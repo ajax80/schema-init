@@ -63,10 +63,20 @@ needs_root=1
 critical=0
 SVC
 
+cat > "$MNT/etc/schema-init/services/dbus.svc" <<'SVC'
+name=dbus
+exec=/usr/bin/dbus-daemon
+args=--system
+args=--nofork
+oneshot=0
+needs_root=1
+critical=0
+SVC
+
 cat > "$MNT/etc/schema-init/services/display-manager.svc" <<'SVC'
 name=display-manager
 exec=/usr/sbin/lightdm
-dep=network
+dep=dbus
 oneshot=0
 needs_root=1
 critical=0
