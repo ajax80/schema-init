@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/mount.h>
+#include <sys/reboot.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <errno.h>
@@ -239,8 +240,9 @@ int main(int argc, char **argv) {
     }
 
     if (getpid() == 1) {
-        printf("[schema-init] PID 1 reboot\n");
-        for (;;) pause();
+        printf("[schema-init] PID 1 poweroff\n");
+        sync();
+        reboot(RB_POWER_OFF);
     }
 
     return 0;
