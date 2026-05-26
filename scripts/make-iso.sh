@@ -205,12 +205,12 @@ chroot "$MNT" dconf update 2>/dev/null || true
 printf '#!/bin/sh\nexec xterm "$@"\n' > "$MNT/usr/local/bin/gnome-terminal"
 chmod +x "$MNT/usr/local/bin/gnome-terminal"
 
-echo "=== Shutdown binaries (busybox symlinks) ==="
-ln -sf /bin/busybox "$MNT/sbin/poweroff"
-ln -sf /bin/busybox "$MNT/sbin/halt"
-ln -sf /bin/busybox "$MNT/sbin/reboot"
-printf '#!/bin/sh\ncase "$1" in\n  -r|--reboot) exec /sbin/reboot ;;\n  *) exec /sbin/poweroff ;;\nesac\n' > "$MNT/sbin/shutdown"
-chmod +x "$MNT/sbin/shutdown"
+echo "=== Shutdown binaries ==="
+printf '#!/bin/sh\nkill -TERM 1\n' > "$MNT/sbin/poweroff"
+printf '#!/bin/sh\nkill -TERM 1\n' > "$MNT/sbin/halt"
+printf '#!/bin/sh\nkill -INT 1\n'  > "$MNT/sbin/reboot"
+printf '#!/bin/sh\ncase "$1" in\n  -r|--reboot) kill -INT 1 ;;\n  *) kill -TERM 1 ;;\nesac\n' > "$MNT/sbin/shutdown"
+chmod +x "$MNT/sbin/poweroff" "$MNT/sbin/halt" "$MNT/sbin/reboot" "$MNT/sbin/shutdown"
 
 cat > "$MNT/etc/X11/Xsession.d/70-pulseaudio" <<'XSESS'
 #!/bin/sh

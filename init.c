@@ -21,7 +21,8 @@
 
 static service_t    services[MAX_SERVICES];
 static int          svc_count = 0;
-static volatile int running = 1;
+static volatile int running   = 1;
+static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
@@ -35,8 +36,9 @@ static void mount_pseudo(void) {
     mount("devtmpfs","/dev",  "devtmpfs", MS_NOSUID|MS_STRICTATIME,     NULL);
 }
 
-static void sig_child(int s) { (void)s; }   /* wake waitpid loop */
-static void sig_term(int s)  { (void)s; running = 0; }
+static void sig_child(int s)  { (void)s; }
+static void sig_term(int s)   { (void)s; running = 0; do_reboot = 0; }
+static void sig_int(int s)    { (void)s; running = 0; do_reboot = 1; }
 
 static void setup_signals(void) {
     struct sigaction sa;
@@ -49,6 +51,9 @@ static void setup_signals(void) {
     sa.sa_handler = sig_term;
     sa.sa_flags   = SA_RESTART;
     sigaction(SIGTERM, &sa, NULL);
+
+    sa.sa_handler = sig_int;
+    sa.sa_flags   = SA_RESTART;
     sigaction(SIGINT,  &sa, NULL);
 
     /* PID 1 must not die on these */
@@ -240,9 +245,14 @@ int main(int argc, char **argv) {
     }
 
     if (getpid() == 1) {
-        printf("[schema-init] PID 1 poweroff\n");
         sync();
-        reboot(RB_POWER_OFF);
+        if (do_reboot) {
+            printf("[schema-init] PID 1 reboot\n");
+            reboot(RB_AUTOBOOT);
+        } else {
+            printf("[schema-init] PID 1 poweroff\n");
+            reboot(RB_POWER_OFF);
+        }
     }
 
     return 0;
