@@ -23,10 +23,11 @@ gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
 chmod +x "$MNT/sbin/schema-init"
 echo "Binary: $(file $MNT/sbin/schema-init)"
 
-echo "=== Installing network packages ==="
+echo "=== Installing packages ==="
 chroot "$MNT" /bin/bash <<'CHROOT'
 export DEBIAN_FRONTEND=noninteractive
 apt-get install -y -q isc-dhcp-client iproute2 2>/dev/null || true
+apt-get install -y task-cinnamon-desktop lightdm 2>/dev/null || true
 CHROOT
 
 echo "=== Writing service files ==="
@@ -58,6 +59,15 @@ cat > "$MNT/etc/schema-init/services/network.svc" <<'SVC'
 name=network
 exec=/usr/local/sbin/schema-network
 oneshot=1
+needs_root=1
+critical=0
+SVC
+
+cat > "$MNT/etc/schema-init/services/display-manager.svc" <<'SVC'
+name=display-manager
+exec=/usr/sbin/lightdm
+dep=network
+oneshot=0
 needs_root=1
 critical=0
 SVC

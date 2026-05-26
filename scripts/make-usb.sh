@@ -52,7 +52,9 @@ apt-get install -y -q \
     isc-dhcp-client \
     iproute2 \
     busybox-static \
-    passwd
+    passwd \
+    task-cinnamon-desktop \
+    lightdm
 
 echo "root:schema" | chpasswd
 echo "schema-node" > /etc/hostname
@@ -112,6 +114,15 @@ cat > "$MNT/etc/schema-init/services/network.svc" <<'SVC'
 name=network
 exec=/usr/local/sbin/schema-network
 oneshot=1
+needs_root=1
+critical=0
+SVC
+
+cat > "$MNT/etc/schema-init/services/display-manager.svc" <<'SVC'
+name=display-manager
+exec=/usr/sbin/lightdm
+dep=network
+oneshot=0
 needs_root=1
 critical=0
 SVC
