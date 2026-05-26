@@ -12,6 +12,7 @@ mount --bind /dev     "$MNT/dev"
 mount --bind /dev/pts "$MNT/dev/pts"
 mount --bind /proc    "$MNT/proc"
 mount --bind /sys     "$MNT/sys"
+cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 
 echo "=== Building schema-init static ==="
 cd /home/ajax80/projects/schema-init
@@ -22,8 +23,15 @@ gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
 chmod +x "$MNT/sbin/schema-init"
 echo "Binary: $(file $MNT/sbin/schema-init)"
 
+echo "=== Installing network packages ==="
+chroot "$MNT" /bin/bash <<'CHROOT'
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y -q isc-dhcp-client iproute2 2>/dev/null || true
+CHROOT
+
 echo "=== Writing service files ==="
 mkdir -p "$MNT/etc/schema-init/services"
+
 cat > "$MNT/etc/schema-init/services/getty-tty1.svc" <<'SVC'
 name=getty-tty1
 exec=/sbin/agetty
@@ -36,13 +44,31 @@ needs_root=1
 critical=1
 SVC
 
+cat > "$MNT/usr/local/sbin/schema-network" <<'NET'
+#!/bin/sh
+for iface in $(ls /sys/class/net); do
+    [ "$iface" = "lo" ] && continue
+    ip link set "$iface" up
+    dhclient -1 "$iface" && break
+done
+NET
+chmod +x "$MNT/usr/local/sbin/schema-network"
+
+cat > "$MNT/etc/schema-init/services/network.svc" <<'SVC'
+name=network
+exec=/usr/local/sbin/schema-network
+oneshot=1
+needs_root=1
+critical=0
+SVC
+
 echo "=== Fixing GRUB config ==="
 chroot "$MNT" /bin/bash <<'CHROOT'
 cat > /etc/default/grub <<'GRUB'
 GRUB_DEFAULT=0
 GRUB_TIMEOUT=3
 GRUB_DISTRIBUTOR="schema-init"
-GRUB_CMDLINE_LINUX_DEFAULT="quiet init=/sbin/schema-init"
+GRUB_CMDLINE_LINUX_DEFAULT="rw init=/sbin/schema-init"
 GRUB_CMDLINE_LINUX=""
 GRUB
 update-grub
