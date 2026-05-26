@@ -27,7 +27,7 @@ echo "=== Installing packages ==="
 chroot "$MNT" /bin/bash <<'CHROOT'
 export DEBIAN_FRONTEND=noninteractive
 apt-get install -y -q isc-dhcp-client iproute2 2>/dev/null || true
-apt-get install -y task-cinnamon-desktop lightdm 2>/dev/null || true
+apt-get install -y task-cinnamon-desktop lightdm xserver-xorg-input-all xserver-xorg-input-libinput 2>/dev/null || true
 CHROOT
 
 echo "=== Writing service files ==="
@@ -63,11 +63,17 @@ needs_root=1
 critical=0
 SVC
 
+cat > "$MNT/usr/local/sbin/schema-dbus" <<'DBUS'
+#!/bin/sh
+mkdir -p /run/dbus
+dbus-uuidgen --ensure
+exec /usr/bin/dbus-daemon --system --nofork
+DBUS
+chmod +x "$MNT/usr/local/sbin/schema-dbus"
+
 cat > "$MNT/etc/schema-init/services/dbus.svc" <<'SVC'
 name=dbus
-exec=/usr/bin/dbus-daemon
-args=--system
-args=--nofork
+exec=/usr/local/sbin/schema-dbus
 oneshot=0
 needs_root=1
 critical=0
@@ -81,6 +87,15 @@ oneshot=0
 needs_root=1
 critical=0
 SVC
+
+echo "=== Configuring lightdm autologin ==="
+mkdir -p "$MNT/etc/lightdm/lightdm.conf.d"
+cat > "$MNT/etc/lightdm/lightdm.conf.d/50-autologin.conf" <<'CONF'
+[Seat:*]
+autologin-user=root
+autologin-user-timeout=0
+user-session=cinnamon
+CONF
 
 echo "=== Fixing GRUB config ==="
 chroot "$MNT" /bin/bash <<'CHROOT'

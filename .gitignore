@@ -1,3 +1,4 @@
 *.o
 schema-init
 desktop/schema-desktop
+*.log
