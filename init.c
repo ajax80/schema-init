@@ -11,13 +11,17 @@
 
 #include "schema.h"
 #include "service.h"
+#include "schema_shm.h"
+#include <sys/mman.h>
+#include <fcntl.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
 
-static service_t services[MAX_SERVICES];
-static int       svc_count = 0;
+static service_t    services[MAX_SERVICES];
+static int          svc_count = 0;
 static volatile int running = 1;
+static schema_shm_t *shm_ptr = NULL;
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
 
@@ -150,6 +154,31 @@ static void tick_service(service_t *svc) {
     }
 }
 
+/* ── shared memory export ───────────────────────────────────────────── */
+
+static void shm_init(void) {
+    int fd = shm_open(SCHEMA_SHM_NAME, O_CREAT | O_RDWR, 0644);
+    if (fd < 0) return;
+    ftruncate(fd, (off_t)sizeof(schema_shm_t));
+    shm_ptr = mmap(NULL, sizeof(schema_shm_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (shm_ptr == MAP_FAILED) shm_ptr = NULL;
+}
+
+static void shm_update(void) {
+    int i;
+    if (!shm_ptr) return;
+    for (i = 0; i < svc_count; i++) {
+        memcpy(shm_ptr->svc[i].name, services[i].name, 64);
+        shm_ptr->svc[i].state          = services[i].inst.state;
+        shm_ptr->svc[i].weight         = services[i].inst.weight;
+        shm_ptr->svc[i].child_pid      = (int32_t)services[i].child_pid;
+        shm_ptr->svc[i].restart_count  = services[i].restart_count;
+    }
+    shm_ptr->count = svc_count;
+    shm_ptr->seq++;
+}
+
 /* ── boot sequence ──────────────────────────────────────────────────── */
 
 static void schema_boot_log(void) {
@@ -181,12 +210,14 @@ int main(int argc, char **argv) {
         svc_count = services_load("./services", services, MAX_SERVICES);
     }
 
+    shm_init();
     schema_boot_log();
 
     while (running) {
         reap();
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i]);
+        shm_update();
         usleep(TICK_USEC);
     }
 
@@ -202,8 +233,12 @@ int main(int argc, char **argv) {
             kill(services[i].child_pid, SIGKILL);
     }
 
+    if (shm_ptr) {
+        munmap(shm_ptr, sizeof(schema_shm_t));
+        shm_unlink(SCHEMA_SHM_NAME);
+    }
+
     if (getpid() == 1) {
-        /* PID 1 cannot exit — reboot */
         printf("[schema-init] PID 1 reboot\n");
         for (;;) pause();
     }
