@@ -1,36 +1,68 @@
 #!/bin/bash
 set -e
 
-DEV=${1:-/dev/sde}
-MNT=/mnt/schema-usb
+OUT=${1:-/home/ajax80/schema-init.iso}
+WORK=/tmp/schema-iso-work
+MNT=$WORK/chroot
+ISO=$WORK/iso
 
-echo "=== Mounting ==="
-mkdir -p "$MNT"
-mount "${DEV}2" "$MNT"
-mount "${DEV}1" "$MNT/boot/efi"
+cleanup() {
+    umount "$MNT/dev/pts" 2>/dev/null || true
+    umount "$MNT/dev"     2>/dev/null || true
+    umount "$MNT/proc"    2>/dev/null || true
+    umount "$MNT/sys"     2>/dev/null || true
+}
+trap cleanup EXIT
+
+echo "=== Setup ==="
+rm -rf "$WORK"
+mkdir -p "$MNT" "$ISO/live" "$ISO/boot/grub"
+
+echo "=== Extracting Debian rootfs via Docker ==="
+docker rm schema-iso-tmp 2>/dev/null || true
+docker create --name schema-iso-tmp debian:bookworm
+docker export schema-iso-tmp | tar -C "$MNT" -x
+docker rm schema-iso-tmp
+
+echo "=== Bind mounts ==="
 mount --bind /dev     "$MNT/dev"
 mount --bind /dev/pts "$MNT/dev/pts"
 mount --bind /proc    "$MNT/proc"
 mount --bind /sys     "$MNT/sys"
 cp /etc/resolv.conf "$MNT/etc/resolv.conf"
 
-echo "=== Building schema-init static ==="
+echo "=== Installing packages ==="
+chroot "$MNT" /bin/bash <<CHROOT
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -q
+apt-get install -y -q \
+    linux-image-amd64 \
+    live-boot \
+    live-boot-initramfs-tools \
+    isc-dhcp-client \
+    iproute2 \
+    busybox-static \
+    passwd \
+    task-cinnamon-desktop \
+    lightdm \
+    xserver-xorg-input-all \
+    xserver-xorg-input-libinput \
+    gnome-terminal \
+    network-manager \
+    elogind \
+    libpam-elogind \
+    policykit-1
+echo "root:schema" | chpasswd
+echo "schema-node" > /etc/hostname
+pam-auth-update --enable elogind 2>/dev/null || true
+CHROOT
+
+echo "=== Installing schema-init ==="
 cd /home/ajax80/projects/schema-init
-make clean
 gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
     -o "$MNT/sbin/schema-init" \
     init.c schema.c service.c -lrt
 chmod +x "$MNT/sbin/schema-init"
-echo "Binary: $(file $MNT/sbin/schema-init)"
-
-echo "=== Installing packages ==="
-chroot "$MNT" /bin/bash <<'CHROOT'
-export DEBIAN_FRONTEND=noninteractive
-apt-get install -y -q isc-dhcp-client iproute2 2>/dev/null || true
-apt-get install -y task-cinnamon-desktop lightdm xserver-xorg-input-all xserver-xorg-input-libinput \
-    gnome-terminal network-manager elogind libpam-elogind policykit-1 2>/dev/null || true
-pam-auth-update --enable elogind 2>/dev/null || true
-CHROOT
 
 echo "=== Writing service files ==="
 mkdir -p "$MNT/etc/schema-init/services"
@@ -86,7 +118,7 @@ cat > "$MNT/usr/local/sbin/schema-udev" <<'UDEV'
 /lib/systemd/systemd-udevd &
 sleep 2
 udevadm trigger --action=add || true
-udevadm settle --timeout=30 || true
+udevadm settle --timeout=10 || true
 UDEV
 chmod +x "$MNT/usr/local/sbin/schema-udev"
 
@@ -140,11 +172,10 @@ autologin-user-timeout=0
 user-session=cinnamon
 CONF
 
-echo "=== Allowing Cinnamon to run as root ==="
+echo "=== Desktop fixes (no-systemd) ==="
 grep -q CINNAMON_BYPASS_ROOT_CHECK "$MNT/etc/environment" 2>/dev/null || \
     printf '\nCINNAMON_BYPASS_ROOT_CHECK=1\n' >> "$MNT/etc/environment"
 
-echo "=== Fixing session D-Bus (no logind) ==="
 cat > "$MNT/etc/X11/Xsession.d/19-no-logind" <<'XSESS'
 #!/bin/sh
 RDIR="/run/user/$(id -u)"
@@ -161,15 +192,18 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=$RDIR/bus"
 XSESS
 chmod +x "$MNT/etc/X11/Xsession.d/19-no-logind"
 
-echo "=== Unblocking root autologin in PAM ==="
-sed -i 's/^auth.*pam_succeed_if.so user != root.*/#&/' "$MNT/etc/pam.d/lightdm-autologin"
+sed -i 's/^auth.*pam_succeed_if.so user != root.*/#&/' \
+    "$MNT/etc/pam.d/lightdm-autologin"
 
-echo "=== Setting xterm as default terminal and starting PulseAudio ==="
+echo "=== Setting xterm as default terminal ==="
 mkdir -p "$MNT/etc/dconf/db/local.d" "$MNT/etc/dconf/profile"
 printf '[org/cinnamon/desktop/applications/terminal]\nexec='"'"'xterm'"'"'\nexec-arg='"'"'-e'"'"'\n' \
     > "$MNT/etc/dconf/db/local.d/00-schema"
 printf 'user-db:user\nsystem-db:local\n' > "$MNT/etc/dconf/profile/user"
 chroot "$MNT" dconf update 2>/dev/null || true
+
+printf '#!/bin/sh\nexec xterm "$@"\n' > "$MNT/usr/local/bin/gnome-terminal"
+chmod +x "$MNT/usr/local/bin/gnome-terminal"
 
 cat > "$MNT/etc/X11/Xsession.d/70-pulseaudio" <<'XSESS'
 #!/bin/sh
@@ -179,28 +213,36 @@ fi
 XSESS
 chmod +x "$MNT/etc/X11/Xsession.d/70-pulseaudio"
 
-echo "=== Terminal wrapper ==="
-printf '#!/bin/sh\nexec xterm "$@"\n' > "$MNT/usr/local/bin/gnome-terminal"
-chmod +x "$MNT/usr/local/bin/gnome-terminal"
+echo "=== Regenerating initrd with live-boot ==="
+chroot "$MNT" update-initramfs -u -k all
 
-echo "=== Fixing GRUB config ==="
-chroot "$MNT" /bin/bash <<'CHROOT'
-cat > /etc/default/grub <<'GRUB'
-GRUB_DEFAULT=0
-GRUB_TIMEOUT=3
-GRUB_DISTRIBUTOR="schema-init"
-GRUB_CMDLINE_LINUX_DEFAULT="rw init=/sbin/schema-init"
-GRUB_CMDLINE_LINUX=""
+echo "=== Copying kernel and initrd ==="
+cp "$MNT"/boot/vmlinuz-*    "$ISO/live/vmlinuz"
+cp "$MNT"/boot/initrd.img-* "$ISO/live/initrd.img"
+
+echo "=== Unmounting bind mounts before squash ==="
+cleanup
+trap - EXIT
+
+echo "=== Creating squashfs (this takes a while) ==="
+mksquashfs "$MNT" "$ISO/live/filesystem.squashfs" \
+    -e boot \
+    -comp xz -noappend
+echo "Squashfs size: $(du -sh $ISO/live/filesystem.squashfs | cut -f1)"
+
+echo "=== Writing GRUB config ==="
+cat > "$ISO/boot/grub/grub.cfg" <<'GRUB'
+set default=0
+set timeout=3
+
+menuentry "schema-init live" {
+    linux  /live/vmlinuz boot=live init=/sbin/schema-init rw quiet
+    initrd /live/initrd.img
+}
 GRUB
-update-grub
-CHROOT
 
-echo "=== Unmounting ==="
-umount "$MNT/dev/pts"
-umount "$MNT/dev"
-umount "$MNT/proc"
-umount "$MNT/sys"
-umount "$MNT/boot/efi"
-umount "$MNT"
+echo "=== Building ISO ==="
+grub2-mkrescue -o "$OUT" "$ISO"
 
-echo "=== USB ready ==="
+echo "=== Done ==="
+echo "ISO: $OUT  ($(du -sh $OUT | cut -f1))"
