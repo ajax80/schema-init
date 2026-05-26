@@ -21,8 +21,9 @@ typedef struct {
     char             name[64];
     char             exec[256];
     char            *argv[MAX_ARGV];
-    int              dep_idx[MAX_DEPS]; /* indices into service table, -1=none */
-    int              flags;             /* SVC_* flags above                   */
+    char             dep_name[MAX_DEPS][64]; /* dep names as written in .svc    */
+    int              dep_idx[MAX_DEPS];      /* resolved indices, -1=none       */
+    int              flags;                  /* SVC_* flags above               */
 
     schema_instance_t inst;
     pid_t            child_pid;
@@ -46,6 +47,9 @@ int service_spawn(service_t *svc);
 
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);
+
+/* 1 if all deps are in a stable state (FUNDAMENTAL/SETTLED/PERFECT), 0 otherwise */
+int service_deps_ready(service_t *svc, service_t *table, int count);
 
 /* parse a simple service file; returns number loaded */
 int services_load(const char *dir, service_t *table, int max);

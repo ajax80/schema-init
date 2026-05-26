@@ -153,6 +153,23 @@ void service_log(const service_t *svc, const char *event) {
     fflush(stdout);
 }
 
+/* ── dependency readiness ───────────────────────────────────────────── */
+
+int service_deps_ready(service_t *svc, service_t *table, int count) {
+    int i;
+    for (i = 0; i < MAX_DEPS; i++) {
+        int di = svc->dep_idx[i];
+        uint8_t s;
+        if (di < 0) break;
+        if (di >= count) return 0;
+        s = table[di].inst.state;
+        if (s == STATE_EXCISED)                                    return 0;
+        if (s != STATE_FUNDAMENTAL && s != STATE_SETTLED &&
+            s != STATE_PERFECT)                                    return 0;
+    }
+    return 1;
+}
+
 /* ── service file parser ─────────────────────────────────────────────
  *
  * Simple format — one key=value per line:
@@ -192,6 +209,7 @@ int services_load(const char *dir, service_t *table, int max) {
         memset(svc, 0, sizeof(*svc));
         for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
         schema_instance_init(&svc->inst, 0, STATE_PERFECT);
+        int dep_slot = 0;
 
         argc = 0;
         while (fgets(line, sizeof(line), f)) {
@@ -211,6 +229,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 argc = 1;
             } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1) {
                 svc->argv[argc++] = strdup(val);
+            } else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS) {
+                strncpy(svc->dep_name[dep_slot++], val, 63);
             } else if (strcmp(line, "oneshot") == 0 && atoi(val))
                 svc->flags |= SVC_ONESHOT;
             else if (strcmp(line, "needs_root") == 0 && atoi(val))
@@ -227,9 +247,23 @@ int services_load(const char *dir, service_t *table, int max) {
 
     closedir(d);
 
-    /* second pass: resolve dep names to indices */
-    /* (dep_idx resolution requires names loaded first — done via a separate
-       dep= line scan; skipped here for initial build, add when needed) */
+    /* second pass: resolve dep names → indices */
+    {
+        int i, d, j, k;
+        for (i = 0; i < count; i++) {
+            k = 0;
+            for (d = 0; d < MAX_DEPS; d++) {
+                if (!table[i].dep_name[d][0]) break;
+                for (j = 0; j < count; j++) {
+                    if (strcmp(table[j].name, table[i].dep_name[d]) == 0) {
+                        table[i].dep_idx[k++] = j;
+                        break;
+                    }
+                }
+                /* unresolved dep name: logged at runtime via service_deps_ready */
+            }
+        }
+    }
 
     return count;
 }

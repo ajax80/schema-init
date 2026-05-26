@@ -90,6 +90,8 @@ static void tick_service(service_t *svc) {
     switch (svc->inst.state) {
 
         case STATE_NEW_PROCESS:
+            /* hold here silently until all deps reach a stable state */
+            if (!service_deps_ready(svc, services, svc_count)) break;
             flags = service_probe_f8(svc, services, svc_count);
             schema_step(&svc->inst, flags);
             if (svc->inst.state == STATE_FULL_TRUST) {

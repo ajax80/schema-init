@@ -1,6 +1,7 @@
 name=sleep-test
 exec=/usr/bin/sleep
 args=30
+dep=logger
 oneshot=0
 needs_root=0
 critical=0
