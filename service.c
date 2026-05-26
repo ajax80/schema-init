@@ -121,7 +121,7 @@ int service_spawn(service_t *svc) {
     if (pid < 0) return -1;
 
     if (pid == 0) {
-        /* child: redirect stdout/stderr to /dev/null unless debugging */
+        setsid();
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
             dup2(fd, STDOUT_FILENO);
