@@ -184,11 +184,13 @@ printf '#!/bin/sh\nexec xterm "$@"\n' > "$MNT/usr/local/bin/gnome-terminal"
 chmod +x "$MNT/usr/local/bin/gnome-terminal"
 
 echo "=== Shutdown binaries ==="
-printf '#!/bin/sh\nkill -TERM 1\n' > "$MNT/sbin/poweroff"
-printf '#!/bin/sh\nkill -TERM 1\n' > "$MNT/sbin/halt"
-printf '#!/bin/sh\nkill -INT 1\n'  > "$MNT/sbin/reboot"
-printf '#!/bin/sh\ncase "$1" in\n  -r|--reboot) kill -INT 1 ;;\n  *) kill -TERM 1 ;;\nesac\n' > "$MNT/sbin/shutdown"
-chmod +x "$MNT/sbin/poweroff" "$MNT/sbin/halt" "$MNT/sbin/reboot" "$MNT/sbin/shutdown"
+for dir in "$MNT/sbin" "$MNT/usr/sbin"; do
+    printf '#!/bin/sh\nkill -TERM 1\n' > "$dir/poweroff"
+    printf '#!/bin/sh\nkill -TERM 1\n' > "$dir/halt"
+    printf '#!/bin/sh\nkill -INT 1\n'  > "$dir/reboot"
+    printf '#!/bin/sh\ncase "$1" in\n  -r|--reboot) kill -INT 1 ;;\n  *) kill -TERM 1 ;;\nesac\n' > "$dir/shutdown"
+    chmod +x "$dir/poweroff" "$dir/halt" "$dir/reboot" "$dir/shutdown"
+done
 
 echo "=== Fixing GRUB config ==="
 chroot "$MNT" /bin/bash <<'CHROOT'
