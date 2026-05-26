@@ -1,0 +1,7 @@
+name=logger
+exec=/usr/bin/logger
+args=-t schema-init
+args=schema-init heartbeat
+oneshot=1
+needs_root=0
+critical=0
