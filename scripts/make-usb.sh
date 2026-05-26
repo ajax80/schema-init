@@ -128,10 +128,28 @@ needs_root=1
 critical=0
 SVC
 
+cat > "$MNT/usr/local/sbin/schema-udev" <<'UDEV'
+#!/bin/sh
+/lib/systemd/systemd-udevd &
+sleep 2
+udevadm trigger --action=add
+udevadm settle --timeout=30
+UDEV
+chmod +x "$MNT/usr/local/sbin/schema-udev"
+
+cat > "$MNT/etc/schema-init/services/udev.svc" <<'SVC'
+name=udev
+exec=/usr/local/sbin/schema-udev
+oneshot=1
+needs_root=1
+critical=0
+SVC
+
 cat > "$MNT/etc/schema-init/services/display-manager.svc" <<'SVC'
 name=display-manager
 exec=/usr/sbin/lightdm
 dep=dbus
+dep=udev
 oneshot=0
 needs_root=1
 critical=0

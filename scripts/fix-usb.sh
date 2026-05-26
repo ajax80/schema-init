@@ -79,10 +79,28 @@ needs_root=1
 critical=0
 SVC
 
+cat > "$MNT/usr/local/sbin/schema-udev" <<'UDEV'
+#!/bin/sh
+/lib/systemd/systemd-udevd &
+sleep 2
+udevadm trigger --action=add
+udevadm settle --timeout=30
+UDEV
+chmod +x "$MNT/usr/local/sbin/schema-udev"
+
+cat > "$MNT/etc/schema-init/services/udev.svc" <<'SVC'
+name=udev
+exec=/usr/local/sbin/schema-udev
+oneshot=1
+needs_root=1
+critical=0
+SVC
+
 cat > "$MNT/etc/schema-init/services/display-manager.svc" <<'SVC'
 name=display-manager
 exec=/usr/sbin/lightdm
 dep=dbus
+dep=udev
 oneshot=0
 needs_root=1
 critical=0
@@ -96,6 +114,30 @@ autologin-user=root
 autologin-user-timeout=0
 user-session=cinnamon
 CONF
+
+echo "=== Allowing Cinnamon to run as root ==="
+grep -q CINNAMON_BYPASS_ROOT_CHECK "$MNT/etc/environment" 2>/dev/null || \
+    printf '\nCINNAMON_BYPASS_ROOT_CHECK=1\n' >> "$MNT/etc/environment"
+
+echo "=== Fixing session D-Bus (no logind) ==="
+cat > "$MNT/etc/X11/Xsession.d/19-no-logind" <<'XSESS'
+#!/bin/sh
+RDIR=/run/user/0
+mkdir -p "$RDIR"
+chmod 700 "$RDIR"
+export XDG_RUNTIME_DIR="$RDIR"
+if [ ! -S "$RDIR/bus" ]; then
+    /usr/bin/dbus-daemon --session \
+        --address="unix:path=$RDIR/bus" \
+        --nofork --nopidfile &
+    sleep 0.3
+fi
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$RDIR/bus"
+XSESS
+chmod +x "$MNT/etc/X11/Xsession.d/19-no-logind"
+
+echo "=== Unblocking root autologin in PAM ==="
+sed -i 's/^auth.*pam_succeed_if.so user != root.*/#&/' "$MNT/etc/pam.d/lightdm-autologin"
 
 echo "=== Fixing GRUB config ==="
 chroot "$MNT" /bin/bash <<'CHROOT'
