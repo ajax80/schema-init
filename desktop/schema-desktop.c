@@ -9,7 +9,7 @@
 #include "../schema_shm.h"
 #include "../schema.h"
 
-#define WIN_W      960
+#define WIN_W     1100
 #define WIN_H      600
 #define GRID_COLS    8
 #define NODE_W     104
@@ -20,11 +20,11 @@
 #define DETAIL_X   (GRID_X + GRID_COLS * (NODE_W + NODE_GAP) + 12)
 
 static const char *FONTS[] = {
+    "/usr/share/fonts/liberation-mono-fonts/LiberationMono-Regular.ttf",
+    "/usr/share/fonts/adwaita-mono-fonts/AdwaitaMono-Regular.ttf",
     "/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
-    "/usr/share/fonts/google-noto/NotoMono-Regular.ttf",
     NULL
 };
 
