@@ -185,6 +185,7 @@ chmod +x "$MNT/usr/local/bin/gnome-terminal"
 
 echo "=== Shutdown binaries ==="
 for dir in "$MNT/sbin" "$MNT/usr/sbin"; do
+    rm -f "$dir/poweroff" "$dir/halt" "$dir/reboot" "$dir/shutdown"
     printf '#!/bin/sh\nkill -TERM 1\n' > "$dir/poweroff"
     printf '#!/bin/sh\nkill -TERM 1\n' > "$dir/halt"
     printf '#!/bin/sh\nkill -INT 1\n'  > "$dir/reboot"
