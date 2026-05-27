@@ -16,6 +16,7 @@
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
+#define SVC_NO_RESTART  (1 << 3)  /* 76 on any death, no recovery arc     */
 
 typedef struct {
     char             name[64];

@@ -237,6 +237,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_NEEDS_ROOT;
             else if (strcmp(line, "critical") == 0 && atoi(val))
                 svc->flags |= SVC_CRITICAL;
+            else if (strcmp(line, "no_restart") == 0 && atoi(val))
+                svc->flags |= SVC_NO_RESTART;
         }
         fclose(f);
 

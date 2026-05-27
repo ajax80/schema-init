@@ -80,6 +80,9 @@ static void reap(void) {
                 /* clean one-shot exit → PERFECT */
                 services[i].inst.state = STATE_PERFECT;
                 service_log(&services[i], "oneshot-done");
+            } else if (services[i].flags & SVC_NO_RESTART) {
+                services[i].inst.state = STATE_EXCISED;
+                service_log(&services[i], "76-no-restart");
             } else {
                 /* unexpected death → enter recovery arc */
                 services[i].inst.state = STATE_RECOVERY;
