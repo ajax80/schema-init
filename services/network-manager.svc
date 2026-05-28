@@ -1,0 +1,5 @@
+name=network-manager
+exec=/usr/sbin/NetworkManager
+dep=dbus
+needs_root=1
+critical=0
