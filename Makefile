@@ -8,7 +8,7 @@ OBJS    = $(SRCS:.c=.o)
 all: schema-init
 
 schema-init: $(OBJS)
-	$(CC) -o $@ $^
+	$(CC) -static -o $@ $^ -lrt
 
 schema-init-static: $(OBJS)
 	$(CC) $(CFLAGS_STATIC) -o $@ $(SRCS)

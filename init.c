@@ -31,15 +31,29 @@ static void mount_pseudo(void) {
     /* only attempt mounts when we are PID 1 */
     if (getpid() != 1) return;
 
+    /* kernel mounts rootfs ro for fsck; remount rw before anything else */
+    mount(NULL, "/", NULL, MS_REMOUNT, NULL);
+
     mount("proc",    "/proc", "proc",     MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     mount("sysfs",   "/sys",  "sysfs",    MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     mount("devtmpfs","/dev",  "devtmpfs", MS_NOSUID|MS_STRICTATIME,     NULL);
     mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755");
+    mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
+    mkdir("/run/dbus",     0755);
+    mkdir("/run/lock",     1777);
+    mkdir("/run/shm",      1777);
+    mkdir("/run/user",              0755);
+    mkdir("/run/user/0",            0700);
+    mkdir("/run/systemd",           0755);
+    mkdir("/run/systemd/shutdown",  0755);
+    mkdir("/run/sshd",              0755);
 }
 
 static void sig_child(int s)  { (void)s; }
 static void sig_term(int s)   { (void)s; running = 0; do_reboot = 0; }
 static void sig_int(int s)    { (void)s; running = 0; do_reboot = 1; }
+static void sig_usr1(int s)   { (void)s; running = 0; do_reboot = 0; }  /* halt */
+static void sig_usr2(int s)   { (void)s; running = 0; do_reboot = 0; }  /* poweroff */
 
 static void setup_signals(void) {
     struct sigaction sa;
@@ -56,6 +70,14 @@ static void setup_signals(void) {
     sa.sa_handler = sig_int;
     sa.sa_flags   = SA_RESTART;
     sigaction(SIGINT,  &sa, NULL);
+
+    sa.sa_handler = sig_usr1;
+    sa.sa_flags   = SA_RESTART;
+    sigaction(SIGUSR1, &sa, NULL);
+
+    sa.sa_handler = sig_usr2;
+    sa.sa_flags   = SA_RESTART;
+    sigaction(SIGUSR2, &sa, NULL);
 
     /* PID 1 must not die on these */
     signal(SIGHUP,  SIG_IGN);
