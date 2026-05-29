@@ -1,5 +1,6 @@
 *.o
 schema-init
+schema-ctl
 desktop/schema-desktop
 *.log
 *.vmdk

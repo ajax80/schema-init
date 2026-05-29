@@ -16,9 +16,13 @@
 #include "schema_shm.h"
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <stdarg.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
+#define CTL_SOCK_PATH   "/run/schema-init.sock"
 
 static service_t    services[MAX_SERVICES];
 static int          svc_count = 0;
@@ -27,6 +31,7 @@ static int          grp_count = 0;
 static volatile int running   = 1;
 static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
+static int          ctl_fd   = -1;
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
 
@@ -223,6 +228,124 @@ static void shm_update(void) {
     shm_ptr->seq++;
 }
 
+/* ── runtime control socket ─────────────────────────────────────────── */
+
+static void ctl_writef(int fd, const char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    int n;
+    va_start(ap, fmt);
+    n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) write(fd, buf, (size_t)n);
+}
+
+static void ctl_cmd(int fd, char *line) {
+    int i;
+    line[strcspn(line, "\r\n")] = '\0';
+
+    if (strcmp(line, "status") == 0) {
+        ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
+        for (i = 0; i < svc_count; i++)
+            ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d\n",
+                services[i].name, (int)services[i].child_pid,
+                state_name(services[i].inst.state), services[i].restart_count);
+
+    } else if (strcmp(line, "list") == 0) {
+        for (i = 0; i < svc_count; i++)
+            ctl_writef(fd, "%s\n", services[i].name);
+
+    } else if (strncmp(line, "start ", 6) == 0) {
+        const char *name = line + 6;
+        for (i = 0; i < svc_count; i++) {
+            if (strcmp(services[i].name, name) != 0) continue;
+            if (services[i].inst.state == STATE_EXCISED ||
+                services[i].inst.state == STATE_PERFECT) {
+                services[i].flags       &= ~SVC_NO_RESTART;
+                services[i].inst.state   = STATE_NEW_PROCESS;
+                services[i].restart_count = 0;
+                ctl_writef(fd, "ok: %s queued\n", name);
+            } else {
+                ctl_writef(fd, "err: %s is %s\n",
+                    name, state_name(services[i].inst.state));
+            }
+            write(fd, ".\n", 2);
+            return;
+        }
+        ctl_writef(fd, "err: not found: %s\n", name);
+
+    } else if (strncmp(line, "stop ", 5) == 0) {
+        const char *name = line + 5;
+        for (i = 0; i < svc_count; i++) {
+            if (strcmp(services[i].name, name) != 0) continue;
+            services[i].flags |= SVC_NO_RESTART;
+            if (services[i].child_pid > 0) {
+                kill(services[i].child_pid, SIGTERM);
+                ctl_writef(fd, "ok: SIGTERM → %s (pid %d)\n",
+                    name, (int)services[i].child_pid);
+            } else {
+                services[i].inst.state = STATE_EXCISED;
+                ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
+            }
+            write(fd, ".\n", 2);
+            return;
+        }
+        ctl_writef(fd, "err: not found: %s\n", name);
+
+    } else if (strncmp(line, "restart ", 8) == 0) {
+        const char *name = line + 8;
+        for (i = 0; i < svc_count; i++) {
+            if (strcmp(services[i].name, name) != 0) continue;
+            services[i].flags &= ~SVC_NO_RESTART;
+            if (services[i].child_pid > 0) {
+                kill(services[i].child_pid, SIGTERM);
+                ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
+            } else {
+                services[i].inst.state    = STATE_NEW_PROCESS;
+                services[i].restart_count = 0;
+                ctl_writef(fd, "ok: %s requeued\n", name);
+            }
+            write(fd, ".\n", 2);
+            return;
+        }
+        ctl_writef(fd, "err: not found: %s\n", name);
+
+    } else {
+        ctl_writef(fd, "err: unknown: %s\n", line);
+    }
+    write(fd, ".\n", 2);
+}
+
+static void ctl_init(void) {
+    struct sockaddr_un addr;
+    unlink(CTL_SOCK_PATH);
+    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (ctl_fd < 0) return;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, CTL_SOCK_PATH, sizeof(addr.sun_path) - 1);
+    if (bind(ctl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(ctl_fd); ctl_fd = -1; return;
+    }
+    chmod(CTL_SOCK_PATH, 0600);
+    listen(ctl_fd, 4);
+}
+
+static void ctl_poll(void) {
+    char buf[256];
+    ssize_t n;
+    int cfd;
+    if (ctl_fd < 0) return;
+    cfd = accept(ctl_fd, NULL, NULL);
+    if (cfd < 0) return;
+    n = recv(cfd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+    if (n > 0) {
+        buf[n] = '\0';
+        ctl_cmd(cfd, buf);
+    }
+    close(cfd);
+}
+
 /* ── boot sequence ──────────────────────────────────────────────────── */
 
 static void schema_boot_log(void) {
@@ -296,11 +419,13 @@ int main(int argc, char **argv) {
     }
 
     shm_init();
+    ctl_init();
     schema_boot_log();
 
     while (running) {
         uint8_t grp_states[MAX_GROUPS];
         uint8_t svc_states[MAX_SERVICES];
+        ctl_poll();
         reap();
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;
         for (i = 0; i < svc_count; i++)  svc_states[i] = services[i].inst.state;
@@ -320,6 +445,11 @@ int main(int argc, char **argv) {
     sleep(3);
     for (i = 0; i < svc_count; i++) {
         service_cgroup_kill(&services[i]);
+    }
+
+    if (ctl_fd >= 0) {
+        close(ctl_fd);
+        unlink(CTL_SOCK_PATH);
     }
 
     if (shm_ptr) {
