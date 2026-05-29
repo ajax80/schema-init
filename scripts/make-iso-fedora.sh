@@ -2,7 +2,7 @@
 set -e
 
 OUT=${1:-/home/ajax80/schema-init-fedora.iso}
-WORK=/tmp/schema-fedora-work
+WORK=/home/ajax80/schema-fedora-work
 MNT=$WORK/chroot
 ISO=$WORK/iso
 LABEL=SCHEMA_FEDORA
@@ -49,7 +49,6 @@ chroot "$MNT" dnf install -y \
     sddm \
     dolphin \
     konsole \
-    firefox \
     sudo \
     passwd \
     hostname \
