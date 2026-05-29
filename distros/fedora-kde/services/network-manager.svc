@@ -2,4 +2,5 @@ name=network-manager
 exec=/usr/sbin/NetworkManager
 args=--no-daemon
 dep=dbus
+dep=network-up
 needs_root=1
