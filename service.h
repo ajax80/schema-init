@@ -33,6 +33,7 @@ typedef struct {
     time_t           last_start;
     time_t           start_time;       /* when current run began              */
     int              exit_status;
+    char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
 } service_t;
 
 /* build the F8 flag word by inspecting the real system */
@@ -49,6 +50,9 @@ int service_spawn(service_t *svc);
 
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);
+
+/* kill all processes in the service's cgroup and remove it */
+void service_cgroup_kill(service_t *svc);
 
 /* 1 if all deps (service and group) are stable, 0 otherwise */
 int service_deps_ready(service_t *svc, service_t *stable, int scount,
