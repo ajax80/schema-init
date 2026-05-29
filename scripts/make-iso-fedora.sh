@@ -143,15 +143,17 @@ done
 printf "=== Dracut live config ===\n"
 mkdir -p "$MNT/etc/dracut.conf.d"
 printf 'add_dracutmodules+=" dmsquash-live "\n' > "$MNT/etc/dracut.conf.d/live.conf"
+printf 'omit_dracutmodules+=" systemd-pcrphase "\n' >> "$MNT/etc/dracut.conf.d/live.conf"
 printf 'compress="xz"\n' >> "$MNT/etc/dracut.conf.d/live.conf"
 
 printf "=== Regenerating initrd ===\n"
-KVER=$(ls "$MNT/lib/modules/" | head -1)
-chroot "$MNT" dracut --force --kver "$KVER" /boot/initramfs-live.img
+KVER=$(ls "$MNT/usr/lib/modules/" | head -1)
+chroot "$MNT" dracut --force --no-hostonly --omit "systemd-pcrphase" \
+    --kver "$KVER" /boot/initramfs-live.img
 
 printf "=== Copying kernel and initrd ===\n"
-cp "$MNT/boot/vmlinuz-$KVER"     "$ISO/images/pxeboot/vmlinuz"
-cp "$MNT/boot/initramfs-live.img" "$ISO/images/pxeboot/initrd.img"
+cp "$MNT/usr/lib/modules/$KVER/vmlinuz" "$ISO/images/pxeboot/vmlinuz"
+cp "$MNT/boot/initramfs-live.img"       "$ISO/images/pxeboot/initrd.img"
 
 printf "=== Unmounting before squash ===\n"
 cleanup
