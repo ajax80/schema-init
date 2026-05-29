@@ -1,0 +1,17 @@
+#!/bin/sh
+exec >> /var/log/sddm-schema.log 2>&1
+set -x
+mkdir -p /run/user/1000
+chown 1000:1000 /run/user/1000
+chmod 700 /run/user/1000
+udevadm trigger --subsystem-match=input --action=add
+udevadm settle --timeout=10
+plymouth --wait quit
+runuser -u ajax80 -- env \
+    XDG_RUNTIME_DIR=/run/user/1000 \
+    LIBSEAT_BACKEND=direct \
+    LANG=en_US.UTF-8 \
+    /usr/libexec/plasma-dbus-run-session-if-needed \
+    /usr/bin/startplasma-wayland
+RC=$?
+printf "plasma_exited=%d\\n" "$RC"

@@ -1,0 +1,6 @@
+name=heartbeat
+exec=/usr/bin/yes
+dep=logger
+oneshot=0
+needs_root=0
+critical=0

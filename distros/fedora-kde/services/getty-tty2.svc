@@ -1,0 +1,7 @@
+name=getty-tty2
+exec=/usr/sbin/agetty
+args=--autologin
+args=root
+args=tty2
+args=linux
+needs_root=1

@@ -1,0 +1,6 @@
+name=sddm
+exec=/usr/local/bin/sddm-logged
+dep=display-stack
+dep=mount-home
+needs_root=1
+critical=1

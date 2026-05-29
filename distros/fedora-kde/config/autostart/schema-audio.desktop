@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=PipeWire
+Exec=/usr/local/bin/schema-audio-start.sh
+X-KDE-AutostartScript=true
+NoDisplay=true

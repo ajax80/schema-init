@@ -1,0 +1,5 @@
+name=network-up
+exec=/usr/local/bin/network-up.sh
+oneshot=1
+dep=udevd
+needs_root=1

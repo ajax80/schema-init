@@ -1,0 +1,5 @@
+name=udev
+exec=/usr/local/sbin/schema-udev
+oneshot=1
+needs_root=1
+critical=0

@@ -2,3 +2,4 @@
 schema-init
 desktop/schema-desktop
 *.log
+*.vmdk

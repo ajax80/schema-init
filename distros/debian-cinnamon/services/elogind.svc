@@ -1,0 +1,5 @@
+name=elogind
+exec=/lib/elogind/elogind
+dep=dbus
+needs_root=1
+critical=0

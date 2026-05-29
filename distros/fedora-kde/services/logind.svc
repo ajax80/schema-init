@@ -1,0 +1,5 @@
+name=logind
+exec=/usr/lib/systemd/systemd-logind
+dep=dbus
+needs_root=1
+critical=1

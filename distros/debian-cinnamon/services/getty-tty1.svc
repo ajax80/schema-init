@@ -1,0 +1,9 @@
+name=getty-tty1
+exec=/sbin/agetty
+args=--autologin
+args=root
+args=tty1
+args=linux
+oneshot=0
+needs_root=1
+critical=1

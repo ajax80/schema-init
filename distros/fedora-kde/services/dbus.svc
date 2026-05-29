@@ -1,0 +1,6 @@
+name=dbus
+exec=/usr/bin/dbus-daemon
+args=--system
+args=--nofork
+needs_root=1
+critical=1
