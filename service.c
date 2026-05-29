@@ -334,3 +334,46 @@ int services_load(const char *dir, service_t *table, int max) {
 
     return count;
 }
+
+/* ── dependency cycle detection (DFS, three-color) ──────────────────── */
+
+#define COLOR_WHITE 0
+#define COLOR_GRAY  1
+#define COLOR_BLACK 2
+
+static int dfs(int node, int *color, service_t *table, int count, int *cycle_found) {
+    int i;
+    color[node] = COLOR_GRAY;
+
+    for (i = 0; i < MAX_DEPS; i++) {
+        int dep = table[node].dep_idx[i];
+        if (dep < 0) break;
+        if (dep >= count) continue;
+        if (color[dep] == COLOR_GRAY) {
+            fprintf(stderr, "schema-init: dependency cycle: %s -> %s\n",
+                    table[node].name, table[dep].name);
+            (*cycle_found)++;
+        } else if (color[dep] == COLOR_WHITE) {
+            dfs(dep, color, table, count, cycle_found);
+        }
+    }
+
+    color[node] = COLOR_BLACK;
+    return 0;
+}
+
+int services_check_cycles(service_t *table, int count) {
+    int color[MAX_SERVICES] = {0};
+    int cycles = 0;
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (color[i] == COLOR_WHITE)
+            dfs(i, color, table, count, &cycles);
+    }
+
+    if (cycles == 0)
+        printf("[schema-init] dependency graph: no cycles\n");
+
+    return cycles;
+}

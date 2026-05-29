@@ -290,6 +290,11 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (services_check_cycles(services, svc_count) > 0) {
+        fprintf(stderr, "schema-init: aborting — dependency cycles detected\n");
+        return 1;
+    }
+
     shm_init();
     schema_boot_log();
 
