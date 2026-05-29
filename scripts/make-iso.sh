@@ -2,7 +2,7 @@
 set -e
 
 OUT=${1:-/home/ajax80/schema-init.iso}
-WORK=/tmp/schema-iso-work
+WORK=/home/ajax80/schema-debian-work
 MNT=$WORK/chroot
 ISO=$WORK/iso
 
@@ -61,7 +61,7 @@ echo "=== Installing schema-init ==="
 cd /home/ajax80/projects/schema-init
 gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
     -o "$MNT/sbin/schema-init" \
-    init.c schema.c service.c -lrt
+    init.c schema.c service.c group.c -lrt
 chmod +x "$MNT/sbin/schema-init"
 
 echo "=== Writing service files ==="
