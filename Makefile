@@ -2,7 +2,7 @@ CC      = gcc
 CFLAGS  = -std=c99 -Wall -Wextra -O2 -D_GNU_SOURCE
 CFLAGS_STATIC = $(CFLAGS) -static
 
-SRCS    = init.c schema.c service.c
+SRCS    = init.c schema.c service.c group.c
 OBJS    = $(SRCS:.c=.o)
 
 all: schema-init

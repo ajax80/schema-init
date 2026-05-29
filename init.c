@@ -12,6 +12,7 @@
 
 #include "schema.h"
 #include "service.h"
+#include "group.h"
 #include "schema_shm.h"
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -21,6 +22,8 @@
 
 static service_t    services[MAX_SERVICES];
 static int          svc_count = 0;
+static group_t      groups[MAX_GROUPS];
+static int          grp_count = 0;
 static volatile int running   = 1;
 static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
@@ -118,7 +121,8 @@ static void reap(void) {
 
 /* ── schema tick for one service ────────────────────────────────────── */
 
-static void tick_service(service_t *svc) {
+static void tick_service(service_t *svc,
+                         const uint8_t *grp_states, int gcount) {
     uint32_t flags;
     uint8_t  prev = svc->inst.state;
     time_t   now  = time(NULL);
@@ -127,7 +131,8 @@ static void tick_service(service_t *svc) {
 
         case STATE_NEW_PROCESS:
             /* hold here silently until all deps reach a stable state */
-            if (!service_deps_ready(svc, services, svc_count)) break;
+            if (!service_deps_ready(svc, services, svc_count,
+                                    grp_states, gcount)) break;
             flags = service_probe_f8(svc, services, svc_count);
             schema_step(&svc->inst, flags);
             if (svc->inst.state == STATE_FULL_TRUST) {
@@ -202,12 +207,18 @@ static void shm_update(void) {
     if (!shm_ptr) return;
     for (i = 0; i < svc_count; i++) {
         memcpy(shm_ptr->svc[i].name, services[i].name, 64);
-        shm_ptr->svc[i].state          = services[i].inst.state;
-        shm_ptr->svc[i].weight         = services[i].inst.weight;
-        shm_ptr->svc[i].child_pid      = (int32_t)services[i].child_pid;
-        shm_ptr->svc[i].restart_count  = services[i].restart_count;
+        shm_ptr->svc[i].state         = services[i].inst.state;
+        shm_ptr->svc[i].weight        = services[i].inst.weight;
+        shm_ptr->svc[i].child_pid     = (int32_t)services[i].child_pid;
+        shm_ptr->svc[i].restart_count = services[i].restart_count;
     }
     shm_ptr->count = svc_count;
+    for (i = 0; i < grp_count; i++) {
+        memcpy(shm_ptr->groups[i].name, groups[i].name, 64);
+        shm_ptr->groups[i].state        = groups[i].state;
+        shm_ptr->groups[i].member_count = groups[i].member_count;
+    }
+    shm_ptr->group_count = grp_count;
     shm_ptr->seq++;
 }
 
@@ -238,17 +249,58 @@ int main(int argc, char **argv) {
 
     svc_count = services_load(svc_dir, services, MAX_SERVICES);
     if (svc_count == 0) {
-        /* fallback: look in current directory for testing */
         svc_count = services_load("./services", services, MAX_SERVICES);
+    }
+
+    grp_count = groups_load(svc_dir, groups, MAX_GROUPS);
+    if (grp_count == 0) {
+        grp_count = groups_load("./services", groups, MAX_GROUPS);
+    }
+
+    /* resolve group member names → service indices */
+    {
+        int g, m, s;
+        for (g = 0; g < grp_count; g++) {
+            for (m = 0; m < groups[g].member_count; m++) {
+                for (s = 0; s < svc_count; s++) {
+                    if (strcmp(services[s].name, groups[g].member_name[m]) == 0) {
+                        groups[g].member_idx[m] = s;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /* resolve group deps in service dep_name arrays */
+    {
+        int s, d, g;
+        for (s = 0; s < svc_count; s++) {
+            for (d = 0; d < MAX_DEPS; d++) {
+                if (!services[s].dep_name[d][0]) break;
+                if (services[s].dep_idx[d] >= 0) continue; /* already a service dep */
+                for (g = 0; g < grp_count; g++) {
+                    if (strcmp(groups[g].name, services[s].dep_name[d]) == 0) {
+                        services[s].grp_dep_idx[d] = g;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     shm_init();
     schema_boot_log();
 
     while (running) {
+        uint8_t grp_states[MAX_GROUPS];
+        uint8_t svc_states[MAX_SERVICES];
         reap();
+        for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;
+        for (i = 0; i < svc_count; i++)  svc_states[i] = services[i].inst.state;
         for (i = 0; i < svc_count; i++)
-            tick_service(&services[i]);
+            tick_service(&services[i], grp_states, grp_count);
+        groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
         usleep(TICK_USEC);
     }
