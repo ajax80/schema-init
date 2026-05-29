@@ -155,17 +155,31 @@ void service_log(const service_t *svc, const char *event) {
 
 /* ── dependency readiness ───────────────────────────────────────────── */
 
-int service_deps_ready(service_t *svc, service_t *table, int count) {
+int service_deps_ready(service_t *svc, service_t *stable, int scount,
+                       const uint8_t *grp_states, int gcount) {
     int i;
     for (i = 0; i < MAX_DEPS; i++) {
         int di = svc->dep_idx[i];
+        int gi = svc->grp_dep_idx[i];
         uint8_t s;
-        if (di < 0) break;
-        if (di >= count) return 0;
-        s = table[di].inst.state;
-        if (s == STATE_EXCISED)                                    return 0;
-        if (s != STATE_FUNDAMENTAL && s != STATE_SETTLED &&
-            s != STATE_PERFECT)                                    return 0;
+
+        if (di < 0 && gi < 0) break;
+
+        if (di >= 0) {
+            if (di >= scount) return 0;
+            s = stable[di].inst.state;
+            if (s == STATE_EXCISED)                              return 0;
+            if (s != STATE_FUNDAMENTAL && s != STATE_SETTLED &&
+                s != STATE_PERFECT)                              return 0;
+        }
+
+        if (gi >= 0) {
+            if (gi >= gcount) return 0;
+            s = grp_states[gi];
+            if (s == STATE_EXCISED)                              return 0;
+            if (s != STATE_FUNDAMENTAL && s != STATE_SETTLED &&
+                s != STATE_PERFECT)                              return 0;
+        }
     }
     return 1;
 }
@@ -208,6 +222,7 @@ int services_load(const char *dir, service_t *table, int max) {
         svc = &table[count];
         memset(svc, 0, sizeof(*svc));
         for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
+        for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
         schema_instance_init(&svc->inst, 0, STATE_PERFECT);
         int dep_slot = 0;
 
