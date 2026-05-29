@@ -58,8 +58,8 @@ static void mount_pseudo(void) {
 }
 
 static void sig_child(int s)  { (void)s; }
-static void sig_term(int s)   { (void)s; running = 0; do_reboot = 0; }
-static void sig_int(int s)    { (void)s; running = 0; do_reboot = 1; }
+static void sig_term(int s)   { (void)s; running = 0; do_reboot = 0; if (shm_ptr) shm_ptr->system_state = 13; }
+static void sig_int(int s)    { (void)s; running = 0; do_reboot = 1; if (shm_ptr) shm_ptr->system_state = 14; }
 static void sig_usr1(int s)   { (void)s; running = 0; do_reboot = 0; }  /* halt */
 static void sig_usr2(int s)   { (void)s; running = 0; do_reboot = 0; }  /* poweroff */
 
@@ -436,7 +436,8 @@ int main(int argc, char **argv) {
         usleep(TICK_USEC);
     }
 
-    /* shutdown: send SIGTERM to all children then kill cgroups */
+    /* shutdown: hold briefly so viewers see system_state 13/14, then kill */
+    usleep(500000);
     printf("[schema-init] shutting down\n");
     for (i = 0; i < svc_count; i++) {
         if (services[i].child_pid > 0)

@@ -27,6 +27,7 @@ typedef struct {
     shm_svc_t   svc[SCHEMA_SHM_MAX];
     int32_t     group_count;
     shm_group_t groups[SCHEMA_SHM_MAX_GROUPS];
+    uint8_t     system_state; /* 0=running, 13=shutdown, 14=restart */
 } schema_shm_t;
 
 #endif

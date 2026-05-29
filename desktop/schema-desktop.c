@@ -118,10 +118,20 @@ int main(void) {
         SDL_RenderClear(ren);
 
         /* header bar */
-        SDL_SetRenderDrawColor(ren, 28, 28, 36, 255);
+        uint8_t ss = shm->system_state;
+        Uint8 hbr = 28, hbg = 28, hbb = 36;
+        if      (ss == 13) { hbr = 60; hbg = 14; hbb = 14; }
+        else if (ss == 14) { hbr = 14; hbg = 30; hbb = 60; }
+        SDL_SetRenderDrawColor(ren, hbr, hbg, hbb, 255);
         SDL_Rect hbar = {0, 0, WIN_W, GRID_Y - 4};
         SDL_RenderFillRect(ren, &hbar);
-        text(ren, flg, "schema-init", 12, 10, 160, 160, 200);
+
+        if (ss == 13)
+            text(ren, flg, "13 — shutdown", 12, 10, 220, 80, 80);
+        else if (ss == 14)
+            text(ren, flg, "14 — restart",  12, 10, 80, 160, 220);
+        else
+            text(ren, flg, "schema-init",   12, 10, 160, 160, 200);
 
         char seq_buf[32];
         snprintf(seq_buf, sizeof(seq_buf), "tick:%u", shm->seq);
