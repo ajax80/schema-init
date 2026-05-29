@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
+#include <signal.h>
 
 /* ── F8: can we spawn this right now? ──────────────────────────────── */
 
@@ -116,6 +117,25 @@ uint32_t service_probe_f6(service_t *svc) {
 
 /* ── fork + exec ────────────────────────────────────────────────────── */
 
+static void cgroup_assign(service_t *svc, pid_t pid) {
+    char path[160];
+    int fd;
+    char buf[32];
+    int n;
+
+    mkdir("/sys/fs/cgroup/schema-init", 0755);
+    snprintf(svc->cgroup_path, sizeof(svc->cgroup_path),
+             "/sys/fs/cgroup/schema-init/%s", svc->name);
+    mkdir(svc->cgroup_path, 0755);
+
+    snprintf(path, sizeof(path), "%s/cgroup.procs", svc->cgroup_path);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) { svc->cgroup_path[0] = '\0'; return; }
+    n = snprintf(buf, sizeof(buf), "%d\n", (int)pid);
+    write(fd, buf, (size_t)n);
+    close(fd);
+}
+
 int service_spawn(service_t *svc) {
     pid_t pid = fork();
     if (pid < 0) return -1;
@@ -136,7 +156,37 @@ int service_spawn(service_t *svc) {
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     svc->restart_count++;
+    cgroup_assign(svc, pid);
     return 0;
+}
+
+void service_cgroup_kill(service_t *svc) {
+    char path[160];
+    int fd;
+
+    if (!svc->cgroup_path[0]) return;
+
+    /* Linux 5.14+: write 1 to cgroup.kill nukes the whole subtree */
+    snprintf(path, sizeof(path), "%s/cgroup.kill", svc->cgroup_path);
+    fd = open(path, O_WRONLY);
+    if (fd >= 0) {
+        write(fd, "1", 1);
+        close(fd);
+    } else {
+        /* fallback: read cgroup.procs and kill each PID individually */
+        FILE *f;
+        pid_t p;
+        snprintf(path, sizeof(path), "%s/cgroup.procs", svc->cgroup_path);
+        f = fopen(path, "r");
+        if (f) {
+            while (fscanf(f, "%d", &p) == 1)
+                kill(p, SIGKILL);
+            fclose(f);
+        }
+    }
+
+    rmdir(svc->cgroup_path);
+    svc->cgroup_path[0] = '\0';
 }
 
 /* ── logging ─────────────────────────────────────────────────────────  */

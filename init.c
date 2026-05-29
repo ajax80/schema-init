@@ -175,6 +175,7 @@ static void tick_service(service_t *svc,
                 svc->inst.state = STATE_NEW_PROCESS;
                 service_log(svc, "retry-deep");
             } else if (svc->inst.state == STATE_EXCISED) {
+                service_cgroup_kill(svc);
                 service_log(svc, "76-excised");
                 if (svc->flags & SVC_CRITICAL) {
                     fprintf(stderr, "schema-init: critical service %s excised — system friction\n",
@@ -305,7 +306,7 @@ int main(int argc, char **argv) {
         usleep(TICK_USEC);
     }
 
-    /* shutdown: send SIGTERM to all children */
+    /* shutdown: send SIGTERM to all children then kill cgroups */
     printf("[schema-init] shutting down\n");
     for (i = 0; i < svc_count; i++) {
         if (services[i].child_pid > 0)
@@ -313,8 +314,7 @@ int main(int argc, char **argv) {
     }
     sleep(3);
     for (i = 0; i < svc_count; i++) {
-        if (services[i].child_pid > 0)
-            kill(services[i].child_pid, SIGKILL);
+        service_cgroup_kill(&services[i]);
     }
 
     if (shm_ptr) {
