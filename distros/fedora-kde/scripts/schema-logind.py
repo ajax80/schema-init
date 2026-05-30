@@ -194,6 +194,35 @@ class Login1Manager(dbus.service.Object):
             }
         return {}
 
+class Hostname1(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/hostname1')
+        print("login1-stub: Registered Hostname1 at /org/freedesktop/hostname1")
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.hostname1':
+            return {
+                'Hostname': dbus.String('GreyBox'),
+                'StaticHostname': dbus.String('GreyBox'),
+                'PrettyHostname': dbus.String('GreyBox'),
+                'IconName': dbus.String('computer'),
+                'Chassis': dbus.String('desktop'),
+                'KernelName': dbus.String('Linux'),
+                'KernelRelease': dbus.String('6.1.0-49-amd64'),
+                'KernelVersion': dbus.String('#1 SMP PREEMPT_DYNAMIC Debian 6.1.0-49'),
+                'OperatingSystemPrettyName': dbus.String('Fedora Linux 44 (schema-init)'),
+                'OperatingSystemCPEName': dbus.String('cpe:/o:fedoraproject:fedora:44'),
+                'HardwareVendor': dbus.String('Dell Inc.'),
+                'HardwareModel': dbus.String('Inspiron 3542'),
+                'FirmwareVersion': dbus.String('A12'),
+            }
+        return {}
+
 def main():
     DBusGMainLoop(set_as_default=True)
 
@@ -208,14 +237,21 @@ def main():
     user = Login1User(bus)
     seat = Login1Seat(bus)
     manager = Login1Manager(bus)
+    hostname = Hostname1(bus)
 
-    # Request the well-known name
+    # Request the well-known names
     try:
         bus.request_name('org.freedesktop.login1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
         print("login1-stub: Successfully acquired 'org.freedesktop.login1' name")
     except Exception as e:
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.login1': {e}", file=sys.stderr)
         sys.exit(1)
+
+    try:
+        bus.request_name('org.freedesktop.hostname1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
+        print("login1-stub: Successfully acquired 'org.freedesktop.hostname1' name")
+    except Exception as e:
+        print(f"login1-stub: Failed to acquire name 'org.freedesktop.hostname1': {e}", file=sys.stderr)
 
     loop = GLib.MainLoop()
     
