@@ -3,4 +3,5 @@ exec=/lib/elogind/elogind
 dep=dbus
 needs_root=1
 critical=0
-stable_secs=2
+stable_secs=10
+ready_path=/run/systemd/seats

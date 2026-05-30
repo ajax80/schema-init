@@ -160,12 +160,20 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FULL_TRUST:
-            if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0 && now - svc->start_time >= svc->stable_secs) {
-                flags = service_probe_f8(svc, services, svc_count);
-                schema_step(&svc->inst, flags);
-                if (svc->inst.state != prev) {
-                    clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
-                    service_log(svc, "promote");
+            if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
+                int ready = 0;
+                if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
+                    ready = 1;
+                } else if (now - svc->start_time >= svc->stable_secs) {
+                    ready = 1;
+                }
+                if (ready) {
+                    flags = service_probe_f8(svc, services, svc_count);
+                    schema_step(&svc->inst, flags);
+                    if (svc->inst.state != prev) {
+                        clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
+                        service_log(svc, "promote");
+                    }
                 }
             }
             break;

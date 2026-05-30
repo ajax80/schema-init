@@ -33,6 +33,7 @@ typedef struct {
     time_t           last_start;
     time_t           start_time;       /* when current run began              */
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
+    char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */

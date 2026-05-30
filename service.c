@@ -335,6 +335,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_NO_RESTART;
             else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
                 svc->stable_secs = atoi(val);
+            else if (strcmp(line, "ready_path") == 0)
+                strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
         }
         fclose(f);
 
@@ -411,6 +413,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_NO_RESTART;
         else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
             svc->stable_secs = atoi(val);
+        else if (strcmp(line, "ready_path") == 0)
+            strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
     }
     fclose(f);
 
