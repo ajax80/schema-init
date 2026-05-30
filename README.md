@@ -20,6 +20,7 @@ Every service moves through a state machine driven by probes. Before a service i
            F8 probe passes                              │
                   │                                     │
             FULL_TRUST ──── stable 10s ──── FUNDAMENTAL │
+                  │                         SETTLED     │
                   │                                     │
              (oneshot exit 0)                           │
                   │                                     │
@@ -137,13 +138,33 @@ These are real gaps, not future features being teased:
 
 ---
 
+## Filesystem setup
+
+schema-init does not parse `/etc/fstab`. On boot it mounts the pseudo-filesystems directly:
+
+| Mount | Type | Notes |
+|-------|------|-------|
+| `/` | remount rw | Kernel mounts rootfs read-only for fsck; schema-init remounts it writable before anything else |
+| `/proc` | proc | nosuid, nodev, noexec |
+| `/sys` | sysfs | nosuid, nodev, noexec |
+| `/dev` | devtmpfs | nosuid, strictatime |
+| `/run` | tmpfs | nosuid, nodev, mode=0755 |
+| `/sys/fs/cgroup` | cgroup2 | nosuid, nodev, noexec, relatime |
+
+If your system needs additional mounts (data partitions, network filesystems), run them as `oneshot` services before your other services depend on them.
+
+---
+
 ## Building
 
 ```sh
 make
 ```
 
-Produces a fully static binary — no glibc version dependency, runs on any Linux kernel. Tested on Debian Bookworm kernel 6.1, x86_64.
+Produces a fully static binary — no glibc version dependency, runs on any Linux kernel. Tested on:
+
+- Debian Bookworm, kernel 6.1, x86_64 — headless and Cinnamon desktop
+- Fedora 44, kernel 7.0, x86_64 — full KDE Plasma desktop, btrfs subvolume boot
 
 ```sh
 # install as PID 1
