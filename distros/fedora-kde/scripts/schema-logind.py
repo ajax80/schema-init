@@ -2,15 +2,88 @@
 import sys
 import os
 import signal
-import time
 import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
+class Login1Session(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/session/_31')
+        print("login1-stub: Registered Session at /org/freedesktop/login1/session/_31")
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
+    def Lock(self):
+        print("login1-stub: Session.Lock() requested")
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
+    def Unlock(self):
+        print("login1-stub: Session.Unlock() requested")
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.login1.Session':
+            return {
+                'Id': dbus.String('31'),
+                'User': dbus.Struct((dbus.UInt32(1000), dbus.ObjectPath('/org/freedesktop/login1/user/_1000')), signature='uo'),
+                'Name': dbus.String('root'),
+                'Active': dbus.Boolean(True),
+                'State': dbus.String('active'),
+                'Remote': dbus.Boolean(False),
+                'Type': dbus.String('wayland'),
+                'Class': dbus.String('user'),
+                'Seat': dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so'),
+            }
+        return {}
+
+class Login1User(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/user/_1000')
+        print("login1-stub: Registered User at /org/freedesktop/login1/user/_1000")
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.login1.User':
+            return {
+                'UID': dbus.UInt32(1000),
+                'GID': dbus.UInt32(1000),
+                'Name': dbus.String('root'),
+                'Display': dbus.ObjectPath('/org/freedesktop/login1/session/_31'),
+                'State': dbus.String('active'),
+            }
+        return {}
+
+class Login1Seat(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/seat/seat0')
+        print("login1-stub: Registered Seat at /org/freedesktop/login1/seat/seat0")
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.login1.Seat':
+            return {
+                'Id': dbus.String('seat0'),
+                'ActiveSession': dbus.Struct((dbus.String('31'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='so'),
+                'CanMultiSession': dbus.Boolean(True),
+                'CanTTY': dbus.Boolean(True),
+                'CanGraphical': dbus.Boolean(True),
+            }
+        return {}
+
 class Login1Manager(dbus.service.Object):
     def __init__(self, bus):
-        # Register the manager object
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1')
         print("login1-stub: Registered Manager at /org/freedesktop/login1")
 
@@ -42,67 +115,60 @@ class Login1Manager(dbus.service.Object):
     def CanReboot(self):
         return "yes"
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
-    def CanSuspend(self):
-        time.sleep(0.05)
-        return "na"
+    # Async delay logic to prevent the LogindSessionBackend race condition
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s',
+                         async_callbacks=('reply_cb', 'error_cb'))
+    def CanSuspend(self, reply_cb, error_cb):
+        GLib.timeout_add(50, lambda: self._delayed_reply(reply_cb, "na"))
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
-    def CanHibernate(self):
-        time.sleep(0.05)
-        return "na"
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s',
+                         async_callbacks=('reply_cb', 'error_cb'))
+    def CanHibernate(self, reply_cb, error_cb):
+        GLib.timeout_add(50, lambda: self._delayed_reply(reply_cb, "na"))
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
-    def CanHybridSleep(self):
-        time.sleep(0.05)
-        return "na"
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s',
+                         async_callbacks=('reply_cb', 'error_cb'))
+    def CanHybridSleep(self, reply_cb, error_cb):
+        GLib.timeout_add(50, lambda: self._delayed_reply(reply_cb, "na"))
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
-    def CanSuspendThenHibernate(self):
-        time.sleep(0.05)
-        return "na"
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s',
+                         async_callbacks=('reply_cb', 'error_cb'))
+    def CanSuspendThenHibernate(self, reply_cb, error_cb):
+        GLib.timeout_add(50, lambda: self._delayed_reply(reply_cb, "na"))
 
-    # ── Stubbed Session, User, Seat methods ────────────────────────────────
+    def _delayed_reply(self, reply_cb, val):
+        reply_cb(val)
+        return False
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(sus)')
+    # ── Session, User, Seat methods returning dummy paths ─────────────────
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(susso)')
     def ListSessions(self):
-        return []
+        return [dbus.Struct((dbus.String('31'), dbus.UInt32(1000), dbus.String('root'), dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='susso')]
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(su)')
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(uso)')
     def ListUsers(self):
-        return []
+        return [dbus.Struct((dbus.UInt32(1000), dbus.String('root'), dbus.ObjectPath('/org/freedesktop/login1/user/_1000')), signature='uso')]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(ss)')
     def ListSeats(self):
-        return []
+        return [dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='ss')]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
-        raise dbus.exceptions.DBusException(
-            "org.freedesktop.login1.NoSessionForPID",
-            f"No session found for PID {pid}"
-        )
+        return dbus.ObjectPath('/org/freedesktop/login1/session/_31')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='o')
     def GetSession(self, session_id):
-        raise dbus.exceptions.DBusException(
-            "org.freedesktop.login1.NoSuchSession",
-            f"No session found with ID {session_id}"
-        )
+        return dbus.ObjectPath('/org/freedesktop/login1/session/_31')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetUser(self, uid):
-        raise dbus.exceptions.DBusException(
-            "org.freedesktop.login1.NoSuchUser",
-            f"No user found with UID {uid}"
-        )
+        return dbus.ObjectPath('/org/freedesktop/login1/user/_1000')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='o')
     def GetSeat(self, seat_id):
-        raise dbus.exceptions.DBusException(
-            "org.freedesktop.login1.NoSuchSeat",
-            f"No seat found with ID {seat_id}"
-        )
+        return dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')
 
     # ── Properties Interface ──────────────────────────────────────────────
 
@@ -119,6 +185,12 @@ class Login1Manager(dbus.service.Object):
                 'PreparingForShutdown': dbus.Boolean(False),
                 'PreparingForSleep': dbus.Boolean(False),
                 'PreparingForReboot': dbus.Boolean(False),
+                'CanPowerOff': dbus.String('yes'),
+                'CanReboot': dbus.String('yes'),
+                'CanSuspend': dbus.String('na'),
+                'CanHibernate': dbus.String('na'),
+                'CanHybridSleep': dbus.String('na'),
+                'CanSuspendThenHibernate': dbus.String('na'),
             }
         return {}
 
@@ -131,6 +203,10 @@ def main():
         print(f"login1-stub: Failed to connect to System Bus: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Instantiate the dummy objects
+    session = Login1Session(bus)
+    user = Login1User(bus)
+    seat = Login1Seat(bus)
     manager = Login1Manager(bus)
 
     # Request the well-known name
