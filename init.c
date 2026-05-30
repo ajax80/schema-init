@@ -47,6 +47,9 @@ static void mount_pseudo(void) {
     mount("devtmpfs","/dev",  "devtmpfs", MS_NOSUID|MS_STRICTATIME,     NULL);
     mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755");
     mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
+    mount("/dev/nvme0n1p1", "/boot/efi", "vfat", MS_NOATIME, NULL);
+    symlink("/boot/efi/EFI/fedora", "/boot/grub2");
+
     mkdir("/run/dbus",     0755);
     mkdir("/run/lock",     1777);
     mkdir("/run/shm",      1777);
