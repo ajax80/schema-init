@@ -147,10 +147,10 @@ int service_spawn(service_t *svc) {
 
     if (pid == 0) {
         char c;
+        setsid();
         close(sync[1]);
         read(sync[0], &c, 1);
         close(sync[0]);
-        setsid();
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
             dup2(fd, STDOUT_FILENO);
@@ -326,7 +326,7 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_CRITICAL;
             else if (strcmp(line, "no_restart") == 0 && atoi(val))
                 svc->flags |= SVC_NO_RESTART;
-            else if (strcmp(line, "stable_secs") == 0 && atoi(val) > 0)
+            else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
                 svc->stable_secs = atoi(val);
         }
         fclose(f);
@@ -402,7 +402,7 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_CRITICAL;
         else if (strcmp(line, "no_restart") == 0 && atoi(val))
             svc->flags |= SVC_NO_RESTART;
-        else if (strcmp(line, "stable_secs") == 0 && atoi(val) > 0)
+        else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
             svc->stable_secs = atoi(val);
     }
     fclose(f);
