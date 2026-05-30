@@ -75,6 +75,8 @@ sudo cp config/polkit/10-schema-nm.rules /etc/polkit-1/rules.d/
 | PipeWire not starting | KDE autostart via `schema-audio.desktop` |
 | NM "not authorized" | polkit rule granting wheel group NM control |
 | AMD Ryzen audio modules not loaded | `sound-modules.svc` oneshot at boot |
+| KDE System Settings hangs 25s on open | `schema-logind` registers `org.freedesktop.systemd1` stub — `GetUnitFileState` returns immediately instead of timing out waiting for systemd activation |
+| About This System hangs 25s | `schema-logind` registers `org.freedesktop.hostname1` stub — hostname, OS name, hardware vendor/model returned instantly |
 
 ## Audio hardware
 
