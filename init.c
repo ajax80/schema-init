@@ -58,6 +58,8 @@ static void mount_pseudo(void) {
     mkdir("/run/user/0",            0700);
     mkdir("/run/systemd",           0755);
     mkdir("/run/systemd/shutdown",  0755);
+    mkdir("/run/log",               0755);
+    mkdir("/run/log/schema-init",   0755);
     mkdir("/run/sshd",              0755);
 }
 
@@ -158,7 +160,7 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FULL_TRUST:
-            if (svc->child_pid > 0 && now - svc->start_time >= svc->stable_secs) {
+            if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0 && now - svc->start_time >= svc->stable_secs) {
                 flags = service_probe_f8(svc, services, svc_count);
                 schema_step(&svc->inst, flags);
                 if (svc->inst.state != prev) {
