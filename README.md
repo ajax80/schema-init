@@ -282,7 +282,7 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 
 - [x] Runtime service loading — `schema-ctl add <path>` loads a new service at runtime
 - [ ] Boot time measurement — formal numbers with a `systemd-analyze` equivalent
-- [ ] login1 D-Bus stub — restore KDE shutdown/restart buttons on no-systemd systems
+- [x] login1 D-Bus stub — `schema-logind` restores KDE shutdown/restart buttons on no-systemd systems
 - [ ] ARM port — Ungulate Leg hardware target
 - [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
 
