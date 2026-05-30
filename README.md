@@ -254,6 +254,30 @@ for (int i = 0; i < shm->count; i++) {
 
 ---
 
+## Distributions
+
+Working configurations for specific distros and desktops live in `distros/`.
+
+### Fedora 44 + KDE Plasma (`distros/fedora-kde/`)
+
+Full KDE Plasma 6 desktop on Fedora 44 with schema-init as PID 1. Boots from a btrfs subvolume alongside a normal Fedora install — no repartitioning required.
+
+**What's running:**
+
+| Service | Role |
+|---------|------|
+| `udevd` | Device enumeration — required for libinput and /dev/input/event* |
+| `dbus` | System bus |
+| `network-up` | Loads r8152 USB ethernet module, udev settle |
+| `network-manager` | Owns the network interface via NM profile |
+| `polkitd` | Authorization — required for NM and elogind PowerOff |
+| `sddm` | Display manager (via sddm-logged wrapper, no systemd session) |
+| `sound-modules` | oneshot — loads AMD Ryzen audio modules at boot |
+
+See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full installation instructions and key fixes.
+
+---
+
 ## Roadmap
 
 - [x] Runtime service loading — `schema-ctl add <path>` loads a new service at runtime
