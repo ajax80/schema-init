@@ -187,9 +187,26 @@ Tested on Dell Inspiron 3542 (Intel Core i3, 4GB RAM) running full Cinnamon desk
 | PID 1 threads | **1** | 20–30+ |
 | RAM used at desktop | **~1.1 GB** | ~1.6–2.0 GB |
 | Swap used | **0 MB** | 200–500 MB |
-| Time to desktop | **not yet measured** | slower |
+| Time to desktop | **~29.5s** | slower |
 
 The gap is structural. schema-init spawns your services and then sits in a 250ms tick loop. There is no journal daemon, no dbus-broker, no socket activation layer, no unit file parser running in the background.
+
+Boot timing breakdown (Dell Inspiron 3542, Debian Bookworm, kernel 6.1.0-49, CLOCK_MONOTONIC from kernel start):
+
+```
+kernel → PID 1:    5.836s
+network            1.914s   (oneshot — ip link up, udevadm settle)
+udev               7.356s
+dbus               9.609s
+getty-tty1         9.681s
+sshd               9.681s
+elogind           19.591s
+network-manager   19.591s
+polkitd           19.591s
+display-manager   29.517s   ← LightDM login screen visible
+```
+
+`schema-ctl timing` produces this output. The 5.8s kernel→PID1 gap is BIOS + GRUB + kernel decompress, not schema-init overhead. elogind, NM, and polkitd all land on the same tick because they share the dbus dependency and run their stability windows in parallel.
 
 ---
 
