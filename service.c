@@ -344,6 +344,57 @@ int services_load(const char *dir, service_t *table, int max) {
     return count;
 }
 
+/* ── single service file loader ─────────────────────────────────────── */
+
+int service_load_one(const char *path, service_t *svc) {
+    FILE *f;
+    char line[512];
+    int argc, dep_slot;
+
+    f = fopen(path, "r");
+    if (!f) return -1;
+
+    memset(svc, 0, sizeof(*svc));
+    for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
+    for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
+    schema_instance_init(&svc->inst, 0, STATE_PERFECT);
+    argc = 0;
+    dep_slot = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        char *eq = strchr(line, '=');
+        char *val;
+        if (!eq) continue;
+        *eq = 0;
+        val = eq + 1;
+        val[strcspn(val, "\r\n")] = 0;
+
+        if (strcmp(line, "name") == 0)
+            strncpy(svc->name, val, sizeof(svc->name) - 1);
+        else if (strcmp(line, "exec") == 0) {
+            strncpy(svc->exec, val, sizeof(svc->exec) - 1);
+            svc->argv[0] = svc->exec;
+            argc = 1;
+        } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1)
+            svc->argv[argc++] = strdup(val);
+        else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS)
+            strncpy(svc->dep_name[dep_slot++], val, 63);
+        else if (strcmp(line, "oneshot") == 0 && atoi(val))
+            svc->flags |= SVC_ONESHOT;
+        else if (strcmp(line, "needs_root") == 0 && atoi(val))
+            svc->flags |= SVC_NEEDS_ROOT;
+        else if (strcmp(line, "critical") == 0 && atoi(val))
+            svc->flags |= SVC_CRITICAL;
+        else if (strcmp(line, "no_restart") == 0 && atoi(val))
+            svc->flags |= SVC_NO_RESTART;
+    }
+    fclose(f);
+
+    if (!svc->name[0] || !svc->exec[0]) return -1;
+    svc->argv[argc] = NULL;
+    return 0;
+}
+
 /* ── dependency cycle detection (DFS, three-color) ──────────────────── */
 
 #define COLOR_WHITE 0

@@ -203,6 +203,7 @@ sudo schema-ctl list            # names and current states only
 sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service
 sudo schema-ctl restart <name>  # stop + re-queue through the state machine
+sudo schema-ctl add <path>      # load a new .svc file at runtime, no reboot needed
 ```
 
 The socket is `chmod 0600` — root only. Build alongside the init binary:
@@ -255,7 +256,7 @@ for (int i = 0; i < shm->count; i++) {
 
 ## Roadmap
 
-- [ ] Runtime service loading — add/remove services without restarting init
+- [x] Runtime service loading — `schema-ctl add <path>` loads a new service at runtime
 - [ ] Boot time measurement — formal numbers with a `systemd-analyze` equivalent
 - [ ] login1 D-Bus stub — restore KDE shutdown/restart buttons on no-systemd systems
 - [ ] ARM port — Ungulate Leg hardware target

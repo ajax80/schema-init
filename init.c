@@ -310,6 +310,41 @@ static void ctl_cmd(int fd, char *line) {
         }
         ctl_writef(fd, "err: not found: %s\n", name);
 
+    } else if (strncmp(line, "add ", 4) == 0) {
+        const char *path = line + 4;
+        int j, k, ds;
+        if (svc_count >= MAX_SERVICES) {
+            ctl_writef(fd, "err: MAX_SERVICES (%d) reached\n", MAX_SERVICES);
+            write(fd, ".\n", 2);
+            return;
+        }
+        if (service_load_one(path, &services[svc_count]) < 0) {
+            ctl_writef(fd, "err: failed to load %s\n", path);
+            write(fd, ".\n", 2);
+            return;
+        }
+        for (j = 0; j < svc_count; j++) {
+            if (strcmp(services[j].name, services[svc_count].name) == 0) {
+                ctl_writef(fd, "err: '%s' already loaded\n", services[svc_count].name);
+                write(fd, ".\n", 2);
+                return;
+            }
+        }
+        k = 0;
+        for (ds = 0; ds < MAX_DEPS; ds++) {
+            if (!services[svc_count].dep_name[ds][0]) break;
+            for (j = 0; j < svc_count; j++) {
+                if (strcmp(services[j].name, services[svc_count].dep_name[ds]) == 0) {
+                    services[svc_count].dep_idx[k++] = j;
+                    break;
+                }
+            }
+        }
+        ctl_writef(fd, "ok: %s queued\n", services[svc_count].name);
+        svc_count++;
+        write(fd, ".\n", 2);
+        return;
+
     } else {
         ctl_writef(fd, "err: unknown: %s\n", line);
     }

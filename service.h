@@ -61,6 +61,9 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
 /* parse a simple service file; returns number loaded */
 int services_load(const char *dir, service_t *table, int max);
 
+/* parse a single .svc file into svc; returns 0 on success, -1 on failure */
+int service_load_one(const char *path, service_t *svc);
+
 /* detect dependency cycles; logs and returns number of cycles found */
 int services_check_cycles(service_t *table, int count);
 
