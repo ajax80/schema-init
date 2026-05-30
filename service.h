@@ -32,6 +32,7 @@ typedef struct {
     int              restart_count;
     time_t           last_start;
     time_t           start_time;       /* when current run began              */
+    struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
 } service_t;

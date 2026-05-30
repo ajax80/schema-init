@@ -36,6 +36,7 @@ static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
 static int          epoll_fd = -1;
 static int          sig_fd   = -1;
+static struct timespec init_start;
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
 
@@ -115,6 +116,7 @@ static void reap(void) {
                 && (services[i].flags & SVC_ONESHOT)) {
                 /* clean one-shot exit → PERFECT */
                 services[i].inst.state = STATE_PERFECT;
+                clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
                 service_log(&services[i], "oneshot-done");
             } else if (services[i].flags & SVC_NO_RESTART) {
                 services[i].inst.state = STATE_EXCISED;
@@ -161,8 +163,10 @@ static void tick_service(service_t *svc,
             if (svc->child_pid > 0 && now - svc->start_time >= STABLE_SECS) {
                 flags = service_probe_f8(svc, services, svc_count);
                 schema_step(&svc->inst, flags);
-                if (svc->inst.state != prev)
+                if (svc->inst.state != prev) {
+                    clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
                     service_log(svc, "promote");
+                }
             }
             break;
 
@@ -350,6 +354,17 @@ static void ctl_cmd(int fd, char *line) {
         write(fd, ".\n", 2);
         return;
 
+    } else if (strcmp(line, "timing") == 0) {
+        double k2p = (double)init_start.tv_sec + (double)init_start.tv_nsec / 1e9;
+        ctl_writef(fd, "kernel → PID 1:            %.3fs\n", k2p);
+        for (i = 0; i < svc_count; i++) {
+            double delta;
+            if (services[i].stable_time.tv_sec == 0) continue;
+            delta = (double)(services[i].stable_time.tv_sec - init_start.tv_sec)
+                  + (double)(services[i].stable_time.tv_nsec - init_start.tv_nsec) / 1e9;
+            ctl_writef(fd, "  %-24s %.3fs\n", services[i].name, delta);
+        }
+
     } else {
         ctl_writef(fd, "err: unknown: %s\n", line);
     }
@@ -436,6 +451,8 @@ int main(int argc, char **argv) {
 
     (void)argc;
     (void)argv;
+
+    clock_gettime(CLOCK_MONOTONIC, &init_start);
 
     if (getpid() == 1) mount_pseudo();
     setup_signals();
