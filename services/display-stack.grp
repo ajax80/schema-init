@@ -1,5 +1,5 @@
 name=display-stack
 member=udev
 member=dbus
-member=elogind
+member=schema-logind
 member=polkitd
