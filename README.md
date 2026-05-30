@@ -128,6 +128,45 @@ The gap is structural. schema-init spawns your services and then sits in a 250ms
 
 ---
 
+## Runtime control
+
+`schema-ctl` is a control client that communicates with the running init over a Unix domain socket at `/run/schema-init.sock`.
+
+```sh
+sudo schema-ctl status          # full state dump for all services
+sudo schema-ctl list            # names and current states only
+sudo schema-ctl start <name>    # start a stopped or EXCISED service
+sudo schema-ctl stop <name>     # send SIGTERM to a running service
+sudo schema-ctl restart <name>  # stop + re-queue through the state machine
+```
+
+The socket is `chmod 0600` — root only. Build alongside the init binary:
+
+```sh
+make schema-ctl
+sudo cp schema-ctl /usr/local/bin/schema-ctl
+```
+
+---
+
+## Logs
+
+schema-init writes to stderr, which the kernel connects to the console (typically `/dev/console` at boot). To persist logs, redirect in your init script or point a service at a log file:
+
+```sh
+exec /sbin/schema-init 2>/var/log/schema-init.log
+```
+
+Per-service output goes to the console by default. To capture a specific service's stdout/stderr, wrap it:
+
+```sh
+exec=/usr/local/bin/my-logger   # wrapper that redirects before exec
+```
+
+There is no journal daemon. Logs are plain text, always.
+
+---
+
 ## Shared memory interface
 
 Running processes can read service state via POSIX shared memory at `/schema-init`:
