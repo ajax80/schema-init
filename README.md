@@ -306,6 +306,13 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 - [x] Boot hang fix — dep_idx alignment bug in group dep resolution; poll() replaces epoll (PID 1 epoll deadlock on kernel 6.1.0-49)
 - [x] Boot timing — `schema-ctl timing` reports kernel→PID1 handoff and per-service FUNDAMENTAL/PERFECT timestamps (CLOCK_MONOTONIC)
 - [x] Boot time measurement — 29.5s → 20.7s with `ready_path` probes; `stable_secs` fallback per service
+- [x] Per-service readiness probes — `ready_path=` promotes on path existence; `stable_secs=` fallback timer
+- [x] Cgroup assignment race fix — pipe barrier guarantees cgroup.procs written before child exec
+- [x] Dynamic poll timeout — loop sleeps indefinitely once all services stable; 0% CPU idle
+- [x] Service log files — stdout/stderr per service at `/run/log/schema-init/<name>.log`
+- [x] D-Bus stubs — `hostname1` and `systemd1` Manager stubs in `schema-logind`; KDE Settings 25s → 2s
+- [x] Fedora KDE distribution — GreyBox daily driver, full KDE Plasma 6 on Fedora 44
+- [ ] Fedora Cinnamon distribution — in progress
 - [ ] ARM port — Ungulate Leg hardware target
 - [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
 
