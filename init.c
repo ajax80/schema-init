@@ -19,6 +19,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <stdarg.h>
+#include <sys/epoll.h>
+#include <sys/signalfd.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -32,6 +34,8 @@ static volatile int running   = 1;
 static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
+static int          epoll_fd = -1;
+static int          sig_fd   = -1;
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
 
@@ -57,7 +61,6 @@ static void mount_pseudo(void) {
     mkdir("/run/sshd",              0755);
 }
 
-static void sig_child(int s)  { (void)s; }
 static void sig_term(int s)   { (void)s; running = 0; do_reboot = 0; if (shm_ptr) shm_ptr->system_state = 13; }
 static void sig_int(int s)    { (void)s; running = 0; do_reboot = 1; if (shm_ptr) shm_ptr->system_state = 14; }
 static void sig_usr1(int s)   { (void)s; running = 0; do_reboot = 0; }  /* halt */
@@ -65,11 +68,13 @@ static void sig_usr2(int s)   { (void)s; running = 0; do_reboot = 0; }  /* power
 
 static void setup_signals(void) {
     struct sigaction sa;
+    sigset_t chld;
     memset(&sa, 0, sizeof(sa));
 
-    sa.sa_handler = sig_child;
-    sa.sa_flags   = SA_RESTART | SA_NOCLDSTOP;
-    sigaction(SIGCHLD, &sa, NULL);
+    /* block SIGCHLD — signalfd will drain it in the epoll loop */
+    sigemptyset(&chld);
+    sigaddset(&chld, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &chld, NULL);
 
     sa.sa_handler = sig_term;
     sa.sa_flags   = SA_RESTART;
@@ -387,6 +392,29 @@ static void ctl_poll(void) {
     close(cfd);
 }
 
+static void epoll_init(void) {
+    struct epoll_event ev;
+    sigset_t mask;
+
+    epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd < 0) return;
+
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sig_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+    if (sig_fd >= 0) {
+        ev.events  = EPOLLIN;
+        ev.data.fd = sig_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sig_fd, &ev);
+    }
+
+    if (ctl_fd >= 0) {
+        ev.events  = EPOLLIN;
+        ev.data.fd = ctl_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctl_fd, &ev);
+    }
+}
+
 /* ── boot sequence ──────────────────────────────────────────────────── */
 
 static void schema_boot_log(void) {
@@ -480,20 +508,39 @@ int main(int argc, char **argv) {
 
     shm_init();
     ctl_init();
+    epoll_init();
     schema_boot_log();
 
     while (running) {
+        struct epoll_event evs[4];
         uint8_t grp_states[MAX_GROUPS];
         uint8_t svc_states[MAX_SERVICES];
-        ctl_poll();
-        reap();
+        int nev = 0, e;
+
+        if (epoll_fd >= 0) {
+            nev = epoll_wait(epoll_fd, evs, 4, TICK_USEC / 1000);
+            for (e = 0; e < nev; e++) {
+                if (evs[e].data.fd == sig_fd) {
+                    struct signalfd_siginfo ssi;
+                    while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi))
+                        ;
+                    reap();
+                } else if (evs[e].data.fd == ctl_fd) {
+                    ctl_poll();
+                }
+            }
+        } else {
+            ctl_poll();
+            reap();
+            usleep(TICK_USEC);
+        }
+
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;
         for (i = 0; i < svc_count; i++)  svc_states[i] = services[i].inst.state;
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i], grp_states, grp_count);
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
-        usleep(TICK_USEC);
     }
 
     /* shutdown: hold briefly so viewers see system_state 13/14, then kill */
