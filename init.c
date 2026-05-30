@@ -439,6 +439,17 @@ static void schema_boot_log(void) {
     fflush(stdout);
 }
 
+static int get_poll_timeout(void) {
+    int i;
+    for (i = 0; i < svc_count; i++) {
+        uint8_t s = services[i].inst.state;
+        if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED) {
+            return TICK_USEC / 1000;
+        }
+    }
+    return -1;
+}
+
 /* ── main ───────────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
@@ -545,7 +556,7 @@ int main(int argc, char **argv) {
         }
 
         if (nfds > 0) {
-            ret = poll(fds, nfds, TICK_USEC / 1000);
+            ret = poll(fds, nfds, get_poll_timeout());
             if (ret > 0) {
                 int e;
                 for (e = 0; e < nfds; e++) {
@@ -604,6 +615,17 @@ int main(int argc, char **argv) {
         } else {
             printf("[schema-init] PID 1 poweroff\n");
             reboot(RB_POWER_OFF);
+        }
+    }
+
+    /* free duplicated arguments to prevent memory leaks */
+    for (i = 0; i < svc_count; i++) {
+        int j;
+        for (j = 1; j < MAX_ARGV; j++) {
+            if (services[i].argv[j]) {
+                free(services[i].argv[j]);
+                services[i].argv[j] = NULL;
+            }
         }
     }
 
