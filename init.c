@@ -19,7 +19,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <stdarg.h>
-#include <sys/epoll.h>
+#include <poll.h>
 #include <sys/signalfd.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
@@ -34,7 +34,6 @@ static volatile int running   = 1;
 static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
-static int          epoll_fd = -1;
 static int          sig_fd   = -1;
 static struct timespec init_start;
 
@@ -371,11 +370,20 @@ static void ctl_cmd(int fd, char *line) {
     write(fd, ".\n", 2);
 }
 
+static void set_nonblock(int fd) {
+    if (fd < 0) return;
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+}
+
 static void ctl_init(void) {
     struct sockaddr_un addr;
     unlink(CTL_SOCK_PATH);
     ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (ctl_fd < 0) return;
+    set_nonblock(ctl_fd);
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, CTL_SOCK_PATH, sizeof(addr.sun_path) - 1);
@@ -407,26 +415,13 @@ static void ctl_poll(void) {
     close(cfd);
 }
 
-static void epoll_init(void) {
-    struct epoll_event ev;
+static void signalfd_init(void) {
     sigset_t mask;
-
-    epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-    if (epoll_fd < 0) return;
-
     sigemptyset(&mask);
     sigaddset(&mask, SIGCHLD);
     sig_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     if (sig_fd >= 0) {
-        ev.events  = EPOLLIN;
-        ev.data.fd = sig_fd;
-        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sig_fd, &ev);
-    }
-
-    if (ctl_fd >= 0) {
-        ev.events  = EPOLLIN;
-        ev.data.fd = ctl_fd;
-        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ctl_fd, &ev);
+        set_nonblock(sig_fd);
     }
 }
 
@@ -525,30 +520,48 @@ int main(int argc, char **argv) {
 
     shm_init();
     ctl_init();
-    epoll_init();
+    signalfd_init();
     schema_boot_log();
 
     while (running) {
-        struct epoll_event evs[4];
+        struct pollfd fds[2];
+        int nfds = 0;
         uint8_t grp_states[MAX_GROUPS];
         uint8_t svc_states[MAX_SERVICES];
-        int nev = 0, e;
+        int ret = 0;
 
-        if (epoll_fd >= 0) {
-            nev = epoll_wait(epoll_fd, evs, 4, TICK_USEC / 1000);
-            for (e = 0; e < nev; e++) {
-                if (evs[e].data.fd == sig_fd) {
-                    struct signalfd_siginfo ssi;
-                    while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi))
-                        ;
-                    reap();
-                } else if (evs[e].data.fd == ctl_fd) {
-                    ctl_poll();
+        if (sig_fd >= 0) {
+            fds[nfds].fd = sig_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+        if (ctl_fd >= 0) {
+            fds[nfds].fd = ctl_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+
+        if (nfds > 0) {
+            ret = poll(fds, nfds, TICK_USEC / 1000);
+            if (ret > 0) {
+                int e;
+                for (e = 0; e < nfds; e++) {
+                    if (!(fds[e].revents & POLLIN)) continue;
+                    if (fds[e].fd == sig_fd) {
+                        struct signalfd_siginfo ssi;
+                        while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi))
+                            ;
+                        reap();
+                    } else if (fds[e].fd == ctl_fd) {
+                        ctl_poll();
+                    }
                 }
+            } else if (ret < 0 && errno != EINTR) {
+                usleep(TICK_USEC);
             }
         } else {
-            ctl_poll();
-            reap();
             usleep(TICK_USEC);
         }
 

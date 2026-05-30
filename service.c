@@ -213,7 +213,7 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
         int gi = svc->grp_dep_idx[i];
         uint8_t s;
 
-        if (di < 0 && gi < 0) break;
+        if (!svc->dep_name[i][0]) break;
 
         if (di >= 0) {
             if (di >= scount) return 0;
@@ -325,14 +325,13 @@ int services_load(const char *dir, service_t *table, int max) {
 
     /* second pass: resolve dep names → indices */
     {
-        int i, d, j, k;
+        int i, d, j;
         for (i = 0; i < count; i++) {
-            k = 0;
             for (d = 0; d < MAX_DEPS; d++) {
                 if (!table[i].dep_name[d][0]) break;
                 for (j = 0; j < count; j++) {
                     if (strcmp(table[j].name, table[i].dep_name[d]) == 0) {
-                        table[i].dep_idx[k++] = j;
+                        table[i].dep_idx[d] = j;
                         break;
                     }
                 }
@@ -407,7 +406,7 @@ static int dfs(int node, int *color, service_t *table, int count, int *cycle_fou
 
     for (i = 0; i < MAX_DEPS; i++) {
         int dep = table[node].dep_idx[i];
-        if (dep < 0) break;
+        if (dep < 0) continue;
         if (dep >= count) continue;
         if (color[dep] == COLOR_GRAY) {
             fprintf(stderr, "schema-init: dependency cycle: %s -> %s\n",
