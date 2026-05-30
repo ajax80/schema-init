@@ -131,7 +131,7 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 
 These are real gaps, not future features being teased:
 
-- **No runtime service loading** — services are read at startup. Adding a `.svc` file requires a restart of the init. This is the next thing getting built.
+- **Runtime service removal not supported** — `schema-ctl add <path>` loads new services at runtime, but there is no remove command yet. Removing a service requires a restart of the init.
 - **No cgroup management** — schema-init does not create or manage cgroups. Services inherit the root cgroup.
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off.
 - **No dependency cycle detection at runtime** — cycles stall in `NEW_PROCESS` indefinitely. Cycle detection runs at load time and drops to a rescue shell, but runtime cycle introduction via schema-ctl is not guarded.
