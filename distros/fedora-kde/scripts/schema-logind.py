@@ -223,6 +223,56 @@ class Hostname1(dbus.service.Object):
             }
         return {}
 
+class Systemd1Manager(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/systemd1')
+        print("login1-stub: Registered Systemd1 Manager at /org/freedesktop/systemd1")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='s', out_signature='s')
+    def GetUnitFileState(self, name):
+        print(f"systemd1-stub: GetUnitFileState({name}) requested")
+        if name in ('sddm.service', 'sddm', 'display-manager.service'):
+            return "enabled"
+        return "disabled"
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='s', out_signature='o')
+    def GetUnit(self, name):
+        print(f"systemd1-stub: GetUnit({name}) requested")
+        escaped = name.replace('.', '_2e').replace('-', '_2d')
+        return dbus.ObjectPath(f'/org/freedesktop/systemd1/unit/{escaped}')
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='a(ssssssouso)')
+    def ListUnits(self):
+        print("systemd1-stub: ListUnits() requested")
+        return [
+            dbus.Struct((
+                dbus.String('sddm.service'),
+                dbus.String('Simple Desktop Display Manager'),
+                dbus.String('loaded'),
+                dbus.String('active'),
+                dbus.String('running'),
+                dbus.String(''),
+                dbus.ObjectPath('/org/freedesktop/systemd1/unit/sddm_2eservice'),
+                dbus.UInt32(0),
+                dbus.String(''),
+                dbus.ObjectPath('/')
+            ), signature='ssssssouso')
+        ]
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.systemd1.Manager':
+            return {
+                'Version': dbus.String('256'),
+                'Features': dbus.String('+PAM +AUDIT +SELINUX -APPARMOR +GLIB'),
+                'Architecture': dbus.String('x86-64'),
+            }
+        return {}
+
 def main():
     DBusGMainLoop(set_as_default=True)
 
@@ -238,6 +288,7 @@ def main():
     seat = Login1Seat(bus)
     manager = Login1Manager(bus)
     hostname = Hostname1(bus)
+    systemd = Systemd1Manager(bus)
 
     # Request the well-known names
     try:
@@ -252,6 +303,12 @@ def main():
         print("login1-stub: Successfully acquired 'org.freedesktop.hostname1' name")
     except Exception as e:
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.hostname1': {e}", file=sys.stderr)
+
+    try:
+        bus.request_name('org.freedesktop.systemd1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
+        print("login1-stub: Successfully acquired 'org.freedesktop.systemd1' name")
+    except Exception as e:
+        print(f"login1-stub: Failed to acquire name 'org.freedesktop.systemd1': {e}", file=sys.stderr)
 
     loop = GLib.MainLoop()
     
