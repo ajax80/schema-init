@@ -88,6 +88,7 @@ oneshot=1
 | `needs_root` | Require uid 0 before spawning |
 | `critical` | EXCISED → system friction warning |
 | `no_restart` | Any death → EXCISED immediately, no recovery arc |
+| *(default)* | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
 Dependencies are resolved by name at load time. A service stays in `NEW_PROCESS` until all its deps reach `FUNDAMENTAL`, `SETTLED`, or `PERFECT`.
 
