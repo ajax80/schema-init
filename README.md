@@ -282,8 +282,9 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 ## Roadmap
 
 - [x] Runtime service loading — `schema-ctl add <path>` loads a new service at runtime
-- [ ] Boot time measurement — formal numbers with a `systemd-analyze` equivalent
 - [x] login1 D-Bus stub — `schema-logind` restores KDE shutdown/restart buttons on no-systemd systems
+- [x] epoll event loop — main loop wakes on child death (signalfd) and ctl commands instead of polling every 250ms
+- [ ] Boot time measurement — formal numbers with a `systemd-analyze` equivalent
 - [ ] ARM port — Ungulate Leg hardware target
 - [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
 
