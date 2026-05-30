@@ -1,0 +1,4 @@
+name=mount-efi
+exec=/usr/local/bin/mount-efi.sh
+oneshot=1
+needs_root=1

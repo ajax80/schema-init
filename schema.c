@@ -42,10 +42,9 @@ uint8_t schema_step(schema_instance_t *inst, uint32_t flags) {
         case STATE_FULL_TRUST:
             if ((flags & F8_MASK) == F8_MASK)
                 inst->state = STATE_FUNDAMENTAL;
-            else if (flags)
-                inst->state = STATE_PERFECT;
-            else
+            else if (!flags)
                 inst->state = STATE_EXCISED;
+            /* partial flags: stay in FULL_TRUST, re-evaluated next tick */
             break;
     }
 
