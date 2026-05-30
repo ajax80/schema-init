@@ -333,14 +333,20 @@ static void ctl_init(void) {
 
 static void ctl_poll(void) {
     char buf[256];
+    int pos = 0, cfd;
     ssize_t n;
-    int cfd;
+    struct timeval tv = {0, 100000}; /* 100ms receive timeout */
     if (ctl_fd < 0) return;
     cfd = accept(ctl_fd, NULL, NULL);
     if (cfd < 0) return;
-    n = recv(cfd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
-    if (n > 0) {
-        buf[n] = '\0';
+    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    while (pos < (int)sizeof(buf) - 1) {
+        n = recv(cfd, buf + pos, 1, 0);
+        if (n <= 0) break;
+        if (buf[pos++] == '\n') break;
+    }
+    if (pos > 0) {
+        buf[pos] = '\0';
         ctl_cmd(cfd, buf);
     }
     close(cfd);
@@ -414,7 +420,26 @@ int main(int argc, char **argv) {
     }
 
     if (services_check_cycles(services, svc_count) > 0) {
-        fprintf(stderr, "schema-init: aborting — dependency cycles detected\n");
+        fprintf(stderr, "schema-init: dependency cycles detected — dropping to rescue shell\n");
+        pid_t rsh = fork();
+        if (rsh == 0) {
+            setsid();
+            int tty = open("/dev/tty1", O_RDWR);
+            if (tty >= 0) {
+                dup2(tty, STDIN_FILENO);
+                dup2(tty, STDOUT_FILENO);
+                dup2(tty, STDERR_FILENO);
+                write(tty, "\n\n*** schema-init: DEPENDENCY CYCLE DETECTED ***\n", 50);
+                write(tty, "Dropping to emergency rescue shell. Type 'exit' to halt.\n\n", 58);
+                close(tty);
+            }
+            execl("/bin/sh", "sh", NULL);
+            _exit(1);
+        }
+        if (rsh > 0)
+            waitpid(rsh, NULL, 0);
+        sync();
+        reboot(RB_HALT_SYSTEM);
         return 1;
     }
 

@@ -250,10 +250,11 @@ int services_load(const char *dir, service_t *table, int max) {
     DIR *d = opendir(dir);
     struct dirent *ent;
     int count = 0;
+    int warned = 0;
 
     if (!d) return 0;
 
-    while ((ent = readdir(d)) && count < max) {
+    while ((ent = readdir(d))) {
         char path[512];
         FILE *f;
         char line[512];
@@ -264,6 +265,14 @@ int services_load(const char *dir, service_t *table, int max) {
         /* only .svc files */
         if (nlen < 5 || strcmp(ent->d_name + nlen - 4, ".svc") != 0)
             continue;
+
+        if (count >= max) {
+            if (!warned) {
+                fprintf(stderr, "schema-init: WARNING — MAX_SERVICES (%d) reached; extra .svc files ignored\n", max);
+                warned = 1;
+            }
+            continue;
+        }
 
         snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
         f = fopen(path, "r");

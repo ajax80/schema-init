@@ -91,10 +91,11 @@ int groups_load(const char *dir, group_t *table, int max) {
     DIR *d = opendir(dir);
     struct dirent *ent;
     int count = 0;
+    int warned = 0;
 
     if (!d) return 0;
 
-    while ((ent = readdir(d)) && count < max) {
+    while ((ent = readdir(d))) {
         char path[512];
         FILE *f;
         char line[512];
@@ -103,6 +104,14 @@ int groups_load(const char *dir, group_t *table, int max) {
 
         if (nlen < 5 || strcmp(ent->d_name + nlen - 4, ".grp") != 0)
             continue;
+
+        if (count >= max) {
+            if (!warned) {
+                fprintf(stderr, "schema-init: WARNING — MAX_GROUPS (%d) reached; extra .grp files ignored\n", max);
+                warned = 1;
+            }
+            continue;
+        }
 
         snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
         f = fopen(path, "r");
