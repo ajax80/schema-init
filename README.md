@@ -79,19 +79,52 @@ oneshot=1
 
 **Keys:**
 
-| Key | Description |
-|-----|-------------|
-| `name` | Service name (used in logs and dep resolution) |
-| `exec` | Absolute path to binary |
-| `args` | Argument (repeat for multiple args) |
-| `dep` | Dependency by name (repeat for multiple deps) |
-| `oneshot` | Exit 0 → PERFECT, don't restart |
-| `needs_root` | Require uid 0 before spawning |
-| `critical` | EXCISED → system friction warning |
-| `no_restart` | Any death → EXCISED immediately, no recovery arc |
-| *(default)* | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
+| Key | Default | Description |
+|-----|---------|-------------|
+| `name` | *(required)* | Service name — used in logs, dep resolution, and schema-ctl commands |
+| `exec` | *(required)* | Absolute path to the binary to execute |
+| `args` | — | Argument string (repeat the key for multiple args) |
+| `dep` | — | Dependency by name (repeat for multiple deps; can name a service or a group) |
+| `oneshot` | `0` | Exit 0 → PERFECT and don't restart; exit non-zero → RECOVERY arc |
+| `needs_root` | `0` | Abort spawn if uid ≠ 0 |
+| `critical` | `0` | EXCISED → emit system friction warning to console |
+| `no_restart` | `0` | Any death → EXCISED immediately; no recovery arc |
+| `stable_secs` | `10` | Seconds process must stay alive before FULL_TRUST promotes to FUNDAMENTAL. Set lower for fast services; use `ready_path` instead when possible |
+| `ready_path` | — | Filesystem path that, when it exists, triggers immediate FULL_TRUST→FUNDAMENTAL promotion. Falls back to `stable_secs` if the path never appears |
+| *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
-Dependencies are resolved by name at load time. A service stays in `NEW_PROCESS` until all its deps reach `FUNDAMENTAL`, `SETTLED`, or `PERFECT`.
+A full example using readiness probes:
+
+```ini
+name=dbus
+exec=/usr/bin/dbus-daemon
+args=--system
+args=--nofork
+needs_root=1
+stable_secs=2
+ready_path=/run/dbus/system_bus_socket
+```
+
+Dependencies are resolved by name at load time. A service stays in `NEW_PROCESS` until all its deps reach `FUNDAMENTAL`, `SETTLED`, or `PERFECT`. A dep name can refer to either a service or a group (see below).
+
+### Group files
+
+Drop a `.grp` file in the same services directory to create a named group. Services can depend on a group name just like a service name.
+
+```ini
+name=storage
+member=lvm
+member=cryptsetup
+member=mount-data
+```
+
+A group's state is the worst-case view of its members:
+- Any member EXCISED → group is EXCISED
+- Any member in FRICTION/RECOVERY → group reflects that
+- All members FUNDAMENTAL or better → group is FUNDAMENTAL
+- All members PERFECT → group is PERFECT
+
+Maximum 16 groups, 8 members per group. Names and members are matched at load time.
 
 ---
 
@@ -100,7 +133,7 @@ Dependencies are resolved by name at load time. A service stays in `NEW_PROCESS`
 | State | Meaning |
 |-------|---------|
 | `NEW_PROCESS` | Queued. Waiting for all deps to reach FUNDAMENTAL. No spawn attempt yet. |
-| `FULL_TRUST` | Spawned. Watching for 10 seconds — if it stays alive, it promotes. |
+| `FULL_TRUST` | Spawned. Watching — promotes to FUNDAMENTAL when `ready_path` exists or `stable_secs` elapses, whichever comes first. |
 | `FUNDAMENTAL` | Stable. Load-bearing. Other services can depend on it. |
 | `SETTLED` | Stable, non-critical. Satisfies deps but generates no friction warnings if lost. |
 | `RECOVERY` | Died unexpectedly. F9 probe running. May re-queue or escalate. |
@@ -132,7 +165,6 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 These are real gaps, not future features being teased:
 
 - **Runtime service removal not supported** — `schema-ctl add <path>` loads new services at runtime, but there is no remove command yet. Removing a service requires a restart of the init.
-- **No cgroup management** — schema-init does not create or manage cgroups. Services inherit the root cgroup.
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off.
 - **No dependency cycle detection at runtime** — cycles stall in `NEW_PROCESS` indefinitely. Cycle detection runs at load time and drops to a rescue shell, but runtime cycle introduction via schema-ctl is not guarded.
 
@@ -151,6 +183,8 @@ schema-init does not parse `/etc/fstab`. On boot it mounts the pseudo-filesystem
 | `/run` | tmpfs | nosuid, nodev, mode=0755 |
 | `/sys/fs/cgroup` | cgroup2 | nosuid, nodev, noexec, relatime |
 
+schema-init also creates `/run/log/schema-init/` at boot. Each service's stdout and stderr are redirected there automatically (see Logs).
+
 If your system needs additional mounts (data partitions, network filesystems), run them as `oneshot` services before your other services depend on them.
 
 ---
@@ -167,13 +201,43 @@ Produces a fully static binary — no glibc version dependency, runs on any Linu
 - Fedora 44, kernel 7.0, x86_64 — full KDE Plasma desktop, btrfs subvolume boot
 
 ```sh
-# install as PID 1
+# install as PID 1 — symlink approach (distro-compatible)
 cp schema-init /sbin/schema-init
-ln -s /sbin/schema-init /sbin/init
+ln -sf /sbin/schema-init /sbin/init
 
-# or pass to kernel directly
-linux /boot/vmlinuz root=LABEL=my-root init=/usr/sbin/schema-init
+# or pass to kernel directly via GRUB
+linux /boot/vmlinuz root=LABEL=my-root init=/sbin/schema-init
 ```
+
+### GRUB setup
+
+**Option A — symlink** (`/sbin/init` → `/sbin/schema-init`): works with any distro GRUB config, no kernel cmdline change needed. Replace your distro's init binary or point the symlink.
+
+**Option B — explicit init= in GRUB**: add `init=/sbin/schema-init` to the kernel line in `/etc/default/grub`, then `grub-mkconfig -o /boot/grub/grub.cfg` (Debian/Ubuntu) or `grub2-mkconfig -o /boot/grub2/grub.cfg` (Fedora).
+
+**Option C — custom GRUB menu entry**: create a separate entry that leaves the distro default untouched:
+
+```
+# /boot/grub/custom.cfg  (included automatically by grub.cfg)
+menuentry 'schema-init' {
+    search --no-floppy --label --set=root schema-root
+    linux   /boot/vmlinuz-$(uname -r) root=LABEL=schema-root rw quiet init=/sbin/schema-init
+    initrd  /boot/initramfs-$(uname -r).img
+}
+```
+
+Option C is the safest for dual-boot or first-time installs — it leaves the existing systemd entry intact as a fallback.
+
+### Replacing a running init (without reboot)
+
+The init binary cannot be overwritten while running (`text file busy`). Use the copy-then-move trick:
+
+```sh
+cp schema-init /sbin/schema-init.new
+mv /sbin/schema-init.new /sbin/schema-init
+```
+
+`mv` replaces the directory entry atomically without touching the inode that the kernel holds open. The new binary takes effect on next boot.
 
 ---
 
@@ -234,18 +298,78 @@ sudo cp schema-ctl /usr/local/bin/schema-ctl
 
 ---
 
-## Logs
+## Debugging
 
-schema-init writes to stderr, which the kernel connects to the console (typically `/dev/console` at boot). To persist logs, redirect in your init script or point a service at a log file:
+### Service state
 
 ```sh
-exec /sbin/schema-init 2>/var/log/schema-init.log
+sudo schema-ctl status          # full dump: state, pid, restart count, weight
+sudo schema-ctl list            # compact: name + state only
+sudo schema-ctl timing          # kernel→PID1 handoff + per-service stable timestamps
 ```
 
-Per-service output goes to the console by default. To capture a specific service's stdout/stderr, wrap it:
+A service stuck in `NEW_PROCESS` means its dependencies haven't stabilised. `status` shows the state of every dep — trace upward.
+
+A service in `FRICTION` is in last-chance recovery. It will be EXCISED on the next failed F6 probe. Use `sudo schema-ctl start <name>` to manually re-queue it.
+
+### Service logs
 
 ```sh
-exec=/usr/local/bin/my-logger   # wrapper that redirects before exec
+tail -f /run/log/schema-init/<name>.log    # live stdout/stderr for a service
+cat /run/log/schema-init/dbus.log          # full output since last boot
+```
+
+These are plain text on a tmpfs. If a service is failing silently, its output is here.
+
+### D-Bus tracing
+
+If a desktop application hangs for exactly 25–30 seconds, D-Bus auto-activation is timing out trying to reach an unregistered interface. Trace it:
+
+```sh
+dbus-monitor --system 2>&1 | grep -A4 "method call"
+```
+
+The culprit will appear as a `method call` to a `destination=org.freedesktop.SomeName` that produces no `method return` for ~25 seconds.
+
+Fix options:
+1. Register the interface — see schema-logind for the pattern
+2. Mask the activation file: `sudo rm /usr/share/dbus-1/system-services/<name>.service`
+
+### Rescue shell
+
+If schema-init drops to a rescue shell at boot (cycle detected, or fatal probe failure), you have a minimal `/bin/sh` with access to the mounted filesystems. From there:
+
+```sh
+# inspect service files
+ls /etc/schema-init/services/
+cat /etc/schema-init/services/broken.svc
+
+# fix and re-exec
+vi /etc/schema-init/services/broken.svc
+exec /sbin/schema-init
+```
+
+---
+
+## Logs
+
+**Init log** — schema-init writes spawn/promote/death events to stdout, which the kernel connects to the console at boot. To persist:
+
+```sh
+exec /sbin/schema-init >/var/log/schema-init.log 2>&1
+```
+
+**Per-service logs** — each service's stdout and stderr are captured automatically to:
+
+```
+/run/log/schema-init/<name>.log
+```
+
+These files are created fresh on each boot (tmpfs). To read them while the system is running:
+
+```sh
+tail -f /run/log/schema-init/dbus.log
+tail -f /run/log/schema-init/network-manager.log
 ```
 
 There is no journal daemon. Logs are plain text, always.
@@ -270,6 +394,96 @@ for (int i = 0; i < shm->count; i++) {
            shm->svc[i].child_pid);
 }
 ```
+
+---
+
+## D-Bus compatibility
+
+On a no-systemd desktop, several interfaces are missing that desktop environments expect. schema-logind (`distros/*/services/schema-logind.svc`) handles all of them in a single Python process on the system bus.
+
+| Interface | Why it matters | What schema-logind returns |
+|-----------|---------------|---------------------------|
+| `org.freedesktop.login1` | Power/reboot buttons, session tracking, polkit seat queries | PowerOff, Reboot, CanPowerOff, CanReboot, GetSessionByPID, mock Session/User/Seat objects |
+| `org.freedesktop.hostname1` | About This System panel, network-manager display | hostname, static hostname, OS pretty name, hardware vendor/model from `/sys/class/dmi/` |
+| `org.freedesktop.systemd1.Manager` | KDE System Settings queries unit state on open | GetUnitFileState → "enabled"; GetUnit, ListUnits, Version/Features/Architecture properties |
+
+Without these stubs, KDE and GNOME panels hit the D-Bus default timeout (25–30s) before giving up. With them, the same queries return in <100ms.
+
+**schema-logind is not a dependency of schema-init itself** — it is a userspace service like any other. Drop its `.svc` file in your services directory and list it as a dep of your display manager:
+
+```ini
+name=sddm
+exec=/usr/sbin/sddm
+dep=dbus
+dep=schema-logind
+dep=polkitd
+needs_root=1
+```
+
+---
+
+## Porting to a new distro
+
+Starting from scratch on a distro not in `distros/`:
+
+**1. Build the binary on the target (or cross-compile):**
+```sh
+git clone https://github.com/ajax80/schema-init
+cd schema-init && make
+```
+
+**2. Install:**
+```sh
+sudo cp schema-init /sbin/schema-init
+sudo cp schema-ctl  /usr/local/bin/schema-ctl
+sudo mkdir -p /etc/schema-init/services
+```
+
+**3. Write service files.** Start minimal — just enough to reach a console:
+
+```ini
+# /etc/schema-init/services/udevd.svc
+name=udevd
+exec=/usr/lib/systemd/udevd
+args=--daemon
+needs_root=1
+stable_secs=3
+
+# /etc/schema-init/services/dbus.svc
+name=dbus
+exec=/usr/bin/dbus-daemon
+args=--system
+args=--nofork
+needs_root=1
+stable_secs=2
+ready_path=/run/dbus/system_bus_socket
+```
+
+The udevd path varies by distro: `/usr/lib/systemd/udevd` (Fedora/Debian), `/lib/udev/udevd` (older Debian), `/usr/bin/udevd` (Arch).
+
+**4. Configure GRUB** (see Building → GRUB setup above). Boot with a fallback entry pointing at systemd so you can recover.
+
+**5. Boot and check:**
+```sh
+sudo schema-ctl list       # all services should reach FUNDAMENTAL
+sudo schema-ctl timing     # see where time goes
+tail /run/log/schema-init/udevd.log   # if something is EXCISED, check its log
+```
+
+**6. Add services incrementally.** Bring up network, then login manager, then display manager. Add `dep=` links to enforce order. Add `ready_path=` for anything with a socket or pidfile.
+
+**7. Handle D-Bus hangs.** Open your desktop's settings panel immediately after first login. If it hangs >5s, run `dbus-monitor --system` and identify the missing interface. Add a stub to schema-logind or mask the activation file.
+
+**Common issues by distro:**
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| udevd not populating /dev/input | udev not settled before display manager | `dep=udev` in display manager svc; `udevadm settle` in a oneshot before it |
+| polkit "not authorized" on NM | polkit rule missing wheel group | Copy `distros/fedora-kde/config/polkit/10-schema-nm.rules` |
+| `/etc/resolv.conf` is a dead symlink | systemd-resolved wrote it | `rm /etc/resolv.conf && echo "nameserver 1.1.1.1" > /etc/resolv.conf` in your network oneshot |
+| Plasma/GNOME hangs on settings open | Missing D-Bus interface | See D-Bus compatibility section above |
+| PipeWire/PulseAudio not starting | systemd user session missing | Add autostart `.desktop` entry, or run from display manager wrapper script |
+| display manager exits immediately | No seat available | Ensure elogind or schema-logind is up and answering login1 before display manager starts |
 
 ---
 
