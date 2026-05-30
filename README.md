@@ -187,26 +187,28 @@ Tested on Dell Inspiron 3542 (Intel Core i3, 4GB RAM) running full Cinnamon desk
 | PID 1 threads | **1** | 20–30+ |
 | RAM used at desktop | **~1.1 GB** | ~1.6–2.0 GB |
 | Swap used | **0 MB** | 200–500 MB |
-| Time to desktop | **~29.5s** | slower |
+| Time to desktop | **~20.7s** | slower |
 
 The gap is structural. schema-init spawns your services and then sits in a 250ms tick loop. There is no journal daemon, no dbus-broker, no socket activation layer, no unit file parser running in the background.
 
-Boot timing breakdown (Dell Inspiron 3542, Debian Bookworm, kernel 6.1.0-49, CLOCK_MONOTONIC from kernel start):
+Boot timing breakdown (Dell Inspiron 3542, Debian Bookworm, kernel 6.1.0-49, times relative to PID1 start):
 
 ```
-kernel → PID 1:    5.836s
-network            1.914s   (oneshot — ip link up, udevadm settle)
-udev               7.356s
-dbus               9.609s
-getty-tty1         9.681s
-sshd               9.681s
-elogind           19.591s
-network-manager   19.591s
-polkitd           19.591s
-display-manager   29.517s   ← LightDM login screen visible
+kernel → PID 1:    6.968s
+dbus               1.761s   (ready: /run/dbus/system_bus_socket)
+elogind            2.739s   (ready: /run/systemd/seats)
+polkitd            3.447s
+udev               3.197s
+network           10.505s   (oneshot)
+network-manager   11.757s
+getty-tty1        10.755s
+sshd              10.755s
+display-manager   13.760s   ← LightDM login screen visible
 ```
 
-`schema-ctl timing` produces this output. The 5.8s kernel→PID1 gap is BIOS + GRUB + kernel decompress, not schema-init overhead. elogind, NM, and polkitd all land on the same tick because they share the dbus dependency and run their stability windows in parallel.
+total kernel → login screen: **~20.7s**
+
+`schema-ctl timing` produces this output. Services with `ready_path` set promote the instant the path exists — no blind timer. `stable_secs` (default 10s) is the fallback. The remaining ~10s cluster is network/getty/sshd with no readiness path.
 
 ---
 
@@ -303,7 +305,7 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 - [x] event-driven main loop — signalfd for SIGCHLD + poll() with 250ms timeout; wakes on child death and ctl commands instead of busy-polling
 - [x] Boot hang fix — dep_idx alignment bug in group dep resolution; poll() replaces epoll (PID 1 epoll deadlock on kernel 6.1.0-49)
 - [x] Boot timing — `schema-ctl timing` reports kernel→PID1 handoff and per-service FUNDAMENTAL/PERFECT timestamps (CLOCK_MONOTONIC)
-- [ ] Boot time measurement — formal numbers with a `systemd-analyze` equivalent
+- [x] Boot time measurement — 29.5s → 20.7s with `ready_path` probes; `stable_secs` fallback per service
 - [ ] ARM port — Ungulate Leg hardware target
 - [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
 
