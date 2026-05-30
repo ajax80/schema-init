@@ -2,6 +2,7 @@
 import sys
 import os
 import signal
+import time
 import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
@@ -43,10 +44,22 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
     def CanSuspend(self):
+        time.sleep(0.05)
         return "na"
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
     def CanHibernate(self):
+        time.sleep(0.05)
+        return "na"
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
+    def CanHybridSleep(self):
+        time.sleep(0.05)
+        return "na"
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
+    def CanSuspendThenHibernate(self):
+        time.sleep(0.05)
         return "na"
 
     # ── Stubbed Session, User, Seat methods ────────────────────────────────
