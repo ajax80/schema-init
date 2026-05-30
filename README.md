@@ -253,6 +253,16 @@ for (int i = 0; i < shm->count; i++) {
 
 ---
 
+## Roadmap
+
+- [ ] Runtime service loading — add/remove services without restarting init
+- [ ] Boot time measurement — formal numbers with a `systemd-analyze` equivalent
+- [ ] login1 D-Bus stub — restore KDE shutdown/restart buttons on no-systemd systems
+- [ ] ARM port — Ungulate Leg hardware target
+- [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
+
+---
+
 ## License
 
 AGPL-3.0 for open source use.  
