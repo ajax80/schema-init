@@ -137,10 +137,19 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
 }
 
 int service_spawn(service_t *svc) {
-    pid_t pid = fork();
-    if (pid < 0) return -1;
+    int sync[2];
+    pid_t pid;
+
+    if (pipe(sync) < 0) return -1;
+
+    pid = fork();
+    if (pid < 0) { close(sync[0]); close(sync[1]); return -1; }
 
     if (pid == 0) {
+        char c;
+        close(sync[1]);
+        read(sync[0], &c, 1);
+        close(sync[0]);
         setsid();
         int fd = open("/dev/null", O_WRONLY);
         if (fd >= 0) {
@@ -152,11 +161,14 @@ int service_spawn(service_t *svc) {
         _exit(127);
     }
 
+    close(sync[0]);
     svc->child_pid  = pid;
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     svc->restart_count++;
     cgroup_assign(svc, pid);
+    write(sync[1], "", 1);
+    close(sync[1]);
     return 0;
 }
 
