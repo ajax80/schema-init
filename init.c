@@ -36,6 +36,7 @@ static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
 static int          sig_fd   = -1;
 static int          system_under_pressure = 0;
+static int          pressure_clear_ticks = 0;
 static struct timespec init_start;
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
@@ -204,6 +205,12 @@ static void set_cgroup_freeze(service_t *svc, int freeze) {
         close(fd);
         svc->is_frozen = freeze;
         service_log(svc, freeze ? "freeze" : "thaw");
+    } else if (errno == ENOENT) {
+        if (svc->child_pid > 0) {
+            kill(svc->child_pid, freeze ? SIGSTOP : SIGCONT);
+            svc->is_frozen = freeze;
+            service_log(svc, freeze ? "freeze-sig" : "thaw-sig");
+        }
     }
 }
 
@@ -241,8 +248,6 @@ static void execute_fuse_cmd(service_t *svc) {
         setsid();
         execl("/bin/sh", "sh", "-c", svc->fuse_cmd, NULL);
         _exit(127);
-    } else if (pid > 0) {
-        waitpid(pid, NULL, 0);
     }
 }
 
@@ -721,11 +726,23 @@ int main(int argc, char **argv) {
             usleep(TICK_USEC);
         }
 
-        /* Check resource pressure and toggle survival posture */
+        /* Check resource pressure and toggle survival posture with hysteresis */
         int pressure = check_system_pressure();
-        if (pressure != system_under_pressure) {
-            system_under_pressure = pressure;
-            execute_survival_posture(pressure);
+        if (pressure) {
+            pressure_clear_ticks = 0;
+            if (!system_under_pressure) {
+                system_under_pressure = 1;
+                execute_survival_posture(1);
+            }
+        } else {
+            if (system_under_pressure) {
+                pressure_clear_ticks++;
+                if (pressure_clear_ticks >= 8) { /* ~2 seconds of clean ticks */
+                    system_under_pressure = 0;
+                    pressure_clear_ticks = 0;
+                    execute_survival_posture(0);
+                }
+            }
         }
 
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;
