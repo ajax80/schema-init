@@ -1,0 +1,6 @@
+#!/bin/sh
+for iface in $(ls /sys/class/net); do
+    [ "$iface" = "lo" ] && continue
+    ip link set "$iface" up
+done
+udevadm settle || true
