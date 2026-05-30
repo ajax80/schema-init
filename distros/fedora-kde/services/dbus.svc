@@ -4,3 +4,5 @@ args=--system
 args=--nofork
 needs_root=1
 critical=1
+stable_secs=2
+ready_path=/run/dbus/system_bus_socket
