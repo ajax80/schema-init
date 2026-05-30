@@ -283,6 +283,7 @@ int services_load(const char *dir, service_t *table, int max) {
         for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
         for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
         schema_instance_init(&svc->inst, 0, STATE_PERFECT);
+        svc->stable_secs = STABLE_SECS;
         int dep_slot = 0;
 
         argc = 0;
@@ -313,6 +314,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_CRITICAL;
             else if (strcmp(line, "no_restart") == 0 && atoi(val))
                 svc->flags |= SVC_NO_RESTART;
+            else if (strcmp(line, "stable_secs") == 0 && atoi(val) > 0)
+                svc->stable_secs = atoi(val);
         }
         fclose(f);
 
@@ -357,6 +360,7 @@ int service_load_one(const char *path, service_t *svc) {
     for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
     for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
     schema_instance_init(&svc->inst, 0, STATE_PERFECT);
+    svc->stable_secs = STABLE_SECS;
     argc = 0;
     dep_slot = 0;
 
@@ -386,6 +390,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_CRITICAL;
         else if (strcmp(line, "no_restart") == 0 && atoi(val))
             svc->flags |= SVC_NO_RESTART;
+        else if (strcmp(line, "stable_secs") == 0 && atoi(val) > 0)
+            svc->stable_secs = atoi(val);
     }
     fclose(f);
 

@@ -158,8 +158,7 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FULL_TRUST:
-            /* promote to FUNDAMENTAL once stable for STABLE_SECS */
-            if (svc->child_pid > 0 && now - svc->start_time >= STABLE_SECS) {
+            if (svc->child_pid > 0 && now - svc->start_time >= svc->stable_secs) {
                 flags = service_probe_f8(svc, services, svc_count);
                 schema_step(&svc->inst, flags);
                 if (svc->inst.state != prev) {

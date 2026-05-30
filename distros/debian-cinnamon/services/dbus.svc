@@ -5,3 +5,4 @@ args=--nofork
 oneshot=0
 needs_root=1
 critical=0
+stable_secs=2
