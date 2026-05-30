@@ -94,6 +94,49 @@ Dependencies are resolved by name at load time. A service stays in `NEW_PROCESS`
 
 ---
 
+## State glossary
+
+| State | Meaning |
+|-------|---------|
+| `NEW_PROCESS` | Queued. Waiting for all deps to reach FUNDAMENTAL. No spawn attempt yet. |
+| `FULL_TRUST` | Spawned. Watching for 10 seconds — if it stays alive, it promotes. |
+| `FUNDAMENTAL` | Stable. Load-bearing. Other services can depend on it. |
+| `SETTLED` | Stable, non-critical. Satisfies deps but generates no friction warnings if lost. |
+| `RECOVERY` | Died unexpectedly. F9 probe running. May re-queue or escalate. |
+| `FRICTION` | Recovery failed. F6 last-chance probe running. |
+| `EXCISED` | Permanently removed. No restart, no retry. Gate closes. |
+| `PERFECT` | Oneshot service exited 0. Terminal success. |
+
+---
+
+## Shutdown
+
+schema-init handles shutdown signals from userspace or the kernel:
+
+```sh
+sudo kill -TERM 1   # poweroff
+sudo kill -INT 1    # reboot
+```
+
+On SIGTERM, schema-init sets system state to shutdown, sends SIGTERM to all child processes, waits 500ms for clean exit, then calls `reboot(RB_POWER_OFF)`.
+
+On SIGINT, same sequence ends with `reboot(RB_AUTOBOOT)`.
+
+The 500ms hold is intentional — it gives any running desktop or display manager time to render a shutdown state before the process tree is torn down.
+
+---
+
+## Known limitations
+
+These are real gaps, not future features being teased:
+
+- **No runtime service loading** — services are read at startup. Adding a `.svc` file requires a restart of the init. This is the next thing getting built.
+- **No cgroup management** — schema-init does not create or manage cgroups. Services inherit the root cgroup.
+- **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off.
+- **No dependency cycle detection at runtime** — cycles stall in `NEW_PROCESS` indefinitely. Cycle detection runs at load time and drops to a rescue shell, but runtime cycle introduction via schema-ctl is not guarded.
+
+---
+
 ## Building
 
 ```sh
@@ -123,7 +166,7 @@ Tested on Dell Inspiron 3542 (Intel Core i3, 4GB RAM) running full Cinnamon desk
 | PID 1 threads | **1** | 20–30+ |
 | RAM used at desktop | **~1.1 GB** | ~1.6–2.0 GB |
 | Swap used | **0 MB** | 200–500 MB |
-| Time to desktop | **fast** | slower |
+| Time to desktop | **not yet measured** | slower |
 
 The gap is structural. schema-init spawns your services and then sits in a 250ms tick loop. There is no journal daemon, no dbus-broker, no socket activation layer, no unit file parser running in the background.
 
