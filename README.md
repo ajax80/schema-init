@@ -270,7 +270,8 @@ Full KDE Plasma 6 desktop on Fedora 44 with schema-init as PID 1. Boots from a b
 | `dbus` | System bus |
 | `network-up` | Loads r8152 USB ethernet module, udev settle |
 | `network-manager` | Owns the network interface via NM profile |
-| `polkitd` | Authorization — required for NM and elogind PowerOff |
+| `polkitd` | Authorization — required for NM actions |
+| `schema-logind` | Minimal `org.freedesktop.login1` D-Bus stub — restores KDE shutdown/restart buttons |
 | `sddm` | Display manager (via sddm-logged wrapper, no systemd session) |
 | `sound-modules` | oneshot — loads AMD Ryzen audio modules at boot |
 
