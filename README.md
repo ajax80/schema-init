@@ -283,7 +283,9 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 
 - [x] Runtime service loading — `schema-ctl add <path>` loads a new service at runtime
 - [x] login1 D-Bus stub — `schema-logind` restores KDE shutdown/restart buttons on no-systemd systems
-- [x] epoll event loop — main loop wakes on child death (signalfd) and ctl commands instead of polling every 250ms
+- [x] event-driven main loop — signalfd for SIGCHLD + poll() with 250ms timeout; wakes on child death and ctl commands instead of busy-polling
+- [x] Boot hang fix — dep_idx alignment bug in group dep resolution; poll() replaces epoll (PID 1 epoll deadlock on kernel 6.1.0-49)
+- [x] Boot timing — `schema-ctl timing` reports kernel→PID1 handoff and per-service FUNDAMENTAL/PERFECT timestamps (CLOCK_MONOTONIC)
 - [ ] Boot time measurement — formal numbers with a `systemd-analyze` equivalent
 - [ ] ARM port — Ungulate Leg hardware target
 - [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
