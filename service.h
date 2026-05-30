@@ -18,6 +18,12 @@
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
 #define SVC_NO_RESTART  (1 << 3)  /* 76 on any death, no recovery arc     */
 
+typedef enum {
+    PRIO_PERIPHERAL = 0,
+    PRIO_STANDARD,
+    PRIO_CRITICAL
+} prio_t;
+
 typedef struct {
     char             name[64];
     char             exec[256];
@@ -34,6 +40,10 @@ typedef struct {
     time_t           start_time;       /* when current run began              */
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
     char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */
+    prio_t           priority;         /* priority class for resource throttling */
+    int              fuse;             /* 1 to enable quarantine cascade */
+    char             fuse_cmd[256];    /* shell command executed on fuse trip */
+    int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */

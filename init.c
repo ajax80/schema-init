@@ -35,6 +35,7 @@ static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
 static int          sig_fd   = -1;
+static int          system_under_pressure = 0;
 static struct timespec init_start;
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
@@ -51,6 +52,11 @@ static void mount_pseudo(void) {
     mount("devtmpfs","/dev",  "devtmpfs", MS_NOSUID|MS_STRICTATIME,     NULL);
     mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755");
     mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
+    int cg_fd = open("/sys/fs/cgroup/cgroup.subtree_control", O_WRONLY);
+    if (cg_fd >= 0) {
+        write(cg_fd, "+cpu +memory", 12);
+        close(cg_fd);
+    }
     mkdir("/run/dbus",     0755);
     mkdir("/run/lock",     1777);
     mkdir("/run/shm",      1777);
@@ -132,6 +138,114 @@ static void reap(void) {
     }
 }
 
+/* ── resource pressure and quarantine executive ─────────────────────── */
+
+static double read_cpu_pressure(const char *cgroup_path) {
+    char path[256];
+    FILE *f;
+    double avg10 = 0.0;
+    if (!cgroup_path[0]) return 0.0;
+    snprintf(path, sizeof(path), "%s/cpu.pressure", cgroup_path);
+    f = fopen(path, "r");
+    if (!f) return 0.0;
+    char line[256];
+    if (fgets(line, sizeof(line), f)) {
+        char *p = strstr(line, "avg10=");
+        if (p) {
+            sscanf(p + 6, "%lf", &avg10);
+        }
+    }
+    fclose(f);
+    return avg10;
+}
+
+static double read_system_mem_pressure(void) {
+    FILE *f = fopen("/proc/pressure/memory", "r");
+    double avg10 = 0.0;
+    if (!f) return 0.0;
+    char line[256];
+    if (fgets(line, sizeof(line), f)) {
+        char *p = strstr(line, "avg10=");
+        if (p) {
+            sscanf(p + 6, "%lf", &avg10);
+        }
+    }
+    fclose(f);
+    return avg10;
+}
+
+static int check_system_pressure(void) {
+    int i;
+    for (i = 0; i < svc_count; i++) {
+        service_t *svc = &services[i];
+        if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0) {
+            double cpu_stalled = read_cpu_pressure(svc->cgroup_path);
+            if (cpu_stalled > 5.0) {
+                return 1;
+            }
+        }
+    }
+    double mem_stalled = read_system_mem_pressure();
+    if (mem_stalled > 10.0) {
+        return 1;
+    }
+    return 0;
+}
+
+static void set_cgroup_freeze(service_t *svc, int freeze) {
+    char path[256];
+    int fd;
+    if (!svc->cgroup_path[0]) return;
+    if (svc->is_frozen == freeze) return;
+    snprintf(path, sizeof(path), "%s/cgroup.freeze", svc->cgroup_path);
+    fd = open(path, O_WRONLY);
+    if (fd >= 0) {
+        write(fd, freeze ? "1\n" : "0\n", 2);
+        close(fd);
+        svc->is_frozen = freeze;
+        service_log(svc, freeze ? "freeze" : "thaw");
+    }
+}
+
+static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
+    char path[256];
+    int fd;
+    if (!svc->cgroup_path[0]) return;
+    snprintf(path, sizeof(path), "%s/cpu.max", svc->cgroup_path);
+    fd = open(path, O_WRONLY);
+    if (fd >= 0) {
+        write(fd, limit, strlen(limit));
+        close(fd);
+    }
+}
+
+static void execute_survival_posture(int under_pressure) {
+    int i;
+    for (i = 0; i < svc_count; i++) {
+        service_t *svc = &services[i];
+        if (svc->child_pid <= 0) continue;
+        if (svc->priority == PRIO_PERIPHERAL) {
+            set_cgroup_freeze(svc, under_pressure);
+        } else if (svc->priority == PRIO_STANDARD) {
+            set_cgroup_cpu_limit(svc, under_pressure ? "50000 100000" : "max 100000");
+        }
+    }
+}
+
+static void execute_fuse_cmd(service_t *svc) {
+    pid_t pid;
+    if (!svc->fuse_cmd[0]) return;
+    service_log(svc, "fuse-cmd-exec");
+    pid = fork();
+    if (pid == 0) {
+        setsid();
+        execl("/bin/sh", "sh", "-c", svc->fuse_cmd, NULL);
+        _exit(127);
+    } else if (pid > 0) {
+        waitpid(pid, NULL, 0);
+    }
+}
+
 /* ── schema tick for one service ────────────────────────────────────── */
 
 static void tick_service(service_t *svc,
@@ -139,6 +253,25 @@ static void tick_service(service_t *svc,
     uint32_t flags;
     uint8_t  prev = svc->inst.state;
     time_t   now  = time(NULL);
+
+    /* Quarantine fuse check */
+    if (svc->fuse && svc->inst.state != STATE_EXCISED) {
+        int i;
+        for (i = 0; i < MAX_DEPS && svc->dep_idx[i] >= 0; i++) {
+            int di = svc->dep_idx[i];
+            if (services[di].inst.state == STATE_FRICTION || services[di].inst.state == STATE_EXCISED) {
+                execute_fuse_cmd(svc);
+                svc->inst.state = STATE_EXCISED;
+                service_log(svc, "fuse-tripped");
+                if (svc->child_pid > 0) {
+                    kill(svc->child_pid, SIGKILL);
+                    service_cgroup_kill(svc);
+                    svc->child_pid = 0;
+                }
+                break;
+            }
+        }
+    }
 
     switch (svc->inst.state) {
 
@@ -448,6 +581,9 @@ static void schema_boot_log(void) {
 }
 
 static int get_poll_timeout(void) {
+    if (system_under_pressure) {
+        return TICK_USEC / 1000;
+    }
     int i;
     for (i = 0; i < svc_count; i++) {
         uint8_t s = services[i].inst.state;
@@ -583,6 +719,13 @@ int main(int argc, char **argv) {
             }
         } else {
             usleep(TICK_USEC);
+        }
+
+        /* Check resource pressure and toggle survival posture */
+        int pressure = check_system_pressure();
+        if (pressure != system_under_pressure) {
+            system_under_pressure = pressure;
+            execute_survival_posture(pressure);
         }
 
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;

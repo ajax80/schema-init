@@ -124,6 +124,11 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     int n;
 
     mkdir("/sys/fs/cgroup/schema-init", 0755);
+    int sub_fd = open("/sys/fs/cgroup/schema-init/cgroup.subtree_control", O_WRONLY);
+    if (sub_fd >= 0) {
+        write(sub_fd, "+cpu +memory", 12);
+        close(sub_fd);
+    }
     snprintf(svc->cgroup_path, sizeof(svc->cgroup_path),
              "/sys/fs/cgroup/schema-init/%s", svc->name);
     mkdir(svc->cgroup_path, 0755);
@@ -303,6 +308,7 @@ int services_load(const char *dir, service_t *table, int max) {
         for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
         schema_instance_init(&svc->inst, 0, STATE_PERFECT);
         svc->stable_secs = STABLE_SECS;
+        svc->priority = PRIO_STANDARD;
         int dep_slot = 0;
 
         argc = 0;
@@ -337,6 +343,15 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->stable_secs = atoi(val);
             else if (strcmp(line, "ready_path") == 0)
                 strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
+            else if (strcmp(line, "priority") == 0) {
+                if (strcasecmp(val, "critical") == 0) svc->priority = PRIO_CRITICAL;
+                else if (strcasecmp(val, "peripheral") == 0) svc->priority = PRIO_PERIPHERAL;
+                else svc->priority = PRIO_STANDARD;
+            } else if (strcmp(line, "fuse") == 0) {
+                svc->fuse = atoi(val);
+            } else if (strcmp(line, "fuse_cmd") == 0) {
+                strncpy(svc->fuse_cmd, val, sizeof(svc->fuse_cmd) - 1);
+            }
         }
         fclose(f);
 
@@ -382,6 +397,7 @@ int service_load_one(const char *path, service_t *svc) {
     for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
     schema_instance_init(&svc->inst, 0, STATE_PERFECT);
     svc->stable_secs = STABLE_SECS;
+    svc->priority = PRIO_STANDARD;
     argc = 0;
     dep_slot = 0;
 
@@ -415,6 +431,15 @@ int service_load_one(const char *path, service_t *svc) {
             svc->stable_secs = atoi(val);
         else if (strcmp(line, "ready_path") == 0)
             strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
+        else if (strcmp(line, "priority") == 0) {
+            if (strcasecmp(val, "critical") == 0) svc->priority = PRIO_CRITICAL;
+            else if (strcasecmp(val, "peripheral") == 0) svc->priority = PRIO_PERIPHERAL;
+            else svc->priority = PRIO_STANDARD;
+        } else if (strcmp(line, "fuse") == 0) {
+            svc->fuse = atoi(val);
+        } else if (strcmp(line, "fuse_cmd") == 0) {
+            strncpy(svc->fuse_cmd, val, sizeof(svc->fuse_cmd) - 1);
+        }
     }
     fclose(f);
 
