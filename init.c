@@ -21,6 +21,7 @@
 #include <stdarg.h>
 #include <poll.h>
 #include <sys/signalfd.h>
+#include <glob.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -68,6 +69,25 @@ static void mount_pseudo(void) {
     mkdir("/run/log",               0755);
     mkdir("/run/log/schema-init",   0755);
     mkdir("/run/sshd",              0755);
+}
+
+static void cleanup_tmp_locks(void) {
+    glob_t globbuf;
+    size_t i;
+    /* Clean up stale Xorg lock files */
+    if (glob("/tmp/.X*-lock", 0, NULL, &globbuf) == 0) {
+        for (i = 0; i < globbuf.gl_pathc; i++) {
+            unlink(globbuf.gl_pathv[i]);
+        }
+        globfree(&globbuf);
+    }
+    /* Clean up stale Xorg Unix socket files */
+    if (glob("/tmp/.X11-unix/X*", 0, NULL, &globbuf) == 0) {
+        for (i = 0; i < globbuf.gl_pathc; i++) {
+            unlink(globbuf.gl_pathv[i]);
+        }
+        globfree(&globbuf);
+    }
 }
 
 static void sig_term(int s)   { (void)s; running = 0; do_reboot = 0; if (shm_ptr) shm_ptr->system_state = 13; }
@@ -410,8 +430,8 @@ static void ctl_cmd(int fd, char *line) {
         for (i = 0; i < svc_count; i++)
             ctl_writef(fd, "%s\n", services[i].name);
 
-    } else if (strncmp(line, "start ", 6) == 0) {
-        const char *name = line + 6;
+    } else if (strncmp(line, "start ", 6) == 0 || strncmp(line, "up ", 3) == 0) {
+        const char *name = (strncmp(line, "start ", 6) == 0) ? line + 6 : line + 3;
         for (i = 0; i < svc_count; i++) {
             if (strcmp(services[i].name, name) != 0) continue;
             if (services[i].inst.state == STATE_EXCISED ||
@@ -429,7 +449,7 @@ static void ctl_cmd(int fd, char *line) {
         }
         ctl_writef(fd, "err: not found: %s\n", name);
 
-    } else if (strncmp(line, "stop ", 5) == 0) {
+    } else if (strncmp(line, "stop ", 5) == 0 || strncmp(line, "down ", 5) == 0) {
         const char *name = line + 5;
         for (i = 0; i < svc_count; i++) {
             if (strcmp(services[i].name, name) != 0) continue;
@@ -610,7 +630,10 @@ int main(int argc, char **argv) {
 
     clock_gettime(CLOCK_MONOTONIC, &init_start);
 
-    if (getpid() == 1) mount_pseudo();
+    if (getpid() == 1) {
+        mount_pseudo();
+        cleanup_tmp_locks();
+    }
     setup_signals();
 
     svc_count = services_load(svc_dir, services, MAX_SERVICES);
