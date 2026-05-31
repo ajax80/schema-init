@@ -113,7 +113,7 @@ oneshot=1
 | `dep` | — | Dependency by name (repeat for multiple deps; can name a service or a group) |
 | `oneshot` | `0` | Exit 0 → PERFECT and don't restart; exit non-zero → RECOVERY arc |
 | `needs_root` | `0` | Abort spawn if uid ≠ 0 |
-| `critical` | `0` | EXCISED → emit system friction warning to console |
+| `critical` | `0` | If `1`: service never reaches EXCISED — stays DORMANT at 1h retry indefinitely. Also: if this service is EXCISED, its dependents are hard-blocked. |
 | `no_restart` | `0` | Any death → EXCISED immediately; no recovery arc |
 | `stable_secs` | `10` | Seconds process must stay alive before FULL_TRUST promotes to FUNDAMENTAL. Set lower for fast services; use `ready_path` instead when possible |
 | `ready_path` | — | Filesystem path that, when it exists, triggers immediate FULL_TRUST→FUNDAMENTAL promotion. Falls back to `stable_secs` if the path never appears |
@@ -443,6 +443,16 @@ On a no-systemd desktop, several interfaces are missing that desktop environment
 | `org.freedesktop.systemd1.Manager` | KDE System Settings queries unit state on open | GetUnitFileState → "enabled"; GetUnit, ListUnits, Version/Features/Architecture properties |
 
 Without these stubs, KDE and GNOME panels hit the D-Bus default timeout (25–30s) before giving up. With them, the same queries return in <100ms.
+
+**D-Bus policy required.** The systemd-shipped `org.freedesktop.login1.conf` policy denies all non-root calls to login1 by default — KDE and Cinnamon will never see the power buttons without a drop-in. Install the one from this repo:
+
+```sh
+sudo cp distros/shared/dbus/schema-logind.conf /etc/dbus-1/system.d/schema-logind.conf
+sudo dbus-send --system --type=method_call --dest=org.freedesktop.DBus \
+    /org/freedesktop/DBus org.freedesktop.DBus.ReloadConfig
+```
+
+Then log out and back in (or reboot). The policy whitelists CanPowerOff, CanReboot, PowerOff, Reboot, and all session/seat methods schema-logind exports.
 
 **schema-logind is not a dependency of schema-init itself** — it is a userspace service like any other. Drop its `.svc` file in your services directory and list it as a dep of your display manager:
 
