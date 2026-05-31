@@ -58,6 +58,10 @@ Every service moves through a state machine driven by probes. Before a service i
                   │
            F6 probe fails
                   │
+             DORMANT  (75 — backoff anteroom: 5m → 10m → 20m → 40m → 60m)
+                  │
+         (non-critical, 5 cycles exhausted)
+                  │
              EXCISED  (76 — gate closes)
 ```
 
@@ -69,7 +73,7 @@ Three probe families:
 | **F9** | After death | Retry budget, cooldown window, memory, escalation path |
 | **F6** | After recovery fails | Last-chance: can we even attempt a restart? |
 
-If a service is marked `critical` and reaches EXCISED, it logs a system friction warning. Everything else just stops retrying and steps aside.
+Services marked `critical=1` never reach EXCISED — they enter DORMANT and retry at 1-hour intervals indefinitely. Non-critical services excise after 5 dormant cycles (~75 minutes). A dep marked `critical=1` that is EXCISED still blocks its dependents. A non-critical EXCISED dep is skipped — dependents proceed without it.
 
 ---
 
@@ -160,7 +164,8 @@ Maximum 16 groups, 8 members per group. Names and members are matched at load ti
 | `SETTLED` | Stable, non-critical. Satisfies deps but generates no friction warnings if lost. |
 | `RECOVERY` | Died unexpectedly. F9 probe running. May re-queue or escalate. |
 | `FRICTION` | Recovery failed. F6 last-chance probe running. |
-| `EXCISED` | Permanently removed. No restart, no retry. Gate closes. |
+| `DORMANT` | F6 failed. Exponential backoff: 5m→10m→20m→40m→60m. Re-queues on wake. `critical=1` services never leave this toward EXCISED. |
+| `EXCISED` | Permanently removed. Non-critical only, after 5 dormant cycles. Gate closes. |
 | `PERFECT` | Oneshot service exited 0. Terminal success. |
 
 ---
@@ -221,6 +226,14 @@ Produces a fully static binary — no glibc version dependency, runs on any Linu
 
 - Debian Bookworm, kernel 6.1, x86_64 — headless and Cinnamon desktop
 - Fedora 44, kernel 7.0, x86_64 — full KDE Plasma desktop, btrfs subvolume boot
+
+**Cross-compile for aarch64 (ARM — Ungulate Leg target):**
+
+```sh
+make aarch64
+```
+
+Requires `aarch64-linux-gnu-gcc`. On Fedora: `sudo dnf install gcc-aarch64-linux-gnu`. Produces static `schema-init-static`, `schema-ctl`, and `schema-subreaper` binaries. Override sysroot with `SYSROOT=/path/to/sysroot make aarch64`.
 
 ```sh
 # install as PID 1 — symlink approach (distro-compatible)
@@ -332,7 +345,7 @@ sudo schema-ctl timing          # kernel→PID1 handoff + per-service stable tim
 
 A service stuck in `NEW_PROCESS` means its dependencies haven't stabilised. `status` shows the state of every dep — trace upward.
 
-A service in `FRICTION` is in last-chance recovery. It will be EXCISED on the next failed F6 probe. Use `sudo schema-ctl start <name>` to manually re-queue it.
+A service in `FRICTION` is in last-chance recovery. On the next failed F6 probe it enters `DORMANT` (exponential backoff) rather than going straight to EXCISED. Use `sudo schema-ctl start <name>` to manually re-queue it immediately instead of waiting out the backoff.
 
 ### Service logs
 
@@ -548,8 +561,11 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 - [x] Service log files — stdout/stderr per service at `/run/log/schema-init/<name>.log`
 - [x] D-Bus stubs — `hostname1` and `systemd1` Manager stubs in `schema-logind`; KDE Settings 25s → 2s
 - [x] Fedora KDE distribution — GreyBox daily driver, full KDE Plasma 6 on Fedora 44
-- [ ] Fedora Cinnamon distribution — in progress
-- [ ] ARM port — Ungulate Leg hardware target
+- [x] Fedora Cinnamon distribution — Eli (Dell Inspiron), keyboard/touchpad/ethernet working
+- [x] STATE_DORMANT (75) — exponential backoff before 76 verdict; critical services never excise
+- [x] Soft dep cascades — non-critical EXCISED deps skipped; dependents proceed without them
+- [x] aarch64 cross-compile — `make aarch64`; all three binaries static; Ungulate Leg target ready
+- [ ] ARM bare-metal deploy — RPi 3B first target
 - [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
 
 ---
