@@ -62,6 +62,19 @@ cp config/autostart/schema-audio.desktop ~/.config/autostart/
 sudo cp config/polkit/10-schema-nm.rules /etc/polkit-1/rules.d/
 ```
 
+### 6. Install D-Bus policy for login1
+Without this, shutdown/restart buttons won't appear in Cinnamon:
+```
+sudo cp ../../shared/dbus/schema-logind.conf /etc/dbus-1/system.d/schema-logind.conf
+```
+
+### 7. Disable ModemManager D-Bus activation
+ModemManager gets auto-activated by D-Bus when NetworkManager starts (no systemd to intercept it). It grabs WiFi adapters and prevents them appearing in NM:
+```
+sudo mv /usr/share/dbus-1/system-services/org.freedesktop.ModemManager1.service \
+        /usr/share/dbus-1/system-services/org.freedesktop.ModemManager1.service.disabled
+```
+
 ## Key fixes explained
 
 | Problem | Fix |
@@ -71,6 +84,8 @@ sudo cp config/polkit/10-schema-nm.rules /etc/polkit-1/rules.d/
 | PipeWire not starting | Cinnamon autostart via `schema-audio.desktop`. |
 | NM "not authorized" | polkit rule granting wheel group NM control. |
 | KDE/Cinnamon System Settings hangs | `schema-logind` registers `org.freedesktop.systemd1` and `org.freedesktop.hostname1` stubs to prevent D-Bus timeouts. |
+| Shutdown/restart buttons missing | D-Bus policy denies non-root login1 calls by default — install `shared/dbus/schema-logind.conf`, then log out/in. |
+| WiFi adapter missing from NM | ModemManager D-Bus-activated and grabbed the adapter — disable its activation file (step 7 above) and `sudo modprobe ath9k`. |
 
 ## Network
 
