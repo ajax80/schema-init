@@ -7,6 +7,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 import socket
+import pwd
 
 def read_file_line(path):
     try:
@@ -27,6 +28,27 @@ def get_os_release_val(key):
     except Exception:
         pass
     return ""
+
+def get_active_uid():
+    try:
+        uids = [int(d) for d in os.listdir('/run/user') if d.isdigit() and int(d) >= 1000]
+        if uids:
+            return uids[0]
+    except Exception:
+        pass
+    return 1000
+
+def get_username_for_uid(uid):
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except Exception:
+        return "root"
+
+def get_gid_for_uid(uid):
+    try:
+        return pwd.getpwuid(uid).pw_gid
+    except Exception:
+        return uid
 
 class Login1Session(dbus.service.Object):
     def __init__(self, bus):
@@ -93,23 +115,28 @@ class Login1Session(dbus.service.Object):
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
         if interface_name == 'org.freedesktop.login1.Session':
+            uid = get_active_uid()
+            username = get_username_for_uid(uid)
             return {
                 'Id': dbus.String('31'),
-                'User': dbus.Struct((dbus.UInt32(1000), dbus.ObjectPath('/org/freedesktop/login1/user/_1000')), signature='uo'),
-                'Name': dbus.String('root'),
+                'User': dbus.Struct((dbus.UInt32(uid), dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')), signature='uo'),
+                'Name': dbus.String(username),
                 'Active': dbus.Boolean(True),
                 'State': dbus.String('active'),
                 'Remote': dbus.Boolean(False),
                 'Type': dbus.String('x11'),
                 'Class': dbus.String('user'),
                 'Seat': dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so'),
+                'CanReboot': dbus.String('yes'),
+                'CanPowerOff': dbus.String('yes'),
             }
         return {}
 
 class Login1User(dbus.service.Object):
-    def __init__(self, bus):
-        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/user/_1000')
-        print("login1-stub: Registered User at /org/freedesktop/login1/user/_1000")
+    def __init__(self, bus, uid=1000):
+        self.uid = uid
+        dbus.service.Object.__init__(self, bus, f'/org/freedesktop/login1/user/_{uid}')
+        print(f"login1-stub: Registered User at /org/freedesktop/login1/user/_{uid}")
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
@@ -118,10 +145,13 @@ class Login1User(dbus.service.Object):
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
         if interface_name == 'org.freedesktop.login1.User':
+            uid = getattr(self, 'uid', 1000)
+            username = get_username_for_uid(uid)
+            gid = get_gid_for_uid(uid)
             return {
-                'UID': dbus.UInt32(1000),
-                'GID': dbus.UInt32(1000),
-                'Name': dbus.String('root'),
+                'UID': dbus.UInt32(uid),
+                'GID': dbus.UInt32(gid),
+                'Name': dbus.String(username),
                 'Display': dbus.ObjectPath('/org/freedesktop/login1/session/_31'),
                 'State': dbus.String('active'),
             }
@@ -210,11 +240,15 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(susso)')
     def ListSessions(self):
-        return [dbus.Struct((dbus.String('31'), dbus.UInt32(1000), dbus.String('root'), dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='susso')]
+        uid = get_active_uid()
+        username = get_username_for_uid(uid)
+        return [dbus.Struct((dbus.String('31'), dbus.UInt32(uid), dbus.String(username), dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='susso')]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(uso)')
     def ListUsers(self):
-        return [dbus.Struct((dbus.UInt32(1000), dbus.String('root'), dbus.ObjectPath('/org/freedesktop/login1/user/_1000')), signature='uso')]
+        uid = get_active_uid()
+        username = get_username_for_uid(uid)
+        return [dbus.Struct((dbus.UInt32(uid), dbus.String(username), dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')), signature='uso')]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(so)')
     def ListSeats(self):
@@ -230,7 +264,7 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetUser(self, uid):
-        return dbus.ObjectPath('/org/freedesktop/login1/user/_1000')
+        return dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='o')
     def GetSeat(self, seat_id):
@@ -367,8 +401,9 @@ def main():
         sys.exit(1)
 
     # Instantiate the dummy objects
+    uid = get_active_uid()
     session = Login1Session(bus)
-    user = Login1User(bus)
+    user = Login1User(bus, uid)
     seat = Login1Seat(bus)
     manager = Login1Manager(bus)
     hostname = Hostname1(bus)
