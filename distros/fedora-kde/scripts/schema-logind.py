@@ -10,6 +10,7 @@ from gi.repository import GLib
 class Login1Session(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/session/_31')
+        self.devices = {}
         print("login1-stub: Registered Session at /org/freedesktop/login1/session/_31")
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
@@ -19,6 +20,50 @@ class Login1Session(dbus.service.Object):
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
     def Unlock(self):
         print("login1-stub: Session.Unlock() requested")
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
+    def TakeControl(self, force):
+        print(f"login1-stub: Session.TakeControl({force}) requested")
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='hb')
+    def TakeDevice(self, major, minor):
+        print(f"login1-stub: Session.TakeDevice({major}, {minor}) requested")
+        key = (major, minor)
+        if key in self.devices:
+            print(f"login1-stub: Device {major}:{minor} already taken, closing existing")
+            try:
+                os.close(self.devices.pop(key))
+            except Exception:
+                pass
+
+        device_path = f"/dev/char/{major}:{minor}"
+        try:
+            fd = os.open(device_path, os.O_RDWR | os.O_CLOEXEC | os.O_NONBLOCK)
+            self.devices[key] = fd
+            print(f"login1-stub: Opened {device_path} as fd={fd}")
+            return dbus.types.UnixFd(fd), dbus.Boolean(False)
+        except Exception as e:
+            print(f"login1-stub: Failed to open {device_path}: {e}", file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                f"Failed to open device {device_path}: {e}",
+                name='org.freedesktop.login1.FailedToOpenDevice'
+            )
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='')
+    def ReleaseDevice(self, major, minor):
+        print(f"login1-stub: Session.ReleaseDevice({major}, {minor}) requested")
+        key = (major, minor)
+        fd = self.devices.pop(key, None)
+        if fd is not None:
+            try:
+                os.close(fd)
+                print(f"login1-stub: Closed fd={fd} for device {major}:{minor}")
+            except Exception as e:
+                print(f"login1-stub: Error closing fd={fd}: {e}", file=sys.stderr)
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='')
+    def PauseDeviceComplete(self, major, minor):
+        print(f"login1-stub: Session.PauseDeviceComplete({major}, {minor}) requested")
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
