@@ -2,3 +2,5 @@ name=mount-home
 exec=/usr/local/bin/mount-home.sh
 oneshot=1
 needs_root=1
+critical=0
+

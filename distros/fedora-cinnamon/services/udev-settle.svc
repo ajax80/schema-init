@@ -5,3 +5,5 @@ args=--timeout=10
 dep=udevd
 oneshot=1
 needs_root=1
+critical=0
+

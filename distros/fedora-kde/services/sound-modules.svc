@@ -2,3 +2,5 @@ name=sound-modules
 exec=/usr/local/bin/sound-modules.sh
 oneshot=1
 needs_root=1
+critical=0
+

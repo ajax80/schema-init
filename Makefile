@@ -1,6 +1,13 @@
-CC      = gcc
+CROSS_COMPILE ?=
+CC      = $(CROSS_COMPILE)gcc
 CFLAGS  = -std=c99 -Wall -Wextra -O2 -D_GNU_SOURCE
 CFLAGS_STATIC = $(CFLAGS) -static
+LDFLAGS ?=
+
+ifneq ($(CROSS_COMPILE),)
+  SYSROOT ?= /usr/aarch64-redhat-linux/sys-root/fc44
+  CFLAGS += --sysroot=$(SYSROOT)
+endif
 
 SRCS    = init.c schema.c service.c group.c
 OBJS    = $(SRCS:.c=.o)
@@ -10,19 +17,25 @@ all: schema-init schema-ctl schema-subreaper
 schema-init: $(OBJS)
 	$(CC) -static -o $@ $^ -lrt
 
-schema-init-static: $(OBJS)
-	$(CC) $(CFLAGS_STATIC) -o $@ $(SRCS)
+schema-init-static:
+	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
 
 schema-ctl: schema-ctl.c
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 schema-subreaper: schema-subreaper.c
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper
+	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper libatomic_asneeded.a
 
-.PHONY: all clean
+aarch64:
+	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
+	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper
+
+.PHONY: all clean aarch64
+
+

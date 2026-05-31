@@ -4,5 +4,7 @@ args=--no-daemon
 dep=dbus
 dep=network-up
 needs_root=1
+critical=0
+
 stable_secs=2
 ready_path=/run/NetworkManager/resolv.conf

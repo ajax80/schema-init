@@ -4,3 +4,5 @@ args=/usr/lib/polkit-1/polkitd
 args=--no-debug
 dep=dbus
 needs_root=1
+critical=0
+
