@@ -216,9 +216,9 @@ class Login1Manager(dbus.service.Object):
     def ListUsers(self):
         return [dbus.Struct((dbus.UInt32(1000), dbus.String('root'), dbus.ObjectPath('/org/freedesktop/login1/user/_1000')), signature='uso')]
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(ss)')
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(so)')
     def ListSeats(self):
-        return [dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='ss')]
+        return [dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so')]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
