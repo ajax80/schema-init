@@ -100,7 +100,7 @@ class Login1Session(dbus.service.Object):
                 'Active': dbus.Boolean(True),
                 'State': dbus.String('active'),
                 'Remote': dbus.Boolean(False),
-                'Type': dbus.String('wayland'),
+                'Type': dbus.String('x11'),
                 'Class': dbus.String('user'),
                 'Seat': dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so'),
             }

@@ -1,5 +1,5 @@
 name=sshd
 exec=/usr/sbin/sshd
 args=-D
-dep=network-up
+dep=network-manager
 needs_root=1
