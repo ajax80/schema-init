@@ -12,6 +12,7 @@
 #define STATE_FULL_TRUST    10
 #define STATE_PERFECT       88
 #define STATE_EXCISED       76
+#define STATE_DORMANT       75  /* backoff anteroom — retry after delay, before 76 verdict */
 
 /* Weight maxima */
 #define STATE_8_MAX         8

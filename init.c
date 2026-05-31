@@ -356,11 +356,23 @@ static void tick_service(service_t *svc,
                 service_log(svc, "retry-deep");
             } else if (svc->inst.state == STATE_EXCISED) {
                 service_cgroup_kill(svc);
-                service_log(svc, "76-excised");
-                if (svc->flags & SVC_CRITICAL) {
-                    fprintf(stderr, "schema-init: critical service %s excised — system friction\n",
-                            svc->name);
+                svc->dormant_count++;
+                if (!(svc->flags & SVC_CRITICAL) && svc->dormant_count > 4) {
+                    service_log(svc, "76-excised");
+                } else {
+                    time_t delay = 300L << (svc->dormant_count - 1);
+                    if (delay > 3600) delay = 3600;
+                    svc->dormant_until = time(NULL) + delay;
+                    svc->inst.state = STATE_DORMANT;
+                    service_log(svc, "dormant");
                 }
+            }
+            break;
+
+        case STATE_DORMANT:
+            if (time(NULL) >= svc->dormant_until) {
+                svc->inst.state = STATE_NEW_PROCESS;
+                service_log(svc, "dormant-wake");
             }
             break;
 

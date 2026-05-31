@@ -61,6 +61,7 @@ const char *state_name(uint8_t s) {
         case STATE_FULL_TRUST:  return "FULL_TRUST";
         case STATE_PERFECT:     return "PERFECT";
         case STATE_EXCISED:     return "EXCISED";
+        case STATE_DORMANT:     return "DORMANT";
         default:                return "UNKNOWN";
     }
 }

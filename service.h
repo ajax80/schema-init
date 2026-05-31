@@ -47,6 +47,8 @@ typedef struct {
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
+    time_t           dormant_until;    /* epoch when DORMANT->NEW_PROCESS fires */
+    uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
 } service_t;
 
 /* build the F8 flag word by inspecting the real system */

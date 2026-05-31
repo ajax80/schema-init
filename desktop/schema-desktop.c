@@ -38,6 +38,7 @@ static Col state_col(uint8_t s) {
         case STATE_RECOVERY:     return (Col){220, 180, 40};
         case STATE_FRICTION:     return (Col){240, 100, 20};
         case STATE_EXCISED:      return (Col){160, 20,  20};
+        case STATE_DORMANT:      return (Col){100, 60,  140};
         case STATE_PERFECT:      return (Col){0,   210, 190};
         case STATE_SETTLED:      return (Col){140, 60,  220};
         default:                 return (Col){30,  30,  36};
