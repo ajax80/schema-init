@@ -2,6 +2,5 @@ name=lightdm
 exec=/usr/sbin/lightdm
 dep=display-stack
 dep=udev-settle
-dep=mount-home
 needs_root=1
 critical=1
