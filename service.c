@@ -242,7 +242,10 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
         if (di >= 0) {
             if (di >= scount) return 0;
             s = stable[di].inst.state;
-            if (s == STATE_EXCISED)                              return 0;
+            if (s == STATE_EXCISED) {
+                if (stable[di].flags & SVC_CRITICAL) return 0;
+                continue;   /* non-critical excised dep: proceed without it */
+            }
             if (s != STATE_FUNDAMENTAL && s != STATE_SETTLED &&
                 s != STATE_PERFECT)                              return 0;
         }
