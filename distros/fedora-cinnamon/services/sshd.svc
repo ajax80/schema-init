@@ -1,0 +1,5 @@
+name=sshd
+exec=/usr/sbin/sshd
+args=-D
+dep=network-up
+needs_root=1

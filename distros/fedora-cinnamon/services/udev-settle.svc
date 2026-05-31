@@ -1,0 +1,7 @@
+name=udev-settle
+exec=/usr/bin/udevadm
+args=settle
+args=--timeout=10
+dep=udevd
+oneshot=1
+needs_root=1

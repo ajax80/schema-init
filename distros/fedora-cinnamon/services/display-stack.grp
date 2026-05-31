@@ -1,0 +1,5 @@
+name=display-stack
+member=udevd
+member=dbus
+member=schema-logind
+member=polkitd
