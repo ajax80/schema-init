@@ -320,7 +320,19 @@ Live measurements from a 9-hour uptime session (Fedora 44, KDE Plasma, GreyBox):
 | State tracking | D-Bus event loops, logging daemons | Direct POSIX shared memory / binary flag probes | Removes IPC serialization and deserialization bottlenecks entirely |
 | Session tracking | utmp/logind infrastructure | Ghost sessions — `who`/`w` show 0 users | Zero inode contention on `/var/run/utmp`; `who` and `w` are zero-overhead no-ops under concurrent logins |
 
-The load average on an idle system with schema-init as PID 1 sits at 0.03. On the same hardware with systemd, ambient timer wakeups hold it at 0.10–0.20 at idle. The difference is structural: schema-init's tick loop sleeps indefinitely once all services are stable. Nothing wakes it. Services with `ready_path` set promote the instant the path exists — no blind timer. `stable_secs` (default 10s) is the fallback. The remaining ~10s cluster is network/getty/sshd with no readiness path.
+The load average on an idle system with schema-init as PID 1 sits at 0.03. On the same hardware with systemd, ambient timer wakeups hold it at 0.10–0.20 at idle. The difference is structural: schema-init's tick loop sleeps indefinitely once all services are stable. Nothing wakes it.
+
+`turbostat` on Eli (Dell Inspiron 3542, Intel i3-4005U, Fedora 44, full Cinnamon desktop):
+
+```
+C10%: 92–99%    ← deepest available C-state; CPU hardware-verified
+C6%:  0.00%     ← skipped; CPU goes straight to C10
+Busy: 0.21–0.38%
+PkgWatt: 1.23–1.32W   ← entire SoC including iGPU, read via Intel RAPL
+GFX%rc6: 99.67%        ← integrated GPU in deepest sleep state
+```
+
+C10 is the deepest sleep state on Haswell silicon. Reaching it requires the CPU to sit undisturbed long enough to flush caches and power-gate internal voltage rails — typically blocked by the constant timer wakeups from systemd's watchdog, journal flush, and D-Bus polling infrastructure. At 95% C10 residency with a full desktop running, schema-init is generating near-zero ambient noise. The 1.25W package figure is read directly from Intel RAPL hardware energy counters, not estimated. Services with `ready_path` set promote the instant the path exists — no blind timer. `stable_secs` (default 10s) is the fallback. The remaining ~10s cluster is network/getty/sshd with no readiness path.
 
 ---
 
