@@ -254,6 +254,13 @@ class Login1Manager(dbus.service.Object):
     def ListSeats(self):
         return [dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so')]
 
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ssss', out_signature='h')
+    def Inhibit(self, what, who, why, mode):
+        print(f"login1-stub: Inhibit({what}, {who}, {why}, {mode})")
+        r, w = os.pipe()
+        os.close(r)
+        return dbus.types.UnixFd(w)
+
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
         return dbus.ObjectPath('/org/freedesktop/login1/session/_31')
@@ -341,6 +348,165 @@ class Hostname1(dbus.service.Object):
             }
         return {}
 
+class ConsoleKitSession(dbus.service.Object):
+    def __init__(self, bus, uid=1000):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/ConsoleKit/Session1')
+        self.uid = uid
+        print(f"ck-stub: Registered Session at /org/freedesktop/ConsoleKit/Session1")
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='o')
+    def GetId(self):
+        return dbus.ObjectPath('/org/freedesktop/ConsoleKit/Session1')
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='o')
+    def GetSeatId(self):
+        return dbus.ObjectPath('/org/freedesktop/ConsoleKit/Seat1')
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='s')
+    def GetSessionType(self):
+        return "LoginSession"
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='u')
+    def GetUser(self):
+        return dbus.UInt32(self.uid)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='u')
+    def GetUnixUser(self):
+        return dbus.UInt32(self.uid)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='s')
+    def GetXDisplay(self):
+        return ":0"
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='s')
+    def GetX11Display(self):
+        return ":0"
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='s')
+    def GetX11DisplayDevice(self):
+        return "/dev/tty7"
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='s')
+    def GetDisplayDevice(self):
+        return "/dev/tty7"
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='s')
+    def GetRemoteHostName(self):
+        return ""
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='s')
+    def GetLoginSessionId(self):
+        return "1"
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='b')
+    def IsActive(self):
+        return dbus.Boolean(True)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='b')
+    def IsLocal(self):
+        return dbus.Boolean(True)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='b')
+    def GetIdleHint(self):
+        return dbus.Boolean(False)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='b', out_signature='')
+    def SetIdleHint(self, idle):
+        pass
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='')
+    def Lock(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='')
+    def Unlock(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Session', in_signature='', out_signature='')
+    def Activate(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.ConsoleKit.Session':
+            return {
+                'Id': dbus.ObjectPath('/org/freedesktop/ConsoleKit/Session1'),
+                'User': dbus.UInt32(self.uid),
+                'Active': dbus.Boolean(True),
+                'IsLocal': dbus.Boolean(True),
+                'SeatId': dbus.ObjectPath('/org/freedesktop/ConsoleKit/Seat1'),
+                'SessionType': dbus.String('LoginSession'),
+                'X11Display': dbus.String(':0'),
+                'X11DisplayDevice': dbus.String('/dev/tty7'),
+                'DisplayDevice': dbus.String('/dev/tty7'),
+                'RemoteHostName': dbus.String(''),
+                'IdleHint': dbus.Boolean(False),
+            }
+        return {}
+
+
+class ConsoleKitManager(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/ConsoleKit/Manager')
+        print("ck-stub: Registered Manager at /org/freedesktop/ConsoleKit/Manager")
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='u', out_signature='o')
+    def GetSessionForUnixProcess(self, pid):
+        print(f"ck-stub: GetSessionForUnixProcess({pid})")
+        return dbus.ObjectPath('/org/freedesktop/ConsoleKit/Session1')
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='o')
+    def GetCurrentSession(self):
+        return dbus.ObjectPath('/org/freedesktop/ConsoleKit/Session1')
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='ao')
+    def GetSessions(self):
+        return [dbus.ObjectPath('/org/freedesktop/ConsoleKit/Session1')]
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='ao')
+    def GetSeats(self):
+        return [dbus.ObjectPath('/org/freedesktop/ConsoleKit/Seat1')]
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='b')
+    def CanRestart(self):
+        print("ck-stub: CanRestart -> True")
+        return dbus.Boolean(True)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='b')
+    def CanStop(self):
+        return dbus.Boolean(True)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='')
+    def Restart(self):
+        print("ck-stub: Restart -> SIGINT to PID 1")
+        os.kill(1, signal.SIGINT)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='')
+    def Stop(self):
+        print("ck-stub: Stop -> SIGTERM to PID 1")
+        os.kill(1, signal.SIGTERM)
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='', out_signature='s')
+    def OpenSession(self):
+        return dbus.String('schema-ck-cookie')
+
+    @dbus.service.method('org.freedesktop.ConsoleKit.Manager', in_signature='s', out_signature='b')
+    def CloseSession(self, cookie):
+        return dbus.Boolean(True)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        return {}
+
+
 class Systemd1Manager(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/systemd1')
@@ -394,6 +560,8 @@ class Systemd1Manager(dbus.service.Object):
 def main():
     DBusGMainLoop(set_as_default=True)
 
+    os.makedirs('/run/systemd/system', exist_ok=True)
+
     try:
         bus = dbus.SystemBus()
     except Exception as e:
@@ -408,6 +576,8 @@ def main():
     manager = Login1Manager(bus)
     hostname = Hostname1(bus)
     systemd = Systemd1Manager(bus)
+    ck_session = ConsoleKitSession(bus, uid)
+    ck_manager = ConsoleKitManager(bus)
 
     # Request the well-known names
     try:
@@ -428,6 +598,12 @@ def main():
         print("login1-stub: Successfully acquired 'org.freedesktop.systemd1' name")
     except Exception as e:
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.systemd1': {e}", file=sys.stderr)
+
+    try:
+        bus.request_name('org.freedesktop.ConsoleKit', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
+        print("login1-stub: Successfully acquired 'org.freedesktop.ConsoleKit' name")
+    except Exception as e:
+        print(f"login1-stub: Failed to acquire name 'org.freedesktop.ConsoleKit': {e}", file=sys.stderr)
 
     loop = GLib.MainLoop()
     
