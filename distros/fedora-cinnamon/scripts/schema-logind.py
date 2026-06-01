@@ -561,6 +561,14 @@ def main():
     DBusGMainLoop(set_as_default=True)
 
     os.makedirs('/run/systemd/system', exist_ok=True)
+    uid = get_active_uid()
+    runtime_dir = f'/run/user/{uid}'
+    os.makedirs(runtime_dir, exist_ok=True)
+    os.chmod(runtime_dir, 0o700)
+    try:
+        os.chown(runtime_dir, uid, -1)
+    except Exception:
+        pass
 
     try:
         bus = dbus.SystemBus()
