@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=schema-desktop
+Exec=/usr/local/bin/schema-desktop
+NoDisplay=true

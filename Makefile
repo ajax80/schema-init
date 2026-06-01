@@ -14,6 +14,9 @@ OBJS    = $(SRCS:.c=.o)
 
 all: schema-init schema-ctl schema-subreaper
 
+desktop:
+	$(MAKE) -C desktop
+
 schema-init: $(OBJS)
 	$(CC) -static -o $@ $^ -lrt
 
@@ -31,11 +34,12 @@ schema-subreaper: schema-subreaper.c
 
 clean:
 	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper libatomic_asneeded.a
+	$(MAKE) -C desktop clean
 
 aarch64:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper
 
-.PHONY: all clean aarch64
+.PHONY: all clean aarch64 desktop
 
 

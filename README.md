@@ -235,6 +235,15 @@ make aarch64
 
 Requires `aarch64-linux-gnu-gcc`. On Fedora: `sudo dnf install gcc-aarch64-linux-gnu`. Produces static `schema-init-static`, `schema-ctl`, and `schema-subreaper` binaries. Override sysroot with `SYSROOT=/path/to/sysroot make aarch64`.
 
+**schema-desktop (optional SDL2 monitor):**
+
+```sh
+make desktop
+sudo cp desktop/schema-desktop /usr/local/bin/schema-desktop
+```
+
+Requires `SDL2` and `SDL2_ttf`. On Fedora: `sudo dnf install SDL2-devel SDL2_ttf-devel`. Reads live service state from PID 1's shared memory segment — run it from the desktop after login, or drop `distros/*/config/autostart/schema-desktop.desktop` into `~/.config/autostart/` to launch it automatically.
+
 ```sh
 # install as PID 1 — symlink approach (distro-compatible)
 cp schema-init /sbin/schema-init
@@ -602,7 +611,7 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 - [x] Soft dep cascades — non-critical EXCISED deps skipped; dependents proceed without them
 - [x] aarch64 cross-compile — `make aarch64`; all three binaries static; Ungulate Leg target ready
 - [ ] ARM bare-metal deploy — RPi 3B first target
-- [ ] schema-desktop — SDL2 live service viewer shipping as part of the repo
+- [x] schema-desktop — SDL2 live service viewer; `make desktop` + autostart entry in Cinnamon and KDE distros
 
 ---
 
