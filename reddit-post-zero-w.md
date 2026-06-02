@@ -34,7 +34,7 @@ No NetworkManager. No D-Bus mode wpa_supplicant. Traditional headless Pi stack.
 
 **What actually broke, in order:**
 
-**1. PSK quoting.** `psk=goodlife` fails — wpa_supplicant parses unquoted values as 64-char hex. Needs `psk="goodlife"`. Caught from wpa.log on the SD card.
+**1. PSK quoting.** `psk=mypassword` fails — wpa_supplicant parses unquoted values as 64-char hex. Needs `psk="mypassword"`. Caught from wpa.log on the SD card.
 
 **2. wlan0 never existed.** systemd normally runs `udev-trigger.service` to replay device uevents for hardware present at power-on. Without it, udevd starts but the BCM2835's SDIO WiFi device never gets its uevent replayed — brcmfmac firmware never loads, wlan0 doesn't appear. Fixed: dedicated `udev-trigger` oneshot service runs `udevadm trigger --action=add && udevadm settle --timeout=15` before wpa-supplicant is allowed to start.
 
