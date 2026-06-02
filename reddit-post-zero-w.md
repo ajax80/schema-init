@@ -75,3 +75,20 @@ Typical Pi Zero W idle under Pi OS + systemd: 130–180 MB RAM, swap active, PID
 On a 512 MB machine the headroom difference is real. No swap pressure. No journal daemon. No resolver daemon. Just udev, dbus, wpa_supplicant, dhcpcd, sshd, and PID 1 at 684 KB.
 
 `distros/raspberry-pi-zero-w/` is in the repo — full service chain, wrapper scripts, and the gotchas (rfkill country code, D-Bus mandatory in wpa_supplicant, udev coldplug trigger) are documented.
+
+---
+
+## Comment — Pi 3B comparison (add as follow-up)
+
+Compared it against a Pi 3B running Pi OS + systemd as a live reference. Same platform family, both ARM, both Raspberry Pi.
+
+| | Pi Zero W (schema-init) | Pi 3B (systemd) |
+|---|---|---|
+| PID 1 RSS | 684 KB | 8.8 MB |
+| RAM used | 64 MB / 427 MB | ~76 MB / 870 MB |
+| Swap | 0 | 0 |
+| Tasks | 82 | 142 |
+
+The 3B is running a desktop + TFT mirror daemon on top of that, so total RAM isn't a clean comparison — but PID 1 always is. systemd on idle ARM hardware at 8.8 MB, schema-init at 684 KB. 13x.
+
+The 3B also has 4 cores and almost double the RAM, so if anything it has more room to breathe. Still 13x.
