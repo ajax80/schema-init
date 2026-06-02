@@ -40,7 +40,7 @@ static int          system_under_pressure = 0;
 static int          pressure_clear_ticks = 0;
 static struct timespec init_start;
 
-static void exec_failsafe(service_t *svc);
+static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
@@ -155,7 +155,7 @@ static void reap(void) {
             } else {
                 /* unexpected death → enter recovery arc */
                 if (services[i].failsafe_cmd[0]) {
-                    exec_failsafe(&services[i]);
+                    start_failsafe(&services[i]);
                 }
                 services[i].inst.state = STATE_RECOVERY;
                 service_log(&services[i], "died");
@@ -277,9 +277,11 @@ static void execute_fuse_cmd(service_t *svc) {
     }
 }
 
-static void exec_failsafe(service_t *svc) {
+static void start_failsafe(service_t *svc) {
     pid_t pid;
     if (!svc->failsafe_cmd[0]) return;
+    if (svc->failsafe_pid > 0) return; /* already running */
+
     service_log(svc, "failsafe-exec");
     pid = fork();
     if (pid < 0) {
@@ -292,24 +294,36 @@ static void exec_failsafe(service_t *svc) {
         _exit(127);
     }
     
-    int timeout_ms = svc->failsafe_timeout_ms > 0 ? svc->failsafe_timeout_ms : 500;
-    int elapsed_ms = 0;
-    int status;
-    while (elapsed_ms < timeout_ms) {
-        pid_t res = waitpid(pid, &status, WNOHANG);
-        if (res == pid) {
-            service_log(svc, "failsafe-done");
-            return;
-        } else if (res < 0 && errno == ECHILD) {
-            return;
-        }
-        usleep(1000);
-        elapsed_ms++;
-    }
+    svc->failsafe_pid = pid;
+    clock_gettime(CLOCK_MONOTONIC, &svc->failsafe_start);
+}
+
+static void monitor_failsafes(void) {
+    int i;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
     
-    service_log(svc, "failsafe-timeout");
-    kill(pid, SIGKILL);
-    waitpid(pid, &status, 0);
+    for (i = 0; i < svc_count; i++) {
+        service_t *svc = &services[i];
+        if (svc->failsafe_pid <= 0) continue;
+        
+        int status;
+        pid_t res = waitpid(svc->failsafe_pid, &status, WNOHANG);
+        if (res == svc->failsafe_pid || (res < 0 && errno == ECHILD)) {
+            service_log(svc, "failsafe-done");
+            svc->failsafe_pid = 0;
+        } else {
+            long elapsed_ms = (now.tv_sec - svc->failsafe_start.tv_sec) * 1000 +
+                              (now.tv_nsec - svc->failsafe_start.tv_nsec) / 1000000;
+            int timeout_ms = svc->failsafe_timeout_ms > 0 ? svc->failsafe_timeout_ms : 500;
+            if (elapsed_ms >= timeout_ms) {
+                service_log(svc, "failsafe-timeout");
+                kill(svc->failsafe_pid, SIGKILL);
+                waitpid(svc->failsafe_pid, &status, 0);
+                svc->failsafe_pid = 0;
+            }
+        }
+    }
 }
 
 static void active_kill_service(service_t *svc) {
@@ -366,6 +380,7 @@ static void tick_service(service_t *svc,
     switch (svc->inst.state) {
 
         case STATE_NEW_PROCESS:
+            if (svc->failsafe_pid > 0) break;
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
@@ -422,7 +437,7 @@ static void tick_service(service_t *svc,
             } else if (svc->inst.state == STATE_EXCISED) {
                 service_cgroup_kill(svc);
                 svc->dormant_count++;
-                if (!(svc->flags & SVC_CRITICAL) && svc->dormant_count > 4) {
+                if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
                     service_log(svc, "76-excised");
                 } else {
                     time_t delay = 300L << (svc->dormant_count - 1);
@@ -457,10 +472,10 @@ static void tick_service(service_t *svc,
                     if (access(svc->ready_path, F_OK) != 0) {
                         service_log(svc, "readiness-lost");
                         active_kill_service(svc);
-                        exec_failsafe(svc);
+                        start_failsafe(svc);
                         
                         svc->dormant_count++;
-                        if (!(svc->flags & SVC_CRITICAL) && svc->dormant_count > 4) {
+                        if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
                             svc->inst.state = STATE_EXCISED;
                             service_log(svc, "76-excised");
                         } else {
@@ -725,6 +740,9 @@ static int get_poll_timeout(void) {
         if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED) {
             return TICK_USEC / 1000;
         }
+        if (s == STATE_FUNDAMENTAL && services[i].ready_path[0] && services[i].child_pid > 0) {
+            return TICK_USEC / 1000;
+        }
     }
     return -1;
 }
@@ -882,6 +900,7 @@ int main(int argc, char **argv) {
         for (i = 0; i < svc_count; i++)  svc_states[i] = services[i].inst.state;
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i], grp_states, grp_count);
+        monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
     }

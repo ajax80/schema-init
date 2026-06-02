@@ -360,6 +360,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->failsafe_timeout_ms = atoi(val);
             } else if (strcmp(line, "ready_poll_hz") == 0) {
                 svc->ready_poll_hz = atoi(val);
+            } else if (strcmp(line, "no_excise") == 0) {
+                svc->no_excise = atoi(val);
             }
         }
         fclose(f);
@@ -454,6 +456,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->failsafe_timeout_ms = atoi(val);
         } else if (strcmp(line, "ready_poll_hz") == 0) {
             svc->ready_poll_hz = atoi(val);
+        } else if (strcmp(line, "no_excise") == 0) {
+            svc->no_excise = atoi(val);
         }
     }
     fclose(f);

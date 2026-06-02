@@ -47,6 +47,9 @@ typedef struct {
     int              failsafe_timeout_ms; /* timeout for failsafe execution */
     int              ready_poll_hz;    /* polling rate for ready_path check at runtime */
     int              ready_check_ticks; /* tick counter for ready_path polling */
+    pid_t            failsafe_pid;     /* PID of running failsafe command, 0 if none */
+    struct timespec  failsafe_start;   /* CLOCK_MONOTONIC when failsafe execution began */
+    int              no_excise;        /* 1 to prevent transition to STATE_EXCISED */
     int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
