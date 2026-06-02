@@ -1,0 +1,6 @@
+name=dbus
+exec=/usr/local/bin/schema-dbus.sh
+oneshot=0
+critical=1
+stable_secs=3
+ready_path=/run/dbus/system_bus_socket

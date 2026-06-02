@@ -235,6 +235,18 @@ make aarch64
 
 Requires `aarch64-linux-gnu-gcc`. On Fedora: `sudo dnf install gcc-aarch64-linux-gnu`. Produces static `schema-init-static`, `schema-ctl`, and `schema-subreaper` binaries. Override sysroot with `SYSROOT=/path/to/sysroot make aarch64`.
 
+**ARM bare-metal (Pi Zero W, armv6l):**
+
+Fedora's `arm-linux-gnu-gcc` cross-compiler does not ship an arm sysroot. Compile natively on the Pi:
+
+```sh
+sudo apt install git gcc make
+git clone https://github.com/ajax80/schema-init
+cd schema-init && make
+```
+
+The `armhf` Makefile target exists for environments that have a full arm sysroot available.
+
 **schema-desktop (optional SDL2 monitor):**
 
 ```sh
@@ -590,6 +602,23 @@ Full KDE Plasma 6 desktop on Fedora 44 with schema-init as PID 1. Boots from a b
 
 See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full installation instructions and key fixes.
 
+### Raspberry Pi Zero W (`distros/raspberry-pi-zero-w/`)
+
+WiFi headless deploy on a Pi Zero W (BCM2835, armv6l, 32-bit ARM). No Ethernet, no HDMI — schema-init as PID 1, WiFi up, SSH accessible in ~50 seconds from cold boot. First ARM bare-metal target.
+
+**Service chain:**
+
+| Service | Role |
+|---------|------|
+| `udev` | Device enumeration daemon |
+| `udev-trigger` | Oneshot — coldplug trigger + settle; loads brcmfmac WiFi firmware |
+| `dbus` | System bus — mandatory for Pi OS wpa_supplicant |
+| `wpa-supplicant` | WiFi association (config-file mode, not D-Bus mode) |
+| `dhcpcd` | DHCP client, foreground (`-B`), wlan0 only |
+| `sshd` | First usable interface — up when DHCP lease is held |
+
+See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README.md) for the full list of gotchas (rfkill country code, dbus privilege drop, coldplug trigger, dhcpcd forking behavior) and installation steps.
+
 ---
 
 ## Roadmap
@@ -610,7 +639,7 @@ See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full inst
 - [x] STATE_DORMANT (75) — exponential backoff before 76 verdict; critical services never excise
 - [x] Soft dep cascades — non-critical EXCISED deps skipped; dependents proceed without them
 - [x] aarch64 cross-compile — `make aarch64`; all three binaries static; Ungulate Leg target ready
-- [ ] ARM bare-metal deploy — RPi 3B first target
+- [x] ARM bare-metal deploy — Pi Zero W (armv6l), Pi OS Trixie; SSH up in ~50s from cold boot
 - [x] schema-desktop — SDL2 live service viewer; `make desktop` + autostart entry in Cinnamon and KDE distros
 
 ---

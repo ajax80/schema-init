@@ -1,0 +1,8 @@
+name=wpa-supplicant
+exec=/usr/local/bin/schema-wpa.sh
+dep=udev-trigger
+dep=dbus
+oneshot=0
+critical=0
+stable_secs=5
+ready_path=/run/wpa_supplicant/wlan0

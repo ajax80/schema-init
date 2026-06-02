@@ -1,0 +1,6 @@
+name=dhcpcd
+exec=/usr/local/bin/schema-dhcpcd.sh
+dep=wpa-supplicant
+oneshot=0
+critical=0
+stable_secs=30
