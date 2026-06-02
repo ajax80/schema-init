@@ -129,6 +129,45 @@ static void setup_signals(void) {
     signal(SIGPIPE, SIG_IGN);
 }
 
+static void load_env_file(void) {
+    FILE *f = fopen("/run/schema-init/env", "r");
+    if (!f) {
+        f = fopen("./run/schema-init/env", "r");
+    }
+    if (!f) return;
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        char *start = line;
+        while (*start == ' ' || *start == '\t') start++;
+
+        char *end = start + strlen(start) - 1;
+        while (end >= start && (*end == '\n' || *end == '\r' || *end == ' ' || *end == '\t')) {
+            *end = '\0';
+            end--;
+        }
+
+        if (*start == '\0' || *start == '#') continue;
+
+        char *eq = strchr(start, '=');
+        if (!eq) continue;
+
+        *eq = '\0';
+        char *key = start;
+        char *val = eq + 1;
+
+        char *key_end = key + strlen(key) - 1;
+        while (key_end >= key && (*key_end == ' ' || *key_end == '\t')) {
+            *key_end = '\0';
+            key_end--;
+        }
+        while (*val == ' ' || *val == '\t') val++;
+
+        setenv(key, val, 1);
+    }
+    fclose(f);
+}
+
 /* ── zombie reaper ──────────────────────────────────────────────────── */
 
 static void reap(void) {
@@ -149,6 +188,9 @@ static void reap(void) {
                 services[i].inst.state = STATE_PERFECT;
                 clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
                 service_log(&services[i], "oneshot-done");
+                if (strcmp(services[i].name, "slot-detect") == 0) {
+                    load_env_file();
+                }
             } else if (services[i].flags & SVC_NO_RESTART) {
                 services[i].inst.state = STATE_EXCISED;
                 service_log(&services[i], "76-no-restart");
