@@ -354,6 +354,12 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->fuse = atoi(val);
             } else if (strcmp(line, "fuse_cmd") == 0) {
                 strncpy(svc->fuse_cmd, val, sizeof(svc->fuse_cmd) - 1);
+            } else if (strcmp(line, "failsafe") == 0) {
+                strncpy(svc->failsafe_cmd, val, sizeof(svc->failsafe_cmd) - 1);
+            } else if (strcmp(line, "failsafe_timeout_ms") == 0) {
+                svc->failsafe_timeout_ms = atoi(val);
+            } else if (strcmp(line, "ready_poll_hz") == 0) {
+                svc->ready_poll_hz = atoi(val);
             }
         }
         fclose(f);
@@ -442,6 +448,12 @@ int service_load_one(const char *path, service_t *svc) {
             svc->fuse = atoi(val);
         } else if (strcmp(line, "fuse_cmd") == 0) {
             strncpy(svc->fuse_cmd, val, sizeof(svc->fuse_cmd) - 1);
+        } else if (strcmp(line, "failsafe") == 0) {
+            strncpy(svc->failsafe_cmd, val, sizeof(svc->failsafe_cmd) - 1);
+        } else if (strcmp(line, "failsafe_timeout_ms") == 0) {
+            svc->failsafe_timeout_ms = atoi(val);
+        } else if (strcmp(line, "ready_poll_hz") == 0) {
+            svc->ready_poll_hz = atoi(val);
         }
     }
     fclose(f);

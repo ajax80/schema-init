@@ -43,6 +43,10 @@ typedef struct {
     prio_t           priority;         /* priority class for resource throttling */
     int              fuse;             /* 1 to enable quarantine cascade */
     char             fuse_cmd[256];    /* shell command executed on fuse trip */
+    char             failsafe_cmd[256]; /* shell command executed on failsafe */
+    int              failsafe_timeout_ms; /* timeout for failsafe execution */
+    int              ready_poll_hz;    /* polling rate for ready_path check at runtime */
+    int              ready_check_ticks; /* tick counter for ready_path polling */
     int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;

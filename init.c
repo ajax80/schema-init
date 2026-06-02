@@ -40,6 +40,9 @@ static int          system_under_pressure = 0;
 static int          pressure_clear_ticks = 0;
 static struct timespec init_start;
 
+static void exec_failsafe(service_t *svc);
+static void active_kill_service(service_t *svc);
+
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
 
 static void mount_pseudo(void) {
@@ -151,6 +154,9 @@ static void reap(void) {
                 service_log(&services[i], "76-no-restart");
             } else {
                 /* unexpected death → enter recovery arc */
+                if (services[i].failsafe_cmd[0]) {
+                    exec_failsafe(&services[i]);
+                }
                 services[i].inst.state = STATE_RECOVERY;
                 service_log(&services[i], "died");
             }
@@ -271,6 +277,65 @@ static void execute_fuse_cmd(service_t *svc) {
     }
 }
 
+static void exec_failsafe(service_t *svc) {
+    pid_t pid;
+    if (!svc->failsafe_cmd[0]) return;
+    service_log(svc, "failsafe-exec");
+    pid = fork();
+    if (pid < 0) {
+        service_log(svc, "failsafe-fork-fail");
+        return;
+    }
+    if (pid == 0) {
+        setsid();
+        execl("/bin/sh", "sh", "-c", svc->failsafe_cmd, NULL);
+        _exit(127);
+    }
+    
+    int timeout_ms = svc->failsafe_timeout_ms > 0 ? svc->failsafe_timeout_ms : 500;
+    int elapsed_ms = 0;
+    int status;
+    while (elapsed_ms < timeout_ms) {
+        pid_t res = waitpid(pid, &status, WNOHANG);
+        if (res == pid) {
+            service_log(svc, "failsafe-done");
+            return;
+        } else if (res < 0 && errno == ECHILD) {
+            return;
+        }
+        usleep(1000);
+        elapsed_ms++;
+    }
+    
+    service_log(svc, "failsafe-timeout");
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+}
+
+static void active_kill_service(service_t *svc) {
+    if (svc->child_pid <= 0) return;
+    
+    kill(svc->child_pid, SIGTERM);
+    
+    int elapsed_ms = 0;
+    int status;
+    while (elapsed_ms < 50) {
+        pid_t res = waitpid(svc->child_pid, &status, WNOHANG);
+        if (res == svc->child_pid) {
+            svc->child_pid = 0;
+            service_cgroup_kill(svc);
+            return;
+        }
+        usleep(1000);
+        elapsed_ms++;
+    }
+    
+    kill(svc->child_pid, SIGKILL);
+    waitpid(svc->child_pid, &status, 0);
+    svc->child_pid = 0;
+    service_cgroup_kill(svc);
+}
+
 /* ── schema tick for one service ────────────────────────────────────── */
 
 static void tick_service(service_t *svc,
@@ -377,6 +442,39 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FUNDAMENTAL:
+            if (svc->ready_path[0] && svc->child_pid > 0) {
+                int ticks_to_wait = 1;
+                if (svc->ready_poll_hz > 0) {
+                    int loop_hz = 1000000 / TICK_USEC;
+                    if (loop_hz > svc->ready_poll_hz) {
+                        ticks_to_wait = loop_hz / svc->ready_poll_hz;
+                        if (ticks_to_wait < 1) ticks_to_wait = 1;
+                    }
+                }
+                svc->ready_check_ticks++;
+                if (svc->ready_check_ticks >= ticks_to_wait) {
+                    svc->ready_check_ticks = 0;
+                    if (access(svc->ready_path, F_OK) != 0) {
+                        service_log(svc, "readiness-lost");
+                        active_kill_service(svc);
+                        exec_failsafe(svc);
+                        
+                        svc->dormant_count++;
+                        if (!(svc->flags & SVC_CRITICAL) && svc->dormant_count > 4) {
+                            svc->inst.state = STATE_EXCISED;
+                            service_log(svc, "76-excised");
+                        } else {
+                            time_t delay = 300L << (svc->dormant_count - 1);
+                            if (delay > 3600) delay = 3600;
+                            svc->dormant_until = time(NULL) + delay;
+                            svc->inst.state = STATE_DORMANT;
+                            service_log(svc, "dormant");
+                        }
+                    }
+                }
+            }
+            break;
+
         case STATE_PERFECT:
         case STATE_EXCISED:
             /* nothing to do — stable, done, or dead */
