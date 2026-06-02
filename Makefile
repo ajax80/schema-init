@@ -4,8 +4,7 @@ CFLAGS  = -std=c99 -Wall -Wextra -O2 -D_GNU_SOURCE
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
-ifneq ($(CROSS_COMPILE),)
-  SYSROOT ?= /usr/aarch64-redhat-linux/sys-root/fc44
+ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
@@ -38,8 +37,12 @@ clean:
 
 aarch64:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
-	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper
+	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- SYSROOT=/usr/aarch64-redhat-linux/sys-root/fc44 LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper
 
-.PHONY: all clean aarch64 desktop
+armhf:
+	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
+	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper
+
+.PHONY: all clean aarch64 armhf desktop
 
 

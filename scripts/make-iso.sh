@@ -100,6 +100,8 @@ SVC
 cat > "$MNT/usr/local/sbin/schema-dbus" <<'DBUS'
 #!/bin/sh
 mkdir -p /run/dbus
+chown messagebus:messagebus /run/dbus
+chmod 755 /run/dbus
 dbus-uuidgen --ensure
 exec /usr/bin/dbus-daemon --system --nofork
 DBUS
