@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=AirzDowne
+Description=AirzDowne Solutions boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/airzdowne
+ScriptFile=/usr/share/plymouth/themes/airzdowne/airzdowne.script

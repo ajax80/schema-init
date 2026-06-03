@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <rect width="500" height="500" fill="white"/>
+
+  <!-- Outer circle -->
+  <circle cx="250" cy="250" r="220" fill="white" stroke="#111111" stroke-width="20"/>
+
+  <!-- Inverted A (∀) — left glyph, apex at bottom -->
+  <polyline points="108,148 182,322 256,148"
+            fill="none" stroke="#CC0000" stroke-width="26"
+            stroke-linecap="butt" stroke-linejoin="miter"/>
+  <!-- crossbar sits ~38% down from top of glyph -->
+  <line x1="134" y1="216" x2="230" y2="216"
+        stroke="#CC0000" stroke-width="26" stroke-linecap="butt"/>
+
+  <!-- Regular A — right glyph, apex at top -->
+  <polyline points="244,322 318,148 392,322"
+            fill="none" stroke="#CC0000" stroke-width="26"
+            stroke-linecap="butt" stroke-linejoin="miter"/>
+  <!-- crossbar sits ~62% down from top of glyph -->
+  <line x1="270" y1="258" x2="366" y2="258"
+        stroke="#CC0000" stroke-width="26" stroke-linecap="butt"/>
+
+  <!-- Company name -->
+  <text x="250" y="390"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="21" font-weight="bold" letter-spacing="1"
+        fill="#111111">AIRZDOWNESOLUTIONS</text>
+</svg>
