@@ -117,6 +117,7 @@ oneshot=1
 | `no_restart` | `0` | Any death → EXCISED immediately; no recovery arc |
 | `stable_secs` | `10` | Seconds process must stay alive before FULL_TRUST promotes to FUNDAMENTAL. Set lower for fast services; use `ready_path` instead when possible |
 | `ready_path` | — | Filesystem path that, when it exists, triggers immediate FULL_TRUST→FUNDAMENTAL promotion. Falls back to `stable_secs` if the path never appears |
+| `watchdog_timeout_ms` | `0` | Dead Man Token window in milliseconds. Service must call `schema-ctl pet <name>` within this window or PID 1 stops kicking `/dev/watchdog` and the hardware resets. Use for `critical=1` real-time processes. `0` = disabled. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
 A full example using readiness probes:
@@ -130,6 +131,24 @@ needs_root=1
 stable_secs=2
 ready_path=/run/dbus/system_bus_socket
 ```
+
+### Service templates
+
+For fleets of identical services — e.g. 49 joint controllers on an exoskeleton — define config once and symlink instances:
+
+```sh
+# template — write once
+/etc/schema-init/services/motor@.svc
+
+# instances — zero-byte symlinks; suffix becomes $INSTANCE in the child
+ln -s motor@.svc /etc/schema-init/services/motor@0.svc
+ln -s motor@.svc /etc/schema-init/services/motor@12.svc
+ln -s motor@.svc /etc/schema-init/services/motor@48.svc
+```
+
+At boot, `motor@.svc` is skipped as a non-spawnable template. Each `motor@N.svc` symlink loads config from the template and spawns the binary with `INSTANCE=N` in the child environment. The motor controller reads `$INSTANCE` to determine its joint index, SPI bus address, or any other per-instance identity — no per-node config files required.
+
+If a node runs the bare template directly (e.g. on a slot-detected Pi Zero W 2 where the node's identity comes from GPIO strapping), `INSTANCE` falls back to `SLOT_ID` from `/run/schema-init/env`. One SD card image serves the entire fleet.
 
 Dependencies are resolved by name at load time. A service stays in `NEW_PROCESS` until all its deps reach `FUNDAMENTAL`, `SETTLED`, or `PERFECT`. A dep name can refer to either a service or a group (see below).
 
@@ -363,11 +382,14 @@ C10 is the deepest sleep state on Haswell silicon. Reaching it requires the CPU 
 
 ```sh
 sudo schema-ctl status          # full state dump for all services
+sudo schema-ctl status --json   # machine-parseable JSON — for supervisory loops and IEC 62304 audit
+sudo schema-ctl status --kv     # flat key=value — grep-friendly
 sudo schema-ctl list            # names and current states only
 sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service
 sudo schema-ctl restart <name>  # stop + re-queue through the state machine
 sudo schema-ctl add <path>      # load a new .svc file at runtime, no reboot needed
+sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
 ```
 
 The socket is `chmod 0600` — root only. Build alongside the init binary:
@@ -641,6 +663,10 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 - [x] aarch64 cross-compile — `make aarch64`; all three binaries static; Ungulate Leg target ready
 - [x] ARM bare-metal deploy — Pi Zero W (armv6l), Pi OS Trixie; SSH up in ~50s from cold boot
 - [x] schema-desktop — SDL2 live service viewer; `make desktop` + autostart entry in Cinnamon and KDE distros
+- [x] Dead Man Token hardware watchdog — `/dev/watchdog` driven by per-service check-in via `schema-ctl pet`; any critical service missing its `watchdog_timeout_ms` window stops WDT petting → hardware reboot; PID 1 deadlock covered implicitly
+- [x] Symlink template instances — `motor@12.svc → motor@.svc`; `$INSTANCE` injected at spawn; `$SLOT_ID` fallback for GPIO-strapped nodes; one SD card image per fleet
+- [x] Structured telemetry — `schema-ctl status --json` and `--kv` for machine-parseable supervisory loop consumption and IEC 62304 audit traceability
+- [ ] Cgroup resource limits — `cpu_limit=` and `mem_limit=` per `.svc`; written via sync-pipe window before child exec; IEC 62304 Class C blast-radius isolation
 
 ---
 
