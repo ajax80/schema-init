@@ -99,9 +99,14 @@ static void eviction_tick(void) {
  * under all single-point failure modes.
  */
 static void watchdog_init(void) {
-    watchdog_fd = open("/dev/watchdog", O_WRONLY | O_CLOEXEC);
-    if (watchdog_fd >= 0) {
-        printf("[schema-init] opened hardware watchdog (/dev/watchdog)\n");
+    const char *paths[] = { "/dev/watchdog0", "/dev/watchdog", NULL };
+    int i;
+    for (i = 0; paths[i]; i++) {
+        watchdog_fd = open(paths[i], O_WRONLY | O_CLOEXEC);
+        if (watchdog_fd >= 0) {
+            printf("[schema-init] opened hardware watchdog (%s)\n", paths[i]);
+            break;
+        }
     }
 }
 
@@ -931,6 +936,7 @@ static int get_poll_timeout(void) {
         return TICK_USEC / 1000;
     }
     int i;
+    int has_watchdog_services = 0;
     for (i = 0; i < svc_count; i++) {
         uint8_t s = services[i].inst.state;
         if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED) {
@@ -939,6 +945,16 @@ static int get_poll_timeout(void) {
         if (s == STATE_FUNDAMENTAL && services[i].ready_path[0] && services[i].child_pid > 0) {
             return TICK_USEC / 1000;
         }
+        if (services[i].watchdog_timeout_ms > 0 && services[i].child_pid > 0) {
+            has_watchdog_services = 1;
+        }
+    }
+    if (has_watchdog_services) {
+        return TICK_USEC / 1000;
+    }
+    if (watchdog_fd >= 0) {
+        /* Hardware watchdog is active; wake up at least every 5 seconds to pet it */
+        return 5000;
     }
     return -1;
 }
