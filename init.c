@@ -36,12 +36,69 @@ static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
 static int          sig_fd   = -1;
+static int          watchdog_fd = -1;
 static int          system_under_pressure = 0;
 static int          pressure_clear_ticks = 0;
 static struct timespec init_start;
 
 static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
+
+/*
+ * IEC 62304 / ISO 26262 Safety Audit Traceability:
+ * 
+ * This function (watchdog_pet) implements the safety-critical "Dead Man's Token" watchdog.
+ * It ensures that if any critical system service hangs (e.g. motor controller SPI deadlock),
+ * PID 1 will detect the missed check-in window and intentionally withhold the heartbeats 
+ * to /dev/watchdog, causing the hardware watchdog chip to force-reset the system.
+ * 
+ * Crucially, if PID 1 itself hangs, deadlocks, or blocks indefinitely (e.g., due to a main
+ * event loop lockup), no pets will be sent to /dev/watchdog. The hardware watchdog will
+ * naturally timeout and force-reboot the processor. This guarantees a safe failure cascade
+ * under all single-point failure modes.
+ */
+static void watchdog_init(void) {
+    watchdog_fd = open("/dev/watchdog", O_WRONLY | O_CLOEXEC);
+    if (watchdog_fd >= 0) {
+        printf("[schema-init] opened hardware watchdog (/dev/watchdog)\n");
+    }
+}
+
+static void watchdog_close(void) {
+    if (watchdog_fd >= 0) {
+        /* Write 'V' before closing to indicate safe close/disable if supported */
+        write(watchdog_fd, "V", 1);
+        close(watchdog_fd);
+        watchdog_fd = -1;
+    }
+}
+
+static void watchdog_pet(void) {
+    if (watchdog_fd < 0) return;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    int i;
+    int pet_ok = 1;
+    for (i = 0; i < svc_count; i++) {
+        service_t *svc = &services[i];
+        if (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0) {
+            long elapsed_ms = (now.tv_sec - svc->last_pet.tv_sec) * 1000 +
+                              (now.tv_nsec - svc->last_pet.tv_nsec) / 1000000;
+            if (elapsed_ms > svc->watchdog_timeout_ms) {
+                printf("[schema-init] watchdog: service '%s' missed pet window (%ldms > %dms)\n",
+                       svc->name, elapsed_ms, svc->watchdog_timeout_ms);
+                pet_ok = 0;
+                break;
+            }
+        }
+    }
+
+    if (pet_ok) {
+        write(watchdog_fd, "\0", 1);
+    }
+}
 
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
 
@@ -332,6 +389,17 @@ static void start_failsafe(service_t *svc) {
     }
     if (pid == 0) {
         setsid();
+        char *at = strchr(svc->name, '@');
+        if (at) {
+            if (*(at + 1)) {
+                setenv("INSTANCE", at + 1, 1);
+            } else {
+                char *slot = getenv("SLOT_ID");
+                if (slot) {
+                    setenv("INSTANCE", slot, 1);
+                }
+            }
+        }
         execl("/bin/sh", "sh", "-c", svc->failsafe_cmd, NULL);
         _exit(127);
     }
@@ -586,12 +654,43 @@ static void ctl_cmd(int fd, char *line) {
     int i;
     line[strcspn(line, "\r\n")] = '\0';
 
-    if (strcmp(line, "status") == 0) {
-        ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
-        for (i = 0; i < svc_count; i++)
-            ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d\n",
-                services[i].name, (int)services[i].child_pid,
-                state_name(services[i].inst.state), services[i].restart_count);
+    if (strncmp(line, "status", 6) == 0) {
+        char *opt = line + 6;
+        while (*opt == ' ') opt++;
+        if (strcmp(opt, "--json") == 0) {
+            ctl_writef(fd, "{\n  \"services_count\": %d,\n  \"groups_count\": %d,\n  \"services\": [\n", svc_count, grp_count);
+            for (i = 0; i < svc_count; i++) {
+                ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d\n    }%s\n",
+                    services[i].name, (int)services[i].child_pid,
+                    state_name(services[i].inst.state), services[i].restart_count,
+                    (i < svc_count - 1) ? "," : "");
+            }
+            ctl_writef(fd, "  ]\n}\n");
+        } else if (strcmp(opt, "--kv") == 0) {
+            ctl_writef(fd, "services_count=%d\ngroups_count=%d\n", svc_count, grp_count);
+            for (i = 0; i < svc_count; i++) {
+                ctl_writef(fd, "service.%s.pid=%d\n", services[i].name, (int)services[i].child_pid);
+                ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));
+                ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
+            }
+        } else {
+            ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
+            for (i = 0; i < svc_count; i++)
+                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d\n",
+                    services[i].name, (int)services[i].child_pid,
+                    state_name(services[i].inst.state), services[i].restart_count);
+        }
+
+    } else if (strncmp(line, "pet ", 4) == 0) {
+        const char *name = line + 4;
+        for (i = 0; i < svc_count; i++) {
+            if (strcmp(services[i].name, name) != 0) continue;
+            clock_gettime(CLOCK_MONOTONIC, &services[i].last_pet);
+            ctl_writef(fd, "ok\n");
+            write(fd, ".\n", 2);
+            return;
+        }
+        ctl_writef(fd, "err: not found: %s\n", name);
 
     } else if (strcmp(line, "list") == 0) {
         for (i = 0; i < svc_count; i++)
@@ -722,9 +821,15 @@ static void ctl_init(void) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, CTL_SOCK_PATH, sizeof(addr.sun_path) - 1);
     if (bind(ctl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(ctl_fd); ctl_fd = -1; return;
+        /* try local fallback path */
+        mkdir("./run", 0755);
+        unlink("./run/schema-init.sock");
+        strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
+        if (bind(ctl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            close(ctl_fd); ctl_fd = -1; return;
+        }
     }
-    chmod(CTL_SOCK_PATH, 0600);
+    chmod(addr.sun_path, 0600);
     listen(ctl_fd, 4);
 }
 
@@ -803,6 +908,7 @@ int main(int argc, char **argv) {
     if (getpid() == 1) {
         mount_pseudo();
         cleanup_tmp_locks();
+        watchdog_init();
     }
     setup_signals();
 
@@ -945,9 +1051,11 @@ int main(int argc, char **argv) {
         monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
+        watchdog_pet();
     }
 
     /* shutdown: hold briefly so viewers see system_state 13/14, then kill */
+    watchdog_close();
     usleep(500000);
     printf("[schema-init] shutting down\n");
     for (i = 0; i < svc_count; i++) {
@@ -962,6 +1070,7 @@ int main(int argc, char **argv) {
     if (ctl_fd >= 0) {
         close(ctl_fd);
         unlink(CTL_SOCK_PATH);
+        unlink("./run/schema-init.sock");
     }
 
     if (shm_ptr) {

@@ -162,12 +162,30 @@ int service_spawn(service_t *svc) {
         mkdir("/run/log/schema-init", 0755);
         int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
         if (fd < 0) {
+            snprintf(log_path, sizeof(log_path), "./run/log/schema-init/%s.log", svc->name);
+            mkdir("./run", 0755);
+            mkdir("./run/log", 0755);
+            mkdir("./run/log/schema-init", 0755);
+            fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
+        }
+        if (fd < 0) {
             fd = open("/dev/null", O_WRONLY);
         }
         if (fd >= 0) {
             dup2(fd, STDOUT_FILENO);
             dup2(fd, STDERR_FILENO);
             close(fd);
+        }
+        char *at = strchr(svc->name, '@');
+        if (at) {
+            if (*(at + 1)) {
+                setenv("INSTANCE", at + 1, 1);
+            } else {
+                char *slot = getenv("SLOT_ID");
+                if (slot) {
+                    setenv("INSTANCE", slot, 1);
+                }
+            }
         }
         execv(svc->exec, svc->argv);
         _exit(127);
@@ -177,6 +195,7 @@ int service_spawn(service_t *svc) {
     svc->child_pid  = pid;
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
+    clock_gettime(CLOCK_MONOTONIC, &svc->last_pet);
     svc->restart_count++;
     cgroup_assign(svc, pid);
     write(sync[1], "", 1);
@@ -362,9 +381,32 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->ready_poll_hz = atoi(val);
             } else if (strcmp(line, "no_excise") == 0) {
                 svc->no_excise = atoi(val);
+            } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
+                svc->watchdog_timeout_ms = atoi(val);
             }
         }
         fclose(f);
+
+        char base_name[256];
+        memset(base_name, 0, sizeof(base_name));
+        if (nlen - 4 < sizeof(base_name)) {
+            memcpy(base_name, ent->d_name, nlen - 4);
+        } else {
+            memcpy(base_name, ent->d_name, sizeof(base_name) - 1);
+        }
+        {
+            char *bat = strchr(base_name, '@');
+            if (bat && !*(bat + 1)) {
+                /* template file itself (motor@.svc) — not a spawnable instance */
+                continue;
+            }
+            if (bat || !svc->name[0]) {
+                strncpy(svc->name, base_name, sizeof(svc->name) - 1);
+                svc->name[sizeof(svc->name) - 1] = '\0';
+            }
+            if (bat && *(bat + 1))
+                strncpy(svc->instance, bat + 1, sizeof(svc->instance) - 1);
+        }
 
         if (!svc->name[0] || !svc->exec[0]) continue;
         svc->argv[argc] = NULL;
@@ -458,9 +500,27 @@ int service_load_one(const char *path, service_t *svc) {
             svc->ready_poll_hz = atoi(val);
         } else if (strcmp(line, "no_excise") == 0) {
             svc->no_excise = atoi(val);
+        } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
+            svc->watchdog_timeout_ms = atoi(val);
         }
     }
     fclose(f);
+
+    char base_name[256];
+    memset(base_name, 0, sizeof(base_name));
+    const char *fname = strrchr(path, '/');
+    if (fname) fname++;
+    else fname = path;
+    size_t flen = strlen(fname);
+    if (flen >= 5 && strcmp(fname + flen - 4, ".svc") == 0) {
+        size_t blen = flen - 4;
+        if (blen >= sizeof(base_name)) blen = sizeof(base_name) - 1;
+        memcpy(base_name, fname, blen);
+        if (strchr(base_name, '@') || !svc->name[0]) {
+            strncpy(svc->name, base_name, sizeof(svc->name) - 1);
+            svc->name[sizeof(svc->name) - 1] = '\0';
+        }
+    }
 
     if (!svc->name[0] || !svc->exec[0]) return -1;
     svc->argv[argc] = NULL;

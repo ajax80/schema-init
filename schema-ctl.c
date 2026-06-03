@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
     struct sockaddr_un addr;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: schema-ctl status|list|timing|start <svc>|stop <svc>|up <svc>|down <svc>|restart <svc>|add <path>\n");
+        fprintf(stderr, "usage: schema-ctl status [--json|--kv]|list|timing|start <svc>|stop <svc>|up <svc>|down <svc>|restart <svc>|add <path>|pet <svc>\n");
         return 1;
     }
 
@@ -33,9 +33,15 @@ int main(int argc, char **argv) {
     strncpy(addr.sun_path, CTL_SOCK_PATH, sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("connect");
-        close(fd);
-        return 1;
+        /* try local fallback */
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            perror("connect");
+            close(fd);
+            return 1;
+        }
     }
 
     write(fd, cmd, strlen(cmd));

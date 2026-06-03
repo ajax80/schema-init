@@ -26,6 +26,7 @@ typedef enum {
 
 typedef struct {
     char             name[64];
+    char             instance[32];    /* template instance ID, e.g. "12" from motor@12.svc */
     char             exec[256];
     char            *argv[MAX_ARGV];
     char             dep_name[MAX_DEPS][64]; /* dep names as written in .svc    */
@@ -50,6 +51,8 @@ typedef struct {
     pid_t            failsafe_pid;     /* PID of running failsafe command, 0 if none */
     struct timespec  failsafe_start;   /* CLOCK_MONOTONIC when failsafe execution began */
     int              no_excise;        /* 1 to prevent transition to STATE_EXCISED */
+    int              watchdog_timeout_ms; /* service watchdog window (0 = disabled) */
+    struct timespec  last_pet;            /* CLOCK_MONOTONIC timestamp of last pet */
     int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
