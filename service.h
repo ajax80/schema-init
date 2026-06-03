@@ -56,6 +56,8 @@ typedef struct {
     int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
+    int              cpu_limit_pct;    /* 1-100: % of one CPU core via cpu.max; 0 = unlimited */
+    long             mem_limit_mb;     /* MB hard cap via memory.max; 0 = unlimited */
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
     time_t           dormant_until;    /* epoch when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */

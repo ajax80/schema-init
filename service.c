@@ -141,6 +141,35 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     close(fd);
 }
 
+static void cgroup_apply_limits(service_t *svc) {
+    char path[160];
+    char buf[64];
+    int fd;
+    int n;
+
+    if (!svc->cgroup_path[0]) return;
+
+    if (svc->cpu_limit_pct > 0 && svc->cpu_limit_pct <= 100) {
+        snprintf(path, sizeof(path), "%s/cpu.max", svc->cgroup_path);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0) {
+            n = snprintf(buf, sizeof(buf), "%d 100000\n", svc->cpu_limit_pct * 1000);
+            write(fd, buf, (size_t)n);
+            close(fd);
+        }
+    }
+
+    if (svc->mem_limit_mb > 0) {
+        snprintf(path, sizeof(path), "%s/memory.max", svc->cgroup_path);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0) {
+            n = snprintf(buf, sizeof(buf), "%ld\n", svc->mem_limit_mb * 1024L * 1024L);
+            write(fd, buf, (size_t)n);
+            close(fd);
+        }
+    }
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -198,6 +227,7 @@ int service_spawn(service_t *svc) {
     clock_gettime(CLOCK_MONOTONIC, &svc->last_pet);
     svc->restart_count++;
     cgroup_assign(svc, pid);
+    cgroup_apply_limits(svc);
     write(sync[1], "", 1);
     close(sync[1]);
     return 0;
@@ -383,6 +413,10 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->no_excise = atoi(val);
             } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
                 svc->watchdog_timeout_ms = atoi(val);
+            } else if (strcmp(line, "cpu_limit") == 0) {
+                svc->cpu_limit_pct = atoi(val);
+            } else if (strcmp(line, "mem_limit") == 0) {
+                svc->mem_limit_mb = atol(val);
             }
         }
         fclose(f);
