@@ -27,10 +27,29 @@
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
 
-static service_t    services[MAX_SERVICES];
+static service_t    services_a[MAX_SERVICES];
+static service_t    services_b[MAX_SERVICES];
+static service_t   *services = services_a;
+static service_t   *shadow_services = services_b;
 static int          svc_count = 0;
-static group_t      groups[MAX_GROUPS];
+
+static group_t      groups_a[MAX_GROUPS];
+static group_t      groups_b[MAX_GROUPS];
+static group_t     *groups = groups_a;
+static group_t     *shadow_groups = groups_b;
 static int          grp_count = 0;
+#define EVICT_GRACE_SECS  3
+#define MAX_EVICTIONS     16
+
+typedef struct {
+    pid_t  pid;
+    char   cgroup[128];
+    time_t deadline;
+} eviction_t;
+
+static eviction_t evictions[MAX_EVICTIONS];
+static int        eviction_count = 0;
+
 static volatile int running   = 1;
 static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
@@ -43,6 +62,28 @@ static struct timespec init_start;
 
 static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
+static void handle_reload(int evict_mode);
+
+static void eviction_tick(void) {
+    time_t now = time(NULL);
+    int i = 0;
+    while (i < eviction_count) {
+        if (now < evictions[i].deadline) { i++; continue; }
+        if (evictions[i].cgroup[0]) {
+            char path[160];
+            int fd;
+            snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
+            fd = open(path, O_WRONLY);
+            if (fd >= 0) { write(fd, "1", 1); close(fd); }
+            else {
+                kill(evictions[i].pid, SIGKILL);
+            }
+            printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
+                   (int)evictions[i].pid);
+        }
+        evictions[i] = evictions[--eviction_count];
+    }
+}
 
 /*
  * IEC 62304 / ISO 26262 Safety Audit Traceability:
@@ -182,7 +223,6 @@ static void setup_signals(void) {
     sigaction(SIGUSR2, &sa, NULL);
 
     /* PID 1 must not die on these */
-    signal(SIGHUP,  SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 }
 
@@ -786,6 +826,13 @@ static void ctl_cmd(int fd, char *line) {
         write(fd, ".\n", 2);
         return;
 
+    } else if (strncmp(line, "reload", 6) == 0) {
+        char *opt = line + 6;
+        while (*opt == ' ') opt++;
+        int evict = (strcmp(opt, "--evict") == 0);
+        handle_reload(evict);
+        ctl_writef(fd, "ok: reload %s\n", evict ? "(evict mode)" : "(graceful)");
+
     } else if (strcmp(line, "timing") == 0) {
         double k2p = (double)init_start.tv_sec + (double)init_start.tv_nsec / 1e9;
         ctl_writef(fd, "kernel → PID 1:            %.3fs\n", k2p);
@@ -858,6 +905,8 @@ static void signalfd_init(void) {
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGCHLD);
+    sigaddset(&mask, SIGHUP);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
     sig_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     if (sig_fd >= 0) {
         set_nonblock(sig_fd);
@@ -894,6 +943,167 @@ static int get_poll_timeout(void) {
     return -1;
 }
 
+static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count) {
+    int g, m, s, d;
+    /* resolve group member names → service indices */
+    for (g = 0; g < g_count; g++) {
+        for (m = 0; m < grp_table[g].member_count; m++) {
+            grp_table[g].member_idx[m] = -1;
+            for (s = 0; s < s_count; s++) {
+                if (strcmp(svc_table[s].name, grp_table[g].member_name[m]) == 0) {
+                    grp_table[g].member_idx[m] = s;
+                    break;
+                }
+            }
+        }
+    }
+    /* resolve group deps in service dep_name arrays */
+    for (s = 0; s < s_count; s++) {
+        for (d = 0; d < MAX_DEPS; d++) {
+            if (!svc_table[s].dep_name[d][0]) break;
+            svc_table[s].dep_idx[d] = -1;
+            svc_table[s].grp_dep_idx[d] = -1;
+            /* try to resolve as service dependency first */
+            for (int j = 0; j < s_count; j++) {
+                if (strcmp(svc_table[j].name, svc_table[s].dep_name[d]) == 0) {
+                    svc_table[s].dep_idx[d] = j;
+                    break;
+                }
+            }
+            if (svc_table[s].dep_idx[d] >= 0) continue;
+            /* resolve as group dependency */
+            for (g = 0; g < g_count; g++) {
+                if (strcmp(grp_table[g].name, svc_table[s].dep_name[d]) == 0) {
+                    svc_table[s].grp_dep_idx[d] = g;
+                    break;
+                }
+            }
+        }
+    }
+    return services_check_cycles(svc_table, s_count);
+}
+
+static void handle_reload(int evict_mode) {
+    int i, j;
+    printf("[schema-init] reloading configuration (SIGHUP)... \n");
+
+    const char *svc_dir = SVC_DIR;
+    memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
+    int shadow_count = services_load(svc_dir, shadow_services, MAX_SERVICES);
+    if (shadow_count == 0) {
+        shadow_count = services_load("./services", shadow_services, MAX_SERVICES);
+    }
+    if (shadow_count <= 0) {
+        printf("[schema-init] reload failed: no services loaded from configuration\n");
+        return;
+    }
+
+    memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
+    int shadow_grp_count = groups_load(svc_dir, shadow_groups, MAX_GROUPS);
+    if (shadow_grp_count == 0) {
+        shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
+    }
+
+    /* hash integrity check — reject any .svc file modified since boot */
+    for (i = 0; i < shadow_count; i++) {
+        for (j = 0; j < svc_count; j++) {
+            if (strcmp(shadow_services[i].name, services[j].name) != 0) continue;
+            if (shadow_services[i].content_hash != services[j].content_hash &&
+                shadow_services[i].content_hash != 0) {
+                printf("[schema-init] INTEGRITY: '%s' hash mismatch — file modified since boot; reload rejected\n",
+                       shadow_services[i].name);
+                for (int k = 0; k < shadow_count; k++)
+                    for (int m = 1; m < MAX_ARGV; m++)
+                        if (shadow_services[k].argv[m]) { free(shadow_services[k].argv[m]); shadow_services[k].argv[m] = NULL; }
+                return;
+            }
+            break;
+        }
+    }
+
+    if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
+        printf("[schema-init] reload rejected: dependency cycles detected in new configuration\n");
+        /* free duplicated arguments in shadow array to prevent leaks */
+        for (i = 0; i < shadow_count; i++) {
+            for (j = 1; j < MAX_ARGV; j++) {
+                if (shadow_services[i].argv[j]) {
+                    free(shadow_services[i].argv[j]);
+                }
+            }
+        }
+        return;
+    }
+
+    /* Merge running state from live to shadow */
+    for (i = 0; i < shadow_count; i++) {
+        for (j = 0; j < svc_count; j++) {
+            if (strcmp(shadow_services[i].name, services[j].name) == 0) {
+                shadow_services[i].child_pid     = services[j].child_pid;
+                shadow_services[i].inst          = services[j].inst;
+                shadow_services[i].restart_count = services[j].restart_count;
+                shadow_services[i].last_start    = services[j].last_start;
+                shadow_services[i].start_time    = services[j].start_time;
+                shadow_services[i].stable_time   = services[j].stable_time;
+                shadow_services[i].failsafe_pid  = services[j].failsafe_pid;
+                shadow_services[i].failsafe_start = services[j].failsafe_start;
+                shadow_services[i].last_pet      = services[j].last_pet;
+                memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path, sizeof(shadow_services[i].cgroup_path));
+                
+                /* clear live service state so we don't accidentally treat it as running/managed */
+                services[j].child_pid = 0;
+                services[j].failsafe_pid = 0;
+                break;
+            }
+        }
+    }
+
+    /* Identify and clean up orphaned running services */
+    for (j = 0; j < svc_count; j++) {
+        if (services[j].child_pid > 0 || services[j].failsafe_pid > 0) {
+            printf("[schema-init] service '%s' is orphaned in new configuration\n", services[j].name);
+            if (evict_mode) {
+                printf("[schema-init] evicting orphaned service '%s' (pid=%d)\n", services[j].name, (int)services[j].child_pid);
+                if (services[j].child_pid > 0) {
+                    kill(services[j].child_pid, SIGTERM);
+                    if (eviction_count < MAX_EVICTIONS) {
+                        evictions[eviction_count].pid      = services[j].child_pid;
+                        evictions[eviction_count].deadline = time(NULL) + EVICT_GRACE_SECS;
+                        memcpy(evictions[eviction_count].cgroup,
+                               services[j].cgroup_path,
+                               sizeof(evictions[eviction_count].cgroup));
+                        eviction_count++;
+                    }
+                }
+                if (services[j].failsafe_pid > 0) {
+                    kill(services[j].failsafe_pid, SIGTERM);
+                }
+            } else {
+                printf("[schema-init] service '%s' (pid=%d) running unmanaged to natural death\n", services[j].name, (int)services[j].child_pid);
+            }
+        }
+        /* Free duplicated arguments from the old configuration array */
+        for (int k = 1; k < MAX_ARGV; k++) {
+            if (services[j].argv[k]) {
+                free(services[j].argv[k]);
+                services[j].argv[k] = NULL;
+            }
+        }
+    }
+
+    /* Swap the buffers */
+    service_t *tmp_svc = services;
+    services = shadow_services;
+    shadow_services = tmp_svc;
+    svc_count = shadow_count;
+
+    group_t *tmp_grp = groups;
+    groups = shadow_groups;
+    shadow_groups = tmp_grp;
+    grp_count = shadow_grp_count;
+
+    printf("[schema-init] configuration reload completed successfully (generation updated)\n");
+}
+
 /* ── main ───────────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
@@ -922,39 +1132,7 @@ int main(int argc, char **argv) {
         grp_count = groups_load("./services", groups, MAX_GROUPS);
     }
 
-    /* resolve group member names → service indices */
-    {
-        int g, m, s;
-        for (g = 0; g < grp_count; g++) {
-            for (m = 0; m < groups[g].member_count; m++) {
-                for (s = 0; s < svc_count; s++) {
-                    if (strcmp(services[s].name, groups[g].member_name[m]) == 0) {
-                        groups[g].member_idx[m] = s;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    /* resolve group deps in service dep_name arrays */
-    {
-        int s, d, g;
-        for (s = 0; s < svc_count; s++) {
-            for (d = 0; d < MAX_DEPS; d++) {
-                if (!services[s].dep_name[d][0]) break;
-                if (services[s].dep_idx[d] >= 0) continue; /* already a service dep */
-                for (g = 0; g < grp_count; g++) {
-                    if (strcmp(groups[g].name, services[s].dep_name[d]) == 0) {
-                        services[s].grp_dep_idx[d] = g;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if (services_check_cycles(services, svc_count) > 0) {
+    if (validate_and_resolve(services, svc_count, groups, grp_count) > 0) {
         fprintf(stderr, "schema-init: dependency cycles detected — dropping to rescue shell\n");
         pid_t rsh = fork();
         if (rsh == 0) {
@@ -1011,9 +1189,13 @@ int main(int argc, char **argv) {
                     if (!(fds[e].revents & POLLIN)) continue;
                     if (fds[e].fd == sig_fd) {
                         struct signalfd_siginfo ssi;
-                        while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi))
-                            ;
-                        reap();
+                        while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi)) {
+                            if (ssi.ssi_signo == SIGCHLD) {
+                                reap();
+                            } else if (ssi.ssi_signo == SIGHUP) {
+                                handle_reload(0);
+                            }
+                        }
                     } else if (fds[e].fd == ctl_fd) {
                         ctl_poll();
                     }
@@ -1051,6 +1233,7 @@ int main(int argc, char **argv) {
         monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
+        eviction_tick();
         watchdog_pet();
     }
 

@@ -310,6 +310,19 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
     return 1;
 }
 
+static uint32_t fnv1a_file(const char *path) {
+    uint32_t h = 2166136261u;
+    FILE *f = fopen(path, "r");
+    int c;
+    if (!f) return 0;
+    while ((c = fgetc(f)) != EOF) {
+        h ^= (uint32_t)(unsigned char)c;
+        h *= 16777619u;
+    }
+    fclose(f);
+    return h;
+}
+
 /* ── service file parser ─────────────────────────────────────────────
  *
  * Simple format — one key=value per line:
@@ -420,6 +433,7 @@ int services_load(const char *dir, service_t *table, int max) {
             }
         }
         fclose(f);
+        svc->content_hash = fnv1a_file(path);
 
         char base_name[256];
         memset(base_name, 0, sizeof(base_name));

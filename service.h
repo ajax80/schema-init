@@ -2,6 +2,7 @@
 #define SERVICE_H
 
 #include <sys/types.h>
+#include <stdint.h>
 #include <time.h>
 #include "schema.h"
 
@@ -58,6 +59,7 @@ typedef struct {
     int              exit_status;
     int              cpu_limit_pct;    /* 1-100: % of one CPU core via cpu.max; 0 = unlimited */
     long             mem_limit_mb;     /* MB hard cap via memory.max; 0 = unlimited */
+    uint32_t         content_hash;     /* FNV-1a hash of the parsed .svc file at load time */
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
     time_t           dormant_until;    /* epoch when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
