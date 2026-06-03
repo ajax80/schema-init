@@ -176,6 +176,22 @@ int service_spawn(service_t *svc) {
 
     if (pipe(sync) < 0) return -1;
 
+    if (svc->allowed_slot_min >= 0) {
+        char *slot_env = getenv("SLOT_ID");
+        int slot_id = slot_env ? atoi(slot_env) : -1;
+        if (slot_id < svc->allowed_slot_min || slot_id > svc->allowed_slot_max) {
+            fprintf(stderr,
+                    "[schema-init] HAZARD: '%s' slot constraint violation "
+                    "(SLOT_ID=%s, allowed=[%d,%d]) — spawn refused\n",
+                    svc->name,
+                    slot_env ? slot_env : "unset",
+                    svc->allowed_slot_min, svc->allowed_slot_max);
+            close(sync[0]); close(sync[1]);
+            svc->flags |= SVC_NO_RESTART;
+            return -1;
+        }
+    }
+
     pid = fork();
     if (pid < 0) { close(sync[0]); close(sync[1]); return -1; }
 
@@ -374,6 +390,8 @@ int services_load(const char *dir, service_t *table, int max) {
         schema_instance_init(&svc->inst, 0, STATE_PERFECT);
         svc->stable_secs = STABLE_SECS;
         svc->priority = PRIO_STANDARD;
+        svc->allowed_slot_min = -1;
+        svc->allowed_slot_max = -1;
         int dep_slot = 0;
 
         argc = 0;
@@ -430,6 +448,10 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->cpu_limit_pct = atoi(val);
             } else if (strcmp(line, "mem_limit") == 0) {
                 svc->mem_limit_mb = atol(val);
+            } else if (strcmp(line, "allowed_slot_min") == 0) {
+                svc->allowed_slot_min = atoi(val);
+            } else if (strcmp(line, "allowed_slot_max") == 0) {
+                svc->allowed_slot_max = atoi(val);
             }
         }
         fclose(f);

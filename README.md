@@ -120,6 +120,8 @@ oneshot=1
 | `watchdog_timeout_ms` | `0` | Dead Man Token window in milliseconds. Service must call `schema-ctl pet <name>` within this window or PID 1 stops kicking `/dev/watchdog` and the hardware resets. Use for `critical=1` real-time processes. `0` = disabled. |
 | `cpu_limit` | `0` | Percent of one CPU core (1–100) enforced via cgroupv2 `cpu.max`. Written before child exec. `0` = unlimited. |
 | `mem_limit` | `0` | Memory hard cap in MB via cgroupv2 `memory.max`. OOM inside the cgroup kills the service, not the system. Written before child exec. `0` = unlimited. |
+| `allowed_slot_min` | `-1` | Minimum hardware slot ID (inclusive) this service is permitted to run on. Checked against `SLOT_ID` env at spawn time. `-1` = unconstrained. |
+| `allowed_slot_max` | `-1` | Maximum hardware slot ID (inclusive). If `SLOT_ID` falls outside `[allowed_slot_min, allowed_slot_max]`, spawn is refused with a `HAZARD` log and `SVC_NO_RESTART` is set — the service will not retry. Both min and max must be ≥ 0 to activate the gate. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
 A full example using readiness probes:
@@ -151,6 +153,29 @@ ln -s motor@.svc /etc/schema-init/services/motor@48.svc
 At boot, `motor@.svc` is skipped as a non-spawnable template. Each `motor@N.svc` symlink loads config from the template and spawns the binary with `INSTANCE=N` in the child environment. The motor controller reads `$INSTANCE` to determine its joint index, SPI bus address, or any other per-instance identity — no per-node config files required.
 
 If a node runs the bare template directly (e.g. on a slot-detected Pi Zero W 2 where the node's identity comes from GPIO strapping), `INSTANCE` falls back to `SLOT_ID` from `/run/schema-init/env`. One SD card image serves the entire fleet.
+
+**AllowedSlot gate** — for hardware deployments where running the wrong firmware on the wrong node is a physical hazard, add slot constraints to the template:
+
+```ini
+name=motor
+exec=/usr/local/bin/motor-ctrl
+allowed_slot_min=16
+allowed_slot_max=27
+```
+
+If `SLOT_ID` is outside the declared range at spawn time, `schema-init` logs a `HAZARD` line, refuses the spawn, and sets `SVC_NO_RESTART`. The process never runs. Project Daedalus slot map:
+
+| Slot range | Joint |
+|------------|-------|
+| 0–7 | Hip Left |
+| 8–15 | Hip Right |
+| 16–21 | Knee Left |
+| 22–27 | Knee Right |
+| 28–33 | Ankle Left |
+| 34–39 | Ankle Right |
+| 40–43 | Toe Left |
+| 44–47 | Toe Right |
+| 48 | Supervisor |
 
 Dependencies are resolved by name at load time. A service stays in `NEW_PROCESS` until all its deps reach `FUNDAMENTAL`, `SETTLED`, or `PERFECT`. A dep name can refer to either a service or a group (see below).
 
