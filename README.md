@@ -118,6 +118,8 @@ oneshot=1
 | `stable_secs` | `10` | Seconds process must stay alive before FULL_TRUST promotes to FUNDAMENTAL. Set lower for fast services; use `ready_path` instead when possible |
 | `ready_path` | — | Filesystem path that, when it exists, triggers immediate FULL_TRUST→FUNDAMENTAL promotion. Falls back to `stable_secs` if the path never appears |
 | `watchdog_timeout_ms` | `0` | Dead Man Token window in milliseconds. Service must call `schema-ctl pet <name>` within this window or PID 1 stops kicking `/dev/watchdog` and the hardware resets. Use for `critical=1` real-time processes. `0` = disabled. |
+| `cpu_limit` | `0` | Percent of one CPU core (1–100) enforced via cgroupv2 `cpu.max`. Written before child exec. `0` = unlimited. |
+| `mem_limit` | `0` | Memory hard cap in MB via cgroupv2 `memory.max`. OOM inside the cgroup kills the service, not the system. Written before child exec. `0` = unlimited. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
 A full example using readiness probes:
@@ -666,7 +668,7 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 - [x] Dead Man Token hardware watchdog — `/dev/watchdog` driven by per-service check-in via `schema-ctl pet`; any critical service missing its `watchdog_timeout_ms` window stops WDT petting → hardware reboot; PID 1 deadlock covered implicitly
 - [x] Symlink template instances — `motor@12.svc → motor@.svc`; `$INSTANCE` injected at spawn; `$SLOT_ID` fallback for GPIO-strapped nodes; one SD card image per fleet
 - [x] Structured telemetry — `schema-ctl status --json` and `--kv` for machine-parseable supervisory loop consumption and IEC 62304 audit traceability
-- [ ] Cgroup resource limits — `cpu_limit=` and `mem_limit=` per `.svc`; written via sync-pipe window before child exec; IEC 62304 Class C blast-radius isolation
+- [x] Cgroup resource limits — `cpu_limit=` (1–100, % of one core) and `mem_limit=` (MB) per `.svc`; written via sync-pipe window before child exec; IEC 62304 Class C blast-radius isolation
 
 ---
 
