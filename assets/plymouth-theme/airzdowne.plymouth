@@ -1,8 +1,31 @@
 [Plymouth Theme]
 Name=AirzDowne
 Description=AirzDowne Solutions boot splash
-ModuleName=script
+ModuleName=two-step
 
-[script]
+[two-step]
+Font=Cantarell 12
+TitleFont=Cantarell Light 30
 ImageDir=/usr/share/plymouth/themes/airzdowne
-ScriptFile=/usr/share/plymouth/themes/airzdowne/airzdowne.script
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.382
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.5
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0xffffff
+BackgroundEndColor=0xffffff
+ProgressBarBackgroundColor=0x606060
+ProgressBarForegroundColor=0xffffff
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+
+[shutdown]
+UseEndAnimation=false
+
+[reboot]
+UseEndAnimation=false

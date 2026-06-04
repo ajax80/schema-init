@@ -64,6 +64,36 @@ cp config/autostart/schema-audio.desktop ~/.config/autostart/
 sudo cp config/polkit/10-schema-nm.rules /etc/polkit-1/rules.d/
 ```
 
+### 6. Install Plymouth boot theme
+```
+sudo mkdir -p /usr/share/plymouth/themes/airzdowne
+sudo cp assets/plymouth-theme/airzdowne.plymouth /usr/share/plymouth/themes/airzdowne/
+sudo cp assets/plymouth-theme/logo.png /usr/share/plymouth/themes/airzdowne/
+```
+
+Generate the 30-frame breathing animation (requires `pillow`):
+```
+pip install pillow
+python3 assets/plymouth-theme/generate-frames.py /usr/share/plymouth/themes/airzdowne/
+```
+
+Copy password prompt graphics from the bundled spinner theme:
+```
+sudo cp /usr/share/plymouth/themes/spinner/{bullet,lock,entry,capslock}.png \
+        /usr/share/plymouth/themes/airzdowne/
+```
+
+Set as default and rebuild initramfs:
+```
+sudo plymouth-set-default-theme airzdowne
+sudo dracut -f --regenerate-all
+```
+
+Ensure `quiet rhgb` is present in your kernel command line:
+```
+sudo grubby --update-kernel=ALL --args="quiet rhgb"
+```
+
 ## Key fixes explained
 
 | Problem | Fix |
@@ -77,6 +107,10 @@ sudo cp config/polkit/10-schema-nm.rules /etc/polkit-1/rules.d/
 | AMD Ryzen audio modules not loaded | `sound-modules.svc` oneshot at boot |
 | KDE System Settings hangs 25s on open | `schema-logind` registers `org.freedesktop.systemd1` stub — `GetUnitFileState` returns immediately instead of timing out waiting for systemd activation |
 | About This System hangs 25s | `schema-logind` registers `org.freedesktop.hostname1` stub — hostname, OS name, hardware vendor/model returned instantly |
+| Plymouth black screen on AMD GPU | `script` plugin fails on AMD Picasso/Raven DRM; use `ModuleName=two-step` with pre-rendered frames |
+| Boot shows `^[[3~` escape sequences | Plymouth restores TTY echo on exit; `sddm-logged` runs `stty -echo` both before and immediately after `plymouth --wait quit`, then `tcflush` + `clear` on tty1 |
+| KDE Connect not discovered on LAN | `avahi-daemon` not running; `services/avahi.svc` starts it after dbus |
+| Clock wrong after reboot | `chronyd` not running; `services/chronyd.svc` starts it after network-manager |
 
 ## Audio hardware
 

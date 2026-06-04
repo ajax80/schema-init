@@ -1,0 +1,7 @@
+name=avahi
+exec=/usr/sbin/avahi-daemon
+args=--no-drop-root
+args=-s
+dep=dbus
+needs_root=1
+critical=0

@@ -1,0 +1,6 @@
+name=chronyd
+exec=/usr/sbin/chronyd
+args=-d
+dep=network-manager
+needs_root=1
+critical=0

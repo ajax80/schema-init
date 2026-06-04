@@ -6,7 +6,18 @@ chown 1000:1000 /run/user/1000
 chmod 700 /run/user/1000
 udevadm trigger --subsystem-match=input --action=add
 udevadm settle --timeout=10
+# Disable echoing on tty1 to prevent keypresses (like Delete sequences) from displaying
+stty -F /dev/tty1 -echo 2>/dev/null || true
+
 plymouth --wait quit
+
+# Disable echoing again after Plymouth quit restores default settings
+stty -F /dev/tty1 -echo 2>/dev/null || true
+# Flush the input buffer of /dev/tty1 to discard any buffered keys (like Delete sequences)
+perl -e 'use POSIX; open(my $fh, "+<", "/dev/tty1") or die; tcflush(fileno($fh), 0);'
+# Clear tty1 console screen to keep the transition black and silent
+clear > /dev/tty1
+
 runuser -u ajax80 -- env \
     XDG_RUNTIME_DIR=/run/user/1000 \
     LIBSEAT_BACKEND=direct \
