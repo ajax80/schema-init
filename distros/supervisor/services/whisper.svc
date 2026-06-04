@@ -1,0 +1,5 @@
+name=whisper
+exec=/usr/local/bin/schema-whisper.sh
+dep=pipewire
+needs_root=0
+critical=0

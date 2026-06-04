@@ -1,0 +1,5 @@
+name=pipewire
+exec=/usr/local/bin/schema-pipewire.sh
+dep=udev-trigger
+needs_root=0
+critical=0

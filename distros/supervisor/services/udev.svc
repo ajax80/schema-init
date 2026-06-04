@@ -1,0 +1,6 @@
+name=udev
+exec=/lib/systemd/systemd-udevd
+oneshot=0
+critical=1
+stable_secs=5
+ready_path=/run/udev/control

@@ -1,0 +1,6 @@
+name=supervisor-agent
+exec=/usr/local/bin/schema-supervisor-agent.sh
+dep=whisper
+dep=dhcpcd
+needs_root=0
+critical=1

@@ -1,0 +1,6 @@
+name=sshd
+exec=/usr/local/bin/schema-sshd.sh
+dep=dhcpcd
+oneshot=0
+critical=0
+stable_secs=3
