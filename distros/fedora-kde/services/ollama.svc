@@ -1,0 +1,5 @@
+name=ollama
+exec=/usr/local/bin/ollama-start.sh
+dep=network-manager
+needs_root=1
+critical=0

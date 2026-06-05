@@ -1,6 +1,7 @@
 #!/bin/sh
 exec >> /var/log/network-up.log 2>&1
 printf "network-up start: %s\n" "$(date)"
+modprobe r8169 2>&1 || true
 modprobe r8152 2>&1 || true
 udevadm trigger --subsystem-match=usb 2>/dev/null || true
 udevadm settle --timeout=10 2>/dev/null || true

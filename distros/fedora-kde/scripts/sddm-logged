@@ -7,15 +7,14 @@ chmod 700 /run/user/1000
 udevadm trigger --subsystem-match=input --action=add
 udevadm settle --timeout=10
 stty -F /dev/tty1 -echo 2>/dev/null || true
-
 timeout 5 plymouth --wait quit 2>/dev/null || plymouth quit 2>/dev/null || true
-
 stty -F /dev/tty1 -echo 2>/dev/null || true
 perl -e 'use POSIX; open(my $fh, "+<", "/dev/tty1") or die; tcflush(fileno($fh), 0);'
 clear > /dev/tty1
 
 while true; do
-    runuser -u ajax80 -- env         XDG_RUNTIME_DIR=/run/user/1000         LIBSEAT_BACKEND=direct         LANG=en_US.UTF-8         PLASMA_USE_SYSTEMD_SCOPE=0         /usr/libexec/plasma-dbus-run-session-if-needed         /usr/bin/startplasma-wayland
+    rm -f /run/user/1000/wayland-* /tmp/.ICE-unix/* /tmp/.X*-lock 2>/dev/null || true
+    runuser -u ajax80 -- env XDG_RUNTIME_DIR=/run/user/1000 LIBSEAT_BACKEND=direct LANG=en_US.UTF-8 PLASMA_USE_SYSTEMD_SCOPE=0 /usr/libexec/plasma-dbus-run-session-if-needed /usr/bin/startplasma-wayland
     RC=$?
     printf 'plasma_exited rc=%d\n' "$RC"
     [ "$RC" -ne 0 ] && break
