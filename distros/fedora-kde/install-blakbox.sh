@@ -39,10 +39,12 @@ cp "$REPO/distros/fedora-kde/scripts/sddm-logged"          "$BIN_DIR/sddm-logged
 cp "$REPO/distros/fedora-kde/scripts/sound-modules.sh"     "$BIN_DIR/sound-modules.sh"
 cp "$REPO/distros/fedora-kde/scripts/ollama-start.sh"      "$BIN_DIR/ollama-start.sh"
 cp "$REPO/distros/fedora-kde/scripts/network-blakbox.sh" "$BIN_DIR/network-blakbox.sh"
+cp "$REPO/distros/fedora-kde/scripts/udhcpc.sh"         "$BIN_DIR/udhcpc.sh"
 cp "$REPO/distros/fedora-kde/scripts/seatd-run.sh"         "$BIN_DIR/seatd-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/plasma-session-start.sh" "$BIN_DIR/plasma-session-start.sh"
-cp "$REPO/distros/fedora-kde/scripts/pipewire-run.sh"     "$BIN_DIR/pipewire-run.sh"
-cp "$REPO/distros/fedora-kde/scripts/wireplumber-run.sh" "$BIN_DIR/wireplumber-run.sh"
+cp "$REPO/distros/fedora-kde/scripts/pipewire-run.sh"       "$BIN_DIR/pipewire-run.sh"
+cp "$REPO/distros/fedora-kde/scripts/wireplumber-run.sh"   "$BIN_DIR/wireplumber-run.sh"
+cp "$REPO/distros/fedora-kde/scripts/pipewire-pulse-run.sh" "$BIN_DIR/pipewire-pulse-run.sh"
 chmod +x \
     "$BIN_DIR/mount-efi.sh" \
     "$BIN_DIR/mount-home.sh" \
@@ -54,10 +56,12 @@ chmod +x \
     "$BIN_DIR/sound-modules.sh" \
     "$BIN_DIR/ollama-start.sh" \
     "$BIN_DIR/network-blakbox.sh" \
+    "$BIN_DIR/udhcpc.sh" \
     "$BIN_DIR/seatd-run.sh" \
     "$BIN_DIR/plasma-session-start.sh" \
     "$BIN_DIR/pipewire-run.sh" \
-    "$BIN_DIR/wireplumber-run.sh"
+    "$BIN_DIR/wireplumber-run.sh" \
+    "$BIN_DIR/pipewire-pulse-run.sh"
 
 printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d

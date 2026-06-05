@@ -1,0 +1,6 @@
+name=mount-ocean-drives
+exec=/usr/local/bin/mount-ocean-drives.sh
+oneshot=1
+needs_root=1
+critical=0
+dep=mount-home
