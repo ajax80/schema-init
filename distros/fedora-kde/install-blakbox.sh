@@ -41,6 +41,8 @@ cp "$REPO/distros/fedora-kde/scripts/ollama-start.sh"      "$BIN_DIR/ollama-star
 cp "$REPO/distros/fedora-kde/scripts/network-blakbox.sh" "$BIN_DIR/network-blakbox.sh"
 cp "$REPO/distros/fedora-kde/scripts/seatd-run.sh"         "$BIN_DIR/seatd-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/plasma-session-start.sh" "$BIN_DIR/plasma-session-start.sh"
+cp "$REPO/distros/fedora-kde/scripts/pipewire-run.sh"     "$BIN_DIR/pipewire-run.sh"
+cp "$REPO/distros/fedora-kde/scripts/wireplumber-run.sh" "$BIN_DIR/wireplumber-run.sh"
 chmod +x \
     "$BIN_DIR/mount-efi.sh" \
     "$BIN_DIR/mount-home.sh" \
@@ -53,7 +55,9 @@ chmod +x \
     "$BIN_DIR/ollama-start.sh" \
     "$BIN_DIR/network-blakbox.sh" \
     "$BIN_DIR/seatd-run.sh" \
-    "$BIN_DIR/plasma-session-start.sh"
+    "$BIN_DIR/plasma-session-start.sh" \
+    "$BIN_DIR/pipewire-run.sh" \
+    "$BIN_DIR/wireplumber-run.sh"
 
 printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d
