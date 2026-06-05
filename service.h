@@ -63,7 +63,7 @@ typedef struct {
     int              allowed_slot_max; /* slot boundary gate: -1 = unconstrained */
     uint32_t         content_hash;     /* FNV-1a hash of the parsed .svc file at load time */
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
-    time_t           dormant_until;    /* epoch when DORMANT->NEW_PROCESS fires */
+    struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
 } service_t;
 

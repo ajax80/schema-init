@@ -597,19 +597,25 @@ static void tick_service(service_t *svc,
                 } else {
                     time_t delay = 300L << (svc->dormant_count - 1);
                     if (delay > 3600) delay = 3600;
-                    svc->dormant_until = time(NULL) + delay;
+                    struct timespec _now;
+                    clock_gettime(CLOCK_MONOTONIC, &_now);
+                    svc->dormant_until.tv_sec  = _now.tv_sec + delay;
+                    svc->dormant_until.tv_nsec = _now.tv_nsec;
                     svc->inst.state = STATE_DORMANT;
                     service_log(svc, "dormant");
                 }
             }
             break;
 
-        case STATE_DORMANT:
-            if (time(NULL) >= svc->dormant_until) {
+        case STATE_DORMANT: {
+            struct timespec _now;
+            clock_gettime(CLOCK_MONOTONIC, &_now);
+            if (_now.tv_sec >= svc->dormant_until.tv_sec) {
                 svc->inst.state = STATE_NEW_PROCESS;
                 service_log(svc, "dormant-wake");
             }
             break;
+        }
 
         case STATE_FUNDAMENTAL:
             if (svc->ready_path[0] && svc->child_pid > 0) {
@@ -636,7 +642,10 @@ static void tick_service(service_t *svc,
                         } else {
                             time_t delay = 300L << (svc->dormant_count - 1);
                             if (delay > 3600) delay = 3600;
-                            svc->dormant_until = time(NULL) + delay;
+                            struct timespec _now2;
+                            clock_gettime(CLOCK_MONOTONIC, &_now2);
+                            svc->dormant_until.tv_sec  = _now2.tv_sec + delay;
+                            svc->dormant_until.tv_nsec = _now2.tv_nsec;
                             svc->inst.state = STATE_DORMANT;
                             service_log(svc, "dormant");
                         }
