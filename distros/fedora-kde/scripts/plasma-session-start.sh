@@ -7,6 +7,12 @@ while [ $i -lt 60 ]; do
     sleep 0.5
     i=$((i+1))
 done
-sleep 2
+i=0
+while [ $i -lt 20 ]; do
+    [ -S "${XDG_RUNTIME_DIR}/pipewire-0" ] && break
+    sleep 0.5
+    i=$((i+1))
+done
+sleep 1
 pgrep -x plasmashell > /dev/null || plasmashell &
 wait $SPW

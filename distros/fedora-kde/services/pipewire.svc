@@ -1,0 +1,7 @@
+name=pipewire
+exec=/usr/local/bin/pipewire-run.sh
+dep=sound-modules
+dep=dbus
+needs_root=1
+stable_secs=3
+ready_path=/run/user/1000/pipewire-0
