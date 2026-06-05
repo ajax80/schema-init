@@ -1,0 +1,6 @@
+name=network-blakbox
+exec=/usr/local/bin/network-blakbox.sh
+dep=network-up
+needs_root=1
+critical=0
+stable_secs=3
