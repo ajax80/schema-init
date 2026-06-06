@@ -3,3 +3,4 @@ exec=/usr/local/bin/wireplumber-run.sh
 dep=pipewire
 needs_root=1
 stable_secs=3
+priority=critical

@@ -6,3 +6,4 @@ dep=wireplumber
 dep=seatd
 needs_root=1
 critical=1
+priority=critical

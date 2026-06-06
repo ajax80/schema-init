@@ -3,3 +3,4 @@ exec=/usr/local/bin/pipewire-pulse-run.sh
 dep=wireplumber
 needs_root=1
 stable_secs=3
+priority=critical

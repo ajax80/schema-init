@@ -2,3 +2,4 @@ name=udevd
 exec=/usr/lib/systemd/systemd-udevd
 needs_root=1
 critical=1
+priority=critical
