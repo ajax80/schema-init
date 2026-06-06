@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <stdint.h>
 #include <time.h>
+#include <pwd.h>
 #include "schema.h"
 
 #define MAX_SERVICES    64
@@ -38,7 +39,14 @@ typedef struct {
     schema_instance_t inst;
     pid_t            child_pid;
     int              restart_count;
+    int              max_restarts;
     time_t           last_start;
+    uid_t            run_uid;            /* if non-zero: drop to this uid before exec */
+    gid_t            run_gid;            /* companion gid for run_uid                 */
+    char             run_user[32];       /* username string for initgroups            */
+
+
+
     time_t           start_time;       /* when current run began              */
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
     char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */

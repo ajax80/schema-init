@@ -3,3 +3,6 @@ exec=/usr/local/bin/schema-whisper.sh
 dep=pipewire
 needs_root=0
 critical=0
+allowed_slot_min=48
+allowed_slot_max=48
+

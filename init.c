@@ -22,6 +22,7 @@
 #include <poll.h>
 #include <sys/signalfd.h>
 #include <glob.h>
+#include <sys/ioctl.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -805,6 +806,45 @@ static void ctl_cmd(int fd, char *line) {
         }
         ctl_writef(fd, "err: not found: %s\n", name);
 
+    } else if (strncmp(line, "reset", 5) == 0) {
+        const char *name = line + 5;
+        while (*name == ' ') name++;
+        if (*name == '\0') {
+            for (i = 0; i < svc_count; i++) {
+                services[i].restart_count = 0;
+                services[i].dormant_count = 0;
+                services[i].flags &= ~SVC_NO_RESTART;
+                if (services[i].inst.state == STATE_EXCISED ||
+                    services[i].inst.state == STATE_DORMANT ||
+                    services[i].inst.state == STATE_PERFECT) {
+                    services[i].inst.state = STATE_NEW_PROCESS;
+                }
+            }
+            ctl_writef(fd, "ok: reset all services\n");
+        } else {
+            for (i = 0; i < svc_count; i++) {
+                if (strcmp(services[i].name, name) != 0) continue;
+                services[i].restart_count = 0;
+                services[i].dormant_count = 0;
+                services[i].flags &= ~SVC_NO_RESTART;
+                if (services[i].inst.state == STATE_EXCISED ||
+                    services[i].inst.state == STATE_DORMANT ||
+                    services[i].inst.state == STATE_PERFECT) {
+                    services[i].inst.state = STATE_NEW_PROCESS;
+                    ctl_writef(fd, "ok: reset and queued %s\n", name);
+                } else {
+                    ctl_writef(fd, "ok: reset restart count for %s (current state: %s)\n",
+                               name, state_name(services[i].inst.state));
+                }
+                write(fd, ".\n", 2);
+                return;
+            }
+            ctl_writef(fd, "err: not found: %s\n", name);
+        }
+        write(fd, ".\n", 2);
+        return;
+
+
     } else if (strncmp(line, "add ", 4) == 0) {
         const char *path = line + 4;
         int j, k, ds;
@@ -1066,6 +1106,8 @@ static void handle_reload(int evict_mode) {
                 shadow_services[i].child_pid     = services[j].child_pid;
                 shadow_services[i].inst          = services[j].inst;
                 shadow_services[i].restart_count = services[j].restart_count;
+                shadow_services[i].dormant_count = services[j].dormant_count;
+                shadow_services[i].dormant_until = services[j].dormant_until;
                 shadow_services[i].last_start    = services[j].last_start;
                 shadow_services[i].start_time    = services[j].start_time;
                 shadow_services[i].stable_time   = services[j].stable_time;
@@ -1073,6 +1115,7 @@ static void handle_reload(int evict_mode) {
                 shadow_services[i].failsafe_start = services[j].failsafe_start;
                 shadow_services[i].last_pet      = services[j].last_pet;
                 memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path, sizeof(shadow_services[i].cgroup_path));
+
                 
                 /* clear live service state so we don't accidentally treat it as running/managed */
                 services[j].child_pid = 0;
@@ -1135,12 +1178,20 @@ int main(int argc, char **argv) {
     int i;
     const char *svc_dir = SVC_DIR;
 
-    (void)argc;
-    (void)argv;
+    if (argc > 1) {
+        svc_dir = argv[1];
+    }
+
 
     clock_gettime(CLOCK_MONOTONIC, &init_start);
 
     if (getpid() == 1) {
+        /* Detach from controlling terminal to prevent receiving SIGINT on Ctrl+C */
+        int fd = open("/dev/tty", O_RDWR | O_NOCTTY);
+        if (fd >= 0) {
+            ioctl(fd, TIOCNOTTY);
+            close(fd);
+        }
         mount_pseudo();
         cleanup_tmp_locks();
         watchdog_init();

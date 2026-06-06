@@ -115,6 +115,7 @@ oneshot=1
 | `needs_root` | `0` | Abort spawn if uid ≠ 0 |
 | `critical` | `0` | If `1`: service never reaches EXCISED — stays DORMANT at 1h retry indefinitely. Also: if this service is EXCISED, its dependents are hard-blocked. |
 | `no_restart` | `0` | Any death → EXCISED immediately; no recovery arc |
+| `max_restarts` | `5` | Maximum number of times to attempt restarting a service before entering EXCISED or backoff |
 | `stable_secs` | `10` | Seconds process must stay alive before FULL_TRUST promotes to FUNDAMENTAL. Set lower for fast services; use `ready_path` instead when possible |
 | `ready_path` | — | Filesystem path that, when it exists, triggers immediate FULL_TRUST→FUNDAMENTAL promotion. Falls back to `stable_secs` if the path never appears |
 | `watchdog_timeout_ms` | `0` | Dead Man Token window in milliseconds. Service must call `schema-ctl pet <name>` within this window or PID 1 stops kicking `/dev/watchdog` and the hardware resets. Use for `critical=1` real-time processes. `0` = disabled. |
@@ -417,6 +418,7 @@ sudo schema-ctl stop <name>     # send SIGTERM to a running service
 sudo schema-ctl restart <name>  # stop + re-queue through the state machine
 sudo schema-ctl add <path>      # load a new .svc file at runtime, no reboot needed
 sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
+sudo schema-ctl reset [<name>]  # reset restart/dormant counts and re-queue failed services
 ```
 
 The socket is `chmod 0600` — root only. Build alongside the init binary:

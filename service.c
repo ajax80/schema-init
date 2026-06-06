@@ -10,6 +10,8 @@
 #include <dirent.h>
 #include <time.h>
 #include <signal.h>
+#include <pwd.h>
+#include <grp.h>
 
 /* ── F8: can we spawn this right now? ──────────────────────────────── */
 
@@ -71,7 +73,7 @@ uint32_t service_probe_f9(service_t *svc, service_t *table, int count) {
     long mem;
 
     /* F9_RETRY_COUNT / F9_RETRY_WIN */
-    if (svc->restart_count < MAX_RESTARTS)          f |= F9_RETRY_COUNT;
+    if (svc->restart_count < svc->max_restarts)     f |= F9_RETRY_COUNT;
     if (now - svc->last_start >= COOLDOWN_SECS)     f |= F9_RETRY_WIN;
 
     /* F9_FALL_EXISTS / F9_FALL_HEALTH — no fallback system yet, reserved */
@@ -85,7 +87,7 @@ uint32_t service_probe_f9(service_t *svc, service_t *table, int count) {
     /* F9_ESC_PATH / F9_ESC_AUTH — no escalation path yet */
 
     /* F9_TIMEOUT_WIN / F9_TIMEOUT_EXT */
-    if (svc->restart_count < MAX_RESTARTS) {
+    if (svc->restart_count < svc->max_restarts) {
         f |= F9_TIMEOUT_WIN;
         f |= F9_TIMEOUT_EXT;
     }
@@ -102,13 +104,13 @@ uint32_t service_probe_f6(service_t *svc) {
     long mem = free_mem_kb();
 
     /* F6_ERR_PATH / F6_ERR_RES — can we even attempt recovery? */
-    if (svc->restart_count < MAX_RESTARTS) f |= F6_ERR_PATH;
-    if (mem >= MEM_MIN_KB)                 f |= F6_ERR_RES;
+    if (svc->restart_count < svc->max_restarts) f |= F6_ERR_PATH;
+    if (mem >= MEM_MIN_KB)                      f |= F6_ERR_RES;
 
     /* F6_ROLL_STATE / F6_ROLL_SAFE — no state snapshot yet, reserved */
 
     /* F6_ESC_LIMIT / F6_ESC_PATTERN */
-    if (svc->restart_count < MAX_RESTARTS) f |= F6_ESC_LIMIT;
+    if (svc->restart_count < svc->max_restarts) f |= F6_ESC_LIMIT;
     /* assume non-repeating pattern for now */
     f |= F6_ESC_PATTERN;
 
@@ -202,15 +204,13 @@ int service_spawn(service_t *svc) {
         read(sync[0], &c, 1);
         close(sync[0]);
         char log_path[256];
-        snprintf(log_path, sizeof(log_path), "/run/log/schema-init/%s.log", svc->name);
-        mkdir("/run/log", 0755);
-        mkdir("/run/log/schema-init", 0755);
+        mkdir("/var/log/schema-init", 0755);
+        snprintf(log_path, sizeof(log_path), "/var/log/schema-init/%s.log", svc->name);
         int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
         if (fd < 0) {
-            snprintf(log_path, sizeof(log_path), "./run/log/schema-init/%s.log", svc->name);
-            mkdir("./run", 0755);
-            mkdir("./run/log", 0755);
-            mkdir("./run/log/schema-init", 0755);
+            mkdir("/run/log", 0755);
+            mkdir("/run/log/schema-init", 0755);
+            snprintf(log_path, sizeof(log_path), "/run/log/schema-init/%s.log", svc->name);
             fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
         }
         if (fd < 0) {
@@ -231,6 +231,16 @@ int service_spawn(service_t *svc) {
                     setenv("INSTANCE", slot, 1);
                 }
             }
+        }
+        if (svc->run_uid) {
+            char xdg[48];
+            snprintf(xdg, sizeof(xdg), "/run/user/%u", (unsigned)svc->run_uid);
+            mkdir(xdg, 0700);
+            chown(xdg, svc->run_uid, svc->run_gid);
+            setenv("XDG_RUNTIME_DIR", xdg, 1);
+            initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid);
+            setgid(svc->run_gid);
+            setuid(svc->run_uid);
         }
         execv(svc->exec, svc->argv);
         _exit(127);
@@ -392,6 +402,7 @@ int services_load(const char *dir, service_t *table, int max) {
         svc->priority = PRIO_STANDARD;
         svc->allowed_slot_min = -1;
         svc->allowed_slot_max = -1;
+        svc->max_restarts = MAX_RESTARTS;
         int dep_slot = 0;
 
         argc = 0;
@@ -452,6 +463,15 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->allowed_slot_min = atoi(val);
             } else if (strcmp(line, "allowed_slot_max") == 0) {
                 svc->allowed_slot_max = atoi(val);
+            } else if (strcmp(line, "max_restarts") == 0) {
+                svc->max_restarts = atoi(val);
+            } else if (strcmp(line, "user") == 0) {
+                struct passwd *pw = getpwnam(val);
+                if (pw) {
+                    svc->run_uid = pw->pw_uid;
+                    svc->run_gid = pw->pw_gid;
+                    strncpy(svc->run_user, val, sizeof(svc->run_user) - 1);
+                }
             }
         }
         fclose(f);
@@ -521,6 +541,9 @@ int service_load_one(const char *path, service_t *svc) {
     schema_instance_init(&svc->inst, 0, STATE_PERFECT);
     svc->stable_secs = STABLE_SECS;
     svc->priority = PRIO_STANDARD;
+    svc->allowed_slot_min = -1;
+    svc->allowed_slot_max = -1;
+    svc->max_restarts = MAX_RESTARTS;
     argc = 0;
     dep_slot = 0;
 
@@ -572,6 +595,19 @@ int service_load_one(const char *path, service_t *svc) {
             svc->no_excise = atoi(val);
         } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
             svc->watchdog_timeout_ms = atoi(val);
+        } else if (strcmp(line, "cpu_limit") == 0) {
+            svc->cpu_limit_pct = atoi(val);
+        } else if (strcmp(line, "mem_limit") == 0) {
+            svc->mem_limit_mb = atol(val);
+        } else if (strcmp(line, "allowed_slot_min") == 0) {
+            svc->allowed_slot_min = atoi(val);
+        } else if (strcmp(line, "allowed_slot_max") == 0) {
+            svc->allowed_slot_max = atoi(val);
+        } else if (strcmp(line, "max_restarts") == 0) {
+            svc->max_restarts = atoi(val);
+        } else if (strcmp(line, "user") == 0) {
+            struct passwd *pw = getpwnam(val);
+            if (pw) { svc->run_uid = pw->pw_uid; svc->run_gid = pw->pw_gid; }
         }
     }
     fclose(f);

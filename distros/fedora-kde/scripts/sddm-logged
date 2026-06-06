@@ -18,19 +18,19 @@ while true; do
         XDG_RUNTIME_DIR=/run/user/1000 \
         LANG=en_US.UTF-8 \
         PLASMA_USE_SYSTEMD_SCOPE=0 \
-        WAYLAND_DISPLAY=wayland-0 \
         XDG_CURRENT_DESKTOP=KDE \
         XDG_SESSION_TYPE=wayland \
         XDG_SESSION_CLASS=user \
         XDG_SESSION_DESKTOP=KDE \
         XDG_SEAT=seat0 \
+        XDG_VTNR=1 \
         DESKTOP_SESSION=plasma \
         KDE_FULL_SESSION=true \
         KDE_SESSION_VERSION=6 \
         KDE_SESSION_UID=1000 \
         /usr/libexec/plasma-dbus-run-session-if-needed /usr/local/bin/plasma-session-start.sh
     RC=$?
-    printf 'plasma_exited rc=%d\n' "$RC"
-    [ "$RC" -ne 0 ] && break
+    printf 'plasma_exited rc=%d\n' $RC
+    [ $RC -ne 0 ] && break
     sleep 2
 done

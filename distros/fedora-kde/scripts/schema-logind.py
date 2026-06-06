@@ -7,6 +7,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 import socket
+import time
 import pwd
 
 def read_file_line(path):
@@ -187,6 +188,8 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='')
     def PowerOff(self, interactive):
+        print("login1-stub: PowerOff in 5s - Ctrl+C to cancel", flush=True)
+        time.sleep(5)
         print("login1-stub: PowerOff requested -> sending SIGTERM to PID 1")
         try:
             os.kill(1, signal.SIGTERM)
@@ -194,8 +197,17 @@ class Login1Manager(dbus.service.Object):
             print("login1-stub: PID 1 not found (not running as init system)")
             sys.exit(0)
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='')
-    def Reboot(self, interactive):
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='', sender_keyword='sender')
+    def Reboot(self, interactive, sender=None):
+        import subprocess
+        try:
+            pid = self._connection.get_unix_process_id(sender) if sender else '?'
+            proc = subprocess.check_output(['cat', f'/proc/{pid}/comm'], text=True).strip() if pid != '?' else '?'
+            print(f"login1-stub: Reboot called by PID {pid} ({proc}) sender={sender}", flush=True)
+        except Exception as e:
+            print(f"login1-stub: Reboot called (could not identify caller: {e})", flush=True)
+        print("login1-stub: Reboot in 5s - Ctrl+C to cancel", flush=True)
+        time.sleep(5)
         print("login1-stub: Reboot requested -> sending SIGINT to PID 1")
         try:
             os.kill(1, signal.SIGINT)

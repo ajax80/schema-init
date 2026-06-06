@@ -4,3 +4,6 @@ dep=whisper
 dep=dhcpcd
 needs_root=0
 critical=1
+allowed_slot_min=48
+allowed_slot_max=48
+
