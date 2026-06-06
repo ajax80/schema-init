@@ -1,0 +1,5 @@
+name=greybox-audio
+exec=/usr/local/bin/greybox-audio-tunnel.sh
+dep=pipewire-pulse
+oneshot=1
+critical=0
