@@ -83,10 +83,12 @@ cp /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/sddm-logged \
    /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/mount-home.sh \
    /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/sound-modules.sh \
    /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/schema-audio-start.sh \
+   /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/schema-udev-trigger.sh \
    "$MNT/usr/local/bin/"
 chmod +x "$MNT/usr/local/bin/sddm-logged" \
           "$MNT/usr/local/bin/sound-modules.sh" \
-          "$MNT/usr/local/bin/schema-audio-start.sh"
+          "$MNT/usr/local/bin/schema-audio-start.sh" \
+          "$MNT/usr/local/bin/schema-udev-trigger.sh"
 
 printf "#!/bin/sh\n# live ISO: home is on rootfs, no separate mount needed\nexit 0\n" \
     > "$MNT/usr/local/bin/mount-home.sh"
