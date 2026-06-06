@@ -248,6 +248,17 @@ class Login1Manager(dbus.service.Object):
         reply_cb(val)
         return False
 
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ssss', out_signature='h')
+    def Inhibit(self, what, who, why, mode):
+        print(f"login1-stub: Inhibit(what={what}, who={who}, why={why}, mode={mode})")
+        r, w = os.pipe()
+        os.close(r)
+        return dbus.types.UnixFd(w)
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(ssssuu)')
+    def ListInhibitors(self):
+        return dbus.Array([], signature='(ssssuu)')
+
     # ── Session, User, Seat methods returning dummy paths ─────────────────
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(susso)')
