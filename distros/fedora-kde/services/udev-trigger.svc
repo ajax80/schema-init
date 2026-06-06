@@ -1,0 +1,6 @@
+name=udev-trigger
+exec=/usr/local/bin/schema-udev-trigger.sh
+dep=udevd
+oneshot=1
+critical=1
+priority=critical
