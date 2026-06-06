@@ -256,10 +256,14 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ssss', out_signature='h')
     def Inhibit(self, what, who, why, mode):
-        print(f"login1-stub: Inhibit({what}, {who}, {why}, {mode})")
+        print(f"login1-stub: Inhibit(what={what}, who={who}, why={why}, mode={mode})")
         r, w = os.pipe()
         os.close(r)
         return dbus.types.UnixFd(w)
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(ssssuu)')
+    def ListInhibitors(self):
+        return dbus.Array([], signature='(ssssuu)')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
