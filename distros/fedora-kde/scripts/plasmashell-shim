@@ -1,0 +1,2 @@
+#!/bin/sh
+exec env LD_PRELOAD=/usr/local/lib/mock_sd.so /usr/bin/plasmashell "$@"

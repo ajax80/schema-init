@@ -25,5 +25,5 @@ while [ $i -lt 20 ]; do
     i=$((i+1))
 done
 sleep 1
-pgrep -x plasmashell > /dev/null || plasmashell &
+pgrep -x plasmashell > /dev/null || /usr/local/bin/plasmashell-shim &
 wait $SPW

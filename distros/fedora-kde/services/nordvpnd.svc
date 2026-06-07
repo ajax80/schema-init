@@ -1,5 +1,5 @@
 name=nordvpnd
-exec=/usr/sbin/nordvpnd
+exec=/usr/local/bin/nordvpnd-wrapper.sh
 dep=network-manager
 needs_root=1
 critical=0

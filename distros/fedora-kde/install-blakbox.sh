@@ -45,6 +45,8 @@ cp "$REPO/distros/fedora-kde/scripts/plasma-session-start.sh" "$BIN_DIR/plasma-s
 cp "$REPO/distros/fedora-kde/scripts/pipewire-run.sh"       "$BIN_DIR/pipewire-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/wireplumber-run.sh"   "$BIN_DIR/wireplumber-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/pipewire-pulse-run.sh" "$BIN_DIR/pipewire-pulse-run.sh"
+cp "$REPO/distros/fedora-kde/scripts/nordvpnd-wrapper.sh"     "$BIN_DIR/nordvpnd-wrapper.sh"
+cp "$REPO/distros/fedora-kde/scripts/plasmashell-shim"        "$BIN_DIR/plasmashell-shim"
 chmod +x \
     "$BIN_DIR/mount-efi.sh" \
     "$BIN_DIR/mount-home.sh" \
@@ -61,7 +63,15 @@ chmod +x \
     "$BIN_DIR/plasma-session-start.sh" \
     "$BIN_DIR/pipewire-run.sh" \
     "$BIN_DIR/wireplumber-run.sh" \
-    "$BIN_DIR/pipewire-pulse-run.sh"
+    "$BIN_DIR/pipewire-pulse-run.sh" \
+    "$BIN_DIR/nordvpnd-wrapper.sh" \
+    "$BIN_DIR/plasmashell-shim"
+
+printf "==> building KDE Plasma sd_booted shim (fixes ~30%% idle CPU with no systemd user session)\n"
+gcc -shared -fPIC -o /usr/local/lib/mock_sd.so "$REPO/distros/fedora-kde/scripts/mock_sd.c" -ldl
+install -d -o ajax80 -g ajax80 /home/ajax80/.config/autostart
+cp "$REPO/distros/fedora-kde/config/autostart/org.kde.plasmashell.desktop" /home/ajax80/.config/autostart/
+chown ajax80:ajax80 /home/ajax80/.config/autostart/org.kde.plasmashell.desktop
 
 printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d
