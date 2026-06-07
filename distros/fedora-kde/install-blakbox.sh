@@ -17,9 +17,13 @@ make clean
 make
 
 printf "==> installing binaries\n"
-cp schema-init /sbin/schema-init
+# /sbin/schema-init is the running PID 1; a plain cp hits ETXTBSY.
+# Copy to a temp on the same fs and rename atomically over the busy inode.
+cp schema-init /sbin/schema-init.new
+chmod 755 /sbin/schema-init.new
+mv -f /sbin/schema-init.new /sbin/schema-init
 cp schema-ctl "$BIN_DIR/schema-ctl"
-chmod 755 /sbin/schema-init "$BIN_DIR/schema-ctl"
+chmod 755 "$BIN_DIR/schema-ctl"
 
 printf "==> installing services\n"
 mkdir -p "$SVC_DIR"
