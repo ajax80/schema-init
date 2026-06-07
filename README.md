@@ -651,6 +651,7 @@ Full KDE Plasma 6 desktop on Fedora 44 with schema-init as PID 1. Boots from a b
 | `sddm` | Display manager (via sddm-logged wrapper, no systemd session) |
 | `sound-modules` | oneshot — loads AMD Ryzen audio modules at boot |
 | `bluetoothd` | Starts `bluez` daemon — registers `org.bluez`, restores KDE Bluetooth applet |
+| `zram-swap` | oneshot — zstd-compressed zram swap device; replaces systemd's `zram-generator` |
 
 See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full installation instructions and key fixes.
 
@@ -697,6 +698,7 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 - [x] Symlink template instances — `motor@12.svc → motor@.svc`; `$INSTANCE` injected at spawn; `$SLOT_ID` fallback for GPIO-strapped nodes; one SD card image per fleet
 - [x] Structured telemetry — `schema-ctl status --json` and `--kv` for machine-parseable supervisory loop consumption and IEC 62304 audit traceability
 - [x] Cgroup resource limits — `cpu_limit=` (1–100, % of one core) and `mem_limit=` (MB) per `.svc`; written via sync-pipe window before child exec; IEC 62304 Class C blast-radius isolation
+- [x] zram swap — `zram-swap.svc` boots a zstd-compressed zram swap device, replacing systemd's `zram-generator`; eliminates disk thrashing / periodic stutter under memory pressure
 
 ---
 

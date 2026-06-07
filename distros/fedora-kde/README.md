@@ -120,6 +120,7 @@ sudo grubby --update-kernel=ALL --args="quiet rhgb"
 | Clock wrong after reboot | `chronyd` not running; `services/chronyd.svc` starts it after network-manager |
 | KDE Bluetooth applet dead, no controller | `bluetoothd` not running so `org.bluez` never registers on the system bus; `services/bluetoothd.svc` starts `/usr/libexec/bluetooth/bluetoothd -n` after dbus. Loadable live with `schema-ctl add` — no reboot |
 | Xbox One/Series controller won't pair over BT | Kernel ERTM (Enhanced Re-Transmission Mode); disable it: `echo "options bluetooth disable_ertm=1" > /etc/modprobe.d/bluetooth.conf` and `echo 1 > /sys/module/bluetooth/parameters/disable_ertm` to apply live |
+| Periodic stutter/hitching under memory pressure (e.g. gaming) | No systemd means `zram-generator` never runs, so the system boots with **zero swap**. Under RAM pressure the kernel thrashes — discarding and re-reading page cache from disk (high iowait, processes stuck in `D` state), producing a stutter every few seconds. `zram-swap.svc` creates a zstd-compressed zram swap device at boot (~3–4x compression), restoring the headroom systemd would normally provide |
 
 ## Audio hardware
 

@@ -60,6 +60,7 @@ cp "$REPO/distros/fedora-kde/scripts/wireplumber-run.sh"   "$BIN_DIR/wireplumber
 cp "$REPO/distros/fedora-kde/scripts/pipewire-pulse-run.sh" "$BIN_DIR/pipewire-pulse-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/nordvpnd-wrapper.sh"     "$BIN_DIR/nordvpnd-wrapper.sh"
 cp "$REPO/distros/fedora-kde/scripts/plasmashell-shim"        "$BIN_DIR/plasmashell-shim"
+cp "$REPO/distros/fedora-kde/scripts/zram-swap.sh"            "$BIN_DIR/zram-swap.sh"
 chmod +x \
     "$BIN_DIR/mount-efi.sh" \
     "$BIN_DIR/mount-home.sh" \
@@ -78,7 +79,8 @@ chmod +x \
     "$BIN_DIR/wireplumber-run.sh" \
     "$BIN_DIR/pipewire-pulse-run.sh" \
     "$BIN_DIR/nordvpnd-wrapper.sh" \
-    "$BIN_DIR/plasmashell-shim"
+    "$BIN_DIR/plasmashell-shim" \
+    "$BIN_DIR/zram-swap.sh"
 
 printf "==> building KDE Plasma sd_booted shim (fixes ~30%% idle CPU with no systemd user session)\n"
 gcc -shared -fPIC -o /usr/local/lib/mock_sd.so "$REPO/distros/fedora-kde/scripts/mock_sd.c" -ldl
