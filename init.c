@@ -558,6 +558,7 @@ static void tick_service(service_t *svc,
                 int ready = 0;
                 if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
                     ready = 1;
+                    svc->ready_path_verified = 1;
                 } else if (now - svc->start_time >= svc->stable_secs) {
                     ready = 1;
                 }
@@ -620,35 +621,42 @@ static void tick_service(service_t *svc,
 
         case STATE_FUNDAMENTAL:
             if (svc->ready_path[0] && svc->child_pid > 0) {
-                int ticks_to_wait = 1;
-                if (svc->ready_poll_hz > 0) {
-                    int loop_hz = 1000000 / TICK_USEC;
-                    if (loop_hz > svc->ready_poll_hz) {
-                        ticks_to_wait = loop_hz / svc->ready_poll_hz;
-                        if (ticks_to_wait < 1) ticks_to_wait = 1;
+                if (!svc->ready_path_verified) {
+                    if (access(svc->ready_path, F_OK) == 0) {
+                        svc->ready_path_verified = 1;
                     }
                 }
-                svc->ready_check_ticks++;
-                if (svc->ready_check_ticks >= ticks_to_wait) {
-                    svc->ready_check_ticks = 0;
-                    if (access(svc->ready_path, F_OK) != 0) {
-                        service_log(svc, "readiness-lost");
-                        active_kill_service(svc);
-                        start_failsafe(svc);
-                        
-                        svc->dormant_count++;
-                        if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
-                            svc->inst.state = STATE_EXCISED;
-                            service_log(svc, "76-excised");
-                        } else {
-                            time_t delay = 300L << (svc->dormant_count - 1);
-                            if (delay > 3600) delay = 3600;
-                            struct timespec _now2;
-                            clock_gettime(CLOCK_MONOTONIC, &_now2);
-                            svc->dormant_until.tv_sec  = _now2.tv_sec + delay;
-                            svc->dormant_until.tv_nsec = _now2.tv_nsec;
-                            svc->inst.state = STATE_DORMANT;
-                            service_log(svc, "dormant");
+                if (svc->ready_path_verified) {
+                    int ticks_to_wait = 1;
+                    if (svc->ready_poll_hz > 0) {
+                        int loop_hz = 1000000 / TICK_USEC;
+                        if (loop_hz > svc->ready_poll_hz) {
+                            ticks_to_wait = loop_hz / svc->ready_poll_hz;
+                            if (ticks_to_wait < 1) ticks_to_wait = 1;
+                        }
+                    }
+                    svc->ready_check_ticks++;
+                    if (svc->ready_check_ticks >= ticks_to_wait) {
+                        svc->ready_check_ticks = 0;
+                        if (access(svc->ready_path, F_OK) != 0) {
+                            service_log(svc, "readiness-lost");
+                            active_kill_service(svc);
+                            start_failsafe(svc);
+                            
+                            svc->dormant_count++;
+                            if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
+                                svc->inst.state = STATE_EXCISED;
+                                service_log(svc, "76-excised");
+                            } else {
+                                time_t delay = 300L << (svc->dormant_count - 1);
+                                if (delay > 3600) delay = 3600;
+                                struct timespec _now2;
+                                clock_gettime(CLOCK_MONOTONIC, &_now2);
+                                svc->dormant_until.tv_sec  = _now2.tv_sec + delay;
+                                svc->dormant_until.tv_nsec = _now2.tv_nsec;
+                                svc->inst.state = STATE_DORMANT;
+                                service_log(svc, "dormant");
+                            }
                         }
                     }
                 }
@@ -1114,6 +1122,7 @@ static void handle_reload(int evict_mode) {
                 shadow_services[i].failsafe_pid  = services[j].failsafe_pid;
                 shadow_services[i].failsafe_start = services[j].failsafe_start;
                 shadow_services[i].last_pet      = services[j].last_pet;
+                shadow_services[i].ready_path_verified = services[j].ready_path_verified;
                 memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path, sizeof(shadow_services[i].cgroup_path));
 
                 

@@ -176,6 +176,8 @@ int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
 
+    svc->ready_path_verified = 0;
+
     if (pipe(sync) < 0) return -1;
 
     if (svc->allowed_slot_min >= 0) {
