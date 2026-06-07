@@ -1,0 +1,5 @@
+name=zram-swap
+exec=/usr/local/bin/zram-swap.sh
+oneshot=1
+needs_root=1
+critical=0
