@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
-OUT=${1:-/home/ajax80/schema-init.iso}
-WORK=/home/ajax80/schema-debian-work
+OUT=${1:-${HOME}/schema-init.iso}
+WORK=${HOME}/schema-debian-work
 MNT=$WORK/chroot
 ISO=$WORK/iso
 
@@ -58,7 +59,7 @@ pam-auth-update --enable elogind 2>/dev/null || true
 CHROOT
 
 echo "=== Installing schema-init ==="
-cd /home/ajax80/projects/schema-init
+cd "$REPO"
 gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
     -o "$MNT/sbin/schema-init" \
     init.c schema.c service.c group.c -lrt

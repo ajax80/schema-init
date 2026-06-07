@@ -4,7 +4,8 @@ import sys
 import os
 
 def main():
-    doc_path = "/home/ajax80/projects/schema-init/iec62304_skeleton.md"
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    doc_path = os.environ.get("SCHEMA_DOC", os.path.join(repo_root, "iec62304_skeleton.md"))
     if not os.path.exists(doc_path):
         print(f"Error: Skeleton file not found at {doc_path}")
         sys.exit(1)

@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 DEV=${1:-/dev/sde}
 MNT=/mnt/schema-usb
@@ -77,7 +78,7 @@ update-grub
 CHROOT
 
 echo "=== Installing schema-init ==="
-cd /home/ajax80/projects/schema-init
+cd "$REPO"
 make clean
 gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
     -o "$MNT/sbin/schema-init" \

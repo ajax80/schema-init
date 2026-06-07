@@ -11,6 +11,11 @@ SVC_DIR="/etc/schema-init/services"
 BIN_DIR="/usr/local/bin"
 KERNEL="$(uname -r)"
 
+# Desktop user the session/audio services run as. Override: TARGET_USER=foo ./install-blakbox.sh
+TARGET_USER="${TARGET_USER:-${SUDO_USER:-ajax80}}"
+TARGET_UID="$(id -u "$TARGET_USER")"
+USER_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
+
 printf "==> building schema-init\n"
 cd "$REPO"
 make clean
@@ -24,6 +29,10 @@ chmod 755 /sbin/schema-init.new
 mv -f /sbin/schema-init.new /sbin/schema-init
 cp schema-ctl "$BIN_DIR/schema-ctl"
 chmod 755 "$BIN_DIR/schema-ctl"
+
+printf "==> writing user.conf (session/audio services read this)\n"
+mkdir -p /etc/schema-init
+printf 'SCHEMA_USER=%s\nSCHEMA_UID=%s\n' "$TARGET_USER" "$TARGET_UID" > /etc/schema-init/user.conf
 
 printf "==> installing services\n"
 mkdir -p "$SVC_DIR"
@@ -73,9 +82,9 @@ chmod +x \
 
 printf "==> building KDE Plasma sd_booted shim (fixes ~30%% idle CPU with no systemd user session)\n"
 gcc -shared -fPIC -o /usr/local/lib/mock_sd.so "$REPO/distros/fedora-kde/scripts/mock_sd.c" -ldl
-install -d -o ajax80 -g ajax80 /home/ajax80/.config/autostart
-cp "$REPO/distros/fedora-kde/config/autostart/org.kde.plasmashell.desktop" /home/ajax80/.config/autostart/
-chown ajax80:ajax80 /home/ajax80/.config/autostart/org.kde.plasmashell.desktop
+install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/autostart"
+cp "$REPO/distros/fedora-kde/config/autostart/org.kde.plasmashell.desktop" "$USER_HOME/.config/autostart/"
+chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config/autostart/org.kde.plasmashell.desktop"
 
 printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d

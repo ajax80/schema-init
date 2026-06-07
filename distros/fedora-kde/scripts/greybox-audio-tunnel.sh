@@ -1,3 +1,7 @@
 #!/bin/sh
-exec runuser -u ajax80 -- env XDG_RUNTIME_DIR=/run/user/1000 \
-    pactl load-module module-tunnel-sink server=192.168.8.246 sink_name=greybox latency_msec=500
+[ -r /etc/schema-init/user.conf ] && . /etc/schema-init/user.conf
+SCHEMA_USER="${SCHEMA_USER:-ajax80}"
+SCHEMA_UID="${SCHEMA_UID:-1000}"
+SINK_SERVER="${SINK_SERVER:-192.168.8.246}"
+exec runuser -u "$SCHEMA_USER" -- env XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" \
+    pactl load-module module-tunnel-sink server="$SINK_SERVER" sink_name=greybox latency_msec=500

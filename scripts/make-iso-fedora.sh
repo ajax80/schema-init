@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
-OUT=${1:-/home/ajax80/schema-init-fedora.iso}
-WORK=/home/ajax80/schema-fedora-work
+OUT=${1:-${HOME}/schema-init-fedora.iso}
+WORK=${HOME}/schema-fedora-work
 MNT=$WORK/chroot
 ISO=$WORK/iso
 LABEL=SCHEMA_FEDORA
@@ -63,7 +64,7 @@ chmod 440 "$MNT/etc/sudoers.d/$LIVEUSER"
 printf 'schema-live\n' > "$MNT/etc/hostname"
 
 printf "=== Installing schema-init ===\n"
-cd /home/ajax80/projects/schema-init
+cd "$REPO"
 gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
     -o "$MNT/sbin/schema-init" \
     init.c schema.c service.c group.c -lrt
@@ -72,18 +73,18 @@ ln -sf /sbin/schema-init "$MNT/sbin/init"
 
 printf "=== Writing service files ===\n"
 mkdir -p "$MNT/etc/schema-init/services"
-cp /home/ajax80/projects/schema-init/distros/fedora-kde/services/*.svc \
-   /home/ajax80/projects/schema-init/distros/fedora-kde/services/*.grp \
+cp "$REPO"/distros/fedora-kde/services/*.svc \
+   "$REPO"/distros/fedora-kde/services/*.grp \
    "$MNT/etc/schema-init/services/"
 
 sed -i "s/ajax80/$LIVEUSER/g" "$MNT/etc/schema-init/services/sddm.svc" 2>/dev/null || true
 
 printf "=== Installing scripts ===\n"
-cp /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/sddm-logged \
-   /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/mount-home.sh \
-   /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/sound-modules.sh \
-   /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/schema-audio-start.sh \
-   /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/schema-udev-trigger.sh \
+cp "$REPO"/distros/fedora-kde/scripts/sddm-logged \
+   "$REPO"/distros/fedora-kde/scripts/mount-home.sh \
+   "$REPO"/distros/fedora-kde/scripts/sound-modules.sh \
+   "$REPO"/distros/fedora-kde/scripts/schema-audio-start.sh \
+   "$REPO"/distros/fedora-kde/scripts/schema-udev-trigger.sh \
    "$MNT/usr/local/bin/"
 chmod +x "$MNT/usr/local/bin/sddm-logged" \
           "$MNT/usr/local/bin/sound-modules.sh" \
@@ -119,16 +120,16 @@ printf "=== KDE user config ===\n"
 UHOME="$MNT/home/$LIVEUSER"
 mkdir -p "$UHOME/.config/autostart"
 chown -R 1000:1000 "$UHOME"
-cp /home/ajax80/projects/schema-init/distros/fedora-kde/config/ksplashrc \
-   /home/ajax80/projects/schema-init/distros/fedora-kde/config/plasma-session.conf \
+cp "$REPO"/distros/fedora-kde/config/ksplashrc \
+   "$REPO"/distros/fedora-kde/config/plasma-session.conf \
    "$UHOME/.config/"
-cp /home/ajax80/projects/schema-init/distros/fedora-kde/config/autostart/schema-audio.desktop \
+cp "$REPO"/distros/fedora-kde/config/autostart/schema-audio.desktop \
    "$UHOME/.config/autostart/"
 chown -R 1000:1000 "$UHOME/.config"
 
 printf "=== Polkit rule ===\n"
 mkdir -p "$MNT/etc/polkit-1/rules.d"
-cp /home/ajax80/projects/schema-init/distros/fedora-kde/config/polkit/10-schema-nm.rules \
+cp "$REPO"/distros/fedora-kde/config/polkit/10-schema-nm.rules \
    "$MNT/etc/polkit-1/rules.d/"
 
 printf "=== Shutdown wrappers ===\n"

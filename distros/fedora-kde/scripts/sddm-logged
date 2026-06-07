@@ -1,9 +1,12 @@
 #!/bin/sh
 exec >> /var/log/sddm-schema.log 2>&1
 set -x
-mkdir -p /run/user/1000
-chown 1000:1000 /run/user/1000
-chmod 700 /run/user/1000
+[ -r /etc/schema-init/user.conf ] && . /etc/schema-init/user.conf
+SCHEMA_USER="${SCHEMA_USER:-ajax80}"
+SCHEMA_UID="${SCHEMA_UID:-1000}"
+mkdir -p "/run/user/$SCHEMA_UID"
+chown "$SCHEMA_UID:$SCHEMA_UID" "/run/user/$SCHEMA_UID"
+chmod 700 "/run/user/$SCHEMA_UID"
 udevadm trigger --subsystem-match=input --action=add
 udevadm settle --timeout=10
 stty -F /dev/tty1 -echo 2>/dev/null || true
@@ -13,9 +16,9 @@ perl -e 'use POSIX; open(my $fh, "+<", "/dev/tty1") or die; tcflush(fileno($fh),
 clear > /dev/tty1
 
 while true; do
-    rm -f /run/user/1000/wayland-* /tmp/.ICE-unix/* /tmp/.X*-lock 2>/dev/null || true
-    runuser -u ajax80 -- env \
-        XDG_RUNTIME_DIR=/run/user/1000 \
+    rm -f "/run/user/$SCHEMA_UID"/wayland-* /tmp/.ICE-unix/* /tmp/.X*-lock 2>/dev/null || true
+    runuser -u "$SCHEMA_USER" -- env \
+        XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" \
         LANG=en_US.UTF-8 \
         PLASMA_USE_SYSTEMD_SCOPE=0 \
         XDG_CURRENT_DESKTOP=KDE \
@@ -27,7 +30,7 @@ while true; do
         DESKTOP_SESSION=plasma \
         KDE_FULL_SESSION=true \
         KDE_SESSION_VERSION=6 \
-        KDE_SESSION_UID=1000 \
+        KDE_SESSION_UID="$SCHEMA_UID" \
         /usr/libexec/plasma-dbus-run-session-if-needed /usr/local/bin/plasma-session-start.sh
     RC=$?
     printf 'plasma_exited rc=%d\n' $RC
