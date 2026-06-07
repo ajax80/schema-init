@@ -117,7 +117,7 @@ oneshot=1
 | `no_restart` | `0` | Any death → EXCISED immediately; no recovery arc |
 | `max_restarts` | `5` | Maximum number of times to attempt restarting a service before entering EXCISED or backoff |
 | `stable_secs` | `10` | Seconds process must stay alive before FULL_TRUST promotes to FUNDAMENTAL. Set lower for fast services; use `ready_path` instead when possible |
-| `ready_path` | — | Filesystem path that, when it exists, triggers immediate FULL_TRUST→FUNDAMENTAL promotion. Falls back to `stable_secs` if the path never appears |
+| `ready_path` | — | Filesystem path that, when it exists, triggers immediate FULL_TRUST→FUNDAMENTAL promotion. Falls back to `stable_secs` if the path never appears. In FUNDAMENTAL it also acts as a liveness probe: if the path *disappears*, the service is killed and backed off. The disappearance check only arms once the path has been seen at least once — a service promoted by `stable_secs` before its path exists won't be falsely killed. For services slower than `stable_secs` to come up (e.g. NetworkManager writing `resolv.conf`), set `stable_secs` generously so promotion doesn't outrun the path. |
 | `watchdog_timeout_ms` | `0` | Dead Man Token window in milliseconds. Service must call `schema-ctl pet <name>` within this window or PID 1 stops kicking `/dev/watchdog` and the hardware resets. Use for `critical=1` real-time processes. `0` = disabled. |
 | `cpu_limit` | `0` | Percent of one CPU core (1–100) enforced via cgroupv2 `cpu.max`. Written before child exec. `0` = unlimited. |
 | `mem_limit` | `0` | Memory hard cap in MB via cgroupv2 `memory.max`. OOM inside the cgroup kills the service, not the system. Written before child exec. `0` = unlimited. |
