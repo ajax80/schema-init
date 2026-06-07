@@ -650,6 +650,7 @@ Full KDE Plasma 6 desktop on Fedora 44 with schema-init as PID 1. Boots from a b
 | `schema-logind` | Minimal `org.freedesktop.login1` D-Bus stub — restores KDE shutdown/restart buttons |
 | `sddm` | Display manager (via sddm-logged wrapper, no systemd session) |
 | `sound-modules` | oneshot — loads AMD Ryzen audio modules at boot |
+| `bluetoothd` | Starts `bluez` daemon — registers `org.bluez`, restores KDE Bluetooth applet |
 
 See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full installation instructions and key fixes.
 

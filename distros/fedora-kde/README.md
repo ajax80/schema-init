@@ -112,6 +112,8 @@ sudo grubby --update-kernel=ALL --args="quiet rhgb"
 | Boot shows `^[[3~` escape sequences | Plymouth restores TTY echo on exit; `sddm-logged` runs `stty -echo` both before and immediately after `plymouth --wait quit`, then `tcflush` + `clear` on tty1 |
 | KDE Connect not discovered on LAN | `avahi-daemon` not running; `services/avahi.svc` starts it after dbus |
 | Clock wrong after reboot | `chronyd` not running; `services/chronyd.svc` starts it after network-manager |
+| KDE Bluetooth applet dead, no controller | `bluetoothd` not running so `org.bluez` never registers on the system bus; `services/bluetoothd.svc` starts `/usr/libexec/bluetooth/bluetoothd -n` after dbus. Loadable live with `schema-ctl add` — no reboot |
+| Xbox One/Series controller won't pair over BT | Kernel ERTM (Enhanced Re-Transmission Mode); disable it: `echo "options bluetooth disable_ertm=1" > /etc/modprobe.d/bluetooth.conf` and `echo 1 > /sys/module/bluetooth/parameters/disable_ertm` to apply live |
 
 ## Audio hardware
 

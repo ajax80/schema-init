@@ -1,0 +1,6 @@
+name=bluetoothd
+exec=/usr/libexec/bluetooth/bluetoothd
+args=-n
+dep=dbus
+needs_root=1
+stable_secs=2
