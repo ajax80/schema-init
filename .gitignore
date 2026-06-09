@@ -1,6 +1,7 @@
 *.o
 schema-init
 schema-ctl
+schema-journal-sink
 desktop/schema-desktop
 *.log
 *.vmdk

@@ -96,6 +96,7 @@ If you're reading the source to evaluate it, start here. The whole init is ~2,50
 |------|------------|
 | `schema-ctl.c` | The CLI client. Talks to PID 1 over the `/run/schema-init.sock` UNIX socket — `schema-ctl status`, `restart`, etc. |
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
+| `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
 | `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
 
 **Directories:**

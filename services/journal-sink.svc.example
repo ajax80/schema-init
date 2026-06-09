@@ -1,0 +1,4 @@
+name=journal-sink
+exec=/usr/local/bin/schema-journal-sink
+needs_root=1
+ready_path=/run/systemd/journal/socket
