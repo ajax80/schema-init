@@ -172,6 +172,7 @@ static void mount_pseudo(void) {
     mkdir("/run/user",              0755);
     mkdir("/run/user/0",            0700);
     mkdir("/run/systemd",           0755);
+    mkdir("/run/systemd/system",    0755);   /* sd_booted() signal: libsystemd does access() here */
     mkdir("/run/systemd/shutdown",  0755);
     mkdir("/run/log",               0755);
     mkdir("/run/log/schema-init",   0755);
