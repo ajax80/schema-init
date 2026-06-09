@@ -161,6 +161,7 @@ oneshot=1
 | `allowed_slot_max` | `-1` | Maximum hardware slot ID (inclusive). If `SLOT_ID` falls outside `[allowed_slot_min, allowed_slot_max]`, spawn is refused with a `HAZARD` log and `SVC_NO_RESTART` is set — the service will not retry. Both min and max must be ≥ 0 to activate the gate. |
 | `on_boot_sec` | `0` | Makes the service a **timer**: seconds after boot before the first fire (`0` = at boot). Implies `oneshot=1` — the service runs, exits, and re-arms. The analog of systemd's `OnBootSec=`. See [Timers](#timers) below. |
 | `on_active_sec` | `0` | Timer period: seconds after each completion before the next fire. Measured from completion (like systemd's `OnUnitInactiveSec=`), so a slow run never overlaps itself. Implies `oneshot=1`. |
+| `start_timeout_sec` | `90` for oneshots, `0` otherwise | Max seconds a service may sit in `FULL_TRUST` without promoting before it is killed and routed into the recovery arc — so a hung boot service can't stall its dependents. **Defaults on for oneshots** (the only services that can hang the chain; daemons promote via `stable_secs`). **Timers are exempt** (may run long). `0` disables. The analog of systemd's `TimeoutStartSec=`. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
 A full example using readiness probes:

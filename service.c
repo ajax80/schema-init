@@ -430,6 +430,7 @@ int services_load(const char *dir, service_t *table, int max) {
         schema_instance_init(&svc->inst, 0, STATE_PERFECT);
         svc->stable_secs = STABLE_SECS;
         svc->priority = PRIO_STANDARD;
+        svc->start_timeout_sec = -1;
         svc->allowed_slot_min = -1;
         svc->allowed_slot_max = -1;
         svc->max_restarts = MAX_RESTARTS;
@@ -495,6 +496,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->allowed_slot_max = atoi(val);
             } else if (strcmp(line, "max_restarts") == 0) {
                 svc->max_restarts = atoi(val);
+            } else if (strcmp(line, "start_timeout_sec") == 0) {
+                svc->start_timeout_sec = atoi(val);
             } else if (strcmp(line, "on_boot_sec") == 0) {
                 svc->timer_boot_sec = atoi(val);
                 svc->flags |= SVC_TIMER | SVC_ONESHOT;
@@ -512,6 +515,14 @@ int services_load(const char *dir, service_t *table, int max) {
         }
         fclose(f);
         svc->content_hash = fnv1a_file(path);
+
+        /* default start timeout: protect oneshots (but not timers, which may
+         * legitimately run long); daemons rely on stable_secs instead */
+        if (svc->start_timeout_sec == -1) {
+            svc->start_timeout_sec =
+                ((svc->flags & SVC_ONESHOT) && !(svc->flags & SVC_TIMER))
+                ? ONESHOT_START_TIMEOUT : 0;
+        }
 
         char base_name[256];
         memset(base_name, 0, sizeof(base_name));
@@ -577,6 +588,7 @@ int service_load_one(const char *path, service_t *svc) {
     schema_instance_init(&svc->inst, 0, STATE_PERFECT);
     svc->stable_secs = STABLE_SECS;
     svc->priority = PRIO_STANDARD;
+    svc->start_timeout_sec = -1;
     svc->allowed_slot_min = -1;
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
@@ -641,6 +653,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->allowed_slot_max = atoi(val);
         } else if (strcmp(line, "max_restarts") == 0) {
             svc->max_restarts = atoi(val);
+        } else if (strcmp(line, "start_timeout_sec") == 0) {
+            svc->start_timeout_sec = atoi(val);
         } else if (strcmp(line, "on_boot_sec") == 0) {
             svc->timer_boot_sec = atoi(val);
             svc->flags |= SVC_TIMER | SVC_ONESHOT;
@@ -653,6 +667,12 @@ int service_load_one(const char *path, service_t *svc) {
         }
     }
     fclose(f);
+
+    if (svc->start_timeout_sec == -1) {
+        svc->start_timeout_sec =
+            ((svc->flags & SVC_ONESHOT) && !(svc->flags & SVC_TIMER))
+            ? ONESHOT_START_TIMEOUT : 0;
+    }
 
     char base_name[256];
     memset(base_name, 0, sizeof(base_name));

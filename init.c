@@ -573,6 +573,18 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FULL_TRUST:
+            if (svc->start_timeout_sec > 0 && svc->child_pid > 0 &&
+                now - svc->start_time >= svc->start_timeout_sec) {
+                /* stuck in FULL_TRUST past its window — kill it and drive it into
+                 * the recovery arc so dependents aren't hung on boot.
+                 * active_kill_service() reaps the child itself, so reap() won't
+                 * see it — set the state here, mirroring an unexpected death. */
+                service_log(svc, "start-timeout");
+                active_kill_service(svc);
+                if (svc->failsafe_cmd[0]) start_failsafe(svc);
+                svc->inst.state = STATE_RECOVERY;
+                break;
+            }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
                 if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {

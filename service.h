@@ -13,6 +13,7 @@
 #define MAX_RESTARTS    5
 #define COOLDOWN_SECS   5
 #define STABLE_SECS     10   /* seconds running before FULL_TRUST -> FUNDAMENTAL */
+#define ONESHOT_START_TIMEOUT 90 /* default kill window for a oneshot stuck in FULL_TRUST */
 #define MEM_MIN_KB      8192 /* minimum free memory to attempt spawn */
 
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
@@ -75,6 +76,7 @@ typedef struct {
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
+    int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
     int              timer_boot_sec;     /* on_boot_sec: delay from boot to first fire     */
     int              timer_interval_sec; /* on_active_sec: gap after each completion        */
     struct timespec  timer_next;         /* CLOCK_MONOTONIC next-fire deadline (SVC_TIMER)   */
