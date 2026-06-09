@@ -105,8 +105,11 @@ forward and size cap.
   logs but never reads them back.
 - No structured indexing, cursors, `MESSAGE_ID`, boot IDs, FSS sealing, rate-limit
   quotas, or D-Bus journal methods.
-- Does **not** create `/run/systemd/system` (the `sd_booted()` signal) — that is a
-  separate Track B shim; cross-reference, don't bundle.
+- Does **not** create `/run/systemd/system` (the `sd_booted()` signal) — that is
+  handled separately in core `mount_pseudo()` (`init.c`), created alongside the
+  rest of the `/run/systemd` skeleton. Empirically: with libsystemd, that dir's
+  presence is exactly what flips `sd_booted()` 0→1, retiring the per-process
+  `mock_sd.so` LD_PRELOAD shim.
 
 ## Testing
 
