@@ -77,6 +77,41 @@ Services marked `critical=1` never reach EXCISED — they enter DORMANT and retr
 
 ---
 
+## Repository layout
+
+If you're reading the source to evaluate it, start here. The whole init is ~2,500 lines of C with no external dependencies.
+
+**Read these first, in this order:**
+
+| File | Lines | What it is |
+|------|-------|------------|
+| `init.c` | ~1,370 | PID 1 itself. Mounts pseudo-filesystems, reaps children, runs the supervise loop, handles signals and shutdown. The spine — everything below is called from here. |
+| `schema.c` / `schema.h` | ~70 | The weight-state machine. Pure state transitions; a service's "weight" is the popcount of its probe flag word. This is *the schema* — the single source of truth for what every state means. |
+| `service.c` / `service.h` | ~680 | Parses `.svc` files, spawns services, runs the F8/F9/F6 probes, and drives the recovery → backoff → excision arc. |
+| `group.c` / `group.h` | ~150 | Aggregates a `.grp` of services into one worst-case state, so a stack (network, display) promotes and fails as a unit. |
+
+**Supporting binaries:**
+
+| File | What it is |
+|------|------------|
+| `schema-ctl.c` | The CLI client. Talks to PID 1 over the `/run/schema-init.sock` UNIX socket — `schema-ctl status`, `restart`, etc. |
+| `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
+| `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
+
+**Directories:**
+
+| Dir | What's inside |
+|-----|---------------|
+| `services/` | The reference service set — real `.svc` and `.grp` files for `sshd`, `dbus`, `udev`, `network-manager`, `display-manager`, and the `network-stack` / `display-stack` groups. Copy these as your starting templates. |
+| `desktop/` | `schema-desktop.c` — an SDL2 live visualizer that maps `schema_shm.h` into an 8-node grid and shows every service's weight-state in real time. This is how you *watch* the state machine run. |
+| `scripts/` | Build and integration tooling: `make-iso*.sh` / `make-usb.sh` / `fix-usb.sh` (bootable media), `schema-logind.py` (a logind compatibility shim), and `verify_traceability.py` (IEC 62304 requirement traceability). |
+| `distros/` | Per-distribution profiles — `fedora-kde/` and `raspberry-pi-zero-w/`. Each carries the service files and boot glue that distro needs. |
+| `docs/`, `assets/` | Documentation and images. |
+
+Top-level: `setup.sh` (newcomer bootstrap — dep check, desktop-environment detection, GRUB entry generation) and `Makefile` (static build; see [Building](#building)).
+
+---
+
 ## Service files
 
 Drop a `.svc` file in `/etc/schema-init/services/`. One key=value per line:
