@@ -77,6 +77,7 @@ typedef struct {
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
+    struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
     int              timer_boot_sec;     /* on_boot_sec: delay from boot to first fire     */
     int              timer_interval_sec; /* on_active_sec: gap after each completion        */
     struct timespec  timer_next;         /* CLOCK_MONOTONIC next-fire deadline (SVC_TIMER)   */

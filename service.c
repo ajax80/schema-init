@@ -280,7 +280,8 @@ int service_spawn(service_t *svc) {
     svc->child_pid  = pid;
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
-    clock_gettime(CLOCK_MONOTONIC, &svc->last_pet);
+    clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
+    svc->last_pet   = svc->spawn_time_mono;
     svc->restart_count++;
     cgroup_assign(svc, pid);
     cgroup_apply_limits(svc);
