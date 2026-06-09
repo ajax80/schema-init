@@ -254,9 +254,13 @@ int service_spawn(service_t *svc) {
             }
         }
         if (svc->priority == PRIO_CRITICAL) {
-            setpriority(PRIO_PROCESS, 0, -10);
+            if (setpriority(PRIO_PROCESS, 0, -10) < 0) {
+                fprintf(stderr, "[schema-init] Warning: failed to set critical priority for %s: %s\n", svc->name, strerror(errno));
+            }
         } else if (svc->priority == PRIO_PERIPHERAL) {
-            setpriority(PRIO_PROCESS, 0, 10);
+            if (setpriority(PRIO_PROCESS, 0, 10) < 0) {
+                fprintf(stderr, "[schema-init] Warning: failed to set peripheral priority for %s: %s\n", svc->name, strerror(errno));
+            }
         }
         if (svc->run_uid) {
             char xdg[48];
