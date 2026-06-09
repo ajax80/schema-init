@@ -287,12 +287,18 @@ static void reap(void) {
 
             if (services[i].flags & SVC_TIMER) {
                 /* timer fire complete: re-arm regardless of exit code (cron
-                 * semantics — a failed run isn't retried, it runs next window) */
-                struct timespec tn;
-                clock_gettime(CLOCK_MONOTONIC, &tn);
+                 * semantics — a failed run isn't retried, it runs next window).
+                 * interval 0 = run-once (only on_boot_sec): drop the flag so
+                 * PERFECT becomes terminal instead of re-firing every tick. */
                 services[i].inst.state = STATE_PERFECT;
-                services[i].timer_next = tn;
-                services[i].timer_next.tv_sec += services[i].timer_interval_sec;
+                if (services[i].timer_interval_sec > 0) {
+                    struct timespec tn;
+                    clock_gettime(CLOCK_MONOTONIC, &tn);
+                    services[i].timer_next = tn;
+                    services[i].timer_next.tv_sec += services[i].timer_interval_sec;
+                } else {
+                    services[i].flags &= ~SVC_TIMER;
+                }
                 service_log(&services[i],
                     services[i].exit_status == 0 ? "timer-done" : "timer-failed");
                 break;
