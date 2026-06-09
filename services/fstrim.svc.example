@@ -1,0 +1,6 @@
+name=fstrim
+exec=/usr/sbin/fstrim
+args=-a
+needs_root=1
+on_boot_sec=600
+on_active_sec=86400

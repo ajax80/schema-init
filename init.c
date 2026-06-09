@@ -285,6 +285,19 @@ static void reap(void) {
             services[i].child_pid  = 0;
             services[i].exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
+            if (services[i].flags & SVC_TIMER) {
+                /* timer fire complete: re-arm regardless of exit code (cron
+                 * semantics — a failed run isn't retried, it runs next window) */
+                struct timespec tn;
+                clock_gettime(CLOCK_MONOTONIC, &tn);
+                services[i].inst.state = STATE_PERFECT;
+                services[i].timer_next = tn;
+                services[i].timer_next.tv_sec += services[i].timer_interval_sec;
+                service_log(&services[i],
+                    services[i].exit_status == 0 ? "timer-done" : "timer-failed");
+                break;
+            }
+
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0
                 && (services[i].flags & SVC_ONESHOT)) {
                 /* clean one-shot exit → PERFECT */
@@ -664,6 +677,16 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_PERFECT:
+            if (svc->flags & SVC_TIMER) {
+                struct timespec _tn;
+                clock_gettime(CLOCK_MONOTONIC, &_tn);
+                if (_tn.tv_sec >= svc->timer_next.tv_sec) {
+                    svc->inst.state = STATE_NEW_PROCESS;
+                    service_log(svc, "timer-fire");
+                }
+            }
+            break;
+
         case STATE_EXCISED:
             /* nothing to do — stable, done, or dead */
             break;
@@ -1245,6 +1268,19 @@ int main(int argc, char **argv) {
     ctl_init();
     signalfd_init();
     schema_boot_log();
+
+    /* arm timer services: born "already ran", first fire = boot + on_boot_sec */
+    {
+        struct timespec tnow;
+        clock_gettime(CLOCK_MONOTONIC, &tnow);
+        for (int ti = 0; ti < svc_count; ti++) {
+            if (services[ti].flags & SVC_TIMER) {
+                services[ti].inst.state = STATE_PERFECT;
+                services[ti].timer_next = tnow;
+                services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
+            }
+        }
+    }
 
     while (running) {
         struct pollfd fds[2];

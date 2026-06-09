@@ -159,6 +159,8 @@ oneshot=1
 | `priority` | `standard` | CPU contention class via cgroupv2 `cpu.weight`: `critical` (weight 1000), `standard` (100), `peripheral` (10). Proportional share — only takes effect when cores are saturated; idle services are never penalized. The analog of systemd's `CPUWeight=`. Children inherit the service's cgroup, so tagging a session leader (e.g. `display-manager`) elevates its whole subtree, compositor included. |
 | `allowed_slot_min` | `-1` | Minimum hardware slot ID (inclusive) this service is permitted to run on. Checked against `SLOT_ID` env at spawn time. `-1` = unconstrained. |
 | `allowed_slot_max` | `-1` | Maximum hardware slot ID (inclusive). If `SLOT_ID` falls outside `[allowed_slot_min, allowed_slot_max]`, spawn is refused with a `HAZARD` log and `SVC_NO_RESTART` is set — the service will not retry. Both min and max must be ≥ 0 to activate the gate. |
+| `on_boot_sec` | `0` | Makes the service a **timer**: seconds after boot before the first fire (`0` = at boot). Implies `oneshot=1` — the service runs, exits, and re-arms. The analog of systemd's `OnBootSec=`. See [Timers](#timers) below. |
+| `on_active_sec` | `0` | Timer period: seconds after each completion before the next fire. Measured from completion (like systemd's `OnUnitInactiveSec=`), so a slow run never overlaps itself. Implies `oneshot=1`. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
 A full example using readiness probes:
@@ -234,6 +236,29 @@ A group's state is the worst-case view of its members:
 - All members PERFECT → group is PERFECT
 
 Maximum 16 groups, 8 members per group. Names and members are matched at load time.
+
+### Timers
+
+Add `on_boot_sec` and/or `on_active_sec` to any `.svc` to make it **periodic** — no separate `.timer` file, no second unit to link. The service *is* the timer. This replaces `cron` and systemd `.timer` units with the same `.svc` you already wrote.
+
+```ini
+name=fstrim
+exec=/usr/sbin/fstrim
+args=-a
+needs_root=1
+on_boot_sec=600        # first fire 10 min after boot
+on_active_sec=86400    # then every 24 h after each completion
+```
+
+A timer is a oneshot that re-arms on a `CLOCK_MONOTONIC` deadline instead of staying terminal at PERFECT:
+
+- It boots into PERFECT (as if it already ran), first fire at `boot + on_boot_sec`.
+- On fire it re-enters NEW_PROCESS — so **dependencies are still honored** and it waits for its deps exactly like any service.
+- When it exits, it re-arms for `now + on_active_sec` **regardless of exit code** (cron semantics — a failed run is not retried in a loop; it runs again next window). The exit is logged `timer-done` or `timer-failed`.
+
+The period is measured from completion, so a slow job never overlaps itself. Fires on the 250 ms tick (±1 tick) — cron-class precision, not sub-second. For real-time work use `watchdog_timeout_ms` and the control loop instead.
+
+**Not yet implemented:** `on_calendar=HH:MM` wall-clock fire, and persistent catch-up of jobs missed during downtime. See `docs/timers-design.md`.
 
 ---
 

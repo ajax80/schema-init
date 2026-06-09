@@ -495,6 +495,12 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->allowed_slot_max = atoi(val);
             } else if (strcmp(line, "max_restarts") == 0) {
                 svc->max_restarts = atoi(val);
+            } else if (strcmp(line, "on_boot_sec") == 0) {
+                svc->timer_boot_sec = atoi(val);
+                svc->flags |= SVC_TIMER | SVC_ONESHOT;
+            } else if (strcmp(line, "on_active_sec") == 0) {
+                svc->timer_interval_sec = atoi(val);
+                svc->flags |= SVC_TIMER | SVC_ONESHOT;
             } else if (strcmp(line, "user") == 0) {
                 struct passwd *pw = getpwnam(val);
                 if (pw) {
@@ -635,6 +641,12 @@ int service_load_one(const char *path, service_t *svc) {
             svc->allowed_slot_max = atoi(val);
         } else if (strcmp(line, "max_restarts") == 0) {
             svc->max_restarts = atoi(val);
+        } else if (strcmp(line, "on_boot_sec") == 0) {
+            svc->timer_boot_sec = atoi(val);
+            svc->flags |= SVC_TIMER | SVC_ONESHOT;
+        } else if (strcmp(line, "on_active_sec") == 0) {
+            svc->timer_interval_sec = atoi(val);
+            svc->flags |= SVC_TIMER | SVC_ONESHOT;
         } else if (strcmp(line, "user") == 0) {
             struct passwd *pw = getpwnam(val);
             if (pw) { svc->run_uid = pw->pw_uid; svc->run_gid = pw->pw_gid; }
