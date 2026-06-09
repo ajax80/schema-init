@@ -121,5 +121,9 @@ forward and size cap.
 
 ## Status
 
-Design only. Queue: build **after** PR #8 (start_timeout) merges. Becomes its own
-PR. Track B per the schema-init doctrine.
+**Built + smoke-tested** (2026-06-09, after PR #8 merged). `schema-journal-sink.c`
++ Makefile target + `services/journal-sink.svc.example`. All three sockets verified
+live: `logger`→`/dev/log` (RFC3164 timestamp stripped, tag lifted), native
+`MESSAGE=` text + binary/oversized form with embedded-newline folding, and the
+stdout stream (7-line header consumed). Embedded CR/LF folded to keep one message =
+one physical line. Awaiting Greg review → PR. Track B per the schema-init doctrine.
