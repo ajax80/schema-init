@@ -285,6 +285,25 @@ static void reap(void) {
             services[i].child_pid  = 0;
             services[i].exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
+            if (services[i].flags & SVC_TIMER) {
+                /* timer fire complete: re-arm regardless of exit code (cron
+                 * semantics — a failed run isn't retried, it runs next window).
+                 * interval 0 = run-once (only on_boot_sec): drop the flag so
+                 * PERFECT becomes terminal instead of re-firing every tick. */
+                services[i].inst.state = STATE_PERFECT;
+                if (services[i].timer_interval_sec > 0) {
+                    struct timespec tn;
+                    clock_gettime(CLOCK_MONOTONIC, &tn);
+                    services[i].timer_next = tn;
+                    services[i].timer_next.tv_sec += services[i].timer_interval_sec;
+                } else {
+                    services[i].flags &= ~SVC_TIMER;
+                }
+                service_log(&services[i],
+                    services[i].exit_status == 0 ? "timer-done" : "timer-failed");
+                break;
+            }
+
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0
                 && (services[i].flags & SVC_ONESHOT)) {
                 /* clean one-shot exit → PERFECT */
@@ -664,6 +683,17 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_PERFECT:
+            if (svc->flags & SVC_TIMER) {
+                struct timespec _tn;
+                clock_gettime(CLOCK_MONOTONIC, &_tn);
+                if (_tn.tv_sec > svc->timer_next.tv_sec ||
+                    (_tn.tv_sec == svc->timer_next.tv_sec && _tn.tv_nsec >= svc->timer_next.tv_nsec)) {
+                    svc->inst.state = STATE_NEW_PROCESS;
+                    service_log(svc, "timer-fire");
+                }
+            }
+            break;
+
         case STATE_EXCISED:
             /* nothing to do — stable, done, or dead */
             break;
@@ -1040,6 +1070,10 @@ static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_
             for (int j = 0; j < s_count; j++) {
                 if (strcmp(svc_table[j].name, svc_table[s].dep_name[d]) == 0) {
                     svc_table[s].dep_idx[d] = j;
+                    if (svc_table[j].flags & SVC_TIMER) {
+                        printf("[schema-init] WARNING: service '%s' depends on timer service '%s'. Dependents of timer services may be transiently blocked when the timer fires.\n",
+                               svc_table[s].name, svc_table[j].name);
+                    }
                     break;
                 }
             }
@@ -1124,6 +1158,7 @@ static void handle_reload(int evict_mode) {
                 shadow_services[i].last_pet      = services[j].last_pet;
                 shadow_services[i].ready_path_verified = services[j].ready_path_verified;
                 memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path, sizeof(shadow_services[i].cgroup_path));
+                shadow_services[i].timer_next    = services[j].timer_next;
 
                 
                 /* clear live service state so we don't accidentally treat it as running/managed */
@@ -1179,6 +1214,19 @@ static void handle_reload(int evict_mode) {
     grp_count = shadow_grp_count;
 
     printf("[schema-init] configuration reload completed successfully (generation updated)\n");
+
+    /* Arm newly introduced timer services or ensure they are scheduled */
+    struct timespec tnow;
+    clock_gettime(CLOCK_MONOTONIC, &tnow);
+    for (i = 0; i < svc_count; i++) {
+        if (services[i].flags & SVC_TIMER) {
+            if (services[i].timer_next.tv_sec == 0) {
+                services[i].inst.state = STATE_PERFECT;
+                services[i].timer_next = tnow;
+                services[i].timer_next.tv_sec += services[i].timer_boot_sec;
+            }
+        }
+    }
 }
 
 /* ── main ───────────────────────────────────────────────────────────── */
@@ -1246,6 +1294,19 @@ int main(int argc, char **argv) {
     signalfd_init();
     schema_boot_log();
 
+    /* arm timer services: born "already ran", first fire = boot + on_boot_sec */
+    {
+        struct timespec tnow;
+        clock_gettime(CLOCK_MONOTONIC, &tnow);
+        for (int ti = 0; ti < svc_count; ti++) {
+            if (services[ti].flags & SVC_TIMER) {
+                services[ti].inst.state = STATE_PERFECT;
+                services[ti].timer_next = tnow;
+                services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
+            }
+        }
+    }
+
     while (running) {
         struct pollfd fds[2];
         int nfds = 0;
@@ -1312,7 +1373,14 @@ int main(int argc, char **argv) {
         }
 
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;
-        for (i = 0; i < svc_count; i++)  svc_states[i] = services[i].inst.state;
+        for (i = 0; i < svc_count; i++) {
+            uint8_t s = services[i].inst.state;
+            if ((services[i].flags & SVC_TIMER) && (s == STATE_NEW_PROCESS || s == STATE_FULL_TRUST)) {
+                svc_states[i] = STATE_PERFECT;
+            } else {
+                svc_states[i] = s;
+            }
+        }
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i], grp_states, grp_count);
         monitor_failsafes();

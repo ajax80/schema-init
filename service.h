@@ -19,6 +19,7 @@
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
 #define SVC_NO_RESTART  (1 << 3)  /* 76 on any death, no recovery arc     */
+#define SVC_TIMER       (1 << 4)  /* periodic: re-arm to NEW_PROCESS on clock */
 
 typedef enum {
     PRIO_PERIPHERAL = 0,
@@ -74,6 +75,9 @@ typedef struct {
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
+    int              timer_boot_sec;     /* on_boot_sec: delay from boot to first fire     */
+    int              timer_interval_sec; /* on_active_sec: gap after each completion        */
+    struct timespec  timer_next;         /* CLOCK_MONOTONIC next-fire deadline (SVC_TIMER)   */
 } service_t;
 
 /* build the F8 flag word by inspecting the real system */
