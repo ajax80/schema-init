@@ -256,6 +256,8 @@ A timer is a oneshot that re-arms on a `CLOCK_MONOTONIC` deadline instead of sta
 - On fire it re-enters NEW_PROCESS — so **dependencies are still honored** and it waits for its deps exactly like any service.
 - When it exits, it re-arms for `now + on_active_sec` **regardless of exit code** (cron semantics — a failed run is not retried in a loop; it runs again next window). The exit is logged `timer-done` or `timer-failed`.
 
+**Run-once:** set only `on_boot_sec` (leave `on_active_sec` unset) and the service fires exactly once, `on_boot_sec` seconds after boot, then stays terminal — a deferred startup job rather than a repeating one.
+
 The period is measured from completion, so a slow job never overlaps itself. Fires on the 250 ms tick (±1 tick) — cron-class precision, not sub-second. For real-time work use `watchdog_timeout_ms` and the control loop instead.
 
 **Not yet implemented:** `on_calendar=HH:MM` wall-clock fire, and persistent catch-up of jobs missed during downtime. See `docs/timers-design.md`.
