@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <pwd.h>
 #include <grp.h>
+#include <sys/resource.h>
 
 /* ── F8: can we spawn this right now? ──────────────────────────────── */
 
@@ -178,7 +179,7 @@ static void cgroup_apply_limits(service_t *svc) {
      * background work. This is the analog of systemd's CPUWeight=. */
     {
         int weight = 100;
-        if (svc->priority == PRIO_CRITICAL)        weight = 10000;
+        if (svc->priority == PRIO_CRITICAL)        weight = 1000;
         else if (svc->priority == PRIO_PERIPHERAL) weight = 10;
         snprintf(path, sizeof(path), "%s/cpu.weight", svc->cgroup_path);
         fd = open(path, O_WRONLY);
@@ -251,6 +252,11 @@ int service_spawn(service_t *svc) {
                     setenv("INSTANCE", slot, 1);
                 }
             }
+        }
+        if (svc->priority == PRIO_CRITICAL) {
+            setpriority(PRIO_PROCESS, 0, -10);
+        } else if (svc->priority == PRIO_PERIPHERAL) {
+            setpriority(PRIO_PROCESS, 0, 10);
         }
         if (svc->run_uid) {
             char xdg[48];
