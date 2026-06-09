@@ -72,11 +72,10 @@ We have pressure-tested the implementation across the four specific scenarios re
 ---
 
 ### 4. tv_sec-Only Comparison (`_tn.tv_sec >= svc->timer_next.tv_sec`)
-* **The Hazard**: Comparing only seconds ignores nanoseconds. Because `reap()` sets `timer_next` relative to the current monotonic time (`clock_gettime`), a seconds-only comparison introduces a severe bug for short-interval or sub-second boundaries.
+* **The Hazard**: Comparing only seconds ignores nanoseconds. Because `reap()` sets `timer_next` relative to the current monotonic time (`clock_gettime`), a seconds-only comparison lets a timer fire **up to ~1 second early**, truncating its interval.
 * **Our Read**: 
-  - This is a critical bug. Suppose a timer with a `1s` interval fires at `sec 10, nsec 900M` and re-arms to `sec 11, nsec 900M`.
-  - Just 100ms later, the clock ticks to `sec 11, nsec 0`. With the seconds-only comparison, `11 >= 11` is true, and the timer fires again immediately!
-  - The timer effectively runs twice within 100ms, completely violating the `1s` interval.
+  - This is a real precision bug (not a double-fire — once a timer fires it leaves `STATE_PERFECT` for `STATE_NEW_PROCESS`, so it cannot re-trigger from the PERFECT check until it completes and re-arms).
+  - Suppose a timer with a `1s` interval re-arms to `sec 11, nsec 900M`. With the seconds-only comparison, the check `11 >= 11` becomes true as soon as the clock ticks to `sec 11, nsec 0` — firing ~900ms early and effectively shortening the interval to ~0.1s on that cycle.
 * **Action Taken**:
   - We replaced the seconds-only check in [tick_service](file:///home/ajax80/projects/schema-init/init.c#L530) with a full `timespec` comparison:
     ```c
