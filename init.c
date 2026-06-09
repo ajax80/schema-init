@@ -531,7 +531,8 @@ static void tick_service(service_t *svc,
                          const uint8_t *grp_states, int gcount) {
     uint32_t flags;
     uint8_t  prev = svc->inst.state;
-    time_t   now  = time(NULL);
+    struct timespec now_mono;
+    clock_gettime(CLOCK_MONOTONIC, &now_mono);
 
     /* Quarantine fuse check */
     if (svc->fuse && svc->inst.state != STATE_EXCISED) {
@@ -573,12 +574,30 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FULL_TRUST:
+            if (svc->start_timeout_sec > 0 && svc->child_pid > 0 &&
+                now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->start_timeout_sec) {
+                /* stuck in FULL_TRUST past its window — kill it.
+                 * active_kill_service() reaps the child itself, so reap() won't
+                 * see it; set the next state here.
+                 * Non-critical: excise immediately so dependents proceed (no
+                 * retry storm). Critical / no_excise: must NEVER excise (would
+                 * permanently hard-block its chain) — route to RECOVERY so it
+                 * retries like any other death. */
+                service_log(svc, "start-timeout");
+                active_kill_service(svc);
+                if (svc->failsafe_cmd[0]) start_failsafe(svc);
+                if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise)
+                    svc->inst.state = STATE_EXCISED;
+                else
+                    svc->inst.state = STATE_RECOVERY;
+                break;
+            }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
                 if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
                     ready = 1;
                     svc->ready_path_verified = 1;
-                } else if (now - svc->start_time >= svc->stable_secs) {
+                } else if (now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->stable_secs) {
                     ready = 1;
                 }
                 if (ready) {
@@ -1157,8 +1176,8 @@ static void handle_reload(int evict_mode) {
                 shadow_services[i].failsafe_start = services[j].failsafe_start;
                 shadow_services[i].last_pet      = services[j].last_pet;
                 shadow_services[i].ready_path_verified = services[j].ready_path_verified;
-                memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path, sizeof(shadow_services[i].cgroup_path));
                 shadow_services[i].timer_next    = services[j].timer_next;
+                shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;
 
                 
                 /* clear live service state so we don't accidentally treat it as running/managed */
