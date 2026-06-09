@@ -121,6 +121,7 @@ oneshot=1
 | `watchdog_timeout_ms` | `0` | Dead Man Token window in milliseconds. Service must call `schema-ctl pet <name>` within this window or PID 1 stops kicking `/dev/watchdog` and the hardware resets. Use for `critical=1` real-time processes. `0` = disabled. |
 | `cpu_limit` | `0` | Percent of one CPU core (1–100) enforced via cgroupv2 `cpu.max`. Written before child exec. `0` = unlimited. |
 | `mem_limit` | `0` | Memory hard cap in MB via cgroupv2 `memory.max`. OOM inside the cgroup kills the service, not the system. Written before child exec. `0` = unlimited. |
+| `priority` | `standard` | CPU contention class via cgroupv2 `cpu.weight`: `critical` (weight 10000), `standard` (100), `peripheral` (10). Proportional share — only takes effect when cores are saturated; idle services are never penalized. The analog of systemd's `CPUWeight=`. Children inherit the service's cgroup, so tagging a session leader (e.g. `display-manager`) elevates its whole subtree, compositor included. |
 | `allowed_slot_min` | `-1` | Minimum hardware slot ID (inclusive) this service is permitted to run on. Checked against `SLOT_ID` env at spawn time. `-1` = unconstrained. |
 | `allowed_slot_max` | `-1` | Maximum hardware slot ID (inclusive). If `SLOT_ID` falls outside `[allowed_slot_min, allowed_slot_max]`, spawn is refused with a `HAZARD` log and `SVC_NO_RESTART` is set — the service will not retry. Both min and max must be ≥ 0 to activate the gate. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |

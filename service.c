@@ -170,6 +170,24 @@ static void cgroup_apply_limits(service_t *svc) {
             close(fd);
         }
     }
+
+    /* priority -> cgroup v2 cpu.weight (proportional share, default 100).
+     * Only takes effect under CPU contention: idle services see no penalty,
+     * but when cores are saturated a CRITICAL service (e.g. the display
+     * stack or the Leg control loop) wins the scheduler over PERIPHERAL
+     * background work. This is the analog of systemd's CPUWeight=. */
+    {
+        int weight = 100;
+        if (svc->priority == PRIO_CRITICAL)        weight = 10000;
+        else if (svc->priority == PRIO_PERIPHERAL) weight = 10;
+        snprintf(path, sizeof(path), "%s/cpu.weight", svc->cgroup_path);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0) {
+            n = snprintf(buf, sizeof(buf), "%d\n", weight);
+            write(fd, buf, (size_t)n);
+            close(fd);
+        }
+    }
 }
 
 int service_spawn(service_t *svc) {
