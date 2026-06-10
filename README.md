@@ -628,6 +628,8 @@ dep=polkitd
 needs_root=1
 ```
 
+**The `sd_booted()` signal.** `mount_pseudo()` creates `/run/systemd/system` at early boot (`init.c`). `libsystemd`'s `sd_booted()` is a bare `access()` on that path, so any software gated on "is systemd the init?" — KService/ksycoca, elogind clients — gets a positive answer with no shim. This is what made the old `LD_PRELOAD` `mock_sd.so` workaround (which faked the check to stop KDE's ksycoca from spinning at idle) unnecessary: the signal is now native and costs one `mkdir`.
+
 ---
 
 ## Porting to a new distro
