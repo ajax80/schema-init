@@ -1,0 +1,59 @@
+#!/bin/sh
+# Track B journalctl interceptor for schema-init.
+# There is no journald; per-service logs are plain text written by PID 1 to
+# /var/log/schema-init/<unit>.log (or /run/log/schema-init/<unit>.log when /var
+# is not writable). This stub answers the common `journalctl` invocations a
+# desktop/UI/post-install script makes, reading those files. It NEVER errors:
+# unknown flags are swallowed and a missing log yields an empty stream, exit 0 —
+# so a caller piping us to jq/awk never hard-crashes.
+
+unit=""
+out="short"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -u|--unit)        unit="$2"; shift 2 ;;
+        --unit=*)         unit="${1#*=}"; shift ;;
+        -o|--output)      out="$2"; shift 2 ;;
+        --output=*)       out="${1#*=}"; shift ;;
+        -n|--lines)
+            # argument is optional: only consume it if it looks numeric
+            case "$2" in
+                ''|*[!0-9]*) shift ;;
+                *)           shift 2 ;;
+            esac ;;
+        --no-pager|-b|-x|-e|-f|--follow|-q|--quiet|-r|--reverse|-a|--all|--system|--user)
+            shift ;;
+        *) shift ;;   # ignore anything we don't model
+    esac
+done
+
+# strip a trailing .service so `journalctl -u foo.service` finds foo.log
+unit="${unit%.service}"
+
+log=""
+if [ -n "$unit" ]; then
+    for d in /var/log/schema-init /run/log/schema-init; do
+        if [ -f "$d/$unit.log" ]; then log="$d/$unit.log"; break; fi
+    done
+else
+    # no unit: concatenate everything available (prefer /var, fall back to /run)
+    for d in /var/log/schema-init /run/log/schema-init; do
+        if ls "$d"/*.log >/dev/null 2>&1; then log="$d"/*.log; break; fi
+    done
+fi
+
+[ -z "$log" ] && exit 0   # nothing to show — empty stream, success
+
+case "$out" in
+    json|json-pretty|json-sse)
+        # minimal but VALID journal JSON: real field name is MESSAGE
+        cat $log 2>/dev/null | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+            printf '{"MESSAGE":"%s","PRIORITY":"6"}\n' "$esc"
+        done ;;
+    *)
+        cat $log 2>/dev/null ;;
+esac
+
+exit 0

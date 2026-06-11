@@ -4,10 +4,12 @@ import os
 import signal
 import dbus
 import dbus.service
+import dbus.exceptions
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 import socket
 import pwd
+import time
 
 def read_file_line(path):
     try:
@@ -49,6 +51,15 @@ def get_gid_for_uid(uid):
         return pwd.getpwuid(uid).pw_gid
     except Exception:
         return uid
+
+def get_timezone():
+    try:
+        target = os.readlink('/etc/localtime')
+        if 'zoneinfo/' in target:
+            return target.split('zoneinfo/', 1)[1]
+    except OSError:
+        pass
+    return read_file_line('/etc/timezone') or 'UTC'
 
 class Login1Session(dbus.service.Object):
     def __init__(self, bus):
@@ -341,6 +352,62 @@ class Hostname1(dbus.service.Object):
             }
         return {}
 
+class Timedate1(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/timedate1')
+        print("login1-stub: Registered Timedate1 at /org/freedesktop/timedate1")
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        return self.GetAll(interface_name).get(property_name)
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.timedate1':
+            now_us = dbus.UInt64(int(time.time() * 1_000_000))
+            return {
+                'Timezone': dbus.String(get_timezone()),
+                'LocalRTC': dbus.Boolean(False),
+                'CanNTP': dbus.Boolean(True),
+                'NTP': dbus.Boolean(True),
+                'NTPSynchronized': dbus.Boolean(True),
+                'TimeUSec': now_us,
+                'RTCTimeUSec': now_us,
+            }
+        return {}
+
+    @dbus.service.method('org.freedesktop.timedate1', in_signature='sb', out_signature='')
+    def SetTimezone(self, timezone, interactive):
+        zonefile = '/usr/share/zoneinfo/' + timezone
+        if '..' in timezone or not os.path.isfile(zonefile):
+            raise dbus.exceptions.DBusException(
+                'Invalid time zone: ' + timezone,
+                name='org.freedesktop.timedate1.Error.InvalidTimezone')
+        try:
+            tmp = '/etc/localtime.new'
+            if os.path.lexists(tmp):
+                os.remove(tmp)
+            os.symlink(zonefile, tmp)
+            os.replace(tmp, '/etc/localtime')
+            with open('/etc/timezone', 'w') as f:
+                f.write(timezone + '\n')
+        except OSError as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.timedate1.Error.Failed')
+
+    @dbus.service.method('org.freedesktop.timedate1', in_signature='bb', out_signature='')
+    def SetLocalRTC(self, local_rtc, fix_system):
+        pass
+
+    @dbus.service.method('org.freedesktop.timedate1', in_signature='bb', out_signature='')
+    def SetNTP(self, use_ntp, interactive):
+        pass
+
+    @dbus.service.method('org.freedesktop.timedate1', in_signature='xbb', out_signature='')
+    def SetTime(self, usec_utc, relative, interactive):
+        pass
+
+
 class Systemd1Manager(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/systemd1')
@@ -408,6 +475,7 @@ def main():
     manager = Login1Manager(bus)
     hostname = Hostname1(bus)
     systemd = Systemd1Manager(bus)
+    timedate = Timedate1(bus)
 
     # Request the well-known names
     try:
@@ -428,6 +496,12 @@ def main():
         print("login1-stub: Successfully acquired 'org.freedesktop.systemd1' name")
     except Exception as e:
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.systemd1': {e}", file=sys.stderr)
+
+    try:
+        bus.request_name('org.freedesktop.timedate1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
+        print("login1-stub: Successfully acquired 'org.freedesktop.timedate1' name")
+    except Exception as e:
+        print(f"login1-stub: Failed to acquire name 'org.freedesktop.timedate1': {e}", file=sys.stderr)
 
     loop = GLib.MainLoop()
     
