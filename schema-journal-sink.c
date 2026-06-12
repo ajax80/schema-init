@@ -139,7 +139,10 @@ static void parse_native(const char *buf, size_t len) {
             for (int i = 0; i < 8; i++)
                 blen |= (unsigned long long)(unsigned char)lp[i] << (8 * i);
             const char *raw = lp + 8;
-            if (raw + blen > end) break;
+            /* compare as integers: raw + blen can overflow the pointer (UB) and
+             * wrap past `end`, slipping a hostile length through. raw <= end
+             * here, so end - raw is a safe non-negative bound. */
+            if (blen > (unsigned long long)(end - raw)) break;
             if (flen == 7 && !memcmp(p, "MESSAGE", 7)) {
                 msg = raw; msglen = (size_t)blen;
             }
