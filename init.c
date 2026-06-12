@@ -70,18 +70,22 @@ static void eviction_tick(void) {
     int i = 0;
     while (i < eviction_count) {
         if (now < evictions[i].deadline) { i++; continue; }
+        int killed = 0;
         if (evictions[i].cgroup[0]) {
             char path[160];
             int fd;
             snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
             fd = open(path, O_WRONLY);
-            if (fd >= 0) { write(fd, "1", 1); close(fd); }
-            else {
-                kill(evictions[i].pid, SIGKILL);
-            }
-            printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
-                   (int)evictions[i].pid);
+            if (fd >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
         }
+        /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
+         * previously this whole branch was gated on cgroup[0], so an orphan
+         * with no cgroup that ignored SIGTERM survived eviction entirely. */
+        if (!killed) {
+            kill(evictions[i].pid, SIGKILL);
+        }
+        printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
+               (int)evictions[i].pid);
         evictions[i] = evictions[--eviction_count];
     }
 }
