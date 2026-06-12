@@ -499,8 +499,8 @@ static void monitor_failsafes(void) {
             if (elapsed_ms >= timeout_ms) {
                 service_log(svc, "failsafe-timeout");
                 kill(svc->failsafe_pid, SIGKILL);
-                waitpid(svc->failsafe_pid, &status, 0);
-                svc->failsafe_pid = 0;
+                /* don't block PID 1 waiting on it — the WNOHANG poll at the top
+                 * of this loop reaps it on the next tick. */
             }
         }
     }
@@ -525,7 +525,16 @@ static void active_kill_service(service_t *svc) {
     }
     
     kill(svc->child_pid, SIGKILL);
-    waitpid(svc->child_pid, &status, 0);
+    /* bounded non-blocking reap: never block PID 1 on a process wedged in
+     * uninterruptible (D) state — e.g. a deadlocked SPI/NFS driver. If it
+     * doesn't die within the window, leave the zombie for the signalfd
+     * reaper and proceed so the main loop can't hang. */
+    elapsed_ms = 0;
+    while (elapsed_ms < 50) {
+        if (waitpid(svc->child_pid, &status, WNOHANG) == svc->child_pid) break;
+        usleep(1000);
+        elapsed_ms++;
+    }
     svc->child_pid = 0;
     service_cgroup_kill(svc);
 }
