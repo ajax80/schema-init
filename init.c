@@ -973,7 +973,7 @@ static void set_nonblock(int fd) {
 static void ctl_init(void) {
     struct sockaddr_un addr;
     unlink(CTL_SOCK_PATH);
-    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (ctl_fd < 0) return;
     set_nonblock(ctl_fd);
     memset(&addr, 0, sizeof(addr));
@@ -998,7 +998,7 @@ static void ctl_poll(void) {
     ssize_t n;
     struct timeval tv = {0, 100000}; /* 100ms receive timeout */
     if (ctl_fd < 0) return;
-    cfd = accept(ctl_fd, NULL, NULL);
+    cfd = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC);
     if (cfd < 0) return;
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     while (pos < (int)sizeof(buf) - 1) {
