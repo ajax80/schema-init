@@ -35,12 +35,52 @@ def get_os_release_val(key):
 
 def get_active_uid():
     try:
+        if os.path.exists('/sys/class/tty/tty0/active'):
+            with open('/sys/class/tty/tty0/active', 'r') as f:
+                active_tty = f.read().strip()
+            if active_tty.startswith('tty'):
+                vt_num = active_tty[3:]
+                if vt_num.isdigit():
+                    # Enumerate processes to find the one running on this VT
+                    for pid_dir in os.listdir('/proc'):
+                        if pid_dir.isdigit():
+                            try:
+                                with open(f'/proc/{pid_dir}/environ', 'rb') as f_env:
+                                    env_data = f_env.read()
+                                env = {}
+                                for item in env_data.split(b'\0'):
+                                    if b'=' in item:
+                                        k, v = item.split(b'=', 1)
+                                        env[k.decode('utf-8', errors='ignore')] = v.decode('utf-8', errors='ignore')
+                                if env.get('XDG_VTNR') == vt_num:
+                                    stat_file = f'/proc/{pid_dir}/status'
+                                    with open(stat_file, 'r') as f_stat:
+                                        for line in f_stat:
+                                            if line.startswith('Uid:'):
+                                                real_uid = int(line.split()[1])
+                                                if real_uid >= 1000:
+                                                    return real_uid
+                            except Exception:
+                                continue
+                    # Fallback: check owner of the active tty device
+                    try:
+                        tty_stat = os.stat(f'/dev/{active_tty}')
+                        if tty_stat.st_uid >= 1000:
+                            return tty_stat.st_uid
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    # Fallback to the original method (first UID in /run/user)
+    try:
         uids = [int(d) for d in os.listdir('/run/user') if d.isdigit() and int(d) >= 1000]
         if uids:
             return uids[0]
     except Exception:
         pass
     return 1000
+
 
 def get_username_for_uid(uid):
     try:
