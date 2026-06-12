@@ -70,18 +70,22 @@ static void eviction_tick(void) {
     int i = 0;
     while (i < eviction_count) {
         if (now < evictions[i].deadline) { i++; continue; }
+        int killed = 0;
         if (evictions[i].cgroup[0]) {
             char path[160];
             int fd;
             snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
             fd = open(path, O_WRONLY);
-            if (fd >= 0) { write(fd, "1", 1); close(fd); }
-            else {
-                kill(evictions[i].pid, SIGKILL);
-            }
-            printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
-                   (int)evictions[i].pid);
+            if (fd >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
         }
+        /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
+         * previously this whole branch was gated on cgroup[0], so an orphan
+         * with no cgroup that ignored SIGTERM survived eviction entirely. */
+        if (!killed) {
+            kill(evictions[i].pid, SIGKILL);
+        }
+        printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
+               (int)evictions[i].pid);
         evictions[i] = evictions[--eviction_count];
     }
 }
@@ -495,8 +499,8 @@ static void monitor_failsafes(void) {
             if (elapsed_ms >= timeout_ms) {
                 service_log(svc, "failsafe-timeout");
                 kill(svc->failsafe_pid, SIGKILL);
-                waitpid(svc->failsafe_pid, &status, 0);
-                svc->failsafe_pid = 0;
+                /* don't block PID 1 waiting on it — the WNOHANG poll at the top
+                 * of this loop reaps it on the next tick. */
             }
         }
     }
@@ -521,7 +525,16 @@ static void active_kill_service(service_t *svc) {
     }
     
     kill(svc->child_pid, SIGKILL);
-    waitpid(svc->child_pid, &status, 0);
+    /* bounded non-blocking reap: never block PID 1 on a process wedged in
+     * uninterruptible (D) state — e.g. a deadlocked SPI/NFS driver. If it
+     * doesn't die within the window, leave the zombie for the signalfd
+     * reaper and proceed so the main loop can't hang. */
+    elapsed_ms = 0;
+    while (elapsed_ms < 50) {
+        if (waitpid(svc->child_pid, &status, WNOHANG) == svc->child_pid) break;
+        usleep(1000);
+        elapsed_ms++;
+    }
     svc->child_pid = 0;
     service_cgroup_kill(svc);
 }
@@ -973,7 +986,7 @@ static void set_nonblock(int fd) {
 static void ctl_init(void) {
     struct sockaddr_un addr;
     unlink(CTL_SOCK_PATH);
-    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (ctl_fd < 0) return;
     set_nonblock(ctl_fd);
     memset(&addr, 0, sizeof(addr));
@@ -998,7 +1011,7 @@ static void ctl_poll(void) {
     ssize_t n;
     struct timeval tv = {0, 100000}; /* 100ms receive timeout */
     if (ctl_fd < 0) return;
-    cfd = accept(ctl_fd, NULL, NULL);
+    cfd = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC);
     if (cfd < 0) return;
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     while (pos < (int)sizeof(buf) - 1) {

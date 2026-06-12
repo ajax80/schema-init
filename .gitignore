@@ -5,3 +5,5 @@ schema-journal-sink
 desktop/schema-desktop
 *.log
 *.vmdk
+__pycache__/
+*.pyc
