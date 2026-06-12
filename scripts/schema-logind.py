@@ -34,49 +34,20 @@ def get_os_release_val(key):
     return ""
 
 def get_active_uid():
-    try:
-        if os.path.exists('/sys/class/tty/tty0/active'):
-            with open('/sys/class/tty/tty0/active', 'r') as f:
-                active_tty = f.read().strip()
-            if active_tty.startswith('tty'):
-                vt_num = active_tty[3:]
-                if vt_num.isdigit():
-                    # Enumerate processes to find the one running on this VT
-                    for pid_dir in os.listdir('/proc'):
-                        if pid_dir.isdigit():
-                            try:
-                                with open(f'/proc/{pid_dir}/environ', 'rb') as f_env:
-                                    env_data = f_env.read()
-                                env = {}
-                                for item in env_data.split(b'\0'):
-                                    if b'=' in item:
-                                        k, v = item.split(b'=', 1)
-                                        env[k.decode('utf-8', errors='ignore')] = v.decode('utf-8', errors='ignore')
-                                if env.get('XDG_VTNR') == vt_num:
-                                    stat_file = f'/proc/{pid_dir}/status'
-                                    with open(stat_file, 'r') as f_stat:
-                                        for line in f_stat:
-                                            if line.startswith('Uid:'):
-                                                real_uid = int(line.split()[1])
-                                                if real_uid >= 1000:
-                                                    return real_uid
-                            except Exception:
-                                continue
-                    # Fallback: check owner of the active tty device
-                    try:
-                        tty_stat = os.stat(f'/dev/{active_tty}')
-                        if tty_stat.st_uid >= 1000:
-                            return tty_stat.st_uid
-                    except Exception:
-                        pass
-    except Exception:
-        pass
-
-    # Fallback to the original method (first UID in /run/user)
+    # SECURITY: resolve the active-session uid ONLY from root-created
+    # /run/user/<uid> entries. Do NOT derive it from /proc/<pid>/environ
+    # (e.g. XDG_VTNR mapped to the active VT) — environ is forgeable by the
+    # process owner, so a low-pid unprivileged daemon could forge the active VT
+    # number and make this return ITS uid, defeating caller_authorized() and
+    # granting PowerOff/Reboot/TakeDevice. (/dev/ttyN is root-owned under
+    # schema-init, so the device-owner signal is unavailable too.) min() gives a
+    # deterministic pick from the trusted set; true foreground-session selection
+    # on a multi-user box is a follow-up that must use a trusted seat source.
+    # See docs/reviews/logind_authz_gate_review.md.
     try:
         uids = [int(d) for d in os.listdir('/run/user') if d.isdigit() and int(d) >= 1000]
         if uids:
-            return uids[0]
+            return min(uids)
     except Exception:
         pass
     return 1000

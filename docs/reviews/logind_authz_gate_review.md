@@ -70,3 +70,42 @@ Live validation was executed on `blakbox` with the following results:
    ```
 4. **Daemon Persistence**: Verified `org.freedesktop.login1` re-registered successfully as PID owned by schema-init (`PPID=1`).
 
+## ⚠️ REJECTED — `004b37b`'s VT/XDG_VTNR mapping is a privilege ESCALATION (Claire, 2026-06-12)
+
+Greg's `get_active_uid()` refactor (`004b37b`, the section above) **must not merge as-is.**
+It derives the authorization decision from attacker-forgeable data:
+
+- It returns the uid of the first `/proc` process whose **`XDG_VTNR`** matches the active VT.
+  `/proc/<pid>/environ` is **forgeable by the process owner** — anyone can launch a process
+  with `XDG_VTNR=1` set.
+- `os.listdir('/proc')` enumerates in **ascending pid order** (verified), so the function
+  returns the **lowest-pid** match. A boot-time daemon has a low pid (`dbus-daemon` = 809 ≪
+  the session's 6292). A compromised unprivileged daemon (uid ≥1000) that forges
+  `XDG_VTNR=<active vt>` sorts ahead of the real session → `get_active_uid()` returns the
+  **attacker's** uid → the gate authorizes it for `PowerOff`/`Reboot`/`TakeDevice`
+  (keylogger). That is the precise threat the gate exists to stop.
+- The `/dev/ttyN`-owner fallback doesn't save it: under schema-init the VT device stays
+  root-owned (not chowned to the session user), so it never fires for a real user.
+
+Greg's "Wayland session passed the active UID gate" validation is also hollow on these
+boxes — login acquires input via **video/input group membership, not logind TakeDevice** —
+so it never exercised the uid-1000 allow path through the gate.
+
+**FIX (working tree, replaces `004b37b`'s body):** `get_active_uid()` resolves the uid
+**only** from root-created `/run/user/<uid>` entries (`min()` for a deterministic pick).
+Verified live on the running service: with **20 forged `nobody`/`XDG_VTNR=1` processes**
+present, `get_active_uid()` still returns 1000 and `nobody`→`PowerOff`/`TakeDevice` still
+get `AccessDenied`. The original `/run/user` signal was always safe (root-created, not
+forgeable); its only flaw was multi-user nondeterminism — a robustness nit, never an
+escalation. True foreground-session selection on a genuine multi-user box stays a
+follow-up that MUST use a trusted seat source, never environ.
+
+## Deploy footgun (separate schema-init bug, observed during this fix)
+
+`deploy-canonical-logind.sh`'s `schema-ctl restart schema-logind` tripped the known
+**reload→start control-socket wedge**: schema-logind was SIGTERM'd but the recovery arc
+never respawned it — `login1` was absent until manually restarted. Corroborating evidence
+of the related ctl-fd leak: the listening `/run/schema-init.sock` is inherited as fd=3
+across ~50 services (`ss -xlp`) — the no-`SOCK_CLOEXEC` ctl-fd leak. A reboot re-establishes
+clean supervision. The deploy script should use a wedge-safe restart path.
+
