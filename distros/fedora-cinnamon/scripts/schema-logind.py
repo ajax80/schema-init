@@ -2,6 +2,9 @@
 import sys
 import os
 import signal
+import threading
+import json
+import subprocess
 import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
@@ -49,6 +52,18 @@ def get_gid_for_uid(uid):
         return pwd.getpwuid(uid).pw_gid
     except Exception:
         return uid
+
+def svc_name(unit):
+    for suffix in ('.service', '.target', '.socket', '.timer', '.mount', '.path'):
+        if unit.endswith(suffix):
+            return unit[:-len(suffix)]
+    return unit
+
+def schema_ctl(action, name):
+    try:
+        subprocess.run(['schema-ctl', action, name], capture_output=True, timeout=5)
+    except Exception as e:
+        print(f"systemd1-stub: schema-ctl {action} {name} failed: {e}", file=sys.stderr)
 
 class Login1Session(dbus.service.Object):
     def __init__(self, bus):
@@ -110,7 +125,12 @@ class Login1Session(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
@@ -140,7 +160,12 @@ class Login1User(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
@@ -164,7 +189,12 @@ class Login1Seat(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
@@ -182,8 +212,6 @@ class Login1Manager(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1')
         print("login1-stub: Registered Manager at /org/freedesktop/login1")
-
-    # ── Manager Methods ───────────────────────────────────────────────────
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='')
     def PowerOff(self, interactive):
@@ -211,7 +239,6 @@ class Login1Manager(dbus.service.Object):
     def CanReboot(self):
         return "yes"
 
-    # Async delay logic to prevent the LogindSessionBackend race condition
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s',
                          async_callbacks=('reply_cb', 'error_cb'))
     def CanSuspend(self, reply_cb, error_cb):
@@ -236,8 +263,6 @@ class Login1Manager(dbus.service.Object):
         reply_cb(val)
         return False
 
-    # ── Session, User, Seat methods returning dummy paths ─────────────────
-
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(susso)')
     def ListSessions(self):
         uid = get_active_uid()
@@ -256,14 +281,14 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ssss', out_signature='h')
     def Inhibit(self, what, who, why, mode):
-        print(f"login1-stub: Inhibit(what={what}, who={who}, why={why}, mode={mode})")
+        print(f"login1-stub: Inhibit({what}, {who}, {why}, {mode})")
         r, w = os.pipe()
         os.close(r)
         return dbus.types.UnixFd(w)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(ssssuu)')
     def ListInhibitors(self):
-        return dbus.Array([], signature='(ssssuu)')
+        return []
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
@@ -281,11 +306,14 @@ class Login1Manager(dbus.service.Object):
     def GetSeat(self, seat_id):
         return dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')
 
-    # ── Properties Interface ──────────────────────────────────────────────
-
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
@@ -312,7 +340,12 @@ class Hostname1(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
@@ -320,21 +353,16 @@ class Hostname1(dbus.service.Object):
             hn = socket.gethostname() or "localhost"
             os_pretty = get_os_release_val('PRETTY_NAME') or "Fedora Linux"
             os_cpe = get_os_release_val('CPE_NAME') or "cpe:/o:fedoraproject:fedora"
-            
-            # Read DMI hardware attributes dynamically
             vendor = read_file_line('/sys/class/dmi/id/sys_vendor') or "Unknown"
             model = read_file_line('/sys/class/dmi/id/product_name') or "Unknown"
             firmware = read_file_line('/sys/class/dmi/id/bios_version') or "Unknown"
             chassis = read_file_line('/sys/class/dmi/id/chassis_type') or "desktop"
-            
-            # Map common chassis type numbers to strings
             if chassis in ('3', '4', '6', '7'):
                 chassis_str = 'desktop'
             elif chassis in ('8', '9', '10', '14'):
                 chassis_str = 'laptop'
             else:
                 chassis_str = 'desktop'
-                
             return {
                 'Hostname': dbus.String(hn),
                 'StaticHostname': dbus.String(hn),
@@ -432,7 +460,12 @@ class ConsoleKitSession(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
@@ -504,7 +537,12 @@ class ConsoleKitManager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
@@ -547,24 +585,189 @@ class Systemd1Manager(dbus.service.Object):
             ), signature='ssssssouso')
         ]
 
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='as', out_signature='a(ssssssouso)')
+    def ListUnitsFiltered(self, states):
+        print(f"systemd1-stub: ListUnitsFiltered({list(states)}) requested")
+        return self.ListUnits()
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
+    def StartUnit(self, name, mode):
+        print(f"systemd1-stub: StartUnit({name}, {mode})")
+        schema_ctl('start', svc_name(str(name)))
+        return dbus.ObjectPath('/org/freedesktop/systemd1/job/1')
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
+    def StopUnit(self, name, mode):
+        print(f"systemd1-stub: StopUnit({name}, {mode})")
+        schema_ctl('stop', svc_name(str(name)))
+        return dbus.ObjectPath('/org/freedesktop/systemd1/job/2')
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
+    def RestartUnit(self, name, mode):
+        print(f"systemd1-stub: RestartUnit({name}, {mode})")
+        schema_ctl('reset', svc_name(str(name)))
+        return dbus.ObjectPath('/org/freedesktop/systemd1/job/3')
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asbb', out_signature='ba(sss)')
+    def EnableUnitFiles(self, names, runtime, force):
+        print(f"systemd1-stub: EnableUnitFiles({list(names)})")
+        return dbus.Boolean(False), []
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asb', out_signature='a(sss)')
+    def DisableUnitFiles(self, names, runtime):
+        print(f"systemd1-stub: DisableUnitFiles({list(names)})")
+        return []
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asbb', out_signature='a(sss)')
+    def MaskUnitFiles(self, names, runtime, force):
+        print(f"systemd1-stub: MaskUnitFiles({list(names)})")
+        results = []
+        for name in names:
+            path = f'/etc/systemd/system/{name}'
+            try:
+                os.makedirs('/etc/systemd/system', exist_ok=True)
+                if os.path.lexists(path):
+                    os.unlink(path)
+                os.symlink('/dev/null', path)
+                results.append(dbus.Struct(('symlink', path, '/dev/null'), signature='sss'))
+            except Exception as e:
+                print(f"systemd1-stub: MaskUnitFiles error for {name}: {e}", file=sys.stderr)
+        return results
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='')
+    def Subscribe(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='')
+    def Unsubscribe(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='')
+    def Reload(self):
+        print("systemd1-stub: Reload() requested (no-op)")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='a(ssssuu)')
+    def ListInhibitors(self):
+        return []
+
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name).get(property_name)
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
         if interface_name == 'org.freedesktop.systemd1.Manager':
             return {
                 'Version': dbus.String('256'),
+                'SystemState': dbus.String('running'),
                 'Features': dbus.String('+PAM +AUDIT +SELINUX -APPARMOR +GLIB'),
                 'Architecture': dbus.String('x86-64'),
             }
         return {}
 
+
+class VarlinkServer:
+    """Minimal varlink socket — systemd 256+ systemctl tries this before dbus."""
+
+    SOCKET_PATH = '/run/systemd/private/io.systemd.Manager'
+
+    def __init__(self):
+        os.makedirs('/run/systemd/private', exist_ok=True)
+        if os.path.exists(self.SOCKET_PATH):
+            os.unlink(self.SOCKET_PATH)
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(self.SOCKET_PATH)
+        os.chmod(self.SOCKET_PATH, 0o666)
+        self.sock.listen(8)
+        print(f"varlink-stub: Listening at {self.SOCKET_PATH}")
+
+    def start(self):
+        t = threading.Thread(target=self._accept_loop, daemon=True)
+        t.start()
+
+    def _accept_loop(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+                threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+            except Exception:
+                break
+
+    def _handle(self, conn):
+        buf = b''
+        try:
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                while b'\0' in buf:
+                    msg, buf = buf.split(b'\0', 1)
+                    if msg:
+                        self._dispatch(conn, msg)
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _dispatch(self, conn, msg):
+        try:
+            req = json.loads(msg)
+            method = req.get('method', '')
+            params = req.get('parameters', {})
+            resp = self._route(method, params)
+        except Exception as e:
+            resp = {'error': 'io.systemd.Error.Failed', 'parameters': {'description': str(e)}}
+        try:
+            conn.sendall(json.dumps(resp).encode() + b'\0')
+        except Exception:
+            pass
+
+    def _route(self, method, params):
+        print(f"varlink-stub: {method}({params})")
+        if method == 'io.systemd.Manager.StartUnit':
+            schema_ctl('start', svc_name(params.get('name', '')))
+            return {'parameters': {'job': '/org/freedesktop/systemd1/job/1'}}
+        elif method == 'io.systemd.Manager.StopUnit':
+            schema_ctl('stop', svc_name(params.get('name', '')))
+            return {'parameters': {'job': '/org/freedesktop/systemd1/job/2'}}
+        elif method == 'io.systemd.Manager.RestartUnit':
+            schema_ctl('reset', svc_name(params.get('name', '')))
+            return {'parameters': {'job': '/org/freedesktop/systemd1/job/3'}}
+        elif method == 'io.systemd.Manager.EnableUnitFiles':
+            return {'parameters': {'carries_install_info': False, 'install_changes': []}}
+        elif method == 'io.systemd.Manager.DisableUnitFiles':
+            return {'parameters': {'install_changes': []}}
+        elif method == 'io.systemd.Manager.MaskUnitFiles':
+            return {'parameters': {'install_changes': []}}
+        elif method == 'io.systemd.Manager.GetUnitFileState':
+            return {'parameters': {'state': 'disabled'}}
+        elif method in ('io.systemd.Manager.Subscribe', 'io.systemd.Manager.Unsubscribe',
+                        'io.systemd.Manager.Reload'):
+            return {'parameters': {}}
+        elif method == 'io.systemd.Manager.ListUnits':
+            return {'parameters': {'units': []}}
+        else:
+            return {'error': 'io.systemd.Error.NoSuchMethod', 'parameters': {'method': method}}
+
+
 def main():
     DBusGMainLoop(set_as_default=True)
 
     os.makedirs('/run/systemd/system', exist_ok=True)
+    # NOTE: do NOT create /run/systemd/private — root systemctl connects there as a
+    # peer sd-bus socket (to bypass polkit). We don't serve that socket, and creating
+    # it as a directory makes root systemctl fail with "Connection refused" instead of
+    # cleanly falling through. Non-root systemctl uses the D-Bus system bus and works.
+
     uid = get_active_uid()
     runtime_dir = f'/run/user/{uid}'
     os.makedirs(runtime_dir, exist_ok=True)
@@ -574,13 +777,18 @@ def main():
     except Exception:
         pass
 
+    # systemctl on this systemd talks plain D-Bus to org.freedesktop.systemd1.Manager
+    # over /run/dbus/system_bus_socket — it does NOT use varlink here. Creating a
+    # varlink socket actually BREAKS systemctl (it prefers the local transport, then
+    # the stub refuses the connection). So we do NOT start a varlink server; the
+    # D-Bus action methods on Systemd1Manager handle enable/disable/start/stop.
+
     try:
         bus = dbus.SystemBus()
     except Exception as e:
         print(f"login1-stub: Failed to connect to System Bus: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Instantiate the dummy objects
     uid = get_active_uid()
     session = Login1Session(bus)
     user = Login1User(bus, uid)
@@ -591,7 +799,6 @@ def main():
     ck_session = ConsoleKitSession(bus, uid)
     ck_manager = ConsoleKitManager(bus)
 
-    # Request the well-known names
     try:
         bus.request_name('org.freedesktop.login1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
         print("login1-stub: Successfully acquired 'org.freedesktop.login1' name")
@@ -618,8 +825,7 @@ def main():
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.ConsoleKit': {e}", file=sys.stderr)
 
     loop = GLib.MainLoop()
-    
-    # Handle clean termination
+
     def shutdown_handler(sig, frame):
         print(f"login1-stub: Received signal {sig}, shutting down...")
         loop.quit()
