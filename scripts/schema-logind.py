@@ -395,8 +395,8 @@ class Timedate1(dbus.service.Object):
             raise dbus.exceptions.DBusException(
                 str(e), name='org.freedesktop.timedate1.Error.Failed')
 
-    @dbus.service.method('org.freedesktop.timedate1', in_signature='bb', out_signature='')
-    def SetLocalRTC(self, local_rtc, fix_system):
+    @dbus.service.method('org.freedesktop.timedate1', in_signature='bbb', out_signature='')
+    def SetLocalRTC(self, local_rtc, fix_system, interactive):
         pass
 
     @dbus.service.method('org.freedesktop.timedate1', in_signature='bb', out_signature='')

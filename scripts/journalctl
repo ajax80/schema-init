@@ -12,15 +12,15 @@ out="short"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        -u|--unit)        unit="$2"; shift 2 ;;
+        -u|--unit)        unit="$2"; shift; [ $# -gt 0 ] && shift ;;
         --unit=*)         unit="${1#*=}"; shift ;;
-        -o|--output)      out="$2"; shift 2 ;;
+        -o|--output)      out="$2"; shift; [ $# -gt 0 ] && shift ;;
         --output=*)       out="${1#*=}"; shift ;;
         -n|--lines)
             # argument is optional: only consume it if it looks numeric
             case "$2" in
                 ''|*[!0-9]*) shift ;;
-                *)           shift 2 ;;
+                *)           shift; [ $# -gt 0 ] && shift ;;
             esac ;;
         --no-pager|-b|-x|-e|-f|--follow|-q|--quiet|-r|--reverse|-a|--all|--system|--user)
             shift ;;
@@ -47,9 +47,14 @@ fi
 
 case "$out" in
     json|json-pretty|json-sse)
-        # minimal but VALID journal JSON: real field name is MESSAGE
+        # minimal but VALID journal JSON: real field name is MESSAGE.
+        # Escape \ and " AND the control chars (tab, CR) that JSON forbids
+        # unescaped — else a tab in a stack trace makes the stream invalid (jq
+        # fails). Literal TAB/CR in the sed pattern keep this portable to
+        # busybox/dash sed (no reliance on \t/\r being interpreted).
+        TAB=$(printf '\t'); CR=$(printf '\r')
         cat $log 2>/dev/null | while IFS= read -r line; do
-            esc=$(printf '%s' "$line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+            esc=$(printf '%s' "$line" | sed "s/\\\\/\\\\\\\\/g; s/\"/\\\\\"/g; s/$TAB/\\\\t/g; s/$CR/\\\\r/g")
             printf '{"MESSAGE":"%s","PRIORITY":"6"}\n' "$esc"
         done ;;
     *)
