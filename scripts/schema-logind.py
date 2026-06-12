@@ -52,6 +52,29 @@ def get_gid_for_uid(uid):
     except Exception:
         return uid
 
+def caller_uid(connection, sender):
+    """uid of the D-Bus caller, or None if it can't be determined."""
+    if sender is None:
+        return None
+    try:
+        return int(connection.get_unix_user(sender))
+    except Exception:
+        return None
+
+def caller_authorized(connection, sender):
+    """Ownership gate real logind enforces via session/seat membership.
+
+    Without it, ANY bus client can TakeDevice() an input-device fd (a
+    keylogger) or power off the box. We can't track real session ownership
+    in a stub, so we allow root (covers root-run display-manager greeters)
+    and the active local session's uid (the user's compositor), and deny
+    everyone else — e.g. a compromised low-privilege daemon.
+    """
+    uid = caller_uid(connection, sender)
+    if uid is None:
+        return False
+    return uid == 0 or uid == get_active_uid()
+
 def get_timezone():
     try:
         target = os.readlink('/etc/localtime')
@@ -75,12 +98,26 @@ class Login1Session(dbus.service.Object):
     def Unlock(self):
         print("login1-stub: Session.Unlock() requested")
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
-    def TakeControl(self, force):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='',
+                         sender_keyword='sender')
+    def TakeControl(self, force, sender=None):
+        if not caller_authorized(self._connection, sender):
+            print(f"login1-stub: DENY TakeControl from uid={caller_uid(self._connection, sender)}",
+                  file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "Not the active session owner",
+                name='org.freedesktop.login1.AccessDenied')
         print(f"login1-stub: Session.TakeControl({force}) requested")
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='hb')
-    def TakeDevice(self, major, minor):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='hb',
+                         sender_keyword='sender')
+    def TakeDevice(self, major, minor, sender=None):
+        if not caller_authorized(self._connection, sender):
+            print(f"login1-stub: DENY TakeDevice({major},{minor}) from "
+                  f"uid={caller_uid(self._connection, sender)}", file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "Not the active session owner",
+                name='org.freedesktop.login1.AccessDenied')
         print(f"login1-stub: Session.TakeDevice({major}, {minor}) requested")
         key = (major, minor)
         if key in self.devices:
@@ -196,18 +233,32 @@ class Login1Manager(dbus.service.Object):
 
     # ── Manager Methods ───────────────────────────────────────────────────
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='')
-    def PowerOff(self, interactive):
-        print("login1-stub: PowerOff requested -> sending SIGTERM to PID 1")
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='',
+                         sender_keyword='sender')
+    def PowerOff(self, interactive, sender=None):
+        if not caller_authorized(self._connection, sender):
+            print(f"login1-stub: DENY PowerOff from uid={caller_uid(self._connection, sender)}",
+                  file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "Not authorized to power off",
+                name='org.freedesktop.login1.AccessDenied')
+        print(f"login1-stub: PowerOff (uid={caller_uid(self._connection, sender)}) -> SIGTERM to PID 1")
         try:
             os.kill(1, signal.SIGTERM)
         except ProcessLookupError:
             print("login1-stub: PID 1 not found (not running as init system)")
             sys.exit(0)
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='')
-    def Reboot(self, interactive):
-        print("login1-stub: Reboot requested -> sending SIGINT to PID 1")
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='',
+                         sender_keyword='sender')
+    def Reboot(self, interactive, sender=None):
+        if not caller_authorized(self._connection, sender):
+            print(f"login1-stub: DENY Reboot from uid={caller_uid(self._connection, sender)}",
+                  file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "Not authorized to reboot",
+                name='org.freedesktop.login1.AccessDenied')
+        print(f"login1-stub: Reboot (uid={caller_uid(self._connection, sender)}) -> SIGINT to PID 1")
         try:
             os.kill(1, signal.SIGINT)
         except ProcessLookupError:
