@@ -29,6 +29,8 @@ chmod 755 /sbin/schema-init.new
 mv -f /sbin/schema-init.new /sbin/schema-init
 cp schema-ctl "$BIN_DIR/schema-ctl"
 chmod 755 "$BIN_DIR/schema-ctl"
+cp schema-journal-sink "$BIN_DIR/schema-journal-sink"
+chmod 755 "$BIN_DIR/schema-journal-sink"
 
 printf "==> writing user.conf (session/audio services read this)\n"
 mkdir -p /etc/schema-init
@@ -40,6 +42,8 @@ cp "$REPO/distros/fedora-kde/services/"*.svc "$SVC_DIR/"
 cp "$REPO/distros/fedora-kde/services/"*.grp "$SVC_DIR/"
 cp "$REPO/services/avahi.svc"   "$SVC_DIR/"
 cp "$REPO/services/chronyd.svc" "$SVC_DIR/"
+# journald-compat shim (opt-in upstream; we enable it fleet-wide)
+cp "$REPO/services/journal-sink.svc.example" "$SVC_DIR/journal-sink.svc"
 
 printf "==> installing scripts\n"
 cp "$REPO/distros/fedora-kde/scripts/mount-efi.sh"         "$BIN_DIR/mount-efi.sh"
