@@ -88,6 +88,19 @@ install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/autostart"
 cp "$REPO/distros/fedora-kde/config/autostart/org.kde.plasmashell.desktop" "$USER_HOME/.config/autostart/"
 chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config/autostart/org.kde.plasmashell.desktop"
 
+printf "==> installing user-session autostart runner + plasmashell watchdog\n"
+# No `systemd --user` to run xdg-desktop-autostart.target or respawn plasmashell.
+# The runner sweeps ~/.config/autostart and keeps plasmashell alive; the env hook
+# launches it at session start.
+install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.local/bin"
+cp "$REPO/distros/fedora-kde/scripts/schema-autostart-runner.sh" "$USER_HOME/.local/bin/schema-autostart-runner.sh"
+chmod +x "$USER_HOME/.local/bin/schema-autostart-runner.sh"
+chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.local/bin/schema-autostart-runner.sh"
+install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/plasma-workspace/env"
+cp "$REPO/distros/fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh" "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"
+chmod +x "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"
+chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"
+
 printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d
 cp "$REPO/distros/shared/dbus/schema-logind.conf" /usr/share/dbus-1/system.d/
