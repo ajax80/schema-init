@@ -1002,11 +1002,14 @@ static void ctl_init(void) {
     listen(ctl_fd, 4);
 }
 
-/* Read-only verbs any connected uid may run. Everything else needs uid 0. */
+/* Read-only verbs any connected uid may run. Everything else needs uid 0.
+ * Match the first whitespace-delimited token exactly so e.g. "statusfoo" is
+ * not treated as "status" (anchored allowlist); "status --json" still passes. */
 static int ctl_is_readonly(const char *line) {
-    return strncmp(line, "status", 6) == 0
-        || strcmp(line, "list") == 0
-        || strcmp(line, "timing") == 0;
+    size_t n = strcspn(line, " \t");
+    return (n == 6 && memcmp(line, "status", 6) == 0)
+        || (n == 4 && memcmp(line, "list", 4) == 0)
+        || (n == 6 && memcmp(line, "timing", 6) == 0);
 }
 
 static void ctl_poll(void) {
