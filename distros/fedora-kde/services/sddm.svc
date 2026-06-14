@@ -1,6 +1,8 @@
 name=sddm
 exec=/usr/local/bin/sddm-logged
 dep=display-stack
+dep=nvidia-modules
+dep=x11-tmpfiles
 dep=mount-home
 dep=wireplumber
 dep=seatd
