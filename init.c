@@ -23,6 +23,7 @@
 #include <sys/signalfd.h>
 #include <glob.h>
 #include <sys/ioctl.h>
+#include <grp.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -988,8 +989,24 @@ static void ctl_init(void) {
             close(ctl_fd); ctl_fd = -1; return;
         }
     }
-    chmod(addr.sun_path, 0600);
+    /* If a "schema" group exists, grant it read-only access (status/list/timing)
+     * by opening the socket to root:schema 0660. Writes are still gated per-call
+     * by peer uid in ctl_poll(). No group → root-only 0600 as before. */
+    {
+        struct group *g = getgrnam("schema");
+        if (g && chown(addr.sun_path, 0, g->gr_gid) == 0)
+            chmod(addr.sun_path, 0660);
+        else
+            chmod(addr.sun_path, 0600);
+    }
     listen(ctl_fd, 4);
+}
+
+/* Read-only verbs any connected uid may run. Everything else needs uid 0. */
+static int ctl_is_readonly(const char *line) {
+    return strncmp(line, "status", 6) == 0
+        || strcmp(line, "list") == 0
+        || strcmp(line, "timing") == 0;
 }
 
 static void ctl_poll(void) {
@@ -1001,6 +1018,15 @@ static void ctl_poll(void) {
     cfd = accept(ctl_fd, NULL, NULL);
     if (cfd < 0) return;
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    /* Peer identity: root may run everything; schema-group members (allowed in
+     * by the 0660 socket) get read-only verbs only. */
+    struct ucred cred;
+    socklen_t clen = sizeof(cred);
+    uid_t peer_uid = (uid_t)-1;
+    if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &clen) == 0)
+        peer_uid = cred.uid;
+
     while (pos < (int)sizeof(buf) - 1) {
         n = recv(cfd, buf + pos, 1, 0);
         if (n <= 0) break;
@@ -1008,7 +1034,14 @@ static void ctl_poll(void) {
     }
     if (pos > 0) {
         buf[pos] = '\0';
-        ctl_cmd(cfd, buf);
+        buf[strcspn(buf, "\r\n")] = '\0';
+        if (peer_uid != 0 && !ctl_is_readonly(buf)) {
+            ctl_writef(cfd, "err: '%s' requires root (uid %d has read-only access)\n",
+                       buf, (int)peer_uid);
+            write(cfd, ".\n", 2);
+        } else {
+            ctl_cmd(cfd, buf);
+        }
     }
     close(cfd);
 }
