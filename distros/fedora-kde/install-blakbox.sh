@@ -88,6 +88,14 @@ install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/autostart"
 cp "$REPO/distros/fedora-kde/config/autostart/org.kde.plasmashell.desktop" "$USER_HOME/.config/autostart/"
 chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config/autostart/org.kde.plasmashell.desktop"
 
+printf "==> installing plasma session env hooks (flatpak XDG_DATA_DIRS + environment.d replay)\n"
+install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/plasma-workspace/env"
+cp "$REPO/distros/fedora-kde/config/plasma-env/flatpak-data-dirs.sh" "$USER_HOME/.config/plasma-workspace/env/flatpak-data-dirs.sh"
+cp "$REPO/distros/fedora-kde/config/plasma-env/zzz-environment-d.sh" "$USER_HOME/.config/plasma-workspace/env/zzz-environment-d.sh"
+chown "$TARGET_USER:$TARGET_USER" \
+    "$USER_HOME/.config/plasma-workspace/env/flatpak-data-dirs.sh" \
+    "$USER_HOME/.config/plasma-workspace/env/zzz-environment-d.sh"
+
 printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d
 cp "$REPO/distros/shared/dbus/schema-logind.conf" /usr/share/dbus-1/system.d/
