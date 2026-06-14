@@ -68,6 +68,10 @@ done
 # Wayland session lives; exit cleanly once kwin_wayland is gone (logout).
 (
     WD_LOG=/tmp/schema-plasma-watchdog.log
+    # Single instance: never let two watchdogs run (both would respawn plasmashell).
+    LOCK="${XDG_RUNTIME_DIR:-/tmp}/schema-plasma-watchdog.lock"
+    exec 9>"$LOCK"
+    flock -n 9 || { echo "another watchdog already running, exit $(date)" >> "$WD_LOG"; exit 0; }
     echo "watchdog start $(date)" > "$WD_LOG"
     fails=0; window=$(date +%s)
     while sleep 5; do
