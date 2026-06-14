@@ -34,6 +34,12 @@ printf "==> writing user.conf (session/audio services read this)\n"
 mkdir -p /etc/schema-init
 printf 'SCHEMA_USER=%s\nSCHEMA_UID=%s\n' "$TARGET_USER" "$TARGET_UID" > /etc/schema-init/user.conf
 
+printf "==> ensuring 'schema' group (read-only schema-ctl without sudo)\n"
+# schema-init opens /run/schema-init.sock to root:schema 0660; members may run
+# status/list/timing (reads), writes still require root.
+getent group schema >/dev/null || groupadd --system schema
+id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx schema || usermod -aG schema "$TARGET_USER"
+
 printf "==> installing services\n"
 mkdir -p "$SVC_DIR"
 cp "$REPO/distros/fedora-kde/services/"*.svc "$SVC_DIR/"
