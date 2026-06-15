@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=schema-init Cinnamon Watchdog
+Comment=Respawns the cinnamon shell if it dies (no systemd --user)
+Exec=/home/ajax80/.local/bin/cinnamon-watchdog.sh
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+OnlyShowIn=X-Cinnamon;
