@@ -24,7 +24,7 @@ endif
 SRCS    = init.c schema.c service.c group.c
 OBJS    = $(SRCS:.c=.o)
 
-all: schema-init schema-ctl schema-subreaper schema-journal-sink
+all: $(BINS) schema-board
 
 desktop:
 	$(MAKE) -C desktop
@@ -43,6 +43,9 @@ schema-subreaper: schema-subreaper.c
 
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+schema-board: schema-board.c schema.h schema_shm.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -67,7 +70,7 @@ release: all
 	@cd $(RELDIR) && ls -l $(BINS) SHA256SUMS
 
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink libatomic_asneeded.a
+	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 
