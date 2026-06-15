@@ -36,6 +36,12 @@ printf "==> writing user.conf (session/audio services read this)\n"
 mkdir -p /etc/schema-init
 printf 'SCHEMA_USER=%s\nSCHEMA_UID=%s\n' "$TARGET_USER" "$TARGET_UID" > /etc/schema-init/user.conf
 
+printf "==> ensuring 'schema' group (read-only schema-ctl without sudo)\n"
+# schema-init opens /run/schema-init.sock to root:schema 0660; members may run
+# status/list/timing (reads), writes still require root.
+getent group schema >/dev/null || groupadd --system schema
+id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx schema || usermod -aG schema "$TARGET_USER"
+
 printf "==> installing services\n"
 mkdir -p "$SVC_DIR"
 cp "$REPO/distros/fedora-kde/services/"*.svc "$SVC_DIR/"
@@ -65,6 +71,7 @@ cp "$REPO/distros/fedora-kde/scripts/pipewire-pulse-run.sh" "$BIN_DIR/pipewire-p
 cp "$REPO/distros/fedora-kde/scripts/nordvpnd-wrapper.sh"     "$BIN_DIR/nordvpnd-wrapper.sh"
 cp "$REPO/distros/fedora-kde/scripts/plasmashell-shim"        "$BIN_DIR/plasmashell-shim"
 cp "$REPO/distros/fedora-kde/scripts/zram-swap.sh"            "$BIN_DIR/zram-swap.sh"
+cp "$REPO/distros/fedora-kde/scripts/nvidia-modules.sh"       "$BIN_DIR/nvidia-modules.sh"
 chmod +x \
     "$BIN_DIR/mount-efi.sh" \
     "$BIN_DIR/mount-home.sh" \
@@ -84,7 +91,8 @@ chmod +x \
     "$BIN_DIR/pipewire-pulse-run.sh" \
     "$BIN_DIR/nordvpnd-wrapper.sh" \
     "$BIN_DIR/plasmashell-shim" \
-    "$BIN_DIR/zram-swap.sh"
+    "$BIN_DIR/zram-swap.sh" \
+    "$BIN_DIR/nvidia-modules.sh"
 
 printf "==> building KDE Plasma sd_booted shim (fixes ~30%% idle CPU with no systemd user session)\n"
 gcc -shared -fPIC -o /usr/local/lib/mock_sd.so "$REPO/distros/fedora-kde/scripts/mock_sd.c" -ldl
@@ -107,6 +115,13 @@ install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/plasma-worksp
 cp "$REPO/distros/fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh" "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"
 chmod +x "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"
 chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"
+printf "==> installing plasma session env hooks (flatpak XDG_DATA_DIRS + environment.d replay)\n"
+install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/plasma-workspace/env"
+cp "$REPO/distros/fedora-kde/config/plasma-env/flatpak-data-dirs.sh" "$USER_HOME/.config/plasma-workspace/env/flatpak-data-dirs.sh"
+cp "$REPO/distros/fedora-kde/config/plasma-env/zzz-environment-d.sh" "$USER_HOME/.config/plasma-workspace/env/zzz-environment-d.sh"
+chown "$TARGET_USER:$TARGET_USER" \
+    "$USER_HOME/.config/plasma-workspace/env/flatpak-data-dirs.sh" \
+    "$USER_HOME/.config/plasma-workspace/env/zzz-environment-d.sh"
 
 printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d

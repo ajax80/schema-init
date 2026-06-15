@@ -559,17 +559,20 @@ exec /sbin/schema-init >/var/log/schema-init.log 2>&1
 **Per-service logs** — each service's stdout and stderr are captured automatically to:
 
 ```
-/run/log/schema-init/<name>.log
+/var/log/schema-init/<name>.log        # preferred (persists across boots)
+/run/log/schema-init/<name>.log        # fallback when /var is not writable (tmpfs, per-boot)
 ```
 
-These files are created fresh on each boot (tmpfs). To read them while the system is running:
+To read them while the system is running:
 
 ```sh
-tail -f /run/log/schema-init/dbus.log
-tail -f /run/log/schema-init/network-manager.log
+tail -f /var/log/schema-init/dbus.log
+tail -f /var/log/schema-init/network-manager.log
 ```
 
 There is no journal daemon. Logs are plain text, always.
+
+**`journalctl` shim (optional Track B)** — software and post-install scripts that shell out to `journalctl -u <svc>` would fail with no journald present. `scripts/journalctl` is a drop-in interceptor: install it to `/usr/local/bin/journalctl` and it serves the matching `*.log` from the directories above, swallows unknown flags, supports `-o json`, and always exits 0 so a caller piping it to `jq`/`awk` never hard-crashes. It does **not** read a binary journal — there isn't one.
 
 ---
 
@@ -604,6 +607,7 @@ On a no-systemd desktop, several interfaces are missing that desktop environment
 | `org.freedesktop.ConsoleKit` | Cinnamon session manager uses ConsoleKit, not logind, for CanRestart/CanStop — controls restart button visibility | GetSessionForUnixProcess, CanRestart → True, CanStop → True, Restart/Stop → SIGINT/SIGTERM to PID 1 |
 | `org.freedesktop.hostname1` | About This System panel, network-manager display | hostname, static hostname, OS pretty name, hardware vendor/model from `/sys/class/dmi/` |
 | `org.freedesktop.systemd1.Manager` | KDE System Settings queries unit state on open | GetUnitFileState → "enabled"; GetUnit, ListUnits, Version/Features/Architecture properties |
+| `org.freedesktop.timedate1` | Date & Time settings panel: timezone, NTP status, clock | Timezone (from `/etc/localtime`), CanNTP/NTP/NTPSynchronized → true, TimeUSec; `SetTimezone` re-links `/etc/localtime` and writes `/etc/timezone` for real |
 
 Without these stubs, KDE and GNOME panels hit the D-Bus default timeout (25–30s) before giving up. With them, the same queries return in <100ms.
 

@@ -23,6 +23,7 @@
 #include <sys/signalfd.h>
 #include <glob.h>
 #include <sys/ioctl.h>
+#include <grp.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -70,18 +71,22 @@ static void eviction_tick(void) {
     int i = 0;
     while (i < eviction_count) {
         if (now < evictions[i].deadline) { i++; continue; }
+        int killed = 0;
         if (evictions[i].cgroup[0]) {
             char path[160];
             int fd;
             snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
             fd = open(path, O_WRONLY);
-            if (fd >= 0) { write(fd, "1", 1); close(fd); }
-            else {
-                kill(evictions[i].pid, SIGKILL);
-            }
-            printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
-                   (int)evictions[i].pid);
+            if (fd >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
         }
+        /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
+         * previously this whole branch was gated on cgroup[0], so an orphan
+         * with no cgroup that ignored SIGTERM survived eviction entirely. */
+        if (!killed) {
+            kill(evictions[i].pid, SIGKILL);
+        }
+        printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
+               (int)evictions[i].pid);
         evictions[i] = evictions[--eviction_count];
     }
 }
@@ -159,6 +164,10 @@ static void mount_pseudo(void) {
     mount("proc",    "/proc", "proc",     MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     mount("sysfs",   "/sys",  "sysfs",    MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     mount("devtmpfs","/dev",  "devtmpfs", MS_NOSUID|MS_STRICTATIME,     NULL);
+    mkdir("/dev/pts", 0755);
+    mount("devpts",  "/dev/pts", "devpts", MS_NOSUID|MS_NOEXEC,        "gid=5,mode=620,ptmxmode=666");
+    mkdir("/dev/shm", 1777);
+    mount("tmpfs",   "/dev/shm", "tmpfs", MS_NOSUID|MS_NODEV,          "mode=1777");
     mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755");
     mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
     int cg_fd = open("/sys/fs/cgroup/cgroup.subtree_control", O_WRONLY);
@@ -495,8 +504,8 @@ static void monitor_failsafes(void) {
             if (elapsed_ms >= timeout_ms) {
                 service_log(svc, "failsafe-timeout");
                 kill(svc->failsafe_pid, SIGKILL);
-                waitpid(svc->failsafe_pid, &status, 0);
-                svc->failsafe_pid = 0;
+                /* don't block PID 1 waiting on it — the WNOHANG poll at the top
+                 * of this loop reaps it on the next tick. */
             }
         }
     }
@@ -521,7 +530,16 @@ static void active_kill_service(service_t *svc) {
     }
     
     kill(svc->child_pid, SIGKILL);
-    waitpid(svc->child_pid, &status, 0);
+    /* bounded non-blocking reap: never block PID 1 on a process wedged in
+     * uninterruptible (D) state — e.g. a deadlocked SPI/NFS driver. If it
+     * doesn't die within the window, leave the zombie for the signalfd
+     * reaper and proceed so the main loop can't hang. */
+    elapsed_ms = 0;
+    while (elapsed_ms < 50) {
+        if (waitpid(svc->child_pid, &status, WNOHANG) == svc->child_pid) break;
+        usleep(1000);
+        elapsed_ms++;
+    }
     svc->child_pid = 0;
     service_cgroup_kill(svc);
 }
@@ -973,7 +991,7 @@ static void set_nonblock(int fd) {
 static void ctl_init(void) {
     struct sockaddr_un addr;
     unlink(CTL_SOCK_PATH);
-    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (ctl_fd < 0) return;
     set_nonblock(ctl_fd);
     memset(&addr, 0, sizeof(addr));
@@ -988,8 +1006,27 @@ static void ctl_init(void) {
             close(ctl_fd); ctl_fd = -1; return;
         }
     }
-    chmod(addr.sun_path, 0600);
+    /* If a "schema" group exists, grant it read-only access (status/list/timing)
+     * by opening the socket to root:schema 0660. Writes are still gated per-call
+     * by peer uid in ctl_poll(). No group → root-only 0600 as before. */
+    {
+        struct group *g = getgrnam("schema");
+        if (g && chown(addr.sun_path, 0, g->gr_gid) == 0)
+            chmod(addr.sun_path, 0660);
+        else
+            chmod(addr.sun_path, 0600);
+    }
     listen(ctl_fd, 4);
+}
+
+/* Read-only verbs any connected uid may run. Everything else needs uid 0.
+ * Match the first whitespace-delimited token exactly so e.g. "statusfoo" is
+ * not treated as "status" (anchored allowlist); "status --json" still passes. */
+static int ctl_is_readonly(const char *line) {
+    size_t n = strcspn(line, " \t");
+    return (n == 6 && memcmp(line, "status", 6) == 0)
+        || (n == 4 && memcmp(line, "list", 4) == 0)
+        || (n == 6 && memcmp(line, "timing", 6) == 0);
 }
 
 static void ctl_poll(void) {
@@ -998,9 +1035,18 @@ static void ctl_poll(void) {
     ssize_t n;
     struct timeval tv = {0, 100000}; /* 100ms receive timeout */
     if (ctl_fd < 0) return;
-    cfd = accept(ctl_fd, NULL, NULL);
+    cfd = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC);
     if (cfd < 0) return;
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    /* Peer identity: root may run everything; schema-group members (allowed in
+     * by the 0660 socket) get read-only verbs only. */
+    struct ucred cred;
+    socklen_t clen = sizeof(cred);
+    uid_t peer_uid = (uid_t)-1;
+    if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &clen) == 0)
+        peer_uid = cred.uid;
+
     while (pos < (int)sizeof(buf) - 1) {
         n = recv(cfd, buf + pos, 1, 0);
         if (n <= 0) break;
@@ -1008,7 +1054,14 @@ static void ctl_poll(void) {
     }
     if (pos > 0) {
         buf[pos] = '\0';
-        ctl_cmd(cfd, buf);
+        buf[strcspn(buf, "\r\n")] = '\0';
+        if (peer_uid != 0 && !ctl_is_readonly(buf)) {
+            ctl_writef(cfd, "err: '%s' requires root (uid %d has read-only access)\n",
+                       buf, (int)peer_uid);
+            write(cfd, ".\n", 2);
+        } else {
+            ctl_cmd(cfd, buf);
+        }
     }
     close(cfd);
 }
