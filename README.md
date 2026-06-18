@@ -297,9 +297,8 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 
 These are real gaps, not future features being teased:
 
-- **Runtime service removal not supported** — `schema-ctl add <path>` loads new services at runtime, but there is no remove command yet. Removing a service requires a restart of the init.
-- **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off.
-- **No dependency cycle detection at runtime** — cycles stall in `NEW_PROCESS` indefinitely. Cycle detection runs at load time and drops to a rescue shell, but runtime cycle introduction via schema-ctl is not guarded.
+- **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
+- **`schema-ctl add` does not check for dependency cycles** — cycle detection runs at load time (drops to a rescue shell) and on `schema-ctl reload` (the reload is rejected if the new configuration contains a cycle), but a cycle introduced via `add` is not guarded — the service simply stalls in `NEW_PROCESS` indefinitely.
 
 ---
 
@@ -476,6 +475,8 @@ sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service
 sudo schema-ctl restart <name>  # stop + re-queue through the state machine
 sudo schema-ctl add <path>      # load a new .svc file at runtime, no reboot needed
+sudo schema-ctl reload          # re-read the services directory (rejected if new config has a cycle)
+sudo schema-ctl reload --evict  # reload + SIGTERM any running service no longer present in config
 sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
 sudo schema-ctl reset [<name>]  # reset restart/dormant counts and re-queue failed services
 ```
@@ -742,6 +743,7 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 ## Roadmap
 
 - [x] Runtime service loading — `schema-ctl add <path>` loads a new service at runtime
+- [x] Runtime reload + removal — `schema-ctl reload [--evict]` re-reads config (cycle-checked); `--evict` SIGTERMs services dropped from config, no reboot
 - [x] login1 D-Bus stub — `schema-logind` restores KDE shutdown/restart buttons on no-systemd systems
 - [x] event-driven main loop — signalfd for SIGCHLD + poll() with 250ms timeout; wakes on child death and ctl commands instead of busy-polling
 - [x] Boot hang fix — dep_idx alignment bug in group dep resolution; poll() replaces epoll (PID 1 epoll deadlock on kernel 6.1.0-49)
