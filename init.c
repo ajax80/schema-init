@@ -65,6 +65,7 @@ static struct timespec init_start;
 static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
 static void handle_reload(int evict_mode);
+static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 
 static void eviction_tick(void) {
     time_t now = time(NULL);
@@ -923,7 +924,7 @@ static void ctl_cmd(int fd, char *line) {
 
     } else if (strncmp(line, "add ", 4) == 0) {
         const char *path = line + 4;
-        int j, k, ds;
+        int j, k;
         if (svc_count >= MAX_SERVICES) {
             ctl_writef(fd, "err: MAX_SERVICES (%d) reached\n", MAX_SERVICES);
             write(fd, ".\n", 2);
@@ -937,19 +938,20 @@ static void ctl_cmd(int fd, char *line) {
         for (j = 0; j < svc_count; j++) {
             if (strcmp(services[j].name, services[svc_count].name) == 0) {
                 ctl_writef(fd, "err: '%s' already loaded\n", services[svc_count].name);
+                for (k = 1; k < MAX_ARGV; k++)
+                    if (services[svc_count].argv[k]) { free(services[svc_count].argv[k]); services[svc_count].argv[k] = NULL; }
                 write(fd, ".\n", 2);
                 return;
             }
         }
-        k = 0;
-        for (ds = 0; ds < MAX_DEPS; ds++) {
-            if (!services[svc_count].dep_name[ds][0]) break;
-            for (j = 0; j < svc_count; j++) {
-                if (strcmp(services[j].name, services[svc_count].dep_name[ds]) == 0) {
-                    services[svc_count].dep_idx[k++] = j;
-                    break;
-                }
-            }
+        if (validate_and_resolve(services, svc_count + 1, groups, grp_count) > 0) {
+            ctl_writef(fd, "err: '%s' introduces a dependency cycle — rejected\n", services[svc_count].name);
+            for (k = 1; k < MAX_ARGV; k++)
+                if (services[svc_count].argv[k]) { free(services[svc_count].argv[k]); services[svc_count].argv[k] = NULL; }
+            memset(&services[svc_count], 0, sizeof(service_t));
+            validate_and_resolve(services, svc_count, groups, grp_count);
+            write(fd, ".\n", 2);
+            return;
         }
         ctl_writef(fd, "ok: %s queued\n", services[svc_count].name);
         svc_count++;
