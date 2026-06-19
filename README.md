@@ -298,7 +298,6 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 These are real gaps, not future features being teased:
 
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
-- **`schema-ctl add` does not check for dependency cycles** — cycle detection runs at load time (drops to a rescue shell) and on `schema-ctl reload` (the reload is rejected if the new configuration contains a cycle), but a cycle introduced via `add` is not guarded — the service simply stalls in `NEW_PROCESS` indefinitely.
 
 ---
 
