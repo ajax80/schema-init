@@ -21,6 +21,7 @@
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
 #define SVC_NO_RESTART  (1 << 3)  /* 76 on any death, no recovery arc     */
 #define SVC_TIMER       (1 << 4)  /* periodic: re-arm to NEW_PROCESS on clock */
+#define SVC_TIMER_CALENDAR (1 << 5) /* timer_next is a CLOCK_REALTIME wall-clock target */
 
 typedef enum {
     PRIO_PERIPHERAL = 0,
@@ -88,7 +89,9 @@ typedef struct {
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
     int              timer_boot_sec;     /* on_boot_sec: delay from boot to first fire     */
     int              timer_interval_sec; /* on_active_sec: gap after each completion        */
-    struct timespec  timer_next;         /* CLOCK_MONOTONIC next-fire deadline (SVC_TIMER)   */
+    int              timer_cal_hour;     /* on_calendar=HH:MM hour; -1 = not a calendar timer */
+    int              timer_cal_min;      /* on_calendar=HH:MM minute                          */
+    struct timespec  timer_next;         /* next-fire deadline: CLOCK_MONOTONIC, or CLOCK_REALTIME if SVC_TIMER_CALENDAR */
 } service_t;
 
 /* build the F8 flag word by inspecting the real system */
