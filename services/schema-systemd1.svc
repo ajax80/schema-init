@@ -1,0 +1,5 @@
+name=schema-systemd1
+exec=/usr/local/bin/schema-systemd1.py
+dep=dbus
+needs_root=1
+critical=0
