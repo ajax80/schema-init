@@ -79,10 +79,25 @@ clock steps (chrony stepping the clock after boot) self-correct at the next fire
 whatever the clock said at arm time and fire at the wrong wall-clock minute if the
 clock later moved.
 
-**No catch-up (yet):** if the machine is off when `HH:MM` passes, the missed run
-is *not* replayed at next boot — arming simply picks the next future occurrence.
-That is plain (non-`Persistent=`) systemd-timer behaviour. Persistent catch-up is
-the follow-up below.
+**Catch-up (`persistent=1`):** by default a fire missed during downtime is *not*
+replayed — arming picks the next future occurrence (plain non-`Persistent=`
+behaviour). Setting `persistent=1` opts a calendar timer into catch-up:
+
+- Last run is stamped to `/var/lib/schema-init/timers/<name>.stamp` (the realtime
+  epoch) on every completion (`timer_stamp_write` in `reap()`).
+- At **boot/reload arm only** (`timer_arm_persistent`), compute the most recent
+  past `HH:MM` occurrence (`calendar_recent_occurrence`). If it is newer than the
+  stamp, a fire was due while we were down → `timer_next = now` so it fires on the
+  next tick (logged `timer-catchup`). Otherwise arm normally.
+- A timer with **no stamp** (never run) is *seeded* with the current time rather
+  than replayed, so enabling a persistent timer doesn't fire spuriously on first
+  boot.
+- Re-arm after a normal fire never catches up — only the initial arm does, so a
+  single missed window produces a single catch-up, not a storm.
+
+`persistent=1` is meaningful only with `on_calendar` (matching systemd, where
+`Persistent=` pairs with `OnCalendar`); on an interval timer it is logged and
+ignored.
 
 ## Precision
 
@@ -95,13 +110,14 @@ the real-time control loop are for.
 **PR #7:** interval timers — `on_boot_sec` + `on_active_sec`.
 Covers the bulk of cron use (`fstrim`, log rotation, backups, mem-sync).
 
-**This feature:** calendar timers — `on_calendar=HH:MM` daily wall-clock fire
+**Calendar timers:** `on_calendar=HH:MM` daily wall-clock fire
 (`CLOCK_REALTIME`, DST/NTP-safe via per-cycle recompute).
+
+**This feature:** `persistent=1` catch-up for calendar timers — run a missed fire
+once at boot, last-run stamped under `/var/lib/schema-init/timers/`.
 
 **Known gaps (not yet implemented):**
 
-- **Persistent / catch-up** (systemd `Persistent=true`, run jobs missed during
-  downtime) — needs last-run stamped to disk. Next follow-up.
 - **Richer calendar forms** — day-of-week, multiple times per day, `*:0/15`
   style. Single daily `HH:MM` only for now.
 - **Reload** — `schema-ctl reload` reloads a timer in `NEW_PROCESS`, so it fires
