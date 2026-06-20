@@ -96,3 +96,28 @@ cgroup resource APIs). Unmapped **methods** return a proper `org.freedesktop.DBu
   never run both claiming `org.freedesktop.systemd1`.
 - **dbus-python dynamic objects:** avoid path re-registration leaks on unit churn; unregister removed units.
 - **Poll lag:** ~1s signal latency (acceptable for v1; Approach 2 removes it later).
+
+## v1 Deployment Results (2026-06-20, live on blakbox)
+
+Deployed live (logind restarted to release the name; seatd owns the seat so no
+display disruption; logind backed up to `schema-logind.py.bak-20260620-systemd1`).
+Two bugs surfaced only under the real deployment (not the isolated bus test):
+
+1. **`schema-ctl` not on the service PATH** — schema-init's service env lacks
+   `/usr/local/bin`, so `subprocess.run(['schema-ctl', ...])` failed and zero
+   units were created. Fixed: call by absolute path (`SCHEMA_CTL`).
+2. **`GetAll("")` returned `{}`** — `systemctl` fetches all properties via
+   `GetAll("")` (empty interface); we only matched exact interface names, so
+   `status` got nothing and aborted on the null `Id`. Fixed: empty interface
+   returns the union of all interfaces' properties.
+
+**Verified working via real systemctl:** `list-units` (35 services), `status
+frigate` (active/running, MainPID 21102), `mount-efi` active(exited) oneshot,
+non-root `systemctl restart` (exit 0), direct D-Bus `RestartUnit` (Cockpit/KCM
+path) returns a job.
+
+**Known limitation → next milestone:** `sudo systemctl <verb>` (root) prefers
+systemd's private transport `/run/systemd/private`, which schema-init does not
+provide, so root-CLI systemctl fails (non-root + all D-Bus GUIs work). Closing
+this means serving the sd-bus private socket at `/run/systemd/private` — a
+deliberate follow-on, since a malformed one makes systemctl prefer-then-fail.

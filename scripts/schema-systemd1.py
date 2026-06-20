@@ -15,6 +15,11 @@ from gi.repository import GLib
 # service management. One-line change if a client tries unmapped 256-era APIs.
 SYSTEMD_COMPAT_VERSION = "256"
 
+# Absolute path: under schema-init's service environment PATH does not include
+# /usr/local/bin, so a bare 'schema-ctl' is not found (and an absolute path also
+# avoids PATH-hijack for this root daemon).
+SCHEMA_CTL = "/usr/local/bin/schema-ctl"
+
 # Unit names reach schema_ctl() from D-Bus callers (any local client on the
 # system bus) and we run as root. schema-ctl's wire protocol is newline-
 # delimited text, so an unvalidated name with a newline/space could smuggle a
@@ -27,7 +32,7 @@ def schema_ctl(action, name):
         print(f"systemd1: refusing unsafe unit name {name!r}", file=sys.stderr)
         return
     try:
-        subprocess.run(['schema-ctl', action, name], capture_output=True, timeout=5)
+        subprocess.run([SCHEMA_CTL, action, name], capture_output=True, timeout=5)
     except Exception as e:
         print(f"systemd1: schema-ctl {action} {name} failed: {e}", file=sys.stderr)
 
@@ -112,34 +117,47 @@ class Systemd1Unit(dbus.service.Object):
                 name='org.freedesktop.DBus.Error.UnknownProperty')
         return props[property_name]
 
+    def _unit_props(self):
+        return {
+            'Id': dbus.String(self.name),
+            'Names': dbus.Array([dbus.String(self.name)], signature='s'),
+            'Description': dbus.String(self.description),
+            'LoadState': dbus.String('loaded'),
+            'ActiveState': dbus.String(self.active_state),
+            'SubState': dbus.String(self.sub_state),
+            'UnitFileState': dbus.String(self.unit_file_state),
+            'UnitFilePreset': dbus.String('enabled'),
+            'FragmentPath': dbus.String(f'/etc/schema-init/services/{self.short_name}.svc'),
+            'ActiveEnterTimestamp': dbus.UInt64(self.active_enter_timestamp),
+            'Job': dbus.Struct((dbus.UInt32(0), dbus.ObjectPath('/')), signature='uo'),
+            'CanStart': dbus.Boolean(True),
+            'CanStop': dbus.Boolean(True),
+            'CanReload': dbus.Boolean(False),
+            'CanRestart': dbus.Boolean(True),
+        }
+
+    def _service_props(self):
+        return {
+            'Type': dbus.String(self.service_type),
+            'MainPID': dbus.UInt32(self.pid),
+            'ExecMainPID': dbus.UInt32(self.pid),
+            'NRestarts': dbus.UInt32(self.restarts),
+            'Result': dbus.String('success'),
+        }
+
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
+        # systemctl/sd-bus calls GetAll("") to fetch every property across all
+        # interfaces at once; an empty interface must return the union, or
+        # status/show get nothing and systemctl aborts on the null Id.
         if interface_name == 'org.freedesktop.systemd1.Unit':
-            return {
-                'Id': dbus.String(self.name),
-                'Names': dbus.Array([dbus.String(self.name)], signature='s'),
-                'Description': dbus.String(self.description),
-                'LoadState': dbus.String('loaded'),
-                'ActiveState': dbus.String(self.active_state),
-                'SubState': dbus.String(self.sub_state),
-                'UnitFileState': dbus.String(self.unit_file_state),
-                'UnitFilePreset': dbus.String('enabled'),
-                'FragmentPath': dbus.String(f'/etc/schema-init/services/{self.short_name}.svc'),
-                'ActiveEnterTimestamp': dbus.UInt64(self.active_enter_timestamp),
-                'Job': dbus.Struct((dbus.UInt32(0), dbus.ObjectPath('/')), signature='uo'),
-                'CanStart': dbus.Boolean(True),
-                'CanStop': dbus.Boolean(True),
-                'CanReload': dbus.Boolean(False),
-                'CanRestart': dbus.Boolean(True),
-            }
-        elif interface_name == 'org.freedesktop.systemd1.Service':
-            return {
-                'Type': dbus.String(self.service_type),
-                'MainPID': dbus.UInt32(self.pid),
-                'ExecMainPID': dbus.UInt32(self.pid),
-                'NRestarts': dbus.UInt32(self.restarts),
-                'Result': dbus.String('success'),
-            }
+            return self._unit_props()
+        if interface_name == 'org.freedesktop.systemd1.Service':
+            return self._service_props()
+        if not interface_name:
+            props = self._unit_props()
+            props.update(self._service_props())
+            return props
         return {}
 
     @dbus.service.signal('org.freedesktop.DBus.Properties', signature='sa{sv}as')
@@ -159,7 +177,7 @@ class Systemd1Manager(dbus.service.Object):
     def poll_and_update(self):
         try:
             # Query schema-ctl status --json
-            res = subprocess.run(['schema-ctl', 'status', '--json'], capture_output=True, text=True, timeout=5)
+            res = subprocess.run([SCHEMA_CTL, 'status', '--json'], capture_output=True, text=True, timeout=5)
             if res.returncode == 0:
                 data = json.loads(res.stdout)
                 services_list = data.get('services', [])
@@ -314,7 +332,7 @@ class Systemd1Manager(dbus.service.Object):
     def Reload(self):
         print("systemd1: Reload requested")
         try:
-            subprocess.run(['schema-ctl', 'reload'], capture_output=True, timeout=5)
+            subprocess.run([SCHEMA_CTL, 'reload'], capture_output=True, timeout=5)
         except Exception as e:
             print(f"systemd1: schema-ctl reload failed: {e}", file=sys.stderr)
 
@@ -329,7 +347,8 @@ class Systemd1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.systemd1.Manager':
+        # As on units, GetAll("") must return the Manager's properties too.
+        if interface_name == 'org.freedesktop.systemd1.Manager' or not interface_name:
             return {
                 'Version': dbus.String(SYSTEMD_COMPAT_VERSION),
                 'SystemState': dbus.String('running'),
