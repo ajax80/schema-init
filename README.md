@@ -595,14 +595,14 @@ for (int i = 0; i < shm->count; i++) {
 
 ## D-Bus compatibility
 
-On a no-systemd desktop, several interfaces are missing that desktop environments expect. schema-logind (`distros/*/services/schema-logind.svc`) handles all of them in a single Python process on the system bus.
+On a no-systemd desktop, several interfaces are missing that desktop environments expect. schema-logind (`distros/*/services/schema-logind.svc`) handles the session/power/host interfaces in a single Python process on the system bus. The `org.freedesktop.systemd1` management surface is served by its own process — see below.
 
 | Interface | Why it matters | What schema-logind returns |
 |-----------|---------------|---------------------------|
 | `org.freedesktop.login1` | Power/reboot buttons, session tracking, polkit seat queries | PowerOff, Reboot, CanPowerOff, CanReboot, Inhibit, GetSessionByPID, mock Session/User/Seat objects |
 | `org.freedesktop.ConsoleKit` | Cinnamon session manager uses ConsoleKit, not logind, for CanRestart/CanStop — controls restart button visibility | GetSessionForUnixProcess, CanRestart → True, CanStop → True, Restart/Stop → SIGINT/SIGTERM to PID 1 |
 | `org.freedesktop.hostname1` | About This System panel, network-manager display | hostname, static hostname, OS pretty name, hardware vendor/model from `/sys/class/dmi/` |
-| `org.freedesktop.systemd1.Manager` | KDE System Settings queries unit state on open | GetUnitFileState → "enabled"; GetUnit, ListUnits, Version/Features/Architecture properties |
+| `org.freedesktop.systemd1` | `systemctl`, Cockpit's Services page, and KDE/GNOME unit-state queries — the full systemd-compat management surface | **Live** per-unit ActiveState/SubState/MainPID/NRestarts mapped from `schema-ctl`; ListUnits/ListUnitsFiltered, GetUnit, GetUnitFileState, StartUnit/StopUnit/RestartUnit driving `schema-ctl` for real; PropertiesChanged on state transitions. Served by a **separate** `schema-systemd1` process (see below) |
 | `org.freedesktop.timedate1` | Date & Time settings panel: timezone, NTP status, clock | Timezone (from `/etc/localtime`), CanNTP/NTP/NTPSynchronized → true, TimeUSec; `SetTimezone` re-links `/etc/localtime` and writes `/etc/timezone` for real |
 
 Without these stubs, KDE and GNOME panels hit the D-Bus default timeout (25–30s) before giving up. With them, the same queries return in <100ms.
@@ -627,6 +627,8 @@ dep=schema-logind
 dep=polkitd
 needs_root=1
 ```
+
+**The real systemd1 surface (`schema-systemd1`).** Unlike the read-only stubs above, `org.freedesktop.systemd1` is served by its own process (`services/schema-systemd1.svc` → `scripts/schema-systemd1.py`), not schema-logind. It registers every schema-init unit as a `…/unit/<name>_2eservice` object and mirrors live state from `schema-ctl`, so `systemctl status <svc>` and Cockpit's Services page show real ActiveState/SubState/MainPID/restart counts — and `StartUnit`/`StopUnit`/`RestartUnit` drive `schema-ctl` for real. Unit names are validated before being handed to `schema-ctl` (argv/newline injection guard). State transitions emit `PropertiesChanged`, so Cockpit updates without a refresh. Design notes: `docs/superpowers/specs/2026-06-20-schema-systemd1-dbus-design.md`.
 
 **The `sd_booted()` signal.** `mount_pseudo()` creates `/run/systemd/system` at early boot (`init.c`). `libsystemd`'s `sd_booted()` is a bare `access()` on that path, so any software gated on "is systemd the init?" — KService/ksycoca, elogind clients — gets a positive answer with no shim. This is what made the old `LD_PRELOAD` `mock_sd.so` workaround (which faked the check to stop KDE's ksycoca from spinning at idle) unnecessary: the signal is now native and costs one `mkdir`.
 
