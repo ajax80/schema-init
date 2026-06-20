@@ -70,6 +70,7 @@ typedef struct {
     int              exit_status;
     int              cpu_limit_pct;    /* 1-100: % of one CPU core via cpu.max; 0 = unlimited */
     long             mem_limit_mb;     /* MB hard cap via memory.max; 0 = unlimited */
+    char             cpuset[64];       /* CPU affinity list for cpuset.cpus (e.g. "2,3"); empty = unconstrained */
     int              allowed_slot_min; /* slot boundary gate: -1 = unconstrained */
     int              allowed_slot_max; /* slot boundary gate: -1 = unconstrained */
     uint32_t         content_hash;     /* FNV-1a hash of the parsed .svc file at load time */
