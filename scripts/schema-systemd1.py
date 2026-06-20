@@ -5,6 +5,7 @@ import signal
 import time
 import subprocess
 import json
+import re
 import dbus
 import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
@@ -14,7 +15,17 @@ from gi.repository import GLib
 # service management. One-line change if a client tries unmapped 256-era APIs.
 SYSTEMD_COMPAT_VERSION = "256"
 
+# Unit names reach schema_ctl() from D-Bus callers (any local client on the
+# system bus) and we run as root. schema-ctl's wire protocol is newline-
+# delimited text, so an unvalidated name with a newline/space could smuggle a
+# second root command into the control socket. Allow only safe chars and reject
+# a leading '-'; this still permits real names like getty-tty2 / mount-efi.
+_UNIT_RE = re.compile(r'^[A-Za-z0-9:_.@-]+$')
+
 def schema_ctl(action, name):
+    if not name or name.startswith('-') or not _UNIT_RE.match(name):
+        print(f"systemd1: refusing unsafe unit name {name!r}", file=sys.stderr)
+        return
     try:
         subprocess.run(['schema-ctl', action, name], capture_output=True, timeout=5)
     except Exception as e:
