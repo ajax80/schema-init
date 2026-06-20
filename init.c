@@ -327,6 +327,15 @@ static void reap(void) {
             } else if (services[i].flags & SVC_NO_RESTART) {
                 services[i].inst.state = STATE_EXCISED;
                 service_log(&services[i], "76-no-restart");
+                /* Explicit stop/down lands here straight from reap() — it
+                 * never crosses the FRICTION→EXCISED transition that the tick
+                 * loop uses to tear cgroups down, and case STATE_EXCISED is a
+                 * no-op. Without this an isolated cpuset partition keeps its
+                 * core carved out of general scheduling (and leaks the parent
+                 * cpuset.cpus.exclusive union) until reboot. Release here so
+                 * stop frees the reservation; cgroup_assign() rebuilds the
+                 * cgroup on any later start. */
+                service_cgroup_kill(&services[i]);
             } else {
                 /* unexpected death → enter recovery arc */
                 if (services[i].failsafe_cmd[0]) {
