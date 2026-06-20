@@ -209,25 +209,37 @@ static void cgroup_apply_limits(service_t *svc) {
         /* 1. Reserve these cores in schema-init's exclusive union.
          *    Read-modify-write the live value; the kernel resolves the union
          *    and dedups. Strip the trailing newline; no leading comma when
-         *    the existing set is empty. */
+         *    the existing set is empty. Fail-closed if excl read fills the
+         *    buffer — a truncated prefix would corrupt another service's
+         *    reservation, so skip the parent write and let step 4 degrade. */
         {
-            char excl[256] = {0};
-            char merged[320];
+            char excl[512] = {0};
+            char merged[640];
             int rfd = open("/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive",
                            O_RDONLY);
+            int truncated = 0;
             if (rfd >= 0) {
                 r = read(rfd, excl, sizeof(excl) - 1);
                 close(rfd);
                 if (r > 0) excl[r] = '\0';
+                if (r == (ssize_t)(sizeof(excl) - 1)) truncated = 1;
             }
             excl[strcspn(excl, "\n")] = '\0';
             if (excl[0])
                 snprintf(merged, sizeof(merged), "%s,%s", excl, svc->cpuset);
             else
                 snprintf(merged, sizeof(merged), "%s", svc->cpuset);
-            fd = open("/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive",
-                      O_WRONLY);
-            if (fd >= 0) { write(fd, merged, strlen(merged)); close(fd); }
+            if (truncated) {
+                fprintf(stderr,
+                        "[schema-init] HAZARD: '%s' parent cpuset.cpus.exclusive"
+                        " too large to extend safely — skipping parent write,"
+                        " partition will degrade to plain pinning\n",
+                        svc->name);
+            } else {
+                fd = open("/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive",
+                          O_WRONLY);
+                if (fd >= 0) { write(fd, merged, strlen(merged)); close(fd); }
+            }
         }
 
         /* 2. Claim the cores exclusively for this service. */
@@ -363,6 +375,9 @@ int service_spawn(service_t *svc) {
     svc->last_pet   = svc->spawn_time_mono;
     svc->restart_count++;
     cgroup_assign(svc, pid);
+    /* cgroup v2 partition order: child cpuset.cpus → parent cpuset.cpus.exclusive
+     * → child cpuset.cpus.exclusive → child cpuset.cpus.partition; any other
+     * order breaks partition formation. */
     cgroup_apply_limits(svc);
     write(sync[1], "", 1);
     close(sync[1]);
