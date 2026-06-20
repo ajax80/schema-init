@@ -28,6 +28,12 @@ typedef enum {
     PRIO_CRITICAL
 } prio_t;
 
+enum {
+    PART_MEMBER = 0,
+    PART_ROOT,
+    PART_ISOLATED
+};
+
 typedef struct {
     char             name[64];
     char             instance[32];    /* template instance ID, e.g. "12" from motor@12.svc */
@@ -71,6 +77,7 @@ typedef struct {
     int              cpu_limit_pct;    /* 1-100: % of one CPU core via cpu.max; 0 = unlimited */
     long             mem_limit_mb;     /* MB hard cap via memory.max; 0 = unlimited */
     char             cpuset[64];       /* CPU affinity list for cpuset.cpus (e.g. "2,3"); empty = unconstrained */
+    int              cpuset_partition; /* PART_MEMBER/ROOT/ISOLATED; cgroupv2 cpuset.cpus.partition */
     int              allowed_slot_min; /* slot boundary gate: -1 = unconstrained */
     int              allowed_slot_max; /* slot boundary gate: -1 = unconstrained */
     uint32_t         content_hash;     /* FNV-1a hash of the parsed .svc file at load time */

@@ -401,6 +401,12 @@ static uint32_t fnv1a_file(const char *path) {
  *   critical=0
  */
 
+static int parse_partition(const char *val) {
+    if (strcasecmp(val, "isolated") == 0) return PART_ISOLATED;
+    if (strcasecmp(val, "root") == 0)     return PART_ROOT;
+    return PART_MEMBER;
+}
+
 int services_load(const char *dir, service_t *table, int max) {
     DIR *d = opendir(dir);
     struct dirent *ent;
@@ -502,6 +508,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->mem_limit_mb = atol(val);
             } else if (strcmp(line, "cpuset") == 0) {
                 strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
+            } else if (strcmp(line, "cpuset_partition") == 0) {
+                svc->cpuset_partition = parse_partition(val);
             } else if (strcmp(line, "allowed_slot_min") == 0) {
                 svc->allowed_slot_min = atoi(val);
             } else if (strcmp(line, "allowed_slot_max") == 0) {
@@ -526,6 +534,12 @@ int services_load(const char *dir, service_t *table, int max) {
             }
         }
         fclose(f);
+        if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
+            fprintf(stderr,
+                    "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
+                    "— ignoring (no cores to isolate)\n", svc->name);
+            svc->cpuset_partition = PART_MEMBER;
+        }
         svc->content_hash = fnv1a_file(path);
 
         /* default start timeout: protect oneshots (but not timers, which may
@@ -661,6 +675,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->mem_limit_mb = atol(val);
         } else if (strcmp(line, "cpuset") == 0) {
             strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
+        } else if (strcmp(line, "cpuset_partition") == 0) {
+            svc->cpuset_partition = parse_partition(val);
         } else if (strcmp(line, "allowed_slot_min") == 0) {
             svc->allowed_slot_min = atoi(val);
         } else if (strcmp(line, "allowed_slot_max") == 0) {
@@ -681,6 +697,12 @@ int service_load_one(const char *path, service_t *svc) {
         }
     }
     fclose(f);
+    if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
+        fprintf(stderr,
+                "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
+                "— ignoring (no cores to isolate)\n", svc->name);
+        svc->cpuset_partition = PART_MEMBER;
+    }
 
     if (svc->start_timeout_sec == -1) {
         svc->start_timeout_sec =
