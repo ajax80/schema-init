@@ -129,7 +129,7 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     mkdir("/sys/fs/cgroup/schema-init", 0755);
     int sub_fd = open("/sys/fs/cgroup/schema-init/cgroup.subtree_control", O_WRONLY);
     if (sub_fd >= 0) {
-        write(sub_fd, "+cpu +memory", 12);
+        write(sub_fd, "+cpu +memory +cpuset", 20);
         close(sub_fd);
     }
     snprintf(svc->cgroup_path, sizeof(svc->cgroup_path),
@@ -186,6 +186,15 @@ static void cgroup_apply_limits(service_t *svc) {
         if (fd >= 0) {
             n = snprintf(buf, sizeof(buf), "%d\n", weight);
             write(fd, buf, (size_t)n);
+            close(fd);
+        }
+    }
+
+    if (svc->cpuset[0]) {
+        snprintf(path, sizeof(path), "%s/cpuset.cpus", svc->cgroup_path);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0) {
+            write(fd, svc->cpuset, strlen(svc->cpuset));
             close(fd);
         }
     }
@@ -491,6 +500,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->cpu_limit_pct = atoi(val);
             } else if (strcmp(line, "mem_limit") == 0) {
                 svc->mem_limit_mb = atol(val);
+            } else if (strcmp(line, "cpuset") == 0) {
+                strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
             } else if (strcmp(line, "allowed_slot_min") == 0) {
                 svc->allowed_slot_min = atoi(val);
             } else if (strcmp(line, "allowed_slot_max") == 0) {
@@ -648,6 +659,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->cpu_limit_pct = atoi(val);
         } else if (strcmp(line, "mem_limit") == 0) {
             svc->mem_limit_mb = atol(val);
+        } else if (strcmp(line, "cpuset") == 0) {
+            strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
         } else if (strcmp(line, "allowed_slot_min") == 0) {
             svc->allowed_slot_min = atoi(val);
         } else if (strcmp(line, "allowed_slot_max") == 0) {
