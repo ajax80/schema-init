@@ -700,6 +700,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 if (parse_calendar(svc, val) != 0)
                     fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
                             "(want HH:MM 00:00-23:59) — ignoring\n", svc->name, val);
+            } else if (strcmp(line, "persistent") == 0) {
+                if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
             } else if (strcmp(line, "user") == 0) {
                 struct passwd *pw = getpwnam(val);
                 if (pw) {
@@ -715,6 +717,11 @@ int services_load(const char *dir, service_t *table, int max) {
                     "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
                     "— ignoring (no cores to isolate)\n", svc->name);
             svc->cpuset_partition = PART_MEMBER;
+        }
+        if ((svc->flags & SVC_TIMER_PERSIST) && !(svc->flags & SVC_TIMER_CALENDAR)) {
+            fprintf(stderr, "[schema-init] WARN: '%s' persistent=1 needs on_calendar "
+                    "— ignoring (catch-up only applies to calendar timers)\n", svc->name);
+            svc->flags &= ~SVC_TIMER_PERSIST;
         }
         svc->content_hash = fnv1a_file(path);
 
@@ -872,6 +879,8 @@ int service_load_one(const char *path, service_t *svc) {
             if (parse_calendar(svc, val) != 0)
                 fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
                         "(want HH:MM 00:00-23:59) — ignoring\n", svc->name, val);
+        } else if (strcmp(line, "persistent") == 0) {
+            if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
         } else if (strcmp(line, "user") == 0) {
             struct passwd *pw = getpwnam(val);
             if (pw) { svc->run_uid = pw->pw_uid; svc->run_gid = pw->pw_gid; }
@@ -883,6 +892,12 @@ int service_load_one(const char *path, service_t *svc) {
                 "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
                 "— ignoring (no cores to isolate)\n", svc->name);
         svc->cpuset_partition = PART_MEMBER;
+    }
+
+    if ((svc->flags & SVC_TIMER_PERSIST) && !(svc->flags & SVC_TIMER_CALENDAR)) {
+        fprintf(stderr, "[schema-init] WARN: '%s' persistent=1 needs on_calendar "
+                "— ignoring (catch-up only applies to calendar timers)\n", svc->name);
+        svc->flags &= ~SVC_TIMER_PERSIST;
     }
 
     if (svc->start_timeout_sec == -1) {
