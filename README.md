@@ -258,7 +258,18 @@ A timer is a oneshot that re-arms on a `CLOCK_MONOTONIC` deadline instead of sta
 
 The period is measured from completion, so a slow job never overlaps itself. Fires on the 250 ms tick (±1 tick) — cron-class precision, not sub-second. For real-time work use `watchdog_timeout_ms` and the control loop instead.
 
-**Not yet implemented:** `on_calendar=HH:MM` wall-clock fire, and persistent catch-up of jobs missed during downtime. See `docs/timers-design.md`.
+**Wall-clock timers** — set `on_calendar=HH:MM` to fire at a fixed local time every day, the way you'd write a cron line. This is the form you want for "3am backup", "midnight log rotation", "nightly cert renewal":
+
+```ini
+name=nightly-backup
+exec=/usr/local/bin/backup.sh
+needs_root=1
+on_calendar=03:00     # fire at 03:00 local time, every day
+```
+
+`on_calendar` re-evaluates the wall clock on every fire, so it tracks `CLOCK_REALTIME` (not monotonic) — DST shifts and NTP clock steps self-correct each cycle rather than drifting. Time is local (`/etc/localtime`). Malformed values (`want HH:MM`, `00:00`–`23:59`) are logged and ignored, never scheduled. If the system is off when the time passes, the job runs at the next occurrence — there is no missed-run catch-up yet.
+
+**Not yet implemented:** persistent catch-up of jobs missed during downtime (systemd `Persistent=true`), and richer calendar forms (day-of-week, multiple times). See `docs/timers-design.md`.
 
 ---
 

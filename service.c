@@ -564,6 +564,20 @@ static int parse_partition(const char *val) {
     return PART_MEMBER;
 }
 
+/* parse on_calendar=HH:MM into svc->timer_cal_{hour,min} and set the timer
+ * flags. Returns 0 on success, -1 on malformed input (caller leaves the
+ * service non-timer so a typo can't silently schedule garbage). */
+static int parse_calendar(service_t *svc, const char *val) {
+    int h = -1, m = -1;
+    char extra;
+    if (sscanf(val, "%d:%d%c", &h, &m, &extra) != 2) return -1;
+    if (h < 0 || h > 23 || m < 0 || m > 59) return -1;
+    svc->timer_cal_hour = h;
+    svc->timer_cal_min  = m;
+    svc->flags |= SVC_TIMER | SVC_TIMER_CALENDAR | SVC_ONESHOT;
+    return 0;
+}
+
 int services_load(const char *dir, service_t *table, int max) {
     DIR *d = opendir(dir);
     struct dirent *ent;
@@ -607,6 +621,7 @@ int services_load(const char *dir, service_t *table, int max) {
         svc->allowed_slot_min = -1;
         svc->allowed_slot_max = -1;
         svc->max_restarts = MAX_RESTARTS;
+        svc->timer_cal_hour = -1;
         int dep_slot = 0;
 
         argc = 0;
@@ -681,6 +696,10 @@ int services_load(const char *dir, service_t *table, int max) {
             } else if (strcmp(line, "on_active_sec") == 0) {
                 svc->timer_interval_sec = atoi(val);
                 svc->flags |= SVC_TIMER | SVC_ONESHOT;
+            } else if (strcmp(line, "on_calendar") == 0) {
+                if (parse_calendar(svc, val) != 0)
+                    fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
+                            "(want HH:MM 00:00-23:59) — ignoring\n", svc->name, val);
             } else if (strcmp(line, "user") == 0) {
                 struct passwd *pw = getpwnam(val);
                 if (pw) {
@@ -775,6 +794,7 @@ int service_load_one(const char *path, service_t *svc) {
     svc->allowed_slot_min = -1;
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
+    svc->timer_cal_hour = -1;
     argc = 0;
     dep_slot = 0;
 
@@ -848,6 +868,10 @@ int service_load_one(const char *path, service_t *svc) {
         } else if (strcmp(line, "on_active_sec") == 0) {
             svc->timer_interval_sec = atoi(val);
             svc->flags |= SVC_TIMER | SVC_ONESHOT;
+        } else if (strcmp(line, "on_calendar") == 0) {
+            if (parse_calendar(svc, val) != 0)
+                fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
+                        "(want HH:MM 00:00-23:59) — ignoring\n", svc->name, val);
         } else if (strcmp(line, "user") == 0) {
             struct passwd *pw = getpwnam(val);
             if (pw) { svc->run_uid = pw->pw_uid; svc->run_gid = pw->pw_gid; }

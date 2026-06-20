@@ -67,6 +67,31 @@ static void active_kill_service(service_t *svc);
 static void handle_reload(int evict_mode);
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 
+/* Arm a calendar timer: set timer_next to the next CLOCK_REALTIME instant at
+ * which local wall-clock reaches HH:MM, strictly in the future. Recomputed on
+ * every (re-)arm so DST and NTP clock steps self-correct each cycle. */
+static void timer_arm_calendar(service_t *svc) {
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    tm.tm_hour = svc->timer_cal_hour;
+    tm.tm_min  = svc->timer_cal_min;
+    tm.tm_sec  = 0;
+    tm.tm_isdst = -1;
+    time_t target = mktime(&tm);
+    if (target == (time_t)-1 || target <= now) {
+        localtime_r(&now, &tm);
+        tm.tm_mday += 1;
+        tm.tm_hour = svc->timer_cal_hour;
+        tm.tm_min  = svc->timer_cal_min;
+        tm.tm_sec  = 0;
+        tm.tm_isdst = -1;
+        target = mktime(&tm);
+    }
+    svc->timer_next.tv_sec  = target;
+    svc->timer_next.tv_nsec = 0;
+}
+
 static void eviction_tick(void) {
     time_t now = time(NULL);
     int i = 0;
@@ -302,7 +327,9 @@ static void reap(void) {
                  * interval 0 = run-once (only on_boot_sec): drop the flag so
                  * PERFECT becomes terminal instead of re-firing every tick. */
                 services[i].inst.state = STATE_PERFECT;
-                if (services[i].timer_interval_sec > 0) {
+                if (services[i].flags & SVC_TIMER_CALENDAR) {
+                    timer_arm_calendar(&services[i]);
+                } else if (services[i].timer_interval_sec > 0) {
                     struct timespec tn;
                     clock_gettime(CLOCK_MONOTONIC, &tn);
                     services[i].timer_next = tn;
@@ -733,7 +760,8 @@ static void tick_service(service_t *svc,
         case STATE_PERFECT:
             if (svc->flags & SVC_TIMER) {
                 struct timespec _tn;
-                clock_gettime(CLOCK_MONOTONIC, &_tn);
+                clock_gettime((svc->flags & SVC_TIMER_CALENDAR)
+                                  ? CLOCK_REALTIME : CLOCK_MONOTONIC, &_tn);
                 if (_tn.tv_sec > svc->timer_next.tv_sec ||
                     (_tn.tv_sec == svc->timer_next.tv_sec && _tn.tv_nsec >= svc->timer_next.tv_nsec)) {
                     svc->inst.state = STATE_NEW_PROCESS;
@@ -1306,8 +1334,12 @@ static void handle_reload(int evict_mode) {
         if (services[i].flags & SVC_TIMER) {
             if (services[i].timer_next.tv_sec == 0) {
                 services[i].inst.state = STATE_PERFECT;
-                services[i].timer_next = tnow;
-                services[i].timer_next.tv_sec += services[i].timer_boot_sec;
+                if (services[i].flags & SVC_TIMER_CALENDAR) {
+                    timer_arm_calendar(&services[i]);
+                } else {
+                    services[i].timer_next = tnow;
+                    services[i].timer_next.tv_sec += services[i].timer_boot_sec;
+                }
             }
         }
     }
@@ -1385,8 +1417,12 @@ int main(int argc, char **argv) {
         for (int ti = 0; ti < svc_count; ti++) {
             if (services[ti].flags & SVC_TIMER) {
                 services[ti].inst.state = STATE_PERFECT;
-                services[ti].timer_next = tnow;
-                services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
+                if (services[ti].flags & SVC_TIMER_CALENDAR) {
+                    timer_arm_calendar(&services[ti]);
+                } else {
+                    services[ti].timer_next = tnow;
+                    services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
+                }
             }
         }
     }
