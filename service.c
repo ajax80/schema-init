@@ -384,11 +384,83 @@ int service_spawn(service_t *svc) {
     return 0;
 }
 
+/* cpuset.cpus list ("0-3,7,11") → bitmap; tolerant of spaces/newlines. */
+static void cpulist_parse(const char *s, unsigned char *bits, int nbytes) {
+    while (*s) {
+        int a, b, i;
+        while (*s == ',' || *s == ' ' || *s == '\n') s++;
+        if (!*s) break;
+        a = b = atoi(s);
+        while (*s && *s != ',' && *s != '-') s++;
+        if (*s == '-') { s++; b = atoi(s); while (*s && *s != ',') s++; }
+        for (i = a; i <= b && i / 8 < nbytes; i++) bits[i / 8] |= 1u << (i % 8);
+    }
+}
+
+/* bitmap → compact cpuset.cpus list, collapsing runs into "a-b". */
+static void cpulist_emit(const unsigned char *bits, int nbits,
+                         char *out, size_t outsz) {
+    size_t off = 0;
+    int i = 0;
+    out[0] = '\0';
+    while (i < nbits) {
+        int j;
+        if (!(bits[i / 8] & (1u << (i % 8)))) { i++; continue; }
+        j = i;
+        while (j + 1 < nbits && (bits[(j + 1) / 8] & (1u << ((j + 1) % 8)))) j++;
+        if (off && off < outsz) off += snprintf(out + off, outsz - off, ",");
+        if (off < outsz) {
+            if (i == j) off += snprintf(out + off, outsz - off, "%d", i);
+            else        off += snprintf(out + off, outsz - off, "%d-%d", i, j);
+        }
+        i = j + 1;
+    }
+}
+
 void service_cgroup_kill(service_t *svc) {
     char path[160];
     int fd;
 
     if (!svc->cgroup_path[0]) return;
+
+    /* Release a partition reservation before destroying the cgroup. An
+     * isolated/root child carves its cores out of general scheduling via
+     * schema-init's cpuset.cpus.exclusive union (see cgroup_apply_limits);
+     * rmdir alone leaves that union stale, so the cores never return until
+     * reboot and the union grows unbounded across restarts. Undo it in the
+     * reverse order of the apply: demote the child to member so it stops
+     * claiming the cores, then subtract them from the parent union. */
+    if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0]) {
+        const char *excl_path =
+            "/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive";
+        unsigned char have[128] = {0}, mine[128] = {0};
+        char excl[512] = {0}, out[512];
+        ssize_t r;
+        int k;
+
+        snprintf(path, sizeof(path), "%s/cpuset.cpus.partition",
+                 svc->cgroup_path);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0) { write(fd, "member", 6); close(fd); }
+
+        fd = open(excl_path, O_RDONLY);
+        if (fd >= 0) {
+            r = read(fd, excl, sizeof(excl) - 1);
+            close(fd);
+            if (r > 0) excl[r] = '\0';
+        }
+        excl[strcspn(excl, "\n")] = '\0';
+        cpulist_parse(excl, have, sizeof(have));
+        cpulist_parse(svc->cpuset, mine, sizeof(mine));
+        for (k = 0; k < (int)sizeof(have); k++) have[k] &= ~mine[k];
+        cpulist_emit(have, (int)sizeof(have) * 8, out, sizeof(out));
+        fd = open(excl_path, O_WRONLY);
+        if (fd >= 0) {
+            if (out[0]) write(fd, out, strlen(out));
+            else        write(fd, "\n", 1);   /* empty the union */
+            close(fd);
+        }
+    }
 
     /* Linux 5.14+: write 1 to cgroup.kill nukes the whole subtree */
     snprintf(path, sizeof(path), "%s/cgroup.kill", svc->cgroup_path);
