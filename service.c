@@ -198,6 +198,76 @@ static void cgroup_apply_limits(service_t *svc) {
             close(fd);
         }
     }
+
+    if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0]) {
+        const char *want =
+            (svc->cpuset_partition == PART_ISOLATED) ? "isolated" : "root";
+        char part[64];
+        ssize_t r;
+        int ok;
+
+        /* 1. Reserve these cores in schema-init's exclusive union.
+         *    Read-modify-write the live value; the kernel resolves the union
+         *    and dedups. Strip the trailing newline; no leading comma when
+         *    the existing set is empty. */
+        {
+            char excl[256] = {0};
+            char merged[320];
+            int rfd = open("/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive",
+                           O_RDONLY);
+            if (rfd >= 0) {
+                r = read(rfd, excl, sizeof(excl) - 1);
+                close(rfd);
+                if (r > 0) excl[r] = '\0';
+            }
+            excl[strcspn(excl, "\n")] = '\0';
+            if (excl[0])
+                snprintf(merged, sizeof(merged), "%s,%s", excl, svc->cpuset);
+            else
+                snprintf(merged, sizeof(merged), "%s", svc->cpuset);
+            fd = open("/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive",
+                      O_WRONLY);
+            if (fd >= 0) { write(fd, merged, strlen(merged)); close(fd); }
+        }
+
+        /* 2. Claim the cores exclusively for this service. */
+        snprintf(path, sizeof(path), "%s/cpuset.cpus.exclusive", svc->cgroup_path);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0) { write(fd, svc->cpuset, strlen(svc->cpuset)); close(fd); }
+
+        /* 3. Request the partition. */
+        snprintf(path, sizeof(path), "%s/cpuset.cpus.partition", svc->cgroup_path);
+        fd = open(path, O_WRONLY);
+        if (fd >= 0) { write(fd, want, strlen(want)); close(fd); }
+
+        /* 4. Read back; the kernel appends " invalid (...)" on failure. */
+        part[0] = '\0';
+        fd = open(path, O_RDONLY);
+        if (fd >= 0) {
+            r = read(fd, part, sizeof(part) - 1);
+            close(fd);
+            if (r > 0) part[r] = '\0';
+        }
+        ok = (strstr(part, "invalid") == NULL &&
+              strncmp(part, want, strlen(want)) == 0);
+
+        if (!ok) {
+            /* Degrade: revert to plain member pinning (cpuset.cpus stands).
+             * No parent rollback — a member child claims no cores, so the
+             * leftover union entry is inert. */
+            fd = open(path, O_WRONLY);                 /* still cpuset.cpus.partition */
+            if (fd >= 0) { write(fd, "member", 6); close(fd); }
+            snprintf(path, sizeof(path), "%s/cpuset.cpus.exclusive",
+                     svc->cgroup_path);
+            fd = open(path, O_WRONLY);
+            if (fd >= 0) { write(fd, "\n", 1); close(fd); }
+            part[strcspn(part, "\n")] = '\0';
+            fprintf(stderr,
+                    "[schema-init] HAZARD: '%s' cpuset_partition=%s rejected "
+                    "(kernel: '%s') — degraded to plain cpuset pinning on %s\n",
+                    svc->name, want, part[0] ? part : "?", svc->cpuset);
+        }
+    }
 }
 
 int service_spawn(service_t *svc) {
