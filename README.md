@@ -267,9 +267,21 @@ needs_root=1
 on_calendar=03:00     # fire at 03:00 local time, every day
 ```
 
-`on_calendar` re-evaluates the wall clock on every fire, so it tracks `CLOCK_REALTIME` (not monotonic) — DST shifts and NTP clock steps self-correct each cycle rather than drifting. Time is local (`/etc/localtime`). Malformed values (`want HH:MM`, `00:00`–`23:59`) are logged and ignored, never scheduled. If the system is off when the time passes, the job runs at the next occurrence — there is no missed-run catch-up yet.
+`on_calendar` re-evaluates the wall clock on every fire, so it tracks `CLOCK_REALTIME` (not monotonic) — DST shifts and NTP clock steps self-correct each cycle rather than drifting. Time is local (`/etc/localtime`). Malformed values (`want HH:MM`, `00:00`–`23:59`) are logged and ignored, never scheduled.
 
-**Not yet implemented:** persistent catch-up of jobs missed during downtime (systemd `Persistent=true`), and richer calendar forms (day-of-week, multiple times). See `docs/timers-design.md`.
+**Catch-up after downtime** — by default a job missed while the machine was off simply runs at its next occurrence. Add `persistent=1` to run it **once at boot** instead, if its scheduled time passed while the system was down (systemd `Persistent=true`):
+
+```ini
+name=nightly-backup
+exec=/usr/local/bin/backup.sh
+needs_root=1
+on_calendar=03:00
+persistent=1          # if 03:00 was missed while off, run at next boot
+```
+
+Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if the most recent `HH:MM` occurrence is newer than that stamp, the timer fires immediately (logged `timer-catchup`) instead of waiting. A never-run timer is seeded rather than replayed, so enabling one doesn't trigger a surprise fire on first boot. `persistent=1` only applies to `on_calendar` timers; on an interval timer it's logged and ignored.
+
+**Not yet implemented:** richer calendar forms (day-of-week, multiple times per day). See `docs/timers-design.md`.
 
 ---
 

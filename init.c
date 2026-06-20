@@ -92,6 +92,76 @@ static void timer_arm_calendar(service_t *svc) {
     svc->timer_next.tv_nsec = 0;
 }
 
+/* ── persistent calendar timers (persistent=1): catch up a fire missed while
+ * the machine was down. Last run is stamped to /var/lib/schema-init/timers/. ── */
+#define TIMER_STAMP_DIR "/var/lib/schema-init/timers"
+
+static void timer_stamp_path(const service_t *svc, char *buf, size_t n) {
+    snprintf(buf, n, "%s/%s.stamp", TIMER_STAMP_DIR, svc->name);
+}
+
+static time_t timer_stamp_read(const service_t *svc) {
+    char path[256]; timer_stamp_path(svc, path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    long long v = 0;
+    if (fscanf(f, "%lld", &v) != 1) v = 0;
+    fclose(f);
+    return (time_t)v;
+}
+
+static void timer_stamp_write(const service_t *svc, time_t t) {
+    mkdir("/var/lib", 0755);
+    mkdir("/var/lib/schema-init", 0755);
+    mkdir(TIMER_STAMP_DIR, 0755);
+    char path[256]; timer_stamp_path(svc, path, sizeof path);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "%lld\n", (long long)t);
+    fclose(f);
+}
+
+/* most recent past (or current) occurrence of HH:MM, <= now */
+static time_t calendar_recent_occurrence(const service_t *svc, time_t now) {
+    struct tm tm;
+    localtime_r(&now, &tm);
+    tm.tm_hour = svc->timer_cal_hour;
+    tm.tm_min  = svc->timer_cal_min;
+    tm.tm_sec  = 0;
+    tm.tm_isdst = -1;
+    time_t t = mktime(&tm);
+    if (t > now) {                       /* today's slot is still ahead → yesterday's */
+        localtime_r(&now, &tm);
+        tm.tm_mday -= 1;
+        tm.tm_hour = svc->timer_cal_hour;
+        tm.tm_min  = svc->timer_cal_min;
+        tm.tm_sec  = 0;
+        tm.tm_isdst = -1;
+        t = mktime(&tm);
+    }
+    return t;
+}
+
+/* Initial arm for a persistent calendar timer: if a scheduled fire passed while
+ * we were down, fire now; otherwise arm normally. A never-stamped timer is
+ * seeded (no replay of history on first deploy). */
+static void timer_arm_persistent(service_t *svc) {
+    time_t now = time(NULL);
+    time_t stamp = timer_stamp_read(svc);
+    if (stamp == 0) {
+        timer_stamp_write(svc, now);
+        timer_arm_calendar(svc);
+        return;
+    }
+    if (calendar_recent_occurrence(svc, now) > stamp) {
+        svc->timer_next.tv_sec  = now;   /* CLOCK_REALTIME: fires on the next tick */
+        svc->timer_next.tv_nsec = 0;
+        service_log(svc, "timer-catchup");
+    } else {
+        timer_arm_calendar(svc);
+    }
+}
+
 static void eviction_tick(void) {
     time_t now = time(NULL);
     int i = 0;
@@ -328,6 +398,8 @@ static void reap(void) {
                  * PERFECT becomes terminal instead of re-firing every tick. */
                 services[i].inst.state = STATE_PERFECT;
                 if (services[i].flags & SVC_TIMER_CALENDAR) {
+                    if (services[i].flags & SVC_TIMER_PERSIST)
+                        timer_stamp_write(&services[i], time(NULL));
                     timer_arm_calendar(&services[i]);
                 } else if (services[i].timer_interval_sec > 0) {
                     struct timespec tn;
@@ -1335,7 +1407,10 @@ static void handle_reload(int evict_mode) {
             if (services[i].timer_next.tv_sec == 0) {
                 services[i].inst.state = STATE_PERFECT;
                 if (services[i].flags & SVC_TIMER_CALENDAR) {
-                    timer_arm_calendar(&services[i]);
+                    if (services[i].flags & SVC_TIMER_PERSIST)
+                        timer_arm_persistent(&services[i]);
+                    else
+                        timer_arm_calendar(&services[i]);
                 } else {
                     services[i].timer_next = tnow;
                     services[i].timer_next.tv_sec += services[i].timer_boot_sec;
@@ -1418,7 +1493,10 @@ int main(int argc, char **argv) {
             if (services[ti].flags & SVC_TIMER) {
                 services[ti].inst.state = STATE_PERFECT;
                 if (services[ti].flags & SVC_TIMER_CALENDAR) {
-                    timer_arm_calendar(&services[ti]);
+                    if (services[ti].flags & SVC_TIMER_PERSIST)
+                        timer_arm_persistent(&services[ti]);
+                    else
+                        timer_arm_calendar(&services[ti]);
                 } else {
                     services[ti].timer_next = tnow;
                     services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
