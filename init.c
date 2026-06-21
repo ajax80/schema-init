@@ -268,7 +268,7 @@ static void mount_pseudo(void) {
     mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
     int cg_fd = open("/sys/fs/cgroup/cgroup.subtree_control", O_WRONLY);
     if (cg_fd >= 0) {
-        write(cg_fd, "+cpu +memory +cpuset", 20);
+        write(cg_fd, "+cpu +memory +cpuset +pids +io", 30);
         close(cg_fd);
     }
     mkdir("/run/dbus",     0755);

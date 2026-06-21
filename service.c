@@ -129,7 +129,7 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     mkdir("/sys/fs/cgroup/schema-init", 0755);
     int sub_fd = open("/sys/fs/cgroup/schema-init/cgroup.subtree_control", O_WRONLY);
     if (sub_fd >= 0) {
-        write(sub_fd, "+cpu +memory +cpuset", 20);
+        write(sub_fd, "+cpu +memory +cpuset +pids +io", 30);
         close(sub_fd);
     }
     snprintf(svc->cgroup_path, sizeof(svc->cgroup_path),
