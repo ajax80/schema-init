@@ -1,0 +1,5 @@
+name=docker-modules
+exec=/usr/local/bin/docker-modules.sh
+oneshot=1
+needs_root=1
+critical=0

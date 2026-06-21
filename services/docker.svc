@@ -1,0 +1,7 @@
+name=docker
+exec=/usr/local/bin/docker-wrapper.sh
+dep=docker-modules
+dep=containerd
+needs_root=1
+critical=0
+ready_path=/var/run/docker.sock
