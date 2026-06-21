@@ -1062,6 +1062,23 @@ static void ctl_cmd(int fd, char *line) {
             write(fd, ".\n", 2);
             return;
         }
+        /* Arm timers added at runtime, mirroring the boot/reload arm sites.
+         * Without this the timer keeps timer_next=0 (a past CLOCK_REALTIME
+         * instant) and fires once immediately on the next tick. */
+        if (services[svc_count].flags & SVC_TIMER) {
+            services[svc_count].inst.state = STATE_PERFECT;
+            if (services[svc_count].flags & SVC_TIMER_CALENDAR) {
+                if (services[svc_count].flags & SVC_TIMER_PERSIST)
+                    timer_arm_persistent(&services[svc_count]);
+                else
+                    timer_arm_calendar(&services[svc_count]);
+            } else {
+                struct timespec tnow;
+                clock_gettime(CLOCK_MONOTONIC, &tnow);
+                services[svc_count].timer_next = tnow;
+                services[svc_count].timer_next.tv_sec += services[svc_count].timer_boot_sec;
+            }
+        }
         ctl_writef(fd, "ok: %s queued\n", services[svc_count].name);
         svc_count++;
         write(fd, ".\n", 2);
