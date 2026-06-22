@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
     struct sockaddr_un addr;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: schema-ctl status [--json|--kv]|list|timing|reload [--evict]|start <svc>|stop <svc>|up <svc>|down <svc>|restart <svc>|add <path>|pet <svc>|reset [<svc>]\n");
+        fprintf(stderr, "usage: schema-ctl status [--json|--kv]|list|timing|reload [--evict]|start <svc>|stop <svc>|up <svc>|down <svc>|restart <svc>|add <path>|pet <svc>|reset [<svc>]|reboot|poweroff\n");
         return 1;
     }
 

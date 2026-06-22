@@ -1102,6 +1102,18 @@ static void ctl_cmd(int fd, char *line) {
             ctl_writef(fd, "  %-24s %.3fs\n", services[i].name, delta);
         }
 
+    } else if (strcmp(line, "reboot") == 0) {
+        ctl_writef(fd, "ok: rebooting\n");
+        if (shm_ptr) shm_ptr->system_state = 14;
+        do_reboot = 1;
+        running = 0;
+
+    } else if (strcmp(line, "poweroff") == 0) {
+        ctl_writef(fd, "ok: powering off\n");
+        if (shm_ptr) shm_ptr->system_state = 13;
+        do_reboot = 0;
+        running = 0;
+
     } else {
         ctl_writef(fd, "err: unknown: %s\n", line);
     }
