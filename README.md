@@ -1,5 +1,10 @@
 # schema-init
 
+<p align="center">
+  <a href="assets/schema-init-trailer.mp4"><img src="assets/schema-init-trailer.gif" alt="schema-init — 30-second trailer" width="640"></a>
+</p>
+<p align="center"><sub>▶ 30-second trailer — <a href="assets/schema-init-trailer.mp4">watch in full resolution, with sound</a></sub></p>
+
 A minimal PID 1 init system for Linux that supervises services through a weight-state machine instead of unit files and dependency graphs.
 
 No systemd. No OpenRC. No journal daemon. No socket activation engine. Just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
