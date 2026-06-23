@@ -8,6 +8,7 @@ import json
 import re
 import dbus
 import dbus.service
+import dbus.server
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
@@ -305,6 +306,45 @@ class Systemd1Manager(dbus.service.Object):
         schema_ctl('restart', svc_name(str(name)))
         return self._trigger_job_signals(str(name))
 
+    def _is_active(self, name):
+        u = self.units.get(name)
+        return bool(u and u.active_state in ('active', 'activating'))
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
+    def TryRestartUnit(self, name, mode):
+        print(f"systemd1: TryRestartUnit({name}, {mode})")
+        self.poll_and_update()
+        if self._is_active(str(name)):
+            schema_ctl('restart', svc_name(str(name)))
+        return self._trigger_job_signals(str(name))
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
+    def ReloadOrRestartUnit(self, name, mode):
+        print(f"systemd1: ReloadOrRestartUnit({name}, {mode})")
+        schema_ctl('restart', svc_name(str(name)))
+        return self._trigger_job_signals(str(name))
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
+    def ReloadOrTryRestartUnit(self, name, mode):
+        print(f"systemd1: ReloadOrTryRestartUnit({name}, {mode})")
+        self.poll_and_update()
+        if self._is_active(str(name)):
+            schema_ctl('restart', svc_name(str(name)))
+        return self._trigger_job_signals(str(name))
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='ao')
+    def EnqueueMarkedJobs(self):
+        print("systemd1: EnqueueMarkedJobs (no marker tracking; returning empty)")
+        return dbus.Array([], signature='o')
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='')
+    def Reexecute(self):
+        print("systemd1: Reexecute (no-op; schema-init is PID 1, not systemd)")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='sba(sv)', out_signature='')
+    def SetUnitProperties(self, name, runtime, properties):
+        print(f"systemd1: SetUnitProperties({name}) (no-op)")
+
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asbb', out_signature='ba(sss)')
     def EnableUnitFiles(self, names, runtime, force):
         print(f"systemd1: EnableUnitFiles({list(names)})")
@@ -376,6 +416,24 @@ class Systemd1Manager(dbus.service.Object):
     def JobRemoved(self, job_id, job_path, unit_id, result):
         pass
 
+PRIVATE_SOCKET_PATH = '/run/systemd/private'
+
+class PrivateSocketServer(dbus.server.Server):
+    conn_mgrs = None
+
+    def connection_added(self, conn):
+        if self.conn_mgrs is None:
+            self.conn_mgrs = {}
+        self.conn_mgrs[id(conn)] = Systemd1Manager(conn)
+
+    def connection_removed(self, conn):
+        m = (self.conn_mgrs or {}).pop(id(conn), None)
+        if m is not None:
+            try:
+                m.remove_from_connection()
+            except Exception:
+                pass
+
 def main():
     DBusGMainLoop(set_as_default=True)
 
@@ -394,6 +452,15 @@ def main():
         print(f"systemd1: Failed to acquire name 'org.freedesktop.systemd1': {e}", file=sys.stderr)
         sys.exit(1)
 
+    try:
+        if os.path.exists(PRIVATE_SOCKET_PATH):
+            os.unlink(PRIVATE_SOCKET_PATH)
+        priv_server = PrivateSocketServer('unix:path=' + PRIVATE_SOCKET_PATH)
+        os.chmod(PRIVATE_SOCKET_PATH, 0o600)
+        print(f"systemd1: serving root private socket at {PRIVATE_SOCKET_PATH}")
+    except Exception as e:
+        print(f"systemd1: failed to start private socket: {e}", file=sys.stderr)
+
     loop = GLib.MainLoop()
 
     # GLib Timeout to poll status every 1 second
@@ -401,6 +468,10 @@ def main():
 
     def shutdown_handler(sig, frame):
         print(f"systemd1: Received signal {sig}, shutting down...")
+        try:
+            os.unlink(PRIVATE_SOCKET_PATH)
+        except OSError:
+            pass
         loop.quit()
 
     signal.signal(signal.SIGINT, shutdown_handler)
