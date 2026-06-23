@@ -348,6 +348,8 @@ schema-init also creates `/run/log/schema-init/` at boot. Each service's stdout 
 
 If your system needs additional mounts (data partitions, network filesystems), run them as `oneshot` services before your other services depend on them.
 
+> **Mount by `UUID=` or `LABEL=`, never `/dev/sdX`.** The kernel assigns `sda`/`sdb`/… in detection order, which can change between boots — so a oneshot that mounts `/dev/sdb1` may silently land on the wrong physical disk, swapping two data drives and pointing every absolute path at the wrong filesystem. `/etc/fstab` under systemd hid this by mounting by UUID for you; schema-init doesn't read fstab, so do it explicitly: `mount UUID=1b7d654f-… /mnt/data` (or `LABEL=`). The same applies to the root `LABEL=`/`PARTUUID=` on the kernel cmdline.
+
 ---
 
 ## Building
@@ -724,6 +726,8 @@ tail /run/log/schema-init/udevd.log   # if something is EXCISED, check its log
 | Plasma/GNOME hangs on settings open | Missing D-Bus interface | See D-Bus compatibility section above |
 | PipeWire/PulseAudio not starting | systemd user session missing | Add autostart `.desktop` entry, or run from display manager wrapper script |
 | display manager exits immediately | No seat available | Ensure elogind or schema-logind is up and answering login1 before display manager starts |
+| X11/XWayland apps die with `Unable to open display` (Steam, any non-Wayland-native app) | `systemd-tmpfiles` normally creates `/tmp/.X11-unix` as `1777 root:root`; with no systemd it's missing or wrong-perm, and **an X server refuses a `/tmp/.X11-unix` without the sticky bit** — so the compositor's XWayland silently never starts and `DISPLAY` is never exported | oneshot before the display manager: `mkdir -p /tmp/.X11-unix && chown root:root /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix` (also clear stale `/tmp/.X[0-9]*-lock`). `dep=` it from the DM. On a root-fs `/tmp` (not tmpfs) the broken dir persists across reboots, so this isn't self-healing |
+| flatpak/snap apps won't launch — `The name org.<app>.desktop was not provided by any .service files` | The **session** D-Bus bus computes its `.service` search dirs once at startup from `XDG_DATA_DIRS`; with no systemd user env-generator that variable is unset when the bus is born, so it never scans `…/flatpak/exports/share/dbus-1/services`. Anything later (a `plasma-workspace/env` script) runs *inside* the bus's child — too late | Export `XDG_DATA_DIRS=$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share:/var/lib/snapd/desktop` in the env that launches the session bus, **before** the bus starts. Stopgap without re-login: symlink the `*.service` files into `~/.local/share/dbus-1/services/` (always searched regardless of `XDG_DATA_DIRS`) and `ReloadConfig` the bus |
 
 ---
 
