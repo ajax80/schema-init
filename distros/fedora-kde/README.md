@@ -105,6 +105,7 @@ sudo grubby --update-kernel=ALL --args="quiet rhgb"
 | Problem | Fix |
 |---------|-----|
 | kwin_wayland needs DRM | User in `video` group + `LIBSEAT_BACKEND=direct` |
+| Blank screen on NVIDIA — kwin starts (`wayland-0` socket appears after ~25s) but no display output | NVIDIA proprietary driver with `nvidia-drm.modeset=1` requires **atomic** modesetting. **Never set `KWIN_DRM_NO_AMS=1`** — it's a common mouse-latency tweak, but disabling atomic modeset on NVIDIA KMS gives you a running compositor with zero output. The safe latency knob is `__GL_SYNC_TO_VBLANK=0`, which helps and does no harm |
 | KSplash crashes (nested Wayland) | `ksplashrc` Engine=none |
 | Plasma hangs on systemd user units | `plasma-session.conf` systemdBoot=false |
 | /etc/resolv.conf dead symlink | `network-up.sh` removes symlink, writes nameservers |
