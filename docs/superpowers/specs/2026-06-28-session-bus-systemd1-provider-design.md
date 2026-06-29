@@ -1,7 +1,7 @@
 # Session-bus `org.freedesktop.systemd1` provider — design
 
 **Date:** 2026-06-28
-**Status:** DRAFT / proposal (not built)
+**Status:** BUILT (Option A) 2026-06-28 — `scripts/schema-systemd1-session.py`. Live + activation-verified on blakbox.
 **Depends on:** `2026-06-20-schema-systemd1-dbus-design.md` (the system-bus bridge `schema-systemd1.py`)
 **Track:** B (systemd-compat surface — "indistinguishable from systemd")
 
@@ -135,6 +135,39 @@ Implements only the subset GUIs actually use: `Manager.ListUnits`, `GetUnit`, `S
   adding the Manager timestamp properties.
 - Rollback: remove the override file (session bus reverts to the `/bin/false` stub = today's behavior) and the binary.
   Zero impact on the system-bus surface or PID 1.
+
+## Build notes (as implemented 2026-06-28)
+
+Implemented Option A (the generic forwarding relay), not the minimal-effort fallback.
+
+- **Relay:** `scripts/schema-systemd1-session.py` → installed `install -m0755 … /usr/local/bin/schema-systemd1-session`.
+  dbus-python low-level message filter: owns `org.freedesktop.systemd1` on the session bus (`NAME_FLAG_DO_NOT_QUEUE`),
+  blind-forwards any MethodCall under `/org/freedesktop/systemd1` (and `/`) to the system-bus surface via
+  `send_message_with_reply_and_block`, relays the reply/error, and re-emits the system bus's signals session-ward.
+- **Activation (per-user, highest precedence):** `~/.local/share/dbus-1/services/org.freedesktop.systemd1.service`:
+  ```
+  [D-BUS Service]
+  Name=org.freedesktop.systemd1
+  Exec=/usr/local/bin/schema-systemd1-session
+  ```
+  XDG_DATA_HOME outranks `/usr/share` so this beats the stock `/bin/false` stub. For a multi-user box, install to
+  `/usr/local/share/dbus-1/services/` instead (still ahead of `/usr/share` in default `XDG_DATA_DIRS`).
+- **Verified:** killed any owner → `ReloadConfig` → cold call activated the relay on demand (PID from the installed path);
+  `Manager.Version`=256, `ListUnits`=38, `GetUnit`, `Subscribe`, unit `GetAll` (Id/LoadState/ActiveState/SubState),
+  `Service.MainPID` all forward correctly. Complex nested array (`a(ssssssouso)`) round-trips intact.
+- **Prereq discovered while building:** the system-bus bridge (`schema-systemd1.py`) had to be **restarted** — the long-lived
+  PID from 2026-06-12 was wedged after days of failed polls and served 0 units even once `schema-ctl` was fixed; a fresh
+  process serves a stable 38. So the relay is only as good as a healthy system-bus bridge underneath it. (See the
+  degraded-state-signal hardening note — still wanted.)
+
+### Known limitations / TODO
+- Forwarding is **blocking** (`send_message_with_reply_and_block`) — fine for a low-traffic GUI, but a slow/polkit-gated
+  write stalls the relay's loop until `FWD_TIMEOUT` (25s). Make async if it ever matters.
+- No clean exit on session-bus disconnect (logout) → the relay may orphan until the session scope is torn down. Add a
+  disconnect→quit handler.
+- Manager boot-timestamp properties (`FirmwareTimestampMonotonic`/`UserspaceTimestamp`/…) still missing from the system-bus
+  bridge, so Ferrix's "Startup finished in firmware+loader+kernel+userspace" readout stays blank until the bridge exposes
+  them. The relay forwards them the moment they exist — no relay change needed.
 
 ## Related
 
