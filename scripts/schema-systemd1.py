@@ -6,6 +6,8 @@ import time
 import subprocess
 import json
 import re
+import gc
+import resource
 import dbus
 import dbus.service
 import dbus.server
@@ -228,10 +230,22 @@ class Systemd1Manager(dbus.service.Object):
         self.units = {}
         self.recently_stopped = set()
         self.next_job_id = 1
+        self._last_poll = 0.0
+        self._poll_cache_sec = 0.8
         self.poll_and_update()
         print("systemd1: Registered Manager at /org/freedesktop/systemd1")
 
-    def poll_and_update(self):
+    def poll_and_update(self, force=False):
+        # Read-path D-Bus calls (GetUnit/ListUnits/...) each used to spawn a
+        # schema-ctl subprocess. Under the session-bus relay, KDE/Ferrix poll
+        # these ~10x/sec; the child pidfds outlived the call and the fd table
+        # hit RLIMIT_NOFILE -> EMFILE -> libdbus busy-spin (100% CPU). Cache for
+        # _poll_cache_sec so only the 1s timer actually spawns, and force a GC
+        # pass to reap any lingering Popen pidfds.
+        now = time.monotonic()
+        if not force and (now - self._last_poll) < self._poll_cache_sec:
+            return True
+        self._last_poll = now
         try:
             # Query schema-ctl status --json
             res = subprocess.run([SCHEMA_CTL, 'status', '--json'], capture_output=True, text=True, timeout=5)
@@ -285,7 +299,33 @@ class Systemd1Manager(dbus.service.Object):
                 self.UnitRemoved(name, dbus.ObjectPath(unit.path))
                 unit.remove_from_connection()
 
+        self._reap_dead_pidfds()
+        gc.collect()
         return True
+
+    def _reap_dead_pidfds(self):
+        # A library beneath the private-socket server opens a pidfd per spawned
+        # schema-ctl child and never closes it; once the child exits the pidfd
+        # lingers (Pid: -1) until the fd table fills -> EMFILE -> 100% busy-spin.
+        # A pidfd to a dead, reaped process is inert, so closing it is safe. This
+        # runs single-threaded in the GLib callback, so no fd is in flight.
+        try:
+            fds = os.listdir('/proc/self/fd')
+        except OSError:
+            return
+        for name in fds:
+            try:
+                if os.readlink(f'/proc/self/fd/{name}') != 'anon_inode:[pidfd]':
+                    continue
+                with open(f'/proc/self/fdinfo/{name}') as fi:
+                    info = fi.read()
+            except OSError:
+                continue
+            if 'Pid:\t-1' in info:
+                try:
+                    os.close(int(name))
+                except OSError:
+                    pass
 
     def _trigger_job_signals(self, unit_name):
         job_id = self.next_job_id
@@ -348,6 +388,24 @@ class Systemd1Manager(dbus.service.Object):
         print(f"systemd1: StartUnit({name}, {mode})")
         schema_ctl('start', svc_name(str(name)))
         return self._trigger_job_signals(str(name))
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager',
+                         in_signature='ssa(sv)a(sa(sv))', out_signature='o')
+    def StartTransientUnit(self, name, mode, properties, aux):
+        # KDE/Plasma launches every desktop app as a transient app-*.scope,
+        # adopting an already-forked child PID. schema-init has no cgroup scope
+        # manager, so we don't build a real scope -- we just acknowledge the job
+        # (JobNew + JobRemoved=done) so the launcher releases its waiting child
+        # and the app actually starts. Without this every menu/krunner launch
+        # (Konsole, Ghostty, Helium) dies on UnknownMethod.
+        name = str(name)
+        print(f"systemd1: StartTransientUnit({name}, {mode}) [ack; no real scope]")
+        job_id = self.next_job_id
+        self.next_job_id += 1
+        job_path = dbus.ObjectPath(f'/org/freedesktop/systemd1/job/{job_id}')
+        self.JobNew(dbus.UInt32(job_id), job_path, name)
+        self.JobRemoved(dbus.UInt32(job_id), job_path, name, "done")
+        return job_path
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
     def StopUnit(self, name, mode):
@@ -495,6 +553,15 @@ class PrivateSocketServer(dbus.server.Server):
 
 def main():
     DBusGMainLoop(set_as_default=True)
+
+    # Insurance against fd exhaustion (pidfd leak under heavy polling): lift the
+    # soft NOFILE limit toward the hard cap so a transient leak can't pin the
+    # process in an EMFILE busy-spin before the GC pass reclaims handles.
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(65536, hard), hard))
+    except Exception as e:
+        print(f"systemd1: could not raise NOFILE limit: {e}", file=sys.stderr)
 
     try:
         bus = dbus.SystemBus()
