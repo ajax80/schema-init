@@ -165,6 +165,62 @@ class Systemd1Unit(dbus.service.Object):
     def PropertiesChanged(self, interface_name, changed_properties, invalidated_properties):
         pass
 
+def _read_btime_usec():
+    """CLOCK_REALTIME of monotonic-zero (boot) in usec, from /proc/stat btime."""
+    try:
+        with open('/proc/stat') as f:
+            for line in f:
+                if line.startswith('btime '):
+                    return int(line.split()[1]) * 1_000_000
+    except Exception:
+        pass
+    return 0
+
+
+def _pid1_start_usec():
+    """Monotonic usec at which PID 1 (schema-init) started — ~= userspace start."""
+    try:
+        with open('/proc/1/stat') as f:
+            data = f.read()
+        after = data[data.rindex(')') + 2:].split()  # skip pid + (comm)
+        starttime_ticks = int(after[19])              # field 22 = starttime
+        return int(starttime_ticks * 1_000_000 / os.sysconf('SC_CLK_TCK'))
+    except Exception:
+        return 0
+
+
+def manager_boot_timestamps():
+    """Best-effort systemd Manager boot-timing properties. schema-init has no
+    firmware/loader/initrd handoff timing, so those are 0; kernel monotonic base
+    is 0; userspace ~= PID1 start. Enough for clients (Ferrix, systemd-analyze)
+    to render 'Startup finished in ...' instead of erroring on UnknownProperty."""
+    btime = _read_btime_usec()
+    usp = _pid1_start_usec()
+    z = dbus.UInt64(0)
+    return {
+        'FirmwareTimestamp': z, 'FirmwareTimestampMonotonic': z,
+        'LoaderTimestamp': z, 'LoaderTimestampMonotonic': z,
+        'KernelTimestamp': dbus.UInt64(btime), 'KernelTimestampMonotonic': z,
+        'InitRDTimestamp': z, 'InitRDTimestampMonotonic': z,
+        'UserspaceTimestamp': dbus.UInt64(btime + usp),
+        'UserspaceTimestampMonotonic': dbus.UInt64(usp),
+        'FinishTimestamp': dbus.UInt64(btime + usp),
+        'FinishTimestampMonotonic': dbus.UInt64(usp),
+    }
+
+
+def manager_environment():
+    """PID 1's environment block as KEY=val strings — the schema-init analog of
+    systemd's Manager.Environment (the env handed to spawned services)."""
+    try:
+        with open('/proc/1/environ', 'rb') as f:
+            raw = f.read()
+        items = [p.decode('utf-8', 'replace') for p in raw.split(b'\x00') if p]
+        return dbus.Array([dbus.String(i) for i in items], signature='s')
+    except Exception:
+        return dbus.Array([], signature='s')
+
+
 class Systemd1Manager(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/systemd1')
@@ -389,14 +445,17 @@ class Systemd1Manager(dbus.service.Object):
     def GetAll(self, interface_name):
         # As on units, GetAll("") must return the Manager's properties too.
         if interface_name == 'org.freedesktop.systemd1.Manager' or not interface_name:
-            return {
+            props = {
                 'Version': dbus.String(SYSTEMD_COMPAT_VERSION),
                 'SystemState': dbus.String('running'),
                 # Keep Features empty: don't advertise PAM/SELINUX/etc. we don't
                 # back, so clients don't try APIs we deliberately don't implement.
                 'Features': dbus.String(''),
                 'Architecture': dbus.String('x86-64'),
+                'Environment': manager_environment(),
             }
+            props.update(manager_boot_timestamps())
+            return props
         return {}
 
     # Signals
