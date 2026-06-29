@@ -114,6 +114,15 @@ def _parse_exec_and_env(props):
     return exec_path, argv, kde_env
 
 
+def _child_preexec():
+    # We keep SIGCHLD=SIG_IGN in the relay so our fire-and-forget launches don't
+    # zombie -- but SIG_IGN survives execve and is inherited by the launched app.
+    # An app that then waitpid()s its own children gets ECHILD ("no child process",
+    # os error 10) and breaks (e.g. Ferrix installed-software / DMI tabs). Restore
+    # default disposition in the child before exec so launched apps behave normally.
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+
+
 def _spawn(exec_path, argv, kde_env):
     env = _session_env()
     for kv in kde_env:
@@ -123,7 +132,7 @@ def _spawn(exec_path, argv, kde_env):
     try:
         subprocess.Popen(
             argv, executable=exec_path, env=env,
-            start_new_session=True, close_fds=True,
+            start_new_session=True, close_fds=True, preexec_fn=_child_preexec,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
