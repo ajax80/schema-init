@@ -165,9 +165,11 @@ Implemented Option A (the generic forwarding relay), not the minimal-effort fall
   write stalls the relay's loop until `FWD_TIMEOUT` (25s). Make async if it ever matters.
 - No clean exit on session-bus disconnect (logout) → the relay may orphan until the session scope is torn down. Add a
   disconnect→quit handler.
-- Manager boot-timestamp properties (`FirmwareTimestampMonotonic`/`UserspaceTimestamp`/…) still missing from the system-bus
-  bridge, so Ferrix's "Startup finished in firmware+loader+kernel+userspace" readout stays blank until the bridge exposes
-  them. The relay forwards them the moment they exist — no relay change needed.
+- ~~Manager boot-timestamp properties missing~~ — DONE (master `ef7d3fd`): bridge now serves Firmware/Loader/Kernel/InitRD/
+  Userspace/Finish timestamps (realtime+monotonic) + `Environment`. schema-init has no firmware/loader handoff timing so those
+  read 0 (kernel monotonic base 0, userspace ~= PID1 start), so the "Startup finished in …" readout shows ~0 but no longer
+  errors. This unblocked Ferrix's System Manager / Misc / Environment tabs (they raised `UnknownProperty` on the missing
+  props). Future nicety: a real `FinishTimestamp` (boot-complete moment) for an accurate userspace boot duration.
 
 ## Related
 
