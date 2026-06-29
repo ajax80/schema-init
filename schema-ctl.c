@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -8,8 +9,10 @@
 
 int main(int argc, char **argv) {
     char cmd[256];
-    char rbuf[4096];
-    int fd, i, rlen;
+    char *rbuf;
+    size_t cap = 65536;
+    int fd, i;
+    size_t rlen;
     ssize_t n;
     struct sockaddr_un addr;
 
@@ -26,8 +29,11 @@ int main(int argc, char **argv) {
     }
     strncat(cmd, "\n", sizeof(cmd) - strlen(cmd) - 1);
 
+    rbuf = malloc(cap);
+    if (!rbuf) { perror("malloc"); return 1; }
+
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) { perror("socket"); return 1; }
+    if (fd < 0) { perror("socket"); free(rbuf); return 1; }
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -41,6 +47,7 @@ int main(int argc, char **argv) {
         if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
             perror("connect");
             close(fd);
+            free(rbuf);
             return 1;
         }
     }
@@ -48,10 +55,16 @@ int main(int argc, char **argv) {
     write(fd, cmd, strlen(cmd));
 
     rlen = 0;
-    while (rlen < (int)sizeof(rbuf) - 1) {
-        n = read(fd, rbuf + rlen, sizeof(rbuf) - 1 - (size_t)rlen);
+    for (;;) {
+        if (rlen + 1 >= cap) {
+            char *nb = realloc(rbuf, cap * 2);
+            if (!nb) { perror("realloc"); close(fd); free(rbuf); return 1; }
+            rbuf = nb;
+            cap *= 2;
+        }
+        n = read(fd, rbuf + rlen, cap - 1 - rlen);
         if (n <= 0) break;
-        rlen += (int)n;
+        rlen += (size_t)n;
         rbuf[rlen] = '\0';
         if (rlen >= 2 && rbuf[rlen - 2] == '.' && rbuf[rlen - 1] == '\n') {
             rbuf[rlen - 2] = '\0';
@@ -61,5 +74,6 @@ int main(int argc, char **argv) {
 
     printf("%s", rbuf);
     close(fd);
+    free(rbuf);
     return 0;
 }
