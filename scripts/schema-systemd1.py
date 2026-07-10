@@ -232,6 +232,7 @@ class Systemd1Manager(dbus.service.Object):
         self.next_job_id = 1
         self._last_poll = 0.0
         self._poll_cache_sec = 0.8
+        self._priv_server = None
         self.poll_and_update()
         print("systemd1: Registered Manager at /org/freedesktop/systemd1")
 
@@ -300,8 +301,30 @@ class Systemd1Manager(dbus.service.Object):
                 unit.remove_from_connection()
 
         self._reap_dead_pidfds()
+        self._reap_dead_conns()
         gc.collect()
         return True
+
+    def _reap_dead_conns(self):
+        # A private-socket peer that half-closes (data queued, write side gone)
+        # never fires connection_removed, so its fd stays armed in the GLib main
+        # loop -> readable-but-inert -> 100% busy-spin. WirePlumber's failed
+        # logind-monitor attempts leave exactly these. Sweep them each poll.
+        srv = self._priv_server
+        if srv is None:
+            return
+        for cid, mgr in list((srv.conn_mgrs or {}).items()):
+            conn = getattr(mgr, 'bus', None)
+            try:
+                alive = conn is not None and conn.get_is_connected()
+            except Exception:
+                alive = False
+            if not alive:
+                srv.connection_removed(conn)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _reap_dead_pidfds(self):
         # A library beneath the private-socket server opens a pidfd per spawned
@@ -541,6 +564,10 @@ class PrivateSocketServer(dbus.server.Server):
     def connection_added(self, conn):
         if self.conn_mgrs is None:
             self.conn_mgrs = {}
+        try:
+            conn.set_exit_on_disconnect(False)
+        except Exception:
+            pass
         self.conn_mgrs[id(conn)] = Systemd1Manager(conn)
 
     def connection_removed(self, conn):
@@ -553,6 +580,13 @@ class PrivateSocketServer(dbus.server.Server):
 
 def main():
     DBusGMainLoop(set_as_default=True)
+
+    # Runtime priority floor: even if a client wedges a connection into a busy
+    # loop, nice 19 keeps it from stealing PipeWire's timeslice (audio xruns).
+    try:
+        os.nice(19)
+    except Exception as e:
+        print(f"systemd1: could not lower priority: {e}", file=sys.stderr)
 
     # Insurance against fd exhaustion (pidfd leak under heavy polling): lift the
     # soft NOFILE limit toward the hard cap so a transient leak can't pin the
@@ -583,6 +617,7 @@ def main():
             os.unlink(PRIVATE_SOCKET_PATH)
         priv_server = PrivateSocketServer('unix:path=' + PRIVATE_SOCKET_PATH)
         os.chmod(PRIVATE_SOCKET_PATH, 0o600)
+        manager._priv_server = priv_server
         print(f"systemd1: serving root private socket at {PRIVATE_SOCKET_PATH}")
     except Exception as e:
         print(f"systemd1: failed to start private socket: {e}", file=sys.stderr)
