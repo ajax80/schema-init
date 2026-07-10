@@ -68,6 +68,27 @@ install_profile() {
     done
 }
 
+# RT audio: pipewire ships /etc/security/limits.d/*-pw-rlimits.conf granting
+# @pipewire rtprio/memlock, but the group ships empty. Audio starts via runuser,
+# whose pam_limits applies that grant against the user's groups — so the desktop
+# user must be IN the pipewire group, or WirePlumber/PipeWire never get
+# SCHED_FIFO and audio xruns (crackles) under load. A PID1-level RLIMIT grant
+# does NOT work: pam_limits in the runuser path overrides it.
+enable_rt_audio() {
+    local u="$1"
+    [ -n "$u" ] || return 0
+    if ! getent group pipewire >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}pipewire group absent — skipping RT-audio grant.${NC}"
+        return 0
+    fi
+    if id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx pipewire; then
+        echo -e "  ${u} already in pipewire group (RT audio)."
+    else
+        usermod -aG pipewire "$u" && \
+            echo -e "  ${GREEN}+${NC} added ${u} to pipewire group — PipeWire/WirePlumber get SCHED_FIFO."
+    fi
+}
+
 # 0. Pre-flight: Python dependency check
 echo -e "\n${YELLOW}[0/4] Checking Python dependencies for schema-logind...${NC}"
 MISSING_PY=()
@@ -237,6 +258,11 @@ if [ -n "$PROFILE" ]; then
     ans="${ans:-Y}"
     if [[ "$ans" =~ ^[Yy]$ ]]; then
         install_profile "$PROFILE"
+        # RT audio for the desktop user (profiles ship pipewire/wireplumber)
+        RT_USER=""
+        [ -r /etc/schema-init/user.conf ] && RT_USER=$(. /etc/schema-init/user.conf 2>/dev/null; echo "$SCHEMA_USER")
+        RT_USER="${RT_USER:-$SUDO_USER}"
+        enable_rt_audio "$RT_USER"
         echo -e "${GREEN}Profile '${PROFILE}' installed.${NC}"
     else
         echo -e "  Skipped profile install."
@@ -350,6 +376,15 @@ cat << 'GOTCHAS'
 
   8. chronyd depends on network being up. If NM never signals ready_path,
      chronyd will hang at startup waiting for its dep to be satisfied.
+
+  9. Audio: two things beyond XDG_RUNTIME_DIR (see #2).
+     - RT: the desktop user must be in the 'pipewire' group or PipeWire never
+       gets SCHED_FIFO and audio crackles under load. setup.sh adds them when
+       a desktop profile is installed. (A PID1 RLIMIT grant won't work —
+       runuser's pam_limits overrides it; group membership is the lever.)
+     - Session modules (mpris pause, device reservation): WirePlumber needs the
+       graphical-session bus env, which wireplumber-run.sh harvests from a live
+       Plasma/kwin process (no systemd --user to provide it).
 GOTCHAS
 echo -e "==================================================================\n"
 echo -e "${GREEN}Done. Reboot and select the schema-init GRUB entry to test.${NC}"
