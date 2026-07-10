@@ -662,6 +662,8 @@ needs_root=1
 
 **The `sd_booted()` signal.** `mount_pseudo()` creates `/run/systemd/system` at early boot (`init.c`). `libsystemd`'s `sd_booted()` is a bare `access()` on that path, so any software gated on "is systemd the init?" — KService/ksycoca, elogind clients — gets a positive answer with no shim. This is what made the old `LD_PRELOAD` `mock_sd.so` workaround (which faked the check to stop KDE's ksycoca from spinning at idle) unnecessary: the signal is now native and costs one `mkdir`.
 
+**The `sd_login_monitor` directories.** `libsystemd`'s `sd_login_monitor_new(NULL, …)` — used by WirePlumber's logind module and other session/seat-aware clients — sets an inotify watch on `/run/systemd/{sessions,seats,users,machines}`. If any of those directories is missing the call fails with `-ENOENT` and the client silently drops logind integration (for WirePlumber that means no device reservation, no session-based pause). schema-logind creates all four at startup, empty — matching what real logind does even with no active sessions — so those clients initialize cleanly. Costs four `mkdir`s.
+
 ---
 
 ## Porting to a new distro
