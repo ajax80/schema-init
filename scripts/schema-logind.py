@@ -798,6 +798,9 @@ def main():
     DBusGMainLoop(set_as_default=True)
 
     os.makedirs('/run/systemd/system', exist_ok=True)
+    # sd_login_monitor_new(NULL) watches all four; missing dir -> ENOENT (-2) aborts WirePlumber's logind module.
+    for _d in ('sessions', 'seats', 'users', 'machines'):
+        os.makedirs('/run/systemd/' + _d, exist_ok=True)
     # NOTE: do NOT create /run/systemd/private — root systemctl connects there as a
     # peer sd-bus socket (to bypass polkit). We don't serve that socket, and creating
     # it as a directory makes root systemctl fail with "Connection refused" instead of
