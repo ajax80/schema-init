@@ -260,6 +260,12 @@ static void mount_pseudo(void) {
     mount("proc",    "/proc", "proc",     MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     mount("sysfs",   "/sys",  "sysfs",    MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     mount("devtmpfs","/dev",  "devtmpfs", MS_NOSUID|MS_STRICTATIME,     NULL);
+    /* devtmpfs doesn't create these; userspace init must. Without them bash
+     * process substitution and /dev/std{in,out,err} fail. */
+    symlink("/proc/self/fd",   "/dev/fd");
+    symlink("/proc/self/fd/0", "/dev/stdin");
+    symlink("/proc/self/fd/1", "/dev/stdout");
+    symlink("/proc/self/fd/2", "/dev/stderr");
     mkdir("/dev/pts", 0755);
     mount("devpts",  "/dev/pts", "devpts", MS_NOSUID|MS_NOEXEC,        "gid=5,mode=620,ptmxmode=666");
     mkdir("/dev/shm", 1777);
