@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#define SCHEMA_INIT_VERSION "0.1.0"
+
 /* States */
 #define STATE_FUNDAMENTAL   1
 #define STATE_FRICTION      6
