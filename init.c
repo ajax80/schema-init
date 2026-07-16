@@ -1457,28 +1457,74 @@ static void handle_reload(int evict_mode) {
 
 /* ── main ───────────────────────────────────────────────────────────── */
 
+static void usage(FILE *out) {
+    fprintf(out,
+        "Usage: schema-init [SERVICE_DIR]\n"
+        "\n"
+        "schema-init is an init system. The kernel starts it as PID 1; it is not\n"
+        "a command-line tool and refuses to run as any other pid.\n"
+        "\n"
+        "  SERVICE_DIR    service definitions (default: %s)\n"
+        "  -h, --help     show this help and exit\n"
+        "  -V, --version  show version and exit\n"
+        "\n"
+        "To inspect or control a running schema-init, use schema-ctl:\n"
+        "  schema-ctl status | timing | list | reload | start NAME | stop NAME\n",
+        SVC_DIR);
+}
+
 int main(int argc, char **argv) {
     int i;
     const char *svc_dir = SVC_DIR;
+    int have_dir = 0;
 
-    if (argc > 1) {
-        svc_dir = argv[1];
+    for (i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            usage(stdout);
+            return 0;
+        }
+        if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
+            printf("schema-init %s\n", SCHEMA_INIT_VERSION);
+            return 0;
+        }
+        if (argv[i][0] == '-') {
+            fprintf(stderr, "schema-init: unknown option '%s'\n", argv[i]);
+            usage(stderr);
+            return 1;
+        }
+        if (have_dir) {
+            fprintf(stderr, "schema-init: too many arguments\n");
+            usage(stderr);
+            return 1;
+        }
+        svc_dir = argv[i];
+        have_dir = 1;
     }
 
+    if (getpid() != 1) {
+        fprintf(stderr,
+            "schema-init: refusing to run as pid %d — schema-init must be PID 1.\n"
+            "Running it by hand would take the control socket (%s) away from the\n"
+            "real PID 1 and start a second copy of every service.\n"
+            "\n"
+            "Did you mean:  schema-ctl status\n",
+            (int)getpid(), CTL_SOCK_PATH);
+        return 1;
+    }
 
     clock_gettime(CLOCK_MONOTONIC, &init_start);
 
-    if (getpid() == 1) {
-        /* Detach from controlling terminal to prevent receiving SIGINT on Ctrl+C */
+    /* Detach from controlling terminal to prevent receiving SIGINT on Ctrl+C */
+    {
         int fd = open("/dev/tty", O_RDWR | O_NOCTTY);
         if (fd >= 0) {
             ioctl(fd, TIOCNOTTY);
             close(fd);
         }
-        mount_pseudo();
-        cleanup_tmp_locks();
-        watchdog_init();
     }
+    mount_pseudo();
+    cleanup_tmp_locks();
+    watchdog_init();
     setup_signals();
 
     svc_count = services_load(svc_dir, services, MAX_SERVICES);
