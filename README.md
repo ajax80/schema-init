@@ -341,8 +341,21 @@ schema-init does not parse `/etc/fstab`. On boot it mounts the pseudo-filesystem
 | `/proc` | proc | nosuid, nodev, noexec |
 | `/sys` | sysfs | nosuid, nodev, noexec |
 | `/dev` | devtmpfs | nosuid, strictatime |
+| `/dev/pts` | devpts | nosuid, noexec, `gid=5,mode=620,ptmxmode=666` — without it there are no PTYs and every terminal emulator fails to start |
+| `/dev/shm` | tmpfs | nosuid, nodev, mode=1777 — POSIX shared memory |
 | `/run` | tmpfs | nosuid, nodev, mode=0755 |
 | `/sys/fs/cgroup` | cgroup2 | nosuid, nodev, noexec, relatime |
+
+After mounting `/dev`, schema-init creates four symlinks that devtmpfs does not provide and a userspace init is expected to make itself:
+
+| Link | Target |
+|------|--------|
+| `/dev/fd` | `/proc/self/fd` |
+| `/dev/stdin` | `/proc/self/fd/0` |
+| `/dev/stdout` | `/proc/self/fd/1` |
+| `/dev/stderr` | `/proc/self/fd/2` |
+
+Without these, bash process substitution (`< <(...)`) and any `/dev/stdin`-style redirect fail — a gap that surfaces in ordinary shell scripts long before it surfaces anywhere in the init itself.
 
 schema-init also creates `/run/log/schema-init/` at boot. Each service's stdout and stderr are redirected there automatically (see Logs).
 
