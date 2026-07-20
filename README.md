@@ -433,6 +433,8 @@ menuentry 'schema-init' {
 
 Option C is the safest for dual-boot or first-time installs — it leaves the existing systemd entry intact as a fallback.
 
+**Kernel cmdline words are safe.** The kernel hands PID 1 every boot-cmdline token it didn't consume (`rhgb`, `quiet`, `splash`, `plymouth.debug`, …), so leave your usual options in the kernel line — schema-init ignores them when it runs as PID 1. A services directory other than the default `/etc/schema-init/services` can only be set by hand-running the binary (`schema-init /path/to/services`), never via the kernel cmdline.
+
 ### Replacing a running init (without reboot)
 
 The init binary cannot be overwritten while running (`text file busy`). Use the copy-then-move trick:

@@ -1487,6 +1487,14 @@ int main(int argc, char **argv) {
             printf("schema-init %s\n", SCHEMA_INIT_VERSION);
             return 0;
         }
+        /* As PID 1 the kernel appends every boot-cmdline word it didn't
+         * consume (rhgb, splash, quiet, plymouth.debug, ...) to our argv.
+         * Those tokens are not ours: letting a stray one become svc_dir makes
+         * services_load() open a bogus directory and silently start zero
+         * services. Only a hand-run invocation may name a services dir; as
+         * PID 1, ignore all positional arguments and keep the built-in SVC_DIR. */
+        if (getpid() == 1)
+            continue;
         if (argv[i][0] == '-') {
             fprintf(stderr, "schema-init: unknown option '%s'\n", argv[i]);
             usage(stderr);
