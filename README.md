@@ -9,7 +9,7 @@ A minimal PID 1 init system for Linux that supervises services through a weight-
 
 No systemd. No OpenRC. No journal daemon. No socket activation engine. Just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
 
-**PID 1 footprint: 892 KB RSS, 1 thread.**
+**PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every footprint figure in this README names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](#pid-1-rss--every-measurement).
 
 ---
 
@@ -19,13 +19,15 @@ systemd isn't just PID 1 — it's a constellation of always-on daemons: `journal
 
 **Your RAM comes back.** On identical hardware running the identical desktop, schema-init frees roughly **half a gigabyte of RAM** that systemd's daemon stack was sitting on (~1.1 GB used at desktop vs ~1.6–2.0 GB — see [Real numbers](#real-numbers)), and idle swap drops from hundreds of MB to **zero**. In lived terms that is the difference between *a few browser tabs plus one other program before the machine starts thrashing* and **two or three browsers with ~20 tabs each and a game running at the same time** — same RAM, no upgrade. The computer you already own effectively gets bigger.
 
-**Your power comes back.** With no ambient timer wakeups holding the cores awake, the CPU actually reaches its deepest hardware sleep state: measured **92–99% C10 residency** and **~1.25 W full-SoC package draw** at a working desktop, idle load average **0.03** (vs 0.10–0.20 under systemd). Those figures are read from Intel RAPL hardware energy counters, not estimated. Per machine it is a small, honest number — but it is *structural*, paid back every second of every idle hour. The per-node idle delta is published above for exactly one reason: multiply it by your own fleet size and uptime and the total is yours to compute. schema-init's part is simply removing the constant wakeups that keep silicon out of deep sleep in the first place. At datacenter scale, "stop waking millions of idle cores 100+ times a second" is not a rounding error.
+**Your power comes back.** With no ambient timer wakeups holding the cores awake, the CPU actually reaches its deepest hardware sleep state: measured **92–99% C10 residency** and **~1.25 W full-SoC package draw** at a working desktop, idle load average **0.03** (vs 0.10–0.20 under systemd). Those figures are read from Intel RAPL hardware energy counters, not estimated. Per machine it is a small, honest number — but it is *structural*, paid back every second of every idle hour. schema-init's part is simply removing the constant wakeups that keep silicon out of deep sleep in the first place.
+
+> **On extrapolating this:** don't. These are single-node measurements on one i3 laptop. An init system's own power draw is a tiny slice of a server's total, so multiplying a per-node idle delta by a fleet size produces a number that will not survive contact with anyone who runs real hardware. If schema-init saves money at scale, the levers are **density, footprint, boot time, attack surface and determinism** — not init power draw.
 
 **The machine goes quiet, not just lean.** One PID-1 thread instead of 20–30. A tick loop that sleeps *indefinitely* once services are stable — nothing wakes it on a schedule. No journal flush, no D-Bus polling, no watchdog chatter. The hardware is allowed to actually rest.
 
 This isn't theory or a benchmark rig — it's a salvaged Dell Inspiron (Intel i3, 4 GB) that swapped constantly under systemd and now runs a full desktop with room to spare under schema-init. Older and low-RAM machines benefit the most: the daemons you delete are the exact ones a small machine can least afford.
 
-**PID 1 footprint: 892 KB RSS, 1 thread.**
+**PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every footprint figure in this README names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](#pid-1-rss--every-measurement).
 
 ---
 
@@ -454,7 +456,7 @@ Tested on Dell Inspiron 3542 (Intel Core i3, 4GB RAM) running full Cinnamon desk
 
 | Metric | schema-init | systemd (same hardware, Fedora) |
 |--------|-------------|----------------------------------|
-| PID 1 RSS | **892 KB** | ~8–15 MB |
+| PID 1 RSS | see [PID 1 RSS — every measurement](#pid-1-rss--every-measurement) | *(not measured on this machine)* |
 | PID 1 threads | **1** | 20–30+ |
 | RAM used at desktop | **~1.1 GB** | ~1.6–2.0 GB |
 | Swap used | **0 MB** | 200–500 MB |
@@ -481,13 +483,42 @@ total kernel → login screen: **~20.7s**
 
 `schema-ctl timing` produces this output.
 
+### PID 1 RSS — every measurement
+
+One table, every number, each naming the machine, the build and the service count it came from. Anything not listed here is not a measurement we have.
+
+| PID 1 | RSS | Machine / conditions | Measured |
+|-------|-----|----------------------|----------|
+| schema-init | **1.2 MB** | minimal static boot, QEMU/KVM 512 MB / 2 vCPU | 2026-06-14 |
+| schema-init | **2.6 MB** | live desktop, QEMU/KVM 512 MB / 2 vCPU | 2026-06-14 |
+| schema-init | **3.3–4.0 MB** | Fedora 44, KDE Plasma + Docker/podman, **47 services**, v0.1.0 — six consecutive boots | 2026-07-16 → 07-24 |
+| systemd | **20.1 MB** | Fedora Cloud Base 44 clean idle, 15 running units, same kernel, same QEMU profile | 2026-06-14 |
+
+**On the same kernel and QEMU profile that is 8–17× lighter.** The desktop and the Cloud Base figures are *not* a fair pair — one runs KDE, the other is headless — so they are not presented as one. The only apples-to-apples comparison here is minimal-boot schema-init vs clean-idle systemd.
+
+Two numbers this README used to carry, and why they're gone:
+
+- **"892 KB"** was real, but it was an earlier and smaller build on the Dell. Current builds measure 1.2 MB minimal and 3.3–4.0 MB at a full desktop; the init has grown (timers, cpuset, cgroup delegation, container support). Leading with the lowest figure ever recorded, from a binary you can no longer download, isn't a footprint claim — it's cherry-picking. **892 KB was also never the binary's size on disk** (see [Binary size](#binary-size)).
+- **"40 MB – 120 MB" for systemd's PID 1** was never measured by this project. The measured figure is 20.1 MB, above.
+
+### Binary size
+
+`make` produces an unstripped static binary. Measured on the v0.1.0 build (`601b18ac`, 2026-07-24):
+
+| | Bytes | |
+|---|---|---|
+| as built (static, with debug info) | 5,607,840 | **5.6 MB** |
+| after `strip schema-init` | 1,199,144 | **1.2 MB** |
+| `.text` alone | 1,119,086 | 1.1 MB |
+
+`.text` alone is 1.1 MB, so no build of this binary has ever been under 1 MB on disk. Reproduce with `ls -l`, `size` and `strip`. Note that `make` does **not** strip — quote 5.6 MB for what you build yourself, 1.2 MB only for a binary you stripped.
+
 ### Architectural efficiency
 
-Live measurements from a 9-hour uptime session (Fedora 44, KDE Plasma, GreyBox):
+Live measurements from a 9-hour uptime session (Fedora 44, KDE Plasma, GreyBox — note this node runs an older, smaller build; its RSS is not comparable to the current one):
 
 | Metric | systemd | schema-init | Architectural elimination |
 |--------|---------|-------------|--------------------------|
-| PID 1 RSS | 40MB – 120MB | 960KB – 1.2MB | Eliminates heap allocation bloat and redundant daemon memory overhead |
 | Idle CPU consumption | Constant ambient timer wakeups | ~0.03ms/min (1.06s over 9h) | CPU reaches deeper C-states — hardware idle, not just low-utilization idle |
 | State tracking | D-Bus event loops, logging daemons | Direct POSIX shared memory / binary flag probes | Removes IPC serialization and deserialization bottlenecks entirely |
 | Session tracking | utmp/logind infrastructure | Ghost sessions — `who`/`w` show 0 users | Zero inode contention on `/var/run/utmp`; `who` and `w` are zero-overhead no-ops under concurrent logins |
@@ -504,7 +535,7 @@ PkgWatt: 1.23–1.32W   ← entire SoC including iGPU, read via Intel RAPL
 GFX%rc6: 99.67%        ← integrated GPU in deepest sleep state
 ```
 
-C10 is the deepest sleep state on Haswell silicon. Reaching it requires the CPU to sit undisturbed long enough to flush caches and power-gate internal voltage rails — typically blocked by the constant timer wakeups from systemd's watchdog, journal flush, and D-Bus polling infrastructure. At 95% C10 residency with a full desktop running, schema-init is generating near-zero ambient noise. The 1.25W package figure is read directly from Intel RAPL hardware energy counters, not estimated. Services with `ready_path` set promote the instant the path exists — no blind timer. `stable_secs` (default 10s) is the fallback. The remaining ~10s cluster is network/getty/sshd with no readiness path.
+C10 is the deepest sleep state on Haswell silicon. Reaching it requires the CPU to sit undisturbed long enough to flush caches and power-gate internal voltage rails — typically blocked by the constant timer wakeups from systemd's watchdog, journal flush, and D-Bus polling infrastructure. At 92–99% C10 residency with a full desktop running, schema-init is generating near-zero ambient noise. The 1.25W package figure is read directly from Intel RAPL hardware energy counters, not estimated. Services with `ready_path` set promote the instant the path exists — no blind timer. `stable_secs` (default 10s) is the fallback. The remaining ~10s cluster is network/getty/sshd with no readiness path.
 
 ---
 
