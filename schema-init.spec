@@ -39,9 +39,10 @@ overwrite a service file a running system depends on.
 %autosetup
 
 %build
-# The Makefile sets its own CFLAGS (-std=c99 -D_GNU_SOURCE) and links -static.
-# %%{optflags} is deliberately not injected: overriding CFLAGS from the command
-# line replaces those flags rather than adding to them, which breaks the build.
+# The Makefile takes CFLAGS from the environment and appends the flags the code
+# requires, so rpm's %%{optflags} -- fortify, stack-protector, annobin -- apply
+# to the dynamically linked helpers. PID 1 itself is linked -static and does not
+# consume LDFLAGS; the hardened-ld specs would force PIE onto a static binary.
 %make_build
 
 %install

@@ -1,7 +1,11 @@
 CROSS_COMPILE ?=
 CC      = $(CROSS_COMPILE)gcc
 STRIP   = $(CROSS_COMPILE)strip
-CFLAGS  = -std=c99 -Wall -Wextra -O2 -D_GNU_SOURCE
+# Optimisation and hardening are tunable; a packager or distro can supply its
+# own CFLAGS in the environment. The flags the code actually requires to
+# compile are appended, so overriding CFLAGS cannot silently drop them.
+CFLAGS ?= -O2
+CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
