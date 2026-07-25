@@ -9,9 +9,11 @@
  * snapshot, so it survives a frozen compositor. This increment is display
  * only — no input, no mitigation (see docs/superpowers/specs/2026-06-14-limp-mode-design.md).
  *
- *   schema-board          live board, refreshes on shm changes
- *   schema-board --once   print one snapshot and exit (for vmtest)
+ *   schema-board                    live board, refreshes on shm changes
+ *   schema-board --once             print one snapshot and exit (for vmtest)
+ *   schema-board --tty /dev/tty8    own a console, reachable with ctrl-alt-F8
  */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -124,16 +126,63 @@ static void render(const schema_shm_t *s) {
     fflush(stdout);
 }
 
+static void usage(FILE *out) {
+    fprintf(out,
+        "usage: schema-board [--tty <device>] [--once]\n"
+        "\n"
+        "  --tty <device>   paint a dedicated console instead of stdout, e.g.\n"
+        "                   --tty /dev/tty8 — reachable with ctrl-alt-F8 even\n"
+        "                   when the desktop is wedged\n"
+        "  --once           print one snapshot and exit\n"
+        "  --help           this text\n"
+        "  --version        print version and exit\n"
+        "\n"
+        "Reads the PID 1 shared-memory export, not the control socket, so it\n"
+        "needs no root and keeps working when the socket is wedged.\n");
+}
+
+/* Repoint stdout at a console so render() paints there unchanged. Services are
+ * spawned with stdout on a logfile, so a board run as a .svc needs this. */
+static int open_tty(const char *dev) {
+    int t = open(dev, O_WRONLY | O_NOCTTY);
+    if (t < 0) { fprintf(stderr, "schema-board: %s: %s\n", dev, strerror(errno)); return -1; }
+    if (dup2(t, STDOUT_FILENO) < 0) { perror("dup2"); close(t); return -1; }
+    if (t != STDOUT_FILENO) close(t);
+    fputs("\033[9;0]", stdout);   /* linux console: disable screen blanking */
+    fputs("\033[?25l", stdout);   /* hide cursor */
+    fflush(stdout);
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    int once = (argc > 1 && (strcmp(argv[1], "--once") == 0 ||
-                             strcmp(argv[1], "-1") == 0));
-    int fd;
+    const char *tty = NULL;
+    int once = 0;
+    int fd, i;
     schema_shm_t *live;
     schema_shm_t snap;
     uint32_t last_seq = (uint32_t)-1;
 
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--once") == 0 || strcmp(argv[i], "-1") == 0) {
+            once = 1;
+        } else if (strcmp(argv[i], "--tty") == 0 && i + 1 < argc) {
+            tty = argv[++i];
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            usage(stdout);
+            return 0;
+        } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            printf("schema-board %s\n", SCHEMA_INIT_VERSION);
+            return 0;
+        } else {
+            usage(stderr);
+            return 1;
+        }
+    }
+
     signal(SIGINT,  on_sig);
     signal(SIGTERM, on_sig);
+
+    if (tty && open_tty(tty) != 0) return 1;
 
     fd = shm_open(SCHEMA_SHM_NAME, O_RDONLY, 0);
     if (fd < 0) {
@@ -159,6 +208,7 @@ int main(int argc, char **argv) {
         usleep(200 * 1000);   /* 5 Hz poll */
     }
 
+    if (tty) { fputs("\033[?25h\n", stdout); fflush(stdout); }
     munmap(live, sizeof(*live));
     return 0;
 }

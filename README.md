@@ -99,7 +99,7 @@ If you're reading the source to evaluate it, start here. The whole init is ~2,50
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
 | `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
 | `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
-| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. Increment 1 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
+| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` gives it a dedicated console reachable with `ctrl-alt-F8` when the desktop is wedged — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
 
 **Directories:**
 
@@ -565,6 +565,36 @@ The socket is `chmod 0600` — root only. Build alongside the init binary:
 make schema-ctl
 sudo cp schema-ctl /usr/local/bin/schema-ctl
 ```
+
+---
+
+## Recovery console
+
+When a Wayland compositor wedges, `ctrl-alt-F2` only gets you another login on the same broken session, and systemd's `rescue`/`emergency` targets are all-or-nothing — they tear the session down and lose your work. `schema-board` on a dedicated VT is the alternative: a surface that sits **below** the compositor and shows you what is actually wrong.
+
+```sh
+schema-board --tty /dev/tty8      # then ctrl-alt-F8 to look at it
+```
+
+It reads the shared-memory export rather than the control socket and depends on nothing graphical, so a frozen desktop, a wedged control socket, and a saturated D-Bus all leave it working. Give it a VT no getty owns — `services/` ships gettys on tty2–tty6, and tty1 is the display manager, so tty7 and up are free.
+
+To have PID 1 own it from boot, copy `services/schema-board.svc.example` into `/etc/schema-init/services/`:
+
+```ini
+name=schema-board
+exec=/usr/bin/schema-board
+args=--tty
+args=/dev/tty8
+needs_root=1
+critical=0
+```
+
+Two things about that file are load-bearing:
+
+- **`args=` is one argument per line.** `args=--tty /dev/tty8` on a single line passes *one* argv of `"--tty /dev/tty8"`, which `schema-board` rejects. Repeat the key.
+- **`--tty` is not optional for a service.** Services are spawned with stdout redirected to `/var/log/schema-init/<name>.log`, so without `--tty` the board would faithfully paint its frames into a logfile.
+
+On the console it takes over, the board disables screen blanking and hides the cursor, restoring the cursor when it exits.
 
 ---
 
