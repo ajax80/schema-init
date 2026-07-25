@@ -5,7 +5,34 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
+#include "schema.h"
+
 #define CTL_SOCK_PATH "/run/schema-init.sock"
+
+static void usage(FILE *out) {
+    fprintf(out,
+        "usage: schema-ctl <command> [args]\n"
+        "\n"
+        "  status [--json|--kv]   service table: name, pid, state, restarts\n"
+        "  list                   service names, one per line\n"
+        "  timing                 how long each service took to start\n"
+        "  reload [--evict]       re-read service files; --evict also SIGTERMs\n"
+        "                         services no longer present in config\n"
+        "  start <svc>            start a service (alias: up)\n"
+        "  stop <svc>             stop it and hold it down (alias: down)\n"
+        "  restart <svc>\n"
+        "  add <path>             load one .svc file at runtime\n"
+        "  pet <svc>              feed a service's watchdog\n"
+        "  reset [<svc>]          clear restart/dormant counters and retry;\n"
+        "                         no argument resets every service\n"
+        "  reboot\n"
+        "  poweroff\n"
+        "\n"
+        "  --help                 this text\n"
+        "  --version              print version and exit\n"
+        "\n"
+        "Talks to PID 1 over %s.\n", CTL_SOCK_PATH);
+}
 
 int main(int argc, char **argv) {
     char cmd[256];
@@ -17,8 +44,18 @@ int main(int argc, char **argv) {
     struct sockaddr_un addr;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: schema-ctl status [--json|--kv]|list|timing|reload [--evict]|start <svc>|stop <svc>|up <svc>|down <svc>|restart <svc>|add <path>|pet <svc>|reset [<svc>]|reboot|poweroff\n");
+        usage(stderr);
         return 1;
+    }
+
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        usage(stdout);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0) {
+        printf("schema-ctl %s\n", SCHEMA_INIT_VERSION);
+        return 0;
     }
 
 
