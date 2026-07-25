@@ -2,6 +2,8 @@
 schema-init
 schema-ctl
 schema-journal-sink
+schema-init-static
+release/
 desktop/schema-desktop
 *.log
 *.vmdk
