@@ -57,6 +57,7 @@ overwrite a service file a running system depends on.
 %{_bindir}/schema-journal-sink
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
+%config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
 %dir %{_datadir}/%{name}
 %{_datadir}/%{name}/services
 

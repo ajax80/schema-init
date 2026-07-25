@@ -1,0 +1,9 @@
+/var/log/schema-init/*.log {
+    weekly
+    maxsize 100M
+    rotate 4
+    missingok
+    notifempty
+    compress
+    copytruncate
+}

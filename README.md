@@ -644,6 +644,24 @@ tail -f /var/log/schema-init/network-manager.log
 
 There is no journal daemon. Logs are plain text, always.
 
+**Rotation** — `schema-init.logrotate` is installed to `/etc/logrotate.d/schema-init` (weekly, or sooner at 100 MB, keeping 4 compressed generations). It uses **`copytruncate`, and that is not optional**:
+
+- A service's log fd is opened in the child before `exec` (`service.c:321`) and held for the whole life of the process. Renaming the file would leave every running service appending to the old inode — the new file would stay empty until the service restarted.
+- `SIGHUP` to PID 1 means **reload configuration** (`init.c:1312`), not "reopen logs". A `postrotate kill -HUP 1` would silently trigger a config reload instead of rotating.
+- Every writer uses `O_APPEND` (`service.c:321`, `schema-journal-sink.c:344`), which is what makes truncation safe: writes resume at offset 0 instead of leaving a sparse hole at the old offset.
+
+**Something has to run logrotate.** There is no cron and no `logrotate.timer` here, so schedule it as an ordinary wall-clock timer — see `services/logrotate.svc.example`:
+
+```ini
+name=logrotate
+exec=/usr/bin/logrotate
+args=/etc/logrotate.conf
+needs_root=1
+on_calendar=00:10
+```
+
+Without that timer (or some other caller) the config sits inert and logs still grow unbounded.
+
 **`journalctl` shim (optional Track B)** — software and post-install scripts that shell out to `journalctl -u <svc>` would fail with no journald present. `scripts/journalctl` is a drop-in interceptor: install it to `/usr/local/bin/journalctl` and it serves the matching `*.log` from the directories above, swallows unknown flags, supports `-o json`, and always exits 0 so a caller piping it to `jq`/`awk` never hard-crashes. It does **not** read a binary journal — there isn't one.
 
 ---
