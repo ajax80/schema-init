@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.1.1
+Version:        0.1.2
 Release:        1%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -55,6 +55,7 @@ overwrite a service file a running system depends on.
 %{_bindir}/schema-ctl
 %{_bindir}/schema-subreaper
 %{_bindir}/schema-journal-sink
+%{_bindir}/schema-board
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
 %config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
@@ -62,6 +63,11 @@ overwrite a service file a running system depends on.
 %{_datadir}/%{name}/services
 
 %changelog
+* Fri Jul 24 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.2-1
+- Ship schema-board, the read-only weight-state board; needs no root
+- Ship a logrotate config and an example rotation timer
+- schema-ctl gains --help/--version and reports the real connect error
+
 * Fri Jul 24 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.1-1
 - Initial RPM package
 - Adds the AGPL-3.0 license text, which v0.1.0 shipped without
