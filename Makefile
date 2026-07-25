@@ -10,7 +10,7 @@ CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -24,7 +24,7 @@ endif
 SRCS    = init.c schema.c service.c group.c
 OBJS    = $(SRCS:.c=.o)
 
-all: $(BINS) schema-board
+all: $(BINS)
 
 desktop:
 	$(MAKE) -C desktop
