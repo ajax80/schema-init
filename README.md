@@ -511,7 +511,7 @@ Two numbers this README used to carry, and why they're gone:
 | after `strip schema-init` | 1,199,144 | **1.2 MB** |
 | `.text` alone | 1,119,086 | 1.1 MB |
 
-`.text` alone is 1.1 MB, so no build of this binary has ever been under 1 MB on disk. Reproduce with `ls -l`, `size` and `strip`. Note that `make` does **not** strip — quote 5.6 MB for what you build yourself, 1.2 MB only for a binary you stripped.
+`.text` alone is 1.1 MB, so no build of this binary has ever been under 1 MB on disk. Reproduce with `ls -l`, `size` and `strip`. Note that plain `make` does **not** strip — quote 5.6 MB for what you build yourself, 1.2 MB only for a stripped binary. `make release` produces the stripped set in `release/` alongside a `SHA256SUMS` file; that is what release assets ship.
 
 ### Architectural efficiency
 
