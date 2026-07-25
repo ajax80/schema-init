@@ -860,7 +860,7 @@ schema-init was built by Jonathan Ayers in 2026 as the operating layer for the *
 
 ## License
 
-AGPL-3.0 for open source use.  
+**AGPL-3.0-or-later** for open source use — full text in [LICENSE](LICENSE).  
 Commercial license available for embedding in proprietary systems — open an issue or contact via GitHub.
 
 ---

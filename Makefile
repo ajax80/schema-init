@@ -1,12 +1,21 @@
 CROSS_COMPILE ?=
 CC      = $(CROSS_COMPILE)gcc
 STRIP   = $(CROSS_COMPILE)strip
-CFLAGS  = -std=c99 -Wall -Wextra -O2 -D_GNU_SOURCE
+# Optimisation and hardening are tunable; a packager or distro can supply its
+# own CFLAGS in the environment. The flags the code actually requires to
+# compile are appended, so overriding CFLAGS cannot silently drop them.
+CFLAGS ?= -O2
+CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
 RELDIR ?= release
 BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink
+
+PREFIX     ?= /usr
+BINDIR     ?= $(PREFIX)/bin
+DATADIR    ?= $(PREFIX)/share
+SYSCONFDIR ?= /etc
 
 ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
@@ -38,6 +47,13 @@ schema-journal-sink: schema-journal-sink.c
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+install: all
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 0755 $(BINS) $(DESTDIR)$(BINDIR)/
+	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
+	install -d $(DESTDIR)$(DATADIR)/schema-init/services
+	install -m 0644 services/* $(DESTDIR)$(DATADIR)/schema-init/services/
+
 release: all
 	rm -rf $(RELDIR)
 	mkdir -p $(RELDIR)
@@ -61,6 +77,6 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-.PHONY: all clean release aarch64 armhf desktop
+.PHONY: all clean install release aarch64 armhf desktop
 
 
