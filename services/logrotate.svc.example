@@ -1,0 +1,5 @@
+name=logrotate
+exec=/usr/bin/logrotate
+args=/etc/logrotate.conf
+needs_root=1
+on_calendar=00:10

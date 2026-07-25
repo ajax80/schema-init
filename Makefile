@@ -53,6 +53,8 @@ install: all
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
 	install -d $(DESTDIR)$(DATADIR)/schema-init/services
 	install -m 0644 services/* $(DESTDIR)$(DATADIR)/schema-init/services/
+	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
+	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
 
 release: all
 	rm -rf $(RELDIR)
