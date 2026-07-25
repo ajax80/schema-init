@@ -331,6 +331,8 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 These are real gaps, not future features being teased:
 
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
+- **Log rotation needs a timer you schedule.** The `logrotate` config ships; nothing here fires it. See [Logs](#logs).
+- **The recovery console is not visible during a *full* compositor wedge.** The board survives — measured — but a compositor that cannot release DRM master leaves the screen showing a frozen image while the VT switch happens invisibly. See [Recovery console](#recovery-console).
 
 ---
 
@@ -576,7 +578,22 @@ When a Wayland compositor wedges, `ctrl-alt-F2` only gets you another login on t
 schema-board --tty /dev/tty8      # then ctrl-alt-F8 to look at it
 ```
 
-It reads the shared-memory export rather than the control socket and depends on nothing graphical, so a frozen desktop, a wedged control socket, and a saturated D-Bus all leave it working. Give it a VT no getty owns — `services/` ships gettys on tty2–tty6, and tty1 is the display manager, so tty7 and up are free.
+It reads the shared-memory export rather than the control socket and depends on nothing graphical, so a frozen desktop, a wedged control socket, and a saturated D-Bus all leave the **process** working. Give it a VT no getty owns — `services/` ships gettys on tty2–tty6, and tty1 is the display manager, so tty7 and up are free.
+
+### What it survives, and what it does not
+
+This is measured on real hardware, not assumed. `kwin_wayland` was `SIGSTOP`ed for 30 seconds on a 47-service desktop:
+
+| | |
+|---|---|
+| The board keeps reading and updating while the compositor is wedged | **Yes** — `seq` advanced 82491 → 82639 with the compositor in state `T` |
+| You can *see* it while the compositor is fully wedged | **No** |
+
+The second row is the important one. A stopped compositor still holds **DRM master** and cannot release it, so `ctrl-alt-F8` switches the active VT *in the kernel* — `fgconsole` really does change — while the screen keeps displaying the frozen desktop image. Your keystrokes land on a console you cannot see.
+
+So today the recovery console is reachable when the session is **degraded but alive**: `plasmashell` has died, a single client is hung, the panel is gone, `schema-ctl` is unresponsive — the compositor itself still services VT switches. That covers the common cases. A compositor wedged so hard it cannot release KMS is **not** covered; getting there requires the board to take DRM master itself rather than write to a tty, which is not implemented.
+
+If you are stranded on an invisible VT, `sudo chvt 1` from any other shell (ssh included) puts you back.
 
 To have PID 1 own it from boot, copy `services/schema-board.svc.example` into `/etc/schema-init/services/`:
 

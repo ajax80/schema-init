@@ -86,8 +86,21 @@ is the first external reader; no producer changes needed for the read-only incre
   open shm read-only, seqlock-consistent snapshot, render the service table with
   state colors + weight + pid + restart_count + system_state + groups; refresh on `seq`
   change. Verify it renders the live shm under the vmtest harness. No input, no fixing yet.
-- Increment 2 — own a dedicated VT + ctrl-alt-F<n> reachability; survive a wedged
-  compositor (manual freeze test).
+- Increment 2 — **PARTIAL (2026-07-24).** `--tty <device>` implemented: the board paints a
+  dedicated console, verified with `setterm --dump`. Freeze test run on real hardware
+  (`SIGSTOP` on `kwin_wayland`, 30 s, 47-service desktop):
+  - ✅ **Survival proven** — `seq` advanced 82491 → 82639 with the compositor in state `T`.
+  - ❌ **Reachability disproven** — `ctrl-alt-F8` switched the active VT in the kernel
+    (`fgconsole` changed) but the screen never repainted, because the stopped compositor
+    still holds **DRM master** and cannot release it. The operator saw nothing.
+  - Therefore the console is reachable only while the session is *degraded but alive*
+    (plasmashell dead, hung client, unresponsive `schema-ctl`). Documented as a known
+    limitation rather than claimed as working.
+  - **Remaining work:** the board must take DRM master itself — `VT_ACTIVATE` +
+    `DRM_IOCTL_SET_MASTER` — instead of writing to a tty a live compositor still owns.
+    Note `SIGSTOP`/`SIGCONT` is the right freeze harness (reversible, no work lost);
+    killing the compositor on Wayland ends the session, which is the very cost limp-mode
+    exists to avoid. `sudo chvt 1` is the escape hatch when stranded on an invisible VT.
 - Increment 3 — B-cockpit: arrow to a lit slot, apply a card via the `schema-ctl` socket.
 - Increment 4 — `.svc` card-ladder syntax + auto-healer (C) playing declared decks.
 - Increment 5 — generative fallback card from F8/F9/F6 flags when the deck is empty.

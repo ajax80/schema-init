@@ -12,6 +12,12 @@
  *   schema-board                    live board, refreshes on shm changes
  *   schema-board --once             print one snapshot and exit (for vmtest)
  *   schema-board --tty /dev/tty8    own a console, reachable with ctrl-alt-F8
+ *
+ * The process survives a fully wedged compositor (measured), but it is only
+ * *visible* while the compositor can still service a VT switch: a stopped
+ * compositor holds DRM master, so the switch happens in the kernel while the
+ * screen keeps showing the frozen image. Making the board visible in that case
+ * needs DRM master, not a tty write — see the design spec, increment 2.
  */
 #include <errno.h>
 #include <stdio.h>
