@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,12 +78,17 @@ int main(int argc, char **argv) {
     strncpy(addr.sun_path, CTL_SOCK_PATH, sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int first_errno = errno;
         /* try local fallback */
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
         strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
         if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-            perror("connect");
+            fprintf(stderr, "%s: %s\n", CTL_SOCK_PATH, strerror(first_errno));
+            if (first_errno == EACCES || first_errno == EPERM)
+                fprintf(stderr, "schema-ctl talks to PID 1 as root: try sudo schema-ctl %s", cmd);
+            else if (first_errno == ENOENT)
+                fprintf(stderr, "no socket there — is schema-init running as PID 1?\n");
             close(fd);
             free(rbuf);
             return 1;
