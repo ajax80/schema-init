@@ -10,3 +10,4 @@ desktop/schema-desktop
 __pycache__/
 *.pyc
 schema-subreaper
+schema-board
