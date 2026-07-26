@@ -86,21 +86,46 @@ is the first external reader; no producer changes needed for the read-only incre
   open shm read-only, seqlock-consistent snapshot, render the service table with
   state colors + weight + pid + restart_count + system_state + groups; refresh on `seq`
   change. Verify it renders the live shm under the vmtest harness. No input, no fixing yet.
-- Increment 2 — **PARTIAL (2026-07-24).** `--tty <device>` implemented: the board paints a
-  dedicated console, verified with `setterm --dump`. Freeze test run on real hardware
-  (`SIGSTOP` on `kwin_wayland`, 30 s, 47-service desktop):
-  - ✅ **Survival proven** — `seq` advanced 82491 → 82639 with the compositor in state `T`.
-  - ❌ **Reachability disproven** — `ctrl-alt-F8` switched the active VT in the kernel
-    (`fgconsole` changed) but the screen never repainted, because the stopped compositor
-    still holds **DRM master** and cannot release it. The operator saw nothing.
-  - Therefore the console is reachable only while the session is *degraded but alive*
-    (plasmashell dead, hung client, unresponsive `schema-ctl`). Documented as a known
-    limitation rather than claimed as working.
-  - **Remaining work:** the board must take DRM master itself — `VT_ACTIVATE` +
-    `DRM_IOCTL_SET_MASTER` — instead of writing to a tty a live compositor still owns.
-    Note `SIGSTOP`/`SIGCONT` is the right freeze harness (reversible, no work lost);
-    killing the compositor on Wayland ends the session, which is the very cost limp-mode
-    exists to avoid. `sudo chvt 1` is the escape hatch when stranded on an invisible VT.
+- Increment 2 — **BLOCKED on a logind gap (2026-07-25).** `--tty <device>` is implemented and
+  the board paints a dedicated console (verified with `setterm --dump`), but the console is
+  **not reachable on a graphical system at all** — healthy or wedged.
+
+  Measured twice on real hardware:
+  - ✅ **Survival proven** (07-24) — `SIGSTOP` on `kwin_wayland`, 30 s, 47-service desktop:
+    `seq` advanced 82491 → 82639 with the compositor in state `T`.
+  - ❌ **Reachability disproven, healthy desktop** (07-25) — with `kwin_wayland` running
+    normally, `ctrl-alt-F8` moved `/sys/class/tty/tty0/active` to `tty8` and the operator
+    saw no change. `ctrl-alt-F2` — a plain autologin console with no connection to the
+    board — moved it to `tty2` with the same result. The kernel switches; nothing repaints.
+
+  **Root cause — `scripts/schema-logind.py`, not `schema-board.c`.** The session-device
+  handoff is one-way. It implements `TakeControl` and `TakeDevice` (so a compositor can
+  acquire KMS) but has **no** `ResumeDevice`, **no** `Seat.SwitchTo`, **no** session `VTNr`,
+  and **no** watch on `/sys/class/tty/tty0/active`. So the compositor is never told it lost
+  the console, never drops DRM master, and the scanout never changes. `loginctl show-session`
+  returns empty for the same reason. This breaks the tty2–tty6 gettys identically.
+
+  **Two earlier conclusions were wrong and are retracted here:**
+  1. "A *stopped* compositor cannot release DRM master." A healthy one does not release it
+     either — nothing asks it to. The `SIGSTOP` was incidental.
+  2. "The board must take DRM master itself (`VT_ACTIVATE` + `DRM_IOCTL_SET_MASTER`)." That
+     cannot work: `SET_MASTER` fails while another process holds master.
+
+  **Remaining work — in `schema-logind.py`:**
+  1. Record a `VTNr` on each session at creation (from the session's tty / `XDG_VTNR`).
+  2. Watch the active VT — poll `/sys/class/tty/tty0/active`, or `VT_WAITACTIVE` on
+     `/dev/tty0` in a thread.
+  3. On a transition, emit `PauseDevice(major, minor, "gone")` for every device the
+     outgoing session took and set its `Active` to false; emit `ResumeDevice(major, minor, fd)`
+     with a fresh fd for the incoming session and set `Active` true.
+  4. Implement `Seat.SwitchTo(uint32)` and `Session.Activate()` so a compositor can request
+     a switch itself.
+
+  ⚠️ **This is the display path on the only working desktop.** A wrong `PauseDevice` makes the
+  compositor drop KMS with nothing to hand it back: black screen, blind reboot. Gate on
+  `schema-vmtest` before any hardware run, and keep `sudo chvt 1` reachable over ssh
+  throughout. `SIGSTOP`/`SIGCONT` remains the correct freeze harness — killing a Wayland
+  compositor ends the session, which is the exact cost limp-mode exists to avoid.
 - Increment 3 — B-cockpit: arrow to a lit slot, apply a card via the `schema-ctl` socket.
 - Increment 4 — `.svc` card-ladder syntax + auto-healer (C) playing declared decks.
 - Increment 5 — generative fallback card from F8/F9/F6 flags when the deck is empty.

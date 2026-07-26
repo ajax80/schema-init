@@ -99,7 +99,7 @@ If you're reading the source to evaluate it, start here. The whole init is ~2,50
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
 | `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
 | `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
-| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` gives it a dedicated console reachable with `ctrl-alt-F8` when the desktop is wedged — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
+| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` paints a dedicated console; note that VT switching does not currently repaint on a graphical system — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
 
 **Directories:**
 
@@ -332,7 +332,7 @@ These are real gaps, not future features being teased:
 
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
 - **Log rotation needs a timer you schedule.** The `logrotate` config ships; nothing here fires it. See [Logs](#logs).
-- **The recovery console is not visible during a *full* compositor wedge.** The board survives — measured — but a compositor that cannot release DRM master leaves the screen showing a frozen image while the VT switch happens invisibly. See [Recovery console](#recovery-console).
+- **VT switching does not repaint on a graphical system.** `ctrl-alt-F<n>` moves the active VT in the kernel, but `scripts/schema-logind.py` never marks the outgoing session inactive or sends `PauseDevice`, so the compositor keeps KMS and the screen never changes. This affects every console — the gettys on tty2–tty6 as much as the recovery console. See [Recovery console](#recovery-console).
 
 ---
 
@@ -582,16 +582,33 @@ It reads the shared-memory export rather than the control socket and depends on 
 
 ### What it survives, and what it does not
 
-This is measured on real hardware, not assumed. `kwin_wayland` was `SIGSTOP`ed for 30 seconds on a 47-service desktop:
+🔴 **The console is currently not reachable at all on a graphical schema-init system, healthy or wedged.** This is measured on real hardware, twice, not assumed.
 
 | | |
 |---|---|
-| The board keeps reading and updating while the compositor is wedged | **Yes** — `seq` advanced 82491 → 82639 with the compositor in state `T` |
-| You can *see* it while the compositor is fully wedged | **No** |
+| The board keeps reading and updating while the compositor is wedged | **Yes** — `seq` advanced 82491 → 82639 with `kwin_wayland` in state `T` |
+| You can *see* it while the compositor is wedged | **No** |
+| You can *see* it while the compositor is **healthy**| **No** |
 
-The second row is the important one. A stopped compositor still holds **DRM master** and cannot release it, so `ctrl-alt-F8` switches the active VT *in the kernel* — `fgconsole` really does change — while the screen keeps displaying the frozen desktop image. Your keystrokes land on a console you cannot see.
+The last row is the one that matters, and it is not a `schema-board` bug. Pressing `ctrl-alt-F8` — or `ctrl-alt-F2`, which is a plain `agetty`/autologin console with nothing to do with the board — moves the active VT in the kernel (`/sys/class/tty/tty0/active` really does change) while the screen keeps showing the desktop.
 
-So today the recovery console is reachable when the session is **degraded but alive**: `plasmashell` has died, a single client is hung, the panel is gone, `schema-ctl` is unresponsive — the compositor itself still services VT switches. That covers the common cases. A compositor wedged so hard it cannot release KMS is **not** covered; getting there requires the board to take DRM master itself rather than write to a tty, which is not implemented.
+The break is in `scripts/schema-logind.py`. The handoff a graphical session needs looks like this:
+
+```
+ctrl-alt-F<n>
+  → kernel switches the active VT              ✅ works
+  → logind notices the active VT changed       ❌ nothing watches /sys/class/tty/tty0/active
+  → logind marks the outgoing session inactive ❌ sessions carry no VTNr to compare against
+  → logind sends PauseDevice to the compositor ❌ never fires
+  → the compositor drops DRM master            ❌ never asked to
+  → the console becomes visible                ❌ scanout still shows the compositor
+```
+
+`schema-logind.py` implements `TakeControl` and `TakeDevice`, which is enough for a compositor to *acquire* KMS, but it has no `ResumeDevice`, no `Seat.SwitchTo`, no session `VTNr`, and no watch on the active-VT file. The handoff is one-way: the compositor can take the display and nothing can ever take it back. `loginctl show-session <id>` returns empty for the same reason.
+
+An earlier revision of this section blamed a *stopped* compositor for being unable to release DRM master. That was wrong — a healthy compositor does not release it either, because nothing asks. It also proposed having the board take DRM master itself; that cannot work, since `DRM_IOCTL_SET_MASTER` fails while another process holds master.
+
+**Until the logind gap is closed, treat the recovery console as a headless/serial and single-user-boot surface only.** On a machine with no graphical session — a server, a Pi, an initramfs-less boot before the display manager starts — it works as documented, because nothing has taken KMS.
 
 If you are stranded on an invisible VT, `sudo chvt 1` from any other shell (ssh included) puts you back.
 

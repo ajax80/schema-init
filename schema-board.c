@@ -13,11 +13,13 @@
  *   schema-board --once             print one snapshot and exit (for vmtest)
  *   schema-board --tty /dev/tty8    own a console, reachable with ctrl-alt-F8
  *
- * The process survives a fully wedged compositor (measured), but it is only
- * *visible* while the compositor can still service a VT switch: a stopped
- * compositor holds DRM master, so the switch happens in the kernel while the
- * screen keeps showing the frozen image. Making the board visible in that case
- * needs DRM master, not a tty write — see the design spec, increment 2.
+ * The process survives a fully wedged compositor (measured), but on a graphical
+ * schema-init system it is not *visible* at all — healthy or wedged. The kernel
+ * switches the active VT; schema-logind.py never marks the outgoing session
+ * inactive or sends PauseDevice, so the compositor keeps KMS and the screen
+ * never repaints. This affects the tty2-tty6 gettys identically, so it is not a
+ * bug in this file. Fix belongs in scripts/schema-logind.py — see the design
+ * spec, increment 2.
  */
 #include <errno.h>
 #include <stdio.h>
