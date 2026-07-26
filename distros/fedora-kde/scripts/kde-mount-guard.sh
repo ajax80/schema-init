@@ -5,6 +5,9 @@
 # No-op (no flicker) on a clean boot. See project_schema_init_plasma_cpu_tax.
 
 LOG=/tmp/kde-mount-guard.log
+# Held only while `plasmashell --replace` is in flight; schema-plasma-watchdog
+# defers its respawn while this exists. Keep the path in sync with the watchdog.
+INHIBIT="${XDG_RUNTIME_DIR:-/tmp}/plasma-replace-inflight"
 echo "guard start $(date)" > "$LOG"
 
 # 1) wait up to 45s for every data mount to be present
@@ -28,14 +31,20 @@ echo "plasmashell pid=$pid cpu=$cpu" >> "$LOG"
 # 3) replace only if it's stuck spinning (clean settles ~10-15%, race pegs ~70%)
 if [ "${cpu:-0}" -gt 40 ]; then
     echo "SPINNING -> plasmashell --replace" >> "$LOG"
-    plasmashell --replace >/dev/null 2>&1 &
 
     # 4) the --replace handoff is a D-Bus name race: the old instance drops
-    # org.kde.plasmashell, and if the new one loses the race to reacquire it,
-    # it logs "Failed to register name" and exits -- leaving NO shell at all.
-    # KWin survives, so the screen goes black with a live cursor (seen 07-26).
-    # Poll for a survivor; if there is none, start one bare. Settle first --
-    # polling too early just finds the OLD instance still winding down.
+    # org.kde.plasmashell and the new one reacquires it, so there is a window
+    # with no plasmashell at all. schema-plasma-watchdog polls every 5s and
+    # reads that window as a crash -- its restart then races ours for the name
+    # and BOTH instances exit, leaving KWin up and the screen black with a live
+    # cursor (seen 07-26 12:03). Inhibit the watchdog across the handoff: it
+    # owns respawn, we only own the replace. Trap so a kill can't strand it.
+    trap 'rm -f "$INHIBIT"' EXIT INT TERM
+    : > "$INHIBIT"
+
+    plasmashell --replace >/dev/null 2>&1 &
+
+    # Settle first -- polling too early just finds the OLD instance winding down.
     sleep 10
     i=0
     while [ "$i" -lt 20 ]; do
@@ -43,16 +52,14 @@ if [ "${cpu:-0}" -gt 40 ]; then
         i=$((i + 1))
         sleep 1
     done
+    rm -f "$INHIBIT"
+
     if pgrep -x plasmashell >/dev/null; then
         echo "replace ok, plasmashell pid=$(pgrep -x plasmashell | head -1)" >> "$LOG"
     else
-        echo "REPLACE LOST THE NAME -> bare restart $(date)" >> "$LOG"
-        plasmashell >/dev/null 2>&1 &
-        sleep 10
-        if pgrep -x plasmashell >/dev/null; then
-            echo "recovered, pid=$(pgrep -x plasmashell | head -1)" >> "$LOG"
-        else
-            echo "STILL NO PLASMASHELL -- black screen, needs hands" >> "$LOG"
-        fi
+        # Deliberately do NOT start one here. The inhibit is down, so the
+        # watchdog sees no plasmashell within 5s and respawns it with its own
+        # crash-loop backoff. A restart from us would just be the second racer.
+        echo "REPLACE LOST THE NAME -> handing off to watchdog $(date)" >> "$LOG"
     fi
 fi
