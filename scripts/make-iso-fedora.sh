@@ -79,6 +79,15 @@ cp "$REPO"/distros/fedora-kde/services/*.svc \
 
 sed -i "s/ajax80/$LIVEUSER/g" "$MNT/etc/schema-init/services/sddm.svc" 2>/dev/null || true
 
+printf "=== Installing schema-logind ===\n"
+# services/schema-logind.svc points at /usr/local/bin/schema-logind.py; without
+# this the service starts and immediately fails, the login1 name is never taken,
+# and KWin silently falls back to a no-op session with no VT management.
+chroot "$MNT" dnf install -y python3-dbus python3-gobject \
+    --setopt=install_weak_deps=False
+cp "$REPO"/scripts/schema-logind.py "$MNT/usr/local/bin/"
+chmod +x "$MNT/usr/local/bin/schema-logind.py"
+
 printf "=== Installing scripts ===\n"
 cp "$REPO"/distros/fedora-kde/scripts/sddm-logged \
    "$REPO"/distros/fedora-kde/scripts/mount-home.sh \
