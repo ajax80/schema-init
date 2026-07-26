@@ -2,6 +2,7 @@
 import sys
 import os
 import fcntl
+import struct
 import signal
 import time
 import threading
@@ -134,6 +135,12 @@ ACTIVE_VT_PATH = os.environ.get('SCHEMA_LOGIND_ACTIVE_VT', '/sys/class/tty/tty0/
 VT_POLL_MS = 250
 DRM_MAJOR = 226
 VT_ACTIVATE = 0x5606
+VT_SETMODE = 0x5602
+VT_RELDISP = 0x5605
+VT_AUTO = 0
+VT_PROCESS = 1
+VT_ACKACQ = 2
+VT_RELEASE_ACK_MS = 500
 DRM_IOCTL_SET_MASTER = 0x641E
 DRM_IOCTL_DROP_MASTER = 0x641F
 SESSION_IFACE = 'org.freedesktop.login1.Session'
@@ -178,6 +185,9 @@ class Login1Session(dbus.service.Object):
         # get_active_uid).
         self.vtnr = int(env_vt) if env_vt.isdigit() else None
         self.active = True
+        self.vt_fd = None
+        self.pending_acks = set()
+        self.release_timer = None
         print("login1-stub: Registered Session at /org/freedesktop/login1/session/_31")
 
     # -- session-device handoff ---------------------------------------------
@@ -240,10 +250,120 @@ class Login1Session(dbus.service.Object):
             self._set_active(True)
 
     def poll_active_vt(self):
+        # Only a fallback for when VT_PROCESS could not be set up. While a
+        # release is pending the sysfs VT has not moved yet, so polling would
+        # see "still my VT", decide the session is active and resume devices in
+        # the middle of handing them over.
+        if self.vt_fd is not None:
+            return True
         try:
             self.on_vt_changed(read_active_vt())
         except Exception as e:
             print(f"login1-stub: VT poll error: {e}", file=sys.stderr)
+        return True
+
+    # -- VT_PROCESS mediation -----------------------------------------------
+    #
+    # Watching the active VT and cleaning up afterwards is too late: the kernel
+    # completes the switch synchronously, and fbcon's mode restore runs during
+    # that switch while the compositor still holds DRM master. It fails silently
+    # and is never retried, so the console never repaints. VT_PROCESS makes the
+    # kernel ask first -- it signals us and waits for VT_RELDISP -- which is the
+    # only way to drop master BEFORE the switch instead of after it.
+
+    def _setup_vt_mediation(self):
+        if self.vtnr is None or self.vt_fd is not None:
+            return
+        try:
+            fd = os.open(f'/dev/tty{self.vtnr}', os.O_RDWR | os.O_NOCTTY)
+        except Exception as e:
+            print(f"login1-stub: VT mediation open failed: {e}", file=sys.stderr)
+            return
+        mode = struct.pack('bbhhh', VT_PROCESS, 0, signal.SIGUSR1, signal.SIGUSR2, 0)
+        try:
+            fcntl.ioctl(fd, VT_SETMODE, mode)
+        except Exception as e:
+            os.close(fd)
+            print(f"login1-stub: VT_SETMODE(VT_PROCESS) failed: {e}", file=sys.stderr)
+            return
+        self.vt_fd = fd
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self._on_vt_release)
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, self._on_vt_acquire)
+        print(f"login1-stub: VT {self.vtnr} now mediated (VT_PROCESS)")
+
+    def _teardown_vt_mediation(self):
+        if self.vt_fd is None:
+            return
+        try:
+            fcntl.ioctl(self.vt_fd, VT_SETMODE,
+                        struct.pack('bbhhh', VT_AUTO, 0, 0, 0, 0))
+        except Exception as e:
+            print(f"login1-stub: restoring VT_AUTO failed: {e}", file=sys.stderr)
+        try:
+            os.close(self.vt_fd)
+        except Exception:
+            pass
+        self.vt_fd = None
+        print("login1-stub: VT mediation released (VT_AUTO restored)")
+
+    def _reldisp(self, arg):
+        if self.vt_fd is None:
+            return
+        if self.release_timer is not None:
+            GLib.source_remove(self.release_timer)
+            self.release_timer = None
+        self.pending_acks.clear()
+        try:
+            fcntl.ioctl(self.vt_fd, VT_RELDISP, arg)
+            print(f"login1-stub: VT_RELDISP({arg}) — switch allowed to proceed")
+        except Exception as e:
+            print(f"login1-stub: VT_RELDISP({arg}) failed: {e}", file=sys.stderr)
+
+    def _release_ack_timeout(self):
+        self.release_timer = None
+        print(f"login1-stub: {len(self.pending_acks)} device ack(s) missing — "
+              f"releasing anyway", file=sys.stderr)
+        self._reldisp(1)
+        return False
+
+    def _on_vt_release(self, *_):
+        # The chord can arrive twice: the kernel's own VT handler signals us,
+        # and the compositor independently calls Seat.SwitchTo for the same
+        # keypress. Re-running the pause would overwrite the pending ack timer
+        # (leaking it) and re-drop an already-dropped master.
+        if self.release_timer is not None or not self.active:
+            print("login1-stub: VT release already in flight — ignoring duplicate")
+            return True
+        print(f"login1-stub: VT release requested — pausing {len(self.devices)} device(s)")
+        # Anything that escapes here would leave the kernel waiting forever for a
+        # VT_RELDISP that never comes, with DRM master already dropped: a black
+        # screen with no way back. Releasing the VT always wins over reporting.
+        try:
+            self._set_active(False)
+            self.pending_acks = set(self.devices.keys())
+            for (major, minor), fd in self.devices.items():
+                self._drm_master(major, fd, acquire=False)
+                self.PauseDevice(dbus.UInt32(major), dbus.UInt32(minor), 'pause')
+        except Exception as e:
+            print(f"login1-stub: pause failed ({e}) — releasing VT anyway",
+                  file=sys.stderr)
+            self._reldisp(1)
+            return True
+        if self.pending_acks:
+            self.release_timer = GLib.timeout_add(VT_RELEASE_ACK_MS,
+                                                  self._release_ack_timeout)
+        else:
+            self._reldisp(1)
+        return True
+
+    def _on_vt_acquire(self, *_):
+        print(f"login1-stub: VT acquired — resuming {len(self.devices)} device(s)")
+        self._reldisp(VT_ACKACQ)
+        for (major, minor), fd in self.devices.items():
+            self._drm_master(major, fd, acquire=True)
+            self.ResumeDevice(dbus.UInt32(major), dbus.UInt32(minor),
+                              dbus.types.UnixFd(fd))
+        self._set_active(True)
         return True
 
     @dbus.service.method(SESSION_IFACE, in_signature='', out_signature='')
@@ -273,6 +393,12 @@ class Login1Session(dbus.service.Object):
         if self.vtnr is None:
             self.vtnr = read_active_vt() or None
             print(f"login1-stub: session VT captured as {self.vtnr}")
+        self._setup_vt_mediation()
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
+    def ReleaseControl(self):
+        print("login1-stub: Session.ReleaseControl() requested")
+        self._teardown_vt_mediation()
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='hb',
                          sender_keyword='sender')
@@ -320,6 +446,9 @@ class Login1Session(dbus.service.Object):
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='')
     def PauseDeviceComplete(self, major, minor):
         print(f"login1-stub: Session.PauseDeviceComplete({major}, {minor}) requested")
+        self.pending_acks.discard((major, minor))
+        if not self.pending_acks and self.release_timer is not None:
+            self._reldisp(1)
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
@@ -938,6 +1067,10 @@ class VarlinkServer:
 
 
 def main():
+    # PID 1 redirects our stdout to a logfile, which makes it block-buffered:
+    # diagnostics sit in an 8K buffer and are invisible until the process exits.
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
     DBusGMainLoop(set_as_default=True)
 
     os.makedirs('/run/systemd/system', exist_ok=True)

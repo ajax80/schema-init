@@ -83,10 +83,18 @@ boot)
             -drive "if=pflash,format=raw,unit=1,file=$RUN/vars.fd")
         echo ">> firmware: UEFI (OVMF)"
     fi
+    # A 9p share is the only sane way to get a script into the guest: typing it
+    # over sendkey is slow and lossy, and the guest cannot reach a host listener
+    # (slirp's 10.0.2.2 lands in whatever network namespace qemu was started in).
+    # In the guest: mount -t 9p -o trans=virtio host /mnt
+    SHARE=${SHARE:-$RUN/share}
+    mkdir -p "$SHARE"
+    SH=(-virtfs "local,path=$SHARE,mount_tag=host,security_model=none,id=host")
+    echo ">> 9p share: $SHARE -> mount_tag=host"
     echo ">> booting $(basename "$ISO")  (${RAM}M, ${CPUS} cpu, display=$DISP)"
     qemu-system-x86_64 \
         -enable-kvm -m "$RAM" -smp "$CPUS" \
-        "${FW[@]}" "${KOPT[@]}" \
+        "${FW[@]}" "${KOPT[@]}" "${SH[@]}" \
         -cdrom "$ISO" -boot d \
         -device virtio-vga \
         -display "$DISP" \
@@ -128,6 +136,7 @@ type)
         else echo "  (skipping unmappable char '$c')" >&2; continue
         fi
         mon "sendkey $k" >/dev/null
+        sleep "${TYPE_DELAY:-0.08}"
     done
     mon "sendkey ret" >/dev/null
     echo ">> typed: $TEXT"
