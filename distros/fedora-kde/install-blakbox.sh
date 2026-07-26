@@ -111,6 +111,13 @@ chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.local/bin/schema-autostart-runner
 cp "$REPO/distros/fedora-kde/scripts/schema-plasma-watchdog.sh" "$USER_HOME/.local/bin/schema-plasma-watchdog.sh"
 chmod +x "$USER_HOME/.local/bin/schema-plasma-watchdog.sh"
 chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.local/bin/schema-plasma-watchdog.sh"
+cp "$REPO/distros/fedora-kde/scripts/kde-mount-guard.sh" "$USER_HOME/.local/bin/kde-mount-guard.sh"
+chmod +x "$USER_HOME/.local/bin/kde-mount-guard.sh"
+chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.local/bin/kde-mount-guard.sh"
+sed -e "s|@USER_HOME@|$USER_HOME|" \
+    "$REPO/distros/fedora-kde/config/autostart/kde-mount-guard.desktop" \
+    > "$USER_HOME/.config/autostart/kde-mount-guard.desktop"
+chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config/autostart/kde-mount-guard.desktop"
 install -d -o "$TARGET_USER" -g "$TARGET_USER" "$USER_HOME/.config/plasma-workspace/env"
 cp "$REPO/distros/fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh" "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"
 chmod +x "$USER_HOME/.config/plasma-workspace/env/zz-schema-autostart.sh"

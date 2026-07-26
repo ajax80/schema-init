@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=KDE Mount Guard
+Comment=Heals plasmashell boot-order race vs late data mounts
+Exec=@USER_HOME@/.local/bin/kde-mount-guard.sh
+X-KDE-autostart-phase=2
+NoDisplay=true
+Terminal=false
