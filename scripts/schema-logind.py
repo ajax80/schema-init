@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import os
+import fcntl
 import signal
 import time
 import threading
@@ -122,11 +123,134 @@ def schema_ctl(action, name):
     except Exception as e:
         print(f"systemd1-stub: schema-ctl {action} {name} failed: {e}", file=sys.stderr)
 
+# --- VT / session-device handoff -------------------------------------------
+# A compositor that TakeDevice()s the DRM node becomes DRM master and owns the
+# scanout. If nothing tells it the console went away, it keeps master forever
+# and ctrl-alt-F<n> switches the VT in the kernel with no visible effect. That
+# is exactly what schema-init shipped with. We watch the active VT, emit
+# PauseDevice/ResumeDevice, and drop/reacquire DRM master ourselves the way
+# systemd-logind's session_device_stop()/start() do.
+ACTIVE_VT_PATH = os.environ.get('SCHEMA_LOGIND_ACTIVE_VT', '/sys/class/tty/tty0/active')
+VT_POLL_MS = 250
+DRM_MAJOR = 226
+VT_ACTIVATE = 0x5606
+DRM_IOCTL_SET_MASTER = 0x641E
+DRM_IOCTL_DROP_MASTER = 0x641F
+SESSION_IFACE = 'org.freedesktop.login1.Session'
+
+
+def read_active_vt():
+    """Current active VT number ('tty3' -> 3), or 0 when it can't be read."""
+    val = read_file_line(ACTIVE_VT_PATH)
+    if val.startswith('tty'):
+        val = val[3:]
+    try:
+        return int(val)
+    except ValueError:
+        return 0
+
+
+def vt_activate(vtnr):
+    """Ask the kernel to switch to VT `vtnr`. Returns True on success."""
+    try:
+        fd = os.open('/dev/tty0', os.O_RDWR | os.O_NOCTTY)
+    except Exception as e:
+        print(f"login1-stub: VT_ACTIVATE open failed: {e}", file=sys.stderr)
+        return False
+    try:
+        fcntl.ioctl(fd, VT_ACTIVATE, vtnr)
+        return True
+    except Exception as e:
+        print(f"login1-stub: VT_ACTIVATE({vtnr}) failed: {e}", file=sys.stderr)
+        return False
+    finally:
+        os.close(fd)
+
+
 class Login1Session(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/session/_31')
         self.devices = {}
+        env_vt = os.environ.get('SCHEMA_LOGIND_VTNR', '')
+        # The session's VT is captured at TakeControl() time — that is when the
+        # compositor announces itself, and it is the only trusted moment we
+        # have. Deriving it from /proc/<pid>/environ would be forgeable (see
+        # get_active_uid).
+        self.vtnr = int(env_vt) if env_vt.isdigit() else None
+        self.active = True
         print("login1-stub: Registered Session at /org/freedesktop/login1/session/_31")
+
+    # -- session-device handoff ---------------------------------------------
+
+    @dbus.service.signal(SESSION_IFACE, signature='uus')
+    def PauseDevice(self, major, minor, kind):
+        pass
+
+    @dbus.service.signal(SESSION_IFACE, signature='uuh')
+    def ResumeDevice(self, major, minor, fd):
+        pass
+
+    @dbus.service.signal('org.freedesktop.DBus.Properties', signature='sa{sv}as')
+    def PropertiesChanged(self, interface, changed, invalidated):
+        pass
+
+    def _drm_master(self, major, fd, acquire):
+        """Drop or reacquire DRM master on a taken device. No-op for non-DRM."""
+        if major != DRM_MAJOR:
+            return
+        req = DRM_IOCTL_SET_MASTER if acquire else DRM_IOCTL_DROP_MASTER
+        try:
+            fcntl.ioctl(fd, req, 0)
+            print(f"login1-stub: {'SET' if acquire else 'DROP'}_MASTER ok on fd={fd}")
+        except Exception as e:
+            print(f"login1-stub: {'SET' if acquire else 'DROP'}_MASTER failed on "
+                  f"fd={fd}: {e}", file=sys.stderr)
+
+    def _set_active(self, active):
+        if self.active == active:
+            return
+        self.active = active
+        self.PropertiesChanged(SESSION_IFACE, {
+            'Active': dbus.Boolean(active),
+            'State': dbus.String('active' if active else 'online'),
+        }, [])
+
+    def on_vt_changed(self, new_vt):
+        """Active VT moved. Pause or resume every device this session took."""
+        if self.vtnr is None or new_vt == 0:
+            return
+        should_be_active = (new_vt == self.vtnr)
+        if should_be_active == self.active:
+            return
+
+        if not should_be_active:
+            print(f"login1-stub: VT {new_vt} != session VT {self.vtnr} — pausing "
+                  f"{len(self.devices)} device(s)")
+            self._set_active(False)
+            for (major, minor), fd in self.devices.items():
+                self._drm_master(major, fd, acquire=False)
+                self.PauseDevice(dbus.UInt32(major), dbus.UInt32(minor), 'gone')
+        else:
+            print(f"login1-stub: VT {new_vt} == session VT {self.vtnr} — resuming "
+                  f"{len(self.devices)} device(s)")
+            for (major, minor), fd in self.devices.items():
+                self._drm_master(major, fd, acquire=True)
+                self.ResumeDevice(dbus.UInt32(major), dbus.UInt32(minor),
+                                  dbus.types.UnixFd(fd))
+            self._set_active(True)
+
+    def poll_active_vt(self):
+        try:
+            self.on_vt_changed(read_active_vt())
+        except Exception as e:
+            print(f"login1-stub: VT poll error: {e}", file=sys.stderr)
+        return True
+
+    @dbus.service.method(SESSION_IFACE, in_signature='', out_signature='')
+    def Activate(self):
+        print(f"login1-stub: Session.Activate() -> VT {self.vtnr}")
+        if self.vtnr:
+            vt_activate(self.vtnr)
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
     def Lock(self):
@@ -146,6 +270,9 @@ class Login1Session(dbus.service.Object):
                 "Not the active session owner",
                 name='org.freedesktop.login1.AccessDenied')
         print(f"login1-stub: Session.TakeControl({force}) requested")
+        if self.vtnr is None:
+            self.vtnr = read_active_vt() or None
+            print(f"login1-stub: session VT captured as {self.vtnr}")
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='hb',
                          sender_keyword='sender')
@@ -212,8 +339,9 @@ class Login1Session(dbus.service.Object):
                 'Id': dbus.String('31'),
                 'User': dbus.Struct((dbus.UInt32(uid), dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')), signature='uo'),
                 'Name': dbus.String(username),
-                'Active': dbus.Boolean(True),
-                'State': dbus.String('active'),
+                'Active': dbus.Boolean(self.active),
+                'State': dbus.String('active' if self.active else 'online'),
+                'VTNr': dbus.UInt32(self.vtnr if self.vtnr is not None else read_active_vt()),
                 'Remote': dbus.Boolean(False),
                 'Type': dbus.String(get_session_type()),
                 'Class': dbus.String('user'),
@@ -257,6 +385,21 @@ class Login1Seat(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/seat/seat0')
         print("login1-stub: Registered Seat at /org/freedesktop/login1/seat/seat0")
+
+    @dbus.service.method('org.freedesktop.login1.Seat', in_signature='u', out_signature='',
+                         sender_keyword='sender')
+    def SwitchTo(self, vtnr, sender=None):
+        if not caller_authorized(self._connection, sender):
+            print(f"login1-stub: DENY SwitchTo({vtnr}) from "
+                  f"uid={caller_uid(self._connection, sender)}", file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "Not the active session owner",
+                name='org.freedesktop.login1.AccessDenied')
+        print(f"login1-stub: Seat.SwitchTo({vtnr}) requested")
+        if not vt_activate(int(vtnr)):
+            raise dbus.exceptions.DBusException(
+                f"VT_ACTIVATE({vtnr}) failed",
+                name='org.freedesktop.login1.FailedToSwitch')
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
@@ -865,6 +1008,10 @@ def main():
         print("login1-stub: Successfully acquired 'org.freedesktop.ConsoleKit' name")
     except Exception as e:
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.ConsoleKit': {e}", file=sys.stderr)
+
+    GLib.timeout_add(VT_POLL_MS, session.poll_active_vt)
+    print(f"login1-stub: watching {ACTIVE_VT_PATH} every {VT_POLL_MS}ms "
+          f"(active VT {read_active_vt()})")
 
     loop = GLib.MainLoop()
 
