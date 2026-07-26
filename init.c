@@ -28,6 +28,7 @@
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
+#define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
 
 static service_t    services_a[MAX_SERVICES];
 static service_t    services_b[MAX_SERVICES];
@@ -1473,6 +1474,83 @@ static void usage(FILE *out) {
         SVC_DIR);
 }
 
+static void shut_log(const char *msg) {
+    printf("[schema-init] shutdown: %s\n", msg);
+    fflush(stdout);
+}
+
+/* A FUSE mount whose daemon we just cgroup-killed can leave the connection
+ * live with nobody to answer it; anything that then touches the superblock
+ * (sync, umount, remount) waits in D state forever. Abort them first. */
+static void fuse_abort_all(void) {
+    glob_t g;
+    size_t n;
+
+    if (glob("/sys/fs/fuse/connections/*/abort", 0, NULL, &g) != 0) return;
+    for (n = 0; n < g.gl_pathc; n++) {
+        int fd = open(g.gl_pathv[n], O_WRONLY);
+        if (fd >= 0) { write(fd, "1", 1); close(fd); }
+    }
+    if (g.gl_pathc) shut_log("fuse connections aborted");
+    globfree(&g);
+}
+
+/* sync() is unbounded: one wedged filesystem and PID 1 never reaches
+ * reboot(). Run it in a child so the deadline is ours, not the kernel's. */
+static void bounded_sync(int secs) {
+    pid_t p = fork();
+    int slice;
+
+    if (p < 0) { shut_log("sync fork failed - skipping"); return; }
+    if (p == 0) { sync(); _exit(0); }
+
+    for (slice = 0; slice < secs * 10; slice++) {
+        if (waitpid(p, NULL, WNOHANG) == p) { shut_log("sync done"); return; }
+        usleep(100000);
+    }
+    kill(p, SIGKILL);
+    waitpid(p, NULL, 0);
+    shut_log("sync timed out - continuing");
+}
+
+/* Nothing else in the shutdown path takes a filesystem read-only, so every
+ * reboot leaves the journals dirty and the next boot replays them. Walk
+ * /proc/mounts backwards (children before parents) and remount ro. */
+static void remount_all_ro(void) {
+    static const char *skip[] = {
+        "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup2", "ramfs",
+        "securityfs", "pstore", "bpf", "autofs", "hugetlbfs", "mqueue",
+        "debugfs", "tracefs", "configfs", "fusectl", "efivarfs",
+        "binfmt_misc", "nsfs", "rpc_pipefs", "selinuxfs",
+        "overlay", "squashfs", "iso9660", "rootfs", NULL
+    };
+    char mounts[MAX_MOUNTS][256];
+    int count = 0, k, n;
+    char line[512];
+    FILE *f = fopen("/proc/mounts", "r");
+
+    if (!f) { shut_log("remount-ro: no /proc/mounts"); return; }
+    while (count < MAX_MOUNTS && fgets(line, sizeof(line), f)) {
+        char dev[256], mp[256], type[64];
+        if (sscanf(line, "%255s %255s %63s", dev, mp, type) != 3) continue;
+        for (k = 0; skip[k]; k++)
+            if (!strcmp(type, skip[k])) break;
+        if (skip[k]) continue;
+        if (!strncmp(type, "fuse", 4)) continue;   /* daemon is already gone */
+        snprintf(mounts[count], sizeof(mounts[0]), "%s", mp);
+        count++;
+    }
+    fclose(f);
+
+    for (n = count - 1; n >= 0; n--) {
+        if (mount(NULL, mounts[n], NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0)
+            printf("[schema-init] shutdown: remount-ro %s failed: %s\n",
+                   mounts[n], strerror(errno));
+    }
+    fflush(stdout);
+    shut_log("filesystems read-only");
+}
+
 int main(int argc, char **argv) {
     int i;
     const char *svc_dir = SVC_DIR;
@@ -1681,14 +1759,17 @@ int main(int argc, char **argv) {
     watchdog_close();
     usleep(500000);
     printf("[schema-init] shutting down\n");
+    fflush(stdout);
     for (i = 0; i < svc_count; i++) {
         if (services[i].child_pid > 0)
             kill(services[i].child_pid, SIGTERM);
     }
+    shut_log("SIGTERM sent");
     sleep(3);
     for (i = 0; i < svc_count; i++) {
         service_cgroup_kill(&services[i]);
     }
+    shut_log("cgroups killed");
 
     if (ctl_fd >= 0) {
         close(ctl_fd);
@@ -1700,14 +1781,19 @@ int main(int argc, char **argv) {
         munmap(shm_ptr, sizeof(schema_shm_t));
         shm_unlink(SCHEMA_SHM_NAME);
     }
+    shut_log("control socket and shm released");
 
     if (getpid() == 1) {
-        sync();
+        fuse_abort_all();
+        bounded_sync(10);
+        remount_all_ro();
         if (do_reboot) {
             printf("[schema-init] PID 1 reboot\n");
+            fflush(stdout);
             reboot(RB_AUTOBOOT);
         } else {
             printf("[schema-init] PID 1 poweroff\n");
+            fflush(stdout);
             reboot(RB_POWER_OFF);
         }
     }
