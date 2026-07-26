@@ -3,6 +3,7 @@ import sys
 import os
 import fcntl
 import struct
+import termios
 import signal
 import time
 import threading
@@ -287,9 +288,33 @@ class Login1Session(dbus.service.Object):
             print(f"login1-stub: VT_SETMODE(VT_PROCESS) failed: {e}", file=sys.stderr)
             return
         self.vt_fd = fd
+        self._disarm_vt_flow_control(fd)
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self._on_vt_release)
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, self._on_vt_acquire)
         print(f"login1-stub: VT {self.vtnr} now mediated (VT_PROCESS)")
+
+    def _disarm_vt_flow_control(self, fd):
+        # The session VT stays in KD_TEXT with a live line discipline
+        # (KDGKBMODE=K_UNICODE), so every keystroke the compositor consumes is
+        # ALSO fed to the console's line discipline. With IXON on, one stray ^S
+        # sets tty->flow.stopped, do_con_write() then accepts 0 bytes forever,
+        # and every later write to /dev/console sleeps in n_tty_write() with
+        # MAX_SCHEDULE_TIMEOUT -- no timeout, no signal. On 2026-07-26 that
+        # caught PID 1's own shutdown log and hung the box twice.
+        #
+        # Deliberately NOT KDSKBMODE=K_OFF, which is what systemd-logind does
+        # here. K_OFF would also stop the kernel from handling ctrl-alt-F<n>,
+        # and that kernel-level switch is the limp-mode escape hatch for a
+        # wedged compositor -- the whole point of the recovery console.
+        try:
+            termios.tcflow(fd, termios.TCOON)          # clear any existing stop
+            attrs = termios.tcgetattr(fd)
+            attrs[0] &= ~(termios.IXON | termios.IXANY)
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+            print(f"login1-stub: VT {self.vtnr} flow control disarmed (IXON off)")
+        except Exception as e:
+            print(f"login1-stub: disarming VT {self.vtnr} flow control failed: {e}",
+                  file=sys.stderr)
 
     def _teardown_vt_mediation(self):
         if self.vt_fd is None:
