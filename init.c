@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <sys/mount.h>
 #include <sys/reboot.h>
+#include <termios.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <errno.h>
@@ -1474,9 +1475,36 @@ static void usage(FILE *out) {
         SVC_DIR);
 }
 
+/* PID 1 must never be able to block on a tty. /dev/console follows the
+ * FOREGROUND VT, and a session VT left in KD_TEXT with a live line discipline
+ * turns one stray ^S into tty->flow.stopped: do_con_write() accepts 0 bytes
+ * from then on and every write sleeps in n_tty_write() under
+ * MAX_SCHEDULE_TIMEOUT. No timeout, no signal, no way out. On 2026-07-26 that
+ * caught PID 1 on the FIRST printf of this path and hung the box -- services
+ * never signalled, nothing synced, no reboot. Own console fd, O_NONBLOCK,
+ * TCOON to clear any stop we inherited. A dropped log line beats a dead init. */
+static int shut_fd = -1;
+
+static void shut_console_open(void) {
+    shut_fd = open("/dev/console", O_WRONLY | O_NONBLOCK | O_NOCTTY);
+    if (shut_fd < 0) return;
+    tcflow(shut_fd, TCOON);
+}
+
+static void shut_write(const char *s) {
+    if (shut_fd >= 0) {
+        ssize_t w = write(shut_fd, s, strlen(s));
+        (void)w;                       /* short or EAGAIN: drop it, never wait */
+    } else {
+        printf("%s", s);
+        fflush(stdout);
+    }
+}
+
 static void shut_log(const char *msg) {
-    printf("[schema-init] shutdown: %s\n", msg);
-    fflush(stdout);
+    char buf[192];
+    snprintf(buf, sizeof(buf), "[schema-init] shutdown: %s\n", msg);
+    shut_write(buf);
 }
 
 /* A FUSE mount whose daemon we just cgroup-killed can leave the connection
@@ -1543,11 +1571,13 @@ static void remount_all_ro(void) {
     fclose(f);
 
     for (n = count - 1; n >= 0; n--) {
-        if (mount(NULL, mounts[n], NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0)
-            printf("[schema-init] shutdown: remount-ro %s failed: %s\n",
-                   mounts[n], strerror(errno));
+        if (mount(NULL, mounts[n], NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+            char msg[320];
+            snprintf(msg, sizeof(msg), "remount-ro %s failed: %s",
+                     mounts[n], strerror(errno));
+            shut_log(msg);
+        }
     }
-    fflush(stdout);
     shut_log("filesystems read-only");
 }
 
@@ -1758,8 +1788,8 @@ int main(int argc, char **argv) {
     /* shutdown: hold briefly so viewers see system_state 13/14, then kill */
     watchdog_close();
     usleep(500000);
-    printf("[schema-init] shutting down\n");
-    fflush(stdout);
+    shut_console_open();
+    shut_write("[schema-init] shutting down\n");
     for (i = 0; i < svc_count; i++) {
         if (services[i].child_pid > 0)
             kill(services[i].child_pid, SIGTERM);
@@ -1788,12 +1818,10 @@ int main(int argc, char **argv) {
         bounded_sync(10);
         remount_all_ro();
         if (do_reboot) {
-            printf("[schema-init] PID 1 reboot\n");
-            fflush(stdout);
+            shut_write("[schema-init] PID 1 reboot\n");
             reboot(RB_AUTOBOOT);
         } else {
-            printf("[schema-init] PID 1 poweroff\n");
-            fflush(stdout);
+            shut_write("[schema-init] PID 1 poweroff\n");
             reboot(RB_POWER_OFF);
         }
     }
