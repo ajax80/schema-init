@@ -1,0 +1,4 @@
+name=test-hang
+exec=/bin/sleep
+args=100000
+oneshot=1

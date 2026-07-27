@@ -1,0 +1,5 @@
+name=test-dependent
+exec=/usr/bin/touch
+args=/run/test-dependent.ran
+oneshot=1
+dep=test-hang

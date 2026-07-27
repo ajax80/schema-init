@@ -14,6 +14,19 @@
 #include <grp.h>
 #include <sys/resource.h>
 
+/* PID 1 runs its main loop with SIGCHLD and SIGHUP blocked -- it reaps through
+ * signalfd, so that is correct for us and wrong for everyone else. exec resets
+ * handlers to SIG_DFL but PRESERVES the mask, so every child we spawn inherits
+ * a blocked SIGCHLD unless it clears the mask itself. A child that reaps its own
+ * children then never sees them exit: crond collected 55 zombies this way on
+ * 2026-07-12. Go binaries escape because their runtime resets the mask at
+ * startup; C daemons do not. Clear it in the child, between fork and exec. */
+void service_reset_child_sigmask(void) {
+    sigset_t empty;
+    sigemptyset(&empty);
+    sigprocmask(SIG_SETMASK, &empty, NULL);
+}
+
 /* ── F8: can we spawn this right now? ──────────────────────────────── */
 
 static long free_mem_kb(void) {
@@ -311,6 +324,7 @@ int service_spawn(service_t *svc) {
 
     if (pid == 0) {
         char c;
+        service_reset_child_sigmask();
         setsid();
         close(sync[1]);
         read(sync[0], &c, 1);
