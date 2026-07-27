@@ -332,7 +332,7 @@ These are real gaps, not future features being teased:
 
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
 - **Log rotation needs a timer you schedule.** The `logrotate` config ships; nothing here fires it. See [Logs](#logs).
-- **VT switching does not repaint on a graphical system.** `ctrl-alt-F<n>` moves the active VT in the kernel, but `scripts/schema-logind.py` never marks the outgoing session inactive or sends `PauseDevice`, so the compositor keeps KMS and the screen never changes. This affects every console — the gettys on tty2–tty6 as much as the recovery console. See [Recovery console](#recovery-console).
+- **`schema-logind.py` is a stub with one session object, not one per session.** It implements enough of `org.freedesktop.login1` for a Wayland compositor to take KMS and hand it back on a VT switch (see [Recovery console](#recovery-console)), but it does not model multiple concurrent seats or sessions. It also does not set `KDSKBMODE = K_OFF`, deliberately — if the daemon died while `K_OFF` were set, the console keyboard would stay dead — so keystrokes can still leak to the tty underneath a compositor.
 
 ---
 
@@ -582,33 +582,40 @@ It reads the shared-memory export rather than the control socket and depends on 
 
 ### What it survives, and what it does not
 
-🔴 **The console is currently not reachable at all on a graphical schema-init system, healthy or wedged.** This is measured on real hardware, twice, not assumed.
+✅ **VT switching works on a graphical schema-init system.** This was broken until 2026-07-26 and is now fixed in `scripts/schema-logind.py`. Confirmed on real hardware — NVIDIA, `sddm`-started KDE Wayland session — by a human looking at the screen, which is the only evidence that settles a question about what is visible.
 
 | | |
 |---|---|
 | The board keeps reading and updating while the compositor is wedged | **Yes** — `seq` advanced 82491 → 82639 with `kwin_wayland` in state `T` |
-| You can *see* it while the compositor is wedged | **No** |
-| You can *see* it while the compositor is **healthy**| **No** |
+| You can *see* it while the compositor is **healthy** | **Yes** — `ctrl-alt-F8` shows the console, `ctrl-alt-F1` returns to a repainted desktop |
+| You can *see* it while the compositor is wedged | ⏭️ **Not retested since the fix** — see below |
 
-The last row is the one that matters, and it is not a `schema-board` bug. Pressing `ctrl-alt-F8` — or `ctrl-alt-F2`, which is a plain `agetty`/autologin console with nothing to do with the board — moves the active VT in the kernel (`/sys/class/tty/tty0/active` really does change) while the screen keeps showing the desktop.
+**The wedged case is a prediction, not a result.** With `VT_PROCESS` the kernel signals `schema-logind`, which drops DRM master and acknowledges the switch itself, so a `SIGSTOP`ed compositor no longer has to participate — but the freeze test that originally failed has not been re-run against the fix. Do not read the healthy result as covering it.
 
-The break is in `scripts/schema-logind.py`. The handoff a graphical session needs looks like this:
+### How the handoff works
+
+A graphical session needs this chain, and every link now exists:
 
 ```
 ctrl-alt-F<n>
-  → kernel switches the active VT              ✅ works
-  → logind notices the active VT changed       ❌ nothing watches /sys/class/tty/tty0/active
-  → logind marks the outgoing session inactive ❌ sessions carry no VTNr to compare against
-  → logind sends PauseDevice to the compositor ❌ never fires
-  → the compositor drops DRM master            ❌ never asked to
-  → the console becomes visible                ❌ scanout still shows the compositor
+  → kernel signals schema-logind (VT_PROCESS) and WAITS   ✅ VT_SETMODE at TakeControl
+  → logind sends PauseDevice to the compositor            ✅ pause, per device taken
+  → logind drops DRM master                               ✅ DRM_IOCTL_DROP_MASTER
+  → logind acks with VT_RELDISP, kernel completes switch   ✅
+  → fbcon restores the mode with master already free      ✅ console repaints
+  → on return: VT_RELDISP(VT_ACKACQ), SET_MASTER, ResumeDevice
 ```
 
-`schema-logind.py` implements `TakeControl` and `TakeDevice`, which is enough for a compositor to *acquire* KMS, but it has no `ResumeDevice`, no `Seat.SwitchTo`, no session `VTNr`, and no watch on the active-VT file. The handoff is one-way: the compositor can take the display and nothing can ever take it back. `loginctl show-session <id>` returns empty for the same reason.
+**`VT_PROCESS` mediation is the load-bearing part, and a polling implementation cannot replace it.** An earlier fix watched `/sys/class/tty/tty0/active` every 250 ms and implemented `PauseDevice`/`ResumeDevice`, `VTNr`, and `Seat.SwitchTo` — all necessary, none sufficient. The kernel completes a VT switch *synchronously*, and fbcon's mode restore runs during it, while master is still held; it fails silently and is never retried. Measured: after the poll dropped master the console sat at **15** non-black pixels, and a *second* switch — master already free — painted **32,771**. The active-VT poll survives only as a fallback for when `VT_SETMODE` fails.
 
-An earlier revision of this section blamed a *stopped* compositor for being unable to release DRM master. That was wrong — a healthy compositor does not release it either, because nothing asks. It also proposed having the board take DRM master itself; that cannot work, since `DRM_IOCTL_SET_MASTER` fails while another process holds master.
+Two things this depends on, both worth knowing before you touch it:
 
-**Until the logind gap is closed, treat the recovery console as a headless/serial and single-user-boot surface only.** On a machine with no graphical session — a server, a Pi, an initramfs-less boot before the display manager starts — it works as documented, because nothing has taken KMS.
+- **`ReleaseControl` restores `VT_AUTO`.** KWin calls it from `~LogindSession`. Anything that takes control and exits — a display-manager greeter, for instance — tears mediation down for whoever comes next.
+- **The chord arrives twice**, once from the kernel's VT handler and once from the compositor calling `Seat.SwitchTo` for the same keypress. Handling it twice overwrites and leaks the pending-ack timer.
+
+Two earlier revisions of this section were wrong in ways worth recording. The first blamed a *stopped* compositor for being unable to release DRM master; a healthy one does not release it either, because nothing asks. The second proposed having the board take DRM master itself, which cannot work — `DRM_IOCTL_SET_MASTER` fails while another process holds master. The real cause was that `Properties.Get` for `VTNr` failed, so KWin's `LogindSession::create()` bailed and it silently fell back to `NoopSession`, whose `switchTo()` is an empty function body.
+
+**On a machine with no graphical session** — a server, a Pi, an initramfs-less boot before the display manager starts — the recovery console works regardless, because nothing has taken KMS.
 
 If you are stranded on an invisible VT, `sudo chvt 1` from any other shell (ssh included) puts you back.
 
