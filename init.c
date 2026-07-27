@@ -1485,24 +1485,60 @@ static void usage(FILE *out) {
  * TCOON to clear any stop we inherited. A dropped log line beats a dead init. */
 static int shut_fd = -1;
 
+/* The console is the only place shutdown has ever reported to, and it scrolls.
+ * journal-sink is dead by then, so the fifteen seconds that matter most are the
+ * one stretch with no recoverable log -- on 2026-07-26 the verdict had to be
+ * read off a phone photo. Buffer the transcript in memory and put it on disk in
+ * one go, deliberately NOT as we write it: touching the filesystem early would
+ * hand PID 1 a second way to block. shut_flush_log() runs after bounded_sync()
+ * and before the mount holding it goes read-only. */
+#define SHUT_LOG_PATH "/var/log/schema-init/shutdown.log"
+#define SHUT_LOG_MAX  4096
+static char shut_buf[SHUT_LOG_MAX];
+static size_t shut_len = 0;
+
 static void shut_console_open(void) {
+    time_t now = time(NULL);
+    struct tm tm;
+
     shut_fd = open("/dev/console", O_WRONLY | O_NONBLOCK | O_NOCTTY);
-    if (shut_fd < 0) return;
-    tcflow(shut_fd, TCOON);
+    if (shut_fd >= 0) tcflow(shut_fd, TCOON);
+
+    if (localtime_r(&now, &tm))
+        shut_len = strftime(shut_buf, sizeof(shut_buf),
+                            "=== shutdown %Y-%m-%d %H:%M:%S ===\n", &tm);
 }
 
 static void shut_write(const char *s) {
+    size_t n = strlen(s);
+
     if (shut_fd >= 0) {
-        ssize_t w = write(shut_fd, s, strlen(s));
+        ssize_t w = write(shut_fd, s, n);
         (void)w;                       /* short or EAGAIN: drop it, never wait */
     } else {
         printf("%s", s);
         fflush(stdout);
     }
+
+    if (shut_len + n < sizeof(shut_buf)) {
+        memcpy(shut_buf + shut_len, s, n);
+        shut_len += n;
+    }
+}
+
+/* Best effort by design: if this fails the reboot still has to happen. */
+static void shut_flush_log(void) {
+    int fd;
+
+    mkdir("/var/log/schema-init", 0755);
+    fd = open(SHUT_LOG_PATH, O_WRONLY | O_APPEND | O_CREAT, 0600);
+    if (fd < 0) return;
+    if (write(fd, shut_buf, shut_len) > 0) fsync(fd);
+    close(fd);
 }
 
 static void shut_log(const char *msg) {
-    char buf[192];
+    char buf[384];                 /* >= the 320-byte mount-path messages */
     snprintf(buf, sizeof(buf), "[schema-init] shutdown: %s\n", msg);
     shut_write(buf);
 }
@@ -1543,7 +1579,9 @@ static void bounded_sync(int secs) {
 
 /* Nothing else in the shutdown path takes a filesystem read-only, so every
  * reboot leaves the journals dirty and the next boot replays them. Walk
- * /proc/mounts backwards (children before parents) and remount ro. */
+ * /proc/mounts backwards (children before parents) and remount ro. "/" is
+ * held out of that walk and done last on its own, so the shutdown transcript
+ * can be flushed while the filesystem holding it is still writable. */
 static void remount_all_ro(void) {
     static const char *skip[] = {
         "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup2", "ramfs",
@@ -1565,20 +1603,42 @@ static void remount_all_ro(void) {
             if (!strcmp(type, skip[k])) break;
         if (skip[k]) continue;
         if (!strncmp(type, "fuse", 4)) continue;   /* daemon is already gone */
+        if (!strcmp(mp, "/")) continue;            /* held back, see below */
         snprintf(mounts[count], sizeof(mounts[0]), "%s", mp);
         count++;
     }
     fclose(f);
 
     for (n = count - 1; n >= 0; n--) {
-        if (mount(NULL, mounts[n], NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
-            char msg[320];
-            snprintf(msg, sizeof(msg), "remount-ro %s failed: %s",
-                     mounts[n], strerror(errno));
+        char msg[320];
+
+        if (mount(NULL, mounts[n], NULL, MS_REMOUNT | MS_RDONLY, NULL) == 0)
+            continue;
+
+        snprintf(msg, sizeof(msg), "remount-ro %s failed: %s",
+                 mounts[n], strerror(errno));
+        shut_log(msg);
+
+        /* Last resort, and a weak one: a lazy umount detaches the tree but
+         * does not put the superblock while anyone still holds a file open,
+         * so a journal dirtied by a live writer stays dirty. It only helps
+         * when the mount is busy as a mountpoint rather than as a file. The
+         * real answer to EBUSY here is the SIGKILL broadcast upstream. */
+        if (umount2(mounts[n], MNT_DETACH) == 0) {
+            snprintf(msg, sizeof(msg), "  %s lazily detached", mounts[n]);
             shut_log(msg);
         }
     }
     shut_log("filesystems read-only");
+
+    /* Everything above is on disk before the mount holding the log goes ro. */
+    shut_flush_log();
+    if (mount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+        char msg[320];
+        snprintf(msg, sizeof(msg), "remount-ro / failed: %s", strerror(errno));
+        shut_write(msg);                             /* console only: / is ro */
+        shut_write("\n");
+    }
 }
 
 int main(int argc, char **argv) {
@@ -1800,6 +1860,18 @@ int main(int argc, char **argv) {
         service_cgroup_kill(&services[i]);
     }
     shut_log("cgroups killed");
+
+    /* The cgroup sweep only reaches what a .svc owns. Containers live under
+     * the runtime's own cgroup, not docker.svc's, so they survive it holding
+     * files open -- on 2026-07-26 Frigate kept frigate.db open on /mnt/extdrive
+     * and the remount-ro below returned EBUSY, leaving an ext4 journal the next
+     * boot had to replay. Kill whatever is left. Linux exempts PID 1 from
+     * kill(-1), so this cannot hit us. */
+    kill(-1, SIGKILL);
+    sleep(1);
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
+    shut_log("SIGKILL broadcast");
 
     if (ctl_fd >= 0) {
         close(ctl_fd);
