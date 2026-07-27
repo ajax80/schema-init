@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <sys/mount.h>
 #include <sys/reboot.h>
+#include <termios.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <errno.h>
@@ -28,6 +29,7 @@
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
+#define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
 
 static service_t    services_a[MAX_SERVICES];
 static service_t    services_b[MAX_SERVICES];
@@ -1473,6 +1475,226 @@ static void usage(FILE *out) {
         SVC_DIR);
 }
 
+/* PID 1 must never be able to block on a tty. /dev/console follows the
+ * FOREGROUND VT, and a session VT left in KD_TEXT with a live line discipline
+ * turns one stray ^S into tty->flow.stopped: do_con_write() accepts 0 bytes
+ * from then on and every write sleeps in n_tty_write() under
+ * MAX_SCHEDULE_TIMEOUT. No timeout, no signal, no way out. On 2026-07-26 that
+ * caught PID 1 on the FIRST printf of this path and hung the box -- services
+ * never signalled, nothing synced, no reboot. Own console fd, O_NONBLOCK,
+ * TCOON to clear any stop we inherited. A dropped log line beats a dead init. */
+static int shut_fd = -1;
+
+/* The console is the only place shutdown has ever reported to, and it scrolls.
+ * journal-sink is dead by then, so the fifteen seconds that matter most are the
+ * one stretch with no recoverable log -- on 2026-07-26 the verdict had to be
+ * read off a phone photo. Buffer the transcript in memory and put it on disk in
+ * one go, deliberately NOT as we write it: touching the filesystem early would
+ * hand PID 1 a second way to block. shut_flush_log() runs after bounded_sync()
+ * and before the mount holding it goes read-only. */
+#define SHUT_LOG_PATH "/var/log/schema-init/shutdown.log"
+#define SHUT_LOG_MAX  4096
+static char shut_buf[SHUT_LOG_MAX];
+static size_t shut_len = 0;
+static size_t shut_flushed = 0;
+
+static void shut_console_open(void) {
+    time_t now = time(NULL);
+    struct tm tm;
+
+    shut_fd = open("/dev/console", O_WRONLY | O_NONBLOCK | O_NOCTTY);
+    if (shut_fd >= 0) tcflow(shut_fd, TCOON);
+
+    if (localtime_r(&now, &tm))
+        shut_len = strftime(shut_buf, sizeof(shut_buf),
+                            "=== shutdown %Y-%m-%d %H:%M:%S ===\n", &tm);
+}
+
+static void shut_write(const char *s) {
+    size_t n = strlen(s);
+
+    if (shut_fd >= 0) {
+        ssize_t w = write(shut_fd, s, n);
+        (void)w;                       /* short or EAGAIN: drop it, never wait */
+    } else {
+        printf("%s", s);
+        fflush(stdout);
+    }
+
+    if (shut_len + n < sizeof(shut_buf)) {
+        memcpy(shut_buf + shut_len, s, n);
+        shut_len += n;
+    }
+}
+
+/* Best effort by design: if this fails the reboot still has to happen. Appends
+ * only what has not been written yet, so it is safe to call more than once --
+ * the call before the remount sweep is the one that always lands, the call
+ * after it adds the sweep's own verdict if the filesystem is still writable. */
+static void shut_flush_log(void) {
+    int fd;
+
+    if (shut_len <= shut_flushed) return;
+    mkdir("/var/log/schema-init", 0755);
+    fd = open(SHUT_LOG_PATH, O_WRONLY | O_APPEND | O_CREAT, 0600);
+    if (fd < 0) return;
+    if (write(fd, shut_buf + shut_flushed, shut_len - shut_flushed) > 0) {
+        fsync(fd);
+        shut_flushed = shut_len;
+    }
+    close(fd);
+}
+
+static void shut_log(const char *msg) {
+    char buf[384];                 /* >= the 320-byte mount-path messages */
+    snprintf(buf, sizeof(buf), "[schema-init] shutdown: %s\n", msg);
+    shut_write(buf);
+}
+
+/* A FUSE mount whose daemon we just cgroup-killed can leave the connection
+ * live with nobody to answer it; anything that then touches the superblock
+ * (sync, umount, remount) waits in D state forever. Abort them first. */
+static void fuse_abort_all(void) {
+    glob_t g;
+    size_t n;
+
+    if (glob("/sys/fs/fuse/connections/*/abort", 0, NULL, &g) != 0) return;
+    for (n = 0; n < g.gl_pathc; n++) {
+        int fd = open(g.gl_pathv[n], O_WRONLY);
+        if (fd >= 0) { write(fd, "1", 1); close(fd); }
+    }
+    if (g.gl_pathc) shut_log("fuse connections aborted");
+    globfree(&g);
+}
+
+/* sync() is unbounded: one wedged filesystem and PID 1 never reaches
+ * reboot(). Run it in a child so the deadline is ours, not the kernel's. */
+static void bounded_sync(int secs) {
+    pid_t p = fork();
+    int slice;
+
+    if (p < 0) { shut_log("sync fork failed - skipping"); return; }
+    if (p == 0) { sync(); _exit(0); }
+
+    for (slice = 0; slice < secs * 10; slice++) {
+        if (waitpid(p, NULL, WNOHANG) == p) { shut_log("sync done"); return; }
+        usleep(100000);
+    }
+    kill(p, SIGKILL);
+    waitpid(p, NULL, 0);
+    shut_log("sync timed out - continuing");
+}
+
+/* An overlay mount's option string runs well past any sane line buffer, and a
+ * bare fgets() then hands back the tail of that line as if it were the next
+ * mount -- sscanf turns the fragment into a mountpoint that does not exist,
+ * and 128 of those crowd the real filesystems out of the sweep. The first
+ * three fields always fit, so parse the head and drop the rest of the line. */
+static char *read_mount_line(FILE *f, char *line, size_t len) {
+    if (!fgets(line, len, f)) return NULL;
+    if (!strchr(line, '\n')) {
+        int c;
+        while ((c = fgetc(f)) != '\n' && c != EOF)
+            ;
+    }
+    return line;
+}
+
+/* Which device backs "/". Read on its own pass because /proc/mounts is not
+ * required to list "/" first, and the sweep below needs the answer up front. */
+static void root_source(char *out, size_t len) {
+    char line[512];
+    FILE *f;
+
+    *out = '\0';
+    f = fopen("/proc/mounts", "r");
+    if (!f) return;
+    while (read_mount_line(f, line, sizeof(line))) {
+        char dev[256], mp[256];
+        if (sscanf(line, "%255s %255s", dev, mp) != 2) continue;
+        if (!strcmp(mp, "/")) { snprintf(out, len, "%s", dev); break; }
+    }
+    fclose(f);
+}
+
+/* Nothing else in the shutdown path takes a filesystem read-only, so every
+ * reboot leaves the journals dirty and the next boot replays them. Walk
+ * /proc/mounts backwards (children before parents) and remount ro. "/" is
+ * held out of that walk and done last on its own, so the shutdown transcript
+ * can be flushed while the filesystem holding it is still writable. */
+static void remount_all_ro(void) {
+    static const char *skip[] = {
+        "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup2", "ramfs",
+        "securityfs", "pstore", "bpf", "autofs", "hugetlbfs", "mqueue",
+        "debugfs", "tracefs", "configfs", "fusectl", "efivarfs",
+        "binfmt_misc", "nsfs", "rpc_pipefs", "selinuxfs",
+        "overlay", "squashfs", "iso9660", "rootfs", NULL
+    };
+    char mounts[MAX_MOUNTS][256];
+    char rootdev[256];
+    int count = 0, k, n;
+    char line[512];
+    FILE *f;
+
+    root_source(rootdev, sizeof(rootdev));
+    f = fopen("/proc/mounts", "r");
+    if (!f) { shut_log("remount-ro: no /proc/mounts"); return; }
+    while (count < MAX_MOUNTS && read_mount_line(f, line, sizeof(line))) {
+        char dev[256], mp[256], type[64];
+        if (sscanf(line, "%255s %255s %63s", dev, mp, type) != 3) continue;
+        for (k = 0; skip[k]; k++)
+            if (!strcmp(type, skip[k])) break;
+        if (skip[k]) continue;
+        if (!strncmp(type, "fuse", 4)) continue;   /* daemon is already gone */
+        if (!strcmp(mp, "/")) continue;            /* held back, see below */
+
+        /* MS_REMOUNT without MS_BIND reconfigures the SUPERBLOCK, not the
+         * mount. Every btrfs subvolume and every bind mount of / reports the
+         * same source device and shares that superblock, so remounting one of
+         * them ro takes / ro with it -- on 2026-07-26 /var/lib/docker did
+         * exactly that, and shut_flush_log() below then hit EROFS and the
+         * shutdown transcript was never written. Holding back the string "/"
+         * does not hold back the filesystem. Skip its siblings; the single
+         * "/" remount at the end covers all of them at once. */
+        if (*rootdev && !strcmp(dev, rootdev)) continue;
+
+        snprintf(mounts[count], sizeof(mounts[0]), "%s", mp);
+        count++;
+    }
+    fclose(f);
+
+    for (n = count - 1; n >= 0; n--) {
+        char msg[320];
+
+        if (mount(NULL, mounts[n], NULL, MS_REMOUNT | MS_RDONLY, NULL) == 0)
+            continue;
+
+        snprintf(msg, sizeof(msg), "remount-ro %s failed: %s",
+                 mounts[n], strerror(errno));
+        shut_log(msg);
+
+        /* Last resort, and a weak one: a lazy umount detaches the tree but
+         * does not put the superblock while anyone still holds a file open,
+         * so a journal dirtied by a live writer stays dirty. It only helps
+         * when the mount is busy as a mountpoint rather than as a file. The
+         * real answer to EBUSY here is the SIGKILL broadcast upstream. */
+        if (umount2(mounts[n], MNT_DETACH) == 0) {
+            snprintf(msg, sizeof(msg), "  %s lazily detached", mounts[n]);
+            shut_log(msg);
+        }
+    }
+    shut_log("filesystems read-only");
+
+    /* Everything above is on disk before the mount holding the log goes ro. */
+    shut_flush_log();
+    if (mount(NULL, "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+        char msg[320];
+        snprintf(msg, sizeof(msg), "remount-ro / failed: %s", strerror(errno));
+        shut_write(msg);                             /* console only: / is ro */
+        shut_write("\n");
+    }
+}
+
 int main(int argc, char **argv) {
     int i;
     const char *svc_dir = SVC_DIR;
@@ -1680,15 +1902,30 @@ int main(int argc, char **argv) {
     /* shutdown: hold briefly so viewers see system_state 13/14, then kill */
     watchdog_close();
     usleep(500000);
-    printf("[schema-init] shutting down\n");
+    shut_console_open();
+    shut_write("[schema-init] shutting down\n");
     for (i = 0; i < svc_count; i++) {
         if (services[i].child_pid > 0)
             kill(services[i].child_pid, SIGTERM);
     }
+    shut_log("SIGTERM sent");
     sleep(3);
     for (i = 0; i < svc_count; i++) {
         service_cgroup_kill(&services[i]);
     }
+    shut_log("cgroups killed");
+
+    /* The cgroup sweep only reaches what a .svc owns. Containers live under
+     * the runtime's own cgroup, not docker.svc's, so they survive it holding
+     * files open -- on 2026-07-26 Frigate kept frigate.db open on /mnt/extdrive
+     * and the remount-ro below returned EBUSY, leaving an ext4 journal the next
+     * boot had to replay. Kill whatever is left. Linux exempts PID 1 from
+     * kill(-1), so this cannot hit us. */
+    kill(-1, SIGKILL);
+    sleep(1);
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
+    shut_log("SIGKILL broadcast");
 
     if (ctl_fd >= 0) {
         close(ctl_fd);
@@ -1700,14 +1937,18 @@ int main(int argc, char **argv) {
         munmap(shm_ptr, sizeof(schema_shm_t));
         shm_unlink(SCHEMA_SHM_NAME);
     }
+    shut_log("control socket and shm released");
 
     if (getpid() == 1) {
-        sync();
+        fuse_abort_all();
+        bounded_sync(10);
+        shut_flush_log();        /* the sweep is the last thing that can lose it */
+        remount_all_ro();
         if (do_reboot) {
-            printf("[schema-init] PID 1 reboot\n");
+            shut_write("[schema-init] PID 1 reboot\n");
             reboot(RB_AUTOBOOT);
         } else {
-            printf("[schema-init] PID 1 poweroff\n");
+            shut_write("[schema-init] PID 1 poweroff\n");
             reboot(RB_POWER_OFF);
         }
     }
