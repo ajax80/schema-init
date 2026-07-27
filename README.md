@@ -575,8 +575,29 @@ sudo cp schema-ctl /usr/local/bin/schema-ctl
 When a Wayland compositor wedges, `ctrl-alt-F2` only gets you another login on the same broken session, and systemd's `rescue`/`emergency` targets are all-or-nothing — they tear the session down and lose your work. `schema-board` on a dedicated VT is the alternative: a surface that sits **below** the compositor and shows you what is actually wrong.
 
 ```sh
-schema-board --tty /dev/tty8      # then ctrl-alt-F8 to look at it
+schema-board --tty /dev/tty8                    # then ctrl-alt-F8 to look at it
+schema-board --tty /dev/tty8 --interactive      # ...and fix something from there
 ```
+
+`--interactive` adds a cockpit: `↑`/`↓` (or `j`/`k`) to select a service, `enter` to raise a card,
+`y` to apply, `n` to cancel. The card is chosen from the service's state — `DORMANT` gets `reset`,
+`EXCISED` gets `start`, anything else gets `restart` — and the confirm panel prints the exact
+command before it runs:
+
+```
+ ▸ restart frigate?
+   will run: schema-ctl restart frigate
+   [y] apply   [n] cancel
+```
+
+**Browsing stays read-only.** The board is a pure shared-memory reader until you press `y`, so it
+needs no root to watch and keeps working when the control socket is wedged. Only applying a card
+opens the socket, and that needs root. The board can only ever issue a command you could have typed
+yourself. `ctrl-C` always works — `ISIG` is left on deliberately.
+
+Note that this lets anyone at the physical console restart a service. That is not a new privilege
+boundary — the shipped gettys autologin root on tty2 — but it is worth knowing before you enable it
+on a machine other people can walk up to.
 
 It reads the shared-memory export rather than the control socket and depends on nothing graphical, so a frozen desktop, a wedged control socket, and a saturated D-Bus all leave the **process** working. Give it a VT no getty owns — `services/` ships gettys on tty2–tty6, and tty1 is the display manager, so tty7 and up are free.
 
