@@ -86,40 +86,51 @@ is the first external reader; no producer changes needed for the read-only incre
   open shm read-only, seqlock-consistent snapshot, render the service table with
   state colors + weight + pid + restart_count + system_state + groups; refresh on `seq`
   change. Verify it renders the live shm under the vmtest harness. No input, no fixing yet.
-- Increment 2 — **BLOCKED on a logind gap (2026-07-25).** `--tty <device>` is implemented and
-  the board paints a dedicated console (verified with `setterm --dump`), but the console is
-  **not reachable on a graphical system at all** — healthy or wedged.
+- Increment 2 — ✅ **DONE (2026-07-27).** `--tty <device>` paints a dedicated console, and the
+  console is reachable on a graphical system both healthy and wedged. It took three attempts
+  and two retractions to get here; the history is worth keeping, because two of the wrong
+  answers were plausible enough to cost days.
 
-  Measured twice on real hardware:
-  - ✅ **Survival proven** (07-24) — `SIGSTOP` on `kwin_wayland`, 30 s, 47-service desktop:
-    `seq` advanced 82491 → 82639 with the compositor in state `T`.
-  - ❌ **Reachability disproven, healthy desktop** (07-25) — with `kwin_wayland` running
-    normally, `ctrl-alt-F8` moved `/sys/class/tty/tty0/active` to `tty8` and the operator
-    saw no change. `ctrl-alt-F2` — a plain autologin console with no connection to the
-    board — moved it to `tty2` with the same result. The kernel switches; nothing repaints.
+  Measured on real hardware — NVIDIA, `sddm`-started KDE Wayland, 47-service desktop:
+  - ✅ **Survival** (07-24) — `SIGSTOP` on `kwin_wayland`, 30 s: `seq` kept advancing with the
+    compositor in state `T`. Never in doubt since.
+  - ❌ **Reachability disproven** (07-25) — healthy desktop, `ctrl-alt-F8` moved
+    `/sys/class/tty/tty0/active` to `tty8` and the operator saw **no change**. `ctrl-alt-F2`
+    behaved identically, so this was never a `schema-board` bug — the gettys were equally
+    unreachable.
+  - ✅ **Reachability proven, healthy** (07-26 12:24) — operator saw the console on F8 and a
+    repainted desktop on F1.
+  - ✅ **Reachability proven, wedged** (07-27 10:21) — the original failing test, re-run
+    against the fix: `SIGSTOP` on `kwin_wayland`, 30 s, and the operator **saw the board
+    render in colour** while the compositor sat in state `T`.
 
-  **Root cause — `scripts/schema-logind.py`, not `schema-board.c`.** The session-device
-  handoff is one-way. It implements `TakeControl` and `TakeDevice` (so a compositor can
-  acquire KMS) but has **no** `ResumeDevice`, **no** `Seat.SwitchTo`, **no** session `VTNr`,
-  and **no** watch on `/sys/class/tty/tty0/active`. So the compositor is never told it lost
-  the console, never drops DRM master, and the scanout never changes. `loginctl show-session`
-  returns empty for the same reason. This breaks the tty2–tty6 gettys identically.
+  **Root cause — `scripts/schema-logind.py`, not `schema-board.c`.** KWin's
+  `LogindSession::create()` requires `Properties.Get` to answer `Active`, `VTNr` and `Seat`;
+  the stub answered `VTNr` zero times, so KWin fell back to `NoopSession`, whose `switchTo()`
+  is an empty function body and whose `isActive()` is hardcoded true. Nothing was ever asked
+  to release the console.
 
-  **Two earlier conclusions were wrong and are retracted here:**
+  **Three earlier conclusions were wrong and are retracted here:**
   1. "A *stopped* compositor cannot release DRM master." A healthy one does not release it
      either — nothing asks it to. The `SIGSTOP` was incidental.
   2. "The board must take DRM master itself (`VT_ACTIVATE` + `DRM_IOCTL_SET_MASTER`)." That
      cannot work: `SET_MASTER` fails while another process holds master.
+  3. "Watching the active VT and implementing `PauseDevice`/`ResumeDevice`/`VTNr`/
+     `Seat.SwitchTo` is the fix." All necessary, none sufficient. The kernel completes a VT
+     switch synchronously and fbcon restores the mode *during* it, while master is still
+     held; the restore fails silently and is never retried. Measured: 15 non-black pixels
+     after a poll-driven switch, 32,771 after a second switch with master already free.
 
-  **Remaining work — in `schema-logind.py`:**
-  1. Record a `VTNr` on each session at creation (from the session's tty / `XDG_VTNR`).
-  2. Watch the active VT — poll `/sys/class/tty/tty0/active`, or `VT_WAITACTIVE` on
-     `/dev/tty0` in a thread.
-  3. On a transition, emit `PauseDevice(major, minor, "gone")` for every device the
-     outgoing session took and set its `Active` to false; emit `ResumeDevice(major, minor, fd)`
-     with a fresh fd for the incoming session and set `Active` true.
-  4. Implement `Seat.SwitchTo(uint32)` and `Session.Activate()` so a compositor can request
-     a switch itself.
+  **What actually works: `VT_SETMODE(VT_PROCESS)` mediation.** The kernel signals the daemon
+  and waits for `VT_RELDISP`, so devices are paused and master dropped *before* the switch.
+  The active-VT poll survives only as a fallback for when `VT_SETMODE` fails.
+
+  **The wedged case turns on the ack fail-safe.** A `SIGSTOP`ed compositor cannot answer
+  `PauseDeviceComplete`, so all ten acks go missing and the release must proceed anyway —
+  `10 device ack(s) missing — releasing anyway`. Blocking there would strand the kernel
+  mid-switch with master already dropped. This was written as defensive cleanup and turns out
+  to be the load-bearing line for limp-mode's entire premise. On `SIGCONT` the compositor
+  flushes all ten acks plus a late `Seat.SwitchTo` and the session recovers intact.
 
   ⚠️ **This is the display path on the only working desktop.** A wrong `PauseDevice` makes the
   compositor drop KMS with nothing to hand it back: black screen, blind reboot. Gate on
