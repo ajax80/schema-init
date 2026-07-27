@@ -1496,6 +1496,7 @@ static int shut_fd = -1;
 #define SHUT_LOG_MAX  4096
 static char shut_buf[SHUT_LOG_MAX];
 static size_t shut_len = 0;
+static size_t shut_flushed = 0;
 
 static void shut_console_open(void) {
     time_t now = time(NULL);
@@ -1526,14 +1527,21 @@ static void shut_write(const char *s) {
     }
 }
 
-/* Best effort by design: if this fails the reboot still has to happen. */
+/* Best effort by design: if this fails the reboot still has to happen. Appends
+ * only what has not been written yet, so it is safe to call more than once --
+ * the call before the remount sweep is the one that always lands, the call
+ * after it adds the sweep's own verdict if the filesystem is still writable. */
 static void shut_flush_log(void) {
     int fd;
 
+    if (shut_len <= shut_flushed) return;
     mkdir("/var/log/schema-init", 0755);
     fd = open(SHUT_LOG_PATH, O_WRONLY | O_APPEND | O_CREAT, 0600);
     if (fd < 0) return;
-    if (write(fd, shut_buf, shut_len) > 0) fsync(fd);
+    if (write(fd, shut_buf + shut_flushed, shut_len - shut_flushed) > 0) {
+        fsync(fd);
+        shut_flushed = shut_len;
+    }
     close(fd);
 }
 
@@ -1577,6 +1585,38 @@ static void bounded_sync(int secs) {
     shut_log("sync timed out - continuing");
 }
 
+/* An overlay mount's option string runs well past any sane line buffer, and a
+ * bare fgets() then hands back the tail of that line as if it were the next
+ * mount -- sscanf turns the fragment into a mountpoint that does not exist,
+ * and 128 of those crowd the real filesystems out of the sweep. The first
+ * three fields always fit, so parse the head and drop the rest of the line. */
+static char *read_mount_line(FILE *f, char *line, size_t len) {
+    if (!fgets(line, len, f)) return NULL;
+    if (!strchr(line, '\n')) {
+        int c;
+        while ((c = fgetc(f)) != '\n' && c != EOF)
+            ;
+    }
+    return line;
+}
+
+/* Which device backs "/". Read on its own pass because /proc/mounts is not
+ * required to list "/" first, and the sweep below needs the answer up front. */
+static void root_source(char *out, size_t len) {
+    char line[512];
+    FILE *f;
+
+    *out = '\0';
+    f = fopen("/proc/mounts", "r");
+    if (!f) return;
+    while (read_mount_line(f, line, sizeof(line))) {
+        char dev[256], mp[256];
+        if (sscanf(line, "%255s %255s", dev, mp) != 2) continue;
+        if (!strcmp(mp, "/")) { snprintf(out, len, "%s", dev); break; }
+    }
+    fclose(f);
+}
+
 /* Nothing else in the shutdown path takes a filesystem read-only, so every
  * reboot leaves the journals dirty and the next boot replays them. Walk
  * /proc/mounts backwards (children before parents) and remount ro. "/" is
@@ -1591,12 +1631,15 @@ static void remount_all_ro(void) {
         "overlay", "squashfs", "iso9660", "rootfs", NULL
     };
     char mounts[MAX_MOUNTS][256];
+    char rootdev[256];
     int count = 0, k, n;
     char line[512];
-    FILE *f = fopen("/proc/mounts", "r");
+    FILE *f;
 
+    root_source(rootdev, sizeof(rootdev));
+    f = fopen("/proc/mounts", "r");
     if (!f) { shut_log("remount-ro: no /proc/mounts"); return; }
-    while (count < MAX_MOUNTS && fgets(line, sizeof(line), f)) {
+    while (count < MAX_MOUNTS && read_mount_line(f, line, sizeof(line))) {
         char dev[256], mp[256], type[64];
         if (sscanf(line, "%255s %255s %63s", dev, mp, type) != 3) continue;
         for (k = 0; skip[k]; k++)
@@ -1604,6 +1647,17 @@ static void remount_all_ro(void) {
         if (skip[k]) continue;
         if (!strncmp(type, "fuse", 4)) continue;   /* daemon is already gone */
         if (!strcmp(mp, "/")) continue;            /* held back, see below */
+
+        /* MS_REMOUNT without MS_BIND reconfigures the SUPERBLOCK, not the
+         * mount. Every btrfs subvolume and every bind mount of / reports the
+         * same source device and shares that superblock, so remounting one of
+         * them ro takes / ro with it -- on 2026-07-26 /var/lib/docker did
+         * exactly that, and shut_flush_log() below then hit EROFS and the
+         * shutdown transcript was never written. Holding back the string "/"
+         * does not hold back the filesystem. Skip its siblings; the single
+         * "/" remount at the end covers all of them at once. */
+        if (*rootdev && !strcmp(dev, rootdev)) continue;
+
         snprintf(mounts[count], sizeof(mounts[0]), "%s", mp);
         count++;
     }
@@ -1888,6 +1942,7 @@ int main(int argc, char **argv) {
     if (getpid() == 1) {
         fuse_abort_all();
         bounded_sync(10);
+        shut_flush_log();        /* the sweep is the last thing that can lose it */
         remount_all_ro();
         if (do_reboot) {
             shut_write("[schema-init] PID 1 reboot\n");
