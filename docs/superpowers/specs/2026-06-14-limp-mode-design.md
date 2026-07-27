@@ -137,7 +137,34 @@ is the first external reader; no producer changes needed for the read-only incre
   `schema-vmtest` before any hardware run, and keep `sudo chvt 1` reachable over ssh
   throughout. `SIGSTOP`/`SIGCONT` remains the correct freeze harness — killing a Wayland
   compositor ends the session, which is the exact cost limp-mode exists to avoid.
-- Increment 3 — B-cockpit: arrow to a lit slot, apply a card via the `schema-ctl` socket.
+- Increment 3 — ✅ **DONE (2026-07-27)** — B-cockpit: arrow to a lit slot, apply a card via the
+  control socket. `schema-board --tty /dev/tty8 --interactive`.
+
+  **Confirm-before-apply, deliberately.** Browsing never touches the socket; the board is still a
+  pure shm reader until an operator presses `y`. The confirm panel prints the exact command first
+  (`will run: schema-ctl restart frigate`), so the board can only ever do what the operator could
+  have typed themselves — no hidden verbs, nothing that reads differently than it behaves.
+
+  **Card selection is deterministic**, a narrow stand-in for increment 4's declared ladders:
+  `DORMANT → reset` (gave up; clear counters and re-queue), `EXCISED → start` (removed from the
+  rail), everything else → `restart`.
+
+  Keys: `↑`/`↓` or `j`/`k` to select, `g`/`G` for first/last, `enter` to raise a card, `y` apply,
+  `n`/`esc` cancel. `ISIG` is left **on** so ctrl-C still works — a recovery surface must never trap
+  its operator.
+
+  Every socket operation is bounded (3s `SO_RCVTIMEO`/`SO_SNDTIMEO`, reply capped): the surface you
+  reach for when things are wedged must not itself hang because the thing it is recovering stopped
+  answering. Same rule that produced the buffered shutdown log.
+
+  **Verified end to end on the live box**, driven through a pty: `jj` moved the selection, `enter`
+  raised `▸ restart mount-efi?`, `n` cancelled, and a real apply returned
+  `ok: SIGTERM → schema-board — recovery arc will respawn` with the service coming back at
+  `ppid=1, restarts=2`, still painting tty8. Non-root browses fine and gets
+  `Permission denied (needs root)` on apply rather than a crash.
+
+  ⚠️ **Physical-console access can now restart services.** This is not a new boundary — tty2 already
+  autologins root — but it is worth stating rather than discovering.
 - Increment 4 — `.svc` card-ladder syntax + auto-healer (C) playing declared decks.
 - Increment 5 — generative fallback card from F8/F9/F6 flags when the deck is empty.
 - Increment 6 — compositor tile bridged to `schema-plasma-watchdog`, surgical→nuclear
