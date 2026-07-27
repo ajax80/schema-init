@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.1.2
+Version:        0.1.3
 Release:        1%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -63,6 +63,15 @@ overwrite a service file a running system depends on.
 %{_datadir}/%{name}/services
 
 %changelog
+* Mon Jul 27 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.3-1
+- PID 1 resets the child signal mask before every exec, so services no longer
+  inherit a blocked SIGCHLD and can reap their own children
+- Shutdown no longer blocks PID 1 on a console write, bounds sync, and kills
+  what the cgroup sweep misses; the transcript is persisted
+- The remount sweep no longer takes / read-only before the log is written
+- VT switches are mediated with VT_PROCESS, so consoles repaint on a graphical
+  session; IXON is disarmed on the mediated session VT
+
 * Fri Jul 24 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.2-1
 - Ship schema-board, the read-only weight-state board; needs no root
 - Ship a logrotate config and an example rotation timer

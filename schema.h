@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define SCHEMA_INIT_VERSION "0.1.2"
+#define SCHEMA_INIT_VERSION "0.1.3"
 
 /* States */
 #define STATE_FUNDAMENTAL   1
