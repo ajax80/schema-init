@@ -562,6 +562,7 @@ static void execute_fuse_cmd(service_t *svc) {
     service_log(svc, "fuse-cmd-exec");
     pid = fork();
     if (pid == 0) {
+        service_reset_child_sigmask();
         setsid();
         execl("/bin/sh", "sh", "-c", svc->fuse_cmd, NULL);
         _exit(127);
@@ -580,6 +581,7 @@ static void start_failsafe(service_t *svc) {
         return;
     }
     if (pid == 0) {
+        service_reset_child_sigmask();
         setsid();
         char *at = strchr(svc->name, '@');
         if (at) {
@@ -1771,6 +1773,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "schema-init: dependency cycles detected — dropping to rescue shell\n");
         pid_t rsh = fork();
         if (rsh == 0) {
+            service_reset_child_sigmask();
             setsid();
             int tty = open("/dev/tty1", O_RDWR);
             if (tty >= 0) {

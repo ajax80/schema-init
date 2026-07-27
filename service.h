@@ -126,4 +126,7 @@ int service_load_one(const char *path, service_t *svc);
 /* detect dependency cycles; logs and returns number of cycles found */
 int services_check_cycles(service_t *table, int count);
 
+/* call between fork() and exec() in every child: clear the inherited mask */
+void service_reset_child_sigmask(void);
+
 #endif
