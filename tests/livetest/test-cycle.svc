@@ -1,0 +1,3 @@
+name=cyc-selfloop
+exec=/bin/true
+dep=cyc-selfloop
