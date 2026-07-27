@@ -1,0 +1,5 @@
+name=test-timer
+exec=/usr/bin/touch
+args=/run/test-timer.fired
+on_boot_sec=30
+on_active_sec=60
