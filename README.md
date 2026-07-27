@@ -586,11 +586,20 @@ It reads the shared-memory export rather than the control socket and depends on 
 
 | | |
 |---|---|
-| The board keeps reading and updating while the compositor is wedged | **Yes** — `seq` advanced 82491 → 82639 with `kwin_wayland` in state `T` |
+| The board keeps reading and updating while the compositor is wedged | **Yes** — `seq` advanced 228430 → 228569 across a 30 s freeze with `kwin_wayland` in state `T` |
 | You can *see* it while the compositor is **healthy** | **Yes** — `ctrl-alt-F8` shows the console, `ctrl-alt-F1` returns to a repainted desktop |
-| You can *see* it while the compositor is wedged | ⏭️ **Not retested since the fix** — see below |
+| You can *see* it while the compositor is **wedged** | **Yes** — the board rendered, in colour, with `kwin_wayland` in state `T` |
 
-**The wedged case is a prediction, not a result.** With `VT_PROCESS` the kernel signals `schema-logind`, which drops DRM master and acknowledges the switch itself, so a `SIGSTOP`ed compositor no longer has to participate — but the freeze test that originally failed has not been re-run against the fix. Do not read the healthy result as covering it.
+**The wedged case is what the recovery console exists for, and it is the fail-safe that carries it.** With the compositor `SIGSTOP`ed it cannot answer `PauseDeviceComplete`, so every device ack goes missing. Releasing the VT anyway — rather than waiting for acks that will never arrive — is the only reason the switch completes:
+
+```
+VT release requested — pausing 10 device(s)
+DROP_MASTER ok on fd=11
+10 device ack(s) missing — releasing anyway
+VT_RELDISP(1) — switch allowed to proceed
+```
+
+Blocking there would strand the kernel mid-switch with DRM master already dropped: a black screen with no way back. On `SIGCONT` the compositor flushes all ten acks and a late `Seat.SwitchTo` for the keypress it was frozen on, and the session recovers. Note that in the wedged case the kernel drives the handoff alone through `VT_PROCESS` — `Seat.SwitchTo` arrives *after* the release, not before it as in the healthy case. That is the difference a polling implementation cannot cover.
 
 ### How the handoff works
 
