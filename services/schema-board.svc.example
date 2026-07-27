@@ -1,0 +1,6 @@
+name=schema-board
+exec=/usr/bin/schema-board
+args=--tty
+args=/dev/tty8
+needs_root=1
+critical=0

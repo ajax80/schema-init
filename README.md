@@ -99,7 +99,7 @@ If you're reading the source to evaluate it, start here. The whole init is ~2,50
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
 | `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
 | `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
-| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. Increment 1 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
+| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` paints a dedicated console; note that VT switching does not currently repaint on a graphical system — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
 
 **Directories:**
 
@@ -331,6 +331,8 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 These are real gaps, not future features being teased:
 
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
+- **Log rotation needs a timer you schedule.** The `logrotate` config ships; nothing here fires it. See [Logs](#logs).
+- **VT switching does not repaint on a graphical system.** `ctrl-alt-F<n>` moves the active VT in the kernel, but `scripts/schema-logind.py` never marks the outgoing session inactive or sends `PauseDevice`, so the compositor keeps KMS and the screen never changes. This affects every console — the gettys on tty2–tty6 as much as the recovery console. See [Recovery console](#recovery-console).
 
 ---
 
@@ -565,6 +567,68 @@ The socket is `chmod 0600` — root only. Build alongside the init binary:
 make schema-ctl
 sudo cp schema-ctl /usr/local/bin/schema-ctl
 ```
+
+---
+
+## Recovery console
+
+When a Wayland compositor wedges, `ctrl-alt-F2` only gets you another login on the same broken session, and systemd's `rescue`/`emergency` targets are all-or-nothing — they tear the session down and lose your work. `schema-board` on a dedicated VT is the alternative: a surface that sits **below** the compositor and shows you what is actually wrong.
+
+```sh
+schema-board --tty /dev/tty8      # then ctrl-alt-F8 to look at it
+```
+
+It reads the shared-memory export rather than the control socket and depends on nothing graphical, so a frozen desktop, a wedged control socket, and a saturated D-Bus all leave the **process** working. Give it a VT no getty owns — `services/` ships gettys on tty2–tty6, and tty1 is the display manager, so tty7 and up are free.
+
+### What it survives, and what it does not
+
+🔴 **The console is currently not reachable at all on a graphical schema-init system, healthy or wedged.** This is measured on real hardware, twice, not assumed.
+
+| | |
+|---|---|
+| The board keeps reading and updating while the compositor is wedged | **Yes** — `seq` advanced 82491 → 82639 with `kwin_wayland` in state `T` |
+| You can *see* it while the compositor is wedged | **No** |
+| You can *see* it while the compositor is **healthy**| **No** |
+
+The last row is the one that matters, and it is not a `schema-board` bug. Pressing `ctrl-alt-F8` — or `ctrl-alt-F2`, which is a plain `agetty`/autologin console with nothing to do with the board — moves the active VT in the kernel (`/sys/class/tty/tty0/active` really does change) while the screen keeps showing the desktop.
+
+The break is in `scripts/schema-logind.py`. The handoff a graphical session needs looks like this:
+
+```
+ctrl-alt-F<n>
+  → kernel switches the active VT              ✅ works
+  → logind notices the active VT changed       ❌ nothing watches /sys/class/tty/tty0/active
+  → logind marks the outgoing session inactive ❌ sessions carry no VTNr to compare against
+  → logind sends PauseDevice to the compositor ❌ never fires
+  → the compositor drops DRM master            ❌ never asked to
+  → the console becomes visible                ❌ scanout still shows the compositor
+```
+
+`schema-logind.py` implements `TakeControl` and `TakeDevice`, which is enough for a compositor to *acquire* KMS, but it has no `ResumeDevice`, no `Seat.SwitchTo`, no session `VTNr`, and no watch on the active-VT file. The handoff is one-way: the compositor can take the display and nothing can ever take it back. `loginctl show-session <id>` returns empty for the same reason.
+
+An earlier revision of this section blamed a *stopped* compositor for being unable to release DRM master. That was wrong — a healthy compositor does not release it either, because nothing asks. It also proposed having the board take DRM master itself; that cannot work, since `DRM_IOCTL_SET_MASTER` fails while another process holds master.
+
+**Until the logind gap is closed, treat the recovery console as a headless/serial and single-user-boot surface only.** On a machine with no graphical session — a server, a Pi, an initramfs-less boot before the display manager starts — it works as documented, because nothing has taken KMS.
+
+If you are stranded on an invisible VT, `sudo chvt 1` from any other shell (ssh included) puts you back.
+
+To have PID 1 own it from boot, copy `services/schema-board.svc.example` into `/etc/schema-init/services/`:
+
+```ini
+name=schema-board
+exec=/usr/bin/schema-board
+args=--tty
+args=/dev/tty8
+needs_root=1
+critical=0
+```
+
+Two things about that file are load-bearing:
+
+- **`args=` is one argument per line.** `args=--tty /dev/tty8` on a single line passes *one* argv of `"--tty /dev/tty8"`, which `schema-board` rejects. Repeat the key.
+- **`--tty` is not optional for a service.** Services are spawned with stdout redirected to `/var/log/schema-init/<name>.log`, so without `--tty` the board would faithfully paint its frames into a logfile.
+
+On the console it takes over, the board disables screen blanking and hides the cursor, restoring the cursor when it exits.
 
 ---
 
