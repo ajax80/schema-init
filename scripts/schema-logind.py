@@ -11,6 +11,7 @@ import json
 import subprocess
 import dbus
 import dbus.service
+import dbus.lowlevel
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 import socket
@@ -206,6 +207,10 @@ VT_RELEASE_ACK_MS = 500
 DRM_IOCTL_SET_MASTER = 0x641E
 DRM_IOCTL_DROP_MASTER = 0x641F
 SESSION_IFACE = 'org.freedesktop.login1.Session'
+# The single-session stub's identity. Hardcoded in seven places before this;
+# collecting it here is the first step toward a real multi-session table.
+SESSION_ID = '31'
+SESSION_PATH = '/org/freedesktop/login1/session/_' + SESSION_ID
 
 
 def read_active_vt():
@@ -238,7 +243,7 @@ def vt_activate(vtnr):
 
 class Login1Session(dbus.service.Object):
     def __init__(self, bus):
-        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/session/_31')
+        dbus.service.Object.__init__(self, bus, SESSION_PATH)
         self.devices = {}
         env_vt = os.environ.get('SCHEMA_LOGIND_VTNR', '')
         # The session's VT is captured at TakeControl() time — that is when the
@@ -250,7 +255,10 @@ class Login1Session(dbus.service.Object):
         self.vt_fd = None
         self.pending_acks = set()
         self.release_timer = None
-        print("login1-stub: Registered Session at /org/freedesktop/login1/session/_31")
+        self.locked_hint = False
+        self.idle_hint = False
+        self.idle_since = 0
+        print("login1-stub: Registered Session at " + SESSION_PATH)
 
     # -- session-device handoff ---------------------------------------------
 
@@ -458,13 +466,52 @@ class Login1Session(dbus.service.Object):
         if self.vtnr:
             vt_activate(self.vtnr)
 
+    def _emit_bare_signal(self, member):
+        """Emit Lock/Unlock on login1.Session.
+
+        These exist as BOTH a method and a signal on the real interface. The
+        method is the request ("please lock"); the signal is what the session's
+        own screen locker subscribes to and acts on. dbus-python derives the
+        D-Bus member name from the Python function __name__, so a class cannot
+        carry both under one name — send the signal message directly instead.
+        Without this, Lock() printed a line and nothing ever locked."""
+        msg = dbus.lowlevel.SignalMessage(SESSION_PATH, SESSION_IFACE, member)
+        self._connection.send_message(msg)
+
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
     def Lock(self):
         print("login1-stub: Session.Lock() requested")
+        self._emit_bare_signal('Lock')
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
     def Unlock(self):
         print("login1-stub: Session.Unlock() requested")
+        self._emit_bare_signal('Unlock')
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
+    def SetLockedHint(self, locked):
+        # The screen locker reports its state here; everything that asks "is the
+        # screen locked" reads the resulting LockedHint property.
+        locked = bool(locked)
+        if locked == self.locked_hint:
+            return
+        self.locked_hint = locked
+        print(f"login1-stub: Session.SetLockedHint({locked})")
+        self.PropertiesChanged(SESSION_IFACE,
+                               {'LockedHint': dbus.Boolean(locked)}, [])
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
+    def SetIdleHint(self, idle):
+        idle = bool(idle)
+        if idle == self.idle_hint:
+            return
+        self.idle_hint = idle
+        self.idle_since = int(time.time() * 1000000) if idle else 0
+        print(f"login1-stub: Session.SetIdleHint({idle})")
+        self.PropertiesChanged(SESSION_IFACE, {
+            'IdleHint': dbus.Boolean(idle),
+            'IdleSinceHint': dbus.UInt64(self.idle_since),
+        }, [])
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='',
                          sender_keyword='sender')
@@ -572,10 +619,10 @@ class Login1Session(dbus.service.Object):
                 'Desktop': dbus.String(get_desktop_name()),
                 'Service': dbus.String(leader_comm.split('-', 1)[0] if leader_comm else ''),
                 'Scope': dbus.String('session-31.scope'),
-                'IdleHint': dbus.Boolean(False),
-                'IdleSinceHint': dbus.UInt64(0),
+                'IdleHint': dbus.Boolean(self.idle_hint),
+                'IdleSinceHint': dbus.UInt64(self.idle_since),
                 'IdleSinceHintMonotonic': dbus.UInt64(0),
-                'LockedHint': dbus.Boolean(False),
+                'LockedHint': dbus.Boolean(self.locked_hint),
                 'Timestamp': dbus.UInt64(started),
                 'TimestampMonotonic': dbus.UInt64(started_mono),
             }
@@ -606,7 +653,7 @@ class Login1User(dbus.service.Object):
                 'UID': dbus.UInt32(uid),
                 'GID': dbus.UInt32(gid),
                 'Name': dbus.String(username),
-                'Display': dbus.ObjectPath('/org/freedesktop/login1/session/_31'),
+                'Display': dbus.ObjectPath(SESSION_PATH),
                 'State': dbus.String('active'),
             }
         return {}
@@ -645,7 +692,7 @@ class Login1Seat(dbus.service.Object):
         if interface_name == 'org.freedesktop.login1.Seat' or not interface_name:
             return {
                 'Id': dbus.String('seat0'),
-                'ActiveSession': dbus.Struct((dbus.String('31'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='so'),
+                'ActiveSession': dbus.Struct((dbus.String('31'), dbus.ObjectPath(SESSION_PATH)), signature='so'),
                 'CanMultiSession': dbus.Boolean(True),
                 'CanTTY': dbus.Boolean(True),
                 'CanGraphical': dbus.Boolean(True),
@@ -653,9 +700,35 @@ class Login1Seat(dbus.service.Object):
         return {}
 
 class Login1Manager(dbus.service.Object):
-    def __init__(self, bus):
+    def __init__(self, bus, session=None):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1')
+        self.session = session
         print("login1-stub: Registered Manager at /org/freedesktop/login1")
+
+    # loginctl lock-session/unlock-session route through the Manager, not the
+    # Session object. Before these existed dbus-python raised UnknownMethod as
+    # an unhandled traceback, so `loginctl lock-session` failed outright.
+    def _relay_lock(self, member):
+        if self.session is None:
+            raise dbus.exceptions.DBusException(
+                "No session", name='org.freedesktop.login1.NoSuchSession')
+        getattr(self.session, member)()
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def LockSession(self, session_id):
+        self._relay_lock('Lock')
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def UnlockSession(self, session_id):
+        self._relay_lock('Unlock')
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
+    def LockSessions(self):
+        self._relay_lock('Lock')
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
+    def UnlockSessions(self):
+        self._relay_lock('Unlock')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='',
                          sender_keyword='sender')
@@ -725,7 +798,7 @@ class Login1Manager(dbus.service.Object):
     def ListSessions(self):
         uid = get_active_uid()
         username = get_username_for_uid(uid)
-        return [dbus.Struct((dbus.String('31'), dbus.UInt32(uid), dbus.String(username), dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='susso')]
+        return [dbus.Struct((dbus.String('31'), dbus.UInt32(uid), dbus.String(username), dbus.String('seat0'), dbus.ObjectPath(SESSION_PATH)), signature='susso')]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(uso)')
     def ListUsers(self):
@@ -750,11 +823,11 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
-        return dbus.ObjectPath('/org/freedesktop/login1/session/_31')
+        return dbus.ObjectPath(SESSION_PATH)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='o')
     def GetSession(self, session_id):
-        return dbus.ObjectPath('/org/freedesktop/login1/session/_31')
+        return dbus.ObjectPath(SESSION_PATH)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetUser(self, uid):
@@ -1209,7 +1282,7 @@ def main():
     session = Login1Session(bus)
     user = Login1User(bus, uid)
     seat = Login1Seat(bus)
-    manager = Login1Manager(bus)
+    manager = Login1Manager(bus, session)
     hostname = Hostname1(bus)
     timedate = Timedate1(bus)
 
