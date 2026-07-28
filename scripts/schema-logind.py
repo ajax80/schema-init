@@ -113,6 +113,67 @@ def get_session_type():
         pass
     return 'x11'
 
+_COMPOSITORS = ('kwin_wayland', 'cinnamon', 'gnome-shell', 'Xorg', 'plasmashell')
+
+def get_session_leader():
+    """(pid, comm) of the session leader, or (0, '').
+
+    Found as getsid() of a live compositor owned by the active uid — on a real
+    login that resolves to the display-manager session process (sddm-logged
+    here), which is exactly what logind calls Leader. Deliberately NOT read from
+    /proc/<pid>/environ: see the note in get_active_uid(). Worst case a caller
+    gets Leader=0, which is what it already got before this existed."""
+    uid = get_active_uid()
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            if os.stat('/proc/%d' % pid).st_uid != uid:
+                continue
+            if read_file_line('/proc/%d/comm' % pid) not in _COMPOSITORS:
+                continue
+            sid = os.getsid(pid)
+            return sid, (read_file_line('/proc/%d/comm' % sid) or '')
+        except (OSError, ProcessLookupError):
+            continue
+    return 0, ''
+
+def get_desktop_name():
+    # Runtime-detected for the same reason get_session_type() is: hardcoding it
+    # is what made the KDE and Cinnamon copies of this file diverge.
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        comm = read_file_line('/proc/%s/comm' % entry)
+        if comm == 'kwin_wayland' or comm == 'plasmashell':
+            return 'KDE'
+        if comm == 'cinnamon':
+            return 'X-Cinnamon'
+        if comm == 'gnome-shell':
+            return 'GNOME'
+    return ''
+
+def proc_start_usec(pid):
+    """(realtime, monotonic) session start in usec, from /proc/<pid>/stat field
+    22. That field is already ticks-since-boot, so it IS the monotonic stamp;
+    adding /proc/stat btime converts it to realtime. loginctl needs both — with
+    TimestampMonotonic=0 it prints the session duration as '(null)'."""
+    try:
+        with open('/proc/%d/stat' % pid) as f:
+            fields = f.read().rsplit(') ', 1)[1].split()
+        ticks = int(fields[19])
+        hz = os.sysconf('SC_CLK_TCK')
+        monotonic = int(ticks / hz * 1000000)
+        with open('/proc/stat') as f:
+            for line in f:
+                if line.startswith('btime '):
+                    btime = int(line.split()[1])
+                    return int(btime * 1000000) + monotonic, monotonic
+    except (OSError, IndexError, ValueError):
+        pass
+    return 0, 0
+
 def svc_name(unit):
     for suffix in ('.service', '.target', '.socket', '.timer', '.mount', '.path'):
         if unit.endswith(suffix):
@@ -486,22 +547,37 @@ class Login1Session(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.Session':
+        if interface_name == 'org.freedesktop.login1.Session' or not interface_name:
             uid = get_active_uid()
             username = get_username_for_uid(uid)
+            vtnr = self.vtnr if self.vtnr is not None else read_active_vt()
+            leader_pid, leader_comm = get_session_leader()
+            started, started_mono = proc_start_usec(leader_pid) if leader_pid else (0, 0)
             return {
                 'Id': dbus.String('31'),
                 'User': dbus.Struct((dbus.UInt32(uid), dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')), signature='uo'),
                 'Name': dbus.String(username),
                 'Active': dbus.Boolean(self.active),
                 'State': dbus.String('active' if self.active else 'online'),
-                'VTNr': dbus.UInt32(self.vtnr if self.vtnr is not None else read_active_vt()),
+                'VTNr': dbus.UInt32(vtnr),
                 'Remote': dbus.Boolean(False),
                 'Type': dbus.String(get_session_type()),
                 'Class': dbus.String('user'),
                 'Seat': dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so'),
                 'CanReboot': dbus.String('yes'),
                 'CanPowerOff': dbus.String('yes'),
+                'Leader': dbus.UInt32(leader_pid),
+                'TTY': dbus.String('tty%d' % vtnr if vtnr else ''),
+                'Display': dbus.String(''),
+                'Desktop': dbus.String(get_desktop_name()),
+                'Service': dbus.String(leader_comm.split('-', 1)[0] if leader_comm else ''),
+                'Scope': dbus.String('session-31.scope'),
+                'IdleHint': dbus.Boolean(False),
+                'IdleSinceHint': dbus.UInt64(0),
+                'IdleSinceHintMonotonic': dbus.UInt64(0),
+                'LockedHint': dbus.Boolean(False),
+                'Timestamp': dbus.UInt64(started),
+                'TimestampMonotonic': dbus.UInt64(started_mono),
             }
         return {}
 
@@ -522,7 +598,7 @@ class Login1User(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.User':
+        if interface_name == 'org.freedesktop.login1.User' or not interface_name:
             uid = getattr(self, 'uid', 1000)
             username = get_username_for_uid(uid)
             gid = get_gid_for_uid(uid)
@@ -566,7 +642,7 @@ class Login1Seat(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.Seat':
+        if interface_name == 'org.freedesktop.login1.Seat' or not interface_name:
             return {
                 'Id': dbus.String('seat0'),
                 'ActiveSession': dbus.Struct((dbus.String('31'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='so'),
@@ -699,7 +775,7 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.Manager':
+        if interface_name == 'org.freedesktop.login1.Manager' or not interface_name:
             return {
                 'NAutoVTs': dbus.UInt32(6),
                 'KillUserProcesses': dbus.Boolean(False),
@@ -731,7 +807,7 @@ class Hostname1(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.hostname1':
+        if interface_name == 'org.freedesktop.hostname1' or not interface_name:
             hn = socket.gethostname() or "localhost"
             os_pretty = get_os_release_val('PRETTY_NAME') or "Fedora Linux"
             os_cpe = get_os_release_val('CPE_NAME') or "cpe:/o:fedoraproject:fedora"
@@ -851,7 +927,7 @@ class ConsoleKitSession(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.ConsoleKit.Session':
+        if interface_name == 'org.freedesktop.ConsoleKit.Session' or not interface_name:
             return {
                 'Id': dbus.ObjectPath('/org/freedesktop/ConsoleKit/Session1'),
                 'User': dbus.UInt32(self.uid),
@@ -956,7 +1032,7 @@ class Timedate1(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.timedate1':
+        if interface_name == 'org.freedesktop.timedate1' or not interface_name:
             now_us = dbus.UInt64(int(time.time() * 1_000_000))
             return {
                 'Timezone': dbus.String(get_timezone()),
