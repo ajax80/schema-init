@@ -30,6 +30,15 @@ if [ ! -f "$CANON" ]; then echo "canonical not found: $CANON"; exit 1; fi
 # parse-check the new file before touching the live one
 if ! python3 -m py_compile "$CANON"; then echo "ABORT: $CANON does not parse"; exit 1; fi
 
+# Can the bridge that is RUNNING RIGHT NOW handle SIGHUP? Versions before the
+# re-exec handoff cannot, and SIGHUP's default disposition is terminate -- so
+# sending it would kill them, PID 1 would respawn a cold bridge, and this script
+# would cause the very orphaning it now exists to prevent. Bootstrapping onto
+# the fix therefore costs one logout/login, once. Decided by the live file,
+# because that is what the running pid was started from.
+HUP_CAPABLE=1
+if [ -f "$LIVE" ] && ! grep -q 'SIGHUP' "$LIVE"; then HUP_CAPABLE=0; fi
+
 # timestamped backup
 TS=$(date +%Y%m%d-%H%M%S)
 if [ -f "$LIVE" ]; then cp "$LIVE" "$LIVE.bak-$TS" && echo "backup -> $LIVE.bak-$TS"; fi
@@ -41,7 +50,23 @@ echo "installed canonical -> $LIVE ($(wc -l <"$LIVE") lines)"
 
 # reload: SIGHUP re-exec if it is live, restart only if it is not
 OLDPID=$(pgrep -f "[s]chema-logind.py" | head -1)
-if [ -n "$OLDPID" ]; then
+if [ -n "$OLDPID" ] && [ "$HUP_CAPABLE" = 0 ]; then
+    if [ "${ACCEPT_ORPHAN:-0}" != 1 ]; then
+        echo "ABORT: the running bridge (pid $OLDPID) predates the SIGHUP handoff."
+        echo "  SIGHUP would kill it and PID 1 would respawn a cold bridge with none"
+        echo "  of this session's fds — VT mediation would go dead and the recovery"
+        echo "  console would be unreachable until the desktop session logs out."
+        echo "  This is a one-time bootstrap cost. Either:"
+        echo "    - run this immediately before a logout/login, with ACCEPT_ORPHAN=1"
+        echo "    - or run it from a console with no graphical session logged in"
+        echo "  The file is installed at $LIVE; only the reload was skipped."
+        exit 1
+    fi
+    echo "bridge live at pid $OLDPID but pre-handoff — restarting (session WILL be"
+    echo "orphaned until logout/login), as ACCEPT_ORPHAN=1 was set"
+    OLDPID=''
+    schema-ctl restart schema-logind || { echo "ABORT: restart failed. REVERT: $REVERT"; exit 1; }
+elif [ -n "$OLDPID" ]; then
     echo "bridge live at pid $OLDPID — SIGHUP re-exec (fds preserved)"
     kill -HUP "$OLDPID" || { echo "ABORT: SIGHUP failed. REVERT: $REVERT"; exit 1; }
 else
