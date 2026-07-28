@@ -1,7 +1,10 @@
 # logind multi-session — design
 
 **Date:** 2026-07-27
-**Status:** DESIGN — not built. Groundwork landed on `feat/logind-session-properties` (`5da80ac`, `126e3b7`).
+**Status:** Step 1 (bridge) BUILT on `feat/logind-multi-session` — registry, legacy fallback, derived
+seat/user files, `SessionNew`/`SessionRemoved`. Not yet deployed to hardware. Steps 2 and 3 (the
+`sddm-logged` and getty allocation halves) remain unbuilt. Groundwork landed on
+`feat/logind-session-properties` (`5da80ac`, `126e3b7`).
 **Depends on:** nothing new; supersedes the hardcoded session identity in `scripts/schema-logind.py` and `/usr/local/bin/sddm-logged`
 **Track:** B (systemd-compat surface — "indistinguishable from systemd")
 
@@ -181,9 +184,17 @@ The two files deploy independently, so the bridge **must tolerate an un-updated 
 That makes the order irrelevant and every step individually revertible:
 
 1. Ship the bridge (registry + legacy fallback). Behaviour identical on the current box, because `sddm-logged` still
-   writes `31` and the registry finds it.
+   writes `31` and the registry finds it. **DONE** — `tests/test_logind_registry.py` (34 checks) and
+   `tests/test_logind_multisession.py` (21 checks) cover it, and `tests/test_logind_vt.py` still passes 17/17
+   including the SIGHUP re-exec handoff.
 2. Ship `sddm-logged` allocation. Now ids are real.
 3. Add the same snippet to the getty wrapper so tty logins get sessions (`TYPE=tty`, `CLASS=user`).
+
+**One intentional behaviour change in step 1.** `_set_active()` now writes `ACTIVE=`/`STATE=` back to the session's
+state file on a VT switch. Before this the file said `STATE=active` forever while D-Bus reported the truth, so
+`sd_session_is_active()` — which polkit calls — disagreed with the bus. Two answers to one question is a bug, not
+neutrality, and the constraint above ("for a large class of consumers the files *are* the interface") is the reason.
+The write is skipped for a synthesised session, which has no file to write.
 
 ## Risks
 

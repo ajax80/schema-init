@@ -80,10 +80,17 @@ def main():
         print("could not start a private bus", file=sys.stderr)
         return 1
 
+    # The bridge now writes the derived seat/user files and sweeps stale
+    # session files, so it must be pointed at a temp tree — otherwise a test
+    # run edits the live /run/systemd. Left empty on purpose: that exercises
+    # the legacy fallback, which has to keep serving session 31.
+    rundir = tempfile.mkdtemp(prefix='schema-logind-vt-')
+
     env = dict(os.environ)
     env['DBUS_SYSTEM_BUS_ADDRESS'] = addr
     env['SCHEMA_LOGIND_ACTIVE_VT'] = vtfile.name
     env['SCHEMA_LOGIND_VTNR'] = '1'
+    env['SCHEMA_LOGIND_RUN_DIR'] = rundir
 
     stub = subprocess.Popen([sys.executable, LOGIND], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
