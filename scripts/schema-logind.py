@@ -207,10 +207,32 @@ VT_RELEASE_ACK_MS = 500
 DRM_IOCTL_SET_MASTER = 0x641E
 DRM_IOCTL_DROP_MASTER = 0x641F
 SESSION_IFACE = 'org.freedesktop.login1.Session'
-# The single-session stub's identity. Hardcoded in seven places before this;
-# collecting it here is the first step toward a real multi-session table.
-SESSION_ID = '31'
-SESSION_PATH = '/org/freedesktop/login1/session/_' + SESSION_ID
+SEAT_IFACE = 'org.freedesktop.login1.Seat'
+MANAGER_IFACE = 'org.freedesktop.login1.Manager'
+# Overridable for the same reason SCHEMA_LOGIND_ACTIVE_VT is: a test must be
+# able to point the bridge at a temp tree. This one matters more than the VT
+# path — the registry writes the seat/user files and sweeps stale session
+# files, so a test run against the real /run/systemd would edit live state.
+_RUN_SYSTEMD = os.environ.get('SCHEMA_LOGIND_RUN_DIR', '/run/systemd')
+SESSIONS_DIR = _RUN_SYSTEMD + '/sessions'
+SEATS_DIR = _RUN_SYSTEMD + '/seats'
+USERS_DIR = _RUN_SYSTEMD + '/users'
+# The id the stub served when it could only serve one session. Still used as
+# the synthesised id when /run/systemd/sessions/ is empty, which is what a
+# login script that predates id allocation leaves behind.
+LEGACY_SESSION_ID = '31'
+
+
+def session_path_for(sid):
+    return '/org/freedesktop/login1/session/_' + str(sid)
+
+
+def user_path_for(uid):
+    return '/org/freedesktop/login1/user/_%d' % int(uid)
+
+
+def session_file_for(sid):
+    return SESSIONS_DIR + '/' + str(sid)
 
 # --- restart handoff --------------------------------------------------------
 # TakeDevice() opens the DRM node and passes THAT fd to the compositor, so our
@@ -227,7 +249,6 @@ SESSION_PATH = '/org/freedesktop/login1/session/_' + SESSION_ID
 HANDOFF_ENV = 'SCHEMA_LOGIND_HANDOFF'
 TTY_MAJOR = 4
 SCRIPT_PATH = os.path.abspath(__file__)
-SESSION_FILE = '/run/systemd/sessions/' + SESSION_ID
 
 
 def read_file_value(path, key):
@@ -242,8 +263,208 @@ def read_file_value(path, key):
     return ""
 
 
-def session_file_is_active():
-    return read_file_value(SESSION_FILE, 'STATE') == 'active'
+def read_state_file(path):
+    """Whole KEY=value file as a dict. Comment lines and junk are skipped."""
+    out = {}
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, v = line.split('=', 1)
+                out[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return out
+
+
+def _int_or(val, default):
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
+class SessionRecord:
+    """One parsed /run/systemd/sessions/<id>.
+
+    Any field the login script did not write falls back to runtime detection,
+    because the two files deploy independently: a bridge running against an
+    un-updated sddm-logged still has to produce a complete session. Missing
+    keys are the normal case during a partial rollout, not an error.
+
+    Those fallbacks are LAZY and cached. get_session_leader() and
+    get_desktop_name() each walk all of /proc, and this object is rebuilt on
+    every scan — resolving them eagerly would put two full /proc scans per
+    session on a 4 Hz timer, which is the shape of both prior CPU-spin
+    incidents. Nothing here touches /proc until D-Bus actually asks for a
+    property that needs it.
+    """
+
+    def __init__(self, sid, data=None, synthesised=False):
+        self.sid = str(sid)
+        self.data = data or {}
+        self.synthesised = synthesised
+        self._cache = {}
+
+    # -- cheap: straight off the file, safe to touch at poll cadence ---------
+
+    @property
+    def uid(self):
+        if self.data.get('UID'):
+            return _int_or(self.data['UID'], 0)
+        return self._lazy('uid', get_active_uid)
+
+    @property
+    def seat(self):
+        return self.data.get('SEAT') or 'seat0'
+
+    @property
+    def vtnr(self):
+        return _int_or(self.data.get('VTNR'), 0)
+
+    @property
+    def klass(self):
+        return self.data.get('CLASS') or 'user'
+
+    @property
+    def state(self):
+        if self.data.get('STATE'):
+            return self.data['STATE']
+        # A synthesised record stands in for a session the legacy login script
+        # created and never described. It is by definition the live one — the
+        # single-session bridge hardcoded active=True for exactly that reason,
+        # and starting it 'online' would leave on_vt_changed() with nothing to
+        # transition away from, so the first PauseDevice never fires.
+        return 'active' if self.synthesised else 'online'
+
+    @property
+    def active(self):
+        if 'ACTIVE' in self.data:
+            return self.data['ACTIVE'] == '1'
+        return self.state == 'active'
+
+    @property
+    def remote(self):
+        return self.data.get('REMOTE', '0') == '1'
+
+    @property
+    def is_display(self):
+        return self.data.get('IS_DISPLAY', '0') == '1'
+
+    # -- lazy: only resolved when something actually reads them --------------
+
+    def _lazy(self, key, fn):
+        if key not in self._cache:
+            self._cache[key] = fn()
+        return self._cache[key]
+
+    @property
+    def user(self):
+        return self.data.get('USER') \
+            or self._lazy('user', lambda: get_username_for_uid(self.uid))
+
+    @property
+    def type(self):
+        return self.data.get('TYPE') or self._lazy('type', get_session_type)
+
+    @property
+    def desktop(self):
+        return self.data.get('DESKTOP') or self._lazy('desktop', get_desktop_name)
+
+    def _resolve_leader(self):
+        pid = _int_or(self.data.get('LEADER'), 0)
+        if pid:
+            return pid, ''
+        return get_session_leader()
+
+    @property
+    def leader(self):
+        return self._lazy('leader_pair', self._resolve_leader)[0]
+
+    @property
+    def service(self):
+        if self.data.get('SERVICE'):
+            return self.data['SERVICE']
+        comm = self._lazy('leader_pair', self._resolve_leader)[1]
+        return comm.split('-', 1)[0] if comm else ''
+
+    def _resolve_times(self):
+        rt = _int_or(self.data.get('REALTIME'), 0)
+        mono = _int_or(self.data.get('MONOTONIC'), 0)
+        if rt:
+            return rt, mono
+        return proc_start_usec(self.leader) if self.leader else (0, 0)
+
+    @property
+    def realtime(self):
+        return self._lazy('times', self._resolve_times)[0]
+
+    @property
+    def monotonic(self):
+        return self._lazy('times', self._resolve_times)[1]
+
+    # -- change detection ----------------------------------------------------
+
+    # State-file key -> the D-Bus property whose value it backs. Used to emit
+    # PropertiesChanged for only the keys that actually moved, rather than
+    # invalidating the whole interface on every touch of the file.
+    KEY_TO_PROP = {
+        'UID': 'User', 'USER': 'Name', 'SEAT': 'Seat', 'VTNR': 'VTNr',
+        'TYPE': 'Type', 'CLASS': 'Class', 'DESKTOP': 'Desktop',
+        'STATE': 'State', 'ACTIVE': 'Active', 'REMOTE': 'Remote',
+        'LEADER': 'Leader', 'SERVICE': 'Service',
+    }
+
+    def signature(self):
+        """What a change looks like.
+
+        Deliberately the raw file contents, not the resolved properties: this
+        is compared on every scan, so it must not force a single lazy lookup.
+        """
+        return tuple(sorted(self.data.items()))
+
+    def changed_properties(self, other):
+        """D-Bus property names whose backing key differs from `other`."""
+        props = []
+        for key in set(self.data) | set(other.data):
+            if self.data.get(key) != other.data.get(key):
+                prop = self.KEY_TO_PROP.get(key)
+                if prop and prop not in props:
+                    props.append(prop)
+        return props
+
+    def leader_alive(self):
+        pid = _int_or(self.data.get('LEADER'), 0)
+        if not pid:
+            return True     # nothing claimed a leader; not ours to declare dead
+        return os.path.isdir('/proc/%d' % pid)
+
+
+def scan_session_files():
+    """All /run/systemd/sessions/<id> as {sid: SessionRecord}.
+
+    Falls back to synthesising the legacy id when the directory is empty, so
+    the bridge works unchanged against a login script that never learned to
+    allocate one. Deployment order between the two files is therefore free.
+    """
+    records = {}
+    try:
+        names = os.listdir(SESSIONS_DIR)
+    except OSError:
+        names = []
+    for name in names:
+        # Real logind ids can be alphanumeric ('c1' for a greeter); ours are
+        # integers. Accept both, reject dotfiles and rotation leftovers.
+        if not name or not name.isalnum():
+            continue
+        records[name] = SessionRecord(name, read_state_file(session_file_for(name)))
+
+    if not records:
+        records[LEGACY_SESSION_ID] = SessionRecord(LEGACY_SESSION_ID,
+                                                   None, synthesised=True)
+    return records
 
 
 def load_handoff():
@@ -306,23 +527,31 @@ def vt_activate(vtnr):
 
 
 class Login1Session(dbus.service.Object):
-    def __init__(self, bus, handoff=None):
-        dbus.service.Object.__init__(self, bus, SESSION_PATH)
+    def __init__(self, bus, record, handoff=None):
+        self.record = record
+        self.sid = record.sid
+        self.path = session_path_for(self.sid)
+        dbus.service.Object.__init__(self, bus, self.path)
         self.devices = {}
         env_vt = os.environ.get('SCHEMA_LOGIND_VTNR', '')
         # The session's VT is captured at TakeControl() time — that is when the
         # compositor announces itself, and it is the only trusted moment we
         # have. Deriving it from /proc/<pid>/environ would be forgeable (see
-        # get_active_uid).
-        self.vtnr = int(env_vt) if env_vt.isdigit() else None
-        self.active = True
+        # get_active_uid). A VTNR in the state file is trusted, though: it is
+        # root-written by the login path.
+        if env_vt.isdigit():
+            self.vtnr = int(env_vt)
+        else:
+            self.vtnr = record.vtnr or None
+        self.active = record.active
         self.vt_fd = None
         self.pending_acks = set()
         self.release_timer = None
         self.locked_hint = False
         self.idle_hint = False
         self.idle_since = 0
-        print("login1-stub: Registered Session at " + SESSION_PATH)
+        print(f"login1-stub: Registered Session {self.sid} at {self.path}"
+              + (" (synthesised — no state file)" if record.synthesised else ""))
         if handoff:
             self._adopt_handoff(handoff)
 
@@ -392,6 +621,7 @@ class Login1Session(dbus.service.Object):
             return
 
         state = {
+            'sid': self.sid,
             'vtnr': self.vtnr,
             'active': self.active,
             'locked_hint': self.locked_hint,
@@ -464,10 +694,59 @@ class Login1Session(dbus.service.Object):
         if self.active == active:
             return
         self.active = active
+        self._write_back_active(active)
         self.PropertiesChanged(SESSION_IFACE, {
             'Active': dbus.Boolean(active),
             'State': dbus.String('active' if active else 'online'),
         }, [])
+
+    def _write_back_active(self, active):
+        """Keep ACTIVE=/STATE= in the state file agreeing with D-Bus.
+
+        sd_session_is_active() parses the file, not the bus, and polkit is one
+        of its callers — so leaving the file saying active while D-Bus says
+        otherwise is not a cosmetic disagreement, it is two answers to the same
+        question. Skipped for a synthesised session, which has no file.
+        """
+        if self.record.synthesised:
+            return
+        path = session_file_for(self.sid)
+        data = read_state_file(path)
+        if not data:
+            return
+        data['ACTIVE'] = '1' if active else '0'
+        data['STATE'] = 'active' if active else 'online'
+        body = ['# This is private data. Do not parse.']
+        body += ['%s=%s' % (k, v) for k, v in data.items()]
+        tmp = path + '.tmp'
+        try:
+            with open(tmp, 'w') as f:
+                f.write('\n'.join(body) + '\n')
+            os.rename(tmp, path)
+            self.record.data = data
+        except OSError as e:
+            print(f"login1-stub: cannot update {path}: {e}", file=sys.stderr)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def shutdown(self):
+        """Session is gone: drop mediation, close taken devices, leave the bus."""
+        try:
+            self._teardown_vt_mediation()
+        except Exception:
+            pass
+        for fd in list(self.devices.values()):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self.devices.clear()
+        try:
+            self.remove_from_connection()
+        except Exception:
+            pass
 
     def on_vt_changed(self, new_vt):
         """Active VT moved. Pause or resume every device this session took."""
@@ -652,7 +931,7 @@ class Login1Session(dbus.service.Object):
         D-Bus member name from the Python function __name__, so a class cannot
         carry both under one name — send the signal message directly instead.
         Without this, Lock() printed a line and nothing ever locked."""
-        msg = dbus.lowlevel.SignalMessage(SESSION_PATH, SESSION_IFACE, member)
+        msg = dbus.lowlevel.SignalMessage(self.path, SESSION_IFACE, member)
         self._connection.send_message(msg)
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
@@ -772,44 +1051,324 @@ class Login1Session(dbus.service.Object):
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
         if interface_name == 'org.freedesktop.login1.Session' or not interface_name:
-            uid = get_active_uid()
-            username = get_username_for_uid(uid)
-            vtnr = self.vtnr if self.vtnr is not None else read_active_vt()
-            leader_pid, leader_comm = get_session_leader()
-            started, started_mono = proc_start_usec(leader_pid) if leader_pid else (0, 0)
+            rec = self.record
+            uid = rec.uid
+            vtnr = self.vtnr if self.vtnr is not None else rec.vtnr
+            seat = rec.seat
             return {
-                'Id': dbus.String('31'),
-                'User': dbus.Struct((dbus.UInt32(uid), dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')), signature='uo'),
-                'Name': dbus.String(username),
+                'Id': dbus.String(self.sid),
+                'User': dbus.Struct((dbus.UInt32(uid), dbus.ObjectPath(user_path_for(uid))), signature='uo'),
+                'Name': dbus.String(rec.user),
                 'Active': dbus.Boolean(self.active),
                 'State': dbus.String('active' if self.active else 'online'),
-                'VTNr': dbus.UInt32(vtnr),
-                'Remote': dbus.Boolean(False),
-                'Type': dbus.String(get_session_type()),
-                'Class': dbus.String('user'),
-                'Seat': dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so'),
+                'VTNr': dbus.UInt32(vtnr or 0),
+                'Remote': dbus.Boolean(rec.remote),
+                'Type': dbus.String(rec.type),
+                'Class': dbus.String(rec.klass),
+                'Seat': dbus.Struct((dbus.String(seat), dbus.ObjectPath('/org/freedesktop/login1/seat/' + seat)), signature='so'),
                 'CanReboot': dbus.String('yes'),
                 'CanPowerOff': dbus.String('yes'),
-                'Leader': dbus.UInt32(leader_pid),
+                'Leader': dbus.UInt32(rec.leader),
                 'TTY': dbus.String('tty%d' % vtnr if vtnr else ''),
                 'Display': dbus.String(''),
-                'Desktop': dbus.String(get_desktop_name()),
-                'Service': dbus.String(leader_comm.split('-', 1)[0] if leader_comm else ''),
-                'Scope': dbus.String('session-31.scope'),
+                'Desktop': dbus.String(rec.desktop),
+                'Service': dbus.String(rec.service),
+                'Scope': dbus.String('session-%s.scope' % self.sid),
                 'IdleHint': dbus.Boolean(self.idle_hint),
                 'IdleSinceHint': dbus.UInt64(self.idle_since),
                 'IdleSinceHintMonotonic': dbus.UInt64(0),
                 'LockedHint': dbus.Boolean(self.locked_hint),
-                'Timestamp': dbus.UInt64(started),
-                'TimestampMonotonic': dbus.UInt64(started_mono),
+                'Timestamp': dbus.UInt64(rec.realtime),
+                'TimestampMonotonic': dbus.UInt64(rec.monotonic),
             }
         return {}
 
+class SessionRegistry:
+    """Projects /run/systemd/sessions/ onto the login1 D-Bus surface.
+
+    The login path owns the directory; this owns the bus objects and the
+    derived seat/user files. Neither side hardcodes an id.
+
+    Watch mechanism is the existing 250 ms VT poll, deliberately: an added
+    Gio.FileMonitor or raw inotify fd would be a new long-lived descriptor in
+    a GLib loop, and that is the exact shape of both prior CPU-spin incidents
+    (the pidfd leak and the half-open peer wedge). A readdir of a directory
+    holding single-digit entries at 4 Hz costs nothing, and SessionRecord
+    keeps every /proc-walking fallback lazy so a scan stays pure file I/O.
+    """
+
+    def __init__(self, bus):
+        self.bus = bus
+        self.sessions = {}      # sid -> Login1Session
+        self.users = {}         # uid -> Login1User
+        self.seat = None        # Login1Seat, attached by main()
+        self.manager = None     # Login1Manager, attached by main()
+        self._sigs = {}         # sid -> record signature at last sync
+        self._derived = {}      # path -> last content written
+        self._last_vt = None
+        self._swept = False     # startup stale-file sweep has run
+
+    # -- lookup --------------------------------------------------------------
+
+    def get(self, sid):
+        return self.sessions.get(str(sid))
+
+    def primary(self):
+        """The session an unqualified request means: the active one, else any.
+
+        Callers like `loginctl lock-session` with no argument used to reach the
+        only session there was; this keeps that working without pretending the
+        choice is meaningful on a multi-session box.
+        """
+        for obj in self.sessions.values():
+            if obj.active:
+                return obj
+        return next(iter(self.sessions.values()), None)
+
+    def uids(self):
+        seen = []
+        for obj in self.sessions.values():
+            uid = obj.record.uid
+            if uid not in seen:
+                seen.append(uid)
+        return seen
+
+    def seats(self):
+        seen = []
+        for obj in self.sessions.values():
+            if obj.record.seat not in seen:
+                seen.append(obj.record.seat)
+        return seen or ['seat0']
+
+    def sessions_for_seat(self, seat_id):
+        return [(o.sid, o.path) for o in self.sessions.values()
+                if o.record.seat == seat_id]
+
+    def active_session_for_seat(self, seat_id):
+        for obj in self.sessions.values():
+            if obj.record.seat == seat_id and obj.active:
+                return obj.sid, obj.path
+        return '', '/'
+
+    def display_session_path(self, uid):
+        """The user's graphical session, which is what User.Display means."""
+        for obj in self.sessions.values():
+            if obj.record.uid == uid and obj.record.is_display:
+                return obj.path
+        for obj in self.sessions.values():
+            if obj.record.uid == uid:
+                return obj.path
+        return '/'
+
+    def user_is_active(self, uid):
+        return any(o.active for o in self.sessions.values()
+                   if o.record.uid == uid)
+
+    def session_for_pid(self, pid):
+        """Resolve a pid to a session the way sd_pid_get_session() does.
+
+        The cgroup scope is authoritative — that is what real logind keys on —
+        with getsid() as a fallback for a process that escaped its scope.
+        """
+        try:
+            with open('/proc/%d/cgroup' % pid) as f:
+                blob = f.read()
+        except OSError:
+            blob = ''
+        for sid in self.sessions:
+            if ('session-%s.scope' % sid) in blob:
+                return self.sessions[sid]
+        try:
+            leader = os.getsid(pid)
+        except OSError:
+            return None
+        for obj in self.sessions.values():
+            if obj.record.leader and obj.record.leader == leader:
+                return obj
+        return None
+
+    # -- sync ----------------------------------------------------------------
+
+    def sync(self, handoff=None):
+        """Diff the directory against the live objects. Returns True (GLib)."""
+        try:
+            records = scan_session_files()
+        except Exception as e:
+            print(f"login1-stub: session scan failed: {e}", file=sys.stderr)
+            return True
+
+        # Sweep session files whose leader is gone — a crash between the login
+        # script's trap and its cleanup leaves one, and a stale file is a
+        # phantom session on the bus forever. Deliberately a STARTUP sweep
+        # only: the login path owns this directory, and a bridge that unlinks
+        # its files on a 4 Hz timer would be racing the moment between an id
+        # being claimed and its leader being written.
+        if not self._swept:
+            self._swept = True
+            for sid in [s for s, r in records.items() if not r.leader_alive()]:
+                print(f"login1-stub: session {sid} leader is gone — sweeping "
+                      f"stale state file", file=sys.stderr)
+                records.pop(sid)
+                try:
+                    os.unlink(session_file_for(sid))
+                except OSError:
+                    pass
+
+        for sid in [s for s in self.sessions if s not in records]:
+            obj = self.sessions.pop(sid)
+            self._sigs.pop(sid, None)
+            path = obj.path
+            obj.shutdown()
+            print(f"login1-stub: session {sid} gone")
+            if self.manager:
+                self.manager.SessionRemoved(sid, path)
+
+        for sid, rec in records.items():
+            obj = self.sessions.get(sid)
+            if obj is None:
+                adopt = handoff if (handoff or {}).get(
+                    'sid', LEGACY_SESSION_ID) == sid else None
+                obj = Login1Session(self.bus, rec, adopt)
+                self.sessions[sid] = obj
+                self._sigs[sid] = rec.signature()
+                if self.manager:
+                    self.manager.SessionNew(sid, obj.path)
+                continue
+
+            sig = rec.signature()
+            if sig != self._sigs.get(sid):
+                changed = rec.changed_properties(obj.record)
+                obj.record = rec
+                self._sigs[sid] = sig
+                if changed:
+                    obj.PropertiesChanged(
+                        SESSION_IFACE,
+                        {k: v for k, v in obj.GetAll(SESSION_IFACE).items()
+                         if k in changed}, [])
+
+        self._sync_users()
+        self._write_derived()
+        return True
+
+    def _sync_users(self):
+        live = set(self.uids())
+        for uid in [u for u in self.users if u not in live]:
+            obj = self.users.pop(uid)
+            path = obj.path
+            obj.remove_from_connection()
+            if self.manager:
+                self.manager.UserRemoved(dbus.UInt32(uid), path)
+        for uid in live:
+            if uid not in self.users:
+                obj = Login1User(self.bus, uid, self)
+                self.users[uid] = obj
+                if self.manager:
+                    self.manager.UserNew(dbus.UInt32(uid), obj.path)
+
+    # -- derived state files -------------------------------------------------
+
+    def _write_derived(self):
+        """Populate /run/systemd/seats and /run/systemd/users.
+
+        These are derived from the whole picture, so the bridge writes them
+        rather than the login script. They were created empty purely so
+        sd_login_monitor_new(NULL) would not fail with -ENOENT; nothing could
+        read real seat or user state off disk until now.
+        """
+        for seat_id in self.seats():
+            members = self.sessions_for_seat(seat_id)
+            active_sid, _ = self.active_session_for_seat(seat_id)
+            uids = []
+            for sid, _p in members:
+                uid = self.sessions[sid].record.uid
+                if uid not in uids:
+                    uids.append(uid)
+            body = ['# This is private data. Do not parse.']
+            if active_sid:
+                body.append('ACTIVE=%s' % active_sid)
+                body.append('ACTIVE_UID=%d' % self.sessions[active_sid].record.uid)
+            body.append('SESSIONS=%s' % ' '.join(s for s, _ in members))
+            body.append('UIDS=%s' % ' '.join(str(u) for u in uids))
+            self._write_if_changed(SEATS_DIR + '/' + seat_id, '\n'.join(body) + '\n')
+
+        for uid in self.uids():
+            mine = [o for o in self.sessions.values() if o.record.uid == uid]
+            display = self.display_session_path(uid).rsplit('_', 1)[-1]
+            body = [
+                '# This is private data. Do not parse.',
+                'NAME=%s' % get_username_for_uid(uid),
+                'STATE=%s' % ('active' if self.user_is_active(uid) else 'online'),
+                'SESSIONS=%s' % ' '.join(o.sid for o in mine),
+                'SEATS=%s' % ' '.join(sorted({o.record.seat for o in mine})),
+            ]
+            if display != '/':
+                body.append('DISPLAY=%s' % display)
+            self._write_if_changed(USERS_DIR + '/%d' % uid, '\n'.join(body) + '\n')
+
+    def _write_if_changed(self, path, content):
+        # Compared against what we last wrote rather than re-read: this runs at
+        # 4 Hz and the point is to touch the filesystem only when something
+        # actually moved.
+        if self._derived.get(path) == content:
+            return
+        tmp = path + '.tmp'
+        try:
+            with open(tmp, 'w') as f:
+                f.write(content)
+            os.rename(tmp, path)
+            self._derived[path] = content
+        except OSError as e:
+            print(f"login1-stub: cannot write {path}: {e}", file=sys.stderr)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    # -- VT ------------------------------------------------------------------
+
+    def poll(self):
+        """The one 250 ms timer: reconcile the directory, then the active VT."""
+        self.sync()
+
+        # A session that holds VT_PROCESS mediation is authoritative and the
+        # sysfs VT has not moved yet while a release is in flight. Polling
+        # through that window would see "still my VT", call the session active
+        # and resume devices in the middle of handing them over.
+        for obj in self.sessions.values():
+            if obj.vt_fd is not None:
+                return True
+
+        try:
+            vt = read_active_vt()
+        except Exception as e:
+            print(f"login1-stub: VT poll error: {e}", file=sys.stderr)
+            return True
+        self.on_vt_changed(vt)
+        return True
+
+    def on_vt_changed(self, new_vt):
+        if not new_vt:
+            return
+        for obj in self.sessions.values():
+            obj.on_vt_changed(new_vt)
+        if new_vt != self._last_vt:
+            self._last_vt = new_vt
+            self._write_derived()
+            if self.seat:
+                sid, path = self.active_session_for_seat(self.seat.seat_id)
+                self.seat.PropertiesChanged(SEAT_IFACE, {
+                    'ActiveSession': dbus.Struct(
+                        (dbus.String(sid), dbus.ObjectPath(path)), signature='so'),
+                }, [])
+
+
 class Login1User(dbus.service.Object):
-    def __init__(self, bus, uid=1000):
+    def __init__(self, bus, uid=1000, registry=None):
         self.uid = uid
-        dbus.service.Object.__init__(self, bus, f'/org/freedesktop/login1/user/_{uid}')
-        print(f"login1-stub: Registered User at /org/freedesktop/login1/user/_{uid}")
+        self.registry = registry
+        self.path = user_path_for(uid)
+        dbus.service.Object.__init__(self, bus, self.path)
+        print(f"login1-stub: Registered User at {self.path}")
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
@@ -826,19 +1385,30 @@ class Login1User(dbus.service.Object):
             uid = getattr(self, 'uid', 1000)
             username = get_username_for_uid(uid)
             gid = get_gid_for_uid(uid)
+            display = self.registry.display_session_path(uid) if self.registry \
+                else session_path_for(LEGACY_SESSION_ID)
+            state = 'active' if (self.registry is None
+                                 or self.registry.user_is_active(uid)) else 'online'
             return {
                 'UID': dbus.UInt32(uid),
                 'GID': dbus.UInt32(gid),
                 'Name': dbus.String(username),
-                'Display': dbus.ObjectPath(SESSION_PATH),
-                'State': dbus.String('active'),
+                'Display': dbus.ObjectPath(display),
+                'State': dbus.String(state),
             }
         return {}
 
 class Login1Seat(dbus.service.Object):
-    def __init__(self, bus):
-        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/seat/seat0')
-        print("login1-stub: Registered Seat at /org/freedesktop/login1/seat/seat0")
+    def __init__(self, bus, registry=None, seat_id='seat0'):
+        self.seat_id = seat_id
+        self.registry = registry
+        self.path = '/org/freedesktop/login1/seat/' + seat_id
+        dbus.service.Object.__init__(self, bus, self.path)
+        print(f"login1-stub: Registered Seat at {self.path}")
+
+    @dbus.service.signal('org.freedesktop.DBus.Properties', signature='sa{sv}as')
+    def PropertiesChanged(self, interface, changed, invalidated):
+        pass
 
     @dbus.service.method('org.freedesktop.login1.Seat', in_signature='u', out_signature='',
                          sender_keyword='sender')
@@ -867,9 +1437,17 @@ class Login1Seat(dbus.service.Object):
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
         if interface_name == 'org.freedesktop.login1.Seat' or not interface_name:
+            sid, path = (self.registry.active_session_for_seat(self.seat_id)
+                         if self.registry
+                         else (LEGACY_SESSION_ID, session_path_for(LEGACY_SESSION_ID)))
+            sessions = (self.registry.sessions_for_seat(self.seat_id)
+                        if self.registry else [])
             return {
-                'Id': dbus.String('seat0'),
-                'ActiveSession': dbus.Struct((dbus.String('31'), dbus.ObjectPath(SESSION_PATH)), signature='so'),
+                'Id': dbus.String(self.seat_id),
+                'ActiveSession': dbus.Struct((dbus.String(sid), dbus.ObjectPath(path)), signature='so'),
+                'Sessions': dbus.Array(
+                    [dbus.Struct((dbus.String(s), dbus.ObjectPath(p)), signature='so')
+                     for s, p in sessions], signature='(so)'),
                 'CanMultiSession': dbus.Boolean(True),
                 'CanTTY': dbus.Boolean(True),
                 'CanGraphical': dbus.Boolean(True),
@@ -877,27 +1455,63 @@ class Login1Seat(dbus.service.Object):
         return {}
 
 class Login1Manager(dbus.service.Object):
-    def __init__(self, bus, session=None):
+    def __init__(self, bus, registry=None):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1')
-        self.session = session
+        self.registry = registry
         print("login1-stub: Registered Manager at /org/freedesktop/login1")
+
+    @property
+    def session(self):
+        """The session a caller means when it does not name one."""
+        return self.registry.primary() if self.registry else None
+
+    def _lookup(self, session_id):
+        obj = self.registry.get(str(session_id)) if self.registry else None
+        if obj is None:
+            raise dbus.exceptions.DBusException(
+                "No session '%s'" % session_id,
+                name='org.freedesktop.login1.NoSuchSession')
+        return obj
+
+    # -- session lifecycle signals ------------------------------------------
+
+    @dbus.service.signal(MANAGER_IFACE, signature='so')
+    def SessionNew(self, session_id, path):
+        pass
+
+    @dbus.service.signal(MANAGER_IFACE, signature='so')
+    def SessionRemoved(self, session_id, path):
+        pass
+
+    @dbus.service.signal(MANAGER_IFACE, signature='uo')
+    def UserNew(self, uid, path):
+        pass
+
+    @dbus.service.signal(MANAGER_IFACE, signature='uo')
+    def UserRemoved(self, uid, path):
+        pass
 
     # loginctl lock-session/unlock-session route through the Manager, not the
     # Session object. Before these existed dbus-python raised UnknownMethod as
     # an unhandled traceback, so `loginctl lock-session` failed outright.
-    def _relay_lock(self, member):
-        if self.session is None:
+    def _relay_lock(self, member, session_id=None):
+        if session_id:
+            getattr(self._lookup(session_id), member)()
+            return
+        targets = list(self.registry.sessions.values()) if self.registry else []
+        if not targets:
             raise dbus.exceptions.DBusException(
                 "No session", name='org.freedesktop.login1.NoSuchSession')
-        getattr(self.session, member)()
+        for obj in targets:
+            getattr(obj, member)()
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
     def LockSession(self, session_id):
-        self._relay_lock('Lock')
+        self._relay_lock('Lock', session_id)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
     def UnlockSession(self, session_id):
-        self._relay_lock('Unlock')
+        self._relay_lock('Unlock', session_id)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
     def LockSessions(self):
@@ -973,19 +1587,25 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(susso)')
     def ListSessions(self):
-        uid = get_active_uid()
-        username = get_username_for_uid(uid)
-        return [dbus.Struct((dbus.String('31'), dbus.UInt32(uid), dbus.String(username), dbus.String('seat0'), dbus.ObjectPath(SESSION_PATH)), signature='susso')]
+        out = []
+        for obj in (self.registry.sessions.values() if self.registry else []):
+            rec = obj.record
+            out.append(dbus.Struct((dbus.String(obj.sid), dbus.UInt32(rec.uid),
+                                    dbus.String(rec.user), dbus.String(rec.seat),
+                                    dbus.ObjectPath(obj.path)), signature='susso'))
+        return out
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(uso)')
     def ListUsers(self):
-        uid = get_active_uid()
-        username = get_username_for_uid(uid)
-        return [dbus.Struct((dbus.UInt32(uid), dbus.String(username), dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')), signature='uso')]
+        return [dbus.Struct((dbus.UInt32(uid), dbus.String(get_username_for_uid(uid)),
+                             dbus.ObjectPath(user_path_for(uid))), signature='uso')
+                for uid in (self.registry.uids() if self.registry
+                            else [get_active_uid()])]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(so)')
     def ListSeats(self):
-        return [dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so')]
+        return [dbus.Struct((dbus.String(s), dbus.ObjectPath('/org/freedesktop/login1/seat/' + s)), signature='so')
+                for s in (self.registry.seats() if self.registry else ['seat0'])]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ssss', out_signature='h')
     def Inhibit(self, what, who, why, mode):
@@ -1000,19 +1620,33 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
-        return dbus.ObjectPath(SESSION_PATH)
+        obj = self.registry.session_for_pid(int(pid)) if self.registry else None
+        if obj is None:
+            raise dbus.exceptions.DBusException(
+                "PID %s is not part of any session" % pid,
+                name='org.freedesktop.login1.NoSuchSession')
+        return dbus.ObjectPath(obj.path)
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
+    def GetUserByPID(self, pid):
+        obj = self.registry.session_for_pid(int(pid)) if self.registry else None
+        if obj is None:
+            raise dbus.exceptions.DBusException(
+                "PID %s is not part of any session" % pid,
+                name='org.freedesktop.login1.NoSuchUser')
+        return dbus.ObjectPath(user_path_for(obj.record.uid))
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='o')
     def GetSession(self, session_id):
-        return dbus.ObjectPath(SESSION_PATH)
+        return dbus.ObjectPath(self._lookup(session_id).path)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetUser(self, uid):
-        return dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')
+        return dbus.ObjectPath(user_path_for(uid))
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='o')
     def GetSeat(self, seat_id):
-        return dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')
+        return dbus.ObjectPath('/org/freedesktop/login1/seat/' + str(seat_id or 'seat0'))
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
@@ -1426,10 +2060,10 @@ def main():
     handoff = load_handoff()
     DBusGMainLoop(set_as_default=True)
 
-    os.makedirs('/run/systemd/system', exist_ok=True)
+    os.makedirs(_RUN_SYSTEMD + '/system', exist_ok=True)
     # sd_login_monitor_new(NULL) watches all four; missing dir -> ENOENT (-2) aborts WirePlumber's logind module.
     for _d in ('sessions', 'seats', 'users', 'machines'):
-        os.makedirs('/run/systemd/' + _d, exist_ok=True)
+        os.makedirs(_RUN_SYSTEMD + '/' + _d, exist_ok=True)
     # NOTE: do NOT create /run/systemd/private — root systemctl connects there as a
     # peer sd-bus socket (to bypass polkit). We don't serve that socket, and creating
     # it as a directory makes root systemctl fail with "Connection refused" instead of
@@ -1458,21 +2092,30 @@ def main():
         sys.exit(1)
 
     uid = get_active_uid()
-    session = Login1Session(bus, handoff)
-    if handoff is None and session_file_is_active():
-        # Cold start under a session that is already running: its compositor
-        # took control of a bridge that no longer exists, so we hold none of its
-        # fds and _setup_vt_mediation() is never called for it. Before this line
-        # that failed in complete silence — ctrl-alt-F<n> simply stopped working
-        # and nothing said why. Upgrade with `kill -HUP` to keep mediation.
-        print(f"login1-stub: ORPHANED SESSION — session {SESSION_ID} is active on "
-              f"VT {read_file_value(SESSION_FILE, 'VTNR')} but no fds were handed "
-              f"off. VT mediation is NOT armed: the recovery console is "
-              f"unreachable until that session logs out and back in.",
-              file=sys.stderr)
-    user = Login1User(bus, uid)
-    seat = Login1Seat(bus)
-    manager = Login1Manager(bus, session)
+    registry = SessionRegistry(bus)
+    seat = Login1Seat(bus, registry)
+    manager = Login1Manager(bus, registry)
+    registry.seat = seat
+    # Objects are built by the first sync, not by hand: the directory is the
+    # source of truth from the very first tick, and the legacy fallback inside
+    # scan_session_files() covers a login script that never allocated an id.
+    # The manager is attached only afterwards so the initial population does
+    # not emit SessionNew for sessions that predate us.
+    registry.sync(handoff)
+    registry.manager = manager
+
+    for obj in registry.sessions.values():
+        if handoff is None and obj.record.active and obj.vt_fd is None:
+            # Cold start under a session that is already running: its compositor
+            # took control of a bridge that no longer exists, so we hold none of
+            # its fds and _setup_vt_mediation() is never called for it. Before
+            # this line that failed in complete silence — ctrl-alt-F<n> simply
+            # stopped working and nothing said why. Upgrade with `kill -HUP`.
+            print(f"login1-stub: ORPHANED SESSION — session {obj.sid} is active "
+                  f"on VT {obj.record.vtnr} but no fds were handed off. VT "
+                  f"mediation is NOT armed: the recovery console is unreachable "
+                  f"until that session logs out and back in.", file=sys.stderr)
+
     hostname = Hostname1(bus)
     timedate = Timedate1(bus)
 
@@ -1506,9 +2149,11 @@ def main():
     except Exception as e:
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.ConsoleKit': {e}", file=sys.stderr)
 
-    GLib.timeout_add(VT_POLL_MS, session.poll_active_vt)
-    print(f"login1-stub: watching {ACTIVE_VT_PATH} every {VT_POLL_MS}ms "
-          f"(active VT {read_active_vt()})")
+    GLib.timeout_add(VT_POLL_MS, registry.poll)
+    print(f"login1-stub: watching {ACTIVE_VT_PATH} and {SESSIONS_DIR} every "
+          f"{VT_POLL_MS}ms (active VT {read_active_vt()}, "
+          f"{len(registry.sessions)} session(s): "
+          f"{' '.join(sorted(registry.sessions)) or 'none'})")
 
     loop = GLib.MainLoop()
 
@@ -1524,7 +2169,18 @@ def main():
     # mid-flight, not from an async signal handler between two bytecodes.
     def hup_handler():
         print("login1-stub: SIGHUP — re-exec requested")
-        session.reexec()
+        # Only one session can hold VT mediation and taken device fds, and only
+        # those are what the handoff exists to preserve. Re-exec through that
+        # session so its release-in-flight check is the one that runs; with no
+        # mediation anywhere, any session will do and there is nothing to lose.
+        holder = next((o for o in registry.sessions.values()
+                       if o.vt_fd is not None), None) or registry.primary()
+        if holder is None:
+            print("login1-stub: no session to re-exec through — exec'ing bare",
+                  file=sys.stderr)
+            interp = sys.executable or os.path.realpath('/proc/self/exe')
+            os.execv(interp, [interp, SCRIPT_PATH] + sys.argv[1:])
+        holder.reexec()
         return True
 
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, hup_handler)
