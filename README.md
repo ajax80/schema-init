@@ -99,7 +99,7 @@ If you're reading the source to evaluate it, start here. The whole init is ~2,50
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
 | `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
 | `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
-| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` paints a dedicated console; note that VT switching does not currently repaint on a graphical system — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
+| `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` paints a dedicated console — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
 
 **Directories:**
 
@@ -638,10 +638,11 @@ ctrl-alt-F<n>
 
 **`VT_PROCESS` mediation is the load-bearing part, and a polling implementation cannot replace it.** An earlier fix watched `/sys/class/tty/tty0/active` every 250 ms and implemented `PauseDevice`/`ResumeDevice`, `VTNr`, and `Seat.SwitchTo` — all necessary, none sufficient. The kernel completes a VT switch *synchronously*, and fbcon's mode restore runs during it, while master is still held; it fails silently and is never retried. Measured: after the poll dropped master the console sat at **15** non-black pixels, and a *second* switch — master already free — painted **32,771**. The active-VT poll survives only as a fallback for when `VT_SETMODE` fails.
 
-Two things this depends on, both worth knowing before you touch it:
+Three things this depends on, all worth knowing before you touch it:
 
 - **`ReleaseControl` restores `VT_AUTO`.** KWin calls it from `~LogindSession`. Anything that takes control and exits — a display-manager greeter, for instance — tears mediation down for whoever comes next.
 - **The chord arrives twice**, once from the kernel's VT handler and once from the compositor calling `Seat.SwitchTo` for the same keypress. Handling it twice overwrites and leaks the pending-ack timer.
+- **Mediation belongs to the bridge's pid, and the DRM fd is shared, not reopened.** `TakeDevice` hands the compositor a dup of the bridge's own fd, so both share one open file description and one DRM master — which is the only reason `DROP_MASTER` on this side takes master away from the compositor. Neither survives kill-and-respawn. See [Redeploying the bridge](#redeploying-the-bridge).
 
 Two earlier revisions of this section were wrong in ways worth recording. The first blamed a *stopped* compositor for being unable to release DRM master; a healthy one does not release it either, because nothing asks. The second proposed having the board take DRM master itself, which cannot work — `DRM_IOCTL_SET_MASTER` fails while another process holds master. The real cause was that `Properties.Get` for `VTNr` failed, so KWin's `LogindSession::create()` bailed and it silently fell back to `NoopSession`, whose `switchTo()` is an empty function body.
 
@@ -666,6 +667,28 @@ Two things about that file are load-bearing:
 - **`--tty` is not optional for a service.** Services are spawned with stdout redirected to `/var/log/schema-init/<name>.log`, so without `--tty` the board would faithfully paint its frames into a logfile.
 
 On the console it takes over, the board disables screen blanking and hides the cursor, restoring the cursor when it exits.
+
+### Redeploying the bridge
+
+**Restarting `schema-logind` under a live graphical session takes the recovery console down, silently.** The replacement process holds none of that session's fds and never saw its `TakeControl`, so `VT_PROCESS` is never re-armed. `ctrl-alt-F8` then lands on the bus and dies there — `Seat.SwitchTo(8)` logged, no VT release, no `DROP_MASTER`, and **no error anywhere**. Nothing is visibly broken until the moment you need the console. It stays that way until the session logs out and back in.
+
+So the bridge does not get restarted. On `SIGHUP` it `execv()`s itself: `exec` preserves the pid — which is how the kernel records the `VT_PROCESS` owner, so mediation never lapses — and preserves every fd marked inheritable. The device map travels in the environment and is re-validated against `st_rdev` on the way in, because an inherited fd number is a claim and everything downstream issues DRM ioctls on it. Re-exec is refused while a VT release is in flight: master is already dropped there and the kernel is blocked on `VT_RELDISP`, so the new process would have no pending release to answer and the screen would stay dark.
+
+`scripts/deploy-canonical-logind.sh` installs the file and sends `SIGHUP`, falling back to a restart only when the bridge is not running:
+
+```sh
+sudo sh scripts/deploy-canonical-logind.sh
+```
+
+It reads the *live* file to decide, and **refuses to proceed if the running bridge predates the handoff** — `SIGHUP`'s default disposition is terminate, so a bridge with no handler for it would be killed and respawned cold, causing exactly the orphaned mediation described above. Installing onto such a bridge costs one logout/login; the script says so and stops rather than spending it silently. Pair it with a logout you were taking anyway:
+
+```sh
+sudo ACCEPT_ORPHAN=1 sh scripts/deploy-canonical-logind.sh
+```
+
+Every deploy after that one is a free `kill -HUP`. On success the bridge logs `adopted handoff — VT <n>, <k> device(s), mediation live`; that line, not the surviving pid, is the proof — `reexec()` deliberately survives its own `execv` failure on the same pid, so a preserved pid alone says nothing about which file is running.
+
+If the bridge does not come back, note that `schema-ctl restart` on a service whose restart counter is spent leaves it `DORMANT` and `start` refuses it. Only `sudo schema-ctl reset schema-logind` re-queues it.
 
 ---
 
