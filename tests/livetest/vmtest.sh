@@ -37,7 +37,7 @@ mkdir -p "$ROOT"/{sbin,bin,usr/bin,etc/schema-init/services,proc,sys,dev,run,sys
 cp "$BIN" "$ROOT/sbin/schema-init"
 ln -sf /sbin/schema-init "$ROOT/init"   # kernel initramfs entry point is /init
 cp "$BB"  "$ROOT/bin/busybox"
-for a in sh ls cat sleep touch poweroff mount mkdir echo grep head; do
+for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill; do
   ln -sf /bin/busybox "$ROOT/bin/$a"
 done
 ln -sf /bin/busybox "$ROOT/usr/bin/touch"   # test svcs call /usr/bin/touch
@@ -46,6 +46,23 @@ ln -sf /bin/busybox "$ROOT/bin/sleep"       # and /bin/sleep
 cp "$HERE/test-timer.svc"     "$ROOT/etc/schema-init/services/"
 cp "$HERE/test-hang.svc"      "$ROOT/etc/schema-init/services/"
 cp "$HERE/test-dependent.svc" "$ROOT/etc/schema-init/services/"
+
+# A RUN-ONCE boot timer: on_boot_sec with no on_active_sec. Distinct from
+# test-timer, which repeats. Reload used to re-run every one of these, because
+# the terminal state (SVC_TIMER cleared) lived only on the live record while
+# the shadow was parsed fresh from the .svc and inherited an already-expired
+# timer_next. Each fire appends a line, so the count is the assertion.
+cat > "$ROOT/usr/bin/runonce.sh" <<'EOF'
+#!/bin/sh
+echo fired >> /run/runonce.count
+EOF
+chmod +x "$ROOT/usr/bin/runonce.sh"
+cat > "$ROOT/etc/schema-init/services/test-runonce.svc" <<'EOF'
+name=test-runonce
+exec=/usr/bin/runonce.sh
+on_boot_sec=20
+needs_root=1
+EOF
 
 cat > "$ROOT/etc/schema-init/services/test-iso.svc" <<'EOF'
 name=test-iso
@@ -138,6 +155,23 @@ echo "RAIL-LOG: $RAIL"
 grep -E 'timer-fire|start-timeout|oneshot-done' "$RAIL" 2>&1 | while read -r l; do
     echo "RAIL| $l"   # prefix so the assertion cannot match the console's own copy
 done
+echo "===== RELOAD-REFIRE-TEST ====="
+# SIGHUP to PID 1 is the reload path (init.c calls handle_reload from the
+# signal drain), which is what schema-ctl reload asks for over the socket.
+# Using the signal keeps this test free of schema-ctl, which is dynamically
+# linked and has no libc in this initramfs.
+BEFORE=$(grep -c fired /run/runonce.count 2>/dev/null || echo 0)
+echo "RUNONCE-BEFORE: $BEFORE"
+kill -HUP 1
+sleep 3
+AFTER=$(grep -c fired /run/runonce.count 2>/dev/null || echo 0)
+echo "RUNONCE-AFTER: $AFTER"
+if [ "$BEFORE" = "$AFTER" ]; then
+    echo "RELOAD-REFIRE: PASS (run-once boot timer stayed terminal)"
+else
+    echo "RELOAD-REFIRE: FAIL (re-fired $BEFORE -> $AFTER)"
+fi
+echo "===== RELOAD-REFIRE-END ====="
 echo "===== CPUSET-REPORT ====="
 echo "root-subtree: $(cat /sys/fs/cgroup/cgroup.subtree_control 2>&1)"
 echo "schema-init-subtree: $(cat /sys/fs/cgroup/schema-init/cgroup.subtree_control 2>&1)"
@@ -198,6 +232,9 @@ grep -Eq "test-dependent .*(spawn|oneshot-done)" "$SERIAL" || { echo "  MISS: de
 grep -Eq "SDBOOTED-DIR: present"        "$SERIAL" || { echo "  MISS: /run/systemd/system (sd_booted signal)"; pass=0; }
 # The rail must outlive the console it was printed on.
 grep -Eq "RAIL\| .*test-hang .*start-timeout" "$SERIAL" || { echo "  MISS: rail.log did not persist the rail"; pass=0; }
+# A completed run-once boot timer must stay terminal across a reload.
+grep -Eq "RUNONCE-BEFORE: 1"   "$SERIAL" || { echo "  MISS: run-once boot timer never fired"; pass=0; }
+grep -Eq "RELOAD-REFIRE: PASS" "$SERIAL" || { echo "  MISS: reload re-fired a completed run-once timer"; pass=0; }
 grep -Eq "iso-partition: isolated"                  "$SERIAL" || { echo "  MISS: iso partition not isolated"; pass=0; }
 grep -Eq "iso-affinity:.*Cpus_allowed_list:[[:space:]]*3" "$SERIAL" || { echo "  MISS: iso affinity != core 3"; pass=0; }
 grep -Eq "root-partition: root"                     "$SERIAL" || { echo "  MISS: root variant did not form partition"; pass=0; }
