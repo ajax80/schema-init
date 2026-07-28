@@ -724,10 +724,13 @@ static void tick_service(service_t *svc,
                 service_log(svc, "start-timeout");
                 active_kill_service(svc);
                 if (svc->failsafe_cmd[0]) start_failsafe(svc);
-                if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise)
+                if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise) {
                     svc->inst.state = STATE_EXCISED;
-                else
+                    service_log(svc, "76-excised");
+                } else {
                     svc->inst.state = STATE_RECOVERY;
+                    service_log(svc, "timeout-recovery");
+                }
                 break;
             }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
