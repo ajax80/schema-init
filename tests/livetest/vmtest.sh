@@ -131,6 +131,13 @@ exec >/dev/console 2>&1   # service stdout is captured to a logfile; force seria
 echo "===== VMTEST-REPORT ====="
 ls -la /run/test-timer.fired /run/test-dependent.ran 2>&1
 [ -d /run/systemd/system ] && echo "SDBOOTED-DIR: present" || echo "SDBOOTED-DIR: MISSING"
+# NB: this initramfs only has the applets linked above -- no wc, find or sed.
+RAIL=/var/log/schema-init/rail.log
+[ -f "$RAIL" ] || RAIL=/run/log/schema-init/rail.log
+echo "RAIL-LOG: $RAIL"
+grep -E 'timer-fire|start-timeout|oneshot-done' "$RAIL" 2>&1 | while read -r l; do
+    echo "RAIL| $l"   # prefix so the assertion cannot match the console's own copy
+done
 echo "===== CPUSET-REPORT ====="
 echo "root-subtree: $(cat /sys/fs/cgroup/cgroup.subtree_control 2>&1)"
 echo "schema-init-subtree: $(cat /sys/fs/cgroup/schema-init/cgroup.subtree_control 2>&1)"
@@ -189,6 +196,8 @@ grep -Eq "test-timer .*timer-done"      "$SERIAL" || { echo "  MISS: timer-done"
 grep -Eq "test-hang .*start-timeout"    "$SERIAL" || { echo "  MISS: start-timeout"; pass=0; }
 grep -Eq "test-dependent .*(spawn|oneshot-done)" "$SERIAL" || { echo "  MISS: dependent ran"; pass=0; }
 grep -Eq "SDBOOTED-DIR: present"        "$SERIAL" || { echo "  MISS: /run/systemd/system (sd_booted signal)"; pass=0; }
+# The rail must outlive the console it was printed on.
+grep -Eq "RAIL\| .*test-hang .*start-timeout" "$SERIAL" || { echo "  MISS: rail.log did not persist the rail"; pass=0; }
 grep -Eq "iso-partition: isolated"                  "$SERIAL" || { echo "  MISS: iso partition not isolated"; pass=0; }
 grep -Eq "iso-affinity:.*Cpus_allowed_list:[[:space:]]*3" "$SERIAL" || { echo "  MISS: iso affinity != core 3"; pass=0; }
 grep -Eq "root-partition: root"                     "$SERIAL" || { echo "  MISS: root variant did not form partition"; pass=0; }
