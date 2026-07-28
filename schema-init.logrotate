@@ -1,5 +1,15 @@
 /var/log/schema-init/*.log {
-    weekly
+    daily
+    maxsize 100M
+    rotate 4
+    missingok
+    notifempty
+    compress
+    copytruncate
+}
+
+/var/log/sddm-schema.log {
+    daily
     maxsize 100M
     rotate 4
     missingok

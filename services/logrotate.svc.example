@@ -1,5 +1,6 @@
 name=logrotate
-exec=/usr/bin/logrotate
+exec=/usr/sbin/logrotate
 args=/etc/logrotate.conf
 needs_root=1
 on_calendar=00:10
+persistent=1
