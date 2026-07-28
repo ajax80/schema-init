@@ -1,0 +1,40 @@
+#!/bin/sh
+# schema-session-unregister — release a session id claimed by
+# schema-session-register.
+#
+#   schema-session-unregister <id> [uid]
+#
+# Called from a trap, so it runs on the abnormal exits too. A leaked state file
+# is a phantom session on D-Bus forever: schema-logind sweeps those at startup
+# by checking LEADER, but only a reboot away, so releasing here is what keeps
+# `loginctl list-sessions` honest on a box that stays up.
+#
+# Like its counterpart, this can never fail loudly enough to matter — it runs
+# while a login path is tearing down.
+set -u
+
+RUN_SYSTEMD="${SCHEMA_LOGIND_RUN_DIR:-/run/systemd}"
+SESSIONS_DIR="$RUN_SYSTEMD/sessions"
+CGROOT="${SCHEMA_CGROUP_ROOT:-/sys/fs/cgroup}"
+
+SID="${1:-}"
+UID_="${2:-}"
+
+[ -n "$SID" ] || { printf 'usage: %s <id> [uid]\n' "$0" >&2; exit 2; }
+
+# Recover the uid from the file itself when the caller did not pass one — the
+# scope path needs it and the file is about to go away.
+if [ -z "$UID_" ] && [ -r "$SESSIONS_DIR/$SID" ]; then
+    UID_=$(sed -n 's/^UID=//p' "$SESSIONS_DIR/$SID" 2>/dev/null | head -1)
+fi
+
+rm -f "$SESSIONS_DIR/$SID" 2>/dev/null || true
+
+# rmdir, never rm -r: if anything is still in the scope the kernel refuses and
+# we leave it, which is correct. Recursively deleting a live cgroup would move
+# whatever is still running into the parent behind its back.
+if [ -n "$UID_" ]; then
+    rmdir "$CGROOT/user.slice/user-$UID_.slice/session-$SID.scope" 2>/dev/null || true
+fi
+
+exit 0

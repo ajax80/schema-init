@@ -1,0 +1,144 @@
+#!/bin/sh
+# schema-session-register — claim a logind session id and write its state.
+#
+# Prints the allocated id on stdout. Everything else goes to stderr, so a
+# caller can do:  SID=$(schema-session-register --vtnr 1 ...)
+#
+# This is the writer of record for /run/systemd/sessions/<id> and the
+# session-<id>.scope cgroup. schema-logind reads that directory and projects it
+# onto D-Bus; neither side hardcodes an id. See
+# docs/superpowers/specs/2026-07-27-logind-multi-session-design.md.
+#
+# It is called from login paths, so it MUST NOT be able to block a login:
+# every failure path falls through to the legacy id and exits 0. A session
+# that is wrong is recoverable; a login that never completes is not.
+set -u
+
+RUN_SYSTEMD="${SCHEMA_LOGIND_RUN_DIR:-/run/systemd}"
+SESSIONS_DIR="$RUN_SYSTEMD/sessions"
+CGROOT="${SCHEMA_CGROUP_ROOT:-/sys/fs/cgroup}"
+LEGACY_ID=31
+
+UID_=""
+USER_=""
+SEAT=seat0
+VTNR=0
+TYPE=tty
+CLASS=user
+DESKTOP=""
+IS_DISPLAY=0
+SERVICE=login
+LEADER=""
+
+usage() {
+    printf 'usage: %s [--uid N] [--user NAME] [--seat S] [--vtnr N] [--type T]\n' "$0" >&2
+    printf '       [--class C] [--desktop D] [--display] [--service S] [--leader PID]\n' >&2
+    exit 2
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --uid)     UID_="$2";     shift 2 ;;
+        --user)    USER_="$2";    shift 2 ;;
+        --seat)    SEAT="$2";     shift 2 ;;
+        --vtnr)    VTNR="$2";     shift 2 ;;
+        --type)    TYPE="$2";     shift 2 ;;
+        --class)   CLASS="$2";    shift 2 ;;
+        --desktop) DESKTOP="$2";  shift 2 ;;
+        --service) SERVICE="$2";  shift 2 ;;
+        --leader)  LEADER="$2";   shift 2 ;;
+        --display) IS_DISPLAY=1;  shift ;;
+        -h|--help) usage ;;
+        *) printf 'schema-session-register: unknown option %s\n' "$1" >&2; usage ;;
+    esac
+done
+
+# Resolve the user from whichever half the caller gave us. PAM hands over a
+# name; a display-manager wrapper usually knows the uid.
+if [ -z "$UID_" ] && [ -n "$USER_" ]; then
+    UID_=$(id -u "$USER_" 2>/dev/null) || UID_=""
+fi
+if [ -z "$USER_" ] && [ -n "$UID_" ]; then
+    USER_=$(getent passwd "$UID_" 2>/dev/null | cut -d: -f1) || USER_=""
+fi
+if [ -z "$UID_" ] || [ -z "$USER_" ]; then
+    printf 'schema-session-register: need a resolvable --uid or --user\n' >&2
+    printf '%s\n' "$LEGACY_ID"
+    exit 0
+fi
+
+[ -n "$LEADER" ] || LEADER=$PPID
+
+mkdir -p "$SESSIONS_DIR" 2>/dev/null || true
+
+# Lowest free positive integer by atomic create. `set -o noclobber` makes `>`
+# fail when the file exists, which is the shell's O_EXCL — so two simultaneous
+# logins cannot be handed the same id. The claim is an EMPTY file; schema-logind
+# skips a session file with no keys precisely so this half-built moment is not
+# briefly visible on the bus.
+alloc_session_id() {
+    i=1
+    while [ "$i" -lt 1000 ]; do
+        if (set -o noclobber; : > "$SESSIONS_DIR/$i") 2>/dev/null; then
+            printf '%s\n' "$i"
+            return 0
+        fi
+        i=$((i + 1))
+    done
+    printf '%s\n' "$LEGACY_ID"
+}
+
+SID=$(alloc_session_id)
+
+now_usec() {
+    # Realtime and monotonic in usec. loginctl prints '(null)' for the session
+    # duration when TimestampMonotonic is 0.
+    date +%s%6N 2>/dev/null || printf '0\n'
+}
+REALTIME=$(now_usec)
+MONOTONIC=$(awk '{printf "%d", $1 * 1000000}' /proc/uptime 2>/dev/null || printf '0')
+
+STATE=online
+ACTIVE=0
+# The session on the currently active VT is the active one. Anything else is
+# online: logged in, not on screen.
+if [ -r /sys/class/tty/tty0/active ]; then
+    CUR=$(sed 's/^tty//' /sys/class/tty/tty0/active 2>/dev/null || printf '')
+    if [ -n "$CUR" ] && [ "$CUR" = "$VTNR" ]; then
+        STATE=active
+        ACTIVE=1
+    fi
+fi
+
+TMP="$SESSIONS_DIR/.$SID.tmp"
+{
+    printf '%s\n' '# This is private data. Do not parse.'
+    printf 'UID=%s\n'        "$UID_"
+    printf 'USER=%s\n'       "$USER_"
+    printf 'ACTIVE=%s\n'     "$ACTIVE"
+    printf 'STATE=%s\n'      "$STATE"
+    printf 'SEAT=%s\n'       "$SEAT"
+    printf 'VTNR=%s\n'       "$VTNR"
+    printf 'TYPE=%s\n'       "$TYPE"
+    printf 'CLASS=%s\n'      "$CLASS"
+    printf 'DESKTOP=%s\n'    "$DESKTOP"
+    printf 'IS_DISPLAY=%s\n' "$IS_DISPLAY"
+    printf 'REMOTE=0\n'
+    printf 'LEADER=%s\n'     "$LEADER"
+    printf 'SERVICE=%s\n'    "$SERVICE"
+    printf 'REALTIME=%s\n'   "$REALTIME"
+    printf 'MONOTONIC=%s\n'  "$MONOTONIC"
+} > "$TMP" 2>/dev/null && mv -f "$TMP" "$SESSIONS_DIR/$SID" 2>/dev/null || {
+    printf 'schema-session-register: could not write session %s\n' "$SID" >&2
+    rm -f "$TMP" 2>/dev/null || true
+}
+
+# sd_pid_get_session() is cgroup-based: it walks to
+# /user.slice/user-<uid>.slice/session-<id>.scope. Without this the polkit auth
+# agent cannot register and GUI privilege escalation fails with ENXIO, even
+# when the state file is perfectly correct.
+SCOPE="$CGROOT/user.slice/user-$UID_.slice/session-$SID.scope"
+mkdir -p "$SCOPE" 2>/dev/null || true
+
+printf '%s\n' "$SID"
+exit 0

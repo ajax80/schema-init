@@ -459,7 +459,15 @@ def scan_session_files():
         # integers. Accept both, reject dotfiles and rotation leftovers.
         if not name or not name.isalnum():
             continue
-        records[name] = SessionRecord(name, read_state_file(session_file_for(name)))
+        data = read_state_file(session_file_for(name))
+        if not data:
+            # An id claimed but not yet described. schema-session-register
+            # allocates by creating an EMPTY file (the shell's O_EXCL) and
+            # only then renames the real content over it, so this is the
+            # normal half-built moment of a login in progress — not a
+            # session, and not something to put on the bus for 250 ms.
+            continue
+        records[name] = SessionRecord(name, data)
 
     if not records:
         records[LEGACY_SESSION_ID] = SessionRecord(LEGACY_SESSION_ID,
