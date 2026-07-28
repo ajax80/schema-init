@@ -411,12 +411,16 @@ class Login1Session(dbus.service.Object):
             os.set_inheritable(fd, True)
 
         os.environ[HANDOFF_ENV] = json.dumps(state)
-        print(f"login1-stub: re-exec {SCRIPT_PATH} — handing off "
+        # PID 1 execs us as bare "python3" with no PATH, so Python cannot
+        # resolve its own binary and sys.executable is ''. /proc/self/exe is
+        # the interpreter regardless of how argv[0] was spelled.
+        interp = sys.executable or os.path.realpath('/proc/self/exe')
+        print(f"login1-stub: re-exec {SCRIPT_PATH} via {interp} — handing off "
               f"{len(self.devices)} device(s) + VT {self.vtnr}")
         sys.stdout.flush()
         sys.stderr.flush()
         try:
-            os.execv(sys.executable, [sys.executable, SCRIPT_PATH] + sys.argv[1:])
+            os.execv(interp, [interp, SCRIPT_PATH] + sys.argv[1:])
         except Exception as e:
             # execv only returns on failure, and we are still the intact old
             # process: undo the inheritable flags and carry on serving.

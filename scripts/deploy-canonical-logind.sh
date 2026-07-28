@@ -73,14 +73,27 @@ else
     echo "no bridge running — cold start"
     schema-ctl restart schema-logind || { echo "ABORT: restart failed. REVERT: $REVERT"; exit 1; }
 fi
-i=0
-while [ $i -lt 8 ]; do
-    if dbus-send --system --print-reply --dest=org.freedesktop.login1 \
-         /org/freedesktop/login1 org.freedesktop.login1.Manager.CanReboot >/dev/null 2>&1; then
-        echo "login1 back"; break
-    fi
-    i=$((i+1)); sleep 1
-done
+wait_for_login1() {
+    i=0
+    while [ $i -lt 8 ]; do
+        if dbus-send --system --print-reply --dest=org.freedesktop.login1 \
+             /org/freedesktop/login1 org.freedesktop.login1.Manager.CanReboot >/dev/null 2>&1; then
+            echo "login1 back"; return 0
+        fi
+        i=$((i+1)); sleep 1
+    done
+    return 1
+}
+
+# A SIGTERM'd service whose restart counter is already spent goes DORMANT and
+# `start` refuses it ("err: schema-logind is DORMANT"). Only `reset` clears the
+# counter and re-queues. Seen for real on blakbox 2026-07-28: restarts=5, the
+# bridge stayed down and every probe below failed for want of a bus name.
+if ! wait_for_login1; then
+    echo "login1 did not come back — resetting the service (DORMANT counter)"
+    schema-ctl reset schema-logind || echo "WARN: reset failed"
+    wait_for_login1 || echo "WARN: login1 STILL down — probes below will all fail"
+fi
 
 # a re-exec that silently became a respawn is the whole bug coming back
 FAIL=0
@@ -89,10 +102,13 @@ if [ -n "$OLDPID" ]; then
     printf 'pid preserved across re-exec:           '
     if [ "$NEWPID" = "$OLDPID" ]; then echo "PASS ($OLDPID)"
     else echo "FAIL ($OLDPID -> ${NEWPID:-gone}) — fds and VT mediation were LOST"; FAIL=1; fi
-    printf 'handoff adopted:                        '
+    # a preserved pid alone does NOT prove the re-exec happened: reexec() catches
+    # its own execv failure and keeps serving on the OLD code, same pid. Only the
+    # adoption line proves the new file is what is running.
+    printf 'handoff adopted (new code live):        '
     if tail -50 /var/log/schema-init/schema-logind.log 2>/dev/null | grep -q "adopted handoff"; then
         echo "PASS"
-    else echo "WARN (no 'adopted handoff' line — check the log)"; fi
+    else echo "FAIL (no 'adopted handoff' — re-exec did not happen; still old code)"; FAIL=1; fi
 fi
 
 # smoke test
