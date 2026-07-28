@@ -59,6 +59,11 @@ cp "$REPO/distros/fedora-kde/scripts/polkitd-wrapper.sh"   "$BIN_DIR/polkitd-wra
 cp "$REPO/distros/fedora-kde/scripts/schema-audio-start.sh" "$BIN_DIR/schema-audio-start.sh"
 cp "$REPO/distros/fedora-kde/scripts/schema-logind.py"     "$BIN_DIR/schema-logind.py"
 cp "$REPO/distros/fedora-kde/scripts/sddm-logged"          "$BIN_DIR/sddm-logged"
+# sddm-logged calls these to claim and release its session id. Copied before
+# it so a half-finished install cannot leave a login path referring to a
+# register script that is not there yet.
+cp "$REPO/scripts/schema-session-register"                 "$BIN_DIR/schema-session-register"
+cp "$REPO/scripts/schema-session-unregister"               "$BIN_DIR/schema-session-unregister"
 cp "$REPO/distros/fedora-kde/scripts/sound-modules.sh"     "$BIN_DIR/sound-modules.sh"
 cp "$REPO/distros/fedora-kde/scripts/ollama-start.sh"      "$BIN_DIR/ollama-start.sh"
 cp "$REPO/distros/fedora-kde/scripts/network-blakbox.sh" "$BIN_DIR/network-blakbox.sh"
@@ -80,6 +85,8 @@ chmod +x \
     "$BIN_DIR/schema-audio-start.sh" \
     "$BIN_DIR/schema-logind.py" \
     "$BIN_DIR/sddm-logged" \
+    "$BIN_DIR/schema-session-register" \
+    "$BIN_DIR/schema-session-unregister" \
     "$BIN_DIR/sound-modules.sh" \
     "$BIN_DIR/ollama-start.sh" \
     "$BIN_DIR/network-blakbox.sh" \
