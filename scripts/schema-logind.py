@@ -11,6 +11,7 @@ import json
 import subprocess
 import dbus
 import dbus.service
+import dbus.lowlevel
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 import socket
@@ -113,6 +114,67 @@ def get_session_type():
         pass
     return 'x11'
 
+_COMPOSITORS = ('kwin_wayland', 'cinnamon', 'gnome-shell', 'Xorg', 'plasmashell')
+
+def get_session_leader():
+    """(pid, comm) of the session leader, or (0, '').
+
+    Found as getsid() of a live compositor owned by the active uid — on a real
+    login that resolves to the display-manager session process (sddm-logged
+    here), which is exactly what logind calls Leader. Deliberately NOT read from
+    /proc/<pid>/environ: see the note in get_active_uid(). Worst case a caller
+    gets Leader=0, which is what it already got before this existed."""
+    uid = get_active_uid()
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            if os.stat('/proc/%d' % pid).st_uid != uid:
+                continue
+            if read_file_line('/proc/%d/comm' % pid) not in _COMPOSITORS:
+                continue
+            sid = os.getsid(pid)
+            return sid, (read_file_line('/proc/%d/comm' % sid) or '')
+        except (OSError, ProcessLookupError):
+            continue
+    return 0, ''
+
+def get_desktop_name():
+    # Runtime-detected for the same reason get_session_type() is: hardcoding it
+    # is what made the KDE and Cinnamon copies of this file diverge.
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        comm = read_file_line('/proc/%s/comm' % entry)
+        if comm == 'kwin_wayland' or comm == 'plasmashell':
+            return 'KDE'
+        if comm == 'cinnamon':
+            return 'X-Cinnamon'
+        if comm == 'gnome-shell':
+            return 'GNOME'
+    return ''
+
+def proc_start_usec(pid):
+    """(realtime, monotonic) session start in usec, from /proc/<pid>/stat field
+    22. That field is already ticks-since-boot, so it IS the monotonic stamp;
+    adding /proc/stat btime converts it to realtime. loginctl needs both — with
+    TimestampMonotonic=0 it prints the session duration as '(null)'."""
+    try:
+        with open('/proc/%d/stat' % pid) as f:
+            fields = f.read().rsplit(') ', 1)[1].split()
+        ticks = int(fields[19])
+        hz = os.sysconf('SC_CLK_TCK')
+        monotonic = int(ticks / hz * 1000000)
+        with open('/proc/stat') as f:
+            for line in f:
+                if line.startswith('btime '):
+                    btime = int(line.split()[1])
+                    return int(btime * 1000000) + monotonic, monotonic
+    except (OSError, IndexError, ValueError):
+        pass
+    return 0, 0
+
 def svc_name(unit):
     for suffix in ('.service', '.target', '.socket', '.timer', '.mount', '.path'):
         if unit.endswith(suffix):
@@ -145,6 +207,74 @@ VT_RELEASE_ACK_MS = 500
 DRM_IOCTL_SET_MASTER = 0x641E
 DRM_IOCTL_DROP_MASTER = 0x641F
 SESSION_IFACE = 'org.freedesktop.login1.Session'
+# The single-session stub's identity. Hardcoded in seven places before this;
+# collecting it here is the first step toward a real multi-session table.
+SESSION_ID = '31'
+SESSION_PATH = '/org/freedesktop/login1/session/_' + SESSION_ID
+
+# --- restart handoff --------------------------------------------------------
+# TakeDevice() opens the DRM node and passes THAT fd to the compositor, so our
+# fd and the compositor's are the same open file description -- which is the
+# only reason DROP_MASTER on our side takes master away from theirs. A plain
+# kill+respawn loses those fds, and a fresh open() is a different description
+# that cannot drop anyone's master. The bridge then re-arms VT_PROCESS, fails
+# to drop master on ctrl-alt-F<n>, and hands the VT over anyway: a black tty.
+#
+# So on SIGHUP we execv() OURSELVES instead of dying. exec preserves the pid
+# (the kernel records the VT_PROCESS owner by pid, so mediation survives) and
+# preserves every fd we mark inheritable. The device map travels through the
+# environment. Upgrading the bridge = `kill -HUP`, never `restart`.
+HANDOFF_ENV = 'SCHEMA_LOGIND_HANDOFF'
+TTY_MAJOR = 4
+SCRIPT_PATH = os.path.abspath(__file__)
+SESSION_FILE = '/run/systemd/sessions/' + SESSION_ID
+
+
+def read_file_value(path, key):
+    """One KEY=value out of a /run/systemd/sessions/<id> file, or ''."""
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                if line.startswith(key + '='):
+                    return line.split('=', 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def session_file_is_active():
+    return read_file_value(SESSION_FILE, 'STATE') == 'active'
+
+
+def load_handoff():
+    """Consume the handoff blob left by our pre-exec self, or None on cold start.
+
+    Popped from the environment, never merely read: a stale blob inherited by a
+    grandchild would name fds that mean something else entirely by then.
+    """
+    raw = os.environ.pop(HANDOFF_ENV, '')
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"login1-stub: unreadable {HANDOFF_ENV} ({e}) — cold start",
+              file=sys.stderr)
+        return None
+
+
+def fd_matches_device(fd, major, minor):
+    """True if `fd` is open on exactly the char device major:minor.
+
+    An inherited fd number is a claim, not a fact. Everything downstream issues
+    DRM and VT ioctls on these, so a handoff that lost a race and now points at
+    a logfile must be rejected here rather than discovered by ioctl.
+    """
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return False
+    return os.major(st.st_rdev) == major and os.minor(st.st_rdev) == minor
 
 
 def read_active_vt():
@@ -176,8 +306,8 @@ def vt_activate(vtnr):
 
 
 class Login1Session(dbus.service.Object):
-    def __init__(self, bus):
-        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1/session/_31')
+    def __init__(self, bus, handoff=None):
+        dbus.service.Object.__init__(self, bus, SESSION_PATH)
         self.devices = {}
         env_vt = os.environ.get('SCHEMA_LOGIND_VTNR', '')
         # The session's VT is captured at TakeControl() time — that is when the
@@ -189,7 +319,120 @@ class Login1Session(dbus.service.Object):
         self.vt_fd = None
         self.pending_acks = set()
         self.release_timer = None
-        print("login1-stub: Registered Session at /org/freedesktop/login1/session/_31")
+        self.locked_hint = False
+        self.idle_hint = False
+        self.idle_since = 0
+        print("login1-stub: Registered Session at " + SESSION_PATH)
+        if handoff:
+            self._adopt_handoff(handoff)
+
+    # -- restart handoff -----------------------------------------------------
+
+    def _adopt_handoff(self, state):
+        """Re-inherit a live session's fds and VT mediation across execv()."""
+        self.vtnr = state.get('vtnr') or self.vtnr
+        self.active = bool(state.get('active', True))
+        self.locked_hint = bool(state.get('locked_hint', False))
+        self.idle_hint = bool(state.get('idle_hint', False))
+        self.idle_since = int(state.get('idle_since', 0))
+
+        for key, fd in (state.get('devices') or {}).items():
+            try:
+                major, minor = (int(p) for p in key.split(':'))
+            except ValueError:
+                continue
+            if fd_matches_device(fd, major, minor):
+                os.set_inheritable(fd, False)
+                self.devices[(major, minor)] = fd
+            else:
+                # Cleared but deliberately NOT closed: we just established that
+                # this fd is not what the blob claimed, so we have no idea what
+                # it actually is and closing it could take out stderr.
+                try:
+                    os.set_inheritable(fd, False)
+                except OSError:
+                    pass
+                print(f"login1-stub: handoff fd={fd} is not {key} — dropped",
+                      file=sys.stderr)
+
+        vt_fd = state.get('vt_fd')
+        if vt_fd is not None and self.vtnr is not None \
+                and fd_matches_device(vt_fd, TTY_MAJOR, self.vtnr):
+            os.set_inheritable(vt_fd, False)
+            self.vt_fd = vt_fd
+            # exec kept the pid, so the kernel still has us down as the VT owner
+            # and mediation never lapsed. Re-issuing VT_SETMODE is belt-and-braces
+            # and re-states the signal numbers; the signal handlers themselves did
+            # NOT survive exec and must be re-armed or the next ctrl-alt-F<n>
+            # would leave the kernel waiting for a VT_RELDISP nobody sends.
+            self._arm_vt_signals()
+            mode = struct.pack('bbhhh', VT_PROCESS, 0,
+                               signal.SIGUSR1, signal.SIGUSR2, 0)
+            try:
+                fcntl.ioctl(self.vt_fd, VT_SETMODE, mode)
+            except Exception as e:
+                print(f"login1-stub: re-arming VT_SETMODE failed: {e}",
+                      file=sys.stderr)
+        elif vt_fd is not None:
+            print(f"login1-stub: handoff vt_fd={vt_fd} is not tty{self.vtnr} — "
+                  f"mediation NOT adopted", file=sys.stderr)
+
+        print(f"login1-stub: adopted handoff — VT {self.vtnr}, "
+              f"{len(self.devices)} device(s), mediation "
+              f"{'live' if self.vt_fd is not None else 'LOST'}, active={self.active}")
+
+    def reexec(self):
+        """Replace ourselves with a fresh interpreter, keeping fds and pid."""
+        if self.release_timer is not None or self.pending_acks:
+            # Master is already dropped and the kernel is blocked waiting for
+            # VT_RELDISP. Exec now and the new process has no pending release to
+            # answer: the switch never completes and the screen stays dark.
+            print("login1-stub: VT release in flight — deferring re-exec")
+            GLib.timeout_add(VT_RELEASE_ACK_MS, self._reexec_retry)
+            return
+
+        state = {
+            'vtnr': self.vtnr,
+            'active': self.active,
+            'locked_hint': self.locked_hint,
+            'idle_hint': self.idle_hint,
+            'idle_since': self.idle_since,
+            'devices': {f"{maj}:{minor}": fd
+                        for (maj, minor), fd in self.devices.items()},
+        }
+        keep = list(self.devices.values())
+        if self.vt_fd is not None:
+            state['vt_fd'] = self.vt_fd
+            keep.append(self.vt_fd)
+        # TakeDevice() opens O_CLOEXEC and Python marks its fds non-inheritable
+        # anyway (PEP 446), so without this every fd we are trying to save is
+        # closed by the exec itself.
+        for fd in keep:
+            os.set_inheritable(fd, True)
+
+        os.environ[HANDOFF_ENV] = json.dumps(state)
+        # PID 1 execs us as bare "python3" with no PATH, so Python cannot
+        # resolve its own binary and sys.executable is ''. /proc/self/exe is
+        # the interpreter regardless of how argv[0] was spelled.
+        interp = sys.executable or os.path.realpath('/proc/self/exe')
+        print(f"login1-stub: re-exec {SCRIPT_PATH} via {interp} — handing off "
+              f"{len(self.devices)} device(s) + VT {self.vtnr}")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        try:
+            os.execv(interp, [interp, SCRIPT_PATH] + sys.argv[1:])
+        except Exception as e:
+            # execv only returns on failure, and we are still the intact old
+            # process: undo the inheritable flags and carry on serving.
+            print(f"login1-stub: re-exec FAILED ({e}) — continuing on old code",
+                  file=sys.stderr)
+            os.environ.pop(HANDOFF_ENV, None)
+            for fd in keep:
+                os.set_inheritable(fd, False)
+
+    def _reexec_retry(self):
+        self.reexec()
+        return False
 
     # -- session-device handoff ---------------------------------------------
 
@@ -289,9 +532,12 @@ class Login1Session(dbus.service.Object):
             return
         self.vt_fd = fd
         self._disarm_vt_flow_control(fd)
+        self._arm_vt_signals()
+        print(f"login1-stub: VT {self.vtnr} now mediated (VT_PROCESS)")
+
+    def _arm_vt_signals(self):
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self._on_vt_release)
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, self._on_vt_acquire)
-        print(f"login1-stub: VT {self.vtnr} now mediated (VT_PROCESS)")
 
     def _disarm_vt_flow_control(self, fd):
         # The session VT stays in KD_TEXT with a live line discipline
@@ -397,13 +643,52 @@ class Login1Session(dbus.service.Object):
         if self.vtnr:
             vt_activate(self.vtnr)
 
+    def _emit_bare_signal(self, member):
+        """Emit Lock/Unlock on login1.Session.
+
+        These exist as BOTH a method and a signal on the real interface. The
+        method is the request ("please lock"); the signal is what the session's
+        own screen locker subscribes to and acts on. dbus-python derives the
+        D-Bus member name from the Python function __name__, so a class cannot
+        carry both under one name — send the signal message directly instead.
+        Without this, Lock() printed a line and nothing ever locked."""
+        msg = dbus.lowlevel.SignalMessage(SESSION_PATH, SESSION_IFACE, member)
+        self._connection.send_message(msg)
+
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
     def Lock(self):
         print("login1-stub: Session.Lock() requested")
+        self._emit_bare_signal('Lock')
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
     def Unlock(self):
         print("login1-stub: Session.Unlock() requested")
+        self._emit_bare_signal('Unlock')
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
+    def SetLockedHint(self, locked):
+        # The screen locker reports its state here; everything that asks "is the
+        # screen locked" reads the resulting LockedHint property.
+        locked = bool(locked)
+        if locked == self.locked_hint:
+            return
+        self.locked_hint = locked
+        print(f"login1-stub: Session.SetLockedHint({locked})")
+        self.PropertiesChanged(SESSION_IFACE,
+                               {'LockedHint': dbus.Boolean(locked)}, [])
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
+    def SetIdleHint(self, idle):
+        idle = bool(idle)
+        if idle == self.idle_hint:
+            return
+        self.idle_hint = idle
+        self.idle_since = int(time.time() * 1000000) if idle else 0
+        print(f"login1-stub: Session.SetIdleHint({idle})")
+        self.PropertiesChanged(SESSION_IFACE, {
+            'IdleHint': dbus.Boolean(idle),
+            'IdleSinceHint': dbus.UInt64(self.idle_since),
+        }, [])
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='',
                          sender_keyword='sender')
@@ -486,22 +771,37 @@ class Login1Session(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.Session':
+        if interface_name == 'org.freedesktop.login1.Session' or not interface_name:
             uid = get_active_uid()
             username = get_username_for_uid(uid)
+            vtnr = self.vtnr if self.vtnr is not None else read_active_vt()
+            leader_pid, leader_comm = get_session_leader()
+            started, started_mono = proc_start_usec(leader_pid) if leader_pid else (0, 0)
             return {
                 'Id': dbus.String('31'),
                 'User': dbus.Struct((dbus.UInt32(uid), dbus.ObjectPath(f'/org/freedesktop/login1/user/_{uid}')), signature='uo'),
                 'Name': dbus.String(username),
                 'Active': dbus.Boolean(self.active),
                 'State': dbus.String('active' if self.active else 'online'),
-                'VTNr': dbus.UInt32(self.vtnr if self.vtnr is not None else read_active_vt()),
+                'VTNr': dbus.UInt32(vtnr),
                 'Remote': dbus.Boolean(False),
                 'Type': dbus.String(get_session_type()),
                 'Class': dbus.String('user'),
                 'Seat': dbus.Struct((dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/seat/seat0')), signature='so'),
                 'CanReboot': dbus.String('yes'),
                 'CanPowerOff': dbus.String('yes'),
+                'Leader': dbus.UInt32(leader_pid),
+                'TTY': dbus.String('tty%d' % vtnr if vtnr else ''),
+                'Display': dbus.String(''),
+                'Desktop': dbus.String(get_desktop_name()),
+                'Service': dbus.String(leader_comm.split('-', 1)[0] if leader_comm else ''),
+                'Scope': dbus.String('session-31.scope'),
+                'IdleHint': dbus.Boolean(self.idle_hint),
+                'IdleSinceHint': dbus.UInt64(self.idle_since),
+                'IdleSinceHintMonotonic': dbus.UInt64(0),
+                'LockedHint': dbus.Boolean(self.locked_hint),
+                'Timestamp': dbus.UInt64(started),
+                'TimestampMonotonic': dbus.UInt64(started_mono),
             }
         return {}
 
@@ -522,7 +822,7 @@ class Login1User(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.User':
+        if interface_name == 'org.freedesktop.login1.User' or not interface_name:
             uid = getattr(self, 'uid', 1000)
             username = get_username_for_uid(uid)
             gid = get_gid_for_uid(uid)
@@ -530,7 +830,7 @@ class Login1User(dbus.service.Object):
                 'UID': dbus.UInt32(uid),
                 'GID': dbus.UInt32(gid),
                 'Name': dbus.String(username),
-                'Display': dbus.ObjectPath('/org/freedesktop/login1/session/_31'),
+                'Display': dbus.ObjectPath(SESSION_PATH),
                 'State': dbus.String('active'),
             }
         return {}
@@ -566,10 +866,10 @@ class Login1Seat(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.Seat':
+        if interface_name == 'org.freedesktop.login1.Seat' or not interface_name:
             return {
                 'Id': dbus.String('seat0'),
-                'ActiveSession': dbus.Struct((dbus.String('31'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='so'),
+                'ActiveSession': dbus.Struct((dbus.String('31'), dbus.ObjectPath(SESSION_PATH)), signature='so'),
                 'CanMultiSession': dbus.Boolean(True),
                 'CanTTY': dbus.Boolean(True),
                 'CanGraphical': dbus.Boolean(True),
@@ -577,9 +877,35 @@ class Login1Seat(dbus.service.Object):
         return {}
 
 class Login1Manager(dbus.service.Object):
-    def __init__(self, bus):
+    def __init__(self, bus, session=None):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1')
+        self.session = session
         print("login1-stub: Registered Manager at /org/freedesktop/login1")
+
+    # loginctl lock-session/unlock-session route through the Manager, not the
+    # Session object. Before these existed dbus-python raised UnknownMethod as
+    # an unhandled traceback, so `loginctl lock-session` failed outright.
+    def _relay_lock(self, member):
+        if self.session is None:
+            raise dbus.exceptions.DBusException(
+                "No session", name='org.freedesktop.login1.NoSuchSession')
+        getattr(self.session, member)()
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def LockSession(self, session_id):
+        self._relay_lock('Lock')
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def UnlockSession(self, session_id):
+        self._relay_lock('Unlock')
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
+    def LockSessions(self):
+        self._relay_lock('Lock')
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
+    def UnlockSessions(self):
+        self._relay_lock('Unlock')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='',
                          sender_keyword='sender')
@@ -649,7 +975,7 @@ class Login1Manager(dbus.service.Object):
     def ListSessions(self):
         uid = get_active_uid()
         username = get_username_for_uid(uid)
-        return [dbus.Struct((dbus.String('31'), dbus.UInt32(uid), dbus.String(username), dbus.String('seat0'), dbus.ObjectPath('/org/freedesktop/login1/session/_31')), signature='susso')]
+        return [dbus.Struct((dbus.String('31'), dbus.UInt32(uid), dbus.String(username), dbus.String('seat0'), dbus.ObjectPath(SESSION_PATH)), signature='susso')]
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(uso)')
     def ListUsers(self):
@@ -674,11 +1000,11 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
-        return dbus.ObjectPath('/org/freedesktop/login1/session/_31')
+        return dbus.ObjectPath(SESSION_PATH)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='o')
     def GetSession(self, session_id):
-        return dbus.ObjectPath('/org/freedesktop/login1/session/_31')
+        return dbus.ObjectPath(SESSION_PATH)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetUser(self, uid):
@@ -699,7 +1025,7 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.login1.Manager':
+        if interface_name == 'org.freedesktop.login1.Manager' or not interface_name:
             return {
                 'NAutoVTs': dbus.UInt32(6),
                 'KillUserProcesses': dbus.Boolean(False),
@@ -731,7 +1057,7 @@ class Hostname1(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.hostname1':
+        if interface_name == 'org.freedesktop.hostname1' or not interface_name:
             hn = socket.gethostname() or "localhost"
             os_pretty = get_os_release_val('PRETTY_NAME') or "Fedora Linux"
             os_cpe = get_os_release_val('CPE_NAME') or "cpe:/o:fedoraproject:fedora"
@@ -851,7 +1177,7 @@ class ConsoleKitSession(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.ConsoleKit.Session':
+        if interface_name == 'org.freedesktop.ConsoleKit.Session' or not interface_name:
             return {
                 'Id': dbus.ObjectPath('/org/freedesktop/ConsoleKit/Session1'),
                 'User': dbus.UInt32(self.uid),
@@ -956,7 +1282,7 @@ class Timedate1(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface_name):
-        if interface_name == 'org.freedesktop.timedate1':
+        if interface_name == 'org.freedesktop.timedate1' or not interface_name:
             now_us = dbus.UInt64(int(time.time() * 1_000_000))
             return {
                 'Timezone': dbus.String(get_timezone()),
@@ -1096,6 +1422,8 @@ def main():
     # diagnostics sit in an 8K buffer and are invisible until the process exits.
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
+    # Popped first thing so it cannot leak into the subprocesses we spawn.
+    handoff = load_handoff()
     DBusGMainLoop(set_as_default=True)
 
     os.makedirs('/run/systemd/system', exist_ok=True)
@@ -1130,10 +1458,21 @@ def main():
         sys.exit(1)
 
     uid = get_active_uid()
-    session = Login1Session(bus)
+    session = Login1Session(bus, handoff)
+    if handoff is None and session_file_is_active():
+        # Cold start under a session that is already running: its compositor
+        # took control of a bridge that no longer exists, so we hold none of its
+        # fds and _setup_vt_mediation() is never called for it. Before this line
+        # that failed in complete silence — ctrl-alt-F<n> simply stopped working
+        # and nothing said why. Upgrade with `kill -HUP` to keep mediation.
+        print(f"login1-stub: ORPHANED SESSION — session {SESSION_ID} is active on "
+              f"VT {read_file_value(SESSION_FILE, 'VTNR')} but no fds were handed "
+              f"off. VT mediation is NOT armed: the recovery console is "
+              f"unreachable until that session logs out and back in.",
+              file=sys.stderr)
     user = Login1User(bus, uid)
     seat = Login1Seat(bus)
-    manager = Login1Manager(bus)
+    manager = Login1Manager(bus, session)
     hostname = Hostname1(bus)
     timedate = Timedate1(bus)
 
@@ -1179,6 +1518,16 @@ def main():
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
+
+    # Deliberately via GLib rather than signal.signal(): re-exec has to run on
+    # the main loop, where no D-Bus reply is half-written and no VT release is
+    # mid-flight, not from an async signal handler between two bytecodes.
+    def hup_handler():
+        print("login1-stub: SIGHUP — re-exec requested")
+        session.reexec()
+        return True
+
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, hup_handler)
 
     loop.run()
 
