@@ -501,16 +501,52 @@ void service_cgroup_kill(service_t *svc) {
 
 /* ── logging ─────────────────────────────────────────────────────────  */
 
+/* The console is the rail's only witness, and on hardware it scrolls away --
+ * every marker vmtest greps off the serial line was unrecoverable after boot.
+ * Mirror each line into rail.log.
+ *
+ * Resolve and open the path on EVERY call rather than caching the fd. PID 1
+ * emits its first markers before it has mounted the /run tmpfs, so a cached fd
+ * opened that early keeps writing into the file it created on the underlying
+ * rootfs -- which the tmpfs then hides. The rail looked healthy and the log was
+ * unreachable. Rail events are boot-rate, so the reopen costs nothing, and it
+ * makes logrotate's copytruncate a non-issue too. */
+static void rail_write(const char *line, size_t len) {
+    int fd;
+
+    mkdir("/var/log/schema-init", 0755);
+    fd = open("/var/log/schema-init/rail.log",
+              O_WRONLY | O_CREAT | O_APPEND, 0640);
+    if (fd < 0) {
+        mkdir("/run/log", 0755);
+        mkdir("/run/log/schema-init", 0755);
+        fd = open("/run/log/schema-init/rail.log",
+                  O_WRONLY | O_CREAT | O_APPEND, 0640);
+    }
+    if (fd < 0) return;
+    (void)!write(fd, line, len);
+    close(fd);
+}
+
 void service_log(const service_t *svc, const char *event) {
+    char line[256];
+    int n;
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    printf("[%02d:%02d:%02d] %-20s  %-12s  state=%-12s  wt=%d  pid=%d\n",
-           t->tm_hour, t->tm_min, t->tm_sec,
-           svc->name, event,
-           state_name(svc->inst.state),
-           svc->inst.weight,
-           (int)svc->child_pid);
+
+    n = snprintf(line, sizeof(line),
+                 "[%02d:%02d:%02d] %-20s  %-12s  state=%-12s  wt=%d  pid=%d\n",
+                 t->tm_hour, t->tm_min, t->tm_sec,
+                 svc->name, event,
+                 state_name(svc->inst.state),
+                 svc->inst.weight,
+                 (int)svc->child_pid);
+    if (n > (int)sizeof(line) - 1) n = (int)sizeof(line) - 1;
+
+    fputs(line, stdout);
     fflush(stdout);
+
+    rail_write(line, (size_t)n);
 }
 
 /* ── dependency readiness ───────────────────────────────────────────── */
