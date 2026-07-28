@@ -66,7 +66,7 @@ static struct timespec init_start;
 
 static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
-static void handle_reload(int evict_mode);
+static int handle_reload(int evict_mode, char *err, size_t errsz);
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 
 /* Arm a calendar timer: set timer_next to the next CLOCK_REALTIME instant at
@@ -1098,8 +1098,11 @@ static void ctl_cmd(int fd, char *line) {
         char *opt = line + 6;
         while (*opt == ' ') opt++;
         int evict = (strcmp(opt, "--evict") == 0);
-        handle_reload(evict);
-        ctl_writef(fd, "ok: reload %s\n", evict ? "(evict mode)" : "(graceful)");
+        char rerr[256] = "";
+        if (handle_reload(evict, rerr, sizeof(rerr)) == 0)
+            ctl_writef(fd, "ok: reload %s\n", evict ? "(evict mode)" : "(graceful)");
+        else
+            ctl_writef(fd, "err: reload rejected — %s\n", rerr[0] ? rerr : "see console");
 
     } else if (strcmp(line, "timing") == 0) {
         double k2p = (double)init_start.tv_sec + (double)init_start.tv_nsec / 1e9;
@@ -1313,7 +1316,11 @@ static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_
     return services_check_cycles(svc_table, s_count);
 }
 
-static void handle_reload(int evict_mode) {
+/* Returns 0 if the new configuration was adopted, -1 if it was rejected, with
+ * `err` filled in. The caller reports that outcome: a reload can be refused for
+ * three different reasons and the operator has to be told which, over the same
+ * channel they asked on. */
+static int handle_reload(int evict_mode, char *err, size_t errsz) {
     int i, j;
     printf("[schema-init] reloading configuration (SIGHUP)... \n");
 
@@ -1325,7 +1332,8 @@ static void handle_reload(int evict_mode) {
     }
     if (shadow_count <= 0) {
         printf("[schema-init] reload failed: no services loaded from configuration\n");
-        return;
+        if (err) snprintf(err, errsz, "no services loaded from configuration");
+        return -1;
     }
 
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
@@ -1342,10 +1350,14 @@ static void handle_reload(int evict_mode) {
                 shadow_services[i].content_hash != 0) {
                 printf("[schema-init] INTEGRITY: '%s' hash mismatch — file modified since boot; reload rejected\n",
                        shadow_services[i].name);
+                if (err) snprintf(err, errsz,
+                    "'%s' modified since boot — integrity check rejected the reload; "
+                    "a changed .svc takes effect at next boot",
+                    shadow_services[i].name);
                 for (int k = 0; k < shadow_count; k++)
                     for (int m = 1; m < MAX_ARGV; m++)
                         if (shadow_services[k].argv[m]) { free(shadow_services[k].argv[m]); shadow_services[k].argv[m] = NULL; }
-                return;
+                return -1;
             }
             break;
         }
@@ -1353,6 +1365,7 @@ static void handle_reload(int evict_mode) {
 
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
         printf("[schema-init] reload rejected: dependency cycles detected in new configuration\n");
+        if (err) snprintf(err, errsz, "dependency cycle in new configuration");
         /* free duplicated arguments in shadow array to prevent leaks */
         for (i = 0; i < shadow_count; i++) {
             for (j = 1; j < MAX_ARGV; j++) {
@@ -1361,7 +1374,7 @@ static void handle_reload(int evict_mode) {
                 }
             }
         }
-        return;
+        return -1;
     }
 
     /* Merge running state from live to shadow */
@@ -1457,6 +1470,7 @@ static void handle_reload(int evict_mode) {
             }
         }
     }
+    return 0;
 }
 
 /* ── main ───────────────────────────────────────────────────────────── */
@@ -1851,7 +1865,9 @@ int main(int argc, char **argv) {
                             if (ssi.ssi_signo == SIGCHLD) {
                                 reap();
                             } else if (ssi.ssi_signo == SIGHUP) {
-                                handle_reload(0);
+                                /* No socket to answer on — the console message
+                                 * inside handle_reload is the only report. */
+                                (void)handle_reload(0, NULL, 0);
                             }
                         }
                     } else if (fds[e].fd == ctl_fd) {
