@@ -212,6 +212,70 @@ SESSION_IFACE = 'org.freedesktop.login1.Session'
 SESSION_ID = '31'
 SESSION_PATH = '/org/freedesktop/login1/session/_' + SESSION_ID
 
+# --- restart handoff --------------------------------------------------------
+# TakeDevice() opens the DRM node and passes THAT fd to the compositor, so our
+# fd and the compositor's are the same open file description -- which is the
+# only reason DROP_MASTER on our side takes master away from theirs. A plain
+# kill+respawn loses those fds, and a fresh open() is a different description
+# that cannot drop anyone's master. The bridge then re-arms VT_PROCESS, fails
+# to drop master on ctrl-alt-F<n>, and hands the VT over anyway: a black tty.
+#
+# So on SIGHUP we execv() OURSELVES instead of dying. exec preserves the pid
+# (the kernel records the VT_PROCESS owner by pid, so mediation survives) and
+# preserves every fd we mark inheritable. The device map travels through the
+# environment. Upgrading the bridge = `kill -HUP`, never `restart`.
+HANDOFF_ENV = 'SCHEMA_LOGIND_HANDOFF'
+TTY_MAJOR = 4
+SCRIPT_PATH = os.path.abspath(__file__)
+SESSION_FILE = '/run/systemd/sessions/' + SESSION_ID
+
+
+def read_file_value(path, key):
+    """One KEY=value out of a /run/systemd/sessions/<id> file, or ''."""
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                if line.startswith(key + '='):
+                    return line.split('=', 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def session_file_is_active():
+    return read_file_value(SESSION_FILE, 'STATE') == 'active'
+
+
+def load_handoff():
+    """Consume the handoff blob left by our pre-exec self, or None on cold start.
+
+    Popped from the environment, never merely read: a stale blob inherited by a
+    grandchild would name fds that mean something else entirely by then.
+    """
+    raw = os.environ.pop(HANDOFF_ENV, '')
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception as e:
+        print(f"login1-stub: unreadable {HANDOFF_ENV} ({e}) — cold start",
+              file=sys.stderr)
+        return None
+
+
+def fd_matches_device(fd, major, minor):
+    """True if `fd` is open on exactly the char device major:minor.
+
+    An inherited fd number is a claim, not a fact. Everything downstream issues
+    DRM and VT ioctls on these, so a handoff that lost a race and now points at
+    a logfile must be rejected here rather than discovered by ioctl.
+    """
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return False
+    return os.major(st.st_rdev) == major and os.minor(st.st_rdev) == minor
+
 
 def read_active_vt():
     """Current active VT number ('tty3' -> 3), or 0 when it can't be read."""
@@ -242,7 +306,7 @@ def vt_activate(vtnr):
 
 
 class Login1Session(dbus.service.Object):
-    def __init__(self, bus):
+    def __init__(self, bus, handoff=None):
         dbus.service.Object.__init__(self, bus, SESSION_PATH)
         self.devices = {}
         env_vt = os.environ.get('SCHEMA_LOGIND_VTNR', '')
@@ -259,6 +323,112 @@ class Login1Session(dbus.service.Object):
         self.idle_hint = False
         self.idle_since = 0
         print("login1-stub: Registered Session at " + SESSION_PATH)
+        if handoff:
+            self._adopt_handoff(handoff)
+
+    # -- restart handoff -----------------------------------------------------
+
+    def _adopt_handoff(self, state):
+        """Re-inherit a live session's fds and VT mediation across execv()."""
+        self.vtnr = state.get('vtnr') or self.vtnr
+        self.active = bool(state.get('active', True))
+        self.locked_hint = bool(state.get('locked_hint', False))
+        self.idle_hint = bool(state.get('idle_hint', False))
+        self.idle_since = int(state.get('idle_since', 0))
+
+        for key, fd in (state.get('devices') or {}).items():
+            try:
+                major, minor = (int(p) for p in key.split(':'))
+            except ValueError:
+                continue
+            if fd_matches_device(fd, major, minor):
+                os.set_inheritable(fd, False)
+                self.devices[(major, minor)] = fd
+            else:
+                # Cleared but deliberately NOT closed: we just established that
+                # this fd is not what the blob claimed, so we have no idea what
+                # it actually is and closing it could take out stderr.
+                try:
+                    os.set_inheritable(fd, False)
+                except OSError:
+                    pass
+                print(f"login1-stub: handoff fd={fd} is not {key} — dropped",
+                      file=sys.stderr)
+
+        vt_fd = state.get('vt_fd')
+        if vt_fd is not None and self.vtnr is not None \
+                and fd_matches_device(vt_fd, TTY_MAJOR, self.vtnr):
+            os.set_inheritable(vt_fd, False)
+            self.vt_fd = vt_fd
+            # exec kept the pid, so the kernel still has us down as the VT owner
+            # and mediation never lapsed. Re-issuing VT_SETMODE is belt-and-braces
+            # and re-states the signal numbers; the signal handlers themselves did
+            # NOT survive exec and must be re-armed or the next ctrl-alt-F<n>
+            # would leave the kernel waiting for a VT_RELDISP nobody sends.
+            self._arm_vt_signals()
+            mode = struct.pack('bbhhh', VT_PROCESS, 0,
+                               signal.SIGUSR1, signal.SIGUSR2, 0)
+            try:
+                fcntl.ioctl(self.vt_fd, VT_SETMODE, mode)
+            except Exception as e:
+                print(f"login1-stub: re-arming VT_SETMODE failed: {e}",
+                      file=sys.stderr)
+        elif vt_fd is not None:
+            print(f"login1-stub: handoff vt_fd={vt_fd} is not tty{self.vtnr} — "
+                  f"mediation NOT adopted", file=sys.stderr)
+
+        print(f"login1-stub: adopted handoff — VT {self.vtnr}, "
+              f"{len(self.devices)} device(s), mediation "
+              f"{'live' if self.vt_fd is not None else 'LOST'}, active={self.active}")
+
+    def reexec(self):
+        """Replace ourselves with a fresh interpreter, keeping fds and pid."""
+        if self.release_timer is not None or self.pending_acks:
+            # Master is already dropped and the kernel is blocked waiting for
+            # VT_RELDISP. Exec now and the new process has no pending release to
+            # answer: the switch never completes and the screen stays dark.
+            print("login1-stub: VT release in flight — deferring re-exec")
+            GLib.timeout_add(VT_RELEASE_ACK_MS, self._reexec_retry)
+            return
+
+        state = {
+            'vtnr': self.vtnr,
+            'active': self.active,
+            'locked_hint': self.locked_hint,
+            'idle_hint': self.idle_hint,
+            'idle_since': self.idle_since,
+            'devices': {f"{maj}:{minor}": fd
+                        for (maj, minor), fd in self.devices.items()},
+        }
+        keep = list(self.devices.values())
+        if self.vt_fd is not None:
+            state['vt_fd'] = self.vt_fd
+            keep.append(self.vt_fd)
+        # TakeDevice() opens O_CLOEXEC and Python marks its fds non-inheritable
+        # anyway (PEP 446), so without this every fd we are trying to save is
+        # closed by the exec itself.
+        for fd in keep:
+            os.set_inheritable(fd, True)
+
+        os.environ[HANDOFF_ENV] = json.dumps(state)
+        print(f"login1-stub: re-exec {SCRIPT_PATH} — handing off "
+              f"{len(self.devices)} device(s) + VT {self.vtnr}")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        try:
+            os.execv(sys.executable, [sys.executable, SCRIPT_PATH] + sys.argv[1:])
+        except Exception as e:
+            # execv only returns on failure, and we are still the intact old
+            # process: undo the inheritable flags and carry on serving.
+            print(f"login1-stub: re-exec FAILED ({e}) — continuing on old code",
+                  file=sys.stderr)
+            os.environ.pop(HANDOFF_ENV, None)
+            for fd in keep:
+                os.set_inheritable(fd, False)
+
+    def _reexec_retry(self):
+        self.reexec()
+        return False
 
     # -- session-device handoff ---------------------------------------------
 
@@ -358,9 +528,12 @@ class Login1Session(dbus.service.Object):
             return
         self.vt_fd = fd
         self._disarm_vt_flow_control(fd)
+        self._arm_vt_signals()
+        print(f"login1-stub: VT {self.vtnr} now mediated (VT_PROCESS)")
+
+    def _arm_vt_signals(self):
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self._on_vt_release)
         GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, self._on_vt_acquire)
-        print(f"login1-stub: VT {self.vtnr} now mediated (VT_PROCESS)")
 
     def _disarm_vt_flow_control(self, fd):
         # The session VT stays in KD_TEXT with a live line discipline
@@ -1245,6 +1418,8 @@ def main():
     # diagnostics sit in an 8K buffer and are invisible until the process exits.
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
+    # Popped first thing so it cannot leak into the subprocesses we spawn.
+    handoff = load_handoff()
     DBusGMainLoop(set_as_default=True)
 
     os.makedirs('/run/systemd/system', exist_ok=True)
@@ -1279,7 +1454,18 @@ def main():
         sys.exit(1)
 
     uid = get_active_uid()
-    session = Login1Session(bus)
+    session = Login1Session(bus, handoff)
+    if handoff is None and session_file_is_active():
+        # Cold start under a session that is already running: its compositor
+        # took control of a bridge that no longer exists, so we hold none of its
+        # fds and _setup_vt_mediation() is never called for it. Before this line
+        # that failed in complete silence — ctrl-alt-F<n> simply stopped working
+        # and nothing said why. Upgrade with `kill -HUP` to keep mediation.
+        print(f"login1-stub: ORPHANED SESSION — session {SESSION_ID} is active on "
+              f"VT {read_file_value(SESSION_FILE, 'VTNR')} but no fds were handed "
+              f"off. VT mediation is NOT armed: the recovery console is "
+              f"unreachable until that session logs out and back in.",
+              file=sys.stderr)
     user = Login1User(bus, uid)
     seat = Login1Seat(bus)
     manager = Login1Manager(bus, session)
@@ -1328,6 +1514,16 @@ def main():
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
+
+    # Deliberately via GLib rather than signal.signal(): re-exec has to run on
+    # the main loop, where no D-Bus reply is half-written and no VT release is
+    # mid-flight, not from an async signal handler between two bytecodes.
+    def hup_handler():
+        print("login1-stub: SIGHUP — re-exec requested")
+        session.reexec()
+        return True
+
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, hup_handler)
 
     loop.run()
 

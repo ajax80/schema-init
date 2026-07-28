@@ -12,6 +12,7 @@ temp file; production still defaults to /sys/class/tty/tty0/active.
   ./tests/test_logind_vt.py        exit 0 all pass, 1 any fail
 """
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -151,6 +152,59 @@ def main():
         check('ResumeDevice signal is emitted', args is not None,
               f"args={tuple(args)}" if args else f"no signal within {SIGNAL_TIMEOUT}s")
         check('session goes active again', bool(props.Get(SESSION_IFACE, 'Active')))
+
+        print("\n-- SIGHUP re-exec keeps the session alive --")
+        # A kill+respawn would lose the device fds, and a fresh open() cannot
+        # drop the master a compositor holds. The bridge must exec ITSELF: same
+        # pid (the kernel's VT_PROCESS owner), same fds, new code.
+        old_pid = stub.pid
+        old_owner = bus.get_name_owner(BUS_NAME)
+        os.kill(stub.pid, signal.SIGHUP)
+
+        new_owner = None
+        for _ in range(50):
+            time.sleep(0.1)
+            if stub.poll() is not None:
+                break
+            try:
+                owner = bus.get_name_owner(BUS_NAME)
+            except dbus.DBusException:
+                continue
+            if owner != old_owner:
+                new_owner = owner
+                break
+
+        if not check('survives SIGHUP', stub.poll() is None,
+                     'exited' if stub.poll() is not None else 'still running'):
+            return 1
+        check('pid is unchanged (exec, not restart)', stub.pid == old_pid,
+              f"{old_pid} -> {stub.pid}")
+        check('reconnects to the bus under a new connection', new_owner is not None,
+              f"{old_owner} -> {new_owner}" if new_owner else 'name owner never changed')
+
+        session = bus.get_object(BUS_NAME, SESSION_PATH)
+        iface = dbus.Interface(session, SESSION_IFACE)
+        props = dbus.Interface(session, 'org.freedesktop.DBus.Properties')
+
+        all_props = props.GetAll(SESSION_IFACE)
+        check('VTNr survives the handoff', str(all_props.get('VTNr', '')) == '1',
+              str(all_props.get('VTNr', 'missing')))
+        check('Active survives the handoff', bool(all_props.get('Active', False)))
+
+        print("\n-- the adopted device still pauses (tty1 -> tty2) --")
+        # The load-bearing assertion: PauseDevice can only name this device if
+        # the fd travelled through execv. A cold-started bridge has an empty
+        # device map and stays silent here.
+        with open(vtfile.name, 'w') as f:
+            f.write('tty2\n')
+
+        args = wait_for_signal(bus, 'PauseDevice')
+        check('adopted device still emits PauseDevice', args is not None,
+              f"args={tuple(args)}" if args else 'device map was lost across exec')
+        if args:
+            check('adopted device keeps its identity',
+                  (int(args[0]), int(args[1])) == (TEST_MAJOR, TEST_MINOR),
+                  f"{int(args[0])}:{int(args[1])}")
 
     finally:
         for p in (stub, daemon):
