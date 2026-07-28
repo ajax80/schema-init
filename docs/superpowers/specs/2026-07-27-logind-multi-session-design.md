@@ -1,10 +1,12 @@
 # logind multi-session — design
 
 **Date:** 2026-07-27
-**Status:** Step 1 (bridge) BUILT on `feat/logind-multi-session` — registry, legacy fallback, derived
-seat/user files, `SessionNew`/`SessionRemoved`. Not yet deployed to hardware. Steps 2 and 3 (the
-`sddm-logged` and getty allocation halves) remain unbuilt. Groundwork landed on
-`feat/logind-session-properties` (`5da80ac`, `126e3b7`).
+**Status:** All three steps BUILT, none deployed to hardware.
+`feat/logind-multi-session` (step 1: registry, legacy fallback, derived seat/user files, session signals),
+`feat/logind-session-alloc` (step 2: id allocation at login),
+`feat/logind-create-session` (step 3: `CreateSession`/`ReleaseSession` — see the note under Deployment order,
+this is not what the plan said). 126 checks across five suites.
+Groundwork landed on `feat/logind-session-properties` (`5da80ac`, `126e3b7`).
 **Depends on:** nothing new; supersedes the hardcoded session identity in `scripts/schema-logind.py` and `/usr/local/bin/sddm-logged`
 **Track:** B (systemd-compat surface — "indistinguishable from systemd")
 
@@ -187,8 +189,41 @@ That makes the order irrelevant and every step individually revertible:
    writes `31` and the registry finds it. **DONE** — `tests/test_logind_registry.py` (34 checks) and
    `tests/test_logind_multisession.py` (21 checks) cover it, and `tests/test_logind_vt.py` still passes 17/17
    including the SIGHUP re-exec handoff.
-2. Ship `sddm-logged` allocation. Now ids are real.
-3. Add the same snippet to the getty wrapper so tty logins get sessions (`TYPE=tty`, `CLASS=user`).
+2. Ship `sddm-logged` allocation. Now ids are real. **DONE** — factored into
+   `scripts/schema-session-register` / `-unregister` rather than inlined, because step 3 turned out to have a third
+   caller. `tests/test_logind_session_alloc.py`, 25 checks.
+3. ~~Add the same snippet to the getty wrapper so tty logins get sessions.~~ **Superseded — see below.**
+
+### Step 3 as designed vs. as built
+
+The plan said "getty wrapper". That was wrong twice over, and measurement is what showed it:
+
+- **There is no getty wrapper**, and there should not be one: the `.svc` files exec `agetty` directly, and at `agetty`
+  spawn time *nobody has logged in yet*. There is no uid or username to write. Wrapping it would publish a phantom
+  logged-in session on every idle tty.
+- **`pam_systemd.so` was already calling us.** It sits at `/etc/pam.d/system-auth:20` as `-session optional`, and
+  `/etc/pam.d/login` includes that stack. A `dbus-monitor` on `org.freedesktop.login1.Manager` across two real logins
+  caught **4 `CreateSessionWithPIDFD` + 4 `CreateSession` calls**, every one dying with `UnknownMethod` and being
+  swallowed by the `optional` flag. The hook was installed and firing the whole time; the shim just never answered.
+
+So step 3 is **implement `Manager.CreateSession` and `ReleaseSession`**, not edit a PAM file. That is strictly better:
+no PAM config is touched, so nothing can lock the box out — and a hand-added `pam_exec` line in `system-auth` would
+have been reverted anyway, since that file carries authselect's "Do not modify this file manually" header.
+
+Only `CreateSession` is needed. Callers try `CreateSessionWithPIDFD` first and fall back on `UnknownMethod`; the
+capture shows the same sender doing exactly that, serial 2 then serial 3.
+
+Two decisions inside it:
+
+- **Only sessions that name a real VT are created.** `pam_systemd` also calls this for `sudo` and `su` with
+  `class=background-light`/`background` and no tty. Real logind does create those; we refuse them with
+  `NotSupported`, because a seat session per `sudo` would make `loginctl list-sessions` useless. `pts/N` is refused
+  for the same reason.
+- **The `fifo_fd` is returned but not watched.** Real logind treats its EOF as "session over". Watching it would mean
+  one long-lived fd per session inside the GLib loop — the shape of both prior CPU-spin incidents. Sessions are reaped
+  by the `LEADER`-alive check on the existing 250 ms sync instead, which is why that sweep became continuous rather
+  than startup-only. Caveat: pid-based, so a recycled pid can keep a dead session alive until reboot. Real logind uses
+  a pidfd.
 
 **One intentional behaviour change in step 1.** `_set_active()` now writes `ACTIVE=`/`STATE=` back to the session's
 state file on a VT switch. Before this the file said `STATE=active` forever while D-Bus reported the truth, so

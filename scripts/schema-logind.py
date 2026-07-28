@@ -217,6 +217,10 @@ _RUN_SYSTEMD = os.environ.get('SCHEMA_LOGIND_RUN_DIR', '/run/systemd')
 SESSIONS_DIR = _RUN_SYSTEMD + '/sessions'
 SEATS_DIR = _RUN_SYSTEMD + '/seats'
 USERS_DIR = _RUN_SYSTEMD + '/users'
+# Same override, same reason: CreateSession() creates session scope cgroups and
+# ReleaseSession() rmdirs them, so a test must be able to aim that at a temp
+# tree rather than the real hierarchy.
+CGROUP_ROOT = os.environ.get('SCHEMA_CGROUP_ROOT', '/sys/fs/cgroup')
 # The id the stub served when it could only serve one session. Still used as
 # the synthesised id when /run/systemd/sessions/ is empty, which is what a
 # login script that predates id allocation leaves behind.
@@ -473,6 +477,64 @@ def scan_session_files():
         records[LEGACY_SESSION_ID] = SessionRecord(LEGACY_SESSION_ID,
                                                    None, synthesised=True)
     return records
+
+
+def alloc_session_id():
+    """Lowest free positive id, claimed by atomic create.
+
+    The same algorithm as scripts/schema-session-register's noclobber loop, and
+    it has to stay the same: the login script and this both allocate, and
+    O_EXCL is the only thing keeping two simultaneous logins off one id.
+    Returns None if the directory is unusable, so the caller can decline rather
+    than invent a session.
+    """
+    try:
+        os.makedirs(SESSIONS_DIR, exist_ok=True)
+    except OSError:
+        return None
+    for i in range(1, 1000):
+        try:
+            fd = os.open(session_file_for(i),
+                         os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            continue
+        except OSError:
+            return None
+        os.close(fd)
+        return str(i)
+    return None
+
+
+def write_session_file(sid, fields):
+    """Write /run/systemd/sessions/<id> atomically.
+
+    Rename over the claim rather than writing in place: scan_session_files()
+    skips a file with no keys, so the id is invisible until it describes a
+    whole session.
+    """
+    path = session_file_for(sid)
+    tmp = os.path.join(SESSIONS_DIR, '.%s.tmp' % sid)
+    body = ['# This is private data. Do not parse.']
+    body += ['%s=%s' % (k, v) for k, v in fields.items()]
+    try:
+        with open(tmp, 'w') as f:
+            f.write('\n'.join(body) + '\n')
+        os.rename(tmp, path)
+        return True
+    except OSError as e:
+        print(f"login1-stub: cannot write {path}: {e}", file=sys.stderr)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def vtnr_from_tty(tty):
+    """The VT number a tty name refers to, or 0. 'tty3' -> 3, 'pts/2' -> 0."""
+    if tty.startswith('tty') and tty[3:].isdigit():
+        return int(tty[3:])
+    return 0
 
 
 def load_handoff():
@@ -1114,7 +1176,6 @@ class SessionRegistry:
         self._sigs = {}         # sid -> record signature at last sync
         self._derived = {}      # path -> last content written
         self._last_vt = None
-        self._swept = False     # startup stale-file sweep has run
 
     # -- lookup --------------------------------------------------------------
 
@@ -1205,22 +1266,34 @@ class SessionRegistry:
             print(f"login1-stub: session scan failed: {e}", file=sys.stderr)
             return True
 
-        # Sweep session files whose leader is gone — a crash between the login
-        # script's trap and its cleanup leaves one, and a stale file is a
-        # phantom session on the bus forever. Deliberately a STARTUP sweep
-        # only: the login path owns this directory, and a bridge that unlinks
-        # its files on a 4 Hz timer would be racing the moment between an id
-        # being claimed and its leader being written.
-        if not self._swept:
-            self._swept = True
-            for sid in [s for s, r in records.items() if not r.leader_alive()]:
-                print(f"login1-stub: session {sid} leader is gone — sweeping "
-                      f"stale state file", file=sys.stderr)
-                records.pop(sid)
-                try:
-                    os.unlink(session_file_for(sid))
-                except OSError:
-                    pass
+        # Reap sessions whose leader is gone. This is the only reaping there
+        # is: CreateSession() hands back a fifo_fd but nothing watches it for
+        # EOF, because one long-lived fd per session in the GLib loop is the
+        # shape of both prior CPU-spin incidents. Nothing reliably calls
+        # ReleaseSession either — pam_systemd just drops the fifo.
+        #
+        # Safe to run every tick rather than only at startup: a file is only
+        # considered at all once it has keys, and both writers (the register
+        # script and CreateSession) rename a complete file with LEADER over
+        # the empty claim. So there is no window where a live session looks
+        # leaderless. A file with no LEADER key at all is the legacy
+        # sddm-logged's, and leader_alive() leaves those alone.
+        #
+        # Caveat worth knowing: this is pid-based, so a recycled pid could keep
+        # a dead session alive until the next boot. Real logind uses a pidfd.
+        for sid in [s for s, r in records.items() if not r.leader_alive()]:
+            print(f"login1-stub: session {sid} leader is gone — reaping",
+                  file=sys.stderr)
+            rec = records.pop(sid)
+            try:
+                os.unlink(session_file_for(sid))
+            except OSError:
+                pass
+            try:
+                os.rmdir('%s/user.slice/user-%d.slice/session-%s.scope'
+                         % (CGROUP_ROOT, rec.uid, sid))
+            except OSError:
+                pass
 
         for sid in [s for s in self.sessions if s not in records]:
             obj = self.sessions.pop(sid)
@@ -1620,11 +1693,152 @@ class Login1Manager(dbus.service.Object):
         print(f"login1-stub: Inhibit({what}, {who}, {why}, {mode})")
         r, w = os.pipe()
         os.close(r)
-        return dbus.types.UnixFd(w)
+        # UnixFd dups for the wire, so our copy has to be closed or every
+        # inhibitor leaks one. PowerDevil and friends take these constantly;
+        # this file has already been bitten once by an fd leak reaching EMFILE.
+        try:
+            return dbus.types.UnixFd(w)
+        finally:
+            os.close(w)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='a(ssssuu)')
     def ListInhibitors(self):
         return []
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='uusssssussbssa(sv)',
+                         out_signature='soshusub')
+    def CreateSession(self, uid, pid, service, type_, class_, desktop,
+                      seat_id, vtnr, tty, display, remote, remote_user,
+                      remote_host, properties):
+        """The call pam_systemd.so already makes on every login.
+
+        pam_systemd is in the session stack at /etc/pam.d/system-auth, which
+        /etc/pam.d/login includes, so this has been firing on every tty login
+        all along and dying with UnknownMethod behind '-session optional'.
+        Answering it is what gives tty logins a session; no PAM file needs
+        editing, which is the whole point — a hand-added pam_exec line in
+        system-auth would be reverted by the next authselect run anyway.
+
+        Newer callers try CreateSessionWithPIDFD first and fall back here on
+        UnknownMethod, so only this variant needs to exist.
+
+        DELIBERATELY NARROW: a session is created only for a caller that names
+        a real VT. pam_systemd also calls this for sudo and su with
+        class=background/background-light and no tty, and inventing seat
+        sessions for those would fill `loginctl list-sessions` with noise for
+        every sudo on the box.
+        """
+        vtnr = int(vtnr) or vtnr_from_tty(str(tty))
+        if vtnr <= 0:
+            raise dbus.exceptions.DBusException(
+                "schema-logind creates sessions only for real VTs; "
+                "'%s' class=%s tty=%s named none" % (service, class_, tty),
+                name='org.freedesktop.DBus.Error.NotSupported')
+
+        uid = int(uid)
+        pid = int(pid)
+        seat_id = str(seat_id) or 'seat0'
+        username = get_username_for_uid(uid)
+
+        # An existing session on that VT for that user is reused rather than
+        # duplicated, which is what the 'existing' return flag is for.
+        for obj in self.registry.sessions.values():
+            if obj.record.vtnr == vtnr and obj.record.uid == uid \
+                    and not obj.record.synthesised:
+                return self._session_reply(obj.sid, uid, seat_id, vtnr, True)
+
+        sid = alloc_session_id()
+        if sid is None:
+            raise dbus.exceptions.DBusException(
+                "no free session id", name='org.freedesktop.login1.NoSuchSession')
+
+        active = (read_active_vt() == vtnr)
+        ok = write_session_file(sid, {
+            'UID': uid,
+            'USER': username,
+            'ACTIVE': '1' if active else '0',
+            'STATE': 'active' if active else 'online',
+            'SEAT': seat_id,
+            'VTNR': vtnr,
+            'TYPE': str(type_) if str(type_) not in ('', 'unspecified') else 'tty',
+            'CLASS': str(class_) or 'user',
+            'DESKTOP': str(desktop),
+            'IS_DISPLAY': '0',
+            'REMOTE': '1' if remote else '0',
+            'LEADER': pid,
+            'SERVICE': str(service) or 'login',
+            'REALTIME': int(time.time() * 1000000),
+            'MONOTONIC': proc_start_usec(pid)[1] if pid else 0,
+        })
+        if not ok:
+            try:
+                os.unlink(session_file_for(sid))
+            except OSError:
+                pass
+            raise dbus.exceptions.DBusException(
+                "could not write session state",
+                name='org.freedesktop.login1.NoSuchSession')
+
+        # sd_pid_get_session() is cgroup-based, so without the scope the polkit
+        # auth agent for this session cannot register.
+        scope = '%s/user.slice/user-%d.slice/session-%s.scope' % (
+            CGROUP_ROOT, uid, sid)
+        try:
+            os.makedirs(scope, exist_ok=True)
+            if pid:
+                with open(os.path.join(scope, 'cgroup.procs'), 'w') as f:
+                    f.write('%d\n' % pid)
+        except OSError as e:
+            print(f"login1-stub: session {sid} scope cgroup: {e}",
+                  file=sys.stderr)
+
+        print(f"login1-stub: CreateSession -> {sid} uid={uid} vtnr={vtnr} "
+              f"service={service} class={class_} leader={pid}")
+        self.registry.sync()
+        return self._session_reply(sid, uid, seat_id, vtnr, False)
+
+    def _session_reply(self, sid, uid, seat_id, vtnr, existing):
+        # fifo_fd: real logind hands back a pipe end and treats its EOF as
+        # "session over". We deliberately do not watch it — one long-lived fd
+        # per session inside the GLib loop is the shape of both prior CPU-spin
+        # incidents here. Sessions are reaped by the LEADER-alive check on the
+        # existing 250 ms sync instead, so this only has to be a valid fd the
+        # caller can hold and close. Our copy is closed because UnixFd dups for
+        # the wire; not closing it is exactly the leak just fixed in Inhibit().
+        fd = os.open('/dev/null', os.O_RDONLY | os.O_CLOEXEC)
+        try:
+            return (dbus.String(sid),
+                    dbus.ObjectPath(session_path_for(sid)),
+                    dbus.String('/run/user/%d' % uid),
+                    dbus.types.UnixFd(fd),
+                    dbus.UInt32(uid),
+                    dbus.String(seat_id),
+                    dbus.UInt32(vtnr),
+                    dbus.Boolean(existing))
+        finally:
+            os.close(fd)
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def ReleaseSession(self, session_id):
+        sid = str(session_id)
+        obj = self.registry.get(sid) if self.registry else None
+        uid = obj.record.uid if obj else None
+        print(f"login1-stub: ReleaseSession({sid})")
+        try:
+            os.unlink(session_file_for(sid))
+        except OSError:
+            pass
+        if uid is not None:
+            # rmdir, never rm -r: a scope with anything still in it must stay,
+            # or we would move live processes to the parent behind their back.
+            try:
+                os.rmdir('%s/user.slice/user-%d.slice/session-%s.scope'
+                         % (CGROUP_ROOT, uid, sid))
+            except OSError:
+                pass
+        if self.registry:
+            self.registry.sync()
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
