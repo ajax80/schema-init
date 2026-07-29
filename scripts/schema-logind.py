@@ -1624,6 +1624,44 @@ class Login1Manager(dbus.service.Object):
     def UnlockSessions(self):
         self._relay_lock('Unlock')
 
+    # Compat stubs: methods KDE/loginctl may call that this stub does not
+    # faithfully back. Accepting them keeps clients from crashing on
+    # UnknownMethod; they are deliberate no-ops (single-seat box, and the stub
+    # does not own session/user lifecycle -- schema-init does). ActivateSession
+    # is a true no-op: the one session is always the active one here.
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def ActivateSession(self, session_id):
+        print(f"login1-stub: ActivateSession({session_id}) (no-op; single seat)")
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ss', out_signature='')
+    def ActivateSessionOnSeat(self, session_id, seat_id):
+        print(f"login1-stub: ActivateSessionOnSeat({session_id}, {seat_id}) (no-op)")
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def TerminateSession(self, session_id):
+        print(f"login1-stub: TerminateSession({session_id}) (no-op; not managed here)")
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='')
+    def TerminateUser(self, uid):
+        print(f"login1-stub: TerminateUser({uid}) (no-op; not managed here)")
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
+    def TerminateSeat(self, seat_id):
+        print(f"login1-stub: TerminateSeat({seat_id}) (no-op; not managed here)")
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ubb', out_signature='')
+    def SetUserLinger(self, uid, enable, interactive):
+        print(f"login1-stub: SetUserLinger({uid}, {enable}) (no-op)")
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='st', out_signature='')
+    def ScheduleShutdown(self, shutdown_type, usec):
+        print(f"login1-stub: ScheduleShutdown({shutdown_type}, {usec}) (no-op)")
+
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='b')
+    def CancelScheduledShutdown(self):
+        print("login1-stub: CancelScheduledShutdown (nothing scheduled)")
+        return dbus.Boolean(False)
+
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='',
                          sender_keyword='sender')
     def PowerOff(self, interactive, sender=None):
