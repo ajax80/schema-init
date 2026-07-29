@@ -1604,6 +1604,73 @@ static void fuse_abort_all(void) {
     globfree(&g);
 }
 
+/* Containers escape the .svc cgroup sweep. docker's cgroupfs driver puts each
+ * container under /sys/fs/cgroup/docker/<id> -- a top-level cgroup root that no
+ * .svc owns, so service_cgroup_kill() (which only walks a service's own cgroup
+ * under /sys/fs/cgroup/schema-init/<name>) never reaches it. On 2026-07-26
+ * Frigate held frigate.db open there and the remount-ro below returned EBUSY,
+ * leaving a dirty ext4 journal for the next boot to replay. kill(-1) does clear
+ * them, but only by SIGKILL -- no chance to flush. Signalling the container
+ * processes here, in the same grace window the services get, lets a container
+ * shut down cleanly first; the cgroup.kill pass is the recursive backstop. */
+static const char *CONTAINER_CGROUP_PROC_GLOBS[] = {
+    "/sys/fs/cgroup/docker/*/cgroup.procs",
+    "/sys/fs/cgroup/docker/*/*/cgroup.procs",
+    "/sys/fs/cgroup/libpod_parent/*/cgroup.procs",
+    "/sys/fs/cgroup/libpod_parent/*/*/cgroup.procs",
+    NULL
+};
+
+static void container_cgroups_term(void) {
+    glob_t g;
+    size_t n;
+    int i, have = 0;
+
+    memset(&g, 0, sizeof g);
+    for (i = 0; CONTAINER_CGROUP_PROC_GLOBS[i]; i++) {
+        if (glob(CONTAINER_CGROUP_PROC_GLOBS[i],
+                 have ? GLOB_APPEND : 0, NULL, &g) == 0)
+            have = 1;
+    }
+    if (!have) return;
+
+    for (n = 0; n < g.gl_pathc; n++) {
+        FILE *f = fopen(g.gl_pathv[n], "r");
+        pid_t p;
+        if (!f) continue;
+        while (fscanf(f, "%d", &p) == 1)
+            if (p > 1) kill(p, SIGTERM);
+        fclose(f);
+    }
+    if (g.gl_pathc) shut_log("container SIGTERM sent");
+    globfree(&g);
+}
+
+static void container_cgroups_kill(void) {
+    static const char *kill_globs[] = {
+        "/sys/fs/cgroup/docker/*/cgroup.kill",
+        "/sys/fs/cgroup/libpod_parent/*/cgroup.kill",
+        NULL
+    };
+    glob_t g;
+    size_t n;
+    int i, have = 0;
+
+    memset(&g, 0, sizeof g);
+    for (i = 0; kill_globs[i]; i++) {
+        if (glob(kill_globs[i], have ? GLOB_APPEND : 0, NULL, &g) == 0)
+            have = 1;
+    }
+    if (!have) return;
+
+    for (n = 0; n < g.gl_pathc; n++) {
+        int fd = open(g.gl_pathv[n], O_WRONLY);
+        if (fd >= 0) { write(fd, "1", 1); close(fd); }
+    }
+    if (g.gl_pathc) shut_log("container cgroups killed");
+    globfree(&g);
+}
+
 /* sync() is unbounded: one wedged filesystem and PID 1 never reaches
  * reboot(). Run it in a child so the deadline is ours, not the kernel's. */
 static void bounded_sync(int secs) {
@@ -1951,19 +2018,26 @@ int main(int argc, char **argv) {
         if (services[i].child_pid > 0)
             kill(services[i].child_pid, SIGTERM);
     }
+    /* Containers do not hang off a .svc, so SIGTERM them here in the same
+     * grace window -- a clean stop lets Frigate flush frigate.db before the
+     * remount-ro below, instead of relying on the kill(-1) SIGKILL further on. */
+    container_cgroups_term();
     shut_log("SIGTERM sent");
     sleep(3);
     for (i = 0; i < svc_count; i++) {
         service_cgroup_kill(&services[i]);
     }
+    /* Recursively SIGKILL any container subtree that ignored the SIGTERM,
+     * before the kill(-1) backstop, so their files are released for remount. */
+    container_cgroups_kill();
     shut_log("cgroups killed");
 
     /* The cgroup sweep only reaches what a .svc owns. Containers live under
-     * the runtime's own cgroup, not docker.svc's, so they survive it holding
-     * files open -- on 2026-07-26 Frigate kept frigate.db open on /mnt/extdrive
-     * and the remount-ro below returned EBUSY, leaving an ext4 journal the next
-     * boot had to replay. Kill whatever is left. Linux exempts PID 1 from
-     * kill(-1), so this cannot hit us. */
+     * the runtime's own cgroup, not docker.svc's (handled just above now), so
+     * anything still left -- on 2026-07-26 Frigate kept frigate.db open on
+     * /mnt/extdrive and the remount-ro below returned EBUSY, leaving an ext4
+     * journal the next boot had to replay. Kill whatever remains. Linux exempts
+     * PID 1 from kill(-1), so this cannot hit us. */
     kill(-1, SIGKILL);
     sleep(1);
     while (waitpid(-1, NULL, WNOHANG) > 0)
