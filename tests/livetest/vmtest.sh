@@ -155,6 +155,32 @@ echo "RAIL-LOG: $RAIL"
 grep -E 'timer-fire|start-timeout|oneshot-done' "$RAIL" 2>&1 | while read -r l; do
     echo "RAIL| $l"   # prefix so the assertion cannot match the console's own copy
 done
+echo "===== NOFILE-TEST ====="
+# PID 1 must raise its OWN soft limit to the hard one, and children must get
+# the original soft limit back -- a raised soft NOFILE breaks select()/fd_set.
+set -- $(grep 'Max open files' /proc/1/limits)
+P_SOFT=$4; P_HARD=$5
+echo "PID1-NOFILE: soft=$P_SOFT hard=$P_HARD"
+# Resolve a supervised child HERE -- ISO_PID is not computed until the cpuset
+# section below, and reading it early made the child assertion compare two
+# empty strings and pass vacuously.
+NOFILE_PID=$(head -1 /sys/fs/cgroup/schema-init/test-iso/cgroup.procs 2>/dev/null)
+set -- $(grep 'Max open files' /proc/$NOFILE_PID/limits 2>/dev/null)
+C_SOFT=$4; C_HARD=$5
+echo "CHILD-NOFILE: pid=$NOFILE_PID soft=$C_SOFT hard=$C_HARD"
+if [ -z "$C_SOFT" ]; then
+    echo "NOFILE-CHILD: FAIL (could not read a child's limits)"
+elif [ "$C_SOFT" != "$P_SOFT" ]; then
+    echo "NOFILE-CHILD: PASS (child kept the original soft $C_SOFT)"
+else
+    echo "NOFILE-CHILD: FAIL (child inherited the raised soft $C_SOFT)"
+fi
+if [ "$P_SOFT" = "$P_HARD" ]; then
+    echo "NOFILE-PID1: PASS (soft raised to hard)"
+else
+    echo "NOFILE-PID1: FAIL (soft $P_SOFT != hard $P_HARD)"
+fi
+echo "===== NOFILE-END ====="
 echo "===== RELOAD-REFIRE-TEST ====="
 # SIGHUP to PID 1 is the reload path (init.c calls handle_reload from the
 # signal drain), which is what schema-ctl reload asks for over the socket.
@@ -235,6 +261,9 @@ grep -Eq "RAIL\| .*test-hang .*start-timeout" "$SERIAL" || { echo "  MISS: rail.
 # A completed run-once boot timer must stay terminal across a reload.
 grep -Eq "RUNONCE-BEFORE: 1"   "$SERIAL" || { echo "  MISS: run-once boot timer never fired"; pass=0; }
 grep -Eq "RELOAD-REFIRE: PASS" "$SERIAL" || { echo "  MISS: reload re-fired a completed run-once timer"; pass=0; }
+# PID 1 raises its own NOFILE; children must not inherit the raised soft limit.
+grep -Eq "NOFILE-PID1: PASS"  "$SERIAL" || { echo "  MISS: PID 1 did not raise its own RLIMIT_NOFILE"; pass=0; }
+grep -Eq "NOFILE-CHILD: PASS" "$SERIAL" || { echo "  MISS: child inherited PID 1's raised NOFILE soft limit"; pass=0; }
 grep -Eq "iso-partition: isolated"                  "$SERIAL" || { echo "  MISS: iso partition not isolated"; pass=0; }
 grep -Eq "iso-affinity:.*Cpus_allowed_list:[[:space:]]*3" "$SERIAL" || { echo "  MISS: iso affinity != core 3"; pass=0; }
 grep -Eq "root-partition: root"                     "$SERIAL" || { echo "  MISS: root variant did not form partition"; pass=0; }

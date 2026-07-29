@@ -129,4 +129,11 @@ int services_check_cycles(service_t *table, int count);
 /* call between fork() and exec() in every child: clear the inherited mask */
 void service_reset_child_sigmask(void);
 
+/* call once, early in PID 1: raise our own soft RLIMIT_NOFILE to the hard one */
+void service_raise_pid1_nofile(void);
+
+/* call between fork() and exec(): give the child back PID 1's original soft
+ * NOFILE, so nothing inherits a raised limit that breaks select() */
+void service_restore_child_nofile(void);
+
 #endif

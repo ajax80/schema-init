@@ -27,6 +27,46 @@ void service_reset_child_sigmask(void) {
     sigprocmask(SIG_SETMASK, &empty, NULL);
 }
 
+/* The soft RLIMIT_NOFILE PID 1 was handed by the kernel, before we raise it.
+ * Zero until service_raise_pid1_nofile() has run. */
+static rlim_t nofile_soft_at_boot = 0;
+
+/* PID 1 inherits the kernel default -- 1024 soft against a 4096 hard limit on
+ * blakbox. PID 1 itself needs almost none of that (5 open at 49 services,
+ * because a service's log fd is opened in the CHILD before exec, not held
+ * here), so this is not about capacity. It is about surviving a leak: the
+ * control-socket accept path reached EMFILE once already, and at that point
+ * PID 1 can no longer open a log, accept a client, or spawn anything -- with
+ * no supervisor above it to recover. Raising soft to the hard limit costs
+ * nothing and buys 4x the runway.
+ *
+ * Only the soft limit moves, and only for PID 1: see
+ * service_restore_child_nofile(). */
+void service_raise_pid1_nofile(void) {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return;
+    nofile_soft_at_boot = rl.rlim_cur;
+    if (rl.rlim_cur >= rl.rlim_max) return;
+    rl.rlim_cur = rl.rlim_max;
+    if (setrlimit(RLIMIT_NOFILE, &rl) != 0)
+        fprintf(stderr, "schema-init: could not raise RLIMIT_NOFILE: %s\n",
+                strerror(errno));
+}
+
+/* Hand children back the soft limit PID 1 started with, between fork and exec.
+ * Limits are inherited, and a raised soft NOFILE is not a free gift: anything
+ * still using select()/fd_set breaks on a descriptor >= FD_SETSIZE (1024), and
+ * it fails by corrupting the caller's stack rather than returning an error.
+ * systemd keeps a low soft limit and a high hard limit for exactly this
+ * reason; a service that wants more can raise its own. */
+void service_restore_child_nofile(void) {
+    struct rlimit rl;
+    if (nofile_soft_at_boot == 0) return;
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0) return;
+    rl.rlim_cur = nofile_soft_at_boot;
+    setrlimit(RLIMIT_NOFILE, &rl);
+}
+
 /* ── F8: can we spawn this right now? ──────────────────────────────── */
 
 static long free_mem_kb(void) {
@@ -325,6 +365,7 @@ int service_spawn(service_t *svc) {
     if (pid == 0) {
         char c;
         service_reset_child_sigmask();
+        service_restore_child_nofile();
         setsid();
         close(sync[1]);
         read(sync[0], &c, 1);
