@@ -305,18 +305,6 @@ def manager_boot_timestamps():
     }
 
 
-def manager_environment():
-    """PID 1's environment block as KEY=val strings — the schema-init analog of
-    systemd's Manager.Environment (the env handed to spawned services)."""
-    try:
-        with open('/proc/1/environ', 'rb') as f:
-            raw = f.read()
-        items = [p.decode('utf-8', 'replace') for p in raw.split(b'\x00') if p]
-        return dbus.Array([dbus.String(i) for i in items], signature='s')
-    except Exception:
-        return dbus.Array([], signature='s')
-
-
 class Systemd1Manager(dbus.service.Object):
     def __init__(self, bus):
         dbus.service.Object.__init__(self, bus, '/org/freedesktop/systemd1')
@@ -327,6 +315,12 @@ class Systemd1Manager(dbus.service.Object):
         self._last_poll = 0.0
         self._poll_cache_sec = 0.8
         self._priv_server = None
+        # Overlay on PID 1's environment for SetEnvironment/UnsetEnvironment.
+        # schema-init is the real spawner and we cannot mutate /proc/1/environ,
+        # so this only affects what the Environment property reads back -- but
+        # accepting the calls is what stops the UnknownMethod tracebacks.
+        self.env_set = {}
+        self.env_unset = set()
         self.poll_and_update()
         print("systemd1: Registered Manager at /org/freedesktop/systemd1")
 
@@ -656,6 +650,49 @@ class Systemd1Manager(dbus.service.Object):
         except Exception as e:
             print(f"systemd1: schema-ctl reload failed: {e}", file=sys.stderr)
 
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='as', out_signature='')
+    def SetEnvironment(self, assignments):
+        for a in assignments:
+            if '=' not in a:
+                continue
+            k, v = str(a).split('=', 1)
+            self.env_set[k] = v
+            self.env_unset.discard(k)
+        print(f"systemd1: SetEnvironment({list(assignments)})")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='as', out_signature='')
+    def UnsetEnvironment(self, names):
+        for n in names:
+            k = str(n).split('=', 1)[0]
+            self.env_set.pop(k, None)
+            self.env_unset.add(k)
+        print(f"systemd1: UnsetEnvironment({list(names)})")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asas', out_signature='')
+    def UnsetAndSetEnvironment(self, unset, assignments):
+        self.UnsetEnvironment(unset)
+        self.SetEnvironment(assignments)
+
+    def _effective_environment(self):
+        base = {}
+        try:
+            with open('/proc/1/environ', 'rb') as f:
+                raw = f.read()
+            for p in raw.split(b'\x00'):
+                if not p:
+                    continue
+                s = p.decode('utf-8', 'replace')
+                if '=' in s:
+                    k, v = s.split('=', 1)
+                    base[k] = v
+        except Exception:
+            pass
+        for k in self.env_unset:
+            base.pop(k, None)
+        base.update(self.env_set)
+        return dbus.Array([dbus.String(f"{k}={v}") for k, v in base.items()],
+                          signature='s')
+
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
         props = self.GetAll(interface_name)
@@ -676,7 +713,7 @@ class Systemd1Manager(dbus.service.Object):
                 # back, so clients don't try APIs we deliberately don't implement.
                 'Features': dbus.String(''),
                 'Architecture': dbus.String('x86-64'),
-                'Environment': manager_environment(),
+                'Environment': self._effective_environment(),
             }
             props.update(manager_boot_timestamps())
             return props
