@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "caps.h"
 #include <string.h>
 #include <errno.h>

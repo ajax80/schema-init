@@ -945,6 +945,7 @@ int service_load_one(const char *path, service_t *svc) {
             if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
                 fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
                         svc->name, val);
+                fclose(f);
                 return -1;
             }
             svc->cap_restrict = 1;
