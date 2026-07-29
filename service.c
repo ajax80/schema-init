@@ -1,4 +1,5 @@
 #include "service.h"
+#include "caps.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -335,6 +336,24 @@ static void cgroup_apply_limits(service_t *svc) {
     }
 }
 
+int service_apply_hardening(const service_t *svc) {
+    if (svc->cap_restrict) {
+        if (apply_capabilities(svc->cap_keep_mask) != 0) {
+            dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
+                    svc->name, errno);
+            return -1;
+        }
+    }
+    if (svc->flags & SVC_NO_NEW_PRIVS) {
+        if (apply_no_new_privs() != 0) {
+            dprintf(2, "[schema-init] HARDENING FAILED for %s: no_new_privs: %d\n",
+                    svc->name, errno);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -408,6 +427,8 @@ int service_spawn(service_t *svc) {
                 fprintf(stderr, "[schema-init] Warning: failed to set peripheral priority for %s: %s\n", svc->name, strerror(errno));
             }
         }
+        if (service_apply_hardening(svc) != 0)
+            _exit(126);
         if (svc->run_uid) {
             char xdg[48];
             snprintf(xdg, sizeof(xdg), "/run/user/%u", (unsigned)svc->run_uid);
@@ -918,6 +939,16 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_ONESHOT;
         else if (strcmp(line, "needs_root") == 0 && atoi(val))
             svc->flags |= SVC_NEEDS_ROOT;
+        else if (strcmp(line, "no_new_privs") == 0 && atoi(val))
+            svc->flags |= SVC_NO_NEW_PRIVS;
+        else if (strcmp(line, "keep_caps") == 0) {
+            if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
+                fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
+                        svc->name, val);
+                return -1;
+            }
+            svc->cap_restrict = 1;
+        }
         else if (strcmp(line, "critical") == 0 && atoi(val))
             svc->flags |= SVC_CRITICAL;
         else if (strcmp(line, "no_restart") == 0 && atoi(val))
