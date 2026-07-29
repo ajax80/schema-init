@@ -435,9 +435,21 @@ int service_spawn(service_t *svc) {
             mkdir(xdg, 0700);
             chown(xdg, svc->run_uid, svc->run_gid);
             setenv("XDG_RUNTIME_DIR", xdg, 1);
-            initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid);
-            setgid(svc->run_gid);
-            setuid(svc->run_uid);
+            if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: initgroups: %d\n",
+                        svc->name, errno);
+                _exit(126);
+            }
+            if (setgid(svc->run_gid) != 0) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: setgid: %d\n",
+                        svc->name, errno);
+                _exit(126);
+            }
+            if (setuid(svc->run_uid) != 0) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: setuid: %d\n",
+                        svc->name, errno);
+                _exit(126);
+            }
         }
         execv(svc->exec, svc->argv);
         _exit(127);
@@ -767,7 +779,7 @@ int services_load(const char *dir, service_t *table, int max) {
             else if (strcmp(line, "keep_caps") == 0) {
                 if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
                     fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
-                            svc->name, val);
+                            svc->name[0] ? svc->name : path, val);
                     bad = 1;
                     break;
                 }
@@ -959,7 +971,7 @@ int service_load_one(const char *path, service_t *svc) {
         else if (strcmp(line, "keep_caps") == 0) {
             if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
                 fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
-                        svc->name, val);
+                        svc->name[0] ? svc->name : path, val);
                 fclose(f);
                 return -1;
             }
