@@ -37,6 +37,25 @@ def get_os_release_val(key):
         pass
     return ""
 
+def _valid_hostname(name):
+    if len(name) > 64:
+        return False
+    return all(c.isalnum() or c in '-._' for c in name)
+
+def _update_machine_info(key, value):
+    lines = []
+    try:
+        with open('/etc/machine-info', 'r') as f:
+            lines = [l for l in f if not l.startswith(key + '=')]
+    except FileNotFoundError:
+        pass
+    if value:
+        lines.append('%s=%s\n' % (key, value))
+    tmp = '/etc/machine-info.new'
+    with open(tmp, 'w') as f:
+        f.writelines(lines)
+    os.replace(tmp, '/etc/machine-info')
+
 def get_active_uid():
     # SECURITY: resolve the active-session uid ONLY from root-created
     # /run/user/<uid> entries. Do NOT derive it from /proc/<pid>/environ
@@ -1943,6 +1962,71 @@ class Hostname1(dbus.service.Object):
                 'FirmwareVersion': dbus.String(firmware),
             }
         return {}
+
+    # SetHostname is the transient (kernel) name; SetStaticHostname persists to
+    # /etc/hostname; the rest live in /etc/machine-info. KDE's hostname panel and
+    # nm-dispatcher call these in sequence, so implementing only SetHostname just
+    # moves the UnknownMethod traceback to the next call.
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
+    def SetHostname(self, hostname, interactive):
+        if hostname and not _valid_hostname(hostname):
+            raise dbus.exceptions.DBusException(
+                'Invalid hostname: ' + hostname,
+                name='org.freedesktop.DBus.Error.InvalidArgs')
+        try:
+            socket.sethostname(hostname or 'localhost')
+        except OSError as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.hostname1.Error.Failed')
+
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
+    def SetStaticHostname(self, hostname, interactive):
+        if hostname and not _valid_hostname(hostname):
+            raise dbus.exceptions.DBusException(
+                'Invalid hostname: ' + hostname,
+                name='org.freedesktop.DBus.Error.InvalidArgs')
+        try:
+            if hostname:
+                tmp = '/etc/hostname.new'
+                with open(tmp, 'w') as f:
+                    f.write(hostname + '\n')
+                os.replace(tmp, '/etc/hostname')
+                socket.sethostname(hostname)
+            else:
+                try:
+                    os.remove('/etc/hostname')
+                except FileNotFoundError:
+                    pass
+        except OSError as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.hostname1.Error.Failed')
+
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
+    def SetPrettyHostname(self, hostname, interactive):
+        self._set_machine_info('PRETTY_HOSTNAME', hostname)
+
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
+    def SetIconName(self, icon, interactive):
+        self._set_machine_info('ICON_NAME', icon)
+
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
+    def SetChassis(self, chassis, interactive):
+        self._set_machine_info('CHASSIS', chassis)
+
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
+    def SetDeployment(self, deployment, interactive):
+        self._set_machine_info('DEPLOYMENT', deployment)
+
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
+    def SetLocation(self, location, interactive):
+        self._set_machine_info('LOCATION', location)
+
+    def _set_machine_info(self, key, value):
+        try:
+            _update_machine_info(key, value)
+        except OSError as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.hostname1.Error.Failed')
 
 class ConsoleKitSession(dbus.service.Object):
     def __init__(self, bus, uid=1000):
