@@ -130,11 +130,13 @@ cp "$REPO"/distros/fedora-kde/scripts/sddm-logged \
    "$REPO"/distros/fedora-kde/scripts/sound-modules.sh \
    "$REPO"/distros/fedora-kde/scripts/schema-audio-start.sh \
    "$REPO"/distros/fedora-kde/scripts/schema-udev-trigger.sh \
+   "$REPO"/distros/fedora-kde/scripts/schema-hostname.sh \
    "$MNT/usr/local/bin/"
 chmod +x "$MNT/usr/local/bin/sddm-logged" \
           "$MNT/usr/local/bin/sound-modules.sh" \
           "$MNT/usr/local/bin/schema-audio-start.sh" \
-          "$MNT/usr/local/bin/schema-udev-trigger.sh"
+          "$MNT/usr/local/bin/schema-udev-trigger.sh" \
+          "$MNT/usr/local/bin/schema-hostname.sh"
 
 printf "#!/bin/sh\n# live ISO: home is on rootfs, no separate mount needed\nexit 0\n" \
     > "$MNT/usr/local/bin/mount-home.sh"
