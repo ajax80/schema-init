@@ -52,6 +52,78 @@ def svc_name(unit):
             return unit[:-len(suffix)]
     return unit
 
+class UnknownUnitFallback(dbus.service.FallbackObject):
+    """Answers Properties on unit paths we do not manage.
+
+    systemctl builds the unit object path CLIENT-SIDE and calls
+    Properties.Get on it directly -- it never asks GetUnit first. So for a
+    unit schema-init does not run, there was no object at that path and
+    dbus-python replied
+        Method "Get" with signature "ss" ... doesn't exist
+    which is what `systemctl is-active psacct` and NetworkManager's
+    nm_dispatcher have been logging all along. Fixing GetUnit alone does not
+    touch this path.
+
+    A dbus.service.FallbackObject serves its whole subtree -- NOT
+    Object(..., fallback=True), which is not a kwarg this dbus-python accepts
+    and raises TypeError at construction. It covers
+    /org/freedesktop/systemd1/unit EXCEPT the exact paths real units occupy;
+    dbus-python prefers the more specific registration. Reports what
+    systemd reports for a unit that is not loaded: LoadState=not-found,
+    ActiveState=inactive. `systemctl is-active` then prints "inactive" and
+    exits non-zero, which is a real answer instead of an error.
+    """
+
+    def __init__(self, bus):
+        dbus.service.FallbackObject.__init__(
+            self, bus, '/org/freedesktop/systemd1/unit')
+
+    def _name_from_path(self, path):
+        leaf = str(path).rsplit('/', 1)[-1]
+        return unescape_unit_name(leaf) if leaf else 'unknown.service'
+
+    def _props(self, path):
+        name = self._name_from_path(path)
+        return {
+            'Id': dbus.String(name),
+            'Names': dbus.Array([dbus.String(name)], signature='s'),
+            'Description': dbus.String(name),
+            'LoadState': dbus.String('not-found'),
+            'ActiveState': dbus.String('inactive'),
+            'SubState': dbus.String('dead'),
+            'UnitFileState': dbus.String(''),
+            'LoadError': dbus.Struct(
+                (dbus.String('org.freedesktop.systemd1.NoSuchUnit'),
+                 dbus.String('Unit %s not found.' % name)), signature='ss'),
+            'Job': dbus.Struct((dbus.UInt32(0), dbus.ObjectPath('/')), signature='uo'),
+            'CanStart': dbus.Boolean(False),
+            'CanStop': dbus.Boolean(False),
+            'CanReload': dbus.Boolean(False),
+            'CanRestart': dbus.Boolean(False),
+            'ActiveEnterTimestamp': dbus.UInt64(0),
+            'MainPID': dbus.UInt32(0),
+            'ExecMainPID': dbus.UInt32(0),
+            'NRestarts': dbus.UInt32(0),
+            'Result': dbus.String('success'),
+            'Type': dbus.String('simple'),
+        }
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss',
+                         out_signature='v', path_keyword='path')
+    def Get(self, interface_name, property_name, path=None):
+        props = self._props(path)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s',
+                         out_signature='a{sv}', path_keyword='path')
+    def GetAll(self, interface_name, path=None):
+        return self._props(path)
+
+
 class Systemd1Unit(dbus.service.Object):
     def __init__(self, bus, name, status_dict, manager):
         self.name = name  # e.g., 'frigate.service'
@@ -65,8 +137,30 @@ class Systemd1Unit(dbus.service.Object):
         self.update_state(status_dict)
         print(f"systemd1: Registered Unit {self.name} at {self.path}")
 
+    def _read_can_reload(self):
+        """reload=1 in the .svc opts a service into ReloadUnit (SIGHUP).
+
+        Cached: this is read per unit and update_state runs on every poll.
+        A service that does not handle SIGHUP dies on it, so reload is never
+        assumed from the mere existence of a pid.
+        """
+        if hasattr(self, 'can_reload'):
+            return self.can_reload
+        self.can_reload = False
+        try:
+            with open('/etc/schema-init/services/%s.svc' % self.short_name) as f:
+                for line in f:
+                    line = line.strip()
+                    if line in ('reload=1', 'reload=yes'):
+                        self.can_reload = True
+                        break
+        except OSError:
+            pass
+        return self.can_reload
+
     def update_state(self, status_dict):
         prev_active = getattr(self, 'active_state', None)
+        self._read_can_reload()
         self.pid = status_dict.get('pid', 0)
         self.raw_state = status_dict.get('state', 'UNKNOWN')
         self.restarts = status_dict.get('restarts', 0)
@@ -135,7 +229,7 @@ class Systemd1Unit(dbus.service.Object):
             'Job': dbus.Struct((dbus.UInt32(0), dbus.ObjectPath('/')), signature='uo'),
             'CanStart': dbus.Boolean(True),
             'CanStop': dbus.Boolean(True),
-            'CanReload': dbus.Boolean(False),
+            'CanReload': dbus.Boolean(self.can_reload),
             'CanRestart': dbus.Boolean(True),
         }
 
@@ -373,8 +467,17 @@ class Systemd1Manager(dbus.service.Object):
         self.poll_and_update()
         if name in self.units:
             return dbus.ObjectPath(self.units[name].path)
-        escaped = escape_unit_name(name)
-        return dbus.ObjectPath(f'/org/freedesktop/systemd1/unit/{escaped}')
+        # Real logind raises NoSuchUnit here. Handing back a synthesised path
+        # for a unit we do not manage was actively worse than an error: no
+        # D-Bus object is registered there, so the caller's very next
+        # Properties.Get lands on nothing and dbus-python answers
+        #   Method "Get" with signature "ss" ... doesn't exist
+        # which reads like a broken shim rather than "no such unit". That is
+        # exactly what `systemctl is-active psacct` and NetworkManager's
+        # nm_dispatcher were hitting.
+        raise dbus.exceptions.DBusException(
+            "Unit %s not loaded." % name,
+            name='org.freedesktop.systemd1.NoSuchUnit')
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='s', out_signature='o')
     def LoadUnit(self, name):
@@ -454,6 +557,46 @@ class Systemd1Manager(dbus.service.Object):
         if self._is_active(str(name)):
             schema_ctl('restart', svc_name(str(name)))
         return self._trigger_job_signals(str(name))
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
+    def ReloadUnit(self, name, mode):
+        """SIGHUP the service's own pid — the reopen/reload signal daemons expect.
+
+        This is what logrotate's postrotate hooks call: rsyslog reopens its
+        files on SIGHUP, and without it a renamed log means the daemon keeps
+        writing to the rotated inode forever. Missing entirely before this, so
+        every caller got a full dbus-python traceback instead of an answer.
+
+        NOT a restart. Reload is only offered for a unit that is actually
+        running, and a service that does not handle SIGHUP would die -- so
+        this stays opt-in via reload=1 in the .svc rather than being applied
+        to anything with a pid. Real systemd makes the same distinction with
+        ExecReload=; CanReload reports it per unit.
+        """
+        name = str(name)
+        print(f"systemd1: ReloadUnit({name}, {mode})")
+        self.poll_and_update()
+        unit = self.units.get(name)
+        if unit is None:
+            raise dbus.exceptions.DBusException(
+                "Unit %s not loaded." % name,
+                name='org.freedesktop.systemd1.NoSuchUnit')
+        if not unit.can_reload:
+            raise dbus.exceptions.DBusException(
+                "Unit %s does not support reload; set reload=1 in its .svc "
+                "if the service reopens on SIGHUP." % name,
+                name='org.freedesktop.systemd1.NoSuchUnit')
+        if not unit.pid:
+            raise dbus.exceptions.DBusException(
+                "Unit %s is not running." % name,
+                name='org.freedesktop.systemd1.NoSuchUnit')
+        try:
+            os.kill(unit.pid, signal.SIGHUP)
+        except OSError as e:
+            raise dbus.exceptions.DBusException(
+                "Could not signal %s (pid %d): %s" % (name, unit.pid, e),
+                name='org.freedesktop.systemd1.NoSuchUnit')
+        return self._trigger_job_signals(name)
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
     def ReloadOrRestartUnit(self, name, mode):
@@ -604,6 +747,9 @@ def main():
         sys.exit(1)
 
     manager = Systemd1Manager(bus)
+    # Registered AFTER the manager so real units, which register at exact
+    # paths, keep winning the dispatch; this only catches what is left.
+    unknown_units = UnknownUnitFallback(bus)
 
     try:
         bus.request_name('org.freedesktop.systemd1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
