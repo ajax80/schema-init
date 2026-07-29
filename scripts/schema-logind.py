@@ -43,6 +43,9 @@ def _valid_hostname(name):
     return all(c.isalnum() or c in '-._' for c in name)
 
 def _update_machine_info(key, value):
+    if value and any(c in value for c in '\r\n\0'):
+        raise dbus.exceptions.DBusException(
+            'Invalid value', name='org.freedesktop.DBus.Error.InvalidArgs')
     lines = []
     try:
         with open('/etc/machine-info', 'r') as f:
