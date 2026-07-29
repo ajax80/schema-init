@@ -1792,6 +1792,9 @@ int main(int argc, char **argv) {
     mount_pseudo();
     cleanup_tmp_locks();
     watchdog_init();
+    /* Before the control socket opens or a single service spawns, so the
+     * raised limit covers every descriptor PID 1 will ever hold. */
+    service_raise_pid1_nofile();
     setup_signals();
 
     svc_count = services_load(svc_dir, services, MAX_SERVICES);
