@@ -83,5 +83,25 @@ int parse_cap_list(const char *csv, uint64_t *mask) {
     return 0;
 }
 
-int apply_capabilities(uint64_t keep_mask) { (void)keep_mask; return 0; }  /* Task 2 */
-int apply_no_new_privs(void) { return 0; }                                 /* Task 2 */
+int apply_capabilities(uint64_t keep_mask) {
+    for (int c = 0; c < 64; c++) {
+        if (keep_mask & ((uint64_t)1 << c)) continue;
+        if (prctl(PR_CAPBSET_DROP, c, 0, 0, 0) != 0) {
+            if (errno == EINVAL) break;   /* past running kernel's max cap */
+            return -1;
+        }
+    }
+    struct __user_cap_header_struct hdr = { _LINUX_CAPABILITY_VERSION_3, 0 };
+    struct __user_cap_data_struct data[2];
+    memset(data, 0, sizeof(data));
+    data[0].permitted = data[0].effective = data[0].inheritable =
+        (uint32_t)(keep_mask & 0xffffffffu);
+    data[1].permitted = data[1].effective = data[1].inheritable =
+        (uint32_t)(keep_mask >> 32);
+    if (syscall(SYS_capset, &hdr, data) != 0) return -1;
+    return 0;
+}
+
+int apply_no_new_privs(void) {
+    return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0 ? 0 : -1;
+}
