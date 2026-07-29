@@ -1,0 +1,5 @@
+name=hostname
+exec=/usr/local/bin/schema-hostname.sh
+oneshot=1
+needs_root=1
+critical=0

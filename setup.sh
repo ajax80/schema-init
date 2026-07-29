@@ -182,6 +182,27 @@ oneshot=1
 critical=1
 EOF
 
+# --- HOSTNAME SERVICE ---
+# schema-init is PID 1 and, unlike systemd, does not apply /etc/hostname to the
+# kernel at boot, so the box comes up as localhost.localdomain no matter what
+# the file says. Apply it once, early.
+write_if_missing "$BIN_DIR/schema-hostname.sh" << 'EOF'
+#!/bin/sh
+[ -r /etc/hostname ] || exit 0
+hn=$(cat /etc/hostname)
+[ -n "$hn" ] && hostname "$hn"
+exit 0
+EOF
+chmod 755 "$BIN_DIR/schema-hostname.sh"
+
+write_if_missing "$SVC_DIR/hostname.svc" << 'EOF'
+name=hostname
+exec=/usr/local/bin/schema-hostname.sh
+oneshot=1
+needs_root=1
+critical=0
+EOF
+
 # --- DBUS SERVICE ---
 write_if_missing "$BIN_DIR/schema-dbus.sh" << 'EOF'
 #!/bin/sh
