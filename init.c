@@ -1399,7 +1399,25 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 shadow_services[i].timer_next    = services[j].timer_next;
                 shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;
 
-                
+                /* A run-once timer (on_boot_sec with no interval) marks itself
+                 * terminal by clearing SVC_TIMER when it completes. The shadow
+                 * is parsed fresh from the .svc, so it has the flag back, and
+                 * it just inherited the live timer_next -- a deadline already
+                 * in the past. The arm block at the end of this function only
+                 * touches timers whose timer_next is zero, so the shadow would
+                 * keep that expired deadline and fire on the very next tick.
+                 * Carry the terminal fact across instead. Without this, every
+                 * `schema-ctl reload` re-ran every completed boot timer:
+                 * boot-timing reached restarts=6 in one afternoon and wrote
+                 * six phantom rows into boot-history.csv, all claiming the
+                 * same boot. */
+                if ((shadow_services[i].flags & SVC_TIMER) &&
+                    !(services[j].flags & SVC_TIMER) &&
+                    !(shadow_services[i].flags & SVC_TIMER_CALENDAR) &&
+                    shadow_services[i].timer_interval_sec <= 0) {
+                    shadow_services[i].flags &= ~SVC_TIMER;
+                }
+
                 /* clear live service state so we don't accidentally treat it as running/managed */
                 services[j].child_pid = 0;
                 services[j].failsafe_pid = 0;
