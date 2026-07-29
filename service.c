@@ -735,8 +735,10 @@ int services_load(const char *dir, service_t *table, int max) {
         svc->max_restarts = MAX_RESTARTS;
         svc->timer_cal_hour = -1;
         int dep_slot = 0;
+        int bad = 0;
 
         argc = 0;
+        /* NOTE: keep in sync with service_load_one parse chain */
         while (fgets(line, sizeof(line), f)) {
             char *eq = strchr(line, '=');
             char *val;
@@ -760,6 +762,17 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_ONESHOT;
             else if (strcmp(line, "needs_root") == 0 && atoi(val))
                 svc->flags |= SVC_NEEDS_ROOT;
+            else if (strcmp(line, "no_new_privs") == 0 && atoi(val))
+                svc->flags |= SVC_NO_NEW_PRIVS;
+            else if (strcmp(line, "keep_caps") == 0) {
+                if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
+                    fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
+                            svc->name, val);
+                    bad = 1;
+                    break;
+                }
+                svc->cap_restrict = 1;
+            }
             else if (strcmp(line, "critical") == 0 && atoi(val))
                 svc->flags |= SVC_CRITICAL;
             else if (strcmp(line, "no_restart") == 0 && atoi(val))
@@ -823,6 +836,7 @@ int services_load(const char *dir, service_t *table, int max) {
                 }
             }
         }
+        if (bad) { fclose(f); continue; }
         fclose(f);
         if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
             fprintf(stderr,
@@ -917,6 +931,7 @@ int service_load_one(const char *path, service_t *svc) {
     argc = 0;
     dep_slot = 0;
 
+    /* NOTE: keep in sync with services_load parse chain */
     while (fgets(line, sizeof(line), f)) {
         char *eq = strchr(line, '=');
         char *val;
