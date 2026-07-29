@@ -1081,6 +1081,17 @@ class Login1Session(dbus.service.Object):
         print("login1-stub: Session.ReleaseControl() requested")
         self._teardown_vt_mediation()
 
+    # Compat: KDE/loginctl call these on logout / session setup. schema-init
+    # owns session lifecycle, so Terminate is a logged no-op (never tear down
+    # the live session answering the call); SetType just records intent.
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
+    def Terminate(self):
+        print("login1-stub: Session.Terminate() (no-op; not managed here)")
+
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='s', out_signature='')
+    def SetType(self, type_):
+        print(f"login1-stub: Session.SetType({type_}) (no-op)")
+
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='hb',
                          sender_keyword='sender')
     def TakeDevice(self, major, minor, sender=None):
@@ -1527,6 +1538,16 @@ class Login1Seat(dbus.service.Object):
             raise dbus.exceptions.DBusException(
                 f"VT_ACTIVATE({vtnr}) failed",
                 name='org.freedesktop.login1.FailedToSwitch')
+
+    # Compat: single-seat box, so Seat.ActivateSession is a true no-op (the one
+    # session is always active) and Terminate is a logged no-op.
+    @dbus.service.method('org.freedesktop.login1.Seat', in_signature='s', out_signature='')
+    def ActivateSession(self, session_id):
+        print(f"login1-stub: Seat.ActivateSession({session_id}) (no-op; single seat)")
+
+    @dbus.service.method('org.freedesktop.login1.Seat', in_signature='', out_signature='')
+    def Terminate(self):
+        print("login1-stub: Seat.Terminate() (no-op; not managed here)")
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
     def Get(self, interface_name, property_name):
