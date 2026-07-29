@@ -503,6 +503,54 @@ class Systemd1Manager(dbus.service.Object):
             return units
         return [u for u in units if u[3] in states]
 
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='as', out_signature='a(ssssssouso)')
+    def ListUnitsByNames(self, names):
+        want = {str(n) for n in names} | {svc_name(str(n)) for n in names}
+        return [u for u in self.ListUnits() if u[0] in want]
+
+    # Compat stubs: management verbs systemctl/KDE may issue that this shim does
+    # not faithfully back (schema-init owns unit lifecycle, not systemd). They
+    # return correctly-shaped replies so a caller sees a no-op, not a crash.
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='')
+    def ResetFailed(self):
+        print("systemd1: ResetFailed (no-op; schema-init auto-recovers)")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='s', out_signature='')
+    def ResetFailedUnit(self, name):
+        print(f"systemd1: ResetFailedUnit({name}) (no-op)")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ssi', out_signature='')
+    def KillUnit(self, name, whom, sig):
+        print(f"systemd1: KillUnit({name}, {whom}, {sig}) (no-op)")
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='s')
+    def GetDefaultTarget(self):
+        return dbus.String('graphical.target')
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='a(ss)')
+    def ListUnitFiles(self):
+        self.poll_and_update()
+        return [dbus.Struct((dbus.String(name), dbus.String('enabled')), signature='ss')
+                for name in self.units]
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asb', out_signature='a(sss)')
+    def UnmaskUnitFiles(self, names, runtime):
+        print(f"systemd1: UnmaskUnitFiles({list(names)})")
+        return []
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asbb', out_signature='ba(sss)')
+    def PresetUnitFiles(self, names, runtime, force):
+        print(f"systemd1: PresetUnitFiles({list(names)})")
+        return dbus.Boolean(True), []
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='a(usssoo)')
+    def ListJobs(self):
+        return []
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='u', out_signature='')
+    def CancelJob(self, job_id):
+        print(f"systemd1: CancelJob({job_id}) (no-op)")
+
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
     def StartUnit(self, name, mode):
         print(f"systemd1: StartUnit({name}, {mode})")
