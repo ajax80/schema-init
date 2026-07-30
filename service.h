@@ -23,6 +23,7 @@
 #define SVC_TIMER       (1 << 4)  /* periodic: re-arm to NEW_PROCESS on clock */
 #define SVC_TIMER_CALENDAR (1 << 5) /* timer_next is a CLOCK_REALTIME wall-clock target */
 #define SVC_TIMER_PERSIST  (1 << 6) /* persistent=1: catch up a calendar fire missed while down */
+#define SVC_NO_NEW_PRIVS   (1 << 7)  /* prctl(PR_SET_NO_NEW_PRIVS) in child   */
 
 typedef enum {
     PRIO_PERIPHERAL = 0,
@@ -83,6 +84,8 @@ typedef struct {
     int              allowed_slot_min; /* slot boundary gate: -1 = unconstrained */
     int              allowed_slot_max; /* slot boundary gate: -1 = unconstrained */
     uint32_t         content_hash;     /* FNV-1a hash of the parsed .svc file at load time */
+    uint64_t         cap_keep_mask;    /* keep_caps allowlist; bit N = CAP_N       */
+    uint8_t          cap_restrict;     /* 1 if keep_caps= was present in the .svc  */
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
@@ -106,6 +109,9 @@ uint32_t service_probe_f6(service_t *svc);
 
 /* fork+exec the service; sets child_pid and last_start */
 int service_spawn(service_t *svc);
+
+/* apply opt-in hardening in the child, before setuid/execv; -1 -> fail closed */
+int service_apply_hardening(const service_t *svc);
 
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);

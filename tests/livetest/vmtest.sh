@@ -97,6 +97,16 @@ exec=/bin/sleep
 args=600
 cpuset_partition=isolated
 EOF
+# Phase 1 service hardening: opt-in no_new_privs + keep_caps. Runs as a plain
+# root child (no run_uid), so this exercises the capset-on-a-root-service path.
+# keep_caps=CAP_NET_BIND_SERVICE (value 10) => CapBnd must collapse to 0x400.
+cat > "$ROOT/etc/schema-init/services/test-hardened.svc" <<'EOF'
+name=test-hardened
+exec=/bin/sleep
+args=600
+no_new_privs=1
+keep_caps=CAP_NET_BIND_SERVICE
+EOF
 
 cat > "$ROOT/etc/schema-init/services/docker-modules.svc" <<'EOF'
 name=docker-modules
@@ -210,6 +220,9 @@ echo "iso-affinity: $(grep Cpus_allowed_list /proc/$ISO_PID/status 2>&1)"
 # mask, the same shape as crond. PID 1 runs with SIGCHLD+SIGHUP blocked and the
 # mask survives exec, so this is where the inheritance shows up.
 echo "sigmask-child: $(grep SigBlk /proc/$ISO_PID/status 2>&1)"
+HARD_PID=$(head -1 /sys/fs/cgroup/schema-init/test-hardened/cgroup.procs 2>/dev/null)
+echo "hardened-nnp: $(grep NoNewPrivs /proc/$HARD_PID/status 2>&1)"
+echo "hardened-capbnd: $(grep CapBnd /proc/$HARD_PID/status 2>&1)"
 echo "root-partition: $(cat /sys/fs/cgroup/schema-init/test-root/cpuset.cpus.partition 2>&1)"
 echo "share-effective: $(cat /sys/fs/cgroup/schema-init/test-share/cpuset.cpus.effective 2>&1)"
 echo "iso2-partition: $(cat /sys/fs/cgroup/schema-init/test-iso2/cpuset.cpus.partition 2>&1)"
@@ -284,6 +297,11 @@ done
 grep -Eq "docker-sock:.*docker.sock"                "$SERIAL" || { echo "  MISS: docker.sock not found"; pass=0; }
 # no $ anchor: QEMU's serial line ends CRLF and the CR is part of the line.
 grep -Eq "sigmask-child:.*SigBlk:[[:space:]]*0{16}" "$SERIAL" || { echo "  MISS: child inherited PID 1's blocked signal mask (SIGCHLD) across exec"; pass=0; }
+# Phase 1 hardening: no_new_privs applied, and keep_caps=CAP_NET_BIND_SERVICE
+# collapsed the bounding set to exactly 0x400 (bit 10). Proves parse -> capbset
+# drop -> capset all ran correctly under real PID 1 on a root-staying child.
+grep -Eq "hardened-nnp:.*NoNewPrivs:[[:space:]]*1"          "$SERIAL" || { echo "  MISS: hardened service NoNewPrivs != 1"; pass=0; }
+grep -Eq "hardened-capbnd:.*CapBnd:[[:space:]]*0000000000000400" "$SERIAL" || { echo "  MISS: hardened CapBnd != CAP_NET_BIND_SERVICE only"; pass=0; }
 # Shutdown rail: every step must print, and PID 1 must reach reboot() itself.
 # A wedge here is the 2026-07-26 hang (unbounded sync never returned).
 for step in "SIGTERM sent" "cgroups killed" "control socket and shm released" \

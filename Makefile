@@ -21,7 +21,7 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c schema.c service.c group.c
+SRCS    = init.c schema.c service.c group.c caps.c
 OBJS    = $(SRCS:.c=.o)
 
 all: $(BINS)

@@ -1,4 +1,5 @@
 #include "service.h"
+#include "caps.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -335,6 +336,24 @@ static void cgroup_apply_limits(service_t *svc) {
     }
 }
 
+int service_apply_hardening(const service_t *svc) {
+    if (svc->cap_restrict) {
+        if (apply_capabilities(svc->cap_keep_mask) != 0) {
+            dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
+                    svc->name, errno);
+            return -1;
+        }
+    }
+    if (svc->flags & SVC_NO_NEW_PRIVS) {
+        if (apply_no_new_privs() != 0) {
+            dprintf(2, "[schema-init] HARDENING FAILED for %s: no_new_privs: %d\n",
+                    svc->name, errno);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -408,15 +427,29 @@ int service_spawn(service_t *svc) {
                 fprintf(stderr, "[schema-init] Warning: failed to set peripheral priority for %s: %s\n", svc->name, strerror(errno));
             }
         }
+        if (service_apply_hardening(svc) != 0)
+            _exit(126);
         if (svc->run_uid) {
             char xdg[48];
             snprintf(xdg, sizeof(xdg), "/run/user/%u", (unsigned)svc->run_uid);
             mkdir(xdg, 0700);
             chown(xdg, svc->run_uid, svc->run_gid);
             setenv("XDG_RUNTIME_DIR", xdg, 1);
-            initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid);
-            setgid(svc->run_gid);
-            setuid(svc->run_uid);
+            if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: initgroups: %d\n",
+                        svc->name, errno);
+                _exit(126);
+            }
+            if (setgid(svc->run_gid) != 0) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: setgid: %d\n",
+                        svc->name, errno);
+                _exit(126);
+            }
+            if (setuid(svc->run_uid) != 0) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: setuid: %d\n",
+                        svc->name, errno);
+                _exit(126);
+            }
         }
         execv(svc->exec, svc->argv);
         _exit(127);
@@ -714,8 +747,10 @@ int services_load(const char *dir, service_t *table, int max) {
         svc->max_restarts = MAX_RESTARTS;
         svc->timer_cal_hour = -1;
         int dep_slot = 0;
+        int bad = 0;
 
         argc = 0;
+        /* NOTE: keep in sync with service_load_one parse chain */
         while (fgets(line, sizeof(line), f)) {
             char *eq = strchr(line, '=');
             char *val;
@@ -739,6 +774,17 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_ONESHOT;
             else if (strcmp(line, "needs_root") == 0 && atoi(val))
                 svc->flags |= SVC_NEEDS_ROOT;
+            else if (strcmp(line, "no_new_privs") == 0 && atoi(val))
+                svc->flags |= SVC_NO_NEW_PRIVS;
+            else if (strcmp(line, "keep_caps") == 0) {
+                if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
+                    fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
+                            svc->name[0] ? svc->name : path, val);
+                    bad = 1;
+                    break;
+                }
+                svc->cap_restrict = 1;
+            }
             else if (strcmp(line, "critical") == 0 && atoi(val))
                 svc->flags |= SVC_CRITICAL;
             else if (strcmp(line, "no_restart") == 0 && atoi(val))
@@ -802,6 +848,7 @@ int services_load(const char *dir, service_t *table, int max) {
                 }
             }
         }
+        if (bad) { fclose(f); continue; }
         fclose(f);
         if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
             fprintf(stderr,
@@ -896,6 +943,7 @@ int service_load_one(const char *path, service_t *svc) {
     argc = 0;
     dep_slot = 0;
 
+    /* NOTE: keep in sync with services_load parse chain */
     while (fgets(line, sizeof(line), f)) {
         char *eq = strchr(line, '=');
         char *val;
@@ -918,6 +966,17 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_ONESHOT;
         else if (strcmp(line, "needs_root") == 0 && atoi(val))
             svc->flags |= SVC_NEEDS_ROOT;
+        else if (strcmp(line, "no_new_privs") == 0 && atoi(val))
+            svc->flags |= SVC_NO_NEW_PRIVS;
+        else if (strcmp(line, "keep_caps") == 0) {
+            if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
+                fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
+                        svc->name[0] ? svc->name : path, val);
+                fclose(f);
+                return -1;
+            }
+            svc->cap_restrict = 1;
+        }
         else if (strcmp(line, "critical") == 0 && atoi(val))
             svc->flags |= SVC_CRITICAL;
         else if (strcmp(line, "no_restart") == 0 && atoi(val))
