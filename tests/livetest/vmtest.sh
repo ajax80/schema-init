@@ -108,6 +108,16 @@ no_new_privs=1
 keep_caps=CAP_NET_BIND_SERVICE
 EOF
 
+# chrony live-pilot flavor: same mechanism, but keep_caps=CAP_SYS_TIME (value 25)
+# => CapBnd must collapse to exactly 0x2000000. This is chrony's real profile.
+cat > "$ROOT/etc/schema-init/services/test-chrony.svc" <<'EOF'
+name=test-chrony
+exec=/bin/sleep
+args=600
+no_new_privs=1
+keep_caps=CAP_SYS_TIME
+EOF
+
 cat > "$ROOT/etc/schema-init/services/docker-modules.svc" <<'EOF'
 name=docker-modules
 exec=/usr/local/bin/docker-modules.sh
@@ -223,6 +233,9 @@ echo "sigmask-child: $(grep SigBlk /proc/$ISO_PID/status 2>&1)"
 HARD_PID=$(head -1 /sys/fs/cgroup/schema-init/test-hardened/cgroup.procs 2>/dev/null)
 echo "hardened-nnp: $(grep NoNewPrivs /proc/$HARD_PID/status 2>&1)"
 echo "hardened-capbnd: $(grep CapBnd /proc/$HARD_PID/status 2>&1)"
+CHRONY_PID=$(head -1 /sys/fs/cgroup/schema-init/test-chrony/cgroup.procs 2>/dev/null)
+echo "chrony-nnp: $(grep NoNewPrivs /proc/$CHRONY_PID/status 2>&1)"
+echo "chrony-capbnd: $(grep CapBnd /proc/$CHRONY_PID/status 2>&1)"
 echo "root-partition: $(cat /sys/fs/cgroup/schema-init/test-root/cpuset.cpus.partition 2>&1)"
 echo "share-effective: $(cat /sys/fs/cgroup/schema-init/test-share/cpuset.cpus.effective 2>&1)"
 echo "iso2-partition: $(cat /sys/fs/cgroup/schema-init/test-iso2/cpuset.cpus.partition 2>&1)"
@@ -302,6 +315,10 @@ grep -Eq "sigmask-child:.*SigBlk:[[:space:]]*0{16}" "$SERIAL" || { echo "  MISS:
 # drop -> capset all ran correctly under real PID 1 on a root-staying child.
 grep -Eq "hardened-nnp:.*NoNewPrivs:[[:space:]]*1"          "$SERIAL" || { echo "  MISS: hardened service NoNewPrivs != 1"; pass=0; }
 grep -Eq "hardened-capbnd:.*CapBnd:[[:space:]]*0000000000000400" "$SERIAL" || { echo "  MISS: hardened CapBnd != CAP_NET_BIND_SERVICE only"; pass=0; }
+# chrony pilot: keep_caps=CAP_SYS_TIME (bit 25) collapses the bounding set to
+# exactly 0x2000000 -- chrony's real capability, proving it's not hardcoded.
+grep -Eq "chrony-nnp:.*NoNewPrivs:[[:space:]]*1"            "$SERIAL" || { echo "  MISS: chrony service NoNewPrivs != 1"; pass=0; }
+grep -Eq "chrony-capbnd:.*CapBnd:[[:space:]]*0000000002000000" "$SERIAL" || { echo "  MISS: chrony CapBnd != CAP_SYS_TIME only"; pass=0; }
 # Shutdown rail: every step must print, and PID 1 must reach reboot() itself.
 # A wedge here is the 2026-07-26 hang (unbounded sync never returned).
 for step in "SIGTERM sent" "cgroups killed" "control socket and shm released" \
