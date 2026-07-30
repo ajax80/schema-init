@@ -32,6 +32,12 @@ fi
 BIN="$REPO/schema-init"
 [ -x "$BIN" ] || { echo "no binary at $BIN"; exit 1; }
 
+# Static privdrop helper (initramfs has no libc -> must be -static). Exercises
+# chronyd's real self-privdrop so the cap set is validated, not just asserted.
+PRIVDROP="$WORK/test_privdrop"
+cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c" \
+  || { echo "PRIVDROP HELPER BUILD FAILED"; cc -static -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c"; exit 1; }
+
 # 2. Assemble a minimal initramfs root.
 mkdir -p "$ROOT"/{sbin,bin,usr/bin,etc/schema-init/services,proc,sys,dev,run,sys/fs/cgroup}
 cp "$BIN" "$ROOT/sbin/schema-init"
@@ -42,6 +48,7 @@ for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill; do
 done
 ln -sf /bin/busybox "$ROOT/usr/bin/touch"   # test svcs call /usr/bin/touch
 ln -sf /bin/busybox "$ROOT/bin/sleep"       # and /bin/sleep
+cp "$PRIVDROP" "$ROOT/bin/test_privdrop"
 
 cp "$HERE/test-timer.svc"     "$ROOT/etc/schema-init/services/"
 cp "$HERE/test-hang.svc"      "$ROOT/etc/schema-init/services/"
@@ -108,14 +115,16 @@ no_new_privs=1
 keep_caps=CAP_NET_BIND_SERVICE
 EOF
 
-# chrony live-pilot flavor: same mechanism, but keep_caps=CAP_SYS_TIME (value 25)
-# => CapBnd must collapse to exactly 0x2000000. This is chrony's real profile.
-cat > "$ROOT/etc/schema-init/services/test-chrony.svc" <<'EOF'
-name=test-chrony
-exec=/bin/sleep
-args=600
+# Phase 2 chrony hardening: the REAL self-privdrop path. test_privdrop replays
+# chronyd's exact privileged sequence (bind :123 -> chown /run -> setgid/setuid
+# -> retain CAP_SYS_TIME) under the 5-cap keep set. A /bin/sleep here would
+# false-green -- it exercises none of those -- which was exactly the Phase-1 gap.
+cat > "$ROOT/etc/schema-init/services/test-privdrop.svc" <<'EOF'
+name=test-privdrop
+exec=/bin/test_privdrop
+needs_root=1
 no_new_privs=1
-keep_caps=CAP_SYS_TIME
+keep_caps=CAP_SYS_TIME,CAP_NET_BIND_SERVICE,CAP_CHOWN,CAP_SETUID,CAP_SETGID
 EOF
 
 cat > "$ROOT/etc/schema-init/services/docker-modules.svc" <<'EOF'
@@ -233,9 +242,12 @@ echo "sigmask-child: $(grep SigBlk /proc/$ISO_PID/status 2>&1)"
 HARD_PID=$(head -1 /sys/fs/cgroup/schema-init/test-hardened/cgroup.procs 2>/dev/null)
 echo "hardened-nnp: $(grep NoNewPrivs /proc/$HARD_PID/status 2>&1)"
 echo "hardened-capbnd: $(grep CapBnd /proc/$HARD_PID/status 2>&1)"
-CHRONY_PID=$(head -1 /sys/fs/cgroup/schema-init/test-chrony/cgroup.procs 2>/dev/null)
-echo "chrony-nnp: $(grep NoNewPrivs /proc/$CHRONY_PID/status 2>&1)"
-echo "chrony-capbnd: $(grep CapBnd /proc/$CHRONY_PID/status 2>&1)"
+PRIVDROP_PID=$(head -1 /sys/fs/cgroup/schema-init/test-privdrop/cgroup.procs 2>/dev/null)
+echo "privdrop-result: $(cat /run/chrony-test/ok 2>&1)"
+echo "privdrop-uid: $(grep -E '^Uid:' /proc/$PRIVDROP_PID/status 2>&1)"
+echo "privdrop-nnp: $(grep NoNewPrivs /proc/$PRIVDROP_PID/status 2>&1)"
+echo "privdrop-capbnd: $(grep CapBnd /proc/$PRIVDROP_PID/status 2>&1)"
+echo "privdrop-capeff: $(grep CapEff /proc/$PRIVDROP_PID/status 2>&1)"
 echo "root-partition: $(cat /sys/fs/cgroup/schema-init/test-root/cpuset.cpus.partition 2>&1)"
 echo "share-effective: $(cat /sys/fs/cgroup/schema-init/test-share/cpuset.cpus.effective 2>&1)"
 echo "iso2-partition: $(cat /sys/fs/cgroup/schema-init/test-iso2/cpuset.cpus.partition 2>&1)"
@@ -315,10 +327,14 @@ grep -Eq "sigmask-child:.*SigBlk:[[:space:]]*0{16}" "$SERIAL" || { echo "  MISS:
 # drop -> capset all ran correctly under real PID 1 on a root-staying child.
 grep -Eq "hardened-nnp:.*NoNewPrivs:[[:space:]]*1"          "$SERIAL" || { echo "  MISS: hardened service NoNewPrivs != 1"; pass=0; }
 grep -Eq "hardened-capbnd:.*CapBnd:[[:space:]]*0000000000000400" "$SERIAL" || { echo "  MISS: hardened CapBnd != CAP_NET_BIND_SERVICE only"; pass=0; }
-# chrony pilot: keep_caps=CAP_SYS_TIME (bit 25) collapses the bounding set to
-# exactly 0x2000000 -- chrony's real capability, proving it's not hardcoded.
-grep -Eq "chrony-nnp:.*NoNewPrivs:[[:space:]]*1"            "$SERIAL" || { echo "  MISS: chrony service NoNewPrivs != 1"; pass=0; }
-grep -Eq "chrony-capbnd:.*CapBnd:[[:space:]]*0000000002000000" "$SERIAL" || { echo "  MISS: chrony CapBnd != CAP_SYS_TIME only"; pass=0; }
+# Phase 2 chrony: the self-privdrop actually SUCCEEDS under the 5-cap keep set.
+# Anti-false-green: test_privdrop writes /run/chrony-test/ok and reaches uid 996
+# only if every cap-gated step (bind/chown/setgid/setuid/adjtimex) is permitted.
+grep -Eq "privdrop-result: PRIVDROP_OK"                 "$SERIAL" || { echo "  MISS: privdrop helper did not complete (cap set too tight?)"; pass=0; }
+grep -Eq "privdrop-uid:.*Uid:[[:space:]]*996"           "$SERIAL" || { echo "  MISS: privdrop helper did not drop to uid 996"; pass=0; }
+grep -Eq "privdrop-nnp:.*NoNewPrivs:[[:space:]]*1"      "$SERIAL" || { echo "  MISS: privdrop NoNewPrivs != 1"; pass=0; }
+grep -Eq "privdrop-capbnd:.*CapBnd:[[:space:]]*00000000020004c1" "$SERIAL" || { echo "  MISS: privdrop CapBnd != 5-cap set"; pass=0; }
+grep -Eq "privdrop-capeff:.*CapEff:[[:space:]]*0000000002000000" "$SERIAL" || { echo "  MISS: privdrop CapEff != CAP_SYS_TIME after drop"; pass=0; }
 # Shutdown rail: every step must print, and PID 1 must reach reboot() itself.
 # A wedge here is the 2026-07-26 hang (unbounded sync never returned).
 for step in "SIGTERM sent" "cgroups killed" "control socket and shm released" \
