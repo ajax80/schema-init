@@ -116,15 +116,17 @@ keep_caps=CAP_NET_BIND_SERVICE
 EOF
 
 # Phase 2 chrony hardening: the REAL self-privdrop path. test_privdrop replays
-# chronyd's exact privileged sequence (bind :123 -> chown /run -> setgid/setuid
-# -> retain CAP_SYS_TIME) under the 5-cap keep set. A /bin/sleep here would
+# chronyd's exact privileged sequence (bind :123 -> chown /run -> write pidfile
+# as root -> setgid/setuid -> retain CAP_SYS_TIME) under the 6-cap keep set. The
+# root pidfile write into the chrony-owned 0750 dir needs CAP_DAC_OVERRIDE -- the
+# cap whose absence crash-looped the first hardened boot. A /bin/sleep here would
 # false-green -- it exercises none of those -- which was exactly the Phase-1 gap.
 cat > "$ROOT/etc/schema-init/services/test-privdrop.svc" <<'EOF'
 name=test-privdrop
 exec=/bin/test_privdrop
 needs_root=1
 no_new_privs=1
-keep_caps=CAP_SYS_TIME,CAP_NET_BIND_SERVICE,CAP_CHOWN,CAP_SETUID,CAP_SETGID
+keep_caps=CAP_SYS_TIME,CAP_NET_BIND_SERVICE,CAP_CHOWN,CAP_SETUID,CAP_SETGID,CAP_DAC_OVERRIDE
 EOF
 
 cat > "$ROOT/etc/schema-init/services/docker-modules.svc" <<'EOF'
@@ -327,13 +329,14 @@ grep -Eq "sigmask-child:.*SigBlk:[[:space:]]*0{16}" "$SERIAL" || { echo "  MISS:
 # drop -> capset all ran correctly under real PID 1 on a root-staying child.
 grep -Eq "hardened-nnp:.*NoNewPrivs:[[:space:]]*1"          "$SERIAL" || { echo "  MISS: hardened service NoNewPrivs != 1"; pass=0; }
 grep -Eq "hardened-capbnd:.*CapBnd:[[:space:]]*0000000000000400" "$SERIAL" || { echo "  MISS: hardened CapBnd != CAP_NET_BIND_SERVICE only"; pass=0; }
-# Phase 2 chrony: the self-privdrop actually SUCCEEDS under the 5-cap keep set.
+# Phase 2 chrony: the self-privdrop actually SUCCEEDS under the 6-cap keep set.
 # Anti-false-green: test_privdrop writes /run/chrony-test/ok and reaches uid 996
-# only if every cap-gated step (bind/chown/setgid/setuid/adjtimex) is permitted.
+# only if every cap-gated step (bind/chown/pidfile-as-root/setgid/setuid/adjtimex)
+# is permitted -- the pidfile write is the CAP_DAC_OVERRIDE regression guard.
 grep -Eq "privdrop-result: PRIVDROP_OK"                 "$SERIAL" || { echo "  MISS: privdrop helper did not complete (cap set too tight?)"; pass=0; }
 grep -Eq "privdrop-uid:.*Uid:[[:space:]]*996"           "$SERIAL" || { echo "  MISS: privdrop helper did not drop to uid 996"; pass=0; }
 grep -Eq "privdrop-nnp:.*NoNewPrivs:[[:space:]]*1"      "$SERIAL" || { echo "  MISS: privdrop NoNewPrivs != 1"; pass=0; }
-grep -Eq "privdrop-capbnd:.*CapBnd:[[:space:]]*00000000020004c1" "$SERIAL" || { echo "  MISS: privdrop CapBnd != 5-cap set"; pass=0; }
+grep -Eq "privdrop-capbnd:.*CapBnd:[[:space:]]*00000000020004c3" "$SERIAL" || { echo "  MISS: privdrop CapBnd != 6-cap set"; pass=0; }
 grep -Eq "privdrop-capeff:.*CapEff:[[:space:]]*0000000002000000" "$SERIAL" || { echo "  MISS: privdrop CapEff != CAP_SYS_TIME after drop"; pass=0; }
 # Shutdown rail: every step must print, and PID 1 must reach reboot() itself.
 # A wedge here is the 2026-07-26 hang (unbounded sync never returned).

@@ -63,16 +63,26 @@ int main(void) {
     mkdir(RUNDIR, 0750);                 /* EEXIST is fine */
     if (chown(RUNDIR, CHRONY_UID, CHRONY_GID) != 0) fail("chown");
 
-    /* 3. drop to the chrony user, keeping caps across the transition. */
+    /* 3. write the pidfile AS ROOT into the chrony-owned 0750 dir, exactly as
+     *    chronyd does before it drops privileges. Root is not the dir owner and
+     *    0750 grants "other" nothing, so this open REQUIRES CAP_DAC_OVERRIDE --
+     *    the cap whose absence crash-looped the first hardened boot. Without it
+     *    this returns EACCES, the helper _exit(1)s, its cgroup empties, and
+     *    every /proc assertion in the harness MISSes -> RED. */
+    int pf = open(RUNDIR "/chronyd.pid", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (pf < 0) fail("pidfile-root");
+    close(pf);
+
+    /* 4. drop to the chrony user, keeping caps across the transition. */
     if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) fail("keepcaps");
     if (setgroups(0, NULL) != 0) fail("setgroups");   /* CAP_SETGID */
     if (setgid(CHRONY_GID) != 0) fail("setgid");      /* CAP_SETGID */
     if (setuid(CHRONY_UID) != 0) fail("setuid");      /* CAP_SETUID */
 
-    /* 4. restore CAP_SYS_TIME into effective, now that we are non-root. */
+    /* 5. restore CAP_SYS_TIME into effective, now that we are non-root. */
     if (retain_sys_time() != 0) fail("capset");
 
-    /* 5. prove CAP_SYS_TIME is effective post-drop: a zero-offset clock set is
+    /* 6. prove CAP_SYS_TIME is effective post-drop: a zero-offset clock set is
      *    cap-gated but harmless. adjtimex returns clock state (>=0) or -1. */
     struct timex tx;
     memset(&tx, 0, sizeof(tx));
@@ -80,7 +90,7 @@ int main(void) {
     tx.offset = 0;
     if (adjtimex(&tx) == -1 && errno == EPERM) fail("adjtimex");
 
-    /* 6. sentinel written as uid 996 into the dir we now own -> proves we ran
+    /* 7. sentinel written as uid 996 into the dir we now own -> proves we ran
      *    the whole chain to the end. The harness greps this out of serial. */
     int fd = open(RUNDIR "/ok", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) fail("sentinel-open");
