@@ -543,6 +543,58 @@ static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
     }
 }
 
+/* bytes of cold memory to ask the kernel to reclaim from svc's cgroup, or 0 to
+ * skip. Critical services and tiny cgroups are left alone. Cheap (a single
+ * memory.current read) — safe to run inline in PID 1. */
+static long reclaim_read_target(const service_t *svc) {
+    char path[256];
+    long cur;
+    FILE *f;
+    if (!svc->cgroup_path[0]) return 0;
+    if (svc->priority == PRIO_CRITICAL) return 0;
+    snprintf(path, sizeof(path), "%s/memory.current", svc->cgroup_path);
+    f = fopen(path, "r");
+    if (!f) return 0;
+    if (fscanf(f, "%ld", &cur) != 1) { fclose(f); return 0; }
+    fclose(f);
+    return reclaim_target(cur, RECLAIM_CAP);
+}
+
+/* The memory.reclaim write is SYNCHRONOUS — the kernel reclaims in the writer's
+ * context. Run it only in the forked child (reclaim_pass), never in PID 1. */
+static void reclaim_cgroup_write(const service_t *svc, long target) {
+    char path[256], buf[32];
+    int fd, n;
+    snprintf(path, sizeof(path), "%s/memory.reclaim", svc->cgroup_path);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) return;
+    n = snprintf(buf, sizeof(buf), "%ld\n", target);
+    if (n > 0) write(fd, buf, (size_t)n);
+    close(fd);
+}
+
+/* Fork a helper to reclaim cold pages from non-critical cgroups. The parent
+ * reads targets and logs (fast, non-blocking); the child performs the
+ * synchronous memory.reclaim writes and exits, so PID 1 never stalls. */
+static void reclaim_pass(void) {
+    long targets[MAX_SERVICES];
+    int i, any = 0;
+    pid_t pid;
+    for (i = 0; i < svc_count; i++) {
+        targets[i] = 0;
+        if (services[i].child_pid <= 0) continue;
+        targets[i] = reclaim_read_target(&services[i]);
+        if (targets[i] > 0) { service_log(&services[i], "reclaim"); any = 1; }
+    }
+    if (!any) return;
+    pid = fork();
+    if (pid != 0) return; /* parent, or fork failure: do not block PID 1 */
+    service_reset_child_sigmask();
+    for (i = 0; i < svc_count; i++)
+        if (targets[i] > 0) reclaim_cgroup_write(&services[i], targets[i]);
+    _exit(0);
+}
+
 static void execute_survival_posture(int under_pressure) {
     int i;
     for (i = 0; i < svc_count; i++) {
@@ -554,6 +606,10 @@ static void execute_survival_posture(int under_pressure) {
             set_cgroup_cpu_limit(svc, under_pressure ? "50000 100000" : "max 100000");
         }
     }
+    /* On memory pressure, reclaim cold pages from non-critical cgroups. Peripheral
+     * services are now frozen, so their pages are cold and reclaim cleanly. */
+    if (under_pressure && read_system_mem_pressure() > 10.0)
+        reclaim_pass();
 }
 
 static void execute_fuse_cmd(service_t *svc) {

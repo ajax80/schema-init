@@ -4,3 +4,4 @@ dep=logger
 oneshot=0
 needs_root=0
 critical=0
+priority=peripheral

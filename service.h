@@ -16,6 +16,19 @@
 #define ONESHOT_START_TIMEOUT 90 /* default kill window for a oneshot stuck in FULL_TRUST */
 #define MEM_MIN_KB      8192 /* minimum free memory to attempt spawn */
 
+#define RECLAIM_FLOOR   (4L * 1024 * 1024)   /* skip cgroups holding < 4 MiB */
+#define RECLAIM_CAP     (128L * 1024 * 1024) /* reclaim at most this per service */
+
+/* how many bytes of cold memory to ask the kernel to reclaim from a cgroup
+ * currently holding `current` bytes: half of it, never more than `cap`, and
+ * nothing at all below the floor. Pure — unit-tested in tests/test_reclaim.c. */
+static inline long reclaim_target(long current, long cap) {
+    long half;
+    if (current < RECLAIM_FLOOR) return 0;
+    half = current / 2;
+    return half < cap ? half : cap;
+}
+
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */

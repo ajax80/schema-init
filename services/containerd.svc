@@ -4,3 +4,4 @@ oneshot=0
 needs_root=1
 critical=0
 ready_path=/run/containerd/containerd.sock
+priority=peripheral
