@@ -82,6 +82,10 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-.PHONY: all clean install release aarch64 armhf desktop
+test:
+	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
+	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o /tmp/schema-test-tiering && /tmp/schema-test-tiering
+
+.PHONY: all clean install release aarch64 armhf desktop test
 
 

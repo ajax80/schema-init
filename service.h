@@ -44,6 +44,37 @@ typedef enum {
     PRIO_CRITICAL
 } prio_t;
 
+/* cgroup v2 resource tiering derived from a service's priority class. Pure —
+ * unit-tested in tests/test_cgroup_tiering.c. cpu_weight is 0 for PERIPHERAL
+ * because cpu.idle=1 and cpu.weight are mutually exclusive: when cpu_idle is
+ * set the caller writes cpu.idle and skips cpu.weight. */
+typedef struct {
+    int cpu_weight; /* 100 STANDARD, 1000 CRITICAL; 0 when cpu_idle set */
+    int io_weight;  /* 10 PERIPHERAL, 100 STANDARD, 1000 CRITICAL */
+    int cpu_idle;   /* 1 PERIPHERAL, 0 otherwise */
+} cgroup_tier_t;
+
+static inline cgroup_tier_t cgroup_tiering(prio_t priority) {
+    cgroup_tier_t tier = {0, 0, 0};
+    switch (priority) {
+    case PRIO_PERIPHERAL:
+        tier.cpu_idle = 1; tier.cpu_weight = 0;    tier.io_weight = 10;   break;
+    case PRIO_CRITICAL:
+        tier.cpu_idle = 0; tier.cpu_weight = 1000; tier.io_weight = 1000; break;
+    case PRIO_STANDARD:
+    default:
+        tier.cpu_idle = 0; tier.cpu_weight = 100;  tier.io_weight = 100;  break;
+    }
+    return tier;
+}
+
+/* soft reclaim buffer (memory.high): 90% of the hard cap, in bytes; 0 (no
+ * memory.high) when the service has no mem_limit. Pure. */
+static inline long mem_high_bytes(long mem_limit_mb) {
+    if (mem_limit_mb <= 0) return 0;
+    return (mem_limit_mb * 1024L * 1024L * 9L) / 10L;
+}
+
 enum {
     PART_MEMBER = 0,
     PART_ROOT,
