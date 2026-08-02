@@ -16,6 +16,19 @@
 #define ONESHOT_START_TIMEOUT 90 /* default kill window for a oneshot stuck in FULL_TRUST */
 #define MEM_MIN_KB      8192 /* minimum free memory to attempt spawn */
 
+#define RECLAIM_FLOOR   (4L * 1024 * 1024)   /* skip cgroups holding < 4 MiB */
+#define RECLAIM_CAP     (128L * 1024 * 1024) /* reclaim at most this per service */
+
+/* how many bytes of cold memory to ask the kernel to reclaim from a cgroup
+ * currently holding `current` bytes: half of it, never more than `cap`, and
+ * nothing at all below the floor. Pure — unit-tested in tests/test_reclaim.c. */
+static inline long reclaim_target(long current, long cap) {
+    long half;
+    if (current < RECLAIM_FLOOR) return 0;
+    half = current / 2;
+    return half < cap ? half : cap;
+}
+
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
@@ -30,6 +43,37 @@ typedef enum {
     PRIO_STANDARD,
     PRIO_CRITICAL
 } prio_t;
+
+/* cgroup v2 resource tiering derived from a service's priority class. Pure —
+ * unit-tested in tests/test_cgroup_tiering.c. cpu_weight is 0 for PERIPHERAL
+ * because cpu.idle=1 and cpu.weight are mutually exclusive: when cpu_idle is
+ * set the caller writes cpu.idle and skips cpu.weight. */
+typedef struct {
+    int cpu_weight; /* 100 STANDARD, 1000 CRITICAL; 0 when cpu_idle set */
+    int io_weight;  /* 10 PERIPHERAL, 100 STANDARD, 1000 CRITICAL */
+    int cpu_idle;   /* 1 PERIPHERAL, 0 otherwise */
+} cgroup_tier_t;
+
+static inline cgroup_tier_t cgroup_tiering(prio_t priority) {
+    cgroup_tier_t tier = {0, 0, 0};
+    switch (priority) {
+    case PRIO_PERIPHERAL:
+        tier.cpu_idle = 1; tier.cpu_weight = 0;    tier.io_weight = 10;   break;
+    case PRIO_CRITICAL:
+        tier.cpu_idle = 0; tier.cpu_weight = 1000; tier.io_weight = 1000; break;
+    case PRIO_STANDARD:
+    default:
+        tier.cpu_idle = 0; tier.cpu_weight = 100;  tier.io_weight = 100;  break;
+    }
+    return tier;
+}
+
+/* soft reclaim buffer (memory.high): 90% of the hard cap, in bytes; 0 (no
+ * memory.high) when the service has no mem_limit. Pure. */
+static inline long mem_high_bytes(long mem_limit_mb) {
+    if (mem_limit_mb <= 0) return 0;
+    return (mem_limit_mb * 1024L * 1024L * 9L) / 10L;
+}
 
 enum {
     PART_MEMBER = 0,

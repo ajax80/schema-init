@@ -198,6 +198,18 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     close(fd);
 }
 
+/* best-effort single-value cgroup write: silently ignores a missing file (the
+ * controller isn't enabled on this cgroup) or a value the kernel rejects. */
+static void cg_write(const char *cgroup_path, const char *file, const char *val) {
+    char path[160];
+    int fd;
+    snprintf(path, sizeof(path), "%s/%s", cgroup_path, file);
+    fd = open(path, O_WRONLY);
+    if (fd < 0) return;
+    write(fd, val, strlen(val));
+    close(fd);
+}
+
 static void cgroup_apply_limits(service_t *svc) {
     char path[160];
     char buf[64];
@@ -226,22 +238,35 @@ static void cgroup_apply_limits(service_t *svc) {
         }
     }
 
-    /* priority -> cgroup v2 cpu.weight (proportional share, default 100).
-     * Only takes effect under CPU contention: idle services see no penalty,
-     * but when cores are saturated a CRITICAL service (e.g. the display
-     * stack or the Leg control loop) wins the scheduler over PERIPHERAL
-     * background work. This is the analog of systemd's CPUWeight=. */
+    /* memory.high: soft cap 10% below the hard cap -> the kernel reclaims cold
+     * pages under gentle back-pressure before ever hitting the OOM path. Pairs
+     * with the PSI reclaim executive. Only when a hard mem_limit exists. */
     {
-        int weight = 100;
-        if (svc->priority == PRIO_CRITICAL)        weight = 1000;
-        else if (svc->priority == PRIO_PERIPHERAL) weight = 10;
-        snprintf(path, sizeof(path), "%s/cpu.weight", svc->cgroup_path);
-        fd = open(path, O_WRONLY);
-        if (fd >= 0) {
-            n = snprintf(buf, sizeof(buf), "%d\n", weight);
-            write(fd, buf, (size_t)n);
-            close(fd);
+        long high = mem_high_bytes(svc->mem_limit_mb);
+        if (high > 0) {
+            n = snprintf(buf, sizeof(buf), "%ld\n", high);
+            cg_write(svc->cgroup_path, "memory.high", buf);
         }
+    }
+
+    /* kill a service's whole cgroup together on OOM — no orphaned survivors. */
+    cg_write(svc->cgroup_path, "memory.oom.group", "1\n");
+
+    /* priority -> cgroup v2 CPU + IO tiering. Only bites under contention: a
+     * CRITICAL service (display stack, audio, the Leg loop) wins the scheduler
+     * and the disk over STANDARD; PERIPHERAL background work yields entirely via
+     * cpu.idle. io.weight shields CRITICAL disk I/O from peripheral hogs — keeps
+     * PipeWire from crackling under frigate/torrent load. */
+    {
+        cgroup_tier_t tier = cgroup_tiering(svc->priority);
+        if (tier.cpu_idle) {
+            cg_write(svc->cgroup_path, "cpu.idle", "1\n");
+        } else {
+            n = snprintf(buf, sizeof(buf), "%d\n", tier.cpu_weight);
+            cg_write(svc->cgroup_path, "cpu.weight", buf);
+        }
+        n = snprintf(buf, sizeof(buf), "%d\n", tier.io_weight);
+        cg_write(svc->cgroup_path, "io.weight", buf);
     }
 
     if (svc->cpuset[0]) {

@@ -93,6 +93,12 @@ def _session_env():
                 env.setdefault(k, v.decode("utf-8", "replace"))
         break
     env.setdefault("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+    # plasmashell frequently lacks DISPLAY (Xwayland exports :0 only after
+    # plasmashell has spawned), so harvesting from it yields display=None and
+    # every GDK_BACKEND=x11 menu-launch draws nothing. Fall back to :0 when
+    # Xwayland is actually up so X11 app launches from the taskbar work.
+    if not env.get("DISPLAY") and os.path.exists("/tmp/.X11-unix/X0"):
+        env["DISPLAY"] = ":0"
     _gui_env_cache = env
     return dict(env)
 

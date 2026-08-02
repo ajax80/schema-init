@@ -1,6 +1,8 @@
 name=heartbeat
-exec=/usr/bin/yes
+exec=/bin/sleep
+args=infinity
 dep=logger
 oneshot=0
 needs_root=0
 critical=0
+priority=peripheral

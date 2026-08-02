@@ -5,3 +5,4 @@ args=schema-init heartbeat
 oneshot=1
 needs_root=0
 critical=0
+priority=peripheral
