@@ -290,6 +290,11 @@ static void mount_pseudo(void) {
     mkdir("/run/log",               0755);
     mkdir("/run/log/schema-init",   0755);
     mkdir("/run/sshd",              0755);
+
+    /* make / rshared so mount events propagate — podman and GLib/KDE mount
+     * monitors need this; systemd runs `mount --make-rshared /` at boot. Without
+     * it / stays private and mount-watching userspace spins (plasmashell 100%). */
+    mount(NULL, "/", NULL, MS_SHARED|MS_REC, NULL);
 }
 
 static void cleanup_tmp_locks(void) {
