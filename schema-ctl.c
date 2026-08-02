@@ -62,8 +62,10 @@ int main(int argc, char **argv) {
 
     cmd[0] = '\0';
     for (i = 1; i < argc; i++) {
-        if (i > 1) strncat(cmd, " ", sizeof(cmd) - strlen(cmd) - 1);
-        strncat(cmd, argv[i], sizeof(cmd) - strlen(cmd) - 2);
+        size_t len = strlen(cmd);
+        if (len >= sizeof(cmd) - 2) break;
+        if (i > 1) { strncat(cmd, " ", sizeof(cmd) - len - 1); len = strlen(cmd); }
+        strncat(cmd, argv[i], sizeof(cmd) - len - 1);
     }
     strncat(cmd, "\n", sizeof(cmd) - strlen(cmd) - 1);
 
