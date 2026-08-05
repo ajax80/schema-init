@@ -85,6 +85,7 @@ armhf:
 test:
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o /tmp/schema-test-tiering && /tmp/schema-test-tiering
+	$(CC) $(CFLAGS) tests/test_calendar.c -o /tmp/schema-test-calendar && /tmp/schema-test-calendar
 
 .PHONY: all clean install release aarch64 armhf desktop test
 

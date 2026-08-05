@@ -70,27 +70,15 @@ static int handle_reload(int evict_mode, char *err, size_t errsz);
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 
 /* Arm a calendar timer: set timer_next to the next CLOCK_REALTIME instant at
- * which local wall-clock reaches HH:MM, strictly in the future. Recomputed on
- * every (re-)arm so DST and NTP clock steps self-correct each cycle. */
+ * which local wall-clock reaches HH:MM on a day matching the timer's dow/dom
+ * constraints, strictly in the future. Walks forward day-by-day (mktime per
+ * step re-normalizes wday/mday and self-corrects DST/NTP each cycle). Daily
+ * timers (dow=dom=-1) match the first or second day and behave as before. */
 static void timer_arm_calendar(service_t *svc) {
-    time_t now = time(NULL);
-    struct tm tm;
-    localtime_r(&now, &tm);
-    tm.tm_hour = svc->timer_cal_hour;
-    tm.tm_min  = svc->timer_cal_min;
-    tm.tm_sec  = 0;
-    tm.tm_isdst = -1;
-    time_t target = mktime(&tm);
-    if (target == (time_t)-1 || target <= now) {
-        localtime_r(&now, &tm);
-        tm.tm_mday += 1;
-        tm.tm_hour = svc->timer_cal_hour;
-        tm.tm_min  = svc->timer_cal_min;
-        tm.tm_sec  = 0;
-        tm.tm_isdst = -1;
-        target = mktime(&tm);
-    }
-    svc->timer_next.tv_sec  = target;
+    svc->timer_next.tv_sec  = calendar_next_after(svc->timer_cal_hour,
+                                                  svc->timer_cal_min,
+                                                  svc->timer_cal_dow,
+                                                  svc->timer_cal_dom, time(NULL));
     svc->timer_next.tv_nsec = 0;
 }
 
@@ -123,25 +111,12 @@ static void timer_stamp_write(const service_t *svc, time_t t) {
     fclose(f);
 }
 
-/* most recent past (or current) occurrence of HH:MM, <= now */
+/* most recent past (or current) occurrence of the timer's HH:MM on a day
+ * matching its dow/dom constraints, <= now. Walks backward day-by-day; returns
+ * 0 if none in the last ~400 days (constraint never satisfiable). */
 static time_t calendar_recent_occurrence(const service_t *svc, time_t now) {
-    struct tm tm;
-    localtime_r(&now, &tm);
-    tm.tm_hour = svc->timer_cal_hour;
-    tm.tm_min  = svc->timer_cal_min;
-    tm.tm_sec  = 0;
-    tm.tm_isdst = -1;
-    time_t t = mktime(&tm);
-    if (t > now) {                       /* today's slot is still ahead → yesterday's */
-        localtime_r(&now, &tm);
-        tm.tm_mday -= 1;
-        tm.tm_hour = svc->timer_cal_hour;
-        tm.tm_min  = svc->timer_cal_min;
-        tm.tm_sec  = 0;
-        tm.tm_isdst = -1;
-        t = mktime(&tm);
-    }
-    return t;
+    return calendar_recent_at_or_before(svc->timer_cal_hour, svc->timer_cal_min,
+                                        svc->timer_cal_dow, svc->timer_cal_dom, now);
 }
 
 /* Initial arm for a persistent calendar timer: if a scheduled fire passed while
