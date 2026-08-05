@@ -713,16 +713,18 @@ static int parse_partition(const char *val) {
     return PART_MEMBER;
 }
 
-/* parse on_calendar=HH:MM into svc->timer_cal_{hour,min} and set the timer
- * flags. Returns 0 on success, -1 on malformed input (caller leaves the
- * service non-timer so a typo can't silently schedule garbage). */
+/* parse on_calendar into svc->timer_cal_{hour,min,dow,dom} and set the timer
+ * flags. Accepts "HH:MM" (daily), "Mon HH:MM" (weekly), "15 HH:MM" (monthly).
+ * Returns 0 on success, -1 on malformed input (caller leaves the service
+ * non-timer so a typo can't silently schedule garbage). Field parsing is the
+ * pure, unit-tested parse_calendar_fields() in service.h. */
 static int parse_calendar(service_t *svc, const char *val) {
-    int h = -1, m = -1;
-    char extra;
-    if (sscanf(val, "%d:%d%c", &h, &m, &extra) != 2) return -1;
-    if (h < 0 || h > 23 || m < 0 || m > 59) return -1;
+    int h, m, dw, dm;
+    if (parse_calendar_fields(val, &h, &m, &dw, &dm) != 0) return -1;
     svc->timer_cal_hour = h;
     svc->timer_cal_min  = m;
+    svc->timer_cal_dow  = dw;
+    svc->timer_cal_dom  = dm;
     svc->flags |= SVC_TIMER | SVC_TIMER_CALENDAR | SVC_ONESHOT;
     return 0;
 }
@@ -771,6 +773,8 @@ int services_load(const char *dir, service_t *table, int max) {
         svc->allowed_slot_max = -1;
         svc->max_restarts = MAX_RESTARTS;
         svc->timer_cal_hour = -1;
+        svc->timer_cal_dow = -1;
+        svc->timer_cal_dom = -1;
         int dep_slot = 0;
         int bad = 0;
 
@@ -861,7 +865,8 @@ int services_load(const char *dir, service_t *table, int max) {
             } else if (strcmp(line, "on_calendar") == 0) {
                 if (parse_calendar(svc, val) != 0)
                     fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
-                            "(want HH:MM 00:00-23:59) — ignoring\n", svc->name, val);
+                            "(want HH:MM, or 'Mon HH:MM' weekly, or 'DD HH:MM' "
+                            "monthly) — ignoring\n", svc->name, val);
             } else if (strcmp(line, "persistent") == 0) {
                 if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
             } else if (strcmp(line, "user") == 0) {
@@ -965,6 +970,8 @@ int service_load_one(const char *path, service_t *svc) {
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
     svc->timer_cal_hour = -1;
+    svc->timer_cal_dow = -1;
+    svc->timer_cal_dom = -1;
     argc = 0;
     dep_slot = 0;
 
