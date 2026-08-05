@@ -3,6 +3,9 @@
 
 #include <stddef.h>
 #include <string.h>
+#include <ctype.h>
+#include <fnmatch.h>
+#include <stdio.h>
 
 #define UE_MAX_KEYS 32
 #define UE_KEY_MAX  64
@@ -47,6 +50,51 @@ static inline int uevent_parse(const char *buf, size_t len, struct uevent *ev) {
         i += rl + 1;
     }
     return uevent_get(ev, "ACTION") ? 0 : -1;
+}
+
+#define RULE_MAX_MATCH 8
+#define RULE_HOOK_MAX  512
+#define RULE_NAME_MAX  64
+
+struct dev_rule {
+    char name[RULE_NAME_MAX];
+    char mkey[RULE_MAX_MATCH][UE_KEY_MAX];
+    char mpat[RULE_MAX_MATCH][UE_VAL_MAX];
+    int  nmatch;
+    char on_add[RULE_HOOK_MAX];
+    char on_remove[RULE_HOOK_MAX];
+};
+
+static inline int dev_rule_set(struct dev_rule *r, const char *key, const char *val) {
+    if (strcmp(key, "name") == 0) {
+        snprintf(r->name, sizeof r->name, "%s", val);
+    } else if (strcmp(key, "on_add") == 0) {
+        snprintf(r->on_add, sizeof r->on_add, "%s", val);
+    } else if (strcmp(key, "on_remove") == 0) {
+        snprintf(r->on_remove, sizeof r->on_remove, "%s", val);
+    } else if (strncmp(key, "match_", 6) == 0) {
+        const char *sub = key + 6;
+        if (*sub == '\0' || r->nmatch >= RULE_MAX_MATCH) return -1;
+        int k = r->nmatch;
+        size_t z;
+        for (z = 0; sub[z] && z < UE_KEY_MAX - 1; z++)
+            r->mkey[k][z] = (char)toupper((unsigned char)sub[z]);
+        r->mkey[k][z] = '\0';
+        snprintf(r->mpat[k], sizeof r->mpat[k], "%s", val);
+        r->nmatch++;
+    } else {
+        return -1;
+    }
+    return 0;
+}
+
+static inline int dev_rule_match(const struct dev_rule *r, const struct uevent *ev) {
+    if (r->nmatch == 0) return 0;
+    for (int k = 0; k < r->nmatch; k++) {
+        const char *v = uevent_get(ev, r->mkey[k]);
+        if (!v || fnmatch(r->mpat[k], v, 0) != 0) return 0;
+    }
+    return 1;
 }
 
 #endif /* SCHEMA_UDEV_H */
