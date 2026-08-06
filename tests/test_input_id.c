@@ -91,9 +91,96 @@ static void test_discovery(void) {
     printf("test_discovery OK\n");
 }
 
+static int iid_has(const struct uevent *ev, const char *k) {
+    const char *v = uevent_get(ev, k);
+    return v && strcmp(v, "1") == 0;
+}
+
+static void test_heuristic(void) {
+    unsigned long ev[IID_NWORDS], key[IID_NWORDS], rel[IID_NWORDS], ab[IID_NWORDS], pr[IID_NWORDS];
+    struct uevent out;
+
+    /* full keyboard: word0 = 0xfffffffffffffffe */
+    iid_parse_mask("3", ev); iid_parse_mask("fffffffffffffffe", key);
+    out.n = 0;
+    assert(iid_test_key(ev, key, &out) == 1);
+    assert(iid_has(&out, "ID_INPUT_KEYBOARD") && iid_has(&out, "ID_INPUT_KEY"));
+
+    /* key-only: a media key in word3, not a full keyboard */
+    iid_parse_mask("3", ev); iid_parse_mask("100000 0 0 0", key);
+    out.n = 0;
+    assert(iid_test_key(ev, key, &out) == 1);
+    assert(iid_has(&out, "ID_INPUT_KEY") && !iid_has(&out, "ID_INPUT_KEYBOARD"));
+
+    /* no EV_KEY -> nothing */
+    iid_parse_mask("21", ev); iid_parse_mask("0", key);   /* ev = SYN|SW */
+    out.n = 0;
+    assert(iid_test_key(ev, key, &out) == 0);
+    assert(out.n == 0);
+
+    /* mouse: EV_KEY|EV_REL, BTN_MOUSE range set, REL_X/Y set */
+    iid_parse_mask("17", ev);                     /* SYN|KEY|REL|MSC */
+    iid_parse_mask("1f0000 0 0 0 0", key);        /* BTN_LEFT.. word4 */
+    iid_parse_mask("3", rel);                     /* REL_X|REL_Y */
+    iid_parse_mask("0", ab); iid_parse_mask("0", pr);
+    out.n = 0;
+    assert(iid_test_pointers(ev, ab, key, rel, pr, &out) == 1);
+    assert(iid_has(&out, "ID_INPUT_MOUSE"));
+    assert(!iid_has(&out, "ID_INPUT_TOUCHPAD") && !iid_has(&out, "ID_INPUT_TABLET"));
+
+    /* accelerometer via prop bit 6 */
+    iid_parse_mask("9", ev); iid_parse_mask("0", key);
+    iid_parse_mask("0", rel); iid_parse_mask("7", ab); iid_parse_mask("40", pr); /* prop bit6 */
+    out.n = 0;
+    assert(iid_test_pointers(ev, ab, key, rel, pr, &out) == 1);
+    assert(iid_has(&out, "ID_INPUT_ACCELEROMETER"));
+
+    /* touchpad: ABS_X/Y + BTN_TOOL_FINGER, no pen, not direct */
+    iid_parse_mask("9", ev);                                  /* SYN|ABS */
+    { unsigned long k[IID_NWORDS]; for (int i=0;i<IID_NWORDS;i++) k[i]=0;
+      k[BTN_TOOL_FINGER/64] |= 1UL << (BTN_TOOL_FINGER%64);
+      iid_parse_mask("3", ab);                                /* ABS_X|ABS_Y */
+      iid_parse_mask("0", rel); iid_parse_mask("0", pr);
+      out.n = 0;
+      assert(iid_test_pointers(ev, ab, k, rel, pr, &out) == 1);
+      assert(iid_has(&out, "ID_INPUT_TOUCHPAD"));
+      assert(!iid_has(&out, "ID_INPUT_MOUSE")); }
+
+    /* touchscreen: MT coords + INPUT_PROP_DIRECT */
+    { unsigned long a[IID_NWORDS]; for (int i=0;i<IID_NWORDS;i++) a[i]=0;
+      a[ABS_MT_POSITION_X/64] |= 1UL << (ABS_MT_POSITION_X%64);
+      a[ABS_MT_POSITION_Y/64] |= 1UL << (ABS_MT_POSITION_Y%64);
+      iid_parse_mask("9", ev); iid_parse_mask("0", key);
+      iid_parse_mask("0", rel); iid_parse_mask("2", pr);      /* prop bit1 = DIRECT */
+      out.n = 0;
+      assert(iid_test_pointers(ev, a, key, rel, pr, &out) == 1);
+      assert(iid_has(&out, "ID_INPUT_TOUCHSCREEN")); }
+
+    /* joystick: BTN_JOYSTICK button */
+    { unsigned long k[IID_NWORDS]; for (int i=0;i<IID_NWORDS;i++) k[i]=0;
+      k[BTN_JOYSTICK/64] |= 1UL << (BTN_JOYSTICK%64);
+      iid_parse_mask("3", ev); iid_parse_mask("0", rel);
+      iid_parse_mask("0", ab); iid_parse_mask("0", pr);
+      out.n = 0;
+      assert(iid_test_pointers(ev, ab, k, rel, pr, &out) == 1);
+      assert(iid_has(&out, "ID_INPUT_JOYSTICK")); }
+
+    /* pointingstick: prop bit5 + mouse buttons */
+    { unsigned long k[IID_NWORDS]; for (int i=0;i<IID_NWORDS;i++) k[i]=0;
+      k[BTN_MOUSE/64] |= 1UL << (BTN_MOUSE%64);
+      iid_parse_mask("17", ev); iid_parse_mask("3", rel);
+      iid_parse_mask("0", ab); iid_parse_mask("20", pr);      /* prop bit5 */
+      out.n = 0;
+      assert(iid_test_pointers(ev, ab, k, rel, pr, &out) == 1);
+      assert(iid_has(&out, "ID_INPUT_POINTINGSTICK") && iid_has(&out, "ID_INPUT_MOUSE")); }
+
+    printf("test_heuristic OK\n");
+}
+
 int main(void) {
     test_mask();
     test_discovery();
+    test_heuristic();
     printf("ALL input_id tests passed\n");
     return 0;
 }

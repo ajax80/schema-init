@@ -101,4 +101,66 @@ static inline int iid_read_masks(const char *inputdir,
     return 0;
 }
 
+static inline int iid_test_key(const unsigned long ev[IID_NWORDS],
+                               const unsigned long key[IID_NWORDS], struct uevent *out) {
+    if (!iid_test_bit(ev, EV_KEY)) return 0;
+    unsigned long found = 0;
+    for (int i = 0; i < BTN_MISC / 64; i++) found |= key[i];   /* KEY_* below BTN_* */
+    int ret = 0;
+    if ((key[0] & 0xFFFFFFFEUL) == 0xFFFFFFFEUL) { iid_emit(out, "ID_INPUT_KEYBOARD", "1"); ret = 1; }
+    if (found != 0) { iid_emit(out, "ID_INPUT_KEY", "1"); ret = 1; }
+    return ret;
+}
+
+static inline int iid_test_pointers(const unsigned long ev[IID_NWORDS], const unsigned long abs_[IID_NWORDS],
+                                    const unsigned long key[IID_NWORDS], const unsigned long rel[IID_NWORDS],
+                                    const unsigned long prop[IID_NWORDS], struct uevent *out) {
+    int has_keys = iid_test_bit(ev, EV_KEY);
+    int has_abs = iid_test_bit(abs_, ABS_X) && iid_test_bit(abs_, ABS_Y);
+    int has_3d  = has_abs && iid_test_bit(abs_, ABS_Z);
+    int is_accel = iid_test_bit(prop, INPUT_PROP_ACCELEROMETER);
+    if (!has_keys && has_3d) is_accel = 1;
+    if (is_accel) { iid_emit(out, "ID_INPUT_ACCELEROMETER", "1"); return 1; }
+
+    int is_pointing_stick = iid_test_bit(prop, INPUT_PROP_POINTING_STICK);
+    int has_stylus = iid_test_bit(key, BTN_STYLUS);
+    int has_pen    = iid_test_bit(key, BTN_TOOL_PEN);
+    int finger_but_no_pen = iid_test_bit(key, BTN_TOOL_FINGER) && !has_pen;
+    int has_mouse_button = iid_any_bit(key, BTN_MOUSE, BTN_JOYSTICK);
+    int has_rel = iid_test_bit(ev, EV_REL) && iid_test_bit(rel, REL_X) && iid_test_bit(rel, REL_Y);
+    int has_mt  = iid_test_bit(abs_, ABS_MT_POSITION_X) && iid_test_bit(abs_, ABS_MT_POSITION_Y);
+    int is_direct = iid_test_bit(prop, INPUT_PROP_DIRECT);
+    int has_touch = iid_test_bit(key, BTN_TOUCH);
+    int has_joy = iid_any_bit(key, BTN_JOYSTICK, BTN_DIGI)
+               || iid_any_bit(key, BTN_TRIGGER_HAPPY, BTN_TRIGGER_HAPPY40 + 1)
+               || iid_any_bit(abs_, ABS_RX, ABS_PRESSURE);
+
+    int is_tablet = 0, is_touchpad = 0, is_touchscreen = 0, is_joystick = 0, is_mouse = 0;
+    if (has_abs) {
+        if (has_stylus || has_pen) is_tablet = 1;
+        else if (finger_but_no_pen && !is_direct) is_touchpad = 1;
+        else if (has_mouse_button) is_mouse = 1;
+        else if (has_touch || is_direct) is_touchscreen = 1;
+        else if (has_joy) is_joystick = 1;
+    } else if (has_joy) {
+        is_joystick = 1;
+    }
+
+    if (has_mt) {
+        if (is_direct) is_touchscreen = 1;
+        else is_touchpad = 1;
+    }
+
+    if (!is_tablet && !is_touchpad && !is_joystick && has_mouse_button && (has_rel || !has_abs))
+        is_mouse = 1;
+
+    if (is_pointing_stick) iid_emit(out, "ID_INPUT_POINTINGSTICK", "1");
+    if (is_mouse)          iid_emit(out, "ID_INPUT_MOUSE", "1");
+    if (is_touchpad)       iid_emit(out, "ID_INPUT_TOUCHPAD", "1");
+    if (is_touchscreen)    iid_emit(out, "ID_INPUT_TOUCHSCREEN", "1");
+    if (is_joystick)       iid_emit(out, "ID_INPUT_JOYSTICK", "1");
+    if (is_tablet)         iid_emit(out, "ID_INPUT_TABLET", "1");
+    return is_tablet || is_mouse || is_touchpad || is_touchscreen || is_joystick || is_pointing_stick;
+}
+
 #endif
