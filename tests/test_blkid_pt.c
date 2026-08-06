@@ -163,12 +163,65 @@ static void test_dos(void) {
     printf("test_dos OK\n");
 }
 
+#include <sys/stat.h>
+#include <limits.h>
+
+static void bpt_mkdirs(const char *p) {
+    char t[PATH_MAX]; safe_copy(t, p, sizeof t);
+    for (char *s = t + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(t, 0755); *s = '/'; }
+    mkdir(t, 0755);
+}
+static void bpt_wf(const char *dir, const char *name, const char *val) {
+    char p[PATH_MAX]; snprintf(p, sizeof p, "%s/%s", dir, name);
+    FILE *f = fopen(p, "w"); assert(f); fputs(val, f); fputc('\n', f); fclose(f);
+}
+
+static void test_build(void) {
+    char root[] = "/tmp/bptsysXXXXXX"; assert(mkdtemp(root));
+    /* sysfs: /devices/disk (whole) with a child partition p1 */
+    char disk[PATH_MAX];
+    if ((size_t)snprintf(disk, sizeof disk, "%s/devices/disk", root) >= sizeof disk) assert(0);
+    bpt_mkdirs(disk);
+    char q[PATH_MAX];
+    if ((size_t)snprintf(q, sizeof q, "%s/queue", disk) >= sizeof q) assert(0);
+    bpt_mkdirs(q);
+    bpt_wf(q, "logical_block_size", "512");
+    bpt_wf(disk, "dev", "8:0");
+    char part[PATH_MAX];
+    if ((size_t)snprintf(part, sizeof part, "%s/p1", disk) >= sizeof part) assert(0);
+    bpt_mkdirs(part);
+    bpt_wf(part, "partition", "1");
+
+    /* GPT image used as the "devnode" for both disk and its parent */
+    char img[] = "/tmp/bptimgXXXXXX"; int fd = mkstemp(img); assert(fd >= 0); close(fd);
+    unsigned char dg[16] = {0xa6,0x6d,0xd4,0x56,0x84,0xc4,0xd7,0x4d,
+                            0xa6,0xc3,0xd4,0x69,0x3c,0x92,0xf9,0x4d};
+    unsigned char ent[128]; mk_entry_efi(ent);
+    mk_gpt(img, dg, ent, 128);
+
+    /* whole disk: TABLE only, no ENTRY */
+    struct uevent e; e.n = 0;
+    assert(blkid_pt_build(root, "/devices/disk", img, &e) == 0);
+    assert(bpt_has(&e, "ID_PART_TABLE_TYPE", "gpt"));
+    assert(bpt_has(&e, "ID_PART_TABLE_UUID", "56d46da6-c484-4dd7-a6c3-d4693c92f94d"));
+    assert(bpt_absent(&e, "ID_PART_ENTRY_SCHEME"));
+
+    /* classification: p1 is detected as a partition (number 1) */
+    char ps[PATH_MAX]; snprintf(ps, sizeof ps, "%s/devices/disk/p1", root);
+    char pb[16];
+    assert(pi_sysattr(ps, "partition", pb, sizeof pb) == 0 && atoi(pb) == 1);
+
+    unlink(img);
+    printf("test_build OK\n");
+}
+
 int main(void) {
     test_guid();
     test_le();
     test_gpt_disk();
     test_gpt_entry();
     test_dos();
+    test_build();
     printf("ALL blkid_pt tests passed\n");
     return 0;
 }

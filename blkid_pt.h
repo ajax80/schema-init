@@ -167,4 +167,64 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
     bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
 }
 
+static inline int blkid_pt_build(const char *sysroot, const char *devpath,
+                                 const char *devnode, struct uevent *out) {
+    out->n = 0;
+    char syspath[PATH_MAX];
+    if ((size_t)snprintf(syspath, sizeof syspath, "%s%s", sysroot, devpath) >= sizeof syspath)
+        return 0;
+
+    char partbuf[64];
+    int is_part = (pi_sysattr(syspath, "partition", partbuf, sizeof partbuf) == 0);
+
+    if (!is_part) {
+        uint64_t ssz = bpt_sector_size(syspath);
+        char uuid[37];
+        if (bpt_gpt_disk_uuid(devnode, ssz, uuid) == 0) {
+            bpt_emit(out, "ID_PART_TABLE_TYPE", "gpt");
+            bpt_emit(out, "ID_PART_TABLE_UUID", uuid);
+        } else if (bpt_dos_disk_uuid(devnode, uuid) == 0) {
+            bpt_emit(out, "ID_PART_TABLE_TYPE", "dos");
+            bpt_emit(out, "ID_PART_TABLE_UUID", uuid);
+        }
+        return 0;
+    }
+
+    unsigned n = (unsigned)atoi(partbuf);
+
+    char parentsys[PATH_MAX]; safe_copy(parentsys, syspath, sizeof parentsys);
+    if (pi_parent(parentsys) != 0) return 0;
+    uint64_t ssz = bpt_sector_size(parentsys);
+    char pdev[64];
+    if (pi_sysattr(parentsys, "dev", pdev, sizeof pdev) != 0) pdev[0] = '\0';
+
+    /* parent devnode = same directory as devnode, basename = parent sysfs basename */
+    char dir[PATH_MAX]; safe_copy(dir, devnode, sizeof dir);
+    char parentnode[PATH_MAX];
+    if (pi_parent(dir) == 0) {
+        safe_copy(parentnode, dir, sizeof parentnode);
+        safe_copy(parentnode + strlen(parentnode), "/", sizeof parentnode - strlen(parentnode));
+        safe_copy(parentnode + strlen(parentnode), pi_base(parentsys), sizeof parentnode - strlen(parentnode));
+    } else {
+        safe_copy(parentnode, "/dev/", sizeof parentnode);
+        safe_copy(parentnode + strlen(parentnode), pi_base(parentsys), sizeof parentnode - strlen(parentnode));
+    }
+
+    char uuid[37];
+    if (bpt_gpt_disk_uuid(parentnode, ssz, uuid) == 0) {
+        bpt_emit(out, "ID_PART_TABLE_TYPE", "gpt");
+        bpt_emit(out, "ID_PART_TABLE_UUID", uuid);
+        unsigned char ent[128];
+        if (bpt_gpt_entry(parentnode, ssz, n, ent) == 0)
+            bpt_emit_gpt_entry(ent, ssz, n, pdev, out);
+    } else if (bpt_dos_disk_uuid(parentnode, uuid) == 0) {
+        bpt_emit(out, "ID_PART_TABLE_TYPE", "dos");
+        bpt_emit(out, "ID_PART_TABLE_UUID", uuid);
+        unsigned char ent[16];
+        if (bpt_dos_entry(parentnode, n, ent) == 0)
+            bpt_emit_dos_entry(ent, n, pdev, out);
+    }
+    return 0;
+}
+
 #endif /* SCHEMA_BLKID_PT_H */
