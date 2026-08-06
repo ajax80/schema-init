@@ -61,4 +61,79 @@ static inline int bpt_gpt_disk_uuid(const char *devnode, uint64_t ssz, char *uui
     return 0;
 }
 
+static inline int bpt_all_zero(const unsigned char *p, size_t n) {
+    for (size_t i = 0; i < n; i++) if (p[i]) return 0;
+    return 1;
+}
+
+static inline int bpt_name_safe(unsigned char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+           (c >= 'a' && c <= 'z') || (c && strchr("#+-.:=@_", c) != NULL);
+}
+
+/* UTF-16LE (72 bytes, NUL-terminated within) -> UTF-8 -> blkid_encode_string */
+static inline void bpt_name_encode(const unsigned char *name16, char *out, size_t outsz) {
+    size_t o = 0;
+    for (int i = 0; i + 1 < 72; i += 2) {
+        unsigned u = (unsigned)name16[i] | ((unsigned)name16[i + 1] << 8);
+        if (u == 0) break;
+        unsigned char utf8[3]; int ulen;
+        if (u < 0x80)       { utf8[0] = (unsigned char)u; ulen = 1; }
+        else if (u < 0x800) { utf8[0] = (unsigned char)(0xc0 | (u >> 6));
+                              utf8[1] = (unsigned char)(0x80 | (u & 0x3f)); ulen = 2; }
+        else                { utf8[0] = (unsigned char)(0xe0 | (u >> 12));
+                              utf8[1] = (unsigned char)(0x80 | ((u >> 6) & 0x3f));
+                              utf8[2] = (unsigned char)(0x80 | (u & 0x3f)); ulen = 3; }
+        for (int k = 0; k < ulen; k++) {
+            unsigned char c = utf8[k];
+            if (bpt_name_safe(c)) { if (o + 1 < outsz) out[o++] = (char)c; }
+            else if (o + 4 < outsz) o += (size_t)snprintf(out + o, outsz - o, "\\x%02x", c);
+        }
+    }
+    if (o < outsz) out[o] = '\0'; else if (outsz) out[outsz - 1] = '\0';
+}
+
+static inline int bpt_gpt_entry(const char *devnode, uint64_t ssz, unsigned n,
+                                unsigned char ent[128]) {
+    unsigned char hdr[96];
+    if (bpt_read_at(devnode, ssz, hdr, sizeof hdr) != 0) return -1;
+    if (memcmp(hdr, "EFI PART", 8) != 0) return -1;
+    uint64_t entry_lba = bpt_le64(hdr + 72);
+    uint32_t count     = bpt_le32(hdr + 80);
+    uint32_t entsz     = bpt_le32(hdr + 84);
+    if (n < 1 || n > count || entsz < 128) return -1;
+    uint64_t off = entry_lba * ssz + (uint64_t)(n - 1) * entsz;
+    return bpt_read_at(devnode, off, ent, 128);
+}
+
+static inline void bpt_emit_gpt_entry(const unsigned char ent[128], uint64_t ssz, unsigned n,
+                                      const char *diskdev, struct uevent *out) {
+    if (bpt_all_zero(ent, 16)) return;   /* unused slot */
+    uint64_t scale = ssz / 512;
+    uint64_t first = bpt_le64(ent + 32);
+    uint64_t last  = bpt_le64(ent + 40);
+    uint64_t attrs = bpt_le64(ent + 48);
+
+    char s[64];
+    bpt_emit(out, "ID_PART_ENTRY_SCHEME", "gpt");
+
+    char name[256];
+    bpt_name_encode(ent + 56, name, sizeof name);
+    if (name[0]) bpt_emit(out, "ID_PART_ENTRY_NAME", name);
+
+    bpt_guid_str(ent + 16, s); bpt_emit(out, "ID_PART_ENTRY_UUID", s);
+    bpt_guid_str(ent + 0,  s); bpt_emit(out, "ID_PART_ENTRY_TYPE", s);
+
+    if (attrs != 0) {
+        snprintf(s, sizeof s, "0x%016llx", (unsigned long long)attrs);
+        bpt_emit(out, "ID_PART_ENTRY_FLAGS", s);
+    }
+    snprintf(s, sizeof s, "%u", n);                    bpt_emit(out, "ID_PART_ENTRY_NUMBER", s);
+    snprintf(s, sizeof s, "%llu", (unsigned long long)(first * scale));
+    bpt_emit(out, "ID_PART_ENTRY_OFFSET", s);
+    snprintf(s, sizeof s, "%llu", (unsigned long long)((last - first + 1) * scale));
+    bpt_emit(out, "ID_PART_ENTRY_SIZE", s);
+    bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
+}
+
 #endif /* SCHEMA_BLKID_PT_H */

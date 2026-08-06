@@ -67,10 +67,73 @@ static void test_gpt_disk(void) {
     printf("test_gpt_disk OK\n");
 }
 
+static int bpt_has(const struct uevent *e, const char *k, const char *v) {
+    const char *g = uevent_get(e, k); return g && strcmp(g, v) == 0;
+}
+static int bpt_absent(const struct uevent *e, const char *k) {
+    return uevent_get(e, k) == NULL;
+}
+
+/* build the verified nvme0n1p1 entry (128 bytes) */
+static void mk_entry_efi(unsigned char ent[128]) {
+    memset(ent, 0, 128);
+    unsigned char type[16] = {0x28,0x73,0x2a,0xc1,0x1f,0xf8,0xd2,0x11,
+                              0xba,0x4b,0x00,0xa0,0xc9,0x3e,0xc9,0x3b};
+    unsigned char uuid[16] = {0x88,0x4a,0xa8,0x97,0xe4,0x34,0xde,0x4d,
+                              0xb2,0xe8,0x4c,0x1e,0xe3,0xd5,0xfc,0xcc};
+    memcpy(ent, type, 16); memcpy(ent + 16, uuid, 16);
+    ent[32] = 0x00; ent[33] = 0x08;                 /* first_lba = 0x800 = 2048 */
+    ent[40] = 0xff; ent[41] = 0xc7; ent[42] = 0x12; /* last_lba = 0x12c7ff = 1230847 */
+    /* name "EFI System Partition" UTF-16LE */
+    const char *nm = "EFI System Partition";
+    for (size_t i = 0; nm[i]; i++) ent[56 + i*2] = (unsigned char)nm[i];
+}
+
+static void test_gpt_entry(void) {
+    unsigned char ent[128];
+    struct uevent e; e.n = 0;
+    mk_entry_efi(ent);
+    bpt_emit_gpt_entry(ent, 512, 1, "8:0", &e);
+    assert(bpt_has(&e, "ID_PART_ENTRY_SCHEME", "gpt"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_TYPE", "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_UUID", "97a84a88-34e4-4dde-b2e8-4c1ee3d5fccc"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_NAME", "EFI\\x20System\\x20Partition"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_NUMBER", "1"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_OFFSET", "2048"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_SIZE", "1228800"));   /* 1230847-2048+1 */
+    assert(bpt_has(&e, "ID_PART_ENTRY_DISK", "8:0"));
+    assert(bpt_absent(&e, "ID_PART_ENTRY_FLAGS"));          /* attrs 0 */
+
+    /* flags set, no name */
+    unsigned char ent2[128]; memcpy(ent2, ent, 128);
+    memset(ent2 + 56, 0, 72);                               /* clear name */
+    ent2[48+7] = 0x80;                                      /* attrs = 0x8000000000000000 */
+    struct uevent e2; e2.n = 0;
+    bpt_emit_gpt_entry(ent2, 512, 2, "8:16", &e2);
+    assert(bpt_absent(&e2, "ID_PART_ENTRY_NAME"));
+    assert(bpt_has(&e2, "ID_PART_ENTRY_FLAGS", "0x8000000000000000"));
+    assert(bpt_has(&e2, "ID_PART_ENTRY_NUMBER", "2"));
+
+    /* empty slot (all-zero type) -> emits nothing */
+    unsigned char ent3[128]; memset(ent3, 0, 128);
+    struct uevent e3; e3.n = 0;
+    bpt_emit_gpt_entry(ent3, 512, 3, "8:16", &e3);
+    assert(e3.n == 0);
+
+    /* 4Kn scaling: sector_size 4096 -> offset/size ×8 */
+    struct uevent e4; e4.n = 0;
+    bpt_emit_gpt_entry(ent, 4096, 1, "8:0", &e4);
+    assert(bpt_has(&e4, "ID_PART_ENTRY_OFFSET", "16384"));  /* 2048*8 */
+    assert(bpt_has(&e4, "ID_PART_ENTRY_SIZE", "9830400"));  /* 1228800*8 */
+
+    printf("test_gpt_entry OK\n");
+}
+
 int main(void) {
     test_guid();
     test_le();
     test_gpt_disk();
+    test_gpt_entry();
     printf("ALL blkid_pt tests passed\n");
     return 0;
 }
