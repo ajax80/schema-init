@@ -154,7 +154,7 @@ static inline void nid_names_pci(const char *sysroot, const char *pcidir, const 
     int multi = nid_pci_multifunction(pcidir);
 
     /* shared func/dev_port suffix */
-    char suffix[32]; size_t so = 0;
+    char suffix[32]; suffix[0] = '\0'; size_t so = 0;
     if (func > 0 || multi) so += (size_t)snprintf(suffix + so, sizeof suffix - so, "f%u", func);
     if (dev_port > 0)      so += (size_t)snprintf(suffix + so, sizeof suffix - so, "d%u", dev_port);
     (void)so;
@@ -284,6 +284,40 @@ static inline void nid_names_devicetree(const char *sysroot, const char *netdir,
     char path[32];
     snprintf(path, sizeof path, "%sd%d", prefix, atoi(idx));
     nid_emit(out, "ID_NET_NAME_PATH", path);
+}
+
+static inline int net_id_build(const char *sysroot, const char *devpath, struct uevent *out) {
+    out->n = 0;
+    char netdir[PATH_MAX];
+    if ((size_t)snprintf(netdir, sizeof netdir, "%s%s", sysroot, devpath) >= sizeof netdir) return 0;
+
+    if (nid_is_stacked(netdir)) return 0;
+
+    int arphrd = nid_arphrd(netdir);
+    if (arphrd != NID_ARPHRD_ETHER && arphrd != NID_ARPHRD_SLIP && arphrd != NID_ARPHRD_INFINIBAND)
+        return 0;
+
+    nid_emit(out, "ID_NET_NAMING_SCHEME", NID_NAMING_SCHEME);
+
+    char prefix[8];
+    if (nid_prefix(netdir, arphrd, prefix, sizeof prefix) != 0) return 0;
+
+    char mac[64];
+    if (nid_mac_name(netdir, prefix, arphrd, mac, sizeof mac) == 0)
+        nid_emit(out, "ID_NET_NAME_MAC", mac);
+
+    /* devicetree may provide NAME_PATH independent of the bus parent */
+    nid_names_devicetree(sysroot, netdir, prefix, out);
+    int have_path = uevent_get(out, "ID_NET_NAME_PATH") != NULL;
+
+    char busdir[PATH_MAX], sub[64];
+    if (nid_find_bus_parent(sysroot, devpath, busdir, sizeof busdir, sub, sizeof sub) == 0) {
+        if (strcmp(sub, "pci") == 0)            nid_names_pci(sysroot, busdir, prefix, out);
+        else if (strcmp(sub, "usb") == 0)       nid_names_usb(sysroot, busdir, prefix, out);
+        else if (strcmp(sub, "platform") == 0 && !have_path)
+                                                nid_names_platform(busdir, prefix, out);
+    }
+    return 0;
 }
 
 #endif /* SCHEMA_NET_ID_H */

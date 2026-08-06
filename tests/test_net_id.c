@@ -194,11 +194,74 @@ static void test_other_buses(void) {
     printf("test_other_buses OK\n");
 }
 
+static void test_build(void) {
+    char root[] = "/tmp/nidbuildXXXXXX"; assert(mkdtemp(root));
+
+    /* full PCI ethernet, permanent MAC */
+    char pci[PATH_MAX];
+    if ((size_t)snprintf(pci, sizeof pci, "%s/devices/pci0000:00/0000:06:00.0", root) >= sizeof pci) assert(0);
+    char net[PATH_MAX];
+    if ((size_t)snprintf(net, sizeof net, "%s/net/enp6s0", pci) >= sizeof net) assert(0);
+    nid_mkdirs(net);
+    nid_wf(net, "ifindex", "2"); nid_wf(net, "iflink", "2");
+    nid_wf(net, "type", "1");
+    nid_wf(net, "addr_assign_type", "0"); nid_wf(net, "addr_len", "6");
+    nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
+    nid_wf(net, "uevent", "DEVTYPE=");
+    nid_wf(pci, "dev_port", "0");
+    { char cf[PATH_MAX];
+      if ((size_t)snprintf(cf, sizeof cf, "%s/config", pci) >= sizeof cf) assert(0);
+      FILE *f = fopen(cf, "wb"); assert(f); unsigned char z[64] = {0}; fwrite(z,1,64,f); fclose(f); }
+    { char tgt[PATH_MAX];
+      if ((size_t)snprintf(tgt, sizeof tgt, "%s/bus/pci", root) >= sizeof tgt) assert(0);
+      nid_mkdirs(tgt);
+      char link[PATH_MAX];
+      if ((size_t)snprintf(link, sizeof link, "%s/subsystem", pci) >= sizeof link) assert(0);
+      symlink(tgt, link); }
+
+    struct uevent e;
+    assert(net_id_build(root, "/devices/pci0000:00/0000:06:00.0/net/enp6s0", &e) == 0);
+    assert(nid_has_val(&e, "ID_NET_NAMING_SCHEME", "v259"));
+    assert(nid_has_val(&e, "ID_NET_NAME_MAC", "enxa8a1590be8ef"));
+    assert(nid_has_val(&e, "ID_NET_NAME_PATH", "enp6s0"));
+
+    /* stacked: iflink != ifindex -> nothing */
+    char v[PATH_MAX];
+    if ((size_t)snprintf(v, sizeof v, "%s/devices/virt/net/veth0", root) >= sizeof v) assert(0);
+    nid_mkdirs(v);
+    nid_wf(v, "ifindex", "9"); nid_wf(v, "iflink", "8"); nid_wf(v, "type", "1");
+    assert(net_id_build(root, "/devices/virt/net/veth0", &e) == 0);
+    assert(e.n == 0);
+
+    /* unsupported ARPHRD (loopback 772) -> nothing */
+    char lo[PATH_MAX];
+    if ((size_t)snprintf(lo, sizeof lo, "%s/devices/virt/net/lo", root) >= sizeof lo) assert(0);
+    nid_mkdirs(lo);
+    nid_wf(lo, "ifindex", "1"); nid_wf(lo, "iflink", "1"); nid_wf(lo, "type", "772");
+    assert(net_id_build(root, "/devices/virt/net/lo", &e) == 0);
+    assert(e.n == 0);
+
+    /* standalone virtual ether (docker0): not stacked, ether, no bus parent -> scheme only */
+    char dk[PATH_MAX];
+    if ((size_t)snprintf(dk, sizeof dk, "%s/devices/virt/net/docker0", root) >= sizeof dk) assert(0);
+    nid_mkdirs(dk);
+    nid_wf(dk, "ifindex", "4"); nid_wf(dk, "iflink", "4"); nid_wf(dk, "type", "1");
+    nid_wf(dk, "addr_assign_type", "3"); nid_wf(dk, "addr_len", "6");
+    nid_wf(dk, "address", "02:42:aa:bb:cc:dd"); nid_wf(dk, "uevent", "DEVTYPE=");
+    assert(net_id_build(root, "/devices/virt/net/docker0", &e) == 0);
+    assert(nid_has_val(&e, "ID_NET_NAMING_SCHEME", "v259"));
+    assert(nid_absent(&e, "ID_NET_NAME_PATH"));
+    assert(nid_absent(&e, "ID_NET_NAME_MAC"));   /* addr_assign_type 3, not permanent */
+
+    printf("test_build OK\n");
+}
+
 int main(void) {
     test_gates();
     test_mac();
     test_pci();
     test_other_buses();
+    test_build();
     printf("ALL net_id tests passed\n");
     return 0;
 }
