@@ -1435,6 +1435,16 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 shadow_services[i].timer_next    = services[j].timer_next;
                 shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;
 
+                /* cgroup_path is runtime-only (not in the .svc): a reload parses
+                 * the shadow fresh with an empty path, so without carrying it the
+                 * PSI freeze/reclaim executive silently no-ops on every running
+                 * service after the first reload. is_frozen rides along too, or a
+                 * service frozen at reload time can never thaw (set_cgroup_freeze
+                 * early-returns when is_frozen already matches the request). */
+                memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path,
+                       sizeof(shadow_services[i].cgroup_path));
+                shadow_services[i].is_frozen = services[j].is_frozen;
+
                 /* A run-once timer (on_boot_sec with no interval) marks itself
                  * terminal by clearing SVC_TIMER when it completes. The shadow
                  * is parsed fresh from the .svc, so it has the flag back, and
