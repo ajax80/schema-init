@@ -293,6 +293,32 @@ Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if t
 
 ---
 
+## schema-udev
+
+`schema-udev` is a native uevent→schema→action daemon — a small, purpose-built alternative to udev rules for the specific devices you care about (an ESP32 over USB-serial, an RFID reader, a sensor board), running **alongside** real `systemd-udevd`, not replacing it. udevd still owns `/dev` population, symlinks, and driver binding; `schema-udev` just watches the same kernel uevent stream and runs your hook scripts when a match fires.
+
+It binds **kernel netlink group 1** (`UDEV_MONITOR_KERNEL`), never group 2 (`UDEV_MONITOR_UDEV`) — group 2 is udevd's own processed-event multicast, consumed by libudev/PipeWire for device enumeration. `schema-udev` only listens to the raw kernel group, so it has zero observed impact on PipeWire or desktop hotplug. Datagrams are checked against the kernel's `SCM_CREDENTIALS` (uid 0, pid 0) before being parsed, so a spoofed unprivileged uevent is dropped.
+
+**Rule files** live in `/etc/schema-init/dev/*.dev`, one `key=value` per line:
+
+```ini
+name=esp32-serial
+match_subsystem=tty
+match_product=10c4/*
+on_add=/usr/local/bin/esp32-up.sh
+on_remove=/usr/local/bin/esp32-down.sh
+```
+
+- `match_*` keys map to raw kernel uevent keys (`match_subsystem` → `SUBSYSTEM`, `match_product` → `PRODUCT`, etc.), **ANDed together** — a rule only fires when every `match_*` key it declares matches. Values support `fnmatch(3)` globs (`10c4/*`).
+- `on_add` / `on_remove` are hook commands run via `/bin/sh -c` with the full uevent exported as environment variables — `ACTION`, `DEVNAME`, `DEVPATH`, `PRODUCT`, `MODALIAS`, and whatever else the kernel sent.
+- Comments must be on their own line (`#` as the first non-blank character). There is no inline-comment stripping — a trailing `# note` after a value becomes part of the value. See `assets/example.dev` (fully inert — every line commented, safe to drop in as a template) and copy it to `/etc/schema-init/dev/<name>.dev` to activate.
+- `SIGHUP` reloads all rule files from disk without restarting the daemon (`schema-ctl reload` or `kill -HUP` on its pid).
+- Raw kernel (group 1) uevents deliver `DEVNAME` **without** the `/dev/` prefix (e.g. `DEVNAME=ttyUSB0`, not `/dev/ttyUSB0`) — don't anchor `match_devname` globs to `/dev/`, and hooks see `$DEVNAME` the same unprefixed way. Prefer keying on `match_subsystem` + `match_product` (vid/pid), as in the example above.
+
+**Phase 1 boundaries** — deliberately not yet implemented: no coldplug replay (only live events after `schema-udev` starts; existing devices at boot are not matched retroactively), no `/dev` symlink creation, no `/run/udev` database. Those land in later phases; Phase 1 is the netlink listener, the rule grammar, and hook dispatch.
+
+---
+
 ## State glossary
 
 | State | Meaning |

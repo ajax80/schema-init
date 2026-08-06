@@ -1,0 +1,13 @@
+# schema-udev rule example (INERT — every line commented so it loads no rule).
+# Copy to /etc/schema-init/dev/<name>.dev and uncomment when the hardware is present.
+#
+# Match keys map to raw kernel uevent keys (match_subsystem -> SUBSYSTEM), ANDed,
+# fnmatch globs allowed. Hooks run /bin/sh -c with the full uevent exported as env
+# (ACTION, DEVNAME, DEVPATH, PRODUCT, MODALIAS, ...). Comments must be on their own
+# line — inline comments after a value are NOT stripped.
+#
+# name=esp32-serial
+# match_subsystem=tty
+# match_product=10c4/*
+# on_add=/usr/local/bin/esp32-up.sh
+# on_remove=/usr/local/bin/esp32-down.sh

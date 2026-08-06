@@ -11,4 +11,5 @@ __pycache__/
 *.pyc
 schema-subreaper
 schema-board
+schema-udev
 tests/livetest/boot-logs/boot-*.txt

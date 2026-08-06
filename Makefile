@@ -10,7 +10,7 @@ CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -47,6 +47,9 @@ schema-journal-sink: schema-journal-sink.c
 schema-board: schema-board.c schema.h schema_shm.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
+schema-udev: schema-udev.c schema-udev.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -70,7 +73,7 @@ release: all
 	@cd $(RELDIR) && ls -l $(BINS) SHA256SUMS
 
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board libatomic_asneeded.a
+	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 
@@ -86,6 +89,9 @@ test:
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o /tmp/schema-test-tiering && /tmp/schema-test-tiering
 	$(CC) $(CFLAGS) tests/test_calendar.c -o /tmp/schema-test-calendar && /tmp/schema-test-calendar
+	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o /tmp/schema-test-uevent && /tmp/schema-test-uevent
+	$(CC) $(CFLAGS) tests/test_dev_match.c -o /tmp/schema-test-devmatch && /tmp/schema-test-devmatch
+	$(CC) $(CFLAGS) tests/test_dev_load.c -o /tmp/schema-test-devload && /tmp/schema-test-devload
 
 .PHONY: all clean install release aarch64 armhf desktop test
 

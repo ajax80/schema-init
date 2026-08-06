@@ -251,6 +251,16 @@ critical=1
 stable_secs=2
 EOF
 
+# --- SCHEMA-UDEV RULES DIR ---
+DEV_DIR="/etc/schema-init/dev"
+mkdir -p "$DEV_DIR"
+if [ ! -f "$DEV_DIR/example.dev" ]; then
+    cp assets/example.dev "$DEV_DIR/example.dev"
+    echo -e "  Created $DEV_DIR/example.dev"
+else
+    echo -e "  Skipped $DEV_DIR/example.dev (already exists)"
+fi
+
 # 3b. Detect DE and install matching distro profile
 DISTRO=$(detect_distro)
 DE=$(detect_de)
