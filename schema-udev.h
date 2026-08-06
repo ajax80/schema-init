@@ -153,4 +153,44 @@ static inline int dev_rules_load_dir(const char *dir, struct dev_rule *rules, in
     return n;
 }
 
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define SCHEMA_DEV_DIR "/dev/schema"
+
+static inline int symlink_apply(const char *base_dir, const char *name, const char *devname) {
+    if (!base_dir || !name || !devname || name[0] == '\0') return -1;
+    
+    struct stat st;
+    if (stat(base_dir, &st) != 0) {
+        if (mkdir(base_dir, 0755) != 0 && errno != EEXIST) return -1;
+    }
+
+    char target[512];
+    if (devname[0] == '/') snprintf(target, sizeof target, "%s", devname);
+    else snprintf(target, sizeof target, "/dev/%s", devname);
+
+    char tmppath[512], finalpath[512];
+    snprintf(tmppath, sizeof tmppath, "%s/.%s.tmp.%d", base_dir, name, (int)getpid());
+    snprintf(finalpath, sizeof finalpath, "%s/%s", base_dir, name);
+
+    unlink(tmppath);
+    if (symlink(target, tmppath) != 0) return -1;
+    if (rename(tmppath, finalpath) != 0) {
+        unlink(tmppath);
+        return -1;
+    }
+    return 0;
+}
+
+static inline int symlink_clear(const char *base_dir, const char *name) {
+    if (!base_dir || !name || name[0] == '\0') return -1;
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", base_dir, name);
+    if (unlink(path) != 0 && errno != ENOENT) return -1;
+    return 0;
+}
+
 #endif /* SCHEMA_UDEV_H */
