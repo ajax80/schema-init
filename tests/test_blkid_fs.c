@@ -78,9 +78,37 @@ static void test_ext(void) {
     printf("test_ext OK\n");
 }
 
+static void test_btrfs(void) {
+    char img[] = "/tmp/fsbtrXXXXXX"; int fd = mkstemp(img); assert(fd >= 0); close(fd);
+    zero_img(img, 0x10000 + 1024);
+    unsigned char sb[576] = {0};
+    memcpy(sb + 64, "_BHRfS_M", 8);
+    unsigned char fsid[16] = {0x90,0x55,0x7b,0xe5,0x57,0xa8,0x4f,0xf5,
+                              0xbc,0x32,0xe1,0xbc,0x83,0xbe,0x6d,0x75};
+    unsigned char sub[16]  = {0x94,0xec,0xd0,0xf5,0x5b,0x70,0x41,0x3e,
+                              0xb7,0x1f,0xdd,0x67,0x60,0x66,0x8f,0x32};
+    memcpy(sb + 32, fsid, 16);
+    memcpy(sb + 267, sub, 16);
+    memcpy(sb + 299, "fedora", 6);
+    wr_img(img, 0x10000, sb, sizeof sb);
+
+    struct uevent e; e.n = 0;
+    assert(fs_probe_btrfs(img, &e) == 0);
+    assert(fs_has(&e, "ID_FS_TYPE", "btrfs"));
+    assert(fs_has(&e, "ID_FS_UUID", "90557be5-57a8-4ff5-bc32-e1bc83be6d75"));
+    assert(fs_has(&e, "ID_FS_UUID_SUB", "94ecd0f5-5b70-413e-b71f-dd6760668f32"));
+    assert(fs_has(&e, "ID_FS_UUID_SUB_ENC", "94ecd0f5-5b70-413e-b71f-dd6760668f32"));
+    assert(fs_has(&e, "ID_FS_LABEL", "fedora"));
+    assert(fs_absent(&e, "ID_FS_VERSION"));
+
+    unlink(img);
+    printf("test_btrfs OK\n");
+}
+
 int main(void) {
     test_helpers();
     test_ext();
+    test_btrfs();
     printf("ALL blkid_fs tests passed\n");
     return 0;
 }

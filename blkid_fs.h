@@ -92,4 +92,21 @@ static inline int fs_probe_ext(const char *dev, struct uevent *out) {
     return 0;
 }
 
+static inline int fs_probe_btrfs(const char *dev, struct uevent *out) {
+    unsigned char sb[576];
+    if (bpt_read_at(dev, 0x10000, sb, sizeof sb) != 0) return -1;
+    if (memcmp(sb + 64, "_BHRfS_M", 8) != 0) return -1;
+
+    bpt_emit(out, "ID_FS_TYPE", "btrfs");
+    bpt_emit(out, "ID_FS_USAGE", "filesystem");
+    char u[37]; fs_uuid_straight(sb + 32, u); fs_emit_uuid(out, u);
+    if (!bpt_all_zero(sb + 267, 16)) {
+        char s[37]; fs_uuid_straight(sb + 267, s);
+        bpt_emit(out, "ID_FS_UUID_SUB", s);
+        bpt_emit(out, "ID_FS_UUID_SUB_ENC", s);
+    }
+    fs_emit_label(out, sb + 299, 256);
+    return 0;
+}
+
 #endif /* SCHEMA_BLKID_FS_H */
