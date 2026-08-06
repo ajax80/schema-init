@@ -219,12 +219,41 @@ static void test_ntfs_exfat(void) {
     printf("test_ntfs_exfat OK\n");
 }
 
+static void test_build(void) {
+    /* reuse the ext4 image path: build a real ext4 sb, drive the orchestrator */
+    char img[] = "/tmp/fsbuildXXXXXX"; int fd = mkstemp(img); assert(fd >= 0); close(fd);
+    zero_img(img, 4096);
+    unsigned char sb[264] = {0};
+    sb[56] = 0x53; sb[57] = 0xef;
+    unsigned char uu[16] = {0xcf,0x4f,0x2b,0x07,0xf1,0x50,0x40,0x4f,
+                            0xbd,0xe1,0x4d,0x9f,0x54,0x55,0x94,0xb4};
+    memcpy(sb + 104, uu, 16); sb[0x4C] = 1; sb[0x60] = 0x40;
+    wr_img(img, 1024, sb, sizeof sb);
+
+    struct uevent e;
+    assert(blkid_fs_build("/sys", "/devices/x", img, &e) == 0);
+    assert(fs_has(&e, "ID_FS_TYPE", "ext4"));
+    assert(fs_has(&e, "ID_FS_UUID", "cf4f2b07-f150-404f-bde1-4d9f545594b4"));
+    unlink(img);
+
+    /* unformatted device -> nothing */
+    char z[] = "/tmp/fszeroXXXXXX"; int zf = mkstemp(z); assert(zf >= 0); close(zf);
+    zero_img(z, 65536 + 1024);
+    struct uevent e2;
+    assert(blkid_fs_build("/sys", "/devices/z", z, &e2) == 0);
+    assert(e2.n == 0);
+    unlink(z);
+
+    printf("test_build OK\n");
+}
+
 int main(void) {
     test_helpers();
     test_ext();
     test_btrfs();
     test_vfat_swap();
     test_ntfs_exfat();
+    test_build();
     printf("ALL blkid_fs tests passed\n");
     return 0;
 }
