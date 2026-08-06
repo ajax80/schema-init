@@ -136,4 +136,35 @@ static inline void bpt_emit_gpt_entry(const unsigned char ent[128], uint64_t ssz
     bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
 }
 
+static inline int bpt_dos_disk_uuid(const char *devnode, char *uuid_out) {
+    unsigned char mbr[512];
+    if (bpt_read_at(devnode, 0, mbr, sizeof mbr) != 0) return -1;
+    if (mbr[510] != 0x55 || mbr[511] != 0xaa) return -1;
+    snprintf(uuid_out, 9, "%08x", bpt_le32(mbr + 440));
+    return 0;
+}
+
+static inline int bpt_dos_entry(const char *devnode, unsigned n, unsigned char ent[16]) {
+    if (n < 1 || n > 4) return -1;   /* primaries only; logical chain: see note */
+    unsigned char mbr[512];
+    if (bpt_read_at(devnode, 0, mbr, sizeof mbr) != 0) return -1;
+    if (mbr[510] != 0x55 || mbr[511] != 0xaa) return -1;
+    memcpy(ent, mbr + 446 + (n - 1) * 16, 16);
+    return 0;
+}
+
+static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
+                                      const char *diskdev, struct uevent *out) {
+    unsigned char type = ent[4];
+    if (type == 0) return;   /* empty entry */
+    char s[64];
+    bpt_emit(out, "ID_PART_ENTRY_SCHEME", "dos");
+    snprintf(s, sizeof s, "0x%02x", type);          bpt_emit(out, "ID_PART_ENTRY_TYPE", s);
+    if (ent[0] == 0x80) bpt_emit(out, "ID_PART_ENTRY_FLAGS", "0x80");
+    snprintf(s, sizeof s, "%u", n);                 bpt_emit(out, "ID_PART_ENTRY_NUMBER", s);
+    snprintf(s, sizeof s, "%u", bpt_le32(ent + 8)); bpt_emit(out, "ID_PART_ENTRY_OFFSET", s);
+    snprintf(s, sizeof s, "%u", bpt_le32(ent + 12));bpt_emit(out, "ID_PART_ENTRY_SIZE", s);
+    bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
+}
+
 #endif /* SCHEMA_BLKID_PT_H */

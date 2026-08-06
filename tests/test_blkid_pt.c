@@ -129,11 +129,46 @@ static void test_gpt_entry(void) {
     printf("test_gpt_entry OK\n");
 }
 
+static void test_dos(void) {
+    char img[] = "/tmp/bptdosXXXXXX";
+    int fd = mkstemp(img); assert(fd >= 0);
+    unsigned char buf[512] = {0};
+    /* disk signature at 440 = 0x11223344 (LE bytes) */
+    buf[440] = 0x44; buf[441] = 0x33; buf[442] = 0x22; buf[443] = 0x11;
+    /* primary entry 1 @446: bootable, type 0x83 (linux), start 2048, size 1000 */
+    unsigned char *p = buf + 446;
+    p[0] = 0x80;                    /* bootable */
+    p[4] = 0x83;                    /* type */
+    p[8] = 0x00; p[9] = 0x08;       /* start_lba = 2048 */
+    p[12] = 0xe8; p[13] = 0x03;     /* num_sectors = 1000 */
+    buf[510] = 0x55; buf[511] = 0xaa;
+    assert(write(fd, buf, sizeof buf) == (ssize_t)sizeof buf); close(fd);
+
+    char uuid[9];
+    assert(bpt_dos_disk_uuid(img, uuid) == 0);
+    assert(strcmp(uuid, "11223344") == 0);
+
+    unsigned char ent[16];
+    assert(bpt_dos_entry(img, 1, ent) == 0);
+    struct uevent e; e.n = 0;
+    bpt_emit_dos_entry(ent, 1, "8:0", &e);
+    assert(bpt_has(&e, "ID_PART_ENTRY_SCHEME", "dos"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_TYPE", "0x83"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_NUMBER", "1"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_OFFSET", "2048"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_SIZE", "1000"));
+    assert(bpt_has(&e, "ID_PART_ENTRY_FLAGS", "0x80"));
+
+    unlink(img);
+    printf("test_dos OK\n");
+}
+
 int main(void) {
     test_guid();
     test_le();
     test_gpt_disk();
     test_gpt_entry();
+    test_dos();
     printf("ALL blkid_pt tests passed\n");
     return 0;
 }
