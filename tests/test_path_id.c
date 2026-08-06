@@ -86,9 +86,99 @@ static void test_helpers(void) {
     printf("test_helpers OK\n");
 }
 
+static void mk_pci_node(const char *root, const char *relpath) {
+    char dir[4096], sub[4096], tgt[4096];
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, relpath) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    if ((size_t)snprintf(tgt, sizeof tgt, "%s/bus/pci", root) >= sizeof tgt) assert(0);
+    mklink(sub, tgt);
+}
+
+static void test_pci_bare(void) {
+    char tmpl[] = "/tmp/schema-pathid-pci-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* GPU: /devices/pci0000:00/0000:00:03.1/0000:07:00.0  (bridge skipped) */
+    char rootdir[2048];
+    snprintf(rootdir, sizeof rootdir, "%s/devices/pci0000:00", root);
+    mkdirp(rootdir);                                          /* host bridge root: no subsystem */
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:03.1");    /* bridge (pci) */
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:03.1/0000:07:00.0");
+
+    char out[PATH_ID_MAX], tag[PATH_ID_MAX];
+    assert(path_id_build(root, "/devices/pci0000:00/0000:00:03.1/0000:07:00.0",
+                         out, sizeof out) > 0);
+    assert(strcmp(out, "pci-0000:07:00.0") == 0);   /* leaf-most only, bridge skipped */
+    assert(path_id_tag(out, tag, sizeof tag) == 0);
+    assert(strcmp(tag, "pci-0000_07_00_0") == 0);
+    printf("test_pci_bare OK\n");
+}
+
+static void test_platform(void) {
+    char tmpl[] = "/tmp/schema-pathid-plat-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* bare platform: /devices/platform/AMDI0030:00 */
+    char dir[4096], sub[4096], tgt[4096];
+    if ((size_t)snprintf(dir, sizeof dir, "%s/devices/platform/AMDI0030:00", root) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(tgt, sizeof tgt, "%s/bus/platform", root) >= sizeof tgt) assert(0);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, tgt);
+
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, "/devices/platform/AMDI0030:00", out, sizeof out) > 0);
+    assert(strcmp(out, "platform-AMDI0030:00") == 0);
+    printf("test_platform OK\n");
+}
+
+static void test_pci_platform(void) {
+    char tmpl[] = "/tmp/schema-pathid-pp-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* pcspkr: /devices/pci0000:00/0000:00:14.3/PNP0800:00 */
+    char base[4096];
+    if ((size_t)snprintf(base, sizeof base, "%s/devices/pci0000:00", root) >= sizeof base) assert(0);
+    mkdirp(base);
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:14.3");
+    char dir[4096], sub[4096], tgt[4096];
+    if ((size_t)snprintf(dir, sizeof dir, "%s/devices/pci0000:00/0000:00:14.3/PNP0800:00", root) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(tgt, sizeof tgt, "%s/bus/platform", root) >= sizeof tgt) assert(0);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, tgt);
+
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, "/devices/pci0000:00/0000:00:14.3/PNP0800:00",
+                         out, sizeof out) > 0);
+    assert(strcmp(out, "pci-0000:00:14.3-platform-PNP0800:00") == 0);
+    printf("test_pci_platform OK\n");
+}
+
+static void test_unanchored(void) {
+    char tmpl[] = "/tmp/schema-pathid-un-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* a device with only a 'virtual' subsystem chain -> no pci/platform anchor */
+    char dir[4096], sub[4096], tgt[4096];
+    if ((size_t)snprintf(dir, sizeof dir, "%s/devices/virtual/misc/foo", root) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(tgt, sizeof tgt, "%s/class/misc", root) >= sizeof tgt) assert(0);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, tgt);
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, "/devices/virtual/misc/foo", out, sizeof out) == -1);
+    printf("test_unanchored OK\n");
+}
+
 int main(void) {
     test_tag();
     test_helpers();
+    test_pci_bare();
+    test_platform();
+    test_pci_platform();
+    test_unanchored();
     printf("ALL path_id tests passed\n");
     return 0;
 }

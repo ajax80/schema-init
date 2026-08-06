@@ -54,10 +54,88 @@ static inline int pi_parent(char *cur) {
 }
 
 static inline void pi_prepend(char *path, size_t pathsz, const char *comp) {
-    char tmp[PATH_ID_MAX];
+    char tmp[PATH_ID_MAX * 2];
     if (path[0]) snprintf(tmp, sizeof tmp, "%s-%s", comp, path);
     else         snprintf(tmp, sizeof tmp, "%s", comp);
     safe_copy(path, tmp, pathsz);
+}
+
+static inline int pi_handle_usb(const char *leafdir, char *cur, size_t cursz,
+                                char *path, size_t pathsz) {
+    (void)leafdir; (void)cur; (void)cursz; (void)path; (void)pathsz;
+    return 0;   /* stub: filled in Task 3 */
+}
+static inline int pi_handle_scsi(const char *leafdir, char *cur, size_t cursz,
+                                 char *path, size_t pathsz) {
+    (void)leafdir; (void)cur; (void)cursz; (void)path; (void)pathsz;
+    return 0;   /* stub: filled in Task 5 */
+}
+static inline int pi_handle_nvme(const char *leafdir, char *cur, size_t cursz,
+                                 char *path, size_t pathsz) {
+    (void)leafdir; (void)cur; (void)cursz; (void)path; (void)pathsz;
+    return 0;   /* stub: filled in Task 4 */
+}
+
+static inline ssize_t path_id_build(const char *sysroot, const char *devpath,
+                                    char *out, size_t outsz) {
+    char devroot[PATH_MAX], cur[PATH_MAX], leafdir[PATH_MAX];
+    if ((size_t)snprintf(devroot, sizeof devroot, "%s/devices", sysroot) >= sizeof devroot)
+        return -1;
+    if ((size_t)snprintf(cur, sizeof cur, "%s%s", sysroot, devpath) >= sizeof cur)
+        return -1;
+    safe_copy(leafdir, cur, sizeof leafdir);
+
+    size_t rootlen = strlen(devroot);
+    char path[PATH_ID_MAX] = "";
+    int anchored = 0;
+    char comp[PATH_ID_MAX], sub[128];
+
+    while (strlen(cur) > rootlen) {
+        if (pi_subsystem(cur, sub, sizeof sub) != 0) {
+            if (pi_parent(cur) != 0) break;
+            continue;
+        }
+        if (strcmp(sub, "pci") == 0) {
+            snprintf(comp, sizeof comp, "pci-%s", pi_base(cur));
+            pi_prepend(path, sizeof path, comp);
+            anchored = 1;
+            /* skip all pci ancestors (bridges) */
+            for (;;) {
+                if (pi_parent(cur) != 0 || strlen(cur) <= rootlen) break;
+                if (pi_subsystem(cur, sub, sizeof sub) != 0 || strcmp(sub, "pci") != 0) break;
+            }
+            continue;
+        }
+        if (strcmp(sub, "platform") == 0) {
+            snprintf(comp, sizeof comp, "platform-%s", pi_base(cur));
+            pi_prepend(path, sizeof path, comp);
+            anchored = 1;
+            if (pi_parent(cur) != 0) break;
+            continue;
+        }
+        if (strcmp(sub, "usb") == 0) {
+            if (pi_handle_usb(leafdir, cur, sizeof cur, path, sizeof path)) continue;
+            if (pi_parent(cur) != 0) break;
+            continue;
+        }
+        if (strcmp(sub, "scsi") == 0) {
+            if (pi_handle_scsi(leafdir, cur, sizeof cur, path, sizeof path)) continue;
+            if (pi_parent(cur) != 0) break;
+            continue;
+        }
+        if (strcmp(sub, "nvme") == 0) {
+            if (pi_handle_nvme(leafdir, cur, sizeof cur, path, sizeof path)) continue;
+            if (pi_parent(cur) != 0) break;
+            continue;
+        }
+        if (pi_parent(cur) != 0) break;
+    }
+
+    if (!anchored || path[0] == '\0') return -1;
+    size_t plen = strlen(path);
+    if (plen + 1 > outsz) return -1;
+    memcpy(out, path, plen + 1);
+    return (ssize_t)plen;
 }
 
 #endif /* PATH_ID_H */
