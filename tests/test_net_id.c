@@ -57,8 +57,33 @@ static void test_gates(void) {
     printf("test_gates OK\n");
 }
 
+static void test_mac(void) {
+    char root[] = "/tmp/nidmacXXXXXX"; assert(mkdtemp(root));
+    char net[PATH_MAX]; snprintf(net, sizeof net, "%s/net/eth0", root); nid_mkdirs(net);
+    char name[64];
+
+    /* permanent, 6-byte -> enx<hex, colons stripped> */
+    nid_wf(net, "addr_assign_type", "0");
+    nid_wf(net, "addr_len", "6");
+    nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
+    assert(nid_mac_name(net, "en", NID_ARPHRD_ETHER, name, sizeof name) == 0);
+    assert(strcmp(name, "enxa8a1590be8ef") == 0);
+
+    /* random assign type (1) -> no name */
+    nid_wf(net, "addr_assign_type", "1");
+    assert(nid_mac_name(net, "en", NID_ARPHRD_ETHER, name, sizeof name) != 0);
+
+    /* permanent but not 6 bytes -> no name */
+    nid_wf(net, "addr_assign_type", "0");
+    nid_wf(net, "addr_len", "20");
+    assert(nid_mac_name(net, "ib", NID_ARPHRD_INFINIBAND, name, sizeof name) != 0);
+
+    printf("test_mac OK\n");
+}
+
 int main(void) {
     test_gates();
+    test_mac();
     printf("ALL net_id tests passed\n");
     return 0;
 }

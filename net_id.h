@@ -68,4 +68,24 @@ static inline int nid_prefix(const char *netdir, int arphrd, char *out, size_t o
     return -1;
 }
 
+static inline int nid_mac_name(const char *netdir, const char *prefix, int arphrd,
+                               char *out, size_t outsz) {
+    if (arphrd == NID_ARPHRD_INFINIBAND) return -1;
+    char aat[64], alen[64], addr[64];
+    if (pi_sysattr(netdir, "addr_assign_type", aat, sizeof aat) != 0) return -1;
+    if (atoi(aat) != 0) return -1;                 /* not NET_ADDR_PERM */
+    if (pi_sysattr(netdir, "addr_len", alen, sizeof alen) != 0) return -1;
+    if (atoi(alen) != 6) return -1;
+    if (pi_sysattr(netdir, "address", addr, sizeof addr) != 0) return -1;
+
+    char hex[32]; size_t j = 0;
+    for (size_t i = 0; addr[i] && j + 1 < sizeof hex; i++)
+        if (addr[i] != ':') hex[j++] = addr[i];
+    hex[j] = '\0';
+    if (j != 12) return -1;
+
+    snprintf(out, outsz, "%sx%s", prefix, hex);
+    return 0;
+}
+
 #endif /* SCHEMA_NET_ID_H */
