@@ -221,6 +221,47 @@ static void test_usb(void) {
     printf("test_usb OK\n");
 }
 
+static void test_nvme(void) {
+    char tmpl[] = "/tmp/schema-pathid-nvme-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* /devices/pci0000:00/0000:00:01.1/0000:01:00.0/nvme/nvme0/nvme0n1
+       ID_PATH = pci-0000:01:00.0-nvme-1 */
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:01.1");
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:01.1/0000:01:00.0");
+
+    const char *pcirel = "/devices/pci0000:00/0000:00:01.1/0000:01:00.0";
+    char rel[2048], dir[2600], sub[2600], ntgt[2100], btgt[2100];
+    if ((size_t)snprintf(ntgt, sizeof ntgt, "%s/class/nvme", root) >= sizeof ntgt) assert(0);
+    mkdirp(ntgt);
+    if ((size_t)snprintf(btgt, sizeof btgt, "%s/class/block", root) >= sizeof btgt) assert(0);
+    mkdirp(btgt);
+
+    /* container 'nvme' dir: no subsystem */
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s/nvme", root, pcirel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    /* nvme0 controller: subsystem=nvme */
+    if ((size_t)snprintf(rel, sizeof rel, "%s/nvme/nvme0", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, ntgt);
+    /* nvme0n1 namespace/block leaf: subsystem=block, nsid=1 */
+    if ((size_t)snprintf(rel, sizeof rel, "%s/nvme/nvme0/nvme0n1", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, btgt);
+    char nsid[2600];
+    if ((size_t)snprintf(nsid, sizeof nsid, "%s/nsid", dir) >= sizeof nsid) assert(0);
+    mkfile(nsid, "1\n");
+
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, rel, out, sizeof out) > 0);
+    assert(strcmp(out, "pci-0000:01:00.0-nvme-1") == 0);
+    printf("test_nvme OK\n");
+}
+
 int main(void) {
     test_tag();
     test_helpers();
@@ -229,6 +270,7 @@ int main(void) {
     test_pci_platform();
     test_unanchored();
     test_usb();
+    test_nvme();
     printf("ALL path_id tests passed\n");
     return 0;
 }

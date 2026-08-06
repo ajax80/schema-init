@@ -85,8 +85,14 @@ static inline int pi_handle_scsi(const char *leafdir, char *cur, size_t cursz,
 }
 static inline int pi_handle_nvme(const char *leafdir, char *cur, size_t cursz,
                                  char *path, size_t pathsz) {
-    (void)leafdir; (void)cur; (void)cursz; (void)path; (void)pathsz;
-    return 0;   /* stub: filled in Task 4 */
+    (void)cursz;
+    char nsid[64];
+    if (pi_sysattr(leafdir, "nsid", nsid, sizeof nsid) != 0) return 0;
+    char comp[PATH_ID_MAX];
+    snprintf(comp, sizeof comp, "nvme-%s", nsid);
+    pi_prepend(path, pathsz, comp);
+    if (pi_parent(cur) != 0) return 1;
+    return 1;
 }
 
 static inline ssize_t path_id_build(const char *sysroot, const char *devpath,
