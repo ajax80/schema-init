@@ -173,4 +173,71 @@ static inline void usb_interfaces(const char *devdir, char *out, size_t outsz) {
     safe_copy(out, buf, outsz);
 }
 
+static inline int usb_id_build(const char *sysroot, const char *devpath, struct uevent *out) {
+    char devdir[PATH_MAX], ifdir[PATH_MAX];
+    if (usb_find_nodes(sysroot, devpath, devdir, sizeof devdir, ifdir, sizeof ifdir) != 0)
+        return -1;
+
+    char vid[16], pid[16], rev[16];
+    if (pi_sysattr(devdir, "idVendor", vid, sizeof vid) != 0) return -1;   /* not USB */
+    if (pi_sysattr(devdir, "idProduct", pid, sizeof pid) != 0) return -1;
+    if (pi_sysattr(devdir, "bcdDevice", rev, sizeof rev) != 0) rev[0] = '\0';
+
+    char vendor[USB_STR_MAX], vendor_enc[USB_STR_MAX];
+    char model[USB_STR_MAX], model_enc[USB_STR_MAX];
+    usb_name_field(devdir, "manufacturer", vid, vendor, sizeof vendor, vendor_enc, sizeof vendor_enc);
+    usb_name_field(devdir, "product", pid, model, sizeof model, model_enc, sizeof model_enc);
+
+    char serial_short[USB_STR_MAX];
+    int have_serial = 0;
+    {
+        char raw[USB_STR_MAX];
+        if (pi_sysattr(devdir, "serial", raw, sizeof raw) == 0 && raw[0]) {
+            usb_plain(raw, serial_short, sizeof serial_short);
+            have_serial = 1;
+        }
+    }
+
+    char serial[USB_STR_MAX * 3];
+    if (have_serial) snprintf(serial, sizeof serial, "%s_%s_%s", vendor, model, serial_short);
+    else             snprintf(serial, sizeof serial, "%s_%s", vendor, model);
+
+    const char *type = ifdir[0] ? usb_type_from_iface(ifdir) : "generic";
+    char ifaces[USB_STR_MAX];
+    usb_interfaces(devdir, ifaces, sizeof ifaces);
+    char ifnum[16];
+    int have_ifnum = ifdir[0] && pi_sysattr(ifdir, "bInterfaceNumber", ifnum, sizeof ifnum) == 0;
+    char drv[64];
+    int have_drv = ifdir[0] && usb_driver(ifdir, drv, sizeof drv) == 0;
+
+    out->n = 0;
+    #define UEMIT(k, v) do { \
+        if (out->n < UE_MAX_KEYS) { \
+            safe_copy(out->key[out->n], (k), UE_KEY_MAX); \
+            safe_copy(out->val[out->n], (v), UE_VAL_MAX); \
+            out->n++; \
+        } \
+    } while (0)
+
+    UEMIT("ID_BUS", "usb");
+    UEMIT("ID_MODEL", model); UEMIT("ID_MODEL_ENC", model_enc); UEMIT("ID_MODEL_ID", pid);
+    UEMIT("ID_SERIAL", serial);
+    if (have_serial) UEMIT("ID_SERIAL_SHORT", serial_short);
+    UEMIT("ID_VENDOR", vendor); UEMIT("ID_VENDOR_ENC", vendor_enc); UEMIT("ID_VENDOR_ID", vid);
+    if (rev[0]) UEMIT("ID_REVISION", rev);
+    UEMIT("ID_TYPE", type);
+
+    UEMIT("ID_USB_MODEL", model); UEMIT("ID_USB_MODEL_ENC", model_enc); UEMIT("ID_USB_MODEL_ID", pid);
+    UEMIT("ID_USB_SERIAL", serial);
+    if (have_serial) UEMIT("ID_USB_SERIAL_SHORT", serial_short);
+    UEMIT("ID_USB_VENDOR", vendor); UEMIT("ID_USB_VENDOR_ENC", vendor_enc); UEMIT("ID_USB_VENDOR_ID", vid);
+    if (rev[0]) UEMIT("ID_USB_REVISION", rev);
+    UEMIT("ID_USB_TYPE", type);
+    UEMIT("ID_USB_INTERFACES", ifaces);
+    if (have_ifnum) UEMIT("ID_USB_INTERFACE_NUM", ifnum);
+    if (have_drv) UEMIT("ID_USB_DRIVER", drv);
+    #undef UEMIT
+    return 0;
+}
+
 #endif /* USB_ID_H */

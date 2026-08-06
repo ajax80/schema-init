@@ -257,10 +257,76 @@ static void test_type_driver_interfaces(void) {
     printf("test_type_driver_interfaces OK\n");
 }
 
+static const char *ev_get(const struct uevent *ev, const char *k) {
+    for (int i = 0; i < ev->n; i++) if (strcmp(ev->key[i], k) == 0) return ev->val[i];
+    return NULL;
+}
+
+static void test_build_full(void) {
+    char tmpl[] = "/tmp/schema-usbid-b-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    char leaf[2048];
+    /* camera: manufacturer + product, NO serial; interface 1-4:1.0 class 0e (video) */
+    build_usb_dev(root, "/devices/pci0000:00/0000:02:00.0/usb1", "1-4", "1-4:1.0",
+                  "GenesysLogic Technology Co., Ltd.", "USB2.0 UVC PC Camera", NULL,
+                  "a16f\n", "0304\n", "0620\n", leaf, sizeof leaf);
+    /* add a second interface so ID_USB_INTERFACES has two entries like the real camera.
+     * build_usb_dev's interface is class 0e sub 01 -> 0e0100; this second is 0e0200 */
+    mk_iface(root, "/devices/pci0000:00/0000:02:00.0/usb1/1-4/1-4:1.1",
+             "01\n", "0e\n", "02\n", "00\n", NULL);
+    /* set the interface driver so ID_USB_DRIVER is present */
+    {
+        char dtgt[2200], link[2600];
+        if ((size_t)snprintf(dtgt, sizeof dtgt, "%s/bus/usb/drivers/uvcvideo", root) >= sizeof dtgt) assert(0);
+        mkdirp(dtgt);
+        if ((size_t)snprintf(link, sizeof link, "%s/devices/pci0000:00/0000:02:00.0/usb1/1-4/1-4:1.0/driver", root) >= sizeof link) assert(0);
+        mklink(link, dtgt);
+    }
+
+    struct uevent ev;
+    assert(usb_id_build(root, leaf, &ev) == 0);
+
+    assert(strcmp(ev_get(&ev, "ID_BUS"), "usb") == 0);
+    assert(strcmp(ev_get(&ev, "ID_VENDOR_ID"), "a16f") == 0);
+    assert(strcmp(ev_get(&ev, "ID_MODEL_ID"), "0304") == 0);
+    assert(strcmp(ev_get(&ev, "ID_REVISION"), "0620") == 0);
+    assert(strcmp(ev_get(&ev, "ID_VENDOR"), "GenesysLogic_Technology_Co.__Ltd.") == 0);
+    assert(strcmp(ev_get(&ev, "ID_VENDOR_ENC"), "GenesysLogic\\x20Technology\\x20Co.\\x2c\\x20Ltd.") == 0);
+    assert(strcmp(ev_get(&ev, "ID_MODEL"), "USB2.0_UVC_PC_Camera") == 0);
+    assert(strcmp(ev_get(&ev, "ID_MODEL_ENC"), "USB2.0\\x20UVC\\x20PC\\x20Camera") == 0);
+    assert(strcmp(ev_get(&ev, "ID_SERIAL"),
+                  "GenesysLogic_Technology_Co.__Ltd._USB2.0_UVC_PC_Camera") == 0);
+    assert(ev_get(&ev, "ID_SERIAL_SHORT") == NULL);          /* no serial sysattr */
+    assert(strcmp(ev_get(&ev, "ID_TYPE"), "video") == 0);
+    assert(strcmp(ev_get(&ev, "ID_USB_MODEL"), "USB2.0_UVC_PC_Camera") == 0);
+    assert(strcmp(ev_get(&ev, "ID_USB_TYPE"), "video") == 0);
+    assert(strcmp(ev_get(&ev, "ID_USB_INTERFACES"), ":0e0100:0e0200:") == 0);
+    assert(strcmp(ev_get(&ev, "ID_USB_INTERFACE_NUM"), "00") == 0);
+    assert(strcmp(ev_get(&ev, "ID_USB_DRIVER"), "uvcvideo") == 0);
+
+    /* with a serial: composition includes _SHORT */
+    char tmpl2[] = "/tmp/schema-usbid-b2-XXXXXX";
+    char *root2 = mkdtemp(tmpl2);
+    assert(root2);
+    char leaf2[2048];
+    build_usb_dev(root2, "/devices/pci0000:00/0000:02:00.0/usb1", "1-7", "1-7:1.0",
+                  "Pol Henarejos", "Pico Key", "44BA59F930300000",
+                  "2e8a\n", "10fe\n", "0806\n", leaf2, sizeof leaf2);
+    struct uevent ev2;
+    assert(usb_id_build(root2, leaf2, &ev2) == 0);
+    assert(strcmp(ev_get(&ev2, "ID_SERIAL"), "Pol_Henarejos_Pico_Key_44BA59F930300000") == 0);
+    assert(strcmp(ev_get(&ev2, "ID_SERIAL_SHORT"), "44BA59F930300000") == 0);
+    assert(strcmp(ev_get(&ev2, "ID_USB_SERIAL_SHORT"), "44BA59F930300000") == 0);
+
+    printf("test_build_full OK\n");
+}
+
 int main(void) {
     test_encoders();
     test_discovery_and_names();
     test_type_driver_interfaces();
+    test_build_full();
     printf("ALL usb_id tests passed\n");
     return 0;
 }
