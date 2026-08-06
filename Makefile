@@ -5,7 +5,7 @@ STRIP   = $(CROSS_COMPILE)strip
 # own CFLAGS in the environment. The flags the code actually requires to
 # compile are appended, so overriding CFLAGS cannot silently drop them.
 CFLAGS ?= -O2
-CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE
+CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I.
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
@@ -102,6 +102,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_parity.c -o /tmp/schema-test-parity && /tmp/schema-test-parity
 	$(CC) $(CFLAGS) tests/test_path_id.c -o /tmp/schema-test-pathid && /tmp/schema-test-pathid
 	$(CC) $(CFLAGS) tests/test_usb_id.c -o /tmp/schema-test-usbid && /tmp/schema-test-usbid
+	$(CC) $(CFLAGS) tests/test_input_id.c -o /tmp/schema-test-inputid && /tmp/schema-test-inputid
 
 .PHONY: all clean install release aarch64 armhf desktop test
 
