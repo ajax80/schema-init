@@ -125,7 +125,7 @@ static inline void bpt_emit_gpt_entry(const unsigned char ent[128], uint64_t ssz
     bpt_guid_str(ent + 0,  s); bpt_emit(out, "ID_PART_ENTRY_TYPE", s);
 
     if (attrs != 0) {
-        snprintf(s, sizeof s, "0x%016llx", (unsigned long long)attrs);
+        snprintf(s, sizeof s, "0x%llx", (unsigned long long)attrs);
         bpt_emit(out, "ID_PART_ENTRY_FLAGS", s);
     }
     snprintf(s, sizeof s, "%u", n);                    bpt_emit(out, "ID_PART_ENTRY_NUMBER", s);
