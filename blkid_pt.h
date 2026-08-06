@@ -24,6 +24,10 @@ static inline int bpt_read_at(const char *devnode, uint64_t off, void *buf, size
     return (n == (ssize_t)len) ? 0 : -1;
 }
 
+static inline uint16_t bpt_le16(const unsigned char *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
 static inline uint32_t bpt_le32(const unsigned char *p) {
     uint32_t v = 0;
     for (int i = 0; i < 4; i++) v |= (uint32_t)p[i] << (8 * i);

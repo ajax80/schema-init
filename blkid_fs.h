@@ -63,4 +63,33 @@ static inline void fs_emit_label(struct uevent *out, const unsigned char *raw, s
     if (enc[0])  bpt_emit(out, "ID_FS_LABEL_ENC", enc);
 }
 
+static inline int fs_probe_ext(const char *dev, struct uevent *out) {
+    unsigned char sb[264];
+    if (bpt_read_at(dev, 1024, sb, sizeof sb) != 0) return -1;
+    if (!(sb[56] == 0x53 && sb[57] == 0xef)) return -1;   /* 0xEF53 LE */
+
+    uint32_t fc = bpt_le32(sb + 0x5C);   /* feature_compat   */
+    uint32_t fi = bpt_le32(sb + 0x60);   /* feature_incompat */
+    uint32_t frc = bpt_le32(sb + 0x64);  /* feature_ro_compat */
+    const char *type;
+    /* ext4 markers: EXTENTS|64BIT|FLEX_BG (incompat) or HUGE_FILE|GDT_CSUM|DIR_NLINK|EXTRA_ISIZE|METADATA_CSUM (ro) */
+    if ((fi & (0x0040u | 0x0080u | 0x0200u)) ||
+        (frc & (0x0008u | 0x0010u | 0x0020u | 0x0040u | 0x0400u)))
+        type = "ext4";
+    else if (fc & 0x0004u)   /* HAS_JOURNAL */
+        type = "ext3";
+    else
+        type = "ext2";
+
+    bpt_emit(out, "ID_FS_TYPE", type);
+    bpt_emit(out, "ID_FS_USAGE", "filesystem");
+    char u[37]; fs_uuid_straight(sb + 104, u); fs_emit_uuid(out, u);
+    fs_emit_label(out, sb + 120, 16);
+    char ver[16];
+    snprintf(ver, sizeof ver, "%u.%u",
+             (unsigned)bpt_le32(sb + 0x4C), (unsigned)bpt_le16(sb + 0x7E));
+    bpt_emit(out, "ID_FS_VERSION", ver);
+    return 0;
+}
+
 #endif /* SCHEMA_BLKID_FS_H */
