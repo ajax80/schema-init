@@ -87,4 +87,90 @@ static inline void usb_name_field(const char *devdir, const char *attr,
     usb_encode(raw, enc, esz);
 }
 
+static inline const char *usb_type_from_iface(const char *ifdir) {
+    char cls[16], sub[16];
+    if (pi_sysattr(ifdir, "bInterfaceClass", cls, sizeof cls) != 0) return "generic";
+    if (strcmp(cls, "01") == 0) return "audio";
+    if (strcmp(cls, "03") == 0) return "hid";
+    if (strcmp(cls, "06") == 0) return "media";
+    if (strcmp(cls, "07") == 0) return "printer";
+    if (strcmp(cls, "08") == 0) {
+        if (pi_sysattr(ifdir, "bInterfaceSubClass", sub, sizeof sub) == 0) {
+            if (strcmp(sub, "02") == 0) return "cd";
+            if (strcmp(sub, "03") == 0) return "tape";
+            if (strcmp(sub, "04") == 0 || strcmp(sub, "07") == 0) return "floppy";
+        }
+        return "disk";
+    }
+    if (strcmp(cls, "09") == 0) return "hub";
+    if (strcmp(cls, "0e") == 0) return "video";
+    if (strcmp(cls, "e0") == 0) return "wireless";
+    return "generic";
+}
+
+static inline int usb_driver(const char *ifdir, char *out, size_t outsz) {
+    char link[PATH_MAX], target[PATH_MAX];
+    if ((size_t)snprintf(link, sizeof link, "%s/driver", ifdir) >= sizeof link) return -1;
+    ssize_t n = readlink(link, target, sizeof target - 1);
+    if (n <= 0) return -1;
+    target[n] = '\0';
+    char *b = strrchr(target, '/');
+    safe_copy(out, b ? b + 1 : target, outsz);
+    return 0;
+}
+
+struct usb_if { int num; char trip[16]; };
+
+static inline void usb_interfaces(const char *devdir, char *out, size_t outsz) {
+    const char *devbase = pi_base(devdir);
+    char prefix[128];
+    snprintf(prefix, sizeof prefix, "%s:", devbase);
+    size_t plen = strlen(prefix);
+
+    struct usb_if ifs[32];
+    int n = 0;
+    DIR *d = opendir(devdir);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL && n < 32) {
+            if (strncmp(e->d_name, prefix, plen) != 0) continue;
+            char ifp[PATH_MAX];
+            if ((size_t)snprintf(ifp, sizeof ifp, "%s/%s", devdir, e->d_name) >= sizeof ifp) continue;
+            char cls[16], sub[16], pro[16], num[16];
+            if (pi_sysattr(ifp, "bInterfaceClass", cls, sizeof cls) != 0) continue;
+            if (pi_sysattr(ifp, "bInterfaceSubClass", sub, sizeof sub) != 0) continue;
+            if (pi_sysattr(ifp, "bInterfaceProtocol", pro, sizeof pro) != 0) continue;
+            if (pi_sysattr(ifp, "bInterfaceNumber", num, sizeof num) != 0) continue;
+            ifs[n].num = (int)strtol(num, NULL, 16);
+            if ((size_t)snprintf(ifs[n].trip, sizeof ifs[n].trip, "%s%s%s", cls, sub, pro) >= sizeof ifs[n].trip) continue;
+            n++;
+        }
+        closedir(d);
+    }
+    /* insertion sort ascending by bInterfaceNumber */
+    for (int i = 1; i < n; i++) {
+        struct usb_if key = ifs[i];
+        int j = i - 1;
+        while (j >= 0 && ifs[j].num > key.num) { ifs[j + 1] = ifs[j]; j--; }
+        ifs[j + 1] = key;
+    }
+    /* build ":t:t:...:" with dedup */
+    char buf[USB_STR_MAX];
+    size_t bl = 0;
+    buf[bl++] = ':'; buf[bl] = '\0';
+    for (int i = 0; i < n; i++) {
+        char probe[16];
+        snprintf(probe, sizeof probe, ":%s:", ifs[i].trip);
+        if (strstr(buf, probe)) continue;              /* dedup: triplet already present */
+        char seg[16];
+        int w = snprintf(seg, sizeof seg, "%s:", ifs[i].trip);
+        if (w > 0 && bl + (size_t)w < sizeof buf) {
+            memcpy(buf + bl, seg, (size_t)w);
+            bl += (size_t)w;
+            buf[bl] = '\0';
+        }
+    }
+    safe_copy(out, buf, outsz);
+}
+
 #endif /* USB_ID_H */
