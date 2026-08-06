@@ -159,4 +159,80 @@ static inline int fs_probe_swap(const char *dev, struct uevent *out) {
     return 0;
 }
 
+static inline int fs_probe_ntfs(const char *dev, struct uevent *out) {
+    unsigned char bs[512];
+    if (bpt_read_at(dev, 0, bs, sizeof bs) != 0) return -1;
+    if (memcmp(bs + 3, "NTFS    ", 8) != 0) return -1;
+
+    bpt_emit(out, "ID_FS_TYPE", "ntfs");
+    bpt_emit(out, "ID_FS_USAGE", "filesystem");
+    char u[17];
+    snprintf(u, sizeof u, "%02X%02X%02X%02X%02X%02X%02X%02X",
+             bs[79], bs[78], bs[77], bs[76], bs[75], bs[74], bs[73], bs[72]);
+    fs_emit_uuid(out, u);
+
+    unsigned bps = bpt_le16(bs + 11);
+    unsigned spc = bs[13];
+    if (bps == 0 || spc == 0) return 0;
+    uint64_t cluster = (uint64_t)bps * spc;
+    int64_t mft_lcn = (int64_t)bpt_le64(bs + 48);
+    int8_t rd = (int8_t)bs[64];
+    uint64_t rec_size = (rd < 0) ? ((uint64_t)1 << (unsigned)(-rd)) : (uint64_t)rd * cluster;
+    if (mft_lcn <= 0 || rec_size < 42 || rec_size > 65536) return 0;
+
+    unsigned char *rec = (unsigned char *)malloc(rec_size);
+    if (!rec) return 0;
+    if (bpt_read_at(dev, (uint64_t)mft_lcn * cluster + 3 * rec_size, rec, rec_size) != 0 ||
+        memcmp(rec, "FILE", 4) != 0) { free(rec); return 0; }
+
+    /* apply the update-sequence-array fixup */
+    unsigned usa_off = bpt_le16(rec + 4), usa_cnt = bpt_le16(rec + 6);
+    if (usa_off && usa_cnt > 1 && bps) {
+        for (unsigned i = 1; i < usa_cnt; i++) {
+            uint64_t pos = (uint64_t)i * bps - 2;
+            if (pos + 2 <= rec_size && usa_off + i * 2 + 1 < rec_size) {
+                rec[pos]     = rec[usa_off + i * 2];
+                rec[pos + 1] = rec[usa_off + i * 2 + 1];
+            }
+        }
+    }
+
+    unsigned ao = bpt_le16(rec + 20);
+    while (ao + 8 <= rec_size) {
+        uint32_t atype = bpt_le32(rec + ao);
+        if (atype == 0xffffffffu) break;
+        uint32_t alen = bpt_le32(rec + ao + 4);
+        if (alen == 0 || (uint64_t)ao + alen > rec_size) break;
+        if (atype == 0x60) {   /* $VOLUME_NAME, resident */
+            uint32_t vlen = bpt_le32(rec + ao + 16);
+            uint32_t voff = bpt_le16(rec + ao + 20);
+            if (vlen > 0 && (uint64_t)ao + voff + vlen <= rec_size) {
+                char lbl[256];
+                fs_utf16_to_utf8(rec + ao + voff, vlen, lbl, sizeof lbl);
+                fs_emit_label(out, (unsigned char *)lbl, strlen(lbl));
+            }
+            break;
+        }
+        ao += alen;
+    }
+    free(rec);
+    return 0;
+}
+
+static inline int fs_probe_exfat(const char *dev, struct uevent *out) {
+    unsigned char vbr[512];
+    if (bpt_read_at(dev, 0, vbr, sizeof vbr) != 0) return -1;
+    if (memcmp(vbr + 3, "EXFAT   ", 8) != 0) return -1;
+
+    bpt_emit(out, "ID_FS_TYPE", "exfat");
+    bpt_emit(out, "ID_FS_USAGE", "filesystem");
+    uint32_t serial = bpt_le32(vbr + 100);
+    char u[16];
+    snprintf(u, sizeof u, "%04X-%04X", (unsigned)(serial >> 16), (unsigned)(serial & 0xffff));
+    fs_emit_uuid(out, u);
+    /* exFAT LABEL lives in a root-directory volume-label entry (cluster walk) — deferred;
+       port from libblkid superblocks/exfat.c if a real exFAT volume ever needs it. */
+    return 0;
+}
+
 #endif /* SCHEMA_BLKID_FS_H */

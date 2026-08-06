@@ -158,11 +158,73 @@ static void test_vfat_swap(void) {
     printf("test_vfat_swap OK\n");
 }
 
+static void test_ntfs_exfat(void) {
+    /* NTFS: bps=512, spc=8 -> cluster 4096; mft_lcn=1 -> mft @4096; rec_desc=-10 -> rec 1024.
+       $Volume is record 3 -> mft@4096 + 3*1024 = 7168. Serial @72 (8B) reversed. */
+    char n[] = "/tmp/fsntfsXXXXXX"; int nf = mkstemp(n); assert(nf >= 0); close(nf);
+    zero_img(n, 16384);
+    unsigned char bs[512] = {0};
+    memcpy(bs + 3, "NTFS    ", 8);
+    bs[11] = 0x00; bs[12] = 0x02;   /* bytes/sector = 512 */
+    bs[13] = 8;                     /* sec/cluster -> cluster 4096 */
+    bs[48] = 1;                     /* mft_lcn = 1 (u64 LE) */
+    bs[64] = (unsigned char)(-10);  /* clusters_per_mft_record = -10 -> 1<<10 = 1024 */
+    /* serial @72: bytes -> printed reversed as 6E54847B54844833 */
+    unsigned char ser[8] = {0x33,0x48,0x84,0x54,0x7b,0x84,0x54,0x6e};
+    memcpy(bs + 72, ser, 8);
+    bs[510] = 0x55; bs[511] = 0xaa;
+    wr_img(n, 0, bs, sizeof bs);
+
+    /* MFT record 3 @ 7168: "FILE" header, usa_off=48 usa_cnt=3, first_attr@56,
+       one $VOLUME_NAME (0x60) resident attr with value "RECOVERY" (UTF-16LE). */
+    unsigned char rec[1024] = {0};
+    memcpy(rec, "FILE", 4);
+    rec[4] = 48; rec[5] = 0;        /* usa_offset = 48 */
+    rec[6] = 3;  rec[7] = 0;        /* usa_count = 3 */
+    rec[20] = 56; rec[21] = 0;      /* first attribute offset = 56 */
+    /* attribute @56: type 0x60, len 40, non-res=0, name_len=0, value_len, value_off */
+    unsigned char *a = rec + 56;
+    a[0] = 0x60;                    /* type $VOLUME_NAME */
+    a[4] = 40;                      /* attr length = 40 */
+    a[16] = 16; a[17] = 0;          /* value_length = 16 (8 UTF-16 chars) */
+    a[20] = 24; a[21] = 0;          /* value_offset = 24 */
+    const char *L = "RECOVERY";
+    for (int i = 0; L[i]; i++) a[24 + i*2] = (unsigned char)L[i];
+    /* terminator after the attr */
+    rec[56 + 40] = 0xff; rec[56 + 41] = 0xff; rec[56 + 42] = 0xff; rec[56 + 43] = 0xff;
+    /* fixup: usa[0]=signature word; sectors' last 2 bytes must equal usa[0] then get restored.
+       Keep signature 0 so the fixup writes zeros (harmless for our short attr region). */
+    wr_img(n, 7168, rec, sizeof rec);
+
+    struct uevent e; e.n = 0;
+    assert(fs_probe_ntfs(n, &e) == 0);
+    assert(fs_has(&e, "ID_FS_TYPE", "ntfs"));
+    assert(fs_has(&e, "ID_FS_UUID", "6E54847B54844833"));
+    assert(fs_has(&e, "ID_FS_LABEL", "RECOVERY"));
+    unlink(n);
+
+    /* exfat: serial @100 = 0x12345678 -> "1234-5678" */
+    char x[] = "/tmp/fsexfatXXXXXX"; int xf = mkstemp(x); assert(xf >= 0); close(xf);
+    zero_img(x, 512);
+    unsigned char xb[512] = {0};
+    memcpy(xb + 3, "EXFAT   ", 8);
+    xb[100] = 0x78; xb[101] = 0x56; xb[102] = 0x34; xb[103] = 0x12;   /* serial LE */
+    wr_img(x, 0, xb, sizeof xb);
+    struct uevent e2; e2.n = 0;
+    assert(fs_probe_exfat(x, &e2) == 0);
+    assert(fs_has(&e2, "ID_FS_TYPE", "exfat"));
+    assert(fs_has(&e2, "ID_FS_UUID", "1234-5678"));
+    unlink(x);
+
+    printf("test_ntfs_exfat OK\n");
+}
+
 int main(void) {
     test_helpers();
     test_ext();
     test_btrfs();
     test_vfat_swap();
+    test_ntfs_exfat();
     printf("ALL blkid_fs tests passed\n");
     return 0;
 }
