@@ -105,10 +105,64 @@ static void test_btrfs(void) {
     printf("test_btrfs OK\n");
 }
 
+static void test_vfat_swap(void) {
+    /* vfat FAT32: serial 7c 76 73 07 -> 0773-767C; label "NO NAME    " -> none */
+    char v[] = "/tmp/fsvfatXXXXXX"; int vf = mkstemp(v); assert(vf >= 0); close(vf);
+    zero_img(v, 512);
+    unsigned char bs[512] = {0};
+    bs[11] = 0x00; bs[12] = 0x02;   /* bytes/sector = 512 */
+    bs[13] = 8;                     /* sec/cluster */
+    /* fatsz16 (@22) = 0 -> FAT32 */
+    bs[67] = 0x7c; bs[68] = 0x76; bs[69] = 0x73; bs[70] = 0x07;      /* serial */
+    memcpy(bs + 71, "NO NAME    ", 11);                              /* no label */
+    bs[510] = 0x55; bs[511] = 0xaa;
+    wr_img(v, 0, bs, sizeof bs);
+
+    struct uevent e; e.n = 0;
+    assert(fs_probe_vfat(v, &e) == 0);
+    assert(fs_has(&e, "ID_FS_TYPE", "vfat"));
+    assert(fs_has(&e, "ID_FS_UUID", "0773-767C"));
+    assert(fs_has(&e, "ID_FS_VERSION", "FAT32"));
+    assert(fs_absent(&e, "ID_FS_LABEL"));
+    unlink(v);
+
+    /* labeled FAT32 */
+    char v2[] = "/tmp/fsvfat2XXXXXX"; int vf2 = mkstemp(v2); assert(vf2 >= 0); close(vf2);
+    zero_img(v2, 512);
+    bs[13] = 8; memcpy(bs + 71, "MYSTICK    ", 11);
+    wr_img(v2, 0, bs, sizeof bs);
+    struct uevent e2; e2.n = 0;
+    assert(fs_probe_vfat(v2, &e2) == 0);
+    assert(fs_has(&e2, "ID_FS_LABEL", "MYSTICK"));
+    unlink(v2);
+
+    /* swap: version 1, uuid c2e50da1..., usage other, page 4096 */
+    char s[] = "/tmp/fsswapXXXXXX"; int sf = mkstemp(s); assert(sf >= 0); close(sf);
+    zero_img(s, 8192);
+    unsigned char hdr[64] = {0};
+    hdr[0] = 1;                     /* version @1024 = 1 */
+    unsigned char su[16] = {0xc2,0xe5,0x0d,0xa1,0x0f,0x93,0x4f,0x2b,
+                            0x81,0x32,0x29,0xe3,0x14,0xf2,0xc8,0x27};
+    memcpy(hdr + 12, su, 16);       /* uuid @1036 */
+    wr_img(s, 1024, hdr, sizeof hdr);
+    unsigned char mg[10]; memcpy(mg, "SWAPSPACE2", 10);
+    wr_img(s, 4096 - 10, mg, 10);
+    struct uevent e3; e3.n = 0;
+    assert(fs_probe_swap(s, &e3) == 0);
+    assert(fs_has(&e3, "ID_FS_TYPE", "swap"));
+    assert(fs_has(&e3, "ID_FS_USAGE", "other"));
+    assert(fs_has(&e3, "ID_FS_UUID", "c2e50da1-0f93-4f2b-8132-29e314f2c827"));
+    assert(fs_has(&e3, "ID_FS_VERSION", "1"));
+    unlink(s);
+
+    printf("test_vfat_swap OK\n");
+}
+
 int main(void) {
     test_helpers();
     test_ext();
     test_btrfs();
+    test_vfat_swap();
     printf("ALL blkid_fs tests passed\n");
     return 0;
 }

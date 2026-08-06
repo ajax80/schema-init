@@ -109,4 +109,54 @@ static inline int fs_probe_btrfs(const char *dev, struct uevent *out) {
     return 0;
 }
 
+static inline int fs_probe_vfat(const char *dev, struct uevent *out) {
+    unsigned char bs[512];
+    if (bpt_read_at(dev, 0, bs, sizeof bs) != 0) return -1;
+    if (!(bs[510] == 0x55 && bs[511] == 0xaa)) return -1;
+    if (memcmp(bs + 3, "NTFS", 4) == 0 || memcmp(bs + 3, "EXFAT", 5) == 0) return -1;
+    unsigned bps = bpt_le16(bs + 11);
+    if (bps < 512 || bps > 4096 || (bps & (bps - 1)) || bs[13] == 0) return -1;
+
+    int is_fat32 = (bpt_le16(bs + 22) == 0);
+    unsigned ser = is_fat32 ? 67 : 39;
+    unsigned lbo = is_fat32 ? 71 : 43;
+
+    bpt_emit(out, "ID_FS_TYPE", "vfat");
+    bpt_emit(out, "ID_FS_USAGE", "filesystem");
+    char u[16];
+    snprintf(u, sizeof u, "%02X%02X-%02X%02X", bs[ser + 3], bs[ser + 2], bs[ser + 1], bs[ser]);
+    fs_emit_uuid(out, u);
+    if (memcmp(bs + lbo, "NO NAME    ", 11) != 0) {
+        unsigned char lbl[12]; memcpy(lbl, bs + lbo, 11); lbl[11] = '\0';
+        int end = 11; while (end > 0 && lbl[end - 1] == ' ') end--;
+        lbl[end] = '\0';
+        if (end > 0) fs_emit_label(out, lbl, (size_t)end);
+    }
+    bpt_emit(out, "ID_FS_VERSION", is_fat32 ? "FAT32" : "FAT16");   /* FAT12 vs 16: see note */
+    return 0;
+}
+
+static inline int fs_probe_swap(const char *dev, struct uevent *out) {
+    static const uint64_t pages[] = {4096, 65536, 16384, 8192, 2048, 1024};
+    int found = 0;
+    for (unsigned i = 0; i < sizeof pages / sizeof pages[0]; i++) {
+        unsigned char m[10];
+        if (bpt_read_at(dev, pages[i] - 10, m, 10) != 0) continue;
+        if (memcmp(m, "SWAPSPACE2", 10) == 0 || memcmp(m, "SWAP-SPACE", 10) == 0) { found = 1; break; }
+    }
+    if (!found) return -1;
+    unsigned char hdr[64];
+    if (bpt_read_at(dev, 1024, hdr, sizeof hdr) != 0) return -1;
+
+    bpt_emit(out, "ID_FS_TYPE", "swap");
+    bpt_emit(out, "ID_FS_USAGE", "other");
+    if (!bpt_all_zero(hdr + 12, 16)) {
+        char u[37]; fs_uuid_straight(hdr + 12, u); fs_emit_uuid(out, u);
+    }
+    fs_emit_label(out, hdr + 28, 16);   /* volume_name @ 1024+28 = 1052 */
+    char ver[16]; snprintf(ver, sizeof ver, "%u", (unsigned)bpt_le32(hdr));
+    bpt_emit(out, "ID_FS_VERSION", ver);
+    return 0;
+}
+
 #endif /* SCHEMA_BLKID_FS_H */
