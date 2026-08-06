@@ -223,7 +223,7 @@ static void test_type_driver_interfaces(void) {
     /* type from the class-0e interface */
     char ifdir[PATH_MAX];
     if ((size_t)snprintf(ifdir, sizeof ifdir, "%s%s/1-7:1.0", root, devrel) >= sizeof ifdir) assert(0);
-    assert(strcmp(usb_type_from_iface(ifdir), "hid") == 0);
+    assert(strcmp(usb_type_from_iface(ifdir, devrel), "hid") == 0);
 
     char drv[64];
     assert(usb_driver(ifdir, drv, sizeof drv) == 0);
@@ -248,11 +248,11 @@ static void test_type_driver_interfaces(void) {
     char tmpl3[] = "/tmp/schema-usbid-s-XXXXXX";
     char *root3 = mkdtemp(tmpl3);
     assert(root3);
-    const char *sifrel = "/devices/pci0000:00/x/4-1/4-1:1.0";
-    mk_iface(root3, sifrel, "00\n","08\n","06\n","50\n","usb-storage");
+    const char *sifrel = "/devices/pci0000:00/x/4-1/4-1:1.0/block/sda";
+    mk_iface(root3, "/devices/pci0000:00/x/4-1/4-1:1.0", "00\n","08\n","06\n","50\n","usb-storage");
     char sifdir[PATH_MAX];
-    if ((size_t)snprintf(sifdir, sizeof sifdir, "%s%s", root3, sifrel) >= sizeof sifdir) assert(0);
-    assert(strcmp(usb_type_from_iface(sifdir), "disk") == 0);
+    if ((size_t)snprintf(sifdir, sizeof sifdir, "%s/devices/pci0000:00/x/4-1/4-1:1.0", root3) >= sizeof sifdir) assert(0);
+    assert(strcmp(usb_type_from_iface(sifdir, sifrel), "disk") == 0);
 
     printf("test_type_driver_interfaces OK\n");
 }
