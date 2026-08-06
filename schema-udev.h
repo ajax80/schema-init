@@ -193,4 +193,70 @@ static inline int symlink_clear(const char *base_dir, const char *name) {
     return 0;
 }
 
+static inline void safe_copy(char *dst, const char *src, size_t maxlen) {
+    size_t l = strlen(src);
+    if (l >= maxlen) l = maxlen - 1;
+    memcpy(dst, src, l);
+    dst[l] = '\0';
+}
+
+/* Synthesize a struct uevent from a sysfs device directory D (which contains a uevent file).
+ * sysroot is the sysfs root path (usually "/sys", or a /tmp test root).
+ * Strips sysroot from dirpath to yield DEVPATH starting with "/devices/". */
+static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, struct uevent *ev) {
+    char upath[1024];
+    if ((size_t)snprintf(upath, sizeof upath, "%s/uevent", dirpath) >= sizeof upath) return -1;
+    FILE *f = fopen(upath, "r");
+    if (!f) return -1;
+
+    memset(ev, 0, sizeof *ev);
+
+    /* Set ACTION=add */
+    safe_copy(ev->key[ev->n], "ACTION", UE_KEY_MAX);
+    safe_copy(ev->val[ev->n], "add", UE_VAL_MAX);
+    ev->n++;
+
+    /* Set DEVPATH (strip sysroot prefix) */
+    const char *devpath = dirpath;
+    size_t sroot_len = strlen(sysroot);
+    if (strncmp(dirpath, sysroot, sroot_len) == 0) devpath = dirpath + sroot_len;
+    safe_copy(ev->key[ev->n], "DEVPATH", UE_KEY_MAX);
+    safe_copy(ev->val[ev->n], devpath, UE_VAL_MAX);
+    ev->n++;
+
+    /* Resolve SUBSYSTEM from subsystem symlink */
+    char sublink[1024], subtarget[1024];
+    if ((size_t)snprintf(sublink, sizeof sublink, "%s/subsystem", dirpath) < sizeof sublink) {
+        ssize_t slen = readlink(sublink, subtarget, sizeof(subtarget) - 1);
+        if (slen > 0) {
+            subtarget[slen] = '\0';
+            char *bname = strrchr(subtarget, '/');
+            const char *subsys = bname ? bname + 1 : subtarget;
+            safe_copy(ev->key[ev->n], "SUBSYSTEM", UE_KEY_MAX);
+            safe_copy(ev->val[ev->n], subsys, UE_VAL_MAX);
+            ev->n++;
+        }
+    }
+
+    /* Read KEY=VALUE lines from uevent file */
+    char line[512];
+    while (fgets(line, sizeof line, f) && ev->n < UE_MAX_KEYS) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *val = eq + 1;
+        val[strcspn(val, "\r\n")] = '\0';
+        
+        /* Skip duplicate ACTION, DEVPATH, SUBSYSTEM if in file */
+        if (uevent_get(ev, line) != NULL) continue;
+
+        safe_copy(ev->key[ev->n], line, UE_KEY_MAX);
+        safe_copy(ev->val[ev->n], val, UE_VAL_MAX);
+        ev->n++;
+    }
+
+    fclose(f);
+    return 0;
+}
+
 #endif /* SCHEMA_UDEV_H */
