@@ -163,4 +163,29 @@ static inline int iid_test_pointers(const unsigned long ev[IID_NWORDS], const un
     return is_tablet || is_mouse || is_touchpad || is_touchscreen || is_joystick || is_pointing_stick;
 }
 
+static inline int input_id_build(const char *sysroot, const char *devpath, struct uevent *out) {
+    out->n = 0;
+    char inp[PATH_MAX];
+    if (iid_find_input_node(sysroot, devpath, inp, sizeof inp) != 0) return -1;
+
+    unsigned long ev[IID_NWORDS], key[IID_NWORDS], rel[IID_NWORDS], abs_[IID_NWORDS], prop[IID_NWORDS];
+    iid_read_masks(inp, ev, key, rel, abs_, prop);
+
+    if (iid_test_bit(ev, EV_SW)) iid_emit(out, "ID_INPUT_SWITCH", "1");
+
+    int is_pointer = iid_test_pointers(ev, abs_, key, rel, prop, out);
+    int is_key = iid_test_key(ev, key, out);
+
+    if (!is_pointer && !is_key && iid_test_bit(ev, EV_REL)
+        && (iid_test_bit(rel, REL_WHEEL) || iid_test_bit(rel, REL_HWHEEL))) {
+        iid_emit(out, "ID_INPUT_KEY", "1");
+        is_key = 1;
+    }
+
+    if (is_pointer || is_key || iid_test_bit(ev, EV_SW))
+        iid_emit(out, "ID_INPUT", "1");
+
+    return 0;
+}
+
 #endif

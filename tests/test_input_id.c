@@ -177,10 +177,40 @@ static void test_heuristic(void) {
     printf("test_heuristic OK\n");
 }
 
+static void test_build_full(void) {
+    char root[] = "/tmp/iidbuildXXXXXX";
+    assert(mkdtemp(root));
+
+    /* keyboard node */
+    iid_make_node(root, "/devices/kbd", "120013", "fffffffffffffffe", "0", "0", "0"); /* word0 = keyboard mask */
+    char ev0[PATH_MAX]; snprintf(ev0, sizeof ev0, "%s/devices/kbd/event0", root); iid_mkdirs(ev0);
+    struct uevent e; assert(input_id_build(root, "/devices/kbd/event0", &e) == 0);
+    assert(iid_has(&e, "ID_INPUT"));
+    assert(iid_has(&e, "ID_INPUT_KEYBOARD") && iid_has(&e, "ID_INPUT_KEY"));
+    assert(!iid_has(&e, "ID_INPUT_MOUSE"));
+
+    /* switch-only node (audio jack): ev = SYN|SW, sw set */
+    iid_make_node(root, "/devices/sw", "21", "0", "0", "0", "0");
+    assert(input_id_build(root, "/devices/sw", &e) == 0);
+    assert(iid_has(&e, "ID_INPUT") && iid_has(&e, "ID_INPUT_SWITCH"));
+    assert(!iid_has(&e, "ID_INPUT_KEY"));
+
+    /* scrollwheel-only: EV_REL + REL_WHEEL, no buttons -> ID_INPUT_KEY + ID_INPUT */
+    iid_make_node(root, "/devices/whl", "4", "0", "100", "0", "0");   /* ev = EV_REL only; rel bit8 = REL_WHEEL */
+    assert(input_id_build(root, "/devices/whl", &e) == 0);
+    assert(iid_has(&e, "ID_INPUT") && iid_has(&e, "ID_INPUT_KEY"));
+
+    /* not an input device */
+    assert(input_id_build(root, "/devices", &e) != 0);
+
+    printf("test_build_full OK\n");
+}
+
 int main(void) {
     test_mask();
     test_discovery();
     test_heuristic();
+    test_build_full();
     printf("ALL input_id tests passed\n");
     return 0;
 }
