@@ -73,4 +73,32 @@ static inline void iid_emit(struct uevent *out, const char *k, const char *v) {
     }
 }
 
+static inline int iid_find_input_node(const char *sysroot, const char *devpath,
+                                      char *out, size_t outsz) {
+    char dir[PATH_MAX];
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", sysroot, devpath) >= sizeof dir) return -1;
+    for (;;) {
+        char probe[PATH_MAX];
+        if ((size_t)snprintf(probe, sizeof probe, "%s/capabilities/ev", dir) < sizeof probe
+            && access(probe, R_OK) == 0) {
+            safe_copy(out, dir, outsz);
+            return 0;
+        }
+        if (pi_parent(dir) != 0) return -1;
+    }
+}
+
+static inline int iid_read_masks(const char *inputdir,
+                                 unsigned long ev[IID_NWORDS], unsigned long key[IID_NWORDS],
+                                 unsigned long rel[IID_NWORDS], unsigned long abs_[IID_NWORDS],
+                                 unsigned long prop[IID_NWORDS]) {
+    char b[1024];
+    iid_parse_mask(pi_sysattr(inputdir, "capabilities/ev",  b, sizeof b) == 0 ? b : NULL, ev);
+    iid_parse_mask(pi_sysattr(inputdir, "capabilities/key", b, sizeof b) == 0 ? b : NULL, key);
+    iid_parse_mask(pi_sysattr(inputdir, "capabilities/rel", b, sizeof b) == 0 ? b : NULL, rel);
+    iid_parse_mask(pi_sysattr(inputdir, "capabilities/abs", b, sizeof b) == 0 ? b : NULL, abs_);
+    iid_parse_mask(pi_sysattr(inputdir, "properties",       b, sizeof b) == 0 ? b : NULL, prop);
+    return 0;
+}
+
 #endif
