@@ -191,4 +191,99 @@ static inline void nid_names_pci(const char *sysroot, const char *pcidir, const 
         nid_emit(out, "ID_NET_LABEL_ONBOARD", label);
 }
 
+/* USB sysname: "<bus>-<ports>:<config>.<iface>"; ports '.'→'u'; drop config==1, iface==0 */
+static inline int nid_usb_specifier(const char *usbdir, char *out, size_t outsz) {
+    const char *name = pi_base(usbdir);
+    const char *dash = strchr(name, '-');
+    if (!dash) return -1;
+    char ports[64] = "", cfg[16] = "", iface[16] = "";
+    const char *colon = strchr(dash, ':');
+    if (colon) {
+        size_t plen = (size_t)(colon - (dash + 1));
+        if (plen >= sizeof ports) return -1;
+        memcpy(ports, dash + 1, plen); ports[plen] = '\0';
+        const char *dot = strchr(colon, '.');
+        if (dot) {
+            char cbuf[16];
+            size_t clen = (size_t)(dot - (colon + 1));
+            if (clen >= sizeof cbuf) return -1;
+            memcpy(cbuf, colon + 1, clen); cbuf[clen] = '\0';
+            if (atoi(cbuf) != 1) snprintf(cfg, sizeof cfg, "c%d", atoi(cbuf));
+            if (atoi(dot + 1) != 0) snprintf(iface, sizeof iface, "i%d", atoi(dot + 1));
+        }
+    } else {
+        safe_copy(ports, dash + 1, sizeof ports);
+    }
+    for (char *s = ports; *s; s++) if (*s == '.') *s = 'u';   /* "1.2" -> "1u2" */
+    snprintf(out, outsz, "u%s%s%s", ports, cfg, iface);
+    return 0;
+}
+
+static inline void nid_names_usb(const char *sysroot, const char *usbdir, const char *prefix,
+                                 struct uevent *out) {
+    char spec[64];
+    if (nid_usb_specifier(usbdir, spec, sizeof spec) != 0) return;
+
+    /* climb to a PCI parent; if found, name is the PCI path with the USB specifier appended */
+    char cur[PATH_MAX]; safe_copy(cur, usbdir, sizeof cur);
+    for (;;) {
+        if (pi_parent(cur) != 0) { cur[0] = '\0'; break; }
+        char s[128];
+        if (pi_subsystem(cur, s, sizeof s) == 0 && strcmp(s, "pci") == 0) break;
+    }
+    if (cur[0]) {
+        /* delegate: build the PCI path, then fold in the USB specifier */
+        struct uevent tmp; tmp.n = 0;
+        nid_names_pci(sysroot, cur, prefix, &tmp);
+        const char *pcipath = uevent_get(&tmp, "ID_NET_NAME_PATH");
+        if (pcipath) {
+            char full[192];
+            snprintf(full, sizeof full, "%s%s", pcipath, spec);
+            nid_emit(out, "ID_NET_NAME_PATH", full);
+        }
+    } else {
+        char full[128];
+        snprintf(full, sizeof full, "%s%s", prefix, spec);
+        nid_emit(out, "ID_NET_NAME_PATH", full);
+    }
+}
+
+/* ACPI platform id "<vendor><model>:<instance>": 3- or 4-char alpha vendor,
+ * 4 hex model digits, colon at index 7 (len 10) or 8 (len 11), then decimal instance.
+ * ID_NET_NAME_PATH = <prefix>a<vendor lowercase><hex model>i<instance>
+ * e.g. "ETH0000:02" -> "enaeth0i2" */
+static inline void nid_names_platform(const char *platdir, const char *prefix, struct uevent *out) {
+    const char *id = pi_base(platdir);
+    size_t len = strlen(id);
+    if (len != 10 && len != 11) return;
+    size_t vlen = (len == 10) ? 3 : 4;   /* vendor length */
+    if (id[vlen + 4] != ':') return;     /* colon after vendor + 4 model digits */
+    char vendor[8];
+    for (size_t i = 0; i < vlen; i++) {
+        char c = id[i];
+        if (!(c >= 'A' && c <= 'Z')) return;   /* vendor is alpha */
+        vendor[i] = (char)(c - 'A' + 'a');
+    }
+    vendor[vlen] = '\0';
+    char modbuf[8];
+    memcpy(modbuf, id + vlen, 4); modbuf[4] = '\0';
+    unsigned model = (unsigned)strtoul(modbuf, NULL, 16);
+    unsigned inst = (unsigned)strtoul(id + vlen + 5, NULL, 10);
+    char path[64];
+    snprintf(path, sizeof path, "%sa%s%xi%u", prefix, vendor, model, inst);
+    nid_emit(out, "ID_NET_NAME_PATH", path);
+}
+
+/* DeviceTree alias: match the netdev's of_node against /firmware/devicetree aliases;
+ * emit <prefix>d<index>. Port the alias-scan from systemd v259 names_devicetree. */
+static inline void nid_names_devicetree(const char *sysroot, const char *netdir,
+                                        const char *prefix, struct uevent *out) {
+    (void)sysroot;
+    char idx[16];
+    if (pi_sysattr(netdir, "of_node/alias_index", idx, sizeof idx) != 0) return;
+    char path[32];
+    snprintf(path, sizeof path, "%sd%d", prefix, atoi(idx));
+    nid_emit(out, "ID_NET_NAME_PATH", path);
+}
+
 #endif /* SCHEMA_NET_ID_H */

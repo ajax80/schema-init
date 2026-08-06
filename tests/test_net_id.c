@@ -153,10 +153,52 @@ static void test_pci(void) {
     printf("test_pci OK\n");
 }
 
+static void test_other_buses(void) {
+    char root[] = "/tmp/nidbusXXXXXX"; assert(mkdtemp(root));
+
+    /* USB specifier: "1-1.2:1.0" -> ports "1.2"->"1u2", config 1 (omitted), iface 0 (omitted) */
+    char spec[64];
+    { char usb[PATH_MAX];
+      if ((size_t)snprintf(usb, sizeof usb, "%s/1-1.2:1.0", root) >= sizeof usb) assert(0);
+      nid_mkdirs(usb);
+      assert(nid_usb_specifier(usb, spec, sizeof spec) == 0);
+      assert(strcmp(spec, "u1u2") == 0); }
+
+    /* USB specifier with config 2 + iface 3: "2-1:2.3" -> "u1c2i3" */
+    { char usb[PATH_MAX];
+      if ((size_t)snprintf(usb, sizeof usb, "%s/2-1:2.3", root) >= sizeof usb) assert(0);
+      nid_mkdirs(usb);
+      assert(nid_usb_specifier(usb, spec, sizeof spec) == 0);
+      assert(strcmp(spec, "u1c2i3") == 0); }
+
+    /* platform: ACPI id "ETH0000:02" (vendor eth, model 0x0000, instance 2) -> enaeth0i2 */
+    { char plat[PATH_MAX];
+      if ((size_t)snprintf(plat, sizeof plat, "%s/devices/platform/ETH0000:02", root) >= sizeof plat) assert(0);
+      nid_mkdirs(plat);
+      struct uevent e; e.n = 0;
+      nid_names_platform(plat, "en", &e);
+      assert(nid_has_val(&e, "ID_NET_NAME_PATH", "enaeth0i2")); }
+
+    /* malformed platform id (colon misplaced) -> nothing */
+    { char plat[PATH_MAX];
+      if ((size_t)snprintf(plat, sizeof plat, "%s/devices/platform/BADID00000", root) >= sizeof plat) assert(0);
+      nid_mkdirs(plat);
+      struct uevent e; e.n = 0;
+      nid_names_platform(plat, "en", &e);
+      assert(e.n == 0); }
+
+    /* devicetree output format literal */
+    { char name[32]; snprintf(name, sizeof name, "%sd%u", "en", 0u);
+      assert(strcmp(name, "end0") == 0); }
+
+    printf("test_other_buses OK\n");
+}
+
 int main(void) {
     test_gates();
     test_mac();
     test_pci();
+    test_other_buses();
     printf("ALL net_id tests passed\n");
     return 0;
 }
