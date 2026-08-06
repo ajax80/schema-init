@@ -63,6 +63,7 @@ struct dev_rule {
     char mkey[RULE_MAX_MATCH][UE_KEY_MAX];
     char mpat[RULE_MAX_MATCH][UE_VAL_MAX];
     int  nmatch;
+    char symlink[64];
     char on_add[RULE_HOOK_MAX];
     char on_remove[RULE_HOOK_MAX];
 };
@@ -70,6 +71,10 @@ struct dev_rule {
 static inline int dev_rule_set(struct dev_rule *r, const char *key, const char *val) {
     if (strcmp(key, "name") == 0) {
         snprintf(r->name, sizeof r->name, "%s", val);
+    } else if (strcmp(key, "symlink") == 0) {
+        size_t len = strlen(val);
+        if (len == 0 || len >= 64 || strchr(val, '/') || strstr(val, "..")) return -1;
+        snprintf(r->symlink, sizeof r->symlink, "%s", val);
     } else if (strcmp(key, "on_add") == 0) {
         snprintf(r->on_add, sizeof r->on_add, "%s", val);
     } else if (strcmp(key, "on_remove") == 0) {
@@ -146,6 +151,147 @@ static inline int dev_rules_load_dir(const char *dir, struct dev_rule *rules, in
     }
     free(names);
     return n;
+}
+
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define SCHEMA_DEV_DIR "/dev/schema"
+
+static inline int symlink_apply(const char *base_dir, const char *name, const char *devname) {
+    if (!base_dir || !name || !devname || name[0] == '\0') return -1;
+    
+    struct stat st;
+    if (stat(base_dir, &st) != 0) {
+        if (mkdir(base_dir, 0755) != 0 && errno != EEXIST) return -1;
+    }
+
+    char target[512];
+    if (devname[0] == '/') snprintf(target, sizeof target, "%s", devname);
+    else snprintf(target, sizeof target, "/dev/%s", devname);
+
+    char tmppath[512], finalpath[512];
+    snprintf(tmppath, sizeof tmppath, "%s/.%s.tmp.%d", base_dir, name, (int)getpid());
+    snprintf(finalpath, sizeof finalpath, "%s/%s", base_dir, name);
+
+    unlink(tmppath);
+    if (symlink(target, tmppath) != 0) return -1;
+    if (rename(tmppath, finalpath) != 0) {
+        unlink(tmppath);
+        return -1;
+    }
+    return 0;
+}
+
+static inline int symlink_clear(const char *base_dir, const char *name) {
+    if (!base_dir || !name || name[0] == '\0') return -1;
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", base_dir, name);
+    if (unlink(path) != 0 && errno != ENOENT) return -1;
+    return 0;
+}
+
+static inline void safe_copy(char *dst, const char *src, size_t maxlen) {
+    size_t l = strlen(src);
+    if (l >= maxlen) l = maxlen - 1;
+    memcpy(dst, src, l);
+    dst[l] = '\0';
+}
+
+/* Synthesize a struct uevent from a sysfs device directory D (which contains a uevent file).
+ * sysroot is the sysfs root path (usually "/sys", or a /tmp test root).
+ * Strips sysroot from dirpath to yield DEVPATH starting with "/devices/". */
+static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, struct uevent *ev) {
+    char upath[1024];
+    if ((size_t)snprintf(upath, sizeof upath, "%s/uevent", dirpath) >= sizeof upath) return -1;
+    FILE *f = fopen(upath, "r");
+    if (!f) return -1;
+
+    memset(ev, 0, sizeof *ev);
+
+    /* Set ACTION=add */
+    safe_copy(ev->key[ev->n], "ACTION", UE_KEY_MAX);
+    safe_copy(ev->val[ev->n], "add", UE_VAL_MAX);
+    ev->n++;
+
+    /* Set DEVPATH (strip sysroot prefix) */
+    const char *devpath = dirpath;
+    size_t sroot_len = strlen(sysroot);
+    if (strncmp(dirpath, sysroot, sroot_len) == 0) devpath = dirpath + sroot_len;
+    safe_copy(ev->key[ev->n], "DEVPATH", UE_KEY_MAX);
+    safe_copy(ev->val[ev->n], devpath, UE_VAL_MAX);
+    ev->n++;
+
+    /* Resolve SUBSYSTEM from subsystem symlink */
+    char sublink[1024], subtarget[1024];
+    if ((size_t)snprintf(sublink, sizeof sublink, "%s/subsystem", dirpath) < sizeof sublink) {
+        ssize_t slen = readlink(sublink, subtarget, sizeof(subtarget) - 1);
+        if (slen > 0) {
+            subtarget[slen] = '\0';
+            char *bname = strrchr(subtarget, '/');
+            const char *subsys = bname ? bname + 1 : subtarget;
+            safe_copy(ev->key[ev->n], "SUBSYSTEM", UE_KEY_MAX);
+            safe_copy(ev->val[ev->n], subsys, UE_VAL_MAX);
+            ev->n++;
+        }
+    }
+
+    /* Read KEY=VALUE lines from uevent file */
+    char line[512];
+    while (fgets(line, sizeof line, f) && ev->n < UE_MAX_KEYS) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *val = eq + 1;
+        val[strcspn(val, "\r\n")] = '\0';
+        
+        /* Skip duplicate ACTION, DEVPATH, SUBSYSTEM if in file */
+        if (uevent_get(ev, line) != NULL) continue;
+
+        safe_copy(ev->key[ev->n], line, UE_KEY_MAX);
+        safe_copy(ev->val[ev->n], val, UE_VAL_MAX);
+        ev->n++;
+    }
+
+    fclose(f);
+    return 0;
+}
+
+#include <ftw.h>
+
+static const char *g_coldplug_sysroot = NULL;
+static void (*g_coldplug_cb)(const struct uevent *ev) = NULL;
+
+static int coldplug_ftw_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+    (void)sb; (void)ftwbuf;
+    if (typeflag == FTW_F) {
+        const char *bname = strrchr(fpath, '/');
+        if (bname && strcmp(bname + 1, "uevent") == 0) {
+            char dirpath[1024];
+            safe_copy(dirpath, fpath, sizeof dirpath);
+            char *last_slash = strrchr(dirpath, '/');
+            if (last_slash) *last_slash = '\0';
+            
+            struct uevent ev;
+            if (uevent_from_sysfs(g_coldplug_sysroot, dirpath, &ev) == 0 && g_coldplug_cb) {
+                g_coldplug_cb(&ev);
+            }
+        }
+    }
+    return 0;
+}
+
+static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(const struct uevent *ev)) {
+    char devroot[1024];
+    if ((size_t)snprintf(devroot, sizeof devroot, "%s/devices", sysroot) >= sizeof devroot) return -1;
+    struct stat st;
+    if (stat(devroot, &st) != 0) return 0;  /* missing sysfs dir -> no-op */
+
+    g_coldplug_sysroot = sysroot;
+    g_coldplug_cb = on_event;
+    return nftw(devroot, coldplug_ftw_cb, 32, FTW_PHYS);
 }
 
 #endif /* SCHEMA_UDEV_H */

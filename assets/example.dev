@@ -9,5 +9,6 @@
 # name=esp32-serial
 # match_subsystem=tty
 # match_product=10c4/*
+# symlink=esp32
 # on_add=/usr/local/bin/esp32-up.sh
 # on_remove=/usr/local/bin/esp32-down.sh
