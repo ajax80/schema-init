@@ -259,4 +259,39 @@ static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, st
     return 0;
 }
 
+#include <ftw.h>
+
+static const char *g_coldplug_sysroot = NULL;
+static void (*g_coldplug_cb)(const struct uevent *ev) = NULL;
+
+static int coldplug_ftw_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+    (void)sb; (void)ftwbuf;
+    if (typeflag == FTW_F) {
+        const char *bname = strrchr(fpath, '/');
+        if (bname && strcmp(bname + 1, "uevent") == 0) {
+            char dirpath[1024];
+            safe_copy(dirpath, fpath, sizeof dirpath);
+            char *last_slash = strrchr(dirpath, '/');
+            if (last_slash) *last_slash = '\0';
+            
+            struct uevent ev;
+            if (uevent_from_sysfs(g_coldplug_sysroot, dirpath, &ev) == 0 && g_coldplug_cb) {
+                g_coldplug_cb(&ev);
+            }
+        }
+    }
+    return 0;
+}
+
+static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(const struct uevent *ev)) {
+    char devroot[1024];
+    if ((size_t)snprintf(devroot, sizeof devroot, "%s/devices", sysroot) >= sizeof devroot) return -1;
+    struct stat st;
+    if (stat(devroot, &st) != 0) return 0;  /* missing sysfs dir -> no-op */
+
+    g_coldplug_sysroot = sysroot;
+    g_coldplug_cb = on_event;
+    return nftw(devroot, coldplug_ftw_cb, 32, FTW_PHYS);
+}
+
 #endif /* SCHEMA_UDEV_H */
