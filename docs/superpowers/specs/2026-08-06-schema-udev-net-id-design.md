@@ -101,10 +101,10 @@ ancestor's `subsystem` symlink basename (`pi_subsystem`). First ancestor whose s
   (all numbers decimal; domain 0 omitted). enp6s0 = `en` + `p6` + `s0` (bus 6, slot 0, func 0
   single-function, dev_port 0) — matches ground truth.
 - `ID_NET_NAME_SLOT`: if the device sits in a PCI hotplug slot (`/sys/bus/pci/slots/<n>/address`
-  matches the parent, per `names_pci_slot`), emit `<prefix>` + optional domain + `s`<slot#> +
-  the same func/dev_port suffix — but **only if it differs from NAME_PATH** (udev drops it
-  otherwise). No hotplug slots on blakbox → not emitted here; unit-tested with a fabricated
-  `/sys/bus/pci/slots` tree.
+  is a prefix of the device's `dom:bus:slot`, per `names_pci_slot`), emit `<prefix>` + optional
+  domain + `s`<slot#> + the same func/dev_port suffix. No hotplug slots on blakbox → not emitted
+  here; unit-tested with a fabricated `/sys/bus/pci/slots` tree. (If the source suppresses SLOT
+  when it would equal NAME_PATH, port that guard too — source governs.)
 - `ID_NET_NAME_ONBOARD` / `ID_NET_LABEL_ONBOARD`: read `<pciparent>/acpi_index` (→ ONBOARD index)
   and `<pciparent>/label` (→ LABEL string). Absent on blakbox → not emitted; unit-tested.
 
