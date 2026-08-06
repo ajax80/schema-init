@@ -78,10 +78,99 @@ static inline int pi_handle_usb(const char *leafdir, char *cur, size_t cursz,
     }
     return 1;
 }
+/* Lowest integer N among sibling dirs named "<prefix>N" inside parent_dir.
+ * Returns the min, or -1 if none found. */
+static inline int pi_min_index(const char *parent_dir, const char *prefix) {
+    DIR *d = opendir(parent_dir);
+    if (!d) return -1;
+    size_t plen = strlen(prefix);
+    int min = -1;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (strncmp(e->d_name, prefix, plen) != 0) continue;
+        const char *num = e->d_name + plen;
+        if (num[0] < '0' || num[0] > '9') continue;
+        int v = atoi(num);
+        if (min < 0 || v < min) min = v;
+    }
+    closedir(d);
+    return min;
+}
+
+/* Find the ata_device number M (suffix after '.') by scanning
+ * <atadir>/link*<any>/dev<N>.<M>. Writes M to out. Returns 0/-1. */
+static inline int pi_ata_devnum(const char *atadir, char *out, size_t outsz) {
+    DIR *d = opendir(atadir);
+    if (!d) return -1;
+    struct dirent *e;
+    int found = -1;
+    while ((e = readdir(d)) != NULL && found != 0) {
+        if (strncmp(e->d_name, "link", 4) != 0) continue;
+        char linkdir[PATH_MAX];
+        if ((size_t)snprintf(linkdir, sizeof linkdir, "%s/%s", atadir, e->d_name) >= sizeof linkdir)
+            continue;
+        DIR *ld = opendir(linkdir);
+        if (!ld) continue;
+        struct dirent *le;
+        while ((le = readdir(ld)) != NULL) {
+            if (strncmp(le->d_name, "dev", 3) != 0) continue;
+            const char *dot = strrchr(le->d_name, '.');
+            if (!dot) continue;
+            safe_copy(out, dot + 1, outsz);
+            found = 0;
+            break;
+        }
+        closedir(ld);
+    }
+    closedir(d);
+    return found;
+}
+
 static inline int pi_handle_scsi(const char *leafdir, char *cur, size_t cursz,
                                  char *path, size_t pathsz) {
-    (void)leafdir; (void)cur; (void)cursz; (void)path; (void)pathsz;
-    return 0;   /* stub: filled in Task 5 */
+    (void)leafdir;
+    /* only a scsi_device sysname H:C:T:L */
+    unsigned H, C, T, L;
+    if (sscanf(pi_base(cur), "%u:%u:%u:%u", &H, &C, &T, &L) != 4) return 0;
+
+    /* climb to the hostN dir */
+    char hostdir[PATH_MAX];
+    safe_copy(hostdir, cur, sizeof hostdir);
+    while (strncmp(pi_base(hostdir), "host", 4) != 0) {
+        if (pi_parent(hostdir) != 0) return 0;
+    }
+    /* the dir above hostN: ata port (ata transport) or the plain bus parent */
+    char above[PATH_MAX];
+    safe_copy(above, hostdir, sizeof above);
+    if (pi_parent(above) != 0) return 0;
+    const char *abase = pi_base(above);
+
+    char comp[PATH_ID_MAX];
+    if (strncmp(abase, "ata", 3) == 0 && abase[3] >= '0' && abase[3] <= '9') {
+        /* ATA transport: ata-<port_no>.<M> */
+        char port[64], atap[PATH_MAX], devnum[64];
+        if ((size_t)snprintf(atap, sizeof atap, "%s/ata_port/%s", above, abase) >= sizeof atap) return 0;
+        if (pi_sysattr(atap, "port_no", port, sizeof port) != 0) return 0;
+        if (pi_ata_devnum(above, devnum, sizeof devnum) != 0) safe_copy(devnum, "0", sizeof devnum);
+        snprintf(comp, sizeof comp, "ata-%s.%s", port, devnum);
+        pi_prepend(path, pathsz, comp);
+        /* consume up to the ata port's parent */
+        safe_copy(cur, above, cursz);
+        if (pi_parent(cur) != 0) return 1;
+        return 1;
+    }
+
+    /* default transport: rebase H by the lowest sibling host index */
+    char hostparent[PATH_MAX];
+    safe_copy(hostparent, hostdir, sizeof hostparent);
+    if (pi_parent(hostparent) != 0) return 0;
+    int offset = pi_min_index(hostparent, "host");
+    if (offset < 0) offset = 0;
+    snprintf(comp, sizeof comp, "scsi-%u:%u:%u:%u", H - (unsigned)offset, C, T, L);
+    pi_prepend(path, pathsz, comp);
+    /* consume up to the host's parent */
+    safe_copy(cur, hostparent, cursz);
+    return 1;
 }
 static inline int pi_handle_nvme(const char *leafdir, char *cur, size_t cursz,
                                  char *path, size_t pathsz) {

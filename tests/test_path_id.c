@@ -8,7 +8,7 @@
 
 /* --- fake-sysfs builders (same idiom as test_coldplug.c) --- */
 static void mkdirp(const char *path) {
-    char cmd[4096];
+    char cmd[8192];
     snprintf(cmd, sizeof cmd, "mkdir -p '%s'", path);
     assert(system(cmd) == 0);
 }
@@ -262,6 +262,95 @@ static void test_nvme(void) {
     printf("test_nvme OK\n");
 }
 
+static void test_ata(void) {
+    char tmpl[] = "/tmp/schema-pathid-ata-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* /devices/pci0000:00/0000:00:01.3/0000:02:00.1/ata1/host0/target0:0:0/0:0:0:0/block/sda
+       ID_PATH for the block leaf = pci-0000:02:00.1-ata-1.0 */
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:01.3");
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:01.3/0000:02:00.1");
+
+    const char *pcirel = "/devices/pci0000:00/0000:00:01.3/0000:02:00.1";
+    char rel[2048], dir[2600], sub[2600], stgt[2100], btgt[2100], f[2700];
+    if ((size_t)snprintf(stgt, sizeof stgt, "%s/bus/scsi", root) >= sizeof stgt) assert(0);
+    mkdirp(stgt);
+    if ((size_t)snprintf(btgt, sizeof btgt, "%s/class/block", root) >= sizeof btgt) assert(0);
+    mkdirp(btgt);
+
+    /* ata1 (ata_port host); port_no lives at ata1/ata_port/ata1/port_no */
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s/ata1", root, pcirel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(f, sizeof f, "%s%s/ata1/ata_port/ata1/port_no", root, pcirel) >= sizeof f) assert(0);
+    mkfile(f, "1\n");
+    /* ata_device dev1.0 under link1 */
+    if ((size_t)snprintf(f, sizeof f, "%s%s/ata1/link1/dev1.0/uevent", root, pcirel) >= sizeof f) assert(0);
+    mkfile(f, "DEVTYPE=ata_device\n");
+    /* host0/target0:0:0/0:0:0:0 (scsi_device) */
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s/ata1/host0", root, pcirel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(rel, sizeof rel, "%s/ata1/host0/target0:0:0/0:0:0:0", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, stgt);
+    /* block/sda leaf */
+    if ((size_t)snprintf(rel, sizeof rel, "%s/ata1/host0/target0:0:0/0:0:0:0/block/sda", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, btgt);
+
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, rel, out, sizeof out) > 0);
+    assert(strcmp(out, "pci-0000:02:00.1-ata-1.0") == 0);
+    printf("test_ata OK\n");
+}
+
+static void test_usb_scsi_rebase(void) {
+    char tmpl[] = "/tmp/schema-pathid-us-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* .../0000:08:00.3/usb4/4-1/4-1:1.0/host9/target9:0:0/9:0:0:0/block/sdd
+       ID_PATH = pci-0000:08:00.3-usb-0:1:1.0-scsi-0:0:0:0  (host9 rebased -> 0) */
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:07.1");
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:07.1/0000:08:00.3");
+
+    const char *pcirel = "/devices/pci0000:00/0000:00:07.1/0000:08:00.3";
+    char rel[2048], dir[2600], sub[2600], utgt[2100], stgt[2100], btgt[2100];
+    if ((size_t)snprintf(utgt, sizeof utgt, "%s/bus/usb", root) >= sizeof utgt) assert(0);
+    mkdirp(utgt);
+    if ((size_t)snprintf(stgt, sizeof stgt, "%s/bus/scsi", root) >= sizeof stgt) assert(0);
+    mkdirp(stgt);
+    if ((size_t)snprintf(btgt, sizeof btgt, "%s/class/block", root) >= sizeof btgt) assert(0);
+    mkdirp(btgt);
+
+    const char *usbdirs[] = { "usb4", "usb4/4-1", "usb4/4-1/4-1:1.0" };
+    for (int i = 0; i < 3; i++) {
+        if ((size_t)snprintf(rel, sizeof rel, "%s/%s", pcirel, usbdirs[i]) >= sizeof rel) assert(0);
+        if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+        mkdirp(dir);
+        if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+        mklink(sub, utgt);
+    }
+    /* host9 under the usb interface (only host -> rebases to 0) */
+    if ((size_t)snprintf(rel, sizeof rel, "%s/usb4/4-1/4-1:1.0/host9/target9:0:0/9:0:0:0", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, stgt);
+    if ((size_t)snprintf(rel, sizeof rel, "%s/usb4/4-1/4-1:1.0/host9/target9:0:0/9:0:0:0/block/sdd", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, btgt);
+
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, rel, out, sizeof out) > 0);
+    assert(strcmp(out, "pci-0000:08:00.3-usb-0:1:1.0-scsi-0:0:0:0") == 0);
+    printf("test_usb_scsi_rebase OK\n");
+}
+
 int main(void) {
     test_tag();
     test_helpers();
@@ -271,6 +360,8 @@ int main(void) {
     test_unanchored();
     test_usb();
     test_nvme();
+    test_ata();
+    test_usb_scsi_rebase();
     printf("ALL path_id tests passed\n");
     return 0;
 }
