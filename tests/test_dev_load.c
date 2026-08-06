@@ -13,7 +13,7 @@ int main(void) {
     char p[256];
     snprintf(p, sizeof p, "%s/esp32.dev", dir);
     FILE *f = fopen(p, "w");
-    fputs("# a comment line (no '=') is skipped\n", f);
+    fputs("# a comment line is skipped, even one containing = like this\n", f);
     fputs("name=esp32-serial\n", f);
     fputs("match_subsystem=tty\n", f);
     fputs("match_product=10c4/ea60\n", f);
@@ -35,6 +35,25 @@ int main(void) {
     int n = dev_rules_load_dir(dir, rules, MAX_RULES);
     assert(n == 1);
     assert(strcmp(rules[0].name, "esp32-serial") == 0);
+
+    /* an all-comment .dev is inert: a commented line with '=' is still skipped,
+       no rule keys are recognized, load_file returns 1, and the dir loader does
+       not count it (the shipped example.dev is exactly this shape) */
+    snprintf(p, sizeof p, "%s/inert.dev", dir);
+    f = fopen(p, "w");
+    fputs("# name=should-not-load\n", f);
+    fputs("#match_subsystem=tty\n", f);
+    fputs("   # indented comment\n", f);
+    fputs("\n", f);
+    fclose(f);
+    struct dev_rule ir;
+    assert(dev_rule_load_file(p, &ir) == 1);
+    n = dev_rules_load_dir(dir, rules, MAX_RULES);
+    assert(n == 1);
+    assert(strcmp(rules[0].name, "esp32-serial") == 0);
+
+    /* nonexistent file -> -1 */
+    assert(dev_rule_load_file("/nonexistent/schema-udev/x.dev", &ir) == -1);
 
     /* missing dir -> 0 rules, no crash */
     assert(dev_rules_load_dir("/nonexistent/schema-udev/dir", rules, MAX_RULES) == 0);

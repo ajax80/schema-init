@@ -106,17 +106,23 @@ static inline int dev_rule_load_file(const char *path, struct dev_rule *r) {
     if (!f) return -1;
     memset(r, 0, sizeof *r);
     char line[512];
+    int nset = 0;
     while (fgets(line, sizeof line, f)) {
-        char *eq = strchr(line, '=');
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\0' || *p == '\n' || *p == '\r') continue;
+        char *eq = strchr(p, '=');
         if (!eq) continue;
         *eq = '\0';
         char *val = eq + 1;
         val[strcspn(val, "\r\n")] = '\0';
-        if (dev_rule_set(r, line, val) != 0)
-            fprintf(stderr, "[schema-udev] %s: ignoring unknown key '%s'\n", path, line);
+        if (dev_rule_set(r, p, val) == 0)
+            nset++;
+        else
+            fprintf(stderr, "[schema-udev] %s: ignoring unknown key '%s'\n", path, p);
     }
     fclose(f);
-    return 0;
+    return nset > 0 ? 0 : 1;   /* 1 = file had no rule keys (all comments/blank) */
 }
 
 static inline int dev_is_dotdev(const struct dirent *d) {
