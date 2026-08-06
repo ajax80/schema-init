@@ -50,6 +50,9 @@ schema-board: schema-board.c schema.h schema_shm.h
 schema-udev: schema-udev.c schema-udev.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
+parity: tools/udev-parity.c udev-parity.h schema-udev.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o udev-parity tools/udev-parity.c
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -96,6 +99,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_coldplug.c -o /tmp/schema-test-coldplug && /tmp/schema-test-coldplug
 	$(CC) $(CFLAGS) tests/test_libudev_frame.c -o /tmp/schema-test-libudev && /tmp/schema-test-libudev
 	$(CC) $(CFLAGS) tests/test_udev_db.c -o /tmp/schema-test-udevdb && /tmp/schema-test-udevdb
+	$(CC) $(CFLAGS) tests/test_parity.c -o /tmp/schema-test-parity && /tmp/schema-test-parity
 
 .PHONY: all clean install release aarch64 armhf desktop test
 
