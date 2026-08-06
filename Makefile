@@ -76,7 +76,7 @@ release: all
 	@cd $(RELDIR) && ls -l $(BINS) SHA256SUMS
 
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev libatomic_asneeded.a
+	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 
