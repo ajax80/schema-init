@@ -65,8 +65,8 @@ static inline int pi_handle_usb(const char *leafdir, char *cur, size_t cursz,
     (void)leafdir; (void)cursz;
     const char *name = pi_base(cur);
     const char *dash = strchr(name, '-');
-    /* only usb_interface nodes (name has both '-' and ':', e.g. 1-4:1.0) emit */
-    if (!dash || !strchr(name, ':')) return 0;
+    /* usb_device (e.g. 1-7) and usb_interface (e.g. 1-4:1.0) nodes emit usb-0:<rest> */
+    if (!dash) return 0;
     char comp[PATH_ID_MAX];
     snprintf(comp, sizeof comp, "usb-0:%s", dash + 1);
     pi_prepend(path, pathsz, comp);
@@ -78,6 +78,7 @@ static inline int pi_handle_usb(const char *leafdir, char *cur, size_t cursz,
     }
     return 1;
 }
+
 /* Lowest integer N among sibling dirs named "<prefix>N" inside parent_dir.
  * Returns the min, or -1 if none found. */
 static inline int pi_min_index(const char *parent_dir, const char *prefix) {
@@ -176,7 +177,11 @@ static inline int pi_handle_nvme(const char *leafdir, char *cur, size_t cursz,
                                  char *path, size_t pathsz) {
     (void)cursz;
     char nsid[64];
-    if (pi_sysattr(leafdir, "nsid", nsid, sizeof nsid) != 0) return 0;
+    char p[PATH_MAX];
+    safe_copy(p, leafdir, sizeof p);
+    while (pi_sysattr(p, "nsid", nsid, sizeof nsid) != 0) {
+        if (strcmp(p, cur) == 0 || pi_parent(p) != 0) return 0;
+    }
     char comp[PATH_ID_MAX];
     snprintf(comp, sizeof comp, "nvme-%s", nsid);
     pi_prepend(path, pathsz, comp);
