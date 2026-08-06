@@ -87,7 +87,7 @@ static inline int fs_probe_ext(const char *dev, struct uevent *out) {
     fs_emit_label(out, sb + 120, 16);
     char ver[16];
     snprintf(ver, sizeof ver, "%u.%u",
-             (unsigned)bpt_le32(sb + 0x4C), (unsigned)bpt_le16(sb + 0x7E));
+             (unsigned)bpt_le32(sb + 0x4C), (unsigned)bpt_le16(sb + 0x3E));
     bpt_emit(out, "ID_FS_VERSION", ver);
     return 0;
 }
