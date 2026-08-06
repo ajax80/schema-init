@@ -9,6 +9,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/signalfd.h>
+#include <sys/wait.h>
 #include <linux/netlink.h>
 
 #define DEV_DIR "/etc/schema-init/dev"
@@ -48,38 +50,106 @@ static ssize_t netlink_recv(int fd, char *buf, size_t bufsz) {
     return n;
 }
 
+static struct dev_rule g_rules[MAX_RULES];
+static int g_nrules = 0;
+
+static void rules_reload(void) {
+    struct dev_rule tmp[MAX_RULES];
+    int n = dev_rules_load_dir(DEV_DIR, tmp, MAX_RULES);
+    memcpy(g_rules, tmp, sizeof(struct dev_rule) * (n < 0 ? 0 : n));
+    g_nrules = n < 0 ? 0 : n;
+    fprintf(stderr, "[schema-udev] loaded %d rule(s) from %s\n", g_nrules, DEV_DIR);
+}
+
+/* Fork a hook, exporting the full uevent (incl. ACTION) as environment.
+ * Parent does not block; children are reaped by the SIGCHLD drain in main(). */
+static void run_hook(const char *hook, const struct uevent *ev) {
+    pid_t pid = fork();
+    if (pid < 0) { fprintf(stderr, "[schema-udev] fork: %s\n", strerror(errno)); return; }
+    if (pid == 0) {
+        for (int j = 0; j < ev->n; j++)
+            setenv(ev->key[j], ev->val[j], 1);   /* ACTION included here */
+        execl("/bin/sh", "sh", "-c", hook, (char *)NULL);
+        _exit(127);
+    }
+}
+
+static void dispatch(const struct uevent *ev) {
+    const char *action = uevent_get(ev, "ACTION");
+    if (!action) return;
+    for (int i = 0; i < g_nrules; i++) {
+        if (!dev_rule_match(&g_rules[i], ev)) continue;
+        const char *hook = NULL;
+        if (strcmp(action, "add") == 0 && g_rules[i].on_add[0])    hook = g_rules[i].on_add;
+        else if (strcmp(action, "remove") == 0 && g_rules[i].on_remove[0]) hook = g_rules[i].on_remove;
+        if (hook) {
+            fprintf(stderr, "[schema-udev] matched %s %s %s -> %s\n",
+                    g_rules[i].name, action,
+                    uevent_get(ev, "DEVNAME") ? uevent_get(ev, "DEVNAME") : uevent_get(ev, "DEVPATH"),
+                    hook);
+            run_hook(hook, ev);
+        }
+    }
+}
+
 int main(void) {
     int nlfd = netlink_open();
     if (nlfd < 0) {
         fprintf(stderr, "[schema-udev] netlink open/bind failed: %s\n", strerror(errno));
         return 1;
     }
+
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGHUP);  sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGINT);  sigaddset(&mask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
+    int sfd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
+    if (sfd < 0) { fprintf(stderr, "[schema-udev] signalfd: %s\n", strerror(errno)); return 1; }
+
+    rules_reload();
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
 
+    struct pollfd pfd[2] = { { nlfd, POLLIN, 0 }, { sfd, POLLIN, 0 } };
     for (;;) {
-        struct pollfd pfd = { nlfd, POLLIN, 0 };
-        if (poll(&pfd, 1, -1) < 0) { if (errno == EINTR) continue; break; }
-        for (;;) {
-            char buf[8192];
-            ssize_t n = netlink_recv(nlfd, buf, sizeof buf);
-            if (n < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) break;  /* drained */
-                if (errno == ENOBUFS) {
-                    fprintf(stderr, "[schema-udev] kernel dropped events (ENOBUFS)\n");
-                    continue;
+        if (poll(pfd, 2, -1) < 0) { if (errno == EINTR) continue; break; }
+
+        if (pfd[1].revents & POLLIN) {
+            struct signalfd_siginfo si;
+            int quit = 0;
+            while (read(sfd, &si, sizeof si) == (ssize_t)sizeof si) {
+                if (si.ssi_signo == SIGCHLD) {
+                    while (waitpid(-1, NULL, WNOHANG) > 0) ;   /* drain all */
+                } else if (si.ssi_signo == SIGHUP) {
+                    rules_reload();
+                } else {
+                    quit = 1;   /* TERM / INT */
                 }
-                if (errno == EINTR) continue;
-                if (errno == 0) continue;   /* spoofed datagram skipped */
-                break;                      /* real error */
             }
-            struct uevent ev;
-            if (uevent_parse(buf, (size_t)n, &ev) != 0) continue;
-            /* Task 5 replaces this log with rule matching + hook dispatch. */
-            fprintf(stderr, "[schema-udev] uevent %s %s\n",
-                    uevent_get(&ev, "ACTION"),
-                    uevent_get(&ev, "DEVPATH") ? uevent_get(&ev, "DEVPATH") : "?");
+            if (quit) break;
+        }
+
+        if (pfd[0].revents & POLLIN) {
+            for (;;) {
+                char buf[8192];
+                ssize_t n = netlink_recv(nlfd, buf, sizeof buf);
+                if (n < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                    if (errno == ENOBUFS) {
+                        fprintf(stderr, "[schema-udev] kernel dropped events (ENOBUFS)\n");
+                        continue;
+                    }
+                    if (errno == EINTR) continue;
+                    if (errno == 0) continue;   /* spoofed datagram skipped */
+                    break;
+                }
+                struct uevent ev;
+                if (uevent_parse(buf, (size_t)n, &ev) != 0) continue;
+                dispatch(&ev);
+            }
         }
     }
-    close(nlfd);
+    fprintf(stderr, "[schema-udev] shutting down\n");
+    close(nlfd); close(sfd);
     return 0;
 }
