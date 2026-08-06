@@ -6,6 +6,8 @@
 #include <ctype.h>
 #include <fnmatch.h>
 #include <stdio.h>
+#include <dirent.h>
+#include <stdlib.h>
 
 #define UE_MAX_KEYS 32
 #define UE_KEY_MAX  64
@@ -95,6 +97,49 @@ static inline int dev_rule_match(const struct dev_rule *r, const struct uevent *
         if (!v || fnmatch(r->mpat[k], v, 0) != 0) return 0;
     }
     return 1;
+}
+
+#define MAX_RULES 64
+
+static inline int dev_rule_load_file(const char *path, struct dev_rule *r) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    memset(r, 0, sizeof *r);
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *val = eq + 1;
+        val[strcspn(val, "\r\n")] = '\0';
+        if (dev_rule_set(r, line, val) != 0)
+            fprintf(stderr, "[schema-udev] %s: ignoring unknown key '%s'\n", path, line);
+    }
+    fclose(f);
+    return 0;
+}
+
+static inline int dev_is_dotdev(const struct dirent *d) {
+    const char *n = d->d_name;
+    size_t l = strlen(n);
+    return l > 4 && strcmp(n + l - 4, ".dev") == 0;
+}
+
+static inline int dev_rules_load_dir(const char *dir, struct dev_rule *rules, int max) {
+    struct dirent **names = NULL;
+    int nf = scandir(dir, &names, dev_is_dotdev, alphasort);
+    if (nf < 0) return 0;
+    int n = 0;
+    for (int i = 0; i < nf; i++) {
+        if (n < max) {
+            char path[512];
+            snprintf(path, sizeof path, "%s/%s", dir, names[i]->d_name);
+            if (dev_rule_load_file(path, &rules[n]) == 0) n++;
+        }
+        free(names[i]);
+    }
+    free(names);
+    return n;
 }
 
 #endif /* SCHEMA_UDEV_H */

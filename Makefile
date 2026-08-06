@@ -88,6 +88,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_calendar.c -o /tmp/schema-test-calendar && /tmp/schema-test-calendar
 	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o /tmp/schema-test-uevent && /tmp/schema-test-uevent
 	$(CC) $(CFLAGS) tests/test_dev_match.c -o /tmp/schema-test-devmatch && /tmp/schema-test-devmatch
+	$(CC) $(CFLAGS) tests/test_dev_load.c -o /tmp/schema-test-devload && /tmp/schema-test-devload
 
 .PHONY: all clean install release aarch64 armhf desktop test
 

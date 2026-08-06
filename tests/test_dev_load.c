@@ -1,0 +1,44 @@
+#include "../schema-udev.h"
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(void) {
+    char tmpl[] = "/tmp/schema-udev-testXXXXXX";
+    char *dir = mkdtemp(tmpl);
+    assert(dir);
+
+    char p[256];
+    snprintf(p, sizeof p, "%s/esp32.dev", dir);
+    FILE *f = fopen(p, "w");
+    fputs("# a comment line (no '=') is skipped\n", f);
+    fputs("name=esp32-serial\n", f);
+    fputs("match_subsystem=tty\n", f);
+    fputs("match_product=10c4/ea60\n", f);
+    fputs("on_add=/bin/true\n", f);
+    fputs("bogus_key=ignored-with-warning\n", f);
+    fclose(f);
+
+    struct dev_rule r;
+    assert(dev_rule_load_file(p, &r) == 0);
+    assert(strcmp(r.name, "esp32-serial") == 0);
+    assert(r.nmatch == 2);
+    assert(strcmp(r.on_add, "/bin/true") == 0);
+
+    /* a non-.dev file in the dir is ignored by the directory loader */
+    snprintf(p, sizeof p, "%s/README.txt", dir);
+    f = fopen(p, "w"); fputs("name=notarule\n", f); fclose(f);
+
+    struct dev_rule rules[MAX_RULES];
+    int n = dev_rules_load_dir(dir, rules, MAX_RULES);
+    assert(n == 1);
+    assert(strcmp(rules[0].name, "esp32-serial") == 0);
+
+    /* missing dir -> 0 rules, no crash */
+    assert(dev_rules_load_dir("/nonexistent/schema-udev/dir", rules, MAX_RULES) == 0);
+
+    printf("test_dev_load: OK\n");
+    return 0;
+}
