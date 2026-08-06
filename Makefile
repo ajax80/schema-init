@@ -92,6 +92,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o /tmp/schema-test-uevent && /tmp/schema-test-uevent
 	$(CC) $(CFLAGS) tests/test_dev_match.c -o /tmp/schema-test-devmatch && /tmp/schema-test-devmatch
 	$(CC) $(CFLAGS) tests/test_dev_load.c -o /tmp/schema-test-devload && /tmp/schema-test-devload
+	$(CC) $(CFLAGS) tests/test_symlink.c -o /tmp/schema-test-symlink && /tmp/schema-test-symlink
 
 .PHONY: all clean install release aarch64 armhf desktop test
 

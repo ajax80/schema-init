@@ -63,6 +63,7 @@ struct dev_rule {
     char mkey[RULE_MAX_MATCH][UE_KEY_MAX];
     char mpat[RULE_MAX_MATCH][UE_VAL_MAX];
     int  nmatch;
+    char symlink[64];
     char on_add[RULE_HOOK_MAX];
     char on_remove[RULE_HOOK_MAX];
 };
@@ -70,6 +71,10 @@ struct dev_rule {
 static inline int dev_rule_set(struct dev_rule *r, const char *key, const char *val) {
     if (strcmp(key, "name") == 0) {
         snprintf(r->name, sizeof r->name, "%s", val);
+    } else if (strcmp(key, "symlink") == 0) {
+        size_t len = strlen(val);
+        if (len == 0 || len >= 64 || strchr(val, '/') || strstr(val, "..")) return -1;
+        snprintf(r->symlink, sizeof r->symlink, "%s", val);
     } else if (strcmp(key, "on_add") == 0) {
         snprintf(r->on_add, sizeof r->on_add, "%s", val);
     } else if (strcmp(key, "on_remove") == 0) {
