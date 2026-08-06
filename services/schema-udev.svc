@@ -1,0 +1,3 @@
+name=schema-udev
+exec=/usr/bin/schema-udev
+needs_root=1
