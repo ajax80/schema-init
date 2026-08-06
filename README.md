@@ -305,17 +305,20 @@ It binds **kernel netlink group 1** (`UDEV_MONITOR_KERNEL`), never group 2 (`UDE
 name=esp32-serial
 match_subsystem=tty
 match_product=10c4/*
+symlink=esp32
 on_add=/usr/local/bin/esp32-up.sh
 on_remove=/usr/local/bin/esp32-down.sh
 ```
 
 - `match_*` keys map to raw kernel uevent keys (`match_subsystem` → `SUBSYSTEM`, `match_product` → `PRODUCT`, etc.), **ANDed together** — a rule only fires when every `match_*` key it declares matches. Values support `fnmatch(3)` globs (`10c4/*`).
+- `symlink=<name>` creates a stable symlink `/dev/schema/<name>` → `/dev/<DEVNAME>` on `add`, unlinking it on `remove`. Created atomically prior to `on_add` hook execution. Name must be single-level (no `/` or `..`, max 63 chars) under the parallel `/dev/schema/` namespace to avoid writer contention with systemd-udevd.
 - `on_add` / `on_remove` are hook commands run via `/bin/sh -c` with the full uevent exported as environment variables — `ACTION`, `DEVNAME`, `DEVPATH`, `PRODUCT`, `MODALIAS`, and whatever else the kernel sent.
+- **Coldplug at startup**: On launch, `schema-udev` performs an in-process physical sysfs walk (`/sys/devices`) to synthesize events for devices already present at boot and fire `on_add` rules and symlinks without touching netlink or `/sys/*/uevent` files (ensuring zero `systemd-udevd` or desktop disturbance).
 - Comments must be on their own line (`#` as the first non-blank character). There is no inline-comment stripping — a trailing `# note` after a value becomes part of the value. See `assets/example.dev` (fully inert — every line commented, safe to drop in as a template) and copy it to `/etc/schema-init/dev/<name>.dev` to activate.
 - `SIGHUP` reloads all rule files from disk without restarting the daemon (`schema-ctl reload` or `kill -HUP` on its pid).
 - Raw kernel (group 1) uevents deliver `DEVNAME` **without** the `/dev/` prefix (e.g. `DEVNAME=ttyUSB0`, not `/dev/ttyUSB0`) — don't anchor `match_devname` globs to `/dev/`, and hooks see `$DEVNAME` the same unprefixed way. Prefer keying on `match_subsystem` + `match_product` (vid/pid), as in the example above.
 
-**Phase 1 boundaries** — deliberately not yet implemented: no coldplug replay (only live events after `schema-udev` starts; existing devices at boot are not matched retroactively), no `/dev` symlink creation, no `/run/udev` database. Those land in later phases; Phase 1 is the netlink listener, the rule grammar, and hook dispatch.
+**Phase 2 status** — coldplug sysfs walk and `/dev/schema/` declarative symlinks are live. Phase 3 (libudev database, `/run/udev` state, group-2 monitor rebroadcast) is deferred to future work for full systemd-udevd retirement.
 
 ---
 
