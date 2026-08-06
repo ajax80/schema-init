@@ -11,6 +11,7 @@
 #define EV_REL 0x02
 #define EV_ABS 0x03
 #define EV_SW  0x05
+#define EV_SND 0x12
 #define ABS_X 0x00
 #define ABS_Y 0x01
 #define ABS_Z 0x02
@@ -182,7 +183,7 @@ static inline int input_id_build(const char *sysroot, const char *devpath, struc
         is_key = 1;
     }
 
-    if (is_pointer || is_key || iid_test_bit(ev, EV_SW))
+    if (is_pointer || is_key || iid_test_bit(ev, EV_SW) || iid_test_bit(ev, EV_SND))
         iid_emit(out, "ID_INPUT", "1");
 
     return 0;
