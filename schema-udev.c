@@ -82,6 +82,21 @@ static void dispatch(const struct uevent *ev) {
     if (!action) return;
     for (int i = 0; i < g_nrules; i++) {
         if (!dev_rule_match(&g_rules[i], ev)) continue;
+
+        if (strcmp(action, "add") == 0 && g_rules[i].symlink[0]) {
+            const char *dn = uevent_get(ev, "DEVNAME");
+            if (dn) {
+                if (symlink_apply(SCHEMA_DEV_DIR, g_rules[i].symlink, dn) == 0) {
+                    fprintf(stderr, "[schema-udev] created symlink %s/%s -> %s\n",
+                            SCHEMA_DEV_DIR, g_rules[i].symlink, dn);
+                }
+            }
+        } else if (strcmp(action, "remove") == 0 && g_rules[i].symlink[0]) {
+            symlink_clear(SCHEMA_DEV_DIR, g_rules[i].symlink);
+            fprintf(stderr, "[schema-udev] removed symlink %s/%s\n",
+                    SCHEMA_DEV_DIR, g_rules[i].symlink);
+        }
+
         const char *hook = NULL;
         if (strcmp(action, "add") == 0 && g_rules[i].on_add[0])    hook = g_rules[i].on_add;
         else if (strcmp(action, "remove") == 0 && g_rules[i].on_remove[0]) hook = g_rules[i].on_remove;
@@ -111,6 +126,8 @@ int main(void) {
     if (sfd < 0) { fprintf(stderr, "[schema-udev] signalfd: %s\n", strerror(errno)); return 1; }
 
     rules_reload();
+    fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
+    coldplug_walk_root("/sys", dispatch);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
 
     struct pollfd pfd[2] = { { nlfd, POLLIN, 0 }, { sfd, POLLIN, 0 } };
