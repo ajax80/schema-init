@@ -318,7 +318,15 @@ on_remove=/usr/local/bin/esp32-down.sh
 - `SIGHUP` reloads all rule files from disk without restarting the daemon (`schema-ctl reload` or `kill -HUP` on its pid).
 - Raw kernel (group 1) uevents deliver `DEVNAME` **without** the `/dev/` prefix (e.g. `DEVNAME=ttyUSB0`, not `/dev/ttyUSB0`) — don't anchor `match_devname` globs to `/dev/`, and hooks see `$DEVNAME` the same unprefixed way. Prefer keying on `match_subsystem` + `match_product` (vid/pid), as in the example above.
 
-**Phase 2 status** — coldplug sysfs walk and `/dev/schema/` declarative symlinks are live. Phase 3 (libudev database, `/run/udev` state, group-2 monitor rebroadcast) is deferred to future work for full systemd-udevd retirement.
+### Phase 3 (interop mechanism — built, not yet active)
+
+schema-udev carries pure encoders for the two formats a future udevd
+retirement needs: the **libudev monitor** netlink frame (group 2) and the
+**`/run/udev/data`** device-database record. They are unit-tested against
+real captured frames but are **not wired into the daemon** — schema-udev
+neither broadcasts on group 2 nor writes `/run/udev` while systemd-udevd
+runs (doing so would double libudev events / corrupt udev's database).
+Activating them is a separate, deliberate cutover, not part of this build.
 
 ---
 

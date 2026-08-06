@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <dirent.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <endian.h>
 
 #define UE_MAX_KEYS 32
 #define UE_KEY_MAX  64
@@ -292,6 +294,115 @@ static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(const
     g_coldplug_sysroot = sysroot;
     g_coldplug_cb = on_event;
     return nftw(devroot, coldplug_ftw_cb, 32, FTW_PHYS);
+}
+
+#define UDEV_MONITOR_MAGIC 0xfeedcafeu
+
+static inline uint32_t murmur2(const char *str) {
+    const uint32_t m = 0x5bd1e995u;
+    const int r = 24;
+    size_t len = strlen(str);
+    const unsigned char *data = (const unsigned char *)str;
+    uint32_t h = (uint32_t)len;   /* seed 0 */
+    while (len >= 4) {
+        uint32_t k = (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+                     ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+        k *= m; k ^= k >> r; k *= m;
+        h *= m; h ^= k;
+        data += 4; len -= 4;
+    }
+    switch (len) {
+        case 3: h ^= (uint32_t)data[2] << 16; /* fall through */
+        case 2: h ^= (uint32_t)data[1] << 8;  /* fall through */
+        case 1: h ^= (uint32_t)data[0];
+                h *= m;
+    }
+    h ^= h >> 13; h *= m; h ^= h >> 15;
+    return h;
+}
+
+static inline ssize_t libudev_frame_build(const struct uevent *ev, char *buf, size_t bufsz) {
+    const char *sub = uevent_get(ev, "SUBSYSTEM");
+    if (!uevent_get(ev, "ACTION") || !uevent_get(ev, "DEVPATH") || !sub) return -1;
+    if (bufsz < 40) return -1;
+
+    size_t plen = 0;
+    for (int i = 0; i < ev->n; i++) {
+        size_t klen = strlen(ev->key[i]);
+        size_t vlen = strlen(ev->val[i]);
+        size_t rec = klen + 1 + vlen + 1;   /* KEY=VALUE\0 */
+        if (40 + plen + rec > bufsz) return -1;
+        char *p = buf + 40 + plen;
+        memcpy(p, ev->key[i], klen); p += klen;
+        *p++ = '=';
+        memcpy(p, ev->val[i], vlen); p += vlen;
+        *p = '\0';
+        plen += rec;
+    }
+
+    const char *devtype = uevent_get(ev, "DEVTYPE");
+    memset(buf, 0, 40);
+    memcpy(buf, "libudev", 7);   /* buf[7] left NUL by memset */
+    uint32_t magic  = htobe32(UDEV_MONITOR_MAGIC);
+    uint32_t hdrsz  = 40, poff = 40, plen32 = (uint32_t)plen;
+    uint32_t subh   = htobe32(murmur2(sub));
+    uint32_t dth    = devtype ? htobe32(murmur2(devtype)) : 0;
+    memcpy(buf + 8,  &magic,  4);
+    memcpy(buf + 12, &hdrsz,  4);
+    memcpy(buf + 16, &poff,   4);
+    memcpy(buf + 20, &plen32, 4);
+    memcpy(buf + 24, &subh,   4);
+    memcpy(buf + 28, &dth,    4);
+    /* buf+32, buf+36 (bloom hi/lo) already zero */
+    return (ssize_t)(40 + plen);
+}
+
+static inline int udev_db_filename(const struct uevent *ev, char *out, size_t outsz) {
+    const char *sub = uevent_get(ev, "SUBSYSTEM");
+    const char *maj = uevent_get(ev, "MAJOR");
+    const char *min = uevent_get(ev, "MINOR");
+    const char *ifidx = uevent_get(ev, "IFINDEX");
+    const char *devpath = uevent_get(ev, "DEVPATH");
+    int w = -1;
+    if (sub && strcmp(sub, "net") == 0 && ifidx)
+        w = snprintf(out, outsz, "n%s", ifidx);
+    else if (maj && min)
+        w = snprintf(out, outsz, "%c%s:%s",
+                     (sub && strcmp(sub, "block") == 0) ? 'b' : 'c', maj, min);
+    else if (sub && devpath) {
+        const char *slash = strrchr(devpath, '/');
+        w = snprintf(out, outsz, "+%s:%s", sub, slash ? slash + 1 : devpath);
+    } else
+        return -1;
+    return (w > 0 && (size_t)w < outsz) ? 0 : -1;
+}
+
+static inline ssize_t udev_db_record_build(const struct uevent *ev, char *buf, size_t bufsz) {
+    int w = snprintf(buf, bufsz, "V:1\n");
+    if (w < 0 || (size_t)w >= bufsz) return -1;
+    size_t used = (size_t)w;
+    for (int i = 0; i < ev->n; i++) {
+        w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    return (ssize_t)used;
+}
+
+static inline int udev_db_write(const char *base_dir, const struct uevent *ev) {
+    char name[128];
+    if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
+    struct stat st;
+    if (stat(base_dir, &st) != 0 && mkdir(base_dir, 0755) != 0 && errno != EEXIST) return -1;
+    char path[512], buf[8192];
+    if ((size_t)snprintf(path, sizeof path, "%s/%s", base_dir, name) >= sizeof path) return -1;
+    ssize_t len = udev_db_record_build(ev, buf, sizeof buf);
+    if (len < 0) return -1;
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fwrite(buf, 1, (size_t)len, f);
+    fclose(f);
+    return 0;
 }
 
 #endif /* SCHEMA_UDEV_H */
