@@ -62,8 +62,21 @@ static inline void pi_prepend(char *path, size_t pathsz, const char *comp) {
 
 static inline int pi_handle_usb(const char *leafdir, char *cur, size_t cursz,
                                 char *path, size_t pathsz) {
-    (void)leafdir; (void)cur; (void)cursz; (void)path; (void)pathsz;
-    return 0;   /* stub: filled in Task 3 */
+    (void)leafdir; (void)cursz;
+    const char *name = pi_base(cur);
+    const char *dash = strchr(name, '-');
+    /* only usb_interface nodes (name has both '-' and ':', e.g. 1-4:1.0) emit */
+    if (!dash || !strchr(name, ':')) return 0;
+    char comp[PATH_ID_MAX];
+    snprintf(comp, sizeof comp, "usb-0:%s", dash + 1);
+    pi_prepend(path, pathsz, comp);
+    /* consume: climb past all usb ancestors to the first non-usb parent */
+    char sub[128];
+    for (;;) {
+        if (pi_parent(cur) != 0) break;
+        if (pi_subsystem(cur, sub, sizeof sub) != 0 || strcmp(sub, "usb") != 0) break;
+    }
+    return 1;
 }
 static inline int pi_handle_scsi(const char *leafdir, char *cur, size_t cursz,
                                  char *path, size_t pathsz) {

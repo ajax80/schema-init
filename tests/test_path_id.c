@@ -172,6 +172,55 @@ static void test_unanchored(void) {
     printf("test_unanchored OK\n");
 }
 
+static void test_usb(void) {
+    char tmpl[] = "/tmp/schema-pathid-usb-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    /* /devices/pci0000:00/0000:00:07.0/0000:02:00.0/usb1/1-4/1-4:1.0/ttyUSB0
+       ID_PATH for the tty leaf = pci-0000:02:00.0-usb-0:4:1.0 */
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:07.0");
+    mk_pci_node(root, "/devices/pci0000:00/0000:00:07.0/0000:02:00.0");
+
+    const char *pcirel = "/devices/pci0000:00/0000:00:07.0/0000:02:00.0";
+    /* usb host + device + interface, each subsystem=usb */
+    char rel[2048], dir[2600], sub[2600], utgt[2100];
+    if ((size_t)snprintf(utgt, sizeof utgt, "%s/bus/usb", root) >= sizeof utgt) assert(0);
+    mkdirp(utgt);
+
+    if ((size_t)snprintf(rel, sizeof rel, "%s/usb1", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, utgt);
+
+    if ((size_t)snprintf(rel, sizeof rel, "%s/usb1/1-4", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, utgt);
+
+    if ((size_t)snprintf(rel, sizeof rel, "%s/usb1/1-4/1-4:1.0", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, utgt);
+
+    /* tty leaf */
+    char ttytgt[2100];
+    if ((size_t)snprintf(ttytgt, sizeof ttytgt, "%s/class/tty", root) >= sizeof ttytgt) assert(0);
+    mkdirp(ttytgt);
+    if ((size_t)snprintf(rel, sizeof rel, "%s/usb1/1-4/1-4:1.0/ttyUSB0", pcirel) >= sizeof rel) assert(0);
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, rel) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, ttytgt);
+
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, rel, out, sizeof out) > 0);
+    assert(strcmp(out, "pci-0000:02:00.0-usb-0:4:1.0") == 0);
+    printf("test_usb OK\n");
+}
+
 int main(void) {
     test_tag();
     test_helpers();
@@ -179,6 +228,7 @@ int main(void) {
     test_platform();
     test_pci_platform();
     test_unanchored();
+    test_usb();
     printf("ALL path_id tests passed\n");
     return 0;
 }
