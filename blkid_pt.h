@@ -44,4 +44,21 @@ static inline void bpt_guid_str(const unsigned char g[16], char *out) {
              g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]);
 }
 
+static inline uint64_t bpt_sector_size(const char *disksys) {
+    char b[64];
+    if (pi_sysattr(disksys, "queue/logical_block_size", b, sizeof b) == 0) {
+        long s = atol(b);
+        if (s >= 512) return (uint64_t)s;
+    }
+    return 512;
+}
+
+static inline int bpt_gpt_disk_uuid(const char *devnode, uint64_t ssz, char *uuid_out) {
+    unsigned char hdr[96];
+    if (bpt_read_at(devnode, ssz, hdr, sizeof hdr) != 0) return -1;
+    if (memcmp(hdr, "EFI PART", 8) != 0) return -1;
+    bpt_guid_str(hdr + 56, uuid_out);
+    return 0;
+}
+
 #endif /* SCHEMA_BLKID_PT_H */
