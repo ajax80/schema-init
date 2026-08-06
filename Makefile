@@ -10,7 +10,7 @@ CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -47,6 +47,9 @@ schema-journal-sink: schema-journal-sink.c
 schema-board: schema-board.c schema.h schema_shm.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
+schema-udev: schema-udev.c schema-udev.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -70,7 +73,7 @@ release: all
 	@cd $(RELDIR) && ls -l $(BINS) SHA256SUMS
 
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board libatomic_asneeded.a
+	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 
