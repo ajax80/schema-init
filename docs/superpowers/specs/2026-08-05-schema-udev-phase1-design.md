@@ -125,7 +125,7 @@ stderr, captured by journal-sink like every other service. Levels:
 
 ```
 name=schema-udev
-exec=/usr/local/sbin/schema-udev
+exec=/usr/bin/schema-udev
 needs_root=1
 ```
 

@@ -44,7 +44,8 @@ static ssize_t netlink_recv(int fd, char *buf, size_t bufsz) {
     if (n < 0) return -1;                 /* errno set by recvmsg */
     if (sa.nl_pid != 0) { errno = 0; return -1; }   /* not from kernel */
     struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
-    if (!cm || cm->cmsg_type != SCM_CREDENTIALS) { errno = 0; return -1; }
+    if (!cm || cm->cmsg_level != SOL_SOCKET || cm->cmsg_type != SCM_CREDENTIALS ||
+        cm->cmsg_len < CMSG_LEN(sizeof(struct ucred))) { errno = 0; return -1; }
     struct ucred *uc = (struct ucred *)CMSG_DATA(cm);
     if (uc->uid != 0) { errno = 0; return -1; }     /* not root/kernel */
     return n;
@@ -67,6 +68,8 @@ static void run_hook(const char *hook, const struct uevent *ev) {
     pid_t pid = fork();
     if (pid < 0) { fprintf(stderr, "[schema-udev] fork: %s\n", strerror(errno)); return; }
     if (pid == 0) {
+        sigset_t empty; sigemptyset(&empty);
+        sigprocmask(SIG_SETMASK, &empty, NULL);
         for (int j = 0; j < ev->n; j++)
             setenv(ev->key[j], ev->val[j], 1);   /* ACTION included here */
         execl("/bin/sh", "sh", "-c", hook, (char *)NULL);
@@ -113,6 +116,11 @@ int main(void) {
     struct pollfd pfd[2] = { { nlfd, POLLIN, 0 }, { sfd, POLLIN, 0 } };
     for (;;) {
         if (poll(pfd, 2, -1) < 0) { if (errno == EINTR) continue; break; }
+
+        if ((pfd[0].revents | pfd[1].revents) & (POLLERR | POLLHUP | POLLNVAL)) {
+            fprintf(stderr, "[schema-udev] poll error on fd, exiting\n");
+            break;
+        }
 
         if (pfd[1].revents & POLLIN) {
             struct signalfd_siginfo si;

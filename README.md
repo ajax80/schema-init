@@ -313,6 +313,7 @@ on_remove=/usr/local/bin/esp32-down.sh
 - `on_add` / `on_remove` are hook commands run via `/bin/sh -c` with the full uevent exported as environment variables — `ACTION`, `DEVNAME`, `DEVPATH`, `PRODUCT`, `MODALIAS`, and whatever else the kernel sent.
 - Comments must be on their own line (`#` as the first non-blank character). There is no inline-comment stripping — a trailing `# note` after a value becomes part of the value. See `assets/example.dev` (fully inert — every line commented, safe to drop in as a template) and copy it to `/etc/schema-init/dev/<name>.dev` to activate.
 - `SIGHUP` reloads all rule files from disk without restarting the daemon (`schema-ctl reload` or `kill -HUP` on its pid).
+- Raw kernel (group 1) uevents deliver `DEVNAME` **without** the `/dev/` prefix (e.g. `DEVNAME=ttyUSB0`, not `/dev/ttyUSB0`) — don't anchor `match_devname` globs to `/dev/`, and hooks see `$DEVNAME` the same unprefixed way. Prefer keying on `match_subsystem` + `match_product` (vid/pid), as in the example above.
 
 **Phase 1 boundaries** — deliberately not yet implemented: no coldplug replay (only live events after `schema-udev` starts; existing devices at boot are not matched retroactively), no `/dev` symlink creation, no `/run/udev` database. Those land in later phases; Phase 1 is the netlink listener, the rule grammar, and hook dispatch.
 
