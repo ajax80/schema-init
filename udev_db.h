@@ -33,31 +33,53 @@ static inline int udev_db_filename(const struct uevent *ev, char *out, size_t ou
     return (w > 0 && (size_t)w < outsz) ? 0 : -1;
 }
 
-static inline ssize_t udev_db_record_build(const struct uevent *ev, char *buf, size_t bufsz) {
-    int w = snprintf(buf, bufsz, "V:1\n");
-    if (w < 0 || (size_t)w >= bufsz) return -1;
-    size_t used = (size_t)w;
-    for (int i = 0; i < ev->n; i++) {
-        w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
+static inline ssize_t udev_db_record_build(const struct uevent *ev, int kernel_n,
+                                           char *buf, size_t bufsz) {
+    size_t used = 0;
+    for (int i = kernel_n; i < ev->n; i++) {
+        if (!ev->key[i][0] || !ev->val[i][0]) continue;
+        int w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
         if (w < 0 || (size_t)w >= bufsz - used) return -1;
         used += (size_t)w;
     }
+    int w = snprintf(buf + used, bufsz - used, "V:1\n");
+    if (w < 0 || (size_t)w >= bufsz - used) return -1;
+    used += (size_t)w;
     return (ssize_t)used;
 }
 
-static inline int udev_db_write(const char *base_dir, const struct uevent *ev) {
+static inline int udev_db_ensure_dir(const char *d) {
+    if (mkdir(d, 0755) == 0 || errno == EEXIST) return 0;
+    if (errno != ENOENT) return -1;
+    char parent[512];
+    safe_copy(parent, d, sizeof parent);
+    char *slash = strrchr(parent, '/');
+    if (!slash || slash == parent) return -1;
+    *slash = '\0';
+    if (udev_db_ensure_dir(parent) != 0) return -1;
+    return (mkdir(d, 0755) == 0 || errno == EEXIST) ? 0 : -1;
+}
+
+static inline int udev_db_write(const char *base_dir, const struct uevent *ev, int kernel_n) {
     char name[128];
     if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
-    struct stat st;
-    if (stat(base_dir, &st) != 0 && mkdir(base_dir, 0755) != 0 && errno != EEXIST) return -1;
-    char path[512], buf[8192];
-    if ((size_t)snprintf(path, sizeof path, "%s/%s", base_dir, name) >= sizeof path) return -1;
-    ssize_t len = udev_db_record_build(ev, buf, sizeof buf);
+    if (udev_db_ensure_dir(base_dir) != 0) return -1;
+    char buf[8192];
+    ssize_t len = udev_db_record_build(ev, kernel_n, buf, sizeof buf);
     if (len < 0) return -1;
-    FILE *f = fopen(path, "w");
-    if (!f) return -1;
-    fwrite(buf, 1, (size_t)len, f);
-    fclose(f);
+    char final[512], tmpl[512];
+    if ((size_t)snprintf(final, sizeof final, "%s/%s", base_dir, name) >= sizeof final) return -1;
+    if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return -1;
+    ssize_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, buf + off, (size_t)(len - off));
+        if (w < 0) { close(fd); unlink(tmpl); return -1; }
+        off += w;
+    }
+    if (close(fd) != 0) { unlink(tmpl); return -1; }
+    if (rename(tmpl, final) != 0) { unlink(tmpl); return -1; }
     return 0;
 }
 
