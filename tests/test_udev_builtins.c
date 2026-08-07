@@ -28,10 +28,82 @@ static void set_subsystem(const char *devrel, const char *name) {
     unlink(linkp); assert(symlink(target, linkp) == 0);
 }
 
+/* fabricate an event with the given SUBSYSTEM/DEVTYPE/DEVPATH (any may be NULL) */
+static void ev_set(struct uevent *ev, const char *sub, const char *dt, const char *dp) {
+    ev->n = 0;
+    if (sub) { strcpy(ev->key[ev->n], "SUBSYSTEM"); strcpy(ev->val[ev->n], sub); ev->n++; }
+    if (dt)  { strcpy(ev->key[ev->n], "DEVTYPE");   strcpy(ev->val[ev->n], dt);  ev->n++; }
+    if (dp)  { strcpy(ev->key[ev->n], "DEVPATH");   strcpy(ev->val[ev->n], dp);  ev->n++; }
+}
+
+static void test_select(void) {
+    struct uevent ev;
+
+    /* usb_device with modalias, parent usb -> HWDB|USB|PATH */
+    mkdirs("/devices/pci0/usb1/1-2");
+    writef("/devices/pci0/usb1/1-2/modalias", "usb:v1234p5678\n");
+    set_subsystem("/devices/pci0", "pci");
+    set_subsystem("/devices/pci0/usb1", "usb");
+    set_subsystem("/devices/pci0/usb1/1-2", "usb");
+    ev_set(&ev, "usb", "usb_device", "/devices/pci0/usb1/1-2");
+    int s = ub_select(ROOT, "/devices/pci0/usb1/1-2", "/dev/bus/usb/001/002", &ev);
+    assert(s & UB_USB); assert(s & UB_HWDB); assert(s & UB_PATH);
+    assert(!(s & UB_BLKID)); assert(!(s & UB_NET)); assert(!(s & UB_INPUT));
+
+    /* virtual block disk (zram0): BLKID only, PATH suppressed by /virtual/ + no bus ancestor */
+    mkdirs("/devices/virtual/block/zram0");
+    set_subsystem("/devices/virtual/block/zram0", "block");
+    ev_set(&ev, "block", "disk", "/devices/virtual/block/zram0");
+    s = ub_select(ROOT, "/devices/virtual/block/zram0", "/dev/zram0", &ev);
+    assert(s & UB_BLKID); assert(!(s & UB_PATH));
+
+    /* real disk (nvme): BLKID + PATH */
+    mkdirs("/devices/pci0/nvme/nvme0/nvme0n1");
+    set_subsystem("/devices/pci0/nvme/nvme0/nvme0n1", "block");
+    ev_set(&ev, "block", "disk", "/devices/pci0/nvme/nvme0/nvme0n1");
+    s = ub_select(ROOT, "/devices/pci0/nvme/nvme0/nvme0n1", "/dev/nvme0n1", &ev);
+    assert(s & UB_BLKID); assert(s & UB_PATH);
+
+    /* sr0 optical: BLKID suppressed by KERNEL sr* */
+    mkdirs("/devices/pci0/ata/sr0");
+    set_subsystem("/devices/pci0/ata/sr0", "block");
+    ev_set(&ev, "block", "disk", "/devices/pci0/ata/sr0");
+    s = ub_select(ROOT, "/devices/pci0/ata/sr0", "/dev/sr0", &ev);
+    assert(!(s & UB_BLKID));
+
+    /* mmcblk0boot0: BLKID suppressed */
+    mkdirs("/devices/mmc/mmcblk0boot0");
+    set_subsystem("/devices/mmc/mmcblk0boot0", "block");
+    ev_set(&ev, "block", "disk", "/devices/mmc/mmcblk0boot0");
+    s = ub_select(ROOT, "/devices/mmc/mmcblk0boot0", "/dev/mmcblk0boot0", &ev);
+    assert(!(s & UB_BLKID));
+
+    /* net device: NET only (no modalias here) */
+    mkdirs("/devices/pci0/net/eth0");
+    set_subsystem("/devices/pci0/net/eth0", "net");
+    ev_set(&ev, "net", NULL, "/devices/pci0/net/eth0");
+    s = ub_select(ROOT, "/devices/pci0/net/eth0", NULL, &ev);
+    assert(s & UB_NET); assert(!(s & UB_BLKID)); assert(!(s & UB_USB));
+
+    /* input device: INPUT (+PATH via pci ancestor) */
+    mkdirs("/devices/pci0/input/input5");
+    set_subsystem("/devices/pci0/input/input5", "input");
+    ev_set(&ev, "input", NULL, "/devices/pci0/input/input5");
+    s = ub_select(ROOT, "/devices/pci0/input/input5", NULL, &ev);
+    assert(s & UB_INPUT);
+
+    /* usb interface (DEVTYPE=usb_interface, NOT usb_device): USB suppressed */
+    mkdirs("/devices/pci0/usb1/1-2/1-2:1.0");
+    set_subsystem("/devices/pci0/usb1/1-2/1-2:1.0", "usb");
+    ev_set(&ev, "usb", "usb_interface", "/devices/pci0/usb1/1-2/1-2:1.0");
+    s = ub_select(ROOT, "/devices/pci0/usb1/1-2/1-2:1.0", NULL, &ev);
+    assert(!(s & UB_USB));
+
+    printf("test_udev_builtins ub_select: OK\n");
+}
+
 int main(void) {
     root_make();
-
-    /* ub_kernel_name */
     assert(strcmp(ub_kernel_name("/devices/pci0000:00/0000:00:01.0/net/enp6s0"), "enp6s0") == 0);
     assert(strcmp(ub_kernel_name("sda"), "sda") == 0);
 
@@ -60,5 +132,6 @@ int main(void) {
     assert(ub_ancestor_in(ROOT, "/devices/virtual/block/zram0", busset) == 0);
 
     printf("test_udev_builtins helpers: OK\n");
+    test_select();
     return 0;
 }

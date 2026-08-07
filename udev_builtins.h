@@ -47,4 +47,72 @@ static inline int ub_ancestor_in(const char *sysroot, const char *devpath,
     return 0;
 }
 
+enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32 };
+
+/* Pure guard logic: which builtins apply to this device? Mirrors the IMPORT{builtin}
+ * conditions in systemd's shipped /usr/lib/udev/rules.d. Order of the bits is
+ * irrelevant; run_builtins imposes the dispatch order. */
+static inline int ub_select(const char *sysroot, const char *devpath,
+                            const char *devnode, const struct uevent *ev) {
+    (void)devnode;
+    static const char *const bus3[]  = { "pci", "usb", "platform", NULL };
+    static const char *const bus4[]  = { "pci", "usb", "platform", "acpi", NULL };
+    const char *subsystem = uevent_get(ev, "SUBSYSTEM");
+    const char *devtype   = uevent_get(ev, "DEVTYPE");
+    const char *kname     = ub_kernel_name(devpath);
+    int sel = 0;
+
+    if (ub_has_modalias(sysroot, devpath)) sel |= UB_HWDB;
+
+    if (ub_in(subsystem, bus3)) sel |= UB_PATH;
+    else if (subsystem && strcmp(subsystem, "block") == 0 &&
+             devtype && strcmp(devtype, "disk") == 0 &&
+             strstr(devpath, "/virtual/") == NULL) sel |= UB_PATH;
+    else if (ub_ancestor_in(sysroot, devpath, bus4)) sel |= UB_PATH;
+
+    if (subsystem && strcmp(subsystem, "usb") == 0 &&
+        devtype && strcmp(devtype, "usb_device") == 0) sel |= UB_USB;
+
+    if (subsystem && strcmp(subsystem, "input") == 0) sel |= UB_INPUT;
+
+    if (subsystem && strcmp(subsystem, "net") == 0) sel |= UB_NET;
+
+    if (subsystem && strcmp(subsystem, "block") == 0 &&
+        devtype && (strcmp(devtype, "disk") == 0 || strcmp(devtype, "partition") == 0) &&
+        fnmatch("sr*", kname, 0) != 0 && fnmatch("mmcblk*boot*", kname, 0) != 0)
+        sel |= UB_BLKID;
+
+    return sel;
+}
+
+/* Dispatch: run each selected builtin in fixed udev precedence order. Each builtin
+ * appends its properties into ev. Returns the number of properties added. */
+static inline int run_builtins(const char *sysroot, const char *devpath,
+                               const char *devnode, struct uevent *ev) {
+    int before = ev->n;
+    int sel = ub_select(sysroot, devpath, devnode, ev);
+    if (sel & UB_HWDB)  hwdb_build(sysroot, devpath, ev);
+    if (sel & UB_PATH) {
+        char idpath[PATH_ID_MAX], idtag[PATH_ID_MAX];
+        if (path_id_build(sysroot, devpath, idpath, sizeof idpath) > 0) {
+            if (ev->n < UE_MAX_KEYS) {
+                safe_copy(ev->key[ev->n], "ID_PATH", UE_KEY_MAX);
+                safe_copy(ev->val[ev->n], idpath, UE_VAL_MAX);
+                ev->n++;
+            }
+            if (path_id_tag(idpath, idtag, sizeof idtag) == 0 && ev->n < UE_MAX_KEYS) {
+                safe_copy(ev->key[ev->n], "ID_PATH_TAG", UE_KEY_MAX);
+                safe_copy(ev->val[ev->n], idtag, UE_VAL_MAX);
+                ev->n++;
+            }
+        }
+    }
+    if (sel & UB_USB)   usb_id_build(sysroot, devpath, ev);
+    if (sel & UB_INPUT) input_id_build(sysroot, devpath, ev);
+    if (sel & UB_NET)   net_id_build(sysroot, devpath, ev);
+    if (sel & UB_BLKID) { blkid_pt_build(sysroot, devpath, devnode, ev);
+                          blkid_fs_build(sysroot, devpath, devnode, ev); }
+    return ev->n - before;
+}
+
 #endif /* UDEV_BUILTINS_H */
