@@ -7,7 +7,7 @@
 #include <sys/stat.h>
 
 static int g_coldplug_events = 0;
-static void test_handler(const struct uevent *ev) {
+static void test_handler(struct uevent *ev) {
     if (strcmp(uevent_get(ev, "ACTION"), "add") == 0) g_coldplug_events++;
 }
 
