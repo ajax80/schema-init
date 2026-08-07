@@ -60,4 +60,64 @@ static inline void hwdb_close(struct hwdb *h) {
     if (h->map) { munmap((void *)h->map, h->size); h->map = NULL; }
 }
 
+static inline uint64_t hw_node_prefix(const struct hwdb *h, uint64_t noff) { return hw_le64(h->map + noff); }
+static inline uint8_t  hw_node_cc(const struct hwdb *h, uint64_t noff)     { return h->map[noff + 8]; }
+static inline uint64_t hw_node_vc(const struct hwdb *h, uint64_t noff)     { return hw_le64(h->map + noff + 16); }
+
+static inline int hw_child(const struct hwdb *h, uint64_t noff, uint8_t idx,
+                           uint8_t *c, uint64_t *coff) {
+    uint64_t b = noff + h->node_size + (uint64_t)idx * h->child_entry_size;
+    if (!hw_ok(h, b, h->child_entry_size)) return -1;
+    *c = h->map[b];
+    *coff = hw_le64(h->map + b + 8);
+    return 0;
+}
+
+static inline int hw_child_lookup(const struct hwdb *h, uint64_t noff, uint8_t want, uint64_t *coff) {
+    uint8_t cc = hw_node_cc(h, noff);
+    for (uint8_t i = 0; i < cc; i++) {
+        uint8_t c; uint64_t o;
+        if (hw_child(h, noff, i, &c, &o) == 0 && c == want) { *coff = o; return 1; }
+    }
+    return 0;
+}
+
+struct hw_collect {
+    char key[HW_MAX_PROPS][UE_KEY_MAX];
+    char val[HW_MAX_PROPS][UE_VAL_MAX];
+    uint16_t prio[HW_MAX_PROPS];
+    uint32_t line[HW_MAX_PROPS];
+    int n;
+};
+
+static inline void hw_collect_add(struct hw_collect *c, const char *k, const char *v,
+                                  uint16_t prio, uint32_t line) {
+    for (int i = 0; i < c->n; i++) {
+        if (strcmp(c->key[i], k) == 0) {
+            if (prio > c->prio[i] || (prio == c->prio[i] && line >= c->line[i])) {
+                safe_copy(c->val[i], v, UE_VAL_MAX); c->prio[i] = prio; c->line[i] = line;
+            }
+            return;
+        }
+    }
+    if (c->n < HW_MAX_PROPS) {
+        safe_copy(c->key[c->n], k, UE_KEY_MAX);
+        safe_copy(c->val[c->n], v, UE_VAL_MAX);
+        c->prio[c->n] = prio; c->line[c->n] = line; c->n++;
+    }
+}
+
+static inline void hw_add_value(const struct hwdb *h, uint64_t noff, uint8_t cc,
+                                uint64_t idx, struct hw_collect *col) {
+    uint64_t vb = noff + h->node_size + (uint64_t)cc * h->child_entry_size + idx * h->value_entry_size;
+    if (!hw_ok(h, vb, h->value_entry_size)) return;
+    uint64_t koff = hw_le64(h->map + vb);
+    uint64_t voff = hw_le64(h->map + vb + 8);
+    uint16_t prio = 0; uint32_t line = 0;
+    if (h->value_entry_size >= 32) { line = hw_le32(h->map + vb + 24); prio = hw_le16(h->map + vb + 28); }
+    const char *key = hw_string(h, koff);
+    if (key[0] != ' ') return;
+    hw_collect_add(col, key + 1, hw_string(h, voff), prio, line);
+}
+
 #endif /* SCHEMA_HWDB_H */

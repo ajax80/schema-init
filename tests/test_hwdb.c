@@ -65,8 +65,41 @@ static void test_open(void) {
     printf("test_open OK\n");
 }
 
+static void test_values(void) {
+    img_reset();
+    uint64_t pfx  = put_str("m");
+    uint64_t k1   = put_str(" P1");        /* leading space -> emitted as P1 */
+    uint64_t v1   = put_str("one");
+    uint64_t knos = put_str("NOSPACE");    /* no leading space -> filtered */
+    uint64_t v2   = put_str("two");
+    uint64_t v3   = put_str("one_hi");
+    /* root: prefix "m", 0 children, 3 values */
+    uint64_t root = node_start(pfx, 0, 3);
+    add_value(k1, v1, 0, 0);               /* P1=one  prio0 line0 */
+    add_value(knos, v2, 0, 0);             /* filtered */
+    add_value(k1, v3, 1, 5);               /* P1=one_hi prio5 -> wins */
+    const char *path = img_finalize(root);
+
+    struct hwdb h; assert(hwdb_open(path, &h) == 0);
+    assert(hw_node_cc(&h, root) == 0 && hw_node_vc(&h, root) == 3);
+
+    struct hw_collect col; col.n = 0;
+    for (uint64_t i = 0; i < hw_node_vc(&h, root); i++)
+        hw_add_value(&h, root, 0, i, &col);
+    /* P1 present with the higher-priority value; NOSPACE filtered */
+    int found_p1 = 0;
+    for (int i = 0; i < col.n; i++) {
+        if (strcmp(col.key[i], "P1") == 0) { found_p1 = 1; assert(strcmp(col.val[i], "one_hi") == 0); }
+        assert(strcmp(col.key[i], "NOSPACE") != 0);
+    }
+    assert(found_p1 && col.n == 1);
+    hwdb_close(&h); unlink(path);
+    printf("test_values OK\n");
+}
+
 int main(void) {
     test_open();
+    test_values();
     printf("ALL hwdb tests passed\n");
     return 0;
 }
