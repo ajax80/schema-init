@@ -10,6 +10,7 @@
 #include "hwdb.h"
 #include "ata_id.h"
 #include "v4l_id.h"
+#include "cdrom_id.h"
 
 #include <string.h>
 #include <fnmatch.h>
@@ -55,7 +56,7 @@ static inline int ub_has_ata_ancestor(const char *devpath) {
     return 0;
 }
 
-enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128 };
+enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128, UB_CDROM = 256 };
 
 /* Pure guard logic: which builtins apply to this device? Mirrors the IMPORT{builtin}
  * conditions in systemd's shipped /usr/lib/udev/rules.d. Order of the bits is
@@ -110,6 +111,10 @@ static inline int ub_select(const char *sysroot, const char *devpath,
         ub_has_ata_ancestor(devpath))
         sel |= UB_ATA;
 
+    if (subsystem && strcmp(subsystem, "block") == 0 &&
+        (fnmatch("sr*", kname, 0) == 0 || fnmatch("scd*", kname, 0) == 0))
+        sel |= UB_CDROM;
+
     return sel;
 }
 
@@ -157,6 +162,7 @@ static inline int run_builtins(const char *sysroot, const char *devpath,
         tmp.n = 0; blkid_pt_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
         tmp.n = 0; blkid_fs_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
     }
+    if (sel & UB_CDROM) { tmp.n = 0; cdrom_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); }
     return ev->n - before;
 }
 

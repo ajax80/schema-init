@@ -19,6 +19,7 @@ static inline const char *parity_builtin_hint(const char *key) {
     if (strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0) return "blkid";
     if (strncmp(key, "ID_PATH", 7) == 0) return "path_id";
     if (strncmp(key, "ID_V4L", 6) == 0 || strncmp(key, "ID_VIDEO", 8) == 0) return "v4l_id";
+    if (strncmp(key, "ID_CDROM", 8) == 0) return "cdrom_id";
     if (strncmp(key, "ID_USB", 6) == 0 || strncmp(key, "ID_SERIAL", 9) == 0 ||
         strncmp(key, "ID_MODEL", 8) == 0 || strncmp(key, "ID_VENDOR", 9) == 0 ||
         strcmp(key, "ID_REVISION") == 0 || strcmp(key, "ID_BUS") == 0 ||
@@ -40,6 +41,10 @@ static inline int parity_ata_feature(const char *key) {
     return 1;   /* all ID_ATA_* feature-set keys are documented-deferred in slice 3a */
 }
 
+static inline int parity_cdrom_media(const char *key) {
+    return strncmp(key, "ID_CDROM_MEDIA", 14) == 0;   /* media status -> slice 3e */
+}
+
 /* Is a udev E: key that WE failed to reproduce a genuine in-scope gap?
  * Device-class aware so it cannot be gamed by declassifying key names. */
 static inline int parity_in_scope_missing(const char *key, const char *sub,
@@ -49,6 +54,7 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
     if (parity_deferred(key)) return 0;           /* documented deferral */
     if (sub && strcmp(sub, "block") == 0) {
         if (parity_ata_feature(key)) return 0;                 /* slice-3a deferral */
+        if (parity_cdrom_media(key)) return 0;                 /* slice-3e deferral */
         if (strcmp(key, "ID_PATH") == 0 || strcmp(key, "ID_PATH_TAG") == 0 ||
             strstr(key, "_FROM_DATABASE") != NULL ||
             strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0 ||
@@ -60,6 +66,7 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
         if (udev_identity_key(key) && devpath &&
             (strstr(devpath, "/ata") != NULL || strstr(devpath, "/usb") != NULL))
             return 1;
+        if (strncmp(key, "ID_CDROM", 8) == 0) return 1;        /* cdrom capabilities (3d) */
         return 0;
     }
     if (udev_identity_key(key)) {
