@@ -3,6 +3,7 @@
 
 #include "schema-udev.h"
 #include "udev_db.h"
+#include "udev_rules.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -32,16 +33,6 @@ static inline int parity_deferred(const char *key) {
     return strcmp(key, "ID_FS_SIZE") == 0 || strcmp(key, "ID_FS_BLOCKSIZE") == 0 ||
            strcmp(key, "ID_FS_LASTBLOCK") == 0 || strcmp(key, "ID_OUI_FROM_DATABASE") == 0 ||
            strcmp(key, "ID_PATH_WITH_USB_REVISION") == 0 || strcmp(key, "ID_PATH_ATA_COMPAT") == 0;
-}
-
-/* usb_id identity/type keys: usb_id owns them ONLY on a usb chain. On block (and
- * on dmi/etc) they come from ata_id/scsi_id/cdrom_id/dmi — not yet reimplemented. */
-static inline int parity_identity_key(const char *key) {
-    return strncmp(key, "ID_SERIAL", 9) == 0 || strncmp(key, "ID_MODEL", 8) == 0 ||
-           strncmp(key, "ID_VENDOR", 9) == 0 || strcmp(key, "ID_REVISION") == 0 ||
-           strcmp(key, "ID_BUS") == 0 || strcmp(key, "ID_TYPE") == 0 ||
-           strcmp(key, "ID_USB_TYPE") == 0 || strcmp(key, "ID_WWN") == 0 ||
-           strcmp(key, "ID_INSTANCE") == 0;
 }
 
 static inline int parity_ata_feature(const char *key) {

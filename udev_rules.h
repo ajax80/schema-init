@@ -24,7 +24,17 @@ static inline int rules_inheritable(const char *key) {
            strcmp(key, "ID_REVISION") == 0 ||
            strcmp(key, "ID_TYPE") == 0 ||
            strcmp(key, "ID_BUS") == 0 ||
-           strcmp(key, "ID_INSTANCE") == 0;
+           strcmp(key, "ID_INSTANCE") == 0 ||
+           strncmp(key, "ID_WWN", 6) == 0 ||
+           strcmp(key, "ID_ATA") == 0;
+}
+
+static inline int parity_identity_key(const char *key) {
+    return strncmp(key, "ID_SERIAL", 9) == 0 || strncmp(key, "ID_MODEL", 8) == 0 ||
+           strncmp(key, "ID_VENDOR", 9) == 0 || strcmp(key, "ID_REVISION") == 0 ||
+           strcmp(key, "ID_BUS") == 0 || strcmp(key, "ID_TYPE") == 0 ||
+           strcmp(key, "ID_USB_TYPE") == 0 || strcmp(key, "ID_WWN") == 0 ||
+           strcmp(key, "ID_WWN_WITH_EXTENSION") == 0 || strcmp(key, "ID_INSTANCE") == 0;
 }
 
 /* On block devices, storage identity + type + usb-descriptor strings come from
@@ -32,11 +42,14 @@ static inline int rules_inheritable(const char *key) {
  * — and udev formats them differently (trailing-space padding, "-0:0" lun suffix).
  * So a block device inherits ONLY topology/db keys plus the two interface-topology
  * keys udev genuinely carries onto usb-storage nodes. Everything else is bypassed. */
-static inline int rules_block_bypass(const char *key) {
+static inline int rules_block_bypass(const struct uevent *anc, const char *key) {
     if (strcmp(key, "ID_PATH") == 0 || strcmp(key, "ID_PATH_TAG") == 0 ||
         strstr(key, "_FROM_DATABASE") != NULL ||
         strcmp(key, "ID_USB_INTERFACE_NUM") == 0 || strcmp(key, "ID_USB_DRIVER") == 0)
         return 0;   /* allowed to inherit */
+    if ((strcmp(key, "ID_ATA") == 0 || parity_identity_key(key)) &&
+        uevent_get(anc, "ID_BUS") && strcmp(uevent_get(anc, "ID_BUS"), "ata") == 0)
+        return 0;   /* ATA disk identity allowed onto ATA partitions */
     return 1;       /* bypass */
 }
 
@@ -93,7 +106,7 @@ static inline int rules_import_parent(const char *sysroot, const char *devpath,
         run_builtins(sysroot, cur, dn, &anc);
         rules_usb_interface(sysroot, cur, &anc);   /* usb_interface keys usb_id skips */
         for (int i = 0; i < anc.n; i++) {
-            if (is_block && rules_block_bypass(anc.key[i])) continue;
+            if (is_block && rules_block_bypass(&anc, anc.key[i])) continue;
             if (rules_inheritable(anc.key[i]))
                 ub_add(ev, anc.key[i], anc.val[i]);   /* first-writer-wins */
         }
