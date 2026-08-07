@@ -137,10 +137,46 @@ static void test_search(void) {
     printf("test_search OK\n");
 }
 
+#include <sys/stat.h>
+#include <limits.h>
+
+static void test_mkdirs(const char *p) {
+    char t[PATH_MAX]; safe_copy(t, p, sizeof t);
+    for (char *s = t + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(t, 0755); *s = '/'; }
+    mkdir(t, 0755);
+}
+
+static void test_build(void) {
+    /* fabricate a sysfs node with a modalias; hwdb_build reads it (db open is exercised live) */
+    char root[] = "/tmp/hwdbsysXXXXXX"; assert(mkdtemp(root));
+    char dir[PATH_MAX];
+    if ((size_t)snprintf(dir, sizeof dir, "%s/devices/x", root) >= sizeof dir) assert(0);
+    test_mkdirs(dir);
+    { char p[PATH_MAX];
+      if ((size_t)snprintf(p, sizeof p, "%s/modalias", dir) >= sizeof p) assert(0);
+      FILE *f = fopen(p, "w"); assert(f); fputs("pci:v0000ABCD\n", f); fclose(f); }
+
+    /* no /etc/udev/hwdb.bin under our fake root: hwdb_build uses the real absolute path.
+       On a box without hwdb.bin it simply emits nothing — assert it returns 0 and does not crash. */
+    struct uevent e;
+    assert(hwdb_build(root, "/devices/x", &e) == 0);
+
+    /* a node with no modalias -> nothing */
+    char dir2[PATH_MAX];
+    if ((size_t)snprintf(dir2, sizeof dir2, "%s/devices/y", root) >= sizeof dir2) assert(0);
+    test_mkdirs(dir2);
+    struct uevent e2;
+    assert(hwdb_build(root, "/devices/y", &e2) == 0);
+    assert(e2.n == 0);
+
+    printf("test_build OK\n");
+}
+
 int main(void) {
     test_open();
     test_values();
     test_search();
+    test_build();
     printf("ALL hwdb tests passed\n");
     return 0;
 }

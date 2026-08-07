@@ -204,4 +204,20 @@ static inline int hwdb_query(struct hwdb *h, const char *key, struct uevent *out
     return 0;
 }
 
+static inline int hwdb_build(const char *sysroot, const char *devpath, struct uevent *out) {
+    out->n = 0;
+    char syspath[PATH_MAX];
+    if ((size_t)snprintf(syspath, sizeof syspath, "%s%s", sysroot, devpath) >= sizeof syspath) return 0;
+    char modalias[512];
+    if (pi_sysattr(syspath, "modalias", modalias, sizeof modalias) != 0) return 0;
+
+    struct hwdb h;
+    if (hwdb_open("/etc/udev/hwdb.bin", &h) != 0 &&
+        hwdb_open("/usr/lib/udev/hwdb.bin", &h) != 0)
+        return 0;
+    hwdb_query(&h, modalias, out);
+    hwdb_close(&h);
+    return 0;
+}
+
 #endif /* SCHEMA_HWDB_H */
