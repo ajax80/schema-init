@@ -27,11 +27,43 @@ static inline int rules_inheritable(const char *key) {
            strcmp(key, "ID_INSTANCE") == 0;
 }
 
+/* On block devices, storage identity + type + usb-descriptor strings come from
+ * ata_id/scsi_id/cdrom_id/usb-storage (not yet reimplemented), NOT the usb parent
+ * — and udev formats them differently (trailing-space padding, "-0:0" lun suffix).
+ * So a block device inherits ONLY topology/db keys plus the two interface-topology
+ * keys udev genuinely carries onto usb-storage nodes. Everything else is bypassed. */
+static inline int rules_block_bypass(const char *key) {
+    if (strcmp(key, "ID_PATH") == 0 || strcmp(key, "ID_PATH_TAG") == 0 ||
+        strstr(key, "_FROM_DATABASE") != NULL ||
+        strcmp(key, "ID_USB_INTERFACE_NUM") == 0 || strcmp(key, "ID_USB_DRIVER") == 0)
+        return 0;   /* allowed to inherit */
+    return 1;       /* bypass */
+}
+
+/* usb_id computes ID_USB_INTERFACE_NUM/ID_USB_DRIVER/ID_USB_TYPE/ID_TYPE on a
+ * usb_interface device; children (input/hidraw/sound/video4linux) inherit them.
+ * Our usb_id builtin only fires on usb_device, so synthesize the interface keys
+ * here (reusing usb_id.h's iftype map + driver reader for exact parity). */
+static inline int rules_usb_interface(const char *sysroot, const char *devpath,
+                                      struct uevent *ev) {
+    char ifdir[PATH_MAX], num[16], drv[64];
+    if ((size_t)snprintf(ifdir, sizeof ifdir, "%s%s", sysroot, devpath) >= sizeof ifdir) return 0;
+    if (pi_sysattr(ifdir, "bInterfaceNumber", num, sizeof num) != 0) return 0;  /* not an interface */
+    int before = ev->n;
+    ub_add(ev, "ID_USB_INTERFACE_NUM", num);
+    if (usb_driver(ifdir, drv, sizeof drv) == 0) ub_add(ev, "ID_USB_DRIVER", drv);
+    const char *type = usb_type_from_iface(ifdir, devpath);
+    if (type) { ub_add(ev, "ID_USB_TYPE", type); ub_add(ev, "ID_TYPE", type); }
+    return ev->n - before;
+}
+
 /* Walk ancestors nearest-first; for each real ancestor device, compute its
  * builtin properties and inherit the bounded ID_* keys the child lacks. */
 static inline int rules_import_parent(const char *sysroot, const char *devpath,
                                       struct uevent *ev) {
     int before = ev->n;
+    const char *sub = uevent_get(ev, "SUBSYSTEM");
+    int is_block = (sub && strcmp(sub, "block") == 0);
     char cur[PATH_MAX];
     if ((size_t)snprintf(cur, sizeof cur, "%s", devpath) >= sizeof cur) return 0;
     while (pi_parent(cur) == 0) {
@@ -45,17 +77,9 @@ static inline int rules_import_parent(const char *sysroot, const char *devpath,
         char devnode[UE_VAL_MAX]; const char *dn = NULL;
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins(sysroot, cur, dn, &anc);
-        const char *sub = uevent_get(ev, "SUBSYSTEM");
-        int is_block = (sub && strcmp(sub, "block") == 0);
+        rules_usb_interface(sysroot, cur, &anc);   /* usb_interface keys usb_id skips */
         for (int i = 0; i < anc.n; i++) {
-            if (is_block && (strncmp(anc.key[i], "ID_USB_", 7) == 0 ||
-                             strcmp(anc.key[i], "ID_SERIAL") == 0 ||
-                             strcmp(anc.key[i], "ID_MODEL") == 0 ||
-                             strcmp(anc.key[i], "ID_VENDOR") == 0 ||
-                             strcmp(anc.key[i], "ID_REVISION") == 0 ||
-                             strcmp(anc.key[i], "ID_MODEL_ENC") == 0 ||
-                             strcmp(anc.key[i], "ID_VENDOR_ENC") == 0))
-                continue;
+            if (is_block && rules_block_bypass(anc.key[i])) continue;
             if (rules_inheritable(anc.key[i]))
                 ub_add(ev, anc.key[i], anc.val[i]);   /* first-writer-wins */
         }
@@ -128,6 +152,7 @@ static inline int run_rules(const char *sysroot, const char *devpath,
                             const char *devnode, struct uevent *ev) {
     (void)devnode;
     int before = ev->n;
+    rules_usb_interface(sysroot, devpath, ev);   /* if the device itself is a usb_interface */
     rules_composite_hwdb(sysroot, devpath, ev);
     rules_import_parent(sysroot, devpath, ev);
     return ev->n - before;

@@ -138,6 +138,39 @@ static void test_composite_oui_key(void) {
     printf("test_udev_rules composite OUI key: OK\n");
 }
 
+/* usb_interface keys usb_id skips (INTERFACE_NUM/DRIVER/TYPE/ID_TYPE) are
+ * synthesized on the interface and inherited by an input child. */
+static void test_usb_interface_inherit(void) {
+    root_make();
+    mkdirs("/devices/pci0/usb1/1-2/1-2:1.0");
+    writef("/devices/pci0/usb1/1-2/uevent", "DEVTYPE=usb_device\n");
+    writef("/devices/pci0/usb1/1-2/1-2:1.0/uevent", "DEVTYPE=usb_interface\n");
+    writef("/devices/pci0/usb1/1-2/1-2:1.0/bInterfaceNumber", "01\n");
+    writef("/devices/pci0/usb1/1-2/1-2:1.0/bInterfaceClass", "03\n");
+    set_subsystem("/devices/pci0", "pci");
+    set_subsystem("/devices/pci0/usb1", "usb");
+    set_subsystem("/devices/pci0/usb1/1-2", "usb");
+    set_subsystem("/devices/pci0/usb1/1-2/1-2:1.0", "usb");
+    { char lp[PATH_MAX], tgt[PATH_MAX];             /* interface driver symlink */
+      snprintf(lp, sizeof lp, "%s/devices/pci0/usb1/1-2/1-2:1.0/driver", ROOT);
+      snprintf(tgt, sizeof tgt, "%s/bus/usb/drivers/usbhid", ROOT);
+      mkdirs("/bus/usb/drivers/usbhid"); assert(symlink(tgt, lp) == 0); }
+    mkdirs("/devices/pci0/usb1/1-2/1-2:1.0/input/input9");
+    writef("/devices/pci0/usb1/1-2/1-2:1.0/input/input9/uevent", "DEVTYPE=\n");
+    set_subsystem("/devices/pci0/usb1/1-2/1-2:1.0/input/input9", "input");
+
+    struct uevent ev; ev.n = 0;
+    strcpy(ev.key[ev.n], "SUBSYSTEM"); strcpy(ev.val[ev.n], "input"); ev.n++;
+    strcpy(ev.key[ev.n], "DEVPATH");
+    strcpy(ev.val[ev.n], "/devices/pci0/usb1/1-2/1-2:1.0/input/input9"); ev.n++;
+    run_rules(ROOT, ev.val[1], NULL, &ev);
+    assert(strcmp(uevent_get(&ev, "ID_USB_INTERFACE_NUM"), "01") == 0);
+    assert(strcmp(uevent_get(&ev, "ID_USB_DRIVER"), "usbhid") == 0);
+    assert(strcmp(uevent_get(&ev, "ID_USB_TYPE"), "hid") == 0);
+    assert(strcmp(uevent_get(&ev, "ID_TYPE"), "hid") == 0);
+    printf("test_udev_rules usb_interface inherit: OK\n");
+}
+
 int main(void) {
     test_inert_on_childless();
     test_inherit_id_path();
@@ -145,5 +178,6 @@ int main(void) {
     test_inherit_bounded_set();
     test_composite_usb_modalias();
     test_composite_oui_key();
+    test_usb_interface_inherit();
     return 0;
 }

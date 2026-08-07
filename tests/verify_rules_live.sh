@@ -28,13 +28,16 @@ scanned=$(echo "$out" | sed -n 's/^Scanned \([0-9]*\) devices.*/\1/p')
 mm=$(echo "$out" | sed -n 's/^VALUE MISMATCHES.*: \([0-9]*\)$/\1/p')
 [ "${mm:-1}" -eq 0 ] || { echo "FAIL: $mm value mismatch(es)"; exit 1; }
 
-# in-scope missing must be zero: any TOP MISSING line whose [hint] is one of the
-# six reimplemented builtins is a real gap. Lines with no hint, hints for
-# not-yet-reimplemented builtins (v4l_id), or deferred keys (ID_FS_SIZE,
-# ID_NET_DRIVER, ID_PATH_WITH_USB_REVISION, USB interface props, etc.) are out of scope.
-DEFER_KEYS='ID_OUI_FROM_DATABASE|ID_NET_DRIVER|ID_NET_LINK_FILE|ID_FS_SIZE|ID_FS_BLOCKSIZE|ID_FS_LASTBLOCK|ID_PATH_WITH_USB_REVISION|ID_PATH_ATA_COMPAT|ID_USB_INTERFACE_NUM|ID_USB_DRIVER|ID_USB_TYPE|ID_USB_MODEL|ID_USB_VENDOR|ID_USB_SERIAL|ID_USB_REVISION|ID_USB_INSTANCE|ID_USB_INTERFACES|ID_SERIAL'
-inscope_missing=$(echo "$out" | grep -E '\[(path_id|usb_id|input_id|net_id|blkid|hwdb)\]' | grep -vE "$DEFER_KEYS" || true)
-if [ -n "$inscope_missing" ]; then
-    echo "FAIL: in-scope missing keys:"; echo "$inscope_missing"; exit 1
+# in-scope missing must be zero. The tool computes this itself with device-class
+# awareness (parity_in_scope_missing in udev-parity.h): a key udev has that we
+# don't, attributed to one of the six reimplemented builtins, minus documented
+# deferrals (ID_FS geometry, ID_PATH compat variants, ID_OUI, v4l_id) and minus
+# identity/type keys on non-usb devices (ata_id/scsi_id/cdrom_id/dmi territory).
+# Each such gap is printed as an INSCOPE-MISS line above, so it cannot be hidden.
+im=$(echo "$out" | sed -n 's/^IN-SCOPE MISSING.*: \([0-9]*\)$/\1/p')
+if [ "${im:-1}" -ne 0 ]; then
+    echo "FAIL: $im in-scope missing key(s):"
+    echo "$out" | grep '^INSCOPE-MISS'
+    exit 1
 fi
 echo "PASS: full-device parity, 0 in-scope missing, 0 mismatch across $scanned devices"

@@ -14,7 +14,7 @@ static int g_nmissing = 0;
 struct subrow { char sub[UE_KEY_MAX]; int devices, with_db, ekeys, reproduced; };
 static struct subrow g_subs[MAX_SUBS];
 static int g_nsubs = 0;
-static int g_total = 0, g_total_db = 0, g_mismatch = 0;
+static int g_total = 0, g_total_db = 0, g_mismatch = 0, g_inscope_missing = 0;
 
 static struct subrow *sub_row(const char *sub) {
     int i;
@@ -67,6 +67,11 @@ static void collect(struct uevent *ev_in) {
             }
         } else {
             keycount_add(g_missing, &g_nmissing, MAX_MISSING, dbev.key[j]);
+            if (parity_in_scope_missing(dbev.key[j], sub, uevent_get(&ev, "DEVPATH"))) {
+                printf("INSCOPE-MISS %-9s %-24s @ %s\n", sub ? sub : "-", dbev.key[j],
+                       uevent_get(&ev, "DEVPATH"));
+                g_inscope_missing++;
+            }
         }
     }
 }
@@ -100,5 +105,6 @@ int main(void) {
     }
 
     printf("\nVALUE MISMATCHES (keys in both, differing value): %d\n", g_mismatch);
+    printf("IN-SCOPE MISSING (device-class aware): %d\n", g_inscope_missing);
     return 0;
 }
