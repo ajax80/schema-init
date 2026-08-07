@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <endian.h>
 
-#define UE_MAX_KEYS 32
+#define UE_MAX_KEYS 64
 #define UE_KEY_MAX  64
 #define UE_VAL_MAX  512
 
