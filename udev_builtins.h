@@ -8,6 +8,7 @@
 #include "net_id.h"
 #include "blkid_fs.h"   /* pulls in blkid_pt.h */
 #include "hwdb.h"
+#include "ata_id.h"
 
 #include <string.h>
 #include <fnmatch.h>
@@ -47,7 +48,13 @@ static inline int ub_ancestor_in(const char *sysroot, const char *devpath,
     return 0;
 }
 
-enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32 };
+static inline int ub_has_ata_ancestor(const char *devpath) {
+    for (const char *p = devpath; (p = strstr(p, "/ata")) != NULL; p += 4)
+        if (p[4] >= '0' && p[4] <= '9') return 1;
+    return 0;
+}
+
+enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64 };
 
 /* Pure guard logic: which builtins apply to this device? Mirrors the IMPORT{builtin}
  * conditions in systemd's shipped /usr/lib/udev/rules.d. Order of the bits is
@@ -88,6 +95,11 @@ static inline int ub_select(const char *sysroot, const char *devpath,
         devtype && (strcmp(devtype, "disk") == 0 || strcmp(devtype, "partition") == 0) &&
         fnmatch("sr*", kname, 0) != 0 && fnmatch("mmcblk*boot*", kname, 0) != 0)
         sel |= UB_BLKID;
+
+    if (subsystem && strcmp(subsystem, "block") == 0 &&
+        devtype && strcmp(devtype, "disk") == 0 &&
+        ub_has_ata_ancestor(devpath))
+        sel |= UB_ATA;
 
     return sel;
 }
@@ -130,6 +142,7 @@ static inline int run_builtins(const char *sysroot, const char *devpath,
     if (sel & UB_USB)   { tmp.n = 0; usb_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
     if (sel & UB_INPUT) { tmp.n = 0; input_id_build(sysroot, devpath, &tmp); ub_absorb(ev, &tmp); }
     if (sel & UB_NET)   { tmp.n = 0; net_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
+    if (sel & UB_ATA)   { tmp.n = 0; ata_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); }
     if (sel & UB_BLKID) {
         tmp.n = 0; blkid_pt_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
         tmp.n = 0; blkid_fs_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);

@@ -3,6 +3,7 @@
 
 #include "schema-udev.h"
 #include "udev_db.h"
+#include "udev_rules.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -34,14 +35,9 @@ static inline int parity_deferred(const char *key) {
            strcmp(key, "ID_PATH_WITH_USB_REVISION") == 0 || strcmp(key, "ID_PATH_ATA_COMPAT") == 0;
 }
 
-/* usb_id identity/type keys: usb_id owns them ONLY on a usb chain. On block (and
- * on dmi/etc) they come from ata_id/scsi_id/cdrom_id/dmi — not yet reimplemented. */
-static inline int parity_identity_key(const char *key) {
-    return strncmp(key, "ID_SERIAL", 9) == 0 || strncmp(key, "ID_MODEL", 8) == 0 ||
-           strncmp(key, "ID_VENDOR", 9) == 0 || strcmp(key, "ID_REVISION") == 0 ||
-           strcmp(key, "ID_BUS") == 0 || strcmp(key, "ID_TYPE") == 0 ||
-           strcmp(key, "ID_USB_TYPE") == 0 || strcmp(key, "ID_WWN") == 0 ||
-           strcmp(key, "ID_INSTANCE") == 0;
+static inline int parity_ata_feature(const char *key) {
+    if (strncmp(key, "ID_ATA_", 7) != 0) return 0;   /* ID_ATA (=1) is emitted, not deferred */
+    return 1;   /* all ID_ATA_* feature-set keys are documented-deferred in slice 3a */
 }
 
 /* Is a udev E: key that WE failed to reproduce a genuine in-scope gap?
@@ -53,17 +49,19 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
     if (strcmp(hint, "v4l_id") == 0) return 0;    /* v4l_id not reimplemented */
     if (parity_deferred(key)) return 0;           /* documented deferral */
     if (sub && strcmp(sub, "block") == 0) {
-        /* on block, only topology/db + interface-topology keys are ours; identity,
-         * type, and usb-descriptor strings come from ata_id/scsi_id/cdrom_id/
-         * usb-storage (not reimplemented). */
+        if (parity_ata_feature(key)) return 0;                 /* slice-3a deferral */
         if (strcmp(key, "ID_PATH") == 0 || strcmp(key, "ID_PATH_TAG") == 0 ||
             strstr(key, "_FROM_DATABASE") != NULL ||
             strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0 ||
             strcmp(key, "ID_USB_INTERFACE_NUM") == 0 || strcmp(key, "ID_USB_DRIVER") == 0)
             return 1;
+        /* identity keys are ours on the ATA chain (ata_id, slice 3a); on usb/scsi
+         * block they remain deferred (scsi_id, slice 3b). */
+        if (udev_identity_key(key) && devpath && strstr(devpath, "/ata") != NULL)
+            return 1;
         return 0;
     }
-    if (parity_identity_key(key)) {
+    if (udev_identity_key(key)) {
         int on_usb = devpath && strstr(devpath, "/usb") != NULL;
         return on_usb ? 1 : 0;                    /* usb_id only on usb chain */
     }
