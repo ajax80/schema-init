@@ -55,20 +55,25 @@ enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID
 static inline int ub_select(const char *sysroot, const char *devpath,
                             const char *devnode, const struct uevent *ev) {
     (void)devnode;
-    static const char *const bus3[]  = { "pci", "usb", "platform", NULL };
-    static const char *const bus4[]  = { "pci", "usb", "platform", "acpi", NULL };
     const char *subsystem = uevent_get(ev, "SUBSYSTEM");
     const char *devtype   = uevent_get(ev, "DEVTYPE");
     const char *kname     = ub_kernel_name(devpath);
     int sel = 0;
 
+    static const char *const path_subs[] = { "pci", "platform", "block", "net", "input", "drm", "graphics", NULL };
     if (ub_has_modalias(sysroot, devpath)) sel |= UB_HWDB;
 
-    if (ub_in(subsystem, bus3)) sel |= UB_PATH;
-    else if (subsystem && strcmp(subsystem, "block") == 0 &&
-             devtype && strcmp(devtype, "disk") == 0 &&
-             strstr(devpath, "/virtual/") == NULL) sel |= UB_PATH;
-    else if (ub_ancestor_in(sysroot, devpath, bus4)) sel |= UB_PATH;
+    if (subsystem && ub_in(subsystem, path_subs)) {
+        if (strcmp(subsystem, "block") == 0 && strstr(devpath, "/virtual/")) {
+            /* skip virtual block devices */
+        } else {
+            sel |= UB_PATH;
+        }
+    } else if (subsystem && strcmp(subsystem, "sound") == 0 && fnmatch("card*", kname, 0) == 0) {
+        sel |= UB_PATH;
+    } else if (subsystem && strcmp(subsystem, "usb") == 0 && devtype && strcmp(devtype, "usb_device") == 0) {
+        sel |= UB_PATH;
+    }
 
     if (subsystem && strcmp(subsystem, "usb") == 0 &&
         devtype && strcmp(devtype, "usb_device") == 0) sel |= UB_USB;
