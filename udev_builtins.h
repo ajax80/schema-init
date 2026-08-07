@@ -63,13 +63,18 @@ static inline int ub_select(const char *sysroot, const char *devpath,
     (void)kname;
     if (ub_has_modalias(sysroot, devpath)) sel |= UB_HWDB;
 
-    /* path_id: udev emits ID_PATH on essentially any device that anchors to a
-     * hardware bus (pci/usb/platform/acpi/scsi/nvme in its parent chain) — including
-     * bus interfaces, hidraw, sound controls, gpiochips, leds, rfkill, net sub-nodes.
-     * path_id_build() returns >0 only when it anchors, so fire broadly and let it
-     * decide, except virtual block devices which udev explicitly excludes
-     * (DEVPATH not matching a /virtual/ segment). */
-    if (subsystem && !(strcmp(subsystem, "block") == 0 && strstr(devpath, "/virtual/")))
+    /* path_id: udev runs it (per its shipped rules) on a specific set of subsystems —
+     * pci/usb/platform (direct), rfkill, block disks (non-virtual), and the leaf
+     * subsystems whose devices introduce their own path component (input, hidraw).
+     * Other subsystems (sound/net/tty/drm/...) get ID_PATH by INHERITING their bus
+     * ancestor's value via the rules engine (IMPORT{parent} = sub-project B), not a
+     * fresh path_id run — so we do not fire on them here. path_id_build() still
+     * returns >0 only when it anchors. */
+    static const char *const path_subs[] = {
+        "pci", "usb", "platform", "block", "input", "hidraw", "rfkill", NULL
+    };
+    if (ub_in(subsystem, path_subs) &&
+        !(strcmp(subsystem, "block") == 0 && strstr(devpath, "/virtual/")))
         sel |= UB_PATH;
 
     if (subsystem && strcmp(subsystem, "usb") == 0 &&

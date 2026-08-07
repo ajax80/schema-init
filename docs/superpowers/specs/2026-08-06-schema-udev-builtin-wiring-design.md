@@ -9,8 +9,26 @@
 schema-udev runs the six reimplemented builtins (path_id, usb_id, input_id, net_id, blkid, hwdb)
 against each device — on both the coldplug sysfs walk and live hotplug uevents — with
 udev-faithful dispatch guards, merging each builtin's output into the event's property set. This is
-the `IMPORT{builtin}` equivalent. Acceptance is **0 mismatches vs real udev across all `/sys`
-devices on blakbox** (both directions) on the union of the six builtins' owned property subsets.
+the `IMPORT{builtin}` equivalent.
+
+**Acceptance (revised 2026-08-06 during implementation — see "Scope correction"):** for each
+builtin, on the device class that builtin is the ORIGIN for, `run_builtins` reproduces that
+builtin's correct output — **0 mismatches, both directions**, verified by
+`tests/verify_builtins_live.sh` (297 builtin-origin comparisons on blakbox). The gate compares each
+builtin only on its origin devices, using the builtin's own oracle (for hwdb, `systemd-hwdb query
+<modalias>` — the pure `IMPORT{builtin}` result — not `udevadm info`, which also shows
+parent-inherited properties).
+
+### Scope correction (why not "all /sys devices, both directions")
+
+The originally-spec'd bar — full per-device parity vs `udevadm info` across every device — actually
+tests the **rules engine (sub-project B)**, not A. udev's per-device property set is shaped by
+`IMPORT{parent}` propagation (a child usb node's `ID_USB_VENDOR` is byte-identical to its parent
+usb_device's — inherited, not recomputed) and by constructed/composite hwdb keys (a usb_device's
+`ID_VENDOR_FROM_DATABASE` comes from a `usb:vVVVVpPPPP` key built from `idVendor`/`idProduct`, since
+the usb_device's `modalias` sysattr is empty). A implements `IMPORT{builtin}` only — run a builtin
+*on a device* and merge its output — so its honest acceptance is origin-scoped. Parent propagation
+and composite keys are deferred to B.
 
 **Compute-only / inert:** A attaches builtin properties and exposes them (hooks already receive the
 full property set via environment in `run_hook`; rules can now `match_<KEY>` on builtin properties).
@@ -70,7 +88,7 @@ rules would have suppressed) and wasteful raw I/O (blkid).
 | order | builtin | guard | owned keys |
 |---|---|---|---|
 | 1 | hwdb | `modalias` sysattr present (`MODALIAS!=""`) | `ID_VENDOR_FROM_DATABASE`, `ID_MODEL_FROM_DATABASE`, `ID_PCI_CLASS_FROM_DATABASE`, `ID_PCI_SUBCLASS_FROM_DATABASE`, and other single-key `*_FROM_DATABASE` (composite input/net:naming/OUI lookups deferred, excluded from gate) |
-| 2 | path_id | `SUBSYSTEM∈{pci,usb,platform}`, OR block `DEVTYPE=disk` and `DEVPATH` not matching `*/virtual/*` (incl. nvme-subsystem), OR an ancestor `SUBSYSTEMS∈{pci,usb,platform,acpi}` | `ID_PATH`, `ID_PATH_TAG` |
+| 2 | path_id | `SUBSYSTEM∈{pci,usb,platform,block,input,hidraw,rfkill}` minus virtual block (`SUBSYSTEM=block && DEVPATH~*/virtual/*`). This allowlist is where udev's shipped rules run path_id; leaf subsystems (sound/net/tty/drm) get `ID_PATH` by INHERITING their bus ancestor's value via the rules engine (sub-project B), not a fresh path_id run. | `ID_PATH`, `ID_PATH_TAG` |
 | 3 | usb_id | `SUBSYSTEM=usb` and `DEVTYPE=usb_device` | `ID_VENDOR`, `ID_VENDOR_ID`, `ID_MODEL`, `ID_MODEL_ID`, `ID_SERIAL`, `ID_SERIAL_SHORT`, `ID_REVISION`, `ID_TYPE`, `ID_USB_*`, `ID_BUS`, `ID_INSTANCE` (per usb_id.h) |
 | 4 | input_id | `SUBSYSTEM=input` | `ID_INPUT`, `ID_INPUT_*` |
 | 5 | net_id | `SUBSYSTEM=net` | `ID_NET_NAMING_SCHEME`, `ID_NET_NAME_MAC`, `ID_NET_NAME_ONBOARD`, `ID_NET_LABEL_ONBOARD`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT` |
@@ -83,17 +101,21 @@ of `DEVPATH`).
 
 ## Merge semantics
 
-1. `ev` enters with the kernel payload properties already parsed in.
-2. Each builtin, in dispatch order, appends its `key=value` pairs.
-3. On a key already present in `ev`: overwrite the value (later writer wins). On our fleet no builtin
-   key collides with a base kernel key; collisions between builtins are resolved by dispatch order.
-4. Key cap: `UE_MAX_KEYS` raised 32 → 64. Worst observed aggregate is a block partition (~17) and a
-   USB device (~18); 64 gives ample headroom so a device can never silently truncate. `UE_KEY_MAX`
-   and `UE_VAL_MAX` unchanged.
+**Correction (found during implementation):** the six builtins do **not** append into a caller's
+uevent — each does `out->n = 0` at entry (it owns the buffer, because every per-builtin gate calls
+it with a fresh `struct uevent`). So `run_builtins` must run each builtin into a **scratch**
+`struct uevent` and absorb its output into `ev`; calling them in sequence on one shared `ev` would
+make each builtin wipe the kernel payload and the previous builtin's output.
 
-`ub_merge` (or the append path in `run_builtins`) enforces the overwrite rule and the cap; on cap
-overflow it drops the excess and the caller logs (a dropped property would fail the parity gate, so
-the cap is sized to never trigger on real devices).
+1. `ev` enters with the kernel payload properties already parsed in.
+2. For each selected builtin, in dispatch order: `tmp.n = 0; <builtin>_build(..., &tmp);
+   ub_absorb(ev, &tmp)`. (path_id writes a string buffer, not a uevent — it is handled directly:
+   `path_id_build` into a buffer, then `ub_add(ev, "ID_PATH"/"ID_PATH_TAG", ...)`.)
+3. `ub_add` is **first-writer-wins**: it skips a key already present, so the kernel payload is never
+   overwritten. On our fleet no builtin key collides with a base kernel key or with another
+   builtin's key, so first-writer-wins and last-writer-wins are equivalent here.
+4. Key cap: `UE_MAX_KEYS` raised 32 → 64. Worst observed aggregate is a block partition (~17) and a
+   USB device (~18); 64 gives ample headroom. `UE_KEY_MAX` and `UE_VAL_MAX` unchanged.
 
 ## Components
 
@@ -113,12 +135,16 @@ the cap is sized to never trigger on real devices).
   - merge dedup: a fabricated collision resolves to the later-dispatch builtin's value.
   - key-cap headroom: a device producing ~18 keys keeps all of them (none dropped).
   Reuse the fabricated-superblock / synthetic-sysfs helpers from the existing per-builtin tests.
-- **`tests/verify_builtins_live.sh`** (new): for every device under `/sys` (enumerate as the
-  per-builtin live gates do), build the event's kernel payload, run `run_builtins`, and diff the
-  emitted property set against `udevadm info -q property <dev>` — restricted to the **union of the
-  six builtins' owned key-subsets**, both directions. `sudo` (blkid raw reads). Excludes the same
-  deferred keys the per-builtin gates excluded: `ID_OUI_FROM_DATABASE`, `ID_NET_DRIVER`,
-  `ID_FS_SIZE`, `ID_FS_BLOCKSIZE`, `ID_FS_LASTBLOCK`. Expect **0 mismatches** across all devices.
+- **`tests/verify_builtins_live.sh`** (new): for every device under `/sys`, run `run_builtins` and,
+  **per builtin, compare only on that builtin's ORIGIN device class** (origin-scoped — see Scope
+  correction): path_id keys on the path_id allowlist subsystems (virtual block excluded); blkid keys
+  on block disk/partition (not `sr*`/`mmcblk*boot*`); usb_id keys on `usb_device` nodes (excluding
+  `_FROM_DATABASE`, which is hwdb's constructed-key domain); input_id keys on `input`; net_id keys on
+  `net`; hwdb `_FROM_DATABASE` compared against **`systemd-hwdb query <modalias>`** (the pure
+  `IMPORT{builtin}` oracle) on devices with a non-empty own modalias. `sudo` (blkid raw reads).
+  Deferred keys excluded: `ID_OUI_FROM_DATABASE`, `ID_NET_DRIVER`/`ID_NET_LINK_FILE`/`ID_NET_NAME`,
+  `ID_FS_SIZE`/`ID_FS_BLOCKSIZE`/`ID_FS_LASTBLOCK`. Expect **0 mismatches, both directions**
+  (297 builtin-origin comparisons on blakbox).
 - **`schema-udev.c`**: one `run_builtins` call site in `dispatch()` before the match loop. No other
   logic change.
 - **`schema-udev.h`**: `#define UE_MAX_KEYS 64` (was 32). No other change.
@@ -129,8 +155,8 @@ the cap is sized to never trigger on real devices).
 1. `make test` green incl. `test_udev_builtins`, `-Wall -Wextra` clean.
 2. Boundary: `git diff master -- schema-udev.c` shows only the single `run_builtins` call site;
    `git diff master -- schema-udev.h` shows only the `UE_MAX_KEYS` bump. No other lines.
-3. Live: `tests/verify_builtins_live.sh` → **0 mismatches** across all `/sys` devices, both
-   directions, on the union owned-subset.
+3. Live: `tests/verify_builtins_live.sh` → **0 mismatches, both directions**, origin-scoped
+   (per-builtin on each builtin's origin device class; hwdb oracle = `systemd-hwdb query`).
 4. `vmtest.sh` → RESULT: PASS (schema-udev is not PID 1; the vmtest rail must still pass unchanged).
 
 ## Out of scope
@@ -139,8 +165,10 @@ the cap is sized to never trigger on real devices).
 - Persistent `/dev/disk/by-*`, `/dev/input/by-*` symlinks and symlink var-expansion (sub-project C).
 - The uaccess ACL manager (sub-project D).
 - Retiring `udevd.svc` — the cutover (sub-project E).
-- Composite hwdb lookups (evdev/mouse/keyboard/sensor/net:naming/OUI) — deferred with the rules
-  engine's multi-attribute key construction.
+- Composite/constructed hwdb keys (usb `usb:vVVVVpPPPP` from idVendor/idProduct;
+  evdev/mouse/keyboard/sensor/net:naming/OUI) — deferred with the rules engine's key construction.
+- `IMPORT{parent}` propagation of properties to child devices (a child inheriting its parent's
+  `ID_USB_*` / `*_FROM_DATABASE` / `ID_PATH`) — this is the rules engine (sub-project B).
 - Any consumption of the new properties beyond hooks-via-environment and rule `match_` conditions.
 - A declarative `builtin=` rule field (auto-by-subsystem dispatch is the parity baseline; the
   declarative form is YAGNI until a concrete need appears).

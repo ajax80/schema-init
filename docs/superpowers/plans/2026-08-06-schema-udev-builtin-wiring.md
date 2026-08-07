@@ -8,6 +8,24 @@
 
 **Tech Stack:** C99, single-header builtins, libc `fnmatch`/`mmap`/`pread`. Tests are freestanding C compiled per the Makefile `test:` target; the live gate is a POSIX shell script driving `udevadm`.
 
+> **CORRECTIONS APPLIED DURING IMPLEMENTATION (2026-08-06).** Three things in this plan were
+> wrong and were fixed while landing; the merged code + the spec are the source of truth:
+> 1. **Builtins RESET, not append.** All six do `out->n = 0` at entry (Task 2's "each already
+>    appends" is wrong). `run_builtins` runs each into a scratch `struct uevent` and merges via
+>    `ub_add` (first-writer-wins) / `ub_absorb`. path_id writes a string buffer, handled directly.
+> 2. **path_id dispatch = allowlist.** `ub_select` fires path_id on
+>    `SUBSYSTEM∈{pci,usb,platform,block,input,hidraw,rfkill}` (minus virtual block), the set udev's
+>    shipped rules run path_id on — not "any device with a bus ancestor" (that over-emits on
+>    wakeup/wmi/serial-base/tty) and not the narrow first-cut list (that under-emits on usb
+>    interfaces/hidraw). Leaf subsystems (sound/net/tty/drm) inherit `ID_PATH` via the rules engine
+>    (sub-project B).
+> 3. **Acceptance is ORIGIN-SCOPED, not "all devices both directions."** The aggregate bar tested
+>    the rules engine (`IMPORT{parent}` inheritance + composite hwdb keys = sub-project B). The gate
+>    compares each builtin only on its origin device class; hwdb's oracle is `systemd-hwdb query
+>    <modalias>`, not `udevadm info`. Result on blakbox: 0 mismatches / 297 comparisons, both dirs.
+> Also: `schema-udev.h` required a second one-line change beyond `UE_MAX_KEYS` — the coldplug
+> callback typedef drops `const` (dispatch now mutates `ev`); this was anticipated in Task 3.
+
 ## Global Constraints
 
 - Boundary: `schema-udev.c` changes ONLY by the single `run_builtins()` call site; `schema-udev.h` changes ONLY by `UE_MAX_KEYS` 32→64. `git diff master` on those two files must show nothing else.

@@ -1,11 +1,20 @@
 #!/bin/sh
-# Aggregate live parity gate for builtin wiring: run run_builtins over EVERY /sys
-# device, diff the union of the six builtins' owned key-subsets vs `udevadm info`,
-# BOTH directions. sudo (blkid reads raw block devices). Deferred keys excluded.
+# Aggregate live parity gate for builtin wiring (sub-project A = IMPORT{builtin}).
 #
-# A device is counted whenever EITHER side emits an owned key, so under-emission
-# (udev has a key we lack) is caught, not skipped. The key set is uniform across all
-# devices — no per-device narrowing that could mask a delta.
+# A wires the six builtins so run_builtins() dispatches the right ones per device and
+# merges their output. This gate proves that, per builtin, on the device class that
+# builtin is the ORIGIN for, run_builtins() reproduces the builtin's correct output.
+#
+# It deliberately does NOT test IMPORT{parent} propagation to child devices or
+# constructed/composite hwdb keys (usb idVendor/idProduct, evdev/OUI/...): those are
+# the rules engine = sub-project B. Accordingly:
+#   - each builtin's keys are compared only on that builtin's origin device class;
+#   - the hwdb oracle is `systemd-hwdb query <modalias>` (the pure IMPORT{builtin}
+#     result for the device's OWN modalias), not `udevadm info` (which also shows
+#     parent-inherited *_FROM_DATABASE);
+#   - usb_id keys are compared only on usb_device nodes (where usb_id owns them;
+#     elsewhere ata_id/scsi_id/cdrom_id — out of scope — emit the same prefixes).
+# sudo: blkid reads raw block devices.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -13,7 +22,6 @@ cat > /tmp/ub_driver.c <<'EOF'
 #include "udev_builtins.h"
 #include <stdio.h>
 #include <string.h>
-/* argv[1]=devpath (under /sys), argv[2]=devnode or "-" */
 int main(int argc, char **argv) {
     if (argc < 3) return 2;
     const char *devnode = strcmp(argv[2], "-") ? argv[2] : NULL;
@@ -29,35 +37,86 @@ int main(int argc, char **argv) {
 EOF
 gcc -O2 -std=c99 -Wall -Wextra -D_GNU_SOURCE -I. /tmp/ub_driver.c -o /tmp/ub_driver
 
-# Keys uniquely owned by our six builtins — compared on EVERY device, both sides.
-UNIFORM='^ID_PATH=|^ID_PATH_TAG=|^ID_INPUT|^ID_NET_|^ID_FS_|^ID_PART_|^ID_USB|_FROM_DATABASE='
-# Keys usb_id owns but that udev ALSO emits via out-of-scope builtins (ata_id/scsi_id/
-# cdrom_id) on non-USB nodes — compared ONLY on usb_device nodes, where usb_id owns them.
-USBKEYS='^ID_VENDOR|^ID_MODEL|^ID_SERIAL|^ID_REVISION=|^ID_BUS=|^ID_TYPE=|^ID_INSTANCE='
-# deferred keys excluded from BOTH sides (composite/informational + out-of-scope net link)
-DEFER='^ID_OUI_FROM_DATABASE=|^ID_NET_DRIVER=|^ID_NET_LINK_FILE=|^ID_NET_NAME=|^ID_FS_SIZE=|^ID_FS_BLOCKSIZE=|^ID_FS_LASTBLOCK='
+PATH_K='^ID_PATH=|^ID_PATH_TAG='
+BLKID_K='^ID_FS_|^ID_PART_'
+USB_K='^ID_USB|^ID_VENDOR|^ID_MODEL|^ID_SERIAL|^ID_REVISION=|^ID_BUS=|^ID_TYPE=|^ID_INSTANCE='
+INPUT_K='^ID_INPUT'
+NET_K='^ID_NET_'
+HWDB_K='_FROM_DATABASE='
+DEFER_FS='^ID_FS_SIZE=|^ID_FS_BLOCKSIZE=|^ID_FS_LASTBLOCK='
+DEFER_NET='^ID_NET_DRIVER=|^ID_NET_LINK_FILE=|^ID_NET_NAME='
+DEFER_HWDB='^ID_OUI_FROM_DATABASE='
+# subsystems udev runs path_id on (rest inherit ID_PATH via the rules engine = B)
+PATH_SUBS=" pci usb platform block input hidraw rfkill "
 
-ours=$(mktemp); theirs=$(mktemp)
-devs=0; total=0
+ours=$(mktemp); theirs=$(mktemp); allo=$(mktemp)
+total=0; devs=0
+
+check() {   # $1=label $2=keypat $3=defer(may be empty); compares $ours vs $theirs
+    devs=$((devs+1))
+    diff -q "$theirs" "$ours" >/dev/null && return 0
+    echo "### $1 MISMATCH $dp"; diff "$theirs" "$ours" | grep -E '^[<>]' || true
+    total=$((total+1))
+}
+
 for uev in $(find /sys/devices -name uevent -printf '%h\n'); do
-    devpath=${uev#/sys}
+    dp=${uev#/sys}
     devname=$(sed -n 's/^DEVNAME=//p' "$uev/uevent" 2>/dev/null | head -1)
     node="-"; [ -n "$devname" ] && node="/dev/$devname"
+    sub=$(basename "$(readlink "$uev/subsystem" 2>/dev/null)" 2>/dev/null || true)
     dt=$(sed -n 's/^DEVTYPE=//p' "$uev/uevent" 2>/dev/null | head -1)
-    KEYS="$UNIFORM"; [ "$dt" = "usb_device" ] && KEYS="$UNIFORM|$USBKEYS"
-    /tmp/ub_driver "$devpath" "$node" 2>/dev/null \
-        | grep -E "$KEYS" | grep -Ev "$DEFER" | sort > "$ours" || true
-    udevadm info -q property -p "$uev" 2>/dev/null \
-        | grep -E "$KEYS" | grep -Ev "$DEFER" | sort > "$theirs" || true
-    # count if EITHER side has owned keys — under-emission must not be skipped
-    [ -s "$ours" ] || [ -s "$theirs" ] || continue
-    devs=$((devs+1))
-    if ! diff -q "$theirs" "$ours" >/dev/null; then
-        echo "### MISMATCH $devpath"
-        diff -u "$theirs" "$ours" | sed '1,2d' || true
-        total=$((total+1))
+    kname=${dp##*/}
+    sudo /tmp/ub_driver "$dp" "$node" 2>/dev/null > "$allo" || true
+
+    # path_id — only on the subsystems udev path_id's, virtual block excluded
+    case "$PATH_SUBS" in *" $sub "*)
+        if ! { [ "$sub" = block ] && case "$dp" in */virtual/*) true;; *) false;; esac; }; then
+            grep -E "$PATH_K" "$allo" | sort > "$ours" || true
+            udevadm info -q property -p "$uev" 2>/dev/null | grep -E "$PATH_K" | sort > "$theirs" || true
+            { [ -s "$ours" ] || [ -s "$theirs" ]; } && check path_id
+        fi ;;
+    esac
+
+    # blkid — block disk/partition, not optical/mmc-boot
+    if [ "$sub" = block ] && { [ "$dt" = disk ] || [ "$dt" = partition ]; } \
+       && ! echo "$kname" | grep -qE '^sr|^mmcblk.*boot'; then
+        grep -E "$BLKID_K" "$allo" | grep -Ev "$DEFER_FS" | sort > "$ours" || true
+        udevadm info -q property -p "$uev" 2>/dev/null | grep -E "$BLKID_K" | grep -Ev "$DEFER_FS" | sort > "$theirs" || true
+        { [ -s "$ours" ] || [ -s "$theirs" ]; } && check blkid
+    fi
+
+    # usb_id — usb_device nodes only. Exclude *_FROM_DATABASE: those are hwdb's
+    # CONSTRUCTED usb:vVVVVpPPPP lookup (from idVendor/idProduct) = deferred composite
+    # key, not usb_id's (usb_id emits ID_USB_VENDOR/ID_VENDOR from string descriptors).
+    if [ "$dt" = usb_device ]; then
+        grep -E "$USB_K" "$allo" | grep -Ev "$HWDB_K" | sort > "$ours" || true
+        udevadm info -q property -p "$uev" 2>/dev/null | grep -E "$USB_K" | grep -Ev "$HWDB_K" | sort > "$theirs" || true
+        { [ -s "$ours" ] || [ -s "$theirs" ]; } && check usb_id
+    fi
+
+    # input_id — input subsystem
+    if [ "$sub" = input ]; then
+        grep -E "$INPUT_K" "$allo" | sort > "$ours" || true
+        udevadm info -q property -p "$uev" 2>/dev/null | grep -E "$INPUT_K" | sort > "$theirs" || true
+        { [ -s "$ours" ] || [ -s "$theirs" ]; } && check input_id
+    fi
+
+    # net_id — net subsystem
+    if [ "$sub" = net ]; then
+        grep -E "$NET_K" "$allo" | grep -Ev "$DEFER_NET" | sort > "$ours" || true
+        udevadm info -q property -p "$uev" 2>/dev/null | grep -E "$NET_K" | grep -Ev "$DEFER_NET" | sort > "$theirs" || true
+        { [ -s "$ours" ] || [ -s "$theirs" ]; } && check net_id
+    fi
+
+    # hwdb — oracle is `systemd-hwdb query <own modalias>` (pure IMPORT{builtin}),
+    # NOT udevadm (which adds parent-inherited *_FROM_DATABASE = sub-project B).
+    ma=$(cat "$uev/modalias" 2>/dev/null || true)
+    if [ -n "$ma" ]; then
+        grep -E "$HWDB_K" "$allo" | grep -Ev "$DEFER_HWDB" | sort > "$ours" || true
+        systemd-hwdb query "$ma" 2>/dev/null | grep -E "$HWDB_K" | grep -Ev "$DEFER_HWDB" | sort > "$theirs" || true
+        { [ -s "$ours" ] || [ -s "$theirs" ]; } && check hwdb
     fi
 done
-echo "checked $devs devices with builtin properties; $total mismatch(es)"
-rm -f "$ours" "$theirs"
+echo "checked $devs builtin-origin comparisons; $total mismatch(es)"
+rm -f "$ours" "$theirs" "$allo"
 [ "$total" -eq 0 ]
