@@ -120,4 +120,88 @@ static inline void hw_add_value(const struct hwdb *h, uint64_t noff, uint8_t cc,
     hw_collect_add(col, key + 1, hw_string(h, voff), prio, line);
 }
 
+struct hw_linebuf { char b[HW_LINE_MAX]; size_t len; };
+static inline void hw_lb_add(struct hw_linebuf *lb, const char *s, size_t n) {
+    if (lb->len + n >= sizeof lb->b) return;
+    memcpy(lb->b + lb->len, s, n); lb->len += n;
+}
+static inline void hw_lb_addc(struct hw_linebuf *lb, char c) {
+    if (lb->len + 1 >= sizeof lb->b) return;
+    lb->b[lb->len++] = c;
+}
+static inline void hw_lb_rem(struct hw_linebuf *lb, size_t n) { if (n <= lb->len) lb->len -= n; }
+
+static inline void hw_fnmatch(const struct hwdb *h, uint64_t noff, size_t p,
+                              struct hw_linebuf *lb, const char *search, struct hw_collect *col) {
+    if (!hw_ok(h, noff, h->node_size)) return;
+    const char *prefix = hw_string(h, hw_node_prefix(h, noff));
+    size_t plen = strlen(prefix + p);
+    hw_lb_add(lb, prefix + p, plen);
+    uint8_t cc = hw_node_cc(h, noff);
+    uint64_t vc = hw_node_vc(h, noff);
+    for (uint8_t i = 0; i < cc; i++) {
+        uint8_t c; uint64_t coff;
+        if (hw_child(h, noff, i, &c, &coff) != 0) break;
+        hw_lb_addc(lb, (char)c);
+        hw_fnmatch(h, coff, 0, lb, search, col);
+        hw_lb_rem(lb, 1);
+    }
+    if (vc) {
+        char pat[HW_LINE_MAX];
+        size_t L = lb->len < sizeof pat ? lb->len : sizeof pat - 1;
+        memcpy(pat, lb->b, L); pat[L] = '\0';
+        if (fnmatch(pat, search, 0) == 0)
+            for (uint64_t i = 0; i < vc; i++) hw_add_value(h, noff, cc, i, col);
+    }
+    hw_lb_rem(lb, plen);
+}
+
+static inline void hw_search(const struct hwdb *h, const char *search, struct hw_collect *col) {
+    struct hw_linebuf lb; lb.len = 0;
+    uint64_t noff = h->root_off;
+    size_t i = 0;
+    while (hw_ok(h, noff, h->node_size)) {
+        uint64_t poff = hw_node_prefix(h, noff);
+        uint8_t cc = hw_node_cc(h, noff);
+        uint64_t vc = hw_node_vc(h, noff);
+        if (poff) {
+            const char *prefix = hw_string(h, poff);
+            size_t p = 0;
+            for (; prefix[p]; p++) {
+                char c = prefix[p];
+                if (c == '*' || c == '?' || c == '[') { hw_fnmatch(h, noff, p, &lb, search + i + p, col); return; }
+                if (c != search[i + p]) return;
+            }
+            i += p;
+        }
+        for (int g = 0; g < 3; g++) {
+            char gc = (g == 0) ? '*' : (g == 1) ? '?' : '[';
+            uint64_t coff;
+            if (hw_child_lookup(h, noff, (uint8_t)gc, &coff)) {
+                hw_lb_addc(&lb, gc);
+                hw_fnmatch(h, coff, 0, &lb, search + i, col);
+                hw_lb_rem(&lb, 1);
+            }
+        }
+        if (search[i] == '\0') {
+            for (uint64_t n = 0; n < vc; n++) hw_add_value(h, noff, cc, n, col);
+            return;
+        }
+        uint64_t coff;
+        if (!hw_child_lookup(h, noff, (uint8_t)search[i], &coff)) return;
+        noff = coff; i++;
+    }
+}
+
+static inline int hwdb_query(struct hwdb *h, const char *key, struct uevent *out) {
+    struct hw_collect col; col.n = 0;
+    hw_search(h, key, &col);
+    for (int i = 0; i < col.n && out->n < UE_MAX_KEYS; i++) {
+        safe_copy(out->key[out->n], col.key[i], UE_KEY_MAX);
+        safe_copy(out->val[out->n], col.val[i], UE_VAL_MAX);
+        out->n++;
+    }
+    return 0;
+}
+
 #endif /* SCHEMA_HWDB_H */

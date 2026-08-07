@@ -97,9 +97,50 @@ static void test_values(void) {
     printf("test_values OK\n");
 }
 
+static void test_search(void) {
+    /* trie1: root prefix "key" with 3 values (literal descent + filter + priority) */
+    img_reset();
+    uint64_t pfx = put_str("key");
+    uint64_t k1 = put_str(" P1"), v1 = put_str("one"), v3 = put_str("one_hi");
+    uint64_t kn = put_str("NOSPACE"), v2 = put_str("two");
+    uint64_t root = node_start(pfx, 0, 3);
+    add_value(k1, v1, 0, 0); add_value(kn, v2, 0, 0); add_value(k1, v3, 1, 5);
+    const char *p1 = img_finalize(root);
+    struct hwdb h; assert(hwdb_open(p1, &h) == 0);
+    struct uevent e; e.n = 0;
+    assert(hwdb_query(&h, "key", &e) == 0);
+    assert(hw_has(&e, "P1", "one_hi") && hw_absent(&e, "NOSPACE") && e.n == 1);
+    /* wrong search -> nothing */
+    struct uevent e0; e0.n = 0; hwdb_query(&h, "nope", &e0); assert(e0.n == 0);
+    hwdb_close(&h); unlink(p1);
+
+    /* trie2: root prefix "x" with a '*' glob child -> value G (fnmatch path) */
+    img_reset();
+    uint64_t px = put_str("x");
+    uint64_t empty = put_str("");           /* empty prefix for the glob child node */
+    uint64_t gk = put_str(" G"), gv = put_str("globbed");
+    uint64_t gnode = node_start(empty, 0, 1);     /* build leaf FIRST so its offset is known */
+    add_value(gk, gv, 0, 0);
+    uint64_t root2 = node_start(px, 1, 0);
+    add_child('*', gnode);
+    const char *p2 = img_finalize(root2);
+    struct hwdb h2; assert(hwdb_open(p2, &h2) == 0);
+    struct uevent e2; e2.n = 0;
+    assert(hwdb_query(&h2, "xyz", &e2) == 0);
+    assert(hw_has(&e2, "G", "globbed"));
+    /* "x" alone also matches "*" of the remainder "" */
+    struct uevent e3; e3.n = 0; hwdb_query(&h2, "x", &e3); assert(hw_has(&e3, "G", "globbed"));
+    /* non-matching first char -> nothing */
+    struct uevent e4; e4.n = 0; hwdb_query(&h2, "zzz", &e4); assert(e4.n == 0);
+    hwdb_close(&h2); unlink(p2);
+
+    printf("test_search OK\n");
+}
+
 int main(void) {
     test_open();
     test_values();
+    test_search();
     printf("ALL hwdb tests passed\n");
     return 0;
 }
