@@ -55,9 +55,11 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
             strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0 ||
             strcmp(key, "ID_USB_INTERFACE_NUM") == 0 || strcmp(key, "ID_USB_DRIVER") == 0)
             return 1;
-        /* identity keys are ours on the ATA chain (ata_id, slice 3a); on usb/scsi
-         * block they remain deferred (scsi_id, slice 3b). */
-        if (udev_identity_key(key) && devpath && strstr(devpath, "/ata") != NULL)
+        /* identity keys are ours on the ATA chain (ata_id) and the usb chain
+         * (usb_id on usb-storage block, slice 3b); real non-usb SCSI stays
+         * deferred (scsi_id, no target). */
+        if (udev_identity_key(key) && devpath &&
+            (strstr(devpath, "/ata") != NULL || strstr(devpath, "/usb") != NULL))
             return 1;
         return 0;
     }

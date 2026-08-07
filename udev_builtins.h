@@ -87,6 +87,12 @@ static inline int ub_select(const char *sysroot, const char *devpath,
     if (subsystem && strcmp(subsystem, "usb") == 0 &&
         devtype && strcmp(devtype, "usb_device") == 0) sel |= UB_USB;
 
+    static const char *const usb_anc[] = { "usb", NULL };
+    if (subsystem && strcmp(subsystem, "block") == 0 &&
+        devtype && strcmp(devtype, "disk") == 0 &&
+        ub_ancestor_in(sysroot, devpath, usb_anc))
+        sel |= UB_USB;
+
     if (subsystem && strcmp(subsystem, "input") == 0) sel |= UB_INPUT;
 
     if (subsystem && strcmp(subsystem, "net") == 0) sel |= UB_NET;

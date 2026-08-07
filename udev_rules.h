@@ -48,8 +48,10 @@ static inline int rules_block_bypass(const struct uevent *anc, const char *key) 
         strcmp(key, "ID_USB_INTERFACE_NUM") == 0 || strcmp(key, "ID_USB_DRIVER") == 0)
         return 0;   /* allowed to inherit */
     if ((strcmp(key, "ID_ATA") == 0 || udev_identity_key(key)) &&
-        uevent_get(anc, "ID_BUS") && strcmp(uevent_get(anc, "ID_BUS"), "ata") == 0)
-        return 0;   /* ATA disk identity allowed onto ATA partitions */
+        uevent_get(anc, "ID_BUS") &&
+        (strcmp(uevent_get(anc, "ID_BUS"), "ata") == 0 ||
+         strcmp(uevent_get(anc, "ID_BUS"), "usb") == 0))
+        return 0;   /* ATA/usb-storage disk identity allowed onto its partitions */
     return 1;       /* bypass */
 }
 
