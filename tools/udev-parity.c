@@ -15,6 +15,7 @@ struct subrow { char sub[UE_KEY_MAX]; int devices, with_db, ekeys, reproduced; }
 static struct subrow g_subs[MAX_SUBS];
 static int g_nsubs = 0;
 static int g_total = 0, g_total_db = 0, g_mismatch = 0, g_inscope_missing = 0;
+static int g_db_inscope_missing = 0, g_db_mismatch = 0;
 
 static struct subrow *sub_row(const char *sub) {
     int i;
@@ -31,6 +32,7 @@ static struct subrow *sub_row(const char *sub) {
 
 static void collect(struct uevent *ev_in) {
     struct uevent ev = *ev_in;   /* mutable copy: run builtins + rules on it */
+    int kernel_n = ev.n;
     const char *devpath = uevent_get(&ev, "DEVPATH");
     if (devpath) {
         const char *devname = uevent_get(&ev, "DEVNAME");
@@ -74,6 +76,27 @@ static void collect(struct uevent *ev_in) {
             }
         }
     }
+
+    /* --- db parity: our PERSISTED record (bytes we write) vs udevd's E: set --- */
+    char rbuf[8192];
+    if (udev_db_record_build(&ev, kernel_n, rbuf, sizeof rbuf) > 0) {
+        struct uevent ours;
+        udev_db_parse_eprops(rbuf, &ours);
+        for (int k = 0; k < dbev.n; k++) {
+            const char *mine = uevent_get(&ours, dbev.key[k]);
+            if (mine) {
+                if (strcmp(mine, dbev.val[k]) != 0) {
+                    printf("VALMIS-DB %s %s: ours='%s' theirs='%s'\n",
+                           key, dbev.key[k], mine, dbev.val[k]);
+                    g_db_mismatch++;
+                }
+            } else if (parity_in_scope_missing(dbev.key[k], sub, uevent_get(&ev, "DEVPATH"))) {
+                printf("INSCOPE-MISS-DB %-9s %-24s @ %s\n", sub ? sub : "-", dbev.key[k],
+                       uevent_get(&ev, "DEVPATH"));
+                g_db_inscope_missing++;
+            }
+        }
+    }
 }
 
 int main(void) {
@@ -106,5 +129,7 @@ int main(void) {
 
     printf("\nVALUE MISMATCHES (keys in both, differing value): %d\n", g_mismatch);
     printf("IN-SCOPE MISSING (device-class aware): %d\n", g_inscope_missing);
+    printf("IN-SCOPE MISSING (db): %d\n", g_db_inscope_missing);
+    printf("VALUE MISMATCHES (db): %d\n", g_db_mismatch);
     return 0;
 }

@@ -113,4 +113,29 @@ static inline int udev_db_read_eprops(const char *path, struct uevent *out) {
     return 0;
 }
 
+static inline int udev_db_parse_eprops(const char *text, struct uevent *out) {
+    out->n = 0;
+    for (const char *p = text; *p; ) {
+        const char *nl = strchr(p, '\n');
+        size_t linelen = nl ? (size_t)(nl - p) : strlen(p);
+        if (p[0] == 'E' && p[1] == ':' && out->n < UE_MAX_KEYS) {
+            const char *kv = p + 2;
+            const char *eq = memchr(kv, '=', linelen - 2);
+            if (eq) {
+                char k[UE_KEY_MAX], v[UE_VAL_MAX];
+                size_t kl = (size_t)(eq - kv); if (kl >= UE_KEY_MAX) kl = UE_KEY_MAX - 1;
+                size_t vl = (size_t)(p + linelen - (eq + 1)); if (vl >= UE_VAL_MAX) vl = UE_VAL_MAX - 1;
+                memcpy(k, kv, kl); k[kl] = '\0';
+                memcpy(v, eq + 1, vl); v[vl] = '\0';
+                safe_copy(out->key[out->n], k, UE_KEY_MAX);
+                safe_copy(out->val[out->n], v, UE_VAL_MAX);
+                out->n++;
+            }
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return 0;
+}
+
 #endif /* UDEV_DB_H */
