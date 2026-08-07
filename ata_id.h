@@ -2,6 +2,10 @@
 #define ATA_ID_H
 
 #include "usb_id.h"     /* usb_plain, usb_encode (+ transitively schema-udev.h) */
+#include <scsi/sg.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +66,39 @@ static inline int ata_id_decode(const uint8_t *buf, struct uevent *out) {
     }
     #undef UEMIT
     return out->n;
+}
+
+static inline int ata_id_identify(const char *devnode, uint8_t *buf) {
+    int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -1;
+    uint8_t cdb[16] = {0};
+    cdb[0] = 0x85; cdb[1] = 0x08; cdb[2] = 0x0e; cdb[6] = 0x01; cdb[14] = 0xec;
+    uint8_t sense[32] = {0};
+    struct sg_io_hdr io = {0};
+    io.interface_id = 'S';
+    io.dxfer_direction = SG_DXFER_FROM_DEV;
+    io.cmd_len = sizeof cdb;
+    io.cmdp = cdb;
+    io.dxfer_len = 512;
+    io.dxferp = buf;
+    io.sbp = sense;
+    io.mx_sb_len = sizeof sense;
+    io.timeout = 2000;
+    int rc = ioctl(fd, SG_IO, &io);
+    close(fd);
+    if (rc < 0) return -1;
+    if ((io.info & SG_INFO_OK_MASK) != SG_INFO_OK) return -1;
+    return 0;
+}
+
+static inline int ata_id_build(const char *sysroot, const char *devpath,
+                               const char *devnode, struct uevent *out) {
+    (void)sysroot; (void)devpath;
+    out->n = 0;
+    if (!devnode) return 0;
+    uint8_t buf[512];
+    if (ata_id_identify(devnode, buf) != 0) return 0;
+    return ata_id_decode(buf, out);
 }
 
 #endif /* ATA_ID_H */
