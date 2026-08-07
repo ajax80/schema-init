@@ -47,7 +47,7 @@ schema-journal-sink: schema-journal-sink.c
 schema-board: schema-board.c schema.h schema_shm.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
-schema-udev: schema-udev.c schema-udev.h
+schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h schema-udev.h

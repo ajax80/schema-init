@@ -66,7 +66,7 @@ static inline int udev_db_write(const char *base_dir, const struct uevent *ev, i
     if (udev_db_ensure_dir(base_dir) != 0) return -1;
     char buf[8192];
     ssize_t len = udev_db_record_build(ev, kernel_n, buf, sizeof buf);
-    if (len < 0) return -1;
+    if (len <= 4) return 0;   /* no derived properties -> don't write 4-byte V:1-only file */
     char final[512], tmpl[512];
     if ((size_t)snprintf(final, sizeof final, "%s/%s", base_dir, name) >= sizeof final) return -1;
     if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
