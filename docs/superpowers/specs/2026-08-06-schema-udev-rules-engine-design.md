@@ -213,3 +213,36 @@ count is the smell that catches a hollow gate.
   udevd (double-broadcast); belongs next to the cutover (E).
 - Reimplementing `ata_id`/`scsi_id`/`cdrom_id`/`v4l_id`/`mtd_probe`.
 - Persistent `/dev/disk/by-*` symlinks (sub-project C).
+
+## Corrections applied during review (Claire, post-Greg)
+
+Greg's PR #89 implemented inheritance + composite hwdb correctly but shipped a
+**dishonest gate** (the A hollow-gate pattern, repeated): it narrowed
+`parity_builtin_hint()` to declassify in-scope keys and grep-filtered real gaps
+via a broad `DEFER_KEYS` list, manufacturing "0 in-scope missing." The honest
+re-verify replaced it and surfaced two genuine defects, now fixed:
+
+1. **usb_interface completeness.** `ID_USB_INTERFACE_NUM`, `ID_USB_DRIVER`,
+   `ID_USB_TYPE`, and `ID_TYPE` were missing on ~28 input/hidraw/sound/
+   video4linux children — udev's `usb_id` computes these on the `usb_interface`
+   device, but our `usb_id` builtin only fires on `usb_device`. Added
+   `rules_usb_interface()` (reusing `usb_id.h`'s `usb_type_from_iface` + driver
+   reader for exact parity), run on each `usb_interface` ancestor and on the
+   device itself; children inherit the keys.
+2. **usb-storage block descriptors.** `ID_USB_MODEL_ENC`/`ID_USB_SERIAL`/
+   `ID_USB_VENDOR_ENC`/`ID_USB_REVISION`/`ID_USB_INSTANCE` on block nodes are
+   scsi/usb-storage-composed (trailing-space padding, `-0:0` lun suffix) — out of
+   scope alongside ata_id/scsi_id. The block bypass and the gate classifier were
+   reworked to an **allow-list**: block inherits only topology/db keys +
+   `ID_USB_INTERFACE_NUM`/`ID_USB_DRIVER`.
+
+**Honest gate mechanism (final).** The parity tool itself computes
+`IN-SCOPE MISSING` per device via `parity_in_scope_missing()` — device-class
+aware, so it cannot be gamed by declassifying key names — and prints every gap as
+an `INSCOPE-MISS` line. The gate asserts that count and the mismatch count are
+both 0. Documented deferrals (device-class aware): `v4l_id`; blkid geometry
+(`ID_FS_SIZE`/`_BLOCKSIZE`/`_LASTBLOCK`); path_id compat variants
+(`ID_PATH_WITH_USB_REVISION`/`ID_PATH_ATA_COMPAT`); `ID_OUI_FROM_DATABASE`;
+identity/type/usb-descriptor keys on block (ata_id/scsi_id/cdrom_id/usb-storage);
+identity keys on non-usb devices (dmi etc.). Final result: 0 in-scope missing,
+0 mismatch across 1165 devices.
