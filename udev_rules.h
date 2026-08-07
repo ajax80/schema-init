@@ -29,7 +29,7 @@ static inline int rules_inheritable(const char *key) {
            strcmp(key, "ID_ATA") == 0;
 }
 
-static inline int parity_identity_key(const char *key) {
+static inline int udev_identity_key(const char *key) {
     return strncmp(key, "ID_SERIAL", 9) == 0 || strncmp(key, "ID_MODEL", 8) == 0 ||
            strncmp(key, "ID_VENDOR", 9) == 0 || strcmp(key, "ID_REVISION") == 0 ||
            strcmp(key, "ID_BUS") == 0 || strcmp(key, "ID_TYPE") == 0 ||
@@ -47,7 +47,7 @@ static inline int rules_block_bypass(const struct uevent *anc, const char *key) 
         strstr(key, "_FROM_DATABASE") != NULL ||
         strcmp(key, "ID_USB_INTERFACE_NUM") == 0 || strcmp(key, "ID_USB_DRIVER") == 0)
         return 0;   /* allowed to inherit */
-    if ((strcmp(key, "ID_ATA") == 0 || parity_identity_key(key)) &&
+    if ((strcmp(key, "ID_ATA") == 0 || udev_identity_key(key)) &&
         uevent_get(anc, "ID_BUS") && strcmp(uevent_get(anc, "ID_BUS"), "ata") == 0)
         return 0;   /* ATA disk identity allowed onto ATA partitions */
     return 1;       /* bypass */

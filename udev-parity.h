@@ -57,11 +57,11 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
             return 1;
         /* identity keys are ours on the ATA chain (ata_id, slice 3a); on usb/scsi
          * block they remain deferred (scsi_id, slice 3b). */
-        if (parity_identity_key(key) && devpath && strstr(devpath, "/ata") != NULL)
+        if (udev_identity_key(key) && devpath && strstr(devpath, "/ata") != NULL)
             return 1;
         return 0;
     }
-    if (parity_identity_key(key)) {
+    if (udev_identity_key(key)) {
         int on_usb = devpath && strstr(devpath, "/usb") != NULL;
         return on_usb ? 1 : 0;                    /* usb_id only on usb chain */
     }
