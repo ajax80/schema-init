@@ -293,11 +293,13 @@ static inline int usb_id_build(const char *sysroot, const char *devpath, struct 
     if (have_serial) snprintf(serial, sizeof serial, "%s_%s_%s", vendor, model, serial_short);
     else             snprintf(serial, sizeof serial, "%s_%s", vendor, model);
 
+    char instance[16] = "";
     if (scsidir[0]) {
         unsigned H, C, T, L;
         if (sscanf(pi_base(scsidir), "%u:%u:%u:%u", &H, &C, &T, &L) == 4) {
+            snprintf(instance, sizeof instance, "%u:%u", C, L);
             char inst[32];
-            snprintf(inst, sizeof inst, "-%u:%u", C, L);
+            snprintf(inst, sizeof inst, "-%s", instance);
             safe_copy(serial + strlen(serial), inst, sizeof serial - strlen(serial));
         }
     }
@@ -326,6 +328,7 @@ static inline int usb_id_build(const char *sysroot, const char *devpath, struct 
     UEMIT("ID_VENDOR", vendor); UEMIT("ID_VENDOR_ENC", vendor_enc); UEMIT("ID_VENDOR_ID", vid);
     if (rev[0]) UEMIT("ID_REVISION", rev);
     if (type) UEMIT("ID_TYPE", type);
+    if (instance[0]) UEMIT("ID_INSTANCE", instance);
 
     UEMIT("ID_USB_MODEL", model); UEMIT("ID_USB_MODEL_ENC", model_enc); UEMIT("ID_USB_MODEL_ID", pid);
     UEMIT("ID_USB_SERIAL", serial);
@@ -333,6 +336,7 @@ static inline int usb_id_build(const char *sysroot, const char *devpath, struct 
     UEMIT("ID_USB_VENDOR", vendor); UEMIT("ID_USB_VENDOR_ENC", vendor_enc); UEMIT("ID_USB_VENDOR_ID", vid);
     if (rev[0]) UEMIT("ID_USB_REVISION", rev);
     if (type) UEMIT("ID_USB_TYPE", type);
+    if (instance[0]) UEMIT("ID_USB_INSTANCE", instance);
     UEMIT("ID_USB_INTERFACES", ifaces);
     if (have_ifnum) UEMIT("ID_USB_INTERFACE_NUM", ifnum);
     if (have_drv) UEMIT("ID_USB_DRIVER", drv);

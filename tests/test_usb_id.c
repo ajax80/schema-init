@@ -322,11 +322,54 @@ static void test_build_full(void) {
     printf("test_build_full OK\n");
 }
 
+static void test_usb_storage_scsi(void) {
+    char tmpl[] = "/tmp/schema-usbid-scsi-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    char utgt[2100], stgt[2100], btgt[2100], p[3000];
+    snprintf(utgt, sizeof utgt, "%s/bus/usb", root);   mkdirp(utgt);
+    snprintf(stgt, sizeof stgt, "%s/bus/scsi", root);  mkdirp(stgt);
+    snprintf(btgt, sizeof btgt, "%s/class/block", root); mkdirp(btgt);
+
+    const char *dev = "/devices/pci0/usb1/1-1";
+    const char *ifc = "/devices/pci0/usb1/1-1/1-1:1.0";
+    const char *scsi = "/devices/pci0/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0";
+    const char *blk  = "/devices/pci0/usb1/1-1/1-1:1.0/host0/target0:0:0/0:0:0:0/block/sdd";
+
+    /* usb_device */
+    snprintf(p, sizeof p, "%s%s/subsystem", root, dev);   mklink(p, utgt);
+    snprintf(p, sizeof p, "%s%s/idVendor", root, dev);    mkfile(p, "0bc2\n");
+    snprintf(p, sizeof p, "%s%s/idProduct", root, dev);   mkfile(p, "2322\n");
+    snprintf(p, sizeof p, "%s%s/bcdDevice", root, dev);   mkfile(p, "9300\n");
+    snprintf(p, sizeof p, "%s%s/serial", root, dev);      mkfile(p, "NZ0FC26W\n");
+    /* usb_interface: mass storage (class 08 sub 06), driver usb-storage */
+    mk_iface(root, ifc, "00\n", "08\n", "06\n", "50\n", "usb-storage");
+    /* scsi_device with vendor/model/rev sysattrs */
+    snprintf(p, sizeof p, "%s%s/subsystem", root, scsi);  mklink(p, stgt);
+    snprintf(p, sizeof p, "%s%s/vendor", root, scsi);     mkfile(p, "Seagate \n");
+    snprintf(p, sizeof p, "%s%s/model", root, scsi);      mkfile(p, "Expansion\n");
+    snprintf(p, sizeof p, "%s%s/rev", root, scsi);        mkfile(p, "9300\n");
+    /* block device */
+    snprintf(p, sizeof p, "%s%s/subsystem", root, blk);   mklink(p, btgt);
+
+    struct uevent ev;
+    assert(usb_id_build(root, blk, &ev) == 0);
+    assert(strcmp(ev_get(&ev, "ID_BUS"), "usb") == 0);
+    assert(strcmp(ev_get(&ev, "ID_VENDOR"), "Seagate") == 0);
+    assert(strcmp(ev_get(&ev, "ID_MODEL"), "Expansion") == 0);
+    assert(strcmp(ev_get(&ev, "ID_SERIAL"), "Seagate_Expansion_NZ0FC26W-0:0") == 0);
+    assert(strcmp(ev_get(&ev, "ID_SERIAL_SHORT"), "NZ0FC26W") == 0);
+    assert(strcmp(ev_get(&ev, "ID_INSTANCE"), "0:0") == 0);
+    assert(strcmp(ev_get(&ev, "ID_USB_INSTANCE"), "0:0") == 0);
+    printf("test_usb_storage_scsi OK\n");
+}
+
 int main(void) {
     test_encoders();
     test_discovery_and_names();
     test_type_driver_interfaces();
     test_build_full();
+    test_usb_storage_scsi();
     printf("ALL usb_id tests passed\n");
     return 0;
 }
