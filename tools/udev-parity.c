@@ -1,6 +1,7 @@
 /* Read-only parity harness: diff schema-udev's synthesized properties against
  * real systemd-udevd's /run/udev/data. Writes nothing. */
 #include "../udev-parity.h"
+#include "../udev_rules.h"   /* run_builtins + run_rules */
 #include <stdio.h>
 #include <string.h>
 
@@ -28,15 +29,24 @@ static struct subrow *sub_row(const char *sub) {
     return NULL;
 }
 
-static void collect(const struct uevent *ev) {
-    const char *sub = uevent_get(ev, "SUBSYSTEM");
+static void collect(struct uevent *ev_in) {
+    struct uevent ev = *ev_in;   /* mutable copy: run builtins + rules on it */
+    const char *devpath = uevent_get(&ev, "DEVPATH");
+    if (devpath) {
+        const char *devname = uevent_get(&ev, "DEVNAME");
+        char devnode[UE_VAL_MAX]; const char *dn = NULL;
+        if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
+        run_builtins("/sys", devpath, dn, &ev);
+        run_rules("/sys", devpath, dn, &ev);
+    }
+    const char *sub = uevent_get(&ev, "SUBSYSTEM");
     if (!sub) sub = "(none)";
     struct subrow *row = sub_row(sub);
     g_total++;
     if (row) row->devices++;
 
     char key[128];
-    if (udev_db_filename(ev, key, sizeof key) != 0) return;
+    if (udev_db_filename(&ev, key, sizeof key) != 0) return;
     char path[256];
     if ((size_t)snprintf(path, sizeof path, "%s/%s", UDEV_DB_DIR, key) >= sizeof path) return;
 
@@ -48,7 +58,7 @@ static void collect(const struct uevent *ev) {
     int j;
     for (j = 0; j < dbev.n; j++) {
         if (row) row->ekeys++;
-        const char *have = uevent_get(ev, dbev.key[j]);
+        const char *have = uevent_get(&ev, dbev.key[j]);
         if (have) {
             if (row) row->reproduced++;
             if (strcmp(have, dbev.val[j]) != 0) g_mismatch++;
