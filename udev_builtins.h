@@ -9,6 +9,7 @@
 #include "blkid_fs.h"   /* pulls in blkid_pt.h */
 #include "hwdb.h"
 #include "ata_id.h"
+#include "v4l_id.h"
 
 #include <string.h>
 #include <fnmatch.h>
@@ -54,7 +55,7 @@ static inline int ub_has_ata_ancestor(const char *devpath) {
     return 0;
 }
 
-enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64 };
+enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128 };
 
 /* Pure guard logic: which builtins apply to this device? Mirrors the IMPORT{builtin}
  * conditions in systemd's shipped /usr/lib/udev/rules.d. Order of the bits is
@@ -96,6 +97,8 @@ static inline int ub_select(const char *sysroot, const char *devpath,
     if (subsystem && strcmp(subsystem, "input") == 0) sel |= UB_INPUT;
 
     if (subsystem && strcmp(subsystem, "net") == 0) sel |= UB_NET;
+
+    if (subsystem && strcmp(subsystem, "video4linux") == 0) sel |= UB_V4L;
 
     if (subsystem && strcmp(subsystem, "block") == 0 &&
         devtype && (strcmp(devtype, "disk") == 0 || strcmp(devtype, "partition") == 0) &&
@@ -148,6 +151,7 @@ static inline int run_builtins(const char *sysroot, const char *devpath,
     if (sel & UB_USB)   { tmp.n = 0; usb_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
     if (sel & UB_INPUT) { tmp.n = 0; input_id_build(sysroot, devpath, &tmp); ub_absorb(ev, &tmp); }
     if (sel & UB_NET)   { tmp.n = 0; net_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
+    if (sel & UB_V4L)   { tmp.n = 0; v4l_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); }
     if (sel & UB_ATA)   { tmp.n = 0; ata_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); }
     if (sel & UB_BLKID) {
         tmp.n = 0; blkid_pt_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
