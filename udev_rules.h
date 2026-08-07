@@ -45,9 +45,20 @@ static inline int rules_import_parent(const char *sysroot, const char *devpath,
         char devnode[UE_VAL_MAX]; const char *dn = NULL;
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins(sysroot, cur, dn, &anc);
-        for (int i = 0; i < anc.n; i++)
+        const char *sub = uevent_get(ev, "SUBSYSTEM");
+        int is_block = (sub && strcmp(sub, "block") == 0);
+        for (int i = 0; i < anc.n; i++) {
+            if (is_block && (strncmp(anc.key[i], "ID_USB_", 7) == 0 ||
+                             strcmp(anc.key[i], "ID_SERIAL") == 0 ||
+                             strcmp(anc.key[i], "ID_MODEL") == 0 ||
+                             strcmp(anc.key[i], "ID_VENDOR") == 0 ||
+                             strcmp(anc.key[i], "ID_REVISION") == 0 ||
+                             strcmp(anc.key[i], "ID_MODEL_ENC") == 0 ||
+                             strcmp(anc.key[i], "ID_VENDOR_ENC") == 0))
+                continue;
             if (rules_inheritable(anc.key[i]))
                 ub_add(ev, anc.key[i], anc.val[i]);   /* first-writer-wins */
+        }
     }
     return ev->n - before;
 }

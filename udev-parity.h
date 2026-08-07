@@ -31,12 +31,13 @@ static inline int udev_db_read_eprops(const char *path, struct uevent *out) {
 static inline const char *parity_builtin_hint(const char *key) {
     if (strstr(key, "_FROM_DATABASE")) return "hwdb";
     if (strncmp(key, "ID_INPUT", 8) == 0) return "input_id";
-    if (strncmp(key, "ID_NET", 6) == 0) return "net_id";
-    if (strncmp(key, "ID_FS", 5) == 0 || strncmp(key, "ID_PART", 7) == 0) return "blkid";
-    if (strncmp(key, "ID_PATH", 7) == 0) return "path_id";
+    if (strncmp(key, "ID_NET_NAME_P", 13) == 0 || strncmp(key, "ID_NET_NAME_M", 13) == 0 ||
+        strncmp(key, "ID_NET_NAME_S", 13) == 0 || strncmp(key, "ID_NET_NAME_O", 13) == 0 ||
+        strncmp(key, "ID_NET_NAMING_", 14) == 0) return "net_id";
+    if (strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0) return "blkid";
+    if (strcmp(key, "ID_PATH") == 0 || strcmp(key, "ID_PATH_TAG") == 0) return "path_id";
     if (strncmp(key, "ID_V4L", 6) == 0 || strncmp(key, "ID_VIDEO", 8) == 0) return "v4l_id";
-    if (strncmp(key, "ID_SERIAL", 9) == 0 || strncmp(key, "ID_USB", 6) == 0 ||
-        strncmp(key, "ID_MODEL", 8) == 0 || strncmp(key, "ID_VENDOR", 9) == 0) return "usb_id";
+    if (strncmp(key, "ID_USB", 6) == 0 || strcmp(key, "ID_SERIAL") == 0) return "usb_id";
     return "";
 }
 

@@ -61,7 +61,10 @@ static void collect(struct uevent *ev_in) {
         const char *have = uevent_get(&ev, dbev.key[j]);
         if (have) {
             if (row) row->reproduced++;
-            if (strcmp(have, dbev.val[j]) != 0) g_mismatch++;
+            if (strcmp(have, dbev.val[j]) != 0) {
+                printf("VALMIS %s %s: ours='%s' theirs='%s'\n", key, dbev.key[j], have, dbev.val[j]);
+                g_mismatch++;
+            }
         } else {
             keycount_add(g_missing, &g_nmissing, MAX_MISSING, dbev.key[j]);
         }
