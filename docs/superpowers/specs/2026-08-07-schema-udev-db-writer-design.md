@@ -9,12 +9,12 @@ schema-udev writes udev-format device db records to a **shadow directory** (`/ru
 ## Scope
 
 ### In scope
-- New `udev_db.h`: db-key computation, owned-record serialization, atomic write, remove.
+- Extract the existing db functions from `schema-udev.h` (+ the reader from `udev-parity.h`) into a new `udev_db.h`, fixing the record-build delta boundary and atomic write while moving; add `udev_db_remove`.
 - One minimal call site in `schema-udev.c` `dispatch()`.
 - Shadow-dir plumbing (`/run/schema-udev/data`, created on demand).
-- Owned-subset record: `E:` lines for the derived property delta + `V:1`.
+- Owned-subset record: `E:` lines for the derived property delta + trailing `V:1`.
 - File-vs-file parity gate (extends `tools/udev-parity.c`) + live gate (`tests/verify_db_live.sh`).
-- Unit tests (`tests/test_udev_db.c`).
+- Rewritten unit tests (`tests/test_udev_db.c`).
 
 ### Out of scope (owned by later slices — do NOT emit these lines)
 - `S:` symlink lines — slice C (persistent `/dev/disk/by-*`).
@@ -43,36 +43,49 @@ Precedence, first match wins:
 
 Observed forms: `b253:0`, `c10:58`, `n1`, `+acpi:AMDI0030:00`.
 
-## Module: `udev_db.h`
+## Module: `udev_db.h` (extraction + fix)
 
-Header-only, matching the `udev_builtins.h` / `udev_rules.h` pattern. Depends on `schema-udev.h` (uevent, `uevent_get`, `safe_copy`).
+The db functions already exist in `schema-udev.h` (`udev_db_filename`, `udev_db_record_build`, `udev_db_write`) and the reader `udev_db_read_eprops` lives in `udev-parity.h`. This slice **moves them all into a new `udev_db.h`** (the single db home, matching the `udev_builtins.h` / `udev_rules.h` module-per-concern pattern) and fixes the two real defects while moving. `udev_db.h` includes `schema-udev.h` (for `struct uevent`, `uevent_get`, `safe_copy`) plus `sys/stat.h`, `sys/types.h`, `unistd.h`, `errno.h`, `stdio.h`, `string.h`, `stdlib.h`.
+
+`schema-udev.h` loses the three db functions (shrinks). `udev-parity.h` loses `udev_db_read_eprops` and gains `#include "udev_db.h"`. `#define UDEV_DB_DIR "/run/udev/data"` (udevd's real dir, read-only ground truth) stays reachable via `udev_db.h`.
 
 ```c
-#define SCHEMA_UDEV_DB_DIR "/run/schema-udev/data"
+#define SCHEMA_UDEV_DB_DIR "/run/schema-udev/data"  /* OUR shadow dir */
+#define UDEV_DB_DIR        "/run/udev/data"         /* udevd's real dir (read-only) */
 
-/* Derive the db filename key from the uevent. Returns 0 and fills out[]
- * (NUL-terminated) on success; -1 if no key is derivable. */
-int db_key(const struct uevent *ev, char *out, size_t outsz);
+/* UNCHANGED (moved verbatim): derive the db filename key. net+IFINDEX first,
+ * then devnum (b/c<maj>:<min>), then +<subsystem>:<sysname>. Returns 0 + fills
+ * out[]; -1 if none derivable. Net devices never carry MAJOR/MINOR, so the
+ * net-first order is equivalent to udev's devnum-first for real devices. */
+int udev_db_filename(const struct uevent *ev, char *out, size_t outsz);
 
-/* Serialize the OWNED record: one "E:k=v\n" per property in [kernel_n, ev->n),
- * then "V:1\n". kernel_n is ev->n captured before run_builtins ran, so
- * [kernel_n, ev->n) is exactly the builtins+rules-derived delta (no kernel
- * core props). Returns bytes written (< bufsz), or -1 on overflow. */
-int db_serialize(const struct uevent *ev, int kernel_n, char *buf, size_t bufsz);
+/* FIXED: serialize the OWNED record — one "E:k=v\n" per property in
+ * [kernel_n, ev->n), then a TRAILING "V:1\n". kernel_n is ev->n captured
+ * before run_builtins ran, so [kernel_n, ev->n) is exactly the builtins+rules
+ * delta (no kernel core props like DEVPATH/SUBSYSTEM/MAJOR). Skips any entry
+ * with an empty key or empty value. Returns bytes written (< bufsz), -1 on
+ * overflow. (Was: all props from 0, leading V:1.) */
+ssize_t udev_db_record_build(const struct uevent *ev, int kernel_n,
+                             char *buf, size_t bufsz);
 
-/* db_key -> serialize -> atomic write to SCHEMA_UDEV_DB_DIR/<key> via
- * mkstemp+rename. Creates the dir on demand. Returns 0 on success, -1 on
- * failure or when db_key returns -1 (nothing to persist). */
-int db_write(const struct uevent *ev, int kernel_n);
+/* FIXED: udev_db_filename -> record_build -> ATOMIC write to base_dir/<key>
+ * via mkstemp+rename. Creates base_dir on demand. Returns 0; -1 on failure or
+ * when udev_db_filename returns -1 (nothing to persist). base_dir is a param
+ * so tests pass a temp dir and the daemon passes SCHEMA_UDEV_DB_DIR.
+ * (Was: bare fopen("w").) */
+int udev_db_write(const char *base_dir, const struct uevent *ev, int kernel_n);
 
-/* db_key -> unlink SCHEMA_UDEV_DB_DIR/<key>. ENOENT is success. Returns 0
- * on success (incl. already-absent), -1 on other errors or no key. */
-int db_remove(const struct uevent *ev);
+/* NEW: udev_db_filename -> unlink base_dir/<key>. ENOENT is success. Returns 0
+ * (incl. already-absent), -1 on other errors or no derivable key. */
+int udev_db_remove(const char *base_dir, const struct uevent *ev);
+
+/* UNCHANGED (moved from udev-parity.h): read E: lines of a db file into out. */
+int udev_db_read_eprops(const char *path, struct uevent *out);
 ```
 
-**Property filtering:** only `[kernel_n, ev->n)` is persisted. `kernel_n` is captured in `dispatch()` immediately before `run_builtins`. Because `run_builtins`/`run_rules` only append (first-writer-wins), this range is exactly the synthesized properties — the udev db-flag equivalent. Any property with an empty key or empty value is skipped.
+**Property filtering:** only `[kernel_n, ev->n)` is persisted. `kernel_n` is captured in `dispatch()` immediately before `run_builtins`. Because `run_builtins`/`run_rules` only append (first-writer-wins), this range is exactly the synthesized properties — the udev db-flag equivalent. Entries with an empty key or empty value are skipped.
 
-**Atomic write:** `mkstemp` a temp file in `SCHEMA_UDEV_DB_DIR`, write the full serialized buffer, `close`, `rename` over the final path. On any step failure, unlink the temp and return -1. `mkdir(SCHEMA_UDEV_DB_DIR, 0755)` (and its parent `/run/schema-udev`) is attempted before mkstemp; `EEXIST` is fine.
+**Atomic write:** `mkstemp` a temp file in `base_dir`, write the full serialized buffer, `close`, `rename` over the final path. On any step failure, unlink the temp and return -1. `mkdir(base_dir, 0755)` (and its parent for the daemon's `/run/schema-udev`) is attempted first; `EEXIST` is fine.
 
 ## Wiring: `schema-udev.c` `dispatch()`
 
@@ -86,29 +99,29 @@ static void dispatch(struct uevent *ev) {
         /* ... existing devname/dn setup ... */
         run_builtins("/sys", devpath, dn, ev);
         run_rules("/sys", devpath, dn, ev);
-        if (strcmp(action, "remove") == 0) db_remove(ev);
-        else                               db_write(ev, kernel_n);
+        if (strcmp(action, "remove") == 0) udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
+        else                               udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
     }
     /* ... existing rule-match / symlink / hook loop unchanged ... */
 }
 ```
 
-`kernel_n` is captured before the `if (devpath)` block so the boundary is correct even though writes only happen when `devpath` exists. Add `#include "udev_db.h"`. `schema-udev.h` is untouched. Net diff to `schema-udev.c`: one include + ~4 lines.
+`kernel_n` is captured before the `if (devpath)` block so the boundary is correct even though writes only happen when `devpath` exists. Add `#include "udev_db.h"`. Net diff to `schema-udev.c`: one include + ~4 lines. `schema-udev.h` **shrinks** (the three db functions move out) — it is not left byte-identical this slice.
 
 ## Verification
 
-### Unit tests — `tests/test_udev_db.c`
-Synthetic-uevent tests (no `/sys` dependency where possible):
-- `db_key` block → `b<maj>:<min>`; char → `c<maj>:<min>`; net → `n<ifindex>`; no-devnum → `+<subsys>:<sysname>`; underivable → -1.
-- `db_serialize` emits only `[kernel_n, ev->n)` as `E:` lines + trailing `V:1`; asserts **no** `E:DEVPATH`/`E:SUBSYSTEM`/`E:MAJOR` even though those keys are in `[0, kernel_n)`.
-- `db_write` then read-back round-trips the record; `db_remove` unlinks it (and second remove returns 0 via ENOENT). Uses a temp `SCHEMA_UDEV_DB_DIR` override if practical, else the real shadow path under the test's own key.
+### Unit tests — `tests/test_udev_db.c` (REWRITE)
+This file **already exists** and asserts the OLD behavior (all props from index 0, leading `V:1`). It must be rewritten to the new contract, not appended to. Synthetic-uevent tests (no `/sys` dependency where possible), writing to a temp `base_dir` from `mkdtemp`:
+- `udev_db_filename` block → `b<maj>:<min>`; char → `c<maj>:<min>`; net → `n<ifindex>`; no-devnum → `+<subsys>:<sysname>`; underivable (no subsystem, no devnum) → -1.
+- `udev_db_record_build(ev, kernel_n, ...)` emits only `[kernel_n, ev->n)` as `E:` lines followed by a **trailing** `V:1`; asserts **no** `E:DEVPATH`/`E:SUBSYSTEM`/`E:MAJOR` even though those keys sit in `[0, kernel_n)`, and asserts the last line is `V:1`.
+- `udev_db_write(tmpdir, ev, kernel_n)` then `udev_db_read_eprops` round-trips the derived `E:` set; `udev_db_remove(tmpdir, ev)` unlinks it, and a second remove returns 0 (ENOENT).
 - overflow: a `bufsz` too small for the record returns -1, writes nothing.
 
 ### File-vs-file parity — `tools/udev-parity.c`
 Extend the existing tool (reuse the slice-1 `parity_in_scope_missing()` / value-mismatch classifier verbatim). For every device in the `/sys` coldplug walk:
-1. Read the device's sysfs uevent into a mutable copy; record `kernel_n = ev.n` at that point (the raw sysfs key count); run `run_builtins`+`run_rules`; `db_serialize(&ev, kernel_n, ...)` the owned record. This mirrors the daemon's own `kernel_n` boundary so the persisted set is identical to what `db_write` would produce live.
-2. `db_key(ev)` → read udevd's real `/run/udev/data/<key>` via `udev_db_read_eprops`.
-3. Compare **our persisted `E:` set** vs udevd's `E:` set with `parity_in_scope_missing` (in-scope missing) and value equality (mismatch). Assert `db_key` equals the real filename udevd used (key-derivation parity).
+1. Read the device's sysfs uevent into a mutable copy; record `kernel_n = ev.n` at that point (the raw sysfs key count); run `run_builtins`+`run_rules`; `udev_db_record_build(&ev, kernel_n, ...)` the owned record, then parse its `E:` lines back out (or serialize+re-read) to get our persisted set. This mirrors the daemon's own `kernel_n` boundary so the persisted set is identical to what `udev_db_write` would produce live.
+2. `udev_db_filename(ev)` → read udevd's real `/run/udev/data/<key>` via `udev_db_read_eprops`.
+3. Compare **our persisted `E:` set** vs udevd's `E:` set with `parity_in_scope_missing` (in-scope missing) and value equality (mismatch). Assert `udev_db_filename` equals the real filename udevd used (key-derivation parity).
 4. Print counters: `IN-SCOPE MISSING (db)`, `VALUE MISMATCHES (db)`, `KEY-DERIVATION MISMATCHES`.
 
 **Gate:** all three counters `0` across every device that has a real udevd db file. Devices with no real udevd file are skipped (no ground truth), not counted as failures.
@@ -132,6 +145,13 @@ schema-udev is not PID 1; the boot rail must pass unchanged. Run `cd ~/schema-li
 *(populated post-Greg, as in slice 1)*
 
 ## Boundary summary
-- New file: `udev_db.h`, `tests/test_udev_db.c`, `tests/verify_db_live.sh`.
-- Modified: `schema-udev.c` (include + ~4 lines), `tools/udev-parity.c` (db-parity mode), `udev-parity.h` (only if a shared helper is needed — prefer reusing existing classifier untouched), `Makefile` (test target).
-- Untouched: `schema-udev.h`, `udev_rules.h`, `udev_builtins.h`, the group-1 netlink bind.
+- New file: `udev_db.h`, `tests/verify_db_live.sh`.
+- Rewritten: `tests/test_udev_db.c` (old contract → new delta/trailing-`V:1` contract).
+- Modified:
+  - `schema-udev.h` — **remove** `udev_db_filename`/`udev_db_record_build`/`udev_db_write` (moved to `udev_db.h`).
+  - `udev_db.h` — receives the three moved functions (with the record_build + write fixes), `udev_db_remove` (new), and `udev_db_read_eprops` (moved from `udev-parity.h`); defines `SCHEMA_UDEV_DB_DIR` + `UDEV_DB_DIR`.
+  - `udev-parity.h` — drop `udev_db_read_eprops` + its `UDEV_DB_DIR` define, add `#include "udev_db.h"`. Classifier untouched.
+  - `schema-udev.c` — `#include "udev_db.h"` + ~4 lines in `dispatch()`.
+  - `tools/udev-parity.c` — add the db file-vs-file parity mode.
+  - `Makefile` — `test_udev_db` target + any include-dep update.
+- Untouched: `udev_rules.h`, `udev_builtins.h`, the **group-1** netlink bind and its "NEVER group 2" comment.
