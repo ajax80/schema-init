@@ -57,12 +57,26 @@ static inline int rules_usb_interface(const char *sysroot, const char *devpath,
     return ev->n - before;
 }
 
+static inline int rules_import_subsystem_inherits(const char *sub) {
+    if (!sub) return 0;
+    return strcmp(sub, "input") == 0 || strcmp(sub, "sound") == 0 ||
+           strcmp(sub, "video4linux") == 0 || strcmp(sub, "hidraw") == 0 ||
+           strcmp(sub, "net") == 0 || strcmp(sub, "tty") == 0 ||
+           strcmp(sub, "block") == 0 || strcmp(sub, "usb") == 0 ||
+           strcmp(sub, "pci") == 0 || strcmp(sub, "platform") == 0 ||
+           strcmp(sub, "drm") == 0 || strcmp(sub, "graphics") == 0 ||
+           strcmp(sub, "rfkill") == 0 || strcmp(sub, "leds") == 0 ||
+           strcmp(sub, "bluetooth") == 0 || strcmp(sub, "media") == 0 ||
+           strcmp(sub, "gpio") == 0;
+}
+
 /* Walk ancestors nearest-first; for each real ancestor device, compute its
  * builtin properties and inherit the bounded ID_* keys the child lacks. */
 static inline int rules_import_parent(const char *sysroot, const char *devpath,
                                       struct uevent *ev) {
-    int before = ev->n;
     const char *sub = uevent_get(ev, "SUBSYSTEM");
+    if (!rules_import_subsystem_inherits(sub)) return 0;
+    int before = ev->n;
     int is_block = (sub && strcmp(sub, "block") == 0);
     char cur[PATH_MAX];
     if ((size_t)snprintf(cur, sizeof cur, "%s", devpath) >= sizeof cur) return 0;
