@@ -2,6 +2,7 @@
  * Listens on the kernel uevent netlink (group 1), alongside systemd-udevd. */
 #include "schema-udev.h"
 #include "udev_builtins.h"
+#include "udev_rules.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -88,6 +89,7 @@ static void dispatch(struct uevent *ev) {
         const char *dn = NULL;
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins("/sys", devpath, dn, ev);
+        run_rules("/sys", devpath, dn, ev);
     }
     for (int i = 0; i < g_nrules; i++) {
         if (!dev_rule_match(&g_rules[i], ev)) continue;

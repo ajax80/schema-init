@@ -108,6 +108,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_blkid_fs.c -o /tmp/schema-test-blkidfs && /tmp/schema-test-blkidfs
 	$(CC) $(CFLAGS) tests/test_hwdb.c -o /tmp/schema-test-hwdb && /tmp/schema-test-hwdb
 	$(CC) $(CFLAGS) tests/test_udev_builtins.c -o /tmp/schema-test-ub && /tmp/schema-test-ub
+	$(CC) $(CFLAGS) tests/test_udev_rules.c -o /tmp/schema-test-ur && /tmp/schema-test-ur
 
 .PHONY: all clean install release aarch64 armhf desktop test
 

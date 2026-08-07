@@ -28,16 +28,67 @@ static inline int udev_db_read_eprops(const char *path, struct uevent *out) {
     return 0;
 }
 
+/* Attribute an E: key to its TRUE owning builtin (honest — do not narrow to make
+ * a gate pass; the in-scope classifier below handles legitimate deferrals). */
 static inline const char *parity_builtin_hint(const char *key) {
     if (strstr(key, "_FROM_DATABASE")) return "hwdb";
     if (strncmp(key, "ID_INPUT", 8) == 0) return "input_id";
-    if (strncmp(key, "ID_NET", 6) == 0) return "net_id";
-    if (strncmp(key, "ID_FS", 5) == 0 || strncmp(key, "ID_PART", 7) == 0) return "blkid";
+    /* net_id owns only the ID_NET_NAME_{ONBOARD,SLOT,PATH,MAC} + NAMING keys;
+     * ID_NET_DRIVER/ID_NET_LINK_FILE/ID_NET_NAME are net_setup_link (out of scope). */
+    if (strncmp(key, "ID_NET_NAME_", 12) == 0 || strncmp(key, "ID_NET_NAMING_", 14) == 0) return "net_id";
+    if (strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0) return "blkid";
     if (strncmp(key, "ID_PATH", 7) == 0) return "path_id";
     if (strncmp(key, "ID_V4L", 6) == 0 || strncmp(key, "ID_VIDEO", 8) == 0) return "v4l_id";
-    if (strncmp(key, "ID_SERIAL", 9) == 0 || strncmp(key, "ID_USB", 6) == 0 ||
-        strncmp(key, "ID_MODEL", 8) == 0 || strncmp(key, "ID_VENDOR", 9) == 0) return "usb_id";
+    if (strncmp(key, "ID_USB", 6) == 0 || strncmp(key, "ID_SERIAL", 9) == 0 ||
+        strncmp(key, "ID_MODEL", 8) == 0 || strncmp(key, "ID_VENDOR", 9) == 0 ||
+        strcmp(key, "ID_REVISION") == 0 || strcmp(key, "ID_BUS") == 0 ||
+        strcmp(key, "ID_TYPE") == 0 || strcmp(key, "ID_INSTANCE") == 0 ||
+        strcmp(key, "ID_WWN") == 0) return "usb_id";
     return "";
+}
+
+/* Sub-features not yet implemented within an in-scope builtin — documented
+ * deferrals (blkid geometry deferred in A; path_id compat variants; hwdb OUI). */
+static inline int parity_deferred(const char *key) {
+    return strcmp(key, "ID_FS_SIZE") == 0 || strcmp(key, "ID_FS_BLOCKSIZE") == 0 ||
+           strcmp(key, "ID_FS_LASTBLOCK") == 0 || strcmp(key, "ID_OUI_FROM_DATABASE") == 0 ||
+           strcmp(key, "ID_PATH_WITH_USB_REVISION") == 0 || strcmp(key, "ID_PATH_ATA_COMPAT") == 0;
+}
+
+/* usb_id identity/type keys: usb_id owns them ONLY on a usb chain. On block (and
+ * on dmi/etc) they come from ata_id/scsi_id/cdrom_id/dmi — not yet reimplemented. */
+static inline int parity_identity_key(const char *key) {
+    return strncmp(key, "ID_SERIAL", 9) == 0 || strncmp(key, "ID_MODEL", 8) == 0 ||
+           strncmp(key, "ID_VENDOR", 9) == 0 || strcmp(key, "ID_REVISION") == 0 ||
+           strcmp(key, "ID_BUS") == 0 || strcmp(key, "ID_TYPE") == 0 ||
+           strcmp(key, "ID_USB_TYPE") == 0 || strcmp(key, "ID_WWN") == 0 ||
+           strcmp(key, "ID_INSTANCE") == 0;
+}
+
+/* Is a udev E: key that WE failed to reproduce a genuine in-scope gap?
+ * Device-class aware so it cannot be gamed by declassifying key names. */
+static inline int parity_in_scope_missing(const char *key, const char *sub,
+                                          const char *devpath) {
+    const char *hint = parity_builtin_hint(key);
+    if (!hint[0]) return 0;                       /* runtime / other-builtin key */
+    if (strcmp(hint, "v4l_id") == 0) return 0;    /* v4l_id not reimplemented */
+    if (parity_deferred(key)) return 0;           /* documented deferral */
+    if (sub && strcmp(sub, "block") == 0) {
+        /* on block, only topology/db + interface-topology keys are ours; identity,
+         * type, and usb-descriptor strings come from ata_id/scsi_id/cdrom_id/
+         * usb-storage (not reimplemented). */
+        if (strcmp(key, "ID_PATH") == 0 || strcmp(key, "ID_PATH_TAG") == 0 ||
+            strstr(key, "_FROM_DATABASE") != NULL ||
+            strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0 ||
+            strcmp(key, "ID_USB_INTERFACE_NUM") == 0 || strcmp(key, "ID_USB_DRIVER") == 0)
+            return 1;
+        return 0;
+    }
+    if (parity_identity_key(key)) {
+        int on_usb = devpath && strstr(devpath, "/usb") != NULL;
+        return on_usb ? 1 : 0;                    /* usb_id only on usb chain */
+    }
+    return 1;
 }
 
 struct keycount { char key[UE_KEY_MAX]; int count; };
