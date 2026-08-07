@@ -1,4 +1,5 @@
 #include "../schema-udev.h"
+#include "../udev_db.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

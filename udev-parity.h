@@ -2,31 +2,10 @@
 #define UDEV_PARITY_H
 
 #include "schema-udev.h"
+#include "udev_db.h"
 #include <string.h>
 #include <stdio.h>
 
-#define UDEV_DB_DIR "/run/udev/data"
-
-static inline int udev_db_read_eprops(const char *path, struct uevent *out) {
-    FILE *f = fopen(path, "r");
-    if (!f) return -1;
-    memset(out, 0, sizeof *out);
-    char line[1024];
-    while (fgets(line, sizeof line, f) && out->n < UE_MAX_KEYS) {
-        if (line[0] != 'E' || line[1] != ':') continue;
-        char *kv = line + 2;
-        char *eq = strchr(kv, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        char *val = eq + 1;
-        val[strcspn(val, "\r\n")] = '\0';
-        safe_copy(out->key[out->n], kv, UE_KEY_MAX);
-        safe_copy(out->val[out->n], val, UE_VAL_MAX);
-        out->n++;
-    }
-    fclose(f);
-    return 0;
-}
 
 /* Attribute an E: key to its TRUE owning builtin (honest — do not narrow to make
  * a gate pass; the in-scope classifier below handles legitimate deferrals). */
