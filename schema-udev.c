@@ -1,6 +1,7 @@
 /* schema-udev — native uevent -> schema rule -> action daemon (Phase 1).
  * Listens on the kernel uevent netlink (group 1), alongside systemd-udevd. */
 #include "schema-udev.h"
+#include "udev_builtins.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -77,9 +78,17 @@ static void run_hook(const char *hook, const struct uevent *ev) {
     }
 }
 
-static void dispatch(const struct uevent *ev) {
+static void dispatch(struct uevent *ev) {
     const char *action = uevent_get(ev, "ACTION");
     if (!action) return;
+    const char *devpath = uevent_get(ev, "DEVPATH");
+    if (devpath) {
+        const char *devname = uevent_get(ev, "DEVNAME");
+        char devnode[UE_VAL_MAX];
+        const char *dn = NULL;
+        if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
+        run_builtins("/sys", devpath, dn, ev);
+    }
     for (int i = 0; i < g_nrules; i++) {
         if (!dev_rule_match(&g_rules[i], ev)) continue;
 

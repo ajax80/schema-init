@@ -264,7 +264,7 @@ static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, st
 #include <ftw.h>
 
 static const char *g_coldplug_sysroot = NULL;
-static void (*g_coldplug_cb)(const struct uevent *ev) = NULL;
+static void (*g_coldplug_cb)(struct uevent *ev) = NULL;
 
 static int coldplug_ftw_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
     (void)sb; (void)ftwbuf;
@@ -285,7 +285,7 @@ static int coldplug_ftw_cb(const char *fpath, const struct stat *sb, int typefla
     return 0;
 }
 
-static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(const struct uevent *ev)) {
+static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struct uevent *ev)) {
     char devroot[1024];
     if ((size_t)snprintf(devroot, sizeof devroot, "%s/devices", sysroot) >= sizeof devroot) return -1;
     struct stat st;
