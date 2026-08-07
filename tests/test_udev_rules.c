@@ -45,7 +45,84 @@ static void test_inert_on_childless(void) {
     printf("test_udev_rules inert: OK\n");
 }
 
+/* child (hidraw) under a usb_device parent that carries ID_USB_VENDOR-style props.
+ * We seed the PARENT with a modalias so hwdb/usb-derived keys exist to inherit,
+ * and assert the child inherits ID_PATH from the ancestor chain. */
+static void test_inherit_id_path(void) {
+    root_make();
+    mkdirs("/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/uevent",
+           "DEVTYPE=usb_device\n");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/modalias", "usb:v1234p5678\n");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0", "pci");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1", "usb");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1/1-2", "usb");
+    /* child hidraw device */
+    mkdirs("/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0/hidraw/hidraw5");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0/hidraw/hidraw5/uevent",
+           "DEVTYPE=\n");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0/hidraw/hidraw5", "hidraw");
+
+    struct uevent ev; ev.n = 0;
+    strcpy(ev.key[ev.n], "SUBSYSTEM"); strcpy(ev.val[ev.n], "hidraw"); ev.n++;
+    strcpy(ev.key[ev.n], "DEVPATH");
+    strcpy(ev.val[ev.n], "/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0/hidraw/hidraw5");
+    ev.n++;
+    run_rules(ROOT, ev.val[1], NULL, &ev);
+    const char *idp = uevent_get(&ev, "ID_PATH");
+    assert(idp != NULL);            /* inherited from the usb ancestor's path_id */
+    printf("test_udev_rules inherit ID_PATH: OK\n");
+}
+
+/* first-writer-wins: a child that already has its own ID_PATH keeps it */
+static void test_inherit_first_writer_wins(void) {
+    root_make();
+    mkdirs("/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/uevent", "DEVTYPE=usb_device\n");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/modalias", "usb:v1234p5678\n");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0", "pci");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1", "usb");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1/1-2", "usb");
+    mkdirs("/devices/pci0000:00/0000:00:14.0/usb1/1-2/child");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/child/uevent", "DEVTYPE=\n");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1/1-2/child", "hidraw");
+
+    struct uevent ev; ev.n = 0;
+    strcpy(ev.key[ev.n], "SUBSYSTEM"); strcpy(ev.val[ev.n], "hidraw"); ev.n++;
+    strcpy(ev.key[ev.n], "DEVPATH");
+    strcpy(ev.val[ev.n], "/devices/pci0000:00/0000:00:14.0/usb1/1-2/child"); ev.n++;
+    strcpy(ev.key[ev.n], "ID_PATH"); strcpy(ev.val[ev.n], "MINE-DO-NOT-REPLACE"); ev.n++;
+    run_rules(ROOT, ev.val[1], NULL, &ev);
+    assert(strcmp(uevent_get(&ev, "ID_PATH"), "MINE-DO-NOT-REPLACE") == 0);
+    printf("test_udev_rules first-writer-wins: OK\n");
+}
+
+/* a non-inheritable key on the ancestor is NOT copied down */
+static void test_inherit_bounded_set(void) {
+    root_make();
+    mkdirs("/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/uevent",
+           "DEVTYPE=usb_device\nID_NONINHERIT=nope\n");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0", "pci");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1", "usb");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1/1-2", "usb");
+    mkdirs("/devices/pci0000:00/0000:00:14.0/usb1/1-2/child");
+    writef("/devices/pci0000:00/0000:00:14.0/usb1/1-2/child/uevent", "DEVTYPE=\n");
+    set_subsystem("/devices/pci0000:00/0000:00:14.0/usb1/1-2/child", "hidraw");
+
+    struct uevent ev; ev.n = 0;
+    strcpy(ev.key[ev.n], "SUBSYSTEM"); strcpy(ev.val[ev.n], "hidraw"); ev.n++;
+    strcpy(ev.key[ev.n], "DEVPATH");
+    strcpy(ev.val[ev.n], "/devices/pci0000:00/0000:00:14.0/usb1/1-2/child"); ev.n++;
+    run_rules(ROOT, ev.val[1], NULL, &ev);
+    assert(uevent_get(&ev, "ID_NONINHERIT") == NULL);
+    printf("test_udev_rules bounded-set: OK\n");
+}
+
 int main(void) {
     test_inert_on_childless();
+    test_inherit_id_path();
+    test_inherit_first_writer_wins();
+    test_inherit_bounded_set();
     return 0;
 }
