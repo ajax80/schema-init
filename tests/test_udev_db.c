@@ -68,6 +68,12 @@ int main(void) {
     /* overflow -> -1, nothing usable */
     assert(udev_db_record_build(&d, kernel_n, rec, 3) == -1);
 
+    /* remove unlinks the record; a second remove is still success (ENOENT) */
+    assert(udev_db_remove(base, &d) == 0);
+    struct uevent gone;
+    assert(udev_db_read_eprops(path, &gone) != 0);   /* file is gone */
+    assert(udev_db_remove(base, &d) == 0);            /* idempotent */
+
     unlink(path); rmdir(base);
     printf("test_udev_db: OK\n");
     return 0;

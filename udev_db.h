@@ -83,6 +83,15 @@ static inline int udev_db_write(const char *base_dir, const struct uevent *ev, i
     return 0;
 }
 
+static inline int udev_db_remove(const char *base_dir, const struct uevent *ev) {
+    char name[128];
+    if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
+    char path[512];
+    if ((size_t)snprintf(path, sizeof path, "%s/%s", base_dir, name) >= sizeof path) return -1;
+    if (unlink(path) != 0 && errno != ENOENT) return -1;
+    return 0;
+}
+
 static inline int udev_db_read_eprops(const char *path, struct uevent *out) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
