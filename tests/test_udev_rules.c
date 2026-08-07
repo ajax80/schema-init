@@ -119,10 +119,31 @@ static void test_inherit_bounded_set(void) {
     printf("test_udev_rules bounded-set: OK\n");
 }
 
+/* composite usb modalias is built as usb:vVVVVpPPPP from idVendor/idProduct */
+static void test_composite_usb_modalias(void) {
+    char out[128];
+    assert(rules_usb_modalias("1d6b", "0002", NULL, out, sizeof out) == 0);
+    assert(strcmp(out, "usb:v1D6Bp0002") == 0);
+    /* with bcdDevice -> appends dVVVV */
+    assert(rules_usb_modalias("1d6b", "0002", "0410", out, sizeof out) == 0);
+    assert(strcmp(out, "usb:v1D6Bp0002d0410") == 0);
+    printf("test_udev_rules composite usb modalias: OK\n");
+}
+
+/* OUI lookup key from a MAC address is OUI:XXXXXX (first 3 octets, upper, no colons) */
+static void test_composite_oui_key(void) {
+    char out[32];
+    assert(rules_oui_key("00:1a:2b:3c:4d:5e", out, sizeof out) == 0);
+    assert(strcmp(out, "OUI:001A2B") == 0);
+    printf("test_udev_rules composite OUI key: OK\n");
+}
+
 int main(void) {
     test_inert_on_childless();
     test_inherit_id_path();
     test_inherit_first_writer_wins();
     test_inherit_bounded_set();
+    test_composite_usb_modalias();
+    test_composite_oui_key();
     return 0;
 }
