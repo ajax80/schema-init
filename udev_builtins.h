@@ -60,20 +60,17 @@ static inline int ub_select(const char *sysroot, const char *devpath,
     const char *kname     = ub_kernel_name(devpath);
     int sel = 0;
 
-    static const char *const path_subs[] = { "pci", "platform", "block", "net", "input", "drm", "graphics", NULL };
+    (void)kname;
     if (ub_has_modalias(sysroot, devpath)) sel |= UB_HWDB;
 
-    if (subsystem && ub_in(subsystem, path_subs)) {
-        if (strcmp(subsystem, "block") == 0 && strstr(devpath, "/virtual/")) {
-            /* skip virtual block devices */
-        } else {
-            sel |= UB_PATH;
-        }
-    } else if (subsystem && strcmp(subsystem, "sound") == 0 && fnmatch("card*", kname, 0) == 0) {
+    /* path_id: udev emits ID_PATH on essentially any device that anchors to a
+     * hardware bus (pci/usb/platform/acpi/scsi/nvme in its parent chain) — including
+     * bus interfaces, hidraw, sound controls, gpiochips, leds, rfkill, net sub-nodes.
+     * path_id_build() returns >0 only when it anchors, so fire broadly and let it
+     * decide, except virtual block devices which udev explicitly excludes
+     * (DEVPATH not matching a /virtual/ segment). */
+    if (subsystem && !(strcmp(subsystem, "block") == 0 && strstr(devpath, "/virtual/")))
         sel |= UB_PATH;
-    } else if (subsystem && strcmp(subsystem, "usb") == 0 && devtype && strcmp(devtype, "usb_device") == 0) {
-        sel |= UB_PATH;
-    }
 
     if (subsystem && strcmp(subsystem, "usb") == 0 &&
         devtype && strcmp(devtype, "usb_device") == 0) sel |= UB_USB;
@@ -90,33 +87,48 @@ static inline int ub_select(const char *sysroot, const char *devpath,
     return sel;
 }
 
-/* Dispatch: run each selected builtin in fixed udev precedence order. Each builtin
- * appends its properties into ev. Returns the number of properties added. */
+/* Append one key=value into ev if the key is not already present (first writer wins,
+ * so the kernel payload is never overwritten). */
+static inline void ub_add(struct uevent *ev, const char *key, const char *val) {
+    if (ev->n >= UE_MAX_KEYS || uevent_get(ev, key)) return;
+    safe_copy(ev->key[ev->n], key, UE_KEY_MAX);
+    safe_copy(ev->val[ev->n], val, UE_VAL_MAX);
+    ev->n++;
+}
+
+/* Merge a builtin's output (in a scratch uevent) into ev. The builtins RESET their
+ * out->n at entry (they own their buffer), so each must be run into its own scratch
+ * uevent and then absorbed here — otherwise a later builtin wipes earlier output and
+ * the base kernel payload. */
+static inline void ub_absorb(struct uevent *ev, const struct uevent *tmp) {
+    for (int i = 0; i < tmp->n; i++) ub_add(ev, tmp->key[i], tmp->val[i]);
+}
+
+/* Dispatch: run each selected builtin in fixed udev precedence order, each into a
+ * scratch uevent, absorbing its properties into ev. Returns the number added. */
 static inline int run_builtins(const char *sysroot, const char *devpath,
                                const char *devnode, struct uevent *ev) {
     int before = ev->n;
     int sel = ub_select(sysroot, devpath, devnode, ev);
-    if (sel & UB_HWDB)  hwdb_build(sysroot, devpath, ev);
+    struct uevent tmp;
+
+    if (sel & UB_HWDB)  { tmp.n = 0; hwdb_build(sysroot, devpath, &tmp); ub_absorb(ev, &tmp); }
+
     if (sel & UB_PATH) {
         char idpath[PATH_ID_MAX], idtag[PATH_ID_MAX];
         if (path_id_build(sysroot, devpath, idpath, sizeof idpath) > 0) {
-            if (ev->n < UE_MAX_KEYS) {
-                safe_copy(ev->key[ev->n], "ID_PATH", UE_KEY_MAX);
-                safe_copy(ev->val[ev->n], idpath, UE_VAL_MAX);
-                ev->n++;
-            }
-            if (path_id_tag(idpath, idtag, sizeof idtag) == 0 && ev->n < UE_MAX_KEYS) {
-                safe_copy(ev->key[ev->n], "ID_PATH_TAG", UE_KEY_MAX);
-                safe_copy(ev->val[ev->n], idtag, UE_VAL_MAX);
-                ev->n++;
-            }
+            ub_add(ev, "ID_PATH", idpath);
+            if (path_id_tag(idpath, idtag, sizeof idtag) == 0) ub_add(ev, "ID_PATH_TAG", idtag);
         }
     }
-    if (sel & UB_USB)   usb_id_build(sysroot, devpath, ev);
-    if (sel & UB_INPUT) input_id_build(sysroot, devpath, ev);
-    if (sel & UB_NET)   net_id_build(sysroot, devpath, ev);
-    if (sel & UB_BLKID) { blkid_pt_build(sysroot, devpath, devnode, ev);
-                          blkid_fs_build(sysroot, devpath, devnode, ev); }
+
+    if (sel & UB_USB)   { tmp.n = 0; usb_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
+    if (sel & UB_INPUT) { tmp.n = 0; input_id_build(sysroot, devpath, &tmp); ub_absorb(ev, &tmp); }
+    if (sel & UB_NET)   { tmp.n = 0; net_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
+    if (sel & UB_BLKID) {
+        tmp.n = 0; blkid_pt_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
+        tmp.n = 0; blkid_fs_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
+    }
     return ev->n - before;
 }
 
