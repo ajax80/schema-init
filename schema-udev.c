@@ -3,6 +3,7 @@
 #include "schema-udev.h"
 #include "udev_builtins.h"
 #include "udev_rules.h"
+#include "udev_db.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -83,6 +84,7 @@ static void dispatch(struct uevent *ev) {
     const char *action = uevent_get(ev, "ACTION");
     if (!action) return;
     const char *devpath = uevent_get(ev, "DEVPATH");
+    int kernel_n = ev->n;
     if (devpath) {
         const char *devname = uevent_get(ev, "DEVNAME");
         char devnode[UE_VAL_MAX];
@@ -90,6 +92,8 @@ static void dispatch(struct uevent *ev) {
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins("/sys", devpath, dn, ev);
         run_rules("/sys", devpath, dn, ev);
+        if (strcmp(action, "remove") == 0) udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
+        else                               udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
     }
     for (int i = 0; i < g_nrules; i++) {
         if (!dev_rule_match(&g_rules[i], ev)) continue;
