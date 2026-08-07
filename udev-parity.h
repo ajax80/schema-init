@@ -46,7 +46,6 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
                                           const char *devpath) {
     const char *hint = parity_builtin_hint(key);
     if (!hint[0]) return 0;                       /* runtime / other-builtin key */
-    if (strcmp(hint, "v4l_id") == 0) return 0;    /* v4l_id not reimplemented */
     if (parity_deferred(key)) return 0;           /* documented deferral */
     if (sub && strcmp(sub, "block") == 0) {
         if (parity_ata_feature(key)) return 0;                 /* slice-3a deferral */

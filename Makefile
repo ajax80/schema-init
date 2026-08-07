@@ -50,7 +50,7 @@ schema-board: schema-board.c schema.h schema_shm.h
 schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h ata_id.h schema-udev.h
+parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h ata_id.h v4l_id.h schema-udev.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o udev-parity tools/udev-parity.c
 
 %.o: %.c
@@ -110,6 +110,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_udev_builtins.c -o /tmp/schema-test-ub && /tmp/schema-test-ub
 	$(CC) $(CFLAGS) tests/test_udev_rules.c -o /tmp/schema-test-ur && /tmp/schema-test-ur
 	$(CC) $(CFLAGS) tests/test_ata_id.c -o /tmp/schema-test-ataid && /tmp/schema-test-ataid
+	$(CC) $(CFLAGS) tests/test_v4l_id.c -o /tmp/schema-test-v4lid && /tmp/schema-test-v4lid
 
 .PHONY: all clean install release aarch64 armhf desktop test
 
