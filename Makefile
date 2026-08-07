@@ -111,6 +111,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_udev_rules.c -o /tmp/schema-test-ur && /tmp/schema-test-ur
 	$(CC) $(CFLAGS) tests/test_ata_id.c -o /tmp/schema-test-ataid && /tmp/schema-test-ataid
 	$(CC) $(CFLAGS) tests/test_v4l_id.c -o /tmp/schema-test-v4lid && /tmp/schema-test-v4lid
+	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o /tmp/schema-test-cdromid && /tmp/schema-test-cdromid
 
 .PHONY: all clean install release aarch64 armhf desktop test
 
