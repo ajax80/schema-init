@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 static inline int cdrom_id_decode(const uint8_t *buf, int len, struct uevent *out) {
     out->n = 0;
@@ -142,26 +143,53 @@ static inline int cdrom_toc_decode(const uint8_t *toc, int len, struct uevent *o
     return out->n;
 }
 
+static inline int cdrom_sg(int fd, const uint8_t *cdb, int cdblen,
+                           uint8_t *buf, int buflen, int dir) {
+    uint8_t sense[32] = {0};
+    struct sg_io_hdr io = {0};
+    io.interface_id='S'; io.dxfer_direction=dir; io.cmd_len=cdblen;
+    io.cmdp=(uint8_t*)cdb; io.dxfer_len=buflen; io.dxferp=buf;
+    io.sbp=sense; io.mx_sb_len=sizeof sense; io.timeout=8000;
+    if (ioctl(fd, SG_IO, &io) < 0) return -2;
+    if ((io.info & SG_INFO_OK_MASK) != SG_INFO_OK) return -1;
+    return buflen - io.resid;
+}
+
+static inline int cdrom_test_unit_ready(int fd) {
+    uint8_t cdb[6] = {0,0,0,0,0,0};
+    for (int i = 0; i < 5; i++) {
+        if (cdrom_sg(fd, cdb, 6, NULL, 0, SG_DXFER_NONE) == 0) return 1;
+        struct timespec ts = {0, 200*1000*1000L};   /* 200 ms */
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+
+static inline int cdrom_read_disc_info(int fd, uint8_t *buf, size_t sz, int *len) {
+    uint8_t cdb[10] = {0x51,0,0,0,0,0,0,(uint8_t)(sz>>8),(uint8_t)(sz&0xff),0};
+    int r = cdrom_sg(fd, cdb, 10, buf, (int)sz, SG_DXFER_FROM_DEV);
+    if (r < 4) return -1;
+    *len = r;
+    return 0;
+}
+
+static inline int cdrom_read_toc(int fd, uint8_t *buf, size_t sz, int *len) {
+    uint8_t cdb[10] = {0x43,0,0,0,0,0,1,(uint8_t)(sz>>8),(uint8_t)(sz&0xff),0};
+    int r = cdrom_sg(fd, cdb, 10, buf, (int)sz, SG_DXFER_FROM_DEV);
+    if (r < 4) return -1;
+    *len = r;
+    return 0;
+}
+
 static inline int cdrom_get_config(const char *devnode, uint8_t *buf, size_t bufsz, int *len) {
     int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
     memset(buf, 0, bufsz);
     uint8_t cdb[10] = {0x46, 0x00, 0, 0, 0, 0, 0,
                        (uint8_t)(bufsz >> 8), (uint8_t)(bufsz & 0xff), 0};
-    uint8_t sense[32] = {0};
-    struct sg_io_hdr io = {0};
-    io.interface_id = 'S';
-    io.dxfer_direction = SG_DXFER_FROM_DEV;
-    io.cmd_len = sizeof cdb;
-    io.cmdp = cdb;
-    io.dxfer_len = (unsigned)bufsz;
-    io.dxferp = buf;
-    io.sbp = sense;
-    io.mx_sb_len = sizeof sense;
-    io.timeout = 5000;
-    int rc = ioctl(fd, SG_IO, &io);
+    int r = cdrom_sg(fd, cdb, 10, buf, (int)bufsz, SG_DXFER_FROM_DEV);
     close(fd);
-    if (rc < 0 || (io.info & SG_INFO_OK_MASK) != SG_INFO_OK) return -1;
+    if (r < 4) return -1;
     int datalen = ((int)buf[0] << 24) | ((int)buf[1] << 16) | ((int)buf[2] << 8) | buf[3];
     int total = datalen + 4;
     if (total > (int)bufsz) total = (int)bufsz;
@@ -174,10 +202,24 @@ static inline int cdrom_id_build(const char *sysroot, const char *devpath,
     (void)sysroot; (void)devpath;
     out->n = 0;
     if (!devnode) return 0;
-    uint8_t buf[2048];
-    int len = 0;
-    if (cdrom_get_config(devnode, buf, sizeof buf, &len) != 0) return 0;
-    return cdrom_id_decode(buf, len, out);
+    uint8_t buf[2048]; int len = 0;
+    if (cdrom_get_config(devnode, buf, sizeof buf, &len) == 0)
+        cdrom_id_decode(buf, len, out);            /* 3d capabilities (resets out->n) */
+    /* NOTE: cdrom_id_decode sets out->n=0 at entry; keep it FIRST. */
+    cdrom_media_type(buf, len, out);               /* 3e media presence + type */
+
+    int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return out->n;
+    if (!cdrom_test_unit_ready(fd)) { close(fd); return out->n; }
+
+    uint8_t di[64]; int dlen = 0;
+    if (cdrom_read_disc_info(fd, di, sizeof di, &dlen) == 0)
+        cdrom_discinfo_decode(di, dlen, out);
+    uint8_t tc[64]; int tlen = 0;
+    if (cdrom_read_toc(fd, tc, sizeof tc, &tlen) == 0)
+        cdrom_toc_decode(tc, tlen, out);
+    close(fd);
+    return out->n;
 }
 
 #endif /* CDROM_ID_H */
