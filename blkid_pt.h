@@ -17,7 +17,7 @@ static inline void bpt_emit(struct uevent *out, const char *k, const char *v) {
 }
 
 static inline int bpt_read_at(const char *devnode, uint64_t off, void *buf, size_t len) {
-    int fd = open(devnode, O_RDONLY | O_CLOEXEC);
+    int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
     ssize_t n = pread(fd, buf, len, (off_t)off);
     close(fd);
