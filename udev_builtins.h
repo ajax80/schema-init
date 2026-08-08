@@ -103,7 +103,7 @@ static inline int ub_select(const char *sysroot, const char *devpath,
 
     if (subsystem && strcmp(subsystem, "block") == 0 &&
         devtype && (strcmp(devtype, "disk") == 0 || strcmp(devtype, "partition") == 0) &&
-        fnmatch("mmcblk*boot*", kname, 0) != 0)
+        fnmatch("sr*", kname, 0) != 0 && fnmatch("mmcblk*boot*", kname, 0) != 0)
         sel |= UB_BLKID;
 
     if (subsystem && strcmp(subsystem, "block") == 0 &&
