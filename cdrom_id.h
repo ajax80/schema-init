@@ -63,6 +63,43 @@ static inline int cdrom_id_decode(const uint8_t *buf, int len, struct uevent *ou
     return out->n;
 }
 
+static inline int cdrom_media_type(const uint8_t *buf, int len, struct uevent *out) {
+    if (len < 8) return 0;
+    unsigned cur = ((unsigned)buf[6] << 8) | buf[7];
+    if (cur == 0x0000 || cur == 0xffff) return 0;
+    #define MEMIT(k) do { \
+        if (out->n < UE_MAX_KEYS && !uevent_get(out, (k))) { \
+            safe_copy(out->key[out->n], (k), UE_KEY_MAX); \
+            safe_copy(out->val[out->n], "1", UE_VAL_MAX); out->n++; } \
+    } while (0)
+    MEMIT("ID_CDROM_MEDIA");
+    switch (cur) {
+    case 0x08: MEMIT("ID_CDROM_MEDIA_CD"); break;
+    case 0x09: MEMIT("ID_CDROM_MEDIA_CD_R"); break;
+    case 0x0a: MEMIT("ID_CDROM_MEDIA_CD_RW"); break;
+    case 0x10: MEMIT("ID_CDROM_MEDIA_DVD"); break;
+    case 0x11: MEMIT("ID_CDROM_MEDIA_DVD_R"); break;
+    case 0x12: MEMIT("ID_CDROM_MEDIA_DVD_RAM"); break;
+    case 0x13: MEMIT("ID_CDROM_MEDIA_DVD_RW_RO"); break;
+    case 0x14: MEMIT("ID_CDROM_MEDIA_DVD_RW_SEQ"); break;
+    case 0x15: MEMIT("ID_CDROM_MEDIA_DVD_R_DL_SEQ"); break;
+    case 0x16: MEMIT("ID_CDROM_MEDIA_DVD_R_DL_JR"); break;
+    case 0x1a: MEMIT("ID_CDROM_MEDIA_DVD_PLUS_RW"); break;
+    case 0x1b: MEMIT("ID_CDROM_MEDIA_DVD_PLUS_R"); break;
+    case 0x2a: MEMIT("ID_CDROM_MEDIA_DVD_PLUS_RW_DL"); break;
+    case 0x2b: MEMIT("ID_CDROM_MEDIA_DVD_PLUS_R_DL"); break;
+    case 0x40: MEMIT("ID_CDROM_MEDIA_BD"); break;
+    case 0x41: case 0x42: MEMIT("ID_CDROM_MEDIA_BD_R"); break;
+    case 0x43: MEMIT("ID_CDROM_MEDIA_BD_RE"); break;
+    case 0x50: MEMIT("ID_CDROM_MEDIA_HDDVD"); break;
+    case 0x51: MEMIT("ID_CDROM_MEDIA_HDDVD_R"); break;
+    case 0x52: MEMIT("ID_CDROM_MEDIA_HDDVD_RW"); break;
+    default: break;
+    }
+    #undef MEMIT
+    return out->n;
+}
+
 static inline int cdrom_get_config(const char *devnode, uint8_t *buf, size_t bufsz, int *len) {
     int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
