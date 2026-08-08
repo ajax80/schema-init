@@ -19,6 +19,7 @@ static inline const char *parity_builtin_hint(const char *key) {
     if (strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0) return "blkid";
     if (strncmp(key, "ID_PATH", 7) == 0) return "path_id";
     if (strncmp(key, "ID_V4L", 6) == 0 || strncmp(key, "ID_VIDEO", 8) == 0) return "v4l_id";
+    if (strncmp(key, "ID_CDROM", 8) == 0) return "cdrom_id";
     if (strncmp(key, "ID_USB", 6) == 0 || strncmp(key, "ID_SERIAL", 9) == 0 ||
         strncmp(key, "ID_MODEL", 8) == 0 || strncmp(key, "ID_VENDOR", 9) == 0 ||
         strcmp(key, "ID_REVISION") == 0 || strcmp(key, "ID_BUS") == 0 ||
@@ -40,6 +41,19 @@ static inline int parity_ata_feature(const char *key) {
     return 1;   /* all ID_ATA_* feature-set keys are documented-deferred in slice 3a */
 }
 
+static inline int parity_cdrom_media(const char *key) {
+    return strncmp(key, "ID_CDROM_MEDIA", 14) == 0;   /* media status -> slice 3e */
+}
+
+/* Optical devices (sr, scd): their filesystem (ID_FS_) is media-dependent and
+ * needs spin-up + ISO9660/UDF probing, deferred to slice 3e (not 3d capabilities). */
+static inline int parity_is_optical(const char *devpath) {
+    if (!devpath) return 0;
+    const char *b = strrchr(devpath, '/');
+    b = b ? b + 1 : devpath;
+    return strncmp(b, "sr", 2) == 0 || strncmp(b, "scd", 3) == 0;
+}
+
 /* Is a udev E: key that WE failed to reproduce a genuine in-scope gap?
  * Device-class aware so it cannot be gamed by declassifying key names. */
 static inline int parity_in_scope_missing(const char *key, const char *sub,
@@ -49,6 +63,9 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
     if (parity_deferred(key)) return 0;           /* documented deferral */
     if (sub && strcmp(sub, "block") == 0) {
         if (parity_ata_feature(key)) return 0;                 /* slice-3a deferral */
+        if (parity_cdrom_media(key)) return 0;                 /* slice-3e deferral */
+        if (parity_is_optical(devpath) && strncmp(key, "ID_FS_", 6) == 0)
+            return 0;                                          /* optical media fs -> slice 3e */
         if (strcmp(key, "ID_PATH") == 0 || strcmp(key, "ID_PATH_TAG") == 0 ||
             strstr(key, "_FROM_DATABASE") != NULL ||
             strncmp(key, "ID_FS_", 6) == 0 || strncmp(key, "ID_PART_", 8) == 0 ||
@@ -60,6 +77,7 @@ static inline int parity_in_scope_missing(const char *key, const char *sub,
         if (udev_identity_key(key) && devpath &&
             (strstr(devpath, "/ata") != NULL || strstr(devpath, "/usb") != NULL))
             return 1;
+        if (strncmp(key, "ID_CDROM", 8) == 0) return 1;        /* cdrom capabilities (3d) */
         return 0;
     }
     if (udev_identity_key(key)) {

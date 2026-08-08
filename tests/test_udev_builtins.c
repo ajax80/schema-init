@@ -64,12 +64,12 @@ static void test_select(void) {
     s = ub_select(ROOT, "/devices/pci0/nvme/nvme0/nvme0n1", "/dev/nvme0n1", &ev);
     assert(s & UB_BLKID); assert(s & UB_PATH);
 
-    /* sr0 optical: BLKID suppressed by KERNEL sr* */
+    /* sr0 optical: BLKID suppressed by KERNEL sr*, CDROM fires */
     mkdirs("/devices/pci0/ata/sr0");
     set_subsystem("/devices/pci0/ata/sr0", "block");
     ev_set(&ev, "block", "disk", "/devices/pci0/ata/sr0");
     s = ub_select(ROOT, "/devices/pci0/ata/sr0", "/dev/sr0", &ev);
-    assert(!(s & UB_BLKID));
+    assert(!(s & UB_BLKID)); assert(s & UB_CDROM);
 
     /* mmcblk0boot0: BLKID suppressed */
     mkdirs("/devices/mmc/mmcblk0boot0");
