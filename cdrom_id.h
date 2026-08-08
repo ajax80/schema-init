@@ -100,6 +100,29 @@ static inline int cdrom_media_type(const uint8_t *buf, int len, struct uevent *o
     return out->n;
 }
 
+static inline int cdrom_discinfo_decode(const uint8_t *di, int len, struct uevent *out) {
+    if (len < 12) return 0;
+    #define DEMIT(k,v) do { \
+        if (out->n < UE_MAX_KEYS && !uevent_get(out,(k))) { \
+            safe_copy(out->key[out->n],(k),UE_KEY_MAX); \
+            safe_copy(out->val[out->n],(v),UE_VAL_MAX); out->n++; } \
+    } while (0)
+    DEMIT("ID_CDROM_MEDIA", "1");
+    const char *st = NULL;
+    switch (di[2] & 3) { case 0: st="blank"; break; case 1: st="appendable"; break;
+                         case 2: st="complete"; break; default: st=NULL; }
+    if (st) DEMIT("ID_CDROM_MEDIA_STATE", st);
+    char num[16];
+    int sessions = (di[9] << 8) | di[4];
+    snprintf(num, sizeof num, "%d", sessions); DEMIT("ID_CDROM_MEDIA_SESSION_COUNT", num);
+    int first = di[3], last = (di[11] << 8) | di[6];
+    int tracks = last - first + 1;
+    if (tracks < 0) tracks = 0;
+    snprintf(num, sizeof num, "%d", tracks); DEMIT("ID_CDROM_MEDIA_TRACK_COUNT", num);
+    #undef DEMIT
+    return out->n;
+}
+
 static inline int cdrom_get_config(const char *devnode, uint8_t *buf, size_t bufsz, int *len) {
     int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
