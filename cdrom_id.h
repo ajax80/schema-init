@@ -123,6 +123,25 @@ static inline int cdrom_discinfo_decode(const uint8_t *di, int len, struct ueven
     return out->n;
 }
 
+static inline int cdrom_toc_decode(const uint8_t *toc, int len, struct uevent *out) {
+    if (len < 4) return 0;
+    int ndata = 0, naudio = 0;
+    for (int off = 4; off + 8 <= len; off += 8) {
+        if (toc[off + 2] == 0xaa) continue;           /* lead-out */
+        if (toc[off + 1] & 0x04) ndata++; else naudio++;
+    }
+    char num[16];
+    if (ndata > 0)  { snprintf(num,sizeof num,"%d",ndata);
+        if (!uevent_get(out,"ID_CDROM_MEDIA_TRACK_COUNT_DATA") && out->n < UE_MAX_KEYS) {
+            safe_copy(out->key[out->n],"ID_CDROM_MEDIA_TRACK_COUNT_DATA",UE_KEY_MAX);
+            safe_copy(out->val[out->n],num,UE_VAL_MAX); out->n++; } }
+    if (naudio > 0) { snprintf(num,sizeof num,"%d",naudio);
+        if (!uevent_get(out,"ID_CDROM_MEDIA_TRACK_COUNT_AUDIO") && out->n < UE_MAX_KEYS) {
+            safe_copy(out->key[out->n],"ID_CDROM_MEDIA_TRACK_COUNT_AUDIO",UE_KEY_MAX);
+            safe_copy(out->val[out->n],num,UE_VAL_MAX); out->n++; } }
+    return out->n;
+}
+
 static inline int cdrom_get_config(const char *devnode, uint8_t *buf, size_t bufsz, int *len) {
     int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;

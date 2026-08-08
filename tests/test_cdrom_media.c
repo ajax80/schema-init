@@ -36,8 +36,17 @@ static void test_discinfo(void) {
     printf("test_cdrom_media discinfo: OK\n");
 }
 
+static void test_toc(void) {
+    struct uevent e;
+    cdrom_toc_decode(cdrom_toc_wardriver, sizeof cdrom_toc_wardriver, (e.n=0,&e));
+    assert(strcmp(get(&e,"ID_CDROM_MEDIA_TRACK_COUNT_DATA"),"1")==0);
+    assert(strcmp(get(&e,"ID_CDROM_MEDIA_TRACK_COUNT_AUDIO"),"")==0);  /* 0 -> omitted */
+    printf("test_cdrom_media toc: OK\n");
+}
+
 int main(void) {
     test_media_type();
     test_discinfo();
+    test_toc();
     return 0;
 }
