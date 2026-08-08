@@ -37,9 +37,10 @@ shadow db**, not the parity tool.
 - **Media-ready reliability:** TEST UNIT READY poll + bounded retry (mirrors real
   cdrom_id; bounded so it can never wedge the event loop).
 - **Media keys — full set:** presence + state + type + counts.
-- **Optical filesystem:** ISO9660 **and** UDF. ISO9660 verified live now against
-  the burned Wardriver disc; UDF ships with code + a captured fixture, marked
-  hardware-proven only if a UDF disc is inserted.
+- **Optical filesystem:** ISO9660 **and** UDF, both a full parse and both verified
+  live this slice — ISO9660 against the burned Wardriver disc, UDF (full key set)
+  against the `POWERT_TOUR_DVD` bridge disc. A UDF disc turned up, so UDF is no
+  longer code-only.
 
 Out of scope (unchanged deferrals): true non-USB `scsi_id` and `mtd_probe` (no
 hardware on blakbox); blkid geometry keys `ID_FS_SIZE/BLOCKSIZE/LASTBLOCK`
@@ -118,16 +119,28 @@ attempted against a not-ready drive.
   Emits `ID_FS_TYPE=iso9660`, `ID_FS_USAGE=filesystem`, `ID_FS_SYSTEM_ID`,
   `ID_FS_LABEL(_ENC)`, `ID_FS_APPLICATION_ID`, `ID_FS_UUID`,
   `ID_FS_VERSION="Joliet Extension"` (when a Joliet SVD is present).
-- **UDF:** new `fs_probe_udf`. Volume Recognition Sequence at sector 16
-  (offset 32768), 2048-byte descriptors; a `NSR02`/`NSR03` tag in the VRS ⇒
-  `ID_FS_TYPE=udf`, `ID_FS_USAGE=filesystem`. Label/UUID extraction from the
-  Logical/Primary Volume Descriptor is best-effort (emit `ID_FS_LABEL`/
-  `ID_FS_UUID` when cleanly decodable, else omit — never fabricate). UDF scope is
-  type + label + uuid; documented as verified-if-inserted.
-- `optical_fs_probe(devnode, out)`: try ISO9660, then UDF; first hit wins
-  (a disc can carry both a UDF bridge and ISO9660 — ISO9660 first matches blkid's
-  default ordering for these bridge discs). Called from `cdrom_id_build` **only
-  after media-ready**.
+- **UDF (full parse):** new `fs_probe_udf`. Detect via the Volume Recognition
+  Sequence (`NSR02`/`NSR03` at sectors 16–20) ⇒ `ID_FS_TYPE=udf`,
+  `ID_FS_USAGE=filesystem`. Then AVDP @ LBA 256 → Main Volume Descriptor
+  Sequence extent; walk it for the Primary Volume Descriptor (tag 1) and Logical
+  Volume Descriptor (tag 6):
+  - LVD LogicalVolumeIdentifier (dstring@84) ⇒ `ID_FS_LABEL(+_ENC)` +
+    `ID_FS_LOGICAL_VOLUME_ID`.
+  - PVD VolumeIdentifier (dstring@24) ⇒ `ID_FS_VOLUME_ID`.
+  - PVD VolumeSetIdentifier (dstring@72) ⇒ `ID_FS_VOLUME_SET_ID`; its first 16
+    chars lowercased (right-padded with `0`) ⇒ `ID_FS_UUID(+_ENC)`.
+  - LVD DomainIdentifier suffix UDF revision (@240, BCD) ⇒ `ID_FS_VERSION`
+    (e.g. `1.02`).
+  - PVD ImplementationIdentifier (@389, leading `*` stripped, encoded) ⇒
+    `ID_FS_APPLICATION_ID`.
+  Every field is emitted only when present — never fabricated. Verified live
+  against the `POWERT_TOUR_DVD` bridge disc (all offsets confirmed against real
+  systemd-udevd's `/run/udev/data/b11:0`).
+- **Ordering — UDF FIRST, then ISO9660.** `optical_fs_probe(devnode, out)` tries
+  UDF, then ISO9660; first hit wins. Real udev reports `ID_FS_TYPE=udf` for a
+  UDF+ISO9660 bridge disc even though the ISO9660 PVD is readable, so UDF must
+  win. A pure-ISO9660 disc (no UDF VRS) falls through to the ISO9660 prober.
+  Called from `cdrom_id_build` **only after media-ready**.
 
 ### Producer note (why cdrom_id, not blkid)
 

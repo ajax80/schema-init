@@ -52,7 +52,19 @@ ID_CDROM_MEDIA_TRACK_COUNT=1        (invisible incomplete track — NOT zero)
 ```
 No `ID_CDROM_MEDIA_TRACK_COUNT_DATA` (READ TOC fails 0x05/0x24 on blank → 0 data tracks → omit). No `ID_FS_*` (no filesystem). Deferred: `ID_CDROM_MEDIA_SESSION_NEXT`.
 
-Fixture array names: `cdrom_getconf_wardriver[384]`, `cdrom_discinfo_wardriver[34]`, `cdrom_toc_wardriver[20]`, `iso_pvd_wardriver[2048]`, `cdrom_getconf_blank[384]`, `cdrom_discinfo_blank[34]`.
+**UDF bridge disc "POWERT_TOUR_DVD"** (`tests/fixtures/cdrom_media_udf.h`) — a DVD-ROM (current profile 0x0010) carrying BOTH a UDF filesystem and an ISO9660 PVD. Real udev reports it as **udf** (not iso9660):
+```
+ID_CDROM_MEDIA=1  ID_CDROM_MEDIA_DVD=1  ID_CDROM_MEDIA_STATE=complete
+ID_CDROM_MEDIA_SESSION_COUNT=1  ID_CDROM_MEDIA_TRACK_COUNT=1  ID_CDROM_MEDIA_TRACK_COUNT_DATA=1
+ID_FS_TYPE=udf   ID_FS_USAGE=filesystem   ID_FS_VERSION=1.02
+ID_FS_LABEL=POWERT_TOUR_DVD  (+ ID_FS_LABEL_ENC)   ID_FS_LOGICAL_VOLUME_ID=POWERT_TOUR_DVD
+ID_FS_VOLUME_ID=POWERT_TOUR_DVD   ID_FS_VOLUME_SET_ID=3655822E
+ID_FS_UUID=3655822e00000000  (+ ID_FS_UUID_ENC)
+ID_FS_APPLICATION_ID=Apple\x20Computer\x2c\x20Inc.   (encoded form)
+```
+Verified UDF offsets (confirmed against this disc): AVDP @ LBA 256, tag id `d[0]|d[1]<<8 == 2`; Main VDS location = `d[20..23]` LE, length = `d[16..19]` LE (here LBA 32, 16 sectors). In each VDS sector, tag = `d[0]|d[1]<<8`: **PVD = tag 1** — VolumeIdentifier dstring @24 (len 32), VolumeSetIdentifier dstring @72 (len 128), ImplementationIdentifier @388 (identifier at +1, 23 bytes, strip leading `*`); **LVD = tag 6** — LogicalVolumeIdentifier dstring @84 (len 128), DomainIdentifier UDF revision at `d[240]|d[241]<<8` (BCD → `%x.%02x`); **tag 8** = terminating descriptor (stop). UDF dstring: byte 0 = compression id (8 → 8-bit, 16 → UTF-16BE), last byte of the field = length (including the compression byte).
+
+Fixture array names: `cdrom_getconf_wardriver[384]`, `cdrom_discinfo_wardriver[34]`, `cdrom_toc_wardriver[20]`, `iso_pvd_wardriver[2048]`, `cdrom_getconf_blank[384]`, `cdrom_discinfo_blank[34]`, `udf_nsr_lba19[2048]`, `udf_avdp_lba256[2048]`, `udf_pvd_lba32[2048]`, `udf_lvd_lba35[2048]`.
 
 Verified formulas (hold on both discs):
 - current profile = `getconf[6]<<8 | getconf[7]` (both = 0x0011 → DVD_R).
@@ -419,53 +431,117 @@ static void test_iso9660(void) {
 (The fixture is PVD-only; `ID_FS_VERSION`=Joliet needs the SVD and is covered by the live gate, not asserted here.)
 Add `#include "optical_fs.h"` to the test if not already pulled via `cdrom_id.h`, and call `test_iso9660()` from `main`.
 
-- [ ] **Step 3: Add the UDF prober** `fs_probe_udf` to `optical_fs.h`. Detect via the Volume Recognition Sequence: sectors starting at LBA 16 (offset 32768), 2048-byte descriptors, structure `{ type[1], id[5], ver[1], ... }`. A descriptor whose `id` is `NSR02` or `NSR03` ⇒ UDF. Emit type + usage; label/UUID best-effort (omit if not cleanly present — do not fabricate):
+- [ ] **Step 3: Add the full UDF prober** `fs_probe_udf` (+ `udf_dstring` helper) to `optical_fs.h`. Detect via the VRS, then parse AVDP@256 → Main VDS → PVD/LVD. All offsets verified against `POWERT_TOUR_DVD` (see ground-truth section). Never fabricate — emit each field only when present:
 
 ```c
+/* UDF dstring: field[0]=compression id, field[fieldlen-1]=length (incl comp byte);
+   comp 8 = 8-bit chars, comp 16 = UTF-16BE, both starting at field[1]. */
+static inline void udf_dstring(const unsigned char *f, int fieldlen, char *out, int outsz) {
+    int len = f[fieldlen - 1], o = 0;
+    if (len <= 1) { out[0] = 0; return; }
+    if (f[0] == 16) { for (int i = 1; i + 1 < len && o < outsz - 1; i += 2) out[o++] = f[i + 1]; }
+    else            { for (int i = 1; i < len && o < outsz - 1; i++)     out[o++] = f[i]; }
+    out[o] = 0;
+}
+
 static inline int fs_probe_udf(const char *dev, struct uevent *out) {
     unsigned char d[2048];
     int found = 0;
     for (int sec = 16; sec <= 20; sec++) {
         if (bpt_read_at(dev, (uint64_t)sec * 2048, d, sizeof d) != 0) break;
         if (memcmp(d + 1, "NSR02", 5) == 0 || memcmp(d + 1, "NSR03", 5) == 0) { found = 1; break; }
-        if (memcmp(d + 1, "TEA01", 5) == 0) break;   /* end of VRS */
+        if (memcmp(d + 1, "TEA01", 5) == 0) break;      /* end of VRS */
     }
     if (!found) return -1;
     bpt_emit(out, "ID_FS_TYPE", "udf");
     bpt_emit(out, "ID_FS_USAGE", "filesystem");
+
+    if (bpt_read_at(dev, 256ULL * 2048, d, sizeof d) != 0) return 0;   /* AVDP */
+    if ((d[0] | (d[1] << 8)) != 2) return 0;
+    uint32_t loc = d[20] | (d[21]<<8) | (d[22]<<16) | ((uint32_t)d[23]<<24);
+    uint32_t mlen = d[16] | (d[17]<<8) | (d[18]<<16) | ((uint32_t)d[19]<<24);
+    uint32_t nsec = mlen / 2048; if (nsec > 64) nsec = 64;
+
+    char label[128]="", volid[64]="", volset[128]="", appid[128]="", version[8]="";
+    for (uint32_t i = 0; i <= nsec; i++) {
+        if (bpt_read_at(dev, (uint64_t)(loc + i) * 2048, d, sizeof d) != 0) break;
+        unsigned t = d[0] | (d[1] << 8);
+        if (t == 1) {                                    /* PVD */
+            udf_dstring(d + 24, 32, volid, sizeof volid);
+            udf_dstring(d + 72, 128, volset, sizeof volset);
+            const unsigned char *impl = d + 388 + 1;     /* ImplId identifier (skip flags) */
+            size_t ilen = strnlen((const char *)impl, 23);
+            if (ilen && impl[0] == '*') { impl++; ilen--; }
+            fs_encode_bytes(impl, ilen, appid, sizeof appid);
+        } else if (t == 6) {                             /* LVD */
+            udf_dstring(d + 84, 128, label, sizeof label);
+            unsigned rev = d[240] | (d[241] << 8);
+            snprintf(version, sizeof version, "%x.%02x", rev >> 8, rev & 0xff);
+        } else if (t == 8) break;                        /* terminating descriptor */
+    }
+    if (label[0])  { fs_emit_label(out, (const unsigned char *)label, strlen(label));
+                     bpt_emit(out, "ID_FS_LOGICAL_VOLUME_ID", label); }
+    if (volid[0])  bpt_emit(out, "ID_FS_VOLUME_ID", volid);
+    if (volset[0]) bpt_emit(out, "ID_FS_VOLUME_SET_ID", volset);
+    if (version[0] && strcmp(version, "0.00") != 0) bpt_emit(out, "ID_FS_VERSION", version);
+    if (appid[0])  bpt_emit(out, "ID_FS_APPLICATION_ID", appid);
+    if (volset[0]) {                                      /* UUID: lowercase volset, pad to 16 */
+        char uuid[17]; int j;
+        for (j = 0; j < 16 && volset[j]; j++) {
+            char c = volset[j];
+            uuid[j] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
+        }
+        for (; j < 16; j++) uuid[j] = '0';
+        uuid[16] = 0;
+        fs_emit_uuid(out, uuid);
+    }
     return 0;
 }
 ```
+
+Expected against `POWERT_TOUR_DVD`: `ID_FS_TYPE=udf`, `ID_FS_LABEL`/`_ENC`/`ID_FS_LOGICAL_VOLUME_ID`/`ID_FS_VOLUME_ID`=`POWERT_TOUR_DVD`, `ID_FS_VOLUME_SET_ID=3655822E`, `ID_FS_UUID`/`_ENC`=`3655822e00000000`, `ID_FS_VERSION=1.02`, `ID_FS_APPLICATION_ID=Apple\x20Computer\x2c\x20Inc.`.
 
 - [ ] **Step 4: Add `optical_fs_probe`** and wire it into `cdrom_id.h`:
 
 ```c
 static inline int optical_fs_probe(const char *devnode, struct uevent *out) {
+    if (fs_probe_udf(devnode, out) == 0) return 0;       /* UDF wins on bridge discs */
     if (fs_probe_iso9660(devnode, out) == 0) return 0;
-    if (fs_probe_udf(devnode, out) == 0) return 0;
     return -1;
 }
 ```
+**Ordering matters:** UDF is tried FIRST. Real udev reports `ID_FS_TYPE=udf` for a UDF+ISO9660 bridge disc even though the ISO9660 PVD is readable; ISO9660-first would mislabel it and break parity. A pure-ISO9660 disc has no UDF VRS, so `fs_probe_udf` returns -1 and it falls through correctly.
+
 In `cdrom_id.h`: add `#include "optical_fs.h"` near the top, and add the `optical_fs_probe(devnode, out);` line at the end of `cdrom_id_build` (the spot noted in Task 4).
 
-- [ ] **Step 5: Add a synthetic UDF test** to `tests/test_cdrom_media.c` (deterministic, no hardware): write an `NSR02` tag at offset `32768 + 2048` (sector 17), assert `optical_fs_probe` yields `ID_FS_TYPE=udf`:
+- [ ] **Step 5: Add the real-fixture UDF test** to `tests/test_cdrom_media.c`. Write the 4 captured sectors to their real LBA offsets in a sparse temp file (`ftruncate` makes the gaps sparse), then run the production `optical_fs_probe` and assert the full key set including that UDF wins over the bridge disc's ISO9660:
 
 ```c
+#include "fixtures/cdrom_media_udf.h"
 static void test_udf(void) {
     char path[] = "/tmp/optudfXXXXXX";
     int fd = mkstemp(path); assert(fd >= 0);
-    assert(ftruncate(fd, 32768 + 3*2048) == 0);
-    unsigned char nsr[2048] = {0}; nsr[0]=0; memcpy(nsr+1,"NSR02",5); nsr[6]=1;
-    assert(pwrite(fd, nsr, sizeof nsr, 32768 + 2048) == (ssize_t)sizeof nsr);
+    assert(ftruncate(fd, 257ULL*2048) == 0);
+    assert(pwrite(fd, udf_nsr_lba19,   2048, 19ULL*2048)  == 2048);
+    assert(pwrite(fd, udf_avdp_lba256, 2048, 256ULL*2048) == 2048);
+    assert(pwrite(fd, udf_pvd_lba32,   2048, 32ULL*2048)  == 2048);
+    assert(pwrite(fd, udf_lvd_lba35,   2048, 35ULL*2048)  == 2048);
     close(fd);
     struct uevent e; e.n = 0;
     assert(optical_fs_probe(path, &e) == 0);
     assert(strcmp(get(&e,"ID_FS_TYPE"),"udf")==0);
+    assert(strcmp(get(&e,"ID_FS_LABEL"),"POWERT_TOUR_DVD")==0);
+    assert(strcmp(get(&e,"ID_FS_LOGICAL_VOLUME_ID"),"POWERT_TOUR_DVD")==0);
+    assert(strcmp(get(&e,"ID_FS_VOLUME_ID"),"POWERT_TOUR_DVD")==0);
+    assert(strcmp(get(&e,"ID_FS_VOLUME_SET_ID"),"3655822E")==0);
+    assert(strcmp(get(&e,"ID_FS_UUID"),"3655822e00000000")==0);
+    assert(strcmp(get(&e,"ID_FS_VERSION"),"1.02")==0);
+    assert(strstr(get(&e,"ID_FS_APPLICATION_ID"),"Apple")!=NULL);
     unlink(path);
     printf("test_cdrom_media udf: OK\n");
 }
 ```
-Call `test_udf()` from `main`.
+Call `test_udf()` from `main`. (The AVDP's Main-VDS location is the absolute LBA 32, which is exactly where `udf_pvd_lba32` is written, so the sparse file resolves correctly.)
 
 - [ ] **Step 6: Build + run.** Run: `cc -I. -o /tmp/tcm tests/test_cdrom_media.c && /tmp/tcm` → all subtests PASS. Then `make` → clean.
 
@@ -510,7 +586,9 @@ Run: `sudo ./udev-parity` → 0 missing / 0 extra, both directions.
   - resolve `MM=$(cat /sys/block/sr0/dev)`;
   - ensure the daemon has processed sr0 (trigger its coldplug/uevent path for sr0), then read `/run/schema-udev/data/b$MM`;
   - with the **burned** disc inserted, assert the record CONTAINS (positive grep, anti-hollow): `ID_CDROM_MEDIA=1`, `ID_CDROM_MEDIA_STATE=appendable`, `ID_CDROM_MEDIA_TRACK_COUNT=2`, `ID_CDROM_MEDIA_TRACK_COUNT_DATA=1`, `ID_FS_TYPE=iso9660`, `ID_FS_LABEL=Wardriver.2026.1080p.WEBRip.x264`, `ID_FS_VERSION=Joliet Extension`;
+  - with the **UDF bridge** disc (`POWERT_TOUR_DVD`) inserted, assert the daemon record has `ID_FS_TYPE=udf` (NOT iso9660), `ID_FS_LABEL=POWERT_TOUR_DVD`, `ID_FS_VERSION=1.02`, and `ID_CDROM_MEDIA_STATE=complete`;
   - **inverted-#94 regression:** with NO media (empty drive), assert the daemon record has ZERO `ID_FS_` lines (`! grep -q '^E:ID_FS_'`);
+  - the burned/UDF/empty passes are each prompted (disc swap) or guarded by a detected current-profile/media-state so the script asserts against the disc actually present;
   - print explicit PASS/FAIL per assertion and exit non-zero on any miss.
   Use `printf`, `grep -q`, and assert the tool's own found/absent state — never `grep -v ... | wc -l == 0`.
 
@@ -546,5 +624,5 @@ echo "PASS burned"
 - **Spec coverage:** media-ready (T4), media presence/type (T1), state+counts (T2/T3), optical FS ISO9660+UDF (T5), parity in-scope + SESSION_NEXT deferral (T6), daemon-shadow-db live gate + inverted-#94 regression (T7). All spec sections mapped.
 - **SESSION_NEXT:** deferred by decision — real-udev emits it but the formula is under-determined by the two available discs; deferral keeps parity honest at 0/0.
 - **No `schema-udev.c` / `ub_select` change** — cdrom_id already fires on sr*/scd*; the diff must show `schema-udev.c` and `udev_builtins.h` untouched.
-- **UDF** ships code + synthetic test; hardware-verified only if a UDF disc is captured (add a real UDF fixture + live assertion if one becomes available).
+- **UDF** is a full parse (AVDP→PVD/LVD), verified live against the `POWERT_TOUR_DVD` bridge disc; fixture `cdrom_media_udf.h` holds the 4 real sectors. Prober order is UDF-first (bridge discs report udf). All offsets confirmed against the real udev oracle.
 - **Order dependency:** `cdrom_id_decode` (resets out->n) must run before `cdrom_media_type`; `optical_fs_probe` appends only. Flagged in T4/T5.
