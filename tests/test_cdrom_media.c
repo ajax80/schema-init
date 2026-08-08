@@ -44,9 +44,57 @@ static void test_toc(void) {
     printf("test_cdrom_media toc: OK\n");
 }
 
+#include "fixtures/cdrom_media_udf.h"
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+static void test_iso9660(void) {
+    char path[] = "/tmp/optfsXXXXXX";
+    int fd = mkstemp(path); assert(fd >= 0);
+    assert(ftruncate(fd, 32768 + 2048) == 0);
+    assert(pwrite(fd, iso_pvd_wardriver, sizeof iso_pvd_wardriver, 32768)
+           == (ssize_t)sizeof iso_pvd_wardriver);
+    close(fd);
+    struct uevent e; e.n = 0;
+    assert(optical_fs_probe(path, &e) == 0);
+    assert(strcmp(get(&e,"ID_FS_TYPE"),"iso9660")==0);
+    assert(strcmp(get(&e,"ID_FS_LABEL"),"Wardriver.2026.1080p.WEBRip.x264")==0);
+    assert(strcmp(get(&e,"ID_FS_SYSTEM_ID"),"LINUX")==0);
+    assert(strcmp(get(&e,"ID_FS_UUID"),"2026-05-09-01-34-23-00")==0);
+    assert(strstr(get(&e,"ID_FS_APPLICATION_ID"),"K3B") != NULL);
+    unlink(path);
+    printf("test_cdrom_media iso9660: OK\n");
+}
+
+static void test_udf(void) {
+    char path[] = "/tmp/optudfXXXXXX";
+    int fd = mkstemp(path); assert(fd >= 0);
+    assert(ftruncate(fd, 257ULL*2048) == 0);
+    assert(pwrite(fd, udf_nsr_lba19,   2048, 19ULL*2048)  == 2048);
+    assert(pwrite(fd, udf_avdp_lba256, 2048, 256ULL*2048) == 2048);
+    assert(pwrite(fd, udf_pvd_lba32,   2048, 32ULL*2048)  == 2048);
+    assert(pwrite(fd, udf_lvd_lba35,   2048, 35ULL*2048)  == 2048);
+    close(fd);
+    struct uevent e; e.n = 0;
+    assert(optical_fs_probe(path, &e) == 0);
+    assert(strcmp(get(&e,"ID_FS_TYPE"),"udf")==0);
+    assert(strcmp(get(&e,"ID_FS_LABEL"),"POWERT_TOUR_DVD")==0);
+    assert(strcmp(get(&e,"ID_FS_LOGICAL_VOLUME_ID"),"POWERT_TOUR_DVD")==0);
+    assert(strcmp(get(&e,"ID_FS_VOLUME_ID"),"POWERT_TOUR_DVD")==0);
+    assert(strcmp(get(&e,"ID_FS_VOLUME_SET_ID"),"3655822E")==0);
+    assert(strcmp(get(&e,"ID_FS_UUID"),"3655822e00000000")==0);
+    assert(strcmp(get(&e,"ID_FS_VERSION"),"1.02")==0);
+    assert(strstr(get(&e,"ID_FS_APPLICATION_ID"),"Apple")!=NULL);
+    unlink(path);
+    printf("test_cdrom_media udf: OK\n");
+}
+
 int main(void) {
     test_media_type();
     test_discinfo();
     test_toc();
+    test_iso9660();
+    test_udf();
     return 0;
 }

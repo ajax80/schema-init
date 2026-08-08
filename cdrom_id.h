@@ -2,6 +2,7 @@
 #define CDROM_ID_H
 
 #include "schema-udev.h"
+#include "optical_fs.h"
 #include <scsi/sg.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
@@ -219,6 +220,8 @@ static inline int cdrom_id_build(const char *sysroot, const char *devpath,
     if (cdrom_read_toc(fd, tc, sizeof tc, &tlen) == 0)
         cdrom_toc_decode(tc, tlen, out);
     close(fd);
+
+    optical_fs_probe(devnode, out);                /* 3e optical filesystem */
     return out->n;
 }
 
