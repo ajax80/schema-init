@@ -5,6 +5,7 @@
 #include "udev_rules.h"
 #include "udev_db.h"
 #include "disk_links.h"
+#include "uaccess.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -97,11 +98,14 @@ static void dispatch(struct uevent *ev) {
         int is_block = sub && strcmp(sub, "block") == 0;
         if (strcmp(action, "remove") == 0) {
             if (is_block) disk_links_gc(SCHEMA_DISK_DIR, SCHEMA_UDEV_DB_DIR, ev);
+            uaccess_clear(SCHEMA_UACCESS_DIR, ev);
             udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
         } else {
             udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
             if (is_block && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
                 disk_links_apply(SCHEMA_DISK_DIR, ev);
+            if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0)
+                uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev);
         }
     }
     for (int i = 0; i < g_nrules; i++) {
@@ -151,6 +155,7 @@ int main(void) {
 
     rules_reload();
     disk_links_wipe(SCHEMA_DISK_DIR);
+    uaccess_wipe(SCHEMA_UACCESS_DIR);
     fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
     coldplug_walk_root("/sys", dispatch);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
