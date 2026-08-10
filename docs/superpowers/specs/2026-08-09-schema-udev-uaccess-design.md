@@ -24,8 +24,19 @@ seat/session change. The active-seat uid is the security-sensitive input.
 schema-init already reclaims the seat/session side: `scripts/schema-logind.py`
 resolves the active uid (`get_active_uid`, deliberately from root-created
 `/run/user/<uid>` — never forgeable `/proc/<pid>/environ`) and projects it to
-`/run/systemd/seats/seat0` as `ACTIVE_UID=<uid>`. Slice D CONSUMES that
-projection; it does not re-implement seat tracking.
+`/run/systemd/seats/seat0` as `ACTIVE_UID=<uid>`
+(`scripts/schema-logind.py:1403`, byte-format identical to systemd's,
+including the `# This is private data. Do not parse.` header). Slice D
+CONSUMES that projection; it does not re-implement seat tracking.
+
+**Which daemon writes `seat0` during dry-run:** while systemd-logind is
+still live (the whole shadow phase), the live `/run/systemd/seats/seat0` may
+be written by systemd-logind rather than schema-logind — the two emit the
+identical `ACTIVE_UID=<uid>` format, so `uaccess_active_uid` reads it
+correctly regardless of author. This is the same "read logind's live file"
+posture the parity harness uses for `/run/udev/data`. At cutover (slice E),
+schema-logind takes sole ownership of `seat0`. Slice D therefore has no
+unmet dependency: the field it reads exists and is written today.
 
 ## Scope
 
@@ -95,7 +106,9 @@ ACL=user:<uid>:rw
 ```
 Otherwise (ineligible, or no active uid) clear any stale record via
 `uaccess_clear`. `mkdir -p` `dir` as needed. **Never touches the real node.**
-Returns 0 (best-effort).
+Returns 0 (best-effort). (`DEVNAME` is a kernel uevent property — always
+present on char device nodes, e.g. `DEVNAME=snd/controlC0`, verified in the
+sysfs `uevent` file — so it needs no `run_builtins` to populate.)
 
 ```
 int uaccess_clear(const char *dir, const struct uevent *ev);
@@ -155,9 +168,12 @@ remove:        uevent → uaccess_clear → unlink the shadow record
 - ineligible uevent, or seat0 without `ACTIVE_UID`, → no record written /
   stale record cleared.
 - `uaccess_clear` removes the record; second clear is a no-op.
-- **Dry-run proof:** after all calls, assert no filesystem path outside the
-  temp shadow dir was created or modified (the test operates entirely within
-  temp dirs; the code must reference no real `/dev` node).
+- **Dry-run proof (structural, enforceable):** the review/gate greps the
+  diff — `uaccess.h` must contain no `acl_*` call and no
+  `#include <acl/...>` / `<sys/acl.h>`. (A C unit test can't assert "no path
+  outside temp touched" without strace; the real guarantee is that the code
+  has no ACL-mutation surface at all. The unit test additionally operates
+  entirely within temp dirs.)
 
 **Live parity gate — `tests/verify_uaccess_live.sh` (sudo):**
 - Spawn a fresh daemon (`rm -rf /run/schema-udev`, start `./schema-udev`),
