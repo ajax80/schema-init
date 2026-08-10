@@ -113,6 +113,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_v4l_id.c -o /tmp/schema-test-v4lid && /tmp/schema-test-v4lid
 	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o /tmp/schema-test-cdromid && /tmp/schema-test-cdromid
 	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o /tmp/schema-test-cdrommedia && /tmp/schema-test-cdrommedia
+	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
 
 .PHONY: all clean install release aarch64 armhf desktop test
 
