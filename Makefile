@@ -114,6 +114,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o /tmp/schema-test-cdromid && /tmp/schema-test-cdromid
 	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o /tmp/schema-test-cdrommedia && /tmp/schema-test-cdrommedia
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
+	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess && /tmp/schema-test-uaccess
 
 .PHONY: all clean install release aarch64 armhf desktop test
 
