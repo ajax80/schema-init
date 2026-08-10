@@ -92,9 +92,13 @@ the two paths can never disagree.
 
 ### Wiring in `schema-udev.c`
 
-In `dispatch()`, block devices only (guard on `MAJOR`/`SUBSYSTEM=block` or
-presence of a block devnode — match the existing convention), mirroring the
-existing `symlink=` rule block:
+In `dispatch()`, gate on `SUBSYSTEM=block`, full stop —
+`uevent_get(ev, "SUBSYSTEM")` is reliably set by `uevent_from_sysfs` via
+subsystem-symlink resolution. Do NOT gate on `MAJOR` (fragile: SCSI disk
+and optical share major ranges). Optical devices (`sr0`) ARE
+`SUBSYSTEM=block` and DO get `by-label`/`by-uuid` links from this path —
+that is correct and intended (their FS properties flow in via
+`cdrom_id.h`/`optical_fs.h`). Mirrors the existing `symlink=` rule block:
 
 - `add` / `change`: after `run_builtins` + `run_rules` populate `ev` and
   after `udev_db_write`, call `disk_links_apply(ev)`.
@@ -135,11 +139,17 @@ remove:        uevent → disk_links_gc("b<maj>:<min>")   (reads db record)
 - Collision (two devices resolve to the same `by-label` name) →
   last-writer-wins (udev default; acceptable, no true collisions on the
   target hardware).
-- `change` event that alters a source property (e.g. relabel) re-applies
+- `change` event that alters a source property (e.g. relabel, or an optical
+  disc swap on `sr0`: `POWERT_TOUR_DVD` ejected → blank inserted) re-applies
   the new link but does NOT prune the now-stale old-value link until the
-  next `remove` or the startup wipe. Accepted for slice C (rare; udevd's
-  full db-diff pruning is deferred). Parity is measured on a fresh
-  coldplugged daemon, so this does not affect the gate.
+  next `remove` or the startup wipe. Accepted for slice C (udevd's full
+  db-diff pruning is deferred). Parity is measured on a fresh coldplugged
+  daemon, so this does not affect the gate.
+  **Follow-up (slice D/E):** add a db-diff prune on `change` — read the
+  still-present OLD db record's derived link names *before* `udev_db_write`
+  overwrites it, then `unlink` any no longer produced by the new `ev`. The
+  shared derive helper + existing `disk_links_gc` make this nearly free;
+  held out of slice C only to keep the surface tight.
 
 ## Testing
 
