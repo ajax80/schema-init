@@ -4,6 +4,7 @@
 #include "udev_builtins.h"
 #include "udev_rules.h"
 #include "udev_db.h"
+#include "disk_links.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -92,8 +93,16 @@ static void dispatch(struct uevent *ev) {
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins("/sys", devpath, dn, ev);
         run_rules("/sys", devpath, dn, ev);
-        if (strcmp(action, "remove") == 0) udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
-        else                               udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
+        const char *sub = uevent_get(ev, "SUBSYSTEM");
+        int is_block = sub && strcmp(sub, "block") == 0;
+        if (strcmp(action, "remove") == 0) {
+            if (is_block) disk_links_gc(SCHEMA_DISK_DIR, SCHEMA_UDEV_DB_DIR, ev);
+            udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
+        } else {
+            udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
+            if (is_block && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
+                disk_links_apply(SCHEMA_DISK_DIR, ev);
+        }
     }
     for (int i = 0; i < g_nrules; i++) {
         if (!dev_rule_match(&g_rules[i], ev)) continue;
@@ -141,6 +150,7 @@ int main(void) {
     if (sfd < 0) { fprintf(stderr, "[schema-udev] signalfd: %s\n", strerror(errno)); return 1; }
 
     rules_reload();
+    disk_links_wipe(SCHEMA_DISK_DIR);
     fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
     coldplug_walk_root("/sys", dispatch);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
