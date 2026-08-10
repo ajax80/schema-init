@@ -46,6 +46,17 @@ property→symlink plumbing.
 - `by-id` — its multi-link, bus-specific parity (`ata-`/`nvme-` [three name
   variants]/`wwn-`/`usb-`/`scsi-` prefixes, model+serial sanitization,
   `-partN` suffixes) is a separate slice.
+- **`by-path` compat variants** — udevd also creates `by-path` links from
+  `ID_PATH_ATA_COMPAT` (`pci-…-ata-N`, no `.0` host suffix) and
+  `ID_PATH_WITH_USB_REVISION` (`usbvN-…`), plus their `-partN` forms (12
+  links on the target host, `sda`/`sr0`/USB buses). Our `path_id` builtin
+  emits only `ID_PATH`/`ID_PATH_TAG`, not those two compat properties, so
+  slice C cannot produce these links. Deferred to the future
+  persistent-naming slice (bundled with `by-id`, since both need `path_id`
+  property-side work). The live gate SUBTRACTS this documented set from
+  udevd's expected `by-path` names, reports the deferred count, and still
+  FAILS on any udevd link that is neither matched nor in this deferral —
+  the gap is surfaced, never hidden.
 - Writing to the real `/dev/disk` — that cutover is a one-constant flip
   deferred to **slice E**, when udevd is actually retired.
 - `link_priority`-style collision arbitration — last-writer-wins (udev's
