@@ -16,14 +16,24 @@ slice.
 
 **In scope — six trees, each one-property-one-link:**
 
-| Tree (`/dev/schema/disk/…`) | Link-name source property | Gate |
+| Tree (`/dev/schema/disk/…`) | Link name | Gate |
 |---|---|---|
 | `by-uuid/<name>`     | `ID_FS_UUID_ENC` (fallback `ID_FS_UUID`) | property present |
 | `by-label/<name>`    | `ID_FS_LABEL_ENC`                        | property present |
 | `by-partuuid/<name>` | `ID_PART_ENTRY_UUID`                     | property present |
 | `by-partlabel/<name>`| `ID_PART_ENTRY_NAME` (already ENC)       | property present |
-| `by-path/<name>`     | `ID_PATH`                                | property present |
-| `by-diskseq/<name>`  | `DISKSEQ`                                | `DEVTYPE=disk` |
+| `by-path/<name>`     | `ID_PATH` (+ `-part<PARTN>` if partition)  | property present |
+| `by-diskseq/<name>`  | `DISKSEQ` (+ `-part<PARTN>` if partition)  | property present |
+
+**Partition suffix rule (critical for parity):** udevd stores a single
+`ID_PATH`/`DISKSEQ` value shared by a disk and its partitions, then appends
+`-part<PARTN>` to the *link name* for partitions (verified on hardware:
+`sda` → `by-diskseq/2`, `sda1` → `by-diskseq/2-part1`; `sda` →
+`by-path/pci-…-ata-1.0`, `sda1` → `by-path/pci-…-ata-1.0-part1`). So
+`by-path` and `by-diskseq` apply to BOTH disks and partitions; the partition
+link name is `<value>-part<PARTN>`. `PARTN` is a kernel uevent property
+(present on add AND remove, absent from the shadow db). The four other trees
+(`by-uuid`/`by-label`/`by-partuuid`/`by-partlabel`) are never suffixed.
 
 All six source properties are ALREADY emitted by existing builtins
 (`blkid_fs.h` emits `ID_FS_UUID`/`ID_FS_UUID_ENC`/`ID_FS_LABEL_ENC`;
@@ -65,30 +75,47 @@ included by `schema-udev.c` (mirrors `optical_fs.h`).
 ### Public functions
 
 ```
-int disk_links_apply(const struct uevent *ev);
+int disk_links_derive(const struct uevent *ev, struct disk_link *out, int max);
 ```
-For each table row whose source property is set (and gate passes), create
-`/dev/schema/disk/<tree>/<value>` as a symlink to a **relative** target that
+The shared core: for a given uevent, produce the list of `(tree, name)`
+pairs the device should own — used by BOTH apply and gc so the two can never
+disagree. Applies the partition suffix rule (`-part<PARTN>` for `by-path`
+and `by-diskseq` when `DEVTYPE=partition`). Returns the count.
+
+```
+int disk_links_apply(const char *base_dir, const struct uevent *ev);
+```
+Derive the pairs from the live uevent, then for each create
+`<base_dir>/<tree>/<value>` as a symlink to a **relative** target that
 resolves back to the devnode — `../../../<devname>` (three `..` climb:
 `by-X` → `disk` → `schema` → `dev`), matching udev's relative-symlink
 convention. `mkdir -p` the tree directory; write atomically via a
-`.tmp.<pid>` name + `rename()` (same technique as the existing
-`symlink_apply` in `schema-udev.h`). Best-effort per link: a failure on one
-tree does not abort the others. Returns 0 (best-effort; individual failures
-are logged to stderr, not fatal).
+`.tmp.<pid>` name + `rename()` (same technique as `symlink_apply` in
+`schema-udev.h`). Best-effort per link: a failure on one tree does not abort
+the others. Returns 0. (`base_dir` is `SCHEMA_DISK_DIR` in production; a
+temp dir in tests.)
 
 ```
-int disk_links_gc(const char *maj_min);
+int disk_links_gc(const char *base_dir, const char *db_dir, const struct uevent *ev);
 ```
-Read the shadow db record at `/run/schema-udev/data/<maj_min>` (e.g.
-`b8:1`), parse its `E:KEY=VALUE` lines into a temporary `struct uevent`, run
-the SAME derive logic as `disk_links_apply`, and `unlink()` each resulting
-path (ignoring `ENOENT`). This recovers the link names for a device whose
-kernel remove-uevent is too sparse to re-derive them. Returns 0.
+On remove, the shadow db record carries the DERIVED props
+(`ID_FS_*`/`ID_PART_*`/`ID_PATH`) but NOT the kernel props, while the live
+remove uevent carries the kernel props (`DEVTYPE`/`DISKSEQ`/`PARTN`) but NOT
+the derived ones (device gone, no re-probe). So gc **merges** both: read the
+db record at `<db_dir>/b<maj>:<min>` via the existing
+`udev_db_read_eprops` (giving the derived props), then graft `DEVTYPE`,
+`DISKSEQ`, and `PARTN` from the live `ev`. Run `disk_links_derive` on the
+merged uevent and `unlink()` each `<base_dir>/<tree>/<name>` (ignoring
+`ENOENT`). Returns 0.
 
-A shared static helper derives, for a given `struct uevent`, the list of
-`(tree, name)` pairs — used by both apply (to create) and gc (to unlink), so
-the two paths can never disagree.
+```
+void disk_links_wipe(const char *base_dir);
+```
+Recursively remove `base_dir` (symlinks + empty dirs) via
+`nftw(..., FTW_DEPTH | FTW_PHYS)`. Called once at daemon startup on
+`SCHEMA_DISK_DIR` before coldplug, so the farm is rebuilt clean each boot
+(this is the GC for devices that vanished while the daemon was down).
+`FTW_PHYS` ensures our entries are unlinked, not followed.
 
 ### Wiring in `schema-udev.c`
 
@@ -101,12 +128,14 @@ that is correct and intended (their FS properties flow in via
 `cdrom_id.h`/`optical_fs.h`). Mirrors the existing `symlink=` rule block:
 
 - `add` / `change`: after `run_builtins` + `run_rules` populate `ev` and
-  after `udev_db_write`, call `disk_links_apply(ev)`.
-- `remove`: call `disk_links_gc("<maj>:<min>")` **before**
-  `udev_db_remove(...)` — the db record must still exist when GC reads it.
+  after `udev_db_write`, call `disk_links_apply(SCHEMA_DISK_DIR, ev)`.
+- `remove`: call
+  `disk_links_gc(SCHEMA_DISK_DIR, SCHEMA_UDEV_DB_DIR, ev)` **before**
+  `udev_db_remove(...)` — the db record must still exist when gc reads it.
 
-The `<maj>:<min>` key is built from the uevent `MAJOR`/`MINOR` the same way
-`udev_db.h` builds its record path (block → `b<maj>:<min>`).
+The `b<maj>:<min>` key is built inside gc from the uevent via
+`udev_db_filename` (block → `b<maj>:<min>`), the same helper `udev_db.h`
+uses.
 
 ### Startup wipe
 
@@ -125,7 +154,7 @@ add/coldplug:  uevent → run_builtins (fills ID_* props) → udev_db_write
                                           ↓
                        /dev/schema/disk/by-*/<value> → ../../../<devname>
 
-remove:        uevent → disk_links_gc("b<maj>:<min>")   (reads db record)
+remove:        uevent → disk_links_gc(ev)   (merge db record + kernel props)
                                           ↓                    ↓
                                unlink each derived path   → udev_db_remove
 ```
@@ -154,24 +183,35 @@ remove:        uevent → disk_links_gc("b<maj>:<min>")   (reads db record)
 ## Testing
 
 **Unit — `tests/test_disk_links.c`:**
-- Synthesize a `struct uevent` carrying all six source properties plus
-  `DEVNAME`/`MAJOR`/`MINOR`/`DEVTYPE=disk`, pointed at a temp root; call
-  `disk_links_apply`; assert all six link files exist with the exact
-  expected names and that each relative target resolves to the devnode.
-- Assert the `by-diskseq` gate: a `DEVTYPE=partition` uevent produces no
-  `by-diskseq` link.
+- Synthesize a `struct uevent` for a whole disk (`DEVTYPE=disk`,
+  `DEVNAME=sda`, `MAJOR`/`MINOR`, `DISKSEQ`, `ID_FS_UUID_ENC`,
+  `ID_PATH`) into a temp root; call `disk_links_apply`; assert the expected
+  links exist with exact names and each relative target reads back as
+  `../../../sda`.
+- Synthesize a partition uevent (`DEVTYPE=partition`, `DEVNAME=sda1`,
+  `PARTN=1`, `DISKSEQ`, `ID_PATH`, `ID_PART_ENTRY_UUID`,
+  `ID_PART_ENTRY_NAME`); assert `by-path` and `by-diskseq` link names carry
+  the `-part1` suffix (e.g. `by-diskseq/2-part1`,
+  `by-path/pci-…-ata-1.0-part1`) while `by-partuuid`/`by-partlabel` do NOT.
 - Assert `by-partlabel` preserves the pre-encoded value verbatim (e.g.
   `Basic\x20data\x20partition`).
-- Write a matching shadow-db record, call `disk_links_gc`, assert all six
-  links are gone.
+- Write a matching shadow-db record (derived props only) and call
+  `disk_links_gc` with a live remove-ev carrying only the kernel props
+  (`DEVTYPE`/`DISKSEQ`/`PARTN`/`MAJOR`/`MINOR`); assert the merge recovers
+  and unlinks ALL derived links including the suffixed `by-diskseq`/`by-path`
+  — proving the db+ev merge.
+- Assert `disk_links_wipe` on a populated temp farm removes the whole
+  subtree.
 - Must build and pass under the existing `make test` harness.
 
 **Live parity gate — `tests/verify_disk_links_live.sh` (sudo):**
 - Spawn a fresh daemon (`rm -rf /run/schema-udev`, start `./schema-udev`),
   let coldplug settle.
-- For each of the six in-scope trees: assert the link-name set under
-  `/dev/schema/disk/by-X` **equals** the set under `/dev/disk/by-X`, and
-  that each shadow link `realpath`s to the same device node as udevd's
+- For each of the six in-scope trees: compare **symlinks only**
+  (`find -type l -printf '%f\n'`, so stray non-symlink entries like udevd's
+  anomalous `…-part` directory are ignored) — assert the link-name set under
+  `/dev/schema/disk/by-X` **equals** the set under `/dev/disk/by-X`, and that
+  each shadow link `realpath`s to the same device node as udevd's
   corresponding link.
 - **`by-id` is explicitly excluded** from the comparison (deferred slice).
 - Exit non-zero on any mismatch in either direction.
