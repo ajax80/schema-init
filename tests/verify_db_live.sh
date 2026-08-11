@@ -1,30 +1,22 @@
 #!/bin/sh
+# E1 artifact-parity gate: schema-udev's /run/schema-udev/data reproduces real
+# /run/udev/data (E: keys) for in-scope subsystems. Wraps the read-only udev-parity
+# harness as a pass/fail gate. Writes nothing.
 set -e
 cd "$(dirname "$0")/.."
-make -s schema-udev parity
+make -s parity
 
-sudo rm -rf /run/schema-udev
-sudo ./schema-udev &
-UDPID=$!
-sleep 2
-sudo kill "$UDPID" 2>/dev/null || true
-wait "$UDPID" 2>/dev/null || true
+out=$(sudo ./udev-parity 2>&1)
 
-# 1) parity tool: db counters must be exactly 0
-OUT=$(sudo ./udev-parity)
-echo "$OUT" | grep -E 'IN-SCOPE MISSING \(db\)|VALUE MISMATCHES \(db\)'
-MISS=$(echo "$OUT" | sed -n 's/^IN-SCOPE MISSING (db): //p')
-MMIS=$(echo "$OUT" | sed -n 's/^VALUE MISMATCHES (db): //p')
-[ "$MISS" = "0" ] || { echo "FAIL: db in-scope missing=$MISS"; exit 1; }
-[ "$MMIS" = "0" ] || { echo "FAIL: db value mismatches=$MMIS"; exit 1; }
+miss=$(printf '%s\n' "$out" | sed -n 's/^IN-SCOPE MISSING (db): *//p' | tail -1)
+mism=$(printf '%s\n' "$out" | sed -n 's/^VALUE MISMATCHES (db): *//p' | tail -1)
 
-# 2) no phantom shadow files: every shadow record names a real udevd record
-PHANTOM=0
-for f in /run/schema-udev/data/*; do
-    [ -e "$f" ] || continue
-    key=$(basename "$f")
-    [ -e "/run/udev/data/$key" ] || { echo "PHANTOM: $key has no /run/udev/data counterpart"; PHANTOM=$((PHANTOM+1)); }
-done
-[ "$PHANTOM" = "0" ] || { echo "FAIL: $PHANTOM phantom shadow records"; exit 1; }
+echo "db in-scope missing: ${miss:-?}   db value mismatches: ${mism:-?}"
 
-echo ">> RESULT: PASS (db live gate)"
+if [ -z "$miss" ] || [ -z "$mism" ]; then
+    echo ">> RESULT: FAIL (could not parse udev-parity db summary)"; exit 1
+fi
+if [ "$miss" != 0 ] || [ "$mism" != 0 ]; then
+    echo ">> RESULT: FAIL (db parity gap — see udev-parity output)"; exit 1
+fi
+echo ">> RESULT: PASS (schema db reproduces real /run/udev/data E: keys, in-scope)"

@@ -116,6 +116,11 @@ test:
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess && /tmp/schema-test-uaccess
 
-.PHONY: all clean install release aarch64 armhf desktop test
+verify-live:
+	sh tests/verify_disk_links_live.sh
+	sh tests/verify_uaccess_live.sh
+	sh tests/verify_db_live.sh
+
+.PHONY: all clean install release aarch64 armhf desktop test verify-live
 
 
