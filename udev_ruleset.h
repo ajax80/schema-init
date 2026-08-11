@@ -269,7 +269,10 @@ static inline int match_dev_clause(const struct rule_clause *c, const struct dev
     if (!strcmp(c->key, "ACTION"))    return rk_cmp(c->op, c->val, uevent_get(ev, "ACTION"));
     if (!strcmp(c->key, "DEVPATH"))   return rk_cmp(c->op, c->val, uevent_get(ev, "DEVPATH"));
     if (!strcmp(c->key, "SUBSYSTEM")) return rk_cmp(c->op, c->val, uevent_get(ev, "SUBSYSTEM"));
-    if (!strcmp(c->key, "DRIVER"))    return rk_cmp(c->op, c->val, uevent_get(ev, "DRIVER"));
+    if (!strcmp(c->key, "DRIVER"))    { char b[UE_VAL_MAX];
+                                        const char *d = (pi_driver(ctx->sysdir, b, sizeof b) == 0)
+                                                        ? b : uevent_get(ev, "DRIVER");
+                                        return rk_cmp(c->op, c->val, d); }
     if (!strcmp(c->key, "KERNEL"))    { const char *dp = uevent_get(ev, "DEVPATH");
                                         return rk_cmp(c->op, c->val, dp ? pi_base(dp) : NULL); }
     if (!strcmp(c->key, "ENV"))       return rk_cmp(c->op, c->val, uevent_get(ev, c->subkey));

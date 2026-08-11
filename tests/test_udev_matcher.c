@@ -123,6 +123,15 @@ int main(void) {
     ruleset_parse_line("SUBSYSTEM==\"block\", SYMLINK+=\"disk/by-x\"", &r);
     assert(rule_match(&r, &cm) == 1);
 
+    /* device-level DRIVER== resolves via the driver symlink, not uevent DRIVER= */
+    char drvl[160]; snprintf(drvl, sizeof drvl, "%s/devices/sda/driver", t4);
+    assert(symlink("../../../bus/scsi/drivers/sd", drvl) == 0);
+    ruleset_parse_line("DRIVER==\"sd\"", &r);
+    assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("DRIVER==\"ahci\"", &r);
+    assert(rule_match(&r, &cm) == 0);
+    unlink(drvl);
+
     unlink(af); rmdir(xdir);
     snprintf(xdir, sizeof xdir, "%s/devices", t4); rmdir(xdir); rmdir(t4);
 
@@ -169,6 +178,14 @@ int main(void) {
 
     /* device-level and parent-group clauses combine correctly */
     ruleset_parse_line("KERNEL==\"B\", SUBSYSTEMS==\"pci\", DRIVERS==\"ahci\"", &pr);
+    assert(rule_match(&pr, &cp) == 1);
+
+    /* DRIVERS!= inside a group: A is pci and its driver ahci != nvme -> matches on A */
+    ruleset_parse_line("SUBSYSTEMS==\"pci\", DRIVERS!=\"nvme\"", &pr);
+    assert(rule_match(&pr, &cp) == 1);
+
+    /* KERNELS group match: ancestor A has kernel name "A" and subsystem pci */
+    ruleset_parse_line("KERNELS==\"A\", SUBSYSTEMS==\"pci\"", &pr);
     assert(rule_match(&pr, &cp) == 1);
 
     /* cleanup */
