@@ -47,8 +47,8 @@ schema-journal-sink: schema-journal-sink.c
 schema-board: schema-board.c schema.h schema_shm.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
-schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h uaccess.h disk_links.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lacl
 
 parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h schema-udev.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o udev-parity tools/udev-parity.c
@@ -114,7 +114,8 @@ test:
 	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o /tmp/schema-test-cdromid && /tmp/schema-test-cdromid
 	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o /tmp/schema-test-cdrommedia && /tmp/schema-test-cdrommedia
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
-	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess && /tmp/schema-test-uaccess
+	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess -lacl && /tmp/schema-test-uaccess
+	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o /tmp/schema-test-uaccess-apply -lacl && /tmp/schema-test-uaccess-apply
 
 verify-live:
 	sh tests/verify_disk_links_live.sh

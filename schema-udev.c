@@ -59,6 +59,12 @@ static ssize_t netlink_recv(int fd, char *buf, size_t bufsz) {
 static struct dev_rule g_rules[MAX_RULES];
 static int g_nrules = 0;
 
+/* Live-mode sentinel: read ONCE at startup (never re-read on HUP, so a running
+ * daemon never changes ownership mid-flight). Absent => dry-run (isolated
+ * namespaces); present => own the real /dev, /dev/disk, and real ACLs. */
+#define SCHEMA_UDEV_LIVE_FLAG "/etc/schema-init/schema-udev.live"
+static int g_live = 0;
+
 static void rules_reload(void) {
     struct dev_rule tmp[MAX_RULES];
     int n = dev_rules_load_dir(DEV_DIR, tmp, MAX_RULES);
@@ -96,33 +102,49 @@ static void dispatch(struct uevent *ev) {
         run_rules("/sys", devpath, dn, ev);
         const char *sub = uevent_get(ev, "SUBSYSTEM");
         int is_block = sub && strcmp(sub, "block") == 0;
+        /* Live mode owns the real trees; dry-run stays isolated. The udev db is
+         * always shadow-only for now (real /run/udev/data write is deferred to
+         * E3: its record format needs S:/G:/Q:/V:/I: lines, not just E:). */
+        const char *disk_base = g_live ? "/dev/disk" : SCHEMA_DISK_DIR;
         if (strcmp(action, "remove") == 0) {
-            if (is_block) disk_links_gc(SCHEMA_DISK_DIR, SCHEMA_UDEV_DB_DIR, ev);
+            if (is_block) disk_links_gc(disk_base, SCHEMA_UDEV_DB_DIR, ev);
             uaccess_clear(SCHEMA_UACCESS_DIR, ev);
+            if (g_live) {
+                int uid = uaccess_active_uid(SEAT0_PATH);
+                const char *rn = uevent_get(ev, "DEVNAME");
+                if (uid >= 0 && rn && rn[0] && uaccess_eligible(ev)) {
+                    char node[UE_VAL_MAX + 8];
+                    if ((size_t)snprintf(node, sizeof node, "/dev/%s", rn) < sizeof node)
+                        ua_clear_node(node, uid);
+                }
+            }
             udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
         } else {
             udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
             if (is_block && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
-                disk_links_apply(SCHEMA_DISK_DIR, ev);
-            if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0)
-                uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev);
+                disk_links_apply(disk_base, ev);
+            if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0) {
+                uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev);   /* audit trail */
+                if (g_live) uaccess_apply(SEAT0_PATH, ev);            /* real ACL */
+            }
         }
     }
+    const char *dev_base = g_live ? "/dev" : SCHEMA_DEV_DIR;
     for (int i = 0; i < g_nrules; i++) {
         if (!dev_rule_match(&g_rules[i], ev)) continue;
 
         if (strcmp(action, "add") == 0 && g_rules[i].symlink[0]) {
             const char *dn = uevent_get(ev, "DEVNAME");
             if (dn) {
-                if (symlink_apply(SCHEMA_DEV_DIR, g_rules[i].symlink, dn) == 0) {
+                if (symlink_apply(dev_base, g_rules[i].symlink, dn) == 0) {
                     fprintf(stderr, "[schema-udev] created symlink %s/%s -> %s\n",
-                            SCHEMA_DEV_DIR, g_rules[i].symlink, dn);
+                            dev_base, g_rules[i].symlink, dn);
                 }
             }
         } else if (strcmp(action, "remove") == 0 && g_rules[i].symlink[0]) {
-            symlink_clear(SCHEMA_DEV_DIR, g_rules[i].symlink);
+            symlink_clear(dev_base, g_rules[i].symlink);
             fprintf(stderr, "[schema-udev] removed symlink %s/%s\n",
-                    SCHEMA_DEV_DIR, g_rules[i].symlink);
+                    dev_base, g_rules[i].symlink);
         }
 
         const char *hook = NULL;
@@ -152,6 +174,11 @@ int main(void) {
     sigprocmask(SIG_BLOCK, &mask, NULL);
     int sfd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (sfd < 0) { fprintf(stderr, "[schema-udev] signalfd: %s\n", strerror(errno)); return 1; }
+
+    g_live = (access(SCHEMA_UDEV_LIVE_FLAG, F_OK) == 0);
+    fprintf(stderr, "[schema-udev] mode=%s (%s)\n",
+            g_live ? "LIVE" : "dry-run",
+            g_live ? "owns real /dev, /dev/disk, ACLs" : "isolated namespaces");
 
     rules_reload();
     disk_links_wipe(SCHEMA_DISK_DIR);
