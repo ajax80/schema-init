@@ -127,5 +127,61 @@ int main(void) {
     snprintf(xdir, sizeof xdir, "%s/devices", t4); rmdir(xdir); rmdir(t4);
 
     printf("test_udev_matcher: dev-match OK\n");
+
+    /* synthetic tree: <root>/devices/A/B ; A=pci+ahci+vendor, B=block */
+    char t5[] = "/tmp/schema-m5-XXXXXX"; assert(mkdtemp(t5));
+    char pp[PATH_MAX];
+    snprintf(pp, sizeof pp, "%s/devices", t5);       assert(mkdir(pp, 0755) == 0);
+    snprintf(pp, sizeof pp, "%s/devices/A", t5);     assert(mkdir(pp, 0755) == 0);
+    snprintf(pp, sizeof pp, "%s/devices/A/B", t5);   assert(mkdir(pp, 0755) == 0);
+    snprintf(pp, sizeof pp, "%s/devices/A/subsystem", t5);  assert(symlink("../../class/pci", pp) == 0);
+    snprintf(pp, sizeof pp, "%s/devices/A/driver", t5);     assert(symlink("../../bus/ahci", pp) == 0);
+    snprintf(pp, sizeof pp, "%s/devices/A/vendor", t5);
+    { FILE *f = fopen(pp, "w"); fputs("0x8086\n", f); fclose(f); }
+    snprintf(pp, sizeof pp, "%s/devices/A/B/subsystem", t5); assert(symlink("../../../class/block", pp) == 0);
+    snprintf(pp, sizeof pp, "%s/devices/A/B/onlyB", t5);
+    { FILE *f = fopen(pp, "w"); fputs("x\n", f); fclose(f); }
+
+    struct uevent evp; memset(&evp, 0, sizeof evp);
+    ue_set(&evp, "ACTION", "add");
+    ue_set(&evp, "DEVPATH", "/devices/A/B");
+    ue_set(&evp, "SUBSYSTEM", "block");
+    struct dev_ctx cp; assert(dev_ctx_init(&cp, &evp, t5) == 0);
+    struct rule pr;
+
+    /* all three satisfied by ancestor A -> match, matched_parent == "A" */
+    ruleset_parse_line("SUBSYSTEMS==\"pci\", DRIVERS==\"ahci\", ATTRS{vendor}==\"0x8086\"", &pr);
+    assert(rule_match(&pr, &cp) == 1);
+    assert(strcmp(cp.matched_parent, "A") == 0);
+
+    /* value mismatch on the same ancestor -> no match */
+    ruleset_parse_line("SUBSYSTEMS==\"pci\", ATTRS{vendor}==\"0xbeef\"", &pr);
+    assert(rule_match(&pr, &cp) == 0);
+
+    /* THE CRUX: clauses satisfiable only across DIFFERENT ancestors must NOT match
+       (A has pci, B has onlyB; no single ancestor has both) */
+    ruleset_parse_line("SUBSYSTEMS==\"pci\", ATTRS{onlyB}==\"x\"", &pr);
+    assert(rule_match(&pr, &cp) == 0);
+
+    /* device self is included in the walk: SUBSYSTEMS matches B's own subsystem */
+    ruleset_parse_line("SUBSYSTEMS==\"block\"", &pr);
+    assert(rule_match(&pr, &cp) == 1);
+
+    /* device-level and parent-group clauses combine correctly */
+    ruleset_parse_line("KERNEL==\"B\", SUBSYSTEMS==\"pci\", DRIVERS==\"ahci\"", &pr);
+    assert(rule_match(&pr, &cp) == 1);
+
+    /* cleanup */
+    snprintf(pp, sizeof pp, "%s/devices/A/B/subsystem", t5); unlink(pp);
+    snprintf(pp, sizeof pp, "%s/devices/A/B/onlyB", t5);     unlink(pp);
+    snprintf(pp, sizeof pp, "%s/devices/A/B", t5);           rmdir(pp);
+    snprintf(pp, sizeof pp, "%s/devices/A/subsystem", t5);   unlink(pp);
+    snprintf(pp, sizeof pp, "%s/devices/A/driver", t5);      unlink(pp);
+    snprintf(pp, sizeof pp, "%s/devices/A/vendor", t5);      unlink(pp);
+    snprintf(pp, sizeof pp, "%s/devices/A", t5);             rmdir(pp);
+    snprintf(pp, sizeof pp, "%s/devices", t5);               rmdir(pp);
+    rmdir(t5);
+
+    printf("test_udev_matcher: parent-walk OK\n");
     return 0;
 }

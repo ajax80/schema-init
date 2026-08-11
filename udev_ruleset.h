@@ -284,6 +284,45 @@ static inline int match_dev_clause(const struct rule_clause *c, const struct dev
     return -1;   /* parent key (SUBSYSTEMS/…) or R4 conditional (TEST/PROGRAM) */
 }
 
+static inline int rk_is_parent_key(const char *k) {
+    return !strcmp(k, "SUBSYSTEMS") || !strcmp(k, "KERNELS") ||
+           !strcmp(k, "DRIVERS")    || !strcmp(k, "ATTRS")   || !strcmp(k, "TAGS");
+}
+
+static inline int parent_clause_on(const struct rule_clause *c, const char *anc,
+                                   const struct dev_ctx *ctx) {
+    char buf[UE_VAL_MAX];
+    if (!strcmp(c->key, "SUBSYSTEMS"))
+        return rk_cmp(c->op, c->val, pi_subsystem(anc, buf, sizeof buf) == 0 ? buf : NULL);
+    if (!strcmp(c->key, "KERNELS"))
+        return rk_cmp(c->op, c->val, pi_base(anc));
+    if (!strcmp(c->key, "DRIVERS"))
+        return rk_cmp(c->op, c->val, pi_driver(anc, buf, sizeof buf) == 0 ? buf : NULL);
+    if (!strcmp(c->key, "ATTRS"))
+        return rk_cmp(c->op, c->val, pi_sysattr(anc, c->subkey, buf, sizeof buf) == 0 ? buf : NULL);
+    if (!strcmp(c->key, "TAGS")) {
+        int has = 0;
+        for (int i = 0; i < ctx->ntags; i++) if (udev_glob(c->val, ctx->tags[i])) { has = 1; break; }
+        return c->op == OP_MATCH_NE ? !has : has;
+    }
+    return 0;
+}
+
+/* climb from ctx->sysdir (self first) up to sysroot; match iff one ancestor
+ * satisfies ALL nc clauses. Records that ancestor's basename in matched_parent. */
+static inline int parent_group_match(const struct rule_clause *cl, int nc, struct dev_ctx *ctx) {
+    char anc[PATH_MAX];
+    safe_copy(anc, ctx->sysdir, sizeof anc);
+    for (;;) {
+        int all = 1;
+        for (int k = 0; k < nc; k++)
+            if (!parent_clause_on(&cl[k], anc, ctx)) { all = 0; break; }
+        if (all) { safe_copy(ctx->matched_parent, pi_base(anc), UE_KEY_MAX); return 1; }
+        if (strlen(anc) <= strlen(ctx->sysroot)) return 0;   /* don't climb above sysroot */
+        if (pi_parent(anc) != 0) return 0;
+    }
+}
+
 static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
     for (int i = 0; i < r->nclause; i++) {
         const struct rule_clause *c = &r->clause[i];
@@ -291,8 +330,16 @@ static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
         int d = match_dev_clause(c, ctx);
         if (d == 0) return 0;
         if (d == 1) continue;
-        /* d == -1: parent-match group handled in Task 5; other conditionals (R4) skipped */
-        continue;
+        /* d == -1: a parent-match group, or an R4 conditional (TEST/PROGRAM) */
+        if (rk_is_parent_key(c->key)) {
+            int j = i;
+            while (j < r->nclause && rk_is_match_op(r->clause[j].op) &&
+                   rk_is_parent_key(r->clause[j].key)) j++;
+            if (!parent_group_match(&r->clause[i], j - i, ctx)) return 0;
+            i = j - 1;   /* for-loop ++ advances past the group */
+            continue;
+        }
+        continue;   /* unknown match key (TEST/PROGRAM): deferred to R4 */
     }
     return 1;
 }
