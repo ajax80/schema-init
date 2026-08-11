@@ -183,5 +183,35 @@ int main(void) {
     rmdir(t5);
 
     printf("test_udev_matcher: parent-walk OK\n");
+
+    /* live smoke: rule_match on a real block device if present */
+    if (access("/sys/block/sda", F_OK) == 0) {
+        char lnk[PATH_MAX]; ssize_t ln = readlink("/sys/block/sda", lnk, sizeof lnk - 1);
+        assert(ln > 0); lnk[ln] = '\0';
+        const char *dp = strstr(lnk, "/devices/");
+        assert(dp != NULL);
+        struct uevent el; memset(&el, 0, sizeof el);
+        ue_set(&el, "ACTION", "add");
+        ue_set(&el, "DEVPATH", dp);
+        ue_set(&el, "SUBSYSTEM", "block");
+        struct dev_ctx cl; assert(dev_ctx_init(&cl, &el, "/sys") == 0);
+
+        struct rule r;
+        ruleset_parse_line("SUBSYSTEM==\"block\", KERNEL==\"sda\"", &r);
+        assert(rule_match(&r, &cl) == 1);          /* known-true */
+        ruleset_parse_line("SUBSYSTEM==\"net\"", &r);
+        assert(rule_match(&r, &cl) == 0);          /* known-false */
+
+        /* run the whole installed ruleset against the real device: must not crash */
+        const char *real[] = { "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
+        struct ruleset live = {0};
+        assert(ruleset_load_dirs(real, 3, &live) == 0);
+        int matched = 0;
+        for (int i = 0; i < live.n; i++) if (rule_match(&live.rules[i], &cl)) matched++;
+        assert(matched >= 0);
+        free(live.rules);
+    }
+
+    printf("test_udev_matcher: ALL OK\n");
     return 0;
 }
