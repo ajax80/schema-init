@@ -161,4 +161,25 @@ static inline int ruleset_load_dirs(const char *const *dirs, int ndirs, struct r
     return 0;
 }
 
+/* udev glob: split PAT on top-level '|' (respecting [..] classes), fnmatch each. */
+static inline int udev_glob(const char *pat, const char *str) {
+    const char *seg = pat, *p = pat;
+    int inbr = 0;
+    for (;; p++) {
+        if (*p == '[') inbr = 1;
+        else if (*p == ']') inbr = 0;
+        if (*p == '\0' || (*p == '|' && !inbr)) {
+            size_t len = (size_t)(p - seg);
+            char buf[RK_VAL_MAX];
+            if (len < sizeof buf) {
+                memcpy(buf, seg, len); buf[len] = '\0';
+                if (fnmatch(buf, str, 0) == 0) return 1;
+            }
+            if (*p == '\0') break;
+            seg = p + 1;
+        }
+    }
+    return 0;
+}
+
 #endif /* UDEV_RULESET_H */
