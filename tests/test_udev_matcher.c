@@ -51,6 +51,36 @@ int main(void) {
     assert(dev_ctx_init(&ctx2, &ev3, "/sys") == -1);   /* no DEVPATH */
     unlink(dl); rmdir(dvd); rmdir(dvd2); rmdir(t2);
 
+    struct uevent evs; memset(&evs, 0, sizeof evs);
+    ue_set(&evs, "ACTION", "add");
+    ue_set(&evs, "DEVPATH", "/devices/pci/ata1/block/sda/sda3");
+    ue_set(&evs, "MAJOR", "8");
+    ue_set(&evs, "MINOR", "3");
+    ue_set(&evs, "ID_BUS", "ata");
+    struct dev_ctx cs; assert(dev_ctx_init(&cs, &evs, "/sys") == 0);
+    char o[256];
+
+    ruleset_subst("k=%k n=%n M=%M m=%m", &cs, o, sizeof o);
+    assert(strcmp(o, "k=sda3 n=3 M=8 m=3") == 0);
+    ruleset_subst("$env{ID_BUS}-$kernel", &cs, o, sizeof o);
+    assert(strcmp(o, "ata-sda3") == 0);
+    ruleset_subst("p=$devpath", &cs, o, sizeof o);
+    assert(strcmp(o, "p=/devices/pci/ata1/block/sda/sda3") == 0);
+    ruleset_subst("100%%$$done", &cs, o, sizeof o);
+    assert(strcmp(o, "100%$done") == 0);
+    /* deferred tokens copied verbatim */
+    ruleset_subst("x$result-$links-%c-$name", &cs, o, sizeof o);
+    assert(strcmp(o, "x$result-$links-%c-$name") == 0);
+    /* $id / %b reads matched_parent */
+    safe_copy(cs.matched_parent, "0000:00:1f.2", sizeof cs.matched_parent);
+    ruleset_subst("$id|%b", &cs, o, sizeof o);
+    assert(strcmp(o, "0000:00:1f.2|0000:00:1f.2") == 0);
+    /* sz==0: no crash, no out-of-bounds write */
+    char z[1] = {0x7f};
+    ruleset_subst("$$", &cs, z, 0);
+    assert(z[0] == 0x7f);
+
+    printf("test_udev_matcher: subst OK\n");
     printf("test_udev_matcher: glob OK\n");
     printf("test_udev_matcher: ctx OK\n");
     return 0;

@@ -205,4 +205,55 @@ static inline int dev_ctx_init(struct dev_ctx *ctx, struct uevent *ev, const cha
     return 0;
 }
 
+static inline void rs_app(char *out, size_t sz, size_t *o, const char *s) {
+    if (!s) return;
+    while (*s && *o + 1 < sz) out[(*o)++] = *s++;
+    if (sz) out[*o] = '\0';
+}
+
+/* Expand match-resolvable substitution tokens; deferred/unknown copied verbatim. */
+static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char *out, size_t sz) {
+    size_t o = 0; if (sz) out[0] = '\0';
+    const char *dp = uevent_get(ctx->ev, "DEVPATH");
+    const char *kname = dp ? pi_base(dp) : "";
+    for (const char *p = in; *p; ) {
+        if (*p != '$' && *p != '%') { if (o + 1 < sz) { out[o++] = *p; out[o] = '\0'; } p++; continue; }
+        char sig = *p;
+        if (sig == '$' && p[1] == '$') { rs_app(out, sz, &o, "$"); p += 2; continue; }
+        if (sig == '%' && p[1] == '%') { rs_app(out, sz, &o, "%"); p += 2; continue; }
+        const char *q = p + 1;
+        char name[32]; size_t nl = 0;
+        if (sig == '$') { while (((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z')) && nl < sizeof name - 1) name[nl++] = *q++; }
+        else if (*q) { name[nl++] = *q++; }   /* % form: single letter */
+        name[nl] = '\0';
+        char arg[128]; arg[0] = '\0';
+        if (*q == '{') { const char *e = strchr(q, '}');
+            if (e) { size_t al = (size_t)(e - (q + 1)); if (al < sizeof arg) { memcpy(arg, q + 1, al); arg[al] = '\0'; } q = e + 1; } }
+        char tmp[UE_VAL_MAX];
+        const char *rep = NULL; int known = 1;
+        if      ((sig == '$' && !strcmp(name, "kernel"))  || (sig == '%' && !strcmp(name, "k"))) rep = kname;
+        else if ((sig == '$' && !strcmp(name, "number"))  || (sig == '%' && !strcmp(name, "n"))) {
+            const char *d = kname + strlen(kname); while (d > kname && d[-1] >= '0' && d[-1] <= '9') d--; rep = d; }
+        else if ((sig == '$' && !strcmp(name, "devpath")) || (sig == '%' && !strcmp(name, "p"))) rep = dp ? dp : "";
+        else if ((sig == '$' && !strcmp(name, "id"))      || (sig == '%' && !strcmp(name, "b"))) rep = ctx->matched_parent;
+        else if ((sig == '$' && !strcmp(name, "major"))   || (sig == '%' && !strcmp(name, "M"))) rep = uevent_get(ctx->ev, "MAJOR");
+        else if ((sig == '$' && !strcmp(name, "minor"))   || (sig == '%' && !strcmp(name, "m"))) rep = uevent_get(ctx->ev, "MINOR");
+        else if  (sig == '$' && !strcmp(name, "driver"))  rep = uevent_get(ctx->ev, "DRIVER");
+        else if ((sig == '$' && !strcmp(name, "sys"))     || (sig == '%' && !strcmp(name, "S"))) rep = ctx->sysroot;
+        else if ((sig == '$' && !strcmp(name, "root"))    || (sig == '%' && !strcmp(name, "r"))) rep = "/dev";
+        else if ((sig == '$' && !strcmp(name, "env"))     || (sig == '%' && !strcmp(name, "E"))) rep = uevent_get(ctx->ev, arg);
+        else if ((sig == '$' && !strcmp(name, "attr"))    || (sig == '%' && !strcmp(name, "s"))) {
+            rep = (pi_sysattr(ctx->sysdir, arg, tmp, sizeof tmp) == 0) ? tmp : ""; }
+        else known = 0;
+        if (known) { rs_app(out, sz, &o, rep ? rep : ""); p = q; }
+        else {
+            /* deferred/unknown token: copy [p, q) verbatim */
+            size_t tl = (size_t)(q - p); char tk[160];
+            if (tl < sizeof tk) { memcpy(tk, p, tl); tk[tl] = '\0'; rs_app(out, sz, &o, tk); }
+            p = q;
+        }
+    }
+    return 0;
+}
+
 #endif /* UDEV_RULESET_H */
