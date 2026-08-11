@@ -64,6 +64,30 @@ int main(void) {
     assert(sc.nsym == 0);
     printf("test_udev_executor: symlink-ops OK\n");
 
+    struct dev_ctx oc; memset(&oc, 0, sizeof oc);
+    apply_options(&oc, "link_priority=10");
+    assert(oc.link_priority == 10);
+    apply_options(&oc, "string_escape=replace");
+    assert(oc.escape == 1);
+    apply_options(&oc, "string_escape=none");
+    assert(oc.escape == 0);
+    apply_options(&oc, "static_node=foo");           /* no-op, no crash */
+    apply_options(&oc, "db_persist, link_priority=-5"); /* mixed list */
+    assert(oc.link_priority == -5);
+
+    struct rule_clause c1; memset(&c1, 0, sizeof c1);
+    safe_copy(c1.key, "NAME", sizeof c1.key);
+    assert(ctx_key_final(&oc, &c1) == 0);
+    ctx_lock_final(&oc, &c1);
+    assert(ctx_key_final(&oc, &c1) == 1);
+    ctx_lock_final(&oc, &c1);                          /* idempotent */
+    assert(oc.nfinal == 1);
+    struct rule_clause c2; memset(&c2, 0, sizeof c2);
+    safe_copy(c2.key, "ENV", sizeof c2.key);
+    safe_copy(c2.subkey, "FOO", sizeof c2.subkey);
+    assert(ctx_key_final(&oc, &c2) == 0);              /* ENV{FOO} distinct from NAME */
+    printf("test_udev_executor: options+final OK\n");
+
     printf("test_udev_executor: uevent_set OK\n");
     printf("test_udev_executor: ALL OK\n");
     return 0;

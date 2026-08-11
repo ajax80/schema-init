@@ -422,4 +422,37 @@ static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
     return 1;
 }
 
+static inline void ctx_final_token(const struct rule_clause *c, char *out, size_t sz) {
+    if (c->subkey[0]) snprintf(out, sz, "%s{%s}", c->key, c->subkey);
+    else              snprintf(out, sz, "%s", c->key);
+}
+
+static inline int ctx_key_final(const struct dev_ctx *ctx, const struct rule_clause *c) {
+    char tok[RK_KEY_MAX + RK_SUB_MAX + 2]; ctx_final_token(c, tok, sizeof tok);
+    for (int i = 0; i < ctx->nfinal; i++) if (!strcmp(ctx->final_keys[i], tok)) return 1;
+    return 0;
+}
+
+static inline void ctx_lock_final(struct dev_ctx *ctx, const struct rule_clause *c) {
+    if (ctx_key_final(ctx, c) || ctx->nfinal >= DEVCTX_FINAL_MAX) return;
+    ctx_final_token(c, ctx->final_keys[ctx->nfinal++], RK_KEY_MAX + RK_SUB_MAX + 2);
+}
+
+static inline void apply_options(struct dev_ctx *ctx, const char *val) {
+    const char *p = val;
+    while (*p) {
+        while (*p == ',' || *p == ' ' || *p == '\t') p++;
+        const char *s = p;
+        while (*p && *p != ',' && *p != ' ' && *p != '\t') p++;
+        size_t len = (size_t)(p - s);
+        char tok[128];
+        if (len == 0 || len >= sizeof tok) continue;
+        memcpy(tok, s, len); tok[len] = '\0';
+        if      (!strncmp(tok, "link_priority=", 14)) ctx->link_priority = atoi(tok + 14);
+        else if (!strcmp(tok, "string_escape=replace")) ctx->escape = 1;
+        else if (!strcmp(tok, "string_escape=none"))    ctx->escape = 0;
+        /* static_node=, watch, nowatch, db_persist, ... : tracked no-ops */
+    }
+}
+
 #endif /* UDEV_RULESET_H */
