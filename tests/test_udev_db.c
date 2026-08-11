@@ -68,6 +68,31 @@ int main(void) {
     /* overflow -> -1, nothing usable */
     assert(udev_db_record_build(&d, kernel_n, rec, 3) == -1);
 
+    /* full record: S: symlinks, I: init usec, E: props, G:/Q: tags, V: last */
+    const char *syms[] = { "disk/by-id/foo", "disk/by-diskseq/24" };
+    const char *tags[] = { "uaccess", "systemd" };
+    ssize_t fn = udev_db_record_build_full(&d, kernel_n, syms, 2, 3205703LL,
+                                           tags, 2, rec, sizeof rec);
+    assert(fn > 0);
+    assert(strcmp(rec,
+        "S:disk/by-id/foo\n"
+        "S:disk/by-diskseq/24\n"
+        "I:3205703\n"
+        "E:ID_FS_TYPE=ext4\n"
+        "E:ID_FS_UUID=abc\n"
+        "G:uaccess\n"
+        "G:systemd\n"
+        "Q:uaccess\n"
+        "Q:systemd\n"
+        "V:1\n") == 0);
+    /* no symlinks -> no S: lines; usec 0 -> no I: line; no tags -> no G:/Q: */
+    ssize_t fn2 = udev_db_record_build_full(&d, kernel_n, NULL, 0, 0,
+                                            NULL, 0, rec, sizeof rec);
+    assert(fn2 > 0);
+    assert(strcmp(rec, "E:ID_FS_TYPE=ext4\nE:ID_FS_UUID=abc\nV:1\n") == 0);
+    assert(strstr(rec, "S:") == NULL && strstr(rec, "I:") == NULL &&
+           strstr(rec, "G:") == NULL && strstr(rec, "Q:") == NULL);
+
     /* remove unlinks the record; a second remove is still success (ENOENT) */
     assert(udev_db_remove(base, &d) == 0);
     struct uevent gone;

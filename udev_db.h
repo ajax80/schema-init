@@ -48,6 +48,50 @@ static inline ssize_t udev_db_record_build(const struct uevent *ev, int kernel_n
     return (ssize_t)used;
 }
 
+/* Full udev-db record: S: symlinks, I: init usec, E: derived props, G:/Q: tags,
+ * V: version last. Byte-order matches real /run/udev/data records. */
+static inline ssize_t udev_db_record_build_full(const struct uevent *ev, int kernel_n,
+                                                const char *const *symlinks, int nsym,
+                                                long long usec_init,
+                                                const char *const *tags, int ntag,
+                                                char *buf, size_t bufsz) {
+    size_t used = 0;
+    int w;
+    for (int i = 0; i < nsym; i++) {
+        if (!symlinks[i] || !symlinks[i][0]) continue;
+        w = snprintf(buf + used, bufsz - used, "S:%s\n", symlinks[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    if (usec_init > 0) {
+        w = snprintf(buf + used, bufsz - used, "I:%lld\n", usec_init);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    for (int i = kernel_n; i < ev->n; i++) {
+        if (!ev->key[i][0] || !ev->val[i][0]) continue;
+        w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    for (int i = 0; i < ntag; i++) {
+        if (!tags[i] || !tags[i][0]) continue;
+        w = snprintf(buf + used, bufsz - used, "G:%s\n", tags[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    for (int i = 0; i < ntag; i++) {
+        if (!tags[i] || !tags[i][0]) continue;
+        w = snprintf(buf + used, bufsz - used, "Q:%s\n", tags[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    w = snprintf(buf + used, bufsz - used, "V:1\n");
+    if (w < 0 || (size_t)w >= bufsz - used) return -1;
+    used += (size_t)w;
+    return (ssize_t)used;
+}
+
 static inline int udev_db_ensure_dir(const char *d) {
     if (mkdir(d, 0755) == 0 || errno == EEXIST) return 0;
     if (errno != ENOENT) return -1;
