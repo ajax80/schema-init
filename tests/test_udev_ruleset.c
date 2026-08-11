@@ -80,5 +80,28 @@ int main(void) {
     unlink(tmpl);
 
     printf("test_udev_ruleset: file OK\n");
+
+    /* two dirs; /etc overrides /usr/lib for same basename; lexical order across names */
+    char d1[] = "/tmp/schema-rd1-XXXXXX"; assert(mkdtemp(d1));
+    char d2[] = "/tmp/schema-rd2-XXXXXX"; assert(mkdtemp(d2));
+    char pa[256], pb[256], pc[256];
+    snprintf(pa, sizeof pa, "%s/50-a.rules", d1);
+    snprintf(pb, sizeof pb, "%s/90-z.rules", d1);
+    snprintf(pc, sizeof pc, "%s/50-a.rules", d2);   /* overrides d1's 50-a */
+    FILE *fa = fopen(pa, "w"); fputs("KERNEL==\"fromd1\"\n", fa); fclose(fa);
+    FILE *fb = fopen(pb, "w"); fputs("KERNEL==\"zlast\"\n", fb); fclose(fb);
+    FILE *fc = fopen(pc, "w"); fputs("KERNEL==\"fromd2\"\n", fc); fclose(fc);
+
+    const char *dirs[] = { d1, d2 };   /* d2 = higher precedence */
+    struct ruleset rs2 = {0};
+    assert(ruleset_load_dirs(dirs, 2, &rs2) == 0);
+    assert(rs2.n == 2);
+    /* 50-a comes before 90-z lexically; 50-a resolved from d2 */
+    assert(strcmp(rs2.rules[0].clause[0].val, "fromd2") == 0);
+    assert(strcmp(rs2.rules[1].clause[0].val, "zlast") == 0);
+    free(rs2.rules);
+    unlink(pa); unlink(pb); unlink(pc); rmdir(d1); rmdir(d2);
+
+    printf("test_udev_ruleset: dirs OK\n");
     return 0;
 }

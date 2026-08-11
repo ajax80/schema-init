@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <dirent.h>
 
 #define RK_KEY_MAX 32
 #define RK_SUB_MAX 128
@@ -120,6 +121,43 @@ static inline int ruleset_load_file(const char *path, struct ruleset *rs) {
         llen = 0; logical[0] = '\0';
     }
     fclose(f);
+    return 0;
+}
+
+/* Resolve *.rules basenames across dirs (later dir wins), process in lexical
+ * basename order. Bounded to 1024 unique rule files. */
+static inline int ruleset_load_dirs(const char *const *dirs, int ndirs, struct ruleset *rs) {
+    char names[1024][64];
+    char owner[1024][256];   /* full path of winning dir for that basename */
+    int nn = 0;
+    for (int di = 0; di < ndirs; di++) {
+        DIR *d = opendir(dirs[di]);
+        if (!d) continue;
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            size_t l = strlen(e->d_name);
+            if (l < 7 || strcmp(e->d_name + l - 6, ".rules") != 0) continue;
+            if (l >= sizeof names[0]) continue;
+            int found = -1;
+            for (int i = 0; i < nn; i++) if (strcmp(names[i], e->d_name) == 0) { found = i; break; }
+            if (found < 0) {
+                if (nn >= 1024) continue;
+                found = nn++;
+                safe_copy(names[found], e->d_name, sizeof names[0]);
+            }
+            snprintf(owner[found], sizeof owner[0], "%s/%s", dirs[di], names[found]);
+        }
+        closedir(d);
+    }
+    /* insertion sort basenames lexically, carrying owner path */
+    for (int i = 1; i < nn; i++)
+        for (int j = i; j > 0 && strcmp(names[j-1], names[j]) > 0; j--) {
+            char tn[64]; safe_copy(tn, names[j-1], sizeof tn);
+            safe_copy(names[j-1], names[j], sizeof tn); safe_copy(names[j], tn, sizeof tn);
+            char to[256]; safe_copy(to, owner[j-1], sizeof to);
+            safe_copy(owner[j-1], owner[j], sizeof to); safe_copy(owner[j], to, sizeof to);
+        }
+    for (int i = 0; i < nn; i++) ruleset_load_file(owner[i], rs);
     return 0;
 }
 
