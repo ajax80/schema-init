@@ -4,6 +4,7 @@
 #include "schema-udev.h"   /* safe_copy */
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #define RK_KEY_MAX 32
 #define RK_SUB_MAX 128
@@ -82,6 +83,44 @@ static inline int ruleset_parse_line(const char *line, struct rule *out) {
         if (*p == ',') p++;
     }
     return out->nclause;
+}
+
+static inline int ruleset_append(struct ruleset *rs, const struct rule *r) {
+    if (rs->n >= rs->cap) {
+        int ncap = rs->cap ? rs->cap * 2 : 64;
+        struct rule *nr = realloc(rs->rules, (size_t)ncap * sizeof *nr);
+        if (!nr) return -1;
+        rs->rules = nr; rs->cap = ncap;
+    }
+    rs->rules[rs->n++] = *r;
+    return 0;
+}
+
+static inline int ruleset_load_file(const char *path, struct ruleset *rs) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char logical[4096]; size_t llen = 0; int cont = 0;
+    char line[2048];
+    while (fgets(line, sizeof line, f)) {
+        size_t len = strlen(line);
+        while (len && (line[len-1] == '\n' || line[len-1] == '\r')) line[--len] = '\0';
+        const char *s = line;
+        if (!cont) { while (*s == ' ' || *s == '\t') s++; }
+        cont = 0;
+        if (len && line[len-1] == '\\') { line[--len] = '\0'; cont = 1;
+            /* re-trim s length after removing backslash */
+            len = strlen(s); }
+        else len = strlen(s);
+        if (llen + strlen(s) < sizeof logical) { memcpy(logical + llen, s, strlen(s)); llen += strlen(s); logical[llen] = '\0'; }
+        if (cont) continue;
+        if (llen && logical[0] != '#') {
+            struct rule r;
+            if (ruleset_parse_line(logical, &r) > 0) ruleset_append(rs, &r);
+        }
+        llen = 0; logical[0] = '\0';
+    }
+    fclose(f);
+    return 0;
 }
 
 #endif /* UDEV_RULESET_H */

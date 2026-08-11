@@ -2,6 +2,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <stdlib.h>
 
 int main(void) {
     struct rule_clause c;
@@ -54,5 +56,29 @@ int main(void) {
     assert(ruleset_parse_line("   ", &r) == 0);
 
     printf("test_udev_ruleset: line OK\n");
+
+    /* file with a comment, a continuation, and two rules */
+    char tmpl[] = "/tmp/schema-ruleset-XXXXXX";
+    int fd = mkstemp(tmpl); assert(fd >= 0);
+    const char *content =
+        "# a comment\n"
+        "ACTION!=\"remove\", SUBSYSTEM==\"block\", \\\n"
+        "  KERNEL==\"sd*|vd*\", OPTIONS+=\"watch\"\n"
+        "\n"
+        "LABEL=\"end\"\n";
+    assert(write(fd, content, strlen(content)) == (ssize_t)strlen(content));
+    close(fd);
+
+    struct ruleset rs = {0};
+    assert(ruleset_load_file(tmpl, &rs) == 0);
+    assert(rs.n == 2);
+    assert(rs.rules[0].nclause == 4);
+    assert(strcmp(rs.rules[0].clause[2].key, "KERNEL") == 0 &&
+           strcmp(rs.rules[0].clause[2].val, "sd*|vd*") == 0);
+    assert(strcmp(rs.rules[1].clause[0].key, "LABEL") == 0);
+    free(rs.rules);
+    unlink(tmpl);
+
+    printf("test_udev_ruleset: file OK\n");
     return 0;
 }
