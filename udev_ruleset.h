@@ -61,4 +61,27 @@ static inline int ruleset_parse_clause(const char *s, struct rule_clause *out) {
     return 0;
 }
 
+/* Split on top-level commas (quotes are literal), parse each as a clause. */
+static inline int ruleset_parse_line(const char *line, struct rule *out) {
+    out->nclause = 0;
+    const char *p = line;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        /* find end of this clause: next top-level comma */
+        const char *seg = p;
+        int inq = 0;
+        while (*p && !(*p == ',' && !inq)) { if (*p == '"') inq = !inq; p++; }
+        size_t seglen = (size_t)(p - seg);
+        char buf[RK_KEY_MAX + RK_SUB_MAX + RK_VAL_MAX + 8];
+        if (seglen == 0 || seglen >= sizeof buf) { if (*p == ',') p++; continue; }
+        memcpy(buf, seg, seglen); buf[seglen] = '\0';
+        if (out->nclause >= RULE_MAX_CLAUSES) return -1;
+        if (ruleset_parse_clause(buf, &out->clause[out->nclause]) != 0) return -1;
+        out->nclause++;
+        if (*p == ',') p++;
+    }
+    return out->nclause;
+}
+
 #endif /* UDEV_RULESET_H */

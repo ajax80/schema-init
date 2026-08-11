@@ -36,5 +36,23 @@ int main(void) {
     assert(ruleset_parse_clause("ACTION add", &c) == -1);
 
     printf("test_udev_ruleset: clause OK\n");
+
+    struct rule r;
+    int nc = ruleset_parse_line(
+        "ACTION==\"change\", SUBSYSTEM==\"block\", KERNEL==\"loop*\", GROUP=\"disk\", MODE=\"660\"", &r);
+    assert(nc == 5 && r.nclause == 5);
+    assert(strcmp(r.clause[0].key, "ACTION") == 0 && r.clause[0].op == OP_MATCH_EQ);
+    assert(strcmp(r.clause[3].key, "GROUP") == 0 && strcmp(r.clause[3].val, "disk") == 0);
+    assert(strcmp(r.clause[4].key, "MODE") == 0 && strcmp(r.clause[4].val, "660") == 0);
+
+    /* GOTO / LABEL are single-clause lines */
+    assert(ruleset_parse_line("ACTION==\"remove\", GOTO=\"uaccess_end\"", &r) == 2);
+    assert(strcmp(r.clause[1].key, "GOTO") == 0 && strcmp(r.clause[1].val, "uaccess_end") == 0);
+    assert(ruleset_parse_line("LABEL=\"uaccess_end\"", &r) == 1);
+
+    /* blank line -> 0 clauses */
+    assert(ruleset_parse_line("   ", &r) == 0);
+
+    printf("test_udev_ruleset: line OK\n");
     return 0;
 }
