@@ -99,6 +99,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_coldplug.c -o /tmp/schema-test-coldplug && /tmp/schema-test-coldplug
 	$(CC) $(CFLAGS) tests/test_libudev_frame.c -o /tmp/schema-test-libudev && /tmp/schema-test-libudev
 	$(CC) $(CFLAGS) tests/test_udev_db.c -o /tmp/schema-test-udevdb && /tmp/schema-test-udevdb
+	$(CC) $(CFLAGS) tests/test_udev_ruleset.c -o /tmp/schema-test-ruleset && /tmp/schema-test-ruleset
 	$(CC) $(CFLAGS) tests/test_parity.c -o /tmp/schema-test-parity && /tmp/schema-test-parity
 	$(CC) $(CFLAGS) tests/test_path_id.c -o /tmp/schema-test-pathid && /tmp/schema-test-pathid
 	$(CC) $(CFLAGS) tests/test_usb_id.c -o /tmp/schema-test-usbid && /tmp/schema-test-usbid

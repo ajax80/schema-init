@@ -103,5 +103,15 @@ int main(void) {
     unlink(pa); unlink(pb); unlink(pc); rmdir(d1); rmdir(d2);
 
     printf("test_udev_ruleset: dirs OK\n");
+
+    /* smoke: real installed set loads and parses a sane number of rules */
+    const char *real[] = { "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
+    struct ruleset live = {0};
+    assert(ruleset_load_dirs(real, 3, &live) == 0);
+    if (access("/usr/lib/udev/rules.d", F_OK) == 0)
+        assert(live.n > 100);   /* 168 files on blakbox -> thousands of rules */
+    free(live.rules);
+
+    printf("test_udev_ruleset: ALL OK\n");
     return 0;
 }
