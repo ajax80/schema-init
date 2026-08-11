@@ -83,5 +83,49 @@ int main(void) {
     printf("test_udev_matcher: subst OK\n");
     printf("test_udev_matcher: glob OK\n");
     printf("test_udev_matcher: ctx OK\n");
+
+    /* device-level matching, incl. an ATTR read from a synthetic sysdir */
+    char t4[] = "/tmp/schema-m4-XXXXXX"; assert(mkdtemp(t4));
+    char xdir[PATH_MAX]; snprintf(xdir, sizeof xdir, "%s/devices", t4); assert(mkdir(xdir, 0755) == 0);
+    snprintf(xdir, sizeof xdir, "%s/devices/sda", t4); assert(mkdir(xdir, 0755) == 0);
+    char af[PATH_MAX]; snprintf(af, sizeof af, "%s/devices/sda/serial", t4);
+    FILE *sf = fopen(af, "w"); fputs("ABC123\n", sf); fclose(sf);
+
+    struct uevent evm; memset(&evm, 0, sizeof evm);
+    ue_set(&evm, "ACTION", "add");
+    ue_set(&evm, "DEVPATH", "/devices/sda");
+    ue_set(&evm, "SUBSYSTEM", "block");
+    ue_set(&evm, "DRIVER", "sd");
+    ue_set(&evm, "ID_FS_TYPE", "ext4");
+    struct dev_ctx cm; assert(dev_ctx_init(&cm, &evm, t4) == 0);
+    safe_copy(cm.tags[cm.ntags++], "systemd", UE_KEY_MAX);
+
+    struct rule r;
+    ruleset_parse_line("ACTION==\"add\", SUBSYSTEM==\"block\", KERNEL==\"sd*\"", &r);
+    assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("SUBSYSTEM==\"net\"", &r);
+    assert(rule_match(&r, &cm) == 0);
+    ruleset_parse_line("ACTION!=\"remove\", ENV{ID_FS_TYPE}==\"ext4\"", &r);
+    assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("ENV{NOPE}==\"x\"", &r);          /* missing => == fails */
+    assert(rule_match(&r, &cm) == 0);
+    ruleset_parse_line("ENV{NOPE}!=\"x\"", &r);          /* missing => != passes */
+    assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("ATTR{serial}==\"ABC123\"", &r);  /* sysfs attr read */
+    assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("ATTR{serial}==\"WRONG\"", &r);
+    assert(rule_match(&r, &cm) == 0);
+    ruleset_parse_line("TAG==\"systemd\"", &r);
+    assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("TAG==\"seat\"", &r);
+    assert(rule_match(&r, &cm) == 0);
+    /* assignment clauses are ignored by the matcher */
+    ruleset_parse_line("SUBSYSTEM==\"block\", SYMLINK+=\"disk/by-x\"", &r);
+    assert(rule_match(&r, &cm) == 1);
+
+    unlink(af); rmdir(xdir);
+    snprintf(xdir, sizeof xdir, "%s/devices", t4); rmdir(xdir); rmdir(t4);
+
+    printf("test_udev_matcher: dev-match OK\n");
     return 0;
 }

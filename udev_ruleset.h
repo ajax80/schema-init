@@ -256,4 +256,45 @@ static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char 
     return 0;
 }
 
+static inline int rk_is_match_op(enum rule_op op) { return op == OP_MATCH_EQ || op == OP_MATCH_NE; }
+
+static inline int rk_cmp(enum rule_op op, const char *pat, const char *actual) {
+    int m = (actual != NULL) && udev_glob(pat, actual);
+    return (op == OP_MATCH_NE) ? !m : m;
+}
+
+/* 1 match / 0 nomatch / -1 not a device-level key */
+static inline int match_dev_clause(const struct rule_clause *c, const struct dev_ctx *ctx) {
+    const struct uevent *ev = ctx->ev;
+    if (!strcmp(c->key, "ACTION"))    return rk_cmp(c->op, c->val, uevent_get(ev, "ACTION"));
+    if (!strcmp(c->key, "DEVPATH"))   return rk_cmp(c->op, c->val, uevent_get(ev, "DEVPATH"));
+    if (!strcmp(c->key, "SUBSYSTEM")) return rk_cmp(c->op, c->val, uevent_get(ev, "SUBSYSTEM"));
+    if (!strcmp(c->key, "DRIVER"))    return rk_cmp(c->op, c->val, uevent_get(ev, "DRIVER"));
+    if (!strcmp(c->key, "KERNEL"))    { const char *dp = uevent_get(ev, "DEVPATH");
+                                        return rk_cmp(c->op, c->val, dp ? pi_base(dp) : NULL); }
+    if (!strcmp(c->key, "ENV"))       return rk_cmp(c->op, c->val, uevent_get(ev, c->subkey));
+    if (!strcmp(c->key, "ATTR"))      { char b[UE_VAL_MAX];
+                                        int ok = pi_sysattr(ctx->sysdir, c->subkey, b, sizeof b) == 0;
+                                        return rk_cmp(c->op, c->val, ok ? b : NULL); }
+    if (!strcmp(c->key, "TAG")) {
+        int has = 0;
+        for (int i = 0; i < ctx->ntags; i++) if (udev_glob(c->val, ctx->tags[i])) { has = 1; break; }
+        return c->op == OP_MATCH_NE ? !has : has;
+    }
+    return -1;   /* parent key (SUBSYSTEMS/…) or R4 conditional (TEST/PROGRAM) */
+}
+
+static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
+    for (int i = 0; i < r->nclause; i++) {
+        const struct rule_clause *c = &r->clause[i];
+        if (!rk_is_match_op(c->op)) continue;    /* assignments: R3 */
+        int d = match_dev_clause(c, ctx);
+        if (d == 0) return 0;
+        if (d == 1) continue;
+        /* d == -1: parent-match group handled in Task 5; other conditionals (R4) skipped */
+        continue;
+    }
+    return 1;
+}
+
 #endif /* UDEV_RULESET_H */
