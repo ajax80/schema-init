@@ -237,6 +237,39 @@ static inline void ctx_del_tag(struct dev_ctx *ctx, const char *t) {
 
 static inline void ctx_clear_tags(struct dev_ctx *ctx) { ctx->ntags = 0; }
 
+static inline int udev_wl_ok(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') ||
+           c == '#' || c == '+' || c == '-' || c == '.' ||
+           c == ':' || c == '=' || c == '@' || c == '_' || c == '/';
+}
+
+static inline void udev_replace_chars(const char *in, char *out, size_t sz) {
+    size_t o = 0;
+    for (const char *p = in; *p && o + 1 < sz; p++)
+        out[o++] = udev_wl_ok(*p) ? *p : '_';
+    if (sz) out[o] = '\0';
+}
+
+static inline void ctx_add_symlink(struct dev_ctx *ctx, const char *link) {
+    if (!link || !*link) return;
+    for (int i = 0; i < ctx->nsym; i++) if (!strcmp(ctx->symlinks[i], link)) return;
+    if (ctx->nsym >= DEVCTX_SYMLINKS_MAX) return;
+    safe_copy(ctx->symlinks[ctx->nsym++], link, UE_VAL_MAX);
+}
+
+static inline void ctx_del_symlink(struct dev_ctx *ctx, const char *link) {
+    int w = 0;
+    for (int i = 0; i < ctx->nsym; i++)
+        if (strcmp(ctx->symlinks[i], link) != 0) {
+            if (w != i) safe_copy(ctx->symlinks[w], ctx->symlinks[i], UE_VAL_MAX);
+            w++;
+        }
+    ctx->nsym = w;
+}
+
+static inline void ctx_clear_symlinks(struct dev_ctx *ctx) { ctx->nsym = 0; }
+
 static inline int uevent_set(struct uevent *ev, const char *key, const char *val) {
     for (int i = 0; i < ev->n; i++)
         if (!strcmp(ev->key[i], key)) { safe_copy(ev->val[i], val, UE_VAL_MAX); return 0; }

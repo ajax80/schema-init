@@ -46,6 +46,24 @@ int main(void) {
     assert(tc.ntags == 0);
     printf("test_udev_executor: tag-ops OK\n");
 
+    char esc[64];
+    udev_replace_chars("a b/c", esc, sizeof esc);   /* space -> _, '/' kept */
+    assert(strcmp(esc, "a_b/c") == 0);
+    udev_replace_chars("wwn-0x5!bad", esc, sizeof esc); /* '!' -> _ */
+    assert(strcmp(esc, "wwn-0x5_bad") == 0);
+
+    struct dev_ctx sc; memset(&sc, 0, sizeof sc);
+    ctx_add_symlink(&sc, "disk/by-id/a");
+    ctx_add_symlink(&sc, "disk/by-id/a");           /* dedupe */
+    ctx_add_symlink(&sc, "disk/by-path/b");
+    ctx_add_symlink(&sc, "");                        /* empty: no-op */
+    assert(sc.nsym == 2);
+    ctx_del_symlink(&sc, "disk/by-id/a");
+    assert(sc.nsym == 1 && strcmp(sc.symlinks[0], "disk/by-path/b") == 0);
+    ctx_clear_symlinks(&sc);
+    assert(sc.nsym == 0);
+    printf("test_udev_executor: symlink-ops OK\n");
+
     printf("test_udev_executor: uevent_set OK\n");
     printf("test_udev_executor: ALL OK\n");
     return 0;
