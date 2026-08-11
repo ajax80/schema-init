@@ -180,6 +180,19 @@ int main(void) {
     assert(fc.deferred_applies > 0);
     free(rs3.rules);
 
+    /* deferred gate: PROGRAM= (assign-op) still applies (superset) and bumps the counter */
+    struct dev_ctx pc; memset(&pc, 0, sizeof pc);
+    struct uevent pe; memset(&pe, 0, sizeof pe);
+    ue_set(&pe, "ACTION", "add"); ue_set(&pe, "DEVPATH", "/devices/p");
+    ue_set(&pe, "SUBSYSTEM", "drm");
+    assert(dev_ctx_init(&pc, &pe, "/sys") == 0);
+    struct ruleset rs5 = {0};
+    ADD(&rs5, "SUBSYSTEM==\"drm\", PROGRAM=\"/nonexistent/helper\", TAG+=\"prog_superset\"");
+    assert(ruleset_apply(&rs5, &pc) == 0);
+    assert(pc.ntags == 1 && strcmp(pc.tags[0], "prog_superset") == 0);
+    assert(pc.deferred_applies > 0);
+    free(rs5.rules);
+
     /* GOTO to a missing label stops cleanly (no crash, no later apply) */
     struct dev_ctx mc; memset(&mc, 0, sizeof mc);
     struct uevent me; memset(&me, 0, sizeof me);

@@ -405,7 +405,10 @@ static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
     ctx->last_rule_deferred = 0;
     for (int i = 0; i < r->nclause; i++) {
         const struct rule_clause *c = &r->clause[i];
-        if (!rk_is_match_op(c->op)) continue;    /* assignments: R3 */
+        if (!rk_is_match_op(c->op)) {
+            if (!strcmp(c->key, "PROGRAM")) ctx->last_rule_deferred = 1;  /* deferred gate (assign-op) */
+            continue;    /* assignments: R3 */
+        }
         int d = match_dev_clause(c, ctx);
         if (d == 0) return 0;
         if (d == 1) continue;
