@@ -2,6 +2,7 @@
 #define UDEV_RULESET_H
 
 #include "schema-udev.h"   /* safe_copy */
+#include "path_id.h"   /* pi_parent, pi_sysattr, pi_subsystem, pi_base, pi_driver */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -179,6 +180,28 @@ static inline int udev_glob(const char *pat, const char *str) {
             seg = p + 1;
         }
     }
+    return 0;
+}
+
+#define DEVCTX_TAGS_MAX 32
+
+struct dev_ctx {
+    struct uevent *ev;                          /* properties; mutable (R3 grows) */
+    const char    *sysroot;                     /* e.g. "/sys" */
+    char           sysdir[PATH_MAX];            /* absolute sysfs dir of device */
+    char           tags[DEVCTX_TAGS_MAX][UE_KEY_MAX];
+    int            ntags;
+    char           matched_parent[UE_KEY_MAX];  /* last parent-group match kname */
+};
+
+static inline int dev_ctx_init(struct dev_ctx *ctx, struct uevent *ev, const char *sysroot) {
+    memset(ctx, 0, sizeof *ctx);
+    ctx->ev = ev;
+    ctx->sysroot = sysroot;
+    const char *dp = uevent_get(ev, "DEVPATH");
+    if (!dp) return -1;
+    if ((size_t)snprintf(ctx->sysdir, sizeof ctx->sysdir, "%s%s", sysroot, dp) >= sizeof ctx->sysdir)
+        return -1;
     return 0;
 }
 

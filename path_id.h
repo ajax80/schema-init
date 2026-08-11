@@ -30,6 +30,17 @@ static inline int pi_subsystem(const char *devdir, char *out, size_t outsz) {
     return 0;
 }
 
+static inline int pi_driver(const char *devdir, char *out, size_t outsz) {
+    char link[PATH_MAX], target[PATH_MAX];
+    if ((size_t)snprintf(link, sizeof link, "%s/driver", devdir) >= sizeof link) return -1;
+    ssize_t n = readlink(link, target, sizeof target - 1);
+    if (n <= 0) return -1;
+    target[n] = '\0';
+    char *b = strrchr(target, '/');
+    safe_copy(out, b ? b + 1 : target, outsz);
+    return 0;
+}
+
 static inline int pi_sysattr(const char *devdir, const char *attr, char *out, size_t outsz) {
     char p[PATH_MAX];
     if ((size_t)snprintf(p, sizeof p, "%s/%s", devdir, attr) >= sizeof p) return -1;
