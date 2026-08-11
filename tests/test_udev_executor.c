@@ -33,6 +33,19 @@ int main(void) {
     ruleset_parse_line("ENV{FOO}==\"two\"", &r);
     assert(rule_match(&r, &ctx) == 1);
 
+    struct dev_ctx tc; memset(&tc, 0, sizeof tc);
+    ctx_add_tag(&tc, "systemd");
+    ctx_add_tag(&tc, "systemd");        /* dedupe */
+    ctx_add_tag(&tc, "seat");
+    assert(tc.ntags == 2);
+    ctx_del_tag(&tc, "systemd");
+    assert(tc.ntags == 1 && strcmp(tc.tags[0], "seat") == 0);
+    ctx_del_tag(&tc, "nope");           /* absent: no-op */
+    assert(tc.ntags == 1);
+    ctx_clear_tags(&tc);
+    assert(tc.ntags == 0);
+    printf("test_udev_executor: tag-ops OK\n");
+
     printf("test_udev_executor: uevent_set OK\n");
     printf("test_udev_executor: ALL OK\n");
     return 0;

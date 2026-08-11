@@ -219,6 +219,24 @@ static inline int dev_ctx_init(struct dev_ctx *ctx, struct uevent *ev, const cha
     return 0;
 }
 
+static inline void ctx_add_tag(struct dev_ctx *ctx, const char *t) {
+    for (int i = 0; i < ctx->ntags; i++) if (!strcmp(ctx->tags[i], t)) return;
+    if (ctx->ntags >= DEVCTX_TAGS_MAX) return;
+    safe_copy(ctx->tags[ctx->ntags++], t, UE_KEY_MAX);
+}
+
+static inline void ctx_del_tag(struct dev_ctx *ctx, const char *t) {
+    int w = 0;
+    for (int i = 0; i < ctx->ntags; i++)
+        if (strcmp(ctx->tags[i], t) != 0) {
+            if (w != i) safe_copy(ctx->tags[w], ctx->tags[i], UE_KEY_MAX);
+            w++;
+        }
+    ctx->ntags = w;
+}
+
+static inline void ctx_clear_tags(struct dev_ctx *ctx) { ctx->ntags = 0; }
+
 static inline int uevent_set(struct uevent *ev, const char *key, const char *val) {
     for (int i = 0; i < ev->n; i++)
         if (!strcmp(ev->key[i], key)) { safe_copy(ev->val[i], val, UE_VAL_MAX); return 0; }
