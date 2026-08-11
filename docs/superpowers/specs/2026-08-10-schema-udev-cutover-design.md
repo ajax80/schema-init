@@ -96,27 +96,43 @@ byte-identical to today's dry-run.
 
 In `dispatch()`, select targets by `g_live` (base dirs chosen once):
 
-| capability      | `g_live` OFF (dry)          | `g_live` ON (live)                    |
-|-----------------|-----------------------------|---------------------------------------|
-| dev symlinks    | `SCHEMA_DEV_DIR` `/dev/schema` | `/dev`                             |
-| disk links      | `SCHEMA_DISK_DIR` `/dev/schema/disk` | `/dev/disk`                  |
-| udev db         | `SCHEMA_UDEV_DB_DIR` `/run/schema-udev/data` | `/run/udev/data`     |
-| uaccess         | `uaccess_record` only       | `uaccess_record` **+ new `uaccess_apply`** (`acl_set_file` real node) |
-| libudev monitor | *(nothing)*                 | `sendto` group 2 via `libudev_frame_build` |
+| capability      | `g_live` OFF (dry)          | `g_live` ON (live)                    | status |
+|-----------------|-----------------------------|---------------------------------------|--------|
+| dev symlinks    | `SCHEMA_DEV_DIR` `/dev/schema` | `/dev`                             | **E2** |
+| disk links      | `SCHEMA_DISK_DIR` `/dev/schema/disk` | `/dev/disk`                  | **E2** |
+| uaccess         | `uaccess_record` only       | `uaccess_record` **+ new `uaccess_apply`** (`acl_set_file` real node) | **E2** |
+| udev db         | `SCHEMA_UDEV_DB_DIR` `/run/schema-udev/data` (both modes) | *(deferred)* | **E3** |
+| libudev monitor | *(nothing)*                 | `sendto` group 2 via `libudev_frame_build` | **E3** |
 
-New code introduced by E2:
+**Two capabilities deferred from E2 to E3** (discovered during E2 build — both
+are flag-on-only and cannot be integration-tested until the cutover, so landing
+them tonight buys nothing while the flag is off):
 
-1. **`uaccess_apply(seat_path, ev)`** in `uaccess.h` — the first `acl_set_file`
-   call in the tree. Grants `user:<active_uid>:rw` on the real `DEVNAME` node for
-   eligible subsystems; clears on remove. In live mode we **record AND apply**
-   (decision file stays as audit trail). Unit-tested against a scratch node/file:
-   `acl_set_file` then `acl_get_file` readback asserts the entry.
-2. **Group-2 send socket** — a second netlink send path. In live mode, after
-   processing an event, build the cooked frame with the phase-3
-   `libudev_frame_build` and `sendto` group 2 so libudev consumers see it. Frame
-   encoder is already byte-tested against captured golden frames.
-3. **`g_live` startup read** — `access("/etc/schema-init/schema-udev.live", F_OK)`.
-4. **Real-dir writes** for symlinks / disk links / db gated by the same flag.
+- **Real `/run/udev/data` write.** Real records carry `S:`/`I:`/`G:`/`Q:`/`V:`
+  lines; `udev_db_record_build` emits `E:` only. Writing E:-only to real
+  `/run/udev/data` would break libudev's `V:`-version init check and systemd
+  `.device` units (keyed on `G:`/`Q:systemd` tags). E1's db gate does **not**
+  catch this (it diffs `E:` keys only). Db stays shadow-only in both modes until
+  the record format reaches fidelity. This is an E3 precondition.
+- **Group-2 libudev rebroadcast.** `libudev_frame_build` is byte-tested, but the
+  `sendto` to the multicast group needs privilege + a live consumer to prove, and
+  only runs flag-on. Lands at E3 with the db-format work, tested at the flip.
+
+New code introduced by E2 (as built):
+
+1. **`ua_apply_node` / `ua_clear_node`** in `uaccess.h` — the first `acl_set_file`
+   calls in the tree. `ua_apply_node` grants `user:<uid>:rw` on a real node,
+   preserving other entries and recomputing the mask (idempotent);
+   `ua_clear_node` removes the entry (ENOENT-safe). Unit-tested against a scratch
+   file with `acl_get_file` readback (`tests/test_uaccess_apply.c`).
+2. **`uaccess_apply(seat_path, ev)`** — thin wrapper: builds `/dev/DEVNAME`,
+   applies for eligible subsystems / clears otherwise. In live mode dispatch
+   **records AND applies** (decision file stays as audit trail).
+3. **`g_live` startup read** — `access("/etc/schema-init/schema-udev.live", F_OK)`,
+   read once (never on HUP); logged as `mode=LIVE`/`dry-run`.
+4. **Real-dir selection** for symlinks (`dev_base`) and disk links (`disk_base`)
+   gated by `g_live`. Db real-write and group-2 send are **not** in E2 (deferred
+   above).
 
 **Explicit invariant change (called out loudly):** E2 deliberately ends the
 "`acl_set_file` == 0" property. The binary *gains* mutation capability. Safety
@@ -126,8 +142,8 @@ changes from "`acl_set_file` absent" to "`acl_set_file` present **and**
 `g_live`-gated" (assert no real ACL changed with the sentinel absent).
 
 **Test plan (E2):**
-- `make test` green with new `uaccess_apply` + group-2 send unit tests
-  (scratch paths only; real `/dev`, `/run/udev`, real ACLs never touched).
+- `make test` green with new `ua_apply_node`/`ua_clear_node` unit tests
+  (scratch file only; real `/dev`, `/run/udev`, real ACLs never touched).
 - `vmtest` PASS as PID 1.
 - Deploy behind parachute; reboot; **flag OFF** → all three E1 verify scripts
   still PASS (flag-off == today's dry-run, proven byte-identical).
@@ -143,14 +159,24 @@ changes from "`acl_set_file` absent" to "`acl_set_file` present **and**
 
 ## E3 — the cutover (spec only; NOT built tonight)
 
-The flip, gated on E1 green:
+The flip, gated on E1 green. E3 must first **build the two deferred mechanisms**
+(they only become exercisable once udevd is gone):
+
+- **Real `/run/udev/data` writer** — extend `udev_db_record_build` to emit the
+  full record (`S:` symlinks, `I:` init usec, `G:`/`Q:systemd` tags, `V:`
+  version) so libudev init-checks and systemd `.device` units keep working. Add a
+  db-format fidelity gate (compare full record, not just `E:` keys) before the flip.
+- **Group-2 rebroadcast** — the `sendto`-group-2 path, verified end-to-end
+  against a live libudev consumer once udevd no longer double-broadcasts.
+
+Then the cutover proper:
 
 1. **Sequence udevd out.** The `udev.svc` oneshot shim
    (`/usr/local/sbin/schema-udev`) stops launching `systemd-udevd` +
    `udevadm trigger/settle`. schema-udev's own coldplug (`coldplug_walk_root`)
    becomes the sole coldplug.
 2. **Create the sentinel** so `schema-udev.svc` starts in live mode and owns all
-   four capabilities.
+   capabilities.
 3. **Parachute (next-boot fallback).** If the box boots degraded, recovery is:
    restore the udevd-starting shim + `rm` the sentinel + reboot. Ship this as a
    pre-staged `rollback-flip.sh` before the flip reboot. Consider a boot-count
