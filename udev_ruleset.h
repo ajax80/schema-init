@@ -455,4 +455,66 @@ static inline void apply_options(struct dev_ctx *ctx, const char *val) {
     }
 }
 
+/* add each whitespace-separated symlink token (escaped) from a SYMLINK value */
+static inline void apply_symlink_value(struct dev_ctx *ctx, const char *v, enum rule_op op) {
+    if (op == OP_ASSIGN || op == OP_ASSIGN_FINAL) ctx_clear_symlinks(ctx);
+    if (ctx->escape) {                    /* whole value -> one escaped link */
+        char e[UE_VAL_MAX]; udev_replace_chars(v, e, sizeof e);
+        if (op == OP_ASSIGN_SUB) ctx_del_symlink(ctx, e); else ctx_add_symlink(ctx, e);
+        return;
+    }
+    const char *p = v;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        const char *s = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        size_t len = (size_t)(p - s);
+        if (!len) continue;
+        char raw[UE_VAL_MAX], e[UE_VAL_MAX];
+        if (len >= sizeof raw) len = sizeof raw - 1;
+        memcpy(raw, s, len); raw[len] = '\0';
+        udev_replace_chars(raw, e, sizeof e);
+        if (op == OP_ASSIGN_SUB) ctx_del_symlink(ctx, e); else ctx_add_symlink(ctx, e);
+    }
+}
+
+static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) {
+    for (int i = 0; i < r->nclause; i++) {
+        const struct rule_clause *c = &r->clause[i];
+        if (rk_is_match_op(c->op)) continue;
+
+        if (!strcmp(c->key, "GOTO"))  return c->val;
+        if (!strcmp(c->key, "LABEL")) continue;
+
+        if (ctx_key_final(ctx, c)) continue;
+
+        char sv[UE_VAL_MAX];
+        ruleset_subst(c->val, ctx, sv, sizeof sv);
+
+        if (!strcmp(c->key, "ENV")) {
+            uevent_set(ctx->ev, c->subkey, sv);
+        } else if (!strcmp(c->key, "TAG")) {
+            if (c->op == OP_ASSIGN_SUB) ctx_del_tag(ctx, sv);
+            else { if (c->op == OP_ASSIGN || c->op == OP_ASSIGN_FINAL) ctx_clear_tags(ctx);
+                   ctx_add_tag(ctx, sv); }
+        } else if (!strcmp(c->key, "SYMLINK")) {
+            apply_symlink_value(ctx, sv, c->op);
+        } else if (!strcmp(c->key, "OPTIONS")) {
+            apply_options(ctx, sv);
+        } else if (!strcmp(c->key, "MODE")) {
+            safe_copy(ctx->mode, sv, sizeof ctx->mode);
+        } else if (!strcmp(c->key, "GROUP")) {
+            safe_copy(ctx->group, sv, sizeof ctx->group);
+        } else if (!strcmp(c->key, "OWNER")) {
+            safe_copy(ctx->owner, sv, sizeof ctx->owner);
+        } else if (!strcmp(c->key, "NAME")) {
+            safe_copy(ctx->name, sv, sizeof ctx->name);
+        }
+        /* IMPORT / RUN / other: R4 — ignored here */
+
+        if (c->op == OP_ASSIGN_FINAL) ctx_lock_final(ctx, c);
+    }
+    return NULL;
+}
+
 #endif /* UDEV_RULESET_H */

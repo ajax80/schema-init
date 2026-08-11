@@ -89,6 +89,54 @@ int main(void) {
     printf("test_udev_executor: options+final OK\n");
 
     printf("test_udev_executor: uevent_set OK\n");
+
+    /* build a dev_ctx over a minimal device */
+    struct uevent ae; memset(&ae, 0, sizeof ae);
+    ue_set(&ae, "ACTION", "add"); ue_set(&ae, "DEVPATH", "/devices/z");
+    struct dev_ctx ac; assert(dev_ctx_init(&ac, &ae, "/sys") == 0);
+
+    struct rule ar;
+    ruleset_parse_line("ENV{MYK}=\"v1\", TAG+=\"uaccess\", MODE=\"0660\", GROUP=\"plugdev\"", &ar);
+    assert(apply_rule(&ar, &ac) == NULL);
+    assert(strcmp(uevent_get(&ae, "MYK"), "v1") == 0);
+    assert(ac.ntags == 1 && strcmp(ac.tags[0], "uaccess") == 0);
+    assert(strcmp(ac.mode, "0660") == 0 && strcmp(ac.group, "plugdev") == 0);
+
+    /* SYMLINK+= with a space-separated list -> two links */
+    ruleset_parse_line("SYMLINK+=\"disk/by-id/x disk/by-path/y\"", &ar);
+    apply_rule(&ar, &ac);
+    assert(ac.nsym == 2);
+
+    /* string_escape=replace: whitespace escaped -> a single link */
+    ac.escape = 1;
+    ruleset_parse_line("SYMLINK+=\"has space\"", &ar);
+    apply_rule(&ar, &ac);
+    assert(ac.nsym == 3 && strcmp(ac.symlinks[2], "has_space") == 0);
+    ac.escape = 0;
+
+    /* TAG-= removes */
+    ruleset_parse_line("TAG-=\"uaccess\"", &ar);
+    apply_rule(&ar, &ac);
+    assert(ac.ntags == 0);
+
+    /* := locks the key: a later = does not override */
+    ruleset_parse_line("NAME:=\"locked\"", &ar);
+    apply_rule(&ar, &ac);
+    assert(strcmp(ac.name, "locked") == 0);
+    ruleset_parse_line("NAME=\"other\"", &ar);
+    apply_rule(&ar, &ac);
+    assert(strcmp(ac.name, "locked") == 0);
+
+    /* GOTO returns the target label */
+    ruleset_parse_line("GOTO=\"end_here\"", &ar);
+    const char *g = apply_rule(&ar, &ac);
+    assert(g != NULL && strcmp(g, "end_here") == 0);
+
+    /* substitution runs on values */
+    ruleset_parse_line("ENV{KN}=\"%k\"", &ar);
+    apply_rule(&ar, &ac);
+    assert(strcmp(uevent_get(&ae, "KN"), "z") == 0);
+    printf("test_udev_executor: apply-rule OK\n");
     printf("test_udev_executor: ALL OK\n");
     return 0;
 }
