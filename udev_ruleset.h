@@ -184,6 +184,8 @@ static inline int udev_glob(const char *pat, const char *str) {
 }
 
 #define DEVCTX_TAGS_MAX 32
+#define DEVCTX_SYMLINKS_MAX 32
+#define DEVCTX_FINAL_MAX    16
 
 struct dev_ctx {
     struct uevent *ev;                          /* properties; mutable (R3 grows) */
@@ -192,6 +194,18 @@ struct dev_ctx {
     char           tags[DEVCTX_TAGS_MAX][UE_KEY_MAX];
     int            ntags;
     char           matched_parent[UE_KEY_MAX];  /* last parent-group match kname */
+    char symlinks[DEVCTX_SYMLINKS_MAX][UE_VAL_MAX];
+    int  nsym;
+    char mode[8];
+    char group[UE_KEY_MAX];
+    char owner[UE_KEY_MAX];
+    char name[UE_VAL_MAX];
+    int  link_priority;
+    int  escape;                  /* 0=none, 1=replace */
+    char final_keys[DEVCTX_FINAL_MAX][RK_KEY_MAX + RK_SUB_MAX + 2];
+    int  nfinal;
+    int  last_rule_deferred;
+    int  deferred_applies;
 };
 
 static inline int dev_ctx_init(struct dev_ctx *ctx, struct uevent *ev, const char *sysroot) {
@@ -202,6 +216,16 @@ static inline int dev_ctx_init(struct dev_ctx *ctx, struct uevent *ev, const cha
     if (!dp) return -1;
     if ((size_t)snprintf(ctx->sysdir, sizeof ctx->sysdir, "%s%s", sysroot, dp) >= sizeof ctx->sysdir)
         return -1;
+    return 0;
+}
+
+static inline int uevent_set(struct uevent *ev, const char *key, const char *val) {
+    for (int i = 0; i < ev->n; i++)
+        if (!strcmp(ev->key[i], key)) { safe_copy(ev->val[i], val, UE_VAL_MAX); return 0; }
+    if (ev->n >= UE_MAX_KEYS) return -1;
+    safe_copy(ev->key[ev->n], key, UE_KEY_MAX);
+    safe_copy(ev->val[ev->n], val, UE_VAL_MAX);
+    ev->n++;
     return 0;
 }
 
