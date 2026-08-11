@@ -402,6 +402,7 @@ static inline int parent_group_match(const struct rule_clause *cl, int nc, struc
 }
 
 static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
+    ctx->last_rule_deferred = 0;
     for (int i = 0; i < r->nclause; i++) {
         const struct rule_clause *c = &r->clause[i];
         if (!rk_is_match_op(c->op)) continue;    /* assignments: R3 */
@@ -417,6 +418,7 @@ static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
             i = j - 1;   /* for-loop ++ advances past the group */
             continue;
         }
+        ctx->last_rule_deferred = 1;   /* a deferred conditional was skipped */
         continue;   /* unknown match key (TEST/PROGRAM): deferred to R4 */
     }
     return 1;
@@ -515,6 +517,32 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
         if (c->op == OP_ASSIGN_FINAL) ctx_lock_final(ctx, c);
     }
     return NULL;
+}
+
+/* Find the first rule at index >= from carrying LABEL=="label"; -1 if none. */
+static inline int ruleset_find_label(const struct ruleset *rs, int from, const char *label) {
+    for (int i = from; i < rs->n; i++)
+        for (int k = 0; k < rs->rules[i].nclause; k++) {
+            const struct rule_clause *c = &rs->rules[i].clause[k];
+            if (!strcmp(c->key, "LABEL") && !strcmp(c->val, label)) return i;
+        }
+    return -1;
+}
+
+static inline int ruleset_apply(const struct ruleset *rs, struct dev_ctx *ctx) {
+    for (int i = 0; i < rs->n; ) {
+        if (!rule_match(&rs->rules[i], ctx)) { i++; continue; }
+        if (ctx->last_rule_deferred) ctx->deferred_applies++;
+        const char *goto_label = apply_rule(&rs->rules[i], ctx);
+        if (goto_label) {
+            int t = ruleset_find_label(rs, i + 1, goto_label);
+            if (t < 0) break;      /* forward label not found: stop */
+            i = t;
+        } else {
+            i++;
+        }
+    }
+    return 0;
 }
 
 #endif /* UDEV_RULESET_H */

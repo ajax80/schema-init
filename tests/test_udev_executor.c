@@ -137,6 +137,80 @@ int main(void) {
     apply_rule(&ar, &ac);
     assert(strcmp(uevent_get(&ae, "KN"), "z") == 0);
     printf("test_udev_executor: apply-rule OK\n");
+
+    /* helper: append a parsed line to a ruleset */
+    #define ADD(RS, LINE) do { struct rule _r; \
+        assert(ruleset_parse_line((LINE), &_r) > 0); \
+        assert(ruleset_append((RS), &_r) == 0); } while (0)
+
+    /* ENV set by an early rule is visible to a later rule's ENV== match */
+    struct uevent de; memset(&de, 0, sizeof de);
+    ue_set(&de, "ACTION", "add"); ue_set(&de, "DEVPATH", "/devices/w");
+    struct dev_ctx dc; assert(dev_ctx_init(&dc, &de, "/sys") == 0);
+    struct ruleset rs1 = {0};
+    ADD(&rs1, "ACTION==\"add\", ENV{PHASE}=\"two\"");
+    ADD(&rs1, "ENV{PHASE}==\"two\", TAG+=\"reached\"");
+    assert(ruleset_apply(&rs1, &dc) == 0);
+    assert(dc.ntags == 1 && strcmp(dc.tags[0], "reached") == 0);
+    free(rs1.rules);
+
+    /* GOTO skips the intervening rule's assignment */
+    struct dev_ctx gc; memset(&gc, 0, sizeof gc);
+    struct uevent ge; memset(&ge, 0, sizeof ge);
+    ue_set(&ge, "ACTION", "add"); ue_set(&ge, "DEVPATH", "/devices/g");
+    assert(dev_ctx_init(&gc, &ge, "/sys") == 0);
+    struct ruleset rs2 = {0};
+    ADD(&rs2, "ACTION==\"add\", GOTO=\"skip\"");
+    ADD(&rs2, "TAG+=\"should_not_appear\"");
+    ADD(&rs2, "LABEL=\"skip\"");
+    ADD(&rs2, "TAG+=\"after_label\"");
+    assert(ruleset_apply(&rs2, &gc) == 0);
+    assert(gc.ntags == 1 && strcmp(gc.tags[0], "after_label") == 0);
+    free(rs2.rules);
+
+    /* deferred gate: a TEST== rule still applies (superset) and bumps the counter */
+    struct dev_ctx fc; memset(&fc, 0, sizeof fc);
+    struct uevent fe; memset(&fe, 0, sizeof fe);
+    ue_set(&fe, "ACTION", "add"); ue_set(&fe, "DEVPATH", "/devices/f");
+    assert(dev_ctx_init(&fc, &fe, "/sys") == 0);
+    struct ruleset rs3 = {0};
+    ADD(&rs3, "ACTION==\"add\", TEST==\"/nonexistent/path\", TAG+=\"superset\"");
+    assert(ruleset_apply(&rs3, &fc) == 0);
+    assert(fc.ntags == 1 && strcmp(fc.tags[0], "superset") == 0);
+    assert(fc.deferred_applies > 0);
+    free(rs3.rules);
+
+    /* GOTO to a missing label stops cleanly (no crash, no later apply) */
+    struct dev_ctx mc; memset(&mc, 0, sizeof mc);
+    struct uevent me; memset(&me, 0, sizeof me);
+    ue_set(&me, "ACTION", "add"); ue_set(&me, "DEVPATH", "/devices/m");
+    assert(dev_ctx_init(&mc, &me, "/sys") == 0);
+    struct ruleset rs4 = {0};
+    ADD(&rs4, "GOTO=\"nowhere\"");
+    ADD(&rs4, "TAG+=\"unreached\"");
+    assert(ruleset_apply(&rs4, &mc) == 0);
+    assert(mc.ntags == 0);
+    free(rs4.rules);
+    printf("test_udev_executor: driver OK\n");
+
+    /* live smoke: apply the whole installed ruleset to a real device, no crash */
+    if (access("/sys/block/sda", F_OK) == 0) {
+        char lnk[PATH_MAX]; ssize_t ln = readlink("/sys/block/sda", lnk, sizeof lnk - 1);
+        assert(ln > 0); lnk[ln] = '\0';
+        const char *dp = strstr(lnk, "/devices/"); assert(dp);
+        struct uevent le; memset(&le, 0, sizeof le);
+        ue_set(&le, "ACTION", "add"); ue_set(&le, "DEVPATH", dp);
+        ue_set(&le, "SUBSYSTEM", "block");
+        struct dev_ctx lc; assert(dev_ctx_init(&lc, &le, "/sys") == 0);
+        const char *real[] = { "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
+        struct ruleset live = {0};
+        assert(ruleset_load_dirs(real, 3, &live) == 0);
+        assert(ruleset_apply(&live, &lc) == 0);   /* must not crash */
+        assert(lc.ntags >= 0);                    /* sda typically gets "systemd" */
+        free(live.rules);
+        printf("test_udev_executor: live-smoke OK (sda tags=%d symlinks=%d)\n", lc.ntags, lc.nsym);
+    }
+    #undef ADD
     printf("test_udev_executor: ALL OK\n");
     return 0;
 }
