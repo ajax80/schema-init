@@ -77,6 +77,43 @@ int main(void) {
     }
     printf("test_udev_r4a: TEST OK\n");
 
+    /* Task 2b: TEST relative paths resolve against ctx->sysdir, not CWD */
+    {
+        char root[] = "/tmp/r4a_relXXXXXX";
+        assert(mkdtemp(root) != NULL);
+        char devdir[PATH_MAX], powerdir[PATH_MAX], control[PATH_MAX];
+        snprintf(devdir, sizeof devdir, "%s/devices/x", root);
+        snprintf(powerdir, sizeof powerdir, "%s/devices/x/power", root);
+        snprintf(control, sizeof control, "%s/devices/x/power/control", root);
+        char mkcmd[PATH_MAX + 16];
+        snprintf(mkcmd, sizeof mkcmd, "mkdir -p '%s'", powerdir);
+        assert(system(mkcmd) == 0);
+        FILE *f = fopen(control, "w"); assert(f); fclose(f);
+
+        struct uevent rev; memset(&rev, 0, sizeof rev);
+        ue_set(&rev, "ACTION", "add"); ue_set(&rev, "DEVPATH", "/devices/x");
+        struct dev_ctx relc; assert(dev_ctx_init(&relc, &rev, root) == 0);
+        char expect_sysdir[PATH_MAX];
+        snprintf(expect_sysdir, sizeof expect_sysdir, "%s/devices/x", root);
+        assert(strcmp(relc.sysdir, expect_sysdir) == 0);
+
+        struct rule r;
+        char line[PATH_MAX + 64];
+        snprintf(line, sizeof line, "TEST==\"power/control\"");
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &relc) == 1);
+
+        snprintf(line, sizeof line, "TEST==\"power/nonexistent\"");
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &relc) == 0);
+
+        snprintf(line, sizeof line, "TEST!=\"power/nonexistent\"");
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &relc) == 1);
+
+        unlink(control); rmdir(powerdir); rmdir(devdir);
+        char rmdev[PATH_MAX]; snprintf(rmdev, sizeof rmdev, "%s/devices", root);
+        rmdir(rmdev); rmdir(root);
+    }
+    printf("test_udev_r4a: TEST-relative OK\n");
+
     /* Task 3: run_builtin_bit exists and is a no-op on a bogus device */
     {
         struct uevent bev; memset(&bev, 0, sizeof bev);

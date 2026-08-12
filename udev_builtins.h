@@ -136,9 +136,11 @@ static inline void ub_absorb(struct uevent *ev, const struct uevent *tmp) {
 }
 
 /* Run one builtin (bit is a single UB_* value), absorbing its properties into ev.
- * Returns 0 if the builtin ran, < 0 if it failed / does not apply. hwdb_build,
- * usb_id_build, input_id_build, net_id_build and blkid_{pt,fs}_build already use
- * this 0/-1 convention natively. path_id_build returns a length (> 0 = anchored).
+ * Returns 0 if the builtin ran, < 0 if it failed / does not apply. usb_id_build,
+ * input_id_build and net_id_build use this 0/-1 convention natively. hwdb_build
+ * and blkid_{pt,fs}_build always return 0 (never -1) — they are property
+ * importers that report "ran" unconditionally and never hard-gate a rule.
+ * path_id_build returns a length (> 0 = anchored).
  * v4l_id_build/ata_id_build return a *count* of emitted properties (0 = did not
  * run, since their success path always emits a fixed set of base properties), so
  * a positive count is remapped to 0. cdrom_id_build also returns a count, but

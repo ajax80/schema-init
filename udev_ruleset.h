@@ -348,10 +348,15 @@ static inline int rk_cmp(enum rule_op op, const char *pat, const char *actual) {
     return (op == OP_MATCH_NE) ? !m : m;
 }
 
-/* TEST{<octal>}=="path" / != : $-subst the path, stat it; optional mode mask. */
+/* TEST{<octal>}=="path" / != : $-subst the path, stat it; optional mode mask.
+ * A non-absolute path is resolved against the device's sysfs dir (ctx->sysdir),
+ * matching real udev's TK_M_TEST SYSPATH-prepend behavior. */
 static inline int test_clause_match(const struct rule_clause *c, const struct dev_ctx *ctx) {
-    char path[PATH_MAX];
-    ruleset_subst(c->val, ctx, path, sizeof path);
+    char sub[PATH_MAX], path[PATH_MAX];
+    ruleset_subst(c->val, ctx, sub, sizeof sub);
+    if (sub[0] == '/') safe_copy(path, sub, sizeof path);
+    else if ((size_t)snprintf(path, sizeof path, "%s/%s", ctx->sysdir, sub) >= sizeof path)
+        return (c->op == OP_MATCH_NE) ? 1 : 0;
     struct stat st;
     int exists = (stat(path, &st) == 0);
     if (exists && c->subkey[0]) {
