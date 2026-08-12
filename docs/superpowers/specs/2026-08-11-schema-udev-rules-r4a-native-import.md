@@ -53,8 +53,8 @@ const char *cmdline_path;                             /* "/proc/cmdline"; test-o
 
 `TEST{<octal>}=="<path>"` / `!=`. In `match_dev_clause`, before the final `return -1`:
 
-- `ruleset_subst` the path (relative paths resolve against `ctx->sysroot`, mirroring udev's cwd semantics for TEST).
-- `stat()` it. `==` → matches iff it exists; if `{octal}` present, additionally `(st.st_mode & octal) > 0` — udev's **any-bit-overlaps** semantics (`udev-rules.c` `TK_M_TEST`: `(statbuf.st_mode & mode) > 0`), **not** all-bits-present. `!=` inverts the existence result. (No installed rule uses `TEST{octal}`, but faithfulness carries for other machines.)
+- `ruleset_subst` the path, then resolve it: an **absolute** path is used as-is; a **relative** path is prepended with the device syspath `ctx->sysdir` (e.g. `power/control` → `<sysdir>/power/control`), mirroring real udev's `TK_M_TEST` (it stats a non-absolute TEST path against the device's `syspath`, **not** the daemon CWD and **not** `/sys`). 60 of the 70 installed TEST clauses are relative sysfs attrs — getting this wrong diverges 86% of them at R5.
+- `stat()` the resolved path. `==` → matches iff it exists; if `{octal}` present, additionally `(st.st_mode & octal) > 0` — udev's **any-bit-overlaps** semantics (`udev-rules.c` `TK_M_TEST`: `(statbuf.st_mode & mode) > 0`), **not** all-bits-present. `!=` inverts the existence result. (No installed rule uses `TEST{octal}`, but faithfulness carries for other machines.)
 
 TEST stops being a `-1`/deferred key. In `rule_match`, remove TEST from the deferred path — it is now a resolved gate. **This un-defers 70 clauses and shrinks the superset.**
 
