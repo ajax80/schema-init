@@ -54,7 +54,7 @@ const char *cmdline_path;                             /* "/proc/cmdline"; test-o
 `TEST{<octal>}=="<path>"` / `!=`. In `match_dev_clause`, before the final `return -1`:
 
 - `ruleset_subst` the path (relative paths resolve against `ctx->sysroot`, mirroring udev's cwd semantics for TEST).
-- `stat()` it. `==` → matches iff it exists; if `{octal}` present, additionally `(st.st_mode & 07777 & octal) == octal`. `!=` inverts the existence result.
+- `stat()` it. `==` → matches iff it exists; if `{octal}` present, additionally `(st.st_mode & octal) > 0` — udev's **any-bit-overlaps** semantics (`udev-rules.c` `TK_M_TEST`: `(statbuf.st_mode & mode) > 0`), **not** all-bits-present. `!=` inverts the existence result. (No installed rule uses `TEST{octal}`, but faithfulness carries for other machines.)
 
 TEST stops being a `-1`/deferred key. In `rule_match`, remove TEST from the deferred path — it is now a resolved gate. **This un-defers 70 clauses and shrinks the superset.**
 
