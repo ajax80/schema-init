@@ -44,7 +44,7 @@ int main(void) {
         struct dev_ctx tc; assert(dev_ctx_init(&tc, &tev, "/sys") == 0);
 
         struct rule r;
-        char line[256];
+        char line[PATH_MAX + 64];
         snprintf(line, sizeof line, "TEST==\"%s\"", present);
         ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 1);   /* exists */
 

@@ -168,7 +168,7 @@ int main(void) {
     assert(gc.ntags == 1 && strcmp(gc.tags[0], "after_label") == 0);
     free(rs2.rules);
 
-    /* deferred gate: a TEST== rule still applies (superset) and bumps the counter */
+    /* TEST now gates natively (R4a): a nonexistent path no longer applies at all */
     struct dev_ctx fc; memset(&fc, 0, sizeof fc);
     struct uevent fe; memset(&fe, 0, sizeof fe);
     ue_set(&fe, "ACTION", "add"); ue_set(&fe, "DEVPATH", "/devices/f");
@@ -176,9 +176,21 @@ int main(void) {
     struct ruleset rs3 = {0};
     ADD(&rs3, "ACTION==\"add\", TEST==\"/nonexistent/path\", TAG+=\"superset\"");
     assert(ruleset_apply(&rs3, &fc) == 0);
-    assert(fc.ntags == 1 && strcmp(fc.tags[0], "superset") == 0);
-    assert(fc.deferred_applies > 0);
+    assert(fc.ntags == 0);
+    assert(fc.deferred_applies == 0);
     free(rs3.rules);
+
+    /* TEST resolving true applies the rule without inflating the deferred counter */
+    struct dev_ctx fc2; memset(&fc2, 0, sizeof fc2);
+    struct uevent fe2; memset(&fe2, 0, sizeof fe2);
+    ue_set(&fe2, "ACTION", "add"); ue_set(&fe2, "DEVPATH", "/devices/f2");
+    assert(dev_ctx_init(&fc2, &fe2, "/sys") == 0);
+    struct ruleset rs3b = {0};
+    ADD(&rs3b, "ACTION==\"add\", TEST==\"/\", TAG+=\"present\"");
+    assert(ruleset_apply(&rs3b, &fc2) == 0);
+    assert(fc2.ntags == 1 && strcmp(fc2.tags[0], "present") == 0);
+    assert(fc2.deferred_applies == 0);
+    free(rs3b.rules);
 
     /* deferred gate: PROGRAM= (assign-op) still applies (superset) and bumps the counter */
     struct dev_ctx pc; memset(&pc, 0, sizeof pc);

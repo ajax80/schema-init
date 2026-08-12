@@ -171,7 +171,7 @@ static inline void usb_interfaces(const char *devdir, char *out, size_t outsz) {
                 size_t sl = 0;
                 str[sl++] = ':'; str[sl] = '\0';
                 for (int i = 0; i < count; i++) {
-                    char probe[16];
+                    char probe[USB_STR_MAX];
                     snprintf(probe, sizeof probe, ":%s:", ifs[i].trip);
                     if (strstr(str, probe)) continue;
                     int w = snprintf(str + sl, sizeof str - sl, "%s:", ifs[i].trip);
@@ -223,10 +223,10 @@ static inline void usb_interfaces(const char *devdir, char *out, size_t outsz) {
     size_t bl = 0;
     buf[bl++] = ':'; buf[bl] = '\0';
     for (int i = 0; i < n; i++) {
-        char probe[16];
+        char probe[USB_STR_MAX];
         snprintf(probe, sizeof probe, ":%s:", ifs[i].trip);
         if (strstr(buf, probe)) continue;
-        char seg[16];
+        char seg[USB_STR_MAX];
         int w = snprintf(seg, sizeof seg, "%s:", ifs[i].trip);
         if (w > 0 && bl + (size_t)w < sizeof buf) {
             memcpy(buf + bl, seg, (size_t)w);
