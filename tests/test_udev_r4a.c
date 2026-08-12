@@ -87,5 +87,34 @@ int main(void) {
         assert(bev.n == before);   /* nothing absorbed */
     }
     printf("test_udev_r4a: run_builtin_bit OK\n");
+
+    /* Task 3: run_builtins actually executes the loop, and the corrected
+     * V4L/ATA/CDROM mappings behave as derived, on a bogus/absent device.
+     * devnode is a nonexistent-but-non-NULL path here: a literal NULL at these
+     * multiple sibling call sites lets -O2 constant-propagate a specialized
+     * run_builtin_bit clone in which the UB_BLKID branch (which does not
+     * NULL-check devnode before calling open()) is flagged -Wnonnull, even
+     * though none of these calls select that bit. */
+    {
+        const char *bogus_devnode = "/dev/nonexistent-r4a-test";
+
+        struct uevent gev; memset(&gev, 0, sizeof gev);
+        ue_set(&gev, "ACTION", "add"); ue_set(&gev, "DEVPATH", "/devices/none");
+        int before = gev.n;
+        int rc = run_builtins("/nonexistent-sysroot", "/devices/none", bogus_devnode, &gev);
+        assert(rc == 0);
+        assert(gev.n == before);
+
+        struct uevent mev; memset(&mev, 0, sizeof mev);
+        ue_set(&mev, "ACTION", "add"); ue_set(&mev, "DEVPATH", "/devices/none");
+        int mbefore = mev.n;
+        assert(run_builtin_bit("/nonexistent-sysroot", "/devices/none", bogus_devnode, &mev, UB_V4L) < 0);
+        assert(mev.n == mbefore);
+        assert(run_builtin_bit("/nonexistent-sysroot", "/devices/none", bogus_devnode, &mev, UB_ATA) < 0);
+        assert(mev.n == mbefore);
+        assert(run_builtin_bit("/nonexistent-sysroot", "/devices/none", bogus_devnode, &mev, UB_CDROM) == 0);
+        assert(mev.n == mbefore);
+    }
+    printf("test_udev_r4a: run_builtins-guard OK\n");
     return 0;
 }
