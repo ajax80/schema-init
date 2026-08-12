@@ -271,5 +271,23 @@ int main(void) {
         snprintf(cmd, sizeof cmd, "rm -rf '%s' '%s'", root, dbdir); assert(system(cmd) == 0);
     }
     printf("test_udev_r4a: IMPORT-parent OK\n");
+
+    /* Task 8: RUN records intent, executes nothing */
+    {
+        char marker[] = "/tmp/r4a_marker_shouldnotexist";
+        unlink(marker);
+        struct uevent rev; memset(&rev, 0, sizeof rev);
+        ue_set(&rev, "ACTION", "add"); ue_set(&rev, "DEVPATH", "/devices/x");
+        struct dev_ctx rc; assert(dev_ctx_init(&rc, &rev, "/sys") == 0);
+        struct rule r;
+        char line[256];
+        snprintf(line, sizeof line, "RUN+=\"/bin/touch %s\"", marker);
+        ruleset_parse_line(line, &r);
+        apply_rule(&r, &rc);
+        assert(rc.nruns == 1);
+        assert(strstr(rc.runs[0], "/bin/touch") != NULL);
+        assert(access(marker, F_OK) != 0);    /* NOT executed */
+    }
+    printf("test_udev_r4a: RUN-record OK\n");
     return 0;
 }
