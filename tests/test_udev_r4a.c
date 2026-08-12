@@ -236,5 +236,40 @@ int main(void) {
         import_db(&dc, "ID_FS_TYPE");                    /* still ext4 from before, unchanged */
     }
     printf("test_udev_r4a: IMPORT-db OK\n");
+
+    /* Task 7: IMPORT{parent} */
+    {
+        char root[] = "/tmp/r4a_sysXXXXXX"; assert(mkdtemp(root));
+        /* child: <root>/devices/pci/blk/sda1 ; parent: .../blk (block, b8:0) */
+        char parent[PATH_MAX], child[PATH_MAX];
+        snprintf(parent, sizeof parent, "%s/devices/pci/blk", root);
+        snprintf(child,  sizeof child,  "%s/devices/pci/blk/sda1", root);
+        char cmd[PATH_MAX + 32];
+        snprintf(cmd, sizeof cmd, "mkdir -p '%s'", child); assert(system(cmd) == 0);
+        /* parent uevent gives MAJOR/MINOR so its db filename is b8:0 */
+        char uev[PATH_MAX]; assert((size_t)snprintf(uev, sizeof uev, "%s/uevent", parent) < sizeof uev);
+        FILE *f = fopen(uev, "w"); assert(f);
+        fprintf(f, "MAJOR=8\nMINOR=0\nDEVNAME=sda\nSUBSYSTEM=block\n"); fclose(f);
+
+        char dbdir[] = "/tmp/r4a_pdbXXXXXX"; assert(mkdtemp(dbdir));
+        char rec[PATH_MAX]; snprintf(rec, sizeof rec, "%s/b8:0", dbdir);
+        f = fopen(rec, "w"); assert(f);
+        fprintf(f, "E:ID_SERIAL=WDC-123\nE:ID_MODEL=WDC\nE:OTHER=x\n"); fclose(f);
+
+        struct uevent dev; memset(&dev, 0, sizeof dev);
+        ue_set(&dev, "ACTION", "add");
+        ue_set(&dev, "DEVPATH", "/devices/pci/blk/sda1");
+        ue_set(&dev, "SUBSYSTEM", "block");
+        struct dev_ctx dc; assert(dev_ctx_init(&dc, &dev, root) == 0);
+        dc.dbroot = dbdir;
+
+        import_parent(&dc, "ID_*");
+        assert(strcmp(uevent_get(dc.ev, "ID_SERIAL"), "WDC-123") == 0);
+        assert(strcmp(uevent_get(dc.ev, "ID_MODEL"), "WDC") == 0);
+        assert(uevent_get(dc.ev, "OTHER") == NULL);     /* glob did not match */
+
+        snprintf(cmd, sizeof cmd, "rm -rf '%s' '%s'", root, dbdir); assert(system(cmd) == 0);
+    }
+    printf("test_udev_r4a: IMPORT-parent OK\n");
     return 0;
 }

@@ -543,7 +543,22 @@ static inline void import_db(struct dev_ctx *ctx, const char *key) {
     const char *v = uevent_get(&rec, key);
     if (v) uevent_set(ctx->ev, key, v);
 }
-static inline void import_parent(struct dev_ctx *c, const char *k)  { (void)c; (void)k; }
+static inline void import_parent(struct dev_ctx *ctx, const char *keypat) {
+    char pdir[PATH_MAX];
+    safe_copy(pdir, ctx->sysdir, sizeof pdir);
+    if (pi_parent(pdir) != 0) return;                 /* no parent */
+    struct uevent pev;
+    if (uevent_from_sysfs(ctx->sysroot, pdir, &pev) != 0) return;
+    char fn[128];
+    if (udev_db_filename(&pev, fn, sizeof fn) != 0) return;
+    char path[PATH_MAX];
+    if ((size_t)snprintf(path, sizeof path, "%s/%s", ctx->dbroot, fn) >= sizeof path) return;
+    struct uevent rec;
+    if (udev_db_read_eprops(path, &rec) != 0) return;
+    for (int i = 0; i < rec.n; i++)
+        if (udev_glob(keypat, rec.key[i]))
+            uevent_set(ctx->ev, rec.key[i], rec.val[i]);
+}
 
 static inline int builtin_name_bit(const char *name) {
     if (!strcmp(name, "hwdb"))     return UB_HWDB;
