@@ -354,7 +354,7 @@ static inline int test_clause_match(const struct rule_clause *c, const struct de
     int exists = (stat(path, &st) == 0);
     if (exists && c->subkey[0]) {
         unsigned mode = (unsigned)strtoul(c->subkey, NULL, 8);
-        exists = ((st.st_mode & 07777u & mode) == mode);
+        exists = ((st.st_mode & mode) > 0);
     }
     return (c->op == OP_MATCH_NE) ? !exists : exists;
 }

@@ -28,12 +28,15 @@ int main(void) {
     {
         char dir[] = "/tmp/r4a_testXXXXXX";
         assert(mkdtemp(dir) != NULL);
-        char present[PATH_MAX], mode0700[PATH_MAX];
+        char present[PATH_MAX], mode0700[PATH_MAX], mode0600[PATH_MAX];
         snprintf(present, sizeof present, "%s/here", dir);
         snprintf(mode0700, sizeof mode0700, "%s/priv", dir);
+        snprintf(mode0600, sizeof mode0600, "%s/partial", dir);
         FILE *f = fopen(present, "w"); assert(f); fclose(f);
         f = fopen(mode0700, "w"); assert(f); fclose(f);
         assert(chmod(mode0700, 0700) == 0);
+        f = fopen(mode0600, "w"); assert(f); fclose(f);
+        assert(chmod(mode0600, 0600) == 0);
 
         struct uevent tev; memset(&tev, 0, sizeof tev);
         ue_set(&tev, "ACTION", "add"); ue_set(&tev, "DEVPATH", "/devices/x");
@@ -56,6 +59,12 @@ int main(void) {
         snprintf(line, sizeof line, "TEST{0070}==\"%s\"", mode0700);
         ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 0);   /* group bits absent */
 
+        snprintf(line, sizeof line, "TEST{0402}==\"%s\"", mode0600);
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 1);   /* any-bit-overlap: 0600 & 0402 = 0400 > 0 */
+
+        snprintf(line, sizeof line, "TEST{0021}==\"%s\"", mode0600);
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 0);   /* no overlap: 0600 & 0021 = 0 */
+
         /* re-gate: a TEST-gated rule no longer flags deferred */
         snprintf(line, sizeof line, "TEST==\"%s\", ENV{X}=\"1\"", present);
         ruleset_parse_line(line, &r);
@@ -63,7 +72,7 @@ int main(void) {
         assert(rule_match(&r, &tc) == 1);
         assert(tc.last_rule_deferred == 0);
 
-        unlink(present); unlink(mode0700); rmdir(dir);
+        unlink(present); unlink(mode0700); unlink(mode0600); rmdir(dir);
     }
     printf("test_udev_r4a: TEST OK\n");
     return 0;
