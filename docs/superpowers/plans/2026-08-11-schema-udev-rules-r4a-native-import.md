@@ -12,7 +12,8 @@
 
 - Branch: `feat/schema-udev-cutover-e3` (unpushed WIP; shadow-until-R5). Do **not** push.
 - `schema-udev.c` **byte-identical** to prior — verify with `git diff HEAD -- schema-udev.c` empty at the end. R4a is `udev_ruleset.h` + `udev_builtins.h` + tests only.
-- Zero warnings under **both** `-std=c99` (Makefile) **and** `-std=c11`, each with `-Wall -Wextra -D_GNU_SOURCE -I.`. The Makefile only gates c99; c11 must be compiled explicitly.
+- Zero warnings under **both** `-std=c99` (Makefile) **and** `-std=c11`, each with `-Wall -Wextra -D_GNU_SOURCE -I.`. **The Makefile builds at `-O2` (`CFLAGS ?= -O2`)** — `-Wformat-truncation` and other optimization-gated diagnostics only fire with optimization on, so verify at **`-O2`** (matching `make test`) AND at `-O0`; the Makefile only gates c99, so compile c11 explicitly.
+- Changing a match clause's semantics (e.g. TEST becoming a resolved gate) can invalidate an existing test that encoded the old behavior — `tests/test_udev_executor.c` asserts TEST-as-deferred-superset (R3). Whichever task changes TEST must update that test to the new behavior, or the suite goes red.
 - No new external deps. No docstrings/comments beyond what already exists in these headers.
 - Live box UNTOUCHED: no `install`, no daemon restart, no `/dev` or `/run/udev/data` writes. IMPORT{db}/{parent}/{cmdline} read live state **read-only** and only in the daemon; tests use the `dbroot`/`cmdline_path` seams pointed at tmp trees.
 - Test idiom (match existing `tests/test_udev_executor.c`): single `int main(void)`, `assert(...)`, `printf("test_udev_r4a: <section> OK\n")`, local `ue_set` helper, `ruleset_parse_line`.
