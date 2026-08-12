@@ -507,7 +507,32 @@ static inline void apply_symlink_value(struct dev_ctx *ctx, const char *v, enum 
     }
 }
 
-static inline void import_cmdline(struct dev_ctx *c, const char *k) { (void)c; (void)k; }
+static inline void import_cmdline(struct dev_ctx *ctx, const char *key) {
+    FILE *f = fopen(ctx->cmdline_path, "r");
+    if (!f) return;
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    size_t klen = strlen(key);
+    for (char *p = buf; *p; ) {
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        char *s = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        size_t tlen = (size_t)(p - s);
+        if (tlen == 0) continue;
+        if (tlen >= klen && !strncmp(s, key, klen)) {
+            if (tlen == klen) { uevent_set(ctx->ev, key, "1"); return; }
+            if (s[klen] == '=') {
+                char val[UE_VAL_MAX];
+                size_t vlen = tlen - klen - 1;
+                if (vlen >= sizeof val) vlen = sizeof val - 1;
+                memcpy(val, s + klen + 1, vlen); val[vlen] = '\0';
+                uevent_set(ctx->ev, key, val); return;
+            }
+        }
+    }
+}
 static inline void import_db(struct dev_ctx *c, const char *k)      { (void)c; (void)k; }
 static inline void import_parent(struct dev_ctx *c, const char *k)  { (void)c; (void)k; }
 

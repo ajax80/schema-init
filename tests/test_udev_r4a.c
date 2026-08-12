@@ -186,5 +186,26 @@ int main(void) {
         unlink(partfile); rmdir(childpath); rmdir(dir);
     }
     printf("test_udev_r4a: blkid-null-devnode OK\n");
+
+    /* Task 5: IMPORT{cmdline} */
+    {
+        char cf[] = "/tmp/r4a_cmdlineXXXXXX";
+        int fd = mkstemp(cf); assert(fd >= 0);
+        dprintf(fd, "quiet root=/dev/sda2 rd.foo=bar\n"); close(fd);
+
+        struct uevent cev; memset(&cev, 0, sizeof cev);
+        ue_set(&cev, "ACTION", "add"); ue_set(&cev, "DEVPATH", "/devices/x");
+        struct dev_ctx cc; assert(dev_ctx_init(&cc, &cev, "/sys") == 0);
+        cc.cmdline_path = cf;
+
+        import_cmdline(&cc, "rd.foo");
+        assert(strcmp(uevent_get(cc.ev, "rd.foo"), "bar") == 0);
+        import_cmdline(&cc, "quiet");
+        assert(strcmp(uevent_get(cc.ev, "quiet"), "1") == 0);   /* bare flag -> "1" */
+        import_cmdline(&cc, "absent");
+        assert(uevent_get(cc.ev, "absent") == NULL);            /* soft: no-op */
+        unlink(cf);
+    }
+    printf("test_udev_r4a: IMPORT-cmdline OK\n");
     return 0;
 }
