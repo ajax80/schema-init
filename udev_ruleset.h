@@ -3,6 +3,7 @@
 
 #include "schema-udev.h"   /* safe_copy */
 #include "path_id.h"   /* pi_parent, pi_sysattr, pi_subsystem, pi_base, pi_driver */
+#include <sys/stat.h>   /* TEST clause: stat, st_mode */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -345,6 +346,19 @@ static inline int rk_cmp(enum rule_op op, const char *pat, const char *actual) {
     return (op == OP_MATCH_NE) ? !m : m;
 }
 
+/* TEST{<octal>}=="path" / != : $-subst the path, stat it; optional mode mask. */
+static inline int test_clause_match(const struct rule_clause *c, const struct dev_ctx *ctx) {
+    char path[PATH_MAX];
+    ruleset_subst(c->val, ctx, path, sizeof path);
+    struct stat st;
+    int exists = (stat(path, &st) == 0);
+    if (exists && c->subkey[0]) {
+        unsigned mode = (unsigned)strtoul(c->subkey, NULL, 8);
+        exists = ((st.st_mode & 07777u & mode) == mode);
+    }
+    return (c->op == OP_MATCH_NE) ? !exists : exists;
+}
+
 /* 1 match / 0 nomatch / -1 not a device-level key */
 static inline int match_dev_clause(const struct rule_clause *c, const struct dev_ctx *ctx) {
     const struct uevent *ev = ctx->ev;
@@ -366,6 +380,7 @@ static inline int match_dev_clause(const struct rule_clause *c, const struct dev
         for (int i = 0; i < ctx->ntags; i++) if (udev_glob(c->val, ctx->tags[i])) { has = 1; break; }
         return c->op == OP_MATCH_NE ? !has : has;
     }
+    if (!strcmp(c->key, "TEST"))  return test_clause_match(c, ctx);
     return -1;   /* parent key (SUBSYSTEMS/…) or R4 conditional (TEST/PROGRAM) */
 }
 

@@ -23,5 +23,48 @@ int main(void) {
     assert(strcmp(ctx.cmdline_path, "/proc/cmdline") == 0);
     assert(ctx.nruns == 0);
     printf("test_udev_r4a: ctx-defaults OK\n");
+
+    /* Task 2: TEST */
+    {
+        char dir[] = "/tmp/r4a_testXXXXXX";
+        assert(mkdtemp(dir) != NULL);
+        char present[PATH_MAX], mode0700[PATH_MAX];
+        snprintf(present, sizeof present, "%s/here", dir);
+        snprintf(mode0700, sizeof mode0700, "%s/priv", dir);
+        FILE *f = fopen(present, "w"); assert(f); fclose(f);
+        f = fopen(mode0700, "w"); assert(f); fclose(f);
+        assert(chmod(mode0700, 0700) == 0);
+
+        struct uevent tev; memset(&tev, 0, sizeof tev);
+        ue_set(&tev, "ACTION", "add"); ue_set(&tev, "DEVPATH", "/devices/x");
+        struct dev_ctx tc; assert(dev_ctx_init(&tc, &tev, "/sys") == 0);
+
+        struct rule r;
+        char line[256];
+        snprintf(line, sizeof line, "TEST==\"%s\"", present);
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 1);   /* exists */
+
+        snprintf(line, sizeof line, "TEST!=\"%s/absent\"", dir);
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 1);   /* absent, != */
+
+        snprintf(line, sizeof line, "TEST==\"%s/absent\"", dir);
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 0);   /* absent, == */
+
+        snprintf(line, sizeof line, "TEST{0700}==\"%s\"", mode0700);
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 1);   /* mode matches */
+
+        snprintf(line, sizeof line, "TEST{0070}==\"%s\"", mode0700);
+        ruleset_parse_line(line, &r); assert(rule_match(&r, &tc) == 0);   /* group bits absent */
+
+        /* re-gate: a TEST-gated rule no longer flags deferred */
+        snprintf(line, sizeof line, "TEST==\"%s\", ENV{X}=\"1\"", present);
+        ruleset_parse_line(line, &r);
+        tc.last_rule_deferred = 0;
+        assert(rule_match(&r, &tc) == 1);
+        assert(tc.last_rule_deferred == 0);
+
+        unlink(present); unlink(mode0700); rmdir(dir);
+    }
+    printf("test_udev_r4a: TEST OK\n");
     return 0;
 }
