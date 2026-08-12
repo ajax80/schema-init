@@ -1,6 +1,6 @@
 # schema-udev R4a — native IMPORT / TEST + RUN-record
 
-**Branch:** `feat/schema-udev-cutover-e3` · **File:** `udev_ruleset.h` (+ `tests/test_udev_ruleset.c`) · **Date:** 2026-08-11
+**Branch:** `feat/schema-udev-cutover-e3` · **Files:** `udev_ruleset.h`, `udev_builtins.h` (behavior-preserving refactor) + new `tests/test_udev_r4a.c` · **Date:** 2026-08-11
 
 ## Context
 
@@ -25,8 +25,10 @@ The `usb`/`pci`/`disk`/`systemd` entries seen in a naive `IMPORT{builtin}` grep 
 
 ## Reused, do not reinvent
 
+- **`udev_builtins.h`** (already exists, currently no caller — built for exactly this): `run_builtins(sysroot,devpath,devnode,ev)` runs every `ub_select`-applicable builtin in fixed udev precedence order, each into a scratch uevent absorbed via `ub_absorb`. **Every signature difference is already handled here** — `path_id_build`'s char-buffer is wrapped into `ID_PATH`/`ID_PATH_TAG` (it is *not* a `struct uevent *` port), `blkid` runs `blkid_pt_build`+`blkid_fs_build`, and the devnode-taking ports (`blkid`, `ata_id`, `v4l_id`, `cdrom_id`) get `devnode`. Bit enum: `UB_HWDB=1, UB_PATH=2, UB_USB=4, UB_INPUT=8, UB_NET=16, UB_BLKID=32, UB_ATA=64, UB_V4L=128, UB_CDROM=256`. Helpers `ub_add`/`ub_absorb`.
 - **`udev_db.h`**: `udev_db_filename(ev,out,sz)` (builds `b<maj>:<min>` / `c<maj>:<min>` / `+<subsys>:<sysname>` / `n<ifindex>`), `udev_db_read_eprops(path,out)` (parses `E:KEY=val` lines into a `struct uevent`). These are the IMPORT{db}/{parent} readers.
-- **Builtin ports** (`struct uevent *out`, byte-exact, live-verified): `hwdb_build`, `usb_id_build`, `input_id_build`, `net_id_build`, `blkid_fs_build`, `blkid_pt_build`; `path_id_build` (char-buffer, emits `ID_PATH`/`ID_PATH_TAG` — wrapped).
+- **Builtin ports** — do **not** call these directly; go through `udev_builtins.h` which already adapts their differing signatures. `path_id_build(sysroot,devpath,char*out,sz)` returns a buffer; `blkid_fs_build`/`blkid_pt_build`/`ata_id_build`/`v4l_id_build`/`cdrom_id_build` take a **4th `devnode` arg**; `hwdb_build`/`usb_id_build`/`input_id_build`/`net_id_build` are `(sysroot,devpath,struct uevent*)`.
+- **`path_id.h`**: `pi_parent(char *cur)` (climb one sysfs level, in-place), `pi_base`, `pi_sysattr`, `pi_driver`, `pi_subsystem`.
 - **`schema-udev.h`**: `uevent_get`/`uevent_set` (R3), `uevent_from_sysfs(sysroot,dir,ev)` (synthesizes a parent's uevent so its db filename resolves).
 - **`udev_ruleset.h`**: `ruleset_subst` (`$`/`%` token expansion), `rk_cmp`, `match_dev_clause`, `rule_match`, `apply_rule`, `dev_ctx`.
 
@@ -43,6 +45,8 @@ const char *dbroot;                                   /* "/run/udev/data"; test-
 const char *cmdline_path;                             /* "/proc/cmdline"; test-overridable */
 ```
 
+`DEVCTX_RUNS_MAX 32`: measured max `RUN+=` per rule line = **1**; per-device accumulation across all matched rules is small. RUN is **record-only** — never gated, never executed, never in the fidelity record — so overflow silently drops the excess with zero correctness impact. 32 comfortably exceeds any observed per-device RUN count.
+
 `dev_ctx_init` sets `dbroot = "/run/udev/data"` and `cmdline_path = "/proc/cmdline"`. Tests point them at fake files — the seam that keeps IMPORT{db}/{parent}/{cmdline} off live system state.
 
 ### 2. TEST — new match clause
@@ -56,13 +60,29 @@ TEST stops being a `-1`/deferred key. In `rule_match`, remove TEST from the defe
 
 ### 3. IMPORT — native branches
 
-Wired into `apply_rule` at the current `/* IMPORT / RUN / other: R4 */` no-op (line ~518). `IMPORT` uses an assign-op (`=`); in udev it acts as an **implicit gate** — a native IMPORT that fails imports nothing *and skips the rest of the rule's application*. R4a honors that: `apply_rule` returns a sentinel (or sets a flag) so the caller stops applying the current rule when a native IMPORT hard-fails, matching udev.
+Wired into `apply_rule` at the current `/* IMPORT / RUN / other: R4 */` no-op (line ~518). `IMPORT` uses an assign-op (`=`), but its subtypes split into **hard gates** and **soft imports** — the most error-prone part of this slice. The faithful udev semantics:
+
+**IMPORT failure decision table**
+
+| Clause | R4a runs it? | Success | Empty / failure |
+|---|---|---|---|
+| `TEST==` / `TEST!=` | yes, at **match** time (`rule_match`) | gate pass | **gate fail → `rule_match` returns 0**, rule never applies |
+| `IMPORT{cmdline}` | yes | import keys, continue | import nothing, **continue** (soft) |
+| `IMPORT{db}` | yes | import key, continue | import nothing, **continue** (soft) |
+| `IMPORT{parent}` | yes | import matching keys, continue | import nothing, **continue** (soft) |
+| `IMPORT{builtin}` (ported) | yes | import keys, continue | **hard gate → stop applying this rule** |
+| `IMPORT{builtin}` (un-ported) | no | — | flag `deferred_applies`, skip clause, **continue** |
+| `IMPORT{program}` | no (R4b) | — | flag `deferred_applies`, skip clause, **continue** |
+| `RUN` | recorded, never run | appended to `ctx->runs` | n/a |
+
+**Return mechanism (pinned).** No new channel. `apply_rule` already returns `const char *` (a GOTO label, or `NULL` on normal completion). A hard-gate failure = **early `return NULL`**: stop applying the current rule; downstream in `ruleset_apply` this is identical to normal completion (advance to next rule, `i++`). Assignments already applied earlier in the same rule persist — faithful to udev, which applies tokens left-to-right and abandons the rule at the failing token without rollback. TEST is handled entirely in `rule_match` (it is a match op), so it never reaches `apply_rule`.
 
 - **`IMPORT{cmdline}`** — read `ctx->cmdline_path` (`/proc/cmdline`; test-overridable). Tokenize on whitespace; for `key` or `key=val`, `uevent_set(ctx->ev, key, val?val:"1")`. Absent key → import nothing (no gate failure; cmdline import is best-effort in udev).
 - **`IMPORT{db}`** — `udev_db_filename(ctx->ev, fn, sz)`; open `dbroot/fn`; `udev_db_read_eprops` into a scratch uevent; import the single named key (`c->val` names the property) via `uevent_set`. Missing file / missing key → no-op. Reads **real udevd's live db, read-only** — udevd is authoritative in shadow, so its record is ground truth, exactly what udevd itself reads during reprocessing.
 - **`IMPORT{parent}`** — `pi_parent(ctx->sysdir)` to climb one level; `uevent_from_sysfs` to synth the parent's uevent; `udev_db_filename` on that; read parent's record; import keys matching the clause's glob (`c->val`) into `ctx->ev`. udev's IMPORT{parent} copies parent props whose names match the pattern.
-- **`IMPORT{builtin}`** — dispatch table `name → port fn`:
-  `path_id, usb_id, input_id, net_id, hwdb, blkid`. Call `<port>_build(ctx->sysroot, devpath, &scratch)` into a scratch uevent; merge every scratch key into `ctx->ev` via `uevent_set`. `path_id` wrapped (buffer → set `ID_PATH`/`ID_PATH_TAG`). `blkid` maps to `blkid_fs_build` then `blkid_pt_build` (both, as udev's blkid builtin emits FS + PT props). Builtin returns error/empty → gate fails (skip rest of rule), matching udev. **Un-ported name** (`keyboard`, `factory_reset`, `dissect_image`, `btrfs`, `net_setup_link`) → set `last_rule_deferred`, bump `deferred_applies`, skip that clause (do not fail the rule — we cannot know its result).
+- **`IMPORT{builtin}`** — **reuse `udev_builtins.h`, do not build a parallel dispatch table.** Refactor `run_builtins` to extract a behavior-preserving `run_builtin_bit(sysroot,devpath,devnode,ev,bit)` that runs a single `UB_*` bit's builtin (the existing `run_builtins` becomes: `for each selected bit: run_builtin_bit`). `import_builtin(ctx,name)` maps the rule's builtin name → `UB_*` bit (`hwdb→UB_HWDB, path_id→UB_PATH, usb_id→UB_USB, input_id→UB_INPUT, net_id→UB_NET, blkid→UB_BLKID`) and calls `run_builtin_bit` **directly, bypassing `ub_select`** — a rule that names a builtin runs it unconditionally, unlike the coldplug heuristic path. `devnode` = `/dev/` + `uevent_get(ev,"DEVNAME")`, or NULL when the device has no node (devnode-taking ports no-op gracefully on NULL). Builtin runs but imports zero keys → **hard gate**: stop applying the rest of this rule (see decision table). **Un-ported name** (`keyboard`, `factory_reset`, `dissect_image`, `btrfs`, `net_setup_link`) → set `last_rule_deferred`, bump `deferred_applies`, skip that clause, **continue** the rule (we cannot know its result, so we neither gate nor drop).
+
+  This slice therefore touches `udev_builtins.h` as well as `udev_ruleset.h` — a pure extract-function refactor that leaves `run_builtins`' observable behavior identical (guarded by the existing `test_udev_builtins.c`). `schema-udev.c` stays byte-identical.
 
 ### 4. RUN — record, never execute
 
@@ -72,22 +92,25 @@ Wired into `apply_rule` at the current `/* IMPORT / RUN / other: R4 */` no-op (l
 
 After R4a, a rule is flagged deferred (`deferred_applies++`) only if it still carries an unresolved `PROGRAM`, `RESULT`, `IMPORT{program}`, or un-ported `IMPORT{builtin}`. TEST and native IMPORT no longer inflate the superset. The `deferred_applies` counter therefore drops toward the true residual that R4b will close.
 
-## Tests (`tests/test_udev_ruleset.c`, extend existing)
+## Tests (`tests/test_udev_r4a.c` — new; add to Makefile)
+
+The suite is split by phase (`test_udev_rules.c` / `_matcher.c` / `_executor.c` / `_builtins.c` / `_db.c` / `_ruleset.c`). R4a adds match-clause + apply-branch behavior; give it its own `test_udev_r4a.c` rather than swelling `_ruleset.c`. The `run_builtins` refactor stays covered by the existing `test_udev_builtins.c` (behavior unchanged).
 
 1. **TEST** — path exists/absent (`==`, `!=`); `{octal}` mode pass and fail; `$`-subst in the path. Fabricated tmp tree.
 2. **IMPORT{cmdline}** — fake cmdline with `key` and `key=val`; present/absent.
 3. **IMPORT{db}** — fake `dbroot/b8:0` record with `E:` lines → named key lands in ctx; missing key no-op; missing file no-op.
 4. **IMPORT{parent}** — fake sysfs child+parent, parent db record → glob-matched keys inherited.
-5. **IMPORT{builtin}** — dispatch to `path_id`/`usb_id` against a fabricated sysfs tree, keys merged into ctx; un-ported name sets deferred flag, no crash, rule not failed.
-6. **RUN** — recorded into `ctx->runs`, count correct, **nothing executed** (assert a marker file the RUN command *would* have created does not exist).
-7. **Re-gate** — a TEST-gated rule that R2/R3 over-matched now correctly rejects (`rule_match` returns 0); `deferred_applies` not bumped for a TEST-only rule.
+5. **IMPORT{builtin} success + soft/hard/deferred split** — `path_id`/`usb_id` against a fabricated sysfs tree, keys merged into ctx; ported builtin that imports **zero** keys → hard gate stops the rule (a later assignment in the same rule does **not** apply); un-ported name sets deferred flag, no crash, rule **not** failed (later assignment *does* apply). This test is the decision table's teeth.
+6. **`run_builtin_bit` extraction** — assert `run_builtins` output is byte-identical before/after the refactor for a fabricated multi-builtin device (or lean on existing `test_udev_builtins.c`).
+7. **RUN** — recorded into `ctx->runs`, count correct, **nothing executed** (assert a marker file the RUN command *would* have created does not exist).
+8. **Re-gate** — a TEST-gated rule that R2/R3 over-matched now correctly rejects (`rule_match` returns 0); `deferred_applies` not bumped for a TEST-only rule.
 
 ## Gates (verification before "done")
 
 - `make test` exit 0, all OK lines green.
 - **Direct c11 compile** of the test TU with zero warnings — the Makefile hardcodes `-std=c99`, so `make test` alone does **not** CI-gate c11 (R3 deferred-minor (a)). Compile explicitly: `cc -std=c11 -Wall -Wextra ...`.
 - Live-smoke: `ruleset_apply` on real `/sys/block/sda`, assert no crash and expected props/tags; **live box untouched** (dry-run, sentinel absent, working-tree binary, no deploy, no reboot).
-- Boundary: `schema-udev.c` byte-identical to prior (R4a is header-only + tests).
+- Boundary: `schema-udev.c` byte-identical to prior. R4a is headers + tests only — it edits `udev_ruleset.h` and refactors `udev_builtins.h` (behavior-preserving), never `schema-udev.c`.
 
 ## Out of scope (R4b / later)
 
@@ -98,6 +121,6 @@ After R4a, a rule is flagged deferred (`deferred_applies++`) only if it still ca
 
 ## Parked / risks
 
-- **IMPORT gate faithfulness** is the load-bearing subtlety: udev treats a failed IMPORT as a rule-skip. Getting the native-IMPORT-fails-→-skip-rest-of-rule path wrong would either over- or under-apply. Covered by test 5 (un-ported must *not* fail the rule) and the builtin-empty case.
+- **IMPORT gate faithfulness** is the load-bearing subtlety: `{builtin}`/`{program}` are hard gates (fail → skip rest of rule), but `{db}`/`{parent}`/`{cmdline}` are soft (import-what's-there, always continue). Conflating the two would over- or under-apply. Pinned in the decision table; test 5 is its teeth.
 - **hwdb builtin args**: `IMPORT{builtin}="hwdb <args>"` may carry `--subsystem=`/lookup-key arguments the port's `hwdb_build` ignores. If a live-gate mismatch surfaces at R5, revisit arg parsing then — do not speculatively build it now (YAGNI).
 - **`udev_db_filename` for parent** requires the parent's MAJOR/MINOR or a `+subsystem:sysname` form; `uevent_from_sysfs` supplies what the parent's `uevent` file carries. A parent with no db record → inherit nothing (faithful).
