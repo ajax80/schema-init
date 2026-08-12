@@ -1,4 +1,5 @@
 #include "../udev_ruleset.h"
+#include "../udev_builtins.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -75,5 +76,16 @@ int main(void) {
         unlink(present); unlink(mode0700); unlink(mode0600); rmdir(dir);
     }
     printf("test_udev_r4a: TEST OK\n");
+
+    /* Task 3: run_builtin_bit exists and is a no-op on a bogus device */
+    {
+        struct uevent bev; memset(&bev, 0, sizeof bev);
+        ue_set(&bev, "ACTION", "add"); ue_set(&bev, "DEVPATH", "/devices/none");
+        int before = bev.n;
+        int rc = run_builtin_bit("/nonexistent-sysroot", "/devices/none", NULL, &bev, UB_USB);
+        assert(rc < 0);            /* usb_id on a non-USB/absent device fails */
+        assert(bev.n == before);   /* nothing absorbed */
+    }
+    printf("test_udev_r4a: run_builtin_bit OK\n");
     return 0;
 }
