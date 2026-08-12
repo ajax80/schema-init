@@ -239,6 +239,7 @@ static inline int blkid_fs_build(const char *sysroot, const char *devpath,
                                  const char *devnode, struct uevent *out) {
     (void)sysroot; (void)devpath;
     out->n = 0;
+    if (!devnode) return 0;
     if (fs_probe_btrfs(devnode, out) == 0) return 0;
     if (fs_probe_ext(devnode, out)   == 0) return 0;
     if (fs_probe_ntfs(devnode, out)  == 0) return 0;

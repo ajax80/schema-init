@@ -116,5 +116,75 @@ int main(void) {
         assert(mev.n == mbefore);
     }
     printf("test_udev_r4a: run_builtins-guard OK\n");
+
+    /* Task 4: IMPORT{builtin} gate semantics */
+    {
+        struct uevent gev; memset(&gev, 0, sizeof gev);
+        ue_set(&gev, "ACTION", "add"); ue_set(&gev, "DEVPATH", "/devices/none");
+        struct dev_ctx gc; assert(dev_ctx_init(&gc, &gev, "/nonexistent-sysroot") == 0);
+
+        /* ported builtin that FAILS -> hard gate: later ENV assignment must NOT apply */
+        struct rule r;
+        ruleset_parse_line("IMPORT{builtin}=\"usb_id\", ENV{AFTER}=\"1\"", &r);
+        assert(rule_match(&r, &gc) == 1);
+        apply_rule(&r, &gc);
+        assert(uevent_get(gc.ev, "AFTER") == NULL);
+
+        /* un-ported builtin -> deferred, NOT a gate: later ENV assignment DOES apply */
+        struct uevent dev2; memset(&dev2, 0, sizeof dev2);
+        ue_set(&dev2, "ACTION", "add"); ue_set(&dev2, "DEVPATH", "/devices/none");
+        struct dev_ctx dc; assert(dev_ctx_init(&dc, &dev2, "/sys") == 0);
+        ruleset_parse_line("IMPORT{builtin}=\"keyboard\", ENV{AFTER}=\"1\"", &r);
+        assert(rule_match(&r, &dc) == 1);
+        dc.last_rule_deferred = 0;
+        apply_rule(&r, &dc);
+        assert(strcmp(uevent_get(dc.ev, "AFTER"), "1") == 0);
+        assert(dc.last_rule_deferred == 1);
+
+        /* IMPORT{program} -> deferred, NOT a gate */
+        struct uevent pev; memset(&pev, 0, sizeof pev);
+        ue_set(&pev, "ACTION", "add"); ue_set(&pev, "DEVPATH", "/devices/none");
+        struct dev_ctx pc; assert(dev_ctx_init(&pc, &pev, "/sys") == 0);
+        ruleset_parse_line("IMPORT{program}=\"/bin/true\", ENV{AFTER}=\"1\"", &r);
+        pc.last_rule_deferred = 0;
+        apply_rule(&r, &pc);
+        assert(strcmp(uevent_get(pc.ev, "AFTER"), "1") == 0);
+        assert(pc.last_rule_deferred == 1);
+
+        /* deferred bump is counted once by ruleset_apply, after apply */
+        struct uevent sev; memset(&sev, 0, sizeof sev);
+        ue_set(&sev, "ACTION", "add"); ue_set(&sev, "DEVPATH", "/devices/none");
+        struct dev_ctx sc2; assert(dev_ctx_init(&sc2, &sev, "/sys") == 0);
+        struct ruleset rs = {0};
+        struct rule sr;
+        assert(ruleset_parse_line("IMPORT{builtin}=\"keyboard\"", &sr) > 0);
+        assert(ruleset_append(&rs, &sr) == 0);
+        ruleset_apply(&rs, &sc2);
+        assert(sc2.deferred_applies == 1);
+        free(rs.rules);
+    }
+    printf("test_udev_r4a: IMPORT-gate OK\n");
+
+    /* Task 4: blkid builtins must not crash on a NULL devnode (no DEVNAME) */
+    {
+        char dir[] = "/tmp/r4a_blkidXXXXXX";
+        assert(mkdtemp(dir) != NULL);
+        char childpath[sizeof dir + 8];
+        snprintf(childpath, sizeof childpath, "%s/child", dir);
+        assert(mkdir(childpath, 0700) == 0);
+        char partfile[sizeof dir + 20];
+        snprintf(partfile, sizeof partfile, "%s/child/partition", dir);
+        FILE *f = fopen(partfile, "w"); assert(f); fprintf(f, "1\n"); fclose(f);
+
+        struct uevent bev; memset(&bev, 0, sizeof bev);
+        ue_set(&bev, "ACTION", "add"); ue_set(&bev, "DEVPATH", "/child");
+        int before = bev.n;
+        int rc = run_builtin_bit(dir, "/child", NULL, &bev, UB_BLKID);
+        assert(rc == 0);
+        assert(bev.n == before);
+
+        unlink(partfile); rmdir(childpath); rmdir(dir);
+    }
+    printf("test_udev_r4a: blkid-null-devnode OK\n");
     return 0;
 }

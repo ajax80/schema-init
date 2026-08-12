@@ -3,6 +3,8 @@
 
 #include "schema-udev.h"   /* safe_copy */
 #include "path_id.h"   /* pi_parent, pi_sysattr, pi_subsystem, pi_base, pi_driver */
+#include "udev_db.h"        /* udev_db_filename, udev_db_read_eprops (IMPORT{db}/{parent}) */
+#include "udev_builtins.h"  /* run_builtin_bit, UB_* (IMPORT{builtin}) */
 #include <sys/stat.h>   /* TEST clause: stat, st_mode */
 #include <string.h>
 #include <stdlib.h>
@@ -505,6 +507,45 @@ static inline void apply_symlink_value(struct dev_ctx *ctx, const char *v, enum 
     }
 }
 
+static inline void import_cmdline(struct dev_ctx *c, const char *k) { (void)c; (void)k; }
+static inline void import_db(struct dev_ctx *c, const char *k)      { (void)c; (void)k; }
+static inline void import_parent(struct dev_ctx *c, const char *k)  { (void)c; (void)k; }
+
+static inline int builtin_name_bit(const char *name) {
+    if (!strcmp(name, "hwdb"))     return UB_HWDB;
+    if (!strcmp(name, "path_id"))  return UB_PATH;
+    if (!strcmp(name, "usb_id"))   return UB_USB;
+    if (!strcmp(name, "input_id")) return UB_INPUT;
+    if (!strcmp(name, "net_id"))   return UB_NET;
+    if (!strcmp(name, "blkid"))    return UB_BLKID;
+    return 0;   /* keyboard, factory_reset, dissect_image, btrfs, net_setup_link, ... */
+}
+
+/* 1 = continue applying rule; 0 = hard gate (stop this rule). */
+static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c, const char *sv) {
+    if (!strcmp(c->subkey, "cmdline")) { import_cmdline(ctx, c->val); return 1; }
+    if (!strcmp(c->subkey, "db"))      { import_db(ctx, c->val);      return 1; }
+    if (!strcmp(c->subkey, "parent"))  { import_parent(ctx, c->val);  return 1; }
+    if (!strcmp(c->subkey, "builtin")) {
+        int bit = builtin_name_bit(sv);
+        if (bit == 0) { ctx->last_rule_deferred = 1; return 1; }   /* un-ported: defer, no gate */
+        char devnode[PATH_MAX]; const char *dn = NULL;
+        const char *name = uevent_get(ctx->ev, "DEVNAME");
+        if (name && *name) { snprintf(devnode, sizeof devnode, "/dev/%s", name); dn = devnode; }
+        const char *dp = uevent_get(ctx->ev, "DEVPATH");
+        int rc = run_builtin_bit(ctx->sysroot, dp ? dp : "", dn, ctx->ev, bit);
+        return (rc < 0) ? 0 : 1;   /* hard gate on builtin failure */
+    }
+    /* program / file / other: deferred to R4b */
+    ctx->last_rule_deferred = 1;
+    return 1;
+}
+
+static inline void ctx_add_run(struct dev_ctx *ctx, const char *v) {
+    if (ctx->nruns >= DEVCTX_RUNS_MAX) return;
+    safe_copy(ctx->runs[ctx->nruns++], v, UE_VAL_MAX);
+}
+
 static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) {
     for (int i = 0; i < r->nclause; i++) {
         const struct rule_clause *c = &r->clause[i];
@@ -536,8 +577,11 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
             safe_copy(ctx->owner, sv, sizeof ctx->owner);
         } else if (!strcmp(c->key, "NAME")) {
             safe_copy(ctx->name, sv, sizeof ctx->name);
+        } else if (!strcmp(c->key, "IMPORT")) {
+            if (apply_import(ctx, c, sv) == 0) return NULL;   /* hard gate: stop this rule */
+        } else if (!strcmp(c->key, "RUN")) {
+            ctx_add_run(ctx, sv);
         }
-        /* IMPORT / RUN / other: R4 — ignored here */
 
         if (c->op == OP_ASSIGN_FINAL) ctx_lock_final(ctx, c);
     }
@@ -557,8 +601,8 @@ static inline int ruleset_find_label(const struct ruleset *rs, int from, const c
 static inline int ruleset_apply(const struct ruleset *rs, struct dev_ctx *ctx) {
     for (int i = 0; i < rs->n; ) {
         if (!rule_match(&rs->rules[i], ctx)) { i++; continue; }
-        if (ctx->last_rule_deferred) ctx->deferred_applies++;
         const char *goto_label = apply_rule(&rs->rules[i], ctx);
+        if (ctx->last_rule_deferred) ctx->deferred_applies++;
         if (goto_label) {
             int t = ruleset_find_label(rs, i + 1, goto_label);
             if (t < 0) break;      /* forward label not found: stop */

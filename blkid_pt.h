@@ -174,6 +174,7 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
 static inline int blkid_pt_build(const char *sysroot, const char *devpath,
                                  const char *devnode, struct uevent *out) {
     out->n = 0;
+    if (!devnode) return 0;
     char syspath[PATH_MAX];
     if ((size_t)snprintf(syspath, sizeof syspath, "%s%s", sysroot, devpath) >= sizeof syspath)
         return 0;
