@@ -186,6 +186,7 @@ static inline int udev_glob(const char *pat, const char *str) {
 #define DEVCTX_TAGS_MAX 32
 #define DEVCTX_SYMLINKS_MAX 32
 #define DEVCTX_FINAL_MAX    16
+#define DEVCTX_RUNS_MAX 32
 
 struct dev_ctx {
     struct uevent *ev;                          /* properties; mutable (R3 grows) */
@@ -206,12 +207,18 @@ struct dev_ctx {
     int  nfinal;
     int  last_rule_deferred;
     int  deferred_applies;
+    char runs[DEVCTX_RUNS_MAX][UE_VAL_MAX];
+    int  nruns;
+    const char *dbroot;
+    const char *cmdline_path;
 };
 
 static inline int dev_ctx_init(struct dev_ctx *ctx, struct uevent *ev, const char *sysroot) {
     memset(ctx, 0, sizeof *ctx);
     ctx->ev = ev;
     ctx->sysroot = sysroot;
+    ctx->dbroot = "/run/udev/data";
+    ctx->cmdline_path = "/proc/cmdline";
     const char *dp = uevent_get(ev, "DEVPATH");
     if (!dp) return -1;
     if ((size_t)snprintf(ctx->sysdir, sizeof ctx->sysdir, "%s%s", sysroot, dp) >= sizeof ctx->sysdir)

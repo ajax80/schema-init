@@ -102,6 +102,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_udev_ruleset.c -o /tmp/schema-test-ruleset && /tmp/schema-test-ruleset
 	$(CC) $(CFLAGS) tests/test_udev_matcher.c -o /tmp/schema-test-matcher && /tmp/schema-test-matcher
 	$(CC) $(CFLAGS) tests/test_udev_executor.c -o /tmp/schema-test-executor && /tmp/schema-test-executor
+	$(CC) $(CFLAGS) tests/test_udev_r4a.c -o /tmp/schema-test-r4a && /tmp/schema-test-r4a
 	$(CC) $(CFLAGS) tests/test_parity.c -o /tmp/schema-test-parity && /tmp/schema-test-parity
 	$(CC) $(CFLAGS) tests/test_path_id.c -o /tmp/schema-test-pathid && /tmp/schema-test-pathid
 	$(CC) $(CFLAGS) tests/test_usb_id.c -o /tmp/schema-test-usbid && /tmp/schema-test-usbid
