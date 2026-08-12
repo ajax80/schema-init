@@ -533,7 +533,16 @@ static inline void import_cmdline(struct dev_ctx *ctx, const char *key) {
         }
     }
 }
-static inline void import_db(struct dev_ctx *c, const char *k)      { (void)c; (void)k; }
+static inline void import_db(struct dev_ctx *ctx, const char *key) {
+    char fn[128];
+    if (udev_db_filename(ctx->ev, fn, sizeof fn) != 0) return;
+    char path[PATH_MAX];
+    if ((size_t)snprintf(path, sizeof path, "%s/%s", ctx->dbroot, fn) >= sizeof path) return;
+    struct uevent rec;
+    if (udev_db_read_eprops(path, &rec) != 0) return;
+    const char *v = uevent_get(&rec, key);
+    if (v) uevent_set(ctx->ev, key, v);
+}
 static inline void import_parent(struct dev_ctx *c, const char *k)  { (void)c; (void)k; }
 
 static inline int builtin_name_bit(const char *name) {

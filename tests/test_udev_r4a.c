@@ -207,5 +207,34 @@ int main(void) {
         unlink(cf);
     }
     printf("test_udev_r4a: IMPORT-cmdline OK\n");
+
+    /* Task 6: IMPORT{db} */
+    {
+        char dbdir[] = "/tmp/r4a_dbXXXXXX"; assert(mkdtemp(dbdir));
+        char rec[PATH_MAX]; snprintf(rec, sizeof rec, "%s/b8:0", dbdir);
+        FILE *f = fopen(rec, "w"); assert(f);
+        fprintf(f, "E:ID_FS_TYPE=ext4\nE:ID_FS_UUID=dead-beef\nS:disk/by-uuid/dead-beef\n");
+        fclose(f);
+
+        struct uevent dev; memset(&dev, 0, sizeof dev);
+        ue_set(&dev, "ACTION", "add"); ue_set(&dev, "DEVPATH", "/devices/virtual/block/sda");
+        ue_set(&dev, "SUBSYSTEM", "block"); ue_set(&dev, "MAJOR", "8"); ue_set(&dev, "MINOR", "0");
+        ue_set(&dev, "DEVNAME", "sda");
+        struct dev_ctx dc; assert(dev_ctx_init(&dc, &dev, "/sys") == 0);
+        dc.dbroot = dbdir;
+
+        import_db(&dc, "ID_FS_TYPE");
+        assert(strcmp(uevent_get(dc.ev, "ID_FS_TYPE"), "ext4") == 0);
+        import_db(&dc, "ID_FS_UUID");
+        assert(strcmp(uevent_get(dc.ev, "ID_FS_UUID"), "dead-beef") == 0);
+        import_db(&dc, "NOPE");
+        assert(uevent_get(dc.ev, "NOPE") == NULL);       /* missing key: no-op */
+        unlink(rec); rmdir(dbdir);
+
+        /* missing file: no-op, no crash */
+        dc.dbroot = "/tmp/r4a_absent_db";
+        import_db(&dc, "ID_FS_TYPE");                    /* still ext4 from before, unchanged */
+    }
+    printf("test_udev_r4a: IMPORT-db OK\n");
     return 0;
 }
