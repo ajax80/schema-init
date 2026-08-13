@@ -11,6 +11,7 @@
 #include "ata_id.h"
 #include "v4l_id.h"
 #include "cdrom_id.h"
+#include "fido_id.h"
 
 #include <string.h>
 #include <fnmatch.h>
@@ -56,7 +57,7 @@ static inline int ub_has_ata_ancestor(const char *devpath) {
     return 0;
 }
 
-enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128, UB_CDROM = 256 };
+enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128, UB_CDROM = 256, UB_FIDO = 512 };
 
 /* Pure guard logic: which builtins apply to this device? Mirrors the IMPORT{builtin}
  * conditions in systemd's shipped /usr/lib/udev/rules.d. Order of the bits is
@@ -172,6 +173,7 @@ static inline int run_builtin_bit(const char *sysroot, const char *devpath,
         return (rpt == 0 || rfs == 0) ? 0 : -1;
     }
     case UB_CDROM: tmp.n = 0; { cdrom_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); return 0; }
+    case UB_FIDO:  tmp.n = 0; { int r = fido_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }
     default: return -1;
     }
 }

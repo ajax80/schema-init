@@ -104,11 +104,39 @@ static void test_program_result(void) {
     printf("test_udev_r4b: program-result OK\n");
 }
 
+static void test_fido_id(void) {
+    char dir[] = "/tmp/r4b_fidoXXXXXX"; assert(mkdtemp(dir));
+    char sysdev[PATH_MAX]; snprintf(sysdev, sizeof sysdev, "%s/devices/hid0", dir);
+    char cmd[PATH_MAX + 16]; snprintf(cmd, sizeof cmd, "mkdir -p %s", sysdev); assert(system(cmd) == 0);
+    char rd[PATH_MAX]; assert((size_t)snprintf(rd, sizeof rd, "%s/report_descriptor", sysdev) < sizeof rd);
+    unsigned char desc[] = { 0x06, 0xd0, 0xf1, 0x09, 0x01, 0xa1, 0x01 };
+    int fd = open(rd, O_WRONLY | O_CREAT, 0644); assert(fd >= 0);
+    assert(write(fd, desc, sizeof desc) == (ssize_t)sizeof desc); close(fd);
+
+    struct uevent out; memset(&out, 0, sizeof out);
+    int n = fido_id_build(dir, "/devices/hid0", &out);
+    assert(n == 2);
+    assert(!strcmp(uevent_get(&out, "ID_FIDO_TOKEN"), "1"));
+    assert(!strcmp(uevent_get(&out, "ID_SECURITY_TOKEN"), "1"));
+
+    /* non-FIDO descriptor → nothing */
+    unsigned char kbd[] = { 0x05, 0x01, 0x09, 0x06, 0xa1, 0x01 };
+    fd = open(rd, O_WRONLY | O_TRUNC, 0644); assert(fd >= 0);
+    assert(write(fd, kbd, sizeof kbd) == (ssize_t)sizeof kbd); close(fd);
+    memset(&out, 0, sizeof out);
+    assert(fido_id_build(dir, "/devices/hid0", &out) == 0);
+
+    /* name→bit map */
+    assert(builtin_name_bit("fido_id") == UB_FIDO);
+    printf("test_udev_r4b: fido-id OK\n");
+}
+
 int main(void) {
     test_result_subst();
     test_argv_split();
     test_run_capture();
     test_program_result();
+    test_fido_id();
     printf("test_udev_r4b: ALL OK\n");
     return 0;
 }

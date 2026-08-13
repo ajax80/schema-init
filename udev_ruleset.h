@@ -599,6 +599,10 @@ static inline int builtin_name_bit(const char *name) {
     if (!strcmp(name, "input_id")) return UB_INPUT;
     if (!strcmp(name, "net_id"))   return UB_NET;
     if (!strcmp(name, "blkid"))    return UB_BLKID;
+    if (!strcmp(name, "ata_id"))   return UB_ATA;
+    if (!strcmp(name, "v4l_id"))   return UB_V4L;
+    if (!strcmp(name, "cdrom_id")) return UB_CDROM;
+    if (!strcmp(name, "fido_id"))  return UB_FIDO;
     return 0;   /* keyboard, factory_reset, dissect_image, btrfs, net_setup_link, ... */
 }
 
