@@ -111,6 +111,10 @@ int main(void) {
     assert(rule_match(&r, &cm) == 0);
     ruleset_parse_line("ENV{NOPE}!=\"x\"", &r);          /* missing => != passes */
     assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("ENV{NOPE}==\"\"", &r);           /* unset == "" => empty-match passes */
+    assert(rule_match(&r, &cm) == 1);
+    ruleset_parse_line("ENV{NOPE}!=\"\"", &r);           /* unset != "" => not-empty fails */
+    assert(rule_match(&r, &cm) == 0);
     ruleset_parse_line("ATTR{serial}==\"ABC123\"", &r);  /* sysfs attr read */
     assert(rule_match(&r, &cm) == 1);
     ruleset_parse_line("ATTR{serial}==\"WRONG\"", &r);

@@ -360,7 +360,7 @@ static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char 
 static inline int rk_is_match_op(enum rule_op op) { return op == OP_MATCH_EQ || op == OP_MATCH_NE; }
 
 static inline int rk_cmp(enum rule_op op, const char *pat, const char *actual) {
-    int m = (actual != NULL) && udev_glob(pat, actual);
+    int m = udev_glob(pat, actual ? actual : "");
     return (op == OP_MATCH_NE) ? !m : m;
 }
 
