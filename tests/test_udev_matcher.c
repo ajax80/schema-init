@@ -169,6 +169,10 @@ int main(void) {
     assert(rule_match(&pr, &cp) == 1);
     assert(strcmp(cp.matched_parent, "A") == 0);
 
+    /* $attr{} falls back to the matched parent: A has vendor, device B does not */
+    ruleset_subst("$attr{vendor}", &cp, o, sizeof o);
+    assert(strcmp(o, "0x8086") == 0);
+
     /* value mismatch on the same ancestor -> no match */
     ruleset_parse_line("SUBSYSTEMS==\"pci\", ATTRS{vendor}==\"0xbeef\"", &pr);
     assert(rule_match(&pr, &cp) == 0);

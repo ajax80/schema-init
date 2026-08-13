@@ -199,6 +199,7 @@ struct dev_ctx {
     char           tags[DEVCTX_TAGS_MAX][UE_KEY_MAX];
     int            ntags;
     char           matched_parent[UE_KEY_MAX];  /* last parent-group match kname */
+    char           matched_parent_dir[PATH_MAX]; /* full sysfs path of that ancestor */
     char symlinks[DEVCTX_SYMLINKS_MAX][UE_VAL_MAX];
     int  nsym;
     char mode[8];
@@ -305,8 +306,11 @@ static inline void rs_app(char *out, size_t sz, size_t *o, const char *s) {
     if (sz) out[*o] = '\0';
 }
 
-/* Expand match-resolvable substitution tokens; deferred/unknown copied verbatim. */
-static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char *out, size_t sz) {
+/* Expand match-resolvable substitution tokens; deferred/unknown copied verbatim.
+ * repl_ws: replace whitespace inside each substituted VALUE with '_' (SYMLINK/NAME
+ * context) so value-internal spaces don't split into multiple links; literal
+ * template spaces are preserved. */
+static inline int ruleset_subst_ex(const char *in, const struct dev_ctx *ctx, char *out, size_t sz, int repl_ws) {
     size_t o = 0; if (sz) out[0] = '\0';
     const char *dp = uevent_get(ctx->ev, "DEVPATH");
     const char *kname = dp ? pi_base(dp) : "";
@@ -337,7 +341,10 @@ static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char 
         else if ((sig == '$' && !strcmp(name, "root"))    || (sig == '%' && !strcmp(name, "r"))) rep = "/dev";
         else if ((sig == '$' && !strcmp(name, "env"))     || (sig == '%' && !strcmp(name, "E"))) rep = uevent_get(ctx->ev, arg);
         else if ((sig == '$' && !strcmp(name, "attr"))    || (sig == '%' && !strcmp(name, "s"))) {
-            rep = (pi_sysattr(ctx->sysdir, arg, tmp, sizeof tmp) == 0) ? tmp : ""; }
+            if (pi_sysattr(ctx->sysdir, arg, tmp, sizeof tmp) == 0) rep = tmp;
+            else if (ctx->matched_parent_dir[0] &&
+                     pi_sysattr(ctx->matched_parent_dir, arg, tmp, sizeof tmp) == 0) rep = tmp;
+            else rep = ""; }
         else if ((sig == '$' && !strcmp(name, "result")) || (sig == '%' && !strcmp(name, "c"))) {
             if (arg[0]) {
                 int want = atoi(arg), idx = 0; rep = "";
@@ -353,7 +360,16 @@ static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char 
             } else rep = ctx->result;
         }
         else known = 0;
-        if (known) { rs_app(out, sz, &o, rep ? rep : ""); p = q; }
+        if (known) {
+            const char *use = rep ? rep : "";
+            if (repl_ws && (strchr(use, ' ') || strchr(use, '\t'))) {
+                char wsb[UE_VAL_MAX]; size_t k = 0;
+                for (const char *s = use; *s && k + 1 < sizeof wsb; s++)
+                    wsb[k++] = (*s == ' ' || *s == '\t') ? '_' : *s;
+                wsb[k] = '\0'; rs_app(out, sz, &o, wsb);
+            } else rs_app(out, sz, &o, use);
+            p = q;
+        }
         else {
             /* deferred/unknown token: copy [p, q) verbatim */
             size_t tl = (size_t)(q - p); char tk[160];
@@ -362,6 +378,10 @@ static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char 
         }
     }
     return 0;
+}
+
+static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char *out, size_t sz) {
+    return ruleset_subst_ex(in, ctx, out, sz, 0);
 }
 
 static inline int rk_is_match_op(enum rule_op op) { return op == OP_MATCH_EQ || op == OP_MATCH_NE; }
@@ -455,7 +475,8 @@ static inline int parent_group_match(const struct rule_clause *cl, int nc, struc
         int all = 1;
         for (int k = 0; k < nc; k++)
             if (!parent_clause_on(&cl[k], anc, ctx)) { all = 0; break; }
-        if (all) { safe_copy(ctx->matched_parent, pi_base(anc), UE_KEY_MAX); return 1; }
+        if (all) { safe_copy(ctx->matched_parent, pi_base(anc), UE_KEY_MAX);
+                   safe_copy(ctx->matched_parent_dir, anc, sizeof ctx->matched_parent_dir); return 1; }
         if (strlen(anc) <= strlen(ctx->sysroot)) return 0;   /* don't climb above sysroot */
         if (pi_parent(anc) != 0) return 0;
     }
@@ -701,7 +722,8 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
             else { if (c->op == OP_ASSIGN || c->op == OP_ASSIGN_FINAL) ctx_clear_tags(ctx);
                    ctx_add_tag(ctx, sv); }
         } else if (!strcmp(c->key, "SYMLINK")) {
-            apply_symlink_value(ctx, sv, c->op);
+            char svl[UE_VAL_MAX]; ruleset_subst_ex(c->val, ctx, svl, sizeof svl, 1);
+            apply_symlink_value(ctx, svl, c->op);
         } else if (!strcmp(c->key, "OPTIONS")) {
             apply_options(ctx, sv);
         } else if (!strcmp(c->key, "MODE")) {

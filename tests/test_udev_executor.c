@@ -106,16 +106,22 @@ int main(void) {
     assert(ac.ntags == 1 && strcmp(ac.tags[0], "uaccess") == 0);
     assert(strcmp(ac.mode, "0660") == 0 && strcmp(ac.group, "plugdev") == 0);
 
-    /* SYMLINK+= with a space-separated list -> two links */
+    /* SYMLINK+= with a literal space-separated list -> two links (separators kept) */
     ruleset_parse_line("SYMLINK+=\"disk/by-id/x disk/by-path/y\"", &ar);
     apply_rule(&ar, &ac);
     assert(ac.nsym == 2);
+
+    /* whitespace INSIDE a substituted value -> escaped to _, ONE link (not split) */
+    uevent_set(&ae, "MODEL", "a b c");
+    ruleset_parse_line("SYMLINK+=\"disk/by-id/x-$env{MODEL}\"", &ar);
+    apply_rule(&ar, &ac);
+    assert(ac.nsym == 3 && strcmp(ac.symlinks[2], "disk/by-id/x-a_b_c") == 0);
 
     /* string_escape=replace: whitespace escaped -> a single link */
     ac.escape = 1;
     ruleset_parse_line("SYMLINK+=\"has space\"", &ar);
     apply_rule(&ar, &ac);
-    assert(ac.nsym == 3 && strcmp(ac.symlinks[2], "has_space") == 0);
+    assert(ac.nsym == 4 && strcmp(ac.symlinks[3], "has_space") == 0);
     ac.escape = 0;
 
     /* TAG-= removes */
