@@ -97,6 +97,7 @@ int main(void) {
     /* build a dev_ctx over a minimal device */
     struct uevent ae; memset(&ae, 0, sizeof ae);
     ue_set(&ae, "ACTION", "add"); ue_set(&ae, "DEVPATH", "/devices/z");
+    ue_set(&ae, "DEVNAME", "z");
     struct dev_ctx ac; assert(dev_ctx_init(&ac, &ae, "/sys") == 0);
 
     struct rule ar;
@@ -123,6 +124,14 @@ int main(void) {
     apply_rule(&ar, &ac);
     assert(ac.nsym == 4 && strcmp(ac.symlinks[3], "has_space") == 0);
     ac.escape = 0;
+
+    /* devnode-less device (no DEVNAME): SYMLINK+= is a no-op (real udev needs a devnode) */
+    struct uevent nde; memset(&nde, 0, sizeof nde);
+    ue_set(&nde, "ACTION", "add"); ue_set(&nde, "DEVPATH", "/devices/drm/card1-HDMI-A-1");
+    struct dev_ctx ndc; assert(dev_ctx_init(&ndc, &nde, "/sys") == 0);
+    ruleset_parse_line("SYMLINK+=\"dri/by-path/pci-x-card\"", &ar);
+    apply_rule(&ar, &ndc);
+    assert(ndc.nsym == 0);
 
     /* TAG-= removes */
     ruleset_parse_line("TAG-=\"uaccess\"", &ar);

@@ -235,12 +235,12 @@ int main(void) {
         struct dev_ctx cc; assert(dev_ctx_init(&cc, &cev, "/sys") == 0);
         cc.cmdline_path = cf;
 
-        import_cmdline(&cc, "rd.foo");
+        assert(import_cmdline(&cc, "rd.foo") == 1);             /* found -> 1 (rule continues) */
         assert(strcmp(uevent_get(cc.ev, "rd.foo"), "bar") == 0);
-        import_cmdline(&cc, "quiet");
+        assert(import_cmdline(&cc, "quiet") == 1);
         assert(strcmp(uevent_get(cc.ev, "quiet"), "1") == 0);   /* bare flag -> "1" */
-        import_cmdline(&cc, "absent");
-        assert(uevent_get(cc.ev, "absent") == NULL);            /* soft: no-op */
+        assert(import_cmdline(&cc, "absent") == 0);             /* absent -> 0 (rule gates) */
+        assert(uevent_get(cc.ev, "absent") == NULL);
         unlink(cf);
     }
     printf("test_udev_r4a: IMPORT-cmdline OK\n");

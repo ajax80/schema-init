@@ -553,6 +553,7 @@ static inline void apply_options(struct dev_ctx *ctx, const char *val) {
 
 /* add each whitespace-separated symlink token (escaped) from a SYMLINK value */
 static inline void apply_symlink_value(struct dev_ctx *ctx, const char *v, enum rule_op op) {
+    if (!uevent_get(ctx->ev, "DEVNAME")) return;   /* no devnode -> no symlinks (real udev) */
     if (op == OP_ASSIGN || op == OP_ASSIGN_FINAL) ctx_clear_symlinks(ctx);
     if (ctx->escape) {                    /* whole value -> one escaped link */
         char e[UE_VAL_MAX]; udev_replace_chars(v, e, sizeof e);
@@ -574,9 +575,10 @@ static inline void apply_symlink_value(struct dev_ctx *ctx, const char *v, enum 
     }
 }
 
-static inline void import_cmdline(struct dev_ctx *ctx, const char *key) {
+/* 1 if the key was present on the cmdline (property imported), 0 otherwise. */
+static inline int import_cmdline(struct dev_ctx *ctx, const char *key) {
     FILE *f = fopen(ctx->cmdline_path, "r");
-    if (!f) return;
+    if (!f) return 0;
     char buf[4096];
     size_t n = fread(buf, 1, sizeof buf - 1, f);
     fclose(f);
@@ -589,16 +591,17 @@ static inline void import_cmdline(struct dev_ctx *ctx, const char *key) {
         size_t tlen = (size_t)(p - s);
         if (tlen == 0) continue;
         if (tlen >= klen && !strncmp(s, key, klen)) {
-            if (tlen == klen) { uevent_set(ctx->ev, key, "1"); return; }
+            if (tlen == klen) { uevent_set(ctx->ev, key, "1"); return 1; }
             if (s[klen] == '=') {
                 char val[UE_VAL_MAX];
                 size_t vlen = tlen - klen - 1;
                 if (vlen >= sizeof val) vlen = sizeof val - 1;
                 memcpy(val, s + klen + 1, vlen); val[vlen] = '\0';
-                uevent_set(ctx->ev, key, val); return;
+                uevent_set(ctx->ev, key, val); return 1;
             }
         }
     }
+    return 0;
 }
 static inline void import_db(struct dev_ctx *ctx, const char *key) {
     char fn[128];
@@ -656,7 +659,7 @@ static inline int builtin_name_bit(const char *name) {
 
 /* 1 = continue applying rule; 0 = hard gate (stop this rule). */
 static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c, const char *sv) {
-    if (!strcmp(c->subkey, "cmdline")) { import_cmdline(ctx, c->val); return 1; }
+    if (!strcmp(c->subkey, "cmdline")) { return import_cmdline(ctx, c->val); }
     if (!strcmp(c->subkey, "db"))      { import_db(ctx, c->val);      return 1; }
     if (!strcmp(c->subkey, "parent"))  { import_parent(ctx, c->val);  return 1; }
     if (!strcmp(c->subkey, "builtin")) {
