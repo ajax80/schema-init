@@ -204,6 +204,7 @@ struct dev_ctx {
     char group[UE_KEY_MAX];
     char owner[UE_KEY_MAX];
     char name[UE_VAL_MAX];
+    char result[UE_VAL_MAX];      /* last PROGRAM stdout (trimmed); $result / %c */
     int  link_priority;
     int  escape;                  /* 0=none, 1=replace */
     char final_keys[DEVCTX_FINAL_MAX][RK_KEY_MAX + RK_SUB_MAX + 2];
@@ -329,6 +330,20 @@ static inline int ruleset_subst(const char *in, const struct dev_ctx *ctx, char 
         else if ((sig == '$' && !strcmp(name, "env"))     || (sig == '%' && !strcmp(name, "E"))) rep = uevent_get(ctx->ev, arg);
         else if ((sig == '$' && !strcmp(name, "attr"))    || (sig == '%' && !strcmp(name, "s"))) {
             rep = (pi_sysattr(ctx->sysdir, arg, tmp, sizeof tmp) == 0) ? tmp : ""; }
+        else if ((sig == '$' && !strcmp(name, "result")) || (sig == '%' && !strcmp(name, "c"))) {
+            if (arg[0]) {
+                int want = atoi(arg), idx = 0; rep = "";
+                const char *s = ctx->result;
+                while (*s) {
+                    while (*s == ' ' || *s == '\t') s++;
+                    if (!*s) break;
+                    const char *e = s; while (*e && *e != ' ' && *e != '\t') e++;
+                    if (++idx == want) { size_t l = (size_t)(e - s); if (l >= sizeof tmp) l = sizeof tmp - 1;
+                        memcpy(tmp, s, l); tmp[l] = '\0'; rep = tmp; break; }
+                    s = e;
+                }
+            } else rep = ctx->result;
+        }
         else known = 0;
         if (known) { rs_app(out, sz, &o, rep ? rep : ""); p = q; }
         else {

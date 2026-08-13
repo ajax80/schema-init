@@ -68,9 +68,9 @@ int main(void) {
     assert(strcmp(o, "p=/devices/pci/ata1/block/sda/sda3") == 0);
     ruleset_subst("100%%$$done", &cs, o, sizeof o);
     assert(strcmp(o, "100%$done") == 0);
-    /* deferred tokens copied verbatim */
+    /* $result/%c now known (R4b); others deferred */
     ruleset_subst("x$result-$links-%c-$name", &cs, o, sizeof o);
-    assert(strcmp(o, "x$result-$links-%c-$name") == 0);
+    assert(strcmp(o, "x-$links--$name") == 0);
     /* $id / %b reads matched_parent */
     safe_copy(cs.matched_parent, "0000:00:1f.2", sizeof cs.matched_parent);
     ruleset_subst("$id|%b", &cs, o, sizeof o);
