@@ -131,12 +131,46 @@ static void test_fido_id(void) {
     printf("test_udev_r4b: fido-id OK\n");
 }
 
+static void test_import_program_bridge(void) {
+    char dir[] = "/tmp/r4b_impXXXXXX"; assert(mkdtemp(dir));
+    char sh[PATH_MAX]; snprintf(sh, sizeof sh, "%s/foo_id.sh", dir);
+    FILE *f = fopen(sh, "w"); assert(f);
+    fprintf(f, "#!/bin/sh\necho 'ID_FOO=bar'\necho 'ID_BAZ=qux'\nexit 0\n"); fclose(f);
+    assert(chmod(sh, 0755) == 0);
+
+    struct uevent ev; memset(&ev, 0, sizeof ev);
+    ue_set(&ev, "ACTION", "add"); ue_set(&ev, "DEVPATH", "/devices/x");
+    struct dev_ctx ctx; assert(dev_ctx_init(&ctx, &ev, "/sys") == 0);
+
+    struct rule r; char line[PATH_MAX + 64];
+    snprintf(line, sizeof line, "IMPORT{program}=\"%s\"", sh);
+    ruleset_parse_line(line, &r);
+    assert(rule_match(&r, &ctx) == 1);
+    apply_rule(&r, &ctx);
+    assert(!strcmp(uevent_get(&ev, "ID_FOO"), "bar"));
+    assert(!strcmp(uevent_get(&ev, "ID_BAZ"), "qux"));
+
+    /* nonzero exit → gate: a later assignment in the same rule must NOT apply */
+    char bad[PATH_MAX]; snprintf(bad, sizeof bad, "%s/bad_id.sh", dir);
+    f = fopen(bad, "w"); assert(f); fprintf(f, "#!/bin/sh\nexit 4\n"); fclose(f);
+    assert(chmod(bad, 0755) == 0);
+    struct uevent ev2; memset(&ev2, 0, sizeof ev2);
+    ue_set(&ev2, "ACTION", "add"); ue_set(&ev2, "DEVPATH", "/devices/y");
+    struct dev_ctx c2; assert(dev_ctx_init(&c2, &ev2, "/sys") == 0);
+    snprintf(line, sizeof line, "IMPORT{program}=\"%s\", ENV{AFTER}=\"1\"", bad);
+    ruleset_parse_line(line, &r);
+    rule_match(&r, &c2); apply_rule(&r, &c2);
+    assert(uevent_get(&ev2, "AFTER") == NULL);   /* gated */
+    printf("test_udev_r4b: import-program-bridge OK\n");
+}
+
 int main(void) {
     test_result_subst();
     test_argv_split();
     test_run_capture();
     test_program_result();
     test_fido_id();
+    test_import_program_bridge();
     printf("test_udev_r4b: ALL OK\n");
     return 0;
 }

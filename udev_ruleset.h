@@ -592,6 +592,19 @@ static inline void import_parent(struct dev_ctx *ctx, const char *keypat) {
             uevent_set(ctx->ev, rec.key[i], rec.val[i]);
 }
 
+static inline void import_kv_lines(struct dev_ctx *ctx, const char *text) {
+    const char *p = text;
+    while (*p) {
+        const char *nl = strchr(p, '\n'); size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        char line[UE_VAL_MAX]; if (len >= sizeof line) len = sizeof line - 1;
+        memcpy(line, p, len); line[len] = '\0';
+        char *eq = strchr(line, '=');
+        if (eq) { *eq = '\0'; uevent_set(ctx->ev, line, eq + 1); }
+        if (!nl) break;
+        p = nl + 1;
+    }
+}
+
 static inline int builtin_name_bit(const char *name) {
     if (!strcmp(name, "hwdb"))     return UB_HWDB;
     if (!strcmp(name, "path_id"))  return UB_PATH;
@@ -621,7 +634,26 @@ static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c,
         int rc = run_builtin_bit(ctx->sysroot, dp ? dp : "", dn, ctx->ev, bit);
         return (rc < 0) ? 0 : 1;   /* hard gate on builtin failure */
     }
-    /* program / file / other: deferred to R4b */
+    if (!strcmp(c->subkey, "program")) {
+        char store[32][UE_VAL_MAX]; char *pv[33];
+        if (udev_argv_split(sv, store, pv, 32) <= 0) { ctx->last_rule_deferred = 1; return 1; }
+        const char *base = strrchr(pv[0], '/'); base = base ? base + 1 : pv[0];
+        int bit = builtin_name_bit(base);
+        if (bit) {
+            char devnode[PATH_MAX]; const char *dn = NULL;
+            const char *name = uevent_get(ctx->ev, "DEVNAME");
+            if (name && *name) { snprintf(devnode, sizeof devnode, "/dev/%s", name); dn = devnode; }
+            const char *dp = uevent_get(ctx->ev, "DEVPATH");
+            int rc = run_builtin_bit(ctx->sysroot, dp ? dp : "", dn, ctx->ev, bit);
+            return (rc < 0) ? 0 : 1;
+        }
+        char rout[UE_VAL_MAX];
+        int rc = udev_run_capture(sv, rout, sizeof rout);
+        if (rc != 0) return 0;
+        import_kv_lines(ctx, rout);
+        return 1;
+    }
+    /* file / other: deferred */
     ctx->last_rule_deferred = 1;
     return 1;
 }

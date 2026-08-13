@@ -178,7 +178,7 @@ int main(void) {
         assert(strcmp(uevent_get(dc.ev, "AFTER"), "1") == 0);
         assert(dc.last_rule_deferred == 1);
 
-        /* IMPORT{program} -> deferred, NOT a gate */
+        /* IMPORT{program} non-builtin success -> bridged (R4b), NOT deferred, NOT a gate */
         struct uevent pev; memset(&pev, 0, sizeof pev);
         ue_set(&pev, "ACTION", "add"); ue_set(&pev, "DEVPATH", "/devices/none");
         struct dev_ctx pc; assert(dev_ctx_init(&pc, &pev, "/sys") == 0);
@@ -186,7 +186,7 @@ int main(void) {
         pc.last_rule_deferred = 0;
         apply_rule(&r, &pc);
         assert(strcmp(uevent_get(pc.ev, "AFTER"), "1") == 0);
-        assert(pc.last_rule_deferred == 1);
+        assert(pc.last_rule_deferred == 0);
 
         /* deferred bump is counted once by ruleset_apply, after apply */
         struct uevent sev; memset(&sev, 0, sizeof sev);
