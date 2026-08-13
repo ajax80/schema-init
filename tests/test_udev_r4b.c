@@ -46,9 +46,35 @@ static void test_argv_split(void) {
     printf("test_udev_r4b: argv-split OK\n");
 }
 
+static void test_run_capture(void) {
+    char dir[] = "/tmp/r4b_execXXXXXX"; assert(mkdtemp(dir));
+    char ok[PATH_MAX]; snprintf(ok, sizeof ok, "%s/ok.sh", dir);
+    FILE *f = fopen(ok, "w"); assert(f);
+    fprintf(f, "#!/bin/sh\necho 'ID_FOO=bar'\nexit 0\n"); fclose(f);
+    assert(chmod(ok, 0755) == 0);
+
+    char bad[PATH_MAX]; snprintf(bad, sizeof bad, "%s/bad.sh", dir);
+    f = fopen(bad, "w"); assert(f);
+    fprintf(f, "#!/bin/sh\necho nope\nexit 3\n"); fclose(f);
+    assert(chmod(bad, 0755) == 0);
+
+    char out[UE_VAL_MAX];
+    char cmd[PATH_MAX + 8];
+    snprintf(cmd, sizeof cmd, "%s", ok);
+    assert(udev_run_capture(cmd, out, sizeof out) == 0);
+    assert(!strcmp(out, "ID_FOO=bar\n"));
+
+    snprintf(cmd, sizeof cmd, "%s", bad);
+    assert(udev_run_capture(cmd, out, sizeof out) == 3);
+
+    assert(udev_run_capture("/nonexistent/xyz", out, sizeof out) == -1);
+    printf("test_udev_r4b: run-capture OK\n");
+}
+
 int main(void) {
     test_result_subst();
     test_argv_split();
+    test_run_capture();
     printf("test_udev_r4b: ALL OK\n");
     return 0;
 }
