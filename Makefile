@@ -53,6 +53,9 @@ schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h 
 parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h schema-udev.h fido_id.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o udev-parity tools/udev-parity.c
 
+verify-rules-live: tools/verify-rules-live.c udev_db.h udev_rules.h udev_builtins.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h schema-udev.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-rules-live tools/verify-rules-live.c
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
