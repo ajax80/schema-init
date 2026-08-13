@@ -1,5 +1,6 @@
 #include "../udev_ruleset.h"
 #include "../udev_builtins.h"
+#include "../udev_exec.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,8 +31,24 @@ static void test_result_subst(void) {
     printf("test_udev_r4b: result-subst OK\n");
 }
 
+static void test_argv_split(void) {
+    char store[16][UE_VAL_MAX]; char *argv[17];
+    int n = udev_argv_split("ata_id --export /dev/sda", store, argv, 16);
+    assert(n == 3);
+    assert(!strcmp(argv[0], "ata_id")); assert(!strcmp(argv[1], "--export"));
+    assert(!strcmp(argv[2], "/dev/sda")); assert(argv[3] == NULL);
+
+    n = udev_argv_split("/bin/sh -c 'logger hi there' -- x", store, argv, 16);
+    assert(n == 5);
+    assert(!strcmp(argv[0], "/bin/sh")); assert(!strcmp(argv[1], "-c"));
+    assert(!strcmp(argv[2], "logger hi there"));
+    assert(!strcmp(argv[3], "--")); assert(!strcmp(argv[4], "x"));
+    printf("test_udev_r4b: argv-split OK\n");
+}
+
 int main(void) {
     test_result_subst();
+    test_argv_split();
     printf("test_udev_r4b: ALL OK\n");
     return 0;
 }
