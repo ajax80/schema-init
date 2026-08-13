@@ -51,6 +51,10 @@ int main(void) {
     assert(strcmp(esc, "a_b/c") == 0);
     udev_replace_chars("wwn-0x5!bad", esc, sizeof esc); /* '!' -> _ */
     assert(strcmp(esc, "wwn-0x5_bad") == 0);
+    udev_replace_chars("Basic\\x20data\\x20partition", esc, sizeof esc); /* \xNN hex-escape preserved */
+    assert(strcmp(esc, "Basic\\x20data\\x20partition") == 0);
+    udev_replace_chars("bad\\slash", esc, sizeof esc);  /* lone '\' (not \x) -> _ */
+    assert(strcmp(esc, "bad_slash") == 0);
 
     struct dev_ctx sc; memset(&sc, 0, sizeof sc);
     ctx_add_symlink(&sc, "disk/by-id/a");

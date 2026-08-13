@@ -258,8 +258,15 @@ static inline int udev_wl_ok(char c) {
 
 static inline void udev_replace_chars(const char *in, char *out, size_t sz) {
     size_t o = 0;
-    for (const char *p = in; *p && o + 1 < sz; p++)
+    for (const char *p = in; *p && o + 1 < sz; ) {
+        if (p[0] == '\\' && p[1] == 'x') {          /* preserve \xNN hex encoding */
+            out[o++] = *p++;
+            if (o + 1 < sz) out[o++] = *p++;
+            continue;
+        }
         out[o++] = udev_wl_ok(*p) ? *p : '_';
+        p++;
+    }
     if (sz) out[o] = '\0';
 }
 
