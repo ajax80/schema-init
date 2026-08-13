@@ -24,7 +24,7 @@ static int in_set(char set[][UE_VAL_MAX], int n, const char *s) {
     return 0;
 }
 static int in_tagset(char set[][UE_KEY_MAX], int n, const char *s) {
-    for (int i = 0; i < n; i++) if (!strcmp(set[i], s)) return 1;
+    for (int i = 0; i < n; i++) if (set[i][0] && !strcmp(set[i], s)) return 1;
     return 0;
 }
 
@@ -76,7 +76,7 @@ static void collect(struct uevent *ev_in) {
             g_tag_miss++;
         }
     for (int i = 0; i < ctx.ntags; i++)
-        if (!in_tagset(ttags, tnt, ctx.tags[i])) {
+        if (ctx.tags[i][0] != '\0' && !in_tagset(ttags, tnt, ctx.tags[i])) {
             printf("TAG-EXTRA  %-10s %s\n", name, ctx.tags[i]);
             g_tag_extra++;
         }
