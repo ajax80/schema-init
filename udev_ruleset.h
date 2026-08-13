@@ -5,6 +5,7 @@
 #include "path_id.h"   /* pi_parent, pi_sysattr, pi_subsystem, pi_base, pi_driver */
 #include "udev_db.h"        /* udev_db_filename, udev_db_read_eprops (IMPORT{db}/{parent}) */
 #include "udev_builtins.h"  /* run_builtin_bit, UB_* (IMPORT{builtin}) */
+#include "udev_exec.h"      /* udev_run_capture (PROGRAM) */
 #include <sys/stat.h>   /* TEST clause: stat, st_mode */
 #include <string.h>
 #include <stdlib.h>
@@ -403,7 +404,8 @@ static inline int match_dev_clause(const struct rule_clause *c, const struct dev
         return c->op == OP_MATCH_NE ? !has : has;
     }
     if (!strcmp(c->key, "TEST"))  return test_clause_match(c, ctx);
-    return -1;   /* parent key (SUBSYSTEMS/…) or R4 conditional (TEST/PROGRAM) */
+    if (!strcmp(c->key, "RESULT")) return rk_cmp(c->op, c->val, ctx->result);
+    return -1;   /* parent key (SUBSYSTEMS/…) or R4 conditional (PROGRAM) */
 }
 
 static inline int rk_is_parent_key(const char *k) {
@@ -449,14 +451,24 @@ static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
     ctx->last_rule_deferred = 0;
     for (int i = 0; i < r->nclause; i++) {
         const struct rule_clause *c = &r->clause[i];
+        if (!strcmp(c->key, "PROGRAM")) {
+            char sv[UE_VAL_MAX]; ruleset_subst(c->val, ctx, sv, sizeof sv);
+            char rout[UE_VAL_MAX];
+            int rc = udev_run_capture(sv, rout, sizeof rout);
+            if (rc != 0) return 0;               /* gate on exit status */
+            size_t l = strlen(rout);
+            while (l && (rout[l-1] == '\n' || rout[l-1] == '\r' ||
+                         rout[l-1] == ' ' || rout[l-1] == '\t')) rout[--l] = '\0';
+            safe_copy(ctx->result, rout, sizeof ctx->result);
+            continue;
+        }
         if (!rk_is_match_op(c->op)) {
-            if (!strcmp(c->key, "PROGRAM")) ctx->last_rule_deferred = 1;  /* deferred gate (assign-op) */
             continue;    /* assignments: R3 */
         }
         int d = match_dev_clause(c, ctx);
         if (d == 0) return 0;
         if (d == 1) continue;
-        /* d == -1: a parent-match group, or an R4 conditional (TEST/PROGRAM) */
+        /* d == -1: a parent-match group, or an unported match key */
         if (rk_is_parent_key(c->key)) {
             int j = i;
             while (j < r->nclause && rk_is_match_op(r->clause[j].op) &&
@@ -466,7 +478,7 @@ static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
             continue;
         }
         ctx->last_rule_deferred = 1;   /* a deferred conditional was skipped */
-        continue;   /* unknown match key (TEST/PROGRAM): deferred to R4 */
+        continue;   /* unknown match key: deferred */
     }
     return 1;
 }
@@ -619,6 +631,7 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
     for (int i = 0; i < r->nclause; i++) {
         const struct rule_clause *c = &r->clause[i];
         if (rk_is_match_op(c->op)) continue;
+        if (!strcmp(c->key, "PROGRAM")) continue;   /* executed in match phase */
 
         if (!strcmp(c->key, "GOTO"))  return c->val;
         if (!strcmp(c->key, "LABEL")) continue;

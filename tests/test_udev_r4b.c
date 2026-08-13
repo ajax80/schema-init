@@ -71,10 +71,44 @@ static void test_run_capture(void) {
     printf("test_udev_r4b: run-capture OK\n");
 }
 
+static void test_program_result(void) {
+    char dir[] = "/tmp/r4b_prXXXXXX"; assert(mkdtemp(dir));
+    char sh[PATH_MAX]; snprintf(sh, sizeof sh, "%s/echo1.sh", dir);
+    FILE *f = fopen(sh, "w"); assert(f);
+    fprintf(f, "#!/bin/sh\nprintf '%%s' \"$1\"\nexit 0\n"); fclose(f);
+    assert(chmod(sh, 0755) == 0);
+
+    struct uevent ev; memset(&ev, 0, sizeof ev);
+    ue_set(&ev, "ACTION", "add"); ue_set(&ev, "DEVPATH", "/devices/x");
+    struct dev_ctx ctx; assert(dev_ctx_init(&ctx, &ev, "/sys") == 0);
+
+    struct rule r; char line[PATH_MAX + 64];
+    /* PROGRAM stores result; RESULT== matches it; whole rule matches */
+    snprintf(line, sizeof line, "PROGRAM==\"%s hello\", RESULT==\"hello\"", sh);
+    ruleset_parse_line(line, &r);
+    assert(rule_match(&r, &ctx) == 1);
+    assert(!strcmp(ctx.result, "hello"));
+
+    /* RESULT mismatch → rule fails */
+    snprintf(line, sizeof line, "PROGRAM==\"%s hello\", RESULT==\"world\"", sh);
+    ruleset_parse_line(line, &r);
+    assert(rule_match(&r, &ctx) == 0);
+
+    /* nonzero exit → rule fails */
+    char bad[PATH_MAX]; snprintf(bad, sizeof bad, "%s/bad.sh", dir);
+    f = fopen(bad, "w"); assert(f); fprintf(f, "#!/bin/sh\nexit 5\n"); fclose(f);
+    assert(chmod(bad, 0755) == 0);
+    snprintf(line, sizeof line, "PROGRAM==\"%s\"", bad);
+    ruleset_parse_line(line, &r);
+    assert(rule_match(&r, &ctx) == 0);
+    printf("test_udev_r4b: program-result OK\n");
+}
+
 int main(void) {
     test_result_subst();
     test_argv_split();
     test_run_capture();
+    test_program_result();
     printf("test_udev_r4b: ALL OK\n");
     return 0;
 }
