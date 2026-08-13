@@ -158,6 +158,11 @@ static inline int run_builtin_bit(const char *sysroot, const char *devpath,
         if (path_id_build(sysroot, devpath, idpath, sizeof idpath) > 0) {
             ub_add(ev, "ID_PATH", idpath);
             if (path_id_tag(idpath, idtag, sizeof idtag) == 0) ub_add(ev, "ID_PATH_TAG", idtag);
+            char comp[PATH_ID_MAX];
+            if (pi_ata_compat(idpath, comp, sizeof comp)) ub_add(ev, "ID_PATH_ATA_COMPAT", comp);
+            int maj = pi_usb_major(sysroot, devpath);
+            if (maj > 0 && pi_usb_rev_swap(idpath, maj, comp, sizeof comp))
+                ub_add(ev, "ID_PATH_WITH_USB_REVISION", comp);
             return 0;
         }
         return -1;
