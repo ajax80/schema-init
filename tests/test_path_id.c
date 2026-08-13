@@ -70,6 +70,12 @@ static void test_helpers(void) {
     assert(pi_sysattr(devdir, "port_no", out, sizeof out) == 0);
     assert(strcmp(out, "6") == 0);
 
+    /* trailing whitespace trimmed (like real udev sysattr), internal spaces kept */
+    char attrm[1200]; snprintf(attrm, sizeof attrm, "%s/model", devdir);
+    mkfile(attrm, "XPG GAMMIX S11 Pro          \n");
+    assert(pi_sysattr(devdir, "model", out, sizeof out) == 0);
+    assert(strcmp(out, "XPG GAMMIX S11 Pro") == 0);
+
     assert(strcmp(pi_base(devdir), "ata1") == 0);
 
     char cur[1024];

@@ -49,6 +49,8 @@ static inline int pi_sysattr(const char *devdir, const char *attr, char *out, si
     if (!fgets(out, (int)outsz, f)) { fclose(f); return -1; }
     fclose(f);
     out[strcspn(out, "\r\n")] = '\0';
+    size_t l = strlen(out);
+    while (l && (out[l-1] == ' ' || out[l-1] == '\t')) out[--l] = '\0';
     return 0;
 }
 
