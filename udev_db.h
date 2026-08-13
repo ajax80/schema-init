@@ -12,6 +12,7 @@
 
 #define SCHEMA_UDEV_DB_DIR "/run/schema-udev/data"   /* OUR shadow dir */
 #define UDEV_DB_DIR        "/run/udev/data"          /* udevd's real dir (read-only) */
+#define SCHEMA_UDEV_RULES_DIR "/run/schema-udev/rules-data"   /* R5 interpreter shadow */
 
 static inline int udev_db_filename(const struct uevent *ev, char *out, size_t outsz) {
     const char *sub = uevent_get(ev, "SUBSYSTEM");
@@ -127,6 +128,33 @@ static inline int udev_db_write(const char *base_dir, const struct uevent *ev, i
     return 0;
 }
 
+static inline int udev_db_write_full(const char *base_dir, const struct uevent *ev,
+                                     int kernel_n,
+                                     const char *const *symlinks, int nsym,
+                                     const char *const *tags, int ntag) {
+    char name[128];
+    if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
+    if (udev_db_ensure_dir(base_dir) != 0) return -1;
+    char buf[8192];
+    ssize_t len = udev_db_record_build_full(ev, kernel_n, symlinks, nsym, 0,
+                                            tags, ntag, buf, sizeof buf);
+    if (len <= 0) return -1;
+    char final[512], tmpl[512];
+    if ((size_t)snprintf(final, sizeof final, "%s/%s", base_dir, name) >= sizeof final) return -1;
+    if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return -1;
+    ssize_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, buf + off, (size_t)(len - off));
+        if (w < 0) { close(fd); unlink(tmpl); return -1; }
+        off += w;
+    }
+    if (close(fd) != 0) { unlink(tmpl); return -1; }
+    if (rename(tmpl, final) != 0) { unlink(tmpl); return -1; }
+    return 0;
+}
+
 static inline int udev_db_remove(const char *base_dir, const struct uevent *ev) {
     char name[128];
     if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
@@ -152,6 +180,24 @@ static inline int udev_db_read_eprops(const char *path, struct uevent *out) {
         safe_copy(out->key[out->n], kv, UE_KEY_MAX);
         safe_copy(out->val[out->n], val, UE_VAL_MAX);
         out->n++;
+    }
+    fclose(f);
+    return 0;
+}
+
+static inline int udev_db_read_links_tags(const char *path,
+        char links[][UE_VAL_MAX], int *nlink, int maxlink,
+        char tags[][UE_KEY_MAX], int *ntag, int maxtag) {
+    *nlink = 0; *ntag = 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[1024];
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (line[0] == 'S' && line[1] == ':' && *nlink < maxlink)
+            safe_copy(links[(*nlink)++], line + 2, UE_VAL_MAX);
+        else if (line[0] == 'G' && line[1] == ':' && *ntag < maxtag)
+            safe_copy(tags[(*ntag)++], line + 2, UE_KEY_MAX);
     }
     fclose(f);
     return 0;

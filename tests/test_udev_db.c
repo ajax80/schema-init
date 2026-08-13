@@ -100,6 +100,34 @@ int main(void) {
     assert(udev_db_remove(base, &d) == 0);            /* idempotent */
 
     unlink(path); rmdir(base);
+
+    /* --- R5: udev_db_write_full round-trip (S:/G:/Q:/E:) --- */
+    char tmpl2[] = "/tmp/schema-r5-XXXXXX";
+    char *rbase = mkdtemp(tmpl2);
+    assert(rbase);
+
+    struct uevent fe; memset(&fe, 0, sizeof fe);
+    put(&fe, "SUBSYSTEM", "block"); put(&fe, "MAJOR", "8"); put(&fe, "MINOR", "0");
+    put(&fe, "DEVPATH", "/devices/x/block/sda");
+    int fkn = fe.n;                       /* kernel boundary */
+    put(&fe, "ID_FS_TYPE", "ext4");       /* a derived E: prop */
+    const char *fsyms[] = { "disk/by-id/wwn-0xabc", "disk/by-path/pci-0000" };
+    const char *ftags[] = { "systemd", "seat" };
+    assert(udev_db_write_full(rbase, &fe, fkn, fsyms, 2, ftags, 2) == 0);
+
+    char fpath[512];
+    snprintf(fpath, sizeof fpath, "%s/b8:0", rbase);
+    char links[8][UE_VAL_MAX]; int nl = 0;
+    char rtags[8][UE_KEY_MAX];  int nt = 0;
+    assert(udev_db_read_links_tags(fpath, links, &nl, 8, rtags, &nt, 8) == 0);
+    assert(nl == 2 && !strcmp(links[0], "disk/by-id/wwn-0xabc") && !strcmp(links[1], "disk/by-path/pci-0000"));
+    assert(nt == 2 && !strcmp(rtags[0], "systemd") && !strcmp(rtags[1], "seat"));
+
+    /* E: delta present, G: and Q: both emitted, V: last */
+    struct uevent fback; assert(udev_db_read_eprops(fpath, &fback) == 0);
+    assert(!strcmp(uevent_get(&fback, "ID_FS_TYPE"), "ext4"));
+    unlink(fpath); rmdir(rbase);
+
     printf("test_udev_db: OK\n");
     return 0;
 }
