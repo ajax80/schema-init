@@ -640,7 +640,7 @@ static inline void import_kv_lines(struct dev_ctx *ctx, const char *text) {
             return (rc < 0) ? 0 : 1;
         }
         char rout[UE_VAL_MAX];
-        int rc = udev_run_capture(sv, rout, sizeof rout);   /* TODO(reclaim): scsi_id native port */
+        int rc = udev_run_capture(sv, rout, sizeof rout);
         if (rc != 0) return 0;
         import_kv_lines(ctx, rout);
         return 1;
