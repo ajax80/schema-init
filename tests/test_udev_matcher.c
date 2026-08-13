@@ -119,6 +119,8 @@ int main(void) {
     assert(rule_match(&r, &cm) == 1);
     ruleset_parse_line("ATTR{serial}==\"WRONG\"", &r);
     assert(rule_match(&r, &cm) == 0);
+    ruleset_parse_line("ATTR{nonexist}==\"\"", &r);     /* missing sysattr: == "" must NOT match */
+    assert(rule_match(&r, &cm) == 0);
     ruleset_parse_line("TAG==\"systemd\"", &r);
     assert(rule_match(&r, &cm) == 1);
     ruleset_parse_line("TAG==\"seat\"", &r);
@@ -169,6 +171,10 @@ int main(void) {
 
     /* value mismatch on the same ancestor -> no match */
     ruleset_parse_line("SUBSYSTEMS==\"pci\", ATTRS{vendor}==\"0xbeef\"", &pr);
+    assert(rule_match(&pr, &cp) == 0);
+
+    /* missing parent sysattr: == "" must NOT match (no ancestor has it) */
+    ruleset_parse_line("ATTRS{nonexist}==\"\"", &pr);
     assert(rule_match(&pr, &cp) == 0);
 
     /* THE CRUX: clauses satisfiable only across DIFFERENT ancestors must NOT match

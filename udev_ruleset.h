@@ -371,6 +371,13 @@ static inline int rk_cmp(enum rule_op op, const char *pat, const char *actual) {
     return (op == OP_MATCH_NE) ? !m : m;
 }
 
+/* Like rk_cmp but an absent (NULL) actual never matches — real udev treats a
+ * missing sysfs attribute as no-match, not as an empty string. */
+static inline int rk_cmp_present(enum rule_op op, const char *pat, const char *actual) {
+    int m = (actual != NULL) && udev_glob(pat, actual);
+    return (op == OP_MATCH_NE) ? !m : m;
+}
+
 /* TEST{<octal>}=="path" / != : $-subst the path, stat it; optional mode mask.
  * A non-absolute path is resolved against the device's sysfs dir (ctx->sysdir),
  * matching real udev's TK_M_TEST SYSPATH-prepend behavior. */
@@ -404,7 +411,7 @@ static inline int match_dev_clause(const struct rule_clause *c, const struct dev
     if (!strcmp(c->key, "ENV"))       return rk_cmp(c->op, c->val, uevent_get(ev, c->subkey));
     if (!strcmp(c->key, "ATTR"))      { char b[UE_VAL_MAX];
                                         int ok = pi_sysattr(ctx->sysdir, c->subkey, b, sizeof b) == 0;
-                                        return rk_cmp(c->op, c->val, ok ? b : NULL); }
+                                        return rk_cmp_present(c->op, c->val, ok ? b : NULL); }
     if (!strcmp(c->key, "TAG")) {
         int has = 0;
         for (int i = 0; i < ctx->ntags; i++) if (udev_glob(c->val, ctx->tags[i])) { has = 1; break; }
@@ -430,7 +437,7 @@ static inline int parent_clause_on(const struct rule_clause *c, const char *anc,
     if (!strcmp(c->key, "DRIVERS"))
         return rk_cmp(c->op, c->val, pi_driver(anc, buf, sizeof buf) == 0 ? buf : NULL);
     if (!strcmp(c->key, "ATTRS"))
-        return rk_cmp(c->op, c->val, pi_sysattr(anc, c->subkey, buf, sizeof buf) == 0 ? buf : NULL);
+        return rk_cmp_present(c->op, c->val, pi_sysattr(anc, c->subkey, buf, sizeof buf) == 0 ? buf : NULL);
     if (!strcmp(c->key, "TAGS")) {
         int has = 0;
         for (int i = 0; i < ctx->ntags; i++) if (udev_glob(c->val, ctx->tags[i])) { has = 1; break; }
