@@ -4,6 +4,7 @@
 #include "udev_builtins.h"
 #include "udev_rules.h"
 #include "udev_db.h"
+#include "udev_ruleset.h"
 #include "disk_links.h"
 #include "uaccess.h"
 #include <errno.h>
@@ -65,6 +66,17 @@ static int g_nrules = 0;
 #define SCHEMA_UDEV_LIVE_FLAG "/etc/schema-init/schema-udev.live"
 static int g_live = 0;
 
+static struct ruleset g_ruleset;
+static const char *const RULE_DIRS[] = {
+    "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
+
+static void ruleset_reload(void) {
+    free(g_ruleset.rules);
+    memset(&g_ruleset, 0, sizeof g_ruleset);
+    ruleset_load_dirs(RULE_DIRS, 3, &g_ruleset);
+    fprintf(stderr, "[schema-udev] loaded %d native rule(s)\n", g_ruleset.n);
+}
+
 static void rules_reload(void) {
     struct dev_rule tmp[MAX_RULES];
     int n = dev_rules_load_dir(DEV_DIR, tmp, MAX_RULES);
@@ -99,6 +111,22 @@ static void dispatch(struct uevent *ev) {
         const char *dn = NULL;
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins("/sys", devpath, dn, ev);
+        struct uevent shadow_ev = *ev;          /* deep copy: uevent is inline char[], no heap */
+        int pre_rules_n = shadow_ev.n;
+        struct dev_ctx rc;
+        if (dev_ctx_init(&rc, &shadow_ev, "/sys") == 0) {
+            ruleset_apply(&g_ruleset, &rc);
+            if (strcmp(action, "remove") == 0) {
+                udev_db_remove(SCHEMA_UDEV_RULES_DIR, &shadow_ev);
+            } else if (rc.nsym > 0 || rc.ntags > 0 || shadow_ev.n > pre_rules_n) {
+                const char *syms[DEVCTX_SYMLINKS_MAX];
+                const char *tgs[DEVCTX_TAGS_MAX];
+                for (int i = 0; i < rc.nsym;  i++) syms[i] = rc.symlinks[i];
+                for (int i = 0; i < rc.ntags; i++) tgs[i]  = rc.tags[i];
+                udev_db_write_full(SCHEMA_UDEV_RULES_DIR, &shadow_ev, kernel_n,
+                                   syms, rc.nsym, tgs, rc.ntags);
+            }
+        }
         run_rules("/sys", devpath, dn, ev);
         const char *sub = uevent_get(ev, "SUBSYSTEM");
         int is_block = sub && strcmp(sub, "block") == 0;
@@ -181,6 +209,8 @@ int main(void) {
             g_live ? "owns real /dev, /dev/disk, ACLs" : "isolated namespaces");
 
     rules_reload();
+    ruleset_reload();
+    disk_links_wipe(SCHEMA_UDEV_RULES_DIR);   /* reuse the generic recursive rmdir/wipe */
     disk_links_wipe(SCHEMA_DISK_DIR);
     uaccess_wipe(SCHEMA_UACCESS_DIR);
     fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
@@ -204,6 +234,7 @@ int main(void) {
                     while (waitpid(-1, NULL, WNOHANG) > 0) ;   /* drain all */
                 } else if (si.ssi_signo == SIGHUP) {
                     rules_reload();
+                    ruleset_reload();
                 } else {
                     quit = 1;   /* TERM / INT */
                 }
