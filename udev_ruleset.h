@@ -625,7 +625,10 @@ static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c,
     if (!strcmp(c->subkey, "db"))      { import_db(ctx, c->val);      return 1; }
     if (!strcmp(c->subkey, "parent"))  { import_parent(ctx, c->val);  return 1; }
     if (!strcmp(c->subkey, "builtin")) {
-        int bit = builtin_name_bit(sv);
+        char bstore[32][UE_VAL_MAX]; char *bv[33];
+        if (udev_argv_split(sv, bstore, bv, 32) <= 0) { ctx->last_rule_deferred = 1; return 1; }
+        const char *bbase = strrchr(bv[0], '/'); bbase = bbase ? bbase + 1 : bv[0];
+        int bit = builtin_name_bit(bbase);
         if (bit == 0) { ctx->last_rule_deferred = 1; return 1; }   /* un-ported: defer, no gate */
         char devnode[PATH_MAX]; const char *dn = NULL;
         const char *name = uevent_get(ctx->ev, "DEVNAME");

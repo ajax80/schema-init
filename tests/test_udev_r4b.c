@@ -164,6 +164,22 @@ static void test_import_program_bridge(void) {
     printf("test_udev_r4b: import-program-bridge OK\n");
 }
 
+static void test_import_builtin_args_strip(void) {
+    struct uevent ev; memset(&ev, 0, sizeof ev);
+    ue_set(&ev, "ACTION", "add"); ue_set(&ev, "DEVPATH", "/devices/x");
+    struct dev_ctx ctx; assert(dev_ctx_init(&ctx, &ev, "/sys") == 0);
+
+    struct rule r;
+    /* path_id is a ported builtin; with args, it should strip them before lookup */
+    ruleset_parse_line("IMPORT{builtin}=\"path_id --export\", ENV{AFTER}=\"1\"", &r);
+    assert(rule_match(&r, &ctx) == 1);
+    ctx.last_rule_deferred = 0;
+    apply_rule(&r, &ctx);
+    /* path_id might fail on non-device context, but should NOT defer due to args */
+    assert(ctx.last_rule_deferred == 0);
+    printf("test_udev_r4b: import-builtin-args-strip OK\n");
+}
+
 int main(void) {
     test_result_subst();
     test_argv_split();
@@ -171,6 +187,7 @@ int main(void) {
     test_program_result();
     test_fido_id();
     test_import_program_bridge();
+    test_import_builtin_args_strip();
     printf("test_udev_r4b: ALL OK\n");
     return 0;
 }
