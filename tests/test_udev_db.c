@@ -55,6 +55,16 @@ int main(void) {
     assert(ern > 0 && strstr(rec, "ID_EMPTY") == NULL);
     assert(strstr(rec, "E:ID_A=x\n") && strstr(rec, "E:ID_B=y\n"));
 
+    /* dotted private props are never persisted (matches udev: 0 dotted E: in /run/udev/data) */
+    struct uevent dp; memset(&dp, 0, sizeof dp);
+    int dpn = dp.n;
+    put(&dp, "ID_REAL", "1"); put(&dp, ".PART_SUFFIX", "-part1"); put(&dp, ".HAVE_HWDB_PROPERTIES", "1");
+    ssize_t dprn = udev_db_record_build(&dp, dpn, rec, sizeof rec);
+    assert(dprn > 0);
+    assert(strstr(rec, "E:ID_REAL=1\n") != NULL);
+    assert(strstr(rec, ".PART_SUFFIX") == NULL);
+    assert(strstr(rec, ".HAVE_HWDB_PROPERTIES") == NULL);
+
     /* write -> read-back round-trips the derived E: set */
     char tmpl[] = "/tmp/schema-udev-db-XXXXXX";
     char *base = mkdtemp(tmpl); assert(base);

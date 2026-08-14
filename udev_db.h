@@ -50,6 +50,7 @@ static inline ssize_t udev_db_record_build(const struct uevent *ev, int kernel_n
     size_t used = 0;
     for (int i = kernel_n; i < ev->n; i++) {
         if (!ev->key[i][0] || !ev->val[i][0]) continue;
+        if (ev->key[i][0] == '.') continue;   /* private prop: never persisted (matches udev) */
         int w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
         if (w < 0 || (size_t)w >= bufsz - used) return -1;
         used += (size_t)w;
@@ -82,6 +83,7 @@ static inline ssize_t udev_db_record_build_full(const struct uevent *ev, int ker
     }
     for (int i = kernel_n; i < ev->n; i++) {
         if (!ev->key[i][0] || !ev->val[i][0]) continue;
+        if (ev->key[i][0] == '.') continue;   /* private prop: never persisted (matches udev) */
         w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
         if (w < 0 || (size_t)w >= bufsz - used) return -1;
         used += (size_t)w;

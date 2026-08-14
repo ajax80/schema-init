@@ -87,6 +87,7 @@ static void collect(struct uevent *ev_in) {
     for (int i = kernel_n; i < ev.n; i++) {
         const char *k = ev.key[i];
         if (!k[0] || !ev.val[i][0]) continue;
+        if (k[0] == '.') continue;                 /* private prop: never persisted by either side */
         if (uevent_get(&theirs, k)) continue;      /* present in theirs -> covered above */
         if (key_is_known_debt(k)) { g_debt++; continue; }
         printf("E-EXTRA  %-12s %s=%s\n", name, k, ev.val[i]);
