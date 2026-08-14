@@ -113,6 +113,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_input_id.c -o /tmp/schema-test-inputid && /tmp/schema-test-inputid
 	$(CC) $(CFLAGS) tests/test_net_id.c -o /tmp/schema-test-netid && /tmp/schema-test-netid
 	$(CC) $(CFLAGS) tests/test_blkid_pt.c -o /tmp/schema-test-blkidpt && /tmp/schema-test-blkidpt
+	$(CC) $(CFLAGS) tests/test_dissect_image.c -o /tmp/schema-test-dissect && /tmp/schema-test-dissect
 	$(CC) $(CFLAGS) tests/test_blkid_fs.c -o /tmp/schema-test-blkidfs && /tmp/schema-test-blkidfs
 	$(CC) $(CFLAGS) tests/test_hwdb.c -o /tmp/schema-test-hwdb && /tmp/schema-test-hwdb
 	$(CC) $(CFLAGS) tests/test_udev_builtins.c -o /tmp/schema-test-ub && /tmp/schema-test-ub
