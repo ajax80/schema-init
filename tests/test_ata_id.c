@@ -34,6 +34,14 @@ int main(void) {
     assert(get(&ev2, "ID_WWN_WITH_EXTENSION") == NULL);
     assert(strcmp(get(&ev2, "ID_MODEL"), "WDC_WD10EZEX-08WN4A0") == 0);  /* rest intact */
 
+    /* feature-set decode (WD10EZEX: rotational SATA HDD, not ATAPI) */
+    assert(strcmp(get(&ev, "ID_ATA_PERIPHERAL_DEVICE_TYPE"), "0") == 0);   /* ATA, not packet */
+    assert(strcmp(get(&ev, "ID_ATA_ROTATION_RATE_RPM"), "7200") == 0);
+    assert(strcmp(get(&ev, "ID_ATA_SATA"), "1") == 0);
+    assert(strcmp(get(&ev, "ID_ATA_WRITE_CACHE"), "1") == 0);
+    assert(get(&ev, "ID_ATA_FEATURE_SET_SMART") != NULL);
+    assert(get(&ev, "ID_ATA_FEATURE_SET_SMART_ENABLED") != NULL);
+
     printf("test_ata_id: OK\n");
     return 0;
 }
