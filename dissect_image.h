@@ -34,4 +34,25 @@ static inline const char *dissect_designator_for_guid(const char *type_guid_lc) 
         if (!strcasecmp(type_guid_lc, DISSECT_MAP[i].guid)) return DISSECT_MAP[i].desig;
     return NULL;
 }
+/* whole-disk probe: map each GPT partition's type GUID -> designator. */
+static inline int dissect_probe_build(const char *sysroot, const char *devpath,
+                                      const char *devnode, struct uevent *out) {
+    if (!devnode) return 0;
+    char syspath[PATH_MAX];
+    if ((size_t)snprintf(syspath, sizeof syspath, "%s%s", sysroot ? sysroot : "",
+                         devpath ? devpath : "") >= sizeof syspath) return 0;
+    uint64_t ssz = bpt_sector_size(syspath);   /* 512 fallback for plain files */
+    bpt_emit(out, "ID_DISSECT_IMAGE", "1");
+    unsigned char ent[128];
+    for (unsigned n = 1; n <= 128; n++) {
+        if (bpt_gpt_entry(devnode, ssz, n, ent) != 0) break;   /* not GPT / past header */
+        if (bpt_all_zero(ent, 16)) continue;                    /* unused slot */
+        char g[37]; bpt_guid_str(ent + 0, g);
+        const char *desig = dissect_designator_for_guid(g);
+        if (!desig) continue;
+        char key[48]; snprintf(key, sizeof key, "ID_DISSECT_PART%u_DESIGNATOR", n);
+        bpt_emit(out, key, desig);
+    }
+    return 0;
+}
 #endif /* DISSECT_IMAGE_H */
