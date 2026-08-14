@@ -263,26 +263,32 @@ static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, st
 
 #include <ftw.h>
 
-static const char *g_coldplug_sysroot = NULL;
-static void (*g_coldplug_cb)(struct uevent *ev) = NULL;
+static char  **g_coldplug_paths = NULL;   /* collected device dir paths */
+static size_t  g_coldplug_np = 0, g_coldplug_cap = 0;
 
-static int coldplug_ftw_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+/* Collect-only: gather each device's dir path (strip "/uevent"); dispatch is
+ * deferred until after a sort, so parents precede children. */
+static int coldplug_collect_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
     (void)sb; (void)ftwbuf;
-    if (typeflag == FTW_F) {
-        const char *bname = strrchr(fpath, '/');
-        if (bname && strcmp(bname + 1, "uevent") == 0) {
-            char dirpath[1024];
-            safe_copy(dirpath, fpath, sizeof dirpath);
-            char *last_slash = strrchr(dirpath, '/');
-            if (last_slash) *last_slash = '\0';
-            
-            struct uevent ev;
-            if (uevent_from_sysfs(g_coldplug_sysroot, dirpath, &ev) == 0 && g_coldplug_cb) {
-                g_coldplug_cb(&ev);
-            }
-        }
+    if (typeflag != FTW_F) return 0;
+    const char *bname = strrchr(fpath, '/');
+    if (!bname || strcmp(bname + 1, "uevent") != 0) return 0;
+    size_t dlen = (size_t)(bname - fpath);   /* dir path (without "/uevent") */
+    if (g_coldplug_np == g_coldplug_cap) {
+        size_t ncap = g_coldplug_cap ? g_coldplug_cap * 2 : 256;
+        char **np = realloc(g_coldplug_paths, ncap * sizeof *np);
+        if (!np) return 1;                   /* OOM -> stop walk, dispatch what we have */
+        g_coldplug_paths = np; g_coldplug_cap = ncap;
     }
+    char *d = malloc(dlen + 1);
+    if (!d) return 1;
+    memcpy(d, fpath, dlen); d[dlen] = '\0';
+    g_coldplug_paths[g_coldplug_np++] = d;
     return 0;
+}
+
+static int coldplug_path_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
 static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struct uevent *ev)) {
@@ -291,9 +297,21 @@ static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struc
     struct stat st;
     if (stat(devroot, &st) != 0) return 0;  /* missing sysfs dir -> no-op */
 
-    g_coldplug_sysroot = sysroot;
-    g_coldplug_cb = on_event;
-    return nftw(devroot, coldplug_ftw_cb, 32, FTW_PHYS);
+    g_coldplug_paths = NULL; g_coldplug_np = 0; g_coldplug_cap = 0;
+    int rc = nftw(devroot, coldplug_collect_cb, 32, FTW_PHYS);
+    /* A parent's devpath is a prefix of its children's, so a lexicographic sort
+     * dispatches every parent before its children — required so a child's
+     * IMPORT{parent} finds the parent's DB record already written. */
+    qsort(g_coldplug_paths, g_coldplug_np, sizeof *g_coldplug_paths, coldplug_path_cmp);
+    for (size_t i = 0; i < g_coldplug_np; i++) {
+        struct uevent ev;
+        if (uevent_from_sysfs(sysroot, g_coldplug_paths[i], &ev) == 0 && on_event)
+            on_event(&ev);
+        free(g_coldplug_paths[i]);
+    }
+    free(g_coldplug_paths);
+    g_coldplug_paths = NULL; g_coldplug_np = g_coldplug_cap = 0;
+    return rc;
 }
 
 #define UDEV_MONITOR_MAGIC 0xfeedcafeu
