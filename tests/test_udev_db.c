@@ -126,6 +126,14 @@ int main(void) {
     /* E: delta present, G: and Q: both emitted, V: last */
     struct uevent fback; assert(udev_db_read_eprops(fpath, &fback) == 0);
     assert(!strcmp(uevent_get(&fback, "ID_FS_TYPE"), "ext4"));
+
+    /* Part A: every written record carries an I: init-usec line (is_initialized) */
+    FILE *rf = fopen(fpath, "r"); assert(rf);
+    char rline[1024]; long long iusec = -1;
+    while (fgets(rline, sizeof rline, rf))
+        if (rline[0] == 'I' && rline[1] == ':') { iusec = atoll(rline + 2); break; }
+    fclose(rf);
+    assert(iusec > 0);   /* real CLOCK_MONOTONIC usec, not omitted */
     unlink(fpath); rmdir(rbase);
 
     printf("test_udev_db: OK\n");

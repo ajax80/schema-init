@@ -9,6 +9,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+
+/* udev's USEC_INITIALIZED: monotonic microseconds when the device record is
+ * committed. Consumers (libudev is_initialized, logind/udisks settle) gate on
+ * the I: line's presence, so every committed record must carry one. */
+static inline long long udev_db_now_usec(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 1;
+    long long u = (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000LL;
+    return u > 0 ? u : 1;
+}
 
 #define SCHEMA_UDEV_DB_DIR "/run/schema-udev/data"   /* OUR shadow dir */
 #define UDEV_DB_DIR        "/run/udev/data"          /* udevd's real dir (read-only) */
@@ -136,7 +147,8 @@ static inline int udev_db_write_full(const char *base_dir, const struct uevent *
     if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
     if (udev_db_ensure_dir(base_dir) != 0) return -1;
     char buf[8192];
-    ssize_t len = udev_db_record_build_full(ev, kernel_n, symlinks, nsym, 0,
+    ssize_t len = udev_db_record_build_full(ev, kernel_n, symlinks, nsym,
+                                            udev_db_now_usec(),
                                             tags, ntag, buf, sizeof buf);
     if (len <= 0) return -1;
     char final[512], tmpl[512];

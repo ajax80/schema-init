@@ -116,14 +116,20 @@ static void dispatch(struct uevent *ev) {
         struct dev_ctx rc;
         if (dev_ctx_init(&rc, &shadow_ev, "/sys") == 0) {
             ruleset_apply(&g_ruleset, &rc);
+            /* Live mode is the sole device-DB authority: write the full record
+             * to /run/udev/data so libudev/sd-device consumers AND our own
+             * IMPORT{parent}/{db} (dbroot defaults there) read our output.
+             * Dry-run stays shadow-only; import there still borrows udevd. */
+            (void)pre_rules_n;
+            const char *db_authority = g_live ? UDEV_DB_DIR : SCHEMA_UDEV_RULES_DIR;
             if (strcmp(action, "remove") == 0) {
-                udev_db_remove(SCHEMA_UDEV_RULES_DIR, &shadow_ev);
-            } else if (rc.nsym > 0 || rc.ntags > 0 || shadow_ev.n > pre_rules_n) {
+                udev_db_remove(db_authority, &shadow_ev);
+            } else {
                 const char *syms[DEVCTX_SYMLINKS_MAX];
                 const char *tgs[DEVCTX_TAGS_MAX];
                 for (int i = 0; i < rc.nsym;  i++) syms[i] = rc.symlinks[i];
                 for (int i = 0; i < rc.ntags; i++) tgs[i]  = rc.tags[i];
-                udev_db_write_full(SCHEMA_UDEV_RULES_DIR, &shadow_ev, kernel_n,
+                udev_db_write_full(db_authority, &shadow_ev, kernel_n,
                                    syms, rc.nsym, tgs, rc.ntags);
             }
         }
