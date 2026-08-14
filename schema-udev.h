@@ -159,8 +159,30 @@ static inline int dev_rules_load_dir(const char *dir, struct dev_rule *rules, in
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 
 #define SCHEMA_DEV_DIR "/dev/schema"
+
+/* Boot-readiness marker: written once after the initial coldplug completes so
+ * schema-init's udevd.svc ready_path can gate services that depend on the
+ * device manager (network-up, etc). A dedicated path, not systemd's
+ * /run/udev/control socket, to avoid confusing libudev/udevadm clients. */
+#define SCHEMA_UDEV_READY_DIR  "/run/schema-udev"
+#define SCHEMA_UDEV_READY      "/run/schema-udev/ready"
+
+static inline int udev_signal_ready_at(const char *dir) {
+    char path[PATH_MAX];
+    mkdir(dir, 0755);   /* ok if it already exists */
+    if ((size_t)snprintf(path, sizeof path, "%s/ready", dir) >= sizeof path) return -1;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -1;
+    close(fd);
+    return 0;
+}
+
+static inline int udev_signal_ready(void) {
+    return udev_signal_ready_at(SCHEMA_UDEV_READY_DIR);
+}
 
 static inline int symlink_apply(const char *base_dir, const char *name, const char *devname) {
     if (!base_dir || !name || !devname || name[0] == '\0') return -1;

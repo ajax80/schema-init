@@ -117,5 +117,16 @@ int main(void) {
     assert(i_parent < i_child);   /* parent before child, guaranteed */
 
     printf("test_coldplug (parent-before-child order): OK\n");
+
+    /* readiness marker: created after coldplug so schema-init's ready_path can
+       gate services that depend on the device manager (network-up etc). */
+    char tmpl4[] = "/tmp/schema-udev-ready-XXXXXX";
+    char *rd = mkdtemp(tmpl4); assert(rd);
+    char sub[512]; snprintf(sub, sizeof sub, "%s/run", rd);   /* dir does not exist yet */
+    assert(udev_signal_ready_at(sub) == 0);
+    char marker[600]; snprintf(marker, sizeof marker, "%s/ready", sub);
+    struct stat rst; assert(stat(marker, &rst) == 0 && S_ISREG(rst.st_mode));
+    assert(udev_signal_ready_at(sub) == 0);                   /* idempotent */
+    printf("test_coldplug (ready-marker): OK\n");
     return 0;
 }

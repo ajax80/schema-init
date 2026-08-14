@@ -221,6 +221,8 @@ int main(void) {
     uaccess_wipe(SCHEMA_UACCESS_DIR);
     fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
     coldplug_walk_root("/sys", dispatch);
+    if (g_live && udev_signal_ready() == 0)
+        fprintf(stderr, "[schema-udev] ready marker %s written (coldplug complete)\n", SCHEMA_UDEV_READY);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
 
     struct pollfd pfd[2] = { { nlfd, POLLIN, 0 }, { sfd, POLLIN, 0 } };
