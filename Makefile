@@ -56,6 +56,9 @@ parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h
 verify-rules-live: tools/verify-rules-live.c udev_db.h udev_rules.h udev_builtins.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h dissect_image.h schema-udev.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-rules-live tools/verify-rules-live.c
 
+verify-eprops-live: tools/verify-eprops-live.c udev_db.h udev_rules.h udev_builtins.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h dissect_image.h schema-udev.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-eprops-live tools/verify-eprops-live.c
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
