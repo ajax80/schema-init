@@ -139,9 +139,11 @@ static inline void ub_absorb(struct uevent *ev, const struct uevent *tmp) {
 
 /* Run one builtin (bit is a single UB_* value), absorbing its properties into ev.
  * Returns 0 if the builtin ran, < 0 if it failed / does not apply. usb_id_build,
- * input_id_build and net_id_build use this 0/-1 convention natively. hwdb_build
- * and blkid_{pt,fs}_build always return 0 (never -1) — they are property
- * importers that report "ran" unconditionally and never hard-gate a rule.
+ * input_id_build and net_id_build use this 0/-1 convention natively. hwdb
+ * reports failure when it imports zero properties (matching real udev, so
+ * IMPORT{builtin}="hwdb" gates a trailing clause like .HAVE_HWDB_PROPERTIES);
+ * blkid_{pt,fs}_build always return 0 (never -1) — property importers that
+ * report "ran" unconditionally and never hard-gate a rule.
  * path_id_build returns a length (> 0 = anchored).
  * v4l_id_build/ata_id_build return a *count* of emitted properties (0 = did not
  * run, since their success path always emits a fixed set of base properties), so
@@ -153,7 +155,7 @@ static inline int run_builtin_bit(const char *sysroot, const char *devpath,
                                   const char *devnode, struct uevent *ev, int bit) {
     struct uevent tmp;
     switch (bit) {
-    case UB_HWDB:  tmp.n = 0; { int r = hwdb_build(sysroot, devpath, &tmp);      ub_absorb(ev, &tmp); return r; }
+    case UB_HWDB:  tmp.n = 0; { hwdb_build(sysroot, devpath, &tmp); int got = tmp.n; ub_absorb(ev, &tmp); return got > 0 ? 0 : -1; }
     case UB_PATH: {
         char idpath[PATH_ID_MAX], idtag[PATH_ID_MAX];
         if (path_id_build(sysroot, devpath, idpath, sizeof idpath) > 0) {

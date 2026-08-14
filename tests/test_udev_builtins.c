@@ -116,6 +116,20 @@ static void test_dissect_dispatch(void) {
     printf("test_dissect_dispatch OK\n");
 }
 
+/* IMPORT{builtin}="hwdb" must FAIL (gate the rule) when it imports zero
+   properties, so a trailing clause like ENV{.HAVE_HWDB_PROPERTIES}="1" is not
+   applied. A device with no modalias imports nothing -> run_builtin_bit<0. */
+static void test_hwdb_import_gate(void) {
+    mkdirs("/devices/hwdb_nomod");   /* no modalias attr */
+    struct uevent ev; ev.n = 0;
+    bpt_emit(&ev, "DEVPATH", "/devices/hwdb_nomod");
+    int before = ev.n;
+    int rc = run_builtin_bit(ROOT, "/devices/hwdb_nomod", NULL, &ev, UB_HWDB);
+    assert(rc < 0);
+    assert(ev.n == before);
+    printf("test_hwdb_import_gate OK\n");
+}
+
 int main(void) {
     root_make();
     assert(strcmp(ub_kernel_name("/devices/pci0000:00/0000:00:01.0/net/enp6s0"), "enp6s0") == 0);
@@ -148,5 +162,6 @@ int main(void) {
     printf("test_udev_builtins helpers: OK\n");
     test_select();
     test_dissect_dispatch();
+    test_hwdb_import_gate();
     return 0;
 }
