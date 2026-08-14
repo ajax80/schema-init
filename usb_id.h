@@ -59,19 +59,27 @@ static inline int usb_find_nodes(const char *sysroot, const char *devpath,
     if ((size_t)snprintf(cur, sizeof cur, "%s%s", sysroot, devpath) >= sizeof cur) return -1;
     devdir[0] = '\0'; ifdir[0] = '\0';
     char sub[128];
+    int first = 1, self_is_usb_device = 0;
     for (;;) {
         if (pi_subsystem(cur, sub, sizeof sub) == 0 && strcmp(sub, "usb") == 0) {
             const char *b = pi_base(cur);
             if (strchr(b, ':')) {                 /* usb_interface */
-                if (ifdir[0] == '\0') safe_copy(ifdir, cur, ifsz);
+                if (!first && ifdir[0] == '\0') safe_copy(ifdir, cur, ifsz);
             } else {                              /* usb_device */
+                if (first) self_is_usb_device = 1;
                 safe_copy(devdir, cur, devsz);
-                return 0;
+                break;
             }
         }
+        first = 0;
         if (pi_parent(cur) != 0) break;
     }
-    return devdir[0] ? 0 : -1;
+    if (devdir[0] == '\0') return -1;
+    /* mirror real udev: usb_id requires a usb_interface ancestor unless the
+     * invoked device is itself the usb_device; a usb_interface node (or any
+     * device with no interface ancestor) bails and imports nothing. */
+    if (!self_is_usb_device && ifdir[0] == '\0') return -1;
+    return 0;
 }
 
 static inline int usb_read_sysattr(const char *devdir, const char *attr, char *out, size_t outsz) {

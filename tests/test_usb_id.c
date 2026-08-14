@@ -364,12 +364,44 @@ static void test_usb_storage_scsi(void) {
     printf("test_usb_storage_scsi OK\n");
 }
 
+/* Real udev's usb_id bails (imports nothing) when invoked directly on a
+ * usb_interface node: it requires a usb_interface *ancestor* (excluding self),
+ * finds none, and returns failure. A bare usb_device is fine (no interface). */
+static void test_bail_on_interface_node(void) {
+    char tmpl[] = "/tmp/schema-usbid-b-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    char leaf[2048];
+    build_usb_dev(root, "/devices/pci0000:00/0000:02:00.0/usb1", "1-4", "1-4:1.0",
+                  "GenesysLogic", "USB2.0 UVC PC Camera", NULL,
+                  "a16f\n", "0304\n", "0620\n", leaf, sizeof leaf);
+
+    const char *devrel = "/devices/pci0000:00/0000:02:00.0/usb1/1-4";
+    const char *ifrel  = "/devices/pci0000:00/0000:02:00.0/usb1/1-4/1-4:1.0";
+
+    char devdir[PATH_MAX], ifdir[PATH_MAX];
+
+    /* interface node invoked directly -> bail */
+    assert(usb_find_nodes(root, ifrel, devdir, sizeof devdir, ifdir, sizeof ifdir) == -1);
+    struct uevent ev;
+    assert(usb_id_build(root, ifrel, &ev) == -1);
+
+    /* usb_device node invoked directly -> succeed, no interface */
+    assert(usb_find_nodes(root, devrel, devdir, sizeof devdir, ifdir, sizeof ifdir) == 0);
+    assert(strcmp(pi_base(devdir), "1-4") == 0);
+    assert(ifdir[0] == '\0');
+    assert(usb_id_build(root, devrel, &ev) == 0);
+
+    printf("test_bail_on_interface_node: OK\n");
+}
+
 int main(void) {
     test_encoders();
     test_discovery_and_names();
     test_type_driver_interfaces();
     test_build_full();
     test_usb_storage_scsi();
+    test_bail_on_interface_node();
     printf("ALL usb_id tests passed\n");
     return 0;
 }
