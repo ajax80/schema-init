@@ -62,4 +62,22 @@ static void test_probe(void) {
     printf("test_probe OK\n");
 }
 
-int main(void) { test_table(); test_probe(); printf("ALL dissect_image tests OK\n"); return 0; }
+static void test_copy(void) {
+    struct uevent ev; ev.n = 0;
+    bpt_emit(&ev, "ID_PART_ENTRY_NUMBER", "2");
+    bpt_emit(&ev, "ID_DISSECT_IMAGE", "1");
+    bpt_emit(&ev, "ID_DISSECT_PART1_DESIGNATOR", "esp");
+    bpt_emit(&ev, "ID_DISSECT_PART2_DESIGNATOR", "xbootldr");
+    assert(dissect_copy_build("", "", "/dev/nvme0n1p2", &ev) == 0);
+    assert(!strcmp(uevent_get(&ev, "ID_DISSECT_PART_DESIGNATOR"), "xbootldr"));
+
+    /* partition with no mapped designator in the list => no key set */
+    struct uevent ev2; ev2.n = 0;
+    bpt_emit(&ev2, "ID_PART_ENTRY_NUMBER", "5");
+    bpt_emit(&ev2, "ID_DISSECT_PART1_DESIGNATOR", "esp");
+    assert(dissect_copy_build("", "", "/dev/nvme0n1p5", &ev2) == 0);
+    assert(uevent_get(&ev2, "ID_DISSECT_PART_DESIGNATOR") == NULL);
+    printf("test_copy OK\n");
+}
+
+int main(void) { test_table(); test_probe(); test_copy(); printf("ALL dissect_image tests OK\n"); return 0; }

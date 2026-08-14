@@ -55,4 +55,16 @@ static inline int dissect_probe_build(const char *sysroot, const char *devpath,
     }
     return 0;
 }
+/* partition copy: pick this partition's designator out of the parent's list
+ * (inherited onto the partition via 60-persistent-storage IMPORT{parent}). */
+static inline int dissect_copy_build(const char *sysroot, const char *devpath,
+                                     const char *devnode, struct uevent *ev) {
+    (void)sysroot; (void)devpath; (void)devnode;
+    const char *num = uevent_get(ev, "ID_PART_ENTRY_NUMBER");
+    if (!num || !*num) return 0;
+    char key[48]; snprintf(key, sizeof key, "ID_DISSECT_PART%s_DESIGNATOR", num);
+    const char *desig = uevent_get(ev, key);
+    if (desig && *desig) bpt_emit(ev, "ID_DISSECT_PART_DESIGNATOR", desig);
+    return 0;
+}
 #endif /* DISSECT_IMAGE_H */
