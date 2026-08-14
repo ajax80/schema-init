@@ -102,6 +102,20 @@ static void test_select(void) {
     printf("test_udev_builtins ub_select: OK\n");
 }
 
+/* dissect_image dispatches by device type: on a partition uevent carrying an
+   inherited designator list, run_builtin_bit(UB_DISSECT) runs copy and sets
+   ID_DISSECT_PART_DESIGNATOR. */
+static void test_dissect_dispatch(void) {
+    struct uevent ev; ev.n = 0;
+    bpt_emit(&ev, "DEVTYPE", "partition");
+    bpt_emit(&ev, "ID_PART_ENTRY_NUMBER", "1");
+    bpt_emit(&ev, "ID_DISSECT_PART1_DESIGNATOR", "esp");
+    int rc = run_builtin_bit("", "/devices/x/block/nvme0n1/nvme0n1p1", "/dev/nvme0n1p1", &ev, UB_DISSECT);
+    assert(rc >= 0);
+    assert(!strcmp(uevent_get(&ev, "ID_DISSECT_PART_DESIGNATOR"), "esp"));
+    printf("test_dissect_dispatch OK\n");
+}
+
 int main(void) {
     root_make();
     assert(strcmp(ub_kernel_name("/devices/pci0000:00/0000:00:01.0/net/enp6s0"), "enp6s0") == 0);
@@ -133,5 +147,6 @@ int main(void) {
 
     printf("test_udev_builtins helpers: OK\n");
     test_select();
+    test_dissect_dispatch();
     return 0;
 }

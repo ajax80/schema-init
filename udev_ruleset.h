@@ -654,7 +654,8 @@ static inline int builtin_name_bit(const char *name) {
     if (!strcmp(name, "v4l_id"))   return UB_V4L;
     if (!strcmp(name, "cdrom_id")) return UB_CDROM;
     if (!strcmp(name, "fido_id"))  return UB_FIDO;
-    return 0;   /* keyboard, factory_reset, dissect_image, btrfs, net_setup_link, ... */
+    if (!strcmp(name, "dissect_image")) return UB_DISSECT;
+    return 0;   /* keyboard, factory_reset, btrfs, net_setup_link, ... */
 }
 
 /* 1 = continue applying rule; 0 = hard gate (stop this rule). */
