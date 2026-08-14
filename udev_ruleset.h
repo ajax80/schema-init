@@ -689,7 +689,7 @@ static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c,
             int rc = run_builtin_bit(ctx->sysroot, dp ? dp : "", dn, ctx->ev, bit);
             return (rc < 0) ? 0 : 1;
         }
-        char rout[UE_VAL_MAX];
+        char rout[8192];   /* IMPORT{program} emits multi-line KEY=VAL; dmi_memory_id ~1.3KB */
         int rc = udev_run_capture(sv, rout, sizeof rout);
         if (rc != 0) return 0;
         import_kv_lines(ctx, rout);

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <limits.h>
+#include <sys/stat.h>
 
 static void ue_set(struct uevent *ev, const char *k, const char *v) {
     safe_copy(ev->key[ev->n], k, UE_KEY_MAX);
@@ -253,6 +254,27 @@ int main(void) {
         free(live.rules);
         printf("test_udev_executor: live-smoke OK (sda tags=%d symlinks=%d)\n", lc.ntags, lc.nsym);
     }
+    /* IMPORT{program} must capture multi-line output beyond 512 bytes
+       (regression: dmi_memory_id emits ~1.3KB; a 512-byte buffer truncated it). */
+    {
+        char script[] = "/tmp/schema-imp-XXXXXX";
+        int sfd = mkstemp(script); assert(sfd >= 0);
+        const char *body = "#!/bin/sh\ni=0\nwhile [ $i -lt 40 ]; do echo K$i=value_value_value_$i; i=$((i+1)); done\n";
+        assert(write(sfd, body, strlen(body)) == (ssize_t)strlen(body));
+        close(sfd); assert(chmod(script, 0755) == 0);
+
+        struct uevent ie; memset(&ie, 0, sizeof ie);
+        ue_set(&ie, "ACTION", "add"); ue_set(&ie, "DEVPATH", "/devices/imp");
+        struct dev_ctx ic; assert(dev_ctx_init(&ic, &ie, "/sys") == 0);
+        char line[128]; snprintf(line, sizeof line, "IMPORT{program}=\"%s\"", script);
+        struct rule ir; ruleset_parse_line(line, &ir);
+        apply_rule(&ir, &ic);
+        /* K39 lives past the old 512-byte cut-off (40 lines * ~22 bytes = ~880) */
+        assert(strcmp(uevent_get(&ie, "K39"), "value_value_value_39") == 0);
+        unlink(script);
+        printf("test_udev_executor: multiline-import OK\n");
+    }
+
     #undef ADD
     printf("test_udev_executor: ALL OK\n");
     return 0;
