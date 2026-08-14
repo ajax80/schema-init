@@ -80,4 +80,27 @@ static void test_copy(void) {
     printf("test_copy OK\n");
 }
 
-int main(void) { test_table(); test_probe(); test_copy(); printf("ALL dissect_image tests OK\n"); return 0; }
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+/* Live: the helper must resolve the box's real root-backing whole disk (works
+ * on btrfs where stat("/") gives an anonymous devnum), and is_root_backing_disk
+ * must return 1 on that disk's devpath. Negative case (sdb) is the Task-6 gate. */
+static void test_root_disk_live(void) {
+    char rootdev[64];
+    if (bpt_root_disk_devnum(rootdev, sizeof rootdev) != 0) {
+        printf("test_root_disk_live SKIP (no /proc/mounts root)\n"); return;
+    }
+    assert(rootdev[0] != '\0');
+    char sp[PATH_MAX];
+    snprintf(sp, sizeof sp, "/sys/dev/block/%s", rootdev);
+    char real[PATH_MAX];
+    assert(realpath(sp, real) != NULL);            /* resolved to a real disk */
+    char partbuf[64];
+    assert(pi_sysattr(real, "partition", partbuf, sizeof partbuf) != 0);  /* whole disk */
+    const char *devpath = real + 4;                /* strip "/sys" */
+    assert(bpt_is_root_backing_disk("/sys", devpath) == 1);
+    printf("test_root_disk_live OK (%s -> %s)\n", rootdev, devpath);
+}
+
+int main(void) { test_table(); test_probe(); test_copy(); test_root_disk_live();
+                 printf("ALL dissect_image tests OK\n"); return 0; }

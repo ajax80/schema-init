@@ -7,6 +7,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/sysmacros.h>
 
 static inline void bpt_emit(struct uevent *out, const char *k, const char *v) {
     if (out->n < UE_MAX_KEYS) {
@@ -171,6 +172,45 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
     bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
 }
 
+/* Whole-disk devnum that backs the running root fs. stat("/")->st_dev is an
+ * anonymous devnum on btrfs/zfs/overlay, so resolve the backing block device
+ * from /proc/mounts instead: source node -> st_rdev -> walk /sys up to disk. */
+static inline int bpt_root_disk_devnum(char *out, size_t outsz) {
+    FILE *f = fopen("/proc/mounts", "r");
+    if (!f) return -1;
+    char dev[256]; char line[1024]; dev[0] = '\0';
+    while (fgets(line, sizeof line, f)) {
+        char d[256], m[256];
+        if (sscanf(line, "%255s %255s", d, m) != 2) continue;
+        if (!strcmp(m, "/")) { safe_copy(dev, d, sizeof dev); break; }
+    }
+    fclose(f);
+    if (strncmp(dev, "/dev/", 5) != 0) return -1;
+    struct stat st;
+    if (stat(dev, &st) != 0 || !S_ISBLK(st.st_mode)) return -1;
+    unsigned maj = (unsigned)major(st.st_rdev), min = (unsigned)minor(st.st_rdev);
+    char sp[PATH_MAX];
+    if ((size_t)snprintf(sp, sizeof sp, "/sys/dev/block/%u:%u", maj, min) >= sizeof sp) return -1;
+    char real[PATH_MAX];
+    if (!realpath(sp, real)) return -1;
+    char partbuf[64];
+    if (pi_sysattr(real, "partition", partbuf, sizeof partbuf) == 0) {
+        if (pi_parent(real) != 0) return -1;   /* partition -> whole disk */
+    }
+    return pi_sysattr(real, "dev", out, outsz);   /* "MAJ:MIN" */
+}
+
+static inline int bpt_is_root_backing_disk(const char *sysroot, const char *devpath) {
+    char syspath[PATH_MAX];
+    if ((size_t)snprintf(syspath, sizeof syspath, "%s%s", sysroot ? sysroot : "",
+                         devpath ? devpath : "") >= sizeof syspath) return 0;
+    char thisdev[64];
+    if (pi_sysattr(syspath, "dev", thisdev, sizeof thisdev) != 0) return 0;
+    char rootdev[64];
+    if (bpt_root_disk_devnum(rootdev, sizeof rootdev) != 0) return 0;
+    return strcmp(thisdev, rootdev) == 0 ? 1 : 0;
+}
+
 static inline int blkid_pt_build(const char *sysroot, const char *devpath,
                                  const char *devnode, struct uevent *out) {
     out->n = 0;
@@ -192,6 +232,8 @@ static inline int blkid_pt_build(const char *sysroot, const char *devpath,
             bpt_emit(out, "ID_PART_TABLE_TYPE", "dos");
             bpt_emit(out, "ID_PART_TABLE_UUID", uuid);
         }
+        if (bpt_is_root_backing_disk(sysroot, devpath) == 1)
+            bpt_emit(out, "ID_PART_GPT_AUTO_ROOT_DISK", "1");
         return 0;
     }
 
