@@ -323,7 +323,20 @@ int main(void) {
     int sfd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (sfd < 0) { fprintf(stderr, "[schema-udev] signalfd: %s\n", strerror(errno)); return 1; }
 
-    g_live = (access(SCHEMA_UDEV_LIVE_FLAG, F_OK) == 0);
+    errno = 0;
+    int live_rc = access(SCHEMA_UDEV_LIVE_FLAG, F_OK);
+    int live_errno = errno;
+    g_live = (live_rc == 0);
+    {
+        struct stat lst;
+        int st_rc = lstat(SCHEMA_UDEV_LIVE_FLAG, &lst);
+        fprintf(stderr,
+                "[schema-udev] flag-check: path=%s access_rc=%d errno=%d(%s) "
+                "euid=%u uid=%u lstat_rc=%d%s\n",
+                SCHEMA_UDEV_LIVE_FLAG, live_rc, live_errno, strerror(live_errno),
+                (unsigned)geteuid(), (unsigned)getuid(), st_rc,
+                st_rc == 0 ? "" : " <<FLAG ABSENT AT LAUNCH>>");
+    }
     fprintf(stderr, "[schema-udev] mode=%s (%s)\n",
             g_live ? "LIVE" : "dry-run",
             g_live ? "owns real /dev, /dev/disk, ACLs" : "isolated namespaces");
