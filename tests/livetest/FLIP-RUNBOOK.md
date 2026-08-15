@@ -35,7 +35,7 @@ sudo cp -a /etc/schema-init/services /etc/schema-init/services.bak-preflip
 ## 2. Install the new binary
 
 ```sh
-sudo cp ~/projects/schema-init/schema-udev /usr/bin/schema-udev
+sudo install -m0755 ~/projects/schema-init/schema-udev /usr/bin/schema-udev  # install, NOT cp: the shadow daemon holds the running inode -> cp fails ETXTBSY
 md5sum /usr/bin/schema-udev        # note it: this is the new authority
 ```
 

@@ -275,6 +275,53 @@ int main(void) {
         printf("test_udev_executor: multiline-import OK\n");
     }
 
+    /* ATTR{...}="value" writes value to sysfs attribute file */
+    {
+        char tdir[] = "/tmp/schema-attr-test-XXXXXX";
+        assert(mkdtemp(tdir) != NULL);
+        char attr_file[PATH_MAX];
+        snprintf(attr_file, sizeof attr_file, "%s/uevent", tdir);
+
+        struct uevent ate; memset(&ate, 0, sizeof ate);
+        ue_set(&ate, "ACTION", "add");
+        ue_set(&ate, "DEVPATH", "/devices/virtual/sound/card0/controlC0");
+        struct dev_ctx atc; assert(dev_ctx_init(&atc, &ate, "/sys") == 0);
+        /* Point sysdir to our temp test directory */
+        safe_copy(atc.sysdir, tdir, sizeof atc.sysdir);
+
+        struct rule attr_rule;
+        ruleset_parse_line("ATTR{uevent}=\"change\"", &attr_rule);
+        apply_rule(&attr_rule, &atc);
+
+        FILE *f = fopen(attr_file, "r");
+        assert(f != NULL);
+        char buf[64];
+        assert(fgets(buf, sizeof buf, f) != NULL);
+        fclose(f);
+        assert(strcmp(buf, "change") == 0);
+
+        unlink(attr_file);
+        rmdir(tdir);
+        printf("test_udev_executor: attr-write OK\n");
+    }
+
+    /* RUN{builtin}="kmod load" records run_builtin=1 */
+    {
+        struct uevent ke; memset(&ke, 0, sizeof ke);
+        ue_set(&ke, "ACTION", "add");
+        ue_set(&ke, "DEVPATH", "/devices/usb/test");
+        ue_set(&ke, "MODALIAS", "usb:v1234p5678d0100dc00dsc00dp00ic01isc01ip00in00");
+        struct dev_ctx kc; assert(dev_ctx_init(&kc, &ke, "/sys") == 0);
+
+        struct rule krule;
+        ruleset_parse_line("ENV{MODALIAS}==\"?*\", RUN{builtin}+=\"kmod load\"", &krule);
+        apply_rule(&krule, &kc);
+        assert(kc.nruns == 1);
+        assert(kc.run_builtin[0] == 1);
+        assert(strcmp(kc.runs[0], "kmod load") == 0);
+        printf("test_udev_executor: kmod-run-record OK\n");
+    }
+
     #undef ADD
     printf("test_udev_executor: ALL OK\n");
     return 0;

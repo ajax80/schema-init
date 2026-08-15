@@ -190,7 +190,7 @@ static inline int udev_glob(const char *pat, const char *str) {
 #define DEVCTX_TAGS_MAX 32
 #define DEVCTX_SYMLINKS_MAX 32
 #define DEVCTX_FINAL_MAX    16
-#define DEVCTX_RUNS_MAX 32
+#define DEVCTX_RUNS_MAX 64
 
 struct dev_ctx {
     struct uevent *ev;                          /* properties; mutable (R3 grows) */
@@ -744,6 +744,17 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
             if (apply_import(ctx, c, sv) == 0) return NULL;   /* hard gate: stop this rule */
         } else if (!strcmp(c->key, "RUN")) {
             ctx_add_run(ctx, sv, !strcmp(c->subkey, "builtin"));
+        } else if (!strcmp(c->key, "ATTR")) {
+            if (c->subkey[0]) {
+                char p[PATH_MAX];
+                if ((size_t)snprintf(p, sizeof p, "%s/%s", ctx->sysdir, c->subkey) < sizeof p) {
+                    FILE *f = fopen(p, "w");
+                    if (f) {
+                        fputs(sv, f);
+                        fclose(f);
+                    }
+                }
+            }
         }
 
         if (c->op == OP_ASSIGN_FINAL) ctx_lock_final(ctx, c);

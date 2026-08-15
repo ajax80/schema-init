@@ -93,16 +93,59 @@ static void monitor_broadcast(const struct uevent *ev) {
     (void)sendmsg(g_monfd, &msg, 0);
 }
 
-/* Execute RUN{program} directives fire-and-forget (udev semantics: direct
+/* Execute RUN directives fire-and-forget (udev semantics: direct
  * argv exec, not a shell; output discarded; children reaped by the SIGCHLD
- * drain). RUN{builtin} is skipped: uaccess is handled natively elsewhere;
- * kmod/btrfs remain deferred debt. */
+ * drain). RUN{builtin} kmod load invokes modprobe for MODALIAS or explicit modules;
+ * other builtins (uaccess) are handled natively elsewhere. */
 static void run_ctx_runs(const struct dev_ctx *rc) {
     for (int i = 0; i < rc->nruns; i++) {
-        if (rc->run_builtin[i]) continue;
         char store[32][UE_VAL_MAX]; char *argv[33];
         int argc = udev_argv_split(rc->runs[i], store, argv, 32);
         if (argc <= 0) continue;
+
+        if (rc->run_builtin[i]) {
+            if (strcmp(argv[0], "kmod") == 0 && argc >= 2 && strcmp(argv[1], "load") == 0) {
+                pid_t pid = fork();
+                if (pid < 0) continue;
+                if (pid == 0) {
+                    sigset_t empty; sigemptyset(&empty);
+                    sigprocmask(SIG_SETMASK, &empty, NULL);
+                    int devnull = open("/dev/null", O_RDWR);
+                    if (devnull >= 0) {
+                        dup2(devnull, STDIN_FILENO);
+                        dup2(devnull, STDOUT_FILENO);
+                        dup2(devnull, STDERR_FILENO);
+                        if (devnull > STDERR_FILENO) close(devnull);
+                    }
+                    if (argc > 2) {
+                        char *margv[37];
+                        margv[0] = "modprobe";
+                        margv[1] = "-a";
+                        margv[2] = "-q";
+                        margv[3] = "-s";
+                        margv[4] = "--";
+                        for (int k = 2; k < argc; k++) margv[k + 3] = argv[k];
+                        margv[argc + 3] = NULL;
+                        execvp("modprobe", margv);
+                        execv("/sbin/modprobe", margv);
+                        execv("/usr/sbin/modprobe", margv);
+                        execv("/bin/kmod", margv);
+                    } else {
+                        const char *alias = uevent_get(rc->ev, "MODALIAS");
+                        if (alias && alias[0] && alias[0] != '-') {
+                            char *margv[] = { "modprobe", "-b", "-q", "-s", "--", (char *)alias, NULL };
+                            execvp("modprobe", margv);
+                            execv("/sbin/modprobe", margv);
+                            execv("/usr/sbin/modprobe", margv);
+                            execv("/bin/kmod", margv);
+                        }
+                    }
+                    _exit(127);
+                }
+            }
+            continue;
+        }
+
         pid_t pid = fork();
         if (pid < 0) continue;
         if (pid == 0) {
