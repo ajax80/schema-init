@@ -7,6 +7,7 @@
 #include "udev_ruleset.h"
 #include "disk_links.h"
 #include "uaccess.h"
+#include "udev_exec.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -59,6 +60,65 @@ static ssize_t netlink_recv(int fd, char *buf, size_t bufsz) {
 
 static struct dev_rule g_rules[MAX_RULES];
 static int g_nrules = 0;
+
+/* Group-2 (UDEV_MONITOR_UDEV) broadcast socket. Live mode only: once udevd is
+ * retired, schema-udev is the sole source of the processed-event stream that
+ * libudev monitors (kwin/libinput/WirePlumber/NetworkManager) subscribe to. */
+static int g_monfd = -1;
+
+static int monitor_open(void) {
+    int fd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_KOBJECT_UEVENT);
+    if (fd < 0) return -1;
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof sa);
+    sa.nl_family = AF_NETLINK;
+    sa.nl_pid    = 0;   /* send-only; kernel assigns pid */
+    sa.nl_groups = 0;   /* we broadcast, never subscribe */
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
+    return fd;
+}
+
+static void monitor_broadcast(const struct uevent *ev) {
+    if (g_monfd < 0) return;
+    char frame[8192];
+    ssize_t len = libudev_frame_build(ev, frame, sizeof frame);
+    if (len < 0) return;
+    struct sockaddr_nl dst;
+    memset(&dst, 0, sizeof dst);
+    dst.nl_family = AF_NETLINK;
+    dst.nl_pid    = 0;
+    dst.nl_groups = 2;   /* UDEV_MONITOR_UDEV */
+    struct iovec iov = { frame, (size_t)len };
+    struct msghdr msg = { &dst, sizeof dst, &iov, 1, NULL, 0, 0 };
+    (void)sendmsg(g_monfd, &msg, 0);
+}
+
+/* Execute RUN{program} directives fire-and-forget (udev semantics: direct
+ * argv exec, not a shell; output discarded; children reaped by the SIGCHLD
+ * drain). RUN{builtin} is skipped: uaccess is handled natively elsewhere;
+ * kmod/btrfs remain deferred debt. */
+static void run_ctx_runs(const struct dev_ctx *rc) {
+    for (int i = 0; i < rc->nruns; i++) {
+        if (rc->run_builtin[i]) continue;
+        char store[32][UE_VAL_MAX]; char *argv[33];
+        int argc = udev_argv_split(rc->runs[i], store, argv, 32);
+        if (argc <= 0) continue;
+        pid_t pid = fork();
+        if (pid < 0) continue;
+        if (pid == 0) {
+            sigset_t empty; sigemptyset(&empty);
+            sigprocmask(SIG_SETMASK, &empty, NULL);
+            for (int j = 0; j < rc->ev->n; j++) setenv(rc->ev->key[j], rc->ev->val[j], 1);
+            if (!strchr(argv[0], '/')) {
+                char lp[512];
+                snprintf(lp, sizeof lp, "/usr/lib/udev/%s", argv[0]);
+                execv(lp, argv);
+            }
+            execvp(argv[0], argv);
+            _exit(127);
+        }
+    }
+}
 
 /* Live-mode sentinel: read ONCE at startup (never re-read on HUP, so a running
  * daemon never changes ownership mid-flight). Absent => dry-run (isolated
@@ -131,6 +191,17 @@ static void dispatch(struct uevent *ev) {
                 for (int i = 0; i < rc.ntags; i++) tgs[i]  = rc.tags[i];
                 udev_db_write_full(db_authority, &shadow_ev, kernel_n,
                                    syms, rc.nsym, tgs, rc.ntags);
+            }
+            /* Live mode owns real /dev: build the /dev/{char,block} farm, apply
+             * node ownership/mode, run RUN{program}, then announce the processed
+             * event on the udev monitor group so live consumers see hotplug. */
+            if (g_live) {
+                node_symlink_farm(&shadow_ev, action);
+                if (strcmp(action, "remove") != 0) {
+                    if (dn) node_apply_perms(dn, rc.owner, rc.group, rc.mode);
+                    run_ctx_runs(&rc);
+                }
+                monitor_broadcast(&shadow_ev);
             }
         }
         run_rules("/sys", devpath, dn, ev);
@@ -213,6 +284,14 @@ int main(void) {
     fprintf(stderr, "[schema-udev] mode=%s (%s)\n",
             g_live ? "LIVE" : "dry-run",
             g_live ? "owns real /dev, /dev/disk, ACLs" : "isolated namespaces");
+
+    if (g_live) {
+        g_monfd = monitor_open();
+        if (g_monfd < 0)
+            fprintf(stderr, "[schema-udev] monitor socket open failed: %s\n", strerror(errno));
+        else
+            fprintf(stderr, "[schema-udev] udev monitor broadcast (group 2) active\n");
+    }
 
     rules_reload();
     ruleset_reload();

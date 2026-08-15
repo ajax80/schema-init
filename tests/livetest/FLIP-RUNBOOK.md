@@ -72,6 +72,29 @@ sudo mv /etc/schema-init/services/udev-trigger.svc \
         /etc/schema-init/services/udev-trigger.svc.retired-preflip
 ```
 
+**d. Scrub dangling members/deps of the two retired services** (this is Gap 2
+from the 08-14 rollback: `display-stack.grp` still listed `member=udev-trigger`
+after 3c retired it → the group could never go ready → `sddm`/desktop blocked
+forever). A group with a member that no longer resolves never completes. Find
+and fix every reference before rebooting:
+
+```sh
+# List any group/service still pointing at a service retired in 3b/3c:
+grep -rlE 'udev-trigger|(member|dep|needs)=schema-udev$' /etc/schema-init/services/*.grp /etc/schema-init/services/*.svc
+```
+
+For each `*.grp` that lists `member=udev-trigger`, drop that line (schema-udev
+does its own coldplug — the trigger member is pure dead weight). For anything
+that listed `member=schema-udev`/`dep=schema-udev`, repoint it at `udevd` (the
+now-flipped service). `dep=udevd` references need no change — the `udevd`
+service keeps its name through the flip. Concretely for the box that bit us:
+
+```sh
+sudo sed -i '/^member=udev-trigger$/d' /etc/schema-init/services/display-stack.grp
+```
+
+Re-run the grep above and confirm it prints nothing before continuing.
+
 ## 4. Arm the switch (the sentinel = LIVE mode)
 
 ```sh
@@ -97,8 +120,32 @@ ls /dev/disk/by-designator 2>&1                         # esp/xbootldr on the re
 udevadm info /dev/nvme0n1p1 | head                      # libudev consumers see props
 loginctl                                                # your seat exists
 ```
-Then: **log into the GUI**, **plug in a USB stick** and confirm it appears in
-the file manager. Check network came up (`ip a`, browser).
+
+**The six 08-14 gaps — verify each is closed (these are what the fidelity gate
+cannot see):**
+```sh
+# Gap 5: property records world-readable (0644), not 0600.
+stat -c '%a' /run/udev/data/* | sort | uniq -c          # expect all 644
+
+# Gap 3: the major:minor symlink farm exists and is populated.
+ls /dev/char | head; ls /dev/block                      # both non-empty
+
+# Gap 4: baseline group/mode on nodes (root:root 0600 = broken).
+stat -c '%G %a %n' /dev/dri/card* /dev/input/event0 /dev/snd/* 2>/dev/null
+                                                        # video/input/audio, 0660
+
+# Gap 1: RUN fired — the nvidia node exists (was the boot-hang).
+ls -l /dev/nvidia0 2>&1
+
+# Gap 6: THE one that killed the flip. A live udev monitor must deliver a
+# device-added event, not just enumerate. Run this, then unplug/replug a USB
+# device or keyboard:
+libinput debug-events --udev seat0                      # expect "device added" lines, NOT
+                                                        # "Expected device added events ... but got none"
+```
+Then: **log into the GUI**, confirm **mouse + keyboard work**, **plug in a USB
+stick** and confirm it appears in the file manager. Check network (`ip a`,
+`nmcli device status`, browser).
 
 ## Rollback (if anything is off — no data risk, one reboot back)
 
@@ -106,7 +153,7 @@ the file manager. Check network came up (`ip a`, browser).
 sudo rm -f /etc/schema-init/schema-udev.live            # disarm LIVE mode
 sudo rm -rf /etc/schema-init/services
 sudo mv /etc/schema-init/services.bak-preflip /etc/schema-init/services
-sudo cp -a /usr/bin/schema-udev.bak-preflip /usr/bin/schema-udev
+sudo install -m0755 /usr/bin/schema-udev.bak-preflip /usr/bin/schema-udev  # NOT cp: the live daemon holds the inode -> cp fails ETXTBSY (08-14)
 sudo reboot
 ```
 

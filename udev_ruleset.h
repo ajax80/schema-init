@@ -214,6 +214,7 @@ struct dev_ctx {
     int  last_rule_deferred;
     int  deferred_applies;
     char runs[DEVCTX_RUNS_MAX][UE_VAL_MAX];
+    int  run_builtin[DEVCTX_RUNS_MAX];   /* 1 = RUN{builtin}, 0 = RUN{program} */
     int  nruns;
     const char *dbroot;
     const char *cmdline_path;
@@ -700,8 +701,9 @@ static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c,
     return 1;
 }
 
-static inline void ctx_add_run(struct dev_ctx *ctx, const char *v) {
+static inline void ctx_add_run(struct dev_ctx *ctx, const char *v, int is_builtin) {
     if (ctx->nruns >= DEVCTX_RUNS_MAX) return;
+    ctx->run_builtin[ctx->nruns] = is_builtin;
     safe_copy(ctx->runs[ctx->nruns++], v, UE_VAL_MAX);
 }
 
@@ -741,7 +743,7 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
         } else if (!strcmp(c->key, "IMPORT")) {
             if (apply_import(ctx, c, sv) == 0) return NULL;   /* hard gate: stop this rule */
         } else if (!strcmp(c->key, "RUN")) {
-            ctx_add_run(ctx, sv);
+            ctx_add_run(ctx, sv, !strcmp(c->subkey, "builtin"));
         }
 
         if (c->op == OP_ASSIGN_FINAL) ctx_lock_final(ctx, c);

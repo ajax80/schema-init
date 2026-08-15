@@ -130,6 +130,7 @@ static inline int udev_db_write(const char *base_dir, const struct uevent *ev, i
     if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
     int fd = mkstemp(tmpl);
     if (fd < 0) return -1;
+    if (fchmod(fd, 0644) != 0) { close(fd); unlink(tmpl); return -1; }
     ssize_t off = 0;
     while (off < len) {
         ssize_t w = write(fd, buf + off, (size_t)(len - off));
@@ -158,6 +159,7 @@ static inline int udev_db_write_full(const char *base_dir, const struct uevent *
     if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
     int fd = mkstemp(tmpl);
     if (fd < 0) return -1;
+    if (fchmod(fd, 0644) != 0) { close(fd); unlink(tmpl); return -1; }
     ssize_t off = 0;
     while (off < len) {
         ssize_t w = write(fd, buf + off, (size_t)(len - off));

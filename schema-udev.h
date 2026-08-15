@@ -10,6 +10,11 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <endian.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <pwd.h>
+#include <grp.h>
 
 #define UE_MAX_KEYS 128
 #define UE_KEY_MAX  64
@@ -215,6 +220,39 @@ static inline int symlink_clear(const char *base_dir, const char *name) {
     snprintf(path, sizeof path, "%s/%s", base_dir, name);
     if (unlink(path) != 0 && errno != ENOENT) return -1;
     return 0;
+}
+
+/* Apply udev MODE/OWNER/GROUP to a real device node (live mode only). udev's
+ * default when a GROUP is set but no MODE is 0660 (else 0600). Only touches
+ * char/block special files; best-effort. */
+static inline void node_apply_perms(const char *node, const char *owner,
+                                    const char *group, const char *mode_str) {
+    struct stat st;
+    if (!node || lstat(node, &st) != 0) return;
+    if (!S_ISCHR(st.st_mode) && !S_ISBLK(st.st_mode)) return;
+    uid_t uid = 0; gid_t gid = 0; int have_group = 0;
+    if (owner && owner[0]) { struct passwd *pw = getpwnam(owner); if (pw) uid = pw->pw_uid; }
+    if (group && group[0]) { struct group  *gr = getgrnam(group); if (gr) { gid = gr->gr_gid; have_group = 1; } }
+    mode_t mode = (mode_str && mode_str[0]) ? (mode_t)strtoul(mode_str, NULL, 8)
+                                            : (have_group ? 0660 : 0600);
+    if (chown(node, uid, gid) != 0) { /* best-effort */ }
+    chmod(node, mode & 07777);
+}
+
+/* Maintain the /dev/{char,block}/MAJ:MIN symlink farm. Core udevd node_symlink
+ * behavior: every device node gets one, rule-independent. schema-logind's
+ * TakeDevice() opens devices by this exact path. */
+static inline void node_symlink_farm(const struct uevent *ev, const char *action) {
+    const char *maj = uevent_get(ev, "MAJOR");
+    const char *min = uevent_get(ev, "MINOR");
+    const char *devname = uevent_get(ev, "DEVNAME");
+    if (!maj || !min || !devname) return;
+    const char *sub = uevent_get(ev, "SUBSYSTEM");
+    const char *dir = (sub && strcmp(sub, "block") == 0) ? "/dev/block" : "/dev/char";
+    char name[64];
+    if ((size_t)snprintf(name, sizeof name, "%s:%s", maj, min) >= sizeof name) return;
+    if (action && strcmp(action, "remove") == 0) symlink_clear(dir, name);
+    else symlink_apply(dir, name, devname);
 }
 
 static inline void safe_copy(char *dst, const char *src, size_t maxlen) {
