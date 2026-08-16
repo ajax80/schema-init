@@ -32,8 +32,20 @@ fi
 # nvidia_drm (KMS for Wayland) is the one module nvidia-modprobe does not handle.
 err=$(modprobe nvidia_drm modeset=1 2>&1) || log "modprobe nvidia_drm modeset=1 FAILED: $err"
 
-# nvidia-modprobe creates the nodes synchronously; this short bounded wait only
-# matters for the modprobe-fallback path above.
+# DETERMINISTIC node creation. nvidia-modprobe -c 0 races the PCI bind on the
+# no-initramfs boot: it returns 0 having enumerated ZERO GPUs, so it mknods
+# neither /dev/nvidia0 nor /dev/nvidiactl and the compositor falls back to
+# simpledrm (proven: two cold boots, 5x "nvidia0 absent", nodes only appeared
+# after a hand mknod). Unlike modeset/uvm (kernel miscdevices, auto-created),
+# the frontend nodes need userspace mknod, so do it ourselves from the
+# registered major -- the exact recovery that fixes every degraded boot by hand.
+NVMAJ=$(awk '$2=="nvidia"{print $1; exit}' /proc/devices)
+[ -n "$NVMAJ" ] || NVMAJ=195
+[ -c /dev/nvidiactl ] || { mknod -m 666 /dev/nvidiactl c "$NVMAJ" 255 && log "mknod /dev/nvidiactl ($NVMAJ,255)"; }
+[ -c /dev/nvidia0 ]   || { mknod -m 666 /dev/nvidia0   c "$NVMAJ" 0   && log "mknod /dev/nvidia0 ($NVMAJ,0)"; }
+
+# confirm (immediate now that we mknod ourselves; the wait only covers a slow
+# major registration right after modprobe).
 for i in $(seq 1 50); do
     [ -c /dev/nvidia0 ] && break
     sleep 0.1
