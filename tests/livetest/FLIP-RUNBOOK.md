@@ -27,9 +27,13 @@ Do NOT proceed unless both vmtests say PASS and verify-rules-live is 0.
 
 ## 1. Back up everything (the whole rollback lives here)
 
+Use the blessed backup — a bare `cp -a` is what bit us on 08-14 (it captured a
+prior aborted flip's BROKEN build as the rollback source). This refuses to back
+up anything but the known-good baseline and records its md5 in a manifest:
+
 ```sh
-sudo cp -a /usr/bin/schema-udev /usr/bin/schema-udev.bak-preflip
-sudo cp -a /etc/schema-init/services /etc/schema-init/services.bak-preflip
+sudo scripts/schema-udev-flip-backup.sh backup   # REFUSES if BIN != known-good baseline
+sudo scripts/schema-udev-flip-backup.sh verify   # asserts backup md5 == manifest
 ```
 
 ## 2. Install the new binary
@@ -150,14 +154,14 @@ stick** and confirm it appears in the file manager. Check network (`ip a`,
 ## Rollback (if anything is off — no data risk, one reboot back)
 
 ```sh
-sudo rm -f /etc/schema-init/schema-udev.live            # disarm LIVE mode
-sudo rm -rf /etc/schema-init/services
-sudo mv /etc/schema-init/services.bak-preflip /etc/schema-init/services
-sudo install -m0755 /usr/bin/schema-udev.bak-preflip /usr/bin/schema-udev  # NOT cp: the live daemon holds the inode -> cp fails ETXTBSY (08-14)
+sudo scripts/schema-udev-flip-backup.sh rollback   # asserts backup==manifest & backup!=installed, disarms flag, restores bin+services
 sudo reboot
 ```
 
-You're back to systemd-udevd exactly as it is right now.
+Rollback ABORTS rather than restore a corrupt/mismatched backup, disarms the
+LIVE flag first (so a crash mid-rollback still boots dry-run), and uses `cp`
+(not `mv`) for services so the backup survives a second attempt. You're back to
+systemd-udevd exactly as it is right now.
 
 ---
 
