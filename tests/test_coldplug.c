@@ -11,6 +11,13 @@ static void test_handler(struct uevent *ev) {
     if (strcmp(uevent_get(ev, "ACTION"), "add") == 0) g_coldplug_events++;
 }
 
+static char g_order[16][64];
+static int g_order_n = 0;
+static void order_handler(struct uevent *ev) {
+    const char *dn = uevent_get(ev, "DEVNAME");
+    if (dn && g_order_n < 16) { safe_copy(g_order[g_order_n], dn, 64); g_order_n++; }
+}
+
 int main(void) {
     char tmpl[] = "/tmp/schema-udev-test-sysXXXXXX";
     char *sysroot = mkdtemp(tmpl);
@@ -83,5 +90,43 @@ int main(void) {
     assert(g_coldplug_events == 2);
 
     printf("test_coldplug (coldplug_walk_root): OK\n");
+
+    /* Ordering contract: a parent device is always dispatched before its
+     * children (its devpath is a prefix). Build child subtree + uevent FIRST
+     * to bias readdir toward child-first, then assert coldplug still orders
+     * parent before child. */
+    char tmpl3[] = "/tmp/schema-udev-test-ordXXXXXX";
+    char *sr3 = mkdtemp(tmpl3); assert(sr3);
+    char pdir[1024], cdir[1024];
+    snprintf(pdir, sizeof pdir, "%s/devices/blk/sda", sr3);
+    snprintf(cdir, sizeof cdir, "%s/devices/blk/sda/sda1", sr3);
+    snprintf(cmd, sizeof cmd, "mkdir -p '%s'", cdir); assert(system(cmd) == 0);
+    char cu[1100], pu[1100];
+    snprintf(cu, sizeof cu, "%s/uevent", cdir); f = fopen(cu, "w"); fputs("DEVNAME=sda1\n", f); fclose(f);
+    snprintf(pu, sizeof pu, "%s/uevent", pdir); f = fopen(pu, "w"); fputs("DEVNAME=sda\n", f); fclose(f);
+
+    g_order_n = 0;
+    assert(coldplug_walk_root(sr3, order_handler) == 0);
+    assert(g_order_n == 2);
+    int i_parent = -1, i_child = -1;
+    for (int i = 0; i < g_order_n; i++) {
+        if (!strcmp(g_order[i], "sda"))  i_parent = i;
+        if (!strcmp(g_order[i], "sda1")) i_child  = i;
+    }
+    assert(i_parent >= 0 && i_child >= 0);
+    assert(i_parent < i_child);   /* parent before child, guaranteed */
+
+    printf("test_coldplug (parent-before-child order): OK\n");
+
+    /* readiness marker: created after coldplug so schema-init's ready_path can
+       gate services that depend on the device manager (network-up etc). */
+    char tmpl4[] = "/tmp/schema-udev-ready-XXXXXX";
+    char *rd = mkdtemp(tmpl4); assert(rd);
+    char sub[512]; snprintf(sub, sizeof sub, "%s/run", rd);   /* dir does not exist yet */
+    assert(udev_signal_ready_at(sub) == 0);
+    char marker[600]; snprintf(marker, sizeof marker, "%s/ready", sub);
+    struct stat rst; assert(stat(marker, &rst) == 0 && S_ISREG(rst.st_mode));
+    assert(udev_signal_ready_at(sub) == 0);                   /* idempotent */
+    printf("test_coldplug (ready-marker): OK\n");
     return 0;
 }

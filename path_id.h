@@ -30,6 +30,17 @@ static inline int pi_subsystem(const char *devdir, char *out, size_t outsz) {
     return 0;
 }
 
+static inline int pi_driver(const char *devdir, char *out, size_t outsz) {
+    char link[PATH_MAX], target[PATH_MAX];
+    if ((size_t)snprintf(link, sizeof link, "%s/driver", devdir) >= sizeof link) return -1;
+    ssize_t n = readlink(link, target, sizeof target - 1);
+    if (n <= 0) return -1;
+    target[n] = '\0';
+    char *b = strrchr(target, '/');
+    safe_copy(out, b ? b + 1 : target, outsz);
+    return 0;
+}
+
 static inline int pi_sysattr(const char *devdir, const char *attr, char *out, size_t outsz) {
     char p[PATH_MAX];
     if ((size_t)snprintf(p, sizeof p, "%s/%s", devdir, attr) >= sizeof p) return -1;
@@ -38,6 +49,8 @@ static inline int pi_sysattr(const char *devdir, const char *attr, char *out, si
     if (!fgets(out, (int)outsz, f)) { fclose(f); return -1; }
     fclose(f);
     out[strcspn(out, "\r\n")] = '\0';
+    size_t l = strlen(out);
+    while (l && (out[l-1] == ' ' || out[l-1] == '\t')) out[--l] = '\0';
     return 0;
 }
 
@@ -58,6 +71,52 @@ static inline void pi_prepend(char *path, size_t pathsz, const char *comp) {
     if (path[0]) snprintf(tmp, sizeof tmp, "%s-%s", comp, path);
     else         snprintf(tmp, sizeof tmp, "%s", comp);
     safe_copy(path, tmp, pathsz);
+}
+
+/* ID_PATH_ATA_COMPAT: ID_PATH with the ata "-ata-<port>.<devnum>" reduced to
+ * "-ata-<port>" (the pre-devnum backward-compat form). 1 if produced, else 0. */
+static inline int pi_ata_compat(const char *idpath, char *out, size_t sz) {
+    const char *a = strstr(idpath, "-ata-");
+    if (!a) return 0;
+    const char *p = a + 5;                       /* past "-ata-" */
+    while (*p >= '0' && *p <= '9') p++;           /* port digits */
+    if (*p != '.') return 0;
+    const char *d = p + 1;
+    while (*d >= '0' && *d <= '9') d++;            /* devnum digits */
+    size_t head = (size_t)(p - idpath);
+    if (head + strlen(d) + 1 > sz) return 0;
+    memcpy(out, idpath, head);
+    safe_copy(out + head, d, sz - head);          /* drop ".<devnum>" */
+    return 1;
+}
+
+/* ID_PATH_WITH_USB_REVISION: swap the "usb" token in "-usb-" for "usbv<major>".
+ * 1 if the path had a usb token, else 0. */
+static inline int pi_usb_rev_swap(const char *idpath, int major, char *out, size_t sz) {
+    const char *u = strstr(idpath, "-usb-");
+    if (!u) return 0;
+    size_t head = (size_t)(u - idpath) + 1;       /* include leading '-', before "usb" */
+    int n = snprintf(out, sz, "%.*susbv%d-%s", (int)head, idpath, major, u + 5);
+    return (n > 0 && (size_t)n < sz) ? 1 : 0;
+}
+
+/* Integer major of the nearest usb-subsystem ancestor's "version" attr, else 0. */
+static inline int pi_usb_major(const char *sysroot, const char *devpath) {
+    char cur[PATH_MAX];
+    if ((size_t)snprintf(cur, sizeof cur, "%s%s", sysroot, devpath) >= sizeof cur) return 0;
+    char sub[128], ver[64];
+    int maj = 0;
+    for (;;) {
+        if (pi_subsystem(cur, sub, sizeof sub) == 0 && strcmp(sub, "usb") == 0 &&
+            pi_sysattr(cur, "version", ver, sizeof ver) == 0) {
+            const char *p = ver; while (*p == ' ' || *p == '\t') p++;
+            int m = atoi(p);
+            if (m > 0) maj = m;   /* keep climbing: the topmost usb node (root hub) wins */
+        }
+        if (pi_parent(cur) != 0) break;
+        if (strlen(cur) <= strlen(sysroot)) break;
+    }
+    return maj;
 }
 
 static inline int pi_handle_usb(const char *leafdir, char *cur, size_t cursz,

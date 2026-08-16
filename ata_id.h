@@ -64,6 +64,45 @@ static inline int ata_id_decode(const uint8_t *buf, struct uevent *out) {
             UEMIT("ID_WWN_WITH_EXTENSION", s);
         }
     }
+
+    #define W(n)   ((unsigned)buf[2 * (n)] | ((unsigned)buf[2 * (n) + 1] << 8))
+    #define UNUM(k, v) do { char _b[16]; snprintf(_b, sizeof _b, "%u", (unsigned)(v)); UEMIT((k), _b); } while (0)
+    #define BIT(k, cond) UEMIT((k), (cond) ? "1" : "0")
+    unsigned w0 = W(0), w76 = W(76), w82 = W(82), w83 = W(83), w85 = W(85),
+             w86 = W(86), w89 = W(89), w90 = W(90), w91 = W(91), w128 = W(128), w217 = W(217);
+
+    UNUM("ID_ATA_PERIPHERAL_DEVICE_TYPE", (w0 & 0x8000) ? ((w0 >> 8) & 0x1f) : 0);  /* type only for ATAPI packet devices */
+
+    if (w82 & (1u << 5)) { UEMIT("ID_ATA_WRITE_CACHE", "1");   BIT("ID_ATA_WRITE_CACHE_ENABLED",   w85 & (1u << 5)); }
+    if (w82 & (1u << 6)) { UEMIT("ID_ATA_READ_LOOKAHEAD", "1"); BIT("ID_ATA_READ_LOOKAHEAD_ENABLED", w85 & (1u << 6)); }
+    if (w82 & (1u << 0)) { UEMIT("ID_ATA_FEATURE_SET_SMART", "1"); BIT("ID_ATA_FEATURE_SET_SMART_ENABLED", w85 & (1u << 0)); }
+    if (w82 & (1u << 1)) {
+        UEMIT("ID_ATA_FEATURE_SET_SECURITY", "1");
+        BIT("ID_ATA_FEATURE_SET_SECURITY_ENABLED", w85 & (1u << 1));
+        UNUM("ID_ATA_FEATURE_SET_SECURITY_ERASE_UNIT_MIN", w89 * 2);
+        UNUM("ID_ATA_FEATURE_SET_SECURITY_ENHANCED_ERASE_UNIT_MIN", w90 * 2);
+        BIT("ID_ATA_FEATURE_SET_SECURITY_FROZEN", w128 & (1u << 3));
+    }
+    if (w82 & (1u << 3)) { UEMIT("ID_ATA_FEATURE_SET_PM", "1");  BIT("ID_ATA_FEATURE_SET_PM_ENABLED",  w85 & (1u << 3)); }
+    if (w82 & (1u << 10)) { UEMIT("ID_ATA_FEATURE_SET_HPA", "1"); BIT("ID_ATA_FEATURE_SET_HPA_ENABLED", w85 & (1u << 10)); }
+    if (w83 & (1u << 3)) {
+        UEMIT("ID_ATA_FEATURE_SET_APM", "1");
+        BIT("ID_ATA_FEATURE_SET_APM_ENABLED", w86 & (1u << 3));
+        UNUM("ID_ATA_FEATURE_SET_APM_CURRENT_VALUE", w91 & 0xff);
+    }
+    if (w83 & (1u << 0)) UEMIT("ID_ATA_DOWNLOAD_MICROCODE", "1");
+
+    if (w217 >= 0x0401 && w217 <= 0xfffe) UNUM("ID_ATA_ROTATION_RATE_RPM", w217);
+    else if (w217 == 1)                   UEMIT("ID_ATA_ROTATION_RATE_RPM", "0");
+
+    if (w76 != 0x0000 && w76 != 0xffff) {
+        UEMIT("ID_ATA_SATA", "1");
+        if (w76 & (1u << 1)) UEMIT("ID_ATA_SATA_SIGNAL_RATE_GEN1", "1");
+        if (w76 & (1u << 2)) UEMIT("ID_ATA_SATA_SIGNAL_RATE_GEN2", "1");
+    }
+    #undef W
+    #undef UNUM
+    #undef BIT
     #undef UEMIT
     return out->n;
 }

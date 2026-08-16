@@ -47,11 +47,17 @@ schema-journal-sink: schema-journal-sink.c
 schema-board: schema-board.c schema.h schema_shm.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
-schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h uaccess.h disk_links.h
+schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lacl
 
-parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h schema-udev.h
+parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h schema-udev.h fido_id.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o udev-parity tools/udev-parity.c
+
+verify-rules-live: tools/verify-rules-live.c udev_db.h udev_rules.h udev_builtins.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h dissect_image.h schema-udev.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-rules-live tools/verify-rules-live.c
+
+verify-eprops-live: tools/verify-eprops-live.c udev_db.h udev_rules.h udev_builtins.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h dissect_image.h schema-udev.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-eprops-live tools/verify-eprops-live.c
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -99,12 +105,18 @@ test:
 	$(CC) $(CFLAGS) tests/test_coldplug.c -o /tmp/schema-test-coldplug && /tmp/schema-test-coldplug
 	$(CC) $(CFLAGS) tests/test_libudev_frame.c -o /tmp/schema-test-libudev && /tmp/schema-test-libudev
 	$(CC) $(CFLAGS) tests/test_udev_db.c -o /tmp/schema-test-udevdb && /tmp/schema-test-udevdb
+	$(CC) $(CFLAGS) tests/test_udev_ruleset.c -o /tmp/schema-test-ruleset && /tmp/schema-test-ruleset
+	$(CC) $(CFLAGS) tests/test_udev_matcher.c -o /tmp/schema-test-matcher && /tmp/schema-test-matcher
+	$(CC) $(CFLAGS) tests/test_udev_executor.c -o /tmp/schema-test-executor && /tmp/schema-test-executor
+	$(CC) $(CFLAGS) tests/test_udev_r4a.c -o /tmp/schema-test-r4a && /tmp/schema-test-r4a
+	$(CC) $(CFLAGS) tests/test_udev_r4b.c -o /tmp/schema-test-r4b && /tmp/schema-test-r4b
 	$(CC) $(CFLAGS) tests/test_parity.c -o /tmp/schema-test-parity && /tmp/schema-test-parity
 	$(CC) $(CFLAGS) tests/test_path_id.c -o /tmp/schema-test-pathid && /tmp/schema-test-pathid
 	$(CC) $(CFLAGS) tests/test_usb_id.c -o /tmp/schema-test-usbid && /tmp/schema-test-usbid
 	$(CC) $(CFLAGS) tests/test_input_id.c -o /tmp/schema-test-inputid && /tmp/schema-test-inputid
 	$(CC) $(CFLAGS) tests/test_net_id.c -o /tmp/schema-test-netid && /tmp/schema-test-netid
 	$(CC) $(CFLAGS) tests/test_blkid_pt.c -o /tmp/schema-test-blkidpt && /tmp/schema-test-blkidpt
+	$(CC) $(CFLAGS) tests/test_dissect_image.c -o /tmp/schema-test-dissect && /tmp/schema-test-dissect
 	$(CC) $(CFLAGS) tests/test_blkid_fs.c -o /tmp/schema-test-blkidfs && /tmp/schema-test-blkidfs
 	$(CC) $(CFLAGS) tests/test_hwdb.c -o /tmp/schema-test-hwdb && /tmp/schema-test-hwdb
 	$(CC) $(CFLAGS) tests/test_udev_builtins.c -o /tmp/schema-test-ub && /tmp/schema-test-ub

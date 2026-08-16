@@ -70,6 +70,12 @@ static void test_helpers(void) {
     assert(pi_sysattr(devdir, "port_no", out, sizeof out) == 0);
     assert(strcmp(out, "6") == 0);
 
+    /* trailing whitespace trimmed (like real udev sysattr), internal spaces kept */
+    char attrm[1200]; snprintf(attrm, sizeof attrm, "%s/model", devdir);
+    mkfile(attrm, "XPG GAMMIX S11 Pro          \n");
+    assert(pi_sysattr(devdir, "model", out, sizeof out) == 0);
+    assert(strcmp(out, "XPG GAMMIX S11 Pro") == 0);
+
     assert(strcmp(pi_base(devdir), "ata1") == 0);
 
     char cur[1024];
@@ -351,8 +357,43 @@ static void test_usb_scsi_rebase(void) {
     printf("test_usb_scsi_rebase OK\n");
 }
 
+static void test_derived_props(void) {
+    char out[PATH_ID_MAX];
+
+    /* ID_PATH_ATA_COMPAT: strip the ata ".devnum" (backward-compat path) */
+    assert(pi_ata_compat("pci-0000:02:00.1-ata-1.0", out, sizeof out) == 1);
+    assert(strcmp(out, "pci-0000:02:00.1-ata-1") == 0);
+    assert(pi_ata_compat("pci-0000:00:17.0-ata-3.0", out, sizeof out) == 1);
+    assert(strcmp(out, "pci-0000:00:17.0-ata-3") == 0);
+    assert(pi_ata_compat("pci-0000:02:00.0-usb-0:7:1.1", out, sizeof out) == 0);  /* no ata */
+
+    /* ID_PATH_WITH_USB_REVISION: swap "usb" token for "usbv<major>" */
+    assert(pi_usb_rev_swap("pci-0000:02:00.0-usb-0:7:1.1", 2, out, sizeof out) == 1);
+    assert(strcmp(out, "pci-0000:02:00.0-usbv2-0:7:1.1") == 0);
+    assert(pi_usb_rev_swap("pci-0000:08:00.3-usb-0:1:1.0-scsi-0:0:0:0", 3, out, sizeof out) == 1);
+    assert(strcmp(out, "pci-0000:08:00.3-usbv3-0:1:1.0-scsi-0:0:0:0") == 0);
+    assert(pi_usb_rev_swap("pci-0000:02:00.1-ata-1.0", 2, out, sizeof out) == 0);  /* no usb */
+
+    /* pi_usb_major: uses the ROOT HUB's version, not the leaf device's
+     * (a USB1.1 device on a USB2 root hub -> major 2, like real udev) */
+    char t[] = "/tmp/schema-uv-XXXXXX"; assert(mkdtemp(t));
+    char hub[600]; snprintf(hub, sizeof hub, "%s/devices/usb1", t);
+    char dev[600]; snprintf(dev, sizeof dev, "%s/devices/usb1/1-5", t);
+    char cmd[700]; snprintf(cmd, sizeof cmd, "mkdir -p %s", dev); assert(system(cmd) == 0);
+    char sl[700];
+    snprintf(sl, sizeof sl, "%s/subsystem", hub); assert(symlink("../../bus/usb", sl) == 0);
+    snprintf(sl, sizeof sl, "%s/subsystem", dev); assert(symlink("../../../bus/usb", sl) == 0);
+    char vf[700];
+    snprintf(vf, sizeof vf, "%s/version", hub); mkfile(vf, " 2.00\n");
+    snprintf(vf, sizeof vf, "%s/version", dev); mkfile(vf, " 1.10\n");
+    assert(pi_usb_major(t, "/devices/usb1/1-5") == 2);
+
+    printf("test_derived_props OK\n");
+}
+
 int main(void) {
     test_tag();
+    test_derived_props();
     test_helpers();
     test_pci_bare();
     test_platform();

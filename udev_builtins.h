@@ -11,6 +11,8 @@
 #include "ata_id.h"
 #include "v4l_id.h"
 #include "cdrom_id.h"
+#include "fido_id.h"
+#include "dissect_image.h"
 
 #include <string.h>
 #include <fnmatch.h>
@@ -56,7 +58,7 @@ static inline int ub_has_ata_ancestor(const char *devpath) {
     return 0;
 }
 
-enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128, UB_CDROM = 256 };
+enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128, UB_CDROM = 256, UB_FIDO = 512, UB_DISSECT = 1024 };
 
 /* Pure guard logic: which builtins apply to this device? Mirrors the IMPORT{builtin}
  * conditions in systemd's shipped /usr/lib/udev/rules.d. Order of the bits is
@@ -135,34 +137,71 @@ static inline void ub_absorb(struct uevent *ev, const struct uevent *tmp) {
     for (int i = 0; i < tmp->n; i++) ub_add(ev, tmp->key[i], tmp->val[i]);
 }
 
-/* Dispatch: run each selected builtin in fixed udev precedence order, each into a
- * scratch uevent, absorbing its properties into ev. Returns the number added. */
-static inline int run_builtins(const char *sysroot, const char *devpath,
-                               const char *devnode, struct uevent *ev) {
-    int before = ev->n;
-    int sel = ub_select(sysroot, devpath, devnode, ev);
+/* Run one builtin (bit is a single UB_* value), absorbing its properties into ev.
+ * Returns 0 if the builtin ran, < 0 if it failed / does not apply. usb_id_build,
+ * input_id_build and net_id_build use this 0/-1 convention natively. hwdb
+ * reports failure when it imports zero properties (matching real udev, so
+ * IMPORT{builtin}="hwdb" gates a trailing clause like .HAVE_HWDB_PROPERTIES);
+ * blkid_{pt,fs}_build always return 0 (never -1) — property importers that
+ * report "ran" unconditionally and never hard-gate a rule.
+ * path_id_build returns a length (> 0 = anchored).
+ * v4l_id_build/ata_id_build return a *count* of emitted properties (0 = did not
+ * run, since their success path always emits a fixed set of base properties), so
+ * a positive count is remapped to 0. cdrom_id_build also returns a count, but
+ * unlike v4l/ata its success path can legitimately emit zero properties (e.g. a
+ * drive with no media present) — it has no observable failure signal at all, so
+ * it always reports as ran. */
+static inline int run_builtin_bit(const char *sysroot, const char *devpath,
+                                  const char *devnode, struct uevent *ev, int bit) {
     struct uevent tmp;
-
-    if (sel & UB_HWDB)  { tmp.n = 0; hwdb_build(sysroot, devpath, &tmp); ub_absorb(ev, &tmp); }
-
-    if (sel & UB_PATH) {
+    switch (bit) {
+    case UB_HWDB:  tmp.n = 0; { hwdb_build(sysroot, devpath, &tmp); int got = tmp.n; ub_absorb(ev, &tmp); return got > 0 ? 0 : -1; }
+    case UB_PATH: {
         char idpath[PATH_ID_MAX], idtag[PATH_ID_MAX];
         if (path_id_build(sysroot, devpath, idpath, sizeof idpath) > 0) {
             ub_add(ev, "ID_PATH", idpath);
             if (path_id_tag(idpath, idtag, sizeof idtag) == 0) ub_add(ev, "ID_PATH_TAG", idtag);
+            char comp[PATH_ID_MAX];
+            if (pi_ata_compat(idpath, comp, sizeof comp)) ub_add(ev, "ID_PATH_ATA_COMPAT", comp);
+            int maj = pi_usb_major(sysroot, devpath);
+            if (maj > 0 && pi_usb_rev_swap(idpath, maj, comp, sizeof comp))
+                ub_add(ev, "ID_PATH_WITH_USB_REVISION", comp);
+            return 0;
         }
+        return -1;
     }
+    case UB_USB:   tmp.n = 0; { int r = usb_id_build(sysroot, devpath, &tmp);    ub_absorb(ev, &tmp); return r; }
+    case UB_INPUT: tmp.n = 0; { int r = input_id_build(sysroot, devpath, &tmp);  ub_absorb(ev, &tmp); return r; }
+    case UB_NET:   tmp.n = 0; { int r = net_id_build(sysroot, devpath, &tmp);    ub_absorb(ev, &tmp); return r; }
+    case UB_V4L:   tmp.n = 0; { int r = v4l_id_build(sysroot, devpath, devnode, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }
+    case UB_ATA:   tmp.n = 0; { int r = ata_id_build(sysroot, devpath, devnode, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }
+    case UB_BLKID: {
+        tmp.n = 0; int rpt = blkid_pt_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
+        tmp.n = 0; int rfs = blkid_fs_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
+        return (rpt == 0 || rfs == 0) ? 0 : -1;
+    }
+    case UB_CDROM: tmp.n = 0; { cdrom_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); return 0; }
+    case UB_FIDO:  tmp.n = 0; { int r = fido_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }
+    case UB_DISSECT: {
+        const char *dt = uevent_get(ev, "DEVTYPE");
+        if (dt && !strcmp(dt, "partition")) return dissect_copy_build(sysroot, devpath, devnode, ev) < 0 ? -1 : 0;
+        tmp.n = 0; int r = dissect_probe_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
+        return r < 0 ? -1 : 0;
+    }
+    default: return -1;
+    }
+}
 
-    if (sel & UB_USB)   { tmp.n = 0; usb_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
-    if (sel & UB_INPUT) { tmp.n = 0; input_id_build(sysroot, devpath, &tmp); ub_absorb(ev, &tmp); }
-    if (sel & UB_NET)   { tmp.n = 0; net_id_build(sysroot, devpath, &tmp);   ub_absorb(ev, &tmp); }
-    if (sel & UB_V4L)   { tmp.n = 0; v4l_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); }
-    if (sel & UB_ATA)   { tmp.n = 0; ata_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); }
-    if (sel & UB_BLKID) {
-        tmp.n = 0; blkid_pt_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
-        tmp.n = 0; blkid_fs_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
-    }
-    if (sel & UB_CDROM) { tmp.n = 0; cdrom_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); }
+/* Dispatch: run each selected builtin in fixed udev precedence order via
+ * run_builtin_bit, absorbing its properties into ev. Returns the number added. */
+static inline int run_builtins(const char *sysroot, const char *devpath,
+                               const char *devnode, struct uevent *ev) {
+    int before = ev->n;
+    int sel = ub_select(sysroot, devpath, devnode, ev);
+    static const int order[] = { UB_HWDB, UB_PATH, UB_USB, UB_INPUT, UB_NET,
+                                 UB_V4L, UB_ATA, UB_BLKID, UB_CDROM };
+    for (size_t i = 0; i < sizeof order / sizeof order[0]; i++)
+        if (sel & order[i]) run_builtin_bit(sysroot, devpath, devnode, ev, order[i]);
     return ev->n - before;
 }
 

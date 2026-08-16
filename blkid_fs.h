@@ -63,8 +63,13 @@ static inline void fs_emit_label(struct uevent *out, const unsigned char *raw, s
     if (enc[0])  bpt_emit(out, "ID_FS_LABEL_ENC", enc);
 }
 
+static inline void fs_emit_u64(struct uevent *out, const char *key, uint64_t v) {
+    char b[24]; snprintf(b, sizeof b, "%llu", (unsigned long long)v);
+    bpt_emit(out, key, b);
+}
+
 static inline int fs_probe_ext(const char *dev, struct uevent *out) {
-    unsigned char sb[264];
+    unsigned char sb[512];
     if (bpt_read_at(dev, 1024, sb, sizeof sb) != 0) return -1;
     if (!(sb[56] == 0x53 && sb[57] == 0xef)) return -1;   /* 0xEF53 LE */
 
@@ -89,6 +94,13 @@ static inline int fs_probe_ext(const char *dev, struct uevent *out) {
     snprintf(ver, sizeof ver, "%u.%u",
              (unsigned)bpt_le32(sb + 0x4C), (unsigned)bpt_le16(sb + 0x3E));
     bpt_emit(out, "ID_FS_VERSION", ver);
+
+    uint64_t bsz = 1024ULL << bpt_le32(sb + 0x18);            /* s_log_block_size */
+    uint64_t blocks = (uint64_t)bpt_le32(sb + 0x4)            /* s_blocks_count_lo */
+                    | ((uint64_t)bpt_le32(sb + 0x150) << 32); /* s_blocks_count_hi */
+    fs_emit_u64(out, "ID_FS_SIZE", blocks * bsz);
+    fs_emit_u64(out, "ID_FS_LASTBLOCK", blocks);
+    fs_emit_u64(out, "ID_FS_BLOCKSIZE", bsz);
     return 0;
 }
 
@@ -106,6 +118,12 @@ static inline int fs_probe_btrfs(const char *dev, struct uevent *out) {
         bpt_emit(out, "ID_FS_UUID_SUB_ENC", s);
     }
     fs_emit_label(out, sb + 299, 256);
+
+    uint64_t total = bpt_le64(sb + 112);                     /* total_bytes */
+    uint64_t sectorsize = bpt_le32(sb + 144);
+    fs_emit_u64(out, "ID_FS_SIZE", total);
+    if (sectorsize) fs_emit_u64(out, "ID_FS_LASTBLOCK", total / sectorsize);
+    fs_emit_u64(out, "ID_FS_BLOCKSIZE", sectorsize);
     return 0;
 }
 
@@ -133,18 +151,23 @@ static inline int fs_probe_vfat(const char *dev, struct uevent *out) {
         if (end > 0) fs_emit_label(out, lbl, (size_t)end);
     }
     bpt_emit(out, "ID_FS_VERSION", is_fat32 ? "FAT32" : "FAT16");   /* FAT12 vs 16: see note */
+
+    uint64_t sectors = bpt_le16(bs + 19);                    /* total_sectors_16 */
+    if (sectors == 0) sectors = bpt_le32(bs + 32);           /* total_sectors_32 */
+    fs_emit_u64(out, "ID_FS_SIZE", sectors * bps);
+    fs_emit_u64(out, "ID_FS_BLOCKSIZE", (uint64_t)bps * bs[13]);
     return 0;
 }
 
 static inline int fs_probe_swap(const char *dev, struct uevent *out) {
     static const uint64_t pages[] = {4096, 65536, 16384, 8192, 2048, 1024};
-    int found = 0;
+    uint64_t pagesize = 0;
     for (unsigned i = 0; i < sizeof pages / sizeof pages[0]; i++) {
         unsigned char m[10];
         if (bpt_read_at(dev, pages[i] - 10, m, 10) != 0) continue;
-        if (memcmp(m, "SWAPSPACE2", 10) == 0 || memcmp(m, "SWAP-SPACE", 10) == 0) { found = 1; break; }
+        if (memcmp(m, "SWAPSPACE2", 10) == 0 || memcmp(m, "SWAP-SPACE", 10) == 0) { pagesize = pages[i]; break; }
     }
-    if (!found) return -1;
+    if (!pagesize) return -1;
     unsigned char hdr[64];
     if (bpt_read_at(dev, 1024, hdr, sizeof hdr) != 0) return -1;
 
@@ -156,6 +179,11 @@ static inline int fs_probe_swap(const char *dev, struct uevent *out) {
     fs_emit_label(out, hdr + 28, 16);   /* volume_name @ 1024+28 = 1052 */
     char ver[16]; snprintf(ver, sizeof ver, "%u", (unsigned)bpt_le32(hdr));
     bpt_emit(out, "ID_FS_VERSION", ver);
+
+    uint64_t last_page = bpt_le32(hdr + 4);                  /* last usable page index */
+    fs_emit_u64(out, "ID_FS_SIZE", last_page * pagesize);
+    fs_emit_u64(out, "ID_FS_LASTBLOCK", last_page + 1);      /* blkid: total pages */
+    fs_emit_u64(out, "ID_FS_BLOCKSIZE", pagesize);
     return 0;
 }
 
@@ -175,6 +203,8 @@ static inline int fs_probe_ntfs(const char *dev, struct uevent *out) {
     unsigned spc = bs[13];
     if (bps == 0 || spc == 0) return 0;
     uint64_t cluster = (uint64_t)bps * spc;
+    fs_emit_u64(out, "ID_FS_SIZE", bpt_le64(bs + 40) * bps);  /* total_sectors */
+    fs_emit_u64(out, "ID_FS_BLOCKSIZE", cluster);
     int64_t mft_lcn = (int64_t)bpt_le64(bs + 48);
     int8_t rd = (int8_t)bs[64];
     uint64_t rec_size = (rd < 0) ? ((uint64_t)1 << (unsigned)(-rd)) : (uint64_t)rd * cluster;
@@ -239,6 +269,7 @@ static inline int blkid_fs_build(const char *sysroot, const char *devpath,
                                  const char *devnode, struct uevent *out) {
     (void)sysroot; (void)devpath;
     out->n = 0;
+    if (!devnode) return 0;
     if (fs_probe_btrfs(devnode, out) == 0) return 0;
     if (fs_probe_ext(devnode, out)   == 0) return 0;
     if (fs_probe_ntfs(devnode, out)  == 0) return 0;

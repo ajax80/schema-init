@@ -9,9 +9,21 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+
+/* udev's USEC_INITIALIZED: monotonic microseconds when the device record is
+ * committed. Consumers (libudev is_initialized, logind/udisks settle) gate on
+ * the I: line's presence, so every committed record must carry one. */
+static inline long long udev_db_now_usec(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 1;
+    long long u = (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000LL;
+    return u > 0 ? u : 1;
+}
 
 #define SCHEMA_UDEV_DB_DIR "/run/schema-udev/data"   /* OUR shadow dir */
 #define UDEV_DB_DIR        "/run/udev/data"          /* udevd's real dir (read-only) */
+#define SCHEMA_UDEV_RULES_DIR "/run/schema-udev/rules-data"   /* R5 interpreter shadow */
 
 static inline int udev_db_filename(const struct uevent *ev, char *out, size_t outsz) {
     const char *sub = uevent_get(ev, "SUBSYSTEM");
@@ -38,11 +50,57 @@ static inline ssize_t udev_db_record_build(const struct uevent *ev, int kernel_n
     size_t used = 0;
     for (int i = kernel_n; i < ev->n; i++) {
         if (!ev->key[i][0] || !ev->val[i][0]) continue;
+        if (ev->key[i][0] == '.') continue;   /* private prop: never persisted (matches udev) */
         int w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
         if (w < 0 || (size_t)w >= bufsz - used) return -1;
         used += (size_t)w;
     }
     int w = snprintf(buf + used, bufsz - used, "V:1\n");
+    if (w < 0 || (size_t)w >= bufsz - used) return -1;
+    used += (size_t)w;
+    return (ssize_t)used;
+}
+
+/* Full udev-db record: S: symlinks, I: init usec, E: derived props, G:/Q: tags,
+ * V: version last. Byte-order matches real /run/udev/data records. */
+static inline ssize_t udev_db_record_build_full(const struct uevent *ev, int kernel_n,
+                                                const char *const *symlinks, int nsym,
+                                                long long usec_init,
+                                                const char *const *tags, int ntag,
+                                                char *buf, size_t bufsz) {
+    size_t used = 0;
+    int w;
+    for (int i = 0; i < nsym; i++) {
+        if (!symlinks[i] || !symlinks[i][0]) continue;
+        w = snprintf(buf + used, bufsz - used, "S:%s\n", symlinks[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    if (usec_init > 0) {
+        w = snprintf(buf + used, bufsz - used, "I:%lld\n", usec_init);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    for (int i = kernel_n; i < ev->n; i++) {
+        if (!ev->key[i][0] || !ev->val[i][0]) continue;
+        if (ev->key[i][0] == '.') continue;   /* private prop: never persisted (matches udev) */
+        w = snprintf(buf + used, bufsz - used, "E:%s=%s\n", ev->key[i], ev->val[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    for (int i = 0; i < ntag; i++) {
+        if (!tags[i] || !tags[i][0]) continue;
+        w = snprintf(buf + used, bufsz - used, "G:%s\n", tags[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    for (int i = 0; i < ntag; i++) {
+        if (!tags[i] || !tags[i][0]) continue;
+        w = snprintf(buf + used, bufsz - used, "Q:%s\n", tags[i]);
+        if (w < 0 || (size_t)w >= bufsz - used) return -1;
+        used += (size_t)w;
+    }
+    w = snprintf(buf + used, bufsz - used, "V:1\n");
     if (w < 0 || (size_t)w >= bufsz - used) return -1;
     used += (size_t)w;
     return (ssize_t)used;
@@ -72,6 +130,36 @@ static inline int udev_db_write(const char *base_dir, const struct uevent *ev, i
     if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
     int fd = mkstemp(tmpl);
     if (fd < 0) return -1;
+    if (fchmod(fd, 0644) != 0) { close(fd); unlink(tmpl); return -1; }
+    ssize_t off = 0;
+    while (off < len) {
+        ssize_t w = write(fd, buf + off, (size_t)(len - off));
+        if (w < 0) { close(fd); unlink(tmpl); return -1; }
+        off += w;
+    }
+    if (close(fd) != 0) { unlink(tmpl); return -1; }
+    if (rename(tmpl, final) != 0) { unlink(tmpl); return -1; }
+    return 0;
+}
+
+static inline int udev_db_write_full(const char *base_dir, const struct uevent *ev,
+                                     int kernel_n,
+                                     const char *const *symlinks, int nsym,
+                                     const char *const *tags, int ntag) {
+    char name[128];
+    if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
+    if (udev_db_ensure_dir(base_dir) != 0) return -1;
+    char buf[8192];
+    ssize_t len = udev_db_record_build_full(ev, kernel_n, symlinks, nsym,
+                                            udev_db_now_usec(),
+                                            tags, ntag, buf, sizeof buf);
+    if (len <= 0) return -1;
+    char final[512], tmpl[512];
+    if ((size_t)snprintf(final, sizeof final, "%s/%s", base_dir, name) >= sizeof final) return -1;
+    if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return -1;
+    if (fchmod(fd, 0644) != 0) { close(fd); unlink(tmpl); return -1; }
     ssize_t off = 0;
     while (off < len) {
         ssize_t w = write(fd, buf + off, (size_t)(len - off));
@@ -108,6 +196,24 @@ static inline int udev_db_read_eprops(const char *path, struct uevent *out) {
         safe_copy(out->key[out->n], kv, UE_KEY_MAX);
         safe_copy(out->val[out->n], val, UE_VAL_MAX);
         out->n++;
+    }
+    fclose(f);
+    return 0;
+}
+
+static inline int udev_db_read_links_tags(const char *path,
+        char links[][UE_VAL_MAX], int *nlink, int maxlink,
+        char tags[][UE_KEY_MAX], int *ntag, int maxtag) {
+    *nlink = 0; *ntag = 0;
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[1024];
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (line[0] == 'S' && line[1] == ':' && *nlink < maxlink)
+            safe_copy(links[(*nlink)++], line + 2, UE_VAL_MAX);
+        else if (line[0] == 'G' && line[1] == ':' && *ntag < maxtag)
+            safe_copy(tags[(*ntag)++], line + 2, UE_KEY_MAX);
     }
     fclose(f);
     return 0;

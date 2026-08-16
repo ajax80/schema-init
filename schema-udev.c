@@ -4,8 +4,10 @@
 #include "udev_builtins.h"
 #include "udev_rules.h"
 #include "udev_db.h"
+#include "udev_ruleset.h"
 #include "disk_links.h"
 #include "uaccess.h"
+#include "udev_exec.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -59,11 +61,124 @@ static ssize_t netlink_recv(int fd, char *buf, size_t bufsz) {
 static struct dev_rule g_rules[MAX_RULES];
 static int g_nrules = 0;
 
+/* Group-2 (UDEV_MONITOR_UDEV) broadcast socket. Live mode only: once udevd is
+ * retired, schema-udev is the sole source of the processed-event stream that
+ * libudev monitors (kwin/libinput/WirePlumber/NetworkManager) subscribe to. */
+static int g_monfd = -1;
+
+static int monitor_open(void) {
+    int fd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC, NETLINK_KOBJECT_UEVENT);
+    if (fd < 0) return -1;
+    struct sockaddr_nl sa;
+    memset(&sa, 0, sizeof sa);
+    sa.nl_family = AF_NETLINK;
+    sa.nl_pid    = 0;   /* send-only; kernel assigns pid */
+    sa.nl_groups = 0;   /* we broadcast, never subscribe */
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
+    return fd;
+}
+
+static void monitor_broadcast(const struct uevent *ev) {
+    if (g_monfd < 0) return;
+    char frame[8192];
+    ssize_t len = libudev_frame_build(ev, frame, sizeof frame);
+    if (len < 0) return;
+    struct sockaddr_nl dst;
+    memset(&dst, 0, sizeof dst);
+    dst.nl_family = AF_NETLINK;
+    dst.nl_pid    = 0;
+    dst.nl_groups = 2;   /* UDEV_MONITOR_UDEV */
+    struct iovec iov = { frame, (size_t)len };
+    struct msghdr msg = { &dst, sizeof dst, &iov, 1, NULL, 0, 0 };
+    (void)sendmsg(g_monfd, &msg, 0);
+}
+
+/* Execute RUN directives fire-and-forget (udev semantics: direct
+ * argv exec, not a shell; output discarded; children reaped by the SIGCHLD
+ * drain). RUN{builtin} kmod load invokes modprobe for MODALIAS or explicit modules;
+ * other builtins (uaccess) are handled natively elsewhere. */
+static void run_ctx_runs(const struct dev_ctx *rc) {
+    for (int i = 0; i < rc->nruns; i++) {
+        char store[32][UE_VAL_MAX]; char *argv[33];
+        int argc = udev_argv_split(rc->runs[i], store, argv, 32);
+        if (argc <= 0) continue;
+
+        if (rc->run_builtin[i]) {
+            if (strcmp(argv[0], "kmod") == 0 && argc >= 2 && strcmp(argv[1], "load") == 0) {
+                pid_t pid = fork();
+                if (pid < 0) continue;
+                if (pid == 0) {
+                    sigset_t empty; sigemptyset(&empty);
+                    sigprocmask(SIG_SETMASK, &empty, NULL);
+                    int devnull = open("/dev/null", O_RDWR);
+                    if (devnull >= 0) {
+                        dup2(devnull, STDIN_FILENO);
+                        dup2(devnull, STDOUT_FILENO);
+                        dup2(devnull, STDERR_FILENO);
+                        if (devnull > STDERR_FILENO) close(devnull);
+                    }
+                    if (argc > 2) {
+                        char *margv[37];
+                        margv[0] = "modprobe";
+                        margv[1] = "-a";
+                        margv[2] = "-q";
+                        margv[3] = "-s";
+                        margv[4] = "--";
+                        for (int k = 2; k < argc; k++) margv[k + 3] = argv[k];
+                        margv[argc + 3] = NULL;
+                        execvp("modprobe", margv);
+                        execv("/sbin/modprobe", margv);
+                        execv("/usr/sbin/modprobe", margv);
+                        execv("/bin/kmod", margv);
+                    } else {
+                        const char *alias = uevent_get(rc->ev, "MODALIAS");
+                        if (alias && alias[0] && alias[0] != '-') {
+                            char *margv[] = { "modprobe", "-b", "-q", "-s", "--", (char *)alias, NULL };
+                            execvp("modprobe", margv);
+                            execv("/sbin/modprobe", margv);
+                            execv("/usr/sbin/modprobe", margv);
+                            execv("/bin/kmod", margv);
+                        }
+                    }
+                    _exit(127);
+                }
+            }
+            continue;
+        }
+
+        pid_t pid = fork();
+        if (pid < 0) continue;
+        if (pid == 0) {
+            sigset_t empty; sigemptyset(&empty);
+            sigprocmask(SIG_SETMASK, &empty, NULL);
+            for (int j = 0; j < rc->ev->n; j++) setenv(rc->ev->key[j], rc->ev->val[j], 1);
+            if (!strchr(argv[0], '/')) {
+                char lp[512];
+                snprintf(lp, sizeof lp, "/usr/lib/udev/%s", argv[0]);
+                execv(lp, argv);
+            }
+            execvp(argv[0], argv);
+            _exit(127);
+        }
+    }
+}
+
 /* Live-mode sentinel: read ONCE at startup (never re-read on HUP, so a running
  * daemon never changes ownership mid-flight). Absent => dry-run (isolated
  * namespaces); present => own the real /dev, /dev/disk, and real ACLs. */
 #define SCHEMA_UDEV_LIVE_FLAG "/etc/schema-init/schema-udev.live"
 static int g_live = 0;
+
+static struct ruleset g_ruleset;
+static const char *const RULE_DIRS[] = {
+    "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
+
+static void ruleset_reload(void) {
+    free(g_ruleset.rules);
+    memset(&g_ruleset, 0, sizeof g_ruleset);
+    ruleset_load_dirs(RULE_DIRS, 3, &g_ruleset);
+    fprintf(stderr, "[schema-udev] loaded %d native rule(s)\n", g_ruleset.n);
+}
 
 static void rules_reload(void) {
     struct dev_rule tmp[MAX_RULES];
@@ -99,6 +214,39 @@ static void dispatch(struct uevent *ev) {
         const char *dn = NULL;
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins("/sys", devpath, dn, ev);
+        struct uevent shadow_ev = *ev;          /* deep copy: uevent is inline char[], no heap */
+        int pre_rules_n = shadow_ev.n;
+        struct dev_ctx rc;
+        if (dev_ctx_init(&rc, &shadow_ev, "/sys") == 0) {
+            ruleset_apply(&g_ruleset, &rc);
+            /* Live mode is the sole device-DB authority: write the full record
+             * to /run/udev/data so libudev/sd-device consumers AND our own
+             * IMPORT{parent}/{db} (dbroot defaults there) read our output.
+             * Dry-run stays shadow-only; import there still borrows udevd. */
+            (void)pre_rules_n;
+            const char *db_authority = g_live ? UDEV_DB_DIR : SCHEMA_UDEV_RULES_DIR;
+            if (strcmp(action, "remove") == 0) {
+                udev_db_remove(db_authority, &shadow_ev);
+            } else {
+                const char *syms[DEVCTX_SYMLINKS_MAX];
+                const char *tgs[DEVCTX_TAGS_MAX];
+                for (int i = 0; i < rc.nsym;  i++) syms[i] = rc.symlinks[i];
+                for (int i = 0; i < rc.ntags; i++) tgs[i]  = rc.tags[i];
+                udev_db_write_full(db_authority, &shadow_ev, kernel_n,
+                                   syms, rc.nsym, tgs, rc.ntags);
+            }
+            /* Live mode owns real /dev: build the /dev/{char,block} farm, apply
+             * node ownership/mode, run RUN{program}, then announce the processed
+             * event on the udev monitor group so live consumers see hotplug. */
+            if (g_live) {
+                node_symlink_farm(&shadow_ev, action);
+                if (strcmp(action, "remove") != 0) {
+                    if (dn) node_apply_perms(dn, rc.owner, rc.group, rc.mode);
+                    run_ctx_runs(&rc);
+                }
+                monitor_broadcast(&shadow_ev);
+            }
+        }
         run_rules("/sys", devpath, dn, ev);
         const char *sub = uevent_get(ev, "SUBSYSTEM");
         int is_block = sub && strcmp(sub, "block") == 0;
@@ -175,16 +323,41 @@ int main(void) {
     int sfd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (sfd < 0) { fprintf(stderr, "[schema-udev] signalfd: %s\n", strerror(errno)); return 1; }
 
-    g_live = (access(SCHEMA_UDEV_LIVE_FLAG, F_OK) == 0);
+    errno = 0;
+    int live_rc = access(SCHEMA_UDEV_LIVE_FLAG, F_OK);
+    int live_errno = errno;
+    g_live = (live_rc == 0);
+    {
+        struct stat lst;
+        int st_rc = lstat(SCHEMA_UDEV_LIVE_FLAG, &lst);
+        fprintf(stderr,
+                "[schema-udev] flag-check: path=%s access_rc=%d errno=%d(%s) "
+                "euid=%u uid=%u lstat_rc=%d%s\n",
+                SCHEMA_UDEV_LIVE_FLAG, live_rc, live_errno, strerror(live_errno),
+                (unsigned)geteuid(), (unsigned)getuid(), st_rc,
+                st_rc == 0 ? "" : " <<FLAG ABSENT AT LAUNCH>>");
+    }
     fprintf(stderr, "[schema-udev] mode=%s (%s)\n",
             g_live ? "LIVE" : "dry-run",
             g_live ? "owns real /dev, /dev/disk, ACLs" : "isolated namespaces");
 
+    if (g_live) {
+        g_monfd = monitor_open();
+        if (g_monfd < 0)
+            fprintf(stderr, "[schema-udev] monitor socket open failed: %s\n", strerror(errno));
+        else
+            fprintf(stderr, "[schema-udev] udev monitor broadcast (group 2) active\n");
+    }
+
     rules_reload();
+    ruleset_reload();
+    disk_links_wipe(SCHEMA_UDEV_RULES_DIR);   /* reuse the generic recursive rmdir/wipe */
     disk_links_wipe(SCHEMA_DISK_DIR);
     uaccess_wipe(SCHEMA_UACCESS_DIR);
     fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
     coldplug_walk_root("/sys", dispatch);
+    if (g_live && udev_signal_ready() == 0)
+        fprintf(stderr, "[schema-udev] ready marker %s written (coldplug complete)\n", SCHEMA_UDEV_READY);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
 
     struct pollfd pfd[2] = { { nlfd, POLLIN, 0 }, { sfd, POLLIN, 0 } };
@@ -204,6 +377,7 @@ int main(void) {
                     while (waitpid(-1, NULL, WNOHANG) > 0) ;   /* drain all */
                 } else if (si.ssi_signo == SIGHUP) {
                     rules_reload();
+                    ruleset_reload();
                 } else {
                     quit = 1;   /* TERM / INT */
                 }

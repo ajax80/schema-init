@@ -63,6 +63,8 @@ static void test_ext(void) {
     sb[0x4C] = 1;                                         /* s_rev_level = 1 */
     /* s_minor_rev_level (u16 @ 0x7E) = 0 */
     sb[0x60] = 0x40;                                      /* incompat EXTENTS -> ext4 */
+    sb[24] = 2;                                           /* s_log_block_size=2 -> 4096 */
+    sb[4] = 0xE8; sb[5] = 0x03;                           /* s_blocks_count_lo = 1000 */
     wr_img(img, 1024, sb, sizeof sb);
 
     struct uevent e; e.n = 0;
@@ -73,6 +75,9 @@ static void test_ext(void) {
     assert(fs_has(&e, "ID_FS_UUID_ENC", "cf4f2b07-f150-404f-bde1-4d9f545594b4"));
     assert(fs_has(&e, "ID_FS_VERSION", "1.0"));
     assert(fs_absent(&e, "ID_FS_LABEL"));
+    assert(fs_has(&e, "ID_FS_BLOCKSIZE", "4096"));
+    assert(fs_has(&e, "ID_FS_LASTBLOCK", "1000"));
+    assert(fs_has(&e, "ID_FS_SIZE", "4096000"));
 
     unlink(img);
     printf("test_ext OK\n");
@@ -90,6 +95,8 @@ static void test_btrfs(void) {
     memcpy(sb + 32, fsid, 16);
     memcpy(sb + 267, sub, 16);
     memcpy(sb + 299, "fedora", 6);
+    sb[112] = 0x00; sb[113] = 0x00; sb[114] = 0x7D;       /* total_bytes = 8192000 */
+    sb[144] = 0x00; sb[145] = 0x10;                       /* sectorsize = 4096 */
     wr_img(img, 0x10000, sb, sizeof sb);
 
     struct uevent e; e.n = 0;
@@ -100,6 +107,9 @@ static void test_btrfs(void) {
     assert(fs_has(&e, "ID_FS_UUID_SUB_ENC", "94ecd0f5-5b70-413e-b71f-dd6760668f32"));
     assert(fs_has(&e, "ID_FS_LABEL", "fedora"));
     assert(fs_absent(&e, "ID_FS_VERSION"));
+    assert(fs_has(&e, "ID_FS_BLOCKSIZE", "4096"));
+    assert(fs_has(&e, "ID_FS_LASTBLOCK", "2000"));
+    assert(fs_has(&e, "ID_FS_SIZE", "8192000"));
 
     unlink(img);
     printf("test_btrfs OK\n");
@@ -111,7 +121,8 @@ static void test_vfat_swap(void) {
     zero_img(v, 512);
     unsigned char bs[512] = {0};
     bs[11] = 0x00; bs[12] = 0x02;   /* bytes/sector = 512 */
-    bs[13] = 8;                     /* sec/cluster */
+    bs[13] = 8;                     /* sec/cluster -> cluster 4096 */
+    bs[32] = 0xA0; bs[33] = 0x86; bs[34] = 0x01;                     /* total_sectors_32 = 100000 */
     /* fatsz16 (@22) = 0 -> FAT32 */
     bs[67] = 0x7c; bs[68] = 0x76; bs[69] = 0x73; bs[70] = 0x07;      /* serial */
     memcpy(bs + 71, "NO NAME    ", 11);                              /* no label */
@@ -124,6 +135,9 @@ static void test_vfat_swap(void) {
     assert(fs_has(&e, "ID_FS_UUID", "0773-767C"));
     assert(fs_has(&e, "ID_FS_VERSION", "FAT32"));
     assert(fs_absent(&e, "ID_FS_LABEL"));
+    assert(fs_has(&e, "ID_FS_BLOCKSIZE", "4096"));
+    assert(fs_has(&e, "ID_FS_SIZE", "51200000"));
+    assert(fs_absent(&e, "ID_FS_LASTBLOCK"));
     unlink(v);
 
     /* labeled FAT32 */
@@ -141,6 +155,7 @@ static void test_vfat_swap(void) {
     zero_img(s, 8192);
     unsigned char hdr[64] = {0};
     hdr[0] = 1;                     /* version @1024 = 1 */
+    hdr[4] = 0xD0; hdr[5] = 0x07;   /* last_page = 2000 */
     unsigned char su[16] = {0xc2,0xe5,0x0d,0xa1,0x0f,0x93,0x4f,0x2b,
                             0x81,0x32,0x29,0xe3,0x14,0xf2,0xc8,0x27};
     memcpy(hdr + 12, su, 16);       /* uuid @1036 */
@@ -153,6 +168,9 @@ static void test_vfat_swap(void) {
     assert(fs_has(&e3, "ID_FS_USAGE", "other"));
     assert(fs_has(&e3, "ID_FS_UUID", "c2e50da1-0f93-4f2b-8132-29e314f2c827"));
     assert(fs_has(&e3, "ID_FS_VERSION", "1"));
+    assert(fs_has(&e3, "ID_FS_BLOCKSIZE", "4096"));
+    assert(fs_has(&e3, "ID_FS_LASTBLOCK", "2001"));
+    assert(fs_has(&e3, "ID_FS_SIZE", "8192000"));
     unlink(s);
 
     printf("test_vfat_swap OK\n");

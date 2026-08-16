@@ -1,0 +1,7 @@
+name=frigate
+exec=/usr/local/bin/frigate-wrapper.sh
+oneshot=1
+needs_root=1
+critical=0
+dep=nvidia-modules
+dep=mount-ocean-drives

@@ -10,6 +10,11 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <endian.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <pwd.h>
+#include <grp.h>
 
 #define UE_MAX_KEYS 128
 #define UE_KEY_MAX  64
@@ -159,8 +164,30 @@ static inline int dev_rules_load_dir(const char *dir, struct dev_rule *rules, in
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 
 #define SCHEMA_DEV_DIR "/dev/schema"
+
+/* Boot-readiness marker: written once after the initial coldplug completes so
+ * schema-init's udevd.svc ready_path can gate services that depend on the
+ * device manager (network-up, etc). A dedicated path, not systemd's
+ * /run/udev/control socket, to avoid confusing libudev/udevadm clients. */
+#define SCHEMA_UDEV_READY_DIR  "/run/schema-udev"
+#define SCHEMA_UDEV_READY      "/run/schema-udev/ready"
+
+static inline int udev_signal_ready_at(const char *dir) {
+    char path[PATH_MAX];
+    mkdir(dir, 0755);   /* ok if it already exists */
+    if ((size_t)snprintf(path, sizeof path, "%s/ready", dir) >= sizeof path) return -1;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -1;
+    close(fd);
+    return 0;
+}
+
+static inline int udev_signal_ready(void) {
+    return udev_signal_ready_at(SCHEMA_UDEV_READY_DIR);
+}
 
 static inline int symlink_apply(const char *base_dir, const char *name, const char *devname) {
     if (!base_dir || !name || !devname || name[0] == '\0') return -1;
@@ -193,6 +220,50 @@ static inline int symlink_clear(const char *base_dir, const char *name) {
     snprintf(path, sizeof path, "%s/%s", base_dir, name);
     if (unlink(path) != 0 && errno != ENOENT) return -1;
     return 0;
+}
+
+/* Apply udev MODE/OWNER/GROUP to a real device node (live mode only). udev's
+ * default when a GROUP is set but no MODE is 0660 (else 0600). Only touches
+ * char/block special files; best-effort. */
+static inline void node_apply_perms(const char *node, const char *owner,
+                                    const char *group, const char *mode_str) {
+    struct stat st;
+    if (!node || lstat(node, &st) != 0) return;
+    if (!S_ISCHR(st.st_mode) && !S_ISBLK(st.st_mode)) return;
+    int have_owner = owner && owner[0];
+    int have_group = group && group[0];
+    int have_mode  = mode_str && mode_str[0];
+    /* No rule addressed this node's ownership or mode: leave the devtmpfs node
+     * exactly as the kernel created it. Clobbering to a fabricated 0600 breaks
+     * kernel nodes that ship world-writable (/dev/null, /dev/zero, ...). */
+    if (!have_owner && !have_group && !have_mode) return;
+    /* Default to the node's current ids, never root: a failed name lookup must
+     * not silently reassign the node to root:root. */
+    uid_t uid = st.st_uid; gid_t gid = st.st_gid;
+    if (have_owner) { struct passwd *pw = getpwnam(owner); if (pw) uid = pw->pw_uid; }
+    if (have_group) { struct group  *gr = getgrnam(group); if (gr) gid = gr->gr_gid; }
+    /* udev's default when a GROUP is named but no MODE is 0660; keyed on the
+     * name being present, not on the lookup succeeding. */
+    mode_t mode = have_mode ? (mode_t)strtoul(mode_str, NULL, 8)
+                            : (have_group ? 0660 : (st.st_mode & 07777));
+    if (chown(node, uid, gid) != 0) { /* best-effort */ }
+    chmod(node, mode & 07777);
+}
+
+/* Maintain the /dev/{char,block}/MAJ:MIN symlink farm. Core udevd node_symlink
+ * behavior: every device node gets one, rule-independent. schema-logind's
+ * TakeDevice() opens devices by this exact path. */
+static inline void node_symlink_farm(const struct uevent *ev, const char *action) {
+    const char *maj = uevent_get(ev, "MAJOR");
+    const char *min = uevent_get(ev, "MINOR");
+    const char *devname = uevent_get(ev, "DEVNAME");
+    if (!maj || !min || !devname) return;
+    const char *sub = uevent_get(ev, "SUBSYSTEM");
+    const char *dir = (sub && strcmp(sub, "block") == 0) ? "/dev/block" : "/dev/char";
+    char name[64];
+    if ((size_t)snprintf(name, sizeof name, "%s:%s", maj, min) >= sizeof name) return;
+    if (action && strcmp(action, "remove") == 0) symlink_clear(dir, name);
+    else symlink_apply(dir, name, devname);
 }
 
 static inline void safe_copy(char *dst, const char *src, size_t maxlen) {
@@ -263,26 +334,32 @@ static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, st
 
 #include <ftw.h>
 
-static const char *g_coldplug_sysroot = NULL;
-static void (*g_coldplug_cb)(struct uevent *ev) = NULL;
+static char  **g_coldplug_paths = NULL;   /* collected device dir paths */
+static size_t  g_coldplug_np = 0, g_coldplug_cap = 0;
 
-static int coldplug_ftw_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
+/* Collect-only: gather each device's dir path (strip "/uevent"); dispatch is
+ * deferred until after a sort, so parents precede children. */
+static int coldplug_collect_cb(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
     (void)sb; (void)ftwbuf;
-    if (typeflag == FTW_F) {
-        const char *bname = strrchr(fpath, '/');
-        if (bname && strcmp(bname + 1, "uevent") == 0) {
-            char dirpath[1024];
-            safe_copy(dirpath, fpath, sizeof dirpath);
-            char *last_slash = strrchr(dirpath, '/');
-            if (last_slash) *last_slash = '\0';
-            
-            struct uevent ev;
-            if (uevent_from_sysfs(g_coldplug_sysroot, dirpath, &ev) == 0 && g_coldplug_cb) {
-                g_coldplug_cb(&ev);
-            }
-        }
+    if (typeflag != FTW_F) return 0;
+    const char *bname = strrchr(fpath, '/');
+    if (!bname || strcmp(bname + 1, "uevent") != 0) return 0;
+    size_t dlen = (size_t)(bname - fpath);   /* dir path (without "/uevent") */
+    if (g_coldplug_np == g_coldplug_cap) {
+        size_t ncap = g_coldplug_cap ? g_coldplug_cap * 2 : 256;
+        char **np = realloc(g_coldplug_paths, ncap * sizeof *np);
+        if (!np) return 1;                   /* OOM -> stop walk, dispatch what we have */
+        g_coldplug_paths = np; g_coldplug_cap = ncap;
     }
+    char *d = malloc(dlen + 1);
+    if (!d) return 1;
+    memcpy(d, fpath, dlen); d[dlen] = '\0';
+    g_coldplug_paths[g_coldplug_np++] = d;
     return 0;
+}
+
+static int coldplug_path_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
 static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struct uevent *ev)) {
@@ -291,9 +368,21 @@ static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struc
     struct stat st;
     if (stat(devroot, &st) != 0) return 0;  /* missing sysfs dir -> no-op */
 
-    g_coldplug_sysroot = sysroot;
-    g_coldplug_cb = on_event;
-    return nftw(devroot, coldplug_ftw_cb, 32, FTW_PHYS);
+    g_coldplug_paths = NULL; g_coldplug_np = 0; g_coldplug_cap = 0;
+    int rc = nftw(devroot, coldplug_collect_cb, 32, FTW_PHYS);
+    /* A parent's devpath is a prefix of its children's, so a lexicographic sort
+     * dispatches every parent before its children — required so a child's
+     * IMPORT{parent} finds the parent's DB record already written. */
+    qsort(g_coldplug_paths, g_coldplug_np, sizeof *g_coldplug_paths, coldplug_path_cmp);
+    for (size_t i = 0; i < g_coldplug_np; i++) {
+        struct uevent ev;
+        if (uevent_from_sysfs(sysroot, g_coldplug_paths[i], &ev) == 0 && on_event)
+            on_event(&ev);
+        free(g_coldplug_paths[i]);
+    }
+    free(g_coldplug_paths);
+    g_coldplug_paths = NULL; g_coldplug_np = g_coldplug_cap = 0;
+    return rc;
 }
 
 #define UDEV_MONITOR_MAGIC 0xfeedcafeu
