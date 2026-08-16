@@ -230,11 +230,22 @@ static inline void node_apply_perms(const char *node, const char *owner,
     struct stat st;
     if (!node || lstat(node, &st) != 0) return;
     if (!S_ISCHR(st.st_mode) && !S_ISBLK(st.st_mode)) return;
-    uid_t uid = 0; gid_t gid = 0; int have_group = 0;
-    if (owner && owner[0]) { struct passwd *pw = getpwnam(owner); if (pw) uid = pw->pw_uid; }
-    if (group && group[0]) { struct group  *gr = getgrnam(group); if (gr) { gid = gr->gr_gid; have_group = 1; } }
-    mode_t mode = (mode_str && mode_str[0]) ? (mode_t)strtoul(mode_str, NULL, 8)
-                                            : (have_group ? 0660 : 0600);
+    int have_owner = owner && owner[0];
+    int have_group = group && group[0];
+    int have_mode  = mode_str && mode_str[0];
+    /* No rule addressed this node's ownership or mode: leave the devtmpfs node
+     * exactly as the kernel created it. Clobbering to a fabricated 0600 breaks
+     * kernel nodes that ship world-writable (/dev/null, /dev/zero, ...). */
+    if (!have_owner && !have_group && !have_mode) return;
+    /* Default to the node's current ids, never root: a failed name lookup must
+     * not silently reassign the node to root:root. */
+    uid_t uid = st.st_uid; gid_t gid = st.st_gid;
+    if (have_owner) { struct passwd *pw = getpwnam(owner); if (pw) uid = pw->pw_uid; }
+    if (have_group) { struct group  *gr = getgrnam(group); if (gr) gid = gr->gr_gid; }
+    /* udev's default when a GROUP is named but no MODE is 0660; keyed on the
+     * name being present, not on the lookup succeeding. */
+    mode_t mode = have_mode ? (mode_t)strtoul(mode_str, NULL, 8)
+                            : (have_group ? 0660 : (st.st_mode & 07777));
     if (chown(node, uid, gid) != 0) { /* best-effort */ }
     chmod(node, mode & 07777);
 }
