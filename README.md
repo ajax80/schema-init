@@ -295,9 +295,24 @@ Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if t
 
 ## schema-udev
 
-`schema-udev` is a native uevent→schema→action daemon — a small, purpose-built alternative to udev rules for the specific devices you care about (an ESP32 over USB-serial, an RFID reader, a sensor board), running **alongside** real `systemd-udevd`, not replacing it. udevd still owns `/dev` population, symlinks, and driver binding; `schema-udev` just watches the same kernel uevent stream and runs your hook scripts when a match fires.
+`schema-udev` is a native uevent→schema→action daemon — a small, purpose-built device manager that watches the kernel uevent stream and runs your hook scripts when a match fires. It runs in one of **two modes**.
 
-It binds **kernel netlink group 1** (`UDEV_MONITOR_KERNEL`), never group 2 (`UDEV_MONITOR_UDEV`) — group 2 is udevd's own processed-event multicast, consumed by libudev/PipeWire for device enumeration. `schema-udev` only listens to the raw kernel group, so it has zero observed impact on PipeWire or desktop hotplug. Datagrams are checked against the kernel's `SCM_CREDENTIALS` (uid 0, pid 0) before being parsed, so a spoofed unprivileged uevent is dropped.
+### Shadow mode (default)
+
+The safe default: `schema-udev` runs **alongside** real `systemd-udevd`, not replacing it. udevd still owns `/dev` population, symlinks, and driver binding; `schema-udev` just watches the same kernel uevent stream and fires your rules for the specific devices you care about (an ESP32 over USB-serial, an RFID reader, a sensor board).
+
+It binds **kernel netlink group 1** (`UDEV_MONITOR_KERNEL`), never group 2 (`UDEV_MONITOR_UDEV`) — group 2 is udevd's own processed-event multicast, consumed by libudev/PipeWire for device enumeration. In shadow mode `schema-udev` only listens to the raw kernel group, so it has **zero observed impact** on PipeWire or desktop hotplug. Datagrams are checked against the kernel's `SCM_CREDENTIALS` (uid 0, pid 0) before being parsed, so a spoofed unprivileged uevent is dropped. Rule syntax, coldplug, and hooks below apply to both modes.
+
+### Authoritative mode (the udevd cutover)
+
+The endgame of schema reclamation: `schema-udev` **retires `systemd-udevd` and owns `/dev` itself.** This is a deliberate, reversible opt-in — off unless you explicitly arm it — because it moves device management for the whole machine under schema-init.
+
+- **Arm it** by placing the sentinel flag `/etc/schema-init/schema-udev.live` and restarting the daemon; on the next launch schema-udev takes authority and `systemd-udevd` is retired. Its startup log records `mode=LIVE (owns real /dev, /dev/disk, ACLs)` so the mode is never ambiguous.
+- In LIVE mode schema-udev takes on everything libudev/PipeWire/logind expect from a udev: device-node creation (native `mknod`, `RUN{builtin}` kmod loads, `ATTR{}` sysfs writes), the `/dev/disk/by-*` + `/dev/char` + `/dev/block` symlink farm, `uaccess` seat ACLs, the **group-2 libudev monitor broadcast**, and the `/run/udev/data` device database — the two interop encoders that are dormant in shadow mode are wired live here.
+- **Rules** are interpreted natively from the distro's `*.rules` (`TAG+=`, `SYMLINK+=`, `PROGRAM`/`RESULT`, `IMPORT`, native `*_id` builtins) in addition to schema-init's own `*.dev` files, so tag/symlink-dependent consumers (FIDO2/pico-fido ACLs, snaps, power-button handling) keep working after udevd is gone.
+- **Rollback is blessed and checksum-asserting:** a verified pristine backup of the stock device path is restored on disarm (remove the sentinel), so a bad cutover reverts cleanly to `systemd-udevd` authority on the next boot. Keep the backup — the sentinel protects the machine; it does not un-take authority on its own.
+
+> ⚠️ Authoritative mode is the advanced path. Validate it in `schema-vmtest` LIVE mode (prove it boots owning `/dev`) before trusting it on hardware you can't easily recover, and confirm the `by-*` symlink set your mounts depend on is complete for your disks.
 
 **Rule files** live in `/etc/schema-init/dev/*.dev`, one `key=value` per line:
 
@@ -318,15 +333,17 @@ on_remove=/usr/local/bin/esp32-down.sh
 - `SIGHUP` reloads all rule files from disk without restarting the daemon (`schema-ctl reload` or `kill -HUP` on its pid).
 - Raw kernel (group 1) uevents deliver `DEVNAME` **without** the `/dev/` prefix (e.g. `DEVNAME=ttyUSB0`, not `/dev/ttyUSB0`) — don't anchor `match_devname` globs to `/dev/`, and hooks see `$DEVNAME` the same unprefixed way. Prefer keying on `match_subsystem` + `match_product` (vid/pid), as in the example above.
 
-### Phase 3 (interop mechanism — built, not yet active)
+### libudev / `/run/udev` interop
 
-schema-udev carries pure encoders for the two formats a future udevd
-retirement needs: the **libudev monitor** netlink frame (group 2) and the
-**`/run/udev/data`** device-database record. They are unit-tested against
-real captured frames but are **not wired into the daemon** — schema-udev
-neither broadcasts on group 2 nor writes `/run/udev` while systemd-udevd
-runs (doing so would double libudev events / corrupt udev's database).
-Activating them is a separate, deliberate cutover, not part of this build.
+schema-udev carries pure encoders for the two formats a udevd retirement
+needs: the **libudev monitor** netlink frame (group 2) and the
+**`/run/udev/data`** device-database record, unit-tested against real
+captured frames. In **shadow mode** they are dormant — schema-udev neither
+broadcasts on group 2 nor writes `/run/udev` while systemd-udevd runs, since
+doing so would double libudev events and corrupt udev's database. In
+**authoritative mode** (see above) they are wired live: schema-udev is the
+sole writer of `/run/udev/data` and the sole group-2 broadcaster, which is
+what lets libudev/PipeWire/logind keep enumerating devices with udevd gone.
 
 ---
 
