@@ -177,7 +177,9 @@ static inline int run_builtin_bit(const char *sysroot, const char *devpath,
     case UB_ATA:   tmp.n = 0; { int r = ata_id_build(sysroot, devpath, devnode, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }
     case UB_BLKID: {
         tmp.n = 0; int rpt = blkid_pt_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
-        tmp.n = 0; int rfs = blkid_fs_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp);
+        tmp.n = 0; int rfs = blkid_fs_build(sysroot, devpath, devnode, &tmp);
+        if (tmp.n == 0) optical_fs_probe(devnode, &tmp);   /* iso9660/udf on plain block devs (usb-written images), not just optical drives */
+        ub_absorb(ev, &tmp);
         return (rpt == 0 || rfs == 0) ? 0 : -1;
     }
     case UB_CDROM: tmp.n = 0; { cdrom_id_build(sysroot, devpath, devnode, &tmp); ub_absorb(ev, &tmp); return 0; }
