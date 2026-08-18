@@ -300,6 +300,37 @@ if [ -n "$PROFILE" ]; then
     fi
 fi
 
+# 3b. Generate mount services from this machine's /etc/fstab.
+# schema-init does not parse fstab; without this a stranger's box boots unable to
+# find /home, data, or swap. gen-mounts.sh reads the live fstab and emits a single
+# mount-fstab service that reproduces exactly what systemd was mounting.
+echo -e "\n${YELLOW}[3b/4] Generating mount services from /etc/fstab...${NC}"
+if [ -x scripts/gen-mounts.sh ]; then
+    read -r -p "  Generate mount services for THIS machine from /etc/fstab? [Y/n] " ans
+    ans="${ans:-Y}"
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+        MTMP=$(mktemp -d)
+        if sh scripts/gen-mounts.sh -o "$MTMP"; then
+            install -m 0755 "$MTMP/scripts/mount-fstab.sh" "$BIN_DIR/mount-fstab.sh"
+            if [ ! -f "$SVC_DIR/mount-fstab.svc" ]; then
+                install -m 0644 "$MTMP/services/mount-fstab.svc" "$SVC_DIR/mount-fstab.svc"
+                echo -e "  ${GREEN}+${NC} mount-fstab.svc + mount-fstab.sh installed."
+            else
+                echo -e "  ${YELLOW}~${NC} mount-fstab.svc exists — refreshed script only, kept your .svc."
+            fi
+            echo -e "  ${YELLOW}Review${NC} $BIN_DIR/mount-fstab.sh before rebooting — confirm every mount is correct."
+        else
+            echo -e "  ${RED}gen-mounts.sh failed — set up mounts manually (see docs).${NC}"
+        fi
+        rm -rf "$MTMP"
+    else
+        echo -e "  ${YELLOW}Skipped.${NC} schema-init will NOT mount your disks until you add mount services."
+        echo -e "  Run later: ${YELLOW}scripts/gen-mounts.sh${NC} (preview) or ${YELLOW}-o <dir>${NC} (write)."
+    fi
+else
+    echo -e "  ${YELLOW}scripts/gen-mounts.sh not found — skipping mount generation.${NC}"
+fi
+
 # 4. Provide boot configuration instructions
 echo -e "\n${YELLOW}[4/4] Installation Complete! Bootloader Instructions:${NC}"
 echo -e "=================================================================="
