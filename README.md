@@ -115,7 +115,7 @@ Reboot, pick **schema-init (fallback)** from the boot menu, and try it. If anyth
 
 When the schema-init entry has booted cleanly a few times, make it default (set `GRUB_DEFAULT` / your distro's boot-entry default to it). Only then, if you want the full reclamation, opt into the [authoritative udev cutover](#authoritative-mode-the-udevd-cutover) — a deliberate, checksum-backed, reversible flip that retires `systemd-udevd`. It is the advanced path; validate it in `schema-vmtest` LIVE mode first.
 
-**Porting to a machine that isn't yours yet** (e.g. setting it up for someone else): see [Porting to a new distro](#porting-to-a-new-distro) and the `distros/` profiles. `gen-mounts.sh -o distros/<name>` and `gen-services.sh -o distros/<name>` capture that machine's mounts and services into a reusable profile.
+**Porting to a machine that isn't yours yet** (e.g. setting it up for someone else): on that machine, while it's still on systemd, run `./setup.sh --generate-profile <name>` (no root, installs nothing) — it captures the machine's mounts and enabled services into a reusable `distros/<name>/` profile. Commit it, then `sudo ./setup.sh --profile <name>` brings the box up with its own disks and services. See [Porting to a new distro](#porting-to-a-new-distro) and the `distros/` profiles.
 
 ---
 
