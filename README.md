@@ -78,6 +78,47 @@ Services marked `critical=1` never reach EXCISED — they enter DORMANT and retr
 
 ---
 
+## Quickstart
+
+Replacing PID 1 sounds scary. It isn't, if you do it in the right order — you never lose your existing systemd boot, and you can back out with a single reboot at every step. Three lanes, safest first.
+
+**Requirements:** `gcc`, `make`, and (for `schema-logind`) `python3-dbus` + `python3-gobject`. Everything builds from a single static binary — no runtime dependencies.
+
+### Lane 1 — Try it in a VM (zero risk to your machine)
+
+```sh
+git clone https://github.com/ajax80/schema-init && cd schema-init
+make            # build the static binary
+make test       # unit + boot tests
+sudo scripts/make-iso.sh   # build a bootable ISO, or scripts/vmtest-gui.sh to boot it in QEMU
+```
+
+Nothing here touches your real bootloader or `/dev`. This is how to see it boot a real system before you trust it with yours.
+
+### Lane 2 — Install alongside systemd (reversible)
+
+```sh
+sudo ./setup.sh
+```
+
+The installer **does not replace systemd.** It compiles, installs the binaries, and:
+
+- **reads your `/etc/fstab`** and generates a `mount-fstab` service so schema-init mounts your disks, swap, and bind mounts exactly as systemd did (`scripts/gen-mounts.sh` — schema-init does not parse fstab itself);
+- optionally **imports your enabled systemd services** as `.svc` stubs so the box comes up running what it ran before (`scripts/gen-services.sh`);
+- writes a **separate `schema-init (fallback)` GRUB entry** and leaves stock systemd as the default.
+
+Reboot, pick **schema-init (fallback)** from the boot menu, and try it. If anything is wrong, reboot and choose your normal systemd entry — you're back, untouched. Iterate on your service files, boot the schema-init entry again. In this lane `systemd-udevd` still runs; schema-init does not retire anything.
+
+> Run `scripts/gen-mounts.sh` (preview) before rebooting and read the generated `mount-fstab.sh` — confirm every mount is right. This is the one file that decides whether your disks come up.
+
+### Lane 3 — Make it the default (once you trust it)
+
+When the schema-init entry has booted cleanly a few times, make it default (set `GRUB_DEFAULT` / your distro's boot-entry default to it). Only then, if you want the full reclamation, opt into the [authoritative udev cutover](#authoritative-mode-the-udevd-cutover) — a deliberate, checksum-backed, reversible flip that retires `systemd-udevd`. It is the advanced path; validate it in `schema-vmtest` LIVE mode first.
+
+**Porting to a machine that isn't yours yet** (e.g. setting it up for someone else): see [Porting to a new distro](#porting-to-a-new-distro) and the `distros/` profiles. `gen-mounts.sh -o distros/<name>` and `gen-services.sh -o distros/<name>` capture that machine's mounts and services into a reusable profile.
+
+---
+
 ## Repository layout
 
 If you're reading the source to evaluate it, start here. The whole init is ~2,500 lines of C with no external dependencies.
