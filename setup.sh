@@ -331,6 +331,36 @@ else
     echo -e "  ${YELLOW}scripts/gen-mounts.sh not found — skipping mount generation.${NC}"
 fi
 
+# 3c. Import currently-enabled systemd services as schema-init stubs.
+# Runs while systemd is still PID 1, so it captures what THIS machine actually
+# runs. Default off — the stubs are a review-before-boot starting point, not a
+# drop-in, so we don't surprise the user with dozens of files.
+echo -e "\n${YELLOW}[3c/4] Import enabled systemd services (optional)...${NC}"
+if [ -x scripts/gen-services.sh ] && command -v systemctl >/dev/null 2>&1; then
+    read -r -p "  Import your enabled systemd services as .svc stubs (review before boot)? [y/N] " ans
+    ans="${ans:-N}"
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+        STMP=$(mktemp -d)
+        if sh scripts/gen-services.sh -o "$STMP"; then
+            imported=0
+            for f in "$STMP"/services/*.svc; do
+                [ -f "$f" ] || continue
+                dest="$SVC_DIR/$(basename "$f")"
+                if [ ! -f "$dest" ]; then
+                    install -m 0644 "$f" "$dest"; imported=$((imported+1))
+                fi
+            done
+            echo -e "  ${GREEN}${imported} stub(s) installed to ${SVC_DIR}${NC} (existing files kept)."
+            echo -e "  ${YELLOW}Review each before rebooting${NC} — add dep= where ordering matters; fix any \$VAR args."
+        fi
+        rm -rf "$STMP"
+    else
+        echo -e "  Skipped. Import later with: ${YELLOW}scripts/gen-services.sh -o <dir>${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}systemctl unavailable — skipping service import.${NC}"
+fi
+
 # 4. Provide boot configuration instructions
 echo -e "\n${YELLOW}[4/4] Installation Complete! Bootloader Instructions:${NC}"
 echo -e "=================================================================="
