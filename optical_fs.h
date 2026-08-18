@@ -37,7 +37,9 @@ static inline int fs_probe_iso9660(const char *dev, struct uevent *out) {
     fs_trim_bytes(pvd + 8, 32, sysid, sizeof sysid);
     if (sysid[0]) bpt_emit(out, "ID_FS_SYSTEM_ID", sysid);
 
-    fs_emit_label(out, pvd + 40, 32);
+    unsigned char lbl[33]; memcpy(lbl, pvd + 40, 32);
+    int lend = 32; while (lend > 0 && (lbl[lend - 1] == ' ' || lbl[lend - 1] == '\0')) lend--;
+    if (lend > 0) fs_emit_label(out, lbl, (size_t)lend);
 
     char appid[256];
     fs_trim_encode_bytes(pvd + 566, 128, appid, sizeof appid);
