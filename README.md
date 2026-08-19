@@ -80,20 +80,32 @@ Services marked `critical=1` never reach EXCISED — they enter DORMANT and retr
 
 ## Quickstart
 
-Replacing PID 1 sounds scary. It isn't, if you do it in the right order — you never lose your existing systemd boot, and you can back out with a single reboot at every step. Three lanes, safest first.
+Replacing PID 1 sounds scary. It isn't, if you do it in the right order — you never lose your existing systemd boot, and you can back out with a single reboot at every step. Four lanes, safest first.
 
-**Requirements:** `gcc`, `make`, and (for `schema-logind`) `python3-dbus` + `python3-gobject`. Everything builds from a single static binary — no runtime dependencies.
+**Requirements:**
 
-### Lane 1 — Try it in a VM (zero risk to your machine)
+- **Build + test (Lane 0):** `gcc`, `make`, and `libacl` headers (`libacl1-dev` on Debian/Ubuntu, `libacl-devel` on Fedora — the udev `uaccess` tests link `-lacl`). Nothing else. The init itself is a single static binary with no runtime dependencies.
+- **`schema-logind`:** additionally `python3-dbus` + `python3-gobject`.
+- **Build a bootable ISO (Lane 1):** additionally **Docker** (or podman) — the ISO is built from a `debian:bookworm` container — plus `squashfs-tools` (`mksquashfs`), and network access to pull the base image. To boot that ISO in a window: `qemu-system-x86_64`, `xorriso`, `socat`.
+
+### Lane 0 — Build and test it (needs only a compiler, zero risk)
 
 ```sh
 git clone https://github.com/ajax80/schema-init && cd schema-init
 make            # build the static binary
-make test       # unit + boot tests
-sudo scripts/make-iso.sh   # build a bootable ISO, or scripts/vmtest-gui.sh to boot it in QEMU
+make test       # ~30 unit tests: schema state machine, cgroup tiering, udev parity, …
 ```
 
-Nothing here touches your real bootloader or `/dev`. This is how to see it boot a real system before you trust it with yours.
+No root, no Docker, no VM — this just proves the code compiles clean and passes its test suite on your machine. Start here.
+
+### Lane 1 — Watch it boot in a VM (still zero risk to your machine)
+
+```sh
+sudo scripts/make-iso.sh              # build a bootable schema-init ISO (needs Docker + squashfs-tools)
+scripts/vmtest-gui.sh boot ~/schema-init.iso   # boot that ISO in QEMU (needs qemu + xorriso + socat)
+```
+
+`make-iso.sh` builds a full Debian + desktop live image with schema-init as PID 1 — it pulls a `debian:bookworm` container, so **Docker must be installed and running** and the first build downloads a few hundred MB. `vmtest-gui.sh` then boots the ISO you just built (it takes the ISO path as an argument — build it first). Nothing here touches your real bootloader or `/dev`; this is how you see it boot a real system before you trust it with yours.
 
 ### Lane 2 — Install alongside systemd (reversible)
 

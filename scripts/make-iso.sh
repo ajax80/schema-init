@@ -2,6 +2,16 @@
 set -e
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
+for cmd in docker mksquashfs; do
+    command -v "$cmd" >/dev/null 2>&1 || {
+        echo "make-iso.sh: '$cmd' not found." >&2
+        echo "  This script builds the ISO from a debian:bookworm container." >&2
+        echo "  Install:  docker (or podman) + squashfs-tools, and make sure the docker daemon is running." >&2
+        echo "  Just want to try schema-init with no Docker? Run 'make && make test' (Lane 0 in the README)." >&2
+        exit 1
+    }
+done
+
 OUT=${1:-${HOME}/schema-init.iso}
 WORK=${HOME}/schema-debian-work
 MNT=$WORK/chroot
