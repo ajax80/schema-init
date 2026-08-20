@@ -1144,14 +1144,41 @@ static void ctl_cmd(int fd, char *line) {
             ctl_writef(fd, "err: reload rejected — %s\n", rerr[0] ? rerr : "see console");
 
     } else if (strcmp(line, "timing") == 0) {
+        struct trow { const char *name; double cost; double ready; };
+        struct trow rows[MAX_SERVICES];
+        int nrows = 0, j;
         double k2p = (double)init_start.tv_sec + (double)init_start.tv_nsec / 1e9;
         ctl_writef(fd, "kernel → PID 1:            %.3fs\n", k2p);
         for (i = 0; i < svc_count; i++) {
-            double delta;
             if (services[i].stable_time.tv_sec == 0) continue;
-            delta = (double)(services[i].stable_time.tv_sec - init_start.tv_sec)
-                  + (double)(services[i].stable_time.tv_nsec - init_start.tv_nsec) / 1e9;
-            ctl_writef(fd, "  %-24s %.3fs\n", services[i].name, delta);
+            rows[nrows].name  = services[i].name;
+            rows[nrows].ready = (double)(services[i].stable_time.tv_sec - init_start.tv_sec)
+                              + (double)(services[i].stable_time.tv_nsec - init_start.tv_nsec) / 1e9;
+            /* cost = self-time from spawn to ready; the readiness column above is
+             * only a wall-clock instant. A zero-initialized timespec {0,0} means
+             * never observed spawning (adopted/oneshot with no fork) -> unknown,
+             * sinks to bottom. Test tv_nsec too: CLOCK_MONOTONIC is uptime, so a
+             * service spawned in the first second has tv_sec==0 legitimately. */
+            if (services[i].spawn_time_mono.tv_sec == 0
+                && services[i].spawn_time_mono.tv_nsec == 0)
+                rows[nrows].cost = -1.0;
+            else
+                rows[nrows].cost = (double)(services[i].stable_time.tv_sec - services[i].spawn_time_mono.tv_sec)
+                                 + (double)(services[i].stable_time.tv_nsec - services[i].spawn_time_mono.tv_nsec) / 1e9;
+            nrows++;
+        }
+        /* sort by cost desc: the long pole on the critical path lands first */
+        for (i = 0; i < nrows; i++)
+            for (j = i + 1; j < nrows; j++)
+                if (rows[j].cost > rows[i].cost) {
+                    struct trow t = rows[i]; rows[i] = rows[j]; rows[j] = t;
+                }
+        ctl_writef(fd, "  %-24s %8s  %8s\n", "service", "cost", "ready@");
+        for (i = 0; i < nrows; i++) {
+            if (rows[i].cost < 0)
+                ctl_writef(fd, "  %-24s %8s  %7.3fs\n", rows[i].name, "-", rows[i].ready);
+            else
+                ctl_writef(fd, "  %-24s %7.3fs  %7.3fs\n", rows[i].name, rows[i].cost, rows[i].ready);
         }
 
     } else if (strcmp(line, "reboot") == 0) {
