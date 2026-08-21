@@ -28,4 +28,13 @@ for u in $(awk -F: '$3>=1000 && $3<65000 {print $1}' /etc/passwd); do
     usermod -aG video,input,render "$u" 2>/dev/null || true
 done
 
+# KDE's bluedevil kded module hot-loops org.bluez.obex activation on a machine
+# with no bluetooth adapter — it pegs a CPU and freezes the desktop. Disable it
+# only when no adapter is present; leave it on where bluetooth actually exists.
+if [ -z "$(ls -A /sys/class/bluetooth 2>/dev/null)" ]; then
+    for rc in /etc/xdg/kded5rc /etc/xdg/kded6rc; do
+        printf '[Module-bluedevil]\nautoload=false\n' > "$rc"
+    done
+fi
+
 exit 0
