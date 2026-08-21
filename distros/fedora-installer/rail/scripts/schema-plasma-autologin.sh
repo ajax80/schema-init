@@ -37,6 +37,22 @@ udevadm settle --timeout=10 2>/dev/null || true
 stty -F "/dev/tty$SCHEMA_VTNR" -echo 2>/dev/null || true
 clear > "/dev/tty$SCHEMA_VTNR" 2>/dev/null || true
 
+# Hand the DRM master from plymouth to the compositor. plymouthd is started in
+# the initramfs and persists across switch-root holding /dev/dri; with no
+# systemd there is no plymouth-quit.service to release it, so the splash would
+# otherwise sit forever and kwin could never open the card (the classic
+# first-boot spinner hang). Quit it here, right before the session starts.
+# --retain-splash leaves the last frame up until kwin draws, so boot looks
+# seamless (splash -> desktop). Then wait for plymouthd to actually exit and
+# drop the master before the compositor grabs it, to avoid a DRM race.
+if command -v plymouth >/dev/null 2>&1; then
+    plymouth quit --retain-splash 2>/dev/null || true
+    for _ in $(seq 1 50); do
+        pgrep -x plymouthd >/dev/null 2>&1 || break
+        sleep 0.1
+    done
+fi
+
 REGISTER=/usr/local/bin/schema-session-register
 UNREGISTER=/usr/local/bin/schema-session-unregister
 

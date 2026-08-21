@@ -119,16 +119,33 @@ install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.
 
 # 3. Point the bootloader at schema-init. grubby covers grub2 + BLS entries.
 #    - init=/sbin/schema-init: hand PID 1 to schema-init.
-#    - remove rhgb quiet: THIS is the first-boot hang fix. rhgb starts plymouth,
-#      which grabs the DRM master at boot and, on a systemd box, is told to quit
-#      by plymouth-quit.service once the DM/desktop is up. schema-init has no
-#      such handoff, so plymouthd holds the display forever and kwin never gets
-#      it — the box sits on the spinner. Dropping the splash lets the compositor
-#      take the display. (Proven: with rhgb quiet present the box hangs even with
-#      SELinux permissive; removing it boots straight to the Plasma desktop.)
-#    - enforcing=0: kernel-level belt for the permissive config above.
-grubby --update-kernel=ALL --args="init=/sbin/schema-init enforcing=0" \
-                           --remove-args="rhgb quiet"
+#    - enforcing=0: kernel-level belt for the `selinux --permissive` config above.
+#    - rhgb quiet is KEPT: the pretty plymouth splash stays. The first-boot hang
+#      it used to cause (plymouthd from the initramfs holds the DRM master and,
+#      with no systemd plymouth-quit.service, never releases it, so kwin can't
+#      take the display) is handled in schema-plasma-autologin.sh, which runs
+#      `plymouth quit` right before the compositor opens the card. If that
+#      handoff is ever removed, add `--remove-args="rhgb quiet"` here as the
+#      proven fallback (commit afeed4c) — text boot, but never hangs.
+grubby --update-kernel=ALL --args="init=/sbin/schema-init enforcing=0"
+
+#    Durability: a kernel update (dnf) builds the new BLS entry from
+#    /etc/kernel/cmdline when it exists, else from the running cmdline — which
+#    on a schema-init box would LOSE init=/sbin/schema-init and boot systemd.
+#    Seed it from the entry grubby just wrote so every future kernel inherits
+#    schema-init as PID 1 (and enforcing=0). Captured post-edit → includes
+#    root=UUID/rootflags, so new entries stay bootable.
+#    grubby reports root= as its OWN field, separate from args= — so the full
+#    boot cmdline is `root=<root> <args>`. Capture both; a file missing root=
+#    would make a future kernel entry unbootable, which is worse than no seed.
+KINFO=$(grubby --info=DEFAULT 2>/dev/null) || true
+KROOT=$(printf '%s\n' "$KINFO" | sed -n 's/^root="\(.*\)"$/\1/p' | head -1)
+KARGS=$(printf '%s\n' "$KINFO" | sed -n 's/^args="\(.*\)"$/\1/p' | head -1)
+if [ -n "$KARGS" ]; then
+    if [ -n "$KROOT" ]; then printf 'root=%s %s\n' "$KROOT" "$KARGS" > /etc/kernel/cmdline
+    else                    printf '%s\n' "$KARGS"                > /etc/kernel/cmdline
+    fi
+fi
 
 # 4. Stage schema-udev SHADOW: present, LIVE flag disarmed, and record the
 #    shipped binary's md5 as THIS ISO's blessed baseline (blakbox's c42164b7
@@ -140,6 +157,10 @@ echo "$SHIP_MD5" > /etc/schema-init/schema-udev.ship-md5
 # 5. First-boot wizard: install it + a guarded autostart + the headless
 #    seatbelt that self-heals a bad flip without a working desktop.
 install -m0755 "$SRC/scripts/firstboot-flip-wizard.sh" /usr/local/bin/schema-firstboot-wizard
+# the wizard's PRIVILEGED half — it runs as the desktop user (so yad can draw)
+# and delegates every root action to this one helper via passwordless sudo.
+install -d /usr/local/lib/schema
+install -m0755 "$SRC/scripts/schema-flip-apply.sh" /usr/local/lib/schema/schema-flip-apply
 install -d /etc/xdg/autostart
 cat > /etc/xdg/autostart/schema-firstboot.desktop <<'DESK'
 [Desktop Entry]
@@ -150,6 +171,41 @@ OnlyShowIn=GNOME;KDE;
 X-GNOME-Autostart-enabled=true
 NoDisplay=false
 DESK
+
+# A clickable Desktop icon too, so the flip is reachable on demand even after the
+# autostart popup is dismissed (the wizard removes the autostart once resolved,
+# but a novice may want to trigger the flip later). Dropped into the first human
+# user's ~/Desktop (the account Anaconda just made). Plasma prompts once to trust
+# an executable .desktop on first click — acceptable for a deliberate action.
+FBUSER=$(awk -F: '$3>=1000 && $3<65000 {print $1; exit}' /etc/passwd) || true
+FBHOME=""
+[ -n "$FBUSER" ] && FBHOME=$(getent passwd "$FBUSER" | cut -d: -f6)
+
+# Passwordless sudo for JUST the flip helper, for JUST the login user. The helper
+# is the security boundary (a closed set of subcommands, fixed paths); this lets
+# the user-side GUI wizard perform the root flip steps without a polkit agent
+# (which can't run here — it's a systemd user unit). 0440 + validate before commit.
+if [ -n "$FBUSER" ]; then
+    printf '%s ALL=(root) NOPASSWD: /usr/local/lib/schema/schema-flip-apply\n' "$FBUSER" \
+        > /etc/sudoers.d/schema-flip
+    chmod 0440 /etc/sudoers.d/schema-flip
+    visudo -cf /etc/sudoers.d/schema-flip || rm -f /etc/sudoers.d/schema-flip
+fi
+
+if [ -n "$FBHOME" ] && [ -d "$FBHOME" ]; then
+    install -d -o "$FBUSER" -g "$FBUSER" "$FBHOME/Desktop"
+    cat > "$FBHOME/Desktop/schema-udev-flip.desktop" <<'DESK'
+[Desktop Entry]
+Type=Application
+Name=Finish Setting Up schema
+Comment=Enable schema-udev — the schema-native device manager
+Exec=/usr/local/bin/schema-firstboot-wizard
+Icon=drive-harddisk
+Terminal=false
+DESK
+    chmod 0755 "$FBHOME/Desktop/schema-udev-flip.desktop"
+    chown "$FBUSER:$FBUSER" "$FBHOME/Desktop/schema-udev-flip.desktop"
+fi
 
 # headless seatbelt: schema-init oneshot, runs every boot, auto-rolls-back a
 # flip that armed but failed to come up healthy (see healthcheck script).
