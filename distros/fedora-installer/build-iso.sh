@@ -39,11 +39,26 @@ install -m0755 "$REPO/scripts/gen-services.sh"            "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/gen-mounts.sh"              "$PAYLOAD/scripts/"
 install -m0755 "$HERE/firstboot-flip-wizard.sh"           "$PAYLOAD/scripts/"
 install -m0755 "$HERE/schema-udev-flip-healthcheck.sh"    "$PAYLOAD/scripts/"
-install -m0755 "$HERE/rail/scripts/schema-sysprep.sh"     "$PAYLOAD/scripts/"
-# The service rail: a Fedora-KDE-correct set (systemd-udevd coldplug + dbus +
-# NetworkManager + autologin getty), boot-proven under schema-init as PID 1.
-# NOT $REPO/services — that reference rail's exec paths (schema-udev as udev,
-# lightdm as DM) don't exist on a fresh Fedora install and hang the box.
+install -m0755 "$HERE/rail/scripts/schema-sysprep.sh"          "$PAYLOAD/scripts/"
+install -m0755 "$HERE/rail/scripts/schema-plasma-autologin.sh" "$PAYLOAD/scripts/"
+# Desktop-session pipeline, generalized from distros/fedora-kde: the native
+# login1 stub + session bookkeeping + the Plasma launch chain. Autologin drives
+# these to bring up a full KDE Wayland desktop under schema-init as PID 1.
+install -m0755 "$REPO/scripts/schema-logind.py"               "$PAYLOAD/scripts/"
+install -m0755 "$REPO/scripts/schema-session-register"        "$PAYLOAD/scripts/"
+install -m0755 "$REPO/scripts/schema-session-unregister"      "$PAYLOAD/scripts/"
+install -m0755 "$HERE/../fedora-kde/scripts/plasma-session-start.sh" "$PAYLOAD/scripts/"
+install -m0755 "$HERE/../fedora-kde/scripts/plasmashell-shim"        "$PAYLOAD/scripts/"
+# mock_sd.so fakes /run/systemd/system for plasmashell's sd_booted() probe.
+# Compile it on the build host (x86_64, same as target) so the %post chroot,
+# which has no toolchain, does not need one.
+gcc -shared -fPIC -o "$PAYLOAD/scripts/mock_sd.so" \
+    "$HERE/../fedora-kde/scripts/mock_sd.c" -ldl
+# The service rail: a Fedora-KDE-correct desktop set (systemd-udevd coldplug +
+# fstab mounts + dbus + NetworkManager + schema-logind + polkitd + autologin
+# Plasma), boot-proven under schema-init as PID 1. NOT $REPO/services — that
+# reference rail's exec paths (schema-udev as udev, lightdm as DM) don't exist
+# on a fresh Fedora install and hang the box.
 cp -a "$HERE/rail/services/." "$PAYLOAD/services/"
 
 echo "=== injecting kickstart + payload into the ISO ==="

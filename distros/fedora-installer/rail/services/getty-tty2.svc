@@ -1,9 +1,9 @@
-name=getty-tty1
+name=getty-tty2
 exec=/sbin/agetty
 args=--autologin
 args=root
-args=tty1
+args=tty2
 args=linux
 oneshot=0
 needs_root=1
-critical=1
+critical=0

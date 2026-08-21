@@ -35,6 +35,10 @@ repo --name=updates --mirrorlist="https://mirrors.fedoraproject.org/mirrorlist?r
 kernel
 grubby
 yad
+polkit
+NetworkManager
+python3-dbus
+python3-gobject
 %end
 
 # --- Let Anaconda drive its normal GUI for disk/user/timezone — the familiar
@@ -76,14 +80,28 @@ install -m0755 "$SRC/scripts/gen-mounts.sh"              /usr/local/lib/schema/
 #    Anaconda %post chroot — there is no running systemd here, so it detects
 #    nothing and would leave a rail with no getty/display-manager/network (an
 #    unbootable box). So lay down the Fedora-KDE-correct rail from the ISO
-#    payload unconditionally (systemd-udevd coldplug + dbus + NetworkManager +
-#    autologin getty — boot-proven under schema-init as PID 1), then add only
-#    THIS machine's fstab-derived mounts on top (a pure /etc/fstab read, which
-#    DOES work in the chroot).
+#    payload unconditionally (systemd-udevd coldplug + fstab mounts + dbus +
+#    NetworkManager + schema-logind + polkitd + autologin Plasma desktop —
+#    boot-proven under schema-init as PID 1), then add only THIS machine's
+#    fstab-derived mounts on top (a pure /etc/fstab read, which DOES work in
+#    the chroot).
 install -d /etc/schema-init/services /etc/schema-init/scripts
 cp -a "$SRC/services/." /etc/schema-init/services/
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
 install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
+
+# Desktop-session pipeline (autologin Plasma under schema-init). The rail's
+# plasma-autologin.svc drives schema-plasma-autologin.sh, which registers a
+# login1 session via schema-logind + the session helpers, then launches Plasma.
+install -m0755 "$SRC/scripts/schema-plasma-autologin.sh" /usr/local/bin/schema-plasma-autologin.sh
+install -m0755 "$SRC/scripts/schema-logind.py"           /usr/local/bin/schema-logind.py
+install -m0755 "$SRC/scripts/schema-session-register"    /usr/local/bin/schema-session-register
+install -m0755 "$SRC/scripts/schema-session-unregister"  /usr/local/bin/schema-session-unregister
+install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-session-start.sh
+install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
+install -d /usr/local/lib
+install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
+
 /usr/local/lib/schema/gen-mounts.sh -o /etc/schema-init 2>/dev/null || true
 # mount-fstab.svc runs its script from /usr/local/bin (gen-mounts' fixed path) —
 # gen-mounts only writes it under scripts/, so put it where the .svc expects it.

@@ -1,0 +1,7 @@
+name=plasma-autologin
+exec=/usr/local/bin/schema-plasma-autologin.sh
+dep=schema-logind
+dep=polkitd
+dep=mount-fstab
+needs_root=1
+critical=0
