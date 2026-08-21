@@ -41,9 +41,17 @@ yad
 # --- Fedora screens Dad clicks through. Deliberately NO autopart/clearpart/
 # --- rootpw/user here, so nothing is silently decided for him.
 
+# --- Stage the ISO payload ACROSS the chroot boundary. The boot media (with the
+# --- mkksiso --add tree) is mounted at /run/install/repo in the installer's own
+# --- environment ONLY — a chrooted %post cannot see it. So copy it into the new
+# --- root here (--nochroot), and the main %post below reads it from inside.
+%post --nochroot
+cp -a /run/install/repo/schema /mnt/sysroot/root/schema-payload
+%end
+
 %post --log=/root/schema-ks-post.log
 set -eu
-SRC=/run/install/repo/schema          # payload baked onto the ISO
+SRC=/root/schema-payload              # staged in by the --nochroot block above
 DEST=/                                 # %post is chrooted into the new system
 
 echo "=== schema %post: installing schema-init as PID 1 ==="
@@ -64,19 +72,23 @@ install -m0755 "$SRC/bin/verify-rules-live"              /usr/local/lib/schema/
 install -m0755 "$SRC/scripts/gen-services.sh"            /usr/local/lib/schema/
 install -m0755 "$SRC/scripts/gen-mounts.sh"              /usr/local/lib/schema/
 
-# 2. Service rail for THIS machine. gen-services.sh/gen-mounts.sh must run while
-#    the system is STILL systemd — which %post is (schema-init only takes over
-#    after step 3 + reboot). They read the enabled systemd units and the target
-#    /etc/fstab and emit .svc stubs so the box comes up running what it ran
-#    before. Generic rail is the fallback if offline detection comes up thin.
+# 2. Service rail. gen-services' systemd introspection does NOT work inside an
+#    Anaconda %post chroot — there is no running systemd here, so it detects
+#    nothing and would leave a rail with no getty/display-manager/network (an
+#    unbootable box). So lay down the Fedora-KDE-correct rail from the ISO
+#    payload unconditionally (systemd-udevd coldplug + dbus + NetworkManager +
+#    autologin getty — boot-proven under schema-init as PID 1), then add only
+#    THIS machine's fstab-derived mounts on top (a pure /etc/fstab read, which
+#    DOES work in the chroot).
 install -d /etc/schema-init/services /etc/schema-init/scripts
-/usr/local/lib/schema/gen-services.sh -o /etc/schema-init 2>/dev/null || true
-/usr/local/lib/schema/gen-mounts.sh   -o /etc/schema-init 2>/dev/null || true
-# guarantee a non-empty rail no matter what detection produced
-if [ -z "$(ls -A /etc/schema-init/services 2>/dev/null)" ]; then
-    echo "detection produced no rail; installing generic services"
-    cp -a "$SRC/services/." /etc/schema-init/services/
-fi
+cp -a "$SRC/services/." /etc/schema-init/services/
+rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
+install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
+/usr/local/lib/schema/gen-mounts.sh -o /etc/schema-init 2>/dev/null || true
+# mount-fstab.svc runs its script from /usr/local/bin (gen-mounts' fixed path) —
+# gen-mounts only writes it under scripts/, so put it where the .svc expects it.
+[ -f /etc/schema-init/scripts/mount-fstab.sh ] && \
+    install -m0755 /etc/schema-init/scripts/mount-fstab.sh /usr/local/bin/mount-fstab.sh
 
 # 3. Point the bootloader at schema-init. grubby covers grub2 + BLS entries.
 grubby --update-kernel=ALL --args="init=/sbin/schema-init"
@@ -108,11 +120,12 @@ install -m0755 "$SRC/scripts/schema-udev-flip-healthcheck.sh" /usr/local/lib/sch
 cat > /etc/schema-init/services/schema-udev-healthcheck.svc <<'SVC'
 name=schema-udev-healthcheck
 exec=/usr/local/lib/schema/schema-udev-flip-healthcheck.sh
-oneshot=yes
+oneshot=1
 SVC
 
 # yad is what the wizard is built on — make sure it's present.
 dnf install -y yad || echo "WARN: yad not installed; wizard will not launch"
 
+rm -rf /root/schema-payload
 echo "=== schema %post complete ==="
 %end

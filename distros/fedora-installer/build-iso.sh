@@ -39,12 +39,17 @@ install -m0755 "$REPO/scripts/gen-services.sh"            "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/gen-mounts.sh"              "$PAYLOAD/scripts/"
 install -m0755 "$HERE/firstboot-flip-wizard.sh"           "$PAYLOAD/scripts/"
 install -m0755 "$HERE/schema-udev-flip-healthcheck.sh"    "$PAYLOAD/scripts/"
-# a generic service rail as fallback if --generate-profile can't detect hardware
-cp -a "$REPO/services/." "$PAYLOAD/services/" 2>/dev/null || true
+install -m0755 "$HERE/rail/scripts/schema-sysprep.sh"     "$PAYLOAD/scripts/"
+# The service rail: a Fedora-KDE-correct set (systemd-udevd coldplug + dbus +
+# NetworkManager + autologin getty), boot-proven under schema-init as PID 1.
+# NOT $REPO/services — that reference rail's exec paths (schema-udev as udev,
+# lightdm as DM) don't exist on a fresh Fedora install and hang the box.
+cp -a "$HERE/rail/services/." "$PAYLOAD/services/"
 
 echo "=== injecting kickstart + payload into the ISO ==="
-# --add drops the payload tree onto the ISO; it lands under /run/install/repo
-# at install time, which schema.ks reads as $SRC.
+# --add drops the payload tree onto the ISO; the boot media mounts at
+# /run/install/repo at install time, but ONLY in the installer environment —
+# schema.ks stages it across the chroot with a %post --nochroot copy.
 # mkefiboot inside mkksiso needs root; output is then handed back to the user.
 sudo mkksiso --ks "$HERE/schema.ks" --add "$PAYLOAD" "$BASE_ISO" "$OUT"
 sudo chown "$(id -u):$(id -g)" "$OUT"
