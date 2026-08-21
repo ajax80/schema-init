@@ -45,6 +45,15 @@ python3-gobject
 # --- Fedora screens Dad clicks through. Deliberately NO autopart/clearpart/
 # --- rootpw/user here, so nothing is silently decided for him.
 
+# --- SELinux: permissive. Fedora's stock policy knows only systemd as PID 1;
+# --- under enforcing, schema-init's rail (udev coldplug, cgroup writes, runuser
+# --- into the session) can hit denials with no matching allow rules. Permissive
+# --- keeps the labels and logs AVCs without blocking. A schema-init policy
+# --- module is the path back to enforcing later. (Not the first-boot hang cause
+# --- — that was plymouth, see the bootloader step below — but the right default
+# --- for a non-systemd init all the same.)
+selinux --permissive
+
 # --- Stage the ISO payload ACROSS the chroot boundary. The boot media (with the
 # --- mkksiso --add tree) is mounted at /run/install/repo in the installer's own
 # --- environment ONLY — a chrooted %post cannot see it. So copy it into the new
@@ -109,7 +118,17 @@ install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.
     install -m0755 /etc/schema-init/scripts/mount-fstab.sh /usr/local/bin/mount-fstab.sh
 
 # 3. Point the bootloader at schema-init. grubby covers grub2 + BLS entries.
-grubby --update-kernel=ALL --args="init=/sbin/schema-init"
+#    - init=/sbin/schema-init: hand PID 1 to schema-init.
+#    - remove rhgb quiet: THIS is the first-boot hang fix. rhgb starts plymouth,
+#      which grabs the DRM master at boot and, on a systemd box, is told to quit
+#      by plymouth-quit.service once the DM/desktop is up. schema-init has no
+#      such handoff, so plymouthd holds the display forever and kwin never gets
+#      it — the box sits on the spinner. Dropping the splash lets the compositor
+#      take the display. (Proven: with rhgb quiet present the box hangs even with
+#      SELinux permissive; removing it boots straight to the Plasma desktop.)
+#    - enforcing=0: kernel-level belt for the permissive config above.
+grubby --update-kernel=ALL --args="init=/sbin/schema-init enforcing=0" \
+                           --remove-args="rhgb quiet"
 
 # 4. Stage schema-udev SHADOW: present, LIVE flag disarmed, and record the
 #    shipped binary's md5 as THIS ISO's blessed baseline (blakbox's c42164b7
