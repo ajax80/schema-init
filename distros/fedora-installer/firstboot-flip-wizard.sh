@@ -53,6 +53,20 @@ show_report() {
         --button="Close":0 2>/dev/null || true
 }
 
+# translate the seatbelt's raw rollback reason into something a novice reads.
+humanize_reason() {
+    case "$1" in
+        "schema-udev not running")            echo "schema's own device manager didn't start" ;;
+        "no /dev/disk/by-uuid entries")       echo "the disks weren't presented the way startup needs" ;;
+        "no /dev/input/event"*)               echo "the keyboard and mouse weren't set up" ;;
+        "no group-accessible /dev/dri card node") echo "the screen/graphics couldn't be opened" ;;
+        "missing core node"*)                 echo "an essential system device was missing" ;;
+        "desktop never confirmed"*)           echo "the desktop didn't finish coming up in time" ;;
+        "") echo "the switch didn't come up cleanly" ;;
+        *)  echo "$1" ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 case "$phase" in
 
@@ -118,22 +132,41 @@ If it doesn't, it puts itself back the way it is now — you don't have to do an
     ;;
 
 armed)
-    # booting AFTER the flip was armed. The headless seatbelt already rolled back
-    # if /dev came up unusable; if we're here with a working desktop, confirm.
+    # booting AFTER the flip was armed. Three outcomes:
+    #   1. schema-udev is authoritative        -> success, confirm.
+    #   2. the headless seatbelt already healed -> explain WHY, no extra reboot.
+    #   3. armed but neither                    -> undo cleanly ourselves.
+    rstate=$(H root-state 2>/dev/null)
     if H is-authoritative; then
         H confirm || true            # clears the root state so the seatbelt stops
         pull_report
         echo done > "$STATE"; finish_clean
         info dialog-information \
 "<b>All set.</b>\n\nYour computer is now running entirely on schema. There's nothing else to do." "Finish"
-    else
-        # desktop came up but schema-udev isn't authoritative -> undo cleanly.
+    elif [ "$rstate" = skipped ] || [ "$rstate" = done ]; then
+        # The seatbelt already rolled us back to the old system on an earlier
+        # boot (root state is resolved). Do NOT roll back again or reboot — just
+        # tell the user, in plain language, what went wrong, and get out of the way.
         pull_report
+        reason=$(humanize_reason "$(H explain 2>/dev/null)")
+        echo skipped > "$STATE"; finish_clean
+        yad --title="$TITLE" --window-icon="$ICON" --width=600 --borders=18 --image=dialog-warning \
+            --text="<b>The switch was undone automatically.</b>\n\nYour computer tried the optional switch, saw that \
+<b>${reason}</b>, and put itself back the way it was — on its own, before you even logged in. <b>Everything works normally \
+and there's nothing you need to do.</b>\n\nIf you'd like to try again later (or show this to someone who can help), the full \
+details are saved to:\n<tt>${REPORT_USER}</tt>" \
+            --button="See details":2 --button="OK":0
+        [ $? -eq 2 ] && show_report
+    else
+        # armed, schema-udev isn't authoritative, and the seatbelt hasn't acted
+        # (rstate still 'armed'/unknown) -> undo cleanly ourselves.
+        pull_report
+        reason=$(humanize_reason "$(H explain 2>/dev/null)")
         H rollback || true           # also resets the root state to skipped
         echo skipped > "$STATE"; finish_clean
         info dialog-warning \
-"<b>Put back the way it was.</b>\n\nThe extra step didn't take on this hardware, so your computer undid it automatically. \
-Everything works normally — one more restart will tidy up.\n\n(Details saved to <tt>${REPORT_USER}</tt>.)" "Restart"
+"<b>Putting it back the way it was.</b>\n\nThe optional switch didn't take on this hardware (${reason}), so we're undoing it. \
+Everything will work normally — one more restart finishes tidying up.\n\n(Details saved to <tt>${REPORT_USER}</tt>.)" "Restart"
         H reboot
     fi
     ;;

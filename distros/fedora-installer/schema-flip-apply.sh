@@ -101,6 +101,17 @@ case "$cmd" in
         "$ARM" status | grep -q '^ARMED'     || exit 1
         udevadm info /dev/null >/dev/null 2>&1 || exit 1
         ;;
+    root-state)
+        # echo the ROOT flip state the headless seatbelt owns, so the GUI can
+        # tell whether the seatbelt already healed us (skipped) before it acts.
+        cat "$ROOT_STATE" 2>/dev/null || echo unknown
+        ;;
+    explain)
+        # surface WHY the seatbelt rolled back, raw, from its own log. The GUI
+        # translates this to plain language. Read-only.
+        grep -o 'flip UNHEALTHY ([^)]*)' /var/log/schema-init/flip-healthcheck.log 2>/dev/null \
+            | tail -1 | sed 's/^flip UNHEALTHY (//; s/)$//'
+        ;;
     resolve)
         # remove the system autostart so the wizard never nags again (the user's
         # own ~/Desktop launcher is removed by the wizard itself, as the user).
@@ -110,7 +121,7 @@ case "$cmd" in
         systemctl reboot 2>/dev/null || schema-ctl reboot 2>/dev/null || reboot
         ;;
     *)
-        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|resolve|reboot}" >&2
+        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|root-state|explain|resolve|reboot}" >&2
         exit 2
         ;;
 esac
