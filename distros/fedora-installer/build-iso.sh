@@ -41,6 +41,8 @@ install -m0755 "$HERE/firstboot-flip-wizard.sh"           "$PAYLOAD/scripts/"
 install -m0755 "$HERE/schema-flip-apply.sh"               "$PAYLOAD/scripts/"
 install -m0755 "$HERE/schema-udev-flip-healthcheck.sh"    "$PAYLOAD/scripts/"
 install -m0755 "$HERE/rail/scripts/schema-sysprep.sh"          "$PAYLOAD/scripts/"
+install -m0755 "$HERE/rail/scripts/schema-sshd-start.sh"       "$PAYLOAD/scripts/"
+install -m0755 "$HERE/rail/scripts/schema-zram-start.sh"       "$PAYLOAD/scripts/"
 install -m0755 "$HERE/rail/scripts/schema-plasma-autologin.sh" "$PAYLOAD/scripts/"
 # Desktop-session pipeline, generalized from distros/fedora-kde: the native
 # login1 stub + session bookkeeping + the Plasma launch chain. Autologin drives

@@ -37,6 +37,10 @@ grubby
 yad
 polkit
 NetworkManager
+openssh-server
+pipewire
+pipewire-pulseaudio
+wireplumber
 python3-dbus
 python3-gobject
 %end
@@ -98,6 +102,8 @@ install -d /etc/schema-init/services /etc/schema-init/scripts
 cp -a "$SRC/services/." /etc/schema-init/services/
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
 install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
+install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
+install -m0755 "$SRC/scripts/schema-zram-start.sh" /usr/local/bin/schema-zram-start.sh  # zram.svc execs this
 
 # Desktop-session pipeline (autologin Plasma under schema-init). The rail's
 # plasma-autologin.svc drives schema-plasma-autologin.sh, which registers a
@@ -147,6 +153,15 @@ if [ -n "$KARGS" ]; then
     fi
 fi
 
+#    DNS: a stock Fedora install points /etc/resolv.conf at systemd-resolved,
+#    which never runs under schema-init -> the file is a dangling symlink, name
+#    resolution fails, and NetworkManager reports "limited" connectivity. Have
+#    NM own the file directly instead (dns=default writes it, rc-manager=file
+#    stops it trying to symlink to resolved).
+rm -f /etc/resolv.conf
+install -d /etc/NetworkManager/conf.d
+printf '[main]\ndns=default\nrc-manager=file\n' > /etc/NetworkManager/conf.d/00-schema-dns.conf
+
 # 4. Stage schema-udev SHADOW: present, LIVE flag disarmed, and record the
 #    shipped binary's md5 as THIS ISO's blessed baseline (blakbox's c42164b7
 #    baseline is meaningless on someone else's build).
@@ -180,6 +195,12 @@ DESK
 FBUSER=$(awk -F: '$3>=1000 && $3<65000 {print $1; exit}' /etc/passwd) || true
 FBHOME=""
 [ -n "$FBUSER" ] && FBHOME=$(getent passwd "$FBUSER" | cut -d: -f6)
+
+# Device access. systemd-logind grants the active session an ACL on /dev/snd,
+# /dev/dri, etc. (uaccess); schema-init does not, so the login user needs the
+# device groups directly or there is no sound (wireplumber can't open the ALSA
+# card -> only a dummy auto_null sink). audio is the one Anaconda leaves off.
+[ -n "$FBUSER" ] && usermod -aG audio "$FBUSER" 2>/dev/null || true
 
 # Passwordless sudo for JUST the flip helper, for JUST the login user. The helper
 # is the security boundary (a closed set of subcommands, fixed paths); this lets
@@ -215,6 +236,42 @@ name=schema-udev-healthcheck
 exec=/usr/local/lib/schema/schema-udev-flip-healthcheck.sh
 oneshot=1
 SVC
+
+# 6. Hardware video decode for Intel iGPUs (eli-class: Haswell HD 4400). A stock
+#    Fedora install ships NO VA-API driver, so Firefox software-decodes every
+#    frame and video stutters on a weak CPU (both cores pegged). Fedora dropped
+#    the i965 driver that Gen4-Gen8 Intel needs from its repos — it lives in
+#    RPM Fusion now; the in-repo iHD driver only covers Gen8+. Install both, gated
+#    on an Intel GPU actually being present; libva auto-selects the right one per
+#    PCI id. Detect via sysfs vendor (0x8086) so we don't depend on pciutils in
+#    the chroot.
+INTEL_GPU=no
+for _v in /sys/class/drm/card[0-9]/device/vendor; do
+    if [ -r "$_v" ] && [ "$(cat "$_v")" = "0x8086" ]; then INTEL_GPU=yes; fi
+done
+if [ "$INTEL_GPU" = yes ]; then
+    echo "=== Intel iGPU detected: enabling VA-API hardware video decode ==="
+    dnf install -y "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+        || echo "WARN: rpmfusion-free not enabled; i965 (Haswell-class) decode unavailable"
+    dnf install -y libva-intel-driver libva-intel-media-driver libva-utils \
+        || echo "WARN: VA-API driver install incomplete"
+    # Firefox: pin VA-API on and force H.264 — Haswell-class Intel has no VP9/AV1
+    # hardware decode (YouTube's defaults), so without this YouTube keeps
+    # software-decoding. H.264 has a hardware VLD path on every Intel gen here.
+    install -d /etc/firefox/policies
+    cat > /etc/firefox/policies/policies.json <<'POL'
+{
+  "policies": {
+    "Preferences": {
+      "media.ffmpeg.vaapi.enabled": { "Value": true, "Status": "locked" },
+      "media.hardware-video-decoding.force-enabled": { "Value": true, "Status": "locked" },
+      "media.mediasource.vp9.enabled": { "Value": false, "Status": "default" },
+      "media.av1.enabled": { "Value": false, "Status": "default" }
+    }
+  }
+}
+POL
+fi
 
 # yad is what the wizard is built on — make sure it's present.
 dnf install -y yad || echo "WARN: yad not installed; wizard will not launch"
