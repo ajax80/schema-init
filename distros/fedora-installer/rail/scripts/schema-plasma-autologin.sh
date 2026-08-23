@@ -86,6 +86,8 @@ while true; do
         SHELL="$SCHEMA_SHELL" \
         XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" \
         XDG_DATA_DIRS="$SCHEMA_DATA_DIRS" \
+        XDG_CONFIG_DIRS="/etc/xdg:/usr/share/kde-settings/kde-profile/default/xdg" \
+        XDG_MENU_PREFIX="plasma-" \
         XDG_SESSION_ID="$SID" \
         LANG=en_US.UTF-8 \
         PLASMA_USE_SYSTEMD_SCOPE=0 \

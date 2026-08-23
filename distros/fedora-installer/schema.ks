@@ -256,6 +256,12 @@ if [ "$INTEL_GPU" = yes ]; then
         || echo "WARN: rpmfusion-free not enabled; i965 (Haswell-class) decode unavailable"
     dnf install -y libva-intel-driver libva-intel-media-driver libva-utils \
         || echo "WARN: VA-API driver install incomplete"
+    # Fedora's stock libavcodec-free has H.264 DECODING stripped (patents), so
+    # forcing YouTube to H.264 above without this leaves Firefox with no usable
+    # codec at all -> "An error occurred". freeworld restores H.264 decode, which
+    # the i965/iHD VA-API path then decodes in hardware.
+    dnf install -y libavcodec-freeworld \
+        || echo "WARN: libavcodec-freeworld missing; H.264 decode unavailable"
     # Firefox: pin VA-API on and force H.264 — Haswell-class Intel has no VP9/AV1
     # hardware decode (YouTube's defaults), so without this YouTube keeps
     # software-decoding. H.264 has a hardware VLD path on every Intel gen here.

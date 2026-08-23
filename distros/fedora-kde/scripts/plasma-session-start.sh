@@ -40,4 +40,16 @@ while [ $i -lt 20 ]; do
 done
 sleep 1
 pgrep -x plasmashell > /dev/null || /usr/local/bin/plasmashell-shim &
+
+# Plasma daemons that are normally systemd --user units. Their /etc/xdg/autostart
+# entries carry X-systemd-skip=true, so with no systemd --user the KDE autostart
+# fallback skips them too -> no power management (PowerDevil settings "service not
+# running"), no global shortcuts, no polkit auth prompts. Start them in-session so
+# they inherit the logind session (polkit-kde needs it to resolve its subject).
+for _svc in /usr/libexec/org_kde_powerdevil \
+            /usr/libexec/kglobalacceld \
+            /usr/libexec/kf6/polkit-kde-authentication-agent-1; do
+    [ -x "$_svc" ] && ! pgrep -f "$_svc" > /dev/null 2>&1 && "$_svc" &
+done
+
 wait $SPW

@@ -128,6 +128,30 @@ def active_uid():
     return None
 
 
+def _proc_table():
+    tbl = []
+    for d in sorted(glob.glob(os.path.join(ROOT, "proc/[0-9]*"))):
+        try:
+            cmd = open(os.path.join(d, "cmdline"), "rb").read() \
+                    .replace(b"\0", b" ").decode(errors="replace").strip()
+        except OSError:
+            continue
+        env = {}
+        try:
+            for kv in open(os.path.join(d, "environ"), "rb").read().split(b"\0"):
+                k, sep, v = kv.partition(b"=")
+                if sep:
+                    env[k.decode(errors="replace")] = v.decode(errors="replace")
+        except OSError:
+            pass
+        tbl.append({"pid": os.path.basename(d), "cmd": cmd, "env": env})
+    return tbl
+
+
+def _running(needle, tbl=None):
+    return any(needle in p["cmd"] for p in (tbl if tbl is not None else _proc_table()))
+
+
 class CardInputAcl(Check):
     name = "card-input-acl"
     summary = "the logged-in user can open the GPU and input devices"
@@ -237,7 +261,7 @@ REGISTRY.append(SessionSingle())
 
 class Login1Power(Check):
     name = "login1-power"
-    summary = "the power controls (PowerDevil) can read login1"
+    summary = "login1 answers power, suspend, and inhibitor queries"
     grade = DEFERRED
 
     METHODS = ["CanPowerOff", "CanReboot", "CanSuspend", "CanHibernate", "ListInhibitors"]
@@ -322,6 +346,56 @@ class VtMediation(Check):
 
 
 REGISTRY.append(VtMediation())
+
+
+class PowerDevilRunning(Check):
+    name = "powerdevil-running"
+    summary = "PowerDevil is running so power and screen-lock settings load"
+    grade = DEFERRED
+
+    def detect(self):
+        if active_uid() in (None, 0):
+            return None
+        if _running("org_kde_powerdevil"):
+            return None
+        return Finding(
+            detail="PowerDevil is not running — its /etc/xdg/autostart entry carries "
+                   "X-systemd-skip=true and there is no systemd --user to start it, so "
+                   "the power and screen-lock settings report the service is not running "
+                   "and cannot load",
+            oracle_said="systemd --user starts plasma-powerdevil.service at login",
+            healable=False)
+
+
+REGISTRY.append(PowerDevilRunning())
+
+
+class KsycocaLoop(Check):
+    name = "ksycoca-loop"
+    summary = "Plasma processes agree on the menu prefix (no ksycoca rebuild storm)"
+    grade = DEFERRED
+
+    def detect(self):
+        tbl = _proc_table()
+        pl = next((p for p in tbl if "plasmashell" in p["cmd"]), None)
+        kd = next((p for p in tbl if "kded6" in p["cmd"]), None)
+        if not pl or not kd:
+            return None
+        a = pl["env"].get("XDG_MENU_PREFIX", "")
+        b = kd["env"].get("XDG_MENU_PREFIX", "")
+        if a == b:
+            return None
+        return Finding(
+            detail=f"plasmashell and kded6 disagree on XDG_MENU_PREFIX "
+                   f"(plasmashell={a or 'unset'!r}, kded6={b or 'unset'!r}) — each "
+                   "rebuilds ksycoca to its own menu view about once a second, pinning "
+                   "a CPU core; that is the ~2-second desktop and video stutter",
+            oracle_said="systemd --user gives every session process one consistent "
+                        "XDG_MENU_PREFIX",
+            healable=False)
+
+
+REGISTRY.append(KsycocaLoop())
 
 
 def read_config():
