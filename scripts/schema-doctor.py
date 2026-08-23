@@ -112,6 +112,71 @@ def run_checks(checks, heal, force):
 REGISTRY: list = []
 
 
+def active_uid():
+    d = os.path.join(ROOT, "run/systemd/sessions")
+    try:
+        names = [n for n in os.listdir(d) if n != "31" and not n.endswith(".ref")]
+    except FileNotFoundError:
+        return None
+    for n in sorted(names):
+        try:
+            for line in open(os.path.join(d, n)):
+                if line.startswith("UID="):
+                    return int(line.strip()[4:])
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+class CardInputAcl(Check):
+    name = "card-input-acl"
+    summary = "the logged-in user can open the GPU and input devices"
+    grade = SAFE
+
+    def _nodes(self):
+        pats = ["dev/dri/card*", "dev/dri/renderD*", "dev/input/event*"]
+        out = []
+        for p in pats:
+            out += glob.glob(os.path.join(ROOT, p))
+        return sorted(out)
+
+    def _getfacl(self, path):
+        return subprocess.run(["getfacl", "-pn", path],
+                              capture_output=True, text=True).stdout
+
+    def _has_rw(self, path, uid):
+        return f"user:{uid}:rw" in self._getfacl(path)
+
+    def detect(self):
+        uid = active_uid()
+        if uid is None or uid == 0:
+            return None
+        missing = [n for n in self._nodes() if not self._has_rw(n, uid)]
+        if not missing:
+            return None
+        return Finding(
+            detail=f"uid {uid} lacks rw on: {', '.join(os.path.basename(m) for m in missing)}",
+            oracle_said="systemd uaccess grants the active-seat user rw on these",
+            healable=True)
+
+    def snapshot(self):
+        return {n: self._getfacl(n) for n in self._nodes()}
+
+    def heal(self, f):
+        uid = active_uid()
+        for n in self._nodes():
+            if not self._has_rw(n, uid):
+                subprocess.run(["setfacl", "-m", f"u:{uid}:rw", n], check=False)
+
+    def back_out(self, snap):
+        for n, acl in snap.items():
+            subprocess.run(["setfacl", "--set-file=-", n],
+                           input=acl, text=True, check=False)
+
+
+REGISTRY.append(CardInputAcl())
+
+
 def read_config():
     heal = True
     disabled = set()
