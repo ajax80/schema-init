@@ -1715,6 +1715,17 @@ class Login1Manager(dbus.service.Object):
             print("login1-stub: PID 1 not found (not running as init system)")
             sys.exit(0)
 
+    @dbus.service.method('org.schema.logind1.Manager', in_signature='', out_signature='s')
+    def RearmVtMediation(self):
+        sess = self.registry.primary() if self.registry else None
+        if sess is None:
+            return "no active session"
+        try:
+            sess._setup_vt_mediation()
+            return ""
+        except Exception as e:
+            return f"rearm failed: {e}"
+
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s')
     def CanPowerOff(self):
         return "yes"
