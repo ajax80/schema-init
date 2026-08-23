@@ -177,6 +177,64 @@ class CardInputAcl(Check):
 REGISTRY.append(CardInputAcl())
 
 
+def _active_vtnr():
+    rel = os.environ.get("SCHEMA_DOCTOR_ACTIVE_VT", "sys/class/tty/tty0/active")
+    try:
+        val = open(os.path.join(ROOT, rel)).read().strip()   # e.g. "tty1"
+        return int(val[3:]) if val.startswith("tty") else None
+    except (OSError, ValueError):
+        return None
+
+
+def _sessions():
+    d = os.path.join(ROOT, "run/systemd/sessions")
+    out = {}
+    try:
+        names = [n for n in os.listdir(d) if not n.endswith(".ref")]
+    except FileNotFoundError:
+        return out
+    for n in names:
+        kv = {}
+        try:
+            for line in open(os.path.join(d, n)):
+                k, _, v = line.strip().partition("=")
+                kv[k] = v
+        except OSError:
+            continue
+        out[n] = kv
+    return out
+
+
+class SessionSingle(Check):
+    name = "session-single"
+    summary = "one real desktop session, no orphaned placeholder"
+    grade = DEFERRED
+
+    def detect(self):
+        sess = _sessions()
+        if not sess:
+            return None
+        vtnr = _active_vtnr()
+        orphan = "31" in sess and sess["31"].get("VTNR", "0") == "0"
+        backed = any(s.get("VTNR") == str(vtnr) for s in sess.values()) if vtnr else False
+        active_is_orphan = orphan and (len(sess) == 1 or not backed)
+        if active_is_orphan:
+            return Finding(
+                detail="the active session is the synthesised placeholder #31 "
+                       "(VTNR=0) — session registration lost the boot-time race",
+                oracle_said=f"a real session should own the live VT (tty{vtnr})",
+                healable=False)
+        if vtnr and not backed:
+            return Finding(
+                detail=f"no registered session owns the active VT (tty{vtnr})",
+                oracle_said=f"the logged-in session should carry VTNR={vtnr}",
+                healable=False)
+        return None
+
+
+REGISTRY.append(SessionSingle())
+
+
 def read_config():
     heal = True
     disabled = set()
