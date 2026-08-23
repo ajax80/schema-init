@@ -235,6 +235,38 @@ class SessionSingle(Check):
 REGISTRY.append(SessionSingle())
 
 
+class Login1Power(Check):
+    name = "login1-power"
+    summary = "the power controls (PowerDevil) can read login1"
+    grade = DEFERRED
+
+    METHODS = ["CanPowerOff", "CanReboot", "CanSuspend", "CanHibernate", "ListInhibitors"]
+
+    def probe(self, method):
+        cmd = os.environ.get("SCHEMA_DOCTOR_BUSCTL", "busctl")
+        try:
+            r = subprocess.run(
+                [cmd, "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+                 "org.freedesktop.login1.Manager", method],
+                capture_output=True, text=True, timeout=5)
+            return r.returncode, (r.stdout + r.stderr).strip()
+        except Exception as e:
+            return 1, str(e)
+
+    def detect(self):
+        failed = [m for m in self.METHODS if self.probe(m)[0] != 0]
+        if not failed:
+            return None
+        return Finding(
+            detail=f"login1 did not answer: {', '.join(failed)} "
+                   "(this is why PowerDevil says settings could not be loaded)",
+            oracle_said="systemd-logind answers all of these on the Manager interface",
+            healable=False)
+
+
+REGISTRY.append(Login1Power())
+
+
 def read_config():
     heal = True
     disabled = set()
