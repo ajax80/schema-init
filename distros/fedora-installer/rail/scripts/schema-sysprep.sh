@@ -8,11 +8,20 @@ rm -f /run/nologin 2>/dev/null
 /usr/bin/systemd-tmpfiles --create 2>/dev/null
 
 # cold-plug /dev so the DRM card, input devices and /dev/disk/by-uuid exist
-# before mount-fstab and the compositor come up.
-/usr/lib/systemd/systemd-udevd --daemon
-udevadm trigger --type=subsystems --action=add
-udevadm trigger --type=devices --action=add
-udevadm settle --timeout=30
+# before mount-fstab and the compositor come up. The LIVE flag chooses the owner:
+# armed -> schema-udev (walks /sys itself, writes /run/schema-udev/ready, owns
+# real /dev); absent -> stock systemd-udevd. The headless seatbelt rolls a bad
+# schema-udev come-up back to systemd-udevd, so the armed path is safe to try.
+if [ -e /etc/schema-init/schema-udev.live ] && [ -x /usr/bin/schema-udev ]; then
+    mkdir -p /run/schema-udev /var/log/schema-init
+    /usr/bin/schema-udev >> /var/log/schema-init/udevd.log 2>&1 &
+    i=0; while [ $i -lt 60 ]; do [ -e /run/schema-udev/ready ] && break; i=$((i+1)); sleep 0.5; done
+else
+    /usr/lib/systemd/systemd-udevd --daemon
+    udevadm trigger --type=subsystems --action=add
+    udevadm trigger --type=devices --action=add
+    udevadm settle --timeout=30
+fi
 
 # XDG_RUNTIME_DIR per user — logind normally delegates this to a systemd unit
 # that cannot run here, so create it for root and every human account.
