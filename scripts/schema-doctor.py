@@ -267,6 +267,63 @@ class Login1Power(Check):
 REGISTRY.append(Login1Power())
 
 
+# linux/vt.h
+VT_GETMODE = 0x5601
+VT_AUTO, VT_PROCESS = 0x00, 0x01
+
+
+class VtMediation(Check):
+    name = "vt-mediation"
+    summary = "Ctrl+Alt+F-keys are mediated (VT switching won't freeze the screen)"
+    grade = SAFE
+
+    def vt_mode(self):
+        env = os.environ.get("SCHEMA_DOCTOR_VT_MODE")
+        if env:
+            return env
+        try:
+            fd = os.open(os.path.join(ROOT, "dev/tty0"), os.O_RDONLY | os.O_NOCTTY)
+        except OSError:
+            return "unknown"
+        try:
+            buf = fcntl.ioctl(fd, VT_GETMODE, struct.pack("bbhhh", 0, 0, 0, 0, 0))
+            mode = struct.unpack("bbhhh", buf)[0]
+            return "process" if mode == VT_PROCESS else "auto"
+        except OSError:
+            return "unknown"
+        finally:
+            os.close(fd)
+
+    def rearm(self):
+        cmd = os.environ.get("SCHEMA_DOCTOR_BUSCTL", "busctl")
+        subprocess.run(
+            [cmd, "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+             "org.schema.logind1.Manager", "RearmVtMediation"],
+            capture_output=True, text=True, check=False, timeout=5)
+
+    def detect(self):
+        m = self.vt_mode()
+        if m in ("process", "unknown"):     # unknown = can't prove broken; don't cry wolf
+            return None
+        return Finding(
+            detail="the active VT is in kernel-native switching (VT_AUTO), not "
+                   "mediated by schema-logind — switching consoles can freeze the screen",
+            oracle_said="logind puts the session's VT in VT_PROCESS mode",
+            healable=True)
+
+    def heal(self, f):
+        try:
+            self.rearm()
+        except Exception:
+            pass
+
+    def verify(self):
+        return self.vt_mode() == "process"
+
+
+REGISTRY.append(VtMediation())
+
+
 def read_config():
     heal = True
     disabled = set()
