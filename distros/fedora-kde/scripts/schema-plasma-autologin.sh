@@ -1,17 +1,23 @@
 #!/bin/bash
-# sddm-logged — the login path. Highest-consequence file on the box: if this is
-# wrong, nobody can log in. Every added line keeps the `2>/dev/null || true`
-# failsafe idiom, and schema-session-register falls back to the legacy id
-# rather than failing, so a broken registration degrades to what shipped before
-# it rather than blocking a login.
+# schema-plasma-autologin.sh — the canonical GUI-login path for every
+# schema-init desktop profile (fedora-kde, fedora-installer). Autologs the
+# machine's primary human user straight into a Plasma Wayland session under
+# schema-init as PID 1. No display-manager greeter — the box was set up for one
+# person, so it boots to their desktop.
 #
-# bash, not sh, for $BASHPID: the process that joins the session scope cgroup
-# has to be the one that execs the compositor, and POSIX $$ inside a subshell
-# is the parent's pid.
-exec >> /var/log/sddm-schema.log 2>&1
+# bash, not sh, for $BASHPID: the process that joins the session-scope cgroup
+# must be the one that execs the compositor.
+exec >> /var/log/schema-autologin.log 2>&1
 set -x
+
+# --- who logs in. user.conf if the installer wrote one; else auto-detect the
+#     first real human account (uid 1000..64999). Never fail out over this.
 [ -r /etc/schema-init/user.conf ] && . /etc/schema-init/user.conf
+if [ -z "${SCHEMA_USER:-}" ]; then
+    SCHEMA_USER=$(awk -F: '$3>=1000 && $3<65000 {print $1; exit}' /etc/passwd)
+fi
 SCHEMA_USER="${SCHEMA_USER:-ajax80}"
+SCHEMA_UID="${SCHEMA_UID:-$(id -u "$SCHEMA_USER" 2>/dev/null)}"
 SCHEMA_UID="${SCHEMA_UID:-1000}"
 SCHEMA_SEAT="${SCHEMA_SEAT:-seat0}"
 SCHEMA_VTNR="${SCHEMA_VTNR:-1}"
@@ -19,36 +25,39 @@ SCHEMA_HOME="${SCHEMA_HOME:-$(getent passwd "$SCHEMA_USER" | cut -d: -f6)}"
 SCHEMA_HOME="${SCHEMA_HOME:-/home/$SCHEMA_USER}"
 SCHEMA_SHELL="${SCHEMA_SHELL:-$(getent passwd "$SCHEMA_USER" | cut -d: -f7)}"
 SCHEMA_SHELL="${SCHEMA_SHELL:-/bin/bash}"
-# Flatpak and snap exports have to be on XDG_DATA_DIRS or their apps are
-# invisible to the launcher. runuser does not build this for us.
 SCHEMA_DATA_DIRS="${SCHEMA_DATA_DIRS:-$SCHEMA_HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share:/var/lib/snapd/desktop}"
-
-# Plasma reads HOME from the session leader's environment, and under schema-init
-# it has come through as / more than once -- most recently when plasma-workspace
-# 6.7.3 replaced the wrapper. This resets it before login and self-heals. It must
-# never block a login, hence the guard.
-[ -x /usr/local/bin/fix-plasma-session-home.sh ] && \
-    /usr/local/bin/fix-plasma-session-home.sh 2>/dev/null || true
 
 mkdir -p "/run/user/$SCHEMA_UID"
 chown "$SCHEMA_UID:$SCHEMA_UID" "/run/user/$SCHEMA_UID"
 chmod 700 "/run/user/$SCHEMA_UID"
-udevadm trigger --subsystem-match=input --action=add
-udevadm settle --timeout=10
+
+# input devices coldplugged so libinput sees the keyboard/mouse
+udevadm trigger --subsystem-match=input --action=add 2>/dev/null || true
+udevadm settle --timeout=10 2>/dev/null || true
 stty -F "/dev/tty$SCHEMA_VTNR" -echo 2>/dev/null || true
-timeout 5 plymouth --wait quit 2>/dev/null || plymouth quit 2>/dev/null || true
-stty -F "/dev/tty$SCHEMA_VTNR" -echo 2>/dev/null || true
-perl -e 'use POSIX; open(my $fh, "+<", $ARGV[0]) or die; tcflush(fileno($fh), 0);' \
-    "/dev/tty$SCHEMA_VTNR" 2>/dev/null || true
-clear > "/dev/tty$SCHEMA_VTNR"
+clear > "/dev/tty$SCHEMA_VTNR" 2>/dev/null || true
+
+# Hand the DRM master from plymouth to the compositor. plymouthd is started in
+# the initramfs and persists across switch-root holding /dev/dri; with no
+# systemd there is no plymouth-quit.service to release it, so the splash would
+# otherwise sit forever and kwin could never open the card (the classic
+# first-boot spinner hang). Quit it here, right before the session starts.
+# --retain-splash leaves the last frame up until kwin draws, so boot looks
+# seamless (splash -> desktop). Then wait for plymouthd to actually exit and
+# drop the master before the compositor grabs it, to avoid a DRM race.
+if command -v plymouth >/dev/null 2>&1; then
+    plymouth quit --retain-splash 2>/dev/null || true
+    for _ in $(seq 1 50); do
+        pgrep -x plymouthd >/dev/null 2>&1 || break
+        sleep 0.1
+    done
+fi
 
 REGISTER=/usr/local/bin/schema-session-register
 UNREGISTER=/usr/local/bin/schema-session-unregister
 
 SID=""
 release_session() {
-    # A leaked state file is a phantom session on D-Bus until the next boot, so
-    # this runs on the abnormal exits too, not just at the loop's bottom.
     [ -n "$SID" ] || return 0
     [ -x "$UNREGISTER" ] && "$UNREGISTER" "$SID" "$SCHEMA_UID" 2>/dev/null || true
     SID=""
@@ -58,25 +67,17 @@ trap 'release_session' EXIT HUP INT TERM
 while true; do
     rm -f "/run/user/$SCHEMA_UID"/wayland-* /tmp/.ICE-unix/* /tmp/.X*-lock 2>/dev/null || true
 
-    # Claim an id for this login. schema-logind reads /run/systemd/sessions/
-    # and projects whatever it finds onto D-Bus, so nothing here needs to know
-    # which id it gets — the literal 31 used to be a contract between this file
-    # and the bridge that both copies had to agree on.
     SID=""
     if [ -x "$REGISTER" ]; then
         SID=$("$REGISTER" --uid "$SCHEMA_UID" --user "$SCHEMA_USER" \
                           --seat "$SCHEMA_SEAT" --vtnr "$SCHEMA_VTNR" \
                           --type wayland --class user --desktop KDE \
-                          --display --service sddm --leader $$ 2>/dev/null)
+                          --display --service schema-autologin --leader $$ 2>/dev/null)
     fi
-    [ -n "$SID" ] || SID=31        # never block a login over this
+    [ -n "$SID" ] || SID=31
     SESSION_SCOPE="/sys/fs/cgroup/user.slice/user-$SCHEMA_UID.slice/session-$SID.scope"
     mkdir -p "$SESSION_SCOPE" 2>/dev/null || true
 
-    # sd_pid_get_session() resolves a session by walking the cgroup path, so
-    # the Plasma subtree has to sit under the scope for the polkit auth agent
-    # to register — that is what makes GUI privilege escalation work at all
-    # (flatpak system updates, udisks mounts, Discover).
     ( echo $BASHPID > "$SESSION_SCOPE/cgroup.procs" 2>/dev/null || true
       exec runuser -u "$SCHEMA_USER" -- env \
         HOME="$SCHEMA_HOME" \
@@ -85,6 +86,8 @@ while true; do
         SHELL="$SCHEMA_SHELL" \
         XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" \
         XDG_DATA_DIRS="$SCHEMA_DATA_DIRS" \
+        XDG_CONFIG_DIRS="/etc/xdg:/usr/share/kde-settings/kde-profile/default/xdg" \
+        XDG_MENU_PREFIX="plasma-" \
         XDG_SESSION_ID="$SID" \
         LANG=en_US.UTF-8 \
         PLASMA_USE_SYSTEMD_SCOPE=0 \

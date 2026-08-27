@@ -5,7 +5,7 @@ Runs KDE Plasma 6 on Fedora 44 under schema-init as PID 1 (no systemd).
 ## What this replaces
 
 - systemd (PID 1) → schema-init
-- SDDM session management → sddm-logged wrapper
+- SDDM session management → schema-plasma-autologin.sh wrapper
 - systemd user units (pipewire, wireplumber) → KDE autostart
 - systemd-resolved → static /etc/resolv.conf written at boot
 
@@ -37,7 +37,7 @@ sudo mkdir -p /etc/schema-init/services
 sudo cp services/* /etc/schema-init/services/
 ```
 
-The session and audio services (`sddm-logged`, `pipewire-run.sh`, etc.) run the desktop as a specific user. They read `SCHEMA_USER`/`SCHEMA_UID` from `/etc/schema-init/user.conf`, defaulting to `ajax80`/`1000` if absent. Point them at your account:
+The session and audio services (`schema-plasma-autologin.sh`, `pipewire-run.sh`, etc.) run the desktop as a specific user. They read `SCHEMA_USER`/`SCHEMA_UID` from `/etc/schema-init/user.conf`, defaulting to `ajax80`/`1000` if absent. Point them at your account:
 ```
 printf 'SCHEMA_USER=%s\nSCHEMA_UID=%s\n' "$USER" "$(id -u)" | sudo tee /etc/schema-init/user.conf
 ```
@@ -49,12 +49,12 @@ sudo cp scripts/network-up.sh /usr/local/bin/
 sudo cp scripts/mount-home.sh /usr/local/bin/
 sudo cp scripts/sound-modules.sh /usr/local/bin/
 sudo cp scripts/schema-audio-start.sh /usr/local/bin/
-sudo cp scripts/sddm-logged /usr/local/bin/
+sudo cp scripts/schema-plasma-autologin.sh /usr/local/bin/
 sudo chmod +x /usr/local/bin/network-up.sh \
                /usr/local/bin/mount-home.sh \
                /usr/local/bin/sound-modules.sh \
                /usr/local/bin/schema-audio-start.sh \
-               /usr/local/bin/sddm-logged
+               /usr/local/bin/schema-plasma-autologin.sh
 ```
 
 ### 4. Install user configs (as YOUR_USER)
@@ -116,7 +116,7 @@ sudo grubby --update-kernel=ALL --args="quiet rhgb"
 | About This System hangs 25s | `schema-logind` registers `org.freedesktop.hostname1` stub — hostname, OS name, hardware vendor/model returned instantly |
 | plasmashell ~30% idle CPU (ksycoca rebuild loop) | KService gates cache validation on libsystemd `sd_booted()` = `access("/run/systemd/system/")`. With no systemd that dir is absent, so it never confirms the cache is fresh and self-feeds an in-process rebuild loop (rebuild → `databaseChanged` → AppsModel refresh → rebuild). `scripts/mock_sd.c` → `/usr/local/lib/mock_sd.so` is an `LD_PRELOAD` shim overriding `access`/`stat`/`statx` to report that dir exists, applied to plasmashell only via the `plasmashell-shim` wrapper (used by both `~/.config/autostart/org.kde.plasmashell.desktop` and `plasma-session-start.sh`). Drops to 0% idle. A session-bus `systemd1` D-Bus mock was tried first and did **not** work — the gate is the filesystem check, not D-Bus. Tradeoff: ksycoca no longer auto-polls, so run `kbuildsycoca6` (from a full session shell, with flatpak paths in `XDG_DATA_DIRS`) after installing new apps |
 | Plymouth black screen on AMD GPU | `script` plugin fails on AMD Picasso/Raven DRM; use `ModuleName=two-step` with pre-rendered frames |
-| Boot shows `^[[3~` escape sequences | Plymouth restores TTY echo on exit; `sddm-logged` runs `stty -echo` both before and immediately after `plymouth --wait quit`, then `tcflush` + `clear` on tty1 |
+| Boot shows `^[[3~` escape sequences | Plymouth restores TTY echo on exit; `schema-plasma-autologin.sh` runs `stty -echo` and clears tty1 before quitting Plymouth |
 | KDE Connect not discovered on LAN | `avahi-daemon` not running; `services/avahi.svc` starts it after dbus |
 | Clock wrong after reboot | `chronyd` not running; `services/chronyd.svc` starts it after network-manager |
 | KDE Bluetooth applet dead, no controller | `bluetoothd` not running so `org.bluez` never registers on the system bus; `services/bluetoothd.svc` starts `/usr/libexec/bluetooth/bluetoothd -n` after dbus. Loadable live with `schema-ctl add` — no reboot |

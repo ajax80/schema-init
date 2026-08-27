@@ -1,5 +1,5 @@
 name=sddm
-exec=/usr/local/bin/sddm-logged
+exec=/usr/local/bin/schema-plasma-autologin.sh
 dep=display-stack
 dep=nvidia-modules
 dep=x11-tmpfiles

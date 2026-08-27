@@ -43,7 +43,7 @@ install -m0755 "$HERE/schema-udev-flip-healthcheck.sh"    "$PAYLOAD/scripts/"
 install -m0755 "$HERE/rail/scripts/schema-sysprep.sh"          "$PAYLOAD/scripts/"
 install -m0755 "$HERE/rail/scripts/schema-sshd-start.sh"       "$PAYLOAD/scripts/"
 install -m0755 "$HERE/rail/scripts/schema-zram-start.sh"       "$PAYLOAD/scripts/"
-install -m0755 "$HERE/rail/scripts/schema-plasma-autologin.sh" "$PAYLOAD/scripts/"
+install -m0755 "$HERE/../fedora-kde/scripts/schema-plasma-autologin.sh" "$PAYLOAD/scripts/"
 # Desktop-session pipeline, generalized from distros/fedora-kde: the native
 # login1 stub + session bookkeeping + the Plasma launch chain. Autologin drives
 # these to bring up a full KDE Wayland desktop under schema-init as PID 1.
