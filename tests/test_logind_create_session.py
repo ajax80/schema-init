@@ -147,7 +147,6 @@ def main():
         # Drive the helper directly into a throwaway run dir with the SAME args
         # CreateSession maps, then compare the resulting state file key-for-key
         # (except the two timestamps, which are wall-clock and always differ).
-        import glob
         ref_run = tempfile.mkdtemp(prefix='ref-run-')
         ref_cg = tempfile.mkdtemp(prefix='ref-cg-')
         helper = os.path.join(REPO, 'scripts', 'schema-session-register')
@@ -258,6 +257,32 @@ def main():
         mgr.ReleaseSession(sid, dbus_interface=MANAGER_IFACE)
         time.sleep(SETTLE)
         check('released session is gone', sid not in ids(), str(ids()))
+
+        print("\n-- ReleaseSession removes the state file and the scope --")
+        rel_leader = subprocess.Popen(['sleep', '120'])
+        rr = create(pid=rel_leader.pid, service='login', class_='user',
+                    tty='tty7', vtnr=7)
+        rsid = str(rr[0])
+        time.sleep(SETTLE)
+        rfile = os.path.join(rundir, 'sessions', rsid)
+        rscope = os.path.join(cgroot, 'user.slice', 'user-%d.slice' % uid,
+                              'session-%s.scope' % rsid)
+        check('release: file present before', os.path.exists(rfile), rfile)
+        # Real cgroupfs drops a scope's auto-created cgroup.procs when the
+        # leader dies, so rmdir on an emptied scope succeeds. A plain temp
+        # tree keeps cgroup.procs as an ordinary file (same caveat as "a dead
+        # leader is reaped" above), so clear it here rather than weaken the
+        # check.
+        try:
+            os.unlink(os.path.join(rscope, 'cgroup.procs'))
+        except OSError:
+            pass
+        rel_leader.terminate()  # free the scope so rmdir can succeed
+        rel_leader.wait()
+        mgr.ReleaseSession(rsid, dbus_interface=MANAGER_IFACE)
+        time.sleep(SETTLE)
+        check('release: state file removed', not os.path.exists(rfile), rfile)
+        check('release: scope rmdir-ed', not os.path.isdir(rscope), rscope)
 
     finally:
         for p in (leader, stub, daemon):

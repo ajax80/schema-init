@@ -250,6 +250,9 @@ LEGACY_SESSION_ID = '31'
 SESSION_REGISTER = os.environ.get(
     'SCHEMA_SESSION_REGISTER',
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema-session-register'))
+SESSION_UNREGISTER = os.environ.get(
+    'SCHEMA_SESSION_UNREGISTER',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema-session-unregister'))
 
 
 def session_path_for(sid):
@@ -1861,23 +1864,14 @@ class Login1Manager(dbus.service.Object):
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
     def ReleaseSession(self, session_id):
         sid = str(session_id)
-        obj = self.registry.get(sid) if self.registry else None
-        uid = obj.record.uid if obj else None
         print(f"login1-stub: ReleaseSession({sid})")
+        uid = self.registry.sessions[sid].record.uid if sid in self.registry.sessions else ''
         try:
-            os.unlink(session_file_for(sid))
-        except OSError:
-            pass
-        if uid is not None:
-            # rmdir, never rm -r: a scope with anything still in it must stay,
-            # or we would move live processes to the parent behind their back.
-            try:
-                os.rmdir('%s/user.slice/user-%d.slice/session-%s.scope'
-                         % (CGROUP_ROOT, uid, sid))
-            except OSError:
-                pass
-        if self.registry:
-            self.registry.sync()
+            subprocess.run([SESSION_UNREGISTER, str(sid), str(uid)], timeout=5)
+        except Exception as e:
+            print("login1-stub: schema-session-unregister failed: %s" % e,
+                  file=sys.stderr)
+        self.registry.sync()
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
