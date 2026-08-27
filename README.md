@@ -82,6 +82,23 @@ Services marked `critical=1` never reach EXCISED — they enter DORMANT and retr
 
 Replacing PID 1 sounds scary. It isn't, if you do it in the right order — you never lose your existing systemd boot, and you can back out with a single reboot at every step. Four lanes, safest first.
 
+### The fast path — boot a prebuilt installer (no compiler, no Docker)
+
+If you just want to *see it run*, grab the prebuilt Fedora 44 installer from the [latest release](https://github.com/ajax80/schema-init/releases/latest):
+
+```sh
+# download schema-fedora44-installer.iso from the release, then:
+sudo dd if=schema-fedora44-installer.iso of=/dev/sdX bs=4M status=progress oflag=direct && sync
+```
+
+Boot that USB stick (or point a VM at the ISO) and the guided installer gives you a full KDE desktop running **schema-init as PID 1**. During install you can *optionally* take the **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev.
+
+> ⚠️ **What the udev flip does:** it kills `systemd-udevd` and makes **schema-udev** authoritative over device management. This is the whole point — watching your init own `/dev` — but it *is* a real change to how the box handles hardware. It's optional and guided; skip it and you still get schema-init as PID 1 with stock udev underneath.
+
+After the restart, just log back into your desktop — it finishes the switch on its own; you don't have to click anything. If you arm the switch but then never return to the desktop, a headless seatbelt safely undoes it after the next boot and puts you back on stock udev — no damage, nothing to clean up. (One consequence of that safety net: it's a *desktop* on-ramp — a machine you run headless won't keep the flip, because the confirmation comes from the graphical session coming up.)
+
+Prefer to build it yourself, or try it with zero risk to a real disk first? Take the lanes below instead — they compile from source and boot in a throwaway VM.
+
 **Requirements:**
 
 - **Build + test (Lane 0):** `gcc`, `make`, and `libacl` headers (`libacl1-dev` on Debian/Ubuntu, `libacl-devel` on Fedora — the udev `uaccess` tests link `-lacl`). Nothing else. The init itself is a single static binary with no runtime dependencies.

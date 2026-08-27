@@ -1,0 +1,7 @@
+name=network-manager
+exec=/usr/sbin/NetworkManager
+args=--no-daemon
+dep=dbus
+oneshot=0
+needs_root=1
+critical=0

@@ -1,0 +1,6 @@
+name=schema-doctor
+exec=/usr/local/bin/schema-doctor --heal --wait 30
+dep=schema-logind
+oneshot=1
+needs_root=1
+critical=0

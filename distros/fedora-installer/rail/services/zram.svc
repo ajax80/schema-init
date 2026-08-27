@@ -1,0 +1,5 @@
+name=zram
+exec=/usr/local/bin/schema-zram-start.sh
+oneshot=1
+needs_root=1
+critical=0
