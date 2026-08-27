@@ -1811,6 +1811,7 @@ class Login1Manager(dbus.service.Object):
         # SCHEMA_CGROUP_ROOT (real or test), so inheriting it is what makes the
         # helper write to the same tree the registry reads. Never block a login:
         # a helper failure still returns a reply on the legacy id.
+        fell_back = False
         try:
             out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             sid = (out.stdout.strip().splitlines() or [''])[-1]
@@ -1820,15 +1821,24 @@ class Login1Manager(dbus.service.Object):
             sid = ''
         if not sid.isdigit():
             sid = LEGACY_SESSION_ID
+            fell_back = True
 
         # sd_pid_get_session() is cgroup-based, so without the scope the polkit
         # auth agent for this session cannot register. The helper mkdirs the
         # scope; placing the leader in it stays caller-side (same as the GUI
         # autologin, which places its own subshell pid).
+        #
+        # The register helper always allocates a fresh, unused id (O_EXCL), so
+        # its sid never collides. Only the exec-failure/non-digit fallback can
+        # land on LEGACY_SESSION_ID while a DIFFERENT, already-live session by
+        # that id exists -- writing this leader into that scope would misattribute
+        # it to a stranger's session (sd_pid_get_session). Skip the placement in
+        # that one case; the login still proceeds, just without VT mediation,
+        # which is better than joining a stranger's scope.
         scope = '%s/user.slice/user-%d.slice/session-%s.scope' % (
             CGROUP_ROOT, uid, sid)
         try:
-            if pid:
+            if pid and not (fell_back and sid in self.registry.sessions):
                 with open(os.path.join(scope, 'cgroup.procs'), 'w') as f:
                     f.write('%d\n' % pid)
         except OSError as e:

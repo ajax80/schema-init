@@ -43,6 +43,127 @@ def check(name, ok, detail=''):
     return ok
 
 
+def test_fallback_collision(uid):
+    """The exec-failure fallback must not join a DIFFERENT, already-live
+    session 31.
+
+    schema-session-register always allocates a fresh unused id (O_EXCL), so
+    its sid never collides. Only CreateSession's own exec-failure/non-digit
+    fallback can land on LEGACY_SESSION_ID ('31') while an unrelated session
+    already lives there -- writing a new leader into that scope would
+    misattribute it to a stranger's session. Forces the fallback by pointing
+    SCHEMA_SESSION_REGISTER at a path that does not exist, after seeding a
+    live session 31 (its own daemon, its own rundir/cgroot -- never touches
+    the module-level fixtures the rest of this file uses).
+    """
+    print("\n-- fallback collision: exec-failure sid must not join a live "
+          "stranger's session (Finding 2) --")
+    fb_rundir = tempfile.mkdtemp(prefix='schema-cs-fb-run-')
+    fb_cgroot = tempfile.mkdtemp(prefix='schema-cs-fb-cg-')
+    os.makedirs(os.path.join(fb_rundir, 'sessions'), exist_ok=True)
+
+    fb_vtfile = tempfile.NamedTemporaryFile('w', suffix='.activevt', delete=False)
+    fb_vtfile.write('tty2\n')
+    fb_vtfile.close()
+
+    other_leader = subprocess.Popen(['sleep', '120'])
+    new_leader = subprocess.Popen(['sleep', '120'])
+    fb_daemon = None
+    fb_stub = None
+    try:
+        username = pwd.getpwuid(uid).pw_name
+        with open(os.path.join(fb_rundir, 'sessions', '31'), 'w') as f:
+            f.write('# This is private data. Do not parse.\n')
+            f.write('UID=%d\n' % uid)
+            f.write('USER=%s\n' % username)
+            f.write('ACTIVE=0\n')
+            f.write('STATE=online\n')
+            f.write('SEAT=seat0\n')
+            f.write('VTNR=9\n')
+            f.write('TYPE=tty\n')
+            f.write('CLASS=user\n')
+            f.write('DESKTOP=\n')
+            f.write('IS_DISPLAY=0\n')
+            f.write('REMOTE=0\n')
+            f.write('LEADER=%d\n' % other_leader.pid)
+            f.write('SERVICE=login\n')
+            f.write('REALTIME=%d\n' % int(time.time() * 1_000_000))
+            f.write('MONOTONIC=0\n')
+
+        other_scope = os.path.join(fb_cgroot, 'user.slice',
+                                   'user-%d.slice' % uid, 'session-31.scope')
+        os.makedirs(other_scope, exist_ok=True)
+        with open(os.path.join(other_scope, 'cgroup.procs'), 'w') as f:
+            f.write('%d\n' % other_leader.pid)
+
+        fb_daemon = subprocess.Popen(
+            ['dbus-daemon', '--session', '--print-address', '--nofork'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        fb_addr = fb_daemon.stdout.readline().strip()
+        if not fb_addr:
+            check('fallback collision: private bus started', False, 'no address')
+            return
+
+        fb_env = dict(os.environ)
+        fb_env['DBUS_SYSTEM_BUS_ADDRESS'] = fb_addr
+        fb_env['SCHEMA_LOGIND_ACTIVE_VT'] = fb_vtfile.name
+        fb_env['SCHEMA_LOGIND_RUN_DIR'] = fb_rundir
+        fb_env['SCHEMA_CGROUP_ROOT'] = fb_cgroot
+        fb_env['SCHEMA_SESSION_REGISTER'] = '/nonexistent/schema-session-register'
+        fb_env.pop('SCHEMA_LOGIND_VTNR', None)
+
+        fb_stub = subprocess.Popen([sys.executable, LOGIND], env=fb_env,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        fb_bus = dbus.bus.BusConnection(fb_addr)
+
+        for _ in range(50):
+            if fb_stub.poll() is not None:
+                print("fallback-collision stub exited early:\n"
+                      + fb_stub.stdout.read(), file=sys.stderr)
+                break
+            try:
+                if fb_bus.name_has_owner(BUS_NAME):
+                    break
+            except dbus.DBusException:
+                pass
+            time.sleep(0.1)
+
+        time.sleep(SETTLE)   # let registry.sync() pick up the seeded session 31
+
+        fb_mgr = fb_bus.get_object(BUS_NAME, MANAGER_PATH)
+        r = fb_mgr.CreateSession(
+            dbus.UInt32(uid), dbus.UInt32(new_leader.pid), 'login',
+            'unspecified', 'user', '', 'seat0', dbus.UInt32(5), 'tty5', '',
+            dbus.Boolean(False), '', '', dbus.Array([], signature='(sv)'),
+            dbus_interface=MANAGER_IFACE)
+        new_sid = str(r[0])
+        check('fallback collision: exec failure falls back to the legacy id',
+              new_sid == '31', new_sid)
+
+        procs_content = open(os.path.join(other_scope, 'cgroup.procs')).read()
+        check("fallback collision: new leader's pid NOT written into "
+              "session-31.scope/cgroup.procs",
+              str(new_leader.pid) not in procs_content.split(),
+              procs_content.strip())
+        check('fallback collision: the live stranger leader is still the '
+              'sole occupant of its own scope',
+              procs_content.split() == [str(other_leader.pid)],
+              procs_content.strip())
+    finally:
+        for p in (new_leader, other_leader, fb_stub, fb_daemon):
+            if p is None:
+                continue
+            try:
+                p.terminate()
+                p.wait(timeout=5)
+            except Exception:
+                p.kill()
+        os.unlink(fb_vtfile.name)
+        shutil.rmtree(fb_rundir, ignore_errors=True)
+        shutil.rmtree(fb_cgroot, ignore_errors=True)
+
+
 def main():
     DBusGMainLoop(set_as_default=True)
 
@@ -305,6 +426,8 @@ def main():
         os.unlink(vtfile.name)
         shutil.rmtree(rundir, ignore_errors=True)
         shutil.rmtree(cgroot, ignore_errors=True)
+
+    test_fallback_collision(uid)
 
     failed = [r for r in results if not r[1]]
     print(f"\n>> {len(results) - len(failed)}/{len(results)} passed")
