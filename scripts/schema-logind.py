@@ -197,6 +197,16 @@ def proc_start_usec(pid):
         pass
     return 0, 0
 
+def read_cgroup_procs(path):
+    """The set of pids listed in a cgroup.procs file, or None if it cannot be
+    read (missing scope, permission, unexpected layout). None means 'unknown',
+    and callers fall back to a /proc existence check rather than reaping."""
+    try:
+        with open(path) as f:
+            return {int(line) for line in f if line.strip().isdigit()}
+    except OSError:
+        return None
+
 def svc_name(unit):
     for suffix in ('.service', '.target', '.socket', '.timer', '.mount', '.path'):
         if unit.endswith(suffix):
@@ -467,11 +477,25 @@ class SessionRecord:
                     props.append(prop)
         return props
 
+    def _scope_procs(self):
+        """Pids in this session's scope cgroup, or None if unreadable. The
+        real leader is a direct member of this scope; a recycled pid lives in
+        a different cgroup and can never appear here, and the kernel drops the
+        pid the instant the leader exits."""
+        path = '%s/user.slice/user-%d.slice/session-%s.scope/cgroup.procs' % (
+            CGROUP_ROOT, self.uid, self.sid)
+        return read_cgroup_procs(path)
+
     def leader_alive(self):
         pid = _int_or(self.data.get('LEADER'), 0)
         if not pid:
             return True     # nothing claimed a leader; not ours to declare dead
-        return os.path.isdir('/proc/%d' % pid)
+        procs = self._scope_procs()
+        if procs is None:
+            # No readable scope (never created / cgroup layout differs): fall
+            # back to bare pid existence — exactly the prior behavior.
+            return os.path.isdir('/proc/%d' % pid)
+        return pid in procs
 
 
 def scan_session_files():

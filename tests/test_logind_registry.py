@@ -22,6 +22,9 @@ for _d in ('sessions', 'seats', 'users'):
     os.makedirs(os.path.join(RUNDIR, _d), exist_ok=True)
 os.environ['SCHEMA_LOGIND_RUN_DIR'] = RUNDIR
 
+CGROOT = tempfile.mkdtemp(prefix='schema-logind-cg-')
+os.environ['SCHEMA_CGROUP_ROOT'] = CGROOT
+
 sys.path.insert(0, os.path.join(REPO, 'scripts'))
 import importlib.util
 spec = importlib.util.spec_from_file_location(
@@ -43,6 +46,16 @@ def write_session(sid, **kv):
     body += ['%s=%s' % (k, v) for k, v in kv.items()]
     with open(os.path.join(RUNDIR, 'sessions', str(sid)), 'w') as f:
         f.write('\n'.join(body) + '\n')
+
+
+def write_scope(uid, sid, *pids):
+    """Create session-<sid>.scope/cgroup.procs under the test cgroup root and
+    populate it with the given pids (one per line, as the kernel would)."""
+    scope = os.path.join(
+        CGROOT, 'user.slice', 'user-%d.slice' % uid, 'session-%s.scope' % sid)
+    os.makedirs(scope, exist_ok=True)
+    with open(os.path.join(scope, 'cgroup.procs'), 'w') as f:
+        f.write(''.join('%d\n' % p for p in pids))
 
 
 def clear_sessions():
@@ -154,17 +167,55 @@ def test_signature_and_changes():
 
 def test_leader_sweep():
     clear_sessions()
+
+    # --- backward-compat: no scope dir -> isdir fallback (today's behavior) ---
     write_session(5, UID=1000, USER='ajax80', VTNR=1, LEADER=os.getpid())
     write_session(6, UID=1000, USER='ajax80', VTNR=3, LEADER=999999)
     recs = L.scan_session_files()
-    check('sweep: live leader survives', recs['5'].leader_alive() is True)
-    check('sweep: dead leader detected', recs['6'].leader_alive() is False)
+    check('sweep(no-scope): live leader survives via isdir fallback',
+          recs['5'].leader_alive() is True)
+    check('sweep(no-scope): dead leader detected via isdir fallback',
+          recs['6'].leader_alive() is False)
 
     clear_sessions()
     write_session(8, UID=1000, USER='ajax80', VTNR=1)
     recs = L.scan_session_files()
     check('sweep: no LEADER key is not treated as dead',
           recs['8'].leader_alive() is True)
+
+    # --- (a) live leader present in its scope -> alive ---
+    clear_sessions()
+    write_session(10, UID=1000, USER='ajax80', VTNR=1, LEADER=os.getpid())
+    write_scope(1000, 10, os.getpid())
+    recs = L.scan_session_files()
+    check('sweep(scope): leader listed in scope -> alive',
+          recs['10'].leader_alive() is True)
+
+    # --- (b) recycle case: leader pid is alive in /proc but NOT in the scope ---
+    # os.getpid() genuinely exists, so today's isdir check would call this
+    # alive; membership must call it dead.
+    clear_sessions()
+    write_session(11, UID=1000, USER='ajax80', VTNR=1, LEADER=os.getpid())
+    write_scope(1000, 11, 4242424)          # some other, unrelated pid
+    recs = L.scan_session_files()
+    check('sweep(scope): recycled pid (alive in /proc, absent from scope) -> dead',
+          recs['11'].leader_alive() is False)
+
+    # --- (c) empty scope -> dead ---
+    clear_sessions()
+    write_session(12, UID=1000, USER='ajax80', VTNR=1, LEADER=os.getpid())
+    write_scope(1000, 12)                    # cgroup.procs present but empty
+    recs = L.scan_session_files()
+    check('sweep(scope): empty cgroup.procs -> dead',
+          recs['12'].leader_alive() is False)
+
+    # --- (d) unreadable scope -> isdir fallback (dead here, pid 999999) ---
+    clear_sessions()
+    write_session(13, UID=1000, USER='ajax80', VTNR=3, LEADER=999999)
+    # no write_scope: scope dir absent -> read_cgroup_procs returns None
+    recs = L.scan_session_files()
+    check('sweep(no-scope): unreadable scope falls back to isdir -> dead',
+          recs['13'].leader_alive() is False)
 
 
 def test_derived_files():
