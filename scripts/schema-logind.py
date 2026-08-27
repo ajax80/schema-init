@@ -504,55 +504,6 @@ def scan_session_files():
     return records
 
 
-def alloc_session_id():
-    """Lowest free positive id, claimed by atomic create.
-
-    The same algorithm as scripts/schema-session-register's noclobber loop, and
-    it has to stay the same: the login script and this both allocate, and
-    O_EXCL is the only thing keeping two simultaneous logins off one id.
-    Returns None if the directory is unusable, so the caller can decline rather
-    than invent a session.
-    """
-    try:
-        os.makedirs(SESSIONS_DIR, exist_ok=True)
-    except OSError:
-        return None
-    for i in range(1, 1000):
-        try:
-            fd = os.open(session_file_for(i),
-                         os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            continue
-        except OSError:
-            return None
-        os.close(fd)
-        return str(i)
-    return None
-
-
-def write_session_file(sid, fields):
-    """Write /run/systemd/sessions/<id> atomically.
-
-    Rename over the claim rather than writing in place: scan_session_files()
-    skips a file with no keys, so the id is invisible until it describes a
-    whole session.
-    """
-    path = session_file_for(sid)
-    tmp = os.path.join(SESSIONS_DIR, '.%s.tmp' % sid)
-    body = ['# This is private data. Do not parse.']
-    body += ['%s=%s' % (k, v) for k, v in fields.items()]
-    try:
-        with open(tmp, 'w') as f:
-            f.write('\n'.join(body) + '\n')
-        os.rename(tmp, path)
-        return True
-    except OSError as e:
-        print(f"login1-stub: cannot write {path}: {e}", file=sys.stderr)
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        return False
 
 
 def vtnr_from_tty(tty):
