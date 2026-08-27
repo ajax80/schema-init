@@ -125,14 +125,18 @@ cp "$REPO"/scripts/schema-logind.py "$MNT/usr/local/bin/"
 chmod +x "$MNT/usr/local/bin/schema-logind.py"
 
 printf "=== Installing scripts ===\n"
-cp "$REPO"/distros/fedora-kde/scripts/sddm-logged \
+cp "$REPO"/distros/fedora-kde/scripts/schema-plasma-autologin.sh \
+   "$REPO"/scripts/schema-session-register \
+   "$REPO"/scripts/schema-session-unregister \
    "$REPO"/distros/fedora-kde/scripts/mount-home.sh \
    "$REPO"/distros/fedora-kde/scripts/sound-modules.sh \
    "$REPO"/distros/fedora-kde/scripts/schema-audio-start.sh \
    "$REPO"/distros/fedora-kde/scripts/schema-udev-trigger.sh \
    "$REPO"/distros/fedora-kde/scripts/schema-hostname.sh \
    "$MNT/usr/local/bin/"
-chmod +x "$MNT/usr/local/bin/sddm-logged" \
+chmod +x "$MNT/usr/local/bin/schema-plasma-autologin.sh" \
+          "$MNT/usr/local/bin/schema-session-register" \
+          "$MNT/usr/local/bin/schema-session-unregister" \
           "$MNT/usr/local/bin/sound-modules.sh" \
           "$MNT/usr/local/bin/schema-audio-start.sh" \
           "$MNT/usr/local/bin/schema-udev-trigger.sh" \
@@ -144,7 +148,7 @@ chmod +x "$MNT/usr/local/bin/mount-home.sh"
 
 LIVEUID=$(chroot "$MNT" id -u "$LIVEUSER" 2>/dev/null || printf '1000')
 sed -i "s|ajax80|$LIVEUSER|g; s|/run/user/1000|/run/user/$LIVEUID|g" \
-    "$MNT/usr/local/bin/sddm-logged"
+    "$MNT/usr/local/bin/schema-plasma-autologin.sh"
 
 printf "=== Network (DHCP for live) ===\n"
 NETSCRIPT="$MNT/usr/local/bin/network-up.sh"
