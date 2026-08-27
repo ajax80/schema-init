@@ -43,21 +43,21 @@ def check(name, ok, detail=''):
     return ok
 
 
-def test_fallback_collision(uid):
-    """The exec-failure fallback must not join a DIFFERENT, already-live
-    session 31.
+def _run_fallback_case(uid, label, seed_real_session):
+    """Force CreateSession's exec-failure fallback (SCHEMA_SESSION_REGISTER
+    points at a path that does not exist) and return
+    (new_sid, other_leader_pid_or_None, procs_content, new_leader_pid).
 
-    schema-session-register always allocates a fresh unused id (O_EXCL), so
-    its sid never collides. Only CreateSession's own exec-failure/non-digit
-    fallback can land on LEGACY_SESSION_ID ('31') while an unrelated session
-    already lives there -- writing a new leader into that scope would
-    misattribute it to a stranger's session. Forces the fallback by pointing
-    SCHEMA_SESSION_REGISTER at a path that does not exist, after seeding a
-    live session 31 (its own daemon, its own rundir/cgroot -- never touches
-    the module-level fixtures the rest of this file uses).
+    seed_real_session=True seeds a real, live session 31 (own leader, own
+    scope) before the call -- the fallback then collides with a DIFFERENT,
+    already-live session. seed_real_session=False leaves SESSIONS_DIR empty,
+    so the only '31' scan_session_files() produces is the synthesised
+    placeholder (pid=0, leader_alive()==True, never reaped) -- there is no
+    real stranger to collide with.
+
+    Own daemon, own rundir/cgroot/vtfile every call -- never touches the
+    module-level fixtures the rest of this file uses.
     """
-    print("\n-- fallback collision: exec-failure sid must not join a live "
-          "stranger's session (Finding 2) --")
     fb_rundir = tempfile.mkdtemp(prefix='schema-cs-fb-run-')
     fb_cgroot = tempfile.mkdtemp(prefix='schema-cs-fb-cg-')
     os.makedirs(os.path.join(fb_rundir, 'sessions'), exist_ok=True)
@@ -66,43 +66,50 @@ def test_fallback_collision(uid):
     fb_vtfile.write('tty2\n')
     fb_vtfile.close()
 
-    other_leader = subprocess.Popen(['sleep', '120'])
+    other_leader = subprocess.Popen(['sleep', '120']) if seed_real_session else None
     new_leader = subprocess.Popen(['sleep', '120'])
     fb_daemon = None
     fb_stub = None
     try:
-        username = pwd.getpwuid(uid).pw_name
-        with open(os.path.join(fb_rundir, 'sessions', '31'), 'w') as f:
-            f.write('# This is private data. Do not parse.\n')
-            f.write('UID=%d\n' % uid)
-            f.write('USER=%s\n' % username)
-            f.write('ACTIVE=0\n')
-            f.write('STATE=online\n')
-            f.write('SEAT=seat0\n')
-            f.write('VTNR=9\n')
-            f.write('TYPE=tty\n')
-            f.write('CLASS=user\n')
-            f.write('DESKTOP=\n')
-            f.write('IS_DISPLAY=0\n')
-            f.write('REMOTE=0\n')
-            f.write('LEADER=%d\n' % other_leader.pid)
-            f.write('SERVICE=login\n')
-            f.write('REALTIME=%d\n' % int(time.time() * 1_000_000))
-            f.write('MONOTONIC=0\n')
-
         other_scope = os.path.join(fb_cgroot, 'user.slice',
                                    'user-%d.slice' % uid, 'session-31.scope')
-        os.makedirs(other_scope, exist_ok=True)
-        with open(os.path.join(other_scope, 'cgroup.procs'), 'w') as f:
-            f.write('%d\n' % other_leader.pid)
+        if seed_real_session:
+            username = pwd.getpwuid(uid).pw_name
+            with open(os.path.join(fb_rundir, 'sessions', '31'), 'w') as f:
+                f.write('# This is private data. Do not parse.\n')
+                f.write('UID=%d\n' % uid)
+                f.write('USER=%s\n' % username)
+                f.write('ACTIVE=0\n')
+                f.write('STATE=online\n')
+                f.write('SEAT=seat0\n')
+                f.write('VTNR=9\n')
+                f.write('TYPE=tty\n')
+                f.write('CLASS=user\n')
+                f.write('DESKTOP=\n')
+                f.write('IS_DISPLAY=0\n')
+                f.write('REMOTE=0\n')
+                f.write('LEADER=%d\n' % other_leader.pid)
+                f.write('SERVICE=login\n')
+                f.write('REALTIME=%d\n' % int(time.time() * 1_000_000))
+                f.write('MONOTONIC=0\n')
+            os.makedirs(other_scope, exist_ok=True)
+            with open(os.path.join(other_scope, 'cgroup.procs'), 'w') as f:
+                f.write('%d\n' % other_leader.pid)
+        else:
+            # SESSIONS_DIR stays empty, so scan_session_files() synthesises
+            # the '31' placeholder itself. The scope dir is pre-created here
+            # (normally the register helper's job) purely so the write
+            # attempt this case is testing can succeed or fail on the guard
+            # alone, not on an incidentally-missing directory.
+            os.makedirs(other_scope, exist_ok=True)
 
         fb_daemon = subprocess.Popen(
             ['dbus-daemon', '--session', '--print-address', '--nofork'],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         fb_addr = fb_daemon.stdout.readline().strip()
         if not fb_addr:
-            check('fallback collision: private bus started', False, 'no address')
-            return
+            check('%s: private bus started' % label, False, 'no address')
+            return None, None, '', new_leader.pid
 
         fb_env = dict(os.environ)
         fb_env['DBUS_SYSTEM_BUS_ADDRESS'] = fb_addr
@@ -119,7 +126,7 @@ def test_fallback_collision(uid):
 
         for _ in range(50):
             if fb_stub.poll() is not None:
-                print("fallback-collision stub exited early:\n"
+                print("%s stub exited early:\n" % label
                       + fb_stub.stdout.read(), file=sys.stderr)
                 break
             try:
@@ -129,7 +136,7 @@ def test_fallback_collision(uid):
                 pass
             time.sleep(0.1)
 
-        time.sleep(SETTLE)   # let registry.sync() pick up the seeded session 31
+        time.sleep(SETTLE)   # let registry.sync() see the seeded/empty state
 
         fb_mgr = fb_bus.get_object(BUS_NAME, MANAGER_PATH)
         r = fb_mgr.CreateSession(
@@ -138,18 +145,13 @@ def test_fallback_collision(uid):
             dbus.Boolean(False), '', '', dbus.Array([], signature='(sv)'),
             dbus_interface=MANAGER_IFACE)
         new_sid = str(r[0])
-        check('fallback collision: exec failure falls back to the legacy id',
-              new_sid == '31', new_sid)
 
-        procs_content = open(os.path.join(other_scope, 'cgroup.procs')).read()
-        check("fallback collision: new leader's pid NOT written into "
-              "session-31.scope/cgroup.procs",
-              str(new_leader.pid) not in procs_content.split(),
-              procs_content.strip())
-        check('fallback collision: the live stranger leader is still the '
-              'sole occupant of its own scope',
-              procs_content.split() == [str(other_leader.pid)],
-              procs_content.strip())
+        try:
+            procs_content = open(os.path.join(other_scope, 'cgroup.procs')).read()
+        except OSError:
+            procs_content = ''
+        other_pid = other_leader.pid if other_leader else None
+        return new_sid, other_pid, procs_content, new_leader.pid
     finally:
         for p in (new_leader, other_leader, fb_stub, fb_daemon):
             if p is None:
@@ -162,6 +164,44 @@ def test_fallback_collision(uid):
         os.unlink(fb_vtfile.name)
         shutil.rmtree(fb_rundir, ignore_errors=True)
         shutil.rmtree(fb_cgroot, ignore_errors=True)
+
+
+def test_fallback_collision(uid):
+    """CreateSession's exec-failure fallback (LEGACY_SESSION_ID='31') must
+    skip the cgroup.procs write ONLY when '31' is a REAL, already-live
+    session -- not when it is merely the synthesised placeholder
+    scan_session_files() manufactures whenever SESSIONS_DIR is empty (every
+    fresh boot). Both must be true, or the guard either lets a real
+    collision through or wrongly denies VT mediation on the common
+    fresh-boot degraded-login case.
+    """
+    print("\n-- fallback collision: real stranger session 31 -> leader must "
+          "NOT be written (Finding 2) --")
+    label = 'fallback collision (real stranger)'
+    new_sid, other_pid, procs_content, new_pid = _run_fallback_case(
+        uid, label, seed_real_session=True)
+    check('%s: exec failure falls back to the legacy id' % label,
+          new_sid == '31', new_sid)
+    check("%s: new leader's pid NOT written into session-31.scope/"
+          "cgroup.procs" % label,
+          str(new_pid) not in procs_content.split(), procs_content.strip())
+    check('%s: the live stranger leader is still the sole occupant of its '
+          'own scope' % label,
+          procs_content.split() == [str(other_pid)], procs_content.strip())
+
+    print("\n-- fallback collision: synthesised-only '31' (empty boot, no "
+          "real session) -> leader MUST still be written (Finding 2 "
+          "regression) --")
+    label = 'fallback collision (synthesised placeholder only)'
+    new_sid2, other_pid2, procs_content2, new_pid2 = _run_fallback_case(
+        uid, label, seed_real_session=False)
+    check('%s: exec failure falls back to the legacy id' % label,
+          new_sid2 == '31', new_sid2)
+    check('%s: no real stranger existed (nothing pre-seeded)' % label,
+          other_pid2 is None, str(other_pid2))
+    check("%s: new leader's pid IS written into session-31.scope/"
+          "cgroup.procs (no real collision to protect against)" % label,
+          str(new_pid2) in procs_content2.split(), procs_content2.strip())
 
 
 def main():

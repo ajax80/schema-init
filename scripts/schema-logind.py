@@ -1838,7 +1838,8 @@ class Login1Manager(dbus.service.Object):
         scope = '%s/user.slice/user-%d.slice/session-%s.scope' % (
             CGROUP_ROOT, uid, sid)
         try:
-            if pid and not (fell_back and sid in self.registry.sessions):
+            if pid and not (fell_back and sid in self.registry.sessions
+                            and not self.registry.sessions[sid].record.synthesised):
                 with open(os.path.join(scope, 'cgroup.procs'), 'w') as f:
                     f.write('%d\n' % pid)
         except OSError as e:
