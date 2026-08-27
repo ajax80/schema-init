@@ -259,30 +259,41 @@ def main():
         check('released session is gone', sid not in ids(), str(ids()))
 
         print("\n-- ReleaseSession removes the state file and the scope --")
+        # rel_leader is kept ALIVE across the ReleaseSession call (never
+        # terminated first): a live leader means the dead-leader reaper in
+        # SessionRegistry.sync() (runs every ~250ms, same one the harness's
+        # top-level `leader` sidesteps with its own `sleep 120`) will not
+        # touch this session on its own. That isolates the assertions below
+        # to ReleaseSession's own teardown -- if ReleaseSession silently did
+        # nothing, the reaper could not mask that by cleaning up behind it.
         rel_leader = subprocess.Popen(['sleep', '120'])
-        rr = create(pid=rel_leader.pid, service='login', class_='user',
-                    tty='tty7', vtnr=7)
-        rsid = str(rr[0])
-        time.sleep(SETTLE)
-        rfile = os.path.join(rundir, 'sessions', rsid)
-        rscope = os.path.join(cgroot, 'user.slice', 'user-%d.slice' % uid,
-                              'session-%s.scope' % rsid)
-        check('release: file present before', os.path.exists(rfile), rfile)
-        # Real cgroupfs drops a scope's auto-created cgroup.procs when the
-        # leader dies, so rmdir on an emptied scope succeeds. A plain temp
-        # tree keeps cgroup.procs as an ordinary file (same caveat as "a dead
-        # leader is reaped" above), so clear it here rather than weaken the
-        # check.
         try:
-            os.unlink(os.path.join(rscope, 'cgroup.procs'))
-        except OSError:
-            pass
-        rel_leader.terminate()  # free the scope so rmdir can succeed
-        rel_leader.wait()
-        mgr.ReleaseSession(rsid, dbus_interface=MANAGER_IFACE)
-        time.sleep(SETTLE)
-        check('release: state file removed', not os.path.exists(rfile), rfile)
-        check('release: scope rmdir-ed', not os.path.isdir(rscope), rscope)
+            rr = create(pid=rel_leader.pid, service='login', class_='user',
+                        tty='tty7', vtnr=7)
+            rsid = str(rr[0])
+            time.sleep(SETTLE)
+            rfile = os.path.join(rundir, 'sessions', rsid)
+            rscope = os.path.join(cgroot, 'user.slice', 'user-%d.slice' % uid,
+                                  'session-%s.scope' % rsid)
+            check('release: file present before', os.path.exists(rfile), rfile)
+            # Real cgroupfs drops a scope's auto-created cgroup.procs when the
+            # leader dies, so rmdir on an emptied scope succeeds. A plain temp
+            # tree keeps cgroup.procs as an ordinary file even with a live
+            # leader (same caveat as "a dead leader is reaped" above), so
+            # clear it here rather than weaken the check -- this must not
+            # depend on the leader dying, since the leader stays alive.
+            try:
+                os.unlink(os.path.join(rscope, 'cgroup.procs'))
+            except OSError:
+                pass
+            mgr.ReleaseSession(rsid, dbus_interface=MANAGER_IFACE)
+            time.sleep(SETTLE)
+            check('release: state file removed', not os.path.exists(rfile), rfile)
+            check('release: scope rmdir-ed', not os.path.isdir(rscope), rscope)
+        finally:
+            if rel_leader.poll() is None:
+                rel_leader.terminate()
+                rel_leader.wait(timeout=5)
 
     finally:
         for p in (leader, stub, daemon):
