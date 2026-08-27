@@ -16,6 +16,7 @@ Never touches the live logind, the real /run/systemd, or the real cgroups.
   ./tests/test_logind_create_session.py     exit 0 all pass, 1 any fail
 """
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,167 @@ def check(name, ok, detail=''):
     results.append((name, ok, detail))
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ''))
     return ok
+
+
+def _run_fallback_case(uid, label, seed_real_session):
+    """Force CreateSession's exec-failure fallback (SCHEMA_SESSION_REGISTER
+    points at a path that does not exist) and return
+    (new_sid, other_leader_pid_or_None, procs_content, new_leader_pid).
+
+    seed_real_session=True seeds a real, live session 31 (own leader, own
+    scope) before the call -- the fallback then collides with a DIFFERENT,
+    already-live session. seed_real_session=False leaves SESSIONS_DIR empty,
+    so the only '31' scan_session_files() produces is the synthesised
+    placeholder (pid=0, leader_alive()==True, never reaped) -- there is no
+    real stranger to collide with.
+
+    Own daemon, own rundir/cgroot/vtfile every call -- never touches the
+    module-level fixtures the rest of this file uses.
+    """
+    fb_rundir = tempfile.mkdtemp(prefix='schema-cs-fb-run-')
+    fb_cgroot = tempfile.mkdtemp(prefix='schema-cs-fb-cg-')
+    os.makedirs(os.path.join(fb_rundir, 'sessions'), exist_ok=True)
+
+    fb_vtfile = tempfile.NamedTemporaryFile('w', suffix='.activevt', delete=False)
+    fb_vtfile.write('tty2\n')
+    fb_vtfile.close()
+
+    other_leader = subprocess.Popen(['sleep', '120']) if seed_real_session else None
+    new_leader = subprocess.Popen(['sleep', '120'])
+    fb_daemon = None
+    fb_stub = None
+    try:
+        other_scope = os.path.join(fb_cgroot, 'user.slice',
+                                   'user-%d.slice' % uid, 'session-31.scope')
+        if seed_real_session:
+            username = pwd.getpwuid(uid).pw_name
+            with open(os.path.join(fb_rundir, 'sessions', '31'), 'w') as f:
+                f.write('# This is private data. Do not parse.\n')
+                f.write('UID=%d\n' % uid)
+                f.write('USER=%s\n' % username)
+                f.write('ACTIVE=0\n')
+                f.write('STATE=online\n')
+                f.write('SEAT=seat0\n')
+                f.write('VTNR=9\n')
+                f.write('TYPE=tty\n')
+                f.write('CLASS=user\n')
+                f.write('DESKTOP=\n')
+                f.write('IS_DISPLAY=0\n')
+                f.write('REMOTE=0\n')
+                f.write('LEADER=%d\n' % other_leader.pid)
+                f.write('SERVICE=login\n')
+                f.write('REALTIME=%d\n' % int(time.time() * 1_000_000))
+                f.write('MONOTONIC=0\n')
+            os.makedirs(other_scope, exist_ok=True)
+            with open(os.path.join(other_scope, 'cgroup.procs'), 'w') as f:
+                f.write('%d\n' % other_leader.pid)
+        else:
+            # SESSIONS_DIR stays empty, so scan_session_files() synthesises
+            # the '31' placeholder itself. The scope dir is pre-created here
+            # (normally the register helper's job) purely so the write
+            # attempt this case is testing can succeed or fail on the guard
+            # alone, not on an incidentally-missing directory.
+            os.makedirs(other_scope, exist_ok=True)
+
+        fb_daemon = subprocess.Popen(
+            ['dbus-daemon', '--session', '--print-address', '--nofork'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        fb_addr = fb_daemon.stdout.readline().strip()
+        if not fb_addr:
+            check('%s: private bus started' % label, False, 'no address')
+            return None, None, '', new_leader.pid
+
+        fb_env = dict(os.environ)
+        fb_env['DBUS_SYSTEM_BUS_ADDRESS'] = fb_addr
+        fb_env['SCHEMA_LOGIND_ACTIVE_VT'] = fb_vtfile.name
+        fb_env['SCHEMA_LOGIND_RUN_DIR'] = fb_rundir
+        fb_env['SCHEMA_CGROUP_ROOT'] = fb_cgroot
+        fb_env['SCHEMA_SESSION_REGISTER'] = '/nonexistent/schema-session-register'
+        fb_env.pop('SCHEMA_LOGIND_VTNR', None)
+
+        fb_stub = subprocess.Popen([sys.executable, LOGIND], env=fb_env,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        fb_bus = dbus.bus.BusConnection(fb_addr)
+
+        for _ in range(50):
+            if fb_stub.poll() is not None:
+                print("%s stub exited early:\n" % label
+                      + fb_stub.stdout.read(), file=sys.stderr)
+                break
+            try:
+                if fb_bus.name_has_owner(BUS_NAME):
+                    break
+            except dbus.DBusException:
+                pass
+            time.sleep(0.1)
+
+        time.sleep(SETTLE)   # let registry.sync() see the seeded/empty state
+
+        fb_mgr = fb_bus.get_object(BUS_NAME, MANAGER_PATH)
+        r = fb_mgr.CreateSession(
+            dbus.UInt32(uid), dbus.UInt32(new_leader.pid), 'login',
+            'unspecified', 'user', '', 'seat0', dbus.UInt32(5), 'tty5', '',
+            dbus.Boolean(False), '', '', dbus.Array([], signature='(sv)'),
+            dbus_interface=MANAGER_IFACE)
+        new_sid = str(r[0])
+
+        try:
+            procs_content = open(os.path.join(other_scope, 'cgroup.procs')).read()
+        except OSError:
+            procs_content = ''
+        other_pid = other_leader.pid if other_leader else None
+        return new_sid, other_pid, procs_content, new_leader.pid
+    finally:
+        for p in (new_leader, other_leader, fb_stub, fb_daemon):
+            if p is None:
+                continue
+            try:
+                p.terminate()
+                p.wait(timeout=5)
+            except Exception:
+                p.kill()
+        os.unlink(fb_vtfile.name)
+        shutil.rmtree(fb_rundir, ignore_errors=True)
+        shutil.rmtree(fb_cgroot, ignore_errors=True)
+
+
+def test_fallback_collision(uid):
+    """CreateSession's exec-failure fallback (LEGACY_SESSION_ID='31') must
+    skip the cgroup.procs write ONLY when '31' is a REAL, already-live
+    session -- not when it is merely the synthesised placeholder
+    scan_session_files() manufactures whenever SESSIONS_DIR is empty (every
+    fresh boot). Both must be true, or the guard either lets a real
+    collision through or wrongly denies VT mediation on the common
+    fresh-boot degraded-login case.
+    """
+    print("\n-- fallback collision: real stranger session 31 -> leader must "
+          "NOT be written (Finding 2) --")
+    label = 'fallback collision (real stranger)'
+    new_sid, other_pid, procs_content, new_pid = _run_fallback_case(
+        uid, label, seed_real_session=True)
+    check('%s: exec failure falls back to the legacy id' % label,
+          new_sid == '31', new_sid)
+    check("%s: new leader's pid NOT written into session-31.scope/"
+          "cgroup.procs" % label,
+          str(new_pid) not in procs_content.split(), procs_content.strip())
+    check('%s: the live stranger leader is still the sole occupant of its '
+          'own scope' % label,
+          procs_content.split() == [str(other_pid)], procs_content.strip())
+
+    print("\n-- fallback collision: synthesised-only '31' (empty boot, no "
+          "real session) -> leader MUST still be written (Finding 2 "
+          "regression) --")
+    label = 'fallback collision (synthesised placeholder only)'
+    new_sid2, other_pid2, procs_content2, new_pid2 = _run_fallback_case(
+        uid, label, seed_real_session=False)
+    check('%s: exec failure falls back to the legacy id' % label,
+          new_sid2 == '31', new_sid2)
+    check('%s: no real stranger existed (nothing pre-seeded)' % label,
+          other_pid2 is None, str(other_pid2))
+    check("%s: new leader's pid IS written into session-31.scope/"
+          "cgroup.procs (no real collision to protect against)" % label,
+          str(new_pid2) in procs_content2.split(), procs_content2.strip())
 
 
 def main():
@@ -142,6 +304,50 @@ def main():
               os.path.exists(procs) and str(leader.pid) in open(procs).read(),
               open(procs).read().strip() if os.path.exists(procs) else 'missing')
 
+        print("\n-- CreateSession writes the same file schema-session-register would --")
+        # Drive the helper directly into a throwaway run dir with the SAME args
+        # CreateSession maps, then compare the resulting state file key-for-key
+        # (except the two timestamps, which are wall-clock and always differ).
+        ref_run = tempfile.mkdtemp(prefix='ref-run-')
+        ref_cg = tempfile.mkdtemp(prefix='ref-cg-')
+        helper = os.path.join(REPO, 'scripts', 'schema-session-register')
+        henv = dict(os.environ)
+        henv['SCHEMA_LOGIND_RUN_DIR'] = ref_run
+        henv['SCHEMA_CGROUP_ROOT'] = ref_cg
+        henv['SCHEMA_LOGIND_ACTIVE_VT'] = os.environ.get('SCHEMA_LOGIND_ACTIVE_VT', '')
+        # CreateSession sends the resolved username (matching real logind
+        # session files), not the raw uid -- match that here so the two
+        # calls are actually comparable.
+        ref_sid = subprocess.check_output(
+            [helper, '--uid', str(uid), '--user', pwd.getpwuid(uid).pw_name,
+             '--seat', 'seat0', '--vtnr', '2', '--type', 'tty', '--class', 'user',
+             '--service', 'login', '--leader', str(leader.pid)],
+            env=henv, text=True).strip()
+
+        def stable_keys(path):
+            d = {}
+            for line in open(path):
+                if '=' in line and not line.startswith('#'):
+                    k, v = line.rstrip('\n').split('=', 1)
+                    # REALTIME/MONOTONIC are wall-clock, always differ.
+                    # ACTIVE/STATE are live state the daemon's VT-poll loop
+                    # (on_vt_changed -> _write_back_active) keeps in sync with
+                    # the real active VT independently of whoever wrote the
+                    # file, so the CreateSession-managed file can legitimately
+                    # diverge from a one-off standalone helper invocation that
+                    # nothing is watching.
+                    if k not in ('REALTIME', 'MONOTONIC', 'ACTIVE', 'STATE'):
+                        d[k] = v
+            return d
+
+        cs_file = os.path.join(rundir, 'sessions', sid)      # written by CreateSession above
+        ref_file = os.path.join(ref_run, 'sessions', ref_sid)
+        check('CreateSession state file matches the helper key-for-key',
+              stable_keys(cs_file) == stable_keys(ref_file),
+              '%s vs %s' % (stable_keys(cs_file), stable_keys(ref_file)))
+        shutil.rmtree(ref_run, ignore_errors=True)
+        shutil.rmtree(ref_cg, ignore_errors=True)
+
         print("\n-- sudo and su are refused, not given fake sessions --")
         before = ids()
         for svc, cls in (('sudo', 'background-light'), ('su-l', 'background'),
@@ -213,6 +419,43 @@ def main():
         time.sleep(SETTLE)
         check('released session is gone', sid not in ids(), str(ids()))
 
+        print("\n-- ReleaseSession removes the state file and the scope --")
+        # rel_leader is kept ALIVE across the ReleaseSession call (never
+        # terminated first): a live leader means the dead-leader reaper in
+        # SessionRegistry.sync() (runs every ~250ms, same one the harness's
+        # top-level `leader` sidesteps with its own `sleep 120`) will not
+        # touch this session on its own. That isolates the assertions below
+        # to ReleaseSession's own teardown -- if ReleaseSession silently did
+        # nothing, the reaper could not mask that by cleaning up behind it.
+        rel_leader = subprocess.Popen(['sleep', '120'])
+        try:
+            rr = create(pid=rel_leader.pid, service='login', class_='user',
+                        tty='tty7', vtnr=7)
+            rsid = str(rr[0])
+            time.sleep(SETTLE)
+            rfile = os.path.join(rundir, 'sessions', rsid)
+            rscope = os.path.join(cgroot, 'user.slice', 'user-%d.slice' % uid,
+                                  'session-%s.scope' % rsid)
+            check('release: file present before', os.path.exists(rfile), rfile)
+            # Real cgroupfs drops a scope's auto-created cgroup.procs when the
+            # leader dies, so rmdir on an emptied scope succeeds. A plain temp
+            # tree keeps cgroup.procs as an ordinary file even with a live
+            # leader (same caveat as "a dead leader is reaped" above), so
+            # clear it here rather than weaken the check -- this must not
+            # depend on the leader dying, since the leader stays alive.
+            try:
+                os.unlink(os.path.join(rscope, 'cgroup.procs'))
+            except OSError:
+                pass
+            mgr.ReleaseSession(rsid, dbus_interface=MANAGER_IFACE)
+            time.sleep(SETTLE)
+            check('release: state file removed', not os.path.exists(rfile), rfile)
+            check('release: scope rmdir-ed', not os.path.isdir(rscope), rscope)
+        finally:
+            if rel_leader.poll() is None:
+                rel_leader.terminate()
+                rel_leader.wait(timeout=5)
+
     finally:
         for p in (leader, stub, daemon):
             try:
@@ -223,6 +466,8 @@ def main():
         os.unlink(vtfile.name)
         shutil.rmtree(rundir, ignore_errors=True)
         shutil.rmtree(cgroot, ignore_errors=True)
+
+    test_fallback_collision(uid)
 
     failed = [r for r in results if not r[1]]
     print(f"\n>> {len(results) - len(failed)}/{len(results)} passed")
