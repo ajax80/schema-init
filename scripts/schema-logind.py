@@ -247,6 +247,9 @@ CGROUP_ROOT = os.environ.get('SCHEMA_CGROUP_ROOT', '/sys/fs/cgroup')
 # the synthesised id when /run/systemd/sessions/ is empty, which is what a
 # login script that predates id allocation leaves behind.
 LEGACY_SESSION_ID = '31'
+SESSION_REGISTER = os.environ.get(
+    'SCHEMA_SESSION_REGISTER',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema-session-register'))
 
 
 def session_path_for(sid):
@@ -1840,44 +1843,37 @@ class Login1Manager(dbus.service.Object):
                     and not obj.record.synthesised:
                 return self._session_reply(obj.sid, uid, seat_id, vtnr, True)
 
-        sid = alloc_session_id()
-        if sid is None:
-            raise dbus.exceptions.DBusException(
-                "no free session id", name='org.freedesktop.login1.NoSuchSession')
-
-        active = (read_active_vt() == vtnr)
-        ok = write_session_file(sid, {
-            'UID': uid,
-            'USER': username,
-            'ACTIVE': '1' if active else '0',
-            'STATE': 'active' if active else 'online',
-            'SEAT': seat_id,
-            'VTNR': vtnr,
-            'TYPE': str(type_) if str(type_) not in ('', 'unspecified') else 'tty',
-            'CLASS': str(class_) or 'user',
-            'DESKTOP': str(desktop),
-            'IS_DISPLAY': '0',
-            'REMOTE': '1' if remote else '0',
-            'LEADER': pid,
-            'SERVICE': str(service) or 'login',
-            'REALTIME': int(time.time() * 1000000),
-            'MONOTONIC': proc_start_usec(pid)[1] if pid else 0,
-        })
-        if not ok:
-            try:
-                os.unlink(session_file_for(sid))
-            except OSError:
-                pass
-            raise dbus.exceptions.DBusException(
-                "could not write session state",
-                name='org.freedesktop.login1.NoSuchSession')
+        cmd = [SESSION_REGISTER,
+               '--uid', str(uid), '--user', str(username or uid),
+               '--seat', seat_id, '--vtnr', str(vtnr),
+               '--type', str(type_) if str(type_) not in ('', 'unspecified') else 'tty',
+               '--class', str(class_) or 'user',
+               '--desktop', str(desktop),
+               '--service', str(service) or 'login',
+               '--leader', str(pid)]
+        if str(desktop):  # a DM login is a display session
+            cmd.append('--display')
+        # The daemon's own env already carries SCHEMA_LOGIND_RUN_DIR /
+        # SCHEMA_CGROUP_ROOT (real or test), so inheriting it is what makes the
+        # helper write to the same tree the registry reads. Never block a login:
+        # a helper failure still returns a reply on the legacy id.
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            sid = (out.stdout.strip().splitlines() or [''])[-1]
+        except Exception as e:
+            print("login1-stub: schema-session-register failed: %s" % e,
+                  file=sys.stderr)
+            sid = ''
+        if not sid.isdigit():
+            sid = LEGACY_SESSION_ID
 
         # sd_pid_get_session() is cgroup-based, so without the scope the polkit
-        # auth agent for this session cannot register.
+        # auth agent for this session cannot register. The helper mkdirs the
+        # scope; placing the leader in it stays caller-side (same as the GUI
+        # autologin, which places its own subshell pid).
         scope = '%s/user.slice/user-%d.slice/session-%s.scope' % (
             CGROUP_ROOT, uid, sid)
         try:
-            os.makedirs(scope, exist_ok=True)
             if pid:
                 with open(os.path.join(scope, 'cgroup.procs'), 'w') as f:
                     f.write('%d\n' % pid)

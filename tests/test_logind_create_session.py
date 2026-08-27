@@ -16,6 +16,7 @@ Never touches the live logind, the real /run/systemd, or the real cgroups.
   ./tests/test_logind_create_session.py     exit 0 all pass, 1 any fail
 """
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -141,6 +142,51 @@ def main():
         check('leader put in the scope',
               os.path.exists(procs) and str(leader.pid) in open(procs).read(),
               open(procs).read().strip() if os.path.exists(procs) else 'missing')
+
+        print("\n-- CreateSession writes the same file schema-session-register would --")
+        # Drive the helper directly into a throwaway run dir with the SAME args
+        # CreateSession maps, then compare the resulting state file key-for-key
+        # (except the two timestamps, which are wall-clock and always differ).
+        import glob
+        ref_run = tempfile.mkdtemp(prefix='ref-run-')
+        ref_cg = tempfile.mkdtemp(prefix='ref-cg-')
+        helper = os.path.join(REPO, 'scripts', 'schema-session-register')
+        henv = dict(os.environ)
+        henv['SCHEMA_LOGIND_RUN_DIR'] = ref_run
+        henv['SCHEMA_CGROUP_ROOT'] = ref_cg
+        henv['SCHEMA_LOGIND_ACTIVE_VT'] = os.environ.get('SCHEMA_LOGIND_ACTIVE_VT', '')
+        # CreateSession sends the resolved username (matching real logind
+        # session files), not the raw uid -- match that here so the two
+        # calls are actually comparable.
+        ref_sid = subprocess.check_output(
+            [helper, '--uid', str(uid), '--user', pwd.getpwuid(uid).pw_name,
+             '--seat', 'seat0', '--vtnr', '2', '--type', 'tty', '--class', 'user',
+             '--service', 'login', '--leader', str(leader.pid)],
+            env=henv, text=True).strip()
+
+        def stable_keys(path):
+            d = {}
+            for line in open(path):
+                if '=' in line and not line.startswith('#'):
+                    k, v = line.rstrip('\n').split('=', 1)
+                    # REALTIME/MONOTONIC are wall-clock, always differ.
+                    # ACTIVE/STATE are live state the daemon's VT-poll loop
+                    # (on_vt_changed -> _write_back_active) keeps in sync with
+                    # the real active VT independently of whoever wrote the
+                    # file, so the CreateSession-managed file can legitimately
+                    # diverge from a one-off standalone helper invocation that
+                    # nothing is watching.
+                    if k not in ('REALTIME', 'MONOTONIC', 'ACTIVE', 'STATE'):
+                        d[k] = v
+            return d
+
+        cs_file = os.path.join(rundir, 'sessions', sid)      # written by CreateSession above
+        ref_file = os.path.join(ref_run, 'sessions', ref_sid)
+        check('CreateSession state file matches the helper key-for-key',
+              stable_keys(cs_file) == stable_keys(ref_file),
+              '%s vs %s' % (stable_keys(cs_file), stable_keys(ref_file)))
+        shutil.rmtree(ref_run, ignore_errors=True)
+        shutil.rmtree(ref_cg, ignore_errors=True)
 
         print("\n-- sudo and su are refused, not given fake sessions --")
         before = ids()
