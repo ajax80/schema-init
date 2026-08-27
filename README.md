@@ -95,6 +95,8 @@ Boot that USB stick (or point a VM at the ISO) and the guided installer gives yo
 
 > ⚠️ **What the udev flip does:** it kills `systemd-udevd` and makes **schema-udev** authoritative over device management. This is the whole point — watching your init own `/dev` — but it *is* a real change to how the box handles hardware. It's optional and guided; skip it and you still get schema-init as PID 1 with stock udev underneath.
 
+After the restart, just log back into your desktop — it finishes the switch on its own; you don't have to click anything. If you arm the switch but then never return to the desktop, a headless seatbelt safely undoes it after the next boot and puts you back on stock udev — no damage, nothing to clean up. (One consequence of that safety net: it's a *desktop* on-ramp — a machine you run headless won't keep the flip, because the confirmation comes from the graphical session coming up.)
+
 Prefer to build it yourself, or try it with zero risk to a real disk first? Take the lanes below instead — they compile from source and boot in a throwaway VM.
 
 **Requirements:**
