@@ -1,9 +1,11 @@
-# schema-logind: recycle-proof session reaping via cgroup membership
+# schema-logind: recycle-proof session reaping via leader start-time
 
 **Date:** 2026-08-27
-**Status:** Design approved (brainstorming); implementation plan pending.
-**Scope:** One focused correctness fix to `SessionRecord.leader_alive()` in
-`scripts/schema-logind.py`. No writer, D-Bus, or property changes.
+**Status:** Design approved (approach A, after approach B was falsified on the
+live box). Implementation plan updated to match.
+**Scope:** `SessionRecord.leader_alive()` in `scripts/schema-logind.py` plus a
+new baseline key written by `scripts/schema-session-register`. No D-Bus
+property or on-bus `MONOTONIC` change.
 
 ## Problem
 
@@ -28,54 +30,49 @@ The reaper (`schema-logind.py:1274`, inside the 250 ms VT poll) already carries
 the caveat inline: *"this is pid-based, so a recycled pid could keep a dead
 session alive until the next boot. Real logind uses a pidfd."*
 
-## Goals
+## Rejected approach: cgroup membership (approach B) — falsified on the live box
 
-- A session whose leader has exited is reaped even if that pid is later reused.
-- No false-reap: a change that is a strict superset of today's safety — any
-  case the current code handles correctly, the new code still handles
-  correctly.
-- No new long-lived file descriptors, no per-session watches in the GLib loop
-  (the shape of both prior CPU-spin incidents).
-- Cheap enough to run at the existing 250 ms cadence: one small file read per
-  session per sweep.
+The first design checked whether `LEADER` was a member of that session's own
+`session-<sid>.scope/cgroup.procs`, on the assumption that the leader is a
+direct member of its session scope. **This is false for GUI autologin
+sessions, which are the primary case on this fleet.** Verified live on blakbox
+before any deploy:
 
-## Non-goals
+- Session `1`'s leader is `1745` = `schema-plasma-autologin.sh`, running in the
+  `/schema-init/sddm` **service** cgroup — not the session scope.
+- The scope (`session-1.scope`) holds the desktop payload (`runuser` 1804 →
+  `dbus` → plasma, all pids 1804+) but never `1745`.
+- Cause is by design: `schema-plasma-autologin.sh:81` registers `--leader $$`
+  (the script) but then a **subshell** does `echo $BASHPID > scope/cgroup.procs`
+  — a *child* pid joins the scope and execs the desktop, while the recorded
+  leader stays in the service cgroup.
 
-- **pidfd-based reaping.** Rejected: this codebase already had a pidfd leak
-  reach `EMFILE` and busy-spin; one long-lived fd per session inside the GLib
-  loop is exactly the shape both CPU-spin incidents took.
-- **Start-time / `MONOTONIC` baseline.** A viable alternative (record the
-  leader's `/proc/<pid>/stat` field-22 start time and compare on reap), and it
-  would carry a `loginctl`-timestamp correctness bonus, but it re-opens the
-  meaning of the on-bus `MONOTONIC` property and needs shell↔Python value
-  matching with a tolerance. Deliberately not taken; cgroup membership is
-  structurally correct with a smaller surface.
-- Any change to `schema-session-register`, `CreateSession`, `MONOTONIC`,
-  `REALTIME`, or any D-Bus property.
+So `pid in scope.cgroup.procs` would be `False` for a healthy GUI session and
+the reaper would delete it on the first sweep. (getty/`CreateSession` sessions
+place the leader pid into the scope at `schema-logind.py:1843`, so B would have
+worked *there* — but not for the desktop.) Approach B is abandoned.
 
-## Design
+## Approach A: leader start-time baseline
 
-### The invariant we lean on
+Identify the leader by its own process **start-time**, which is immune to
+*where* the leader lives. `/proc/<pid>/stat` field 22 is the process start time
+in clock ticks since boot; it is unique to a specific process incarnation, so a
+recycled pid — even one running in the same or a different cgroup — has a
+different start-time than the original leader.
 
-Both session writers place the leader pid into that session's own scope cgroup:
+### The baseline key
 
-- `schema-session-register` creates
-  `$CGROOT/user.slice/user-<uid>.slice/session-<sid>.scope` and the caller
-  writes the leader into its `cgroup.procs` (the GUI autologin writes its own
-  subshell pid; `CreateSession` writes the login pid — `schema-logind.py:1838`).
-- The scope exists precisely because `sd_pid_get_session()` is cgroup-based and
-  the polkit auth agent cannot register without it.
+`schema-session-register` (the single writer of record for session files, which
+`CreateSession` now execs) records the leader's start-ticks in a new private
+key when it writes the session file:
 
-Two kernel-guaranteed facts make membership an identity-checked liveness test:
+```
+LEADER_STARTTIME=<field-22 ticks of /proc/$LEADER/stat>
+```
 
-1. A process appears in `cgroup.procs` only for the one cgroup it is a **direct
-   member** of. A recycled pid belongs to whatever cgroup its new process was
-   created in — never this session's scope, because nothing in schema-init
-   moves an unrelated process into an existing session scope.
-2. The kernel removes a pid from `cgroup.procs` the instant that process exits.
-
-So *"is `LEADER` listed in `session-<sid>.scope/cgroup.procs`"* is true exactly
-while this session's original leader is alive.
+Raw integer ticks, not microseconds — so the reaper compares by exact integer
+equality with no float/rounding fragility. If `/proc/$LEADER/stat` is
+unreadable, the key is omitted (never block a login).
 
 ### New `leader_alive()`
 
@@ -83,84 +80,103 @@ while this session's original leader is alive.
 def leader_alive(self):
     pid = _int_or(self.data.get('LEADER'), 0)
     if not pid:
-        return True                      # leaderless legacy/synthesised — not ours to reap
-    procs = self._scope_procs()          # set[int], or None if unreadable
-    if procs is None:
-        return os.path.isdir('/proc/%d' % pid)   # scope absent → prior behavior
-    return pid in procs
+        return True                       # leaderless legacy/synthesised — not ours to reap
+    if not os.path.isdir('/proc/%d' % pid):
+        return False                      # pid is gone outright
+    stored = _int_or(self.data.get('LEADER_STARTTIME'), 0)
+    if not stored:
+        return True                       # no baseline (pre-upgrade session) — prior behavior
+    live = proc_starttime_ticks(pid)      # field-22 ticks, or None if unreadable
+    if live is None:
+        return True                       # can't read start-time — never false-reap
+    return live == stored                 # same incarnation; mismatch = recycled pid
 ```
 
-Supporting pieces:
+Supporting piece — a module helper returning raw start-ticks (distinct from the
+existing `proc_start_usec`, which converts to microseconds):
 
-- Module helper `read_cgroup_procs(path) -> set[int] | None`: opens `path`,
-  returns the pids as a set of ints; returns `None` on any `OSError` (missing
-  file, permission, unexpected cgroup layout) and skips non-integer lines
-  defensively.
-- `SessionRecord._scope_procs(self)`: builds
-  `'%s/user.slice/user-%d.slice/session-%s.scope/cgroup.procs' % (CGROUP_ROOT,
-  self.uid, self.sid)` and delegates to `read_cgroup_procs`. `CGROUP_ROOT`
-  (`schema-logind.py:245`) already honors the `SCHEMA_CGROUP_ROOT` test
-  override, so this stays test-isolated.
+```python
+def proc_starttime_ticks(pid):
+    """Field 22 of /proc/<pid>/stat: the process start time in clock ticks
+    since boot. Unique to a process incarnation, so it distinguishes a live
+    leader from a recycled pid. Returns None if the stat cannot be read."""
+    try:
+        with open('/proc/%d/stat' % pid) as f:
+            return int(f.read().rsplit(') ', 1)[1].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+```
 
 ### Behavior table
 
-| Case | `_scope_procs()` | Result | vs. today |
-|------|------------------|--------|-----------|
-| No `LEADER` key (legacy/synthesised) | not reached | alive | unchanged |
-| Live leader, pid in scope | `{pid, …}` | alive | unchanged (was alive) |
-| Leader exited, pid **not** recycled | `set()` w/o pid | dead | unchanged (was dead) |
-| Leader exited, pid **recycled** elsewhere | `set()` w/o pid | **dead** | **FIXED** (was falsely alive) |
-| Scope never created / unreadable | `None` | `isdir` fallback | unchanged |
+| Case | Result | vs. today |
+|------|--------|-----------|
+| No `LEADER` key (legacy/synthesised) | alive | unchanged |
+| pid gone from `/proc` | dead | unchanged |
+| Live leader, start-ticks match stored | alive | unchanged |
+| pid recycled (exists, start-ticks differ) | **dead** | **FIXED** (was falsely alive) |
+| No `LEADER_STARTTIME` (session predates upgrade) | alive if pid exists | unchanged (graceful) |
+| Start-time unreadable | alive if pid exists | unchanged (never false-reap) |
 
-### Semantics note (documented, non-occurring in practice)
+### Deploy safety (why this cannot false-reap the live session)
 
-A pid that is alive in `/proc` but absent from its session's scope is treated
-as gone → reaped. The only way that arises other than recycling is an external
-actor moving the leader out of its scope, which nothing in schema-init does.
-Fail-toward-reap here is correct: a session whose scope no longer contains its
-leader has no live leader to mediate its VT.
+The session already running when the new daemon is HUP'd in was written by the
+old helper and has **no** `LEADER_STARTTIME` key, so `leader_alive()` takes the
+`if not stored: return True` path — exactly today's behavior. The recycle
+guard becomes active only for sessions registered after the new helper is
+deployed. Existing sessions keep prior behavior until the next login; new
+sessions are recycle-proof.
 
-## Data flow
+## Non-goals
 
-Unchanged control flow. The reaper list-comprehension at `schema-logind.py:1274`
-calls `r.leader_alive()` per record on each 250 ms sweep; only what that method
-reads changes — from one `stat('/proc/<pid>')` to one `open()+read()` of the
-session scope's `cgroup.procs` (with the `isdir` path as fallback).
+- **pidfd reaping.** Rejected: a prior pidfd leak reached `EMFILE` and
+  busy-spun; one long-lived fd per session in the GLib loop is the shape of
+  both prior CPU-spin incidents.
+- **Overloading the on-bus `MONOTONIC` property.** The baseline is a private
+  `LEADER_STARTTIME` key, so `MONOTONIC`/`REALTIME` and every D-Bus property
+  keep their current meaning. No `loginctl` timestamp change.
+- Any change to `CreateSession`'s own logic (it already execs the helper, so it
+  inherits the new key for free), the reuse check, or session allocation.
 
 ## Testing (TDD)
 
-Extend `tests/test_logind_registry.py`:
+**`tests/test_logind_registry.py::test_leader_sweep`** — the pure-logic core:
+- No `LEADER` key → alive (unchanged).
+- `LEADER=os.getpid()`, `LEADER_STARTTIME` = this process's real field-22 ticks
+  → alive (matching baseline).
+- `LEADER=os.getpid()`, `LEADER_STARTTIME` = a wrong value (e.g. stored+1) →
+  **dead** (the recycle case: pid alive in `/proc` but start-ticks differ).
+- `LEADER=999999` (absent) → dead regardless of key.
+- `LEADER=os.getpid()`, **no** `LEADER_STARTTIME` key → alive (backward-compat).
 
-1. Add an `SCHEMA_CGROUP_ROOT` temp tree at module top, beside the existing
-   `SCHEMA_LOGIND_RUN_DIR` setup (env must be set before the module import at
-   line 30, since `CGROUP_ROOT` is read at import).
-2. A small helper to create a fake scope and write pids into its `cgroup.procs`:
-   `write_scope(uid, sid, *pids)`.
-3. Extend `test_leader_sweep`:
-   - **Backward-compat (no scope):** existing `LEADER=os.getpid()` → alive,
-     `LEADER=999999` → dead, no-`LEADER` → alive all keep passing via the
-     `isdir` fallback (no scope dir created for them).
-   - **(a) live in scope:** `write_scope(1000, 5, os.getpid())` → session 5
-     with `LEADER=os.getpid()` → alive.
-   - **(b) recycle case:** session with `LEADER=os.getpid()` (a pid that
-     genuinely exists in `/proc`) but `write_scope(...)` containing a
-     *different* pid → **dead** (the fix; today's `isdir` would call it alive).
-   - **(c) empty scope:** `cgroup.procs` present but empty → dead.
-   - **(d) unreadable scope:** scope dir absent → `isdir` fallback path taken.
+**`tests/test_logind_session_alloc.py`** (or wherever the helper's output is
+asserted) — `schema-session-register --leader <pid>` writes a
+`LEADER_STARTTIME` line whose value equals field 22 of `/proc/<pid>/stat`;
+with an unreadable/dead leader pid the key is absent and the script still
+exits 0 with a valid id.
+
+Helper: a small `proc_starttime_ticks`-equivalent read in the test to compute
+the expected value, so the assertion is exact.
 
 ## Rollout
 
-1. Unit tests green (`test_logind_registry` + full `python3` logind suite).
-2. `schema-vmtest` LIVE boot: a GUI session comes up with a real `LEADER` and
-   is **not** spuriously reaped across many sweeps; `schema-doctor` CLEAN.
-3. Deploy to blakbox by `kill -HUP` of PID 1 (never `restart`, per the
-   schema-init deploy rule). Verify the live login survives repeated reap
-   sweeps and `loginctl list-sessions` stays stable; then confirm a session
-   whose leader is killed is reaped within a sweep.
+1. Unit tests green (`test_logind_registry` + `test_logind_session_alloc` +
+   full `python3` logind suite).
+2. Pre-deploy safety check on blakbox: confirm the live session has **no**
+   `LEADER_STARTTIME` key (so the new daemon leaves it alive), i.e. the
+   `if not stored` path applies.
+3. Deploy **both** `scripts/schema-logind.py` and `scripts/schema-session-register`
+   to `/usr/local/bin/`; reload PID 1 with `kill -HUP 1` (never `restart`, per
+   the schema-init deploy rule).
+4. Verify the live session survives repeated reap sweeps and `loginctl` stays
+   stable; then confirm a **new** login gets a `LEADER_STARTTIME` key and that a
+   session whose leader is killed is reaped within a sweep.
 
 ## Affected files
 
-- `scripts/schema-logind.py` — rewrite `SessionRecord.leader_alive()`; add
-  `read_cgroup_procs()` (module) and `SessionRecord._scope_procs()`.
-- `tests/test_logind_registry.py` — `SCHEMA_CGROUP_ROOT` setup, `write_scope`
-  helper, extended `test_leader_sweep`.
+- `scripts/schema-logind.py` — add `proc_starttime_ticks()`; rewrite
+  `SessionRecord.leader_alive()`.
+- `scripts/schema-session-register` — compute the leader's field-22 ticks and
+  write the `LEADER_STARTTIME` key (omit on failure).
+- `tests/test_logind_registry.py` — extended `test_leader_sweep`.
+- `tests/test_logind_session_alloc.py` — assert the helper writes the key.
