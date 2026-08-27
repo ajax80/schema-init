@@ -197,6 +197,17 @@ def proc_start_usec(pid):
         pass
     return 0, 0
 
+def proc_starttime_ticks(pid):
+    """Field 22 of /proc/<pid>/stat: process start time in clock ticks since
+    boot. Unique to a process incarnation, so it distinguishes a live leader
+    from a recycled pid. Returns None if the stat cannot be read. comm (field
+    2) may contain spaces/parens, so split on the last ') '."""
+    try:
+        with open('/proc/%d/stat' % pid) as f:
+            return int(f.read().rsplit(') ', 1)[1].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
 def svc_name(unit):
     for suffix in ('.service', '.target', '.socket', '.timer', '.mount', '.path'):
         if unit.endswith(suffix):
@@ -471,7 +482,15 @@ class SessionRecord:
         pid = _int_or(self.data.get('LEADER'), 0)
         if not pid:
             return True     # nothing claimed a leader; not ours to declare dead
-        return os.path.isdir('/proc/%d' % pid)
+        if not os.path.isdir('/proc/%d' % pid):
+            return False    # pid is gone outright
+        stored = _int_or(self.data.get('LEADER_STARTTIME'), 0)
+        if not stored:
+            return True     # no baseline recorded (pre-upgrade session): prior behavior
+        live = proc_starttime_ticks(pid)
+        if live is None:
+            return True     # can't read start-time — never false-reap
+        return live == stored   # same incarnation; a mismatch means the pid was recycled
 
 
 def scan_session_files():
