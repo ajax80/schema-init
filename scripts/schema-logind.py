@@ -1288,8 +1288,12 @@ class SessionRegistry:
         # leaderless. A file with no LEADER key at all is the legacy
         # sddm-logged's, and leader_alive() leaves those alone.
         #
-        # Caveat worth knowing: this is pid-based, so a recycled pid could keep
-        # a dead session alive until the next boot. Real logind uses a pidfd.
+        # leader_alive() also guards against a recycled pid: it compares the
+        # leader's live /proc start-ticks against the LEADER_STARTTIME baseline
+        # recorded at registration, so a dead leader's pid being reused by an
+        # unrelated process is still detected and reaped. A session registered
+        # before that baseline existed (no LEADER_STARTTIME key) falls back to
+        # bare pid-existence, same as before.
         for sid in [s for s, r in records.items() if not r.leader_alive()]:
             print(f"login1-stub: session {sid} leader is gone — reaping",
                   file=sys.stderr)
