@@ -69,6 +69,17 @@ fi
 
 [ -n "$LEADER" ] || LEADER=$PPID
 
+# The leader's start time in clock ticks (field 22 of /proc/<pid>/stat). schema-
+# logind stores this and compares it on every reap sweep to tell a live leader
+# from a recycled pid. comm (field 2) can contain spaces and parens, so split on
+# the last ') '. Printed empty on any failure — the key is then simply omitted.
+leader_starttime() {
+    _stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    _rest=${_stat##*') '}
+    printf '%s\n' "$_rest" | awk '{print $20}'
+}
+LEADER_STARTTIME=$(leader_starttime "$LEADER" 2>/dev/null || printf '')
+
 mkdir -p "$SESSIONS_DIR" 2>/dev/null || true
 
 # Lowest free positive integer by atomic create. `set -o noclobber` makes `>`
@@ -125,6 +136,7 @@ TMP="$SESSIONS_DIR/.$SID.tmp"
     printf 'IS_DISPLAY=%s\n' "$IS_DISPLAY"
     printf 'REMOTE=0\n'
     printf 'LEADER=%s\n'     "$LEADER"
+    [ -n "$LEADER_STARTTIME" ] && printf 'LEADER_STARTTIME=%s\n' "$LEADER_STARTTIME"
     printf 'SERVICE=%s\n'    "$SERVICE"
     printf 'REALTIME=%s\n'   "$REALTIME"
     printf 'MONOTONIC=%s\n'  "$MONOTONIC"

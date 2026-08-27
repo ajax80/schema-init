@@ -160,6 +160,21 @@ def main():
         check('seat file names the active one', 'ACTIVE=1\n' in seat,
               seat.replace('\n', ' '))
 
+        # --- LEADER_STARTTIME baseline is recorded for the recycle guard ---
+        sid_lt, rc_lt = register(
+            '--uid', uid, '--user', user, '--seat', 'seat0', '--vtnr', '7',
+            '--type', 'tty', '--leader', str(os.getpid()))
+        check('register with a live leader exits 0', rc_lt == 0, 'rc=%d' % rc_lt)
+        body = open(os.path.join(rundir, 'sessions', sid_lt)).read()
+        with open('/proc/%d/stat' % os.getpid()) as f:
+            want = int(f.read().rsplit(') ', 1)[1].split()[19])
+        check('session file records LEADER_STARTTIME',
+              ('LEADER_STARTTIME=%d' % want) in body.splitlines(),
+              body)
+        time.sleep(SETTLE)
+        unregister(sid_lt, uid)
+        time.sleep(SETTLE)
+
         print("\n-- unregistering releases the id and the scope --")
         rc = unregister('1', uid)
         check('unregister exits 0', rc == 0, 'rc=%d' % rc)
@@ -191,7 +206,7 @@ def main():
         except Exception:
             pass
         seen = re.findall(r'Registered Session (\S+) at', log)
-        bad = [s for s in seen if s not in ('1', '2', '31')]
+        bad = [s for s in seen if s not in ('1', '2', '31', sid_lt)]
         check('no session object for an unexpected id', not bad,
               'saw %s' % (seen or 'nothing'))
 

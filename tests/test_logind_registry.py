@@ -154,17 +154,34 @@ def test_signature_and_changes():
 
 def test_leader_sweep():
     clear_sessions()
-    write_session(5, UID=1000, USER='ajax80', VTNR=1, LEADER=os.getpid())
-    write_session(6, UID=1000, USER='ajax80', VTNR=3, LEADER=999999)
-    recs = L.scan_session_files()
-    check('sweep: live leader survives', recs['5'].leader_alive() is True)
-    check('sweep: dead leader detected', recs['6'].leader_alive() is False)
+    my = os.getpid()
+    my_start = L.proc_starttime_ticks(my)   # the real field-22 ticks for this test process
 
-    clear_sessions()
-    write_session(8, UID=1000, USER='ajax80', VTNR=1)
+    # live leader, baseline matches -> alive
+    write_session(5, UID=1000, USER='ajax80', VTNR=1,
+                  LEADER=my, LEADER_STARTTIME=my_start)
+    # pid absent -> dead regardless of baseline
+    write_session(6, UID=1000, USER='ajax80', VTNR=3,
+                  LEADER=999999, LEADER_STARTTIME=12345)
+    # recycle case: pid alive in /proc, but baseline start-ticks differ -> dead
+    write_session(7, UID=1000, USER='ajax80', VTNR=4,
+                  LEADER=my, LEADER_STARTTIME=my_start + 1)
+    # no baseline key (pre-upgrade session) -> alive if pid exists (prior behavior)
+    write_session(8, UID=1000, USER='ajax80', VTNR=5, LEADER=my)
+    # no LEADER key at all -> not ours to reap
+    write_session(9, UID=1000, USER='ajax80', VTNR=6)
+
     recs = L.scan_session_files()
-    check('sweep: no LEADER key is not treated as dead',
+    check('sweep: live leader, matching start-ticks -> alive',
+          recs['5'].leader_alive() is True)
+    check('sweep: absent pid -> dead',
+          recs['6'].leader_alive() is False)
+    check('sweep: recycled pid (alive, start-ticks differ) -> dead',
+          recs['7'].leader_alive() is False)
+    check('sweep: no baseline key -> alive if pid exists (backward-compat)',
           recs['8'].leader_alive() is True)
+    check('sweep: no LEADER key is not treated as dead',
+          recs['9'].leader_alive() is True)
 
 
 def test_derived_files():
