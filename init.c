@@ -177,6 +177,22 @@ static void eviction_tick(void) {
  * naturally timeout and force-reboot the processor. This guarantees a safe failure cascade
  * under all single-point failure modes.
  */
+static void load_watchdog_module(void) {
+    if (getpid() != 1) return;
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/sbin/modprobe", "modprobe", "sp5100_tco", (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) return;
+    int status;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+        printf("[schema-init] loaded watchdog module (sp5100_tco)\n");
+    else
+        printf("[schema-init] watchdog module load failed (sp5100_tco)\n");
+}
+
 static void watchdog_init(void) {
     const char *paths[] = { "/dev/watchdog0", "/dev/watchdog", NULL };
     int i;
@@ -1931,6 +1947,7 @@ int main(int argc, char **argv) {
     }
     mount_pseudo();
     cleanup_tmp_locks();
+    load_watchdog_module();
     watchdog_init();
     /* Before the control socket opens or a single service spawns, so the
      * raised limit covers every descriptor PID 1 will ever hold. */
