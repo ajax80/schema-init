@@ -52,4 +52,24 @@ fs5 = sd.FlapState.load()
 check("boot change resets heals", fs5._c("x")["heals"] == [])
 check("boot change clears chronic", fs5._c("x")["chronic"] is False)
 
+class Flaky(sd.Check):
+    """SAFE check that heals (verify passes) but re-breaks before the next run."""
+    def __init__(self):
+        self.name = self.summary = "flaky"; self.grade = sd.SAFE; self._broken = True
+    def detect(self):
+        return sd.Finding("broke again") if self._broken else None
+    def heal(self, f): self._broken = False          # verify() -> detect() is None -> True
+
+fs6 = sd.FlapState.load()
+states = []
+for i in range(4):
+    c = Flaky()
+    r = sd.run_checks([c], heal=True, force=set(), flap=fs6, now=9000 + i)[0]
+    states.append(r.state)
+check("periodic: heals 3x then chronic", states == ["healed", "healed", "healed", "chronic"], str(states))
+
+# boot mode (flap=None) never goes chronic — heals every time
+boot_states = [sd.run_checks([Flaky()], heal=True, force=set(), now=9000 + i)[0].state for i in range(4)]
+check("boot mode: always heals, never chronic", boot_states == ["healed"] * 4, str(boot_states))
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

@@ -64,7 +64,9 @@ class Check:
         pass
 
 
-def run_checks(checks, heal, force):
+def run_checks(checks, heal, force, flap=None, now=None):
+    if now is None:
+        now = time.time()
     results = {}
     order = []
     clean = []          # checks that detected healthy — watched for collateral
@@ -80,6 +82,8 @@ def run_checks(checks, heal, force):
         if f is None:
             results[c.name] = CheckResult(c.name, c.summary, "clean", grade=c.grade)
             clean.append(c)
+            if flap is not None:
+                flap.recovered(c.name)
             continue
         will_heal = heal and f.healable and (c.grade == SAFE or c.name in force)
         if not will_heal:
@@ -88,6 +92,13 @@ def run_checks(checks, heal, force):
                                           "left as found (deferred)" if c.grade == DEFERRED
                                           else "detect-only", grade=c.grade)
             continue
+        if flap is not None and c.grade == SAFE and c.name not in force:
+            if not flap.should_heal(c.name, now):
+                results[c.name] = CheckResult(
+                    c.name, c.summary, "chronic", c.explain(f), f.oracle_said,
+                    f"chronic — {FLAP_THRESHOLD}+ heals in {FLAP_WINDOW // 60}m, not re-healing",
+                    grade=c.grade)
+                continue
         snap = c.snapshot()
         c.heal(f)
         # collateral: did any previously-clean check just break?
@@ -103,6 +114,8 @@ def run_checks(checks, heal, force):
             results[c.name] = CheckResult(c.name, c.summary, "healed",
                                           c.explain(f), f.oracle_said, "healed", grade=c.grade)
             clean.append(c)
+            if flap is not None:
+                flap.record_heal(c.name, now)
         else:
             c.back_out(snap)
             results[c.name] = CheckResult(c.name, c.summary, "reported",
