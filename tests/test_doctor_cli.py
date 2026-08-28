@@ -17,12 +17,12 @@ os.makedirs(os.path.join(root, "etc/schema-init"))
 sd = load(root)
 
 # config: missing file → heal on, nothing disabled
-heal, dis = sd.read_config(); check("default config heals", heal is True and dis == set())
+heal, dis, notify = sd.read_config(); check("default config heals", heal is True and dis == set())
 
 # config: heal=no + disable list
 with open(os.path.join(root, "etc/schema-init/doctor.conf"), "w") as fh:
     fh.write("heal=no\ndisable=foo, bar\n")
-heal, dis = sd.read_config(); check("config parsed", heal is False and dis == {"foo", "bar"})
+heal, dis, notify = sd.read_config(); check("config parsed", heal is False and dis == {"foo", "bar"})
 
 # report writer creates a 0644 file
 res = [sd.CheckResult("x", "x summary", "healed", "was broken", "systemd: rw", "healed")]
