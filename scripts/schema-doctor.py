@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 SAFE, DEFERRED = "SAFE", "DEFERRED"
 ROOT = os.environ.get("DOCTOR_ROOT", "")
+GREEN, AMBER, RED = "GREEN", "AMBER", "RED"
 
 
 @dataclass
@@ -36,6 +37,7 @@ class CheckResult:
     detail: str = ""
     oracle_said: str = ""
     action: str = ""
+    grade: str = SAFE
 
 
 class Check:
@@ -72,11 +74,11 @@ def run_checks(checks, heal, force):
         if aborted:
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           "not run — earlier heal was rolled back",
-                                          "", "run aborted")
+                                          "", "run aborted", grade=c.grade)
             continue
         f = c.detect()
         if f is None:
-            results[c.name] = CheckResult(c.name, c.summary, "clean")
+            results[c.name] = CheckResult(c.name, c.summary, "clean", grade=c.grade)
             clean.append(c)
             continue
         will_heal = heal and f.healable and (c.grade == SAFE or c.name in force)
@@ -84,7 +86,7 @@ def run_checks(checks, heal, force):
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
                                           "left as found (deferred)" if c.grade == DEFERRED
-                                          else "detect-only")
+                                          else "detect-only", grade=c.grade)
             continue
         snap = c.snapshot()
         c.heal(f)
@@ -94,19 +96,39 @@ def run_checks(checks, heal, force):
             c.back_out(snap)
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
-                                          f"rolled back — heal broke {broke.name}")
+                                          f"rolled back — heal broke {broke.name}", grade=c.grade)
             aborted = True
             continue
         if c.verify():
             results[c.name] = CheckResult(c.name, c.summary, "healed",
-                                          c.explain(f), f.oracle_said, "healed")
+                                          c.explain(f), f.oracle_said, "healed", grade=c.grade)
             clean.append(c)
         else:
             c.back_out(snap)
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
-                                          "heal did not resolve — rolled back")
+                                          "heal did not resolve — rolled back", grade=c.grade)
     return [results[n] for n in order]
+
+
+def result_color(r):
+    if r.state == "clean":
+        return GREEN
+    if r.state == "healed":
+        return AMBER
+    if r.state == "chronic":
+        return RED
+    return AMBER if r.grade == DEFERRED else RED   # reported
+
+
+def overall_color(results):
+    rank = {GREEN: 0, AMBER: 1, RED: 2}
+    worst = GREEN
+    for r in results:
+        c = result_color(r)
+        if rank[c] > rank[worst]:
+            worst = c
+    return worst
 
 
 REGISTRY: list = []
