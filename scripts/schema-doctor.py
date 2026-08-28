@@ -506,6 +506,7 @@ REGISTRY.append(KsycocaLoop())
 def read_config():
     heal = True
     disabled = set()
+    notify = True
     path = os.path.join(ROOT, "etc/schema-init/doctor.conf")
     try:
         with open(path) as fh:
@@ -519,9 +520,11 @@ def read_config():
                     heal = False
                 elif k == "disable":
                     disabled |= {x.strip() for x in v.split(",") if x.strip()}
+                elif k == "notify" and v.lower() in ("no", "off", "0", "false"):
+                    notify = False
     except FileNotFoundError:
         pass
-    return heal, disabled
+    return heal, disabled, notify
 
 
 def render_report(results):
@@ -649,9 +652,9 @@ def wait_for_session(timeout):
     return False
 
 
-def _safe_detect_all(checks, heal, force):
+def _safe_detect_all(checks, heal, force, flap=None):
     try:
-        return run_checks(checks, heal, force)
+        return run_checks(checks, heal, force, flap=flap)
     except Exception as e:                       # never propagate — never block boot
         return [CheckResult("schema-doctor", "internal", "reported",
                             f"doctor aborted: {e}", "", "logged, exit 0")]
@@ -668,10 +671,16 @@ def main(argv):
                     help="run a DEFERRED check's heal anyway")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--wait", type=float, default=0.0, help="wait N s for a session first")
+    ap.add_argument("--periodic", action="store_true", help="flap-aware run + notify (timer)")
+    ap.add_argument("--status", action="store_true", help="print the last health status")
     args = ap.parse_args(argv)
 
-    cfg_heal, disabled = read_config()
+    cfg_heal, disabled, cfg_notify = read_config()
     checks = [c for c in REGISTRY if c.name not in disabled]
+
+    if args.status:
+        print(read_status())
+        return 0
 
     if args.explain:
         for c in checks:
@@ -689,7 +698,20 @@ def main(argv):
         wait_for_session(args.wait)
 
     heal = (args.heal or (not args.check and not args.dry_run)) and cfg_heal and not args.dry_run
-    results = _safe_detect_all(checks, heal, set(args.force))
+    flap = FlapState.load() if args.periodic else None
+    results = _safe_detect_all(checks, heal, set(args.force), flap)
+
+    mode = "periodic" if args.periodic else ("boot" if args.wait else "manual")
+    try:
+        write_status(render_status(results, mode))
+    except Exception:
+        pass
+    if flap is not None:
+        try:
+            notify_transitions(results, flap, cfg_notify)
+            flap.save()
+        except Exception:
+            pass
 
     out = render_json(results) if args.json else render_report(results)
     write_report(render_report(results))
