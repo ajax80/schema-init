@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 SAFE, DEFERRED = "SAFE", "DEFERRED"
-ROOT = os.environ.get("DOCTOR_ROOT", "")
+ROOT = os.environ.get("DOCTOR_ROOT") or "/"
 GREEN, AMBER, RED = "GREEN", "AMBER", "RED"
 
 
