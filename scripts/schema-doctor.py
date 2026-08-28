@@ -18,7 +18,8 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 SAFE, DEFERRED = "SAFE", "DEFERRED"
-ROOT = os.environ.get("DOCTOR_ROOT", "")
+ROOT = os.environ.get("DOCTOR_ROOT") or "/"
+GREEN, AMBER, RED = "GREEN", "AMBER", "RED"
 
 
 @dataclass
@@ -36,6 +37,7 @@ class CheckResult:
     detail: str = ""
     oracle_said: str = ""
     action: str = ""
+    grade: str = SAFE
 
 
 class Check:
@@ -62,7 +64,9 @@ class Check:
         pass
 
 
-def run_checks(checks, heal, force):
+def run_checks(checks, heal, force, flap=None, now=None):
+    if now is None:
+        now = time.time()
     results = {}
     order = []
     clean = []          # checks that detected healthy — watched for collateral
@@ -72,20 +76,29 @@ def run_checks(checks, heal, force):
         if aborted:
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           "not run — earlier heal was rolled back",
-                                          "", "run aborted")
+                                          "", "run aborted", grade=c.grade)
             continue
         f = c.detect()
         if f is None:
-            results[c.name] = CheckResult(c.name, c.summary, "clean")
+            results[c.name] = CheckResult(c.name, c.summary, "clean", grade=c.grade)
             clean.append(c)
+            if flap is not None:
+                flap.recovered(c.name)
             continue
         will_heal = heal and f.healable and (c.grade == SAFE or c.name in force)
         if not will_heal:
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
                                           "left as found (deferred)" if c.grade == DEFERRED
-                                          else "detect-only")
+                                          else "detect-only", grade=c.grade)
             continue
+        if flap is not None and c.grade == SAFE and c.name not in force:
+            if not flap.should_heal(c.name, now):
+                results[c.name] = CheckResult(
+                    c.name, c.summary, "chronic", c.explain(f), f.oracle_said,
+                    f"chronic — {FLAP_THRESHOLD}+ heals in {FLAP_WINDOW // 60}m, not re-healing",
+                    grade=c.grade)
+                continue
         snap = c.snapshot()
         c.heal(f)
         # collateral: did any previously-clean check just break?
@@ -94,19 +107,117 @@ def run_checks(checks, heal, force):
             c.back_out(snap)
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
-                                          f"rolled back — heal broke {broke.name}")
+                                          f"rolled back — heal broke {broke.name}", grade=c.grade)
             aborted = True
             continue
         if c.verify():
             results[c.name] = CheckResult(c.name, c.summary, "healed",
-                                          c.explain(f), f.oracle_said, "healed")
+                                          c.explain(f), f.oracle_said, "healed", grade=c.grade)
             clean.append(c)
+            if flap is not None:
+                flap.record_heal(c.name, now)
         else:
             c.back_out(snap)
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
-                                          "heal did not resolve — rolled back")
+                                          "heal did not resolve — rolled back", grade=c.grade)
     return [results[n] for n in order]
+
+
+def result_color(r):
+    if r.state == "clean":
+        return GREEN
+    if r.state == "healed":
+        return AMBER
+    if r.state == "chronic":
+        return RED
+    return AMBER if r.grade == DEFERRED else RED   # reported
+
+
+def overall_color(results):
+    rank = {GREEN: 0, AMBER: 1, RED: 2}
+    worst = GREEN
+    for r in results:
+        c = result_color(r)
+        if rank[c] > rank[worst]:
+            worst = c
+    return worst
+
+
+FLAP_THRESHOLD = 3
+FLAP_WINDOW = 1800   # seconds
+
+
+def _boot_id():
+    try:
+        return open(os.path.join(ROOT, "proc/sys/kernel/random/boot_id")).read().strip()
+    except OSError:
+        return ""
+
+
+class FlapState:
+    PATH = "var/lib/schema-init/doctor-state"
+
+    def __init__(self, data):
+        self.data = data
+
+    @classmethod
+    def load(cls):
+        try:
+            data = json.load(open(os.path.join(ROOT, cls.PATH)))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data.setdefault("version", 1)
+        data.setdefault("last_overall", GREEN)
+        data.setdefault("last_run", 0)
+        data.setdefault("checks", {})
+        if not isinstance(data["checks"], dict):
+            data["checks"] = {}
+        bid = _boot_id()
+        if data.get("boot_id") != bid:            # fresh boot -> fresh flap history
+            data["boot_id"] = bid
+            try:
+                for c in data["checks"].values():
+                    c["heals"] = []
+                    c["chronic"] = False
+            except (AttributeError, TypeError):
+                data["checks"] = {}
+        return cls(data)
+
+    def save(self, now=None):
+        self.data["last_run"] = int(now if now is not None else time.time())
+        p = os.path.join(ROOT, self.PATH)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p + ".tmp", "w") as fh:
+            json.dump(self.data, fh)
+        os.replace(p + ".tmp", p)
+        os.chmod(p, 0o644)
+
+    def _c(self, name):
+        return self.data["checks"].setdefault(
+            name, {"heals": [], "chronic": False, "last_state": GREEN})
+
+    def should_heal(self, name, now):
+        c = self._c(name)
+        c["heals"] = [t for t in c["heals"] if now - t < FLAP_WINDOW]
+        if len(c["heals"]) >= FLAP_THRESHOLD:
+            c["chronic"] = True
+            return False
+        c["chronic"] = False
+        return True
+
+    def record_heal(self, name, now):
+        self._c(name)["heals"].append(int(now))
+
+    def recovered(self, name):
+        c = self._c(name)
+        c["heals"] = []
+        c["chronic"] = False
+
+    def is_chronic(self, name):
+        return self._c(name).get("chronic", False)
 
 
 REGISTRY: list = []
@@ -401,6 +512,7 @@ REGISTRY.append(KsycocaLoop())
 def read_config():
     heal = True
     disabled = set()
+    notify = True
     path = os.path.join(ROOT, "etc/schema-init/doctor.conf")
     try:
         with open(path) as fh:
@@ -414,9 +526,11 @@ def read_config():
                     heal = False
                 elif k == "disable":
                     disabled |= {x.strip() for x in v.split(",") if x.strip()}
+                elif k == "notify" and v.lower() in ("no", "off", "0", "false"):
+                    notify = False
     except FileNotFoundError:
         pass
-    return heal, disabled
+    return heal, disabled, notify
 
 
 def render_report(results):
@@ -447,6 +561,107 @@ def write_report(text):
     return p
 
 
+def render_status(results, mode):
+    ov = overall_color(results)
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    lines = [f"schema-doctor: {ov}   {ts}   mode={mode}"]
+    for r in results:
+        tail = r.action or r.detail or ""
+        lines.append(f"  {result_color(r):<6} {r.name:<22} {tail}")
+    return "\n".join(lines) + "\n"
+
+
+def status_json(results, mode):
+    return json.dumps({
+        "overall": overall_color(results),
+        "mode": mode,
+        "ts": int(time.time()),
+        "checks": [{"name": r.name, "color": result_color(r), "state": r.state,
+                    "detail": r.detail, "action": r.action} for r in results],
+    }, indent=2)
+
+
+def write_status(text):
+    d = os.path.join(ROOT, "run/schema-init")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "doctor-status")
+    with open(p, "w") as fh:
+        fh.write(text)
+    os.chmod(p, 0o644)
+    return p
+
+
+def read_status():
+    try:
+        return open(os.path.join(ROOT, "run/schema-init/doctor-status")).read()
+    except OSError:
+        return "schema-doctor: no status yet (run --heal or wait for the periodic timer)\n"
+
+
+def write_status_json(text):
+    d = os.path.join(ROOT, "run/schema-init")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "doctor-status.json")
+    with open(p, "w") as fh:
+        fh.write(text)
+    os.chmod(p, 0o644)
+    return p
+
+
+def read_status_json():
+    try:
+        return open(os.path.join(ROOT, "run/schema-init/doctor-status.json")).read()
+    except OSError:
+        return json.dumps({"overall": "UNKNOWN", "mode": "", "ts": 0, "checks": []})
+
+
+def active_session_env():
+    uid = active_uid()
+    for p in _proc_table():
+        if p["env"].get("DBUS_SESSION_BUS_ADDRESS"):
+            return uid, p["env"]
+    return uid, None
+
+
+def _notify_argv(uid, summary, body):
+    return ["setpriv", "--reuid", str(uid), "--regid", str(uid), "--clear-groups",
+            "notify-send", "-a", "schema-doctor", "--", summary, body]
+
+
+def notify_send(uid, env, summary, body):
+    if uid is None or not env or not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        return
+    child = {"DBUS_SESSION_BUS_ADDRESS": env["DBUS_SESSION_BUS_ADDRESS"],
+             "DISPLAY": env.get("DISPLAY", ""),
+             "WAYLAND_DISPLAY": env.get("WAYLAND_DISPLAY", ""),
+             "XDG_RUNTIME_DIR": env.get("XDG_RUNTIME_DIR", f"/run/user/{uid}"),
+             "PATH": "/usr/bin:/bin"}
+    try:
+        subprocess.run(_notify_argv(uid, summary, body), env=child,
+                       timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def notify_transitions(results, flap, enabled):
+    events = []
+    for r in results:
+        col = result_color(r)
+        prev = flap._c(r.name).get("last_state", GREEN)
+        if col == RED and prev != RED:
+            events.append((f"schema-doctor: {r.name}",
+                           r.action or r.detail or "needs attention"))
+        flap._c(r.name)["last_state"] = col          # bookkeeping, always
+    new_overall = overall_color(results)
+    if new_overall == GREEN and flap.data.get("last_overall", GREEN) != GREEN:
+        events.append(("schema-doctor: all clear", "all seams healthy again"))
+    flap.data["last_overall"] = new_overall
+    if enabled and events:
+        uid, env = active_session_env()
+        for summ, body in events:
+            notify_send(uid, env, summ, body)
+
+
 def wait_for_session(timeout):
     d = os.path.join(ROOT, "run/systemd/sessions")
     deadline = time.time() + timeout
@@ -460,9 +675,9 @@ def wait_for_session(timeout):
     return False
 
 
-def _safe_detect_all(checks, heal, force):
+def _safe_detect_all(checks, heal, force, flap=None):
     try:
-        return run_checks(checks, heal, force)
+        return run_checks(checks, heal, force, flap=flap)
     except Exception as e:                       # never propagate — never block boot
         return [CheckResult("schema-doctor", "internal", "reported",
                             f"doctor aborted: {e}", "", "logged, exit 0")]
@@ -479,10 +694,16 @@ def main(argv):
                     help="run a DEFERRED check's heal anyway")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--wait", type=float, default=0.0, help="wait N s for a session first")
+    ap.add_argument("--periodic", action="store_true", help="flap-aware run + notify (timer)")
+    ap.add_argument("--status", action="store_true", help="print the last health status")
     args = ap.parse_args(argv)
 
-    cfg_heal, disabled = read_config()
+    cfg_heal, disabled, cfg_notify = read_config()
     checks = [c for c in REGISTRY if c.name not in disabled]
+
+    if args.status:
+        print(read_status_json() if args.json else read_status())
+        return 0
 
     if args.explain:
         for c in checks:
@@ -500,7 +721,24 @@ def main(argv):
         wait_for_session(args.wait)
 
     heal = (args.heal or (not args.check and not args.dry_run)) and cfg_heal and not args.dry_run
-    results = _safe_detect_all(checks, heal, set(args.force))
+    flap = FlapState.load() if args.periodic else None
+    results = _safe_detect_all(checks, heal, set(args.force), flap)
+
+    mode = "periodic" if args.periodic else ("boot" if args.wait else "manual")
+    try:
+        write_status(render_status(results, mode))
+    except Exception:
+        pass
+    try:
+        write_status_json(status_json(results, mode))
+    except Exception:
+        pass
+    if flap is not None:
+        try:
+            notify_transitions(results, flap, cfg_notify)
+            flap.save()
+        except Exception:
+            pass
 
     out = render_json(results) if args.json else render_report(results)
     write_report(render_report(results))
