@@ -417,6 +417,42 @@ what lets libudev/PipeWire/logind keep enumerating devices with udevd gone.
 
 ---
 
+## schema-doctor
+
+`schema-doctor` is a self-healing seam checker. schema-init's replacements (its own logind, its own udev) meet desktop expectations at a handful of seams, and every machine comes up with *different but very similar* quirks clustered there — a compositor that raced ahead of its device ACLs, a power daemon that never autostarted, a menu-cache rebuild storm. The doctor diagnoses those seams, **heals the safe ones itself**, and **names the deep ones** (too invasive to fix under a live desktop — the real fix belongs at the source). It is a stdlib-only script, installed at `/usr/local/bin/schema-doctor`, that uses the still-installed systemd as its oracle for "what should this look like."
+
+### The checks
+
+Each check is graded **SAFE** (auto-healed on every run) or **DEFERRED** (detected and named, never auto-healed — run with `--force <name>` to override):
+
+| Check | Grade | Catches |
+|---|---|---|
+| `card-input-acl` | SAFE | active user missing `uaccess` rw on `/dev/dri/card*`, `renderD*`, `/dev/input/event*` → re-applies the ACL |
+| `vt-mediation` | SAFE | `Ctrl+Alt+F<n>` VT switching unmediated (the frozen-screen path) → re-arms it via schema-logind |
+| `session-single` | DEFERRED | an orphaned placeholder session — registration lost the boot race |
+| `login1-power` | DEFERRED | `login1` not answering the PowerOff/Reboot/Suspend/Hibernate/inhibitor queries PowerDevil makes on load |
+| `powerdevil-running` | DEFERRED | PowerDevil not running, so power and screen-lock settings won't load |
+| `ksycoca-loop` | DEFERRED | plasmashell and kded6 disagree on `XDG_MENU_PREFIX`, each rebuilding the menu cache in a loop |
+
+The run loop is the safety heart: **snapshot → heal → verify**, per check. If a heal doesn't resolve the fault, or breaks a previously-clean check, it is **backed out** and reported not-healed; a collateral break aborts the whole run. The entire run is wrapped to always `exit 0` (`critical=0`) — the doctor can never block boot or leave the box worse than it found it. Config lives in `/etc/schema-init/doctor.conf` (`heal=no` for global detect-only, `disable=a,b`, `notify=no`).
+
+### Two runs, one engine
+
+The same one-shot engine runs in two roles — it is **not** a daemon:
+
+- **Boot run** (`schema-doctor.svc`, `--heal --wait 30`): a late oneshot after a session exists, aggressive first-heal on a fresh box, silent.
+- **Standing run** (`schema-doctor-periodic.svc`, `--heal --periodic`): a native schema-init interval timer (`on_boot_sec`/`on_active_sec`, re-armed by PID 1) re-runs the engine every 10 minutes to catch faults that appear *after* login — a helper that dies at hour 3, an ACL a bad app clobbers mid-session.
+
+The standing run adds three fail-safe guards:
+
+- **Flap guard** — heal history lives in `/var/lib/schema-init/doctor-state` (JSON, keyed by `boot_id`). A check healed **≥3 times in 30 minutes** is marked **CHRONIC**: the doctor stops band-aiding it and escalates it to a visible RED, because the real fix is elsewhere. The mark clears the first time the check reads clean.
+- **Health signal** — `/run/schema-init/doctor-status` (text, plus a `--json` twin) is rewritten every run: per-check GREEN/AMBER/RED with an overall worst-wins rollup. `schema-doctor --status` prints it from anywhere.
+- **Desktop notifications** — edge-triggered on `--periodic` runs only: a check newly going CHRONIC or heal-failing, or the box returning to all-GREEN. Successful auto-heals are silent — quiet self-healing is the point. Notifications reach the active user by reading `DBUS_SESSION_BUS_ADDRESS` from the session leader's environ (this platform's bus is `/tmp/dbus-XXXX`, not `/run/user/1000/bus`), and are best-effort — a notify failure never fails a run.
+
+schema-doctor is the logind-seam counterpart to what `verify-rules-live` is for the udev seam: a standing assertion that the seam still holds.
+
+---
+
 ## State glossary
 
 | State | Meaning |
