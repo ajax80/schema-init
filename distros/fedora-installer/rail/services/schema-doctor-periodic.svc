@@ -1,0 +1,8 @@
+name=schema-doctor-periodic
+exec=/usr/local/bin/schema-doctor
+args=--heal
+args=--periodic
+on_boot_sec=600
+on_active_sec=600
+needs_root=1
+critical=0
