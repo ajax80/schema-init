@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Flap backoff/escalate state machine for schema-doctor."""
+import os, sys, json, tempfile, importlib.util
+TMP = tempfile.mkdtemp()
+os.environ["DOCTOR_ROOT"] = TMP
+os.makedirs(os.path.join(TMP, "proc/sys/kernel/random"), exist_ok=True)
+open(os.path.join(TMP, "proc/sys/kernel/random/boot_id"), "w").write("boot-A\n")
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+spec = importlib.util.spec_from_file_location("schema_doctor", os.path.join(REPO, "scripts", "schema-doctor.py"))
+sd = importlib.util.module_from_spec(spec); spec.loader.exec_module(sd)
+
+results = []
+def check(name, ok, detail=''):
+    results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ''))
+
+# 3 heals allowed in-window, 4th blocked + chronic
+fs = sd.FlapState.load()
+t = 1000
+oks = []
+for i in range(3):
+    oks.append(fs.should_heal("x", t + i))       # True, True, True
+    if oks[-1]:
+        fs.record_heal("x", t + i)
+blocked = fs.should_heal("x", t + 3)              # False -> chronic
+check("first 3 heals allowed", oks == [True, True, True])
+check("4th blocked", blocked is False)
+check("marked chronic", fs.is_chronic("x") is True)
+
+# recovery clears chronic + history
+fs.recovered("x")
+check("recovered clears chronic", fs.is_chronic("x") is False)
+check("recovered clears heals", fs._c("x")["heals"] == [])
+
+# window pruning: old heals age out
+fs2 = sd.FlapState.load()
+fs2._c("y")["heals"] = [10, 20, 30]               # far older than now
+check("prune re-allows after window", fs2.should_heal("y", 10 + sd.FLAP_WINDOW + 1) is True)
+
+# persistence + corrupt-file tolerance
+fs.record_heal("z", 5000); fs.save(now=5000)
+open(os.path.join(TMP, "var/lib/schema-init/doctor-state"), "w").write("{ not json")
+fs3 = sd.FlapState.load()
+check("corrupt state -> empty, no crash", fs3.data["checks"] == {})
+
+# boot_id change resets heals
+open(os.path.join(TMP, "proc/sys/kernel/random/boot_id"), "w").write("boot-B\n")
+fs4 = sd.FlapState(json.loads(json.dumps(
+    {"version": 1, "boot_id": "boot-A", "last_overall": sd.GREEN, "last_run": 0,
+     "checks": {"x": {"heals": [1, 2, 3], "chronic": True, "last_state": sd.RED}}})))
+open(os.path.join(TMP, "var/lib/schema-init/doctor-state"), "w").write(json.dumps(fs4.data))
+fs5 = sd.FlapState.load()
+check("boot change resets heals", fs5._c("x")["heals"] == [])
+check("boot change clears chronic", fs5._c("x")["chronic"] is False)
+
+print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

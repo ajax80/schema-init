@@ -131,6 +131,76 @@ def overall_color(results):
     return worst
 
 
+FLAP_THRESHOLD = 3
+FLAP_WINDOW = 1800   # seconds
+
+
+def _boot_id():
+    try:
+        return open(os.path.join(ROOT, "proc/sys/kernel/random/boot_id")).read().strip()
+    except OSError:
+        return ""
+
+
+class FlapState:
+    PATH = "var/lib/schema-init/doctor-state"
+
+    def __init__(self, data):
+        self.data = data
+
+    @classmethod
+    def load(cls):
+        try:
+            data = json.load(open(os.path.join(ROOT, cls.PATH)))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data.setdefault("version", 1)
+        data.setdefault("last_overall", GREEN)
+        data.setdefault("last_run", 0)
+        data.setdefault("checks", {})
+        bid = _boot_id()
+        if data.get("boot_id") != bid:            # fresh boot -> fresh flap history
+            data["boot_id"] = bid
+            for c in data["checks"].values():
+                c["heals"] = []
+                c["chronic"] = False
+        return cls(data)
+
+    def save(self, now=None):
+        self.data["last_run"] = int(now if now is not None else time.time())
+        p = os.path.join(ROOT, self.PATH)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p + ".tmp", "w") as fh:
+            json.dump(self.data, fh)
+        os.replace(p + ".tmp", p)
+        os.chmod(p, 0o644)
+
+    def _c(self, name):
+        return self.data["checks"].setdefault(
+            name, {"heals": [], "chronic": False, "last_state": GREEN})
+
+    def should_heal(self, name, now):
+        c = self._c(name)
+        c["heals"] = [t for t in c["heals"] if now - t < FLAP_WINDOW]
+        if len(c["heals"]) >= FLAP_THRESHOLD:
+            c["chronic"] = True
+            return False
+        return True
+
+    def record_heal(self, name, now):
+        self._c(name)["heals"].append(int(now))
+
+    def recovered(self, name):
+        c = self._c(name)
+        c["heals"] = []
+        c["chronic"] = False
+
+    def is_chronic(self, name):
+        return self._c(name).get("chronic", False)
+
+
 REGISTRY: list = []
 
 
