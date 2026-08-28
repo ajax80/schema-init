@@ -552,6 +552,43 @@ def write_report(text):
     return p
 
 
+def render_status(results, mode):
+    ov = overall_color(results)
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    lines = [f"schema-doctor: {ov}   {ts}   mode={mode}"]
+    for r in results:
+        tail = r.action or r.detail or ""
+        lines.append(f"  {result_color(r):<6} {r.name:<22} {tail}")
+    return "\n".join(lines) + "\n"
+
+
+def status_json(results, mode):
+    return json.dumps({
+        "overall": overall_color(results),
+        "mode": mode,
+        "ts": int(time.time()),
+        "checks": [{"name": r.name, "color": result_color(r), "state": r.state,
+                    "detail": r.detail, "action": r.action} for r in results],
+    }, indent=2)
+
+
+def write_status(text):
+    d = os.path.join(ROOT, "run/schema-init")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "doctor-status")
+    with open(p, "w") as fh:
+        fh.write(text)
+    os.chmod(p, 0o644)
+    return p
+
+
+def read_status():
+    try:
+        return open(os.path.join(ROOT, "run/schema-init/doctor-status")).read()
+    except OSError:
+        return "schema-doctor: no status yet (run --heal or wait for the periodic timer)\n"
+
+
 def wait_for_session(timeout):
     d = os.path.join(ROOT, "run/systemd/sessions")
     deadline = time.time() + timeout
