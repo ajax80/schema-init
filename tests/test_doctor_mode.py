@@ -31,6 +31,16 @@ with contextlib.redirect_stdout(buf):
     sd.main(["--status"])
 check("--status prints GREEN (empty registry)", "GREEN" in buf.getvalue())
 
+check("periodic writes json status file",
+      os.path.exists(os.path.join(TMP, "run/schema-init/doctor-status.json")))
+
+import json
+buf2 = io.StringIO()
+with contextlib.redirect_stdout(buf2):
+    sd.main(["--status", "--json"])
+j = json.loads(buf2.getvalue())
+check("--status --json prints valid JSON with overall", j.get("overall") == "GREEN", str(j))
+
 # boot mode writes status but not a fresh state file: remove state, run --heal, assert none created
 os.remove(os.path.join(TMP, "var/lib/schema-init/doctor-state"))
 sd.main(["--heal"])

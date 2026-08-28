@@ -27,6 +27,10 @@ check("finds active uid", uid == 1000, str(uid))
 check("harvests /tmp/dbus bus", env and env.get("DBUS_SESSION_BUS_ADDRESS") == "unix:path=/tmp/dbus-abc")
 check("notify argv targets uid + app", sd._notify_argv(1000, "S", "B")[:6] ==
       ["setpriv", "--reuid", "1000", "--regid", "1000", "--clear-groups"])
+check("notify argv guards dash-leading summary with --", sd._notify_argv(1000, "S", "B")[-3:] ==
+      ["--", "S", "B"])
+check("notify argv survives dash-leading summary/body", sd._notify_argv(1000, "-x", "-y")[-3:] ==
+      ["--", "-x", "-y"])
 
 # capture notify_send calls without running anything
 sent = []

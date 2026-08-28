@@ -173,12 +173,17 @@ class FlapState:
         data.setdefault("last_overall", GREEN)
         data.setdefault("last_run", 0)
         data.setdefault("checks", {})
+        if not isinstance(data["checks"], dict):
+            data["checks"] = {}
         bid = _boot_id()
         if data.get("boot_id") != bid:            # fresh boot -> fresh flap history
             data["boot_id"] = bid
-            for c in data["checks"].values():
-                c["heals"] = []
-                c["chronic"] = False
+            try:
+                for c in data["checks"].values():
+                    c["heals"] = []
+                    c["chronic"] = False
+            except (AttributeError, TypeError):
+                data["checks"] = {}
         return cls(data)
 
     def save(self, now=None):
@@ -200,6 +205,7 @@ class FlapState:
         if len(c["heals"]) >= FLAP_THRESHOLD:
             c["chronic"] = True
             return False
+        c["chronic"] = False
         return True
 
     def record_heal(self, name, now):
@@ -592,6 +598,23 @@ def read_status():
         return "schema-doctor: no status yet (run --heal or wait for the periodic timer)\n"
 
 
+def write_status_json(text):
+    d = os.path.join(ROOT, "run/schema-init")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "doctor-status.json")
+    with open(p, "w") as fh:
+        fh.write(text)
+    os.chmod(p, 0o644)
+    return p
+
+
+def read_status_json():
+    try:
+        return open(os.path.join(ROOT, "run/schema-init/doctor-status.json")).read()
+    except OSError:
+        return json.dumps({"overall": "UNKNOWN", "mode": "", "ts": 0, "checks": []})
+
+
 def active_session_env():
     uid = active_uid()
     for p in _proc_table():
@@ -602,7 +625,7 @@ def active_session_env():
 
 def _notify_argv(uid, summary, body):
     return ["setpriv", "--reuid", str(uid), "--regid", str(uid), "--clear-groups",
-            "notify-send", "-a", "schema-doctor", summary, body]
+            "notify-send", "-a", "schema-doctor", "--", summary, body]
 
 
 def notify_send(uid, env, summary, body):
@@ -679,7 +702,7 @@ def main(argv):
     checks = [c for c in REGISTRY if c.name not in disabled]
 
     if args.status:
-        print(read_status())
+        print(read_status_json() if args.json else read_status())
         return 0
 
     if args.explain:
@@ -704,6 +727,10 @@ def main(argv):
     mode = "periodic" if args.periodic else ("boot" if args.wait else "manual")
     try:
         write_status(render_status(results, mode))
+    except Exception:
+        pass
+    try:
+        write_status_json(status_json(results, mode))
     except Exception:
         pass
     if flap is not None:

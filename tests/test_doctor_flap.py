@@ -72,4 +72,35 @@ check("periodic: heals 3x then chronic", states == ["healed", "healed", "healed"
 boot_states = [sd.run_checks([Flaky()], heal=True, force=set(), now=9000 + i)[0].state for i in range(4)]
 check("boot mode: always heals, never chronic", boot_states == ["healed"] * 4, str(boot_states))
 
+# wrong-shaped-but-valid JSON + boot_id mismatch -> empty state, no crash (Fix #2)
+open(os.path.join(TMP, "proc/sys/kernel/random/boot_id"), "w").write("boot-C\n")
+open(os.path.join(TMP, "var/lib/schema-init/doctor-state"), "w").write(
+    json.dumps({"version": 1, "boot_id": "boot-B", "checks": [1, 2, 3]}))
+try:
+    fs7 = sd.FlapState.load()
+    check("wrong-shape checks (list) -> empty, no crash", fs7.data["checks"] == {})
+except Exception as e:
+    check("wrong-shape checks (list) -> empty, no crash", False, f"raised {e!r}")
+
+open(os.path.join(TMP, "proc/sys/kernel/random/boot_id"), "w").write("boot-D\n")
+open(os.path.join(TMP, "var/lib/schema-init/doctor-state"), "w").write(
+    json.dumps({"version": 1, "boot_id": "boot-C", "checks": {"x": 5}}))
+try:
+    fs8 = sd.FlapState.load()
+    check("wrong-shape checks (dict of non-dicts) -> empty, no crash", fs8.data["checks"] == {})
+except Exception as e:
+    check("wrong-shape checks (dict of non-dicts) -> empty, no crash", False, f"raised {e!r}")
+
+# chronic clears once the window prunes heals below threshold (Fix #5)
+fs9 = sd.FlapState.load()
+t2 = 2000
+for i in range(3):
+    fs9.should_heal("w", t2 + i)
+    fs9.record_heal("w", t2 + i)
+fs9.should_heal("w", t2 + 3)                      # 4th -> blocked, chronic True
+check("chronic set after 4th", fs9.is_chronic("w") is True)
+later = fs9.should_heal("w", t2 + sd.FLAP_WINDOW + 10)   # heals aged out of window
+check("chronic clears after window prunes below threshold",
+      later is True and fs9.is_chronic("w") is False)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
