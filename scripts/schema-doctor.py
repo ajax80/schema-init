@@ -589,6 +589,53 @@ def read_status():
         return "schema-doctor: no status yet (run --heal or wait for the periodic timer)\n"
 
 
+def active_session_env():
+    uid = active_uid()
+    for p in _proc_table():
+        if p["env"].get("DBUS_SESSION_BUS_ADDRESS"):
+            return uid, p["env"]
+    return uid, None
+
+
+def _notify_argv(uid, summary, body):
+    return ["setpriv", "--reuid", str(uid), "--regid", str(uid), "--clear-groups",
+            "notify-send", "-a", "schema-doctor", summary, body]
+
+
+def notify_send(uid, env, summary, body):
+    if uid is None or not env or not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        return
+    child = {"DBUS_SESSION_BUS_ADDRESS": env["DBUS_SESSION_BUS_ADDRESS"],
+             "DISPLAY": env.get("DISPLAY", ""),
+             "WAYLAND_DISPLAY": env.get("WAYLAND_DISPLAY", ""),
+             "XDG_RUNTIME_DIR": env.get("XDG_RUNTIME_DIR", f"/run/user/{uid}"),
+             "PATH": "/usr/bin:/bin"}
+    try:
+        subprocess.run(_notify_argv(uid, summary, body), env=child,
+                       timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def notify_transitions(results, flap, enabled):
+    events = []
+    for r in results:
+        col = result_color(r)
+        prev = flap._c(r.name).get("last_state", GREEN)
+        if col == RED and prev != RED:
+            events.append((f"schema-doctor: {r.name}",
+                           r.action or r.detail or "needs attention"))
+        flap._c(r.name)["last_state"] = col          # bookkeeping, always
+    new_overall = overall_color(results)
+    if new_overall == GREEN and flap.data.get("last_overall", GREEN) != GREEN:
+        events.append(("schema-doctor: all clear", "all seams healthy again"))
+    flap.data["last_overall"] = new_overall
+    if enabled and events:
+        uid, env = active_session_env()
+        for summ, body in events:
+            notify_send(uid, env, summ, body)
+
+
 def wait_for_session(timeout):
     d = os.path.join(ROOT, "run/systemd/sessions")
     deadline = time.time() + timeout
