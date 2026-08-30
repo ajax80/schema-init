@@ -25,6 +25,17 @@ MOD = os.path.join(REPO, "distros/fedora-installer/migrate/schema-migrate.py")
 spec = importlib.util.spec_from_file_location("schema_migrate", MOD)
 sm = importlib.util.module_from_spec(spec); spec.loader.exec_module(sm)
 sm._PREVENT_LIST_OVERRIDE = os.path.join(fakerepo, "distros/fedora-installer/migrate/prevent-set.list")
+
+# No real toolchain in the temp root: stand in for the build, producing the
+# binary run_make_install guarantees so the CLI-sequencing checks can run.
+def fake_make_install(manifest, run=None, dry_run=False):
+    if dry_run:
+        return
+    dst = os.path.join(root, "usr/bin/schema-init")
+    open(dst, "w").close()
+    manifest.add_file("/usr/bin/schema-init")
+sm.run_make_install = fake_make_install
+
 results = []
 def check(n, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {n}")
 
