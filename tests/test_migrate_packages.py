@@ -24,8 +24,22 @@ check("records only newly installed", "egl-wayland" not in m.packages and "libav
 check("dnf install actually called", any(c[:2] == ["dnf", "install"] for c in calls))
 
 calls.clear()
-sm.run_make_install(run=fake_run)
+def fake_run_make(argv, **kw):
+    calls.append(argv)
+    if argv[0] == "make":
+        destdir = next(x.split("=", 1)[1] for x in argv if x.startswith("DESTDIR="))
+        target = os.path.join(destdir, "usr/bin/schema-init")
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        open(target, "w").close()
+    return type("R", (), {"returncode": 0, "stdout": ""})()
+
+m2 = sm.Manifest()
+sm.run_make_install(m2, run=fake_run_make)
 check("make install targets DESTDIR + PREFIX",
       any(c[0] == "make" and any("DESTDIR=" in x for x in c) and "PREFIX=/usr" in c for c in calls))
+check("installed file landed under MIGRATE_ROOT",
+      os.path.exists(os.path.join(root, "usr/bin/schema-init")))
+check("installed file recorded in manifest",
+      "/usr/bin/schema-init" in m2.files)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

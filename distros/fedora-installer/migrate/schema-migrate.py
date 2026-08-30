@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = os.environ.get("MIGRATE_ROOT") or "/"
 _MODDIR = os.path.dirname(os.path.abspath(__file__))
@@ -329,9 +330,14 @@ def _mount_slug(target):
     return target.strip("/").replace("/", "-")
 
 
+SKIP_MOUNT_TARGETS = {"/", "/boot", "/boot/efi"}
+
+
 def generate_host_units(profile, manifest, dry_run=False):
     written = []
     for mnt in profile.get("mounts", []):
+        if mnt["target"] in SKIP_MOUNT_TARGETS:
+            continue
         slug = _mount_slug(mnt["target"])
         rel = "etc/schema-init/services/mount-%s.svc" % slug
         body = ("name=mount-%s\n"
@@ -371,11 +377,23 @@ def install_packages(manifest, run=subprocess.run, dry_run=False):
     return done
 
 
-def run_make_install(run=subprocess.run, dry_run=False):
+def run_make_install(manifest, run=subprocess.run, dry_run=False):
     if dry_run:
         return
-    run(["make", "-C", repo(), "install", "DESTDIR=" + ROOT.rstrip("/"), "PREFIX=/usr"],
-        check=False)
+    staging = tempfile.mkdtemp()
+    try:
+        run(["make", "-C", repo(), "install", "DESTDIR=" + staging, "PREFIX=/usr"],
+            check=False)
+        for dirpath, _dirs, files in os.walk(staging):
+            for f in files:
+                full = os.path.join(dirpath, f)
+                rel = os.path.relpath(full, staging)
+                dst = P(rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(full, dst)
+                manifest.add_file("/" + rel)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def do_deploy(run=subprocess.run, dry_run=False):
@@ -383,7 +401,7 @@ def do_deploy(run=subprocess.run, dry_run=False):
     if not dry_run:
         write_profile(profile)
     m = Manifest()
-    run_make_install(run=run, dry_run=dry_run)
+    run_make_install(m, run=run, dry_run=dry_run)
     deploy_prevent_set(m, dry_run=dry_run)
     generate_host_units(profile, m, dry_run=dry_run)
     install_packages(m, run=run, dry_run=dry_run)
