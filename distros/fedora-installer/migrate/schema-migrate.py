@@ -6,6 +6,7 @@ Stdlib only. MIGRATE_ROOT prefixes filesystem paths (tests inject a temp tree);
 MIGRATE_REPO points at the schema-init tree on the USB.
 """
 import glob
+import glob as _glob
 import json
 import os
 import shutil
@@ -170,3 +171,49 @@ def write_profile(profile):
         json.dump(profile, fh, indent=2)
     os.chmod(p, 0o644)
     return p
+
+
+SCHEMA_ENTRY_ID = "schema-init"
+INIT_PATH = "/usr/bin/schema-init"
+
+
+def _active_entry(kernel):
+    entries = sorted(_glob.glob(P("boot/loader/entries/*.conf")))
+    entries = [e for e in entries if os.path.basename(e) != SCHEMA_ENTRY_ID + ".conf"]
+    if not entries:
+        return None
+    for e in entries:
+        if kernel and kernel in os.path.basename(e):
+            return e
+    for e in entries:
+        if kernel and kernel in open(e).read():
+            return e
+    return entries[-1]
+
+
+def add_boot_entry(kernel):
+    src = _active_entry(kernel)
+    dst = P("boot/loader/entries/%s.conf" % SCHEMA_ENTRY_ID)
+    lines = open(src).read().splitlines() if src else ["options ro"]
+    out = []
+    for line in lines:
+        if line.startswith("title "):
+            out.append(line.rstrip() + " (schema-init)")
+        elif line.startswith("options "):
+            if ("init=" + INIT_PATH) not in line:
+                line = line.rstrip() + " init=" + INIT_PATH
+            out.append(line)
+        else:
+            out.append(line)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "w") as fh:
+        fh.write("\n".join(out) + "\n")
+    return dst
+
+
+def remove_boot_entry():
+    dst = P("boot/loader/entries/%s.conf" % SCHEMA_ENTRY_ID)
+    try:
+        os.remove(dst)
+    except OSError:
+        pass
