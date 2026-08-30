@@ -481,6 +481,36 @@ class PowerDevilRunning(Check):
 REGISTRY.append(PowerDevilRunning())
 
 
+class SessionAgents(Check):
+    name = "session-agents"
+    summary = "KDE's global-shortcut and polkit auth agents are running"
+    grade = DEFERRED
+
+    AGENTS = [
+        ("kglobalacceld", "kglobalacceld (global shortcuts)"),
+        ("polkit-kde-authentication-agent", "polkit-kde-authentication-agent-1 (authorization prompts)"),
+    ]
+
+    def detect(self):
+        if active_uid() in (None, 0):
+            return None
+        tbl = _proc_table()
+        if not _running("plasmashell", tbl):
+            return None                              # not a live KDE desktop
+        missing = [label for needle, label in self.AGENTS if not _running(needle, tbl)]
+        if not missing:
+            return None
+        return Finding(
+            detail="not running: " + "; ".join(missing) + " — their /etc/xdg/autostart "
+                   "entries carry X-systemd-skip=true and there is no systemd --user to "
+                   "start them, so global shortcuts and authorization prompts are dead",
+            oracle_said="systemd --user starts these from the plasma session at login",
+            healable=False)
+
+
+REGISTRY.append(SessionAgents())
+
+
 class KsycocaLoop(Check):
     name = "ksycoca-loop"
     summary = "Plasma processes agree on the menu prefix (no ksycoca rebuild storm)"
@@ -507,6 +537,42 @@ class KsycocaLoop(Check):
 
 
 REGISTRY.append(KsycocaLoop())
+
+
+class PanelLauncherPaths(Check):
+    name = "panel-launcher-paths"
+    summary = "panel pins resolve by app-id, not by fragile file:// drive paths"
+    grade = DEFERRED
+
+    APPLETS_REL = ".config/plasma-org.kde.plasma.desktop-appletsrc"
+
+    def detect(self):
+        p = next((x for x in _proc_table() if "plasmashell" in x["cmd"]), None)
+        home = p["env"].get("HOME") if p else None
+        if not home:
+            return None
+        path = os.path.join(home, self.APPLETS_REL)
+        try:
+            lines = open(path, errors="replace").read().splitlines()
+        except OSError:
+            return None
+        bad = []
+        for line in lines:
+            if line.startswith("launchers="):
+                bad += [e for e in line[len("launchers="):].split(",")
+                        if e.startswith("file://")]
+        if not bad:
+            return None
+        return Finding(
+            detail=f"{len(bad)} panel pin(s) are stored as file:// absolute paths "
+                   f"(e.g. {bad[0]}); when the drive mounts after login the pin can't "
+                   "resolve and Plasma silently drops it. Rewriting them to "
+                   "applications:<app-id>.desktop resolves through ksycoca instead",
+            oracle_said="app-id pins resolve via XDG_DATA_DIRS, independent of mount order",
+            healable=False)
+
+
+REGISTRY.append(PanelLauncherPaths())
 
 
 DEDUP_GUARD_REL = ".config/plasma-workspace/env/zzzz-dedup-xdg-data-dirs.sh"
