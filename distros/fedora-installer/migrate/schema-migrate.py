@@ -217,3 +217,42 @@ def remove_boot_entry():
         os.remove(dst)
     except OSError:
         pass
+
+
+class Manifest:
+    PATH = "var/lib/schema-init/migrate-manifest.json"
+
+    def __init__(self, files=None, packages=None, boot_entry=None):
+        self.files = list(files or [])
+        self.packages = list(packages or [])
+        self.boot_entry = boot_entry
+
+    def add_file(self, path):
+        if path not in self.files:
+            self.files.append(path)
+
+    def add_package(self, name):
+        if name not in self.packages:
+            self.packages.append(name)
+
+    def set_boot_entry(self, path):
+        self.boot_entry = path
+
+    def save(self):
+        p = P(self.PATH)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as fh:
+            json.dump({"files": self.files, "packages": self.packages,
+                       "boot_entry": self.boot_entry}, fh, indent=2)
+        os.chmod(p, 0o644)
+        return p
+
+    @classmethod
+    def load(cls):
+        try:
+            d = json.load(open(P(cls.PATH)))
+            if not isinstance(d, dict):
+                d = {}
+        except (OSError, ValueError):
+            d = {}
+        return cls(d.get("files"), d.get("packages"), d.get("boot_entry"))
