@@ -347,3 +347,32 @@ def generate_host_units(profile, manifest, dry_run=False):
             open(P(rel), "w").write(body)
             manifest.add_file("/" + rel)
     return written
+
+
+PREVENT_PACKAGES = ["libavcodec-freeworld", "egl-wayland", "seatd"]
+
+
+def _installed(pkg, run):
+    try:
+        return run(["rpm", "-q", pkg], capture_output=True, text=True).returncode == 0
+    except Exception:
+        return False
+
+
+def install_packages(manifest, run=subprocess.run, dry_run=False):
+    done = []
+    for pkg in PREVENT_PACKAGES:
+        if _installed(pkg, run):
+            continue
+        done.append(pkg)
+        if not dry_run:
+            run(["dnf", "install", "-y", pkg], check=False)
+            manifest.add_package(pkg)
+    return done
+
+
+def run_make_install(run=subprocess.run, dry_run=False):
+    if dry_run:
+        return
+    run(["make", "-C", repo(), "install", "DESTDIR=" + ROOT.rstrip("/"), "PREFIX=/usr"],
+        check=False)
