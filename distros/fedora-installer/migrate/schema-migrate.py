@@ -256,3 +256,22 @@ class Manifest:
         except (OSError, ValueError):
             d = {}
         return cls(d.get("files"), d.get("packages"), d.get("boot_entry"))
+
+
+def uninstall(run=subprocess.run):
+    m = Manifest.load()
+    removed = 0
+    for rel in m.files:
+        try:
+            os.remove(P(rel))
+            removed += 1
+        except OSError:
+            pass
+    if m.packages:
+        run(["dnf", "remove", "-y"] + m.packages, check=False)
+    remove_boot_entry()
+    try:
+        os.remove(P(Manifest.PATH))
+    except OSError:
+        pass
+    return {"files_removed": removed, "packages": m.packages}
