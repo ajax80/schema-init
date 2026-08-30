@@ -57,3 +57,51 @@ def detect_platform():
     if not (os.path.exists(P("usr/bin/plasmashell")) or os.path.exists(P("usr/bin/sddm"))):
         return None, "no KDE found (plasmashell/sddm absent) — v1 supports Fedora KDE only"
     return "fedora-kde", ""
+
+
+SCHEMA_OWNED = {
+    "systemd-udevd", "systemd-journald", "systemd-logind", "systemd-resolved",
+    "crond", "cron", "systemd-timesyncd", "systemd-userdbd",
+}
+
+UNIT_TO_SVC = {
+    "NetworkManager": "network-manager",
+    "sshd": "sshd",
+    "bluetooth": "bluetoothd",
+    "polkit": "polkitd",
+    "dbus": "dbus",
+    "dbus-broker": "dbus",
+    "seatd": "seatd",
+}
+
+
+def running_services(run=subprocess.run):
+    try:
+        r = run(["systemctl", "list-units", "--type=service", "--state=running",
+                 "--no-legend", "--plain"], capture_output=True, text=True)
+        out = r.stdout
+    except Exception:
+        out = ""
+    units = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        unit = line.split()[0]
+        if unit.endswith(".service"):
+            units.append(unit[:-len(".service")])
+    return units
+
+
+def classify_services(units, prevent):
+    covered, owned, leftover = set(), set(), set()
+    svc_set = set(prevent["service"])
+    for u in units:
+        if u in SCHEMA_OWNED:
+            owned.add(u)
+        elif u in UNIT_TO_SVC and UNIT_TO_SVC[u] in svc_set:
+            covered.add(UNIT_TO_SVC[u])
+        else:
+            leftover.add(u)
+    return {"covered": sorted(covered), "schema_owned": sorted(owned),
+            "leftover": sorted(leftover)}
