@@ -321,3 +321,29 @@ def uninstall(run=subprocess.run):
     except OSError:
         pass
     return {"files_removed": removed, "packages": m.packages}
+
+
+def _mount_slug(target):
+    if target == "/":
+        return "root"
+    return target.strip("/").replace("/", "-")
+
+
+def generate_host_units(profile, manifest, dry_run=False):
+    written = []
+    for mnt in profile.get("mounts", []):
+        slug = _mount_slug(mnt["target"])
+        rel = "etc/schema-init/services/mount-%s.svc" % slug
+        body = ("name=mount-%s\n"
+                "exec=/bin/mount\n"
+                "args=-t %s -o %s %s %s\n"
+                "oneshot=1\n"
+                "needs_root=1\n"
+                "critical=0\n") % (slug, mnt["fstype"], mnt.get("opts", "defaults"),
+                                   mnt["src"], mnt["target"])
+        written.append(P(rel))
+        if not dry_run:
+            os.makedirs(os.path.dirname(P(rel)), exist_ok=True)
+            open(P(rel), "w").write(body)
+            manifest.add_file("/" + rel)
+    return written
