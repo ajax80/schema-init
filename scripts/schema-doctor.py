@@ -481,6 +481,36 @@ class PowerDevilRunning(Check):
 REGISTRY.append(PowerDevilRunning())
 
 
+class SessionAgents(Check):
+    name = "session-agents"
+    summary = "KDE's global-shortcut and polkit auth agents are running"
+    grade = DEFERRED
+
+    AGENTS = [
+        ("kglobalacceld", "kglobalacceld (global shortcuts)"),
+        ("polkit-kde-authentication-agent", "polkit-kde-authentication-agent-1 (authorization prompts)"),
+    ]
+
+    def detect(self):
+        if active_uid() in (None, 0):
+            return None
+        tbl = _proc_table()
+        if not _running("plasmashell", tbl):
+            return None                              # not a live KDE desktop
+        missing = [label for needle, label in self.AGENTS if not _running(needle, tbl)]
+        if not missing:
+            return None
+        return Finding(
+            detail="not running: " + "; ".join(missing) + " — their /etc/xdg/autostart "
+                   "entries carry X-systemd-skip=true and there is no systemd --user to "
+                   "start them, so global shortcuts and authorization prompts are dead",
+            oracle_said="systemd --user starts these from the plasma session at login",
+            healable=False)
+
+
+REGISTRY.append(SessionAgents())
+
+
 class KsycocaLoop(Check):
     name = "ksycoca-loop"
     summary = "Plasma processes agree on the menu prefix (no ksycoca rebuild storm)"
@@ -507,6 +537,183 @@ class KsycocaLoop(Check):
 
 
 REGISTRY.append(KsycocaLoop())
+
+
+class PanelLauncherPaths(Check):
+    name = "panel-launcher-paths"
+    summary = "panel pins resolve by app-id, not by fragile file:// drive paths"
+    grade = DEFERRED
+
+    APPLETS_REL = ".config/plasma-org.kde.plasma.desktop-appletsrc"
+
+    def detect(self):
+        p = next((x for x in _proc_table() if "plasmashell" in x["cmd"]), None)
+        home = p["env"].get("HOME") if p else None
+        if not home:
+            return None
+        path = os.path.join(home, self.APPLETS_REL)
+        try:
+            lines = open(path, errors="replace").read().splitlines()
+        except OSError:
+            return None
+        bad = []
+        for line in lines:
+            if line.startswith("launchers="):
+                bad += [e for e in line[len("launchers="):].split(",")
+                        if e.startswith("file://")]
+        if not bad:
+            return None
+        return Finding(
+            detail=f"{len(bad)} panel pin(s) are stored as file:// absolute paths "
+                   f"(e.g. {bad[0]}); when the drive mounts after login the pin can't "
+                   "resolve and Plasma silently drops it. Rewriting them to "
+                   "applications:<app-id>.desktop resolves through ksycoca instead",
+            oracle_said="app-id pins resolve via XDG_DATA_DIRS, independent of mount order",
+            healable=False)
+
+
+REGISTRY.append(PanelLauncherPaths())
+
+
+DEDUP_GUARD_REL = ".config/plasma-workspace/env/zzzz-dedup-xdg-data-dirs.sh"
+DEDUP_GUARD = """#!/bin/sh
+# schema-doctor: collapse duplicate XDG_DATA_DIRS entries (snapd double-add).
+# Named zzzz-* so it sources LAST, after the env.d replay re-adds the double.
+if [ -n "$XDG_DATA_DIRS" ]; then
+    _out=""
+    _oldifs=$IFS
+    IFS=:
+    for _d in $XDG_DATA_DIRS; do
+        case ":$_out:" in
+            *":$_d:"*) ;;
+            *) _out="${_out:+$_out:}$_d" ;;
+        esac
+    done
+    IFS=$_oldifs
+    export XDG_DATA_DIRS="$_out"
+fi
+"""
+
+
+class XdgDataDirsDup(Check):
+    name = "xdg-data-dirs-dup"
+    summary = "XDG_DATA_DIRS carries no duplicate entries (the cause under the ksycoca stutter)"
+    grade = SAFE
+
+    def _plasma(self):
+        return next((p for p in _proc_table() if "plasmashell" in p["cmd"]), None)
+
+    def _guard(self, home):
+        return os.path.join(home, DEDUP_GUARD_REL)
+
+    def detect(self):
+        p = self._plasma()
+        if not p:
+            return None
+        home = p["env"].get("HOME")
+        parts = [d for d in p["env"].get("XDG_DATA_DIRS", "").split(":") if d]
+        if len(parts) == len(set(parts)):
+            return None
+        if home and os.path.exists(self._guard(home)):
+            return None
+        dupes = sorted({d for d in parts if parts.count(d) > 1})
+        return Finding(
+            detail=f"plasmashell's XDG_DATA_DIRS repeats {', '.join(dupes)} — snapd is "
+                   "added twice, so session apps keep the doubled value while deduped "
+                   "ones do not; that fingerprint split drives the ksycoca rebuild loop. "
+                   "A persistent dedup guard fixes it from the next login",
+            oracle_said="systemd --user sources environment.d once, without doubling",
+            healable=bool(home))
+
+    def snapshot(self):
+        p = self._plasma()
+        home = p["env"].get("HOME") if p else None
+        g = self._guard(home) if home else None
+        return {"guard": g, "existed": bool(g and os.path.exists(g))}
+
+    def heal(self, f):
+        p = self._plasma()
+        home = p["env"].get("HOME") if p else None
+        if not home:
+            return
+        g = self._guard(home)
+        os.makedirs(os.path.dirname(g), exist_ok=True)
+        with open(g, "w") as fh:
+            fh.write(DEDUP_GUARD)
+        os.chmod(g, 0o755)
+
+    def verify(self):
+        p = self._plasma()
+        home = p["env"].get("HOME") if p else None
+        return bool(home and os.path.exists(self._guard(home)))
+
+    def back_out(self, snap):
+        if snap and snap.get("guard") and not snap.get("existed"):
+            try:
+                os.remove(snap["guard"])
+            except OSError:
+                pass
+
+
+REGISTRY.append(XdgDataDirsDup())
+
+
+NVIDIA_EGL_DIR = "usr/share/egl/egl_external_platform.d"
+NVIDIA_WAYLAND_JSON = NVIDIA_EGL_DIR + "/10_nvidia_wayland.json"
+NVIDIA_GBM_JSON = NVIDIA_EGL_DIR + "/15_nvidia_gbm.json"
+NVIDIA_WAYLAND_ICD = {
+    "file_format_version": "1.0.0",
+    "ICD": {"library_path": "libnvidia-egl-wayland.so.1"},
+}
+
+
+class NvidiaWaylandEgl(Check):
+    name = "nvidia-wayland-egl"
+    summary = "NVIDIA's Wayland EGL platform is registered (no llvmpipe CPU burn)"
+    grade = SAFE
+
+    def _p(self, rel):
+        return os.path.join(ROOT, rel)
+
+    def detect(self):
+        if not os.path.exists(self._p("dev/nvidia0")):
+            return None                              # no NVIDIA → irrelevant
+        if not os.path.exists(self._p(NVIDIA_GBM_JSON)):
+            return None                              # egl-wayland not installed → not this wound
+        if os.path.exists(self._p(NVIDIA_WAYLAND_JSON)):
+            return None
+        return Finding(
+            detail="the packaged egl_external_platform.d/10_nvidia_wayland.json is "
+                   "missing while its 15_nvidia_gbm.json sibling is present — EGL has no "
+                   "NVIDIA provider for Wayland, so GL clients fall back to the llvmpipe "
+                   "software rasteriser and burn CPU. Restoring the registration puts new "
+                   "windows back on the GPU",
+            oracle_said="egl-wayland ships this file; rpm -V lists it as missing",
+            healable=True)
+
+    def snapshot(self):
+        return {"existed": os.path.exists(self._p(NVIDIA_WAYLAND_JSON))}
+
+    def heal(self, f):
+        p = self._p(NVIDIA_WAYLAND_JSON)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as fh:
+            json.dump(NVIDIA_WAYLAND_ICD, fh, indent=4)
+            fh.write("\n")
+        os.chmod(p, 0o644)
+
+    def verify(self):
+        return os.path.exists(self._p(NVIDIA_WAYLAND_JSON))
+
+    def back_out(self, snap):
+        if snap and not snap.get("existed"):
+            try:
+                os.remove(self._p(NVIDIA_WAYLAND_JSON))
+            except OSError:
+                pass
+
+
+REGISTRY.append(NvidiaWaylandEgl())
 
 
 def read_config():
