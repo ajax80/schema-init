@@ -93,6 +93,42 @@ static void monitor_broadcast(const struct uevent *ev) {
     (void)sendmsg(g_monfd, &msg, 0);
 }
 
+/* True for an env key that steers the dynamic loader, libc, or the shell —
+ * one that must never originate from a uevent property. A uevent can carry an
+ * arbitrary KEY=VAL, so hook children can't just inherit every property: a
+ * crafted LD_PRELOAD / GCONV_PATH / BASH_ENV / IFS would hijack the loader,
+ * libc, or shell. Real udev property keys are plain uppercase device fields
+ * (DEVPATH, SUBSYSTEM, ACTION, MODALIAS, ...) and never match here, so
+ * filtering by this predicate drops only injection attempts. */
+static int env_key_unsafe(const char *k) {
+    static const char *const prefixes[] = {
+        "LD_", "DYLD_", "GCONV_", "GLIBC_", "BASH_", "PYTHON", "PERL5",
+        "RUBY", "NODE_", "GIT_", "PS" };
+    static const char *const exact[] = {
+        "IFS", "PATH", "ENV", "CDPATH", "SHELLOPTS", "BASHOPTS",
+        "PROMPT_COMMAND", "GETCONF_DIR", "HOSTALIASES", "RESOLV_HOST_CONF",
+        "LOCALDOMAIN", "NIS_PATH", "TMPDIR", "TZDIR" };
+    for (size_t i = 0; i < sizeof prefixes / sizeof *prefixes; i++)
+        if (strncmp(k, prefixes[i], strlen(prefixes[i])) == 0) return 1;
+    for (size_t i = 0; i < sizeof exact / sizeof *exact; i++)
+        if (strcmp(k, exact[i]) == 0) return 1;
+    return 0;
+}
+
+/* Export the uevent properties as environment, dropping any injection-carrier
+ * key, then force a known-good PATH and IFS. The positive PATH/IFS reset is
+ * belt-and-suspenders over the filter (also normalizes an odd inherited env). */
+static void export_scrubbed_env(const struct uevent *ev) {
+    for (int j = 0; j < ev->n; j++)
+        if (!env_key_unsafe(ev->key[j]))
+            setenv(ev->key[j], ev->val[j], 1);
+    setenv("PATH", "/usr/sbin:/usr/bin:/sbin:/bin", 1);
+    setenv("IFS", " \t\n", 1);
+    unsetenv("LD_PRELOAD");
+    unsetenv("LD_LIBRARY_PATH");
+    unsetenv("LD_AUDIT");
+}
+
 /* Execute RUN directives fire-and-forget (udev semantics: direct
  * argv exec, not a shell; output discarded; children reaped by the SIGCHLD
  * drain). RUN{builtin} kmod load invokes modprobe for MODALIAS or explicit modules;
@@ -151,7 +187,7 @@ static void run_ctx_runs(const struct dev_ctx *rc) {
         if (pid == 0) {
             sigset_t empty; sigemptyset(&empty);
             sigprocmask(SIG_SETMASK, &empty, NULL);
-            for (int j = 0; j < rc->ev->n; j++) setenv(rc->ev->key[j], rc->ev->val[j], 1);
+            export_scrubbed_env(rc->ev);
             if (!strchr(argv[0], '/')) {
                 char lp[512];
                 snprintf(lp, sizeof lp, "/usr/lib/udev/%s", argv[0]);
@@ -196,8 +232,7 @@ static void run_hook(const char *hook, const struct uevent *ev) {
     if (pid == 0) {
         sigset_t empty; sigemptyset(&empty);
         sigprocmask(SIG_SETMASK, &empty, NULL);
-        for (int j = 0; j < ev->n; j++)
-            setenv(ev->key[j], ev->val[j], 1);   /* ACTION included here */
+        export_scrubbed_env(ev);                 /* ACTION included here */
         execl("/bin/sh", "sh", "-c", hook, (char *)NULL);
         _exit(127);
     }
