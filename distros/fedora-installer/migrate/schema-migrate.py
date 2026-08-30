@@ -5,6 +5,7 @@ in place, non-destructively, with a fallback boot entry and post-reboot heal.
 Stdlib only. MIGRATE_ROOT prefixes filesystem paths (tests inject a temp tree);
 MIGRATE_REPO points at the schema-init tree on the USB.
 """
+import glob
 import json
 import os
 import shutil
@@ -105,3 +106,67 @@ def classify_services(units, prevent):
             leftover.add(u)
     return {"covered": sorted(covered), "schema_owned": sorted(owned),
             "leftover": sorted(leftover)}
+
+
+SKIP_FSTYPES = {"proc", "sysfs", "devpts", "tmpfs", "devtmpfs", "cgroup",
+                "cgroup2", "mqueue", "hugetlbfs", "debugfs", "swap", "efivarfs"}
+
+
+def read_fstab():
+    out = []
+    try:
+        lines = open(P("etc/fstab")).read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        f = line.split()
+        if len(f) < 3 or f[2] in SKIP_FSTYPES:
+            continue
+        out.append({"src": f[0], "target": f[1], "fstype": f[2],
+                    "opts": f[3] if len(f) > 3 else "defaults"})
+    return out
+
+
+def primary_user():
+    try:
+        for line in open(P("etc/passwd")):
+            f = line.split(":")
+            if len(f) >= 3 and f[2] == "1000":
+                return f[0], 1000
+    except OSError:
+        pass
+    return None, None
+
+
+def bootloader_kind():
+    if glob.glob(P("boot/loader/entries/*.conf")):
+        return "bls"
+    return "unknown"
+
+
+def build_profile(run=subprocess.run):
+    plat, _ = detect_platform()
+    user, uid = primary_user()
+    prevent = load_prevent_set()
+    services = classify_services(running_services(run=run), prevent)
+    return {
+        "platform": plat,
+        "user": user,
+        "uid": uid,
+        "services": services,
+        "mounts": read_fstab(),
+        "bootloader": bootloader_kind(),
+        "kernel": os.environ.get("MIGRATE_KERNEL") or os.uname().release,
+    }
+
+
+def write_profile(profile):
+    p = P("var/lib/schema-init/migrate-profile.json")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as fh:
+        json.dump(profile, fh, indent=2)
+    os.chmod(p, 0o644)
+    return p
