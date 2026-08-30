@@ -376,3 +376,59 @@ def run_make_install(run=subprocess.run, dry_run=False):
         return
     run(["make", "-C", repo(), "install", "DESTDIR=" + ROOT.rstrip("/"), "PREFIX=/usr"],
         check=False)
+
+
+def do_deploy(run=subprocess.run, dry_run=False):
+    profile = build_profile(run=run)
+    if not dry_run:
+        write_profile(profile)
+    m = Manifest()
+    run_make_install(run=run, dry_run=dry_run)
+    deploy_prevent_set(m, dry_run=dry_run)
+    generate_host_units(profile, m, dry_run=dry_run)
+    install_packages(m, run=run, dry_run=dry_run)
+    entry = add_boot_entry(profile["kernel"]) if not dry_run else None
+    if not dry_run:
+        m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
+        m.save()
+    return m
+
+
+def main(argv, run=subprocess.run):
+    import argparse
+    ap = argparse.ArgumentParser(prog="schema-migrate")
+    ap.add_argument("--discover", action="store_true", help="preview the profile, change nothing")
+    ap.add_argument("--deploy", action="store_true", help="run the flip")
+    ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
+    ap.add_argument("--uninstall", action="store_true", help="reverse a prior migration")
+    args = ap.parse_args(argv)
+
+    if args.uninstall:
+        res = uninstall(run=run)
+        print("uninstalled: %d files, packages=%s" % (res["files_removed"], res["packages"]))
+        return 0
+
+    plat, why = detect_platform()
+    if plat is None:
+        print("refusing: " + why)
+        return 2
+
+    if args.discover:
+        profile = build_profile(run=run)
+        path = write_profile(profile)
+        print(json.dumps(profile, indent=2))
+        print("profile written to " + path)
+        return 0
+
+    if os.path.exists(P(Manifest.PATH)) and not args.dry_run:
+        print("already migrated (manifest present) — run --uninstall to reverse")
+        return 0
+
+    do_deploy(run=run, dry_run=args.dry_run)
+    print("dry-run complete — nothing changed" if args.dry_run
+          else "deploy complete — reboot and pick the '(schema-init)' entry")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
