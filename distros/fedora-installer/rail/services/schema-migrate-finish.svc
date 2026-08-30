@@ -1,0 +1,7 @@
+name=schema-migrate-finish
+exec=/usr/local/bin/schema-migrate
+args=--finish
+dep=schema-doctor
+oneshot=1
+needs_root=1
+critical=0

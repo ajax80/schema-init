@@ -394,6 +394,33 @@ def do_deploy(run=subprocess.run, dry_run=False):
     return m
 
 
+def finish_report():
+    try:
+        prof = json.load(open(P("var/lib/schema-init/migrate-profile.json")))
+    except (OSError, ValueError):
+        prof = {}
+    leftover = prof.get("services", {}).get("leftover", [])
+    try:
+        doctor = open(P("run/schema-init/doctor-status")).read().strip()
+    except OSError:
+        doctor = "(schema-doctor status not found)"
+    lines = ["=== schema-migrate: first-boot report ===", "",
+             "platform: " + str(prof.get("platform", "?")), "",
+             "schema-doctor: " + doctor, ""]
+    if leftover:
+        lines.append("Services still running under the old system that were NOT ported:")
+        lines += ["  - " + s for s in leftover]
+        lines.append("")
+        lines.append("Run `schema-migrate --translate` to carry these over "
+                     "(simple units auto-convert; complex ones are named, not dropped).")
+    else:
+        lines.append("No un-ported services — nothing left to translate.")
+    marker = P("run/schema-init/migrate-finished")
+    os.makedirs(os.path.dirname(marker), exist_ok=True)
+    open(marker, "w").write("done\n")
+    return "\n".join(lines)
+
+
 def main(argv, run=subprocess.run):
     import argparse
     ap = argparse.ArgumentParser(prog="schema-migrate")
@@ -401,7 +428,15 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--deploy", action="store_true", help="run the flip")
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--uninstall", action="store_true", help="reverse a prior migration")
+    ap.add_argument("--finish", action="store_true", help="post-reboot report + translate offer")
     args = ap.parse_args(argv)
+
+    if args.finish:
+        if os.path.exists(P("run/schema-init/migrate-finished")):
+            print("migrate-finish already ran")
+            return 0
+        print(finish_report())
+        return 0
 
     if args.uninstall:
         res = uninstall(run=run)
