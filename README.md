@@ -140,6 +140,23 @@ Reboot, pick **schema-init (fallback)** from the boot menu, and try it. If anyth
 
 > Run `scripts/gen-mounts.sh` (preview) before rebooting and read the generated `mount-fstab.sh` — confirm every mount is right. This is the one file that decides whether your disks come up.
 
+### Fedora KDE — the in-place migration wizard (turnkey Lane 2)
+
+If your daily driver *is* Fedora KDE, `schema-migrate` is Lane 2 tuned for exactly that: it converts your running install in place, keeps your desktop working, and reverses with one command. It reads your system, builds and installs schema-init, ports the KDE session seam (seatd, `schema-logind`, autologin, PipeWire, polkit), bridges udev so the network and `/dev` come up, writes a **non-default** `(schema-init)` GRUB entry (your normal Fedora stays the default), makes the boot menu visible so you can pick it by hand, and heals the session gaps on first boot with `schema-doctor`.
+
+```sh
+git clone https://github.com/ajax80/schema-init   # e.g. onto a USB stick
+cd schema-init
+# preview only — reads the system, changes nothing:
+sudo python3 distros/fedora-installer/migrate/schema-migrate.py --discover
+# deploy (needs network the first time — pulls gcc/make to build schema-init):
+sudo python3 distros/fedora-installer/migrate/schema-migrate.py --deploy
+```
+
+Reboot, pick the entry ending **(schema-init)** from the boot menu. To go back: boot your normal Fedora entry, then run the same command with `--uninstall` — it reverses exactly what it wrote (manifest-tracked) and leaves pre-existing packages alone.
+
+Proven end-to-end in a Fedora-KDE VM (legacy BIOS): deploy → schema-init as PID 1 with a full Plasma desktop → `--uninstall` → back on systemd. v1 is Fedora KDE only; other distros and desktops are the next milestone. The generic, distro-agnostic version of this path is Lane 2 above (`./setup.sh`).
+
 ### Lane 3 — Make it the default (once you trust it)
 
 When the schema-init entry has booted cleanly a few times, make it default (set `GRUB_DEFAULT` / your distro's boot-entry default to it). Only then, if you want the full reclamation, opt into the [authoritative udev cutover](#authoritative-mode-the-udevd-cutover) — a deliberate, checksum-backed, reversible flip that retires `systemd-udevd`. It is the advanced path; validate it in `schema-vmtest` LIVE mode first.

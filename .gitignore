@@ -16,3 +16,7 @@ tests/livetest/boot-logs/boot-*.txt
 udev-parity
 verify-rules-live
 verify-eprops-live
+
+# migrate round-trip VM harness — large binaries, never commit
+tests/migratetest/artifacts
+tests/migratetest/artifacts/

@@ -115,6 +115,23 @@ no_new_privs=1
 keep_caps=CAP_NET_BIND_SERVICE
 EOF
 
+# args= left-trim regression guard: a leading space in the value must be
+# stripped before it reaches argv, so a stranger writing `args= foo` gets
+# "foo", not " foo". The script brackets $1 so a stray leading space is
+# visible in the serial. Broken parse => "[ TRIMMED]"; fixed => "[TRIMMED]".
+cat > "$ROOT/usr/bin/argtrim.sh" <<'EOF'
+#!/bin/sh
+echo "[$1]" > /run/argtrim.val
+EOF
+chmod +x "$ROOT/usr/bin/argtrim.sh"
+cat > "$ROOT/etc/schema-init/services/test-argtrim.svc" <<'EOF'
+name=test-argtrim
+exec=/usr/bin/argtrim.sh
+args= TRIMMED
+oneshot=1
+needs_root=1
+EOF
+
 # Phase 2 chrony hardening: the REAL self-privdrop path. test_privdrop replays
 # chronyd's exact privileged sequence (bind :123 -> chown /run -> write pidfile
 # as root -> setgid/setuid -> retain CAP_SYS_TIME) under the 6-cap keep set. The
@@ -186,6 +203,7 @@ echo "RAIL-LOG: $RAIL"
 grep -E 'timer-fire|start-timeout|oneshot-done' "$RAIL" 2>&1 | while read -r l; do
     echo "RAIL| $l"   # prefix so the assertion cannot match the console's own copy
 done
+echo "argtrim-val: $(cat /run/argtrim.val 2>&1)"
 echo "===== NOFILE-TEST ====="
 # PID 1 must raise its OWN soft limit to the hard one, and children must get
 # the original soft limit back -- a raised soft NOFILE breaks select()/fd_set.
@@ -302,6 +320,8 @@ grep -Eq "RAIL\| .*test-hang .*start-timeout" "$SERIAL" || { echo "  MISS: rail.
 grep -Eq "RUNONCE-BEFORE: 1"   "$SERIAL" || { echo "  MISS: run-once boot timer never fired"; pass=0; }
 grep -Eq "RELOAD-REFIRE: PASS" "$SERIAL" || { echo "  MISS: reload re-fired a completed run-once timer"; pass=0; }
 # PID 1 raises its own NOFILE; children must not inherit the raised soft limit.
+# args= leading space must be trimmed off before argv.
+grep -Eq "argtrim-val: \[TRIMMED\]" "$SERIAL" || { echo "  MISS: args= leading space not trimmed (got non-[TRIMMED])"; pass=0; }
 grep -Eq "NOFILE-PID1: PASS"  "$SERIAL" || { echo "  MISS: PID 1 did not raise its own RLIMIT_NOFILE"; pass=0; }
 grep -Eq "NOFILE-CHILD: PASS" "$SERIAL" || { echo "  MISS: child inherited PID 1's raised NOFILE soft limit"; pass=0; }
 grep -Eq "iso-partition: isolated"                  "$SERIAL" || { echo "  MISS: iso partition not isolated"; pass=0; }

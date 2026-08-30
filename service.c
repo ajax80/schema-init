@@ -796,6 +796,7 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->argv[0] = svc->exec;
                 argc = 1;
             } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1) {
+                while (*val == ' ' || *val == '\t') val++;
                 svc->argv[argc++] = strdup(val);
             } else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS) {
                 strncpy(svc->dep_name[dep_slot++], val, 63);
@@ -990,8 +991,10 @@ int service_load_one(const char *path, service_t *svc) {
             strncpy(svc->exec, val, sizeof(svc->exec) - 1);
             svc->argv[0] = svc->exec;
             argc = 1;
-        } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1)
+        } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1) {
+            while (*val == ' ' || *val == '\t') val++;
             svc->argv[argc++] = strdup(val);
+        }
         else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS)
             strncpy(svc->dep_name[dep_slot++], val, 63);
         else if (strcmp(line, "oneshot") == 0 && atoi(val))
