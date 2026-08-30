@@ -37,3 +37,23 @@ def load_prevent_set(path=None):
             if cat in out and name:
                 out[cat].append(name)
     return out
+
+
+def _os_release():
+    kv = {}
+    try:
+        for line in open(P("etc/os-release")):
+            k, _, v = line.strip().partition("=")
+            kv[k] = v.strip().strip('"')
+    except OSError:
+        pass
+    return kv
+
+
+def detect_platform():
+    osr = _os_release()
+    if osr.get("ID") != "fedora":
+        return None, "this box is not Fedora (os-release ID=%s) — v1 supports Fedora only" % osr.get("ID", "unknown")
+    if not (os.path.exists(P("usr/bin/plasmashell")) or os.path.exists(P("usr/bin/sddm"))):
+        return None, "no KDE found (plasmashell/sddm absent) — v1 supports Fedora KDE only"
+    return "fedora-kde", ""
