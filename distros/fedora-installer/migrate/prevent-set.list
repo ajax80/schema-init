@@ -1,0 +1,42 @@
+# schema-migrate prevent-set — the portable desktop-seam core of the
+# fedora-kde profile. Deploy copies exactly what is named here.
+# Format: "<category> <name>"; categories: script config service exclude.
+
+# --- scripts (from distros/fedora-kde/scripts/) ---
+script plasma-session-start.sh
+script schema-plasma-autologin.sh
+script schema-plasma-watchdog.sh
+script schema-autostart-runner.sh
+script schema-logind.py
+script seatd-run.sh
+script pipewire-run.sh
+script wireplumber-run.sh
+script pipewire-pulse-run.sh
+
+# --- config (from distros/fedora-kde/config/) ---
+config plasma-env
+config plasma-workspace
+config polkit
+config autostart
+
+# --- services (from distros/fedora-installer/rail/services/) ---
+service dbus
+service seatd
+service schema-logind
+service plasma-autologin
+service polkitd
+service bluetoothd
+service network-manager
+service sshd
+service zram
+service schema-doctor
+service schema-doctor-periodic
+
+# --- excluded: host-specific, never deployed to a stranger ---
+exclude frigate
+exclude greybox-audio
+exclude nordvpnd
+exclude ollama
+exclude mount-home
+exclude network-blakbox
+exclude loop-module
