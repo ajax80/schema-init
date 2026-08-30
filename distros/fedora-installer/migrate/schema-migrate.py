@@ -15,6 +15,7 @@ import sys
 
 ROOT = os.environ.get("MIGRATE_ROOT") or "/"
 _MODDIR = os.path.dirname(os.path.abspath(__file__))
+_PREVENT_LIST_OVERRIDE = None  # tests may set this to a path
 
 
 def P(rel):
@@ -27,7 +28,7 @@ def repo():
 
 def load_prevent_set(path=None):
     if path is None:
-        path = os.path.join(_MODDIR, "prevent-set.list")
+        path = _PREVENT_LIST_OVERRIDE or os.path.join(_MODDIR, "prevent-set.list")
     out = {"script": [], "config": [], "service": [], "exclude": []}
     with open(path) as fh:
         for line in fh:
@@ -39,6 +40,51 @@ def load_prevent_set(path=None):
             if cat in out and name:
                 out[cat].append(name)
     return out
+
+
+def _copy_into(src, dst, manifest, dry_run):
+    if dry_run:
+        return dst
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if os.path.isdir(src):
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dst)
+    return dst
+
+
+def deploy_prevent_set(manifest, dry_run=False):
+    ps = load_prevent_set()
+    r = repo()
+    written = []
+    for name in ps["script"]:
+        src = os.path.join(r, "distros/fedora-kde/scripts", name)
+        dst = P("usr/local/lib/schema-init/scripts/" + name)
+        if os.path.exists(src):
+            _copy_into(src, dst, manifest, dry_run)
+            written.append(dst)
+            if not dry_run:
+                manifest.add_file("/usr/local/lib/schema-init/scripts/" + name)
+    for name in ps["config"]:
+        src = os.path.join(r, "distros/fedora-kde/config", name)
+        dst = P("etc/schema-init/config/" + name)
+        if os.path.exists(src):
+            _copy_into(src, dst, manifest, dry_run)
+            written.append(dst)
+            if not dry_run:
+                manifest.add_file("/etc/schema-init/config/" + name)
+    for name in ps["service"]:
+        for base in ("distros/fedora-installer/rail/services",
+                     "distros/fedora-kde/services"):
+            src = os.path.join(r, base, name + ".svc")
+            if os.path.exists(src):
+                dst = P("etc/schema-init/services/" + name + ".svc")
+                _copy_into(src, dst, manifest, dry_run)
+                written.append(dst)
+                if not dry_run:
+                    manifest.add_file("/etc/schema-init/services/" + name + ".svc")
+                break
+    return written
 
 
 def _os_release():
