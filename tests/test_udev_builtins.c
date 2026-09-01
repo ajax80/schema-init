@@ -130,6 +130,33 @@ static void test_hwdb_import_gate(void) {
     printf("test_hwdb_import_gate OK\n");
 }
 
+/* usb_device nodes carry NO modalias sysattr; the hwdb builtin must synthesize
+   systemd's `hwdb --subsystem=usb` key usb:vVVVVpPPPP:MODEL from idVendor/
+   idProduct/product so DB props (ID_SOFTWARE_RADIO, *_FROM_DATABASE, uaccess via
+   70-uaccess.rules) still resolve for USB devices. */
+static void test_hwdb_usb_synth_key(void) {
+    mkdirs("/devices/usbdev");
+    writef("/devices/usbdev/idVendor", "0bda\n");
+    writef("/devices/usbdev/idProduct", "2838\n");
+    writef("/devices/usbdev/product", "RTL2838UHIDIR\n");
+    char syspath[PATH_MAX], key[512];
+    snprintf(syspath, sizeof syspath, "%s/devices/usbdev", ROOT);
+    assert(hwdb_usb_modalias(syspath, key, sizeof key) == 0);
+    assert(strcmp(key, "usb:v0BDAp2838:RTL2838UHIDIR") == 0);
+    /* no product -> empty model segment, still a valid vendor:product key */
+    mkdirs("/devices/usbdev2");
+    writef("/devices/usbdev2/idVendor", "1d6b\n");
+    writef("/devices/usbdev2/idProduct", "0002\n");
+    snprintf(syspath, sizeof syspath, "%s/devices/usbdev2", ROOT);
+    assert(hwdb_usb_modalias(syspath, key, sizeof key) == 0);
+    assert(strcmp(key, "usb:v1D6Bp0002:") == 0);
+    /* no idVendor -> not a usb device -> refuse */
+    mkdirs("/devices/nousb");
+    snprintf(syspath, sizeof syspath, "%s/devices/nousb", ROOT);
+    assert(hwdb_usb_modalias(syspath, key, sizeof key) < 0);
+    printf("test_hwdb_usb_synth_key OK\n");
+}
+
 int main(void) {
     root_make();
     assert(strcmp(ub_kernel_name("/devices/pci0000:00/0000:00:01.0/net/enp6s0"), "enp6s0") == 0);
@@ -163,5 +190,6 @@ int main(void) {
     test_select();
     test_dissect_dispatch();
     test_hwdb_import_gate();
+    test_hwdb_usb_synth_key();
     return 0;
 }
