@@ -115,6 +115,8 @@ def _run_fallback_case(uid, label, seed_real_session):
         fb_env['DBUS_SYSTEM_BUS_ADDRESS'] = fb_addr
         fb_env['SCHEMA_LOGIND_ACTIVE_VT'] = fb_vtfile.name
         fb_env['SCHEMA_LOGIND_RUN_DIR'] = fb_rundir
+        fb_env['SCHEMA_LOGIND_UDEV_DATA'] = fb_rundir   # uaccess re-scan inert
+        fb_env['SCHEMA_LOGIND_DEV_DIR'] = fb_rundir
         fb_env['SCHEMA_CGROUP_ROOT'] = fb_cgroot
         fb_env['SCHEMA_SESSION_REGISTER'] = '/nonexistent/schema-session-register'
         fb_env.pop('SCHEMA_LOGIND_VTNR', None)
@@ -228,6 +230,8 @@ def main():
     env['DBUS_SYSTEM_BUS_ADDRESS'] = addr
     env['SCHEMA_LOGIND_ACTIVE_VT'] = vtfile.name
     env['SCHEMA_LOGIND_RUN_DIR'] = rundir
+    env['SCHEMA_LOGIND_UDEV_DATA'] = rundir   # uaccess re-scan inert
+    env['SCHEMA_LOGIND_DEV_DIR'] = rundir
     env['SCHEMA_CGROUP_ROOT'] = cgroot
     env.pop('SCHEMA_LOGIND_VTNR', None)
 
@@ -313,6 +317,8 @@ def main():
         helper = os.path.join(REPO, 'scripts', 'schema-session-register')
         henv = dict(os.environ)
         henv['SCHEMA_LOGIND_RUN_DIR'] = ref_run
+        henv['SCHEMA_LOGIND_UDEV_DATA'] = ref_run   # uaccess re-scan inert
+        henv['SCHEMA_LOGIND_DEV_DIR'] = ref_run
         henv['SCHEMA_CGROUP_ROOT'] = ref_cg
         henv['SCHEMA_LOGIND_ACTIVE_VT'] = os.environ.get('SCHEMA_LOGIND_ACTIVE_VT', '')
         # CreateSession sends the resolved username (matching real logind
