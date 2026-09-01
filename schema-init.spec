@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.1.3
+Version:        0.2.1
 Release:        1%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -43,10 +43,18 @@ overwrite a service file a running system depends on.
 # requires, so rpm's %%{optflags} -- fortify, stack-protector, annobin -- apply
 # to the dynamically linked helpers. PID 1 itself is linked -static and does not
 # consume LDFLAGS; the hardened-ld specs would force PIE onto a static binary.
-%make_build
+#
+# schema-udev (the native device manager) lives in the same tree but is a
+# separate, still-maturing concern that is deliberately NOT shipped by this
+# package -- installing it would not change your init system, but retiring
+# systemd-udevd is a manual, hardware-specific cutover, not a package upgrade.
+# Restrict BINS to the core init and its tooling so it is neither built nor
+# installed here.
+%global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
+%make_build BINS="%{core_bins}"
 
 %install
-%make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
+%make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir} BINS="%{core_bins}"
 
 %files
 %license LICENSE
@@ -63,6 +71,31 @@ overwrite a service file a running system depends on.
 %{_datadir}/%{name}/services
 
 %changelog
+* Tue Sep 01 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.2.1-1
+- Hardware watchdog: PID 1 loads the sp5100_tco module itself and arms
+  /dev/watchdog0, so boxes without an initramfs still get a hardware watchdog
+- Memory-pressure reclaim: a service's cgroup path and freeze state now survive
+  a schema-ctl reload, so freeze/reclaim keeps working after a reload instead of
+  silently becoming a no-op
+- cgroup efficiency: io.weight / cpu.idle shielding keeps non-critical services
+  off the critical path
+- init: gracefully stops container cgroups during the shutdown sweep, applies
+  /etc/hostname at boot, and raises PID 1's own RLIMIT_NOFILE while keeping
+  children off the raised limit
+- Service hardening: opt-in no_new_privs and a keep_caps bounding set
+  (chronyd hardened as the reference service)
+- Timers: on_calendar day-of-week and day-of-month; a completed run-once boot
+  timer stays terminal across a reload
+- schema-ctl: reports a rejected reload instead of answering ok; guards a
+  strncat length against a size_t underflow
+- args= values are left-trimmed of leading whitespace
+- Per-service boot-timing cost column, sorted by the critical path
+- rail: persists service_log lines to rail.log and logs excise/recovery
+  transitions on a start-timeout
+- logrotate: rotates daily, covers sddm-schema.log, and arms the timer
+  persistently
+- schema-board: increment 3 -- apply a card to a lit slot
+
 * Mon Jul 27 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.3-1
 - PID 1 resets the child signal mask before every exec, so services no longer
   inherit a blocked SIGCHLD and can reap their own children
