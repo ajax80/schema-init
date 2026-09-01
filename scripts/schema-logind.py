@@ -252,6 +252,13 @@ _RUN_SYSTEMD = os.environ.get('SCHEMA_LOGIND_RUN_DIR', '/run/systemd')
 SESSIONS_DIR = _RUN_SYSTEMD + '/sessions'
 SEATS_DIR = _RUN_SYSTEMD + '/seats'
 USERS_DIR = _RUN_SYSTEMD + '/users'
+# localed backing files, systemd-compatible paths so KDE/GNOME panels and
+# desktop tooling read/write the same locations. Overridable for tests, same
+# reason as SCHEMA_LOGIND_RUN_DIR.
+_ETC = os.environ.get('SCHEMA_LOGIND_ETC', '/etc')
+LOCALE_CONF = _ETC + '/locale.conf'
+VCONSOLE_CONF = _ETC + '/vconsole.conf'
+X11_KEYMAP_CONF = _ETC + '/X11/xorg.conf.d/00-keyboard.conf'
 # Same override, same reason: CreateSession() creates session scope cgroups and
 # ReleaseSession() rmdirs them, so a test must be able to aim that at a temp
 # tree rather than the real hierarchy.
@@ -2427,6 +2434,178 @@ class Timedate1(dbus.service.Object):
         pass
 
 
+# --- localed backing store (org.freedesktop.locale1) -------------------------
+# The set of locale variables systemd's localed accepts; anything else in a
+# SetLocale() call is rejected rather than written blindly to /etc/locale.conf.
+_LOCALE_VARS = (
+    'LANG', 'LANGUAGE', 'LC_CTYPE', 'LC_NUMERIC', 'LC_TIME', 'LC_COLLATE',
+    'LC_MONETARY', 'LC_MESSAGES', 'LC_PAPER', 'LC_NAME', 'LC_ADDRESS',
+    'LC_TELEPHONE', 'LC_MEASUREMENT', 'LC_IDENTIFICATION', 'LC_ALL',
+)
+
+
+def _read_kv_conf(path):
+    """Parse a KEY=VALUE shell-ish conf (locale.conf / vconsole.conf)."""
+    out = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, v = line.split('=', 1)
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in '"\'':
+                    v = v[1:-1]
+                out[k.strip()] = v
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def _atomic_write(path, text):
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
+    tmp = path + '.new'
+    with open(tmp, 'w') as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def get_locale():
+    kv = _read_kv_conf(LOCALE_CONF)
+    return ['%s=%s' % (k, kv[k]) for k in _LOCALE_VARS if k in kv]
+
+
+def set_locale(assignments):
+    parsed = []
+    for a in assignments:
+        if '=' not in a:
+            raise ValueError('malformed locale assignment: %r' % a)
+        k, v = a.split('=', 1)
+        if k not in _LOCALE_VARS:
+            raise ValueError('unknown locale variable: %r' % k)
+        if any(c in v for c in '\r\n\0'):
+            raise ValueError('invalid locale value: %r' % v)
+        parsed.append('%s=%s' % (k, v))
+    if parsed:
+        _atomic_write(LOCALE_CONF, '\n'.join(parsed) + '\n')
+    elif os.path.exists(LOCALE_CONF):
+        os.remove(LOCALE_CONF)
+
+
+def get_vconsole():
+    kv = _read_kv_conf(VCONSOLE_CONF)
+    return (kv.get('KEYMAP', ''), kv.get('KEYMAP_TOGGLE', ''))
+
+
+def set_vconsole(keymap, toggle):
+    # Preserve any FONT* lines already present; only rewrite the KEYMAP pair.
+    kv = _read_kv_conf(VCONSOLE_CONF)
+    kv.pop('KEYMAP', None)
+    kv.pop('KEYMAP_TOGGLE', None)
+    lines = ['%s=%s' % (k, v) for k, v in kv.items()]
+    if keymap:
+        lines.append('KEYMAP=%s' % keymap)
+    if toggle:
+        lines.append('KEYMAP_TOGGLE=%s' % toggle)
+    _atomic_write(VCONSOLE_CONF, '\n'.join(lines) + '\n' if lines else '')
+
+
+def get_x11_keyboard():
+    layout = model = variant = options = ''
+    try:
+        with open(X11_KEYMAP_CONF) as f:
+            for line in f:
+                m = re.search(r'Option\s+"Xkb(Layout|Model|Variant|Options)"\s+"([^"]*)"',
+                              line)
+                if not m:
+                    continue
+                which, val = m.group(1), m.group(2)
+                if which == 'Layout':
+                    layout = val
+                elif which == 'Model':
+                    model = val
+                elif which == 'Variant':
+                    variant = val
+                elif which == 'Options':
+                    options = val
+    except FileNotFoundError:
+        pass
+    return (layout, model, variant, options)
+
+
+def set_x11_keyboard(layout, model, variant, options):
+    for v in (layout, model, variant, options):
+        if any(c in v for c in '"\r\n\0'):
+            raise ValueError('invalid X11 keyboard value: %r' % v)
+    opts = [('XkbLayout', layout), ('XkbModel', model),
+            ('XkbVariant', variant), ('XkbOptions', options)]
+    body = ['Section "InputClass"',
+            '        Identifier "system-keyboard"',
+            '        MatchIsKeyboard "on"']
+    body += ['        Option "%s" "%s"' % (k, v) for k, v in opts if v]
+    body += ['EndSection', '']
+    _atomic_write(X11_KEYMAP_CONF, '\n'.join(body))
+
+
+class Locale1(dbus.service.Object):
+    def __init__(self, bus):
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/locale1')
+        print("login1-stub: Registered Locale1 at /org/freedesktop/locale1")
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+    def Get(self, interface_name, property_name):
+        props = self.GetAll(interface_name)
+        if property_name not in props:
+            raise dbus.exceptions.DBusException(
+                'No such property: ' + str(property_name),
+                name='org.freedesktop.DBus.Error.UnknownProperty')
+        return props[property_name]
+
+    @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface_name):
+        if interface_name == 'org.freedesktop.locale1' or not interface_name:
+            layout, model, variant, options = get_x11_keyboard()
+            keymap, toggle = get_vconsole()
+            return {
+                'Locale': dbus.Array([dbus.String(s) for s in get_locale()],
+                                     signature='s'),
+                'X11Layout': dbus.String(layout),
+                'X11Model': dbus.String(model),
+                'X11Variant': dbus.String(variant),
+                'X11Options': dbus.String(options),
+                'VConsoleKeymap': dbus.String(keymap),
+                'VConsoleKeymapToggle': dbus.String(toggle),
+            }
+        return {}
+
+    @dbus.service.method('org.freedesktop.locale1', in_signature='asb', out_signature='')
+    def SetLocale(self, locale, interactive):
+        try:
+            set_locale([str(x) for x in locale])
+        except (ValueError, OSError) as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.locale1.Error.Failed')
+
+    # `convert` (cross-generate the X11 layout from the vconsole keymap and vice
+    # versa) is not honoured yet — a v1 follow-up. The pair is written verbatim.
+    @dbus.service.method('org.freedesktop.locale1', in_signature='ssbb', out_signature='')
+    def SetVConsoleKeyboard(self, keymap, keymap_toggle, convert, interactive):
+        try:
+            set_vconsole(str(keymap), str(keymap_toggle))
+        except (ValueError, OSError) as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.locale1.Error.Failed')
+
+    @dbus.service.method('org.freedesktop.locale1', in_signature='ssssbb', out_signature='')
+    def SetX11Keyboard(self, layout, model, variant, options, convert, interactive):
+        try:
+            set_x11_keyboard(str(layout), str(model), str(variant), str(options))
+        except (ValueError, OSError) as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.locale1.Error.Failed')
 
 
 class VarlinkServer:
@@ -2584,6 +2763,7 @@ def main():
 
     hostname = Hostname1(bus)
     timedate = Timedate1(bus)
+    locale = Locale1(bus)
 
     ck_session = ConsoleKitSession(bus, uid)
     ck_manager = ConsoleKitManager(bus)
@@ -2608,6 +2788,12 @@ def main():
         print("login1-stub: Successfully acquired 'org.freedesktop.timedate1' name")
     except Exception as e:
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.timedate1': {e}", file=sys.stderr)
+
+    try:
+        bus.request_name('org.freedesktop.locale1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
+        print("login1-stub: Successfully acquired 'org.freedesktop.locale1' name")
+    except Exception as e:
+        print(f"login1-stub: Failed to acquire name 'org.freedesktop.locale1': {e}", file=sys.stderr)
 
     try:
         bus.request_name('org.freedesktop.ConsoleKit', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
