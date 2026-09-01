@@ -12,16 +12,13 @@ static void put(struct uevent *e, const char *k, const char *v) {
 }
 
 int main(void) {
-    /* ---- eligibility ---- */
-    struct uevent e;
-    e.n = 0; put(&e, "SUBSYSTEM", "sound");        assert(uaccess_eligible(&e) == 1);
-    e.n = 0; put(&e, "SUBSYSTEM", "video4linux");  assert(uaccess_eligible(&e) == 1);
-    e.n = 0; put(&e, "SUBSYSTEM", "media");        assert(uaccess_eligible(&e) == 1);
-    e.n = 0; put(&e, "SUBSYSTEM", "dri");          assert(uaccess_eligible(&e) == 0);
-    e.n = 0; put(&e, "SUBSYSTEM", "hidraw");       assert(uaccess_eligible(&e) == 0);
-    e.n = 0; put(&e, "SUBSYSTEM", "block");        assert(uaccess_eligible(&e) == 0);
-    e.n = 0;                                        assert(uaccess_eligible(&e) == 0);
-    printf("test_uaccess eligible: OK\n");
+    /* ---- eligibility = the uaccess tag, not a subsystem allowlist ---- */
+    const char *t_ua[]   = { "seat", "uaccess" };
+    const char *t_noua[] = { "seat", "systemd" };
+    assert(uaccess_tag_present(t_ua, 2) == 1);
+    assert(uaccess_tag_present(t_noua, 2) == 0);
+    assert(uaccess_tag_present(t_ua, 0) == 0);   /* ntags=0 -> not present */
+    printf("test_uaccess tag_present: OK\n");
 
     /* ---- active_uid ---- */
     char st[] = "/tmp/ua-seat-XXXXXX"; int sfd = mkstemp(st); assert(sfd >= 0);
@@ -41,7 +38,7 @@ int main(void) {
     struct uevent s; s.n = 0;
     put(&s, "SUBSYSTEM", "sound"); put(&s, "DEVNAME", "snd/controlC0");
     put(&s, "MAJOR", "116"); put(&s, "MINOR", "7");
-    assert(uaccess_record(dir, st, &s) == 0);
+    assert(uaccess_record(dir, st, &s, 1) == 0);
 
     char rec[512]; snprintf(rec, sizeof rec, "%s/c116:7", dir);
     FILE *f = fopen(rec, "r"); assert(f);
@@ -51,21 +48,33 @@ int main(void) {
     assert(strstr(buf, "ACL=user:1000:rw"));
     printf("test_uaccess record: OK\n");
 
+    /* ---- eligibility is the tag: a USB SDR (excluded by the old
+       sound/v4l/media subsystem allowlist) records when tagged uaccess ---- */
+    struct uevent usb; usb.n = 0;
+    put(&usb, "SUBSYSTEM", "usb"); put(&usb, "DEVNAME", "bus/usb/002/005");
+    put(&usb, "MAJOR", "189"); put(&usb, "MINOR", "132");
+    char urec[512]; snprintf(urec, sizeof urec, "%s/c189:132", dir);
+    assert(uaccess_record(dir, st, &usb, 1) == 0);
+    assert(access(urec, F_OK) == 0);
+    assert(uaccess_record(dir, st, &usb, 0) == 0);   /* untagged -> cleared */
+    assert(access(urec, F_OK) != 0);
+    printf("test_uaccess usb-tagged-records: OK\n");
+
     /* ---- ineligible clears a stale record at the same key ---- */
     struct uevent ie; ie.n = 0;
     put(&ie, "SUBSYSTEM", "dri"); put(&ie, "DEVNAME", "dri/card1");
     put(&ie, "MAJOR", "116"); put(&ie, "MINOR", "7");
-    assert(uaccess_record(dir, st, &ie) == 0);   /* not eligible -> clears c116:7 */
+    assert(uaccess_record(dir, st, &ie, 0) == 0);   /* not tagged uaccess -> clears c116:7 */
     assert(access(rec, F_OK) != 0);
     printf("test_uaccess ineligible-clears: OK\n");
 
     /* ---- no active uid -> no record ---- */
-    assert(uaccess_record(dir, st2, &s) == 0);   /* st2 has no ACTIVE_UID */
+    assert(uaccess_record(dir, st2, &s, 1) == 0);   /* st2 has no ACTIVE_UID */
     assert(access(rec, F_OK) != 0);
     printf("test_uaccess no-uid-no-record: OK\n");
 
     /* ---- explicit clear is idempotent ---- */
-    assert(uaccess_record(dir, st, &s) == 0);    /* recreate */
+    assert(uaccess_record(dir, st, &s, 1) == 0);    /* recreate */
     assert(access(rec, F_OK) == 0);
     assert(uaccess_clear(dir, &s) == 0);
     assert(access(rec, F_OK) != 0);
@@ -73,7 +82,7 @@ int main(void) {
     printf("test_uaccess clear-idempotent: OK\n");
 
     /* ---- wipe removes all records ---- */
-    assert(uaccess_record(dir, st, &s) == 0);
+    assert(uaccess_record(dir, st, &s, 1) == 0);
     uaccess_wipe(dir);
     assert(access(rec, F_OK) != 0);
     printf("test_uaccess wipe: OK\n");

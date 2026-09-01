@@ -28,12 +28,14 @@ static inline int uaccess_active_uid(const char *seat_path) {
     return uid;
 }
 
-static inline int uaccess_eligible(const struct uevent *ev) {
-    const char *sub = uevent_get(ev, "SUBSYSTEM");
-    if (!sub) return 0;
-    return strcmp(sub, "sound") == 0
-        || strcmp(sub, "video4linux") == 0
-        || strcmp(sub, "media") == 0;
+/* Eligibility is the `uaccess` TAG the ruleset computed for this device, not a
+ * fixed subsystem list: real udev grants uaccess to whatever a rule tagged
+ * (sound, v4l, drm, usb SDRs, hidraw FIDO keys, joysticks, ...). Callers pass
+ * the tag decision in; this checks a tag list for it. */
+static inline int uaccess_tag_present(const char *const *tags, int ntags) {
+    for (int i = 0; i < ntags; i++)
+        if (tags[i] && strcmp(tags[i], "uaccess") == 0) return 1;
+    return 0;
 }
 
 static inline int ua_keyname(const struct uevent *ev, char *out, size_t outsz) {
@@ -64,8 +66,8 @@ static inline int ua_mkdir_p(const char *path) {
 }
 
 static inline int uaccess_record(const char *dir, const char *seat_path,
-                                 const struct uevent *ev) {
-    if (!uaccess_eligible(ev)) return uaccess_clear(dir, ev);
+                                 const struct uevent *ev, int eligible) {
+    if (!eligible) return uaccess_clear(dir, ev);
     int uid = uaccess_active_uid(seat_path);
     if (uid < 0) return uaccess_clear(dir, ev);
     const char *devname = uevent_get(ev, "DEVNAME");
@@ -154,14 +156,14 @@ static inline int ua_clear_node(const char *node, int uid) {
 
 /* Live counterpart of uaccess_record: apply/clear the real ACL on /dev/DEVNAME
  * for the seat's active uid. Ineligible or no active uid -> nothing granted. */
-static inline int uaccess_apply(const char *seat_path, const struct uevent *ev) {
+static inline int uaccess_apply(const char *seat_path, const struct uevent *ev, int eligible) {
     const char *devname = uevent_get(ev, "DEVNAME");
     if (!devname || !devname[0]) return -1;
     char node[UE_VAL_MAX + 8];
     if ((size_t)snprintf(node, sizeof node, "/dev/%s", devname) >= sizeof node) return -1;
     int uid = uaccess_active_uid(seat_path);
     if (uid < 0) return 0;
-    if (!uaccess_eligible(ev)) return ua_clear_node(node, uid);
+    if (!eligible) return ua_clear_node(node, uid);
     return ua_apply_node(node, uid);
 }
 

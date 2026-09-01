@@ -217,8 +217,11 @@ static void dispatch(struct uevent *ev) {
         struct uevent shadow_ev = *ev;          /* deep copy: uevent is inline char[], no heap */
         int pre_rules_n = shadow_ev.n;
         struct dev_ctx rc;
+        int ua_tagged = 0;
         if (dev_ctx_init(&rc, &shadow_ev, "/sys") == 0) {
             ruleset_apply(&g_ruleset, &rc);
+            for (int i = 0; i < rc.ntags; i++)
+                if (strcmp(rc.tags[i], "uaccess") == 0) { ua_tagged = 1; break; }
             /* Live mode is the sole device-DB authority: write the full record
              * to /run/udev/data so libudev/sd-device consumers AND our own
              * IMPORT{parent}/{db} (dbroot defaults there) read our output.
@@ -260,7 +263,7 @@ static void dispatch(struct uevent *ev) {
             if (g_live) {
                 int uid = uaccess_active_uid(SEAT0_PATH);
                 const char *rn = uevent_get(ev, "DEVNAME");
-                if (uid >= 0 && rn && rn[0] && uaccess_eligible(ev)) {
+                if (uid >= 0 && rn && rn[0] && ua_tagged) {
                     char node[UE_VAL_MAX + 8];
                     if ((size_t)snprintf(node, sizeof node, "/dev/%s", rn) < sizeof node)
                         ua_clear_node(node, uid);
@@ -272,8 +275,8 @@ static void dispatch(struct uevent *ev) {
             if (is_block && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
                 disk_links_apply(disk_base, ev);
             if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0) {
-                uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev);   /* audit trail */
-                if (g_live) uaccess_apply(SEAT0_PATH, ev);            /* real ACL */
+                uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev, ua_tagged);   /* audit trail */
+                if (g_live) uaccess_apply(SEAT0_PATH, ev, ua_tagged);            /* real ACL */
             }
         }
     }
