@@ -3,6 +3,7 @@
 
 #include "path_id.h"   /* pi_sysattr, safe_copy, struct uevent, UE_* */
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -204,18 +205,37 @@ static inline int hwdb_query(struct hwdb *h, const char *key, struct uevent *out
     return 0;
 }
 
+/* Synthesize systemd's `hwdb --subsystem=usb` modalias usb:vVVVVpPPPP:MODEL from a
+ * usb_device's idVendor/idProduct/product sysattrs. usb_device nodes carry no
+ * `modalias` sysattr (only usb_interface nodes do), so without this USB devices
+ * resolve zero hwdb properties. Returns 0 on success, -1 if not a usb device. */
+static inline int hwdb_usb_modalias(const char *syspath, char *out, size_t outsz) {
+    char vend[64], prod[64], model[256];
+    if (pi_sysattr(syspath, "idVendor", vend, sizeof vend) != 0) return -1;
+    if (pi_sysattr(syspath, "idProduct", prod, sizeof prod) != 0) return -1;
+    if (pi_sysattr(syspath, "product", model, sizeof model) != 0) model[0] = '\0';
+    int w = snprintf(out, outsz, "usb:v%04Xp%04X:%s",
+                     (unsigned)strtoul(vend, NULL, 16),
+                     (unsigned)strtoul(prod, NULL, 16), model);
+    return (w > 0 && (size_t)w < outsz) ? 0 : -1;
+}
+
 static inline int hwdb_build(const char *sysroot, const char *devpath, struct uevent *out) {
     out->n = 0;
     char syspath[PATH_MAX];
     if ((size_t)snprintf(syspath, sizeof syspath, "%s%s", sysroot, devpath) >= sizeof syspath) return 0;
-    char modalias[512];
-    if (pi_sysattr(syspath, "modalias", modalias, sizeof modalias) != 0) return 0;
 
     struct hwdb h;
     if (hwdb_open("/etc/udev/hwdb.bin", &h) != 0 &&
         hwdb_open("/usr/lib/udev/hwdb.bin", &h) != 0)
         return 0;
-    hwdb_query(&h, modalias, out);
+
+    char modalias[512];
+    if (pi_sysattr(syspath, "modalias", modalias, sizeof modalias) == 0 && modalias[0])
+        hwdb_query(&h, modalias, out);
+    if (out->n == 0 && hwdb_usb_modalias(syspath, modalias, sizeof modalias) == 0)
+        hwdb_query(&h, modalias, out);
+
     hwdb_close(&h);
     return 0;
 }
