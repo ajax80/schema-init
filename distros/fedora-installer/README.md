@@ -84,8 +84,11 @@ Confirm `/dev/sdX` is the USB stick, not a disk — `dd` does not ask twice.
 1. **Boxes / KVM VM** — ~25 GB disk, 4 GB+ RAM, networking on. Watch:
    - boots straight into Anaconda and picks up the kickstart (no manual ks prompt);
    - `%post` runs — `/root/schema-ks-post.log` in the installed system is the receipt;
-     `grubby` set `init=/sbin/schema-init`; `gen-services` produced a non-empty rail;
-   - reboots into **schema-init as PID 1** with a working KDE desktop;
+     a `schema-<ver>.conf` BLS entry exists in `/boot/loader/entries` alongside the
+     pristine stock entry, and `grub2-editenv - list` shows `saved_entry=schema-<ver>`;
+     `gen-services` produced a non-empty rail;
+   - reboots into **schema-init as PID 1** (the schema entry is the default) with a
+     working KDE desktop; the stock **Fedora** entry is still in the menu as a fallback;
    - `sudo schema-ctl timing` shows the per-service cost table.
 2. **A real spare machine** (e.g. the Dell laptop) — same checks on metal.
 3. **A true stranger's machine** — only after 1 and 2 are clean.
@@ -106,3 +109,10 @@ Only touch the **udev flip wizard** after step 1 is solid.
 - **First-boot flip is reboot-gated** — the wizard arms + reboots + verifies; it is
   not a single-window action. The GUI is the happy path; the headless healthcheck is
   the seatbelt for a flip that breaks boot.
+- **Two entries per kernel in the boot menu** — a stock `Fedora Linux (...)` entry
+  (boots systemd, the fallback) and a `... (schema-init)` entry (the saved default).
+  This is intentional: the stock entry is a novice's escape hatch if schema ever fails
+  to boot. The `kernel-install` plugin (`/etc/kernel/install.d/99-schema-init.install`)
+  regenerates the schema entry on every `dnf` kernel update and repoints the default at
+  it, gated on the `/etc/schema-init/boot-default` marker; per-box extra kernel args go
+  in `/etc/schema-init/kernel-cmdline.d/*.conf` (the installer seeds `enforcing=0` there).
