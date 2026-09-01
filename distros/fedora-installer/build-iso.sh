@@ -65,6 +65,13 @@ gcc -shared -fPIC -o "$PAYLOAD/scripts/mock_sd.so" \
 # on a fresh Fedora install and hang the box.
 cp -a "$HERE/rail/services/." "$PAYLOAD/services/"
 
+# kernel-install plugin: regenerates a schema-init BLS entry on every dnf kernel
+# update (stock systemd entries stay pristine as a boot fallback). %post installs
+# it into /etc/kernel/install.d and seeds the first entry.
+install -d "$PAYLOAD/kernel-install"
+install -m0755 "$REPO/distros/shared/kernel-install/99-schema-init.install" \
+    "$PAYLOAD/kernel-install/99-schema-init.install"
+
 echo "=== injecting kickstart + payload into the ISO ==="
 # --add drops the payload tree onto the ISO; the boot media mounts at
 # /run/install/repo at install time, but ONLY in the installer environment —

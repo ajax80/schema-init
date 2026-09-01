@@ -124,24 +124,33 @@ install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.
 [ -f /etc/schema-init/scripts/mount-fstab.sh ] && \
     install -m0755 /etc/schema-init/scripts/mount-fstab.sh /usr/local/bin/mount-fstab.sh
 
-# 3. Point the bootloader at schema-init. grubby covers grub2 + BLS entries.
-#    - init=/sbin/schema-init: hand PID 1 to schema-init.
-#    - enforcing=0: kernel-level belt for the `selinux --permissive` config above.
-#    - rhgb quiet is KEPT: the pretty plymouth splash stays. The first-boot hang
-#      it used to cause (plymouthd from the initramfs holds the DRM master and,
-#      with no systemd plymouth-quit.service, never releases it, so kwin can't
-#      take the display) is handled in schema-plasma-autologin.sh, which runs
-#      `plymouth quit` right before the compositor opens the card. If that
-#      handoff is ever removed, add `--remove-args="rhgb quiet"` here as the
-#      proven fallback (commit afeed4c) — text boot, but never hangs.
-grubby --update-kernel=ALL --args="init=/sbin/schema-init enforcing=0"
+# 3. Bootloader: the hook model. Leave the STOCK BLS entries pristine — they
+#    boot stock systemd, so a novice always has a working escape hatch in the
+#    boot menu if a schema boot ever fails. A SEPARATE schema-init entry per
+#    kernel is maintained as the saved default, cloned from the stock entry with
+#    init= + enforcing=0 added. The kernel-install plugin regenerates that
+#    schema entry on every dnf kernel update, so the box stays on schema-init
+#    across updates without pinning — and without ever touching the fallback.
+#    (Contrast: rewriting the stock entry in place would leave NO systemd
+#    fallback in the menu.)
+#    - init=/sbin/schema-init: hand PID 1 to schema-init (added by the plugin).
+#    - enforcing=0: kernel-level belt for `selinux --permissive`; lives in
+#      kernel-cmdline.d so it lands on the schema entry only. The stock fallback
+#      boots permissive via /etc/selinux/config, so it needs no kernel arg.
+#    - rhgb quiet is inherited from the stock entry: the pretty plymouth splash
+#      stays. The first-boot hang it used to cause (plymouthd from the initramfs
+#      holds the DRM master and, with no systemd plymouth-quit.service, never
+#      releases it, so kwin can't take the display) is handled in
+#      schema-plasma-autologin.sh, which runs `plymouth quit` right before the
+#      compositor opens the card.
 
-#    Durability: a kernel update (dnf) builds the new BLS entry from
-#    /etc/kernel/cmdline when it exists, else from the running cmdline — which
-#    on a schema-init box would LOSE init=/sbin/schema-init and boot systemd.
-#    Seed it from the entry grubby just wrote so every future kernel inherits
-#    schema-init as PID 1 (and enforcing=0). Captured post-edit → includes
-#    root=UUID/rootflags, so new entries stay bootable.
+#    Durability seed: a kernel update (dnf) builds the new STOCK BLS entry from
+#    /etc/kernel/cmdline when it exists, else from the running cmdline — which on
+#    a schema-init box carries init=/sbin/schema-init and would make the "stock"
+#    entry boot schema-init too, destroying the fallback. Seed the file from the
+#    PRISTINE stock entry now (before any schema entry exists or the default is
+#    flipped), so every future stock entry stays pure systemd. The plugin re-adds
+#    the schema bits on top for its own entry.
 #    grubby reports root= as its OWN field, separate from args= — so the full
 #    boot cmdline is `root=<root> <args>`. Capture both; a file missing root=
 #    would make a future kernel entry unbootable, which is worse than no seed.
@@ -153,6 +162,29 @@ if [ -n "$KARGS" ]; then
     else                    printf '%s\n' "$KARGS"                > /etc/kernel/cmdline
     fi
 fi
+
+#    Install the kernel-install plugin + its config, then seed the schema entry
+#    for the kernel(s) already on disk (the plugin only fires on FUTURE installs).
+install -d /etc/kernel/install.d
+install -m0755 "$SRC/kernel-install/99-schema-init.install" \
+    /etc/kernel/install.d/99-schema-init.install
+
+install -d /etc/schema-init/kernel-cmdline.d
+printf 'enforcing=0\n' > /etc/schema-init/kernel-cmdline.d/10-enforcing.conf
+# boot-default marker: presence tells the plugin to repoint the saved default at
+# the newest schema entry on each add — this is what keeps the box on schema-init.
+touch /etc/schema-init/boot-default
+
+# Generate the schema entry for each installed kernel, exactly as kernel-install
+# would (COMMAND KERNEL_VERSION); each /lib/modules/<ver> is one KERNEL_VERSION.
+# Version-sorted so the newest kernel wins the saved default. This also flips the
+# default to the schema entry, so it must run AFTER the /etc/kernel/cmdline seed.
+for kv in $(ls /lib/modules 2>/dev/null | sort -V); do
+    [ -d "/lib/modules/$kv" ] || continue
+    SCHEMA_INIT_BIN=/sbin/schema-init \
+        /etc/kernel/install.d/99-schema-init.install add "$kv" "/boot/vmlinuz-$kv" \
+        || echo "WARN: schema BLS entry for $kv not generated"
+done
 
 #    DNS: a stock Fedora install points /etc/resolv.conf at systemd-resolved,
 #    which never runs under schema-init -> the file is a dangling symlink, name
