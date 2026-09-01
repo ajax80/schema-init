@@ -64,15 +64,22 @@ def new_tree(marker=True, extras=True):
         f.write('#!/bin/sh\nfor a in "$@"; do case "$a" in saved_entry=*) '
                 f'echo "$a" >> "{rec}";; esac; done\nexit 0\n')
     os.chmod(stub, 0o755)
+    # a schema-init on PATH so the auto-resolve path (empty SCHEMA_INIT_BIN) has
+    # something deterministic to find
+    si = os.path.join(bind, 'schema-init')
+    open(si, 'w').close(); os.chmod(si, 0o755)
     return root, boot, entries, conf_root, rec, bind
 
 
-def run(cmd, ver, boot, conf_root, bind):
+def run(cmd, ver, boot, conf_root, bind, extra_env=None):
     env = dict(os.environ)
     env['KERNEL_INSTALL_BOOT_ROOT'] = boot
     env['KERNEL_INSTALL_ENTRY_TOKEN'] = TOKEN
     env['SCHEMA_INIT_CONF_ROOT'] = conf_root
+    env['SCHEMA_INIT_BIN'] = '/usr/bin/schema-init'   # deterministic; host-independent
     env['PATH'] = bind + os.pathsep + env['PATH']
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(['sh', HOOK, cmd, ver, os.path.join(boot, 'x')],
                           env=env, capture_output=True, text=True)
 
@@ -123,6 +130,40 @@ def test_idempotent_add():
     check('idempotent: init= not duplicated', opts.count('init=/usr/bin/schema-init') == 1, opts)
 
 
+def test_init_path_override():
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    run('add', VER, boot, conf_root, bind,
+        extra_env={'SCHEMA_INIT_BIN': '/sbin/schema-init'})
+    opts = next((l for l in open(os.path.join(entries, f'schema-{VER}.conf'))
+                 if l.startswith('options ')), '')
+    check('override: uses SCHEMA_INIT_BIN path', 'init=/sbin/schema-init' in opts, opts)
+    check('override: not the default path', 'init=/usr/bin/schema-init' not in opts, opts)
+
+
+def test_no_double_init():
+    # a stock entry that already carries a (differently-pathed) schema init must
+    # not get a second init= appended
+    root, boot, entries, conf_root, rec, bind = new_tree(extras=False)
+    stock = os.path.join(entries, f'{TOKEN}-{VER}.conf')
+    body = open(stock).read().replace(
+        'options root=UUID=abc ro',
+        'options root=UUID=abc ro init=/sbin/schema-init')
+    open(stock, 'w').write(body)
+    run('add', VER, boot, conf_root, bind)
+    opts = next((l for l in open(os.path.join(entries, f'schema-{VER}.conf'))
+                 if l.startswith('options ')), '')
+    check('no-double: exactly one init=', opts.count('init=') == 1, opts)
+
+
+def test_auto_resolve_from_path():
+    root, boot, entries, conf_root, rec, bind = new_tree(extras=False)
+    run('add', VER, boot, conf_root, bind, extra_env={'SCHEMA_INIT_BIN': ''})
+    opts = next((l for l in open(os.path.join(entries, f'schema-{VER}.conf'))
+                 if l.startswith('options ')), '')
+    check('auto-resolve: uses schema-init found on PATH',
+          f'init={os.path.join(bind, "schema-init")}' in opts, opts)
+
+
 def test_remove():
     root, boot, entries, conf_root, rec, bind = new_tree()
     run('add', VER, boot, conf_root, bind)
@@ -137,7 +178,8 @@ def test_remove():
 def main():
     print('schema-init kernel-install hook tests\n')
     for fn in (test_add_full, test_no_marker_leaves_default, test_no_extras,
-               test_idempotent_add, test_remove):
+               test_idempotent_add, test_init_path_override, test_no_double_init,
+               test_auto_resolve_from_path, test_remove):
         print(fn.__name__)
         fn()
         print()

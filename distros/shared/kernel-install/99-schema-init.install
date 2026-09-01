@@ -25,7 +25,13 @@ ENTRIES="$BOOT_ROOT/loader/entries"
 CONF_ROOT="${SCHEMA_INIT_CONF_ROOT:-/etc/schema-init}"
 CMDLINE_D="$CONF_ROOT/kernel-cmdline.d"
 DEFAULT_MARKER="$CONF_ROOT/boot-default"
-INIT_PATH="/usr/bin/schema-init"
+# init path is not the same on every box (/usr/bin on some, /sbin on others), so
+# resolve it rather than hardcode: explicit override, else whatever is on PATH.
+INIT_PATH="${SCHEMA_INIT_BIN:-}"
+if [ -z "$INIT_PATH" ]; then
+    INIT_PATH="$(command -v schema-init 2>/dev/null || true)"
+    [ -n "$INIT_PATH" ] || INIT_PATH="/usr/bin/schema-init"
+fi
 SCHEMA_CONF="$ENTRIES/schema-$KERNEL_VERSION.conf"
 ENTRY_TOKEN="${KERNEL_INSTALL_ENTRY_TOKEN:-}"
 [ -n "$ENTRY_TOKEN" ] || ENTRY_TOKEN="$(cat /etc/machine-id 2>/dev/null || true)"
@@ -79,7 +85,7 @@ add)
                 ;;
             "options "*)
                 case "$line" in
-                    *"init=$INIT_PATH"*) : ;;
+                    *init=*schema-init*) : ;;   # already a schema-init entry, any path
                     *) line="$line init=$INIT_PATH" ;;
                 esac
                 [ -n "$xtra" ] && line="$line $xtra"
