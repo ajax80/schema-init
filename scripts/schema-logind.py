@@ -8,6 +8,8 @@ import signal
 import time
 import threading
 import json
+import re
+import stat
 import subprocess
 import dbus
 import dbus.service
@@ -264,6 +266,96 @@ SESSION_REGISTER = os.environ.get(
 SESSION_UNREGISTER = os.environ.get(
     'SCHEMA_SESSION_UNREGISTER',
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema-session-unregister'))
+# uaccess re-scan: coldplug tags and ACLs devices before any user is active, so
+# a device present at boot is only granted to whoever was active then (nobody).
+# Real systemd's logind (logind-acl.c devnode_acl_all) re-applies the ACL when a
+# seat's active session changes; schema-udev only tags at device-add, so logind
+# owns the login-time re-application. Both dirs are overridable so a test can aim
+# the scan at a temp tree instead of the live /dev and udev database.
+UDEV_DATA_DIR = os.environ.get('SCHEMA_LOGIND_UDEV_DATA', '/run/udev/data')
+DEV_DIR = os.environ.get('SCHEMA_LOGIND_DEV_DIR', '/dev')
+_UDEV_DB_RE = re.compile(r'([cb])(\d+):(\d+)')
+
+
+def _rebase_devname(devname):
+    """An absolute E:DEVNAME (/dev/...) resolved under DEV_DIR for test trees."""
+    if devname.startswith('/dev/'):
+        return os.path.join(DEV_DIR, devname[len('/dev/'):])
+    return os.path.join(DEV_DIR, devname.lstrip('/'))
+
+
+def _dev_rdev_map():
+    """(is_block, major, minor) -> real device-node path under DEV_DIR."""
+    m = {}
+    for dp, _dirs, files in os.walk(DEV_DIR):
+        for n in files:
+            p = os.path.join(dp, n)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISCHR(st.st_mode) or stat.S_ISBLK(st.st_mode):
+                key = (stat.S_ISBLK(st.st_mode),
+                       os.major(st.st_rdev), os.minor(st.st_rdev))
+                m.setdefault(key, p)
+    return m
+
+
+def uaccess_seat_nodes(seat_id='seat0'):
+    """/dev nodes tagged uaccess that belong to `seat_id`, per the udev db.
+
+    A record belongs to the seat when its E:ID_SEAT equals seat_id, or it has no
+    ID_SEAT and seat_id is seat0 (the udev/systemd default). Nodes are resolved
+    by N:/E:DEVNAME when present, else by major:minor -> st_rdev — real records
+    on this fleet carry neither name field, so the rdev map is the live path.
+    """
+    try:
+        entries = os.listdir(UDEV_DATA_DIR)
+    except OSError:
+        return []
+    rdev = None
+    out = []
+    for name in entries:
+        mm = _UDEV_DB_RE.fullmatch(name)
+        if not mm:
+            continue
+        try:
+            body = open(os.path.join(UDEV_DATA_DIR, name)).read().splitlines()
+        except OSError:
+            continue
+        if not any(ln == 'Q:uaccess' or ln == 'G:uaccess' for ln in body):
+            continue
+        id_seat = 'seat0'
+        path = None
+        for ln in body:
+            if ln.startswith('E:ID_SEAT='):
+                id_seat = ln[len('E:ID_SEAT='):] or 'seat0'
+            elif ln.startswith('E:DEVNAME='):
+                path = _rebase_devname(ln[len('E:DEVNAME='):])
+            elif ln.startswith('N:'):
+                path = os.path.join(DEV_DIR, ln[2:])
+        if id_seat != seat_id:
+            continue
+        if path is None:
+            if rdev is None:
+                rdev = _dev_rdev_map()
+            path = rdev.get((mm.group(1) == 'b',
+                             int(mm.group(2)), int(mm.group(3))))
+        if path and os.path.exists(path):
+            out.append(path)
+    return out
+
+
+def apply_uaccess_acl(nodes, new_uid, old_uid=None):
+    """Grant the active user rw on each node and revoke the previous user's —
+    the setfacl half of devnode_acl_all. Non-fatal per node: a device that
+    vanished mid-scan must not abort the rest."""
+    for n in nodes:
+        subprocess.run(['setfacl', '-m', 'u:%d:rw' % new_uid, n],
+                       stderr=subprocess.DEVNULL)
+        if old_uid is not None and old_uid != new_uid:
+            subprocess.run(['setfacl', '-x', 'u:%d' % old_uid, n],
+                           stderr=subprocess.DEVNULL)
 
 
 def session_path_for(sid):
@@ -1185,6 +1277,7 @@ class SessionRegistry:
         self._sigs = {}         # sid -> record signature at last sync
         self._derived = {}      # path -> last content written
         self._last_vt = None
+        self._seat_active_uid = {}   # seat_id -> uid last granted uaccess ACLs
 
     # -- lookup --------------------------------------------------------------
 
@@ -1379,8 +1472,10 @@ class SessionRegistry:
                     uids.append(uid)
             body = ['# This is private data. Do not parse.']
             if active_sid:
+                active_uid = self.sessions[active_sid].record.uid
                 body.append('ACTIVE=%s' % active_sid)
-                body.append('ACTIVE_UID=%d' % self.sessions[active_sid].record.uid)
+                body.append('ACTIVE_UID=%d' % active_uid)
+                self._reconcile_uaccess(seat_id, active_uid)
             body.append('SESSIONS=%s' % ' '.join(s for s, _ in members))
             body.append('UIDS=%s' % ' '.join(str(u) for u in uids))
             self._write_if_changed(SEATS_DIR + '/' + seat_id, '\n'.join(body) + '\n')
@@ -1398,6 +1493,23 @@ class SessionRegistry:
             if display != '/':
                 body.append('DISPLAY=%s' % display)
             self._write_if_changed(USERS_DIR + '/%d' % uid, '\n'.join(body) + '\n')
+
+    def _reconcile_uaccess(self, seat_id, active_uid):
+        """Re-grant the seat's uaccess devices to whoever is active now, once
+        per active-uid change. Coldplug ran before login, so without this the
+        device sits owned by no one until a replug; this is logind's half of the
+        systemd uaccess contract that schema-udev's device-add tagging can't do.
+        """
+        if self._seat_active_uid.get(seat_id) == active_uid:
+            return
+        old = self._seat_active_uid.get(seat_id)
+        try:
+            apply_uaccess_acl(uaccess_seat_nodes(seat_id), active_uid, old)
+        except Exception as e:
+            print(f"login1-stub: uaccess re-scan failed on {seat_id}: {e}",
+                  file=sys.stderr)
+            return
+        self._seat_active_uid[seat_id] = active_uid
 
     def _write_if_changed(self, path, content):
         # Compared against what we last wrote rather than re-read: this runs at

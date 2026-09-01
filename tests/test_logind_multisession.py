@@ -107,6 +107,8 @@ def main():
     env['DBUS_SYSTEM_BUS_ADDRESS'] = addr
     env['SCHEMA_LOGIND_ACTIVE_VT'] = vtfile.name
     env['SCHEMA_LOGIND_RUN_DIR'] = rundir
+    env['SCHEMA_LOGIND_UDEV_DATA'] = rundir   # no cN:M files -> uaccess re-scan inert
+    env['SCHEMA_LOGIND_DEV_DIR'] = rundir
     env.pop('SCHEMA_LOGIND_VTNR', None)
 
     stub = subprocess.Popen([sys.executable, LOGIND], env=env,
