@@ -409,23 +409,42 @@ def _mount_slug(target):
     return target.strip("/").replace("/", "-")
 
 
-SKIP_MOUNT_TARGETS = {"/", "/boot", "/boot/efi"}
+SKIP_MOUNT_TARGETS = {"/"}
+
+
+def _parent_mount_target(target, targets):
+    best = None
+    for t in targets:
+        if t in SKIP_MOUNT_TARGETS or t == target:
+            continue
+        if target.startswith(t.rstrip("/") + "/"):
+            if best is None or len(t) > len(best):
+                best = t
+    return best
 
 
 def generate_host_units(profile, manifest, dry_run=False):
     written = []
-    for mnt in profile.get("mounts", []):
+    mounts = profile.get("mounts", [])
+    targets = [m["target"] for m in mounts]
+    for mnt in mounts:
         if mnt["target"] in SKIP_MOUNT_TARGETS:
             continue
         slug = _mount_slug(mnt["target"])
         rel = "etc/schema-init/services/mount-%s.svc" % slug
-        body = ("name=mount-%s\n"
-                "exec=/bin/mount\n"
-                "args=-t %s -o %s %s %s\n"
-                "oneshot=1\n"
-                "needs_root=1\n"
-                "critical=0\n") % (slug, mnt["fstype"], mnt.get("opts", "defaults"),
-                                   mnt["src"], mnt["target"])
+        # schema-init takes ONE argv element per args= line (it never splits on
+        # whitespace) — a single combined line reaches /bin/mount as one garbage
+        # argument and the mount silently fails.
+        margs = ["-t", mnt["fstype"], "-o", mnt.get("opts", "defaults"),
+                 mnt["src"], mnt["target"]]
+        deps = ["udev-trigger"]
+        parent = _parent_mount_target(mnt["target"], targets)
+        if parent:
+            deps.append("mount-" + _mount_slug(parent))
+        body = ("name=mount-%s\nexec=/bin/mount\n" % slug
+                + "".join("args=%s\n" % a for a in margs)
+                + "oneshot=1\nneeds_root=1\ncritical=0\n"
+                + "".join("dep=%s\n" % d for d in deps))
         written.append(P(rel))
         if not dry_run:
             os.makedirs(os.path.dirname(P(rel)), exist_ok=True)
@@ -565,8 +584,15 @@ def generate_nm_config(manifest, dry_run=False):
         return
     conf = P("etc/NetworkManager/conf.d/10-schema-managed.conf")
     os.makedirs(os.path.dirname(conf), exist_ok=True)
-    open(conf, "w").write("[device]\nmatch-device=*\nmanaged=1\n")
+    # rc-manager=file: without systemd-resolved under schema-init, /etc/resolv.conf
+    # is a dangling symlink to resolved's stub and every DNS lookup fails. Tell NM
+    # to write resolv.conf directly as a real file from DHCP.
+    open(conf, "w").write("[device]\nmatch-device=*\nmanaged=1\n\n"
+                          "[main]\nrc-manager=file\n")
     manifest.add_file("/etc/NetworkManager/conf.d/10-schema-managed.conf")
+    rc = P("etc/resolv.conf")
+    if os.path.islink(rc) and not os.path.exists(rc):
+        os.unlink(rc)
     key = P("etc/NetworkManager/system-connections/schema-wired.nmconnection")
     os.makedirs(os.path.dirname(key), exist_ok=True)
     open(key, "w").write("[connection]\nid=schema-wired\ntype=ethernet\n"
@@ -576,7 +602,7 @@ def generate_nm_config(manifest, dry_run=False):
     manifest.add_file("/etc/NetworkManager/system-connections/schema-wired.nmconnection")
 
 
-DESKTOP_GROUPS = ["video", "render", "input"]
+DESKTOP_GROUPS = ["video", "render", "input", "audio"]
 
 
 def ensure_user_groups(profile, run=subprocess.run, dry_run=False):
