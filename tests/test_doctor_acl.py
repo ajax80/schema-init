@@ -38,4 +38,18 @@ check("back_out removes user rw", f"user:{uid}:rw" not in out)
 # idempotent: heal twice, second is a no-op that still verifies
 f = c.detect(); c.heal(f); c.heal(c.detect() or sd.Finding("x")); check("idempotent", c.verify() is True)
 
+# uaccess-tagged usb/hidraw nodes (SDR/FIDO) are discovered from the udev db,
+# non-uaccess devices are not
+dbdir = os.path.join(root, "run/udev/data"); os.makedirs(dbdir)
+os.makedirs(os.path.join(root, "dev/extra"))
+sdr = os.path.join(root, "dev/extra/sdr0"); open(sdr, "w").close()
+nope = os.path.join(root, "dev/extra/nope"); open(nope, "w").close()
+with open(os.path.join(dbdir, "c500:0"), "w") as fh:
+    fh.write("N:extra/sdr0\nG:uaccess\nQ:uaccess\nQ:seat\n")
+with open(os.path.join(dbdir, "c501:0"), "w") as fh:
+    fh.write("N:extra/nope\nQ:seat\n")
+nodes = c._nodes()
+check("uaccess db node discovered", sdr in nodes)
+check("non-uaccess db node skipped", nope not in nodes)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
