@@ -1,2 +1,6 @@
 #!/bin/sh
-exec env LD_PRELOAD=/usr/local/lib/mock_sd.so /usr/bin/plasmashell "$@"
+# mock_sd.so faked sd_booted() for ksycoca; native /run/systemd/system (init.c)
+# makes it redundant. Only preload it if it actually exists (absent on migrated
+# boxes) so we never set a broken LD_PRELOAD.
+[ -e /usr/local/lib/mock_sd.so ] && export LD_PRELOAD=/usr/local/lib/mock_sd.so
+exec /usr/bin/plasmashell "$@"
