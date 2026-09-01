@@ -10,6 +10,8 @@ import fcntl
 import glob
 import json
 import os
+import re
+import stat
 import struct
 import subprocess
 import sys
@@ -265,15 +267,67 @@ def _running(needle, tbl=None):
 
 class CardInputAcl(Check):
     name = "card-input-acl"
-    summary = "the logged-in user can open the GPU and input devices"
+    summary = "the logged-in user can open the GPU, input, and uaccess devices (SDR/FIDO)"
     grade = SAFE
 
     def _nodes(self):
         pats = ["dev/dri/card*", "dev/dri/renderD*", "dev/input/event*"]
-        out = []
+        out = set()
         for p in pats:
-            out += glob.glob(os.path.join(ROOT, p))
+            out.update(glob.glob(os.path.join(ROOT, p)))
+        out.update(self._uaccess_db_nodes())
         return sorted(out)
+
+    def _rdev_map(self):
+        """(is_block, major, minor) -> real device-node path under ROOT/dev."""
+        m = {}
+        for dp, dirs, files in os.walk(os.path.join(ROOT, "dev")):
+            for n in files:
+                p = os.path.join(dp, n)
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                if stat.S_ISCHR(st.st_mode) or stat.S_ISBLK(st.st_mode):
+                    key = (stat.S_ISBLK(st.st_mode),
+                           os.major(st.st_rdev), os.minor(st.st_rdev))
+                    m.setdefault(key, p)
+        return m
+
+    def _uaccess_db_nodes(self):
+        """Device nodes carrying the uaccess tag, per the udev database — this
+        picks up usb/hidraw SDR and FIDO2 keys that the glob patterns miss."""
+        dbdir = os.path.join(ROOT, "run/udev/data")
+        try:
+            entries = os.listdir(dbdir)
+        except OSError:
+            return []
+        rdev = None
+        out = []
+        for name in entries:
+            mm = re.fullmatch(r"([cb])(\d+):(\d+)", name)
+            if not mm:
+                continue
+            try:
+                body = open(os.path.join(dbdir, name)).read().splitlines()
+            except OSError:
+                continue
+            if not any(ln == "Q:uaccess" or ln == "G:uaccess" for ln in body):
+                continue
+            path = None
+            for ln in body:
+                if ln.startswith("E:DEVNAME="):
+                    path = os.path.join(ROOT, ln[10:].lstrip("/"))
+                elif ln.startswith("N:"):
+                    path = os.path.join(ROOT, "dev", ln[2:])
+            if path is None:
+                if rdev is None:
+                    rdev = self._rdev_map()
+                path = rdev.get((mm.group(1) == "b",
+                                 int(mm.group(2)), int(mm.group(3))))
+            if path and os.path.exists(path):
+                out.append(path)
+        return out
 
     def _getfacl(self, path):
         return subprocess.run(["getfacl", "-pn", path],
