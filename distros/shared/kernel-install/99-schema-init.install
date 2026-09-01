@@ -1,0 +1,100 @@
+#!/bin/sh
+# kernel-install plugin: maintain a schema-init BLS entry for each kernel.
+#
+# Fedora's 90-loaderentry.install writes the stock systemd BLS entry; this runs
+# after it (99- prefix) and clones that entry into schema-<version>.conf with
+# init=/usr/bin/schema-init, so every kernel dnf installs gets a schema-init
+# variant automatically. Without this the schema-init entry is pinned to one
+# kernel and every update silently drops the default back to stock systemd.
+#
+# Per-host extra cmdline args (e.g. modprobe.blacklist=radeon on a box whose GPU
+# needs it) live in /etc/schema-init/kernel-cmdline.d/*.conf so the plugin ships
+# identically to every box. If /etc/schema-init/boot-default exists, the newest
+# schema entry is made the saved default on each add — this is what keeps a
+# schema-init box on schema-init across kernel updates.
+set -eu
+
+COMMAND="${1:-}"
+KERNEL_VERSION="${2:-}"
+[ -n "$KERNEL_VERSION" ] || exit 0
+
+BOOT_ROOT="${KERNEL_INSTALL_BOOT_ROOT:-/boot}"
+ENTRIES="$BOOT_ROOT/loader/entries"
+[ -d "$ENTRIES" ] || exit 0            # not a BLS layout — nothing to do
+
+CONF_ROOT="${SCHEMA_INIT_CONF_ROOT:-/etc/schema-init}"
+CMDLINE_D="$CONF_ROOT/kernel-cmdline.d"
+DEFAULT_MARKER="$CONF_ROOT/boot-default"
+INIT_PATH="/usr/bin/schema-init"
+SCHEMA_CONF="$ENTRIES/schema-$KERNEL_VERSION.conf"
+ENTRY_TOKEN="${KERNEL_INSTALL_ENTRY_TOKEN:-}"
+[ -n "$ENTRY_TOKEN" ] || ENTRY_TOKEN="$(cat /etc/machine-id 2>/dev/null || true)"
+
+find_stock() {
+    if [ -n "$ENTRY_TOKEN" ] && [ -f "$ENTRIES/$ENTRY_TOKEN-$KERNEL_VERSION.conf" ]; then
+        printf '%s\n' "$ENTRIES/$ENTRY_TOKEN-$KERNEL_VERSION.conf"
+        return
+    fi
+    for e in "$ENTRIES"/*-"$KERNEL_VERSION".conf; do
+        [ -f "$e" ] || continue
+        case "$(basename "$e")" in
+            schema-*|*rescue*) continue ;;
+        esac
+        printf '%s\n' "$e"
+        return
+    done
+}
+
+extra_args() {
+    [ -d "$CMDLINE_D" ] || return 0
+    for f in "$CMDLINE_D"/*.conf; do
+        [ -f "$f" ] || continue
+        sed 's/#.*//' "$f"
+    done | tr '\n' ' ' | tr -s ' ' | sed 's/^ *//; s/ *$//'
+}
+
+newest_schema_version() {
+    ls -1 "$ENTRIES"/schema-*.conf 2>/dev/null \
+        | sed 's|.*/schema-||; s|\.conf$||' \
+        | sort -V | tail -1
+}
+
+set_default_to() {
+    [ -f "$DEFAULT_MARKER" ] || return 0
+    command -v grub2-editenv >/dev/null 2>&1 || return 0
+    grub2-editenv - set "saved_entry=schema-$1" 2>/dev/null || true
+}
+
+case "$COMMAND" in
+add)
+    stock="$(find_stock)"
+    [ -n "$stock" ] || exit 0
+    xtra="$(extra_args)"
+    tmp="$SCHEMA_CONF.tmp.$$"
+    : > "$tmp"
+    while IFS= read -r line; do
+        case "$line" in
+            "title "*)
+                line="$line (schema-init)"
+                ;;
+            "options "*)
+                case "$line" in
+                    *"init=$INIT_PATH"*) : ;;
+                    *) line="$line init=$INIT_PATH" ;;
+                esac
+                [ -n "$xtra" ] && line="$line $xtra"
+                ;;
+        esac
+        printf '%s\n' "$line" >> "$tmp"
+    done < "$stock"
+    mv "$tmp" "$SCHEMA_CONF"
+    set_default_to "$KERNEL_VERSION"
+    ;;
+remove)
+    rm -f "$SCHEMA_CONF"
+    # if this was the default, fall back to the newest surviving schema entry
+    latest="$(newest_schema_version)"
+    [ -n "$latest" ] && set_default_to "$latest"
+    ;;
+esac
+exit 0
