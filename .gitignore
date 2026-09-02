@@ -20,3 +20,7 @@ verify-eprops-live
 # migrate round-trip VM harness — large binaries, never commit
 tests/migratetest/artifacts
 tests/migratetest/artifacts/
+
+# schema-dbus SP0 learner: live corpus stays local, never pushed
+tests/dbus-corpus/*
+!tests/dbus-corpus/sample.jsonl
