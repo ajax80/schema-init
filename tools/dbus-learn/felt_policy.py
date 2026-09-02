@@ -37,7 +37,10 @@ def parse_policy(text):
 # maps a predicate attribute to the request field it constrains
 _SEND = {"send_destination": "destination", "send_interface": "interface",
          "send_member": "member", "send_type": "msgtype", "send_path": "path"}
-_RECV = {"receive_sender": "destination", "receive_interface": "interface",
+# receive_sender constrains the sender identity of the incoming message, not its
+# destination. sender_name is not yet populated by any request builder in SP0
+# (no op="receive" request exists yet) — this mapping is correctness-for-the-future.
+_RECV = {"receive_sender": "sender_name", "receive_interface": "interface",
          "receive_member": "member", "receive_type": "msgtype", "receive_path": "path"}
 
 def _rule_matches(rule, request):
@@ -124,7 +127,8 @@ def _applicable(context, request):
 
 def evaluate(contexts, request):
     ordered = ([c for c in contexts if c.kind == "default"]
-               + [c for c in contexts if c.kind in ("user", "group")]
+               + [c for c in contexts if c.kind == "group"]
+               + [c for c in contexts if c.kind == "user"]
                + [c for c in contexts if c.kind == "mandatory"])
     verdict = "deny"
     for context in ordered:

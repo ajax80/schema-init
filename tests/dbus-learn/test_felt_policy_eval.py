@@ -59,3 +59,38 @@ allow=send_destination:com.example.Service
                         "destination": "com.example.Service", "interface": "com.x",
                         "member": "Do", "msgtype": "method_call", "path": "/"}
     assert evaluate(policy, req_not_in_group) == "deny"
+
+def test_receive_sender_matches_sender_name_not_destination():
+    policy = parse_policy("""\
+context=default
+allow=receive_type:signal
+deny=receive_sender:org.foo
+""")
+    denied = {"op": "receive", "uid": 1000, "gids": [1000],
+              "sender_name": "org.foo", "msgtype": "signal",
+              "destination": None, "interface": None, "member": None, "path": None}
+    assert evaluate(policy, denied) == "deny"
+
+    allowed = {"op": "receive", "uid": 1000, "gids": [1000],
+               "sender_name": "org.bar", "msgtype": "signal",
+               "destination": None, "interface": None, "member": None, "path": None}
+    assert evaluate(policy, allowed) == "allow"
+
+def test_user_context_overrides_group_context():
+    # Real on-box identities: uid 0 = root, gid 10 = wheel.
+    # user:root is declared FIRST in the file, group:wheel SECOND — this only
+    # discriminates real tier ordering (group < user) from mere file order.
+    policy = parse_policy("""\
+context=default
+deny=send_type:method_call
+context=user:root
+deny=send_destination:com.example.Service
+context=group:wheel
+allow=send_destination:com.example.Service
+""")
+    req = {"op": "send", "uid": 0, "gids": [0, 10],
+           "destination": "com.example.Service", "interface": "com.x",
+           "member": "Do", "msgtype": "method_call", "path": "/"}
+    # root is in wheel too; user tier must be evaluated AFTER group tier and win,
+    # even though it appears earlier in the file.
+    assert evaluate(policy, req) == "deny"
