@@ -89,7 +89,10 @@ def _applicable(context, request):
         selector = context.selector
         if selector is None:
             return True
-        # Check if uid matches selector: try numeric comparison, then name lookup
+        # Check if uid matches selector: try numeric comparison, then name lookup.
+        # NOTE: This deliberately performs uid/name resolution here rather than deferring
+        # to the gate harness (Task 6), enabling the engine to work standalone on unfiltered
+        # policy (as the brief's own tests require). The harness can pre-filter in production.
         try:
             return int(selector) == uid
         except ValueError:
@@ -99,7 +102,24 @@ def _applicable(context, request):
             except KeyError:
                 return False
     if context.kind == "group":
-        return True
+        gids = request.get("gids")
+        if not gids:
+            return False
+        selector = context.selector
+        if selector is None:
+            return True
+        # Check if any gid matches selector: try numeric comparison, then name lookup.
+        # NOTE: Same rationale as user contexts above — resolves selectors here for engine
+        # standalone testing, while harness can pre-filter in production.
+        try:
+            target_gid = int(selector)
+        except ValueError:
+            import grp
+            try:
+                target_gid = grp.getgrnam(selector).gr_gid
+            except KeyError:
+                return False
+        return target_gid in gids
     return False
 
 def evaluate(contexts, request):
