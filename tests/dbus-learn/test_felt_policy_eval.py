@@ -60,6 +60,52 @@ allow=send_destination:com.example.Service
                         "member": "Do", "msgtype": "method_call", "path": "/"}
     assert evaluate(policy, req_not_in_group) == "deny"
 
+def test_send_destination_resolves_through_destination_names():
+    # policy is written in well-known names; the wire destination is often the
+    # unique name. destination_names carries the owned well-known name(s), and a
+    # send_destination rule must match against that set.
+    policy = parse_policy("""\
+context=default
+deny=send_type:method_call
+allow=send_destination:org.freedesktop.login1
+""")
+    by_unique = {"op": "send", "uid": 1000, "gids": [1000], "destination": ":1.8",
+                 "destination_names": ["org.freedesktop.login1"], "interface": "i",
+                 "member": "m", "msgtype": "method_call", "path": "/"}
+    assert evaluate(policy, by_unique) == "allow"
+    # a unique name owning NO matching well-known name stays denied
+    unowned = dict(by_unique, destination=":1.99", destination_names=[])
+    assert evaluate(policy, unowned) == "deny"
+
+def test_last_match_wins_over_the_owned_name_set():
+    # a connection owning both an allowed and a later-denied name must resolve to
+    # the LAST matching rule (deny), not allow-if-any.
+    policy = parse_policy("""\
+context=default
+allow=send_destination:a.Allowed
+deny=send_destination:b.Denied
+""")
+    req = {"op": "send", "uid": 1000, "gids": [1000], "destination": ":1.5",
+           "destination_names": ["a.Allowed", "b.Denied"], "interface": "i",
+           "member": "m", "msgtype": "method_call", "path": "/"}
+    assert evaluate(policy, req) == "deny"
+
+def test_requested_reply_bypasses_send_destination_deny():
+    # a method_return/error carrying a reply_serial is a requested reply and is
+    # exempt from send policy (dbus send_requested_reply defaults true).
+    policy = parse_policy("""\
+context=default
+allow=send_type:method_return
+deny=send_destination:org.freedesktop.NetworkManager
+""")
+    base = {"op": "send", "uid": 81, "gids": [81], "destination": ":1.5",
+            "destination_names": ["org.freedesktop.NetworkManager"], "interface": "i",
+            "member": "m", "msgtype": "method_return", "path": "/"}
+    assert evaluate(policy, dict(base, reply_serial=42)) == "allow"   # tracked reply
+    assert evaluate(policy, dict(base, reply_serial=None)) == "deny"  # not a reply
+    call = dict(base, msgtype="method_call", reply_serial=None)
+    assert evaluate(policy, call) == "deny"                           # exemption is replies only
+
 def test_receive_sender_matches_sender_name_not_destination():
     policy = parse_policy("""\
 context=default

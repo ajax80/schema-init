@@ -1,7 +1,25 @@
+import functools, pwd, grp
 from collections import namedtuple
 
 Rule = namedtuple("Rule", ["decision", "predicates"])
 Context = namedtuple("Context", ["kind", "selector", "rules"])
+
+# name->id resolution, cached: users/groups are stable within a gate run, and a
+# large corpus re-resolves the same handful of selectors (root, avahi, ...)
+# once per record without this — the difference between ~1min and >4min on 83k.
+@functools.lru_cache(maxsize=None)
+def _uid_of(name):
+    try:
+        return pwd.getpwnam(name).pw_uid
+    except KeyError:
+        return None
+
+@functools.lru_cache(maxsize=None)
+def _gid_of(name):
+    try:
+        return grp.getgrnam(name).gr_gid
+    except KeyError:
+        return None
 
 def _parse_predicates(spec):
     preds = {}
@@ -34,8 +52,10 @@ def parse_policy(text):
             raise ValueError(f"unknown key: {key!r}")
     return contexts
 
-# maps a predicate attribute to the request field it constrains
-_SEND = {"send_destination": "destination", "send_interface": "interface",
+# maps a predicate attribute to the request field it constrains.
+# send_destination is handled separately (set-membership against the
+# destination's owned well-known names), not through this scalar map.
+_SEND = {"send_interface": "interface",
          "send_member": "member", "send_type": "msgtype", "send_path": "path"}
 # receive_sender constrains the sender identity of the incoming message, not its
 # destination. sender_name is not yet populated by any request builder in SP0
@@ -63,6 +83,23 @@ def _rule_matches(rule, request):
             else:  # own_prefix
                 if not name.startswith(value):
                     return False
+        elif attr == "send_destination":
+            if op != "send":
+                return False
+            # dbus evaluates send_destination against the well-known name(s) the
+            # destination connection OWNS. On the wire the destination is often a
+            # unique name (:1.x); destination_names is its resolved ownership set
+            # (from the learner's live registry). Fall back to the raw
+            # destination for old corpus records that predate that field.
+            names = request.get("destination_names")
+            if not names:
+                d = request.get("destination")
+                names = [d] if d else []
+            if value == "*":
+                if not names:
+                    return False
+            elif value not in names:
+                return False
         elif attr in _SEND:
             if op != "send":
                 return False
@@ -99,11 +136,7 @@ def _applicable(context, request):
         try:
             return int(selector) == uid
         except ValueError:
-            import pwd
-            try:
-                return pwd.getpwnam(selector).pw_uid == uid
-            except KeyError:
-                return False
+            return _uid_of(selector) == uid
     if context.kind == "group":
         gids = request.get("gids")
         if not gids:
@@ -117,15 +150,26 @@ def _applicable(context, request):
         try:
             target_gid = int(selector)
         except ValueError:
-            import grp
-            try:
-                target_gid = grp.getgrnam(selector).gr_gid
-            except KeyError:
+            target_gid = _gid_of(selector)
+            if target_gid is None:
                 return False
         return target_gid in gids
     return False
 
+def _is_requested_reply(request):
+    # A method_return/error carrying a reply_serial is a reply to a pending
+    # call. dbus's send_requested_reply defaults true, so ordinary send policy
+    # (send_destination denies in particular) does not apply to such replies.
+    # The dissolver drops send_requested_reply="false" qualifiers (a documented
+    # deferral), so no surviving rule can re-block a reply — "allow" is correct
+    # for every requested reply the daemon actually delivered.
+    return (request.get("op") == "send"
+            and request.get("reply_serial") is not None
+            and request.get("msgtype") in ("method_return", "error"))
+
 def evaluate(contexts, request):
+    if _is_requested_reply(request):
+        return "allow"
     ordered = ([c for c in contexts if c.kind == "default"]
                + [c for c in contexts if c.kind == "group"]
                + [c for c in contexts if c.kind == "user"]

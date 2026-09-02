@@ -5,9 +5,31 @@ _TYPE_NAMES = {1: "method_call", 2: "method_return", 3: "error", 4: "signal"}
 def _name(v):
     return str(v) if v is not None else None
 
+def _names_for(dbus_name, unique_to_names):
+    # Resolve a bus name to the well-known name(s) policy is written against:
+    # a unique name (:1.x) maps to whatever well-known names it owns; a
+    # well-known name resolves to itself. dbus policy send_destination rules
+    # only ever reference well-known names, so this is what the gate matches on.
+    if dbus_name is None:
+        return []
+    if dbus_name.startswith(":"):
+        return list(unique_to_names.get(dbus_name, []))
+    return [dbus_name]
+
+def _public_name_arg(msg):
+    # Read arg[0] of a name-registry method (RequestName/ReleaseName). Bus
+    # names are PUBLIC — this is the one deliberate body read; message payloads
+    # are still never touched (body_shape stays signature-only).
+    try:
+        args = msg.get_args_list()
+        return str(args[0]) if args else None
+    except Exception:
+        return None
+
 def record_from_message(msg, unique_to_names, unique_to_creds):
     t = _TYPE_NAMES.get(msg.get_type(), "unknown")
     sender = _name(msg.get_sender())
+    dest = _name(msg.get_destination())
     creds = unique_to_creds.get(sender, {})
     rec = {
         "ts_mono": time.monotonic(),
@@ -17,7 +39,8 @@ def record_from_message(msg, unique_to_names, unique_to_creds):
         "reply_serial": msg.get_reply_serial() or None,
         "sender": sender,
         "sender_names": list(unique_to_names.get(sender, [])),
-        "destination": _name(msg.get_destination()),
+        "destination": dest,
+        "destination_names": _names_for(dest, unique_to_names),   # well-known names of the callee
         "path": _name(msg.get_path()),
         "interface": _name(msg.get_interface()),
         "member": _name(msg.get_member()),
@@ -30,8 +53,32 @@ def record_from_message(msg, unique_to_names, unique_to_creds):
         "gids": list(creds.get("gids", [])),
     }
     if rec["interface"] == "org.freedesktop.DBus" and rec["member"] in ("RequestName", "ReleaseName"):
-        rec["owns"] = {"op": rec["member"]}          # name arg captured from body in the live loop
+        rec["owns"] = {"op": rec["member"], "name": _public_name_arg(msg)}
     return rec
+
+def apply_name_owner_changed(msg, unique_to_names):
+    # Keep the unique->well-known registry live across the whole run by
+    # following org.freedesktop.DBus.NameOwnerChanged (name, old, new). Without
+    # this the map is only a startup snapshot and goes stale for every
+    # connection that appears later (PackageKit, transient tools, etc).
+    args = None
+    try:
+        args = msg.get_args_list()
+        name, old_owner, new_owner = str(args[0]), str(args[1]), str(args[2])
+    except Exception:
+        return
+    if name.startswith(":"):
+        return  # unique-name churn, not a well-known ownership change
+    if old_owner:
+        lst = unique_to_names.get(old_owner)
+        if lst and name in lst:
+            lst.remove(name)
+            if not lst:
+                unique_to_names.pop(old_owner, None)
+    if new_owner:
+        lst = unique_to_names.setdefault(new_owner, [])
+        if name not in lst:
+            lst.append(name)
 
 class Recorder:
     def __init__(self, path):
@@ -88,6 +135,11 @@ def main():
 
     def on_message(_bus, msg):
         try:
+            # keep the ownership registry current BEFORE recording, so a message
+            # sees the well-known names that were live when it was sent
+            if (msg.get_member() == "NameOwnerChanged"
+                    and _name(msg.get_interface()) == "org.freedesktop.DBus"):
+                apply_name_owner_changed(msg, unique_to_names)
             sender = _name(msg.get_sender())
             if sender is not None and sender not in unique_to_creds:
                 unique_to_creds[sender] = _fetch_creds(iface, sender)
