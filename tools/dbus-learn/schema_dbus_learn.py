@@ -65,11 +65,15 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
     rec = Recorder(out)
     DBusGMainLoop(set_as_default=True)
-    bus = dbus.SystemBus()
     unique_to_names = {}
     unique_to_creds = {}
 
-    drv = bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+    # Two PRIVATE connections: a monitor connection may never send (the spec
+    # forbids it), so all driver reads (ListNames/GetNameOwner snapshot AND
+    # the per-message lazy GetConnectionCredentials) go through a separate,
+    # ordinary client connection.
+    client_bus = dbus.SystemBus(private=True)
+    drv = client_bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
     iface = dbus.Interface(drv, "org.freedesktop.DBus")
 
     # seed initial ownership snapshot (+ best-effort creds)
@@ -93,10 +97,14 @@ def main():
             pass  # never let a bad record kill the drain loop
         return  # do not block, do not reply
 
-    # become a monitor: receive everything, reply to nothing
-    monitor_iface = dbus.Interface(drv, "org.freedesktop.DBus.Monitoring")
-    conn = bus.get_connection()
-    conn.add_message_filter(on_message)
+    # become a monitor on a SEPARATE private connection: it receives
+    # everything but must never send (BecomeMonitor + add_message_filter
+    # only; no driver calls on monitor_bus).
+    monitor_bus = dbus.SystemBus(private=True)
+    monitor_bus.set_exit_on_disconnect(False)
+    monitor_drv = monitor_bus.get_object("org.freedesktop.DBus", "/org/freedesktop/DBus")
+    monitor_iface = dbus.Interface(monitor_drv, "org.freedesktop.DBus.Monitoring")
+    monitor_bus.add_message_filter(on_message)
     monitor_iface.BecomeMonitor(dbus.Array([], signature="s"), dbus.UInt32(0))
     GLib.MainLoop().run()
 
