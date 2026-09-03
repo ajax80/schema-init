@@ -125,7 +125,8 @@ def test_registry_fires_on_change():
     L.apply_uaccess_acl = lambda nodes, new, old: calls.append((tuple(nodes), new, old))
     try:
         reg = L.SessionRegistry.__new__(L.SessionRegistry)
-        reg.sessions = {}; reg._derived = {}; reg._seat_active_uid = {}
+        reg.sessions = {}; reg._derived = {}
+        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
 
         _set_active(reg, 1000)
         reg._write_derived()
@@ -145,9 +146,56 @@ def test_registry_fires_on_change():
         L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
 
 
+def test_registry_refires_on_node_readd():
+    # systemd re-runs uaccess on every device-add; schema-logind used to fire
+    # only on active-uid change, so a node that appeared or was re-created
+    # (nvidia re-mknod, late coldplug, replug) AFTER the first login was left
+    # ACL-less until a reboot or schema-doctor. Reconcile must re-apply when
+    # the live node set moves, not just when the uid does.
+    calls = []
+    real_apply = L.apply_uaccess_acl
+    L.apply_uaccess_acl = lambda nodes, new, old: calls.append((tuple(sorted(nodes)), new, old))
+    try:
+        a = node('readd/card0')
+        record('c226:0', 'N:readd/card0\nE:ID_SEAT=seat0\nQ:uaccess\n')
+        reg = L.SessionRegistry.__new__(L.SessionRegistry)
+        reg.sessions = {}; reg._derived = {}
+        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
+
+        _set_active(reg, 1000)
+        reg._write_derived()
+        check('readd: first apply grants the node present at login',
+              any(a in c[0] and c[1] == 1000 for c in calls), str(calls))
+
+        # a new uaccess node appears AFTER the latch, same active uid
+        calls.clear()
+        b = node('readd/card1')
+        record('c226:1', 'N:readd/card1\nE:ID_SEAT=seat0\nQ:uaccess\n')
+        reg._write_derived()
+        check('readd: re-applies when a new node appears at the same uid',
+              any(b in c[0] for c in calls), str(calls))
+
+        # the SAME node re-created (new inode/mtime), same active uid
+        calls.clear()
+        os.unlink(a)
+        node('readd/card0')
+        reg._write_derived()
+        check('readd: re-applies when an existing node is re-created',
+              any(a in c[0] for c in calls), str(calls))
+
+        # steady state: nothing moved, no re-fire (still cheap at 4 Hz)
+        calls.clear()
+        reg._write_derived()
+        check('readd: no re-fire when the node set is unchanged',
+              calls == [], str(calls))
+    finally:
+        L.apply_uaccess_acl = real_apply
+
+
 def main():
     print(f"schema-logind uaccess re-scan tests (run dir {RUNDIR})\n")
-    for fn in (test_enumerate, test_apply, test_registry_fires_on_change):
+    for fn in (test_enumerate, test_apply, test_registry_fires_on_change,
+               test_registry_refires_on_node_readd):
         print(fn.__name__)
         fn()
         print()

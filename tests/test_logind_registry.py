@@ -197,6 +197,7 @@ def test_derived_files():
     reg.sessions = {}
     reg._derived = {}
     reg._seat_active_uid = {}
+    reg._seat_uaccess_fp = {}
     for sid, rec in L.scan_session_files().items():
         obj = type('S', (), {})()
         obj.sid, obj.record, obj.path = sid, rec, L.session_path_for(sid)
