@@ -366,19 +366,18 @@ def apply_uaccess_acl(nodes, new_uid, old_uid=None):
 
 
 def _uaccess_fingerprint(nodes):
-    """A cheap identity of the live uaccess node set for change-detection:
-    (path, inode, mtime_ns) per node that still exists. inode + mtime catch a
-    device re-created in place (nvidia re-mknod); the path set catches nodes
-    that appear or vanish. mtime, not ctime — setfacl bumps ctime, so keying on
-    it would make every apply re-trigger the next cycle."""
-    fp = []
+    # {path: (inode, mtime_ns)} for each node that still exists. inode+mtime
+    # catch an in-place re-create (nvidia re-mknod); the key set catches
+    # appear/vanish. mtime not ctime: setfacl bumps ctime, which would self-
+    # trigger every cycle.
+    fp = {}
     for n in nodes:
         try:
             st = os.stat(n)
         except OSError:
             continue
-        fp.append((n, st.st_ino, st.st_mtime_ns))
-    return tuple(sorted(fp))
+        fp[n] = (st.st_ino, st.st_mtime_ns)
+    return fp
 
 
 def session_path_for(sid):
@@ -1301,7 +1300,9 @@ class SessionRegistry:
         self._derived = {}      # path -> last content written
         self._last_vt = None
         self._seat_active_uid = {}   # seat_id -> uid last granted uaccess ACLs
-        self._seat_uaccess_fp = {}   # seat_id -> fingerprint of nodes last granted
+        self._seat_uaccess_fp = {}   # seat_id -> {path: (ino, mtime_ns)} last granted
+        self._seat_uaccess_nodes = {}  # seat_id -> cached node paths
+        self._seat_udev_mtime = {}   # seat_id -> udev-DB mtime at last enumeration
 
     # -- lookup --------------------------------------------------------------
 
@@ -1522,23 +1523,37 @@ class SessionRegistry:
         """Re-grant the seat's uaccess devices to whoever is active now.
 
         Coldplug ran before login, so without this the device sits owned by no
-        one until a replug; this is logind's half of the systemd uaccess
-        contract that schema-udev's device-add tagging can't do. systemd re-runs
-        uaccess on every device-add event, so keying only on the active uid is a
-        wrong proxy for "the ACLs are present": a node that appears or is
-        re-created after the first login (nvidia re-mknod, late coldplug, replug)
-        keeps the same active uid yet has no ACL. So we also fire when the live
-        node set moves — its (path, inode, mtime) fingerprint. setfacl'ing an
-        already-correct node is idempotent, and the fingerprint short-circuits
-        the steady state, so this stays cheap at the 4 Hz derive rate.
+        one; this is logind's half of the systemd uaccess contract. systemd
+        re-runs uaccess on every device event, so keying only on the active uid
+        misses a node that appears or is re-created afterward (nvidia re-mknod,
+        late coldplug, replug) at the same uid. But re-enumerating the udev DB
+        every cycle can fall through to an os.walk of /dev — the ambient spin
+        this project exists to avoid — so re-enumerate only when the udev DB
+        mtime moves, re-stat the cached node paths cheaply each cycle to catch
+        an in-place re-mknod, and setfacl only the nodes that actually changed.
         """
-        nodes = uaccess_seat_nodes(seat_id)
+        try:
+            udev_mtime = os.stat(UDEV_DATA_DIR).st_mtime_ns
+        except OSError:
+            udev_mtime = None
+        if (seat_id not in self._seat_uaccess_nodes
+                or udev_mtime != self._seat_udev_mtime.get(seat_id)):
+            self._seat_uaccess_nodes[seat_id] = uaccess_seat_nodes(seat_id)
+            self._seat_udev_mtime[seat_id] = udev_mtime
+        nodes = self._seat_uaccess_nodes[seat_id]
+
         fp = _uaccess_fingerprint(nodes)
         old = self._seat_active_uid.get(seat_id)
-        if old == active_uid and self._seat_uaccess_fp.get(seat_id) == fp:
+        prev = self._seat_uaccess_fp.get(seat_id)
+        if old == active_uid and prev == fp:
             return
+        if old != active_uid:
+            targets, revoke = nodes, old          # login / uid switch: all, revoke old
+        else:
+            prev = prev or {}
+            targets, revoke = [n for n, sig in fp.items() if prev.get(n) != sig], None
         try:
-            apply_uaccess_acl(nodes, active_uid, old)
+            apply_uaccess_acl(targets, active_uid, revoke)
         except Exception as e:
             print(f"login1-stub: uaccess re-scan failed on {seat_id}: {e}",
                   file=sys.stderr)
