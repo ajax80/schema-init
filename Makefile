@@ -9,8 +9,11 @@ CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I.
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
+DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
+DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
+
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev schema-dbus
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -58,6 +61,9 @@ verify-rules-live: tools/verify-rules-live.c tools/flip_classify.h udev_db.h ude
 
 verify-eprops-live: tools/verify-eprops-live.c udev_db.h udev_rules.h udev_builtins.h hwdb.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h dissect_image.h schema-udev.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-eprops-live tools/verify-eprops-live.c
+
+schema-dbus: schema-dbus.c sdbus_policy.h sdbus_names.h sdbus_match.h sdbus_reply.h sdbus_codec.h sdbus_auth.h sdbus_conn.h sdbus_route.h sdbus_driver.h
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) $(LDFLAGS) schema-dbus.c -o $@ $(DBUS_LIBS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<

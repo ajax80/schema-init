@@ -12,6 +12,7 @@ __pycache__/
 schema-subreaper
 schema-board
 schema-udev
+schema-dbus
 tests/livetest/boot-logs/boot-*.txt
 udev-parity
 verify-rules-live
