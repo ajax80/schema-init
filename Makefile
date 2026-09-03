@@ -77,6 +77,20 @@ install: all
 	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
 
+# SP1 cutover prerequisites — deploy the broker, its boot launcher, and the
+# policy dissolver to the live /usr/local layout the shims use. Does NOT flip
+# dbus.svc (that is the reboot-only, Jonathan-gated Step 6): after this, copy
+# services/dbus.svc.sp1 over the live services/dbus.svc when ready.
+install-dbus-sp1: schema-dbus
+	install -d $(DESTDIR)/usr/local/bin
+	install -m 0755 schema-dbus $(DESTDIR)/usr/local/bin/schema-dbus
+	install -m 0755 scripts/schema-dbus-run.sh $(DESTDIR)/usr/local/bin/schema-dbus-run.sh
+	install -d $(DESTDIR)/usr/local/lib/schema-init
+	install -m 0755 tools/dbus-learn/dissect_policy.py $(DESTDIR)/usr/local/lib/schema-init/dissect_policy.py
+	@echo
+	@echo "SP1 prerequisites installed. To FLIP the bus (reboot-only, gated):"
+	@echo "  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"
+
 release: all
 	rm -rf $(RELDIR)
 	mkdir -p $(RELDIR)
@@ -162,6 +176,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install release aarch64 armhf desktop test verify-live verify-dbus-conformance
+.PHONY: all clean install install-dbus-sp1 release aarch64 armhf desktop test verify-live verify-dbus-conformance
 
 

@@ -1,0 +1,6 @@
+name=accounts-daemon
+exec=/usr/local/bin/schema-subreaper
+args=/usr/libexec/accounts-daemon
+dep=dbus
+needs_root=1
+critical=0
