@@ -5,9 +5,11 @@
 </p>
 <p align="center"><sub>▶ 30-second trailer — <a href="assets/schema-init-trailer.mp4">watch in full resolution, with sound</a></sub></p>
 
-A minimal PID 1 init system for Linux that supervises services through a weight-state machine instead of unit files and dependency graphs.
+A minimal PID 1 init system for Linux that supervises services through a weight-state machine instead of unit files and dependency graphs — and, increasingly, a native, auditable replacement for the systemd daemons around it.
 
-No systemd. No OpenRC. No journal daemon. No socket activation engine. Just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
+No systemd. No OpenRC. No journal daemon. No socket activation engine. At its core, just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
+
+**It doesn't stop at PID 1.** systemd's satellite daemons don't have to be systemd's. schema-init ships small, single-purpose, native replacements you opt into one at a time: `schema-logind` (sessions, power, seats — plus the `hostname1`/`timedate1`/`systemd1` D-Bus surfaces), `schema-udev` (device management, authoritative over `/dev`), `schema-journal-sink` (a journald-shaped endpoint that drains to a plain logfile — no journal database), built-in `.svc` timers that retire `cron` and systemd `.timer` units, and now `schema-dbus` — the D-Bus system bus broker itself. Each is a program you can read end to end, runs only if you list it, and backs out with a single reboot. So you can reclaim the init layer piece by piece — or keep the stock daemons underneath and just run a leaner PID 1. The point isn't only *less*; it's an init layer you can actually **read, top to bottom, and own**.
 
 **PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every footprint figure in this README names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](#pid-1-rss--every-measurement).
 
