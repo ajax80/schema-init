@@ -30,10 +30,15 @@ static inline void sdbus_replies_record(sdbus_replies *t, int callee, uint32_t s
 }
 
 /* Returns the caller conn to deliver the reply to, consuming the entry; -1 if no
-   matching pending call (the reply should be dropped). */
-static inline int sdbus_replies_match(sdbus_replies *t, int from, uint32_t reply_serial) {
+   matching pending call (the reply should be dropped). Serials are per-connection,
+   so two callers can hold the same (callee, serial); `want_caller` (the reply's
+   resolved destination, or -1 if unknown) disambiguates them so a reply is never
+   cross-delivered to the wrong caller. -1 falls back to first (callee, serial). */
+static inline int sdbus_replies_match(sdbus_replies *t, int from, uint32_t reply_serial,
+                                      int want_caller) {
     for (int i = 0; i < t->n; i++)
-        if (t->ents[i].live && t->ents[i].callee == from && t->ents[i].serial == reply_serial) {
+        if (t->ents[i].live && t->ents[i].callee == from && t->ents[i].serial == reply_serial
+            && (want_caller < 0 || t->ents[i].caller == want_caller)) {
             t->ents[i].live = 0;
             return t->ents[i].caller;
         }

@@ -48,9 +48,12 @@ static inline int sdbus_route_targets(sdbus_wire_msg *msg, sdbus_conn *sender,
     int is_reply = (msg->type == SDBUS_TYPE_METHOD_RETURN ||
                     msg->type == SDBUS_TYPE_ERROR) && msg->has_reply_serial;
 
-    /* requested reply: bypass policy, route to the recorded caller */
+    /* requested reply: bypass policy, route to the recorded caller. Disambiguate
+       by the reply's destination — per-connection serials collide across callers,
+       so (callee, reply_serial) alone can match the wrong pending call. */
     if (is_reply) {
-        int caller = sdbus_replies_match(replies, sender->id, msg->reply_serial);
+        int want = sdbus__route_resolve(names, all, n_all, msg->destination);
+        int caller = sdbus_replies_match(replies, sender->id, msg->reply_serial, want);
         if (caller < 0) return 0;                 /* no pending call -> drop */
         if (max_targets < 1) return 0;
         targets[0] = caller;
