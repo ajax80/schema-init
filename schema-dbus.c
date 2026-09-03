@@ -282,10 +282,14 @@ static void add_conn(int fd) {
 
 static void remove_conn(sdbus_conn *c) {
     epoll_ctl(g_epfd, EPOLL_CTL_DEL, c->fd, NULL);
-    sdbus_transition t[256]; int nt = 0;
-    sdbus_names_disconnect(g_names, c->id, t, &nt);
+    /* a conn can primary-own up to every name on the bus; size the transition
+       buffer to that so RequestName-many-then-disconnect can't overflow it */
+    int tcap = g_names->n_names; int nt = 0;
+    sdbus_transition *t = tcap > 0 ? malloc(tcap * sizeof *t) : NULL;
+    sdbus_names_disconnect(g_names, c->id, t, &nt, tcap);
     c->unique = NULL;   /* names just freed this string; don't let signals deref it */
     if (nt) broadcast_transitions(NULL, t, nt);
+    free(t);
     sdbus_replies_purge(g_replies, c->id);
     for (int i = 0; i < c->n_pending_fds; i++) close(c->pending_fds[i]);
     close(c->fd);

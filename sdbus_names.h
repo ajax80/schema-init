@@ -166,7 +166,7 @@ static inline int sdbus_names_release(sdbus_names *r, int conn_id, const char *w
 /* Drop conn from every name it holds; emit a transition for each name whose
    primary owner changes. out must have room for r->n_names entries. */
 static inline void sdbus_names_disconnect(sdbus_names *r, int conn_id,
-                                   sdbus_transition *out, int *n_out) {
+                                   sdbus_transition *out, int *n_out, int max) {
     *n_out = 0;
     for (int i = 0; i < r->n_names; i++) {
         sdbus_name_ent *e = &r->names[i];
@@ -175,10 +175,12 @@ static inline void sdbus_names_disconnect(sdbus_names *r, int conn_id,
         if (idx == 0) {
             sdbus__holder_remove(e, 0);
             int newo = e->n_holders ? e->holders[0].conn_id : -1;
-            out[*n_out].name = e->name;
-            out[*n_out].old_owner = conn_id;
-            out[*n_out].new_owner = newo;
-            (*n_out)++;
+            if (*n_out < max) {                     /* never write past the caller's buffer */
+                out[*n_out].name = e->name;
+                out[*n_out].old_owner = conn_id;
+                out[*n_out].new_owner = newo;
+                (*n_out)++;
+            }
         } else {
             sdbus__holder_remove(e, idx);
         }

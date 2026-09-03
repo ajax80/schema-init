@@ -72,7 +72,7 @@ int main(void) {
     sdbus_names_request(r4, 1, "org.a", 0, t, &n);
     sdbus_names_request(r4, 2, "org.a", 0, t, &n);
     sdbus_names_request(r4, 1, "org.b", 0, t, &n);
-    sdbus_names_disconnect(r4, 1, t, &n);
+    sdbus_names_disconnect(r4, 1, t, &n, 8);
     assert(n == 2);                                 /* org.a: 1->2, org.b: 1->none */
     assert(sdbus_names_owner(r4, "org.a") == 2);
     assert(sdbus_names_owner(r4, "org.b") == -1);
@@ -82,7 +82,23 @@ int main(void) {
     assert(c == 1 && !strcmp(owned[0], "org.a"));
     free(owned);
 
+    /* F1: a conn owning more names than the caller's transition buffer must
+       cap the emitted transitions, never overflow it — and still drop every
+       holder. (RequestName has no per-conn ownership cap.) */
+    sdbus_names *r5 = sdbus_names_new();
+    for (int i = 0; i < 20; i++) {
+        char nm[24]; sprintf(nm, "org.f1.n%d", i);
+        sdbus_names_request(r5, 1, nm, 0, t, &n);
+    }
+    sdbus_transition small[4]; int sn = -1;
+    sdbus_names_disconnect(r5, 1, small, &sn, 4);
+    assert(sn >= 0 && sn <= 4);                     /* capped to buffer, no overflow */
+    assert(sdbus_names_owner(r5, "org.f1.n0") == -1);   /* every holder removed regardless */
+    assert(sdbus_names_owner(r5, "org.f1.n19") == -1);
+    const char **o5; assert(sdbus_names_list(r5, &o5) == 0); free(o5);
+
     sdbus_names_free(r); sdbus_names_free(r2); sdbus_names_free(r3); sdbus_names_free(r4);
+    sdbus_names_free(r5);
     printf("all sdbus_names tests passed\n");
     return 0;
 }
