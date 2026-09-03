@@ -19,6 +19,7 @@
 #define SDBUS_TYPE_ERROR         3
 #define SDBUS_TYPE_SIGNAL        4
 #define SDBUS_FLAG_NO_REPLY      0x1
+#define SDBUS_MAX_MSG (128 * 1024 * 1024)   /* D-Bus default max message size */
 
 typedef struct {
     int endian_le;
@@ -47,15 +48,17 @@ static inline int sdbus_wire_parse(const unsigned char *buf, int len, sdbus_wire
     m->endian_le = buf[0] == 'l';
     m->type = buf[1];
     m->flags = buf[2];
-    m->body_len = (int)sdbus__rd_u32(buf + 4, m->endian_le);
+    uint32_t body_len = sdbus__rd_u32(buf + 4, m->endian_le);
     m->serial = sdbus__rd_u32(buf + 8, m->endian_le);
     uint32_t farr = sdbus__rd_u32(buf + 12, m->endian_le);
-    int header_end = 16 + (int)farr;
-    if (header_end < 16) return -1;
+    /* bound attacker-controlled lengths before any signed arithmetic */
+    if (farr > (uint32_t)SDBUS_MAX_MSG || body_len > (uint32_t)SDBUS_MAX_MSG) return -1;
+    int header_end = 16 + (int)farr;                 /* farr bounded -> no overflow */
     m->body_offset = sdbus__align(header_end, 8);
-    if (m->body_len < 0) return -1;
-    m->total_len = m->body_offset + m->body_len;
-    if (m->total_len < 0) return -1;
+    long total = (long)m->body_offset + (long)body_len;   /* both bounded -> fits in long */
+    if (total > SDBUS_MAX_MSG) return -1;
+    m->body_len = (int)body_len;
+    m->total_len = (int)total;
     if (len < m->total_len) return 0;                /* incomplete */
 
     int off = 16;
@@ -72,12 +75,16 @@ static inline int sdbus_wire_parse(const unsigned char *buf, int len, sdbus_wire
             off = sdbus__align(off, 4);
             if (off + 4 > header_end) return -1;
             uint32_t sl = sdbus__rd_u32(buf + off, m->endian_le); off += 4;
-            if (off + (int)sl + 1 > header_end) return -1;
-            sval = (const char *)buf + off; off += sl + 1;
+            uint32_t avail = (uint32_t)(header_end - off);   /* off <= header_end here */
+            if (sl >= avail) return -1;                      /* need sl bytes + a NUL */
+            if (buf[off + sl] != 0) return -1;               /* enforce NUL terminator */
+            sval = (const char *)buf + off; off += (int)sl + 1;
         } else if (sig == 'g') {
             if (off >= header_end) return -1;
             int gl = buf[off++];
-            if (off + gl + 1 > header_end) return -1;
+            uint32_t avail = (uint32_t)(header_end - off);
+            if ((uint32_t)gl >= avail) return -1;            /* need gl bytes + a NUL */
+            if (buf[off + gl] != 0) return -1;
             sval = (const char *)buf + off; off += gl + 1;
         } else if (sig == 'u') {
             off = sdbus__align(off, 4);

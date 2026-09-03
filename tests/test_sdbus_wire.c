@@ -65,6 +65,40 @@ int main(void) {
     assert(rt2 && !strcmp(dbus_message_get_sender(rt2), ":1.7"));
     assert(dbus_message_get_reply_serial(rt2) == 42);
 
+    /* --- adversarial input: the parser must reject, never over-read --- */
+    /* oversized header-fields array length (offset 12) */
+    unsigned char *bad = malloc(rawlen);
+    memcpy(bad, raw, rawlen);
+    bad[12] = bad[13] = bad[14] = bad[15] = 0xFF;
+    sdbus_wire_msg mb;
+    assert(sdbus_wire_parse(bad, rawlen, &mb) == -1);
+    /* oversized body length (offset 4) */
+    memcpy(bad, raw, rawlen);
+    bad[4] = bad[5] = bad[6] = bad[7] = 0xFF;
+    assert(sdbus_wire_parse(bad, rawlen, &mb) == -1);
+    free(bad);
+
+    /* hand-crafted header claiming a 4GB string field -> reject, no over-read */
+    unsigned char h[24] = {0};
+    h[0] = 'l'; h[1] = 1; h[3] = 1;                   /* LE, method_call, ver 1 */
+    /* body_len=0 @4, serial=1 @8 */ h[8] = 1;
+    h[12] = 8;                                        /* farr = 8 (fields region 16..24) */
+    h[16] = 1; h[17] = 1; h[18] = 'o'; h[19] = 0;     /* field: PATH, variant 'o' */
+    h[20] = h[21] = h[22] = h[23] = 0xFF;             /* string length = 0xFFFFFFFF */
+    sdbus_wire_msg mh;
+    assert(sdbus_wire_parse(h, sizeof h, &mh) == -1);
+
+    /* single-byte mutation sweep: parse must never report more than we passed */
+    for (int p = 0; p < rawlen; p++) {
+        unsigned char *mut = malloc(rawlen);
+        memcpy(mut, raw, rawlen);
+        mut[p] ^= 0xFF;
+        sdbus_wire_msg mm;
+        int r = sdbus_wire_parse(mut, rawlen, &mm);
+        assert(r <= rawlen);                          /* never claims beyond the buffer */
+        free(mut);
+    }
+
     free(fwd); free(fwd2);
     dbus_message_unref(call); dbus_message_unref(reply);
     dbus_message_unref(rt); dbus_message_unref(rt2);

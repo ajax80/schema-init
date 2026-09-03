@@ -177,6 +177,8 @@ static void synth_error_wire(sdbus_conn *c, uint32_t reply_serial,
 /* drop this message's fds from the head of pending_fds; close them unless they
    were transferred to an outbound chunk (which will close them after sending). */
 static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
+    if (nfds < 0) nfds = 0;
+    if (nfds > c->n_pending_fds) nfds = c->n_pending_fds;   /* never index past what we hold */
     if (!transferred) for (int i = 0; i < nfds; i++) close(c->pending_fds[i]);
     for (int i = nfds; i < c->n_pending_fds; i++) c->pending_fds[i - nfds] = c->pending_fds[i];
     c->n_pending_fds -= nfds;
@@ -185,6 +187,17 @@ static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
 /* ---- process one fully-buffered message (parsed header w, raw bytes) ---- */
 static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char *raw, int rawlen) {
     int nfds = sdbus_wire_n_fds(w);   /* this message's fds sit at head of pending_fds */
+
+    /* the fd count is attacker-controlled (UNIX_FDS header field); a message
+       must not claim more fds than were actually passed, or downstream code
+       would touch pending_fds[] entries we never received. */
+    if (nfds < 0 || nfds > c->n_pending_fds) {
+        synth_error_wire(c, w->serial, DBUS_ERROR_INVALID_ARGS, "unix_fds count mismatch");
+        for (int i = 0; i < c->n_pending_fds; i++) close(c->pending_fds[i]);
+        c->n_pending_fds = 0;
+        drain_scratch(c); ep_update(c);
+        return;
+    }
 
     int to_driver = w->destination && !strcmp(w->destination, SDBUS_DRIVER_NAME);
     if (!w->destination && w->interface && !strcmp(w->interface, "org.freedesktop.DBus.Peer"))
