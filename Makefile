@@ -141,6 +141,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_sdbus_match.c -o /tmp/schema-test-sdbus-match && /tmp/schema-test-sdbus-match
 	$(CC) $(CFLAGS) tests/test_sdbus_reply.c -o /tmp/schema-test-sdbus-reply && /tmp/schema-test-sdbus-reply
 	$(CC) $(CFLAGS) tests/test_sdbus_auth.c -o /tmp/schema-test-sdbus-auth && /tmp/schema-test-sdbus-auth
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_driver.c -o /tmp/schema-test-sdbus-driver $(DBUS_LIBS) && /tmp/schema-test-sdbus-driver
 
 verify-live:
 	sh tests/verify_disk_links_live.sh
