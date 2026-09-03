@@ -34,6 +34,7 @@ POL="$POLDIR/dbus.policy"
 
 fallback() {
     echo "schema-dbus-run: $1 — falling back to stock dbus-daemon" >&2
+    [ -n "$STOCK" ] || { echo "schema-dbus-run: no dbus-daemon to fall back to — no system bus" >&2; exit 1; }
     exec "$STOCK" --system --nofork
 }
 

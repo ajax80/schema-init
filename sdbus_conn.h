@@ -59,11 +59,25 @@ static inline void sdbus_conn_capture_creds(sdbus_conn *c) {
     gid_t grps[SDBUS_MAX_GIDS];
     int ng = SDBUS_MAX_GIDS;
     struct passwd *pw = getpwuid(cred.uid);
-    if (pw && getgrouplist(pw->pw_name, cred.gid, grps, &ng) >= 0) {
-        if (ng > SDBUS_MAX_GIDS) ng = SDBUS_MAX_GIDS;
-        for (int i = 0; i < ng; i++) c->gids[i] = (int)grps[i];
-        c->n_gids = ng;
-    } else {
+    if (pw) {
+        gid_t *g = grps;
+        gid_t *heap = NULL;
+        if (getgrouplist(pw->pw_name, cred.gid, g, &ng) < 0) {
+            /* buffer too small: ng now holds the real count -> retry on the heap */
+            heap = malloc((size_t)ng * sizeof *heap);
+            if (heap && getgrouplist(pw->pw_name, cred.gid, heap, &ng) >= 0)
+                g = heap;
+            else
+                ng = -1;
+        }
+        if (ng >= 0) {
+            if (ng > SDBUS_MAX_GIDS) ng = SDBUS_MAX_GIDS;
+            for (int i = 0; i < ng; i++) c->gids[i] = (int)g[i];
+            c->n_gids = ng;
+        }
+        free(heap);
+    }
+    if (c->n_gids == 0) {
         c->gids[0] = (int)cred.gid;    /* fall back to the primary gid */
         c->n_gids = 1;
     }
@@ -96,7 +110,10 @@ static inline void sdbus_conn_in_consume(sdbus_conn *c, int n) {
 
 static inline void sdbus_conn_free_fields(sdbus_conn *c) {
     free(c->in); free(c->out);
-    for (int i = c->oq_head; i < c->n_oq; i++) free(c->oq[i].b);
+    for (int i = c->oq_head; i < c->n_oq; i++) {
+        for (int j = 0; j < c->oq[i].nfds; j++) close(c->oq[i].fds[j]);
+        free(c->oq[i].b);
+    }
     free(c->oq); c->oq = NULL; c->n_oq = c->oq_head = 0;
     if (c->matches) sdbus_match_free(c->matches);
     c->in = c->out = NULL; c->matches = NULL;

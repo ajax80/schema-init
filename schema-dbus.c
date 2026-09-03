@@ -78,8 +78,10 @@ static int flush_conn(sdbus_conn *c) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
             return -1;                                 /* broken pipe etc. */
         }
-        if (ch->off == 0)                              /* fds have now been sent */
+        if (ch->off == 0) {                            /* fds have now been sent */
             for (int i = 0; i < ch->nfds; i++) close(ch->fds[i]);
+            ch->nfds = 0;                              /* don't re-close on teardown */
+        }
         ch->off += (int)n;
         if (ch->off >= ch->len) { free(ch->b); c->oq_head++; }
         else return 0;                                 /* partial; wait for writable */
