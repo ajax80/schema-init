@@ -19,6 +19,10 @@
 #define SDBUS_MAX_GIDS 64
 #define SDBUS_MAX_PENDING_FDS 16
 
+/* one queued outbound message: its bytes and the unix fds bound to it. Keeping
+   fds per-chunk is what makes SCM_RIGHTS relay correct under partial writes. */
+typedef struct { unsigned char *b; int len, off; int fds[SDBUS_MAX_PENDING_FDS]; int nfds; } sdbus_outchunk;
+
 typedef struct {
     int fd, id;
     int authed, said_hello, negotiated_fd, saw_nul;
@@ -26,10 +30,24 @@ typedef struct {
     int gids[SDBUS_MAX_GIDS]; int n_gids;
     const char *unique;                 /* ":1.N", set at Hello */
     unsigned char *in;  int in_len, in_cap;
-    unsigned char *out; int out_len, out_cap;
-    int pending_fds[SDBUS_MAX_PENDING_FDS]; int n_pending_fds;
+    unsigned char *out; int out_len, out_cap;   /* scratch for auth/driver bytes */
+    int pending_fds[SDBUS_MAX_PENDING_FDS]; int n_pending_fds;   /* received, awaiting a full msg */
+    sdbus_outchunk *oq; int n_oq, oq_head;      /* ordered outbound queue */
     sdbus_matchset *matches;
 } sdbus_conn;
+
+/* enqueue one outbound message (its bytes are copied). fds may be NULL. */
+static inline void sdbus_conn_enqueue(sdbus_conn *c, const unsigned char *b, int len,
+                                      const int *fds, int nfds) {
+    c->oq = realloc(c->oq, (c->n_oq + 1) * sizeof *c->oq);
+    sdbus_outchunk *ch = &c->oq[c->n_oq++];
+    ch->b = malloc(len); memcpy(ch->b, b, len); ch->len = len; ch->off = 0;
+    ch->nfds = nfds > SDBUS_MAX_PENDING_FDS ? SDBUS_MAX_PENDING_FDS : nfds;
+    for (int i = 0; i < ch->nfds; i++) ch->fds[i] = fds[i];
+}
+
+/* does the connection have unsent outbound data? */
+static inline int sdbus_conn_has_out(sdbus_conn *c) { return c->oq_head < c->n_oq; }
 
 static inline void sdbus_conn_capture_creds(sdbus_conn *c) {
     struct ucred cred;
@@ -78,6 +96,8 @@ static inline void sdbus_conn_in_consume(sdbus_conn *c, int n) {
 
 static inline void sdbus_conn_free_fields(sdbus_conn *c) {
     free(c->in); free(c->out);
+    for (int i = c->oq_head; i < c->n_oq; i++) free(c->oq[i].b);
+    free(c->oq); c->oq = NULL; c->n_oq = c->oq_head = 0;
     if (c->matches) sdbus_match_free(c->matches);
     c->in = c->out = NULL; c->matches = NULL;
 }

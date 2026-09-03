@@ -1,14 +1,390 @@
+/* schema-dbus: a wire-compatible D-Bus system-bus broker. libdbus is linked as
+   a wire codec only; the event loop, connection lifecycle, auth, name registry,
+   routing, reply-tracking and policy are all ours. Service activation is a v1.1
+   stub. See docs/superpowers/specs/2026-09-02-schema-dbus-sp1-broker-design.md */
+
 #include <dbus/dbus.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include "sdbus_codec.h"
+#include "sdbus_policy.h"
+#include "sdbus_names.h"
+#include "sdbus_match.h"
+#include "sdbus_reply.h"
+#include "sdbus_conn.h"
+#include "sdbus_auth.h"
+#include "sdbus_driver.h"
+#include "sdbus_route.h"
+
+#define DEFAULT_SOCKET "/run/dbus/system_bus_socket"
+#define MAX_TARGETS 256
+#define OUT_BACKPRESSURE_CAP (16 * 1024 * 1024)
+
+static sdbus_names   *g_names;
+static sdbus_replies *g_replies;
+static sdbus_policy  *g_policy;
+static sdbus_conn   **g_conns;
+static int            g_nconns;
+static int            g_epfd;
+static unsigned       g_next_id = 1;
+static dbus_uint32_t  g_bcast_serial;
+
+/* ---- epoll registration ---- */
+static void ep_update(sdbus_conn *c) {
+    struct epoll_event ev = {0};
+    ev.events = EPOLLIN | (sdbus_conn_has_out(c) ? EPOLLOUT : 0);
+    ev.data.ptr = c;
+    epoll_ctl(g_epfd, EPOLL_CTL_MOD, c->fd, &ev);
+}
+
+static sdbus_conn *conn_by_id(int id) {
+    for (int i = 0; i < g_nconns; i++) if (g_conns[i]->id == id) return g_conns[i];
+    return NULL;
+}
+
+/* ---- outbound flush (SCM_RIGHTS for fd-bearing chunks) ---- */
+static int flush_conn(sdbus_conn *c) {
+    while (c->oq_head < c->n_oq) {
+        sdbus_outchunk *ch = &c->oq[c->oq_head];
+        struct msghdr mh = {0};
+        struct iovec iov;
+        iov.iov_base = ch->b + ch->off;
+        iov.iov_len  = ch->len - ch->off;
+        mh.msg_iov = &iov;
+        mh.msg_iovlen = 1;
+        char cbuf[CMSG_SPACE(sizeof(int) * SDBUS_MAX_PENDING_FDS)];
+        if (ch->nfds > 0 && ch->off == 0) {           /* fds go with the first bytes */
+            memset(cbuf, 0, sizeof cbuf);
+            mh.msg_control = cbuf;
+            mh.msg_controllen = CMSG_SPACE(sizeof(int) * ch->nfds);
+            struct cmsghdr *cm = CMSG_FIRSTHDR(&mh);
+            cm->cmsg_level = SOL_SOCKET;
+            cm->cmsg_type = SCM_RIGHTS;
+            cm->cmsg_len = CMSG_LEN(sizeof(int) * ch->nfds);
+            memcpy(CMSG_DATA(cm), ch->fds, sizeof(int) * ch->nfds);
+        }
+        ssize_t n = sendmsg(c->fd, &mh, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+            return -1;                                 /* broken pipe etc. */
+        }
+        if (ch->off == 0)                              /* fds have now been sent */
+            for (int i = 0; i < ch->nfds; i++) close(ch->fds[i]);
+        ch->off += (int)n;
+        if (ch->off >= ch->len) { free(ch->b); c->oq_head++; }
+        else return 0;                                 /* partial; wait for writable */
+    }
+    /* queue drained; compact */
+    c->n_oq = c->oq_head = 0;
+    free(c->oq); c->oq = NULL;
+    return 0;
+}
+
+/* ---- signal broadcast for name transitions ---- */
+static void enqueue_signal(sdbus_conn *dst, DBusMessage *sig) {
+    dbus_message_set_serial(sig, ++g_bcast_serial);
+    dbus_message_set_sender(sig, SDBUS_DRIVER_NAME);
+    if (dst->unique) dbus_message_set_destination(sig, dst->unique);
+    char *b = NULL; int len = 0;
+    if (dbus_message_marshal(sig, &b, &len)) {
+        sdbus_conn_enqueue(dst, (unsigned char *)b, len, NULL, 0);
+        dbus_free(b);
+        ep_update(dst);
+    }
+}
+
+static const char *unique_or_empty(int conn_id) {
+    if (conn_id < 0) return "";
+    const char *u = sdbus_names_unique(g_names, conn_id);
+    return u ? u : "";
+}
+
+static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
+    (void)ctx;
+    for (int i = 0; i < n; i++) {
+        const char *name = t[i].name;
+        const char *oldo = unique_or_empty(t[i].old_owner);
+        const char *newo = unique_or_empty(t[i].new_owner);
+
+        /* NameOwnerChanged -> every conn whose match set accepts it */
+        for (int j = 0; j < g_nconns; j++) {
+            sdbus_conn *cc = g_conns[j];
+            if (!cc->matches) continue;
+            if (!sdbus_match_signal(cc->matches, SDBUS_DRIVER_NAME,
+                                    "NameOwnerChanged", SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME))
+                continue;
+            DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME,
+                                                     "NameOwnerChanged");
+            dbus_message_append_args(s, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldo,
+                                     DBUS_TYPE_STRING, &newo, DBUS_TYPE_INVALID);
+            enqueue_signal(cc, s);
+            dbus_message_unref(s);
+        }
+        /* directed NameLost / NameAcquired */
+        if (t[i].old_owner >= 0) {
+            sdbus_conn *o = conn_by_id(t[i].old_owner);
+            if (o) {
+                DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, "NameLost");
+                dbus_message_append_args(s, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
+                enqueue_signal(o, s); dbus_message_unref(s);
+            }
+        }
+        if (t[i].new_owner >= 0) {
+            sdbus_conn *o = conn_by_id(t[i].new_owner);
+            if (o) {
+                DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, "NameAcquired");
+                dbus_message_append_args(s, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
+                enqueue_signal(o, s); dbus_message_unref(s);
+            }
+        }
+    }
+}
+
+/* move c->out (driver/auth scratch bytes) into the ordered queue as one chunk */
+static void drain_scratch(sdbus_conn *c) {
+    if (c->out_len > 0) {
+        sdbus_conn_enqueue(c, c->out, c->out_len, NULL, 0);
+        c->out_len = 0;
+    }
+}
+
+static void synth_error_to(sdbus_conn *c, sdbus_msg *call, const char *name, const char *text) {
+    DBusMessage *err = dbus_message_new_error(call->msg, name, text);
+    dbus_message_set_serial(err, ++g_bcast_serial);
+    dbus_message_set_sender(err, SDBUS_DRIVER_NAME);
+    if (c->unique) dbus_message_set_destination(err, c->unique);
+    char *b = NULL; int len = 0;
+    if (dbus_message_marshal(err, &b, &len)) { sdbus_conn_enqueue(c, (unsigned char *)b, len, NULL, 0); dbus_free(b); }
+    dbus_message_unref(err);
+}
+
+/* ---- process one fully-buffered message from conn c ---- */
+static void handle_message(sdbus_conn *c, sdbus_msg *m) {
+    int nfds = sdbus_msg_n_fds(m);   /* fds for this message sit at head of pending_fds */
+
+    /* enforce Hello-first */
+    if (!c->said_hello) {
+        if (!(m->member && !strcmp(m->member, "Hello"))) {
+            /* protocol violation: reply with an error, but proceed leniently */
+        }
+    }
+
+    int to_driver = m->destination && !strcmp(m->destination, SDBUS_DRIVER_NAME);
+    /* driver Peer methods may arrive with any destination when unset */
+    if (!m->destination && m->interface && !strcmp(m->interface, "org.freedesktop.DBus.Peer"))
+        to_driver = 1;
+
+    if (to_driver) {
+        int rc = sdbus_driver_dispatch(m, c, g_names, g_conns, g_nconns,
+                                       broadcast_transitions, NULL);
+        if (rc < 0)
+            synth_error_to(c, m, DBUS_ERROR_UNKNOWN_METHOD, "unknown method on org.freedesktop.DBus");
+        drain_scratch(c);
+        ep_update(c);
+        /* consume this message's inbound fds (driver never relays them) */
+        for (int i = nfds; i < c->n_pending_fds; i++) c->pending_fds[i - nfds] = c->pending_fds[i];
+        c->n_pending_fds -= nfds;
+        return;
+    }
+
+    int targets[MAX_TARGETS], synth = 0, denied = 0;
+    int nt = sdbus_route_targets(m, c, g_names, g_conns, g_nconns, g_policy,
+                                 g_replies, &synth, &denied, targets, MAX_TARGETS);
+    if (denied) {
+        synth_error_to(c, m, DBUS_ERROR_ACCESS_DENIED, "rejected by policy");
+    } else if (synth) {
+        synth_error_to(c, m, DBUS_ERROR_SERVICE_UNKNOWN, "name has no owner");
+    } else {
+        for (int i = 0; i < nt; i++) {
+            sdbus_conn *dst = conn_by_id(targets[i]);
+            if (!dst) continue;
+            unsigned char *bytes = NULL; int len = 0;
+            if (sdbus_codec_emit(m, c->unique, &bytes, &len) != 0) continue;
+            /* attach this message's fds to the first target only */
+            if (i == 0 && nfds > 0)
+                sdbus_conn_enqueue(dst, bytes, len, c->pending_fds, nfds);
+            else
+                sdbus_conn_enqueue(dst, bytes, len, NULL, 0);
+            free(bytes);
+            ep_update(dst);
+        }
+    }
+    drain_scratch(c);
+    ep_update(c);
+    /* consume this message's inbound fds */
+    for (int i = nfds; i < c->n_pending_fds; i++) c->pending_fds[i - nfds] = c->pending_fds[i];
+    c->n_pending_fds -= nfds;
+}
+
+static void process_inbound(sdbus_conn *c) {
+    for (;;) {
+        sdbus_msg m;
+        int taken = sdbus_codec_take(c->in, c->in_len, &m);
+        if (taken == 0) return;                    /* need more */
+        if (taken < 0) { c->in_len = 0; return; }  /* corrupt; drop buffer */
+        sdbus_conn_in_consume(c, taken);
+        handle_message(c, &m);
+        sdbus_msg_free(&m);
+    }
+}
+
+/* ---- connection lifecycle ---- */
+static void add_conn(int fd) {
+    sdbus_conn *c = calloc(1, sizeof *c);
+    c->fd = fd;
+    c->id = (int)g_next_id++;
+    sdbus_conn_capture_creds(c);
+    g_conns = realloc(g_conns, (g_nconns + 1) * sizeof *g_conns);
+    g_conns[g_nconns++] = c;
+    struct epoll_event ev = {0};
+    ev.events = EPOLLIN;
+    ev.data.ptr = c;
+    epoll_ctl(g_epfd, EPOLL_CTL_ADD, fd, &ev);
+}
+
+static void remove_conn(sdbus_conn *c) {
+    epoll_ctl(g_epfd, EPOLL_CTL_DEL, c->fd, NULL);
+    sdbus_transition t[256]; int nt = 0;
+    sdbus_names_disconnect(g_names, c->id, t, &nt);
+    if (nt) broadcast_transitions(NULL, t, nt);
+    sdbus_replies_purge(g_replies, c->id);
+    for (int i = 0; i < c->n_pending_fds; i++) close(c->pending_fds[i]);
+    close(c->fd);
+    sdbus_conn_free_fields(c);
+    for (int i = 0; i < g_nconns; i++)
+        if (g_conns[i] == c) { g_conns[i] = g_conns[--g_nconns]; break; }
+    free(c);
+}
+
+/* returns 1 if the connection survived, 0 if it was removed */
+static int on_readable(sdbus_conn *c) {
+    unsigned char buf[65536];
+    char cbuf[CMSG_SPACE(sizeof(int) * SDBUS_MAX_PENDING_FDS)];
+    struct msghdr mh = {0};
+    struct iovec iov = { buf, sizeof buf };
+    mh.msg_iov = &iov; mh.msg_iovlen = 1;
+    mh.msg_control = cbuf; mh.msg_controllen = sizeof cbuf;
+    ssize_t n = recvmsg(c->fd, &mh, 0);
+    if (n <= 0) {
+        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) { remove_conn(c); return 0; }
+        return 1;
+    }
+
+    for (struct cmsghdr *cm = CMSG_FIRSTHDR(&mh); cm; cm = CMSG_NXTHDR(&mh, cm)) {
+        if (cm->cmsg_level == SOL_SOCKET && cm->cmsg_type == SCM_RIGHTS) {
+            int cnt = (int)((cm->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+            int *fds = (int *)CMSG_DATA(cm);
+            for (int i = 0; i < cnt; i++) {
+                if (c->n_pending_fds < SDBUS_MAX_PENDING_FDS) c->pending_fds[c->n_pending_fds++] = fds[i];
+                else close(fds[i]);
+            }
+        }
+    }
+
+    if (!c->authed) {
+        int r = sdbus_auth_feed(c, buf, (int)n);
+        drain_scratch(c);           /* auth responses go out via the queue */
+        ep_update(c);
+        if (r < 0) { remove_conn(c); return 0; }
+        if (r == 1) process_inbound(c);   /* BEGIN reached; remaining bytes are messages */
+        return 1;
+    }
+    sdbus_conn_in_append(c, buf, (int)n);
+    process_inbound(c);
+    return 1;
+}
+
+static int make_listen_socket(const char *path) {
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un sa = {0};
+    sa.sun_family = AF_UNIX;
+    strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
+    unlink(path);
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
+    chmod(path, 0777);            /* system bus is world-connectable; policy gates use */
+    if (listen(fd, 128) < 0) { close(fd); return -1; }
+    return fd;
+}
 
 int main(int argc, char **argv) {
     int system_bus = 0;
-    for (int i = 1; i < argc; i++)
-        if (!strcmp(argv[i], "--system")) system_bus = 1;
-    int maj = 0, min = 0, mic = 0;
-    dbus_get_version(&maj, &min, &mic);
-    fprintf(stderr, "schema-dbus: starting (system=%d, libdbus %d.%d.%d)\n",
-            system_bus, maj, min, mic);
+    for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--system")) system_bus = 1;
+
+    const char *sock = getenv("SCHEMA_DBUS_SOCKET");
+    if (!sock) sock = DEFAULT_SOCKET;
+
+    /* load the dissolved policy: prefer a precompiled file, else dissolve live */
+    const char *polfile = getenv("SCHEMA_DBUS_POLICY");
+    char *poltext = NULL;
+    if (polfile) {
+        FILE *f = fopen(polfile, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long n = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            poltext = malloc(n + 1);
+            if (fread(poltext, 1, n, f) != (size_t)n) {
+                free(poltext);
+                poltext = NULL;
+            } else {
+                poltext[n] = '\0';
+            }
+            fclose(f);
+        }
+    }
+    g_policy = sdbus_policy_parse(poltext ? poltext : "context = default\nallow = send_destination:*\n");
+    free(poltext);
+    g_names = sdbus_names_new();
+    g_replies = sdbus_replies_new();
+
+    int lfd = make_listen_socket(sock);
+    if (lfd < 0) { fprintf(stderr, "schema-dbus: cannot bind %s: %s\n", sock, strerror(errno)); return 1; }
+
+    g_epfd = epoll_create1(EPOLL_CLOEXEC);
+    struct epoll_event lev = {0};
+    lev.events = EPOLLIN; lev.data.ptr = NULL;   /* NULL ptr marks the listen fd */
+    epoll_ctl(g_epfd, EPOLL_CTL_ADD, lfd, &lev);
+
+    int vmaj = 0, vmin = 0, vmic = 0;
+    dbus_get_version(&vmaj, &vmin, &vmic);
+    fprintf(stderr, "schema-dbus: listening on %s (system=%d, libdbus %d.%d.%d)\n",
+            sock, system_bus, vmaj, vmin, vmic);
+
+    struct epoll_event evs[64];
+    for (;;) {
+        int nev = epoll_wait(g_epfd, evs, 64, -1);
+        if (nev < 0) { if (errno == EINTR) continue; break; }
+        for (int i = 0; i < nev; i++) {
+            if (evs[i].data.ptr == NULL) {           /* listen socket */
+                for (;;) {
+                    int cfd = accept4(lfd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                    if (cfd < 0) break;
+                    add_conn(cfd);
+                }
+                continue;
+            }
+            sdbus_conn *c = evs[i].data.ptr;
+            if (evs[i].events & (EPOLLHUP | EPOLLERR)) { remove_conn(c); continue; }
+            if (evs[i].events & EPOLLIN)  { if (!on_readable(c)) continue; }  /* c may be freed */
+            if (evs[i].events & EPOLLOUT) {
+                if (flush_conn(c) < 0) { remove_conn(c); continue; }
+                ep_update(c);
+            }
+            /* backpressure: a stuck reader must not wedge the bus */
+            int backlog = 0;
+            for (int q = c->oq_head; q < c->n_oq; q++) backlog += c->oq[q].len - c->oq[q].off;
+            if (backlog > OUT_BACKPRESSURE_CAP) remove_conn(c);
+        }
+    }
     return 0;
 }

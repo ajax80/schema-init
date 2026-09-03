@@ -66,11 +66,15 @@ static inline int sdbus__holder_index(sdbus_name_ent *e, int conn_id) {
 }
 
 static inline void sdbus__holder_insert(sdbus_name_ent *e, int idx, int conn_id, unsigned flags) {
-    e->holders = realloc(e->holders, (e->n_holders + 1) * sizeof *e->holders);
-    for (int i = e->n_holders; i > idx; i--) e->holders[i] = e->holders[i - 1];
-    e->holders[idx].conn_id = conn_id;
-    e->holders[idx].flags = flags;
-    e->n_holders++;
+    int nn = e->n_holders + 1;
+    sdbus_holder *nh = malloc((size_t)nn * sizeof *nh);
+    for (int i = 0; i < idx; i++) nh[i] = e->holders[i];
+    nh[idx].conn_id = conn_id;
+    nh[idx].flags = flags;
+    for (int i = idx; i < e->n_holders; i++) nh[i + 1] = e->holders[i];
+    free(e->holders);
+    e->holders = nh;
+    e->n_holders = nn;
 }
 
 static inline void sdbus__holder_remove(sdbus_name_ent *e, int idx) {
@@ -200,6 +204,20 @@ static inline int sdbus_names_list(sdbus_names *r, const char ***out_names) {
         arr[n++] = r->names[i].name;
     }
     *out_names = arr;
+    return n;
+}
+
+/* Well-known names for which conn_id is the primary owner. Caller frees the
+   returned array (not the strings). Returns count. */
+static inline int sdbus_names_owned_by(sdbus_names *r, int conn_id, const char ***out) {
+    const char **arr = NULL;
+    int n = 0;
+    for (int i = 0; i < r->n_names; i++)
+        if (r->names[i].n_holders && r->names[i].holders[0].conn_id == conn_id) {
+            arr = realloc(arr, (n + 1) * sizeof *arr);
+            arr[n++] = r->names[i].name;
+        }
+    *out = arr;
     return n;
 }
 
