@@ -134,12 +134,25 @@ test:
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess -lacl && /tmp/schema-test-uaccess
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o /tmp/schema-test-uaccess-apply -lacl && /tmp/schema-test-uaccess-apply
+	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o /tmp/schema-test-sdbus-policy && /tmp/schema-test-sdbus-policy
+	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf && /tmp/schema-test-sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
 
 verify-live:
 	sh tests/verify_disk_links_live.sh
 	sh tests/verify_uaccess_live.sh
 	sh tests/verify_db_live.sh
 
-.PHONY: all clean install release aarch64 armhf desktop test verify-live
+# Local-only: prove the C policy engine byte-identical against the PRIVATE
+# 14,979-msg SP0 corpus. Corpus + its derivatives never leave the machine
+# (tests/dbus-corpus/* is gitignored), so this is not part of `make test`.
+verify-dbus-conformance:
+	cd tools/dbus-learn && python3 emit_conformance_golden.py \
+	  ../../tests/dbus-corpus/capture-20260902.jsonl \
+	  ../../tests/dbus-corpus/policy-dissolved-full.txt \
+	  ../../tests/dbus-corpus/policy-golden-full.tsv
+	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
+	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
+
+.PHONY: all clean install release aarch64 armhf desktop test verify-live verify-dbus-conformance
 
 
