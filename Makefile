@@ -137,6 +137,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o /tmp/schema-test-sdbus-policy && /tmp/schema-test-sdbus-policy
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf && /tmp/schema-test-sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_codec.c -o /tmp/schema-test-sdbus-codec $(DBUS_LIBS) && /tmp/schema-test-sdbus-codec
+	$(CC) $(CFLAGS) tests/test_sdbus_names.c -o /tmp/schema-test-sdbus-names && /tmp/schema-test-sdbus-names
 
 verify-live:
 	sh tests/verify_disk_links_live.sh
