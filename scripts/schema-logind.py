@@ -365,6 +365,21 @@ def apply_uaccess_acl(nodes, new_uid, old_uid=None):
                            stderr=subprocess.DEVNULL)
 
 
+def _uaccess_fingerprint(nodes):
+    # {path: (inode, mtime_ns)} for each node that still exists. inode+mtime
+    # catch an in-place re-create (nvidia re-mknod); the key set catches
+    # appear/vanish. mtime not ctime: setfacl bumps ctime, which would self-
+    # trigger every cycle.
+    fp = {}
+    for n in nodes:
+        try:
+            st = os.stat(n)
+        except OSError:
+            continue
+        fp[n] = (st.st_ino, st.st_mtime_ns)
+    return fp
+
+
 def session_path_for(sid):
     return '/org/freedesktop/login1/session/_' + str(sid)
 
@@ -1285,6 +1300,9 @@ class SessionRegistry:
         self._derived = {}      # path -> last content written
         self._last_vt = None
         self._seat_active_uid = {}   # seat_id -> uid last granted uaccess ACLs
+        self._seat_uaccess_fp = {}   # seat_id -> {path: (ino, mtime_ns)} last granted
+        self._seat_uaccess_nodes = {}  # seat_id -> cached node paths
+        self._seat_udev_mtime = {}   # seat_id -> udev-DB mtime at last enumeration
 
     # -- lookup --------------------------------------------------------------
 
@@ -1502,21 +1520,46 @@ class SessionRegistry:
             self._write_if_changed(USERS_DIR + '/%d' % uid, '\n'.join(body) + '\n')
 
     def _reconcile_uaccess(self, seat_id, active_uid):
-        """Re-grant the seat's uaccess devices to whoever is active now, once
-        per active-uid change. Coldplug ran before login, so without this the
-        device sits owned by no one until a replug; this is logind's half of the
-        systemd uaccess contract that schema-udev's device-add tagging can't do.
+        """Re-grant the seat's uaccess devices to whoever is active now.
+
+        Coldplug ran before login, so without this the device sits owned by no
+        one; this is logind's half of the systemd uaccess contract. systemd
+        re-runs uaccess on every device event, so keying only on the active uid
+        misses a node that appears or is re-created afterward (nvidia re-mknod,
+        late coldplug, replug) at the same uid. But re-enumerating the udev DB
+        every cycle can fall through to an os.walk of /dev — the ambient spin
+        this project exists to avoid — so re-enumerate only when the udev DB
+        mtime moves, re-stat the cached node paths cheaply each cycle to catch
+        an in-place re-mknod, and setfacl only the nodes that actually changed.
         """
-        if self._seat_active_uid.get(seat_id) == active_uid:
-            return
-        old = self._seat_active_uid.get(seat_id)
         try:
-            apply_uaccess_acl(uaccess_seat_nodes(seat_id), active_uid, old)
+            udev_mtime = os.stat(UDEV_DATA_DIR).st_mtime_ns
+        except OSError:
+            udev_mtime = None
+        if (seat_id not in self._seat_uaccess_nodes
+                or udev_mtime != self._seat_udev_mtime.get(seat_id)):
+            self._seat_uaccess_nodes[seat_id] = uaccess_seat_nodes(seat_id)
+            self._seat_udev_mtime[seat_id] = udev_mtime
+        nodes = self._seat_uaccess_nodes[seat_id]
+
+        fp = _uaccess_fingerprint(nodes)
+        old = self._seat_active_uid.get(seat_id)
+        prev = self._seat_uaccess_fp.get(seat_id)
+        if old == active_uid and prev == fp:
+            return
+        if old != active_uid:
+            targets, revoke = nodes, old          # login / uid switch: all, revoke old
+        else:
+            prev = prev or {}
+            targets, revoke = [n for n, sig in fp.items() if prev.get(n) != sig], None
+        try:
+            apply_uaccess_acl(targets, active_uid, revoke)
         except Exception as e:
             print(f"login1-stub: uaccess re-scan failed on {seat_id}: {e}",
                   file=sys.stderr)
             return
         self._seat_active_uid[seat_id] = active_uid
+        self._seat_uaccess_fp[seat_id] = fp
 
     def _write_if_changed(self, path, content):
         # Compared against what we last wrote rather than re-read: this runs at

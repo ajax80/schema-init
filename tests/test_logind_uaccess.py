@@ -125,7 +125,9 @@ def test_registry_fires_on_change():
     L.apply_uaccess_acl = lambda nodes, new, old: calls.append((tuple(nodes), new, old))
     try:
         reg = L.SessionRegistry.__new__(L.SessionRegistry)
-        reg.sessions = {}; reg._derived = {}; reg._seat_active_uid = {}
+        reg.sessions = {}; reg._derived = {}
+        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
+        reg._seat_uaccess_nodes = {}; reg._seat_udev_mtime = {}
 
         _set_active(reg, 1000)
         reg._write_derived()
@@ -145,9 +147,89 @@ def test_registry_fires_on_change():
         L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
 
 
+def test_registry_refires_on_node_readd():
+    # systemd re-runs uaccess on every device-add; schema-logind used to fire
+    # only on active-uid change, so a node that appeared or was re-created
+    # (nvidia re-mknod, late coldplug, replug) AFTER the first login was left
+    # ACL-less until a reboot or schema-doctor. Reconcile must re-apply when
+    # the live node set moves, not just when the uid does.
+    calls = []
+    real_apply = L.apply_uaccess_acl
+    L.apply_uaccess_acl = lambda nodes, new, old: calls.append((tuple(sorted(nodes)), new, old))
+    try:
+        a = node('readd/card0')
+        record('c226:0', 'N:readd/card0\nE:ID_SEAT=seat0\nQ:uaccess\n')
+        reg = L.SessionRegistry.__new__(L.SessionRegistry)
+        reg.sessions = {}; reg._derived = {}
+        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
+        reg._seat_uaccess_nodes = {}; reg._seat_udev_mtime = {}
+
+        _set_active(reg, 1000)
+        reg._write_derived()
+        check('readd: first apply grants the node present at login',
+              any(a in c[0] and c[1] == 1000 for c in calls), str(calls))
+
+        # a new uaccess node appears AFTER the latch, same active uid
+        calls.clear()
+        b = node('readd/card1')
+        record('c226:1', 'N:readd/card1\nE:ID_SEAT=seat0\nQ:uaccess\n')
+        reg._write_derived()
+        check('readd: re-applies when a new node appears at the same uid',
+              any(b in c[0] for c in calls), str(calls))
+
+        # the SAME node re-created (new inode/mtime), same active uid
+        calls.clear()
+        os.unlink(a)
+        node('readd/card0')
+        reg._write_derived()
+        check('readd: re-applies when an existing node is re-created',
+              any(a in c[0] for c in calls), str(calls))
+
+        # steady state: nothing moved, no re-fire (still cheap at 4 Hz)
+        calls.clear()
+        reg._write_derived()
+        check('readd: no re-fire when the node set is unchanged',
+              calls == [], str(calls))
+    finally:
+        L.apply_uaccess_acl = real_apply
+
+
+def test_registry_enumerates_only_on_udev_change():
+    # The enumeration can fall through to an os.walk of /dev, so it must NOT
+    # run on every 4 Hz derive cycle — only when the udev DB actually moves.
+    n_enum = [0]
+    real_nodes, real_apply = L.uaccess_seat_nodes, L.apply_uaccess_acl
+    def counting_nodes(seat='seat0'):
+        n_enum[0] += 1
+        return [node('lazy/card0')]
+    L.uaccess_seat_nodes = counting_nodes
+    L.apply_uaccess_acl = lambda *a: None
+    try:
+        reg = L.SessionRegistry.__new__(L.SessionRegistry)
+        reg.sessions = {}; reg._derived = {}
+        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
+        reg._seat_uaccess_nodes = {}; reg._seat_udev_mtime = {}
+
+        _set_active(reg, 1000)
+        for _ in range(20):                    # five seconds of polling
+            reg._write_derived()
+        check('lazy: enumerates once across 20 quiet cycles',
+              n_enum[0] == 1, 'enum count=%d' % n_enum[0])
+
+        # a udev DB change re-enumerates
+        record('c226:9', 'N:lazy/card9\nE:ID_SEAT=seat0\nQ:uaccess\n')
+        reg._write_derived()
+        check('lazy: re-enumerates when the udev DB moves',
+              n_enum[0] == 2, 'enum count=%d' % n_enum[0])
+    finally:
+        L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
+
+
 def main():
     print(f"schema-logind uaccess re-scan tests (run dir {RUNDIR})\n")
-    for fn in (test_enumerate, test_apply, test_registry_fires_on_change):
+    for fn in (test_enumerate, test_apply, test_registry_fires_on_change,
+               test_registry_refires_on_node_readd,
+               test_registry_enumerates_only_on_udev_change):
         print(fn.__name__)
         fn()
         print()
