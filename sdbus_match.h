@@ -18,16 +18,16 @@ typedef struct {
 struct sdbus_matchset { sdbus_match_rule *rules; int n; };
 typedef struct sdbus_matchset sdbus_matchset;
 
-static sdbus_matchset *sdbus_match_new(void) { return calloc(1, sizeof(sdbus_matchset)); }
+static inline sdbus_matchset *sdbus_match_new(void) { return calloc(1, sizeof(sdbus_matchset)); }
 
-static void sdbus__rule_clear(sdbus_match_rule *r) {
+static inline void sdbus__rule_clear(sdbus_match_rule *r) {
     free(r->type); free(r->interface); free(r->member);
     free(r->path); free(r->path_namespace); free(r->sender); free(r->raw);
     memset(r, 0, sizeof *r);
 }
 
 /* parse "key='value',key='value'" into r; returns 0 ok, -1 malformed. */
-static int sdbus__parse_rule(const char *rule, sdbus_match_rule *r) {
+static inline int sdbus__parse_rule(const char *rule, sdbus_match_rule *r) {
     memset(r, 0, sizeof *r);
     const char *p = rule;
     while (*p) {
@@ -61,7 +61,7 @@ static int sdbus__parse_rule(const char *rule, sdbus_match_rule *r) {
     return 0;
 }
 
-static int sdbus_match_add(sdbus_matchset *m, const char *rule) {
+static inline int sdbus_match_add(sdbus_matchset *m, const char *rule) {
     sdbus_match_rule r;
     if (sdbus__parse_rule(rule, &r) != 0) return -1;
     m->rules = realloc(m->rules, (m->n + 1) * sizeof *m->rules);
@@ -69,7 +69,7 @@ static int sdbus_match_add(sdbus_matchset *m, const char *rule) {
     return 0;
 }
 
-static int sdbus_match_remove(sdbus_matchset *m, const char *rule) {
+static inline int sdbus_match_remove(sdbus_matchset *m, const char *rule) {
     for (int i = 0; i < m->n; i++) {
         if (!strcmp(m->rules[i].raw, rule)) {
             sdbus__rule_clear(&m->rules[i]);
@@ -80,13 +80,13 @@ static int sdbus_match_remove(sdbus_matchset *m, const char *rule) {
     return -1;                                  /* not found */
 }
 
-static int sdbus__eqornull(const char *constraint, const char *field) {
+static inline int sdbus__eqornull(const char *constraint, const char *field) {
     if (!constraint) return 1;                  /* absent constraint = wildcard */
     return field && !strcmp(constraint, field);
 }
 
 /* path_namespace matches path itself or any path under it. */
-static int sdbus__ns_match(const char *ns, const char *path) {
+static inline int sdbus__ns_match(const char *ns, const char *path) {
     if (!ns) return 1;
     if (!path) return 0;
     size_t nl = strlen(ns);
@@ -95,7 +95,7 @@ static int sdbus__ns_match(const char *ns, const char *path) {
 }
 
 /* 1 if any stored rule accepts this signal. */
-static int sdbus_match_signal(sdbus_matchset *m, const char *interface,
+static inline int sdbus_match_signal(sdbus_matchset *m, const char *interface,
                               const char *member, const char *path, const char *sender) {
     for (int i = 0; i < m->n; i++) {
         sdbus_match_rule *r = &m->rules[i];
@@ -110,7 +110,7 @@ static int sdbus_match_signal(sdbus_matchset *m, const char *interface,
     return 0;
 }
 
-static void sdbus_match_free(sdbus_matchset *m) {
+static inline void sdbus_match_free(sdbus_matchset *m) {
     if (!m) return;
     for (int i = 0; i < m->n; i++) sdbus__rule_clear(&m->rules[i]);
     free(m->rules); free(m);

@@ -47,9 +47,9 @@ static const char SDBUS_ALLOW[] = "allow";
 static const char SDBUS_DENY[]  = "deny";
 
 /* --- small helpers --- */
-static int sdbus__eq(const char *a, const char *b) { return a && b && !strcmp(a, b); }
+static inline int sdbus__eq(const char *a, const char *b) { return a && b && !strcmp(a, b); }
 
-static char *sdbus__trim(char *s) {
+static inline char *sdbus__trim(char *s) {
     while (*s && isspace((unsigned char)*s)) s++;
     if (!*s) return s;
     char *e = s + strlen(s) - 1;
@@ -57,7 +57,7 @@ static char *sdbus__trim(char *s) {
     return s;
 }
 
-static int sdbus__is_int(const char *s, long *out) {
+static inline int sdbus__is_int(const char *s, long *out) {
     if (!s || !*s) return 0;
     char *end;
     long v = strtol(s, &end, 10);
@@ -67,18 +67,18 @@ static int sdbus__is_int(const char *s, long *out) {
 }
 
 /* felt_policy _uid_of / _gid_of: name -> id, None (here -1) if unknown. */
-static int sdbus__uid_of(const char *name) {
+static inline int sdbus__uid_of(const char *name) {
     struct passwd *p = getpwnam(name);
     return p ? (int)p->pw_uid : -1;
 }
-static int sdbus__gid_of(const char *name) {
+static inline int sdbus__gid_of(const char *name) {
     struct group *g = getgrnam(name);
     return g ? (int)g->gr_gid : -1;
 }
 
 /* Resolve a context selector once at parse time (felt_policy resolves per-eval
    with an lru_cache; static-per-boot policy lets us resolve once). */
-static void sdbus__resolve_sel(sdbus_ctx_kind kind, const char *selector, sdbus_ctx_sel *out) {
+static inline void sdbus__resolve_sel(sdbus_ctx_kind kind, const char *selector, sdbus_ctx_sel *out) {
     out->kind = kind;
     out->wildcard = 0;
     out->selector_id = -1;
@@ -89,10 +89,10 @@ static void sdbus__resolve_sel(sdbus_ctx_kind kind, const char *selector, sdbus_
     out->selector_id = (kind == CTX_USER) ? sdbus__uid_of(selector) : sdbus__gid_of(selector);
 }
 
-static void sdbus_policy_free(sdbus_policy *pol);
+static inline void sdbus_policy_free(sdbus_policy *pol);
 
 /* --- parse (felt_policy.parse_policy + _parse_predicates) --- */
-static sdbus_policy *sdbus_policy_parse(const char *text) {
+static inline sdbus_policy *sdbus_policy_parse(const char *text) {
     sdbus_policy *pol = calloc(1, sizeof *pol);
     if (!pol) return NULL;
     pol->buf = strdup(text ? text : "");
@@ -164,7 +164,7 @@ static sdbus_policy *sdbus_policy_parse(const char *text) {
     return pol;
 }
 
-static void sdbus_policy_free(sdbus_policy *pol) {
+static inline void sdbus_policy_free(sdbus_policy *pol) {
     if (!pol) return;
     for (int i = 0; i < pol->n_ctxs; i++) {
         for (int j = 0; j < pol->ctxs[i].n_rules; j++) free(pol->ctxs[i].rules[j].preds);
@@ -176,12 +176,12 @@ static void sdbus_policy_free(sdbus_policy *pol) {
 }
 
 /* --- match (felt_policy _field_matches / _rule_matches) --- */
-static int sdbus__field_matches(const char *field, const char *value) {
+static inline int sdbus__field_matches(const char *field, const char *value) {
     if (!strcmp(value, "*")) return field != NULL;   /* "*" -> field is not None */
     return sdbus__eq(field, value);
 }
 
-static int sdbus__rule_matches(const sdbus_rule *rule, const sdbus_req *req) {
+static inline int sdbus__rule_matches(const sdbus_rule *rule, const sdbus_req *req) {
     const char *op = req->op;
     for (int i = 0; i < rule->n_preds; i++) {
         const char *attr = rule->preds[i].attr;
@@ -246,7 +246,7 @@ static int sdbus__rule_matches(const sdbus_rule *rule, const sdbus_req *req) {
     return 1;
 }
 
-static int sdbus__applicable(const sdbus_ctx *ctx, const sdbus_req *req) {
+static inline int sdbus__applicable(const sdbus_ctx *ctx, const sdbus_req *req) {
     if (ctx->kind == CTX_DEFAULT || ctx->kind == CTX_MANDATORY) return 1;
     if (ctx->kind == CTX_USER) {
         if (req->uid < 0) return 0;                 /* uid None -> False */
@@ -261,7 +261,7 @@ static int sdbus__applicable(const sdbus_ctx *ctx, const sdbus_req *req) {
     return 0;
 }
 
-static int sdbus__is_requested_reply(const sdbus_req *req) {
+static inline int sdbus__is_requested_reply(const sdbus_req *req) {
     return sdbus__eq(req->op, "send")
         && req->has_reply_serial
         && (sdbus__eq(req->msgtype, "method_return") || sdbus__eq(req->msgtype, "error"));
@@ -269,7 +269,7 @@ static int sdbus__is_requested_reply(const sdbus_req *req) {
 
 /* felt_policy.evaluate: ordered default->group->user->mandatory, last-match-wins,
    start deny; requested-reply short-circuits to allow. */
-static const char *sdbus_policy_eval(const sdbus_policy *pol, const sdbus_req *req) {
+static inline const char *sdbus_policy_eval(const sdbus_policy *pol, const sdbus_req *req) {
     if (sdbus__is_requested_reply(req)) return SDBUS_ALLOW;
     const char *verdict = SDBUS_DENY;
     static const sdbus_ctx_kind order[] = { CTX_DEFAULT, CTX_GROUP, CTX_USER, CTX_MANDATORY };

@@ -36,19 +36,19 @@ struct sdbus_names {
 };
 typedef struct sdbus_names sdbus_names;
 
-static sdbus_names *sdbus_names_new(void) {
+static inline sdbus_names *sdbus_names_new(void) {
     sdbus_names *n = calloc(1, sizeof *n);
     if (n) n->next_unique = 1;
     return n;
 }
 
-static sdbus_name_ent *sdbus__name_find(sdbus_names *r, const char *name) {
+static inline sdbus_name_ent *sdbus__name_find(sdbus_names *r, const char *name) {
     for (int i = 0; i < r->n_names; i++)
         if (!strcmp(r->names[i].name, name)) return &r->names[i];
     return NULL;
 }
 
-static sdbus_name_ent *sdbus__name_intern(sdbus_names *r, const char *name) {
+static inline sdbus_name_ent *sdbus__name_intern(sdbus_names *r, const char *name) {
     sdbus_name_ent *e = sdbus__name_find(r, name);
     if (e) return e;
     r->names = realloc(r->names, (r->n_names + 1) * sizeof *r->names);
@@ -59,13 +59,13 @@ static sdbus_name_ent *sdbus__name_intern(sdbus_names *r, const char *name) {
     return e;
 }
 
-static int sdbus__holder_index(sdbus_name_ent *e, int conn_id) {
+static inline int sdbus__holder_index(sdbus_name_ent *e, int conn_id) {
     for (int i = 0; i < e->n_holders; i++)
         if (e->holders[i].conn_id == conn_id) return i;
     return -1;
 }
 
-static void sdbus__holder_insert(sdbus_name_ent *e, int idx, int conn_id, unsigned flags) {
+static inline void sdbus__holder_insert(sdbus_name_ent *e, int idx, int conn_id, unsigned flags) {
     e->holders = realloc(e->holders, (e->n_holders + 1) * sizeof *e->holders);
     for (int i = e->n_holders; i > idx; i--) e->holders[i] = e->holders[i - 1];
     e->holders[idx].conn_id = conn_id;
@@ -73,12 +73,12 @@ static void sdbus__holder_insert(sdbus_name_ent *e, int idx, int conn_id, unsign
     e->n_holders++;
 }
 
-static void sdbus__holder_remove(sdbus_name_ent *e, int idx) {
+static inline void sdbus__holder_remove(sdbus_name_ent *e, int idx) {
     for (int i = idx; i < e->n_holders - 1; i++) e->holders[i] = e->holders[i + 1];
     e->n_holders--;
 }
 
-static const char *sdbus_names_alloc_unique(sdbus_names *r, int conn_id) {
+static inline const char *sdbus_names_alloc_unique(sdbus_names *r, int conn_id) {
     char buf[32];
     snprintf(buf, sizeof buf, ":1.%u", r->next_unique++);
     r->uniques = realloc(r->uniques, (r->n_uniques + 1) * sizeof *r->uniques);
@@ -88,13 +88,13 @@ static const char *sdbus_names_alloc_unique(sdbus_names *r, int conn_id) {
 }
 
 /* conn_id of the current primary owner of `name`, or -1. */
-static int sdbus_names_owner(sdbus_names *r, const char *name) {
+static inline int sdbus_names_owner(sdbus_names *r, const char *name) {
     sdbus_name_ent *e = sdbus__name_find(r, name);
     if (!e || e->n_holders == 0) return -1;
     return e->holders[0].conn_id;
 }
 
-static int sdbus_names_request(sdbus_names *r, int conn_id, const char *well_known,
+static inline int sdbus_names_request(sdbus_names *r, int conn_id, const char *well_known,
                                unsigned flags, sdbus_transition *out, int *n_out) {
     *n_out = 0;
     sdbus_name_ent *e = sdbus__name_intern(r, well_known);
@@ -141,7 +141,7 @@ static int sdbus_names_request(sdbus_names *r, int conn_id, const char *well_kno
     return SDBUS_REQ_IN_QUEUE;
 }
 
-static int sdbus_names_release(sdbus_names *r, int conn_id, const char *well_known,
+static inline int sdbus_names_release(sdbus_names *r, int conn_id, const char *well_known,
                                sdbus_transition *out, int *n_out) {
     *n_out = 0;
     sdbus_name_ent *e = sdbus__name_find(r, well_known);
@@ -161,7 +161,7 @@ static int sdbus_names_release(sdbus_names *r, int conn_id, const char *well_kno
 
 /* Drop conn from every name it holds; emit a transition for each name whose
    primary owner changes. out must have room for r->n_names entries. */
-static void sdbus_names_disconnect(sdbus_names *r, int conn_id,
+static inline void sdbus_names_disconnect(sdbus_names *r, int conn_id,
                                    sdbus_transition *out, int *n_out) {
     *n_out = 0;
     for (int i = 0; i < r->n_names; i++) {
@@ -191,7 +191,7 @@ static void sdbus_names_disconnect(sdbus_names *r, int conn_id,
 
 /* All currently-owned well-known names. Caller frees the returned array (not the
    strings). Returns count. */
-static int sdbus_names_list(sdbus_names *r, const char ***out_names) {
+static inline int sdbus_names_list(sdbus_names *r, const char ***out_names) {
     const char **arr = NULL;
     int n = 0;
     for (int i = 0; i < r->n_names; i++) {
@@ -204,13 +204,13 @@ static int sdbus_names_list(sdbus_names *r, const char ***out_names) {
 }
 
 /* unique name string for a conn, or NULL. */
-static const char *sdbus_names_unique(sdbus_names *r, int conn_id) {
+static inline const char *sdbus_names_unique(sdbus_names *r, int conn_id) {
     for (int i = 0; i < r->n_uniques; i++)
         if (r->uniques[i].conn_id == conn_id) return r->uniques[i].unique;
     return NULL;
 }
 
-static void sdbus_names_free(sdbus_names *r) {
+static inline void sdbus_names_free(sdbus_names *r) {
     if (!r) return;
     for (int i = 0; i < r->n_names; i++) { free(r->names[i].name); free(r->names[i].holders); }
     for (int i = 0; i < r->n_uniques; i++) free(r->uniques[i].unique);

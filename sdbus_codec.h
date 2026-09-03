@@ -19,7 +19,7 @@ typedef struct {
     const char *destination, *path, *interface, *member, *signature, *error_name, *sender;
 } sdbus_msg;
 
-static void sdbus__msg_fill(sdbus_msg *out) {
+static inline void sdbus__msg_fill(sdbus_msg *out) {
     DBusMessage *m = out->msg;
     out->type        = dbus_message_get_type(m);
     out->serial      = dbus_message_get_serial(m);
@@ -36,7 +36,7 @@ static void sdbus__msg_fill(sdbus_msg *out) {
 
 /* Demarshal one complete message from buf[0..len). Returns bytes consumed (>0),
    0 if a full message is not yet buffered, -1 on protocol error. */
-static int sdbus_codec_take(const unsigned char *buf, int len, sdbus_msg *out) {
+static inline int sdbus_codec_take(const unsigned char *buf, int len, sdbus_msg *out) {
     memset(out, 0, sizeof *out);
     int needed = dbus_message_demarshal_bytes_needed((const char *)buf, len);
     if (needed < 0) return -1;
@@ -50,13 +50,13 @@ static int sdbus_codec_take(const unsigned char *buf, int len, sdbus_msg *out) {
     return needed;
 }
 
-static void sdbus_msg_free(sdbus_msg *out) {
+static inline void sdbus_msg_free(sdbus_msg *out) {
     if (out && out->msg) { dbus_message_unref(out->msg); out->msg = NULL; }
 }
 
 /* Stamp the verified unique sender, then marshal to a fresh malloc'd buffer the
    caller frees with free(). Returns 0 on success, -1 on failure. */
-static int sdbus_codec_emit(sdbus_msg *m, const char *sender_unique,
+static inline int sdbus_codec_emit(sdbus_msg *m, const char *sender_unique,
                             unsigned char **bytes, int *len) {
     if (sender_unique && !dbus_message_set_sender(m->msg, sender_unique)) return -1;
     char *dbytes = NULL;
@@ -74,7 +74,7 @@ static int sdbus_codec_emit(sdbus_msg *m, const char *sender_unique,
 /* Number of unix fds the message declares (count of 'h' in its signature).
    Authoritative fd relay is the event loop's job (SCM_RIGHTS); this reports how
    many the message expects so the loop knows what to attach. */
-static int sdbus_msg_n_fds(const sdbus_msg *m) {
+static inline int sdbus_msg_n_fds(const sdbus_msg *m) {
     int n = 0;
     const char *s = m->signature;
     if (!s) return 0;
