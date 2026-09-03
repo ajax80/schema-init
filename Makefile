@@ -139,6 +139,7 @@ test:
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_codec.c -o /tmp/schema-test-sdbus-codec $(DBUS_LIBS) && /tmp/schema-test-sdbus-codec
 	$(CC) $(CFLAGS) tests/test_sdbus_names.c -o /tmp/schema-test-sdbus-names && /tmp/schema-test-sdbus-names
 	$(CC) $(CFLAGS) tests/test_sdbus_match.c -o /tmp/schema-test-sdbus-match && /tmp/schema-test-sdbus-match
+	$(CC) $(CFLAGS) tests/test_sdbus_reply.c -o /tmp/schema-test-sdbus-reply && /tmp/schema-test-sdbus-reply
 
 verify-live:
 	sh tests/verify_disk_links_live.sh
