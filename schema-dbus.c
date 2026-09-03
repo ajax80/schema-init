@@ -122,8 +122,8 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
         for (int j = 0; j < g_nconns; j++) {
             sdbus_conn *cc = g_conns[j];
             if (!cc->matches) continue;
-            if (!sdbus_match_signal(cc->matches, SDBUS_DRIVER_NAME,
-                                    "NameOwnerChanged", SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME))
+            if (!sdbus_match_signal(cc->matches, SDBUS_DRIVER_NAME, "NameOwnerChanged",
+                                    SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, NULL, 0))
                 continue;
             DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME,
                                                      "NameOwnerChanged");

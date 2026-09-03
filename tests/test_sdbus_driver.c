@@ -103,7 +103,7 @@ int main(void) {
     dbus_message_append_args(am, DBUS_TYPE_STRING, &rule, DBUS_TYPE_INVALID);
     r = do_call(&c, names, am);
     assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_METHOD_RETURN);
-    assert(c.matches && sdbus_match_signal(c.matches, "org.freedesktop.DBus", "X", "/p", "s") == 1);
+    assert(c.matches && sdbus_match_signal(c.matches, "org.freedesktop.DBus", "X", "/p", "s", NULL, 0) == 1);
     sdbus_msg_free(&r); dbus_message_unref(am);
 
     /* StartServiceByName -> ServiceUnknown error (v1.1 deferral) */

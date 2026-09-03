@@ -93,13 +93,17 @@ static inline int sdbus_route_targets(sdbus_wire_msg *msg, sdbus_conn *sender,
             return 1;
         }
         int n = 0;                                 /* broadcast by match rules */
+        const char **snames = NULL;                /* sender's well-known names */
+        int n_snames = sdbus_names_owned_by(names, sender->id, &snames);
         for (int i = 0; i < n_all && n < max_targets; i++) {
             sdbus_conn *cc = all[i];
             if (cc->id == sender->id) continue;
             if (cc->matches && sdbus_match_signal(cc->matches, msg->interface,
-                                                  msg->member, msg->path, msg->sender))
+                                                  msg->member, msg->path,
+                                                  sender->unique, snames, n_snames))
                 targets[n++] = cc->id;
         }
+        free(snames);
         return n;
     }
 

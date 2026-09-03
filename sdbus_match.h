@@ -94,16 +94,33 @@ static inline int sdbus__ns_match(const char *ns, const char *path) {
     return path[nl] == '\0' || path[nl] == '/' || (nl == 1 && ns[0] == '/');
 }
 
-/* 1 if any stored rule accepts this signal. */
+/* A rule's sender= may name the emitter by its unique name (":1.N") or by any
+   well-known name it owns; on the wire a signal's sender is always the unique
+   name, so match the constraint against the unique name AND the sender's owned
+   well-known set. Without this, a sender='well.known.Name' subscription (what
+   gvfs/Solid/gdbus register) never matches a service that emits as ":1.N". */
+static inline int sdbus__sender_match(const char *constraint, const char *uniq,
+                                      const char **owned, int n_owned) {
+    if (!constraint) return 1;                  /* absent = wildcard */
+    if (uniq && !strcmp(constraint, uniq)) return 1;
+    for (int i = 0; i < n_owned; i++)
+        if (owned[i] && !strcmp(constraint, owned[i])) return 1;
+    return 0;
+}
+
+/* 1 if any stored rule accepts this signal. sender_uniq is the emitter's unique
+   name; sender_owned/n_owned are the well-known names it owns (may be NULL/0). */
 static inline int sdbus_match_signal(sdbus_matchset *m, const char *interface,
-                              const char *member, const char *path, const char *sender) {
+                              const char *member, const char *path,
+                              const char *sender_uniq, const char **sender_owned,
+                              int n_owned) {
     for (int i = 0; i < m->n; i++) {
         sdbus_match_rule *r = &m->rules[i];
         if (r->type && strcmp(r->type, "signal") != 0) continue;
         if (!sdbus__eqornull(r->interface, interface)) continue;
         if (!sdbus__eqornull(r->member, member)) continue;
         if (!sdbus__eqornull(r->path, path)) continue;
-        if (!sdbus__eqornull(r->sender, sender)) continue;
+        if (!sdbus__sender_match(r->sender, sender_uniq, sender_owned, n_owned)) continue;
         if (!sdbus__ns_match(r->path_namespace, path)) continue;
         return 1;
     }
