@@ -9,8 +9,11 @@ CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I.
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
+DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
+DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
+
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev schema-dbus
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -59,6 +62,9 @@ verify-rules-live: tools/verify-rules-live.c tools/flip_classify.h udev_db.h ude
 verify-eprops-live: tools/verify-eprops-live.c udev_db.h udev_rules.h udev_builtins.h hwdb.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h dissect_image.h schema-udev.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-eprops-live tools/verify-eprops-live.c
 
+schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match.h sdbus_reply.h sdbus_codec.h sdbus_auth.h sdbus_conn.h sdbus_route.h sdbus_driver.h
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) $(LDFLAGS) schema-dbus.c -o $@ $(DBUS_LIBS)
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -70,6 +76,20 @@ install: all
 	install -m 0644 services/* $(DESTDIR)$(DATADIR)/schema-init/services/
 	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
+
+# SP1 cutover prerequisites — deploy the broker, its boot launcher, and the
+# policy dissolver to the live /usr/local layout the shims use. Does NOT flip
+# dbus.svc (that is the reboot-only, Jonathan-gated Step 6): after this, copy
+# services/dbus.svc.sp1 over the live services/dbus.svc when ready.
+install-dbus-sp1: schema-dbus
+	install -d $(DESTDIR)/usr/local/bin
+	install -m 0755 schema-dbus $(DESTDIR)/usr/local/bin/schema-dbus
+	install -m 0755 scripts/schema-dbus-run.sh $(DESTDIR)/usr/local/bin/schema-dbus-run.sh
+	install -d $(DESTDIR)/usr/local/lib/schema-init
+	install -m 0755 tools/dbus-learn/dissect_policy.py $(DESTDIR)/usr/local/lib/schema-init/dissect_policy.py
+	@echo
+	@echo "SP1 prerequisites installed. To FLIP the bus (reboot-only, gated):"
+	@echo "  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"
 
 release: all
 	rm -rf $(RELDIR)
@@ -128,12 +148,35 @@ test:
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess -lacl && /tmp/schema-test-uaccess
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o /tmp/schema-test-uaccess-apply -lacl && /tmp/schema-test-uaccess-apply
+	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o /tmp/schema-test-sdbus-policy && /tmp/schema-test-sdbus-policy
+	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf && /tmp/schema-test-sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_codec.c -o /tmp/schema-test-sdbus-codec $(DBUS_LIBS) && /tmp/schema-test-sdbus-codec
+	$(CC) $(CFLAGS) tests/test_sdbus_names.c -o /tmp/schema-test-sdbus-names && /tmp/schema-test-sdbus-names
+	$(CC) $(CFLAGS) tests/test_sdbus_match.c -o /tmp/schema-test-sdbus-match && /tmp/schema-test-sdbus-match
+	$(CC) $(CFLAGS) tests/test_sdbus_reply.c -o /tmp/schema-test-sdbus-reply && /tmp/schema-test-sdbus-reply
+	$(CC) $(CFLAGS) tests/test_sdbus_conn.c -o /tmp/schema-test-sdbus-conn && /tmp/schema-test-sdbus-conn
+	$(CC) $(CFLAGS) tests/test_sdbus_auth.c -o /tmp/schema-test-sdbus-auth && /tmp/schema-test-sdbus-auth
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_driver.c -o /tmp/schema-test-sdbus-driver $(DBUS_LIBS) && /tmp/schema-test-sdbus-driver
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_route.c -o /tmp/schema-test-sdbus-route $(DBUS_LIBS) && /tmp/schema-test-sdbus-route
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o /tmp/schema-test-sdbus-wire $(DBUS_LIBS) && /tmp/schema-test-sdbus-wire
 
 verify-live:
+	sh tests/sdbus_live_interop.sh
 	sh tests/verify_disk_links_live.sh
 	sh tests/verify_uaccess_live.sh
 	sh tests/verify_db_live.sh
 
-.PHONY: all clean install release aarch64 armhf desktop test verify-live
+# Local-only: prove the C policy engine byte-identical against the PRIVATE
+# 14,979-msg SP0 corpus. Corpus + its derivatives never leave the machine
+# (tests/dbus-corpus/* is gitignored), so this is not part of `make test`.
+verify-dbus-conformance:
+	cd tools/dbus-learn && python3 emit_conformance_golden.py \
+	  ../../tests/dbus-corpus/capture-20260902.jsonl \
+	  ../../tests/dbus-corpus/policy-dissolved-full.txt \
+	  ../../tests/dbus-corpus/policy-golden-full.tsv
+	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
+	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
+
+.PHONY: all clean install install-dbus-sp1 release aarch64 armhf desktop test verify-live verify-dbus-conformance
 
 

@@ -1,0 +1,18 @@
+name=dbus
+exec=/usr/local/bin/schema-dbus-run.sh
+oneshot=0
+needs_root=1
+critical=0
+ready_path=/run/dbus/system_bus_socket
+# SP1 cutover form of dbus.svc: the schema-dbus C broker (schema-reclamation of
+# dbus-daemon) instead of stock dbus-daemon. schema-dbus-run.sh dissolves the
+# live busconfig into /run/schema-init/dbus.policy and execs
+# /usr/local/bin/schema-dbus --system, falling back to stock dbus-daemon if the
+# dissolve fails. ready_path gates dependents until the broker binds the socket.
+#
+# To activate: copy this over services/dbus.svc on the target (Jonathan-gated,
+# reboot-only — see T13 Step 6). To roll back permanently, restore the stock
+# dbus.svc:
+#   exec=/usr/bin/dbus-daemon
+#   args=--system
+#   args=--nofork

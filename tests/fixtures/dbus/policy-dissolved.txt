@@ -1,0 +1,10 @@
+context = default
+allow = send_destination:org.freedesktop.DBus
+allow = send_destination:org.example.Public
+deny = send_destination:org.example.Secret
+context = group:981
+allow = send_destination:org.example.Secret
+context = user:0
+allow = own:*
+context = user:1000
+allow = own_prefix:org.example.user

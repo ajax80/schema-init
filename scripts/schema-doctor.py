@@ -456,6 +456,52 @@ class Login1Power(Check):
 REGISTRY.append(Login1Power())
 
 
+class DbusBus(Check):
+    name = "dbus-bus"
+    summary = "the D-Bus system bus is up (socket present and answering)"
+    grade = DEFERRED
+
+    def socket_path(self):
+        return os.path.join(ROOT, "run/dbus/system_bus_socket")
+
+    def socket_present(self):
+        try:
+            return stat.S_ISSOCK(os.stat(self.socket_path()).st_mode)
+        except OSError:
+            return False
+
+    def probe(self):
+        cmd = os.environ.get("SCHEMA_DOCTOR_BUSCTL", "busctl")
+        try:
+            r = subprocess.run(
+                [cmd, "call", "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                 "org.freedesktop.DBus", "GetId"],
+                capture_output=True, text=True, timeout=5)
+            return r.returncode, (r.stdout + r.stderr).strip()
+        except Exception as e:
+            return 1, str(e)
+
+    def detect(self):
+        if not self.socket_present():
+            return Finding(
+                detail=f"{self.socket_path()} is missing — the D-Bus system bus did "
+                       "not come up, so login1/systemd1 and every desktop service "
+                       "that needs the bus are unreachable",
+                oracle_said="dbus.service binds /run/dbus/system_bus_socket at boot",
+                healable=False)
+        rc, out = self.probe()
+        if rc != 0:
+            return Finding(
+                detail="the system bus socket exists but org.freedesktop.DBus did not "
+                       f"answer GetId: {out}",
+                oracle_said="the bus driver answers GetId on every healthy bus",
+                healable=False)
+        return None
+
+
+REGISTRY.append(DbusBus())
+
+
 # linux/vt.h
 VT_GETMODE = 0x5601
 VT_AUTO, VT_PROCESS = 0x00, 0x01

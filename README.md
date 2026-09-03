@@ -5,9 +5,11 @@
 </p>
 <p align="center"><sub>▶ 30-second trailer — <a href="assets/schema-init-trailer.mp4">watch in full resolution, with sound</a></sub></p>
 
-A minimal PID 1 init system for Linux that supervises services through a weight-state machine instead of unit files and dependency graphs.
+A minimal PID 1 init system for Linux that supervises services through a weight-state machine instead of unit files and dependency graphs — and, increasingly, a native, auditable replacement for the systemd daemons around it.
 
-No systemd. No OpenRC. No journal daemon. No socket activation engine. Just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
+No systemd. No OpenRC. No journal daemon. No socket activation engine. At its core, just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
+
+**It doesn't stop at PID 1.** systemd's satellite daemons don't have to be systemd's. schema-init ships small, single-purpose, native replacements you opt into one at a time: `schema-logind` (sessions, power, seats — plus the `hostname1`/`timedate1`/`systemd1` D-Bus surfaces), `schema-udev` (device management, authoritative over `/dev`), `schema-journal-sink` (a journald-shaped endpoint that drains to a plain logfile — no journal database), built-in `.svc` timers that retire `cron` and systemd `.timer` units, and now `schema-dbus` — the D-Bus system bus broker itself. Each is a program you can read end to end, runs only if you list it, and backs out with a single reboot. So you can reclaim the init layer piece by piece — or keep the stock daemons underneath and just run a leaner PID 1. The point isn't only *less*; it's an init layer you can actually **read, top to bottom, and own**.
 
 **PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every footprint figure in this README names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](#pid-1-rss--every-measurement).
 
@@ -1018,6 +1020,24 @@ needs_root=1
 
 **The `sd_login_monitor` directories.** `libsystemd`'s `sd_login_monitor_new(NULL, …)` — used by WirePlumber's logind module and other session/seat-aware clients — sets an inotify watch on `/run/systemd/{sessions,seats,users,machines}`. If any of those directories is missing the call fails with `-ENOENT` and the client silently drops logind integration (for WirePlumber that means no device reservation, no session-based pause). schema-logind creates all four at startup, empty — matching what real logind does even with no active sessions — so those clients initialize cleanly. Costs four `mkdir`s.
 
+### The system bus itself (`schema-dbus`)
+
+Everything above runs *on* the D-Bus system bus. `schema-dbus` (`schema-dbus.c`) **is** that bus — a native C implementation of the message broker that replaces `dbus-daemon`/`dbus-broker` as the process owning `/run/dbus/system_bus_socket`. It does the real work of a bus daemon: `EXTERNAL` authentication, well-known and unique name ownership, client→client routing with reply tracking, match-rule signal delivery, the `org.freedesktop.DBus` driver, and **unix-fd passing** — libdbus can't demarshal fd-carrying messages, so the broker parses the wire format directly and forwards the fds opaquely (`sdbus_wire.h`).
+
+It enforces the **same policy** as the stock daemon. The system's shipped `busconfig` XML (`/usr/share/dbus-1/system.conf` and its `system.d/` drop-ins) is *dissolved* into a flat allow/deny table at startup by `scripts/schema-dbus-run.sh`, which then execs the broker against it — so `<deny>`/`<allow>` rules for login1, polkit, NetworkManager and the rest are honored exactly. A conformance test checks the dissolved verdicts against a frozen corpus (`tests/test_sdbus_conformance.c`).
+
+Activate it the way you'd flip udev — advanced, opt-in, reversible:
+
+```sh
+sudo make install-dbus-sp1                                    # installs broker + launcher, changes nothing yet
+cp services/dbus.svc.sp1 /etc/schema-init/services/dbus.svc   # the flip
+sudo reboot
+```
+
+Build needs `dbus-devel` (`make schema-dbus`). If the policy dissolve ever fails at boot, the launcher **self-heals to stock `dbus-daemon`** on the spot, so even a broken flip still comes up on a working bus; to roll back permanently, restore the stock `dbus.svc` (`exec=/usr/bin/dbus-daemon`, `args=--system`, `args=--nofork`) and reboot.
+
+**Status.** Proven serving a full KDE Plasma desktop as the live system bus across reboots — kwin, plasmashell, polkit, PowerDevil, portals, WirePlumber, tailscale and schema-logind all routing through it. It is **v1.0**, with two pieces deliberately deferred to v1.1: **service activation** (`StartServiceByName` — until then, D-Bus-activatable services you actually need are pinned as ordinary schema-init services rather than started on demand), and the **monitoring/credentials driver methods** (`BecomeMonitor`, and the introspection `busctl status` leans on). Validate in `schema-vmtest` before flipping hardware.
+
 ---
 
 ## Porting to a new distro
@@ -1157,6 +1177,7 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 - [x] Structured telemetry — `schema-ctl status --json` and `--kv` for machine-parseable supervisory loop consumption and IEC 62304 audit traceability
 - [x] Cgroup resource limits — `cpu_limit=` (1–100, % of one core), `mem_limit=` (MB), `cpuset=` (CPU affinity / core pinning, systemd `AllowedCPUs=` analog), and `cpuset_partition=` (`isolated`/`root` exclusive cores via cgroupv2 partitions — dynamic `isolcpus`) per `.svc`; written via sync-pipe window before child exec; IEC 62304 Class C blast-radius isolation
 - [x] zram swap — `zram-swap.svc` boots a zstd-compressed zram swap device, replacing systemd's `zram-generator`; eliminates disk thrashing / periodic stutter under memory pressure
+- [x] schema-dbus — native C system-bus broker replacing `dbus-daemon`; enforces the dissolved `busconfig` policy (conformance-tested), does auth / name ownership / routing / match rules / unix-fd passing; serves a full KDE desktop as the live bus through reboots; opt-in, self-healing, reversible flip (v1.0 — `StartServiceByName` activation + monitoring driver methods deferred to v1.1)
 
 ---
 

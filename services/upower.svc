@@ -1,0 +1,6 @@
+name=upower
+exec=/usr/local/bin/schema-subreaper
+args=/usr/libexec/upowerd
+dep=dbus
+needs_root=1
+critical=0
