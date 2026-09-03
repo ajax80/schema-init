@@ -1,9 +1,9 @@
 #ifndef SDBUS_ROUTE_H
 #define SDBUS_ROUTE_H
 
-/* Routing decision: given a message from `sender`, decide the target conn_ids,
-   applying the policy gate. Pure decision logic (no I/O) so it is unit-testable
-   with fake conns; the event loop does the actual send. Rules:
+/* Routing decision over a parsed wire header (sdbus_wire_msg), so fd-bearing
+   messages route without a full demarshal. Pure decision logic (no I/O),
+   unit-testable with fake conns. Rules:
    - a requested reply (method_return/error with reply_serial) bypasses policy
      and routes to the caller recorded in the reply table (dropped if unmatched);
    - otherwise the send is policy-gated; a denial sets *denied;
@@ -13,7 +13,7 @@
      sets *synth_error (ServiceUnknown) if the name has no owner;
    - a method_call expecting a reply records a pending-reply entry. */
 
-#include "sdbus_codec.h"
+#include "sdbus_wire.h"
 #include "sdbus_policy.h"
 #include "sdbus_names.h"
 #include "sdbus_conn.h"
@@ -22,11 +22,11 @@
 
 static inline const char *sdbus__type_str(int t) {
     switch (t) {
-        case DBUS_MESSAGE_TYPE_METHOD_CALL:   return "method_call";
-        case DBUS_MESSAGE_TYPE_METHOD_RETURN: return "method_return";
-        case DBUS_MESSAGE_TYPE_ERROR:         return "error";
-        case DBUS_MESSAGE_TYPE_SIGNAL:        return "signal";
-        default:                              return NULL;
+        case SDBUS_TYPE_METHOD_CALL:   return "method_call";
+        case SDBUS_TYPE_METHOD_RETURN: return "method_return";
+        case SDBUS_TYPE_ERROR:         return "error";
+        case SDBUS_TYPE_SIGNAL:        return "signal";
+        default:                       return NULL;
     }
 }
 
@@ -38,20 +38,15 @@ static inline int sdbus__route_resolve(sdbus_names *names, sdbus_conn **all,
     return sdbus_names_owner(names, dest);
 }
 
-static inline sdbus_conn *sdbus__route_conn(sdbus_conn **all, int n_all, int id) {
-    for (int i = 0; i < n_all; i++) if (all[i]->id == id) return all[i];
-    return NULL;
-}
-
-static inline int sdbus_route_targets(sdbus_msg *msg, sdbus_conn *sender,
+static inline int sdbus_route_targets(sdbus_wire_msg *msg, sdbus_conn *sender,
         sdbus_names *names, sdbus_conn **all, int n_all, sdbus_policy *pol,
         sdbus_replies *replies, int *synth_error, int *denied,
         int *targets, int max_targets) {
     *synth_error = 0;
     *denied = 0;
     const char *tstr = sdbus__type_str(msg->type);
-    int is_reply = (msg->type == DBUS_MESSAGE_TYPE_METHOD_RETURN ||
-                    msg->type == DBUS_MESSAGE_TYPE_ERROR) && msg->has_reply_serial;
+    int is_reply = (msg->type == SDBUS_TYPE_METHOD_RETURN ||
+                    msg->type == SDBUS_TYPE_ERROR) && msg->has_reply_serial;
 
     /* requested reply: bypass policy, route to the recorded caller */
     if (is_reply) {
@@ -87,7 +82,7 @@ static inline int sdbus_route_targets(sdbus_msg *msg, sdbus_conn *sender,
     if (strcmp(verdict, "allow") != 0) { *denied = 1; return 0; }
 
     /* signals */
-    if (msg->type == DBUS_MESSAGE_TYPE_SIGNAL) {
+    if (msg->type == SDBUS_TYPE_SIGNAL) {
         if (msg->destination) {                    /* directed signal */
             if (dest_owner < 0) return 0;
             if (max_targets < 1) return 0;
@@ -111,8 +106,7 @@ static inline int sdbus_route_targets(sdbus_msg *msg, sdbus_conn *sender,
     targets[0] = dest_owner;
 
     /* record a pending reply for calls that expect one */
-    if (msg->type == DBUS_MESSAGE_TYPE_METHOD_CALL &&
-        !dbus_message_get_no_reply(msg->msg))
+    if (msg->type == SDBUS_TYPE_METHOD_CALL && !(msg->flags & SDBUS_FLAG_NO_REPLY))
         sdbus_replies_record(replies, dest_owner, msg->serial, sender->id);
 
     return 1;

@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "sdbus_codec.h"
+#include "sdbus_wire.h"
 #include "sdbus_policy.h"
 #include "sdbus_names.h"
 #include "sdbus_match.h"
@@ -157,83 +158,98 @@ static void drain_scratch(sdbus_conn *c) {
     }
 }
 
-static void synth_error_to(sdbus_conn *c, sdbus_msg *call, const char *name, const char *text) {
-    DBusMessage *err = dbus_message_new_error(call->msg, name, text);
+/* build an error reply from scratch (no original DBusMessage needed, so it works
+   even for offending messages that carry fds). */
+static void synth_error_wire(sdbus_conn *c, uint32_t reply_serial,
+                             const char *name, const char *text) {
+    DBusMessage *err = dbus_message_new(DBUS_MESSAGE_TYPE_ERROR);
+    dbus_message_set_error_name(err, name);
+    dbus_message_set_reply_serial(err, reply_serial);
     dbus_message_set_serial(err, ++g_bcast_serial);
     dbus_message_set_sender(err, SDBUS_DRIVER_NAME);
     if (c->unique) dbus_message_set_destination(err, c->unique);
+    dbus_message_append_args(err, DBUS_TYPE_STRING, &text, DBUS_TYPE_INVALID);
     char *b = NULL; int len = 0;
     if (dbus_message_marshal(err, &b, &len)) { sdbus_conn_enqueue(c, (unsigned char *)b, len, NULL, 0); dbus_free(b); }
     dbus_message_unref(err);
 }
 
-/* ---- process one fully-buffered message from conn c ---- */
-static void handle_message(sdbus_conn *c, sdbus_msg *m) {
-    int nfds = sdbus_msg_n_fds(m);   /* fds for this message sit at head of pending_fds */
-
-    /* enforce Hello-first */
-    if (!c->said_hello) {
-        if (!(m->member && !strcmp(m->member, "Hello"))) {
-            /* protocol violation: reply with an error, but proceed leniently */
-        }
-    }
-
-    int to_driver = m->destination && !strcmp(m->destination, SDBUS_DRIVER_NAME);
-    /* driver Peer methods may arrive with any destination when unset */
-    if (!m->destination && m->interface && !strcmp(m->interface, "org.freedesktop.DBus.Peer"))
-        to_driver = 1;
-
-    if (to_driver) {
-        int rc = sdbus_driver_dispatch(m, c, g_names, g_conns, g_nconns,
-                                       broadcast_transitions, NULL);
-        if (rc < 0)
-            synth_error_to(c, m, DBUS_ERROR_UNKNOWN_METHOD, "unknown method on org.freedesktop.DBus");
-        drain_scratch(c);
-        ep_update(c);
-        /* consume this message's inbound fds (driver never relays them) */
-        for (int i = nfds; i < c->n_pending_fds; i++) c->pending_fds[i - nfds] = c->pending_fds[i];
-        c->n_pending_fds -= nfds;
-        return;
-    }
-
-    int targets[MAX_TARGETS], synth = 0, denied = 0;
-    int nt = sdbus_route_targets(m, c, g_names, g_conns, g_nconns, g_policy,
-                                 g_replies, &synth, &denied, targets, MAX_TARGETS);
-    if (denied) {
-        synth_error_to(c, m, DBUS_ERROR_ACCESS_DENIED, "rejected by policy");
-    } else if (synth) {
-        synth_error_to(c, m, DBUS_ERROR_SERVICE_UNKNOWN, "name has no owner");
-    } else {
-        for (int i = 0; i < nt; i++) {
-            sdbus_conn *dst = conn_by_id(targets[i]);
-            if (!dst) continue;
-            unsigned char *bytes = NULL; int len = 0;
-            if (sdbus_codec_emit(m, c->unique, &bytes, &len) != 0) continue;
-            /* attach this message's fds to the first target only */
-            if (i == 0 && nfds > 0)
-                sdbus_conn_enqueue(dst, bytes, len, c->pending_fds, nfds);
-            else
-                sdbus_conn_enqueue(dst, bytes, len, NULL, 0);
-            free(bytes);
-            ep_update(dst);
-        }
-    }
-    drain_scratch(c);
-    ep_update(c);
-    /* consume this message's inbound fds */
+/* drop this message's fds from the head of pending_fds; close them unless they
+   were transferred to an outbound chunk (which will close them after sending). */
+static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
+    if (!transferred) for (int i = 0; i < nfds; i++) close(c->pending_fds[i]);
     for (int i = nfds; i < c->n_pending_fds; i++) c->pending_fds[i - nfds] = c->pending_fds[i];
     c->n_pending_fds -= nfds;
 }
 
+/* ---- process one fully-buffered message (parsed header w, raw bytes) ---- */
+static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char *raw, int rawlen) {
+    int nfds = sdbus_wire_n_fds(w);   /* this message's fds sit at head of pending_fds */
+
+    int to_driver = w->destination && !strcmp(w->destination, SDBUS_DRIVER_NAME);
+    if (!w->destination && w->interface && !strcmp(w->interface, "org.freedesktop.DBus.Peer"))
+        to_driver = 1;   /* Peer methods (Ping/GetMachineId) may omit the destination */
+
+    if (to_driver) {
+        /* driver methods never carry fds -> libdbus can demarshal to read args */
+        sdbus_msg dm;
+        if (sdbus_codec_take(raw, rawlen, &dm) == rawlen) {
+            int rc = sdbus_driver_dispatch(&dm, c, g_names, g_conns, g_nconns,
+                                           broadcast_transitions, NULL);
+            if (rc < 0)
+                synth_error_wire(c, w->serial, DBUS_ERROR_UNKNOWN_METHOD, "unknown method");
+            sdbus_msg_free(&dm);
+        } else {
+            synth_error_wire(c, w->serial, DBUS_ERROR_FAILED, "cannot parse message");
+        }
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
+
+    if (!c->unique) {   /* routing requires a Hello-assigned unique name to stamp */
+        synth_error_wire(c, w->serial, DBUS_ERROR_ACCESS_DENIED, "Hello required first");
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
+
+    int targets[MAX_TARGETS], synth = 0, denied = 0;
+    int nt = sdbus_route_targets(w, c, g_names, g_conns, g_nconns, g_policy,
+                                 g_replies, &synth, &denied, targets, MAX_TARGETS);
+    int transferred = 0;
+    if (denied) {
+        synth_error_wire(c, w->serial, DBUS_ERROR_ACCESS_DENIED, "rejected by policy");
+    } else if (synth) {
+        synth_error_wire(c, w->serial, DBUS_ERROR_SERVICE_UNKNOWN, "name has no owner");
+    } else if (nt > 0) {
+        unsigned char *bytes = NULL; int len = 0;
+        if (sdbus_wire_reforward(raw, w, c->unique, &bytes, &len) == 0) {
+            for (int i = 0; i < nt; i++) {
+                sdbus_conn *dst = conn_by_id(targets[i]);
+                if (!dst) continue;
+                if (i == 0 && nfds > 0) { sdbus_conn_enqueue(dst, bytes, len, c->pending_fds, nfds); transferred = 1; }
+                else                    sdbus_conn_enqueue(dst, bytes, len, NULL, 0);
+                ep_update(dst);
+            }
+            free(bytes);
+        }
+    }
+    drain_scratch(c); ep_update(c);
+    consume_msg_fds(c, nfds, transferred);
+}
+
 static void process_inbound(sdbus_conn *c) {
     for (;;) {
-        sdbus_msg m;
-        int taken = sdbus_codec_take(c->in, c->in_len, &m);
+        sdbus_wire_msg w;
+        int taken = sdbus_wire_parse(c->in, c->in_len, &w);
         if (taken == 0) return;                    /* need more */
-        if (taken < 0) { c->in_len = 0; return; }  /* corrupt; drop buffer */
+        if (taken < 0) {                           /* corrupt: drop buffer + its fds */
+            for (int i = 0; i < c->n_pending_fds; i++) close(c->pending_fds[i]);
+            c->n_pending_fds = 0; c->in_len = 0; return;
+        }
+        handle_message(c, &w, c->in, taken);       /* w points into c->in; used before consume */
         sdbus_conn_in_consume(c, taken);
-        handle_message(c, &m);
-        sdbus_msg_free(&m);
     }
 }
 
@@ -255,6 +271,7 @@ static void remove_conn(sdbus_conn *c) {
     epoll_ctl(g_epfd, EPOLL_CTL_DEL, c->fd, NULL);
     sdbus_transition t[256]; int nt = 0;
     sdbus_names_disconnect(g_names, c->id, t, &nt);
+    c->unique = NULL;   /* names just freed this string; don't let signals deref it */
     if (nt) broadcast_transitions(NULL, t, nt);
     sdbus_replies_purge(g_replies, c->id);
     for (int i = 0; i < c->n_pending_fds; i++) close(c->pending_fds[i]);

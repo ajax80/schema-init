@@ -84,9 +84,23 @@ static inline int sdbus_auth_feed(sdbus_conn *c, const unsigned char *buf, int l
         if (!strncmp(line, "AUTH EXTERNAL", 13)) {
             const char *arg = line + 13;
             while (*arg == ' ') arg++;
-            long claimed = sdbus__hex_uid(arg, (int)strlen(arg));
+            if (!*arg) {                          /* two-step: request the identity */
+                sdbus__send(c, "DATA\r\n");
+                continue;
+            }
+            long claimed = sdbus__hex_uid(arg, (int)strlen(arg));   /* one-step: identity inline */
             if (claimed == -1) { sdbus__send(c, "REJECTED EXTERNAL\r\n"); continue; }
             if (claimed != -2 && claimed != (long)c->uid) {
+                sdbus__send(c, "REJECTED EXTERNAL\r\n"); continue;
+            }
+            char ok[80];
+            snprintf(ok, sizeof ok, "OK %s\r\n", sdbus__guid());
+            sdbus__send(c, ok);
+        } else if (!strncmp(line, "DATA", 4) && (line[4] == '\0' || line[4] == ' ')) {
+            const char *arg = line + 4;           /* EXTERNAL identity response */
+            while (*arg == ' ') arg++;
+            long claimed = sdbus__hex_uid(arg, (int)strlen(arg));   /* empty -> use peer uid */
+            if (claimed == -1 || (claimed != -2 && claimed != (long)c->uid)) {
                 sdbus__send(c, "REJECTED EXTERNAL\r\n"); continue;
             }
             char ok[80];
