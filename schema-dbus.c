@@ -14,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/signalfd.h>
+#include <sys/wait.h>
+#include <pwd.h>
+#include <grp.h>
 
 #include "sdbus_codec.h"
 #include "sdbus_wire.h"
@@ -380,6 +385,34 @@ static int make_listen_socket(const char *path) {
     chmod(path, 0777);            /* system bus is world-connectable; policy gates use */
     if (listen(fd, 128) < 0) { close(fd); return -1; }
     return fd;
+}
+
+/* fork+exec an activatable service, dropping to its User= before exec. Returns
+   the child pid, or -1 if fork failed. Matches stock dbus-daemon: clean env with
+   DBUS_STARTER_*; all broker fds are CLOEXEC so exec closes them. */
+static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid > 0) return pid;
+
+    /* --- child --- */
+    setsid();
+    struct passwd *pw = getpwnam(e->user);
+    if (pw && pw->pw_uid != 0) {
+        if (initgroups(e->user, pw->pw_gid) != 0) _exit(127);
+        if (setgid(pw->pw_gid) != 0) _exit(127);
+        if (setuid(pw->pw_uid) != 0) _exit(127);
+    }
+    char starter[320];
+    snprintf(starter, sizeof starter, "DBUS_STARTER_ADDRESS=%s", bus_addr);
+    char *env[] = {
+        (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+        starter,
+        (char *)"DBUS_STARTER_BUS_TYPE=system",
+        NULL
+    };
+    execve(e->argv[0], e->argv, env);
+    _exit(127);                         /* exec failed */
 }
 
 int main(int argc, char **argv) {
