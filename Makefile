@@ -159,6 +159,7 @@ test:
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_driver.c -o /tmp/schema-test-sdbus-driver $(DBUS_LIBS) && /tmp/schema-test-sdbus-driver
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_route.c -o /tmp/schema-test-sdbus-route $(DBUS_LIBS) && /tmp/schema-test-sdbus-route
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o /tmp/schema-test-sdbus-wire $(DBUS_LIBS) && /tmp/schema-test-sdbus-wire
+	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate
 
 verify-live:
 	sh tests/sdbus_live_interop.sh
