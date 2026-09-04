@@ -14,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <sys/signalfd.h>
+#include <sys/wait.h>
+#include <pwd.h>
+#include <grp.h>
 
 #include "sdbus_codec.h"
 #include "sdbus_wire.h"
@@ -25,6 +30,7 @@
 #include "sdbus_auth.h"
 #include "sdbus_driver.h"
 #include "sdbus_route.h"
+#include "sdbus_activate.h"
 
 #define DEFAULT_SOCKET "/run/dbus/system_bus_socket"
 #define MAX_TARGETS 256
@@ -37,6 +43,13 @@ static int            g_nconns;
 static int            g_epfd;
 static unsigned       g_next_id = 1;
 static dbus_uint32_t  g_bcast_serial;
+static sdbus_svctab  *g_svctab;
+static sdbus_acts    *g_acts;
+static char           g_bus_addr[256];
+#define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
+#define SDBUS_SPAWN_TIMEOUT_MS 25000
+
+static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
 
 /* ---- epoll registration ---- */
 static void ep_update(sdbus_conn *c) {
@@ -112,6 +125,53 @@ static const char *unique_or_empty(int conn_id) {
     return u ? u : "";
 }
 
+/* a name just got an owner: deliver every message held for it. IMPLICIT ones are
+   re-routed as a fresh send (records a pending reply so the answer routes back);
+   EXPLICIT StartServiceByName callers get a SUCCESS reply. */
+static void release_activation(const char *name) {
+    sdbus_held_msg *held = NULL; int n = 0;
+    if (!sdbus_acts_take(g_acts, name, &held, &n)) return;
+    for (int i = 0; i < n; i++) {
+        sdbus_conn *caller = conn_by_id(held[i].caller_id);
+        if (held[i].kind == SDBUS_HELD_EXPLICIT) {
+            if (caller) {
+                DBusMessage *r = dbus_message_new(DBUS_MESSAGE_TYPE_METHOD_RETURN);
+                dbus_message_set_reply_serial(r, held[i].serial);
+                dbus_message_set_serial(r, ++g_bcast_serial);
+                dbus_message_set_sender(r, SDBUS_DRIVER_NAME);
+                if (caller->unique) dbus_message_set_destination(r, caller->unique);
+                dbus_uint32_t code = DBUS_START_REPLY_SUCCESS;
+                dbus_message_append_args(r, DBUS_TYPE_UINT32, &code, DBUS_TYPE_INVALID);
+                char *b = NULL; int len = 0;
+                if (dbus_message_marshal(r, &b, &len)) { sdbus_conn_enqueue(caller, (unsigned char *)b, len, NULL, 0); dbus_free(b); ep_update(caller); }
+                dbus_message_unref(r);
+            }
+            for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+            free(held[i].bytes); free(held[i].fds);
+            continue;
+        }
+        /* IMPLICIT: re-route the captured (already sender-stamped) message. */
+        sdbus_wire_msg w2;
+        if (sdbus_wire_parse(held[i].bytes, held[i].len, &w2) == held[i].len && caller) {
+            int targets[MAX_TARGETS], synth2 = 0, denied2 = 0;
+            int nt = sdbus_route_targets(&w2, caller, g_names, g_conns, g_nconns,
+                                         g_policy, g_replies, &synth2, &denied2, targets, MAX_TARGETS);
+            for (int k = 0; k < nt; k++) {
+                sdbus_conn *dst = conn_by_id(targets[k]);
+                if (!dst) continue;
+                if (k == 0 && held[i].nfds > 0) sdbus_conn_enqueue(dst, held[i].bytes, held[i].len, held[i].fds, held[i].nfds);
+                else                            sdbus_conn_enqueue(dst, held[i].bytes, held[i].len, NULL, 0);
+                ep_update(dst);
+            }
+            if (!(held[i].nfds > 0 && nt > 0)) for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+        } else {
+            for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+        }
+        free(held[i].bytes); free(held[i].fds);
+    }
+    free(held);
+}
+
 static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
     (void)ctx;
     for (int i = 0; i < n; i++) {
@@ -149,6 +209,7 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
                 dbus_message_append_args(s, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
                 enqueue_signal(o, s); dbus_message_unref(s);
             }
+            release_activation(name);          /* deliver anything held for this name */
         }
     }
 }
@@ -187,6 +248,21 @@ static void send_no_reply_to(int caller_id, uint32_t reply_serial, const char *t
     ep_update(caller);
 }
 
+/* reply an error to each held caller of an activation that failed, and free the
+   held array (bytes/fds owned by the array). */
+static void fail_held(sdbus_held_msg *held, int n, const char *errname, const char *text) {
+    for (int i = 0; i < n; i++) {
+        sdbus_conn *caller = conn_by_id(held[i].caller_id);
+        if (caller && held[i].expects_reply) {
+            synth_error_wire(caller, held[i].serial, errname, text);
+            ep_update(caller);
+        }
+        for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+        free(held[i].bytes); free(held[i].fds);
+    }
+    free(held);
+}
+
 /* drop this message's fds from the head of pending_fds; close them unless they
    were transferred to an outbound chunk (which will close them after sending). */
 static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
@@ -195,6 +271,53 @@ static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
     if (!transferred) for (int i = 0; i < nfds; i++) close(c->pending_fds[i]);
     for (int i = nfds; i < c->n_pending_fds; i++) c->pending_fds[i - nfds] = c->pending_fds[i];
     c->n_pending_fds -= nfds;
+}
+
+/* If w->destination is an activatable name with no current owner, capture this
+   message (reforwarded bytes + dup'd fds + caller + serial), spawn the service if
+   not already spawning, and return 1 (message is held, not answered). Return 0 if
+   the name is not activatable (caller emits ServiceUnknown as before). The dup'd
+   fds are owned by the held copy; the caller still consumes the originals. */
+static int activate_or_hold(sdbus_conn *c, sdbus_wire_msg *w,
+                            const unsigned char *raw, int rawlen, int nfds) {
+    (void)rawlen;
+    if (!w->destination) return 0;
+    const sdbus_svc_ent *e = sdbus_svctab_find(g_svctab, w->destination);
+    if (!e) return 0;
+
+    /* capture the reforwarded (sender-stamped) bytes so release re-injects a
+       ready-to-route message. */
+    unsigned char *fwd = NULL; int fwlen = 0;
+    if (sdbus_wire_reforward(raw, w, c->unique, &fwd, &fwlen) != 0) return 0;
+
+    sdbus_held_msg m = {0};
+    m.bytes = fwd; m.len = fwlen;
+    m.caller_id = c->id; m.serial = w->serial;
+    m.expects_reply = !(w->flags & SDBUS_FLAG_NO_REPLY);
+    m.kind = SDBUS_HELD_IMPLICIT;
+    if (nfds > 0) {
+        m.fds = malloc(nfds * sizeof(int));
+        for (int i = 0; i < nfds; i++) m.fds[i] = dup(c->pending_fds[i]);
+        m.nfds = nfds;
+    }
+
+    sdbus_pending_act *pa = sdbus_acts_find(g_acts, w->destination);
+    if (!pa) {
+        pid_t pid = spawn_service(e, g_bus_addr);
+        if (pid < 0) {                          /* fork failed -> ServiceUnknown path */
+            free(fwd);
+            for (int i = 0; i < m.nfds; i++) close(m.fds[i]);
+            free(m.fds);
+            return 0;
+        }
+        pa = sdbus_acts_begin(g_acts, w->destination, pid,
+                              sdbus__now_ms() + SDBUS_SPAWN_TIMEOUT_MS);
+    }
+    sdbus_acts_hold(pa, &m);        /* deep-copies bytes + fds */
+    free(fwd);
+    for (int i = 0; i < m.nfds; i++) close(m.fds[i]);
+    free(m.fds);
+    return 1;
 }
 
 /* ---- process one fully-buffered message (parsed header w, raw bytes) ---- */
@@ -215,6 +338,57 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
     int to_driver = w->destination && !strcmp(w->destination, SDBUS_DRIVER_NAME);
     if (!w->destination && w->interface && !strcmp(w->interface, "org.freedesktop.DBus.Peer"))
         to_driver = 1;   /* Peer methods (Ping/GetMachineId) may omit the destination */
+
+    if (to_driver && w->member && !strcmp(w->member, "StartServiceByName")) {
+        /* explicit activation: arg0 = target name, arg1 = flags (su) */
+        sdbus_msg dm;
+        const char *target = NULL;
+        dbus_uint32_t sflags = 0;
+        int parsed = (sdbus_codec_take(raw, rawlen, &dm) == rawlen);
+        if (parsed) {
+            DBusError e; dbus_error_init(&e);
+            if (!dbus_message_get_args(dm.msg, &e, DBUS_TYPE_STRING, &target,
+                                       DBUS_TYPE_UINT32, &sflags, DBUS_TYPE_INVALID)) {
+                dbus_error_free(&e); target = NULL;
+            }
+        }
+        if (!target) {
+            synth_error_wire(c, w->serial, DBUS_ERROR_INVALID_ARGS, "StartServiceByName needs a name");
+        } else if (sdbus_names_owner(g_names, target) >= 0) {
+            DBusMessage *r = dbus_message_new(DBUS_MESSAGE_TYPE_METHOD_RETURN);
+            dbus_message_set_reply_serial(r, w->serial);
+            dbus_message_set_serial(r, ++g_bcast_serial);
+            dbus_message_set_sender(r, SDBUS_DRIVER_NAME);
+            if (c->unique) dbus_message_set_destination(r, c->unique);
+            dbus_uint32_t code = DBUS_START_REPLY_ALREADY_RUNNING;
+            dbus_message_append_args(r, DBUS_TYPE_UINT32, &code, DBUS_TYPE_INVALID);
+            char *b = NULL; int len = 0;
+            if (dbus_message_marshal(r, &b, &len)) { sdbus_conn_enqueue(c, (unsigned char *)b, len, NULL, 0); dbus_free(b); }
+            dbus_message_unref(r);
+        } else {
+            const sdbus_svc_ent *ent = sdbus_svctab_find(g_svctab, target);
+            if (!ent) {
+                synth_error_wire(c, w->serial, DBUS_ERROR_SERVICE_UNKNOWN, "no such activatable service");
+            } else {
+                sdbus_pending_act *pa = sdbus_acts_find(g_acts, target);
+                if (!pa) {
+                    pid_t pid = spawn_service(ent, g_bus_addr);
+                    if (pid < 0) synth_error_wire(c, w->serial, DBUS_ERROR_SPAWN_FAILED, "fork failed");
+                    else pa = sdbus_acts_begin(g_acts, target, pid, sdbus__now_ms() + SDBUS_SPAWN_TIMEOUT_MS);
+                }
+                if (pa) {
+                    sdbus_held_msg m = {0};
+                    m.caller_id = c->id; m.serial = w->serial; m.expects_reply = 1;
+                    m.kind = SDBUS_HELD_EXPLICIT;
+                    sdbus_acts_hold(pa, &m);
+                }
+            }
+        }
+        if (parsed) sdbus_msg_free(&dm);
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
 
     if (to_driver) {
         /* driver methods never carry fds -> libdbus can demarshal to read args */
@@ -247,7 +421,8 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
     if (denied) {
         synth_error_wire(c, w->serial, DBUS_ERROR_ACCESS_DENIED, "rejected by policy");
     } else if (synth) {
-        synth_error_wire(c, w->serial, DBUS_ERROR_SERVICE_UNKNOWN, "name has no owner");
+        if (!activate_or_hold(c, w, raw, rawlen, nfds))
+            synth_error_wire(c, w->serial, DBUS_ERROR_SERVICE_UNKNOWN, "name has no owner");
     } else if (nt > 0) {
         unsigned char *bytes = NULL; int len = 0;
         if (sdbus_wire_reforward(raw, w, c->unique, &bytes, &len) == 0) {
@@ -376,12 +551,42 @@ static int make_listen_socket(const char *path) {
     return fd;
 }
 
+/* fork+exec an activatable service, dropping to its User= before exec. Returns
+   the child pid, or -1 if fork failed. Matches stock dbus-daemon: clean env with
+   DBUS_STARTER_*; all broker fds are CLOEXEC so exec closes them. */
+static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid > 0) return pid;
+
+    /* --- child --- */
+    setsid();
+    struct passwd *pw = getpwnam(e->user);
+    if (!pw) _exit(127);                 /* unknown User= -> fail closed, never run as root */
+    if (pw->pw_uid != 0) {
+        if (initgroups(e->user, pw->pw_gid) != 0) _exit(127);
+        if (setgid(pw->pw_gid) != 0) _exit(127);
+        if (setuid(pw->pw_uid) != 0) _exit(127);
+    }
+    char starter[320];
+    snprintf(starter, sizeof starter, "DBUS_STARTER_ADDRESS=%s", bus_addr);
+    char *env[] = {
+        (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
+        starter,
+        (char *)"DBUS_STARTER_BUS_TYPE=system",
+        NULL
+    };
+    execve(e->argv[0], e->argv, env);
+    _exit(127);                         /* exec failed */
+}
+
 int main(int argc, char **argv) {
     int system_bus = 0;
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--system")) system_bus = 1;
 
     const char *sock = getenv("SCHEMA_DBUS_SOCKET");
     if (!sock) sock = DEFAULT_SOCKET;
+    snprintf(g_bus_addr, sizeof g_bus_addr, "unix:path=%s", sock);
 
     /* load the dissolved policy: prefer a precompiled file, else dissolve live */
     const char *polfile = getenv("SCHEMA_DBUS_POLICY");
@@ -406,14 +611,29 @@ int main(int argc, char **argv) {
     free(poltext);
     g_names = sdbus_names_new();
     g_replies = sdbus_replies_new();
+    const char *svcdir = getenv("SCHEMA_DBUS_SVCDIR");
+    g_svctab = sdbus_svctab_parse_dir(svcdir ? svcdir : SDBUS_SVC_DIR);
+    g_acts = sdbus_acts_new();
+    fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 
     int lfd = make_listen_socket(sock);
     if (lfd < 0) { fprintf(stderr, "schema-dbus: cannot bind %s: %s\n", sock, strerror(errno)); return 1; }
+
+    /* SIGCHLD via signalfd so activated children are reaped in the event loop */
+    static int sigfd_marker;
+    sigset_t scmask;
+    sigemptyset(&scmask);
+    sigaddset(&scmask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &scmask, NULL);
+    int sigfd = signalfd(-1, &scmask, SFD_NONBLOCK | SFD_CLOEXEC);
 
     g_epfd = epoll_create1(EPOLL_CLOEXEC);
     struct epoll_event lev = {0};
     lev.events = EPOLLIN; lev.data.ptr = NULL;   /* NULL ptr marks the listen fd */
     epoll_ctl(g_epfd, EPOLL_CTL_ADD, lfd, &lev);
+    struct epoll_event sev = {0};
+    sev.events = EPOLLIN; sev.data.ptr = &sigfd_marker;
+    epoll_ctl(g_epfd, EPOLL_CTL_ADD, sigfd, &sev);
 
     int vmaj = 0, vmin = 0, vmic = 0;
     dbus_get_version(&vmaj, &vmin, &vmic);
@@ -425,6 +645,8 @@ int main(int argc, char **argv) {
         /* block until an event, or wake at the next pending-reply deadline */
         int wait_ms = -1;
         long nd = sdbus_replies_next_deadline(g_replies);
+        long ad = sdbus_acts_next_deadline(g_acts);
+        if (ad >= 0 && (nd < 0 || ad < nd)) nd = ad;
         if (nd >= 0) { long now = sdbus__now_ms(); wait_ms = nd <= now ? 0 : (int)(nd - now); }
         int nev = epoll_wait(g_epfd, evs, 64, wait_ms);
         if (nev < 0) { if (errno == EINTR) continue; break; }
@@ -434,6 +656,20 @@ int main(int argc, char **argv) {
                     int cfd = accept4(lfd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (cfd < 0) break;
                     add_conn(cfd);
+                }
+                continue;
+            }
+            if (evs[i].data.ptr == &sigfd_marker) {   /* SIGCHLD: reap activated children */
+                struct signalfd_siginfo si;
+                while (read(sigfd, &si, sizeof si) == (ssize_t)sizeof si) { }  /* drain */
+                int st; pid_t p;
+                while ((p = waitpid(-1, &st, WNOHANG)) > 0) {
+                    sdbus_pending_act *pa = sdbus_acts_by_pid(g_acts, (int)p);
+                    if (!pa) continue;               /* exited after claiming its name: normal */
+                    sdbus_held_msg *held = NULL; int nh = 0;
+                    sdbus_acts_take(g_acts, pa->name, &held, &nh);
+                    fail_held(held, nh, DBUS_ERROR_SPAWN_CHILD_EXITED,
+                              "Activated service exited before acquiring its name");
                 }
                 continue;
             }
@@ -457,6 +693,14 @@ int main(int argc, char **argv) {
                 send_no_reply_to(callers[i], serials[i],
                     "Did not receive a reply within the bus timeout");
             free(callers); free(serials);
+        }
+        /* time out activations whose service never claimed its name */
+        for (;;) {
+            long now = sdbus__now_ms();
+            sdbus_held_msg *held = NULL; int nh = 0;
+            if (!sdbus_acts_reap_expired(g_acts, now, &held, &nh)) break;
+            fail_held(held, nh, DBUS_ERROR_TIMED_OUT,
+                      "Activated service failed to acquire its name in time");
         }
         /* reap connections whose outbound backlog overflowed the cap. Swept after
            the event batch (and after the NoReply enqueues above) so no evs[] entry
