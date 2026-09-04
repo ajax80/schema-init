@@ -103,8 +103,56 @@ int main(void) {
     dbus_message_append_args(am, DBUS_TYPE_STRING, &rule, DBUS_TYPE_INVALID);
     r = do_call(&c, names, am);
     assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_METHOD_RETURN);
-    assert(c.matches && sdbus_match_signal(c.matches, "org.freedesktop.DBus", "X", "/p", "s", NULL, 0) == 1);
+    assert(c.matches && sdbus_match_signal(c.matches, "org.freedesktop.DBus", "X", "/p", "s", NULL, 0, NULL) == 1);
     sdbus_msg_free(&r); dbus_message_unref(am);
+
+    /* GetConnectionCredentials(:1.1) -> a{sv} carrying UnixUserID, ProcessID,
+       UnixGroupIDs (the 60x-dominant credentials method on the live bus) */
+    c.uid = 1000; c.pid = 4242;
+    c.gids[0] = 1000; c.gids[1] = 10; c.n_gids = 2;
+    DBusMessage *gcc = mkcall("GetConnectionCredentials");
+    const char *self = ":1.1";
+    dbus_message_append_args(gcc, DBUS_TYPE_STRING, &self, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, gcc);
+    assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_METHOD_RETURN);
+    {
+        DBusMessageIter it, arr;
+        assert(dbus_message_iter_init(r.msg, &it));
+        assert(dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_ARRAY);
+        int saw_uid = 0, saw_pid = 0, saw_gids = 0;
+        dbus_uint32_t uid = 0, pid = 0; int ngids = 0;
+        dbus_message_iter_recurse(&it, &arr);
+        while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_DICT_ENTRY) {
+            DBusMessageIter ent, var;
+            dbus_message_iter_recurse(&arr, &ent);
+            const char *key = NULL;
+            dbus_message_iter_get_basic(&ent, &key);
+            dbus_message_iter_next(&ent);
+            dbus_message_iter_recurse(&ent, &var);
+            if (!strcmp(key, "UnixUserID")) { dbus_message_iter_get_basic(&var, &uid); saw_uid = 1; }
+            else if (!strcmp(key, "ProcessID")) { dbus_message_iter_get_basic(&var, &pid); saw_pid = 1; }
+            else if (!strcmp(key, "UnixGroupIDs")) {
+                DBusMessageIter au; dbus_message_iter_recurse(&var, &au);
+                while (dbus_message_iter_get_arg_type(&au) == DBUS_TYPE_UINT32) {
+                    ngids++; dbus_message_iter_next(&au);
+                }
+                saw_gids = 1;
+            }
+            dbus_message_iter_next(&arr);
+        }
+        assert(saw_uid && uid == 1000);
+        assert(saw_pid && pid == 4242);
+        assert(saw_gids && ngids == 2);
+    }
+    sdbus_msg_free(&r); dbus_message_unref(gcc);
+
+    /* GetConnectionCredentials for an unowned name -> NameHasNoOwner */
+    DBusMessage *gccn = mkcall("GetConnectionCredentials");
+    dbus_message_append_args(gccn, DBUS_TYPE_STRING, &miss, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, gccn);
+    assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_ERROR);
+    assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_NAME_HAS_NO_OWNER));
+    sdbus_msg_free(&r); dbus_message_unref(gccn);
 
     /* StartServiceByName -> ServiceUnknown error (v1.1 deferral) */
     DBusMessage *ssn = mkcall("StartServiceByName");

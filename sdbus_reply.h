@@ -45,6 +45,22 @@ static inline int sdbus_replies_match(sdbus_replies *t, int from, uint32_t reply
     return -1;
 }
 
+/* Collect the callers still awaiting a reply from `callee` into callers[]/serials[]
+   (up to max), skipping any whose caller is `except` (the disconnecting conn
+   itself). Non-mutating: the caller purges afterward. Returns the count. Used to
+   synthesize a NoReply error to each stranded caller when a callee vanishes. */
+static inline int sdbus_replies_pending_on(sdbus_replies *t, int callee, int except,
+                                           int *callers, uint32_t *serials, int max) {
+    int n = 0;
+    for (int i = 0; i < t->n && n < max; i++)
+        if (t->ents[i].live && t->ents[i].callee == callee && t->ents[i].caller != except) {
+            callers[n] = t->ents[i].caller;
+            serials[n] = t->ents[i].serial;
+            n++;
+        }
+    return n;
+}
+
 /* Purge every entry where conn is caller or callee (on disconnect). */
 static inline void sdbus_replies_purge(sdbus_replies *t, int conn) {
     for (int i = 0; i < t->n; i++)

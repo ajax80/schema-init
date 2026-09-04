@@ -28,7 +28,6 @@
 
 #define DEFAULT_SOCKET "/run/dbus/system_bus_socket"
 #define MAX_TARGETS 256
-#define OUT_BACKPRESSURE_CAP (16 * 1024 * 1024)
 
 static sdbus_names   *g_names;
 static sdbus_replies *g_replies;
@@ -83,11 +82,13 @@ static int flush_conn(sdbus_conn *c) {
             ch->nfds = 0;                              /* don't re-close on teardown */
         }
         ch->off += (int)n;
+        c->oq_bytes -= (int)n;
         if (ch->off >= ch->len) { free(ch->b); c->oq_head++; }
         else return 0;                                 /* partial; wait for writable */
     }
     /* queue drained; compact */
     c->n_oq = c->oq_head = 0;
+    c->oq_bytes = 0;
     free(c->oq); c->oq = NULL;
     return 0;
 }
@@ -123,7 +124,7 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
             sdbus_conn *cc = g_conns[j];
             if (!cc->matches) continue;
             if (!sdbus_match_signal(cc->matches, SDBUS_DRIVER_NAME, "NameOwnerChanged",
-                                    SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, NULL, 0))
+                                    SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, NULL, 0, name))
                 continue;
             DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME,
                                                      "NameOwnerChanged");
@@ -292,6 +293,24 @@ static void remove_conn(sdbus_conn *c) {
     c->unique = NULL;   /* names just freed this string; don't let signals deref it */
     if (nt) broadcast_transitions(NULL, t, nt);
     free(t);
+    /* callee vanished: any caller still awaiting a reply from it would hang until
+       its own timeout (many clients set none), so synthesize a NoReply error to
+       each stranded caller before the entries are purged. */
+    if (g_replies->n > 0) {
+        int cap = g_replies->n;
+        int *callers = malloc(cap * sizeof *callers);
+        uint32_t *serials = malloc(cap * sizeof *serials);
+        int np = sdbus_replies_pending_on(g_replies, c->id, c->id, callers, serials, cap);
+        for (int i = 0; i < np; i++) {
+            sdbus_conn *caller = conn_by_id(callers[i]);
+            if (caller) {
+                synth_error_wire(caller, serials[i], DBUS_ERROR_NO_REPLY,
+                    "Message recipient disconnected from message bus without replying");
+                ep_update(caller);
+            }
+        }
+        free(callers); free(serials);
+    }
     sdbus_replies_purge(g_replies, c->id);
     for (int i = 0; i < c->n_pending_fds; i++) close(c->pending_fds[i]);
     close(c->fd);
@@ -416,10 +435,14 @@ int main(int argc, char **argv) {
                 if (flush_conn(c) < 0) { remove_conn(c); continue; }
                 ep_update(c);
             }
-            /* backpressure: a stuck reader must not wedge the bus */
-            int backlog = 0;
-            for (int q = c->oq_head; q < c->n_oq; q++) backlog += c->oq[q].len - c->oq[q].off;
-            if (backlog > OUT_BACKPRESSURE_CAP) remove_conn(c);
+        }
+        /* reap connections whose outbound backlog overflowed the cap. Swept after
+           the event batch so no evs[] entry can reference a freed conn; looped
+           because a reap's disconnect signals can push another slow reader over. */
+        for (int swept = 1; swept; ) {
+            swept = 0;
+            for (int j = 0; j < g_nconns; j++)
+                if (g_conns[j]->oq_over) { remove_conn(g_conns[j]); swept = 1; break; }
         }
     }
     return 0;

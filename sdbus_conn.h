@@ -18,6 +18,11 @@
 
 #define SDBUS_MAX_GIDS 64
 #define SDBUS_MAX_PENDING_FDS 16
+/* per-connection outbound backlog ceiling. A reader that stops draining must not
+   grow the broker's memory without bound: the broadcast path keeps enqueuing onto
+   it (25k PropertiesChanged/session), and a stuck reader emits no epoll event of
+   its own, so the cap is enforced here, at enqueue, not on the victim's events. */
+#define SDBUS_MAX_OUTGOING_BYTES (16 * 1024 * 1024)
 
 /* one queued outbound message: its bytes and the unix fds bound to it. Keeping
    fds per-chunk is what makes SCM_RIGHTS relay correct under partial writes. */
@@ -33,17 +38,30 @@ typedef struct {
     unsigned char *out; int out_len, out_cap;   /* scratch for auth/driver bytes */
     int pending_fds[SDBUS_MAX_PENDING_FDS]; int n_pending_fds;   /* received, awaiting a full msg */
     sdbus_outchunk *oq; int n_oq, oq_head;      /* ordered outbound queue */
+    long oq_bytes;                              /* unsent bytes across oq[oq_head..n_oq) */
+    int oq_over;                                /* backlog exceeded the cap -> reap */
     sdbus_matchset *matches;
 } sdbus_conn;
 
-/* enqueue one outbound message (its bytes are copied). fds may be NULL. */
+/* enqueue one outbound message (its bytes are copied). fds may be NULL. Once the
+   unsent backlog would exceed the cap the message is dropped and the connection is
+   flagged for reap: silently dropping only this message would desync its byte
+   stream, so the whole connection goes. fds handed to us are ours to close either
+   way, so close them on the drop path to avoid a leak. */
 static inline void sdbus_conn_enqueue(sdbus_conn *c, const unsigned char *b, int len,
                                       const int *fds, int nfds) {
+    int nf = nfds > SDBUS_MAX_PENDING_FDS ? SDBUS_MAX_PENDING_FDS : nfds;
+    if (c->oq_bytes + len > SDBUS_MAX_OUTGOING_BYTES) {
+        c->oq_over = 1;
+        for (int i = 0; i < nf; i++) close(fds[i]);
+        return;
+    }
     c->oq = realloc(c->oq, (c->n_oq + 1) * sizeof *c->oq);
     sdbus_outchunk *ch = &c->oq[c->n_oq++];
     ch->b = malloc(len); memcpy(ch->b, b, len); ch->len = len; ch->off = 0;
-    ch->nfds = nfds > SDBUS_MAX_PENDING_FDS ? SDBUS_MAX_PENDING_FDS : nfds;
+    ch->nfds = nf;
     for (int i = 0; i < ch->nfds; i++) ch->fds[i] = fds[i];
+    c->oq_bytes += len;
 }
 
 /* does the connection have unsent outbound data? */
@@ -115,6 +133,7 @@ static inline void sdbus_conn_free_fields(sdbus_conn *c) {
         free(c->oq[i].b);
     }
     free(c->oq); c->oq = NULL; c->n_oq = c->oq_head = 0;
+    c->oq_bytes = 0; c->oq_over = 0;
     if (c->matches) sdbus_match_free(c->matches);
     c->in = c->out = NULL; c->matches = NULL;
 }

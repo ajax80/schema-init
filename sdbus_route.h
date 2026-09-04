@@ -100,7 +100,8 @@ static inline int sdbus_route_targets(sdbus_wire_msg *msg, sdbus_conn *sender,
             if (cc->id == sender->id) continue;
             if (cc->matches && sdbus_match_signal(cc->matches, msg->interface,
                                                   msg->member, msg->path,
-                                                  sender->unique, snames, n_snames))
+                                                  sender->unique, snames, n_snames,
+                                                  msg->arg0))
                 targets[n++] = cc->id;
         }
         free(snames);

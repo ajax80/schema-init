@@ -48,6 +48,27 @@ int main(void) {
     assert(sdbus_replies_match(t2, 3, 5, -1) == 20);
     sdbus_replies_free(t2);
 
+    /* pending_on: when a callee vanishes, enumerate the callers awaiting its reply
+       so each can be sent a NoReply. Skip the disconnecting conn itself (except). */
+    sdbus_replies *t3 = sdbus_replies_new();
+    sdbus_replies_record(t3, 9, 100, 1);   /* caller 1 awaits callee 9 */
+    sdbus_replies_record(t3, 9, 101, 2);   /* caller 2 awaits callee 9 */
+    sdbus_replies_record(t3, 9, 102, 9);   /* callee 9 called itself */
+    sdbus_replies_record(t3, 5, 103, 3);   /* unrelated callee */
+    int callers[8]; uint32_t serials[8];
+    int np = sdbus_replies_pending_on(t3, 9, 9, callers, serials, 8);
+    assert(np == 2);                        /* callers 1 and 2, not the self-call (except=9) */
+    int got1 = 0, got2 = 0;
+    for (int i = 0; i < np; i++) {
+        if (callers[i] == 1 && serials[i] == 100) got1 = 1;
+        if (callers[i] == 2 && serials[i] == 101) got2 = 1;
+    }
+    assert(got1 && got2);
+    /* the enumerator must not mutate: entries still route normally afterward */
+    assert(sdbus_replies_match(t3, 9, 100, 1) == 1);
+    assert(sdbus_replies_match(t3, 5, 103, -1) == 3);
+    sdbus_replies_free(t3);
+
     printf("all sdbus_reply tests passed\n");
     return 0;
 }

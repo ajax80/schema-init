@@ -28,8 +28,46 @@ int main(void) {
     assert(m.interface && !strcmp(m.interface, "org.example.If"));
     assert(m.member && !strcmp(m.member, "DoThing"));
     assert(m.signature && !strcmp(m.signature, "s"));
+    assert(m.arg0 && !strcmp(m.arg0, "payload"));    /* first string arg extracted */
     assert(m.has_reply_serial == 0);
     assert(sdbus_wire_n_fds(&m) == 0);
+
+    /* a real PropertiesChanged signal: arg0 is the interface name the change is
+       for, which is what property-watch match rules filter on */
+    DBusMessage *pc = dbus_message_new_signal("/org/o", "org.freedesktop.DBus.Properties",
+                                              "PropertiesChanged");
+    dbus_message_set_serial(pc, 7);
+    const char *iface = "org.foo.Bar";
+    dbus_message_append_args(pc, DBUS_TYPE_STRING, &iface, DBUS_TYPE_INVALID);
+    char *praw = NULL; int prawlen = 0;
+    assert(dbus_message_marshal(pc, &praw, &prawlen));
+    sdbus_wire_msg mp;
+    assert(sdbus_wire_parse((unsigned char *)praw, prawlen, &mp) == prawlen);
+    assert(mp.type == DBUS_MESSAGE_TYPE_SIGNAL);
+    assert(mp.arg0 && !strcmp(mp.arg0, "org.foo.Bar"));
+    dbus_message_unref(pc); dbus_free(praw);
+
+    /* a signal whose first arg is NOT a string -> arg0 stays NULL */
+    DBusMessage *us = dbus_message_new_signal("/org/o", "org.example.If", "Tick");
+    dbus_message_set_serial(us, 8);
+    dbus_uint32_t n = 99;
+    dbus_message_append_args(us, DBUS_TYPE_UINT32, &n, DBUS_TYPE_INVALID);
+    char *uraw = NULL; int urawlen = 0;
+    assert(dbus_message_marshal(us, &uraw, &urawlen));
+    sdbus_wire_msg mu;
+    assert(sdbus_wire_parse((unsigned char *)uraw, urawlen, &mu) == urawlen);
+    assert(mu.arg0 == NULL);
+    dbus_message_unref(us); dbus_free(uraw);
+
+    /* a signal with no body at all -> arg0 NULL, no over-read */
+    DBusMessage *eb = dbus_message_new_signal("/org/o", "org.example.If", "Empty");
+    dbus_message_set_serial(eb, 9);
+    char *eraw = NULL; int erawlen = 0;
+    assert(dbus_message_marshal(eb, &eraw, &erawlen));
+    sdbus_wire_msg me;
+    assert(sdbus_wire_parse((unsigned char *)eraw, erawlen, &me) == erawlen);
+    assert(me.arg0 == NULL);
+    dbus_message_unref(eb); dbus_free(eraw);
 
     /* reforward with a stamped sender; libdbus must demarshal the result and see
        the new sender plus every original field and the body intact */

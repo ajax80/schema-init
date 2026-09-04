@@ -12,6 +12,7 @@
 
 typedef struct {
     char *type, *interface, *member, *path, *path_namespace, *sender;
+    char *arg0, *arg0namespace;
     char *raw;                 /* verbatim rule, for exact-string removal */
 } sdbus_match_rule;
 
@@ -22,7 +23,8 @@ static inline sdbus_matchset *sdbus_match_new(void) { return calloc(1, sizeof(sd
 
 static inline void sdbus__rule_clear(sdbus_match_rule *r) {
     free(r->type); free(r->interface); free(r->member);
-    free(r->path); free(r->path_namespace); free(r->sender); free(r->raw);
+    free(r->path); free(r->path_namespace); free(r->sender);
+    free(r->arg0); free(r->arg0namespace); free(r->raw);
     memset(r, 0, sizeof *r);
 }
 
@@ -55,6 +57,8 @@ static inline int sdbus__parse_rule(const char *rule, sdbus_match_rule *r) {
         else if (klen == 4 && !strncmp(k, "path", 4)) slot = &r->path;
         else if (klen == 14 && !strncmp(k, "path_namespace", 14)) slot = &r->path_namespace;
         else if (klen == 6 && !strncmp(k, "sender", 6)) slot = &r->sender;
+        else if (klen == 4 && !strncmp(k, "arg0", 4)) slot = &r->arg0;
+        else if (klen == 13 && !strncmp(k, "arg0namespace", 13)) slot = &r->arg0namespace;
         if (slot) { free(*slot); *slot = val; } else free(val);   /* unknown key ignored */
     }
     r->raw = strdup(rule);
@@ -108,12 +112,29 @@ static inline int sdbus__sender_match(const char *constraint, const char *uniq,
     return 0;
 }
 
+/* arg0 constrains the signal's first body argument (a string): arg0= is exact;
+   arg0namespace= matches the value or any dotted name under it (NameOwnerChanged
+   namespace watches). A rule with neither is unconstrained. arg0 is NULL when the
+   signal's first argument is not a string, so an arg-constrained rule never matches
+   such a signal. */
+static inline int sdbus__arg0_match(const sdbus_match_rule *r, const char *arg0) {
+    if (r->arg0 && (!arg0 || strcmp(r->arg0, arg0) != 0)) return 0;
+    if (r->arg0namespace) {
+        if (!arg0) return 0;
+        size_t nl = strlen(r->arg0namespace);
+        if (strncmp(r->arg0namespace, arg0, nl) != 0) return 0;
+        if (arg0[nl] != '\0' && arg0[nl] != '.') return 0;
+    }
+    return 1;
+}
+
 /* 1 if any stored rule accepts this signal. sender_uniq is the emitter's unique
-   name; sender_owned/n_owned are the well-known names it owns (may be NULL/0). */
+   name; sender_owned/n_owned are the well-known names it owns (may be NULL/0).
+   arg0 is the signal's first body argument when it is a string, else NULL. */
 static inline int sdbus_match_signal(sdbus_matchset *m, const char *interface,
                               const char *member, const char *path,
                               const char *sender_uniq, const char **sender_owned,
-                              int n_owned) {
+                              int n_owned, const char *arg0) {
     for (int i = 0; i < m->n; i++) {
         sdbus_match_rule *r = &m->rules[i];
         if (r->type && strcmp(r->type, "signal") != 0) continue;
@@ -122,6 +143,7 @@ static inline int sdbus_match_signal(sdbus_matchset *m, const char *interface,
         if (!sdbus__eqornull(r->path, path)) continue;
         if (!sdbus__sender_match(r->sender, sender_uniq, sender_owned, n_owned)) continue;
         if (!sdbus__ns_match(r->path_namespace, path)) continue;
+        if (!sdbus__arg0_match(r, arg0)) continue;
         return 1;
     }
     return 0;

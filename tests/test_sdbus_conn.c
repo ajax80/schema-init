@@ -44,6 +44,25 @@ int main(void) {
     assert(fd_open(survivor));                  /* untouched by teardown */
     close(survivor); close(keep[1]);
 
+    /* a normal enqueue tracks its unsent bytes and never flags overflow */
+    sdbus_conn c3; memset(&c3, 0, sizeof c3);
+    sdbus_conn_enqueue(&c3, body, sizeof body, NULL, 0);
+    assert(c3.oq_bytes == (long)sizeof body && c3.oq_over == 0 && c3.n_oq == 1);
+    sdbus_conn_free_fields(&c3);
+    assert(c3.oq_bytes == 0 && c3.oq_over == 0);
+
+    /* backlog cap: a message that would exceed the ceiling is dropped (not queued),
+       the connection is flagged for reap, and the fd it carried is closed. The
+       oversized len never reaches the memcpy because the drop path returns first. */
+    sdbus_conn c4; memset(&c4, 0, sizeof c4);
+    int big[2]; assert(pipe(big) == 0);
+    int bigfd = big[0];
+    sdbus_conn_enqueue(&c4, body, SDBUS_MAX_OUTGOING_BYTES + 1, &bigfd, 1);
+    assert(c4.oq_over == 1 && c4.n_oq == 0 && c4.oq_bytes == 0);
+    assert(!fd_open(bigfd));                     /* dropped msg's fd closed, no leak */
+    close(big[1]);
+    sdbus_conn_free_fields(&c4);
+
     printf("all sdbus_conn tests passed\n");
     return 0;
 }

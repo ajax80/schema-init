@@ -28,6 +28,7 @@ typedef struct {
     uint32_t serial;
     uint32_t reply_serial; int has_reply_serial;
     const char *path, *interface, *member, *error_name, *destination, *sender, *signature;
+    const char *arg0;          /* first body arg iff a string/objpath, else NULL */
     uint32_t unix_fds; int has_unix_fds;
     int body_offset, body_len, total_len;
 } sdbus_wire_msg;
@@ -105,6 +106,17 @@ static inline int sdbus_wire_parse(const unsigned char *buf, int len, sdbus_wire
             case 9: m->unix_fds = uval; m->has_unix_fds = 1; break;
             default: break;                          /* ignore unknown fields */
         }
+    }
+    /* extract arg0 as a C string when the body's first argument is a string or
+       object path — the only arg0 kinds a match rule constrains (PropertiesChanged
+       carries the interface name, NameOwnerChanged the bus name). Pointer into buf,
+       same lifetime as the header string fields. */
+    if (m->signature && (m->signature[0] == 's' || m->signature[0] == 'o')
+            && m->body_len >= 5) {
+        const unsigned char *b = buf + m->body_offset;   /* 8-aligned => 4-aligned */
+        uint32_t sl = sdbus__rd_u32(b, m->endian_le);
+        if (sl < (uint32_t)(m->body_len - 4) && b[4 + sl] == 0)
+            m->arg0 = (const char *)b + 4;
     }
     return m->total_len;
 }

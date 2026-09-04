@@ -81,6 +81,48 @@ static inline void sdbus__reply_strv(sdbus_conn *c, DBusMessage *call,
     sdbus__driver_emit(c, r);
 }
 
+/* one a{sv} entry whose value is a single uint32 wrapped in a variant */
+static inline void sdbus__cred_u32(DBusMessageIter *arr, const char *key, dbus_uint32_t v) {
+    DBusMessageIter ent, var;
+    dbus_message_iter_open_container(arr, DBUS_TYPE_DICT_ENTRY, NULL, &ent);
+    dbus_message_iter_append_basic(&ent, DBUS_TYPE_STRING, &key);
+    dbus_message_iter_open_container(&ent, DBUS_TYPE_VARIANT, "u", &var);
+    dbus_message_iter_append_basic(&var, DBUS_TYPE_UINT32, &v);
+    dbus_message_iter_close_container(&ent, &var);
+    dbus_message_iter_close_container(arr, &ent);
+}
+
+/* one a{sv} entry whose value is an array of uint32 (au) wrapped in a variant */
+static inline void sdbus__cred_au(DBusMessageIter *arr, const char *key,
+                                  const int *ids, int n) {
+    DBusMessageIter ent, var, au;
+    dbus_message_iter_open_container(arr, DBUS_TYPE_DICT_ENTRY, NULL, &ent);
+    dbus_message_iter_append_basic(&ent, DBUS_TYPE_STRING, &key);
+    dbus_message_iter_open_container(&ent, DBUS_TYPE_VARIANT, "au", &var);
+    dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "u", &au);
+    for (int i = 0; i < n; i++) {
+        dbus_uint32_t g = (dbus_uint32_t)ids[i];
+        dbus_message_iter_append_basic(&au, DBUS_TYPE_UINT32, &g);
+    }
+    dbus_message_iter_close_container(&var, &au);
+    dbus_message_iter_close_container(&ent, &var);
+    dbus_message_iter_close_container(arr, &ent);
+}
+
+/* GetConnectionCredentials reply: a{sv} of UnixUserID, ProcessID, UnixGroupIDs
+   (the fields SO_PEERCRED + getgrouplist give us; no LinuxSecurityLabel). */
+static inline void sdbus__reply_credentials(sdbus_conn *c, DBusMessage *call, sdbus_conn *o) {
+    DBusMessage *r = dbus_message_new_method_return(call);
+    DBusMessageIter it, arr;
+    dbus_message_iter_init_append(r, &it);
+    dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &arr);
+    sdbus__cred_u32(&arr, "UnixUserID", (dbus_uint32_t)o->uid);
+    sdbus__cred_u32(&arr, "ProcessID", (dbus_uint32_t)o->pid);
+    if (o->n_gids > 0) sdbus__cred_au(&arr, "UnixGroupIDs", o->gids, o->n_gids);
+    dbus_message_iter_close_container(&it, &arr);
+    sdbus__driver_emit(c, r);
+}
+
 static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
         sdbus_names *names, sdbus_conn **all, int n_all,
         sdbus_broadcast_fn broadcast, void *ctx) {
@@ -226,6 +268,20 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
         dbus_uint32_t val = !strcmp(member, "GetConnectionUnixUser")
                           ? (dbus_uint32_t)o->uid : (dbus_uint32_t)o->pid;
         sdbus__reply_uint32(c, m, val);
+        return 0;
+    }
+    if (!strcmp(member, "GetConnectionCredentials")) {
+        const char *name = NULL;
+        DBusError e; dbus_error_init(&e);
+        if (!dbus_message_get_args(m, &e, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID)) {
+            dbus_error_free(&e);
+            sdbus__reply_error(c, m, DBUS_ERROR_INVALID_ARGS, "args");
+            return 0;
+        }
+        int oid = sdbus__resolve_conn_id(names, all, n_all, name);
+        sdbus_conn *o = oid >= 0 ? sdbus__conn_by_id(all, n_all, oid) : NULL;
+        if (!o) { sdbus__reply_error(c, m, DBUS_ERROR_NAME_HAS_NO_OWNER, "no owner"); return 0; }
+        sdbus__reply_credentials(c, m, o);
         return 0;
     }
     if (!strcmp(member, "StartServiceByName")) {   /* v1.1 */
