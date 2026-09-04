@@ -200,6 +200,21 @@ static void send_no_reply_to(int caller_id, uint32_t reply_serial, const char *t
     ep_update(caller);
 }
 
+/* reply an error to each held caller of an activation that failed, and free the
+   held array (bytes/fds owned by the array). */
+static void fail_held(sdbus_held_msg *held, int n, const char *errname, const char *text) {
+    for (int i = 0; i < n; i++) {
+        sdbus_conn *caller = conn_by_id(held[i].caller_id);
+        if (caller && held[i].expects_reply) {
+            synth_error_wire(caller, held[i].serial, errname, text);
+            ep_update(caller);
+        }
+        for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+        free(held[i].bytes); free(held[i].fds);
+    }
+    free(held);
+}
+
 /* drop this message's fds from the head of pending_fds; close them unless they
    were transferred to an outbound chunk (which will close them after sending). */
 static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
@@ -504,10 +519,21 @@ int main(int argc, char **argv) {
     int lfd = make_listen_socket(sock);
     if (lfd < 0) { fprintf(stderr, "schema-dbus: cannot bind %s: %s\n", sock, strerror(errno)); return 1; }
 
+    /* SIGCHLD via signalfd so activated children are reaped in the event loop */
+    static int sigfd_marker;
+    sigset_t scmask;
+    sigemptyset(&scmask);
+    sigaddset(&scmask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &scmask, NULL);
+    int sigfd = signalfd(-1, &scmask, SFD_NONBLOCK | SFD_CLOEXEC);
+
     g_epfd = epoll_create1(EPOLL_CLOEXEC);
     struct epoll_event lev = {0};
     lev.events = EPOLLIN; lev.data.ptr = NULL;   /* NULL ptr marks the listen fd */
     epoll_ctl(g_epfd, EPOLL_CTL_ADD, lfd, &lev);
+    struct epoll_event sev = {0};
+    sev.events = EPOLLIN; sev.data.ptr = &sigfd_marker;
+    epoll_ctl(g_epfd, EPOLL_CTL_ADD, sigfd, &sev);
 
     int vmaj = 0, vmin = 0, vmic = 0;
     dbus_get_version(&vmaj, &vmin, &vmic);
@@ -528,6 +554,20 @@ int main(int argc, char **argv) {
                     int cfd = accept4(lfd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (cfd < 0) break;
                     add_conn(cfd);
+                }
+                continue;
+            }
+            if (evs[i].data.ptr == &sigfd_marker) {   /* SIGCHLD: reap activated children */
+                struct signalfd_siginfo si;
+                while (read(sigfd, &si, sizeof si) == (ssize_t)sizeof si) { }  /* drain */
+                int st; pid_t p;
+                while ((p = waitpid(-1, &st, WNOHANG)) > 0) {
+                    sdbus_pending_act *pa = sdbus_acts_by_pid(g_acts, (int)p);
+                    if (!pa) continue;               /* exited after claiming its name: normal */
+                    sdbus_held_msg *held = NULL; int nh = 0;
+                    sdbus_acts_take(g_acts, pa->name, &held, &nh);
+                    fail_held(held, nh, DBUS_ERROR_SPAWN_CHILD_EXITED,
+                              "Activated service exited before acquiring its name");
                 }
                 continue;
             }
