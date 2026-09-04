@@ -339,6 +339,57 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
     if (!w->destination && w->interface && !strcmp(w->interface, "org.freedesktop.DBus.Peer"))
         to_driver = 1;   /* Peer methods (Ping/GetMachineId) may omit the destination */
 
+    if (to_driver && w->member && !strcmp(w->member, "StartServiceByName")) {
+        /* explicit activation: arg0 = target name, arg1 = flags (su) */
+        sdbus_msg dm;
+        const char *target = NULL;
+        dbus_uint32_t sflags = 0;
+        int parsed = (sdbus_codec_take(raw, rawlen, &dm) == rawlen);
+        if (parsed) {
+            DBusError e; dbus_error_init(&e);
+            if (!dbus_message_get_args(dm.msg, &e, DBUS_TYPE_STRING, &target,
+                                       DBUS_TYPE_UINT32, &sflags, DBUS_TYPE_INVALID)) {
+                dbus_error_free(&e); target = NULL;
+            }
+        }
+        if (!target) {
+            synth_error_wire(c, w->serial, DBUS_ERROR_INVALID_ARGS, "StartServiceByName needs a name");
+        } else if (sdbus_names_owner(g_names, target) >= 0) {
+            DBusMessage *r = dbus_message_new(DBUS_MESSAGE_TYPE_METHOD_RETURN);
+            dbus_message_set_reply_serial(r, w->serial);
+            dbus_message_set_serial(r, ++g_bcast_serial);
+            dbus_message_set_sender(r, SDBUS_DRIVER_NAME);
+            if (c->unique) dbus_message_set_destination(r, c->unique);
+            dbus_uint32_t code = DBUS_START_REPLY_ALREADY_RUNNING;
+            dbus_message_append_args(r, DBUS_TYPE_UINT32, &code, DBUS_TYPE_INVALID);
+            char *b = NULL; int len = 0;
+            if (dbus_message_marshal(r, &b, &len)) { sdbus_conn_enqueue(c, (unsigned char *)b, len, NULL, 0); dbus_free(b); }
+            dbus_message_unref(r);
+        } else {
+            const sdbus_svc_ent *ent = sdbus_svctab_find(g_svctab, target);
+            if (!ent) {
+                synth_error_wire(c, w->serial, DBUS_ERROR_SERVICE_UNKNOWN, "no such activatable service");
+            } else {
+                sdbus_pending_act *pa = sdbus_acts_find(g_acts, target);
+                if (!pa) {
+                    pid_t pid = spawn_service(ent, g_bus_addr);
+                    if (pid < 0) synth_error_wire(c, w->serial, DBUS_ERROR_SPAWN_FAILED, "fork failed");
+                    else pa = sdbus_acts_begin(g_acts, target, pid, sdbus__now_ms() + SDBUS_SPAWN_TIMEOUT_MS);
+                }
+                if (pa) {
+                    sdbus_held_msg m = {0};
+                    m.caller_id = c->id; m.serial = w->serial; m.expects_reply = 1;
+                    m.kind = SDBUS_HELD_EXPLICIT;
+                    sdbus_acts_hold(pa, &m);
+                }
+            }
+        }
+        if (parsed) sdbus_msg_free(&dm);
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
+
     if (to_driver) {
         /* driver methods never carry fds -> libdbus can demarshal to read args */
         sdbus_msg dm;
@@ -560,7 +611,8 @@ int main(int argc, char **argv) {
     free(poltext);
     g_names = sdbus_names_new();
     g_replies = sdbus_replies_new();
-    g_svctab = sdbus_svctab_parse_dir(SDBUS_SVC_DIR);
+    const char *svcdir = getenv("SCHEMA_DBUS_SVCDIR");
+    g_svctab = sdbus_svctab_parse_dir(svcdir ? svcdir : SDBUS_SVC_DIR);
     g_acts = sdbus_acts_new();
     fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 
