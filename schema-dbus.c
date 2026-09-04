@@ -177,6 +177,16 @@ static void synth_error_wire(sdbus_conn *c, uint32_t reply_serial,
     dbus_message_unref(err);
 }
 
+/* deliver a NoReply error to a caller (by conn id) awaiting reply_serial, if it
+   is still connected. Used both when a callee disconnects and when a pending call
+   times out. */
+static void send_no_reply_to(int caller_id, uint32_t reply_serial, const char *text) {
+    sdbus_conn *caller = conn_by_id(caller_id);
+    if (!caller) return;
+    synth_error_wire(caller, reply_serial, DBUS_ERROR_NO_REPLY, text);
+    ep_update(caller);
+}
+
 /* drop this message's fds from the head of pending_fds; close them unless they
    were transferred to an outbound chunk (which will close them after sending). */
 static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
@@ -301,14 +311,9 @@ static void remove_conn(sdbus_conn *c) {
         int *callers = malloc(cap * sizeof *callers);
         uint32_t *serials = malloc(cap * sizeof *serials);
         int np = sdbus_replies_pending_on(g_replies, c->id, c->id, callers, serials, cap);
-        for (int i = 0; i < np; i++) {
-            sdbus_conn *caller = conn_by_id(callers[i]);
-            if (caller) {
-                synth_error_wire(caller, serials[i], DBUS_ERROR_NO_REPLY,
-                    "Message recipient disconnected from message bus without replying");
-                ep_update(caller);
-            }
-        }
+        for (int i = 0; i < np; i++)
+            send_no_reply_to(callers[i], serials[i],
+                "Message recipient disconnected from message bus without replying");
         free(callers); free(serials);
     }
     sdbus_replies_purge(g_replies, c->id);
@@ -417,7 +422,11 @@ int main(int argc, char **argv) {
 
     struct epoll_event evs[64];
     for (;;) {
-        int nev = epoll_wait(g_epfd, evs, 64, -1);
+        /* block until an event, or wake at the next pending-reply deadline */
+        int wait_ms = -1;
+        long nd = sdbus_replies_next_deadline(g_replies);
+        if (nd >= 0) { long now = sdbus__now_ms(); wait_ms = nd <= now ? 0 : (int)(nd - now); }
+        int nev = epoll_wait(g_epfd, evs, 64, wait_ms);
         if (nev < 0) { if (errno == EINTR) continue; break; }
         for (int i = 0; i < nev; i++) {
             if (evs[i].data.ptr == NULL) {           /* listen socket */
@@ -436,9 +445,23 @@ int main(int argc, char **argv) {
                 ep_update(c);
             }
         }
+        /* time out abandoned pending replies: a caller whose callee never answered
+           gets a NoReply instead of hanging, and the entry is freed. */
+        if (g_replies->n > 0) {
+            long now = sdbus__now_ms();
+            int cap = g_replies->n;
+            int *callers = malloc(cap * sizeof *callers);
+            uint32_t *serials = malloc(cap * sizeof *serials);
+            int ne = sdbus_replies_reap_expired(g_replies, now, callers, serials, cap);
+            for (int i = 0; i < ne; i++)
+                send_no_reply_to(callers[i], serials[i],
+                    "Did not receive a reply within the bus timeout");
+            free(callers); free(serials);
+        }
         /* reap connections whose outbound backlog overflowed the cap. Swept after
-           the event batch so no evs[] entry can reference a freed conn; looped
-           because a reap's disconnect signals can push another slow reader over. */
+           the event batch (and after the NoReply enqueues above) so no evs[] entry
+           can reference a freed conn; looped because a reap's disconnect signals can
+           push another slow reader over. */
         for (int swept = 1; swept; ) {
             swept = 0;
             for (int j = 0; j < g_nconns; j++)

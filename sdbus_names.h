@@ -15,6 +15,10 @@
 #define SDBUS_REQ_REPLACE_EXISTING  0x2
 #define SDBUS_REQ_DO_NOT_QUEUE      0x4
 
+/* ceiling on well-known names one connection may hold, matching dbus-daemon's
+   max_names_per_connection default. Bounds a RequestName-flood DoS. */
+#define SDBUS_MAX_NAMES_PER_CONN 512
+
 enum { SDBUS_REQ_PRIMARY_OWNER = 1, SDBUS_REQ_IN_QUEUE = 2,
        SDBUS_REQ_EXISTS = 3, SDBUS_REQ_ALREADY_OWNER = 4 };
 enum { SDBUS_REL_RELEASED = 1, SDBUS_REL_NON_EXISTENT = 2, SDBUS_REL_NOT_OWNER = 3 };
@@ -220,6 +224,26 @@ static inline int sdbus_names_owned_by(sdbus_names *r, int conn_id, const char *
             arr[n++] = r->names[i].name;
         }
     *out = arr;
+    return n;
+}
+
+/* does conn already hold name in any position (primary or queued)? A re-request
+   of such a name only updates flags, so it must bypass the per-conn cap. */
+static inline int sdbus_names_holds(sdbus_names *r, int conn_id, const char *name) {
+    sdbus_name_ent *e = sdbus__name_find(r, name);
+    if (!e) return 0;
+    for (int h = 0; h < e->n_holders; h++)
+        if (e->holders[h].conn_id == conn_id) return 1;
+    return 0;
+}
+
+/* count of well-known names a conn holds (primary owner OR queued), one per name.
+   Bounds RequestName so a single connection can't exhaust the registry. */
+static inline int sdbus_names_count_held(sdbus_names *r, int conn_id) {
+    int n = 0;
+    for (int i = 0; i < r->n_names; i++)
+        for (int h = 0; h < r->names[i].n_holders; h++)
+            if (r->names[i].holders[h].conn_id == conn_id) { n++; break; }
     return n;
 }
 

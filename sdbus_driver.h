@@ -160,6 +160,14 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
             sdbus__reply_error(c, m, DBUS_ERROR_INVALID_ARGS, "RequestName args");
             return 0;
         }
+        /* cap names per connection, but only when this request would add a new
+           holding (a re-request of a name we already hold just updates flags) */
+        if (!sdbus_names_holds(names, c->id, name) &&
+            sdbus_names_count_held(names, c->id) >= SDBUS_MAX_NAMES_PER_CONN) {
+            sdbus__reply_error(c, m, DBUS_ERROR_LIMITS_EXCEEDED,
+                               "max names per connection exceeded");
+            return 0;
+        }
         sdbus_transition t[1]; int nt = 0;
         int rc = sdbus_names_request(names, c->id, name, flags, t, &nt);
         if (nt && broadcast) broadcast(ctx, t, nt);

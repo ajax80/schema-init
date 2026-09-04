@@ -9,23 +9,40 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 
-typedef struct { int callee, caller; uint32_t serial; int live; } sdbus_reply_ent;
+/* A method_call whose callee never replies (a hung or buggy service) would leave
+   its entry live forever, growing the table. Each entry carries a monotonic
+   deadline; the broker reaps expired ones and sends the caller a NoReply. The
+   window is generous — longer than libdbus's 25s client default so a legitimately
+   slow call is not preempted, short enough to bound an abandoned-call leak. */
+#define SDBUS_REPLY_TIMEOUT_MS 120000L
+
+typedef struct { int callee, caller; uint32_t serial; int live; long deadline; } sdbus_reply_ent;
 struct sdbus_replies { sdbus_reply_ent *ents; int n; };
 typedef struct sdbus_replies sdbus_replies;
+
+static inline long sdbus__now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 static inline sdbus_replies *sdbus_replies_new(void) { return calloc(1, sizeof(sdbus_replies)); }
 
 static inline void sdbus_replies_record(sdbus_replies *t, int callee, uint32_t serial, int caller) {
+    long deadline = sdbus__now_ms() + SDBUS_REPLY_TIMEOUT_MS;
     for (int i = 0; i < t->n; i++)             /* reuse a dead slot */
         if (!t->ents[i].live) {
             t->ents[i].callee = callee; t->ents[i].serial = serial;
             t->ents[i].caller = caller; t->ents[i].live = 1;
+            t->ents[i].deadline = deadline;
             return;
         }
     t->ents = realloc(t->ents, (t->n + 1) * sizeof *t->ents);
     t->ents[t->n].callee = callee; t->ents[t->n].serial = serial;
     t->ents[t->n].caller = caller; t->ents[t->n].live = 1;
+    t->ents[t->n].deadline = deadline;
     t->n++;
 }
 
@@ -57,6 +74,30 @@ static inline int sdbus_replies_pending_on(sdbus_replies *t, int callee, int exc
             callers[n] = t->ents[i].caller;
             serials[n] = t->ents[i].serial;
             n++;
+        }
+    return n;
+}
+
+/* Earliest live-entry deadline (monotonic ms), or -1 if none pending. Lets the
+   event loop wake exactly when the next reply expires instead of polling. */
+static inline long sdbus_replies_next_deadline(sdbus_replies *t) {
+    long best = -1;
+    for (int i = 0; i < t->n; i++)
+        if (t->ents[i].live && (best < 0 || t->ents[i].deadline < best))
+            best = t->ents[i].deadline;
+    return best;
+}
+
+/* Reap entries whose deadline has passed: mark them dead and report their callers
+   (into callers[]/serials[], up to max) so the broker can send each a NoReply.
+   Returns the count reaped. */
+static inline int sdbus_replies_reap_expired(sdbus_replies *t, long now_ms,
+                                             int *callers, uint32_t *serials, int max) {
+    int n = 0;
+    for (int i = 0; i < t->n; i++)
+        if (t->ents[i].live && t->ents[i].deadline <= now_ms) {
+            if (n < max) { callers[n] = t->ents[i].caller; serials[n] = t->ents[i].serial; n++; }
+            t->ents[i].live = 0;
         }
     return n;
 }

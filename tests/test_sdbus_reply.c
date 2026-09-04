@@ -69,6 +69,25 @@ int main(void) {
     assert(sdbus_replies_match(t3, 5, 103, -1) == 3);
     sdbus_replies_free(t3);
 
+    /* reply timeout: a pending call has a future deadline; before it, nothing is
+       reaped; at/after it, the entry is reaped and its caller reported for NoReply. */
+    sdbus_replies *t4 = sdbus_replies_new();
+    long before = sdbus__now_ms();
+    sdbus_replies_record(t4, 2, 200, 1);
+    long dl = sdbus_replies_next_deadline(t4);
+    assert(dl >= before + SDBUS_REPLY_TIMEOUT_MS);       /* deadline is in the future */
+    int ec[4]; uint32_t es[4];
+    assert(sdbus_replies_reap_expired(t4, before, ec, es, 4) == 0);   /* not yet due */
+    assert(sdbus_replies_match(t4, 2, 200, -1) == 1);    /* still live, routes normally */
+    /* re-record (match consumed it), then reap past the deadline */
+    sdbus_replies_record(t4, 2, 201, 5);
+    long past = sdbus__now_ms() + SDBUS_REPLY_TIMEOUT_MS + 1000;
+    int ne = sdbus_replies_reap_expired(t4, past, ec, es, 4);
+    assert(ne == 1 && ec[0] == 5 && es[0] == 201);
+    assert(sdbus_replies_match(t4, 2, 201, -1) == -1);   /* reaped -> gone */
+    assert(sdbus_replies_next_deadline(t4) == -1);       /* nothing pending */
+    sdbus_replies_free(t4);
+
     printf("all sdbus_reply tests passed\n");
     return 0;
 }

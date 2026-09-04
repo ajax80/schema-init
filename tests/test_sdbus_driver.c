@@ -169,6 +169,34 @@ int main(void) {
     assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_METHOD_RETURN);
     sdbus_msg_free(&r); dbus_message_unref(ping);
 
+    /* per-conn name cap: fill the registry to the ceiling for conn 1 (cheaply,
+       via the names API), then a driver RequestName for a NEW name is rejected
+       with LimitsExceeded, while re-requesting an already-held name still works. */
+    {
+        sdbus_transition tt[1]; int ntt = 0;
+        for (int i = 0; i < SDBUS_MAX_NAMES_PER_CONN; i++) {
+            char nm[32]; sprintf(nm, "org.cap.n%d", i);
+            sdbus_names_request(names, c.id, nm, 0, tt, &ntt);
+        }
+        DBusMessage *over = mkcall("RequestName");
+        const char *newnm = "org.cap.overflow"; dbus_uint32_t f = SDBUS_REQ_DO_NOT_QUEUE;
+        dbus_message_append_args(over, DBUS_TYPE_STRING, &newnm, DBUS_TYPE_UINT32, &f, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, over);
+        assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_ERROR);
+        assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_LIMITS_EXCEEDED));
+        sdbus_msg_free(&r); dbus_message_unref(over);
+
+        /* re-requesting a name already held bypasses the cap -> ALREADY_OWNER */
+        DBusMessage *re = mkcall("RequestName");
+        const char *held = "org.cap.n0"; dbus_uint32_t f2 = 0;
+        dbus_message_append_args(re, DBUS_TYPE_STRING, &held, DBUS_TYPE_UINT32, &f2, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, re);
+        dbus_uint32_t rc = 0;
+        assert(dbus_message_get_args(r.msg, &e, DBUS_TYPE_UINT32, &rc, DBUS_TYPE_INVALID));
+        assert(rc == SDBUS_REQ_ALREADY_OWNER);
+        sdbus_msg_free(&r); dbus_message_unref(re);
+    }
+
     /* unknown member -> dispatch returns -1 */
     DBusMessage *bogus = mkcall("NoSuchMethod");
     dbus_message_set_sender(bogus, c.unique);

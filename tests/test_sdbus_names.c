@@ -97,8 +97,22 @@ int main(void) {
     assert(sdbus_names_owner(r5, "org.f1.n19") == -1);
     const char **o5; assert(sdbus_names_list(r5, &o5) == 0); free(o5);
 
+    /* count_held / holds: the per-conn name-cap primitives. count_held counts one
+       per name held (primary or queued); holds is position-agnostic. */
+    sdbus_names *r6 = sdbus_names_new();
+    sdbus_names_request(r6, 1, "org.h.a", 0, t, &n);   /* conn 1 primary */
+    sdbus_names_request(r6, 1, "org.h.b", 0, t, &n);   /* conn 1 primary */
+    sdbus_names_request(r6, 2, "org.h.a", 0, t, &n);   /* conn 2 queued behind 1 */
+    assert(sdbus_names_count_held(r6, 1) == 2);
+    assert(sdbus_names_count_held(r6, 2) == 1);        /* queued still counts */
+    assert(sdbus_names_count_held(r6, 3) == 0);
+    assert(sdbus_names_holds(r6, 1, "org.h.a") == 1);
+    assert(sdbus_names_holds(r6, 2, "org.h.a") == 1);  /* queued -> holds */
+    assert(sdbus_names_holds(r6, 2, "org.h.b") == 0);
+    assert(sdbus_names_holds(r6, 3, "org.never") == 0);
+
     sdbus_names_free(r); sdbus_names_free(r2); sdbus_names_free(r3); sdbus_names_free(r4);
-    sdbus_names_free(r5);
+    sdbus_names_free(r5); sdbus_names_free(r6);
     printf("all sdbus_names tests passed\n");
     return 0;
 }
