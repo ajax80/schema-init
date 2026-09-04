@@ -125,6 +125,53 @@ static const char *unique_or_empty(int conn_id) {
     return u ? u : "";
 }
 
+/* a name just got an owner: deliver every message held for it. IMPLICIT ones are
+   re-routed as a fresh send (records a pending reply so the answer routes back);
+   EXPLICIT StartServiceByName callers get a SUCCESS reply. */
+static void release_activation(const char *name) {
+    sdbus_held_msg *held = NULL; int n = 0;
+    if (!sdbus_acts_take(g_acts, name, &held, &n)) return;
+    for (int i = 0; i < n; i++) {
+        sdbus_conn *caller = conn_by_id(held[i].caller_id);
+        if (held[i].kind == SDBUS_HELD_EXPLICIT) {
+            if (caller) {
+                DBusMessage *r = dbus_message_new(DBUS_MESSAGE_TYPE_METHOD_RETURN);
+                dbus_message_set_reply_serial(r, held[i].serial);
+                dbus_message_set_serial(r, ++g_bcast_serial);
+                dbus_message_set_sender(r, SDBUS_DRIVER_NAME);
+                if (caller->unique) dbus_message_set_destination(r, caller->unique);
+                dbus_uint32_t code = DBUS_START_REPLY_SUCCESS;
+                dbus_message_append_args(r, DBUS_TYPE_UINT32, &code, DBUS_TYPE_INVALID);
+                char *b = NULL; int len = 0;
+                if (dbus_message_marshal(r, &b, &len)) { sdbus_conn_enqueue(caller, (unsigned char *)b, len, NULL, 0); dbus_free(b); ep_update(caller); }
+                dbus_message_unref(r);
+            }
+            for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+            free(held[i].bytes); free(held[i].fds);
+            continue;
+        }
+        /* IMPLICIT: re-route the captured (already sender-stamped) message. */
+        sdbus_wire_msg w2;
+        if (sdbus_wire_parse(held[i].bytes, held[i].len, &w2) == held[i].len && caller) {
+            int targets[MAX_TARGETS], synth2 = 0, denied2 = 0;
+            int nt = sdbus_route_targets(&w2, caller, g_names, g_conns, g_nconns,
+                                         g_policy, g_replies, &synth2, &denied2, targets, MAX_TARGETS);
+            for (int k = 0; k < nt; k++) {
+                sdbus_conn *dst = conn_by_id(targets[k]);
+                if (!dst) continue;
+                if (k == 0 && held[i].nfds > 0) sdbus_conn_enqueue(dst, held[i].bytes, held[i].len, held[i].fds, held[i].nfds);
+                else                            sdbus_conn_enqueue(dst, held[i].bytes, held[i].len, NULL, 0);
+                ep_update(dst);
+            }
+            if (!(held[i].nfds > 0 && nt > 0)) for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+        } else {
+            for (int j = 0; j < held[i].nfds; j++) close(held[i].fds[j]);
+        }
+        free(held[i].bytes); free(held[i].fds);
+    }
+    free(held);
+}
+
 static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
     (void)ctx;
     for (int i = 0; i < n; i++) {
@@ -162,6 +209,7 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
                 dbus_message_append_args(s, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
                 enqueue_signal(o, s); dbus_message_unref(s);
             }
+            release_activation(name);          /* deliver anything held for this name */
         }
     }
 }
