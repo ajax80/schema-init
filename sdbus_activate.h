@@ -80,4 +80,88 @@ static inline void sdbus_svctab_free(sdbus_svctab *t) {
     free(t->v); free(t);
 }
 
+typedef enum { SDBUS_HELD_IMPLICIT, SDBUS_HELD_EXPLICIT } sdbus_held_kind;
+typedef struct {
+    unsigned char *bytes; int len;      /* captured wire message (implicit) */
+    int *fds; int nfds;                 /* its passed fds (implicit) */
+    int caller_id; uint32_t serial; int expects_reply;
+    sdbus_held_kind kind;
+} sdbus_held_msg;
+typedef struct {
+    char *name; int child_pid; long deadline_ms;
+    sdbus_held_msg *held; int n_held;
+} sdbus_pending_act;
+typedef struct { sdbus_pending_act *v; int n; } sdbus_acts;
+
+static inline sdbus_acts *sdbus_acts_new(void) { return calloc(1, sizeof(sdbus_acts)); }
+
+static inline sdbus_pending_act *sdbus_acts_find(sdbus_acts *a, const char *name) {
+    if (!name) return NULL;
+    for (int i = 0; i < a->n; i++)
+        if (!strcmp(a->v[i].name, name)) return &a->v[i];
+    return NULL;
+}
+
+static inline sdbus_pending_act *sdbus_acts_by_pid(sdbus_acts *a, int pid) {
+    for (int i = 0; i < a->n; i++) if (a->v[i].child_pid == pid) return &a->v[i];
+    return NULL;
+}
+
+static inline sdbus_pending_act *sdbus_acts_begin(sdbus_acts *a, const char *name,
+                                                  int pid, long deadline_ms) {
+    a->v = realloc(a->v, (a->n + 1) * sizeof *a->v);
+    sdbus_pending_act *e = &a->v[a->n++];
+    memset(e, 0, sizeof *e);
+    e->name = strdup(name); e->child_pid = pid; e->deadline_ms = deadline_ms;
+    return e;
+}
+
+static inline void sdbus_acts_hold(sdbus_pending_act *e, const sdbus_held_msg *m) {
+    e->held = realloc(e->held, (e->n_held + 1) * sizeof *e->held);
+    sdbus_held_msg *d = &e->held[e->n_held++];
+    *d = *m;
+    if (m->len > 0 && m->bytes) { d->bytes = malloc(m->len); memcpy(d->bytes, m->bytes, m->len); }
+    else { d->bytes = NULL; d->len = 0; }
+    if (m->nfds > 0 && m->fds) { d->fds = malloc(m->nfds * sizeof(int)); memcpy(d->fds, m->fds, m->nfds * sizeof(int)); }
+    else { d->fds = NULL; d->nfds = 0; }
+}
+
+/* remove entry at index i, handing its held[] array to *out (ownership transfers). */
+static inline void sdbus__acts_pop(sdbus_acts *a, int i, sdbus_held_msg **out, int *n) {
+    *out = a->v[i].held; *n = a->v[i].n_held;
+    free(a->v[i].name);
+    a->v[i] = a->v[--a->n];             /* swap-remove */
+}
+
+static inline int sdbus_acts_take(sdbus_acts *a, const char *name,
+                                  sdbus_held_msg **out, int *n) {
+    for (int i = 0; i < a->n; i++)
+        if (!strcmp(a->v[i].name, name)) { sdbus__acts_pop(a, i, out, n); return 1; }
+    *out = NULL; *n = 0; return 0;
+}
+
+static inline long sdbus_acts_next_deadline(sdbus_acts *a) {
+    long best = -1;
+    for (int i = 0; i < a->n; i++)
+        if (best < 0 || a->v[i].deadline_ms < best) best = a->v[i].deadline_ms;
+    return best;
+}
+
+static inline int sdbus_acts_reap_expired(sdbus_acts *a, long now_ms,
+                                          sdbus_held_msg **out, int *n) {
+    for (int i = 0; i < a->n; i++)
+        if (a->v[i].deadline_ms <= now_ms) { sdbus__acts_pop(a, i, out, n); return 1; }
+    *out = NULL; *n = 0; return 0;
+}
+
+static inline void sdbus_acts_free(sdbus_acts *a) {
+    if (!a) return;
+    for (int i = 0; i < a->n; i++) {
+        free(a->v[i].name);
+        for (int j = 0; j < a->v[i].n_held; j++) { free(a->v[i].held[j].bytes); free(a->v[i].held[j].fds); }
+        free(a->v[i].held);
+    }
+    free(a->v); free(a);
+}
+
 #endif
