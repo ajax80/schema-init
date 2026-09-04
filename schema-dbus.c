@@ -593,6 +593,8 @@ int main(int argc, char **argv) {
         /* block until an event, or wake at the next pending-reply deadline */
         int wait_ms = -1;
         long nd = sdbus_replies_next_deadline(g_replies);
+        long ad = sdbus_acts_next_deadline(g_acts);
+        if (ad >= 0 && (nd < 0 || ad < nd)) nd = ad;
         if (nd >= 0) { long now = sdbus__now_ms(); wait_ms = nd <= now ? 0 : (int)(nd - now); }
         int nev = epoll_wait(g_epfd, evs, 64, wait_ms);
         if (nev < 0) { if (errno == EINTR) continue; break; }
@@ -639,6 +641,14 @@ int main(int argc, char **argv) {
                 send_no_reply_to(callers[i], serials[i],
                     "Did not receive a reply within the bus timeout");
             free(callers); free(serials);
+        }
+        /* time out activations whose service never claimed its name */
+        for (;;) {
+            long now = sdbus__now_ms();
+            sdbus_held_msg *held = NULL; int nh = 0;
+            if (!sdbus_acts_reap_expired(g_acts, now, &held, &nh)) break;
+            fail_held(held, nh, DBUS_ERROR_TIMED_OUT,
+                      "Activated service failed to acquire its name in time");
         }
         /* reap connections whose outbound backlog overflowed the cap. Swept after
            the event batch (and after the NoReply enqueues above) so no evs[] entry
