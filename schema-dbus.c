@@ -25,6 +25,7 @@
 #include "sdbus_auth.h"
 #include "sdbus_driver.h"
 #include "sdbus_route.h"
+#include "sdbus_activate.h"
 
 #define DEFAULT_SOCKET "/run/dbus/system_bus_socket"
 #define MAX_TARGETS 256
@@ -37,6 +38,11 @@ static int            g_nconns;
 static int            g_epfd;
 static unsigned       g_next_id = 1;
 static dbus_uint32_t  g_bcast_serial;
+static sdbus_svctab  *g_svctab;
+static sdbus_acts    *g_acts;
+static char           g_bus_addr[256];
+#define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
+#define SDBUS_SPAWN_TIMEOUT_MS 25000
 
 /* ---- epoll registration ---- */
 static void ep_update(sdbus_conn *c) {
@@ -382,6 +388,7 @@ int main(int argc, char **argv) {
 
     const char *sock = getenv("SCHEMA_DBUS_SOCKET");
     if (!sock) sock = DEFAULT_SOCKET;
+    snprintf(g_bus_addr, sizeof g_bus_addr, "unix:path=%s", sock);
 
     /* load the dissolved policy: prefer a precompiled file, else dissolve live */
     const char *polfile = getenv("SCHEMA_DBUS_POLICY");
@@ -406,6 +413,9 @@ int main(int argc, char **argv) {
     free(poltext);
     g_names = sdbus_names_new();
     g_replies = sdbus_replies_new();
+    g_svctab = sdbus_svctab_parse_dir(SDBUS_SVC_DIR);
+    g_acts = sdbus_acts_new();
+    fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 
     int lfd = make_listen_socket(sock);
     if (lfd < 0) { fprintf(stderr, "schema-dbus: cannot bind %s: %s\n", sock, strerror(errno)); return 1; }
