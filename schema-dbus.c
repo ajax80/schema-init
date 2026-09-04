@@ -49,6 +49,8 @@ static char           g_bus_addr[256];
 #define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
 
+static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
+
 /* ---- epoll registration ---- */
 static void ep_update(sdbus_conn *c) {
     struct epoll_event ev = {0};
@@ -208,6 +210,53 @@ static void consume_msg_fds(sdbus_conn *c, int nfds, int transferred) {
     c->n_pending_fds -= nfds;
 }
 
+/* If w->destination is an activatable name with no current owner, capture this
+   message (reforwarded bytes + dup'd fds + caller + serial), spawn the service if
+   not already spawning, and return 1 (message is held, not answered). Return 0 if
+   the name is not activatable (caller emits ServiceUnknown as before). The dup'd
+   fds are owned by the held copy; the caller still consumes the originals. */
+static int activate_or_hold(sdbus_conn *c, sdbus_wire_msg *w,
+                            const unsigned char *raw, int rawlen, int nfds) {
+    (void)rawlen;
+    if (!w->destination) return 0;
+    const sdbus_svc_ent *e = sdbus_svctab_find(g_svctab, w->destination);
+    if (!e) return 0;
+
+    /* capture the reforwarded (sender-stamped) bytes so release re-injects a
+       ready-to-route message. */
+    unsigned char *fwd = NULL; int fwlen = 0;
+    if (sdbus_wire_reforward(raw, w, c->unique, &fwd, &fwlen) != 0) return 0;
+
+    sdbus_held_msg m = {0};
+    m.bytes = fwd; m.len = fwlen;
+    m.caller_id = c->id; m.serial = w->serial;
+    m.expects_reply = !(w->flags & SDBUS_FLAG_NO_REPLY);
+    m.kind = SDBUS_HELD_IMPLICIT;
+    if (nfds > 0) {
+        m.fds = malloc(nfds * sizeof(int));
+        for (int i = 0; i < nfds; i++) m.fds[i] = dup(c->pending_fds[i]);
+        m.nfds = nfds;
+    }
+
+    sdbus_pending_act *pa = sdbus_acts_find(g_acts, w->destination);
+    if (!pa) {
+        pid_t pid = spawn_service(e, g_bus_addr);
+        if (pid < 0) {                          /* fork failed -> ServiceUnknown path */
+            free(fwd);
+            for (int i = 0; i < m.nfds; i++) close(m.fds[i]);
+            free(m.fds);
+            return 0;
+        }
+        pa = sdbus_acts_begin(g_acts, w->destination, pid,
+                              sdbus__now_ms() + SDBUS_SPAWN_TIMEOUT_MS);
+    }
+    sdbus_acts_hold(pa, &m);        /* deep-copies bytes + fds */
+    free(fwd);
+    for (int i = 0; i < m.nfds; i++) close(m.fds[i]);
+    free(m.fds);
+    return 1;
+}
+
 /* ---- process one fully-buffered message (parsed header w, raw bytes) ---- */
 static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char *raw, int rawlen) {
     int nfds = sdbus_wire_n_fds(w);   /* this message's fds sit at head of pending_fds */
@@ -258,7 +307,8 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
     if (denied) {
         synth_error_wire(c, w->serial, DBUS_ERROR_ACCESS_DENIED, "rejected by policy");
     } else if (synth) {
-        synth_error_wire(c, w->serial, DBUS_ERROR_SERVICE_UNKNOWN, "name has no owner");
+        if (!activate_or_hold(c, w, raw, rawlen, nfds))
+            synth_error_wire(c, w->serial, DBUS_ERROR_SERVICE_UNKNOWN, "name has no owner");
     } else if (nt > 0) {
         unsigned char *bytes = NULL; int len = 0;
         if (sdbus_wire_reforward(raw, w, c->unique, &bytes, &len) == 0) {
@@ -398,7 +448,8 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
     /* --- child --- */
     setsid();
     struct passwd *pw = getpwnam(e->user);
-    if (pw && pw->pw_uid != 0) {
+    if (!pw) _exit(127);                 /* unknown User= -> fail closed, never run as root */
+    if (pw->pw_uid != 0) {
         if (initgroups(e->user, pw->pw_gid) != 0) _exit(127);
         if (setgid(pw->pw_gid) != 0) _exit(127);
         if (setuid(pw->pw_uid) != 0) _exit(127);
