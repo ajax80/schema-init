@@ -12,7 +12,7 @@
 
 - **Boundary:** `schema-udev.c` and `schema-udev.h` MUST remain byte-identical to master. `grep net_id schema-udev.c` MUST be empty. The builtin is off by default, wired to nothing.
 - **Normative source:** systemd v259 `src/udev/udev-builtin-net_id.c`. Where this plan and that source disagree, **the source governs and the live parity gate is the authority.** The USB/platform/devicetree branches are NOT exercised by the blakbox live gate (no such hardware here) — for those, port the exact byte format from the source and let the unit tests lock it; the format strings quoted in this plan are taken verbatim from v259.
-- **Emit values verbatim, never `=0`-style flags.** `ID_NET_*` values are real strings (`v259`, `enxa8a1590be8ef`, `enp6s0`). Absence == not applicable. Emit a key at most once.
+- **Emit values verbatim, never `=0`-style flags.** `ID_NET_*` values are real strings (`v259`, `enxdeadbeef0001`, `enp6s0`). Absence == not applicable. Emit a key at most once.
 - **net_id emits ONLY these six keys:** `ID_NET_NAMING_SCHEME`, `ID_NET_NAME_MAC`, `ID_NET_NAME_ONBOARD`, `ID_NET_LABEL_ONBOARD`, `ID_NET_NAME_PATH`, `ID_NET_NAME_SLOT`. It does **NOT** emit `ID_NET_DRIVER`, `ID_NET_NAME`, `ID_PATH`, `ID_BUS`, `ID_VENDOR_ID`, `ID_MODEL_ID` (owned by net_setup_link / path_id / rules). No ethtool, no ioctl, no socket — pure sysfs file reads.
 - **Naming scheme is pinned `v259`** — the version this box's udev stamped. It is the one version-coupled constant; a future scheme bump is a one-line `#define` change plus a live-gate re-baseline.
 - **Gate order is load-bearing:** stacked (`iflink != ifindex`) → bail emitting nothing; ARPHRD not in {1 ether, 256 slip, 32 infiniband} → bail emitting nothing; only then stamp scheme + name.
@@ -238,9 +238,9 @@ static void test_mac(void) {
     /* permanent, 6-byte -> enx<hex, colons stripped> */
     nid_wf(net, "addr_assign_type", "0");
     nid_wf(net, "addr_len", "6");
-    nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
+    nid_wf(net, "address", "de:ad:be:ef:00:01");
     assert(nid_mac_name(net, "en", NID_ARPHRD_ETHER, name, sizeof name) == 0);
-    assert(strcmp(name, "enxa8a1590be8ef") == 0);
+    assert(strcmp(name, "enxdeadbeef0001") == 0);
 
     /* random assign type (1) -> no name */
     nid_wf(net, "addr_assign_type", "1");
@@ -721,7 +721,7 @@ static void test_build(void) {
     nid_wf(net, "ifindex", "2"); nid_wf(net, "iflink", "2");
     nid_wf(net, "type", "1");
     nid_wf(net, "addr_assign_type", "0"); nid_wf(net, "addr_len", "6");
-    nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
+    nid_wf(net, "address", "de:ad:be:ef:00:01");
     nid_wf(net, "uevent", "DEVTYPE=");
     nid_wf(pci, "dev_port", "0");
     { char cf[PATH_MAX]; snprintf(cf, sizeof cf, "%s/config", pci);
@@ -732,7 +732,7 @@ static void test_build(void) {
     struct uevent e;
     assert(net_id_build(root, "/devices/pci0000:00/0000:06:00.0/net/enp6s0", &e) == 0);
     assert(nid_has_val(&e, "ID_NET_NAMING_SCHEME", "v259"));
-    assert(nid_has_val(&e, "ID_NET_NAME_MAC", "enxa8a1590be8ef"));
+    assert(nid_has_val(&e, "ID_NET_NAME_MAC", "enxdeadbeef0001"));
     assert(nid_has_val(&e, "ID_NET_NAME_PATH", "enp6s0"));
 
     /* stacked: iflink != ifindex -> nothing */
@@ -927,7 +927,7 @@ Expected: the two hashes are identical. Only then is the work landable.
 
 ## Notes for the implementer (Greg)
 
-- **The live gate anchors PCI only.** enp6s0 → `ID_NET_NAMING_SCHEME=v259` + `ID_NET_NAME_PATH=enp6s0` + `ID_NET_NAME_MAC=enxa8a1590be8ef`; wlp5s0 → scheme + `ID_NET_NAME_PATH=wlp5s0` (no MAC, random addr); docker0/podman0 → scheme only; lo/wgnord/tailscale0/veth0/veth88d9c02 → nothing. Total 9 devices, 0 mismatches, both directions.
+- **The live gate anchors PCI only.** enp6s0 → `ID_NET_NAMING_SCHEME=v259` + `ID_NET_NAME_PATH=enp6s0` + `ID_NET_NAME_MAC=enxdeadbeef0001`; wlp5s0 → scheme + `ID_NET_NAME_PATH=wlp5s0` (no MAC, random addr); docker0/podman0 → scheme only; lo/wgnord/tailscale0/veth0/veth88d9c02 → nothing. Total 9 devices, 0 mismatches, both directions.
 - **USB / platform / devicetree have no hardware here** — port their exact bytes from systemd v259 `udev-builtin-net_id.c`. The format strings in this plan (`u<ports '.'→'u'>`, `%sa%s%xi%u`, `%sd%u`, `%so%u`, `%s%ss%u`) are verbatim from v259; the unit tests lock them. Where a detail (USB config/iface handling, onboard `phys_port_name` suffix, DT alias scan) exceeds what the fabricated tests cover, the source governs.
 - **Gate order is not cosmetic:** stacked check FIRST (veth pairs must emit nothing, not even the scheme), then ARPHRD, then scheme stamp. A device that fails either gate emits zero keys.
 - `schema-udev.c` and `.h` are frozen. If a test seems to need a change there, stop — it doesn't.

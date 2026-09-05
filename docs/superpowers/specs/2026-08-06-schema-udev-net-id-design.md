@@ -45,7 +45,7 @@ Exact per-device expected net_id output — the live gate's target:
 
 | device | iflink≠ifindex? | ARPHRD | expected net_id keys |
 |---|---|---|---|
-| enp6s0 | no | ether(1) | `ID_NET_NAMING_SCHEME=v259`, `ID_NET_NAME_PATH=enp6s0`, `ID_NET_NAME_MAC=enxa8a1590be8ef` |
+| enp6s0 | no | ether(1) | `ID_NET_NAMING_SCHEME=v259`, `ID_NET_NAME_PATH=enp6s0`, `ID_NET_NAME_MAC=enxdeadbeef0001` |
 | wlp5s0 | no | ether(1) | `ID_NET_NAMING_SCHEME=v259`, `ID_NET_NAME_PATH=wlp5s0` |
 | docker0 | no | ether(1) | `ID_NET_NAMING_SCHEME=v259` |
 | podman0 | no | ether(1) | `ID_NET_NAMING_SCHEME=v259` |
@@ -67,7 +67,7 @@ devpath net_id is invoked with):
 - `ifindex`, `iflink` — decimal ints. `iflink != ifindex` ⇒ **stacked**, emit nothing.
 - `type` — ARPHRD number (decimal). Only `1` (ETHER), `256` (SLIP), `32` (INFINIBAND) proceed.
 - `addr_assign_type` — `0` = `NET_ADDR_PERM` (required for `ID_NET_NAME_MAC`).
-- `address` — colon hex MAC (e.g. `a8:a1:59:0b:e8:ef`); strip colons → `a8a1590be8ef`.
+- `address` — colon hex MAC (e.g. `de:ad:be:ef:00:01`); strip colons → `deadbeef0001`.
 - `addr_len` — hw addr byte length; must be `6` for MAC name.
 - `uevent` — contains `DEVTYPE=` (`wlan` → `wl`, `wwan` → `ww`; absent for plain ether → `en`).
 
@@ -88,7 +88,7 @@ ancestor's `subsystem` symlink basename (`pi_subsystem`). First ancestor whose s
      hardware, so this branch is unit-tested only).
 5. **MAC name:** if `addr_assign_type==0` AND `addr_len==6` AND not infiniband → emit
    `ID_NET_NAME_MAC = <prefix> + "x" + <12 lowercase hex, colons stripped>`
-   (e.g. `enxa8a1590be8ef`).
+   (e.g. `enxdeadbeef0001`).
 6. **Resolve bus parent** (walk up, match subsystem) and dispatch:
 
 ### Bus-suffix formats (in scope: PCI, USB, platform, devicetree)
