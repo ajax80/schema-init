@@ -91,6 +91,22 @@ install-dbus-sp1: schema-dbus
 	@echo "SP1 prerequisites installed. To FLIP the bus (reboot-only, gated):"
 	@echo "  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"
 
+install-migrate: schema-udev verify-rules-live
+	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(PREFIX)/libexec/schema-init
+	install -m 0755 distros/fedora-installer/migrate/schema-migrate.py $(DESTDIR)$(BINDIR)/schema-migrate
+	install -m 0755 schema-udev $(DESTDIR)$(BINDIR)/schema-udev
+	install -m 0755 distros/fedora-installer/schema-flip-apply.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-flip-apply
+	install -m 0755 scripts/schema-udev-flip-arm.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-arm.sh
+	install -m 0755 scripts/schema-udev-flip-backup.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-backup.sh
+	install -m 0755 distros/fedora-installer/schema-udev-flip-healthcheck.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-healthcheck.sh
+	install -m 0755 verify-rules-live $(DESTDIR)$(PREFIX)/libexec/schema-init/verify-rules-live
+	install -m 0644 distros/fedora-installer/migrate/stage.py $(DESTDIR)$(PREFIX)/libexec/schema-init/stage.py
+	install -m 0755 scripts/schema-doctor.py $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-doctor
+	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate
+	install -m 0644 distros/fedora-installer/migrate/prevent-set.list $(DESTDIR)$(DATADIR)/schema-init/migrate/prevent-set.list
+	install -d $(DESTDIR)$(SYSCONFDIR)/sudoers.d
+	install -m 0440 distros/fedora-installer/migrate/schema-wizard.sudoers $(DESTDIR)$(SYSCONFDIR)/sudoers.d/schema-wizard
+
 release: all
 	rm -rf $(RELDIR)
 	mkdir -p $(RELDIR)
@@ -178,6 +194,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install install-dbus-sp1 release aarch64 armhf desktop test verify-live verify-dbus-conformance
+.PHONY: all clean install install-migrate install-dbus-sp1 release aarch64 armhf desktop test verify-live verify-dbus-conformance
 
 

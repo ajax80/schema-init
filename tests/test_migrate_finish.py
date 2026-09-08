@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""finish report tests."""
+"""finish report tests — script-style."""
 import os, sys, json, tempfile, importlib.util
+
+results = []
+def check(name, cond):
+    results.append(bool(cond)); print(("  ok  " if cond else "  FAIL ") + name)
+
 root = tempfile.mkdtemp(); os.environ["MIGRATE_ROOT"] = root
 for d in ("var/lib/schema-init", "run/schema-init"):
     os.makedirs(os.path.join(root, d))
@@ -11,8 +16,6 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(REPO, "distros/fedora-installer/migrate/schema-migrate.py")
 spec = importlib.util.spec_from_file_location("schema_migrate", MOD)
 sm = importlib.util.module_from_spec(spec); spec.loader.exec_module(sm)
-results = []
-def check(n, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {n}")
 
 rep = sm.finish_report()
 check("names the leftover services", "tailscaled" in rep and "docker" in rep)

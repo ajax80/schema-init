@@ -14,10 +14,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import importlib.util as _ilu
 
 ROOT = os.environ.get("MIGRATE_ROOT") or "/"
 _MODDIR = os.path.dirname(os.path.abspath(__file__))
 _PREVENT_LIST_OVERRIDE = None  # tests may set this to a path
+_stage_path = os.path.join(_MODDIR, "stage.py")
+if not os.path.exists(_stage_path):
+    _stage_path = "/usr/libexec/schema-init/stage.py"
+if not os.path.exists(_stage_path):
+    raise SystemExit("schema-migrate: stage.py not found (looked in %s and "
+                     "/usr/libexec/schema-init) — is schema-init-migrate installed?"
+                     % _MODDIR)
+_spec = _ilu.spec_from_file_location("stage", _stage_path)
+stage = _ilu.module_from_spec(_spec); _spec.loader.exec_module(stage)
 
 
 def P(rel):
@@ -31,6 +41,8 @@ def repo():
 def load_prevent_set(path=None):
     if path is None:
         path = _PREVENT_LIST_OVERRIDE or os.path.join(_MODDIR, "prevent-set.list")
+        if not os.path.exists(path):
+            path = "/usr/share/schema-init/migrate/prevent-set.list"
     out = {"script": [], "config": [], "service": [], "exclude": []}
     with open(path) as fh:
         for line in fh:
@@ -622,6 +634,105 @@ def ensure_user_groups(profile, run=subprocess.run, dry_run=False):
 
 
 PREVENT_PACKAGES = ["libavcodec-freeworld", "egl-wayland", "seatd"]
+PREBUILT_BINS = ["schema-init", "schema-ctl", "schema-subreaper"]
+
+FLIP_HELPER = "/usr/libexec/schema-init/schema-flip-apply"
+SEATBELT_HELPER = "/usr/libexec/schema-init/schema-udev-flip-healthcheck.sh"
+AUTOSTART = "etc/xdg/autostart/schema-wizard.desktop"
+
+def _default_flip(*a):
+    return subprocess.run([FLIP_HELPER, *a], capture_output=True, text=True)
+
+def install_flip_seatbelt(manifest, dry_run=False):
+    # headless backstop: a schema-init oneshot that runs every boot and, if a
+    # flip is armed, rolls it back when /dev comes up unusable or the desktop
+    # never confirms. Laid down dormant at deploy; the helper gates itself on
+    # the armed state, so it no-ops until `schema-flip-apply arm` (R2).
+    rel = "etc/schema-init/services/schema-udev-healthcheck.svc"
+    if dry_run:
+        return P(rel)
+    dst = P(rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    # order after udev-trigger (when present) so /dev is populated before the
+    # seatbelt judges node health — otherwise it can false-rollback a good flip.
+    deps = []
+    if os.path.exists(P("etc/schema-init/services/udev-trigger.svc")):
+        deps.append("udev-trigger")
+    body = ("name=schema-udev-healthcheck\n"
+            "exec=" + SEATBELT_HELPER + "\n"
+            + "".join("dep=%s\n" % d for d in deps)
+            + "oneshot=1\n"
+            "needs_root=1\n"
+            "critical=0\n")
+    open(dst, "w").write(body)
+    manifest.add_file("/" + rel)
+    return dst
+
+def teardown(root="/"):
+    try:
+        os.remove(os.path.join(root, AUTOSTART))
+    except OSError:
+        pass
+
+def arm_flip(root="/", flip=_default_flip):
+    if stage.read_stage(root) != stage.R1_HEAL:
+        raise RuntimeError("arm-flip requires stage R1_HEAL")
+    if flip("arm").returncode != 0:
+        return 1
+    stage.transition(stage.R2_PENDING, root=root)
+    return 0
+
+def advance_finish(root="/", flip=_default_flip):
+    cur = stage.read_stage(root)
+    if cur == stage.R1_PENDING:
+        stage.transition(stage.R1_HEAL, root=root)
+        return stage.R1_HEAL
+    if cur == stage.R2_PENDING:
+        authoritative = flip("is-authoritative").returncode == 0
+        new = stage.DONE if authoritative else stage.ROLLED_BACK
+        stage.transition(new, root=root)
+        teardown(root)
+        return new
+    return cur
+
+RECOVERY_TEXT = (
+    "HOW TO GET YOUR COMPUTER BACK\n"
+    "=============================\n\n"
+    "Your computer is about to restart to finish setting up schema.\n\n"
+    "If the screen stays BLACK for more than 2 minutes after the restart:\n\n"
+    "  1. Hold the power button until the computer turns off.\n"
+    "  2. Press it again to turn it back on.\n"
+    "  3. At the start-up menu, use the arrow keys to choose the entry that\n"
+    "     does NOT say \"(schema-init)\".\n"
+    "  4. Press Enter.\n\n"
+    "Your computer will start exactly as it does today. Nothing is lost.\n"
+)
+
+
+def write_recovery_card(profile, root="/"):
+    written = []
+    user = profile.get("user")
+    uid = profile.get("uid")
+    targets = []
+    # only place a card in the user's home if that home already exists — never
+    # create /home/<user> ourselves (as root it would be root-owned and break
+    # the user's later home setup).
+    if user and os.path.isdir(os.path.join(root, "home", user)):
+        targets.append(("home/%s/schema-recovery.txt" % user, uid))
+    targets.append(("boot/schema-recovery.txt", None))
+    for rel, owner in targets:
+        dst = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "w") as fh:
+            fh.write(RECOVERY_TEXT)
+        os.chmod(dst, 0o644)
+        if owner is not None:
+            try:
+                os.chown(dst, owner, owner)
+            except OSError:
+                pass
+        written.append("/" + rel)
+    return written
 
 
 def _installed(pkg, run):
@@ -657,8 +768,14 @@ def ensure_build_toolchain(manifest, run=subprocess.run, dry_run=False):
     return missing
 
 
-def run_make_install(manifest, run=subprocess.run, dry_run=False):
+def provision_binaries(manifest, run=subprocess.run, dry_run=False, prebuilt=False):
     if dry_run:
+        return
+    if prebuilt:
+        missing = [b for b in PREBUILT_BINS if not os.path.exists(P("usr/bin/" + b))]
+        if missing:
+            raise RuntimeError("prebuilt mode: %s absent — install the schema-init "
+                               "package first" % ", ".join("/usr/bin/" + b for b in missing))
         return
     ensure_build_toolchain(manifest, run=run, dry_run=dry_run)
     if shutil.which("make") is None or shutil.which("gcc") is None:
@@ -684,16 +801,21 @@ def run_make_install(manifest, run=subprocess.run, dry_run=False):
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def do_deploy(run=subprocess.run, dry_run=False):
+def run_make_install(manifest, run=subprocess.run, dry_run=False, prebuilt=False):
+    return provision_binaries(manifest, run=run, dry_run=dry_run, prebuilt=prebuilt)
+
+
+def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     profile = build_profile(run=run)
     if not dry_run:
         write_profile(profile)
     m = Manifest()
-    run_make_install(m, run=run, dry_run=dry_run)
+    run_make_install(m, run=run, dry_run=dry_run, prebuilt=prebuilt)
     deploy_prevent_set(m, dry_run=dry_run)
     generate_host_units(profile, m, dry_run=dry_run)
     generate_module_load(m, dry_run=dry_run)
     generate_udev_units(m, dry_run=dry_run)
+    install_flip_seatbelt(m, dry_run=dry_run)
     generate_nm_config(m, dry_run=dry_run)
     ensure_user_groups(profile, run=run, dry_run=dry_run)
     _add_unit_dep("network-manager", "coldplug-modules", dry_run=dry_run)
@@ -706,8 +828,10 @@ def do_deploy(run=subprocess.run, dry_run=False):
     ensure_grub_menu_visible(m, run=run, dry_run=dry_run)
     entry = add_boot_entry(profile["kernel"]) if not dry_run else None
     if not dry_run:
+        write_recovery_card(profile, root=ROOT)
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
+        stage.transition(stage.R1_PENDING, root=ROOT)
     return m
 
 
@@ -746,12 +870,24 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--uninstall", action="store_true", help="reverse a prior migration")
     ap.add_argument("--finish", action="store_true", help="post-reboot report + translate offer")
+    ap.add_argument("--arm-flip", action="store_true", help="R2: arm the udev+dbus flip")
+    ap.add_argument("--prebuilt", action="store_true",
+                    help="consume RPM-installed binaries; never compile")
+    ap.add_argument("--stage", action="store_true", help="print the current wizard stage")
     args = ap.parse_args(argv)
+
+    if args.stage:
+        print(stage.read_stage(ROOT)); return 0
+
+    if args.arm_flip:
+        return arm_flip(root=ROOT)
 
     if args.finish:
         if os.path.exists(P("run/schema-init/migrate-finished")):
             print("migrate-finish already ran")
             return 0
+        new = advance_finish(root=ROOT)
+        print("stage: " + new)
         print(finish_report())
         return 0
 
@@ -776,7 +912,8 @@ def main(argv, run=subprocess.run):
         print("already migrated (manifest present) — run --uninstall to reverse")
         return 0
 
-    do_deploy(run=run, dry_run=args.dry_run)
+    prebuilt = args.prebuilt or os.environ.get("MIGRATE_PREBUILT") == "1"
+    do_deploy(run=run, dry_run=args.dry_run, prebuilt=prebuilt)
     print("dry-run complete — nothing changed" if args.dry_run
           else "deploy complete — reboot and pick the '(schema-init)' entry")
     return 0

@@ -17,7 +17,9 @@ set -u
 
 STATE=/var/lib/schema-init/firstboot.state
 COUNT=/var/lib/schema-init/flip-armed-boots
-LIB=/usr/local/lib/schema
+# helpers ship beside this script in both layouts (ISO /usr/local/lib/schema,
+# RPM /usr/libexec/schema-init) — resolve from our own location.
+LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ARM="$LIB/schema-udev-flip-arm.sh"
 BACKUP="$LIB/schema-udev-flip-backup.sh"
 LOG=/var/log/schema-init/flip-healthcheck.log
@@ -25,6 +27,14 @@ LOG=/var/log/schema-init/flip-healthcheck.log
 [ -f "$STATE" ] && [ "$(cat "$STATE")" = "armed" ] || exit 0
 
 log() { echo "[$(date -Is)] $*" >> "$LOG" 2>/dev/null; }
+
+# self-heal is only possible if the flip helpers actually resolved beside us; if
+# they are missing, do NOT force a reboot into a half-applied state — leave the
+# box as-is and let the human recover via the recovery card / boot menu.
+if [ ! -x "$ARM" ] || [ ! -x "$BACKUP" ]; then
+    log "flip helpers missing under $LIB — cannot self-heal; leaving state untouched"
+    exit 0
+fi
 
 rollback() {
     log "flip UNHEALTHY ($1) — rolling back to systemd-udev"
@@ -37,8 +47,19 @@ rollback() {
     exit 0
 }
 
-# give schema-udev a moment to populate /dev after the flip
-i=0; while [ $i -lt 10 ]; do pgrep -x schema-udev >/dev/null 2>&1 && break; i=$((i+1)); sleep 1; done
+# wait for schema-udev to be up AND /dev to be populated before judging health.
+# The migrate rail also orders us after udev-trigger's settle, but poll here too
+# so the shared ISO path (no such ordering) does not false-rollback a healthy
+# flip on a slow coldplug. Bounded at 30s to match udev-trigger's settle timeout.
+i=0; while [ $i -lt 30 ]; do
+    if pgrep -x schema-udev >/dev/null 2>&1 \
+       && ls /dev/input/event* >/dev/null 2>&1 \
+       && ls /dev/dri/card[0-9]* >/dev/null 2>&1 \
+       && ls /dev/disk/by-uuid/* >/dev/null 2>&1; then
+        break
+    fi
+    i=$((i + 1)); sleep 1
+done
 
 # --- class 1: is /dev usable THIS boot? ---
 pgrep -x schema-udev >/dev/null 2>&1 || rollback "schema-udev not running"

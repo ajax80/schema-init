@@ -28,13 +28,14 @@ sm._PREVENT_LIST_OVERRIDE = os.path.join(fakerepo, "distros/fedora-installer/mig
 
 # No real toolchain in the temp root: stand in for the build, producing the
 # binary run_make_install guarantees so the CLI-sequencing checks can run.
-def fake_make_install(manifest, run=None, dry_run=False):
-    if dry_run:
+def fake_provision(manifest, run=None, dry_run=False, prebuilt=False):
+    if dry_run or prebuilt:
         return
     dst = os.path.join(root, "usr/bin/schema-init")
     open(dst, "w").close()
     manifest.add_file("/usr/bin/schema-init")
-sm.run_make_install = fake_make_install
+sm.provision_binaries = fake_provision
+sm.run_make_install = lambda manifest, run=None, dry_run=False, prebuilt=False: fake_provision(manifest, run=run, dry_run=dry_run, prebuilt=prebuilt)
 
 results = []
 def check(n, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {n}")
