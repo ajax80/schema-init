@@ -653,9 +653,18 @@ def install_flip_seatbelt(manifest, dry_run=False):
         return P(rel)
     dst = P(rel)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    open(dst, "w").write("name=schema-udev-healthcheck\n"
-                         "exec=%s\n" % SEATBELT_HELPER
-                         + "oneshot=1\nneeds_root=1\ncritical=0\n")
+    # order after udev-trigger (when present) so /dev is populated before the
+    # seatbelt judges node health — otherwise it can false-rollback a good flip.
+    deps = []
+    if os.path.exists(P("etc/schema-init/services/udev-trigger.svc")):
+        deps.append("udev-trigger")
+    body = ("name=schema-udev-healthcheck\n"
+            "exec=" + SEATBELT_HELPER + "\n"
+            + "".join("dep=%s\n" % d for d in deps)
+            + "oneshot=1\n"
+            "needs_root=1\n"
+            "critical=0\n")
+    open(dst, "w").write(body)
     manifest.add_file("/" + rel)
     return dst
 
