@@ -625,6 +625,37 @@ PREVENT_PACKAGES = ["libavcodec-freeworld", "egl-wayland", "seatd"]
 PREBUILT_BINS = ["schema-init", "schema-ctl", "schema-subreaper"]
 
 
+RECOVERY_TEXT = (
+    "HOW TO GET YOUR COMPUTER BACK\n"
+    "=============================\n\n"
+    "Your computer is about to restart to finish setting up schema.\n\n"
+    "If the screen stays BLACK for more than 2 minutes after the restart:\n\n"
+    "  1. Hold the power button until the computer turns off.\n"
+    "  2. Press it again to turn it back on.\n"
+    "  3. At the start-up menu, use the arrow keys to choose the entry that\n"
+    "     does NOT say \"(schema-init)\".\n"
+    "  4. Press Enter.\n\n"
+    "Your computer will start exactly as it does today. Nothing is lost.\n"
+)
+
+
+def write_recovery_card(profile, root="/"):
+    written = []
+    user = profile.get("user")
+    targets = []
+    if user:
+        targets.append("home/%s/schema-recovery.txt" % user)
+    targets.append("boot/schema-recovery.txt")
+    for rel in targets:
+        dst = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "w") as fh:
+            fh.write(RECOVERY_TEXT)
+        os.chmod(dst, 0o644)
+        written.append("/" + rel)
+    return written
+
+
 def _installed(pkg, run):
     try:
         return run(["rpm", "-q", pkg], capture_output=True, text=True).returncode == 0
