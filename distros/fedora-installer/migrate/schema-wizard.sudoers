@@ -1,0 +1,3 @@
+# The schema onboarding GUI runs unprivileged and reaches root ONLY through
+# these two fixed helper paths. No wildcards.
+%wheel ALL=(root) NOPASSWD: /usr/bin/schema-migrate, /usr/libexec/schema-init/schema-flip-apply

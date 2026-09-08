@@ -45,16 +45,38 @@ overwrite a service file a running system depends on.
 # consume LDFLAGS; the hardened-ld specs would force PIE onto a static binary.
 #
 # schema-udev (the native device manager) lives in the same tree but is a
-# separate, still-maturing concern that is deliberately NOT shipped by this
-# package -- installing it would not change your init system, but retiring
-# systemd-udevd is a manual, hardware-specific cutover, not a package upgrade.
-# Restrict BINS to the core init and its tooling so it is neither built nor
-# installed here.
+# separate, still-maturing concern that is deliberately NOT shipped by the
+# base package -- installing schema-init must not change your init system,
+# but retiring systemd-udevd is a manual, hardware-specific cutover, not a
+# package upgrade. It is built here (migrate_bins) only so the -migrate
+# subpackage below can ship it; the base %%files list never references it.
 %global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
-%make_build BINS="%{core_bins}"
+%global migrate_bins schema-udev
+%make_build BINS="%{core_bins} %{migrate_bins}"
 
 %install
 %make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir} BINS="%{core_bins}"
+%make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
+
+%package migrate
+Summary:   Guided in-place Fedora KDE onboarding onto schema-init (prebuilt)
+Requires:  %{name} = %{version}-%{release}
+Requires:  python3
+Requires:  btrfs-progs
+%description migrate
+Prebuilt engine that converts a running Fedora KDE box onto schema-init in
+place across two reboots, keeping a systemd fallback boot entry. Drives the
+foundation flip (schema-init PID 1) and the desktop-seam flip (schema-udev +
+schema-dbus) from the schema-migrate CLI. Front-ended by schema-wizard.
+
+%files migrate
+%{_bindir}/schema-migrate
+%{_bindir}/schema-udev
+%{_libexecdir}/schema-init/schema-flip-apply
+%{_libexecdir}/schema-init/stage.py
+%{_libexecdir}/schema-init/schema-doctor
+%{_datadir}/%{name}/migrate/prevent-set.list
+%config(noreplace) %{_sysconfdir}/sudoers.d/schema-wizard
 
 %files
 %license LICENSE

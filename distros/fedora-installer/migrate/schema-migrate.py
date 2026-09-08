@@ -20,6 +20,8 @@ ROOT = os.environ.get("MIGRATE_ROOT") or "/"
 _MODDIR = os.path.dirname(os.path.abspath(__file__))
 _PREVENT_LIST_OVERRIDE = None  # tests may set this to a path
 _stage_path = os.path.join(_MODDIR, "stage.py")
+if not os.path.exists(_stage_path):
+    _stage_path = "/usr/libexec/schema-init/stage.py"
 _spec = _ilu.spec_from_file_location("stage", _stage_path)
 stage = _ilu.module_from_spec(_spec); _spec.loader.exec_module(stage)
 
