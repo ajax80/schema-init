@@ -622,6 +622,7 @@ def ensure_user_groups(profile, run=subprocess.run, dry_run=False):
 
 
 PREVENT_PACKAGES = ["libavcodec-freeworld", "egl-wayland", "seatd"]
+PREBUILT_BINS = ["schema-init", "schema-ctl", "schema-subreaper"]
 
 
 def _installed(pkg, run):
@@ -657,7 +658,12 @@ def ensure_build_toolchain(manifest, run=subprocess.run, dry_run=False):
     return missing
 
 
-def run_make_install(manifest, run=subprocess.run, dry_run=False):
+def provision_binaries(manifest, run=subprocess.run, dry_run=False, prebuilt=False):
+    if prebuilt:
+        if not os.path.exists(P("usr/bin/schema-init")):
+            raise RuntimeError("prebuilt mode: /usr/bin/schema-init absent — "
+                               "install the schema-init package first")
+        return
     if dry_run:
         return
     ensure_build_toolchain(manifest, run=run, dry_run=dry_run)
@@ -684,12 +690,16 @@ def run_make_install(manifest, run=subprocess.run, dry_run=False):
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def do_deploy(run=subprocess.run, dry_run=False):
+def run_make_install(manifest, run=subprocess.run, dry_run=False, prebuilt=False):
+    return provision_binaries(manifest, run=run, dry_run=dry_run, prebuilt=prebuilt)
+
+
+def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     profile = build_profile(run=run)
     if not dry_run:
         write_profile(profile)
     m = Manifest()
-    run_make_install(m, run=run, dry_run=dry_run)
+    run_make_install(m, run=run, dry_run=dry_run, prebuilt=prebuilt)
     deploy_prevent_set(m, dry_run=dry_run)
     generate_host_units(profile, m, dry_run=dry_run)
     generate_module_load(m, dry_run=dry_run)
@@ -746,6 +756,8 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--uninstall", action="store_true", help="reverse a prior migration")
     ap.add_argument("--finish", action="store_true", help="post-reboot report + translate offer")
+    ap.add_argument("--prebuilt", action="store_true",
+                    help="consume RPM-installed binaries; never compile")
     args = ap.parse_args(argv)
 
     if args.finish:
@@ -776,7 +788,8 @@ def main(argv, run=subprocess.run):
         print("already migrated (manifest present) — run --uninstall to reverse")
         return 0
 
-    do_deploy(run=run, dry_run=args.dry_run)
+    prebuilt = args.prebuilt or os.environ.get("MIGRATE_PREBUILT") == "1"
+    do_deploy(run=run, dry_run=args.dry_run, prebuilt=prebuilt)
     print("dry-run complete — nothing changed" if args.dry_run
           else "deploy complete — reboot and pick the '(schema-init)' entry")
     return 0
