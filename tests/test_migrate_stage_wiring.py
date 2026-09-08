@@ -17,7 +17,8 @@ def _fedora_kde_root():
         os.makedirs(os.path.join(root, d))
     open(os.path.join(root, "etc/os-release"), "w").write("ID=fedora\n")
     open(os.path.join(root, "usr/bin/plasmashell"), "w").close()
-    open(os.path.join(root, "usr/bin/schema-init"), "w").close()  # prebuilt present
+    for b in ("schema-init", "schema-ctl", "schema-subreaper"):
+        open(os.path.join(root, "usr/bin", b), "w").close()  # prebuilt present
     open(os.path.join(root, "etc/fstab"), "w").write("UUID=aaa / ext4 defaults 0 1\n")
     open(os.path.join(root, "etc/passwd"), "w").write("jandoe:x:1000:1000::/home/jandoe:/bin/bash\n")
     open(os.path.join(root, "boot/loader/entries/f.conf"), "w").write(

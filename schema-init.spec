@@ -51,7 +51,7 @@ overwrite a service file a running system depends on.
 # package upgrade. It is built here (migrate_bins) only so the -migrate
 # subpackage below can ship it; the base %%files list never references it.
 %global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
-%global migrate_bins schema-udev
+%global migrate_bins schema-udev verify-rules-live
 %make_build BINS="%{core_bins} %{migrate_bins}"
 
 %install
@@ -69,13 +69,30 @@ place across two reboots, keeping a systemd fallback boot entry. Drives the
 foundation flip (schema-init PID 1) and the desktop-seam flip (schema-udev +
 schema-dbus) from the schema-migrate CLI. Front-ended by schema-wizard.
 
+%post migrate
+# The flip's rollback baseline: bless the shipped schema-udev by its digest so
+# `schema-flip-apply arm` can verify it (mirrors the ISO kickstart). Regenerated
+# on every (re)install so it always matches the packaged binary.
+md5sum %{_bindir}/schema-udev | cut -d' ' -f1 > %{_sysconfdir}/schema-init/schema-udev.ship-md5
+
+%postun migrate
+if [ $1 -eq 0 ]; then
+    rm -f %{_sysconfdir}/schema-init/schema-udev.ship-md5
+fi
+
 %files migrate
+%dir %{_libexecdir}/schema-init
+%dir %{_datadir}/%{name}/migrate
 %{_bindir}/schema-migrate
 %{_bindir}/schema-udev
 %{_libexecdir}/schema-init/schema-flip-apply
+%{_libexecdir}/schema-init/schema-udev-flip-arm.sh
+%{_libexecdir}/schema-init/schema-udev-flip-backup.sh
+%{_libexecdir}/schema-init/verify-rules-live
 %{_libexecdir}/schema-init/stage.py
 %{_libexecdir}/schema-init/schema-doctor
 %{_datadir}/%{name}/migrate/prevent-set.list
+%ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
 %config(noreplace) %{_sysconfdir}/sudoers.d/schema-wizard
 
 %files

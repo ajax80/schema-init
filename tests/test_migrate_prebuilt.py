@@ -14,7 +14,8 @@ def check(name, cond):
 # prebuilt skips build + does not claim schema-init in the manifest (RPM owns it)
 root = tempfile.mkdtemp()
 os.makedirs(os.path.join(root, "usr/bin"))
-open(os.path.join(root, "usr/bin/schema-init"), "w").close()
+for b in ("schema-init", "schema-ctl", "schema-subreaper"):
+    open(os.path.join(root, "usr/bin", b), "w").close()
 os.environ["MIGRATE_ROOT"] = root
 m = _load()
 calls = []
@@ -28,7 +29,7 @@ check("prebuilt never builds", not any("make" in " ".join(c) for c in calls))
 check("manifest omits schema-init", not any("schema-init" in f for f in man.files))
 del os.environ["MIGRATE_ROOT"]
 
-# prebuilt refuses when the binary is absent
+# prebuilt refuses when a required binary is absent
 root = tempfile.mkdtemp(); os.makedirs(os.path.join(root, "usr/bin"))
 os.environ["MIGRATE_ROOT"] = root
 m = _load()
@@ -39,5 +40,30 @@ except RuntimeError:
     raised = True
 del os.environ["MIGRATE_ROOT"]
 check("prebuilt refuses when binary absent", raised)
+
+# prebuilt refuses when only schema-init is present (must have all of PREBUILT_BINS)
+root = tempfile.mkdtemp(); os.makedirs(os.path.join(root, "usr/bin"))
+open(os.path.join(root, "usr/bin/schema-init"), "w").close()
+os.environ["MIGRATE_ROOT"] = root
+m = _load()
+raised = False
+try:
+    m.provision_binaries(m.Manifest(), prebuilt=True)
+except RuntimeError:
+    raised = True
+del os.environ["MIGRATE_ROOT"]
+check("prebuilt refuses partial install", raised)
+
+# --dry-run --prebuilt prints the plan, never raises, even with no binaries present
+root = tempfile.mkdtemp(); os.makedirs(os.path.join(root, "usr/bin"))
+os.environ["MIGRATE_ROOT"] = root
+m = _load()
+raised = False
+try:
+    m.provision_binaries(m.Manifest(), dry_run=True, prebuilt=True)
+except RuntimeError:
+    raised = True
+del os.environ["MIGRATE_ROOT"]
+check("dry-run+prebuilt does not raise", not raised)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

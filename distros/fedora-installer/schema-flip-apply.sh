@@ -9,14 +9,17 @@
 #
 # A passwordless sudoers.d rule (installed by schema.ks for the login user)
 # permits exactly this one script — so this file is the whole security surface.
-# Keep it tight: fixed absolute paths, a closed set of subcommands, no eval of
-# caller-supplied strings.
+# Keep it tight: helpers resolved from this script's own fixed, sudoers-pinned
+# location, a closed set of subcommands, no eval of caller-supplied strings.
 #
 # There is no polkit auth agent under schema-init (the KDE agent is a systemd
 # *user* unit, which cannot run here), so pkexec is not an option — hence sudo.
 set -u
 
-LIB=/usr/local/lib/schema
+# The ISO installs this and its helpers under /usr/local/lib/schema; the RPM
+# (-migrate subpackage) under /usr/libexec/schema-init. In both, the helpers sit
+# beside this script, so resolve LIB from the invoked, root-owned script path.
+LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ARM="$LIB/schema-udev-flip-arm.sh"
 BACKUP="$LIB/schema-udev-flip-backup.sh"
 VERIFY="$LIB/verify-rules-live"

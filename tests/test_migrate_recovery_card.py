@@ -26,4 +26,15 @@ try:
 finally:
     del os.environ["MIGRATE_ROOT"]
 
+# home absent: write only the boot card, never create /home/<user>
+root = tempfile.mkdtemp()
+os.makedirs(os.path.join(root, "boot"))
+os.environ["MIGRATE_ROOT"] = root
+try:
+    paths = m.write_recovery_card({"user": "jandoe"}, root=root)
+    check("skips home when it does not exist", not os.path.exists(os.path.join(root, "home")))
+    check("still writes boot card", paths == ["/boot/schema-recovery.txt"])
+finally:
+    del os.environ["MIGRATE_ROOT"]
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

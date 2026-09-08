@@ -22,6 +22,10 @@ _PREVENT_LIST_OVERRIDE = None  # tests may set this to a path
 _stage_path = os.path.join(_MODDIR, "stage.py")
 if not os.path.exists(_stage_path):
     _stage_path = "/usr/libexec/schema-init/stage.py"
+if not os.path.exists(_stage_path):
+    raise SystemExit("schema-migrate: stage.py not found (looked in %s and "
+                     "/usr/libexec/schema-init) — is schema-init-migrate installed?"
+                     % _MODDIR)
 _spec = _ilu.spec_from_file_location("stage", _stage_path)
 stage = _ilu.module_from_spec(_spec); _spec.loader.exec_module(stage)
 
@@ -682,16 +686,25 @@ RECOVERY_TEXT = (
 def write_recovery_card(profile, root="/"):
     written = []
     user = profile.get("user")
+    uid = profile.get("uid")
     targets = []
-    if user:
-        targets.append("home/%s/schema-recovery.txt" % user)
-    targets.append("boot/schema-recovery.txt")
-    for rel in targets:
+    # only place a card in the user's home if that home already exists — never
+    # create /home/<user> ourselves (as root it would be root-owned and break
+    # the user's later home setup).
+    if user and os.path.isdir(os.path.join(root, "home", user)):
+        targets.append(("home/%s/schema-recovery.txt" % user, uid))
+    targets.append(("boot/schema-recovery.txt", None))
+    for rel, owner in targets:
         dst = os.path.join(root, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "w") as fh:
             fh.write(RECOVERY_TEXT)
         os.chmod(dst, 0o644)
+        if owner is not None:
+            try:
+                os.chown(dst, owner, owner)
+            except OSError:
+                pass
         written.append("/" + rel)
     return written
 
@@ -730,12 +743,13 @@ def ensure_build_toolchain(manifest, run=subprocess.run, dry_run=False):
 
 
 def provision_binaries(manifest, run=subprocess.run, dry_run=False, prebuilt=False):
-    if prebuilt:
-        if not os.path.exists(P("usr/bin/schema-init")):
-            raise RuntimeError("prebuilt mode: /usr/bin/schema-init absent — "
-                               "install the schema-init package first")
-        return
     if dry_run:
+        return
+    if prebuilt:
+        missing = [b for b in PREBUILT_BINS if not os.path.exists(P("usr/bin/" + b))]
+        if missing:
+            raise RuntimeError("prebuilt mode: %s absent — install the schema-init "
+                               "package first" % ", ".join("/usr/bin/" + b for b in missing))
         return
     ensure_build_toolchain(manifest, run=run, dry_run=dry_run)
     if shutil.which("make") is None or shutil.which("gcc") is None:
