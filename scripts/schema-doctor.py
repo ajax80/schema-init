@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import re
+import signal
 import stat
 import struct
 import subprocess
@@ -562,20 +563,48 @@ REGISTRY.append(VtMediation())
 class PowerDevilRunning(Check):
     name = "powerdevil-running"
     summary = "PowerDevil is running so power and screen-lock settings load"
-    grade = DEFERRED
+    grade = SAFE
+
+    POWERDEVIL_PATHS = ["/usr/libexec/org_kde_powerdevil", "/usr/bin/org_kde_powerdevil"]
 
     def detect(self):
         if active_uid() in (None, 0):
             return None
         if _running("org_kde_powerdevil"):
             return None
+        _uid, env = active_session_env()
         return Finding(
             detail="PowerDevil is not running — its /etc/xdg/autostart entry carries "
                    "X-systemd-skip=true and there is no systemd --user to start it, so "
                    "the power and screen-lock settings report the service is not running "
                    "and cannot load",
             oracle_said="systemd --user starts plasma-powerdevil.service at login",
-            healable=False)
+            healable=bool(env and env.get("DBUS_SESSION_BUS_ADDRESS")))
+
+    def _bin(self):
+        for p in self.POWERDEVIL_PATHS:
+            if os.path.exists(p):
+                return p
+        return "org_kde_powerdevil"
+
+    def snapshot(self):
+        self._pid = None
+        return None
+
+    def heal(self, f):
+        uid, env = active_session_env()
+        if uid in (None, 0) or not env:
+            return
+        self._pid = spawn_in_session(uid, env, [self._bin()])
+
+    def back_out(self, snap):
+        pid = getattr(self, "_pid", None)
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            self._pid = None
 
 
 REGISTRY.append(PowerDevilRunning())
@@ -614,7 +643,15 @@ REGISTRY.append(SessionAgents())
 class KsycocaLoop(Check):
     name = "ksycoca-loop"
     summary = "Plasma processes agree on the menu prefix (no ksycoca rebuild storm)"
-    grade = DEFERRED
+    grade = SAFE
+
+    GUARD_REL = ".config/plasma-workspace/env/zzzz-schema-menu-prefix.sh"
+
+    def _plasma(self):
+        return next((p for p in _proc_table() if "plasmashell" in p["cmd"]), None)
+
+    def _guard(self, home):
+        return os.path.join(home, self.GUARD_REL)
 
     def detect(self):
         tbl = _proc_table()
@@ -626,14 +663,51 @@ class KsycocaLoop(Check):
         b = kd["env"].get("XDG_MENU_PREFIX", "")
         if a == b:
             return None
+        home = pl["env"].get("HOME")
+        if home and os.path.exists(self._guard(home)):
+            return None
         return Finding(
             detail=f"plasmashell and kded6 disagree on XDG_MENU_PREFIX "
                    f"(plasmashell={a or 'unset'!r}, kded6={b or 'unset'!r}) — each "
                    "rebuilds ksycoca to its own menu view about once a second, pinning "
-                   "a CPU core; that is the ~2-second desktop and video stutter",
+                   "a CPU core; that is the ~2-second desktop and video stutter. A "
+                   "persistent env guard pinning the prefix fixes it from the next login",
             oracle_said="systemd --user gives every session process one consistent "
                         "XDG_MENU_PREFIX",
-            healable=False)
+            healable=bool(home))
+
+    def snapshot(self):
+        p = self._plasma()
+        home = p["env"].get("HOME") if p else None
+        g = self._guard(home) if home else None
+        return {"guard": g, "existed": bool(g and os.path.exists(g))}
+
+    def heal(self, f):
+        p = self._plasma()
+        home = p["env"].get("HOME") if p else None
+        if not home:
+            return
+        prefix = p["env"].get("XDG_MENU_PREFIX", "")
+        g = self._guard(home)
+        os.makedirs(os.path.dirname(g), exist_ok=True)
+        with open(g, "w") as fh:
+            fh.write("#!/bin/sh\n"
+                     "# schema-doctor: pin one XDG_MENU_PREFIX so plasmashell and kded6\n"
+                     "# stop rebuilding ksycoca to divergent menu views (the stutter).\n"
+                     'export XDG_MENU_PREFIX="%s"\n' % prefix)
+        os.chmod(g, 0o755)
+
+    def verify(self):
+        p = self._plasma()
+        home = p["env"].get("HOME") if p else None
+        return bool(home and os.path.exists(self._guard(home)))
+
+    def back_out(self, snap):
+        if snap and snap.get("guard") and not snap.get("existed"):
+            try:
+                os.remove(snap["guard"])
+            except OSError:
+                pass
 
 
 REGISTRY.append(KsycocaLoop())
@@ -642,16 +716,28 @@ REGISTRY.append(KsycocaLoop())
 class PanelLauncherPaths(Check):
     name = "panel-launcher-paths"
     summary = "panel pins resolve by app-id, not by fragile file:// drive paths"
-    grade = DEFERRED
+    grade = SAFE
 
     APPLETS_REL = ".config/plasma-org.kde.plasma.desktop-appletsrc"
 
-    def detect(self):
+    def _appletsrc(self):
         p = next((x for x in _proc_table() if "plasmashell" in x["cmd"]), None)
         home = p["env"].get("HOME") if p else None
-        if not home:
+        return os.path.join(home, self.APPLETS_REL) if home else None
+
+    @staticmethod
+    def _fragile(entry):
+        return entry.startswith("file://") and entry.endswith(".desktop")
+
+    @staticmethod
+    def _to_appid(entry):
+        # file:///…/foo.desktop → applications:foo.desktop (basename is the app-id)
+        return "applications:" + os.path.basename(entry)
+
+    def detect(self):
+        path = self._appletsrc()
+        if not path:
             return None
-        path = os.path.join(home, self.APPLETS_REL)
         try:
             lines = open(path, errors="replace").read().splitlines()
         except OSError:
@@ -659,8 +745,7 @@ class PanelLauncherPaths(Check):
         bad = []
         for line in lines:
             if line.startswith("launchers="):
-                bad += [e for e in line[len("launchers="):].split(",")
-                        if e.startswith("file://")]
+                bad += [e for e in line[len("launchers="):].split(",") if self._fragile(e)]
         if not bad:
             return None
         return Finding(
@@ -669,7 +754,37 @@ class PanelLauncherPaths(Check):
                    "resolve and Plasma silently drops it. Rewriting them to "
                    "applications:<app-id>.desktop resolves through ksycoca instead",
             oracle_said="app-id pins resolve via XDG_DATA_DIRS, independent of mount order",
-            healable=False)
+            healable=True)
+
+    def snapshot(self):
+        path = self._appletsrc()
+        try:
+            return {"path": path, "data": open(path, errors="replace").read()}
+        except (OSError, TypeError):
+            return {"path": path, "data": None}
+
+    def heal(self, f):
+        path = self._appletsrc()
+        if not path or not os.path.exists(path):
+            return
+        out = []
+        for line in open(path, errors="replace").read().splitlines():
+            if line.startswith("launchers="):
+                entries = line[len("launchers="):].split(",")
+                fixed = [self._to_appid(e) if self._fragile(e) else e for e in entries]
+                out.append("launchers=" + ",".join(fixed))
+            else:
+                out.append(line)
+        with open(path, "w") as fh:
+            fh.write("\n".join(out) + "\n")
+
+    def back_out(self, snap):
+        if snap and snap.get("path") and snap.get("data") is not None:
+            try:
+                with open(snap["path"], "w") as fh:
+                    fh.write(snap["data"])
+            except OSError:
+                pass
 
 
 REGISTRY.append(PanelLauncherPaths())
@@ -933,6 +1048,22 @@ def active_session_env():
 def _notify_argv(uid, summary, body):
     return ["setpriv", "--reuid", str(uid), "--regid", str(uid), "--clear-groups",
             "notify-send", "-a", "schema-doctor", "--", summary, body]
+
+
+def spawn_in_session(uid, env, argv):
+    child = {"DBUS_SESSION_BUS_ADDRESS": env.get("DBUS_SESSION_BUS_ADDRESS", ""),
+             "DISPLAY": env.get("DISPLAY", ""),
+             "WAYLAND_DISPLAY": env.get("WAYLAND_DISPLAY", ""),
+             "XDG_RUNTIME_DIR": env.get("XDG_RUNTIME_DIR", f"/run/user/{uid}"),
+             "PATH": "/usr/bin:/bin"}
+    demoted = ["setpriv", "--reuid", str(uid), "--regid", str(uid), "--clear-groups"]
+    try:
+        p = subprocess.Popen(demoted + list(argv), env=child,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        return p.pid
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def notify_send(uid, env, summary, body):

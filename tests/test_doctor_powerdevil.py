@@ -29,13 +29,46 @@ def check(n, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {n}"
 
 c = sd.PowerDevilRunning()
 
-mkproc(1000, "plasmashell")
+# plasmashell carries a live session bus → powerdevil is launchable → healable
+mkproc(1000, "plasmashell", {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+                             "XDG_RUNTIME_DIR": "/run/user/1000",
+                             "WAYLAND_DISPLAY": "wayland-0"})
 f = c.detect()
-check("detect flags powerdevil down", f is not None and not f.healable)
+check("detect flags powerdevil down", f is not None)
 check("detail names X-systemd-skip", f is not None and "X-systemd-skip" in f.detail)
+check("finding is now healable (session bus present)", f is not None and f.healable is True)
+check("check grade is SAFE (self-heals)", c.grade == sd.SAFE)
 
-mkproc(1200, "/usr/libexec/org_kde_powerdevil")
-check("clean when powerdevil runs", c.detect() is None)
+# heal launches powerdevil in the session via the injected spawner
+launched = {}
+def fake_spawn(uid, env, argv):
+    launched["uid"] = uid; launched["argv"] = argv; launched["env"] = env
+    mkproc(1200, "/usr/libexec/org_kde_powerdevil")   # simulate it coming up
+    return 4242
+sd.spawn_in_session = fake_spawn
+
+snap = c.snapshot()
+c.heal(f)
+check("heal spawned as the session uid", launched.get("uid") == 1000)
+check("heal launched org_kde_powerdevil", any("org_kde_powerdevil" in a for a in launched.get("argv", [])))
+check("heal passed the session bus through", "DBUS_SESSION_BUS_ADDRESS" in (launched.get("env") or {}))
+check("verify passes once powerdevil runs", c.verify() is True)
+
+# back_out kills exactly the pid we started
+killed = []
+real_kill = os.kill
+os.kill = lambda pid, sig: killed.append((pid, sig))
+c.back_out(snap)
+os.kill = real_kill
+check("back_out kills the pid we started", (4242,) == tuple(k[0] for k in killed))
+
+# not healable when there is no session bus to launch into
+real_ase, real_running = sd.active_session_env, sd._running
+sd.active_session_env = lambda: (1000, None)      # session has no DBUS bus
+sd._running = lambda needle, tbl=None: False       # and powerdevil is down
+f3 = sd.PowerDevilRunning().detect()
+sd.active_session_env, sd._running = real_ase, real_running
+check("not healable without a session bus", f3 is not None and f3.healable is False)
 
 print("PASS" if all(results) else "FAIL")
 sys.exit(0 if all(results) else 1)
