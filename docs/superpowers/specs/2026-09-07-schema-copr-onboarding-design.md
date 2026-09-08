@@ -79,10 +79,13 @@ the *front end* (CLI + yad → one Qt/QML wizard).
   compile), the prevent-set, service `.svc` files, the flip helper
   (`schema-flip-apply`) and its seatbelt. Built from the existing
   `schema-init.spec`, extended to package the binaries and the fedora-kde /
-  fedora-installer payloads.
+  fedora-installer payloads. Also ships the escalation drop-in
+  `/etc/sudoers.d/schema-wizard` (see Privileged surface) and owns the root
+  stage file `/var/lib/schema-init/wizard-stage.json`.
 - **`schema-wizard`** — the PySide6 Qt/QML GUI. Requires `schema-init` and
-  `python3-pyside6`. Ships the wizard, its QML, and the XDG autostart entry that
-  relaunches it at the right stage after each reboot.
+  `python3-pyside6`. Ships the wizard, its QML, and the XDG autostart entry
+  (`/etc/xdg/autostart/schema-wizard.desktop`) that relaunches it at the right
+  stage after each reboot, plus a `~/Desktop` launcher for on-demand re-runs.
 - **Adoption:** enable COPR → `dnf install schema-wizard` (pulls `schema-init`) →
   launch the wizard.
 
@@ -111,10 +114,37 @@ INSTALLED → R1_PENDING → (reboot) → R1_HEAL → R2_PENDING → (reboot) �
   in **ROLLED_BACK**: explain in plain language *why* (reuse `humanize_reason`),
   leave the machine clean on the proven foundation, offer the report — never a
   silent dead-end.
+- **Teardown (DONE and ROLLED_BACK):** the wizard removes its root autostart
+  entry (`/etc/xdg/autostart/schema-wizard.desktop`, via the helper) and the
+  `~/Desktop` launcher, so it stops relaunching on every login. The stage file
+  is left at its terminal value as an idempotency record; a re-run from the
+  Desktop launcher reads it and no-ops if terminal. This mirrors the yad
+  wizard's `finish_clean()`.
 
-Privileged actions stay behind a single sudoers-permitted helper surface (the
-migrate engine + `schema-flip-apply`); the GUI runs unprivileged in the user
-session and shells to that helper, mirroring the yad wizard's model.
+### State location
+
+The authoritative stage lives in one **root-owned** file,
+`/var/lib/schema-init/wizard-stage.json` (0644, world-readable), alongside the
+existing `migrate-profile.json` / `migrate-manifest.json`. Only the privileged
+helper writes stage transitions; the unprivileged GUI reads it to decide which
+screen to show. This replaces the split between migrate's manifest-presence
+check and the flip wizard's per-user `firstboot.state`. Per-user GUI ephemera
+(which sub-panel is expanded, etc.) may still live under `$XDG_STATE_HOME`, but
+never the authoritative stage.
+
+### Privileged surface
+
+The GUI runs **unprivileged** in the Plasma session and performs every
+system-changing action through a **single fixed helper** — the migrate engine
+and `schema-flip-apply` — never inline. v1 grants that helper via a
+`/etc/sudoers.d/schema-wizard` drop-in: `NOPASSWD` for the exact absolute helper
+path(s) only, nothing wildcarded. This mirrors the model the yad flip wizard
+already ships and proves, and the root-owned fixed-path helper is the entire
+attack surface. (Alternative considered: a polkit `.policy` + `pkexec`, which
+swaps the standing `NOPASSWD` rule for a per-action native KDE auth dialog.
+Noted as post-v1 hardening; not required for the first cut.) The password the
+consent screen collects is the user's own login credential used to gate intent —
+the escalation itself rides the locked helper.
 
 ## GUI (Qt/QML, PySide6)
 
@@ -123,6 +153,21 @@ polish. Screens:
 
 - **Welcome / consent** (per round): what is about to happen, the safety net
   (snapshot + fallback entry + auto-rollback), password prompt.
+- **Recovery card (before R1's reboot — mandatory, cannot be skipped):** the one
+  catastrophe the GUI cannot rescue is R1 booting schema-init and *never
+  reaching SDDM* (black screen / early panic) — there is no desktop left to draw
+  a wizard on. So *before* arming R1, a full-screen card shows, in plain
+  language and large type, exactly how to recover by hand:
+  *"If the screen stays black for more than 2 minutes after this restart, hold
+  the power button to turn the computer off, turn it back on, and at the boot
+  menu use the arrow keys to pick the entry that does **not** say
+  '(schema-init)', then press Enter. Your computer will start exactly as it does
+  today."* The card tells the user to **photograph it with their phone** and
+  requires an explicit *"I've saved these instructions"* check before Continue
+  becomes active. The same text is written to `~/schema-recovery.txt` and to the
+  ESP/`/boot` as a fallback readable from another machine. (The migrate engine
+  already makes the GRUB menu visible and keeps the stock entry, so the menu
+  will be there to pick from.)
 - **Progress**: live step feedback during deploy / arm.
 - **Advanced (collapsed expander)**: every layer listed — keep/remove fallback
   entry, udev flip on/off, dbus broker on/off, snapshot on/off, doctor timers —
@@ -141,6 +186,10 @@ polish. Screens:
 - **Fallback systemd boot entry** kept pristine (migrate already does this; the
   kernel-install hook keeps it across kernel updates).
 - **Headless seatbelt** auto-rolls-back an unusable flip before login.
+- **Manual fallback recovery** for the one case automation can't cover — R1
+  never reaching a desktop: the mandatory Recovery card (above) + the pristine
+  visible GRUB entry + `~/schema-recovery.txt`/`/boot` copy give the user a
+  hand-recoverable path back to stock systemd with no working desktop required.
 - **`schema-migrate --uninstall`** reverses the whole migration from the
   manifest.
 
@@ -177,3 +226,6 @@ polish. Screens:
    foundation layer.
 3. `schema-migrate --uninstall` returns the VM to stock systemd.
 4. Advanced lists every layer with warnings; ignoring it yields the safe path.
+5. The mandatory Recovery card blocks Continue until acknowledged; on a VM forced
+   to a black-screen R1, selecting the non-`(schema-init)` GRUB entry boots
+   straight back to stock systemd with a working desktop.
