@@ -56,7 +56,7 @@ overwrite a service file a running system depends on.
 
 %install
 %make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir} BINS="%{core_bins}"
-%make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
+make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 
 %package migrate
 Summary:   Guided in-place Fedora KDE onboarding onto schema-init (prebuilt)
