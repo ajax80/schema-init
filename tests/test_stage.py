@@ -1,35 +1,46 @@
-import os, sys, tempfile, importlib.util, pytest
+#!/usr/bin/env python3
+"""stage machine tests — script-style, no root needed."""
+import os, sys, json, tempfile, importlib.util
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(REPO, "distros/fedora-installer/migrate/stage.py")
 spec = importlib.util.spec_from_file_location("stage", MOD)
 stage = importlib.util.module_from_spec(spec); spec.loader.exec_module(stage)
 
+results = []
+def check(name, cond):
+    results.append(bool(cond)); print(("  ok  " if cond else "  FAIL ") + name)
+
 def _root():
     r = tempfile.mkdtemp(); os.makedirs(os.path.join(r, "var/lib")); return r
 
-def test_absent_reads_installed():
-    assert stage.read_stage(_root()) == stage.INSTALLED
+# absent stage reads as INSTALLED
+check("absent reads INSTALLED", stage.read_stage(_root()) == stage.INSTALLED)
 
-def test_write_then_read_roundtrip():
-    r = _root()
-    stage.write_stage(stage.R1_PENDING, root=r)
-    assert stage.read_stage(r) == stage.R1_PENDING
-    assert oct(os.stat(os.path.join(r, stage.STAGE_PATH)).st_mode)[-3:] == "644"
+# write then read roundtrip + 644 perms
+r = _root()
+stage.write_stage(stage.R1_PENDING, root=r)
+check("roundtrip reads R1_PENDING", stage.read_stage(r) == stage.R1_PENDING)
+check("stage file is 0644", oct(os.stat(os.path.join(r, stage.STAGE_PATH)).st_mode)[-3:] == "644")
 
-def test_legal_transition():
-    r = _root()
-    stage.transition(stage.R1_PENDING, root=r)
-    stage.transition(stage.R1_HEAL, root=r)
-    assert stage.read_stage(r) == stage.R1_HEAL
+# legal transition chain
+r = _root()
+stage.transition(stage.R1_PENDING, root=r)
+stage.transition(stage.R1_HEAL, root=r)
+check("legal transition to R1_HEAL", stage.read_stage(r) == stage.R1_HEAL)
 
-def test_illegal_transition_raises():
-    r = _root()
-    with pytest.raises(ValueError):
-        stage.transition(stage.DONE, root=r)   # INSTALLED -> DONE is not allowed
+# illegal transition raises ValueError (INSTALLED -> DONE not allowed)
+r = _root()
+raised = False
+try:
+    stage.transition(stage.DONE, root=r)
+except ValueError:
+    raised = True
+check("illegal transition raises ValueError", raised)
 
-def test_extra_fields_persist():
-    r = _root()
-    stage.write_stage(stage.R2_PENDING, root=r, extra={"snapshot": "@pre-schema"})
-    import json
-    d = json.load(open(os.path.join(r, stage.STAGE_PATH)))
-    assert d["snapshot"] == "@pre-schema" and "ts" in d
+# extra fields persist alongside ts
+r = _root()
+stage.write_stage(stage.R2_PENDING, root=r, extra={"snapshot": "@pre-schema"})
+d = json.load(open(os.path.join(r, stage.STAGE_PATH)))
+check("extra fields persist with ts", d["snapshot"] == "@pre-schema" and "ts" in d)
+
+print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
