@@ -628,6 +628,38 @@ def ensure_user_groups(profile, run=subprocess.run, dry_run=False):
 PREVENT_PACKAGES = ["libavcodec-freeworld", "egl-wayland", "seatd"]
 PREBUILT_BINS = ["schema-init", "schema-ctl", "schema-subreaper"]
 
+FLIP_HELPER = "/usr/libexec/schema-init/schema-flip-apply"
+AUTOSTART = "etc/xdg/autostart/schema-wizard.desktop"
+
+def _default_flip(*a):
+    return subprocess.run([FLIP_HELPER, *a], capture_output=True, text=True)
+
+def teardown(root="/"):
+    try:
+        os.remove(os.path.join(root, AUTOSTART))
+    except OSError:
+        pass
+
+def arm_flip(root="/", flip=_default_flip):
+    if stage.read_stage(root) != stage.R1_HEAL:
+        raise RuntimeError("arm-flip requires stage R1_HEAL")
+    if flip("arm").returncode != 0:
+        return 1
+    stage.transition(stage.R2_PENDING, root=root)
+    return 0
+
+def advance_finish(root="/", flip=_default_flip):
+    cur = stage.read_stage(root)
+    if cur == stage.R1_PENDING:
+        stage.transition(stage.R1_HEAL, root=root)
+        return stage.R1_HEAL
+    if cur == stage.R2_PENDING:
+        authoritative = flip("is-authoritative").returncode == 0
+        new = stage.DONE if authoritative else stage.ROLLED_BACK
+        stage.transition(new, root=root)
+        teardown(root)
+        return new
+    return cur
 
 RECOVERY_TEXT = (
     "HOW TO GET YOUR COMPUTER BACK\n"
@@ -793,6 +825,7 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--uninstall", action="store_true", help="reverse a prior migration")
     ap.add_argument("--finish", action="store_true", help="post-reboot report + translate offer")
+    ap.add_argument("--arm-flip", action="store_true", help="R2: arm the udev+dbus flip")
     ap.add_argument("--prebuilt", action="store_true",
                     help="consume RPM-installed binaries; never compile")
     ap.add_argument("--stage", action="store_true", help="print the current wizard stage")
@@ -801,10 +834,15 @@ def main(argv, run=subprocess.run):
     if args.stage:
         print(stage.read_stage(ROOT)); return 0
 
+    if args.arm_flip:
+        return arm_flip(root=ROOT)
+
     if args.finish:
         if os.path.exists(P("run/schema-init/migrate-finished")):
             print("migrate-finish already ran")
             return 0
+        new = advance_finish(root=ROOT)
+        print("stage: " + new)
         print(finish_report())
         return 0
 
