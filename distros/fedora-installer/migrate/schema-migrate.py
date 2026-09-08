@@ -14,10 +14,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import importlib.util as _ilu
 
 ROOT = os.environ.get("MIGRATE_ROOT") or "/"
 _MODDIR = os.path.dirname(os.path.abspath(__file__))
 _PREVENT_LIST_OVERRIDE = None  # tests may set this to a path
+_stage_path = os.path.join(_MODDIR, "stage.py")
+_spec = _ilu.spec_from_file_location("stage", _stage_path)
+stage = _ilu.module_from_spec(_spec); _spec.loader.exec_module(stage)
 
 
 def P(rel):
@@ -747,8 +751,10 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     ensure_grub_menu_visible(m, run=run, dry_run=dry_run)
     entry = add_boot_entry(profile["kernel"]) if not dry_run else None
     if not dry_run:
+        write_recovery_card(profile, root=ROOT)
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
+        stage.transition(stage.R1_PENDING, root=ROOT)
     return m
 
 
@@ -789,7 +795,11 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--finish", action="store_true", help="post-reboot report + translate offer")
     ap.add_argument("--prebuilt", action="store_true",
                     help="consume RPM-installed binaries; never compile")
+    ap.add_argument("--stage", action="store_true", help="print the current wizard stage")
     args = ap.parse_args(argv)
+
+    if args.stage:
+        print(stage.read_stage(ROOT)); return 0
 
     if args.finish:
         if os.path.exists(P("run/schema-init/migrate-finished")):
