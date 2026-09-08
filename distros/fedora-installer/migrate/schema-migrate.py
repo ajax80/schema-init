@@ -637,10 +637,27 @@ PREVENT_PACKAGES = ["libavcodec-freeworld", "egl-wayland", "seatd"]
 PREBUILT_BINS = ["schema-init", "schema-ctl", "schema-subreaper"]
 
 FLIP_HELPER = "/usr/libexec/schema-init/schema-flip-apply"
+SEATBELT_HELPER = "/usr/libexec/schema-init/schema-udev-flip-healthcheck.sh"
 AUTOSTART = "etc/xdg/autostart/schema-wizard.desktop"
 
 def _default_flip(*a):
     return subprocess.run([FLIP_HELPER, *a], capture_output=True, text=True)
+
+def install_flip_seatbelt(manifest, dry_run=False):
+    # headless backstop: a schema-init oneshot that runs every boot and, if a
+    # flip is armed, rolls it back when /dev comes up unusable or the desktop
+    # never confirms. Laid down dormant at deploy; the helper gates itself on
+    # the armed state, so it no-ops until `schema-flip-apply arm` (R2).
+    rel = "etc/schema-init/services/schema-udev-healthcheck.svc"
+    if dry_run:
+        return P(rel)
+    dst = P(rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    open(dst, "w").write("name=schema-udev-healthcheck\n"
+                         "exec=%s\n" % SEATBELT_HELPER
+                         + "oneshot=1\nneeds_root=1\ncritical=0\n")
+    manifest.add_file("/" + rel)
+    return dst
 
 def teardown(root="/"):
     try:
@@ -789,6 +806,7 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     generate_host_units(profile, m, dry_run=dry_run)
     generate_module_load(m, dry_run=dry_run)
     generate_udev_units(m, dry_run=dry_run)
+    install_flip_seatbelt(m, dry_run=dry_run)
     generate_nm_config(m, dry_run=dry_run)
     ensure_user_groups(profile, run=run, dry_run=dry_run)
     _add_unit_dep("network-manager", "coldplug-modules", dry_run=dry_run)

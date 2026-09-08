@@ -88,6 +88,7 @@ fi
 %{_libexecdir}/schema-init/schema-flip-apply
 %{_libexecdir}/schema-init/schema-udev-flip-arm.sh
 %{_libexecdir}/schema-init/schema-udev-flip-backup.sh
+%{_libexecdir}/schema-init/schema-udev-flip-healthcheck.sh
 %{_libexecdir}/schema-init/verify-rules-live
 %{_libexecdir}/schema-init/stage.py
 %{_libexecdir}/schema-init/schema-doctor

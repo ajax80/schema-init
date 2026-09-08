@@ -98,6 +98,7 @@ install-migrate: schema-udev verify-rules-live
 	install -m 0755 distros/fedora-installer/schema-flip-apply.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-flip-apply
 	install -m 0755 scripts/schema-udev-flip-arm.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-arm.sh
 	install -m 0755 scripts/schema-udev-flip-backup.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-backup.sh
+	install -m 0755 distros/fedora-installer/schema-udev-flip-healthcheck.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-healthcheck.sh
 	install -m 0755 verify-rules-live $(DESTDIR)$(PREFIX)/libexec/schema-init/verify-rules-live
 	install -m 0644 distros/fedora-installer/migrate/stage.py $(DESTDIR)$(PREFIX)/libexec/schema-init/stage.py
 	install -m 0755 scripts/schema-doctor.py $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-doctor

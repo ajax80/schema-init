@@ -17,7 +17,9 @@ set -u
 
 STATE=/var/lib/schema-init/firstboot.state
 COUNT=/var/lib/schema-init/flip-armed-boots
-LIB=/usr/local/lib/schema
+# helpers ship beside this script in both layouts (ISO /usr/local/lib/schema,
+# RPM /usr/libexec/schema-init) — resolve from our own location.
+LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ARM="$LIB/schema-udev-flip-arm.sh"
 BACKUP="$LIB/schema-udev-flip-backup.sh"
 LOG=/var/log/schema-init/flip-healthcheck.log
