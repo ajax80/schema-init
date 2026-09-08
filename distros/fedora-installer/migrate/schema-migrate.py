@@ -37,6 +37,8 @@ def repo():
 def load_prevent_set(path=None):
     if path is None:
         path = _PREVENT_LIST_OVERRIDE or os.path.join(_MODDIR, "prevent-set.list")
+        if not os.path.exists(path):
+            path = "/usr/share/schema-init/migrate/prevent-set.list"
     out = {"script": [], "config": [], "service": [], "exclude": []}
     with open(path) as fh:
         for line in fh:
