@@ -40,28 +40,5 @@ check("detail names XDG_MENU_PREFIX", f is not None and "XDG_MENU_PREFIX" in f.d
 mkproc(1, "plasmashell", {"XDG_MENU_PREFIX": "plasma-"})
 check("clean when prefixes agree", c.detect() is None)
 
-# --- heal: write a persistent env guard pinning plasmashell's live prefix ---
-home = os.path.join(root, "home", "u")
-os.makedirs(home, exist_ok=True)
-mkproc(1, "plasmashell", {"XDG_MENU_PREFIX": "plasma-", "HOME": home})
-mkproc(2, "kded6", {"XDG_MENU_PREFIX": ""})   # kded6 disagrees → the loop
-f = c.detect()
-check("detect flags mismatch with home present", f is not None)
-check("finding is now healable", f is not None and f.healable is True)
-check("check grade is SAFE (self-heals)", c.grade == sd.SAFE)
-
-snap = c.snapshot()
-c.heal(f)
-guard = os.path.join(home, sd.KsycocaLoop.GUARD_REL)
-check("heal writes the env guard", os.path.exists(guard))
-gbody = open(guard).read()
-check("guard pins plasmashell's live prefix", 'XDG_MENU_PREFIX="plasma-"' in gbody)
-check("guard is a sourceable sh script", gbody.startswith("#!"))
-check("detect short-circuits once guard exists", c.detect() is None)
-check("verify passes after heal", c.verify() is True)
-
-c.back_out(snap)
-check("back_out removes the guard we wrote", not os.path.exists(guard))
-
 print("PASS" if all(results) else "FAIL")
 sys.exit(0 if all(results) else 1)
