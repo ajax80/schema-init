@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Set up schema
+Comment=Convert this computer to schema-init
+Exec=/usr/bin/schema-wizard
+Icon=drive-harddisk
+Terminal=false

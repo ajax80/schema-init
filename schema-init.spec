@@ -57,6 +57,7 @@ overwrite a service file a running system depends on.
 %install
 %make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir} BINS="%{core_bins}"
 make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
+make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 
 %package migrate
 Summary:   Guided in-place Fedora KDE onboarding onto schema-init (prebuilt)
@@ -95,6 +96,24 @@ fi
 %{_datadir}/%{name}/migrate/prevent-set.list
 %ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
 %config(noreplace) %{_sysconfdir}/sudoers.d/schema-wizard
+
+%package wizard
+Summary:   Guided PySide6 GUI that converts a Fedora KDE box onto schema-init
+Requires:  %{name}-migrate = %{version}-%{release}
+Requires:  python3-pyside6
+BuildArch: noarch
+%description wizard
+The onboarding wizard: a native Plasma (Qt/QML) GUI that walks a novice through
+the two-reboot in-place conversion, driving the migrate engine, the flip helper,
+and schema-doctor. Unprivileged; escalates only through the fixed helpers.
+
+%files wizard
+%dir %{_libexecdir}/schema-init/wizard
+%dir %{_libexecdir}/schema-init/wizard/qml
+%{_bindir}/schema-wizard
+%{_libexecdir}/schema-init/wizard/*.py
+%{_libexecdir}/schema-init/wizard/qml/*.qml
+%{_sysconfdir}/xdg/autostart/schema-wizard.desktop
 
 %files
 %license LICENSE
