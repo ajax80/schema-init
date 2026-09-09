@@ -17,6 +17,31 @@ def _load_stage():
 
 stage = _load_stage()
 
+ADVANCED = [
+    {"key": "keep_fallback_entry", "label": "Keep the current system as a backup boot option",
+     "default": True, "dangerous": True,
+     "warning": "Don't turn this off unless you're certain what it does — it is your way back."},
+    {"key": "snapshot", "label": "Take a filesystem snapshot before changing anything",
+     "default": True, "dangerous": True,
+     "warning": "Don't turn this off unless you're certain what it does."},
+    {"key": "udev_flip", "label": "Switch to the schema device manager (second reboot)",
+     "default": True, "dangerous": True,
+     "warning": "Don't turn this off unless you're certain what it does."},
+    {"key": "dbus_broker", "label": "Switch to the schema message bus (second reboot)",
+     "default": True, "dangerous": True,
+     "warning": "Don't turn this off unless you're certain what it does."},
+    {"key": "doctor_timers", "label": "Let the doctor keep watch and self-heal",
+     "default": True, "dangerous": False, "warning": ""},
+]
+
+_OPT_FLAG = {
+    "keep_fallback_entry": "--advanced-no-fallback-entry",
+    "snapshot": "--advanced-no-snapshot",
+    "udev_flip": "--advanced-no-udev-flip",
+    "dbus_broker": "--advanced-no-dbus-broker",
+    "doctor_timers": "--advanced-no-doctor-timers",
+}
+
 _SCREEN = {
     stage.INSTALLED: "welcome",
     stage.R1_PENDING: "waiting_reboot",
@@ -40,3 +65,12 @@ class WizardCore:
 
     def screen(self):
         return self.screen_for(self.current_stage())
+
+    def deploy_opts(self, selections):
+        defaults = {o["key"]: o["default"] for o in ADVANCED}
+        flags = []
+        for key, default in defaults.items():
+            chosen = selections.get(key, default)
+            if chosen != default and not chosen:
+                flags.append(_OPT_FLAG[key])
+        return flags
