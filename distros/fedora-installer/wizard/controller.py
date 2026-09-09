@@ -1,4 +1,3 @@
-import subprocess
 import os
 import importlib.util as _ilu
 from PySide6.QtCore import QObject, Property, Signal, Slot
