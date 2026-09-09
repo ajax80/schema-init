@@ -874,7 +874,16 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--prebuilt", action="store_true",
                     help="consume RPM-installed binaries; never compile")
     ap.add_argument("--stage", action="store_true", help="print the current wizard stage")
+    ap.add_argument("--advanced-no-fallback-entry", action="store_true")
+    ap.add_argument("--advanced-no-snapshot", action="store_true")
+    ap.add_argument("--advanced-no-udev-flip", action="store_true")
+    ap.add_argument("--advanced-no-dbus-broker", action="store_true")
+    ap.add_argument("--advanced-no-doctor-timers", action="store_true")
     args = ap.parse_args(argv)
+
+    os.environ.setdefault("MIGRATE_ADV", ",".join(
+        k for k in ("no-fallback-entry", "no-snapshot", "no-udev-flip", "no-dbus-broker", "no-doctor-timers")
+        if getattr(args, "advanced_" + k.replace("-", "_"))))
 
     if args.stage:
         print(stage.read_stage(ROOT)); return 0

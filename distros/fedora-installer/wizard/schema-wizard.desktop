@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Finish setting up schema
+Exec=/usr/bin/schema-wizard
+Icon=drive-harddisk
+Terminal=false
+X-KDE-autostart-phase=2
