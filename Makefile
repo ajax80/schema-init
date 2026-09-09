@@ -117,6 +117,16 @@ release: all
 	@echo "release assets in $(RELDIR)/ (stripped):"
 	@cd $(RELDIR) && ls -l $(BINS) SHA256SUMS
 
+# Build a source RPM from tracked git content only (git archive HEAD) — never
+# the working tree, so a stray built binary can't poison find-debuginfo. Mirrors
+# .copr/Makefile's srpm step; assumes rpm-build is already installed.
+srpm:
+	@V=$$(rpmspec -q --srpm --qf '%{version}\n' schema-init.spec); \
+	mkdir -p $(RELDIR); \
+	git archive --format=tar.gz --prefix=schema-init-$$V/ HEAD -o /tmp/schema-init-$$V.tar.gz; \
+	rpmbuild -bs --define "_sourcedir /tmp" --define "_srcrpmdir $(CURDIR)/$(RELDIR)" schema-init.spec; \
+	ls -1 $(RELDIR)/*.src.rpm
+
 clean:
 	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
@@ -194,6 +204,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install install-migrate install-dbus-sp1 release aarch64 armhf desktop test verify-live verify-dbus-conformance
+.PHONY: all clean install install-migrate install-dbus-sp1 release srpm aarch64 armhf desktop test verify-live verify-dbus-conformance
 
 
