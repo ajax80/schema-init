@@ -84,6 +84,29 @@ Services marked `critical=1` never reach EXCISED — they enter DORMANT and retr
 
 Replacing PID 1 sounds scary. It isn't, if you do it in the right order — you never lose your existing systemd boot, and you can back out with a single reboot at every step. Four lanes, safest first.
 
+### The easiest path — install from COPR (Fedora KDE)
+
+On Fedora you don't have to build anything or write a USB stick. Enable the COPR and install:
+
+```sh
+sudo dnf copr enable ajax80/schema-init
+sudo dnf install schema-init-migrate      # the CLI migrator + schema-udev, prebuilt
+# optional GUI front-end:
+sudo dnf install schema-init-wizard
+```
+
+This installs schema-init alongside systemd and **changes nothing about how you boot** — the packages just put the tooling on your system. To actually convert a Fedora KDE box, run the in-place migrator (proven end-to-end in a VM), which writes a **non-default** `(schema-init)` boot entry your normal Fedora still overrides:
+
+```sh
+sudo schema-migrate --discover                 # reads the system, changes nothing
+sudo schema-migrate --deploy --prebuilt        # uses the packaged binaries, no compiler
+# reboot, pick the (schema-init) entry; to undo:  sudo schema-migrate --uninstall
+```
+
+`schema-init-wizard` is a guided GUI wrapper around that same reversible flow with a two-reboot safety ladder. It's the newest layer and hasn't yet been shipped-tested on a live desktop, so if you want the battle-tested route, use the `schema-migrate` CLI above; both do the same thing and back out the same way.
+
+The COPR builds three packages: `schema-init` (the init), `schema-init-migrate` (the migrator + `schema-udev`), and `schema-init-wizard` (the GUI).
+
 ### The fast path — boot a prebuilt installer (no compiler, no Docker)
 
 If you just want to *see it run*, grab the prebuilt Fedora 44 installer from the [latest release](https://github.com/ajax80/schema-init/releases/latest):
