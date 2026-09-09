@@ -107,6 +107,18 @@ install-migrate: schema-udev verify-rules-live
 	install -d $(DESTDIR)$(SYSCONFDIR)/sudoers.d
 	install -m 0440 distros/fedora-installer/migrate/schema-wizard.sudoers $(DESTDIR)$(SYSCONFDIR)/sudoers.d/schema-wizard
 
+install-wizard:
+	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/qml
+	install -m 0755 distros/fedora-installer/wizard/schema-wizard $(DESTDIR)$(BINDIR)/schema-wizard
+	install -m 0644 distros/fedora-installer/wizard/backend.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/backend.py
+	install -m 0644 distros/fedora-installer/wizard/core.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/core.py
+	install -m 0644 distros/fedora-installer/wizard/status.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/status.py
+	install -m 0644 distros/fedora-installer/wizard/controller.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/controller.py
+	install -m 0644 distros/fedora-installer/wizard/main.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/main.py
+	install -m 0644 distros/fedora-installer/wizard/qml/Main.qml $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/qml/Main.qml
+	install -d $(DESTDIR)$(SYSCONFDIR)/xdg/autostart
+	install -m 0644 distros/fedora-installer/wizard/schema-wizard.desktop $(DESTDIR)$(SYSCONFDIR)/xdg/autostart/schema-wizard.desktop
+
 release: all
 	rm -rf $(RELDIR)
 	mkdir -p $(RELDIR)
@@ -194,6 +206,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install install-migrate install-dbus-sp1 release aarch64 armhf desktop test verify-live verify-dbus-conformance
+.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 release aarch64 armhf desktop test verify-live verify-dbus-conformance
 
 

@@ -1,7 +1,15 @@
 import os
 import importlib.util as _ilu
+from importlib.machinery import SourceFileLoader
 
 _MODDIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_from_path(name, p):
+    loader = SourceFileLoader(name, p)
+    spec = _ilu.spec_from_loader(name, loader)
+    m = _ilu.module_from_spec(spec); loader.exec_module(m)
+    return m
 
 
 def _load_stage():
@@ -10,18 +18,14 @@ def _load_stage():
         p = "/usr/libexec/schema-init/stage.py"
     if not os.path.exists(p):
         raise SystemExit("schema-wizard: stage.py not found — is schema-init-migrate installed?")
-    spec = _ilu.spec_from_file_location("stage", p)
-    m = _ilu.module_from_spec(spec); spec.loader.exec_module(m)
-    return m
+    return _load_from_path("stage", p)
 
 
 def _load_migrate():
     p = os.path.join(_MODDIR, "..", "migrate", "schema-migrate.py")
     if not os.path.exists(p):
         p = "/usr/bin/schema-migrate"
-    spec = _ilu.spec_from_file_location("schema_migrate_ro", p)
-    m = _ilu.module_from_spec(spec); spec.loader.exec_module(m)
-    return m
+    return _load_from_path("schema_migrate_ro", p)
 
 
 stage = _load_stage()
