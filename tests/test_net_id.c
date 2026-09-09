@@ -65,9 +65,9 @@ static void test_mac(void) {
     /* permanent, 6-byte -> enx<hex, colons stripped> */
     nid_wf(net, "addr_assign_type", "0");
     nid_wf(net, "addr_len", "6");
-    nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
+    nid_wf(net, "address", "de:ad:be:ef:00:01");
     assert(nid_mac_name(net, "en", NID_ARPHRD_ETHER, name, sizeof name) == 0);
-    assert(strcmp(name, "enxa8a1590be8ef") == 0);
+    assert(strcmp(name, "enxdeadbeef0001") == 0);
 
     /* random assign type (1) -> no name */
     nid_wf(net, "addr_assign_type", "1");
@@ -206,7 +206,7 @@ static void test_build(void) {
     nid_wf(net, "ifindex", "2"); nid_wf(net, "iflink", "2");
     nid_wf(net, "type", "1");
     nid_wf(net, "addr_assign_type", "0"); nid_wf(net, "addr_len", "6");
-    nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
+    nid_wf(net, "address", "de:ad:be:ef:00:01");
     nid_wf(net, "uevent", "DEVTYPE=");
     nid_wf(pci, "dev_port", "0");
     { char cf[PATH_MAX];
@@ -222,7 +222,7 @@ static void test_build(void) {
     struct uevent e;
     assert(net_id_build(root, "/devices/pci0000:00/0000:06:00.0/net/enp6s0", &e) == 0);
     assert(nid_has_val(&e, "ID_NET_NAMING_SCHEME", "v259"));
-    assert(nid_has_val(&e, "ID_NET_NAME_MAC", "enxa8a1590be8ef"));
+    assert(nid_has_val(&e, "ID_NET_NAME_MAC", "enxdeadbeef0001"));
     assert(nid_has_val(&e, "ID_NET_NAME_PATH", "enp6s0"));
 
     /* stacked: iflink != ifindex -> nothing */

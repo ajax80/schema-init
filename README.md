@@ -510,8 +510,8 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 These are real gaps, not future features being teased:
 
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
-- **Log rotation needs a timer you schedule.** The `logrotate` config ships; nothing here fires it. See [Logs](#logs).
-- **`schema-logind.py` is a stub with one session object, not one per session.** It implements enough of `org.freedesktop.login1` for a Wayland compositor to take KMS and hand it back on a VT switch (see [Recovery console](#recovery-console)), but it does not model multiple concurrent seats or sessions. It also does not set `KDSKBMODE = K_OFF`, deliberately — if the daemon died while `K_OFF` were set, the console keyboard would stay dead — so keystrokes can still leak to the tty underneath a compositor.
+- **Log rotation is not scheduled by default.** The `logrotate` config ships, and an example timer (`services/logrotate.svc.example`) ships alongside it, but nothing fires the rotation until you enable that timer. See [Logs](#logs).
+- **`schema-logind.py` reimplements a subset of `org.freedesktop.login1`.** It models multiple concurrent sessions and seats — a session registry with one object per session, per-seat membership, and active-session tracking — which is enough for a Wayland compositor to take KMS and hand it back on a VT switch (see [Recovery console](#recovery-console)) and for `uaccess` device ACLs to follow the active session. It is a targeted reimplementation, not the full daemon. It also does not set `KDSKBMODE = K_OFF`, deliberately — if the daemon died while `K_OFF` were set the console keyboard would stay dead, and `K_OFF` would also disable the kernel's ctrl-alt-F<n> VT switch that is the recovery-console escape hatch — so keystrokes can still leak to the tty underneath a compositor.
 
 ---
 

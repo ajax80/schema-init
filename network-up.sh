@@ -1,5 +1,6 @@
 #!/bin/sh
 exec >> /var/log/network-up.log 2>&1
+[ -r /etc/schema-init/user.conf ] && . /etc/schema-init/user.conf
 printf "network-up start: %s\n" "$(date)"
 modprobe r8152 2>&1 || true
 udevadm trigger --subsystem-match=usb 2>/dev/null || true
@@ -17,7 +18,7 @@ if [ -z "$IFACE" ]; then
 fi
 printf "configuring: %s\n" "$IFACE"
 ip link set "$IFACE" up 2>&1
-ip addr add 192.168.8.246/24 dev "$IFACE" 2>&1 || true
-ip route add default via 192.168.8.1 2>&1 || true
+[ -n "$STATIC_IP" ] && ip addr add "$STATIC_IP" dev "$IFACE" 2>&1 || true
+[ -n "$GATEWAY" ] && ip route add default via "$GATEWAY" 2>&1 || true
 printf "network-up done\n"
 exit 0

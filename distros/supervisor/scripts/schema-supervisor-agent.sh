@@ -1,6 +1,7 @@
 #!/bin/sh
-WHISPER_URL=http://127.0.0.1:8765
-LLAMA_URL=http://192.168.8.102:11434
+[ -r /etc/schema-init/user.conf ] && . /etc/schema-init/user.conf
+WHISPER_URL="${WHISPER_URL:-http://127.0.0.1:8765}"
+LLAMA_URL="${LLAMA_URL:-http://127.0.0.1:11434}"
 LOG=/var/log/schema-init/supervisor-agent.log
 
 mkdir -p /var/log/schema-init
