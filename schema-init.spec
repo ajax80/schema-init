@@ -10,6 +10,7 @@ Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 BuildRequires:  gcc
 BuildRequires:  make
 BuildRequires:  glibc-static
+BuildRequires:  libacl-devel
 
 # Only these two are built and tested. COPR has no armv7hl target; 32-bit ARM
 # is a manual cross-build via `make armhf`.

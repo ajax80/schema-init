@@ -151,8 +151,11 @@ git clone https://github.com/ajax80/schema-init   # e.g. onto a USB stick
 cd schema-init
 # preview only — reads the system, changes nothing:
 sudo python3 distros/fedora-installer/migrate/schema-migrate.py --discover
-# deploy (needs network the first time — pulls gcc/make to build schema-init):
+# deploy (builds from source; pulls gcc/make via dnf the first time):
 sudo python3 distros/fedora-installer/migrate/schema-migrate.py --deploy
+# or, if schema-init is already installed (e.g. from the COPR package),
+# skip the compiler entirely and use the packaged /usr/bin binaries:
+sudo python3 distros/fedora-installer/migrate/schema-migrate.py --deploy --prebuilt
 ```
 
 Reboot, pick the entry ending **(schema-init)** from the boot menu. To go back: boot your normal Fedora entry, then run the same command with `--uninstall` — it reverses exactly what it wrote (manifest-tracked) and leaves pre-existing packages alone.
