@@ -16,11 +16,15 @@ _status = _load("wizard_status", "status.py")
 _backend = _load("wizard_backend", "backend.py")
 
 
+_INSTANCES = []  # keep-alive: QML context properties don't hold a Python ref
+
+
 class WizardController(QObject):
     changed = Signal()
 
     def __init__(self, core=None, parent=None):
         super().__init__(parent)
+        _INSTANCES.append(self)
         self._core = core or _core.WizardCore(backend=_backend.Backend())
         self._recovery_ack = False
         self._selections = {o["key"]: o["default"] for o in _core.ADVANCED}
