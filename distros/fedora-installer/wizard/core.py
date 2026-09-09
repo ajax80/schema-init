@@ -15,6 +15,15 @@ def _load_stage():
     return m
 
 
+def _load_migrate():
+    p = os.path.join(_MODDIR, "..", "migrate", "schema-migrate.py")
+    if not os.path.exists(p):
+        p = "/usr/bin/schema-migrate"
+    spec = _ilu.spec_from_file_location("schema_migrate_ro", p)
+    m = _ilu.module_from_spec(spec); spec.loader.exec_module(m)
+    return m
+
+
 stage = _load_stage()
 
 ADVANCED = [
@@ -74,3 +83,23 @@ class WizardCore:
             if chosen != default and not chosen:
                 flags.append(_OPT_FLAG[key])
         return flags
+
+    def recovery_text(self):
+        return _load_migrate().RECOVERY_TEXT
+
+    def advance(self, consent, recovery_ack, selections):
+        if not consent:
+            return "noop"
+        s = self.current_stage()
+        if s == stage.INSTALLED:
+            if not recovery_ack:
+                return "need_recovery_ack"
+            self.backend.deploy(self.deploy_opts(selections))
+            return "deployed"
+        if s == stage.R1_HEAL:
+            self.backend.arm_flip()
+            return "armed"
+        if s in (stage.DONE, stage.ROLLED_BACK):
+            self.backend.finish()
+            return "finished"
+        return "noop"
