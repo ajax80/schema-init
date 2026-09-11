@@ -52,7 +52,8 @@ ApplicationWindow {
         Item { Layout.fillHeight: true }
 
         Button {
-            text: "Continue"
+            text: wizard.primaryAction
+            visible: wizard.primaryAction !== ""
             enabled: wizard.screen !== "welcome" || ack.checked
             onClicked: wizard.continueClicked()
         }

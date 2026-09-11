@@ -34,6 +34,10 @@ try:
     check("--deploy returns 0", rc == 0)
     check("--deploy sets R1_PENDING", m.stage.read_stage(root) == m.stage.R1_PENDING)
     check("--deploy writes recovery card", os.path.exists(os.path.join(root, "home/jandoe/schema-recovery.txt")))
+    fin = os.path.join(root, "etc/schema-init/services/schema-migrate-finish.svc")
+    check("--deploy installs the finish oneshot", os.path.exists(fin))
+    check("finish oneshot runs schema-migrate --finish",
+          os.path.exists(fin) and "args=--finish" in open(fin).read())
 finally:
     del os.environ["MIGRATE_ROOT"]; del os.environ["MIGRATE_KERNEL"]
 

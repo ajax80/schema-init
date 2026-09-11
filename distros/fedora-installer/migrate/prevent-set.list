@@ -31,6 +31,7 @@ service sshd
 service zram
 service schema-doctor
 service schema-doctor-periodic
+service schema-migrate-finish
 
 # --- excluded: host-specific, never deployed to a stranger ---
 exclude frigate

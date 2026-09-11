@@ -64,6 +64,18 @@ _SCREEN = {
     stage.ROLLED_BACK: "rolled_back",
 }
 
+# The primary button label per screen. "" means the screen has NO clickable
+# action: waiting_reboot is reboot-gated (the user restarts; advance() no-ops
+# there), so it must show no button — a dead Continue is what sent a user
+# rebooting into a stranded stage.
+_ACTION = {
+    "welcome": "Continue",
+    "waiting_reboot": "",
+    "summary": "Continue",
+    "final": "Finish",
+    "rolled_back": "Finish",
+}
+
 
 class WizardCore:
     def __init__(self, backend=None, root="/"):
@@ -78,6 +90,9 @@ class WizardCore:
 
     def screen(self):
         return self.screen_for(self.current_stage())
+
+    def primary_action(self, screen):
+        return _ACTION.get(screen, "")
 
     def deploy_opts(self, selections):
         defaults = {o["key"]: o["default"] for o in ADVANCED}
