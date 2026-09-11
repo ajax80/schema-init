@@ -97,8 +97,6 @@ cp "$REPO"/distros/fedora-kde/services/*.svc \
    "$REPO"/distros/fedora-kde/services/*.grp \
    "$MNT/etc/schema-init/services/"
 
-sed -i "s/ajax80/$LIVEUSER/g" "$MNT/etc/schema-init/services/sddm.svc" 2>/dev/null || true
-
 # distros/fedora-kde/services is blakbox's own config, not a portable profile.
 # Drop the host-specific units and the deps that reference them, or sddm blocks
 # forever on services that can never come up here. x11-tmpfiles has no .svc at
@@ -147,7 +145,7 @@ printf "#!/bin/sh\n# live ISO: home is on rootfs, no separate mount needed\nexit
 chmod +x "$MNT/usr/local/bin/mount-home.sh"
 
 LIVEUID=$(chroot "$MNT" id -u "$LIVEUSER" 2>/dev/null || printf '1000')
-sed -i "s|ajax80|$LIVEUSER|g; s|/run/user/1000|/run/user/$LIVEUID|g" \
+sed -i "s|/run/user/1000|/run/user/$LIVEUID|g" \
     "$MNT/usr/local/bin/schema-plasma-autologin.sh"
 
 printf "=== Network (DHCP for live) ===\n"

@@ -16,7 +16,7 @@ set -x
 if [ -z "${SCHEMA_USER:-}" ]; then
     SCHEMA_USER=$(awk -F: '$3>=1000 && $3<65000 {print $1; exit}' /etc/passwd)
 fi
-SCHEMA_USER="${SCHEMA_USER:-ajax80}"
+SCHEMA_USER="${SCHEMA_USER:-user}"
 SCHEMA_UID="${SCHEMA_UID:-$(id -u "$SCHEMA_USER" 2>/dev/null)}"
 SCHEMA_UID="${SCHEMA_UID:-1000}"
 SCHEMA_SEAT="${SCHEMA_SEAT:-seat0}"

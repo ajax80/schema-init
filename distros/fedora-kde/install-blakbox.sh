@@ -12,7 +12,7 @@ BIN_DIR="/usr/local/bin"
 KERNEL="$(uname -r)"
 
 # Desktop user the session/audio services run as. Override: TARGET_USER=foo ./install-blakbox.sh
-TARGET_USER="${TARGET_USER:-${SUDO_USER:-ajax80}}"
+TARGET_USER="${TARGET_USER:-${SUDO_USER:-$(id -un 1000 2>/dev/null)}}"
 TARGET_UID="$(id -u "$TARGET_USER")"
 USER_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 

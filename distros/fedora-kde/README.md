@@ -37,7 +37,7 @@ sudo mkdir -p /etc/schema-init/services
 sudo cp services/* /etc/schema-init/services/
 ```
 
-The session and audio services (`schema-plasma-autologin.sh`, `pipewire-run.sh`, etc.) run the desktop as a specific user. They read `SCHEMA_USER`/`SCHEMA_UID` from `/etc/schema-init/user.conf`, defaulting to `ajax80`/`1000` if absent. Point them at your account:
+The session and audio services (`schema-plasma-autologin.sh`, `pipewire-run.sh`, etc.) run the desktop as a specific user. They read `SCHEMA_USER`/`SCHEMA_UID` from `/etc/schema-init/user.conf`, falling back to the first uid-1000 account if absent. Point them at your account:
 ```
 printf 'SCHEMA_USER=%s\nSCHEMA_UID=%s\n' "$USER" "$(id -u)" | sudo tee /etc/schema-init/user.conf
 ```

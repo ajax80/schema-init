@@ -199,6 +199,17 @@ test:
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o /tmp/schema-test-sdbus-wire $(DBUS_LIBS) && /tmp/schema-test-sdbus-wire
 	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate
 
+# Everything a contributor can run locally without a reboot: the C unit tests
+# above plus the Python integration suite (doctor / logind / migrate / wizard).
+# Each tests/test_*.py runs standalone and exits nonzero on failure. The wizard
+# tests render PySide6 offscreen.
+test-all: test
+	@fail=0; for t in tests/test_*.py; do \
+		printf '=== %s ===\n' "$$t"; \
+		QT_QPA_PLATFORM=offscreen python3 "$$t" || fail=1; \
+	done; \
+	if [ "$$fail" != 0 ]; then echo "PYTHON SUITE FAILED"; exit 1; fi
+
 verify-live:
 	sh tests/sdbus_live_interop.sh
 	sh tests/verify_disk_links_live.sh
@@ -216,6 +227,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 release srpm aarch64 armhf desktop test verify-live verify-dbus-conformance
+.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 release srpm aarch64 armhf desktop test test-all verify-live verify-dbus-conformance
 
 
