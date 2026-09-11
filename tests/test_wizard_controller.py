@@ -42,5 +42,20 @@ check("continue without ack does not deploy", be.calls == [])
 co.setRecoveryAck(True)
 co.continueClicked()
 check("continue with ack deploys", be.calls and be.calls[-1][0] == "deploy")
+check("successful deploy leaves no error", co.error == "")
+
+# Defect B: a failed backend action surfaces an error to the user instead of
+# silently looking like nothing happened.
+class FailBackend:
+    def deploy(self, opts=None): return type("R", (), {"returncode": 1})()
+    def arm_flip(self): return type("R", (), {"returncode": 1})()
+    def finish(self): return type("R", (), {"returncode": 1})()
+
+root2 = tempfile.mkdtemp(); os.makedirs(os.path.join(root2, "var/lib"))
+wc2 = core.WizardCore(backend=FailBackend(), root=root2)
+co2 = ctrl.WizardController(core=wc2)
+co2.setRecoveryAck(True)
+co2.continueClicked()
+check("failed deploy sets an error message", co2.error != "")
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

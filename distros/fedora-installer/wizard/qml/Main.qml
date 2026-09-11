@@ -51,8 +51,17 @@ ApplicationWindow {
 
         Item { Layout.fillHeight: true }
 
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            visible: wizard.error !== ""
+            color: "#c0392b"
+            text: wizard.error
+        }
+
         Button {
-            text: "Continue"
+            text: wizard.primaryAction
+            visible: wizard.primaryAction !== ""
             enabled: wizard.screen !== "welcome" || ack.checked
             onClicked: wizard.continueClicked()
         }

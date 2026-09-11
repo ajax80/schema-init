@@ -64,6 +64,34 @@ _SCREEN = {
     stage.ROLLED_BACK: "rolled_back",
 }
 
+# The primary button label per screen. "" means the screen has NO clickable
+# action: waiting_reboot is reboot-gated (the user restarts; advance() no-ops
+# there), so it must show no button — a dead Continue is what sent a user
+# rebooting into a stranded stage.
+_ACTION = {
+    "welcome": "Continue",
+    "waiting_reboot": "",
+    "summary": "Continue",
+    "final": "Finish",
+    "rolled_back": "Finish",
+}
+
+
+def _ok(result):
+    return getattr(result, "returncode", 0) == 0
+
+
+_ERROR = {
+    "deploy_failed": "Setup couldn't start, so nothing was changed. "
+                     "Check that you can run admin commands, then try again.",
+    "arm_failed": "Couldn't arm the switch, so nothing was changed. Try again.",
+    "finish_failed": "Couldn't finish tidying up. Your computer is fine.",
+}
+
+
+def error_for(outcome):
+    return _ERROR.get(outcome, "")
+
 
 class WizardCore:
     def __init__(self, backend=None, root="/"):
@@ -78,6 +106,9 @@ class WizardCore:
 
     def screen(self):
         return self.screen_for(self.current_stage())
+
+    def primary_action(self, screen):
+        return _ACTION.get(screen, "")
 
     def deploy_opts(self, selections):
         defaults = {o["key"]: o["default"] for o in ADVANCED}
@@ -98,12 +129,12 @@ class WizardCore:
         if s == stage.INSTALLED:
             if not recovery_ack:
                 return "need_recovery_ack"
-            self.backend.deploy(self.deploy_opts(selections))
-            return "deployed"
+            r = self.backend.deploy(self.deploy_opts(selections))
+            return "deployed" if _ok(r) else "deploy_failed"
         if s == stage.R1_HEAL:
-            self.backend.arm_flip()
-            return "armed"
+            r = self.backend.arm_flip()
+            return "armed" if _ok(r) else "arm_failed"
         if s in (stage.DONE, stage.ROLLED_BACK):
-            self.backend.finish()
-            return "finished"
+            r = self.backend.finish()
+            return "finished" if _ok(r) else "finish_failed"
         return "noop"

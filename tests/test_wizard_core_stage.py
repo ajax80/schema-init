@@ -25,4 +25,12 @@ check("ROLLED_BACK -> rolled_back", c.screen_for(stage.ROLLED_BACK) == "rolled_b
 stage.write_stage(stage.R1_HEAL, root=root)
 check("screen() reflects the written stage", c.screen() == "summary")
 
+# waiting_reboot is reboot-gated: it must expose NO clickable action (a dead
+# Continue button there is what sent a user rebooting into a stuck stage).
+check("welcome offers Continue", c.primary_action("welcome") == "Continue")
+check("waiting_reboot offers no button", c.primary_action("waiting_reboot") == "")
+check("summary offers Continue", c.primary_action("summary") == "Continue")
+check("final offers Finish", c.primary_action("final") == "Finish")
+check("rolled_back offers Finish", c.primary_action("rolled_back") == "Finish")
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
