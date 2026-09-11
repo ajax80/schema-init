@@ -408,10 +408,11 @@ def uninstall(run=subprocess.run):
     if m.packages:
         run(["dnf", "remove", "-y"] + m.packages, check=False)
     remove_boot_entry()
-    try:
-        os.remove(P(Manifest.PATH))
-    except OSError:
-        pass
+    for rel in (Manifest.PATH, stage.STAGE_PATH):
+        try:
+            os.remove(P(rel))
+        except OSError:
+            pass
     return {"files_removed": removed, "packages": m.packages}
 
 
