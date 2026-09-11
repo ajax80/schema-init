@@ -26,6 +26,7 @@ class WizardController(QObject):
         _INSTANCES.append(self)
         self._core = core or _core.WizardCore(backend=_backend.Backend())
         self._recovery_ack = False
+        self._error = ""
         self._selections = {o["key"]: o["default"] for o in _core.ADVANCED}
 
     def _get_screen(self):
@@ -51,8 +52,12 @@ class WizardController(QObject):
     def _get_recovery_ack(self):
         return self._recovery_ack
 
+    def _get_error(self):
+        return self._error
+
     screen = Property(str, _get_screen, notify=changed)
     primaryAction = Property(str, _get_primary_action, notify=changed)
+    error = Property(str, _get_error, notify=changed)
     overall = Property(str, _get_overall, notify=changed)
     statusItems = Property('QVariantList', _get_status_items, notify=changed)
     recoveryAck = Property(bool, _get_recovery_ack, notify=changed)
@@ -76,6 +81,7 @@ class WizardController(QObject):
 
     @Slot()
     def continueClicked(self):
-        self._core.advance(consent=True, recovery_ack=self._recovery_ack,
-                            selections=self._selections)
+        outcome = self._core.advance(consent=True, recovery_ack=self._recovery_ack,
+                                     selections=self._selections)
+        self._error = _core.error_for(outcome)
         self.changed.emit()

@@ -47,6 +47,20 @@ c, be = fresh(None)
 check("no consent -> noop", c.advance(consent=False, recovery_ack=True, selections={}) == "noop")
 check("no consent -> nothing called", be.calls == [])
 
+# a backend action that fails must NOT be reported as success (Defect B): a
+# non-zero return means the deploy/arm/finish did not happen.
+class FailBackend(FakeBackend):
+    def deploy(self, opts=None): FakeBackend.deploy(self, opts); return type("R", (), {"returncode": 1})()
+    def arm_flip(self): FakeBackend.arm_flip(self); return type("R", (), {"returncode": 2})()
+
+def failing(stg):
+    root = tempfile.mkdtemp(); os.makedirs(os.path.join(root, "var/lib"))
+    if stg is not None: stage.write_stage(stg, root=root)
+    return core.WizardCore(backend=FailBackend(), root=root)
+
+check("failed deploy -> deploy_failed", failing(None).advance(consent=True, recovery_ack=True, selections={}) == "deploy_failed")
+check("failed arm -> arm_failed", failing(stage.R1_HEAL).advance(consent=True, recovery_ack=True, selections={}) == "arm_failed")
+
 check("recovery_text is the plain-language card", "black" in c.recovery_text().lower())
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

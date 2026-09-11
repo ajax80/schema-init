@@ -51,6 +51,14 @@ ApplicationWindow {
 
         Item { Layout.fillHeight: true }
 
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            visible: wizard.error !== ""
+            color: "#c0392b"
+            text: wizard.error
+        }
+
         Button {
             text: wizard.primaryAction
             visible: wizard.primaryAction !== ""
