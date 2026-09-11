@@ -755,7 +755,7 @@ def install_packages(manifest, run=subprocess.run, dry_run=False):
     return done
 
 
-BUILD_PACKAGES = ["gcc", "make", "glibc-static", "libacl-devel"]
+BUILD_PACKAGES = ["gcc", "make", "glibc-static", "libacl-devel", "dbus-devel", "pkgconf-pkg-config"]
 
 
 def ensure_build_toolchain(manifest, run=subprocess.run, dry_run=False):

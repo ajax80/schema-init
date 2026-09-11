@@ -486,7 +486,15 @@ else
     # Detect root device and fs type
     ROOT_DEV=$(findmnt -n -o SOURCE /)
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null || echo "")
+    ROOT_FSTYPE=$(findmnt -n -o FSTYPE /)
     ROOT_OPTS="ro quiet"
+    # On a btrfs subvolume root (Fedora/openSUSE default, Ubuntu @), the kernel
+    # needs rootflags=subvol=... or it cannot locate /sbin/schema-init. Inherit
+    # the live subvolume from the running mount.
+    if [ "$ROOT_FSTYPE" = "btrfs" ]; then
+        SUBVOL=$(findmnt -n -o FSROOT / | sed 's#^/##')
+        [ -n "$SUBVOL" ] && ROOT_OPTS="$ROOT_OPTS rootflags=subvol=$SUBVOL"
+    fi
 
     if [ -n "$KPATH" ] && [ -n "$INITRD_PATH" ] && [ -n "$ROOT_UUID" ]; then
         GRUB_ENTRY="menuentry 'schema-init (fallback)' {
@@ -494,6 +502,7 @@ else
     insmod gzio
     insmod part_gpt
     insmod ext2
+    insmod btrfs
     search --no-floppy --fs-uuid --set=root ${ROOT_UUID}
     linux   ${KPATH} root=UUID=${ROOT_UUID} ${ROOT_OPTS} init=/sbin/schema-init
     initrd  ${INITRD_PATH}

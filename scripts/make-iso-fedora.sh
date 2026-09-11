@@ -86,7 +86,7 @@ mkdir -p "$MNT/build"
 cp "$REPO"/*.c "$REPO"/*.h "$MNT/build/"
 chroot "$MNT" dnf install -y gcc glibc-static --setopt=install_weak_deps=False
 chroot "$MNT" sh -c 'cd /build && gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
-    -o /sbin/schema-init init.c schema.c service.c group.c -lrt'
+    -o /sbin/schema-init init.c schema.c service.c group.c caps.c -lrt'
 rm -rf "$MNT/build"
 chmod +x "$MNT/sbin/schema-init"
 ln -sf /sbin/schema-init "$MNT/sbin/init"

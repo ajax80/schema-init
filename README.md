@@ -126,7 +126,7 @@ Prefer to build it yourself, or try it with zero risk to a real disk first? Take
 
 **Requirements:**
 
-- **Build + test (Lane 0):** `gcc`, `make`, and `libacl` headers (`libacl1-dev` on Debian/Ubuntu, `libacl-devel` on Fedora — the udev `uaccess` tests link `-lacl`). Nothing else. The init itself is a single static binary with no runtime dependencies.
+- **Build + test (Lane 0):** `gcc`, `make`, `pkg-config`, `libacl` headers (`libacl1-dev` on Debian/Ubuntu, `libacl-devel` on Fedora — the udev `uaccess` tests link `-lacl`), and `dbus-1` headers (`libdbus-1-dev` on Debian/Ubuntu, `dbus-devel` on Fedora — the default `make` target builds `schema-dbus` and `make test` compiles the sdbus tests against them). On Fedora the static link also needs `glibc-static` (Debian bundles `libc.a` in `libc6-dev`). Nothing else. The init itself is a single static binary with no runtime dependencies.
 - **`schema-logind`:** additionally `python3-dbus` + `python3-gobject`.
 - **Build a bootable ISO (Lane 1):** additionally **Docker** (or podman) — the ISO is built from a `debian:bookworm` container — plus `squashfs-tools` (`mksquashfs`), and network access to pull the base image. To boot that ISO in a window: `qemu-system-x86_64`, `xorriso`, `socat`.
 

@@ -70,9 +70,8 @@ CHROOT
 
 echo "=== Installing schema-init ==="
 cd "$REPO"
-gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
-    -o "$MNT/sbin/schema-init" \
-    init.c schema.c service.c group.c -lrt
+make schema-init
+cp schema-init "$MNT/sbin/schema-init"
 chmod +x "$MNT/sbin/schema-init"
 
 echo "=== Writing service files ==="
