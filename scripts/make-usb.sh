@@ -80,9 +80,8 @@ CHROOT
 echo "=== Installing schema-init ==="
 cd "$REPO"
 make clean
-gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -static \
-    -o "$MNT/sbin/schema-init" \
-    init.c schema.c service.c -lrt
+make schema-init
+cp schema-init "$MNT/sbin/schema-init"
 chmod +x "$MNT/sbin/schema-init"
 echo "Binary: $(file $MNT/sbin/schema-init)"
 

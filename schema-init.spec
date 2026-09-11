@@ -131,7 +131,7 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_datadir}/%{name}/services
 
 %changelog
-* Tue Sep 01 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.2.1-1
+* Tue Sep 01 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.2.1-1
 - Hardware watchdog: PID 1 loads the sp5100_tco module itself and arms
   /dev/watchdog0, so boxes without an initramfs still get a hardware watchdog
 - Memory-pressure reclaim: a service's cgroup path and freeze state now survive
@@ -156,7 +156,7 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
   persistently
 - schema-board: increment 3 -- apply a card to a lit slot
 
-* Mon Jul 27 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.3-1
+* Mon Jul 27 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.1.3-1
 - PID 1 resets the child signal mask before every exec, so services no longer
   inherit a blocked SIGCHLD and can reap their own children
 - Shutdown no longer blocks PID 1 on a console write, bounds sync, and kills
@@ -165,11 +165,11 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 - VT switches are mediated with VT_PROCESS, so consoles repaint on a graphical
   session; IXON is disarmed on the mediated session VT
 
-* Fri Jul 24 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.2-1
+* Fri Jul 24 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.1.2-1
 - Ship schema-board, the read-only weight-state board; needs no root
 - Ship a logrotate config and an example rotation timer
 - schema-ctl gains --help/--version and reports the real connect error
 
-* Fri Jul 24 2026 Jonathan Ayers <ayersjon80@gmail.com> - 0.1.1-1
+* Fri Jul 24 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.1.1-1
 - Initial RPM package
 - Adds the AGPL-3.0 license text, which v0.1.0 shipped without
