@@ -1,5 +1,5 @@
 name=schema-migrate-finish
-exec=/usr/local/bin/schema-migrate
+exec=/usr/bin/schema-migrate
 args=--finish
 dep=schema-doctor
 oneshot=1

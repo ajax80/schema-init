@@ -36,8 +36,11 @@ try:
     check("--deploy writes recovery card", os.path.exists(os.path.join(root, "home/jandoe/schema-recovery.txt")))
     fin = os.path.join(root, "etc/schema-init/services/schema-migrate-finish.svc")
     check("--deploy installs the finish oneshot", os.path.exists(fin))
+    finbody = open(fin).read() if os.path.exists(fin) else ""
     check("finish oneshot runs schema-migrate --finish",
-          os.path.exists(fin) and "args=--finish" in open(fin).read())
+          "args=--finish" in finbody)
+    check("finish oneshot execs the installed schema-migrate path",
+          "exec=/usr/bin/schema-migrate\n" in finbody)
 finally:
     del os.environ["MIGRATE_ROOT"]; del os.environ["MIGRATE_KERNEL"]
 
