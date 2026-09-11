@@ -29,7 +29,7 @@ KEY_SSH=(ssh -i "$SSHKEY" -p "$SSHPORT" -o StrictHostKeyChecking=no \
 log() { printf '\n\033[1;36m>> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
-RAM=4096; CPUS=4
+RAM=${RAM:-3072}; CPUS=${CPUS:-2}
 have_kvm() { [ -w /dev/kvm ] && echo "-accel kvm -cpu host" || echo "-accel tcg"; }
 
 # ---- shared qemu invocation for an installed disk (legacy BIOS) --------------
@@ -133,9 +133,28 @@ do_migrate() {
         | sshc "rm -rf /home/tester/schema-init && mkdir -p /home/tester/schema-init && tar -C /home/tester/schema-init -xf -" \
         || die "tar repo to VM"
 
-    log "running schema-migrate --deploy on the VM"
+    # Pre-place the prebuilt x86_64 binaries the schema-init RPM would ship, then
+    # deploy with --prebuilt — exactly what the wizard backend does
+    # (--deploy --prebuilt). Building on the VM needs dbus-devel etc. we don't
+    # provision here; the fix under test is in Python/data, not the C.
+    # Simulate what the schema-init RPMs install: the three prebuilt binaries,
+    # the migrate tool at /usr/bin/schema-migrate, and stage.py under libexec
+    # (the path schema-migrate falls back to). Without these the finish oneshot
+    # has nothing to exec.
+    log "pre-placing prebuilt binaries + migrate tool (simulating the RPMs)"
+    rootc "install -m0755 /home/tester/schema-init/schema-init \
+           /home/tester/schema-init/schema-ctl \
+           /home/tester/schema-init/schema-subreaper /usr/bin/ && \
+           install -m0755 /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py /usr/bin/schema-migrate && \
+           install -D -m0644 /home/tester/schema-init/distros/fedora-installer/migrate/stage.py /usr/libexec/schema-init/stage.py" \
+          || die "pre-place prebuilt binaries + migrate tool"
+    rootc "test -x /usr/bin/schema-migrate && test -f /usr/libexec/schema-init/stage.py" \
+          || die "pre-place verify: /usr/bin/schema-migrate or stage.py not in place"
+    echo "  OK  /usr/bin/schema-migrate + stage.py in place"
+
+    log "running schema-migrate --deploy --prebuilt on the VM"
     rootc "MIGRATE_REPO=/home/tester/schema-init python3 \
-          /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --deploy" \
+          /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --deploy --prebuilt" \
           2>&1 | tee "$ART/deploy.log"
 
     log "post-deploy checks (before any reboot into schema)"
@@ -148,6 +167,17 @@ do_migrate() {
         echo "  toolchain on VM:"; rootc "command -v gcc make; rpm -q libacl-devel 2>&1" | sed 's/^/      /'
         die "deploy left no schema-init binary — fix schema-migrate, then re-run"
     fi
+
+    # Fix #1 (deploy side): the finish oneshot must be installed, and the stage
+    # must sit at R1_PENDING awaiting the post-reboot auto-advance.
+    if rootc "test -f /etc/schema-init/services/schema-migrate-finish.svc"; then
+        echo "  OK  schema-migrate-finish.svc deployed"
+    else
+        die "FIX#1 REGRESSION: finish oneshot was not deployed"
+    fi
+    local stg; stg=$(rootc "python3 /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --stage")
+    echo "  post-deploy stage: $stg"
+    [ "$stg" = "R1_PENDING" ] || die "expected R1_PENDING after deploy, got '$stg'"
 
     local title; title=$(rootc "grep '^title ' /boot/loader/entries/schema-init.conf | sed 's/^title //'")
     [ -n "$title" ] && echo "  schema BLS entry: '$title'" || die "no schema-init.conf BLS entry written"
@@ -165,6 +195,19 @@ do_verify() {
     log "verifying the schema boot"
     local exe; exe=$(pid1); echo "  PID1 = $exe"
     [ "$exe" = "/usr/bin/schema-init" ] || die "PID1 is not schema-init (got '$exe')"
+
+    # Fix #1 (the whole point): the finish oneshot must auto-advance the stage on
+    # this boot with NO manual --finish. Poll to avoid racing the oneshot.
+    log "checking the finish oneshot advanced the stage on its own (up to 45s):"
+    local stg=""
+    for _ in $(seq 1 15); do
+        stg=$(rootc "python3 /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --stage" 2>/dev/null)
+        [ "$stg" = "R1_HEAL" ] && break
+        sleep 3
+    done
+    echo "  stage after schema boot: $stg"
+    [ "$stg" = "R1_HEAL" ] || die "FIX#1 FAILED: stage did not auto-advance (got '$stg', expected R1_HEAL — the finish oneshot never ran)"
+    echo "  OK  finish oneshot advanced R1_PENDING -> R1_HEAL with no handwork"
     log "waiting for the plasma session (autologin) to come up (up to 90s)"
     local up=""
     for _ in $(seq 1 30); do
