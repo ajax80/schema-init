@@ -7,7 +7,7 @@ The joint nodes (Pi Zero W 2) run the `raspberry-pi-zero-w` distro profile. This
 ## What this provides
 
 - Voice command intake via USB microphone → whisper.cpp (local, offline)
-- On-device inference via llama.cpp server or remote offload to Blakbox (192.168.8.102:11434) when in range
+- On-device inference via llama.cpp server or remote offload to a LAN inference host (`<host>:11434`) when in range
 - SSH access for manual control and debugging
 - Coordination daemon (`supervisor-agent`) that translates voice commands to joint node instructions
 
@@ -73,7 +73,7 @@ sudo cp llama-server /usr/local/bin/
 ```
 
 A 1B–3B parameter model (TinyLlama, Phi-2) fits comfortably in 4GB RAM.
-When Blakbox is on the LAN, `supervisor-agent` offloads to Ollama at `192.168.8.102:11434` instead.
+When a LAN inference host is reachable, `supervisor-agent` offloads to Ollama at `<host>:11434` instead.
 
 ### Node map
 
@@ -81,10 +81,10 @@ Create `/etc/daedalus/nodes.conf` listing each joint node's IP and slot assignme
 
 ```
 # slot  ip              role
-0       192.168.8.10    hip-left-0
-1       192.168.8.11    hip-left-1
+0       10.0.0.10       hip-left-0
+1       10.0.0.11       hip-left-1
 ...
-48      192.168.8.58    supervisor
+48      10.0.0.58       supervisor
 ```
 
 ## Installation

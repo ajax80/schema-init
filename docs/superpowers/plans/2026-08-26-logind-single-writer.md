@@ -296,7 +296,7 @@ git commit -m "feat(logind): unify GUI login on schema-plasma-autologin.sh; reti
 
 - [ ] **Step 1: Deploy the branch to eli.** Sync `scripts/schema-logind.py`, `scripts/schema-session-register`, `scripts/schema-session-unregister`, and `schema-plasma-autologin.sh` to eli's deployed paths; install/repoint the autologin service. Do **not** reboot from the agent.
 - [ ] **Step 2: Ask Jonathan to reboot eli.** State plainly that this is the first hardware test of the change.
-- [ ] **Step 3: Verify on eli after reboot** (`ssh ajax80@192.168.8.213`):
+- [ ] **Step 3: Verify on eli after reboot** (`ssh <user>@<eli-lan-ip>`):
 
 ```bash
 loginctl list-sessions        # one session, real LEADER (not '-')
