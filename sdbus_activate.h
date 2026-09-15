@@ -34,10 +34,50 @@ static inline void sdbus__svc_add(sdbus_svctab *t, const char *name,
     e->user = strdup(user && *user ? user : "root");
 }
 
-static inline sdbus_svctab *sdbus_svctab_parse_dir(const char *dir) {
+/* Names schema-init runs as first-class managed services; the broker must never
+   bus-activate a second copy (which would race the managed one for the well-known
+   name). Loaded from a newline-delimited file (# comments, blank lines and
+   surrounding whitespace ignored) that lives in /etc, so a distro package update
+   of the daemon's own .service file cannot silently un-mask it. */
+typedef struct { char **v; int n; } sdbus_strset;
+
+static inline sdbus_strset *sdbus_masklist_load(const char *path) {
+    sdbus_strset *s = calloc(1, sizeof *s);
+    if (!path) return s;
+    FILE *f = fopen(path, "r");
+    if (!f) return s;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || !*p) continue;
+        char *e = p + strlen(p);
+        while (e > p && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
+        s->v = realloc(s->v, (s->n + 1) * sizeof *s->v);
+        s->v[s->n++] = strdup(p);
+    }
+    fclose(f);
+    return s;
+}
+
+static inline int sdbus_masklist_has(const sdbus_strset *s, const char *name) {
+    if (!s || !name) return 0;
+    for (int i = 0; i < s->n; i++) if (!strcmp(s->v[i], name)) return 1;
+    return 0;
+}
+
+static inline void sdbus_masklist_free(sdbus_strset *s) {
+    if (!s) return;
+    for (int i = 0; i < s->n; i++) free(s->v[i]);
+    free(s->v); free(s);
+}
+
+static inline sdbus_svctab *sdbus_svctab_parse_dir_masked(const char *dir, const char *maskfile) {
     sdbus_svctab *t = calloc(1, sizeof *t);
+    sdbus_strset *mask = sdbus_masklist_load(maskfile);
     DIR *d = opendir(dir);
-    if (!d) return t;                       /* empty table, not NULL */
+    if (!d) { sdbus_masklist_free(mask); return t; }   /* empty table, not NULL */
     struct dirent *de;
     while ((de = readdir(d))) {
         size_t l = strlen(de->d_name);
@@ -57,10 +97,16 @@ static inline sdbus_svctab *sdbus_svctab_parse_dir(const char *dir) {
         if (!name[0] || !exec[0]) continue;                 /* need both */
         /* skip Exec=/bin/false (systemd-only activatables) */
         if (!strcmp(exec, "/bin/false") || !strcmp(exec, "/usr/bin/false")) continue;
+        if (sdbus_masklist_has(mask, name)) continue;       /* schema-managed: never bus-activate */
         sdbus__svc_add(t, name, exec, user);
     }
     closedir(d);
+    sdbus_masklist_free(mask);
     return t;
+}
+
+static inline sdbus_svctab *sdbus_svctab_parse_dir(const char *dir) {
+    return sdbus_svctab_parse_dir_masked(dir, NULL);
 }
 
 static inline const sdbus_svc_ent *sdbus_svctab_find(sdbus_svctab *t, const char *name) {

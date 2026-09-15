@@ -1,0 +1,9 @@
+# Well-known bus names schema-init runs as first-class managed services.
+# schema-dbus refuses to bus-activate any name listed here, so the managed
+# daemon owns the name uncontested and never races a broker-spawned copy.
+# One name per line; # comments and blank lines ignored.
+#
+# polkitd: managed via services/polkitd.svc (schema-subreaper, root). Without
+# this line the broker would activate its own polkitd from polkit's shipped
+# .service file and win the name race, leaving the managed unit DORMANT.
+org.freedesktop.PolicyKit1

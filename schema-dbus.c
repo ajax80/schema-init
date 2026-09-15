@@ -47,6 +47,7 @@ static sdbus_svctab  *g_svctab;
 static sdbus_acts    *g_acts;
 static char           g_bus_addr[256];
 #define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
+#define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
 
 static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
@@ -618,7 +619,9 @@ int main(int argc, char **argv) {
     g_names = sdbus_names_new();
     g_replies = sdbus_replies_new();
     const char *svcdir = getenv("SCHEMA_DBUS_SVCDIR");
-    g_svctab = sdbus_svctab_parse_dir(svcdir ? svcdir : SDBUS_SVC_DIR);
+    const char *maskfile = getenv("SCHEMA_DBUS_MASKFILE");
+    g_svctab = sdbus_svctab_parse_dir_masked(svcdir ? svcdir : SDBUS_SVC_DIR,
+                                             maskfile ? maskfile : SDBUS_MASK_FILE);
     g_acts = sdbus_acts_new();
     fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 

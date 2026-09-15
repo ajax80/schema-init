@@ -90,6 +90,9 @@ install-dbus-sp1: schema-dbus
 	install -m 0755 scripts/schema-dbus-run.sh $(DESTDIR)/usr/local/bin/schema-dbus-run.sh
 	install -d $(DESTDIR)/usr/local/lib/schema-init
 	install -m 0755 tools/dbus-learn/dissect_policy.py $(DESTDIR)/usr/local/lib/schema-init/dissect_policy.py
+	install -d $(DESTDIR)/etc/schema-dbus
+	@# seed the activation mask only if absent, so admin edits survive reinstall
+	@[ -f $(DESTDIR)/etc/schema-dbus/masked ] && echo "keeping existing /etc/schema-dbus/masked" || install -m 0644 config/schema-dbus-masked $(DESTDIR)/etc/schema-dbus/masked
 	@echo
 	@echo "SP1 prerequisites installed. To FLIP the bus (reboot-only, gated):"
 	@echo "  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"

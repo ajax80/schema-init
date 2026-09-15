@@ -45,6 +45,41 @@ static void test_parse(void) {
     printf("test_parse OK\n");
 }
 
+static void test_masklist(void) {
+    char dir[] = "/tmp/sdbus-mask-XXXXXX";
+    assert(mkdtemp(dir));
+    put(dir, "keep.service",
+        "[D-BUS Service]\nName=com.example.Keep\nExec=/usr/libexec/keep\nUser=root\n");
+    put(dir, "polkit.service",
+        "[D-BUS Service]\nName=org.freedesktop.PolicyKit1\nExec=/usr/lib/polkit-1/polkitd --no-debug\nUser=root\n");
+
+    /* no maskfile → back-compat, both activatable */
+    sdbus_svctab *t0 = sdbus_svctab_parse_dir(dir);
+    assert(sdbus_svctab_find(t0, "com.example.Keep"));
+    assert(sdbus_svctab_find(t0, "org.freedesktop.PolicyKit1"));
+    sdbus_svctab_free(t0);
+
+    /* maskfile masks PolicyKit1 (comment + blank + surrounding whitespace tolerated) */
+    char mf[512]; snprintf(mf, sizeof mf, "%s/masked", dir);
+    FILE *f = fopen(mf, "w"); assert(f);
+    fputs("# schema-managed daemons, never bus-activate\n\n  org.freedesktop.PolicyKit1  \n", f);
+    fclose(f);
+
+    sdbus_svctab *t = sdbus_svctab_parse_dir_masked(dir, mf);
+    assert(sdbus_svctab_find(t, "com.example.Keep"));                     /* unaffected */
+    assert(sdbus_svctab_find(t, "org.freedesktop.PolicyKit1") == NULL);   /* masked */
+    assert(t->n == 1);
+    sdbus_svctab_free(t);
+
+    /* absent maskfile path → no masking */
+    sdbus_svctab *t2 = sdbus_svctab_parse_dir_masked(dir, "/nonexistent/masked");
+    assert(sdbus_svctab_find(t2, "org.freedesktop.PolicyKit1"));
+    sdbus_svctab_free(t2);
+
+    char cmd[600]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); (void)system(cmd);
+    printf("test_masklist OK\n");
+}
+
 static sdbus_held_msg mk(int caller, uint32_t serial, sdbus_held_kind k) {
     sdbus_held_msg m = {0};
     m.bytes = (unsigned char *)strdup("wire"); m.len = 4;
@@ -93,6 +128,7 @@ static void test_pending(void) {
 
 int main(void) {
     test_parse();
+    test_masklist();
     test_pending();
     printf("all sdbus_activate tests passed\n");
     return 0;
