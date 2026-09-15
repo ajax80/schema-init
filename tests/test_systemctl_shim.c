@@ -112,8 +112,8 @@ static void make_ctl_stub(const char *active_name) {
         "  echo 'service.sleeper.state=DORMANT'\n"
         "fi\n"
         "exit 0\n", sandbox, active_name);
+    fchmod(fileno(f), 0755);
     fclose(f);
-    chmod(p, 0755);
     char ctl[400];
     snprintf(ctl, sizeof ctl, "%s/schema-ctl", sandbox);
     setenv("SCHEMA_CTL", ctl, 1);
