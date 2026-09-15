@@ -95,6 +95,8 @@ fi
 %{_libexecdir}/schema-init/stage.py
 %{_libexecdir}/schema-init/schema-doctor
 %{_datadir}/%{name}/migrate/prevent-set.list
+%{_datadir}/%{name}/migrate/distros
+%{_datadir}/%{name}/migrate/scripts
 %ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
 %config(noreplace) %{_sysconfdir}/sudoers.d/schema-wizard
 
