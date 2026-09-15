@@ -943,6 +943,13 @@ def main(argv, run=subprocess.run):
         print("already migrated (manifest present) — run --uninstall to reverse")
         return 0
 
+    if not (args.deploy or args.dry_run):
+        ap.print_help(sys.stderr)
+        print("\nrefusing: no action given — pass --deploy to run the migration "
+              "(or --discover / --dry-run to preview). Bare `schema-migrate` no "
+              "longer deploys.", file=sys.stderr)
+        return 2
+
     prebuilt = args.prebuilt or os.environ.get("MIGRATE_PREBUILT") == "1"
     do_deploy(run=run, dry_run=args.dry_run, prebuilt=prebuilt)
     print("dry-run complete — nothing changed" if args.dry_run

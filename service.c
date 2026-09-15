@@ -1068,7 +1068,10 @@ int service_load_one(const char *path, service_t *svc) {
             if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
         } else if (strcmp(line, "user") == 0) {
             struct passwd *pw = getpwnam(val);
-            if (pw) { svc->run_uid = pw->pw_uid; svc->run_gid = pw->pw_gid; }
+            if (pw) {
+                svc->run_uid = pw->pw_uid; svc->run_gid = pw->pw_gid;
+                strncpy(svc->run_user, val, sizeof(svc->run_user) - 1);
+            }
         }
     }
     fclose(f);
