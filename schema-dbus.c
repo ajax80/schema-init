@@ -541,6 +541,12 @@ static int on_readable(sdbus_conn *c) {
 static int make_listen_socket(const char *path) {
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
+    /* ensure the socket's parent dir exists (e.g. /run/dbus) — a fresh boot or a
+       container may not have created it yet, and bind() would ENOENT otherwise. */
+    char dir[sizeof ((struct sockaddr_un *)0)->sun_path];
+    snprintf(dir, sizeof dir, "%s", path);
+    char *slash = strrchr(dir, '/');
+    if (slash && slash != dir) { *slash = '\0'; mkdir(dir, 0755); }
     struct sockaddr_un sa = {0};
     sa.sun_family = AF_UNIX;
     strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
