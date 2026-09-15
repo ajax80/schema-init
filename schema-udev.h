@@ -12,6 +12,7 @@
 #include <endian.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <pwd.h>
 #include <grp.h>
@@ -227,9 +228,7 @@ static inline int symlink_clear(const char *base_dir, const char *name) {
  * char/block special files; best-effort. */
 static inline void node_apply_perms(const char *node, const char *owner,
                                     const char *group, const char *mode_str) {
-    struct stat st;
-    if (!node || lstat(node, &st) != 0) return;
-    if (!S_ISCHR(st.st_mode) && !S_ISBLK(st.st_mode)) return;
+    if (!node) return;
     int have_owner = owner && owner[0];
     int have_group = group && group[0];
     int have_mode  = mode_str && mode_str[0];
@@ -237,6 +236,15 @@ static inline void node_apply_perms(const char *node, const char *owner,
      * exactly as the kernel created it. Clobbering to a fabricated 0600 breaks
      * kernel nodes that ship world-writable (/dev/null, /dev/zero, ...). */
     if (!have_owner && !have_group && !have_mode) return;
+    /* Bind an fd to the node itself: O_NOFOLLOW defeats a symlink swapped in
+     * after the name was resolved, O_PATH avoids actually opening the device.
+     * Every check and change below acts on this fd, never re-resolving the
+     * name, so nothing can substitute the target between check and use. */
+    int fd = open(node, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return;
+    struct stat st;
+    if (fstat(fd, &st) != 0 ||
+        (!S_ISCHR(st.st_mode) && !S_ISBLK(st.st_mode))) { close(fd); return; }
     /* Default to the node's current ids, never root: a failed name lookup must
      * not silently reassign the node to root:root. */
     uid_t uid = st.st_uid; gid_t gid = st.st_gid;
@@ -246,8 +254,13 @@ static inline void node_apply_perms(const char *node, const char *owner,
      * name being present, not on the lookup succeeding. */
     mode_t mode = have_mode ? (mode_t)strtoul(mode_str, NULL, 8)
                             : (have_group ? 0660 : (st.st_mode & 07777));
-    if (chown(node, uid, gid) != 0) { /* best-effort */ }
-    chmod(node, mode & 07777);
+    /* O_PATH fds reject fchown/fchmod directly; act through the fd's procfs
+     * alias so the op still lands on this exact inode, not the re-resolved name. */
+    char fdpath[64];
+    snprintf(fdpath, sizeof fdpath, "/proc/self/fd/%d", fd);
+    if (chown(fdpath, uid, gid) != 0) { /* best-effort */ }
+    chmod(fdpath, mode & 07777);
+    close(fd);
 }
 
 /* Maintain the /dev/{char,block}/MAJ:MIN symlink farm. Core udevd node_symlink

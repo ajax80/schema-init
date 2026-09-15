@@ -50,13 +50,13 @@ static void test_run_capture(void) {
     char dir[] = "/tmp/r4b_execXXXXXX"; assert(mkdtemp(dir));
     char ok[PATH_MAX]; snprintf(ok, sizeof ok, "%s/ok.sh", dir);
     FILE *f = fopen(ok, "w"); assert(f);
-    fprintf(f, "#!/bin/sh\necho 'ID_FOO=bar'\nexit 0\n"); fclose(f);
-    assert(chmod(ok, 0755) == 0);
+    fprintf(f, "#!/bin/sh\necho 'ID_FOO=bar'\nexit 0\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
 
     char bad[PATH_MAX]; snprintf(bad, sizeof bad, "%s/bad.sh", dir);
     f = fopen(bad, "w"); assert(f);
-    fprintf(f, "#!/bin/sh\necho nope\nexit 3\n"); fclose(f);
-    assert(chmod(bad, 0755) == 0);
+    fprintf(f, "#!/bin/sh\necho nope\nexit 3\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
 
     char out[UE_VAL_MAX];
     char cmd[PATH_MAX + 8];
@@ -75,8 +75,8 @@ static void test_program_result(void) {
     char dir[] = "/tmp/r4b_prXXXXXX"; assert(mkdtemp(dir));
     char sh[PATH_MAX]; snprintf(sh, sizeof sh, "%s/echo1.sh", dir);
     FILE *f = fopen(sh, "w"); assert(f);
-    fprintf(f, "#!/bin/sh\nprintf '%%s' \"$1\"\nexit 0\n"); fclose(f);
-    assert(chmod(sh, 0755) == 0);
+    fprintf(f, "#!/bin/sh\nprintf '%%s' \"$1\"\nexit 0\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
 
     struct uevent ev; memset(&ev, 0, sizeof ev);
     ue_set(&ev, "ACTION", "add"); ue_set(&ev, "DEVPATH", "/devices/x");
@@ -96,8 +96,8 @@ static void test_program_result(void) {
 
     /* nonzero exit → rule fails */
     char bad[PATH_MAX]; snprintf(bad, sizeof bad, "%s/bad.sh", dir);
-    f = fopen(bad, "w"); assert(f); fprintf(f, "#!/bin/sh\nexit 5\n"); fclose(f);
-    assert(chmod(bad, 0755) == 0);
+    f = fopen(bad, "w"); assert(f); fprintf(f, "#!/bin/sh\nexit 5\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
     snprintf(line, sizeof line, "PROGRAM==\"%s\"", bad);
     ruleset_parse_line(line, &r);
     assert(rule_match(&r, &ctx) == 0);
@@ -135,8 +135,8 @@ static void test_import_program_bridge(void) {
     char dir[] = "/tmp/r4b_impXXXXXX"; assert(mkdtemp(dir));
     char sh[PATH_MAX]; snprintf(sh, sizeof sh, "%s/foo_id.sh", dir);
     FILE *f = fopen(sh, "w"); assert(f);
-    fprintf(f, "#!/bin/sh\necho 'ID_FOO=bar'\necho 'ID_BAZ=qux'\nexit 0\n"); fclose(f);
-    assert(chmod(sh, 0755) == 0);
+    fprintf(f, "#!/bin/sh\necho 'ID_FOO=bar'\necho 'ID_BAZ=qux'\nexit 0\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
 
     struct uevent ev; memset(&ev, 0, sizeof ev);
     ue_set(&ev, "ACTION", "add"); ue_set(&ev, "DEVPATH", "/devices/x");
@@ -152,8 +152,8 @@ static void test_import_program_bridge(void) {
 
     /* nonzero exit → gate: a later assignment in the same rule must NOT apply */
     char bad[PATH_MAX]; snprintf(bad, sizeof bad, "%s/bad_id.sh", dir);
-    f = fopen(bad, "w"); assert(f); fprintf(f, "#!/bin/sh\nexit 4\n"); fclose(f);
-    assert(chmod(bad, 0755) == 0);
+    f = fopen(bad, "w"); assert(f); fprintf(f, "#!/bin/sh\nexit 4\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
     struct uevent ev2; memset(&ev2, 0, sizeof ev2);
     ue_set(&ev2, "ACTION", "add"); ue_set(&ev2, "DEVPATH", "/devices/y");
     struct dev_ctx c2; assert(dev_ctx_init(&c2, &ev2, "/sys") == 0);
