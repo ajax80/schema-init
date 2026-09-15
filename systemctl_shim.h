@@ -213,16 +213,18 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         return 0;
     }
     if (strcmp(verb, "is-enabled") == 0) {
+        int rc = 0, seen = 0;
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
-            if (!unit_supported(argv[i])) return 1;
+            seen = 1;
+            if (!unit_supported(argv[i])) { printf("disabled\n"); rc = 1; continue; }
             char path[512], name[256];
             resolve_unit_path(argv[i], path, sizeof path);
             strip_service_suffix(argv[i], name, sizeof name);
-            if (queue_contains(path) || svc_exists(name)) return 0;
-            return 1;
+            if (queue_contains(path) || svc_exists(name)) printf("enabled\n");
+            else { printf("disabled\n"); rc = 1; }
         }
-        return 1;
+        return seen ? rc : 1;
     }
     if (strcmp(verb, "daemon-reload") == 0 || strcmp(verb, "daemon-reexec") == 0) {
         run_ctl("reload", NULL);
@@ -248,13 +250,31 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         return 0;
     }
     if (strcmp(verb, "is-active") == 0) {
+        int rc = 0, seen = 0;
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
+            seen = 1;
             char name[256];
             strip_service_suffix(argv[i], name, sizeof name);
-            return ctl_is_active(name) ? 0 : 3;
+            if (ctl_is_active(name)) printf("active\n");
+            else { printf("inactive\n"); rc = 3; }
         }
-        return 3;
+        return seen ? rc : 3;
+    }
+    if (strcmp(verb, "status") == 0) {
+        /* schema-ctl status has no per-unit filter, so show the whole table for
+           visibility and mirror systemctl's exit convention (3 if a named unit
+           is not active, else 0). */
+        int rc = 0, seen = 0;
+        for (i = verb_idx + 1; i < argc; i++) {
+            if (argv[i][0] == '-') continue;
+            seen = 1;
+            char name[256];
+            strip_service_suffix(argv[i], name, sizeof name);
+            if (!ctl_is_active(name)) rc = 3;
+        }
+        run_ctl("status", NULL);
+        return seen ? rc : 0;
     }
     return 0;
 }
