@@ -76,7 +76,23 @@ static inline int dl_link_one(const char *base_dir, const char *tree,
     if (dl_mkdir_p(treedir) != 0) return -1;
 
     char target[600];
-    if ((size_t)snprintf(target, sizeof target, "../../../%s", devname) >= sizeof target)
+    /* One ".." per path component of base_dir hops from the link's directory
+       (base_dir/<tree>/) up to /dev, where the real block node lives (kernel
+       devtmpfs, in live and shadow alike). A fixed "../../../" only matched the
+       3-component shadow base (/dev/schema/disk); the live base (/dev/disk) is
+       one component shallower, so it overshot /dev to "/" and every by-* link
+       dangled (/dev/disk/by-uuid/X -> ../../../sda1 = /sda1). */
+    size_t ups = 0;
+    for (const char *p = base_dir; *p; p++)
+        if (*p == '/' && p[1] && p[1] != '/') ups++;
+    char prefix[128];
+    size_t off = 0;
+    for (size_t u = 0; u < ups && off + 3 < sizeof prefix; u++) {
+        memcpy(prefix + off, "../", 3);
+        off += 3;
+    }
+    prefix[off] = '\0';
+    if ((size_t)snprintf(target, sizeof target, "%s%s", prefix, devname) >= sizeof target)
         return -1;
 
     char final[1024], tmp[1024];
