@@ -100,6 +100,7 @@ needs_root=1
 critical=1
 SVC
 
+mkdir -p "$MNT/usr/local/sbin"
 cat > "$MNT/usr/local/sbin/schema-network" <<'NET'
 #!/bin/sh
 for iface in $(ls /sys/class/net); do

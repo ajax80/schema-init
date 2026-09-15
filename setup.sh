@@ -223,6 +223,11 @@ echo -e "\n${YELLOW}[3/4] Bootstrapping standard system services in ${SVC_DIR}..
 mkdir -p "$SVC_DIR"
 mkdir -p "$BIN_DIR"
 
+# schema-subreaper: several profile services (polkitd, upower, udisks2) exec it
+# as a wrapper at $BIN_DIR/schema-subreaper — install it or they fail to start.
+cp -f schema-subreaper "$BIN_DIR/schema-subreaper"
+chmod 755 "$BIN_DIR/schema-subreaper"
+
 # Helper to write files if they don't already exist
 write_if_missing() {
     local target="$1"
