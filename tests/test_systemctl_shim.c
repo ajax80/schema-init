@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 static void test_strip_suffix(void) {
     char b[256];
@@ -89,11 +90,56 @@ static void test_enable_queue(void) {
     assert(run("is-enabled", "foo") == 0);
 }
 
+static void make_ctl_stub(const char *active_name) {
+    char p[400];
+    snprintf(p, sizeof p, "%s/schema-ctl", sandbox);
+    FILE *f = fopen(p, "w"); assert(f);
+    fprintf(f,
+        "#!/bin/sh\n"
+        "echo \"$@\" >> \"%s/ctl.log\"\n"
+        "if [ \"$1\" = status ]; then\n"
+        "  echo 'service.%s.state=FULL_TRUST'\n"
+        "  echo 'service.sleeper.state=DORMANT'\n"
+        "fi\n"
+        "exit 0\n", sandbox, active_name);
+    fclose(f);
+    chmod(p, 0755);
+    char ctl[400];
+    snprintf(ctl, sizeof ctl, "%s/schema-ctl", sandbox);
+    setenv("SCHEMA_CTL", ctl, 1);
+}
+
+static int ctl_log_has(const char *needle) {
+    char p[400]; snprintf(p, sizeof p, "%s/ctl.log", sandbox);
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    char line[400]; int hit = 0;
+    while (fgets(line, sizeof line, f)) if (strstr(line, needle)) { hit = 1; break; }
+    fclose(f); return hit;
+}
+
+static void test_lifecycle(void) {
+    setup_sandbox();
+    make_ctl_stub("running");
+    char svc[512];
+    snprintf(svc, sizeof svc, "%s/svc/running.svc", sandbox);
+    FILE *f = fopen(svc, "w"); assert(f); fputs("name=running\n", f); fclose(f);
+    assert(run("start", "running.service") == 0);
+    assert(ctl_log_has("start running"));
+    assert(run("start", "ghost.service") == 0);
+    assert(run("daemon-reload", NULL) == 0);
+    assert(ctl_log_has("reload"));
+    assert(run("is-active", "running") == 0);
+    assert(run("is-active", "sleeper") == 3);
+    assert(run("is-active", "nope") == 3);
+}
+
 int main(void) {
     test_strip_suffix();
     test_supported();
     printf("task1 systemctl-shim tests passed\n");
     test_enable_queue();
     printf("task2 systemctl-shim tests passed\n");
+    test_lifecycle();
+    printf("task3 systemctl-shim tests passed\n");
     return 0;
 }

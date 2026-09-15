@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 __attribute__((unused)) static const char *shim_state_dir(void) {
     const char *e = getenv("SCHEMA_STATE_DIR");
@@ -129,6 +130,40 @@ __attribute__((unused)) static int svc_exists(const char *name) {
     return access(p, F_OK) == 0;
 }
 
+__attribute__((unused)) static int run_ctl(const char *verb, const char *name) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        if (name) execlp(shim_ctl(), shim_ctl(), verb, name, (char *)NULL);
+        else      execlp(shim_ctl(), shim_ctl(), verb, (char *)NULL);
+        _exit(127);
+    }
+    int st;
+    if (waitpid(pid, &st, 0) < 0) return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+__attribute__((unused)) static int ctl_is_active(const char *name) {
+    char cmd[512];
+    snprintf(cmd, sizeof cmd, "%s status --kv 2>/dev/null", shim_ctl());
+    FILE *p = popen(cmd, "r");
+    if (!p) return 0;
+    char want[300], line[512];
+    snprintf(want, sizeof want, "service.%s.state=", name);
+    int active = 0;
+    while (fgets(line, sizeof line, p)) {
+        char *eq = strstr(line, want);
+        if (eq != line) continue;
+        char *st = line + strlen(want);
+        st[strcspn(st, "\n")] = '\0';
+        if (strcmp(st, "DORMANT") && strcmp(st, "EXCISED") && strcmp(st, "UNKNOWN"))
+            active = 1;
+        break;
+    }
+    pclose(p);
+    return active;
+}
+
 __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     if (argc < 2) return 0;
     const char *verb = argv[1];
@@ -169,6 +204,37 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             return 1;
         }
         return 1;
+    }
+    if (strcmp(verb, "daemon-reload") == 0 || strcmp(verb, "daemon-reexec") == 0) {
+        run_ctl("reload", NULL);
+        return 0;
+    }
+    if (strcmp(verb, "start") == 0 || strcmp(verb, "stop") == 0 ||
+        strcmp(verb, "restart") == 0 || strcmp(verb, "try-restart") == 0 ||
+        strcmp(verb, "reload") == 0 || strcmp(verb, "reload-or-restart") == 0) {
+        const char *ctlverb = verb;
+        if (strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
+            strcmp(verb, "reload") == 0)
+            ctlverb = "restart";
+        for (i = 2; i < argc; i++) {
+            if (argv[i][0] == '-') continue;
+            if (!unit_supported(argv[i])) continue;
+            char name[256];
+            strip_service_suffix(argv[i], name, sizeof name);
+            if (!svc_exists(name)) continue;
+            if (strcmp(verb, "try-restart") == 0 && !ctl_is_active(name)) continue;
+            run_ctl(ctlverb, name);
+        }
+        return 0;
+    }
+    if (strcmp(verb, "is-active") == 0) {
+        for (i = 2; i < argc; i++) {
+            if (argv[i][0] == '-') continue;
+            char name[256];
+            strip_service_suffix(argv[i], name, sizeof name);
+            return ctl_is_active(name) ? 0 : 3;
+        }
+        return 3;
     }
     return 0;
 }
