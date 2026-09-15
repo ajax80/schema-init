@@ -104,6 +104,22 @@ install-migrate: schema-udev verify-rules-live
 	install -m 0755 scripts/schema-doctor.py $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-doctor
 	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate
 	install -m 0644 distros/fedora-installer/migrate/prevent-set.list $(DESTDIR)$(DATADIR)/schema-init/migrate/prevent-set.list
+	# Rail + KDE asset sources, mirrored at the repo-relative layout so
+	# `schema-migrate --deploy` resolves them via find_source() on an RPM box
+	# (no MIGRATE_REPO, no repo tree). Without these the flip deploys zero
+	# services. (schema-init#121)
+	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-installer/rail/services
+	cp -a distros/fedora-installer/rail/services/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-installer/rail/services/
+	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-installer/rail/scripts
+	cp -a distros/fedora-installer/rail/scripts/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-installer/rail/scripts/
+	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/services
+	cp -a distros/fedora-kde/services/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/services/
+	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/scripts
+	cp -a distros/fedora-kde/scripts/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/scripts/
+	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/config
+	cp -a distros/fedora-kde/config/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/config/
+	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/scripts
+	cp -a scripts/. $(DESTDIR)$(DATADIR)/schema-init/migrate/scripts/
 	install -d $(DESTDIR)$(SYSCONFDIR)/sudoers.d
 	install -m 0440 distros/fedora-installer/migrate/schema-wizard.sudoers $(DESTDIR)$(SYSCONFDIR)/sudoers.d/schema-wizard
 

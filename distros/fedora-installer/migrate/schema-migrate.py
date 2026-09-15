@@ -38,6 +38,28 @@ def repo():
     return os.environ.get("MIGRATE_REPO") or os.path.dirname(os.path.dirname(os.path.dirname(_MODDIR)))
 
 
+# On an RPM box schema-migrate lives in /usr/bin, so repo() resolves to "/" and
+# no source tree exists. The -migrate package mirrors the repo-relative asset
+# layout under here, so find_source() falls back to it when MIGRATE_REPO and the
+# real repo tree are absent.
+_DATA_DIR = "/usr/share/schema-init/migrate"
+
+
+def _source_roots():
+    roots = [repo()]
+    if os.path.isdir(_DATA_DIR) and _DATA_DIR not in roots:
+        roots.append(_DATA_DIR)
+    return roots
+
+
+def find_source(relpath):
+    for root in _source_roots():
+        cand = os.path.join(root, relpath)
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 def load_prevent_set(path=None):
     if path is None:
         path = _PREVENT_LIST_OVERRIDE or os.path.join(_MODDIR, "prevent-set.list")
@@ -69,20 +91,19 @@ def _copy_into(src, dst, manifest, dry_run):
 
 def deploy_prevent_set(manifest, dry_run=False):
     ps = load_prevent_set()
-    r = repo()
     written = []
     for name in ps["script"]:
-        src = os.path.join(r, "distros/fedora-kde/scripts", name)
+        src = find_source("distros/fedora-kde/scripts/" + name)
         dst = P("usr/local/lib/schema-init/scripts/" + name)
-        if os.path.exists(src):
+        if src:
             _copy_into(src, dst, manifest, dry_run)
             written.append(dst)
             if not dry_run:
                 manifest.add_file("/usr/local/lib/schema-init/scripts/" + name)
     for name in ps["config"]:
-        src = os.path.join(r, "distros/fedora-kde/config", name)
+        src = find_source("distros/fedora-kde/config/" + name)
         dst = P("etc/schema-init/config/" + name)
-        if os.path.exists(src):
+        if src:
             _copy_into(src, dst, manifest, dry_run)
             written.append(dst)
             if not dry_run:
@@ -90,8 +111,8 @@ def deploy_prevent_set(manifest, dry_run=False):
     for name in ps["service"]:
         for base in ("distros/fedora-installer/rail/services",
                      "distros/fedora-kde/services"):
-            src = os.path.join(r, base, name + ".svc")
-            if os.path.exists(src):
+            src = find_source(base + "/" + name + ".svc")
+            if src:
                 dst = P("etc/schema-init/services/" + name + ".svc")
                 _copy_into(src, dst, manifest, dry_run)
                 written.append(dst)
@@ -476,8 +497,8 @@ _LOCALBIN_RE = re.compile(r"/usr/local/bin/([A-Za-z0-9._-]+)")
 def _find_helper_src(name):
     base = HELPER_ALIASES.get(name, name)
     for d in HELPER_DIRS:
-        cand = os.path.join(repo(), d, base)
-        if os.path.exists(cand):
+        cand = find_source(os.path.join(d, base))
+        if cand:
             return cand
     return None
 
