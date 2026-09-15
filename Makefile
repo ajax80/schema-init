@@ -13,7 +13,7 @@ DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
 DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev schema-dbus
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev schema-dbus schema-systemctl
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -39,6 +39,9 @@ schema-init-static:
 	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
 
 schema-ctl: schema-ctl.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+schema-systemctl: schema-systemctl.c systemctl_shim.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 schema-subreaper: schema-subreaper.c
@@ -91,10 +94,11 @@ install-dbus-sp1: schema-dbus
 	@echo "SP1 prerequisites installed. To FLIP the bus (reboot-only, gated):"
 	@echo "  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"
 
-install-migrate: schema-udev verify-rules-live
+install-migrate: schema-udev schema-systemctl verify-rules-live
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(PREFIX)/libexec/schema-init
 	install -m 0755 distros/fedora-installer/migrate/schema-migrate.py $(DESTDIR)$(BINDIR)/schema-migrate
 	install -m 0755 schema-udev $(DESTDIR)$(BINDIR)/schema-udev
+	install -m 0755 schema-systemctl $(DESTDIR)$(BINDIR)/schema-systemctl
 	install -m 0755 distros/fedora-installer/schema-flip-apply.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-flip-apply
 	install -m 0755 scripts/schema-udev-flip-arm.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-arm.sh
 	install -m 0755 scripts/schema-udev-flip-backup.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-backup.sh
@@ -140,7 +144,7 @@ srpm:
 	ls -1 $(RELDIR)/*.src.rpm
 
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev udev-parity libatomic_asneeded.a
+	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev schema-systemctl udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 
@@ -198,6 +202,7 @@ test:
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_route.c -o /tmp/schema-test-sdbus-route $(DBUS_LIBS) && /tmp/schema-test-sdbus-route
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o /tmp/schema-test-sdbus-wire $(DBUS_LIBS) && /tmp/schema-test-sdbus-wire
 	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate
+	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o /tmp/schema-test-systemctl && /tmp/schema-test-systemctl
 
 # Everything a contributor can run locally without a reboot: the C unit tests
 # above plus the Python integration suite (doctor / logind / migrate / wizard).
