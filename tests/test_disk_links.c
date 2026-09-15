@@ -43,6 +43,22 @@ int main(void) {
     assert_link(base, "by-diskseq", "2", "../../../sda");
     printf("test_disk_links apply-disk: OK\n");
 
+    /* ---- live-geometry regression: a 2-component base (mirrors live /dev/disk,
+       one component shallower than the 3-component shadow /dev/schema/disk) must
+       yield a 2-hop "../../X" target. The old hardcoded "../../../X" overshot
+       /dev to "/" here, leaving every live by-* link dangling. ---- */
+    char t1b[] = "/tmp/schema-dllive-XXXXXX";
+    char *rootb = mkdtemp(t1b); assert(rootb);   /* /tmp/schema-dllive-XXXXXX = 2 components */
+    struct uevent dl; dl.n = 0;
+    put(&dl, "SUBSYSTEM", "block");
+    put(&dl, "DEVNAME", "sda");
+    put(&dl, "DEVTYPE", "disk");
+    put(&dl, "MAJOR", "8"); put(&dl, "MINOR", "0");
+    put(&dl, "ID_FS_UUID_ENC", "e841ba0a-d7b9-42b6-b627-8ea27df85a54");
+    assert(disk_links_apply(rootb, &dl) == 0);
+    assert_link(rootb, "by-uuid", "e841ba0a-d7b9-42b6-b627-8ea27df85a54", "../../sda");
+    printf("test_disk_links live-geometry (2-hop target): OK\n");
+
     /* ---- apply: partition (suffix rule) ---- */
     char t2[] = "/tmp/schema-dl2-XXXXXX";
     char *root2 = mkdtemp(t2); assert(root2);
