@@ -90,6 +90,8 @@ if [ $1 -eq 0 ]; then
     elif [ -f /usr/bin/systemctl.real ]; then
         rm -f /usr/bin/systemctl
         mv /usr/bin/systemctl.real /usr/bin/systemctl
+    elif [ "$(readlink /usr/bin/systemctl 2>/dev/null)" = "%{_bindir}/schema-systemctl" ]; then
+        rm -f /usr/bin/systemctl
     fi
 fi
 
