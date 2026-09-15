@@ -177,20 +177,53 @@ static void eviction_tick(void) {
  * naturally timeout and force-reboot the processor. This guarantees a safe failure cascade
  * under all single-point failure modes.
  */
-static void load_watchdog_module(void) {
-    if (getpid() != 1) return;
+static int modprobe_one(const char *mod) {
     pid_t pid = fork();
     if (pid == 0) {
-        execl("/sbin/modprobe", "modprobe", "sp5100_tco", (char *)NULL);
+        execl("/sbin/modprobe", "modprobe", mod, (char *)NULL);
         _exit(127);
     }
-    if (pid < 0) return;
+    if (pid < 0) return -1;
     int status;
     waitpid(pid, &status, 0);
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
+}
+
+static void load_watchdog_module(void) {
+    if (getpid() != 1) return;
+    if (modprobe_one("sp5100_tco") == 0)
         printf("[schema-init] loaded watchdog module (sp5100_tco)\n");
     else
         printf("[schema-init] watchdog module load failed (sp5100_tco)\n");
+}
+
+/* systemd-modules-load parity: modprobe every module named in the
+ * /etc/modules-load.d/*.conf drop-ins (one module per line; blanks and
+ * '#'/';' comments ignored). Lets a node declare e.g. `tun` so devtmpfs
+ * creates /dev/net/tun at boot, instead of each service wrapper modprobing
+ * by hand. Runs after mount_pseudo() has devtmpfs mounted. */
+static void load_configured_modules(void) {
+    if (getpid() != 1) return;
+    glob_t g;
+    if (glob("/etc/modules-load.d/*.conf", 0, NULL, &g) != 0) return;
+    for (size_t i = 0; i < g.gl_pathc; i++) {
+        FILE *f = fopen(g.gl_pathv[i], "r");
+        if (!f) continue;
+        char line[256];
+        while (fgets(line, sizeof line, f)) {
+            char *p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '#' || *p == ';' || *p == '\0') continue;
+            p[strcspn(p, " \t\r\n")] = '\0';
+            if (*p == '\0') continue;
+            if (modprobe_one(p) == 0)
+                printf("[schema-init] loaded module '%s'\n", p);
+            else
+                printf("[schema-init] module load failed: '%s'\n", p);
+        }
+        fclose(f);
+    }
+    globfree(&g);
 }
 
 static void watchdog_init(void) {
@@ -1948,6 +1981,7 @@ int main(int argc, char **argv) {
     mount_pseudo();
     cleanup_tmp_locks();
     load_watchdog_module();
+    load_configured_modules();
     watchdog_init();
     /* Before the control socket opens or a single service spawns, so the
      * raised limit covers every descriptor PID 1 will ever hold. */
