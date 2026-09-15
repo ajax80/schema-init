@@ -48,15 +48,19 @@ rc = sm.main(["--dry-run"], run=fake_run)
 check("dry-run exits 0", rc == 0)
 check("dry-run wrote no services", not os.path.exists(os.path.join(root, "etc/schema-init/services")))
 
-# full deploy
+# no-arg invocation refuses
 rc = sm.main([], run=fake_run)
+check("no-arg refuses exit 2", rc == 2)
+
+# full deploy
+rc = sm.main(["--deploy"], run=fake_run)
 check("deploy exits 0", rc == 0)
 check("prevent-set landed", os.path.exists(os.path.join(root, "etc/schema-init/services/dbus.svc")))
 check("boot entry created", os.path.exists(os.path.join(root, "boot/loader/entries/schema-init.conf")))
 check("manifest saved", os.path.exists(os.path.join(root, sm.Manifest.PATH)))
 
 # re-run guard
-rc = sm.main([], run=fake_run)
+rc = sm.main(["--deploy"], run=fake_run)
 check("re-migration is a no-op exit 0", rc == 0)
 
 # uninstall
