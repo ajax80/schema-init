@@ -175,14 +175,15 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     }
     if (user_scope) return 0;
     const char *verb = NULL;
+    int verb_idx = 0;
     for (j = 1; j < argc; j++) {
-        if (argv[j][0] != '-') { verb = argv[j]; break; }
+        if (argv[j][0] != '-') { verb = argv[j]; verb_idx = j; break; }
     }
     if (!verb) return 0;
     int i;
 
     if (strcmp(verb, "enable") == 0 || strcmp(verb, "preset") == 0) {
-        for (i = 2; i < argc; i++) {
+        for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) continue;
             char path[512];
@@ -197,7 +198,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         return 0;
     }
     if (strcmp(verb, "disable") == 0) {
-        for (i = 2; i < argc; i++) {
+        for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) continue;
             char path[512], name[256];
@@ -212,7 +213,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         return 0;
     }
     if (strcmp(verb, "is-enabled") == 0) {
-        for (i = 2; i < argc; i++) {
+        for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) return 1;
             char path[512], name[256];
@@ -234,19 +235,20 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         if (strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
             strcmp(verb, "reload") == 0)
             ctlverb = "restart";
-        for (i = 2; i < argc; i++) {
+        for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) continue;
             char name[256];
             strip_service_suffix(argv[i], name, sizeof name);
             if (!svc_exists(name)) continue;
-            if (strcmp(verb, "try-restart") == 0 && !ctl_is_active(name)) continue;
+            if ((strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload") == 0 ||
+                 strcmp(verb, "reload-or-restart") == 0) && !ctl_is_active(name)) continue;
             run_ctl(ctlverb, name);
         }
         return 0;
     }
     if (strcmp(verb, "is-active") == 0) {
-        for (i = 2; i < argc; i++) {
+        for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             char name[256];
             strip_service_suffix(argv[i], name, sizeof name);

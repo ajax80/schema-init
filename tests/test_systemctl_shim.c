@@ -165,6 +165,25 @@ static void test_flags_and_safety(void) {
     assert(ctl_log_has("start baz"));
 }
 
+static void test_flag_before_verb(void) {
+    setup_sandbox();
+    write_unit("foo.service");
+    assert(run3("--no-reload", "preset", "foo.service") == 0);
+    char qp[400];
+    snprintf(qp, sizeof qp, "%s/state/pending.list", sandbox);
+    FILE *f = fopen(qp, "r"); assert(f);
+    char line[400]; int has_foo = 0, has_preset = 0;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = '\0';
+        if (strstr(line, "foo.service")) has_foo = 1;
+        if (strcmp(line, "preset") == 0) has_preset = 1;
+    }
+    fclose(f);
+    assert(has_foo);
+    assert(!has_preset);
+    assert(run3("--quiet", "is-enabled", "foo") == 0);
+}
+
 int main(void) {
     test_strip_suffix();
     test_supported();
@@ -175,5 +194,7 @@ int main(void) {
     printf("task3 systemctl-shim tests passed\n");
     test_flags_and_safety();
     printf("task4 systemctl-shim tests passed\n");
+    test_flag_before_verb();
+    printf("task5 systemctl-shim tests passed\n");
     return 0;
 }
