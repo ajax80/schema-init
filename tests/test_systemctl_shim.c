@@ -54,6 +54,16 @@ static int run(const char *a, const char *b) {
     return shim_dispatch(n, argv);
 }
 
+static int run3(const char *a, const char *b, const char *c) {
+    char *argv[5]; int n = 0;
+    argv[n++] = (char *)"systemctl";
+    argv[n++] = (char *)a;
+    if (b) argv[n++] = (char *)b;
+    if (c) argv[n++] = (char *)c;
+    argv[n] = NULL;
+    return shim_dispatch(n, argv);
+}
+
 static void write_unit(const char *name) {
     char p[400], *d = getenv("SCHEMA_UNIT_DIR");
     snprintf(p, sizeof p, "%s/%s", d, name);
@@ -126,11 +136,33 @@ static void test_lifecycle(void) {
     assert(run("start", "running.service") == 0);
     assert(ctl_log_has("start running"));
     assert(run("start", "ghost.service") == 0);
+    assert(!ctl_log_has("start ghost"));
     assert(run("daemon-reload", NULL) == 0);
     assert(ctl_log_has("reload"));
     assert(run("is-active", "running") == 0);
     assert(run("is-active", "sleeper") == 3);
     assert(run("is-active", "nope") == 3);
+}
+
+static void test_flags_and_safety(void) {
+    setup_sandbox();
+    write_unit("foo.service");
+    assert(run3("enable", "--now", "foo.service") == 0);
+    assert(run("is-enabled", "foo") == 0);
+    assert(run("frobnicate", "foo") == 0);
+    char *argv[1] = { (char *)"systemctl" };
+    assert(shim_dispatch(1, argv) == 0);
+    setup_sandbox();
+    write_unit("bar.service");
+    assert(run3("--user", "enable", "bar.service") == 0);
+    assert(run("is-enabled", "bar") == 1);
+    make_ctl_stub("baz");
+    char svc[512];
+    snprintf(svc, sizeof svc, "%s/svc/baz.svc", sandbox);
+    FILE *f = fopen(svc, "w"); assert(f); fputs("name=baz\n", f); fclose(f);
+    write_unit("baz.service");
+    assert(run3("enable", "--now", "baz.service") == 0);
+    assert(ctl_log_has("start baz"));
 }
 
 int main(void) {
@@ -141,5 +173,7 @@ int main(void) {
     printf("task2 systemctl-shim tests passed\n");
     test_lifecycle();
     printf("task3 systemctl-shim tests passed\n");
+    test_flags_and_safety();
+    printf("task4 systemctl-shim tests passed\n");
     return 0;
 }

@@ -166,7 +166,19 @@ __attribute__((unused)) static int ctl_is_active(const char *name) {
 
 __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     if (argc < 2) return 0;
-    const char *verb = argv[1];
+    int j;
+    int now = 0, user_scope = 0;
+    for (j = 1; j < argc; j++) {
+        if (strcmp(argv[j], "--now") == 0) now = 1;
+        else if (strcmp(argv[j], "--user") == 0 || strcmp(argv[j], "--global") == 0)
+            user_scope = 1;
+    }
+    if (user_scope) return 0;
+    const char *verb = NULL;
+    for (j = 1; j < argc; j++) {
+        if (argv[j][0] != '-') { verb = argv[j]; break; }
+    }
+    if (!verb) return 0;
     int i;
 
     if (strcmp(verb, "enable") == 0 || strcmp(verb, "preset") == 0) {
@@ -176,6 +188,11 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             char path[512];
             resolve_unit_path(argv[i], path, sizeof path);
             queue_add(path);
+            if (now) {
+                char name[256];
+                strip_service_suffix(argv[i], name, sizeof name);
+                if (svc_exists(name)) run_ctl("start", name);
+            }
         }
         return 0;
     }
@@ -190,6 +207,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             char svc[512];
             snprintf(svc, sizeof svc, "%s/%s.svc", shim_svc_dir(), name);
             unlink(svc);
+            if (now) run_ctl("stop", name);
         }
         return 0;
     }
