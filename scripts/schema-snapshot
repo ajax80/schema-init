@@ -1,0 +1,113 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+ENTRIES=/boot/loader/entries
+KEEP="${SCHEMA_SNAP_KEEP:-3}"
+PREFIX_SNAP=schema-snap
+DEV=""
+TOP=""
+
+die() { echo "schema-snapshot: $*" >&2; exit 1; }
+
+need_root() { [ "$(id -u)" = 0 ] || die "must run as root"; }
+need_btrfs() { [ "$(findmnt -no FSTYPE /)" = btrfs ] || die "root filesystem is not btrfs"; }
+
+resolve_dev() { DEV="$(findmnt -no SOURCE / | sed 's/\[.*//')"; [ -n "$DEV" ] || die "cannot resolve root device"; }
+
+mount_top() { TOP="$(mktemp -d)"; mount -o subvolid=5 "$DEV" "$TOP"; }
+umount_top() {
+  [ -n "$TOP" ] || return 0
+  umount "$TOP" 2>/dev/null || umount -l "$TOP" 2>/dev/null || true
+  rmdir "$TOP" 2>/dev/null || true
+  TOP=""
+}
+trap umount_top EXIT
+
+info_field() { grubby --info=DEFAULT | sed -n "s/^$1=\"\\(.*\\)\"/\\1/p"; }
+
+cmd_create() {
+  local label="${1:-manual}"
+  local ts base rootsnap homesnap kbase args rootdev newargs fstab title
+  ts="$(date +%Y%m%d-%H%M%S)"
+  base="$PREFIX_SNAP-$ts-$label"
+  rootsnap="$base"
+  homesnap="$base-home"
+  kbase="$(basename "$(info_field kernel)")"
+  args="$(info_field args)"
+  rootdev="$(info_field root)"
+  [ -n "$kbase" ] && [ -n "$rootdev" ] || die "could not read default boot entry via grubby"
+
+  mount_top
+  [ -e "$TOP/$rootsnap" ] && { umount_top; die "$rootsnap already exists"; }
+  btrfs subvolume snapshot / "$TOP/$rootsnap" >/dev/null
+  btrfs subvolume snapshot /home "$TOP/$homesnap" >/dev/null
+  fstab="$TOP/$rootsnap/etc/fstab"
+  awk -v r="$rootsnap" -v h="$homesnap" '
+    $2=="/"     && $3=="btrfs" { sub(/subvol=[^, ]+/, "subvol=" r) }
+    $2=="/home" && $3=="btrfs" { sub(/subvol=[^, ]+/, "subvol=" h) }
+    { print }' "$fstab" > "$fstab.new" && mv "$fstab.new" "$fstab"
+  umount_top
+
+  newargs="$(printf '%s' "$args" | sed "s/rootflags=subvol=[^ ]*/rootflags=subvol=$rootsnap/")"
+  title="schema-init snapshot — $label ($ts)"
+  cat > "$ENTRIES/$base.conf" <<EOF
+title $title
+version $(uname -r)
+linux /$rootsnap/boot/$kbase
+options root=$rootdev $newargs
+grub_users \$grub_users
+grub_arg --unrestricted
+grub_class fedora
+EOF
+  echo "created: $rootsnap (+ $homesnap) -> $ENTRIES/$base.conf"
+  cmd_prune
+}
+
+cmd_prune() {
+  local snaps old n
+  mount_top
+  mapfile -t snaps < <(ls -1 "$TOP" 2>/dev/null | grep -E "^$PREFIX_SNAP-[0-9]{8}-[0-9]{6}-" | grep -v -- '-home$' | sort)
+  umount_top
+  n=${#snaps[@]}
+  [ "$n" -gt "$KEEP" ] || return 0
+  for old in "${snaps[@]:0:$((n-KEEP))}"; do
+    mount_top
+    btrfs subvolume delete "$TOP/$old" >/dev/null 2>&1 || true
+    btrfs subvolume delete "$TOP/$old-home" >/dev/null 2>&1 || true
+    umount_top
+    rm -f "$ENTRIES/$old.conf"
+    echo "pruned: $old"
+  done
+}
+
+cmd_delete() {
+  local name="${1:?usage: schema-snapshot delete <name>}"
+  case "$name" in "$PREFIX_SNAP-"*) ;; *) die "refusing to delete non-snapshot subvol: $name" ;; esac
+  mount_top
+  btrfs subvolume delete "$TOP/$name" >/dev/null 2>&1 || true
+  btrfs subvolume delete "$TOP/$name-home" >/dev/null 2>&1 || true
+  umount_top
+  rm -f "$ENTRIES/$name.conf"
+  echo "deleted: $name"
+}
+
+cmd_list() {
+  mount_top
+  echo "== snapshots =="
+  ls -1 "$TOP" 2>/dev/null | grep -E "^$PREFIX_SNAP-" || echo "(none)"
+  umount_top
+  echo "== boot entries =="
+  ls -1 "$ENTRIES" 2>/dev/null | grep -E "^$PREFIX_SNAP-" || echo "(none)"
+}
+
+need_root
+need_btrfs
+resolve_dev
+
+case "${1:-}" in
+  create) shift; cmd_create "${1:-manual}" ;;
+  prune)  cmd_prune ;;
+  delete) shift; cmd_delete "${1:-}" ;;
+  list)   cmd_list ;;
+  *) die "usage: schema-snapshot {create [label]|list|prune|delete <name>}" ;;
+esac

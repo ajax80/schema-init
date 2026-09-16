@@ -79,6 +79,16 @@ install: all
 	install -m 0644 services/* $(DESTDIR)$(DATADIR)/schema-init/services/
 	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
+	install -m 0755 scripts/schema-snapshot $(DESTDIR)$(BINDIR)/schema-snapshot
+
+# Boot-durable rollback for btrfs + schema-init: snapshot / and /home into
+# writable sibling subvols with self-contained BLS entries before a risky
+# deploy. safe-install snapshots first, then installs; roll back by picking the
+# timestamped entry in the GRUB menu and rebooting.
+snapshot:
+	schema-snapshot create pre-deploy
+
+safe-install: snapshot install
 
 # SP1 cutover prerequisites — deploy the broker, its boot launcher, and the
 # policy dissolver to the live /usr/local layout the shims use. Does NOT flip
@@ -251,6 +261,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 release srpm aarch64 armhf desktop test test-all verify-live verify-dbus-conformance
+.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all verify-live verify-dbus-conformance
 
 
