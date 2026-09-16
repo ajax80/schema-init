@@ -109,7 +109,7 @@ newest_fallback_id() {
 }
 
 cmd_arm() {
-  local n="${1:-1}" id
+  local n="${1:-2}" id
   id="$(newest_fallback_id)"
   [ -n "$id" ] || die "no snapshot boot entry to arm against; run 'schema-snapshot create' first"
   grub2-editenv "$GRUBENV" set schema_fallback_id="$id"
@@ -133,7 +133,7 @@ case "${1:-}" in
   prune)  cmd_prune ;;
   delete) shift; cmd_delete "${1:-}" ;;
   list)   cmd_list ;;
-  arm)    shift; cmd_arm "${1:-1}" ;;
+  arm)    shift; cmd_arm "${1:-2}" ;;
   disarm) cmd_disarm ;;
   *) die "usage: schema-snapshot {create [label]|list|prune|delete <name>|arm [N]|disarm}" ;;
 esac
