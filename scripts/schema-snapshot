@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ENTRIES=/boot/loader/entries
+GRUBENV=/boot/grub2/grubenv
 KEEP="${SCHEMA_SNAP_KEEP:-3}"
 PREFIX_SNAP=schema-snap
 DEV=""
@@ -100,6 +101,29 @@ cmd_list() {
   ls -1 "$ENTRIES" 2>/dev/null | grep -E "^$PREFIX_SNAP-" || echo "(none)"
 }
 
+newest_fallback_id() {
+  local id
+  id="$(ls -1 "$ENTRIES" 2>/dev/null | grep -E "^$PREFIX_SNAP-[0-9]{8}-[0-9]{6}-.*\.conf$" | sort | tail -1)"
+  [ -n "$id" ] || id="$(ls -1 "$ENTRIES" 2>/dev/null | grep -E '^schema-good.*\.conf$' | sort | tail -1)"
+  printf '%s' "${id%.conf}"
+}
+
+cmd_arm() {
+  local n="${1:-1}" id
+  id="$(newest_fallback_id)"
+  [ -n "$id" ] || die "no snapshot boot entry to arm against; run 'schema-snapshot create' first"
+  grub2-editenv "$GRUBENV" set schema_fallback_id="$id"
+  grub2-editenv "$GRUBENV" set boot_counter="$n"
+  grub2-editenv "$GRUBENV" set boot_success=0
+  echo "armed: fallback=$id boot_counter=$n"
+}
+
+cmd_disarm() {
+  grub2-editenv "$GRUBENV" unset boot_counter 2>/dev/null || true
+  grub2-editenv "$GRUBENV" unset schema_fallback_id 2>/dev/null || true
+  echo "disarmed"
+}
+
 need_root
 need_btrfs
 resolve_dev
@@ -109,5 +133,7 @@ case "${1:-}" in
   prune)  cmd_prune ;;
   delete) shift; cmd_delete "${1:-}" ;;
   list)   cmd_list ;;
-  *) die "usage: schema-snapshot {create [label]|list|prune|delete <name>}" ;;
+  arm)    shift; cmd_arm "${1:-1}" ;;
+  disarm) cmd_disarm ;;
+  *) die "usage: schema-snapshot {create [label]|list|prune|delete <name>|arm [N]|disarm}" ;;
 esac

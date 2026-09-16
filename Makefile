@@ -90,6 +90,15 @@ snapshot:
 
 safe-install: snapshot install
 
+# Auto-rollback guard (#3): confirm the desktop actually came up before marking
+# the boot good, else GRUB boots the last known-good snapshot. Installs the
+# confirmer, the grub.d hook, and the service; a grub2-mkconfig + reboot are
+# required to arm it (see docs/boot-success-guard.md).
+install-bootguard:
+	install -m 0755 scripts/schema-bootok $(DESTDIR)$(BINDIR)/schema-bootok
+	install -m 0755 scripts/09_schema_fallback $(DESTDIR)$(SYSCONFDIR)/grub.d/09_schema_fallback
+	install -m 0644 services/schema-bootok.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-bootok.svc
+
 # SP1 cutover prerequisites — deploy the broker, its boot launcher, and the
 # policy dissolver to the live /usr/local layout the shims use. Does NOT flip
 # dbus.svc (that is the reboot-only, Jonathan-gated Step 6): after this, copy

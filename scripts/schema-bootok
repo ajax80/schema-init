@@ -1,0 +1,33 @@
+#!/usr/bin/bash
+set -uo pipefail
+shopt -s nullglob
+
+TIMEOUT="${SCHEMA_BOOTOK_TIMEOUT:-90}"
+GRUBENV="${SCHEMA_GRUBENV:-/boot/grub2/grubenv}"
+
+desktop_up() {
+  local p fd
+  for p in $(pgrep -x kwin_wayland 2>/dev/null); do
+    for fd in /proc/"$p"/fd/*; do
+      case "$(readlink -f "$fd" 2>/dev/null)" in
+        /dev/dri/card*) return 0 ;;
+      esac
+    done
+  done
+  return 1
+}
+
+waited=0
+while [ "$waited" -lt "$TIMEOUT" ]; do
+  if desktop_up; then
+    grub2-editenv "$GRUBENV" set boot_success=1
+    grub2-editenv "$GRUBENV" unset boot_counter 2>/dev/null || true
+    echo "schema-bootok: desktop confirmed after ${waited}s; boot marked good"
+    exit 0
+  fi
+  sleep 2
+  waited=$((waited + 2))
+done
+
+echo "schema-bootok: no live compositor after ${TIMEOUT}s; boot_success left 0 (fallback stays armed)" >&2
+exit 1

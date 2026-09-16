@@ -1,0 +1,7 @@
+name=schema-bootok
+exec=/usr/bin/schema-bootok
+dep=display-manager
+oneshot=1
+needs_root=1
+critical=0
+priority=peripheral

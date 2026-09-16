@@ -1,0 +1,13 @@
+#!/usr/bin/sh
+# Runs after 08_fallback_counting. When the boot counter is exhausted and the
+# last boot did not confirm success, boot the schema-init known-good snapshot
+# entry (a BLS id in grubenv) instead of stock numeric `default=1`.
+cat <<'EOF'
+if [ -n "${boot_counter}" -a "${boot_success}" = "0" ]; then
+  if [ "${boot_counter}" = "0" -o "${boot_counter}" = "-1" ]; then
+    if [ -n "${schema_fallback_id}" ]; then
+      set default="${schema_fallback_id}"
+    fi
+  fi
+fi
+EOF
