@@ -97,7 +97,8 @@ safe-install: snapshot install
 install-bootguard:
 	install -m 0755 scripts/schema-bootok $(DESTDIR)$(BINDIR)/schema-bootok
 	install -m 0755 scripts/09_schema_fallback $(DESTDIR)$(SYSCONFDIR)/grub.d/09_schema_fallback
-	install -m 0644 services/schema-bootok.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-bootok.svc
+	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
+	install -m 0644 services/schema-bootok.svc.example $(DESTDIR)$(SYSCONFDIR)/schema-init/services/schema-bootok.svc
 
 # SP1 cutover prerequisites — deploy the broker, its boot launcher, and the
 # policy dissolver to the live /usr/local layout the shims use. Does NOT flip
