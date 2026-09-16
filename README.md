@@ -189,6 +189,8 @@ Proven end-to-end in a Fedora-KDE VM (legacy BIOS): deploy → schema-init as PI
 
 When the schema-init entry has booted cleanly a few times, make it default (set `GRUB_DEFAULT` / your distro's boot-entry default to it). Only then, if you want the full reclamation, opt into the [authoritative udev cutover](#authoritative-mode-the-udevd-cutover) — a deliberate, checksum-backed, reversible flip that retires `systemd-udevd`. It is the advanced path; validate it in `schema-vmtest` LIVE mode first.
 
+**A one-reboot undo (btrfs roots).** On a btrfs root, `make safe-install` snapshots `/` and `/home` into a writable sibling subvol with its own boot entry *before* installing — so a deploy that breaks the desktop is a 30-second rollback (pick the snapshot entry in GRUB, reboot) rather than a live-debugging session. No initramfs overlay needed. An optional boot-success guard (`schema-bootok` plus a `grub.d` hook) ties "the boot succeeded" to *the desktop actually came up* — not just PID 1 finishing — and auto-selects the last known-good snapshot after a failed boot. Setup and deploy flow: [docs/boot-success-guard.md](docs/boot-success-guard.md).
+
 **Porting to a machine that isn't yours yet** (e.g. setting it up for someone else): on that machine, while it's still on systemd, run `./setup.sh --generate-profile <name>` (no root, installs nothing) — it captures the machine's mounts and enabled services into a reusable `distros/<name>/` profile. Commit it, then `sudo ./setup.sh --profile <name>` brings the box up with its own disks and services. See [Porting to a new distro](#porting-to-a-new-distro) and the `distros/` profiles.
 
 ---

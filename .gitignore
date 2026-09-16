@@ -13,6 +13,8 @@ schema-subreaper
 schema-board
 schema-udev
 schema-dbus
+schema-systemctl
+tests/livetest/dbus-probe
 tests/livetest/boot-logs/boot-*.txt
 udev-parity
 verify-rules-live
