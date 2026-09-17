@@ -146,6 +146,7 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_bindir}/schema-subreaper
 %{_bindir}/schema-journal-sink
 %{_bindir}/schema-board
+%{_bindir}/schema-snapshot
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
 %config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
