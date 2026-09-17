@@ -71,6 +71,20 @@ on_boot_sec=20
 needs_root=1
 EOF
 
+# env= spawn probe: prove the Phase 2 env= key reaches the child's environment.
+cat > "$ROOT/usr/bin/envprobe.sh" <<'EOF'
+#!/bin/sh
+echo "ENVPROBE=[$MYVAR]" > /dev/console
+EOF
+chmod +x "$ROOT/usr/bin/envprobe.sh"
+cat > "$ROOT/etc/schema-init/services/test-env.svc" <<'EOF'
+name=test-env
+exec=/usr/bin/envprobe.sh
+env=MYVAR=itworks
+oneshot=1
+needs_root=1
+EOF
+
 cat > "$ROOT/etc/schema-init/services/test-iso.svc" <<'EOF'
 name=test-iso
 exec=/bin/sleep
