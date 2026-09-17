@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,6 +25,11 @@ static inline long long udev_db_now_usec(void) {
 #define SCHEMA_UDEV_DB_DIR "/run/schema-udev/data"   /* OUR shadow dir */
 #define UDEV_DB_DIR        "/run/udev/data"          /* udevd's real dir (read-only) */
 #define SCHEMA_UDEV_RULES_DIR "/run/schema-udev/rules-data"   /* R5 interpreter shadow */
+
+/* defined below; write_full/remove prune the tag index from the prior record */
+static inline int udev_db_read_links_tags(const char *path,
+        char links[][UE_VAL_MAX], int *nlink, int maxlink,
+        char tags[][UE_KEY_MAX], int *ntag, int maxtag);
 
 static inline int udev_db_filename(const struct uevent *ev, char *out, size_t outsz) {
     const char *sub = uevent_get(ev, "SUBSYSTEM");
@@ -118,6 +124,49 @@ static inline int udev_db_ensure_dir(const char *d) {
     return (mkdir(d, 0755) == 0 || errno == EEXIST) ? 0 : -1;
 }
 
+/* Real udevd maintains a tag index at <udev-root>/tags/<tag>/<device-id> that
+ * sd-device's add_match_tag() reads — loginctl's seat-device tree and every
+ * other tag-based enumeration. The per-record G:/Q: lines are invisible to it,
+ * so the index must be written alongside the data record. The index root is the
+ * "tags" sibling of the data dir (/run/udev/data -> /run/udev/tags). */
+static inline int udev_db_tags_root(const char *base_dir, char *out, size_t outsz) {
+    char parent[512];
+    safe_copy(parent, base_dir, sizeof parent);
+    char *slash = strrchr(parent, '/');
+    if (!slash || slash == parent) return -1;
+    *slash = '\0';
+    int w = snprintf(out, outsz, "%s/tags", parent);
+    return (w > 0 && (size_t)w < outsz) ? 0 : -1;
+}
+
+static inline void udev_db_tag_index_set(const char *base_dir, const char *devid,
+                                         const char *const *tags, int ntag) {
+    char root[512];
+    if (udev_db_tags_root(base_dir, root, sizeof root) != 0) return;
+    for (int i = 0; i < ntag; i++) {
+        if (!tags[i] || !tags[i][0]) continue;
+        char dir[600];
+        if ((size_t)snprintf(dir, sizeof dir, "%s/%s", root, tags[i]) >= sizeof dir) continue;
+        if (udev_db_ensure_dir(dir) != 0) continue;
+        char path[768];
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, devid) >= sizeof path) continue;
+        int fd = open(path, O_WRONLY | O_CREAT | O_CLOEXEC, 0444);
+        if (fd >= 0) close(fd);
+    }
+}
+
+static inline void udev_db_tag_index_clear(const char *base_dir, const char *devid,
+                                           char tags[][UE_KEY_MAX], int ntag) {
+    char root[512];
+    if (udev_db_tags_root(base_dir, root, sizeof root) != 0) return;
+    for (int i = 0; i < ntag; i++) {
+        if (!tags[i][0]) continue;
+        char path[768];
+        if ((size_t)snprintf(path, sizeof path, "%s/%s/%s", root, tags[i], devid) >= sizeof path) continue;
+        unlink(path);
+    }
+}
+
 static inline int udev_db_write(const char *base_dir, const struct uevent *ev, int kernel_n) {
     char name[128];
     if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
@@ -149,13 +198,20 @@ static inline int udev_db_write_full(const char *base_dir, const struct uevent *
     char name[128];
     if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
     if (udev_db_ensure_dir(base_dir) != 0) return -1;
+    char final[512], tmpl[512];
+    if ((size_t)snprintf(final, sizeof final, "%s/%s", base_dir, name) >= sizeof final) return -1;
+
+    /* snapshot the record's current tags before overwrite, so index entries for
+     * tags it no longer carries get pruned (real udevd diffs old vs new). */
+    char oldtags[64][UE_KEY_MAX]; int nold = 0;
+    { char oldlinks[1][UE_VAL_MAX]; int nol = 0;
+      udev_db_read_links_tags(final, oldlinks, &nol, 1, oldtags, &nold, 64); }
+
     char buf[8192];
     ssize_t len = udev_db_record_build_full(ev, kernel_n, symlinks, nsym,
                                             udev_db_now_usec(),
                                             tags, ntag, buf, sizeof buf);
     if (len <= 0) return -1;
-    char final[512], tmpl[512];
-    if ((size_t)snprintf(final, sizeof final, "%s/%s", base_dir, name) >= sizeof final) return -1;
     if ((size_t)snprintf(tmpl, sizeof tmpl, "%s/.dbXXXXXX", base_dir) >= sizeof tmpl) return -1;
     int fd = mkstemp(tmpl);
     if (fd < 0) return -1;
@@ -168,6 +224,10 @@ static inline int udev_db_write_full(const char *base_dir, const struct uevent *
     }
     if (close(fd) != 0) { unlink(tmpl); return -1; }
     if (rename(tmpl, final) != 0) { unlink(tmpl); return -1; }
+
+    /* maintain the sd-device tag index: drop stale tags, add current ones */
+    udev_db_tag_index_clear(base_dir, name, oldtags, nold);
+    udev_db_tag_index_set(base_dir, name, tags, ntag);
     return 0;
 }
 
@@ -176,6 +236,11 @@ static inline int udev_db_remove(const char *base_dir, const struct uevent *ev) 
     if (udev_db_filename(ev, name, sizeof name) != 0) return -1;
     char path[512];
     if ((size_t)snprintf(path, sizeof path, "%s/%s", base_dir, name) >= sizeof path) return -1;
+    /* drop tag-index entries for this device before removing the record */
+    char oldtags[64][UE_KEY_MAX]; int nold = 0;
+    { char oldlinks[1][UE_VAL_MAX]; int nol = 0;
+      udev_db_read_links_tags(path, oldlinks, &nol, 1, oldtags, &nold, 64); }
+    udev_db_tag_index_clear(base_dir, name, oldtags, nold);
     if (unlink(path) != 0 && errno != ENOENT) return -1;
     return 0;
 }

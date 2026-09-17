@@ -111,10 +111,12 @@ int main(void) {
 
     unlink(path); rmdir(base);
 
-    /* --- R5: udev_db_write_full round-trip (S:/G:/Q:/E:) --- */
+    /* --- R5: udev_db_write_full round-trip (S:/G:/Q:/E:) + tag index --- */
     char tmpl2[] = "/tmp/schema-r5-XXXXXX";
-    char *rbase = mkdtemp(tmpl2);
-    assert(rbase);
+    char *rroot = mkdtemp(tmpl2);
+    assert(rroot);
+    char rbase[512];
+    snprintf(rbase, sizeof rbase, "%s/data", rroot);  /* tag index sibling: <rroot>/tags */
 
     struct uevent fe; memset(&fe, 0, sizeof fe);
     put(&fe, "SUBSYSTEM", "block"); put(&fe, "MAJOR", "8"); put(&fe, "MINOR", "0");
@@ -125,7 +127,7 @@ int main(void) {
     const char *ftags[] = { "systemd", "seat" };
     assert(udev_db_write_full(rbase, &fe, fkn, fsyms, 2, ftags, 2) == 0);
 
-    char fpath[512];
+    char fpath[600];
     snprintf(fpath, sizeof fpath, "%s/b8:0", rbase);
     char links[8][UE_VAL_MAX]; int nl = 0;
     char rtags[8][UE_KEY_MAX];  int nt = 0;
@@ -144,7 +146,33 @@ int main(void) {
         if (rline[0] == 'I' && rline[1] == ':') { iusec = atoll(rline + 2); break; }
     fclose(rf);
     assert(iusec > 0);   /* real CLOCK_MONOTONIC usec, not omitted */
-    unlink(fpath); rmdir(rbase);
+
+    /* tag index: <rroot>/tags/<tag>/<devid> is what sd-device add_match_tag reads
+     * (loginctl seat devices); the G:/Q: record lines alone are invisible to it. */
+    char tpath[600];
+    snprintf(tpath, sizeof tpath, "%s/tags/systemd/b8:0", rroot);
+    assert(access(tpath, F_OK) == 0);
+    snprintf(tpath, sizeof tpath, "%s/tags/seat/b8:0", rroot);
+    assert(access(tpath, F_OK) == 0);
+
+    /* rewrite with a reduced tag set: the dropped tag's index entry is pruned,
+     * the retained tag's entry stays (real udevd diffs old vs new). */
+    const char *ftags2[] = { "seat" };
+    assert(udev_db_write_full(rbase, &fe, fkn, fsyms, 2, ftags2, 1) == 0);
+    snprintf(tpath, sizeof tpath, "%s/tags/systemd/b8:0", rroot);
+    assert(access(tpath, F_OK) != 0);   /* systemd pruned */
+    snprintf(tpath, sizeof tpath, "%s/tags/seat/b8:0", rroot);
+    assert(access(tpath, F_OK) == 0);   /* seat retained */
+
+    /* remove drops the record and its remaining index entry */
+    assert(udev_db_remove(rbase, &fe) == 0);
+    snprintf(tpath, sizeof tpath, "%s/tags/seat/b8:0", rroot);
+    assert(access(tpath, F_OK) != 0);
+
+    snprintf(tpath, sizeof tpath, "%s/tags/systemd", rroot); rmdir(tpath);
+    snprintf(tpath, sizeof tpath, "%s/tags/seat", rroot); rmdir(tpath);
+    snprintf(tpath, sizeof tpath, "%s/tags", rroot); rmdir(tpath);
+    rmdir(rbase); rmdir(rroot);
 
     printf("test_udev_db: OK\n");
     return 0;
