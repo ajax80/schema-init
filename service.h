@@ -13,6 +13,7 @@
 
 #define MAX_SERVICES    64
 #define MAX_ARGV        16
+#define MAX_ENV         16
 #define MAX_DEPS        8
 #define MAX_RESTARTS    5
 #define COOLDOWN_SECS   5
@@ -180,6 +181,8 @@ typedef struct {
     char             instance[32];    /* template instance ID, e.g. "12" from motor@12.svc */
     char             exec[256];
     char            *argv[MAX_ARGV];
+    char            *envp[MAX_ENV];      /* env= entries, each "KEY=VALUE"  */
+    int              env_count;
     char             dep_name[MAX_DEPS][64]; /* dep names as written in .svc    */
     int              dep_idx[MAX_DEPS];      /* resolved service indices, -1=none */
     int              grp_dep_idx[MAX_DEPS];  /* resolved group indices, -1=none */

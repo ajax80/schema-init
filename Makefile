@@ -26,6 +26,11 @@ endif
 
 SRCS    = init.c schema.c service.c group.c caps.c
 OBJS    = $(SRCS:.c=.o)
+# The core objects share these headers. Without this dependency an incremental
+# build after a header edit (e.g. a service_t field) rebuilds only the changed
+# .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
+# at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
+CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h
 
 all: $(BINS)
 
@@ -67,6 +72,8 @@ verify-eprops-live: tools/verify-eprops-live.c udev_db.h udev_rules.h udev_built
 
 schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match.h sdbus_reply.h sdbus_codec.h sdbus_auth.h sdbus_conn.h sdbus_route.h sdbus_driver.h sdbus_activate.h
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) $(LDFLAGS) schema-dbus.c -o $@ $(DBUS_LIBS)
+
+$(OBJS): $(CORE_HDRS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -242,6 +249,7 @@ test:
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o /tmp/schema-test-sdbus-wire $(DBUS_LIBS) && /tmp/schema-test-sdbus-wire
 	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate
 	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o /tmp/schema-test-systemctl && /tmp/schema-test-systemctl
+	$(CC) $(CFLAGS) tests/test_service_env.c service.c schema.c group.c caps.c -lrt -o /tmp/schema-test-env && /tmp/schema-test-env
 
 # Everything a contributor can run locally without a reboot: the C unit tests
 # above plus the Python integration suite (doctor / logind / migrate / wizard).

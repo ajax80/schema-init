@@ -476,6 +476,14 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
+        for (int e = 0; e < svc->env_count; e++) {
+            char *kv = svc->envp[e];
+            char *ev = strchr(kv, '=');
+            if (!ev) continue;
+            *ev = '\0';
+            setenv(kv, ev + 1, 1);
+            *ev = '=';
+        }
         execv(svc->exec, svc->argv);
         _exit(127);
     }
@@ -798,6 +806,10 @@ int services_load(const char *dir, service_t *table, int max) {
             } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1) {
                 while (*val == ' ' || *val == '\t') val++;
                 svc->argv[argc++] = strdup(val);
+            } else if (strcmp(line, "env") == 0 && svc->env_count < MAX_ENV) {
+                while (*val == ' ' || *val == '\t') val++;
+                if (strchr(val, '='))
+                    svc->envp[svc->env_count++] = strdup(val);
             } else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS) {
                 strncpy(svc->dep_name[dep_slot++], val, 63);
             } else if (strcmp(line, "oneshot") == 0 && atoi(val))
@@ -994,6 +1006,11 @@ int service_load_one(const char *path, service_t *svc) {
         } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1) {
             while (*val == ' ' || *val == '\t') val++;
             svc->argv[argc++] = strdup(val);
+        }
+        else if (strcmp(line, "env") == 0 && svc->env_count < MAX_ENV) {
+            while (*val == ' ' || *val == '\t') val++;
+            if (strchr(val, '='))
+                svc->envp[svc->env_count++] = strdup(val);
         }
         else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS)
             strncpy(svc->dep_name[dep_slot++], val, 63);
