@@ -645,6 +645,8 @@ menuentry 'schema-init' {
 
 Option C is the safest for dual-boot or first-time installs — it leaves the existing systemd entry intact as a fallback.
 
+**No initramfs? The root spec must be kernel-native.** schema-init happily boots with no initramfs (the kernel hands straight to PID 1), but then *nothing resolves a filesystem-level root spec for you* — `root=UUID=…` and `root=LABEL=…` are resolved by dracut/udev from inside the initramfs, which no longer runs. A no-initramfs kernel can only resolve a **kernel-native** device: `root=PARTUUID=…` (GPT partition UUID, from `blkid -s PARTUUID -o value /dev/…`), `root=PARTLABEL=…`, or `root=/dev/…`. If you drop the `initrd` line above, you **must** also switch `root=` to one of these, or the kernel panics before PID 1 with `VFS: Unable to mount root fs on unknown-block(0,0)` — schema-init never gets to run. Keep `rootflags=subvol=root` (or your subvol) for a btrfs root. The fs-UUID and the PARTUUID are different values; don't paste one where the other belongs.
+
 **Kernel cmdline words are safe.** The kernel hands PID 1 every boot-cmdline token it didn't consume (`rhgb`, `quiet`, `splash`, `plymouth.debug`, …), so leave your usual options in the kernel line — schema-init ignores them when it runs as PID 1. A services directory other than the default `/etc/schema-init/services` can only be set by hand-running the binary (`schema-init /path/to/services`), never via the kernel cmdline.
 
 ### Replacing a running init (without reboot)
