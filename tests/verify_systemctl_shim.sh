@@ -9,7 +9,7 @@ mkdir -p "$SCHEMA_STATE_DIR" "$SCHEMA_SVC_DIR" "$SCHEMA_UNIT_DIR"
 : > "$SCHEMA_UNIT_DIR/foo.service"
 
 "$BIN" enable foo.service
-grep -q foo.service "$SCHEMA_STATE_DIR/pending.list" || { echo "FAIL: not queued"; exit 1; }
+grep -qx foo.service "$SCHEMA_STATE_DIR/pending.list" || { echo "FAIL: queue must hold the bare unit name, not a resolved path"; exit 1; }
 rc=0; "$BIN" is-enabled foo || rc=$?; [ "$rc" -eq 0 ] || { echo "FAIL is-enabled"; exit 1; }
 rc=0; "$BIN" is-active foo || rc=$?; [ "$rc" -eq 3 ] || { echo "FAIL is-active rc=$rc"; exit 1; }
 # stdout contract: real systemctl prints the state to stdout, not just an exit code

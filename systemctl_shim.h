@@ -50,27 +50,10 @@ __attribute__((unused)) static int unit_supported(const char *unit) {
     return 1;
 }
 
-__attribute__((unused)) static char *resolve_unit_path(const char *unit, char *buf, size_t n) {
-    const char *one = getenv("SCHEMA_UNIT_DIR");
-    const char *dirs[4]; int i, nd = 0;
-    if (one && *one) {
-        dirs[nd++] = one;
-    } else {
-        dirs[nd++] = "/etc/systemd/system";
-        dirs[nd++] = "/usr/lib/systemd/system";
-        dirs[nd++] = "/lib/systemd/system";
-    }
-    for (i = 0; i < nd; i++) {
-        snprintf(buf, n, "%s/%s", dirs[i], unit);
-        if (access(buf, F_OK) == 0) return buf;
-    }
-    if (!ends_with(unit, ".service")) {
-        for (i = 0; i < nd; i++) {
-            snprintf(buf, n, "%s/%s.service", dirs[i], unit);
-            if (access(buf, F_OK) == 0) return buf;
-        }
-    }
-    snprintf(buf, n, "%s", unit);
+__attribute__((unused)) static char *unit_queue_name(const char *unit, char *buf, size_t n) {
+    char base[256];
+    strip_service_suffix(unit, base, sizeof base);
+    snprintf(buf, n, "%s.service", base);
     return buf;
 }
 
@@ -186,9 +169,9 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) continue;
-            char path[512];
-            resolve_unit_path(argv[i], path, sizeof path);
-            queue_add(path);
+            char qn[300];
+            unit_queue_name(argv[i], qn, sizeof qn);
+            queue_add(qn);
             if (now) {
                 char name[256];
                 strip_service_suffix(argv[i], name, sizeof name);
@@ -201,9 +184,9 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) continue;
-            char path[512], name[256];
-            resolve_unit_path(argv[i], path, sizeof path);
-            queue_remove(path);
+            char qn[300], name[256];
+            unit_queue_name(argv[i], qn, sizeof qn);
+            queue_remove(qn);
             strip_service_suffix(argv[i], name, sizeof name);
             char svc[512];
             snprintf(svc, sizeof svc, "%s/%s.svc", shim_svc_dir(), name);
@@ -218,10 +201,10 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             if (argv[i][0] == '-') continue;
             seen = 1;
             if (!unit_supported(argv[i])) { printf("disabled\n"); rc = 1; continue; }
-            char path[512], name[256];
-            resolve_unit_path(argv[i], path, sizeof path);
+            char qn[300], name[256];
+            unit_queue_name(argv[i], qn, sizeof qn);
             strip_service_suffix(argv[i], name, sizeof name);
-            if (queue_contains(path) || svc_exists(name)) printf("enabled\n");
+            if (queue_contains(qn) || svc_exists(name)) printf("enabled\n");
             else { printf("disabled\n"); rc = 1; }
         }
         return seen ? rc : 1;
