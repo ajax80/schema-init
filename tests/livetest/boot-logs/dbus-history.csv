@@ -1,0 +1,2 @@
+timestamp,broker,rss_kb,lifetime_cpu_s,elapsed_s,cpu_pct,names,conns,lat_min_us,lat_p50_us,lat_p90_us,lat_p99_us,lat_max_us,lat_mean_us
+20260903-192244,schema-dbus,4732,0.57,6114,0.0093,82,63,28.3,36.8,61.7,88.1,100.2,42.1
