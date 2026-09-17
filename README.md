@@ -215,6 +215,7 @@ If you're reading the source to evaluate it, start here. The whole init is ~2,50
 | `schema-ctl.c` | The CLI client. Talks to PID 1 over the `/run/schema-init.sock` UNIX socket — `schema-ctl status`, `restart`, etc. |
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
 | `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
+| `schema-systemctl.c` / `systemctl_shim.h` | The `systemctl(1)` compatibility shim. A drop-in that intercepts systemd verbs so packaged RPM/deb scriptlets succeed on a schema-init box: lifecycle verbs drive `schema-ctl`, `enable`/`preset` queue enable-intent to `/var/lib/schema-init/pending.list` for the importer (`distros/fedora-installer/migrate/schema-import.py`, which drains that queue and translates `.service` units into native `.svc`). See [Running packaged software](#running-packaged-software). |
 | `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
 | `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` paints a dedicated console; note that VT switching does not currently repaint on a graphical system — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
 
@@ -1070,6 +1071,18 @@ Build needs `dbus-devel` (`make schema-dbus`). If the policy dissolve ever fails
 
 ---
 
+## Running packaged software
+
+The D-Bus surface above lets tools *manage* schema-init units as though systemd were running. The other half of the compatibility story is **install-time**: an RPM or deb scriptlet that runs `systemctl enable foo` or `systemctl daemon-reload` must not error out on a schema-init box, and the `foo.service` it just dropped into `/usr/lib/systemd/system` has to become something schema-init can actually run. Two pieces cover this — a translator, not an emulator.
+
+**The shim (`schema-systemctl`).** A `systemctl(1)` drop-in that packaging swaps in for `/usr/bin/systemctl` (via `alternatives` + a symlink). It honours systemd's verb and exit-code contract so scriptlets succeed: lifecycle verbs (`start`/`stop`/`restart`/`status`/`is-active`/`is-enabled`) drive `schema-ctl` for real, `enable`/`preset` record enable-intent to `/var/lib/schema-init/pending.list` (deduplicated) — the hand-off to the importer — and `daemon-reload` and the other no-op-here verbs exit `0` so nothing a caller pipes into hard-crashes. All logic lives in `systemctl_shim.h` (header-carried, static-inline; `schema-systemctl.c` is a thin entry point). Packaging is idempotent and reversible: `%post` saves the stock binary as `systemctl.real`, `%postun` restores exactly that — and on a box that never had systemd, removes the now-dangling shim symlink instead. Verified end-to-end through a real `dnf install`/`dnf remove` round-trip in a `fedora:44` container.
+
+**The importer (`schema-import`).** `distros/fedora-installer/migrate/schema-import.py` drains `pending.list` and translates each queued `.service` into a native `.svc` on 80/20 field coverage: `ExecStart` → `exec=`/`args=` (with `$VAR`/`${VAR}` resolved against the unit's own `Environment=`, since schema-init `exec()`s with no shell), `Type=oneshot` → `oneshot=1`, systemd's `Restart=no` default → `no_restart=1`, `User=` → `user=` (else `needs_root=1`), and `Environment=` → `env=` — a `.svc` key applied via `setenv` in the child before `execv`. Known ratholes are **logged and skipped, never half-translated**: `Type=notify`/`notify-reload` (needs the `sd_notify` readiness protocol), `Type=dbus`/`forking` (schema-init supervises only the direct child), template units (`foo@`), and units with no usable `ExecStart`. A unit whose file isn't found is left queued; the drain is idempotent and rewrites the queue atomically (`--dry-run`/`--force` available). Design notes: `docs/superpowers/specs/2026-09-14-schema-systemctl-shim-design.md`.
+
+Together this is the deployability turn: reclamation stops being "rewrite each daemon by hand" and becomes "install whatever ships, and import its units."
+
+---
+
 ## Porting to a new distro
 
 Starting from scratch on a distro not in `distros/`:
@@ -1214,6 +1227,7 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 - [x] Built-in `.svc` timers — `on_calendar=` scheduling parsed in `service.c` retires `cron` and systemd `.timer` units (richer calendar forms tracked in `docs/timers-design.md`)
 - [x] In-place migrator + COPR — `schema-migrate --discover/--deploy/--uninstall` converts a live Fedora KDE box to schema-init as PID 1 and back (proven end-to-end in a VM); prebuilt via `dnf copr enable ajax80/schema-init` (three packages), with a guided `schema-init-wizard` GUI
 - [x] schema-dbus — native C system-bus broker replacing `dbus-daemon`; enforces the dissolved `busconfig` policy (conformance-tested), does auth / name ownership / routing / match rules / unix-fd passing; serves a full KDE desktop as the live bus through reboots; opt-in, self-healing, reversible flip (v1.0 — `StartServiceByName` activation + monitoring driver methods deferred to v1.1)
+- [x] systemctl compat translator — a `schema-systemctl` shim (`systemctl_shim.h`) that makes packaged RPM/deb scriptlets (`systemctl enable`/`daemon-reload`/…) succeed on a schema-init box and records enable-intent to `pending.list`, plus a `schema-import` runtime importer that drains the queue and translates `.service` units into native `.svc` (`ExecStart`/`Type`/`Restart`/`User`/`Environment` with `$VAR` resolution; `Type=notify`/`dbus`/templates logged-and-skipped); `dnf` install/remove round-trip verified, generated units load under the real `.svc` parser
 
 ---
 
