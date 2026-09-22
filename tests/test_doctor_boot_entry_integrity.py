@@ -229,6 +229,21 @@ def test_heal_idempotent():
     check('heal idempotent: verify() clean', c.verify() is True)
 
 
+def test_heal_preserves_rdinit():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rdinit=/bin/sh rhgb quiet modprobe.blacklist=radeon')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    c.heal(f)
+    opts = read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64')
+    check('heal: rdinit= survives intact', 'rdinit=/bin/sh' in opts, opts)
+    check('heal: no corrupted rd* token', 'rd' not in opts or 'rdinit=' in opts, opts)
+    check('heal: init=schema-init added', 'init=/sbin/schema-init' in opts, opts)
+
+
 def main():
     print('boot-entry-integrity tests\n')
     for fn in (test_clean_entry_detects_none, test_missing_init_detected,
@@ -237,7 +252,7 @@ def main():
                test_saved_entry_on_stock_detected, test_saved_entry_dangling_detected,
                test_saved_entry_on_valid_schema_clean, test_no_schema_entries_ignores_unusual_saved_entry,
                test_heal_restores_missing_init_and_extras, test_heal_strips_duplicate_stale_init,
-               test_heal_idempotent):
+               test_heal_idempotent, test_heal_preserves_rdinit):
         print(fn.__name__)
         fn()
         print()

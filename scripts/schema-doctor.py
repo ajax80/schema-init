@@ -928,7 +928,14 @@ class BootEntryIntegrity(Check):
         tmp = path + ".tmp"
         with open(tmp, "w") as fh:
             fh.writelines(lines)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
+        dirfd = os.open(os.path.dirname(path), os.O_RDONLY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
 
     def _heal_entries(self, extras):
         for path in self._entries():
@@ -938,11 +945,13 @@ class BootEntryIntegrity(Check):
             missing = self._missing_tokens(line, extras)
             if not missing:
                 continue
-            new_line = re.sub(r"init=\S*\s*", "", line).rstrip()
-            new_line += f" init={_resolve_schema_init_bin()}"
+            body = line[len("options "):] if line.startswith("options ") else line
+            tokens = [t for t in body.split() if not t.startswith("init=")]
+            tokens.append(f"init={_resolve_schema_init_bin()}")
             for tok in extras:
-                if tok not in new_line:
-                    new_line += f" {tok}"
+                if tok not in tokens:
+                    tokens.append(tok)
+            new_line = "options " + " ".join(tokens)
             self._rewrite_options(path, idx, new_line)
 
     def heal(self, f):
