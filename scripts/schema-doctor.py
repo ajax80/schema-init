@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import stat
 import struct
 import subprocess
@@ -814,6 +815,236 @@ class NvidiaWaylandEgl(Check):
 
 
 REGISTRY.append(NvidiaWaylandEgl())
+
+def _has_valid_init(options_line):
+    for tok in (options_line or "").split():
+        if tok.startswith("init=") and "schema-init" in tok:
+            return True
+    return False
+
+
+def _cmdline_extra_tokens():
+    """Host-specific kernel cmdline tokens from kernel-cmdline.d/*.conf, parsed
+    the same way the kernel-install hook's extra_args() does."""
+    d = os.path.join(ROOT, "etc/schema-init/kernel-cmdline.d")
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return []
+    tokens = []
+    for n in names:
+        if not n.endswith(".conf"):
+            continue
+        try:
+            fh = open(os.path.join(d, n))
+        except OSError:
+            continue
+        for line in fh:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                tokens.extend(line.split())
+    return tokens
+
+
+def _resolve_schema_init_bin():
+    override = os.environ.get("SCHEMA_INIT_BIN")
+    if override:
+        return override
+    return shutil.which("schema-init")
+
+
+def _read_saved_entry():
+    cmd = os.environ.get("SCHEMA_DOCTOR_GRUB2_EDITENV", "grub2-editenv")
+    try:
+        r = subprocess.run([cmd, "-", "list"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    for line in r.stdout.splitlines():
+        if line.startswith("saved_entry="):
+            return line[len("saved_entry="):].strip()
+    return None
+
+
+def _set_saved_entry(name):
+    cmd = os.environ.get("SCHEMA_DOCTOR_GRUB2_EDITENV", "grub2-editenv")
+    try:
+        subprocess.run([cmd, "-", "set", f"saved_entry={name}"], timeout=5, check=False)
+    except Exception:
+        pass
+
+
+def _normalize_pin(raw):
+    pin = raw.strip()
+    if pin.endswith(".conf"):
+        pin = pin[: -len(".conf")]
+    return pin
+
+
+class BootEntryIntegrity(Check):
+    name = "boot-entry-integrity"
+    summary = "schema BLS entries keep init=schema-init; saved_entry stays on one"
+    grade = SAFE
+
+    def _entries(self):
+        return sorted(glob.glob(os.path.join(ROOT, "boot/loader/entries/schema-*.conf")))
+
+    def _options_line(self, path):
+        try:
+            lines = open(path).readlines()
+        except OSError:
+            return None, None
+        for i, line in enumerate(lines):
+            if line.startswith("options "):
+                return i, line.rstrip("\n")
+        return None, None
+
+    def _missing_tokens(self, options_line, extras):
+        missing = []
+        if not _has_valid_init(options_line):
+            missing.append("init=schema-init")
+        line_tokens = set((options_line or "").split())
+        for tok in extras:
+            if tok not in line_tokens:
+                missing.append(tok)
+        return missing
+
+    def _saved_entry_problem(self):
+        saved = _read_saved_entry()
+        if saved is None:
+            return None
+        if not saved.startswith("schema-"):
+            return f"saved_entry={saved} is not a schema entry"
+        if not os.path.isfile(os.path.join(ROOT, "boot/loader/entries", saved + ".conf")):
+            return f"saved_entry={saved} has no entry file (dangling)"
+        return None
+
+    def detect(self):
+        entries = self._entries()
+        extras = _cmdline_extra_tokens()
+        broken = {}
+        for path in entries:
+            _, line = self._options_line(path)
+            missing = self._missing_tokens(line, extras)
+            if missing:
+                broken[os.path.basename(path)] = missing
+        saved_problem = self._saved_entry_problem() if entries else None
+        if not broken and not saved_problem:
+            return None
+        parts = []
+        if broken:
+            parts.append("entries missing tokens: " + "; ".join(
+                f"{name}: {','.join(toks)}" for name, toks in broken.items()))
+        if saved_problem:
+            parts.append(saved_problem)
+        return Finding(
+            detail="; ".join(parts),
+            oracle_said="every schema-*.conf carries init=<schema-init> plus this "
+                        "host's kernel-cmdline.d extras, and saved_entry points at "
+                        "one of them",
+            healable=True)
+
+    def _rewrite_options(self, path, idx, new_line):
+        lines = open(path).readlines()
+        lines[idx] = new_line + "\n"
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            fh.writelines(lines)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        dirfd = os.open(os.path.dirname(path), os.O_RDONLY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
+
+    def _heal_entries(self, extras):
+        for path in self._entries():
+            idx, line = self._options_line(path)
+            if line is None:
+                continue
+            missing = self._missing_tokens(line, extras)
+            if not missing:
+                continue
+            body = line[len("options "):] if line.startswith("options ") else line
+            tokens = body.split()
+            needs_init = not _has_valid_init(line)
+            if needs_init:
+                init_bin = _resolve_schema_init_bin()
+                if init_bin is None:
+                    continue   # can't verify a real path -- leave reported, not healed
+                tokens = [t for t in tokens if not t.startswith("init=")]
+                tokens.append(f"init={init_bin}")
+            for tok in extras:
+                if tok not in tokens:
+                    tokens.append(tok)
+            new_line = "options " + " ".join(tokens)
+            self._rewrite_options(path, idx, new_line)
+
+    def _pin_target(self):
+        marker = os.path.join(ROOT, "etc/schema-init/boot-default")
+        try:
+            raw = open(marker).read()
+        except OSError:
+            return None
+        pin = _normalize_pin(raw)
+        if pin and pin.startswith("schema-") and os.path.isfile(
+                os.path.join(ROOT, "boot/loader/entries", pin + ".conf")):
+            return pin
+        return None
+
+    def _newest_entry(self):
+        entries = self._entries()
+        if not entries:
+            return None
+        keyed = {}
+        for e in entries:
+            name = os.path.basename(e)[len("schema-"):-len(".conf")]
+            m = re.search(r"\d.*", name)
+            version_key = m.group(0) if m else name
+            keyed[version_key] = name
+        try:
+            r = subprocess.run(["sort", "-V"], input="\n".join(keyed.keys()),
+                                capture_output=True, text=True, timeout=5)
+        except Exception:
+            return None
+        ordered = [k for k in r.stdout.splitlines() if k]
+        if not ordered:
+            return None
+        return f"schema-{keyed[ordered[-1]]}"
+
+    def _heal_saved_entry(self):
+        problem = self._saved_entry_problem()
+        if problem is None:
+            return
+        target = self._pin_target() or self._newest_entry()
+        if target:
+            _set_saved_entry(target)
+
+    def heal(self, f):
+        extras = _cmdline_extra_tokens()
+        self._heal_entries(extras)
+        self._heal_saved_entry()
+
+    def snapshot(self):
+        snap = {"entries": {}, "saved_entry": _read_saved_entry()}
+        for path in self._entries():
+            _, line = self._options_line(path)
+            snap["entries"][path] = line
+        return snap
+
+    def back_out(self, snap):
+        for path, line in snap.get("entries", {}).items():
+            if line is None:
+                continue
+            idx, _ = self._options_line(path)
+            if idx is not None:
+                self._rewrite_options(path, idx, line)
+        if snap.get("saved_entry") is not None:
+            _set_saved_entry(snap["saved_entry"])
+
+
+REGISTRY.append(BootEntryIntegrity())
 
 
 def read_config():
