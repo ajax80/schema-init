@@ -66,8 +66,15 @@ newest_schema_version() {
 }
 
 set_default_to() {
+    # $1 = kernel version being added/removed (the "natural" candidate)
     [ -f "$DEFAULT_MARKER" ] || return 0
+    pin="$(cat "$DEFAULT_MARKER" 2>/dev/null | tr -d '\r\n ')"
+    pin="${pin%.conf}"
     command -v grub2-editenv >/dev/null 2>&1 || return 0
+    if [ -n "$pin" ] && [ -f "$ENTRIES/$pin.conf" ]; then
+        grub2-editenv - set "saved_entry=$pin" 2>/dev/null || true
+        return 0
+    fi
     grub2-editenv - set "saved_entry=schema-$1" 2>/dev/null || true
 }
 

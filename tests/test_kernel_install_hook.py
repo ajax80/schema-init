@@ -175,11 +175,52 @@ def test_remove():
           os.path.isfile(os.path.join(entries, f'{TOKEN}-{VER}.conf')))
 
 
+def test_pin_enforced_over_stock():
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    pinned = 'schema-7.1.10-200.fc44.x86_64'
+    with open(os.path.join(entries, f'{pinned}.conf'), 'w') as f:
+        f.write('title pinned\nversion 7.1.10-200.fc44.x86_64\n'
+                 'options ro init=/usr/bin/schema-init\n')
+    with open(os.path.join(conf_root, 'boot-default'), 'w') as f:
+        f.write(pinned)
+    run('add', VER, boot, conf_root, bind)
+    log = open(rec).read() if os.path.isfile(rec) else ''
+    check('pin: saved_entry actively set to the pin, not the new kernel',
+          f'saved_entry={pinned}' in log, log)
+    check('pin: new kernel version NOT left as the default',
+          f'saved_entry=schema-{VER}' not in log, log)
+
+
+def test_pin_broken_falls_back_to_advance():
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    with open(os.path.join(conf_root, 'boot-default'), 'w') as f:
+        f.write('schema-9.9.9-nonexistent.fc44.x86_64')
+    run('add', VER, boot, conf_root, bind)
+    log = open(rec).read() if os.path.isfile(rec) else ''
+    check('pin-broken: falls back to advancing to the new kernel',
+          f'saved_entry=schema-{VER}' in log, log)
+
+
+def test_marker_whitespace_and_conf_suffix_normalized():
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    pinned = 'schema-7.1.10-200.fc44.x86_64'
+    with open(os.path.join(entries, f'{pinned}.conf'), 'w') as f:
+        f.write('title pinned\nversion 7.1.10-200.fc44.x86_64\n'
+                 'options ro init=/usr/bin/schema-init\n')
+    with open(os.path.join(conf_root, 'boot-default'), 'w') as f:
+        f.write(f'  {pinned}.conf  \n')
+    run('add', VER, boot, conf_root, bind)
+    log = open(rec).read() if os.path.isfile(rec) else ''
+    check('marker normalization: whitespace + .conf suffix still resolves the pin',
+          f'saved_entry={pinned}' in log, log)
+
+
 def main():
     print('schema-init kernel-install hook tests\n')
     for fn in (test_add_full, test_no_marker_leaves_default, test_no_extras,
                test_idempotent_add, test_init_path_override, test_no_double_init,
-               test_auto_resolve_from_path, test_remove):
+               test_auto_resolve_from_path, test_remove, test_pin_enforced_over_stock,
+               test_pin_broken_falls_back_to_advance, test_marker_whitespace_and_conf_suffix_normalized):
         print(fn.__name__)
         fn()
         print()
