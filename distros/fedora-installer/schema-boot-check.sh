@@ -50,7 +50,7 @@ case "$state" in
         info dialog-information "<b>Boot entries OK.</b>\n\nSafe to reboot." "Close"
         ;;
     healed)
-        info dialog-warning "<b>Fixed the boot entries.</b>\n\n${action}\n\nSafe to reboot now." \
+        info dialog-warning "<b>Fixed the boot entries.</b>\n\n${detail}\n\nSafe to reboot now." \
              "Close" --button="Details":1
         ;;
     reported)

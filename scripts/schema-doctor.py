@@ -816,7 +816,11 @@ class NvidiaWaylandEgl(Check):
 
 REGISTRY.append(NvidiaWaylandEgl())
 
-INIT_RE = re.compile(r"init=\S*schema-init")
+def _has_valid_init(options_line):
+    for tok in (options_line or "").split():
+        if tok.startswith("init=") and "schema-init" in tok:
+            return True
+    return False
 
 
 def _cmdline_extra_tokens():
@@ -831,7 +835,11 @@ def _cmdline_extra_tokens():
     for n in names:
         if not n.endswith(".conf"):
             continue
-        for line in open(os.path.join(d, n)):
+        try:
+            fh = open(os.path.join(d, n))
+        except OSError:
+            continue
+        for line in fh:
             line = line.split("#", 1)[0].strip()
             if line:
                 tokens.extend(line.split())
@@ -842,7 +850,7 @@ def _resolve_schema_init_bin():
     override = os.environ.get("SCHEMA_INIT_BIN")
     if override:
         return override
-    return shutil.which("schema-init") or "/usr/bin/schema-init"
+    return shutil.which("schema-init")
 
 
 def _read_saved_entry():
@@ -859,7 +867,10 @@ def _read_saved_entry():
 
 def _set_saved_entry(name):
     cmd = os.environ.get("SCHEMA_DOCTOR_GRUB2_EDITENV", "grub2-editenv")
-    subprocess.run([cmd, "-", "set", f"saved_entry={name}"], check=False)
+    try:
+        subprocess.run([cmd, "-", "set", f"saved_entry={name}"], timeout=5, check=False)
+    except Exception:
+        pass
 
 
 def _normalize_pin(raw):
@@ -878,7 +889,10 @@ class BootEntryIntegrity(Check):
         return sorted(glob.glob(os.path.join(ROOT, "boot/loader/entries/schema-*.conf")))
 
     def _options_line(self, path):
-        lines = open(path).readlines()
+        try:
+            lines = open(path).readlines()
+        except OSError:
+            return None, None
         for i, line in enumerate(lines):
             if line.startswith("options "):
                 return i, line.rstrip("\n")
@@ -886,7 +900,7 @@ class BootEntryIntegrity(Check):
 
     def _missing_tokens(self, options_line, extras):
         missing = []
-        if not INIT_RE.search(options_line or ""):
+        if not _has_valid_init(options_line):
             missing.append("init=schema-init")
         line_tokens = set((options_line or "").split())
         for tok in extras:
@@ -953,8 +967,14 @@ class BootEntryIntegrity(Check):
             if not missing:
                 continue
             body = line[len("options "):] if line.startswith("options ") else line
-            tokens = [t for t in body.split() if not t.startswith("init=")]
-            tokens.append(f"init={_resolve_schema_init_bin()}")
+            tokens = body.split()
+            needs_init = not _has_valid_init(line)
+            if needs_init:
+                init_bin = _resolve_schema_init_bin()
+                if init_bin is None:
+                    continue   # can't verify a real path -- leave reported, not healed
+                tokens = [t for t in tokens if not t.startswith("init=")]
+                tokens.append(f"init={init_bin}")
             for tok in extras:
                 if tok not in tokens:
                     tokens.append(tok)
@@ -983,8 +1003,11 @@ class BootEntryIntegrity(Check):
             m = re.search(r"\d.*", name)
             version_key = m.group(0) if m else name
             keyed[version_key] = name
-        r = subprocess.run(["sort", "-V"], input="\n".join(keyed.keys()),
-                            capture_output=True, text=True)
+        try:
+            r = subprocess.run(["sort", "-V"], input="\n".join(keyed.keys()),
+                                capture_output=True, text=True, timeout=5)
+        except Exception:
+            return None
         ordered = [k for k in r.stdout.splitlines() if k]
         if not ordered:
             return None

@@ -367,6 +367,89 @@ def test_back_out_restores_original_state():
           open(grubenv_state).read())
 
 
+def test_vanishing_entry_does_not_crash_detect():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-7.1.10-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rootflags=subvol=root rhgb quiet')
+    c = sd.BootEntryIntegrity()
+    vanished = os.path.join(ent_dir, 'schema-7.1.10-200.fc44.x86_64.conf')
+    real_entries = c._entries
+
+    def entries_then_remove():
+        paths = real_entries()
+        os.remove(vanished)
+        return paths
+
+    c._entries = entries_then_remove
+    try:
+        f = c.detect()
+    except Exception as e:
+        check('vanishing entry mid-run: detect() does not raise', False, repr(e))
+        return
+    check('vanishing entry mid-run: detect() does not raise', True)
+    check('vanishing entry mid-run: surviving entry still evaluated (flagged missing init=)',
+          f is not None and 'schema-7.1.12' in (f.detail or ''), f.detail if f else '')
+
+
+def test_heal_without_verified_init_bin_does_not_fabricate():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rootflags=subvol=root rhgb quiet')
+    saved_bin = os.environ.pop('SCHEMA_INIT_BIN', None)
+    saved_path = os.environ.get('PATH')
+    os.environ['PATH'] = '/nonexistent'
+    try:
+        c = sd.BootEntryIntegrity()
+        f = c.detect()
+        try:
+            c.heal(f)
+        except Exception as e:
+            check('heal with no verified init= bin: does not crash', False, repr(e))
+        else:
+            check('heal with no verified init= bin: does not crash', True)
+        opts = read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64')
+        check('heal with no verified init= bin: no fabricated init= written',
+              'init=' not in opts, opts)
+        check('heal with no verified init= bin: entry left exactly as found',
+              opts == 'options root=/dev/sda2 ro rootflags=subvol=root rhgb quiet', opts)
+        f2 = c.detect()
+        check('heal with no verified init= bin: detect() still reports the entry broken',
+              f2 is not None, f2.detail if f2 else '')
+    finally:
+        if saved_bin is not None:
+            os.environ['SCHEMA_INIT_BIN'] = saved_bin
+        else:
+            os.environ.pop('SCHEMA_INIT_BIN', None)
+        if saved_path is not None:
+            os.environ['PATH'] = saved_path
+        else:
+            os.environ.pop('PATH', None)
+
+
+def test_rdinit_without_real_init_flagged_and_healed():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rdinit=/sbin/schema-init modprobe.blacklist=radeon')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    check('rdinit= only (no real init=): still flagged as missing init=',
+          f is not None and 'init=schema-init' in (f.detail or ''), f.detail if f else '')
+    c.heal(f)
+    opts = read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64')
+    tokens = opts[len('options '):].split()
+    check('rdinit= only: heal adds a real init= token',
+          'init=/sbin/schema-init' in tokens, opts)
+    check('rdinit= only: rdinit= left undisturbed',
+          'rdinit=/sbin/schema-init' in tokens, opts)
+    check('rdinit= only: verify() clean', c.verify() is True)
+
+
 def test_registered_in_registry():
     root, ent_dir, conf_root, bind, stub, _ = new_root()
     sd = load_module(root, stub)
@@ -386,7 +469,9 @@ def main():
                test_heal_saved_entry_no_pin_picks_newest, test_heal_saved_entry_pin_wins_over_newest,
                test_heal_saved_entry_broken_pin_falls_back, test_heal_saved_entry_pin_normalized,
                test_heal_newest_mixed_flavor_picks_truly_newest, test_heal_pin_must_be_schema_entry,
-               test_back_out_restores_original_state, test_registered_in_registry):
+               test_back_out_restores_original_state, test_vanishing_entry_does_not_crash_detect,
+               test_heal_without_verified_init_bin_does_not_fabricate,
+               test_rdinit_without_real_init_flagged_and_healed, test_registered_in_registry):
         print(fn.__name__)
         fn()
         print()
