@@ -862,6 +862,13 @@ def _set_saved_entry(name):
     subprocess.run([cmd, "-", "set", f"saved_entry={name}"], check=False)
 
 
+def _normalize_pin(raw):
+    pin = raw.strip()
+    if pin.endswith(".conf"):
+        pin = pin[: -len(".conf")]
+    return pin
+
+
 class BootEntryIntegrity(Check):
     name = "boot-entry-integrity"
     summary = "schema BLS entries keep init=schema-init; saved_entry stays on one"
@@ -954,9 +961,39 @@ class BootEntryIntegrity(Check):
             new_line = "options " + " ".join(tokens)
             self._rewrite_options(path, idx, new_line)
 
+    def _pin_target(self):
+        marker = os.path.join(ROOT, "etc/schema-init/boot-default")
+        try:
+            raw = open(marker).read()
+        except OSError:
+            return None
+        pin = _normalize_pin(raw)
+        if pin and os.path.isfile(os.path.join(ROOT, "boot/loader/entries", pin + ".conf")):
+            return pin
+        return None
+
+    def _newest_entry(self):
+        entries = self._entries()
+        if not entries:
+            return None
+        names = [os.path.basename(e)[len("schema-"):-len(".conf")] for e in entries]
+        r = subprocess.run(["sort", "-V"], input="\n".join(names),
+                            capture_output=True, text=True)
+        ordered = [n for n in r.stdout.splitlines() if n]
+        return f"schema-{ordered[-1]}" if ordered else None
+
+    def _heal_saved_entry(self):
+        problem = self._saved_entry_problem()
+        if problem is None:
+            return
+        target = self._pin_target() or self._newest_entry()
+        if target:
+            _set_saved_entry(target)
+
     def heal(self, f):
         extras = _cmdline_extra_tokens()
         self._heal_entries(extras)
+        self._heal_saved_entry()
 
 
 REGISTRY.append(BootEntryIntegrity())

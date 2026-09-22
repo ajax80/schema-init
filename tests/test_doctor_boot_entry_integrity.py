@@ -244,6 +244,72 @@ def test_heal_preserves_rdinit():
     check('heal: init=schema-init added', 'init=/sbin/schema-init' in opts, opts)
 
 
+def test_heal_saved_entry_no_pin_picks_newest():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.10-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    set_saved_entry(grubenv_state, '8ac661a02a5647aaa4f14e6f78f77879-7.2.6-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    c.heal(c.detect())
+    check('no pin: saved_entry healed to newest schema entry',
+          open(grubenv_state).read().strip() == 'saved_entry=schema-7.1.12-200.fc44.x86_64',
+          open(grubenv_state).read())
+
+
+def test_heal_saved_entry_pin_wins_over_newest():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-ssd-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    write_entry(ent_dir, 'schema-7.2.6-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    with open(os.path.join(conf_root, 'boot-default'), 'w') as fh:
+        fh.write('schema-ssd-7.1.12-200.fc44.x86_64')
+    set_saved_entry(grubenv_state, '8ac661a02a5647aaa4f14e6f78f77879-7.2.6-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    c.heal(c.detect())
+    check('pin: saved_entry healed to the pin, not the newer schema-7.2.6',
+          open(grubenv_state).read().strip() == 'saved_entry=schema-ssd-7.1.12-200.fc44.x86_64',
+          open(grubenv_state).read())
+
+
+def test_heal_saved_entry_broken_pin_falls_back():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    with open(os.path.join(conf_root, 'boot-default'), 'w') as fh:
+        fh.write('schema-9.9.9-nonexistent.fc44.x86_64')
+    set_saved_entry(grubenv_state, '8ac661a02a5647aaa4f14e6f78f77879-7.2.6-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    c.heal(c.detect())
+    check('broken pin: falls back to newest resolvable schema entry',
+          open(grubenv_state).read().strip() == 'saved_entry=schema-7.1.12-200.fc44.x86_64',
+          open(grubenv_state).read())
+
+
+def test_heal_saved_entry_pin_normalized():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-ssd-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    with open(os.path.join(conf_root, 'boot-default'), 'w') as fh:
+        fh.write('  schema-ssd-7.1.12-200.fc44.x86_64.conf  \n')
+    set_saved_entry(grubenv_state, '8ac661a02a5647aaa4f14e6f78f77879-7.1.12-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    c.heal(c.detect())
+    check('normalized pin (whitespace + .conf suffix): still resolves',
+          open(grubenv_state).read().strip() == 'saved_entry=schema-ssd-7.1.12-200.fc44.x86_64',
+          open(grubenv_state).read())
+
+
 def main():
     print('boot-entry-integrity tests\n')
     for fn in (test_clean_entry_detects_none, test_missing_init_detected,
@@ -252,7 +318,9 @@ def main():
                test_saved_entry_on_stock_detected, test_saved_entry_dangling_detected,
                test_saved_entry_on_valid_schema_clean, test_no_schema_entries_ignores_unusual_saved_entry,
                test_heal_restores_missing_init_and_extras, test_heal_strips_duplicate_stale_init,
-               test_heal_idempotent, test_heal_preserves_rdinit):
+               test_heal_idempotent, test_heal_preserves_rdinit,
+               test_heal_saved_entry_no_pin_picks_newest, test_heal_saved_entry_pin_wins_over_newest,
+               test_heal_saved_entry_broken_pin_falls_back, test_heal_saved_entry_pin_normalized):
         print(fn.__name__)
         fn()
         print()
