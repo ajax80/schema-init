@@ -848,8 +848,8 @@ def _resolve_schema_init_bin():
 def _read_saved_entry():
     cmd = os.environ.get("SCHEMA_DOCTOR_GRUB2_EDITENV", "grub2-editenv")
     try:
-        r = subprocess.run([cmd, "-", "list"], capture_output=True, text=True)
-    except OSError:
+        r = subprocess.run([cmd, "-", "list"], capture_output=True, text=True, timeout=5)
+    except Exception:
         return None
     for line in r.stdout.splitlines():
         if line.startswith("saved_entry="):

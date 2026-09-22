@@ -168,13 +168,23 @@ def test_saved_entry_on_valid_schema_clean():
     check('saved_entry on a real, valid schema entry: clean', c.detect() is None)
 
 
+def test_no_schema_entries_ignores_unusual_saved_entry():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    # no write_entry() calls — zero schema-*.conf files exist
+    # but set an unusual saved_entry that looks dangling/stock
+    set_saved_entry(grubenv_state, 'schema-9.9.9-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    check('no schema entries + unusual saved_entry: guard skips check, returns clean', c.detect() is None)
+
+
 def main():
     print('boot-entry-integrity tests\n')
     for fn in (test_clean_entry_detects_none, test_missing_init_detected,
                test_missing_extra_only_detected, test_tonights_actual_shape_all_entries_broken,
                test_no_schema_entries_clean, test_substring_collision_detected,
                test_saved_entry_on_stock_detected, test_saved_entry_dangling_detected,
-               test_saved_entry_on_valid_schema_clean):
+               test_saved_entry_on_valid_schema_clean, test_no_schema_entries_ignores_unusual_saved_entry):
         print(fn.__name__)
         fn()
         print()
