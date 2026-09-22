@@ -344,6 +344,36 @@ def test_heal_pin_must_be_schema_entry():
           open(grubenv_state).read())
 
 
+def test_back_out_restores_original_state():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rootflags=subvol=root rhgb quiet')
+    set_saved_entry(grubenv_state, '8ac661a02a5647aaa4f14e6f78f77879-7.2.6-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    snap = c.snapshot()
+    c.heal(f)
+    check('back_out setup: heal changed the options line',
+          'init=' in read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64'))
+    c.back_out(snap)
+    opts = read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64')
+    check('back_out: options line restored exactly',
+          opts == 'options root=/dev/sda2 ro rootflags=subvol=root rhgb quiet', opts)
+    check('back_out: saved_entry restored',
+          open(grubenv_state).read().strip() ==
+          'saved_entry=8ac661a02a5647aaa4f14e6f78f77879-7.2.6-200.fc44.x86_64',
+          open(grubenv_state).read())
+
+
+def test_registered_in_registry():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    names = [c.name for c in sd.REGISTRY]
+    check('boot-entry-integrity is in REGISTRY', 'boot-entry-integrity' in names, str(names))
+
+
 def main():
     print('boot-entry-integrity tests\n')
     for fn in (test_clean_entry_detects_none, test_missing_init_detected,
@@ -355,7 +385,8 @@ def main():
                test_heal_idempotent, test_heal_preserves_rdinit,
                test_heal_saved_entry_no_pin_picks_newest, test_heal_saved_entry_pin_wins_over_newest,
                test_heal_saved_entry_broken_pin_falls_back, test_heal_saved_entry_pin_normalized,
-               test_heal_newest_mixed_flavor_picks_truly_newest, test_heal_pin_must_be_schema_entry):
+               test_heal_newest_mixed_flavor_picks_truly_newest, test_heal_pin_must_be_schema_entry,
+               test_back_out_restores_original_state, test_registered_in_registry):
         print(fn.__name__)
         fn()
         print()

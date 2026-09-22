@@ -1003,6 +1003,23 @@ class BootEntryIntegrity(Check):
         self._heal_entries(extras)
         self._heal_saved_entry()
 
+    def snapshot(self):
+        snap = {"entries": {}, "saved_entry": _read_saved_entry()}
+        for path in self._entries():
+            _, line = self._options_line(path)
+            snap["entries"][path] = line
+        return snap
+
+    def back_out(self, snap):
+        for path, line in snap.get("entries", {}).items():
+            if line is None:
+                continue
+            idx, _ = self._options_line(path)
+            if idx is not None:
+                self._rewrite_options(path, idx, line)
+        if snap.get("saved_entry") is not None:
+            _set_saved_entry(snap["saved_entry"])
+
 
 REGISTRY.append(BootEntryIntegrity())
 
