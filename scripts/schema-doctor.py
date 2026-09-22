@@ -968,7 +968,8 @@ class BootEntryIntegrity(Check):
         except OSError:
             return None
         pin = _normalize_pin(raw)
-        if pin and os.path.isfile(os.path.join(ROOT, "boot/loader/entries", pin + ".conf")):
+        if pin and pin.startswith("schema-") and os.path.isfile(
+                os.path.join(ROOT, "boot/loader/entries", pin + ".conf")):
             return pin
         return None
 
@@ -976,11 +977,18 @@ class BootEntryIntegrity(Check):
         entries = self._entries()
         if not entries:
             return None
-        names = [os.path.basename(e)[len("schema-"):-len(".conf")] for e in entries]
-        r = subprocess.run(["sort", "-V"], input="\n".join(names),
+        keyed = {}
+        for e in entries:
+            name = os.path.basename(e)[len("schema-"):-len(".conf")]
+            m = re.search(r"\d.*", name)
+            version_key = m.group(0) if m else name
+            keyed[version_key] = name
+        r = subprocess.run(["sort", "-V"], input="\n".join(keyed.keys()),
                             capture_output=True, text=True)
-        ordered = [n for n in r.stdout.splitlines() if n]
-        return f"schema-{ordered[-1]}" if ordered else None
+        ordered = [k for k in r.stdout.splitlines() if k]
+        if not ordered:
+            return None
+        return f"schema-{keyed[ordered[-1]]}"
 
     def _heal_saved_entry(self):
         problem = self._saved_entry_problem()
