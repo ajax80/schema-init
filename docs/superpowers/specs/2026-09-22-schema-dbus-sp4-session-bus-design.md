@@ -58,12 +58,15 @@ involvement.
 
 ## Decisions (locked in brainstorming)
 
-1. **Reuse the existing `schema-dbus` binary as-is — no new build, no new
-   mode.** It is already environment-variable-driven
-   (`SCHEMA_DBUS_SOCKET`, `SCHEMA_DBUS_POLICY`, `SCHEMA_DBUS_SVCDIR`); the
-   `--system` flag today only affects a log line, not behavior. Session
-   use is a matter of what env vars + servicedir a launcher script passes
-   in, plus two real bug fixes (below) — not a new binary mode.
+1. **Reuse the existing `schema-dbus` binary as-is — no new build.** It is
+   already environment-variable-driven (`SCHEMA_DBUS_SOCKET`,
+   `SCHEMA_DBUS_POLICY`, `SCHEMA_DBUS_SVCDIR`). The `--system` flag today
+   only affects a log line (`system_bus` is parsed but otherwise unused)
+   — this design gives it real meaning: **`--system` present vs absent
+   becomes the single mode signal** gating all four fixes below (private
+   `g_system_bus`, set once in `main()`). The session launcher simply
+   omits the flag, exactly as it omits `SCHEMA_DBUS_POLICY`. No separate
+   new mode env var.
 2. **No policy engine load for the session bus.** Rely on the broker's
    existing no-policy-file default (`allow send_destination:*`), which
    already matches `session.conf`'s stance. Do not synthesize or dissolve
@@ -93,35 +96,96 @@ involvement.
    later, trivially, by pointing the existing `dbus-probe.sh` at the new
    socket — not blocking this work).
 
-## Two required code fixes
+## Required code fixes
 
-Both in the existing broker source, both small, both unit-testable in
-isolation before any live session is touched.
+All in the existing broker source, all gated on the `g_system_bus` mode
+signal (Decision 1) so system-bus behavior is byte-for-byte unchanged,
+all unit-testable in isolation before any live session is touched.
+Found via external review (Greg/Gemini, 2026-09-22) against this spec's
+first draft and verified line-by-line against the real source + the
+repo's own test suite before being folded in here — the four fixes
+below. One suggested addition (`allow = own:*`, folded into Fix 3) was
+checked and found not load-bearing (RequestName never
+consults the policy engine at all — grepped every `sdbus_policy_eval`
+call site; the only one hardcodes `req.op = "send"` — so `own`/
+`own_prefix` predicates exist in the matcher but are dead code today).
+Included anyway since it costs nothing and documents intent, but it
+does not fix an active bug the way the others do.
 
-### Fix 1 — activation default user must not be `"root"` in session mode
+### Fix 1 — `spawn_service` crashes every activation in session mode
 
-`sdbus_activate.h`, `sdbus__svc_add`-adjacent parse path: when a
-`.service` file carries no `User=` key, the table currently defaults to
-`"root"` (`e->user = strdup(user && *user ? user : "root")`). This is
-correct for the system bus (stock daemon-set services nearly always
-specify `User=` explicitly, or are genuinely meant to run as root when
-they don't). It is wrong for the session bus: session `.service` files
-essentially never carry `User=` because under real `systemd --user`
-that's implicit "run as the session owner." Left unpatched, every
-session-activated app (the KDE portals, kauth-adjacent session helpers,
-anything landing through `sdbus_activate.h`'s spawn path) would launch as
-root the instant this broker owns the session bus — a real privilege
-escalation, not a cosmetic bug.
+`schema-dbus.c:564-586`. Two separate bugs in the same function, both
+real, both would make session activation DOA (not just insecure) if
+shipped as originally drafted:
 
-**Fix:** thread a "default user" through the parse call (env var or
-param, e.g. `SCHEMA_DBUS_DEFAULT_USER`, unset → today's `"root"`
-behavior unchanged for the system bus; session launcher sets it to the
-invoking user). `spawn_service`'s existing fail-closed behavior on an
-unresolvable `User=` (`if (!pw) _exit(127)`) is correct and stays as-is
-— this fix only changes what "absent" resolves to, not the fail-closed
-path for a genuinely bad explicit `User=`.
+**1a — privilege-drop syscalls are unconditional.** `initgroups()`/
+`setgid()`/`setuid()` run whenever `pw->pw_uid != 0`, with no check for
+whether the broker itself is already running as that uid. In session
+mode the broker runs as the login uid (e.g. 1000); `setgroups(2)`
+(underlying `initgroups()`) requires `CAP_SETGID` regardless of whether
+the target set matches the caller's current groups — so it fails EPERM
+and `_exit(127)`s on literally every activation, even one that resolves
+correctly to the session's own user. **Fix:** skip the
+initgroups/setgid/setuid block entirely when `!g_system_bus` (the broker
+is already running as the target user by construction — there is no
+lower-privilege user to drop to, matching how a real `systemd --user`
+manager never drops privilege either).
 
-### Fix 2 — activation table needs a directory search list, not one dir
+**1b — the "absent `User=`" default is hardcoded `"root"`.** Session
+`.service` files essentially never carry `User=` (under real `systemd
+--user` that's implicit "run as the session owner"). Correct for the
+system bus (kept as-is); wrong for the session bus, where it would still
+matter for any explicit non-matching `User=` value. **Fix:** in
+`sdbus_activate.h`'s parse path, thread a default-user string computed
+once in `main()`: `g_system_bus ? "root" : getpwuid(getuid())->pw_name`
+— no new env var, the broker already knows who it's running as.
+`spawn_service`'s existing fail-closed behavior on a genuinely
+unresolvable explicit `User=` (`if (!pw) _exit(127)`) is unchanged.
+
+### Fix 2 — spawned children get a stripped env with `DBUS_STARTER_BUS_TYPE` hardcoded to `"system"`
+
+`schema-dbus.c:578-586`. The child env array is exactly `PATH`,
+`DBUS_STARTER_ADDRESS`, and a literal `DBUS_STARTER_BUS_TYPE=system` —
+nothing else, unconditionally. Correct-ish for system-bus services
+(stock dbus-daemon also gives system-activated services a minimal env).
+Fatal for session activation: KDE portals and any session-activated app
+need `WAYLAND_DISPLAY`/`DISPLAY` (compositor), `XDG_RUNTIME_DIR`,
+`HOME`, `USER`, `XDG_DATA_DIRS` (resource lookup) — none of which reach
+the child today. **Fix:** when `!g_system_bus`, build the child env by
+copying the broker's own `environ` (`extern char **environ`) and
+appending/overriding `DBUS_STARTER_ADDRESS` and
+`DBUS_STARTER_BUS_TYPE=session` on top, instead of the 3-entry clean
+array. System-bus behavior (`g_system_bus` true) is untouched — keep the
+existing clean-env array exactly as it is; it matches stock dbus-daemon
+system-bus behavior and already has real production mileage.
+
+### Fix 3 — default fallback policy denies broadcast signals (and, harmlessly, ownership)
+
+`schema-dbus.c:~617`, the no-policy-file fallback string:
+`"context = default\nallow = send_destination:*\n"`. Verified against
+`sdbus_policy.h`: the `send_destination` rule matcher returns no-match
+for `n_dest_names==0` (an undirected/broadcast signal) even against
+`value=="*"` (`sdbus_policy.h` ~line 202: `if (n == 0) return 0;`), and
+`sdbus_policy_eval`'s default verdict is deny with no matching rule.
+This isn't inferred — the repo's own `tests/test_sdbus_route.c:42-43`
+already needs `allow = send_type:signal` alongside `send_destination:*`
+for its own broadcast-signal test case to pass. Session-bus traffic
+leans heavily on undirected signals (property-change notifications,
+KSplash/portal state signals, etc.) — this fallback string has never
+actually been exercised in production before now (the system-bus
+launcher always supplies a dissolved policy file, so this code path is
+essentially untested-by-use). **Fix:** the default fallback string
+becomes:
+```
+context = default
+allow = send_destination:*
+allow = send_type:signal
+allow = own:*
+```
+(`own:*` included per the finding above — inert today, free, documents
+intent for if/when ownership ever does get policy-gated.)
+
+### Fix 4 — activation table needs a directory search list, not one dir
 
 `sdbus_svctab_parse_dir_masked(dir, maskfile)` scans exactly one
 directory. The system bus only ever needed one
@@ -148,43 +212,76 @@ unset, behavior is identical to today.
 
 New script, sibling to the existing `scripts/schema-dbus-run.sh` (which
 dissolves the live system policy and execs the broker for the system
-bus). This one is simpler — no policy dissolution step:
+bus). This one is simpler — no policy dissolution step, and critically,
+**no `--system` flag** (that absence is what puts the broker in session
+mode per Decision 1):
 
 ```
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 export SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus"
-export SCHEMA_DBUS_DEFAULT_USER="$(id -un)"
 export SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/share/dbus-1/services"
-# unset SCHEMA_DBUS_POLICY -> broker's no-policy-file default (allow-all) applies
-exec_schema_dbus_or_fallback_to_stock_dbus_daemon   # self-heal, see Decision 4
+export SCHEMA_DBUS_MASKFILE=/dev/null   # do NOT inherit the system bus's
+                                         # /etc/schema-dbus/masked (masks
+                                         # org.freedesktop.PolicyKit1, a
+                                         # system-bus-only concern)
+# unset SCHEMA_DBUS_POLICY -> broker's no-policy-file default applies (Fix 3)
+exec "$BROKER"     # no --system flag; foreground, exec'd (see Execution model)
 ```
 
 Wired into `plasma-session-start.sh` in place of the current
-`plasma-dbus-run-session-if-needed` invocation. Self-heal: if
-`schema-dbus` fails to bind the socket or exits immediately, fall back to
-`dbus-daemon --session --address="unix:path=$XDG_RUNTIME_DIR/bus"
---fork` — same shape as `schema-dbus-run.sh`'s existing self-heal for the
-system bus, so the session always gets *a* working bus even on a broken
-flip.
+`plasma-dbus-run-session-if-needed` invocation, **backgrounded with `&`**
+the same way that script already backgrounds `kwin_wayland`/
+`plasmashell` — not self-daemonized. Self-heal: if `schema-dbus` fails to
+bind the socket or exits immediately, fall back to `dbus-daemon --session
+--address="unix:path=$XDG_RUNTIME_DIR/bus" --nofork` — same shape as
+`schema-dbus-run.sh`'s existing self-heal for the system bus (which uses
+`exec "$STOCK" --system --nofork`), so the session always gets *a*
+working bus even on a broken flip.
+
+### Execution model
+
+`schema-dbus-run.sh` (system bus) ends with `exec env ... "$BROKER"
+--system` — it replaces itself with the broker, becoming the long-running
+foreground process that the schema-init rail supervises as a `.svc`
+leader. The session launcher has no rail/PID-1 supervision to plug into
+(`plasma-session-start.sh` is a plain shell script, not a rail unit) —
+it must end the same way (`exec`, not fork/daemonize) so that the `&`
+backgrounding in `plasma-session-start.sh` tracks the actual broker (or
+fallback `dbus-daemon --nofork`) process directly, exactly like the
+`kwin_wayland --drm --xwayland ... &` line already does.
 
 ## Testing plan
 
-1. **Unit tests** for both fixes (default-user threading, multi-dir
-   search/override) — extend the existing `sdbus_activate` test suite,
-   `make test` green.
+1. **Unit tests** for all four fixes — extend the existing
+   `sdbus_activate`/`sdbus_policy`/route test suites, `make test` green:
+   - Fix 1a: spawn under a non-root broker uid, confirm no
+     initgroups/setgid/setuid attempted and the child actually execs
+     (today it would `_exit(127)` before ever reaching `execve`)
+   - Fix 1b: absent `User=` resolves to the broker's own uid in session
+     mode, still resolves to `root` in system mode (regression guard)
+   - Fix 2: spawned child's env contains `DBUS_SESSION_BUS_ADDRESS`-
+     relevant passthrough vars in session mode; system mode env is
+     byte-identical to today (regression guard)
+   - Fix 3: a synthetic broadcast signal (`n_dest_names==0`) routes under
+     the new default fallback string; fails under the old one (proves
+     this is a real regression test, not a no-op)
+   - Fix 4: multi-dir search, override precedence, `SCHEMA_DBUS_SVCDIR`
+     (singular) unaffected
 2. **Isolated scratch-bus proof**, before touching the live login — same
    `dbus-run-session`/userns pattern already used for the system-bus
    shim-check (`tests/sdbus_shim_check.sh`) and the session-shim
-   `StartUnit` tests. Start `schema-dbus` on a throwaway socket with real
-   session servicedirs, then by hand:
+   `StartUnit` tests. Start `schema-dbus` (no `--system`) on a throwaway
+   socket with real session servicedirs, then by hand:
    - connect a real client, `RequestName`/`ReleaseName`, `ListNames`
    - trigger activation of a real portal `.service` by name, confirm it
-     spawns as the *invoking* user (not root) — this is the direct
-     regression test for Fix 1
+     spawns as the *invoking* user (not root) and can actually reach the
+     compositor (Fix 1 + Fix 2's direct regression test)
+   - emit an undirected broadcast signal, confirm a subscribed match
+     receives it (Fix 3's direct regression test)
    - confirm a service in `~/.local/share/dbus-1/services` shadows a
-     same-named one in `/usr/share/dbus-1/services` — direct test for
-     Fix 2
+     same-named one in `/usr/share/dbus-1/services` (Fix 4's direct
+     regression test)
    - client-to-client method call + reply routing (already proven
      broker-generic code, re-confirm it still holds under session env)
 3. Only after (1)+(2) pass does the launcher go into
