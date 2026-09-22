@@ -45,7 +45,7 @@ No file is touched by more than one task below except `schema-dbus.c` (Tasks 3 a
 **Interfaces:**
 - Produces: `SDBUS_NO_POLICY_FILE_DEFAULT` (a `#define`d string literal), consumed by `schema-dbus.c`'s `main()` and by the new test.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add this function to `tests/test_sdbus_route.c`, and add a call to it from `main()` (the file's `main()` currently ends with `dbus_message_unref(...)` cleanup lines then `return 0;` — add the call and its cleanup right before that final `return 0;`):
 
@@ -84,13 +84,13 @@ static void test_no_policy_file_default_allows_broadcast(void) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `gcc -Wall -Wextra -g $(pkg-config --cflags dbus-1) tests/test_sdbus_route.c -o /tmp/schema-test-sdbus-route $(pkg-config --libs dbus-1) && /tmp/schema-test-sdbus-route`
 
 Expected: compile FAILS — `error: 'SDBUS_NO_POLICY_FILE_DEFAULT' undeclared` (the define doesn't exist yet).
 
-- [ ] **Step 3: Add the define and switch the real call site to use it**
+- [x] **Step 3: Add the define and switch the real call site to use it**
 
 In `sdbus_policy.h`, right after the existing includes (after line 13, `#include <grp.h>`, before the `typedef struct` at line 15), add:
 
@@ -123,19 +123,19 @@ to:
     g_policy = sdbus_policy_parse(poltext ? poltext : SDBUS_NO_POLICY_FILE_DEFAULT);
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `gcc -Wall -Wextra -g $(pkg-config --cflags dbus-1) tests/test_sdbus_route.c -o /tmp/schema-test-sdbus-route $(pkg-config --libs dbus-1) && /tmp/schema-test-sdbus-route`
 
 Expected: PASS, prints `test_no_policy_file_default_allows_broadcast OK` among the other route tests, exits 0.
 
-- [ ] **Step 5: Full build + test suite sanity check**
+- [x] **Step 5: Full build + test suite sanity check**
 
 Run: `cd /home/ajax80/projects/schema-init && make schema-dbus && make test 2>&1 | tail -30`
 
 Expected: `schema-dbus` still builds clean; the full `make test` run (all existing suites, unrelated to this change) stays green — this confirms the define didn't break anything the old inline literal was relied on elsewhere (grep confirms `schema-dbus.c:617` was the only use site).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /home/ajax80/projects/schema-init
@@ -169,7 +169,7 @@ EOF
 - Produces: `int sdbus_activate_should_drop_privs(int system_bus, uid_t target_uid)`; `char **sdbus_activate_build_env(int system_bus, const char *bus_addr, char **inherited)`; `void sdbus_activate_free_env(char **env)`.
 - Consumed by: Task 3 (`schema-dbus.c`'s `spawn_service`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_sdbus_activate.c` (needs `#include <sys/types.h>` added to its include block at the top, for `uid_t`):
 
@@ -226,13 +226,13 @@ static void test_build_env(void) {
 
 Add both calls (`test_should_drop_privs();` and `test_build_env();`) into `main()` in that file, before `printf("all sdbus_activate tests passed\n");`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `gcc -Wall -Wextra -g -I. tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate`
 
 Expected: compile FAILS — `implicit declaration of function 'sdbus_activate_should_drop_privs'` (and `_build_env`/`_free_env`).
 
-- [ ] **Step 3: Implement the two functions**
+- [x] **Step 3: Implement the two functions**
 
 In `sdbus_activate.h`, right after `sdbus_svctab_free`'s closing brace (after line 127), add:
 
@@ -293,13 +293,13 @@ static inline void sdbus_activate_free_env(char **env) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `gcc -Wall -Wextra -g -I. tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate`
 
 Expected: PASS, all lines including `test_should_drop_privs OK`, `test_build_env OK`, `all sdbus_activate tests passed`, exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /home/ajax80/projects/schema-init
@@ -334,7 +334,7 @@ EOF
 
 This task has no standalone unit test (`schema-dbus.c`/`main()` is the real binary, not compiled into a `make test` target) — verification is a full build plus the manual smoke check in Step 4.
 
-- [ ] **Step 1: Add the `g_system_bus` global**
+- [x] **Step 1: Add the `g_system_bus` global**
 
 In `schema-dbus.c`, right after the existing `static char g_bus_addr[256];` (line 48), add:
 
@@ -344,7 +344,7 @@ static int g_system_bus;   /* Decision 1, SP4 design doc: --system present vs
                               bus-specific behavior throughout this file. */
 ```
 
-- [ ] **Step 2: Set it from the existing `--system` flag parse**
+- [x] **Step 2: Set it from the existing `--system` flag parse**
 
 In `main()`, change:
 ```c
@@ -359,7 +359,7 @@ to:
 ```
 (the local `system_bus` var stays — it's still used later for the startup log line at line 650 — this just also populates the global other functions read.)
 
-- [ ] **Step 3: Wire `spawn_service` to use the two new functions**
+- [x] **Step 3: Wire `spawn_service` to use the two new functions**
 
 Replace the whole body of `spawn_service` (lines 564-588) with:
 
@@ -387,7 +387,7 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
 
 (No `sdbus_activate_free_env(env)` before `execve`/`_exit` — the child either replaces its image or exits immediately either way, matching this function's existing style of not being fussy about child-process cleanup.)
 
-- [ ] **Step 4: Build and smoke-check byte-identical system-bus behavior**
+- [x] **Step 4: Build and smoke-check byte-identical system-bus behavior**
 
 Run: `cd /home/ajax80/projects/schema-init && make schema-dbus 2>&1 | tail -20`
 
@@ -402,13 +402,13 @@ SCHEMA_DBUS_SOCKET=/tmp/sp4-smoke.sock timeout 2 ./schema-dbus --system 2>&1 | h
 
 Expected output (first two lines): `schema-dbus: N activatable services` then `schema-dbus: listening on /tmp/sp4-smoke.sock (system=1, libdbus ...)` — same shape as before this task; `rm -f /tmp/sp4-smoke.sock` after.
 
-- [ ] **Step 5: Run the full existing test suite**
+- [x] **Step 5: Run the full existing test suite**
 
 Run: `make test 2>&1 | tail -40`
 
 Expected: all suites still green, including `test_sdbus_activate` and `test_sdbus_route` from Tasks 1-2.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /home/ajax80/projects/schema-init
@@ -441,7 +441,7 @@ EOF
 - Produces: `sdbus_svctab *sdbus_svctab_parse_dirs_masked(const char **dirs, int ndirs, const char *maskfile, const char *default_user)`, consumed by Task 5.
 - `sdbus_svctab_parse_dir_masked(dir, maskfile)` and `sdbus_svctab_parse_dir(dir)` keep their exact existing 1-2-arg signatures and behavior (always default to `"root"`) — no existing call site or test changes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_sdbus_activate.c`:
 
@@ -518,13 +518,13 @@ static void test_multidir_missing_dir_skipped(void) {
 
 Add all three calls into `main()` (after the Task 2 calls), before `printf("all sdbus_activate tests passed\n");`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `gcc -Wall -Wextra -g -I. tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate`
 
 Expected: compile FAILS — `implicit declaration of function 'sdbus_svctab_parse_dirs_masked'`.
 
-- [ ] **Step 3: Thread `default_user` through `sdbus__svc_add` and its one call site**
+- [x] **Step 3: Thread `default_user` through `sdbus__svc_add` and its one call site**
 
 In `sdbus_activate.h`, change `sdbus__svc_add`'s definition (lines 26-33) from:
 ```c
@@ -561,7 +561,7 @@ to:
 
 This keeps `sdbus_svctab_parse_dir_masked`/`sdbus_svctab_parse_dir` (and every existing test that calls them) byte-for-byte unchanged.
 
-- [ ] **Step 4: Add `sdbus_svctab_parse_dirs_masked`**
+- [x] **Step 4: Add `sdbus_svctab_parse_dirs_masked`**
 
 In `sdbus_activate.h`, right after `sdbus_svctab_free`'s closing brace (i.e. immediately before the two Task 2 functions you added, or immediately after them — either order is fine, they're independent; place it after `sdbus_svctab_free` and before the Task 2 functions to keep all svctab-table functions grouped together) — note it must come **after** `sdbus_svctab_find` (line ~112-117) since it calls that function:
 
@@ -616,19 +616,19 @@ static inline sdbus_svctab *sdbus_svctab_parse_dirs_masked(const char **dirs, in
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `gcc -Wall -Wextra -g -I. tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate`
 
 Expected: PASS — all previous OKs plus `test_default_user_session_mode OK`, `test_multidir_override_precedence OK`, `test_multidir_missing_dir_skipped OK`, `all sdbus_activate tests passed`, exit 0.
 
-- [ ] **Step 6: Full test suite + build sanity check**
+- [x] **Step 6: Full test suite + build sanity check**
 
 Run: `cd /home/ajax80/projects/schema-init && make schema-dbus && make test 2>&1 | tail -40`
 
 Expected: clean build, all suites green.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /home/ajax80/projects/schema-init
@@ -664,7 +664,7 @@ EOF
 
 No standalone unit test (same reason as Task 3) — verified by build + the scratch-bus proof in Task 7, which exercises this exact code path end-to-end.
 
-- [ ] **Step 1: Add the multi-dir env var and default-user computation, replace the svctab build**
+- [x] **Step 1: Add the multi-dir env var and default-user computation, replace the svctab build**
 
 In `schema-dbus.c`, replace lines 621-624:
 ```c
@@ -706,7 +706,7 @@ And add the constant next to the other `#define`s near the top (after `#define S
 
 Note: on the system bus, `SCHEMA_DBUS_SVCDIRS` is never set (the system-bus launcher `schema-dbus-run.sh` doesn't set it), so this always takes the `else` branch — `dirs[0] = svcdir ? svcdir : SDBUS_SVC_DIR; ndirs = 1;` — functionally identical single-dir behavior to before, just routed through the new multi-dir function instead of the old 2-arg wrapper. `default_user` is `"root"` on the system bus either way, matching today exactly.
 
-- [ ] **Step 2: Build and smoke-check**
+- [x] **Step 2: Build and smoke-check**
 
 Run: `cd /home/ajax80/projects/schema-init && make schema-dbus 2>&1 | tail -20`
 
@@ -734,13 +734,13 @@ rm -f /tmp/sp4-smoke3.sock; rm -rf /tmp/sp4-smoke-svcdir1 /tmp/sp4-smoke-svcdir2
 ```
 Expected: `schema-dbus: 1 activatable services` (no `--system`, so this ran in session mode, found the one entry across the two dirs).
 
-- [ ] **Step 3: Run the full existing test suite**
+- [x] **Step 3: Run the full existing test suite**
 
 Run: `make test 2>&1 | tail -40`
 
 Expected: all suites green.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /home/ajax80/projects/schema-init
@@ -775,7 +775,7 @@ EOF
 
 No unit test (it's a shell launcher, not a header function) — verified by the scratch-bus proof in Task 7 (which exercises the broker directly, the piece with real logic) and a direct manual run in this task's own steps.
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 Create `scripts/schema-dbus-session-run.sh`:
 
@@ -848,7 +848,7 @@ fi
 exec "$@"
 ```
 
-- [ ] **Step 2: Make it executable and shellcheck it**
+- [x] **Step 2: Make it executable and shellcheck it**
 
 Run:
 ```bash
@@ -857,7 +857,7 @@ shellcheck /home/ajax80/projects/schema-init/scripts/schema-dbus-session-run.sh 
 ```
 Expected: no `shellcheck` errors (warnings about `$()` vs backticks etc. are fine if any appear; there shouldn't be any real ones given the script mirrors `schema-dbus-run.sh`'s already-shellcheck-clean style). If `shellcheck` isn't installed, note that and move on — it's a nice-to-have, not a blocker.
 
-- [ ] **Step 3: Manual smoke test — broker path**
+- [x] **Step 3: Manual smoke test — broker path**
 
 Run (as the current user, not root — this is exactly how it'll run in the real session):
 ```bash
@@ -868,7 +868,7 @@ XDG_RUNTIME_DIR=/tmp/sp4-launcher-smoke ./scripts/schema-dbus-session-run.sh sh 
 
 Expected: prints `child running, DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/sp4-launcher-smoke/bus`, then at least `org.freedesktop.DBus` in the acquired-names list — proves the broker started, the socket came up, and `exec "$@"` correctly ran the child with the right env. Clean up: `pkill -f 'schema-dbus$'` for any leftover broker from this test that outlived the smoke script (the script's own broker child is backgrounded and NOT killed when `exec "$@"`'s child exits, matching real session behavior where the broker should keep running after the launched command starts) — check with `pgrep -af schema-dbus` first to confirm which PID to kill, don't blindly kill a broker you didn't just start.
 
-- [ ] **Step 4: Manual smoke test — fallback path**
+- [x] **Step 4: Manual smoke test — fallback path**
 
 Run (rename the broker temporarily to force the fallback branch):
 ```bash
@@ -880,7 +880,7 @@ mv schema-dbus.smoketest-hidden schema-dbus
 ```
 Expected: stderr shows `schema-dbus-session-run: broker unavailable — falling back to stock dbus-daemon`, then the child still prints `child running under: unix:path=/tmp/sp4-launcher-smoke2/bus` — proves the fallback path (Decision 4, self-heal) actually works, not just reads correctly. Clean up any leftover `dbus-daemon --session --address=unix:path=/tmp/sp4-launcher-smoke2/bus` process the same careful way as Step 3, and `rm -rf /tmp/sp4-launcher-smoke /tmp/sp4-launcher-smoke2`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /home/ajax80/projects/schema-init
@@ -914,7 +914,7 @@ EOF
 
 This is the design doc's "Isolated scratch-bus proof" section made concrete and automated (mirroring `tests/sdbus_shim_check.sh`'s shape) instead of a manual by-hand checklist — no root/`unshare` needed, since session mode has no privilege boundary to prove (unlike the system-bus shim-check, which specifically needed to fake uid 0).
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 Create `tests/sdbus_session_shim_check.sh`:
 
@@ -1005,7 +1005,7 @@ kill -0 "$BPID" 2>/dev/null || { echo "FAIL: broker died"; cat "$WORK/broker.log
 echo "sdbus_session_shim_check: ALL OK"
 ```
 
-- [ ] **Step 2: Make it executable and run it**
+- [x] **Step 2: Make it executable and run it**
 
 Run:
 ```bash
@@ -1019,7 +1019,7 @@ Expected: `1.`...`4.` each print with no `FAIL:` lines, ending in `sdbus_session
 
 If step 2's activation check fails, debug with `cat` on the script's own `$WORK/broker.log` (the script deletes `$WORK` on exit via its `cleanup` trap — temporarily comment out the `trap cleanup EXIT` line while debugging, then restore it).
 
-- [ ] **Step 3: Add it to the Makefile's `test-all` awareness (optional but recommended)**
+- [x] **Step 3: Add it to the Makefile's `test-all` awareness (optional but recommended)**
 
 Check whether `test-all`'s Python-glob loop (`for t in tests/test_*.py`) or anything else would need to know about this new `.sh` file. It won't (that loop only picks up `test_*.py`), and `tests/sdbus_shim_check.sh` isn't wired into `make test`/`make test-all` either (it's a standalone integration script, run manually or from a livetest harness) — confirm this by grepping:
 
@@ -1027,7 +1027,7 @@ Run: `grep -n "sdbus_shim_check" Makefile`
 
 Expected: no output (confirms the existing sibling script also isn't Makefile-wired, so not wiring the new one matches established convention — nothing to change here).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /home/ajax80/projects/schema-init
