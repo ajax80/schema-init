@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 typedef struct { char *name; char **argv; char *user; } sdbus_svc_ent;
 typedef struct { sdbus_svc_ent *v; int n; } sdbus_svctab;
@@ -26,12 +27,13 @@ static inline char **sdbus__split_argv(const char *s) {
 }
 
 static inline void sdbus__svc_add(sdbus_svctab *t, const char *name,
-                                  const char *exec, const char *user) {
+                                  const char *exec, const char *user,
+                                  const char *default_user) {
     t->v = realloc(t->v, (t->n + 1) * sizeof *t->v);
     sdbus_svc_ent *e = &t->v[t->n++];
     e->name = strdup(name);
     e->argv = sdbus__split_argv(exec);
-    e->user = strdup(user && *user ? user : "root");
+    e->user = strdup(user && *user ? user : default_user);
 }
 
 /* Names schema-init runs as first-class managed services; the broker must never
@@ -98,7 +100,7 @@ static inline sdbus_svctab *sdbus_svctab_parse_dir_masked(const char *dir, const
         /* skip Exec=/bin/false (systemd-only activatables) */
         if (!strcmp(exec, "/bin/false") || !strcmp(exec, "/usr/bin/false")) continue;
         if (sdbus_masklist_has(mask, name)) continue;       /* schema-managed: never bus-activate */
-        sdbus__svc_add(t, name, exec, user);
+        sdbus__svc_add(t, name, exec, user, "root");   /* unchanged behavior for this back-compat path */
     }
     closedir(d);
     sdbus_masklist_free(mask);
@@ -124,6 +126,110 @@ static inline void sdbus_svctab_free(sdbus_svctab *t) {
         free(t->v[i].argv);
     }
     free(t->v); free(t);
+}
+
+/* Fix 1a (SP4 design doc): whether spawn_service should attempt to drop
+   privileges before exec. System bus: drop whenever the resolved target
+   isn't already root, matching stock dbus-daemon's system-activation
+   behavior (unchanged from before this function existed). Session bus:
+   NEVER drop -- the broker is already running, unprivileged, as the
+   only user in play. Attempting it there calls initgroups()/setgid()/
+   setuid() without CAP_SETGID and _exit(127)s the child before exec,
+   even when the target uid matches the broker's own uid exactly. */
+static inline int sdbus_activate_should_drop_privs(int system_bus, uid_t target_uid) {
+    return system_bus && target_uid != 0;
+}
+
+/* Fix 2 (SP4 design doc): build the env array for an activated child.
+   System bus: the pre-existing minimal clean env (PATH + DBUS_STARTER_*
+   only) -- byte-identical to what spawn_service built inline before this
+   function existed. Session bus: pass through the broker's own
+   `inherited` environment (Wayland/XDG/HOME/etc -- session-activated
+   apps like the KDE portals need these to function at all) with
+   DBUS_STARTER_ADDRESS/DBUS_STARTER_BUS_TYPE=session PREPENDED so they
+   are found first by a front-to-back getenv() scan even in the
+   (unlikely) case `inherited` already carries stale DBUS_STARTER_*
+   entries. Returns a malloc'd NULL-terminated array of malloc'd
+   strings -- free with sdbus_activate_free_env(). `inherited` may be
+   NULL (treated as empty) and is never modified. */
+static inline char **sdbus_activate_build_env(int system_bus, const char *bus_addr,
+                                              char **inherited) {
+    char starter[320];
+    snprintf(starter, sizeof starter, "DBUS_STARTER_ADDRESS=%s", bus_addr);
+
+    if (system_bus) {
+        char **env = malloc(4 * sizeof *env);
+        env[0] = strdup("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin");
+        env[1] = strdup(starter);
+        env[2] = strdup("DBUS_STARTER_BUS_TYPE=system");
+        env[3] = NULL;
+        return env;
+    }
+
+    int n = 0;
+    for (char **p = inherited; p && *p; p++) n++;
+    char **env = malloc((n + 3) * sizeof *env);
+    int i = 0;
+    env[i++] = strdup(starter);
+    env[i++] = strdup("DBUS_STARTER_BUS_TYPE=session");
+    for (char **p = inherited; p && *p; p++) env[i++] = strdup(*p);
+    env[i] = NULL;
+    return env;
+}
+
+static inline void sdbus_activate_free_env(char **env) {
+    if (!env) return;
+    for (char **p = env; *p; p++) free(*p);
+    free(env);
+}
+
+/* Fix 4 (SP4 design doc): like sdbus_svctab_parse_dir_masked, but scans
+   `dirs` in order and applies override precedence -- the first dir to
+   define a given Name= wins, later dirs are skipped for that name (a
+   missing/unreadable dir is silently skipped, same as the single-dir
+   version already does via opendir()'s NULL-on-failure check). Needed
+   for the session bus, which searches at least two directories
+   (~/.local/share/dbus-1/services overriding /usr/share/dbus-1/services
+   -- see the SP4 design doc's Fix 4 section for why the user-level one
+   specifically is load-bearing, not just generically nice-to-have).
+   default_user is Fix 1b: what an entry's User= resolves to when absent
+   from the .service file -- "root" for the system bus (matching
+   sdbus_svctab_parse_dir_masked exactly), the invoking user for the
+   session bus. */
+static inline sdbus_svctab *sdbus_svctab_parse_dirs_masked(const char **dirs, int ndirs,
+                                                            const char *maskfile,
+                                                            const char *default_user) {
+    sdbus_svctab *t = calloc(1, sizeof *t);
+    sdbus_strset *mask = sdbus_masklist_load(maskfile);
+    for (int di = 0; di < ndirs; di++) {
+        DIR *d = opendir(dirs[di]);
+        if (!d) continue;
+        struct dirent *de;
+        while ((de = readdir(d))) {
+            size_t l = strlen(de->d_name);
+            if (l < 9 || strcmp(de->d_name + l - 8, ".service")) continue;
+            char path[1024];
+            snprintf(path, sizeof path, "%s/%s", dirs[di], de->d_name);
+            FILE *f = fopen(path, "r");
+            if (!f) continue;
+            char line[2048], name[2048] = "", exec[2048] = "", user[2048] = "";
+            while (fgets(line, sizeof line, f)) {
+                line[strcspn(line, "\r\n")] = '\0';
+                if (!strncmp(line, "Name=", 5))      snprintf(name, sizeof name, "%s", line + 5);
+                else if (!strncmp(line, "Exec=", 5)) snprintf(exec, sizeof exec, "%s", line + 5);
+                else if (!strncmp(line, "User=", 5)) snprintf(user, sizeof user, "%s", line + 5);
+            }
+            fclose(f);
+            if (!name[0] || !exec[0]) continue;
+            if (!strcmp(exec, "/bin/false") || !strcmp(exec, "/usr/bin/false")) continue;
+            if (sdbus_masklist_has(mask, name)) continue;
+            if (sdbus_svctab_find(t, name)) continue;   /* first dir wins */
+            sdbus__svc_add(t, name, exec, user, default_user);
+        }
+        closedir(d);
+    }
+    sdbus_masklist_free(mask);
+    return t;
 }
 
 typedef enum { SDBUS_HELD_IMPLICIT, SDBUS_HELD_EXPLICIT } sdbus_held_kind;
