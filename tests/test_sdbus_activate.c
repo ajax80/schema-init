@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
 
 /* write a .service file into dir */
 static void put(const char *dir, const char *fn, const char *body) {
@@ -126,10 +127,61 @@ static void test_pending(void) {
     printf("test_pending OK\n");
 }
 
+static void test_should_drop_privs(void) {
+    assert(sdbus_activate_should_drop_privs(1, 1000) == 1);   /* system bus, non-root target: drop */
+    assert(sdbus_activate_should_drop_privs(1, 0) == 0);      /* system bus, root target: no-op today, unchanged */
+    assert(sdbus_activate_should_drop_privs(0, 1000) == 0);   /* session bus: never drop */
+    assert(sdbus_activate_should_drop_privs(0, 0) == 0);      /* session bus: never drop, even if User=root */
+    printf("test_should_drop_privs OK\n");
+}
+
+static int env_has(char **env, const char *entry) {
+    for (char **p = env; p && *p; p++) if (!strcmp(*p, entry)) return 1;
+    return 0;
+}
+
+static void test_build_env(void) {
+    /* system bus: exact 3-entry clean env, unchanged from today's literal array */
+    char **sys_env = sdbus_activate_build_env(1, "unix:path=/run/dbus/system_bus_socket", NULL);
+    int n = 0; for (char **p = sys_env; p && *p; p++) n++;
+    assert(n == 3);
+    assert(env_has(sys_env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"));
+    assert(env_has(sys_env, "DBUS_STARTER_ADDRESS=unix:path=/run/dbus/system_bus_socket"));
+    assert(env_has(sys_env, "DBUS_STARTER_BUS_TYPE=system"));
+    sdbus_activate_free_env(sys_env);
+
+    /* session bus: DBUS_STARTER_BUS_TYPE=session, plus every inherited var passed through */
+    char *fake_inherited[] = {
+        (char *)"WAYLAND_DISPLAY=wayland-0",
+        (char *)"XDG_RUNTIME_DIR=/run/user/1000",
+        (char *)"HOME=/home/ajax80",
+        NULL
+    };
+    char **sess_env = sdbus_activate_build_env(0, "unix:path=/run/user/1000/bus", fake_inherited);
+    n = 0; for (char **p = sess_env; p && *p; p++) n++;
+    assert(n == 5);   /* DBUS_STARTER_ADDRESS + DBUS_STARTER_BUS_TYPE + 3 inherited */
+    assert(env_has(sess_env, "DBUS_STARTER_ADDRESS=unix:path=/run/user/1000/bus"));
+    assert(env_has(sess_env, "DBUS_STARTER_BUS_TYPE=session"));
+    assert(env_has(sess_env, "WAYLAND_DISPLAY=wayland-0"));
+    assert(env_has(sess_env, "XDG_RUNTIME_DIR=/run/user/1000"));
+    assert(env_has(sess_env, "HOME=/home/ajax80"));
+    sdbus_activate_free_env(sess_env);
+
+    /* session bus with no inherited vars at all -- degrades to just the 2 DBUS_STARTER_* */
+    char **empty_env = sdbus_activate_build_env(0, "unix:path=/x", NULL);
+    n = 0; for (char **p = empty_env; p && *p; p++) n++;
+    assert(n == 2);
+    sdbus_activate_free_env(empty_env);
+
+    printf("test_build_env OK\n");
+}
+
 int main(void) {
     test_parse();
     test_masklist();
     test_pending();
+    test_should_drop_privs();
+    test_build_env();
     printf("all sdbus_activate tests passed\n");
     return 0;
 }

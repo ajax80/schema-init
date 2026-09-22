@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 
 typedef struct { char *name; char **argv; char *user; } sdbus_svc_ent;
 typedef struct { sdbus_svc_ent *v; int n; } sdbus_svctab;
@@ -124,6 +125,61 @@ static inline void sdbus_svctab_free(sdbus_svctab *t) {
         free(t->v[i].argv);
     }
     free(t->v); free(t);
+}
+
+/* Fix 1a (SP4 design doc): whether spawn_service should attempt to drop
+   privileges before exec. System bus: drop whenever the resolved target
+   isn't already root, matching stock dbus-daemon's system-activation
+   behavior (unchanged from before this function existed). Session bus:
+   NEVER drop -- the broker is already running, unprivileged, as the
+   only user in play. Attempting it there calls initgroups()/setgid()/
+   setuid() without CAP_SETGID and _exit(127)s the child before exec,
+   even when the target uid matches the broker's own uid exactly. */
+static inline int sdbus_activate_should_drop_privs(int system_bus, uid_t target_uid) {
+    return system_bus && target_uid != 0;
+}
+
+/* Fix 2 (SP4 design doc): build the env array for an activated child.
+   System bus: the pre-existing minimal clean env (PATH + DBUS_STARTER_*
+   only) -- byte-identical to what spawn_service built inline before this
+   function existed. Session bus: pass through the broker's own
+   `inherited` environment (Wayland/XDG/HOME/etc -- session-activated
+   apps like the KDE portals need these to function at all) with
+   DBUS_STARTER_ADDRESS/DBUS_STARTER_BUS_TYPE=session PREPENDED so they
+   are found first by a front-to-back getenv() scan even in the
+   (unlikely) case `inherited` already carries stale DBUS_STARTER_*
+   entries. Returns a malloc'd NULL-terminated array of malloc'd
+   strings -- free with sdbus_activate_free_env(). `inherited` may be
+   NULL (treated as empty) and is never modified. */
+static inline char **sdbus_activate_build_env(int system_bus, const char *bus_addr,
+                                              char **inherited) {
+    char starter[320];
+    snprintf(starter, sizeof starter, "DBUS_STARTER_ADDRESS=%s", bus_addr);
+
+    if (system_bus) {
+        char **env = malloc(4 * sizeof *env);
+        env[0] = strdup("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin");
+        env[1] = strdup(starter);
+        env[2] = strdup("DBUS_STARTER_BUS_TYPE=system");
+        env[3] = NULL;
+        return env;
+    }
+
+    int n = 0;
+    for (char **p = inherited; p && *p; p++) n++;
+    char **env = malloc((n + 3) * sizeof *env);
+    int i = 0;
+    env[i++] = strdup(starter);
+    env[i++] = strdup("DBUS_STARTER_BUS_TYPE=session");
+    for (char **p = inherited; p && *p; p++) env[i++] = strdup(*p);
+    env[i] = NULL;
+    return env;
+}
+
+static inline void sdbus_activate_free_env(char **env) {
+    if (!env) return;
+    for (char **p = env; *p; p++) free(*p);
+    free(env);
 }
 
 typedef enum { SDBUS_HELD_IMPLICIT, SDBUS_HELD_EXPLICIT } sdbus_held_kind;
