@@ -614,7 +614,7 @@ int main(int argc, char **argv) {
             fclose(f);
         }
     }
-    g_policy = sdbus_policy_parse(poltext ? poltext : "context = default\nallow = send_destination:*\n");
+    g_policy = sdbus_policy_parse(poltext ? poltext : SDBUS_NO_POLICY_FILE_DEFAULT);
     free(poltext);
     g_names = sdbus_names_new();
     g_replies = sdbus_replies_new();

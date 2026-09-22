@@ -12,6 +12,24 @@
 #include <pwd.h>
 #include <grp.h>
 
+/* Default policy when no SCHEMA_DBUS_POLICY file is supplied. Matches the
+   session bus's actual policy (/usr/share/dbus-1/session.conf: allow
+   everything) -- the session launcher deliberately never supplies a
+   policy file (see SP4 design doc, Decision 2). send_type:signal is
+   required for undirected/broadcast signals specifically: the
+   send_destination rule's matcher (below) returns no-match when
+   n_dest_names==0, so send_destination:* alone silently drops every
+   broadcast (property-change notifications, portal state signals, etc)
+   -- verified against this file's own test suite, which already needed
+   this same line for tests/test_sdbus_route.c's broadcast case. own:*
+   is included for completeness/documented-intent even though nothing
+   currently gates RequestName on policy (see the SP4 design doc). */
+#define SDBUS_NO_POLICY_FILE_DEFAULT \
+    "context = default\n" \
+    "allow = send_destination:*\n" \
+    "allow = send_type:signal\n" \
+    "allow = own:*\n"
+
 typedef struct {
     const char *op;              /* "send" | "own" | "receive" | NULL */
     int uid;                     /* -1 == unknown */

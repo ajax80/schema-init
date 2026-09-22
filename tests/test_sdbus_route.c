@@ -20,6 +20,39 @@ static sdbus_wire_msg wtake(DBusMessage *m, dbus_uint32_t serial) {
     return wm;
 }
 
+static void test_no_policy_file_default_allows_broadcast(void) {
+    sdbus_names *names = sdbus_names_new();
+    sdbus_replies *replies = sdbus_replies_new();
+
+    sdbus_conn s1 = {0}, s2 = {0};
+    s1.id = 1; s1.uid = 1000; s1.gids[0] = 1000; s1.n_gids = 1;
+    s2.id = 2; s2.uid = 1000; s2.gids[0] = 1000; s2.n_gids = 1;
+    s2.matches = sdbus_match_new();
+    sdbus_match_add(s2.matches, "type='signal',interface='org.sig'");
+    sdbus_conn *all[] = { &s1, &s2 };
+
+    sdbus_policy *pol = sdbus_policy_parse(SDBUS_NO_POLICY_FILE_DEFAULT);
+
+    DBusMessage *sig = dbus_message_new_signal("/p", "org.sig", "Changed");
+    dbus_message_set_serial(sig, 1);
+    char *raw = NULL; int len = 0;
+    assert(dbus_message_marshal(sig, &raw, &len));
+    sdbus_wire_msg wm;
+    assert(sdbus_wire_parse((unsigned char *)raw, len, &wm) == len);
+
+    int synth, denied, tg[8];
+    int n = sdbus_route_targets(&wm, &s1, names, all, 2, pol, replies, &synth, &denied, tg, 8);
+    assert(n == 1 && tg[0] == 2 && !denied);
+
+    dbus_free(raw);
+    dbus_message_unref(sig);
+    sdbus_policy_free(pol);
+    sdbus_names_free(names);
+    sdbus_replies_free(replies);
+    sdbus_match_free(s2.matches);
+    printf("test_no_policy_file_default_allows_broadcast OK\n");
+}
+
 int main(void) {
     sdbus_names *names = sdbus_names_new();
     sdbus_replies *replies = sdbus_replies_new();
@@ -91,6 +124,9 @@ int main(void) {
     sdbus_match_free(c3.matches);
     sdbus_names_free(names); sdbus_replies_free(replies);
     for (int i = 0; i < g_nbufs; i++) free(g_bufs[i]);
+
+    test_no_policy_file_default_allows_broadcast();
+
     printf("all sdbus_route tests passed\n");
     return 0;
 }
