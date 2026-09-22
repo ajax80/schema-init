@@ -27,12 +27,13 @@ static inline char **sdbus__split_argv(const char *s) {
 }
 
 static inline void sdbus__svc_add(sdbus_svctab *t, const char *name,
-                                  const char *exec, const char *user) {
+                                  const char *exec, const char *user,
+                                  const char *default_user) {
     t->v = realloc(t->v, (t->n + 1) * sizeof *t->v);
     sdbus_svc_ent *e = &t->v[t->n++];
     e->name = strdup(name);
     e->argv = sdbus__split_argv(exec);
-    e->user = strdup(user && *user ? user : "root");
+    e->user = strdup(user && *user ? user : default_user);
 }
 
 /* Names schema-init runs as first-class managed services; the broker must never
@@ -99,7 +100,7 @@ static inline sdbus_svctab *sdbus_svctab_parse_dir_masked(const char *dir, const
         /* skip Exec=/bin/false (systemd-only activatables) */
         if (!strcmp(exec, "/bin/false") || !strcmp(exec, "/usr/bin/false")) continue;
         if (sdbus_masklist_has(mask, name)) continue;       /* schema-managed: never bus-activate */
-        sdbus__svc_add(t, name, exec, user);
+        sdbus__svc_add(t, name, exec, user, "root");   /* unchanged behavior for this back-compat path */
     }
     closedir(d);
     sdbus_masklist_free(mask);
@@ -180,6 +181,55 @@ static inline void sdbus_activate_free_env(char **env) {
     if (!env) return;
     for (char **p = env; *p; p++) free(*p);
     free(env);
+}
+
+/* Fix 4 (SP4 design doc): like sdbus_svctab_parse_dir_masked, but scans
+   `dirs` in order and applies override precedence -- the first dir to
+   define a given Name= wins, later dirs are skipped for that name (a
+   missing/unreadable dir is silently skipped, same as the single-dir
+   version already does via opendir()'s NULL-on-failure check). Needed
+   for the session bus, which searches at least two directories
+   (~/.local/share/dbus-1/services overriding /usr/share/dbus-1/services
+   -- see the SP4 design doc's Fix 4 section for why the user-level one
+   specifically is load-bearing, not just generically nice-to-have).
+   default_user is Fix 1b: what an entry's User= resolves to when absent
+   from the .service file -- "root" for the system bus (matching
+   sdbus_svctab_parse_dir_masked exactly), the invoking user for the
+   session bus. */
+static inline sdbus_svctab *sdbus_svctab_parse_dirs_masked(const char **dirs, int ndirs,
+                                                            const char *maskfile,
+                                                            const char *default_user) {
+    sdbus_svctab *t = calloc(1, sizeof *t);
+    sdbus_strset *mask = sdbus_masklist_load(maskfile);
+    for (int di = 0; di < ndirs; di++) {
+        DIR *d = opendir(dirs[di]);
+        if (!d) continue;
+        struct dirent *de;
+        while ((de = readdir(d))) {
+            size_t l = strlen(de->d_name);
+            if (l < 9 || strcmp(de->d_name + l - 8, ".service")) continue;
+            char path[1024];
+            snprintf(path, sizeof path, "%s/%s", dirs[di], de->d_name);
+            FILE *f = fopen(path, "r");
+            if (!f) continue;
+            char line[2048], name[2048] = "", exec[2048] = "", user[2048] = "";
+            while (fgets(line, sizeof line, f)) {
+                line[strcspn(line, "\r\n")] = '\0';
+                if (!strncmp(line, "Name=", 5))      snprintf(name, sizeof name, "%s", line + 5);
+                else if (!strncmp(line, "Exec=", 5)) snprintf(exec, sizeof exec, "%s", line + 5);
+                else if (!strncmp(line, "User=", 5)) snprintf(user, sizeof user, "%s", line + 5);
+            }
+            fclose(f);
+            if (!name[0] || !exec[0]) continue;
+            if (!strcmp(exec, "/bin/false") || !strcmp(exec, "/usr/bin/false")) continue;
+            if (sdbus_masklist_has(mask, name)) continue;
+            if (sdbus_svctab_find(t, name)) continue;   /* first dir wins */
+            sdbus__svc_add(t, name, exec, user, default_user);
+        }
+        closedir(d);
+    }
+    sdbus_masklist_free(mask);
+    return t;
 }
 
 typedef enum { SDBUS_HELD_IMPLICIT, SDBUS_HELD_EXPLICIT } sdbus_held_kind;

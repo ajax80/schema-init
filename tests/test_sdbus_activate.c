@@ -176,12 +176,84 @@ static void test_build_env(void) {
     printf("test_build_env OK\n");
 }
 
+static void test_default_user_session_mode(void) {
+    char dir[] = "/tmp/sdbus-defuser-XXXXXX";
+    assert(mkdtemp(dir));
+    put(dir, "nouser.service",
+        "[D-BUS Service]\nName=com.example.NoUser\nExec=/usr/libexec/nu\n");
+    put(dir, "hasuser.service",
+        "[D-BUS Service]\nName=com.example.HasUser\nExec=/usr/libexec/hu\nUser=nobody\n");
+
+    const char *dirs[] = { dir };
+    sdbus_svctab *t = sdbus_svctab_parse_dirs_masked(dirs, 1, NULL, "ajax80");
+    assert(t);
+
+    const sdbus_svc_ent *n = sdbus_svctab_find(t, "com.example.NoUser");
+    assert(n && !strcmp(n->user, "ajax80"));           /* absent User= -> the passed default */
+
+    const sdbus_svc_ent *h = sdbus_svctab_find(t, "com.example.HasUser");
+    assert(h && !strcmp(h->user, "nobody"));           /* explicit User= always wins */
+
+    sdbus_svctab_free(t);
+    char cmd[600]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); (void)system(cmd);
+    printf("test_default_user_session_mode OK\n");
+}
+
+static void test_multidir_override_precedence(void) {
+    char dir1[] = "/tmp/sdbus-multidir1-XXXXXX";
+    char dir2[] = "/tmp/sdbus-multidir2-XXXXXX";
+    assert(mkdtemp(dir1));
+    assert(mkdtemp(dir2));
+
+    /* same Name in both dirs, different Exec -- dir1 (listed first) must win */
+    put(dir1, "shared.service",
+        "[D-BUS Service]\nName=com.example.Shared\nExec=/from/dir1\n");
+    put(dir2, "shared.service",
+        "[D-BUS Service]\nName=com.example.Shared\nExec=/from/dir2\n");
+    /* dir2-only entry must still show up */
+    put(dir2, "onlydir2.service",
+        "[D-BUS Service]\nName=com.example.OnlyDir2\nExec=/from/dir2/only\n");
+
+    const char *dirs[] = { dir1, dir2 };
+    sdbus_svctab *t = sdbus_svctab_parse_dirs_masked(dirs, 2, NULL, "root");
+    assert(t->n == 2);
+
+    const sdbus_svc_ent *s = sdbus_svctab_find(t, "com.example.Shared");
+    assert(s && !strcmp(s->argv[0], "/from/dir1"));    /* dir1 shadowed dir2 */
+
+    const sdbus_svc_ent *o = sdbus_svctab_find(t, "com.example.OnlyDir2");
+    assert(o && !strcmp(o->argv[0], "/from/dir2/only"));
+
+    sdbus_svctab_free(t);
+    char cmd1[600]; snprintf(cmd1, sizeof cmd1, "rm -rf %s", dir1); (void)system(cmd1);
+    char cmd2[600]; snprintf(cmd2, sizeof cmd2, "rm -rf %s", dir2); (void)system(cmd2);
+    printf("test_multidir_override_precedence OK\n");
+}
+
+static void test_multidir_missing_dir_skipped(void) {
+    char dir[] = "/tmp/sdbus-multidir-missing-XXXXXX";
+    assert(mkdtemp(dir));
+    put(dir, "real.service", "[D-BUS Service]\nName=com.example.Real\nExec=/x\n");
+
+    const char *dirs[] = { "/nonexistent/does/not/exist", dir };
+    sdbus_svctab *t = sdbus_svctab_parse_dirs_masked(dirs, 2, NULL, "root");
+    assert(t->n == 1);
+    assert(sdbus_svctab_find(t, "com.example.Real"));
+
+    sdbus_svctab_free(t);
+    char cmd[600]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); (void)system(cmd);
+    printf("test_multidir_missing_dir_skipped OK\n");
+}
+
 int main(void) {
     test_parse();
     test_masklist();
     test_pending();
     test_should_drop_privs();
     test_build_env();
+    test_default_user_session_mode();
+    test_multidir_override_precedence();
+    test_multidir_missing_dir_skipped();
     printf("all sdbus_activate tests passed\n");
     return 0;
 }
