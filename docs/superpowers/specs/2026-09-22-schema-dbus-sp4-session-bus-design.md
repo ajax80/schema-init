@@ -199,6 +199,19 @@ two, in override order (first match wins, matching
 2. `/usr/share/dbus-1/services` — system-wide session service files
    (the KDE portals, snapd's servicedir-extension pattern)
 
+**Why dir 1 specifically is not optional:** traced how
+`schema-systemd1-session` — the shim every app-launch-from-Dolphin
+action depends on (`schema-stu.log` shows it spawning `kwrite`/
+`dolphin`/`konsole`/etc. on request) — actually starts. It is not
+launched by any session-start script (grepped `distros/fedora-kde/
+scripts/*.sh`, no hits). It is bus-activated from cold, on first
+request, purely via `~/.local/share/dbus-1/services/
+org.freedesktop.systemd1.service` (`Exec=/usr/local/bin/
+schema-systemd1-session`, no `User=` line — exactly the case Fix 1b
+covers). Skip dir 1, or skip Fix 1, and this specific service never
+starts under the new broker — not a hypothetical regression, the
+observed mechanism that runs today.
+
 **Fix:** extend to `sdbus_svctab_parse_dirs_masked(const char **dirs, int
 ndirs, const char *maskfile)`, iterating dirs in order and skipping a
 `Name=` already present in the table (first-wins = override semantics).
@@ -282,6 +295,11 @@ fallback `dbus-daemon --nofork`) process directly, exactly like the
    - confirm a service in `~/.local/share/dbus-1/services` shadows a
      same-named one in `/usr/share/dbus-1/services` (Fix 4's direct
      regression test)
+   - **cold-activate `org.freedesktop.systemd1` itself** (kill
+     `schema-systemd1-session` if it's running, issue a method call to
+     the name, confirm the broker respawns it as the invoking user) —
+     this is the real end-to-end path the whole app-launch-from-Dolphin
+     chain depends on, not a synthetic stand-in
    - client-to-client method call + reply routing (already proven
      broker-generic code, re-confirm it still holds under session env)
 3. Only after (1)+(2) pass does the launcher go into
@@ -297,9 +315,11 @@ On blakbox, Jonathan present (not unattended):
 3. Log out / log back in (or restart the autologin service) — no reboot.
 4. Verify: `busctl --user list` (or equivalent) shows the broker as
    bus owner; portals registered (`pgrep -af xdg-desktop-portal`); no
-   new stalls; `schema-systemd1-session` still functioning as a client
-   (spawn-on-open still works, per the 2026-09-22 StartUnit
-   verification).
+   new stalls; **open a file from Dolphin (e.g. "Open With → KWrite")
+   and confirm it actually launches** — this cold-activates
+   `org.freedesktop.systemd1` through the real `~/.local/share/dbus-1/
+   services` entry, the same path proven in the scratch-bus test above,
+   now under the live desktop.
 5. **Rollback**, if needed: revert the `plasma-session-start.sh` line
    and relogin — no boot-guard, no reboot, fully SSH-recoverable from
    another host if the live session itself is unusable. Self-heal
