@@ -1096,7 +1096,34 @@ Expected: same result as Step 2, confirming the periodic supervisor — not just
 
 **Interfaces:** none — final integration step.
 
-- [ ] **Step 1: Deploy the updated files**
+**Corrected by the final whole-branch review, before this task ever runs:** the
+original step order deployed the new doctor/hook first and set the pin
+second. That leaves a window — however short — where the periodic timer could
+tick with the new doctor live but no pin set yet, in which case
+`_heal_saved_entry()` falls back to `_newest_entry()`, and Optiplex now has a
+real `schema-7.2.6-*.conf` (this update's own kernel), so the fallback would
+pick that instead of the `schema-ssd-7.1.12` entry Jonathan actually wants.
+**Set the pin first**, so the window is harmless — the pin already resolves by
+the time anything with the new code ever runs. Also corrected: the hook's
+real install path (verified against this repo's own installer:
+`distros/fedora-installer/schema.ks` and `distros/fedora-installer/README.md`
+both use `/etc/kernel/install.d/`, not `/usr/lib/kernel/install.d/` — `/etc`
+wins over `/usr/lib` for a same-named plugin, so installing to the wrong one
+would leave the OLD, unfixed hook active with no error and no symptom until
+the next kernel update repeats tonight), and the desktop file's mode (`0755`,
+matching `schema.ks`'s own handling of the sibling flip-wizard icon — a
+non-executable `.desktop` file will not launch on click under Plasma).
+
+- [ ] **Step 1: Set the pin FIRST, before deploying anything else**
+
+```bash
+ssh -i ~/.ssh/id_ed25519_agents ajax80@192.168.8.101 '
+echo -n "schema-ssd-7.1.12-200.fc44.x86_64" | sudo tee /etc/schema-init/boot-default > /dev/null
+cat /etc/schema-init/boot-default; echo
+'
+```
+
+- [ ] **Step 2: Deploy the updated files**
 
 ```bash
 scp -i ~/.ssh/id_ed25519_agents scripts/schema-doctor.py ajax80@192.168.8.101:/tmp/schema-doctor.py
@@ -1107,24 +1134,15 @@ scp -i ~/.ssh/id_ed25519_agents distros/fedora-installer/schema-boot-check.sudoe
 
 ssh -i ~/.ssh/id_ed25519_agents ajax80@192.168.8.101 '
 sudo install -m 0755 /tmp/schema-doctor.py /usr/local/bin/schema-doctor
-sudo install -m 0755 /tmp/99-schema-init.install /usr/lib/kernel/install.d/99-schema-init.install
+sudo install -m 0755 /tmp/99-schema-init.install /etc/kernel/install.d/99-schema-init.install
 sudo install -m 0755 /tmp/schema-boot-check.sh /usr/local/bin/schema-boot-check.sh
 sudo install -m 0440 /tmp/schema-boot-check.sudoers /etc/sudoers.d/schema-boot-check
 sudo visudo -cf /etc/sudoers.d/schema-boot-check
-install -m 0644 /tmp/schema-boot-check.desktop ~/Desktop/schema-boot-check.desktop
+install -m 0755 /tmp/schema-boot-check.desktop ~/Desktop/schema-boot-check.desktop
 '
 ```
 
-Note: confirm `/usr/lib/kernel/install.d/99-schema-init.install` is the real installed path for the hook on Optiplex before running this (re-verify per the spec's note — it may instead be under `/etc/kernel/install.d/`).
-
-- [ ] **Step 2: Set the pin so `schema-ssd-7.1.12` survives future kernel updates**
-
-```bash
-ssh -i ~/.ssh/id_ed25519_agents ajax80@192.168.8.101 '
-echo -n "schema-ssd-7.1.12-200.fc44.x86_64" | sudo tee /etc/schema-init/boot-default > /dev/null
-cat /etc/schema-init/boot-default; echo
-'
-```
+Note: still re-verify `/etc/kernel/install.d/` is genuinely where kernel-install reads plugins from on Optiplex (`ls /etc/kernel/install.d/ /usr/lib/kernel/install.d/` — the old, unfixed hook may currently be sitting in one or both places; remove any stale copy at the other path so only one version is ever picked up) — corrected from the wrong default, but "re-verify on the actual box" per the spec's own note still stands.
 
 - [ ] **Step 3: Reload schema-init (never `restart`)**
 
@@ -1149,7 +1167,31 @@ ssh -i ~/.ssh/id_ed25519_agents ajax80@192.168.8.101 'grep options /boot/loader/
 
 Expected: `init=/sbin/schema-init` and `modprobe.blacklist=radeon` both restored.
 
-- [ ] **Step 5: Confirm a real reboot still boots correctly**
+- [ ] **Step 5: Verify before rebooting, then confirm a real reboot still boots correctly**
+
+Nothing in Tasks 1-8 ever watched a real bootloader consume a healed entry
+(the vmtest substitution in Task 8 proved the file-rewriting logic, not GRUB
+itself) — the only proof of that is this reboot. Check the healed state
+matches tonight's actual known-good line and that the stock fallback entry is
+still intact, before rebooting:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_agents ajax80@192.168.8.101 '
+grep options /boot/loader/entries/schema-ssd-7.1.12-200.fc44.x86_64.conf
+grep options /boot/loader/entries/schema-7.1.12-200.fc44.x86_64.conf
+grub2-editenv - list
+# the stock kernel entry must still be present and untouched -- the escape
+# hatch if the schema entry somehow fails to boot:
+ls /boot/loader/entries/*7.2.6*.conf
+'
+```
+
+Expected: `schema-ssd-7.1.12`'s options line matches
+`root=/dev/sda2 ro rootflags=subvol=root rhgb quiet init=/sbin/schema-init modprobe.blacklist=radeon`
+(the exact line confirmed working earlier tonight), `saved_entry` points at
+`schema-ssd-7.1.12-200.fc44.x86_64`, and the stock `7.2.6` entry file still
+exists. If any of that looks wrong, stop here — do not reboot — and
+investigate before proceeding.
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_agents ajax80@192.168.8.101 'sudo reboot'
