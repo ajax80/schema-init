@@ -46,11 +46,15 @@ wait_for_socket() {   # up to 2s; a local fork+bind is normally near-instant
     return 1
 }
 
+BROKER_PID=""
+STOCK_PID=""
+
 if [ -n "$BROKER" ]; then
     SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus" \
     SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/share/dbus-1/services" \
     SCHEMA_DBUS_MASKFILE=/dev/null \
     "$BROKER" &
+    BROKER_PID=$!
 fi
 
 if [ -z "$BROKER" ] || ! wait_for_socket; then
@@ -60,7 +64,29 @@ if [ -z "$BROKER" ] || ! wait_for_socket; then
         exit 1
     fi
     "$STOCK" --session --address="unix:path=$XDG_RUNTIME_DIR/bus" --nofork &
+    STOCK_PID=$!
     wait_for_socket || echo "schema-dbus-session-run: socket still not up, continuing anyway" >&2
+fi
+
+# We're about to exec into $@, which keeps this same PID alive as the session
+# command (that's the point -- see the header comment). That means a trap set
+# here would never fire: exec discards it. So instead, hand a tiny watchdog
+# to the background that polls for *this* PID to disappear -- which only
+# happens once the exec'd session command itself exits, however it exits
+# (clean logout or a crash) -- and only then reaps the broker/fallback. Without
+# this, every session crash-restart orphaned a live schema-dbus still holding
+# the old $XDG_RUNTIME_DIR/bus socket open (found 2026-09-22, SP4 cutover).
+if [ -n "$BROKER_PID" ] || [ -n "$STOCK_PID" ]; then
+    (
+        # $PPID here is this script's own PID -- the one about to exec into
+        # the session command, so this fires exactly once that PID is gone.
+        session_pid=$PPID
+        while kill -0 "$session_pid" 2>/dev/null; do
+            sleep 1
+        done
+        [ -n "$BROKER_PID" ] && kill "$BROKER_PID" 2>/dev/null
+        [ -n "$STOCK_PID" ] && kill "$STOCK_PID" 2>/dev/null
+    ) &
 fi
 
 exec "$@"
