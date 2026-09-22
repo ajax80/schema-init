@@ -1061,14 +1061,14 @@ EOF
 
 **This task requires Jonathan present and available to log back in — do not run it unattended, and confirm with him immediately before Step 2 (the point of no return for the current login session).**
 
-- [ ] **Step 1: Back up the live file**
+- [x] **Step 1: Back up the live file**
 
 Run:
 ```bash
 sudo cp /usr/local/bin/schema-plasma-autologin.sh /usr/local/bin/schema-plasma-autologin.sh.bak-sp4-cutover-$(date +%Y%m%d)
 ```
 
-- [ ] **Step 2: Edit the repo copy's call site**
+- [x] **Step 2: Edit the repo copy's call site**
 
 In `distros/fedora-kde/scripts/schema-plasma-autologin.sh`, change line 104 from:
 ```sh
@@ -1079,7 +1079,7 @@ to:
         /usr/local/bin/schema-dbus-session-run.sh /usr/local/bin/plasma-session-start.sh )
 ```
 
-- [ ] **Step 3: Deploy the launcher and the updated autologin script**
+- [x] **Step 3: Deploy the launcher and the updated autologin script**
 
 Run:
 ```bash
@@ -1090,11 +1090,11 @@ sudo cp /home/ajax80/projects/schema-init/distros/fedora-kde/scripts/schema-plas
 
 Also confirm the just-built `schema-dbus` binary (with all four fixes) is the one deployed at `/usr/local/bin/schema-dbus` and `/usr/bin/schema-dbus` (wherever the launcher's `find_bin` will actually find it) — check with `which schema-dbus` and `schema-dbus --version` (or equivalent) against the repo build's own version/hash, matching whatever verification pattern was used for the original system-bus cutover ([[project_schema_dbus]]).
 
-- [ ] **Step 4: Log out and back in (Jonathan performs this step)**
+- [x] **Step 4: Log out and back in (Jonathan performs this step)**
 
 No reboot. Confirm with Jonathan before proceeding, then have him log out and back in (or restart the autologin service if that's the faster path on this box).
 
-- [ ] **Step 5: Verify on the fresh session**
+- [x] **Step 5: Verify on the fresh session**
 
 Run each of these and confirm the expected result:
 
@@ -1115,14 +1115,14 @@ Expected: one `schema-dbus` process (no `--system` in its argv), confirming the 
 
 Then, interactively: open Dolphin, "Open With → KWrite" on any file. Expected: KWrite actually launches — this cold-activates `org.freedesktop.systemd1` through `~/.local/share/dbus-1/services/org.freedesktop.systemd1.service` (Fix 1a/1b/4's real-world regression test, per the design doc), the exact path proven synthetically in Task 7.
 
-- [ ] **Step 6: If anything in Step 5 fails — rollback**
+- [x] **Step 6: If anything in Step 5 fails — rollback** (N/A — Step 5 passed)
 
 ```bash
 sudo cp /usr/local/bin/schema-plasma-autologin.sh.bak-sp4-cutover-$(date +%Y%m%d) /usr/local/bin/schema-plasma-autologin.sh
 ```
 Then log out and back in again. No reboot, no boot-guard involvement, fully recoverable — if the live session itself is unusable, do this from another host over SSH instead.
 
-- [ ] **Step 7: Commit the repo-side change (only after Step 5 verification passes)**
+- [x] **Step 7: Commit the repo-side change (only after Step 5 verification passes)**
 
 ```bash
 cd /home/ajax80/projects/schema-init
