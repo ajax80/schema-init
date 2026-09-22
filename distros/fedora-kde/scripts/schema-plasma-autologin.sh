@@ -101,7 +101,7 @@ while true; do
         KDE_FULL_SESSION=true \
         KDE_SESSION_VERSION=6 \
         KDE_SESSION_UID="$SCHEMA_UID" \
-        /usr/libexec/plasma-dbus-run-session-if-needed /usr/local/bin/plasma-session-start.sh )
+        /usr/local/bin/schema-dbus-session-run.sh /usr/local/bin/plasma-session-start.sh )
     RC=$?
     release_session
     printf 'plasma_exited rc=%d\n' $RC
