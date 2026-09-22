@@ -129,6 +129,14 @@ def test_substring_collision_detected():
     check('substring collision: names missing token', 'modprobe.blacklist=radeon' in (f.detail if f else ''), f.detail if f else '')
 
 
+def read_options(ent_dir, name):
+    with open(os.path.join(ent_dir, f'{name}.conf')) as f:
+        for line in f:
+            if line.startswith('options '):
+                return line.rstrip('\n')
+    return ''
+
+
 def set_saved_entry(grubenv_state, name):
     with open(grubenv_state, 'w') as f:
         f.write(f'saved_entry={name}\n')
@@ -178,13 +186,58 @@ def test_no_schema_entries_ignores_unusual_saved_entry():
     check('no schema entries + unusual saved_entry: guard skips check, returns clean', c.detect() is None)
 
 
+def test_heal_restores_missing_init_and_extras():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rootflags=subvol=root rhgb quiet')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    c.heal(f)
+    opts = read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64')
+    check('heal: init= restored', 'init=/sbin/schema-init' in opts, opts)
+    check('heal: extra restored', 'modprobe.blacklist=radeon' in opts, opts)
+    check('heal: verify() clean', c.verify() is True)
+
+
+def test_heal_strips_duplicate_stale_init():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/usr/lib/systemd/systemd modprobe.blacklist=radeon')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    c.heal(f)
+    opts = read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64')
+    check('heal: exactly one init= token', opts.count('init=') == 1, opts)
+    check('heal: the surviving init= is schema-init', 'init=/sbin/schema-init' in opts, opts)
+
+
+def test_heal_idempotent():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    os.environ['SCHEMA_INIT_BIN'] = '/sbin/schema-init'
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rootflags=subvol=root rhgb quiet')
+    c = sd.BootEntryIntegrity()
+    c.heal(c.detect())
+    c.heal(c.detect() or sd.Finding('x'))
+    opts = read_options(ent_dir, 'schema-7.1.12-200.fc44.x86_64')
+    check('heal idempotent: still exactly one init=', opts.count('init=') == 1, opts)
+    check('heal idempotent: verify() clean', c.verify() is True)
+
+
 def main():
     print('boot-entry-integrity tests\n')
     for fn in (test_clean_entry_detects_none, test_missing_init_detected,
                test_missing_extra_only_detected, test_tonights_actual_shape_all_entries_broken,
                test_no_schema_entries_clean, test_substring_collision_detected,
                test_saved_entry_on_stock_detected, test_saved_entry_dangling_detected,
-               test_saved_entry_on_valid_schema_clean, test_no_schema_entries_ignores_unusual_saved_entry):
+               test_saved_entry_on_valid_schema_clean, test_no_schema_entries_ignores_unusual_saved_entry,
+               test_heal_restores_missing_init_and_extras, test_heal_strips_duplicate_stale_init,
+               test_heal_idempotent):
         print(fn.__name__)
         fn()
         print()

@@ -922,6 +922,33 @@ class BootEntryIntegrity(Check):
                         "one of them",
             healable=True)
 
+    def _rewrite_options(self, path, idx, new_line):
+        lines = open(path).readlines()
+        lines[idx] = new_line + "\n"
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            fh.writelines(lines)
+        os.replace(tmp, path)
+
+    def _heal_entries(self, extras):
+        for path in self._entries():
+            idx, line = self._options_line(path)
+            if line is None:
+                continue
+            missing = self._missing_tokens(line, extras)
+            if not missing:
+                continue
+            new_line = re.sub(r"init=\S*\s*", "", line).rstrip()
+            new_line += f" init={_resolve_schema_init_bin()}"
+            for tok in extras:
+                if tok not in new_line:
+                    new_line += f" {tok}"
+            self._rewrite_options(path, idx, new_line)
+
+    def heal(self, f):
+        extras = _cmdline_extra_tokens()
+        self._heal_entries(extras)
+
 
 REGISTRY.append(BootEntryIntegrity())
 
