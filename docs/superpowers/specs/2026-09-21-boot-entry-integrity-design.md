@@ -16,7 +16,13 @@ reset `grubenv`'s `saved_entry` to the update's newly-installed stock kernel
 entry. The box booted raw `systemd` as PID 1 on a filesystem it was never
 meant to run under, which crashed catastrophically on SELinux relabeling.
 Diagnosed and hand-repaired live over SSH; full recovery took about 25
-minutes of an evening.
+minutes of an evening. The hand-repair initially restored only `init=`; a
+follow-up review caught that the same verbatim-overwrite also stripped
+Optiplex's `modprobe.blacklist=radeon` (from
+`/etc/schema-init/kernel-cmdline.d/10-radeon.conf`) from every entry —
+confirmed live (`/proc/cmdline` missing the arg, `radeon.ko` loaded
+alongside `amdgpu.ko`, saved only by `amdgpu` winning the probe race) and
+fixed on disk the same night.
 
 This is the second time a BLS resync has clobbered a schema entry's custom
 `options` (the first, 2026-09-16, hit only `root=` on one entry). Tonight's
@@ -82,30 +88,48 @@ class BootEntryIntegrity(Check):
 
 1. `entries = sorted(glob.glob(f"{ROOT}/boot/loader/entries/schema-*.conf"))`.
    Empty → clean (greybox/eli, or any box not yet migrated to schema-init).
-2. For each entry, read its `options` line; broken if it doesn't match
-   `init=\S*schema-init`.
-3. Read `saved_entry` via `grub2-editenv - list` (parsed the same way the
-   kernel-install hook's tests already stub it — see Testing). Broken (second
-   half of the same finding) if `<saved_entry>.conf`'s basename doesn't start
-   with `schema-`.
-4. If either half is broken, return one `Finding` carrying: the list of
-   broken entry paths, and whether `saved_entry` needs repointing. Otherwise
-   `None`.
+2. Read `/etc/schema-init/kernel-cmdline.d/*.conf` the same way the
+   kernel-install hook's `extra_args()` does (strip `#` comments, join,
+   collapse whitespace) — this is the set of host-specific tokens (e.g.
+   `modprobe.blacklist=radeon` on Optiplex) every schema entry is expected to
+   carry.
+3. For each entry, read its `options` line; broken if it's missing
+   `init=\S*schema-init`, **or** missing any token from step 2. (Tonight's
+   actual corruption stripped both in the same verbatim-overwrite-from-
+   `/etc/kernel/cmdline` event — `/etc/kernel/cmdline` never carries the
+   `kernel-cmdline.d` extras, only the hook's `add` path injects them, so a
+   resync wipes both together. Checked independently so either one missing on
+   its own is still caught.)
+4. Read `saved_entry` via `grub2-editenv - list` (parsed the same way the
+   kernel-install hook's tests already stub it — see Testing). Broken (third
+   part of the same finding) if `<saved_entry>.conf`'s basename doesn't start
+   with `schema-`, **or** that basename starts with `schema-` but the file
+   doesn't actually exist under `entries` (a removed kernel left `saved_entry`
+   dangling — GRUB falls back silently, `detect()` must not read the name
+   alone as proof the entry is real).
+5. If any part is broken, return one `Finding` carrying: the list of broken
+   entry paths (each with its specific missing tokens), and whether
+   `saved_entry` needs repointing. Otherwise `None`.
 
 ### `heal()`
 
-- **Per broken entry:** resolve the real `schema-init` binary path via
-  `SCHEMA_INIT_BIN` env override → `shutil.which("schema-init")` (same
-  resolution order as the kernel-install hook — schema-doctor only ever runs
-  on a box that's currently booted under a working schema-init, so `which`
-  reliably finds the host's real path, e.g. `/sbin/schema-init` on Optiplex).
-  Append `init=<path>` to the entry's `options` line; atomic write (temp file
-  + `os.replace`, matching the hook's own style).
+- **Per broken entry:** strip any existing `init=\S*` token from the
+  `options` line first (regex substitution) — an entry with a stale or
+  foreign `init=` (e.g. `init=/usr/lib/systemd/systemd`) must not end up with
+  two `init=` tokens; blind-append relies on "last one wins" kernel cmdline
+  parsing instead of being correct. Resolve the real `schema-init` binary
+  path via `SCHEMA_INIT_BIN` env override → `shutil.which("schema-init")`
+  (same resolution order as the kernel-install hook — schema-doctor only
+  ever runs on a box that's currently booted under a working schema-init, so
+  `which` reliably finds the host's real path, e.g. `/sbin/schema-init` on
+  Optiplex). Append `init=<path>`, then append any `kernel-cmdline.d` tokens
+  missing from the line (same set `detect()` computed). Atomic write (temp
+  file + `os.replace`, matching the hook's own style).
 - **`saved_entry`, if broken:** target = `/etc/schema-init/boot-default`'s
-  content, if non-empty *and* `<content>.conf` exists; else the newest
-  `schema-*.conf` by kernel version (`sort -V` shelled out, reusing the
-  hook's own version-sort rather than reimplementing it in Python). Then
-  `grub2-editenv - set saved_entry=<target>`.
+  content (normalized — see below), if non-empty *and* `<content>.conf`
+  exists; else the newest `schema-*.conf` by kernel version (`sort -V`
+  shelled out, reusing the hook's own version-sort rather than reimplementing
+  it in Python). Then `grub2-editenv - set saved_entry=<target>`.
 
 ### `snapshot()` / `back_out()`
 
@@ -125,33 +149,50 @@ every kernel add" behavior.
 
 **New:** the file's *content* becomes an optional pin (e.g.
 `schema-ssd-7.1.12-200.fc44.x86_64`), read by both the hook and this check.
+Both readers normalize it the same way before use: strip surrounding
+whitespace/newlines, and strip a trailing `.conf` if someone writes
+`schema-foo.conf` instead of `schema-foo` (shell: `tr -d '\r\n'` then a
+`${pin%.conf}`-style strip; Python: `.strip()` then
+`removesuffix(".conf")`). An empty-after-normalization value is treated as
+"no pin," same as an empty file today.
+
 The two consumers' behavior is deliberately different, because they answer
 different questions:
 
 - **This check always protects against "reverted to stock"** — pin or no
   pin, marker present or absent — because that regression is never wanted.
   Heal target = pin if set and resolvable, else newest.
-- **The hook's existing opt-in auto-advance is now pin-aware.**
-  `set_default_to()` becomes:
+- **The hook's existing opt-in auto-advance is now pin-aware, and must
+  actively enforce the pin, not just decline to move it.** `kernel-install`
+  runs Fedora's own `90-loaderentry.install` before this hook (`99-`
+  ordering) — and tonight's actual `saved_entry` ended up on the brand-new
+  stock `7.2.6` entry, confirming something in that earlier stage sets
+  `saved_entry` to the new kernel during the same transaction. A pin-branch
+  that merely `return 0`s instead of writing the pin back would leave that
+  stock value in place. `set_default_to()` becomes:
 
   ```sh
   set_default_to() {
       # $1 = kernel version being added/removed (the "natural" candidate)
       [ -f "$DEFAULT_MARKER" ] || return 0
-      pin="$(cat "$DEFAULT_MARKER" 2>/dev/null || true)"
-      if [ -n "$pin" ] && [ -f "$ENTRIES/$pin.conf" ]; then
-          return 0   # pin still resolvable — leave saved_entry alone
-      fi
+      pin="$(cat "$DEFAULT_MARKER" 2>/dev/null | tr -d '\r\n ')"
+      pin="${pin%.conf}"
       command -v grub2-editenv >/dev/null 2>&1 || return 0
+      if [ -n "$pin" ] && [ -f "$ENTRIES/$pin.conf" ]; then
+          grub2-editenv - set "saved_entry=$pin" 2>/dev/null || true
+          return 0
+      fi
       grub2-editenv - set "saved_entry=schema-$1" 2>/dev/null || true
   }
   ```
 
   No pin (today's behavior, unchanged) → advances on every add. Pin set and
-  resolvable → stays put, even as new kernels arrive (this is what would have
-  kept Optiplex on `schema-ssd-7.1.12` tonight even after `7.2.6` landed).
-  Pin set but now-broken (its kernel was removed) → falls back to advancing,
-  so `saved_entry` never dangles.
+  resolvable → **actively enforced** every time this runs, even though
+  something upstream already moved `saved_entry` to the new stock entry in
+  the same transaction (this is what would have kept Optiplex on
+  `schema-ssd-7.1.12` tonight even after `7.2.6` landed). Pin set but
+  now-broken (its kernel was removed) → falls back to advancing, so
+  `saved_entry` never dangles.
 
 **Deploy note:** set `/etc/schema-init/boot-default`'s content to
 `schema-ssd-7.1.12-200.fc44.x86_64` on Optiplex as part of rollout, so the
@@ -166,7 +207,13 @@ script following `firstboot-flip-wizard.sh`'s existing pattern:
 
 - **Privilege:** a single new passwordless-sudo entry, scoped to exactly
   `/usr/local/bin/schema-doctor --heal --json` (no wildcard args) — the whole
-  privileged surface, same shape as the flip wizard's `HELPER`.
+  privileged surface, same shape as the flip wizard's `HELPER`. Confirmed live
+  on Optiplex tonight (`/usr/local/bin/schema-doctor`, root-owned, matches the
+  original deploy) — this isn't a guess, but at implementation time re-verify
+  the path on the actual target before writing the sudoers rule rather than
+  assuming it's permanent; nothing packages schema-doctor as an RPM today
+  (it's a plain file drop, not `%{_libexecdir}`), but if that ever changes
+  this rule needs updating in lockstep.
 - **No new CLI flag.** The script runs the existing full-suite `--heal
   --json` (already fast, already running unattended every 10 minutes) and
   filters the JSON array for `"name": "boot-entry-integrity"` — reuses a
@@ -197,17 +244,33 @@ records/replays `saved_entry` without a real bootloader. Cases:
   on a second run.
 - all entries missing `init=` (tonight's actual shape) → all healed in one
   pass.
+- an entry has a stale/foreign `init=` (e.g. `init=/usr/lib/systemd/systemd`)
+  → healed to exactly one `init=` token, not two.
+- an entry is missing only a `kernel-cmdline.d` token (`init=` intact) →
+  still detected and healed — the two checks are independent.
+- entries missing both `init=` and the `kernel-cmdline.d` tokens (tonight's
+  actual shape, confirmed live on Optiplex) → both restored in one pass.
 - `saved_entry` pointed at a stock entry, no pin set → healed to newest
   `schema-*.conf` by version.
 - `saved_entry` pointed at a stock entry, pin set and resolvable → healed to
   the pinned entry, not newest.
 - pin set but its `.conf` no longer exists → falls back to newest (doesn't
   crash, doesn't dangle).
+- `saved_entry` names a `schema-*.conf` that doesn't exist on disk (dangling,
+  e.g. its kernel was removed) → detected as broken, not read as clean just
+  because the name matches the prefix.
+- marker content has trailing whitespace/newline or a `.conf` suffix →
+  normalized before use, same heal target as the clean form.
 - collateral / back-out path exercised the same way `card-input-acl`'s is.
 
 **Hook** (`tests/test_kernel_install_hook.py`, new cases): pin resolvable →
-`add`/`remove` leave `saved_entry` untouched; no pin → today's advance
-behavior unchanged; pin broken → falls back to advancing.
+`add`/`remove` *actively set* `saved_entry` to the pin, not leave it at
+whatever `90-loaderentry.install` already set (this is the real bug tonight's
+review caught — a prior no-op draft of this logic would pass a naive "pin
+untouched" test while still failing to override the stock value); no pin →
+today's advance behavior unchanged; pin broken → falls back to advancing;
+marker content with whitespace/`.conf` suffix → normalized the same as the
+Python side.
 
 **Boot test:** `schema-vmtest` before this ever touches Optiplex live, given
 tonight — seed a VM's schema entries with the exact corruption shape seen
