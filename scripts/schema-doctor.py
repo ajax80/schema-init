@@ -845,6 +845,23 @@ def _resolve_schema_init_bin():
     return shutil.which("schema-init") or "/usr/bin/schema-init"
 
 
+def _read_saved_entry():
+    cmd = os.environ.get("SCHEMA_DOCTOR_GRUB2_EDITENV", "grub2-editenv")
+    try:
+        r = subprocess.run([cmd, "-", "list"], capture_output=True, text=True)
+    except OSError:
+        return None
+    for line in r.stdout.splitlines():
+        if line.startswith("saved_entry="):
+            return line[len("saved_entry="):].strip()
+    return None
+
+
+def _set_saved_entry(name):
+    cmd = os.environ.get("SCHEMA_DOCTOR_GRUB2_EDITENV", "grub2-editenv")
+    subprocess.run([cmd, "-", "set", f"saved_entry={name}"], check=False)
+
+
 class BootEntryIntegrity(Check):
     name = "boot-entry-integrity"
     summary = "schema BLS entries keep init=schema-init; saved_entry stays on one"
@@ -870,10 +887,18 @@ class BootEntryIntegrity(Check):
                 missing.append(tok)
         return missing
 
+    def _saved_entry_problem(self):
+        saved = _read_saved_entry()
+        if saved is None:
+            return None
+        if not saved.startswith("schema-"):
+            return f"saved_entry={saved} is not a schema entry"
+        if not os.path.isfile(os.path.join(ROOT, "boot/loader/entries", saved + ".conf")):
+            return f"saved_entry={saved} has no entry file (dangling)"
+        return None
+
     def detect(self):
         entries = self._entries()
-        if not entries:
-            return None
         extras = _cmdline_extra_tokens()
         broken = {}
         for path in entries:
@@ -881,14 +906,20 @@ class BootEntryIntegrity(Check):
             missing = self._missing_tokens(line, extras)
             if missing:
                 broken[os.path.basename(path)] = missing
-        if not broken:
+        saved_problem = self._saved_entry_problem() if entries else None
+        if not broken and not saved_problem:
             return None
-        detail = "entries missing tokens: " + "; ".join(
-            f"{name}: {','.join(toks)}" for name, toks in broken.items())
+        parts = []
+        if broken:
+            parts.append("entries missing tokens: " + "; ".join(
+                f"{name}: {','.join(toks)}" for name, toks in broken.items()))
+        if saved_problem:
+            parts.append(saved_problem)
         return Finding(
-            detail=detail,
+            detail="; ".join(parts),
             oracle_said="every schema-*.conf carries init=<schema-init> plus this "
-                        "host's kernel-cmdline.d extras",
+                        "host's kernel-cmdline.d extras, and saved_entry points at "
+                        "one of them",
             healable=True)
 
 

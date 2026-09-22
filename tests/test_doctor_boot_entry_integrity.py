@@ -129,11 +129,52 @@ def test_substring_collision_detected():
     check('substring collision: names missing token', 'modprobe.blacklist=radeon' in (f.detail if f else ''), f.detail if f else '')
 
 
+def set_saved_entry(grubenv_state, name):
+    with open(grubenv_state, 'w') as f:
+        f.write(f'saved_entry={name}\n')
+
+
+def test_saved_entry_on_stock_detected():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    set_saved_entry(grubenv_state, '8ac661a02a5647aaa4f14e6f78f77879-7.2.6-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    check('saved_entry on stock kernel: detected', f is not None)
+    check('saved_entry on stock kernel: named in detail', 'saved_entry' in (f.detail if f else ''), f.detail if f else '')
+
+
+def test_saved_entry_dangling_detected():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    # saved_entry NAME looks like ours but the .conf file is gone (kernel removed)
+    set_saved_entry(grubenv_state, 'schema-6.9.9-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    check('dangling saved_entry (schema- prefix, no file): detected', f is not None)
+
+
+def test_saved_entry_on_valid_schema_clean():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    set_saved_entry(grubenv_state, 'schema-7.1.12-200.fc44.x86_64')
+    c = sd.BootEntryIntegrity()
+    check('saved_entry on a real, valid schema entry: clean', c.detect() is None)
+
+
 def main():
     print('boot-entry-integrity tests\n')
     for fn in (test_clean_entry_detects_none, test_missing_init_detected,
                test_missing_extra_only_detected, test_tonights_actual_shape_all_entries_broken,
-               test_no_schema_entries_clean, test_substring_collision_detected):
+               test_no_schema_entries_clean, test_substring_collision_detected,
+               test_saved_entry_on_stock_detected, test_saved_entry_dangling_detected,
+               test_saved_entry_on_valid_schema_clean):
         print(fn.__name__)
         fn()
         print()
