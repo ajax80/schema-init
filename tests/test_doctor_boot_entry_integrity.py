@@ -118,11 +118,22 @@ def test_no_schema_entries_clean():
     check('no schema-*.conf at all (greybox/eli model): clean', c.detect() is None)
 
 
+def test_substring_collision_detected():
+    root, ent_dir, conf_root, bind, stub, _ = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro rootflags=subvol=root init=/sbin/schema-init rd.quiet')
+    c = sd.BootEntryIntegrity()
+    f = c.detect()
+    check('substring collision (rd.quiet vs quiet): still detected as missing', f is not None)
+    check('substring collision: names missing token', 'modprobe.blacklist=radeon' in (f.detail if f else ''), f.detail if f else '')
+
+
 def main():
     print('boot-entry-integrity tests\n')
     for fn in (test_clean_entry_detects_none, test_missing_init_detected,
                test_missing_extra_only_detected, test_tonights_actual_shape_all_entries_broken,
-               test_no_schema_entries_clean):
+               test_no_schema_entries_clean, test_substring_collision_detected):
         print(fn.__name__)
         fn()
         print()

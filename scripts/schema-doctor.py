@@ -864,8 +864,9 @@ class BootEntryIntegrity(Check):
         missing = []
         if not INIT_RE.search(options_line or ""):
             missing.append("init=schema-init")
+        line_tokens = set((options_line or "").split())
         for tok in extras:
-            if tok not in (options_line or ""):
+            if tok not in line_tokens:
                 missing.append(tok)
         return missing
 
