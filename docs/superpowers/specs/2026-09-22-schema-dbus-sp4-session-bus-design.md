@@ -51,10 +51,11 @@ bus at all.
 
 Risk class is also lower than the system-bus flip, not equal to it: the
 system bus is PID-1-rail-managed, so swapping it required a reboot and
-the boot-rollback guard. The session bus is spawned post-login by
-`plasma-session-start.sh` — cutover is a logout/relogin (or restarting
-the autologin service), fully SSH-recoverable, no GRUB/boot-guard
-involvement.
+the boot-rollback guard. The session bus is spawned per-login by
+`schema-plasma-autologin.sh` (via `plasma-dbus-run-session-if-needed`,
+see the Launcher section for the exact call site) — cutover is a
+logout/relogin (or restarting the autologin service), fully
+SSH-recoverable, no GRUB/boot-guard involvement.
 
 ## Decisions (locked in brainstorming)
 
@@ -223,46 +224,74 @@ unset, behavior is identical to today.
 
 ## Launcher: `schema-dbus-session-run.sh`
 
-New script, sibling to the existing `scripts/schema-dbus-run.sh` (which
-dissolves the live system policy and execs the broker for the system
-bus). This one is simpler — no policy dissolution step, and critically,
-**no `--system` flag** (that absence is what puts the broker in session
-mode per Decision 1):
+**Correction (found while writing the implementation plan):** the real
+integration point is not inside `plasma-session-start.sh`. Traced the
+actual call chain: `distros/fedora-kde/scripts/
+schema-plasma-autologin.sh:104` invokes `/usr/libexec/
+plasma-dbus-run-session-if-needed /usr/local/bin/plasma-session-start.sh`
+as a `runuser`-wrapped command whose exit code (`RC=$?`) the autologin
+loop watches to decide whether to restart the whole session.
+`plasma-dbus-run-session-if-needed` is a **wrapper that execs its
+argument as a child** after ensuring a session bus is up — it is not
+called from within `plasma-session-start.sh` at all. The new launcher
+must be a drop-in replacement for that exact call shape: `<launcher>
+plasma-session-start.sh`, starting the bus then `exec "$@"`-ing into the
+given command so the whole plasma session lives as its descendant and
+its exit code still reaches the autologin loop correctly.
 
-```
-export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+New script, sibling to the existing `scripts/schema-dbus-run.sh`.
+Simpler than that one — no policy dissolution step, and critically **no
+`--system` flag** (that absence is what puts the broker in session mode
+per Decision 1):
+
+```sh
+#!/bin/sh
+# schema-dbus-session-run.sh <command> [args...]
+# Drop-in for /usr/libexec/plasma-dbus-run-session-if-needed at its call
+# site in schema-plasma-autologin.sh. Starts the session bus (schema-dbus,
+# falling back to stock dbus-daemon), exports DBUS_SESSION_BUS_ADDRESS,
+# then execs the given command as a child -- same shape as the tool it
+# replaces, so the caller's exit-code/lifetime tracking is unaffected.
+set -u
+
+XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-export SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus"
-export SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/share/dbus-1/services"
-export SCHEMA_DBUS_MASKFILE=/dev/null   # do NOT inherit the system bus's
-                                         # /etc/schema-dbus/masked (masks
-                                         # org.freedesktop.PolicyKit1, a
-                                         # system-bus-only concern)
-# unset SCHEMA_DBUS_POLICY -> broker's no-policy-file default applies (Fix 3)
-exec "$BROKER"     # no --system flag; foreground, exec'd (see Execution model)
+
+# find_bin() / BROKER / STOCK: same lookup pattern as schema-dbus-run.sh
+
+wait_for_socket() {   # up to 2s; a local fork+bind is normally near-instant
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        [ -S "$XDG_RUNTIME_DIR/bus" ] && return 0
+        sleep 0.2
+    done
+    return 1
+}
+
+if [ -n "$BROKER" ]; then
+    SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus" \
+    SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/share/dbus-1/services" \
+    SCHEMA_DBUS_MASKFILE=/dev/null \
+    "$BROKER" &         # no --system; no SCHEMA_DBUS_POLICY (Fix 3 default
+                         # applies); unredirected stderr, same as stock
+                         # dbus-daemon's today -- both flow into
+                         # schema-autologin.log via the runuser chain
+fi
+if [ -z "$BROKER" ] || ! wait_for_socket; then
+    echo "schema-dbus-session-run: broker unavailable — falling back to stock dbus-daemon" >&2
+    [ -n "$STOCK" ] || { echo "schema-dbus-session-run: no dbus-daemon to fall back to" >&2; exit 1; }
+    "$STOCK" --session --address="unix:path=$XDG_RUNTIME_DIR/bus" --nofork &
+    wait_for_socket || echo "schema-dbus-session-run: socket still not up, continuing anyway" >&2
+fi
+
+exec "$@"
 ```
 
-Wired into `plasma-session-start.sh` in place of the current
-`plasma-dbus-run-session-if-needed` invocation, **backgrounded with `&`**
-the same way that script already backgrounds `kwin_wayland`/
-`plasmashell` — not self-daemonized. Self-heal: if `schema-dbus` fails to
-bind the socket or exits immediately, fall back to `dbus-daemon --session
---address="unix:path=$XDG_RUNTIME_DIR/bus" --nofork` — same shape as
-`schema-dbus-run.sh`'s existing self-heal for the system bus (which uses
-`exec "$STOCK" --system --nofork`), so the session always gets *a*
-working bus even on a broken flip.
-
-### Execution model
-
-`schema-dbus-run.sh` (system bus) ends with `exec env ... "$BROKER"
---system` — it replaces itself with the broker, becoming the long-running
-foreground process that the schema-init rail supervises as a `.svc`
-leader. The session launcher has no rail/PID-1 supervision to plug into
-(`plasma-session-start.sh` is a plain shell script, not a rail unit) —
-it must end the same way (`exec`, not fork/daemonize) so that the `&`
-backgrounding in `plasma-session-start.sh` tracks the actual broker (or
-fallback `dbus-daemon --nofork`) process directly, exactly like the
-`kwin_wayland --drm --xwayland ... &` line already does.
+Self-heal matches `schema-dbus-run.sh`'s pattern (try the broker, fall
+back to stock on failure) but shaped for the exec-a-child model instead
+of `schema-dbus-run.sh`'s exec-self model, since this launcher must still
+be alive to `exec "$@"` afterward — it can't just `exec "$STOCK" ...`
+directly the way the system-bus launcher's fallback does, or
+`plasma-session-start.sh` would never run.
 
 ## Testing plan
 
@@ -302,17 +331,23 @@ fallback `dbus-daemon --nofork`) process directly, exactly like the
      chain depends on, not a synthetic stand-in
    - client-to-client method call + reply routing (already proven
      broker-generic code, re-confirm it still holds under session env)
-3. Only after (1)+(2) pass does the launcher go into
-   `plasma-session-start.sh` for a real cutover.
+3. Only after (1)+(2) pass does the launcher get wired into the real
+   call site for a cutover.
 
 ## Cutover
 
 On blakbox, Jonathan present (not unattended):
-1. Back up current session-start invocation (the
-   `plasma-dbus-run-session-if-needed` line) in
-   `plasma-session-start.sh`.
-2. Swap in `schema-dbus-session-run.sh`.
-3. Log out / log back in (or restart the autologin service) — no reboot.
+1. Back up `distros/fedora-kde/scripts/schema-plasma-autologin.sh` (the
+   file, or at minimum the line at `:104`).
+2. Edit line 104 so it invokes `schema-dbus-session-run.sh
+   /usr/local/bin/plasma-session-start.sh` in place of
+   `/usr/libexec/plasma-dbus-run-session-if-needed
+   /usr/local/bin/plasma-session-start.sh`. Redeploy the changed script
+   to `/usr/local/bin/schema-plasma-autologin.sh` (wherever the live
+   rail copy is served from — same mechanism used for prior fixes to
+   this file, e.g. the DISPLAY-autodetect fix).
+3. Log out / log back in (or restart the autologin service) — no
+   reboot, no boot-guard involvement.
 4. Verify: `busctl --user list` (or equivalent) shows the broker as
    bus owner; portals registered (`pgrep -af xdg-desktop-portal`); no
    new stalls; **open a file from Dolphin (e.g. "Open With → KWrite")
@@ -320,7 +355,7 @@ On blakbox, Jonathan present (not unattended):
    `org.freedesktop.systemd1` through the real `~/.local/share/dbus-1/
    services` entry, the same path proven in the scratch-bus test above,
    now under the live desktop.
-5. **Rollback**, if needed: revert the `plasma-session-start.sh` line
+5. **Rollback**, if needed: revert the `schema-plasma-autologin.sh` line
    and relogin — no boot-guard, no reboot, fully SSH-recoverable from
    another host if the live session itself is unusable. Self-heal
    (Decision 4) should mean this manual path is rarely needed.
