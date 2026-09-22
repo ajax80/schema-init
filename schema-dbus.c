@@ -46,6 +46,9 @@ static dbus_uint32_t  g_bcast_serial;
 static sdbus_svctab  *g_svctab;
 static sdbus_acts    *g_acts;
 static char           g_bus_addr[256];
+static int            g_system_bus;   /* Decision 1, SP4 design doc: --system present
+                                          vs absent is the single mode signal gating
+                                          session-bus-specific behavior in this file. */
 #define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
 #define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
@@ -570,19 +573,13 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
     setsid();
     struct passwd *pw = getpwnam(e->user);
     if (!pw) _exit(127);                 /* unknown User= -> fail closed, never run as root */
-    if (pw->pw_uid != 0) {
+    if (sdbus_activate_should_drop_privs(g_system_bus, pw->pw_uid)) {
         if (initgroups(e->user, pw->pw_gid) != 0) _exit(127);
         if (setgid(pw->pw_gid) != 0) _exit(127);
         if (setuid(pw->pw_uid) != 0) _exit(127);
     }
-    char starter[320];
-    snprintf(starter, sizeof starter, "DBUS_STARTER_ADDRESS=%s", bus_addr);
-    char *env[] = {
-        (char *)"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin",
-        starter,
-        (char *)"DBUS_STARTER_BUS_TYPE=system",
-        NULL
-    };
+    extern char **environ;
+    char **env = sdbus_activate_build_env(g_system_bus, bus_addr, environ);
     execve(e->argv[0], e->argv, env);
     _exit(127);                         /* exec failed */
 }
@@ -590,6 +587,7 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
 int main(int argc, char **argv) {
     int system_bus = 0;
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--system")) system_bus = 1;
+    g_system_bus = system_bus;
 
     const char *sock = getenv("SCHEMA_DBUS_SOCKET");
     if (!sock) sock = DEFAULT_SOCKET;
