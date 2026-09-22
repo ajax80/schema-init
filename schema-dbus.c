@@ -52,6 +52,7 @@ static int            g_system_bus;   /* Decision 1, SP4 design doc: --system pr
 #define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
 #define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
+#define SDBUS_MAX_SVCDIRS 8
 
 static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
 
@@ -617,9 +618,27 @@ int main(int argc, char **argv) {
     g_names = sdbus_names_new();
     g_replies = sdbus_replies_new();
     const char *svcdir = getenv("SCHEMA_DBUS_SVCDIR");
+    const char *svcdirs_env = getenv("SCHEMA_DBUS_SVCDIRS");
     const char *maskfile = getenv("SCHEMA_DBUS_MASKFILE");
-    g_svctab = sdbus_svctab_parse_dir_masked(svcdir ? svcdir : SDBUS_SVC_DIR,
-                                             maskfile ? maskfile : SDBUS_MASK_FILE);
+
+    struct passwd *self_pw = g_system_bus ? NULL : getpwuid(getuid());
+    const char *default_user = g_system_bus ? "root" : (self_pw ? self_pw->pw_name : "root");
+
+    const char *dirs[SDBUS_MAX_SVCDIRS];
+    int ndirs = 0;
+    char *svcdirs_buf = NULL;
+    if (svcdirs_env) {
+        svcdirs_buf = strdup(svcdirs_env);
+        for (char *p = strtok(svcdirs_buf, ":"); p && ndirs < SDBUS_MAX_SVCDIRS; p = strtok(NULL, ":"))
+            dirs[ndirs++] = p;
+    } else {
+        dirs[0] = svcdir ? svcdir : SDBUS_SVC_DIR;
+        ndirs = 1;
+    }
+    g_svctab = sdbus_svctab_parse_dirs_masked(dirs, ndirs,
+                                              maskfile ? maskfile : SDBUS_MASK_FILE,
+                                              default_user);
+    free(svcdirs_buf);
     g_acts = sdbus_acts_new();
     fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 
