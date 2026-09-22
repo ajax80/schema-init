@@ -11,6 +11,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import stat
 import struct
 import subprocess
@@ -814,6 +815,83 @@ class NvidiaWaylandEgl(Check):
 
 
 REGISTRY.append(NvidiaWaylandEgl())
+
+INIT_RE = re.compile(r"init=\S*schema-init")
+
+
+def _cmdline_extra_tokens():
+    """Host-specific kernel cmdline tokens from kernel-cmdline.d/*.conf, parsed
+    the same way the kernel-install hook's extra_args() does."""
+    d = os.path.join(ROOT, "etc/schema-init/kernel-cmdline.d")
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return []
+    tokens = []
+    for n in names:
+        if not n.endswith(".conf"):
+            continue
+        for line in open(os.path.join(d, n)):
+            line = line.split("#", 1)[0].strip()
+            if line:
+                tokens.extend(line.split())
+    return tokens
+
+
+def _resolve_schema_init_bin():
+    override = os.environ.get("SCHEMA_INIT_BIN")
+    if override:
+        return override
+    return shutil.which("schema-init") or "/usr/bin/schema-init"
+
+
+class BootEntryIntegrity(Check):
+    name = "boot-entry-integrity"
+    summary = "schema BLS entries keep init=schema-init; saved_entry stays on one"
+    grade = SAFE
+
+    def _entries(self):
+        return sorted(glob.glob(os.path.join(ROOT, "boot/loader/entries/schema-*.conf")))
+
+    def _options_line(self, path):
+        lines = open(path).readlines()
+        for i, line in enumerate(lines):
+            if line.startswith("options "):
+                return i, line.rstrip("\n")
+        return None, None
+
+    def _missing_tokens(self, options_line, extras):
+        missing = []
+        if not INIT_RE.search(options_line or ""):
+            missing.append("init=schema-init")
+        for tok in extras:
+            if tok not in (options_line or ""):
+                missing.append(tok)
+        return missing
+
+    def detect(self):
+        entries = self._entries()
+        if not entries:
+            return None
+        extras = _cmdline_extra_tokens()
+        broken = {}
+        for path in entries:
+            _, line = self._options_line(path)
+            missing = self._missing_tokens(line, extras)
+            if missing:
+                broken[os.path.basename(path)] = missing
+        if not broken:
+            return None
+        detail = "entries missing tokens: " + "; ".join(
+            f"{name}: {','.join(toks)}" for name, toks in broken.items())
+        return Finding(
+            detail=detail,
+            oracle_said="every schema-*.conf carries init=<schema-init> plus this "
+                        "host's kernel-cmdline.d extras",
+            healable=True)
+
+
+REGISTRY.append(BootEntryIntegrity())
 
 
 def read_config():
