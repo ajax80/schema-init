@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Check schema boot
+Comment=Run after updates, before rebooting — confirms the schema boot entries are intact
+Exec=/usr/local/bin/schema-boot-check.sh
+Icon=drive-harddisk
+Terminal=false

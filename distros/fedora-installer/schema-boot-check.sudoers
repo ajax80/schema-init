@@ -1,0 +1,4 @@
+# schema-boot-check (the desktop "check after update, before reboot" shortcut)
+# runs unprivileged and reaches root ONLY through this one fixed command. No
+# wildcards, no other arguments accepted.
+%wheel ALL=(root) NOPASSWD: /usr/local/bin/schema-doctor --heal --json
