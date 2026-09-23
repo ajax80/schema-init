@@ -49,6 +49,20 @@ wait_for_socket() {   # up to 2s; a local fork+bind is normally near-instant
 BROKER_PID=""
 STOCK_PID=""
 
+# A broker from a prior attempt this boot that crashed or was killed can
+# leave its socket file behind (nothing here or in schema-dbus itself
+# unlinks it on exit). The next attempt's bind() then fails silently -- no
+# error text, just no "listening" line and every later connect getting
+# ECONNREFUSED -- which orphans the whole session exactly like a dead
+# broker does, except now the NEW attempt never had a broker at all. Hit
+# live on the second respawn of the third SP4-cutover reboot (2026-09-22):
+# attempt 1's session crashed fast (kwin exit rc=1), attempt 2's broker
+# then failed to bind on the leftover socket. Safe to remove unconditionally
+# here -- by this point any previous broker's reaper watchdog (below) has
+# either already unlinked it or the process holding it is already gone,
+# since this script only runs once per fresh session attempt.
+rm -f "$XDG_RUNTIME_DIR/bus"
+
 if [ -n "$BROKER" ]; then
     SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus" \
     SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/share/dbus-1/services" \
@@ -76,12 +90,18 @@ fi
 # (clean logout or a crash) -- and only then reaps the broker/fallback. Without
 # this, every session crash-restart orphaned a live schema-dbus still holding
 # the old $XDG_RUNTIME_DIR/bus socket open (found 2026-09-22, SP4 cutover).
+SESSION_PID=$$
 if [ -n "$BROKER_PID" ] || [ -n "$STOCK_PID" ]; then
     (
-        # $PPID here is this script's own PID -- the one about to exec into
-        # the session command, so this fires exactly once that PID is gone.
-        session_pid=$PPID
-        while kill -0 "$session_pid" 2>/dev/null; do
+        # $$ is this script's own PID -- preserved across the exec below, so
+        # this fires exactly once the session command itself is gone. NOT
+        # $PPID: in a subshell $PPID is the *parent* (runuser, uid 0), and
+        # `kill -0` on a root pid from this uid-1000 subshell returns EPERM,
+        # which the loop below read as "session gone" -> it killed the broker
+        # ~1s into every boot. That is the 2026-09-22 SP4 black screen: dead
+        # bus, stale socket, every KF6 app aborting on connect. (Crystal)
+        session_pid=$SESSION_PID
+        while [ -d /proc/"$session_pid" ]; do
             sleep 1
         done
         [ -n "$BROKER_PID" ] && kill "$BROKER_PID" 2>/dev/null
@@ -99,12 +119,18 @@ if [ -n "$BROKER_PID" ] || [ -n "$STOCK_PID" ]; then
     # (re-forks kwin, re-runs this whole script, starts a fresh broker with a
     # correct env) takes over instead of leaving a half-dead session running.
     (
-        session_pid=$PPID
+        # Same $$-not-$PPID rule as above, and for a second reason: the
+        # recovery `kill` has to land on a pid this uid can signal. Killing
+        # $PPID (root runuser) was EPERM -> silent no-op -> a broker death
+        # left the session half-alive forever with no respawn. $$ is
+        # ajax80-owned, and killing it exits the session command so the
+        # autologin loop's crash-restart path takes over. (Crystal)
+        session_pid=$SESSION_PID
         watch_pid=${BROKER_PID:-$STOCK_PID}
-        while kill -0 "$session_pid" 2>/dev/null && kill -0 "$watch_pid" 2>/dev/null; do
+        while [ -d /proc/"$session_pid" ] && [ -d /proc/"$watch_pid" ]; do
             sleep 2
         done
-        kill -0 "$watch_pid" 2>/dev/null || kill "$session_pid" 2>/dev/null
+        [ -d /proc/"$watch_pid" ] || kill "$session_pid" 2>/dev/null
     ) &
 fi
 
