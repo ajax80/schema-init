@@ -957,6 +957,9 @@ static void shm_init(void) {
     if (shm_ptr == MAP_FAILED) shm_ptr = NULL;
 }
 
+_Static_assert(SCHEMA_SHM_MAX >= MAX_SERVICES, "shm svc table smaller than MAX_SERVICES");
+_Static_assert(SCHEMA_SHM_MAX_GROUPS >= MAX_GROUPS, "shm group table smaller than MAX_GROUPS");
+
 static void shm_update(void) {
     int i;
     if (!shm_ptr) return;
