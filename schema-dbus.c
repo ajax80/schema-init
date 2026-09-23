@@ -599,6 +599,9 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
     if (pid > 0) return pid;
 
     /* --- child --- */
+    sigset_t none;
+    sigemptyset(&none);
+    sigprocmask(SIG_SETMASK, &none, NULL);   /* broker blocks SIGCHLD for its signalfd; don't leak it */
     setsid();
     struct passwd *pw = getpwnam(e->user);
     if (!pw) _exit(127);                 /* unknown User= -> fail closed, never run as root */

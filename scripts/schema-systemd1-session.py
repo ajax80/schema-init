@@ -153,6 +153,9 @@ def _child_preexec():
     # os error 10) and breaks (e.g. Ferrix installed-software / DMI tabs). Restore
     # default disposition in the child before exec so launched apps behave normally.
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+    # The relay inherits a blocked SIGCHLD from the broker; a blocked mask also
+    # survives execve and makes Qt's QProcess wait out its 30s timeouts.
+    signal.pthread_sigmask(signal.SIG_SETMASK, [])
 
 
 def _spawn(exec_path, argv, kde_env):
