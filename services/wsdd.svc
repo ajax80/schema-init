@@ -1,6 +1,8 @@
 name=wsdd
 exec=/usr/bin/wsdd
 args=--shortlog
+args=--interface
+args=eth0
 args=--workgroup
 args=AIRZDOWN
 user=wsdd
