@@ -49,6 +49,15 @@ if [ -d "$_envdir" ]; then
     unset _f
 fi
 
+# Qt routes qWarning/qCritical to the journal socket when /run/systemd/journal/
+# socket exists (it does -- schema-init's journal-sink owns it), NOT to stderr.
+# Every Qt abort in this session was therefore SILENT in this log: the real
+# message for the 2026-09-22 black screen ("kf.dbusaddons: DBus session bus not
+# found") only appeared once stderr logging was forced by hand, after the dead
+# broker had already been misdiagnosed as a stale plasmashell-shim. Force it so
+# the next failure names itself here. (Crystal 2026-09-22)
+export QT_FORCE_STDERR_LOGGING=1
+
 # Compositor: direct kwin_wayland on the DRM backend. --drm forces the DRM
 # platform (never the DISPLAY-autodetect nested-X11 trap); KWIN_DRM_DEVICES
 # (=/dev/dri/card1, from the autologin env) selects the KMS node. Running
@@ -59,6 +68,15 @@ fi
 # stable). kwin's stderr (kwin_*.debug rules from the autologin env) -> debug log.
 /usr/bin/kwin_wayland --drm --xwayland >/home/ajax80/kwin-debug.log 2>&1 &
 KWIN=$!
+# schema-dbus-session-run.sh's broker-health watchdog kills this script's PID
+# with a plain TERM when the session bus dies mid-session -- but a bare
+# `kill` on a shell process doesn't propagate to backgrounded children, so
+# without this trap kwin was left orphaned and running (still holding the
+# card) while the bus and everything depending on it was gone -- the exact
+# stuck state hand-recovered twice on 2026-09-22 (both SP4 cutover reboots).
+# Killing kwin here makes `wait $KWIN` below return, so the script exits
+# normally and the outer autologin loop's respawn actually takes over.
+trap 'kill "$KWIN" 2>/dev/null' TERM INT HUP
 i=0
 while [ $i -lt 60 ]; do
     [ -S "${XDG_RUNTIME_DIR}/wayland-0" ] && break
@@ -85,9 +103,14 @@ while [ $i -lt 20 ]; do
 done
 sleep 1
 
-# Shell. plasmashell-shim preloads mock_sd.so (fakes sd_booted so plasmashell
-# doesn't idle-spin waiting on the absent systemd --user).
-pgrep -x plasmashell >/dev/null || /usr/local/bin/plasmashell-shim &
+# Shell. plasmashell-shim (LD_PRELOAD=mock_sd.so, fakes sd_booted so
+# plasmashell doesn't idle-spin on absent systemd --user) crash-aborts on
+# every automatic boot post-SP4 (silent abort, no stderr) -- schema-dbus now
+# emulates enough of org.freedesktop.systemd1.Manager that plain plasmashell
+# runs fine without the fake; schema-plasma-watchdog.sh's fallback respawn
+# (plain plasmashell, no shim) proved this live 2026-09-22, stable 15+ min.
+# Launch bare directly instead of waiting on the watchdog's ~60-90s recovery.
+pgrep -x plasmashell >/dev/null || /usr/bin/plasmashell &
 
 # KDE session daemons ksmserver/startplasma normally start. Their
 # /etc/xdg/autostart entries carry X-systemd-skip=true, so the KDE autostart
