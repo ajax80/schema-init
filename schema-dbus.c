@@ -219,6 +219,31 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
     }
 }
 
+/* A connection's unique name disappears when it drops, exactly like a well-known
+   name losing its last owner. sdbus_names_disconnect only emits transitions for
+   well-known names, so a client owning none (e.g. a StatusNotifierItem, which
+   registers under its ":1.N") vanished with no NameOwnerChanged at all -- and
+   arg0=':1.N' watchers (QDBusServiceWatcher, what KDE's StatusNotifierWatcher
+   uses to notice a tray item's client exit) never fired, leaving immortal tray
+   icons. Emit NameOwnerChanged(:1.N, :1.N, "") for them. dying_id is skipped: the
+   conn is mid-teardown and its fd is about to close. */
+static void broadcast_unique_gone(const char *uniq, int dying_id) {
+    const char *empty = "";
+    for (int j = 0; j < g_nconns; j++) {
+        sdbus_conn *cc = g_conns[j];
+        if (cc->id == dying_id || !cc->matches) continue;
+        if (!sdbus_match_signal(cc->matches, SDBUS_DRIVER_NAME, "NameOwnerChanged",
+                                SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, NULL, 0, uniq))
+            continue;
+        DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME,
+                                                 "NameOwnerChanged");
+        dbus_message_append_args(s, DBUS_TYPE_STRING, &uniq, DBUS_TYPE_STRING, &uniq,
+                                 DBUS_TYPE_STRING, &empty, DBUS_TYPE_INVALID);
+        enqueue_signal(cc, s);
+        dbus_message_unref(s);
+    }
+}
+
 /* move c->out (driver/auth scratch bytes) into the ordered queue as one chunk */
 static void drain_scratch(sdbus_conn *c) {
     if (c->out_len > 0) {
@@ -475,6 +500,8 @@ static void add_conn(int fd) {
 
 static void remove_conn(sdbus_conn *c) {
     epoll_ctl(g_epfd, EPOLL_CTL_DEL, c->fd, NULL);
+    /* copy before disconnect frees it; watchers of the unique name need it below */
+    char *uniq = c->unique ? strdup(c->unique) : NULL;
     /* a conn can primary-own up to every name on the bus; size the transition
        buffer to that so RequestName-many-then-disconnect can't overflow it */
     int tcap = g_names->n_names; int nt = 0;
@@ -483,6 +510,7 @@ static void remove_conn(sdbus_conn *c) {
     c->unique = NULL;   /* names just freed this string; don't let signals deref it */
     if (nt) broadcast_transitions(NULL, t, nt);
     free(t);
+    if (uniq) { broadcast_unique_gone(uniq, c->id); free(uniq); }
     /* callee vanished: any caller still awaiting a reply from it would hang until
        its own timeout (many clients set none), so synthesize a NoReply error to
        each stranded caller before the entries are purged. */
@@ -571,6 +599,9 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
     if (pid > 0) return pid;
 
     /* --- child --- */
+    sigset_t none;
+    sigemptyset(&none);
+    sigprocmask(SIG_SETMASK, &none, NULL);   /* broker blocks SIGCHLD for its signalfd; don't leak it */
     setsid();
     struct passwd *pw = getpwnam(e->user);
     if (!pw) _exit(127);                 /* unknown User= -> fail closed, never run as root */

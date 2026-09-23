@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include "schema.h"
 
-#define MAX_SERVICES    64
+#define MAX_SERVICES    88
 #define MAX_ARGV        16
 #define MAX_ENV         16
 #define MAX_DEPS        8

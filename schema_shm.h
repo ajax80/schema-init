@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 #define SCHEMA_SHM_NAME       "/schema-init"
-#define SCHEMA_SHM_MAX        64
+#define SCHEMA_SHM_MAX        88
 #define SCHEMA_SHM_MAX_GROUPS 16
 
 typedef struct {
