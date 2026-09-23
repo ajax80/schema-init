@@ -1,0 +1,8 @@
+name=wsdd
+exec=/usr/bin/wsdd
+args=--shortlog
+args=--workgroup
+args=AIRZDOWN
+user=wsdd
+dep=network-manager
+critical=0
