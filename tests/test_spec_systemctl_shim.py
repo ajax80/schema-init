@@ -15,5 +15,6 @@ check("post diverts systemctl", "systemctl.real" in SPEC and "%post migrate" in 
 check("post is idempotent", "! -L /usr/bin/systemctl" in SPEC)
 check("postun restore gated on removal", "-eq 0" in SPEC and "%postun migrate" in SPEC)
 check("transfiletrigger re-diverts", "%transfiletriggerin migrate -- /usr/bin/systemctl" in SPEC)
+check("unit-install trigger drains queue", "%transfiletriggerin migrate -- /usr/lib/systemd/system\n%{_bindir}/schema-import || :" in SPEC)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

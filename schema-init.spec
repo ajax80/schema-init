@@ -101,6 +101,9 @@ if [ ! -L /usr/bin/systemctl ] && [ -f /usr/bin/systemctl ]; then
     ln -sf %{_bindir}/schema-systemctl /usr/bin/systemctl
 fi
 
+%transfiletriggerin migrate -- /usr/lib/systemd/system
+%{_bindir}/schema-import || :
+
 %files migrate
 %dir %{_libexecdir}/schema-init
 %dir %{_datadir}/%{name}/migrate
