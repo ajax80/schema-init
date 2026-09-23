@@ -87,6 +87,25 @@ if [ -n "$BROKER_PID" ] || [ -n "$STOCK_PID" ]; then
         [ -n "$BROKER_PID" ] && kill "$BROKER_PID" 2>/dev/null
         [ -n "$STOCK_PID" ] && kill "$STOCK_PID" 2>/dev/null
     ) &
+
+    # Nothing previously monitored the broker's own health once the session
+    # was up -- if it (or the stock fallback) dies mid-session but kwin stays
+    # alive, every session app is left holding a dead bus connection with no
+    # automatic recovery (found the hard way on the first reboot of the SP4
+    # cutover 2026-09-22: schema-dbus died independently mid-boot, kwin never
+    # noticed, and bringing plasmashell back up took hand recovery). Watch
+    # the broker's PID here too; if it disappears while the session is still
+    # up, kill the session so the autologin loop's normal crash-restart path
+    # (re-forks kwin, re-runs this whole script, starts a fresh broker with a
+    # correct env) takes over instead of leaving a half-dead session running.
+    (
+        session_pid=$PPID
+        watch_pid=${BROKER_PID:-$STOCK_PID}
+        while kill -0 "$session_pid" 2>/dev/null && kill -0 "$watch_pid" 2>/dev/null; do
+            sleep 2
+        done
+        kill -0 "$watch_pid" 2>/dev/null || kill "$session_pid" 2>/dev/null
+    ) &
 fi
 
 exec "$@"

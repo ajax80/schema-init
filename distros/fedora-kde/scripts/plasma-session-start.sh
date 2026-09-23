@@ -95,10 +95,29 @@ pgrep -x plasmashell >/dev/null || /usr/local/bin/plasmashell-shim &
 # management, no global shortcuts, no polkit auth prompts. Start in-session so
 # they inherit the logind session (polkit-kde needs it to resolve its subject).
 # Guarded against doubles (each is also a single-instance bus name).
+#
+# kactivitymanagerd and xdg-desktop-portal-kde are launched here too, not left
+# to D-Bus activation: both have .service files under
+# /usr/share/dbus-1/services, but an activated child only inherits
+# schema-dbus's own process environ (see sdbus_activate_build_env in
+# sdbus_activate.h), and that environ can be missing DBUS_SESSION_BUS_ADDRESS
+# depending on how the broker itself was started (schema-dbus-session-run.sh
+# always exports it first, but a hand-restarted broker may not) -- the
+# activated child then can't reach dbus_bus_get(DBUS_BUS_SESSION) and exits
+# before claiming its name. Direct launch here sidesteps that: it inherits
+# this script's own env, which is always correct. Found 2026-09-22 (first
+# reboot of the SP4 session-bus cutover): without kactivitymanagerd,
+# plasmashell aborted shell load; without xdg-desktop-portal-kde,
+# xdg-desktop-portal silently fell back to the gtk backend, breaking every
+# KDE-only portal interface (InputCapture, ScreenCast, GlobalShortcuts,
+# Clipboard, Wallpaper, RemoteDesktop, Usb) -- e.g. deskflow-core's
+# InputCapture call failed with UnknownMethod.
 for _svc in /usr/bin/kded6 \
             /usr/libexec/org_kde_powerdevil \
             /usr/libexec/kglobalacceld \
-            /usr/libexec/kf6/polkit-kde-authentication-agent-1; do
+            /usr/libexec/kf6/polkit-kde-authentication-agent-1 \
+            /usr/libexec/kactivitymanagerd \
+            /usr/libexec/xdg-desktop-portal-kde; do
     [ -x "$_svc" ] && ! pgrep -f "$_svc" >/dev/null 2>&1 && "$_svc" &
 done
 
