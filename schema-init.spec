@@ -107,6 +107,7 @@ fi
 %{_bindir}/schema-migrate
 %{_bindir}/schema-udev
 %{_bindir}/schema-systemctl
+%{_bindir}/schema-import
 %{_libexecdir}/schema-init/schema-flip-apply
 %{_libexecdir}/schema-init/schema-udev-flip-arm.sh
 %{_libexecdir}/schema-init/schema-udev-flip-backup.sh

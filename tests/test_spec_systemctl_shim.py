@@ -10,6 +10,7 @@ def check(name, cond):
 
 check("shim in migrate_bins", "schema-systemctl" in SPEC and "migrate_bins" in SPEC)
 check("shim shipped in -migrate %files", "%{_bindir}/schema-systemctl" in SPEC)
+check("importer shipped in -migrate %files", "%{_bindir}/schema-import\n" in SPEC)
 check("post diverts systemctl", "systemctl.real" in SPEC and "%post migrate" in SPEC)
 check("post is idempotent", "! -L /usr/bin/systemctl" in SPEC)
 check("postun restore gated on removal", "-eq 0" in SPEC and "%postun migrate" in SPEC)
