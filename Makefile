@@ -129,6 +129,7 @@ install-migrate: schema-udev schema-systemctl verify-rules-live
 	install -m 0755 distros/fedora-installer/migrate/schema-migrate.py $(DESTDIR)$(BINDIR)/schema-migrate
 	install -m 0755 schema-udev $(DESTDIR)$(BINDIR)/schema-udev
 	install -m 0755 schema-systemctl $(DESTDIR)$(BINDIR)/schema-systemctl
+	install -m 0755 distros/fedora-installer/migrate/schema-import.py $(DESTDIR)$(BINDIR)/schema-import
 	install -m 0755 distros/fedora-installer/schema-flip-apply.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-flip-apply
 	install -m 0755 scripts/schema-udev-flip-arm.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-arm.sh
 	install -m 0755 scripts/schema-udev-flip-backup.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-backup.sh
