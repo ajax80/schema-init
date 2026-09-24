@@ -4,6 +4,8 @@
 #include <string.h>
 
 static int g_ntrans;
+static const sdbus_svctab *g_tab;
+static const sdbus_policy *g_pol;
 static sdbus_transition g_trans[8];
 static void record_broadcast(void *ctx, sdbus_transition *t, int n) {
     (void)ctx;
@@ -19,7 +21,7 @@ static sdbus_msg do_call(sdbus_conn *c, sdbus_names *names, DBusMessage *call) {
     dbus_message_set_serial(call, 100);
     sdbus_msg cm; memset(&cm, 0, sizeof cm); cm.msg = call; cm.member = dbus_message_get_member(call);
     sdbus_conn *all[] = { c };
-    int rc = sdbus_driver_dispatch(&cm, c, names, all, 1, record_broadcast, NULL);
+    int rc = sdbus_driver_dispatch(&cm, c, names, all, 1, g_tab, g_pol, record_broadcast, NULL);
     assert(rc == 0);
     sdbus_msg reply;
     int taken = sdbus_codec_take(c->out, c->out_len, &reply);
@@ -154,14 +156,111 @@ int main(void) {
     assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_NAME_HAS_NO_OWNER));
     sdbus_msg_free(&r); dbus_message_unref(gccn);
 
-    /* StartServiceByName -> ServiceUnknown error (v1.1 deferral) */
-    DBusMessage *ssn = mkcall("StartServiceByName");
-    const char *svc = "org.example.svc"; dbus_uint32_t z = 0;
-    dbus_message_append_args(ssn, DBUS_TYPE_STRING, &svc, DBUS_TYPE_UINT32, &z, DBUS_TYPE_INVALID);
-    r = do_call(&c, names, ssn);
-    assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_ERROR);
-    assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_SERVICE_UNKNOWN));
-    sdbus_msg_free(&r); dbus_message_unref(ssn);
+    /* Introspect -> XML naming the driver interface */
+    DBusMessage *intro = dbus_message_new_method_call(SDBUS_DRIVER_NAME, SDBUS_DRIVER_PATH,
+                                                      "org.freedesktop.DBus.Introspectable", "Introspect");
+    r = do_call(&c, names, intro);
+    const char *xml = NULL;
+    assert(dbus_message_get_args(r.msg, &e, DBUS_TYPE_STRING, &xml, DBUS_TYPE_INVALID));
+    assert(strstr(xml, "<interface name=\"org.freedesktop.DBus\">"));
+    assert(strstr(xml, "ListQueuedOwners"));
+    sdbus_msg_free(&r); dbus_message_unref(intro);
+
+    /* Properties: Get Features -> variant(as), GetAll -> 2 entries,
+       Set -> PropertyReadOnly, unknown -> UnknownProperty */
+    const char *dif = SDBUS_DRIVER_NAME, *feat = "Features", *bogusp = "Nope";
+    DBusMessage *pg = dbus_message_new_method_call(SDBUS_DRIVER_NAME, SDBUS_DRIVER_PATH,
+                                                   "org.freedesktop.DBus.Properties", "Get");
+    dbus_message_append_args(pg, DBUS_TYPE_STRING, &dif, DBUS_TYPE_STRING, &feat, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, pg);
+    assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_METHOD_RETURN);
+    assert(!strcmp(dbus_message_get_signature(r.msg), "v"));
+    sdbus_msg_free(&r); dbus_message_unref(pg);
+
+    DBusMessage *pa = dbus_message_new_method_call(SDBUS_DRIVER_NAME, SDBUS_DRIVER_PATH,
+                                                   "org.freedesktop.DBus.Properties", "GetAll");
+    dbus_message_append_args(pa, DBUS_TYPE_STRING, &dif, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, pa);
+    assert(!strcmp(dbus_message_get_signature(r.msg), "a{sv}"));
+    { DBusMessageIter it, arr; int n = 0;
+      dbus_message_iter_init(r.msg, &it); dbus_message_iter_recurse(&it, &arr);
+      while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_DICT_ENTRY) { n++; dbus_message_iter_next(&arr); }
+      assert(n == 2); }
+    sdbus_msg_free(&r); dbus_message_unref(pa);
+
+    DBusMessage *pu = dbus_message_new_method_call(SDBUS_DRIVER_NAME, SDBUS_DRIVER_PATH,
+                                                   "org.freedesktop.DBus.Properties", "Get");
+    dbus_message_append_args(pu, DBUS_TYPE_STRING, &dif, DBUS_TYPE_STRING, &bogusp, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, pu);
+    assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_UNKNOWN_PROPERTY));
+    sdbus_msg_free(&r); dbus_message_unref(pu);
+
+    DBusMessage *ps = dbus_message_new_method_call(SDBUS_DRIVER_NAME, SDBUS_DRIVER_PATH,
+                                                   "org.freedesktop.DBus.Properties", "Set");
+    dbus_message_append_args(ps, DBUS_TYPE_STRING, &dif, DBUS_TYPE_STRING, &feat, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, ps);
+    assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_PROPERTY_READ_ONLY));
+    sdbus_msg_free(&r); dbus_message_unref(ps);
+
+    /* ListQueuedOwners: primary owner first, then the queue */
+    { sdbus_transition t[1]; int nt = 0;
+      assert(sdbus_names_request(names, c.id, "org.q", 0, t, &nt) == SDBUS_REQ_PRIMARY_OWNER);
+      sdbus_names_alloc_unique(names, 2);
+      assert(sdbus_names_request(names, 2, "org.q", 0, t, &nt) == SDBUS_REQ_IN_QUEUE); }
+    const char *qn = "org.q";
+    DBusMessage *lq = mkcall("ListQueuedOwners");
+    dbus_message_append_args(lq, DBUS_TYPE_STRING, &qn, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, lq);
+    { char **v = NULL; int n = 0;
+      assert(dbus_message_get_args(r.msg, &e, DBUS_TYPE_ARRAY, DBUS_TYPE_STRING, &v, &n, DBUS_TYPE_INVALID));
+      assert(n == 2 && !strcmp(v[0], ":1.1") && !strcmp(v[1], ":1.2"));
+      dbus_free_string_array(v); }
+    sdbus_msg_free(&r); dbus_message_unref(lq);
+
+    const char *nobody = "org.nobody";
+    DBusMessage *lqn = mkcall("ListQueuedOwners");
+    dbus_message_append_args(lqn, DBUS_TYPE_STRING, &nobody, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, lqn);
+    assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_NAME_HAS_NO_OWNER));
+    sdbus_msg_free(&r); dbus_message_unref(lqn);
+
+    /* RequestName honors own policy: denied name -> AccessDenied, allowed -> owner */
+    {
+        sdbus_policy *pol = sdbus_policy_parse("context = default\ndeny = own:*\nallow = own:org.ok\n");
+        g_pol = pol;
+        const char *deny = "org.secret", *ok = "org.ok"; dbus_uint32_t fl = 0;
+        DBusMessage *rd = mkcall("RequestName");
+        dbus_message_append_args(rd, DBUS_TYPE_STRING, &deny, DBUS_TYPE_UINT32, &fl, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, rd);
+        assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_ACCESS_DENIED));
+        assert(sdbus_names_owner(names, "org.secret") < 0);
+        sdbus_msg_free(&r); dbus_message_unref(rd);
+        DBusMessage *ro = mkcall("RequestName");
+        dbus_message_append_args(ro, DBUS_TYPE_STRING, &ok, DBUS_TYPE_UINT32, &fl, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, ro);
+        dbus_uint32_t rc = 0;
+        assert(dbus_message_get_args(r.msg, &e, DBUS_TYPE_UINT32, &rc, DBUS_TYPE_INVALID));
+        assert(rc == SDBUS_REQ_PRIMARY_OWNER);
+        sdbus_msg_free(&r); dbus_message_unref(ro);
+        const char *uq = ":1.99";
+        DBusMessage *ru = mkcall("RequestName");
+        dbus_message_append_args(ru, DBUS_TYPE_STRING, &uq, DBUS_TYPE_UINT32, &fl, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, ru);
+        assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_INVALID_ARGS));
+        sdbus_msg_free(&r); dbus_message_unref(ru);
+        g_pol = NULL;
+        sdbus_policy_free(pol);
+    }
+
+    /* ListActivatableNames: driver name + every service-table entry */
+    sdbus_svc_ent ents[2] = { { "org.act.one", NULL, NULL }, { "org.act.two", NULL, NULL } };
+    sdbus_svctab tab = { ents, 2 };
+    g_tab = &tab;
+    DBusMessage *lan = mkcall("ListActivatableNames");
+    r = do_call(&c, names, lan);
+    assert(strv_has(&r, SDBUS_DRIVER_NAME) && strv_has(&r, "org.act.one") && strv_has(&r, "org.act.two"));
+    sdbus_msg_free(&r); dbus_message_unref(lan);
+    g_tab = NULL;
 
     /* Ping -> empty return */
     DBusMessage *ping = mkcall("Ping");
@@ -203,7 +302,7 @@ int main(void) {
     dbus_message_set_serial(bogus, 200);
     sdbus_msg bm; memset(&bm, 0, sizeof bm); bm.msg = bogus; bm.member = "NoSuchMethod";
     sdbus_conn *all[] = { &c };
-    assert(sdbus_driver_dispatch(&bm, &c, names, all, 1, record_broadcast, NULL) == -1);
+    assert(sdbus_driver_dispatch(&bm, &c, names, all, 1, NULL, NULL, record_broadcast, NULL) == -1);
     dbus_message_unref(bogus);
 
     sdbus_conn_free_fields(&c);

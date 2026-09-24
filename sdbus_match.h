@@ -11,7 +11,7 @@
 #include <string.h>
 
 typedef struct {
-    char *type, *interface, *member, *path, *path_namespace, *sender;
+    char *type, *interface, *member, *path, *path_namespace, *sender, *destination;
     char *arg0, *arg0namespace;
     char *raw;                 /* verbatim rule, for exact-string removal */
 } sdbus_match_rule;
@@ -23,7 +23,7 @@ static inline sdbus_matchset *sdbus_match_new(void) { return calloc(1, sizeof(sd
 
 static inline void sdbus__rule_clear(sdbus_match_rule *r) {
     free(r->type); free(r->interface); free(r->member);
-    free(r->path); free(r->path_namespace); free(r->sender);
+    free(r->path); free(r->path_namespace); free(r->sender); free(r->destination);
     free(r->arg0); free(r->arg0namespace); free(r->raw);
     memset(r, 0, sizeof *r);
 }
@@ -57,6 +57,7 @@ static inline int sdbus__parse_rule(const char *rule, sdbus_match_rule *r) {
         else if (klen == 4 && !strncmp(k, "path", 4)) slot = &r->path;
         else if (klen == 14 && !strncmp(k, "path_namespace", 14)) slot = &r->path_namespace;
         else if (klen == 6 && !strncmp(k, "sender", 6)) slot = &r->sender;
+        else if (klen == 11 && !strncmp(k, "destination", 11)) slot = &r->destination;
         else if (klen == 4 && !strncmp(k, "arg0", 4)) slot = &r->arg0;
         else if (klen == 13 && !strncmp(k, "arg0namespace", 13)) slot = &r->arg0namespace;
         if (slot) { free(*slot); *slot = val; } else free(val);   /* unknown key ignored */
@@ -142,6 +143,31 @@ static inline int sdbus_match_signal(sdbus_matchset *m, const char *interface,
         if (!sdbus__eqornull(r->member, member)) continue;
         if (!sdbus__eqornull(r->path, path)) continue;
         if (!sdbus__sender_match(r->sender, sender_uniq, sender_owned, n_owned)) continue;
+        if (!sdbus__ns_match(r->path_namespace, path)) continue;
+        if (!sdbus__arg0_match(r, arg0)) continue;
+        return 1;
+    }
+    return 0;
+}
+
+/* BecomeMonitor filtering: like sdbus_match_signal but for any message type
+   (type= may name method_call/method_return/error/signal) and with destination=.
+   sender/destination constraints match the peer's unique name or any well-known
+   name it owns. A set with no rules accepts everything. */
+static inline int sdbus_match_message(sdbus_matchset *m, const char *type,
+                                      const char *interface, const char *member,
+                                      const char *path, const char *arg0,
+                                      const char *sender, const char **sender_owned, int n_sender_owned,
+                                      const char *dest, const char **dest_owned, int n_dest_owned) {
+    if (!m || m->n == 0) return 1;
+    for (int i = 0; i < m->n; i++) {
+        sdbus_match_rule *r = &m->rules[i];
+        if (!sdbus__eqornull(r->type, type)) continue;
+        if (!sdbus__eqornull(r->interface, interface)) continue;
+        if (!sdbus__eqornull(r->member, member)) continue;
+        if (!sdbus__eqornull(r->path, path)) continue;
+        if (!sdbus__sender_match(r->sender, sender, sender_owned, n_sender_owned)) continue;
+        if (!sdbus__sender_match(r->destination, dest, dest_owned, n_dest_owned)) continue;
         if (!sdbus__ns_match(r->path_namespace, path)) continue;
         if (!sdbus__arg0_match(r, arg0)) continue;
         return 1;

@@ -45,6 +45,13 @@ static unsigned       g_next_id = 1;
 static dbus_uint32_t  g_bcast_serial;
 static sdbus_svctab  *g_svctab;
 static sdbus_acts    *g_acts;
+#define SDBUS_MAX_SVCDIRS 8
+static const char    *g_svcdirs[SDBUS_MAX_SVCDIRS];
+static int            g_nsvcdirs;
+static const char    *g_maskfile;
+static const char    *g_default_user;
+static char         **g_actenv;       /* session bus: env handed to activated services */
+static int            g_nmonitors;    /* conns that called BecomeMonitor */
 static char           g_bus_addr[256];
 static int            g_system_bus;   /* Decision 1, SP4 design doc: --system present
                                           vs absent is the single mode signal gating
@@ -52,7 +59,6 @@ static int            g_system_bus;   /* Decision 1, SP4 design doc: --system pr
 #define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
 #define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
-#define SDBUS_MAX_SVCDIRS 8
 
 static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
 
@@ -111,6 +117,59 @@ static int flush_conn(sdbus_conn *c) {
     return 0;
 }
 
+/* ---- BecomeMonitor: copy traffic to monitor connections ---- */
+static const char *wire_type_name(int t) {
+    switch (t) {
+    case SDBUS_TYPE_METHOD_CALL:   return "method_call";
+    case SDBUS_TYPE_METHOD_RETURN: return "method_return";
+    case SDBUS_TYPE_ERROR:         return "error";
+    case SDBUS_TYPE_SIGNAL:        return "signal";
+    }
+    return NULL;
+}
+
+/* b/len holds one or more complete marshalled messages; fds belong to the first
+   and are duplicated, never consumed. skip_id is a conn that must not get a copy
+   (the monitor's own traffic). */
+static void monitor_copy(const unsigned char *b, int len, const int *fds, int nfds, int skip_id) {
+    if (!g_nmonitors) return;
+    int off = 0;
+    while (off < len) {
+        sdbus_wire_msg w;
+        int taken = sdbus_wire_parse(b + off, len - off, &w);
+        if (taken <= 0) return;
+        int mfds = off == 0 ? nfds : 0;
+        const char **sown = NULL, **down = NULL; int nsown = 0, ndown = 0;
+        const char *dest = w.destination;
+        int sid = sdbus__resolve_conn_id(g_names, g_conns, g_nconns, w.sender);
+        int did = sdbus__resolve_conn_id(g_names, g_conns, g_nconns, w.destination);
+        if (sid >= 0) nsown = sdbus_names_owned_by(g_names, sid, &sown);
+        if (did >= 0) {
+            ndown = sdbus_names_owned_by(g_names, did, &down);
+            const char *du = sdbus_names_unique(g_names, did);
+            if (du) dest = du;
+        }
+        for (int i = 0; i < g_nconns; i++) {
+            sdbus_conn *m = g_conns[i];
+            if (!m->is_monitor || m->id == skip_id) continue;
+            if (mfds && !m->negotiated_fd) continue;
+            if (!sdbus_match_message(m->mon_matches, wire_type_name(w.type), w.interface,
+                                     w.member, w.path, w.arg0,
+                                     w.sender, sown, nsown, dest, down, ndown))
+                continue;
+            int dup[SDBUS_MAX_PENDING_FDS], nd = 0;
+            for (int k = 0; k < mfds && k < SDBUS_MAX_PENDING_FDS; k++) {
+                int fd = fcntl(fds[k], F_DUPFD_CLOEXEC, 0);
+                if (fd >= 0) dup[nd++] = fd;
+            }
+            sdbus_conn_enqueue(m, b + off, taken, dup, nd);
+            ep_update(m);
+        }
+        free(sown); free(down);
+        off += taken;
+    }
+}
+
 /* ---- signal broadcast for name transitions ---- */
 static void enqueue_signal(sdbus_conn *dst, DBusMessage *sig) {
     dbus_message_set_serial(sig, ++g_bcast_serial);
@@ -119,9 +178,24 @@ static void enqueue_signal(sdbus_conn *dst, DBusMessage *sig) {
     char *b = NULL; int len = 0;
     if (dbus_message_marshal(sig, &b, &len)) {
         sdbus_conn_enqueue(dst, (unsigned char *)b, len, NULL, 0);
+        if (strcmp(dbus_message_get_member(sig), "NameOwnerChanged"))
+            monitor_copy((unsigned char *)b, len, NULL, 0, -1);
         dbus_free(b);
         ep_update(dst);
     }
+}
+
+/* one broadcast NameOwnerChanged for monitors (listeners get per-destination copies) */
+static void monitor_name_owner_changed(const char *name, const char *oldo, const char *newo) {
+    if (!g_nmonitors) return;
+    DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, "NameOwnerChanged");
+    dbus_message_append_args(s, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldo,
+                             DBUS_TYPE_STRING, &newo, DBUS_TYPE_INVALID);
+    dbus_message_set_serial(s, ++g_bcast_serial);
+    dbus_message_set_sender(s, SDBUS_DRIVER_NAME);
+    char *b = NULL; int len = 0;
+    if (dbus_message_marshal(s, &b, &len)) { monitor_copy((unsigned char *)b, len, NULL, 0, -1); dbus_free(b); }
+    dbus_message_unref(s);
 }
 
 static const char *unique_or_empty(int conn_id) {
@@ -183,6 +257,7 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
         const char *name = t[i].name;
         const char *oldo = unique_or_empty(t[i].old_owner);
         const char *newo = unique_or_empty(t[i].new_owner);
+        monitor_name_owner_changed(name, oldo, newo);
 
         /* NameOwnerChanged -> every conn whose match set accepts it */
         for (int j = 0; j < g_nconns; j++) {
@@ -229,6 +304,7 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
    conn is mid-teardown and its fd is about to close. */
 static void broadcast_unique_gone(const char *uniq, int dying_id) {
     const char *empty = "";
+    monitor_name_owner_changed(uniq, uniq, empty);
     for (int j = 0; j < g_nconns; j++) {
         sdbus_conn *cc = g_conns[j];
         if (cc->id == dying_id || !cc->matches) continue;
@@ -247,6 +323,7 @@ static void broadcast_unique_gone(const char *uniq, int dying_id) {
 /* move c->out (driver/auth scratch bytes) into the ordered queue as one chunk */
 static void drain_scratch(sdbus_conn *c) {
     if (c->out_len > 0) {
+        if (c->said_hello && !c->is_monitor) monitor_copy(c->out, c->out_len, NULL, 0, -1);
         sdbus_conn_enqueue(c, c->out, c->out_len, NULL, 0);
         c->out_len = 0;
     }
@@ -264,7 +341,11 @@ static void synth_error_wire(sdbus_conn *c, uint32_t reply_serial,
     if (c->unique) dbus_message_set_destination(err, c->unique);
     dbus_message_append_args(err, DBUS_TYPE_STRING, &text, DBUS_TYPE_INVALID);
     char *b = NULL; int len = 0;
-    if (dbus_message_marshal(err, &b, &len)) { sdbus_conn_enqueue(c, (unsigned char *)b, len, NULL, 0); dbus_free(b); }
+    if (dbus_message_marshal(err, &b, &len)) {
+        sdbus_conn_enqueue(c, (unsigned char *)b, len, NULL, 0);
+        if (!c->is_monitor) monitor_copy((unsigned char *)b, len, NULL, 0, -1);
+        dbus_free(b);
+    }
     dbus_message_unref(err);
 }
 
@@ -365,6 +446,20 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         return;
     }
 
+    if (c->is_monitor) {   /* monitors are receive-only: drop anything they send */
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
+    if (g_nmonitors) {
+        unsigned char *mb = NULL; int ml = 0;
+        if (c->unique && sdbus_wire_reforward(raw, w, c->unique, &mb, &ml) == 0) {
+            monitor_copy(mb, ml, c->pending_fds, nfds, c->id);
+            free(mb);
+        } else {
+            monitor_copy(raw, rawlen, c->pending_fds, nfds, c->id);
+        }
+    }
+
     int to_driver = w->destination && !strcmp(w->destination, SDBUS_DRIVER_NAME);
     if (!w->destination && w->interface && !strcmp(w->interface, "org.freedesktop.DBus.Peer"))
         to_driver = 1;   /* Peer methods (Ping/GetMachineId) may omit the destination */
@@ -420,12 +515,113 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         return;
     }
 
+    if (to_driver && w->member && !strcmp(w->member, "BecomeMonitor")) {
+        sdbus_msg dm;
+        int parsed = (sdbus_codec_take(raw, rawlen, &dm) == rawlen);
+        sdbus_matchset *rules = NULL;
+        if (!parsed) {
+            synth_error_wire(c, w->serial, DBUS_ERROR_FAILED, "cannot parse message");
+        } else if (!(c->uid == 0 || c->uid == getuid())) {
+            sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED, "BecomeMonitor not permitted");
+        } else {
+            char **rv = NULL; int nr = 0; dbus_uint32_t flags = 1;
+            DBusError e; dbus_error_init(&e);
+            int ok = dbus_message_get_args(dm.msg, &e, DBUS_TYPE_ARRAY, DBUS_TYPE_STRING, &rv, &nr,
+                                           DBUS_TYPE_UINT32, &flags, DBUS_TYPE_INVALID);
+            dbus_error_free(&e);
+            if (!ok || flags != 0) {
+                sdbus__reply_error(c, dm.msg, DBUS_ERROR_INVALID_ARGS, "BecomeMonitor expects (as rules, u 0)");
+            } else {
+                rules = sdbus_match_new();
+                for (int i = 0; i < nr && rules; i++)
+                    if (sdbus_match_add(rules, rv[i]) != 0) { sdbus_match_free(rules); rules = NULL; }
+                if (!rules) sdbus__reply_error(c, dm.msg, DBUS_ERROR_MATCH_RULE_INVALID, "invalid match rule");
+                else        sdbus__reply_empty(c, dm.msg);
+            }
+            if (rv) dbus_free_string_array(rv);
+        }
+        if (parsed) sdbus_msg_free(&dm);
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        if (rules) {
+            /* the monitor gives up its names and stops being addressable; NameLost
+               for its own unique name is how clients (busctl) learn it took effect */
+            char *uniq = c->unique ? strdup(c->unique) : NULL;
+            if (uniq) {
+                DBusMessage *nl = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, "NameLost");
+                const char *un = uniq;
+                dbus_message_append_args(nl, DBUS_TYPE_STRING, &un, DBUS_TYPE_INVALID);
+                enqueue_signal(c, nl);
+                dbus_message_unref(nl);
+            }
+            int tcap = g_names->n_names; int nt = 0;
+            sdbus_transition *t = tcap > 0 ? malloc(tcap * sizeof *t) : NULL;
+            sdbus_names_disconnect(g_names, c->id, t, &nt, tcap);
+            c->unique = NULL;
+            if (nt) broadcast_transitions(NULL, t, nt);
+            free(t);
+            if (uniq) { broadcast_unique_gone(uniq, c->id); free(uniq); }
+            if (c->matches) { sdbus_match_free(c->matches); c->matches = NULL; }
+            c->mon_matches = rules;
+            c->is_monitor = 1;
+            g_nmonitors++;
+        }
+        return;
+    }
+
+    if (to_driver && w->member &&
+        (!strcmp(w->member, "ReloadConfig") || !strcmp(w->member, "UpdateActivationEnvironment"))) {
+        sdbus_msg dm;
+        int parsed = (sdbus_codec_take(raw, rawlen, &dm) == rawlen);
+        int privileged = c->uid == 0 || (uid_t)c->uid == getuid();
+        if (!parsed) {
+            synth_error_wire(c, w->serial, DBUS_ERROR_FAILED, "cannot parse message");
+        } else if (!strcmp(w->member, "ReloadConfig")) {
+            if (!privileged) {
+                sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED, "ReloadConfig not permitted");
+            } else {
+                sdbus_svctab_free(g_svctab);
+                g_svctab = sdbus_svctab_parse_dirs_masked(g_svcdirs, g_nsvcdirs, g_maskfile, g_default_user);
+                fprintf(stderr, "schema-dbus: ReloadConfig: %d activatable services\n", g_svctab->n);
+                sdbus__reply_empty(c, dm.msg);
+            }
+        } else if (g_system_bus) {
+            sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED,
+                               "Cannot change activation environment on a system bus.");
+        } else if (!privileged) {
+            sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED,
+                               "UpdateActivationEnvironment not permitted");
+        } else {
+            DBusMessageIter it, arr, ent;
+            int ok = dbus_message_iter_init(dm.msg, &it) &&
+                     !strcmp(dbus_message_get_signature(dm.msg), "a{ss}");
+            if (ok) {
+                dbus_message_iter_recurse(&it, &arr);
+                while (ok && dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_DICT_ENTRY) {
+                    const char *k, *v;
+                    dbus_message_iter_recurse(&arr, &ent);
+                    dbus_message_iter_get_basic(&ent, &k);
+                    dbus_message_iter_next(&ent);
+                    dbus_message_iter_get_basic(&ent, &v);
+                    if (sdbus_activate_env_set(&g_actenv, k, v) != 0) ok = 0;
+                    dbus_message_iter_next(&arr);
+                }
+            }
+            if (ok) sdbus__reply_empty(c, dm.msg);
+            else    sdbus__reply_error(c, dm.msg, DBUS_ERROR_INVALID_ARGS, "expected a{ss} of valid names");
+        }
+        if (parsed) sdbus_msg_free(&dm);
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
+
     if (to_driver) {
         /* driver methods never carry fds -> libdbus can demarshal to read args */
         sdbus_msg dm;
         if (sdbus_codec_take(raw, rawlen, &dm) == rawlen) {
             int rc = sdbus_driver_dispatch(&dm, c, g_names, g_conns, g_nconns,
-                                           broadcast_transitions, NULL);
+                                           g_svctab, g_policy, broadcast_transitions, NULL);
             if (rc < 0)
                 synth_error_wire(c, w->serial, DBUS_ERROR_UNKNOWN_METHOD, "unknown method");
             sdbus_msg_free(&dm);
@@ -458,7 +654,7 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         if (sdbus_wire_reforward(raw, w, c->unique, &bytes, &len) == 0) {
             for (int i = 0; i < nt; i++) {
                 sdbus_conn *dst = conn_by_id(targets[i]);
-                if (!dst) continue;
+                if (!dst || dst->is_monitor) continue;
                 if (i == 0 && nfds > 0) { sdbus_conn_enqueue(dst, bytes, len, c->pending_fds, nfds); transferred = 1; }
                 else                    sdbus_conn_enqueue(dst, bytes, len, NULL, 0);
                 ep_update(dst);
@@ -500,6 +696,7 @@ static void add_conn(int fd) {
 
 static void remove_conn(sdbus_conn *c) {
     epoll_ctl(g_epfd, EPOLL_CTL_DEL, c->fd, NULL);
+    if (c->is_monitor) g_nmonitors--;
     /* copy before disconnect frees it; watchers of the unique name need it below */
     char *uniq = c->unique ? strdup(c->unique) : NULL;
     /* a conn can primary-own up to every name on the bus; size the transition
@@ -611,7 +808,7 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
         if (setuid(pw->pw_uid) != 0) _exit(127);
     }
     extern char **environ;
-    char **env = sdbus_activate_build_env(g_system_bus, bus_addr, environ);
+    char **env = sdbus_activate_build_env(g_system_bus, bus_addr, g_actenv ? g_actenv : environ);
     execve(e->argv[0], e->argv, env);
     _exit(127);                         /* exec failed */
 }
@@ -655,21 +852,21 @@ int main(int argc, char **argv) {
     struct passwd *self_pw = g_system_bus ? NULL : getpwuid(getuid());
     const char *default_user = g_system_bus ? "root" : (self_pw ? self_pw->pw_name : "root");
 
-    const char *dirs[SDBUS_MAX_SVCDIRS];
-    int ndirs = 0;
-    char *svcdirs_buf = NULL;
     if (svcdirs_env) {
-        svcdirs_buf = strdup(svcdirs_env);
-        for (char *p = strtok(svcdirs_buf, ":"); p && ndirs < SDBUS_MAX_SVCDIRS; p = strtok(NULL, ":"))
-            dirs[ndirs++] = p;
+        char *svcdirs_buf = strdup(svcdirs_env);   /* kept for ReloadConfig */
+        for (char *p = strtok(svcdirs_buf, ":"); p && g_nsvcdirs < SDBUS_MAX_SVCDIRS; p = strtok(NULL, ":"))
+            g_svcdirs[g_nsvcdirs++] = p;
     } else {
-        dirs[0] = svcdir ? svcdir : SDBUS_SVC_DIR;
-        ndirs = 1;
+        g_svcdirs[0] = svcdir ? svcdir : SDBUS_SVC_DIR;
+        g_nsvcdirs = 1;
     }
-    g_svctab = sdbus_svctab_parse_dirs_masked(dirs, ndirs,
-                                              maskfile ? maskfile : SDBUS_MASK_FILE,
-                                              default_user);
-    free(svcdirs_buf);
+    g_maskfile = maskfile ? maskfile : SDBUS_MASK_FILE;
+    g_default_user = default_user ? strdup(default_user) : "root";
+    g_svctab = sdbus_svctab_parse_dirs_masked(g_svcdirs, g_nsvcdirs, g_maskfile, g_default_user);
+    if (!g_system_bus) {
+        extern char **environ;
+        g_actenv = sdbus_activate_env_dup(environ);
+    }
     g_acts = sdbus_acts_new();
     fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 

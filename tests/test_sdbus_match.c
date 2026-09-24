@@ -102,6 +102,21 @@ int main(void) {
     sdbus_match_free(m); sdbus_match_free(m2); sdbus_match_free(m3); sdbus_match_free(m4);
     sdbus_match_free(m5); sdbus_match_free(m6); sdbus_match_free(m7); sdbus_match_free(m8);
     sdbus_match_free(m9);
+    /* monitor matching: empty set = all; type/destination/well-known sender */
+    {
+        assert(sdbus_match_message(NULL, "method_call", "i", "m", "/p", NULL, ":1.1", NULL, 0, ":1.2", NULL, 0));
+        sdbus_matchset *mm = sdbus_match_new();
+        assert(sdbus_match_message(mm, "error", NULL, NULL, NULL, NULL, ":1.1", NULL, 0, NULL, NULL, 0));
+        assert(sdbus_match_add(mm, "type='method_call',destination='org.w'") == 0);
+        const char *own[] = { "org.w" };
+        assert(sdbus_match_message(mm, "method_call", "i", "m", "/p", NULL, ":1.1", NULL, 0, ":1.2", own, 1));
+        assert(!sdbus_match_message(mm, "method_return", NULL, NULL, NULL, NULL, ":1.1", NULL, 0, ":1.2", own, 1));
+        assert(!sdbus_match_message(mm, "method_call", "i", "m", "/p", NULL, ":1.1", NULL, 0, ":1.3", NULL, 0));
+        assert(sdbus_match_add(mm, "sender='org.w'") == 0);
+        assert(sdbus_match_message(mm, "signal", "i", "s", "/p", NULL, ":1.2", own, 1, NULL, NULL, 0));
+        assert(!sdbus_match_message(mm, "signal", "i", "s", "/p", NULL, ":1.9", NULL, 0, NULL, NULL, 0));
+        sdbus_match_free(mm);
+    }
     printf("all sdbus_match tests passed\n");
     return 0;
 }
