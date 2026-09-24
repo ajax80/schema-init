@@ -68,7 +68,10 @@ export QT_FORCE_STDERR_LOGGING=1
 # card directly. No trailing app arg — plasmashell is launched separately below
 # (a kwin-argv-launched plasmashell crash-looped in testing; standalone is
 # stable). kwin's stderr (kwin_*.debug rules from the autologin env) -> debug log.
-/usr/bin/kwin_wayland --drm --xwayland >/home/ajax80/kwin-debug.log 2>&1 &
+# Every boot's first session attempt exits rc=1 and the respawn succeeds; the
+# truncating redirect below erased attempt 1's reason. Keep the prior log.
+[ -f "$HOME/kwin-debug.log" ] && mv -f "$HOME/kwin-debug.log" "$HOME/kwin-debug.log.prev"
+/usr/bin/kwin_wayland --drm --xwayland >"$HOME/kwin-debug.log" 2>&1 &
 KWIN=$!
 # schema-dbus-session-run.sh's broker-health watchdog kills this script's PID
 # with a plain TERM when the session bus dies mid-session -- but a bare
