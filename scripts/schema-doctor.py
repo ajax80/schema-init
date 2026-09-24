@@ -588,8 +588,8 @@ class SessionAgents(Check):
     grade = DEFERRED
 
     AGENTS = [
-        ("kglobalacceld", "kglobalacceld (global shortcuts)"),
-        ("polkit-kde-authentication-agent", "polkit-kde-authentication-agent-1 (authorization prompts)"),
+        (("kglobalacceld", "kwin_wayland"), "kglobalacceld (global shortcuts)"),
+        (("polkit-kde-authentication-agent",), "polkit-kde-authentication-agent-1 (authorization prompts)"),
     ]
 
     def detect(self):
@@ -598,7 +598,8 @@ class SessionAgents(Check):
         tbl = _proc_table()
         if not _running("plasmashell", tbl):
             return None                              # not a live KDE desktop
-        missing = [label for needle, label in self.AGENTS if not _running(needle, tbl)]
+        missing = [label for needles, label in self.AGENTS
+                   if not any(_running(n, tbl) for n in needles)]
         if not missing:
             return None
         return Finding(
