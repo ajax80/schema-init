@@ -207,6 +207,7 @@ struct dev_ctx {
     char owner[UE_KEY_MAX];
     char name[UE_VAL_MAX];
     char result[UE_VAL_MAX];      /* last PROGRAM stdout (trimmed); $result / %c */
+    int  dry_run;                 /* skip ATTR{}= sysfs writes (verify tools) */
     int  link_priority;
     int  escape;                  /* 0=none, 1=replace */
     char final_keys[DEVCTX_FINAL_MAX][RK_KEY_MAX + RK_SUB_MAX + 2];
@@ -483,12 +484,22 @@ static inline int parent_group_match(const struct rule_clause *cl, int nc, struc
     }
 }
 
+/* dry_run: helpers that change device state (alsactl nrestore reloads mixers). */
+static inline int dry_run_skips(const struct dev_ctx *ctx, const char *cmd) {
+    if (!ctx->dry_run) return 0;
+    size_t n = strcspn(cmd, " \t");
+    const char *b = cmd + n;
+    while (b > cmd && b[-1] != '/') b--;
+    return (size_t)(cmd + n - b) == 7 && !strncmp(b, "alsactl", 7);
+}
+
 static inline int rule_match(const struct rule *r, struct dev_ctx *ctx) {
     ctx->last_rule_deferred = 0;
     for (int i = 0; i < r->nclause; i++) {
         const struct rule_clause *c = &r->clause[i];
         if (!strcmp(c->key, "PROGRAM")) {
             char sv[UE_VAL_MAX]; ruleset_subst(c->val, ctx, sv, sizeof sv);
+            if (dry_run_skips(ctx, sv)) return 0;
             char rout[UE_VAL_MAX];
             int rc = udev_run_capture(sv, rout, sizeof rout);
             if (rc != 0) return 0;               /* gate on exit status */
@@ -690,6 +701,7 @@ static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c,
             int rc = run_builtin_bit(ctx->sysroot, dp ? dp : "", dn, ctx->ev, bit);
             return (rc < 0) ? 0 : 1;
         }
+        if (dry_run_skips(ctx, sv)) return 1;
         char rout[8192];   /* IMPORT{program} emits multi-line KEY=VAL; dmi_memory_id ~1.3KB */
         int rc = udev_run_capture(sv, rout, sizeof rout);
         if (rc != 0) return 0;
@@ -745,7 +757,7 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
         } else if (!strcmp(c->key, "RUN")) {
             ctx_add_run(ctx, sv, !strcmp(c->subkey, "builtin"));
         } else if (!strcmp(c->key, "ATTR")) {
-            if (c->subkey[0]) {
+            if (c->subkey[0] && !ctx->dry_run) {
                 char p[PATH_MAX];
                 if ((size_t)snprintf(p, sizeof p, "%s/%s", ctx->sysdir, c->subkey) < sizeof p) {
                     FILE *f = fopen(p, "w");
