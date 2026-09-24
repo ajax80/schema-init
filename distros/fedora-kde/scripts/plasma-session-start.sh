@@ -68,6 +68,17 @@ export QT_FORCE_STDERR_LOGGING=1
 # card directly. No trailing app arg — plasmashell is launched separately below
 # (a kwin-argv-launched plasmashell crash-looped in testing; standalone is
 # stable). kwin's stderr (kwin_*.debug rules from the autologin env) -> debug log.
+# Attempt 1's reason (2026-09-24): /dev/char/226:1 missing + renderD128 EACCES.
+# nvidia-drm registers the card after schema-udev writes its ready file, and
+# the autologin's `udevadm settle` is systemd's (fails instantly), so kwin ran
+# ~1s before schema-udev created the /dev/char link and uaccess ACL. Wait for both.
+DRM="${KWIN_DRM_DEVICES:-/dev/dri/card1}"
+for _ in $(seq 1 150); do
+    if [ -r "$DRM" ] && [ -w "$DRM" ]; then
+        [ -e "/dev/char/$(printf '%d:%d' $(stat -c '0x%t 0x%T' "$DRM"))" ] && break
+    fi
+    sleep 0.1
+done
 # Every boot's first session attempt exits rc=1 and the respawn succeeds; the
 # truncating redirect below erased attempt 1's reason. Keep the prior log.
 [ -f "$HOME/kwin-debug.log" ] && mv -f "$HOME/kwin-debug.log" "$HOME/kwin-debug.log.prev"
