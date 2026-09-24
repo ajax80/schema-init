@@ -914,10 +914,12 @@ class BootEntryIntegrity(Check):
         saved = _read_saved_entry()
         if saved is None:
             return None
-        if not saved.startswith("schema-"):
-            return f"saved_entry={saved} is not a schema entry"
-        if not os.path.isfile(os.path.join(ROOT, "boot/loader/entries", saved + ".conf")):
+        path = os.path.join(ROOT, "boot/loader/entries", saved + ".conf")
+        if not os.path.isfile(path):
             return f"saved_entry={saved} has no entry file (dangling)"
+        _, line = self._options_line(path)
+        if not saved.startswith("schema-") and not _has_valid_init(line):
+            return f"saved_entry={saved} is not a schema entry"
         return None
 
     def detect(self):
