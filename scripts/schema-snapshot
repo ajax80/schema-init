@@ -26,14 +26,18 @@ trap umount_top EXIT
 
 info_field() { grubby --info=DEFAULT | sed -n "s/^$1=\"\\(.*\\)\"/\\1/p"; }
 
+separate_boot() { findmnt -n /boot >/dev/null 2>&1; }
+
 cmd_create() {
   local label="${1:-manual}"
-  local ts base rootsnap homesnap kbase args rootdev newargs fstab title
+  local ts base rootsnap homesnap homesub kbase ibase args rootdev newargs fstab title kdir initrd_line=""
   ts="$(date +%Y%m%d-%H%M%S)"
   base="$PREFIX_SNAP-$ts-$label"
   rootsnap="$base"
   homesnap="$base-home"
   kbase="$(basename "$(info_field kernel)")"
+  ibase="$(info_field initrd | awk '{print $1}')"
+  ibase="${ibase:+$(basename "$ibase")}"
   args="$(info_field args)"
   rootdev="$(info_field root)"
   [ -n "$kbase" ] && [ -n "$rootdev" ] || die "could not read default boot entry via grubby"
@@ -47,14 +51,29 @@ cmd_create() {
     $2=="/"     && $3=="btrfs" { sub(/subvol=[^, ]+/, "subvol=" r) }
     $2=="/home" && $3=="btrfs" { sub(/subvol=[^, ]+/, "subvol=" h) }
     { print }' "$fstab" > "$fstab.new" && mv "$fstab.new" "$fstab"
+  homesub="$(findmnt -no SOURCE /home | sed -n 's/.*\[\/\(.*\)\]$/\1/p')"
+  if [ -n "$homesub" ]; then
+    grep -rlE "subvol=/?$homesub([, ]|$)" "$TOP/$rootsnap/usr/local/bin" "$TOP/$rootsnap/etc/schema-init" 2>/dev/null |
+      while read -r f; do sed -i -E "s#subvol=/?$homesub([, ]|$)#subvol=$homesnap\1#g" "$f"; done
+  fi
   umount_top
 
   newargs="$(printf '%s' "$args" | sed "s/rootflags=subvol=[^ ]*/rootflags=subvol=$rootsnap/")"
   title="schema-init snapshot — $label ($ts)"
+  if separate_boot; then
+    mkdir -p "/boot/$base"
+    cp "/boot/$kbase" "/boot/$base/"
+    [ -z "$ibase" ] || cp "/boot/$ibase" "/boot/$base/"
+    kdir="/$base"
+  else
+    kdir="/$rootsnap/boot"
+  fi
+  [ -z "$ibase" ] || initrd_line="initrd $kdir/$ibase"
   cat > "$ENTRIES/$base.conf" <<EOF
 title $title
 version $(uname -r)
-linux /$rootsnap/boot/$kbase
+linux $kdir/$kbase
+${initrd_line}
 options root=$rootdev $newargs
 grub_users \$grub_users
 grub_arg --unrestricted
@@ -77,6 +96,7 @@ cmd_prune() {
     btrfs subvolume delete "$TOP/$old-home" >/dev/null 2>&1 || true
     umount_top
     rm -f "$ENTRIES/$old.conf"
+    rm -rf "/boot/$old"
     echo "pruned: $old"
   done
 }
@@ -89,6 +109,7 @@ cmd_delete() {
   btrfs subvolume delete "$TOP/$name-home" >/dev/null 2>&1 || true
   umount_top
   rm -f "$ENTRIES/$name.conf"
+  rm -rf "/boot/$name"
   echo "deleted: $name"
 }
 
