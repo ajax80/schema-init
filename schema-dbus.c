@@ -621,7 +621,7 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         sdbus_msg dm;
         if (sdbus_codec_take(raw, rawlen, &dm) == rawlen) {
             int rc = sdbus_driver_dispatch(&dm, c, g_names, g_conns, g_nconns,
-                                           g_svctab, broadcast_transitions, NULL);
+                                           g_svctab, g_policy, broadcast_transitions, NULL);
             if (rc < 0)
                 synth_error_wire(c, w->serial, DBUS_ERROR_UNKNOWN_METHOD, "unknown method");
             sdbus_msg_free(&dm);

@@ -5,6 +5,7 @@
 
 static int g_ntrans;
 static const sdbus_svctab *g_tab;
+static const sdbus_policy *g_pol;
 static sdbus_transition g_trans[8];
 static void record_broadcast(void *ctx, sdbus_transition *t, int n) {
     (void)ctx;
@@ -20,7 +21,7 @@ static sdbus_msg do_call(sdbus_conn *c, sdbus_names *names, DBusMessage *call) {
     dbus_message_set_serial(call, 100);
     sdbus_msg cm; memset(&cm, 0, sizeof cm); cm.msg = call; cm.member = dbus_message_get_member(call);
     sdbus_conn *all[] = { c };
-    int rc = sdbus_driver_dispatch(&cm, c, names, all, 1, g_tab, record_broadcast, NULL);
+    int rc = sdbus_driver_dispatch(&cm, c, names, all, 1, g_tab, g_pol, record_broadcast, NULL);
     assert(rc == 0);
     sdbus_msg reply;
     int taken = sdbus_codec_take(c->out, c->out_len, &reply);
@@ -223,6 +224,34 @@ int main(void) {
     assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_NAME_HAS_NO_OWNER));
     sdbus_msg_free(&r); dbus_message_unref(lqn);
 
+    /* RequestName honors own policy: denied name -> AccessDenied, allowed -> owner */
+    {
+        sdbus_policy *pol = sdbus_policy_parse("context = default\ndeny = own:*\nallow = own:org.ok\n");
+        g_pol = pol;
+        const char *deny = "org.secret", *ok = "org.ok"; dbus_uint32_t fl = 0;
+        DBusMessage *rd = mkcall("RequestName");
+        dbus_message_append_args(rd, DBUS_TYPE_STRING, &deny, DBUS_TYPE_UINT32, &fl, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, rd);
+        assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_ACCESS_DENIED));
+        assert(sdbus_names_owner(names, "org.secret") < 0);
+        sdbus_msg_free(&r); dbus_message_unref(rd);
+        DBusMessage *ro = mkcall("RequestName");
+        dbus_message_append_args(ro, DBUS_TYPE_STRING, &ok, DBUS_TYPE_UINT32, &fl, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, ro);
+        dbus_uint32_t rc = 0;
+        assert(dbus_message_get_args(r.msg, &e, DBUS_TYPE_UINT32, &rc, DBUS_TYPE_INVALID));
+        assert(rc == SDBUS_REQ_PRIMARY_OWNER);
+        sdbus_msg_free(&r); dbus_message_unref(ro);
+        const char *uq = ":1.99";
+        DBusMessage *ru = mkcall("RequestName");
+        dbus_message_append_args(ru, DBUS_TYPE_STRING, &uq, DBUS_TYPE_UINT32, &fl, DBUS_TYPE_INVALID);
+        r = do_call(&c, names, ru);
+        assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_INVALID_ARGS));
+        sdbus_msg_free(&r); dbus_message_unref(ru);
+        g_pol = NULL;
+        sdbus_policy_free(pol);
+    }
+
     /* ListActivatableNames: driver name + every service-table entry */
     sdbus_svc_ent ents[2] = { { "org.act.one", NULL, NULL }, { "org.act.two", NULL, NULL } };
     sdbus_svctab tab = { ents, 2 };
@@ -273,7 +302,7 @@ int main(void) {
     dbus_message_set_serial(bogus, 200);
     sdbus_msg bm; memset(&bm, 0, sizeof bm); bm.msg = bogus; bm.member = "NoSuchMethod";
     sdbus_conn *all[] = { &c };
-    assert(sdbus_driver_dispatch(&bm, &c, names, all, 1, NULL, record_broadcast, NULL) == -1);
+    assert(sdbus_driver_dispatch(&bm, &c, names, all, 1, NULL, NULL, record_broadcast, NULL) == -1);
     dbus_message_unref(bogus);
 
     sdbus_conn_free_fields(&c);

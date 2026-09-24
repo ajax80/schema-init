@@ -14,6 +14,7 @@
 #include "sdbus_names.h"
 #include "sdbus_conn.h"
 #include "sdbus_activate.h"
+#include "sdbus_policy.h"
 #include <string.h>
 
 #define SDBUS_DRIVER_NAME "org.freedesktop.DBus"
@@ -188,7 +189,8 @@ static inline void sdbus__reply_credentials(sdbus_conn *c, DBusMessage *call, sd
 
 static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
         sdbus_names *names, sdbus_conn **all, int n_all,
-        const sdbus_svctab *svctab, sdbus_broadcast_fn broadcast, void *ctx) {
+        const sdbus_svctab *svctab, const sdbus_policy *policy,
+        sdbus_broadcast_fn broadcast, void *ctx) {
     DBusMessage *m = call->msg;
     const char *member = call->member;
     const char *iface = dbus_message_get_interface(m);
@@ -278,6 +280,21 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
             dbus_error_free(&e);
             sdbus__reply_error(c, m, DBUS_ERROR_INVALID_ARGS, "RequestName args");
             return 0;
+        }
+        if (name[0] == ':' || !strcmp(name, SDBUS_DRIVER_NAME)) {
+            sdbus__reply_error(c, m, DBUS_ERROR_INVALID_ARGS, "cannot own a unique name or the bus name");
+            return 0;
+        }
+        /* the busconfig <allow own=...>/<deny own=...> rules: without this any
+           local user could claim a system service's name while it is not running */
+        if (policy) {
+            sdbus_req req = { .op = "own", .uid = (int)c->uid, .gids = c->gids,
+                              .n_gids = c->n_gids, .name = name };
+            if (strcmp(sdbus_policy_eval(policy, &req), SDBUS_ALLOW) != 0) {
+                sdbus__reply_error(c, m, DBUS_ERROR_ACCESS_DENIED,
+                                   "not allowed to own this name by security policy");
+                return 0;
+            }
         }
         /* cap names per connection, but only when this request would add a new
            holding (a re-request of a name we already hold just updates flags) */
