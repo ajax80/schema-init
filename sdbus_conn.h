@@ -41,6 +41,8 @@ typedef struct {
     long oq_bytes;                              /* unsent bytes across oq[oq_head..n_oq) */
     int oq_over;                                /* backlog exceeded the cap -> reap */
     sdbus_matchset *matches;
+    int is_monitor;                             /* BecomeMonitor: receive-only copy tap */
+    sdbus_matchset *mon_matches;                /* its rules; NULL = everything */
 } sdbus_conn;
 
 /* enqueue one outbound message (its bytes are copied). fds may be NULL. Once the
@@ -135,7 +137,8 @@ static inline void sdbus_conn_free_fields(sdbus_conn *c) {
     free(c->oq); c->oq = NULL; c->n_oq = c->oq_head = 0;
     c->oq_bytes = 0; c->oq_over = 0;
     if (c->matches) sdbus_match_free(c->matches);
-    c->in = c->out = NULL; c->matches = NULL;
+    if (c->mon_matches) sdbus_match_free(c->mon_matches);
+    c->in = c->out = NULL; c->matches = NULL; c->mon_matches = NULL;
 }
 
 #endif

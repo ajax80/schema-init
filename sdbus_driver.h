@@ -46,6 +46,9 @@ static const char sdbus__driver_introspect_xml[] =
     "  <signal name=\"NameLost\"><arg type=\"s\"/></signal>\n"
     "  <signal name=\"NameAcquired\"><arg type=\"s\"/></signal>\n"
     " </interface>\n"
+    " <interface name=\"org.freedesktop.DBus.Monitoring\">\n"
+    "  <method name=\"BecomeMonitor\"><arg direction=\"in\" type=\"as\"/><arg direction=\"in\" type=\"u\"/></method>\n"
+    " </interface>\n"
     " <interface name=\"org.freedesktop.DBus.Properties\">\n"
     "  <method name=\"Get\"><arg direction=\"in\" type=\"s\"/><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"v\"/></method>\n"
     "  <method name=\"GetAll\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"a{sv}\"/></method>\n"
@@ -60,11 +63,16 @@ static const char sdbus__driver_introspect_xml[] =
     " </interface>\n"
     "</node>\n";
 
-/* the driver's read-only properties: both empty string arrays */
-static inline void sdbus__append_empty_as_variant(DBusMessageIter *it) {
+/* the driver's read-only properties: Features is empty; Interfaces names the
+   optional interfaces beyond org.freedesktop.DBus itself */
+static inline void sdbus__append_prop_variant(DBusMessageIter *it, const char *prop) {
+    static const char *ifaces[] = { "org.freedesktop.DBus.Monitoring" };
     DBusMessageIter var, arr;
     dbus_message_iter_open_container(it, DBUS_TYPE_VARIANT, "as", &var);
     dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "s", &arr);
+    if (!strcmp(prop, "Interfaces"))
+        for (unsigned i = 0; i < sizeof ifaces / sizeof *ifaces; i++)
+            dbus_message_iter_append_basic(&arr, DBUS_TYPE_STRING, &ifaces[i]);
     dbus_message_iter_close_container(&var, &arr);
     dbus_message_iter_close_container(it, &var);
 }
@@ -209,7 +217,7 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
                 for (int i = 0; i < 2; i++) {
                     dbus_message_iter_open_container(&arr, DBUS_TYPE_DICT_ENTRY, NULL, &ent);
                     dbus_message_iter_append_basic(&ent, DBUS_TYPE_STRING, &props[i]);
-                    sdbus__append_empty_as_variant(&ent);
+                    sdbus__append_prop_variant(&ent, props[i]);
                     dbus_message_iter_close_container(&arr, &ent);
                 }
             }
@@ -233,7 +241,7 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
                 DBusMessage *r = dbus_message_new_method_return(m);
                 DBusMessageIter it;
                 dbus_message_iter_init_append(r, &it);
-                sdbus__append_empty_as_variant(&it);
+                sdbus__append_prop_variant(&it, prop);
                 sdbus__driver_emit(c, r);
             }
             return 0;
