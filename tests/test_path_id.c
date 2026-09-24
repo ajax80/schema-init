@@ -391,6 +391,37 @@ static void test_derived_props(void) {
     printf("test_derived_props OK\n");
 }
 
+static void mk_sub_node(const char *root, const char *relpath, const char *bus) {
+    char dir[4096], sub[4096], tgt[4096];
+    if ((size_t)snprintf(dir, sizeof dir, "%s%s", root, relpath) >= sizeof dir) assert(0);
+    mkdirp(dir);
+    if ((size_t)snprintf(tgt, sizeof tgt, "%s/%s", root, bus) >= sizeof tgt) assert(0);
+    if ((size_t)snprintf(sub, sizeof sub, "%s/subsystem", dir) >= sizeof sub) assert(0);
+    mklink(sub, tgt);
+}
+
+static void test_serio(void) {
+    char tmpl[] = "/tmp/schema-pathid-serio-XXXXXX";
+    char *root = mkdtemp(tmpl);
+    assert(root);
+    mk_sub_node(root, "/devices/platform/i8042", "bus/platform");
+    mk_sub_node(root, "/devices/platform/i8042/serio0", "bus/serio");
+    mk_sub_node(root, "/devices/platform/i8042/serio0/input/input3", "class/input");
+    mk_sub_node(root, "/devices/platform/i8042/serio0/input/input3/event3", "class/input");
+    mk_sub_node(root, "/devices/platform/i8042/serio1", "bus/serio");
+    mk_sub_node(root, "/devices/platform/i8042/serio1/serio2", "bus/serio");
+    mk_sub_node(root, "/devices/platform/i8042/serio1/serio2/input/input9", "class/input");
+
+    char out[PATH_ID_MAX];
+    assert(path_id_build(root, "/devices/platform/i8042/serio0/input/input3/event3",
+                         out, sizeof out) > 0);
+    assert(strcmp(out, "platform-i8042-serio-0") == 0);
+    assert(path_id_build(root, "/devices/platform/i8042/serio1/serio2/input/input9",
+                         out, sizeof out) > 0);
+    assert(strcmp(out, "platform-i8042-serio-2") == 0);
+    printf("test_serio OK\n");
+}
+
 int main(void) {
     test_tag();
     test_derived_props();
@@ -403,6 +434,7 @@ int main(void) {
     test_nvme();
     test_ata();
     test_usb_scsi_rebase();
+    test_serio();
     printf("ALL path_id tests passed\n");
     return 0;
 }
