@@ -45,6 +45,12 @@ static unsigned       g_next_id = 1;
 static dbus_uint32_t  g_bcast_serial;
 static sdbus_svctab  *g_svctab;
 static sdbus_acts    *g_acts;
+#define SDBUS_MAX_SVCDIRS 8
+static const char    *g_svcdirs[SDBUS_MAX_SVCDIRS];
+static int            g_nsvcdirs;
+static const char    *g_maskfile;
+static const char    *g_default_user;
+static char         **g_actenv;       /* session bus: env handed to activated services */
 static char           g_bus_addr[256];
 static int            g_system_bus;   /* Decision 1, SP4 design doc: --system present
                                           vs absent is the single mode signal gating
@@ -52,7 +58,6 @@ static int            g_system_bus;   /* Decision 1, SP4 design doc: --system pr
 #define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
 #define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
-#define SDBUS_MAX_SVCDIRS 8
 
 static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
 
@@ -420,12 +425,59 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         return;
     }
 
+    if (to_driver && w->member &&
+        (!strcmp(w->member, "ReloadConfig") || !strcmp(w->member, "UpdateActivationEnvironment"))) {
+        sdbus_msg dm;
+        int parsed = (sdbus_codec_take(raw, rawlen, &dm) == rawlen);
+        int privileged = c->uid == 0 || (uid_t)c->uid == getuid();
+        if (!parsed) {
+            synth_error_wire(c, w->serial, DBUS_ERROR_FAILED, "cannot parse message");
+        } else if (!strcmp(w->member, "ReloadConfig")) {
+            if (!privileged) {
+                sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED, "ReloadConfig not permitted");
+            } else {
+                sdbus_svctab_free(g_svctab);
+                g_svctab = sdbus_svctab_parse_dirs_masked(g_svcdirs, g_nsvcdirs, g_maskfile, g_default_user);
+                fprintf(stderr, "schema-dbus: ReloadConfig: %d activatable services\n", g_svctab->n);
+                sdbus__reply_empty(c, dm.msg);
+            }
+        } else if (g_system_bus) {
+            sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED,
+                               "Cannot change activation environment on a system bus.");
+        } else if (!privileged) {
+            sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED,
+                               "UpdateActivationEnvironment not permitted");
+        } else {
+            DBusMessageIter it, arr, ent;
+            int ok = dbus_message_iter_init(dm.msg, &it) &&
+                     !strcmp(dbus_message_get_signature(dm.msg), "a{ss}");
+            if (ok) {
+                dbus_message_iter_recurse(&it, &arr);
+                while (ok && dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_DICT_ENTRY) {
+                    const char *k, *v;
+                    dbus_message_iter_recurse(&arr, &ent);
+                    dbus_message_iter_get_basic(&ent, &k);
+                    dbus_message_iter_next(&ent);
+                    dbus_message_iter_get_basic(&ent, &v);
+                    if (sdbus_activate_env_set(&g_actenv, k, v) != 0) ok = 0;
+                    dbus_message_iter_next(&arr);
+                }
+            }
+            if (ok) sdbus__reply_empty(c, dm.msg);
+            else    sdbus__reply_error(c, dm.msg, DBUS_ERROR_INVALID_ARGS, "expected a{ss} of valid names");
+        }
+        if (parsed) sdbus_msg_free(&dm);
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
+
     if (to_driver) {
         /* driver methods never carry fds -> libdbus can demarshal to read args */
         sdbus_msg dm;
         if (sdbus_codec_take(raw, rawlen, &dm) == rawlen) {
             int rc = sdbus_driver_dispatch(&dm, c, g_names, g_conns, g_nconns,
-                                           broadcast_transitions, NULL);
+                                           g_svctab, broadcast_transitions, NULL);
             if (rc < 0)
                 synth_error_wire(c, w->serial, DBUS_ERROR_UNKNOWN_METHOD, "unknown method");
             sdbus_msg_free(&dm);
@@ -611,7 +663,7 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
         if (setuid(pw->pw_uid) != 0) _exit(127);
     }
     extern char **environ;
-    char **env = sdbus_activate_build_env(g_system_bus, bus_addr, environ);
+    char **env = sdbus_activate_build_env(g_system_bus, bus_addr, g_actenv ? g_actenv : environ);
     execve(e->argv[0], e->argv, env);
     _exit(127);                         /* exec failed */
 }
@@ -655,21 +707,21 @@ int main(int argc, char **argv) {
     struct passwd *self_pw = g_system_bus ? NULL : getpwuid(getuid());
     const char *default_user = g_system_bus ? "root" : (self_pw ? self_pw->pw_name : "root");
 
-    const char *dirs[SDBUS_MAX_SVCDIRS];
-    int ndirs = 0;
-    char *svcdirs_buf = NULL;
     if (svcdirs_env) {
-        svcdirs_buf = strdup(svcdirs_env);
-        for (char *p = strtok(svcdirs_buf, ":"); p && ndirs < SDBUS_MAX_SVCDIRS; p = strtok(NULL, ":"))
-            dirs[ndirs++] = p;
+        char *svcdirs_buf = strdup(svcdirs_env);   /* kept for ReloadConfig */
+        for (char *p = strtok(svcdirs_buf, ":"); p && g_nsvcdirs < SDBUS_MAX_SVCDIRS; p = strtok(NULL, ":"))
+            g_svcdirs[g_nsvcdirs++] = p;
     } else {
-        dirs[0] = svcdir ? svcdir : SDBUS_SVC_DIR;
-        ndirs = 1;
+        g_svcdirs[0] = svcdir ? svcdir : SDBUS_SVC_DIR;
+        g_nsvcdirs = 1;
     }
-    g_svctab = sdbus_svctab_parse_dirs_masked(dirs, ndirs,
-                                              maskfile ? maskfile : SDBUS_MASK_FILE,
-                                              default_user);
-    free(svcdirs_buf);
+    g_maskfile = maskfile ? maskfile : SDBUS_MASK_FILE;
+    g_default_user = default_user ? strdup(default_user) : "root";
+    g_svctab = sdbus_svctab_parse_dirs_masked(g_svcdirs, g_nsvcdirs, g_maskfile, g_default_user);
+    if (!g_system_bus) {
+        extern char **environ;
+        g_actenv = sdbus_activate_env_dup(environ);
+    }
     g_acts = sdbus_acts_new();
     fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 

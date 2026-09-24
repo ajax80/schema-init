@@ -5,17 +5,72 @@
    org.freedesktop.DBus from connection c: mutates the name registry / c's match
    set, marshals a method_return (or error) into c->out, and emits ownership
    transitions through the broadcast callback. Returns 0 if handled, -1 if the
-   member is unknown (caller synthesizes UnknownMethod). Service activation
-   (StartServiceByName) is a v1.1 stub -> ServiceUnknown. */
+   member is unknown (caller synthesizes UnknownMethod). StartServiceByName,
+   ReloadConfig and UpdateActivationEnvironment touch broker state and are
+   intercepted in schema-dbus.c before this is reached. */
 
 #include <dbus/dbus.h>
 #include "sdbus_codec.h"
 #include "sdbus_names.h"
 #include "sdbus_conn.h"
+#include "sdbus_activate.h"
 #include <string.h>
 
 #define SDBUS_DRIVER_NAME "org.freedesktop.DBus"
 #define SDBUS_DRIVER_PATH "/org/freedesktop/DBus"
+
+static const char sdbus__driver_introspect_xml[] =
+    DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE
+    "<node>\n"
+    " <interface name=\"org.freedesktop.DBus\">\n"
+    "  <method name=\"Hello\"><arg direction=\"out\" type=\"s\"/></method>\n"
+    "  <method name=\"RequestName\"><arg direction=\"in\" type=\"s\"/><arg direction=\"in\" type=\"u\"/><arg direction=\"out\" type=\"u\"/></method>\n"
+    "  <method name=\"ReleaseName\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"u\"/></method>\n"
+    "  <method name=\"StartServiceByName\"><arg direction=\"in\" type=\"s\"/><arg direction=\"in\" type=\"u\"/><arg direction=\"out\" type=\"u\"/></method>\n"
+    "  <method name=\"UpdateActivationEnvironment\"><arg direction=\"in\" type=\"a{ss}\"/></method>\n"
+    "  <method name=\"NameHasOwner\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"b\"/></method>\n"
+    "  <method name=\"ListNames\"><arg direction=\"out\" type=\"as\"/></method>\n"
+    "  <method name=\"ListActivatableNames\"><arg direction=\"out\" type=\"as\"/></method>\n"
+    "  <method name=\"AddMatch\"><arg direction=\"in\" type=\"s\"/></method>\n"
+    "  <method name=\"RemoveMatch\"><arg direction=\"in\" type=\"s\"/></method>\n"
+    "  <method name=\"GetNameOwner\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"s\"/></method>\n"
+    "  <method name=\"ListQueuedOwners\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"as\"/></method>\n"
+    "  <method name=\"GetConnectionUnixUser\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"u\"/></method>\n"
+    "  <method name=\"GetConnectionUnixProcessID\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"u\"/></method>\n"
+    "  <method name=\"GetConnectionCredentials\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"a{sv}\"/></method>\n"
+    "  <method name=\"ReloadConfig\"/>\n"
+    "  <method name=\"GetId\"><arg direction=\"out\" type=\"s\"/></method>\n"
+    "  <property name=\"Features\" type=\"as\" access=\"read\"/>\n"
+    "  <property name=\"Interfaces\" type=\"as\" access=\"read\"/>\n"
+    "  <signal name=\"NameOwnerChanged\"><arg type=\"s\"/><arg type=\"s\"/><arg type=\"s\"/></signal>\n"
+    "  <signal name=\"NameLost\"><arg type=\"s\"/></signal>\n"
+    "  <signal name=\"NameAcquired\"><arg type=\"s\"/></signal>\n"
+    " </interface>\n"
+    " <interface name=\"org.freedesktop.DBus.Properties\">\n"
+    "  <method name=\"Get\"><arg direction=\"in\" type=\"s\"/><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"v\"/></method>\n"
+    "  <method name=\"GetAll\"><arg direction=\"in\" type=\"s\"/><arg direction=\"out\" type=\"a{sv}\"/></method>\n"
+    "  <method name=\"Set\"><arg direction=\"in\" type=\"s\"/><arg direction=\"in\" type=\"s\"/><arg direction=\"in\" type=\"v\"/></method>\n"
+    " </interface>\n"
+    " <interface name=\"org.freedesktop.DBus.Introspectable\">\n"
+    "  <method name=\"Introspect\"><arg direction=\"out\" type=\"s\"/></method>\n"
+    " </interface>\n"
+    " <interface name=\"org.freedesktop.DBus.Peer\">\n"
+    "  <method name=\"GetMachineId\"><arg direction=\"out\" type=\"s\"/></method>\n"
+    "  <method name=\"Ping\"/>\n"
+    " </interface>\n"
+    "</node>\n";
+
+/* the driver's read-only properties: both empty string arrays */
+static inline void sdbus__append_empty_as_variant(DBusMessageIter *it) {
+    DBusMessageIter var, arr;
+    dbus_message_iter_open_container(it, DBUS_TYPE_VARIANT, "as", &var);
+    dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "s", &arr);
+    dbus_message_iter_close_container(&var, &arr);
+    dbus_message_iter_close_container(it, &var);
+}
+static inline int sdbus__is_driver_prop(const char *p) {
+    return p && (!strcmp(p, "Features") || !strcmp(p, "Interfaces"));
+}
 
 typedef void (*sdbus_broadcast_fn)(void *ctx, sdbus_transition *t, int n);
 
@@ -125,10 +180,66 @@ static inline void sdbus__reply_credentials(sdbus_conn *c, DBusMessage *call, sd
 
 static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
         sdbus_names *names, sdbus_conn **all, int n_all,
-        sdbus_broadcast_fn broadcast, void *ctx) {
+        const sdbus_svctab *svctab, sdbus_broadcast_fn broadcast, void *ctx) {
     DBusMessage *m = call->msg;
     const char *member = call->member;
+    const char *iface = dbus_message_get_interface(m);
     if (!member) return -1;
+
+    if (!strcmp(member, "Introspect") &&
+        (!iface || !strcmp(iface, "org.freedesktop.DBus.Introspectable"))) {
+        sdbus__reply_string(c, m, sdbus__driver_introspect_xml);
+        return 0;
+    }
+    if (iface && !strcmp(iface, "org.freedesktop.DBus.Properties")) {
+        const char *pif = NULL, *prop = NULL;
+        DBusError e; dbus_error_init(&e);
+        if (!strcmp(member, "GetAll")) {
+            if (!dbus_message_get_args(m, &e, DBUS_TYPE_STRING, &pif, DBUS_TYPE_INVALID)) {
+                dbus_error_free(&e);
+                sdbus__reply_error(c, m, DBUS_ERROR_INVALID_ARGS, "GetAll args");
+                return 0;
+            }
+            DBusMessage *r = dbus_message_new_method_return(m);
+            DBusMessageIter it, arr, ent;
+            dbus_message_iter_init_append(r, &it);
+            dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &arr);
+            if (!*pif || !strcmp(pif, SDBUS_DRIVER_NAME)) {
+                static const char *props[] = { "Features", "Interfaces" };
+                for (int i = 0; i < 2; i++) {
+                    dbus_message_iter_open_container(&arr, DBUS_TYPE_DICT_ENTRY, NULL, &ent);
+                    dbus_message_iter_append_basic(&ent, DBUS_TYPE_STRING, &props[i]);
+                    sdbus__append_empty_as_variant(&ent);
+                    dbus_message_iter_close_container(&arr, &ent);
+                }
+            }
+            dbus_message_iter_close_container(&it, &arr);
+            sdbus__driver_emit(c, r);
+            return 0;
+        }
+        if (!strcmp(member, "Get") || !strcmp(member, "Set")) {
+            if (!dbus_message_get_args(m, &e, DBUS_TYPE_STRING, &pif,
+                                       DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID)) {
+                dbus_error_free(&e);
+                sdbus__reply_error(c, m, DBUS_ERROR_INVALID_ARGS, "Get/Set args");
+                return 0;
+            }
+            int known = (!*pif || !strcmp(pif, SDBUS_DRIVER_NAME)) && sdbus__is_driver_prop(prop);
+            if (!known) {
+                sdbus__reply_error(c, m, DBUS_ERROR_UNKNOWN_PROPERTY, "no such property");
+            } else if (!strcmp(member, "Set")) {
+                sdbus__reply_error(c, m, DBUS_ERROR_PROPERTY_READ_ONLY, "property is read-only");
+            } else {
+                DBusMessage *r = dbus_message_new_method_return(m);
+                DBusMessageIter it;
+                dbus_message_iter_init_append(r, &it);
+                sdbus__append_empty_as_variant(&it);
+                sdbus__driver_emit(c, r);
+            }
+            return 0;
+        }
+        return -1;
+    }
 
     /* org.freedesktop.DBus.Peer */
     if (!strcmp(member, "Ping")) { sdbus__reply_empty(c, m); return 0; }
@@ -226,6 +337,40 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
             const char **owned; int oc = sdbus_names_list(names, &owned);
             for (int i = 0; i < oc; i++) { v = realloc(v, (n + 1) * sizeof *v); v[n++] = owned[i]; }
             free(owned);
+        } else if (svctab) {
+            for (int i = 0; i < svctab->n; i++) {
+                v = realloc(v, (n + 1) * sizeof *v); v[n++] = svctab->v[i].name;
+            }
+        }
+        sdbus__reply_strv(c, m, v, n);
+        free(v);
+        return 0;
+    }
+    if (!strcmp(member, "ListQueuedOwners")) {
+        const char *name = NULL;
+        DBusError e; dbus_error_init(&e);
+        if (!dbus_message_get_args(m, &e, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID)) {
+            dbus_error_free(&e);
+            sdbus__reply_error(c, m, DBUS_ERROR_INVALID_ARGS, "ListQueuedOwners args");
+            return 0;
+        }
+        if (!strcmp(name, SDBUS_DRIVER_NAME)) {
+            const char *self = SDBUS_DRIVER_NAME;
+            sdbus__reply_strv(c, m, &self, 1);
+            return 0;
+        }
+        sdbus_name_ent *ne = name[0] == ':' ? NULL : sdbus__name_find(names, name);
+        if (!ne || ne->n_holders == 0) {
+            int oid = name[0] == ':' ? sdbus__resolve_conn_id(names, all, n_all, name) : -1;
+            if (oid < 0) { sdbus__reply_error(c, m, DBUS_ERROR_NAME_HAS_NO_OWNER, "no owner"); return 0; }
+            sdbus__reply_strv(c, m, &name, 1);
+            return 0;
+        }
+        const char **v = malloc(ne->n_holders * sizeof *v);
+        int n = 0;
+        for (int i = 0; i < ne->n_holders; i++) {
+            const char *u = sdbus_names_unique(names, ne->holders[i].conn_id);
+            if (u) v[n++] = u;
         }
         sdbus__reply_strv(c, m, v, n);
         free(v);
@@ -290,11 +435,6 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
         sdbus_conn *o = oid >= 0 ? sdbus__conn_by_id(all, n_all, oid) : NULL;
         if (!o) { sdbus__reply_error(c, m, DBUS_ERROR_NAME_HAS_NO_OWNER, "no owner"); return 0; }
         sdbus__reply_credentials(c, m, o);
-        return 0;
-    }
-    if (!strcmp(member, "StartServiceByName")) {   /* v1.1 */
-        sdbus__reply_error(c, m, DBUS_ERROR_SERVICE_UNKNOWN,
-                           "service activation deferred to schema-dbus v1.1");
         return 0;
     }
     return -1;   /* unknown member */

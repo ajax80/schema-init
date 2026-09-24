@@ -183,6 +183,33 @@ static inline void sdbus_activate_free_env(char **env) {
     free(env);
 }
 
+/* NULL-terminated deep copy of an env array (NULL -> empty). */
+static inline char **sdbus_activate_env_dup(char **src) {
+    int n = 0;
+    for (char **p = src; p && *p; p++) n++;
+    char **env = malloc((n + 1) * sizeof *env);
+    for (int i = 0; i < n; i++) env[i] = strdup(src[i]);
+    env[n] = NULL;
+    return env;
+}
+
+/* UpdateActivationEnvironment: set KEY=VAL in *envp, replacing an existing
+   KEY entry or appending. Returns -1 (and changes nothing) for an empty key
+   or one containing '='. */
+static inline int sdbus_activate_env_set(char ***envp, const char *key, const char *val) {
+    size_t kl = strlen(key);
+    if (!kl || strchr(key, '=')) return -1;
+    char *kv = malloc(kl + strlen(val) + 2);
+    sprintf(kv, "%s=%s", key, val);
+    int n = 0;
+    for (char **p = *envp; p && *p; p++, n++)
+        if (!strncmp(*p, key, kl) && (*p)[kl] == '=') { free(*p); *p = kv; return 0; }
+    *envp = realloc(*envp, (n + 2) * sizeof **envp);
+    (*envp)[n] = kv;
+    (*envp)[n + 1] = NULL;
+    return 0;
+}
+
 /* Fix 4 (SP4 design doc): like sdbus_svctab_parse_dir_masked, but scans
    `dirs` in order and applies override precedence -- the first dir to
    define a given Name= wins, later dirs are skipped for that name (a

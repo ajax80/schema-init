@@ -254,6 +254,24 @@ int main(void) {
     test_default_user_session_mode();
     test_multidir_override_precedence();
     test_multidir_missing_dir_skipped();
+    /* UpdateActivationEnvironment helper: replace in place, append new, reject bad keys */
+    {
+        char *base[] = { "HOME=/h", "PATH=/a", NULL };
+        char **env = sdbus_activate_env_dup(base);
+        assert(sdbus_activate_env_set(&env, "PATH", "/b") == 0);
+        assert(sdbus_activate_env_set(&env, "WAYLAND_DISPLAY", "wayland-0") == 0);
+        assert(sdbus_activate_env_set(&env, "PAT", "x") == 0);
+        assert(sdbus_activate_env_set(&env, "", "x") == -1);
+        assert(sdbus_activate_env_set(&env, "A=B", "x") == -1);
+        assert(!strcmp(env[0], "HOME=/h") && !strcmp(env[1], "PATH=/b"));
+        assert(!strcmp(env[2], "WAYLAND_DISPLAY=wayland-0") && !strcmp(env[3], "PAT=x") && !env[4]);
+        char **built = sdbus_activate_build_env(0, "unix:path=/x", env);
+        int saw = 0;
+        for (char **p = built; *p; p++) if (!strcmp(*p, "WAYLAND_DISPLAY=wayland-0")) saw = 1;
+        assert(saw);
+        sdbus_activate_free_env(built);
+        sdbus_activate_free_env(env);
+    }
     printf("all sdbus_activate tests passed\n");
     return 0;
 }
