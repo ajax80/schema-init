@@ -175,6 +175,17 @@ def main():
               body.replace('\n', ' '))
         check('seat file lists both sessions', 'SESSIONS=1 2' in body,
               body.replace('\n', ' '))
+        userf = os.path.join(rundir, 'users', '1000')
+        ubody = open(userf).read() if os.path.exists(userf) else ''
+        ulines = ubody.splitlines()
+        check('user file ACTIVE_SEATS names the seat (sd_uid_get_seats require_active)',
+              'ACTIVE_SEATS=seat0' in ulines, ubody.replace('\n', ' '))
+        check('user file ACTIVE_SESSIONS is only the active one',
+              'ACTIVE_SESSIONS=1' in ulines, ubody.replace('\n', ' '))
+        check('user file ONLINE_SESSIONS lists both',
+              'ONLINE_SESSIONS=1 2' in ulines, ubody.replace('\n', ' '))
+        check('user file ONLINE_SEATS names the seat',
+              'ONLINE_SEATS=seat0' in ulines, ubody.replace('\n', ' '))
 
         print("\n-- a new file becomes a session --")
         write_session(rundir, 3, UID=1000, USER=os.environ.get('USER', 'root'),

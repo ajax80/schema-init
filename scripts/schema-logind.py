@@ -932,21 +932,22 @@ class Login1Session(dbus.service.Object):
 
     def on_vt_changed(self, new_vt):
         """Active VT moved. Pause or resume every device this session took."""
-        if self.vtnr is None or new_vt == 0:
+        vtnr = self.vtnr if self.vtnr is not None else self.record.vtnr
+        if not vtnr or new_vt == 0:
             return
-        should_be_active = (new_vt == self.vtnr)
+        should_be_active = (new_vt == vtnr)
         if should_be_active == self.active:
             return
 
         if not should_be_active:
-            print(f"login1-stub: VT {new_vt} != session VT {self.vtnr} — pausing "
+            print(f"login1-stub: VT {new_vt} != session VT {vtnr} — pausing "
                   f"{len(self.devices)} device(s)")
             self._set_active(False)
             for (major, minor), fd in self.devices.items():
                 self._drm_master(major, fd, acquire=False)
                 self.PauseDevice(dbus.UInt32(major), dbus.UInt32(minor), 'gone')
         else:
-            print(f"login1-stub: VT {new_vt} == session VT {self.vtnr} — resuming "
+            print(f"login1-stub: VT {new_vt} == session VT {vtnr} — resuming "
                   f"{len(self.devices)} device(s)")
             for (major, minor), fd in self.devices.items():
                 self._drm_master(major, fd, acquire=True)
@@ -1514,6 +1515,12 @@ class SessionRegistry:
                 'STATE=%s' % ('active' if self.user_is_active(uid) else 'online'),
                 'SESSIONS=%s' % ' '.join(o.sid for o in mine),
                 'SEATS=%s' % ' '.join(sorted({o.record.seat for o in mine})),
+                'ACTIVE_SESSIONS=%s' % ' '.join(o.sid for o in mine if o.active),
+                'ONLINE_SESSIONS=%s' % ' '.join(o.sid for o in mine),
+                'ACTIVE_SEATS=%s' % ' '.join(sorted({o.record.seat for o in mine
+                                                     if o.active and o.record.seat})),
+                'ONLINE_SEATS=%s' % ' '.join(sorted({o.record.seat for o in mine
+                                                     if o.record.seat})),
             ]
             if display != '/':
                 body.append('DISPLAY=%s' % display)
