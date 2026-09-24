@@ -44,6 +44,7 @@ static void collect(struct uevent *ev_in) {
 
     struct dev_ctx ctx;
     if (dev_ctx_init(&ctx, &ev, "/sys") != 0) return;
+    ctx.dry_run = 1;
     ruleset_apply(&g_rs, &ctx);
 
     char name[128];

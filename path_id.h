@@ -285,6 +285,21 @@ static inline ssize_t path_id_build(const char *sysroot, const char *devpath,
             if (pi_parent(cur) != 0) break;
             continue;
         }
+        if (strcmp(sub, "serio") == 0) {
+            const char *b = pi_base(cur), *num = b + strlen(b);
+            while (num > b && num[-1] >= '0' && num[-1] <= '9') num--;
+            if (*num) {
+                snprintf(comp, sizeof comp, "serio-%.20s", num);
+                pi_prepend(path, sizeof path, comp);
+                for (;;) {
+                    if (pi_parent(cur) != 0 || strlen(cur) <= rootlen) break;
+                    if (pi_subsystem(cur, sub, sizeof sub) != 0 || strcmp(sub, "serio") != 0) break;
+                }
+                continue;
+            }
+            if (pi_parent(cur) != 0) break;
+            continue;
+        }
         if (strcmp(sub, "usb") == 0) {
             if (pi_handle_usb(leafdir, cur, sizeof cur, path, sizeof path)) continue;
             if (pi_parent(cur) != 0) break;

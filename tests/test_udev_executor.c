@@ -301,8 +301,17 @@ int main(void) {
         assert(strcmp(buf, "change") == 0);
 
         unlink(attr_file);
+        atc.dry_run = 1;
+        apply_rule(&attr_rule, &atc);
+        assert(access(attr_file, F_OK) != 0);
         rmdir(tdir);
-        printf("test_udev_executor: attr-write OK\n");
+        assert(dry_run_skips(&atc, "/usr/bin/alsactl --export nrestore 0"));
+        assert(dry_run_skips(&atc, "alsactl nrestore 1"));
+        assert(!dry_run_skips(&atc, "/usr/sbin/ethtool -i lo"));
+        assert(!dry_run_skips(&atc, "/usr/bin/notalsactl x"));
+        atc.dry_run = 0;
+        assert(!dry_run_skips(&atc, "/usr/bin/alsactl nrestore 0"));
+        printf("test_udev_executor: attr-write OK (dry_run suppresses)\n");
     }
 
     /* RUN{builtin}="kmod load" records run_builtin=1 */
