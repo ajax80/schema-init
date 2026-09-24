@@ -115,6 +115,8 @@ install -m0755 "$SRC/scripts/schema-session-register"    /usr/local/bin/schema-s
 install -m0755 "$SRC/scripts/schema-session-unregister"  /usr/local/bin/schema-session-unregister
 install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-session-start.sh
 install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
+install -d /usr/local/lib/schema
+install -m0644 "$SRC/scripts/zzz-environment-d.sh"      /usr/local/lib/schema/zzz-environment-d.sh
 install -d /usr/local/lib
 install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
 

@@ -53,6 +53,7 @@ install -m0755 "$REPO/scripts/schema-session-register"        "$PAYLOAD/scripts/
 install -m0755 "$REPO/scripts/schema-session-unregister"      "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/plasma-session-start.sh" "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/plasmashell-shim"        "$PAYLOAD/scripts/"
+install -m0644 "$HERE/../fedora-kde/config/plasma-env/zzz-environment-d.sh" "$PAYLOAD/scripts/"
 # mock_sd.so fakes /run/systemd/system for plasmashell's sd_booted() probe.
 # Compile it on the build host (x86_64, same as target) so the %post chroot,
 # which has no toolchain, does not need one.

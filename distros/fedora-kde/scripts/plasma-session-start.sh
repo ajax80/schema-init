@@ -48,6 +48,8 @@ if [ -d "$_envdir" ]; then
     done
     unset _f
 fi
+# Installer boxes never get the per-user hooks; replay environment.d anyway.
+[ -f "$_envdir/zzz-environment-d.sh" ] || { [ -f /usr/local/lib/schema/zzz-environment-d.sh ] && . /usr/local/lib/schema/zzz-environment-d.sh; }
 
 # Qt routes qWarning/qCritical to the journal socket when /run/systemd/journal/
 # socket exists (it does -- schema-init's journal-sink owns it), NOT to stderr.
