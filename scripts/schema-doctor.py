@@ -6,6 +6,7 @@ Each invariant is a Check; the run loop snapshots before every SAFE heal and
 backs out on failure or collateral so the box is never left worse. systemd,
 still installed, is the oracle. Stdlib only — dbus is reached via busctl.
 """
+import configparser
 import fcntl
 import glob
 import json
@@ -1045,6 +1046,68 @@ class BootEntryIntegrity(Check):
 
 
 REGISTRY.append(BootEntryIntegrity())
+
+
+class NmProfileIface(Check):
+    name = "nm-profile-iface"
+    summary = "NetworkManager profiles name interfaces that exist (kernel names, no rename)"
+    grade = DEFERRED
+
+    TYPES = {"ethernet", "802-3-ethernet", "wifi", "802-11-wireless"}
+
+    def _nics(self):
+        d = os.path.join(ROOT, "sys/class/net")
+        out = {}
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return out
+        for n in names:
+            try:
+                out[n] = open(os.path.join(d, n, "address")).read().strip().lower()
+            except OSError:
+                out[n] = ""
+        return out
+
+    def detect(self):
+        nics = self._nics()
+        if not nics:
+            return None
+        by_mac = {mac: n for n, mac in nics.items() if mac}
+        bad = []
+        for path in sorted(glob.glob(os.path.join(
+                ROOT, "etc/NetworkManager/system-connections/*.nmconnection"))):
+            cp = configparser.ConfigParser(interpolation=None, strict=False)
+            try:
+                cp.read(path)
+            except (configparser.Error, OSError, UnicodeDecodeError):
+                continue
+            if cp.get("connection", "type", fallback="") not in self.TYPES:
+                continue
+            ifname = cp.get("connection", "interface-name", fallback="").strip()
+            if not ifname or ifname in nics:
+                continue
+            mac = (cp.get("ethernet", "mac-address", fallback="")
+                   or cp.get("wifi", "mac-address", fallback="")).strip().lower()
+            if mac and mac not in by_mac:
+                continue                             # its NIC is simply absent
+            pid = cp.get("connection", "id", fallback=os.path.basename(path))
+            hint = f" (its MAC is on {by_mac[mac]})" if mac else ""
+            bad.append(f"'{pid}' wants {ifname}{hint}")
+        if not bad:
+            return None
+        return Finding(
+            detail="NetworkManager profile(s) bound to an interface name that does not "
+                   "exist: " + "; ".join(bad) + " — schema-udev keeps kernel names "
+                   "(eth0/wlan0), so the profile never activates and NM shows the link "
+                   "as externally managed / disconnected. Fix with "
+                   "nmcli con modify <id> connection.interface-name <kernel name>",
+            oracle_said="udev net_setup_link renames NICs to predictable names "
+                        "(enp6s0) that the profile was saved against",
+            healable=False)
+
+
+REGISTRY.append(NmProfileIface())
 
 
 def read_config():
