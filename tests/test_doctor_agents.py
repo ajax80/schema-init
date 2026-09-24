@@ -49,6 +49,11 @@ check("detect flags missing shortcut daemon", f is not None)
 check("detail names kglobalacceld", f is not None and "kglobalacceld" in f.detail)
 check("finding not healable", f is not None and f.healable is False)
 
+# Plasma 6 Wayland: kwin_wayland hosts kglobalaccel in-process → clean
+mkproc(13, "/usr/bin/kwin_wayland --wayland-fd 7 --socket wayland-0")
+check("clean when kwin_wayland hosts shortcuts", c.detect() is None)
+rmproc(13)
+
 # both agents missing → names both
 rmproc(12)
 f = c.detect()
