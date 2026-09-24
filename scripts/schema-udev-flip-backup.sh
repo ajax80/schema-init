@@ -64,8 +64,14 @@ rollback)
         [ "$(md5 "$BIN")" = "$bakmd5" ] || { echo "ROLLBACK VERIFY FAILED: $BIN != backup after restore" >&2; exit 1; }
     fi
     if [ -d "$SVCBAK" ]; then
-        rm -rf "$SVC"
-        cp -a "$SVCBAK" "$SVC"   # cp, not mv: keep the backup intact for a second attempt
+        # merge, not replace: a services dir wipe silently deleted tailscaled.svc
+        # added after the snapshot (DBox 09-18). Snapshot files win; extras stay.
+        pre="$SVC.pre-rollback-$(date +%Y%m%d-%H%M%S)"
+        cp -a "$SVC" "$pre"
+        cp -a "$SVCBAK/." "$SVC/"   # cp, not mv: keep the backup intact for a second attempt
+        extra="$(cd "$SVC" && for f in *; do [ -e "$SVCBAK/$f" ] || echo "$f"; done)"
+        [ -z "$extra" ] || echo "ROLLBACK NOTE: kept services added after the snapshot:" $extra
+        echo "ROLLBACK NOTE: pre-rollback services saved to $pre"
     else
         echo "ROLLBACK WARN: no $SVCBAK — services NOT restored" >&2
     fi
