@@ -146,6 +146,30 @@ for _svc in /usr/bin/kded6 \
     [ -x "$_svc" ] && ! pgrep -f "$_svc" >/dev/null 2>&1 && "$_svc" &
 done
 
+# xdg-desktop-portal probes its backends ONCE at startup and never re-probes.
+# If anything activates it before kwin's socket exists (2026-09-23 boot: a
+# crashed first session attempt, respawn, frontend activated ~0.1s into the new
+# bus), portal-kde can't open a display, exits before claiming its name, and the
+# frontend serves only its built-ins for the whole session -- no InputCapture,
+# deskflow-core crash-loops. Once portal-kde owns its name, restart a frontend
+# that is missing InputCapture; the next caller re-activates it with the full set.
+(
+    _bus=org.freedesktop.DBus
+    i=0
+    while [ $i -lt 60 ]; do
+        busctl --user status org.freedesktop.impl.portal.desktop.kde >/dev/null 2>&1 && break
+        sleep 0.5
+        i=$((i+1))
+    done
+    _pid=$(busctl --user call $_bus /org/freedesktop/DBus $_bus GetConnectionUnixProcessID \
+        s org.freedesktop.portal.Desktop 2>/dev/null | cut -d' ' -f2)
+    [ -n "$_pid" ] || exit 0
+    busctl --user introspect org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop 2>/dev/null \
+        | grep -q org.freedesktop.portal.InputCapture && exit 0
+    echo "plasma-session-start: portal frontend $_pid missing InputCapture, restarting" >&2
+    kill "$_pid"
+) &
+
 # The session lives as long as the compositor. When kwin exits, the autologin
 # loop re-evaluates its exit code (0 -> respawn, non-zero -> stop at console).
 wait $KWIN
