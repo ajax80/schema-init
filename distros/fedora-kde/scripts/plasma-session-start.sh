@@ -68,7 +68,21 @@ export QT_FORCE_STDERR_LOGGING=1
 # card directly. No trailing app arg — plasmashell is launched separately below
 # (a kwin-argv-launched plasmashell crash-looped in testing; standalone is
 # stable). kwin's stderr (kwin_*.debug rules from the autologin env) -> debug log.
-/usr/bin/kwin_wayland --drm --xwayland >/home/ajax80/kwin-debug.log 2>&1 &
+# Attempt 1's reason (2026-09-24): /dev/char/226:1 missing + renderD128 EACCES.
+# nvidia-drm registers the card after schema-udev writes its ready file, and
+# the autologin's `udevadm settle` is systemd's (fails instantly), so kwin ran
+# ~1s before schema-udev created the /dev/char link and uaccess ACL. Wait for both.
+DRM="${KWIN_DRM_DEVICES:-/dev/dri/card1}"
+for _ in $(seq 1 150); do
+    if [ -r "$DRM" ] && [ -w "$DRM" ]; then
+        [ -e "/dev/char/$(printf '%d:%d' $(stat -c '0x%t 0x%T' "$DRM"))" ] && break
+    fi
+    sleep 0.1
+done
+# Every boot's first session attempt exits rc=1 and the respawn succeeds; the
+# truncating redirect below erased attempt 1's reason. Keep the prior log.
+[ -f "$HOME/kwin-debug.log" ] && mv -f "$HOME/kwin-debug.log" "$HOME/kwin-debug.log.prev"
+/usr/bin/kwin_wayland --drm --xwayland >"$HOME/kwin-debug.log" 2>&1 &
 KWIN=$!
 # schema-dbus-session-run.sh's broker-health watchdog kills this script's PID
 # with a plain TERM when the session bus dies mid-session -- but a bare
@@ -145,6 +159,30 @@ for _svc in /usr/bin/kded6 \
             /usr/libexec/xdg-desktop-portal-kde; do
     [ -x "$_svc" ] && ! pgrep -f "$_svc" >/dev/null 2>&1 && "$_svc" &
 done
+
+# xdg-desktop-portal probes its backends ONCE at startup and never re-probes.
+# If anything activates it before kwin's socket exists (2026-09-23 boot: a
+# crashed first session attempt, respawn, frontend activated ~0.1s into the new
+# bus), portal-kde can't open a display, exits before claiming its name, and the
+# frontend serves only its built-ins for the whole session -- no InputCapture,
+# deskflow-core crash-loops. Once portal-kde owns its name, restart a frontend
+# that is missing InputCapture; the next caller re-activates it with the full set.
+(
+    _bus=org.freedesktop.DBus
+    i=0
+    while [ $i -lt 60 ]; do
+        busctl --user status org.freedesktop.impl.portal.desktop.kde >/dev/null 2>&1 && break
+        sleep 0.5
+        i=$((i+1))
+    done
+    _pid=$(busctl --user call $_bus /org/freedesktop/DBus $_bus GetConnectionUnixProcessID \
+        s org.freedesktop.portal.Desktop 2>/dev/null | cut -d' ' -f2)
+    [ -n "$_pid" ] || exit 0
+    busctl --user introspect org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop 2>/dev/null \
+        | grep -q org.freedesktop.portal.InputCapture && exit 0
+    echo "plasma-session-start: portal frontend $_pid missing InputCapture, restarting" >&2
+    kill "$_pid"
+) &
 
 # The session lives as long as the compositor. When kwin exits, the autologin
 # loop re-evaluates its exit code (0 -> respawn, non-zero -> stop at console).
