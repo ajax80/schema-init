@@ -1008,7 +1008,9 @@ class Login1Session(dbus.service.Object):
         # sets tty->flow.stopped, do_con_write() then accepts 0 bytes forever,
         # and every later write to /dev/console sleeps in n_tty_write() with
         # MAX_SCHEDULE_TIMEOUT -- no timeout, no signal. On 2026-07-26 that
-        # caught PID 1's own shutdown log and hung the box twice.
+        # caught PID 1's own shutdown log and hung the box twice. ECHO goes too:
+        # desktop typing otherwise paints onto the text console under the
+        # compositor, visible whenever it lets go of the display.
         #
         # Deliberately NOT KDSKBMODE=K_OFF, which is what systemd-logind does
         # here. K_OFF would also stop the kernel from handling ctrl-alt-F<n>,
@@ -1018,8 +1020,10 @@ class Login1Session(dbus.service.Object):
             termios.tcflow(fd, termios.TCOON)          # clear any existing stop
             attrs = termios.tcgetattr(fd)
             attrs[0] &= ~(termios.IXON | termios.IXANY)
+            attrs[3] &= ~(termios.ECHO | termios.ECHONL)
             termios.tcsetattr(fd, termios.TCSANOW, attrs)
-            print(f"login1-stub: VT {self.vtnr} flow control disarmed (IXON off)")
+            termios.tcflush(fd, termios.TCIFLUSH)
+            print(f"login1-stub: VT {self.vtnr} flow control disarmed (IXON off, echo off)")
         except Exception as e:
             print(f"login1-stub: disarming VT {self.vtnr} flow control failed: {e}",
                   file=sys.stderr)
