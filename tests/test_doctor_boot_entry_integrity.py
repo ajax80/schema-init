@@ -176,6 +176,34 @@ def test_saved_entry_on_valid_schema_clean():
     check('saved_entry on a real, valid schema entry: clean', c.detect() is None)
 
 
+def test_saved_entry_machine_id_with_schema_init_clean():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-good-fallback-20260915',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    mid = 'c8d9417838064f29b0660ea971162a87-7.0.12-cachyos1-schema.fc44.x86_64'
+    write_entry(ent_dir, mid, 'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    set_saved_entry(grubenv_state, mid)
+    c = sd.BootEntryIntegrity()
+    check('machine-id saved_entry carrying init=schema-init: clean', c.detect() is None)
+    c.heal(None)
+    check('machine-id saved_entry: heal leaves it alone (not the fallback)',
+          open(grubenv_state).read().strip() == f'saved_entry={mid}', open(grubenv_state).read().strip())
+
+
+def test_saved_entry_stock_file_without_init_detected():
+    root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
+    sd = load_module(root, stub)
+    write_entry(ent_dir, 'schema-7.1.12-200.fc44.x86_64',
+                'root=/dev/sda2 ro init=/sbin/schema-init modprobe.blacklist=radeon')
+    stock = '8ac661a02a5647aaa4f14e6f78f77879-7.2.6-200.fc44.x86_64'
+    write_entry(ent_dir, stock, 'root=/dev/sda2 ro rhgb quiet')
+    set_saved_entry(grubenv_state, stock)
+    f = sd.BootEntryIntegrity().detect()
+    check('stock saved_entry file without schema-init: detected',
+          f is not None and 'not a schema entry' in f.detail, f.detail if f else '')
+
+
 def test_no_schema_entries_ignores_unusual_saved_entry():
     root, ent_dir, conf_root, bind, stub, grubenv_state = new_root()
     sd = load_module(root, stub)
@@ -463,7 +491,9 @@ def main():
                test_missing_extra_only_detected, test_tonights_actual_shape_all_entries_broken,
                test_no_schema_entries_clean, test_substring_collision_detected,
                test_saved_entry_on_stock_detected, test_saved_entry_dangling_detected,
-               test_saved_entry_on_valid_schema_clean, test_no_schema_entries_ignores_unusual_saved_entry,
+               test_saved_entry_on_valid_schema_clean,
+               test_saved_entry_machine_id_with_schema_init_clean,
+               test_saved_entry_stock_file_without_init_detected, test_no_schema_entries_ignores_unusual_saved_entry,
                test_heal_restores_missing_init_and_extras, test_heal_strips_duplicate_stale_init,
                test_heal_idempotent, test_heal_preserves_rdinit,
                test_heal_saved_entry_no_pin_picks_newest, test_heal_saved_entry_pin_wins_over_newest,
