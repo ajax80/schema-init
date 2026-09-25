@@ -51,6 +51,7 @@ install -m0755 "$REPO/scripts/schema-logind.py"               "$PAYLOAD/scripts/
 install -m0755 "$REPO/scripts/schema-doctor.py"               "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-session-register"        "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-session-unregister"      "$PAYLOAD/scripts/"
+install -m0755 "$REPO/scripts/schema-dbus-session-run.sh"      "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/plasma-session-start.sh" "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/plasmashell-shim"        "$PAYLOAD/scripts/"
 install -m0644 "$HERE/../fedora-kde/config/plasma-env/zzz-environment-d.sh" "$PAYLOAD/scripts/"
