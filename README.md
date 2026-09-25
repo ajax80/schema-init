@@ -109,14 +109,16 @@ The COPR builds three packages: `schema-init` (the init), `schema-init-migrate` 
 
 ### The fast path — boot a prebuilt installer (no compiler, no Docker)
 
-If you just want to *see it run*, grab the prebuilt Fedora 44 installer from the [latest release](https://github.com/ajax80/schema-init/releases/latest):
+If you just want to *see it run*, grab the prebuilt Fedora 44 installer (`schema-netinst44-installer-*.iso`) from the [latest release](https://github.com/ajax80/schema-init/releases/latest):
 
 ```sh
-# download schema-fedora44-installer.iso from the release, then:
-sudo dd if=schema-fedora44-installer.iso of=/dev/sdX bs=4M status=progress oflag=direct && sync
+# download the .iso from the release, then:
+sudo dd if=schema-netinst44-installer-<version>.iso of=/dev/sdX bs=4M status=progress oflag=direct && sync
 ```
 
-Boot that USB stick (or point a VM at the ISO) and the guided installer gives you a full KDE desktop running **schema-init as PID 1**. During install you can *optionally* take the **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev.
+Boot that USB stick (or point a VM at the ISO) and the installer gives you a full KDE desktop running **schema-init as PID 1**. It is a netinst image: the machine needs a network connection during install (it pulls the KDE package set). Verified on real hardware — a clean install on a Dell i3 laptop boots straight to Plasma with no hand fixes.
+
+After the first login a wizard offers the *optional* **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev. Wi-Fi and wired profiles are unpinned from systemd's interface names before the switch, so the network survives it.
 
 > ⚠️ **What the udev flip does:** it kills `systemd-udevd` and makes **schema-udev** authoritative over device management. This is the whole point — watching your init own `/dev` — but it *is* a real change to how the box handles hardware. It's optional and guided; skip it and you still get schema-init as PID 1 with stock udev underneath.
 
@@ -540,7 +542,7 @@ These are real gaps, not future features being teased:
 
 - **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
 - **Log rotation is not scheduled by default.** The `logrotate` config ships, and an example timer (`services/logrotate.svc.example`) ships alongside it, but nothing fires the rotation until you enable that timer. See [Logs](#logs).
-- **`schema-logind.py` reimplements a subset of `org.freedesktop.login1`.** It models multiple concurrent sessions and seats — a session registry with one object per session, per-seat membership, and active-session tracking — which is enough for a Wayland compositor to take KMS and hand it back on a VT switch (see [Recovery console](#recovery-console)) and for `uaccess` device ACLs to follow the active session. It is a targeted reimplementation, not the full daemon. It also does not set `KDSKBMODE = K_OFF`, deliberately — if the daemon died while `K_OFF` were set the console keyboard would stay dead, and `K_OFF` would also disable the kernel's ctrl-alt-F<n> VT switch that is the recovery-console escape hatch — so keystrokes can still leak to the tty underneath a compositor.
+- **`schema-logind.py` reimplements a subset of `org.freedesktop.login1`.** It models multiple concurrent sessions and seats — a session registry with one object per session, per-seat membership, and active-session tracking — which is enough for a Wayland compositor to take KMS and hand it back on a VT switch (see [Recovery console](#recovery-console)) and for `uaccess` device ACLs to follow the active session. It is a targeted reimplementation, not the full daemon. It also does not set `KDSKBMODE = K_OFF`, deliberately — if the daemon died while `K_OFF` were set the console keyboard would stay dead, and `K_OFF` would also disable the kernel's ctrl-alt-F<n> VT switch that is the recovery-console escape hatch — so keystrokes still reach the tty underneath a compositor. They are neutralised rather than blocked: when the session VT is handed to the compositor, echo is turned off and pending input is flushed, and no getty runs on the session VT to read what arrives.
 
 ---
 
@@ -1230,6 +1232,10 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 - [x] In-place migrator + COPR — `schema-migrate --discover/--deploy/--uninstall` converts a live Fedora KDE box to schema-init as PID 1 and back (proven end-to-end in a VM); prebuilt via `dnf copr enable ajax80/schema-init` (three packages), with a guided `schema-init-wizard` GUI
 - [x] schema-dbus — native C broker replacing `dbus-daemon` on both the system bus and the session bus; enforces the dissolved `busconfig` policy (conformance-tested), does auth / name ownership / routing / match rules / unix-fd passing; serves a full KDE desktop as the live bus through reboots; opt-in, self-healing, reversible flip (on-demand activation, `BecomeMonitor`, full driver interface)
 - [x] systemctl compat translator — a `schema-systemctl` shim (`systemctl_shim.h`) that makes packaged RPM/deb scriptlets (`systemctl enable`/`daemon-reload`/…) succeed on a schema-init box and records enable-intent to `pending.list`, plus a `schema-import` runtime importer that drains the queue and translates `.service` units into native `.svc` (`ExecStart`/`Type`/`Restart`/`User`/`Environment` with `$VAR` resolution; `Type=notify`/`dbus`/templates logged-and-skipped); `dnf` install/remove round-trip verified, generated units load under the real `.svc` parser
+- [x] modules-load.d — PID 1 loads `/etc/modules-load.d/*.conf` at boot (systemd-modules-load parity)
+- [x] schema-doctor — health checks with self-heal (boot-entry integrity, NM profiles bound to missing interfaces, session agents, powerdevil / ksycoca loops, panel pins), run at boot and periodically
+- [x] Boot snapshots + GRUB fallback — known-good root snapshots with their own boot entries (separate `/boot`, initramfs and non-fstab `/home` handled) and a boot-success guard
+- [x] Fedora 44 installer ISO, verified on real hardware — netinst + kickstart installs KDE on schema-init as PID 1 with an optional guided schema-udev flip; clean install to desktop on a Dell i3 laptop with no hand fixes (v0.3.0)
 
 ---
 
