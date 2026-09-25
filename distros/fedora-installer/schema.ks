@@ -118,6 +118,11 @@ install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-s
 install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
 install -d /usr/local/lib/schema
 install -m0644 "$SRC/scripts/zzz-environment-d.sh"      /usr/local/lib/schema/zzz-environment-d.sh
+# powerdevil's libddcutil display watcher falls back to POLL mode here and
+# burns ~7-9% of a core forever (Eli, DBox). Only external-monitor DDC
+# brightness needs it; delete this file to get that back.
+install -d /etc/environment.d
+printf 'POWERDEVIL_NO_DDCUTIL=1\n' > /etc/environment.d/90-no-ddcutil.conf
 install -d /usr/local/lib
 install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
 
