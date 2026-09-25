@@ -113,6 +113,7 @@ install -m0755 "$SRC/scripts/schema-logind.py"           /usr/local/bin/schema-l
 install -m0755 "$SRC/scripts/schema-doctor.py"           /usr/local/bin/schema-doctor
 install -m0755 "$SRC/scripts/schema-session-register"    /usr/local/bin/schema-session-register
 install -m0755 "$SRC/scripts/schema-session-unregister"  /usr/local/bin/schema-session-unregister
+install -m0755 "$SRC/scripts/schema-dbus-session-run.sh"   /usr/local/bin/schema-dbus-session-run.sh
 install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-session-start.sh
 install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
 install -d /usr/local/lib/schema

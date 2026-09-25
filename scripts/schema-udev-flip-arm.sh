@@ -14,6 +14,17 @@ arm)
         exit 1
     fi
     ls -la "$FLAG"
+    # schema-udev keeps kernel NIC names (wlan0/eth0); systemd-udev renames
+    # them (wlp0s29u1u1). An NM profile pinned to the old name never
+    # autoconnects after the flip, so unpin profiles bound to physical NICs.
+    if command -v nmcli >/dev/null 2>&1; then
+        nmcli -t -f UUID connection show 2>/dev/null | while read -r uuid; do
+            ifn=$(nmcli -g connection.interface-name connection show "$uuid" 2>/dev/null)
+            [ -n "$ifn" ] && [ -e "/sys/class/net/$ifn/device" ] || continue
+            nmcli connection modify "$uuid" connection.interface-name "" \
+                && echo "unpinned NM profile $uuid from $ifn"
+        done
+    fi
     echo "ARMED OK — $FLAG present (daemon access() will return 0 -> LIVE)"
     ;;
 disarm)
