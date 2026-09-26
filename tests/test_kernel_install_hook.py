@@ -229,13 +229,44 @@ def test_esp_boot_root_falls_back_to_grub_entries():
           os.path.isfile(rec) and f'saved_entry=schema-{VER}' in open(rec).read())
 
 
+def test_add_refreshes_older_schema_entries():
+    # grub2-mkconfig (run by 20-grub.install) rewrote every entry's options,
+    # stripping init= from the older kernel's schema entry
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    old = '6.19.10-300.fc44.x86_64'
+    wiped = 'options root=UUID=abc ro rootflags=subvol=root rhgb quiet\n'
+    with open(os.path.join(entries, f'{TOKEN}-{old}.conf'), 'w') as f:
+        f.write(f'title Fedora Linux ({old}) 44\nversion {old}\nlinux /vmlinuz-{old}\n' + wiped)
+    with open(os.path.join(entries, f'schema-{old}.conf'), 'w') as f:
+        f.write(f'title Fedora Linux ({old}) 44 (schema-init)\nversion {old}\nlinux /vmlinuz-{old}\n' + wiped)
+    run('add', VER, boot, conf_root, bind)
+    body = open(os.path.join(entries, f'schema-{old}.conf')).read()
+    opts = next((l for l in body.splitlines() if l.startswith('options ')), '')
+    check('refresh: older schema entry gets init= back', 'init=/usr/bin/schema-init' in opts, opts)
+    check('refresh: older title not double-suffixed', body.count('(schema-init)') == 1, body)
+    check('refresh: new kernel still the default',
+          f'saved_entry=schema-{VER}' in open(rec).read().splitlines()[-1])
+
+
+def test_add_leaves_orphan_schema_entry():
+    # a schema entry whose stock twin is gone is left as-is, not deleted
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    orphan = os.path.join(entries, 'schema-5.0.0.conf')
+    with open(orphan, 'w') as f:
+        f.write('title orphan (schema-init)\noptions ro init=/usr/bin/schema-init\n')
+    r = run('add', VER, boot, conf_root, bind)
+    check('orphan: add exits 0', r.returncode == 0, r.stderr)
+    check('orphan: untouched', os.path.isfile(orphan) and 'orphan' in open(orphan).read())
+
+
 def main():
     print('schema-init kernel-install hook tests\n')
     for fn in (test_add_full, test_no_marker_leaves_default, test_no_extras,
                test_idempotent_add, test_init_path_override, test_no_double_init,
                test_auto_resolve_from_path, test_remove, test_pin_enforced_over_stock,
                test_pin_broken_falls_back_to_advance, test_marker_whitespace_and_conf_suffix_normalized,
-               test_esp_boot_root_falls_back_to_grub_entries):
+               test_esp_boot_root_falls_back_to_grub_entries,
+               test_add_refreshes_older_schema_entries, test_add_leaves_orphan_schema_entry):
         print(fn.__name__)
         fn()
         print()
