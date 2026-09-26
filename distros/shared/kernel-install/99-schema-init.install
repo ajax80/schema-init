@@ -42,11 +42,12 @@ ENTRY_TOKEN="${KERNEL_INSTALL_ENTRY_TOKEN:-}"
 [ -n "$ENTRY_TOKEN" ] || ENTRY_TOKEN="$(cat /etc/machine-id 2>/dev/null || true)"
 
 find_stock() {
-    if [ -n "$ENTRY_TOKEN" ] && [ -f "$ENTRIES/$ENTRY_TOKEN-$KERNEL_VERSION.conf" ]; then
-        printf '%s\n' "$ENTRIES/$ENTRY_TOKEN-$KERNEL_VERSION.conf"
+    # $1 = kernel version
+    if [ -n "$ENTRY_TOKEN" ] && [ -f "$ENTRIES/$ENTRY_TOKEN-$1.conf" ]; then
+        printf '%s\n' "$ENTRIES/$ENTRY_TOKEN-$1.conf"
         return
     fi
-    for e in "$ENTRIES"/*-"$KERNEL_VERSION".conf; do
+    for e in "$ENTRIES"/*-"$1".conf; do
         [ -f "$e" ] || continue
         case "$(basename "$e")" in
             schema-*|*rescue*) continue ;;
@@ -83,12 +84,12 @@ set_default_to() {
     grub2-editenv - set "saved_entry=schema-$1" 2>/dev/null || true
 }
 
-case "$COMMAND" in
-add)
-    stock="$(find_stock)"
-    [ -n "$stock" ] || exit 0
-    xtra="$(extra_args)"
-    tmp="$SCHEMA_CONF.tmp.$$"
+clone() {
+    # $1 = kernel version: (re)write schema-$1.conf from its stock entry
+    stock="$(find_stock "$1")"
+    [ -n "$stock" ] || return 1
+    conf="$ENTRIES/schema-$1.conf"
+    tmp="$conf.tmp.$$"
     : > "$tmp"
     while IFS= read -r line; do
         case "$line" in
@@ -105,7 +106,23 @@ add)
         esac
         printf '%s\n' "$line" >> "$tmp"
     done < "$stock"
-    mv "$tmp" "$SCHEMA_CONF"
+    mv "$tmp" "$conf"
+}
+
+case "$COMMAND" in
+add)
+    xtra="$(extra_args)"
+    clone "$KERNEL_VERSION" || exit 0
+    # Fedora's 20-grub.install runs grub2-mkconfig whenever /etc/default/grub is
+    # newer than /etc/kernel/cmdline (e.g. a grub2-tools update replaced it), and
+    # mkconfig rewrites the options of EVERY BLS entry -- stripping init= from
+    # the existing schema entries (DBox, 7.2.7 update, 2026-09-25). Re-clone
+    # every schema entry that still has a stock twin.
+    for e in "$ENTRIES"/schema-*.conf; do
+        [ -f "$e" ] || continue
+        v="${e##*/schema-}"; v="${v%.conf}"
+        [ "$v" = "$KERNEL_VERSION" ] || clone "$v" || true
+    done
     set_default_to "$KERNEL_VERSION"
     ;;
 remove)
