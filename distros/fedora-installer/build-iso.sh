@@ -60,7 +60,7 @@ install -m0644 "$HERE/../fedora-kde/config/plasma-env/zzz-environment-d.sh" "$PA
 install -m0755 "$HERE/../fedora-kde/scripts/schema-autostart-runner.sh" "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/schema-plasma-watchdog.sh"  "$PAYLOAD/scripts/"
 install -d "$PAYLOAD/plasma-env"
-install -m0644 "$HERE/../fedora-kde/config/plasma-env/"{05-kdedefaults,06-x11-display-auth,no-app-scope,ssh-agent-sock}.sh \
+install -m0644 "$HERE/../fedora-kde/config/plasma-env/"{05-kdedefaults,no-app-scope,ssh-agent-sock}.sh \
     "$HERE/../fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh" "$PAYLOAD/plasma-env/"
 # mock_sd.so fakes /run/systemd/system for plasmashell's sd_booted() probe.
 # Compile it on the build host (x86_64, same as target) so the %post chroot,

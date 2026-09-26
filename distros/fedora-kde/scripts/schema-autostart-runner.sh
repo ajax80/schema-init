@@ -11,25 +11,9 @@ echo "runner start $(date)" > "$LOG"
 for _ in $(seq 1 40); do pgrep -x plasmashell >/dev/null && break; sleep 0.5; done
 sleep 2
 
-# X11/Xwayland auth: env/06-x11-display-auth.sh gave the session a stable XAUTHORITY
-# path but no cookie yet (Xwayland starts after plasmashell). Fill it from the live
-# Xwayland -auth file so taskbar-forked X11 apps can reach :0, and mirror DISPLAY/
-# XAUTHORITY into the dbus activation env for dbus-activated launches.
-export DISPLAY=:0
-export XAUTHORITY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/Xauthority"
-xwauth=""
-for _ in $(seq 1 40); do
-    xwpid=$(pgrep -x Xwayland | head -1)
-    [ -n "$xwpid" ] && xwauth=$(tr '\0' '\n' < "/proc/$xwpid/cmdline" 2>/dev/null | grep -A1 '^-auth$' | tail -1)
-    [ -n "$xwauth" ] && [ -f "$xwauth" ] && break
-    xwauth=""; sleep 0.5
-done
-if [ -n "$xwauth" ]; then
-    xauth -f "$XAUTHORITY" merge "$xwauth" 2>>"$LOG" && echo "xauth merged from $xwauth" >>"$LOG"
-    dbus-update-activation-environment --all 2>>"$LOG"
-else
-    echo "Xwayland -auth not found; X11 apps may not launch" >>"$LOG"
-fi
+# No Xwayland cookie step: Plasma 6 kwin starts Xwayland on demand with no
+# -auth and grants SI:localuser, so there is nothing to merge -- waiting for it
+# only delayed every autostart app by 20s.
 
 # ssh-agent on a fixed socket (matches env/ssh-agent-sock.sh) so git and
 # Claude Code inherit a live agent. ssh-add -l: 0=keys, 1=running/empty, 2=no agent.
