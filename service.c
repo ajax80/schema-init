@@ -1,5 +1,6 @@
 #include "service.h"
 #include "caps.h"
+#include "ns.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -361,7 +362,58 @@ static void cgroup_apply_limits(service_t *svc) {
     }
 }
 
+/* 1 = handled, 0 = not a mount-ns key, -1 = bad value (load error). */
+static int parse_ns_field(service_t *svc, const char *key, const char *val) {
+    int r;
+    if (strcmp(key, "private_tmp") == 0)
+        r = parse_ns_bool(val, &svc->ns_private_tmp);
+    else if (strcmp(key, "protect_system") == 0)
+        r = parse_protect_system(val, &svc->ns_protect_system);
+    else if (strcmp(key, "protect_home") == 0)
+        r = parse_ns_bool(val, &svc->ns_protect_home);
+    else
+        return 0;
+    if (r != 0) {
+        fprintf(stderr, "[schema-init] %s: bad value %s=%s\n",
+                svc->name[0] ? svc->name : "?", key, val);
+        return -1;
+    }
+    return 1;
+}
+
+static int path_under(const char *p, const char *const *dirs, int n) {
+    for (int i = 0; i < n; i++)
+        if (strncmp(p, dirs[i], strlen(dirs[i])) == 0) return 1;
+    return 0;
+}
+
+/* A mount-ns field that hides the service's own exec or ready_path. */
+static int ns_conflict(const service_t *svc) {
+    static const char *const tmp[] = { "/tmp/", "/var/tmp/" };
+    static const char *const home[] = { "/home/", "/root/", "/run/user/" };
+    const char *what = NULL;
+
+    if (svc->ns_private_tmp && path_under(svc->exec, tmp, 2))
+        what = "private_tmp hides exec";
+    else if (svc->ns_private_tmp && path_under(svc->ready_path, tmp, 2))
+        what = "private_tmp hides ready_path";
+    else if (svc->ns_protect_home && path_under(svc->exec, home, 3))
+        what = "protect_home hides exec";
+    else if (svc->ns_protect_home && path_under(svc->ready_path, home, 3))
+        what = "protect_home hides ready_path";
+    if (!what) return 0;
+    fprintf(stderr, "[schema-init] %s: %s — not loaded\n", svc->name, what);
+    return -1;
+}
+
 int service_apply_hardening(const service_t *svc) {
+    const char *step = "";
+    if (apply_mount_ns(svc->ns_private_tmp, svc->ns_protect_system,
+                       svc->ns_protect_home, &step) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: mount_ns: %s: %d\n",
+                svc->name, step, errno);
+        return -1;
+    }
     if (svc->cap_restrict) {
         if (apply_capabilities(svc->cap_keep_mask) != 0) {
             dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
@@ -455,11 +507,13 @@ int service_spawn(service_t *svc) {
         if (service_apply_hardening(svc) != 0)
             _exit(126);
         if (svc->run_uid) {
-            char xdg[48];
-            snprintf(xdg, sizeof(xdg), "/run/user/%u", (unsigned)svc->run_uid);
-            mkdir(xdg, 0700);
-            chown(xdg, svc->run_uid, svc->run_gid);
-            setenv("XDG_RUNTIME_DIR", xdg, 1);
+            if (!svc->ns_protect_home) {
+                char xdg[48];
+                snprintf(xdg, sizeof(xdg), "/run/user/%u", (unsigned)svc->run_uid);
+                mkdir(xdg, 0700);
+                chown(xdg, svc->run_uid, svc->run_gid);
+                setenv("XDG_RUNTIME_DIR", xdg, 1);
+            }
             if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0) {
                 dprintf(2, "[schema-init] UID DROP FAILED for %s: initgroups: %d\n",
                         svc->name, errno);
@@ -785,6 +839,7 @@ int services_load(const char *dir, service_t *table, int max) {
         svc->timer_cal_dom = -1;
         int dep_slot = 0;
         int bad = 0;
+        int nsr;
 
         argc = 0;
         /* NOTE: keep in sync with service_load_one parse chain */
@@ -826,6 +881,9 @@ int services_load(const char *dir, service_t *table, int max) {
                     break;
                 }
                 svc->cap_restrict = 1;
+            }
+            else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
+                if (nsr < 0) { bad = 1; break; }
             }
             else if (strcmp(line, "critical") == 0 && atoi(val))
                 svc->flags |= SVC_CRITICAL;
@@ -893,6 +951,7 @@ int services_load(const char *dir, service_t *table, int max) {
         }
         if (bad) { fclose(f); continue; }
         fclose(f);
+        if (ns_conflict(svc) != 0) continue;
         if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
             fprintf(stderr,
                     "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
@@ -967,7 +1026,7 @@ int services_load(const char *dir, service_t *table, int max) {
 int service_load_one(const char *path, service_t *svc) {
     FILE *f;
     char line[512];
-    int argc, dep_slot;
+    int argc, dep_slot, nsr;
 
     f = fopen(path, "r");
     if (!f) return -1;
@@ -1028,6 +1087,9 @@ int service_load_one(const char *path, service_t *svc) {
                 return -1;
             }
             svc->cap_restrict = 1;
+        }
+        else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
+            if (nsr < 0) { fclose(f); return -1; }
         }
         else if (strcmp(line, "critical") == 0 && atoi(val))
             svc->flags |= SVC_CRITICAL;
@@ -1092,6 +1154,7 @@ int service_load_one(const char *path, service_t *svc) {
         }
     }
     fclose(f);
+    if (ns_conflict(svc) != 0) return -1;
     if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
         fprintf(stderr,
                 "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "

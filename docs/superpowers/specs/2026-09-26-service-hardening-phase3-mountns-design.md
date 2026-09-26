@@ -154,10 +154,10 @@ service that fails this way repeatedly.
   `private_tmp`: sddm, display stack, pipewire.
 - **Package managers / updaters** with `protect_system`.
 - **crond**: user jobs need `/home` and the real `/tmp`.
-- **Ordering edge:** with `MS_SLAVE`, a host mount that lands on `/home` *after* a
-  `protect_home` service started propagates into its namespace and may appear above or below
-  the tmpfs. vmtest must cover it (start the checker, then mount on `/home` from the host,
-  re-check). Until proven, `protect_home` services should `dep=` on `mount-home`.
+- **Ordering edge (resolved):** with `MS_SLAVE`, a host mount that lands on `/home` *after*
+  a `protect_home` service started does propagate in, but is tucked beneath the service's
+  tmpfs — the service still sees an empty `/home`. vmtest covers it (`mountns-late-on:
+  home=EMPTY`, control `home=OPEN`). No `dep=mount-home` needed.
 
 ## Testing
 

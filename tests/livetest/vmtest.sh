@@ -34,6 +34,9 @@ BIN="$REPO/schema-init"
 
 # Static privdrop helper (initramfs has no libc -> must be -static). Exercises
 # chronyd's real self-privdrop so the cap set is validated, not just asserted.
+MOUNTNS="$WORK/test_mountns"
+cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$MOUNTNS" "$HERE/test_mountns.c" \
+  || { echo "MOUNTNS HELPER BUILD FAILED"; exit 1; }
 PRIVDROP="$WORK/test_privdrop"
 cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c" \
   || { echo "PRIVDROP HELPER BUILD FAILED"; cc -static -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c"; exit 1; }
@@ -43,12 +46,14 @@ mkdir -p "$ROOT"/{sbin,bin,usr/bin,etc/schema-init/services,proc,sys,dev,run,sys
 cp "$BIN" "$ROOT/sbin/schema-init"
 ln -sf /sbin/schema-init "$ROOT/init"   # kernel initramfs entry point is /init
 cp "$BB"  "$ROOT/bin/busybox"
-for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill; do
+for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill readlink; do
   ln -sf /bin/busybox "$ROOT/bin/$a"
 done
 ln -sf /bin/busybox "$ROOT/usr/bin/touch"   # test svcs call /usr/bin/touch
 ln -sf /bin/busybox "$ROOT/bin/sleep"       # and /bin/sleep
 cp "$PRIVDROP" "$ROOT/bin/test_privdrop"
+cp "$MOUNTNS" "$ROOT/bin/test_mountns"
+mkdir -p "$ROOT"/{boot/efi,home,root,tmp,var/tmp}
 
 cp "$HERE/test-timer.svc"     "$ROOT/etc/schema-init/services/"
 cp "$HERE/test-hang.svc"      "$ROOT/etc/schema-init/services/"
@@ -158,6 +163,42 @@ exec=/bin/test_privdrop
 needs_root=1
 no_new_privs=1
 keep_caps=CAP_SYS_TIME,CAP_NET_BIND_SERVICE,CAP_CHOWN,CAP_SETUID,CAP_SETGID,CAP_DAC_OVERRIDE
+EOF
+
+# Phase 3 mount-ns: prep gives /boot/efi its OWN mount (so a non-recursive
+# read-only would leave it writable) and puts content in /home and /root. The
+# same checker runs hardened ("on") and plain ("off"); "off" must see every
+# probe OPEN or the probes prove nothing. No /efi exists: exercises ENOENT skip.
+cat > "$ROOT/usr/bin/mountns-prep.sh" <<'EOF'
+#!/bin/sh
+mount -t tmpfs efi /boot/efi
+mount -t tmpfs home /home
+mkdir /home/jon
+touch /home/jon/secret /root/secret
+EOF
+chmod +x "$ROOT/usr/bin/mountns-prep.sh"
+cat > "$ROOT/etc/schema-init/services/test-mountns-prep.svc" <<'EOF'
+name=test-mountns-prep
+exec=/usr/bin/mountns-prep.sh
+oneshot=1
+needs_root=1
+EOF
+cat > "$ROOT/etc/schema-init/services/test-mountns-on.svc" <<'EOF'
+name=test-mountns-on
+exec=/bin/test_mountns
+args=on
+dep=test-mountns-prep
+needs_root=1
+private_tmp=1
+protect_system=full
+protect_home=1
+EOF
+cat > "$ROOT/etc/schema-init/services/test-mountns-off.svc" <<'EOF'
+name=test-mountns-off
+exec=/bin/test_mountns
+args=off
+dep=test-mountns-prep
+needs_root=1
 EOF
 
 cat > "$ROOT/etc/schema-init/services/docker-modules.svc" <<'EOF'
@@ -287,6 +328,24 @@ echo "share-effective: $(cat /sys/fs/cgroup/schema-init/test-share/cpuset.cpus.e
 echo "iso2-partition: $(cat /sys/fs/cgroup/schema-init/test-iso2/cpuset.cpus.partition 2>&1)"
 echo "schema-excl: $(cat /sys/fs/cgroup/schema-init/cpuset.cpus.exclusive 2>&1)"
 echo "===== CPUSET-END ====="
+echo "===== MOUNTNS-REPORT ====="
+echo "mountns-on: $(cat /run/mountns-on 2>&1)"
+echo "mountns-off: $(cat /run/mountns-off 2>&1)"
+[ -e /tmp/mountns-sentinel-on ] && echo "MOUNTNS-TMP: FAIL (private /tmp leaked to host)" \
+                                || echo "MOUNTNS-TMP: PASS"
+[ -e /tmp/mountns-sentinel-off ] && echo "MOUNTNS-TMP-CONTROL: PASS" \
+                                 || echo "MOUNTNS-TMP-CONTROL: FAIL"
+ON_PID=$(head -1 /sys/fs/cgroup/schema-init/test-mountns-on/cgroup.procs 2>/dev/null)
+NS_ON=$(readlink /proc/$ON_PID/ns/mnt 2>&1); NS_1=$(readlink /proc/1/ns/mnt 2>&1)
+echo "mountns-ns: on=$NS_ON pid1=$NS_1"
+[ -n "$ON_PID" ] && [ "$NS_ON" != "$NS_1" ] && echo "MOUNTNS-NS: PASS" || echo "MOUNTNS-NS: FAIL"
+touch /usr/.host-probe && echo "MOUNTNS-HOSTUSR: PASS" || echo "MOUNTNS-HOSTUSR: FAIL"
+mount -t tmpfs late /home && touch /home/late-file
+touch /run/mountns-recheck
+sleep 3
+echo "mountns-late-on: $(cat /run/mountns-late-on 2>&1)"
+echo "mountns-late-off: $(cat /run/mountns-late-off 2>&1)"
+echo "===== MOUNTNS-END ====="
 echo "===== VMTEST-END ====="
 # Exercise schema-init's OWN shutdown rail (SIGINT = reboot), not the kernel's.
 # poweroff -f would bypass PID 1 and leave the shutdown path untested.
@@ -372,6 +431,15 @@ grep -Eq "privdrop-uid:.*Uid:[[:space:]]*996"           "$SERIAL" || { echo "  M
 grep -Eq "privdrop-nnp:.*NoNewPrivs:[[:space:]]*1"      "$SERIAL" || { echo "  MISS: privdrop NoNewPrivs != 1"; pass=0; }
 grep -Eq "privdrop-capbnd:.*CapBnd:[[:space:]]*00000000020004c3" "$SERIAL" || { echo "  MISS: privdrop CapBnd != 6-cap set"; pass=0; }
 grep -Eq "privdrop-capeff:.*CapEff:[[:space:]]*0000000002000000" "$SERIAL" || { echo "  MISS: privdrop CapEff != CAP_SYS_TIME after drop"; pass=0; }
+# Phase 3 mount-ns. "off" is the red half: every probe must be OPEN there.
+grep -Eq "mountns-on: usr=RO etc=RO efi=RO home=EMPTY root=EMPTY tmpwrite=OK" "$SERIAL" || { echo "  MISS: hardened service view not fully isolated"; pass=0; }
+grep -Eq "mountns-off: usr=OPEN etc=OPEN efi=OPEN home=OPEN root=OPEN tmpwrite=OK" "$SERIAL" || { echo "  MISS: control run not fully open (probes are vacuous)"; pass=0; }
+grep -Eq "MOUNTNS-TMP: PASS"          "$SERIAL" || { echo "  MISS: private /tmp leaked to host"; pass=0; }
+grep -Eq "MOUNTNS-TMP-CONTROL: PASS"  "$SERIAL" || { echo "  MISS: control /tmp write not visible on host"; pass=0; }
+grep -Eq "MOUNTNS-NS: PASS"           "$SERIAL" || { echo "  MISS: hardened service shares PID 1's mount ns"; pass=0; }
+grep -Eq "MOUNTNS-HOSTUSR: PASS"      "$SERIAL" || { echo "  MISS: host /usr went read-only"; pass=0; }
+grep -Eq "mountns-late-on: home=EMPTY" "$SERIAL" || { echo "  MISS: late host mount on /home leaked into protect_home view"; pass=0; }
+grep -Eq "mountns-late-off: home=OPEN" "$SERIAL" || { echo "  MISS: late-mount control did not see the new /home"; pass=0; }
 # Shutdown rail: every step must print, and PID 1 must reach reboot() itself.
 # A wedge here is the 2026-07-26 hang (unbounded sync never returned).
 for step in "SIGTERM sent" "cgroups killed" "control socket and shm released" \
