@@ -215,12 +215,27 @@ def test_marker_whitespace_and_conf_suffix_normalized():
           f'saved_entry={pinned}' in log, log)
 
 
+def test_esp_boot_root_falls_back_to_grub_entries():
+    # kernel-install hands BOOT_ROOT=/boot/efi (no loader/entries) on Fedora GRUB
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    esp = os.path.join(root, 'esp')
+    os.makedirs(esp)
+    r = run('add', VER, esp, conf_root, bind,
+            extra_env={'SCHEMA_INIT_GRUB_ENTRIES': entries})
+    check('esp-root: exits 0', r.returncode == 0, r.stderr)
+    check('esp-root: schema entry created in grub entries dir',
+          os.path.isfile(os.path.join(entries, f'schema-{VER}.conf')))
+    check('esp-root: default repointed',
+          os.path.isfile(rec) and f'saved_entry=schema-{VER}' in open(rec).read())
+
+
 def main():
     print('schema-init kernel-install hook tests\n')
     for fn in (test_add_full, test_no_marker_leaves_default, test_no_extras,
                test_idempotent_add, test_init_path_override, test_no_double_init,
                test_auto_resolve_from_path, test_remove, test_pin_enforced_over_stock,
-               test_pin_broken_falls_back_to_advance, test_marker_whitespace_and_conf_suffix_normalized):
+               test_pin_broken_falls_back_to_advance, test_marker_whitespace_and_conf_suffix_normalized,
+               test_esp_boot_root_falls_back_to_grub_entries):
         print(fn.__name__)
         fn()
         print()
