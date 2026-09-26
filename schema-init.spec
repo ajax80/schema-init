@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.2.1
+Version:        0.3.1
 Release:        1%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -158,6 +158,16 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_datadir}/%{name}/services
 
 %changelog
+* Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
+- kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
+  BOOT_ROOT to the ESP, so dnf kernel updates get a schema-init entry again
+  instead of silently staying on the install-time kernel
+- Installer ships the XDG autostart runner, plasmashell watchdog and session env
+  hooks system-wide, so ~/.config/autostart apps start on installed boxes
+- Autostart runner no longer waits 20s for an Xwayland cookie Plasma 6 never
+  creates, and logs "no ssh key" instead of a false ssh-add failure
+- Spec version catches up with the v0.3.0 installer release
+
 * Tue Sep 01 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.2.1-1
 - Hardware watchdog: PID 1 loads the sp5100_tco module itself and arms
   /dev/watchdog0, so boxes without an initramfs still get a hardware watchdog
