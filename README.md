@@ -1086,6 +1086,8 @@ cp services/dbus.svc.sp1 /etc/schema-init/services/dbus.svc   # the flip
 sudo reboot
 ```
 
+This is a manual step. The installer ISO and the migration wizard do not flip the bus yet: installed boxes run stock `dbus-daemon` on both the system and session bus.
+
 Build needs `dbus-devel` (`make schema-dbus`). If the policy dissolve ever fails at boot, the launcher **self-heals to stock `dbus-daemon`** on the spot, so even a broken flip still comes up on a working bus; to roll back permanently, restore the stock `dbus.svc` (`exec=/usr/bin/dbus-daemon`, `args=--system`, `args=--nofork`) and reboot.
 
 **Status.** Proven serving a full KDE Plasma desktop as the live system bus across reboots — kwin, plasmashell, polkit, PowerDevil, portals, WirePlumber, tailscale and schema-logind all routing through it. The driver interface is complete: on-demand **service activation** (implicit and `StartServiceByName`), `ReloadConfig`, `UpdateActivationEnvironment` (session bus), `ListQueuedOwners`, introspection and the driver properties, and **`BecomeMonitor`**, so `busctl monitor`, `dbus-monitor`, `busctl status` and `gdbus introspect` all work against it. Name ownership honors the policy's `own` rules exactly like `dbus-daemon`. Validate in `schema-vmtest` before flipping hardware.

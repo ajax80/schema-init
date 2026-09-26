@@ -892,7 +892,7 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
     ap.add_argument("--uninstall", action="store_true", help="reverse a prior migration")
     ap.add_argument("--finish", action="store_true", help="post-reboot report + translate offer")
-    ap.add_argument("--arm-flip", action="store_true", help="R2: arm the udev+dbus flip")
+    ap.add_argument("--arm-flip", action="store_true", help="R2: arm the udev flip")
     ap.add_argument("--prebuilt", action="store_true",
                     help="consume RPM-installed binaries; never compile")
     ap.add_argument("--stage", action="store_true", help="print the current wizard stage")

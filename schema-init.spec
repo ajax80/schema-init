@@ -68,8 +68,9 @@ Requires:  btrfs-progs
 %description migrate
 Prebuilt engine that converts a running Fedora KDE box onto schema-init in
 place across two reboots, keeping a systemd fallback boot entry. Drives the
-foundation flip (schema-init PID 1) and the desktop-seam flip (schema-udev +
-schema-dbus) from the schema-migrate CLI. Front-ended by schema-wizard.
+foundation flip (schema-init PID 1) and the desktop-seam flip (schema-udev)
+from the schema-migrate CLI. Front-ended by schema-wizard. The D-Bus broker
+(schema-dbus) is not flipped by this path; the bus stays on dbus-daemon.
 
 %post migrate
 md5sum %{_bindir}/schema-udev | cut -d' ' -f1 > %{_sysconfdir}/schema-init/schema-udev.ship-md5
