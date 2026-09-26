@@ -1,0 +1,17 @@
+#!/bin/bash
+# Seconds since kernel start at which each process was spawned, plus idle state.
+tck=$(getconf CLK_TCK)
+since_boot() {
+    local p; p=$(pgrep -o -f -- "$1" 2>/dev/null) || { echo "-"; return; }
+    awk -v t="$tck" '{printf "%.1f", $22/t}' /proc/$p/stat
+}
+read -r up _ < /proc/uptime
+mem_used=$(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf "%d", (t-a)/1024}' /proc/meminfo)
+io=$(awk -F'avg300=' '/^some/{split($2,a," "); print a[1]}' /proc/pressure/io)
+printf 'init=%s kernel=%s uptime=%.0f\n' "$(ps -p1 -o comm=)" "$(uname -r)" "$up"
+printf 'kwin=%s plasmashell=%s desktop_drawn=%s portal_kde=%s\n' \
+    "$(since_boot '^(/usr/bin/)?kwin_wayland( |$)')" "$(since_boot '^(/usr/bin/)?plasmashell( |$)')" \
+    "$(since_boot 'kioworker.*desktop\.so')" "$(since_boot 'xdg-desktop-portal-kde')"
+printf 'mem_used_mb=%s procs=%s load1=%s io_some_avg300=%s\n' \
+    "$mem_used" "$(ls -d /proc/[0-9]* | wc -l)" "$(cut -d' ' -f1 /proc/loadavg)" "$io"
+[ "$(ps -p1 -o comm=)" = systemd ] && systemd-analyze time 2>/dev/null | head -1

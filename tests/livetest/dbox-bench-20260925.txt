@@ -1,0 +1,42 @@
+### B1 23:21:02
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=250
+kwin=44.6 plasmashell=57.7 desktop_drawn=91.0 portal_kde=59.2
+mem_used_mb=1445 procs=166 load1=0.29 io_some_avg300=8.77
+### A0-setup (discarded: first systemd boot, initial-setup clicked by hand)
+### A1 23:55:24
+init=systemd kernel=7.2.7-200.fc44.x86_64 uptime=245
+kwin=44.9 plasmashell=64.4 desktop_drawn=92.3 portal_kde=72.6
+mem_used_mb=1497 procs=216 load1=1.45 io_some_avg300=11.40
+Startup finished in 5.076s (firmware) + 11.449s (loader) + 3.376s (kernel) + 5.841s (initrd) + 34.421s (userspace) = 1min 166ms 
+### B2 23:59:59
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=244
+kwin=45.5 plasmashell=59.7 desktop_drawn=87.8 portal_kde=61.9
+mem_used_mb=1104 procs=165 load1=0.36 io_some_avg300=8.45
+### A2 00:04:30
+init=systemd kernel=7.2.7-200.fc44.x86_64 uptime=245
+kwin=45.4 plasmashell=63.5 desktop_drawn=92.0 portal_kde=72.9
+mem_used_mb=1477 procs=219 load1=1.40 io_some_avg300=10.92
+Startup finished in 5.076s (firmware) + 11.489s (loader) + 3.379s (kernel) + 5.752s (initrd) + 32.541s (userspace) = 58.240s 
+### B3 00:09:13
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=251
+kwin=45.5 plasmashell=59.1 desktop_drawn=87.7 portal_kde=60.1
+mem_used_mb=1092 procs=164 load1=0.23 io_some_avg300=8.49
+### A3 00:13:45
+init=systemd kernel=7.2.7-200.fc44.x86_64 uptime=245
+kwin=45.3 plasmashell=64.3 desktop_drawn=92.2 portal_kde=73.6
+mem_used_mb=1460 procs=222 load1=0.91 io_some_avg300=11.65
+Startup finished in 5.022s (firmware) + 11.472s (loader) + 3.385s (kernel) + 5.924s (initrd) + 32.738s (userspace) = 58.544s 
+### DONE 00:13:46
+### C1 00:25:30
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=240
+kwin=45.6 plasmashell=59.3 desktop_drawn=84.5 portal_kde=60.6
+mem_used_mb=1050 procs=163 load1=0.27 io_some_avg300=7.81
+### C2 00:30:07
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=250
+kwin=44.6 plasmashell=58.3 desktop_drawn=81.8 portal_kde=58.3
+mem_used_mb=1036 procs=164 load1=0.19 io_some_avg300=7.74
+### C3 00:34:42
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=249
+kwin=45.7 plasmashell=58.9 desktop_drawn=84.0 portal_kde=58.9
+mem_used_mb=1035 procs=163 load1=0.24 io_some_avg300=7.58
+### DONE 00:34:43
