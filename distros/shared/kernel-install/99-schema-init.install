@@ -20,6 +20,11 @@ KERNEL_VERSION="${2:-}"
 
 BOOT_ROOT="${KERNEL_INSTALL_BOOT_ROOT:-/boot}"
 ENTRIES="$BOOT_ROOT/loader/entries"
+# Fedora GRUB keeps BLS entries in /boot/loader/entries (20-grub.install writes
+# them there itself), but kernel-install resolves BOOT_ROOT to the ESP
+# (/boot/efi, layout=other) on a stock install — so the plugin found no entries
+# dir and silently skipped every dnf kernel update (Eli, 7.2.7, 2026-09-25).
+[ -d "$ENTRIES" ] || ENTRIES="${SCHEMA_INIT_GRUB_ENTRIES:-/boot/loader/entries}"
 [ -d "$ENTRIES" ] || exit 0            # not a BLS layout — nothing to do
 
 CONF_ROOT="${SCHEMA_INIT_CONF_ROOT:-/etc/schema-init}"
