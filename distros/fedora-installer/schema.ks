@@ -118,6 +118,14 @@ install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-s
 install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
 install -d /usr/local/lib/schema
 install -m0644 "$SRC/scripts/zzz-environment-d.sh"      /usr/local/lib/schema/zzz-environment-d.sh
+# No systemd --user to run xdg-desktop-autostart.target: the runner sweeps
+# ~/.config/autostart (+ xauth cookie, ssh-agent) and starts the plasmashell
+# watchdog; plasma-session-start.sh sources plasma-env/*.sh, whose
+# zz-schema-autostart.sh fires the runner.
+install -m0755 "$SRC/scripts/schema-autostart-runner.sh" /usr/local/lib/schema/schema-autostart-runner.sh
+install -m0755 "$SRC/scripts/schema-plasma-watchdog.sh"  /usr/local/lib/schema/schema-plasma-watchdog.sh
+install -d /usr/local/lib/schema/plasma-env
+install -m0644 "$SRC/plasma-env/"*.sh /usr/local/lib/schema/plasma-env/
 # powerdevil's libddcutil display watcher falls back to POLL mode here and
 # burns ~7-9% of a core forever (Eli, DBox). Only external-monitor DDC
 # brightness needs it; delete this file to get that back.

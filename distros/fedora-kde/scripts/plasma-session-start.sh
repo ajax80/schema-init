@@ -48,6 +48,16 @@ if [ -d "$_envdir" ]; then
     done
     unset _f
 fi
+# Installer boxes ship the same hooks system-wide; a per-user file of the same
+# name wins.
+_sysenv=/usr/local/lib/schema/plasma-env
+if [ -d "$_sysenv" ]; then
+    for _f in "$_sysenv"/*.sh; do
+        [ -f "$_f" ] && [ ! -f "$_envdir/${_f##*/}" ] && . "$_f"
+    done
+    unset _f
+fi
+unset _sysenv
 # Installer boxes never get the per-user hooks; replay environment.d anyway.
 [ -f "$_envdir/zzz-environment-d.sh" ] || { [ -f /usr/local/lib/schema/zzz-environment-d.sh ] && . /usr/local/lib/schema/zzz-environment-d.sh; }
 
