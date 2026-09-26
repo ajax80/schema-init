@@ -11,6 +11,26 @@ echo "runner start $(date)" > "$LOG"
 for _ in $(seq 1 40); do pgrep -x plasmashell >/dev/null && break; sleep 0.5; done
 sleep 2
 
+# X11/Xwayland auth: env/06-x11-display-auth.sh gave the session a stable XAUTHORITY
+# path but no cookie yet (Xwayland starts after plasmashell). Fill it from the live
+# Xwayland -auth file so taskbar-forked X11 apps can reach :0, and mirror DISPLAY/
+# XAUTHORITY into the dbus activation env for dbus-activated launches.
+export DISPLAY=:0
+export XAUTHORITY="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/Xauthority"
+xwauth=""
+for _ in $(seq 1 40); do
+    xwpid=$(pgrep -x Xwayland | head -1)
+    [ -n "$xwpid" ] && xwauth=$(tr '\0' '\n' < "/proc/$xwpid/cmdline" 2>/dev/null | grep -A1 '^-auth$' | tail -1)
+    [ -n "$xwauth" ] && [ -f "$xwauth" ] && break
+    xwauth=""; sleep 0.5
+done
+if [ -n "$xwauth" ]; then
+    xauth -f "$XAUTHORITY" merge "$xwauth" 2>>"$LOG" && echo "xauth merged from $xwauth" >>"$LOG"
+    dbus-update-activation-environment --all 2>>"$LOG"
+else
+    echo "Xwayland -auth not found; X11 apps may not launch" >>"$LOG"
+fi
+
 # ssh-agent on a fixed socket (matches env/ssh-agent-sock.sh) so git and
 # Claude Code inherit a live agent. ssh-add -l: 0=keys, 1=running/empty, 2=no agent.
 SSH_SOCK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ssh-agent.socket"
@@ -62,12 +82,12 @@ for f in "$HOME"/.config/autostart/*.desktop; do
     setsid nohup sh -c "$cmd" >/dev/null 2>&1 &
 done
 # --- plasmashell watchdog -------------------------------------------------
-# Standalone script, launched DETACHED. Kept separate from the runner so its
-# process is observable (argv contains the script path -> pgrep -f matchable;
-# the old inline `( ) &` subshell inherited the runner's argv and was invisible
-# to pgrep, which made health-checks read 0 on a healthy system). setsid+nohup
-# puts it in its own session so it outlives the runner. Mirrors the cinnamon port.
+# Extracted to its own script and launched DETACHED. The runner is a setsid
+# session leader; a bare `( ) &` child took SIGHUP on runner exit and died
+# before it could respawn anything (caught via boot-capture, 2026-06-14).
+# setsid+nohup puts the watchdog in its own session so it outlives the runner.
 WD="$HOME/.local/bin/schema-plasma-watchdog.sh"
+[ -x "$WD" ] || WD=/usr/local/lib/schema/schema-plasma-watchdog.sh
 if [ -x "$WD" ]; then
     setsid nohup "$WD" >/dev/null 2>&1 &
     echo "watchdog launched (detached) $(date)" >> "$LOG"
