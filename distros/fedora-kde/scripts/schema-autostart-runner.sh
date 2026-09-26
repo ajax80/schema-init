@@ -27,7 +27,9 @@ else
     echo "ssh-agent already up at $SSH_SOCK" >>"$LOG"
 fi
 # load key unattended via KWallet (ksshaskpass prompts once, stores in wallet, silent after)
-if ! ssh-add -l >/dev/null 2>&1; then
+if [ ! -f ~/.ssh/id_ed25519 ]; then
+    echo "no ssh key (~/.ssh/id_ed25519), skipping ssh-add" >>"$LOG"
+elif ! ssh-add -l >/dev/null 2>&1; then
     SSH_ASKPASS=/usr/bin/ksshaskpass SSH_ASKPASS_REQUIRE=force ssh-add ~/.ssh/id_ed25519 </dev/null >>"$LOG" 2>&1 \
         && echo "ssh key loaded" >>"$LOG" || echo "ssh-add failed (wallet locked?)" >>"$LOG"
 fi
