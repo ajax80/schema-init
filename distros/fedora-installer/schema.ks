@@ -229,6 +229,7 @@ install -m0755 "$SRC/scripts/firstboot-flip-wizard.sh" /usr/local/bin/schema-fir
 install -d /usr/local/lib/schema
 install -m0755 "$SRC/scripts/schema-flip-apply.sh" /usr/local/lib/schema/schema-flip-apply
 install -m0755 "$SRC/scripts/schema-dbus-run.sh"   /usr/local/lib/schema/schema-dbus-run.sh
+install -m0755 "$SRC/scripts/schema-dbus-flip.sh"  /usr/local/lib/schema/schema-dbus-flip.sh
 install -m0755 "$SRC/scripts/dissect_policy.py"    /usr/local/lib/schema/dissect_policy.py
 install -D -m0644 "$SRC/scripts/schema-dbus-masked" /etc/schema-dbus/masked
 install -d /etc/xdg/autostart

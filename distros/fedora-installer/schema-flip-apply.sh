@@ -23,6 +23,7 @@ LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ARM="$LIB/schema-udev-flip-arm.sh"
 BACKUP="$LIB/schema-udev-flip-backup.sh"
 VERIFY="$LIB/verify-rules-live"
+DBUSFLIP="$LIB/schema-dbus-flip.sh"
 SHIP_MD5_FILE=/etc/schema-init/schema-udev.ship-md5
 SYS_AUTOSTART=/etc/xdg/autostart/schema-firstboot.desktop
 # ROOT state the headless seatbelt reads (distinct from the wizard's own
@@ -123,8 +124,11 @@ case "$cmd" in
     reboot)
         systemctl reboot 2>/dev/null || schema-ctl reboot 2>/dev/null || reboot
         ;;
+    dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state)
+        exec env -u SCHEMA_DBUS_FLIP_ROOT "$DBUSFLIP" "${cmd#dbus-}"
+        ;;
     *)
-        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|root-state|explain|resolve|reboot}" >&2
+        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|root-state|explain|resolve|reboot|dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state}" >&2
         exit 2
         ;;
 esac
