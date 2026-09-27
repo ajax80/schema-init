@@ -26,7 +26,8 @@ try:
     check("writes the seatbelt .svc", os.path.exists(svc))
     body = open(svc).read()
     check("exec is the packaged healthcheck", "exec=" + m.SEATBELT_HELPER in body)
-    check("ordered after udev-trigger", "dep=udev-trigger" in body)
+    check("no dep, even with udev-trigger present (DORMANT dep blocks forever)", "dep=" not in body)
+    check("outlives its 120s /dev wait", "start_timeout_sec=300" in body)
     check("runs as a oneshot", "oneshot=1" in body)
     check("runs privileged (needs_root)", "needs_root=1" in body)
     check("non-critical (never wedges boot)", "critical=0" in body)
@@ -78,7 +79,7 @@ try:
     m.main(["--deploy", "--prebuilt"], run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
     svc = os.path.join(root, SVC_REL)
     check("do_deploy wires the seatbelt", os.path.exists(svc))
-    check("do_deploy orders it after udev-trigger", "dep=udev-trigger" in open(svc).read())
+    check("do_deploy seatbelt has no dep", "dep=" not in open(svc).read())
     check("do_deploy records the advanced opt-outs in the stage", m.stage.read_extra(root).get("adv") == [])
 finally:
     del os.environ["MIGRATE_ROOT"]; del os.environ["MIGRATE_KERNEL"]

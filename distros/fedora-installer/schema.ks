@@ -298,6 +298,7 @@ cat > /etc/schema-init/services/schema-udev-healthcheck.svc <<'SVC'
 name=schema-udev-healthcheck
 exec=/usr/local/lib/schema/schema-udev-flip-healthcheck.sh
 oneshot=1
+start_timeout_sec=300
 SVC
 install -m0755 "$SRC/scripts/schema-dbus-flip-healthcheck.sh" /usr/local/lib/schema/
 cat > /etc/schema-init/services/schema-dbus-healthcheck.svc <<'SVC'

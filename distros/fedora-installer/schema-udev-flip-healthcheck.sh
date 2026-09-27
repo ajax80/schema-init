@@ -48,17 +48,19 @@ rollback() {
 }
 
 # wait for schema-udev to be up AND /dev to be populated before judging health.
-# The migrate rail also orders us after udev-trigger's settle, but poll here too
-# so the shared ISO path (no such ordering) does not false-rollback a healthy
-# flip on a slow coldplug. Bounded at 30s to match udev-trigger's settle timeout.
-i=0; while [ $i -lt 30 ]; do
+# Neither rail orders us after udev (a dep on a crash-looping service would
+# block us forever), so poll: bounded at 120s of uptime — the RTC can be hours
+# off until chrony steps it. Both .svc files set start_timeout_sec=300.
+up() { cut -d. -f1 /proc/uptime; }
+deadline=$(( $(up) + 120 ))
+while [ "$(up)" -lt "$deadline" ]; do
     if pgrep -x schema-udev >/dev/null 2>&1 \
        && ls /dev/input/event* >/dev/null 2>&1 \
        && ls /dev/dri/card[0-9]* >/dev/null 2>&1 \
        && ls /dev/disk/by-uuid/* >/dev/null 2>&1; then
         break
     fi
-    i=$((i + 1)); sleep 1
+    sleep 1
 done
 
 # --- class 1: is /dev usable THIS boot? ---
