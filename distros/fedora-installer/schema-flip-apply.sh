@@ -124,11 +124,11 @@ case "$cmd" in
     reboot)
         systemctl reboot 2>/dev/null || schema-ctl reboot 2>/dev/null || reboot
         ;;
-    dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state)
+    dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state|dbus-explain)
         exec env -u SCHEMA_DBUS_FLIP_ROOT "$DBUSFLIP" "${cmd#dbus-}"
         ;;
     *)
-        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|root-state|explain|resolve|reboot|dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state}" >&2
+        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|root-state|explain|resolve|reboot|dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state|dbus-explain}" >&2
         exit 2
         ;;
 esac
