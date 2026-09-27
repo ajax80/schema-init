@@ -532,11 +532,15 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
             if (!ok || flags != 0) {
                 sdbus__reply_error(c, dm.msg, DBUS_ERROR_INVALID_ARGS, "BecomeMonitor expects (as rules, u 0)");
             } else {
-                rules = sdbus_match_new();
-                for (int i = 0; i < nr && rules; i++)
-                    if (sdbus_match_add(rules, rv[i]) != 0) { sdbus_match_free(rules); rules = NULL; }
-                if (!rules) sdbus__reply_error(c, dm.msg, DBUS_ERROR_MATCH_RULE_INVALID, "invalid match rule");
-                else        sdbus__reply_empty(c, dm.msg);
+                if (nr > SDBUS_MAX_MATCH_RULES) {
+                    sdbus__reply_error(c, dm.msg, DBUS_ERROR_LIMITS_EXCEEDED, "too many match rules");
+                } else {
+                    rules = sdbus_match_new();
+                    for (int i = 0; i < nr && rules; i++)
+                        if (sdbus_match_add(rules, rv[i]) != 0) { sdbus_match_free(rules); rules = NULL; }
+                    if (!rules) sdbus__reply_error(c, dm.msg, DBUS_ERROR_MATCH_RULE_INVALID, "invalid match rule");
+                    else        sdbus__reply_empty(c, dm.msg);
+                }
             }
             if (rv) dbus_free_string_array(rv);
         }
@@ -696,6 +700,14 @@ static void add_conn(int fd) {
     c->fd = fd;
     c->id = (int)g_next_id++;
     sdbus_conn_capture_creds(c);
+    /* bound how many connections one (non-root) user can hold open, so a single
+       local uid cannot exhaust the broker's fds/memory by connecting in a loop.
+       root (system daemons) is exempt, as in dbus-daemon. */
+    if (c->uid != 0 && c->uid != (uid_t)-1) {
+        int same = 0;
+        for (int i = 0; i < g_nconns; i++) if (g_conns[i]->uid == c->uid) same++;
+        if (same >= SDBUS_MAX_CONN_PER_UID) { free(c); close(fd); return; }
+    }
     g_conns = realloc(g_conns, (g_nconns + 1) * sizeof *g_conns);
     g_conns[g_nconns++] = c;
     struct epoll_event ev = {0};

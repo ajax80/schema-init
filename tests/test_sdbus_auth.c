@@ -72,6 +72,32 @@ int main(void) {
     assert(c5.n_gids >= 1);
     close(sv[0]); close(sv[1]);
 
+    /* --- BEGIN before any successful AUTH is refused (spec: BEGIN follows OK) --- */
+    sdbus_conn c6 = {0};
+    c6.uid = 1000;
+    assert(sdbus_auth_feed(&c6, (const unsigned char *)"\0BEGIN\r\n", 8) == -1);
+    assert(c6.authed == 0);
+    sdbus_conn_free_fields(&c6);
+
+    /* --- BEGIN after CANCEL (which clears the successful auth) is refused --- */
+    sdbus_conn c7 = {0};
+    c7.uid = 1000;
+    assert(sdbus_auth_feed(&c7, (const unsigned char *)"\0AUTH EXTERNAL 31303030\r\n", 25) == 0);
+    assert(out_has(&c7, "OK "));
+    assert(sdbus_auth_feed(&c7, (const unsigned char *)"CANCEL\r\n", 8) == 0);
+    assert(sdbus_auth_feed(&c7, (const unsigned char *)"BEGIN\r\n", 7) == -1);
+    sdbus_conn_free_fields(&c7);
+
+    /* --- an unauthed peer flooding bytes with no CRLF is cut off, not buffered
+       without bound (pre-auth ceiling) --- */
+    sdbus_conn c8 = {0};
+    c8.uid = 1000;
+    static unsigned char flood[SDBUS_MAX_AUTH_BYTES + 64];
+    flood[0] = 0;
+    memset(flood + 1, 'A', sizeof flood - 1);       /* NUL then garbage, never a CRLF */
+    assert(sdbus_auth_feed(&c8, flood, (int)sizeof flood) == -1);
+    sdbus_conn_free_fields(&c8);
+
     printf("all sdbus_auth tests passed\n");
     return 0;
 }

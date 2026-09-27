@@ -18,6 +18,16 @@
 
 #define SDBUS_MAX_GIDS 64
 #define SDBUS_MAX_PENDING_FDS 16
+/* Pre-auth input ceiling. The SASL handshake is line-based (CRLF); an unauthed
+   peer that never sends a CRLF would otherwise grow c->in without bound (and the
+   per-feed CRLF scan is linear in it). The D-Bus spec caps an auth line at 16384
+   bytes; hold a little slack for pipelined lines, then reject. */
+#define SDBUS_MAX_AUTH_BYTES (16 * 1024)
+/* Per-connection match-rule ceiling and per-uid connection ceiling — the same
+   defaults dbus-daemon enforces (max_match_rules_per_connection / max_connections
+   _per_user). Both bound memory a single local user can pin in the root broker. */
+#define SDBUS_MAX_MATCH_RULES 512
+#define SDBUS_MAX_CONN_PER_UID 256
 /* per-connection outbound backlog ceiling. A reader that stops draining must not
    grow the broker's memory without bound: the broadcast path keeps enqueuing onto
    it (25k PropertiesChanged/session), and a stuck reader emits no epoll event of
@@ -30,7 +40,7 @@ typedef struct { unsigned char *b; int len, off; int fds[SDBUS_MAX_PENDING_FDS];
 
 typedef struct {
     int fd, id;
-    int authed, said_hello, negotiated_fd, saw_nul;
+    int authed, auth_ok, said_hello, negotiated_fd, saw_nul;   /* auth_ok: an AUTH succeeded (OK sent) */
     uid_t uid; gid_t gid; pid_t pid;
     int gids[SDBUS_MAX_GIDS]; int n_gids;
     const char *unique;                 /* ":1.N", set at Hello */
