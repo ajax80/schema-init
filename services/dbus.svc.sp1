@@ -10,7 +10,8 @@ ready_path=/run/dbus/system_bus_socket
 # /usr/local/bin/schema-dbus --system, falling back to stock dbus-daemon if the
 # dissolve fails. ready_path gates dependents until the broker binds the socket.
 #
-# To activate: copy this over services/dbus.svc on the target (Jonathan-gated,
+# To activate: touch /etc/schema-init/dbus-broker (both launchers run stock
+# dbus-daemon without it) and copy this over services/dbus.svc (Jonathan-gated,
 # reboot-only — see T13 Step 6). To roll back permanently, restore the stock
 # dbus.svc:
 #   exec=/usr/bin/dbus-daemon

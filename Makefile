@@ -122,7 +122,7 @@ install-dbus-sp1: schema-dbus
 	@[ -f $(DESTDIR)/etc/schema-dbus/masked ] && echo "keeping existing /etc/schema-dbus/masked" || install -m 0644 config/schema-dbus-masked $(DESTDIR)/etc/schema-dbus/masked
 	@echo
 	@echo "SP1 prerequisites installed. To FLIP the bus (reboot-only, gated):"
-	@echo "  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"
+	@echo "  touch /etc/schema-init/dbus-broker  &&  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"
 
 install-migrate: schema-udev schema-systemctl verify-rules-live
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(PREFIX)/libexec/schema-init
