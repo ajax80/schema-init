@@ -25,12 +25,12 @@ trap 'rm -rf "$(dirname "$PAYLOAD")"' EXIT
 command -v mkksiso >/dev/null || { echo "need mkksiso: sudo dnf install lorax" >&2; exit 1; }
 
 echo "=== building schema-init binaries (current branch) ==="
-make -C "$REPO" schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev >/dev/null
+make -C "$REPO" schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev schema-dbus >/dev/null
 make -C "$REPO" verify-rules-live >/dev/null 2>&1 || true   # if it has a make target
 
 echo "=== staging payload the %post copies from (ISO:/schema) ==="
 mkdir -p "$PAYLOAD/bin" "$PAYLOAD/scripts" "$PAYLOAD/services"
-for b in schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev verify-rules-live; do
+for b in schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev schema-dbus verify-rules-live; do
     install -m0755 "$REPO/$b" "$PAYLOAD/bin/$b"
 done
 install -m0755 "$REPO/scripts/schema-udev-flip-arm.sh"    "$PAYLOAD/scripts/"
@@ -52,6 +52,9 @@ install -m0755 "$REPO/scripts/schema-doctor.py"               "$PAYLOAD/scripts/
 install -m0755 "$REPO/scripts/schema-session-register"        "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-session-unregister"      "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-dbus-session-run.sh"      "$PAYLOAD/scripts/"
+install -m0755 "$REPO/scripts/schema-dbus-run.sh"              "$PAYLOAD/scripts/"
+install -m0755 "$REPO/tools/dbus-learn/dissect_policy.py"      "$PAYLOAD/scripts/"
+install -m0644 "$REPO/config/schema-dbus-masked"               "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/plasma-session-start.sh" "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/plasmashell-shim"        "$PAYLOAD/scripts/"
 install -m0644 "$HERE/../fedora-kde/config/plasma-env/zzz-environment-d.sh" "$PAYLOAD/scripts/"

@@ -124,7 +124,7 @@ install-dbus-sp1: schema-dbus
 	@echo "SP1 prerequisites installed. To FLIP the bus (reboot-only, gated):"
 	@echo "  touch /etc/schema-init/dbus-broker  &&  cp services/dbus.svc.sp1 <live services dir>/dbus.svc  &&  reboot"
 
-install-migrate: schema-udev schema-systemctl verify-rules-live
+install-migrate: schema-udev schema-systemctl verify-rules-live schema-dbus
 	install -d $(DESTDIR)$(BINDIR) $(DESTDIR)$(PREFIX)/libexec/schema-init
 	install -m 0755 distros/fedora-installer/migrate/schema-migrate.py $(DESTDIR)$(BINDIR)/schema-migrate
 	install -m 0755 schema-udev $(DESTDIR)$(BINDIR)/schema-udev
@@ -135,6 +135,10 @@ install-migrate: schema-udev schema-systemctl verify-rules-live
 	install -m 0755 scripts/schema-udev-flip-backup.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-backup.sh
 	install -m 0755 distros/fedora-installer/schema-udev-flip-healthcheck.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-healthcheck.sh
 	install -m 0755 verify-rules-live $(DESTDIR)$(PREFIX)/libexec/schema-init/verify-rules-live
+	install -m 0755 schema-dbus $(DESTDIR)$(BINDIR)/schema-dbus
+	install -m 0755 scripts/schema-dbus-run.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-dbus-run.sh
+	install -m 0755 tools/dbus-learn/dissect_policy.py $(DESTDIR)$(PREFIX)/libexec/schema-init/dissect_policy.py
+	install -D -m 0644 config/schema-dbus-masked $(DESTDIR)$(SYSCONFDIR)/schema-dbus/masked
 	install -m 0644 distros/fedora-installer/migrate/stage.py $(DESTDIR)$(PREFIX)/libexec/schema-init/stage.py
 	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate
 	install -m 0644 distros/fedora-installer/migrate/prevent-set.list $(DESTDIR)$(DATADIR)/schema-init/migrate/prevent-set.list

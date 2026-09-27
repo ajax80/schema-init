@@ -81,6 +81,7 @@ install -m0755 "$SRC/bin/schema-journal-sink" /usr/bin/schema-journal-sink
 install -m0755 "$SRC/bin/schema-subreaper"   /usr/bin/schema-subreaper
 install -m0755 "$SRC/bin/schema-board"       /usr/bin/schema-board
 install -m0755 "$SRC/bin/schema-udev"        /usr/bin/schema-udev   # staged, NOT armed
+install -m0755 "$SRC/bin/schema-dbus"        /usr/bin/schema-dbus   # dormant until /etc/schema-init/dbus-broker
 
 # flip tooling + parity gates the wizard calls
 install -d /usr/local/lib/schema
@@ -227,6 +228,9 @@ install -m0755 "$SRC/scripts/firstboot-flip-wizard.sh" /usr/local/bin/schema-fir
 # and delegates every root action to this one helper via passwordless sudo.
 install -d /usr/local/lib/schema
 install -m0755 "$SRC/scripts/schema-flip-apply.sh" /usr/local/lib/schema/schema-flip-apply
+install -m0755 "$SRC/scripts/schema-dbus-run.sh"   /usr/local/lib/schema/schema-dbus-run.sh
+install -m0755 "$SRC/scripts/dissect_policy.py"    /usr/local/lib/schema/dissect_policy.py
+install -D -m0644 "$SRC/scripts/schema-dbus-masked" /etc/schema-dbus/masked
 install -d /etc/xdg/autostart
 cat > /etc/xdg/autostart/schema-firstboot.desktop <<'DESK'
 [Desktop Entry]

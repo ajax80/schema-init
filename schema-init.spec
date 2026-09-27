@@ -11,6 +11,8 @@ BuildRequires:  gcc
 BuildRequires:  make
 BuildRequires:  glibc-static
 BuildRequires:  libacl-devel
+BuildRequires:  dbus-devel
+BuildRequires:  pkgconf-pkg-config
 Requires:       python3
 
 # Only these two are built and tested. COPR has no armv7hl target; 32-bit ARM
@@ -53,7 +55,7 @@ overwrite a service file a running system depends on.
 # package upgrade. It is built here (migrate_bins) only so the -migrate
 # subpackage below can ship it; the base %%files list never references it.
 %global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
-%global migrate_bins schema-udev verify-rules-live schema-systemctl
+%global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
 %make_build BINS="%{core_bins} %{migrate_bins}"
 
 %install
@@ -74,7 +76,8 @@ Prebuilt engine that converts a running Fedora KDE box onto schema-init in
 place across two reboots, keeping a systemd fallback boot entry. Drives the
 foundation flip (schema-init PID 1) and the desktop-seam flip (schema-udev)
 from the schema-migrate CLI. Front-ended by schema-wizard. The D-Bus broker
-(schema-dbus) is not flipped by this path; the bus stays on dbus-daemon.
+(schema-dbus) ships dormant: both launchers run stock dbus-daemon until
+/etc/schema-init/dbus-broker exists, and nothing here creates it.
 
 %post migrate
 md5sum %{_bindir}/schema-udev | cut -d' ' -f1 > %{_sysconfdir}/schema-init/schema-udev.ship-md5
@@ -116,17 +119,22 @@ fi
 %{_bindir}/schema-udev
 %{_bindir}/schema-systemctl
 %{_bindir}/schema-import
+%{_bindir}/schema-dbus
 %{_libexecdir}/schema-init/schema-flip-apply
 %{_libexecdir}/schema-init/schema-udev-flip-arm.sh
 %{_libexecdir}/schema-init/schema-udev-flip-backup.sh
 %{_libexecdir}/schema-init/schema-udev-flip-healthcheck.sh
 %{_libexecdir}/schema-init/verify-rules-live
+%{_libexecdir}/schema-init/schema-dbus-run.sh
+%{_libexecdir}/schema-init/dissect_policy.py
 %{_libexecdir}/schema-init/stage.py
 %{_datadir}/%{name}/migrate/prevent-set.list
 %{_datadir}/%{name}/migrate/distros
 %{_datadir}/%{name}/migrate/scripts
 %ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
 %config(noreplace) %{_sysconfdir}/sudoers.d/schema-wizard
+%dir %{_sysconfdir}/schema-dbus
+%config(noreplace) %{_sysconfdir}/schema-dbus/masked
 
 %package wizard
 Summary:   Guided PySide6 GUI that converts a Fedora KDE box onto schema-init
