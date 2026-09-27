@@ -694,7 +694,6 @@ def install_flip_seatbelt(manifest, dry_run=False):
     drel = "etc/schema-init/services/schema-dbus-healthcheck.svc"
     open(P(drel), "w").write("name=schema-dbus-healthcheck\n"
                              "exec=" + DBUS_SEATBELT_HELPER + "\n"
-                             "dep=dbus\n"
                              "oneshot=1\n"
                              "needs_root=1\n"
                              "critical=0\n" + NO_HARDENING)

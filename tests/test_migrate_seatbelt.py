@@ -35,7 +35,7 @@ try:
     dbody = open(dsvc).read() if os.path.exists(dsvc) else ""
     check("writes the dbus seatbelt .svc", dbody)
     check("dbus seatbelt execs the packaged healthcheck", "exec=" + m.DBUS_SEATBELT_HELPER in dbody)
-    check("dbus seatbelt ordered after dbus only", [l for l in dbody.splitlines() if l.startswith("dep=")] == ["dep=dbus"])
+    check("dbus seatbelt has no dep (a DORMANT dep would block it forever)", "dep=" not in dbody)
     check("dbus seatbelt privileged oneshot, non-critical", all(k in dbody for k in ("oneshot=1", "needs_root=1", "critical=0")))
     check("dbus seatbelt recorded in the manifest", "/etc/schema-init/services/schema-dbus-healthcheck.svc" in man.files)
 finally:

@@ -1,15 +1,18 @@
 #!/bin/sh
 # Headless seatbelt for the schema-dbus flip: a schema-init oneshot on every
-# boot, ordered only after dbus. A dead system bus is a black screen with no
-# GUI to recover from, so this is what undoes a bad flip unattended.
+# boot, with NO dep= at all. A dead system bus is a black screen with no GUI
+# to recover from, so this is what undoes a bad flip unattended.
 #
 #   1. THIS boot: the broker (not the stock fallback) owns the system bus,
 #      answers GetId, and login1 / NetworkManager / PolicyKit1 each appear on
-#      it within 60s (only those whose .svc is on this box). Else roll back.
+#      it within 120s (only those whose .svc is on this box). Else roll back.
 #   2. The desktop never confirmed across a full armed boot -> roll back.
 #
-# Deliberately no dep= on logind/NM/polkit: if one never starts, a dep would
-# keep this from ever running, and it could never roll back.
+# Deliberately no dep= on anything, dbus included: a service that keeps dying
+# goes DORMANT, not EXCISED, and a DORMANT dep blocks its dependents forever.
+# With dep=dbus a crash-looping broker kept this from ever running (DBox,
+# 2026-09-27) — the exact failure it exists to undo. It waits for the bus
+# itself instead, bounded.
 set -u
 
 LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -49,7 +52,7 @@ want=""
 
 missing=""
 i=0
-while [ $i -lt 60 ]; do
+while [ $i -lt 120 ]; do
     missing=""
     dbus-send --system --print-reply --dest=org.freedesktop.DBus / \
         org.freedesktop.DBus.GetId > /dev/null 2>&1 || missing="GetId"
