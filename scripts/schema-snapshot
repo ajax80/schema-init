@@ -129,8 +129,36 @@ newest_fallback_id() {
   printf '%s' "${id%.conf}"
 }
 
+esp_grubcfg_is_stub() {
+  local esp mnt="" cfg rc=0
+  esp="$(findmnt -n -o TARGET /boot/efi 2>/dev/null)"
+  if [ -z "$esp" ]; then
+    findmnt --fstab -n /boot/efi >/dev/null 2>&1 || return 0
+    mnt="$(mktemp -d)"
+    mount -o ro "$(findmnt --fstab -n -o SOURCE /boot/efi)" "$mnt" || { rmdir "$mnt"; die "cannot mount the ESP to check its grub.cfg"; }
+    esp="$mnt"
+  fi
+  for cfg in "$esp"/EFI/*/grub.cfg; do
+    [ -f "$cfg" ] || continue
+    ! grep -q '^### BEGIN /etc/grub.d/00_header' "$cfg" || { echo "${cfg#"$esp"}"; rc=1; }
+  done
+  [ -z "$mnt" ] || { umount "$mnt"; rmdir "$mnt"; }
+  return "$rc"
+}
+
+check_armable() {
+  local bad
+  grep -q 'schema_fallback_id' /boot/grub2/grub.cfg 2>/dev/null ||
+    die "09_schema_fallback is not in /boot/grub2/grub.cfg; run 'make install-bootguard' and grub2-mkconfig -o /boot/grub2/grub.cfg"
+  bad="$(esp_grubcfg_is_stub)" ||
+    die "ESP$bad is a full GRUB config that loads its own grubenv, not $GRUBENV; replace it with a configfile stub to /boot/grub2"
+  command -v schema-bootok >/dev/null && ls /etc/schema-init/services/schema-bootok.svc >/dev/null 2>&1 ||
+    die "schema-bootok is not installed on the rail; an armed guard would roll back good boots"
+}
+
 cmd_arm() {
   local n="${1:-2}" id
+  check_armable
   id="$(newest_fallback_id)"
   [ -n "$id" ] || die "no snapshot boot entry to arm against; run 'schema-snapshot create' first"
   grub2-editenv "$GRUBENV" set schema_fallback_id="$id"

@@ -59,6 +59,8 @@ overwrite a service file a running system depends on.
 %make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir} BINS="%{core_bins}"
 make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
+install -Dm0755 scripts/schema-bootok %{buildroot}%{_bindir}/schema-bootok
+install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
 
 %package migrate
 Summary:   Guided in-place Fedora KDE onboarding onto schema-init (prebuilt)
@@ -152,6 +154,8 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_bindir}/schema-journal-sink
 %{_bindir}/schema-board
 %{_bindir}/schema-snapshot
+%{_bindir}/schema-bootok
+%{_sysconfdir}/grub.d/09_schema_fallback
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
 %config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
