@@ -640,6 +640,16 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         return;
     }
 
+    /* validate before relaying to any peer: stock dbus-daemon rejects a malformed
+       message at the sender, and a client that receives one off the bus disconnects.
+       Forwarding garbage would let one sender drop every peer it can reach. */
+    if (!sdbus_wire_forwardable(raw, rawlen, w)) {
+        synth_error_wire(c, w->serial, DBUS_ERROR_INVALID_ARGS, "malformed message");
+        drain_scratch(c); ep_update(c);
+        consume_msg_fds(c, nfds, 0);
+        return;
+    }
+
     int targets[MAX_TARGETS], synth = 0, denied = 0;
     int nt = sdbus_route_targets(w, c, g_names, g_conns, g_nconns, g_policy,
                                  g_replies, &synth, &denied, targets, MAX_TARGETS);

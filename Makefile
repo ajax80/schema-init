@@ -249,10 +249,26 @@ test:
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_driver.c -o /tmp/schema-test-sdbus-driver $(DBUS_LIBS) && /tmp/schema-test-sdbus-driver
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_route.c -o /tmp/schema-test-sdbus-route $(DBUS_LIBS) && /tmp/schema-test-sdbus-route
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o /tmp/schema-test-sdbus-wire $(DBUS_LIBS) && /tmp/schema-test-sdbus-wire
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_forward.c -o /tmp/schema-test-sdbus-forward $(DBUS_LIBS) && /tmp/schema-test-sdbus-forward
 	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate
 	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o /tmp/schema-test-systemctl && /tmp/schema-test-systemctl
 	$(CC) $(CFLAGS) tests/test_service_env.c service.c schema.c group.c caps.c ns.c -lrt -o /tmp/schema-test-env && /tmp/schema-test-env
 	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c -lrt -o /tmp/schema-test-mountns && /tmp/schema-test-mountns
+
+# libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
+# + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.
+# FUZZ_SECONDS per target; new corpus + crashes land in /tmp/schema-fuzz/.
+FUZZ_SECONDS ?= 60
+fuzz:
+	@mkdir -p /tmp/schema-fuzz
+	@for t in wire auth match; do \
+		clang -D_GNU_SOURCE -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
+			tests/fuzz/fuzz_$$t.c -o /tmp/schema-fuzz/fuzz_$$t || exit 1; \
+		mkdir -p /tmp/schema-fuzz/corpus_$$t; \
+		/tmp/schema-fuzz/fuzz_$$t -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=2048 \
+			-artifact_prefix=/tmp/schema-fuzz/crash_$$t- \
+			/tmp/schema-fuzz/corpus_$$t tests/fuzz/seeds/$$t || exit 1; \
+	done
 
 # Everything a contributor can run locally without a reboot: the C unit tests
 # above plus the Python integration suite (doctor / logind / migrate / wizard).
@@ -282,6 +298,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all verify-live verify-dbus-conformance
+.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz verify-live verify-dbus-conformance
 
 
