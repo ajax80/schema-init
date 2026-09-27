@@ -78,6 +78,7 @@ try:
     svc = os.path.join(root, SVC_REL)
     check("do_deploy wires the seatbelt", os.path.exists(svc))
     check("do_deploy orders it after udev-trigger", "dep=udev-trigger" in open(svc).read())
+    check("do_deploy records the advanced opt-outs in the stage", m.stage.read_extra(root).get("adv") == [])
 finally:
     del os.environ["MIGRATE_ROOT"]; del os.environ["MIGRATE_KERNEL"]
 
