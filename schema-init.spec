@@ -11,6 +11,7 @@ BuildRequires:  gcc
 BuildRequires:  make
 BuildRequires:  glibc-static
 BuildRequires:  libacl-devel
+Requires:       python3
 
 # Only these two are built and tested. COPR has no armv7hl target; 32-bit ARM
 # is a manual cross-build via `make armhf`.
@@ -60,6 +61,7 @@ overwrite a service file a running system depends on.
 make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 install -Dm0755 scripts/schema-bootok %{buildroot}%{_bindir}/schema-bootok
+install -Dm0755 scripts/schema-doctor.py %{buildroot}/usr/local/bin/schema-doctor
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
 
 %package migrate
@@ -120,7 +122,6 @@ fi
 %{_libexecdir}/schema-init/schema-udev-flip-healthcheck.sh
 %{_libexecdir}/schema-init/verify-rules-live
 %{_libexecdir}/schema-init/stage.py
-%{_libexecdir}/schema-init/schema-doctor
 %{_datadir}/%{name}/migrate/prevent-set.list
 %{_datadir}/%{name}/migrate/distros
 %{_datadir}/%{name}/migrate/scripts
@@ -155,6 +156,7 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_bindir}/schema-board
 %{_bindir}/schema-snapshot
 %{_bindir}/schema-bootok
+/usr/local/bin/schema-doctor
 %{_sysconfdir}/grub.d/09_schema_fallback
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
