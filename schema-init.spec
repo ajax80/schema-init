@@ -1,6 +1,6 @@
 Name:           schema-init
 Version:        0.3.1
-Release:        1%{?dist}
+Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
 License:        AGPL-3.0-or-later
