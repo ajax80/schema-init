@@ -248,6 +248,10 @@ critical=1
 stable_secs=5
 ready_path=/run/udev/control
 priority=critical
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
 EOF
 
 # --- UDEV COLDPLUG TRIGGER SERVICE ---
@@ -266,6 +270,10 @@ exec=/usr/local/bin/schema-udev-trigger.sh
 dep=udev
 oneshot=1
 critical=1
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
 EOF
 
 # --- HOSTNAME SERVICE ---
@@ -287,6 +295,10 @@ exec=/usr/local/bin/schema-hostname.sh
 oneshot=1
 needs_root=1
 critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
 EOF
 
 # --- DBUS SERVICE ---
@@ -307,6 +319,10 @@ dep=udev-trigger
 oneshot=0
 critical=0
 ready_path=/run/dbus/system_bus_socket
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
 EOF
 
 # --- SSHD SERVICE ---
@@ -325,16 +341,28 @@ exec=/usr/local/bin/schema-sshd.sh
 dep=dbus
 oneshot=0
 critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
 EOF
 
 # --- GETTY (LOCAL SHELL) SERVICE ---
 write_if_missing "$SVC_DIR/getty.svc" << 'EOF'
 name=getty
 exec=/sbin/agetty
-args=-o -p -- \u --noclear tty1 linux
+args=-o
+args=-p -- \u
+args=--noclear
+args=tty1
+args=linux
 oneshot=0
 critical=1
 stable_secs=2
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
 EOF
 
 # --- SCHEMA-UDEV RULES DIR ---
