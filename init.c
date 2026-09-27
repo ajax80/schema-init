@@ -1994,6 +1994,17 @@ int main(int argc, char **argv) {
     service_raise_pid1_nofile();
     setup_signals();
 
+    {
+        char cmdline[4096] = "", hd[64] = "";
+        int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) { ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1); if (n > 0) cmdline[n] = '\0'; close(fd); }
+        fd = open("/etc/schema-init/hardening-default", O_RDONLY | O_CLOEXEC);
+        int have = fd >= 0;
+        if (have) { ssize_t n = read(fd, hd, sizeof(hd) - 1); if (n > 0) hd[n] = '\0'; close(fd); }
+        int on = hardening_default_resolve(cmdline, have ? hd : NULL);
+        service_set_hardening_default(on);
+        fprintf(stderr, "[schema-init] hardening default: %s\n", on ? "ON" : "off");
+    }
     svc_count = services_load(svc_dir, services, MAX_SERVICES);
     if (svc_count == 0) {
         svc_count = services_load("./services", services, MAX_SERVICES);

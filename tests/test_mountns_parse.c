@@ -72,6 +72,55 @@ int main(void) {
     assert(service_load_one(path, &one) == 0);
     assert(one.ns_private_tmp == 0 && one.ns_protect_home == 1);
     unlink(path);
+
+    assert(hardening_default_resolve(NULL, NULL) == 0);
+    assert(hardening_default_resolve(NULL, "on") == 1);
+    assert(hardening_default_resolve(NULL, " on \n") == 1);
+    assert(hardening_default_resolve(NULL, "ON") == 0);
+    assert(hardening_default_resolve(NULL, "1") == 0);
+    assert(hardening_default_resolve(NULL, "one") == 0);
+    assert(hardening_default_resolve(NULL, "") == 0);
+    assert(hardening_default_resolve("quiet schema.hardening_default=0 rhgb\n", "on") == 0);
+    assert(hardening_default_resolve("schema.hardening_default=1\n", NULL) == 1);
+    assert(hardening_default_resolve("xschema.hardening_default=1", NULL) == 0);
+    assert(hardening_default_resolve("schema.hardening_default=10", "on") == 1);
+    assert(hardening_default_resolve("schema.hardening_default=2", NULL) == 0);
+
+    snprintf(path, sizeof(path), "%s/plain.svc", dir);
+    write_svc(path, "name=plain\nexec=/usr/bin/true\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(!(one.flags & SVC_NO_NEW_PRIVS) && !one.ns_private_tmp &&
+           !one.ns_protect_system && !one.ns_protect_home && !one.hard_default);
+
+    service_set_hardening_default(1);
+    assert(service_load_one(path, &one) == 0);
+    assert((one.flags & SVC_NO_NEW_PRIVS) && one.ns_private_tmp == 1 &&
+           one.ns_protect_system == PROTECT_SYSTEM_BASE && one.ns_protect_home == 1);
+    assert(one.hard_default == (HARD_NNP | HARD_PT | HARD_PS | HARD_PH) && !one.hard_set);
+    assert(services_load(dir, table, 4) == 1);
+    assert(table[0].hard_default == one.hard_default && table[0].flags == one.flags);
+
+    write_svc(path, "name=plain\nexec=/usr/bin/true\nno_new_privs=0\nprivate_tmp=0\n"
+                    "protect_system=0\nprotect_home=0\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(!(one.flags & SVC_NO_NEW_PRIVS) && !one.ns_private_tmp &&
+           !one.ns_protect_system && !one.ns_protect_home && !one.hard_default);
+    assert(services_load(dir, table, 4) == 1);
+    assert(!(table[0].flags & SVC_NO_NEW_PRIVS) && !table[0].hard_default);
+
+    write_svc(path, "name=plain\nexec=/home/me/run.sh\nready_path=/tmp/plain.ready\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(!one.ns_protect_home && !one.ns_private_tmp);
+    assert(one.hard_dropped == (HARD_PT | HARD_PH));
+    assert(one.ns_protect_system == PROTECT_SYSTEM_BASE && (one.flags & SVC_NO_NEW_PRIVS));
+    assert(services_load(dir, table, 4) == 1 && table[0].hard_dropped == one.hard_dropped);
+
+    write_svc(path, "name=plain\nexec=/home/me/run.sh\nprotect_home=1\n");
+    assert(service_load_one(path, &one) == -1);
+    assert(services_load(dir, table, 4) == 0);
+    service_set_hardening_default(0);
+
+    unlink(path);
     rmdir(dir);
 
     printf("all mountns-parse tests passed\n");
