@@ -43,4 +43,18 @@ stage.write_stage(stage.R2_PENDING, root=r, extra={"snapshot": "@pre-schema"})
 d = json.load(open(os.path.join(r, stage.STAGE_PATH)))
 check("extra fields persist with ts", d["snapshot"] == "@pre-schema" and "ts" in d)
 
+# extras carry forward across transitions
+r = _root()
+stage.write_stage(stage.R1_HEAL, root=r, extra={"adv": ["no-dbus-broker"]})
+stage.transition(stage.R2_PENDING, root=r)
+check("extras survive a transition", stage.read_extra(r).get("adv") == ["no-dbus-broker"])
+
+# R3 chain: DONE -> R3_PENDING -> R3_DONE | R3_ROLLED_BACK
+for end in (stage.R3_DONE, stage.R3_ROLLED_BACK):
+    r = _root()
+    stage.write_stage(stage.DONE, root=r)
+    stage.transition(stage.R3_PENDING, root=r)
+    stage.transition(end, root=r)
+    check("DONE -> R3_PENDING -> " + end, stage.read_stage(r) == end)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

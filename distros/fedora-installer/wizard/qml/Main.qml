@@ -8,6 +8,8 @@ ApplicationWindow {
     width: 640; height: 480
     title: "Set up schema"
 
+    Component.onCompleted: if (wizard.screen === "confirming") wizard.continueClicked()
+
     function screenText() {
         switch (wizard.screen) {
         case "welcome": return "Welcome — this will set up schema on your computer.";
@@ -15,6 +17,8 @@ ApplicationWindow {
         case "summary": return "First stage done. Here is what the doctor checked.";
         case "final": return "Schema is successfully installed.";
         case "rolled_back": return "Your computer put itself back safely.";
+        case "dbus_offer": return "One last optional step: use schema's own message bus — the channel your desktop and system services talk over. If anything looks wrong after the restart, your computer puts itself back automatically.";
+        case "confirming": return "Checking the message bus switch…";
         default: return "";
         }
     }
@@ -57,6 +61,12 @@ ApplicationWindow {
             visible: wizard.error !== ""
             color: "#c0392b"
             text: wizard.error
+        }
+
+        Button {
+            text: wizard.secondaryAction
+            visible: wizard.secondaryAction !== ""
+            onClicked: wizard.skipClicked()
         }
 
         Button {

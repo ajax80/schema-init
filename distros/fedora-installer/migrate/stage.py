@@ -2,10 +2,12 @@ import json, os, time
 
 INSTALLED, R1_PENDING, R1_HEAL, R2_PENDING, DONE, ROLLED_BACK = (
     "INSTALLED", "R1_PENDING", "R1_HEAL", "R2_PENDING", "DONE", "ROLLED_BACK")
+R3_PENDING, R3_DONE, R3_ROLLED_BACK = "R3_PENDING", "R3_DONE", "R3_ROLLED_BACK"
 STAGE_PATH = "var/lib/schema-init/wizard-stage.json"
 VALID = {
     INSTALLED: {R1_PENDING}, R1_PENDING: {R1_HEAL}, R1_HEAL: {R2_PENDING},
-    R2_PENDING: {DONE, ROLLED_BACK}, DONE: set(), ROLLED_BACK: set(),
+    R2_PENDING: {DONE, ROLLED_BACK}, DONE: {R3_PENDING}, ROLLED_BACK: set(),
+    R3_PENDING: {R3_DONE, R3_ROLLED_BACK}, R3_DONE: set(), R3_ROLLED_BACK: set(),
 }
 
 def _p(root):
@@ -17,10 +19,18 @@ def read_stage(root="/"):
     except (OSError, ValueError, KeyError):
         return INSTALLED
 
+def read_extra(root="/"):
+    try:
+        d = json.load(open(_p(root)))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in d.items() if k not in ("stage", "ts")} if isinstance(d, dict) else {}
+
 def write_stage(stage, root="/", extra=None):
     p = _p(root)
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    d = {"stage": stage, "ts": int(time.time())}
+    d = read_extra(root)
+    d.update({"stage": stage, "ts": int(time.time())})
     if extra:
         d.update(extra)
     with open(p, "w") as fh:

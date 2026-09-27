@@ -17,6 +17,15 @@ class Backend:
     def arm_flip(self):
         return self._sudo(self.MIGRATE, "--arm-flip")
 
+    def arm_dbus(self):
+        return self._sudo(self.MIGRATE, "--arm-dbus")
+
+    def confirm_dbus(self):
+        return self._sudo(self.MIGRATE, "--confirm-dbus")
+
+    def skip_dbus(self):
+        return self._sudo(self.MIGRATE, "--skip-dbus")
+
     def finish(self):
         return self._sudo(self.MIGRATE, "--finish")
 

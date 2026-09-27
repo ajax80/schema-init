@@ -25,6 +25,10 @@ b.arm_flip()
 check("arm_flip shells sudo schema-migrate --arm-flip",
       calls[-1] == ["sudo", be.Backend.MIGRATE, "--arm-flip"])
 
+for meth, flag in (("arm_dbus", "--arm-dbus"), ("confirm_dbus", "--confirm-dbus"), ("skip_dbus", "--skip-dbus")):
+    getattr(b, meth)()
+    check(meth + " shells sudo schema-migrate " + flag, calls[-1] == ["sudo", be.Backend.MIGRATE, flag])
+
 b.finish()
 check("finish shells sudo schema-migrate --finish",
       calls[-1] == ["sudo", be.Backend.MIGRATE, "--finish"])

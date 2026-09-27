@@ -35,6 +35,9 @@ class WizardController(QObject):
     def _get_primary_action(self):
         return self._core.primary_action(self._core.screen())
 
+    def _get_secondary_action(self):
+        return self._core.secondary_action(self._core.screen())
+
     def _get_overall(self):
         try:
             with open(os.path.join(self._core.root, "run/schema-init/doctor-status.json")) as fh:
@@ -57,6 +60,7 @@ class WizardController(QObject):
 
     screen = Property(str, _get_screen, notify=changed)
     primaryAction = Property(str, _get_primary_action, notify=changed)
+    secondaryAction = Property(str, _get_secondary_action, notify=changed)
     error = Property(str, _get_error, notify=changed)
     overall = Property(str, _get_overall, notify=changed)
     statusItems = Property('QVariantList', _get_status_items, notify=changed)
@@ -78,6 +82,11 @@ class WizardController(QObject):
     @Slot(result=str)
     def recoveryText(self):
         return self._core.recovery_text()
+
+    @Slot()
+    def skipClicked(self):
+        self._error = _core.error_for(self._core.skip())
+        self.changed.emit()
 
     @Slot()
     def continueClicked(self):

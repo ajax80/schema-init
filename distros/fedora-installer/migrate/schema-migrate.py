@@ -715,6 +715,19 @@ def arm_flip(root="/", flip=_default_flip):
     stage.transition(stage.R2_PENDING, root=root)
     return 0
 
+def _boot_id():
+    try:
+        return open("/proc/sys/kernel/random/boot_id").read().strip()
+    except OSError:
+        return ""
+
+def dbus_awaiting_reboot(root="/"):
+    return (stage.read_stage(root) == stage.R3_PENDING
+            and stage.read_extra(root).get("dbus_armed_boot") == _boot_id())
+
+def dbus_offered(root="/"):
+    return "no-dbus-broker" not in stage.read_extra(root).get("adv", [])
+
 def advance_finish(root="/", flip=_default_flip):
     cur = stage.read_stage(root)
     if cur == stage.R1_PENDING:
@@ -722,11 +735,48 @@ def advance_finish(root="/", flip=_default_flip):
         return stage.R1_HEAL
     if cur == stage.R2_PENDING:
         authoritative = flip("is-authoritative").returncode == 0
+        if authoritative:
+            flip("confirm")
         new = stage.DONE if authoritative else stage.ROLLED_BACK
         stage.transition(new, root=root)
-        teardown(root)
+        if not (authoritative and dbus_offered(root)):
+            teardown(root)
         return new
     return cur
+
+def arm_dbus(root="/", flip=_default_flip):
+    if stage.read_stage(root) != stage.DONE or not dbus_offered(root):
+        return 1
+    if flip("dbus-arm").returncode != 0:
+        return 1
+    stage.transition(stage.R3_PENDING, root=root, extra={"dbus_armed_boot": _boot_id()})
+    return 0
+
+def confirm_dbus(root="/", flip=_default_flip):
+    if stage.read_stage(root) != stage.R3_PENDING or dbus_awaiting_reboot(root):
+        return stage.read_stage(root)
+    if flip("dbus-is-authoritative").returncode == 0:
+        flip("dbus-confirm")
+        new = stage.R3_DONE
+    elif (flip("dbus-state").stdout or "").strip() == "skipped":
+        new = stage.R3_ROLLED_BACK
+    else:
+        flip("dbus-rollback")
+        stage.transition(stage.R3_ROLLED_BACK, root=root)
+        teardown(root)
+        flip("reboot")
+        return stage.R3_ROLLED_BACK
+    stage.transition(new, root=root)
+    teardown(root)
+    return new
+
+def skip_dbus(root="/"):
+    if stage.read_stage(root) != stage.DONE:
+        return 1
+    adv = stage.read_extra(root).get("adv", [])
+    stage.write_stage(stage.DONE, root=root, extra={"adv": sorted(set(adv) | {"no-dbus-broker"})})
+    teardown(root)
+    return 0
 
 RECOVERY_TEXT = (
     "HOW TO GET YOUR COMPUTER BACK\n"
@@ -864,7 +914,8 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
         write_recovery_card(profile, root=ROOT)
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
-        stage.transition(stage.R1_PENDING, root=ROOT)
+        adv = [a for a in os.environ.get("MIGRATE_ADV", "").split(",") if a]
+        stage.transition(stage.R1_PENDING, root=ROOT, extra={"adv": adv})
     return m
 
 
@@ -904,6 +955,9 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--uninstall", action="store_true", help="reverse a prior migration")
     ap.add_argument("--finish", action="store_true", help="post-reboot report + translate offer")
     ap.add_argument("--arm-flip", action="store_true", help="R2: arm the udev flip")
+    ap.add_argument("--arm-dbus", action="store_true", help="R3: arm the schema-dbus flip")
+    ap.add_argument("--confirm-dbus", action="store_true", help="R3: judge the dbus flip from the desktop")
+    ap.add_argument("--skip-dbus", action="store_true", help="R3: decline the dbus flip")
     ap.add_argument("--prebuilt", action="store_true",
                     help="consume RPM-installed binaries; never compile")
     ap.add_argument("--stage", action="store_true", help="print the current wizard stage")
@@ -923,6 +977,16 @@ def main(argv, run=subprocess.run):
 
     if args.arm_flip:
         return arm_flip(root=ROOT)
+
+    if args.arm_dbus:
+        return arm_dbus(root=ROOT)
+
+    if args.confirm_dbus:
+        print(confirm_dbus(root=ROOT))
+        return 0
+
+    if args.skip_dbus:
+        return skip_dbus(root=ROOT)
 
     if args.finish:
         if os.path.exists(P("run/schema-init/migrate-finished")):

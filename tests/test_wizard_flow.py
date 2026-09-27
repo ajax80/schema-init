@@ -16,11 +16,14 @@ class FakeBackend:
     def deploy(self, opts=None): self.calls.append(("deploy", opts or [])); return self
     def arm_flip(self): self.calls.append(("arm_flip",)); return self
     def finish(self): self.calls.append(("finish",)); return self
+    def arm_dbus(self): self.calls.append(("arm_dbus",)); return self
+    def confirm_dbus(self): self.calls.append(("confirm_dbus",)); return self
+    def skip_dbus(self): self.calls.append(("skip_dbus",)); return self
 
-def fresh(stg):
+def fresh(stg, extra=None):
     root = tempfile.mkdtemp(); os.makedirs(os.path.join(root, "var/lib"))
     if stg is not None:
-        stage.write_stage(stg, root=root)
+        stage.write_stage(stg, root=root, extra=extra)
     be = FakeBackend()
     return core.WizardCore(backend=be, root=root), be
 
@@ -37,8 +40,37 @@ c, be = fresh(stage.R1_HEAL)
 check("R1_HEAL arms the flip", c.advance(consent=True, recovery_ack=True, selections={}) == "armed")
 check("arm_flip called", be.calls[-1] == ("arm_flip",))
 
+c, be = fresh(stage.DONE, extra={"adv": ["no-dbus-broker"]})
+check("DONE (dbus opted out) is final", c.screen() == "final")
+check("DONE (dbus opted out) finishes/tears down", c.advance(consent=True, recovery_ack=True, selections={}) == "finished")
+
+# R3: after udev DONE the wizard offers the dbus flip
 c, be = fresh(stage.DONE)
-check("DONE finishes/tears down", c.advance(consent=True, recovery_ack=True, selections={}) == "finished")
+check("DONE offers the dbus flip", c.screen() == "dbus_offer")
+check("dbus_offer has a Skip", c.secondary_action("dbus_offer") != "")
+check("dbus_offer Continue arms dbus", c.advance(consent=True, recovery_ack=True, selections={}) == "dbus_armed")
+check("arm_dbus called", be.calls[-1] == ("arm_dbus",))
+
+c, be = fresh(stage.DONE)
+check("Skip declines the dbus flip", c.skip() == "skipped" and be.calls[-1] == ("skip_dbus",))
+
+c, be = fresh(stage.DONE, extra={"adv": ["no-dbus-broker"]})
+check("Skip does nothing off the offer screen", c.skip() == "noop" and be.calls == [])
+
+bid = open("/proc/sys/kernel/random/boot_id").read().strip()
+c, be = fresh(stage.R3_PENDING, extra={"dbus_armed_boot": bid})
+check("R3 same boot -> waiting_reboot", c.screen() == "waiting_reboot")
+check("R3 same boot never confirms", c.advance(consent=True, recovery_ack=True, selections={}) == "noop" and be.calls == [])
+
+c, be = fresh(stage.R3_PENDING, extra={"dbus_armed_boot": "an-earlier-boot"})
+check("R3 after reboot -> confirming", c.screen() == "confirming")
+check("confirming confirms", c.advance(consent=True, recovery_ack=True, selections={}) == "dbus_confirmed")
+check("confirm_dbus called", be.calls[-1] == ("confirm_dbus",))
+
+check("R3_DONE -> final", fresh(stage.R3_DONE)[0].screen() == "final")
+check("R3_ROLLED_BACK -> rolled_back", fresh(stage.R3_ROLLED_BACK)[0].screen() == "rolled_back")
+c, be = fresh(stage.R3_DONE)
+check("R3_DONE finishes", c.advance(consent=True, recovery_ack=True, selections={}) == "finished")
 
 c, be = fresh(stage.ROLLED_BACK)
 check("ROLLED_BACK finishes/tears down", c.advance(consent=True, recovery_ack=True, selections={}) == "finished")
