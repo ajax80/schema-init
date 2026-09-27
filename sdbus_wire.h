@@ -94,6 +94,15 @@ static inline int sdbus_wire_parse(const unsigned char *buf, int len, sdbus_wire
         } else {
             return -1;                               /* unexpected header field type */
         }
+        /* each header field has ONE legal type in the spec; a field carrying any
+           other type is a malformed message. Enforcing this here (rather than
+           accepting whatever type parsed) stops a peer smuggling e.g. a 300-byte
+           SIGNATURE as an 's' (reforward re-emits field 8 as 'g' with a 1-byte
+           length, which would then truncate) or a PATH that is not an object path. */
+        static const char kfieldtype[10] = {
+            0, 'o', 's', 's', 's', 'u', 's', 's', 'g', 'u'   /* codes 1..9 */
+        };
+        if (code >= 1 && code <= 9 && sig != kfieldtype[code]) return -1;
         switch (code) {
             case 1: m->path = sval; break;
             case 2: m->interface = sval; break;

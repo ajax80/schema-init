@@ -9,6 +9,7 @@
 #include <dbus/dbus.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sdbus_wire.h"          /* sdbus_wire_msg + SDBUS_TYPE_* for the forward validator */
 
 typedef struct {
     DBusMessage *msg;            /* owned; free with sdbus_msg_free */
@@ -80,6 +81,43 @@ static inline int sdbus_msg_n_fds(const sdbus_msg *m) {
     if (!s) return 0;
     for (; *s; s++) if (*s == DBUS_TYPE_UNIX_FD) n++;
     return n;
+}
+
+/* Validate a message the broker is about to forward to another client. The wire
+   parser has already checked the header's framing and field types; this adds the
+   name-syntax and (for fd-free messages) body-vs-signature checks that stock
+   dbus-daemon performs. Without this the broker relays garbage the sender crafted,
+   and a peer's libdbus/sd-bus stack disconnects on receipt of a corrupt message —
+   so one malformed signal (default policy permits signals) can drop every matching
+   subscriber. fd-bearing messages cannot be demarshalled from bytes alone, so their
+   body is left to the receiver; their header names are still checked here.
+   Returns 1 if safe to forward, 0 if malformed. */
+static inline int sdbus_wire_forwardable(const unsigned char *buf, int len,
+                                         const sdbus_wire_msg *w) {
+    if (w->path && !dbus_validate_path(w->path, NULL)) return 0;
+    if (w->interface && !dbus_validate_interface(w->interface, NULL)) return 0;
+    if (w->member && !dbus_validate_member(w->member, NULL)) return 0;
+    if (w->error_name && !dbus_validate_error_name(w->error_name, NULL)) return 0;
+    if (w->destination && !dbus_validate_bus_name(w->destination, NULL)) return 0;
+    /* required members per type: a call/signal needs PATH+MEMBER, an error
+       needs ERROR_NAME+REPLY_SERIAL, a return needs REPLY_SERIAL. */
+    if (w->type == SDBUS_TYPE_METHOD_CALL || w->type == SDBUS_TYPE_SIGNAL) {
+        if (!w->path || !w->member) return 0;
+    } else if (w->type == SDBUS_TYPE_ERROR) {
+        if (!w->error_name || !w->has_reply_serial) return 0;
+    } else if (w->type == SDBUS_TYPE_METHOD_RETURN) {
+        if (!w->has_reply_serial) return 0;
+    } else {
+        return 0;                                    /* unknown message type */
+    }
+    if (sdbus_wire_n_fds(w) > 0) return 1;           /* body opaque; header vetted */
+    DBusError e; dbus_error_init(&e);
+    int needed = dbus_message_demarshal_bytes_needed((const char *)buf, len);
+    if (needed != len) return 0;                     /* one whole message expected */
+    DBusMessage *m = dbus_message_demarshal((const char *)buf, len, &e);
+    if (!m) { dbus_error_free(&e); return 0; }
+    dbus_message_unref(m);
+    return 1;
 }
 
 #endif
