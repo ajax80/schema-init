@@ -855,6 +855,12 @@ int services_load(const char *dir, service_t *table, int max) {
             if (strcmp(line, "name") == 0)
                 strncpy(svc->name, val, sizeof(svc->name) - 1);
             else if (strcmp(line, "exec") == 0) {
+                if (strpbrk(val, " \t")) {
+                    fprintf(stderr, "[schema-init] %s: exec=%s has whitespace; put each argument on its own args= line\n",
+                            svc->name[0] ? svc->name : path, val);
+                    bad = 1;
+                    break;
+                }
                 strncpy(svc->exec, val, sizeof(svc->exec) - 1);
                 svc->argv[0] = svc->exec;
                 argc = 1;
@@ -1059,6 +1065,12 @@ int service_load_one(const char *path, service_t *svc) {
         if (strcmp(line, "name") == 0)
             strncpy(svc->name, val, sizeof(svc->name) - 1);
         else if (strcmp(line, "exec") == 0) {
+            if (strpbrk(val, " \t")) {
+                fprintf(stderr, "[schema-init] %s: exec=%s has whitespace; put each argument on its own args= line\n",
+                        svc->name[0] ? svc->name : path, val);
+                fclose(f);
+                return -1;
+            }
             strncpy(svc->exec, val, sizeof(svc->exec) - 1);
             svc->argv[0] = svc->exec;
             argc = 1;

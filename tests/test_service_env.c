@@ -66,6 +66,25 @@ int main(void) {
     assert(service_load_one(p, &svc) == 0);
     assert(svc.env_count == MAX_ENV);
 
+    /* exec= with inline args is refused by both parsers */
+    snprintf(p, sizeof p, "%s/f.svc", dir);
+    write_svc(p, "name=f\nexec=/usr/bin/foo --bar\n");
+    assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/g.svc", dir);
+    write_svc(p, "name=g\nexec=/usr/bin/foo\targs\n");
+    assert(service_load_one(p, &svc) == -1);
+
+    char tmpl2[] = "/tmp/schema-svc-execXXXXXX";
+    char *dir2 = mkdtemp(tmpl2);
+    assert(dir2);
+    snprintf(p, sizeof p, "%s/ok.svc", dir2);
+    write_svc(p, "name=ok\nexec=/bin/true\nargs=-x\n");
+    snprintf(p, sizeof p, "%s/bad.svc", dir2);
+    write_svc(p, "name=bad\nexec=/bin/true -x\n");
+    static service_t table[4];
+    assert(services_load(dir2, table, 4) == 1);
+    assert(strcmp(table[0].name, "ok") == 0);
+
     printf("all service env tests passed\n");
     return 0;
 }
