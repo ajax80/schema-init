@@ -1836,6 +1836,10 @@ class Login1Manager(dbus.service.Object):
         print("login1-stub: CancelScheduledShutdown (nothing scheduled)")
         return dbus.Boolean(False)
 
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='sb', out_signature='')
+    def SetWallMessage(self, wall_message, interactive):
+        print("login1-stub: SetWallMessage (no-op; no wall broadcast)")
+
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='b', out_signature='',
                          sender_keyword='sender')
     def PowerOff(self, interactive, sender=None):
