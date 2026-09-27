@@ -107,6 +107,8 @@ sudo schema-migrate --deploy --prebuilt        # uses the packaged binaries, no 
 
 The COPR builds three packages: `schema-init` (the init), `schema-init-migrate` (the migrator + `schema-udev`), and `schema-init-wizard` (the GUI).
 
+`ajax80/schema-init` only gets tagged releases. Every commit to master also builds into `ajax80/schema-init-dev`. That repo is untested and meant for the author's own machines, so don't enable it on a box you depend on.
+
 ### The fast path — boot a prebuilt installer (no compiler, no Docker)
 
 If you just want to *see it run*, grab the prebuilt Fedora 44 installer (`schema-netinst44-installer-*.iso`) from the [latest release](https://github.com/ajax80/schema-init/releases/latest):
