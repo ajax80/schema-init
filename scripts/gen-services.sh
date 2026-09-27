@@ -80,6 +80,7 @@ for u in $units; do
             printf 'needs_root=1\n'
         fi
         printf 'critical=0\n'
+        printf 'no_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n'
     )
 
     if [ -n "$OUTDIR" ]; then
