@@ -33,24 +33,34 @@ plain `dnf upgrade`. That is not acceptable.
    today's behaviour, bit for bit. `on` ⇒ every knob a service leaves unset
    takes: `no_new_privs=1`, `protect_system=1` (not `full`),
    `protect_home=1`, `private_tmp=1`. `keep_caps` is never defaulted.
-   Kernel cmdline `schema.hardening_default=0` forces OFF (rescue).
-   Read at boot only — changing it takes a reboot, same as .svc edits.
+   File format is strict: content trimmed of whitespace must be exactly
+   `on`; anything else is OFF and logged once. Kernel cmdline
+   `schema.hardening_default=0|1` overrides the file either way (0 = rescue,
+   1 = trial without touching /etc). Read once at boot and cached — reloads
+   and restarts use the boot-time value; changing it takes a reboot, same as
+   .svc edits.
 
 3. **Defaulted knobs never refuse a load.** If a *defaulted* mount-ns knob
    would hide the service's exec or ready_path (`ns_conflict`), that knob is
    dropped for that service and logged. An *explicit* conflicting knob still
-   refuses the load, as today.
+   refuses the load, as today. `schema-ctl status <svc>` shows each knob's
+   effective value and its source (explicit / default / dropped + reason).
 
 4. **schema-import emits all four fields explicitly**, mapped from the unit:
    `NoNewPrivileges=yes` → 1, `PrivateTmp=yes` → 1,
    `ProtectSystem=yes` → 1 / `full|strict` → full, `ProtectHome=yes` → 1;
    everything else (including `ProtectHome=read-only|tmpfs`) → 0. An imported
    unit therefore means the same thing whether the switch is on or off.
+   Any directive mapped weaker than the unit asked (`ProtectSystem=strict`,
+   `ProtectHome=read-only|tmpfs`, unknown values) prints a warning naming the
+   unit and directive.
 
 5. **Opt-in rollout.** No host turns the switch on until every .svc on it
    carries an explicit value for each knob it cannot take. Order:
    code (switch off everywhere) → schema-import → fleet .svc annotation from
-   the audit → switch on one host at a time, reboot-verified → ISO/wizard
+   the audit → `schema-doctor` lint lists every .svc missing an explicit
+   value for a knob it would receive by default (the gate for flipping a
+   host) → switch on one host at a time, reboot-verified → ISO/wizard
    turns it on for fresh installs whose rail is fully annotated.
 
 ## Tests (vmtest, red/green)
@@ -60,7 +70,11 @@ plain `dnf upgrade`. That is not acceptable.
 - switch `on` + explicit `=0` per knob: that knob off
 - switch `on` + exec under /home: loads, protect_home dropped, logged
 - switch `on` + `schema.hardening_default=0` on cmdline: unhardened
-- schema-import: unit with/without directives → four explicit fields
+- switch absent + `schema.hardening_default=1`: unset svc hardened
+- switch file `on \n` / `ON` / `1`: trimmed `on` accepted, others OFF
+- schema-import: unit with/without directives → four explicit fields;
+  `ProtectSystem=strict` → full + warning
+- schema-doctor lint: unannotated svc listed, fully annotated host clean
 
 ## Separate, no code change
 
