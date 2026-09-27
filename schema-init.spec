@@ -127,6 +127,7 @@ fi
 %{_libexecdir}/schema-init/verify-rules-live
 %{_libexecdir}/schema-init/schema-dbus-run.sh
 %{_libexecdir}/schema-init/schema-dbus-flip.sh
+%{_libexecdir}/schema-init/schema-dbus-flip-healthcheck.sh
 %{_libexecdir}/schema-init/dissect_policy.py
 %{_libexecdir}/schema-init/stage.py
 %{_datadir}/%{name}/migrate/prevent-set.list

@@ -138,6 +138,7 @@ install-migrate: schema-udev schema-systemctl verify-rules-live schema-dbus
 	install -m 0755 schema-dbus $(DESTDIR)$(BINDIR)/schema-dbus
 	install -m 0755 scripts/schema-dbus-run.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-dbus-run.sh
 	install -m 0755 scripts/schema-dbus-flip.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-dbus-flip.sh
+	install -m 0755 scripts/schema-dbus-flip-healthcheck.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-dbus-flip-healthcheck.sh
 	install -m 0755 tools/dbus-learn/dissect_policy.py $(DESTDIR)$(PREFIX)/libexec/schema-init/dissect_policy.py
 	install -D -m 0644 config/schema-dbus-masked $(DESTDIR)$(SYSCONFDIR)/schema-dbus/masked
 	install -m 0644 distros/fedora-installer/migrate/stage.py $(DESTDIR)$(PREFIX)/libexec/schema-init/stage.py

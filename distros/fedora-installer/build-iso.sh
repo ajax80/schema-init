@@ -54,6 +54,7 @@ install -m0755 "$REPO/scripts/schema-session-unregister"      "$PAYLOAD/scripts/
 install -m0755 "$REPO/scripts/schema-dbus-session-run.sh"      "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-dbus-run.sh"              "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-dbus-flip.sh"             "$PAYLOAD/scripts/"
+install -m0755 "$REPO/scripts/schema-dbus-flip-healthcheck.sh" "$PAYLOAD/scripts/"
 install -m0755 "$REPO/tools/dbus-learn/dissect_policy.py"      "$PAYLOAD/scripts/"
 install -m0644 "$REPO/config/schema-dbus-masked"               "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/plasma-session-start.sh" "$PAYLOAD/scripts/"

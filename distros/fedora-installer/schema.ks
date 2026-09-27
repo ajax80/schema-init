@@ -292,6 +292,19 @@ name=schema-udev-healthcheck
 exec=/usr/local/lib/schema/schema-udev-flip-healthcheck.sh
 oneshot=1
 SVC
+install -m0755 "$SRC/scripts/schema-dbus-flip-healthcheck.sh" /usr/local/lib/schema/
+cat > /etc/schema-init/services/schema-dbus-healthcheck.svc <<'SVC'
+name=schema-dbus-healthcheck
+exec=/usr/local/lib/schema/schema-dbus-flip-healthcheck.sh
+dep=dbus
+oneshot=1
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
+SVC
 
 # 6. Hardware video decode for Intel iGPUs (eli-class: Haswell HD 4400). A stock
 #    Fedora install ships NO VA-API driver, so Firefox software-decodes every
