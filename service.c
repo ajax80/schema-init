@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -365,13 +366,16 @@ static void cgroup_apply_limits(service_t *svc) {
 /* 1 = handled, 0 = not a mount-ns key, -1 = bad value (load error). */
 static int parse_ns_field(service_t *svc, const char *key, const char *val) {
     int r;
-    if (strcmp(key, "private_tmp") == 0)
+    if (strcmp(key, "private_tmp") == 0) {
         r = parse_ns_bool(val, &svc->ns_private_tmp);
-    else if (strcmp(key, "protect_system") == 0)
+        svc->hard_set |= HARD_PT;
+    } else if (strcmp(key, "protect_system") == 0) {
         r = parse_protect_system(val, &svc->ns_protect_system);
-    else if (strcmp(key, "protect_home") == 0)
+        svc->hard_set |= HARD_PS;
+    } else if (strcmp(key, "protect_home") == 0) {
         r = parse_ns_bool(val, &svc->ns_protect_home);
-    else
+        svc->hard_set |= HARD_PH;
+    } else
         return 0;
     if (r != 0) {
         fprintf(stderr, "[schema-init] %s: bad value %s=%s\n",
@@ -387,23 +391,77 @@ static int path_under(const char *p, const char *const *dirs, int n) {
     return 0;
 }
 
-/* A mount-ns field that hides the service's own exec or ready_path. */
-static int ns_conflict(const service_t *svc) {
+static int hardening_default_on;
+
+void service_set_hardening_default(int on) { hardening_default_on = on; }
+int  service_hardening_default(void) { return hardening_default_on; }
+
+int hardening_default_resolve(const char *cmdline, const char *file) {
+    static const char key[] = "schema.hardening_default=";
+    const char *p = cmdline;
+    while (p && (p = strstr(p, key)) != NULL) {
+        const char *v = p + sizeof(key) - 1;
+        if ((p == cmdline || isspace((unsigned char)p[-1])) &&
+            (v[0] == '0' || v[0] == '1') &&
+            (v[1] == '\0' || isspace((unsigned char)v[1])))
+            return v[0] == '1';
+        p = v;
+    }
+    if (!file) return 0;
+    while (isspace((unsigned char)*file)) file++;
+    size_t n = strlen(file);
+    while (n && isspace((unsigned char)file[n - 1])) n--;
+    return n == 2 && strncmp(file, "on", 2) == 0;
+}
+
+static void apply_hardening_defaults(service_t *svc) {
+    if (!hardening_default_on) return;
+    if (!(svc->hard_set & HARD_NNP)) {
+        svc->flags |= SVC_NO_NEW_PRIVS;
+        svc->hard_default |= HARD_NNP;
+    }
+    if (!(svc->hard_set & HARD_PT)) {
+        svc->ns_private_tmp = 1;
+        svc->hard_default |= HARD_PT;
+    }
+    if (!(svc->hard_set & HARD_PS)) {
+        svc->ns_protect_system = PROTECT_SYSTEM_BASE;
+        svc->hard_default |= HARD_PS;
+    }
+    if (!(svc->hard_set & HARD_PH)) {
+        svc->ns_protect_home = 1;
+        svc->hard_default |= HARD_PH;
+    }
+}
+
+/* A mount-ns knob that hides the service's own exec or ready_path: an
+ * explicit one refuses the load, a defaulted one is dropped. */
+static int ns_hides(service_t *svc, uint8_t bit, uint8_t *knob, const char *knob_name,
+                    const char *const *dirs, int n) {
+    const char *what = NULL;
+    if (!*knob) return 0;
+    if (path_under(svc->exec, dirs, n)) what = "exec";
+    else if (path_under(svc->ready_path, dirs, n)) what = "ready_path";
+    if (!what) return 0;
+    if (svc->hard_default & bit) {
+        *knob = 0;
+        svc->hard_default &= ~bit;
+        svc->hard_dropped |= bit;
+        fprintf(stderr, "[schema-init] %s: default %s would hide %s — dropped\n",
+                svc->name, knob_name, what);
+        return 0;
+    }
+    fprintf(stderr, "[schema-init] %s: %s hides %s — not loaded\n",
+            svc->name, knob_name, what);
+    return -1;
+}
+
+static int hardening_finalize(service_t *svc) {
     static const char *const tmp[] = { "/tmp/", "/var/tmp/" };
     static const char *const home[] = { "/home/", "/root/", "/run/user/" };
-    const char *what = NULL;
-
-    if (svc->ns_private_tmp && path_under(svc->exec, tmp, 2))
-        what = "private_tmp hides exec";
-    else if (svc->ns_private_tmp && path_under(svc->ready_path, tmp, 2))
-        what = "private_tmp hides ready_path";
-    else if (svc->ns_protect_home && path_under(svc->exec, home, 3))
-        what = "protect_home hides exec";
-    else if (svc->ns_protect_home && path_under(svc->ready_path, home, 3))
-        what = "protect_home hides ready_path";
-    if (!what) return 0;
-    fprintf(stderr, "[schema-init] %s: %s — not loaded\n", svc->name, what);
-    return -1;
+    apply_hardening_defaults(svc);
+    if (ns_hides(svc, HARD_PT, &svc->ns_private_tmp, "private_tmp", tmp, 2) != 0) return -1;
+    return ns_hides(svc, HARD_PH, &svc->ns_protect_home, "protect_home", home, 3);
 }
 
 int service_apply_hardening(const service_t *svc) {
@@ -878,8 +936,10 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_ONESHOT;
             else if (strcmp(line, "needs_root") == 0 && atoi(val))
                 svc->flags |= SVC_NEEDS_ROOT;
-            else if (strcmp(line, "no_new_privs") == 0 && atoi(val))
-                svc->flags |= SVC_NO_NEW_PRIVS;
+            else if (strcmp(line, "no_new_privs") == 0) {
+                svc->hard_set |= HARD_NNP;
+                if (atoi(val)) svc->flags |= SVC_NO_NEW_PRIVS;
+            }
             else if (strcmp(line, "keep_caps") == 0) {
                 if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
                     fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
@@ -958,7 +1018,7 @@ int services_load(const char *dir, service_t *table, int max) {
         }
         if (bad) { fclose(f); continue; }
         fclose(f);
-        if (ns_conflict(svc) != 0) continue;
+        if (hardening_finalize(svc) != 0) continue;
         if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
             fprintf(stderr,
                     "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
@@ -1090,8 +1150,10 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_ONESHOT;
         else if (strcmp(line, "needs_root") == 0 && atoi(val))
             svc->flags |= SVC_NEEDS_ROOT;
-        else if (strcmp(line, "no_new_privs") == 0 && atoi(val))
-            svc->flags |= SVC_NO_NEW_PRIVS;
+        else if (strcmp(line, "no_new_privs") == 0) {
+            svc->hard_set |= HARD_NNP;
+            if (atoi(val)) svc->flags |= SVC_NO_NEW_PRIVS;
+        }
         else if (strcmp(line, "keep_caps") == 0) {
             if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
                 fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
@@ -1167,7 +1229,7 @@ int service_load_one(const char *path, service_t *svc) {
         }
     }
     fclose(f);
-    if (ns_conflict(svc) != 0) return -1;
+    if (hardening_finalize(svc) != 0) return -1;
     if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
         fprintf(stderr,
                 "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "

@@ -231,6 +231,9 @@ typedef struct {
     uint8_t          ns_private_tmp;    /* private /tmp + /var/tmp                 */
     uint8_t          ns_protect_system; /* PROTECT_SYSTEM_* (ns.h)                 */
     uint8_t          ns_protect_home;   /* hide /home /root /run/user              */
+    uint8_t          hard_set;          /* HARD_* knobs given explicitly in .svc   */
+    uint8_t          hard_default;      /* HARD_* knobs taken from host default    */
+    uint8_t          hard_dropped;      /* HARD_* defaults dropped (ns conflict)   */
     char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
@@ -271,6 +274,18 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
                        const uint8_t *grp_states, int gcount);
 
 /* parse a simple service file; returns number loaded */
+#define HARD_NNP 0x1
+#define HARD_PT  0x2
+#define HARD_PS  0x4
+#define HARD_PH  0x8
+
+/* Host-wide hardening default (default-flip spec 2026-09-26). cmdline may be
+ * NULL; file is the content of /etc/schema-init/hardening-default or NULL.
+ * cmdline schema.hardening_default=0|1 wins; else file trimmed == "on". */
+int  hardening_default_resolve(const char *cmdline, const char *file);
+void service_set_hardening_default(int on);
+int  service_hardening_default(void);
+
 int services_load(const char *dir, service_t *table, int max);
 
 /* parse a single .svc file into svc; returns 0 on success, -1 on failure */

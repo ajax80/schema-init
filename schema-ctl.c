@@ -15,6 +15,8 @@ static void usage(FILE *out) {
         "usage: schema-ctl <command> [args]\n"
         "\n"
         "  status [--json|--kv]   service table: name, pid, state, restarts\n"
+        "  status <svc>           one service, with each hardening knob's value\n"
+        "                         and source (explicit / default / dropped)\n"
         "  list                   service names, one per line\n"
         "  timing                 per-service cost (spawn→ready) + readiness instant,\n"
         "                         sorted by cost — the boot critical path first\n"

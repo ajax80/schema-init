@@ -152,6 +152,30 @@ FLAP_THRESHOLD = 3
 FLAP_WINDOW = 1800   # seconds
 
 
+HARDENING_KEYS = ("no_new_privs", "private_tmp", "protect_system", "protect_home")
+
+
+def hardening_default_on():
+    try:
+        return open(os.path.join(ROOT, "etc/schema-init/hardening-default")).read().strip() == "on"
+    except OSError:
+        return False
+
+
+def hardening_unannotated():
+    """[(svc file, [knobs it leaves to the host default])], sorted by file."""
+    out = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "etc/schema-init/services/*.svc"))):
+        try:
+            keys = {ln.split("=", 1)[0].strip() for ln in open(path, errors="replace") if "=" in ln}
+        except OSError:
+            continue
+        missing = [k for k in HARDENING_KEYS if k not in keys]
+        if missing:
+            out.append((os.path.basename(path), missing))
+    return out
+
+
 def _boot_id():
     try:
         return open(os.path.join(ROOT, "proc/sys/kernel/random/boot_id")).read().strip()
@@ -559,6 +583,27 @@ class VtMediation(Check):
 
 
 REGISTRY.append(VtMediation())
+
+
+class HardeningAnnotation(Check):
+    name = "hardening-annotation"
+    summary = "every .svc sets each hardening knob explicitly (host default is on)"
+    grade = DEFERRED
+
+    def detect(self):
+        if not hardening_default_on():
+            return None
+        bad = hardening_unannotated()
+        if not bad:
+            return None
+        return Finding(
+            detail=f"{len(bad)} .svc leave knobs to the host hardening default: "
+                   + "; ".join(f"{n} ({','.join(m)})" for n, m in bad),
+            oracle_said="each unit's own hardening directives decide; nothing is implied",
+            healable=False)
+
+
+REGISTRY.append(HardeningAnnotation())
 
 
 class PowerDevilRunning(Check):
@@ -1300,7 +1345,16 @@ def main(argv):
     ap.add_argument("--wait", type=float, default=0.0, help="wait N s for a session first")
     ap.add_argument("--periodic", action="store_true", help="flap-aware run + notify (timer)")
     ap.add_argument("--status", action="store_true", help="print the last health status")
+    ap.add_argument("--hardening-lint", action="store_true",
+                    help="list .svc missing an explicit hardening knob; exit 1 if any")
     args = ap.parse_args(argv)
+
+    if args.hardening_lint:
+        bad = hardening_unannotated()
+        for n, m in bad:
+            print(f"{n}: {' '.join(m)}")
+        print(f"hardening-lint: {len(bad)} .svc not fully annotated")
+        return 1 if bad else 0
 
     cfg_heal, disabled, cfg_notify = read_config()
     checks = [c for c in REGISTRY if c.name not in disabled]
