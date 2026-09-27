@@ -583,6 +583,10 @@ UDEVD_PATHS = ["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd",
                "/usr/libexec/systemd-udevd"]
 
 
+UDEVD_LAUNCH = "/usr/local/bin/schema-udevd-launch.sh"
+UDEV_LIVE_FLAG = "/etc/schema-init/schema-udev.live"
+
+
 def _udevd_path():
     for p in UDEVD_PATHS:
         if os.path.exists(P(p.lstrip("/"))):
@@ -596,16 +600,33 @@ def generate_udev_units(manifest, dry_run=False):
     udevd = _udevd_path()
     if not udevd:
         return
+    # The armed LIVE flag picks the owner at boot, as schema-sysprep.sh does on
+    # the ISO: schema-udev does its own coldplug and writes its ready file;
+    # otherwise stock systemd-udevd plus udevadm trigger/settle.
+    launch = P(UDEVD_LAUNCH.lstrip("/"))
+    os.makedirs(os.path.dirname(launch), exist_ok=True)
+    open(launch, "w").write("#!/bin/sh\n"
+                            "if [ -e %s ] && [ -x /usr/bin/schema-udev ]; then\n"
+                            "    mkdir -p /run/schema-udev\n"
+                            "    exec /usr/bin/schema-udev\n"
+                            "fi\n"
+                            "exec %s\n" % (UDEV_LIVE_FLAG, udevd))
+    os.chmod(launch, 0o755)
+    manifest.add_file(UDEVD_LAUNCH)
     svc = P("etc/schema-init/services/udevd.svc")
     os.makedirs(os.path.dirname(svc), exist_ok=True)
-    open(svc, "w").write("name=udevd\nexec=%s\nneeds_root=1\ncritical=0\n" % udevd + NO_HARDENING)
+    open(svc, "w").write("name=udevd\nexec=%s\nneeds_root=1\ncritical=0\n" % UDEVD_LAUNCH + NO_HARDENING)
     manifest.add_file("/etc/schema-init/services/udevd.svc")
     script = P("usr/local/bin/schema-udev-trigger.sh")
     os.makedirs(os.path.dirname(script), exist_ok=True)
     open(script, "w").write("#!/bin/sh\n"
+                            "if [ -e %s ] && [ -x /usr/bin/schema-udev ]; then\n"
+                            "    i=0; while [ $i -lt 60 ]; do [ -e /run/schema-udev/ready ] && exit 0; i=$((i+1)); sleep 0.5; done\n"
+                            "    exit 0\n"
+                            "fi\n"
                             "udevadm trigger --action=add --type=subsystems\n"
                             "udevadm trigger --action=add --type=devices\n"
-                            "udevadm settle --timeout=30\n")
+                            "udevadm settle --timeout=30\n" % UDEV_LIVE_FLAG)
     os.chmod(script, 0o755)
     manifest.add_file("/usr/local/bin/schema-udev-trigger.sh")
     tsvc = P("etc/schema-init/services/udev-trigger.svc")
@@ -678,15 +699,14 @@ def install_flip_seatbelt(manifest, dry_run=False):
         return P(rel)
     dst = P(rel)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    # order after udev-trigger (when present) so /dev is populated before the
-    # seatbelt judges node health — otherwise it can false-rollback a good flip.
-    deps = []
-    if os.path.exists(P("etc/schema-init/services/udev-trigger.svc")):
-        deps.append("udev-trigger")
+    # No dep=: a dep that crash-loops goes DORMANT, never EXCISED, and blocks
+    # its dependents forever — a broken udev would stop the seatbelt ever
+    # running. The healthcheck waits for /dev itself (bounded), so it needs
+    # start_timeout_sec above the ~90s oneshot default.
     body = ("name=schema-udev-healthcheck\n"
             "exec=" + SEATBELT_HELPER + "\n"
-            + "".join("dep=%s\n" % d for d in deps)
-            + "oneshot=1\n"
+            "oneshot=1\n"
+            "start_timeout_sec=300\n"
             "needs_root=1\n"
             "critical=0\n" + NO_HARDENING)
     open(dst, "w").write(body)
