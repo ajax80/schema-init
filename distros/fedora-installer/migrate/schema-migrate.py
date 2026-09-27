@@ -695,6 +695,7 @@ def install_flip_seatbelt(manifest, dry_run=False):
     open(P(drel), "w").write("name=schema-dbus-healthcheck\n"
                              "exec=" + DBUS_SEATBELT_HELPER + "\n"
                              "oneshot=1\n"
+                             "start_timeout_sec=300\n"
                              "needs_root=1\n"
                              "critical=0\n" + NO_HARDENING)
     manifest.add_file("/" + drel)

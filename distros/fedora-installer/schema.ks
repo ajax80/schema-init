@@ -304,6 +304,7 @@ cat > /etc/schema-init/services/schema-dbus-healthcheck.svc <<'SVC'
 name=schema-dbus-healthcheck
 exec=/usr/local/lib/schema/schema-dbus-flip-healthcheck.sh
 oneshot=1
+start_timeout_sec=300
 needs_root=1
 critical=0
 no_new_privs=0

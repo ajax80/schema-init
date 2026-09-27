@@ -12,7 +12,9 @@
 # goes DORMANT, not EXCISED, and a DORMANT dep blocks its dependents forever.
 # With dep=dbus a crash-looping broker kept this from ever running (DBox,
 # 2026-09-27) — the exact failure it exists to undo. It waits for the bus
-# itself instead, bounded.
+# itself instead, bounded at 120s of uptime (the RTC can be hours off until
+# chrony steps it); its .svc raises start_timeout_sec
+# above the ~90s oneshot default, or PID 1 kills it mid-wait (also DBox).
 set -u
 
 LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -51,8 +53,9 @@ want=""
 [ -f "$SVCDIR/polkitd.svc" ]          && want="$want org.freedesktop.PolicyKit1"
 
 missing=""
-i=0
-while [ $i -lt 120 ]; do
+up() { cut -d. -f1 /proc/uptime; }
+deadline=$(( $(up) + 120 ))
+while [ "$(up)" -lt "$deadline" ]; do
     missing=""
     dbus-send --system --print-reply --dest=org.freedesktop.DBus / \
         org.freedesktop.DBus.GetId > /dev/null 2>&1 || missing="GetId"
@@ -60,7 +63,7 @@ while [ $i -lt 120 ]; do
         has_owner "$n" || missing="$missing $n"
     done
     [ -z "$missing" ] && break
-    i=$((i + 1)); sleep 1
+    sleep 1
 done
 
 # --- class 1 ---
