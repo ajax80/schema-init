@@ -303,8 +303,8 @@ install -m0755 "$SRC/scripts/schema-dbus-flip-healthcheck.sh" /usr/local/lib/sch
 cat > /etc/schema-init/services/schema-dbus-healthcheck.svc <<'SVC'
 name=schema-dbus-healthcheck
 exec=/usr/local/lib/schema/schema-dbus-flip-healthcheck.sh
-dep=dbus
 oneshot=1
+start_timeout_sec=300
 needs_root=1
 critical=0
 no_new_privs=0

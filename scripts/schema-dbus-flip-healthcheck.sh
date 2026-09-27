@@ -1,15 +1,20 @@
 #!/bin/sh
 # Headless seatbelt for the schema-dbus flip: a schema-init oneshot on every
-# boot, ordered only after dbus. A dead system bus is a black screen with no
-# GUI to recover from, so this is what undoes a bad flip unattended.
+# boot, with NO dep= at all. A dead system bus is a black screen with no GUI
+# to recover from, so this is what undoes a bad flip unattended.
 #
 #   1. THIS boot: the broker (not the stock fallback) owns the system bus,
 #      answers GetId, and login1 / NetworkManager / PolicyKit1 each appear on
-#      it within 60s (only those whose .svc is on this box). Else roll back.
+#      it within 120s (only those whose .svc is on this box). Else roll back.
 #   2. The desktop never confirmed across a full armed boot -> roll back.
 #
-# Deliberately no dep= on logind/NM/polkit: if one never starts, a dep would
-# keep this from ever running, and it could never roll back.
+# Deliberately no dep= on anything, dbus included: a service that keeps dying
+# goes DORMANT, not EXCISED, and a DORMANT dep blocks its dependents forever.
+# With dep=dbus a crash-looping broker kept this from ever running (DBox,
+# 2026-09-27) — the exact failure it exists to undo. It waits for the bus
+# itself instead, bounded at 120s of uptime (the RTC can be hours off until
+# chrony steps it); its .svc raises start_timeout_sec
+# above the ~90s oneshot default, or PID 1 kills it mid-wait (also DBox).
 set -u
 
 LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -48,8 +53,9 @@ want=""
 [ -f "$SVCDIR/polkitd.svc" ]          && want="$want org.freedesktop.PolicyKit1"
 
 missing=""
-i=0
-while [ $i -lt 60 ]; do
+up() { cut -d. -f1 /proc/uptime; }
+deadline=$(( $(up) + 120 ))
+while [ "$(up)" -lt "$deadline" ]; do
     missing=""
     dbus-send --system --print-reply --dest=org.freedesktop.DBus / \
         org.freedesktop.DBus.GetId > /dev/null 2>&1 || missing="GetId"
@@ -57,7 +63,7 @@ while [ $i -lt 60 ]; do
         has_owner "$n" || missing="$missing $n"
     done
     [ -z "$missing" ] && break
-    i=$((i + 1)); sleep 1
+    sleep 1
 done
 
 # --- class 1 ---
