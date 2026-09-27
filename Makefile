@@ -185,9 +185,11 @@ release: all
 # .copr/Makefile's srpm step; assumes rpm-build is already installed.
 srpm:
 	@V=$$(rpmspec -q --srpm --qf '%{version}\n' schema-init.spec); \
+	S=$$(git rev-list --count HEAD).$$(git log -1 --format=%cd --date=format:%Y%m%d)git$$(git rev-parse --short=7 HEAD); \
 	mkdir -p $(RELDIR); \
 	git archive --format=tar.gz --prefix=schema-init-$$V/ HEAD -o /tmp/schema-init-$$V.tar.gz; \
-	rpmbuild -bs --define "_sourcedir /tmp" --define "_srcrpmdir $(CURDIR)/$(RELDIR)" schema-init.spec; \
+	{ echo "%global snapshot $$S"; cat schema-init.spec; } > /tmp/schema-init.spec; \
+	rpmbuild -bs --define "_sourcedir /tmp" --define "_srcrpmdir $(abspath $(RELDIR))" /tmp/schema-init.spec; \
 	ls -1 $(RELDIR)/*.src.rpm
 
 clean:
