@@ -282,6 +282,13 @@ Terminal=false
 DESK
     chmod 0755 "$FBHOME/Desktop/schema-udev-flip.desktop"
     chown "$FBUSER:$FBUSER" "$FBHOME/Desktop/schema-udev-flip.desktop"
+    # schema-autostart-runner (the stand-in for systemd's xdg-autostart target)
+    # sweeps only ~/.config/autostart, so the /etc/xdg entry above never fires
+    # under schema-init. Without this the wizard never opens after an armed
+    # reboot, nothing confirms, and the seatbelt rolls back a healthy flip.
+    install -d -o "$FBUSER" -g "$FBUSER" "$FBHOME/.config" "$FBHOME/.config/autostart"
+    install -o "$FBUSER" -g "$FBUSER" -m0644 /etc/xdg/autostart/schema-firstboot.desktop \
+        "$FBHOME/.config/autostart/schema-firstboot.desktop"
 fi
 
 # headless seatbelt: schema-init oneshot, runs every boot, auto-rolls-back a
