@@ -662,6 +662,7 @@ PREBUILT_BINS = ["schema-init", "schema-ctl", "schema-subreaper"]
 
 FLIP_HELPER = "/usr/libexec/schema-init/schema-flip-apply"
 SEATBELT_HELPER = "/usr/libexec/schema-init/schema-udev-flip-healthcheck.sh"
+DBUS_SEATBELT_HELPER = "/usr/libexec/schema-init/schema-dbus-flip-healthcheck.sh"
 AUTOSTART = "etc/xdg/autostart/schema-wizard.desktop"
 
 def _default_flip(*a):
@@ -690,6 +691,14 @@ def install_flip_seatbelt(manifest, dry_run=False):
             "critical=0\n" + NO_HARDENING)
     open(dst, "w").write(body)
     manifest.add_file("/" + rel)
+    drel = "etc/schema-init/services/schema-dbus-healthcheck.svc"
+    open(P(drel), "w").write("name=schema-dbus-healthcheck\n"
+                             "exec=" + DBUS_SEATBELT_HELPER + "\n"
+                             "dep=dbus\n"
+                             "oneshot=1\n"
+                             "needs_root=1\n"
+                             "critical=0\n" + NO_HARDENING)
+    manifest.add_file("/" + drel)
     return dst
 
 def teardown(root="/"):
