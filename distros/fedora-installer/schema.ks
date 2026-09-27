@@ -38,6 +38,7 @@ yad
 polkit
 NetworkManager
 openssh-server
+chrony
 pipewire
 pipewire-pulseaudio
 wireplumber
@@ -101,6 +102,7 @@ install -m0755 "$SRC/scripts/gen-mounts.sh"              /usr/local/lib/schema/
 install -d /etc/schema-init/services /etc/schema-init/scripts
 cp -a "$SRC/services/." /etc/schema-init/services/
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
+rm -f /etc/schema-init/services/schema-migrate-finish.svc  # migrate-path oneshot; an ISO install has no schema-migrate
 install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
 install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
 install -m0755 "$SRC/scripts/schema-zram-start.sh" /usr/local/bin/schema-zram-start.sh  # zram.svc execs this
