@@ -224,6 +224,13 @@ def main():
             check('GetSession(unknown) raises', 'NoSuchSession' in str(e),
                   e.get_dbus_name())
 
+        print("\n-- SetWallMessage is accepted --")
+        try:
+            mgr.SetWallMessage('going down', False, dbus_interface=MANAGER_IFACE)
+            check('SetWallMessage accepted', True)
+        except dbus.DBusException as e:
+            check('SetWallMessage accepted', False, e.get_dbus_name())
+
     finally:
         for p in (stub, daemon):
             try:
