@@ -184,6 +184,34 @@ static void test_flag_before_verb(void) {
     assert(run3("--quiet", "is-enabled", "foo") == 0);
 }
 
+static void test_passthrough(void) {
+    char dir[] = "/tmp/shim-pt-XXXXXX";
+    assert(mkdtemp(dir));
+    char comm[256], real[256];
+    snprintf(comm, sizeof comm, "%s/comm", dir);
+    snprintf(real, sizeof real, "%s/systemctl.real", dir);
+    setenv("SCHEMA_PID1_COMM", comm, 1);
+    setenv("SCHEMA_REAL_SYSTEMCTL", real, 1);
+    FILE *f;
+
+    f = fopen(comm, "w"); fputs("systemd\n", f); fclose(f);
+    assert(shim_passthrough() == NULL);                 /* real missing -> handle it */
+    f = fopen(real, "w"); fputs("#!/bin/sh\n", f); fclose(f);
+    chmod(real, 0755);
+    assert(shim_passthrough() != NULL);                 /* PID 1 systemd -> real */
+    assert(strcmp(shim_passthrough(), real) == 0);
+
+    f = fopen(comm, "w"); fputs("schema-init\n", f); fclose(f);
+    assert(shim_passthrough() == NULL);                 /* schema-init PID 1 -> shim */
+
+    unlink(comm);
+    assert(shim_passthrough() == NULL);                 /* unreadable -> shim */
+
+    unlink(real); rmdir(dir);
+    unsetenv("SCHEMA_PID1_COMM");
+    unsetenv("SCHEMA_REAL_SYSTEMCTL");
+}
+
 int main(void) {
     test_strip_suffix();
     test_supported();
@@ -196,5 +224,7 @@ int main(void) {
     printf("task4 systemctl-shim tests passed\n");
     test_flag_before_verb();
     printf("task5 systemctl-shim tests passed\n");
+    test_passthrough();
+    printf("passthrough systemctl-shim tests passed\n");
     return 0;
 }

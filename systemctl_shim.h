@@ -21,6 +21,24 @@ __attribute__((unused)) static const char *shim_ctl(void) {
     return (e && *e) ? e : "schema-ctl";
 }
 
+/* PID 1 is still systemd (the -migrate RPM is installed but the box has not
+ * booted schema-init, or never will): hand every call to the real systemctl.
+ * Returns its path, or NULL to handle the call ourselves. */
+__attribute__((unused)) static const char *shim_passthrough(void) {
+    const char *e = getenv("SCHEMA_PID1_COMM");
+    const char *comm = (e && *e) ? e : "/proc/1/comm";
+    e = getenv("SCHEMA_REAL_SYSTEMCTL");
+    const char *real = (e && *e) ? e : "/usr/bin/systemctl.real";
+    char buf[32] = {0};
+    FILE *f = fopen(comm, "r");
+    if (!f) return NULL;
+    if (!fgets(buf, sizeof buf, f)) buf[0] = '\0';
+    fclose(f);
+    buf[strcspn(buf, "\n")] = '\0';
+    if (strcmp(buf, "systemd") != 0) return NULL;
+    return access(real, X_OK) == 0 ? real : NULL;
+}
+
 __attribute__((unused)) static const char *strip_service_suffix(const char *unit, char *buf, size_t n) {
     size_t len = strlen(unit);
     const char *suf = ".service";
