@@ -284,6 +284,7 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
  * cmdline schema.hardening_default=0|1 wins; else file trimmed == "on". */
 int  hardening_default_resolve(const char *cmdline, const char *file);
 void service_set_hardening_default(int on);
+int  service_hardening_default(void);
 
 int services_load(const char *dir, service_t *table, int max);
 

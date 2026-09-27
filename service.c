@@ -394,6 +394,7 @@ static int path_under(const char *p, const char *const *dirs, int n) {
 static int hardening_default_on;
 
 void service_set_hardening_default(int on) { hardening_default_on = on; }
+int  service_hardening_default(void) { return hardening_default_on; }
 
 int hardening_default_resolve(const char *cmdline, const char *file) {
     static const char key[] = "schema.hardening_default=";

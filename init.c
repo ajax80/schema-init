@@ -992,6 +992,13 @@ static void ctl_writef(int fd, const char *fmt, ...) {
     if (n > 0) write(fd, buf, (size_t)n);
 }
 
+static const char *hard_source(const service_t *s, uint8_t bit) {
+    if (s->hard_set & bit) return "explicit";
+    if (s->hard_dropped & bit) return "dropped (default would hide exec/ready_path)";
+    if (s->hard_default & bit) return "default";
+    return "unset";
+}
+
 static void ctl_cmd(int fd, char *line) {
     int i;
     line[strcspn(line, "\r\n")] = '\0';
@@ -1014,6 +1021,23 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.pid=%d\n", services[i].name, (int)services[i].child_pid);
                 ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));
                 ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
+            }
+        } else if (*opt) {
+            for (i = 0; i < svc_count && strcmp(services[i].name, opt) != 0; i++) ;
+            if (i == svc_count) {
+                ctl_writef(fd, "err: not found: %s\n", opt);
+            } else {
+                const service_t *s = &services[i];
+                static const char *const ps[] = { "0", "1", "full" };
+                ctl_writef(fd, "%s  pid=%d  state=%s  restarts=%d\n", s->name,
+                    (int)s->child_pid, state_name(s->inst.state), s->restart_count);
+                ctl_writef(fd, "hardening default: %s\n", service_hardening_default() ? "ON" : "off");
+                ctl_writef(fd, "  %-15s %-5s %s\n", "no_new_privs",
+                    (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", hard_source(s, HARD_NNP));
+                ctl_writef(fd, "  %-15s %-5d %s\n", "private_tmp", s->ns_private_tmp, hard_source(s, HARD_PT));
+                ctl_writef(fd, "  %-15s %-5s %s\n", "protect_system",
+                    ps[s->ns_protect_system < 3 ? s->ns_protect_system : 0], hard_source(s, HARD_PS));
+                ctl_writef(fd, "  %-15s %-5d %s\n", "protect_home", s->ns_protect_home, hard_source(s, HARD_PH));
             }
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);

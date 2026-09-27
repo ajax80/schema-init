@@ -27,6 +27,9 @@ BIN="$REPO/schema-init"
 MOUNTNS="$WORK/test_mountns"
 cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$MOUNTNS" "$HERE/test_mountns.c" \
   || { echo "MOUNTNS HELPER BUILD FAILED"; exit 1; }
+SCTL="$WORK/schema-ctl"
+cc -static -O2 -std=c99 -D_GNU_SOURCE -I"$REPO" -o "$SCTL" "$REPO/schema-ctl.c" \
+  || { echo "SCHEMA-CTL STATIC BUILD FAILED"; exit 1; }
 
 TAGS="unset z-nnp z-pt z-ps z-ph zero homeexec"
 
@@ -41,6 +44,7 @@ build_root() {
     ln -sf /bin/busybox "$root/bin/$a"
   done
   cp "$MOUNTNS" "$root/bin/test_mountns"
+  cp "$SCTL" "$root/bin/schema-ctl"
   cp "$MOUNTNS" "$root/home/jon/test_mountns"
   : > "$root/root/secret"
   [ "$switch" = ABSENT ] || printf '%b' "$switch" > "$root/etc/schema-init/hardening-default"
@@ -75,6 +79,9 @@ for t in $TAGS; do
   echo "HV \$t: nnp=\$NNP ns=\$NS tmp=\$TMP \$(cat /run/mountns-\$t 2>/dev/null || echo NOREPORT)"
 done
 [ -e /run/mountns-explicit-bad ] && echo "HV explicit-bad: RAN" || echo "HV explicit-bad: NOTRUN"
+for t in unset z-pt homeexec nosuch; do
+  /bin/schema-ctl status \$t | while read -r l; do echo "HVCTL \$t| \$l"; done
+done
 echo "===== HV-END ====="
 ( sleep 20; echo "SHUTDOWN-WEDGED"; poweroff -f ) &
 kill -INT 1
@@ -106,6 +113,10 @@ want() {  # boot tag expected-substring
     *"$3"*) ;;
     *) echo "  MISS [$1] $2: want '$3' got '${line:-<none>}'"; pass=0 ;;
   esac
+}
+ctl() {  # boot svc regex
+  grep -a "^HVCTL $2|" "$WORK/$1/serial.log" | tr -d '\r' | grep -Eq "$3" \
+    || { echo "  MISS [$1] schema-ctl status $2: no line matching '$3'"; pass=0; }
 }
 logged() {  # boot regex label
   grep -aEq "$2" "$WORK/$1/serial.log" || { echo "  MISS [$1] $3"; pass=0; }
@@ -144,6 +155,18 @@ want fileon z-ph  "nnp=1 ns=own tmp=private usr=RO etc=OPEN efi=RO home=OPEN roo
 want fileon zero  "$OFF_ALL"
 want fileon homeexec "nnp=1 ns=own tmp=private usr=RO etc=OPEN efi=RO home=OPEN root=OPEN"
 logged fileon "homeexec: default protect_home would hide exec — dropped" "defaulted conflict not dropped+logged"
+
+ctl absent unset  "hardening default: off"
+ctl absent unset  "no_new_privs +0 +unset"
+ctl absent z-pt   "private_tmp +0 +explicit"
+ctl fileon unset  "hardening default: ON"
+ctl fileon unset  "no_new_privs +1 +default"
+ctl fileon unset  "protect_system +1 +default"
+ctl fileon z-pt   "private_tmp +0 +explicit"
+ctl fileon z-pt   "protect_home +1 +default"
+ctl fileon homeexec "protect_home +0 +dropped"
+ctl fileon homeexec "private_tmp +1 +default"
+ctl fileon nosuch "err: not found: nosuch"
 
 echo ">> serial: $OUT/last-hardening-vmtest-serial.log"
 if [ "$pass" = 1 ]; then
