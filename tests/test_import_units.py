@@ -48,6 +48,31 @@ check("known $VAR expanded", "args=-x\n" in b4)
 check("unresolved $VAR dropped", "$UNSET" not in b4 and "args=-z\n" in b4)
 check("drop noted", "dropped 1 unresolved" in b4)
 
+# --- hardening knobs: always all four, explicit ---
+def hard(txt):
+    return si.unit_to_svc("h", si.parse_unit("[Service]\nExecStart=/bin/h\n" + txt + "[Install]\nWantedBy=x\n"))
+h0 = hard("")
+check("no directives -> four explicit =0",
+      all(k + "=0\n" in h0 for k in ("no_new_privs", "private_tmp", "protect_system", "protect_home")))
+check("no directives -> no warning", si.WARN_PREFIX not in h0)
+h1 = hard("NoNewPrivileges=yes\nPrivateTmp=true\nProtectSystem=yes\nProtectHome=yes\n")
+check("all yes -> four =1",
+      all(k + "=1\n" in h1 for k in ("no_new_privs", "private_tmp", "protect_system", "protect_home")))
+check("all yes -> no warning", si.WARN_PREFIX not in h1)
+check("ProtectSystem=full", "protect_system=full\n" in hard("ProtectSystem=full\n"))
+hs = hard("ProtectSystem=strict\n")
+check("ProtectSystem=strict -> full + warning",
+      "protect_system=full\n" in hs and si.WARN_PREFIX + "ProtectSystem=strict" in hs)
+for v in ("read-only", "tmpfs"):
+    hh = hard("ProtectHome=%s\n" % v)
+    check("ProtectHome=%s -> 0 + warning" % v,
+          "protect_home=0\n" in hh and si.WARN_PREFIX + "ProtectHome=" + v in hh)
+hn = hard("NoNewPrivileges=maybe\n")
+check("unknown bool -> 0 + warning", "no_new_privs=0\n" in hn and "NoNewPrivileges=maybe" in hn)
+check("last assignment wins", "private_tmp=0\n" in hard("PrivateTmp=yes\nPrivateTmp=no\n"))
+hw = hard("ProtectSystem=strict\nProtectHome=tmpfs\n")
+check("warnings lead the file", hw.startswith(si.WARN_PREFIX) and hw.count(si.WARN_PREFIX) == 2)
+
 # --- ratholes -> Skip ---
 def skipped(name, txt):
     try:
@@ -70,9 +95,16 @@ unitdir = os.path.join(tmp, "usr/lib/systemd/system")
 os.makedirs(unitdir); os.makedirs(os.environ["SCHEMA_STATE_DIR"])
 open(os.path.join(unitdir, "good.service"), "w").write(
     "[Service]\nExecStart=/usr/bin/good -D\n[Install]\nWantedBy=multi-user.target\n")
+open(os.path.join(unitdir, "strict.service"), "w").write(
+    "[Service]\nExecStart=/usr/bin/strict\nProtectSystem=strict\n[Install]\nWantedBy=x\n")
 open(os.path.join(unitdir, "noisy.service"), "w").write(
     "[Service]\nType=notify\nExecStart=/usr/bin/noisy\n[Install]\nWantedBy=x\n")
 open(si.queue_path(), "w").write("good\nnoisy\nghost\n")
+
+logged = []
+counts = si.drain(units=["strict"], log=logged.append)
+check("drain logs a WARN naming unit + directive",
+      any(l.startswith("WARN    strict: ProtectSystem=strict") for l in logged))
 
 counts = si.drain(log=lambda *_: None)
 check("one imported", counts["imported"] == 1)

@@ -24,7 +24,8 @@ _VAR_RE = re.compile(r"\$\{?(\w+)\}?")
 # Pure translation core (no filesystem) — unit-tested in test_import_units.py.
 # ---------------------------------------------------------------------------
 
-_EXEC_PREFIX = "@-:+!"   # systemd ExecStart special-char prefixes, stripped
+_EXEC_PREFIX = "@-:+!"
+WARN_PREFIX = "# schema-import WARN: "   # systemd ExecStart special-char prefixes, stripped
 
 
 def parse_unit(text):
@@ -122,6 +123,51 @@ class Skip(Exception):
     """Raised when a unit falls in a known rathole and must not be translated."""
 
 
+_TRUE = ("1", "yes", "true", "on")
+_FALSE = ("", "0", "no", "false", "off")
+
+
+def _hardening(svc):
+    """The four hardening knobs, always explicit so the unit means the same
+    thing whatever the host's hardening-default is. Returns (lines, warnings);
+    a warning names each directive mapped weaker than the unit asked."""
+    lines, warns = [], []
+
+    def boolean(directive, key):
+        v = _get_last(svc, directive).lower()
+        if v in _TRUE:
+            lines.append("%s=1" % key)
+            return
+        if v not in _FALSE:
+            warns.append("%s=%s unrecognised, mapped to %s=0" % (directive, v, key))
+        lines.append("%s=0" % key)
+
+    boolean("NoNewPrivileges", "no_new_privs")
+    boolean("PrivateTmp", "private_tmp")
+
+    v = _get_last(svc, "ProtectSystem").lower()
+    if v in _TRUE:
+        lines.append("protect_system=1")
+    elif v == "full":
+        lines.append("protect_system=full")
+    elif v == "strict":
+        lines.append("protect_system=full")
+        warns.append("ProtectSystem=strict mapped to protect_system=full (/ not read-only)")
+    else:
+        if v not in _FALSE:
+            warns.append("ProtectSystem=%s unrecognised, mapped to protect_system=0" % v)
+        lines.append("protect_system=0")
+
+    v = _get_last(svc, "ProtectHome").lower()
+    if v in _TRUE:
+        lines.append("protect_home=1")
+    else:
+        if v not in _FALSE:
+            warns.append("ProtectHome=%s has no equivalent, mapped to protect_home=0" % v)
+        lines.append("protect_home=0")
+    return lines, warns
+
+
 def unit_to_svc(name, sections):
     """Translate parsed unit sections into schema .svc text.
 
@@ -176,6 +222,9 @@ def unit_to_svc(name, sections):
 
     lines.append("critical=0")
 
+    hard, warns = _hardening(svc)
+    lines.extend(hard)
+
     # [Install] presence is why the unit was queued; note if it's missing.
     notes = []
     if dropped_args:
@@ -187,6 +236,8 @@ def unit_to_svc(name, sections):
             notes.append("dropped %s" % k)
     if notes:
         lines.insert(0, "# schema-import: " + "; ".join(notes))
+    for w in reversed(warns):
+        lines.insert(0, "%s%s" % (WARN_PREFIX, w))
 
     return "\n".join(lines) + "\n"
 
@@ -273,6 +324,9 @@ def drain(units=None, force=False, dry_run=False, log=print):
         if status == "imported":
             out, body = detail
             log("import  %s -> %s" % (name, out))
+            for ln in body.splitlines():
+                if ln.startswith(WARN_PREFIX):
+                    log("WARN    %s: %s" % (name, ln[len(WARN_PREFIX):]))
             if not dry_run:
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 with open(out, "w") as f:
