@@ -20,7 +20,8 @@ find_bin() {
 }
 
 DISSECT=""
-for p in "$self_dir/../lib/schema-init/dissect_policy.py" \
+for p in "$self_dir/dissect_policy.py" \
+         "$self_dir/../lib/schema-init/dissect_policy.py" \
          /usr/local/lib/schema-init/dissect_policy.py \
          /usr/lib/schema-init/dissect_policy.py \
          "$self_dir/../tools/dbus-learn/dissect_policy.py"; do
