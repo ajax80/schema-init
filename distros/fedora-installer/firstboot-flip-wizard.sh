@@ -24,6 +24,7 @@ set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/schema"
 STATE="$STATE_DIR/firstboot.state"       # the wizard's own GUI-phase state (user tree)
 DESK_ICON="$HOME/Desktop/schema-udev-flip.desktop"
+USER_AUTOSTART="$HOME/.config/autostart/schema-firstboot.desktop"
 REPORT_USER="$HOME/schema-flip-report.txt"
 HELPER=/usr/local/lib/schema/schema-flip-apply
 
@@ -42,7 +43,7 @@ H() { sudo "$HELPER" "$@"; }
 
 # remove the on-demand launcher (user-owned) and the system autostart (root).
 remove_icon()     { rm -f "$DESK_ICON" 2>/dev/null || true; }
-stop_autostart()  { H resolve 2>/dev/null || true; }   # drops /etc/xdg/autostart entry
+stop_autostart()  { H resolve 2>/dev/null || true; rm -f "$USER_AUTOSTART"; }
 finish_clean()    { stop_autostart; remove_icon; }
 
 # copy the root-written report to the user's home so they can open it without sudo.

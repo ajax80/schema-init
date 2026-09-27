@@ -51,6 +51,9 @@ def run(phase, yad=(), rc=None, out=None):
         open(os.path.join(fake, 'rc.' + k), 'w').write(str(v))
     for k, v in (out or {}).items():
         open(os.path.join(fake, 'out.' + k), 'w').write(v)
+    autostart = os.path.join(home, '.config/autostart/schema-firstboot.desktop')
+    os.makedirs(os.path.dirname(autostart))
+    open(autostart, 'w').close()
     state = os.path.join(home, '.local/state/schema/firstboot.state')
     open(state, 'w').write(phase + '\n')
     env = dict(os.environ, HOME=home, FAKE=fake, PATH=fake + ':' + os.environ['PATH'])
@@ -59,7 +62,9 @@ def run(phase, yad=(), rc=None, out=None):
                    capture_output=True, timeout=30)
     calls = open(os.path.join(fake, 'calls')).read().split() if os.path.exists(os.path.join(fake, 'calls')) else []
     final = open(state).read().strip()
+    kept = os.path.exists(autostart)
     shutil.rmtree(tmp, ignore_errors=True)
+    run.autostart_kept = kept
     return calls, final
 
 
@@ -70,13 +75,13 @@ def main():
     check('dbus checked then armed', 'dbus-check' in calls and calls.index('dbus-check') < calls.index('dbus-arm'), str(calls))
     check('reboots after arming', calls[-1] == 'reboot', str(calls))
     check('state dbus_armed', st == 'dbus_armed', st)
-    check('autostart kept for the confirm login', 'resolve' not in calls, str(calls))
+    check('autostart kept for the confirm login', 'resolve' not in calls and run.autostart_kept, str(calls))
 
     print("-- dbus offer skipped --")
     calls, st = run('dbus_offer', yad=[1])
     check('no dbus-arm', 'dbus-arm' not in calls, str(calls))
     check('state done', st == 'done', st)
-    check('autostart removed', 'resolve' in calls, str(calls))
+    check('autostart removed', 'resolve' in calls and not run.autostart_kept, str(calls))
 
     print("-- dbus preflight fails --")
     calls, st = run('dbus_offer', yad=[0, 0], rc={'dbus-check': 1}, out={'dbus-check': 'broker did not answer'})
@@ -94,6 +99,7 @@ def main():
     check('confirms', 'dbus-confirm' in calls, str(calls))
     check('no rollback, no reboot', 'dbus-rollback' not in calls and 'reboot' not in calls, str(calls))
     check('state done', st == 'done', st)
+    check('user autostart removed once done', not run.autostart_kept)
 
     print("-- armed boot, seatbelt already rolled back --")
     calls, st = run('dbus_armed', yad=[0], rc={'dbus-is-authoritative': 1}, out={'dbus-state': 'skipped'})
