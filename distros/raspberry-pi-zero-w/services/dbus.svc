@@ -4,3 +4,7 @@ oneshot=0
 critical=1
 stable_secs=3
 ready_path=/run/dbus/system_bus_socket
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

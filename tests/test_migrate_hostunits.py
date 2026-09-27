@@ -53,4 +53,17 @@ nmconf = open(os.path.join(root, "etc/NetworkManager/conf.d/10-schema-managed.co
 check("NM writes resolv.conf as a real file (rc-manager=file)", "rc-manager=file" in nmconf)
 check("dangling resolved symlink removed", not os.path.islink(rc))
 
+# Generated units pin every hardening knob to 0, so a host that flips
+# hardening-default=on keeps mount/udev/modprobe/seatbelt unhardened.
+udevd = os.path.join(root, "usr/lib/systemd/systemd-udevd")
+os.makedirs(os.path.dirname(udevd), exist_ok=True); open(udevd, "w").close()
+sm.generate_udev_units(sm.Manifest())
+sm.install_flip_seatbelt(sm.Manifest())
+sm.generate_module_load(sm.Manifest())
+svcd = os.path.join(root, "etc/schema-init/services")
+for fn in sorted(os.listdir(svcd)):
+    keys = {l.split("=", 1)[0] for l in open(os.path.join(svcd, fn)) if "=" in l}
+    check("%s pins all four hardening knobs" % fn,
+          {"no_new_privs", "private_tmp", "protect_system", "protect_home"} <= keys)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
