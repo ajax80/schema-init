@@ -63,4 +63,15 @@ switch(None)
 rc, _ = lint()
 check("lint ignores the switch", rc == 1)
 
+# Every shipped .svc in the repo is fully annotated: lint each source dir as
+# if it were a host's services dir.
+import glob, shutil
+dirs = sorted({os.path.dirname(f) for f in glob.glob(os.path.join(REPO, "**/*.svc"), recursive=True)
+               if "/tests/" not in f})
+for d in dirs:
+    r = tempfile.mkdtemp(); sdir = os.path.join(r, "etc/schema-init/services"); os.makedirs(sdir)
+    for f in glob.glob(os.path.join(d, "*.svc")): shutil.copy(f, sdir)
+    bad = load(r).hardening_unannotated()
+    check("repo %s fully annotated%s" % (os.path.relpath(d, REPO), "" if not bad else " " + str(bad)), not bad)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

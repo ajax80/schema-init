@@ -7,3 +7,7 @@ critical=1
 stable_secs=2
 ready_path=/run/dbus/system_bus_socket
 priority=critical
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

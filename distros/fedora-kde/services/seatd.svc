@@ -5,3 +5,7 @@ critical=0
 stable_secs=2
 ready_path=/run/seatd.sock
 priority=critical
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

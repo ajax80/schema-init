@@ -444,6 +444,7 @@ def _mount_slug(target):
 
 
 SKIP_MOUNT_TARGETS = {"/"}
+NO_HARDENING = "no_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n"
 
 
 def _parent_mount_target(target, targets):
@@ -478,7 +479,8 @@ def generate_host_units(profile, manifest, dry_run=False):
         body = ("name=mount-%s\nexec=/bin/mount\n" % slug
                 + "".join("args=%s\n" % a for a in margs)
                 + "oneshot=1\nneeds_root=1\ncritical=0\n"
-                + "".join("dep=%s\n" % d for d in deps))
+                + "".join("dep=%s\n" % d for d in deps)
+                + NO_HARDENING)
         written.append(P(rel))
         if not dry_run:
             os.makedirs(os.path.dirname(P(rel)), exist_ok=True)
@@ -572,7 +574,7 @@ def generate_module_load(manifest, dry_run=False):
                          "exec=/usr/local/bin/schema-coldplug-modules.sh\n"
                          "oneshot=1\n"
                          "needs_root=1\n"
-                         "critical=0\n")
+                         "critical=0\n" + NO_HARDENING)
     manifest.add_file("/etc/schema-init/services/coldplug-modules.svc")
     return mods
 
@@ -596,7 +598,7 @@ def generate_udev_units(manifest, dry_run=False):
         return
     svc = P("etc/schema-init/services/udevd.svc")
     os.makedirs(os.path.dirname(svc), exist_ok=True)
-    open(svc, "w").write("name=udevd\nexec=%s\nneeds_root=1\ncritical=0\n" % udevd)
+    open(svc, "w").write("name=udevd\nexec=%s\nneeds_root=1\ncritical=0\n" % udevd + NO_HARDENING)
     manifest.add_file("/etc/schema-init/services/udevd.svc")
     script = P("usr/local/bin/schema-udev-trigger.sh")
     os.makedirs(os.path.dirname(script), exist_ok=True)
@@ -609,7 +611,7 @@ def generate_udev_units(manifest, dry_run=False):
     tsvc = P("etc/schema-init/services/udev-trigger.svc")
     open(tsvc, "w").write("name=udev-trigger\n"
                           "exec=/usr/local/bin/schema-udev-trigger.sh\n"
-                          "dep=udevd\noneshot=1\nneeds_root=1\ncritical=0\n")
+                          "dep=udevd\noneshot=1\nneeds_root=1\ncritical=0\n" + NO_HARDENING)
     manifest.add_file("/etc/schema-init/services/udev-trigger.svc")
 
 
@@ -685,7 +687,7 @@ def install_flip_seatbelt(manifest, dry_run=False):
             + "".join("dep=%s\n" % d for d in deps)
             + "oneshot=1\n"
             "needs_root=1\n"
-            "critical=0\n")
+            "critical=0\n" + NO_HARDENING)
     open(dst, "w").write(body)
     manifest.add_file("/" + rel)
     return dst
