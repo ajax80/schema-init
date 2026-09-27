@@ -108,6 +108,19 @@ int main(void) {
     assert(c.matches && sdbus_match_signal(c.matches, "org.freedesktop.DBus", "X", "/p", "s", NULL, 0, NULL) == 1);
     sdbus_msg_free(&r); dbus_message_unref(am);
 
+    /* AddMatch past the per-connection ceiling is refused with LimitsExceeded,
+       so one client cannot pin unbounded rule memory in the broker */
+    while (c.matches->n < SDBUS_MAX_MATCH_RULES)
+        assert(sdbus_match_add(c.matches, "type='signal'") == 0);
+    DBusMessage *amx = mkcall("AddMatch");
+    const char *rule2 = "type='signal',member='Over'";
+    dbus_message_append_args(amx, DBUS_TYPE_STRING, &rule2, DBUS_TYPE_INVALID);
+    r = do_call(&c, names, amx);
+    assert(dbus_message_get_type(r.msg) == DBUS_MESSAGE_TYPE_ERROR);
+    assert(!strcmp(dbus_message_get_error_name(r.msg), DBUS_ERROR_LIMITS_EXCEEDED));
+    assert(c.matches->n == SDBUS_MAX_MATCH_RULES);   /* the over-limit rule was not stored */
+    sdbus_msg_free(&r); dbus_message_unref(amx);
+
     /* GetConnectionCredentials(:1.1) -> a{sv} carrying UnixUserID, ProcessID,
        UnixGroupIDs (the 60x-dominant credentials method on the live bus) */
     c.uid = 1000; c.pid = 4242;

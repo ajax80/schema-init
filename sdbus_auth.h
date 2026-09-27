@@ -62,6 +62,10 @@ static inline void sdbus__send(sdbus_conn *c, const char *s) {
 static inline int sdbus_auth_feed(sdbus_conn *c, const unsigned char *buf, int len) {
     sdbus_conn_in_append(c, buf, len);
 
+    /* an unauthed peer must complete the line-based handshake within a bounded
+       buffer; refuse one that floods bytes without a CRLF rather than growing. */
+    if (c->in_len > SDBUS_MAX_AUTH_BYTES) return -1;
+
     if (!c->saw_nul) {                       /* first byte of the stream is NUL */
         if (c->in_len == 0) return 0;
         if (c->in[0] != 0) return -1;
@@ -95,7 +99,7 @@ static inline int sdbus_auth_feed(sdbus_conn *c, const unsigned char *buf, int l
             }
             char ok[80];
             snprintf(ok, sizeof ok, "OK %s\r\n", sdbus__guid());
-            sdbus__send(c, ok);
+            sdbus__send(c, ok); c->auth_ok = 1;
         } else if (!strncmp(line, "DATA", 4) && (line[4] == '\0' || line[4] == ' ')) {
             const char *arg = line + 4;           /* EXTERNAL identity response */
             while (*arg == ' ') arg++;
@@ -105,15 +109,17 @@ static inline int sdbus_auth_feed(sdbus_conn *c, const unsigned char *buf, int l
             }
             char ok[80];
             snprintf(ok, sizeof ok, "OK %s\r\n", sdbus__guid());
-            sdbus__send(c, ok);
+            sdbus__send(c, ok); c->auth_ok = 1;
         } else if (!strcmp(line, "AUTH") || !strncmp(line, "AUTH ", 5)) {
             sdbus__send(c, "REJECTED EXTERNAL\r\n");   /* only EXTERNAL offered */
         } else if (!strcmp(line, "NEGOTIATE_UNIX_FD")) {
             c->negotiated_fd = 1;
             sdbus__send(c, "AGREE_UNIX_FD\r\n");
         } else if (!strcmp(line, "CANCEL")) {
+            c->auth_ok = 0;                       /* client abandons the current auth */
             sdbus__send(c, "REJECTED EXTERNAL\r\n");
         } else if (!strcmp(line, "BEGIN")) {
+            if (!c->auth_ok) return -1;           /* BEGIN only after a successful AUTH */
             c->authed = 1;
             return 1;                        /* remaining in-bytes are message data */
         } else {

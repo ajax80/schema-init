@@ -410,6 +410,10 @@ static inline int sdbus_driver_dispatch(sdbus_msg *call, sdbus_conn *c,
             return 0;
         }
         if (!c->matches) c->matches = sdbus_match_new();
+        if (c->matches->n >= SDBUS_MAX_MATCH_RULES) {
+            sdbus__reply_error(c, m, DBUS_ERROR_LIMITS_EXCEEDED, "too many match rules");
+            return 0;
+        }
         if (sdbus_match_add(c->matches, rule) != 0) {
             sdbus__reply_error(c, m, DBUS_ERROR_MATCH_RULE_INVALID, "invalid match rule");
             return 0;
