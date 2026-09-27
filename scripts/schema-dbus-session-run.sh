@@ -34,6 +34,7 @@ find_bin() {
 }
 
 BROKER=$(find_bin schema-dbus)
+[ -e "${SCHEMA_DBUS_GATE:-/etc/schema-init/dbus-broker}" ] || BROKER=""
 STOCK=$(find_bin dbus-daemon)
 
 wait_for_socket() {   # up to 2s; a local fork+bind is normally near-instant

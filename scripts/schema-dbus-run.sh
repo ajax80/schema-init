@@ -38,6 +38,7 @@ fallback() {
     exec "$STOCK" --system --nofork
 }
 
+[ -e "${SCHEMA_DBUS_GATE:-/etc/schema-init/dbus-broker}" ] || fallback "broker not armed"
 [ -n "$BROKER" ] || fallback "schema-dbus binary not found"
 [ -n "$DISSECT" ] || fallback "dissect_policy.py not found"
 
