@@ -37,6 +37,9 @@ BIN="$REPO/schema-init"
 MOUNTNS="$WORK/test_mountns"
 cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$MOUNTNS" "$HERE/test_mountns.c" \
   || { echo "MOUNTNS HELPER BUILD FAILED"; exit 1; }
+SCTL="$WORK/schema-ctl"
+cc -static -O2 -std=c99 -D_GNU_SOURCE -I"$REPO" -o "$SCTL" "$REPO/schema-ctl.c" \
+  || { echo "SCHEMA-CTL STATIC BUILD FAILED"; exit 1; }
 PRIVDROP="$WORK/test_privdrop"
 cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c" \
   || { echo "PRIVDROP HELPER BUILD FAILED"; cc -static -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c"; exit 1; }
@@ -53,6 +56,25 @@ ln -sf /bin/busybox "$ROOT/usr/bin/touch"   # test svcs call /usr/bin/touch
 ln -sf /bin/busybox "$ROOT/bin/sleep"       # and /bin/sleep
 cp "$PRIVDROP" "$ROOT/bin/test_privdrop"
 cp "$MOUNTNS" "$ROOT/bin/test_mountns"
+cp "$SCTL" "$ROOT/bin/schema-ctl"
+ln -sf /bin/busybox "$ROOT/bin/rm"
+
+# ready_path service that deletes its readiness file on SIGTERM and lingers,
+# like pipewire removing pipewire-0 on shutdown. schema-ctl restart used to see
+# the file vanish before the reap, log readiness-lost, and park it DORMANT.
+cat > "$ROOT/usr/bin/readypath.sh" <<'EOF'
+#!/bin/sh
+trap 'rm -f /run/test-rp.ready; sleep 2; exit 0' TERM
+echo $$ > /run/test-rp.pid
+touch /run/test-rp.ready
+while :; do sleep 1; done
+EOF
+chmod +x "$ROOT/usr/bin/readypath.sh"
+cat > "$ROOT/etc/schema-init/services/test-readypath.svc" <<'EOF'
+name=test-readypath
+exec=/usr/bin/readypath.sh
+ready_path=/run/test-rp.ready
+EOF
 mkdir -p "$ROOT"/{boot/efi,home,root,tmp,var/tmp}
 
 cp "$HERE/test-timer.svc"     "$ROOT/etc/schema-init/services/"
@@ -285,6 +307,24 @@ else
     echo "NOFILE-PID1: FAIL (soft $P_SOFT != hard $P_HARD)"
 fi
 echo "===== NOFILE-END ====="
+echo "===== CTL-RESTART-TEST ====="
+RP_BEFORE=$(cat /run/test-rp.pid 2>/dev/null)
+/bin/schema-ctl restart test-readypath
+RP_AFTER=$RP_BEFORE
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    sleep 1
+    RP_AFTER=$(cat /run/test-rp.pid 2>/dev/null)
+    [ -n "$RP_AFTER" ] && [ "$RP_AFTER" != "$RP_BEFORE" ] && [ -e /run/test-rp.ready ] && break
+done
+echo "rp-pid: $RP_BEFORE -> $RP_AFTER"
+if grep -q 'test-readypath .*readiness-lost' "$RAIL"; then
+    echo "CTL-RESTART: FAIL (readiness-lost on a requested restart)"
+elif [ -n "$RP_BEFORE" ] && [ "$RP_AFTER" != "$RP_BEFORE" ]; then
+    echo "CTL-RESTART: PASS (respawned, new pid)"
+else
+    echo "CTL-RESTART: FAIL (no respawn)"
+fi
+echo "===== CTL-RESTART-END ====="
 echo "===== RELOAD-REFIRE-TEST ====="
 # SIGHUP to PID 1 is the reload path (init.c calls handle_reload from the
 # signal drain), which is what schema-ctl reload asks for over the socket.
@@ -391,6 +431,7 @@ grep -Eq "SDBOOTED-DIR: present"        "$SERIAL" || { echo "  MISS: /run/system
 grep -Eq "RAIL\| .*test-hang .*start-timeout" "$SERIAL" || { echo "  MISS: rail.log did not persist the rail"; pass=0; }
 # A completed run-once boot timer must stay terminal across a reload.
 grep -Eq "RUNONCE-BEFORE: 1"   "$SERIAL" || { echo "  MISS: run-once boot timer never fired"; pass=0; }
+grep -Eq "CTL-RESTART: PASS"  "$SERIAL" || { echo "  MISS: schema-ctl restart of a ready_path svc did not respawn it"; pass=0; }
 grep -Eq "RELOAD-REFIRE: PASS" "$SERIAL" || { echo "  MISS: reload re-fired a completed run-once timer"; pass=0; }
 # PID 1 raises its own NOFILE; children must not inherit the raised soft limit.
 # args= leading space must be trimmed off before argv.
