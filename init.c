@@ -884,7 +884,7 @@ static void tick_service(service_t *svc,
         }
 
         case STATE_FUNDAMENTAL:
-            if (svc->ready_path[0] && svc->child_pid > 0) {
+            if (svc->ready_path[0] && svc->child_pid > 0 && !svc->ctl_killed) {
                 if (!svc->ready_path_verified) {
                     if (access(svc->ready_path, F_OK) == 0) {
                         svc->ready_path_verified = 1;
@@ -1063,6 +1063,7 @@ static void ctl_cmd(int fd, char *line) {
             if (strcmp(services[i].name, name) != 0) continue;
             services[i].flags |= SVC_NO_RESTART;
             if (services[i].child_pid > 0) {
+                services[i].ctl_killed = 1;
                 kill(services[i].child_pid, SIGTERM);
                 ctl_writef(fd, "ok: SIGTERM → %s (pid %d)\n",
                     name, (int)services[i].child_pid);
@@ -1081,6 +1082,7 @@ static void ctl_cmd(int fd, char *line) {
             if (strcmp(services[i].name, name) != 0) continue;
             services[i].flags &= ~SVC_NO_RESTART;
             if (services[i].child_pid > 0) {
+                services[i].ctl_killed = 1;
                 kill(services[i].child_pid, SIGTERM);
                 ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
             } else {
@@ -1511,6 +1513,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 shadow_services[i].failsafe_start = services[j].failsafe_start;
                 shadow_services[i].last_pet      = services[j].last_pet;
                 shadow_services[i].ready_path_verified = services[j].ready_path_verified;
+                shadow_services[i].ctl_killed = services[j].ctl_killed;
                 shadow_services[i].timer_next    = services[j].timer_next;
                 shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;
 
