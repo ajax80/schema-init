@@ -1,5 +1,5 @@
 #!/bin/sh
-# schema-dbus-flip.sh {check|arm|confirm|rollback|is-authoritative|state}
+# schema-dbus-flip.sh {check|arm|confirm|rollback|is-authoritative|state|explain}
 #
 # The schema-dbus half of the wizard flip, invoked as root through
 # schema-flip-apply (dbus-* subcommands). One flip, one switch: the gate file
@@ -113,8 +113,12 @@ case "${1:-}" in
             / org.freedesktop.DBus.GetId > /dev/null 2>&1
         ;;
     state) cat "$STATE" 2>/dev/null || echo unknown ;;
+    explain)
+        grep -o 'flip UNHEALTHY ([^)]*)' /var/log/schema-init/dbus-flip-healthcheck.log 2>/dev/null \
+            | tail -1 | sed 's/^flip UNHEALTHY (//; s/)$//'
+        ;;
     *)
-        echo "usage: schema-dbus-flip.sh {check|arm|confirm|rollback|is-authoritative|state}" >&2
+        echo "usage: schema-dbus-flip.sh {check|arm|confirm|rollback|is-authoritative|state|explain}" >&2
         exit 2
         ;;
 esac

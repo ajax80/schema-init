@@ -16,7 +16,9 @@
 # unusable, so permissive is safe.
 #
 # The flip is REBOOT-GATED (the daemon reads the LIVE flag at boot):
-#   welcome -> [what we found] -> arm -> reboot -> confirm -> done
+#   welcome -> [what we found] -> arm -> reboot -> confirm -> dbus_offer
+# then the OPTIONAL schema-dbus flip, one change per reboot, same shape:
+#   dbus_offer -> check -> dbus-arm -> reboot -> dbus_armed -> confirm -> done
 set -u
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/schema"
@@ -62,6 +64,8 @@ humanize_reason() {
         "no group-accessible /dev/dri card node") echo "the screen/graphics couldn't be opened" ;;
         "missing core node"*)                 echo "an essential system device was missing" ;;
         "desktop never confirmed"*)           echo "the desktop didn't finish coming up in time" ;;
+        "system bus is not schema-dbus"*)     echo "schema's own message bus didn't start" ;;
+        "system bus not serving"*)            echo "system services couldn't reach each other over the message bus" ;;
         "") echo "the switch didn't come up cleanly" ;;
         *)  echo "$1" ;;
     esac
@@ -140,9 +144,8 @@ armed)
     if H is-authoritative; then
         H confirm || true            # clears the root state so the seatbelt stops
         pull_report
-        echo done > "$STATE"; finish_clean
-        info dialog-information \
-"<b>All set.</b>\n\nYour computer is now running entirely on schema. There's nothing else to do." "Finish"
+        echo dbus_offer > "$STATE"
+        exec "$0"
     elif [ "$rstate" = skipped ] || [ "$rstate" = done ]; then
         # The seatbelt already rolled us back to the old system on an earlier
         # boot (root state is resolved). Do NOT roll back again or reboot — just
@@ -167,6 +170,68 @@ details are saved to:\n<tt>${REPORT_USER}</tt>" \
         info dialog-warning \
 "<b>Putting it back the way it was.</b>\n\nThe optional switch didn't take on this hardware (${reason}), so we're undoing it. \
 Everything will work normally — one more restart finishes tidying up.\n\n(Details saved to <tt>${REPORT_USER}</tt>.)" "Restart"
+        H reboot
+    fi
+    ;;
+
+dbus_offer)
+    yad --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=applications-system \
+        --text="<b>The device manager switch worked.</b>\n\nThere is one last <i>optional</i> step: use schema's own \
+<b>message bus</b> — the channel your desktop and system services talk over. Like before, if anything looks wrong your \
+computer <b>automatically undoes it on the next restart</b>.\n\nYou can skip it and your machine is completely finished." \
+        --button="Skip — I'm done":1 --button="Check my machine":0
+    [ $? -eq 0 ] || { echo done > "$STATE"; finish_clean; exit 0; }
+
+    if ! why=$(H dbus-check 2>&1); then
+        yad --title="$TITLE" --window-icon="$ICON" --width=580 --borders=18 --image=dialog-warning \
+            --text="<b>Not ready to switch the message bus on this machine yet.</b>\n\n<b>Nothing was changed</b> — \
+your computer stays exactly as it is.\n\n<tt>${why}</tt>" \
+            --button="OK, leave it as is":0
+        stop_autostart
+        exit 0
+    fi
+
+    yad --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=object-select \
+        --text="<b>Good — this machine is ready.</b>\n\nThe switch takes one restart. When your computer comes back \
+it confirms everything looks good, and if it doesn't it <b>puts itself back automatically</b>." \
+        --button="Not now":1 --button="Switch and restart":0
+    if [ $? -ne 0 ]; then stop_autostart; exit 0; fi
+
+    if ! H dbus-arm; then
+        info dialog-error \
+"Couldn't prepare the switch, so nothing was changed. Your computer is fine and finished as it is." "OK"
+        H dbus-rollback || true
+        stop_autostart; exit 0
+    fi
+
+    echo dbus_armed > "$STATE"
+    info dialog-information \
+"<b>Ready. Restarting to finish.</b>\n\nWhen your computer comes back it'll confirm everything looks good. \
+If it doesn't, it puts itself back the way it is now — you don't have to do anything." "Restart now"
+    H reboot
+    ;;
+
+dbus_armed)
+    rstate=$(H dbus-state 2>/dev/null)
+    if H dbus-is-authoritative; then
+        H dbus-confirm || true
+        pull_report
+        echo done > "$STATE"; finish_clean
+        info dialog-information \
+"<b>All set.</b>\n\nYour computer is now running entirely on schema. There's nothing else to do." "Finish"
+    elif [ "$rstate" = skipped ]; then
+        reason=$(humanize_reason "$(H dbus-explain 2>/dev/null)")
+        echo done > "$STATE"; finish_clean
+        info dialog-warning \
+"<b>The message bus switch was undone automatically.</b>\n\nYour computer saw that <b>${reason}</b> and put itself \
+back the way it was. <b>Everything works normally and there's nothing you need to do.</b>" "OK"
+    else
+        reason=$(humanize_reason "$(H dbus-explain 2>/dev/null)")
+        H dbus-rollback || true
+        echo done > "$STATE"; finish_clean
+        info dialog-warning \
+"<b>Putting it back the way it was.</b>\n\nThe optional message bus switch didn't take on this hardware \
+(${reason}), so we're undoing it. One more restart finishes tidying up." "Restart"
         H reboot
     fi
     ;;
