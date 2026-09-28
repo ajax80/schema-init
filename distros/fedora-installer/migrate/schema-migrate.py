@@ -379,11 +379,12 @@ def restore_grub(grub, run=subprocess.run):
 class Manifest:
     PATH = "var/lib/schema-init/migrate-manifest.json"
 
-    def __init__(self, files=None, packages=None, boot_entry=None, grub=None):
+    def __init__(self, files=None, packages=None, boot_entry=None, grub=None, links=None):
         self.files = list(files or [])
         self.packages = list(packages or [])
         self.boot_entry = boot_entry
         self.grub = dict(grub or {})
+        self.links = dict(links or {})
 
     def add_file(self, path):
         if path not in self.files:
@@ -401,7 +402,8 @@ class Manifest:
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w") as fh:
             json.dump({"files": self.files, "packages": self.packages,
-                       "boot_entry": self.boot_entry, "grub": self.grub}, fh, indent=2)
+                       "boot_entry": self.boot_entry, "grub": self.grub,
+                       "links": self.links}, fh, indent=2)
         os.chmod(p, 0o644)
         return p
 
@@ -413,7 +415,8 @@ class Manifest:
                 d = {}
         except (OSError, ValueError):
             d = {}
-        return cls(d.get("files"), d.get("packages"), d.get("boot_entry"), d.get("grub"))
+        return cls(d.get("files"), d.get("packages"), d.get("boot_entry"), d.get("grub"),
+                   d.get("links"))
 
 
 def uninstall(run=subprocess.run):
@@ -424,6 +427,13 @@ def uninstall(run=subprocess.run):
         try:
             os.remove(P(rel))
             removed += 1
+        except OSError:
+            pass
+    for rel, target in m.links.items():
+        try:
+            if os.path.lexists(P(rel)):
+                os.remove(P(rel))
+            os.symlink(target, P(rel))
         except OSError:
             pass
     if m.packages:
@@ -650,7 +660,8 @@ def generate_nm_config(manifest, dry_run=False):
                           "[main]\nrc-manager=file\n")
     manifest.add_file("/etc/NetworkManager/conf.d/10-schema-managed.conf")
     rc = P("etc/resolv.conf")
-    if os.path.islink(rc) and not os.path.exists(rc):
+    if os.path.islink(rc) and ("systemd/resolve" in os.readlink(rc) or not os.path.exists(rc)):
+        manifest.links["/etc/resolv.conf"] = os.readlink(rc)
         os.unlink(rc)
     key = P("etc/NetworkManager/system-connections/schema-wired.nmconnection")
     os.makedirs(os.path.dirname(key), exist_ok=True)
