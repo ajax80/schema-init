@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.3.1
+Version:        0.4.0
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -175,6 +175,25 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_datadir}/%{name}/services
 
 %changelog
+* Sun Sep 27 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.0-1
+- The migrate wizard and the ISO first-boot wizard offer the schema-dbus
+  switch as a separate, optional last step, with a headless seatbelt that
+  rolls back to dbus-daemon and reboots if the broker does not take
+- -migrate ships schema-dbus, its launcher and the flip helpers
+- schema-dbus: stricter message validation and bounded per-peer resources
+- The udev switch actually takes on a migrated box; both seatbelts wait
+  on boot uptime (not the RTC) and say so on screen while they wait
+- Migrated boxes keep DNS under schema-init, including after booting the
+  stock entry; Plasma session support and wizard autostart are installed
+- Every --advanced-* opt-out is acted on; the btrfs pre-change snapshot is
+  recorded, named on the recovery card and removed by --uninstall
+- systemctl shim passes through to the real systemctl while PID 1 is
+  systemd, and reboot/poweroff/halt reach schema-ctl under schema-init
+- Service hardening: mount-namespace isolation, per-host default switch
+  (off by default), hardened reference .svc files
+- exec= with inline arguments is refused by both parsers
+- login1 stub accepts SetWallMessage
+
 * Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
 - kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
   BOOT_ROOT to the ESP, so dnf kernel updates get a schema-init entry again
