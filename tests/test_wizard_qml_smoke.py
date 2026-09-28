@@ -18,7 +18,7 @@ wm = importlib.util.module_from_spec(spec); spec.loader.exec_module(wm)
 
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, QEventLoop, QTimer
 
 app = QGuiApplication.instance() or QGuiApplication(sys.argv)
 engine = QQmlApplicationEngine()
@@ -31,5 +31,24 @@ engine.load(QUrl.fromLocalFile(os.path.join(WIZ, "qml", "Main.qml")))
 
 check("Main.qml produced a root object", len(engine.rootObjects()) == 1)
 check("no QML warnings/errors", errors == [])
+
+# the wizard can open before schema-migrate --finish promotes the stage at
+# boot; while it says "restart", it must keep re-reading the stage
+import tempfile
+stage_spec = importlib.util.spec_from_file_location("stage", os.path.join(REPO, "distros/fedora-installer/migrate/stage.py"))
+st = importlib.util.module_from_spec(stage_spec); stage_spec.loader.exec_module(st)
+core_spec = importlib.util.spec_from_file_location("wizard_core", os.path.join(WIZ, "core.py"))
+co = importlib.util.module_from_spec(core_spec); core_spec.loader.exec_module(co)
+root = tempfile.mkdtemp()
+st.write_stage(st.R1_PENDING, root=root)
+w = cm.WizardController(core=co.WizardCore(backend=None, root=root))
+e2 = QQmlApplicationEngine()
+e2.rootContext().setContextProperty("wizard", w)
+e2.load(QUrl.fromLocalFile(os.path.join(WIZ, "qml", "Main.qml")))
+seen = []
+w.changed.connect(lambda: seen.append(w.screen))
+st.transition(st.R1_HEAL, root=root)
+loop = QEventLoop(); QTimer.singleShot(2600, loop.quit); loop.exec()
+check("waiting_reboot re-polls and picks up the promoted stage", "summary" in seen)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

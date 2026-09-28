@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """host unit generation tests."""
-import os, sys, tempfile, importlib.util
+import os, sys, subprocess, tempfile, importlib.util
 root = tempfile.mkdtemp(); os.environ["MIGRATE_ROOT"] = root
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(REPO, "distros/fedora-installer/migrate/schema-migrate.py")
@@ -64,6 +64,20 @@ mn.save()
 open(rc, "w").write("nameserver 10.0.2.3\n")
 sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
 check("uninstall restores the resolved symlink", os.readlink(rc) == "../run/systemd/resolve/stub-resolv.conf")
+
+# a stock boot's tmpfiles (L! /etc/resolv.conf) puts the link back; every
+# schema-init boot must clear it again before NetworkManager starts
+sm.generate_nm_config(sm.Manifest())
+os.symlink("../run/systemd/resolve/gone-stub.conf", rc)
+unstub = os.path.join(root, "usr/local/bin/schema-resolv-unstub.sh")
+check("resolv-unstub oneshot generated", os.path.exists(os.path.join(root, "etc/schema-init/services/resolv-unstub.svc")))
+body = open(unstub).read().replace("/etc/resolv.conf", rc)
+fake = os.path.join(root, "unstub.sh"); open(fake, "w").write(body); os.chmod(fake, 0o755)
+subprocess.run([fake], check=True)
+check("unstub removes a dangling resolved link", not os.path.lexists(rc))
+open(rc, "w").write("nameserver 10.0.2.3\n")
+subprocess.run([fake], check=True)
+check("unstub leaves NM's real file alone", open(rc).read() == "nameserver 10.0.2.3\n")
 
 # Generated units pin every hardening knob to 0, so a host that flips
 # hardening-default=on keeps mount/udev/modprobe/seatbelt unhardened.

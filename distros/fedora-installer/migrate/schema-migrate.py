@@ -719,6 +719,19 @@ def generate_nm_config(manifest, dry_run=False):
     if os.path.islink(rc) and ("systemd/resolve" in os.readlink(rc) or not os.path.exists(rc)):
         manifest.links["/etc/resolv.conf"] = os.readlink(rc)
         os.unlink(rc)
+    script = P("usr/local/bin/schema-resolv-unstub.sh")
+    os.makedirs(os.path.dirname(script), exist_ok=True)
+    open(script, "w").write("#!/bin/sh\n"
+                            "[ -L /etc/resolv.conf ] && [ ! -e /etc/resolv.conf ] && rm -f /etc/resolv.conf\n"
+                            "exit 0\n")
+    os.chmod(script, 0o755)
+    manifest.add_file("/usr/local/bin/schema-resolv-unstub.sh")
+    svc = P("etc/schema-init/services/resolv-unstub.svc")
+    os.makedirs(os.path.dirname(svc), exist_ok=True)
+    open(svc, "w").write("name=resolv-unstub\n"
+                         "exec=/usr/local/bin/schema-resolv-unstub.sh\n"
+                         "oneshot=1\nneeds_root=1\ncritical=0\n" + NO_HARDENING)
+    manifest.add_file("/etc/schema-init/services/resolv-unstub.svc")
     key = P("etc/NetworkManager/system-connections/schema-wired.nmconnection")
     os.makedirs(os.path.dirname(key), exist_ok=True)
     open(key, "w").write("[connection]\nid=schema-wired\ntype=ethernet\n"
@@ -1055,6 +1068,7 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     ensure_user_groups(profile, run=run, dry_run=dry_run)
     _add_unit_dep("network-manager", "coldplug-modules", dry_run=dry_run)
     _add_unit_dep("network-manager", "udev-trigger", dry_run=dry_run)
+    _add_unit_dep("network-manager", "resolv-unstub", dry_run=dry_run)
     install_unit_helpers(m, dry_run=dry_run)
     install_session_support(profile, m, dry_run=dry_run)
     install_packages(m, run=run, dry_run=dry_run)
