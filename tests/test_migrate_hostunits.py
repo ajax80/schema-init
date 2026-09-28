@@ -53,6 +53,18 @@ nmconf = open(os.path.join(root, "etc/NetworkManager/conf.d/10-schema-managed.co
 check("NM writes resolv.conf as a real file (rc-manager=file)", "rc-manager=file" in nmconf)
 check("dangling resolved symlink removed", not os.path.islink(rc))
 
+os.makedirs(os.path.join(root, "run/systemd/resolve"), exist_ok=True)
+open(os.path.join(root, "run/systemd/resolve/stub-resolv.conf"), "w").write("nameserver 127.0.0.53\n")
+os.symlink("../run/systemd/resolve/stub-resolv.conf", rc)
+mn = sm.Manifest()
+sm.generate_nm_config(mn)
+check("live resolved symlink removed too (deploy runs under systemd)", not os.path.islink(rc))
+check("original link recorded for uninstall", mn.links.get("/etc/resolv.conf") == "../run/systemd/resolve/stub-resolv.conf")
+mn.save()
+open(rc, "w").write("nameserver 10.0.2.3\n")
+sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
+check("uninstall restores the resolved symlink", os.readlink(rc) == "../run/systemd/resolve/stub-resolv.conf")
+
 # Generated units pin every hardening knob to 0, so a host that flips
 # hardening-default=on keeps mount/udev/modprobe/seatbelt unhardened.
 udevd = os.path.join(root, "usr/lib/systemd/systemd-udevd")

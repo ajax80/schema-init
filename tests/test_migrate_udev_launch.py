@@ -23,10 +23,13 @@ spec = importlib.util.spec_from_file_location("sm_udev", os.path.join(REPO, "dis
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 man = m.Manifest()
 m.generate_udev_units(man)
+m.install_unit_helpers(man)
 
 svc = open(os.path.join(root, "etc/schema-init/services/udevd.svc")).read()
 check("udevd.svc execs the launcher", "exec=" + m.UDEVD_LAUNCH in svc)
 check("launcher recorded in the manifest", m.UDEVD_LAUNCH in man.files)
+check("rail helper copy does not clobber the generated trigger",
+      "schema-udev/ready" in open(os.path.join(root, "usr/local/bin/schema-udev-trigger.sh")).read())
 
 fake = os.path.join(root, "fake")
 os.makedirs(os.path.join(fake, "bin"))
