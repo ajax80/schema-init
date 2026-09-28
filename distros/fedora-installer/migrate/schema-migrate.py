@@ -518,6 +518,8 @@ def install_unit_helpers(manifest, dry_run=False):
         if name in seen:
             continue
         seen.add(name)
+        if "/usr/local/bin/" + name in manifest.files:
+            continue
         src = _find_helper_src(name)
         if src is None:
             continue
