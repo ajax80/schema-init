@@ -705,18 +705,20 @@ total kernel → login screen: **~20.7s**
 
 Measured 2026-09-25 on an HP 15-bs2xx (Celeron N4000, 4 GB RAM, 5400 rpm HDD): a fresh v0.3.1 ISO install with the schema-udev flip done, fully `dnf upgrade`d, kernel 7.2.7 on every run. Both sides autologin into the same Plasma 6 session. Each run is a warm reboot into the named GRUB entry (`grub2-reboot`); readings are taken 4 minutes after boot by [`tests/livetest/boot-metrics`](tests/livetest/boot-metrics). Times are seconds from kernel start to the process being spawned, read from `/proc/<pid>/stat`, so firmware and bootloader (~16.5 s here, identical for both) are not included. Medians of 3 runs; raw data in [`tests/livetest/dbox-bench-20260925.txt`](tests/livetest/dbox-bench-20260925.txt).
 
-| | systemd (stock Fedora) | schema-init (as installed) | schema-init + host tuning |
-|---|---|---|---|
-| kwin_wayland spawned | 45.3 s | 45.5 s | 45.6 s |
-| plasmashell spawned | 64.3 s | **59.1 s** | 58.9 s |
-| desktop drawn (desktop.so kioworker) | 92.2 s | 87.8 s | **84.0 s** |
-| xdg-desktop-portal-kde spawned | 72.9 s | **60.1 s** | 58.9 s |
-| RAM used at idle | 1477 MB | 1104 MB | **1036 MB** |
-| processes | 219 | 165 | 163 |
-| load average (1 min) at 4 min | 1.40 | 0.29 | 0.24 |
-| IO pressure (`some` avg300) | 11.4 | 8.5 | 7.7 |
+| | systemd (stock Fedora) | schema-init (as installed) | schema-init + host tuning | + schema-dbus |
+|---|---|---|---|---|
+| kwin_wayland spawned | 45.3 s | 45.5 s | 45.6 s | **38.4 s** |
+| plasmashell spawned | 64.3 s | 59.1 s | 58.9 s | **53.6 s** |
+| desktop drawn (desktop.so kioworker) | 92.2 s | 87.8 s | 84.0 s | **76.9 s** |
+| xdg-desktop-portal-kde spawned | 72.9 s | 60.1 s | 58.9 s | **53.6 s** |
+| RAM used at idle | 1477 MB | 1104 MB | **1036 MB** | 1058 MB |
+| processes | 219 | 165 | 163 | 171 |
+| load average (1 min) at 4 min | 1.40 | 0.29 | 0.24 | 0.28 |
+| IO pressure (`some` avg300) | 11.4 | 8.5 | 7.7 | 7.7 |
 
-Both inits reach the compositor at the same moment, because on a 5400 rpm disk that part is bound by reading files. schema-init's gain comes after that: the shell and portal are up sooner, and the booted machine carries 373 MB less RAM and about 54 fewer processes. "Host tuning" is per-machine configuration, not part of schema-init: zswap off (zram only), `noatime`, Wi-Fi power save off, file indexer and unused autostart entries disabled, KWin blur/contrast off. It does not move the shell start, but it draws the desktop about 4 s sooner and trims another ~70 MB.
+With the stock D-Bus daemon, both inits reach the compositor at the same moment, because on a 5400 rpm disk that part is bound by reading files. schema-init's own gain comes after that: the shell and portal are up sooner, and the booted machine carries 373 MB less RAM and about 54 fewer processes. "Host tuning" is per-machine configuration, not part of schema-init: zswap off (zram only), `noatime`, Wi-Fi power save off, file indexer and unused autostart entries disabled, KWin blur/contrast off. It does not move the shell start, but it draws the desktop about 4 s sooner and trims another ~70 MB.
+
+The last column (measured 2026-09-27, medians of 4 runs) adds schema's own message bus, [schema-dbus](#the-system-bus-itself-schema-dbus), on both the system and session bus. To isolate it, the same box with the same tuning was measured with the switch rolled back to the stock daemon (3 runs: kwin 46.0 s, plasmashell 61.1 s, desktop 83.5 s, 1050 MB — matching the 09-25 column), then switched back. schema-dbus alone brings the compositor up 7.6 s sooner and draws the desktop 6.6 s sooner, at the same RAM; the gain lands before the compositor starts. Raw data in [`tests/livetest/dbox-bench-20260927.txt`](tests/livetest/dbox-bench-20260927.txt). End to end, the desktop is drawn about 15 s sooner than on stock systemd.
 
 These are one laptop's numbers. The run-to-run spread was small (plasmashell 57.7–59.7 s on schema-init vs 63.5–64.4 s on systemd), but a different disk, CPU or desktop will give different figures.
 
