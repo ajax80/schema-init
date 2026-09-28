@@ -1,6 +1,6 @@
 import os
 import importlib.util as _ilu
-from PySide6.QtCore import QObject, Property, Signal, Slot
+from PySide6.QtCore import QCoreApplication, QObject, Property, Signal, Slot
 
 _MODDIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -94,3 +94,5 @@ class WizardController(QObject):
                                      selections=self._selections)
         self._error = _core.error_for(outcome)
         self.changed.emit()
+        if outcome == "finished":
+            QCoreApplication.quit()

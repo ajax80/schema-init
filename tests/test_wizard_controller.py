@@ -58,4 +58,17 @@ co2.setRecoveryAck(True)
 co2.continueClicked()
 check("failed deploy sets an error message", co2.error != "")
 
+# Finish on the last screen closes the wizard instead of a dead button
+quits = []
+ctrl.QCoreApplication = type("Q", (), {"quit": staticmethod(lambda: quits.append(1))})
+root3 = tempfile.mkdtemp()
+stage.write_stage(stage.R3_DONE, root=root3)
+co3 = ctrl.WizardController(core=core.WizardCore(backend=FakeBackend(), root=root3))
+co3.continueClicked()
+check("finish on the final screen closes the wizard", quits == [1])
+root4 = tempfile.mkdtemp(); os.makedirs(os.path.join(root4, "var/lib"))
+co4 = ctrl.WizardController(core=core.WizardCore(backend=FakeBackend(), root=root4))
+co4.setRecoveryAck(True); co4.continueClicked()
+check("deploy does not close the wizard", quits == [1])
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

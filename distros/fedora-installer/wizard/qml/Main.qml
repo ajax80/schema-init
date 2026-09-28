@@ -10,6 +10,12 @@ ApplicationWindow {
 
     Component.onCompleted: if (wizard.screen === "confirming") wizard.continueClicked()
 
+    Timer {
+        interval: 2000; repeat: true
+        running: wizard.screen === "waiting_reboot"
+        onTriggered: wizard.refresh()
+    }
+
     function screenText() {
         switch (wizard.screen) {
         case "welcome": return "Welcome — this will set up schema on your computer.";
