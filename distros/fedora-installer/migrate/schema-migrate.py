@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import importlib.util as _ilu
 
 ROOT = os.environ.get("MIGRATE_ROOT") or "/"
@@ -89,8 +90,16 @@ def _copy_into(src, dst, manifest, dry_run):
     return dst
 
 
+def _adv():
+    return [a for a in os.environ.get("MIGRATE_ADV", "").split(",") if a]
+
+
+DOCTOR_TIMERS = {"schema-doctor-periodic"}
+
+
 def deploy_prevent_set(manifest, dry_run=False):
     ps = load_prevent_set()
+    skip = DOCTOR_TIMERS if "no-doctor-timers" in _adv() else set()
     written = []
     for name in ps["script"]:
         src = find_source("distros/fedora-kde/scripts/" + name)
@@ -109,6 +118,8 @@ def deploy_prevent_set(manifest, dry_run=False):
             if not dry_run:
                 manifest.add_file("/etc/schema-init/config/" + name)
     for name in ps["service"]:
+        if name in skip:
+            continue
         for base in ("distros/fedora-installer/rail/services",
                      "distros/fedora-kde/services"):
             src = find_source(base + "/" + name + ".svc")
@@ -292,6 +303,37 @@ def add_boot_entry(kernel):
     return dst
 
 
+FALLBACK_STASH = "var/lib/schema-init/boot-entries.orig"
+
+
+def hide_fallback_entries(manifest):
+    moved = []
+    for e in sorted(_glob.glob(P("boot/loader/entries/*.conf"))):
+        if os.path.basename(e) == SCHEMA_ENTRY_ID + ".conf":
+            continue
+        os.makedirs(P(FALLBACK_STASH), exist_ok=True)
+        shutil.move(e, os.path.join(P(FALLBACK_STASH), os.path.basename(e)))
+        moved.append("/" + os.path.relpath(e, ROOT))
+    manifest.grub["hidden_entries"] = moved
+    return moved
+
+
+def take_snapshot(run=subprocess.run, dry_run=False):
+    r = run(["findmnt", "-no", "FSTYPE", ROOT], capture_output=True, text=True)
+    if (getattr(r, "stdout", "") or "").strip() != "btrfs":
+        print("snapshot: / is not btrfs — skipped")
+        return None
+    dst = P(".schema-migrate-snapshot-" + time.strftime("%Y%m%d-%H%M%S"))
+    if dry_run:
+        return dst
+    r = run(["btrfs", "subvolume", "snapshot", "-r", ROOT, dst], capture_output=True, text=True)
+    if getattr(r, "returncode", 0) != 0:
+        raise RuntimeError("btrfs snapshot of / failed — refusing to change anything "
+                           "without it (--advanced-no-snapshot skips it)")
+    print("snapshot: " + dst)
+    return dst
+
+
 def remove_boot_entry():
     dst = P("boot/loader/entries/%s.conf" % SCHEMA_ENTRY_ID)
     try:
@@ -379,6 +421,10 @@ def restore_grub(grub, run=subprocess.run):
             open(P(GRUB_DEFAULT), "w").write(open(P(backup)).read())
         except OSError:
             pass
+    for rel in grub.get("hidden_entries", []):
+        src = os.path.join(P(FALLBACK_STASH), os.path.basename(rel))
+        if os.path.exists(src):
+            shutil.move(src, P(rel.lstrip("/")))
     prev = grub.get("menu_auto_hide_was")
     if prev:
         run(["grub2-editenv", "-", "set", "menu_auto_hide=" + prev], check=False)
@@ -793,6 +839,11 @@ def teardown(root="/"):
 def arm_flip(root="/", flip=_default_flip):
     if stage.read_stage(root) != stage.R1_HEAL:
         raise RuntimeError("arm-flip requires stage R1_HEAL")
+    if not udev_offered(root):
+        stage.transition(stage.DONE, root=root)
+        if not dbus_offered(root):
+            teardown(root)
+        return 0
     if flip("arm").returncode != 0:
         return 1
     stage.transition(stage.R2_PENDING, root=root)
@@ -807,6 +858,9 @@ def _boot_id():
 def dbus_awaiting_reboot(root="/"):
     return (stage.read_stage(root) == stage.R3_PENDING
             and stage.read_extra(root).get("dbus_armed_boot") == _boot_id())
+
+def udev_offered(root="/"):
+    return "no-udev-flip" not in stage.read_extra(root).get("adv", [])
 
 def dbus_offered(root="/"):
     return "no-dbus-broker" not in stage.read_extra(root).get("adv", [])
@@ -973,6 +1027,8 @@ def run_make_install(manifest, run=subprocess.run, dry_run=False, prebuilt=False
 
 def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     profile = build_profile(run=run)
+    if "no-snapshot" not in _adv():
+        take_snapshot(run=run, dry_run=dry_run)
     if not dry_run:
         write_profile(profile)
     m = Manifest()
@@ -994,12 +1050,13 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     # entry is written or it strips the init= override we just added.
     ensure_grub_menu_visible(m, run=run, dry_run=dry_run)
     entry = add_boot_entry(profile["kernel"]) if not dry_run else None
+    if not dry_run and "no-fallback-entry" in _adv():
+        hide_fallback_entries(m)
     if not dry_run:
         write_recovery_card(profile, root=ROOT)
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
-        adv = [a for a in os.environ.get("MIGRATE_ADV", "").split(",") if a]
-        stage.transition(stage.R1_PENDING, root=ROOT, extra={"adv": adv})
+        stage.transition(stage.R1_PENDING, root=ROOT, extra={"adv": _adv()})
     return m
 
 
