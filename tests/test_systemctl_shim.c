@@ -184,6 +184,62 @@ static void test_flag_before_verb(void) {
     assert(run3("--quiet", "is-enabled", "foo") == 0);
 }
 
+static int run_as(const char *argv0, const char *a, const char *b) {
+    char *argv[4]; int n = 0;
+    argv[n++] = (char *)argv0;
+    if (a) argv[n++] = (char *)a;
+    if (b) argv[n++] = (char *)b;
+    argv[n] = NULL;
+    return shim_dispatch(n, argv);
+}
+
+static void ctl_log_clear(void) {
+    char p[400]; snprintf(p, sizeof p, "%s/ctl.log", sandbox); unlink(p);
+}
+
+static void test_power(void) {
+    setup_sandbox();
+    make_ctl_stub("x");
+    ctl_log_clear(); assert(run_as("systemctl", "reboot", NULL) == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("systemctl", "poweroff", NULL) == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("systemctl", "halt", NULL) == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("/usr/sbin/reboot", NULL, NULL) == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("poweroff", NULL, NULL) == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "-r", "now") == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("shutdown", "now", NULL) == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "-c", NULL) == 0); assert(!ctl_log_has("poweroff") && !ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("systemctl", "--no-wall", "reboot") == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); run_as("systemctl", "status", "reboot"); assert(!ctl_log_has("reboot"));   /* a unit arg, not a verb */
+}
+
+static void test_passthrough(void) {
+    char dir[] = "/tmp/shim-pt-XXXXXX";
+    assert(mkdtemp(dir));
+    char comm[256], real[256];
+    snprintf(comm, sizeof comm, "%s/comm", dir);
+    snprintf(real, sizeof real, "%s/systemctl.real", dir);
+    setenv("SCHEMA_PID1_COMM", comm, 1);
+    setenv("SCHEMA_REAL_SYSTEMCTL", real, 1);
+    FILE *f;
+
+    f = fopen(comm, "w"); fputs("systemd\n", f); fclose(f);
+    assert(shim_passthrough() == NULL);                 /* real missing -> handle it */
+    f = fopen(real, "w"); fputs("#!/bin/sh\n", f); fclose(f);
+    chmod(real, 0755);
+    assert(shim_passthrough() != NULL);                 /* PID 1 systemd -> real */
+    assert(strcmp(shim_passthrough(), real) == 0);
+
+    f = fopen(comm, "w"); fputs("schema-init\n", f); fclose(f);
+    assert(shim_passthrough() == NULL);                 /* schema-init PID 1 -> shim */
+
+    unlink(comm);
+    assert(shim_passthrough() == NULL);                 /* unreadable -> shim */
+
+    unlink(real); rmdir(dir);
+    unsetenv("SCHEMA_PID1_COMM");
+    unsetenv("SCHEMA_REAL_SYSTEMCTL");
+}
+
 int main(void) {
     test_strip_suffix();
     test_supported();
@@ -196,5 +252,9 @@ int main(void) {
     printf("task4 systemctl-shim tests passed\n");
     test_flag_before_verb();
     printf("task5 systemctl-shim tests passed\n");
+    test_power();
+    printf("power systemctl-shim tests passed\n");
+    test_passthrough();
+    printf("passthrough systemctl-shim tests passed\n");
     return 0;
 }

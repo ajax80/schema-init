@@ -21,6 +21,24 @@ __attribute__((unused)) static const char *shim_ctl(void) {
     return (e && *e) ? e : "schema-ctl";
 }
 
+/* PID 1 is still systemd (the -migrate RPM is installed but the box has not
+ * booted schema-init, or never will): hand every call to the real systemctl.
+ * Returns its path, or NULL to handle the call ourselves. */
+__attribute__((unused)) static const char *shim_passthrough(void) {
+    const char *e = getenv("SCHEMA_PID1_COMM");
+    const char *comm = (e && *e) ? e : "/proc/1/comm";
+    e = getenv("SCHEMA_REAL_SYSTEMCTL");
+    const char *real = (e && *e) ? e : "/usr/bin/systemctl.real";
+    char buf[32] = {0};
+    FILE *f = fopen(comm, "r");
+    if (!f) return NULL;
+    if (!fgets(buf, sizeof buf, f)) buf[0] = '\0';
+    fclose(f);
+    buf[strcspn(buf, "\n")] = '\0';
+    if (strcmp(buf, "systemd") != 0) return NULL;
+    return access(real, X_OK) == 0 ? real : NULL;
+}
+
 __attribute__((unused)) static const char *strip_service_suffix(const char *unit, char *buf, size_t n) {
     size_t len = strlen(unit);
     const char *suf = ".service";
@@ -147,7 +165,35 @@ __attribute__((unused)) static int ctl_is_active(const char *name) {
     return active;
 }
 
+/* reboot/poweroff/halt/shutdown are symlinks to systemctl, so they land here
+ * too; so do `systemctl reboot|poweroff|halt`. PID 1's control socket takes
+ * reboot and poweroff. Returns the schema-ctl verb, "" for a no-op
+ * (shutdown -c), or NULL when this is not a power request. */
+__attribute__((unused)) static const char *power_action(int argc, char **argv) {
+    const char *base = strrchr(argv[0], '/');
+    base = base ? base + 1 : argv[0];
+    int j;
+    if (strcmp(base, "reboot") == 0) return "reboot";
+    if (strcmp(base, "poweroff") == 0 || strcmp(base, "halt") == 0) return "poweroff";
+    if (strcmp(base, "shutdown") == 0) {
+        for (j = 1; j < argc; j++) {
+            if (strcmp(argv[j], "-c") == 0) return "";
+            if (strcmp(argv[j], "-r") == 0 || strcmp(argv[j], "--reboot") == 0) return "reboot";
+        }
+        return "poweroff";
+    }
+    for (j = 1; j < argc; j++) {
+        if (argv[j][0] == '-') continue;
+        if (strcmp(argv[j], "reboot") == 0) return "reboot";
+        if (strcmp(argv[j], "poweroff") == 0 || strcmp(argv[j], "halt") == 0) return "poweroff";
+        return NULL;
+    }
+    return NULL;
+}
+
 __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
+    const char *power = power_action(argc, argv);
+    if (power) return *power ? (run_ctl(power, NULL) == 0 ? 0 : 1) : 0;
     if (argc < 2) return 0;
     int j;
     int now = 0, user_scope = 0;
