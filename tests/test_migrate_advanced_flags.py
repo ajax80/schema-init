@@ -79,8 +79,22 @@ m, root, calls, err = deploy([], fstype="btrfs")
 check("btrfs root: deploy takes a read-only snapshot first", len(snapshots(calls)) == 1
       and snapshots(calls)[0][3] == "-r" and calls.index(snapshots(calls)[0]) < calls.index(
           next(c for c in calls if c[:1] == ["dnf"] or c[:1] == ["grub2-editenv"])))
+snap = snapshots(calls)[0][5]
+man = m.Manifest.load()
+check("snapshot recorded in the manifest", man.snapshot == "/" + os.path.relpath(snap, root))
+card = open(os.path.join(root, "boot/schema-recovery.txt")).read()
+check("recovery card names the snapshot", man.snapshot in card)
+os.makedirs(snap)
+ucalls = []
+os.environ["MIGRATE_ROOT"] = root
+try:
+    m = load(); m.uninstall(run=lambda cmd, *a, **k: ucalls.append(list(cmd)) or type("R", (), {"returncode": 0, "stdout": ""})())
+finally:
+    del os.environ["MIGRATE_ROOT"]
+check("uninstall deletes the snapshot", ["btrfs", "subvolume", "delete", snap] in ucalls)
 m, root, calls, err = deploy(["--advanced-no-snapshot"], fstype="btrfs")
 check("no-snapshot: no snapshot taken", snapshots(calls) == [] and err is None)
+check("no-snapshot: card mentions no snapshot", "read-only copy" not in open(os.path.join(root, "boot/schema-recovery.txt")).read())
 m, root, calls, err = deploy([], fstype="ext4")
 check("non-btrfs root: snapshot skipped, deploy goes on", snapshots(calls) == [] and err is None
       and m.stage.read_stage(root) == m.stage.R1_PENDING)
@@ -93,9 +107,13 @@ check("failed snapshot refuses before changing anything", err is not None
 m, root, calls, err = deploy([])
 ents = sorted(os.listdir(os.path.join(root, "boot/loader/entries")))
 check("default keeps the current system's boot entry", ents == ["f.conf", "schema-init.conf"])
+check("default card still points at the old entry", "does NOT say" in open(os.path.join(root, "boot/schema-recovery.txt")).read())
 m, root, calls, err = deploy(["--advanced-no-fallback-entry"])
 ents = sorted(os.listdir(os.path.join(root, "boot/loader/entries")))
 check("no-fallback-entry: only the schema-init entry is left", ents == ["schema-init.conf"])
+card = open(os.path.join(root, "boot/schema-recovery.txt")).read()
+check("no-fallback-entry: card does not point at a hidden menu entry", "does NOT say" not in card
+      and "no menu" in card)
 check("no-fallback-entry: the old entry is stashed, not deleted",
       os.path.exists(os.path.join(root, m.FALLBACK_STASH, "f.conf")))
 os.environ["MIGRATE_ROOT"] = root

@@ -435,12 +435,14 @@ def restore_grub(grub, run=subprocess.run):
 class Manifest:
     PATH = "var/lib/schema-init/migrate-manifest.json"
 
-    def __init__(self, files=None, packages=None, boot_entry=None, grub=None, links=None):
+    def __init__(self, files=None, packages=None, boot_entry=None, grub=None, links=None,
+                 snapshot=None):
         self.files = list(files or [])
         self.packages = list(packages or [])
         self.boot_entry = boot_entry
         self.grub = dict(grub or {})
         self.links = dict(links or {})
+        self.snapshot = snapshot
 
     def add_file(self, path):
         if path not in self.files:
@@ -459,7 +461,7 @@ class Manifest:
         with open(p, "w") as fh:
             json.dump({"files": self.files, "packages": self.packages,
                        "boot_entry": self.boot_entry, "grub": self.grub,
-                       "links": self.links}, fh, indent=2)
+                       "links": self.links, "snapshot": self.snapshot}, fh, indent=2)
         os.chmod(p, 0o644)
         return p
 
@@ -472,7 +474,7 @@ class Manifest:
         except (OSError, ValueError):
             d = {}
         return cls(d.get("files"), d.get("packages"), d.get("boot_entry"), d.get("grub"),
-                   d.get("links"))
+                   d.get("links"), d.get("snapshot"))
 
 
 def uninstall(run=subprocess.run):
@@ -492,6 +494,8 @@ def uninstall(run=subprocess.run):
             os.symlink(target, P(rel))
         except OSError:
             pass
+    if m.snapshot and os.path.isdir(P(m.snapshot)):
+        run(["btrfs", "subvolume", "delete", P(m.snapshot)], check=False)
     if m.packages:
         run(["dnf", "remove", "-y"] + m.packages, check=False)
     remove_boot_entry()
@@ -955,7 +959,25 @@ RECOVERY_TEXT = (
 )
 
 
-def write_recovery_card(profile, root="/"):
+def recovery_text(snapshot=None, fallback=True):
+    t = RECOVERY_TEXT
+    if not fallback:
+        t = t.replace(
+            "  3. At the start-up menu, use the arrow keys to choose the entry that\n"
+            "     does NOT say \"(schema-init)\".\n"
+            "  4. Press Enter.\n\n"
+            "Your computer will start exactly as it does today. Nothing is lost.\n",
+            "You chose not to keep the old start-up entry, so there is no menu\n"
+            "option to go back to. Start from a Fedora USB stick and run\n"
+            "\"sudo schema-migrate --uninstall\" on your installed system.\n")
+    if snapshot:
+        t += ("\nA read-only copy of your system from before the change is saved at\n"
+              "  %s\n"
+              "\"sudo schema-migrate --uninstall\" removes schema and this copy.\n" % snapshot)
+    return t
+
+
+def write_recovery_card(profile, root="/", text=RECOVERY_TEXT):
     written = []
     user = profile.get("user")
     uid = profile.get("uid")
@@ -970,7 +992,7 @@ def write_recovery_card(profile, root="/"):
         dst = os.path.join(root, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "w") as fh:
-            fh.write(RECOVERY_TEXT)
+            fh.write(text)
         os.chmod(dst, 0o644)
         if owner is not None:
             try:
@@ -1053,11 +1075,12 @@ def run_make_install(manifest, run=subprocess.run, dry_run=False, prebuilt=False
 
 def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     profile = build_profile(run=run)
-    if "no-snapshot" not in _adv():
-        take_snapshot(run=run, dry_run=dry_run)
+    snap = take_snapshot(run=run, dry_run=dry_run) if "no-snapshot" not in _adv() else None
     if not dry_run:
         write_profile(profile)
     m = Manifest()
+    if snap and not dry_run:
+        m.snapshot = "/" + os.path.relpath(snap, ROOT)
     run_make_install(m, run=run, dry_run=dry_run, prebuilt=prebuilt)
     deploy_prevent_set(m, dry_run=dry_run)
     generate_host_units(profile, m, dry_run=dry_run)
@@ -1080,7 +1103,8 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     if not dry_run and "no-fallback-entry" in _adv():
         hide_fallback_entries(m)
     if not dry_run:
-        write_recovery_card(profile, root=ROOT)
+        write_recovery_card(profile, root=ROOT, text=recovery_text(
+            m.snapshot, fallback="no-fallback-entry" not in _adv()))
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
         stage.transition(stage.R1_PENDING, root=ROOT, extra={"adv": _adv()})
