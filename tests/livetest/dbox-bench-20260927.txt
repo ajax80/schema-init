@@ -1,0 +1,47 @@
+# DBox (HP 15-bs2xx, Celeron N4000, 4 GB, 5400 rpm HDD) — 2026-09-27
+# Same box, same host tuning as run C of dbox-bench-20260925.txt, kernel 7.2.7.
+# D = schema-init + schema-dbus on both buses; E = schema-init + stock dbus-daemon.
+# E is D with the dbus flip rolled back (schema-flip-apply dbus-rollback); D4 re-armed.
+# D1-D3 on 0.3.1-1.928 (26b84fb), E1-E3 and D4 on 0.4.0-1.951 (3402f85); PID 1 source identical.
+# E bus line lost to a script typo; stock dbus-daemon on both buses verified after E3.
+# Metrics by tests/livetest/boot-metrics at ~250 s uptime, warm reboots.
+
+=== D1 20:50:45
+schema-init
+699 /usr/bin/schema-dbus --system
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=250
+kwin=38.5 plasmashell=53.7 desktop_drawn=77.2 portal_kde=53.8
+mem_used_mb=1054 procs=169 load1=0.24 io_some_avg300=7.60
+=== D2 20:55:19
+schema-init
+701 /usr/bin/schema-dbus --system
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=251
+kwin=38.2 plasmashell=53.5 desktop_drawn=76.6 portal_kde=53.5
+mem_used_mb=1052 procs=171 load1=0.29 io_some_avg300=7.76
+=== D3 20:59:53
+schema-init
+704 /usr/bin/schema-dbus --system
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=250
+kwin=38.5 plasmashell=53.7 desktop_drawn=77.9 portal_kde=53.7
+mem_used_mb=1062 procs=171 load1=0.26 io_some_avg300=7.74
+=== E1 21:56:26
+schema-init
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=247
+kwin=46.4 plasmashell=61.1 desktop_drawn=84.2 portal_kde=61.1
+mem_used_mb=1050 procs=172 load1=0.29 io_some_avg300=7.41
+=== E2 22:01:01
+schema-init
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=251
+kwin=45.3 plasmashell=60.0 desktop_drawn=82.2 portal_kde=61.2
+mem_used_mb=1039 procs=170 load1=0.37 io_some_avg300=7.42
+=== E3 22:05:37
+schema-init
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=253
+kwin=46.0 plasmashell=61.2 desktop_drawn=83.5 portal_kde=61.2
+mem_used_mb=1069 procs=170 load1=0.21 io_some_avg300=7.42
+=== D4 22:10:29
+schema-init
+809 /usr/bin/schema-dbus --system
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=250
+kwin=37.3 plasmashell=51.6 desktop_drawn=73.9 portal_kde=51.5
+mem_used_mb=1072 procs=171 load1=0.29 io_some_avg300=7.55
