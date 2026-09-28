@@ -96,4 +96,52 @@ try:
 finally:
     del os.environ["MIGRATE_ROOT"]
 
+# the healthcheck's bounded wait says so on screen instead of looking frozen
+import shutil, subprocess
+
+def _fake(bindir, name, body):
+    path = os.path.join(bindir, name)
+    open(path, "w").write("#!/bin/sh\n" + body)
+    os.chmod(path, 0o755)
+
+def _run_healthcheck(src, rootvar, statefile, probe, fails, plymouthd):
+    tmp = tempfile.mkdtemp()
+    lib, root, bindir = (os.path.join(tmp, d) for d in ("lib", "root", "bin"))
+    for d in (lib, bindir, os.path.join(root, "dev"), os.path.join(root, "var/lib/schema-init"),
+              os.path.join(root, "var/log/schema-init"), os.path.join(root, "etc/schema-init/services")):
+        os.makedirs(d)
+    script = os.path.join(lib, os.path.basename(src))
+    shutil.copy2(os.path.join(REPO, src), script)
+    for helper in ("schema-dbus-flip.sh", "schema-udev-flip-arm.sh", "schema-udev-flip-backup.sh"):
+        _fake(lib, helper, "exit 0\n")
+    open(os.path.join(root, "var/lib/schema-init", statefile), "w").write("armed\n")
+    calls = os.path.join(tmp, "calls")
+    _fake(bindir, "pgrep", 'case "$*" in *plymouthd*) exit %d ;; esac\nexit 0\n' % (0 if plymouthd else 1))
+    _fake(bindir, "plymouth", 'printf "%%s\\n" "$*" >> %s\n' % calls)
+    _fake(bindir, probe, 'n=$(cat %s.n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > %s.n\n'
+          '[ "$n" -gt %d ]\n' % (calls, calls, fails))
+    for noop in ("sleep", "schema-ctl", "reboot"):
+        _fake(bindir, noop, "exit 0\n")
+    env = dict(os.environ, PATH=bindir + ":" + os.environ["PATH"], **{rootvar: root})
+    subprocess.run(["sh", script], env=env, capture_output=True, timeout=30)
+    console = os.path.join(root, "dev/console")
+    con = open(console).read() if os.path.exists(console) else ""
+    ply = open(calls).read() if os.path.exists(calls) else ""
+    return con, ply
+
+for src, rootvar, statefile, probe, msg in (
+        ("scripts/schema-dbus-flip-healthcheck.sh", "SCHEMA_DBUS_FLIP_ROOT", "dbus-flip.state", "dbus-send",
+         "Checking the message bus - this can take up to 2 minutes"),
+        ("distros/fedora-installer/schema-udev-flip-healthcheck.sh", "SCHEMA_UDEV_FLIP_ROOT", "firstboot.state", "ls",
+         "Checking devices - this can take up to 2 minutes")):
+    name = os.path.basename(src)
+    con, ply = _run_healthcheck(src, rootvar, statefile, probe, 0, False)
+    check(name + ": ready at once shows nothing", con == "" and "display-message" not in ply)
+    con, ply = _run_healthcheck(src, rootvar, statefile, probe, 2, False)
+    check(name + ": waiting without plymouth writes the console once", con == msg + "\n")
+    con, ply = _run_healthcheck(src, rootvar, statefile, probe, 2, True)
+    check(name + ": waiting under plymouth shows it on the splash once",
+          ply.count("display-message --text=" + msg) == 1 and con == "")
+    check(name + ": the splash message is cleared after the wait", "hide-message --text=" + msg in ply)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

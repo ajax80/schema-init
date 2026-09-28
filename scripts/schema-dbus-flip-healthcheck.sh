@@ -17,12 +17,15 @@
 # above the ~90s oneshot default, or PID 1 kills it mid-wait (also DBox).
 set -u
 
+R="${SCHEMA_DBUS_FLIP_ROOT:-}"
 LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 FLIP="$LIB/schema-dbus-flip.sh"
-STATE=/var/lib/schema-init/dbus-flip.state
-COUNT=/var/lib/schema-init/dbus-flip-armed-boots
-SVCDIR=/etc/schema-init/services
-LOG=/var/log/schema-init/dbus-flip-healthcheck.log
+STATE="$R/var/lib/schema-init/dbus-flip.state"
+COUNT="$R/var/lib/schema-init/dbus-flip-armed-boots"
+SVCDIR="$R/etc/schema-init/services"
+LOG="$R/var/log/schema-init/dbus-flip-healthcheck.log"
+CONSOLE="$R/dev/console"
+WAITMSG="Checking the message bus - this can take up to 2 minutes"
 
 [ "$(cat "$STATE" 2>/dev/null)" = armed ] || exit 0
 
@@ -42,6 +45,15 @@ rollback() {
     exit 0
 }
 
+notice() {
+    if pgrep -x plymouthd >/dev/null 2>&1 && plymouth display-message --text="$WAITMSG" 2>/dev/null; then
+        shown=plymouth
+    else
+        printf '%s\n' "$WAITMSG" > "$CONSOLE" 2>/dev/null
+        shown=console
+    fi
+}
+
 has_owner() {
     dbus-send --system --print-reply --dest=org.freedesktop.DBus / \
         org.freedesktop.DBus.NameHasOwner "string:$1" 2>/dev/null | grep -q 'boolean true'
@@ -53,6 +65,7 @@ want=""
 [ -f "$SVCDIR/polkitd.svc" ]          && want="$want org.freedesktop.PolicyKit1"
 
 missing=""
+shown=""
 up() { cut -d. -f1 /proc/uptime; }
 deadline=$(( $(up) + 120 ))
 while [ "$(up)" -lt "$deadline" ]; do
@@ -63,8 +76,10 @@ while [ "$(up)" -lt "$deadline" ]; do
         has_owner "$n" || missing="$missing $n"
     done
     [ -z "$missing" ] && break
+    [ -n "$shown" ] || notice
     sleep 1
 done
+[ "$shown" = plymouth ] && plymouth hide-message --text="$WAITMSG" 2>/dev/null
 
 # --- class 1 ---
 pgrep -f '/schema-dbus --system$' > /dev/null || rollback "system bus is not schema-dbus (launcher fell back)"

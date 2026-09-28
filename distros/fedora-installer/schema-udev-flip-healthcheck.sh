@@ -15,14 +15,17 @@
 #      gives this without a fragile in-boot timer.
 set -u
 
-STATE=/var/lib/schema-init/firstboot.state
-COUNT=/var/lib/schema-init/flip-armed-boots
+R="${SCHEMA_UDEV_FLIP_ROOT:-}"
+STATE="$R/var/lib/schema-init/firstboot.state"
+COUNT="$R/var/lib/schema-init/flip-armed-boots"
 # helpers ship beside this script in both layouts (ISO /usr/local/lib/schema,
 # RPM /usr/libexec/schema-init) — resolve from our own location.
 LIB="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ARM="$LIB/schema-udev-flip-arm.sh"
 BACKUP="$LIB/schema-udev-flip-backup.sh"
-LOG=/var/log/schema-init/flip-healthcheck.log
+LOG="$R/var/log/schema-init/flip-healthcheck.log"
+CONSOLE="$R/dev/console"
+WAITMSG="Checking devices - this can take up to 2 minutes"
 
 [ -f "$STATE" ] && [ "$(cat "$STATE")" = "armed" ] || exit 0
 
@@ -35,6 +38,15 @@ if [ ! -x "$ARM" ] || [ ! -x "$BACKUP" ]; then
     log "flip helpers missing under $LIB — cannot self-heal; leaving state untouched"
     exit 0
 fi
+
+notice() {
+    if pgrep -x plymouthd >/dev/null 2>&1 && plymouth display-message --text="$WAITMSG" 2>/dev/null; then
+        shown=plymouth
+    else
+        printf '%s\n' "$WAITMSG" > "$CONSOLE" 2>/dev/null
+        shown=console
+    fi
+}
 
 rollback() {
     log "flip UNHEALTHY ($1) — rolling back to systemd-udev"
@@ -51,6 +63,7 @@ rollback() {
 # Neither rail orders us after udev (a dep on a crash-looping service would
 # block us forever), so poll: bounded at 120s of uptime — the RTC can be hours
 # off until chrony steps it. Both .svc files set start_timeout_sec=300.
+shown=""
 up() { cut -d. -f1 /proc/uptime; }
 deadline=$(( $(up) + 120 ))
 while [ "$(up)" -lt "$deadline" ]; do
@@ -60,8 +73,10 @@ while [ "$(up)" -lt "$deadline" ]; do
        && ls /dev/disk/by-uuid/* >/dev/null 2>&1; then
         break
     fi
+    [ -n "$shown" ] || notice
     sleep 1
 done
+[ "$shown" = plymouth ] && plymouth hide-message --text="$WAITMSG" 2>/dev/null
 
 # --- class 1: is /dev usable THIS boot? ---
 pgrep -x schema-udev >/dev/null 2>&1 || rollback "schema-udev not running"
