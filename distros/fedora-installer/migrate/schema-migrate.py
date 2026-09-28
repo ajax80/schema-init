@@ -319,8 +319,18 @@ def _grubenv_get(key, run):
 def _grub_cfg_targets():
     targets = []
     for p in ("boot/grub2/grub.cfg", "boot/efi/EFI/fedora/grub.cfg"):
-        if os.path.exists(P(p)):
-            targets.append("/" + p)
+        if not os.path.exists(P(p)):
+            continue
+        # Modern Fedora's ESP grub.cfg is a stub that `configfile`s the real
+        # /boot/grub2/grub.cfg; grub2-mkconfig refuses to overwrite it (older
+        # grub would destroy it). Only a full legacy ESP config is a target.
+        if p.startswith("boot/efi/"):
+            try:
+                if "configfile" in open(P(p), errors="ignore").read():
+                    continue
+            except OSError:
+                continue
+        targets.append("/" + p)
     return targets
 
 
@@ -685,6 +695,54 @@ FLIP_HELPER = "/usr/libexec/schema-init/schema-flip-apply"
 SEATBELT_HELPER = "/usr/libexec/schema-init/schema-udev-flip-healthcheck.sh"
 DBUS_SEATBELT_HELPER = "/usr/libexec/schema-init/schema-dbus-flip-healthcheck.sh"
 AUTOSTART = "etc/xdg/autostart/schema-wizard.desktop"
+USER_AUTOSTART = ".config/autostart/schema-wizard.desktop"
+
+# What the ISO kickstart lays down around the Plasma launch chain, from the
+# same sources. plasma-session-start.sh sources plasma-env/ and fires the
+# XDG-autostart runner from /usr/local/lib/schema; without them a migrated
+# box has no autostart apps, no ssh-agent and no plasmashell watchdog.
+SESSION_SUPPORT = [
+    ("distros/fedora-kde/scripts/schema-autostart-runner.sh", "usr/local/lib/schema/schema-autostart-runner.sh", 0o755),
+    ("distros/fedora-kde/scripts/schema-plasma-watchdog.sh", "usr/local/lib/schema/schema-plasma-watchdog.sh", 0o755),
+    ("distros/fedora-kde/config/plasma-env/zzz-environment-d.sh", "usr/local/lib/schema/zzz-environment-d.sh", 0o644),
+    ("distros/fedora-kde/config/plasma-env/05-kdedefaults.sh", "usr/local/lib/schema/plasma-env/05-kdedefaults.sh", 0o644),
+    ("distros/fedora-kde/config/plasma-env/no-app-scope.sh", "usr/local/lib/schema/plasma-env/no-app-scope.sh", 0o644),
+    ("distros/fedora-kde/config/plasma-env/ssh-agent-sock.sh", "usr/local/lib/schema/plasma-env/ssh-agent-sock.sh", 0o644),
+    ("distros/fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh", "usr/local/lib/schema/plasma-env/zz-schema-autostart.sh", 0o644),
+]
+
+
+def install_session_support(profile, manifest, dry_run=False):
+    done = []
+    for src_rel, dst_rel, mode in SESSION_SUPPORT:
+        src = find_source(src_rel)
+        if not src:
+            continue
+        done.append("/" + dst_rel)
+        if dry_run:
+            continue
+        dst = P(dst_rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        os.chmod(dst, mode)
+        manifest.add_file("/" + dst_rel)
+    # The runner sweeps only ~/.config/autostart, so the wizard's system entry
+    # never fires under schema-init; same filename overrides it under systemd.
+    user, uid = profile.get("user"), profile.get("uid")
+    home = P("home/%s" % user) if user else None
+    src = P(AUTOSTART)
+    if home and os.path.isdir(home) and os.path.exists(src) and not dry_run:
+        dst = os.path.join(home, USER_AUTOSTART)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        for d in (os.path.dirname(os.path.dirname(dst)), os.path.dirname(dst), dst):
+            try:
+                os.chown(d, uid, uid)
+            except (OSError, TypeError):
+                pass
+        manifest.add_file("/home/%s/%s" % (user, USER_AUTOSTART))
+        done.append("/home/%s/%s" % (user, USER_AUTOSTART))
+    return done
 
 def _default_flip(*a):
     return subprocess.run([FLIP_HELPER, *a], capture_output=True, text=True)
@@ -722,10 +780,15 @@ def install_flip_seatbelt(manifest, dry_run=False):
     return dst
 
 def teardown(root="/"):
-    try:
-        os.remove(os.path.join(root, AUTOSTART))
-    except OSError:
-        pass
+    paths = [os.path.join(root, AUTOSTART)]
+    home = os.path.join(root, "home")
+    if os.path.isdir(home):
+        paths += [os.path.join(home, u, USER_AUTOSTART) for u in os.listdir(home)]
+    for p in paths:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 def arm_flip(root="/", flip=_default_flip):
     if stage.read_stage(root) != stage.R1_HEAL:
@@ -924,6 +987,7 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     _add_unit_dep("network-manager", "coldplug-modules", dry_run=dry_run)
     _add_unit_dep("network-manager", "udev-trigger", dry_run=dry_run)
     install_unit_helpers(m, dry_run=dry_run)
+    install_session_support(profile, m, dry_run=dry_run)
     install_packages(m, run=run, dry_run=dry_run)
     # grub2-mkconfig FIRST: Fedora's BLS sync rewrites every loader entry's
     # options from the canonical cmdline, so it must run before the schema
