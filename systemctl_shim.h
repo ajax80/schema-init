@@ -131,6 +131,29 @@ __attribute__((unused)) static int svc_exists(const char *name) {
     return access(p, F_OK) == 0;
 }
 
+/* Where a systemd unit and its rail .svc are named differently. Mirrors
+ * UNIT_TO_SVC in schema-migrate.py. An exact-name .svc still wins. */
+__attribute__((unused)) static const char *unit_alias(const char *base) {
+    static const char *map[][2] = {
+        { "NetworkManager", "network-manager" },
+        { "bluetooth",      "bluetoothd" },
+        { "polkit",         "polkitd" },
+        { "dbus-broker",    "dbus" },
+        { NULL, NULL }
+    };
+    int i;
+    for (i = 0; map[i][0]; i++)
+        if (strcmp(base, map[i][0]) == 0) return map[i][1];
+    return NULL;
+}
+
+__attribute__((unused)) static char *svc_name_for(const char *unit, char *buf, size_t n) {
+    strip_service_suffix(unit, buf, n);
+    const char *alias = unit_alias(buf);
+    if (alias && !svc_exists(buf)) snprintf(buf, n, "%s", alias);
+    return buf;
+}
+
 __attribute__((unused)) static int run_ctl(const char *verb, const char *name) {
     pid_t pid = fork();
     if (pid < 0) return -1;
@@ -220,7 +243,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             queue_add(qn);
             if (now) {
                 char name[256];
-                strip_service_suffix(argv[i], name, sizeof name);
+                svc_name_for(argv[i], name, sizeof name);
                 if (svc_exists(name)) run_ctl("start", name);
             }
         }
@@ -233,7 +256,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             char qn[300], name[256];
             unit_queue_name(argv[i], qn, sizeof qn);
             queue_remove(qn);
-            strip_service_suffix(argv[i], name, sizeof name);
+            svc_name_for(argv[i], name, sizeof name);
             char svc[512];
             snprintf(svc, sizeof svc, "%s/%s.svc", shim_svc_dir(), name);
             unlink(svc);
@@ -249,7 +272,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             if (!unit_supported(argv[i])) { printf("disabled\n"); rc = 1; continue; }
             char qn[300], name[256];
             unit_queue_name(argv[i], qn, sizeof qn);
-            strip_service_suffix(argv[i], name, sizeof name);
+            svc_name_for(argv[i], name, sizeof name);
             if (queue_contains(qn) || svc_exists(name)) printf("enabled\n");
             else { printf("disabled\n"); rc = 1; }
         }
@@ -270,7 +293,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) continue;
             char name[256];
-            strip_service_suffix(argv[i], name, sizeof name);
+            svc_name_for(argv[i], name, sizeof name);
             if (!svc_exists(name)) continue;
             if ((strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload") == 0 ||
                  strcmp(verb, "reload-or-restart") == 0) && !ctl_is_active(name)) continue;
@@ -284,7 +307,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             if (argv[i][0] == '-') continue;
             seen = 1;
             char name[256];
-            strip_service_suffix(argv[i], name, sizeof name);
+            svc_name_for(argv[i], name, sizeof name);
             if (ctl_is_active(name)) printf("active\n");
             else { printf("inactive\n"); rc = 3; }
         }
@@ -299,7 +322,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             if (argv[i][0] == '-') continue;
             seen = 1;
             char name[256];
-            strip_service_suffix(argv[i], name, sizeof name);
+            svc_name_for(argv[i], name, sizeof name);
             if (!ctl_is_active(name)) rc = 3;
         }
         run_ctl("status", NULL);

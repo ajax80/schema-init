@@ -212,6 +212,31 @@ static void test_power(void) {
     ctl_log_clear(); run_as("systemctl", "status", "reboot"); assert(!ctl_log_has("reboot"));   /* a unit arg, not a verb */
 }
 
+static void test_unit_aliases(void) {
+    setup_sandbox();
+    make_ctl_stub("network-manager");
+    char svc[512];
+    snprintf(svc, sizeof svc, "%s/svc/network-manager.svc", sandbox);
+    FILE *f = fopen(svc, "w"); assert(f); fputs("name=network-manager\n", f); fclose(f);
+    assert(run("restart", "NetworkManager.service") == 0);
+    assert(ctl_log_has("restart network-manager"));
+    assert(run("is-active", "NetworkManager.service") == 0);
+    assert(run("is-enabled", "NetworkManager.service") == 0);
+    snprintf(svc, sizeof svc, "%s/svc/polkit.svc", sandbox);
+    f = fopen(svc, "w"); assert(f); fputs("name=polkit\n", f); fclose(f);
+    snprintf(svc, sizeof svc, "%s/svc/polkitd.svc", sandbox);
+    f = fopen(svc, "w"); assert(f); fputs("name=polkitd\n", f); fclose(f);
+    ctl_log_clear();
+    assert(run("start", "polkit.service") == 0);
+    assert(ctl_log_has("start polkit") && !ctl_log_has("start polkitd"));
+    snprintf(svc, sizeof svc, "%s/svc/bluetoothd.svc", sandbox);
+    f = fopen(svc, "w"); assert(f); fputs("name=bluetoothd\n", f); fclose(f);
+    write_unit("bluetooth.service");
+    assert(run("enable", "bluetooth.service") == 0);
+    assert(run("disable", "bluetooth.service") == 0);
+    assert(access(svc, F_OK) != 0);
+}
+
 static void test_passthrough(void) {
     char dir[] = "/tmp/shim-pt-XXXXXX";
     assert(mkdtemp(dir));
@@ -255,6 +280,7 @@ int main(void) {
     test_power();
     printf("power systemctl-shim tests passed\n");
     test_passthrough();
+    test_unit_aliases();
     printf("passthrough systemctl-shim tests passed\n");
     return 0;
 }
