@@ -43,6 +43,9 @@ static void setup_sandbox(void) {
     setenv("SCHEMA_STATE_DIR", state, 1);
     setenv("SCHEMA_SVC_DIR", svc, 1);
     setenv("SCHEMA_UNIT_DIR", unitdir, 1);
+    char noshm[300];
+    snprintf(noshm, sizeof noshm, "%s/no-shm", sandbox);
+    setenv("SCHEMA_SHM_PATH", noshm, 1);
 }
 
 static int run(const char *a, const char *b) {
@@ -237,6 +240,30 @@ static void test_unit_aliases(void) {
     assert(access(svc, F_OK) != 0);
 }
 
+static void test_is_active_from_shm(void) {
+    setup_sandbox();
+    char p[400];
+    snprintf(p, sizeof p, "%s/schema-ctl", sandbox);
+    FILE *f = fopen(p, "w"); assert(f);
+    fprintf(f, "#!/bin/sh\necho \"$@\" >> \"%s/ctl.log\"\nexit 1\n", sandbox);
+    fchmod(fileno(f), 0755); fclose(f);
+    setenv("SCHEMA_CTL", p, 1);
+    static schema_shm_t t;
+    memset(&t, 0, sizeof t);
+    t.seq = 7; t.count = 3;
+    snprintf(t.svc[0].name, sizeof t.svc[0].name, "network-manager"); t.svc[0].state = STATE_FULL_TRUST;
+    snprintf(t.svc[1].name, sizeof t.svc[1].name, "sleeper");         t.svc[1].state = STATE_DORMANT;
+    snprintf(t.svc[2].name, sizeof t.svc[2].name, "gone");            t.svc[2].state = STATE_EXCISED;
+    snprintf(p, sizeof p, "%s/shm", sandbox);
+    f = fopen(p, "w"); assert(f); assert(fwrite(&t, sizeof t, 1, f) == 1); fclose(f);
+    setenv("SCHEMA_SHM_PATH", p, 1);
+    assert(run("is-active", "NetworkManager.service") == 0);
+    assert(run("is-active", "sleeper") == 3);
+    assert(run("is-active", "gone") == 3);
+    assert(run("is-active", "nope") == 3);
+    assert(!ctl_log_has("status"));
+}
+
 static void test_passthrough(void) {
     char dir[] = "/tmp/shim-pt-XXXXXX";
     assert(mkdtemp(dir));
@@ -281,6 +308,7 @@ int main(void) {
     printf("power systemctl-shim tests passed\n");
     test_passthrough();
     test_unit_aliases();
+    test_is_active_from_shm();
     printf("passthrough systemctl-shim tests passed\n");
     return 0;
 }
