@@ -7,6 +7,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include "schema.h"
+#include "schema_shm.h"
 
 __attribute__((unused)) static const char *shim_state_dir(void) {
     const char *e = getenv("SCHEMA_STATE_DIR");
@@ -167,7 +171,52 @@ __attribute__((unused)) static int run_ctl(const char *verb, const char *name) {
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+__attribute__((unused)) static const char *shim_shm_path(void) {
+    const char *e = getenv("SCHEMA_SHM_PATH");
+    return (e && *e) ? e : "/dev/shm/schema-init";
+}
+
+/* PID 1 publishes its service table world-readable, so any user can ask
+ * is-active; the control socket is root-only. 1/0 = active/not, -1 = no
+ * table (PID 1 is not schema-init) or no stable read. */
+__attribute__((unused)) static int shm_is_active(const char *name) {
+    int fd = open(shim_shm_path(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || (size_t)st.st_size < sizeof(schema_shm_t)) { close(fd); return -1; }
+    const schema_shm_t *live = mmap(NULL, sizeof *live, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (live == MAP_FAILED) return -1;
+    static schema_shm_t snap;
+    const volatile uint32_t *seqp = &live->seq;
+    int tries, stable = 0;
+    for (tries = 0; tries < 1000 && !stable; tries++) {
+        uint32_t s1 = *seqp;
+        memcpy(&snap, live, sizeof snap);
+        stable = (s1 == *seqp);
+    }
+    munmap((void *)live, sizeof *live);
+    if (!stable) return -1;
+    int i, n = snap.count;
+    if (n < 0) n = 0;
+    if (n > SCHEMA_SHM_MAX) n = SCHEMA_SHM_MAX;
+    for (i = 0; i < n; i++) {
+        if (strncmp(snap.svc[i].name, name, sizeof snap.svc[i].name) != 0) continue;
+        switch (snap.svc[i].state) {
+            case STATE_FUNDAMENTAL: case STATE_FRICTION: case STATE_SETTLED:
+            case STATE_NEW_PROCESS: case STATE_RECOVERY: case STATE_FULL_TRUST:
+            case STATE_PERFECT:
+                return 1;
+            default:
+                return 0;
+        }
+    }
+    return 0;
+}
+
 __attribute__((unused)) static int ctl_is_active(const char *name) {
+    int shm = shm_is_active(name);
+    if (shm >= 0) return shm;
     char cmd[512];
     snprintf(cmd, sizeof cmd, "%s status --kv 2>/dev/null", shim_ctl());
     FILE *p = popen(cmd, "r");
