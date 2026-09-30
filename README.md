@@ -961,6 +961,31 @@ exec /sbin/schema-init
 
 ---
 
+## Crashes
+
+Fedora's initrd points `kernel.core_pattern` at `systemd-coredump`, which hands each core to a socket-activated `systemd-coredump.socket` that does not exist under schema-init, so every crash is logged as "Failed to connect to coredump service" and the core is thrown away. At boot PID 1 replaces **that** pattern, and only that one, with `schema-coredump` (apport, abrt or a pattern you set by hand is left alone), then raises its soft `RLIMIT_CORE` to the hard limit so services inherit a limit the helper can honour.
+
+Each crash gets a record in `/var/lib/schema-coredump/` (root-only, `0700`): `core.<comm>.<uid>.<time>.<pid>.meta` with the pid, signal, exe, command line, cgroup and schema-init service, and beside it a zstd core unless something says not to:
+
+| RESULT | meaning |
+|---|---|
+| `stored` | core kept |
+| `rlimit` | the process ran with `RLIMIT_CORE` below 4 KiB; it opted out |
+| `rate-limited` | the same program already left a core in the last 60 s (crash loop) |
+| `no-space` | the filesystem is within 10% of full |
+| `truncated` | the core hit a cap: `RLIMIT_CORE`, 2 GiB uncompressed, or the space budget |
+
+Old cores are removed oldest-first once they total 4 GiB; 200 records are kept. One line per crash goes to syslog (`/var/log/schema-init/journal.log`).
+
+```sh
+sudo schema-coredump --list
+sudo zstd -dc /var/lib/schema-coredump/core.foo.….zst > core && gdb /usr/bin/foo core
+```
+
+If something re-applies `sysctl.d` after boot (a `sysctl --system` service), it puts systemd-coredump back; run `schema-coredump --take-pattern` after it.
+
+---
+
 ## Logs
 
 **Init log** — schema-init writes spawn/promote/death events to stdout, which the kernel connects to the console at boot. To persist:
