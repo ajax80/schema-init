@@ -293,16 +293,11 @@ def _running(needle, tbl=None):
 
 class CardInputAcl(Check):
     name = "card-input-acl"
-    summary = "the logged-in user can open the GPU, input, and uaccess devices (SDR/FIDO)"
+    summary = "the logged-in user can open the uaccess-tagged devices (GPU, SDR/FIDO)"
     grade = SAFE
 
     def _nodes(self):
-        pats = ["dev/dri/card*", "dev/dri/renderD*", "dev/input/event*"]
-        out = set()
-        for p in pats:
-            out.update(glob.glob(os.path.join(ROOT, p)))
-        out.update(self._uaccess_db_nodes())
-        return sorted(out)
+        return sorted(set(self._uaccess_db_nodes()))
 
     def _rdev_map(self):
         """(is_block, major, minor) -> real device-node path under ROOT/dev."""

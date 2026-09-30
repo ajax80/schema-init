@@ -512,7 +512,7 @@ Each check is graded **SAFE** (auto-healed on every run) or **DEFERRED** (detect
 
 | Check | Grade | Catches |
 |---|---|---|
-| `card-input-acl` | SAFE | active user missing `uaccess` rw on `/dev/dri/card*`, `renderD*`, `/dev/input/event*` → re-applies the ACL |
+| `card-input-acl` | SAFE | active user missing rw on a node the udev DB tags `uaccess` (drm `card*`, joysticks, SDR/FIDO) → re-applies the ACL |
 | `vt-mediation` | SAFE | `Ctrl+Alt+F<n>` VT switching unmediated (the frozen-screen path) → re-arms it via schema-logind |
 | `session-single` | DEFERRED | an orphaned placeholder session — registration lost the boot race |
 | `login1-power` | DEFERRED | `login1` not answering the PowerOff/Reboot/Suspend/Hibernate/inhibitor queries PowerDevil makes on load |

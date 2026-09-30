@@ -112,6 +112,23 @@ oneshot=1
 needs_root=1
 EOF
 
+# Coredump probe: the VM boots with the kernel's default "core" pattern, as
+# blakbox does. PID 1 should take it and raise RLIMIT_CORE before the first
+# spawn, so a first-wave service already runs with an unlimited soft limit.
+printf '#!/bin/sh\ncat > /dev/null\n' > "$ROOT/usr/bin/schema-coredump"
+chmod +x "$ROOT/usr/bin/schema-coredump"
+cat > "$ROOT/usr/bin/coreprobe.sh" <<'EOF'
+#!/bin/sh
+echo "COREPROBE pattern=[$(cat /proc/sys/kernel/core_pattern)] self=[$(grep 'core file' /proc/self/limits)] pid1=[$(grep 'core file' /proc/1/limits)]" > /dev/console
+EOF
+chmod +x "$ROOT/usr/bin/coreprobe.sh"
+cat > "$ROOT/etc/schema-init/services/test-coreprobe.svc" <<'EOF'
+name=test-coreprobe
+exec=/usr/bin/coreprobe.sh
+oneshot=1
+needs_root=1
+EOF
+
 cat > "$ROOT/etc/schema-init/services/test-iso.svc" <<'EOF'
 name=test-iso
 exec=/bin/sleep
