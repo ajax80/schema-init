@@ -107,8 +107,21 @@ static inline int notify_read_cgroup(pid_t pid, char *text, size_t sz) {
 }
 
 /* A bus-name report is trusted only from root running the schema-dbus
- * binary: the broker is the one party that knows which pid owns a name. */
-#define NOTIFY_BROKER_EXE "/usr/bin/schema-dbus"
+ * binary: the broker is the one party that knows which pid owns a name.
+ * Both install prefixes are real (kickstart/RPM: /usr/bin; make install and
+ * the SP1 run script: /usr/local/bin), and a broker whose binary was replaced
+ * by an upgrade shows " (deleted)". Only root can write either directory. */
+static inline int notify_broker_exe_ok(const char *exe) {
+    static const char *const ok[] = { "/usr/bin/schema-dbus", "/usr/local/bin/schema-dbus" };
+    size_t l = strlen(exe);
+    const char *del = " (deleted)";
+    size_t dl = strlen(del);
+    if (l > dl && strcmp(exe + l - dl, del) == 0) l -= dl;
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++)
+        if (strlen(ok[i]) == l && memcmp(exe, ok[i], l) == 0) return 1;
+    return 0;
+}
+
 static inline int notify_sender_is_broker(pid_t pid, uid_t uid) {
     if (uid != 0) return 0;
     char path[64], exe[256];
@@ -116,7 +129,7 @@ static inline int notify_sender_is_broker(pid_t pid, uid_t uid) {
     ssize_t n = readlink(path, exe, sizeof exe - 1);
     if (n <= 0) return 0;
     exe[n] = '\0';
-    return strcmp(exe, NOTIFY_BROKER_EXE) == 0;
+    return notify_broker_exe_ok(exe);
 }
 
 /* Anyone may send (daemons drop to their own uids); attribution is by the

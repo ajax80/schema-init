@@ -56,6 +56,13 @@ int main(void) {
     const char *bad = "BUSOWNERPID=123456789012345678901234";       /* overlong: ignored */
     assert(notify_parse(bad, strlen(bad), &m) == 0 && m.bus_owner_pid == 0);
     assert(!notify_sender_is_broker(getpid(), getuid()));             /* not root schema-dbus */
+    assert(notify_broker_exe_ok("/usr/bin/schema-dbus"));
+    assert(notify_broker_exe_ok("/usr/local/bin/schema-dbus"));
+    assert(notify_broker_exe_ok("/usr/local/bin/schema-dbus (deleted)"));  /* upgraded under it */
+    assert(!notify_broker_exe_ok("/tmp/schema-dbus"));
+    assert(!notify_broker_exe_ok("/usr/bin/schema-dbus-evil"));
+    assert(!notify_broker_exe_ok("/usr/bin/schema-dbus (deleted) "));
+    assert(!notify_broker_exe_ok(" (deleted)"));
     printf("test_notify parse: OK\n");
 
     /* ---- cgroup attribution ---- */
