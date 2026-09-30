@@ -116,8 +116,9 @@ exit timing is identical with 250 ms and 5 s pass spacing.
 2. schema-vmtest: boot as PID 1, boot log shows `psi trigger armed`. Run the
    scratch-cgroup hog inside the VM, then check `rail.log`: `freeze` ≤ 2 s
    after hog start, `thaw` 5–6 s after hog end, exactly one `reclaim` burst.
-3. Fallback in the VM: boot with `psi=0`. Boot log shows avg10 mode, and
-   the same hog still freezes (at the old ~6 s).
+3. Fallback in the VM: boot with `psi=0`. Boot log shows avg10 mode, and the
+   rail runs normally. `psi=0` removes `/proc/pressure` entirely, so there is no
+   avg10 either and nothing freezes, exactly as today's code behaves with `psi=0`.
 4. Deploy is a reboot, since this is a PID 1 binary change. On blakbox, repeat
    the 09-30 probe and compare against the table above.
 

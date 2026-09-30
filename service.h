@@ -34,6 +34,29 @@ static inline long reclaim_target(long current, long cap) {
     return half < cap ? half : cap;
 }
 
+#define PSI_MEM_TRIGGER        "some 150000 1000000"
+#define THAW_DELAY_MS          5000
+#define RECLAIM_MIN_GAP_MS     10000
+
+enum { PRESSURE_NONE = 0, PRESSURE_ENTER = 1, PRESSURE_EXIT = -1 };
+
+/* Survival-posture hysteresis on CLOCK_MONOTONIC ms: enter on the first
+ * stalled pass, leave after THAW_DELAY_MS with no stall, however far apart
+ * the passes are. Pure — unit-tested in tests/test_pressure_step.c. */
+static inline int pressure_step(int *under, uint64_t now_ms, uint64_t *last_stall_ms, int stalled) {
+    if (stalled) {
+        *last_stall_ms = now_ms;
+        if (*under) return PRESSURE_NONE;
+        *under = 1;
+        return PRESSURE_ENTER;
+    }
+    if (*under && now_ms - *last_stall_ms >= THAW_DELAY_MS) {
+        *under = 0;
+        return PRESSURE_EXIT;
+    }
+    return PRESSURE_NONE;
+}
+
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */

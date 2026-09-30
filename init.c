@@ -65,7 +65,9 @@ static int          notify_fd = -1;
 static int          sig_fd   = -1;
 static int          watchdog_fd = -1;
 static int          system_under_pressure = 0;
-static int          pressure_clear_ticks = 0;
+static uint64_t     last_stall_ms = 0;
+static uint64_t     last_reclaim_ms = 0;
+static int          psi_fd = -1;
 static struct timespec init_start;
 
 static void start_failsafe(service_t *svc);
@@ -539,22 +541,33 @@ static double read_system_mem_pressure(void) {
     return avg10;
 }
 
-static int check_system_pressure(void) {
+static int critical_cpu_pressure(void) {
     int i;
     for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
-        if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0) {
-            double cpu_stalled = read_cpu_pressure(svc->cgroup_path);
-            if (cpu_stalled > 5.0) {
-                return 1;
-            }
-        }
-    }
-    double mem_stalled = read_system_mem_pressure();
-    if (mem_stalled > 10.0) {
-        return 1;
+        if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0 &&
+            read_cpu_pressure(svc->cgroup_path) > 5.0)
+            return 1;
     }
     return 0;
+}
+
+static uint64_t monotonic_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/* The kernel NULs the last byte written, so the trigger must go out with its
+ * terminator or the window loses a digit and the write fails EINVAL. */
+static void psi_open(void) {
+    psi_fd = open("/proc/pressure/memory", O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (psi_fd >= 0 && write(psi_fd, PSI_MEM_TRIGGER, sizeof(PSI_MEM_TRIGGER)) < 0) {
+        close(psi_fd);
+        psi_fd = -1;
+    }
+    printf("[schema-init] memory pressure: %s\n",
+           psi_fd >= 0 ? "psi trigger armed (" PSI_MEM_TRIGGER ")" : "avg10 polling");
 }
 
 static void set_cgroup_freeze(service_t *svc, int freeze) {
@@ -642,7 +655,7 @@ static void reclaim_pass(void) {
     _exit(0);
 }
 
-static void execute_survival_posture(int under_pressure) {
+static void execute_survival_posture(int under_pressure, int mem_pressure) {
     int i;
     for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
@@ -655,8 +668,13 @@ static void execute_survival_posture(int under_pressure) {
     }
     /* On memory pressure, reclaim cold pages from non-critical cgroups. Peripheral
      * services are now frozen, so their pages are cold and reclaim cleanly. */
-    if (under_pressure && read_system_mem_pressure() > 10.0)
-        reclaim_pass();
+    if (under_pressure && mem_pressure) {
+        uint64_t now = monotonic_ms();
+        if (!last_reclaim_ms || now - last_reclaim_ms >= RECLAIM_MIN_GAP_MS) {
+            last_reclaim_ms = now;
+            reclaim_pass();
+        }
+    }
 }
 
 static void execute_fuse_cmd(service_t *svc) {
@@ -2181,6 +2199,7 @@ int main(int argc, char **argv) {
     ctl_init();
     mkdir("/run/schema-init", 0755);
     notify_fd = notify_open(NOTIFY_SOCK_PATH);
+    psi_open();
     signalfd_init();
     schema_boot_log();
 
@@ -2205,8 +2224,9 @@ int main(int argc, char **argv) {
     }
 
     while (running) {
-        struct pollfd fds[3];
+        struct pollfd fds[4];
         int nfds = 0;
+        int psi_fired = 0;
         uint8_t grp_states[MAX_GROUPS];
         uint8_t svc_states[MAX_SERVICES];
         int ret = 0;
@@ -2229,12 +2249,28 @@ int main(int argc, char **argv) {
             fds[nfds].revents = 0;
             nfds++;
         }
+        if (psi_fd >= 0) {
+            fds[nfds].fd = psi_fd;
+            fds[nfds].events = POLLPRI;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
 
         if (nfds > 0) {
             ret = poll(fds, nfds, get_poll_timeout());
             if (ret > 0) {
                 int e;
                 for (e = 0; e < nfds; e++) {
+                    if (fds[e].fd == psi_fd && psi_fd >= 0) {
+                        if (fds[e].revents & (POLLERR | POLLNVAL)) {
+                            close(psi_fd);
+                            psi_fd = -1;
+                            printf("[schema-init] memory pressure: psi trigger lost, avg10 polling\n");
+                        } else if (fds[e].revents & POLLPRI) {
+                            psi_fired = 1;
+                        }
+                        continue;
+                    }
                     if (!(fds[e].revents & POLLIN)) continue;
                     if (fds[e].fd == sig_fd) {
                         struct signalfd_siginfo ssi;
@@ -2260,23 +2296,17 @@ int main(int argc, char **argv) {
             usleep(TICK_USEC);
         }
 
-        /* Check resource pressure and toggle survival posture with hysteresis */
-        int pressure = check_system_pressure();
-        if (pressure) {
-            pressure_clear_ticks = 0;
-            if (!system_under_pressure) {
-                system_under_pressure = 1;
-                execute_survival_posture(1);
-            }
-        } else {
-            if (system_under_pressure) {
-                pressure_clear_ticks++;
-                if (pressure_clear_ticks >= 8) { /* ~2 seconds of clean ticks */
-                    system_under_pressure = 0;
-                    pressure_clear_ticks = 0;
-                    execute_survival_posture(0);
-                }
-            }
+        /* Survival posture: enter on the first stalled pass, thaw after
+         * THAW_DELAY_MS without one. With a psi trigger armed, memory stall is
+         * the trigger alone; avg10's ~14 s decay would hold the thaw. */
+        {
+            int mem = psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
+            int act = pressure_step(&system_under_pressure, monotonic_ms(), &last_stall_ms,
+                                    mem || critical_cpu_pressure());
+            if (act == PRESSURE_ENTER)
+                execute_survival_posture(1, mem);
+            else if (act == PRESSURE_EXIT)
+                execute_survival_posture(0, 0);
         }
 
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;
