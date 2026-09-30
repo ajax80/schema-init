@@ -418,6 +418,20 @@ static void load_env_file(void) {
 
 /* ── zombie reaper ──────────────────────────────────────────────────── */
 
+/* Record why a run ended (wait status) and log a signal death to the rail. */
+static void note_exit(service_t *svc, int status) {
+    svc->exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    svc->term_signal = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+    svc->core_dumped = WIFSIGNALED(status) && WCOREDUMP(status);
+    svc->has_exited  = 1;
+    if (svc->term_signal) {
+        char ev[48];
+        const char *ab = sigabbrev_np(svc->term_signal);
+        snprintf(ev, sizeof ev, "killed-SIG%s%s", ab ? ab : "?", svc->core_dumped ? "-core" : "");
+        service_log(svc, ev);
+    }
+}
+
 static void reap(void) {
     int status;
     pid_t pid;
@@ -428,17 +442,7 @@ static void reap(void) {
             if (services[i].child_pid != pid) continue;
 
             services[i].child_pid  = 0;
-            services[i].exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-            services[i].term_signal = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
-            services[i].core_dumped = WIFSIGNALED(status) && WCOREDUMP(status);
-            services[i].has_exited  = 1;
-            if (services[i].term_signal) {
-                char ev[48];
-                const char *ab = sigabbrev_np(services[i].term_signal);
-                snprintf(ev, sizeof ev, "killed-SIG%s%s", ab ? ab : "?",
-                         services[i].core_dumped ? "-core" : "");
-                service_log(&services[i], ev);
-            }
+            note_exit(&services[i], status);
 
             if (services[i].flags & SVC_TIMER) {
                 /* timer fire complete: re-arm regardless of exit code (cron
@@ -737,6 +741,7 @@ static void active_kill_service(service_t *svc) {
     while (elapsed_ms < 50) {
         pid_t res = waitpid(svc->child_pid, &status, WNOHANG);
         if (res == svc->child_pid) {
+            note_exit(svc, status);
             svc->child_pid = 0;
             service_cgroup_kill(svc);
             return;
@@ -751,11 +756,15 @@ static void active_kill_service(service_t *svc) {
      * doesn't die within the window, leave the zombie for the signalfd
      * reaper and proceed so the main loop can't hang. */
     elapsed_ms = 0;
+    int reaped = 0;
     while (elapsed_ms < 50) {
-        if (waitpid(svc->child_pid, &status, WNOHANG) == svc->child_pid) break;
+        if (waitpid(svc->child_pid, &status, WNOHANG) == svc->child_pid) { reaped = 1; break; }
         usleep(1000);
         elapsed_ms++;
     }
+    /* A zombie left for the reaper no longer matches child_pid there, so the
+     * cause is recorded now: the SIGKILL we just sent. */
+    note_exit(svc, reaped ? status : SIGKILL);
     svc->child_pid = 0;
     service_cgroup_kill(svc);
 }
