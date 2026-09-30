@@ -1,6 +1,7 @@
 #include "../notify.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <sys/wait.h>
 
 static void send_dgram(const char *path, const char *msg, int pass_fd) {
     int s = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
@@ -63,6 +64,15 @@ int main(void) {
     assert(!notify_cgroup_text_matches("0::/schema-init/sshd\n", "/elsewhere/sshd"));
     assert(!notify_cgroup_text_matches("0::/\n", "/sys/fs/cgroup"));
     printf("test_notify cgroup match: OK\n");
+
+    /* ---- reading a live sender's cgroup; an exited sender can't be attributed ---- */
+    char cgt[NOTIFY_CGROUP_TEXT_MAX];
+    assert(notify_read_cgroup(getpid(), cgt, sizeof cgt) == 1 && strstr(cgt, "::"));
+    pid_t gone = fork();
+    if (gone == 0) _exit(0);
+    waitpid(gone, NULL, 0);
+    assert(notify_read_cgroup(gone, cgt, sizeof cgt) == 0);
+    printf("test_notify read cgroup: OK\n");
 
     /* ---- socket round trip: kernel-attested sender pid ---- */
     char dir[] = "/tmp/schema-notify-XXXXXX";

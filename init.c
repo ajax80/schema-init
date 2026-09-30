@@ -1334,17 +1334,26 @@ static int ctl_is_readonly(const char *line) {
  * whose cgroup (or main pid, when cgroups are unavailable) holds the sender. */
 static void notify_poll(void) {
     char buf[NOTIFY_MSG_MAX];
-    for (;;) {
+    /* The socket is world-writable, so a sender must never be able to hold
+     * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
+    for (int batch = 0; batch < NOTIFY_BATCH_MAX; batch++) {
         pid_t pid = 0;
         ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid);
         if (n == 0) return;
+        if (n == -2) return;
         if (n < 0) continue;
         struct notify_msg m;
         if (!notify_parse(buf, (size_t)n, &m)) continue;
+        char cgtext[NOTIFY_CGROUP_TEXT_MAX];
+        int have_cg = -1;                           /* read lazily, once per message */
         for (int i = 0; i < svc_count; i++) {
             service_t *svc = &services[i];
             if (!svc->notify || svc->child_pid <= 0) continue;
-            if (svc->child_pid != pid && !notify_pid_in_cgroup(pid, svc->cgroup_path)) continue;
+            if (svc->child_pid != pid) {
+                if (!svc->cgroup_path[0]) continue;
+                if (have_cg < 0) have_cg = notify_read_cgroup(pid, cgtext, sizeof cgtext);
+                if (!have_cg || !notify_cgroup_text_matches(cgtext, svc->cgroup_path)) continue;
+            }
             if (m.status[0])
                 snprintf(svc->notify_status, sizeof svc->notify_status, "%s", m.status);
             if (m.ready && !svc->notify_ready) {
@@ -1567,6 +1576,9 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 shadow_services[i].failsafe_start = services[j].failsafe_start;
                 shadow_services[i].last_pet      = services[j].last_pet;
                 shadow_services[i].ready_path_verified = services[j].ready_path_verified;
+                shadow_services[i].notify_ready = services[j].notify_ready;
+                memcpy(shadow_services[i].notify_status, services[j].notify_status,
+                       sizeof shadow_services[i].notify_status);
                 shadow_services[i].ctl_killed = services[j].ctl_killed;
                 shadow_services[i].timer_next    = services[j].timer_next;
                 shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;

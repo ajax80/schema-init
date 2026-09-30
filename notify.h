@@ -19,6 +19,8 @@
 #define NOTIFY_SOCK_PATH "/run/schema-init/notify"
 #define NOTIFY_MSG_MAX   4096
 #define NOTIFY_STATUS_MAX 128
+#define NOTIFY_BATCH_MAX  32
+#define NOTIFY_CGROUP_TEXT_MAX 4096
 
 struct notify_msg {
     int  ready;
@@ -72,17 +74,21 @@ static inline int notify_cgroup_text_matches(const char *text, const char *cg_pa
     return hl == wl || have[wl] == '/';
 }
 
-static inline int notify_pid_in_cgroup(pid_t pid, const char *cg_path) {
-    if (!cg_path || !cg_path[0]) return 0;
-    char path[64], text[512];
+/* Read /proc/<pid>/cgroup into TEXT. Returns 1 on success. A sender that has
+ * already exited cannot be attributed (its pid may be reused), so a
+ * send-and-exit helper like `systemd-notify --no-block` falls back to
+ * stable_secs; plain `systemd-notify --ready` waits and is attributed. */
+static inline int notify_read_cgroup(pid_t pid, char *text, size_t sz) {
+    char path[64];
     snprintf(path, sizeof path, "/proc/%d/cgroup", (int)pid);
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return 0;
-    ssize_t n = read(fd, text, sizeof text - 1);
+    size_t off = 0;
+    ssize_t n;
+    while (off + 1 < sz && (n = read(fd, text + off, sz - 1 - off)) > 0) off += (size_t)n;
     close(fd);
-    if (n <= 0) return 0;
-    text[n] = '\0';
-    return notify_cgroup_text_matches(text, cg_path);
+    text[off] = '\0';
+    return off > 0;
 }
 
 /* Anyone may send (daemons drop to their own uids); attribution is by the
@@ -104,8 +110,9 @@ static inline int notify_open(const char *path) {
 }
 
 /* Receive one datagram. Returns its length (NUL-terminated in buf) and the
- * sender pid, 0 when drained, -1 for a message to discard: no credentials,
- * truncated, or carrying fds (FDSTORE is not supported; they are closed). */
+ * sender pid, 0 when drained, -2 on a socket error, -1 for a message to
+ * discard: no credentials, truncated, or carrying fds (FDSTORE is not
+ * supported; they are closed). */
 static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid) {
     struct iovec iov = { buf, bufsz - 1 };
     union {
@@ -119,7 +126,7 @@ static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid) {
     mh.msg_control = ctl.b;
     mh.msg_controllen = sizeof ctl.b;
     ssize_t n = recvmsg(fd, &mh, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
-    if (n < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
+    if (n < 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -2;
     int have_cred = 0, bad = (mh.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0;
     for (struct cmsghdr *c = CMSG_FIRSTHDR(&mh); c; c = CMSG_NXTHDR(&mh, c)) {
         if (c->cmsg_level != SOL_SOCKET) continue;
