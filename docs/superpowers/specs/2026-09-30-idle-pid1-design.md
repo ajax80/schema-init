@@ -1,6 +1,6 @@
 # Idle PID 1: sleep on events and deadlines, not a 250 ms tick
 
-**Status:** Draft 2026-09-30, awaiting Jonathan's review.
+**Status:** Draft 2026-09-30, Greg review folded in (DORMANT deadline, past-deadline → 0, inotify notes). Awaiting Jonathan's approval.
 **Component:** `init.c` main loop (`get_poll_timeout`, `tick_service` STATE_FUNDAMENTAL,
 `watchdog_pet`, the survival block), `service.h` (pure helper + tests).
 
@@ -59,7 +59,8 @@ while services are transitional), boot speed, notify/bus readiness.
 
 **Tick (250 ms), as today, while any of:**
 - `system_under_pressure` (survival posture active; thaw needs 5 s silence timing)
-- any service in a non-settled state (anything but FUNDAMENTAL / PERFECT / EXCISED)
+- any service in a non-settled state (anything but FUNDAMENTAL / PERFECT / EXCISED /
+  DORMANT)
 - any software-watchdog service live (`watchdog_timeout_ms > 0`)
 - any `failsafe_pid > 0` (short-lived; keeps the 500 ms failsafe timeout exact)
 - `psi_fd < 0` (avg10 fallback: unchanged behaviour on psi-less kernels)
@@ -72,9 +73,15 @@ while services are transitional), boot speed, notify/bus readiness.
   - calendar timers converted from CLOCK_REALTIME and **capped at 60 s**, so an NTP step
     or an RTC-less Pi syncing its clock can't oversleep a calendar fire
 - each pending eviction deadline
+- each DORMANT service's `dormant_until` (300–3600 s backoff, `init.c:963`). Without this,
+  one backed-off service would pin the tick for up to an hour (Greg)
 - ready_path backstop: `READY_BACKSTOP_MS` = 30 000 (see §2)
 - hardware watchdog pet: `wd_pet_ms` (see §3)
 - critical CPU pressure check: 2 000 ms while any `priority=critical` service is live (see §4)
+
+A deadline at or before now returns **0** (non-blocking pass), never a negative or
+wrapped value: `poll(-1)` would block forever (Greg). The computation is in signed
+64-bit ms.
 
 The arithmetic goes in a pure function in `service.h` (the same pattern as `pressure_step()`):
 it takes the deadline inputs and "now" values and returns ms. Tested in `tests/test_next_wake.c`
@@ -92,6 +99,10 @@ with no fds and no clocks.
   share a watch; the kernel dedups it and returns the same wd. A spurious event costs a
   handful of `access()` calls. Stale watches (service died) are harmless for the same reason.
   The set of watched dirs is bounded by config.
+- `IN_Q_OVERFLOW` (wd −1) and `IN_IGNORED` (a watch dropped because its dir was deleted or
+  unmounted) need no special handling. They are just more events, so they trigger the same
+  full recheck, silently. A recreated dir isn't re-watched until its service re-verifies
+  (respawn → FUNDAMENTAL) or SIGHUP. The backstop covers the gap.
 - `ready_recheck(svc)` is the existing readiness-lost body lifted out of `tick_service`
   unchanged: log `readiness-lost`, kill, failsafe, dormant/excise backoff.
 - **Backstop:** `ready_recheck` also runs every `READY_BACKSTOP_MS`. That covers the cases
@@ -143,7 +154,7 @@ The ready_path backstop (30 s) adds 0.03/s everywhere.
 ## Verification
 
 - **Unit:** `tests/test_next_wake.c` covers every clamp and min branch, including the
-  calendar 60 s cap, an empty deadline set (→ `-1`) and a tick-forcing condition.
+  calendar 60 s cap, past deadline → 0, DORMANT deadline, an empty deadline set (→ `-1`) and a tick-forcing condition.
 - **vmtest (schema-vmtest skill), PID 1 under QEMU:**
   - settled wakes/60 s via `voluntary_ctxt_switches` (expect ≤15 vs ~240)
   - `on_active_sec=20` timer fires on time in an otherwise-idle VM (the regression for
@@ -163,5 +174,7 @@ The ready_path backstop (30 s) adds 0.03/s everywhere.
   other `tick_service` state check that compares against a clock gets audited in commit 1:
   `grep clock_gettime init.c`, each hit either feeds `next_wake_ms` or runs only in a
   non-settled state.
+- **Suspend:** not a fleet concern (Suspend/Hibernate disabled by design). Timers already
+  run on CLOCK_MONOTONIC and this spec doesn't change which clock anything uses.
 - **Stale ready_path semantics:** `access()` on a socket path only proves the inode exists,
   the same as today. inotify doesn't change what "ready" means.
