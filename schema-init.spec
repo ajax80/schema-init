@@ -15,6 +15,8 @@ BuildRequires:  dbus-devel
 BuildRequires:  libzstd-devel
 BuildRequires:  pkgconf-pkg-config
 Requires:       python3
+Recommends:     python3-dbus
+Recommends:     python3-gobject-base
 
 # Only these two are built and tested. COPR has no armv7hl target; 32-bit ARM
 # is a manual cross-build via `make armhf`.
@@ -65,6 +67,9 @@ make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_syscon
 make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 install -Dm0755 scripts/schema-bootok %{buildroot}%{_bindir}/schema-bootok
 install -Dm0755 scripts/schema-doctor.py %{buildroot}/usr/local/bin/schema-doctor
+install -Dm0755 scripts/schema-logind.py %{buildroot}/usr/local/bin/schema-logind.py
+install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schema-session-register
+install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
 
 %package migrate
@@ -157,6 +162,20 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_libexecdir}/schema-init/wizard/qml/*.qml
 %{_sysconfdir}/xdg/autostart/schema-wizard.desktop
 
+%pre
+# The running login1 stub re-execs itself on SIGHUP, keeping its pid and the
+# DRM/VT fds the desktop session depends on. Stubs older than that handoff
+# die on SIGHUP instead, so only reload one whose file knows the signal.
+if grep -qs SIGHUP /usr/local/bin/schema-logind.py; then
+    touch /run/schema-logind.hup-ok 2>/dev/null || :
+fi
+
+%post
+if [ -e /run/schema-logind.hup-ok ]; then
+    rm -f /run/schema-logind.hup-ok
+    pkill -HUP -f '^(/usr/bin/)?python3(\.[0-9]+)? /usr/local/bin/schema-logind\.py( |$)' || :
+fi
+
 %files
 %license LICENSE
 %doc README.md docs/
@@ -169,6 +188,9 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_bindir}/schema-snapshot
 %{_bindir}/schema-bootok
 /usr/local/bin/schema-doctor
+/usr/local/bin/schema-logind.py
+/usr/local/bin/schema-session-register
+/usr/local/bin/schema-session-unregister
 %{_sysconfdir}/grub.d/09_schema_fallback
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
@@ -195,6 +217,8 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
   (off by default), hardened reference .svc files
 - exec= with inline arguments is refused by both parsers
 - login1 stub accepts SetWallMessage
+- The login1 stub and its session register/unregister helpers ship in the
+  package; an update reloads the running stub in place with SIGHUP
 
 * Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
 - kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
