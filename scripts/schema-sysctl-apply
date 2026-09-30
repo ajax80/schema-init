@@ -1,0 +1,9 @@
+#!/bin/sh
+# Re-apply /usr/lib, /run and /etc sysctl.d after switch-root, as
+# systemd-sysctl.service does: the initramfs only applied the copies frozen
+# into it at build time, and keys of modules loaded since were never set.
+# sysctl --system puts systemd-coredump back in core_pattern; take it again.
+
+/usr/sbin/sysctl --system
+[ -x /usr/bin/schema-coredump ] && /usr/bin/schema-coredump --take-pattern
+exit 0

@@ -70,6 +70,7 @@ install -Dm0755 scripts/schema-doctor.py %{buildroot}/usr/local/bin/schema-docto
 install -Dm0755 scripts/schema-logind.py %{buildroot}/usr/local/bin/schema-logind.py
 install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schema-session-register
 install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
+install -Dm0755 scripts/schema-sysctl-apply %{buildroot}%{_libexecdir}/schema-init/schema-sysctl-apply
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
 
 %package migrate
@@ -191,6 +192,8 @@ fi
 /usr/local/bin/schema-logind.py
 /usr/local/bin/schema-session-register
 /usr/local/bin/schema-session-unregister
+%dir %{_libexecdir}/schema-init
+%{_libexecdir}/schema-init/schema-sysctl-apply
 %{_sysconfdir}/grub.d/09_schema_fallback
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
@@ -219,6 +222,8 @@ fi
 - login1 stub accepts SetWallMessage
 - The login1 stub and its session register/unregister helpers ship in the
   package; an update reloads the running stub in place with SIGHUP
+- sysctl.d is re-applied after switch-root (sysctl.svc on installed and
+  migrated boxes), then core_pattern is taken back for schema-coredump
 
 * Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
 - kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
