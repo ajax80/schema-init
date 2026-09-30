@@ -50,6 +50,19 @@ int main(void) {
     assert(notify_parse(longs, strlen(longs), &m) == 1 && strlen(m.status) == NOTIFY_STATUS_MAX - 1);
     const char *e = "STATUS=a\tb\x1b[2Jc";                /* control chars neutralized */
     assert(notify_parse(e, strlen(e), &m) == 1 && !strchr(m.status, '\x1b') && !strchr(m.status, '\t'));
+    const char *bn = "BUSNAME=org.freedesktop.NetworkManager\nBUSOWNERPID=1234";
+    assert(notify_parse(bn, strlen(bn), &m) == 1 && !m.ready);
+    assert(strcmp(m.busname, "org.freedesktop.NetworkManager") == 0 && m.bus_owner_pid == 1234);
+    const char *bad = "BUSOWNERPID=123456789012345678901234";       /* overlong: ignored */
+    assert(notify_parse(bad, strlen(bad), &m) == 0 && m.bus_owner_pid == 0);
+    assert(!notify_sender_is_broker(getpid(), getuid()));             /* not root schema-dbus */
+    assert(notify_broker_exe_ok("/usr/bin/schema-dbus"));
+    assert(notify_broker_exe_ok("/usr/local/bin/schema-dbus"));
+    assert(notify_broker_exe_ok("/usr/local/bin/schema-dbus (deleted)"));  /* upgraded under it */
+    assert(!notify_broker_exe_ok("/tmp/schema-dbus"));
+    assert(!notify_broker_exe_ok("/usr/bin/schema-dbus-evil"));
+    assert(!notify_broker_exe_ok("/usr/bin/schema-dbus (deleted) "));
+    assert(!notify_broker_exe_ok(" (deleted)"));
     printf("test_notify parse: OK\n");
 
     /* ---- cgroup attribution ---- */
@@ -83,18 +96,19 @@ int main(void) {
     assert(fd >= 0);
     char buf[NOTIFY_MSG_MAX];
     pid_t pid = 0;
-    assert(notify_recv(fd, buf, sizeof buf, &pid) == 0);          /* empty: drained */
+    uid_t uid = 0;
+    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid) == 0);          /* empty: drained */
     send_dgram(path, "READY=1", -1);
-    ssize_t n = notify_recv(fd, buf, sizeof buf, &pid);
-    assert(n == 7 && pid == getpid() && strcmp(buf, "READY=1") == 0);
+    ssize_t n = notify_recv(fd, buf, sizeof buf, &pid, &uid);
+    assert(n == 7 && pid == getpid() && uid == getuid() && strcmp(buf, "READY=1") == 0);
     printf("test_notify recv creds: OK\n");
 
     /* ---- a message carrying fds is discarded and the fd is not leaked ---- */
     int probe = open("/dev/null", O_RDONLY | O_CLOEXEC);
     send_dgram(path, "READY=1\nFDSTORE=1", probe);
     close(probe);
-    assert(notify_recv(fd, buf, sizeof buf, &pid) == -1);
-    assert(notify_recv(fd, buf, sizeof buf, &pid) == 0);
+    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid) == -1);
+    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid) == 0);
     int nxt = open("/dev/null", O_RDONLY | O_CLOEXEC);
     assert(nxt == probe);                                          /* lowest fd free again */
     close(nxt);
