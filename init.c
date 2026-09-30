@@ -841,7 +841,7 @@ static void tick_service(service_t *svc,
             }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
-                if (svc->notify && svc->notify_ready) {
+                if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
                     ready = 1;
                 } else if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
                     ready = 1;
@@ -1375,7 +1375,8 @@ static void notify_poll(void) {
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
     for (int batch = 0; batch < NOTIFY_BATCH_MAX; batch++) {
         pid_t pid = 0;
-        ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid);
+        uid_t uid = (uid_t)-1;
+        ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid, &uid);
         if (n == 0) return;
         if (n == -2) return;
         if (n < 0) continue;
@@ -1383,6 +1384,24 @@ static void notify_poll(void) {
         if (!notify_parse(buf, (size_t)n, &m)) continue;
         char cgtext[NOTIFY_CGROUP_TEXT_MAX];
         int have_cg = -1;                           /* read lazily, once per message */
+        if (m.busname[0]) {
+            /* "this name now has an owner": only the broker may say so, and it
+             * counts for the service whose cgroup holds the owning pid. */
+            if (m.bus_owner_pid <= 0 || !notify_sender_is_broker(pid, uid)) continue;
+            for (int i = 0; i < svc_count; i++) {
+                service_t *svc = &services[i];
+                if (!svc->ready_bus_name[0] || svc->child_pid <= 0 || svc->notify_ready) continue;
+                if (strcmp(svc->ready_bus_name, m.busname) != 0) continue;
+                if (svc->child_pid != m.bus_owner_pid) {
+                    if (!svc->cgroup_path[0]) continue;
+                    if (have_cg < 0) have_cg = notify_read_cgroup(m.bus_owner_pid, cgtext, sizeof cgtext);
+                    if (!have_cg || !notify_cgroup_text_matches(cgtext, svc->cgroup_path)) continue;
+                }
+                svc->notify_ready = 1;
+                service_log(svc, "bus-name-ready");
+            }
+            continue;
+        }
         for (int i = 0; i < svc_count; i++) {
             service_t *svc = &services[i];
             if (!svc->notify || svc->child_pid <= 0) continue;

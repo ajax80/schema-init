@@ -976,6 +976,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 int v = atoi(val);
                 if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
             }
+            else if (strcmp(line, "ready_bus_name") == 0)
+                snprintf(svc->ready_bus_name, sizeof svc->ready_bus_name, "%s", val);
             else if (strcmp(line, "notify") == 0)
                 svc->notify = atoi(val) ? 1 : 0;
             else if (strcmp(line, "ready_path") == 0)
@@ -1196,6 +1198,8 @@ int service_load_one(const char *path, service_t *svc) {
             int v = atoi(val);
             if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
         }
+        else if (strcmp(line, "ready_bus_name") == 0)
+            snprintf(svc->ready_bus_name, sizeof svc->ready_bus_name, "%s", val);
         else if (strcmp(line, "notify") == 0)
             svc->notify = atoi(val) ? 1 : 0;
         else if (strcmp(line, "ready_path") == 0)

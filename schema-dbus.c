@@ -251,6 +251,24 @@ static void release_activation(const char *name) {
     free(held);
 }
 
+/* Tell PID 1 a well-known system-bus name now has an owner, and which pid
+   holds it: a service with ready_bus_name= promotes on this (the bus-name
+   readiness of systemd Type=dbus). Best-effort; PID 1 may not listen. */
+static void report_name_to_pid1(const char *name, pid_t owner_pid) {
+    static int fd = -1;
+    if (!g_system_bus || name[0] == ':' || owner_pid <= 0) return;
+    if (fd < 0) fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0) return;
+    struct sockaddr_un a;
+    memset(&a, 0, sizeof a);
+    a.sun_family = AF_UNIX;
+    snprintf(a.sun_path, sizeof a.sun_path, "%s", "/run/schema-init/notify");
+    char msg[320];
+    int len = snprintf(msg, sizeof msg, "BUSNAME=%s\nBUSOWNERPID=%d", name, (int)owner_pid);
+    if (len > 0 && (size_t)len < sizeof msg)
+        (void)sendto(fd, msg, (size_t)len, MSG_DONTWAIT | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a);
+}
+
 static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
     (void)ctx;
     for (int i = 0; i < n; i++) {
@@ -288,6 +306,7 @@ static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
                 DBusMessage *s = dbus_message_new_signal(SDBUS_DRIVER_PATH, SDBUS_DRIVER_NAME, "NameAcquired");
                 dbus_message_append_args(s, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
                 enqueue_signal(o, s); dbus_message_unref(s);
+                report_name_to_pid1(name, o->pid);
             }
             release_activation(name);          /* deliver anything held for this name */
         }

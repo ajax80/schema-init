@@ -214,6 +214,7 @@ typedef struct {
     int              oom_score_adj;    /* -1000..1000, written before exec; inherited by children */
     int              notify;           /* notify=1: gets NOTIFY_SOCKET; READY=1 promotes (fallback: stable_secs) */
     int              notify_ready;     /* READY=1 received since the last spawn */
+    char             ready_bus_name[256]; /* promote once this system-bus name has an owner in our cgroup */
     char             notify_status[128]; /* last STATUS= from the daemon */
     int              ctl_killed;       /* 1 after schema-ctl stop/restart SIGTERM; readiness check paused until respawn */
     pid_t            failsafe_pid;     /* PID of running failsafe command, 0 if none */

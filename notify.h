@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -28,6 +29,8 @@ struct notify_msg {
     int  stopping;
     int  watchdog;
     char status[NOTIFY_STATUS_MAX];
+    char busname[256];          /* BUSNAME= (from the schema-dbus broker only) */
+    int  bus_owner_pid;         /* BUSOWNERPID= */
 };
 
 /* Parse one datagram. Unknown keys are ignored, as sd_notify expects.
@@ -43,6 +46,18 @@ static inline int notify_parse(const char *buf, size_t len, struct notify_msg *m
         else if (l == 11 && !memcmp(p, "RELOADING=1", 11)) { m->reloading = 1; any = 1; }
         else if (l == 10 && !memcmp(p, "STOPPING=1", 10))  { m->stopping = 1; any = 1; }
         else if (l == 10 && !memcmp(p, "WATCHDOG=1", 10))  { m->watchdog = 1; any = 1; }
+        else if (l > 8 && l - 8 < sizeof m->busname && !memcmp(p, "BUSNAME=", 8)) {
+            memcpy(m->busname, p + 8, l - 8);
+            m->busname[l - 8] = '\0';
+            any = 1;
+        }
+        else if (l > 12 && l < 24 && !memcmp(p, "BUSOWNERPID=", 12)) {
+            char tmp[16];
+            memcpy(tmp, p + 12, l - 12);
+            tmp[l - 12] = '\0';
+            m->bus_owner_pid = atoi(tmp);
+            any = 1;
+        }
         else if (l > 7 && !memcmp(p, "STATUS=", 7)) {
             size_t sl = l - 7;
             if (sl >= NOTIFY_STATUS_MAX) sl = NOTIFY_STATUS_MAX - 1;
@@ -91,6 +106,19 @@ static inline int notify_read_cgroup(pid_t pid, char *text, size_t sz) {
     return off > 0;
 }
 
+/* A bus-name report is trusted only from root running the schema-dbus
+ * binary: the broker is the one party that knows which pid owns a name. */
+#define NOTIFY_BROKER_EXE "/usr/bin/schema-dbus"
+static inline int notify_sender_is_broker(pid_t pid, uid_t uid) {
+    if (uid != 0) return 0;
+    char path[64], exe[256];
+    snprintf(path, sizeof path, "/proc/%d/exe", (int)pid);
+    ssize_t n = readlink(path, exe, sizeof exe - 1);
+    if (n <= 0) return 0;
+    exe[n] = '\0';
+    return strcmp(exe, NOTIFY_BROKER_EXE) == 0;
+}
+
 /* Anyone may send (daemons drop to their own uids); attribution is by the
  * kernel-attested pid, checked against the service's cgroup. */
 static inline int notify_open(const char *path) {
@@ -113,7 +141,7 @@ static inline int notify_open(const char *path) {
  * sender pid, 0 when drained, -2 on a socket error, -1 for a message to
  * discard: no credentials, truncated, or carrying fds (FDSTORE is not
  * supported; they are closed). */
-static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid) {
+static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid, uid_t *uid) {
     struct iovec iov = { buf, bufsz - 1 };
     union {
         char b[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int) * 16)];
@@ -134,6 +162,7 @@ static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid) {
             struct ucred uc;
             memcpy(&uc, CMSG_DATA(c), sizeof uc);
             *pid = uc.pid;
+            *uid = uc.uid;
             have_cred = 1;
         } else if (c->cmsg_type == SCM_RIGHTS) {
             int nfd = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
