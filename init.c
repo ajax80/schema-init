@@ -1956,6 +1956,11 @@ int main(int argc, char **argv) {
     const char *svc_dir = SVC_DIR;
     int have_dir = 0;
 
+    /* An initrd's systemd runs with umask 0 and switch-root hands that to us;
+     * every service would inherit it and create world-writable files. */
+    if (getpid() == 1)
+        umask(022);
+
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
