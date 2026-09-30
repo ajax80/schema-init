@@ -1,5 +1,6 @@
 name=network-manager
 exec=/usr/sbin/NetworkManager
+dep=sysctl
 args=--no-daemon
 dep=dbus
 oneshot=0
