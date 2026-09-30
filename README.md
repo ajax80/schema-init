@@ -29,8 +29,6 @@ systemd isn't just PID 1 — it's a constellation of always-on daemons: `journal
 
 This isn't theory or a benchmark rig — it's a salvaged Dell Inspiron (Intel i3, 4 GB) that swapped constantly under systemd and now runs a full desktop with room to spare under schema-init. Older and low-RAM machines benefit the most: the daemons you delete are the exact ones a small machine can least afford.
 
-**PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every footprint figure in this README names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](#pid-1-rss--every-measurement).
-
 ---
 
 ## How it works
@@ -75,6 +73,8 @@ Three probe families:
 | **F8** | Before first spawn | Binary exists, deps stable, memory safe, permissions met |
 | **F9** | After death | Retry budget, cooldown window, memory, escalation path |
 | **F6** | After recovery fails | Last-chance: can we even attempt a restart? |
+
+FULL_TRUST promotes to FUNDAMENTAL on the first readiness signal the service has: `READY=1` over `sd_notify` (`notify=1`), its bus name appearing (`ready_bus_name=`), a path appearing (`ready_path=`), and otherwise surviving `stable_secs` (default 10).
 
 Services marked `critical=1` never reach EXCISED — they enter DORMANT and retry at 1-hour intervals indefinitely. Non-critical services excise after 5 dormant cycles (~75 minutes). A dep marked `critical=1` that is EXCISED still blocks its dependents. A non-critical EXCISED dep is skipped — dependents proceed without it.
 
@@ -201,16 +201,16 @@ When the schema-init entry has booted cleanly a few times, make it default (set 
 
 ## Repository layout
 
-If you're reading the source to evaluate it, start here. The whole init is ~2,500 lines of C with no external dependencies.
+If you're reading the source to evaluate it, start here. PID 1 is ~4,800 lines of C (the files below plus `caps.c`, `ns.c` and a few headers) with no external dependencies.
 
 **Read these first, in this order:**
 
 | File | Lines | What it is |
 |------|-------|------------|
-| `init.c` | ~1,370 | PID 1 itself. Mounts pseudo-filesystems, reaps children, runs the supervise loop, handles signals and shutdown. The spine — everything below is called from here. |
-| `schema.c` / `schema.h` | ~70 | The weight-state machine. Pure state transitions; a service's "weight" is the popcount of its probe flag word. This is *the schema* — the single source of truth for what every state means. |
-| `service.c` / `service.h` | ~680 | Parses `.svc` files, spawns services, runs the F8/F9/F6 probes, and drives the recovery → backoff → excision arc. |
-| `group.c` / `group.h` | ~150 | Aggregates a `.grp` of services into one worst-case state, so a stack (network, display) promotes and fails as a unit. |
+| `init.c` | ~2,400 | PID 1 itself. Mounts pseudo-filesystems, reaps children, runs the supervise loop, handles signals and shutdown. The spine — everything below is called from here. |
+| `schema.c` / `schema.h` | ~140 | The weight-state machine. Pure state transitions; a service's "weight" is the popcount of its probe flag word. This is *the schema* — the single source of truth for what every state means. |
+| `service.c` / `service.h` | ~1,650 | Parses `.svc` files, spawns services, runs the F8/F9/F6 probes, and drives the recovery → backoff → excision arc. |
+| `group.c` / `group.h` | ~170 | Aggregates a `.grp` of services into one worst-case state, so a stack (network, display) promotes and fails as a unit. |
 
 **Supporting binaries:**
 
@@ -220,6 +220,12 @@ If you're reading the source to evaluate it, start here. The whole init is ~2,50
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
 | `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
 | `schema-systemctl.c` / `systemctl_shim.h` | The `systemctl(1)` compatibility shim. A drop-in that intercepts systemd verbs so packaged RPM/deb scriptlets succeed on a schema-init box: lifecycle verbs drive `schema-ctl`, `enable`/`preset` queue enable-intent to `/var/lib/schema-init/pending.list` for the importer (`distros/fedora-installer/migrate/schema-import.py`, which drains that queue and translates `.service` units into native `.svc`). See [Running packaged software](#running-packaged-software). |
+| `caps.c` / `ns.c` | Service hardening applied in the child before exec: the `keep_caps` capability bounding set and `no_new_privs` (`caps.c`), and the private mount namespace behind `private_tmp` / `protect_system` / `protect_home` (`ns.c`). See [Hardening](#hardening). |
+| `notify.h` | The `sd_notify` readiness socket (`/run/schema-init/notify`): parsing, kernel-attested sender credentials, cgroup attribution. |
+| `schema-coredump.c` / `coredump.h` | The `core_pattern` pipe helper that keeps crashes. See [Crashes](#crashes). |
+| `schema-udev.c` + `*_id.h`, `udev_*.h`, `disk_links.h` | The native device manager. See [schema-udev](#schema-udev). |
+| `schema-dbus.c` + `sdbus_*.h` | The native D-Bus broker for the system and session buses. See [The system bus itself](#the-system-bus-itself-schema-dbus). |
+| `scripts/schema-snapshot`, `scripts/schema-bootok` | Boot snapshots and the boot-success guard ([docs/boot-success-guard.md](docs/boot-success-guard.md)). |
 | `schema_shm.h` | The shared-memory interface — PID 1 publishes live service state here so external tools can read it without polling the socket. |
 | `schema-board.c` | Read-only board that renders every service's weight-state in its LED colour, reading the shm export above rather than the control socket — so it keeps working when the socket or the desktop is wedged. `--once` prints one frame and exits. Reads a world-readable `0644` shm segment, so unlike `schema-ctl` it **needs no root**. `--tty /dev/tty8` paints a dedicated console; note that VT switching does not currently repaint on a graphical system — see [Recovery console](#recovery-console). Increments 1–2 of the limp-mode recovery surface (`docs/superpowers/specs/2026-06-14-limp-mode-design.md`). |
 
@@ -292,6 +298,14 @@ oneshot=1
 | `on_boot_sec` | `0` | Makes the service a **timer**: seconds after boot before the first fire (`0` = at boot). Implies `oneshot=1` — the service runs, exits, and re-arms. The analog of systemd's `OnBootSec=`. See [Timers](#timers) below. |
 | `on_active_sec` | `0` | Timer period: seconds after each completion before the next fire. Measured from completion (like systemd's `OnUnitInactiveSec=`), so a slow run never overlaps itself. Implies `oneshot=1`. |
 | `start_timeout_sec` | `90` for oneshots, `0` otherwise | Max seconds a service may sit in `FULL_TRUST` without promoting before it is killed and routed into the recovery arc — so a hung boot service can't stall its dependents. **Defaults on for oneshots** (the only services that can hang the chain; daemons promote via `stable_secs`). **Timers are exempt** (may run long). `0` disables. The analog of systemd's `TimeoutStartSec=`. |
+| `user` | — | Run as this user (and its primary group, with its supplementary groups) instead of root. Resolved when the file is loaded. |
+| `env` | — | `KEY=VALUE` set in the child before exec (repeat for several, up to 16). There is no shell, so no expansion. |
+| `no_excise` | `0` | Like `critical=1` for the excision gate only: the service backs off in DORMANT forever instead of reaching EXCISED, without hard-blocking its dependents the way a critical dep does. |
+| `fuse` | `0` | Quarantine fuse: if any dependency enters FRICTION or EXCISED, kill this service and excise it at once (for something that must not run on a broken foundation). |
+| `fuse_cmd` | — | Shell command (`sh -c`) run when the fuse trips. |
+| `failsafe` | — | Shell command (`sh -c`) run when the service dies unexpectedly or hits `start_timeout_sec`: drive an actuator to a safe position, raise an alarm. `$INSTANCE` is set for template instances. One at a time per service. |
+| `failsafe_timeout_ms` | `500` | The failsafe command is SIGKILLed after this long. |
+| `ready_poll_hz` | loop rate | How often a FUNDAMENTAL service's `ready_path` liveness check runs, when it should be slower than the main loop. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
 A full example using readiness probes:
@@ -305,6 +319,22 @@ needs_root=1
 stable_secs=2
 ready_path=/run/dbus/system_bus_socket
 ```
+
+### Hardening
+
+Per-service confinement, applied in the child between fork and exec. Each is opt-in per `.svc`; a host-wide switch can default them on.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `no_new_privs` | `0` | `PR_SET_NO_NEW_PRIVS`: setuid binaries and file capabilities can no longer raise privilege in the service or anything it runs. |
+| `keep_caps` | — | Comma-separated capability names (`CAP_NET_BIND_SERVICE,CAP_SYS_TIME`); every other capability is dropped from the bounding set. An unknown name refuses the load. |
+| `private_tmp` | `0` | Fresh `/tmp` and `/var/tmp` for this service (private mount namespace). |
+| `protect_system` | `0` | `1`: `/usr`, `/boot`, `/efi` read-only. `full`: `/etc` too. |
+| `protect_home` | `0` | `/home`, `/root` and `/run/user` replaced by empty read-only mounts. |
+
+**Host default.** `/etc/schema-init/hardening-default` containing `on`, or `schema.hardening_default=1` on the kernel command line (which wins, both ways), turns `no_new_privs`, `private_tmp`, `protect_system=1` and `protect_home` on for every service that doesn't set them. An explicit `key=0` opts a service out. A defaulted `private_tmp` or `protect_home` that would hide the service's own `exec` or `ready_path` is dropped with a log line; an explicit one refuses the load. The switch is off unless you turn it on. `schema-ctl status <svc>` shows each knob's value and whether it came from the file, the default, or was dropped.
+
+A hardening step that fails aborts the spawn (`HARDENING FAILED` in the service log) rather than running the service unconfined.
 
 ### Service templates
 
@@ -391,7 +421,7 @@ A timer is a oneshot that re-arms on a `CLOCK_MONOTONIC` deadline instead of sta
 
 The period is measured from completion, so a slow job never overlaps itself. Fires on the 250 ms tick (±1 tick) — cron-class precision, not sub-second. For real-time work use `watchdog_timeout_ms` and the control loop instead.
 
-**Wall-clock timers** — set `on_calendar=HH:MM` to fire at a fixed local time every day, the way you'd write a cron line. This is the form you want for "3am backup", "midnight log rotation", "nightly cert renewal":
+**Wall-clock timers** — set `on_calendar=HH:MM` to fire at a fixed local time every day, `on_calendar=Mon HH:MM` for weekly, or `on_calendar=15 HH:MM` for a day of the month, the way you'd write a cron line. This is the form you want for "3am backup", "midnight log rotation", "nightly cert renewal":
 
 ```ini
 name=nightly-backup
@@ -400,7 +430,7 @@ needs_root=1
 on_calendar=03:00     # fire at 03:00 local time, every day
 ```
 
-`on_calendar` re-evaluates the wall clock on every fire, so it tracks `CLOCK_REALTIME` (not monotonic) — DST shifts and NTP clock steps self-correct each cycle rather than drifting. Time is local (`/etc/localtime`). Malformed values (`want HH:MM`, `00:00`–`23:59`) are logged and ignored, never scheduled.
+`on_calendar` re-evaluates the wall clock on every fire, so it tracks `CLOCK_REALTIME` (not monotonic) — DST shifts and NTP clock steps self-correct each cycle rather than drifting. Time is local (`/etc/localtime`). Malformed values are logged and ignored, never scheduled.
 
 **Catch-up after downtime** — by default a job missed while the machine was off simply runs at its next occurrence. Add `persistent=1` to run it **once at boot** instead, if its scheduled time passed while the system was down (systemd `Persistent=true`):
 
@@ -412,9 +442,9 @@ on_calendar=03:00
 persistent=1          # if 03:00 was missed while off, run at next boot
 ```
 
-Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if the most recent `HH:MM` occurrence is newer than that stamp, the timer fires immediately (logged `timer-catchup`) instead of waiting. A never-run timer is seeded rather than replayed, so enabling one doesn't trigger a surprise fire on first boot. `persistent=1` only applies to `on_calendar` timers; on an interval timer it's logged and ignored.
+Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if the most recent scheduled occurrence is newer than that stamp, the timer fires immediately (logged `timer-catchup`) instead of waiting. A never-run timer is seeded rather than replayed, so enabling one doesn't trigger a surprise fire on first boot. `persistent=1` only applies to `on_calendar` timers; on an interval timer it's logged and ignored.
 
-**Not yet implemented:** richer calendar forms (day-of-week, multiple times per day). See `docs/timers-design.md`.
+**Not yet implemented:** several times per day, ranges and lists in one key. See `docs/timers-design.md`.
 
 ---
 
@@ -789,6 +819,8 @@ C10 is the deepest sleep state on Haswell silicon. Reaching it requires the CPU 
 sudo schema-ctl status          # full state dump for all services
 sudo schema-ctl status --json   # machine-parseable JSON — for supervisory loops and IEC 62304 audit
 sudo schema-ctl status --kv     # flat key=value — grep-friendly
+sudo schema-ctl status <name>   # one service: state, last exit, readiness, each hardening knob and its source
+sudo schema-ctl timing          # per-service spawn→ready cost, boot critical path first
 sudo schema-ctl list            # names and current states only
 sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service
@@ -798,6 +830,7 @@ sudo schema-ctl reload          # re-read the services directory (rejected if ne
 sudo schema-ctl reload --evict  # reload + SIGTERM any running service no longer present in config
 sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
 sudo schema-ctl reset [<name>]  # reset restart/dormant counts and re-queue failed services
+sudo schema-ctl reboot          # orderly shutdown sweep, then reboot (also: poweroff)
 ```
 
 The socket is `chmod 0600` — root only. Build alongside the init binary:
