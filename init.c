@@ -14,6 +14,8 @@
 #include "schema.h"
 #include "service.h"
 #include "notify.h"
+#include "coredump.h"
+#include <sys/resource.h>
 #include "group.h"
 #include "schema_shm.h"
 #include <sys/mman.h>
@@ -2123,6 +2125,15 @@ int main(int argc, char **argv) {
     /* Before the control socket opens or a single service spawns, so the
      * raised limit covers every descriptor PID 1 will ever hold. */
     service_raise_pid1_nofile();
+    /* With the pattern ours, every service inherits a core limit the helper
+     * can honour; a process that wants no core still lowers its own. */
+    if (coredump_take_pattern() == 1) {
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_CORE, &rl) == 0 && rl.rlim_cur < rl.rlim_max) {
+            rl.rlim_cur = rl.rlim_max;
+            setrlimit(RLIMIT_CORE, &rl);
+        }
+    }
     setup_signals();
 
     {

@@ -13,7 +13,7 @@ DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
 DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev schema-dbus schema-systemctl
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-dbus schema-systemctl
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -30,7 +30,7 @@ OBJS    = $(SRCS:.c=.o)
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h notify.h
+CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h notify.h coredump.h
 
 all: $(BINS)
 
@@ -51,6 +51,9 @@ schema-systemctl: schema-systemctl.c systemctl_shim.h
 
 schema-subreaper: schema-subreaper.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+schema-coredump: schema-coredump.c coredump.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lzstd
 
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
@@ -198,7 +201,7 @@ srpm:
 	ls -1 $(RELDIR)/*.src.rpm
 
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-udev schema-systemctl udev-parity libatomic_asneeded.a
+	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-systemctl udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 
@@ -210,7 +213,7 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test:
+test: schema-coredump
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o /tmp/schema-test-tiering && /tmp/schema-test-tiering
 	$(CC) $(CFLAGS) tests/test_calendar.c -o /tmp/schema-test-calendar && /tmp/schema-test-calendar
@@ -243,6 +246,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o /tmp/schema-test-cdrommedia && /tmp/schema-test-cdrommedia
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
 	$(CC) $(CFLAGS) tests/test_notify.c -o /tmp/schema-test-notify && /tmp/schema-test-notify
+	$(CC) $(CFLAGS) tests/test_coredump.c -o /tmp/schema-test-coredump && /tmp/schema-test-coredump
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess -lacl && /tmp/schema-test-uaccess
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o /tmp/schema-test-uaccess-apply -lacl && /tmp/schema-test-uaccess-apply
 	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o /tmp/schema-test-sdbus-policy && /tmp/schema-test-sdbus-policy

@@ -11,6 +11,7 @@ __pycache__/
 *.pyc
 schema-subreaper
 schema-board
+schema-coredump
 schema-udev
 schema-dbus
 schema-systemctl

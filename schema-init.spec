@@ -12,6 +12,7 @@ BuildRequires:  make
 BuildRequires:  glibc-static
 BuildRequires:  libacl-devel
 BuildRequires:  dbus-devel
+BuildRequires:  libzstd-devel
 BuildRequires:  pkgconf-pkg-config
 Requires:       python3
 
@@ -54,7 +55,7 @@ overwrite a service file a running system depends on.
 # but retiring systemd-udevd is a manual, hardware-specific cutover, not a
 # package upgrade. It is built here (migrate_bins) only so the -migrate
 # subpackage below can ship it; the base %%files list never references it.
-%global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board
+%global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump
 %global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
 %make_build BINS="%{core_bins} %{migrate_bins}"
 
@@ -164,6 +165,7 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_bindir}/schema-subreaper
 %{_bindir}/schema-journal-sink
 %{_bindir}/schema-board
+%{_bindir}/schema-coredump
 %{_bindir}/schema-snapshot
 %{_bindir}/schema-bootok
 /usr/local/bin/schema-doctor
