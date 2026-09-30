@@ -263,13 +263,28 @@ static void dispatch(struct uevent *ev) {
              * Dry-run stays shadow-only; import there still borrows udevd. */
             (void)pre_rules_n;
             const char *db_authority = g_live ? UDEV_DB_DIR : SCHEMA_UDEV_RULES_DIR;
+            /* The record about to be replaced holds the rule links this device
+             * owned last time; live mode diffs against it to retire stale ones. */
+            char oldlinks[DEVCTX_SYMLINKS_MAX][UE_VAL_MAX];
+            int nold = 0;
+            if (g_live) {
+                char recname[128], recpath[512], oldtags[1][UE_KEY_MAX];
+                int nt = 0;
+                if (udev_db_filename(&shadow_ev, recname, sizeof recname) == 0 &&
+                    (size_t)snprintf(recpath, sizeof recpath, "%s/%s",
+                                     db_authority, recname) < sizeof recpath)
+                    udev_db_read_links_tags(recpath, oldlinks, &nold, DEVCTX_SYMLINKS_MAX,
+                                            oldtags, &nt, 1);
+            }
+            const char *syms[DEVCTX_SYMLINKS_MAX];
+            int nsyms = 0;
             if (strcmp(action, "remove") == 0) {
                 udev_db_remove(db_authority, &shadow_ev);
             } else {
-                const char *syms[DEVCTX_SYMLINKS_MAX];
                 const char *tgs[DEVCTX_TAGS_MAX];
                 for (int i = 0; i < rc.nsym;  i++) syms[i] = rc.symlinks[i];
                 for (int i = 0; i < rc.ntags; i++) tgs[i]  = rc.tags[i];
+                nsyms = rc.nsym;
                 udev_db_write_full(db_authority, &shadow_ev, kernel_n,
                                    syms, rc.nsym, tgs, rc.ntags);
             }
@@ -278,6 +293,8 @@ static void dispatch(struct uevent *ev) {
              * event on the udev monitor group so live consumers see hotplug. */
             if (g_live) {
                 node_symlink_farm(&shadow_ev, action);
+                rule_links_update("/dev", uevent_get(&shadow_ev, "DEVNAME"),
+                                  oldlinks, nold, syms, nsyms);
                 if (strcmp(action, "remove") != 0) {
                     if (dn) node_apply_perms(dn, rc.owner, rc.group, rc.mode);
                     run_ctx_runs(&rc);
