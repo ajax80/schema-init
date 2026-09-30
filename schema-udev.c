@@ -263,19 +263,6 @@ static void dispatch(struct uevent *ev) {
              * Dry-run stays shadow-only; import there still borrows udevd. */
             (void)pre_rules_n;
             const char *db_authority = g_live ? UDEV_DB_DIR : SCHEMA_UDEV_RULES_DIR;
-            /* The record about to be replaced holds the rule links this device
-             * owned last time; live mode diffs against it to retire stale ones. */
-            char oldlinks[DEVCTX_SYMLINKS_MAX][UE_VAL_MAX];
-            int nold = 0;
-            if (g_live) {
-                char recname[128], recpath[512], oldtags[1][UE_KEY_MAX];
-                int nt = 0;
-                if (udev_db_filename(&shadow_ev, recname, sizeof recname) == 0 &&
-                    (size_t)snprintf(recpath, sizeof recpath, "%s/%s",
-                                     db_authority, recname) < sizeof recpath)
-                    udev_db_read_links_tags(recpath, oldlinks, &nold, DEVCTX_SYMLINKS_MAX,
-                                            oldtags, &nt, 1);
-            }
             const char *syms[DEVCTX_SYMLINKS_MAX];
             int nsyms = 0;
             if (strcmp(action, "remove") == 0) {
@@ -293,8 +280,11 @@ static void dispatch(struct uevent *ev) {
              * event on the udev monitor group so live consumers see hotplug. */
             if (g_live) {
                 node_symlink_farm(&shadow_ev, action);
-                rule_links_update("/dev", uevent_get(&shadow_ev, "DEVNAME"),
-                                  oldlinks, nold, syms, nsyms);
+                char devid[128];
+                if (udev_db_filename(&shadow_ev, devid, sizeof devid) == 0)
+                    rule_links_update("/dev", SCHEMA_UDEV_LINK_CLAIMS, devid,
+                                      uevent_get(&shadow_ev, "DEVNAME"),
+                                      rc.link_priority, syms, nsyms);
                 if (strcmp(action, "remove") != 0) {
                     if (dn) node_apply_perms(dn, rc.owner, rc.group, rc.mode);
                     run_ctx_runs(&rc);
@@ -305,12 +295,14 @@ static void dispatch(struct uevent *ev) {
         run_rules("/sys", devpath, dn, ev);
         const char *sub = uevent_get(ev, "SUBSYSTEM");
         int is_block = sub && strcmp(sub, "block") == 0;
-        /* Live mode owns the real trees; dry-run stays isolated. The udev db is
-         * always shadow-only for now (real /run/udev/data write is deferred to
-         * E3: its record format needs S:/G:/Q:/V:/I: lines, not just E:). */
-        const char *disk_base = g_live ? "/dev/disk" : SCHEMA_DISK_DIR;
+        /* disk_links' fixed trees only feed the dry-run shadow now. Live, the
+         * rules' SYMLINK+= set (a superset: by-id, by-designator too) owns
+         * /dev/disk through the claims registry; writing both would let the
+         * last writer override the registry's pick for a shared name. */
+        const char *disk_base = SCHEMA_DISK_DIR;
+        int shadow_disk = is_block && !g_live;
         if (strcmp(action, "remove") == 0) {
-            if (is_block) disk_links_gc(disk_base, SCHEMA_UDEV_DB_DIR, ev);
+            if (shadow_disk) disk_links_gc(disk_base, SCHEMA_UDEV_DB_DIR, ev);
             uaccess_clear(SCHEMA_UACCESS_DIR, ev);
             if (g_live) {
                 int uid = uaccess_active_uid(SEAT0_PATH);
@@ -324,7 +316,7 @@ static void dispatch(struct uevent *ev) {
             udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
         } else {
             udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
-            if (is_block && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
+            if (shadow_disk && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
                 disk_links_apply(disk_base, ev);
             if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0) {
                 uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev, ua_tagged);   /* audit trail */
