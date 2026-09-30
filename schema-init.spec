@@ -120,8 +120,10 @@ The Fedora KDE desktop session the installer ISO lays down: the autologin
 launcher, the session-bus wrapper, the direct kwin/plasmashell session start,
 the XDG-autostart runner, the plasmashell watchdog and the session env hooks.
 Not pulled in by the base package: a box running its own session scripts
-keeps them. The session bus runs schema-dbus only when
-/etc/schema-init/dbus-broker exists, stock dbus-daemon otherwise.
+keeps them. Removing this package removes these files, and a rail whose
+plasma-autologin.svc execs them loses its desktop. The session bus runs
+schema-dbus only when /etc/schema-init/dbus-broker exists, stock
+dbus-daemon otherwise.
 
 %files session
 /usr/local/bin/schema-plasma-autologin.sh

@@ -477,11 +477,21 @@ class Manifest:
                    d.get("links"), d.get("snapshot"))
 
 
+def _rpm_owned(rel):
+    try:
+        return subprocess.run(["rpm", "--root", ROOT, "-qf", "/" + rel.lstrip("/")],
+                              capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
 def uninstall(run=subprocess.run):
     m = Manifest.load()
     restore_grub(m.grub, run=run)
     removed = 0
     for rel in m.files:
+        if _rpm_owned(rel):
+            continue
         try:
             os.remove(P(rel))
             removed += 1
@@ -594,12 +604,13 @@ def install_unit_helpers(manifest, dry_run=False):
         if src is None:
             continue
         dst = P("usr/local/bin/" + name)
-        if not dry_run:
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(src, dst)
-            os.chmod(dst, 0o755)
-            manifest.add_file("/usr/local/bin/" + name)
-        installed.append(name)
+        if not _rpm_owned("/usr/local/bin/" + name):
+            if not dry_run:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                os.chmod(dst, 0o755)
+                manifest.add_file("/usr/local/bin/" + name)
+            installed.append(name)
         try:
             for m in _LOCALBIN_RE.finditer(open(src, encoding="utf-8", errors="ignore").read()):
                 if m.group(1) not in seen:
@@ -792,7 +803,7 @@ def install_session_support(profile, manifest, dry_run=False):
     done = []
     for src_rel, dst_rel, mode in SESSION_SUPPORT:
         src = find_source(src_rel)
-        if not src:
+        if not src or _rpm_owned(dst_rel):
             continue
         done.append("/" + dst_rel)
         if dry_run:
