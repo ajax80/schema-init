@@ -173,7 +173,7 @@ fi
 %post
 if [ -e /run/schema-logind.hup-ok ]; then
     rm -f /run/schema-logind.hup-ok
-    pkill -HUP -f '^(/usr/bin/)?python3 /usr/local/bin/schema-logind\.py( |$)' || :
+    pkill -HUP -f '^(/usr/bin/)?python3(\.[0-9]+)? /usr/local/bin/schema-logind\.py( |$)' || :
 fi
 
 %files
