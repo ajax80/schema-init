@@ -2,6 +2,7 @@
 #include "notify.h"
 #include "caps.h"
 #include "ns.h"
+#include "coredump.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -522,6 +523,7 @@ int service_spawn(service_t *svc) {
         char c;
         service_reset_child_sigmask();
         service_restore_child_nofile();
+        coredump_raise_if_ours();
         setsid();
         close(sync[1]);
         read(sync[0], &c, 1);

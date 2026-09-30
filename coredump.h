@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/resource.h>
 
 #define COREDUMP_HELPER      "/usr/bin/schema-coredump"
 #define COREDUMP_PATTERN     "|" COREDUMP_HELPER " %P %u %g %s %t %c %d"
@@ -53,6 +54,24 @@ static inline int coredump_take_pattern(void) {
     ssize_t w = write(fd, COREDUMP_PATTERN, strlen(COREDUMP_PATTERN));
     close(fd);
     return w == (ssize_t)strlen(COREDUMP_PATTERN) ? 1 : -1;
+}
+
+/* Soft RLIMIT_CORE up to the hard limit, but only while the pattern is ours:
+ * a host whose initrd never set one boots with the kernel's "core", and
+ * sysctl.svc hands it to schema-coredump later, so each spawn checks. */
+static inline void coredump_raise_if_ours(void) {
+    char cur[256];
+    struct rlimit rl;
+    int fd = open(COREDUMP_PATTERN_SYS, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    ssize_t n = read(fd, cur, sizeof cur - 1);
+    close(fd);
+    if (n < 0) return;
+    cur[n] = '\0';
+    if (coredump_pattern_classify(cur) != 2) return;
+    if (getrlimit(RLIMIT_CORE, &rl) != 0 || rl.rlim_cur >= rl.rlim_max) return;
+    rl.rlim_cur = rl.rlim_max;
+    setrlimit(RLIMIT_CORE, &rl);
 }
 
 /* "0::/schema-init/<svc>[/...]" -> <svc>; empty when not a service. */

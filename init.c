@@ -2127,13 +2127,8 @@ int main(int argc, char **argv) {
     service_raise_pid1_nofile();
     /* With the pattern ours, every service inherits a core limit the helper
      * can honour; a process that wants no core still lowers its own. */
-    if (coredump_take_pattern() == 1) {
-        struct rlimit rl;
-        if (getrlimit(RLIMIT_CORE, &rl) == 0 && rl.rlim_cur < rl.rlim_max) {
-            rl.rlim_cur = rl.rlim_max;
-            setrlimit(RLIMIT_CORE, &rl);
-        }
-    }
+    if (coredump_take_pattern() == 1)
+        coredump_raise_if_ours();
     setup_signals();
 
     {
