@@ -73,9 +73,32 @@ install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/sch
 install -Dm0755 scripts/schema-sysctl-apply %{buildroot}%{_libexecdir}/schema-init/schema-sysctl-apply
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
 
+%package daemons
+Summary:   schema-udev and schema-dbus, schema-init's udev and D-Bus daemons
+Requires:  %{name} = %{version}-%{release}
+Conflicts: %{name}-migrate < %{version}-%{release}
+%description daemons
+The reclaimed udev daemon and D-Bus broker. A box whose udev or D-Bus was
+flipped onto them (ISO install, migrate wizard) needs these kept current;
+installing them changes nothing until a flip points a service at them.
+
+%post daemons
+md5sum %{_bindir}/schema-udev | cut -d' ' -f1 > %{_sysconfdir}/schema-init/schema-udev.ship-md5
+
+%postun daemons
+if [ $1 -eq 0 ]; then
+    rm -f %{_sysconfdir}/schema-init/schema-udev.ship-md5
+fi
+
+%files daemons
+%{_bindir}/schema-udev
+%{_bindir}/schema-dbus
+%ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
+
 %package migrate
 Summary:   Guided in-place Fedora KDE onboarding onto schema-init (prebuilt)
 Requires:  %{name} = %{version}-%{release}
+Requires:  %{name}-daemons = %{version}-%{release}
 Requires:  python3
 Requires:  btrfs-progs
 %description migrate
@@ -87,7 +110,6 @@ from the schema-migrate CLI. Front-ended by schema-wizard. The D-Bus broker
 /etc/schema-init/dbus-broker exists, and nothing here creates it.
 
 %post migrate
-md5sum %{_bindir}/schema-udev | cut -d' ' -f1 > %{_sysconfdir}/schema-init/schema-udev.ship-md5
 if alternatives --display systemctl >/dev/null 2>&1; then
     alternatives --install /usr/bin/systemctl systemctl %{_bindir}/schema-systemctl 100
 else
@@ -99,7 +121,6 @@ fi
 
 %postun migrate
 if [ $1 -eq 0 ]; then
-    rm -f %{_sysconfdir}/schema-init/schema-udev.ship-md5
     if alternatives --display systemctl >/dev/null 2>&1; then
         alternatives --remove systemctl %{_bindir}/schema-systemctl
     elif [ -f /usr/bin/systemctl.real ]; then
@@ -123,10 +144,8 @@ fi
 %dir %{_libexecdir}/schema-init
 %dir %{_datadir}/%{name}/migrate
 %{_bindir}/schema-migrate
-%{_bindir}/schema-udev
 %{_bindir}/schema-systemctl
 %{_bindir}/schema-import
-%{_bindir}/schema-dbus
 %{_libexecdir}/schema-init/schema-flip-apply
 %{_libexecdir}/schema-init/schema-udev-flip-arm.sh
 %{_libexecdir}/schema-init/schema-udev-flip-backup.sh
@@ -140,7 +159,6 @@ fi
 %{_datadir}/%{name}/migrate/prevent-set.list
 %{_datadir}/%{name}/migrate/distros
 %{_datadir}/%{name}/migrate/scripts
-%ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
 %config(noreplace) %{_sysconfdir}/sudoers.d/schema-wizard
 %dir %{_sysconfdir}/schema-dbus
 %config(noreplace) %{_sysconfdir}/schema-dbus/masked
@@ -222,6 +240,8 @@ fi
 - login1 stub accepts SetWallMessage
 - The login1 stub and its session register/unregister helpers ship in the
   package; an update reloads the running stub in place with SIGHUP
+- schema-udev and schema-dbus move to a -daemons subpackage, so ISO-installed
+  boxes can keep them current without the -migrate systemctl shim
 - sysctl.d is re-applied after switch-root (sysctl.svc on installed and
   migrated boxes), then core_pattern is taken back for schema-coredump
 
