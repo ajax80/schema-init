@@ -15,6 +15,8 @@ BuildRequires:  dbus-devel
 BuildRequires:  libzstd-devel
 BuildRequires:  pkgconf-pkg-config
 Requires:       python3
+Recommends:     python3-dbus
+Recommends:     python3-gobject-base
 
 # Only these two are built and tested. COPR has no armv7hl target; 32-bit ARM
 # is a manual cross-build via `make armhf`.
@@ -65,6 +67,9 @@ make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_syscon
 make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 install -Dm0755 scripts/schema-bootok %{buildroot}%{_bindir}/schema-bootok
 install -Dm0755 scripts/schema-doctor.py %{buildroot}/usr/local/bin/schema-doctor
+install -Dm0755 scripts/schema-logind.py %{buildroot}/usr/local/bin/schema-logind.py
+install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schema-session-register
+install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
 
 %package migrate
@@ -169,6 +174,9 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_bindir}/schema-snapshot
 %{_bindir}/schema-bootok
 /usr/local/bin/schema-doctor
+/usr/local/bin/schema-logind.py
+/usr/local/bin/schema-session-register
+/usr/local/bin/schema-session-unregister
 %{_sysconfdir}/grub.d/09_schema_fallback
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
@@ -195,6 +203,8 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
   (off by default), hardened reference .svc files
 - exec= with inline arguments is refused by both parsers
 - login1 stub accepts SetWallMessage
+- The login1 stub and its session register/unregister helpers ship in the
+  package, so logind fixes reach installed boxes on update
 
 * Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
 - kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
