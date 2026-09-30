@@ -1,6 +1,6 @@
 # PSI Triggers for the Survival Executive
 
-**Status:** Draft — for Jonathan's review. No code yet.
+**Status:** Approved 2026-09-30 (Jonathan + Greg review folded in). Build TDD, vmtest as PID 1, reboot to deploy.
 **Component:** `init.c` survival executive (`check_system_pressure`, `execute_survival_posture`, main loop).
 
 ## Problem
@@ -33,7 +33,11 @@ is not the gap. The average is. Polling faster cannot fix it.
 ### 1. Arm one system-wide memory trigger at startup
 
 After `notify_open()`: open `/proc/pressure/memory` `O_RDWR|O_NONBLOCK|O_CLOEXEC`,
-write `"some 150000 1000000"` (NUL included). Success → global `psi_fd`, added
+write `"some 150000 1000000"` **including the trailing NUL** (`strlen + 1` bytes).
+The kernel's `psi_write` sets the last byte written to NUL. Verified on blakbox
+09-30: `strlen` bytes chop the window to `100000` and the write fails `EINVAL`
+(under the 500 ms minimum), which would put every boot silently on the fallback.
+Success → global `psi_fd`, added
 to the main `poll()` set with `POLLPRI` (`fds[3]` → `fds[4]`).
 
 Any failure (no `CONFIG_PSI`, `psi=0`, older kernel, `EINVAL`) → `psi_fd = -1`
@@ -58,20 +62,30 @@ fast entry would freeze but never reclaim. Pass the reason in:
 `psi_fired || avg10 > 10.0`. Rate-limit `reclaim_pass()` to one per 10 s
 (`CLOCK_MONOTONIC`), since faster entry/exit cycles would otherwise fork one per cycle.
 
-### 4. Exit: hysteresis counts trigger silence
+### 4. Exit: monotonic trigger silence
 
-Today's rule (8 clean passes ≈ 2 s) stays, but a pass is clean only when there
-was no trigger event **and** avg10 ≤ 10. While the stall continues, the trigger
-fires every 1 s window and keeps resetting the counter. Once stall time falls
-under 150 ms/s the events stop, and the posture clears once avg10 has also
-dropped. A falling average should thaw in seconds rather than ~14 s, but that
-is untested (open question 2).
+Replace the 8-pass counter with `CLOCK_MONOTONIC` time. `last_stall_ms` is set
+on every pass that sees pressure. The posture clears when
+`now_ms - last_stall_ms >= THAW_DELAY_MS` (5000), independent of loop frequency.
 
-Extract the state step as a pure function, e.g.
-`int pressure_step(int *under, int *clean, int fired, double avg10)` → returns
-enter / exit / none. Unit-test it with no I/O: enter on fired; enter on avg10;
-no exit while fired within 8 passes; exit after 8 silent low passes; the psi
-fallback case behaves exactly like today.
+What counts as pressure on a pass:
+- `psi_fd >= 0`: a trigger event, or critical-cgroup `cpu.pressure` > 5.
+  **avg10 is ignored for exit** because its decay (~14 s measured) is the lag
+  being removed.
+- `psi_fd < 0` (fallback): today's `check_system_pressure()` (avg10 > 10 or
+  critical cpu), with the same 5 s timestamp rule instead of passes.
+
+While the stall continues the trigger fires every 1 s window, so
+`last_stall_ms` never ages past 5 s. Thaw is expected ~5 s after the stall
+falls under 150 ms/s, compared with ~14 s today. While under pressure,
+`get_poll_timeout()` already returns 250 ms, so the loop wakes to see the deadline.
+
+Extract the state step as a pure function:
+`int pressure_step(int *under, uint64_t now_ms, uint64_t *last_stall_ms, int stalled)`
+→ enter / exit / none, where the caller computes `stalled` from the mode rules
+above. Unit-test it with no I/O: enter on the first stalled pass; no exit
+before 5000 ms of silence; exit at 5000 ms; a stall at 4999 ms re-arms; and
+exit timing is identical with 250 ms and 5 s pass spacing.
 
 ### 5. Event handling details
 
@@ -101,18 +115,16 @@ fallback case behaves exactly like today.
 1. `make test`: new `pressure_step` unit test, and `test_reclaim` unchanged.
 2. schema-vmtest: boot as PID 1, boot log shows `psi trigger armed`. Run the
    scratch-cgroup hog inside the VM, then check `rail.log`: `freeze` ≤ 2 s
-   after hog start, `thaw` ≤ 5 s after hog end, exactly one `reclaim` burst.
+   after hog start, `thaw` 5–6 s after hog end, exactly one `reclaim` burst.
 3. Fallback in the VM: boot with `psi=0`. Boot log shows avg10 mode, and
    the same hog still freezes (at the old ~6 s).
 4. Deploy is a reboot, since this is a PID 1 binary change. On blakbox, repeat
    the 09-30 probe and compare against the table above.
 
-## Open questions for Jonathan
+## Decisions (2026-09-30)
 
-1. Threshold `some 150000 1000000` (150 ms stalled per 1 s) is the kernel-doc
-   example and fired on the first window here. An interactive desktop might
-   want `some 100000 1000000`, and a laptop on HDD (DBox) might want looser.
-   Start with the one we measured?
-2. Faster thaw means peripherals (chronyd, avahi, docker, nfs-server) cycle
-   freeze/thaw more readily under bursty load. Is ≥ 2 s silence enough, or
-   should thaw wait longer (e.g. 5 s) than entry?
+1. Threshold `some 150000 1000000`, as measured. Hardcoded constant; promote
+   to config only if per-host data asks for it.
+2. Thaw after 5 s of monotonic silence rather than 2 s. Bursty loads
+   (compiles, GC) breathe on a 1–3 s rhythm, and flapping would reset NFS/docker
+   clients and jitter chronyd.
