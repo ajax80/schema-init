@@ -13,6 +13,7 @@
 
 #include "schema.h"
 #include "service.h"
+#include "notify.h"
 #include "group.h"
 #include "schema_shm.h"
 #include <sys/mman.h>
@@ -58,6 +59,7 @@ static volatile int running   = 1;
 static volatile int do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
+static int          notify_fd = -1;
 static int          sig_fd   = -1;
 static int          watchdog_fd = -1;
 static int          system_under_pressure = 0;
@@ -820,7 +822,9 @@ static void tick_service(service_t *svc,
             }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
-                if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
+                if (svc->notify && svc->notify_ready) {
+                    ready = 1;
+                } else if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
                     ready = 1;
                     svc->ready_path_verified = 1;
                 } else if (now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->stable_secs) {
@@ -1324,6 +1328,32 @@ static int ctl_is_readonly(const char *line) {
     return (n == 6 && memcmp(line, "status", 6) == 0)
         || (n == 4 && memcmp(line, "list", 4) == 0)
         || (n == 6 && memcmp(line, "timing", 6) == 0);
+}
+
+/* Drain the sd_notify socket. A message counts only for a notify=1 service
+ * whose cgroup (or main pid, when cgroups are unavailable) holds the sender. */
+static void notify_poll(void) {
+    char buf[NOTIFY_MSG_MAX];
+    for (;;) {
+        pid_t pid = 0;
+        ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid);
+        if (n == 0) return;
+        if (n < 0) continue;
+        struct notify_msg m;
+        if (!notify_parse(buf, (size_t)n, &m)) continue;
+        for (int i = 0; i < svc_count; i++) {
+            service_t *svc = &services[i];
+            if (!svc->notify || svc->child_pid <= 0) continue;
+            if (svc->child_pid != pid && !notify_pid_in_cgroup(pid, svc->cgroup_path)) continue;
+            if (m.status[0])
+                snprintf(svc->notify_status, sizeof svc->notify_status, "%s", m.status);
+            if (m.ready && !svc->notify_ready) {
+                svc->notify_ready = 1;
+                service_log(svc, "notify-ready");
+            }
+            break;
+        }
+    }
 }
 
 static void ctl_poll(void) {
@@ -2071,6 +2101,8 @@ int main(int argc, char **argv) {
 
     shm_init();
     ctl_init();
+    mkdir("/run/schema-init", 0755);
+    notify_fd = notify_open(NOTIFY_SOCK_PATH);
     signalfd_init();
     schema_boot_log();
 
@@ -2095,7 +2127,7 @@ int main(int argc, char **argv) {
     }
 
     while (running) {
-        struct pollfd fds[2];
+        struct pollfd fds[3];
         int nfds = 0;
         uint8_t grp_states[MAX_GROUPS];
         uint8_t svc_states[MAX_SERVICES];
@@ -2109,6 +2141,12 @@ int main(int argc, char **argv) {
         }
         if (ctl_fd >= 0) {
             fds[nfds].fd = ctl_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+        if (notify_fd >= 0) {
+            fds[nfds].fd = notify_fd;
             fds[nfds].events = POLLIN;
             fds[nfds].revents = 0;
             nfds++;
@@ -2133,6 +2171,8 @@ int main(int argc, char **argv) {
                         }
                     } else if (fds[e].fd == ctl_fd) {
                         ctl_poll();
+                    } else if (fds[e].fd == notify_fd) {
+                        notify_poll();
                     }
                 }
             } else if (ret < 0 && errno != EINTR) {
@@ -2214,6 +2254,10 @@ int main(int argc, char **argv) {
         ;
     shut_log("SIGKILL broadcast");
 
+    if (notify_fd >= 0) {
+        close(notify_fd);
+        unlink(NOTIFY_SOCK_PATH);
+    }
     if (ctl_fd >= 0) {
         close(ctl_fd);
         unlink(CTL_SOCK_PATH);

@@ -210,6 +210,9 @@ typedef struct {
     int              ready_poll_hz;    /* polling rate for ready_path check at runtime */
     int              ready_check_ticks; /* tick counter for ready_path polling */
     int              ready_path_verified; /* 1 if ready_path has been verified at least once */
+    int              notify;           /* notify=1: gets NOTIFY_SOCKET; READY=1 promotes (fallback: stable_secs) */
+    int              notify_ready;     /* READY=1 received since the last spawn */
+    char             notify_status[128]; /* last STATUS= from the daemon */
     int              ctl_killed;       /* 1 after schema-ctl stop/restart SIGTERM; readiness check paused until respawn */
     pid_t            failsafe_pid;     /* PID of running failsafe command, 0 if none */
     struct timespec  failsafe_start;   /* CLOCK_MONOTONIC when failsafe execution began */

@@ -5,8 +5,8 @@ service files. Phase 2 of the compat translator: the runtime importer.
 The shim (schema-systemctl) records `enable`/`preset` intent to
 pending.list; this tool reads each queued unit, parses its [Service]/[Install]
 sections, and emits a schema `.svc` on 80/20 field coverage. Ratholes
-(Type=notify, templates, missing ExecStart) are logged and skipped, never
-half-translated.
+(forking/dbus types, templates, missing ExecStart) are logged and skipped,
+never half-translated. Type=notify maps to notify=1 (PID 1 speaks sd_notify).
 
 Stdlib only. MIGRATE_ROOT prefixes filesystem paths (tests inject a temp tree);
 SCHEMA_STATE_DIR / SCHEMA_SVC_DIR override the queue and output locations, and
@@ -172,7 +172,7 @@ def unit_to_svc(name, sections):
     """Translate parsed unit sections into schema .svc text.
 
     Returns the .svc file body (str). Raises Skip(reason) for units we refuse
-    to half-translate (Type=notify, template, no ExecStart).
+    to half-translate (Type=forking/dbus, template, no ExecStart).
     """
     if "@" in name:
         raise Skip("template unit (%s) — instances unsupported" % name)
@@ -181,8 +181,6 @@ def unit_to_svc(name, sections):
     inst = sections.get("Install", [])
 
     stype = _get_last(svc, "Type").lower()
-    if stype in ("notify", "notify-reload"):
-        raise Skip("Type=%s — needs sd_notify readiness protocol" % stype)
     if stype in ("forking", "dbus"):
         raise Skip("Type=%s — schema-init tracks only the direct child, "
                    "cannot supervise a %s daemon" % (stype, stype))
@@ -208,6 +206,8 @@ def unit_to_svc(name, sections):
 
     if stype == "oneshot":
         lines.append("oneshot=1")
+    elif stype in ("notify", "notify-reload"):
+        lines.append("notify=1")
 
     # systemd defaults Restart=no; only always/on-* opt into auto-restart.
     restart = _get_last(svc, "Restart").lower()

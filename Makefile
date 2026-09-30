@@ -30,7 +30,7 @@ OBJS    = $(SRCS:.c=.o)
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h
+CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h notify.h
 
 all: $(BINS)
 
@@ -242,6 +242,7 @@ test:
 	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o /tmp/schema-test-cdromid && /tmp/schema-test-cdromid
 	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o /tmp/schema-test-cdrommedia && /tmp/schema-test-cdrommedia
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
+	$(CC) $(CFLAGS) tests/test_notify.c -o /tmp/schema-test-notify && /tmp/schema-test-notify
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess -lacl && /tmp/schema-test-uaccess
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o /tmp/schema-test-uaccess-apply -lacl && /tmp/schema-test-uaccess-apply
 	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o /tmp/schema-test-sdbus-policy && /tmp/schema-test-sdbus-policy
