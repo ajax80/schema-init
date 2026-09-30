@@ -140,6 +140,18 @@ static unsigned long long room(int dfd) {
     return avail > reserve ? avail - reserve : 0;
 }
 
+/* Writers hold the directory lock, so a temp file seen under it belongs to a
+ * helper that was killed mid-write. */
+static void drop_stale_tmp(int dfd) {
+    int fd = dup(dfd);
+    DIR *d = fd >= 0 ? fdopendir(fd) : NULL;
+    if (!d) { if (fd >= 0) close(fd); return; }
+    struct dirent *de;
+    while ((de = readdir(d)))
+        if (!strncmp(de->d_name, ".tmp.", 5)) unlinkat(dfd, de->d_name, 0);
+    closedir(d);
+}
+
 static int store_core(int dfd, struct crash *c) {
     char tmp[64];
     snprintf(tmp, sizeof tmp, ".tmp.%ld", c->pid);
@@ -341,6 +353,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     flock(dfd, LOCK_EX);
+    drop_stale_tmp(dfd);
 
     if (c.climit < 4096)
         snprintf(c.reason, sizeof c.reason, "rlimit");

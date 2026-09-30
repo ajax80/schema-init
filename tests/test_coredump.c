@@ -156,6 +156,17 @@ int main(void) {
     assert(count(".zst") == 1 && newest_meta_has("CORE_RAW_BYTES=1048576\n") && newest_meta_has("TRUNCATED=1\n"));
     printf("test_coredump cap: OK\n");
 
+    /* a helper killed mid-write leaves a temp file; the next run removes it */
+    char stale[600];
+    snprintf(stale, sizeof stale, "%s/.tmp.99999", dir);
+    FILE *sf = fopen(stale, "w");
+    fputs("partial", sf);
+    fclose(sf);
+    sleep(1);
+    assert(run_helper(victim, 0, now + 5, 4096) == 0);
+    assert(access(stale, F_OK) != 0);
+    printf("test_coredump stale tmp: OK\n");
+
     /* a directory someone else can write is refused */
     chmod(dir, 0777);
     assert(run_helper(victim, ~0ULL, now + 4, 4096) == 1);
