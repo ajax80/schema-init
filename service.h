@@ -210,6 +210,8 @@ typedef struct {
     int              ready_poll_hz;    /* polling rate for ready_path check at runtime */
     int              ready_check_ticks; /* tick counter for ready_path polling */
     int              ready_path_verified; /* 1 if ready_path has been verified at least once */
+    int              oom_adj_set;      /* oom_score_adj= given in the .svc */
+    int              oom_score_adj;    /* -1000..1000, written before exec; inherited by children */
     int              notify;           /* notify=1: gets NOTIFY_SOCKET; READY=1 promotes (fallback: stable_secs) */
     int              notify_ready;     /* READY=1 received since the last spawn */
     char             notify_status[128]; /* last STATUS= from the daemon */
@@ -222,6 +224,9 @@ typedef struct {
     int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
+    int              term_signal;      /* signal that ended the last run (0 = exited) */
+    int              core_dumped;      /* that signal produced a core */
+    int              has_exited;       /* a run has ended at least once */
     int              cpu_limit_pct;    /* 1-100: % of one CPU core via cpu.max; 0 = unlimited */
     long             mem_limit_mb;     /* MB hard cap via memory.max; 0 = unlimited */
     char             cpuset[64];       /* CPU affinity list for cpuset.cpus (e.g. "2,3"); empty = unconstrained */

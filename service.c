@@ -564,6 +564,15 @@ int service_spawn(service_t *svc) {
                 fprintf(stderr, "[schema-init] Warning: failed to set peripheral priority for %s: %s\n", svc->name, strerror(errno));
             }
         }
+        if (svc->oom_adj_set) {
+            /* Before the uid drop: lowering it needs CAP_SYS_RESOURCE. Every
+             * child inherits it, so a session launcher must not carry one. */
+            int ofd = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);
+            if (ofd >= 0) {
+                dprintf(ofd, "%d\n", svc->oom_score_adj);
+                close(ofd);
+            }
+        }
         if (service_apply_hardening(svc) != 0)
             _exit(126);
         if (svc->run_uid) {
@@ -963,6 +972,10 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_NO_RESTART;
             else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
                 svc->stable_secs = atoi(val);
+            else if (strcmp(line, "oom_score_adj") == 0) {
+                int v = atoi(val);
+                if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
+            }
             else if (strcmp(line, "notify") == 0)
                 svc->notify = atoi(val) ? 1 : 0;
             else if (strcmp(line, "ready_path") == 0)
@@ -1179,6 +1192,10 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_NO_RESTART;
         else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
             svc->stable_secs = atoi(val);
+        else if (strcmp(line, "oom_score_adj") == 0) {
+            int v = atoi(val);
+            if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
+        }
         else if (strcmp(line, "notify") == 0)
             svc->notify = atoi(val) ? 1 : 0;
         else if (strcmp(line, "ready_path") == 0)

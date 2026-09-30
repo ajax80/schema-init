@@ -822,6 +822,10 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
     sigemptyset(&none);
     sigprocmask(SIG_SETMASK, &none, NULL);   /* broker blocks SIGCHLD for its signalfd; don't leak it */
     setsid();
+    {   /* nor the broker's OOM protection: an activated helper is ordinary */
+        int ofd = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);
+        if (ofd >= 0) { (void)!write(ofd, "0\n", 2); close(ofd); }
+    }
     struct passwd *pw = getpwnam(e->user);
     if (!pw) _exit(127);                 /* unknown User= -> fail closed, never run as root */
     if (sdbus_activate_should_drop_privs(g_system_bus, pw->pw_uid)) {

@@ -429,6 +429,16 @@ static void reap(void) {
 
             services[i].child_pid  = 0;
             services[i].exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            services[i].term_signal = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
+            services[i].core_dumped = WIFSIGNALED(status) && WCOREDUMP(status);
+            services[i].has_exited  = 1;
+            if (services[i].term_signal) {
+                char ev[48];
+                const char *ab = sigabbrev_np(services[i].term_signal);
+                snprintf(ev, sizeof ev, "killed-SIG%s%s", ab ? ab : "?",
+                         services[i].core_dumped ? "-core" : "");
+                service_log(&services[i], ev);
+            }
 
             if (services[i].flags & SVC_TIMER) {
                 /* timer fire complete: re-arm regardless of exit code (cron
@@ -1003,6 +1013,20 @@ static const char *hard_source(const service_t *s, uint8_t bit) {
     return "unset";
 }
 
+/* Why the service's last run ended: "SIGSEGV (core dumped)", "exit 1", "-". */
+static const char *last_exit_str(const service_t *s) {
+    static char b[48];
+    if (s->term_signal) {
+        const char *ab = sigabbrev_np(s->term_signal);
+        snprintf(b, sizeof b, "SIG%s%s", ab ? ab : "?", s->core_dumped ? " (core dumped)" : "");
+    } else if (s->has_exited && s->exit_status >= 0) {
+        snprintf(b, sizeof b, "exit %d", s->exit_status);
+    } else {
+        snprintf(b, sizeof b, "-");
+    }
+    return b;
+}
+
 static void ctl_cmd(int fd, char *line) {
     int i;
     line[strcspn(line, "\r\n")] = '\0';
@@ -1025,6 +1049,7 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.pid=%d\n", services[i].name, (int)services[i].child_pid);
                 ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));
                 ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
+                ctl_writef(fd, "service.%s.last_exit=%s\n", services[i].name, last_exit_str(&services[i]));
             }
         } else if (*opt) {
             for (i = 0; i < svc_count && strcmp(services[i].name, opt) != 0; i++) ;
@@ -1035,6 +1060,7 @@ static void ctl_cmd(int fd, char *line) {
                 static const char *const ps[] = { "0", "1", "full" };
                 ctl_writef(fd, "%s  pid=%d  state=%s  restarts=%d\n", s->name,
                     (int)s->child_pid, state_name(s->inst.state), s->restart_count);
+                ctl_writef(fd, "last exit: %s\n", last_exit_str(s));
                 ctl_writef(fd, "hardening default: %s\n", service_hardening_default() ? "ON" : "off");
                 ctl_writef(fd, "  %-15s %-5s %s\n", "no_new_privs",
                     (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", hard_source(s, HARD_NNP));
@@ -1046,9 +1072,11 @@ static void ctl_cmd(int fd, char *line) {
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++)
-                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d\n",
+                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s\n",
                     services[i].name, (int)services[i].child_pid,
-                    state_name(services[i].inst.state), services[i].restart_count);
+                    state_name(services[i].inst.state), services[i].restart_count,
+                    services[i].term_signal ? "  last=" : "",
+                    services[i].term_signal ? last_exit_str(&services[i]) : "");
         }
 
     } else if (strncmp(line, "pet ", 4) == 0) {
@@ -1580,6 +1608,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 memcpy(shadow_services[i].notify_status, services[j].notify_status,
                        sizeof shadow_services[i].notify_status);
                 shadow_services[i].ctl_killed = services[j].ctl_killed;
+                shadow_services[i].exit_status = services[j].exit_status;
+                shadow_services[i].term_signal = services[j].term_signal;
+                shadow_services[i].core_dumped = services[j].core_dumped;
+                shadow_services[i].has_exited  = services[j].has_exited;
                 shadow_services[i].timer_next    = services[j].timer_next;
                 shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;
 
