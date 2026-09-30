@@ -27,6 +27,7 @@ service plasma-autologin
 service polkitd
 service bluetoothd
 service journal-sink
+service sysctl
 service network-manager
 service sshd
 service zram

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Re-apply /usr/lib, /run and /etc sysctl.d after switch-root, as
+# systemd-sysctl.service does: the initramfs only applied the copies frozen
+# into it at build time, and keys of modules loaded since were never set.
+# zram and NetworkManager dep= on this, so their own runtime tuning lands last.
+#
+# sysctl --system puts systemd-coredump back in core_pattern; take it again
+# whatever sysctl returned. Always exit 0: a failed oneshot holds its
+# dependents (the network) through its retries, and a key for a module that
+# is not loaded makes sysctl --system fail routinely.
+
+/usr/sbin/sysctl --system
+if [ -x /usr/bin/schema-coredump ] && ! /usr/bin/schema-coredump --take-pattern; then
+    echo "schema-sysctl-apply: schema-coredump --take-pattern FAILED; core_pattern is: $(cat /proc/sys/kernel/core_pattern)" >&2
+fi
+exit 0
