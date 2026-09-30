@@ -5,8 +5,8 @@
  * systemd-coredump, which only forwards to a socket-activated
  * systemd-coredump.socket that never exists under schema-init: every crash is
  * logged as "Failed to connect to coredump service" and the core is lost.
- * PID 1 takes that pattern (and only that one: apport, abrt or a hand-set
- * pattern is left alone) for schema-coredump, which stores a capped zstd core
+ * PID 1 takes that pattern, or the kernel's default "core" an initrd left
+ * unset (apport, abrt or a hand-set pattern is left alone) for schema-coredump, which stores a capped zstd core
  * plus a metadata file per crash. */
 
 #include <errno.h>
@@ -33,6 +33,7 @@ static inline int coredump_pattern_classify(const char *cur) {
     size_t sl = strlen(COREDUMP_SYSTEMD);
     if (l == strlen(COREDUMP_PATTERN) && !memcmp(cur, COREDUMP_PATTERN, l)) return 2;
     if (l >= sl && !memcmp(cur, COREDUMP_SYSTEMD, sl) && (l == sl || cur[sl] == ' ')) return 1;
+    if (l == 4 && !memcmp(cur, "core", 4)) return 1;
     return 0;
 }
 
@@ -56,9 +57,9 @@ static inline int coredump_take_pattern(void) {
     return w == (ssize_t)strlen(COREDUMP_PATTERN) ? 1 : -1;
 }
 
-/* Soft RLIMIT_CORE up to the hard limit once the pattern is ours: a host
- * whose initrd never set one boots with the kernel's "core", and sysctl.svc
- * hands it to schema-coredump later, so each spawn checks. Never lowers it. */
+/* Soft RLIMIT_CORE up to the hard limit once the pattern is ours: a pattern
+ * handed to schema-coredump after boot (sysctl.svc) reaches later spawns
+ * too. Never lowers it. */
 static inline void coredump_raise_if_ours(void) {
     char cur[256];
     struct rlimit rl;

@@ -81,11 +81,14 @@ static int newest_meta_has(const char *needle) {
 
 int main(void) {
     signal(SIGPIPE, SIG_IGN);             /* the helper stops reading at its cap */
-    /* ---- pattern takeover: only systemd-coredump's, never someone else's ---- */
+    /* ---- pattern takeover: systemd-coredump's or the kernel default, never someone else's ---- */
     assert(coredump_pattern_classify("|/usr/lib/systemd/systemd-coredump %P %u %g %s %t %c %h %d %F\n") == 1);
     assert(coredump_pattern_classify("|/usr/lib/systemd/systemd-coredump") == 1);
     assert(coredump_pattern_classify(COREDUMP_PATTERN "\n") == 2);
-    assert(coredump_pattern_classify("core\n") == 0);
+    assert(coredump_pattern_classify("core\n") == 1);
+    assert(coredump_pattern_classify("core") == 1);
+    assert(coredump_pattern_classify("core.%p\n") == 0);
+    assert(coredump_pattern_classify("corex\n") == 0);
     assert(coredump_pattern_classify("|/usr/share/apport/apport -p%p -s%s -c%c\n") == 0);
     assert(coredump_pattern_classify("|/usr/libexec/abrt-hook-ccpp %s %c %p %u %g %t e %P %I %h\n") == 0);
     assert(coredump_pattern_classify("|/usr/lib/systemd/systemd-coredump-evil %P\n") == 0);
