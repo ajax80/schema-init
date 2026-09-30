@@ -56,9 +56,9 @@ static inline int coredump_take_pattern(void) {
     return w == (ssize_t)strlen(COREDUMP_PATTERN) ? 1 : -1;
 }
 
-/* Soft RLIMIT_CORE up to the hard limit, but only while the pattern is ours:
- * a host whose initrd never set one boots with the kernel's "core", and
- * sysctl.svc hands it to schema-coredump later, so each spawn checks. */
+/* Soft RLIMIT_CORE up to the hard limit once the pattern is ours: a host
+ * whose initrd never set one boots with the kernel's "core", and sysctl.svc
+ * hands it to schema-coredump later, so each spawn checks. Never lowers it. */
 static inline void coredump_raise_if_ours(void) {
     char cur[256];
     struct rlimit rl;
