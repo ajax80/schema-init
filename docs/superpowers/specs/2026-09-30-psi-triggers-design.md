@@ -1,0 +1,137 @@
+# PSI Triggers for the Survival Executive
+
+**Status:** Approved 2026-09-30 (Jonathan + Greg review folded in). Build TDD, vmtest as PID 1, reboot to deploy.
+**Component:** `init.c` survival executive (`check_system_pressure`, `execute_survival_posture`, main loop).
+
+## Problem
+
+The survival executive (freeze peripheral, throttle standard, reclaim non-critical)
+decides memory pressure from `some avg10` in `/proc/pressure/memory`, read once per
+main-loop pass, entering above 10.0 and leaving after 8 clean passes.
+
+`avg10` is a 10-second moving average that the kernel recomputes every 2 seconds,
+so it lags a sudden stall on both edges. Measured on blakbox 2026-09-30, contained
+scratch cgroup (`memory.high=180M`, `memory.max=900M`, `swap.max=0`, 800 MiB
+anon hog for 30 s):
+
+| edge | today (avg10) | kernel trigger `some 150000 1000000` |
+|---|---|---|
+| pressure starts → react | **5.85 s** (live PID 1 froze at the same second) | **0.69 s** |
+| pressure ends → thaw | **~14 s** (hog ended ~17:03:58, thaw 17:04:12) | — (see Exit) |
+
+The trigger fired 30 times over the 30-second hog, once per 1 s window.
+
+A premise from the 09-29 review is wrong for this fleet: "idle PID 1 only checks
+pressure when woken". All four hosts wake PID 1 4×/s, permanently
+(`voluntary_ctxt_switches` delta, 09-30), because every host runs `journal-sink.svc`
+with `ready_path=`, and `get_poll_timeout()` keeps the 250 ms tick while any
+`ready_path` service is up (liveness re-check, `init.c:912`). So polling frequency
+is not the gap. The average is. Polling faster cannot fix it.
+
+## Design
+
+### 1. Arm one system-wide memory trigger at startup
+
+After `notify_open()`: open `/proc/pressure/memory` `O_RDWR|O_NONBLOCK|O_CLOEXEC`,
+write `"some 100000 1000000"` **including the trailing NUL** (`strlen + 1` bytes).
+The kernel's `psi_write` sets the last byte written to NUL. Verified on blakbox
+09-30: `strlen` bytes chop the window to `100000` and the write fails `EINVAL`
+(under the 500 ms minimum), which would put every boot silently on the fallback.
+Success → global `psi_fd`, added
+to the main `poll()` set with `POLLPRI` (`fds[3]` → `fds[4]`).
+
+Any failure (no `CONFIG_PSI`, `psi=0`, older kernel, `EINVAL`) → `psi_fd = -1`
+and the executive runs exactly as today. One boot-log line says which mode is active.
+
+`psi_fd` is a global, not a `service_t` field, so the `handle_reload`
+live→shadow merge (the #78 `cgroup_path` class of bug) does not touch it.
+
+### 2. Entry: trigger event
+
+`POLLPRI` (or `POLLERR`, see 5) on `psi_fd` sets `psi_fired = 1` for this pass.
+With the trigger armed it is the only memory source, for entry as well as
+exit. The trigger fires at 10% stall per 1 s, the same level as the old
+avg10 > 10 rule, so a steady 10–15% stall still enters (review of #218).
+avg10 is the source only when `psi_fd < 0`.
+Per-critical-cgroup `cpu.pressure` polling is unchanged.
+
+### 3. Reclaim must not re-check avg10
+
+`execute_survival_posture(1)` only runs `reclaim_pass()` when
+`read_system_mem_pressure() > 10.0`. At trigger time avg10 is still ~0, so the
+fast entry would freeze but never reclaim. Move reclaim out of the posture
+change: on every pass that is under pressure and memory-stalled, run
+`reclaim_maybe()`, rate-limited to one `reclaim_pass()` per 10 s
+(`CLOCK_MONOTONIC`). An episode that began on critical-cgroup CPU pressure
+still reclaims once memory stalls (review of #218).
+
+### 4. Exit: monotonic trigger silence
+
+Replace the 8-pass counter with `CLOCK_MONOTONIC` time. `last_stall_ms` is set
+on every pass that sees pressure. The posture clears when
+`now_ms - last_stall_ms >= THAW_DELAY_MS` (5000), independent of loop frequency.
+
+What counts as pressure on a pass:
+- `psi_fd >= 0`: a trigger event, or critical-cgroup `cpu.pressure` > 5.
+  **avg10 is ignored for exit** because its decay (~14 s measured) is the lag
+  being removed.
+- `psi_fd < 0` (fallback): today's `check_system_pressure()` (avg10 > 10 or
+  critical cpu), with the same 5 s timestamp rule instead of passes.
+
+While the stall continues the trigger fires every 1 s window, so
+`last_stall_ms` never ages past 5 s. Thaw is expected ~5 s after the stall
+falls under 150 ms/s, compared with ~14 s today. While under pressure,
+`get_poll_timeout()` already returns 250 ms, so the loop wakes to see the deadline.
+
+Extract the state step as a pure function:
+`int pressure_step(int *under, uint64_t now_ms, uint64_t *last_stall_ms, int stalled)`
+→ enter / exit / none, where the caller computes `stalled` from the mode rules
+above. Unit-test it with no I/O: enter on the first stalled pass; no exit
+before 5000 ms of silence; exit at 5000 ms; a stall at 4999 ms re-arms; and
+exit timing is identical with 250 ms and 5 s pass spacing.
+
+### 5. Event handling details
+
+- No drain: the kernel raises `POLLPRI` at most once per window and there is
+  nothing to `read()` on a trigger fd.
+- `POLLERR` means the fd is dead (the kernel tears triggers down on some
+  errors): close it, `psi_fd = -1`, log once, fall back to avg10. No re-arm loop.
+- The trigger needs no extra wake: PID 1 already sleeps in `poll()` on it, so
+  the pass runs within the same scheduler tick as the event.
+
+## Out of scope (named, not built)
+
+- **Idle PID 1.** Replacing the `ready_path` liveness tick with inotify
+  (`IN_DELETE`/`IN_MOVED_FROM` on the parent dir) would let PID 1 sleep to the
+  5 s hardware-watchdog pet. That saves ~4 wakes/s on the battery boxes (DBox, Eli).
+  It needs its own spec, and this design does not depend on it.
+- Per-cgroup `cpu.pressure` triggers for critical services. They need fd
+  lifecycle on spawn, stop and reload. The polled path works today.
+- Tunable thresholds in `.svc`/config. These are constants until a host needs
+  something else.
+- The user-session hogs (browser, Frigate, ollama) live outside
+  `/sys/fs/cgroup/schema-init/*`. Faster detection does not change what can be
+  frozen (see mem-pressure reclaim design).
+
+## Verification
+
+1. `make test`: new `pressure_step` unit test, and `test_reclaim` unchanged.
+2. schema-vmtest: boot as PID 1, boot log shows `psi trigger armed`. Run the
+   scratch-cgroup hog inside the VM, then check `rail.log`: `freeze` ≤ 2 s
+   after hog start, `thaw` 5–6 s after hog end, `reclaim` repeating every 10 s
+   while the hog runs.
+3. Fallback in the VM: boot with `psi=0`. Boot log shows avg10 mode, and the
+   rail runs normally. `psi=0` removes `/proc/pressure` entirely, so there is no
+   avg10 either and nothing freezes, exactly as today's code behaves with `psi=0`.
+4. Deploy is a reboot, since this is a PID 1 binary change. On blakbox, repeat
+   the 09-30 probe and compare against the table above.
+
+## Decisions (2026-09-30)
+
+1. Threshold `some 100000 1000000` (10%), which keeps the old avg10 entry
+   level but is instant. A false positive costs a ~5 s freeze of peripheral
+   daemons. Hardcoded constant; promote to config only if per-host data asks
+   for it. (Was 150000; lowered after review of #218 found the 10–15% gap.)
+2. Thaw after 5 s of monotonic silence rather than 2 s. Bursty loads
+   (compiles, GC) breathe on a 1–3 s rhythm, and flapping would reset NFS/docker
+   clients and jitter chronyd.
