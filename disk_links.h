@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ftw.h>
+#include <dirent.h>
 
 #define SCHEMA_DISK_DIR "/dev/schema/disk"
 
@@ -55,7 +56,7 @@ static inline int disk_links_derive(const struct uevent *ev,
 }
 
 static inline int dl_mkdir_p(const char *path) {
-    char tmp[512];
+    char tmp[2048];
     safe_copy(tmp, path, sizeof tmp);
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
@@ -182,14 +183,26 @@ static inline int rule_link_target(const char *name, const char *devname,
     return 0;
 }
 
-static inline int rule_link_one(const char *dev_root, const char *name, const char *devname) {
-    if (!rule_link_name_ok(name)) return -1;
-    char final[1024], dir[1024], tmp[1100], target[600];
+/* Point dev_root/NAME at DEVNAME, or drop it when DEVNAME is NULL. Never
+   touches an entry that is not a symlink: a rule alias must not replace a
+   real node or file. */
+static inline int rule_link_set(const char *dev_root, const char *name, const char *devname) {
+    char final[1024];
     if ((size_t)snprintf(final, sizeof final, "%s/%s", dev_root, name) >= sizeof final) return -1;
+    struct stat st;
+    int exists = lstat(final, &st) == 0;
+    if (exists && !S_ISLNK(st.st_mode)) return -1;
+    if (!devname) return exists ? unlink(final) : 0;
+
+    char target[600], have[600];
     if (rule_link_target(name, devname, target, sizeof target) != 0) return -1;
+    if (exists) {
+        ssize_t l = readlink(final, have, sizeof have - 1);
+        if (l >= 0) { have[l] = '\0'; if (strcmp(have, target) == 0) return 0; }
+    }
+    char dir[1024], tmp[1100];
     safe_copy(dir, final, sizeof dir);
     char *slash = strrchr(dir, '/');
-    if (!slash) return -1;
     *slash = '\0';
     if (dl_mkdir_p(dir) != 0) return -1;
     snprintf(tmp, sizeof tmp, "%s/.%s.tmp.%d", dir, slash + 1, (int)getpid());
@@ -199,34 +212,113 @@ static inline int rule_link_one(const char *dev_root, const char *name, const ch
     return 0;
 }
 
-/* Drop a link only while it still points at DEVNAME: another device may have
-   claimed the same name since. */
-static inline void rule_link_clear(const char *dev_root, const char *name, const char *devname) {
-    if (!rule_link_name_ok(name)) return;
-    char path[1024], want[600], have[600];
-    if ((size_t)snprintf(path, sizeof path, "%s/%s", dev_root, name) >= sizeof path) return;
-    if (rule_link_target(name, devname, want, sizeof want) != 0) return;
-    ssize_t l = readlink(path, have, sizeof have - 1);
-    if (l < 0) return;
-    have[l] = '\0';
-    if (strcmp(have, want) == 0) unlink(path);
+/* Claims registry, like udev's /run/udev/links: claims_dir/<name with '/'
+   escaped>/<devid> holds "<link_priority> <devname>" for every device whose
+   rules asked for NAME. The link goes to the highest priority; on a tie the
+   current holder keeps it, so shared names don't flap; when the holder goes
+   the next claimant takes over. */
+static inline void rule_link_escape(const char *name, char *out, size_t outsz) {
+    size_t o = 0;
+    for (const char *p = name; *p && o + 5 < outsz; p++) {
+        if (*p == '/') { memcpy(out + o, "\\x2f", 4); o += 4; }
+        else out[o++] = *p;
+    }
+    out[o] = '\0';
 }
 
-/* Converge /dev on a device's rule links: clear the ones its previous record
-   carried that the new set drops, then (re)create the new set. A remove is an
-   update to the empty set. */
-static inline void rule_links_update(const char *dev_root, const char *devname,
-                                     char old[][UE_VAL_MAX], int nold,
-                                     const char *const *links, int nlinks) {
-    if (!devname || !devname[0]) return;
-    for (int i = 0; i < nold; i++) {
-        int kept = 0;
-        for (int j = 0; j < nlinks && !kept; j++)
-            kept = strcmp(old[i], links[j]) == 0;
-        if (!kept) rule_link_clear(dev_root, old[i], devname);
+static inline void rule_link_resolve(const char *dev_root, const char *claims_dir,
+                                     const char *name) {
+    char esc[1024], cdir[1600];
+    rule_link_escape(name, esc, sizeof esc);
+    if ((size_t)snprintf(cdir, sizeof cdir, "%s/%s", claims_dir, esc) >= sizeof cdir) return;
+
+    char cur[600] = "";
+    { char lp[1024];
+      if ((size_t)snprintf(lp, sizeof lp, "%s/%s", dev_root, name) < sizeof lp) {
+          ssize_t l = readlink(lp, cur, sizeof cur - 1);
+          cur[l > 0 ? l : 0] = '\0';
+      } }
+
+    char best[UE_VAL_MAX] = "";
+    int best_prio = 0, have_best = 0, best_is_cur = 0;
+    DIR *d = opendir(cdir);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (e->d_name[0] == '.') continue;
+            char cp[1900], line[UE_VAL_MAX + 32], dn[UE_VAL_MAX];
+            int prio;
+            if ((size_t)snprintf(cp, sizeof cp, "%s/%s", cdir, e->d_name) >= sizeof cp) continue;
+            FILE *f = fopen(cp, "r");
+            if (!f) continue;
+            int ok = fgets(line, sizeof line, f) && sscanf(line, "%d %511s", &prio, dn) == 2;
+            fclose(f);
+            if (!ok) continue;
+            char tgt[600];
+            int is_cur = rule_link_target(name, dn, tgt, sizeof tgt) == 0 && strcmp(tgt, cur) == 0;
+            if (!have_best || prio > best_prio ||
+                (prio == best_prio && is_cur && !best_is_cur) ||
+                (prio == best_prio && !is_cur && !best_is_cur && strcmp(dn, best) < 0)) {
+                safe_copy(best, dn, sizeof best);
+                best_prio = prio; have_best = 1; best_is_cur = is_cur;
+            }
+        }
+        closedir(d);
     }
-    for (int j = 0; j < nlinks; j++)
-        rule_link_one(dev_root, links[j], devname);
+    rule_link_set(dev_root, name, have_best ? best : NULL);
+    if (!have_best) rmdir(cdir);
+}
+
+/* Converge a device's claims on LINKS (empty for a remove): withdraw the names
+   it claimed before but no longer does, (re)claim the current set, and
+   re-resolve every name touched. What the device held before comes from the
+   registry itself, so a lost or never-written db record can't strand links. */
+static inline void rule_links_update(const char *dev_root, const char *claims_dir,
+                                     const char *devid, const char *devname, int prio,
+                                     const char *const *links, int nlinks) {
+    if (!devid || !devid[0]) return;
+    if (dl_mkdir_p(claims_dir) != 0) return;
+
+    DIR *d = opendir(claims_dir);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (e->d_name[0] == '.') continue;
+            char cp[1600];
+            if ((size_t)snprintf(cp, sizeof cp, "%s/%s/%s", claims_dir, e->d_name, devid) >= sizeof cp)
+                continue;
+            if (access(cp, F_OK) != 0) continue;
+            char name[UE_VAL_MAX];
+            size_t o = 0;
+            for (const char *p = e->d_name; *p && o + 1 < sizeof name; ) {
+                if (!strncmp(p, "\\x2f", 4)) { name[o++] = '/'; p += 4; }
+                else name[o++] = *p++;
+            }
+            name[o] = '\0';
+            int kept = 0;
+            for (int j = 0; j < nlinks && !kept; j++) kept = strcmp(name, links[j]) == 0;
+            if (kept) continue;
+            unlink(cp);
+            if (rule_link_name_ok(name)) rule_link_resolve(dev_root, claims_dir, name);
+        }
+        closedir(d);
+    }
+
+    if (!devname || !devname[0]) return;
+    for (int j = 0; j < nlinks; j++) {
+        if (!rule_link_name_ok(links[j])) continue;
+        char esc[1024], cdir[1600], cp[1700], tmp[1800];
+        rule_link_escape(links[j], esc, sizeof esc);
+        if ((size_t)snprintf(cdir, sizeof cdir, "%s/%s", claims_dir, esc) >= sizeof cdir) continue;
+        if (dl_mkdir_p(cdir) != 0) continue;
+        snprintf(cp, sizeof cp, "%s/%s", cdir, devid);
+        snprintf(tmp, sizeof tmp, "%s/.%s.%d", cdir, devid, (int)getpid());
+        FILE *f = fopen(tmp, "w");
+        if (!f) continue;
+        fprintf(f, "%d %s\n", prio, devname);
+        if (fclose(f) != 0 || rename(tmp, cp) != 0) { unlink(tmp); continue; }
+        rule_link_resolve(dev_root, claims_dir, links[j]);
+    }
 }
 
 static inline int dl_rm_cb(const char *p, const struct stat *sb,
