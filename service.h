@@ -34,7 +34,7 @@ static inline long reclaim_target(long current, long cap) {
     return half < cap ? half : cap;
 }
 
-#define PSI_MEM_TRIGGER        "some 150000 1000000"
+#define PSI_MEM_TRIGGER        "some 100000 1000000"
 #define THAW_DELAY_MS          5000
 #define RECLAIM_MIN_GAP_MS     10000
 

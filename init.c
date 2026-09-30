@@ -655,7 +655,7 @@ static void reclaim_pass(void) {
     _exit(0);
 }
 
-static void execute_survival_posture(int under_pressure, int mem_pressure) {
+static void execute_survival_posture(int under_pressure) {
     int i;
     for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
@@ -666,15 +666,16 @@ static void execute_survival_posture(int under_pressure, int mem_pressure) {
             set_cgroup_cpu_limit(svc, under_pressure ? "50000 100000" : "max 100000");
         }
     }
-    /* On memory pressure, reclaim cold pages from non-critical cgroups. Peripheral
-     * services are now frozen, so their pages are cold and reclaim cleanly. */
-    if (under_pressure && mem_pressure) {
-        uint64_t now = monotonic_ms();
-        if (!last_reclaim_ms || now - last_reclaim_ms >= RECLAIM_MIN_GAP_MS) {
-            last_reclaim_ms = now;
-            reclaim_pass();
-        }
-    }
+}
+
+/* Reclaim cold pages from non-critical cgroups on any memory-stalled pass of a
+ * survival episode, however it began. Peripheral services are frozen by then,
+ * so their pages are cold and reclaim cleanly. */
+static void reclaim_maybe(void) {
+    uint64_t now = monotonic_ms();
+    if (last_reclaim_ms && now - last_reclaim_ms < RECLAIM_MIN_GAP_MS) return;
+    last_reclaim_ms = now;
+    reclaim_pass();
 }
 
 static void execute_fuse_cmd(service_t *svc) {
@@ -2304,9 +2305,11 @@ int main(int argc, char **argv) {
             int act = pressure_step(&system_under_pressure, monotonic_ms(), &last_stall_ms,
                                     mem || critical_cpu_pressure());
             if (act == PRESSURE_ENTER)
-                execute_survival_posture(1, mem);
+                execute_survival_posture(1);
             else if (act == PRESSURE_EXIT)
-                execute_survival_posture(0, 0);
+                execute_survival_posture(0);
+            if (system_under_pressure && mem)
+                reclaim_maybe();
         }
 
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;

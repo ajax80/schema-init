@@ -33,7 +33,7 @@ is not the gap. The average is. Polling faster cannot fix it.
 ### 1. Arm one system-wide memory trigger at startup
 
 After `notify_open()`: open `/proc/pressure/memory` `O_RDWR|O_NONBLOCK|O_CLOEXEC`,
-write `"some 150000 1000000"` **including the trailing NUL** (`strlen + 1` bytes).
+write `"some 100000 1000000"` **including the trailing NUL** (`strlen + 1` bytes).
 The kernel's `psi_write` sets the last byte written to NUL. Verified on blakbox
 09-30: `strlen` bytes chop the window to `100000` and the write fails `EINVAL`
 (under the 500 ms minimum), which would put every boot silently on the fallback.
@@ -49,18 +49,21 @@ live→shadow merge (the #78 `cgroup_path` class of bug) does not touch it.
 ### 2. Entry: trigger event
 
 `POLLPRI` (or `POLLERR`, see 5) on `psi_fd` sets `psi_fired = 1` for this pass.
-Pressure for the pass = `psi_fired || check_system_pressure()`. The avg10 path
-stays as a second source and as the only source when `psi_fd < 0`.
+With the trigger armed it is the only memory source, for entry as well as
+exit. The trigger fires at 10% stall per 1 s, the same level as the old
+avg10 > 10 rule, so a steady 10–15% stall still enters (review of #218).
+avg10 is the source only when `psi_fd < 0`.
 Per-critical-cgroup `cpu.pressure` polling is unchanged.
 
 ### 3. Reclaim must not re-check avg10
 
 `execute_survival_posture(1)` only runs `reclaim_pass()` when
 `read_system_mem_pressure() > 10.0`. At trigger time avg10 is still ~0, so the
-fast entry would freeze but never reclaim. Pass the reason in:
-`execute_survival_posture(1, mem_pressure)`, where `mem_pressure` =
-`psi_fired || avg10 > 10.0`. Rate-limit `reclaim_pass()` to one per 10 s
-(`CLOCK_MONOTONIC`), since faster entry/exit cycles would otherwise fork one per cycle.
+fast entry would freeze but never reclaim. Move reclaim out of the posture
+change: on every pass that is under pressure and memory-stalled, run
+`reclaim_maybe()`, rate-limited to one `reclaim_pass()` per 10 s
+(`CLOCK_MONOTONIC`). An episode that began on critical-cgroup CPU pressure
+still reclaims once memory stalls (review of #218).
 
 ### 4. Exit: monotonic trigger silence
 
@@ -115,7 +118,8 @@ exit timing is identical with 250 ms and 5 s pass spacing.
 1. `make test`: new `pressure_step` unit test, and `test_reclaim` unchanged.
 2. schema-vmtest: boot as PID 1, boot log shows `psi trigger armed`. Run the
    scratch-cgroup hog inside the VM, then check `rail.log`: `freeze` ≤ 2 s
-   after hog start, `thaw` 5–6 s after hog end, exactly one `reclaim` burst.
+   after hog start, `thaw` 5–6 s after hog end, `reclaim` repeating every 10 s
+   while the hog runs.
 3. Fallback in the VM: boot with `psi=0`. Boot log shows avg10 mode, and the
    rail runs normally. `psi=0` removes `/proc/pressure` entirely, so there is no
    avg10 either and nothing freezes, exactly as today's code behaves with `psi=0`.
@@ -124,8 +128,10 @@ exit timing is identical with 250 ms and 5 s pass spacing.
 
 ## Decisions (2026-09-30)
 
-1. Threshold `some 150000 1000000`, as measured. Hardcoded constant; promote
-   to config only if per-host data asks for it.
+1. Threshold `some 100000 1000000` (10%), which keeps the old avg10 entry
+   level but is instant. A false positive costs a ~5 s freeze of peripheral
+   daemons. Hardcoded constant; promote to config only if per-host data asks
+   for it. (Was 150000; lowered after review of #218 found the 10–15% gap.)
 2. Thaw after 5 s of monotonic silence rather than 2 s. Bursty loads
    (compiles, GC) breathe on a 1–3 s rhythm, and flapping would reset NFS/docker
    clients and jitter chronyd.
