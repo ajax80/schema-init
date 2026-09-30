@@ -1,4 +1,5 @@
 #include "service.h"
+#include "notify.h"
 #include "caps.h"
 #include "ns.h"
 
@@ -589,6 +590,8 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
+        if (svc->notify) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
+        else unsetenv("NOTIFY_SOCKET");
         for (int e = 0; e < svc->env_count; e++) {
             char *kv = svc->envp[e];
             char *ev = strchr(kv, '=');
@@ -607,6 +610,8 @@ int service_spawn(service_t *svc) {
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
     svc->last_pet   = svc->spawn_time_mono;
+    svc->notify_ready = 0;
+    svc->notify_status[0] = '\0';
     svc->restart_count++;
     cgroup_assign(svc, pid);
     /* cgroup v2 partition order: child cpuset.cpus → parent cpuset.cpus.exclusive
@@ -958,6 +963,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->flags |= SVC_NO_RESTART;
             else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
                 svc->stable_secs = atoi(val);
+            else if (strcmp(line, "notify") == 0)
+                svc->notify = atoi(val) ? 1 : 0;
             else if (strcmp(line, "ready_path") == 0)
                 strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
             else if (strcmp(line, "priority") == 0) {
@@ -1172,6 +1179,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->flags |= SVC_NO_RESTART;
         else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
             svc->stable_secs = atoi(val);
+        else if (strcmp(line, "notify") == 0)
+            svc->notify = atoi(val) ? 1 : 0;
         else if (strcmp(line, "ready_path") == 0)
             strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
         else if (strcmp(line, "priority") == 0) {

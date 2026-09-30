@@ -80,7 +80,12 @@ def skipped(name, txt):
         return False
     except si.Skip:
         return True
-check("Type=notify skipped", skipped("n", "[Service]\nType=notify\nExecStart=/bin/n\n"))
+bn = si.unit_to_svc("n", si.parse_unit("[Service]\nType=notify\nExecStart=/bin/n\n"))
+check("Type=notify -> notify=1", "notify=1\n" in bn and "oneshot=1" not in bn)
+bnr = si.unit_to_svc("nr", si.parse_unit("[Service]\nType=notify-reload\nExecStart=/bin/nr\n"))
+check("Type=notify-reload -> notify=1", "notify=1\n" in bnr)
+bs = si.unit_to_svc("s", si.parse_unit("[Service]\nType=simple\nExecStart=/bin/s\n"))
+check("Type=simple has no notify", "notify=" not in bs)
 check("Type=forking skipped", skipped("f", "[Service]\nType=forking\nExecStart=/bin/f\n"))
 check("Type=dbus skipped", skipped("d", "[Service]\nType=dbus\nExecStart=/bin/d\n"))
 check("template skipped", skipped("t@", "[Service]\nExecStart=/bin/t\n"))
@@ -98,7 +103,7 @@ open(os.path.join(unitdir, "good.service"), "w").write(
 open(os.path.join(unitdir, "strict.service"), "w").write(
     "[Service]\nExecStart=/usr/bin/strict\nProtectSystem=strict\n[Install]\nWantedBy=x\n")
 open(os.path.join(unitdir, "noisy.service"), "w").write(
-    "[Service]\nType=notify\nExecStart=/usr/bin/noisy\n[Install]\nWantedBy=x\n")
+    "[Service]\nType=forking\nExecStart=/usr/bin/noisy\n[Install]\nWantedBy=x\n")
 open(si.queue_path(), "w").write("good\nnoisy\nghost\n")
 
 logged = []
