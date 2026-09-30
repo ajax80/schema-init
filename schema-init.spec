@@ -73,6 +73,9 @@ install -Dm0755 scripts/schema-logind.py %{buildroot}/usr/local/bin/schema-login
 install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schema-session-register
 install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
 install -Dm0755 scripts/schema-sysctl-apply %{buildroot}%{_libexecdir}/schema-init/schema-sysctl-apply
+install -Dm0755 distros/fedora-installer/rail/scripts/schema-sysprep.sh %{buildroot}/usr/local/bin/schema-sysprep.sh
+install -Dm0755 distros/fedora-installer/rail/scripts/schema-sshd-start.sh %{buildroot}/usr/local/bin/schema-sshd-start.sh
+install -Dm0755 distros/fedora-installer/rail/scripts/schema-zram-start.sh %{buildroot}/usr/local/bin/schema-zram-start.sh
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
 
 %package daemons
@@ -213,6 +216,9 @@ fi
 /usr/local/bin/schema-logind.py
 /usr/local/bin/schema-session-register
 /usr/local/bin/schema-session-unregister
+/usr/local/bin/schema-sysprep.sh
+/usr/local/bin/schema-sshd-start.sh
+/usr/local/bin/schema-zram-start.sh
 %dir %{_libexecdir}/schema-init
 %{_libexecdir}/schema-init/schema-sysctl-apply
 %{_sysconfdir}/grub.d/09_schema_fallback
@@ -247,6 +253,8 @@ fi
   boxes can keep them current without the -migrate systemctl shim
 - sysctl.d is re-applied after switch-root (sysctl.svc on installed and
   migrated boxes), then core_pattern is taken back for schema-coredump
+- The installer rail's sysprep, sshd and zram start scripts ship in the
+  package, so installed boxes get fixes to them on update
 
 * Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
 - kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
