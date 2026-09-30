@@ -15,6 +15,8 @@ BuildRequires:  dbus-devel
 BuildRequires:  libzstd-devel
 BuildRequires:  pkgconf-pkg-config
 Requires:       python3
+# ISO-installed and migrated boxes run both daemons; an upgrade must pull them.
+Requires:       %{name}-daemons = %{version}-%{release}
 Recommends:     python3-dbus
 Recommends:     python3-gobject-base
 
@@ -81,6 +83,7 @@ Conflicts: %{name}-migrate < %{version}-%{release}
 The reclaimed udev daemon and D-Bus broker. A box whose udev or D-Bus was
 flipped onto them (ISO install, migrate wizard) needs these kept current;
 installing them changes nothing until a flip points a service at them.
+The base package requires this one so a plain upgrade keeps them current.
 
 %post daemons
 md5sum %{_bindir}/schema-udev | cut -d' ' -f1 > %{_sysconfdir}/schema-init/schema-udev.ship-md5
