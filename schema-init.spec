@@ -62,6 +62,7 @@ overwrite a service file a running system depends on.
 %global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump
 %global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
 %make_build BINS="%{core_bins} %{migrate_bins}"
+gcc %{optflags} -shared -fPIC -o mock_sd.so distros/fedora-kde/scripts/mock_sd.c -ldl %{build_ldflags}
 
 %install
 %make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir} BINS="%{core_bins}"
@@ -77,6 +78,15 @@ install -Dm0755 distros/fedora-installer/rail/scripts/schema-sysprep.sh %{buildr
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sshd-start.sh %{buildroot}/usr/local/bin/schema-sshd-start.sh
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-zram-start.sh %{buildroot}/usr/local/bin/schema-zram-start.sh
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
+install -Dm0755 distros/fedora-kde/scripts/schema-plasma-autologin.sh %{buildroot}/usr/local/bin/schema-plasma-autologin.sh
+install -Dm0755 distros/fedora-kde/scripts/plasma-session-start.sh %{buildroot}/usr/local/bin/plasma-session-start.sh
+install -Dm0755 distros/fedora-kde/scripts/plasmashell-shim %{buildroot}/usr/local/bin/plasmashell-shim
+install -Dm0755 distros/fedora-kde/scripts/schema-autostart-runner.sh %{buildroot}/usr/local/lib/schema/schema-autostart-runner.sh
+install -Dm0755 distros/fedora-kde/scripts/schema-plasma-watchdog.sh %{buildroot}/usr/local/lib/schema/schema-plasma-watchdog.sh
+install -Dm0755 scripts/schema-dbus-session-run.sh %{buildroot}/usr/local/bin/schema-dbus-session-run.sh
+install -Dm0755 mock_sd.so %{buildroot}/usr/local/lib/mock_sd.so
+install -Dm0644 distros/fedora-kde/config/plasma-env/zzz-environment-d.sh %{buildroot}/usr/local/lib/schema/zzz-environment-d.sh
+install -Dm0644 -t %{buildroot}/usr/local/lib/schema/plasma-env distros/fedora-kde/config/plasma-env/{05-kdedefaults,no-app-scope,ssh-agent-sock}.sh distros/fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh
 
 %package daemons
 Summary:   schema-udev and schema-dbus, schema-init's udev and D-Bus daemons
@@ -100,6 +110,31 @@ fi
 %{_bindir}/schema-udev
 %{_bindir}/schema-dbus
 %ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
+
+%package session
+Summary:   Autologin Plasma session pipeline for installer-built boxes
+Requires:  %{name} = %{version}-%{release}
+Requires:  %{name}-daemons = %{version}-%{release}
+%description session
+The Fedora KDE desktop session the installer ISO lays down: the autologin
+launcher, the session-bus wrapper, the direct kwin/plasmashell session start,
+the XDG-autostart runner, the plasmashell watchdog and the session env hooks.
+Not pulled in by the base package: a box running its own session scripts
+keeps them. The session bus runs schema-dbus only when
+/etc/schema-init/dbus-broker exists, stock dbus-daemon otherwise.
+
+%files session
+/usr/local/bin/schema-plasma-autologin.sh
+/usr/local/bin/schema-dbus-session-run.sh
+/usr/local/bin/plasma-session-start.sh
+/usr/local/bin/plasmashell-shim
+/usr/local/lib/mock_sd.so
+%dir /usr/local/lib/schema
+%dir /usr/local/lib/schema/plasma-env
+/usr/local/lib/schema/zzz-environment-d.sh
+/usr/local/lib/schema/schema-autostart-runner.sh
+/usr/local/lib/schema/schema-plasma-watchdog.sh
+/usr/local/lib/schema/plasma-env/*.sh
 
 %package migrate
 Summary:   Guided in-place Fedora KDE onboarding onto schema-init (prebuilt)
@@ -255,6 +290,8 @@ fi
   migrated boxes), then core_pattern is taken back for schema-coredump
 - The installer rail's sysprep, sshd and zram start scripts ship in the
   package, so installed boxes get fixes to them on update
+- New -session subpackage ships the installer's Plasma autologin session
+  pipeline; nothing requires it, so hand-built sessions are left alone
 
 * Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
 - kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
