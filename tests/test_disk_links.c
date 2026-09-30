@@ -184,6 +184,15 @@ int main(void) {
     snprintf(chk, sizeof chk, "%s/../etc", dev);
     assert(access(chk, F_OK) != 0);
     printf("test_disk_links rule links reject escapes: OK\n");
+
+    /* ---- a claims dir others can write is refused outright ---- */
+    char open_claims[700]; snprintf(open_claims, sizeof open_claims, "%s/.open", dev);
+    assert(mkdir(open_claims, 0755) == 0 && chmod(open_claims, 0777) == 0);
+    const char *hid[] = { "disk/by-id/should-not-exist" };
+    rule_links_update(dev, open_claims, "b8:0", "sda", 0, hid, 1);
+    snprintf(chk, sizeof chk, "%s/disk/by-id/should-not-exist", dev);
+    assert(lstat(chk, &lst) != 0);
+    printf("test_disk_links rule links refuse writable claims dir: OK\n");
     disk_links_wipe(dev);
 
     printf("test_disk_links: ALL OK\n");

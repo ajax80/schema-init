@@ -278,6 +278,10 @@ static inline void rule_links_update(const char *dev_root, const char *claims_di
                                      const char *const *links, int nlinks) {
     if (!devid || !devid[0]) return;
     if (dl_mkdir_p(claims_dir) != 0) return;
+    struct stat cst;
+    if (lstat(claims_dir, &cst) != 0 || !S_ISDIR(cst.st_mode) ||
+        cst.st_uid != geteuid() || (cst.st_mode & 022))
+        return;                                     /* not ours alone: refuse to act in it */
 
     DIR *d = opendir(claims_dir);
     if (d) {
@@ -287,7 +291,6 @@ static inline void rule_links_update(const char *dev_root, const char *claims_di
             char cp[1600];
             if ((size_t)snprintf(cp, sizeof cp, "%s/%s/%s", claims_dir, e->d_name, devid) >= sizeof cp)
                 continue;
-            if (access(cp, F_OK) != 0) continue;
             char name[UE_VAL_MAX];
             size_t o = 0;
             for (const char *p = e->d_name; *p && o + 1 < sizeof name; ) {
@@ -298,7 +301,7 @@ static inline void rule_links_update(const char *dev_root, const char *claims_di
             int kept = 0;
             for (int j = 0; j < nlinks && !kept; j++) kept = strcmp(name, links[j]) == 0;
             if (kept) continue;
-            unlink(cp);
+            if (unlink(cp) != 0) continue;             /* this device never claimed it */
             if (rule_link_name_ok(name)) rule_link_resolve(dev_root, claims_dir, name);
         }
         closedir(d);
