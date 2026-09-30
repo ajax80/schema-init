@@ -162,6 +162,20 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_libexecdir}/schema-init/wizard/qml/*.qml
 %{_sysconfdir}/xdg/autostart/schema-wizard.desktop
 
+%pre
+# The running login1 stub re-execs itself on SIGHUP, keeping its pid and the
+# DRM/VT fds the desktop session depends on. Stubs older than that handoff
+# die on SIGHUP instead, so only reload one whose file knows the signal.
+if grep -qs SIGHUP /usr/local/bin/schema-logind.py; then
+    touch /run/schema-logind.hup-ok 2>/dev/null || :
+fi
+
+%post
+if [ -e /run/schema-logind.hup-ok ]; then
+    rm -f /run/schema-logind.hup-ok
+    pkill -HUP -f '^(/usr/bin/)?python3 /usr/local/bin/schema-logind\.py( |$)' || :
+fi
+
 %files
 %license LICENSE
 %doc README.md docs/
@@ -204,7 +218,7 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 - exec= with inline arguments is refused by both parsers
 - login1 stub accepts SetWallMessage
 - The login1 stub and its session register/unregister helpers ship in the
-  package, so logind fixes reach installed boxes on update
+  package; an update reloads the running stub in place with SIGHUP
 
 * Fri Sep 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.3.1-1
 - kernel-install plugin finds the GRUB BLS entries when kernel-install resolves
