@@ -174,6 +174,7 @@ static inline int dev_rules_load_dir(const char *dir, struct dev_rule *rules, in
  * device manager (network-up, etc). A dedicated path, not systemd's
  * /run/udev/control socket, to avoid confusing libudev/udevadm clients. */
 #define SCHEMA_UDEV_READY_DIR  "/run/schema-udev"
+#define SCHEMA_UDEV_LINK_CLAIMS "/run/schema-udev-links"   /* under root-only /run, not the ready dir */
 #define SCHEMA_UDEV_READY      "/run/schema-udev/ready"
 
 static inline int udev_signal_ready_at(const char *dir) {

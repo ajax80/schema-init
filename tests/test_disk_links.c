@@ -123,47 +123,76 @@ int main(void) {
     /* ---- rule links: nested names get udev's relative targets ---- */
     char t4[] = "/tmp/schema-rl-XXXXXX";
     char *dev = mkdtemp(t4); assert(dev);
-    const char *set1[] = { "disk/by-id/ata-WDC_WD10EZEX_WD-X", "disk/by-id/wwn-0x5001",
-                           "serial/by-id/usb-STM32_Virtual_ComPort-if00" };
-    char none[1][UE_VAL_MAX];
-    rule_links_update(dev, "sda", none, 0, set1, 2);
+    char claims[600]; snprintf(claims, sizeof claims, "%s/.claims", dev);
+    const char *ata = "disk/by-id/ata-WDC_WD10EZEX_WD-X";
+    const char *set1[] = { ata, "disk/by-id/wwn-0x5001" };
+    rule_links_update(dev, claims, "b8:0", "sda", 0, set1, 2);
     assert_link(dev, "disk/by-id", "ata-WDC_WD10EZEX_WD-X", "../../sda");
     assert_link(dev, "disk/by-id", "wwn-0x5001", "../../sda");
-    rule_links_update(dev, "ttyACM0", none, 0, set1 + 2, 1);
+    const char *stm[] = { "serial/by-id/usb-STM32_Virtual_ComPort-if00" };
+    rule_links_update(dev, claims, "c166:0", "ttyACM0", 0, stm, 1);
     assert_link(dev, "serial/by-id", "usb-STM32_Virtual_ComPort-if00", "../../ttyACM0");
-    const char *ev3[] = { "input/by-id/usb-Kbd-event-kbd" };
-    rule_links_update(dev, "input/event3", none, 0, ev3, 1);
+    const char *kbd[] = { "input/by-id/usb-Kbd-event-kbd" };
+    rule_links_update(dev, claims, "c13:67", "input/event3", 0, kbd, 1);
     assert_link(dev, "input/by-id", "usb-Kbd-event-kbd", "../../input/event3");
     printf("test_disk_links rule links apply: OK\n");
 
-    /* ---- rule links: change drops only what the new set no longer carries ---- */
-    char old1[2][UE_VAL_MAX];
-    safe_copy(old1[0], set1[0], UE_VAL_MAX);
-    safe_copy(old1[1], set1[1], UE_VAL_MAX);
-    rule_links_update(dev, "sda", old1, 2, set1, 1);
+    /* ---- change drops only what the new set no longer carries ---- */
+    rule_links_update(dev, claims, "b8:0", "sda", 0, set1, 1);
     assert_link(dev, "disk/by-id", "ata-WDC_WD10EZEX_WD-X", "../../sda");
     snprintf(chk, sizeof chk, "%s/disk/by-id/wwn-0x5001", dev);
-    assert(access(chk, F_OK) != 0 && errno == ENOENT);
+    struct stat lst;
+    assert(lstat(chk, &lst) != 0 && errno == ENOENT);
     printf("test_disk_links rule links change: OK\n");
 
-    /* ---- rule links: remove spares a name another device has claimed ---- */
-    rule_links_update(dev, "sdb", none, 0, set1, 1);             /* sdb takes the name */
-    rule_links_update(dev, "sda", old1, 1, NULL, 0);             /* sda goes away */
-    assert_link(dev, "disk/by-id", "ata-WDC_WD10EZEX_WD-X", "../../sdb");
-    rule_links_update(dev, "sdb", old1, 1, NULL, 0);
-    assert(access(chk, F_OK) != 0);
-    snprintf(chk, sizeof chk, "%s/disk/by-id/ata-WDC_WD10EZEX_WD-X", dev);
-    struct stat lst;
+    /* ---- shared name: tie keeps the holder, removing the holder falls back ---- */
+    const char *lbl[] = { "disk/by-label/USB" };
+    rule_links_update(dev, claims, "b8:16", "sdb", 0, lbl, 1);
+    rule_links_update(dev, claims, "b8:32", "sdc", 0, lbl, 1);
+    assert_link(dev, "disk/by-label", "USB", "../../sdb");          /* tie: no flap */
+    rule_links_update(dev, claims, "b8:16", "sdb", 0, NULL, 0);     /* holder unplugged */
+    assert_link(dev, "disk/by-label", "USB", "../../sdc");          /* survivor takes it */
+    rule_links_update(dev, claims, "b8:48", "sdd", 10, lbl, 1);     /* higher link_priority */
+    assert_link(dev, "disk/by-label", "USB", "../../sdd");
+    rule_links_update(dev, claims, "b8:32", "sdc", 0, NULL, 0);     /* non-holder leaves */
+    assert_link(dev, "disk/by-label", "USB", "../../sdd");
+    rule_links_update(dev, claims, "b8:48", NULL, 0, NULL, 0);      /* last claimant: no DEVNAME on remove */
+    snprintf(chk, sizeof chk, "%s/disk/by-label/USB", dev);
+    assert(lstat(chk, &lst) != 0);
+    printf("test_disk_links rule links shared-name fallback: OK\n");
+
+    /* ---- remove works from the registry alone (no db record needed) ---- */
+    rule_links_update(dev, claims, "b8:0", NULL, 0, NULL, 0);
+    snprintf(chk, sizeof chk, "%s/%s", dev, ata);
     assert(lstat(chk, &lst) != 0);
     printf("test_disk_links rule links remove: OK\n");
 
-    /* ---- rule links: names that could escape dev_root are refused ---- */
+    /* ---- never replaces a real node or file ---- */
+    snprintf(chk, sizeof chk, "%s/rtc", dev);
+    FILE *rf = fopen(chk, "w"); assert(rf); fclose(rf);
+    const char *rtc[] = { "rtc" };
+    rule_links_update(dev, claims, "c252:0", "rtc0", 0, rtc, 1);
+    assert(lstat(chk, &lst) == 0 && S_ISREG(lst.st_mode));
+    rule_links_update(dev, claims, "c252:0", "rtc0", 0, NULL, 0);
+    assert(lstat(chk, &lst) == 0 && S_ISREG(lst.st_mode));
+    printf("test_disk_links rule links spare real nodes: OK\n");
+
+    /* ---- names that could escape dev_root are refused ---- */
     const char *bad[] = { "../etc/passwd", "/etc/x", "disk/../../x", "disk//x", "" };
-    rule_links_update(dev, "sda", none, 0, bad, 5);
-    for (int i = 0; i < 4; i++) assert(!rule_link_name_ok(bad[i]));
+    rule_links_update(dev, claims, "b8:0", "sda", 0, bad, 5);
+    for (int i = 0; i < 5; i++) assert(!rule_link_name_ok(bad[i]));
     snprintf(chk, sizeof chk, "%s/../etc", dev);
     assert(access(chk, F_OK) != 0);
     printf("test_disk_links rule links reject escapes: OK\n");
+
+    /* ---- a claims dir others can write is refused outright ---- */
+    char open_claims[700]; snprintf(open_claims, sizeof open_claims, "%s/.open", dev);
+    assert(mkdir(open_claims, 0755) == 0 && chmod(open_claims, 0777) == 0);
+    const char *hid[] = { "disk/by-id/should-not-exist" };
+    rule_links_update(dev, open_claims, "b8:0", "sda", 0, hid, 1);
+    snprintf(chk, sizeof chk, "%s/disk/by-id/should-not-exist", dev);
+    assert(lstat(chk, &lst) != 0);
+    printf("test_disk_links rule links refuse writable claims dir: OK\n");
     disk_links_wipe(dev);
 
     printf("test_disk_links: ALL OK\n");
