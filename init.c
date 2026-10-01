@@ -481,6 +481,13 @@ static void load_env_file(void) {
 
 /* ── zombie reaper ──────────────────────────────────────────────────── */
 
+static void restart_budget_refresh(service_t *svc) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec - svc->spawn_time_mono.tv_sec >= RESTART_RESET_SECS)
+        svc->restart_count = 0;
+}
+
 /* Record why a run ended (wait status) and log a signal death to the rail. */
 static void note_exit(service_t *svc, int status) {
     svc->exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -555,8 +562,12 @@ static void reap(void) {
                  * stop frees the reservation; cgroup_assign() rebuilds the
                  * cgroup on any later start. */
                 service_cgroup_kill(&services[i]);
+            } else if (services[i].ctl_killed) {
+                services[i].inst.state = STATE_NEW_PROCESS;
+                service_log(&services[i], "ctl-restart");
             } else {
                 /* unexpected death → enter recovery arc */
+                restart_budget_refresh(&services[i]);
                 if (services[i].failsafe_cmd[0]) {
                     start_failsafe(&services[i]);
                 }
@@ -817,6 +828,7 @@ static void monitor_failsafes(void) {
 
 static void active_kill_service(service_t *svc) {
     if (svc->child_pid <= 0) return;
+    restart_budget_refresh(svc);
     
     kill(svc->child_pid, SIGTERM);
     
@@ -1021,6 +1033,7 @@ static void tick_service(service_t *svc,
             if (svc->inst.state == STATE_SETTLED) {
                 /* recovery resolved → re-queue for spawn */
                 svc->inst.state = STATE_NEW_PROCESS;
+                svc->restart_count++;
                 service_log(svc, "retry");
             } else if (svc->inst.state == STATE_FRICTION) {
                 service_log(svc, "friction");
@@ -1032,6 +1045,7 @@ static void tick_service(service_t *svc,
             schema_step(&svc->inst, flags);
             if (svc->inst.state == STATE_RECOVERY) {
                 svc->inst.state = STATE_NEW_PROCESS;
+                svc->restart_count++;
                 service_log(svc, "retry-deep");
             } else if (svc->inst.state == STATE_EXCISED) {
                 service_cgroup_kill(svc);
@@ -1056,6 +1070,7 @@ static void tick_service(service_t *svc,
             clock_gettime(CLOCK_MONOTONIC, &_now);
             if (_now.tv_sec >= svc->dormant_until.tv_sec) {
                 svc->inst.state = STATE_NEW_PROCESS;
+                svc->restart_count++;
                 service_log(svc, "dormant-wake");
             }
             break;

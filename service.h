@@ -19,6 +19,7 @@
 #define MAX_DEPS        8
 #define MAX_RESTARTS    5
 #define COOLDOWN_SECS   5
+#define RESTART_RESET_SECS 300 /* a run this long before dying earns a fresh restart budget */
 #define STABLE_SECS     10   /* seconds running before FULL_TRUST -> FUNDAMENTAL */
 #define ONESHOT_START_TIMEOUT 90 /* default kill window for a oneshot stuck in FULL_TRUST */
 #define MEM_MIN_KB      8192 /* minimum free memory to attempt spawn */
