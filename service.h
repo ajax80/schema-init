@@ -276,6 +276,7 @@ typedef struct {
     int              watchdog_timeout_ms; /* service watchdog window (0 = disabled) */
     struct timespec  last_pet;            /* CLOCK_MONOTONIC timestamp of last pet */
     int              watchdog_sec;        /* restart the service if it goes this long without WATCHDOG=1 (0 = off) */
+    int              wd_armed_sec;        /* the window this spawn was handed in WATCHDOG_USEC (0 = none) */
     struct timespec  wd_abort_at;         /* CLOCK_MONOTONIC when the missed window sent SIGABRT, 0 if not */
     int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
@@ -371,7 +372,7 @@ void   service_set_nofile_soft_at_boot(rlim_t v);
  * NOFILE, so nothing inherits a raised limit that breaks select() */
 void service_restore_child_nofile(void);
 
-#define WD_ABORT_GRACE_MS 5000
+#define WD_ABORT_GRACE_MS 90000
 
 /* Service watchdog deadline (CLOCK_MONOTONIC ms): the end of the pet window,
  * or, once that window was missed and SIGABRT sent, the SIGKILL follow-up. */

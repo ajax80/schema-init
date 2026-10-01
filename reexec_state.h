@@ -33,6 +33,7 @@ typedef struct {
     X(PID,  failsafe_pid)        \
     X(TS,   failsafe_start)      \
     X(TS,   last_pet)            \
+    X(INT,  wd_armed_sec)        \
     X(TS,   wd_abort_at)         \
     X(INT,  ready_path_verified) \
     X(INT,  notify_ready)        \

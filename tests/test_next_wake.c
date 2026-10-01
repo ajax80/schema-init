@@ -32,7 +32,7 @@ int main(void) {
     pet.tv_nsec = 1;
     assert(svc_wd_due(&pet, &ab, 30) == 130001);
     ab.tv_sec = 140;
-    assert(svc_wd_due(&pet, &ab, 30) == 140000 + WD_ABORT_GRACE_MS);
+    assert(svc_wd_due(&pet, &ab, 30) == 140000 + 90000);
 
     assert(wd_pet_ms(60) == 20000);
     assert(wd_pet_ms(30) == 10000);
