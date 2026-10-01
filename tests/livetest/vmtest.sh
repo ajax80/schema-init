@@ -112,6 +112,30 @@ oneshot=1
 needs_root=1
 EOF
 
+# Drop-in probe: test-dropin.svc.d resets args=, overrides env=, sets mem_limit=.
+cat > "$ROOT/usr/bin/dropprobe.sh" <<'EOF'
+#!/bin/sh
+echo "DROPIN-PROBE arg=[$1] argc=[$#] var=[$DVAR] mem=[$(cat /sys/fs/cgroup/schema-init/test-dropin/memory.max 2>&1)]" > /dev/console
+EOF
+chmod +x "$ROOT/usr/bin/dropprobe.sh"
+cat > "$ROOT/etc/schema-init/services/test-dropin.svc" <<'EOF'
+name=test-dropin
+exec=/usr/bin/dropprobe.sh
+args=base-arg
+env=DVAR=base
+oneshot=1
+needs_root=1
+EOF
+mkdir -p "$ROOT/etc/schema-init/services/test-dropin.svc.d"
+cat > "$ROOT/etc/schema-init/services/test-dropin.svc.d/10-override.conf" <<'EOF'
+args=
+args=dropin-arg
+env=
+env=DVAR=dropin
+mem_limit=64
+EOF
+echo 'mem_limit=999' > "$ROOT/etc/schema-init/services/test-dropin.svc.d/.#20-lock.conf"
+
 # Coredump probe: the VM boots with the kernel's default "core" pattern, as
 # blakbox does. PID 1 should take it and raise RLIMIT_CORE before the first
 # spawn, so a first-wave service already runs with an unlimited soft limit.
@@ -403,6 +427,10 @@ sleep 3
 echo "mountns-late-on: $(cat /run/mountns-late-on 2>&1)"
 echo "mountns-late-off: $(cat /run/mountns-late-off 2>&1)"
 echo "===== MOUNTNS-END ====="
+echo "mem_limit=32" > /etc/schema-init/services/test-dropin.svc.d/30-late.conf
+echo "DROPIN-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
+echo "DROPIN-REEXEC: $(/bin/schema-ctl reexec 2>&1 | head -1)"
+echo "DROPIN-CAT-BEGIN"; /bin/schema-ctl cat test-dropin; echo "DROPIN-CAT-END"
 echo "===== VMTEST-END ====="
 # Exercise schema-init's OWN shutdown rail (SIGINT = reboot), not the kernel's.
 # poweroff -f would bypass PID 1 and leave the shutdown path untested.
@@ -504,6 +532,11 @@ for step in "SIGTERM sent" "cgroups killed" "control socket and shm released" \
             "sync done" "filesystems read-only"; do
   grep -Eq "shutdown: $step" "$SERIAL" || { echo "  MISS: shutdown step '$step'"; pass=0; }
 done
+# .svc.d drop-ins: applied at boot, and a drop-in added after boot is "modified".
+grep -Eq "DROPIN-PROBE arg=\[dropin-arg\] argc=\[1\] var=\[dropin\] mem=\[67108864\]" "$SERIAL" || { echo "  MISS: drop-in not applied (args reset / env reset / mem_limit)"; pass=0; }
+grep -Eq "DROPIN-RELOAD: err: .*'test-dropin' modified since boot" "$SERIAL" || { echo "  MISS: reload not refused after a drop-in was added"; pass=0; }
+grep -Eq "DROPIN-REEXEC: err: .*test-dropin" "$SERIAL" || { echo "  MISS: reexec not refused after a drop-in was added"; pass=0; }
+grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL" || { echo "  MISS: schema-ctl cat did not list the late drop-in"; pass=0; }
 grep -Eq "PID 1 reboot"     "$SERIAL" || { echo "  MISS: PID 1 never reached reboot()"; pass=0; }
 grep -Eq "SHUTDOWN-WEDGED"  "$SERIAL" && { echo "  MISS: shutdown wedged, forced off"; pass=0; }
 if [ "$pass" = 1 ]; then
