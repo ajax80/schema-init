@@ -2176,14 +2176,16 @@ static int reexec_start(int client, const char *path, char *err, size_t errsz) {
         snprintf(err, errsz, "'%s' is not an absolute path", path);
         return -1;
     }
-    if (stat(path, &st) < 0 || !S_ISREG(st.st_mode) || access(path, X_OK) < 0) {
-        snprintf(err, errsz, "'%s' is not an executable file", path);
+    /* One open file for the checks, the dry run and the commit: whatever
+     * replaces the path in between, PID 1 becomes the binary that was
+     * checked. O_PATH so a FIFO swapped in can't block PID 1 in open(). */
+    if ((reexec_target = open(path, O_PATH | O_CLOEXEC)) < 0) {
+        snprintf(err, errsz, "open %s: %s", path, strerror(errno));
         return -1;
     }
-    /* One open file for the dry run and the commit: whatever replaces the
-     * path in between, PID 1 becomes the binary that was checked. */
-    if ((reexec_target = open(path, O_RDONLY | O_CLOEXEC)) < 0) {
-        snprintf(err, errsz, "open %s: %s", path, strerror(errno));
+    if (fstat(reexec_target, &st) < 0 || !S_ISREG(st.st_mode) || !(st.st_mode & 0111)) {
+        snprintf(err, errsz, "'%s' is not an executable file", path);
+        close(reexec_target); reexec_target = -1;
         return -1;
     }
     if ((blob = reexec_write_blob(-1, -1, err, errsz)) < 0) {
