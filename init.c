@@ -1362,6 +1362,7 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "err: '%s' already loaded\n", services[svc_count].name);
                 for (k = 1; k < MAX_ARGV; k++)
                     if (services[svc_count].argv[k]) { free(services[svc_count].argv[k]); services[svc_count].argv[k] = NULL; }
+                service_free_landlock(&services[svc_count]);
                 write(fd, ".\n", 2);
                 return;
             }
@@ -1370,6 +1371,7 @@ static void ctl_cmd(int fd, char *line) {
             ctl_writef(fd, "err: '%s' introduces a dependency cycle — rejected\n", services[svc_count].name);
             for (k = 1; k < MAX_ARGV; k++)
                 if (services[svc_count].argv[k]) { free(services[svc_count].argv[k]); services[svc_count].argv[k] = NULL; }
+            service_free_landlock(&services[svc_count]);
             memset(&services[svc_count], 0, sizeof(service_t));
             validate_and_resolve(services, svc_count, groups, grp_count);
             write(fd, ".\n", 2);
@@ -1780,6 +1782,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 for (int k = 0; k < shadow_count; k++)
                     for (int m = 1; m < MAX_ARGV; m++)
                         if (shadow_services[k].argv[m]) { free(shadow_services[k].argv[m]); shadow_services[k].argv[m] = NULL; }
+                for (int k = 0; k < shadow_count; k++) service_free_landlock(&shadow_services[k]);
                 return -1;
             }
             break;
@@ -1796,6 +1799,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                     free(shadow_services[i].argv[j]);
                 }
             }
+            service_free_landlock(&shadow_services[i]);
         }
         return -1;
     }
@@ -1862,6 +1866,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 services[j].argv[k] = NULL;
             }
         }
+        service_free_landlock(&services[j]);
     }
 
     /* Swap the buffers */
@@ -2268,6 +2273,7 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     for (int k = 0; k < shadow_count; k++)
         for (int m = 1; m < MAX_ARGV; m++)
             if (shadow_services[k].argv[m]) { free(shadow_services[k].argv[m]); shadow_services[k].argv[m] = NULL; }
+    for (int k = 0; k < shadow_count; k++) service_free_landlock(&shadow_services[k]);
     return rc;
 }
 
@@ -3042,6 +3048,7 @@ int main(int argc, char **argv) {
                 services[i].argv[j] = NULL;
             }
         }
+        service_free_landlock(&services[i]);
     }
 
     return 0;

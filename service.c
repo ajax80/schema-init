@@ -961,6 +961,10 @@ static void svc_free_strings(service_t *svc) {
         svc->envp[i] = NULL;
     }
     svc->env_count = 0;
+    service_free_landlock(svc);
+}
+
+void service_free_landlock(service_t *svc) {
     for (int i = 0; i < svc->landlock_count; i++) {
         free(svc->landlock[i]);
         svc->landlock[i] = NULL;
@@ -1101,8 +1105,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     }
     else if (strcmp(line, "landlock_ro") == 0 || strcmp(line, "landlock_rw") == 0) {
         while (*val == ' ' || *val == '\t') val++;
-        if (val[0] != '/' || svc->landlock_count >= MAX_LANDLOCK) {
-            fprintf(stderr, "[schema-init] %s: bad %s=%s (absolute path, at most %d)\n",
+        if (val[0] != '/' || strpbrk(val, " \t") || svc->landlock_count >= MAX_LANDLOCK) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s (one absolute path without whitespace, at most %d)\n",
                     svc->name[0] ? svc->name : path, line, val, MAX_LANDLOCK);
             return -1;
         }

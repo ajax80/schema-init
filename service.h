@@ -332,6 +332,9 @@ int service_spawn(service_t *svc);
 /* apply opt-in hardening in the child, before setuid/execv; -1 -> fail closed */
 int service_apply_hardening(const service_t *svc);
 
+/* free the landlock_ro=/landlock_rw= path strings */
+void service_free_landlock(service_t *svc);
+
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);
 

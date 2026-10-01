@@ -95,6 +95,7 @@ int main(void) {
     struct { const char *body; } llbad[] = {
         { "name=b\nexec=/usr/bin/true\nlandlock_ro=/etc\n" },
         { "name=b\nexec=/usr/bin/true\nlandlock_ro=usr\n" },
+        { "name=b\nexec=/usr/bin/true\nlandlock_ro=/usr \n" },
         { "name=b\nexec=/usr/bin/true\nlandlock_ro=/usrx\n" },
         { "name=b\nexec=/usr/bin/true\nlandlock_ro=/usr\nkeep_caps=CAP_NET_BIND_SERVICE\n" },
     };
