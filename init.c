@@ -49,13 +49,6 @@ static group_t     *groups = groups_a;
 static group_t     *shadow_groups = groups_b;
 static int          grp_count = 0;
 #define EVICT_GRACE_SECS  3
-#define MAX_EVICTIONS     16
-
-typedef struct {
-    pid_t  pid;
-    char   cgroup[128];
-    time_t deadline;
-} eviction_t;
 
 static eviction_t evictions[MAX_EVICTIONS];
 static int        eviction_count = 0;
