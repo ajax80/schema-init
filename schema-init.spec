@@ -71,6 +71,7 @@ make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconf
 install -Dm0755 scripts/schema-bootok %{buildroot}%{_bindir}/schema-bootok
 install -Dm0755 scripts/schema-doctor.py %{buildroot}/usr/local/bin/schema-doctor
 install -Dm0755 scripts/schema-logind.py %{buildroot}/usr/local/bin/schema-logind.py
+install -Dm0755 scripts/schema-systemd1.py %{buildroot}/usr/local/bin/schema-systemd1.py
 install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schema-session-register
 install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
 install -Dm0755 scripts/schema-sysctl-apply %{buildroot}%{_libexecdir}/schema-init/schema-sysctl-apply
@@ -251,6 +252,12 @@ if [ -e /run/schema-init.reexec-pending ]; then
         %{_bindir}/schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; run 'schema-ctl reexec' or reboot to pick up the upgrade"
     fi
 fi
+# The org.freedesktop.systemd1 shim is a Python daemon: the new file only
+# takes effect when it is restarted. Only a box that runs it is touched.
+if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ] &&
+   %{_bindir}/schema-ctl status schema-systemd1 2>/dev/null | grep -q '^schema-systemd1 .*pid=[1-9]'; then
+    %{_bindir}/schema-ctl restart schema-systemd1 >/dev/null || echo "schema-init: restart schema-systemd1 to pick up the upgrade"
+fi
 
 %files
 %license LICENSE
@@ -265,6 +272,7 @@ fi
 %{_bindir}/schema-bootok
 /usr/local/bin/schema-doctor
 /usr/local/bin/schema-logind.py
+/usr/local/bin/schema-systemd1.py
 /usr/local/bin/schema-session-register
 /usr/local/bin/schema-session-unregister
 /usr/local/bin/schema-sysprep.sh
