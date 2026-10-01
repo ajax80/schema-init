@@ -98,6 +98,19 @@ on_boot_sec=20
 needs_root=1
 EOF
 
+# restart_count probe: a service that always dies, max_restarts=3. Only
+# crash-driven respawns count, so it must retry exactly 3 times then go dormant.
+cat > "$ROOT/usr/bin/crashloop.sh" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$ROOT/usr/bin/crashloop.sh"
+cat > "$ROOT/etc/schema-init/services/test-crash.svc" <<'EOF'
+name=test-crash
+exec=/usr/bin/crashloop.sh
+max_restarts=3
+EOF
+
 # env= spawn probe: prove the Phase 2 env= key reaches the child's environment.
 cat > "$ROOT/usr/bin/envprobe.sh" <<'EOF'
 #!/bin/sh
@@ -431,6 +444,12 @@ echo "mem_limit=32" > /etc/schema-init/services/test-dropin.svc.d/30-late.conf
 echo "DROPIN-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
 echo "DROPIN-REEXEC: $(/bin/schema-ctl reexec 2>&1 | head -1)"
 echo "DROPIN-CAT-BEGIN"; /bin/schema-ctl cat test-dropin; echo "DROPIN-CAT-END"
+echo "===== RESTARTS-TEST ====="
+echo "crash-retries: $(grep -c 'test-crash .*retry-deep' "$RAIL")"
+echo "crash-dormant: $(grep -c 'test-crash .*dormant ' "$RAIL")"
+for s in test-crash test-timer test-readypath test-dependent; do
+    echo "RESTARTS $s $(/bin/schema-ctl status $s | head -1)"
+done
 echo "===== VMTEST-END ====="
 # Exercise schema-init's OWN shutdown rail (SIGINT = reboot), not the kernel's.
 # poweroff -f would bypass PID 1 and leave the shutdown path untested.
@@ -537,6 +556,13 @@ grep -Eq "DROPIN-PROBE arg=\[dropin-arg\] argc=\[1\] var=\[dropin\] mem=\[671088
 grep -Eq "DROPIN-RELOAD: err: .*'test-dropin' modified since boot" "$SERIAL" || { echo "  MISS: reload not refused after a drop-in was added"; pass=0; }
 grep -Eq "DROPIN-REEXEC: err: .*test-dropin" "$SERIAL" || { echo "  MISS: reexec not refused after a drop-in was added"; pass=0; }
 grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL" || { echo "  MISS: schema-ctl cat did not list the late drop-in"; pass=0; }
+# restart_count: first spawn, timer fires and ctl restart are not restarts.
+grep -Eq "crash-retries: 3"  "$SERIAL" || { echo "  MISS: test-crash did not retry exactly max_restarts=3 times"; pass=0; }
+grep -Eq "crash-dormant: [1-9]" "$SERIAL" || { echo "  MISS: test-crash never went dormant"; pass=0; }
+grep -Eq "RESTARTS test-crash .*restarts=3"     "$SERIAL" || { echo "  MISS: test-crash restarts != 3"; pass=0; }
+grep -Eq "RESTARTS test-timer .*restarts=0"     "$SERIAL" || { echo "  MISS: timer firings counted as restarts"; pass=0; }
+grep -Eq "RESTARTS test-readypath .*restarts=0" "$SERIAL" || { echo "  MISS: schema-ctl restart counted as a restart"; pass=0; }
+grep -Eq "RESTARTS test-dependent .*restarts=0" "$SERIAL" || { echo "  MISS: first spawn counted as a restart"; pass=0; }
 grep -Eq "PID 1 reboot"     "$SERIAL" || { echo "  MISS: PID 1 never reached reboot()"; pass=0; }
 grep -Eq "SHUTDOWN-WEDGED"  "$SERIAL" && { echo "  MISS: shutdown wedged, forced off"; pass=0; }
 if [ "$pass" = 1 ]; then

@@ -555,8 +555,15 @@ static void reap(void) {
                  * stop frees the reservation; cgroup_assign() rebuilds the
                  * cgroup on any later start. */
                 service_cgroup_kill(&services[i]);
+            } else if (services[i].ctl_killed) {
+                services[i].inst.state = STATE_NEW_PROCESS;
+                service_log(&services[i], "ctl-restart");
             } else {
                 /* unexpected death → enter recovery arc */
+                struct timespec dn;
+                clock_gettime(CLOCK_MONOTONIC, &dn);
+                if (dn.tv_sec - services[i].spawn_time_mono.tv_sec >= RESTART_RESET_SECS)
+                    services[i].restart_count = 0;
                 if (services[i].failsafe_cmd[0]) {
                     start_failsafe(&services[i]);
                 }
@@ -1021,6 +1028,7 @@ static void tick_service(service_t *svc,
             if (svc->inst.state == STATE_SETTLED) {
                 /* recovery resolved → re-queue for spawn */
                 svc->inst.state = STATE_NEW_PROCESS;
+                svc->restart_count++;
                 service_log(svc, "retry");
             } else if (svc->inst.state == STATE_FRICTION) {
                 service_log(svc, "friction");
@@ -1032,6 +1040,7 @@ static void tick_service(service_t *svc,
             schema_step(&svc->inst, flags);
             if (svc->inst.state == STATE_RECOVERY) {
                 svc->inst.state = STATE_NEW_PROCESS;
+                svc->restart_count++;
                 service_log(svc, "retry-deep");
             } else if (svc->inst.state == STATE_EXCISED) {
                 service_cgroup_kill(svc);
@@ -1056,6 +1065,7 @@ static void tick_service(service_t *svc,
             clock_gettime(CLOCK_MONOTONIC, &_now);
             if (_now.tv_sec >= svc->dormant_until.tv_sec) {
                 svc->inst.state = STATE_NEW_PROCESS;
+                svc->restart_count++;
                 service_log(svc, "dormant-wake");
             }
             break;
