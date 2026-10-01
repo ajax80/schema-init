@@ -884,6 +884,238 @@ static int parse_calendar(service_t *svc, const char *val) {
     return 0;
 }
 
+static void svc_init_defaults(service_t *svc) {
+    memset(svc, 0, sizeof(*svc));
+    for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
+    for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
+    schema_instance_init(&svc->inst, 0, STATE_PERFECT);
+    svc->stable_secs = STABLE_SECS;
+    svc->priority = PRIO_STANDARD;
+    svc->start_timeout_sec = -1;
+    svc->allowed_slot_min = -1;
+    svc->allowed_slot_max = -1;
+    svc->max_restarts = MAX_RESTARTS;
+    svc->timer_cal_hour = -1;
+    svc->timer_cal_dow = -1;
+    svc->timer_cal_dom = -1;
+}
+
+static void svc_free_strings(service_t *svc) {
+    for (int i = 1; i < MAX_ARGV; i++) {
+        free(svc->argv[i]);
+        svc->argv[i] = NULL;
+    }
+    for (int i = 0; i < svc->env_count; i++) {
+        free(svc->envp[i]);
+        svc->envp[i] = NULL;
+    }
+    svc->env_count = 0;
+}
+
+struct parse_ctx {
+    int argc;
+    int dep_slot;
+};
+
+/* One key=value line. 0 = ok, -1 = the service must be rejected. */
+static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, const char *path) {
+    char *eq = strchr(line, '=');
+    char *val;
+    int nsr;
+    if (!eq) return 0;
+    *eq = 0;
+    val = eq + 1;
+    val[strcspn(val, "\r\n")] = 0;
+
+    if (strcmp(line, "name") == 0)
+        strncpy(svc->name, val, sizeof(svc->name) - 1);
+    else if (strcmp(line, "exec") == 0) {
+        if (strpbrk(val, " \t")) {
+            fprintf(stderr, "[schema-init] %s: exec=%s has whitespace; put each argument on its own args= line\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        strncpy(svc->exec, val, sizeof(svc->exec) - 1);
+        svc->argv[0] = svc->exec;
+        pc->argc = 1;
+    } else if (strcmp(line, "args") == 0 && pc->argc < MAX_ARGV - 1) {
+        while (*val == ' ' || *val == '\t') val++;
+        svc->argv[pc->argc++] = strdup(val);
+    } else if (strcmp(line, "env") == 0 && svc->env_count < MAX_ENV) {
+        while (*val == ' ' || *val == '\t') val++;
+        if (strchr(val, '='))
+            svc->envp[svc->env_count++] = strdup(val);
+    } else if (strcmp(line, "dep") == 0 && pc->dep_slot < MAX_DEPS) {
+        strncpy(svc->dep_name[pc->dep_slot++], val, 63);
+    } else if (strcmp(line, "oneshot") == 0 && atoi(val))
+        svc->flags |= SVC_ONESHOT;
+    else if (strcmp(line, "needs_root") == 0 && atoi(val))
+        svc->flags |= SVC_NEEDS_ROOT;
+    else if (strcmp(line, "no_new_privs") == 0) {
+        svc->hard_set |= HARD_NNP;
+        if (atoi(val)) svc->flags |= SVC_NO_NEW_PRIVS;
+    }
+    else if (strcmp(line, "keep_caps") == 0) {
+        if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
+            fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->cap_restrict = 1;
+    }
+    else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
+        if (nsr < 0) return -1;
+    }
+    else if (strcmp(line, "critical") == 0 && atoi(val))
+        svc->flags |= SVC_CRITICAL;
+    else if (strcmp(line, "no_restart") == 0 && atoi(val))
+        svc->flags |= SVC_NO_RESTART;
+    else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
+        svc->stable_secs = atoi(val);
+    else if (strcmp(line, "oom_score_adj") == 0) {
+        int v = atoi(val);
+        if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
+    }
+    else if (strcmp(line, "ready_bus_name") == 0)
+        snprintf(svc->ready_bus_name, sizeof svc->ready_bus_name, "%s", val);
+    else if (strcmp(line, "notify") == 0)
+        svc->notify = atoi(val) ? 1 : 0;
+    else if (strcmp(line, "ready_path") == 0)
+        strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
+    else if (strcmp(line, "priority") == 0) {
+        if (strcasecmp(val, "critical") == 0) svc->priority = PRIO_CRITICAL;
+        else if (strcasecmp(val, "peripheral") == 0) svc->priority = PRIO_PERIPHERAL;
+        else svc->priority = PRIO_STANDARD;
+    } else if (strcmp(line, "fuse") == 0) {
+        svc->fuse = atoi(val);
+    } else if (strcmp(line, "fuse_cmd") == 0) {
+        strncpy(svc->fuse_cmd, val, sizeof(svc->fuse_cmd) - 1);
+    } else if (strcmp(line, "failsafe") == 0) {
+        strncpy(svc->failsafe_cmd, val, sizeof(svc->failsafe_cmd) - 1);
+    } else if (strcmp(line, "failsafe_timeout_ms") == 0) {
+        svc->failsafe_timeout_ms = atoi(val);
+    } else if (strcmp(line, "ready_poll_hz") == 0) {
+        svc->ready_poll_hz = atoi(val);
+    } else if (strcmp(line, "no_excise") == 0) {
+        svc->no_excise = atoi(val);
+    } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
+        svc->watchdog_timeout_ms = atoi(val);
+    } else if (strcmp(line, "watchdog_sec") == 0) {
+        svc->watchdog_sec = atoi(val);
+    } else if (strcmp(line, "cpu_limit") == 0) {
+        svc->cpu_limit_pct = atoi(val);
+    } else if (strcmp(line, "mem_limit") == 0) {
+        svc->mem_limit_mb = atol(val);
+    } else if (strcmp(line, "cpuset") == 0) {
+        strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
+    } else if (strcmp(line, "cpuset_partition") == 0) {
+        svc->cpuset_partition = parse_partition(val);
+    } else if (strcmp(line, "allowed_slot_min") == 0) {
+        svc->allowed_slot_min = atoi(val);
+    } else if (strcmp(line, "allowed_slot_max") == 0) {
+        svc->allowed_slot_max = atoi(val);
+    } else if (strcmp(line, "max_restarts") == 0) {
+        svc->max_restarts = atoi(val);
+    } else if (strcmp(line, "start_timeout_sec") == 0) {
+        svc->start_timeout_sec = atoi(val);
+    } else if (strcmp(line, "on_boot_sec") == 0) {
+        svc->timer_boot_sec = atoi(val);
+        svc->flags |= SVC_TIMER | SVC_ONESHOT;
+    } else if (strcmp(line, "on_active_sec") == 0) {
+        svc->timer_interval_sec = atoi(val);
+        svc->flags |= SVC_TIMER | SVC_ONESHOT;
+    } else if (strcmp(line, "on_calendar") == 0) {
+        if (parse_calendar(svc, val) != 0)
+            fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
+                    "(want HH:MM, or 'Mon HH:MM' weekly, or 'DD HH:MM' "
+                    "monthly) — ignoring\n", svc->name, val);
+    } else if (strcmp(line, "persistent") == 0) {
+        if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
+    } else if (strcmp(line, "user") == 0) {
+        struct passwd *pw = getpwnam(val);
+        if (pw) {
+            svc->run_uid = pw->pw_uid;
+            svc->run_gid = pw->pw_gid;
+            strncpy(svc->run_user, val, sizeof(svc->run_user) - 1);
+        }
+    }
+    return 0;
+}
+
+static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path) {
+    char line[512];
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    while (fgets(line, sizeof(line), f)) {
+        if (svc_parse_line(svc, pc, line, path) != 0) {
+            fclose(f);
+            return -1;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+/* Post-parse checks and defaults, then the name from the filename.
+ * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
+static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
+    if (hardening_finalize(svc) != 0) return -1;
+    if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
+        fprintf(stderr,
+                "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
+                "— ignoring (no cores to isolate)\n", svc->name);
+        svc->cpuset_partition = PART_MEMBER;
+    }
+    if ((svc->flags & SVC_TIMER_PERSIST) && !(svc->flags & SVC_TIMER_CALENDAR)) {
+        fprintf(stderr, "[schema-init] WARN: '%s' persistent=1 needs on_calendar "
+                "— ignoring (catch-up only applies to calendar timers)\n", svc->name);
+        svc->flags &= ~SVC_TIMER_PERSIST;
+    }
+    svc->content_hash = fnv1a_file(path);
+
+    /* default start timeout: protect oneshots (but not timers, which may
+     * legitimately run long); daemons rely on stable_secs instead */
+    if (svc->start_timeout_sec == -1) {
+        svc->start_timeout_sec =
+            ((svc->flags & SVC_ONESHOT) && !(svc->flags & SVC_TIMER))
+            ? ONESHOT_START_TIMEOUT : 0;
+    }
+
+    const char *fname = strrchr(path, '/');
+    fname = fname ? fname + 1 : path;
+    size_t flen = strlen(fname);
+    if (flen >= 5 && strcmp(fname + flen - 4, ".svc") == 0) {
+        char base_name[256];
+        size_t blen = flen - 4;
+        if (blen >= sizeof(base_name)) blen = sizeof(base_name) - 1;
+        memcpy(base_name, fname, blen);
+        base_name[blen] = '\0';
+        char *bat = strchr(base_name, '@');
+        /* template file itself (motor@.svc) — not a spawnable instance */
+        if (bat && !*(bat + 1)) return -1;
+        if (bat || !svc->name[0]) {
+            strncpy(svc->name, base_name, sizeof(svc->name) - 1);
+            svc->name[sizeof(svc->name) - 1] = '\0';
+        }
+        if (bat)
+            strncpy(svc->instance, bat + 1, sizeof(svc->instance) - 1);
+    }
+
+    if (!svc->name[0] || !svc->exec[0]) return -1;
+    svc->argv[pc->argc] = NULL;
+    return 0;
+}
+
+static int svc_load_file(const char *path, service_t *svc) {
+    struct parse_ctx pc = { 0, 0 };
+    svc_init_defaults(svc);
+    if (svc_parse_file(svc, &pc, path) != 0 || svc_finalize(svc, &pc, path) != 0) {
+        svc_free_strings(svc);
+        return -1;
+    }
+    return 0;
+}
+
 int services_load(const char *dir, service_t *table, int max) {
     DIR *d = opendir(dir);
     struct dirent *ent;
@@ -894,10 +1126,6 @@ int services_load(const char *dir, service_t *table, int max) {
 
     while ((ent = readdir(d))) {
         char path[512];
-        FILE *f;
-        char line[512];
-        service_t *svc;
-        int argc;
         size_t nlen = strlen(ent->d_name);
 
         /* only .svc files */
@@ -913,201 +1141,8 @@ int services_load(const char *dir, service_t *table, int max) {
         }
 
         snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
-        f = fopen(path, "r");
-        if (!f) continue;
-
-        svc = &table[count];
-        memset(svc, 0, sizeof(*svc));
-        for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
-        for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
-        schema_instance_init(&svc->inst, 0, STATE_PERFECT);
-        svc->stable_secs = STABLE_SECS;
-        svc->priority = PRIO_STANDARD;
-        svc->start_timeout_sec = -1;
-        svc->allowed_slot_min = -1;
-        svc->allowed_slot_max = -1;
-        svc->max_restarts = MAX_RESTARTS;
-        svc->timer_cal_hour = -1;
-        svc->timer_cal_dow = -1;
-        svc->timer_cal_dom = -1;
-        int dep_slot = 0;
-        int bad = 0;
-        int nsr;
-
-        argc = 0;
-        /* NOTE: keep in sync with service_load_one parse chain */
-        while (fgets(line, sizeof(line), f)) {
-            char *eq = strchr(line, '=');
-            char *val;
-            if (!eq) continue;
-            *eq = 0;
-            val = eq + 1;
-            /* strip newline */
-            val[strcspn(val, "\r\n")] = 0;
-
-            if (strcmp(line, "name") == 0)
-                strncpy(svc->name, val, sizeof(svc->name) - 1);
-            else if (strcmp(line, "exec") == 0) {
-                if (strpbrk(val, " \t")) {
-                    fprintf(stderr, "[schema-init] %s: exec=%s has whitespace; put each argument on its own args= line\n",
-                            svc->name[0] ? svc->name : path, val);
-                    bad = 1;
-                    break;
-                }
-                strncpy(svc->exec, val, sizeof(svc->exec) - 1);
-                svc->argv[0] = svc->exec;
-                argc = 1;
-            } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1) {
-                while (*val == ' ' || *val == '\t') val++;
-                svc->argv[argc++] = strdup(val);
-            } else if (strcmp(line, "env") == 0 && svc->env_count < MAX_ENV) {
-                while (*val == ' ' || *val == '\t') val++;
-                if (strchr(val, '='))
-                    svc->envp[svc->env_count++] = strdup(val);
-            } else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS) {
-                strncpy(svc->dep_name[dep_slot++], val, 63);
-            } else if (strcmp(line, "oneshot") == 0 && atoi(val))
-                svc->flags |= SVC_ONESHOT;
-            else if (strcmp(line, "needs_root") == 0 && atoi(val))
-                svc->flags |= SVC_NEEDS_ROOT;
-            else if (strcmp(line, "no_new_privs") == 0) {
-                svc->hard_set |= HARD_NNP;
-                if (atoi(val)) svc->flags |= SVC_NO_NEW_PRIVS;
-            }
-            else if (strcmp(line, "keep_caps") == 0) {
-                if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
-                    fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
-                            svc->name[0] ? svc->name : path, val);
-                    bad = 1;
-                    break;
-                }
-                svc->cap_restrict = 1;
-            }
-            else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
-                if (nsr < 0) { bad = 1; break; }
-            }
-            else if (strcmp(line, "critical") == 0 && atoi(val))
-                svc->flags |= SVC_CRITICAL;
-            else if (strcmp(line, "no_restart") == 0 && atoi(val))
-                svc->flags |= SVC_NO_RESTART;
-            else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
-                svc->stable_secs = atoi(val);
-            else if (strcmp(line, "oom_score_adj") == 0) {
-                int v = atoi(val);
-                if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
-            }
-            else if (strcmp(line, "ready_bus_name") == 0)
-                snprintf(svc->ready_bus_name, sizeof svc->ready_bus_name, "%s", val);
-            else if (strcmp(line, "notify") == 0)
-                svc->notify = atoi(val) ? 1 : 0;
-            else if (strcmp(line, "ready_path") == 0)
-                strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
-            else if (strcmp(line, "priority") == 0) {
-                if (strcasecmp(val, "critical") == 0) svc->priority = PRIO_CRITICAL;
-                else if (strcasecmp(val, "peripheral") == 0) svc->priority = PRIO_PERIPHERAL;
-                else svc->priority = PRIO_STANDARD;
-            } else if (strcmp(line, "fuse") == 0) {
-                svc->fuse = atoi(val);
-            } else if (strcmp(line, "fuse_cmd") == 0) {
-                strncpy(svc->fuse_cmd, val, sizeof(svc->fuse_cmd) - 1);
-            } else if (strcmp(line, "failsafe") == 0) {
-                strncpy(svc->failsafe_cmd, val, sizeof(svc->failsafe_cmd) - 1);
-            } else if (strcmp(line, "failsafe_timeout_ms") == 0) {
-                svc->failsafe_timeout_ms = atoi(val);
-            } else if (strcmp(line, "ready_poll_hz") == 0) {
-                svc->ready_poll_hz = atoi(val);
-            } else if (strcmp(line, "no_excise") == 0) {
-                svc->no_excise = atoi(val);
-            } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
-                svc->watchdog_timeout_ms = atoi(val);
-            } else if (strcmp(line, "watchdog_sec") == 0) {
-                svc->watchdog_sec = atoi(val);
-            } else if (strcmp(line, "cpu_limit") == 0) {
-                svc->cpu_limit_pct = atoi(val);
-            } else if (strcmp(line, "mem_limit") == 0) {
-                svc->mem_limit_mb = atol(val);
-            } else if (strcmp(line, "cpuset") == 0) {
-                strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
-            } else if (strcmp(line, "cpuset_partition") == 0) {
-                svc->cpuset_partition = parse_partition(val);
-            } else if (strcmp(line, "allowed_slot_min") == 0) {
-                svc->allowed_slot_min = atoi(val);
-            } else if (strcmp(line, "allowed_slot_max") == 0) {
-                svc->allowed_slot_max = atoi(val);
-            } else if (strcmp(line, "max_restarts") == 0) {
-                svc->max_restarts = atoi(val);
-            } else if (strcmp(line, "start_timeout_sec") == 0) {
-                svc->start_timeout_sec = atoi(val);
-            } else if (strcmp(line, "on_boot_sec") == 0) {
-                svc->timer_boot_sec = atoi(val);
-                svc->flags |= SVC_TIMER | SVC_ONESHOT;
-            } else if (strcmp(line, "on_active_sec") == 0) {
-                svc->timer_interval_sec = atoi(val);
-                svc->flags |= SVC_TIMER | SVC_ONESHOT;
-            } else if (strcmp(line, "on_calendar") == 0) {
-                if (parse_calendar(svc, val) != 0)
-                    fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
-                            "(want HH:MM, or 'Mon HH:MM' weekly, or 'DD HH:MM' "
-                            "monthly) — ignoring\n", svc->name, val);
-            } else if (strcmp(line, "persistent") == 0) {
-                if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
-            } else if (strcmp(line, "user") == 0) {
-                struct passwd *pw = getpwnam(val);
-                if (pw) {
-                    svc->run_uid = pw->pw_uid;
-                    svc->run_gid = pw->pw_gid;
-                    strncpy(svc->run_user, val, sizeof(svc->run_user) - 1);
-                }
-            }
-        }
-        if (bad) { fclose(f); continue; }
-        fclose(f);
-        if (hardening_finalize(svc) != 0) continue;
-        if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
-            fprintf(stderr,
-                    "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
-                    "— ignoring (no cores to isolate)\n", svc->name);
-            svc->cpuset_partition = PART_MEMBER;
-        }
-        if ((svc->flags & SVC_TIMER_PERSIST) && !(svc->flags & SVC_TIMER_CALENDAR)) {
-            fprintf(stderr, "[schema-init] WARN: '%s' persistent=1 needs on_calendar "
-                    "— ignoring (catch-up only applies to calendar timers)\n", svc->name);
-            svc->flags &= ~SVC_TIMER_PERSIST;
-        }
-        svc->content_hash = fnv1a_file(path);
-
-        /* default start timeout: protect oneshots (but not timers, which may
-         * legitimately run long); daemons rely on stable_secs instead */
-        if (svc->start_timeout_sec == -1) {
-            svc->start_timeout_sec =
-                ((svc->flags & SVC_ONESHOT) && !(svc->flags & SVC_TIMER))
-                ? ONESHOT_START_TIMEOUT : 0;
-        }
-
-        char base_name[256];
-        memset(base_name, 0, sizeof(base_name));
-        if (nlen - 4 < sizeof(base_name)) {
-            memcpy(base_name, ent->d_name, nlen - 4);
-        } else {
-            memcpy(base_name, ent->d_name, sizeof(base_name) - 1);
-        }
-        {
-            char *bat = strchr(base_name, '@');
-            if (bat && !*(bat + 1)) {
-                /* template file itself (motor@.svc) — not a spawnable instance */
-                continue;
-            }
-            if (bat || !svc->name[0]) {
-                strncpy(svc->name, base_name, sizeof(svc->name) - 1);
-                svc->name[sizeof(svc->name) - 1] = '\0';
-            }
-            if (bat && *(bat + 1))
-                strncpy(svc->instance, bat + 1, sizeof(svc->instance) - 1);
-        }
-
-        if (!svc->name[0] || !svc->exec[0]) continue;
-        svc->argv[argc] = NULL;
-        count++;
+        if (svc_load_file(path, &table[count]) == 0)
+            count++;
     }
 
     closedir(d);
@@ -1135,194 +1170,9 @@ int services_load(const char *dir, service_t *table, int max) {
 /* ── single service file loader ─────────────────────────────────────── */
 
 int service_load_one(const char *path, service_t *svc) {
-    FILE *f;
-    char line[512];
-    int argc, dep_slot, nsr;
-
-    f = fopen(path, "r");
-    if (!f) return -1;
-
-    memset(svc, 0, sizeof(*svc));
-    for (int i = 0; i < MAX_DEPS; i++) svc->dep_idx[i] = -1;
-    for (int i = 0; i < MAX_DEPS; i++) svc->grp_dep_idx[i] = -1;
-    schema_instance_init(&svc->inst, 0, STATE_PERFECT);
-    svc->stable_secs = STABLE_SECS;
-    svc->priority = PRIO_STANDARD;
-    svc->start_timeout_sec = -1;
-    svc->allowed_slot_min = -1;
-    svc->allowed_slot_max = -1;
-    svc->max_restarts = MAX_RESTARTS;
-    svc->timer_cal_hour = -1;
-    svc->timer_cal_dow = -1;
-    svc->timer_cal_dom = -1;
-    argc = 0;
-    dep_slot = 0;
-
-    /* NOTE: keep in sync with services_load parse chain */
-    while (fgets(line, sizeof(line), f)) {
-        char *eq = strchr(line, '=');
-        char *val;
-        if (!eq) continue;
-        *eq = 0;
-        val = eq + 1;
-        val[strcspn(val, "\r\n")] = 0;
-
-        if (strcmp(line, "name") == 0)
-            strncpy(svc->name, val, sizeof(svc->name) - 1);
-        else if (strcmp(line, "exec") == 0) {
-            if (strpbrk(val, " \t")) {
-                fprintf(stderr, "[schema-init] %s: exec=%s has whitespace; put each argument on its own args= line\n",
-                        svc->name[0] ? svc->name : path, val);
-                fclose(f);
-                return -1;
-            }
-            strncpy(svc->exec, val, sizeof(svc->exec) - 1);
-            svc->argv[0] = svc->exec;
-            argc = 1;
-        } else if (strcmp(line, "args") == 0 && argc < MAX_ARGV - 1) {
-            while (*val == ' ' || *val == '\t') val++;
-            svc->argv[argc++] = strdup(val);
-        }
-        else if (strcmp(line, "env") == 0 && svc->env_count < MAX_ENV) {
-            while (*val == ' ' || *val == '\t') val++;
-            if (strchr(val, '='))
-                svc->envp[svc->env_count++] = strdup(val);
-        }
-        else if (strcmp(line, "dep") == 0 && dep_slot < MAX_DEPS)
-            strncpy(svc->dep_name[dep_slot++], val, 63);
-        else if (strcmp(line, "oneshot") == 0 && atoi(val))
-            svc->flags |= SVC_ONESHOT;
-        else if (strcmp(line, "needs_root") == 0 && atoi(val))
-            svc->flags |= SVC_NEEDS_ROOT;
-        else if (strcmp(line, "no_new_privs") == 0) {
-            svc->hard_set |= HARD_NNP;
-            if (atoi(val)) svc->flags |= SVC_NO_NEW_PRIVS;
-        }
-        else if (strcmp(line, "keep_caps") == 0) {
-            if (parse_cap_list(val, &svc->cap_keep_mask) != 0) {
-                fprintf(stderr, "[schema-init] %s: unknown capability in keep_caps=%s\n",
-                        svc->name[0] ? svc->name : path, val);
-                fclose(f);
-                return -1;
-            }
-            svc->cap_restrict = 1;
-        }
-        else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
-            if (nsr < 0) { fclose(f); return -1; }
-        }
-        else if (strcmp(line, "critical") == 0 && atoi(val))
-            svc->flags |= SVC_CRITICAL;
-        else if (strcmp(line, "no_restart") == 0 && atoi(val))
-            svc->flags |= SVC_NO_RESTART;
-        else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
-            svc->stable_secs = atoi(val);
-        else if (strcmp(line, "oom_score_adj") == 0) {
-            int v = atoi(val);
-            if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
-        }
-        else if (strcmp(line, "ready_bus_name") == 0)
-            snprintf(svc->ready_bus_name, sizeof svc->ready_bus_name, "%s", val);
-        else if (strcmp(line, "notify") == 0)
-            svc->notify = atoi(val) ? 1 : 0;
-        else if (strcmp(line, "ready_path") == 0)
-            strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
-        else if (strcmp(line, "priority") == 0) {
-            if (strcasecmp(val, "critical") == 0) svc->priority = PRIO_CRITICAL;
-            else if (strcasecmp(val, "peripheral") == 0) svc->priority = PRIO_PERIPHERAL;
-            else svc->priority = PRIO_STANDARD;
-        } else if (strcmp(line, "fuse") == 0) {
-            svc->fuse = atoi(val);
-        } else if (strcmp(line, "fuse_cmd") == 0) {
-            strncpy(svc->fuse_cmd, val, sizeof(svc->fuse_cmd) - 1);
-        } else if (strcmp(line, "failsafe") == 0) {
-            strncpy(svc->failsafe_cmd, val, sizeof(svc->failsafe_cmd) - 1);
-        } else if (strcmp(line, "failsafe_timeout_ms") == 0) {
-            svc->failsafe_timeout_ms = atoi(val);
-        } else if (strcmp(line, "ready_poll_hz") == 0) {
-            svc->ready_poll_hz = atoi(val);
-        } else if (strcmp(line, "no_excise") == 0) {
-            svc->no_excise = atoi(val);
-        } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
-            svc->watchdog_timeout_ms = atoi(val);
-        } else if (strcmp(line, "watchdog_sec") == 0) {
-            svc->watchdog_sec = atoi(val);
-        } else if (strcmp(line, "cpu_limit") == 0) {
-            svc->cpu_limit_pct = atoi(val);
-        } else if (strcmp(line, "mem_limit") == 0) {
-            svc->mem_limit_mb = atol(val);
-        } else if (strcmp(line, "cpuset") == 0) {
-            strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
-        } else if (strcmp(line, "cpuset_partition") == 0) {
-            svc->cpuset_partition = parse_partition(val);
-        } else if (strcmp(line, "allowed_slot_min") == 0) {
-            svc->allowed_slot_min = atoi(val);
-        } else if (strcmp(line, "allowed_slot_max") == 0) {
-            svc->allowed_slot_max = atoi(val);
-        } else if (strcmp(line, "max_restarts") == 0) {
-            svc->max_restarts = atoi(val);
-        } else if (strcmp(line, "start_timeout_sec") == 0) {
-            svc->start_timeout_sec = atoi(val);
-        } else if (strcmp(line, "on_boot_sec") == 0) {
-            svc->timer_boot_sec = atoi(val);
-            svc->flags |= SVC_TIMER | SVC_ONESHOT;
-        } else if (strcmp(line, "on_active_sec") == 0) {
-            svc->timer_interval_sec = atoi(val);
-            svc->flags |= SVC_TIMER | SVC_ONESHOT;
-        } else if (strcmp(line, "on_calendar") == 0) {
-            if (parse_calendar(svc, val) != 0)
-                fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
-                        "(want HH:MM 00:00-23:59) — ignoring\n", svc->name, val);
-        } else if (strcmp(line, "persistent") == 0) {
-            if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
-        } else if (strcmp(line, "user") == 0) {
-            struct passwd *pw = getpwnam(val);
-            if (pw) {
-                svc->run_uid = pw->pw_uid; svc->run_gid = pw->pw_gid;
-                strncpy(svc->run_user, val, sizeof(svc->run_user) - 1);
-            }
-        }
-    }
-    fclose(f);
-    if (hardening_finalize(svc) != 0) return -1;
-    if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
-        fprintf(stderr,
-                "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "
-                "— ignoring (no cores to isolate)\n", svc->name);
-        svc->cpuset_partition = PART_MEMBER;
-    }
-
-    if ((svc->flags & SVC_TIMER_PERSIST) && !(svc->flags & SVC_TIMER_CALENDAR)) {
-        fprintf(stderr, "[schema-init] WARN: '%s' persistent=1 needs on_calendar "
-                "— ignoring (catch-up only applies to calendar timers)\n", svc->name);
-        svc->flags &= ~SVC_TIMER_PERSIST;
-    }
-
-    if (svc->start_timeout_sec == -1) {
-        svc->start_timeout_sec =
-            ((svc->flags & SVC_ONESHOT) && !(svc->flags & SVC_TIMER))
-            ? ONESHOT_START_TIMEOUT : 0;
-    }
-
-    char base_name[256];
-    memset(base_name, 0, sizeof(base_name));
-    const char *fname = strrchr(path, '/');
-    if (fname) fname++;
-    else fname = path;
-    size_t flen = strlen(fname);
-    if (flen >= 5 && strcmp(fname + flen - 4, ".svc") == 0) {
-        size_t blen = flen - 4;
-        if (blen >= sizeof(base_name)) blen = sizeof(base_name) - 1;
-        memcpy(base_name, fname, blen);
-        if (strchr(base_name, '@') || !svc->name[0]) {
-            strncpy(svc->name, base_name, sizeof(svc->name) - 1);
-            svc->name[sizeof(svc->name) - 1] = '\0';
-        }
-    }
-
-    if (!svc->name[0] || !svc->exec[0]) return -1;
-    svc->argv[argc] = NULL;
-    return 0;
+    return svc_load_file(path, svc);
 }
+
 
 /* ── dependency cycle detection (DFS, three-color) ──────────────────── */
 
