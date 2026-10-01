@@ -235,3 +235,18 @@ Estimated ~700 lines including tests. Later PR: RPM `%posttrans`.
    the RPM `%posttrans` call `schema-ctl reexec` when `/proc/1/comm` is `schema-init`?
    Recommended: yes, in a later PR. A refusal there just logs "reboot to apply" and the
    upgrade still succeeds.
+
+## As built (2026-09-30, after /code-review)
+
+- argv is `--reexec BLOB OLDEXE`, so the fallback works even when the blob is
+  unreadable. The fallback passes `OLDEXE = -1`. An image with nowhere further back
+  adopts leniently instead of refusing, which would loop. Only an unreadable blob
+  stops it. It replies `err: rolled back to <ver>`.
+- The blob also carries the boot soft `RLIMIT_NOFILE` (`nofile_soft`) and each
+  service's live `SVC_NO_RESTART` bit (`no_restart`). The second is a schema-ctl stop
+  hold and also fixes the same loss on reload.
+- The target is opened once in `reexec_start`. The dry run and the commit both
+  `fexecve` that fd, so the committed binary is the validated one.
+- The dry run sends loader output to stderr and writes its verdict alone on the
+  pipe.
+- `coredump_take_pattern` is boot-only.
