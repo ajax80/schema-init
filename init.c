@@ -309,6 +309,36 @@ static void watchdog_pet(void) {
     }
 }
 
+static void service_watchdog_tick(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    int64_t now_ms = ts_ms_ceil(&now);
+    for (int i = 0; i < svc_count; i++) {
+        service_t *svc = &services[i];
+        if (svc->wd_armed_sec <= 0 || svc->child_pid <= 0 || !svc->notify_ready || svc->ctl_killed)
+            continue;
+        if (svc->is_frozen) {
+            svc->last_pet = now;
+            if (svc->wd_abort_at.tv_sec || svc->wd_abort_at.tv_nsec)
+                svc->wd_abort_at = now;
+            continue;
+        }
+        if (now_ms < svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec)) continue;
+        if (svc->wd_abort_at.tv_sec || svc->wd_abort_at.tv_nsec) {
+            service_log(svc, "watchdog-kill");
+            kill(svc->child_pid, SIGKILL);
+            svc->wd_abort_at = (struct timespec){0, 0};
+            svc->last_pet = now;
+        } else {
+            printf("[schema-init] watchdog: '%s' sent no WATCHDOG=1 for %ds — SIGABRT\n",
+                   svc->name, svc->wd_armed_sec);
+            service_log(svc, "watchdog-abort");
+            kill(svc->child_pid, SIGABRT);
+            svc->wd_abort_at = now;
+        }
+    }
+}
+
 /* ── PID 1 essentials ───────────────────────────────────────────────── */
 
 static void mount_pseudo(void) {
@@ -1532,8 +1562,11 @@ static void notify_poll(void) {
             }
             if (m.status[0])
                 snprintf(svc->notify_status, sizeof svc->notify_status, "%s", m.status);
+            if (m.watchdog)
+                clock_gettime(CLOCK_MONOTONIC, &svc->last_pet);
             if (m.ready && !svc->notify_ready) {
                 svc->notify_ready = 1;
+                clock_gettime(CLOCK_MONOTONIC, &svc->last_pet);
                 service_log(svc, "notify-ready");
             }
             break;
@@ -1621,6 +1654,10 @@ static int get_poll_timeout(void) {
         uint8_t s = svc->inst.state;
         if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0)
             critical = 1;
+        if (svc->wd_armed_sec > 0 && svc->child_pid > 0 && svc->notify_ready && !svc->ctl_killed &&
+            !svc->is_frozen)
+            best = wake_min(best, svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec),
+                            now_m, WAKE_NONE);
         if (svc->failsafe_pid > 0 || (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
             tick = 1;
         else if (s == STATE_DORMANT)
@@ -2921,6 +2958,7 @@ int main(int argc, char **argv) {
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
         eviction_tick();
+        service_watchdog_tick();
         watchdog_pet();
         reexec_check_deadline();
     }

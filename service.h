@@ -275,6 +275,9 @@ typedef struct {
     int              no_excise;        /* 1 to prevent transition to STATE_EXCISED */
     int              watchdog_timeout_ms; /* service watchdog window (0 = disabled) */
     struct timespec  last_pet;            /* CLOCK_MONOTONIC timestamp of last pet */
+    int              watchdog_sec;        /* restart the service if it goes this long without WATCHDOG=1 (0 = off) */
+    int              wd_armed_sec;        /* the window this spawn was handed in WATCHDOG_USEC (0 = none) */
+    struct timespec  wd_abort_at;         /* CLOCK_MONOTONIC when the missed window sent SIGABRT, 0 if not */
     int              is_frozen;        /* status tracker for frozen services */
     struct timespec  stable_time;      /* CLOCK_MONOTONIC when FUNDAMENTAL/PERFECT reached */
     int              exit_status;
@@ -368,5 +371,16 @@ void   service_set_nofile_soft_at_boot(rlim_t v);
 /* call between fork() and exec(): give the child back PID 1's original soft
  * NOFILE, so nothing inherits a raised limit that breaks select() */
 void service_restore_child_nofile(void);
+
+#define WD_ABORT_GRACE_MS 90000
+
+/* Service watchdog deadline (CLOCK_MONOTONIC ms): the end of the pet window,
+ * or, once that window was missed and SIGABRT sent, the SIGKILL follow-up. */
+static inline int64_t svc_wd_due(const struct timespec *last_pet,
+                                 const struct timespec *abort_at, int watchdog_sec) {
+    if (abort_at->tv_sec || abort_at->tv_nsec)
+        return ts_ms_ceil(abort_at) + WD_ABORT_GRACE_MS;
+    return ts_ms_ceil(last_pet) + (int64_t)watchdog_sec * 1000;
+}
 
 #endif
