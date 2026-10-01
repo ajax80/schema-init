@@ -7,6 +7,7 @@
 #include <sys/un.h>
 
 #include "schema.h"
+#include "svc_dropins.h"
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
@@ -28,6 +29,8 @@ static void usage(FILE *out) {
         "  stop <svc>             stop it and hold it down (alias: down)\n"
         "  restart <svc>\n"
         "  add <path>             load one .svc file at runtime\n"
+        "  cat <svc>              print <svc>.svc and its drop-ins in the order\n"
+        "                         they apply (read from disk, not from PID 1)\n"
         "  pet <svc>              feed a service's watchdog\n"
         "  reset [<svc>]          clear restart/dormant counters and retry;\n"
         "                         no argument resets every service\n"
@@ -61,6 +64,34 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0) {
         printf("schema-ctl %s\n", SCHEMA_INIT_VERSION);
+        return 0;
+    }
+
+    if (strcmp(argv[1], "cat") == 0) {
+        char path[SVC_DROPIN_PATH], files[SVC_DROPIN_MAX + 1][SVC_DROPIN_PATH];
+        int nf;
+        if (argc != 3 || !argv[2][0] || strchr(argv[2], '/')) {
+            fprintf(stderr, "usage: schema-ctl cat <svc>\n");
+            return 1;
+        }
+        snprintf(path, sizeof path, "%s/%s.svc", SVC_DIR, argv[2]);
+        if (access(path, R_OK) < 0) {
+            fprintf(stderr, "schema-ctl: %s: %s\n", path, strerror(errno));
+            return 1;
+        }
+        snprintf(files[0], sizeof files[0], "%s", path);
+        nf = 1 + svc_dropin_list(path, files + 1, SVC_DROPIN_MAX);
+        for (i = 0; i < nf; i++) {
+            FILE *f = fopen(files[i], "r");
+            char line[512];
+            if (!f) {
+                fprintf(stderr, "schema-ctl: %s: %s\n", files[i], strerror(errno));
+                return 1;
+            }
+            printf("%s# %s\n", i ? "\n" : "", files[i]);
+            while (fgets(line, sizeof line, f)) fputs(line, stdout);
+            fclose(f);
+        }
         return 0;
     }
 

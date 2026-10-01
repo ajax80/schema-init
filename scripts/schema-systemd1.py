@@ -52,6 +52,27 @@ def svc_name(unit):
             return unit[:-len(suffix)]
     return unit
 
+def svc_files(path):
+    """path, then its drop-ins in the order PID 1 applies them (svc_dropins.h)."""
+    d, base = os.path.split(path)
+    stem = base[:-4]
+    dirs = []
+    if '@' in stem and stem.split('@', 1)[1]:
+        dirs.append(os.path.join(d, stem.split('@', 1)[0] + '@.svc.d'))
+    dirs.append(path + '.d')
+    out = [path]
+    for dd in dirs:
+        try:
+            names = sorted(os.listdir(dd))
+        except OSError:
+            continue
+        for n in names:
+            p = os.path.join(dd, n)
+            if not n.startswith('.') and len(n) > 5 and n.endswith('.conf') and os.path.isfile(p):
+                out.append(p)
+    return out
+
+
 class UnknownUnitFallback(dbus.service.FallbackObject):
     """Answers Properties on unit paths we do not manage.
 
@@ -148,12 +169,12 @@ class Systemd1Unit(dbus.service.Object):
             return self.can_reload
         self.can_reload = False
         try:
-            with open('/etc/schema-init/services/%s.svc' % self.short_name) as f:
-                for line in f:
-                    line = line.strip()
-                    if line in ('reload=1', 'reload=yes'):
-                        self.can_reload = True
-                        break
+            for path in svc_files('/etc/schema-init/services/%s.svc' % self.short_name):
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('reload='):
+                            self.can_reload = line in ('reload=1', 'reload=yes')
         except OSError:
             pass
         return self.can_reload
@@ -225,6 +246,9 @@ class Systemd1Unit(dbus.service.Object):
             'UnitFileState': dbus.String(self.unit_file_state),
             'UnitFilePreset': dbus.String('enabled'),
             'FragmentPath': dbus.String(f'/etc/schema-init/services/{self.short_name}.svc'),
+            'DropInPaths': dbus.Array(
+                [dbus.String(p) for p in svc_files(f'/etc/schema-init/services/{self.short_name}.svc')[1:]],
+                signature='s'),
             'ActiveEnterTimestamp': dbus.UInt64(self.active_enter_timestamp),
             'Job': dbus.Struct((dbus.UInt32(0), dbus.ObjectPath('/')), signature='uo'),
             'CanStart': dbus.Boolean(True),

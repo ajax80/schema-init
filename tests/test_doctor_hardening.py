@@ -63,6 +63,29 @@ switch(None)
 rc, _ = lint()
 check("lint ignores the switch", rc == 1)
 
+# A knob set in a drop-in counts; files PID 1 would skip do not.
+os.makedirs(os.path.join(svcd, "partial.svc.d"))
+open(os.path.join(svcd, "partial.svc.d/10-h.conf"), "w").write("no_new_privs=1\nprivate_tmp=1\n")
+open(os.path.join(svcd, "partial.svc.d/.#20-h.conf"), "w").write("protect_home=1\n")
+open(os.path.join(svcd, "partial.svc.d/30-h.txt"), "w").write("protect_home=1\n")
+check("drop-in knobs count, skipped files do not",
+      dict(sd.hardening_unannotated()).get("partial.svc") == ["protect_home"])
+for d, f in (("m@.svc.d", "50.conf"), ("m@a.svc.d", "10.conf")):
+    os.makedirs(os.path.join(svcd, d))
+    open(os.path.join(svcd, d, f), "w").write("")
+check("svc_files order: base, then template dir, then instance dir",
+      [os.path.relpath(p, svcd) for p in sd.svc_files(os.path.join(svcd, "m@a.svc"))]
+      == ["m@a.svc", "m@.svc.d/50.conf", "m@a.svc.d/10.conf"])
+
+ochk = next(c for c in sd.REGISTRY if c.name == "orphan-dropins")
+svc("m@a", FULL)
+check("used drop-in dirs are not orphans", ochk.detect() is None)
+os.makedirs(os.path.join(svcd, "ghost.svc.d"))
+os.makedirs(os.path.join(svcd, "t@.svc.d"))
+f = ochk.detect()
+check("orphan dirs reported", f is not None and "ghost.svc.d" in f.detail and "t@.svc.d" in f.detail
+      and "partial.svc.d" not in f.detail and "m@.svc.d" not in f.detail and f.healable is False)
+
 # Every shipped .svc in the repo is fully annotated: lint each source dir as
 # if it were a host's services dir.
 import glob, shutil

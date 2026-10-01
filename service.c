@@ -18,6 +18,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <sys/resource.h>
+#include "svc_dropins.h"
 
 /* PID 1 runs its main loop with SIGCHLD and SIGHUP blocked -- it reaps through
  * signalfd, so that is correct for us and wrong for everyone else. exec resets
@@ -837,8 +838,15 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
     return 1;
 }
 
-static uint32_t fnv1a_file(const char *path) {
-    uint32_t h = 2166136261u;
+static uint32_t fnv1a_bytes(uint32_t h, const void *p, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        h ^= ((const unsigned char *)p)[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static uint32_t fnv1a_file_from(uint32_t h, const char *path) {
     FILE *f = fopen(path, "r");
     int c;
     if (!f) return 0;
@@ -847,6 +855,17 @@ static uint32_t fnv1a_file(const char *path) {
         h *= 16777619u;
     }
     fclose(f);
+    return h;
+}
+
+/* The base file's bytes alone (unchanged from before drop-ins, so a host
+ * with none keeps the same hash), then each drop-in's path, NUL, bytes. */
+static uint32_t svc_content_hash(const char *path, char (*dropins)[SVC_DROPIN_PATH], int n) {
+    uint32_t h = fnv1a_file_from(2166136261u, path);
+    for (int i = 0; i < n && h; i++) {
+        h = fnv1a_bytes(h, dropins[i], strlen(dropins[i]) + 1);
+        h = fnv1a_file_from(h, dropins[i]);
+    }
     return h;
 }
 
@@ -917,7 +936,55 @@ static void svc_free_strings(service_t *svc) {
 struct parse_ctx {
     int argc;
     int dep_slot;
+    int dropin;
 };
+
+static int dropin_flag(service_t *svc, const char *key, const char *val) {
+    static const struct { const char *key; unsigned flag; } f[] = {
+        { "oneshot", SVC_ONESHOT }, { "needs_root", SVC_NEEDS_ROOT },
+        { "critical", SVC_CRITICAL }, { "no_restart", SVC_NO_RESTART },
+        { "persistent", SVC_TIMER_PERSIST },
+    };
+    for (size_t i = 0; i < sizeof f / sizeof f[0]; i++) {
+        if (strcmp(key, f[i].key) != 0) continue;
+        if (atoi(val)) svc->flags |= f[i].flag;
+        else svc->flags &= ~f[i].flag;
+        return 1;
+    }
+    return 0;
+}
+
+/* Drop-in only: name= is refused, an empty args=/env=/dep= clears that
+ * list, and flag=0 clears the flag. 1 = handled, 0 = not ours, -1 = reject. */
+static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const char *key,
+                                 const char *val, const char *path) {
+    if (strcmp(key, "name") == 0) {
+        fprintf(stderr, "[schema-init] %s: name= is not allowed in a drop-in\n", path);
+        return -1;
+    }
+    if (dropin_flag(svc, key, val)) return 1;
+    if (val[strspn(val, " \t")] != '\0') return 0;
+    if (strcmp(key, "args") == 0) {
+        int keep = svc->argv[0] == svc->exec ? 1 : 0;
+        for (int i = keep; i < MAX_ARGV; i++) {
+            if (svc->argv[i] != svc->exec) free(svc->argv[i]);
+            svc->argv[i] = NULL;
+        }
+        if (keep) svc->argv[0] = svc->exec;
+        pc->argc = keep;
+    } else if (strcmp(key, "env") == 0) {
+        for (int i = 0; i < svc->env_count; i++) {
+            free(svc->envp[i]);
+            svc->envp[i] = NULL;
+        }
+        svc->env_count = 0;
+    } else if (strcmp(key, "dep") == 0) {
+        memset(svc->dep_name, 0, sizeof svc->dep_name);
+        pc->dep_slot = 0;
+    } else
+        return 0;
+    return 1;
+}
 
 /* One key=value line. 0 = ok, -1 = the service must be rejected. */
 static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, const char *path) {
@@ -929,6 +996,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     val = eq + 1;
     val[strcspn(val, "\r\n")] = 0;
 
+    if (pc->dropin && (nsr = svc_parse_dropin_line(svc, pc, line, val, path)) != 0)
+        return nsr < 0 ? -1 : 0;
     if (strcmp(line, "name") == 0)
         strncpy(svc->name, val, sizeof(svc->name) - 1);
     else if (strcmp(line, "exec") == 0) {
@@ -940,7 +1009,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         strncpy(svc->exec, val, sizeof(svc->exec) - 1);
         if (svc->argv[0] != svc->exec) free(svc->argv[0]);
         svc->argv[0] = svc->exec;
-        pc->argc = 1;
+        if (!pc->dropin || pc->argc == 0) pc->argc = 1;
     } else if (strcmp(line, "args") == 0 && pc->argc < MAX_ARGV - 1) {
         while (*val == ' ' || *val == '\t') val++;
         svc->argv[pc->argc++] = strdup(val);
@@ -1051,6 +1120,8 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
     if (!f) return -1;
     while (fgets(line, sizeof(line), f)) {
         if (svc_parse_line(svc, pc, line, path) != 0) {
+            if (pc->dropin)
+                fprintf(stderr, "[schema-init] bad line in drop-in %s — service not loaded\n", path);
             fclose(f);
             return -1;
         }
@@ -1074,7 +1145,6 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
                 "— ignoring (catch-up only applies to calendar timers)\n", svc->name);
         svc->flags &= ~SVC_TIMER_PERSIST;
     }
-    svc->content_hash = fnv1a_file(path);
 
     /* default start timeout: protect oneshots (but not timers, which may
      * legitimately run long); daemons rely on stable_secs instead */
@@ -1110,13 +1180,20 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
 }
 
 static int svc_load_file(const char *path, service_t *svc) {
-    struct parse_ctx pc = { 0, 0 };
+    struct parse_ctx pc = { 0, 0, 0 };
+    char dropins[SVC_DROPIN_MAX][SVC_DROPIN_PATH];
+    int nd = svc_dropin_list(path, dropins, SVC_DROPIN_MAX);
     svc_init_defaults(svc);
-    if (svc_parse_file(svc, &pc, path) != 0 || svc_finalize(svc, &pc, path) != 0) {
-        svc_free_strings(svc);
-        return -1;
-    }
+    if (svc_parse_file(svc, &pc, path) != 0) goto bad;
+    pc.dropin = 1;
+    for (int i = 0; i < nd; i++)
+        if (svc_parse_file(svc, &pc, dropins[i]) != 0) goto bad;
+    if (svc_finalize(svc, &pc, path) != 0) goto bad;
+    svc->content_hash = svc_content_hash(path, dropins, nd);
     return 0;
+bad:
+    svc_free_strings(svc);
+    return -1;
 }
 
 int services_load(const char *dir, service_t *table, int max) {

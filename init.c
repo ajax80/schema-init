@@ -13,6 +13,7 @@
 
 #include "schema.h"
 #include "service.h"
+#include "svc_dropins.h"
 #include "reexec_state.h"
 #include "notify.h"
 #include "coredump.h"
@@ -33,7 +34,6 @@
 #include <linux/watchdog.h>
 #include <dirent.h>
 
-#define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
 #define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
