@@ -2,6 +2,7 @@
 #include "notify.h"
 #include "caps.h"
 #include "ns.h"
+#include <linux/capability.h>
 #include "coredump.h"
 
 #include <stdio.h>
@@ -464,12 +465,32 @@ static int ns_hides(service_t *svc, uint8_t bit, uint8_t *knob, const char *knob
     return -1;
 }
 
+static int landlock_check(service_t *svc) {
+    int i;
+    if (!svc->landlock_count) return 0;
+    for (i = 0; i < svc->landlock_count; i++)
+        if (landlock_beneath(svc->exec, svc->landlock[i])) break;
+    if (i == svc->landlock_count) {
+        fprintf(stderr, "[schema-init] %s: landlock does not cover exec — not loaded\n",
+                svc->name);
+        return -1;
+    }
+    if (!(svc->flags & SVC_NO_NEW_PRIVS) && svc->cap_restrict &&
+        !(svc->cap_keep_mask & (1ULL << CAP_SYS_ADMIN))) {
+        fprintf(stderr, "[schema-init] %s: landlock needs no_new_privs=1 when keep_caps "
+                "drops CAP_SYS_ADMIN — not loaded\n", svc->name);
+        return -1;
+    }
+    return 0;
+}
+
 static int hardening_finalize(service_t *svc) {
     static const char *const tmp[] = { "/tmp/", "/var/tmp/" };
     static const char *const home[] = { "/home/", "/root/", "/run/user/" };
     apply_hardening_defaults(svc);
     if (ns_hides(svc, HARD_PT, &svc->ns_private_tmp, "private_tmp", tmp, 2) != 0) return -1;
-    return ns_hides(svc, HARD_PH, &svc->ns_protect_home, "protect_home", home, 3);
+    if (ns_hides(svc, HARD_PH, &svc->ns_protect_home, "protect_home", home, 3) != 0) return -1;
+    return landlock_check(svc);
 }
 
 int service_apply_hardening(const service_t *svc) {
@@ -602,11 +623,20 @@ int service_spawn(service_t *svc) {
                         svc->name, errno);
                 _exit(126);
             }
-            if (setuid(svc->run_uid) != 0) {
-                dprintf(2, "[schema-init] UID DROP FAILED for %s: setuid: %d\n",
-                        svc->name, errno);
+        }
+        if (svc->landlock_count) {
+            const char *step = "";
+            if (apply_landlock(svc->landlock, svc->landlock_rw,
+                               svc->landlock_count, &step) != 0) {
+                dprintf(2, "[schema-init] HARDENING FAILED for %s: landlock: %s: %d\n",
+                        svc->name, step, errno);
                 _exit(126);
             }
+        }
+        if (svc->run_uid && setuid(svc->run_uid) != 0) {
+            dprintf(2, "[schema-init] UID DROP FAILED for %s: setuid: %d\n",
+                    svc->name, errno);
+            _exit(126);
         }
         if (svc->notify) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
         else unsetenv("NOTIFY_SOCKET");
@@ -931,6 +961,29 @@ static void svc_free_strings(service_t *svc) {
         svc->envp[i] = NULL;
     }
     svc->env_count = 0;
+    for (int i = 0; i < svc->landlock_count; i++) {
+        free(svc->landlock[i]);
+        svc->landlock[i] = NULL;
+    }
+    svc->landlock_count = 0;
+    svc->landlock_rw = 0;
+}
+
+static void landlock_clear(service_t *svc, int rw) {
+    int o = 0;
+    uint32_t mask = 0;
+    for (int i = 0; i < svc->landlock_count; i++) {
+        int is_rw = (svc->landlock_rw >> i) & 1;
+        if (is_rw == rw) {
+            free(svc->landlock[i]);
+            continue;
+        }
+        if (is_rw) mask |= 1U << o;
+        svc->landlock[o++] = svc->landlock[i];
+    }
+    for (int i = o; i < svc->landlock_count; i++) svc->landlock[i] = NULL;
+    svc->landlock_count = o;
+    svc->landlock_rw = mask;
 }
 
 struct parse_ctx {
@@ -987,6 +1040,8 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     } else if (strcmp(key, "dep") == 0) {
         memset(svc->dep_name, 0, sizeof svc->dep_name);
         pc->dep_slot = 0;
+    } else if (strcmp(key, "landlock_ro") == 0 || strcmp(key, "landlock_rw") == 0) {
+        landlock_clear(svc, key[10] == 'w');
     } else
         return 0;
     return 1;
@@ -1043,6 +1098,16 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     }
     else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
         if (nsr < 0) return -1;
+    }
+    else if (strcmp(line, "landlock_ro") == 0 || strcmp(line, "landlock_rw") == 0) {
+        while (*val == ' ' || *val == '\t') val++;
+        if (val[0] != '/' || svc->landlock_count >= MAX_LANDLOCK) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s (absolute path, at most %d)\n",
+                    svc->name[0] ? svc->name : path, line, val, MAX_LANDLOCK);
+            return -1;
+        }
+        if (line[10] == 'w') svc->landlock_rw |= 1U << svc->landlock_count;
+        svc->landlock[svc->landlock_count++] = strdup(val);
     }
     else if (strcmp(line, "critical") == 0 && atoi(val))
         svc->flags |= SVC_CRITICAL;

@@ -1,4 +1,5 @@
 #include "../ns.h"
+#include "../landlock.h"
 #include "../service.h"
 #include <assert.h>
 #include <stdio.h>
@@ -71,6 +72,46 @@ int main(void) {
                     "ready_path=/run/ok.ready\n");
     assert(service_load_one(path, &one) == 0);
     assert(one.ns_private_tmp == 0 && one.ns_protect_home == 1);
+    unlink(path);
+
+    assert(landlock_beneath("/usr/bin/x", "/usr"));
+    assert(landlock_beneath("/usr/bin/x", "/usr/"));
+    assert(landlock_beneath("/usr", "/usr"));
+    assert(landlock_beneath("/usr/bin/x", "/"));
+    assert(!landlock_beneath("/usrx/bin", "/usr"));
+    assert(!landlock_beneath("/us", "/usr"));
+
+    snprintf(path, sizeof(path), "%s/ll.svc", dir);
+    write_svc(path, "name=ll\nexec=/usr/bin/true\nlandlock_ro=/usr\nlandlock_rw=/var/lib/ll\n"
+                    "landlock_ro=/etc/ll.conf\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(one.landlock_count == 3 && one.landlock_rw == 2);
+    assert(strcmp(one.landlock[2], "/etc/ll.conf") == 0);
+    assert(services_load(dir, table, 4) == 1);
+    assert(table[0].landlock_count == 3 && table[0].landlock_rw == 2);
+    assert(strcmp(table[0].landlock[1], "/var/lib/ll") == 0);
+    unlink(path);
+
+    struct { const char *body; } llbad[] = {
+        { "name=b\nexec=/usr/bin/true\nlandlock_ro=/etc\n" },
+        { "name=b\nexec=/usr/bin/true\nlandlock_ro=usr\n" },
+        { "name=b\nexec=/usr/bin/true\nlandlock_ro=/usrx\n" },
+        { "name=b\nexec=/usr/bin/true\nlandlock_ro=/usr\nkeep_caps=CAP_NET_BIND_SERVICE\n" },
+    };
+    for (size_t i = 0; i < sizeof(llbad) / sizeof(llbad[0]); i++) {
+        snprintf(path, sizeof(path), "%s/b.svc", dir);
+        write_svc(path, llbad[i].body);
+        assert(service_load_one(path, &one) == -1);
+        assert(services_load(dir, table, 4) == 0);
+        unlink(path);
+    }
+    snprintf(path, sizeof(path), "%s/ok.svc", dir);
+    write_svc(path, "name=ok\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\n"
+                    "keep_caps=CAP_NET_BIND_SERVICE\n");
+    assert(service_load_one(path, &one) == 0);
+    write_svc(path, "name=ok\nexec=/usr/bin/true\nlandlock_ro=/usr\n"
+                    "keep_caps=CAP_SYS_ADMIN\n");
+    assert(service_load_one(path, &one) == 0);
     unlink(path);
 
     assert(hardening_default_resolve(NULL, NULL) == 0);

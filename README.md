@@ -201,7 +201,7 @@ When the schema-init entry has booted cleanly a few times, make it default (set 
 
 ## Repository layout
 
-If you're reading the source to evaluate it, start here. PID 1 is ~4,800 lines of C (the files below plus `caps.c`, `ns.c` and a few headers) with no external dependencies.
+If you're reading the source to evaluate it, start here. PID 1 is ~4,800 lines of C (the files below plus `caps.c`, `ns.c`, `landlock.c` and a few headers) with no external dependencies.
 
 **Read these first, in this order:**
 
@@ -220,7 +220,7 @@ If you're reading the source to evaluate it, start here. PID 1 is ~4,800 lines o
 | `schema-subreaper.c` | ~50-line helper that sets `PR_SET_CHILD_SUBREAPER` so a service can adopt its own orphaned grandchildren instead of dumping them on PID 1. |
 | `schema-journal-sink.c` | Opt-in Track B compatibility shim. Provides journald's three ingestion sockets (`/dev/log`, `/run/systemd/journal/{socket,stdout}`) and drains them to a plain logfile so foreign libsystemd/syslog software finds a journald-shaped endpoint. No journal DB, no `journalctl`. schema-init never needs it to boot. See `docs/journal-sink-design.md`. |
 | `schema-systemctl.c` / `systemctl_shim.h` | The `systemctl(1)` compatibility shim. A drop-in that intercepts systemd verbs so packaged RPM/deb scriptlets succeed on a schema-init box: lifecycle verbs drive `schema-ctl`, `enable`/`preset` queue enable-intent to `/var/lib/schema-init/pending.list` for the importer (`distros/fedora-installer/migrate/schema-import.py`, which drains that queue and translates `.service` units into native `.svc`). See [Running packaged software](#running-packaged-software). |
-| `caps.c` / `ns.c` | Service hardening applied in the child before exec: the `keep_caps` capability bounding set and `no_new_privs` (`caps.c`), and the private mount namespace behind `private_tmp` / `protect_system` / `protect_home` (`ns.c`). See [Hardening](#hardening). |
+| `caps.c` / `ns.c` / `landlock.c` | Service hardening applied in the child before exec: the `keep_caps` capability bounding set and `no_new_privs` (`caps.c`), the private mount namespace behind `private_tmp` / `protect_system` / `protect_home` (`ns.c`), and the `landlock_ro` / `landlock_rw` filesystem allowlist (`landlock.c`). See [Hardening](#hardening). |
 | `notify.h` | The `sd_notify` readiness socket (`/run/schema-init/notify`): parsing, kernel-attested sender credentials, cgroup attribution. |
 | `schema-coredump.c` / `coredump.h` | The `core_pattern` pipe helper that keeps crashes. See [Crashes](#crashes). |
 | `schema-udev.c` + `*_id.h`, `udev_*.h`, `disk_links.h` | The native device manager. See [schema-udev](#schema-udev). |
@@ -332,6 +332,7 @@ Per-service confinement, applied in the child between fork and exec. Each is opt
 | `private_tmp` | `0` | Fresh `/tmp` and `/var/tmp` for this service (private mount namespace). |
 | `protect_system` | `0` | `1`: `/usr`, `/boot`, `/efi` read-only. `full`: `/etc` too. |
 | `protect_home` | `0` | `/home`, `/root` and `/run/user` replaced by empty read-only mounts. |
+| `landlock_ro` / `landlock_rw` | — | One absolute path per line, repeatable (up to 16). If any is set, the service can reach **only** the listed paths ([Landlock](https://docs.kernel.org/userspace-api/landlock.html)): `_ro` allows read and execute beneath the path, `_rw` allows everything. Root is confined too. The service's `exec`, its shared libraries and anything it reads (`/etc/ld.so.cache`, `/proc`, `/dev/null`…) must be listed. A path that doesn't exist is skipped. The load is refused if `exec` isn't covered, or if `keep_caps` drops `CAP_SYS_ADMIN` without `no_new_privs=1` (the kernel requires one of them). Applied after the uid/gid lookups and just before `setuid`. In a drop-in, an empty `landlock_ro=` or `landlock_rw=` clears that list. Needs a kernel with Landlock enabled; without it the service fails to start. |
 
 **Host default.** `/etc/schema-init/hardening-default` containing `on`, or `schema.hardening_default=1` on the kernel command line (which wins, both ways), turns `no_new_privs`, `private_tmp`, `protect_system=1` and `protect_home` on for every service that doesn't set them. An explicit `key=0` opts a service out. A defaulted `private_tmp` or `protect_home` that would hide the service's own `exec` or `ready_path` is dropped with a log line; an explicit one refuses the load. The switch is off unless you turn it on. `schema-ctl status <svc>` shows each knob's value and whether it came from the file, the default, or was dropped.
 

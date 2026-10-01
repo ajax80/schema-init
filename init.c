@@ -1219,6 +1219,9 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "  %-15s %-5s %s\n", "protect_system",
                     ps[s->ns_protect_system < 3 ? s->ns_protect_system : 0], hard_source(s, HARD_PS));
                 ctl_writef(fd, "  %-15s %-5d %s\n", "protect_home", s->ns_protect_home, hard_source(s, HARD_PH));
+                for (int k = 0; k < s->landlock_count; k++)
+                    ctl_writef(fd, "  %-15s %s\n", ((s->landlock_rw >> k) & 1) ? "landlock_rw" : "landlock_ro",
+                        s->landlock[k]);
             }
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
