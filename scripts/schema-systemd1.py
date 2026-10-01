@@ -18,10 +18,11 @@ from gi.repository import GLib
 # service management. One-line change if a client tries unmapped 256-era APIs.
 SYSTEMD_COMPAT_VERSION = "256"
 
-# Absolute path: under schema-init's service environment PATH does not include
-# /usr/local/bin, so a bare 'schema-ctl' is not found (and an absolute path also
-# avoids PATH-hijack for this root daemon).
-SCHEMA_CTL = "/usr/local/bin/schema-ctl"
+# Absolute path: services get no PATH, and an absolute path avoids PATH-hijack
+# for this root daemon. The RPM installs /usr/bin/schema-ctl; kickstart and
+# hand-built boxes have /usr/local/bin/schema-ctl.
+SCHEMA_CTL = next((p for p in ("/usr/bin/schema-ctl", "/usr/local/bin/schema-ctl")
+                   if os.access(p, os.X_OK)), "/usr/bin/schema-ctl")
 
 # Unit names reach schema_ctl() from D-Bus callers (any local client on the
 # system bus) and we run as root. schema-ctl's wire protocol is newline-
