@@ -169,6 +169,29 @@ def _hardening(svc):
     return lines, warns
 
 
+_SPAN_UNITS = {"us": 1e-6, "usec": 1e-6, "ms": 1e-3, "msec": 1e-3, "": 1, "s": 1,
+               "sec": 1, "second": 1, "seconds": 1, "m": 60, "min": 60,
+               "minute": 60, "minutes": 60, "h": 3600, "hr": 3600,
+               "hour": 3600, "hours": 3600}
+
+
+def _timespan_sec(v):
+    """systemd timespan ('30', '1min 30s', '500ms') to whole seconds, rounded up.
+    None when unparseable or infinity."""
+    v = v.strip().lower()
+    if not v or v == "infinity":
+        return None
+    total = 0.0
+    for num, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([a-z]*)", v):
+        if unit not in _SPAN_UNITS:
+            return None
+        total += float(num) * _SPAN_UNITS[unit]
+    if not re.fullmatch(r"(\s*\d+(?:\.\d+)?\s*[a-z]*)+", v):
+        return None
+    sec = int(total)
+    return sec + (1 if total > sec else 0)
+
+
 def unit_to_svc(name, sections):
     """Translate parsed unit sections into schema .svc text.
 
@@ -231,6 +254,16 @@ def unit_to_svc(name, sections):
 
     hard, warns = _hardening(svc)
     lines.extend(hard)
+
+    wd = _get_last(svc, "WatchdogSec")
+    if wd:
+        sec = _timespan_sec(wd)
+        if sec is None:
+            warns.append("WatchdogSec=%s unrecognised, no service watchdog" % wd)
+        elif sec > 0 and stype in ("notify", "notify-reload"):
+            lines.append("watchdog_sec=%d" % sec)
+        elif sec > 0:
+            warns.append("WatchdogSec= without Type=notify has no socket to pet over, dropped")
 
     # [Install] presence is why the unit was queued; note if it's missing.
     notes = []

@@ -27,6 +27,13 @@ int main(void) {
     assert(wake_timeout(0, 0, 250) == 0);
     assert(wake_timeout((int64_t)INT_MAX + 5, 0, 250) == INT_MAX);
 
+    struct timespec pet = { 100, 0 }, ab = { 0, 0 };
+    assert(svc_wd_due(&pet, &ab, 30) == 130000);
+    pet.tv_nsec = 1;
+    assert(svc_wd_due(&pet, &ab, 30) == 130001);
+    ab.tv_sec = 140;
+    assert(svc_wd_due(&pet, &ab, 30) == 140000 + WD_ABORT_GRACE_MS);
+
     assert(wd_pet_ms(60) == 20000);
     assert(wd_pet_ms(30) == 10000);
     assert(wd_pet_ms(2) == 666);

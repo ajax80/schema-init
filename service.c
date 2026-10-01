@@ -609,6 +609,16 @@ int service_spawn(service_t *svc) {
         }
         if (svc->notify) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
         else unsetenv("NOTIFY_SOCKET");
+        if (svc->notify && svc->watchdog_sec > 0) {
+            char wv[24];
+            snprintf(wv, sizeof wv, "%lld", (long long)svc->watchdog_sec * 1000000);
+            setenv("WATCHDOG_USEC", wv, 1);
+            snprintf(wv, sizeof wv, "%d", (int)getpid());
+            setenv("WATCHDOG_PID", wv, 1);
+        } else {
+            unsetenv("WATCHDOG_USEC");
+            unsetenv("WATCHDOG_PID");
+        }
         for (int e = 0; e < svc->env_count; e++) {
             char *kv = svc->envp[e];
             char *ev = strchr(kv, '=');
@@ -627,6 +637,7 @@ int service_spawn(service_t *svc) {
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
     svc->last_pet   = svc->spawn_time_mono;
+    svc->wd_abort_at = (struct timespec){0, 0};
     svc->notify_ready = 0;
     svc->notify_status[0] = '\0';
     svc->restart_count++;
@@ -1008,6 +1019,8 @@ int services_load(const char *dir, service_t *table, int max) {
                 svc->no_excise = atoi(val);
             } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
                 svc->watchdog_timeout_ms = atoi(val);
+            } else if (strcmp(line, "watchdog_sec") == 0) {
+                svc->watchdog_sec = atoi(val);
             } else if (strcmp(line, "cpu_limit") == 0) {
                 svc->cpu_limit_pct = atoi(val);
             } else if (strcmp(line, "mem_limit") == 0) {
@@ -1230,6 +1243,8 @@ int service_load_one(const char *path, service_t *svc) {
             svc->no_excise = atoi(val);
         } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
             svc->watchdog_timeout_ms = atoi(val);
+        } else if (strcmp(line, "watchdog_sec") == 0) {
+            svc->watchdog_sec = atoi(val);
         } else if (strcmp(line, "cpu_limit") == 0) {
             svc->cpu_limit_pct = atoi(val);
         } else if (strcmp(line, "mem_limit") == 0) {
