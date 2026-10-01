@@ -111,6 +111,17 @@ int main(void) {
            strcmp(s.argv[2], "-2") == 0 && !s.argv[3]);
     drop(&s);
 
+    /* no_new_privs=0 in a drop-in clears what the base set */
+    put("n.svc", "exec=/bin/n\nno_new_privs=1\n");
+    mk("n.svc.d");
+    put("n.svc.d/10.conf", "no_new_privs=0\n");
+    assert(load("n.svc", &s) == 0 && !(s.flags & SVC_NO_NEW_PRIVS));
+    drop(&s);
+    put("n.svc.d/10.conf", "no_new_privs=1\n");
+    put("n.svc", "exec=/bin/n\n");
+    assert(load("n.svc", &s) == 0 && (s.flags & SVC_NO_NEW_PRIVS));
+    drop(&s);
+
     /* base files keep their old meaning: empty args= is an argument, =0 is a no-op */
     put("c.svc", "exec=/bin/c\nno_restart=1\nno_restart=0\nargs=\n");
     assert(load("c.svc", &s) == 0);

@@ -34,7 +34,7 @@ OBJS    = $(SRCS:.c=.o)
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h notify.h coredump.h
+CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h notify.h coredump.h svc_dropins.h
 
 all: $(BINS)
 
@@ -47,7 +47,7 @@ schema-init: $(OBJS)
 schema-init-static:
 	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
 
-schema-ctl: schema-ctl.c
+schema-ctl: schema-ctl.c svc_dropins.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h

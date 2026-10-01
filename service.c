@@ -963,6 +963,12 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
         return -1;
     }
     if (dropin_flag(svc, key, val)) return 1;
+    if (strcmp(key, "no_new_privs") == 0) {
+        svc->hard_set |= HARD_NNP;
+        if (atoi(val)) svc->flags |= SVC_NO_NEW_PRIVS;
+        else svc->flags &= ~SVC_NO_NEW_PRIVS;
+        return 1;
+    }
     if (val[strspn(val, " \t")] != '\0') return 0;
     if (strcmp(key, "args") == 0) {
         int keep = svc->argv[0] == svc->exec ? 1 : 0;
