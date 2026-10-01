@@ -34,7 +34,7 @@ OBJS    = $(SRCS:.c=.o)
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h notify.h coredump.h
+CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h notify.h coredump.h svc_dropins.h
 
 all: $(BINS)
 
@@ -47,7 +47,7 @@ schema-init: $(OBJS)
 schema-init-static:
 	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
 
-schema-ctl: schema-ctl.c
+schema-ctl: schema-ctl.c svc_dropins.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
@@ -273,6 +273,7 @@ test: schema-coredump
 	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o /tmp/schema-test-systemctl && /tmp/schema-test-systemctl
 	$(CC) $(CFLAGS) tests/test_service_env.c service.c schema.c group.c caps.c ns.c -lrt -o /tmp/schema-test-env && /tmp/schema-test-env
 	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c -lrt -o /tmp/schema-test-mountns && /tmp/schema-test-mountns
+	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c -lrt -o /tmp/schema-test-dropins && /tmp/schema-test-dropins
 
 # libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
 # + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.

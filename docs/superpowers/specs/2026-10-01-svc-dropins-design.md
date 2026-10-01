@@ -66,9 +66,13 @@ if appended to the end of the base file, in order:
 - `name=` in a drop-in is rejected (the service's identity comes from the base
   file / filename; a drop-in renaming it would break `dep=` resolution silently).
 - Flag keys that today only set on true (`oneshot`, `needs_root`, `critical`,
-  `no_restart`, `persistent`): change to set **and clear**, so `no_restart=0` in a
-  drop-in can undo the base. Same parse for base files, so `oneshot=0` in a base
-  file (already a no-op) stays a no-op.
+  `no_restart`, `persistent`): in a drop-in they set **and clear**, so
+  `no_restart=0` can undo the base.
+- **Base files parse exactly as before.** The empty-assignment reset, flag
+  clearing and the `name=` refusal apply only to lines read from a drop-in.
+  Found while implementing: every fleet host has base files full of `critical=0`
+  / `oneshot=0`, and a timer whose `on_boot_sec=` sets `SVC_ONESHOT` followed by
+  `oneshot=0` would have changed meaning if clearing applied to base files too.
 - A bad line in a drop-in (`exec=` with whitespace, unknown cap, bad ns field)
   rejects the whole service, same as a bad line in the base, with the drop-in's
   path in the message.

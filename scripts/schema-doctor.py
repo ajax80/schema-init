@@ -162,12 +162,34 @@ def hardening_default_on():
         return False
 
 
+def svc_files(path):
+    """path, then its drop-ins in the order PID 1 applies them (svc_dropins.h)."""
+    d, base = os.path.split(path)
+    stem = base[:-4]
+    dirs = []
+    if "@" in stem and stem.split("@", 1)[1]:
+        dirs.append(os.path.join(d, stem.split("@", 1)[0] + "@.svc.d"))
+    dirs.append(path + ".d")
+    out = [path]
+    for dd in dirs:
+        try:
+            names = sorted(os.listdir(dd))
+        except OSError:
+            continue
+        for n in names:
+            p = os.path.join(dd, n)
+            if not n.startswith(".") and len(n) > 5 and n.endswith(".conf") and os.path.isfile(p):
+                out.append(p)
+    return out
+
+
 def hardening_unannotated():
     """[(svc file, [knobs it leaves to the host default])], sorted by file."""
     out = []
     for path in sorted(glob.glob(os.path.join(ROOT, "etc/schema-init/services/*.svc"))):
         try:
-            keys = {ln.split("=", 1)[0].strip() for ln in open(path, errors="replace") if "=" in ln}
+            keys = {ln.split("=", 1)[0].strip()
+                    for f in svc_files(path) for ln in open(f, errors="replace") if "=" in ln}
         except OSError:
             continue
         missing = [k for k in HARDENING_KEYS if k not in keys]
@@ -599,6 +621,41 @@ class HardeningAnnotation(Check):
 
 
 REGISTRY.append(HardeningAnnotation())
+
+
+def orphan_dropins():
+    """*.svc.d directories no .svc will ever read."""
+    svcdir = os.path.join(ROOT, "etc/schema-init/services")
+    svcs = {os.path.basename(p) for p in glob.glob(os.path.join(svcdir, "*.svc"))}
+    out = []
+    for d in sorted(glob.glob(os.path.join(svcdir, "*.svc.d"))):
+        base = os.path.basename(d)[:-2]
+        if base.endswith("@.svc"):
+            prefix = base[:-4]
+            used = any(s.startswith(prefix) and s != base for s in svcs)
+        else:
+            used = base in svcs
+        if not used:
+            out.append(os.path.basename(d))
+    return out
+
+
+class OrphanDropins(Check):
+    name = "orphan-dropins"
+    summary = "every .svc.d drop-in directory belongs to a .svc"
+    grade = DEFERRED
+
+    def detect(self):
+        bad = orphan_dropins()
+        if not bad:
+            return None
+        return Finding(
+            detail="drop-in directories with no matching .svc (never applied): " + ", ".join(bad),
+            oracle_said="a drop-in only modifies an existing .svc; it never creates one",
+            healable=False)
+
+
+REGISTRY.append(OrphanDropins())
 
 
 class PowerDevilRunning(Check):
