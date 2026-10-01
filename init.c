@@ -1504,32 +1504,42 @@ static void schema_boot_log(void) {
     fflush(stdout);
 }
 
+/* Sleep until the nearest real deadline. The 250 ms tick is kept only for
+ * states that are themselves polled. Timers, evictions and dormant backoff
+ * used to wake only because some ready_path service forced the tick. */
 static int get_poll_timeout(void) {
-    if (system_under_pressure) {
-        return TICK_USEC / 1000;
-    }
-    int i;
-    int has_watchdog_services = 0;
-    for (i = 0; i < svc_count; i++) {
-        uint8_t s = services[i].inst.state;
-        if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED) {
-            return TICK_USEC / 1000;
+    struct timespec ts;
+    int64_t now_m, now_r, best = WAKE_NONE;
+    int i, tick = system_under_pressure || psi_fd < 0;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    now_m = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    now_r = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+    for (i = 0; i < svc_count && !tick; i++) {
+        service_t *svc = &services[i];
+        uint8_t s = svc->inst.state;
+        if (svc->failsafe_pid > 0 || (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
+            tick = 1;
+        else if (s == STATE_DORMANT)
+            best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);
+        else if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED)
+            tick = 1;
+        else if (s == STATE_FUNDAMENTAL && svc->ready_path[0] && svc->child_pid > 0)
+            tick = 1;
+        else if (s == STATE_PERFECT && (svc->flags & SVC_TIMER)) {
+            if (svc->flags & SVC_TIMER_CALENDAR)
+                best = wake_min(best, ts_ms_ceil(&svc->timer_next), now_r, WAKE_CAL_CAP_MS);
+            else
+                best = wake_min(best, ts_ms_ceil(&svc->timer_next), now_m, WAKE_NONE);
         }
-        if (s == STATE_FUNDAMENTAL && services[i].ready_path[0] && services[i].child_pid > 0) {
-            return TICK_USEC / 1000;
-        }
-        if (services[i].watchdog_timeout_ms > 0 && services[i].child_pid > 0) {
-            has_watchdog_services = 1;
-        }
     }
-    if (has_watchdog_services) {
-        return TICK_USEC / 1000;
-    }
-    if (watchdog_fd >= 0) {
-        /* Hardware watchdog is active; wake up at least every 5 seconds to pet it */
-        return 5000;
-    }
-    return -1;
+    for (i = 0; i < eviction_count; i++)
+        best = wake_min(best, (int64_t)evictions[i].deadline * 1000, now_r, WAKE_CAL_CAP_MS);
+    if (watchdog_fd >= 0)
+        best = wake_min(best, now_m + 5000, now_m, WAKE_NONE);
+    return wake_timeout(best, tick, TICK_USEC / 1000);
 }
 
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count) {
