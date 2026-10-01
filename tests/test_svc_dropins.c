@@ -26,6 +26,7 @@ static void mk(const char *rel) {
 static void drop(service_t *s) {
     for (int i = 1; i < MAX_ARGV; i++) free(s->argv[i]);
     for (int i = 0; i < s->env_count; i++) free(s->envp[i]);
+    for (int i = 0; i < s->landlock_count; i++) free(s->landlock[i]);
 }
 
 static int load(const char *rel, service_t *s) {
@@ -120,6 +121,18 @@ int main(void) {
     put("n.svc.d/10.conf", "no_new_privs=1\n");
     put("n.svc", "exec=/bin/n\n");
     assert(load("n.svc", &s) == 0 && (s.flags & SVC_NO_NEW_PRIVS));
+    drop(&s);
+
+    /* an empty landlock_ro= drops only the ro paths; rw ones and their bits stay */
+    put("l.svc", "exec=/usr/bin/l\nlandlock_ro=/usr\nlandlock_rw=/var/lib/l\nlandlock_ro=/etc\n");
+    mk("l.svc.d");
+    put("l.svc.d/10.conf", "landlock_ro=\nlandlock_ro=/usr/bin\n");
+    assert(load("l.svc", &s) == 0 && s.landlock_count == 2);
+    assert(strcmp(s.landlock[0], "/var/lib/l") == 0 && strcmp(s.landlock[1], "/usr/bin") == 0);
+    assert(s.landlock_rw == 1);
+    drop(&s);
+    put("l.svc.d/10.conf", "landlock_ro=\n");
+    assert(load("l.svc", &s) == -1);
     drop(&s);
 
     /* base files keep their old meaning: empty args= is an argument, =0 is a no-op */

@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "schema.h"
+#include "landlock.h"
 
 #define MAX_SERVICES    88
 #define MAX_ARGV        16
@@ -296,6 +297,9 @@ typedef struct {
     uint8_t          ns_private_tmp;    /* private /tmp + /var/tmp                 */
     uint8_t          ns_protect_system; /* PROTECT_SYSTEM_* (ns.h)                 */
     uint8_t          ns_protect_home;   /* hide /home /root /run/user              */
+    char            *landlock[MAX_LANDLOCK]; /* landlock_ro= / landlock_rw= paths    */
+    uint32_t         landlock_rw;      /* bit i: landlock[i] is read-write          */
+    int              landlock_count;
     uint8_t          hard_set;          /* HARD_* knobs given explicitly in .svc   */
     uint8_t          hard_default;      /* HARD_* knobs taken from host default    */
     uint8_t          hard_dropped;      /* HARD_* defaults dropped (ns conflict)   */
@@ -327,6 +331,9 @@ int service_spawn(service_t *svc);
 
 /* apply opt-in hardening in the child, before setuid/execv; -1 -> fail closed */
 int service_apply_hardening(const service_t *svc);
+
+/* free the landlock_ro=/landlock_rw= path strings */
+void service_free_landlock(service_t *svc);
 
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);
