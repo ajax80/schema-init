@@ -496,6 +496,7 @@ int service_spawn(service_t *svc) {
     pid_t pid;
 
     svc->ready_path_verified = 0;
+    svc->ready_watched = 0;
     svc->ctl_killed = 0;
 
     if (pipe(sync) < 0) return -1;

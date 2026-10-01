@@ -28,6 +28,8 @@
 #include <glob.h>
 #include <sys/ioctl.h>
 #include <grp.h>
+#include <sys/inotify.h>
+#include <linux/watchdog.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -64,10 +66,17 @@ static int          ctl_fd   = -1;
 static int          notify_fd = -1;
 static int          sig_fd   = -1;
 static int          watchdog_fd = -1;
+static int64_t      watchdog_pet_ms = 5000;
 static int          system_under_pressure = 0;
 static uint64_t     last_stall_ms = 0;
 static uint64_t     last_reclaim_ms = 0;
 static int          psi_fd = -1;
+static int          ino_fd = -1;
+static int64_t      ready_event_due = 0;    /* CLOCK_MONOTONIC ms, 0 = none */
+static int64_t      ready_backstop_due = 0;
+#define CPU_CHECK_MS        2000            /* critical cpu.pressure avg10 read rate */
+static int64_t      cpu_check_due = 0;
+static int          cpu_stalled = 0;
 static struct timespec init_start;
 
 static void start_failsafe(service_t *svc);
@@ -238,7 +247,11 @@ static void watchdog_init(void) {
     for (i = 0; paths[i]; i++) {
         watchdog_fd = open(paths[i], O_WRONLY | O_CLOEXEC);
         if (watchdog_fd >= 0) {
-            printf("[schema-init] opened hardware watchdog (%s)\n", paths[i]);
+            int timeout = 0;
+            if (ioctl(watchdog_fd, WDIOC_GETTIMEOUT, &timeout) < 0) timeout = 0;
+            watchdog_pet_ms = wd_pet_ms(timeout);
+            printf("[schema-init] opened hardware watchdog (%s, timeout %ds, pet every %lldms)\n",
+                   paths[i], timeout, (long long)watchdog_pet_ms);
             break;
         }
     }
@@ -792,6 +805,77 @@ static void active_kill_service(service_t *svc) {
 
 /* ── schema tick for one service ────────────────────────────────────── */
 
+/* ── ready_path liveness ─────────────────────────────────────────────
+ * A verified ready_path is watched with inotify on its directory instead of
+ * polled every tick. Any event, including IN_Q_OVERFLOW and IN_IGNORED,
+ * schedules one recheck of every watched service READY_EVENT_GRACE_MS later.
+ * A service that unlinks its socket on the way out is reaped by then, so a
+ * crash takes the normal restart path, not readiness-lost. READY_BACKSTOP_MS
+ * rechecks catch whatever inotify cannot see (bind mounts, odd filesystems). */
+#define READY_EVENT_GRACE_MS  100
+#define READY_BACKSTOP_MS     30000
+
+static int ready_live(const service_t *svc) {
+    return svc->inst.state == STATE_FUNDAMENTAL && svc->ready_path[0] &&
+           svc->child_pid > 0 && !svc->ctl_killed && svc->ready_path_verified;
+}
+
+static void ready_lost(service_t *svc) {
+    service_log(svc, "readiness-lost");
+    active_kill_service(svc);
+    start_failsafe(svc);
+
+    svc->dormant_count++;
+    if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
+        svc->inst.state = STATE_EXCISED;
+        service_log(svc, "76-excised");
+    } else {
+        time_t delay = 300L << (svc->dormant_count - 1);
+        if (delay > 3600) delay = 3600;
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        svc->dormant_until.tv_sec  = now.tv_sec + delay;
+        svc->dormant_until.tv_nsec = now.tv_nsec;
+        svc->inst.state = STATE_DORMANT;
+        service_log(svc, "dormant");
+    }
+}
+
+static void ready_watch(service_t *svc) {
+    char dir[sizeof(svc->ready_path)];
+    char *slash;
+    snprintf(dir, sizeof(dir), "%s", svc->ready_path);
+    slash = strrchr(dir, '/');
+    if (slash == dir) slash[1] = '\0';
+    else if (slash) *slash = '\0';
+    svc->ready_watched = (ino_fd >= 0 && slash &&
+        inotify_add_watch(ino_fd, dir, IN_DELETE | IN_MOVED_FROM | IN_DELETE_SELF |
+                                       IN_MOVE_SELF | IN_UNMOUNT) >= 0) ? 1 : -1;
+    if (svc->ready_watched > 0 && access(svc->ready_path, F_OK) != 0)
+        ready_lost(svc);
+}
+
+static void ready_recheck_all(void) {
+    int i;
+    for (i = 0; i < svc_count; i++) {
+        service_t *svc = &services[i];
+        if (!ready_live(svc) || svc->ready_watched <= 0 || svc->ready_poll_hz > 0)
+            continue;
+        if (access(svc->ready_path, F_OK) != 0)
+            ready_lost(svc);
+        else
+            svc->ready_watched = 0;   /* re-arm: the event may have been IN_IGNORED/IN_MOVE_SELF */
+    }
+}
+
+static void ready_inotify_drain(void) {
+    char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+    while (read(ino_fd, buf, sizeof(buf)) > 0)
+        ;
+    if (!ready_event_due)
+        ready_event_due = (int64_t)monotonic_ms() + READY_EVENT_GRACE_MS;
+}
+
 static void tick_service(service_t *svc,
                          const uint8_t *grp_states, int gcount) {
     uint32_t flags;
@@ -934,39 +1018,26 @@ static void tick_service(service_t *svc,
                         svc->ready_path_verified = 1;
                     }
                 }
-                if (svc->ready_path_verified) {
+                if (svc->ready_path_verified && !svc->ready_watched) {
+                    ready_watch(svc);
+                    if (svc->inst.state != STATE_FUNDAMENTAL) break;
+                }
+                if (svc->ready_path_verified && svc->ready_poll_hz > 0) {
                     int ticks_to_wait = 1;
-                    if (svc->ready_poll_hz > 0) {
-                        int loop_hz = 1000000 / TICK_USEC;
-                        if (loop_hz > svc->ready_poll_hz) {
-                            ticks_to_wait = loop_hz / svc->ready_poll_hz;
-                            if (ticks_to_wait < 1) ticks_to_wait = 1;
-                        }
+                    int loop_hz = 1000000 / TICK_USEC;
+                    if (loop_hz > svc->ready_poll_hz) {
+                        ticks_to_wait = loop_hz / svc->ready_poll_hz;
+                        if (ticks_to_wait < 1) ticks_to_wait = 1;
                     }
                     svc->ready_check_ticks++;
                     if (svc->ready_check_ticks >= ticks_to_wait) {
                         svc->ready_check_ticks = 0;
-                        if (access(svc->ready_path, F_OK) != 0) {
-                            service_log(svc, "readiness-lost");
-                            active_kill_service(svc);
-                            start_failsafe(svc);
-                            
-                            svc->dormant_count++;
-                            if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
-                                svc->inst.state = STATE_EXCISED;
-                                service_log(svc, "76-excised");
-                            } else {
-                                time_t delay = 300L << (svc->dormant_count - 1);
-                                if (delay > 3600) delay = 3600;
-                                struct timespec _now2;
-                                clock_gettime(CLOCK_MONOTONIC, &_now2);
-                                svc->dormant_until.tv_sec  = _now2.tv_sec + delay;
-                                svc->dormant_until.tv_nsec = _now2.tv_nsec;
-                                svc->inst.state = STATE_DORMANT;
-                                service_log(svc, "dormant");
-                            }
-                        }
+                        if (access(svc->ready_path, F_OK) != 0)
+                            ready_lost(svc);
                     }
+                } else if (svc->ready_path_verified && svc->ready_watched < 0 &&
+                           access(svc->ready_path, F_OK) != 0) {
+                    ready_lost(svc);
                 }
             }
             break;
@@ -1504,32 +1575,54 @@ static void schema_boot_log(void) {
     fflush(stdout);
 }
 
+/* Sleep until the nearest real deadline. The 250 ms tick is kept only for
+ * states that are themselves polled. Timers, evictions and dormant backoff
+ * used to wake only because some ready_path service forced the tick. */
 static int get_poll_timeout(void) {
-    if (system_under_pressure) {
-        return TICK_USEC / 1000;
-    }
-    int i;
-    int has_watchdog_services = 0;
-    for (i = 0; i < svc_count; i++) {
-        uint8_t s = services[i].inst.state;
-        if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED) {
-            return TICK_USEC / 1000;
+    struct timespec ts;
+    int64_t now_m, now_r, best = WAKE_NONE;
+    int i, tick = system_under_pressure || psi_fd < 0, watched = 0, critical = 0;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    now_m = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    now_r = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+    for (i = 0; i < svc_count && !tick; i++) {
+        service_t *svc = &services[i];
+        uint8_t s = svc->inst.state;
+        if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0)
+            critical = 1;
+        if (svc->failsafe_pid > 0 || (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
+            tick = 1;
+        else if (s == STATE_DORMANT)
+            best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);
+        else if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED)
+            tick = 1;
+        else if (s == STATE_FUNDAMENTAL && svc->ready_path[0] && svc->child_pid > 0) {
+            if (!svc->ready_path_verified || svc->ready_watched <= 0 || svc->ready_poll_hz > 0)
+                tick = 1;
+            else
+                watched = 1;
         }
-        if (s == STATE_FUNDAMENTAL && services[i].ready_path[0] && services[i].child_pid > 0) {
-            return TICK_USEC / 1000;
+        else if (s == STATE_PERFECT && (svc->flags & SVC_TIMER)) {
+            if (svc->flags & SVC_TIMER_CALENDAR)
+                best = wake_min(best, ts_ms_ceil(&svc->timer_next), now_r, WAKE_CAL_CAP_MS);
+            else
+                best = wake_min(best, ts_ms_ceil(&svc->timer_next), now_m, WAKE_NONE);
         }
-        if (services[i].watchdog_timeout_ms > 0 && services[i].child_pid > 0) {
-            has_watchdog_services = 1;
-        }
     }
-    if (has_watchdog_services) {
-        return TICK_USEC / 1000;
-    }
-    if (watchdog_fd >= 0) {
-        /* Hardware watchdog is active; wake up at least every 5 seconds to pet it */
-        return 5000;
-    }
-    return -1;
+    for (i = 0; i < eviction_count; i++)
+        best = wake_min(best, (int64_t)evictions[i].deadline * 1000, now_r, WAKE_CAL_CAP_MS);
+    if (watched)
+        best = wake_min(best, ready_backstop_due, now_m, WAKE_NONE);
+    if (critical)
+        best = wake_min(best, cpu_check_due, now_m, WAKE_NONE);
+    if (ready_event_due)
+        best = wake_min(best, ready_event_due, now_m, WAKE_NONE);
+    if (watchdog_fd >= 0)
+        best = wake_min(best, now_m + watchdog_pet_ms, now_m, WAKE_NONE);
+    return wake_timeout(best, tick, TICK_USEC / 1000);
 }
 
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count) {
@@ -2201,6 +2294,7 @@ int main(int argc, char **argv) {
     mkdir("/run/schema-init", 0755);
     notify_fd = notify_open(NOTIFY_SOCK_PATH);
     psi_open();
+    ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     signalfd_init();
     schema_boot_log();
 
@@ -2225,7 +2319,7 @@ int main(int argc, char **argv) {
     }
 
     while (running) {
-        struct pollfd fds[4];
+        struct pollfd fds[5];
         int nfds = 0;
         int psi_fired = 0;
         uint8_t grp_states[MAX_GROUPS];
@@ -2253,6 +2347,12 @@ int main(int argc, char **argv) {
         if (psi_fd >= 0) {
             fds[nfds].fd = psi_fd;
             fds[nfds].events = POLLPRI;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+        if (ino_fd >= 0) {
+            fds[nfds].fd = ino_fd;
+            fds[nfds].events = POLLIN;
             fds[nfds].revents = 0;
             nfds++;
         }
@@ -2288,6 +2388,8 @@ int main(int argc, char **argv) {
                         ctl_poll();
                     } else if (fds[e].fd == notify_fd) {
                         notify_poll();
+                    } else if (fds[e].fd == ino_fd) {
+                        ready_inotify_drain();
                     }
                 }
             } else if (ret < 0 && errno != EINTR) {
@@ -2302,14 +2404,29 @@ int main(int argc, char **argv) {
          * the trigger alone; avg10's ~14 s decay would hold the thaw. */
         {
             int mem = psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
-            int act = pressure_step(&system_under_pressure, monotonic_ms(), &last_stall_ms,
-                                    mem || critical_cpu_pressure());
+            uint64_t now = monotonic_ms();
+            /* avg10 only moves every 2 s; reading it faster returns the same value. */
+            if ((int64_t)now >= cpu_check_due) {
+                cpu_check_due = (int64_t)now + CPU_CHECK_MS;
+                cpu_stalled = critical_cpu_pressure();
+            }
+            int act = pressure_step(&system_under_pressure, now, &last_stall_ms,
+                                    mem || cpu_stalled);
             if (act == PRESSURE_ENTER)
                 execute_survival_posture(1);
             else if (act == PRESSURE_EXIT)
                 execute_survival_posture(0);
             if (system_under_pressure && mem)
                 reclaim_maybe();
+        }
+
+        {
+            int64_t now = (int64_t)monotonic_ms();
+            if ((ready_event_due && now >= ready_event_due) || now >= ready_backstop_due) {
+                ready_event_due = 0;
+                ready_backstop_due = now + READY_BACKSTOP_MS;
+                ready_recheck_all();
+            }
         }
 
         for (i = 0; i < grp_count; i++)  grp_states[i] = groups[i].state;

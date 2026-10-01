@@ -57,6 +57,34 @@ static inline int pressure_step(int *under, uint64_t now_ms, uint64_t *last_stal
     return PRESSURE_NONE;
 }
 
+#define WAKE_NONE        INT64_MAX
+#define WAKE_CAL_CAP_MS  60000
+
+/* Deadline arithmetic for the main loop's poll() timeout. Pure — unit-tested
+ * in tests/test_next_wake.c. Deadlines round up so a wake never lands just
+ * before the tv_nsec compare in tick_service and spins. */
+static inline int64_t ts_ms_ceil(const struct timespec *ts) {
+    return (int64_t)ts->tv_sec * 1000 + (ts->tv_nsec + 999999) / 1000000;
+}
+
+static inline int64_t wake_min(int64_t best, int64_t deadline_ms, int64_t now_ms, int64_t cap_ms) {
+    int64_t d = deadline_ms <= now_ms ? 0 : deadline_ms - now_ms;
+    if (d > cap_ms) d = cap_ms;
+    return d < best ? d : best;
+}
+
+/* Hardware watchdog pet interval: a third of the device timeout, 5 s if the
+ * timeout is unknown. Never a floor above timeout/3 — a 1 s chip needs 333 ms. */
+static inline int64_t wd_pet_ms(int timeout_s) {
+    return timeout_s > 0 ? (int64_t)timeout_s * 1000 / 3 : 5000;
+}
+
+static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
+    if (tick && best > tick_ms) return tick_ms;
+    if (best == WAKE_NONE) return -1;
+    return best > 0x7fffffff ? 0x7fffffff : (int)best;
+}
+
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
@@ -233,6 +261,7 @@ typedef struct {
     int              ready_poll_hz;    /* polling rate for ready_path check at runtime */
     int              ready_check_ticks; /* tick counter for ready_path polling */
     int              ready_path_verified; /* 1 if ready_path has been verified at least once */
+    int              ready_watched;    /* 1 inotify watch on dirname(ready_path), -1 add failed (poll), 0 not yet */
     int              oom_adj_set;      /* oom_score_adj= given in the .svc */
     int              oom_score_adj;    /* -1000..1000, written before exec; inherited by children */
     int              notify;           /* notify=1: gets NOTIFY_SOCKET; READY=1 promotes (fallback: stable_secs) */
