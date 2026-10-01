@@ -13,6 +13,7 @@
 
 #include "schema.h"
 #include "service.h"
+#include "reexec_state.h"
 #include "notify.h"
 #include "coredump.h"
 #include <sys/resource.h>
@@ -1734,38 +1735,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     for (i = 0; i < shadow_count; i++) {
         for (j = 0; j < svc_count; j++) {
             if (strcmp(shadow_services[i].name, services[j].name) == 0) {
-                shadow_services[i].child_pid     = services[j].child_pid;
-                shadow_services[i].inst          = services[j].inst;
-                shadow_services[i].restart_count = services[j].restart_count;
-                shadow_services[i].dormant_count = services[j].dormant_count;
-                shadow_services[i].dormant_until = services[j].dormant_until;
-                shadow_services[i].last_start    = services[j].last_start;
-                shadow_services[i].start_time    = services[j].start_time;
-                shadow_services[i].stable_time   = services[j].stable_time;
-                shadow_services[i].failsafe_pid  = services[j].failsafe_pid;
-                shadow_services[i].failsafe_start = services[j].failsafe_start;
-                shadow_services[i].last_pet      = services[j].last_pet;
-                shadow_services[i].ready_path_verified = services[j].ready_path_verified;
-                shadow_services[i].notify_ready = services[j].notify_ready;
-                memcpy(shadow_services[i].notify_status, services[j].notify_status,
-                       sizeof shadow_services[i].notify_status);
-                shadow_services[i].ctl_killed = services[j].ctl_killed;
-                shadow_services[i].exit_status = services[j].exit_status;
-                shadow_services[i].term_signal = services[j].term_signal;
-                shadow_services[i].core_dumped = services[j].core_dumped;
-                shadow_services[i].has_exited  = services[j].has_exited;
-                shadow_services[i].timer_next    = services[j].timer_next;
-                shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;
-
-                /* cgroup_path is runtime-only (not in the .svc): a reload parses
-                 * the shadow fresh with an empty path, so without carrying it the
-                 * PSI freeze/reclaim executive silently no-ops on every running
-                 * service after the first reload. is_frozen rides along too, or a
-                 * service frozen at reload time can never thaw (set_cgroup_freeze
-                 * early-returns when is_frozen already matches the request). */
-                memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path,
-                       sizeof(shadow_services[i].cgroup_path));
-                shadow_services[i].is_frozen = services[j].is_frozen;
+                /* cgroup_path and is_frozen are runtime-only and ride along:
+                 * without them the PSI freeze/reclaim executive no-ops after a
+                 * reload, and a service frozen at reload time can never thaw. */
+                svc_runtime_copy(&shadow_services[i], &services[j]);
 
                 /* A run-once timer (on_boot_sec with no interval) marks itself
                  * terminal by clearing SVC_TIMER when it completes. The shadow
@@ -1779,12 +1752,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                  * boot-timing reached restarts=6 in one afternoon and wrote
                  * six phantom rows into boot-history.csv, all claiming the
                  * same boot. */
-                if ((shadow_services[i].flags & SVC_TIMER) &&
-                    !(services[j].flags & SVC_TIMER) &&
-                    !(shadow_services[i].flags & SVC_TIMER_CALENDAR) &&
-                    shadow_services[i].timer_interval_sec <= 0) {
-                    shadow_services[i].flags &= ~SVC_TIMER;
-                }
+                svc_carry_timer_done(&shadow_services[i], !(services[j].flags & SVC_TIMER));
 
                 /* clear live service state so we don't accidentally treat it as running/managed */
                 services[j].child_pid = 0;
