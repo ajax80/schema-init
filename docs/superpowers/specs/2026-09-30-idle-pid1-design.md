@@ -124,8 +124,8 @@ with no fds and no clocks.
 
 Every host has one open (blakbox SP5100 60 s, DBox wdat 30 s, Eli/Optiplex intel_oc 60 s).
 Today it's petted every loop pass, at least every 5 s. At `watchdog_init` read
-`WDIOC_GETTIMEOUT`: `wd_pet_ms = timeout * 1000 / 3`, floor 1 000, and 5 000 if the ioctl
-fails. The pet stays gated on the software-watchdog check exactly as now. A PID 1 lockup
+`WDIOC_GETTIMEOUT`: `wd_pet_ms = timeout * 1000 / 3`, and 5 000 if the ioctl fails. No
+floor: a floor above timeout/3 would be unsafe on a 1 s chip (found writing the tests). The pet stays gated on the software-watchdog check exactly as now. A PID 1 lockup
 still stops the pets and the chip still resets the box. Only the margin moves, from 5 s to
 timeout/3 (10 s on DBox, 20 s elsewhere).
 

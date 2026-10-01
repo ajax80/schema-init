@@ -27,6 +27,13 @@ int main(void) {
     assert(wake_timeout(0, 0, 250) == 0);
     assert(wake_timeout((int64_t)INT_MAX + 5, 0, 250) == INT_MAX);
 
+    assert(wd_pet_ms(60) == 20000);
+    assert(wd_pet_ms(30) == 10000);
+    assert(wd_pet_ms(2) == 666);
+    assert(wd_pet_ms(1) == 333);
+    assert(wd_pet_ms(0) == 5000);
+    assert(wd_pet_ms(-1) == 5000);
+
     printf("all next_wake tests passed\n");
     return 0;
 }

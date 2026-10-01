@@ -73,6 +73,12 @@ static inline int64_t wake_min(int64_t best, int64_t deadline_ms, int64_t now_ms
     return d < best ? d : best;
 }
 
+/* Hardware watchdog pet interval: a third of the device timeout, 5 s if the
+ * timeout is unknown. Never a floor above timeout/3 — a 1 s chip needs 333 ms. */
+static inline int64_t wd_pet_ms(int timeout_s) {
+    return timeout_s > 0 ? (int64_t)timeout_s * 1000 / 3 : 5000;
+}
+
 static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
     if (tick && best > tick_ms) return tick_ms;
     if (best == WAKE_NONE) return -1;

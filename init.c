@@ -29,6 +29,7 @@
 #include <sys/ioctl.h>
 #include <grp.h>
 #include <sys/inotify.h>
+#include <linux/watchdog.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -65,6 +66,7 @@ static int          ctl_fd   = -1;
 static int          notify_fd = -1;
 static int          sig_fd   = -1;
 static int          watchdog_fd = -1;
+static int64_t      watchdog_pet_ms = 5000;
 static int          system_under_pressure = 0;
 static uint64_t     last_stall_ms = 0;
 static uint64_t     last_reclaim_ms = 0;
@@ -72,6 +74,9 @@ static int          psi_fd = -1;
 static int          ino_fd = -1;
 static int64_t      ready_event_due = 0;    /* CLOCK_MONOTONIC ms, 0 = none */
 static int64_t      ready_backstop_due = 0;
+#define CPU_CHECK_MS        2000            /* critical cpu.pressure avg10 read rate */
+static int64_t      cpu_check_due = 0;
+static int          cpu_stalled = 0;
 static struct timespec init_start;
 
 static void start_failsafe(service_t *svc);
@@ -242,7 +247,11 @@ static void watchdog_init(void) {
     for (i = 0; paths[i]; i++) {
         watchdog_fd = open(paths[i], O_WRONLY | O_CLOEXEC);
         if (watchdog_fd >= 0) {
-            printf("[schema-init] opened hardware watchdog (%s)\n", paths[i]);
+            int timeout = 0;
+            if (ioctl(watchdog_fd, WDIOC_GETTIMEOUT, &timeout) < 0) timeout = 0;
+            watchdog_pet_ms = wd_pet_ms(timeout);
+            printf("[schema-init] opened hardware watchdog (%s, timeout %ds, pet every %lldms)\n",
+                   paths[i], timeout, (long long)watchdog_pet_ms);
             break;
         }
     }
@@ -1569,7 +1578,7 @@ static void schema_boot_log(void) {
 static int get_poll_timeout(void) {
     struct timespec ts;
     int64_t now_m, now_r, best = WAKE_NONE;
-    int i, tick = system_under_pressure || psi_fd < 0, watched = 0;
+    int i, tick = system_under_pressure || psi_fd < 0, watched = 0, critical = 0;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     now_m = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
@@ -1579,6 +1588,8 @@ static int get_poll_timeout(void) {
     for (i = 0; i < svc_count && !tick; i++) {
         service_t *svc = &services[i];
         uint8_t s = svc->inst.state;
+        if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0)
+            critical = 1;
         if (svc->failsafe_pid > 0 || (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
             tick = 1;
         else if (s == STATE_DORMANT)
@@ -1602,10 +1613,12 @@ static int get_poll_timeout(void) {
         best = wake_min(best, (int64_t)evictions[i].deadline * 1000, now_r, WAKE_CAL_CAP_MS);
     if (watched)
         best = wake_min(best, ready_backstop_due, now_m, WAKE_NONE);
+    if (critical)
+        best = wake_min(best, cpu_check_due, now_m, WAKE_NONE);
     if (ready_event_due)
         best = wake_min(best, ready_event_due, now_m, WAKE_NONE);
     if (watchdog_fd >= 0)
-        best = wake_min(best, now_m + 5000, now_m, WAKE_NONE);
+        best = wake_min(best, now_m + watchdog_pet_ms, now_m, WAKE_NONE);
     return wake_timeout(best, tick, TICK_USEC / 1000);
 }
 
@@ -2388,8 +2401,14 @@ int main(int argc, char **argv) {
          * the trigger alone; avg10's ~14 s decay would hold the thaw. */
         {
             int mem = psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
-            int act = pressure_step(&system_under_pressure, monotonic_ms(), &last_stall_ms,
-                                    mem || critical_cpu_pressure());
+            uint64_t now = monotonic_ms();
+            /* avg10 only moves every 2 s; reading it faster returns the same value. */
+            if ((int64_t)now >= cpu_check_due) {
+                cpu_check_due = (int64_t)now + CPU_CHECK_MS;
+                cpu_stalled = critical_cpu_pressure();
+            }
+            int act = pressure_step(&system_under_pressure, now, &last_stall_ms,
+                                    mem || cpu_stalled);
             if (act == PRESSURE_ENTER)
                 execute_survival_posture(1);
             else if (act == PRESSURE_EXIT)
