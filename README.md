@@ -691,14 +691,34 @@ Option C is the safest for dual-boot or first-time installs — it leaves the ex
 
 ### Replacing a running init (without reboot)
 
-The init binary cannot be overwritten while running (`text file busy`). Use the copy-then-move trick:
+PID 1 can swap itself onto a new binary in place. Services keep running with the same pids, restart counts, timers and readiness state, and the desktop session never notices:
 
 ```sh
-cp schema-init /sbin/schema-init.new
-mv /sbin/schema-init.new /sbin/schema-init
+sudo schema-ctl reexec            # re-exec into the binary PID 1 booted from (now the new one on disk)
+sudo schema-ctl reexec /path/bin  # or into a specific absolute path
+# ok: re-executed into 0.4.0-1.990…, 60 services adopted, 0 new
 ```
 
-`mv` replaces the directory entry atomically without touching the inode that the kernel holds open. The new binary takes effect on next boot.
+**With the RPM, you don't need to run it.** On an upgrade, the package re-executes PID 1 itself once the transaction finishes, so `dnf upgrade` is the whole update. It is skipped in a chroot or container (the installer, mock) and when PID 1 isn't schema-init. A refusal is printed and never fails the transaction.
+
+How it stays safe:
+
+- **Dry run first.** The new binary is started as a child with `--reexec-check` and must accept the state before PID 1 commits. A binary that crashes, is the wrong program, or can't read the state is refused, and the running PID 1 is untouched.
+- **State is handed over, not re-derived.** The runtime half of every service is serialized as versioned text into a sealed memfd. The control, notify and watchdog fds are inherited. The new image skips boot-only work (mounts, module loading, `/tmp` lock cleanup, watchdog arming) and adopts the running children.
+- **Fallback.** If the new image fails after the swap, it re-executes the old one (held open by fd) and the command replies `err: rolled back`.
+- **Refused** when a `.svc` changed since boot (those changes need a reboot), when the system is under memory pressure, or for a relative path. `schema-ctl` exits 1 on any refusal.
+
+Measured on blakbox (60 services, full Plasma session): 53 ms per re-exec, `schema-ctl status` byte-identical before and after.
+
+One caveat: a PID 1 older than re-exec support (COPR before `0.4.0-1.983`, git before `v0.4.0-31`) has no `reexec` verb, so moving off it takes one last reboot.
+
+If you install the binary by hand, it can't be overwritten while it runs (`text file busy`). Copy it next to the old one and `mv` it over, which replaces the directory entry atomically, then re-exec:
+
+```sh
+cp schema-init /usr/bin/schema-init.new
+mv /usr/bin/schema-init.new /usr/bin/schema-init
+sudo schema-ctl reexec
+```
 
 ---
 
@@ -831,10 +851,11 @@ sudo schema-ctl reload          # re-read the services directory (rejected if ne
 sudo schema-ctl reload --evict  # reload + SIGTERM any running service no longer present in config
 sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
 sudo schema-ctl reset [<name>]  # reset restart/dormant counts and re-queue failed services
+sudo schema-ctl reexec [<path>] # replace the PID 1 binary in place, services keep running
 sudo schema-ctl reboot          # orderly shutdown sweep, then reboot (also: poweroff)
 ```
 
-The socket is `chmod 0600` — root only. Build alongside the init binary:
+`schema-ctl` exits 1 when PID 1 refuses a command (`err:` reply), so scripts can check it. The socket is `chmod 0600` — root only. Build alongside the init binary:
 
 ```sh
 make schema-ctl
@@ -1323,6 +1344,8 @@ See [`distros/raspberry-pi-zero-w/README.md`](distros/raspberry-pi-zero-w/README
 - [x] modules-load.d — PID 1 loads `/etc/modules-load.d/*.conf` at boot (systemd-modules-load parity)
 - [x] schema-doctor — health checks with self-heal (boot-entry integrity, NM profiles bound to missing interfaces, session agents, powerdevil / ksycoca loops, panel pins), run at boot and periodically
 - [x] Boot snapshots + GRUB fallback — known-good root snapshots with their own boot entries (separate `/boot`, initramfs and non-fstab `/home` handled) and a boot-success guard
+- [x] PID 1 re-exec — `schema-ctl reexec` swaps the init binary in place with a dry run, sealed state handoff and rollback; RPM upgrades re-exec automatically, so updating PID 1 is just `dnf upgrade`, no reboot
+- [x] Service watchdog — `watchdog_sec=` with `WATCHDOG=1` over `sd_notify` (systemd `WatchdogSec=` parity): missed window → SIGABRT + core, then SIGKILL, then the normal restart arc
 - [x] Fedora 44 installer ISO, verified on real hardware — netinst + kickstart installs KDE on schema-init as PID 1 with an optional guided schema-udev flip; clean install to desktop on a Dell i3 laptop with no hand fixes (v0.3.0)
 
 ---
