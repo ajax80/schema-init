@@ -3,7 +3,11 @@
 
 #include <stdint.h>
 
-#define SCHEMA_INIT_VERSION "0.1.3"
+/* The build passes the real version (Makefile: git describe; RPM: its
+ * version-release). A re-exec reports it, so it has to be true. */
+#ifndef SCHEMA_INIT_VERSION
+#define SCHEMA_INIT_VERSION "0.4.0"
+#endif
 
 /* States */
 #define STATE_FUNDAMENTAL   1

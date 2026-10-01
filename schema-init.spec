@@ -61,7 +61,7 @@ overwrite a service file a running system depends on.
 # subpackage below can ship it; the base %%files list never references it.
 %global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump
 %global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
-%make_build BINS="%{core_bins} %{migrate_bins}"
+%make_build BINS="%{core_bins} %{migrate_bins}" VERSION="%{version}-%{release}"
 gcc %{optflags} -shared -fPIC -o mock_sd.so distros/fedora-kde/scripts/mock_sd.c -ldl %{build_ldflags}
 
 %install
