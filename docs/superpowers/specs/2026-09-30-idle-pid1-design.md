@@ -94,8 +94,12 @@ with no fds and no clocks.
 - When a FUNDAMENTAL service's `ready_path_verified` flips to 1, call
   `inotify_add_watch(ino_fd, dirname(ready_path), IN_DELETE | IN_MOVED_FROM | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT)`,
   then **re-`access()` once** to close the check-then-watch race.
-- On any readable `ino_fd`: drain it, then run `ready_recheck()` on **every** verified
-  ready_path service. No per-name matching, no wd refcounts. Services sharing a directory
+- On any readable `ino_fd`: drain it, then **100 ms later** (`READY_EVENT_GRACE_MS`) run
+  `ready_recheck()` on **every** verified ready_path service. The grace is there because a
+  crashing service often unlinks its own socket just before it exits. Without it, the
+  inotify event beats SIGCHLD and a plain crash gets logged `readiness-lost` and parked
+  DORMANT instead of taking the normal restart path. The 250 ms poll had the same race in
+  a narrow window; inotify would make it the common case. (Found while implementing.) No per-name matching, no wd refcounts. Services sharing a directory
   share a watch; the kernel dedups it and returns the same wd. A spurious event costs a
   handful of `access()` calls. Stale watches (service died) are harmless for the same reason.
   The set of watched dirs is bounded by config.
@@ -108,11 +112,13 @@ with no fds and no clocks.
 - **Backstop:** `ready_recheck` also runs every `READY_BACKSTOP_MS`. That covers the cases
   inotify can't see: a path on a filesystem that doesn't send events, a dir replaced by a
   bind mount. `ready_poll_hz=` keeps its meaning as an explicit per-service polling rate:
-  if set, that service's rate becomes a deadline, so `ready_poll_hz=4` reproduces today.
-- SIGHUP config reload: close and recreate `ino_fd`, then re-add watches for verified
-  services, alongside the existing shadow-table carry-over of `ready_path_verified`
-  (`init.c:1655`).
-- Readiness-lost latency goes from ≤250 ms (polled) to event-time (µs).
+  a service that sets it keeps the tick and its old counter, so `ready_poll_hz=4`
+  reproduces today exactly. If `inotify_add_watch` fails (`ready_watched = -1`), that
+  service also falls back to tick polling.
+- SIGHUP config reload: `ino_fd` is kept. Reloaded entries start with `ready_watched = 0`
+  and re-add their watch on the next pass. `inotify_add_watch` on an already-watched dir is
+  idempotent, so nothing gets recreated.
+- Readiness-lost latency goes from 0–250 ms (polled) to a fixed ~100 ms (the grace).
 
 ### 3. Hardware watchdog pet interval from the device
 
@@ -159,7 +165,7 @@ The ready_path backstop (30 s) adds 0.03/s everywhere.
   - settled wakes/60 s via `voluntary_ctxt_switches` (expect ≤15 vs ~240)
   - `on_active_sec=20` timer fires on time in an otherwise-idle VM (the regression for
     latent bug 1)
-  - `rm` a ready_path socket, and `readiness-lost` appears in rail.log within 100 ms
+  - `rm` a ready_path socket, and the service is killed within ~150 ms; a service that unlinks then exits takes the crash path, not readiness-lost
   - an eviction force-kills on its deadline
   - SIGHUP reload keeps the watches alive (rm after reload still detected)
 - **Hardware:** reboot-deploy blakbox (PID 1 → reboot only, never restart). Re-measure
