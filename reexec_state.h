@@ -293,4 +293,39 @@ out:
     return rc;
 }
 
+/* The blob against a fresh parse of the .svc files. Shared by the dry-run
+ * child, the old image's commit-time re-check and the new image, so all three
+ * refuse the same things: a duplicate name, a running service with no .svc
+ * (it would be lost), and the reload integrity rule (a .svc changed since
+ * boot waits for the next boot). Returns 0 or -1 with err. */
+static inline int reexec_compare(const reexec_svc_t *b, int nb,
+                                 const service_t *loaded, int nl,
+                                 char *err, size_t errsz) {
+    for (int i = 0; i < nb; i++) {
+        int j;
+        for (j = 0; j < i; j++)
+            if (!strcmp(b[i].name, b[j].name)) {
+                snprintf(err, errsz, "'%.63s' appears twice in the state blob", b[i].name);
+                return -1;
+            }
+        for (j = 0; j < nl; j++)
+            if (!strcmp(b[i].name, loaded[j].name)) break;
+        if (j == nl) {
+            if (b[i].rt.child_pid > 0 || b[i].rt.failsafe_pid > 0) {
+                snprintf(err, errsz, "'%.63s' is running (pid %d) but has no .svc on disk; "
+                         "run schema-ctl reload --evict first", b[i].name,
+                         (int)(b[i].rt.child_pid > 0 ? b[i].rt.child_pid : b[i].rt.failsafe_pid));
+                return -1;
+            }
+            continue;
+        }
+        if (loaded[j].content_hash != b[i].hash && loaded[j].content_hash != 0) {
+            snprintf(err, errsz, "'%.63s' modified since boot; a changed .svc takes effect "
+                     "at next boot, so re-exec is refused", b[i].name);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 #endif

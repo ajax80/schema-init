@@ -145,6 +145,34 @@ int main(void) {
         fclose(f);
     }
 
+    /* reexec_compare */
+    {
+        static service_t ld[2];
+        static reexec_svc_t b[3];
+        memset(ld, 0, sizeof ld);
+        memset(b, 0, sizeof b);
+        strcpy(ld[0].name, "a"); ld[0].content_hash = 11;
+        strcpy(ld[1].name, "new"); ld[1].content_hash = 22;
+        strcpy(b[0].name, "a"); b[0].hash = 11; b[0].rt.child_pid = 50;
+        strcpy(b[1].name, "gone"); b[1].hash = 33;            /* stopped, no .svc: fine */
+        assert(reexec_compare(b, 2, ld, 2, err, sizeof err) == 0);
+
+        b[1].rt.child_pid = 77;                               /* running, no .svc: orphan */
+        assert(reexec_compare(b, 2, ld, 2, err, sizeof err) == -1 && strstr(err, "reload --evict"));
+        b[1].rt.child_pid = 0; b[1].rt.failsafe_pid = 78;
+        assert(reexec_compare(b, 2, ld, 2, err, sizeof err) == -1 && strstr(err, "pid 78"));
+        b[1].rt.failsafe_pid = 0;
+
+        ld[0].content_hash = 12;                              /* edited since boot */
+        assert(reexec_compare(b, 2, ld, 2, err, sizeof err) == -1 && strstr(err, "modified since boot"));
+        ld[0].content_hash = 0;                               /* unhashed parse: reload's exemption */
+        assert(reexec_compare(b, 2, ld, 2, err, sizeof err) == 0);
+        ld[0].content_hash = 11;
+
+        strcpy(b[2].name, "a");                               /* duplicate */
+        assert(reexec_compare(b, 3, ld, 2, err, sizeof err) == -1 && strstr(err, "twice"));
+    }
+
     free(buf);
     printf("test_reexec_state: OK\n");
     return 0;
