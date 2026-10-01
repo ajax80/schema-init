@@ -1,6 +1,6 @@
 # PID 1 re-exec: swap the schema-init binary without a reboot
 
-**Status:** Draft 2026-09-30. Awaiting Jonathan's approval (open questions at the end).
+**Status:** Draft 2026-09-30, Greg review folded in (async dry run, stray-fd sweep, overlay→reap order). Awaiting Jonathan's answers to the open questions.
 **Component:** `init.c` (`main`, `ctl_cmd`, `handle_reload`), new pure `reexec_state.h`
 (+ `tests/test_reexec_state.c`), `schema-ctl.c` (one verb). RPM `%posttrans` is a later PR.
 
@@ -104,8 +104,19 @@ is the *old* inode. An explicit PATH is for hand-testing a build before it is pa
 `PATH --reexec-check <fd>`. That is a non-PID-1 mode `main` allows. It parses the blob,
 loads `/etc/schema-init/services` exactly as the real path will, runs
 `validate_and_resolve`, applies the checks below, prints one line, and exits 0 or 1.
-PID 1 waits for it with a 5 s timeout and SIGKILLs it if it is late. Anything except
-exit 0 refuses the re-exec and relays the child's line to the client. This catches:
+**PID 1 does not wait on it.** It records `reexec_check_pid`, holds the client fd, and
+goes back to the main loop: petting the watchdog, reaping, answering `status`. A 5 s
+deadline joins `get_poll_timeout`. Blocking instead would starve the watchdog. The fleet's
+shortest pet is 10 s, but a 1 s chip pets every 333 ms. `reap()` matches the check
+child's pid. A deadline that passes first gets a SIGKILL and a refusal. While a check is
+pending, a second `reexec` is refused, and shutdown cancels the check. The check child's
+stdout is a pipe, read when it exits. Anything except exit 0 refuses the re-exec and
+relays the child's line to the client.
+
+The dry-run blob is a validation snapshot. Commit writes a **fresh** blob, because state
+moves during the check (a service can die or respawn). Just before writing it, the old
+image re-runs the integrity and orphan checks itself: they are cheap and need no new
+code. A `.svc` edited during the 5 s window is still caught. The dry run catches:
 - a binary that crashes or doesn't run
 - an incompatible blob version
 - a dependency cycle
@@ -148,7 +159,8 @@ exit 0 refuses the re-exec and relays the child's line to the client. This catch
 | `shm_init`, `psi_open`, inotify, `signalfd_init` | run (fresh fds; `ready_watched=0` re-arms watches on the next pass) |
 | `setup_signals` | run, **then unblock** SIGTERM/INT/USR1/USR2. Pending ones fire now |
 | `schema_boot_log` | replaced by `[schema-init] re-exec git8bd6033 → gitabc1234: 41 adopted, 0 new` |
-| first pass | `reap()` once (exits during the swap are zombies, attributed by the restored `child_pid`), set `ready_event_due = now` |
+| stray fds | close every fd that is not 0–2 and not named in the blob's `fd` line. Several transient `fopen`/`open` calls lack CLOEXEC; one caught mid-flight must not leak into the new image forever |
+| ordering | overlay **→** `reap()` **→** `signalfd_init`. Exits during the swap are zombies, and only the restored `child_pid` can attribute them, so reaping before the overlay would lose them. SIGCHLD pending across exec is still reported by the new signalfd. Then set `ready_event_due = now` |
 
 Then the new image replies on the adopted client fd
 (`ok: re-executed into <version>, <n> services adopted`) and closes it. The client sees
@@ -172,10 +184,11 @@ to `svc_runtime_copy`). No service sees any signal or fd change.
 2. `reexec_state.h`: escape, `state_write`, `state_parse` + `tests/test_reexec_state.c`.
 3. New-image path: `--reexec` / `--reexec-check` arg handling, boot-step skips, fd
    adoption, overlay, signal unblock, reply on the client fd.
-4. Old-image path: `reexec` ctl verb, refusals, dry-run child with timeout, signal
+4. Old-image path: `reexec` ctl verb, refusals, async dry-run child (pid + deadline in the
+   main loop), commit-time re-check + fresh blob, signal
    block, CLOEXEC dance, exec failure restore.
-5. `oldexe` fallback. `schema-ctl reexec [PATH]` help text, a client read timeout
-   long enough for the dry run (≥ 10 s), and a real version string: `SCHEMA_INIT_VERSION`
+5. `oldexe` fallback. `schema-ctl reexec [PATH]` help text (the client read already blocks
+   with no timeout, so it waits out the dry run), and a real version string: `SCHEMA_INIT_VERSION`
    is still hard-coded `"0.1.3"` while the RPM is 0.4.0-1.972. The Makefile injects the
    RPM version + git hash, otherwise the confirmation reply proves nothing.
 
@@ -219,6 +232,6 @@ Estimated ~700 lines including tests. Later PR: RPM `%posttrans`.
    `schema-ctl reexec --accept-modified` to adopt them? Refusing means a host with a
    pending `.svc` edit needs a reboot or a revert before it can re-exec.
 2. **Auto re-exec on upgrade:** after re-exec has run on all four hosts by hand, should
-   the RPM `%posttrans` call `schema-ctl reexec` when PID 1 is schema-init?
+   the RPM `%posttrans` call `schema-ctl reexec` when `/proc/1/comm` is `schema-init`?
    Recommended: yes, in a later PR. A refusal there just logs "reboot to apply" and the
    upgrade still succeeds.
