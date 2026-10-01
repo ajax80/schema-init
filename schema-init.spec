@@ -237,6 +237,20 @@ if [ -e /run/schema-logind.hup-ok ]; then
     rm -f /run/schema-logind.hup-ok
     pkill -HUP -f '^(/usr/bin/)?python3(\.[0-9]+)? /usr/local/bin/schema-logind\.py( |$)' || :
 fi
+if [ $1 -ge 2 ]; then
+    touch /run/schema-init.reexec-pending 2>/dev/null || :
+fi
+
+%posttrans
+# PID 1 swaps itself onto the upgraded binary in place; a refusal (memory
+# pressure, a binary that fails its dry run, a PID 1 too old to know the
+# verb) leaves the running one untouched and never fails the transaction.
+if [ -e /run/schema-init.reexec-pending ]; then
+    rm -f /run/schema-init.reexec-pending
+    if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && [ /proc/1/root -ef / ] && [ -S /run/schema-init.sock ]; then
+        %{_bindir}/schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; run 'schema-ctl reexec' or reboot to pick up the upgrade"
+    fi
+fi
 
 %files
 %license LICENSE
@@ -267,6 +281,9 @@ fi
 
 %changelog
 * Sun Sep 27 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.0-1
+- PID 1 replaces its own binary in place (schema-ctl reexec), and an
+  upgrade does it automatically: services keep running, no reboot
+- schema-ctl exits 1 when PID 1 refuses a command
 - The migrate wizard and the ISO first-boot wizard offer the schema-dbus
   switch as a separate, optional last step, with a headless seatbelt that
   rolls back to dbus-daemon and reboots if the broker does not take
