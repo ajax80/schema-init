@@ -1,6 +1,6 @@
 # PID 1 re-exec: swap the schema-init binary without a reboot
 
-**Status:** Draft 2026-09-30, Greg review folded in (async dry run, stray-fd sweep, overlay→reap order). Awaiting Jonathan's answers to the open questions.
+**Status:** APPROVED 2026-09-30 (Jonathan): Q1 refuse modified .svc, no --accept-modified in v1; Q2 %posttrans auto re-exec in a later PR. Greg review folded in (async dry run, stray-fd sweep, overlay→reap order).
 **Component:** `init.c` (`main`, `ctl_cmd`, `handle_reload`), new pure `reexec_state.h`
 (+ `tests/test_reexec_state.c`), `schema-ctl.c` (one verb). RPM `%posttrans` is a later PR.
 
