@@ -901,6 +901,8 @@ static void svc_init_defaults(service_t *svc) {
 }
 
 static void svc_free_strings(service_t *svc) {
+    if (svc->argv[0] != svc->exec) free(svc->argv[0]);
+    svc->argv[0] = NULL;
     for (int i = 1; i < MAX_ARGV; i++) {
         free(svc->argv[i]);
         svc->argv[i] = NULL;
@@ -936,6 +938,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         strncpy(svc->exec, val, sizeof(svc->exec) - 1);
+        if (svc->argv[0] != svc->exec) free(svc->argv[0]);
         svc->argv[0] = svc->exec;
         pc->argc = 1;
     } else if (strcmp(line, "args") == 0 && pc->argc < MAX_ARGV - 1) {
