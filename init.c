@@ -13,6 +13,7 @@
 
 #include "schema.h"
 #include "service.h"
+#include "reexec_state.h"
 #include "notify.h"
 #include "coredump.h"
 #include <sys/resource.h>
@@ -30,6 +31,7 @@
 #include <grp.h>
 #include <sys/inotify.h>
 #include <linux/watchdog.h>
+#include <dirent.h>
 
 #define SVC_DIR         "/etc/schema-init/services"
 #define TICK_USEC       250000   /* 250ms main loop tick */
@@ -48,13 +50,6 @@ static group_t     *groups = groups_a;
 static group_t     *shadow_groups = groups_b;
 static int          grp_count = 0;
 #define EVICT_GRACE_SECS  3
-#define MAX_EVICTIONS     16
-
-typedef struct {
-    pid_t  pid;
-    char   cgroup[128];
-    time_t deadline;
-} eviction_t;
 
 static eviction_t evictions[MAX_EVICTIONS];
 static int        eviction_count = 0;
@@ -82,6 +77,27 @@ static struct timespec init_start;
 static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
 static int handle_reload(int evict_mode, char *err, size_t errsz);
+static void reexec_check_done(int status);
+static int reexec_start(int client, const char *path, char *err, size_t errsz);
+#define REEXEC_CHECK_MS 5000
+static pid_t   reexec_check_pid = 0;
+static int64_t reexec_check_due = 0;
+static int     reexec_check_killed = 0;
+static int     reexec_check_out = -1;     /* read end of the dry run's stdout */
+static int     reexec_client = -1;        /* the waiting schema-ctl connection */
+static char    reexec_path[256];
+static char    boot_argv0[256] = "/sbin/schema-init";
+static int     reexec_target = -1;        /* the binary the dry run validated */
+
+/* The signals that end PID 1. Blocked across execve: the kernel drops
+ * SIG_DFL signals sent to PID 1, and execve resets our handlers to SIG_DFL. */
+static void held_signals(sigset_t *set) {
+    sigemptyset(set);
+    sigaddset(set, SIGTERM);
+    sigaddset(set, SIGINT);
+    sigaddset(set, SIGUSR1);
+    sigaddset(set, SIGUSR2);
+}
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 
 /* Arm a calendar timer: set timer_next to the next CLOCK_REALTIME instant at
@@ -455,6 +471,10 @@ static void reap(void) {
     int i;
 
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (pid == reexec_check_pid) {
+            reexec_check_done(status);
+            continue;
+        }
         for (i = 0; i < svc_count; i++) {
             if (services[i].child_pid != pid) continue;
 
@@ -1392,6 +1412,14 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "  %-24s %7.3fs  %7.3fs\n", rows[i].name, rows[i].cost, rows[i].ready);
         }
 
+    } else if (strcmp(line, "reexec") == 0 || strncmp(line, "reexec ", 7) == 0) {
+        char rerr[320];
+        const char *path = line[6] ? line + 7 : boot_argv0;
+        while (*path == ' ') path++;
+        if (reexec_start(fd, path, rerr, sizeof rerr) == 0)
+            return;                     /* the reply comes when the dry run ends */
+        ctl_writef(fd, "err: %s\n", rerr);
+
     } else if (strcmp(line, "reboot") == 0) {
         ctl_writef(fd, "ok: rebooting\n");
         if (shm_ptr) shm_ptr->system_state = 14;
@@ -1622,6 +1650,8 @@ static int get_poll_timeout(void) {
         best = wake_min(best, ready_event_due, now_m, WAKE_NONE);
     if (watchdog_fd >= 0)
         best = wake_min(best, now_m + watchdog_pet_ms, now_m, WAKE_NONE);
+    if (reexec_check_pid > 0 && !reexec_check_killed)
+        best = wake_min(best, reexec_check_due, now_m, WAKE_NONE);
     return wake_timeout(best, tick, TICK_USEC / 1000);
 }
 
@@ -1734,38 +1764,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     for (i = 0; i < shadow_count; i++) {
         for (j = 0; j < svc_count; j++) {
             if (strcmp(shadow_services[i].name, services[j].name) == 0) {
-                shadow_services[i].child_pid     = services[j].child_pid;
-                shadow_services[i].inst          = services[j].inst;
-                shadow_services[i].restart_count = services[j].restart_count;
-                shadow_services[i].dormant_count = services[j].dormant_count;
-                shadow_services[i].dormant_until = services[j].dormant_until;
-                shadow_services[i].last_start    = services[j].last_start;
-                shadow_services[i].start_time    = services[j].start_time;
-                shadow_services[i].stable_time   = services[j].stable_time;
-                shadow_services[i].failsafe_pid  = services[j].failsafe_pid;
-                shadow_services[i].failsafe_start = services[j].failsafe_start;
-                shadow_services[i].last_pet      = services[j].last_pet;
-                shadow_services[i].ready_path_verified = services[j].ready_path_verified;
-                shadow_services[i].notify_ready = services[j].notify_ready;
-                memcpy(shadow_services[i].notify_status, services[j].notify_status,
-                       sizeof shadow_services[i].notify_status);
-                shadow_services[i].ctl_killed = services[j].ctl_killed;
-                shadow_services[i].exit_status = services[j].exit_status;
-                shadow_services[i].term_signal = services[j].term_signal;
-                shadow_services[i].core_dumped = services[j].core_dumped;
-                shadow_services[i].has_exited  = services[j].has_exited;
-                shadow_services[i].timer_next    = services[j].timer_next;
-                shadow_services[i].spawn_time_mono = services[j].spawn_time_mono;
-
-                /* cgroup_path is runtime-only (not in the .svc): a reload parses
-                 * the shadow fresh with an empty path, so without carrying it the
-                 * PSI freeze/reclaim executive silently no-ops on every running
-                 * service after the first reload. is_frozen rides along too, or a
-                 * service frozen at reload time can never thaw (set_cgroup_freeze
-                 * early-returns when is_frozen already matches the request). */
-                memcpy(shadow_services[i].cgroup_path, services[j].cgroup_path,
-                       sizeof(shadow_services[i].cgroup_path));
-                shadow_services[i].is_frozen = services[j].is_frozen;
+                /* cgroup_path and is_frozen are runtime-only and ride along:
+                 * without them the PSI freeze/reclaim executive no-ops after a
+                 * reload, and a service frozen at reload time can never thaw. */
+                svc_runtime_copy(&shadow_services[i], &services[j]);
 
                 /* A run-once timer (on_boot_sec with no interval) marks itself
                  * terminal by clearing SVC_TIMER when it completes. The shadow
@@ -1779,12 +1781,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                  * boot-timing reached restarts=6 in one afternoon and wrote
                  * six phantom rows into boot-history.csv, all claiming the
                  * same boot. */
-                if ((shadow_services[i].flags & SVC_TIMER) &&
-                    !(services[j].flags & SVC_TIMER) &&
-                    !(shadow_services[i].flags & SVC_TIMER_CALENDAR) &&
-                    shadow_services[i].timer_interval_sec <= 0) {
-                    shadow_services[i].flags &= ~SVC_TIMER;
-                }
+                svc_carry_timer_done(&shadow_services[i], !(services[j].flags & SVC_TIMER));
 
                 /* clear live service state so we don't accidentally treat it as running/managed */
                 services[j].child_pid = 0;
@@ -1863,6 +1860,458 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
 }
 
 /* ── main ───────────────────────────────────────────────────────────── */
+
+/* ── re-exec: the new image ─────────────────────────────────────────── */
+
+static reexec_svc_t reexec_svcs[MAX_SERVICES];
+static int reexec_reply_fd = -1;
+static char reexec_reply[160];
+
+static int load_tables(const char *svc_dir) {
+    char cmdline[4096] = "", hd[64] = "";
+    int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) { ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1); if (n > 0) cmdline[n] = '\0'; close(fd); }
+    fd = open("/etc/schema-init/hardening-default", O_RDONLY | O_CLOEXEC);
+    int have = fd >= 0;
+    if (have) { ssize_t n = read(fd, hd, sizeof(hd) - 1); if (n > 0) hd[n] = '\0'; close(fd); }
+    int on = hardening_default_resolve(cmdline, have ? hd : NULL);
+    service_set_hardening_default(on);
+    fprintf(stderr, "[schema-init] hardening default: %s\n", on ? "ON" : "off");
+
+    svc_count = services_load(svc_dir, services, MAX_SERVICES);
+    if (svc_count == 0)
+        svc_count = services_load("./services", services, MAX_SERVICES);
+    grp_count = groups_load(svc_dir, groups, MAX_GROUPS);
+    if (grp_count == 0)
+        grp_count = groups_load("./services", groups, MAX_GROUPS);
+    return validate_and_resolve(services, svc_count, groups, grp_count);
+}
+
+static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
+                            eviction_t *ev, int *nev, char *err, size_t errsz) {
+    int d;
+    FILE *f;
+    if (lseek(fd, 0, SEEK_SET) < 0 || (d = dup(fd)) < 0) {
+        snprintf(err, errsz, "state fd %d: %s", fd, strerror(errno));
+        return -1;
+    }
+    if (!(f = fdopen(d, "r"))) {
+        snprintf(err, errsz, "state fd %d: %s", fd, strerror(errno));
+        close(d);
+        return -1;
+    }
+    int rc = state_parse(f, g, reexec_svcs, MAX_SERVICES, nrs, ev, nev, err, errsz);
+    fclose(f);
+    return rc;
+}
+
+/* Everything the new image must prove before it touches anything: the config
+ * parses without a cycle, the blob parses, and the two agree. */
+static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
+                           eviction_t *ev, int *nev, char *err, size_t errsz) {
+    if (load_tables(SVC_DIR) > 0) {
+        snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
+        return -1;
+    }
+    if (svc_count <= 0) {
+        snprintf(err, errsz, "no services loaded from %s", SVC_DIR);
+        return -1;
+    }
+    if (reexec_read_blob(blob_fd, g, nrs, ev, nev, err, errsz) < 0)
+        return -1;
+    return reexec_compare(reexec_svcs, *nrs, services, svc_count, err, errsz);
+}
+
+/* --reexec-check: run by the old image as a plain child, never as PID 1. */
+static int reexec_check_main(int blob_fd) {
+    reexec_global_t g;
+    eviction_t ev[MAX_EVICTIONS];
+    int nrs, nev, rc;
+    char err[320];
+    /* stdout is the verdict pipe: the loader's chatter goes to stderr, so
+     * the verdict is the only thing on it however much the loader says */
+    int verdict = dup(STDOUT_FILENO);
+    dup2(STDERR_FILENO, STDOUT_FILENO);
+    rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err);
+    fflush(stdout);
+    if (rc < 0) {
+        dprintf(verdict, "err: %s\n", err);
+        return 1;
+    }
+    dprintf(verdict, "ok: %s\n", SCHEMA_INIT_VERSION);
+    return 0;
+}
+
+/* The new image could not take the state. Hand it back to the image that
+ * wrote it; that image runs this same path and adopts it. If that is gone
+ * too, a clean reboot beats a PID 1 exit (panic, and a hang without a
+ * hardware watchdog). */
+static void reexec_fallback(int blob_fd, int oldexe_fd, int client_fd, const char *why) {
+    char b[16], o[16];
+    fprintf(stderr, "[schema-init] re-exec refused by the new image: %s; returning to the previous image\n", why);
+    if (client_fd >= 0)
+        ctl_writef(client_fd, "err: new image refused the state: %s; back on the previous image\n", why);
+    if (oldexe_fd >= 0) {
+        /* "-1": the previous image has nowhere further back to go, so it
+         * adopts without the strict checks instead of refusing in a loop */
+        char *av[] = { "/sbin/schema-init", "--reexec", b, o, NULL };
+        snprintf(b, sizeof b, "%d", blob_fd);
+        snprintf(o, sizeof o, "%d", -1);
+        fcntl(oldexe_fd, F_SETFD, FD_CLOEXEC);
+        fflush(NULL);
+        fexecve(oldexe_fd, av, environ);
+    }
+    fprintf(stderr, "[schema-init] re-exec: previous image unavailable (%s); rebooting\n", strerror(errno));
+    sync();
+    reboot(RB_AUTOBOOT);
+    _exit(1);
+}
+
+/* Close every descriptor the old image leaked across execve, keeping the
+ * standard three and the ones the blob names. */
+static void reexec_close_strays(const int *keep, int nkeep) {
+    DIR *d = opendir("/proc/self/fd");
+    struct dirent *e;
+    if (!d) return;
+    int dfd = dirfd(d);
+    while ((e = readdir(d))) {
+        char *end;
+        long fd = strtol(e->d_name, &end, 10);
+        if (*end || end == e->d_name || fd <= 2 || fd == dfd) continue;
+        int k;
+        for (k = 0; k < nkeep; k++)
+            if (keep[k] == fd) break;
+        if (k == nkeep) close((int)fd);
+    }
+    closedir(d);
+}
+
+static void reexec_adopt(int blob_fd, int oldexe_fd) {
+    reexec_global_t g;
+    eviction_t ev[MAX_EVICTIONS];
+    int nrs = 0, nev = 0, adopted = 0, fresh = 0, rolled_back = oldexe_fd < 0;
+    char err[320];
+
+    memset(&g, 0, sizeof g);
+    g.fd_ctl = g.fd_notify = g.fd_watchdog = g.fd_client = g.fd_oldexe = -1;
+    if (oldexe_fd >= 0) {
+        if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+            reexec_fallback(blob_fd, oldexe_fd, g.fd_client, err);
+    } else {
+        /* We ARE the fallback: nowhere further back to go, so refusing would
+         * loop. Adopt whatever the config and blob allow; only a blob we
+         * cannot read at all stops us, since then there is nothing to adopt. */
+        int cycles = load_tables(SVC_DIR);
+        if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+            reexec_fallback(blob_fd, -1, g.fd_client, err);
+        if (cycles > 0)
+            fprintf(stderr, "[schema-init] re-exec fallback: dependency cycle in %s, adopting anyway\n", SVC_DIR);
+        if (reexec_compare(reexec_svcs, nrs, services, svc_count, err, sizeof err) < 0)
+            fprintf(stderr, "[schema-init] re-exec fallback: adopting despite: %s\n", err);
+    }
+
+    {
+        int keep[] = { g.fd_ctl, g.fd_notify, g.fd_watchdog, g.fd_client, blob_fd, oldexe_fd };
+        reexec_close_strays(keep, (int)(sizeof keep / sizeof keep[0]));
+    }
+
+    ctl_fd = g.fd_ctl;
+    notify_fd = g.fd_notify;
+    watchdog_fd = g.fd_watchdog;
+    if (ctl_fd >= 0) fcntl(ctl_fd, F_SETFD, FD_CLOEXEC);
+    if (notify_fd >= 0) fcntl(notify_fd, F_SETFD, FD_CLOEXEC);
+    if (watchdog_fd >= 0) {
+        int timeout = 0;
+        fcntl(watchdog_fd, F_SETFD, FD_CLOEXEC);
+        if (ioctl(watchdog_fd, WDIOC_GETTIMEOUT, &timeout) < 0) timeout = 0;
+        watchdog_pet_ms = wd_pet_ms(timeout);
+        write(watchdog_fd, "\0", 1);
+    }
+
+    for (int i = 0; i < svc_count; i++) {
+        int j;
+        for (j = 0; j < nrs; j++)
+            if (!strcmp(services[i].name, reexec_svcs[j].name)) break;
+        if (j == nrs) { fresh++; continue; }
+        svc_runtime_copy(&services[i], &reexec_svcs[j].rt);
+        svc_carry_timer_done(&services[i], !reexec_svcs[j].timer);
+        adopted++;
+    }
+    if (g.argv0[0] == '/')
+        snprintf(boot_argv0, sizeof boot_argv0, "%s", g.argv0);
+    memcpy(evictions, ev, sizeof(eviction_t) * (size_t)nev);
+    eviction_count = nev;
+    init_start = g.init_start;
+    if (g.nofile_soft)
+        service_set_nofile_soft_at_boot((rlim_t)g.nofile_soft);
+    system_under_pressure = g.under_pressure;
+    last_stall_ms = g.last_stall_ms;
+    last_reclaim_ms = g.last_reclaim_ms;
+
+    printf("[schema-init] re-exec %s -> %s: %d adopted, %d new\n",
+           g.version, SCHEMA_INIT_VERSION, adopted, fresh);
+    if (g.fd_client >= 0) {
+        fcntl(g.fd_client, F_SETFD, FD_CLOEXEC);
+        reexec_reply_fd = g.fd_client;
+        if (rolled_back)
+            snprintf(reexec_reply, sizeof reexec_reply,
+                     "err: rolled back to %s, %d services adopted\n",
+                     SCHEMA_INIT_VERSION, adopted);
+        else
+            snprintf(reexec_reply, sizeof reexec_reply,
+                     "ok: re-executed into %s, %d services adopted, %d new\n",
+                     SCHEMA_INIT_VERSION, adopted, fresh);
+    }
+    close(blob_fd);
+    if (oldexe_fd >= 0) close(oldexe_fd);
+}
+
+/* ── re-exec: the old image ─────────────────────────────────────────── */
+
+/* A sealed memfd holding the live state, CLOEXEC: it is opened to the dry run
+ * and the new image explicitly, never inherited by a service. */
+static int reexec_write_blob(int client, int oldexe, char *err, size_t errsz) {
+    reexec_global_t g;
+    int fd = memfd_create("schema-init-state", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    if (fd < 0) {
+        snprintf(err, errsz, "memfd_create: %s", strerror(errno));
+        return -1;
+    }
+    memset(&g, 0, sizeof g);
+    snprintf(g.version, sizeof g.version, "%s", SCHEMA_INIT_VERSION);
+    snprintf(g.argv0, sizeof g.argv0, "%s", boot_argv0);
+    g.init_start = init_start;
+    g.under_pressure = system_under_pressure;
+    g.last_stall_ms = last_stall_ms;
+    g.last_reclaim_ms = last_reclaim_ms;
+    g.nofile_soft = (uint64_t)service_nofile_soft_at_boot();
+    g.fd_ctl = ctl_fd;
+    g.fd_notify = notify_fd;
+    g.fd_watchdog = watchdog_fd;
+    g.fd_client = client;
+    g.fd_oldexe = oldexe;
+
+    int d = dup(fd);
+    FILE *f = d >= 0 ? fdopen(d, "w") : NULL;
+    if (!f) {
+        snprintf(err, errsz, "state blob: %s", strerror(errno));
+        if (d >= 0) close(d);
+        close(fd);
+        return -1;
+    }
+    state_write(f, &g, services, svc_count, evictions, eviction_count);
+    if (fclose(f) != 0 ||
+        fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) < 0) {
+        snprintf(err, errsz, "state blob: %s", strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static void reexec_reply_end(const char *fmt, const char *arg) {
+    if (reexec_client < 0) return;
+    ctl_writef(reexec_client, fmt, arg);
+    write(reexec_client, ".\n", 2);
+    close(reexec_client);
+    reexec_client = -1;
+}
+
+/* schema-ctl reexec [PATH]: refuse what can be refused now, then start the
+ * dry run as a plain child and go back to the main loop. PID 1 never waits
+ * on it: a blocked PID 1 starves the watchdog and stops reaping. */
+static int reexec_start(int client, const char *path, char *err, size_t errsz) {
+    struct stat st;
+    int out[2], blob;
+    if (!running) {
+        snprintf(err, errsz, "shutting down");
+        return -1;
+    }
+    if (reexec_check_pid > 0) {
+        snprintf(err, errsz, "a re-exec is already in progress");
+        return -1;
+    }
+    if (system_under_pressure) {
+        snprintf(err, errsz, "under memory pressure; try again when it clears");
+        return -1;
+    }
+    if (path[0] != '/' || strlen(path) >= sizeof reexec_path) {
+        snprintf(err, errsz, "'%s' is not an absolute path", path);
+        return -1;
+    }
+    if (stat(path, &st) < 0 || !S_ISREG(st.st_mode) || access(path, X_OK) < 0) {
+        snprintf(err, errsz, "'%s' is not an executable file", path);
+        return -1;
+    }
+    /* One open file for the dry run and the commit: whatever replaces the
+     * path in between, PID 1 becomes the binary that was checked. */
+    if ((reexec_target = open(path, O_RDONLY | O_CLOEXEC)) < 0) {
+        snprintf(err, errsz, "open %s: %s", path, strerror(errno));
+        return -1;
+    }
+    if ((blob = reexec_write_blob(-1, -1, err, errsz)) < 0) {
+        close(reexec_target); reexec_target = -1;
+        return -1;
+    }
+    if (pipe2(out, O_CLOEXEC) < 0) {
+        snprintf(err, errsz, "pipe: %s", strerror(errno));
+        close(blob); close(reexec_target); reexec_target = -1;
+        return -1;
+    }
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid < 0) {
+        snprintf(err, errsz, "fork: %s", strerror(errno));
+        close(blob); close(out[0]); close(out[1]); close(reexec_target); reexec_target = -1;
+        return -1;
+    }
+    if (pid == 0) {
+        char b[16];
+        char *av[] = { (char *)path, "--reexec-check", b, NULL };
+        service_reset_child_sigmask();
+        service_restore_child_nofile();
+        dup2(out[1], STDOUT_FILENO);
+        fcntl(blob, F_SETFD, 0);
+        fcntl(reexec_target, F_SETFD, 0);   /* a #! script needs it open */
+        snprintf(b, sizeof b, "%d", blob);
+        fexecve(reexec_target, av, environ);
+        dprintf(STDOUT_FILENO, "err: exec %s: %s\n", path, strerror(errno));
+        _exit(127);
+    }
+    close(out[1]);
+    close(blob);
+    set_nonblock(out[0]);
+    reexec_check_out = out[0];
+    reexec_check_pid = pid;
+    reexec_check_killed = 0;
+    reexec_check_due = (int64_t)monotonic_ms() + REEXEC_CHECK_MS;
+    reexec_client = fcntl(client, F_DUPFD_CLOEXEC, 3);
+    snprintf(reexec_path, sizeof reexec_path, "%s", path);
+    printf("[schema-init] re-exec: dry run of %s (pid %d)\n", path, (int)pid);
+    return 0;
+}
+
+/* Called from the main loop: a dry run past its deadline gets SIGKILL; reap()
+ * then reports it. */
+static void reexec_check_deadline(void) {
+    if (reexec_check_pid > 0 && !reexec_check_killed &&
+        (int64_t)monotonic_ms() >= reexec_check_due) {
+        kill(reexec_check_pid, SIGKILL);
+        reexec_check_killed = 1;
+    }
+}
+
+/* Re-check what can have changed during the dry run, against a fresh blob:
+ * a .svc edited, a new orphan, a cycle. The same checks the dry run made. */
+static int reexec_recheck(int blob, char *err, size_t errsz) {
+    reexec_global_t g;
+    eviction_t ev[MAX_EVICTIONS];
+    int nrs, nev, shadow_count, shadow_grp_count, rc;
+
+    memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
+    memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
+    shadow_count = services_load(SVC_DIR, shadow_services, MAX_SERVICES);
+    if (shadow_count == 0)
+        shadow_count = services_load("./services", shadow_services, MAX_SERVICES);
+    shadow_grp_count = groups_load(SVC_DIR, shadow_groups, MAX_GROUPS);
+    if (shadow_grp_count == 0)
+        shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
+
+    if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
+        snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
+        rc = -1;
+    } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, err, errsz)) == 0) {
+        rc = reexec_compare(reexec_svcs, nrs, shadow_services, shadow_count, err, errsz);
+    }
+    for (int k = 0; k < shadow_count; k++)
+        for (int m = 1; m < MAX_ARGV; m++)
+            if (shadow_services[k].argv[m]) { free(shadow_services[k].argv[m]); shadow_services[k].argv[m] = NULL; }
+    return rc;
+}
+
+static void set_cloexec(int fd, int on) {
+    if (fd >= 0) fcntl(fd, F_SETFD, on ? FD_CLOEXEC : 0);
+}
+
+static void reexec_commit(void) {
+    char err[320];
+    sigset_t held, prev;
+    int oldexe, blob;
+
+    if (!running) {
+        reexec_reply_end("err: %s\n", "shutting down");
+        return;
+    }
+    oldexe = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+
+    /* execve resets our handlers to SIG_DFL and the kernel drops SIG_DFL
+     * signals sent to PID 1. Blocked, a reboot sent now stays pending and the
+     * new image receives it once its handlers are in. */
+    held_signals(&held);
+    sigprocmask(SIG_BLOCK, &held, &prev);
+
+    blob = reexec_write_blob(reexec_client, oldexe, err, sizeof err);
+    if (blob >= 0 && reexec_recheck(blob, err, sizeof err) == 0) {
+        char b[16], o[16];
+        int fds[] = { ctl_fd, notify_fd, watchdog_fd, reexec_client, oldexe, blob };
+        for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
+            set_cloexec(fds[k], 0);
+        snprintf(b, sizeof b, "%d", blob);
+        snprintf(o, sizeof o, "%d", oldexe);
+        printf("[schema-init] re-exec: %s\n", reexec_path);
+        if (watchdog_fd >= 0)
+            write(watchdog_fd, "\0", 1);
+        fflush(NULL);
+        {
+            char *av[] = { reexec_path, "--reexec", b, o, NULL };
+            fexecve(reexec_target, av, environ);
+        }
+        snprintf(err, sizeof err, "exec %s: %s", reexec_path, strerror(errno));
+        for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
+            set_cloexec(fds[k], 1);
+    }
+    sigprocmask(SIG_SETMASK, &prev, NULL);
+    if (blob >= 0) close(blob);
+    if (oldexe >= 0) close(oldexe);
+    close(reexec_target);
+    reexec_target = -1;
+    printf("[schema-init] re-exec refused: %s\n", err);
+    reexec_reply_end("err: %s\n", err);
+}
+
+static void reexec_check_done(int status) {
+    char out[512] = "", *line, *nl;
+    ssize_t n, len = 0;
+
+    while (len < (ssize_t)sizeof out - 1 &&
+           (n = read(reexec_check_out, out + len, sizeof out - 1 - (size_t)len)) > 0)
+        len += n;
+    out[len] = '\0';
+    close(reexec_check_out);
+    reexec_check_out = -1;
+    reexec_check_pid = 0;
+
+    /* the verdict is the child's last line; the config loader talks first */
+    while (len > 0 && out[len - 1] == '\n') out[--len] = '\0';
+    line = (nl = strrchr(out, '\n')) ? nl + 1 : out;
+
+    if (reexec_check_killed || WIFSIGNALED(status) || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0 || strncmp(line, "ok:", 3)) {
+        close(reexec_target);
+        reexec_target = -1;
+    }
+    if (reexec_check_killed) {
+        reexec_reply_end("err: dry run of %s did not finish in 5 s\n", reexec_path);
+    } else if (WIFSIGNALED(status)) {
+        char why[96];
+        snprintf(why, sizeof why, "dry run died on signal %d", WTERMSIG(status));
+        reexec_reply_end("err: %s\n", why);
+    } else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || strncmp(line, "ok:", 3)) {
+        reexec_reply_end("%s\n", line[0] ? line : "err: dry run failed without a reason");
+    } else {
+        reexec_commit();
+    }
+}
 
 static void usage(FILE *out) {
     fprintf(out,
@@ -2171,6 +2620,7 @@ int main(int argc, char **argv) {
     int i;
     const char *svc_dir = SVC_DIR;
     int have_dir = 0;
+    int reexec_fd = -1, reexec_oldexe = -1, reexec_check_fd = -1;
 
     /* An initrd's systemd runs with umask 0 and switch-root hands that to us;
      * every service would inherit it and create world-writable files. */
@@ -2185,6 +2635,17 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
             printf("schema-init %s\n", SCHEMA_INIT_VERSION);
             return 0;
+        }
+        /* Written by our own previous image, never by the kernel: it
+         * appends only words it didn't consume, and none start "--reexec". */
+        if (!strcmp(argv[i], "--reexec") && i + 2 < argc) {
+            reexec_fd = atoi(argv[++i]);
+            reexec_oldexe = atoi(argv[++i]);
+            continue;
+        }
+        if (!strcmp(argv[i], "--reexec-check") && i + 1 < argc) {
+            reexec_check_fd = atoi(argv[++i]);
+            continue;
         }
         /* As PID 1 the kernel appends every boot-cmdline word it didn't
          * consume (rhgb, splash, quiet, plymouth.debug, ...) to our argv.
@@ -2208,6 +2669,12 @@ int main(int argc, char **argv) {
         have_dir = 1;
     }
 
+    if (reexec_check_fd >= 0)
+        return getpid() == 1 ? 1 : reexec_check_main(reexec_check_fd);
+
+    if (argv[0] && argv[0][0] == '/' && strlen(argv[0]) < sizeof boot_argv0)
+        snprintf(boot_argv0, sizeof boot_argv0, "%s", argv[0]);
+
     if (getpid() != 1) {
         fprintf(stderr,
             "schema-init: refusing to run as pid %d — schema-init must be PID 1.\n"
@@ -2221,50 +2688,35 @@ int main(int argc, char **argv) {
 
     clock_gettime(CLOCK_MONOTONIC, &init_start);
 
-    /* Detach from controlling terminal to prevent receiving SIGINT on Ctrl+C */
-    {
+    /* A re-exec skips what the first boot already did. cleanup_tmp_locks
+     * above all: run again it deletes live X/Xwayland locks. */
+    if (reexec_fd < 0) {
+        /* Detach from controlling terminal to prevent receiving SIGINT on Ctrl+C */
         int fd = open("/dev/tty", O_RDWR | O_NOCTTY);
         if (fd >= 0) {
             ioctl(fd, TIOCNOTTY);
             close(fd);
         }
+        mount_pseudo();
+        cleanup_tmp_locks();
+        load_watchdog_module();
+        load_configured_modules();
+        watchdog_init();
     }
-    mount_pseudo();
-    cleanup_tmp_locks();
-    load_watchdog_module();
-    load_configured_modules();
-    watchdog_init();
     /* Before the control socket opens or a single service spawns, so the
      * raised limit covers every descriptor PID 1 will ever hold. */
     service_raise_pid1_nofile();
     /* With the pattern ours, every service inherits a core limit the helper
-     * can honour; a process that wants no core still lowers its own. */
-    if (coredump_take_pattern() == 1)
+     * can honour; a process that wants no core still lowers its own. Boot
+     * only: a pattern set after boot is the admin's, and the raised core
+     * limit survives execve anyway. */
+    if (reexec_fd < 0 && coredump_take_pattern() == 1)
         coredump_raise_if_ours();
     setup_signals();
 
-    {
-        char cmdline[4096] = "", hd[64] = "";
-        int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
-        if (fd >= 0) { ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1); if (n > 0) cmdline[n] = '\0'; close(fd); }
-        fd = open("/etc/schema-init/hardening-default", O_RDONLY | O_CLOEXEC);
-        int have = fd >= 0;
-        if (have) { ssize_t n = read(fd, hd, sizeof(hd) - 1); if (n > 0) hd[n] = '\0'; close(fd); }
-        int on = hardening_default_resolve(cmdline, have ? hd : NULL);
-        service_set_hardening_default(on);
-        fprintf(stderr, "[schema-init] hardening default: %s\n", on ? "ON" : "off");
-    }
-    svc_count = services_load(svc_dir, services, MAX_SERVICES);
-    if (svc_count == 0) {
-        svc_count = services_load("./services", services, MAX_SERVICES);
-    }
-
-    grp_count = groups_load(svc_dir, groups, MAX_GROUPS);
-    if (grp_count == 0) {
-        grp_count = groups_load("./services", groups, MAX_GROUPS);
-    }
-
-    if (validate_and_resolve(services, svc_count, groups, grp_count) > 0) {
+    if (reexec_fd >= 0)
+        reexec_adopt(reexec_fd, reexec_oldexe);
+    else if (load_tables(svc_dir) > 0) {
         fprintf(stderr, "schema-init: dependency cycles detected — dropping to rescue shell\n");
         pid_t rsh = fork();
         if (rsh == 0) {
@@ -2290,20 +2742,31 @@ int main(int argc, char **argv) {
     }
 
     shm_init();
-    ctl_init();
     mkdir("/run/schema-init", 0755);
-    notify_fd = notify_open(NOTIFY_SOCK_PATH);
+    if (reexec_fd < 0) {
+        ctl_init();
+        notify_fd = notify_open(NOTIFY_SOCK_PATH);
+    }
     psi_open();
     ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (reexec_fd >= 0) {
+        /* Children that exited during the swap are zombies only the restored
+         * child_pid can attribute; their SIGCHLD stays pending for signalfd. */
+        reap();
+        ready_event_due = (int64_t)monotonic_ms();
+    }
     signalfd_init();
-    schema_boot_log();
+    if (reexec_fd < 0)
+        schema_boot_log();
 
-    /* arm timer services: born "already ran", first fire = boot + on_boot_sec */
+    /* arm timer services: born "already ran", first fire = boot + on_boot_sec.
+     * After a re-exec only timers new to the config (timer_next still 0). */
     {
         struct timespec tnow;
         clock_gettime(CLOCK_MONOTONIC, &tnow);
         for (int ti = 0; ti < svc_count; ti++) {
-            if (services[ti].flags & SVC_TIMER) {
+            if ((services[ti].flags & SVC_TIMER) &&
+                (reexec_fd < 0 || services[ti].timer_next.tv_sec == 0)) {
                 services[ti].inst.state = STATE_PERFECT;
                 if (services[ti].flags & SVC_TIMER_CALENDAR) {
                     if (services[ti].flags & SVC_TIMER_PERSIST)
@@ -2315,6 +2778,20 @@ int main(int argc, char **argv) {
                     services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
                 }
             }
+        }
+    }
+
+    if (reexec_fd >= 0) {
+        /* Handlers are installed: let a reboot/poweroff sent during the swap,
+         * held pending since the old image blocked it, arrive now. */
+        sigset_t held;
+        held_signals(&held);
+        sigprocmask(SIG_UNBLOCK, &held, NULL);
+        if (reexec_reply_fd >= 0) {
+            ctl_writef(reexec_reply_fd, "%s", reexec_reply);
+            write(reexec_reply_fd, ".\n", 2);
+            close(reexec_reply_fd);
+            reexec_reply_fd = -1;
         }
     }
 
@@ -2445,6 +2922,7 @@ int main(int argc, char **argv) {
         shm_update();
         eviction_tick();
         watchdog_pet();
+        reexec_check_deadline();
     }
 
     /* shutdown: hold briefly so viewers see system_state 13/14, then kill */

@@ -58,6 +58,11 @@ void service_raise_pid1_nofile(void) {
                 strerror(errno));
 }
 
+/* A re-exec inherits the raised limit: the new image takes the boot value
+ * from the state blob instead of recording the raised one. */
+rlim_t service_nofile_soft_at_boot(void) { return nofile_soft_at_boot; }
+void service_set_nofile_soft_at_boot(rlim_t v) { nofile_soft_at_boot = v; }
+
 /* Hand children back the soft limit PID 1 started with, between fork and exec.
  * Limits are inherited, and a raised soft NOFILE is not a free gift: anything
  * still using select()/fd_set breaks on a descriptor >= FD_SETSIZE (1024), and

@@ -6,6 +6,10 @@ STRIP   = $(CROSS_COMPILE)strip
 # compile are appended, so overriding CFLAGS cannot silently drop them.
 CFLAGS ?= -O2
 CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I.
+SCHEMA_VERSION := $(or $(SCHEMA_VERSION),$(shell git describe --always --dirty 2>/dev/null))
+ifneq ($(SCHEMA_VERSION),)
+CFLAGS += -DSCHEMA_INIT_VERSION='"$(SCHEMA_VERSION)"'
+endif
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
 
@@ -217,6 +221,8 @@ test: schema-coredump
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
+	$(CC) $(CFLAGS) tests/test_runtime_copy.c -o /tmp/schema-test-runtime-copy && /tmp/schema-test-runtime-copy
+	$(CC) $(CFLAGS) tests/test_reexec_state.c -o /tmp/schema-test-reexec-state && /tmp/schema-test-reexec-state
 	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o /tmp/schema-test-tiering && /tmp/schema-test-tiering
 	$(CC) $(CFLAGS) tests/test_calendar.c -o /tmp/schema-test-calendar && /tmp/schema-test-calendar
 	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o /tmp/schema-test-uevent && /tmp/schema-test-uevent

@@ -2,6 +2,7 @@
 #define SERVICE_H
 
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <stdint.h>
 #include <time.h>
 #include <pwd.h>
@@ -360,6 +361,9 @@ void service_reset_child_sigmask(void);
 
 /* call once, early in PID 1: raise our own soft RLIMIT_NOFILE to the hard one */
 void service_raise_pid1_nofile(void);
+
+rlim_t service_nofile_soft_at_boot(void);
+void   service_set_nofile_soft_at_boot(rlim_t v);
 
 /* call between fork() and exec(): give the child back PID 1's original soft
  * NOFILE, so nothing inherits a raised limit that breaks select() */

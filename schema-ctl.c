@@ -22,6 +22,8 @@ static void usage(FILE *out) {
         "                         sorted by cost — the boot critical path first\n"
         "  reload [--evict]       re-read service files; --evict also SIGTERMs\n"
         "                         services no longer present in config\n"
+        "  reexec [<path>]        replace the PID 1 binary in place (default: the\n"
+        "                         one it booted from); services keep running\n"
         "  start <svc>            start a service (alias: up)\n"
         "  stop <svc>             stop it and hold it down (alias: down)\n"
         "  restart <svc>\n"
