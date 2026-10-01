@@ -37,7 +37,7 @@ static void usage(FILE *out) {
         "  --help                 this text\n"
         "  --version              print version and exit\n"
         "\n"
-        "Talks to PID 1 over %s.\n", CTL_SOCK_PATH);
+        "Talks to PID 1 over %s.\nExits 1 when PID 1 replies \"err:\".\n", CTL_SOCK_PATH);
 }
 
 int main(int argc, char **argv) {
@@ -123,7 +123,8 @@ int main(int argc, char **argv) {
     }
 
     printf("%s", rbuf);
+    i = strncmp(rbuf, "err:", 4) == 0;
     close(fd);
     free(rbuf);
-    return 0;
+    return i;
 }
