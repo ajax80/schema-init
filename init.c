@@ -481,6 +481,13 @@ static void load_env_file(void) {
 
 /* ── zombie reaper ──────────────────────────────────────────────────── */
 
+static void restart_budget_refresh(service_t *svc) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec - svc->spawn_time_mono.tv_sec >= RESTART_RESET_SECS)
+        svc->restart_count = 0;
+}
+
 /* Record why a run ended (wait status) and log a signal death to the rail. */
 static void note_exit(service_t *svc, int status) {
     svc->exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -560,10 +567,7 @@ static void reap(void) {
                 service_log(&services[i], "ctl-restart");
             } else {
                 /* unexpected death → enter recovery arc */
-                struct timespec dn;
-                clock_gettime(CLOCK_MONOTONIC, &dn);
-                if (dn.tv_sec - services[i].spawn_time_mono.tv_sec >= RESTART_RESET_SECS)
-                    services[i].restart_count = 0;
+                restart_budget_refresh(&services[i]);
                 if (services[i].failsafe_cmd[0]) {
                     start_failsafe(&services[i]);
                 }
@@ -824,6 +828,7 @@ static void monitor_failsafes(void) {
 
 static void active_kill_service(service_t *svc) {
     if (svc->child_pid <= 0) return;
+    restart_budget_refresh(svc);
     
     kill(svc->child_pid, SIGTERM);
     
