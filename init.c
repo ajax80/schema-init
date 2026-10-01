@@ -859,9 +859,12 @@ static void ready_recheck_all(void) {
     int i;
     for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
-        if (ready_live(svc) && svc->ready_watched > 0 && svc->ready_poll_hz <= 0 &&
-            access(svc->ready_path, F_OK) != 0)
+        if (!ready_live(svc) || svc->ready_watched <= 0 || svc->ready_poll_hz > 0)
+            continue;
+        if (access(svc->ready_path, F_OK) != 0)
             ready_lost(svc);
+        else
+            svc->ready_watched = 0;   /* re-arm: the event may have been IN_IGNORED/IN_MOVE_SELF */
     }
 }
 

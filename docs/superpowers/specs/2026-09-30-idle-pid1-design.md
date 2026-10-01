@@ -105,8 +105,9 @@ with no fds and no clocks.
   The set of watched dirs is bounded by config.
 - `IN_Q_OVERFLOW` (wd −1) and `IN_IGNORED` (a watch dropped because its dir was deleted or
   unmounted) need no special handling. They are just more events, so they trigger the same
-  full recheck, silently. A recreated dir isn't re-watched until its service re-verifies
-  (respawn → FUNDAMENTAL) or SIGHUP. The backstop covers the gap.
+  full recheck, silently. Every service that survives a recheck is marked for re-watch,
+  so a deleted-and-recreated or renamed dir gets a fresh watch on the next pass
+  (`inotify_add_watch` is idempotent on the same inode). Caught by /code-review.
 - `ready_recheck(svc)` is the existing readiness-lost body lifted out of `tick_service`
   unchanged: log `readiness-lost`, kill, failsafe, dormant/excise backoff.
 - **Backstop:** `ready_recheck` also runs every `READY_BACKSTOP_MS`. That covers the cases
