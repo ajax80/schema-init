@@ -1,6 +1,6 @@
 # .svc Drop-ins
 
-**Status:** Draft 2026-10-01, awaiting Jonathan's review.
+**Status:** Approved 2026-10-01 (Jonathan; Greg review folded in). Open questions decided: defer live apply; bad drop-in fails closed.
 **Component:** `service.c` parser (`services_load`, `service_load_one`), `schema-ctl`, `schema-doctor.py`, `schema-systemd1.py`.
 
 ## Problem
@@ -26,11 +26,20 @@ extra `env=`) means editing the whole file, which:
 /etc/schema-init/services/foo.svc.d/50-hardening.conf
 ```
 
-- Directory is `<file basename>.svc.d`, next to the `.svc`. Only `*.conf` files
-  are read, in `strcmp` order of filename (`scandir` + `alphasort` under the C
-  locale PID 1 runs in). Anything else in the directory is ignored.
+- Directory is `<file basename>.svc.d`, next to the `.svc`. Read: names ending
+  in `.conf` that do not start with `.` (skips editor droppings such as emacs'
+  `.#10-mem.conf` lock symlink). Symlinks are followed; the target must be a
+  regular file (`stat`, not `d_type`), anything else is skipped with a warning.
+  Anything else in the directory is ignored.
+- Order is plain `strcmp` of the filename, via a `scandir` comparator — **not**
+  `alphasort`, which uses `strcoll`: `schema-ctl cat` runs in the user's locale
+  and would otherwise be able to list drop-ins in a different order from the
+  one PID 1 (C locale) applied. That one order drives both the merge and the
+  hash.
 - Template instances: `motor@a.svc` reads `motor@.svc.d/` first, then
-  `motor@a.svc.d/`. Two levels, nothing more.
+  `motor@a.svc.d/`. Two levels, nothing more. The template directory applies
+  whether or not a `motor@.svc` file exists (that file is never a spawnable
+  service today; instances are their own `motor@a.svc` files).
 - A drop-in directory with no matching `.svc` does nothing (no service is
   created from drop-ins alone). `schema-doctor` reports it as orphaned.
 - `.grp` files: out of scope.
@@ -47,6 +56,13 @@ if appended to the end of the base file, in order:
   Same rule as systemd's `ExecStart=` reset, so imported muscle memory works.
   - `exec=` in a drop-in does **not** clear `args`; to replace the command line,
     write `exec=…` then `args=` then the new `args=` lines.
+  - A reset frees the `strdup`'d `argv[1..]` / `envp[]` entries before zeroing
+    the count (PID 1 and `schema-ctl add` both parse; a leak per reset per
+    reload adds up). `argv[0]` is `svc->exec`, not heap, and is kept.
+  - `dep=` names are resolved to indices in the second pass of
+    `services_load`, after every file and drop-in is parsed, and cycle checks run
+    after that; a drop-in that clears and rebuilds `dep=` is seen in full by
+    both.
 - `name=` in a drop-in is rejected (the service's identity comes from the base
   file / filename; a drop-in renaming it would break `dep=` resolution silently).
 - Flag keys that today only set on true (`oneshot`, `needs_root`, `critical`,
