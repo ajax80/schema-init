@@ -87,6 +87,17 @@ static int     reexec_check_out = -1;     /* read end of the dry run's stdout */
 static int     reexec_client = -1;        /* the waiting schema-ctl connection */
 static char    reexec_path[256];
 static char    boot_argv0[256] = "/sbin/schema-init";
+static int     reexec_target = -1;        /* the binary the dry run validated */
+
+/* The signals that end PID 1. Blocked across execve: the kernel drops
+ * SIG_DFL signals sent to PID 1, and execve resets our handlers to SIG_DFL. */
+static void held_signals(sigset_t *set) {
+    sigemptyset(set);
+    sigaddset(set, SIGTERM);
+    sigaddset(set, SIGINT);
+    sigaddset(set, SIGUSR1);
+    sigaddset(set, SIGUSR2);
+}
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 
 /* Arm a calendar timer: set timer_next to the next CLOCK_REALTIME instant at
@@ -1915,13 +1926,19 @@ static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
 static int reexec_check_main(int blob_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs, nev;
+    int nrs, nev, rc;
     char err[320];
-    if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0) {
-        printf("err: %s\n", err);
+    /* stdout is the verdict pipe: the loader's chatter goes to stderr, so
+     * the verdict is the only thing on it however much the loader says */
+    int verdict = dup(STDOUT_FILENO);
+    dup2(STDERR_FILENO, STDOUT_FILENO);
+    rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err);
+    fflush(stdout);
+    if (rc < 0) {
+        dprintf(verdict, "err: %s\n", err);
         return 1;
     }
-    printf("ok: %s\n", SCHEMA_INIT_VERSION);
+    dprintf(verdict, "ok: %s\n", SCHEMA_INIT_VERSION);
     return 0;
 }
 
@@ -1935,9 +1952,12 @@ static void reexec_fallback(int blob_fd, int oldexe_fd, int client_fd, const cha
     if (client_fd >= 0)
         ctl_writef(client_fd, "err: new image refused the state: %s; back on the previous image\n", why);
     if (oldexe_fd >= 0) {
+        /* "-1": the previous image has nowhere further back to go, so it
+         * adopts without the strict checks instead of refusing in a loop */
         char *av[] = { "/sbin/schema-init", "--reexec", b, o, NULL };
         snprintf(b, sizeof b, "%d", blob_fd);
-        snprintf(o, sizeof o, "%d", oldexe_fd);
+        snprintf(o, sizeof o, "%d", -1);
+        fcntl(oldexe_fd, F_SETFD, FD_CLOEXEC);
         fflush(NULL);
         fexecve(oldexe_fd, av, environ);
     }
@@ -1969,14 +1989,25 @@ static void reexec_close_strays(const int *keep, int nkeep) {
 static void reexec_adopt(int blob_fd, int oldexe_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs = 0, nev = 0, adopted = 0, fresh = 0;
+    int nrs = 0, nev = 0, adopted = 0, fresh = 0, rolled_back = oldexe_fd < 0;
     char err[320];
 
     memset(&g, 0, sizeof g);
     g.fd_ctl = g.fd_notify = g.fd_watchdog = g.fd_client = g.fd_oldexe = -1;
-    if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0) {
-        /* client fd unknown if the blob is unreadable; only report when parsed */
-        reexec_fallback(blob_fd, oldexe_fd, g.fd_client, err);
+    if (oldexe_fd >= 0) {
+        if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+            reexec_fallback(blob_fd, oldexe_fd, g.fd_client, err);
+    } else {
+        /* We ARE the fallback: nowhere further back to go, so refusing would
+         * loop. Adopt whatever the config and blob allow; only a blob we
+         * cannot read at all stops us, since then there is nothing to adopt. */
+        int cycles = load_tables(SVC_DIR);
+        if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+            reexec_fallback(blob_fd, -1, g.fd_client, err);
+        if (cycles > 0)
+            fprintf(stderr, "[schema-init] re-exec fallback: dependency cycle in %s, adopting anyway\n", SVC_DIR);
+        if (reexec_compare(reexec_svcs, nrs, services, svc_count, err, sizeof err) < 0)
+            fprintf(stderr, "[schema-init] re-exec fallback: adopting despite: %s\n", err);
     }
 
     {
@@ -2011,6 +2042,8 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     memcpy(evictions, ev, sizeof(eviction_t) * (size_t)nev);
     eviction_count = nev;
     init_start = g.init_start;
+    if (g.nofile_soft)
+        service_set_nofile_soft_at_boot((rlim_t)g.nofile_soft);
     system_under_pressure = g.under_pressure;
     last_stall_ms = g.last_stall_ms;
     last_reclaim_ms = g.last_reclaim_ms;
@@ -2020,9 +2053,14 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     if (g.fd_client >= 0) {
         fcntl(g.fd_client, F_SETFD, FD_CLOEXEC);
         reexec_reply_fd = g.fd_client;
-        snprintf(reexec_reply, sizeof reexec_reply,
-                 "ok: re-executed into %s, %d services adopted, %d new\n",
-                 SCHEMA_INIT_VERSION, adopted, fresh);
+        if (rolled_back)
+            snprintf(reexec_reply, sizeof reexec_reply,
+                     "err: rolled back to %s, %d services adopted\n",
+                     SCHEMA_INIT_VERSION, adopted);
+        else
+            snprintf(reexec_reply, sizeof reexec_reply,
+                     "ok: re-executed into %s, %d services adopted, %d new\n",
+                     SCHEMA_INIT_VERSION, adopted, fresh);
     }
     close(blob_fd);
     if (oldexe_fd >= 0) close(oldexe_fd);
@@ -2046,6 +2084,7 @@ static int reexec_write_blob(int client, int oldexe, char *err, size_t errsz) {
     g.under_pressure = system_under_pressure;
     g.last_stall_ms = last_stall_ms;
     g.last_reclaim_ms = last_reclaim_ms;
+    g.nofile_soft = (uint64_t)service_nofile_soft_at_boot();
     g.fd_ctl = ctl_fd;
     g.fd_notify = notify_fd;
     g.fd_watchdog = watchdog_fd;
@@ -2104,28 +2143,39 @@ static int reexec_start(int client, const char *path, char *err, size_t errsz) {
         snprintf(err, errsz, "'%s' is not an executable file", path);
         return -1;
     }
-    if ((blob = reexec_write_blob(-1, -1, err, errsz)) < 0)
-        return -1;
-    if (pipe2(out, O_CLOEXEC) < 0) {
-        snprintf(err, errsz, "pipe: %s", strerror(errno));
-        close(blob);
+    /* One open file for the dry run and the commit: whatever replaces the
+     * path in between, PID 1 becomes the binary that was checked. */
+    if ((reexec_target = open(path, O_RDONLY | O_CLOEXEC)) < 0) {
+        snprintf(err, errsz, "open %s: %s", path, strerror(errno));
         return -1;
     }
+    if ((blob = reexec_write_blob(-1, -1, err, errsz)) < 0) {
+        close(reexec_target); reexec_target = -1;
+        return -1;
+    }
+    if (pipe2(out, O_CLOEXEC) < 0) {
+        snprintf(err, errsz, "pipe: %s", strerror(errno));
+        close(blob); close(reexec_target); reexec_target = -1;
+        return -1;
+    }
+    fflush(NULL);
     pid_t pid = fork();
     if (pid < 0) {
         snprintf(err, errsz, "fork: %s", strerror(errno));
-        close(blob); close(out[0]); close(out[1]);
+        close(blob); close(out[0]); close(out[1]); close(reexec_target); reexec_target = -1;
         return -1;
     }
     if (pid == 0) {
         char b[16];
+        char *av[] = { (char *)path, "--reexec-check", b, NULL };
         service_reset_child_sigmask();
         service_restore_child_nofile();
         dup2(out[1], STDOUT_FILENO);
         fcntl(blob, F_SETFD, 0);
+        fcntl(reexec_target, F_SETFD, 0);   /* a #! script needs it open */
         snprintf(b, sizeof b, "%d", blob);
-        execl(path, path, "--reexec-check", b, (char *)NULL);
-        printf("err: exec %s: %s\n", path, strerror(errno));
+        fexecve(reexec_target, av, environ);
+        dprintf(STDOUT_FILENO, "err: exec %s: %s\n", path, strerror(errno));
         _exit(127);
     }
     close(out[1]);
@@ -2152,26 +2202,26 @@ static void reexec_check_deadline(void) {
 }
 
 /* Re-check what can have changed during the dry run, against a fresh blob:
- * a .svc edited, or a new orphan. Same function the dry run used. */
+ * a .svc edited, a new orphan, a cycle. The same checks the dry run made. */
 static int reexec_recheck(int blob, char *err, size_t errsz) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs, nev, d, shadow_count, rc;
-    FILE *f;
+    int nrs, nev, shadow_count, shadow_grp_count, rc;
 
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
+    memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
     shadow_count = services_load(SVC_DIR, shadow_services, MAX_SERVICES);
     if (shadow_count == 0)
         shadow_count = services_load("./services", shadow_services, MAX_SERVICES);
-    if ((d = dup(blob)) < 0 || lseek(d, 0, SEEK_SET) < 0 || !(f = fdopen(d, "r"))) {
-        snprintf(err, errsz, "state blob: %s", strerror(errno));
-        if (d >= 0) close(d);
+    shadow_grp_count = groups_load(SVC_DIR, shadow_groups, MAX_GROUPS);
+    if (shadow_grp_count == 0)
+        shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
+
+    if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
+        snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
         rc = -1;
-    } else {
-        rc = state_parse(f, &g, reexec_svcs, MAX_SERVICES, &nrs, ev, &nev, err, errsz);
-        fclose(f);
-        if (rc == 0)
-            rc = reexec_compare(reexec_svcs, nrs, shadow_services, shadow_count, err, errsz);
+    } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, err, errsz)) == 0) {
+        rc = reexec_compare(reexec_svcs, nrs, shadow_services, shadow_count, err, errsz);
     }
     for (int k = 0; k < shadow_count; k++)
         for (int m = 1; m < MAX_ARGV; m++)
@@ -2197,11 +2247,7 @@ static void reexec_commit(void) {
     /* execve resets our handlers to SIG_DFL and the kernel drops SIG_DFL
      * signals sent to PID 1. Blocked, a reboot sent now stays pending and the
      * new image receives it once its handlers are in. */
-    sigemptyset(&held);
-    sigaddset(&held, SIGTERM);
-    sigaddset(&held, SIGINT);
-    sigaddset(&held, SIGUSR1);
-    sigaddset(&held, SIGUSR2);
+    held_signals(&held);
     sigprocmask(SIG_BLOCK, &held, &prev);
 
     blob = reexec_write_blob(reexec_client, oldexe, err, sizeof err);
@@ -2216,7 +2262,10 @@ static void reexec_commit(void) {
         if (watchdog_fd >= 0)
             write(watchdog_fd, "\0", 1);
         fflush(NULL);
-        execl(reexec_path, reexec_path, "--reexec", b, o, (char *)NULL);
+        {
+            char *av[] = { reexec_path, "--reexec", b, o, NULL };
+            fexecve(reexec_target, av, environ);
+        }
         snprintf(err, sizeof err, "exec %s: %s", reexec_path, strerror(errno));
         for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
             set_cloexec(fds[k], 1);
@@ -2224,6 +2273,8 @@ static void reexec_commit(void) {
     sigprocmask(SIG_SETMASK, &prev, NULL);
     if (blob >= 0) close(blob);
     if (oldexe >= 0) close(oldexe);
+    close(reexec_target);
+    reexec_target = -1;
     printf("[schema-init] re-exec refused: %s\n", err);
     reexec_reply_end("err: %s\n", err);
 }
@@ -2244,6 +2295,11 @@ static void reexec_check_done(int status) {
     while (len > 0 && out[len - 1] == '\n') out[--len] = '\0';
     line = (nl = strrchr(out, '\n')) ? nl + 1 : out;
 
+    if (reexec_check_killed || WIFSIGNALED(status) || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0 || strncmp(line, "ok:", 3)) {
+        close(reexec_target);
+        reexec_target = -1;
+    }
     if (reexec_check_killed) {
         reexec_reply_end("err: dry run of %s did not finish in 5 s\n", reexec_path);
     } else if (WIFSIGNALED(status)) {
@@ -2651,8 +2707,10 @@ int main(int argc, char **argv) {
      * raised limit covers every descriptor PID 1 will ever hold. */
     service_raise_pid1_nofile();
     /* With the pattern ours, every service inherits a core limit the helper
-     * can honour; a process that wants no core still lowers its own. */
-    if (coredump_take_pattern() == 1)
+     * can honour; a process that wants no core still lowers its own. Boot
+     * only: a pattern set after boot is the admin's, and the raised core
+     * limit survives execve anyway. */
+    if (reexec_fd < 0 && coredump_take_pattern() == 1)
         coredump_raise_if_ours();
     setup_signals();
 
@@ -2727,11 +2785,7 @@ int main(int argc, char **argv) {
         /* Handlers are installed: let a reboot/poweroff sent during the swap,
          * held pending since the old image blocked it, arrive now. */
         sigset_t held;
-        sigemptyset(&held);
-        sigaddset(&held, SIGTERM);
-        sigaddset(&held, SIGINT);
-        sigaddset(&held, SIGUSR1);
-        sigaddset(&held, SIGUSR2);
+        held_signals(&held);
         sigprocmask(SIG_UNBLOCK, &held, NULL);
         if (reexec_reply_fd >= 0) {
             ctl_writef(reexec_reply_fd, "%s", reexec_reply);

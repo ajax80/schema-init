@@ -33,7 +33,7 @@ int main(void) {
     strcpy(g.version, "0.4.0-1.973.git abc");
     strcpy(g.argv0, "/sbin/schema-init");
     g.init_start.tv_sec = 12; g.init_start.tv_nsec = 345678901;
-    g.under_pressure = 1; g.last_stall_ms = 98765; g.last_reclaim_ms = 4321;
+    g.under_pressure = 1; g.last_stall_ms = 98765; g.last_reclaim_ms = 4321; g.nofile_soft = 1024;
     g.fd_ctl = 3; g.fd_notify = 4; g.fd_watchdog = -1; g.fd_client = 6; g.fd_oldexe = 7;
 
     strcpy(svcs[0].name, "dbus");
@@ -47,6 +47,7 @@ int main(void) {
     strcpy(svcs[0].cgroup_path, "/sys/fs/cgroup/schema-init/dbus");
     svcs[0].is_frozen = 1;
     svcs[0].dormant_count = 200;
+    svcs[0].flags = SVC_NO_RESTART;               /* held down by schema-ctl stop */
 
     strcpy(svcs[1].name, "boot-timing");
     svcs[1].flags = 0;                        /* run-once timer, completed */
@@ -70,6 +71,9 @@ int main(void) {
     assert(strcmp(pg.argv0, g.argv0) == 0);
     assert(pg.init_start.tv_sec == 12 && pg.init_start.tv_nsec == 345678901);
     assert(pg.under_pressure == 1 && pg.last_stall_ms == 98765 && pg.last_reclaim_ms == 4321);
+    assert(pg.nofile_soft == 1024);
+    assert(out[0].rt.flags & SVC_NO_RESTART);
+    assert(!(out[2].rt.flags & SVC_NO_RESTART));
     assert(pg.fd_ctl == 3 && pg.fd_notify == 4 && pg.fd_watchdog == -1 && pg.fd_client == 6 && pg.fd_oldexe == 7);
     assert(nsvc == 3 && nev == 1);
     assert(strcmp(out[0].name, "dbus") == 0 && out[0].hash == 4000000000u && out[0].timer == 0);

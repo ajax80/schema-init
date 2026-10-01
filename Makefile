@@ -6,9 +6,9 @@ STRIP   = $(CROSS_COMPILE)strip
 # compile are appended, so overriding CFLAGS cannot silently drop them.
 CFLAGS ?= -O2
 CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I.
-VERSION ?= $(shell git describe --always --dirty 2>/dev/null)
-ifneq ($(VERSION),)
-CFLAGS += -DSCHEMA_INIT_VERSION='"$(VERSION)"'
+SCHEMA_VERSION := $(or $(SCHEMA_VERSION),$(shell git describe --always --dirty 2>/dev/null))
+ifneq ($(SCHEMA_VERSION),)
+CFLAGS += -DSCHEMA_INIT_VERSION='"$(SCHEMA_VERSION)"'
 endif
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=

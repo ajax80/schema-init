@@ -46,10 +46,14 @@ typedef struct {
     X(STR,  cgroup_path)         \
     X(INT,  is_frozen)
 
+/* SVC_NO_RESTART is the one flag PID 1 changes at runtime: schema-ctl stop
+ * sets it to hold a service down, start clears it. The live bit wins over the
+ * fresh parse, or a stopped service respawns after a reload or re-exec. */
 static inline void svc_runtime_copy(service_t *dst, const service_t *src) {
 #define X(kind, f) memcpy(&dst->f, &src->f, sizeof dst->f);
     SVC_RUNTIME_FIELDS(X)
 #undef X
+    dst->flags = (dst->flags & ~SVC_NO_RESTART) | (src->flags & SVC_NO_RESTART);
 }
 
 /* A run-once timer (on_boot_sec, no interval) clears SVC_TIMER when it
@@ -76,6 +80,7 @@ typedef struct {
     int             under_pressure;
     uint64_t        last_stall_ms;
     uint64_t        last_reclaim_ms;
+    uint64_t        nofile_soft;     /* soft RLIMIT_NOFILE the kernel gave PID 1 at boot */
     int             fd_ctl, fd_notify, fd_watchdog, fd_client, fd_oldexe;
 } reexec_global_t;
 
@@ -173,8 +178,8 @@ static inline void state_write(FILE *out, const reexec_global_t *g,
     rx_put_STR(out, "argv0", g->argv0);
     rx_put_TS(out, "init_start", &g->init_start);
     rx_put_INT(out, "under_pressure", &g->under_pressure);
-    fprintf(out, " last_stall_ms=%" PRIu64 " last_reclaim_ms=%" PRIu64 "\n",
-            g->last_stall_ms, g->last_reclaim_ms);
+    fprintf(out, " last_stall_ms=%" PRIu64 " last_reclaim_ms=%" PRIu64 " nofile_soft=%" PRIu64 "\n",
+            g->last_stall_ms, g->last_reclaim_ms, g->nofile_soft);
     fprintf(out, "fd ctl=%d notify=%d watchdog=%d client=%d oldexe=%d\n",
             g->fd_ctl, g->fd_notify, g->fd_watchdog, g->fd_client, g->fd_oldexe);
     for (int i = 0; i < nsvc; i++) {
@@ -184,6 +189,8 @@ static inline void state_write(FILE *out, const reexec_global_t *g,
         rx_put_STR(out, "name", s->name);
         fprintf(out, " hash=%" PRIu32, s->content_hash);
         rx_put_INT(out, "timer", &timer);
+        int no_restart = (s->flags & SVC_NO_RESTART) != 0;
+        rx_put_INT(out, "no_restart", &no_restart);
 #define X(kind, f) rx_put_##kind(out, #f, &s->f);
         SVC_RUNTIME_FIELDS(X)
 #undef X
@@ -256,6 +263,11 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
                 if (!strcmp(k, "name"))       bad = rx_unescape(v, sv->name, sizeof sv->name);
                 else if (!strcmp(k, "hash"))  { bad = rx_ll(v, &x) || x < 0 || x > UINT32_MAX; if (!bad) sv->hash = (uint32_t)x; }
                 else if (!strcmp(k, "timer")) bad = rx_get_INT(v, &sv->timer, 0);
+                else if (!strcmp(k, "no_restart")) {
+                    int nr = 0;
+                    bad = rx_get_INT(v, &nr, 0);
+                    if (nr) sv->rt.flags |= SVC_NO_RESTART;
+                }
 #define X(kind, f) else if (!strcmp(k, #f)) bad = rx_get_##kind(v, &sv->rt.f, sizeof sv->rt.f);
                 SVC_RUNTIME_FIELDS(X)
 #undef X
@@ -270,6 +282,7 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
                 else if (!strcmp(k, "under_pressure")) bad = rx_get_INT(v, &g->under_pressure, 0);
                 else if (!strcmp(k, "last_stall_ms"))  { bad = rx_ll(v, &x) || x < 0; if (!bad) g->last_stall_ms = (uint64_t)x; }
                 else if (!strcmp(k, "last_reclaim_ms")){ bad = rx_ll(v, &x) || x < 0; if (!bad) g->last_reclaim_ms = (uint64_t)x; }
+                else if (!strcmp(k, "nofile_soft"))    { bad = rx_ll(v, &x) || x < 0; if (!bad) g->nofile_soft = (uint64_t)x; }
             } else {
                 int *fd = !strcmp(k, "ctl") ? &g->fd_ctl : !strcmp(k, "notify") ? &g->fd_notify :
                           !strcmp(k, "watchdog") ? &g->fd_watchdog : !strcmp(k, "client") ? &g->fd_client :

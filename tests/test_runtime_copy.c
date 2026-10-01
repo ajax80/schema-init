@@ -9,7 +9,7 @@ int main(void) {
 
     strcpy(src.name, "live");
     strcpy(src.exec, "/old/exec");
-    src.flags = SVC_TIMER;
+    src.flags = SVC_TIMER | SVC_NO_RESTART;
     src.child_pid = 4242;
     src.inst.state = 4; src.inst.prev_state = 3; src.inst.weight = 8; src.inst.flags = 0x55;
     src.restart_count = 3;
@@ -67,7 +67,15 @@ int main(void) {
     /* config half comes from the fresh parse, never from the live table */
     assert(strcmp(dst.name, "fresh") == 0);
     assert(strcmp(dst.exec, "/new/exec") == 0);
-    assert(dst.flags == SVC_ONESHOT);
+    assert(dst.flags == (SVC_ONESHOT | SVC_NO_RESTART));   /* only the stop hold carries */
+
+    /* schema-ctl start cleared a configured restart=no: the live bit wins */
+    {
+        service_t f, l; memset(&f, 0, sizeof f); memset(&l, 0, sizeof l);
+        f.flags = SVC_NO_RESTART;
+        svc_runtime_copy(&f, &l);
+        assert(!(f.flags & SVC_NO_RESTART));
+    }
 
     /* run-once boot timer completed live: stays completed */
     {
