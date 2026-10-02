@@ -8,6 +8,8 @@
 # bash, not sh, for $BASHPID: the process that joins the session-scope cgroup
 # must be the one that execs the compositor.
 exec >> /var/log/schema-autologin.log 2>&1
+# ready_path for this service: kwin's wayland socket appearing means the
+# compositor is up. A fixed marker keeps the .svc independent of the uid.
 READY=/run/schema-plasma-ready
 rm -f "$READY"
 set -x
@@ -65,9 +67,6 @@ release_session() {
     SID=""
 }
 trap 'release_session' EXIT HUP INT TERM
-
-# ready_path for this service: kwin's wayland socket appearing means the
-# compositor is up. A fixed marker keeps the .svc independent of the uid.
 
 while true; do
     rm -f "/run/user/$SCHEMA_UID"/wayland-* /tmp/.ICE-unix/* /tmp/.X*-lock 2>/dev/null || true
