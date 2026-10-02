@@ -10,6 +10,7 @@ rm -f /run/nologin 2>/dev/null
 # not a tmpfs on these installs, so stale X sockets and locks would otherwise
 # survive a reboot (and fake ready_path=/tmp/.X11-unix/X1 for vnc).
 for d in /tmp/.X11-unix /tmp/.ICE-unix /tmp/.XIM-unix /tmp/.font-unix; do
+    [ -L "$d" ] && rm -f "$d"
     mkdir -p "$d"
     find "$d" -mindepth 1 -delete 2>/dev/null
     chown root:root "$d" && chmod 1777 "$d"
