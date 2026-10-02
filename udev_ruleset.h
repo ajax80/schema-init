@@ -26,7 +26,7 @@ struct rule_clause {
     char val[RK_VAL_MAX];
 };
 
-struct rule { struct rule_clause clause[RULE_MAX_CLAUSES]; int nclause; };
+struct rule { struct rule_clause clause[RULE_MAX_CLAUSES]; int nclause; int label_clause; };
 struct ruleset { struct rule *rules; int n; int cap; };
 
 /* Parse "KEY{sub}OP\"val\"" -> clause. Returns 0 / -1. */
@@ -71,6 +71,7 @@ static inline int ruleset_parse_clause(const char *s, struct rule_clause *out) {
 /* Split on top-level commas (quotes are literal), parse each as a clause. */
 static inline int ruleset_parse_line(const char *line, struct rule *out) {
     out->nclause = 0;
+    out->label_clause = -1;
     const char *p = line;
     while (*p) {
         while (*p == ' ' || *p == '\t' || *p == ',') p++;
@@ -85,6 +86,8 @@ static inline int ruleset_parse_line(const char *line, struct rule *out) {
         memcpy(buf, seg, seglen); buf[seglen] = '\0';
         if (out->nclause >= RULE_MAX_CLAUSES) return -1;
         if (ruleset_parse_clause(buf, &out->clause[out->nclause]) != 0) return -1;
+        if (out->label_clause < 0 && !strcmp(out->clause[out->nclause].key, "LABEL"))
+            out->label_clause = out->nclause;
         out->nclause++;
         if (*p == ',') p++;
     }
@@ -806,11 +809,14 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
 
 /* Find the first rule at index >= from carrying LABEL=="label"; -1 if none. */
 static inline int ruleset_find_label(const struct ruleset *rs, int from, const char *label) {
-    for (int i = from; i < rs->n; i++)
-        for (int k = 0; k < rs->rules[i].nclause; k++) {
-            const struct rule_clause *c = &rs->rules[i].clause[k];
+    for (int i = from; i < rs->n; i++) {
+        const struct rule *r = &rs->rules[i];
+        if (r->label_clause < 0) continue;
+        for (int k = r->label_clause; k < r->nclause; k++) {
+            const struct rule_clause *c = &r->clause[k];
             if (!strcmp(c->key, "LABEL") && !strcmp(c->val, label)) return i;
         }
+    }
     return -1;
 }
 
