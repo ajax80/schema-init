@@ -64,6 +64,11 @@ release_session() {
 }
 trap 'release_session' EXIT HUP INT TERM
 
+# ready_path for this service: kwin's wayland socket appearing means the
+# compositor is up. A fixed marker keeps the .svc independent of the uid.
+READY=/run/schema-plasma-ready
+rm -f "$READY"
+
 while true; do
     rm -f "/run/user/$SCHEMA_UID"/wayland-* /tmp/.ICE-unix/* /tmp/.X*-lock 2>/dev/null || true
 
@@ -77,6 +82,12 @@ while true; do
     [ -n "$SID" ] || SID=31
     SESSION_SCOPE="/sys/fs/cgroup/user.slice/user-$SCHEMA_UID.slice/session-$SID.scope"
     mkdir -p "$SESSION_SCOPE" 2>/dev/null || true
+
+    [ -e "$READY" ] || ( set +x
+        for _ in $(seq 1 600); do
+            [ -S "/run/user/$SCHEMA_UID/wayland-0" ] && { : > "$READY"; break; }
+            sleep 0.2
+        done ) &
 
     ( echo $BASHPID > "$SESSION_SCOPE/cgroup.procs" 2>/dev/null || true
       exec runuser -u "$SCHEMA_USER" -- env \
