@@ -270,8 +270,9 @@ typedef struct {
     int              ready_poll_hz;    /* polling rate for ready_path check at runtime */
     int              ready_check_ticks; /* tick counter for ready_path polling */
     int              ready_path_verified; /* 1 if ready_path has been verified at least once */
-    dev_t            ready_stale_dev;  /* ready_path's inode left by a previous run, ignored for readiness */
-    ino_t            ready_stale_ino;
+    uint64_t         ready_stale_dev;  /* ready_path's file left by a previous run, ignored for readiness */
+    uint64_t         ready_stale_ino;
+    struct timespec  ready_stale_ctime;
     int              ready_watched;    /* 1 inotify watch on dirname(ready_path), -1 add failed (poll), 0 not yet */
     int              oom_adj_set;      /* oom_score_adj= given in the .svc */
     int              oom_score_adj;    /* -1000..1000, written before exec; inherited by children */

@@ -92,7 +92,23 @@ cat > "$ROOT/etc/schema-init/services/test-stale.svc" <<'EOF'
 name=test-stale
 exec=/usr/bin/staleready.sh
 ready_path=/run/test-stale.ready
-stable_secs=60
+stable_secs=600
+EOF
+# Same, but run 2 rewrites the leftover in place (O_TRUNC, same inode), as a
+# pidfile writer does. That rewrite must still promote it.
+cat > "$ROOT/usr/bin/staleinplace.sh" <<'EOF'
+#!/bin/sh
+n=$(cat /run/test-stale2.n 2>/dev/null || echo 0); n=$((n+1)); echo $n > /run/test-stale2.n
+if [ "$n" = 1 ]; then echo 1 > /run/test-stale2.ready; sleep 3; exit 1; fi
+sleep 4; echo 2 > /run/test-stale2.ready
+while :; do sleep 1; done
+EOF
+chmod +x "$ROOT/usr/bin/staleinplace.sh"
+cat > "$ROOT/etc/schema-init/services/test-stale2.svc" <<'EOF'
+name=test-stale2
+exec=/usr/bin/staleinplace.sh
+ready_path=/run/test-stale2.ready
+stable_secs=600
 EOF
 
 cp "$HERE/test-timer.svc"     "$ROOT/etc/schema-init/services/"
@@ -447,6 +463,11 @@ elif [ "$(cat /run/test-stale.n 2>/dev/null)" = 2 ] && /bin/schema-ctl status te
     echo "STALE-READY: PASS (respawn promoted on its own marker)"
 else
     echo "STALE-READY: FAIL ($(/bin/schema-ctl status test-stale | head -1))"
+fi
+if [ "$(cat /run/test-stale2.n 2>/dev/null)" = 2 ] && /bin/schema-ctl status test-stale2 | grep -q FUNDAMENTAL; then
+    echo "STALE-INPLACE: PASS (in-place rewrite promoted the respawn)"
+else
+    echo "STALE-INPLACE: FAIL ($(cat /run/test-stale2.n 2>/dev/null) $(/bin/schema-ctl status test-stale2 | head -1))"
 fi
 echo "===== STALE-READY-END ====="
 echo "===== RELOAD-REFIRE-TEST ====="

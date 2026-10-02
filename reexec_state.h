@@ -36,6 +36,9 @@ typedef struct {
     X(INT,  wd_armed_sec)        \
     X(TS,   wd_abort_at)         \
     X(INT,  ready_path_verified) \
+    X(U64,  ready_stale_dev)     \
+    X(U64,  ready_stale_ino)     \
+    X(TS,   ready_stale_ctime)   \
     X(INT,  notify_ready)        \
     X(STR,  notify_status)       \
     X(INT,  ctl_killed)          \
@@ -140,6 +143,7 @@ static inline int rx_ll(const char *v, long long *out) {
 static inline void rx_put_PID(FILE *o, const char *k, const pid_t *v)   { fprintf(o, " %s=%d", k, (int)*v); }
 static inline void rx_put_INT(FILE *o, const char *k, const int *v)     { fprintf(o, " %s=%d", k, *v); }
 static inline void rx_put_U8(FILE *o, const char *k, const uint8_t *v)  { fprintf(o, " %s=%u", k, (unsigned)*v); }
+static inline void rx_put_U64(FILE *o, const char *k, const uint64_t *v) { fprintf(o, " %s=%" PRIu64, k, *v); }
 static inline void rx_put_TIME(FILE *o, const char *k, const time_t *v) { fprintf(o, " %s=%lld", k, (long long)*v); }
 static inline void rx_put_TS(FILE *o, const char *k, const struct timespec *v) {
     fprintf(o, " %s=%lld.%09ld", k, (long long)v->tv_sec, (long)v->tv_nsec);
@@ -153,6 +157,15 @@ static inline void rx_put_INST(FILE *o, const char *k, const schema_instance_t *
 static inline int rx_get_PID(const char *v, pid_t *d, size_t n)  { long long x; (void)n; if (rx_ll(v, &x) || x < 0 || x > INT32_MAX) return -1; *d = (pid_t)x; return 0; }
 static inline int rx_get_INT(const char *v, int *d, size_t n)    { long long x; (void)n; if (rx_ll(v, &x) || x < INT32_MIN || x > INT32_MAX) return -1; *d = (int)x; return 0; }
 static inline int rx_get_U8(const char *v, uint8_t *d, size_t n) { long long x; (void)n; if (rx_ll(v, &x) || x < 0 || x > 255) return -1; *d = (uint8_t)x; return 0; }
+static inline int rx_get_U64(const char *v, uint64_t *d, size_t n) {
+    unsigned long long x; char *end; (void)n;
+    if (*v < '0' || *v > '9') return -1;
+    errno = 0;
+    x = strtoull(v, &end, 10);
+    if (errno || *end) return -1;
+    *d = (uint64_t)x;
+    return 0;
+}
 static inline int rx_get_TIME(const char *v, time_t *d, size_t n){ long long x; (void)n; if (rx_ll(v, &x)) return -1; *d = (time_t)x; return 0; }
 static inline int rx_get_TS(const char *v, struct timespec *d, size_t n) {
     long long sec, ns; char *end; (void)n;

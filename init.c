@@ -874,14 +874,16 @@ static void active_kill_service(service_t *svc) {
 
 /* ── schema tick for one service ────────────────────────────────────── */
 
-/* A ready_path counts only once it is not the same inode that was already
- * there at spawn: a marker or socket left by a crashed run must not promote
- * the new one. */
+/* A ready_path counts only once it is not the file that was already there
+ * at spawn: a marker or socket left by a crashed run must not promote the new
+ * one. ctime catches a rewrite in place and a new file on a reused inode. */
 static int ready_path_fresh(const service_t *svc) {
     struct stat st;
     if (stat(svc->ready_path, &st) != 0) return 0;
     return !(svc->ready_stale_ino && st.st_ino == svc->ready_stale_ino &&
-             st.st_dev == svc->ready_stale_dev);
+             st.st_dev == svc->ready_stale_dev &&
+             st.st_ctim.tv_sec == svc->ready_stale_ctime.tv_sec &&
+             st.st_ctim.tv_nsec == svc->ready_stale_ctime.tv_nsec);
 }
 
 /* ── ready_path liveness ─────────────────────────────────────────────

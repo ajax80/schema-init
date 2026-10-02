@@ -531,6 +531,7 @@ int service_spawn(service_t *svc) {
         if (stat(svc->ready_path, &st) == 0 && !S_ISDIR(st.st_mode)) {
             svc->ready_stale_dev = st.st_dev;
             svc->ready_stale_ino = st.st_ino;
+            svc->ready_stale_ctime = st.st_ctim;
         }
     }
 
