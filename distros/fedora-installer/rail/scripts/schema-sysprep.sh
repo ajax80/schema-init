@@ -5,7 +5,8 @@
 # render/input group grants the autologin compositor needs to open the GPU.
 mkdir -p /run/systemd/system /run/dbus /run/udev /run/lock /run/user 2>/dev/null
 rm -f /run/nologin 2>/dev/null
-/usr/bin/systemd-tmpfiles --create 2>/dev/null
+/usr/bin/systemd-tmpfiles --create 2>/dev/null &
+tmpfiles_pid=$!
 
 # cold-plug /dev so the DRM card, input devices and /dev/disk/by-uuid exist
 # before mount-fstab and the compositor come up. The LIVE flag chooses the owner:
@@ -22,6 +23,8 @@ else
     udevadm trigger --type=devices --action=add
     udevadm settle --timeout=30
 fi
+
+wait $tmpfiles_pid
 
 # XDG_RUNTIME_DIR per user — logind normally delegates this to a systemd unit
 # that cannot run here, so create it for root and every human account.
