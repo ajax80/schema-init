@@ -224,6 +224,29 @@ static inline int symlink_clear(const char *base_dir, const char *name) {
     return 0;
 }
 
+struct ug_cache_ent { char name[UE_KEY_MAX]; unsigned id; int is_group; };
+static struct ug_cache_ent g_ug_cache[64];
+static int g_ug_n;
+
+static inline void ug_cache_clear(void) { g_ug_n = 0; }
+
+static inline int ug_lookup(const char *name, int is_group, unsigned *id) {
+    for (int i = 0; i < g_ug_n; i++)
+        if (g_ug_cache[i].is_group == is_group && !strcmp(g_ug_cache[i].name, name)) {
+            *id = g_ug_cache[i].id;
+            return 0;
+        }
+    if (is_group) { struct group *gr = getgrnam(name); if (!gr) return -1; *id = gr->gr_gid; }
+    else          { struct passwd *pw = getpwnam(name); if (!pw) return -1; *id = pw->pw_uid; }
+    if (g_ug_n < 64 && strlen(name) < UE_KEY_MAX) {
+        snprintf(g_ug_cache[g_ug_n].name, UE_KEY_MAX, "%s", name);
+        g_ug_cache[g_ug_n].id = *id;
+        g_ug_cache[g_ug_n].is_group = is_group;
+        g_ug_n++;
+    }
+    return 0;
+}
+
 /* Apply udev MODE/OWNER/GROUP to a real device node (live mode only). udev's
  * default when a GROUP is set but no MODE is 0660 (else 0600). Only touches
  * char/block special files; best-effort. */
@@ -249,8 +272,9 @@ static inline void node_apply_perms(const char *node, const char *owner,
     /* Default to the node's current ids, never root: a failed name lookup must
      * not silently reassign the node to root:root. */
     uid_t uid = st.st_uid; gid_t gid = st.st_gid;
-    if (have_owner) { struct passwd *pw = getpwnam(owner); if (pw) uid = pw->pw_uid; }
-    if (have_group) { struct group  *gr = getgrnam(group); if (gr) gid = gr->gr_gid; }
+    unsigned id;
+    if (have_owner && ug_lookup(owner, 0, &id) == 0) uid = id;
+    if (have_group && ug_lookup(group, 1, &id) == 0) gid = id;
     /* udev's default when a GROUP is named but no MODE is 0660; keyed on the
      * name being present, not on the lookup succeeding. */
     mode_t mode = have_mode ? (mode_t)strtoul(mode_str, NULL, 8)

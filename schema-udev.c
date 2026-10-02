@@ -213,6 +213,7 @@ static void ruleset_reload(void) {
     free(g_ruleset.rules);
     memset(&g_ruleset, 0, sizeof g_ruleset);
     ruleset_load_dirs(RULE_DIRS, 3, &g_ruleset);
+    ug_cache_clear();
     fprintf(stderr, "[schema-udev] loaded %d native rule(s)\n", g_ruleset.n);
 }
 
