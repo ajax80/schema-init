@@ -156,10 +156,24 @@ static inline int cdrom_sg(int fd, const uint8_t *cdb, int cdblen,
     return buflen - io.resid;
 }
 
+static inline int cdrom_sense_asc(const uint8_t *sense) {
+    uint8_t rc = sense[0] & 0x7f;
+    if (rc == 0x72 || rc == 0x73) return sense[2];
+    if (rc == 0x70 || rc == 0x71) return sense[12];
+    return -1;
+}
+
 static inline int cdrom_test_unit_ready(int fd) {
     uint8_t cdb[6] = {0,0,0,0,0,0};
     for (int i = 0; i < 5; i++) {
-        if (cdrom_sg(fd, cdb, 6, NULL, 0, SG_DXFER_NONE) == 0) return 1;
+        uint8_t sense[32] = {0};
+        struct sg_io_hdr io = {0};
+        io.interface_id='S'; io.dxfer_direction=SG_DXFER_NONE; io.cmd_len=6;
+        io.cmdp=cdb; io.sbp=sense; io.mx_sb_len=sizeof sense; io.timeout=8000;
+        if (ioctl(fd, SG_IO, &io) == 0) {
+            if ((io.info & SG_INFO_OK_MASK) == SG_INFO_OK) return 1;
+            if (io.sb_len_wr > 0 && cdrom_sense_asc(sense) == 0x3a) return 0;   /* medium not present */
+        }
         struct timespec ts = {0, 200*1000*1000L};   /* 200 ms */
         nanosleep(&ts, NULL);
     }
