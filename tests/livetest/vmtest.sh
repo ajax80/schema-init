@@ -111,6 +111,26 @@ exec=/usr/bin/crashloop.sh
 max_restarts=3
 EOF
 
+# analyze probe: test-slow has no readiness signal, so the 10s stable timer
+# promotes it; test-after waits on it. The chain to test-after must walk to
+# test-slow and flag it as timer-gated.
+cat > "$ROOT/usr/bin/slowloop.sh" <<'EOF'
+#!/bin/sh
+while true; do sleep 30; done
+EOF
+chmod +x "$ROOT/usr/bin/slowloop.sh"
+cat > "$ROOT/etc/schema-init/services/test-slow.svc" <<'EOF'
+name=test-slow
+exec=/usr/bin/slowloop.sh
+EOF
+cat > "$ROOT/etc/schema-init/services/test-after.svc" <<'EOF'
+name=test-after
+exec=/usr/bin/touch
+args=/run/test-after.ran
+oneshot=1
+dep=test-slow
+EOF
+
 # env= spawn probe: prove the Phase 2 env= key reaches the child's environment.
 cat > "$ROOT/usr/bin/envprobe.sh" <<'EOF'
 #!/bin/sh
@@ -450,6 +470,12 @@ echo "crash-dormant: $(grep -c 'test-crash .*dormant ' "$RAIL")"
 for s in test-crash test-timer test-readypath test-dependent; do
     echo "RESTARTS $s $(/bin/schema-ctl status $s | head -1)"
 done
+echo "===== ANALYZE-TEST ====="
+/bin/schema-ctl analyze
+echo "ANALYZE-ONE-BEGIN"
+/bin/schema-ctl analyze test-after
+echo "ANALYZE-ONE-END"
+echo "ANALYZE-MISSING: $(/bin/schema-ctl analyze no-such-svc 2>&1 | head -1)"
 echo "===== VMTEST-END ====="
 # Exercise schema-init's OWN shutdown rail (SIGINT = reboot), not the kernel's.
 # poweroff -f would bypass PID 1 and leave the shutdown path untested.
@@ -563,6 +589,16 @@ grep -Eq "RESTARTS test-crash .*restarts=3"     "$SERIAL" || { echo "  MISS: tes
 grep -Eq "RESTARTS test-timer .*restarts=0"     "$SERIAL" || { echo "  MISS: timer firings counted as restarts"; pass=0; }
 grep -Eq "RESTARTS test-readypath .*restarts=0" "$SERIAL" || { echo "  MISS: schema-ctl restart counted as a restart"; pass=0; }
 grep -Eq "RESTARTS test-dependent .*restarts=0" "$SERIAL" || { echo "  MISS: first spawn counted as a restart"; pass=0; }
+# analyze: summary, chain walk through a dep, readiness sources, timer hint.
+grep -Eq "^boot: kernel [0-9.]+s \+ userspace [0-9.]+s = "   "$SERIAL" || { echo "  MISS: analyze boot summary"; pass=0; }
+grep -Eq "^critical chain → "                                "$SERIAL" || { echo "  MISS: analyze critical chain"; pass=0; }
+grep -Eq "test-readypath +[0-9.]+s +[0-9.]+s  ready_path"    "$SERIAL" || { echo "  MISS: analyze readiness source ready_path"; pass=0; }
+grep -Eq "test-dependent +[0-9.]+s +[0-9.]+s  exit"          "$SERIAL" || { echo "  MISS: analyze readiness source exit"; pass=0; }
+grep -Eq "test-slow +[0-9.]+s +(9|10)\.[0-9]+s  timer"  "$SERIAL" || { echo "  MISS: analyze timer promotion (stable_secs=10, whole-second check) for test-slow"; pass=0; }
+sed -n '/ANALYZE-ONE-BEGIN/,/ANALYZE-ONE-END/p' "$SERIAL" | grep -Eq "^ +└─test-slow @" || { echo "  MISS: analyze test-after chain did not walk to test-slow"; pass=0; }
+grep -Eq "^timer-gated with dependents .*test-slow"          "$SERIAL" || { echo "  MISS: analyze did not flag test-slow as timer-gated"; pass=0; }
+grep -Eq "^ +└─test-hang never ready \(EXCISED\)"            "$SERIAL" || { echo "  MISS: analyze chain did not name the never-ready dep"; pass=0; }
+grep -Eq "ANALYZE-MISSING: err: not found: no-such-svc"      "$SERIAL" || { echo "  MISS: analyze unknown service not rejected"; pass=0; }
 grep -Eq "PID 1 reboot"     "$SERIAL" || { echo "  MISS: PID 1 never reached reboot()"; pass=0; }
 grep -Eq "SHUTDOWN-WEDGED"  "$SERIAL" && { echo "  MISS: shutdown wedged, forced off"; pass=0; }
 if [ "$pass" = 1 ]; then

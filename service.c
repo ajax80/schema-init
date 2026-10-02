@@ -667,6 +667,8 @@ int service_spawn(service_t *svc) {
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
+    if (!svc->boot_spawn.tv_sec && !svc->boot_spawn.tv_nsec)
+        svc->boot_spawn = svc->spawn_time_mono;
     svc->last_pet   = svc->spawn_time_mono;
     svc->wd_abort_at = (struct timespec){0, 0};
     svc->wd_armed_sec = svc->notify && svc->watchdog_sec > 0 ? svc->watchdog_sec : 0;

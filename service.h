@@ -88,6 +88,12 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
     return best > 0x7fffffff ? 0x7fffffff : (int)best;
 }
 
+#define READY_NOTIFY    1
+#define READY_BUS       2
+#define READY_PATH      3
+#define READY_TIMER     4
+#define READY_EXIT      5
+
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
@@ -309,6 +315,9 @@ typedef struct {
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
+    struct timespec  boot_spawn;         /* first spawn since PID 1 started (analyze)       */
+    struct timespec  boot_ready;         /* first FUNDAMENTAL/PERFECT since PID 1 started   */
+    int              boot_how;           /* READY_* that proved boot_ready                  */
     int              timer_boot_sec;     /* on_boot_sec: delay from boot to first fire     */
     int              timer_interval_sec; /* on_active_sec: gap after each completion        */
     int              timer_cal_hour;     /* on_calendar=HH:MM hour; -1 = not a calendar timer */
