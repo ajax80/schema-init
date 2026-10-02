@@ -26,7 +26,7 @@ struct rule_clause {
     char val[RK_VAL_MAX];
 };
 
-struct rule { struct rule_clause clause[RULE_MAX_CLAUSES]; int nclause; };
+struct rule { struct rule_clause clause[RULE_MAX_CLAUSES]; int nclause; int label_clause; };
 struct ruleset { struct rule *rules; int n; int cap; };
 
 /* Parse "KEY{sub}OP\"val\"" -> clause. Returns 0 / -1. */
@@ -71,6 +71,7 @@ static inline int ruleset_parse_clause(const char *s, struct rule_clause *out) {
 /* Split on top-level commas (quotes are literal), parse each as a clause. */
 static inline int ruleset_parse_line(const char *line, struct rule *out) {
     out->nclause = 0;
+    out->label_clause = -1;
     const char *p = line;
     while (*p) {
         while (*p == ' ' || *p == '\t' || *p == ',') p++;
@@ -85,6 +86,8 @@ static inline int ruleset_parse_line(const char *line, struct rule *out) {
         memcpy(buf, seg, seglen); buf[seglen] = '\0';
         if (out->nclause >= RULE_MAX_CLAUSES) return -1;
         if (ruleset_parse_clause(buf, &out->clause[out->nclause]) != 0) return -1;
+        if (out->label_clause < 0 && !strcmp(out->clause[out->nclause].key, "LABEL"))
+            out->label_clause = out->nclause;
         out->nclause++;
         if (*p == ',') p++;
     }
@@ -191,6 +194,14 @@ static inline int udev_glob(const char *pat, const char *str) {
 #define DEVCTX_SYMLINKS_MAX 32
 #define DEVCTX_FINAL_MAX    16
 #define DEVCTX_RUNS_MAX 64
+#define DEVCTX_ATTRS_CACHE 128
+
+struct attrs_cache_ent {
+    unsigned short anc_len;
+    signed char    present;
+    char           attr[UE_KEY_MAX];
+    char           val[UE_VAL_MAX];
+};
 
 struct dev_ctx {
     struct uevent *ev;                          /* properties; mutable (R3 grows) */
@@ -219,6 +230,8 @@ struct dev_ctx {
     int  nruns;
     const char *dbroot;
     const char *cmdline_path;
+    struct attrs_cache_ent attrs_cache[DEVCTX_ATTRS_CACHE];
+    int  nattrs_cache;
 };
 
 static inline int dev_ctx_init(struct dev_ctx *ctx, struct uevent *ev, const char *sysroot) {
@@ -418,22 +431,42 @@ static inline int test_clause_match(const struct rule_clause *c, const struct de
     return (c->op == OP_MATCH_NE) ? !exists : exists;
 }
 
+static inline const char *ctx_sysattr(struct dev_ctx *ctx, const char *anc, const char *attr) {
+    size_t al = strlen(anc);
+    int cacheable = !strncmp(anc, ctx->sysdir, al) && (ctx->sysdir[al] == '/' || ctx->sysdir[al] == '\0');
+    for (int i = 0; cacheable && i < ctx->nattrs_cache; i++) {
+        struct attrs_cache_ent *e = &ctx->attrs_cache[i];
+        if (e->anc_len == al && !strcmp(e->attr, attr))
+            return e->present ? e->val : NULL;
+    }
+    if (!cacheable || ctx->nattrs_cache >= DEVCTX_ATTRS_CACHE || al > USHRT_MAX || strlen(attr) >= UE_KEY_MAX) {
+        static char b[UE_VAL_MAX];
+        int ok = !strcmp(attr, ":subsystem") ? pi_subsystem(anc, b, sizeof b)
+               : !strcmp(attr, ":driver")    ? pi_driver(anc, b, sizeof b)
+               :                               pi_sysattr(anc, attr, b, sizeof b);
+        return ok == 0 ? b : NULL;
+    }
+    struct attrs_cache_ent *e = &ctx->attrs_cache[ctx->nattrs_cache++];
+    e->anc_len = (unsigned short)al;
+    safe_copy(e->attr, attr, sizeof e->attr);
+    if (!strcmp(attr, ":subsystem"))   e->present = pi_subsystem(anc, e->val, sizeof e->val) == 0;
+    else if (!strcmp(attr, ":driver")) e->present = pi_driver(anc, e->val, sizeof e->val) == 0;
+    else                               e->present = pi_sysattr(anc, attr, e->val, sizeof e->val) == 0;
+    return e->present ? e->val : NULL;
+}
+
 /* 1 match / 0 nomatch / -1 not a device-level key */
-static inline int match_dev_clause(const struct rule_clause *c, const struct dev_ctx *ctx) {
+static inline int match_dev_clause(const struct rule_clause *c, struct dev_ctx *ctx) {
     const struct uevent *ev = ctx->ev;
     if (!strcmp(c->key, "ACTION"))    return rk_cmp(c->op, c->val, uevent_get(ev, "ACTION"));
     if (!strcmp(c->key, "DEVPATH"))   return rk_cmp(c->op, c->val, uevent_get(ev, "DEVPATH"));
     if (!strcmp(c->key, "SUBSYSTEM")) return rk_cmp(c->op, c->val, uevent_get(ev, "SUBSYSTEM"));
-    if (!strcmp(c->key, "DRIVER"))    { char b[UE_VAL_MAX];
-                                        const char *d = (pi_driver(ctx->sysdir, b, sizeof b) == 0)
-                                                        ? b : uevent_get(ev, "DRIVER");
-                                        return rk_cmp(c->op, c->val, d); }
+    if (!strcmp(c->key, "DRIVER"))    { const char *d = ctx_sysattr(ctx, ctx->sysdir, ":driver");
+                                        return rk_cmp(c->op, c->val, d ? d : uevent_get(ev, "DRIVER")); }
     if (!strcmp(c->key, "KERNEL"))    { const char *dp = uevent_get(ev, "DEVPATH");
                                         return rk_cmp(c->op, c->val, dp ? pi_base(dp) : NULL); }
     if (!strcmp(c->key, "ENV"))       return rk_cmp(c->op, c->val, uevent_get(ev, c->subkey));
-    if (!strcmp(c->key, "ATTR"))      { char b[UE_VAL_MAX];
-                                        int ok = pi_sysattr(ctx->sysdir, c->subkey, b, sizeof b) == 0;
-                                        return rk_cmp_present(c->op, c->val, ok ? b : NULL); }
+    if (!strcmp(c->key, "ATTR"))      return rk_cmp_present(c->op, c->val, ctx_sysattr(ctx, ctx->sysdir, c->subkey));
     if (!strcmp(c->key, "TAG")) {
         int has = 0;
         for (int i = 0; i < ctx->ntags; i++) if (udev_glob(c->val, ctx->tags[i])) { has = 1; break; }
@@ -450,16 +483,15 @@ static inline int rk_is_parent_key(const char *k) {
 }
 
 static inline int parent_clause_on(const struct rule_clause *c, const char *anc,
-                                   const struct dev_ctx *ctx) {
-    char buf[UE_VAL_MAX];
+                                   struct dev_ctx *ctx) {
     if (!strcmp(c->key, "SUBSYSTEMS"))
-        return rk_cmp(c->op, c->val, pi_subsystem(anc, buf, sizeof buf) == 0 ? buf : NULL);
+        return rk_cmp(c->op, c->val, ctx_sysattr(ctx, anc, ":subsystem"));
     if (!strcmp(c->key, "KERNELS"))
         return rk_cmp(c->op, c->val, pi_base(anc));
     if (!strcmp(c->key, "DRIVERS"))
-        return rk_cmp(c->op, c->val, pi_driver(anc, buf, sizeof buf) == 0 ? buf : NULL);
+        return rk_cmp(c->op, c->val, ctx_sysattr(ctx, anc, ":driver"));
     if (!strcmp(c->key, "ATTRS"))
-        return rk_cmp_present(c->op, c->val, pi_sysattr(anc, c->subkey, buf, sizeof buf) == 0 ? buf : NULL);
+        return rk_cmp_present(c->op, c->val, ctx_sysattr(ctx, anc, c->subkey));
     if (!strcmp(c->key, "TAGS")) {
         int has = 0;
         for (int i = 0; i < ctx->ntags; i++) if (udev_glob(c->val, ctx->tags[i])) { has = 1; break; }
@@ -764,6 +796,7 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
                     if (f) {
                         fputs(sv, f);
                         fclose(f);
+                        ctx->nattrs_cache = 0;
                     }
                 }
             }
@@ -776,11 +809,14 @@ static inline const char *apply_rule(const struct rule *r, struct dev_ctx *ctx) 
 
 /* Find the first rule at index >= from carrying LABEL=="label"; -1 if none. */
 static inline int ruleset_find_label(const struct ruleset *rs, int from, const char *label) {
-    for (int i = from; i < rs->n; i++)
-        for (int k = 0; k < rs->rules[i].nclause; k++) {
-            const struct rule_clause *c = &rs->rules[i].clause[k];
+    for (int i = from; i < rs->n; i++) {
+        const struct rule *r = &rs->rules[i];
+        if (r->label_clause < 0) continue;
+        for (int k = r->label_clause; k < r->nclause; k++) {
+            const struct rule_clause *c = &r->clause[k];
             if (!strcmp(c->key, "LABEL") && !strcmp(c->val, label)) return i;
         }
+    }
     return -1;
 }
 
