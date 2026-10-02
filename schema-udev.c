@@ -397,6 +397,7 @@ int main(void) {
             fprintf(stderr, "[schema-udev] udev monitor broadcast (group 2) active\n");
     }
 
+    if (g_live) unlink(SCHEMA_UDEV_READY);
     rules_reload();
     ruleset_reload();
     disk_links_wipe(SCHEMA_UDEV_RULES_DIR);   /* reuse the generic recursive rmdir/wipe */

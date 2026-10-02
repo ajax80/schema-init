@@ -57,6 +57,7 @@ int main(void) {
     strcpy(svcs[2].name, "tick");
     svcs[2].flags = SVC_TIMER;
     svcs[2].timer_next.tv_sec = 1759300000; svcs[2].timer_next.tv_nsec = 999999999;
+    svcs[2].ready_stale_dev = 66306; svcs[2].ready_stale_ino = UINT64_MAX;
 
     ev[0].pid = 4411; ev[0].deadline = 1759284000;
     strcpy(ev[0].cgroup, "/sys/fs/cgroup/schema-init/old one");
@@ -88,6 +89,7 @@ int main(void) {
     assert(out[1].rt.timer_next.tv_sec == 360 && out[1].rt.last_start == -5);
     assert(out[2].timer == 1);
     assert(out[2].rt.timer_next.tv_sec == 1759300000 && out[2].rt.timer_next.tv_nsec == 999999999);
+    assert(out[2].rt.ready_stale_dev == 66306 && out[2].rt.ready_stale_ino == UINT64_MAX);
     assert(pev[0].pid == 4411 && pev[0].deadline == 1759284000);
     assert(strcmp(pev[0].cgroup, "/sys/fs/cgroup/schema-init/old one") == 0);
 
@@ -127,6 +129,7 @@ int main(void) {
     assert(parse_text("schema-init-state 1\nsvc name=a child_pid=x\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nsvc name=a dormant_count=256\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nsvc name=a timer_next=5.1\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
+    assert(parse_text("schema-init-state 1\nsvc name=a ready_stale_ino=-1\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nsvc name=a%ZZ\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nsvc name=a%4\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nsvc child_pid=3\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);

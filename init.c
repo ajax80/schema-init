@@ -874,6 +874,18 @@ static void active_kill_service(service_t *svc) {
 
 /* ── schema tick for one service ────────────────────────────────────── */
 
+/* A ready_path counts only once it is not the file that was already there
+ * at spawn: a marker or socket left by a crashed run must not promote the new
+ * one. ctime catches a rewrite in place and a new file on a reused inode. */
+static int ready_path_fresh(const service_t *svc) {
+    struct stat st;
+    if (stat(svc->ready_path, &st) != 0) return 0;
+    return !(svc->ready_stale_ino && st.st_ino == svc->ready_stale_ino &&
+             st.st_dev == svc->ready_stale_dev &&
+             st.st_ctim.tv_sec == svc->ready_stale_ctime.tv_sec &&
+             st.st_ctim.tv_nsec == svc->ready_stale_ctime.tv_nsec);
+}
+
 /* ── ready_path liveness ─────────────────────────────────────────────
  * A verified ready_path is watched with inotify on its directory instead of
  * polled every tick. Any event, including IN_Q_OVERFLOW and IN_IGNORED,
@@ -1017,7 +1029,7 @@ static void tick_service(service_t *svc,
                 int ready = 0;
                 if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
                     ready = svc->ready_bus_name[0] ? READY_BUS : READY_NOTIFY;
-                } else if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
+                } else if (svc->ready_path[0] && ready_path_fresh(svc)) {
                     ready = READY_PATH;
                     svc->ready_path_verified = 1;
                 } else if (now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->stable_secs) {
@@ -1087,7 +1099,7 @@ static void tick_service(service_t *svc,
         case STATE_FUNDAMENTAL:
             if (svc->ready_path[0] && svc->child_pid > 0 && !svc->ctl_killed) {
                 if (!svc->ready_path_verified) {
-                    if (access(svc->ready_path, F_OK) == 0) {
+                    if (ready_path_fresh(svc)) {
                         svc->ready_path_verified = 1;
                     }
                 }
