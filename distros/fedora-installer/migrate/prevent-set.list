@@ -29,6 +29,7 @@ service bluetoothd
 service journal-sink
 service sysctl
 service network-manager
+service schema-namewatch
 service sshd
 service zram
 service schema-doctor

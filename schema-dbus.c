@@ -269,6 +269,59 @@ static void report_name_to_pid1(const char *name, pid_t owner_pid) {
         (void)sendto(fd, msg, (size_t)len, MSG_DONTWAIT | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a);
 }
 
+/* --watch-names: a client of whatever system bus is running (stock
+   dbus-daemon included) that reports well-known name owners to PID 1 the
+   way the broker does, so ready_bus_name= works without the broker. */
+static void watch_report(DBusConnection *c, const char *name) {
+    DBusMessage *q, *r;
+    dbus_uint32_t pid = 0;
+    if (name[0] == ':') return;
+    q = dbus_message_new_method_call("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                     "org.freedesktop.DBus", "GetConnectionUnixProcessID");
+    dbus_message_append_args(q, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
+    r = dbus_connection_send_with_reply_and_block(c, q, 5000, NULL);
+    dbus_message_unref(q);
+    if (!r) return;
+    if (dbus_message_get_args(r, NULL, DBUS_TYPE_UINT32, &pid, DBUS_TYPE_INVALID))
+        report_name_to_pid1(name, (pid_t)pid);
+    dbus_message_unref(r);
+}
+
+static int watch_names(void) {
+    DBusConnection *c = dbus_bus_get(DBUS_BUS_SYSTEM, NULL);
+    DBusMessage *q, *r, *m;
+    DBusMessageIter it, arr;
+    if (!c) { fprintf(stderr, "schema-dbus: cannot connect to the system bus\n"); return 1; }
+    dbus_connection_set_exit_on_disconnect(c, TRUE);
+    dbus_bus_add_match(c, "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',"
+                          "member='NameOwnerChanged'", NULL);
+    q = dbus_message_new_method_call("org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                     "org.freedesktop.DBus", "ListNames");
+    r = dbus_connection_send_with_reply_and_block(c, q, 5000, NULL);
+    dbus_message_unref(q);
+    if (r && dbus_message_iter_init(r, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_ARRAY) {
+        for (dbus_message_iter_recurse(&it, &arr); dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_STRING;
+             dbus_message_iter_next(&arr)) {
+            const char *name;
+            dbus_message_iter_get_basic(&arr, &name);
+            watch_report(c, name);
+        }
+    }
+    if (r) dbus_message_unref(r);
+    while (dbus_connection_read_write(c, -1)) {
+        while ((m = dbus_connection_pop_message(c))) {
+            const char *name, *oldo, *newo;
+            if (dbus_message_is_signal(m, "org.freedesktop.DBus", "NameOwnerChanged")
+                && dbus_message_get_args(m, NULL, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldo,
+                                         DBUS_TYPE_STRING, &newo, DBUS_TYPE_INVALID)
+                && newo[0])
+                watch_report(c, name);
+            dbus_message_unref(m);
+        }
+    }
+    return 1;
+}
+
 static void broadcast_transitions(void *ctx, sdbus_transition *t, int n) {
     (void)ctx;
     for (int i = 0; i < n; i++) {
@@ -862,6 +915,8 @@ int main(int argc, char **argv) {
     int system_bus = 0;
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--system")) system_bus = 1;
     g_system_bus = system_bus;
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--watch-names")) { g_system_bus = 1; return watch_names(); }
 
     const char *sock = getenv("SCHEMA_DBUS_SOCKET");
     if (!sock) sock = DEFAULT_SOCKET;
