@@ -131,6 +131,23 @@ oneshot=1
 dep=test-slow
 EOF
 
+# Group gate: test-viagrp waits on group test-group (test-slow + test-readypath)
+# and on the timer test-timer. The chain must walk into the group to test-slow,
+# and the timer dep must not be reported as never ready.
+cat > "$ROOT/etc/schema-init/services/test-group.grp" <<'EOF'
+name=test-group
+member=test-slow
+member=test-readypath
+EOF
+cat > "$ROOT/etc/schema-init/services/test-viagrp.svc" <<'EOF'
+name=test-viagrp
+exec=/usr/bin/touch
+args=/run/test-viagrp.ran
+oneshot=1
+dep=test-group
+dep=test-timer
+EOF
+
 # env= spawn probe: prove the Phase 2 env= key reaches the child's environment.
 cat > "$ROOT/usr/bin/envprobe.sh" <<'EOF'
 #!/bin/sh
@@ -475,6 +492,9 @@ echo "===== ANALYZE-TEST ====="
 echo "ANALYZE-ONE-BEGIN"
 /bin/schema-ctl analyze test-after
 echo "ANALYZE-ONE-END"
+echo "ANALYZE-GRP-BEGIN"
+/bin/schema-ctl analyze test-viagrp
+echo "ANALYZE-GRP-END"
 echo "ANALYZE-MISSING: $(/bin/schema-ctl analyze no-such-svc 2>&1 | head -1)"
 echo "===== VMTEST-END ====="
 # Exercise schema-init's OWN shutdown rail (SIGINT = reboot), not the kernel's.
@@ -598,6 +618,8 @@ grep -Eq "test-slow +[0-9.]+s +(9|10)\.[0-9]+s  timer"  "$SERIAL" || { echo "  M
 sed -n '/ANALYZE-ONE-BEGIN/,/ANALYZE-ONE-END/p' "$SERIAL" | grep -Eq "^ +└─test-slow @" || { echo "  MISS: analyze test-after chain did not walk to test-slow"; pass=0; }
 grep -Eq "^timer-gated with dependents .*test-slow"          "$SERIAL" || { echo "  MISS: analyze did not flag test-slow as timer-gated"; pass=0; }
 grep -Eq "^ +└─test-hang never ready \(EXCISED\)"            "$SERIAL" || { echo "  MISS: analyze chain did not name the never-ready dep"; pass=0; }
+sed -n '/ANALYZE-GRP-BEGIN/,/ANALYZE-GRP-END/p' "$SERIAL" | grep -Eq "^ +└─test-slow \(via test-group\) @" || { echo "  MISS: analyze chain did not walk into group test-group"; pass=0; }
+sed -n '/ANALYZE-GRP-BEGIN/,/ANALYZE-GRP-END/p' "$SERIAL" | grep -q "test-timer" && { echo "  MISS: analyze reported a timer dep as never ready"; pass=0; }
 grep -Eq "ANALYZE-MISSING: err: not found: no-such-svc"      "$SERIAL" || { echo "  MISS: analyze unknown service not rejected"; pass=0; }
 grep -Eq "PID 1 reboot"     "$SERIAL" || { echo "  MISS: PID 1 never reached reboot()"; pass=0; }
 grep -Eq "SHUTDOWN-WEDGED"  "$SERIAL" && { echo "  MISS: shutdown wedged, forced off"; pass=0; }

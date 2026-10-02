@@ -1228,13 +1228,38 @@ static int an_is_timer(const service_t *s) {
 }
 
 /* The dep that became ready last: the one this service was waiting on. */
-static int an_gate(const service_t *s) {
-    int k, g = -1;
+/* A group dep waits on its members, so expand it to them. Timer services
+ * count as ready from the moment they are armed: never a real wait. */
+struct an_dep { int svc, grp; };
+#define AN_MAX_DEPS (MAX_DEPS * (1 + MAX_MEMBERS))
+
+static int an_deps(const service_t *s, struct an_dep *out) {
+    int k, m, n = 0;
+    for (k = 0; k < MAX_DEPS && s->dep_name[k][0]; k++) {
+        int di = s->dep_idx[k], gi = s->grp_dep_idx[k];
+        if (di >= 0 && !an_is_timer(&services[di])) out[n++] = (struct an_dep){di, -1};
+        if (gi >= 0)
+            for (m = 0; m < groups[gi].member_count; m++) {
+                int mi = groups[gi].member_idx[m];
+                if (mi >= 0 && !an_is_timer(&services[mi])) out[n++] = (struct an_dep){mi, gi};
+            }
+    }
+    return n;
+}
+
+/* The dep that became ready last: the one this service was waiting on. */
+static int an_gate(const service_t *s, int *via) {
+    struct an_dep d[AN_MAX_DEPS];
+    int k, nd = an_deps(s, d), g = -1;
     double best = -1e18;
-    for (k = 0; k < MAX_DEPS; k++) {
-        int di = s->dep_idx[k];
-        if (di < 0 || !an_has(&services[di])) continue;
-        if (an_ready(&services[di]) > best) { best = an_ready(&services[di]); g = di; }
+    if (via) *via = -1;
+    for (k = 0; k < nd; k++) {
+        if (!an_has(&services[d[k].svc])) continue;
+        if (an_ready(&services[d[k].svc]) > best) {
+            best = an_ready(&services[d[k].svc]);
+            g = d[k].svc;
+            if (via) *via = d[k].grp;
+        }
     }
     return g;
 }
@@ -1242,34 +1267,54 @@ static int an_gate(const service_t *s) {
 /* Started well after everything it depends on was ready: activated or
  * started by hand, not part of boot. A dep that never got ready held it. */
 static int an_is_late(const service_t *s) {
-    int k, g;
-    for (k = 0; k < MAX_DEPS; k++)
-        if (s->dep_idx[k] >= 0 && !an_has(&services[s->dep_idx[k]])) return 0;
-    g = an_gate(s);
+    struct an_dep d[AN_MAX_DEPS];
+    int k, nd = an_deps(s, d), g;
+    for (k = 0; k < nd; k++)
+        if (!an_has(&services[d[k].svc])) return 0;
+    g = an_gate(s, NULL);
     return an_spawn(s) - (g >= 0 ? an_ready(&services[g]) : 0.0) > ANALYZE_LATE_GAP;
 }
 
+static int an_gates_others(int i) {
+    struct an_dep d[AN_MAX_DEPS];
+    int j, k, nd;
+    for (j = 0; j < svc_count; j++) {
+        nd = an_deps(&services[j], d);
+        for (k = 0; k < nd; k++)
+            if (d[k].svc == i) return 1;
+    }
+    return 0;
+}
+
 static void an_chain(int fd, int target) {
-    int depth = 0, cur = target, seen[MAX_SERVICES] = {0};
+    int depth = 0, cur = target, via = -1, seen[MAX_SERVICES] = {0};
     ctl_writef(fd, "critical chain → %s   (@ spawned, + spawn→ready)\n", services[target].name);
     while (cur >= 0 && !seen[cur]) {
         const service_t *s = &services[cur];
-        int g = an_gate(s);
-        char wait[48] = "";
+        struct an_dep d[AN_MAX_DEPS];
+        int k, nd = an_deps(s, d), gvia, g = an_gate(s, &gvia);
+        char wait[48] = "", grp[80] = "";
         seen[cur] = 1;
         if (g >= 0 && an_spawn(s) - an_ready(&services[g]) >= 0.1)
             snprintf(wait, sizeof wait, "  (spawned %.3fs after dep ready)",
                      an_spawn(s) - an_ready(&services[g]));
-        ctl_writef(fd, "  %*s%s%s @%.3fs +%.3fs %s%s\n", depth * 2, "",
-                   depth ? "└─" : "", s->name, an_spawn(s),
+        if (via >= 0)
+            snprintf(grp, sizeof grp, " (via %s)", groups[via].name);
+        ctl_writef(fd, "  %*s%s%s%s @%.3fs +%.3fs %s%s\n", depth * 2, "",
+                   depth ? "└─" : "", s->name, grp, an_spawn(s),
                    an_ready(s) - an_spawn(s), an_how(s), wait);
-        for (int k = 0; k < MAX_DEPS; k++) {
-            int di = s->dep_idx[k];
-            if (di >= 0 && !an_has(&services[di]))
-                ctl_writef(fd, "  %*s└─%s never ready (%s)\n", depth * 2 + 2, "",
-                           services[di].name, state_name(services[di].inst.state));
+        for (k = 0; k < nd; k++) {
+            const service_t *ds = &services[d[k].svc];
+            if (an_has(ds)) continue;
+            if (d[k].grp >= 0)
+                snprintf(grp, sizeof grp, " (via %s)", groups[d[k].grp].name);
+            else
+                grp[0] = '\0';
+            ctl_writef(fd, "  %*s└─%s%s never ready (%s)\n", depth * 2 + 2, "",
+                       ds->name, grp, state_name(ds->inst.state));
         }
         cur = g;
+        via = gvia;
         depth++;
     }
 }
@@ -1316,7 +1361,7 @@ static void ctl_analyze(int fd, const char *arg) {
                k2p, horizon, k2p + horizon, services[target].name);
     ctl_writef(fd, "\n");
     an_chain(fd, target);
-    for (i = target; i >= 0 && !on_chain[i]; i = an_gate(&services[i])) on_chain[i] = 1;
+    for (i = target; i >= 0 && !on_chain[i]; i = an_gate(&services[i], NULL)) on_chain[i] = 1;
 
     ctl_writef(fd, "\n  %-24s %8s %8s  %-10s 0%*s%.1fs\n", "service", "spawn", "cost", "ready-by",
                ANALYZE_BAR - 4, "", horizon);
@@ -1335,11 +1380,7 @@ static void ctl_analyze(int fd, const char *arg) {
         ctl_writef(fd, "%c %-24.24s %7.3fs %7.3fs  %-10s |%s\n", on_chain[idx[i]] ? '*' : ' ',
                    s->name, sp, rd - sp, an_how(s), bar);
         if (s->boot_how == READY_TIMER && ts_set(s->boot_ready)) {
-            int k, gates = 0;
-            for (j = 0; j < svc_count && !gates; j++)
-                for (k = 0; k < MAX_DEPS; k++)
-                    if (services[j].dep_idx[k] == idx[i]) { gates = 1; break; }
-            if (gates) {
+            if (an_gates_others(idx[i])) {
                 size_t l = strlen(gating);
                 if (l < sizeof gating - 30)
                     snprintf(gating + l, sizeof gating - l, "%s%s", ntimer ? ", " : "", s->name);
