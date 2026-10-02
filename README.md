@@ -843,6 +843,8 @@ sudo schema-ctl status --json   # machine-parseable JSON — for supervisory loo
 sudo schema-ctl status --kv     # flat key=value — grep-friendly
 sudo schema-ctl status <name>   # one service: state, last exit, readiness, each hardening knob and its source
 sudo schema-ctl timing          # per-service spawn→ready cost, boot critical path first
+sudo schema-ctl analyze         # boot critical chain + waterfall; how each service proved ready (notify / bus-name / ready_path / stable timer / exit)
+sudo schema-ctl analyze <name>  # the dependency chain that held <name> back
 sudo schema-ctl list            # names and current states only
 sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service

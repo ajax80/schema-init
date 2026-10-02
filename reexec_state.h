@@ -45,6 +45,9 @@ typedef struct {
     X(INT,  has_exited)          \
     X(TS,   timer_next)          \
     X(TS,   spawn_time_mono)     \
+    X(TS,   boot_spawn)          \
+    X(TS,   boot_ready)          \
+    X(INT,  boot_how)            \
     X(STR,  cgroup_path)         \
     X(INT,  is_frozen)
 

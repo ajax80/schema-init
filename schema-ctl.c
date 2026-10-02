@@ -19,6 +19,8 @@ static void usage(FILE *out) {
         "  status <svc>           one service, with each hardening knob's value\n"
         "                         and source (explicit / default / dropped)\n"
         "  list                   service names, one per line\n"
+        "  analyze [<svc>]        boot critical chain + waterfall, and how each\n"
+        "                         service proved ready; <svc>: its chain only\n"
         "  timing                 per-service cost (spawn→ready) + readiness instant,\n"
         "                         sorted by cost — the boot critical path first\n"
         "  reload [--evict]       re-read service files; --evict also SIGTERMs\n"

@@ -488,6 +488,12 @@ static void restart_budget_refresh(service_t *svc) {
         svc->restart_count = 0;
 }
 
+static void mark_boot_ready(service_t *svc, int how) {
+    if (svc->boot_ready.tv_sec || svc->boot_ready.tv_nsec) return;
+    svc->boot_ready = svc->stable_time;
+    svc->boot_how = how;
+}
+
 /* Record why a run ended (wait status) and log a signal death to the rail. */
 static void note_exit(service_t *svc, int status) {
     svc->exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
@@ -546,6 +552,7 @@ static void reap(void) {
                 /* clean one-shot exit → PERFECT */
                 services[i].inst.state = STATE_PERFECT;
                 clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
+                mark_boot_ready(&services[i], READY_EXIT);
                 service_log(&services[i], "oneshot-done");
                 if (strcmp(services[i].name, "slot-detect") == 0) {
                     load_env_file();
@@ -1009,18 +1016,19 @@ static void tick_service(service_t *svc,
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
                 if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
-                    ready = 1;
+                    ready = svc->ready_bus_name[0] ? READY_BUS : READY_NOTIFY;
                 } else if (svc->ready_path[0] && access(svc->ready_path, F_OK) == 0) {
-                    ready = 1;
+                    ready = READY_PATH;
                     svc->ready_path_verified = 1;
                 } else if (now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->stable_secs) {
-                    ready = 1;
+                    ready = READY_TIMER;
                 }
                 if (ready) {
                     flags = service_probe_f8(svc, services, svc_count);
                     schema_step(&svc->inst, flags);
                     if (svc->inst.state != prev) {
                         clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
+                        mark_boot_ready(svc, ready);
                         service_log(svc, "promote");
                     }
                 }
@@ -1163,13 +1171,231 @@ static void shm_update(void) {
 /* ── runtime control socket ─────────────────────────────────────────── */
 
 static void ctl_writef(int fd, const char *fmt, ...) {
-    char buf[256];
+    char buf[512];
     va_list ap;
     int n;
     va_start(ap, fmt);
     n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     if (n > 0) write(fd, buf, (size_t)n);
+}
+
+#define ANALYZE_BAR      40
+#define ANALYZE_LATE_GAP 30.0
+
+static int analyze_approx;
+
+static double mono_rel(struct timespec t) {
+    return (double)(t.tv_sec - init_start.tv_sec)
+         + (double)(t.tv_nsec - init_start.tv_nsec) / 1e9;
+}
+
+static int ts_set(struct timespec t) { return t.tv_sec || t.tv_nsec; }
+
+static int an_has(const service_t *s) {
+    if (ts_set(s->boot_spawn) && ts_set(s->boot_ready)) return 1;
+    return ts_set(s->spawn_time_mono) && ts_set(s->stable_time);
+}
+
+static double an_spawn(const service_t *s) {
+    if (ts_set(s->boot_spawn) && ts_set(s->boot_ready)) return mono_rel(s->boot_spawn);
+    analyze_approx = 1;
+    return mono_rel(s->spawn_time_mono);
+}
+
+static double an_ready(const service_t *s) {
+    if (ts_set(s->boot_spawn) && ts_set(s->boot_ready)) return mono_rel(s->boot_ready);
+    analyze_approx = 1;
+    return mono_rel(s->stable_time);
+}
+
+static const char *an_how(const service_t *s) {
+    int how = ts_set(s->boot_ready) ? s->boot_how
+            : (s->flags & SVC_ONESHOT) ? READY_EXIT : 0;
+    switch (how) {
+        case READY_NOTIFY: return "notify";
+        case READY_BUS:    return "bus-name";
+        case READY_PATH:   return "ready_path";
+        case READY_TIMER:  return "timer";
+        case READY_EXIT:   return "exit";
+    }
+    return "?";
+}
+
+static int an_is_timer(const service_t *s) {
+    return s->timer_boot_sec > 0 || s->timer_interval_sec > 0
+        || (s->flags & SVC_TIMER_CALENDAR);
+}
+
+/* The dep that became ready last: the one this service was waiting on. */
+/* A group dep waits on its members, so expand it to them. Timer services
+ * count as ready from the moment they are armed: never a real wait. */
+struct an_dep { int svc, grp; };
+#define AN_MAX_DEPS (MAX_DEPS * (1 + MAX_MEMBERS))
+
+static int an_deps(const service_t *s, struct an_dep *out) {
+    int k, m, n = 0;
+    for (k = 0; k < MAX_DEPS && s->dep_name[k][0]; k++) {
+        int di = s->dep_idx[k], gi = s->grp_dep_idx[k];
+        if (di >= 0 && !an_is_timer(&services[di])) out[n++] = (struct an_dep){di, -1};
+        if (gi >= 0)
+            for (m = 0; m < groups[gi].member_count; m++) {
+                int mi = groups[gi].member_idx[m];
+                if (mi >= 0 && !an_is_timer(&services[mi])) out[n++] = (struct an_dep){mi, gi};
+            }
+    }
+    return n;
+}
+
+/* The dep that became ready last: the one this service was waiting on. */
+static int an_gate(const service_t *s, int *via) {
+    struct an_dep d[AN_MAX_DEPS];
+    int k, nd = an_deps(s, d), g = -1;
+    double best = -1e18;
+    if (via) *via = -1;
+    for (k = 0; k < nd; k++) {
+        if (!an_has(&services[d[k].svc])) continue;
+        if (an_ready(&services[d[k].svc]) > best) {
+            best = an_ready(&services[d[k].svc]);
+            g = d[k].svc;
+            if (via) *via = d[k].grp;
+        }
+    }
+    return g;
+}
+
+/* Started well after everything it depends on was ready: activated or
+ * started by hand, not part of boot. A dep that never got ready held it. */
+static int an_is_late(const service_t *s) {
+    struct an_dep d[AN_MAX_DEPS];
+    int k, nd = an_deps(s, d), g;
+    for (k = 0; k < nd; k++)
+        if (!an_has(&services[d[k].svc])) return 0;
+    g = an_gate(s, NULL);
+    return an_spawn(s) - (g >= 0 ? an_ready(&services[g]) : 0.0) > ANALYZE_LATE_GAP;
+}
+
+static int an_gates_others(int i) {
+    struct an_dep d[AN_MAX_DEPS];
+    int j, k, nd;
+    for (j = 0; j < svc_count; j++) {
+        nd = an_deps(&services[j], d);
+        for (k = 0; k < nd; k++)
+            if (d[k].svc == i) return 1;
+    }
+    return 0;
+}
+
+static void an_chain(int fd, int target) {
+    int depth = 0, cur = target, via = -1, seen[MAX_SERVICES] = {0};
+    ctl_writef(fd, "critical chain → %s   (@ spawned, + spawn→ready)\n", services[target].name);
+    while (cur >= 0 && !seen[cur]) {
+        const service_t *s = &services[cur];
+        struct an_dep d[AN_MAX_DEPS];
+        int k, nd = an_deps(s, d), gvia, g = an_gate(s, &gvia);
+        char wait[48] = "", grp[80] = "";
+        seen[cur] = 1;
+        if (g >= 0 && an_spawn(s) - an_ready(&services[g]) >= 0.1)
+            snprintf(wait, sizeof wait, "  (spawned %.3fs after dep ready)",
+                     an_spawn(s) - an_ready(&services[g]));
+        if (via >= 0)
+            snprintf(grp, sizeof grp, " (via %s)", groups[via].name);
+        ctl_writef(fd, "  %*s%s%s%s @%.3fs +%.3fs %s%s\n", depth * 2, "",
+                   depth ? "└─" : "", s->name, grp, an_spawn(s),
+                   an_ready(s) - an_spawn(s), an_how(s), wait);
+        for (k = 0; k < nd; k++) {
+            const service_t *ds = &services[d[k].svc];
+            if (an_has(ds)) continue;
+            if (d[k].grp >= 0)
+                snprintf(grp, sizeof grp, " (via %s)", groups[d[k].grp].name);
+            else
+                grp[0] = '\0';
+            ctl_writef(fd, "  %*s└─%s%s never ready (%s)\n", depth * 2 + 2, "",
+                       ds->name, grp, state_name(ds->inst.state));
+        }
+        cur = g;
+        via = gvia;
+        depth++;
+    }
+}
+
+static void ctl_analyze(int fd, const char *arg) {
+    int idx[MAX_SERVICES], n = 0, i, j, target = -1, nlate = 0, ntimer = 0;
+    int on_chain[MAX_SERVICES] = {0};
+    double horizon = 0, k2p = (double)init_start.tv_sec + (double)init_start.tv_nsec / 1e9;
+    char late[200] = "", gating[200] = "";
+
+    analyze_approx = 0;
+    if (*arg) {
+        for (i = 0; i < svc_count; i++)
+            if (strcmp(services[i].name, arg) == 0) break;
+        if (i == svc_count) { ctl_writef(fd, "err: not found: %s\n", arg); return; }
+        if (!an_has(&services[i])) { ctl_writef(fd, "err: %s has not reached ready\n", arg); return; }
+        an_chain(fd, i);
+        return;
+    }
+
+    for (i = 0; i < svc_count; i++) {
+        if (an_is_timer(&services[i]) || !an_has(&services[i])) continue;
+        if (an_is_late(&services[i])) {
+            size_t l = strlen(late);
+            if (l < sizeof late - 40)
+                snprintf(late + l, sizeof late - l, "%s%s @%.0fs", nlate ? ", " : "",
+                         services[i].name, an_spawn(&services[i]));
+            nlate++;
+            continue;
+        }
+        idx[n++] = i;
+    }
+    for (i = 0; i < n; i++)
+        for (j = i + 1; j < n; j++)
+            if (an_spawn(&services[idx[j]]) < an_spawn(&services[idx[i]])) {
+                int t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+            }
+    for (i = 0; i < n; i++)
+        if (an_ready(&services[idx[i]]) > horizon) { horizon = an_ready(&services[idx[i]]); target = idx[i]; }
+    if (target < 0) { ctl_writef(fd, "err: no service has reached ready\n"); return; }
+    if (horizon <= 0) horizon = 1e-3;
+
+    ctl_writef(fd, "boot: kernel %.3fs + userspace %.3fs = %.3fs   (last ready: %s)\n",
+               k2p, horizon, k2p + horizon, services[target].name);
+    ctl_writef(fd, "\n");
+    an_chain(fd, target);
+    for (i = target; i >= 0 && !on_chain[i]; i = an_gate(&services[i], NULL)) on_chain[i] = 1;
+
+    ctl_writef(fd, "\n  %-24s %8s %8s  %-10s 0%*s%.1fs\n", "service", "spawn", "cost", "ready-by",
+               ANALYZE_BAR - 4, "", horizon);
+    for (i = 0; i < n; i++) {
+        const service_t *s = &services[idx[i]];
+        double sp = an_spawn(s), rd = an_ready(s);
+        int a = (int)(sp / horizon * ANALYZE_BAR), b = (int)(rd / horizon * ANALYZE_BAR + 0.999);
+        char bar[ANALYZE_BAR * 3 + 1], *p = bar;
+        const char *fill = s->boot_how == READY_TIMER && ts_set(s->boot_ready) ? "░" : "█";
+        int c;
+        if (b <= a) b = a + 1;
+        if (b > ANALYZE_BAR) b = ANALYZE_BAR;
+        for (c = 0; c < a && c < ANALYZE_BAR; c++) *p++ = ' ';
+        for (; c < b; c++) { memcpy(p, fill, 3); p += 3; }
+        *p = '\0';
+        ctl_writef(fd, "%c %-24.24s %7.3fs %7.3fs  %-10s |%s\n", on_chain[idx[i]] ? '*' : ' ',
+                   s->name, sp, rd - sp, an_how(s), bar);
+        if (s->boot_how == READY_TIMER && ts_set(s->boot_ready)) {
+            if (an_gates_others(idx[i])) {
+                size_t l = strlen(gating);
+                if (l < sizeof gating - 30)
+                    snprintf(gating + l, sizeof gating - l, "%s%s", ntimer ? ", " : "", s->name);
+                ntimer++;
+            }
+        }
+    }
+    ctl_writef(fd, "\n* = on the critical chain   █ readiness signalled   ░ promoted by stable timer\n");
+    if (ntimer)
+        ctl_writef(fd, "timer-gated with dependents (%d): %s — notify=1 or ready_path= would release them sooner\n",
+                   ntimer, gating);
+    if (nlate)
+        ctl_writef(fd, "started after boot (%d): %s\n", nlate, late);
+    if (analyze_approx)
+        ctl_writef(fd, "note: some rows use the current run, not boot (PID 1 re-exec'd from a build without boot stamps)\n");
 }
 
 static const char *hard_source(const service_t *s, uint8_t bit) {
@@ -1462,6 +1688,11 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "  %-24s %7.3fs  %7.3fs\n", rows[i].name, rows[i].cost, rows[i].ready);
         }
 
+    } else if (strcmp(line, "analyze") == 0 || strncmp(line, "analyze ", 8) == 0) {
+        const char *arg = line + 7;
+        while (*arg == ' ') arg++;
+        ctl_analyze(fd, arg);
+
     } else if (strcmp(line, "reexec") == 0 || strncmp(line, "reexec ", 7) == 0) {
         char rerr[320];
         const char *path = line[6] ? line + 7 : boot_argv0;
@@ -1534,7 +1765,8 @@ static int ctl_is_readonly(const char *line) {
     size_t n = strcspn(line, " \t");
     return (n == 6 && memcmp(line, "status", 6) == 0)
         || (n == 4 && memcmp(line, "list", 4) == 0)
-        || (n == 6 && memcmp(line, "timing", 6) == 0);
+        || (n == 6 && memcmp(line, "timing", 6) == 0)
+        || (n == 7 && memcmp(line, "analyze", 7) == 0);
 }
 
 /* Drain the sd_notify socket. A message counts only for a notify=1 service
