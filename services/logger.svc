@@ -3,6 +3,7 @@ exec=/usr/bin/logger
 args=-t schema-init
 args=schema-init heartbeat
 oneshot=1
+dep=journal-sink
 needs_root=0
 critical=0
 priority=peripheral
