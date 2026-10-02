@@ -164,6 +164,14 @@ args=/run/test-after.ran
 oneshot=1
 dep=test-slow
 EOF
+# test-leaf: timer-promoted after test-after, nothing depends on it. It must
+# not set the boot total; analyze lists it as not counted.
+cat > "$ROOT/etc/schema-init/services/test-leaf.svc" <<'EOF'
+name=test-leaf
+exec=/usr/bin/slowloop.sh
+stable_secs=2
+dep=test-after
+EOF
 
 # Group gate: test-viagrp waits on group test-group (test-slow + test-readypath)
 # and on the timer test-timer. The chain must walk into the group to test-slow,
@@ -670,6 +678,7 @@ grep -Eq "test-readypath +[0-9.]+s +[0-9.]+s  ready_path"    "$SERIAL" || { echo
 grep -Eq "test-dependent +[0-9.]+s +[0-9.]+s  exit"          "$SERIAL" || { echo "  MISS: analyze readiness source exit"; pass=0; }
 grep -Eq "test-slow +[0-9.]+s +(9|10)\.[0-9]+s  timer"  "$SERIAL" || { echo "  MISS: analyze timer promotion (stable_secs=10, whole-second check) for test-slow"; pass=0; }
 sed -n '/ANALYZE-ONE-BEGIN/,/ANALYZE-ONE-END/p' "$SERIAL" | grep -Eq "^ +└─test-slow @" || { echo "  MISS: analyze test-after chain did not walk to test-slow"; pass=0; }
+grep -Eq "^not counted in boot .*test-leaf"                     "$SERIAL" || { echo "  MISS: analyze did not exclude timer leaf test-leaf"; pass=0; }
 grep -Eq "^timer-gated with dependents .*test-slow"          "$SERIAL" || { echo "  MISS: analyze did not flag test-slow as timer-gated"; pass=0; }
 grep -Eq "^ +└─test-hang never ready \(EXCISED\)"            "$SERIAL" || { echo "  MISS: analyze chain did not name the never-ready dep"; pass=0; }
 sed -n '/ANALYZE-GRP-BEGIN/,/ANALYZE-GRP-END/p' "$SERIAL" | grep -Eq "^ +└─test-slow \(via test-group\) @" || { echo "  MISS: analyze chain did not walk into group test-group"; pass=0; }

@@ -1298,6 +1298,18 @@ static int an_gates_others(int i) {
     return 0;
 }
 
+static int an_gates_counted(int i, const int *counted) {
+    struct an_dep d[AN_MAX_DEPS];
+    int j, k, nd;
+    for (j = 0; j < svc_count; j++) {
+        if (!counted[j]) continue;
+        nd = an_deps(&services[j], d);
+        for (k = 0; k < nd; k++)
+            if (d[k].svc == i) return 1;
+    }
+    return 0;
+}
+
 static void an_chain(int fd, int target) {
     int depth = 0, cur = target, via = -1, seen[MAX_SERVICES] = {0};
     ctl_writef(fd, "critical chain → %s   (@ spawned, + spawn→ready)\n", services[target].name);
@@ -1334,8 +1346,9 @@ static void an_chain(int fd, int target) {
 static void ctl_analyze(int fd, const char *arg) {
     int idx[MAX_SERVICES], n = 0, i, j, target = -1, nlate = 0, ntimer = 0;
     int on_chain[MAX_SERVICES] = {0};
-    double horizon = 0, k2p = (double)init_start.tv_sec + (double)init_start.tv_nsec / 1e9;
-    char late[200] = "", gating[200] = "";
+    int nleaf = 0, changed, counted[MAX_SERVICES] = {0};
+    double horizon = 0, scale = 0, k2p = (double)init_start.tv_sec + (double)init_start.tv_nsec / 1e9;
+    char late[200] = "", gating[200] = "", leaves[400] = "";
 
     analyze_approx = 0;
     if (*arg) {
@@ -1364,10 +1377,38 @@ static void ctl_analyze(int fd, const char *arg) {
             if (an_spawn(&services[idx[j]]) < an_spawn(&services[idx[i]])) {
                 int t = idx[i]; idx[i] = idx[j]; idx[j] = t;
             }
-    for (i = 0; i < n; i++)
-        if (an_ready(&services[idx[i]]) > horizon) { horizon = an_ready(&services[idx[i]]); target = idx[i]; }
+    for (i = 0; i < n; i++) counted[idx[i]] = 1;
+    for (changed = 1; changed; ) {
+        changed = 0;
+        for (i = 0; i < n; i++) {
+            const service_t *s = &services[idx[i]];
+            if (counted[idx[i]] && s->boot_how == READY_TIMER && ts_set(s->boot_ready)
+                && !an_gates_counted(idx[i], counted)) {
+                counted[idx[i]] = 0;
+                changed = 1;
+            }
+        }
+    }
+    for (i = 0; i < n; i++) {
+        double rd = an_ready(&services[idx[i]]);
+        if (rd > scale) scale = rd;
+        if (!counted[idx[i]]) {
+            size_t l = strlen(leaves);
+            if (l < sizeof leaves - 40)
+                snprintf(leaves + l, sizeof leaves - l, "%s%s", nleaf ? ", " : "", services[idx[i]].name);
+            nleaf++;
+            continue;
+        }
+        if (rd > horizon) { horizon = rd; target = idx[i]; }
+    }
+    if (target < 0) {
+        nleaf = 0;
+        for (i = 0; i < n; i++)
+            if (an_ready(&services[idx[i]]) > horizon) { horizon = an_ready(&services[idx[i]]); target = idx[i]; }
+    }
     if (target < 0) { ctl_writef(fd, "err: no service has reached ready\n"); return; }
     if (horizon <= 0) horizon = 1e-3;
+    if (scale < horizon) scale = horizon;
 
     ctl_writef(fd, "boot: kernel %.3fs + userspace %.3fs = %.3fs   (last ready: %s)\n",
                k2p, horizon, k2p + horizon, services[target].name);
@@ -1376,11 +1417,11 @@ static void ctl_analyze(int fd, const char *arg) {
     for (i = target; i >= 0 && !on_chain[i]; i = an_gate(&services[i], NULL)) on_chain[i] = 1;
 
     ctl_writef(fd, "\n  %-24s %8s %8s  %-10s 0%*s%.1fs\n", "service", "spawn", "cost", "ready-by",
-               ANALYZE_BAR - 4, "", horizon);
+               ANALYZE_BAR - 4, "", scale);
     for (i = 0; i < n; i++) {
         const service_t *s = &services[idx[i]];
         double sp = an_spawn(s), rd = an_ready(s);
-        int a = (int)(sp / horizon * ANALYZE_BAR), b = (int)(rd / horizon * ANALYZE_BAR + 0.999);
+        int a = (int)(sp / scale * ANALYZE_BAR), b = (int)(rd / scale * ANALYZE_BAR + 0.999);
         char bar[ANALYZE_BAR * 3 + 1], *p = bar;
         const char *fill = s->boot_how == READY_TIMER && ts_set(s->boot_ready) ? "░" : "█";
         int c;
@@ -1404,6 +1445,9 @@ static void ctl_analyze(int fd, const char *arg) {
     if (ntimer)
         ctl_writef(fd, "timer-gated with dependents (%d): %s — notify=1 or ready_path= would release them sooner\n",
                    ntimer, gating);
+    if (nleaf)
+        ctl_writef(fd, "not counted in boot (%d, timer-promoted, nothing counted waits on them): %s\n",
+                   nleaf, leaves);
     if (nlate)
         ctl_writef(fd, "started after boot (%d): %s\n", nlate, late);
     if (analyze_approx)
