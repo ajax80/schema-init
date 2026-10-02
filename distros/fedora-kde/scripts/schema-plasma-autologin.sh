@@ -8,6 +8,10 @@
 # bash, not sh, for $BASHPID: the process that joins the session-scope cgroup
 # must be the one that execs the compositor.
 exec >> /var/log/schema-autologin.log 2>&1
+# ready_path for this service: kwin's wayland socket appearing means the
+# compositor is up. A fixed marker keeps the .svc independent of the uid.
+READY=/run/schema-plasma-ready
+rm -f "$READY"
 set -x
 
 # --- who logs in. user.conf if the installer wrote one; else auto-detect the
@@ -77,6 +81,12 @@ while true; do
     [ -n "$SID" ] || SID=31
     SESSION_SCOPE="/sys/fs/cgroup/user.slice/user-$SCHEMA_UID.slice/session-$SID.scope"
     mkdir -p "$SESSION_SCOPE" 2>/dev/null || true
+
+    [ -e "$READY" ] || ( set +x
+        for _ in $(seq 1 600); do
+            [ -S "/run/user/$SCHEMA_UID/wayland-0" ] && { : > "$READY"; break; }
+            sleep 0.2
+        done ) &
 
     ( echo $BASHPID > "$SESSION_SCOPE/cgroup.procs" 2>/dev/null || true
       exec runuser -u "$SCHEMA_USER" -- env \
