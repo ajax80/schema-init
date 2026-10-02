@@ -27,7 +27,7 @@ tmpfiles_pid=$!
 if [ -e /etc/schema-init/schema-udev.live ] && [ -x /usr/bin/schema-udev ]; then
     mkdir -p /run/schema-udev /var/log/schema-init
     /usr/bin/schema-udev >> /var/log/schema-init/udevd.log 2>&1 &
-    i=0; while [ $i -lt 60 ]; do [ -e /run/schema-udev/ready ] && break; i=$((i+1)); sleep 0.5; done
+    i=0; while [ $i -lt 600 ]; do [ -e /run/schema-udev/ready ] && break; i=$((i+1)); sleep 0.05; done
 else
     /usr/lib/systemd/systemd-udevd --daemon
     udevadm trigger --type=subsystems --action=add

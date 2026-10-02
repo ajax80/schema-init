@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #include <sys/signalfd.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <linux/netlink.h>
 
 #define DEV_DIR "/etc/schema-init/dev"
@@ -356,6 +357,20 @@ static void dispatch(struct uevent *ev) {
     }
 }
 
+static double mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+}
+
+static void coldplug_dispatch(struct uevent *ev) {
+    double t0 = mono_ms();
+    dispatch(ev);
+    double dt = mono_ms() - t0;
+    if (dt >= 50.0)
+        fprintf(stderr, "[schema-udev] coldplug slow %.0fms %s\n", dt, uevent_get(ev, "DEVPATH"));
+}
+
 int main(void) {
     int nlfd = netlink_open();
     if (nlfd < 0) {
@@ -398,13 +413,18 @@ int main(void) {
     }
 
     if (g_live) unlink(SCHEMA_UDEV_READY);
+    double rl_t0 = mono_ms();
     rules_reload();
     ruleset_reload();
+    double rl_t1 = mono_ms();
     disk_links_wipe(SCHEMA_UDEV_RULES_DIR);   /* reuse the generic recursive rmdir/wipe */
     disk_links_wipe(SCHEMA_DISK_DIR);
     uaccess_wipe(SCHEMA_UACCESS_DIR);
+    fprintf(stderr, "[schema-udev] rules load %.0fms, wipe %.0fms\n", rl_t1 - rl_t0, mono_ms() - rl_t1);
     fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
-    coldplug_walk_root("/sys", dispatch);
+    double cp_t0 = mono_ms();
+    coldplug_walk_root("/sys", coldplug_dispatch);
+    fprintf(stderr, "[schema-udev] coldplug took %.0fms\n", mono_ms() - cp_t0);
     if (g_live && udev_signal_ready() == 0)
         fprintf(stderr, "[schema-udev] ready marker %s written (coldplug complete)\n", SCHEMA_UDEV_READY);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
