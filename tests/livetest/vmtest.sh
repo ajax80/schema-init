@@ -77,6 +77,24 @@ ready_path=/run/test-rp.ready
 EOF
 mkdir -p "$ROOT"/{boot/efi,home,root,tmp,var/tmp}
 
+# Stale ready_path probe: run 1 leaves its marker behind and crashes; run 2
+# removes the leftover during slow setup and only then writes a fresh one.
+# The leftover must not promote run 2, or its removal reads as readiness-lost.
+cat > "$ROOT/usr/bin/staleready.sh" <<'EOF'
+#!/bin/sh
+n=$(cat /run/test-stale.n 2>/dev/null || echo 0); n=$((n+1)); echo $n > /run/test-stale.n
+if [ "$n" = 1 ]; then touch /run/test-stale.ready; sleep 3; exit 1; fi
+sleep 4; rm -f /run/test-stale.ready; sleep 1; touch /run/test-stale.ready
+while :; do sleep 1; done
+EOF
+chmod +x "$ROOT/usr/bin/staleready.sh"
+cat > "$ROOT/etc/schema-init/services/test-stale.svc" <<'EOF'
+name=test-stale
+exec=/usr/bin/staleready.sh
+ready_path=/run/test-stale.ready
+stable_secs=60
+EOF
+
 cp "$HERE/test-timer.svc"     "$ROOT/etc/schema-init/services/"
 cp "$HERE/test-hang.svc"      "$ROOT/etc/schema-init/services/"
 cp "$HERE/test-dependent.svc" "$ROOT/etc/schema-init/services/"
@@ -416,6 +434,21 @@ else
     echo "CTL-RESTART: FAIL (no respawn)"
 fi
 echo "===== CTL-RESTART-END ====="
+echo "===== STALE-READY-TEST ====="
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+    [ "$(cat /run/test-stale.n 2>/dev/null)" = 2 ] && [ -e /run/test-stale.ready ] && break
+    sleep 1
+done
+sleep 2
+echo "stale-runs: $(cat /run/test-stale.n 2>/dev/null)"
+if grep -q 'test-stale .*readiness-lost' "$RAIL"; then
+    echo "STALE-READY: FAIL (leftover marker promoted the respawn, then readiness-lost)"
+elif [ "$(cat /run/test-stale.n 2>/dev/null)" = 2 ] && /bin/schema-ctl status test-stale | grep -q FUNDAMENTAL; then
+    echo "STALE-READY: PASS (respawn promoted on its own marker)"
+else
+    echo "STALE-READY: FAIL ($(/bin/schema-ctl status test-stale | head -1))"
+fi
+echo "===== STALE-READY-END ====="
 echo "===== RELOAD-REFIRE-TEST ====="
 # SIGHUP to PID 1 is the reload path (init.c calls handle_reload from the
 # signal drain), which is what schema-ctl reload asks for over the socket.

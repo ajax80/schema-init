@@ -525,6 +525,14 @@ int service_spawn(service_t *svc) {
     svc->ready_path_verified = 0;
     svc->ready_watched = 0;
     svc->ctl_killed = 0;
+    svc->ready_stale_ino = 0;
+    if (svc->ready_path[0]) {
+        struct stat st;
+        if (stat(svc->ready_path, &st) == 0 && !S_ISDIR(st.st_mode)) {
+            svc->ready_stale_dev = st.st_dev;
+            svc->ready_stale_ino = st.st_ino;
+        }
+    }
 
     if (pipe(sync) < 0) return -1;
 
