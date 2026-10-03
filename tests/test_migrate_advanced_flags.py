@@ -21,7 +21,7 @@ for b in ("schema-init", "schema-ctl", "schema-subreaper"):
 open(os.path.join(root, "usr/lib/systemd/systemd-udevd"), "w").close()
 open(os.path.join(root, "etc/fstab"), "w").write("UUID=a / ext4 defaults 0 1\n")
 open(os.path.join(root, "etc/passwd"), "w").write("j:x:1000:1000::/home/j:/bin/sh\n")
-open(os.path.join(root, "boot/loader/entries/f.conf"), "w").write(
+open(os.path.join(root, "boot/loader/entries/f-6.10.0.conf"), "w").write(
     "title Fedora\nversion 6.10.0\noptions root=UUID=a ro\n")
 os.environ["MIGRATE_ROOT"] = root; os.environ["MIGRATE_KERNEL"] = "6.10.0"
 m = load()
@@ -44,7 +44,7 @@ def fresh_root():
     open(os.path.join(root, "usr/lib/systemd/systemd-udevd"), "w").close()
     open(os.path.join(root, "etc/fstab"), "w").write("UUID=a / ext4 defaults 0 1\n")
     open(os.path.join(root, "etc/passwd"), "w").write("j:x:1000:1000::/home/j:/bin/sh\n")
-    open(os.path.join(root, "boot/loader/entries/f.conf"), "w").write(
+    open(os.path.join(root, "boot/loader/entries/f-6.10.0.conf"), "w").write(
         "title Fedora\nversion 6.10.0\noptions root=UUID=a ro\n")
     return root
 
@@ -101,27 +101,27 @@ check("non-btrfs root: snapshot skipped, deploy goes on", snapshots(calls) == []
 m, root, calls, err = deploy([], fstype="btrfs", snap_rc=1)
 check("failed snapshot refuses before changing anything", err is not None
       and not os.path.exists(os.path.join(root, m.Manifest.PATH))
-      and not os.path.exists(os.path.join(root, "boot/loader/entries/schema-init.conf")))
+      and not os.path.exists(os.path.join(root, "boot/loader/entries/schema-6.10.0.conf")))
 
 # --advanced-no-fallback-entry
 m, root, calls, err = deploy([])
 ents = sorted(os.listdir(os.path.join(root, "boot/loader/entries")))
-check("default keeps the current system's boot entry", ents == ["f.conf", "schema-init.conf"])
+check("default keeps the current system's boot entry", ents == ["f-6.10.0.conf", "schema-6.10.0.conf"])
 check("default card still points at the old entry", "does NOT say" in open(os.path.join(root, "boot/schema-recovery.txt")).read())
 m, root, calls, err = deploy(["--advanced-no-fallback-entry"])
 ents = sorted(os.listdir(os.path.join(root, "boot/loader/entries")))
-check("no-fallback-entry: only the schema-init entry is left", ents == ["schema-init.conf"])
+check("no-fallback-entry: only the schema entry is left", ents == ["schema-6.10.0.conf"])
 card = open(os.path.join(root, "boot/schema-recovery.txt")).read()
 check("no-fallback-entry: card does not point at a hidden menu entry", "does NOT say" not in card
       and "no menu" in card)
 check("no-fallback-entry: the old entry is stashed, not deleted",
-      os.path.exists(os.path.join(root, m.FALLBACK_STASH, "f.conf")))
+      os.path.exists(os.path.join(root, m.FALLBACK_STASH, "f-6.10.0.conf")))
 os.environ["MIGRATE_ROOT"] = root
 try:
     m = load(); m.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
 finally:
     del os.environ["MIGRATE_ROOT"]
-check("uninstall puts the old entry back", sorted(os.listdir(os.path.join(root, "boot/loader/entries"))) == ["f.conf"])
+check("uninstall puts the old entry back", sorted(os.listdir(os.path.join(root, "boot/loader/entries"))) == ["f-6.10.0.conf"])
 
 # --advanced-no-doctor-timers
 SVC = "etc/schema-init/services/"

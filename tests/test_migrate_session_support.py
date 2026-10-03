@@ -23,7 +23,7 @@ for b in ("schema-init", "schema-ctl", "schema-subreaper"):
     open(os.path.join(root, "usr/bin", b), "w").close()
 open(os.path.join(root, "etc/fstab"), "w").write("UUID=aaa / ext4 defaults 0 1\n")
 open(os.path.join(root, "etc/passwd"), "w").write("jandoe:x:1000:1000::/home/jandoe:/bin/bash\n")
-open(os.path.join(root, "boot/loader/entries/f.conf"), "w").write("title Fedora\nversion 6.10.0\noptions root=UUID=aaa ro\n")
+open(os.path.join(root, "boot/loader/entries/f-6.10.0.conf"), "w").write("title Fedora\nversion 6.10.0\noptions root=UUID=aaa ro\n")
 open(os.path.join(root, "etc/xdg/autostart/schema-wizard.desktop"), "w").write("[Desktop Entry]\nExec=/usr/bin/schema-wizard\n")
 os.environ["MIGRATE_ROOT"] = root; os.environ["MIGRATE_KERNEL"] = "6.10.0"
 
