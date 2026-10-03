@@ -194,6 +194,7 @@ EOF
 cat > "$ROOT/usr/bin/envprobe.sh" <<'EOF'
 #!/bin/sh
 echo "ENVPROBE=[$MYVAR]" > /dev/console
+echo "PATHPROBE=[$(tr '\0' '\n' < /proc/$$/environ | grep '^PATH=')]" > /dev/console
 EOF
 chmod +x "$ROOT/usr/bin/envprobe.sh"
 cat > "$ROOT/etc/schema-init/services/test-env.svc" <<'EOF'
@@ -599,6 +600,7 @@ grep -Eq "test-timer .*timer-done"      "$SERIAL" || { echo "  MISS: timer-done"
 grep -Eq "test-hang .*start-timeout"    "$SERIAL" || { echo "  MISS: start-timeout"; pass=0; }
 grep -Eq "test-dependent .*(spawn|oneshot-done)" "$SERIAL" || { echo "  MISS: dependent ran"; pass=0; }
 grep -Eq "SDBOOTED-DIR: present"        "$SERIAL" || { echo "  MISS: /run/systemd/system (sd_booted signal)"; pass=0; }
+grep -Fq "PATHPROBE=[PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin]" "$SERIAL" || { echo "  MISS: PID1 did not hand services a default PATH"; pass=0; }
 # The rail must outlive the console it was printed on.
 grep -Eq "RAIL\| .*test-hang .*start-timeout" "$SERIAL" || { echo "  MISS: rail.log did not persist the rail"; pass=0; }
 # A completed run-once boot timer must stay terminal across a reload.
