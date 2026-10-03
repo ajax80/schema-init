@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.0
+Version:        0.4.1
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -329,6 +329,26 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sat Oct 03 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.1-1
+- PID 1 upgrades in place: `dnf upgrade` re-execs PID 1 with every service
+  adopted, no reboot; schema-ctl exit codes are meaningful
+- Idle PID 1: events and deadlines instead of a 250 ms tick; PSI memory
+  triggers drive the survival posture
+- Services: sd_notify readiness (notify=1), bus-name readiness, per-service
+  watchdog (watchdog_sec), .svc.d drop-ins, Landlock read/write rules, death
+  reasons and opt-in oom_score_adj, a real restart counter
+- PID 1 hands services umask 022 and a default PATH (Go programs could not
+  find helpers); keeps crashes (schema-coredump); re-applies sysctl.d after
+  switch-root; schema-ctl analyze gives an honest boot total
+- schema-udev: rule SYMLINK+= links in live mode, coldplug timing log
+- Installer: no boot splash (plymouth/drm out of the initramfs) with a wait
+  for the real GPU before the desktop; the first-boot wizard survives a
+  shutdown or logout with a dialog open; the Plasma watchdog no longer kills
+  healthy shells (broken first-login panel); the udev seatbelt no longer
+  rolls back a healthy flip during the GPU handover
+- Migrate: schema-init becomes the default boot entry and stays the default
+  across kernel updates; GRUB_DEFAULT=saved is pinned
+- RPM: -daemons and opt-in -session subpackages; kernel-install hook shipped
 * Sun Sep 27 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.0-1
 - PID 1 replaces its own binary in place (schema-ctl reexec), and an
   upgrade does it automatically: services keep running, no reboot
