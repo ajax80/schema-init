@@ -9,9 +9,11 @@
 #
 # Per-host extra cmdline args (e.g. modprobe.blacklist=radeon on a box whose GPU
 # needs it) live in /etc/schema-init/kernel-cmdline.d/*.conf so the plugin ships
-# identically to every box. If /etc/schema-init/boot-default exists, the newest
-# schema entry is made the saved default on each add — this is what keeps a
-# schema-init box on schema-init across kernel updates.
+# identically to every box. The hook only acts on a box that opted in with
+# /etc/schema-init/boot-default (the installer writes it): the package ships the
+# hook everywhere, and a box that only has it installed keeps its boot menu.
+# On an opted-in box the newest schema entry is made the saved default on each
+# add — this is what keeps a schema-init box on schema-init across kernel updates.
 set -eu
 
 COMMAND="${1:-}"
@@ -30,6 +32,7 @@ ENTRIES="$BOOT_ROOT/loader/entries"
 CONF_ROOT="${SCHEMA_INIT_CONF_ROOT:-/etc/schema-init}"
 CMDLINE_D="$CONF_ROOT/kernel-cmdline.d"
 DEFAULT_MARKER="$CONF_ROOT/boot-default"
+[ -f "$DEFAULT_MARKER" ] || exit 0
 # init path is not the same on every box (/usr/bin on some, /sbin on others), so
 # resolve it rather than hardcode: explicit override, else whatever is on PATH.
 INIT_PATH="${SCHEMA_INIT_BIN:-}"
@@ -66,9 +69,13 @@ extra_args() {
 }
 
 newest_schema_version() {
-    ls -1 "$ENTRIES"/schema-*.conf 2>/dev/null \
-        | sed 's|.*/schema-||; s|\.conf$||' \
-        | sort -V | tail -1
+    # only entries this hook made (schema-<kernel> with a stock twin): sort -V
+    # ranks schema-init.conf and schema-good-*.conf above any kernel version
+    for e in "$ENTRIES"/schema-*.conf; do
+        [ -f "$e" ] || continue
+        v="${e##*/schema-}"; v="${v%.conf}"
+        [ -n "$(find_stock "$v")" ] && printf '%s\n' "$v"
+    done | sort -V | tail -1
 }
 
 set_default_to() {

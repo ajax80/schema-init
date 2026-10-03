@@ -185,9 +185,10 @@ fi
 
 #    Install the kernel-install plugin + its config, then seed the schema entry
 #    for the kernel(s) already on disk (the plugin only fires on FUTURE installs).
-install -d /etc/kernel/install.d
-install -m0755 "$SRC/kernel-install/99-schema-init.install" \
-    /etc/kernel/install.d/99-schema-init.install
+#    Same path the schema-init package owns, so the first package update takes
+#    it over and keeps it current.
+install -Dm0755 "$SRC/kernel-install/99-schema-init.install" \
+    /usr/lib/kernel/install.d/99-schema-init.install
 
 install -d /etc/schema-init/kernel-cmdline.d
 printf 'enforcing=0\n' > /etc/schema-init/kernel-cmdline.d/10-enforcing.conf
@@ -202,7 +203,7 @@ touch /etc/schema-init/boot-default
 for kv in $(ls /lib/modules 2>/dev/null | sort -V); do
     [ -d "/lib/modules/$kv" ] || continue
     SCHEMA_INIT_BIN=/sbin/schema-init \
-        /etc/kernel/install.d/99-schema-init.install add "$kv" "/boot/vmlinuz-$kv" \
+        /usr/lib/kernel/install.d/99-schema-init.install add "$kv" "/boot/vmlinuz-$kv" \
         || echo "WARN: schema BLS entry for $kv not generated"
 done
 
