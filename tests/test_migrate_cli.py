@@ -11,7 +11,7 @@ open(os.path.join(root, "etc/os-release"), "w").write("ID=fedora\n")
 open(os.path.join(root, "usr/bin/plasmashell"), "w").close()
 open(os.path.join(root, "etc/fstab"), "w").write("UUID=aaa / ext4 defaults 0 1\n")
 open(os.path.join(root, "etc/passwd"), "w").write("jandoe:x:1000:1000::/home/jandoe:/bin/bash\n")
-open(os.path.join(root, "boot/loader/entries/f.conf"), "w").write(
+open(os.path.join(root, "boot/loader/entries/f-6.10.0.conf"), "w").write(
     "title Fedora\nversion 6.10.0\noptions root=UUID=aaa ro\n")
 for d in ("distros/fedora-kde/scripts", "distros/fedora-installer/rail/services",
           "distros/fedora-installer/migrate"):
@@ -56,7 +56,7 @@ check("no-arg refuses exit 2", rc == 2)
 rc = sm.main(["--deploy"], run=fake_run)
 check("deploy exits 0", rc == 0)
 check("prevent-set landed", os.path.exists(os.path.join(root, "etc/schema-init/services/dbus.svc")))
-check("boot entry created", os.path.exists(os.path.join(root, "boot/loader/entries/schema-init.conf")))
+check("boot entry created", os.path.exists(os.path.join(root, "boot/loader/entries/schema-6.10.0.conf")))
 check("manifest saved", os.path.exists(os.path.join(root, sm.Manifest.PATH)))
 
 # re-run guard
@@ -66,6 +66,6 @@ check("re-migration is a no-op exit 0", rc == 0)
 # uninstall
 rc = sm.main(["--uninstall"], run=fake_run)
 check("uninstall exits 0 + removes boot entry",
-      rc == 0 and not os.path.exists(os.path.join(root, "boot/loader/entries/schema-init.conf")))
+      rc == 0 and not os.path.exists(os.path.join(root, "boot/loader/entries/schema-6.10.0.conf")))
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

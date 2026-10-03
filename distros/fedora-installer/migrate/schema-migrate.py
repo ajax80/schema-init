@@ -265,42 +265,98 @@ def write_profile(profile):
     return p
 
 
-SCHEMA_ENTRY_ID = "schema-init"
+LEGACY_ENTRY = "schema-init.conf"
 INIT_PATH = "/usr/bin/schema-init"
+HOOK_REL = "usr/lib/kernel/install.d/99-schema-init.install"
+HOOK_SRC = "distros/shared/kernel-install/99-schema-init.install"
+BOOT_DEFAULT = "etc/schema-init/boot-default"
 
 
-def _active_entry(kernel):
-    entries = sorted(_glob.glob(P("boot/loader/entries/*.conf")))
-    entries = [e for e in entries if os.path.basename(e) != SCHEMA_ENTRY_ID + ".conf"]
-    if not entries:
-        return None
-    for e in entries:
-        if kernel and kernel in os.path.basename(e):
-            return e
-    for e in entries:
-        if kernel and kernel in open(e).read():
-            return e
-    return entries[-1]
+def stock_entries():
+    out = {}
+    for e in sorted(_glob.glob(P("boot/loader/entries/*.conf"))):
+        name = os.path.basename(e)
+        if name.startswith("schema-") or "rescue" in name:
+            continue
+        for line in open(e, errors="ignore"):
+            if line.startswith("version "):
+                v = line.split(None, 1)[1].strip()
+                if name.endswith("-%s.conf" % v):
+                    out[v] = name[:-len(".conf")]
+                break
+    return out
 
 
-def add_boot_entry(kernel):
-    src = _active_entry(kernel)
-    dst = P("boot/loader/entries/%s.conf" % SCHEMA_ENTRY_ID)
-    lines = open(src).read().splitlines() if src else ["options ro"]
-    out = []
-    for line in lines:
-        if line.startswith("title "):
-            out.append(line.rstrip() + " (schema-init)")
-        elif line.startswith("options "):
-            if ("init=" + INIT_PATH) not in line:
-                line = line.rstrip() + " init=" + INIT_PATH
-            out.append(line)
-        else:
-            out.append(line)
+def _hook_src():
+    for cand in (find_source(HOOK_SRC),
+                 os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_MODDIR))), HOOK_SRC)):
+        if cand and os.path.exists(cand):
+            return cand
+    return None
+
+
+def install_kernel_hook(manifest):
+    dst = P(HOOK_REL)
+    if os.path.exists(dst):
+        return dst
+    src = _hook_src()
+    if src is None:
+        raise RuntimeError("kernel-install hook %s not found — without it every kernel "
+                           "update drops the box back to its old init" % HOOK_SRC)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    with open(dst, "w") as fh:
-        fh.write("\n".join(out) + "\n")
+    shutil.copy2(src, dst)
+    os.chmod(dst, 0o755)
+    manifest.add_file("/" + HOOK_REL)
     return dst
+
+
+def seed_boot_entries(kernel, manifest, run=subprocess.run):
+    hook = install_kernel_hook(manifest)
+    marker = P(BOOT_DEFAULT)
+    if not os.path.exists(marker):
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        open(marker, "w").close()
+        manifest.add_file("/" + BOOT_DEFAULT)
+    try:
+        os.remove(P("boot/loader/entries/" + LEGACY_ENTRY))
+    except OSError:
+        pass
+    # the hook only clones; migrate picks the default itself (the running
+    # kernel, known to boot — not the newest, which may never have booted)
+    env = dict(os.environ, KERNEL_INSTALL_BOOT_ROOT=P("boot"),
+               SCHEMA_INIT_CONF_ROOT=P("etc/schema-init"),
+               SCHEMA_INIT_BIN=INIT_PATH, SCHEMA_INIT_NO_DEFAULT="1")
+    for v in stock_entries():
+        subprocess.run(["sh", hook, "add", v, "/boot/vmlinuz-" + v], env=env, check=False)
+    entry = P("boot/loader/entries/schema-%s.conf" % kernel)
+    if not os.path.exists(entry):
+        raise RuntimeError("no schema boot entry was made for the running kernel %s" % kernel)
+    manifest.grub["saved_entry_was"] = _grubenv_get("saved_entry", run)
+    run(["grub2-editenv", "-", "set", "saved_entry=schema-" + kernel], check=False)
+    return entry
+
+
+def remove_boot_entries(saved_was=None, run=subprocess.run):
+    stock = stock_entries()
+    ents = P("boot/loader/entries")
+    for name in [LEGACY_ENTRY] + ["schema-%s.conf" % v for v in stock]:
+        try:
+            os.remove(os.path.join(ents, name))
+        except OSError:
+            pass
+    saved = _grubenv_get("saved_entry", run)
+    if not saved or not saved.startswith("schema-") or not stock:
+        return
+    target = stock.get(saved[len("schema-"):])
+    if not target and saved_was and os.path.exists(os.path.join(ents, saved_was + ".conf")):
+        target = saved_was
+    if not target:
+        target = stock[sorted(stock, key=_vkey)[-1]]
+    run(["grub2-editenv", "-", "set", "saved_entry=" + target], check=False)
+
+
+def _vkey(v):
+    return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", v)]
 
 
 FALLBACK_STASH = "var/lib/schema-init/boot-entries.orig"
@@ -309,7 +365,7 @@ FALLBACK_STASH = "var/lib/schema-init/boot-entries.orig"
 def hide_fallback_entries(manifest):
     moved = []
     for e in sorted(_glob.glob(P("boot/loader/entries/*.conf"))):
-        if os.path.basename(e) == SCHEMA_ENTRY_ID + ".conf":
+        if os.path.basename(e).startswith("schema-"):
             continue
         os.makedirs(P(FALLBACK_STASH), exist_ok=True)
         shutil.move(e, os.path.join(P(FALLBACK_STASH), os.path.basename(e)))
@@ -332,14 +388,6 @@ def take_snapshot(run=subprocess.run, dry_run=False):
                            "without it (--advanced-no-snapshot skips it)")
     print("snapshot: " + dst)
     return dst
-
-
-def remove_boot_entry():
-    dst = P("boot/loader/entries/%s.conf" % SCHEMA_ENTRY_ID)
-    try:
-        os.remove(dst)
-    except OSError:
-        pass
 
 
 GRUB_DEFAULT = "etc/default/grub"
@@ -508,7 +556,7 @@ def uninstall(run=subprocess.run):
         run(["btrfs", "subvolume", "delete", P(m.snapshot)], check=False)
     if m.packages:
         run(["dnf", "remove", "-y"] + m.packages, check=False)
-    remove_boot_entry()
+    remove_boot_entries(m.grub.get("saved_entry_was"), run=run)
     for rel in (Manifest.PATH, stage.STAGE_PATH):
         try:
             os.remove(P(rel))
@@ -1086,6 +1134,10 @@ def run_make_install(manifest, run=subprocess.run, dry_run=False, prebuilt=False
 
 def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     profile = build_profile(run=run)
+    if profile["kernel"] not in stock_entries():
+        raise RuntimeError("no boot entry for the running kernel %s in /boot/loader/entries "
+                           "— refusing to migrate a box whose boot menu can't be read"
+                           % profile["kernel"])
     snap = take_snapshot(run=run, dry_run=dry_run) if "no-snapshot" not in _adv() else None
     if not dry_run:
         write_profile(profile)
@@ -1110,7 +1162,7 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     # options from the canonical cmdline, so it must run before the schema
     # entry is written or it strips the init= override we just added.
     ensure_grub_menu_visible(m, run=run, dry_run=dry_run)
-    entry = add_boot_entry(profile["kernel"]) if not dry_run else None
+    entry = seed_boot_entries(profile["kernel"], m, run=run) if not dry_run else None
     if not dry_run and "no-fallback-entry" in _adv():
         hide_fallback_entries(m)
     if not dry_run:
@@ -1231,7 +1283,7 @@ def main(argv, run=subprocess.run):
     prebuilt = args.prebuilt or os.environ.get("MIGRATE_PREBUILT") == "1"
     do_deploy(run=run, dry_run=args.dry_run, prebuilt=prebuilt)
     print("dry-run complete — nothing changed" if args.dry_run
-          else "deploy complete — reboot and pick the '(schema-init)' entry")
+          else "deploy complete — reboot; schema-init is now the default boot entry")
     return 0
 
 
