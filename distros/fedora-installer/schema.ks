@@ -55,8 +55,8 @@ python3-gobject
 # --- into the session) can hit denials with no matching allow rules. Permissive
 # --- keeps the labels and logs AVCs without blocking. A schema-init policy
 # --- module is the path back to enforcing later. (Not the first-boot hang cause
-# --- — that was plymouth, see the bootloader step below — but the right default
-# --- for a non-systemd init all the same.)
+# --- — that was plymouth holding DRM master — but the right default for a
+# --- non-systemd init all the same.)
 selinux --permissive
 
 # --- Stage the ISO payload ACROSS the chroot boundary. The boot media (with the
