@@ -179,13 +179,17 @@ do_migrate() {
     echo "  post-deploy stage: $stg"
     [ "$stg" = "R1_PENDING" ] || die "expected R1_PENDING after deploy, got '$stg'"
 
-    local title; title=$(rootc "grep '^title ' /boot/loader/entries/schema-init.conf | sed 's/^title //'")
-    [ -n "$title" ] && echo "  schema BLS entry: '$title'" || die "no schema-init.conf BLS entry written"
+    local kv; kv=$(rootc "uname -r")
+    rootc "test -f /boot/loader/entries/schema-$kv.conf" && echo "  OK  schema BLS entry schema-$kv.conf" \
+        || die "no schema-$kv.conf BLS entry written"
+    rootc "test -f /etc/schema-init/boot-default" || die "boot-default marker not armed"
+    rootc "grub2-editenv list | grep -qx saved_entry=schema-$kv" && echo "  OK  saved_entry=schema-$kv" \
+        || die "saved_entry is not schema-$kv"
     log "menu-visibility check: is the fallback entry selectable by a human at the console?"
     rootc "grep -E 'GRUB_TIMEOUT=' /etc/default/grub || echo '(GRUB_TIMEOUT unset)'" | sed 's/^/      /'
 
-    log "setting one-time boot to the schema entry and rebooting"
-    rootc "grub2-reboot \"$title\" && systemctl reboot" || true
+    log "rebooting into the default (schema) entry"
+    rootc "systemctl reboot" || true
     sleep 5
     wait_ssh 300 || { panic_in_serial && die "schema boot PANICKED (see $SERLOG)"; die "schema VM never came back on ssh"; }
     do_verify

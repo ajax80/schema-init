@@ -112,6 +112,15 @@ def test_no_marker_leaves_default():
           open(rec).read() if os.path.isfile(rec) else '')
 
 
+def test_no_default_knob():
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    run('add', VER, boot, conf_root, bind, {'SCHEMA_INIT_NO_DEFAULT': '1'})
+    check('no-default knob: entry still cloned',
+          os.path.isfile(os.path.join(entries, f'schema-{VER}.conf')))
+    check('no-default knob: default NOT touched', not os.path.isfile(rec),
+          open(rec).read() if os.path.isfile(rec) else '')
+
+
 def test_no_extras():
     root, boot, entries, conf_root, rec, bind = new_tree(extras=False)
     run('add', VER, boot, conf_root, bind)
@@ -281,7 +290,7 @@ def test_remove_ignores_non_kernel_schema_entries():
 
 def main():
     print('schema-init kernel-install hook tests\n')
-    for fn in (test_add_full, test_no_marker_leaves_default, test_no_extras,
+    for fn in (test_add_full, test_no_marker_leaves_default, test_no_default_knob, test_no_extras,
                test_idempotent_add, test_init_path_override, test_no_double_init,
                test_auto_resolve_from_path, test_remove, test_pin_enforced_over_stock,
                test_pin_broken_falls_back_to_advance, test_marker_whitespace_and_conf_suffix_normalized,

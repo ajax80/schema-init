@@ -25,4 +25,13 @@ check("modern ESP stub is not a target", load(r)._grub_cfg_targets() == ["/boot/
 r = tree("menuentry legacy {}\n")
 check("full legacy ESP config is a target", load(r)._grub_cfg_targets() == ["/boot/grub2/grub.cfg", "/boot/efi/EFI/fedora/grub.cfg"])
 
+nop = lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})()
+for orig, label in (("GRUB_DEFAULT=0\nGRUB_TIMEOUT=1\n", "fixed GRUB_DEFAULT"), ("GRUB_TIMEOUT=1\n", "no GRUB_DEFAULT")):
+    r = tree("menuentry legacy {}\n"); os.makedirs(os.path.join(r, "etc/default"))
+    open(os.path.join(r, "etc/default/grub"), "w").write(orig)
+    m = load(r); m.ensure_grub_menu_visible(m.Manifest(), run=nop)
+    out = open(os.path.join(r, "etc/default/grub")).read().splitlines()
+    check(label + " -> GRUB_DEFAULT=saved, once", out.count("GRUB_DEFAULT=saved") == 1 and "GRUB_DEFAULT=0" not in out)
+    check(label + " original backed up", open(os.path.join(r, m.GRUB_BACKUP)).read() == orig)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

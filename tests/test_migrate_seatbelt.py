@@ -68,7 +68,7 @@ def _fedora_kde_root():
     open(os.path.join(root, "usr/lib/systemd/systemd-udevd"), "w").close()  # so udev-trigger is generated
     open(os.path.join(root, "etc/fstab"), "w").write("UUID=aaa / ext4 defaults 0 1\n")
     open(os.path.join(root, "etc/passwd"), "w").write("jandoe:x:1000:1000::/home/jandoe:/bin/bash\n")
-    open(os.path.join(root, "boot/loader/entries/f.conf"), "w").write(
+    open(os.path.join(root, "boot/loader/entries/f-6.10.0.conf"), "w").write(
         "title Fedora\nversion 6.10.0\noptions root=UUID=aaa ro\n")
     return root
 
