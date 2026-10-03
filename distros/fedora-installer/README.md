@@ -112,7 +112,7 @@ Only touch the **udev flip wizard** after step 1 is solid.
 - **Two entries per kernel in the boot menu** — a stock `Fedora Linux (...)` entry
   (boots systemd, the fallback) and a `... (schema-init)` entry (the saved default).
   This is intentional: the stock entry is a novice's escape hatch if schema ever fails
-  to boot. The `kernel-install` plugin (`/etc/kernel/install.d/99-schema-init.install`)
+  to boot. The `kernel-install` plugin (`/usr/lib/kernel/install.d/99-schema-init.install`, shipped in the schema-init package)
   regenerates the schema entry on every `dnf` kernel update and repoints the default at
   it, gated on the `/etc/schema-init/boot-default` marker; per-box extra kernel args go
   in `/etc/schema-init/kernel-cmdline.d/*.conf` (the installer seeds `enforcing=0` there).

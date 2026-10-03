@@ -79,6 +79,7 @@ install -Dm0755 distros/fedora-installer/rail/scripts/schema-sysprep.sh %{buildr
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sshd-start.sh %{buildroot}/usr/local/bin/schema-sshd-start.sh
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-zram-start.sh %{buildroot}/usr/local/bin/schema-zram-start.sh
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
+install -Dm0755 distros/shared/kernel-install/99-schema-init.install %{buildroot}%{_prefix}/lib/kernel/install.d/99-schema-init.install
 install -Dm0755 distros/fedora-kde/scripts/schema-plasma-autologin.sh %{buildroot}/usr/local/bin/schema-plasma-autologin.sh
 install -Dm0755 distros/fedora-kde/scripts/plasma-session-start.sh %{buildroot}/usr/local/bin/plasma-session-start.sh
 install -Dm0755 distros/fedora-kde/scripts/plasmashell-shim %{buildroot}/usr/local/bin/plasmashell-shim
@@ -241,6 +242,14 @@ fi
 if [ $1 -ge 2 ]; then
     touch /run/schema-init.reexec-pending 2>/dev/null || :
 fi
+# Installers before this package copied the kernel-install hook into /etc,
+# where it shadows the packaged one and never gets fixes. Retire it; without
+# the .install suffix kernel-install ignores it.
+if [ -f %{_sysconfdir}/kernel/install.d/99-schema-init.install ]; then
+    mv -f %{_sysconfdir}/kernel/install.d/99-schema-init.install \
+          %{_sysconfdir}/kernel/install.d/99-schema-init.install.retired || :
+    echo "schema-init: kernel-install hook now ships in %{_prefix}/lib/kernel/install.d; old /etc copy kept as 99-schema-init.install.retired"
+fi
 
 %posttrans
 # PID 1 swaps itself onto the upgraded binary in place; a refusal (memory
@@ -281,6 +290,7 @@ fi
 %dir %{_libexecdir}/schema-init
 %{_libexecdir}/schema-init/schema-sysctl-apply
 %{_sysconfdir}/grub.d/09_schema_fallback
+%{_prefix}/lib/kernel/install.d/99-schema-init.install
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
 %config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
@@ -317,6 +327,9 @@ fi
   migrated boxes), then core_pattern is taken back for schema-coredump
 - The installer rail's sysprep, sshd and zram start scripts ship in the
   package, so installed boxes get fixes to them on update
+- The kernel-install hook ships in the package (/usr/lib/kernel/install.d),
+  so every box gets a schema-init boot entry for each new kernel and gets
+  fixes to the hook on update; the old /etc copy is retired
 - New -session subpackage ships the installer's Plasma autologin session
   pipeline; nothing requires it, so hand-built sessions are left alone
 

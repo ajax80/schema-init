@@ -82,7 +82,7 @@ cp -a "$HERE/rail/services/." "$PAYLOAD/services/"
 
 # kernel-install plugin: regenerates a schema-init BLS entry on every dnf kernel
 # update (stock systemd entries stay pristine as a boot fallback). %post installs
-# it into /etc/kernel/install.d and seeds the first entry.
+# it into /usr/lib/kernel/install.d and seeds the first entry.
 install -d "$PAYLOAD/kernel-install"
 install -m0755 "$REPO/distros/shared/kernel-install/99-schema-init.install" \
     "$PAYLOAD/kernel-install/99-schema-init.install"
