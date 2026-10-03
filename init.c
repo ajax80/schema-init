@@ -2992,9 +2992,13 @@ int main(int argc, char **argv) {
     int reexec_fd = -1, reexec_oldexe = -1, reexec_check_fd = -1;
 
     /* An initrd's systemd runs with umask 0 and switch-root hands that to us;
-     * every service would inherit it and create world-writable files. */
-    if (getpid() == 1)
+     * every service would inherit it and create world-writable files.
+     * The kernel hands PID 1 no PATH either; sh falls back to a built-in
+     * one, but Go and execvp-less code can't find helpers without it. */
+    if (getpid() == 1) {
         umask(022);
+        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 0);
+    }
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
