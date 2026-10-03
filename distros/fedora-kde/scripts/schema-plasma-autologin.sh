@@ -36,15 +36,19 @@ chown "$SCHEMA_UID:$SCHEMA_UID" "/run/user/$SCHEMA_UID"
 chmod 700 "/run/user/$SCHEMA_UID"
 
 # Without drm in the initramfs the real GPU driver loads after switch-root, and
-# on a fast box the session can get here first and start kwin on simpledrm.
-# Wait for a DRM card bound to any other driver; carry on after 30s so a
-# machine with only a firmware framebuffer still gets its desktop.
+# on a fast box the session can get here first and start kwin on the firmware
+# framebuffer (simpledrm binds as "simple-framebuffer"). Wait for a DRM card
+# bound to a real driver; carry on after 30s so a machine with only a firmware
+# framebuffer still gets its desktop.
 ( set +x
   for _ in $(seq 1 300); do
       for c in /sys/class/drm/card*; do
           case "${c##*/}" in *-*) continue ;; esac
           d=$(readlink "$c/device/driver" 2>/dev/null) || continue
-          [ "${d##*/}" != simpledrm ] && { echo "gpu_ready ${c##*/} ${d##*/}"; exit 0; }
+          case "${d##*/}" in
+              simple-framebuffer|efi-framebuffer|vesa-framebuffer|simpledrm|efidrm|vesadrm) ;;
+              *) echo "gpu_ready ${c##*/} ${d##*/}"; exit 0 ;;
+          esac
       done
       sleep 0.1
   done
