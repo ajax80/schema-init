@@ -89,6 +89,13 @@ def main():
             calls, st = run(phase, yad=[code])
             check('state unchanged', st == phase, st)
             check('autostart kept, nothing resolved', run.autostart_kept and 'resolve' not in calls, str(calls))
+    print("-- dbus armed, 'Restarting' notice killed: still reboots --")
+    calls, st = run('dbus_offer', yad=[0, 0, 143])
+    check('armed then rebooted', 'dbus-arm' in calls and calls[-1] == 'reboot', str(calls))
+    print("-- dbus arm fails, error notice killed: still rolls back --")
+    calls, st = run('dbus_offer', yad=[0, 0, 143], rc={'dbus-arm': 1})
+    check('rollback ran', 'dbus-rollback' in calls, str(calls))
+
     print("-- welcome: window closed (252) is a choice --")
     calls, st = run('welcome', yad=[252])
     check('state skipped', st == 'skipped', st)
