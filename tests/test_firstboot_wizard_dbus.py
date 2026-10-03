@@ -78,10 +78,20 @@ def main():
     check('autostart kept for the confirm login', 'resolve' not in calls and run.autostart_kept, str(calls))
 
     print("-- dbus offer skipped --")
-    calls, st = run('dbus_offer', yad=[1])
+    calls, st = run('dbus_offer', yad=[3])
     check('no dbus-arm', 'dbus-arm' not in calls, str(calls))
     check('state done', st == 'done', st)
     check('autostart removed', 'resolve' in calls and not run.autostart_kept, str(calls))
+
+    for phase in ('welcome', 'dbus_offer'):
+        for code, why in ((143, 'killed by shutdown/logout'), (1, "couldn't open")):
+            print(f"-- {phase}: yad {why} (rc {code}) is not Skip --")
+            calls, st = run(phase, yad=[code])
+            check('state unchanged', st == phase, st)
+            check('autostart kept, nothing resolved', run.autostart_kept and 'resolve' not in calls, str(calls))
+    print("-- welcome: window closed (252) is a choice --")
+    calls, st = run('welcome', yad=[252])
+    check('state skipped', st == 'skipped', st)
 
     print("-- dbus preflight fails --")
     calls, st = run('dbus_offer', yad=[0, 0], rc={'dbus-check': 1}, out={'dbus-check': 'broker did not answer'})
