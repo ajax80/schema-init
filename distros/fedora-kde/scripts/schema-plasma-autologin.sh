@@ -35,6 +35,28 @@ mkdir -p "/run/user/$SCHEMA_UID"
 chown "$SCHEMA_UID:$SCHEMA_UID" "/run/user/$SCHEMA_UID"
 chmod 700 "/run/user/$SCHEMA_UID"
 
+# Without drm in the initramfs the real GPU driver loads after switch-root, and
+# on a fast box the session can get here first and start kwin on the firmware
+# framebuffer (simpledrm binds as "simple-framebuffer"). Wait until a card has a
+# real driver and no firmware card is left: on a hybrid laptop the discrete GPU
+# can bind before the one that owns the boot display. Carry on after 30s so a
+# machine with only a firmware framebuffer still gets its desktop.
+( set +x
+  for _ in $(seq 1 300); do
+      real="" fw=""
+      for c in /sys/class/drm/card*; do
+          case "${c##*/}" in *-*) continue ;; esac
+          d=$(readlink "$c/device/driver" 2>/dev/null) || continue
+          case "${d##*/}" in
+              simple-framebuffer|efi-framebuffer|vesa-framebuffer|simpledrm|efidrm|vesadrm) fw=1 ;;
+              *) real="${c##*/} ${d##*/}" ;;
+          esac
+      done
+      [ -n "$real" ] && [ -z "$fw" ] && { echo "gpu_ready $real"; exit 0; }
+      sleep 0.1
+  done
+  echo "gpu_wait_timeout" )
+
 # input devices coldplugged so libinput sees the keyboard/mouse
 udevadm trigger --subsystem-match=input --action=add 2>/dev/null || true
 udevadm settle --timeout=10 2>/dev/null || true

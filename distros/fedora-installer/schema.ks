@@ -55,8 +55,8 @@ python3-gobject
 # --- into the session) can hit denials with no matching allow rules. Permissive
 # --- keeps the labels and logs AVCs without blocking. A schema-init policy
 # --- module is the path back to enforcing later. (Not the first-boot hang cause
-# --- — that was plymouth, see the bootloader step below — but the right default
-# --- for a non-systemd init all the same.)
+# --- — that was plymouth holding DRM master — but the right default for a
+# --- non-systemd init all the same.)
 selinux --permissive
 
 # --- Stage the ISO payload ACROSS the chroot boundary. The boot media (with the
@@ -157,12 +157,13 @@ install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.
 #    - enforcing=0: kernel-level belt for `selinux --permissive`; lives in
 #      kernel-cmdline.d so it lands on the schema entry only. The stock fallback
 #      boots permissive via /etc/selinux/config, so it needs no kernel arg.
-#    - rhgb quiet is inherited from the stock entry: the pretty plymouth splash
-#      stays. The first-boot hang it used to cause (plymouthd from the initramfs
-#      holds the DRM master and, with no systemd plymouth-quit.service, never
-#      releases it, so kwin can't take the display) is handled in
-#      schema-plasma-autologin.sh, which runs `plymouth quit` right before the
-#      compositor opens the card.
+#    - No boot splash: plymouth + drm are omitted from the initramfs. With them
+#      in, dracut-initqueue waits for the udev queue to drain, which includes
+#      the GPU driver probe the splash needs (~3.5s on i915 laptops) before root
+#      is mounted, and plymouth-switch-root adds ~1s more. Measured on Eli and
+#      DBox: kernel stage 11.1->7.0s and 9.1->6.5s. The GPU driver loads after
+#      switch-root instead, off the critical chain. Applies to the stock
+#      fallback too (same initramfs); systemd boots fine without a splash.
 
 #    Durability seed: a kernel update (dnf) builds the new STOCK BLS entry from
 #    /etc/kernel/cmdline when it exists, else from the running cmdline — which on
@@ -182,6 +183,10 @@ if [ -n "$KARGS" ]; then
     else                    printf '%s\n' "$KARGS"                > /etc/kernel/cmdline
     fi
 fi
+
+install -d /etc/dracut.conf.d
+printf 'omit_dracutmodules+=" plymouth drm "\n' > /etc/dracut.conf.d/90-schema-no-splash.conf
+dracut -f --regenerate-all || echo "WARN: initramfs regenerate failed; splash stays in until next kernel update"
 
 #    Install the kernel-install plugin + its config, then seed the schema entry
 #    for the kernel(s) already on disk (the plugin only fires on FUTURE installs).
