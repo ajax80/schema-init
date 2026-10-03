@@ -8,7 +8,7 @@ critical=0
 
 stable_secs=2
 ready_path=/run/NetworkManager/resolv.conf
-no_new_privs=0
-private_tmp=0
-protect_system=0
+no_new_privs=1
+private_tmp=1
+protect_system=1
 protect_home=0
