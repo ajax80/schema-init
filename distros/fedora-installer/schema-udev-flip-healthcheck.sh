@@ -101,6 +101,9 @@ done
 ls /dev/disk/by-uuid/ >/dev/null 2>&1 || rollback "no /dev/disk/by-uuid entries"
 # at least one input event node, or there is no keyboard/mouse
 ls /dev/input/event* >/dev/null 2>&1 || rollback "no /dev/input/event* nodes"
+# re-poll to the same deadline: the card that passed the wait loop can be the
+# firmware card0, swapped for a not-yet-grouped card1 just before this verdict
+until dri_ok || [ "$(up)" -ge "$deadline" ]; do sleep 1; done
 dri_ok || rollback "no group-accessible /dev/dri card node"
 
 # --- class 2: did the desktop ever confirm? ---
