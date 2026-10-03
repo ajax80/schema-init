@@ -39,6 +39,10 @@ yourself. Read the "Replacing a running init" and "GRUB setup" sections of the
 README before you do — a broken PID 1 is a machine that will not boot. Keep a
 working systemd boot entry.
 
+A kernel-install hook keeps a schema-init boot entry for every installed kernel,
+but only on a box that opted in with /etc/schema-init/boot-default (the
+installer writes it). Without that file the hook leaves the boot menu alone.
+
 Reference .svc and .grp files are installed to %{_datadir}/%{name}/services as
 examples. They are deliberately NOT installed into %{_sysconfdir}/%{name},
 which is created empty, so that installing or upgrading this package can never
@@ -243,15 +247,42 @@ if [ $1 -ge 2 ]; then
     touch /run/schema-init.reexec-pending 2>/dev/null || :
 fi
 # Installers before this package copied the kernel-install hook into /etc,
-# where it shadows the packaged one and never gets fixes. Retire it; without
-# the .install suffix kernel-install ignores it.
-if [ -f %{_sysconfdir}/kernel/install.d/99-schema-init.install ]; then
+# where it shadows the packaged one and never gets fixes. Retire it once;
+# without the .install suffix kernel-install ignores it. An /etc copy put back
+# after that is an admin override and is left alone.
+if [ -f %{_sysconfdir}/kernel/install.d/99-schema-init.install ] &&
+   [ ! -e %{_sharedstatedir}/schema-init/kernel-hook-etc-retired ]; then
     mv -f %{_sysconfdir}/kernel/install.d/99-schema-init.install \
           %{_sysconfdir}/kernel/install.d/99-schema-init.install.retired || :
     echo "schema-init: kernel-install hook now ships in %{_prefix}/lib/kernel/install.d; old /etc copy kept as 99-schema-init.install.retired"
 fi
+mkdir -p %{_sharedstatedir}/schema-init && touch %{_sharedstatedir}/schema-init/kernel-hook-etc-retired || :
+
+%preun
+# Last removal on an opted-in box: drop the per-kernel schema entries (their
+# init= would point at a deleted binary) and move a default that pointed at one
+# back to its stock twin.
+if [ $1 -eq 0 ] && [ -f %{_sysconfdir}/schema-init/boot-default ]; then
+    tok=$(cat %{_sysconfdir}/machine-id 2>/dev/null)
+    saved=$(grub2-editenv list 2>/dev/null | sed -n 's/^saved_entry=//p')
+    for e in /boot/loader/entries/schema-*.conf; do
+        [ -f "$e" ] || continue
+        v=${e##*/schema-}; v=${v%%.conf}
+        [ -f "/boot/loader/entries/$tok-$v.conf" ] || continue
+        rm -f "$e"
+        [ "$saved" = "schema-$v" ] && grub2-set-default "$tok-$v" || :
+    done
+fi
 
 %posttrans
+# Kernels installed before the hook shipped never got a schema entry; on an
+# opted-in box, give each one its entry now (the hook is idempotent).
+if [ -f %{_sysconfdir}/schema-init/boot-default ]; then
+    for kv in $(ls /lib/modules 2>/dev/null | sort -V); do
+        [ -f "/lib/modules/$kv/vmlinuz" ] || continue
+        %{_prefix}/lib/kernel/install.d/99-schema-init.install add "$kv" "/boot/vmlinuz-$kv" || :
+    done
+fi
 # PID 1 swaps itself onto the upgraded binary in place; a refusal (memory
 # pressure, a binary that fails its dry run, a PID 1 too old to know the
 # verb) leaves the running one untouched and never fails the transaction.
@@ -327,9 +358,12 @@ fi
   migrated boxes), then core_pattern is taken back for schema-coredump
 - The installer rail's sysprep, sshd and zram start scripts ship in the
   package, so installed boxes get fixes to them on update
-- The kernel-install hook ships in the package (/usr/lib/kernel/install.d),
-  so every box gets a schema-init boot entry for each new kernel and gets
-  fixes to the hook on update; the old /etc copy is retired
+- The kernel-install hook ships in the package (/usr/lib/kernel/install.d)
+  and acts only on boxes with /etc/schema-init/boot-default; installing the
+  package backfills entries for kernels already on disk, removing it drops
+  them, and the installer's old /etc copy is retired once
+- The hook's default fallback after a kernel removal ignores schema-init.conf
+  and schema-good-* entries, which sort above every kernel version
 - New -session subpackage ships the installer's Plasma autologin session
   pipeline; nothing requires it, so hand-built sessions are left alone
 

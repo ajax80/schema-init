@@ -106,8 +106,8 @@ def test_add_full():
 def test_no_marker_leaves_default():
     root, boot, entries, conf_root, rec, bind = new_tree(marker=False)
     run('add', VER, boot, conf_root, bind)
-    check('no-marker: schema entry still created',
-          os.path.isfile(os.path.join(entries, f'schema-{VER}.conf')))
+    check('no-marker: no schema entry (box has not opted in)',
+          not os.path.isfile(os.path.join(entries, f'schema-{VER}.conf')))
     check('no-marker: default NOT touched', not os.path.isfile(rec),
           open(rec).read() if os.path.isfile(rec) else '')
 
@@ -259,6 +259,26 @@ def test_add_leaves_orphan_schema_entry():
     check('orphan: untouched', os.path.isfile(orphan) and 'orphan' in open(orphan).read())
 
 
+def test_remove_ignores_non_kernel_schema_entries():
+    # schema-init.conf (migrate) and schema-good-* (snapshot) sort above kernel
+    # versions; removing a kernel must fall back to a real kernel entry
+    root, boot, entries, conf_root, rec, bind = new_tree()
+    old = '7.0.1-200.fc44.x86_64'
+    with open(os.path.join(entries, f'{TOKEN}-{old}.conf'), 'w') as f:
+        f.write(f'title Fedora ({old})\nversion {old}\noptions ro\n')
+    run('add', old, boot, conf_root, bind)
+    run('add', VER, boot, conf_root, bind)
+    for n in ('schema-init.conf', 'schema-good-fallback-20260915.conf'):
+        with open(os.path.join(entries, n), 'w') as f:
+            f.write('title pinned (schema-init)\noptions ro init=/usr/bin/schema-init\n')
+    os.remove(os.path.join(entries, f'{TOKEN}-{VER}.conf'))
+    open(rec, 'w').close()
+    run('remove', VER, boot, conf_root, bind)
+    got = open(rec).read().strip().splitlines()
+    check('remove: default falls back to the surviving kernel entry',
+          got[-1:] == [f'saved_entry=schema-{old}'], repr(got))
+
+
 def main():
     print('schema-init kernel-install hook tests\n')
     for fn in (test_add_full, test_no_marker_leaves_default, test_no_extras,
@@ -266,7 +286,8 @@ def main():
                test_auto_resolve_from_path, test_remove, test_pin_enforced_over_stock,
                test_pin_broken_falls_back_to_advance, test_marker_whitespace_and_conf_suffix_normalized,
                test_esp_boot_root_falls_back_to_grub_entries,
-               test_add_refreshes_older_schema_entries, test_add_leaves_orphan_schema_entry):
+               test_add_refreshes_older_schema_entries, test_add_leaves_orphan_schema_entry,
+               test_remove_ignores_non_kernel_schema_entries):
         print(fn.__name__)
         fn()
         print()
