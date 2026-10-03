@@ -35,6 +35,20 @@ phase=$(cat "$STATE")
 TITLE="schema — finishing setup"
 ICON=drive-harddisk
 
+# Only a real choice moves the wizard on. A choice dialog that yad couldn't
+# open (rc 1) or that died under it (128+signal: shutdown or logout with it
+# still up) is not "Skip" -- that used to record skipped and delete the
+# autostart, so a novice who shut down with the wizard open never saw it again.
+# Leave the state alone and come back at the next login. 252 is the user
+# closing the window: a choice. Notices stay plain yad/info so the cleanup,
+# rollback or reboot that follows them still runs.
+ask() {
+    yad "$@"
+    local rc=$?
+    if [ "$rc" -eq 1 ] || { [ "$rc" -ge 128 ] && [ "$rc" -ne 252 ]; }; then exit 0; fi
+    return "$rc"
+}
+
 info() { yad --title="$TITLE" --window-icon="$ICON" --width=520 --borders=18 \
              --image="$1" --text="$2" --button="$3":0 "${@:4}"; }
 
@@ -76,17 +90,17 @@ humanize_reason() {
 case "$phase" in
 
 welcome)
-    info dialog-information \
+    ask --title="$TITLE" --window-icon="$ICON" --width=520 --borders=18 --image=dialog-information --button="Continue":0 --text=\
 "<b>Your computer is now running schema.</b>\n\nschema-init has replaced the old startup system. Everything you already \
 set up — your login, your desktop — works exactly the same.\n\nThere is one <i>optional</i> extra step. You can skip it and \
-your machine is completely finished." "Continue" \
+your machine is completely finished." \
         || { echo skipped > "$STATE"; finish_clean; exit 0; }
 
-    yad --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=applications-system \
+    ask --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=applications-system \
         --text="<b>Optional: use schema's own device manager</b>\n\nThis replaces the last piece of the old system. \
 It is safe — if anything looks wrong, your computer <b>automatically undoes it on the next restart</b> and goes back to \
 exactly how it is now.\n\nWe'll check this machine first and show you what we find." \
-        --button="Skip — I'm done":1 --button="Check my machine":0
+        --button="Skip — I'm done":3 --button="Check my machine":0
     [ $? -eq 0 ] || { echo skipped > "$STATE"; finish_clean; exit 0; }
 
     # always capture the full report, then run the PERMISSIVE eligibility check.
@@ -114,12 +128,12 @@ The full details are saved to:\n<tt>${REPORT_USER}</tt>\n\nYou can show this to 
     fi
 
     # ELIGIBLE — summarize, then offer to proceed.
-    yad --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=object-select \
+    ask --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=object-select \
         --text="<b>Good — this machine is ready.</b>\n\nWe checked <b>${scanned}</b> devices. \
 Any small differences we found (<b>${harmless}</b>) are harmless.\n\nThe switch takes one restart. When your computer comes back \
 it confirms everything looks good, and if it doesn't it <b>puts itself back automatically</b> — you don't have to do anything.\n\n\
 (A full report was saved to <tt>${REPORT_USER}</tt>.)" \
-        --button="Not now":1 --button="Switch and restart":0
+        --button="Not now":3 --button="Switch and restart":0
     if [ $? -ne 0 ]; then echo welcome > "$STATE"; stop_autostart; exit 0; fi
 
     if ! H arm; then
@@ -176,11 +190,11 @@ Everything will work normally — one more restart finishes tidying up.\n\n(Deta
     ;;
 
 dbus_offer)
-    yad --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=applications-system \
+    ask --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=applications-system \
         --text="<b>The device manager switch worked.</b>\n\nThere is one last <i>optional</i> step: use schema's own \
 <b>message bus</b> — the channel your desktop and system services talk over. Like before, if anything looks wrong your \
 computer <b>automatically undoes it on the next restart</b>.\n\nYou can skip it and your machine is completely finished." \
-        --button="Skip — I'm done":1 --button="Check my machine":0
+        --button="Skip — I'm done":3 --button="Check my machine":0
     [ $? -eq 0 ] || { echo done > "$STATE"; finish_clean; exit 0; }
 
     if ! why=$(H dbus-check 2>&1); then
@@ -192,10 +206,10 @@ your computer stays exactly as it is.\n\n<tt>${why}</tt>" \
         exit 0
     fi
 
-    yad --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=object-select \
+    ask --title="$TITLE" --window-icon="$ICON" --width=560 --borders=18 --image=object-select \
         --text="<b>Good — this machine is ready.</b>\n\nThe switch takes one restart. When your computer comes back \
 it confirms everything looks good, and if it doesn't it <b>puts itself back automatically</b>." \
-        --button="Not now":1 --button="Switch and restart":0
+        --button="Not now":3 --button="Switch and restart":0
     if [ $? -ne 0 ]; then stop_autostart; exit 0; fi
 
     if ! H dbus-arm; then

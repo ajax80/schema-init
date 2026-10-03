@@ -65,11 +65,25 @@ rollback() {
 # off until chrony steps it. Both .svc files set start_timeout_sec=300.
 shown=""
 up() { cut -d. -f1 /proc/uptime; }
+# the compositor opens a DRM card node; under schema-init there is no logind
+# uaccess ACL, so the node must carry the 'video' (or 'render') group or the
+# desktop can never take the display. A root:root 0600 card = black screen.
+# Polled, not checked once: the firmware framebuffer's card0 is replaced by the
+# real driver's card1 after switch-root, and the kernel creates the new node
+# root:root a moment before udev sets its group -- a single look in that window
+# rolled back a healthy flip (virtio-gpu VM, 2026-10-03).
+dri_ok() {
+    for card in /dev/dri/card[0-9]*; do
+        [ -e "$card" ] || continue
+        case "$(stat -c '%G' "$card" 2>/dev/null)" in video|render) return 0 ;; esac
+    done
+    return 1
+}
 deadline=$(( $(up) + 120 ))
 while [ "$(up)" -lt "$deadline" ]; do
     if pgrep -x schema-udev >/dev/null 2>&1 \
        && ls /dev/input/event* >/dev/null 2>&1 \
-       && ls /dev/dri/card[0-9]* >/dev/null 2>&1 \
+       && dri_ok \
        && ls /dev/disk/by-uuid/* >/dev/null 2>&1; then
         break
     fi
@@ -87,16 +101,10 @@ done
 ls /dev/disk/by-uuid/ >/dev/null 2>&1 || rollback "no /dev/disk/by-uuid entries"
 # at least one input event node, or there is no keyboard/mouse
 ls /dev/input/event* >/dev/null 2>&1 || rollback "no /dev/input/event* nodes"
-# the compositor opens a DRM card node; under schema-init there is no logind
-# uaccess ACL, so the node must carry the 'video' (or 'render') group or the
-# desktop can never take the display. A root:root 0600 card = black screen.
-dri_ok=0
-for card in /dev/dri/card[0-9]*; do
-    [ -e "$card" ] || continue
-    grp=$(stat -c '%G' "$card" 2>/dev/null)
-    case "$grp" in video|render) dri_ok=1 ;; esac
-done
-[ "$dri_ok" = 1 ] || rollback "no group-accessible /dev/dri card node"
+# re-poll to the same deadline: the card that passed the wait loop can be the
+# firmware card0, swapped for a not-yet-grouped card1 just before this verdict
+until dri_ok || [ "$(up)" -ge "$deadline" ]; do sleep 1; done
+dri_ok || rollback "no group-accessible /dev/dri card node"
 
 # --- class 2: did the desktop ever confirm? ---
 # healthy /dev this boot. Bump the armed-boot counter. If we have already been

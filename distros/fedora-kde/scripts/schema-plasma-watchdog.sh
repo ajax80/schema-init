@@ -82,32 +82,9 @@ while sleep 5; do
     # This is a NEW failure mode past the lock/env/headless ones. (Claire)
     kbuildsycoca6 --noincremental >/dev/null 2>&1
     setsid nohup plasmashell >/dev/null 2>&1 &
-    sleep 3
-    # Post-launch render verify. The pre-spawn noincremental is NECESSARY but not
-    # SUFFICIENT: on an early-boot respawn the dbus cohort (kded6 rebuilding
-    # plasma-applications.menu, ksmserver, kwin) is still starting and rebuilds
-    # sycoca itself moments after the line above -> clobbers the fresh cache right
-    # as plasmashell launches -> the new shell comes up alive+connected+correct-env
-    # but wedges on containment and NEVER spawns the desktop kioworker (desktop.so)
-    # -> black desktop. Proven live 2026-08-18: restart #1 at 07:49:07 (5s post-boot)
-    # wedged black; an identical respawn at 07:52:44 (system quiet) rendered. Same
-    # code, same env -- only timing differed. The render-proof is the desktop.so
-    # kioworker, NOT process health. Poll for it; if absent, this is the wedge --
-    # kill -9 and let the loop respawn against a now-quieter system (re-running
-    # noincremental). Cap retries so a genuinely broken shell can't spin forever.
-    # (Claire 2026-08-18)
-    psh=$(pgrep -x plasmashell | head -1)
-    if [ -n "$psh" ]; then
-        rendered=""
-        for _ in $(seq 1 15); do
-            if pgrep -f "kioworker.*desktop\.so" >/dev/null 2>&1; then rendered=1; break; fi
-            pgrep -x plasmashell >/dev/null 2>&1 || break   # crashed; let loop handle it
-            sleep 1
-        done
-        if [ -z "$rendered" ] && pgrep -x plasmashell >/dev/null 2>&1; then
-            echo "plasmashell $psh alive but no desktop kioworker after 15s (black wedge), kill -9 for re-respawn $(date)" >>"$WD_LOG"
-            kill -9 "$psh"
-            rm -f "${HOME}/.cache/ksycoca6"*.lock
-        fi
-    fi
+    # No post-launch "render verify": it waited for a desktop.so kioworker, but
+    # current KIO runs that worker in-process, so the check never passed and
+    # kill -9'd every healthy respawn (3x, until the crash-loop cap). On a first
+    # login that interrupted Plasma writing its default layout -> a panel with
+    # no task manager, tray or clock (fresh ISO install, 2026-10-03).
 done
