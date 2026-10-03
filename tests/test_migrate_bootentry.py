@@ -59,10 +59,18 @@ check("remove deletes every schema entry",
 check("remove keeps stock entries", sorted(os.listdir(ENTRIES)) == ["tok-0-rescue.conf", "tok-6.10.0.conf", "tok-6.11.2.conf"])
 check("remove repoints default at the stock twin", env["saved_entry"] == "tok-6.10.0")
 
+os.remove(os.path.join(root, sm.BOOT_DEFAULT)); os.remove(os.path.join(root, sm.HOOK_REL))
+saved_before, ents_before = env["saved_entry"], sorted(os.listdir(ENTRIES))
+fm = sm.Manifest()
 try:
-    sm.seed_boot_entries("9.9.9", sm.Manifest(), run=fake_run); ok = False
+    sm.seed_boot_entries("9.9.9", fm, run=fake_run); ok = False
 except RuntimeError:
     ok = True
 check("refuses when the running kernel got no entry", ok)
+check("failed seed arms no boot-default marker", not os.path.exists(os.path.join(root, sm.BOOT_DEFAULT)))
+check("failed seed leaves no schema entries", sorted(os.listdir(ENTRIES)) == ents_before)
+check("failed seed removes the hook it installed",
+      not os.path.exists(os.path.join(root, sm.HOOK_REL)) and "/" + sm.HOOK_REL not in fm.files)
+check("failed seed leaves the default alone", env["saved_entry"] == saved_before)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

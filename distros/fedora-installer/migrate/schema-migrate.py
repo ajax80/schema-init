@@ -311,9 +311,12 @@ def install_kernel_hook(manifest):
 
 
 def seed_boot_entries(kernel, manifest, run=subprocess.run):
+    had_hook = os.path.exists(P(HOOK_REL))
     hook = install_kernel_hook(manifest)
+    before = set(os.listdir(P("boot/loader/entries")))
     marker = P(BOOT_DEFAULT)
-    if not os.path.exists(marker):
+    had_marker = os.path.exists(marker)
+    if not had_marker:
         os.makedirs(os.path.dirname(marker), exist_ok=True)
         open(marker, "w").close()
         manifest.add_file("/" + BOOT_DEFAULT)
@@ -330,6 +333,14 @@ def seed_boot_entries(kernel, manifest, run=subprocess.run):
         subprocess.run(["sh", hook, "add", v, "/boot/vmlinuz-" + v], env=env, check=False)
     entry = P("boot/loader/entries/schema-%s.conf" % kernel)
     if not os.path.exists(entry):
+        # no manifest gets saved on this path: leave nothing behind, and above
+        # all no marker, or the next kernel update flips the default anyway
+        for name in set(os.listdir(P("boot/loader/entries"))) - before:
+            os.remove(P("boot/loader/entries/" + name))
+        for made, path in ((had_hook, HOOK_REL), (had_marker, BOOT_DEFAULT)):
+            if not made:
+                os.remove(P(path))
+                manifest.files = [f for f in manifest.files if f != "/" + path]
         raise RuntimeError("no schema boot entry was made for the running kernel %s" % kernel)
     manifest.grub["saved_entry_was"] = _grubenv_get("saved_entry", run)
     run(["grub2-editenv", "-", "set", "saved_entry=schema-" + kernel], check=False)
@@ -441,11 +452,17 @@ def ensure_grub_menu_visible(manifest, run=subprocess.run, dry_run=False):
                 ln, _ = "GRUB_TIMEOUT=5", seen.add(key)
             elif key == "GRUB_TIMEOUT_STYLE":
                 ln, _ = "GRUB_TIMEOUT_STYLE=menu", seen.add(key)
+            elif key == "GRUB_DEFAULT":
+                # saved_entry is how schema becomes the default; a fixed
+                # GRUB_DEFAULT would silently keep booting the old init
+                ln, _ = "GRUB_DEFAULT=saved", seen.add(key)
             lines.append(ln)
         if "GRUB_TIMEOUT" not in seen:
             lines.append("GRUB_TIMEOUT=5")
         if "GRUB_TIMEOUT_STYLE" not in seen:
             lines.append("GRUB_TIMEOUT_STYLE=menu")
+        if "GRUB_DEFAULT" not in seen:
+            lines.append("GRUB_DEFAULT=saved")
         open(src, "w").write("\n".join(lines) + "\n")
         changed["default_backup"] = "/" + GRUB_BACKUP
     # menu_auto_hide hides the GRUB menu on a single-OS box after a clean boot;
