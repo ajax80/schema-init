@@ -220,8 +220,26 @@ static int modprobe_one(const char *mod) {
     return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
+static int cpu_is_amd(void) {
+    FILE *f = fopen("/proc/cpuinfo", "r");
+    if (!f) return 0;
+    char line[256];
+    int amd = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "vendor_id", 9) == 0) {
+            amd = strstr(line, "AuthenticAMD") || strstr(line, "HygonGenuine");
+            break;
+        }
+    }
+    fclose(f);
+    return amd;
+}
+
+/* sp5100_tco only drives AMD/Hygon chipset TCO timers; on anything else
+ * modprobe fails with "No such device" on the boot console. */
 static void load_watchdog_module(void) {
     if (getpid() != 1) return;
+    if (!cpu_is_amd()) return;
     if (modprobe_one("sp5100_tco") == 0)
         printf("[schema-init] loaded watchdog module (sp5100_tco)\n");
     else
