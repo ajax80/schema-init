@@ -123,6 +123,54 @@ def _env_pairs(values):
     return out
 
 
+_SAFE_RE = re.compile(r"[\w@%+=:,./${}-]+")
+_PRE_SEARCH = ("usr/local/sbin", "usr/local/bin", "usr/sbin", "usr/bin", "sbin", "bin")
+
+
+def _cmd_quote(tok):
+    if _SAFE_RE.fullmatch(tok):
+        return tok
+    return '"%s"' % tok.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _which(cmd):
+    root = os.environ.get("MIGRATE_ROOT") or "/"
+    for d in _PRE_SEARCH:
+        if os.access(os.path.join(root, d, cmd), os.X_OK):
+            return "/" + d + "/" + cmd
+    return None
+
+
+def _exec_pre(svc):
+    out = []
+    for v in _get_all(svc, "ExecStartPre"):
+        if not v.strip():
+            out = []
+            continue
+        s = v.strip()
+        pre = ""
+        while s and s[0] in _EXEC_PREFIX:
+            pre += s[0]
+            s = s[1:]
+        if set(pre) - set("+-"):
+            raise Skip("ExecStartPre=%s uses a prefix schema-init can't honour" % v)
+        try:
+            argv = shlex.split(s)
+        except ValueError:
+            raise Skip("ExecStartPre=%s has unbalanced quotes" % v)
+        if not argv:
+            continue
+        if not argv[0].startswith("/"):
+            exe = _which(argv[0])
+            if not exe:
+                raise Skip("ExecStartPre command %s not found" % argv[0])
+            argv[0] = exe
+        out.append(("".join(sorted(set(pre))), argv))
+    if len(out) > 8:
+        raise Skip("%d ExecStartPre= lines (limit 8)" % len(out))
+    return out
+
+
 class Skip(Exception):
     """Raised when a unit falls in a known rathole and must not be translated."""
 
@@ -333,7 +381,8 @@ def unit_to_svc(name, sections):
     if len(env_files) > 4:
         env_file_notes.append("dropped EnvironmentFile=%s (limit 4)" % " ".join(env_files[4:]))
         env_files = env_files[:4]
-    expand = bool(env_files) and any("$" in a for a in argv[1:])
+    pres = _exec_pre(svc)
+    expand = bool(env_files) and any("$" in a for a in argv[1:] + [w for _, pa in pres for w in pa])
     dropped_args = 0
     env_map = dict(p.split("=", 1) for p in env_pairs)
     if env_files and "$" in argv[0]:
@@ -345,6 +394,13 @@ def unit_to_svc(name, sections):
         argv, dropped_args = _expand_argv(argv, env_map)
         if not argv:
             raise Skip("ExecStart is entirely unresolved variables")
+        expanded = []
+        for pre, pa in pres:
+            pa, d = _expand_argv(pa, env_map)
+            dropped_args += d
+            if pa:
+                expanded.append((pre, pa))
+        pres = expanded
 
     lines = ["name=%s" % name, "exec=%s" % argv[0]]
     for a in argv[1:]:
@@ -356,6 +412,8 @@ def unit_to_svc(name, sections):
         lines.append("env_file=%s" % ef)
     if expand:
         lines.append("expand_args=1")
+    for pre, pa in pres:
+        lines.append("exec_pre=%s%s" % (pre, " ".join(_cmd_quote(w) for w in pa)))
 
     if stype == "oneshot":
         lines.append("oneshot=1")
@@ -380,6 +438,13 @@ def unit_to_svc(name, sections):
     lines.append("critical=0")
 
     hard, warns = _hardening(svc)
+    seen_plain = False
+    for pre, _ in pres:
+        if "+" not in pre:
+            seen_plain = True
+        elif seen_plain:
+            warns.append("ExecStartPre order changed: '+' lines run before the others")
+            break
     lines.extend(hard)
 
     wd = _get_last(svc, "WatchdogSec")
@@ -399,7 +464,7 @@ def unit_to_svc(name, sections):
     if not inst:
         notes.append("no [Install] section")
     notes += env_file_notes
-    for k in ("ExecStartPre", "WorkingDirectory"):
+    for k in ("WorkingDirectory",):
         if _get_last(svc, k):
             notes.append("dropped %s" % k)
     if notes:
