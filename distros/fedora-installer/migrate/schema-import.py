@@ -333,6 +333,17 @@ def _read_queue():
         return []
 
 
+def skip_stub(name, path, reason, text):
+    """A <name>.svc.skipped note for a unit we refused to translate: why, and
+    the unit itself, so the admin can write the .svc by hand. PID 1 loads only
+    *.svc, so the stub is inert."""
+    lines = ["# schema-import skipped %s: %s" % (name, reason),
+             "# Write %s.svc by hand if it should run under schema-init." % name,
+             "# Original unit (%s):" % path, "#"]
+    lines += ["# " + ln if ln else "#" for ln in text.splitlines()]
+    return "\n".join(lines) + "\n"
+
+
 def import_one(name, force=False):
     """Translate one queued unit. Returns (status, detail) where status is one
     of: imported, exists, not-found, skipped, error."""
@@ -345,10 +356,11 @@ def import_one(name, force=False):
         return ("not-found", name)
     try:
         with open(path) as f:
-            sections = parse_unit(f.read())
+            text = f.read()
+        sections = parse_unit(text)
         body = unit_to_svc(name, sections)
     except Skip as s:
-        return ("skipped", str(s))
+        return ("skipped", (str(s), skip_stub(name, path, str(s), text), out))
     except OSError as e:
         return ("error", str(e))
     return ("imported", (out, body))
@@ -380,7 +392,16 @@ def drain(units=None, force=False, dry_run=False, log=print):
             log("MISS    %s (no unit file; left queued)" % name)
             keep.append(name)
         elif status == "skipped":
-            log("skip    %s: %s" % (name, detail))
+            reason, stub, out = detail
+            stub_path = out + ".skipped"
+            log("skip    %s: %s (see %s)" % (name, reason, stub_path))
+            if not dry_run:
+                try:
+                    os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+                    with open(stub_path, "w") as f:
+                        f.write(stub)
+                except OSError as e:
+                    log("WARN    %s: could not write %s: %s" % (name, stub_path, e))
         else:
             log("ERROR   %s: %s" % (name, detail))
             keep.append(name)
