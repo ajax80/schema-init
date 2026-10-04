@@ -146,7 +146,10 @@ open(os.path.join(unitdir, "noisy.service"), "w").write(
     "[Service]\nType=forking\nExecStart=/usr/bin/noisy\n[Install]\nWantedBy=x\n")
 open(os.path.join(unitdir, "tick.timer"), "w").write("[Timer]\nOnCalendar=weekly\nPersistent=true\nUnit=tock.service\n")
 open(os.path.join(unitdir, "tock.service"), "w").write("[Service]\nType=oneshot\nExecStart=/usr/bin/tock\n")
-open(si.queue_path(), "w").write("good\nnoisy\nghost\ntick.timer\n")
+open(os.path.join(unitdir, "bell.timer"), "w").write("[Timer]\nOnCalendar=daily\n")
+open(os.path.join(unitdir, "bell.service"), "w").write("[Service]\nType=oneshot\nExecStart=/usr/bin/bell\n")
+open(os.path.join(unitdir, "inst.timer"), "w").write("[Timer]\nOnCalendar=daily\nUnit=job@x.service\n")
+open(si.queue_path(), "w").write("good\nnoisy\nghost\ntick.timer\nbell.service\nbell.timer\ninst.timer\n")
 
 logged = []
 counts = si.drain(units=["strict"], log=logged.append)
@@ -154,10 +157,13 @@ check("drain logs a WARN naming unit + directive",
       any(l.startswith("WARN    strict: ProtectSystem=strict") for l in logged))
 
 counts = si.drain(log=lambda *_: None)
-check("two imported (good + tick.timer)", counts["imported"] == 2)
+check("three imported (good, tick.timer, bell.timer)", counts["imported"] == 3)
+bl = open(os.path.join(os.environ["SCHEMA_SVC_DIR"], "bell.svc")).read()
+check("timer-driven bell.service skipped, bell.timer owns bell.svc", "on_calendar=00:00\n" in bl)
+check("timer -> template instance skipped", os.path.exists(os.path.join(os.environ["SCHEMA_SVC_DIR"], "inst.svc.skipped")))
 tk = open(os.path.join(os.environ["SCHEMA_SVC_DIR"], "tick.svc")).read()
 check("tick.timer -> tick.svc running Unit= target weekly", "exec=/usr/bin/tock\n" in tk and "on_calendar=Mon 00:00\n" in tk)
-check("one skipped", counts["skipped"] == 1)
+check("three skipped (noisy, bell.service, inst.timer)", counts["skipped"] == 3)
 check("one not-found", counts["not-found"] == 1)
 check("good.svc written", os.path.exists(os.path.join(os.environ["SCHEMA_SVC_DIR"], "good.svc")))
 check("noisy.svc NOT written", not os.path.exists(os.path.join(os.environ["SCHEMA_SVC_DIR"], "noisy.svc")))

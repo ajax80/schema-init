@@ -341,8 +341,10 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             ctlverb = "restart";
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
-            /* a timer's .svc is the job itself: starting it would fire it */
-            if (!unit_supported(argv[i]) || ends_with(argv[i], ".timer")) continue;
+            /* a timer's .svc is the job itself: start/restart would fire it,
+             * stop still stops it */
+            if (!unit_supported(argv[i])) continue;
+            if (ends_with(argv[i], ".timer") && strcmp(verb, "stop") != 0) continue;
             char name[256];
             svc_name_for(argv[i], name, sizeof name);
             if (!svc_exists(name)) continue;

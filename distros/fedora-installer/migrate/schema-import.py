@@ -446,6 +446,28 @@ def skip_stub(name, path, reason, text):
     return "\n".join(lines) + "\n"
 
 
+def _timer_for(name):
+    """The .timer that starts name.service (same name or Unit=), if any."""
+    for d in _unit_dirs():
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        for e in entries:
+            if not e.endswith(".timer") or "@" in e:
+                continue
+            if e == name + ".timer":
+                return e
+            try:
+                with open(os.path.join(d, e)) as f:
+                    t = parse_unit(f.read())
+            except OSError:
+                continue
+            if _get_last(t.get("Timer", []), "Unit") == name + ".service":
+                return e
+    return None
+
+
 def import_one(name, force=False):
     """Translate one queued unit. Returns (status, detail) where status is one
     of: imported, exists, not-found, skipped, error."""
@@ -464,12 +486,17 @@ def import_one(name, force=False):
         sections = parse_unit(text)
         if timer:
             target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
+            if "@" in target:
+                raise Skip("timer starts template instance %s — instances unsupported" % target)
             spath = find_unit(target)
             if not spath:
                 raise Skip("timer's %s not found" % target)
             with open(spath) as f:
                 body = timer_to_svc(name, sections, parse_unit(f.read()))
         else:
+            if not sections.get("Install") and _timer_for(name):
+                raise Skip("started by %s, which owns %s.svc — enable the timer"
+                           % (_timer_for(name), name))
             body = unit_to_svc(name, sections)
     except Skip as s:
         return ("skipped", (str(s), skip_stub(name, path, str(s), text), out))

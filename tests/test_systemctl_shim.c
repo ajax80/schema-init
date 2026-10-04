@@ -154,6 +154,14 @@ static void test_lifecycle(void) {
     assert(run("is-active", "running") == 0);
     assert(run("is-active", "sleeper") == 3);
     assert(run("is-active", "nope") == 3);
+    /* a timer: start/restart would fire the job, stop passes through */
+    snprintf(svc, sizeof svc, "%s/svc/tick.svc", sandbox);
+    f = fopen(svc, "w"); assert(f); fputs("name=tick\non_calendar=00:00\n", f); fclose(f);
+    assert(run("start", "tick.timer") == 0);
+    assert(run("restart", "tick.timer") == 0);
+    assert(!ctl_log_has("tick"));
+    assert(run("stop", "tick.timer") == 0);
+    assert(ctl_log_has("stop tick"));
 }
 
 static void test_flags_and_safety(void) {
