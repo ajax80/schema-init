@@ -277,16 +277,16 @@ check("timer + service conditions both kept", "condition=ac_power:true" in tm an
 # --- Requires=/After= -> dep= ---
 known = {"dbus", "polkitd", "tuned", "auditd", "network-manager", "cups"}
 dl, dn = si.dep_lines("tuned-ppd", si.parse_unit(
-    "[Unit]\nRequires=tuned.service\nAfter=tuned.service network.target\n[Service]\nType=dbus\nBusName=x\n"), known)
-check("Type=dbus + Requires/After -> dbus then tuned", dl == ["dep=dbus", "dep=tuned"] and dn == [])
+    "[Unit]\nRequires=tuned.service\nAfter=tuned.service network.target auditd.service\n[Service]\nType=dbus\nBusName=x\n"), known)
+check("Type=dbus + Requires -> dbus then tuned; plain After= not a dep", dl == ["dep=dbus", "dep=tuned"] and dn == [])
 dl, _ = si.dep_lines("tuned", si.parse_unit(
-    "[Unit]\nAfter=systemd-sysctl.service dbus.service polkit.service NetworkManager.service ghost.service\n"
-    "Requires=dbus.service\nWants=auditd.service\nAfter=cups.socket getty@tty1.service tuned.service\n"), known)
-check("aliases mapped, unknown/self/template/Wants-only dropped, deduped",
+    "[Unit]\nRequires=dbus.service polkit.service NetworkManager.service ghost.service\n"
+    "BindsTo=dbus.service\nWants=auditd.service\nRequisite=cups.socket getty@tty1.service tuned.service\n"), known)
+check("aliases mapped, unknown/self/template/Wants dropped, deduped",
       dl == ["dep=dbus", "dep=polkitd", "dep=network-manager", "dep=cups"])
 check("no known set -> no deps", si.dep_lines("x", si.parse_unit("[Unit]\nAfter=dbus.service\n"), None) == ([], []))
 many = {"d%d" % i for i in range(10)}
-dl, dn = si.dep_lines("x", si.parse_unit("[Unit]\nAfter=" + " ".join("d%d.service" % i for i in range(10)) + "\n"), many)
+dl, dn = si.dep_lines("x", si.parse_unit("[Unit]\nRequires=" + " ".join("d%d.service" % i for i in range(10)) + "\n"), many)
 check("more than 8 deps -> first 8 + note", len(dl) == 8 and dn and "d8 d9" in dn[0])
 tp = si.unit_to_svc("tuned-ppd", si.parse_unit("[Unit]\nRequires=tuned.service\n[Service]\nType=dbus\nBusName=net.hadess.PowerProfiles\n"
                     "ExecStart=/usr/sbin/tuned-ppd -l\n[Install]\nWantedBy=x\n"), known=known)
@@ -400,5 +400,13 @@ open(os.path.join(unitdir, "ppd.service"), "w").write("[Unit]\nRequires=pwr.serv
 open(os.path.join(unitdir, "pwr.service"), "w").write("[Service]\nExecStart=/usr/bin/pwr\n[Install]\nWantedBy=x\n")
 si.drain(units=["ppd", "pwr"], log=lambda *_: None)
 check("dep on a unit imported in the same drain", "dep=pwr\n" in open(os.path.join(SD, "ppd.svc")).read())
+open(os.path.join(SD, "loopa.svc"), "w").write("name=loopa\nexec=/usr/bin/la\ndep=loopb\n")
+open(os.path.join(SD, "mid.svc"), "w").write("name=mid\nexec=/usr/bin/mid\ndep=loopa\n")
+open(os.path.join(unitdir, "loopb.service"), "w").write("[Unit]\nRequires=mid.service pwr.service\n[Service]\nExecStart=/usr/bin/lb\n[Install]\nWantedBy=x\n")
+st, det = si.import_one("loopb")
+check("dep closing a loop (loopb->mid->loopa->loopb) dropped, others kept",
+      st == "imported" and "dep=mid" not in det[1] and "dep=pwr\n" in det[1] and "dependency loop" in det[1])
+open(os.path.join(SD, "rot.svc"), "w").write("name=rot\nexec=/usr/sbin/rot\non_calendar=00:00\n")
+check("a timer .svc is never a dep", "rot" not in si._known_svcs([]) and "pwr" in si._known_svcs([]))
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
