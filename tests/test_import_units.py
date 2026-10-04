@@ -215,6 +215,65 @@ cu = si.unit_to_svc("cups", si.parse_unit("[Service]\nExecStart=/usr/bin/cupsd -
 check("socket service: listen + lazy, no [Install] note", "listen=stream:/run/cups/cups.sock\n" in cu
       and "listen_lazy=1\n" in cu and "no [Install]" not in cu and "notify=1\n" in cu)
 
+# --- Condition*/Assert* ---
+si._FACTS = {"virt": "none", "virt_kind": None, "security": {"selinux", "audit"}, "cgroup_v2": True,
+             "controllers": {"cpu", "memory", "io"}, "cpus": 4, "arch": "x86-64"}
+def cond(txt):
+    return si.condition_lines(si.parse_unit("[Unit]\n" + txt + "\n"))
+def cond_skip(txt):
+    try:
+        cond(txt); return False
+    except si.Skip:
+        return True
+check("runtime conditions translated with | and !",
+      cond("ConditionPathExists=!/etc/plasma-setup-done\nConditionKernelCommandLine=!rd.live.image\n"
+           "AssertPathExists=/etc/mdadm.conf\nConditionDirectoryNotEmpty=|/etc/sssd/conf.d/\nConditionACPower=true")
+      == ["condition=path_exists:!/etc/plasma-setup-done", "condition=kernel_cmdline:!rd.live.image",
+          "condition=path_exists:/etc/mdadm.conf", "condition=dir_not_empty:|/etc/sssd/conf.d/",
+          "condition=ac_power:true"])
+check("empty Condition resets", cond("ConditionPathExists=/a\nConditionPathExists=\nConditionPathExists=/b")
+      == ["condition=path_exists:/b"])
+check("static true dropped", cond("ConditionVirtualization=no\nConditionCPUs=>1\nConditionVirtualization=!container\n"
+      "ConditionControlGroupController=v2\nConditionCapability=CAP_SYS_ADMIN\nConditionSecurity=selinux\n"
+      "ConditionFirstBoot=no\nConditionArchitecture=x86-64") == [])
+for t in ("ConditionVirtualization=vm", "ConditionVirtualization=yes", "ConditionVirtualization=kvm",
+          "ConditionCPUs=>=8", "ConditionSecurity=!selinux", "ConditionFirstBoot=yes",
+          "ConditionControlGroupController=v1", "ConditionControlGroupController=cpu rdma",
+          "ConditionNeedsUpdate=/etc", "ConditionSecurity=ima", "ConditionPathExists=%t/x",
+          "ConditionArchitecture=arm64"):
+    check("skipped: " + t, cond_skip(t))
+check("static |-condition true satisfies the group",
+      cond("ConditionVirtualization=|no\nConditionPathExists=|/nope") == [])
+check("static |-condition false leaves runtime triggers",
+      cond("ConditionVirtualization=|vm\nConditionPathExists=|/x") == ["condition=path_exists:|/x"])
+check("only static |-conditions, none true -> skip", cond_skip("ConditionVirtualization=|vm\nConditionCPUs=|>8"))
+check("BindsTo .device -> device path condition",
+      cond("BindsTo=dev-virtio\\x2dports-org.qemu.guest_agent.0.device") ==
+      ["condition=path_exists:/dev/virtio-ports/org.qemu.guest_agent.0"])
+si._FACTS["virt"], si._FACTS["virt_kind"] = "kvm", "vm"
+check("in a VM: Virtualization=vm/kvm hold, =no skips",
+      cond("ConditionVirtualization=vm\nConditionVirtualization=kvm") == [] and cond_skip("ConditionVirtualization=no"))
+si._FACTS["virt"], si._FACTS["virt_kind"] = "none", None
+sm = si.unit_to_svc("smartd", si.parse_unit("[Unit]\nConditionVirtualization=no\nConditionPathExists=/etc/smartd.conf\n"
+                                            "[Service]\nType=notify\nExecStart=/usr/sbin/smartd -n\n[Install]\nWantedBy=x\n"))
+check("unit_to_svc carries condition lines", "condition=path_exists:/etc/smartd.conf\n" in sm)
+tm = si.timer_to_svc("logrotate", si.parse_unit("[Unit]\nConditionACPower=true\n[Timer]\nOnCalendar=daily\n"),
+                     si.parse_unit("[Unit]\nConditionPathExists=/etc/logrotate.conf\n[Service]\nType=oneshot\nExecStart=/usr/sbin/logrotate /etc/logrotate.conf\n"))
+check("non-/dev device unit skipped", cond_skip("BindsTo=sys-subsystem-net-devices-wg0.device"))
+try:
+    si.timer_to_svc("t", si.parse_unit("[Unit]\nConditionPathExists=|/a\n[Timer]\nOnCalendar=daily\n"),
+                    si.parse_unit("[Unit]\nConditionPathExists=|/b\nConditionPathExists=|/c\n[Service]\nExecStart=/bin/t\n")); ok = False
+except si.Skip:
+    ok = True
+check("|-groups on both timer and service skipped", ok)
+try:
+    si.timer_to_svc("t", si.parse_unit("[Unit]\n" + "".join("ConditionPathExists=/t%d\n" % i for i in range(5)) + "[Timer]\nOnCalendar=daily\n"),
+                    si.parse_unit("[Unit]\n" + "".join("ConditionPathExists=/s%d\n" % i for i in range(4)) + "[Service]\nExecStart=/bin/t\n")); ok = False
+except si.Skip:
+    ok = True
+check("timer + service conditions over 8 skipped", ok)
+check("timer + service conditions both kept", "condition=ac_power:true" in tm and "condition=path_exists:/etc/logrotate.conf" in tm)
+
 # --- drain against a temp tree ---
 tmp = tempfile.mkdtemp()
 os.environ["MIGRATE_ROOT"] = tmp
@@ -311,5 +370,12 @@ st, det = si.import_one("other")
 check("a same-name socket for another Service= is not attached", st == "imported" and "listen=" not in det[1])
 open(os.path.join(unitdir, "goodcheck.service"), "w").write("[Service]\nType=oneshot\nExecStart=/usr/bin/good --check\n")
 check("a oneshot sharing a daemon's binary still imports", si.import_one("goodcheck")[0] == "imported")
+
+for n in ("rsyslog", "abrtd", "abrt-oops", "plasma-setup", "initial-setup"):
+    open(os.path.join(unitdir, n + ".service"), "w").write("[Service]\nExecStart=/usr/sbin/%s -n\n[Install]\nWantedBy=x\n" % n)
+    check("deny-listed: " + n, si.import_one(n)[0] == "skipped")
+open(os.path.join(unitdir, "vmonly.service"), "w").write("[Unit]\nConditionVirtualization=vm\n[Service]\nExecStart=/usr/bin/vmonly\n[Install]\nWantedBy=x\n")
+st, det = si.import_one("vmonly")
+check("condition failing on this host -> skip stub", st == "skipped" and "does not hold" in det[0])
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

@@ -304,6 +304,65 @@ int main(void) {
         assert(stat(target, &vst) == 0 && (vst.st_mode & 07777) == 0600);
     }
 
+    {
+        const char *cl = "BOOT_IMAGE=/vmlinuz ro quiet audit=0 rd.live.image";
+        assert(cmdline_word_match(cl, "quiet") && cmdline_word_match(cl, "audit"));
+        assert(cmdline_word_match(cl, "audit=0") && !cmdline_word_match(cl, "audit=off"));
+        assert(cmdline_word_match(cl, "rd.live.image") && !cmdline_word_match(cl, "rd.live"));
+        assert(!cmdline_word_match(cl, "qui") && !cmdline_word_match("", "x"));
+
+        char d[200], f[200], e[200], c[300];
+        snprintf(d, sizeof d, "%s/cdir", dir3);
+        snprintf(e, sizeof e, "%s/cempty", dir3);
+        snprintf(f, sizeof f, "%s/cdir/file", dir3);
+        mkdir(d, 0755);
+        mkdir(e, 0755);
+        write_svc(f, "data");
+        chmod(f, 0755);
+        struct { const char *fmt; const char *arg; int want; } cases[] = {
+            { "path_exists:%s", f, 1 }, { "path_exists:!%s", f, 0 },
+            { "path_exists:%s.nope", f, 0 }, { "path_exists:!%s.nope", f, 1 },
+            { "path_exists_glob:%s/*", d, 1 }, { "path_exists_glob:%s/*", e, 0 },
+            { "path_is_dir:%s", d, 1 }, { "path_is_dir:%s", f, 0 },
+            { "dir_not_empty:%s", d, 1 }, { "dir_not_empty:%s", e, 0 },
+            { "file_not_empty:%s", f, 1 }, { "file_not_empty:%s", d, 0 },
+            { "file_is_exec:%s", f, 1 }, { "path_is_symlink:%s", f, 0 },
+            { "path_is_mount:%s", "/proc", 1 }, { "path_is_mount:%s", d, 0 },
+            { "path_is_rw:%s", d, 1 }, { "path_is_rw:%s.nope", d, 0 },
+            { "kernel_cmdline:!%s", "no.such.cmdline.word", 1 },
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            snprintf(c, sizeof c, cases[i].fmt, cases[i].arg);
+            assert(service_condition_check(c) == cases[i].want);
+        }
+        assert(service_condition_check("bogus:/x") == -1);
+        int ac = service_condition_check("ac_power:true");
+        assert(ac == 0 || ac == 1);
+        assert(service_condition_check("ac_power:false") == !ac);
+
+        snprintf(p, sizeof p, "%s/cond.svc", dir3);
+        snprintf(c, sizeof c,
+            "name=cond\nexec=/bin/true\ncondition=path_exists:%s\n"
+            "condition=dir_not_empty:|%s\ncondition=path_exists:|!%s\n", f, e, f);
+        write_svc(p, c);
+        char why[160];
+        assert(service_load_one(p, &svc) == 0 && svc.cond_count == 3);
+        assert(!service_conditions_met(&svc, why, sizeof why) && strstr(why, "none of the 2"));
+        snprintf(svc.cond[1], sizeof svc.cond[1], "dir_not_empty:|%s", d);
+        assert(service_conditions_met(&svc, why, sizeof why));
+        snprintf(svc.cond[0], sizeof svc.cond[0], "path_exists:!%s", f);
+        assert(!service_conditions_met(&svc, why, sizeof why) && strstr(why, "path_exists:!"));
+        svc.cond_count = 0;
+        assert(service_conditions_met(&svc, why, sizeof why));
+        const char *bad[] = { "condition=path_exists\n", "condition=nope:/x\n", "condition=path_exists:\n",
+                              "condition=path_exists:|\n", "condition=path_exists:|!\n", NULL };
+        for (int i = 0; bad[i]; i++) {
+            snprintf(c, sizeof c, "name=cond\nexec=/bin/true\n%s", bad[i]);
+            write_svc(p, c);
+            assert(service_load_one(p, &svc) == -1);
+        }
+    }
+
     printf("all service env tests passed\n");
     return 0;
 }

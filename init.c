@@ -670,6 +670,26 @@ static void fork_adopt(service_t *svc) {
 
 #define LISTEN_MIN_RUN_SECS 2   /* a quicker exit served nothing: recovery arc, not a wake loop */
 
+/* timer fire complete: re-arm regardless of exit code (cron semantics — a
+ * failed or condition-skipped run isn't retried, it runs next window).
+ * interval 0 = run-once (only on_boot_sec): drop the flag so PERFECT becomes
+ * terminal instead of re-firing every tick. */
+static void timer_rearm(service_t *svc) {
+    svc->inst.state = STATE_PERFECT;
+    if (svc->flags & SVC_TIMER_CALENDAR) {
+        if (svc->flags & SVC_TIMER_PERSIST)
+            timer_stamp_write(svc, time(NULL));
+        timer_arm_calendar(svc);
+    } else if (svc->timer_interval_sec > 0) {
+        struct timespec tn;
+        clock_gettime(CLOCK_MONOTONIC, &tn);
+        svc->timer_next = tn;
+        svc->timer_next.tv_sec += svc->timer_interval_sec;
+    } else {
+        svc->flags &= ~SVC_TIMER;
+    }
+}
+
 static void reap(void) {
     int status;
     pid_t pid;
@@ -687,23 +707,7 @@ static void reap(void) {
             note_exit(&services[i], status);
 
             if (services[i].flags & SVC_TIMER) {
-                /* timer fire complete: re-arm regardless of exit code (cron
-                 * semantics — a failed run isn't retried, it runs next window).
-                 * interval 0 = run-once (only on_boot_sec): drop the flag so
-                 * PERFECT becomes terminal instead of re-firing every tick. */
-                services[i].inst.state = STATE_PERFECT;
-                if (services[i].flags & SVC_TIMER_CALENDAR) {
-                    if (services[i].flags & SVC_TIMER_PERSIST)
-                        timer_stamp_write(&services[i], time(NULL));
-                    timer_arm_calendar(&services[i]);
-                } else if (services[i].timer_interval_sec > 0) {
-                    struct timespec tn;
-                    clock_gettime(CLOCK_MONOTONIC, &tn);
-                    services[i].timer_next = tn;
-                    services[i].timer_next.tv_sec += services[i].timer_interval_sec;
-                } else {
-                    services[i].flags &= ~SVC_TIMER;
-                }
+                timer_rearm(&services[i]);
                 service_log(&services[i],
                     services[i].exit_status == 0 ? "timer-done" : "timer-failed");
                 break;
@@ -1178,6 +1182,25 @@ static void tick_service(service_t *svc,
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
+            if (svc->cond_count) {
+                char why[160];
+                if (!service_conditions_met(svc, why, sizeof why)) {
+                    char ev[200];
+                    /* a parked socket service: no one may take the
+                     * connection that woke it, so stop listening */
+                    service_listen_close(svc);
+                    if (svc->flags & SVC_TIMER) {
+                        timer_rearm(svc);
+                    } else {
+                        svc->inst.state = STATE_PERFECT;
+                        clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
+                        mark_boot_ready(svc, READY_CONDITION);
+                    }
+                    snprintf(ev, sizeof ev, "condition-skip %s", why);
+                    service_log(svc, ev);
+                    break;
+                }
+            }
             if (svc->listen_hold) {
                 if (service_listen_open(svc) < 0) {
                     svc->listen_hold = 0;
@@ -1449,6 +1472,7 @@ static const char *an_how(const service_t *s) {
         case READY_EXIT:   return "exit";
         case READY_PIDFILE: return "pid_file";
         case READY_SOCKET: return "socket";
+        case READY_CONDITION: return "condition";
     }
     return "?";
 }
