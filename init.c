@@ -1186,6 +1186,9 @@ static void tick_service(service_t *svc,
                 char why[160];
                 if (!service_conditions_met(svc, why, sizeof why)) {
                     char ev[200];
+                    /* a parked socket service: no one may take the
+                     * connection that woke it, so stop listening */
+                    service_listen_close(svc);
                     if (svc->flags & SVC_TIMER) {
                         timer_rearm(svc);
                     } else {

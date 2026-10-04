@@ -907,29 +907,37 @@ static int cond_kind(const char *c, const char **arg) {
     return -1;
 }
 
+/* systemd's rule: on AC if an adapter is online, or if there is no system
+ * adapter at all (a desktop); device-scope supplies (a mouse) don't count */
 static int on_ac_power(void) {
     DIR *d = opendir("/sys/class/power_supply");
     struct dirent *e;
-    int mains_online = 0, battery = 0;
+    int online = 0, offline = 0;
     if (!d) return 1;
     while ((e = readdir(d))) {
         char p[300], v[32] = "";
+        FILE *f;
         if (e->d_name[0] == '.') continue;
+        snprintf(p, sizeof p, "/sys/class/power_supply/%s/scope", e->d_name);
+        if ((f = fopen(p, "r"))) {
+            int dev = fgets(v, sizeof v, f) && !strncmp(v, "Device", 6);
+            fclose(f);
+            if (dev) continue;
+        }
         snprintf(p, sizeof p, "/sys/class/power_supply/%s/type", e->d_name);
-        FILE *f = fopen(p, "r");
-        if (!f) continue;
+        if (!(f = fopen(p, "r"))) continue;
         if (!fgets(v, sizeof v, f)) v[0] = '\0';
         fclose(f);
-        if (!strncmp(v, "Battery", 7)) { battery = 1; continue; }
         if (strncmp(v, "Mains", 5) && strncmp(v, "USB", 3)) continue;
         snprintf(p, sizeof p, "/sys/class/power_supply/%s/online", e->d_name);
         if ((f = fopen(p, "r"))) {
-            if (fgets(v, sizeof v, f) && v[0] == '1') mains_online = 1;
+            if (fgets(v, sizeof v, f) && v[0] == '1') online = 1;
+            else offline = 1;
             fclose(f);
         }
     }
     closedir(d);
-    return mains_online || !battery;
+    return online || !offline;
 }
 
 /* one condition= line, with its own '!' applied; '|' is the caller's */

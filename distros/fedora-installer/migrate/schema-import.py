@@ -322,7 +322,13 @@ def timer_to_svc(name, timer_sections, svc_sections):
     """A .timer and the .service it starts as one schema timer .svc, named after
     the timer."""
     tlines, tnotes = timer_lines(timer_sections)
-    tlines += condition_lines(timer_sections)
+    tconds = condition_lines(timer_sections)
+    sconds = condition_lines(svc_sections)
+    if any(":|" in c for c in tconds) and any(":|" in c for c in sconds):
+        raise Skip("timer and service both have |-conditions — schema has one group per service")
+    if len(tconds) + len(sconds) > 8:
+        raise Skip("%d conditions across timer and service (limit 8)" % (len(tconds) + len(sconds)))
+    tlines += tconds
     body = unit_to_svc(name, svc_sections)
     out = []
     for ln in body.splitlines():
@@ -511,6 +517,8 @@ def condition_lines(sections, facts=None):
         for v in _get_all(unit, k):
             for dev in v.split():
                 if dev.endswith(".device"):
+                    if not dev.startswith("dev-"):
+                        raise Skip("%s=%s: only /dev device units map to a path" % (k, dev))
                     conds.append(("PathExists", k, _device_path(dev)))
     lines, static_trig, static_any = [], 0, False
     facts = facts or None

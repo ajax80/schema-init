@@ -259,6 +259,19 @@ sm = si.unit_to_svc("smartd", si.parse_unit("[Unit]\nConditionVirtualization=no\
 check("unit_to_svc carries condition lines", "condition=path_exists:/etc/smartd.conf\n" in sm)
 tm = si.timer_to_svc("logrotate", si.parse_unit("[Unit]\nConditionACPower=true\n[Timer]\nOnCalendar=daily\n"),
                      si.parse_unit("[Unit]\nConditionPathExists=/etc/logrotate.conf\n[Service]\nType=oneshot\nExecStart=/usr/sbin/logrotate /etc/logrotate.conf\n"))
+check("non-/dev device unit skipped", cond_skip("BindsTo=sys-subsystem-net-devices-wg0.device"))
+try:
+    si.timer_to_svc("t", si.parse_unit("[Unit]\nConditionPathExists=|/a\n[Timer]\nOnCalendar=daily\n"),
+                    si.parse_unit("[Unit]\nConditionPathExists=|/b\nConditionPathExists=|/c\n[Service]\nExecStart=/bin/t\n")); ok = False
+except si.Skip:
+    ok = True
+check("|-groups on both timer and service skipped", ok)
+try:
+    si.timer_to_svc("t", si.parse_unit("[Unit]\n" + "".join("ConditionPathExists=/t%d\n" % i for i in range(5)) + "[Timer]\nOnCalendar=daily\n"),
+                    si.parse_unit("[Unit]\n" + "".join("ConditionPathExists=/s%d\n" % i for i in range(4)) + "[Service]\nExecStart=/bin/t\n")); ok = False
+except si.Skip:
+    ok = True
+check("timer + service conditions over 8 skipped", ok)
 check("timer + service conditions both kept", "condition=ac_power:true" in tm and "condition=path_exists:/etc/logrotate.conf" in tm)
 
 # --- drain against a temp tree ---
