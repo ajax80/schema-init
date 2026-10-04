@@ -322,6 +322,7 @@ def timer_to_svc(name, timer_sections, svc_sections):
     """A .timer and the .service it starts as one schema timer .svc, named after
     the timer."""
     tlines, tnotes = timer_lines(timer_sections)
+    tlines += condition_lines(timer_sections)
     body = unit_to_svc(name, svc_sections)
     out = []
     for ln in body.splitlines():
@@ -375,6 +376,192 @@ def socket_lines(sections):
     if len(listens) > 4:
         raise Skip("%d Listen*= lines (limit 4)" % len(listens))
     return listens + lines, notes
+
+
+_COND_RUNTIME = {
+    "PathExists": "path_exists", "PathExistsGlob": "path_exists_glob",
+    "PathIsDirectory": "path_is_dir", "PathIsSymbolicLink": "path_is_symlink",
+    "PathIsMountPoint": "path_is_mount", "PathIsReadWrite": "path_is_rw",
+    "DirectoryNotEmpty": "dir_not_empty", "FileNotEmpty": "file_not_empty",
+    "FileIsExecutable": "file_is_exec", "ACPower": "ac_power",
+    "KernelCommandLine": "kernel_cmdline",
+}
+_COND_STATIC = ("Virtualization", "Security", "ControlGroupController", "Capability",
+                "CPUs", "FirstBoot", "Architecture")
+_ARCH = {"x86_64": "x86-64", "aarch64": "arm64", "i686": "x86", "armv7l": "arm",
+         "riscv64": "riscv64", "ppc64le": "ppc64-le", "s390x": "s390x"}
+_FACTS = None   # tests inject host facts here
+
+
+def _read(path, default=""):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def host_facts():
+    """What the machine-fixed conditions are judged against: this host."""
+    global _FACTS
+    if _FACTS is not None:
+        return _FACTS
+    import glob
+    import platform
+    import subprocess
+
+    def detect(*a):
+        try:
+            r = subprocess.run(["systemd-detect-virt"] + list(a), capture_output=True, text=True)
+            return r.returncode, r.stdout.strip()
+        except OSError:
+            return None, ""
+    rc, virt = detect()
+    if rc is None:
+        flags = _read("/proc/cpuinfo")
+        virt, kind = ("vm-other", "vm") if " hypervisor" in flags else ("none", None)
+    else:
+        virt = virt or "none"
+        kind = "vm" if detect("--vm")[0] == 0 else "container" if detect("--container")[0] == 0 else None
+    sb = glob.glob("/sys/firmware/efi/efivars/SecureBoot-*")
+    sec = set()
+    if os.path.exists("/sys/fs/selinux/enforce"):
+        sec.add("selinux")
+    if _read("/sys/module/apparmor/parameters/enabled") == "Y":
+        sec.add("apparmor")
+    if os.path.exists("/proc/self/loginuid"):
+        sec.add("audit")
+    if os.path.isdir("/sys/fs/smackfs"):
+        sec.add("smack")
+    if glob.glob("/sys/class/tpmrm/*"):
+        sec.add("tpm2")
+    try:
+        if sb and open(sb[0], "rb").read()[-1:] == b"\x01":
+            sec.add("uefi-secureboot")
+    except OSError:
+        pass
+    ctl = _read("/sys/fs/cgroup/cgroup.controllers", None)
+    _FACTS = {"virt": virt, "virt_kind": kind, "security": sec,
+              "cgroup_v2": ctl is not None, "controllers": set((ctl or "").split()),
+              "cpus": len(os.sched_getaffinity(0)),
+              "arch": _ARCH.get(platform.machine(), platform.machine())}
+    return _FACTS
+
+
+def _static_condition(name, arg, facts):
+    """True/False for a machine-fixed condition on this host; None if the value
+    is not one we can judge."""
+    a = arg.strip().lower()
+    if name == "Virtualization":
+        if a in _TRUE:
+            return facts["virt"] != "none"
+        if a in _FALSE:
+            return facts["virt"] == "none"
+        if a in ("vm", "container"):
+            return facts["virt_kind"] == a
+        if a == "private-users":
+            return None
+        return facts["virt"] == a
+    if name == "Security":
+        known = ("selinux", "apparmor", "audit", "smack", "tpm2", "uefi-secureboot")
+        return a in facts["security"] if a in known else None
+    if name == "ControlGroupController":
+        if a == "v2":
+            return facts["cgroup_v2"]
+        if a == "v1":
+            return not facts["cgroup_v2"]
+        return all(c in facts["controllers"] for c in a.split())
+    if name == "Capability":
+        return True                       # PID 1 starts services as root, all caps
+    if name == "CPUs":
+        m = re.fullmatch(r"(<=|>=|!=|<|>|=)?\s*(\d+)", a)
+        if not m:
+            return None
+        op, n, c = m.group(1) or "=", int(m.group(2)), facts["cpus"]
+        return {"<=": c <= n, ">=": c >= n, "!=": c != n, "<": c < n, ">": c > n, "=": c == n}[op]
+    if name == "FirstBoot":
+        return a not in _TRUE             # a migrated system is past its first boot
+    if name == "Architecture":
+        return a == "native" or a == facts["arch"]
+    return None
+
+
+def _device_path(unit):
+    """dev-virtio\\x2dports-org.qemu.guest_agent.0.device -> /dev/virtio-ports/org.qemu.guest_agent.0"""
+    body = unit[:-len(".device")]
+    out = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: "\0" + m.group(1), body)
+    out = out.replace("-", "/")
+    out = re.sub(r"\0([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), out)
+    return "/" + out
+
+
+def condition_lines(sections, facts=None):
+    """[Unit] Condition*/Assert* (and BindsTo/Requires on a .device) to schema
+    condition= lines. Machine-fixed conditions are judged here, against this
+    host. Raises Skip when one fails or has no equivalent."""
+    unit = sections.get("Unit", [])
+    conds = []
+    for k, v in unit:
+        if k.startswith("Condition") or k.startswith("Assert"):
+            if v == "":
+                conds = []
+            else:
+                conds.append((k[len("Condition"):] if k.startswith("Condition") else k[len("Assert"):], k, v))
+    for k in ("BindsTo", "Requires"):
+        for v in _get_all(unit, k):
+            for dev in v.split():
+                if dev.endswith(".device"):
+                    conds.append(("PathExists", k, _device_path(dev)))
+    lines, static_trig, static_any = [], 0, False
+    facts = facts or None
+    for name, key, v in conds:
+        trig = v.startswith("|")
+        rest = v[1:] if trig else v
+        neg = rest.startswith("!")
+        arg = rest[1:] if neg else rest
+        if name in _COND_RUNTIME:
+            if "%" in arg or not arg:
+                raise Skip("%s=%s uses a specifier" % (key, v))
+            lines.append("condition=%s:%s%s%s" % (_COND_RUNTIME[name], "|" if trig else "",
+                                                  "!" if neg else "", arg))
+        elif name in _COND_STATIC:
+            facts = facts or host_facts()
+            r = _static_condition(name, arg, facts)
+            if r is None:
+                raise Skip("%s=%s not understood" % (key, v))
+            r = r != neg
+            if trig:
+                static_trig += 1
+                static_any |= r
+            elif not r:
+                raise Skip("%s=%s does not hold on this host" % (key, v))
+        else:
+            raise Skip("%s= has no schema equivalent" % key)
+    if static_trig:
+        runtime_trig = [ln for ln in lines if ":|" in ln]
+        if static_any:
+            lines = [ln for ln in lines if ":|" not in ln]
+        elif not runtime_trig:
+            raise Skip("none of the |-conditions holds on this host")
+    if len(lines) > 8:
+        raise Skip("%d conditions (limit 8)" % len(lines))
+    return lines
+
+
+_FIRSTBOOT = ("first-boot wizard; a schema-init install or migration has made the user "
+              "already, and its done-marker is often missing, so it would run")
+_DENY = {"rsyslog": "journal-sink owns /dev/log under schema-init",
+         "abrtd": "schema-coredump owns kernel core dumps under schema-init",
+         "plasma-setup": _FIRSTBOOT, "initial-setup": _FIRSTBOOT,
+         "initial-setup-graphical": _FIRSTBOOT, "gnome-initial-setup": _FIRSTBOOT}
+
+
+def _denied(name):
+    if name in _DENY:
+        return _DENY[name]
+    if name.startswith("abrt-"):
+        return _DENY["abrtd"]
+    return None
 
 
 def unit_to_svc(name, sections, sock=None, lazy=False):
@@ -483,6 +670,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False):
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
     lines.extend(hard)
+    lines.extend(condition_lines(sections))
 
     sock_notes = []
     if sock is not None:
@@ -698,6 +886,8 @@ def import_one(name, force=False, queued=()):
         sections = parse_unit(text)
         if "@" in name and sock_sections is not None:
             raise Skip("socket starts template %s — instances unsupported" % name)
+        if _denied(name):
+            raise Skip(_denied(name))
         if timer:
             target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
             if "@" in target:

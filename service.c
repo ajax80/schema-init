@@ -24,6 +24,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stddef.h>
+#include <glob.h>
+#include <sys/statvfs.h>
 #include "svc_dropins.h"
 
 /* PID 1 runs its main loop with SIGCHLD and SIGHUP blocked -- it reaps through
@@ -888,6 +890,132 @@ int service_listen_open(service_t *svc) {
     return 0;
 }
 
+static const char *const cond_kinds[] = {
+    "path_exists", "path_exists_glob", "path_is_dir", "path_is_symlink", "path_is_mount",
+    "path_is_rw", "dir_not_empty", "file_not_empty", "file_is_exec", "ac_power",
+    "kernel_cmdline", NULL,
+};
+
+static int cond_kind(const char *c, const char **arg) {
+    const char *colon = strchr(c, ':');
+    if (!colon) return -1;
+    for (int i = 0; cond_kinds[i]; i++)
+        if ((size_t)(colon - c) == strlen(cond_kinds[i]) && !strncmp(c, cond_kinds[i], colon - c)) {
+            *arg = colon + 1;
+            return i;
+        }
+    return -1;
+}
+
+static int on_ac_power(void) {
+    DIR *d = opendir("/sys/class/power_supply");
+    struct dirent *e;
+    int mains_online = 0, battery = 0;
+    if (!d) return 1;
+    while ((e = readdir(d))) {
+        char p[300], v[32] = "";
+        if (e->d_name[0] == '.') continue;
+        snprintf(p, sizeof p, "/sys/class/power_supply/%s/type", e->d_name);
+        FILE *f = fopen(p, "r");
+        if (!f) continue;
+        if (!fgets(v, sizeof v, f)) v[0] = '\0';
+        fclose(f);
+        if (!strncmp(v, "Battery", 7)) { battery = 1; continue; }
+        if (strncmp(v, "Mains", 5) && strncmp(v, "USB", 3)) continue;
+        snprintf(p, sizeof p, "/sys/class/power_supply/%s/online", e->d_name);
+        if ((f = fopen(p, "r"))) {
+            if (fgets(v, sizeof v, f) && v[0] == '1') mains_online = 1;
+            fclose(f);
+        }
+    }
+    closedir(d);
+    return mains_online || !battery;
+}
+
+/* one condition= line, with its own '!' applied; '|' is the caller's */
+int service_condition_check(const char *c) {
+    const char *a;
+    int k = cond_kind(c, &a), neg, r = 0;
+    struct stat st;
+    if (k < 0) return -1;
+    a += *a == '|';
+    neg = *a == '!';
+    a += neg;
+    switch (k) {
+    case 0: r = access(a, F_OK) == 0; break;
+    case 1: {
+        glob_t g;
+        r = glob(a, GLOB_NOSORT, NULL, &g) == 0;
+        if (r) globfree(&g);
+        break;
+    }
+    case 2: r = stat(a, &st) == 0 && S_ISDIR(st.st_mode); break;
+    case 3: r = lstat(a, &st) == 0 && S_ISLNK(st.st_mode); break;
+    case 4: {
+        struct statx sx;
+        r = statx(AT_FDCWD, a, 0, STATX_BASIC_STATS, &sx) == 0 &&
+            (sx.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT) &&
+            (sx.stx_attributes & STATX_ATTR_MOUNT_ROOT);
+        break;
+    }
+    case 5: {
+        struct statvfs sv;
+        r = statvfs(a, &sv) == 0 && !(sv.f_flag & ST_RDONLY);
+        break;
+    }
+    case 6: {
+        DIR *d = opendir(a);
+        struct dirent *e;
+        if (d) {
+            while (!r && (e = readdir(d)))
+                r = strcmp(e->d_name, ".") && strcmp(e->d_name, "..");
+            closedir(d);
+        }
+        break;
+    }
+    case 7: r = stat(a, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0; break;
+    case 8: r = stat(a, &st) == 0 && S_ISREG(st.st_mode) && access(a, X_OK) == 0; break;
+    case 9: {
+        int want = !strcmp(a, "true") || !strcmp(a, "yes") || !strcmp(a, "1");
+        r = on_ac_power() == want;
+        break;
+    }
+    case 10: {
+        char cl[4096] = "";
+        int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+        if (fd >= 0) {
+            ssize_t n = read(fd, cl, sizeof cl - 1);
+            if (n > 0) cl[n] = '\0';
+            close(fd);
+        }
+        r = cmdline_word_match(cl, a);
+        break;
+    }
+    }
+    return neg ? !r : r;
+}
+
+int service_conditions_met(const service_t *svc, char *why, size_t n) {
+    int triggers = 0, any = 0;
+    for (int i = 0; i < svc->cond_count; i++) {
+        const char *a;
+        cond_kind(svc->cond[i], &a);
+        int trig = *a == '|', r = service_condition_check(svc->cond[i]) == 1;
+        if (trig) {
+            triggers++;
+            any |= r;
+        } else if (!r) {
+            snprintf(why, n, "%s", svc->cond[i]);
+            return 0;
+        }
+    }
+    if (triggers && !any) {
+        snprintf(why, n, "none of the %d |-conditions", triggers);
+        return 0;
+    }
+    return 1;
+}
+
 int service_listen_matches(const service_t *svc, int k) {
     struct sockaddr_storage want, got;
     socklen_t wl, gl = sizeof got;
@@ -1518,6 +1646,9 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
             svc->exec_pre[i] = NULL;
         }
         svc->exec_pre_count = 0;
+    } else if (strcmp(key, "condition") == 0) {
+        memset(svc->cond, 0, sizeof svc->cond);
+        svc->cond_count = 0;
     } else if (strcmp(key, "listen") == 0) {
         memset(svc->listen, 0, sizeof svc->listen);
         svc->listen_count = 0;
@@ -1599,6 +1730,16 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         snprintf(svc->listen[svc->listen_count++], sizeof svc->listen[0], "%s", val);
+    } else if (strcmp(line, "condition") == 0) {
+        const char *a;
+        while (*val == ' ' || *val == '\t') val++;
+        if (svc->cond_count >= MAX_COND || strlen(val) >= sizeof svc->cond[0] ||
+            cond_kind(val, &a) < 0 || !a[*a == '|' ? (a[1] == '!' ? 2 : 1) : (*a == '!')]) {
+            fprintf(stderr, "[schema-init] %s: bad condition=%s (KIND:[|][!]ARG, at most %d)\n",
+                    svc->name[0] ? svc->name : path, val, MAX_COND);
+            return -1;
+        }
+        snprintf(svc->cond[svc->cond_count++], sizeof svc->cond[0], "%s", val);
     } else if (strcmp(line, "listen_lazy") == 0) {
         svc->listen_lazy = svc->listen_hold = atoi(val) != 0;
     } else if (strcmp(line, "socket_mode") == 0) {

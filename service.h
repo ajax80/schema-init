@@ -20,6 +20,7 @@
 #define MAX_ENV_FILES   4
 #define MAX_EXEC_PRE    8
 #define MAX_LISTEN      4
+#define MAX_COND        8
 #define MAX_DEPS        8
 #define MAX_RESTARTS    5
 #define COOLDOWN_SECS   5
@@ -99,6 +100,7 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define READY_EXIT      5
 #define READY_PIDFILE   6
 #define READY_SOCKET    7
+#define READY_CONDITION 8
 
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
@@ -263,6 +265,8 @@ typedef struct {
     int              listen_fd[MAX_LISTEN]; /* held by PID 1 across restarts, valid when listen_open */
     int              listen_open;
     int              listen_hold;         /* park on the sockets instead of spawning */
+    char             cond[MAX_COND][128]; /* condition=KIND:[|][!]ARG, checked before each spawn */
+    int              cond_count;
     char             dep_name[MAX_DEPS][64]; /* dep names as written in .svc    */
     int              dep_idx[MAX_DEPS];      /* resolved service indices, -1=none */
     int              grp_dep_idx[MAX_DEPS];  /* resolved group indices, -1=none */
@@ -382,6 +386,28 @@ int  service_listen_open(service_t *svc);
 void service_listen_close(service_t *svc);
 /* listen_fd[k] is still the socket listen[k] asks for (type and address) */
 int  service_listen_matches(const service_t *svc, int k);
+/* condition= lines: every plain one holds, and any one of the |-marked ones
+ * if there are some (systemd's rule). why gets the first failing line. */
+int  service_condition_check(const char *c);
+
+/* ConditionKernelCommandLine=: a word equal to arg, or, for an arg without
+ * '=', a word "arg=anything". Pure — unit-tested. */
+static inline int cmdline_word_match(const char *cmdline, const char *arg) {
+    size_t al = strlen(arg);
+    int has_eq = strchr(arg, '=') != NULL;
+    for (const char *p = cmdline; *p; ) {
+        p += strspn(p, " \t\n");
+        size_t wl = strcspn(p, " \t\n");
+        if (!wl) break;
+        if ((wl == al && !strncmp(p, arg, al)) ||
+            (!has_eq && wl > al && p[al] == '=' && !strncmp(p, arg, al)))
+            return 1;
+        p += wl;
+    }
+    return 0;
+}
+int  service_conditions_met(const service_t *svc, char *why, size_t n);
+
 /* PID 1 holds the sockets and the service has exited: a connection starts it */
 static inline int service_listen_waiting(const service_t *svc) {
     return svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT;
