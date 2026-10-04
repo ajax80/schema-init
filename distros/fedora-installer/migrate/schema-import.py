@@ -578,16 +578,18 @@ _UNIT_ALIAS = {"dbus-broker": "dbus", "polkit": "polkitd", "NetworkManager": "ne
 
 
 def dep_lines(name, sections, known):
-    """Requires=/Requisite=/BindsTo=/After= on a service or socket that has a
-    schema .svc (known) -> dep= lines; Type=dbus also waits for the bus, as
-    systemd's implicit After=dbus.socket. Returns (lines, notes)."""
+    """Requires=/Requisite=/BindsTo= on a service or socket that has a schema
+    .svc (known) -> dep= lines; Type=dbus also waits for the bus, as systemd's
+    implicit After=dbus.socket. Plain After= is ordering only in systemd and
+    never keeps a unit from starting, while dep= waits for the dep to settle,
+    so it is not translated. Returns (lines, notes)."""
     if not known:
         return [], []
     cands = []
     if _get_last(sections.get("Service", []), "Type").lower() == "dbus":
         cands.append("dbus")
     unit = sections.get("Unit", [])
-    for k in ("Requires", "Requisite", "BindsTo", "After"):
+    for k in ("Requires", "Requisite", "BindsTo"):
         for v in _get_all(unit, k):
             for u in v.split():
                 if u.endswith((".service", ".socket")) and "@" not in u:
@@ -876,16 +878,69 @@ def _exec_owner(body, out):
     return None
 
 
+_TIMER_KEYS = ("on_calendar=", "on_boot_sec=", "on_active_sec=")
+
+
+def _svc_graph():
+    """{name: (deps, is_timer)} for the .svc files in the service dir."""
+    g = {}
+    try:
+        entries = os.listdir(svc_dir())
+    except OSError:
+        return g
+    for e in entries:
+        if not e.endswith(".svc"):
+            continue
+        try:
+            with open(os.path.join(svc_dir(), e)) as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        g[e[:-4]] = ([ln[4:].strip() for ln in lines if ln.startswith("dep=")],
+                     any(ln.startswith(_TIMER_KEYS) for ln in lines))
+    return g
+
+
 def _known_svcs(queued):
     """Schema services a dep= may name: the .svc files there, plus the units
-    being imported in the same drain."""
-    try:
-        known = {e[:-4] for e in os.listdir(svc_dir()) if e.endswith(".svc")}
-    except OSError:
-        known = set()
+    being imported in the same drain. A timer's .svc is the timer job, never
+    something to wait on."""
+    g = _svc_graph()
+    known = {n for n, (_, timer) in g.items() if not timer}
     for q in queued:
-        known.add(re.sub(r"\.(service|socket|timer)$", "", q))
+        if not q.endswith(".timer"):
+            known.add(re.sub(r"\.(service|socket)$", "", q))
     return known
+
+
+def _drop_cycles(name, body):
+    """Drop each dep= of name's body that would close a dependency loop with
+    the .svc files already written: PID 1 refuses to boot a cyclic graph."""
+    g = _svc_graph()
+    g[name] = ([], False)
+    kept, dropped = [], []
+    for ln in body.splitlines():
+        if not ln.startswith("dep="):
+            kept.append(ln)
+            continue
+        d = ln[4:]
+        seen, stack, loop = set(), [d], False
+        while stack and not loop:
+            n = stack.pop()
+            if n == name:
+                loop = True
+            elif n not in seen:
+                seen.add(n)
+                stack.extend(g.get(n, ([], False))[0])
+        if loop:
+            dropped.append(d)
+        else:
+            kept.append(ln)
+            g[name][0].append(d)
+    if dropped:
+        kept.insert(0, "# schema-import: dropped dep on %s (would make a dependency loop)"
+                    % " ".join(dropped))
+    return "\n".join(kept) + "\n"
 
 
 def import_one(name, force=False, queued=()):
@@ -958,6 +1013,7 @@ def import_one(name, force=False, queued=()):
                 raise Skip("started by %s, which owns %s.svc — enable the timer"
                            % (_timer_for(name), name))
             body = unit_to_svc(name, sections, sock_sections, lazy, known)
+        body = _drop_cycles(name, body)
         owner = _exec_owner(body, out)
         if owner:
             raise Skip("its binary already runs as %s — importing it would start a second copy"

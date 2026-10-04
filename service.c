@@ -1181,6 +1181,7 @@ int service_spawn(service_t *svc) {
                 dprintf(2, "[schema-init] %s: env_file %s: 64-variable limit reached, rest ignored\n",
                         svc->name, ef);
         }
+        svc_set_invocation_id();
         char *at = strchr(svc->name, '@');
         if (at) {
             if (*(at + 1)) {
@@ -1267,7 +1268,6 @@ int service_spawn(service_t *svc) {
         }
         svc_apply_env(svc, file_env, file_envc);
         svc_pass_listen(svc);
-        svc_set_invocation_id();
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             xargv[service_expand_argv(svc->argv, xargv, 63)] = NULL;
