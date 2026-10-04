@@ -20,6 +20,7 @@
 #include <grp.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <sys/random.h>
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -1059,6 +1060,19 @@ void service_listen_close(service_t *svc) {
     svc->listen_open = 0;
 }
 
+/* systemd gives every run a fresh 128-bit INVOCATION_ID; daemons read it as
+ * "a service manager runs me" (irqbalance stays in the foreground) */
+static void svc_set_invocation_id(void) {
+    unsigned char b[16];
+    char hex[33];
+    if (getrandom(b, sizeof b, GRND_NONBLOCK) != sizeof b) {
+        unsetenv("INVOCATION_ID");
+        return;
+    }
+    for (int i = 0; i < 16; i++) snprintf(hex + 2 * i, 3, "%02x", b[i]);
+    setenv("INVOCATION_ID", hex, 1);
+}
+
 /* sd_listen_fds(3): the sockets at fd 3.., LISTEN_PID our own pid */
 static void svc_pass_listen(const service_t *svc) {
     int n = svc->listen_open, tmp[MAX_LISTEN];
@@ -1253,6 +1267,7 @@ int service_spawn(service_t *svc) {
         }
         svc_apply_env(svc, file_env, file_envc);
         svc_pass_listen(svc);
+        svc_set_invocation_id();
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             xargv[service_expand_argv(svc->argv, xargv, 63)] = NULL;

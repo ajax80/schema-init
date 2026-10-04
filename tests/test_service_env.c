@@ -243,13 +243,14 @@ int main(void) {
         snprintf(p, sizeof p, "%s/l.svc", dir3);
         snprintf(body, sizeof body,
             "name=l\nexec=/usr/bin/python3\nargs=-c\n"
-            "args=import os,socket,stat;s=socket.socket(fileno=3);c,_=s.accept();c.sendall(('%%s %%s %%s %%d' %% "
+            "args=import os,re,socket,stat;s=socket.socket(fileno=3);c,_=s.accept();c.sendall(('%%s %%s %%s %%d %%s' %% "
             "(os.environ['LISTEN_FDS'],os.environ['LISTEN_PID']==str(os.getpid()),os.environ['LISTEN_FDNAMES'],"
-            "stat.S_ISFIFO(os.fstat(4).st_mode))).encode())\n"
+            "stat.S_ISFIFO(os.fstat(4).st_mode),os.environ['INVOCATION_ID'])).encode())\n"
             "listen=stream:%s\nlisten=fifo:%s\nsocket_mode=0600\n", sock, fifo);
         write_svc(p, body);
         assert(service_load_one(p, &svc) == 0);
         int first = -1;
+        char inv[40] = "";
         for (int round = 0; round < 2; round++) {
             assert(service_spawn(&svc) == 0);
             assert(svc.listen_open == 2);
@@ -268,7 +269,10 @@ int main(void) {
             close(c);
             int st2;
             assert(waitpid(svc.child_pid, &st2, 0) == svc.child_pid && WIFEXITED(st2) && WEXITSTATUS(st2) == 0);
-            assert(strcmp(got, "2 True l.socket:l.socket 1") == 0);
+            assert(strncmp(got, "2 True l.socket:l.socket 1 ", 27) == 0 && strlen(got + 27) == 32);
+            assert(strspn(got + 27, "0123456789abcdef") == 32);
+            if (round == 0) snprintf(inv, sizeof inv, "%s", got + 27);
+            else assert(strcmp(inv, got + 27) != 0);
         }
         assert(fcntl(first, F_GETFD) & FD_CLOEXEC);
         assert(service_listen_matches(&svc, 0) && service_listen_matches(&svc, 1));
