@@ -134,6 +134,11 @@ check("one skipped", counts["skipped"] == 1)
 check("one not-found", counts["not-found"] == 1)
 check("good.svc written", os.path.exists(os.path.join(os.environ["SCHEMA_SVC_DIR"], "good.svc")))
 check("noisy.svc NOT written", not os.path.exists(os.path.join(os.environ["SCHEMA_SVC_DIR"], "noisy.svc")))
+stub = os.path.join(os.environ["SCHEMA_SVC_DIR"], "noisy.svc.skipped")
+st = open(stub).read() if os.path.exists(stub) else ""
+check("noisy.svc.skipped written with reason + commented unit",
+      st.startswith("# schema-import skipped noisy: Type=forking") and "# ExecStart=/usr/bin/noisy\n" in st
+      and all(l.startswith("#") for l in st.splitlines()))
 remaining = [l.strip() for l in open(si.queue_path()) if l.strip()]
 check("queue keeps only the transient miss", remaining == ["ghost"])
 
