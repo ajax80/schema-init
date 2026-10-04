@@ -88,6 +88,24 @@ install -d "$PAYLOAD/kernel-install"
 install -m0755 "$REPO/distros/shared/kernel-install/99-schema-init.install" \
     "$PAYLOAD/kernel-install/99-schema-init.install"
 
+echo "=== building the schema-init RPMs from HEAD into the payload ==="
+# %post installs these so the box is package-managed and takes later builds
+# through dnf. They come from git HEAD (make srpm archives tracked content)
+# while the payload copies come from the working tree, so refuse a dirty tree:
+# the two would differ.
+git -C "$REPO" diff --quiet HEAD -- . ':!tests/livetest/boot-logs' ||
+    { echo "uncommitted changes in $REPO: commit them first (the RPMs build from HEAD)" >&2; exit 1; }
+RPMTMP="$(dirname "$PAYLOAD")/rpmbuild"
+make -C "$REPO" srpm RELDIR="$RPMTMP/srpm" >/dev/null
+rpmbuild --rebuild --define "_topdir $RPMTMP" "$RPMTMP"/srpm/*.src.rpm > "$RPMTMP/build.log" 2>&1 ||
+    { tail -20 "$RPMTMP/build.log" >&2; echo "RPM build failed" >&2; exit 1; }
+install -d "$PAYLOAD/rpms"
+for p in "$RPMTMP"/RPMS/x86_64/schema-init-[0-9]*.rpm "$RPMTMP"/RPMS/x86_64/schema-init-daemons-[0-9]*.rpm \
+         "$RPMTMP"/RPMS/x86_64/schema-init-session-[0-9]*.rpm; do
+    install -m0644 "$p" "$PAYLOAD/rpms/"
+done
+ls "$PAYLOAD/rpms"
+
 echo "=== injecting kickstart + payload into the ISO ==="
 # --add drops the payload tree onto the ISO; the boot media mounts at
 # /run/install/repo at install time, but ONLY in the installer environment —
