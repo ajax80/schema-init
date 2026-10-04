@@ -851,6 +851,36 @@ int service_listen_open(service_t *svc) {
     return 0;
 }
 
+int service_listen_matches(const service_t *svc, int k) {
+    struct sockaddr_storage want, got;
+    socklen_t wl, gl = sizeof got;
+    int type, gt;
+    socklen_t tl = sizeof gt;
+    struct stat a, b;
+    if (service_listen_parse(svc->listen[k], &type, &want, &wl) < 0 ||
+        fstat(svc->listen_fd[k], &a) < 0)
+        return 0;
+    if (type == 0)
+        return S_ISFIFO(a.st_mode) && stat(((struct sockaddr_un *)&want)->sun_path, &b) == 0 &&
+               a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+    if (!S_ISSOCK(a.st_mode) ||
+        getsockopt(svc->listen_fd[k], SOL_SOCKET, SO_TYPE, &gt, &tl) < 0 || gt != type ||
+        getsockname(svc->listen_fd[k], (struct sockaddr *)&got, &gl) < 0 ||
+        got.ss_family != want.ss_family)
+        return 0;
+    if (want.ss_family == AF_UNIX) {
+        const char *w = ((struct sockaddr_un *)&want)->sun_path, *g = ((struct sockaddr_un *)&got)->sun_path;
+        return w[0] ? g[0] && !strncmp(w, g, sizeof ((struct sockaddr_un *)0)->sun_path)
+                    : gl == wl && !memcmp(w, g, wl - offsetof(struct sockaddr_un, sun_path));
+    }
+    if (want.ss_family == AF_INET)
+        return ((struct sockaddr_in *)&got)->sin_port == ((struct sockaddr_in *)&want)->sin_port &&
+               ((struct sockaddr_in *)&got)->sin_addr.s_addr == ((struct sockaddr_in *)&want)->sin_addr.s_addr;
+    return ((struct sockaddr_in6 *)&got)->sin6_port == ((struct sockaddr_in6 *)&want)->sin6_port &&
+           !memcmp(&((struct sockaddr_in6 *)&got)->sin6_addr, &((struct sockaddr_in6 *)&want)->sin6_addr,
+                   sizeof(struct in6_addr));
+}
+
 void service_listen_close(service_t *svc) {
     for (int i = 0; i < svc->listen_open; i++) close(svc->listen_fd[i]);
     svc->listen_open = 0;

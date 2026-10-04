@@ -301,4 +301,15 @@ open(os.path.join(unitdir, "avahi-daemon.service"), "w").write("[Service]\nExecS
 check("usr-merge alias counts as the same binary",
       si.import_one("avahi-daemon.socket")[0] == "not-found" and si.import_one("avahi-daemon")[0] == "skipped")
 
+open(os.path.join(unitdir, "sshd.socket"), "w").write("[Socket]\nListenStream=22\nAccept=yes\n")
+open(os.path.join(unitdir, "sshd.service"), "w").write("[Service]\nExecStart=/usr/sbin/sshd -D\n[Install]\nWantedBy=multi-user.target\n")
+st, det = si.import_one("sshd")
+check("an Accept=yes sibling socket does not block the service", st == "imported" and "listen=" not in det[1])
+open(os.path.join(unitdir, "other.socket"), "w").write("[Socket]\nListenStream=/run/o\nService=elsewhere.service\n")
+open(os.path.join(unitdir, "other.service"), "w").write("[Service]\nExecStart=/usr/bin/other\n")
+st, det = si.import_one("other")
+check("a same-name socket for another Service= is not attached", st == "imported" and "listen=" not in det[1])
+open(os.path.join(unitdir, "goodcheck.service"), "w").write("[Service]\nType=oneshot\nExecStart=/usr/bin/good --check\n")
+check("a oneshot sharing a daemon's binary still imports", si.import_one("goodcheck")[0] == "imported")
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

@@ -380,6 +380,8 @@ int  service_listen_parse(const char *spec, int *type, struct sockaddr_storage *
 /* bind every listen= spec into listen_fd[]; -1 (nothing left open) on failure */
 int  service_listen_open(service_t *svc);
 void service_listen_close(service_t *svc);
+/* listen_fd[k] is still the socket listen[k] asks for (type and address) */
+int  service_listen_matches(const service_t *svc, int k);
 /* PID 1 holds the sockets and the service has exited: a connection starts it */
 static inline int service_listen_waiting(const service_t *svc) {
     return svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT;

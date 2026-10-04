@@ -2569,18 +2569,19 @@ static void reexec_close_strays(const int *keep, int nkeep) {
  * what this .svc asks for. */
 static void listen_adopt(service_t *svc) {
     int ok = svc->listen_open == svc->listen_count;
-    for (int k = 0; ok && k < svc->listen_open; k++) {
-        struct stat st;
-        ok = fstat(svc->listen_fd[k], &st) == 0 && (S_ISSOCK(st.st_mode) || S_ISFIFO(st.st_mode));
-    }
+    for (int k = 0; ok && k < svc->listen_open; k++)
+        ok = service_listen_matches(svc, k);
     if (!ok) {
         if (svc->listen_open)
-            fprintf(stderr, "[schema-init] re-exec: %s: carried sockets unusable, rebinding at next start\n", svc->name);
-        if (svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT) {
+            fprintf(stderr, "[schema-init] re-exec: %s: carried sockets do not match listen=, rebinding at next start\n", svc->name);
+        int parked = svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT;
+        for (int k = 0; k < svc->listen_open && k < MAX_LISTEN; k++)
+            close(svc->listen_fd[k]);
+        svc->listen_open = 0;
+        if (svc->listen_count && service_listen_open(svc) < 0 && parked) {
             svc->inst.state = STATE_NEW_PROCESS;
             svc->listen_hold = 1;
         }
-        svc->listen_open = 0;
         return;
     }
     for (int k = 0; k < svc->listen_open; k++)
@@ -2643,6 +2644,15 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         svc_carry_timer_done(&services[i], !reexec_svcs[j].timer);
         listen_adopt(&services[i]);
         adopted++;
+    }
+    /* a service gone from the config: its sockets go with it */
+    for (int j = 0; j < nrs; j++) {
+        int i;
+        for (i = 0; i < svc_count; i++)
+            if (!strcmp(services[i].name, reexec_svcs[j].name)) break;
+        if (i < svc_count) continue;
+        for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
+            close(reexec_svcs[j].rt.listen_fd[k]);
     }
     if (g.argv0[0] == '/')
         snprintf(boot_argv0, sizeof boot_argv0, "%s", g.argv0);

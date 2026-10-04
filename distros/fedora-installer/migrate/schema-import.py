@@ -612,13 +612,18 @@ _INTERPRETERS = {"sh", "bash", "dash", "env", "python3", "python", "perl", "true
 
 
 def _exec_owner(body, out):
-    """Another .svc already running this unit's binary (usr-merge aliases
-    resolved), or None."""
+    """Another long-running .svc already running this daemon's binary
+    (usr-merge aliases resolved), or None. Oneshots and timers share binaries
+    with daemons legitimately."""
     def real(exe):
         return os.path.realpath(os.path.join(_root(), exe.lstrip("/")))
 
+    def daemon(lines):
+        return not any(ln.startswith(("oneshot=1", "on_calendar=", "on_boot_sec=", "on_active_sec="))
+                       for ln in lines)
+
     exe = next((ln[5:] for ln in body.splitlines() if ln.startswith("exec=")), None)
-    if not exe or os.path.basename(exe) in _INTERPRETERS:
+    if not exe or os.path.basename(exe) in _INTERPRETERS or not daemon(body.splitlines()):
         return None
     mine = real(exe)
     try:
@@ -631,10 +636,11 @@ def _exec_owner(body, out):
             continue
         try:
             with open(p) as f:
-                other = [ln[5:].strip() for ln in f if ln.startswith("exec=")]
+                olines = f.read().splitlines()
         except OSError:
             continue
-        if other and real(other[-1]) == mine:
+        other = [ln[5:].strip() for ln in olines if ln.startswith("exec=")]
+        if other and daemon(olines) and real(other[-1]) == mine:
             return e
     return None
 
@@ -671,9 +677,13 @@ def import_one(name, force=False, queued=()):
         if spath and spath.endswith(name + ".socket"):
             try:
                 with open(spath) as f:
-                    sock_sections = parse_unit(f.read())
-            except OSError as e:
-                return ("error", str(e))
+                    cand = parse_unit(f.read())
+                svc_target = _get_last(cand.get("Socket", []), "Service") or name + ".service"
+                if svc_target == name + ".service":
+                    socket_lines(cand)
+                    sock_sections = cand
+            except (OSError, Skip):
+                pass
     out = os.path.join(svc_dir(), name + ".svc")
     if os.path.exists(out) and not force:
         return ("exists", out)

@@ -271,6 +271,16 @@ int main(void) {
             assert(strcmp(got, "2 True l.socket:l.socket 1") == 0);
         }
         assert(fcntl(first, F_GETFD) & FD_CLOEXEC);
+        assert(service_listen_matches(&svc, 0) && service_listen_matches(&svc, 1));
+        char keep[112];
+        memcpy(keep, svc.listen[0], sizeof keep);
+        snprintf(svc.listen[0], sizeof svc.listen[0], "stream:%s/sub/other.sock", dir3);
+        assert(!service_listen_matches(&svc, 0));
+        snprintf(svc.listen[0], sizeof svc.listen[0], "dgram:%s", sock);
+        assert(!service_listen_matches(&svc, 0));
+        memcpy(svc.listen[0], keep, sizeof keep);
+        snprintf(svc.listen[1], sizeof svc.listen[1], "fifo:%s/sub/other.fifo", dir3);
+        assert(!service_listen_matches(&svc, 1));
         service_listen_close(&svc);
         assert(svc.listen_open == 0 && fcntl(first, F_GETFD) == -1);
     }
