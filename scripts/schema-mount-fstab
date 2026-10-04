@@ -1,0 +1,123 @@
+#!/bin/sh
+# Mount /etc/fstab at boot, read live every time (mount-fstab.svc).
+#
+# Parents before children; already-mounted targets skipped. Each device is
+# waited for up to x-systemd.device-timeout= (default 90 s, nofail 10 s; 0 =
+# no limit). nofail entries run after the rest and never fail the run.
+# noauto, _netdev, / and pseudo filesystems are skipped. Exit 1 if any entry
+# without nofail could not be mounted or swapped on.
+
+FSTAB=${SCHEMA_FSTAB:-/etc/fstab}
+PSEUDO='proc|sysfs|tmpfs|devtmpfs|devpts|cgroup|cgroup2|mqueue|hugetlbfs|debugfs|securityfs|configfs|fusectl|bpf|tracefs|pstore|efivarfs|ramfs|rpc_pipefs|binfmt_misc|autofs|overlay|squashfs'
+
+log() { printf 'schema-mount-fstab: %s\n' "$*"; }
+
+[ -r "$FSTAB" ] || { log "cannot read $FSTAB"; exit 1; }
+
+has_opt() { case ",$1," in *",$2,"*) return 0 ;; esac; return 1; }
+
+opt_val() {
+    printf '%s' "$1" | tr ',' '\n' | sed -n "s/^$2=//p" | tail -1
+}
+
+timeout_secs() {
+    case "$1" in
+        *ms)  echo $(( (${1%ms} + 999) / 1000 )) ;;
+        *min) echo $(( ${1%min} * 60 )) ;;
+        *s)   echo "${1%s}" ;;
+        *)    echo "$1" ;;
+    esac
+}
+
+clean_opts() {
+    o=$(printf '%s' "$1" | tr ',' '\n' \
+        | grep -viE '^(x-.*|nofail|noauto|auto|_netdev|defaults|comment=.*)$' \
+        | paste -sd, -)
+    printf '%s' "${o:-defaults}"
+}
+
+# Block device for a spec, empty until it exists.
+resolve() {
+    case "$1" in
+        UUID=*|LABEL=*|PARTUUID=*|PARTLABEL=*)
+            blkid -l -o device -t "$1" 2>/dev/null ;;
+        /dev/*)
+            [ -b "$1" ] && printf '%s' "$1" ;;
+        *)
+            printf '%s' "$1" ;;
+    esac
+}
+
+wait_dev() {
+    spec=$1 limit=$2 waited=0
+    while :; do
+        dev=$(resolve "$spec")
+        [ -n "$dev" ] && { printf '%s' "$dev"; return 0; }
+        [ "$limit" -ne 0 ] && [ "$waited" -ge $((limit * 10)) ] && return 1
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+}
+
+mounted() { findmnt -rno TARGET --mountpoint "$1" >/dev/null 2>&1; }
+
+failed=0
+
+do_entry() {
+    spec=$1 tgt=$2 fs=$3 opts=$4
+    nofail=0; has_opt "$opts" nofail && nofail=1
+    t=$(opt_val "$opts" x-systemd.device-timeout)
+    if [ -n "$t" ]; then t=$(timeout_secs "$t"); elif [ $nofail = 1 ]; then t=10; else t=90; fi
+
+    fail() {
+        if [ $nofail = 1 ]; then log "$1 (nofail, continuing)"; else log "$1"; failed=1; fi
+    }
+
+    if [ "$fs" = swap ]; then
+        dev=$(wait_dev "$spec" "$t") || { fail "swap $spec: no device after ${t}s"; return; }
+        grep -q "^$dev " /proc/swaps 2>/dev/null && return
+        swapon "$dev" 2>&1 && log "swap $dev" || fail "swap $dev FAILED"
+        return
+    fi
+
+    mounted "$tgt" && { log "$tgt already mounted"; return; }
+    if has_opt "$opts" bind; then
+        dev=$spec
+    else
+        dev=$(wait_dev "$spec" "$t") || { fail "$tgt: $spec not present after ${t}s"; return; }
+    fi
+    mkdir -p "$tgt"
+    case "$fs" in auto|none) set -- ;; *) set -- -t "$fs" ;; esac
+    if mount "$@" -o "$(clean_opts "$opts")" "$dev" "$tgt" 2>&1; then
+        log "$tgt mounted ($spec)"
+    else
+        fail "$tgt mount FAILED ($spec)"
+    fi
+}
+
+# nofail-last, then parents first: pass<TAB>depth<TAB>spec<TAB>target<TAB>fstype<TAB>opts
+rows=$(awk -v pseudo="$PSEUDO" '
+    /^[[:space:]]*#/ || NF < 3 { next }
+    {
+        spec=$1; tgt=$2; fs=$3; opts=(NF >= 4 ? $4 : "defaults")
+        if (fs ~ ("^(" pseudo ")$") || tgt == "/") next
+        o="," opts ","
+        if (o ~ /,noauto,/) next
+        if (o ~ /,_netdev,/) { print "skip\t0\t" spec "\t" tgt "\t" fs "\t_netdev"; next }
+        pass=(o ~ /,nofail,/) ? 1 : 0
+        depth=(fs == "swap") ? 0 : gsub(/\//, "/", tgt)
+        if (o ~ /,bind,/) { src=spec; d=gsub(/\//, "/", src) + 1; if (d > depth) depth=d }
+        print pass "\t" depth "\t" spec "\t" $2 "\t" fs "\t" opts
+    }' "$FSTAB" | sort -t "$(printf '\t')" -k1,1 -k2,2n)
+
+tab=$(printf '\t')
+while IFS=$tab read -r pass depth spec tgt fs opts; do
+    [ -n "$spec" ] || continue
+    if [ "$pass" = skip ]; then log "$tgt skipped (_netdev: no network ordering here)"; continue; fi
+    do_entry "$spec" "$tgt" "$fs" "$opts"
+done <<EOF
+$rows
+EOF
+
+[ $failed = 0 ] || { log "done, with failures"; exit 1; }
+log "done"

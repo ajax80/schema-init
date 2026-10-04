@@ -161,13 +161,13 @@ sudo ./setup.sh
 
 The installer **does not replace systemd.** It compiles, installs the binaries, and:
 
-- **reads your `/etc/fstab`** and generates a `mount-fstab` service so schema-init mounts your disks, swap, and bind mounts exactly as systemd did (`scripts/gen-mounts.sh` — schema-init does not parse fstab itself);
+- installs a `mount-fstab` service that mounts your disks, swap, and bind mounts from `/etc/fstab`, read fresh at every boot (`schema-mount-fstab`: parents first, waits for each device up to `x-systemd.device-timeout=` — 90 s, or 10 s with `nofail` — and a `nofail` entry never fails the boot; `noauto` and `_netdev` entries are skipped). `scripts/gen-mounts.sh` writes the service plus a `mount-fstab.sh` snapshot to check;
 - optionally **imports your enabled systemd services** as `.svc` stubs so the box comes up running what it ran before (`scripts/gen-services.sh`);
 - writes a **separate `schema-init (fallback)` GRUB entry** and leaves stock systemd as the default.
 
 Reboot, pick **schema-init (fallback)** from the boot menu, and try it. If anything is wrong, reboot and choose your normal systemd entry — you're back, untouched. Iterate on your service files, boot the schema-init entry again. In this lane `systemd-udevd` still runs; schema-init does not retire anything.
 
-> Run `scripts/gen-mounts.sh` (preview) before rebooting and read the generated `mount-fstab.sh` — confirm every mount is right. This is the one file that decides whether your disks come up.
+> Run `scripts/gen-mounts.sh` (preview) before rebooting and read the `mount-fstab.sh` snapshot — confirm every mount is right. It shows what your `/etc/fstab` decides; the boot reads the fstab itself, so fix any mistake there.
 
 ### Fedora KDE — the in-place migration wizard (turnkey Lane 2)
 

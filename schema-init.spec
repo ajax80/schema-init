@@ -79,6 +79,7 @@ install -Dm0755 scripts/schema-systemd1.py %{buildroot}/usr/local/bin/schema-sys
 install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schema-session-register
 install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
 install -Dm0755 scripts/schema-sysctl-apply %{buildroot}%{_libexecdir}/schema-init/schema-sysctl-apply
+install -Dm0755 scripts/schema-mount-fstab %{buildroot}%{_libexecdir}/schema-init/schema-mount-fstab
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sysprep.sh %{buildroot}/usr/local/bin/schema-sysprep.sh
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sshd-start.sh %{buildroot}/usr/local/bin/schema-sshd-start.sh
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-zram-start.sh %{buildroot}/usr/local/bin/schema-zram-start.sh
@@ -320,6 +321,7 @@ fi
 /usr/local/bin/schema-zram-start.sh
 %dir %{_libexecdir}/schema-init
 %{_libexecdir}/schema-init/schema-sysctl-apply
+%{_libexecdir}/schema-init/schema-mount-fstab
 %{_sysconfdir}/grub.d/09_schema_fallback
 %{_prefix}/lib/kernel/install.d/99-schema-init.install
 %dir %{_sysconfdir}/%{name}

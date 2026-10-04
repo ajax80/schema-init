@@ -138,11 +138,6 @@ printf 'POWERDEVIL_NO_DDCUTIL=1\n' > /etc/environment.d/90-no-ddcutil.conf
 install -d /usr/local/lib
 install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
 
-/usr/local/lib/schema/gen-mounts.sh -o /etc/schema-init 2>/dev/null || true
-# mount-fstab.svc runs its script from /usr/local/bin (gen-mounts' fixed path) —
-# gen-mounts only writes it under scripts/, so put it where the .svc expects it.
-[ -f /etc/schema-init/scripts/mount-fstab.sh ] && \
-    install -m0755 /etc/schema-init/scripts/mount-fstab.sh /usr/local/bin/mount-fstab.sh
 
 # 3. Bootloader: the hook model. Leave the STOCK BLS entries pristine — they
 #    boot stock systemd, so a novice always has a working escape hatch in the
