@@ -341,8 +341,45 @@ def timer_to_svc(name, timer_sections, svc_sections):
     return "\n".join(out + tlines) + "\n"
 
 
-def unit_to_svc(name, sections):
-    """Translate parsed unit sections into schema .svc text.
+_LISTEN_KINDS = {"ListenStream": "stream", "ListenDatagram": "dgram",
+                 "ListenSequentialPacket": "seqpacket", "ListenFIFO": "fifo"}
+_LISTEN_ADDR = re.compile(r"/\S+|@\S+|\d+|[\d.]+:\d+|\[[0-9a-fA-F:.]+\]:\d+")
+
+
+def socket_lines(sections):
+    """[Socket] keys to schema listen=/socket_* lines plus notes. Raises Skip
+    when a listener has no schema equivalent."""
+    sock = sections.get("Socket", [])
+    if _get_last(sock, "Accept").lower() in _TRUE:
+        raise Skip("Accept=yes starts one service instance per connection — instances unsupported")
+    listens, lines, notes = [], [], []
+    for k, v in sock:
+        if k in _LISTEN_KINDS:
+            if v == "":
+                listens = []
+                continue
+            v = v.replace("%t", "/run")
+            if "%" in v or not _LISTEN_ADDR.fullmatch(v) or (k == "ListenFIFO" and v[0] != "/"):
+                raise Skip("%s=%s not understood" % (k, v))
+            listens.append("listen=%s:%s" % (_LISTEN_KINDS[k], v))
+        elif k.startswith("Listen"):
+            raise Skip("%s= has no schema equivalent" % k)
+        elif k == "SocketMode":
+            lines.append("socket_mode=%s" % v)
+        elif k in ("SocketUser", "SocketGroup"):
+            lines.append("socket_%s=%s" % (k[6:].lower(), v))
+        elif k not in ("Service", "Accept") and "dropped %s" % k not in notes:
+            notes.append("dropped %s" % k)
+    if not listens:
+        raise Skip("socket has no Listen*= line")
+    if len(listens) > 4:
+        raise Skip("%d Listen*= lines (limit 4)" % len(listens))
+    return listens + lines, notes
+
+
+def unit_to_svc(name, sections, sock=None, lazy=False):
+    """Translate parsed unit sections into schema .svc text. sock: the parsed
+    .socket that activates it; lazy: start on the first connection, not at boot.
 
     Returns the .svc file body (str). Raises Skip(reason) for units we refuse
     to half-translate (Type=forking without an absolute PIDFile=, Type=dbus
@@ -447,6 +484,13 @@ def unit_to_svc(name, sections):
             break
     lines.extend(hard)
 
+    sock_notes = []
+    if sock is not None:
+        sl, sock_notes = socket_lines(sock)
+        lines.extend(sl)
+        if lazy:
+            lines.append("listen_lazy=1")
+
     wd = _get_last(svc, "WatchdogSec")
     if wd:
         sec = _timespan_sec(wd)
@@ -461,9 +505,10 @@ def unit_to_svc(name, sections):
     notes = []
     if dropped_args:
         notes.append("dropped %d unresolved $VAR arg(s)" % dropped_args)
-    if not inst:
+    if not inst and sock is None:
         notes.append("no [Install] section")
     notes += env_file_notes
+    notes += ["socket: " + n for n in sock_notes]
     for k in ("WorkingDirectory",):
         if _get_last(svc, k):
             notes.append("dropped %s" % k)
@@ -556,22 +601,93 @@ def _timer_for(name):
     return None
 
 
-def import_one(name, force=False):
+def _service_enabled(name):
+    """name.service has a .wants/ symlink of its own (systemd enabled it)."""
+    import glob
+    return any(glob.glob(os.path.join(d, "*.wants", name + ".service"))
+               for d in _unit_dirs()[:2])
+
+
+_INTERPRETERS = {"sh", "bash", "dash", "env", "python3", "python", "perl", "true", "busybox"}
+
+
+def _exec_owner(body, out):
+    """Another .svc already running this unit's binary (usr-merge aliases
+    resolved), or None."""
+    def real(exe):
+        return os.path.realpath(os.path.join(_root(), exe.lstrip("/")))
+
+    exe = next((ln[5:] for ln in body.splitlines() if ln.startswith("exec=")), None)
+    if not exe or os.path.basename(exe) in _INTERPRETERS:
+        return None
+    mine = real(exe)
+    try:
+        entries = sorted(os.listdir(svc_dir()))
+    except OSError:
+        return None
+    for e in entries:
+        p = os.path.join(svc_dir(), e)
+        if not e.endswith(".svc") or p == out:
+            continue
+        try:
+            with open(p) as f:
+                other = [ln[5:].strip() for ln in f if ln.startswith("exec=")]
+        except OSError:
+            continue
+        if other and real(other[-1]) == mine:
+            return e
+    return None
+
+
+def import_one(name, force=False, queued=()):
     """Translate one queued unit. Returns (status, detail) where status is one
-    of: imported, exists, not-found, skipped, error."""
+    of: imported, exists, not-found, skipped, error. queued: the other names
+    in the same drain (an enabled .service makes its socket eager)."""
     timer = name.endswith(".timer")
+    socket = name.endswith(".socket")
     name = name[:-len(".service")] if name.endswith(".service") else name
     name = name[:-len(".timer")] if timer else name
+    sock_sections = None
+    if socket:
+        name = name[:-len(".socket")]
+        spath = find_unit(name + ".socket")
+        if not spath:
+            return ("not-found", name + ".socket")
+        try:
+            with open(spath) as f:
+                stext = f.read()
+        except OSError as e:
+            return ("error", str(e))
+        sock_sections = parse_unit(stext)
+        try:
+            socket_lines(sock_sections)
+        except Skip as s:
+            return ("skipped", (str(s), skip_stub(name, spath, str(s), stext),
+                                os.path.join(svc_dir(), name + ".svc")))
+        target = _get_last(sock_sections.get("Socket", []), "Service") or name + ".service"
+        name = target[:-len(".service")] if target.endswith(".service") else target
+    else:
+        spath = find_unit(name + ".socket") if not timer else None
+        if spath and spath.endswith(name + ".socket"):
+            try:
+                with open(spath) as f:
+                    sock_sections = parse_unit(f.read())
+            except OSError as e:
+                return ("error", str(e))
     out = os.path.join(svc_dir(), name + ".svc")
     if os.path.exists(out) and not force:
         return ("exists", out)
     path = find_unit(name + ".timer" if timer else name)
     if not path:
         return ("not-found", name)
+    lazy = socket and not _service_enabled(name) and name + ".service" not in queued \
+        and name not in queued
     try:
         with open(path) as f:
             text = f.read()
         sections = parse_unit(text)
+        if "@" in name and sock_sections is not None:
+            raise Skip("socket starts template %s — instances unsupported" % name)
         if timer:
             target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
             if "@" in target:
@@ -585,7 +701,11 @@ def import_one(name, force=False):
             if not sections.get("Install") and _timer_for(name):
                 raise Skip("started by %s, which owns %s.svc — enable the timer"
                            % (_timer_for(name), name))
-            body = unit_to_svc(name, sections)
+            body = unit_to_svc(name, sections, sock_sections, lazy)
+        owner = _exec_owner(body, out)
+        if owner:
+            raise Skip("its binary already runs as %s — importing it would start a second copy"
+                       % owner)
     except Skip as s:
         return ("skipped", (str(s), skip_stub(name, path, str(s), text), out))
     except OSError as e:
@@ -601,7 +721,7 @@ def drain(units=None, force=False, dry_run=False, log=print):
     counts = {"imported": 0, "exists": 0, "not-found": 0, "skipped": 0, "error": 0}
     keep = []
     for name in items:
-        status, detail = import_one(name, force=force)
+        status, detail = import_one(name, force=force, queued=items)
         counts[status] += 1
         if status == "imported":
             out, body = detail

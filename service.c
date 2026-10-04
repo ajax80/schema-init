@@ -20,6 +20,10 @@
 #include <grp.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <sys/un.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <stddef.h>
 #include "svc_dropins.h"
 
 /* PID 1 runs its main loop with SIGCHLD and SIGHUP blocked -- it reaps through
@@ -682,9 +686,10 @@ static void svc_run_pre(const service_t *svc, int privileged) {
         size_t pl = strspn(c, "+-");
         int plus = memchr(c, '+', pl) != NULL, ignore = memchr(c, '-', pl) != NULL;
         if (plus != privileged) continue;
-        char *w[32], *x[33], **argv = x;
+        char *w[33], *x[33], **argv = x;
         int nw = service_split_cmdline(c + pl, w, 32);
         if (nw <= 0) _exit(1);
+        w[nw] = NULL;
         if (svc->expand_args) {
             x[service_expand_argv(w, x, 32)] = NULL;
         } else {
@@ -708,6 +713,175 @@ static void svc_run_pre(const service_t *svc, int privileged) {
     }
 }
 
+int service_listen_parse(const char *spec, int *type, struct sockaddr_storage *ss,
+                         socklen_t *len) {
+    static const struct { const char *k; int t; } kinds[] = {
+        { "stream:", SOCK_STREAM }, { "dgram:", SOCK_DGRAM },
+        { "seqpacket:", SOCK_SEQPACKET }, { "fifo:", 0 },
+    };
+    const char *a = NULL;
+    for (size_t i = 0; i < sizeof kinds / sizeof kinds[0]; i++)
+        if (!strncmp(spec, kinds[i].k, strlen(kinds[i].k))) {
+            *type = kinds[i].t;
+            a = spec + strlen(kinds[i].k);
+        }
+    if (!a || !*a) return -1;
+    memset(ss, 0, sizeof *ss);
+    if (*a == '/' || *a == '@') {
+        struct sockaddr_un *un = (struct sockaddr_un *)ss;
+        size_t n = strlen(a);
+        if (n >= sizeof un->sun_path || (*a == '@' && (*type == 0 || n < 2))) return -1;
+        un->sun_family = AF_UNIX;
+        memcpy(un->sun_path, a, n);
+        if (*a == '@') {
+            un->sun_path[0] = '\0';
+            *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n);
+        } else
+            *len = sizeof *un;
+        return 0;
+    }
+    if (*type == 0 || *type == SOCK_SEQPACKET) return -1;
+    char host[64] = "";
+    const char *port = a, *c;
+    if (*a == '[') {
+        c = strchr(a, ']');
+        if (!c || c[1] != ':' || (size_t)(c - a - 1) >= sizeof host) return -1;
+        memcpy(host, a + 1, c - a - 1);
+        port = c + 2;
+    } else if ((c = strrchr(a, ':'))) {
+        if ((size_t)(c - a) >= sizeof host) return -1;
+        memcpy(host, a, c - a);
+        port = c + 1;
+    }
+    char *end;
+    long p = strtol(port, &end, 10);
+    if (!*port || *end || p < 1 || p > 65535) return -1;
+    struct sockaddr_in *in4 = (struct sockaddr_in *)ss;
+    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)ss;
+    if (*a != '[' && host[0] && inet_pton(AF_INET, host, &in4->sin_addr) == 1) {
+        in4->sin_family = AF_INET;
+        in4->sin_port = htons((uint16_t)p);
+        *len = sizeof *in4;
+        return 0;
+    }
+    if (host[0] && inet_pton(AF_INET6, host, &in6->sin6_addr) != 1) return -1;
+    if (!host[0]) in6->sin6_addr = in6addr_any;
+    in6->sin6_family = AF_INET6;
+    in6->sin6_port = htons((uint16_t)p);
+    *len = sizeof *in6;
+    return 0;
+}
+
+static void mkdir_parents(const char *path) {
+    char d[128];
+    snprintf(d, sizeof d, "%s", path);
+    for (char *p = d + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        mkdir(d, 0755);
+        *p = '/';
+    }
+}
+
+static int listen_one(const service_t *svc, const char *spec) {
+    struct sockaddr_storage ss;
+    socklen_t len;
+    int type, fd, one = 1, zero = 0;
+    mode_t mode = svc->socket_mode ? (mode_t)svc->socket_mode : 0666;
+    if (service_listen_parse(spec, &type, &ss, &len) < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    const char *path = ss.ss_family == AF_UNIX && ((struct sockaddr_un *)&ss)->sun_path[0]
+                     ? ((struct sockaddr_un *)&ss)->sun_path : NULL;
+    struct stat st;
+    if (path) {
+        mkdir_parents(path);
+        if (lstat(path, &st) == 0 && (type ? S_ISSOCK(st.st_mode) : 0))
+            unlink(path);
+    }
+    if (type == 0) {
+        if (mkfifo(path, mode) < 0 && !(errno == EEXIST && stat(path, &st) == 0 && S_ISFIFO(st.st_mode)))
+            return -1;
+        fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) return -1;
+    } else {
+        fd = socket(ss.ss_family, type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        if (fd < 0) return -1;
+        if (ss.ss_family != AF_UNIX)
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        if (ss.ss_family == AF_INET6)
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof zero);
+        if (bind(fd, (struct sockaddr *)&ss, len) < 0 ||
+            (type != SOCK_DGRAM && listen(fd, SOMAXCONN) < 0)) {
+            int e = errno;
+            close(fd);
+            errno = e;
+            return -1;
+        }
+    }
+    if (path) {
+        uid_t u = (uid_t)-1;
+        gid_t g = (gid_t)-1;
+        struct passwd *pw = svc->socket_user[0] ? getpwnam(svc->socket_user) : NULL;
+        struct group *gr = svc->socket_group[0] ? getgrnam(svc->socket_group) : NULL;
+        if (pw) u = pw->pw_uid;
+        if (gr) g = gr->gr_gid;
+        if ((svc->socket_user[0] && !pw) || (svc->socket_group[0] && !gr))
+            fprintf(stderr, "[schema-init] %s: socket owner %s:%s not found, left as root\n",
+                    svc->name, svc->socket_user, svc->socket_group);
+        chmod(path, mode);
+        if (u != (uid_t)-1 || g != (gid_t)-1) chown(path, u, g);
+    }
+    return fd;
+}
+
+int service_listen_open(service_t *svc) {
+    if (svc->listen_open) return 0;
+    for (int i = 0; i < svc->listen_count; i++) {
+        int fd = listen_one(svc, svc->listen[i]);
+        if (fd < 0) {
+            fprintf(stderr, "[schema-init] %s: listen=%s: %s\n", svc->name, svc->listen[i], strerror(errno));
+            while (i) close(svc->listen_fd[--i]);
+            return -1;
+        }
+        svc->listen_fd[i] = fd;
+    }
+    svc->listen_open = svc->listen_count;
+    return 0;
+}
+
+void service_listen_close(service_t *svc) {
+    for (int i = 0; i < svc->listen_open; i++) close(svc->listen_fd[i]);
+    svc->listen_open = 0;
+}
+
+/* sd_listen_fds(3): the sockets at fd 3.., LISTEN_PID our own pid */
+static void svc_pass_listen(const service_t *svc) {
+    int n = svc->listen_open, tmp[MAX_LISTEN];
+    if (!n) {
+        unsetenv("LISTEN_FDS");
+        unsetenv("LISTEN_PID");
+        unsetenv("LISTEN_FDNAMES");
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        if ((tmp[i] = fcntl(svc->listen_fd[i], F_DUPFD, 3 + n)) < 0) _exit(126);
+    for (int i = 0; i < n; i++) {
+        if (dup2(tmp[i], 3 + i) < 0) _exit(126);
+        close(tmp[i]);
+    }
+    char v[24], names[MAX_LISTEN * 72] = "";
+    snprintf(v, sizeof v, "%d", n);
+    setenv("LISTEN_FDS", v, 1);
+    snprintf(v, sizeof v, "%d", (int)getpid());
+    setenv("LISTEN_PID", v, 1);
+    for (int i = 0; i < n; i++)
+        snprintf(names + strlen(names), sizeof names - strlen(names), "%s%s.socket",
+                 i ? ":" : "", svc->name);
+    setenv("LISTEN_FDNAMES", names, 1);
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -725,6 +899,7 @@ int service_spawn(service_t *svc) {
         }
     }
 
+    if (svc->listen_count && service_listen_open(svc) < 0) return -1;
     if (pipe(sync) < 0) return -1;
 
     if (svc->allowed_slot_min >= 0) {
@@ -874,6 +1049,7 @@ int service_spawn(service_t *svc) {
             unsetenv("WATCHDOG_PID");
         }
         svc_apply_env(svc, file_env, file_envc);
+        svc_pass_listen(svc);
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             xargv[service_expand_argv(svc->argv, xargv, 63)] = NULL;
@@ -1275,6 +1451,9 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
             svc->exec_pre[i] = NULL;
         }
         svc->exec_pre_count = 0;
+    } else if (strcmp(key, "listen") == 0) {
+        memset(svc->listen, 0, sizeof svc->listen);
+        svc->listen_count = 0;
     } else if (strcmp(key, "env_file") == 0) {
         memset(svc->env_file, 0, sizeof svc->env_file);
         svc->env_file_count = 0;
@@ -1341,6 +1520,33 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         svc->exec_pre[svc->exec_pre_count++] = strdup(val + strspn(val, " \t"));
+    } else if (strcmp(line, "listen") == 0) {
+        struct sockaddr_storage ss;
+        socklen_t len;
+        int type;
+        while (*val == ' ' || *val == '\t') val++;
+        if (svc->listen_count >= MAX_LISTEN || strlen(val) >= sizeof svc->listen[0]
+            || service_listen_parse(val, &type, &ss, &len) < 0) {
+            fprintf(stderr, "[schema-init] %s: bad listen=%s (stream|dgram|seqpacket|fifo: then /path, @abstract, PORT, ADDR:PORT or [ADDR]:PORT; at most %d)\n",
+                    svc->name[0] ? svc->name : path, val, MAX_LISTEN);
+            return -1;
+        }
+        snprintf(svc->listen[svc->listen_count++], sizeof svc->listen[0], "%s", val);
+    } else if (strcmp(line, "listen_lazy") == 0) {
+        svc->listen_lazy = svc->listen_hold = atoi(val) != 0;
+    } else if (strcmp(line, "socket_mode") == 0) {
+        char *end;
+        long m = strtol(val, &end, 8);
+        if (!*val || *end || m <= 0 || m > 07777) {
+            fprintf(stderr, "[schema-init] %s: socket_mode=%s must be octal\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->socket_mode = (int)m;
+    } else if (strcmp(line, "socket_user") == 0) {
+        snprintf(svc->socket_user, sizeof svc->socket_user, "%s", val);
+    } else if (strcmp(line, "socket_group") == 0) {
+        snprintf(svc->socket_group, sizeof svc->socket_group, "%s", val);
     } else if (strcmp(line, "expand_args") == 0) {
         svc->expand_args = atoi(val) != 0;
     } else if (strcmp(line, "dep") == 0 && pc->dep_slot < MAX_DEPS) {

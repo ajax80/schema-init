@@ -45,7 +45,7 @@ __attribute__((unused)) static const char *shim_passthrough(void) {
 
 __attribute__((unused)) static const char *strip_service_suffix(const char *unit, char *buf, size_t n) {
     size_t len = strlen(unit);
-    static const char *sufs[] = { ".service", ".timer", NULL };
+    static const char *sufs[] = { ".service", ".timer", ".socket", NULL };
     for (int k = 0; sufs[k]; k++) {
         size_t slen = strlen(sufs[k]);
         if (len > slen && strcmp(unit + len - slen, sufs[k]) == 0) { len -= slen; break; }
@@ -63,7 +63,7 @@ __attribute__((unused)) static int ends_with(const char *s, const char *suf) {
 
 __attribute__((unused)) static int unit_supported(const char *unit) {
     static const char *bad[] = {
-        ".socket", ".path", ".target",
+        ".path", ".target",
         ".mount", ".slice", ".scope", NULL
     };
     int i;
@@ -76,7 +76,8 @@ __attribute__((unused)) static int unit_supported(const char *unit) {
 __attribute__((unused)) static char *unit_queue_name(const char *unit, char *buf, size_t n) {
     char base[256];
     strip_service_suffix(unit, base, sizeof base);
-    snprintf(buf, n, "%s%s", base, ends_with(unit, ".timer") ? ".timer" : ".service");
+    snprintf(buf, n, "%s%s", base, ends_with(unit, ".timer") ? ".timer"
+                                 : ends_with(unit, ".socket") ? ".socket" : ".service");
     return buf;
 }
 
@@ -291,7 +292,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             char qn[300];
             unit_queue_name(argv[i], qn, sizeof qn);
             queue_add(qn);
-            if (now && !ends_with(argv[i], ".timer")) {
+            if (now && !ends_with(argv[i], ".timer") && !ends_with(argv[i], ".socket")) {
                 char name[256];
                 svc_name_for(argv[i], name, sizeof name);
                 if (svc_exists(name)) run_ctl("start", name);
@@ -344,7 +345,8 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             /* a timer's .svc is the job itself: start/restart would fire it,
              * stop still stops it */
             if (!unit_supported(argv[i])) continue;
-            if (ends_with(argv[i], ".timer") && strcmp(verb, "stop") != 0) continue;
+            if ((ends_with(argv[i], ".timer") || ends_with(argv[i], ".socket")) &&
+                strcmp(verb, "stop") != 0) continue;
             char name[256];
             svc_name_for(argv[i], name, sizeof name);
             if (!svc_exists(name)) continue;
