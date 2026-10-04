@@ -74,9 +74,36 @@ DEST=/                                 # %post is chrooted into the new system
 
 echo "=== schema %post: installing schema-init as PID 1 ==="
 
+# 0. Packages. The schema-init RPMs built from this same tree (payload/rpms)
+#    own the files the steps below lay down, so the box is a normal package
+#    install, and the COPR repo brings later builds through dnf upgrade (PID 1
+#    re-execs onto them in place). If they cannot be installed (no network for
+#    their dependencies), the plain file copies below still give a working box,
+#    it just will not get updates through dnf.
+RPMS=""
+if ls "$SRC"/rpms/*.rpm >/dev/null 2>&1 && dnf -y install "$SRC"/rpms/*.rpm; then
+    RPMS=1
+    cat > /etc/yum.repos.d/_copr:copr.fedorainfracloud.org:ajax80:schema-init.repo <<'EOF'
+[copr:copr.fedorainfracloud.org:ajax80:schema-init]
+name=Copr repo for schema-init owned by ajax80
+baseurl=https://download.copr.fedorainfracloud.org/results/ajax80/schema-init/fedora-$releasever-$basearch/
+type=rpm-md
+skip_if_unavailable=True
+gpgcheck=1
+gpgkey=https://download.copr.fedorainfracloud.org/results/ajax80/schema-init/pubkey.gpg
+repo_gpgcheck=0
+enabled=1
+enabled_metadata=1
+EOF
+else
+    echo "WARN: schema-init RPMs not installed; falling back to file copies (no dnf updates)"
+fi
+
 # 1. Binaries. usrmerge means /usr/bin is canonical; /sbin etc. resolve to it.
 install -m0755 "$SRC/bin/schema-init"        /usr/bin/schema-init
-install -m0755 "$SRC/bin/schema-ctl"         /usr/local/bin/schema-ctl
+# the package puts schema-ctl in /usr/bin; a /usr/local/bin copy would shadow
+# every later update of it on PATH
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-ctl" /usr/local/bin/schema-ctl
 install -m0755 "$SRC/bin/schema-journal-sink" /usr/bin/schema-journal-sink
 install -m0755 "$SRC/bin/schema-subreaper"   /usr/bin/schema-subreaper
 install -m0755 "$SRC/bin/schema-board"       /usr/bin/schema-board
