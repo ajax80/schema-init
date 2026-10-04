@@ -107,6 +107,7 @@ rm -f /etc/schema-init/services/schema-migrate-finish.svc  # migrate-path onesho
 install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
 install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
 install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
+install -Dm0755 "$SRC/scripts/schema-mount-fstab" /usr/libexec/schema-init/schema-mount-fstab  # mount-fstab.svc execs this
 install -m0755 "$SRC/scripts/schema-zram-start.sh" /usr/local/bin/schema-zram-start.sh  # zram.svc execs this
 
 # Desktop-session pipeline (autologin Plasma under schema-init). The rail's

@@ -1,11 +1,12 @@
 #!/bin/sh
 # Mount /etc/fstab at boot, read live every time (mount-fstab.svc).
 #
-# Parents before children; already-mounted targets skipped. Each device is
-# waited for up to x-systemd.device-timeout= (default 90 s, nofail 10 s; 0 =
-# no limit). nofail entries run after the rest and never fail the run.
-# noauto, _netdev, / and pseudo filesystems are skipped. Exit 1 if any entry
-# without nofail could not be mounted or swapped on.
+# Parents before children, a bind after its source; already-mounted targets
+# skipped. Each device is waited for up to x-systemd.device-timeout= (default
+# 90 s, nofail 10 s; 0 = no limit). noauto, _netdev, / and pseudo filesystems
+# are skipped. Failures are logged and the run still exits 0: a non-zero
+# oneshot is retried, and each retry would wait out the timeouts again while
+# everything that depends on mount-fstab stays blocked.
 
 FSTAB=${SCHEMA_FSTAB:-/etc/fstab}
 PSEUDO='proc|sysfs|tmpfs|devtmpfs|devpts|cgroup|cgroup2|mqueue|hugetlbfs|debugfs|securityfs|configfs|fusectl|bpf|tracefs|pstore|efivarfs|ramfs|rpc_pipefs|binfmt_misc|autofs|overlay|squashfs'
@@ -20,13 +21,28 @@ opt_val() {
     printf '%s' "$1" | tr ',' '\n' | sed -n "s/^$2=//p" | tail -1
 }
 
+# systemd timespan ("90", "1.5s", "1min30s", "500ms", "2h") -> whole seconds,
+# rounded up; empty if unparseable.
 timeout_secs() {
-    case "$1" in
-        *ms)  echo $(( (${1%ms} + 999) / 1000 )) ;;
-        *min) echo $(( ${1%min} * 60 )) ;;
-        *s)   echo "${1%s}" ;;
-        *)    echo "$1" ;;
-    esac
+    printf '%s' "$1" | awk '
+        BEGIN { u["us"]=1e-6; u["usec"]=1e-6; u["ms"]=0.001; u["msec"]=0.001
+                u[""]=1; u["s"]=1; u["sec"]=1; u["second"]=1; u["seconds"]=1
+                u["m"]=60; u["min"]=60; u["minute"]=60; u["minutes"]=60
+                u["h"]=3600; u["hr"]=3600; u["hour"]=3600; u["hours"]=3600
+                u["d"]=86400; u["day"]=86400; u["days"]=86400 }
+        {
+            s=$0; t=0
+            if (s == "") exit
+            while (s != "") {
+                if (!match(s, /^[0-9]+(\.[0-9]+)?/)) exit
+                n=substr(s, 1, RLENGTH) + 0; s=substr(s, RLENGTH + 1)
+                match(s, /^[a-z]*/); unit=substr(s, 1, RLENGTH); s=substr(s, RLENGTH + 1)
+                if (!(unit in u)) exit
+                t += n * u[unit]
+            }
+            r=int(t); if (r < t) r++
+            print r
+        }'
 }
 
 clean_opts() {
@@ -66,8 +82,11 @@ failed=0
 do_entry() {
     spec=$1 tgt=$2 fs=$3 opts=$4
     nofail=0; has_opt "$opts" nofail && nofail=1
-    t=$(opt_val "$opts" x-systemd.device-timeout)
-    if [ -n "$t" ]; then t=$(timeout_secs "$t"); elif [ $nofail = 1 ]; then t=10; else t=90; fi
+    raw=$(opt_val "$opts" x-systemd.device-timeout)
+    t=""
+    [ -z "$raw" ] || t=$(timeout_secs "$raw")
+    [ -n "$raw" ] && [ -z "$t" ] && log "$tgt: x-systemd.device-timeout=$raw not understood, using the default"
+    [ -n "$t" ] || { if [ $nofail = 1 ]; then t=10; else t=90; fi; }
 
     fail() {
         if [ $nofail = 1 ]; then log "$1 (nofail, continuing)"; else log "$1"; failed=1; fi
@@ -75,7 +94,10 @@ do_entry() {
 
     if [ "$fs" = swap ]; then
         dev=$(wait_dev "$spec" "$t") || { fail "swap $spec: no device after ${t}s"; return; }
-        grep -q "^$dev " /proc/swaps 2>/dev/null && return
+        real=$(readlink -f "$dev")
+        while read -r name _; do
+            [ "$(readlink -f "$name" 2>/dev/null)" = "$real" ] && return
+        done < /proc/swaps
         swapon "$dev" 2>&1 && log "swap $dev" || fail "swap $dev FAILED"
         return
     fi
@@ -95,7 +117,7 @@ do_entry() {
     fi
 }
 
-# nofail-last, then parents first: pass<TAB>depth<TAB>spec<TAB>target<TAB>fstype<TAB>opts
+# parents first: kind<TAB>depth<TAB>spec<TAB>target<TAB>fstype<TAB>opts
 rows=$(awk -v pseudo="$PSEUDO" '
     /^[[:space:]]*#/ || NF < 3 { next }
     {
@@ -104,11 +126,11 @@ rows=$(awk -v pseudo="$PSEUDO" '
         o="," opts ","
         if (o ~ /,noauto,/) next
         if (o ~ /,_netdev,/) { print "skip\t0\t" spec "\t" tgt "\t" fs "\t_netdev"; next }
-        pass=(o ~ /,nofail,/) ? 1 : 0
+        pass="m"
         depth=(fs == "swap") ? 0 : gsub(/\//, "/", tgt)
         if (o ~ /,bind,/) { src=spec; d=gsub(/\//, "/", src) + 1; if (d > depth) depth=d }
         print pass "\t" depth "\t" spec "\t" $2 "\t" fs "\t" opts
-    }' "$FSTAB" | sort -t "$(printf '\t')" -k1,1 -k2,2n)
+    }' "$FSTAB" | sort -t "$(printf '\t')" -k2,2n)
 
 tab=$(printf '\t')
 while IFS=$tab read -r pass depth spec tgt fs opts; do
@@ -119,5 +141,5 @@ done <<EOF
 $rows
 EOF
 
-[ $failed = 0 ] || { log "done, with failures"; exit 1; }
+[ $failed = 0 ] || { log "done, with failures"; exit 0; }
 log "done"
