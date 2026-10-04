@@ -88,7 +88,28 @@ release_session() {
     [ -x "$UNREGISTER" ] && "$UNREGISTER" "$SID" "$SCHEMA_UID" 2>/dev/null || true
     SID=""
 }
-trap 'release_session' EXIT HUP INT TERM
+# The session runs in its logind scope, outside this service's cgroup, so
+# PID 1's stop signal reaches only this script. Pass it on to everything in
+# the scope (kwin, plasmashell, the user's apps), give them a moment to save
+# and exit inside PID 1's 3 s grace, then release the seat and go.
+SESSION_SCOPE=""
+SESSION_PID=""
+stop_session() {
+    if [ -n "$SESSION_SCOPE" ] && [ -r "$SESSION_SCOPE/cgroup.procs" ]; then
+        kill -TERM $(cat "$SESSION_SCOPE/cgroup.procs") 2>/dev/null
+        for _ in $(seq 1 25); do
+            [ -n "$(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null)" ] || break
+            sleep 0.1
+        done
+    elif [ -n "$SESSION_PID" ]; then
+        kill -TERM "$SESSION_PID" 2>/dev/null
+    fi
+    printf 'session_stopped\n'
+    release_session
+    exit 0
+}
+trap 'release_session' EXIT
+trap 'stop_session' HUP INT TERM
 
 while true; do
     rm -f "/run/user/$SCHEMA_UID"/wayland-* /tmp/.ICE-unix/* /tmp/.X*-lock 2>/dev/null || true
@@ -110,8 +131,10 @@ while true; do
             sleep 0.2
         done ) &
 
+    # A background job starts with SIGINT/SIGQUIT ignored; env puts them back
+    # so the session does not inherit that.
     ( echo $BASHPID > "$SESSION_SCOPE/cgroup.procs" 2>/dev/null || true
-      exec runuser -u "$SCHEMA_USER" -- env \
+      exec env --default-signal=INT,QUIT runuser -u "$SCHEMA_USER" -- env \
         HOME="$SCHEMA_HOME" \
         USER="$SCHEMA_USER" \
         LOGNAME="$SCHEMA_USER" \
@@ -133,8 +156,11 @@ while true; do
         KDE_FULL_SESSION=true \
         KDE_SESSION_VERSION=6 \
         KDE_SESSION_UID="$SCHEMA_UID" \
-        /usr/local/bin/schema-dbus-session-run.sh /usr/local/bin/plasma-session-start.sh )
+        /usr/local/bin/schema-dbus-session-run.sh /usr/local/bin/plasma-session-start.sh ) &
+    SESSION_PID=$!
+    wait "$SESSION_PID"
     RC=$?
+    SESSION_PID=""
     release_session
     printf 'plasma_exited rc=%d\n' $RC
     [ $RC -ne 0 ] && break
