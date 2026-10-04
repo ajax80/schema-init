@@ -1210,6 +1210,29 @@ class NmProfileIface(Check):
 REGISTRY.append(NmProfileIface())
 
 
+class PstoreCrash(Check):
+    name = "pstore-crash"
+    summary = "the previous boot did not end in a kernel panic or oops"
+    grade = DEFERRED
+
+    def detect(self):
+        try:
+            dest = open(os.path.join(ROOT, "run/schema-init/pstore-harvested")).read().strip()
+        except OSError:
+            return None
+        if not dest:
+            return None
+        return Finding(
+            detail="the kernel left crash records from the previous boot in pstore; "
+                   "PID 1 archived them to " + dest + " — read the dmesg-* "
+                   "files there for the panic/oops trace",
+            oracle_said="systemd-pstore archives /sys/fs/pstore to /var/lib/systemd/pstore",
+            healable=False)
+
+
+REGISTRY.append(PstoreCrash())
+
+
 def read_config():
     heal = True
     disabled = set()

@@ -33,6 +33,7 @@
 #include <sys/inotify.h>
 #include <linux/watchdog.h>
 #include <dirent.h>
+#include <mntent.h>
 
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
@@ -381,6 +382,7 @@ static void mount_pseudo(void) {
     mount("tmpfs",   "/dev/shm", "tmpfs", MS_NOSUID|MS_NODEV,          "mode=1777");
     mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755");
     mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
+    mount("pstore",  "/sys/fs/pstore", "pstore",  MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     int cg_fd = open("/sys/fs/cgroup/cgroup.subtree_control", O_WRONLY);
     if (cg_fd >= 0) {
         write(cg_fd, "+cpu +memory +cpuset +pids +io", 30);
@@ -402,6 +404,97 @@ static void mount_pseudo(void) {
      * monitors need this; systemd runs `mount --make-rshared /` at boot. Without
      * it / stays private and mount-watching userspace spins (plasmashell 100%). */
     mount(NULL, "/", NULL, MS_SHARED|MS_REC, NULL);
+}
+
+/* Records the kernel left in pstore (efi-pstore: dmesg of a panic/oops) belong
+ * to the previous boot. Move them to disk so the next crash finds room in
+ * NVRAM: a record is unlinked only after its copy is fsync'd. Runs after
+ * modules load so ramoops/pstore-blk records are there too. Skipped when
+ * fstab gives /var or /var/lib its own filesystem that is not mounted yet --
+ * the copy would land under the mount point and vanish. The archive path is
+ * left in /run so schema-doctor knows this boot harvested something. */
+#define PSTORE_DIR     "/sys/fs/pstore"
+#define PSTORE_ARCHIVE "/var/lib/schema-init/pstore"
+#define PSTORE_MARKER  "/run/schema-init/pstore-harvested"
+
+static int pstore_var_pending(void) {
+    struct stat root, st;
+    struct mntent *m;
+    int pending = 0;
+    FILE *f = setmntent("/etc/fstab", "r");
+    if (!f || stat("/", &root) < 0) { if (f) endmntent(f); return 0; }
+    while ((m = getmntent(f))) {
+        if (strcmp(m->mnt_dir, "/var") && strcmp(m->mnt_dir, "/var/lib")) continue;
+        if (stat(m->mnt_dir, &st) < 0 || st.st_dev == root.st_dev) pending = 1;
+    }
+    endmntent(f);
+    return pending;
+}
+
+static int pstore_copy(int dirfd, const char *name, int outdir) {
+    char buf[8192];
+    ssize_t n;
+    int ok = 0;
+    int in = openat(dirfd, name, O_RDONLY | O_CLOEXEC);
+    if (in < 0) return 0;
+    int out = openat(outdir, name, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (out >= 0) {
+        ok = 1;
+        while ((n = read(in, buf, sizeof buf)) != 0) {
+            if (n < 0 || write(out, buf, n) != n) { ok = 0; break; }
+        }
+        if (fsync(out) < 0) ok = 0;
+        close(out);
+    }
+    close(in);
+    return ok;
+}
+
+static void pstore_harvest(void) {
+    struct dirent *de;
+    struct stat st;
+    time_t oldest = 0;
+    char dest[128];
+    int moved = 0, kept = 0;
+
+    DIR *d = opendir(PSTORE_DIR);
+    if (!d) return;
+    while ((de = readdir(d))) {
+        if (de->d_name[0] == '.') continue;
+        if (fstatat(dirfd(d), de->d_name, &st, 0) == 0 && S_ISREG(st.st_mode) &&
+            (oldest == 0 || st.st_mtime < oldest))
+            oldest = st.st_mtime;
+    }
+    if (oldest == 0 || pstore_var_pending() || stat("/var/lib/schema-init", &st) < 0) {
+        closedir(d);
+        return;
+    }
+
+    struct tm tm;
+    localtime_r(&oldest, &tm);
+    mkdir(PSTORE_ARCHIVE, 0700);
+    strftime(dest, sizeof dest, PSTORE_ARCHIVE "/%Y%m%d-%H%M%S", &tm);
+    mkdir(dest, 0700);
+    int outdir = open(dest, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (outdir < 0) { closedir(d); return; }
+
+    rewinddir(d);
+    while ((de = readdir(d))) {
+        if (de->d_name[0] == '.') continue;
+        if (pstore_copy(dirfd(d), de->d_name, outdir) &&
+            unlinkat(dirfd(d), de->d_name, 0) == 0)
+            moved++;
+        else
+            kept++;
+    }
+    fsync(outdir);
+    close(outdir);
+    closedir(d);
+    mkdir("/run/schema-init", 0755);
+    FILE *mk = fopen(PSTORE_MARKER, "w");
+    if (mk) { fprintf(mk, "%s\n", dest); fclose(mk); }
+    fprintf(stderr, "schema-init: pstore: %d record(s) from the previous boot -> %s%s\n",
+            moved, dest, kept ? " (some left in pstore)" : "");
 }
 
 static void cleanup_tmp_locks(void) {
@@ -3074,6 +3167,7 @@ int main(int argc, char **argv) {
         cleanup_tmp_locks();
         load_watchdog_module();
         load_configured_modules();
+        pstore_harvest();
         watchdog_init();
     }
     /* Before the control socket opens or a single service spawns, so the
