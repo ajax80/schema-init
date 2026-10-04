@@ -283,6 +283,25 @@ int main(void) {
         assert(!service_listen_matches(&svc, 1));
         service_listen_close(&svc);
         assert(svc.listen_open == 0 && fcntl(first, F_GETFD) == -1);
+
+        /* a directory someone else can write to is refused, and nothing is
+         * followed through a planted symlink */
+        char open_dir[200], target[200];
+        snprintf(open_dir, sizeof open_dir, "%s/open", dir3);
+        mkdir(open_dir, 0777);
+        chmod(open_dir, 0777);
+        snprintf(svc.listen[0], sizeof svc.listen[0], "stream:%s/x.sock", open_dir);
+        svc.listen_count = 1;
+        assert(service_listen_open(&svc) == -1 && svc.listen_open == 0);
+        snprintf(target, sizeof target, "%s/victim", dir3);
+        write_svc(target, "x");
+        chmod(target, 0600);
+        snprintf(svc.listen[0], sizeof svc.listen[0], "fifo:%s/sub/link.fifo", dir3);
+        snprintf(p, sizeof p, "%s/sub/link.fifo", dir3);
+        assert(symlink(target, p) == 0);
+        assert(service_listen_open(&svc) == -1);
+        struct stat vst;
+        assert(stat(target, &vst) == 0 && (vst.st_mode & 07777) == 0600);
     }
 
     printf("all service env tests passed\n");

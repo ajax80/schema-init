@@ -772,57 +772,48 @@ int service_listen_parse(const char *spec, int *type, struct sockaddr_storage *s
     return 0;
 }
 
-static void mkdir_parents(const char *path) {
+/* The socket's directory as a dirfd, created 0755 where missing. Every
+ * directory on the way must be ours (root's) and writable by no one else, or
+ * sticky: PID 1 unlinks, creates and chowns the entry, so nobody may swap a
+ * component under it. */
+static int listen_dir(const char *path, const char **base) {
     char d[128];
+    int dfd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     snprintf(d, sizeof d, "%s", path);
-    for (char *p = d + 1; *p; p++) {
-        if (*p != '/') continue;
-        *p = '\0';
-        mkdir(d, 0755);
-        *p = '/';
+    char *p = d + 1, *slash;
+    while (dfd >= 0 && (slash = strchr(p, '/'))) {
+        struct stat st;
+        *slash = '\0';
+        mkdirat(dfd, p, 0755);
+        int n = openat(dfd, p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        close(dfd);
+        dfd = n;
+        if (dfd >= 0 && (fstat(dfd, &st) < 0 || (st.st_uid != 0 && st.st_uid != geteuid()) ||
+                         ((st.st_mode & 022) && !(st.st_mode & S_ISVTX)))) {
+            close(dfd);
+            dfd = -1;
+            errno = EPERM;
+        }
+        p = slash + 1;
     }
+    *base = path + (p - d);
+    return dfd;
 }
 
 static int listen_one(const service_t *svc, const char *spec) {
     struct sockaddr_storage ss;
     socklen_t len;
-    int type, fd, one = 1, zero = 0;
+    int type, fd, one = 1, zero = 0, dfd = -1;
     mode_t mode = svc->socket_mode ? (mode_t)svc->socket_mode : 0666;
     if (service_listen_parse(spec, &type, &ss, &len) < 0) {
         errno = EINVAL;
         return -1;
     }
     const char *path = ss.ss_family == AF_UNIX && ((struct sockaddr_un *)&ss)->sun_path[0]
-                     ? ((struct sockaddr_un *)&ss)->sun_path : NULL;
-    struct stat st;
+                     ? ((struct sockaddr_un *)&ss)->sun_path : NULL, *base = NULL;
+    uid_t u = (uid_t)-1;
+    gid_t g = (gid_t)-1;
     if (path) {
-        mkdir_parents(path);
-        if (lstat(path, &st) == 0 && (type ? S_ISSOCK(st.st_mode) : 0))
-            unlink(path);
-    }
-    if (type == 0) {
-        if (mkfifo(path, mode) < 0 && !(errno == EEXIST && stat(path, &st) == 0 && S_ISFIFO(st.st_mode)))
-            return -1;
-        fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0) return -1;
-    } else {
-        fd = socket(ss.ss_family, type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (fd < 0) return -1;
-        if (ss.ss_family != AF_UNIX)
-            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        if (ss.ss_family == AF_INET6)
-            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof zero);
-        if (bind(fd, (struct sockaddr *)&ss, len) < 0 ||
-            (type != SOCK_DGRAM && listen(fd, SOMAXCONN) < 0)) {
-            int e = errno;
-            close(fd);
-            errno = e;
-            return -1;
-        }
-    }
-    if (path) {
-        uid_t u = (uid_t)-1;
-        gid_t g = (gid_t)-1;
         struct passwd *pw = svc->socket_user[0] ? getpwnam(svc->socket_user) : NULL;
         struct group *gr = svc->socket_group[0] ? getgrnam(svc->socket_group) : NULL;
         if (pw) u = pw->pw_uid;
@@ -830,8 +821,54 @@ static int listen_one(const service_t *svc, const char *spec) {
         if ((svc->socket_user[0] && !pw) || (svc->socket_group[0] && !gr))
             fprintf(stderr, "[schema-init] %s: socket owner %s:%s not found, left as root\n",
                     svc->name, svc->socket_user, svc->socket_group);
-        chmod(path, mode);
-        if (u != (uid_t)-1 || g != (gid_t)-1) chown(path, u, g);
+        mode_t old = umask(022);
+        dfd = listen_dir(path, &base);
+        umask(old);
+        if (dfd < 0) return -1;
+    }
+    struct stat st;
+    if (type == 0) {
+        mode_t old = umask(0777 & ~mode);
+        int r = mkfifoat(dfd, base, mode);
+        umask(old);
+        fd = r < 0 && errno != EEXIST ? -1
+           : openat(dfd, base, O_RDWR | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+        if (fd >= 0 && (fstat(fd, &st) < 0 || !S_ISFIFO(st.st_mode))) {
+            close(fd);
+            fd = -1;
+            errno = EEXIST;
+        }
+        if (fd >= 0) {
+            fchmod(fd, mode);
+            if (u != (uid_t)-1 || g != (gid_t)-1) fchown(fd, u, g);
+        }
+        close(dfd);
+        return fd;
+    }
+    if (path && fstatat(dfd, base, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISSOCK(st.st_mode))
+        unlinkat(dfd, base, 0);
+    fd = socket(ss.ss_family, type | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd >= 0) {
+        if (ss.ss_family != AF_UNIX)
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        if (ss.ss_family == AF_INET6)
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof zero);
+        mode_t old = umask(0777 & ~mode);
+        int r = bind(fd, (struct sockaddr *)&ss, len);
+        umask(old);
+        if (r < 0 || (type != SOCK_DGRAM && listen(fd, SOMAXCONN) < 0)) {
+            int e = errno;
+            close(fd);
+            fd = -1;
+            errno = e;
+        }
+    }
+    if (fd >= 0 && path && (u != (uid_t)-1 || g != (gid_t)-1))
+        fchownat(dfd, base, u, g, AT_SYMLINK_NOFOLLOW);
+    if (dfd >= 0) {
+        int e = errno;
+        close(dfd);
+        errno = e;
     }
     return fd;
 }
