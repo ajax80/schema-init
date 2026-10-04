@@ -33,6 +33,7 @@
 #include <sys/inotify.h>
 #include <linux/watchdog.h>
 #include <dirent.h>
+#include <mntent.h>
 
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
@@ -407,10 +408,28 @@ static void mount_pseudo(void) {
 
 /* Records the kernel left in pstore (efi-pstore: dmesg of a panic/oops) belong
  * to the previous boot. Move them to disk so the next crash finds room in
- * NVRAM: a record is unlinked only after its copy is fsync'd. Skipped when
- * /var/lib/schema-init is not there yet (a /var not mounted this early). */
+ * NVRAM: a record is unlinked only after its copy is fsync'd. Runs after
+ * modules load so ramoops/pstore-blk records are there too. Skipped when
+ * fstab gives /var or /var/lib its own filesystem that is not mounted yet --
+ * the copy would land under the mount point and vanish. The archive path is
+ * left in /run so schema-doctor knows this boot harvested something. */
 #define PSTORE_DIR     "/sys/fs/pstore"
 #define PSTORE_ARCHIVE "/var/lib/schema-init/pstore"
+#define PSTORE_MARKER  "/run/schema-init/pstore-harvested"
+
+static int pstore_var_pending(void) {
+    struct stat root, st;
+    struct mntent *m;
+    int pending = 0;
+    FILE *f = setmntent("/etc/fstab", "r");
+    if (!f || stat("/", &root) < 0) { if (f) endmntent(f); return 0; }
+    while ((m = getmntent(f))) {
+        if (strcmp(m->mnt_dir, "/var") && strcmp(m->mnt_dir, "/var/lib")) continue;
+        if (stat(m->mnt_dir, &st) < 0 || st.st_dev == root.st_dev) pending = 1;
+    }
+    endmntent(f);
+    return pending;
+}
 
 static int pstore_copy(int dirfd, const char *name, int outdir) {
     char buf[8192];
@@ -446,7 +465,10 @@ static void pstore_harvest(void) {
             (oldest == 0 || st.st_mtime < oldest))
             oldest = st.st_mtime;
     }
-    if (oldest == 0 || stat("/var/lib/schema-init", &st) < 0) { closedir(d); return; }
+    if (oldest == 0 || pstore_var_pending() || stat("/var/lib/schema-init", &st) < 0) {
+        closedir(d);
+        return;
+    }
 
     struct tm tm;
     localtime_r(&oldest, &tm);
@@ -468,6 +490,9 @@ static void pstore_harvest(void) {
     fsync(outdir);
     close(outdir);
     closedir(d);
+    mkdir("/run/schema-init", 0755);
+    FILE *mk = fopen(PSTORE_MARKER, "w");
+    if (mk) { fprintf(mk, "%s\n", dest); fclose(mk); }
     fprintf(stderr, "schema-init: pstore: %d record(s) from the previous boot -> %s%s\n",
             moved, dest, kept ? " (some left in pstore)" : "");
 }
@@ -3139,10 +3164,10 @@ int main(int argc, char **argv) {
             close(fd);
         }
         mount_pseudo();
-        pstore_harvest();
         cleanup_tmp_locks();
         load_watchdog_module();
         load_configured_modules();
+        pstore_harvest();
         watchdog_init();
     }
     /* Before the control socket opens or a single service spawns, so the
