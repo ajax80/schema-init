@@ -729,6 +729,7 @@ static void reap(void) {
 
             if (services[i].pid_file[0] && services[i].fork_state == 0 &&
                 services[i].inst.state == STATE_FULL_TRUST &&
+                !services[i].ctl_killed && !(services[i].flags & SVC_NO_RESTART) &&
                 WIFEXITED(status) && WEXITSTATUS(status) == 0) {
                 fork_adopt(&services[i]);
                 break;
@@ -757,6 +758,7 @@ static void reap(void) {
                  * cgroup on any later start. */
                 service_cgroup_kill(&services[i]);
             } else if (services[i].ctl_killed) {
+                if (services[i].pid_file[0]) service_cgroup_kill(&services[i]);
                 services[i].inst.state = STATE_NEW_PROCESS;
                 service_log(&services[i], "ctl-restart");
             } else {
@@ -1226,7 +1228,9 @@ static void tick_service(service_t *svc,
             }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
-                if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
+                if (svc->pid_file[0] && svc->fork_state != 1) {
+                    /* not before the launcher has exited and the daemon is adopted */
+                } else if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
                     ready = svc->ready_bus_name[0] ? READY_BUS : READY_NOTIFY;
                 } else if (svc->ready_path[0] && ready_path_fresh(svc)) {
                     ready = READY_PATH;
@@ -1777,6 +1781,10 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "ok: SIGTERM → %s (pid %d)\n",
                     name, (int)services[i].child_pid);
             } else {
+                if (services[i].fork_state < 0) {
+                    service_cgroup_kill(&services[i]);
+                    services[i].fork_state = 0;
+                }
                 services[i].inst.state = STATE_EXCISED;
                 ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
             }
@@ -1795,6 +1803,10 @@ static void ctl_cmd(int fd, char *line) {
                 kill(services[i].child_pid, SIGTERM);
                 ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
             } else {
+                if (services[i].fork_state < 0) {
+                    service_cgroup_kill(&services[i]);
+                    services[i].fork_state = 0;
+                }
                 services[i].inst.state    = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
                 ctl_writef(fd, "ok: %s requeued\n", name);
