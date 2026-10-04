@@ -37,6 +37,30 @@ check("User=nobody -> user=, no needs_root", "user=nobody\n" in b2 and "needs_ro
 check("quoted env pair", "env=FOO=a b\n" in b2)
 check("second env pair", "env=BAR=c\n" in b2)
 
+# --- EnvironmentFile -> env_file= + runtime expansion ---
+be = si.unit_to_svc("chronyd", si.parse_unit(
+    "[Service]\nEnvironment=A=1\nEnvironmentFile=-/etc/sysconfig/chronyd\n"
+    "ExecStart=/usr/sbin/chronyd -n $OPTIONS --a=${A}\n[Install]\nWantedBy=x\n"))
+check("env_file= emitted with - prefix", "env_file=-/etc/sysconfig/chronyd\n" in be)
+check("$OPTIONS kept raw for PID1", "args=$OPTIONS\n" in be and "args=--a=${A}\n" in be)
+check("expand_args=1 set", "expand_args=1\n" in be)
+check("Environment= still env=", "env=A=1\n" in be)
+check("no dropped-EnvironmentFile note", "dropped EnvironmentFile" not in be and "unresolved" not in be)
+bn = si.unit_to_svc("irq", si.parse_unit(
+    "[Service]\nEnvironmentFile=/etc/sysconfig/irq\nExecStart=/usr/sbin/irq --foreground\n[Install]\nWantedBy=x\n"))
+check("env_file without $ args -> no expand_args", "env_file=/etc/sysconfig/irq\n" in bn and "expand_args" not in bn)
+br = si.unit_to_svc("r", si.parse_unit(
+    "[Service]\nEnvironmentFile=/etc/a\nEnvironmentFile=\nEnvironmentFile=%h/x\n"
+    "ExecStart=/bin/r $X\n[Install]\nWantedBy=x\n"))
+check("empty EnvironmentFile= resets; specifier dropped with note",
+      "env_file=" not in br and "dropped EnvironmentFile=%h/x" in br and "dropped 1 unresolved" in br)
+try:
+    si.unit_to_svc("v", si.parse_unit(
+        "[Service]\nEnvironmentFile=/etc/v\nExecStart=$BIN -x\n[Install]\nWantedBy=x\n"))
+    check("variable binary with env file skipped", False)
+except si.Skip:
+    check("variable binary with env file skipped", True)
+
 # --- ExecStart prefix stripping ---
 b3 = si.unit_to_svc("p", si.parse_unit("[Service]\nExecStart=@-/bin/p arg\n[Install]\nWantedBy=x\n"))
 check("prefix chars stripped", "exec=/bin/p\n" in b3 and "args=arg\n" in b3)

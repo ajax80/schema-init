@@ -518,6 +518,109 @@ int service_apply_hardening(const service_t *svc) {
     return 0;
 }
 
+static int env_name_ok(const char *s, size_t n) {
+    if (!n || !(isalpha((unsigned char)s[0]) || s[0] == '_')) return 0;
+    for (size_t i = 1; i < n; i++)
+        if (!(isalnum((unsigned char)s[i]) || s[i] == '_')) return 0;
+    return 1;
+}
+
+int service_env_file_read(const char *path, char **pairs, int max) {
+    FILE *f = fopen(path, "re");
+    if (!f) return -1;
+    char *buf = malloc(65537);
+    size_t len = buf ? fread(buf, 1, 65536, f) : 0;
+    fclose(f);
+    if (!buf) return 0;
+    buf[len] = '\0';
+    char *p = buf;
+    int n = 0;
+    while (*p && n < max) {
+        p += strspn(p, " \t\r\n");
+        if (!*p) break;
+        if (*p == '#' || *p == ';') { p += strcspn(p, "\n"); continue; }
+        if (!strncmp(p, "export ", 7)) p += 7;
+        char *k = p;
+        p += strcspn(p, "=\n");
+        if (*p != '=') continue;
+        char *ke = p;
+        while (ke > k && (ke[-1] == ' ' || ke[-1] == '\t')) ke--;
+        p++;
+        p += strspn(p, " \t");
+        size_t o = ke - k, keep;
+        char *out = malloc(o + strlen(p) + 2);
+        if (!out) break;
+        memcpy(out, k, o);
+        out[o++] = '=';
+        keep = o;
+        while (*p && *p != '\n') {
+            if (*p == '\'') {
+                for (p++; *p && *p != '\''; ) out[o++] = *p++;
+                if (*p) p++;
+                keep = o;
+            } else if (*p == '"') {
+                for (p++; *p && *p != '"'; ) {
+                    if (*p == '\\' && p[1] == '\n') { p += 2; continue; }
+                    if (*p == '\\' && p[1] && strchr("\"\\`$", p[1])) p++;
+                    out[o++] = *p++;
+                }
+                if (*p) p++;
+                keep = o;
+            } else if (*p == '\\' && p[1]) {
+                if (p[1] == '\n') { p += 2; continue; }
+                p++;
+                out[o++] = *p++;
+                keep = o;
+            } else {
+                if (*p != ' ' && *p != '\t' && *p != '\r') keep = o + 1;
+                out[o++] = *p++;
+            }
+        }
+        out[keep] = '\0';
+        if (env_name_ok(k, ke - k)) pairs[n++] = out;
+        else free(out);
+    }
+    free(buf);
+    return n;
+}
+
+int service_expand_argv(char *const *argv, char **out, int max) {
+    int n = 0;
+    for (int i = 0; argv[i] && n < max; i++) {
+        const char *a = argv[i];
+        if (a[0] == '$' && env_name_ok(a + 1, strlen(a + 1))) {
+            const char *v = getenv(a + 1);
+            char *dup = strdup(v ? v : ""), *save = NULL;
+            for (char *w = strtok_r(dup, " \t\n", &save); w && n < max;
+                 w = strtok_r(NULL, " \t\n", &save))
+                out[n++] = w;
+            continue;
+        }
+        char *res = NULL;
+        size_t rlen = 0;
+        FILE *m = open_memstream(&res, &rlen);
+        if (!m) { out[n++] = (char *)a; continue; }
+        for (const char *p = a; *p; p++) {
+            if (p[0] == '$' && p[1] == '$') { fputc('$', m); p++; continue; }
+            if (p[0] == '$' && p[1] == '{') {
+                const char *e = strchr(p + 2, '}');
+                if (e && env_name_ok(p + 2, e - p - 2)) {
+                    char name[256];
+                    snprintf(name, sizeof name, "%.*s", (int)(e - p - 2), p + 2);
+                    const char *v = getenv(name);
+                    if (v) fputs(v, m);
+                    p = e;
+                    continue;
+                }
+            }
+            fputc(*p, m);
+        }
+        fclose(m);
+        out[n++] = res;
+    }
+    return n;
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -582,6 +685,19 @@ int service_spawn(service_t *svc) {
             dup2(fd, STDOUT_FILENO);
             dup2(fd, STDERR_FILENO);
             close(fd);
+        }
+        char *file_env[64];
+        int file_envc = 0;
+        for (int i = 0; i < svc->env_file_count; i++) {
+            const char *ef = svc->env_file[i];
+            int opt = *ef == '-';
+            int got = service_env_file_read(ef + opt, file_env + file_envc, 64 - file_envc);
+            if (got < 0) {
+                if (opt) continue;
+                dprintf(2, "[schema-init] %s: env_file %s: %s\n", svc->name, ef, strerror(errno));
+                _exit(1);
+            }
+            file_envc += got;
         }
         char *at = strchr(svc->name, '@');
         if (at) {
@@ -667,7 +783,17 @@ int service_spawn(service_t *svc) {
             setenv(kv, ev + 1, 1);
             *ev = '=';
         }
-        execv(svc->exec, svc->argv);
+        for (int e = 0; e < file_envc; e++) {
+            char *ev = strchr(file_env[e], '=');
+            *ev = '\0';
+            setenv(file_env[e], ev + 1, 1);
+        }
+        char **argv = svc->argv, *xargv[64];
+        if (svc->expand_args) {
+            xargv[service_expand_argv(svc->argv, xargv, 63)] = NULL;
+            argv = xargv;
+        }
+        execv(svc->exec, argv);
         _exit(127);
     }
 
@@ -1052,6 +1178,9 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
             svc->envp[i] = NULL;
         }
         svc->env_count = 0;
+    } else if (strcmp(key, "env_file") == 0) {
+        memset(svc->env_file, 0, sizeof svc->env_file);
+        svc->env_file_count = 0;
     } else if (strcmp(key, "dep") == 0) {
         memset(svc->dep_name, 0, sizeof svc->dep_name);
         pc->dep_slot = 0;
@@ -1093,6 +1222,16 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         while (*val == ' ' || *val == '\t') val++;
         if (strchr(val, '='))
             svc->envp[svc->env_count++] = strdup(val);
+    } else if (strcmp(line, "env_file") == 0 && svc->env_file_count < MAX_ENV_FILES) {
+        while (*val == ' ' || *val == '\t') val++;
+        if (val[*val == '-'] != '/') {
+            fprintf(stderr, "[schema-init] %s: env_file=%s must be an absolute path\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        strncpy(svc->env_file[svc->env_file_count++], val, sizeof svc->env_file[0] - 1);
+    } else if (strcmp(line, "expand_args") == 0) {
+        svc->expand_args = atoi(val) != 0;
     } else if (strcmp(line, "dep") == 0 && pc->dep_slot < MAX_DEPS) {
         strncpy(svc->dep_name[pc->dep_slot++], val, 63);
     } else if (strcmp(line, "oneshot") == 0 && atoi(val))

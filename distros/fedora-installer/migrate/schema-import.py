@@ -89,8 +89,7 @@ def _exec_tokens(execstart):
 
 def _expand_argv(argv, env):
     """Resolve $VAR / ${VAR} tokens against captured Environment= values, since
-    schema-init exec()s with no shell. A token that stays unresolved (its var
-    came from a dropped EnvironmentFile, say) is dropped — matching systemd,
+    schema-init exec()s with no shell. A token that stays unresolved is dropped — matching systemd,
     which expands an unset variable to nothing. Returns (argv, dropped_count)."""
     out, dropped = [], 0
     for tok in argv:
@@ -323,10 +322,26 @@ def unit_to_svc(name, sections):
         raise Skip("no usable ExecStart")
 
     env_pairs = _env_pairs(_get_all(svc, "Environment"))
-    env_map = dict(p.split("=", 1) for p in env_pairs)
-    argv, dropped_args = _expand_argv(argv, env_map)
-    if not argv:
-        raise Skip("ExecStart is entirely unresolved variables")
+    env_files, env_file_notes = [], []
+    for ef in _get_all(svc, "EnvironmentFile"):
+        if ef == "":
+            env_files = []
+        elif "%" in ef or not ef.lstrip("-").startswith("/"):
+            env_file_notes.append("dropped EnvironmentFile=%s" % ef)
+        else:
+            env_files.append(ef)
+    if len(env_files) > 4:
+        env_file_notes.append("dropped EnvironmentFile=%s (limit 4)" % " ".join(env_files[4:]))
+        env_files = env_files[:4]
+    expand = bool(env_files) and any("$" in a for a in argv[1:])
+    dropped_args = 0
+    if env_files and "$" in argv[0]:
+        raise Skip("ExecStart binary path uses a variable from an EnvironmentFile")
+    if not env_files:
+        env_map = dict(p.split("=", 1) for p in env_pairs)
+        argv, dropped_args = _expand_argv(argv, env_map)
+        if not argv:
+            raise Skip("ExecStart is entirely unresolved variables")
 
     lines = ["name=%s" % name, "exec=%s" % argv[0]]
     for a in argv[1:]:
@@ -334,6 +349,10 @@ def unit_to_svc(name, sections):
 
     for e in env_pairs:
         lines.append("env=%s" % e)
+    for ef in env_files:
+        lines.append("env_file=%s" % ef)
+    if expand:
+        lines.append("expand_args=1")
 
     if stype == "oneshot":
         lines.append("oneshot=1")
@@ -376,7 +395,8 @@ def unit_to_svc(name, sections):
         notes.append("dropped %d unresolved $VAR arg(s)" % dropped_args)
     if not inst:
         notes.append("no [Install] section")
-    for k in ("EnvironmentFile", "ExecStartPre", "WorkingDirectory"):
+    notes += env_file_notes
+    for k in ("ExecStartPre", "WorkingDirectory"):
         if _get_last(svc, k):
             notes.append("dropped %s" % k)
     if notes:

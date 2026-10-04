@@ -16,6 +16,7 @@
 #define MAX_SERVICES    88
 #define MAX_ARGV        16
 #define MAX_ENV         16
+#define MAX_ENV_FILES   4
 #define MAX_DEPS        8
 #define MAX_RESTARTS    5
 #define COOLDOWN_SECS   5
@@ -244,6 +245,9 @@ typedef struct {
     char            *argv[MAX_ARGV];
     char            *envp[MAX_ENV];      /* env= entries, each "KEY=VALUE"  */
     int              env_count;
+    char             env_file[MAX_ENV_FILES][256];
+    int              env_file_count;
+    int              expand_args;
     char             dep_name[MAX_DEPS][64]; /* dep names as written in .svc    */
     int              dep_idx[MAX_DEPS];      /* resolved service indices, -1=none */
     int              grp_dep_idx[MAX_DEPS];  /* resolved group indices, -1=none */
@@ -351,6 +355,8 @@ int service_apply_hardening(const service_t *svc);
 
 /* free the landlock_ro=/landlock_rw= path strings */
 void service_free_landlock(service_t *svc);
+int service_env_file_read(const char *path, char **pairs, int max);
+int service_expand_argv(char *const *argv, char **out, int max);
 
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);

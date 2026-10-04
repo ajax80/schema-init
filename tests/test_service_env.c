@@ -85,6 +85,68 @@ int main(void) {
     assert(services_load(dir2, table, 4) == 1);
     assert(strcmp(table[0].name, "ok") == 0);
 
+    char tmpl3[] = "/tmp/schema-svc-efXXXXXX";
+    char *dir3 = mkdtemp(tmpl3);
+    assert(dir3);
+    snprintf(p, sizeof p, "%s/h.svc", dir3);
+    write_svc(p,
+        "name=h\nexec=/bin/true\n"
+        "env_file=/etc/sysconfig/h\n"
+        "env_file=-/etc/default/h\n"
+        "expand_args=1\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.env_file_count == 2);
+    assert(strcmp(svc.env_file[0], "/etc/sysconfig/h") == 0);
+    assert(strcmp(svc.env_file[1], "-/etc/default/h") == 0);
+    assert(svc.expand_args == 1);
+    snprintf(p, sizeof p, "%s/i.svc", dir3);
+    write_svc(p, "name=i\nexec=/bin/true\nenv_file=relative/h\n");
+    assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/j.svc", dir3);
+    write_svc(p, "name=j\nexec=/bin/true\nenv_file=-\n");
+    assert(service_load_one(p, &svc) == -1);
+
+    snprintf(p, sizeof p, "%s/env", dir3);
+    write_svc(p,
+        "# comment\n"
+        "; also comment\n"
+        "\n"
+        "OPTIONS=\"-u chrony -F 2\"\n"
+        "  SPACED = plain value   \n"
+        "SINGLE='a \"b\" $c'\n"
+        "DQ=\"x\\\"y\\\\z \\$w\"\n"
+        "export EXP=1\n"
+        "CONT=one\\\n"
+        "two\n"
+        "EMPTY=\n"
+        "MIX=a'b c'\"d\"\n"
+        "1BAD=no\n"
+        "NOEQ\n"
+        "LAST=end");
+    char *pairs[32];
+    int n = service_env_file_read(p, pairs, 32);
+    const char *want[] = {
+        "OPTIONS=-u chrony -F 2", "SPACED=plain value", "SINGLE=a \"b\" $c",
+        "DQ=x\"y\\z $w", "EXP=1", "CONT=onetwo", "EMPTY=", "MIX=ab cd", "LAST=end",
+    };
+    assert(n == (int)(sizeof want / sizeof want[0]));
+    for (int i = 0; i < n; i++) assert(strcmp(pairs[i], want[i]) == 0);
+    assert(service_env_file_read(p, pairs, 2) == 2);
+    assert(service_env_file_read("/nonexistent/schema-env", pairs, 32) == -1);
+
+    setenv("OPTS", " -a  -b\tc ", 1);
+    setenv("ONE", "x y", 1);
+    unsetenv("UNSET_V");
+    char *in[] = {"/bin/d", "$OPTS", "${ONE}", "--k=${ONE}!", "$UNSET_V", "${UNSET_V}",
+                  "pre$ONE", "$$HOME", "${bad-name}", "${ONE", NULL};
+    char *out[32];
+    int m = service_expand_argv(in, out, 31);
+    const char *exp[] = {"/bin/d", "-a", "-b", "c", "x y", "--k=x y!", "",
+                         "pre$ONE", "$HOME", "${bad-name}", "${ONE"};
+    assert(m == (int)(sizeof exp / sizeof exp[0]));
+    for (int i = 0; i < m; i++) assert(strcmp(out[i], exp[i]) == 0);
+    assert(service_expand_argv(in, out, 3) == 3);
+
     printf("all service env tests passed\n");
     return 0;
 }
