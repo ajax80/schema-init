@@ -142,7 +142,19 @@ def _which(cmd):
     return None
 
 
-def _exec_pre(svc):
+def _specifiers(argv, name):
+    spec = {"n": name + ".service", "N": name, "p": name, "t": "/run", "%": "%"}
+    out = []
+    for w in argv:
+        def rep(m):
+            if m.group(1) not in spec:
+                raise Skip("specifier %%%s has no schema equivalent" % m.group(1))
+            return spec[m.group(1)]
+        out.append(re.sub(r"%(.)", rep, w))
+    return out
+
+
+def _exec_pre(svc, name):
     out = []
     for v in _get_all(svc, "ExecStartPre"):
         if not v.strip():
@@ -166,7 +178,7 @@ def _exec_pre(svc):
             if not exe:
                 raise Skip("ExecStartPre command %s not found" % argv[0])
             argv[0] = exe
-        out.append(("".join(sorted(set(pre))), argv))
+        out.append(("".join(sorted(set(pre))), _specifiers(argv, name)))
     if len(out) > 8:
         raise Skip("%d ExecStartPre= lines (limit 8)" % len(out))
     return out
@@ -706,7 +718,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
     if len(env_files) > 4:
         env_file_notes.append("dropped EnvironmentFile=%s (limit 4)" % " ".join(env_files[4:]))
         env_files = env_files[:4]
-    pres = _exec_pre(svc)
+    pres = _exec_pre(svc, name)
     expand = bool(env_files) and any("$" in a for a in argv[1:] + [w for _, pa in pres for w in pa])
     dropped_args = 0
     env_map = dict(p.split("=", 1) for p in env_pairs)

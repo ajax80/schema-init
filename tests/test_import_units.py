@@ -86,6 +86,16 @@ bq = si.unit_to_svc("q", si.parse_unit(
     "[Service]\nExecStartPre=/bin/sh -c \"grep '^X' /etc/a && echo \\\"y\\\" \\\\ z\"\n"
     "ExecStart=/bin/q\n[Install]\nWantedBy=x\n"))
 check("quotes and backslashes escaped", 'exec_pre=/bin/sh -c "grep \'^X\' /etc/a && echo \\"y\\" \\\\ z"\n' in bq)
+bm = si.unit_to_svc("mariadb", si.parse_unit(
+    "[Service]\nExecStartPre=/usr/libexec/mariadb-prepare-db-dir %n\nExecStartPre=/bin/sh -c \"echo 100%% %t\"\n"
+    "ExecStart=/bin/m\n[Install]\nWantedBy=x\n"))
+check("%n / %t / %% specifiers expanded", "exec_pre=/usr/libexec/mariadb-prepare-db-dir mariadb.service\n" in bm
+      and 'exec_pre=/bin/sh -c "echo 100% /run"\n' in bm)
+try:
+    si.unit_to_svc("u", si.parse_unit("[Service]\nExecStartPre=/bin/a %h\nExecStart=/bin/u\n[Install]\nWantedBy=x\n"))
+    check("unknown specifier skipped", False)
+except si.Skip:
+    check("unknown specifier skipped", True)
 bo = si.unit_to_svc("o", si.parse_unit(
     "[Service]\nExecStartPre=/bin/a\nExecStartPre=+/bin/b\nExecStart=/bin/o\n[Install]\nWantedBy=x\n"))
 check("plain before + warns of reorder", "order changed" in bo)

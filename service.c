@@ -491,6 +491,22 @@ static int landlock_check(service_t *svc) {
                 svc->name);
         return -1;
     }
+    for (int p = 0; p < svc->exec_pre_count; p++) {
+        const char *c = svc->exec_pre[p];
+        size_t pl = strspn(c, "+-");
+        char *w[32];
+        int nw, covered = 0;
+        if (memchr(c, '+', pl)) continue;
+        nw = service_split_cmdline(c + pl, w, 32);
+        for (i = 0; nw > 0 && i < svc->landlock_count && !covered; i++)
+            covered = landlock_beneath(w[0], svc->landlock[i]);
+        for (i = 0; i < nw; i++) free(w[i]);
+        if (!covered) {
+            fprintf(stderr, "[schema-init] %s: landlock does not cover exec_pre=%s — not loaded\n",
+                    svc->name, c);
+            return -1;
+        }
+    }
     if (!(svc->flags & SVC_NO_NEW_PRIVS) && svc->cap_restrict &&
         !(svc->cap_keep_mask & (1ULL << CAP_SYS_ADMIN))) {
         fprintf(stderr, "[schema-init] %s: landlock needs no_new_privs=1 when keep_caps "
@@ -1867,14 +1883,14 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         }
         strncpy(svc->env_file[svc->env_file_count++], val, sizeof svc->env_file[0] - 1);
     } else if (strcmp(line, "exec_pre") == 0) {
-        char *w[32];
+        char *w[33];
         const char *cmd = val + strspn(val, " \t");
         cmd += strspn(cmd, "+-");
-        int nw = service_split_cmdline(cmd, w, 32);
-        int ok = nw > 0 && w[0][0] == '/' && svc->exec_pre_count < MAX_EXEC_PRE;
+        int nw = service_split_cmdline(cmd, w, 33);
+        int ok = nw > 0 && nw <= 32 && w[0][0] == '/' && svc->exec_pre_count < MAX_EXEC_PRE;
         for (int i = 0; i < nw; i++) free(w[i]);
         if (!ok) {
-            fprintf(stderr, "[schema-init] %s: exec_pre=%s needs an absolute command with balanced quotes, at most %d per service\n",
+            fprintf(stderr, "[schema-init] %s: exec_pre=%s needs an absolute command with balanced quotes and at most 32 words, at most %d per service\n",
                     svc->name[0] ? svc->name : path, val, MAX_EXEC_PRE);
             return -1;
         }

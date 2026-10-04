@@ -203,6 +203,24 @@ int main(void) {
     snprintf(p, sizeof p, "%s/o.svc", dir3);
     write_svc(p, "name=o\nexec=/bin/true\nexec_pre=/bin/sh -c \"oops\n");
     assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/r.svc", dir3);
+    {
+        char body[512] = "name=r\nexec=/bin/true\nexec_pre=/bin/echo";
+        for (int i = 0; i < 31; i++) strcat(body, " w");
+        strcat(body, "\n");
+        write_svc(p, body);
+        assert(service_load_one(p, &svc) == 0);
+        body[strlen(body) - 1] = '\0';
+        strcat(body, " w\n");
+        write_svc(p, body);
+        assert(service_load_one(p, &svc) == -1);
+    }
+    snprintf(p, sizeof p, "%s/s.svc", dir3);
+    write_svc(p, "name=s\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\n"
+                 "exec_pre=+/bin/sh -c x\nexec_pre=/usr/bin/env\n");
+    assert(service_load_one(p, &svc) == 0);
+    write_svc(p, "name=s\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\nexec_pre=/bin/sh -c x\n");
+    assert(service_load_one(p, &svc) == -1);
     snprintf(p, sizeof p, "%s/q.svc", dir3);
     f = fopen(p, "w");
     assert(f);
