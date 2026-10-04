@@ -3,6 +3,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <sys/un.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 static void write_svc(const char *path, const char *body) {
     FILE *f = fopen(path, "w");
@@ -193,6 +201,108 @@ int main(void) {
         fputs("exec_pre=/bin/true\n", f);
     fclose(f);
     assert(service_load_one(p, &svc) == -1);
+
+    {
+        struct sockaddr_storage ss;
+        socklen_t len;
+        int type;
+        assert(service_listen_parse("stream:/run/cups/cups.sock", &type, &ss, &len) == 0);
+        assert(type == SOCK_STREAM && ss.ss_family == AF_UNIX && len == sizeof(struct sockaddr_un));
+        assert(service_listen_parse("seqpacket:@ISCSIADM_ABSTRACT_NAMESPACE", &type, &ss, &len) == 0);
+        assert(type == SOCK_SEQPACKET && ((struct sockaddr_un *)&ss)->sun_path[0] == '\0');
+        assert(len == offsetof(struct sockaddr_un, sun_path) + strlen("@ISCSIADM_ABSTRACT_NAMESPACE"));
+        assert(service_listen_parse("fifo:/run/dmeventd-server", &type, &ss, &len) == 0 && type == 0);
+        assert(service_listen_parse("dgram:631", &type, &ss, &len) == 0 && ss.ss_family == AF_INET6);
+        assert(ntohs(((struct sockaddr_in6 *)&ss)->sin6_port) == 631);
+        assert(service_listen_parse("stream:127.0.0.1:8080", &type, &ss, &len) == 0 && ss.ss_family == AF_INET);
+        assert(service_listen_parse("stream:[::1]:8080", &type, &ss, &len) == 0 && ss.ss_family == AF_INET6);
+        const char *bad[] = { "/run/x", "tcp:/run/x", "stream:", "stream:run/x", "fifo:@x", "fifo:80",
+                              "stream:@", "stream:0", "stream:65536", "stream:1.2.3.4:", "stream:[::1]80",
+                              "stream:nothost:80", "seqpacket:80", NULL };
+        for (int i = 0; bad[i]; i++) assert(service_listen_parse(bad[i], &type, &ss, &len) == -1);
+
+        snprintf(p, sizeof p, "%s/s.svc", dir3);
+        write_svc(p, "name=s\nexec=/bin/true\nlisten=stream:/run/s.sock\nlisten=fifo:/run/s.fifo\n"
+                     "listen_lazy=1\nsocket_mode=0660\nsocket_user=root\nsocket_group=wheel\n");
+        assert(service_load_one(p, &svc) == 0);
+        assert(svc.listen_count == 2 && svc.listen_lazy && svc.listen_hold && svc.listen_open == 0);
+        assert(svc.socket_mode == 0660 && !strcmp(svc.socket_group, "wheel"));
+        snprintf(p, sizeof p, "%s/t.svc", dir3);
+        write_svc(p, "name=t\nexec=/bin/true\nlisten=stream:/run/a\nlisten=stream:/run/b\n"
+                     "listen=stream:/run/c\nlisten=stream:/run/d\nlisten=stream:/run/e\n");
+        assert(service_load_one(p, &svc) == -1);
+        write_svc(p, "name=t\nexec=/bin/true\nlisten=unix:/run/a\n");
+        assert(service_load_one(p, &svc) == -1);
+        write_svc(p, "name=t\nexec=/bin/true\nsocket_mode=rw\n");
+        assert(service_load_one(p, &svc) == -1);
+
+        /* PID 1 side for real: bind, spawn, the child gets the socket at fd 3 */
+        char sock[200], fifo[200], body[1024];
+        snprintf(sock, sizeof sock, "%s/sub/l.sock", dir3);
+        snprintf(fifo, sizeof fifo, "%s/sub/l.fifo", dir3);
+        snprintf(p, sizeof p, "%s/l.svc", dir3);
+        snprintf(body, sizeof body,
+            "name=l\nexec=/usr/bin/python3\nargs=-c\n"
+            "args=import os,socket,stat;s=socket.socket(fileno=3);c,_=s.accept();c.sendall(('%%s %%s %%s %%d' %% "
+            "(os.environ['LISTEN_FDS'],os.environ['LISTEN_PID']==str(os.getpid()),os.environ['LISTEN_FDNAMES'],"
+            "stat.S_ISFIFO(os.fstat(4).st_mode))).encode())\n"
+            "listen=stream:%s\nlisten=fifo:%s\nsocket_mode=0600\n", sock, fifo);
+        write_svc(p, body);
+        assert(service_load_one(p, &svc) == 0);
+        int first = -1;
+        for (int round = 0; round < 2; round++) {
+            assert(service_spawn(&svc) == 0);
+            assert(svc.listen_open == 2);
+            if (round == 0) first = svc.listen_fd[0];
+            assert(svc.listen_fd[0] == first);
+            struct stat st;
+            assert(stat(sock, &st) == 0 && S_ISSOCK(st.st_mode) && (st.st_mode & 07777) == 0600);
+            assert(stat(fifo, &st) == 0 && S_ISFIFO(st.st_mode) && (st.st_mode & 07777) == 0600);
+            int c = socket(AF_UNIX, SOCK_STREAM, 0);
+            struct sockaddr_un un = { .sun_family = AF_UNIX };
+            snprintf(un.sun_path, sizeof un.sun_path, "%s", sock);
+            assert(connect(c, (struct sockaddr *)&un, sizeof un) == 0);
+            char got[128] = "";
+            ssize_t r, n = 0;
+            while ((r = read(c, got + n, sizeof got - 1 - n)) > 0) n += r;
+            close(c);
+            int st2;
+            assert(waitpid(svc.child_pid, &st2, 0) == svc.child_pid && WIFEXITED(st2) && WEXITSTATUS(st2) == 0);
+            assert(strcmp(got, "2 True l.socket:l.socket 1") == 0);
+        }
+        assert(fcntl(first, F_GETFD) & FD_CLOEXEC);
+        assert(service_listen_matches(&svc, 0) && service_listen_matches(&svc, 1));
+        char keep[112];
+        memcpy(keep, svc.listen[0], sizeof keep);
+        snprintf(svc.listen[0], sizeof svc.listen[0], "stream:%s/sub/other.sock", dir3);
+        assert(!service_listen_matches(&svc, 0));
+        snprintf(svc.listen[0], sizeof svc.listen[0], "dgram:%s", sock);
+        assert(!service_listen_matches(&svc, 0));
+        memcpy(svc.listen[0], keep, sizeof keep);
+        snprintf(svc.listen[1], sizeof svc.listen[1], "fifo:%s/sub/other.fifo", dir3);
+        assert(!service_listen_matches(&svc, 1));
+        service_listen_close(&svc);
+        assert(svc.listen_open == 0 && fcntl(first, F_GETFD) == -1);
+
+        /* a directory someone else can write to is refused, and nothing is
+         * followed through a planted symlink */
+        char open_dir[200], target[200];
+        snprintf(open_dir, sizeof open_dir, "%s/open", dir3);
+        mkdir(open_dir, 0777);
+        chmod(open_dir, 0777);
+        snprintf(svc.listen[0], sizeof svc.listen[0], "stream:%s/x.sock", open_dir);
+        svc.listen_count = 1;
+        assert(service_listen_open(&svc) == -1 && svc.listen_open == 0);
+        snprintf(target, sizeof target, "%s/victim", dir3);
+        write_svc(target, "x");
+        chmod(target, 0600);
+        snprintf(svc.listen[0], sizeof svc.listen[0], "fifo:%s/sub/link.fifo", dir3);
+        snprintf(p, sizeof p, "%s/sub/link.fifo", dir3);
+        assert(symlink(target, p) == 0);
+        assert(service_listen_open(&svc) == -1);
+        struct stat vst;
+        assert(stat(target, &vst) == 0 && (vst.st_mode & 07777) == 0600);
+    }
 
     printf("all service env tests passed\n");
     return 0;

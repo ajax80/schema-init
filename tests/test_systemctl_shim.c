@@ -11,7 +11,8 @@ static void test_strip_suffix(void) {
     char b[256];
     assert(strcmp(strip_service_suffix("foo.service", b, sizeof b), "foo") == 0);
     assert(strcmp(strip_service_suffix("foo", b, sizeof b), "foo") == 0);
-    assert(strcmp(strip_service_suffix("foo.socket", b, sizeof b), "foo.socket") == 0);
+    assert(strcmp(strip_service_suffix("foo.socket", b, sizeof b), "foo") == 0);
+    assert(strcmp(unit_queue_name("foo.socket", b, sizeof b), "foo.socket") == 0);
     assert(strcmp(strip_service_suffix("foo.timer", b, sizeof b), "foo") == 0);
     assert(strcmp(unit_queue_name("foo.timer", b, sizeof b), "foo.timer") == 0);
     assert(strcmp(unit_queue_name("foo", b, sizeof b), "foo.service") == 0);
@@ -22,7 +23,8 @@ static void test_supported(void) {
     assert(unit_supported("foo") == 1);
     assert(unit_supported("foo@bar.service") == 0);
     assert(unit_supported("getty@tty1.service") == 0);
-    assert(unit_supported("foo.socket") == 0);
+    assert(unit_supported("foo.socket") == 1);
+    assert(unit_supported("foo@.socket") == 0);
     assert(unit_supported("foo.timer") == 1);
     assert(unit_supported("foo@.timer") == 0);
     assert(unit_supported("foo.path") == 0);
@@ -110,6 +112,11 @@ static void test_enable_queue(void) {
     assert(run("is-enabled", "bar.timer") == 0);
     assert(run("disable", "bar.timer") == 0);
     assert(run("is-enabled", "bar.timer") == 1);
+    /* so is a socket */
+    assert(run("enable", "baz.socket") == 0);
+    assert(run("is-enabled", "baz.socket") == 0);
+    assert(run("disable", "baz.socket") == 0);
+    assert(run("is-enabled", "baz.socket") == 1);
 }
 
 static void make_ctl_stub(const char *active_name) {
@@ -162,6 +169,14 @@ static void test_lifecycle(void) {
     assert(!ctl_log_has("tick"));
     assert(run("stop", "tick.timer") == 0);
     assert(ctl_log_has("stop tick"));
+    /* a socket is held whenever its .svc is loaded: start is a no-op, stop stops the service */
+    snprintf(svc, sizeof svc, "%s/svc/sock.svc", sandbox);
+    f = fopen(svc, "w"); assert(f); fputs("name=sock\nlisten=stream:/run/sock\n", f); fclose(f);
+    assert(run("start", "sock.socket") == 0);
+    assert(run("restart", "sock.socket") == 0);
+    assert(!ctl_log_has("sock"));
+    assert(run("stop", "sock.socket") == 0);
+    assert(ctl_log_has("stop sock"));
 }
 
 static void test_flags_and_safety(void) {

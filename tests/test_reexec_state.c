@@ -48,6 +48,8 @@ int main(void) {
     svcs[0].is_frozen = 1;
     svcs[0].dormant_count = 200;
     svcs[0].flags = SVC_NO_RESTART;               /* held down by schema-ctl stop */
+    svcs[0].listen_open = 2; svcs[0].listen_hold = 1;
+    svcs[0].listen_fd[0] = 9; svcs[0].listen_fd[1] = 12; svcs[0].listen_fd[2] = -1; svcs[0].listen_fd[3] = 0;
 
     strcpy(svcs[1].name, "boot-timing");
     svcs[1].flags = 0;                        /* run-once timer, completed */
@@ -85,6 +87,9 @@ int main(void) {
     assert(strcmp(out[0].rt.notify_status, "100% ready = yes\tok\n") == 0);
     assert(strcmp(out[0].rt.cgroup_path, "/sys/fs/cgroup/schema-init/dbus") == 0);
     assert(out[0].rt.is_frozen == 1 && out[0].rt.dormant_count == 200);
+    assert(out[0].rt.listen_open == 2 && out[0].rt.listen_hold == 1);
+    assert(out[0].rt.listen_fd[0] == 9 && out[0].rt.listen_fd[1] == 12 && out[0].rt.listen_fd[2] == -1);
+    assert(out[1].rt.listen_open == 0);
     assert(strcmp(out[1].name, "boot-timing") == 0 && out[1].timer == 0);
     assert(out[1].rt.timer_next.tv_sec == 360 && out[1].rt.last_start == -5);
     assert(out[2].timer == 1);
@@ -134,6 +139,10 @@ int main(void) {
     assert(parse_text("schema-init-state 1\nsvc name=a%4\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nsvc child_pid=3\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nsvc name=a inst=1,2,3\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
+    assert(parse_text("schema-init-state 1\nsvc name=a listen_fd=3,4,5\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
+    assert(parse_text("schema-init-state 1\nsvc name=a listen_fd=3,4,5,6,7\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
+    assert(parse_text("schema-init-state 1\nsvc name=a listen_fd=3,-2,5,6\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
+    assert(parse_text("schema-init-state 1\nsvc name=a listen_fd=3,,5,6\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nfd ctl=-2\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
     assert(parse_text("schema-init-state 1\nend\nsvc name=a\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);
 

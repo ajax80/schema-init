@@ -3,6 +3,7 @@
 
 #include <sys/types.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <stdint.h>
 #include <time.h>
 #include <pwd.h>
@@ -18,6 +19,7 @@
 #define MAX_ENV         16
 #define MAX_ENV_FILES   4
 #define MAX_EXEC_PRE    8
+#define MAX_LISTEN      4
 #define MAX_DEPS        8
 #define MAX_RESTARTS    5
 #define COOLDOWN_SECS   5
@@ -96,6 +98,7 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define READY_TIMER     4
 #define READY_EXIT      5
 #define READY_PIDFILE   6
+#define READY_SOCKET    7
 
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
@@ -251,6 +254,15 @@ typedef struct {
     int              expand_args;
     char            *exec_pre[MAX_EXEC_PRE];
     int              exec_pre_count;
+    char             listen[MAX_LISTEN][112]; /* listen= specs: stream|dgram|seqpacket|fifo:ADDR */
+    int              listen_count;
+    int              listen_lazy;         /* bind at boot, spawn on the first connection */
+    int              socket_mode;         /* 0 = 0666 */
+    char             socket_user[32];
+    char             socket_group[32];
+    int              listen_fd[MAX_LISTEN]; /* held by PID 1 across restarts, valid when listen_open */
+    int              listen_open;
+    int              listen_hold;         /* park on the sockets instead of spawning */
     char             dep_name[MAX_DEPS][64]; /* dep names as written in .svc    */
     int              dep_idx[MAX_DEPS];      /* resolved service indices, -1=none */
     int              grp_dep_idx[MAX_DEPS];  /* resolved group indices, -1=none */
@@ -361,6 +373,19 @@ void service_free_landlock(service_t *svc);
 int service_env_file_read(const char *path, char **pairs, int max);
 int service_expand_argv(char *const *argv, char **out, int max);
 int service_split_cmdline(const char *s, char **out, int max);
+
+/* listen= spec → socket type (0 = FIFO) and address; -1 if malformed */
+int  service_listen_parse(const char *spec, int *type, struct sockaddr_storage *ss,
+                          socklen_t *len);
+/* bind every listen= spec into listen_fd[]; -1 (nothing left open) on failure */
+int  service_listen_open(service_t *svc);
+void service_listen_close(service_t *svc);
+/* listen_fd[k] is still the socket listen[k] asks for (type and address) */
+int  service_listen_matches(const service_t *svc, int k);
+/* PID 1 holds the sockets and the service has exited: a connection starts it */
+static inline int service_listen_waiting(const service_t *svc) {
+    return svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT;
+}
 
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);

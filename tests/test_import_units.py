@@ -193,6 +193,28 @@ check("inexpressible OnCalendar skipped", ok)
 bb = si.unit_to_svc("b", si.parse_unit("[Service]\nExecStart=/bin/bash -c 'echo $X; run ${Y}'\nEnvironment=Y=1\n"))
 check("$VAR inside a word left for the shell, ${VAR} expanded", "args=echo $X; run 1\n" in bb)
 
+# --- .socket translation ---
+sl, sn = si.socket_lines(si.parse_unit(
+    "[Socket]\nListenStream=/run/pcscd/pcscd.comm\nListenFIFO=/run/x.fifo\nListenDatagram=514\n"
+    "ListenStream=[::1]:631\nSocketMode=0666\nSocketUser=pcscd\nSocketGroup=pcscd\nRemoveOnStop=on\n"))
+check("socket listeners + owner/mode", sl == ["listen=stream:/run/pcscd/pcscd.comm", "listen=fifo:/run/x.fifo",
+      "listen=dgram:514", "listen=stream:[::1]:631", "socket_mode=0666", "socket_user=pcscd",
+      "socket_group=pcscd"] and sn == ["dropped RemoveOnStop"])
+sl, _ = si.socket_lines(si.parse_unit("[Socket]\nListenStream=/a\nListenStream=\nListenSequentialPacket=@ISCSI\nListenStream=%t/b.sock\n"))
+check("empty Listen resets, @abstract kept, %t -> /run", sl == ["listen=seqpacket:@ISCSI", "listen=stream:/run/b.sock"])
+for bad in ("Accept=yes\nListenStream=22", "ListenNetlink=kobject-uevent 1", "ListenStream=%h/x",
+            "ListenFIFO=@x", "SocketMode=0600", "ListenStream=" + "\nListenStream=".join("/%d" % i for i in range(5)),
+            "ListenStream=localhost:80"):
+    try:
+        si.socket_lines(si.parse_unit("[Socket]\n" + bad + "\n")); ok = False
+    except si.Skip:
+        ok = True
+    check("socket skipped: " + bad.split("\n")[0], ok)
+cu = si.unit_to_svc("cups", si.parse_unit("[Service]\nExecStart=/usr/bin/cupsd -l\nType=notify\nRestart=on-failure\n"),
+                    si.parse_unit("[Socket]\nListenStream=/run/cups/cups.sock\n"), lazy=True)
+check("socket service: listen + lazy, no [Install] note", "listen=stream:/run/cups/cups.sock\n" in cu
+      and "listen_lazy=1\n" in cu and "no [Install]" not in cu and "notify=1\n" in cu)
+
 # --- drain against a temp tree ---
 tmp = tempfile.mkdtemp()
 os.environ["MIGRATE_ROOT"] = tmp
@@ -243,5 +265,51 @@ check("re-drain: only ghost, still missing", counts2["not-found"] == 1 and count
 # direct re-import of an already-present unit hits the 'exists' path, writes nothing
 counts3 = si.drain(units=["good"], log=lambda *_: None)
 check("existing .svc not overwritten", counts3["exists"] == 1 and counts3["imported"] == 0)
+
+# --- sockets through the drain ---
+open(os.path.join(unitdir, "cupsd.socket"), "w").write("[Socket]\nListenStream=/run/cups/cups.sock\n[Install]\nWantedBy=sockets.target\n")
+open(os.path.join(unitdir, "cupsd.service"), "w").write("[Service]\nExecStart=/usr/bin/cupsd -l\n[Install]\nWantedBy=multi-user.target\n")
+open(os.path.join(unitdir, "mdns.socket"), "w").write("[Socket]\nListenStream=/run/mdns/socket\n")
+open(os.path.join(unitdir, "mdns.service"), "w").write("[Service]\nExecStart=/usr/bin/mdnsd -s\n[Install]\nWantedBy=multi-user.target\n")
+open(os.path.join(unitdir, "kcm.socket"), "w").write("[Socket]\nListenStream=/run/kcm\nService=kcm-responder.service\n")
+open(os.path.join(unitdir, "kcm-responder.service"), "w").write("[Service]\nExecStart=/usr/libexec/kcm\n")
+open(os.path.join(unitdir, "inetd.socket"), "w").write("[Socket]\nListenStream=2222\nAccept=yes\n")
+open(os.path.join(unitdir, "inetd@.service"), "w").write("[Service]\nExecStart=/usr/bin/inetd\n")
+open(os.path.join(unitdir, "dup.socket"), "w").write("[Socket]\nListenStream=/run/dup\n")
+open(os.path.join(unitdir, "dup.service"), "w").write("[Service]\nExecStart=/usr/bin/good\n")
+wants = os.path.join(tmp, "etc/systemd/system/multi-user.target.wants")
+os.makedirs(wants)
+os.symlink(os.path.join(unitdir, "cupsd.service"), os.path.join(wants, "cupsd.service"))
+c4 = si.drain(units=["cupsd.socket", "mdns.socket", "mdns.service", "kcm.socket", "inetd.socket", "dup.socket"],
+              log=lambda *_: None)
+SD = os.environ["SCHEMA_SVC_DIR"]
+cs = open(os.path.join(SD, "cupsd.svc")).read()
+check("socket of a wants-enabled service -> eager", "listen=stream:/run/cups/cups.sock\n" in cs and "listen_lazy" not in cs)
+md = open(os.path.join(SD, "mdns.svc")).read()
+check("socket + its service queued together -> eager", "listen=stream:/run/mdns/socket\n" in md and "listen_lazy" not in md)
+kc = open(os.path.join(SD, "kcm-responder.svc")).read()
+check("Service= names the .svc; socket-only enable -> lazy", "exec=/usr/libexec/kcm\n" in kc and "listen_lazy=1\n" in kc)
+check("Accept=yes socket skipped", os.path.exists(os.path.join(SD, "inetd.svc.skipped")))
+check("binary already run by good.svc -> skipped, not a second copy",
+      not os.path.exists(os.path.join(SD, "dup.svc")) and "already runs as good.svc" in open(os.path.join(SD, "dup.svc.skipped")).read())
+check("socket drain counts", c4["imported"] == 3 and c4["skipped"] == 2 and c4["exists"] == 1)
+os.makedirs(os.path.join(tmp, "usr/sbin"), exist_ok=True); os.makedirs(os.path.join(tmp, "usr/bin"), exist_ok=True)
+open(os.path.join(tmp, "usr/bin/avahi-daemon"), "w").close()
+os.symlink("../bin/avahi-daemon", os.path.join(tmp, "usr/sbin/avahi-daemon"))
+open(os.path.join(SD, "avahi.svc"), "w").write("name=avahi\nexec=/usr/sbin/avahi-daemon\n")
+open(os.path.join(unitdir, "avahi-daemon.service"), "w").write("[Service]\nExecStart=/usr/bin/avahi-daemon -s\n")
+check("usr-merge alias counts as the same binary",
+      si.import_one("avahi-daemon.socket")[0] == "not-found" and si.import_one("avahi-daemon")[0] == "skipped")
+
+open(os.path.join(unitdir, "sshd.socket"), "w").write("[Socket]\nListenStream=22\nAccept=yes\n")
+open(os.path.join(unitdir, "sshd.service"), "w").write("[Service]\nExecStart=/usr/sbin/sshd -D\n[Install]\nWantedBy=multi-user.target\n")
+st, det = si.import_one("sshd")
+check("an Accept=yes sibling socket does not block the service", st == "imported" and "listen=" not in det[1])
+open(os.path.join(unitdir, "other.socket"), "w").write("[Socket]\nListenStream=/run/o\nService=elsewhere.service\n")
+open(os.path.join(unitdir, "other.service"), "w").write("[Service]\nExecStart=/usr/bin/other\n")
+st, det = si.import_one("other")
+check("a same-name socket for another Service= is not attached", st == "imported" and "listen=" not in det[1])
+open(os.path.join(unitdir, "goodcheck.service"), "w").write("[Service]\nType=oneshot\nExecStart=/usr/bin/good --check\n")
+check("a oneshot sharing a daemon's binary still imports", si.import_one("goodcheck")[0] == "imported")
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

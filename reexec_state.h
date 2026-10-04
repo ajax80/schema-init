@@ -54,7 +54,10 @@ typedef struct {
     X(STR,  cgroup_path)         \
     X(INT,  is_frozen)           \
     X(INT,  fork_state)          \
-    X(TS,   fork_wait)
+    X(TS,   fork_wait)           \
+    X(INT,  listen_hold)         \
+    X(INT,  listen_open)         \
+    X(FDS,  listen_fd)
 
 /* SVC_NO_RESTART is the one flag PID 1 changes at runtime: schema-ctl stop
  * sets it to hold a service down, start clears it. The live bit wins over the
@@ -156,6 +159,11 @@ static inline void rx_put_INST(FILE *o, const char *k, const schema_instance_t *
             v->weight, v->target_c, v->pid, v->flags);
 }
 
+static inline void rx_put_FDS(FILE *o, const char *k, const int (*v)[MAX_LISTEN]) {
+    fprintf(o, " %s=", k);
+    for (int i = 0; i < MAX_LISTEN; i++) fprintf(o, i ? ",%d" : "%d", (*v)[i]);
+}
+
 static inline int rx_get_PID(const char *v, pid_t *d, size_t n)  { long long x; (void)n; if (rx_ll(v, &x) || x < 0 || x > INT32_MAX) return -1; *d = (pid_t)x; return 0; }
 static inline int rx_get_INT(const char *v, int *d, size_t n)    { long long x; (void)n; if (rx_ll(v, &x) || x < INT32_MIN || x > INT32_MAX) return -1; *d = (int)x; return 0; }
 static inline int rx_get_U8(const char *v, uint8_t *d, size_t n) { long long x; (void)n; if (rx_ll(v, &x) || x < 0 || x > 255) return -1; *d = (uint8_t)x; return 0; }
@@ -177,6 +185,19 @@ static inline int rx_get_TS(const char *v, struct timespec *d, size_t n) {
     const char *f = end + 1;
     if (strlen(f) != 9 || rx_ll(f, &ns) || ns < 0) return -1;
     d->tv_sec = (time_t)sec; d->tv_nsec = (long)ns;
+    return 0;
+}
+static inline int rx_get_FDS(const char *v, int (*d)[MAX_LISTEN], size_t n) {
+    (void)n;
+    for (int i = 0; i < MAX_LISTEN; i++) {
+        char *end;
+        errno = 0;
+        long x = strtol(v, &end, 10);
+        if (errno || end == v || x < -1 || x > INT32_MAX || *end != (i == MAX_LISTEN - 1 ? '\0' : ','))
+            return -1;
+        (*d)[i] = (int)x;
+        v = end + 1;
+    }
     return 0;
 }
 static inline int rx_get_STR(const char *v, void *d, size_t n)   { return rx_unescape(v, (char *)d, n); }

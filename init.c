@@ -668,6 +668,8 @@ static void fork_adopt(service_t *svc) {
     }
 }
 
+#define LISTEN_MIN_RUN_SECS 2   /* a quicker exit served nothing: recovery arc, not a wake loop */
+
 static void reap(void) {
     int status;
     pid_t pid;
@@ -722,7 +724,17 @@ static void reap(void) {
                 break;
             }
 
-            if (WIFEXITED(status) && WEXITSTATUS(status) == 0
+            if (services[i].listen_open && !services[i].ctl_killed &&
+                !(services[i].flags & SVC_ONESHOT) &&
+                ((WIFEXITED(status) && WEXITSTATUS(status) == 0) ||
+                 (services[i].flags & SVC_NO_RESTART)) &&
+                time(NULL) - services[i].start_time >= LISTEN_MIN_RUN_SECS) {
+                /* idle exit of a socket service: PID 1 still holds its
+                 * sockets, the next connection starts it again */
+                services[i].inst.state = STATE_PERFECT;
+                clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
+                service_log(&services[i], "socket-idle");
+            } else if (WIFEXITED(status) && WEXITSTATUS(status) == 0
                 && (services[i].flags & SVC_ONESHOT)) {
                 /* clean one-shot exit → PERFECT */
                 services[i].inst.state = STATE_PERFECT;
@@ -1166,6 +1178,19 @@ static void tick_service(service_t *svc,
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
+            if (svc->listen_hold) {
+                if (service_listen_open(svc) < 0) {
+                    svc->listen_hold = 0;
+                    svc->inst.state = STATE_EXCISED;
+                    service_log(svc, "listen-fail");
+                    break;
+                }
+                svc->inst.state = STATE_PERFECT;
+                clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
+                mark_boot_ready(svc, READY_SOCKET);
+                service_log(svc, "socket-wait");
+                break;
+            }
             flags = service_probe_f8(svc, services, svc_count);
             schema_step(&svc->inst, flags);
             if (svc->inst.state == STATE_FULL_TRUST) {
@@ -1423,6 +1448,7 @@ static const char *an_how(const service_t *s) {
         case READY_TIMER:  return "timer";
         case READY_EXIT:   return "exit";
         case READY_PIDFILE: return "pid_file";
+        case READY_SOCKET: return "socket";
     }
     return "?";
 }
@@ -1745,6 +1771,7 @@ static void ctl_cmd(int fd, char *line) {
             if (services[i].inst.state == STATE_EXCISED ||
                 services[i].inst.state == STATE_PERFECT) {
                 services[i].flags       &= ~SVC_NO_RESTART;
+                services[i].listen_hold  = 0;
                 services[i].inst.state   = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
                 ctl_writef(fd, "ok: %s queued\n", name);
@@ -1785,6 +1812,7 @@ static void ctl_cmd(int fd, char *line) {
         for (i = 0; i < svc_count; i++) {
             if (strcmp(services[i].name, name) != 0) continue;
             services[i].flags &= ~SVC_NO_RESTART;
+            services[i].listen_hold = 0;
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
                 kill(services[i].child_pid, SIGTERM);
@@ -2334,6 +2362,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 /* clear live service state so we don't accidentally treat it as running/managed */
                 services[j].child_pid = 0;
                 services[j].failsafe_pid = 0;
+                services[j].listen_open = 0;
                 break;
             }
         }
@@ -2363,6 +2392,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 printf("[schema-init] service '%s' (pid=%d) running unmanaged to natural death\n", services[j].name, (int)services[j].child_pid);
             }
         }
+        service_listen_close(&services[j]);
         /* Free duplicated arguments from the old configuration array */
         for (int k = 1; k < MAX_ARGV; k++) {
             if (services[j].argv[k]) {
@@ -2535,6 +2565,29 @@ static void reexec_close_strays(const int *keep, int nkeep) {
     closedir(d);
 }
 
+/* Sockets the old image held: CLOEXEC again, and only while they are still
+ * what this .svc asks for. */
+static void listen_adopt(service_t *svc) {
+    int ok = svc->listen_open == svc->listen_count;
+    for (int k = 0; ok && k < svc->listen_open; k++)
+        ok = service_listen_matches(svc, k);
+    if (!ok) {
+        if (svc->listen_open)
+            fprintf(stderr, "[schema-init] re-exec: %s: carried sockets do not match listen=, rebinding at next start\n", svc->name);
+        int parked = svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT;
+        for (int k = 0; k < svc->listen_open && k < MAX_LISTEN; k++)
+            close(svc->listen_fd[k]);
+        svc->listen_open = 0;
+        if (svc->listen_count && service_listen_open(svc) < 0 && parked) {
+            svc->inst.state = STATE_NEW_PROCESS;
+            svc->listen_hold = 1;
+        }
+        return;
+    }
+    for (int k = 0; k < svc->listen_open; k++)
+        fcntl(svc->listen_fd[k], F_SETFD, FD_CLOEXEC);
+}
+
 static void reexec_adopt(int blob_fd, int oldexe_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
@@ -2560,8 +2613,13 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     }
 
     {
-        int keep[] = { g.fd_ctl, g.fd_notify, g.fd_watchdog, g.fd_client, blob_fd, oldexe_fd };
-        reexec_close_strays(keep, (int)(sizeof keep / sizeof keep[0]));
+        int keep[6 + MAX_SERVICES * MAX_LISTEN] = { g.fd_ctl, g.fd_notify, g.fd_watchdog,
+                                                   g.fd_client, blob_fd, oldexe_fd };
+        int nkeep = 6;
+        for (int j = 0; j < nrs; j++)
+            for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
+                keep[nkeep++] = reexec_svcs[j].rt.listen_fd[k];
+        reexec_close_strays(keep, nkeep);
     }
 
     ctl_fd = g.fd_ctl;
@@ -2584,7 +2642,17 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         if (j == nrs) { fresh++; continue; }
         svc_runtime_copy(&services[i], &reexec_svcs[j].rt);
         svc_carry_timer_done(&services[i], !reexec_svcs[j].timer);
+        listen_adopt(&services[i]);
         adopted++;
+    }
+    /* a service gone from the config: its sockets go with it */
+    for (int j = 0; j < nrs; j++) {
+        int i;
+        for (i = 0; i < svc_count; i++)
+            if (!strcmp(services[i].name, reexec_svcs[j].name)) break;
+        if (i < svc_count) continue;
+        for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
+            close(reexec_svcs[j].rt.listen_fd[k]);
     }
     if (g.argv0[0] == '/')
         snprintf(boot_argv0, sizeof boot_argv0, "%s", g.argv0);
@@ -2785,6 +2853,12 @@ static void set_cloexec(int fd, int on) {
     if (fd >= 0) fcntl(fd, F_SETFD, on ? FD_CLOEXEC : 0);
 }
 
+static void listen_set_cloexec(int on) {
+    for (int i = 0; i < svc_count; i++)
+        for (int k = 0; k < services[i].listen_open; k++)
+            set_cloexec(services[i].listen_fd[k], on);
+}
+
 static void reexec_commit(void) {
     char err[320];
     sigset_t held, prev;
@@ -2808,6 +2882,7 @@ static void reexec_commit(void) {
         int fds[] = { ctl_fd, notify_fd, watchdog_fd, reexec_client, oldexe, blob };
         for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
             set_cloexec(fds[k], 0);
+        listen_set_cloexec(0);
         snprintf(b, sizeof b, "%d", blob);
         snprintf(o, sizeof o, "%d", oldexe);
         printf("[schema-init] re-exec: %s\n", reexec_path);
@@ -2821,6 +2896,7 @@ static void reexec_commit(void) {
         snprintf(err, sizeof err, "exec %s: %s", reexec_path, strerror(errno));
         for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
             set_cloexec(fds[k], 1);
+        listen_set_cloexec(1);
     }
     sigprocmask(SIG_SETMASK, &prev, NULL);
     if (blob >= 0) close(blob);
@@ -3450,8 +3526,9 @@ int main(int argc, char **argv) {
     }
 
     while (running) {
-        struct pollfd fds[5];
-        int nfds = 0;
+        struct pollfd fds[5 + MAX_SERVICES * MAX_LISTEN];
+        int fd_svc[5 + MAX_SERVICES * MAX_LISTEN];
+        int nfds = 0, nfixed;
         int psi_fired = 0;
         uint8_t grp_states[MAX_GROUPS];
         uint8_t svc_states[MAX_SERVICES];
@@ -3487,12 +3564,30 @@ int main(int argc, char **argv) {
             fds[nfds].revents = 0;
             nfds++;
         }
+        nfixed = nfds;
+        for (int si = 0; si < svc_count; si++) {
+            if (!service_listen_waiting(&services[si])) continue;
+            for (int k = 0; k < services[si].listen_open; k++) {
+                fds[nfds].fd = services[si].listen_fd[k];
+                fds[nfds].events = POLLIN;
+                fds[nfds].revents = 0;
+                fd_svc[nfds++] = si;
+            }
+        }
 
         if (nfds > 0) {
             ret = poll(fds, nfds, get_poll_timeout());
             if (ret > 0) {
                 int e;
-                for (e = 0; e < nfds; e++) {
+                for (e = nfixed; e < nfds; e++) {
+                    service_t *ls = &services[fd_svc[e]];
+                    if (fds[e].revents && service_listen_waiting(ls)) {
+                        ls->inst.state = STATE_NEW_PROCESS;
+                        ls->listen_hold = 0;
+                        service_log(ls, "socket-wake");
+                    }
+                }
+                for (e = 0; e < nfixed; e++) {
                     if (fds[e].fd == psi_fd && psi_fd >= 0) {
                         if (fds[e].revents & (POLLERR | POLLNVAL)) {
                             close(psi_fd);
