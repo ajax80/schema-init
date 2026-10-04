@@ -142,6 +142,7 @@ install-migrate: schema-udev schema-systemctl verify-rules-live schema-dbus
 	install -m 0755 scripts/schema-udev-flip-backup.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-backup.sh
 	install -m 0755 distros/fedora-installer/schema-udev-flip-healthcheck.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-healthcheck.sh
 	install -m 0755 verify-rules-live $(DESTDIR)$(PREFIX)/libexec/schema-init/verify-rules-live
+	install -m 0755 scripts/schema-mount-fstab $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-mount-fstab
 	install -m 0755 schema-dbus $(DESTDIR)$(BINDIR)/schema-dbus
 	install -m 0755 scripts/schema-dbus-run.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-dbus-run.sh
 	install -m 0755 scripts/schema-dbus-flip.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-dbus-flip.sh

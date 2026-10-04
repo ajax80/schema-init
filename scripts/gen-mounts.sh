@@ -1,10 +1,11 @@
 #!/bin/sh
 # gen-mounts.sh — generate schema-init mount services from a machine's /etc/fstab.
 #
-# schema-init does NOT parse /etc/fstab. This reads the live system's fstab,
-# resolves every real (non-pseudo) mount to a stable UUID=, and emits a single
-# self-contained mount-fstab.sh + mount-fstab.svc so the box's disks, swap, and
-# bind mounts come up under schema-init exactly as they did under systemd.
+# mount-fstab.svc runs /usr/libexec/schema-init/schema-mount-fstab, which reads
+# /etc/fstab live at every boot. This tool writes that .svc, plus mount-fstab.sh:
+# a snapshot of what the fstab mounts today, every real mount resolved to a
+# stable UUID=, to read and check before the first schema-init boot. The
+# snapshot is not run; edit /etc/fstab, not the snapshot.
 #
 # Usage:
 #   scripts/gen-mounts.sh              preview generated files on stdout (default)
@@ -117,7 +118,7 @@ SCRIPT=$(mktemp)
 SVC=$(mktemp)
 cat > "$SVC" <<'EOF'
 name=mount-fstab
-exec=/usr/local/bin/mount-fstab.sh
+exec=/usr/libexec/schema-init/schema-mount-fstab
 oneshot=1
 needs_root=1
 critical=0
@@ -152,7 +153,6 @@ if [ -z "$OUTDIR" ]; then
     emit_summary
     echo "" >&2
     echo "Preview only. Re-run with -o DIR to write, then install:" >&2
-    echo "  install -m755 DIR/scripts/mount-fstab.sh   /usr/local/bin/" >&2
     echo "  install -m644 DIR/services/mount-fstab.svc /etc/schema-init/services/" >&2
     rm -f "$SCRIPT" "$SVC"
 else

@@ -107,6 +107,7 @@ rm -f /etc/schema-init/services/schema-migrate-finish.svc  # migrate-path onesho
 install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
 install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
 install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
+install -Dm0755 "$SRC/scripts/schema-mount-fstab" /usr/libexec/schema-init/schema-mount-fstab  # mount-fstab.svc execs this
 install -m0755 "$SRC/scripts/schema-zram-start.sh" /usr/local/bin/schema-zram-start.sh  # zram.svc execs this
 
 # Desktop-session pipeline (autologin Plasma under schema-init). The rail's
@@ -138,11 +139,6 @@ printf 'POWERDEVIL_NO_DDCUTIL=1\n' > /etc/environment.d/90-no-ddcutil.conf
 install -d /usr/local/lib
 install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
 
-/usr/local/lib/schema/gen-mounts.sh -o /etc/schema-init 2>/dev/null || true
-# mount-fstab.svc runs its script from /usr/local/bin (gen-mounts' fixed path) —
-# gen-mounts only writes it under scripts/, so put it where the .svc expects it.
-[ -f /etc/schema-init/scripts/mount-fstab.sh ] && \
-    install -m0755 /etc/schema-init/scripts/mount-fstab.sh /usr/local/bin/mount-fstab.sh
 
 # 3. Bootloader: the hook model. Leave the STOCK BLS entries pristine — they
 #    boot stock systemd, so a novice always has a working escape hatch in the
