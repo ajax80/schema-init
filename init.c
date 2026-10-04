@@ -621,20 +621,47 @@ static void note_exit(service_t *svc, int status) {
     }
 }
 
-/* A forking daemon's main PID, from its pid_file: alive and, when the service
- * has a cgroup, inside it, so a stale or planted file cannot hand PID 1 some
- * other process to supervise and kill. 0 if not (yet) valid. */
+/* PPid of p from /proc, -1 if unreadable. */
+static long proc_ppid(pid_t p) {
+    char path[48], line[128];
+    long pp = -1;
+    FILE *f;
+    snprintf(path, sizeof path, "/proc/%d/status", (int)p);
+    if (!(f = fopen(path, "r"))) return -1;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "PPid: %ld", &pp) == 1) break;
+    fclose(f);
+    return pp;
+}
+
+/* A forking daemon's main PID, from its pid_file: alive and inside the
+ * service's cgroup, so a stale or planted file cannot hand PID 1 some other
+ * process to supervise and kill. Without a cgroup, fail closed unless the
+ * file is owned by root or the service's user, not group/other-writable, and
+ * the PID is an orphan PID 1 adopted. 0 if not (yet) valid. */
 static pid_t pid_file_read(const service_t *svc) {
-    char path[160];
+    char path[160], buf[32];
+    struct stat st;
     FILE *f;
     long p = 0, q;
-    int found = 0;
+    int fd, found = 0;
+    ssize_t n;
 
-    if (!(f = fopen(svc->pid_file, "r"))) return 0;
-    if (fscanf(f, "%ld", &p) != 1) p = 0;
-    fclose(f);
+    fd = open(svc->pid_file, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0) return 0;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); return 0; }
+    n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    if (sscanf(buf, "%ld", &p) != 1) return 0;
     if (p <= 1 || p > INT_MAX || kill((pid_t)p, 0) != 0) return 0;
-    if (!svc->cgroup_path[0]) return (pid_t)p;
+    if (!svc->cgroup_path[0]) {
+        if ((st.st_uid != 0 && st.st_uid != svc->run_uid) || (st.st_mode & 022) ||
+            proc_ppid((pid_t)p) != 1)
+            return 0;
+        return (pid_t)p;
+    }
     snprintf(path, sizeof path, "%s/cgroup.procs", svc->cgroup_path);
     if (!(f = fopen(path, "r"))) return 0;
     while (!found && fscanf(f, "%ld", &q) == 1) found = q == p;
