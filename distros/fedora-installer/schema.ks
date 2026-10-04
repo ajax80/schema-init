@@ -100,15 +100,15 @@ else
 fi
 
 # 1. Binaries. usrmerge means /usr/bin is canonical; /sbin etc. resolve to it.
-install -m0755 "$SRC/bin/schema-init"        /usr/bin/schema-init
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-init"        /usr/bin/schema-init
 # the package puts schema-ctl in /usr/bin; a /usr/local/bin copy would shadow
 # every later update of it on PATH
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-ctl" /usr/local/bin/schema-ctl
-install -m0755 "$SRC/bin/schema-journal-sink" /usr/bin/schema-journal-sink
-install -m0755 "$SRC/bin/schema-subreaper"   /usr/bin/schema-subreaper
-install -m0755 "$SRC/bin/schema-board"       /usr/bin/schema-board
-install -m0755 "$SRC/bin/schema-udev"        /usr/bin/schema-udev   # staged, NOT armed
-install -m0755 "$SRC/bin/schema-dbus"        /usr/bin/schema-dbus   # dormant until /etc/schema-init/dbus-broker
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-journal-sink" /usr/bin/schema-journal-sink
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-subreaper"   /usr/bin/schema-subreaper
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-board"       /usr/bin/schema-board
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-udev"        /usr/bin/schema-udev   # staged, NOT armed
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-dbus"        /usr/bin/schema-dbus   # dormant until /etc/schema-init/dbus-broker
 
 # flip tooling + parity gates the wizard calls
 install -d /usr/local/lib/schema
@@ -131,40 +131,40 @@ install -d /etc/schema-init/services /etc/schema-init/scripts
 cp -a "$SRC/services/." /etc/schema-init/services/
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
 rm -f /etc/schema-init/services/schema-migrate-finish.svc  # migrate-path oneshot; an ISO install has no schema-migrate
-install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
-install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
-install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
-install -Dm0755 "$SRC/scripts/schema-mount-fstab" /usr/libexec/schema-init/schema-mount-fstab  # mount-fstab.svc execs this
-install -m0755 "$SRC/scripts/schema-zram-start.sh" /usr/local/bin/schema-zram-start.sh  # zram.svc execs this
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
+[ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
+[ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-mount-fstab" /usr/libexec/schema-init/schema-mount-fstab  # mount-fstab.svc execs this
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-zram-start.sh" /usr/local/bin/schema-zram-start.sh  # zram.svc execs this
 
 # Desktop-session pipeline (autologin Plasma under schema-init). The rail's
 # plasma-autologin.svc drives schema-plasma-autologin.sh, which registers a
 # login1 session via schema-logind + the session helpers, then launches Plasma.
-install -m0755 "$SRC/scripts/schema-plasma-autologin.sh" /usr/local/bin/schema-plasma-autologin.sh
-install -m0755 "$SRC/scripts/schema-logind.py"           /usr/local/bin/schema-logind.py
-install -m0755 "$SRC/scripts/schema-doctor.py"           /usr/local/bin/schema-doctor
-install -m0755 "$SRC/scripts/schema-session-register"    /usr/local/bin/schema-session-register
-install -m0755 "$SRC/scripts/schema-session-unregister"  /usr/local/bin/schema-session-unregister
-install -m0755 "$SRC/scripts/schema-dbus-session-run.sh"   /usr/local/bin/schema-dbus-session-run.sh
-install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-session-start.sh
-install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-plasma-autologin.sh" /usr/local/bin/schema-plasma-autologin.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-logind.py"           /usr/local/bin/schema-logind.py
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-doctor.py"           /usr/local/bin/schema-doctor
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-session-register"    /usr/local/bin/schema-session-register
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-session-unregister"  /usr/local/bin/schema-session-unregister
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-dbus-session-run.sh"   /usr/local/bin/schema-dbus-session-run.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-session-start.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
 install -d /usr/local/lib/schema
-install -m0644 "$SRC/scripts/zzz-environment-d.sh"      /usr/local/lib/schema/zzz-environment-d.sh
+[ -n "$RPMS" ] || install -m0644 "$SRC/scripts/zzz-environment-d.sh"      /usr/local/lib/schema/zzz-environment-d.sh
 # No systemd --user to run xdg-desktop-autostart.target: the runner sweeps
 # ~/.config/autostart (+ xauth cookie, ssh-agent) and starts the plasmashell
 # watchdog; plasma-session-start.sh sources plasma-env/*.sh, whose
 # zz-schema-autostart.sh fires the runner.
-install -m0755 "$SRC/scripts/schema-autostart-runner.sh" /usr/local/lib/schema/schema-autostart-runner.sh
-install -m0755 "$SRC/scripts/schema-plasma-watchdog.sh"  /usr/local/lib/schema/schema-plasma-watchdog.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-autostart-runner.sh" /usr/local/lib/schema/schema-autostart-runner.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-plasma-watchdog.sh"  /usr/local/lib/schema/schema-plasma-watchdog.sh
 install -d /usr/local/lib/schema/plasma-env
-install -m0644 "$SRC/plasma-env/"*.sh /usr/local/lib/schema/plasma-env/
+[ -n "$RPMS" ] || install -m0644 "$SRC/plasma-env/"*.sh /usr/local/lib/schema/plasma-env/
 # powerdevil's libddcutil display watcher falls back to POLL mode here and
 # burns ~7-9% of a core forever (Eli, DBox). Only external-monitor DDC
 # brightness needs it; delete this file to get that back.
 install -d /etc/environment.d
 printf 'POWERDEVIL_NO_DDCUTIL=1\n' > /etc/environment.d/90-no-ddcutil.conf
 install -d /usr/local/lib
-install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
 
 
 # 3. Bootloader: the hook model. Leave the STOCK BLS entries pristine — they
@@ -215,7 +215,7 @@ dracut -f --regenerate-all || echo "WARN: initramfs regenerate failed; splash st
 #    for the kernel(s) already on disk (the plugin only fires on FUTURE installs).
 #    Same path the schema-init package owns, so the first package update takes
 #    it over and keeps it current.
-install -Dm0755 "$SRC/kernel-install/99-schema-init.install" \
+[ -n "$RPMS" ] || install -Dm0755 "$SRC/kernel-install/99-schema-init.install" \
     /usr/lib/kernel/install.d/99-schema-init.install
 
 install -d /etc/schema-init/kernel-cmdline.d
