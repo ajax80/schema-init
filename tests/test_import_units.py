@@ -108,6 +108,29 @@ check("Type=dbus -> ready_bus_name", "ready_bus_name=org.freedesktop.NetworkMana
 check("template skipped", skipped("t@", "[Service]\nExecStart=/bin/t\n"))
 check("no ExecStart skipped", skipped("e", "[Service]\nType=simple\n"))
 
+# --- .timer translation ---
+for cal, want in (("daily", "00:00"), ("weekly", "Mon 00:00"), ("monthly", "1 00:00"),
+                  ("Sun *-*-* 01:00:00", "Sun 01:00"), ("*-*-15 03:30", "15 03:30"),
+                  ("hourly", ("interval", 3600)), ("*-*-* *:00:00", ("interval", 3600)),
+                  ("Sun *-*-1..7 1:00:00", None), ("Mon..Fri 09:00", None), ("Mon *-*-15 01:00", None)):
+    check("calendar %r -> %r" % (cal, want), si._calendar(cal) == want)
+svcu = si.parse_unit("[Service]\nType=oneshot\nExecStart=/usr/sbin/logrotate /etc/logrotate.conf\n")
+bt = si.timer_to_svc("logrotate", si.parse_unit("[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n"), svcu)
+check("timer -> on_calendar + persistent, no oneshot/no_restart, notes drop",
+      "on_calendar=00:00\n" in bt and "persistent=1\n" in bt and "oneshot=" not in bt
+      and "no_restart=" not in bt and "dropped RandomizedDelaySec" in bt and "no [Install]" not in bt)
+bt = si.timer_to_svc("mc", si.parse_unit("[Timer]\nOnBootSec=10min\nOnUnitInactiveSec=3h\n"), svcu)
+check("OnBootSec/OnUnitInactiveSec -> on_boot_sec/on_active_sec", "on_boot_sec=600\n" in bt and "on_active_sec=10800\n" in bt)
+bt = si.timer_to_svc("mc", si.parse_unit("[Timer]\nOnUnitActiveSec=1d\n"), svcu)
+check("OnUnitActiveSec alone also arms the first fire", "on_boot_sec=86400\n" in bt and "on_active_sec=86400\n" in bt)
+try:
+    si.timer_to_svc("x", si.parse_unit("[Timer]\nOnCalendar=Mon..Fri 09:00\n"), svcu); ok = False
+except si.Skip:
+    ok = True
+check("inexpressible OnCalendar skipped", ok)
+bb = si.unit_to_svc("b", si.parse_unit("[Service]\nExecStart=/bin/bash -c 'echo $X; run ${Y}'\nEnvironment=Y=1\n"))
+check("$VAR inside a word left for the shell, ${VAR} expanded", "args=echo $X; run 1\n" in bb)
+
 # --- drain against a temp tree ---
 tmp = tempfile.mkdtemp()
 os.environ["MIGRATE_ROOT"] = tmp
@@ -121,7 +144,9 @@ open(os.path.join(unitdir, "strict.service"), "w").write(
     "[Service]\nExecStart=/usr/bin/strict\nProtectSystem=strict\n[Install]\nWantedBy=x\n")
 open(os.path.join(unitdir, "noisy.service"), "w").write(
     "[Service]\nType=forking\nExecStart=/usr/bin/noisy\n[Install]\nWantedBy=x\n")
-open(si.queue_path(), "w").write("good\nnoisy\nghost\n")
+open(os.path.join(unitdir, "tick.timer"), "w").write("[Timer]\nOnCalendar=weekly\nPersistent=true\nUnit=tock.service\n")
+open(os.path.join(unitdir, "tock.service"), "w").write("[Service]\nType=oneshot\nExecStart=/usr/bin/tock\n")
+open(si.queue_path(), "w").write("good\nnoisy\nghost\ntick.timer\n")
 
 logged = []
 counts = si.drain(units=["strict"], log=logged.append)
@@ -129,7 +154,9 @@ check("drain logs a WARN naming unit + directive",
       any(l.startswith("WARN    strict: ProtectSystem=strict") for l in logged))
 
 counts = si.drain(log=lambda *_: None)
-check("one imported", counts["imported"] == 1)
+check("two imported (good + tick.timer)", counts["imported"] == 2)
+tk = open(os.path.join(os.environ["SCHEMA_SVC_DIR"], "tick.svc")).read()
+check("tick.timer -> tick.svc running Unit= target weekly", "exec=/usr/bin/tock\n" in tk and "on_calendar=Mon 00:00\n" in tk)
 check("one skipped", counts["skipped"] == 1)
 check("one not-found", counts["not-found"] == 1)
 check("good.svc written", os.path.exists(os.path.join(os.environ["SCHEMA_SVC_DIR"], "good.svc")))

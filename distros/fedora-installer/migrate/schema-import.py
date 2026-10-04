@@ -20,6 +20,7 @@ import shlex
 import sys
 
 _VAR_RE = re.compile(r"\$\{?(\w+)\}?")
+_BRACED_RE = re.compile(r"\$\{(\w+)\}")
 
 # ---------------------------------------------------------------------------
 # Pure translation core (no filesystem) — unit-tested in test_import_units.py.
@@ -96,7 +97,10 @@ def _expand_argv(argv, env):
         if "$" not in tok:
             out.append(tok)
             continue
-        rep = _VAR_RE.sub(lambda m: env.get(m.group(1), "\0"), tok)
+        # systemd expands $FOO only as a whole word; inside a word only ${FOO}
+        # (a bare $FOO there is left for the shell of an sh -c script).
+        pat = _VAR_RE if re.fullmatch(r"\$\{?\w+\}?", tok) else _BRACED_RE
+        rep = pat.sub(lambda m: env.get(m.group(1), "\0"), tok)
         if "\0" in rep:
             dropped += 1
             continue
@@ -172,7 +176,8 @@ def _hardening(svc):
 _SPAN_UNITS = {"us": 1e-6, "usec": 1e-6, "ms": 1e-3, "msec": 1e-3, "": 1, "s": 1,
                "sec": 1, "second": 1, "seconds": 1, "m": 60, "min": 60,
                "minute": 60, "minutes": 60, "h": 3600, "hr": 3600,
-               "hour": 3600, "hours": 3600}
+               "hour": 3600, "hours": 3600, "d": 86400, "day": 86400,
+               "days": 86400, "w": 604800, "week": 604800, "weeks": 604800}
 
 
 def _timespan_sec(v):
@@ -190,6 +195,103 @@ def _timespan_sec(v):
         return None
     sec = int(total)
     return sec + (1 if total > sec else 0)
+
+
+_DOW = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def _calendar(v):
+    """systemd OnCalendar= to a schema on_calendar= value ("HH:MM", "Mon HH:MM",
+    "15 HH:MM"); "hourly" to ("interval", 3600). None if not expressible."""
+    v = " ".join(v.split()).lower()
+    short = {"daily": "00:00", "midnight": "00:00", "weekly": "Mon 00:00",
+             "monthly": "1 00:00"}
+    if v in short:
+        return short[v]
+    if v in ("hourly", "*:00", "*:00:00", "*-*-* *:00", "*-*-* *:00:00"):
+        return ("interval", 3600)
+    m = re.fullmatch(r"(?:([a-z]{3})[a-z]*\s+)?(?:\*-\*-(\*|\d{1,2})\s+)?"
+                     r"(\d{1,2}):(\d{2})(?::00)?", v)
+    if not m:
+        return None
+    dow, dom, h, mi = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
+    if h > 23 or mi > 59 or (dow and dow not in _DOW):
+        return None
+    hm = "%02d:%02d" % (h, mi)
+    if dow and dom not in (None, "*"):
+        return None
+    if dow:
+        return "%s %s" % (dow.capitalize(), hm)
+    if dom not in (None, "*"):
+        if not 1 <= int(dom) <= 31:
+            return None
+        return "%d %s" % (int(dom), hm)
+    return hm
+
+
+def timer_lines(sections):
+    """[Timer] keys to schema timer lines plus notes. Raises Skip when the
+    schedule has no schema equivalent."""
+    t = sections.get("Timer", [])
+    cal = _get_last(t, "OnCalendar")
+    boot = _get_last(t, "OnBootSec") or _get_last(t, "OnStartupSec")
+    active = _get_last(t, "OnUnitActiveSec") or _get_last(t, "OnUnitInactiveSec")
+    lines, notes = [], []
+    if len(_get_all(t, "OnCalendar")) > 1:
+        raise Skip("several OnCalendar= — schema has one schedule per service")
+    if cal:
+        c = _calendar(cal)
+        if c is None:
+            raise Skip("OnCalendar=%s has no schema on_calendar equivalent" % cal)
+        if isinstance(c, tuple):
+            lines += ["on_boot_sec=%d" % c[1], "on_active_sec=%d" % c[1]]
+        else:
+            lines.append("on_calendar=%s" % c)
+        if boot or active:
+            notes.append("OnBootSec/OnUnit*Sec ignored next to OnCalendar")
+    else:
+        if not boot and not active:
+            raise Skip("timer has no OnCalendar=, OnBootSec= or OnUnitActiveSec=")
+        for key, val in (("on_boot_sec", boot), ("on_active_sec", active)):
+            if val:
+                sec = _timespan_sec(val)
+                if sec is None:
+                    raise Skip("%s timespan '%s' not understood" % (key, val))
+                lines.append("%s=%d" % (key, sec))
+        if active and not boot:
+            lines.insert(0, "on_boot_sec=%d" % _timespan_sec(active))
+    if _get_last(t, "Persistent").lower() in ("yes", "true", "1", "on"):
+        if any(ln.startswith("on_calendar=") for ln in lines):
+            lines.append("persistent=1")
+        else:
+            notes.append("Persistent= dropped (catch-up applies to calendar timers only)")
+    for k in ("RandomizedDelaySec", "AccuracySec"):
+        if _get_last(t, k):
+            notes.append("dropped %s" % k)
+    return lines, notes
+
+
+def timer_to_svc(name, timer_sections, svc_sections):
+    """A .timer and the .service it starts as one schema timer .svc, named after
+    the timer."""
+    tlines, tnotes = timer_lines(timer_sections)
+    body = unit_to_svc(name, svc_sections)
+    out = []
+    for ln in body.splitlines():
+        if ln.startswith("# schema-import: "):
+            kept = [n for n in ln[len("# schema-import: "):].split("; ")
+                    if n != "no [Install] section"]
+            kept += tnotes
+            tnotes = []
+            if kept:
+                out.append("# schema-import: " + "; ".join(kept))
+        elif ln in ("no_restart=1", "oneshot=1"):
+            continue
+        else:
+            out.append(ln)
+    if tnotes:
+        out.insert(0, "# schema-import: " + "; ".join(tnotes))
+    return "\n".join(out + tlines) + "\n"
 
 
 def unit_to_svc(name, sections):
@@ -347,18 +449,28 @@ def skip_stub(name, path, reason, text):
 def import_one(name, force=False):
     """Translate one queued unit. Returns (status, detail) where status is one
     of: imported, exists, not-found, skipped, error."""
+    timer = name.endswith(".timer")
     name = name[:-len(".service")] if name.endswith(".service") else name
+    name = name[:-len(".timer")] if timer else name
     out = os.path.join(svc_dir(), name + ".svc")
     if os.path.exists(out) and not force:
         return ("exists", out)
-    path = find_unit(name)
+    path = find_unit(name + ".timer" if timer else name)
     if not path:
         return ("not-found", name)
     try:
         with open(path) as f:
             text = f.read()
         sections = parse_unit(text)
-        body = unit_to_svc(name, sections)
+        if timer:
+            target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
+            spath = find_unit(target)
+            if not spath:
+                raise Skip("timer's %s not found" % target)
+            with open(spath) as f:
+                body = timer_to_svc(name, sections, parse_unit(f.read()))
+        else:
+            body = unit_to_svc(name, sections)
     except Skip as s:
         return ("skipped", (str(s), skip_stub(name, path, str(s), text), out))
     except OSError as e:
