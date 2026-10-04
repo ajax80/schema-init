@@ -360,7 +360,7 @@ def import_one(name, force=False):
         sections = parse_unit(text)
         body = unit_to_svc(name, sections)
     except Skip as s:
-        return ("skipped", (str(s), skip_stub(name, path, str(s), text)))
+        return ("skipped", (str(s), skip_stub(name, path, str(s), text), out))
     except OSError as e:
         return ("error", str(e))
     return ("imported", (out, body))
@@ -392,13 +392,16 @@ def drain(units=None, force=False, dry_run=False, log=print):
             log("MISS    %s (no unit file; left queued)" % name)
             keep.append(name)
         elif status == "skipped":
-            reason, stub = detail
-            stub_path = os.path.join(svc_dir(), name[:-len(".service")] if name.endswith(".service") else name) + ".svc.skipped"
+            reason, stub, out = detail
+            stub_path = out + ".skipped"
             log("skip    %s: %s (see %s)" % (name, reason, stub_path))
             if not dry_run:
-                os.makedirs(svc_dir(), exist_ok=True)
-                with open(stub_path, "w") as f:
-                    f.write(stub)
+                try:
+                    os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+                    with open(stub_path, "w") as f:
+                        f.write(stub)
+                except OSError as e:
+                    log("WARN    %s: could not write %s: %s" % (name, stub_path, e))
         else:
             log("ERROR   %s: %s" % (name, detail))
             keep.append(name)
