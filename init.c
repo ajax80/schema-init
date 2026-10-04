@@ -2950,6 +2950,80 @@ static void container_cgroups_kill(void) {
     globfree(&g);
 }
 
+#define SHUT_GRACE_MS   3000
+#define SHUT_TOTAL_MS  12000
+
+static int shut_depends_on(const service_t *s, int target) {
+    int k, m;
+    for (k = 0; k < MAX_DEPS && s->dep_name[k][0]; k++) {
+        int gi = s->grp_dep_idx[k];
+        if (s->dep_idx[k] == target) return 1;
+        if (gi >= 0)
+            for (m = 0; m < groups[gi].member_count; m++)
+                if (groups[gi].member_idx[m] == target) return 1;
+    }
+    return 0;
+}
+
+static void shut_reap(void) {
+    pid_t pid;
+    int i;
+    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0)
+        for (i = 0; i < svc_count; i++)
+            if (services[i].child_pid == pid) { services[i].child_pid = 0; break; }
+}
+
+/* Stop in reverse dependency order: a service gets SIGTERM once nothing still
+ * running depends on it, then has SHUT_GRACE_MS to exit before its cgroup is
+ * killed. A straggler holds back only what it depends on. Past SHUT_TOTAL_MS
+ * everything left gets SIGTERM at once. */
+static void shutdown_ordered(void) {
+    uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0};
+    int i, j, round = 0;
+    char msg[320];
+
+    for (;;) {
+        uint64_t now = monotonic_ms();
+        int left = 0, sent = 0;
+        size_t off = 0;
+
+        shut_reap();
+        for (i = 0; i < svc_count; i++) {
+            int blocked = 0;
+            if (services[i].child_pid <= 0) continue;
+            left++;
+            if (term_at[i]) {
+                if (now - term_at[i] < SHUT_GRACE_MS) continue;
+                snprintf(msg, sizeof msg, "%s ignored SIGTERM for %d ms, killing",
+                         services[i].name, SHUT_GRACE_MS);
+                shut_log(msg);
+                service_cgroup_kill(&services[i]);
+                kill(services[i].child_pid, SIGKILL);
+                services[i].child_pid = 0;
+                continue;
+            }
+            if (now - start < SHUT_TOTAL_MS)
+                for (j = 0; j < svc_count && !blocked; j++)
+                    blocked = j != i && services[j].child_pid > 0 &&
+                              shut_depends_on(&services[j], i);
+            if (blocked) continue;
+            kill(services[i].child_pid, SIGTERM);
+            term_at[i] = now;
+            if (!sent++)
+                off = snprintf(msg, sizeof msg, "stop %d (+%llu ms):", ++round,
+                               (unsigned long long)(now - start));
+            if (off < sizeof msg)
+                off += snprintf(msg + off, sizeof msg - off, " %s", services[i].name);
+        }
+        if (sent) shut_log(msg);
+        if (!left) break;
+        usleep(20000);
+    }
+    snprintf(msg, sizeof msg, "services down in %llu ms",
+             (unsigned long long)(monotonic_ms() - start));
+    shut_log(msg);
+}
+
 /* sync() is unbounded: one wedged filesystem and PID 1 never reaches
  * reboot(). Run it in a child so the deadline is ours, not the kernel's. */
 static void bounded_sync(int secs) {
@@ -3398,16 +3472,11 @@ int main(int argc, char **argv) {
     usleep(500000);
     shut_console_open();
     shut_write("[schema-init] shutting down\n");
-    for (i = 0; i < svc_count; i++) {
-        if (services[i].child_pid > 0)
-            kill(services[i].child_pid, SIGTERM);
-    }
-    /* Containers do not hang off a .svc, so SIGTERM them here in the same
-     * grace window -- a clean stop lets Frigate flush frigate.db before the
+    /* Containers do not hang off a .svc, so SIGTERM them first, ahead of the
+     * services -- a clean stop lets Frigate flush frigate.db before the
      * remount-ro below, instead of relying on the kill(-1) SIGKILL further on. */
     container_cgroups_term();
-    shut_log("SIGTERM sent");
-    sleep(3);
+    shutdown_ordered();
     for (i = 0; i < svc_count; i++) {
         service_cgroup_kill(&services[i]);
     }
