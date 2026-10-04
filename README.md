@@ -120,6 +120,8 @@ sudo dd if=schema-netinst44-installer-<version>.iso of=/dev/sdX bs=4M status=pro
 
 Boot that USB stick (or point a VM at the ISO) and the installer gives you a full KDE desktop running **schema-init as PID 1**. It is a netinst image: the machine needs a network connection during install (it pulls the KDE package set). Verified on real hardware — a clean install on a Dell i3 laptop boots straight to Plasma with no hand fixes.
 
+The install is package-managed: schema-init, -daemons and -session are RPMs and the `ajax80/schema-init` COPR repo is enabled, so `sudo dnf upgrade` brings later builds and PID 1 re-execs onto them in place. A box installed from the v0.4.1 ISO or earlier has the files but not the packages; convert it once with `sudo dnf copr enable ajax80/schema-init && sudo dnf install schema-init schema-init-daemons schema-init-session && sudo schema-ctl reexec && sudo rm -f /usr/local/bin/schema-ctl`.
+
 After the first login a wizard offers the *optional* **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev. Wi-Fi and wired profiles are unpinned from systemd's interface names before the switch, so the network survives it.
 
 > ⚠️ **What the udev flip does:** it kills `systemd-udevd` and makes **schema-udev** authoritative over device management. This is the whole point — watching your init own `/dev` — but it *is* a real change to how the box handles hardware. It's optional and guided; skip it and you still get schema-init as PID 1 with stock udev underneath.
