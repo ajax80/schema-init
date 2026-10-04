@@ -12,6 +12,9 @@ static void test_strip_suffix(void) {
     assert(strcmp(strip_service_suffix("foo.service", b, sizeof b), "foo") == 0);
     assert(strcmp(strip_service_suffix("foo", b, sizeof b), "foo") == 0);
     assert(strcmp(strip_service_suffix("foo.socket", b, sizeof b), "foo.socket") == 0);
+    assert(strcmp(strip_service_suffix("foo.timer", b, sizeof b), "foo") == 0);
+    assert(strcmp(unit_queue_name("foo.timer", b, sizeof b), "foo.timer") == 0);
+    assert(strcmp(unit_queue_name("foo", b, sizeof b), "foo.service") == 0);
 }
 
 static void test_supported(void) {
@@ -20,7 +23,8 @@ static void test_supported(void) {
     assert(unit_supported("foo@bar.service") == 0);
     assert(unit_supported("getty@tty1.service") == 0);
     assert(unit_supported("foo.socket") == 0);
-    assert(unit_supported("foo.timer") == 0);
+    assert(unit_supported("foo.timer") == 1);
+    assert(unit_supported("foo@.timer") == 0);
     assert(unit_supported("foo.path") == 0);
     assert(unit_supported("foo.target") == 0);
     assert(unit_supported("foo.mount") == 0);
@@ -101,6 +105,11 @@ static void test_enable_queue(void) {
     /* preset behaves like enable */
     assert(run("preset", "foo.service") == 0);
     assert(run("is-enabled", "foo") == 0);
+    /* a timer is queued under its own name, and disable takes it back */
+    assert(run("enable", "bar.timer") == 0);
+    assert(run("is-enabled", "bar.timer") == 0);
+    assert(run("disable", "bar.timer") == 0);
+    assert(run("is-enabled", "bar.timer") == 1);
 }
 
 static void make_ctl_stub(const char *active_name) {
@@ -145,6 +154,14 @@ static void test_lifecycle(void) {
     assert(run("is-active", "running") == 0);
     assert(run("is-active", "sleeper") == 3);
     assert(run("is-active", "nope") == 3);
+    /* a timer: start/restart would fire the job, stop passes through */
+    snprintf(svc, sizeof svc, "%s/svc/tick.svc", sandbox);
+    f = fopen(svc, "w"); assert(f); fputs("name=tick\non_calendar=00:00\n", f); fclose(f);
+    assert(run("start", "tick.timer") == 0);
+    assert(run("restart", "tick.timer") == 0);
+    assert(!ctl_log_has("tick"));
+    assert(run("stop", "tick.timer") == 0);
+    assert(ctl_log_has("stop tick"));
 }
 
 static void test_flags_and_safety(void) {
