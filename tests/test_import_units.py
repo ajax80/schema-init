@@ -274,6 +274,24 @@ except si.Skip:
 check("timer + service conditions over 8 skipped", ok)
 check("timer + service conditions both kept", "condition=ac_power:true" in tm and "condition=path_exists:/etc/logrotate.conf" in tm)
 
+# --- Requires=/After= -> dep= ---
+known = {"dbus", "polkitd", "tuned", "auditd", "network-manager", "cups"}
+dl, dn = si.dep_lines("tuned-ppd", si.parse_unit(
+    "[Unit]\nRequires=tuned.service\nAfter=tuned.service network.target\n[Service]\nType=dbus\nBusName=x\n"), known)
+check("Type=dbus + Requires/After -> dbus then tuned", dl == ["dep=dbus", "dep=tuned"] and dn == [])
+dl, _ = si.dep_lines("tuned", si.parse_unit(
+    "[Unit]\nAfter=systemd-sysctl.service dbus.service polkit.service NetworkManager.service ghost.service\n"
+    "Requires=dbus.service\nWants=auditd.service\nAfter=cups.socket getty@tty1.service tuned.service\n"), known)
+check("aliases mapped, unknown/self/template/Wants-only dropped, deduped",
+      dl == ["dep=dbus", "dep=polkitd", "dep=network-manager", "dep=cups"])
+check("no known set -> no deps", si.dep_lines("x", si.parse_unit("[Unit]\nAfter=dbus.service\n"), None) == ([], []))
+many = {"d%d" % i for i in range(10)}
+dl, dn = si.dep_lines("x", si.parse_unit("[Unit]\nAfter=" + " ".join("d%d.service" % i for i in range(10)) + "\n"), many)
+check("more than 8 deps -> first 8 + note", len(dl) == 8 and dn and "d8 d9" in dn[0])
+tp = si.unit_to_svc("tuned-ppd", si.parse_unit("[Unit]\nRequires=tuned.service\n[Service]\nType=dbus\nBusName=net.hadess.PowerProfiles\n"
+                    "ExecStart=/usr/sbin/tuned-ppd -l\n[Install]\nWantedBy=x\n"), known=known)
+check("unit_to_svc emits dep= lines", "dep=dbus\ndep=tuned\n" in tp)
+
 # --- drain against a temp tree ---
 tmp = tempfile.mkdtemp()
 os.environ["MIGRATE_ROOT"] = tmp
@@ -377,5 +395,10 @@ for n in ("rsyslog", "abrtd", "abrt-oops", "plasma-setup", "initial-setup"):
 open(os.path.join(unitdir, "vmonly.service"), "w").write("[Unit]\nConditionVirtualization=vm\n[Service]\nExecStart=/usr/bin/vmonly\n[Install]\nWantedBy=x\n")
 st, det = si.import_one("vmonly")
 check("condition failing on this host -> skip stub", st == "skipped" and "does not hold" in det[0])
+
+open(os.path.join(unitdir, "ppd.service"), "w").write("[Unit]\nRequires=pwr.service\nAfter=pwr.service\n[Service]\nExecStart=/usr/bin/ppd\n[Install]\nWantedBy=x\n")
+open(os.path.join(unitdir, "pwr.service"), "w").write("[Service]\nExecStart=/usr/bin/pwr\n[Install]\nWantedBy=x\n")
+si.drain(units=["ppd", "pwr"], log=lambda *_: None)
+check("dep on a unit imported in the same drain", "dep=pwr\n" in open(os.path.join(SD, "ppd.svc")).read())
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

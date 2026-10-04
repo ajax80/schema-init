@@ -318,7 +318,7 @@ def timer_lines(sections):
     return lines, notes
 
 
-def timer_to_svc(name, timer_sections, svc_sections):
+def timer_to_svc(name, timer_sections, svc_sections, known=None):
     """A .timer and the .service it starts as one schema timer .svc, named after
     the timer."""
     tlines, tnotes = timer_lines(timer_sections)
@@ -329,7 +329,7 @@ def timer_to_svc(name, timer_sections, svc_sections):
     if len(tconds) + len(sconds) > 8:
         raise Skip("%d conditions across timer and service (limit 8)" % (len(tconds) + len(sconds)))
     tlines += tconds
-    body = unit_to_svc(name, svc_sections)
+    body = unit_to_svc(name, svc_sections, known=known)
     out = []
     for ln in body.splitlines():
         if ln.startswith("# schema-import: "):
@@ -572,7 +572,39 @@ def _denied(name):
     return None
 
 
-def unit_to_svc(name, sections, sock=None, lazy=False):
+_UNIT_ALIAS = {"dbus-broker": "dbus", "polkit": "polkitd", "NetworkManager": "network-manager",
+               "bluetooth": "bluetoothd", "systemd-logind": "schema-logind",
+               "systemd-journald": "journal-sink"}
+
+
+def dep_lines(name, sections, known):
+    """Requires=/Requisite=/BindsTo=/After= on a service or socket that has a
+    schema .svc (known) -> dep= lines; Type=dbus also waits for the bus, as
+    systemd's implicit After=dbus.socket. Returns (lines, notes)."""
+    if not known:
+        return [], []
+    cands = []
+    if _get_last(sections.get("Service", []), "Type").lower() == "dbus":
+        cands.append("dbus")
+    unit = sections.get("Unit", [])
+    for k in ("Requires", "Requisite", "BindsTo", "After"):
+        for v in _get_all(unit, k):
+            for u in v.split():
+                if u.endswith((".service", ".socket")) and "@" not in u:
+                    base = u.rsplit(".", 1)[0]
+                    cands.append(_UNIT_ALIAS.get(base, base))
+    deps = []
+    for d in cands:
+        if d != name and d in known and d not in deps:
+            deps.append(d)
+    notes = []
+    if len(deps) > 8:
+        notes.append("dropped dep on %s (limit 8)" % " ".join(deps[8:]))
+        deps = deps[:8]
+    return ["dep=%s" % d for d in deps], notes
+
+
+def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
     """Translate parsed unit sections into schema .svc text. sock: the parsed
     .socket that activates it; lazy: start on the first connection, not at boot.
 
@@ -679,6 +711,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False):
             break
     lines.extend(hard)
     lines.extend(condition_lines(sections))
+    deps, dep_notes = dep_lines(name, sections, known)
+    lines.extend(deps)
 
     sock_notes = []
     if sock is not None:
@@ -704,6 +738,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False):
     if not inst and sock is None:
         notes.append("no [Install] section")
     notes += env_file_notes
+    notes += dep_notes
     notes += ["socket: " + n for n in sock_notes]
     for k in ("WorkingDirectory",):
         if _get_last(svc, k):
@@ -841,6 +876,18 @@ def _exec_owner(body, out):
     return None
 
 
+def _known_svcs(queued):
+    """Schema services a dep= may name: the .svc files there, plus the units
+    being imported in the same drain."""
+    try:
+        known = {e[:-4] for e in os.listdir(svc_dir()) if e.endswith(".svc")}
+    except OSError:
+        known = set()
+    for q in queued:
+        known.add(re.sub(r"\.(service|socket|timer)$", "", q))
+    return known
+
+
 def import_one(name, force=False, queued=()):
     """Translate one queued unit. Returns (status, detail) where status is one
     of: imported, exists, not-found, skipped, error. queued: the other names
@@ -886,6 +933,7 @@ def import_one(name, force=False, queued=()):
     path = find_unit(name + ".timer" if timer else name)
     if not path:
         return ("not-found", name)
+    known = _known_svcs(queued)
     lazy = socket and not _service_enabled(name) and name + ".service" not in queued \
         and name not in queued
     try:
@@ -904,12 +952,12 @@ def import_one(name, force=False, queued=()):
             if not spath:
                 raise Skip("timer's %s not found" % target)
             with open(spath) as f:
-                body = timer_to_svc(name, sections, parse_unit(f.read()))
+                body = timer_to_svc(name, sections, parse_unit(f.read()), known)
         else:
             if not sections.get("Install") and _timer_for(name):
                 raise Skip("started by %s, which owns %s.svc — enable the timer"
                            % (_timer_for(name), name))
-            body = unit_to_svc(name, sections, sock_sections, lazy)
+            body = unit_to_svc(name, sections, sock_sections, lazy, known)
         owner = _exec_owner(body, out)
         if owner:
             raise Skip("its binary already runs as %s — importing it would start a second copy"
