@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,7 @@
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
 #define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
+#define PID_FILE_WAIT_SECS 5
 
 static service_t    services_a[MAX_SERVICES];
 static service_t    services_b[MAX_SERVICES];
@@ -619,6 +621,53 @@ static void note_exit(service_t *svc, int status) {
     }
 }
 
+/* A forking daemon's main PID, from its pid_file: alive and inside the
+ * service's cgroup, so a stale or planted file cannot hand PID 1 some other
+ * process to supervise and kill. 0 if not (yet) valid. */
+static pid_t pid_file_read(const service_t *svc) {
+    char path[160], buf[32];
+    struct stat st;
+    FILE *f;
+    long p = 0, q;
+    int fd, found = 0;
+    ssize_t n;
+
+    fd = open(svc->pid_file, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0) return 0;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) { close(fd); return 0; }
+    n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    if (sscanf(buf, "%ld", &p) != 1) return 0;
+    if (p <= 1 || p > INT_MAX || kill((pid_t)p, 0) != 0) return 0;
+    if (!svc->cgroup_path[0]) return 0;
+    snprintf(path, sizeof path, "%s/cgroup.procs", svc->cgroup_path);
+    if (!(f = fopen(path, "r"))) return 0;
+    while (!found && fscanf(f, "%ld", &q) == 1) found = q == p;
+    fclose(f);
+    return found ? (pid_t)p : 0;
+}
+
+/* The launcher of a pid_file service exited 0: adopt the daemon it left, or
+ * wait up to PID_FILE_WAIT_SECS for a pid_file written after the exit. */
+static void fork_adopt(service_t *svc) {
+    pid_t p = pid_file_read(svc);
+    if (p) {
+        char ev[48];
+        svc->child_pid  = p;
+        svc->fork_state = 1;
+        snprintf(ev, sizeof ev, "forked pid=%d", (int)p);
+        service_log(svc, ev);
+        return;
+    }
+    if (svc->fork_state == 0) {
+        svc->fork_state = -1;
+        clock_gettime(CLOCK_MONOTONIC, &svc->fork_wait);
+        svc->fork_wait.tv_sec += PID_FILE_WAIT_SECS;
+    }
+}
+
 static void reap(void) {
     int status;
     pid_t pid;
@@ -658,6 +707,21 @@ static void reap(void) {
                 break;
             }
 
+            if (services[i].pid_file[0] && services[i].fork_state == 0 &&
+                services[i].inst.state == STATE_FULL_TRUST &&
+                !services[i].ctl_killed &&
+                WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                if (!services[i].cgroup_path[0]) {
+                    /* nothing to prove the PID is ours or to find a daemon
+                     * left behind by: refuse rather than retry into duplicates */
+                    services[i].inst.state = STATE_EXCISED;
+                    service_log(&services[i], "pid_file-no-cgroup");
+                    break;
+                }
+                fork_adopt(&services[i]);
+                break;
+            }
+
             if (WIFEXITED(status) && WEXITSTATUS(status) == 0
                 && (services[i].flags & SVC_ONESHOT)) {
                 /* clean one-shot exit → PERFECT */
@@ -681,6 +745,7 @@ static void reap(void) {
                  * cgroup on any later start. */
                 service_cgroup_kill(&services[i]);
             } else if (services[i].ctl_killed) {
+                if (services[i].pid_file[0]) service_cgroup_kill(&services[i]);
                 services[i].inst.state = STATE_NEW_PROCESS;
                 service_log(&services[i], "ctl-restart");
             } else {
@@ -1136,13 +1201,29 @@ static void tick_service(service_t *svc,
                 }
                 break;
             }
+            if (svc->fork_state < 0) {
+                fork_adopt(svc);
+                if (svc->fork_state < 0 && now_mono.tv_sec >= svc->fork_wait.tv_sec) {
+                    svc->fork_state = 0;
+                    service_cgroup_kill(svc);
+                    restart_budget_refresh(svc);
+                    if (svc->failsafe_cmd[0]) start_failsafe(svc);
+                    svc->inst.state = STATE_RECOVERY;
+                    service_log(svc, "pid_file-missing");
+                }
+                break;
+            }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
-                if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
+                if (svc->pid_file[0] && svc->fork_state != 1) {
+                    /* not before the launcher has exited and the daemon is adopted */
+                } else if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
                     ready = svc->ready_bus_name[0] ? READY_BUS : READY_NOTIFY;
                 } else if (svc->ready_path[0] && ready_path_fresh(svc)) {
                     ready = READY_PATH;
                     svc->ready_path_verified = 1;
+                } else if (svc->pid_file[0]) {
+                    if (svc->fork_state == 1) ready = READY_PIDFILE;
                 } else if (now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->stable_secs) {
                     ready = READY_TIMER;
                 }
@@ -1341,6 +1422,7 @@ static const char *an_how(const service_t *s) {
         case READY_PATH:   return "ready_path";
         case READY_TIMER:  return "timer";
         case READY_EXIT:   return "exit";
+        case READY_PIDFILE: return "pid_file";
     }
     return "?";
 }
@@ -1686,6 +1768,10 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "ok: SIGTERM → %s (pid %d)\n",
                     name, (int)services[i].child_pid);
             } else {
+                if (services[i].fork_state < 0) {
+                    service_cgroup_kill(&services[i]);
+                    services[i].fork_state = 0;
+                }
                 services[i].inst.state = STATE_EXCISED;
                 ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
             }
@@ -1704,6 +1790,10 @@ static void ctl_cmd(int fd, char *line) {
                 kill(services[i].child_pid, SIGTERM);
                 ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
             } else {
+                if (services[i].fork_state < 0) {
+                    service_cgroup_kill(&services[i]);
+                    services[i].fork_state = 0;
+                }
                 services[i].inst.state    = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
                 ctl_writef(fd, "ok: %s requeued\n", name);

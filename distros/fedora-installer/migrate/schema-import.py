@@ -5,7 +5,7 @@ service files. Phase 2 of the compat translator: the runtime importer.
 The shim (schema-systemctl) records `enable`/`preset` intent to
 pending.list; this tool reads each queued unit, parses its [Service]/[Install]
 sections, and emits a schema `.svc` on 80/20 field coverage. Ratholes
-(Type=forking, templates, missing ExecStart) are logged and skipped,
+(Type=forking without PIDFile=, templates, missing ExecStart) are logged and skipped,
 never half-translated. Type=notify maps to notify=1 (PID 1 speaks sd_notify);
 Type=dbus maps to ready_bus_name=<BusName> (the schema-dbus broker reports it).
 
@@ -196,8 +196,8 @@ def unit_to_svc(name, sections):
     """Translate parsed unit sections into schema .svc text.
 
     Returns the .svc file body (str). Raises Skip(reason) for units we refuse
-    to half-translate (Type=forking, Type=dbus without BusName, template,
-    no ExecStart).
+    to half-translate (Type=forking without an absolute PIDFile=, Type=dbus
+    without BusName, template, no ExecStart).
     """
     if "@" in name:
         raise Skip("template unit (%s) — instances unsupported" % name)
@@ -206,9 +206,10 @@ def unit_to_svc(name, sections):
     inst = sections.get("Install", [])
 
     stype = _get_last(svc, "Type").lower()
-    if stype == "forking":
-        raise Skip("Type=forking — schema-init tracks only the direct child, "
-                   "cannot supervise a forking daemon")
+    pidfile = _get_last(svc, "PIDFile")
+    if stype == "forking" and not (pidfile.startswith("/") and not any(c in pidfile for c in "%$")):
+        raise Skip("Type=forking without an absolute PIDFile= — nothing to "
+                   "find the daemon's main PID by")
     busname = _get_last(svc, "BusName")
     if stype == "dbus" and not busname:
         raise Skip("Type=dbus without BusName= — nothing to wait for")
@@ -238,6 +239,8 @@ def unit_to_svc(name, sections):
         lines.append("notify=1")
     elif stype == "dbus":
         lines.append("ready_bus_name=%s" % busname)
+    elif stype == "forking":
+        lines.append("pid_file=%s" % pidfile)
 
     # systemd defaults Restart=no; only always/on-* opt into auto-restart.
     restart = _get_last(svc, "Restart").lower()
