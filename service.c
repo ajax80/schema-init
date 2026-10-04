@@ -673,6 +673,7 @@ int service_spawn(service_t *svc) {
 
     close(sync[0]);
     svc->child_pid  = pid;
+    svc->fork_state = 0;
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
@@ -1139,6 +1140,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->notify = atoi(val) ? 1 : 0;
     else if (strcmp(line, "ready_path") == 0)
         strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
+    else if (strcmp(line, "pid_file") == 0)
+        snprintf(svc->pid_file, sizeof svc->pid_file, "%s", val);
     else if (strcmp(line, "priority") == 0) {
         if (strcasecmp(val, "critical") == 0) svc->priority = PRIO_CRITICAL;
         else if (strcasecmp(val, "peripheral") == 0) svc->priority = PRIO_PERIPHERAL;

@@ -52,7 +52,9 @@ typedef struct {
     X(TS,   boot_ready)          \
     X(INT,  boot_how)            \
     X(STR,  cgroup_path)         \
-    X(INT,  is_frozen)
+    X(INT,  is_frozen)           \
+    X(INT,  fork_state)          \
+    X(TS,   fork_wait)
 
 /* SVC_NO_RESTART is the one flag PID 1 changes at runtime: schema-ctl stop
  * sets it to hold a service down, start clears it. The live bit wins over the

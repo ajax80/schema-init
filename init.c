@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,7 @@
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
 #define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
+#define PID_FILE_WAIT_SECS 5
 
 static service_t    services_a[MAX_SERVICES];
 static service_t    services_b[MAX_SERVICES];
@@ -619,6 +621,46 @@ static void note_exit(service_t *svc, int status) {
     }
 }
 
+/* A forking daemon's main PID, from its pid_file: alive and, when the service
+ * has a cgroup, inside it, so a stale or planted file cannot hand PID 1 some
+ * other process to supervise and kill. 0 if not (yet) valid. */
+static pid_t pid_file_read(const service_t *svc) {
+    char path[160];
+    FILE *f;
+    long p = 0, q;
+    int found = 0;
+
+    if (!(f = fopen(svc->pid_file, "r"))) return 0;
+    if (fscanf(f, "%ld", &p) != 1) p = 0;
+    fclose(f);
+    if (p <= 1 || p > INT_MAX || kill((pid_t)p, 0) != 0) return 0;
+    if (!svc->cgroup_path[0]) return (pid_t)p;
+    snprintf(path, sizeof path, "%s/cgroup.procs", svc->cgroup_path);
+    if (!(f = fopen(path, "r"))) return 0;
+    while (!found && fscanf(f, "%ld", &q) == 1) found = q == p;
+    fclose(f);
+    return found ? (pid_t)p : 0;
+}
+
+/* The launcher of a pid_file service exited 0: adopt the daemon it left, or
+ * wait up to PID_FILE_WAIT_SECS for a pid_file written after the exit. */
+static void fork_adopt(service_t *svc) {
+    pid_t p = pid_file_read(svc);
+    if (p) {
+        char ev[48];
+        svc->child_pid  = p;
+        svc->fork_state = 1;
+        snprintf(ev, sizeof ev, "forked pid=%d", (int)p);
+        service_log(svc, ev);
+        return;
+    }
+    if (svc->fork_state == 0) {
+        svc->fork_state = -1;
+        clock_gettime(CLOCK_MONOTONIC, &svc->fork_wait);
+        svc->fork_wait.tv_sec += PID_FILE_WAIT_SECS;
+    }
+}
+
 static void reap(void) {
     int status;
     pid_t pid;
@@ -655,6 +697,13 @@ static void reap(void) {
                 }
                 service_log(&services[i],
                     services[i].exit_status == 0 ? "timer-done" : "timer-failed");
+                break;
+            }
+
+            if (services[i].pid_file[0] && services[i].fork_state == 0 &&
+                services[i].inst.state == STATE_FULL_TRUST &&
+                WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                fork_adopt(&services[i]);
                 break;
             }
 
@@ -1136,6 +1185,18 @@ static void tick_service(service_t *svc,
                 }
                 break;
             }
+            if (svc->fork_state < 0) {
+                fork_adopt(svc);
+                if (svc->fork_state < 0 && now_mono.tv_sec >= svc->fork_wait.tv_sec) {
+                    svc->fork_state = 0;
+                    service_cgroup_kill(svc);
+                    restart_budget_refresh(svc);
+                    if (svc->failsafe_cmd[0]) start_failsafe(svc);
+                    svc->inst.state = STATE_RECOVERY;
+                    service_log(svc, "pid_file-missing");
+                }
+                break;
+            }
             if (!(svc->flags & SVC_ONESHOT) && svc->child_pid > 0) {
                 int ready = 0;
                 if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
@@ -1143,6 +1204,8 @@ static void tick_service(service_t *svc,
                 } else if (svc->ready_path[0] && ready_path_fresh(svc)) {
                     ready = READY_PATH;
                     svc->ready_path_verified = 1;
+                } else if (svc->pid_file[0]) {
+                    if (svc->fork_state == 1) ready = READY_PIDFILE;
                 } else if (now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->stable_secs) {
                     ready = READY_TIMER;
                 }
@@ -1341,6 +1404,7 @@ static const char *an_how(const service_t *s) {
         case READY_PATH:   return "ready_path";
         case READY_TIMER:  return "timer";
         case READY_EXIT:   return "exit";
+        case READY_PIDFILE: return "pid_file";
     }
     return "?";
 }

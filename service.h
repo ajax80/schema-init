@@ -93,6 +93,7 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define READY_PATH      3
 #define READY_TIMER     4
 #define READY_EXIT      5
+#define READY_PIDFILE   6
 
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
@@ -262,6 +263,9 @@ typedef struct {
     time_t           start_time;       /* when current run began              */
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
     char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */
+    char             pid_file[256];    /* forking daemon: launcher exits 0, main PID read from here */
+    int              fork_state;       /* pid_file: 0 launcher running, 1 main PID adopted, -1 waiting for the file */
+    struct timespec  fork_wait;        /* fork_state -1: give up at this CLOCK_MONOTONIC time */
     prio_t           priority;         /* priority class for resource throttling */
     int              fuse;             /* 1 to enable quarantine cascade */
     char             fuse_cmd[256];    /* shell command executed on fuse trip */
