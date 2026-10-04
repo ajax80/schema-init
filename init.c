@@ -2900,10 +2900,11 @@ static const char *CONTAINER_CGROUP_PROC_GLOBS[] = {
     NULL
 };
 
-static void container_cgroups_term(void) {
+/* Signal every container process; sig 0 just counts the live ones. */
+static int container_cgroups_signal(int sig) {
     glob_t g;
     size_t n;
-    int i, have = 0;
+    int i, have = 0, live = 0;
 
     memset(&g, 0, sizeof g);
     for (i = 0; CONTAINER_CGROUP_PROC_GLOBS[i]; i++) {
@@ -2911,18 +2912,19 @@ static void container_cgroups_term(void) {
                  have ? GLOB_APPEND : 0, NULL, &g) == 0)
             have = 1;
     }
-    if (!have) return;
+    if (!have) return 0;
 
     for (n = 0; n < g.gl_pathc; n++) {
         FILE *f = fopen(g.gl_pathv[n], "r");
         pid_t p;
         if (!f) continue;
         while (fscanf(f, "%d", &p) == 1)
-            if (p > 1) kill(p, SIGTERM);
+            if (p > 1 && kill(p, sig) == 0) live++;
         fclose(f);
     }
-    if (g.gl_pathc) shut_log("container SIGTERM sent");
+    if (sig && live) shut_log("container SIGTERM sent");
     globfree(&g);
+    return live;
 }
 
 static void container_cgroups_kill(void) {
@@ -2965,6 +2967,24 @@ static int shut_depends_on(const service_t *s, int target) {
     return 0;
 }
 
+/* Signal every process in a service's cgroup, main PID included; sig 0 just
+ * counts the live ones. A service is down only when this reaches 0. */
+static int svc_signal_all(service_t *svc, int sig) {
+    char path[160];
+    FILE *f;
+    pid_t p;
+    int live = 0;
+
+    if (svc->child_pid > 0 && kill(svc->child_pid, sig) == 0) live++;
+    if (!svc->cgroup_path[0]) return live;
+    snprintf(path, sizeof path, "%s/cgroup.procs", svc->cgroup_path);
+    if (!(f = fopen(path, "r"))) return live;
+    while (fscanf(f, "%d", &p) == 1)
+        if (p > 1 && p != svc->child_pid && kill(p, sig) == 0) live++;
+    fclose(f);
+    return live;
+}
+
 static void shut_reap(void) {
     pid_t pid;
     int i;
@@ -2979,6 +2999,7 @@ static void shut_reap(void) {
  * everything left gets SIGTERM at once. */
 static void shutdown_ordered(void) {
     uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0};
+    int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0};
     int i, j, round = 0;
     char msg[320];
 
@@ -2989,25 +3010,28 @@ static void shutdown_ordered(void) {
 
         shut_reap();
         for (i = 0; i < svc_count; i++) {
+            alive[i] = !killed[i] && svc_signal_all(&services[i], 0) > 0;
+            left += alive[i];
+        }
+        if (!left) break;
+        for (i = 0; i < svc_count; i++) {
             int blocked = 0;
-            if (services[i].child_pid <= 0) continue;
-            left++;
+            if (!alive[i]) continue;
             if (term_at[i]) {
                 if (now - term_at[i] < SHUT_GRACE_MS) continue;
                 snprintf(msg, sizeof msg, "%s ignored SIGTERM for %d ms, killing",
                          services[i].name, SHUT_GRACE_MS);
                 shut_log(msg);
                 service_cgroup_kill(&services[i]);
-                kill(services[i].child_pid, SIGKILL);
-                services[i].child_pid = 0;
+                if (services[i].child_pid > 0) kill(services[i].child_pid, SIGKILL);
+                killed[i] = 1;
                 continue;
             }
             if (now - start < SHUT_TOTAL_MS)
                 for (j = 0; j < svc_count && !blocked; j++)
-                    blocked = j != i && services[j].child_pid > 0 &&
-                              shut_depends_on(&services[j], i);
+                    blocked = j != i && alive[j] && shut_depends_on(&services[j], i);
             if (blocked) continue;
-            kill(services[i].child_pid, SIGTERM);
+            svc_signal_all(&services[i], SIGTERM);
             term_at[i] = now;
             if (!sent++)
                 off = snprintf(msg, sizeof msg, "stop %d (+%llu ms):", ++round,
@@ -3016,7 +3040,6 @@ static void shutdown_ordered(void) {
                 off += snprintf(msg + off, sizeof msg - off, " %s", services[i].name);
         }
         if (sent) shut_log(msg);
-        if (!left) break;
         usleep(20000);
     }
     snprintf(msg, sizeof msg, "services down in %llu ms",
@@ -3475,8 +3498,11 @@ int main(int argc, char **argv) {
     /* Containers do not hang off a .svc, so SIGTERM them first, ahead of the
      * services -- a clean stop lets Frigate flush frigate.db before the
      * remount-ro below, instead of relying on the kill(-1) SIGKILL further on. */
-    container_cgroups_term();
+    uint64_t ct = monotonic_ms();
+    container_cgroups_signal(SIGTERM);
     shutdown_ordered();
+    while (container_cgroups_signal(0) && monotonic_ms() - ct < SHUT_GRACE_MS)
+        usleep(20000);
     for (i = 0; i < svc_count; i++) {
         service_cgroup_kill(&services[i]);
     }
