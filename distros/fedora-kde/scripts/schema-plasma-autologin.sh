@@ -101,6 +101,17 @@ stop_session() {
             [ -n "$(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null)" ] || break
             sleep 0.1
         done
+        # Anything left would hold the seat and DRM against the respawned
+        # session (schema-ctl restart), or linger after a stop.
+        if [ -n "$(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null)" ]; then
+            printf 'session_kill\n'
+            echo 1 > "$SESSION_SCOPE/cgroup.kill" 2>/dev/null ||
+                kill -KILL $(cat "$SESSION_SCOPE/cgroup.procs") 2>/dev/null
+            for _ in $(seq 1 10); do
+                [ -n "$(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null)" ] || break
+                sleep 0.05
+            done
+        fi
     elif [ -n "$SESSION_PID" ]; then
         kill -TERM "$SESSION_PID" 2>/dev/null
     fi
