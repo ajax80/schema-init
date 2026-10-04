@@ -335,10 +335,13 @@ def unit_to_svc(name, sections):
         env_files = env_files[:4]
     expand = bool(env_files) and any("$" in a for a in argv[1:])
     dropped_args = 0
+    env_map = dict(p.split("=", 1) for p in env_pairs)
     if env_files and "$" in argv[0]:
-        raise Skip("ExecStart binary path uses a variable from an EnvironmentFile")
+        exe, _ = _expand_argv(argv[:1], env_map)
+        if not exe:
+            raise Skip("ExecStart binary path uses a variable from an EnvironmentFile")
+        argv = exe + argv[1:]
     if not env_files:
-        env_map = dict(p.split("=", 1) for p in env_pairs)
         argv, dropped_args = _expand_argv(argv, env_map)
         if not argv:
             raise Skip("ExecStart is entirely unresolved variables")

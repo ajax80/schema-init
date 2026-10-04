@@ -530,6 +530,8 @@ int service_env_file_read(const char *path, char **pairs, int max) {
     if (!f) return -1;
     char *buf = malloc(65537);
     size_t len = buf ? fread(buf, 1, 65536, f) : 0;
+    if (len == 65536 && fgetc(f) != EOF)
+        fprintf(stderr, "[schema-init] env_file %s: only the first 64 KiB read\n", path);
     fclose(f);
     if (!buf) return 0;
     buf[len] = '\0';
@@ -698,6 +700,9 @@ int service_spawn(service_t *svc) {
                 _exit(1);
             }
             file_envc += got;
+            if (file_envc == 64)
+                dprintf(2, "[schema-init] %s: env_file %s: 64-variable limit reached, rest ignored\n",
+                        svc->name, ef);
         }
         char *at = strchr(svc->name, '@');
         if (at) {
@@ -1222,11 +1227,12 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         while (*val == ' ' || *val == '\t') val++;
         if (strchr(val, '='))
             svc->envp[svc->env_count++] = strdup(val);
-    } else if (strcmp(line, "env_file") == 0 && svc->env_file_count < MAX_ENV_FILES) {
+    } else if (strcmp(line, "env_file") == 0) {
         while (*val == ' ' || *val == '\t') val++;
-        if (val[*val == '-'] != '/') {
-            fprintf(stderr, "[schema-init] %s: env_file=%s must be an absolute path\n",
-                    svc->name[0] ? svc->name : path, val);
+        if (val[*val == '-'] != '/' || strlen(val) >= sizeof svc->env_file[0]
+            || svc->env_file_count >= MAX_ENV_FILES) {
+            fprintf(stderr, "[schema-init] %s: env_file=%s must be an absolute path under %zu chars, at most %d per service\n",
+                    svc->name[0] ? svc->name : path, val, sizeof svc->env_file[0], MAX_ENV_FILES);
             return -1;
         }
         strncpy(svc->env_file[svc->env_file_count++], val, sizeof svc->env_file[0] - 1);

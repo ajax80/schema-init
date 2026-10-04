@@ -102,6 +102,18 @@ int main(void) {
     snprintf(p, sizeof p, "%s/i.svc", dir3);
     write_svc(p, "name=i\nexec=/bin/true\nenv_file=relative/h\n");
     assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/k.svc", dir3);
+    write_svc(p, "name=k\nexec=/bin/true\nenv_file=/a\nenv_file=/b\nenv_file=/c\nenv_file=/d\nenv_file=/e\n");
+    assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/l.svc", dir3);
+    {
+        char longp[400] = "name=l\nexec=/bin/true\nenv_file=/";
+        size_t l = strlen(longp);
+        memset(longp + l, 'x', 270);
+        strcpy(longp + l + 270, "\n");
+        write_svc(p, longp);
+    }
+    assert(service_load_one(p, &svc) == -1);
     snprintf(p, sizeof p, "%s/j.svc", dir3);
     write_svc(p, "name=j\nexec=/bin/true\nenv_file=-\n");
     assert(service_load_one(p, &svc) == -1);

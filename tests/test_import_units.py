@@ -60,6 +60,11 @@ try:
     check("variable binary with env file skipped", False)
 except si.Skip:
     check("variable binary with env file skipped", True)
+bb = si.unit_to_svc("bx", si.parse_unit(
+    "[Service]\nEnvironment=BIN=/usr/sbin/x\nEnvironmentFile=-/etc/sysconfig/x\n"
+    "ExecStart=${BIN} -n $OPTS\n[Install]\nWantedBy=x\n"))
+check("binary from Environment= resolved even with env file",
+      "exec=/usr/sbin/x\n" in bb and "args=$OPTS\n" in bb and "expand_args=1\n" in bb)
 
 # --- ExecStart prefix stripping ---
 b3 = si.unit_to_svc("p", si.parse_unit("[Service]\nExecStart=@-/bin/p arg\n[Install]\nWantedBy=x\n"))
