@@ -19,6 +19,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
 #include "svc_dropins.h"
 
 /* PID 1 runs its main loop with SIGCHLD and SIGHUP blocked -- it reaps through
@@ -623,6 +624,90 @@ int service_expand_argv(char *const *argv, char **out, int max) {
     return n;
 }
 
+int service_split_cmdline(const char *s, char **out, int max) {
+    int n = 0;
+    size_t len = strlen(s);
+    while (n < max) {
+        s += strspn(s, " \t");
+        if (!*s) break;
+        char *w = malloc(len + 1), *o = w;
+        if (!w) break;
+        while (*s && *s != ' ' && *s != '\t') {
+            if (*s == '\'') {
+                for (s++; *s && *s != '\''; ) *o++ = *s++;
+                if (!*s) { free(w); goto bad; }
+                s++;
+            } else if (*s == '"') {
+                for (s++; *s && *s != '"'; ) {
+                    if (*s == '\\' && s[1]) s++;
+                    *o++ = *s++;
+                }
+                if (!*s) { free(w); goto bad; }
+                s++;
+            } else if (*s == '\\' && s[1]) {
+                s++;
+                *o++ = *s++;
+            } else
+                *o++ = *s++;
+        }
+        *o = '\0';
+        out[n++] = w;
+    }
+    return n;
+bad:
+    while (n) free(out[--n]);
+    return -1;
+}
+
+static void svc_apply_env(const service_t *svc, char **file_env, int file_envc) {
+    for (int e = 0; e < svc->env_count; e++) {
+        char *kv = svc->envp[e];
+        char *ev = strchr(kv, '=');
+        if (!ev) continue;
+        *ev = '\0';
+        setenv(kv, ev + 1, 1);
+        *ev = '=';
+    }
+    for (int e = 0; e < file_envc; e++) {
+        char *ev = strchr(file_env[e], '=');
+        *ev = '\0';
+        setenv(file_env[e], ev + 1, 1);
+        *ev = '=';
+    }
+}
+
+static void svc_run_pre(const service_t *svc, int privileged) {
+    for (int i = 0; i < svc->exec_pre_count; i++) {
+        const char *c = svc->exec_pre[i];
+        size_t pl = strspn(c, "+-");
+        int plus = memchr(c, '+', pl) != NULL, ignore = memchr(c, '-', pl) != NULL;
+        if (plus != privileged) continue;
+        char *w[32], *x[33], **argv = x;
+        int nw = service_split_cmdline(c + pl, w, 32);
+        if (nw <= 0) _exit(1);
+        if (svc->expand_args) {
+            x[service_expand_argv(w, x, 32)] = NULL;
+        } else {
+            memcpy(x, w, nw * sizeof *w);
+            x[nw] = NULL;
+        }
+        pid_t p = fork();
+        if (p == 0) {
+            execv(argv[0], argv);
+            _exit(127);
+        }
+        int st = 0;
+        while (p > 0 && waitpid(p, &st, 0) < 0 && errno == EINTR) ;
+        if (p < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+            dprintf(2, "[schema-init] %s: exec_pre %s failed (%s %d)%s\n", svc->name, c,
+                    p < 0 ? "fork" : WIFEXITED(st) ? "exit" : "signal",
+                    p < 0 ? errno : WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st),
+                    ignore ? ", ignored" : "");
+            if (!ignore) _exit(1);
+        }
+    }
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -733,6 +818,10 @@ int service_spawn(service_t *svc) {
                 close(ofd);
             }
         }
+        if (svc->exec_pre_count) {
+            svc_apply_env(svc, file_env, file_envc);
+            svc_run_pre(svc, 1);
+        }
         if (service_apply_hardening(svc) != 0)
             _exit(126);
         if (svc->run_uid) {
@@ -768,6 +857,10 @@ int service_spawn(service_t *svc) {
                     svc->name, errno);
             _exit(126);
         }
+        if (svc->exec_pre_count) {
+            svc_apply_env(svc, file_env, file_envc);
+            svc_run_pre(svc, 0);
+        }
         if (svc->notify) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
         else unsetenv("NOTIFY_SOCKET");
         if (svc->notify && svc->watchdog_sec > 0) {
@@ -780,19 +873,7 @@ int service_spawn(service_t *svc) {
             unsetenv("WATCHDOG_USEC");
             unsetenv("WATCHDOG_PID");
         }
-        for (int e = 0; e < svc->env_count; e++) {
-            char *kv = svc->envp[e];
-            char *ev = strchr(kv, '=');
-            if (!ev) continue;
-            *ev = '\0';
-            setenv(kv, ev + 1, 1);
-            *ev = '=';
-        }
-        for (int e = 0; e < file_envc; e++) {
-            char *ev = strchr(file_env[e], '=');
-            *ev = '\0';
-            setenv(file_env[e], ev + 1, 1);
-        }
+        svc_apply_env(svc, file_env, file_envc);
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             xargv[service_expand_argv(svc->argv, xargv, 63)] = NULL;
@@ -1107,6 +1188,11 @@ static void svc_free_strings(service_t *svc) {
 }
 
 void service_free_landlock(service_t *svc) {
+    for (int i = 0; i < svc->exec_pre_count; i++) {
+        free(svc->exec_pre[i]);
+        svc->exec_pre[i] = NULL;
+    }
+    svc->exec_pre_count = 0;
     for (int i = 0; i < svc->landlock_count; i++) {
         free(svc->landlock[i]);
         svc->landlock[i] = NULL;
@@ -1183,6 +1269,12 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
             svc->envp[i] = NULL;
         }
         svc->env_count = 0;
+    } else if (strcmp(key, "exec_pre") == 0) {
+        for (int i = 0; i < svc->exec_pre_count; i++) {
+            free(svc->exec_pre[i]);
+            svc->exec_pre[i] = NULL;
+        }
+        svc->exec_pre_count = 0;
     } else if (strcmp(key, "env_file") == 0) {
         memset(svc->env_file, 0, sizeof svc->env_file);
         svc->env_file_count = 0;
@@ -1236,6 +1328,19 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         strncpy(svc->env_file[svc->env_file_count++], val, sizeof svc->env_file[0] - 1);
+    } else if (strcmp(line, "exec_pre") == 0) {
+        char *w[32];
+        const char *cmd = val + strspn(val, " \t");
+        cmd += strspn(cmd, "+-");
+        int nw = service_split_cmdline(cmd, w, 32);
+        int ok = nw > 0 && w[0][0] == '/' && svc->exec_pre_count < MAX_EXEC_PRE;
+        for (int i = 0; i < nw; i++) free(w[i]);
+        if (!ok) {
+            fprintf(stderr, "[schema-init] %s: exec_pre=%s needs an absolute command with balanced quotes, at most %d per service\n",
+                    svc->name[0] ? svc->name : path, val, MAX_EXEC_PRE);
+            return -1;
+        }
+        svc->exec_pre[svc->exec_pre_count++] = strdup(val + strspn(val, " \t"));
     } else if (strcmp(line, "expand_args") == 0) {
         svc->expand_args = atoi(val) != 0;
     } else if (strcmp(line, "dep") == 0 && pc->dep_slot < MAX_DEPS) {

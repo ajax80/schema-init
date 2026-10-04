@@ -66,6 +66,39 @@ bb = si.unit_to_svc("bx", si.parse_unit(
 check("binary from Environment= resolved even with env file",
       "exec=/usr/sbin/x\n" in bb and "args=$OPTS\n" in bb and "expand_args=1\n" in bb)
 
+# --- ExecStartPre -> exec_pre= ---
+bp = si.unit_to_svc("sssd", si.parse_unit(
+    "[Service]\nUser=sssd\nExecStartPre=+-/bin/chown -f -R root:sssd /etc/sssd\n"
+    "ExecStartPre=+-/bin/sh -c \"/bin/chown -f -h sssd:sssd /var/lib/sss/db/*.ldb\"\n"
+    "ExecStart=/usr/bin/sssd -i\n[Install]\nWantedBy=x\n"))
+check("+- prefix kept, plain words unquoted", "exec_pre=+-/bin/chown -f -R root:sssd /etc/sssd\n" in bp)
+check("sh -c script double-quoted", 'exec_pre=+-/bin/sh -c "/bin/chown -f -h sssd:sssd /var/lib/sss/db/*.ldb"\n' in bp)
+check("no dropped-ExecStartPre note", "ExecStartPre" not in bp)
+bq = si.unit_to_svc("q", si.parse_unit(
+    "[Service]\nExecStartPre=/bin/sh -c \"grep '^X' /etc/a && echo \\\"y\\\" \\\\ z\"\n"
+    "ExecStart=/bin/q\n[Install]\nWantedBy=x\n"))
+check("quotes and backslashes escaped", 'exec_pre=/bin/sh -c "grep \'^X\' /etc/a && echo \\"y\\" \\\\ z"\n' in bq)
+bo = si.unit_to_svc("o", si.parse_unit(
+    "[Service]\nExecStartPre=/bin/a\nExecStartPre=+/bin/b\nExecStart=/bin/o\n[Install]\nWantedBy=x\n"))
+check("plain before + warns of reorder", "order changed" in bo)
+br2 = si.unit_to_svc("r2", si.parse_unit(
+    "[Service]\nExecStartPre=/bin/a\nExecStartPre=\nExecStartPre=/bin/b\nExecStart=/bin/r\n[Install]\nWantedBy=x\n"))
+check("empty ExecStartPre= resets", "exec_pre=/bin/a" not in br2 and "exec_pre=/bin/b\n" in br2)
+bv = si.unit_to_svc("v2", si.parse_unit(
+    "[Service]\nEnvironmentFile=/etc/v\nExecStartPre=/bin/prep $OPTS\nExecStart=/bin/v\n[Install]\nWantedBy=x\n"))
+check("$VAR only in exec_pre still sets expand_args", "exec_pre=/bin/prep $OPTS\n" in bv and "expand_args=1\n" in bv)
+for bad, why in (("@/bin/a x", "prefix"), ("/bin/sh -c \"open", "quotes"), ("no-such-cmd-zz", "not found")):
+    try:
+        si.unit_to_svc("b", si.parse_unit("[Service]\nExecStartPre=%s\nExecStart=/bin/b\n[Install]\nWantedBy=x\n" % bad))
+        check("ExecStartPre skip: " + why, False)
+    except si.Skip:
+        check("ExecStartPre skip: " + why, True)
+try:
+    si.unit_to_svc("n9", si.parse_unit("[Service]\n" + "ExecStartPre=/bin/true\n" * 9 + "ExecStart=/bin/b\n[Install]\nWantedBy=x\n"))
+    check("9 ExecStartPre skipped", False)
+except si.Skip:
+    check("9 ExecStartPre skipped", True)
+
 # --- ExecStart prefix stripping ---
 b3 = si.unit_to_svc("p", si.parse_unit("[Service]\nExecStart=@-/bin/p arg\n[Install]\nWantedBy=x\n"))
 check("prefix chars stripped", "exec=/bin/p\n" in b3 and "args=arg\n" in b3)

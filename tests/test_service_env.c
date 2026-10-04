@@ -159,6 +159,41 @@ int main(void) {
     for (int i = 0; i < m; i++) assert(strcmp(out[i], exp[i]) == 0);
     assert(service_expand_argv(in, out, 3) == 3);
 
+    char *w[32];
+    int nw = service_split_cmdline("  /usr/bin/bash -c \"pkill abrt-dbus || :\"  'a b'c\\ d \"x\\\"y\" ", w, 32);
+    const char *wexp[] = {"/usr/bin/bash", "-c", "pkill abrt-dbus || :", "a bc d", "x\"y"};
+    assert(nw == 5);
+    for (int i = 0; i < nw; i++) assert(strcmp(w[i], wexp[i]) == 0);
+    assert(service_split_cmdline("/bin/sh -c \"unterminated", w, 32) == -1);
+    assert(service_split_cmdline("/bin/sh 'x", w, 32) == -1);
+    assert(service_split_cmdline("   ", w, 32) == 0);
+    assert(service_split_cmdline("a b c d", w, 2) == 2);
+
+    snprintf(p, sizeof p, "%s/m.svc", dir3);
+    write_svc(p,
+        "name=m\nexec=/bin/true\n"
+        "exec_pre=+-/bin/chown -f -R root:sssd /etc/sssd\n"
+        "exec_pre=/bin/sh -c \"echo hi > /run/x\"\n"
+        "exec_pre= -/usr/sbin/modprobe vboxguest\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.exec_pre_count == 3);
+    assert(strcmp(svc.exec_pre[0], "+-/bin/chown -f -R root:sssd /etc/sssd") == 0);
+    assert(strcmp(svc.exec_pre[2], "-/usr/sbin/modprobe vboxguest") == 0);
+    snprintf(p, sizeof p, "%s/n.svc", dir3);
+    write_svc(p, "name=n\nexec=/bin/true\nexec_pre=-udevadm settle\n");
+    assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/o.svc", dir3);
+    write_svc(p, "name=o\nexec=/bin/true\nexec_pre=/bin/sh -c \"oops\n");
+    assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/q.svc", dir3);
+    f = fopen(p, "w");
+    assert(f);
+    fputs("name=q\nexec=/bin/true\n", f);
+    for (int i = 0; i <= MAX_EXEC_PRE; i++)
+        fputs("exec_pre=/bin/true\n", f);
+    fclose(f);
+    assert(service_load_one(p, &svc) == -1);
+
     printf("all service env tests passed\n");
     return 0;
 }
