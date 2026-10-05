@@ -181,6 +181,21 @@ if [ $1 -eq 0 ]; then
     fi
 fi
 
+%posttrans migrate
+m=/var/lib/schema-init/initrd-systemctl-checked
+if [ ! -e "$m" ] && [ -x /usr/bin/systemctl.real ] && command -v lsinitrd >/dev/null; then
+    for img in /boot/initramfs-*.img; do
+        kver=${img#/boot/initramfs-}; kver=${kver%.img}
+        [ -d "/usr/lib/modules/$kver" ] || continue
+        l=$(lsinitrd "$img" 2>/dev/null)
+        if echo "$l" | grep -q ' usr/bin/schema-systemctl$' &&
+           ! echo "$l" | grep -q ' usr/bin/systemctl.real$'; then
+            dracut -f --kver "$kver" "$img" || :
+        fi
+    done
+    mkdir -p "${m%/*}" && touch "$m"
+fi
+
 %transfiletriggerin migrate -- /usr/bin/systemctl
 if [ ! -L /usr/bin/systemctl ] && [ -f /usr/bin/systemctl ]; then
     mv -f /usr/bin/systemctl /usr/bin/systemctl.real
