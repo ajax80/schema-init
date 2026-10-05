@@ -149,6 +149,7 @@ install-migrate: schema-udev schema-systemctl verify-rules-live schema-dbus
 	install -m 0755 scripts/schema-dbus-flip-healthcheck.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-dbus-flip-healthcheck.sh
 	install -m 0755 tools/dbus-learn/dissect_policy.py $(DESTDIR)$(PREFIX)/libexec/schema-init/dissect_policy.py
 	install -D -m 0644 config/schema-dbus-masked $(DESTDIR)$(SYSCONFDIR)/schema-dbus/masked
+	install -D -m 0644 config/dracut-schema-systemctl.conf $(DESTDIR)$(PREFIX)/lib/dracut/dracut.conf.d/90-schema-systemctl.conf
 	install -m 0644 distros/fedora-installer/migrate/stage.py $(DESTDIR)$(PREFIX)/libexec/schema-init/stage.py
 	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate
 	install -m 0644 distros/fedora-installer/migrate/prevent-set.list $(DESTDIR)$(DATADIR)/schema-init/migrate/prevent-set.list
