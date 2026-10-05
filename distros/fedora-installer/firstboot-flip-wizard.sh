@@ -28,7 +28,9 @@ DESK_ICON="$HOME/Desktop/schema-udev-flip.desktop"
 USER_AUTOSTART="$HOME/.config/autostart/schema-firstboot.desktop"
 REPORT_USER="$HOME/schema-flip-report.txt"
 HELPER=/usr/libexec/schema-init/schema-flip-apply
-[ -x "$HELPER" ] || HELPER=/usr/local/lib/schema/schema-flip-apply
+for h in /usr/libexec/schema-init/schema-flip-apply /usr/local/lib/schema/schema-flip-apply; do
+    [ -x "$h" ] && sudo -n -l "$h" >/dev/null 2>&1 && { HELPER=$h; break; }
+done
 
 mkdir -p "$STATE_DIR"
 [ -f "$STATE" ] || echo welcome > "$STATE"
