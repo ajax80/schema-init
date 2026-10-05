@@ -110,11 +110,15 @@ fi
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-udev"        /usr/bin/schema-udev   # staged, NOT armed
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-dbus"        /usr/bin/schema-dbus   # dormant until /etc/schema-init/dbus-broker
 
-# flip tooling + parity gates the wizard calls
+# flip tooling + parity gates the wizard calls. With the packages they come
+# from schema-init-migrate under /usr/libexec/schema-init and update through
+# dnf; the copies are only the no-package fallback.
+LIB=/usr/local/lib/schema
+[ -n "$RPMS" ] && LIB=/usr/libexec/schema-init
 install -d /usr/local/lib/schema
-install -m0755 "$SRC/scripts/schema-udev-flip-arm.sh"    /usr/local/lib/schema/
-install -m0755 "$SRC/scripts/schema-udev-flip-backup.sh" /usr/local/lib/schema/
-install -m0755 "$SRC/bin/verify-rules-live"              /usr/local/lib/schema/
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-udev-flip-arm.sh"    /usr/local/lib/schema/
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-udev-flip-backup.sh" /usr/local/lib/schema/
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/verify-rules-live"              /usr/local/lib/schema/
 install -m0755 "$SRC/scripts/gen-services.sh"            /usr/local/lib/schema/
 install -m0755 "$SRC/scripts/gen-mounts.sh"              /usr/local/lib/schema/
 
@@ -130,7 +134,7 @@ install -m0755 "$SRC/scripts/gen-mounts.sh"              /usr/local/lib/schema/
 install -d /etc/schema-init/services /etc/schema-init/scripts
 cp -a "$SRC/services/." /etc/schema-init/services/
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
-rm -f /etc/schema-init/services/schema-migrate-finish.svc  # migrate-path oneshot; an ISO install has no schema-migrate
+rm -f /etc/schema-init/services/schema-migrate-finish.svc  # finishes an in-place migration; an ISO install never runs one
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
 [ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
@@ -247,7 +251,7 @@ printf '[main]\ndns=default\nrc-manager=file\n' > /etc/NetworkManager/conf.d/00-
 # 4. Stage schema-udev SHADOW: present, LIVE flag disarmed, and record the
 #    shipped binary's md5 as THIS ISO's blessed baseline (blakbox's c42164b7
 #    baseline is meaningless on someone else's build).
-/usr/local/lib/schema/schema-udev-flip-arm.sh disarm || true   # ensure disarmed
+"$LIB/schema-udev-flip-arm.sh" disarm || true   # ensure disarmed
 SHIP_MD5=$(md5sum /usr/bin/schema-udev | cut -d' ' -f1)
 echo "$SHIP_MD5" > /etc/schema-init/schema-udev.ship-md5
 
@@ -256,12 +260,11 @@ echo "$SHIP_MD5" > /etc/schema-init/schema-udev.ship-md5
 install -m0755 "$SRC/scripts/firstboot-flip-wizard.sh" /usr/local/bin/schema-firstboot-wizard
 # the wizard's PRIVILEGED half — it runs as the desktop user (so yad can draw)
 # and delegates every root action to this one helper via passwordless sudo.
-install -d /usr/local/lib/schema
-install -m0755 "$SRC/scripts/schema-flip-apply.sh" /usr/local/lib/schema/schema-flip-apply
-install -m0755 "$SRC/scripts/schema-dbus-run.sh"   /usr/local/lib/schema/schema-dbus-run.sh
-install -m0755 "$SRC/scripts/schema-dbus-flip.sh"  /usr/local/lib/schema/schema-dbus-flip.sh
-install -m0755 "$SRC/scripts/dissect_policy.py"    /usr/local/lib/schema/dissect_policy.py
-install -D -m0644 "$SRC/scripts/schema-dbus-masked" /etc/schema-dbus/masked
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-flip-apply.sh" /usr/local/lib/schema/schema-flip-apply
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-dbus-run.sh"   /usr/local/lib/schema/schema-dbus-run.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-dbus-flip.sh"  /usr/local/lib/schema/schema-dbus-flip.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/dissect_policy.py"    /usr/local/lib/schema/dissect_policy.py
+[ -n "$RPMS" ] || install -D -m0644 "$SRC/scripts/schema-dbus-masked" /etc/schema-dbus/masked
 install -d /etc/xdg/autostart
 cat > /etc/xdg/autostart/schema-firstboot.desktop <<'DESK'
 [Desktop Entry]
@@ -293,7 +296,7 @@ FBHOME=""
 # the user-side GUI wizard perform the root flip steps without a polkit agent
 # (which can't run here — it's a systemd user unit). 0440 + validate before commit.
 if [ -n "$FBUSER" ]; then
-    printf '%s ALL=(root) NOPASSWD: /usr/local/lib/schema/schema-flip-apply\n' "$FBUSER" \
+    printf '%s ALL=(root) NOPASSWD: %s/schema-flip-apply\n' "$FBUSER" "$LIB" \
         > /etc/sudoers.d/schema-flip
     chmod 0440 /etc/sudoers.d/schema-flip
     visudo -cf /etc/sudoers.d/schema-flip || rm -f /etc/sudoers.d/schema-flip
@@ -323,17 +326,17 @@ fi
 
 # headless seatbelt: schema-init oneshot, runs every boot, auto-rolls-back a
 # flip that armed but failed to come up healthy (see healthcheck script).
-install -m0755 "$SRC/scripts/schema-udev-flip-healthcheck.sh" /usr/local/lib/schema/
-cat > /etc/schema-init/services/schema-udev-healthcheck.svc <<'SVC'
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-udev-flip-healthcheck.sh" /usr/local/lib/schema/
+cat > /etc/schema-init/services/schema-udev-healthcheck.svc <<SVC
 name=schema-udev-healthcheck
-exec=/usr/local/lib/schema/schema-udev-flip-healthcheck.sh
+exec=$LIB/schema-udev-flip-healthcheck.sh
 oneshot=1
 start_timeout_sec=300
 SVC
-install -m0755 "$SRC/scripts/schema-dbus-flip-healthcheck.sh" /usr/local/lib/schema/
-cat > /etc/schema-init/services/schema-dbus-healthcheck.svc <<'SVC'
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-dbus-flip-healthcheck.sh" /usr/local/lib/schema/
+cat > /etc/schema-init/services/schema-dbus-healthcheck.svc <<SVC
 name=schema-dbus-healthcheck
-exec=/usr/local/lib/schema/schema-dbus-flip-healthcheck.sh
+exec=$LIB/schema-dbus-flip-healthcheck.sh
 oneshot=1
 start_timeout_sec=300
 needs_root=1

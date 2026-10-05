@@ -5,9 +5,10 @@
 #
 # Runs as the UNPRIVILEGED desktop user (XDG autostart on first login + a
 # ~/Desktop launcher) so yad draws in the user's Wayland session. Everything
-# that needs root is delegated to /usr/local/lib/schema/schema-flip-apply via
-# passwordless sudo (see schema.ks sudoers.d + that helper) — the helper is the
-# whole privileged surface.
+# that needs root is delegated to schema-flip-apply (/usr/libexec/schema-init,
+# or /usr/local/lib/schema on a no-package install) via passwordless sudo (see
+# schema.ks sudoers.d + that helper) — the helper is the whole privileged
+# surface.
 #
 # ELIGIBILITY IS PERMISSIVE: the flip proceeds whenever nothing HARMFUL diverges
 # (a missing boot/fstab exact-path link, or a missing tag). Harmless supersets
@@ -26,7 +27,8 @@ STATE="$STATE_DIR/firstboot.state"       # the wizard's own GUI-phase state (use
 DESK_ICON="$HOME/Desktop/schema-udev-flip.desktop"
 USER_AUTOSTART="$HOME/.config/autostart/schema-firstboot.desktop"
 REPORT_USER="$HOME/schema-flip-report.txt"
-HELPER=/usr/local/lib/schema/schema-flip-apply
+HELPER=/usr/libexec/schema-init/schema-flip-apply
+[ -x "$HELPER" ] || HELPER=/usr/local/lib/schema/schema-flip-apply
 
 mkdir -p "$STATE_DIR"
 [ -f "$STATE" ] || echo welcome > "$STATE"
