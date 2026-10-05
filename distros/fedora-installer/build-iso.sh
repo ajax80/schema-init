@@ -101,7 +101,7 @@ rpmbuild --rebuild --define "_topdir $RPMTMP" "$RPMTMP"/srpm/*.src.rpm > "$RPMTM
     { tail -20 "$RPMTMP/build.log" >&2; echo "RPM build failed" >&2; exit 1; }
 install -d "$PAYLOAD/rpms"
 for p in "$RPMTMP"/RPMS/x86_64/schema-init-[0-9]*.rpm "$RPMTMP"/RPMS/x86_64/schema-init-daemons-[0-9]*.rpm \
-         "$RPMTMP"/RPMS/x86_64/schema-init-session-[0-9]*.rpm; do
+         "$RPMTMP"/RPMS/x86_64/schema-init-session-[0-9]*.rpm "$RPMTMP"/RPMS/x86_64/schema-init-migrate-[0-9]*.rpm; do
     install -m0644 "$p" "$PAYLOAD/rpms/"
 done
 ls "$PAYLOAD/rpms"

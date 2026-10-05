@@ -120,7 +120,15 @@ sudo dd if=schema-netinst44-installer-<version>.iso of=/dev/sdX bs=4M status=pro
 
 Boot that USB stick (or point a VM at the ISO) and the installer gives you a full KDE desktop running **schema-init as PID 1**. It is a netinst image: the machine needs a network connection during install (it pulls the KDE package set). Verified on real hardware — a clean install on a Dell i3 laptop boots straight to Plasma with no hand fixes.
 
-The install is package-managed: schema-init, -daemons and -session are RPMs and the `ajax80/schema-init` COPR repo is enabled, so `sudo dnf upgrade` brings later builds and PID 1 re-execs onto them in place. A box installed from the v0.4.1 ISO or earlier has the files but not the packages; convert it once with `sudo dnf copr enable ajax80/schema-init && sudo dnf install schema-init schema-init-daemons schema-init-session && sudo schema-ctl reexec && sudo rm -f /usr/local/bin/schema-ctl`.
+The install is package-managed: schema-init, -daemons, -session and -migrate are RPMs and the `ajax80/schema-init` COPR repo is enabled, so `sudo dnf upgrade` brings later builds and PID 1 re-execs onto them in place. -migrate also brings the flip tools and health checks (in `/usr/libexec/schema-init`), the `systemctl` stand-in, and the import of any systemd unit a later package installs. A box installed from the v0.4.1 ISO or earlier has the files but not the packages; convert it once, then reboot (the edited service files hold off reloads and re-execs until then):
+
+```sh
+sudo dnf copr enable ajax80/schema-init
+sudo dnf install schema-init schema-init-daemons schema-init-session schema-init-migrate
+sudo schema-ctl reexec && sudo rm -f /usr/local/bin/schema-ctl
+sudo sed -i -E 's#^exec=/usr/local/lib/schema/(schema-dbus-run\.sh|schema-udev-flip-healthcheck\.sh|schema-dbus-flip-healthcheck\.sh)$#exec=/usr/libexec/schema-init/\1#' /etc/schema-init/services/*.svc
+sudo sed -i 's#/usr/local/lib/schema/schema-flip-apply#/usr/libexec/schema-init/schema-flip-apply#' /etc/sudoers.d/schema-flip
+```
 
 After the first login a wizard offers the *optional* **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev. Wi-Fi and wired profiles are unpinned from systemd's interface names before the switch, so the network survives it.
 
