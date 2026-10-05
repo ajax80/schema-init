@@ -243,8 +243,10 @@ done
 #    which never runs under schema-init -> the file is a dangling symlink, name
 #    resolution fails, and NetworkManager reports "limited" connectivity. Have
 #    NM own the file directly instead (dns=default writes it, rc-manager=file
-#    stops it trying to symlink to resolved).
+#    stops it trying to symlink to resolved). Mask resolved's tmpfiles L! rule,
+#    or every systemd boot (firstboot, fallback entry) puts the symlink back.
 rm -f /etc/resolv.conf
+ln -sf /dev/null /etc/tmpfiles.d/systemd-resolve.conf
 install -d /etc/NetworkManager/conf.d
 printf '[main]\ndns=default\nrc-manager=file\n' > /etc/NetworkManager/conf.d/00-schema-dns.conf
 
