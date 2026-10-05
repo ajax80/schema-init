@@ -195,6 +195,7 @@ fi
 %dir %{_datadir}/%{name}/migrate
 %{_bindir}/schema-migrate
 %{_bindir}/schema-systemctl
+%{_prefix}/lib/dracut/dracut.conf.d/90-schema-systemctl.conf
 %{_bindir}/schema-import
 %{_libexecdir}/schema-init/schema-flip-apply
 %{_libexecdir}/schema-init/schema-udev-flip-arm.sh
