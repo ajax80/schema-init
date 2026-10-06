@@ -196,6 +196,29 @@ if [ ! -e "$m" ] && [ -x /usr/bin/systemctl.real ] && command -v lsinitrd >/dev/
     done
     mkdir -p "${m%/*}" && touch "$m"
 fi
+# ISO installs (the installer rail's sysprep.svc) carry their rail in /etc, which
+# no package owns, so rail fixes reach them only here, once each. The kickstart
+# sets both markers, so only installs from before a fix are touched.
+svcd=%{_sysconfdir}/schema-init/services
+st=%{_sharedstatedir}/schema-init
+if [ -f "$svcd/sysprep.svc" ]; then
+    mkdir -p "$st"
+    if [ ! -e "$st/rail-udevd-added" ]; then
+        if [ ! -e "$svcd/udevd.svc" ]; then
+            cp %{_datadir}/%{name}/migrate/distros/fedora-installer/rail/services/udevd.svc "$svcd/udevd.svc" &&
+            if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && [ /proc/1/root -ef / ] && [ -S /run/schema-init.sock ]; then
+                %{_bindir}/schema-ctl add "$svcd/udevd.svc" >/dev/null || echo "schema-init: udev comes under supervision at next boot"
+            fi
+        fi
+        touch "$st/rail-udevd-added"
+    fi
+    if [ ! -e "$st/enabled-units-imported" ]; then
+        if %{_bindir}/schema-import --enabled >/dev/null 2>&1; then
+            echo "schema-init: imported the services systemd had enabled; they start at next boot"
+            touch "$st/enabled-units-imported"
+        fi
+    fi
+fi
 
 %transfiletriggerin migrate -- /usr/bin/systemctl
 if [ ! -L /usr/bin/systemctl ] && [ -f /usr/bin/systemctl ]; then

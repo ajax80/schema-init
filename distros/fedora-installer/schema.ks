@@ -176,6 +176,8 @@ install -d /usr/local/lib
 # Static conditions (Virtualization, CPUs) are judged here, on the target box.
 if [ -n "$RPMS" ]; then
     schema-import --enabled || echo "WARN: schema-import --enabled failed"
+    mkdir -p /var/lib/schema-init
+    touch /var/lib/schema-init/rail-udevd-added /var/lib/schema-init/enabled-units-imported  # the upgrade-time rail repair is for older installs only
 else
     echo "WARN: no schema-import without the RPMs; enabled units not imported"
 fi
