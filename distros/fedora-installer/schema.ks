@@ -175,9 +175,13 @@ install -d /usr/local/lib
 # fstrim/logrotate timers...) — systemd would start it, so the rail must too.
 # Static conditions (Virtualization, CPUs) are judged here, on the target box.
 if [ -n "$RPMS" ]; then
-    schema-import --enabled || echo "WARN: schema-import --enabled failed"
     mkdir -p /var/lib/schema-init
-    touch /var/lib/schema-init/rail-udevd-added /var/lib/schema-init/enabled-units-imported  # the upgrade-time rail repair is for older installs only
+    touch /var/lib/schema-init/rail-udevd-added  # the upgrade-time rail repair is for older installs only
+    if schema-import --enabled; then
+        touch /var/lib/schema-init/enabled-units-imported
+    else
+        echo "WARN: schema-import --enabled failed; the first upgrade retries it"
+    fi
 else
     echo "WARN: no schema-import without the RPMs; enabled units not imported"
 fi

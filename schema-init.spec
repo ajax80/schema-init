@@ -198,25 +198,28 @@ if [ ! -e "$m" ] && [ -x /usr/bin/systemctl.real ] && command -v lsinitrd >/dev/
 fi
 # ISO installs (the installer rail's sysprep.svc) carry their rail in /etc, which
 # no package owns, so rail fixes reach them only here, once each. The kickstart
-# sets both markers, so only installs from before a fix are touched.
+# sets the markers; an install whose rail already had udevd.svc came from an ISO
+# that also ran the import (v0.4.3), so it is marked done without touching it.
 svcd=%{_sysconfdir}/schema-init/services
 st=%{_sharedstatedir}/schema-init
 if [ -f "$svcd/sysprep.svc" ]; then
     mkdir -p "$st"
-    if [ ! -e "$st/rail-udevd-added" ]; then
-        if [ ! -e "$svcd/udevd.svc" ]; then
-            cp %{_datadir}/%{name}/migrate/distros/fedora-installer/rail/services/udevd.svc "$svcd/udevd.svc" &&
-            if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && [ /proc/1/root -ef / ] && [ -S /run/schema-init.sock ]; then
-                %{_bindir}/schema-ctl add "$svcd/udevd.svc" >/dev/null || echo "schema-init: udev comes under supervision at next boot"
-            fi
-        fi
+    if [ -e "$svcd/udevd.svc" ] && [ ! -e "$st/rail-udevd-added" ]; then
+        touch "$st/rail-udevd-added" "$st/enabled-units-imported"
+    fi
+    if [ ! -e "$st/rail-udevd-added" ] &&
+       cp %{_datadir}/%{name}/migrate/distros/fedora-installer/rail/services/udevd.svc "$svcd/udevd.svc"; then
         touch "$st/rail-udevd-added"
+        if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && [ /proc/1/root -ef / ] && [ -S /run/schema-init.sock ]; then
+            %{_bindir}/schema-ctl add "$svcd/udevd.svc" >/dev/null || echo "schema-init: udev comes under supervision at next boot"
+        fi
     fi
     if [ ! -e "$st/enabled-units-imported" ]; then
-        if %{_bindir}/schema-import --enabled >/dev/null 2>&1; then
-            echo "schema-init: imported the services systemd had enabled; they start at next boot"
-            touch "$st/enabled-units-imported"
-        fi
+        mkdir -p /var/log/schema-init
+        %{_bindir}/schema-import --enabled > /var/log/schema-init/upgrade-import.log 2>&1 ||
+            echo "schema-init: some enabled units did not import; see /var/log/schema-init/upgrade-import.log"
+        touch "$st/enabled-units-imported"
+        echo "schema-init: imported the services systemd had enabled; they start at next boot"
     fi
 fi
 
