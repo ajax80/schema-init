@@ -1,0 +1,8 @@
+#!/bin/sh
+# udevd.svc execs this: the LIVE flag picks the device manager, and exec keeps
+# it the supervised pid so a crash is respawned instead of leaving /dev frozen.
+if [ -e /etc/schema-init/schema-udev.live ] && [ -x /usr/bin/schema-udev ]; then
+    mkdir -p /run/schema-udev
+    exec /usr/bin/schema-udev
+fi
+exec /usr/lib/systemd/systemd-udevd
