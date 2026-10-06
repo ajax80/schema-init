@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.2
+Version:        0.4.3
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -349,6 +349,15 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.3-1
+- Installer imports the systemd-enabled units (cron, firewalld, smartd,
+  tuned, timers and the rest) so an ISO install no longer boots without them
+- Imported Type=dbus services wait for polkitd instead of racing it
+- Installer supervises udev (udevd.svc): a crashed device manager is
+  respawned instead of leaving /dev frozen until reboot
+- schema-udev: optical drives get their identity (IDENTIFY PACKET DEVICE),
+  fixing a udisksd crash at boot with a CD/DVD drive present
+
 * Mon Oct 05 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.2-1
 - Installer ISO is package-managed: installs the schema-init RPMs and the COPR
   repo; -migrate ships the systemctl shim and importer
