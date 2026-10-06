@@ -19,9 +19,14 @@ static inline void ata_str_raw(const uint8_t *buf, int w0, int wc, char *raw) {
     raw[j] = '\0';
 }
 
-static inline int ata_id_decode(const uint8_t *buf, struct uevent *out) {
+static inline int ata_id_decode(const uint8_t *buf, int packet, struct uevent *out) {
     char raw[64];
     char serial[64], model[64], model_enc[256], rev[32];
+
+    out->n = 0;
+    int any = 0;
+    for (int i = 0; i < 512; i++) any |= buf[i];
+    if (!any) return 0;
 
     ata_str_raw(buf, 10, 10, raw);  usb_plain(raw, serial, sizeof serial);
     ata_str_raw(buf, 27, 20, raw);  usb_plain(raw, model, sizeof model);
@@ -38,7 +43,16 @@ static inline int ata_id_decode(const uint8_t *buf, struct uevent *out) {
     } while (0)
 
     UEMIT("ID_ATA", "1");
-    UEMIT("ID_TYPE", "disk");
+    if (packet) {
+        switch (buf[1] & 0x1f) {
+        case 1:  UEMIT("ID_TYPE", "tape"); break;
+        case 5:  UEMIT("ID_TYPE", "cd"); break;
+        case 7:  UEMIT("ID_TYPE", "optical"); break;
+        default: UEMIT("ID_TYPE", "generic"); break;
+        }
+    } else {
+        UEMIT("ID_TYPE", "disk");
+    }
     UEMIT("ID_BUS", "ata");
     if (model[0]) { UEMIT("ID_MODEL", model); UEMIT("ID_MODEL_ENC", model_enc); }
     if (rev[0]) UEMIT("ID_REVISION", rev);
@@ -107,11 +121,11 @@ static inline int ata_id_decode(const uint8_t *buf, struct uevent *out) {
     return out->n;
 }
 
-static inline int ata_id_identify(const char *devnode, uint8_t *buf) {
+static inline int ata_id_identify(const char *devnode, uint8_t cmd, uint8_t *buf) {
     int fd = open(devnode, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
     uint8_t cdb[16] = {0};
-    cdb[0] = 0x85; cdb[1] = 0x08; cdb[2] = 0x0e; cdb[6] = 0x01; cdb[14] = 0xec;
+    cdb[0] = 0x85; cdb[1] = 0x08; cdb[2] = 0x0e; cdb[6] = 0x01; cdb[14] = cmd;
     uint8_t sense[32] = {0};
     struct sg_io_hdr io = {0};
     io.interface_id = 'S';
@@ -132,12 +146,16 @@ static inline int ata_id_identify(const char *devnode, uint8_t *buf) {
 
 static inline int ata_id_build(const char *sysroot, const char *devpath,
                                const char *devnode, struct uevent *out) {
-    (void)sysroot; (void)devpath;
     out->n = 0;
     if (!devnode) return 0;
-    uint8_t buf[512];
-    if (ata_id_identify(devnode, buf) != 0) return 0;
-    return ata_id_decode(buf, out);
+    char p[1024], t[8] = "";
+    snprintf(p, sizeof p, "%s%s/device/type", sysroot, devpath);
+    FILE *f = fopen(p, "re");
+    if (f) { if (!fgets(t, sizeof t, f)) t[0] = '\0'; fclose(f); }
+    int packet = atoi(t) == 5;
+    uint8_t buf[512] = {0};
+    if (ata_id_identify(devnode, packet ? 0xa1 : 0xec, buf) != 0) return 0;
+    return ata_id_decode(buf, packet, out);
 }
 
 #endif /* ATA_ID_H */
