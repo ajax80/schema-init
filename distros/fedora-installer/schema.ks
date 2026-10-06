@@ -138,6 +138,7 @@ rm -f /etc/schema-init/services/schema-migrate-finish.svc  # finishes an in-plac
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
 [ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
+[ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-udevd-launch" /usr/libexec/schema-init/schema-udevd-launch  # udevd.svc execs this
 [ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-mount-fstab" /usr/libexec/schema-init/schema-mount-fstab  # mount-fstab.svc execs this
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-zram-start.sh" /usr/local/bin/schema-zram-start.sh  # zram.svc execs this
 

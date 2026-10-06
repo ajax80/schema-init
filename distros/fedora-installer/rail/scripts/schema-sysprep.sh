@@ -24,12 +24,20 @@ tmpfiles_pid=$!
 # armed -> schema-udev (walks /sys itself, writes /run/schema-udev/ready, owns
 # real /dev); absent -> stock systemd-udevd. The headless seatbelt rolls a bad
 # schema-udev come-up back to systemd-udevd, so the armed path is safe to try.
+# udevd.svc runs the daemon supervised; installs that predate it start it here.
+# Polled, not a dep: a crash-looping udevd must not hold the rail.
 if [ -e /etc/schema-init/schema-udev.live ] && [ -x /usr/bin/schema-udev ]; then
-    mkdir -p /run/schema-udev /var/log/schema-init
-    /usr/bin/schema-udev >> /var/log/schema-init/udevd.log 2>&1 &
+    if [ ! -e /etc/schema-init/services/udevd.svc ]; then
+        mkdir -p /run/schema-udev /var/log/schema-init
+        /usr/bin/schema-udev >> /var/log/schema-init/udevd.log 2>&1 &
+    fi
     i=0; while [ $i -lt 600 ]; do [ -e /run/schema-udev/ready ] && break; i=$((i+1)); sleep 0.05; done
 else
-    /usr/lib/systemd/systemd-udevd --daemon
+    if [ -e /etc/schema-init/services/udevd.svc ]; then
+        i=0; while [ $i -lt 600 ] && [ ! -S /run/udev/control ]; do i=$((i+1)); sleep 0.05; done
+    else
+        /usr/lib/systemd/systemd-udevd --daemon
+    fi
     udevadm trigger --type=subsystems --action=add
     udevadm trigger --type=devices --action=add
     udevadm settle --timeout=30

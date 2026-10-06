@@ -1,0 +1,9 @@
+name=udevd
+exec=/usr/libexec/schema-init/schema-udevd-launch
+needs_root=1
+critical=0
+oom_score_adj=-900
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
