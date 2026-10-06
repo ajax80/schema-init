@@ -409,4 +409,16 @@ check("dep closing a loop (loopb->mid->loopa->loopb) dropped, others kept",
 open(os.path.join(SD, "rot.svc"), "w").write("name=rot\nexec=/usr/sbin/rot\non_calendar=00:00\n")
 check("a timer .svc is never a dep", "rot" not in si._known_svcs([]) and "pwr" in si._known_svcs([]))
 
+for w, u in (("multi-user", "crond.service"), ("multi-user", "systemd-resolved.service"),
+             ("timers", "fstrim.timer"), ("sockets", "dbus.socket"), ("sockets", "cups.socket"),
+             ("getty", "getty@tty1.service"), ("network-online", "NetworkManager-wait-online.service"),
+             ("graphical", "crond.service"), ("multi-user", "README")):
+    d = os.path.join(tmp, "etc/systemd/system", w + ".target.wants")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, u), "w").close()
+os.makedirs(os.path.join(tmp, "etc/systemd/system/dev-x.device.wants"))
+open(os.path.join(tmp, "etc/systemd/system/dev-x.device.wants/qga.service"), "w").close()
+check("enabled_units: targets only, reclaimed/template/dup/non-unit dropped",
+      si.enabled_units() == ["crond.service", "cupsd.service", "cups.socket", "fstrim.timer"])
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
