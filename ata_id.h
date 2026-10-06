@@ -19,7 +19,7 @@ static inline void ata_str_raw(const uint8_t *buf, int w0, int wc, char *raw) {
     raw[j] = '\0';
 }
 
-static inline int ata_id_decode(const uint8_t *buf, struct uevent *out) {
+static inline int ata_id_decode(const uint8_t *buf, int packet, struct uevent *out) {
     char raw[64];
     char serial[64], model[64], model_enc[256], rev[32];
 
@@ -43,9 +43,8 @@ static inline int ata_id_decode(const uint8_t *buf, struct uevent *out) {
     } while (0)
 
     UEMIT("ID_ATA", "1");
-    unsigned word0 = (unsigned)buf[0] | ((unsigned)buf[1] << 8);
-    if (word0 & 0x8000) {
-        switch ((word0 >> 8) & 0x1f) {
+    if (packet) {
+        switch (buf[1] & 0x1f) {
         case 1:  UEMIT("ID_TYPE", "tape"); break;
         case 5:  UEMIT("ID_TYPE", "cd"); break;
         case 7:  UEMIT("ID_TYPE", "optical"); break;
@@ -153,9 +152,10 @@ static inline int ata_id_build(const char *sysroot, const char *devpath,
     snprintf(p, sizeof p, "%s%s/device/type", sysroot, devpath);
     FILE *f = fopen(p, "re");
     if (f) { if (!fgets(t, sizeof t, f)) t[0] = '\0'; fclose(f); }
+    int packet = atoi(t) == 5;
     uint8_t buf[512] = {0};
-    if (ata_id_identify(devnode, atoi(t) == 5 ? 0xa1 : 0xec, buf) != 0) return 0;
-    return ata_id_decode(buf, out);
+    if (ata_id_identify(devnode, packet ? 0xa1 : 0xec, buf) != 0) return 0;
+    return ata_id_decode(buf, packet, out);
 }
 
 #endif /* ATA_ID_H */
