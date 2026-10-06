@@ -171,6 +171,15 @@ printf 'POWERDEVIL_NO_DDCUTIL=1\n' > /etc/environment.d/90-no-ddcutil.conf
 install -d /usr/local/lib
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/mock_sd.so"                 /usr/local/lib/mock_sd.so
 
+# Everything Fedora's presets enabled (crond, firewalld, smartd, tuned, the
+# fstrim/logrotate timers...) — systemd would start it, so the rail must too.
+# Static conditions (Virtualization, CPUs) are judged here, on the target box.
+if [ -n "$RPMS" ]; then
+    schema-import --enabled || echo "WARN: schema-import --enabled failed"
+else
+    echo "WARN: no schema-import without the RPMs; enabled units not imported"
+fi
+
 
 # 3. Bootloader: the hook model. Leave the STOCK BLS entries pristine — they
 #    boot stock systemd, so a novice always has a working escape hatch in the

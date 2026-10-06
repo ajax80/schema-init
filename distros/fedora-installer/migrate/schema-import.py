@@ -580,14 +580,16 @@ _UNIT_ALIAS = {"dbus-broker": "dbus", "polkit": "polkitd", "NetworkManager": "ne
 def dep_lines(name, sections, known):
     """Requires=/Requisite=/BindsTo= on a service or socket that has a schema
     .svc (known) -> dep= lines; Type=dbus also waits for the bus, as systemd's
-    implicit After=dbus.socket. Plain After= is ordering only in systemd and
+    implicit After=dbus.socket, and for polkitd: a bus daemon that asks for
+    PolicyKit1 before polkitd.svc owns it gets a bus-activated polkitd, and
+    the supervised one then loses the name and crash-loops. Plain After= is ordering only in systemd and
     never keeps a unit from starting, while dep= waits for the dep to settle,
     so it is not translated. Returns (lines, notes)."""
     if not known:
         return [], []
     cands = []
     if _get_last(sections.get("Service", []), "Type").lower() == "dbus":
-        cands.append("dbus")
+        cands += ["dbus", "polkitd"]
     unit = sections.get("Unit", [])
     for k in ("Requires", "Requisite", "BindsTo"):
         for v in _get_all(unit, k):
@@ -841,6 +843,23 @@ def _service_enabled(name):
                for d in _unit_dirs()[:2])
 
 
+_RECLAIMED = ("systemd-", "dbus", "NetworkManager-wait-online")
+
+
+def enabled_units():
+    """Every service/timer/socket systemd enabled into a target, minus the
+    pieces schema-init itself replaces and template instances."""
+    import glob
+    out = []
+    for p in sorted(glob.glob(os.path.join(_unit_dirs()[0], "*.target.wants", "*"))):
+        u = os.path.basename(p)
+        if not u.endswith((".service", ".timer", ".socket")) or "@" in u \
+                or u.startswith(_RECLAIMED) or u in out:
+            continue
+        out.append(u)
+    return out
+
+
 _INTERPRETERS = {"sh", "bash", "dash", "env", "python3", "python", "perl", "true", "busybox"}
 
 
@@ -1088,8 +1107,13 @@ def main(argv=None):
                     help="show what would happen; touch nothing")
     ap.add_argument("-f", "--force", action="store_true",
                     help="overwrite an existing .svc")
+    ap.add_argument("-e", "--enabled", action="store_true",
+                    help="import every unit systemd enabled (/etc/systemd/system/*.target.wants)")
     args = ap.parse_args(argv)
-    counts = drain(units=args.units or None, force=args.force, dry_run=args.dry_run)
+    units = args.units or None
+    if args.enabled:
+        units = (units or []) + [u for u in enabled_units() if u not in (units or [])]
+    counts = drain(units=units, force=args.force, dry_run=args.dry_run)
     print("imported=%(imported)d exists=%(exists)d not-found=%(not-found)d "
           "skipped=%(skipped)d error=%(error)d" % counts)
     return 1 if counts["error"] else 0

@@ -278,7 +278,9 @@ check("timer + service conditions both kept", "condition=ac_power:true" in tm an
 known = {"dbus", "polkitd", "tuned", "auditd", "network-manager", "cups"}
 dl, dn = si.dep_lines("tuned-ppd", si.parse_unit(
     "[Unit]\nRequires=tuned.service\nAfter=tuned.service network.target auditd.service\n[Service]\nType=dbus\nBusName=x\n"), known)
-check("Type=dbus + Requires -> dbus then tuned; plain After= not a dep", dl == ["dep=dbus", "dep=tuned"] and dn == [])
+check("Type=dbus + Requires -> dbus, polkitd, then tuned; plain After= not a dep", dl == ["dep=dbus", "dep=polkitd", "dep=tuned"] and dn == [])
+dl, _ = si.dep_lines("bd", si.parse_unit("[Service]\nType=dbus\nBusName=x\n"), {"dbus"})
+check("Type=dbus without a polkitd.svc -> dbus only", dl == ["dep=dbus"])
 dl, _ = si.dep_lines("tuned", si.parse_unit(
     "[Unit]\nRequires=dbus.service polkit.service NetworkManager.service ghost.service\n"
     "BindsTo=dbus.service\nWants=auditd.service\nRequisite=cups.socket getty@tty1.service tuned.service\n"), known)
@@ -290,7 +292,7 @@ dl, dn = si.dep_lines("x", si.parse_unit("[Unit]\nRequires=" + " ".join("d%d.ser
 check("more than 8 deps -> first 8 + note", len(dl) == 8 and dn and "d8 d9" in dn[0])
 tp = si.unit_to_svc("tuned-ppd", si.parse_unit("[Unit]\nRequires=tuned.service\n[Service]\nType=dbus\nBusName=net.hadess.PowerProfiles\n"
                     "ExecStart=/usr/sbin/tuned-ppd -l\n[Install]\nWantedBy=x\n"), known=known)
-check("unit_to_svc emits dep= lines", "dep=dbus\ndep=tuned\n" in tp)
+check("unit_to_svc emits dep= lines", "dep=dbus\ndep=polkitd\ndep=tuned\n" in tp)
 
 # --- drain against a temp tree ---
 tmp = tempfile.mkdtemp()
@@ -408,5 +410,17 @@ check("dep closing a loop (loopb->mid->loopa->loopb) dropped, others kept",
       st == "imported" and "dep=mid" not in det[1] and "dep=pwr\n" in det[1] and "dependency loop" in det[1])
 open(os.path.join(SD, "rot.svc"), "w").write("name=rot\nexec=/usr/sbin/rot\non_calendar=00:00\n")
 check("a timer .svc is never a dep", "rot" not in si._known_svcs([]) and "pwr" in si._known_svcs([]))
+
+for w, u in (("multi-user", "crond.service"), ("multi-user", "systemd-resolved.service"),
+             ("timers", "fstrim.timer"), ("sockets", "dbus.socket"), ("sockets", "cups.socket"),
+             ("getty", "getty@tty1.service"), ("network-online", "NetworkManager-wait-online.service"),
+             ("graphical", "crond.service"), ("multi-user", "README")):
+    d = os.path.join(tmp, "etc/systemd/system", w + ".target.wants")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, u), "w").close()
+os.makedirs(os.path.join(tmp, "etc/systemd/system/dev-x.device.wants"))
+open(os.path.join(tmp, "etc/systemd/system/dev-x.device.wants/qga.service"), "w").close()
+check("enabled_units: targets only, reclaimed/template/dup/non-unit dropped",
+      si.enabled_units() == ["crond.service", "cupsd.service", "cups.socket", "fstrim.timer"])
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
