@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.1
+Version:        0.4.2
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -347,6 +347,17 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Mon Oct 05 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.2-1
+- Installer ISO is package-managed: installs the schema-init RPMs and the COPR
+  repo; -migrate ships the systemctl shim and importer
+- Importer: .timer units, EnvironmentFile=, ExecStartPre=, socket activation,
+  Condition*/Assert*, ordering deps, forking daemons with PIDFile=
+- PID 1: reverse-dependency shutdown, pstore crash records, live /etc/fstab,
+  INVOCATION_ID
+- Fix: initramfs built with -migrate installed could hang after
+  initrd-cleanup; real systemctl now carried in, broken images repaired once
+- Fix: fresh installs reported limited connectivity (resolved tmpfiles rule)
+
 * Sat Oct 03 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.1-1
 - PID 1 upgrades in place: `dnf upgrade` re-execs PID 1 with every service
   adopted, no reboot; schema-ctl exit codes are meaningful
