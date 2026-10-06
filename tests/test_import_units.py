@@ -278,7 +278,9 @@ check("timer + service conditions both kept", "condition=ac_power:true" in tm an
 known = {"dbus", "polkitd", "tuned", "auditd", "network-manager", "cups"}
 dl, dn = si.dep_lines("tuned-ppd", si.parse_unit(
     "[Unit]\nRequires=tuned.service\nAfter=tuned.service network.target auditd.service\n[Service]\nType=dbus\nBusName=x\n"), known)
-check("Type=dbus + Requires -> dbus then tuned; plain After= not a dep", dl == ["dep=dbus", "dep=tuned"] and dn == [])
+check("Type=dbus + Requires -> dbus, polkitd, then tuned; plain After= not a dep", dl == ["dep=dbus", "dep=polkitd", "dep=tuned"] and dn == [])
+dl, _ = si.dep_lines("bd", si.parse_unit("[Service]\nType=dbus\nBusName=x\n"), {"dbus"})
+check("Type=dbus without a polkitd.svc -> dbus only", dl == ["dep=dbus"])
 dl, _ = si.dep_lines("tuned", si.parse_unit(
     "[Unit]\nRequires=dbus.service polkit.service NetworkManager.service ghost.service\n"
     "BindsTo=dbus.service\nWants=auditd.service\nRequisite=cups.socket getty@tty1.service tuned.service\n"), known)
@@ -290,7 +292,7 @@ dl, dn = si.dep_lines("x", si.parse_unit("[Unit]\nRequires=" + " ".join("d%d.ser
 check("more than 8 deps -> first 8 + note", len(dl) == 8 and dn and "d8 d9" in dn[0])
 tp = si.unit_to_svc("tuned-ppd", si.parse_unit("[Unit]\nRequires=tuned.service\n[Service]\nType=dbus\nBusName=net.hadess.PowerProfiles\n"
                     "ExecStart=/usr/sbin/tuned-ppd -l\n[Install]\nWantedBy=x\n"), known=known)
-check("unit_to_svc emits dep= lines", "dep=dbus\ndep=tuned\n" in tp)
+check("unit_to_svc emits dep= lines", "dep=dbus\ndep=polkitd\ndep=tuned\n" in tp)
 
 # --- drain against a temp tree ---
 tmp = tempfile.mkdtemp()

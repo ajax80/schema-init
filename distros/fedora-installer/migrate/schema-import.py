@@ -580,14 +580,16 @@ _UNIT_ALIAS = {"dbus-broker": "dbus", "polkit": "polkitd", "NetworkManager": "ne
 def dep_lines(name, sections, known):
     """Requires=/Requisite=/BindsTo= on a service or socket that has a schema
     .svc (known) -> dep= lines; Type=dbus also waits for the bus, as systemd's
-    implicit After=dbus.socket. Plain After= is ordering only in systemd and
+    implicit After=dbus.socket, and for polkitd: a bus daemon that asks for
+    PolicyKit1 before polkitd.svc owns it gets a bus-activated polkitd, and
+    the supervised one then loses the name and crash-loops. Plain After= is ordering only in systemd and
     never keeps a unit from starting, while dep= waits for the dep to settle,
     so it is not translated. Returns (lines, notes)."""
     if not known:
         return [], []
     cands = []
     if _get_last(sections.get("Service", []), "Type").lower() == "dbus":
-        cands.append("dbus")
+        cands += ["dbus", "polkitd"]
     unit = sections.get("Unit", [])
     for k in ("Requires", "Requisite", "BindsTo"):
         for v in _get_all(unit, k):
