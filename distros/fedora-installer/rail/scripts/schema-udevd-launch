@@ -1,6 +1,17 @@
 #!/bin/sh
 # udevd.svc execs this: the LIVE flag picks the device manager, and exec keeps
 # it the supervised pid so a crash is respawned instead of leaving /dev frozen.
+# A udev started outside the rail (an install from before udevd.svc, taken over
+# by the upgrade) is stopped first, so there is never a second device manager;
+# one that will not die yet fails this start and the supervisor retries.
+pgrep -x 'schema-udev|systemd-udevd' >/dev/null && pkill -x 'schema-udev|systemd-udevd'
+i=0
+while pgrep -x 'schema-udev|systemd-udevd' >/dev/null; do
+    i=$((i+1))
+    [ $i -eq 50 ] && pkill -KILL -x 'schema-udev|systemd-udevd'
+    [ $i -ge 100 ] && exit 1
+    sleep 0.1
+done
 if [ -e /etc/schema-init/schema-udev.live ] && [ -x /usr/bin/schema-udev ]; then
     mkdir -p /run/schema-udev
     exec /usr/bin/schema-udev
