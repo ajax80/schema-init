@@ -42,6 +42,27 @@ int main(void) {
     assert(get(&ev, "ID_ATA_FEATURE_SET_SMART") != NULL);
     assert(get(&ev, "ID_ATA_FEATURE_SET_SMART_ENABLED") != NULL);
 
+    uint8_t zero[512] = {0};
+    struct uevent ez;
+    assert(ata_id_decode(zero, &ez) == 0);
+    assert(get(&ez, "ID_ATA") == NULL);
+
+    uint8_t cd[512] = {0};
+    cd[0] = 0xc0; cd[1] = 0x85;
+    const char *sn = "QM00005             ", *fw = "2.5+    ",
+               *mdl = "QEMU DVD-ROM                            ";
+    for (int i = 0; i < 10; i++) { cd[2*(10+i)] = sn[2*i+1]; cd[2*(10+i)+1] = sn[2*i]; }
+    for (int i = 0; i < 4; i++)  { cd[2*(23+i)] = fw[2*i+1]; cd[2*(23+i)+1] = fw[2*i]; }
+    for (int i = 0; i < 20; i++) { cd[2*(27+i)] = mdl[2*i+1]; cd[2*(27+i)+1] = mdl[2*i]; }
+    struct uevent ec;
+    assert(ata_id_decode(cd, &ec) > 0);
+    assert(strcmp(get(&ec, "ID_TYPE"), "cd") == 0);
+    assert(strcmp(get(&ec, "ID_BUS"), "ata") == 0);
+    assert(strcmp(get(&ec, "ID_ATA_PERIPHERAL_DEVICE_TYPE"), "5") == 0);
+    assert(strcmp(get(&ec, "ID_MODEL"), "QEMU_DVD-ROM") == 0);
+    assert(strcmp(get(&ec, "ID_REVISION"), "2.5+") == 0);
+    assert(strcmp(get(&ec, "ID_SERIAL"), "QEMU_DVD-ROM_QM00005") == 0);
+
     printf("test_ata_id: OK\n");
     return 0;
 }
