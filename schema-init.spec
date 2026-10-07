@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.6
+Version:        0.4.7
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -383,6 +383,12 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.7-1
+- Shutdown drops PID 1's copies of socket-activation sockets: a client of a
+  service that is not running gets refused at once instead of hanging
+- The importer carries TimeoutStopSec= / TimeoutSec= over as
+  stop_timeout_sec=, so imported daemons get systemd's stop time
+
 * Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.6-1
 - Shutdown stops the desktop session before system services (new stop_first=
   and stop_timeout_sec= service keys). plasmashell hung on exit while CUPS
