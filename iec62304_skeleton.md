@@ -251,6 +251,5 @@ These require hardware-in-the-loop or process-level fault injection. Stubs only.
 
 - FNV-1a chosen over CRC32: no patent encumbrance, 6 lines of C, zero external deps — auditor-friendly
 - CLOCK_MONOTONIC chosen for WDT: immune to `settimeofday()` and NTP slew — required for safety timing
-- Static arrays throughout (no `malloc`): MISRA-C Rule 21.3 alignment, bounded worst-case stack
 - Sync pipe pattern: POSIX-guaranteed ordering for cgroup-before-exec — no polling, no sleep
 - AllowedSlot uses `int` not `uint8_t` for slot range: -1 sentinel requires signed type — deliberate, documented
