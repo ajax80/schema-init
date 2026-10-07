@@ -28,7 +28,7 @@ schema-init is a minimal PID 1 for Linux that supervises services with a weight-
 - `schema-dbus` — the D-Bus system bus broker itself
 
 ## The privacy angle (lead with this for the Liberated-fork author)
-- schema-init reclaims systemd's daemons **wholesale** — none of systemd's birthdate/age baggage comes along.
+- schema-init replaces systemd's satellite daemons (logind, udev, journald) **wholesale** — none of systemd's birthdate/age baggage comes along.
 - The repo just went through a **full privacy scrub**.
 - Shared value, not a cold pitch: this person already forked over exactly this concern.
 
