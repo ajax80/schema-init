@@ -1149,6 +1149,9 @@ def run_make_install(manifest, run=subprocess.run, dry_run=False, prebuilt=False
     return provision_binaries(manifest, run=run, dry_run=dry_run, prebuilt=prebuilt)
 
 
+IMPORTED_LIST = "var/lib/schema-init/migrate-imported.list"
+
+
 def _import_script():
     src = find_source("distros/fedora-installer/migrate/schema-import.py")
     if src:
@@ -1174,8 +1177,19 @@ def import_enabled_units(manifest, run=subprocess.run, dry_run=False):
     if r.returncode != 0:
         print("WARN: some enabled units did not import; see /var/log/schema-init/migrate-import.log")
     added = sorted(set(os.listdir(svcd)) - before) if os.path.isdir(svcd) else []
-    for name in added:
-        manifest.add_file("/etc/schema-init/services/" + name)
+    rec = P(IMPORTED_LIST)
+    try:
+        prior = open(rec).read().split()
+    except OSError:
+        prior = []
+    names = sorted(set(prior) | set(added))
+    os.makedirs(os.path.dirname(rec), exist_ok=True)
+    with open(rec, "w") as f:
+        f.write("".join(n + "\n" for n in names))
+    manifest.add_file("/" + IMPORTED_LIST)
+    for name in names:
+        if os.path.exists(os.path.join(svcd, name)):
+            manifest.add_file("/etc/schema-init/services/" + name)
     return added
 
 

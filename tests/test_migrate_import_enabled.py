@@ -38,6 +38,11 @@ open(os.path.join(root, "var/lib/schema-init/migrate-profile.json"), "w").write(
 rep = sm.finish_report()
 check("imported unit not reported as leftover", "smartd" not in rep and "tailscaled" in rep)
 
+m = sm.Manifest()
+sm.import_enabled_units(m, run=subprocess.run)
+check("retry after a failed deploy still tracks the import",
+      "/etc/schema-init/services/smartd.svc" in m.files)
+
 m.save()
 sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
 check("uninstall removes the import", not os.path.exists(os.path.join(root, "etc/schema-init/services/smartd.svc")))
