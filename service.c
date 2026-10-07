@@ -1182,6 +1182,15 @@ int service_spawn(service_t *svc) {
                         svc->name, ef);
         }
         svc_set_invocation_id();
+        /* how long this service gets to stop, so a script can pace its own
+         * shutdown inside it (unset = PID 1's default grace) */
+        if (svc->stop_timeout_sec) {
+            char st[12];
+            snprintf(st, sizeof st, "%d", svc->stop_timeout_sec);
+            setenv("SCHEMA_STOP_TIMEOUT_SEC", st, 1);
+        } else {
+            unsetenv("SCHEMA_STOP_TIMEOUT_SEC");
+        }
         char *at = strchr(svc->name, '@');
         if (at) {
             if (*(at + 1)) {
