@@ -3724,6 +3724,13 @@ int main(int argc, char **argv) {
      * remount-ro below, instead of relying on the kill(-1) SIGKILL further on. */
     uint64_t ct = monotonic_ms();
     container_cgroups_signal(SIGTERM);
+    /* Nothing is activated from here on, so a socket PID 1 still listens on
+     * would take a client's connection and never answer it (KDE's printer
+     * client hung on cups.sock this way). Drop PID 1's copies: a running
+     * service keeps the fds it was handed and serves until it is stopped; a
+     * parked one is refused at once. */
+    for (i = 0; i < svc_count; i++)
+        service_listen_close(&services[i]);
     shutdown_ordered();
     while (container_cgroups_signal(0) && monotonic_ms() - ct < SHUT_GRACE_MS)
         usleep(20000);
