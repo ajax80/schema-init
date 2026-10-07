@@ -1182,6 +1182,15 @@ int service_spawn(service_t *svc) {
                         svc->name, ef);
         }
         svc_set_invocation_id();
+        /* how long this service gets to stop, so a script can pace its own
+         * shutdown inside it (unset = PID 1's default grace) */
+        if (svc->stop_timeout_sec) {
+            char st[12];
+            snprintf(st, sizeof st, "%d", svc->stop_timeout_sec);
+            setenv("SCHEMA_STOP_TIMEOUT_SEC", st, 1);
+        } else {
+            unsetenv("SCHEMA_STOP_TIMEOUT_SEC");
+        }
         char *at = strchr(svc->name, '@');
         if (at) {
             if (*(at + 1)) {
@@ -1622,7 +1631,7 @@ static int dropin_flag(service_t *svc, const char *key, const char *val) {
     static const struct { const char *key; unsigned flag; } f[] = {
         { "oneshot", SVC_ONESHOT }, { "needs_root", SVC_NEEDS_ROOT },
         { "critical", SVC_CRITICAL }, { "no_restart", SVC_NO_RESTART },
-        { "persistent", SVC_TIMER_PERSIST },
+        { "persistent", SVC_TIMER_PERSIST }, { "stop_first", SVC_STOP_FIRST },
     };
     for (size_t i = 0; i < sizeof f / sizeof f[0]; i++) {
         if (strcmp(key, f[i].key) != 0) continue;
@@ -1815,6 +1824,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->flags |= SVC_CRITICAL;
     else if (strcmp(line, "no_restart") == 0 && atoi(val))
         svc->flags |= SVC_NO_RESTART;
+    else if (strcmp(line, "stop_first") == 0 && atoi(val))
+        svc->flags |= SVC_STOP_FIRST;
     else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
         svc->stable_secs = atoi(val);
     else if (strcmp(line, "oom_score_adj") == 0) {
@@ -1865,6 +1876,9 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->max_restarts = atoi(val);
     } else if (strcmp(line, "start_timeout_sec") == 0) {
         svc->start_timeout_sec = atoi(val);
+    } else if (strcmp(line, "stop_timeout_sec") == 0) {
+        int v = atoi(val);
+        svc->stop_timeout_sec = (v >= 1 && v <= 300) ? v : 0;
     } else if (strcmp(line, "on_boot_sec") == 0) {
         svc->timer_boot_sec = atoi(val);
         svc->flags |= SVC_TIMER | SVC_ONESHOT;

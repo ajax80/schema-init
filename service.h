@@ -110,6 +110,7 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define SVC_TIMER_CALENDAR (1 << 5) /* timer_next is a CLOCK_REALTIME wall-clock target */
 #define SVC_TIMER_PERSIST  (1 << 6) /* persistent=1: catch up a calendar fire missed while down */
 #define SVC_NO_NEW_PRIVS   (1 << 7)  /* prctl(PR_SET_NO_NEW_PRIVS) in child   */
+#define SVC_STOP_FIRST     (1 << 8)  /* shutdown: stopped before anything else */
 
 typedef enum {
     PRIO_PERIPHERAL = 0,
@@ -344,6 +345,7 @@ typedef struct {
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
+    int              stop_timeout_sec;   /* shutdown SIGTERM->SIGKILL grace; 0 = default */
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
     struct timespec  boot_spawn;         /* first spawn since PID 1 started (analyze)       */
     struct timespec  boot_ready;         /* first FUNDAMENTAL/PERFECT since PID 1 started   */

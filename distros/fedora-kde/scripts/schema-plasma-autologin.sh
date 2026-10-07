@@ -90,14 +90,46 @@ release_session() {
 }
 # The session runs in its logind scope, outside this service's cgroup, so
 # PID 1's stop signal reaches only this script. Pass it on to everything in
-# the scope (kwin, plasmashell, the user's apps), give them a moment to save
-# and exit inside PID 1's 3 s grace, then release the seat and go.
+# the scope (kwin, plasmashell, the user's apps), give them time to save and
+# exit inside this service's stop budget (20 s with stop_first, via the
+# -session drop-in: a kill while plasmashell is still writing a first-login
+# panel layout leaves a half-built one it never rebuilds), then release the
+# seat and go.
 SESSION_SCOPE=""
 SESSION_PID=""
+# Everything in the scope except the session's plumbing: the compositor, the
+# session bus and the scripts that hold them (plasma-session-start's TERM trap
+# takes kwin down with it).
+session_apps() {
+    for p in $(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null); do
+        case "$(cat "/proc/$p/comm" 2>/dev/null)" in
+            kwin_wayland|kwin_wayland_wr|Xwayland|schema-dbus|schema-dbus-ses|dbus-daemon|dbus-broker*|plasma-session-|runuser|sleep|"") ;;
+            *) printf '%s ' "$p" ;;
+        esac
+    done
+}
 stop_session() {
     if [ -n "$SESSION_SCOPE" ] && [ -r "$SESSION_SCOPE/cgroup.procs" ]; then
+        # Shell, apps and helpers first, while the compositor and the session
+        # bus they talk to on the way out are still up (systemd's order);
+        # then the plumbing.
+        # Wait for the ones signalled, not for an empty scope: services the
+        # exiting apps call on the way out get bus-activated anew, and those
+        # go with the plumbing.
+        # Paced to fit this service's stop budget (SCHEMA_STOP_TIMEOUT_SEC from
+        # PID 1, else its 3 s default): 0.5 s margin, 2 s for the plumbing,
+        # the rest for the apps.
+        tenths=$(( ${SCHEMA_STOP_TIMEOUT_SEC:-3} * 10 - 25 ))
+        apps=$(session_apps)
+        [ -n "$apps" ] && kill -TERM $apps 2>/dev/null
+        for _ in $(seq 1 "$tenths"); do
+            alive=""
+            for p in $apps; do kill -0 "$p" 2>/dev/null && { alive=1; break; }; done
+            [ -n "$alive" ] || break
+            sleep 0.1
+        done
         kill -TERM $(cat "$SESSION_SCOPE/cgroup.procs") 2>/dev/null
-        for _ in $(seq 1 25); do
+        for _ in $(seq 1 20); do
             [ -n "$(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null)" ] || break
             sleep 0.1
         done

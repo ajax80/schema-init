@@ -3184,13 +3184,13 @@ static void shut_reap(void) {
 }
 
 /* Stop in reverse dependency order: a service gets SIGTERM once nothing still
- * running depends on it, then has SHUT_GRACE_MS to exit before its cgroup is
- * killed. A straggler holds back only what it depends on. Past SHUT_TOTAL_MS
- * everything left gets SIGTERM at once. */
+ * running depends on it, then has SHUT_GRACE_MS (or its stop_timeout_sec) to
+ * exit before its cgroup is killed. A straggler holds back only what it depends on. Past SHUT_TOTAL_MS
+ * everything left gets SIGTERM at once. stop_first services go before all of it. */
 static void shutdown_ordered(void) {
     uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0};
     int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0};
-    int i, j, round = 0;
+    int i, j, round = 0, held = 0;
     char msg[320];
 
     for (;;) {
@@ -3204,19 +3204,34 @@ static void shutdown_ordered(void) {
             left += alive[i];
         }
         if (!left) break;
+        /* stop_first services (the desktop session) go before anything else:
+         * their clients would otherwise block on daemons stopping under them */
+        int hold = 0;
+        for (i = 0; i < svc_count; i++)
+            if (alive[i] && (services[i].flags & SVC_STOP_FIRST)) hold = 1;
+        if (held && !hold) {
+            snprintf(msg, sizeof msg, "stop_first services down in %llu ms",
+                     (unsigned long long)(now - start));
+            shut_log(msg);
+            start = now;
+        }
+        held = hold;
         for (i = 0; i < svc_count; i++) {
             int blocked = 0;
             if (!alive[i]) continue;
             if (term_at[i]) {
-                if (now - term_at[i] < SHUT_GRACE_MS) continue;
-                snprintf(msg, sizeof msg, "%s ignored SIGTERM for %d ms, killing",
-                         services[i].name, SHUT_GRACE_MS);
+                uint64_t grace = services[i].stop_timeout_sec ? (uint64_t)services[i].stop_timeout_sec * 1000
+                                                         : SHUT_GRACE_MS;
+                if (now - term_at[i] < grace) continue;
+                snprintf(msg, sizeof msg, "%s ignored SIGTERM for %llu ms, killing",
+                         services[i].name, (unsigned long long)grace);
                 shut_log(msg);
                 service_cgroup_kill(&services[i]);
                 if (services[i].child_pid > 0) kill(services[i].child_pid, SIGKILL);
                 killed[i] = 1;
                 continue;
             }
+            if (hold && !(services[i].flags & SVC_STOP_FIRST)) continue;
             if (now - start < SHUT_TOTAL_MS)
                 for (j = 0; j < svc_count && !blocked; j++)
                     blocked = j != i && alive[j] && shut_depends_on(&services[j], i);
