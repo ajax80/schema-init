@@ -20,7 +20,7 @@ sm = importlib.util.module_from_spec(spec); spec.loader.exec_module(sm)
 rep = sm.finish_report()
 check("names the leftover services", "tailscaled" in rep and "docker" in rep)
 check("shows the doctor result", "GREEN" in rep)
-check("mentions the translate step", "translate" in rep.lower())
+check("names a real import command", "schema-import" in rep)
 check("writes the once marker", os.path.exists(os.path.join(root, "run/schema-init/migrate-finished")))
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
