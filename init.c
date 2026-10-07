@@ -3393,6 +3393,12 @@ int main(int argc, char **argv) {
     if (getpid() == 1) {
         umask(022);
         setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 0);
+        /* No console (or a container) leaves 0-2 closed; the next socket or
+         * file would land there and a child's stdio dup2 would clobber it. */
+        int nfd;
+        while ((nfd = open("/dev/null", O_RDWR)) >= 0 && nfd < 3)
+            ;
+        if (nfd > 2) close(nfd);
     }
 
     for (i = 1; i < argc; i++) {

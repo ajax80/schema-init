@@ -627,6 +627,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
     if stype == "forking" and not (pidfile.startswith("/") and not any(c in pidfile for c in "%$")):
         raise Skip("Type=forking without an absolute PIDFile= — nothing to "
                    "find the daemon's main PID by")
+    if _get_last(svc, "StandardInput").lower().startswith("tty"):
+        raise Skip("StandardInput=tty: schema-init gives services /dev/null on stdin; "
+                   "write a .svc that names the terminal (agetty ... tty1)")
     busname = _get_last(svc, "BusName")
     if stype == "dbus" and not busname:
         raise Skip("Type=dbus without BusName= — nothing to wait for")
