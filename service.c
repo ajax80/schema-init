@@ -1865,6 +1865,9 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->max_restarts = atoi(val);
     } else if (strcmp(line, "start_timeout_sec") == 0) {
         svc->start_timeout_sec = atoi(val);
+    } else if (strcmp(line, "stop_timeout_sec") == 0) {
+        int v = atoi(val);
+        svc->stop_timeout_sec = (v >= 1 && v <= 300) ? v : 0;
     } else if (strcmp(line, "on_boot_sec") == 0) {
         svc->timer_boot_sec = atoi(val);
         svc->flags |= SVC_TIMER | SVC_ONESHOT;

@@ -90,14 +90,17 @@ release_session() {
 }
 # The session runs in its logind scope, outside this service's cgroup, so
 # PID 1's stop signal reaches only this script. Pass it on to everything in
-# the scope (kwin, plasmashell, the user's apps), give them a moment to save
-# and exit inside PID 1's 3 s grace, then release the seat and go.
+# the scope (kwin, plasmashell, the user's apps), give them time to save and
+# exit inside this service's stop_timeout_sec (20 s, via the -session drop-in:
+# a first-login plasmashell needs ~12 s to finish its panel layout, and a kill
+# before that leaves a half-built layout it never rebuilds), then release the
+# seat and go.
 SESSION_SCOPE=""
 SESSION_PID=""
 stop_session() {
     if [ -n "$SESSION_SCOPE" ] && [ -r "$SESSION_SCOPE/cgroup.procs" ]; then
         kill -TERM $(cat "$SESSION_SCOPE/cgroup.procs") 2>/dev/null
-        for _ in $(seq 1 25); do
+        for _ in $(seq 1 180); do
             [ -n "$(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null)" ] || break
             sleep 0.1
         done

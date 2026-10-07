@@ -344,6 +344,7 @@ typedef struct {
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
+    int              stop_timeout_sec;   /* shutdown SIGTERM->SIGKILL grace; 0 = default */
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
     struct timespec  boot_spawn;         /* first spawn since PID 1 started (analyze)       */
     struct timespec  boot_ready;         /* first FUNDAMENTAL/PERFECT since PID 1 started   */

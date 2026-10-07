@@ -3184,8 +3184,8 @@ static void shut_reap(void) {
 }
 
 /* Stop in reverse dependency order: a service gets SIGTERM once nothing still
- * running depends on it, then has SHUT_GRACE_MS to exit before its cgroup is
- * killed. A straggler holds back only what it depends on. Past SHUT_TOTAL_MS
+ * running depends on it, then has SHUT_GRACE_MS (or its stop_timeout_sec) to
+ * exit before its cgroup is killed. A straggler holds back only what it depends on. Past SHUT_TOTAL_MS
  * everything left gets SIGTERM at once. */
 static void shutdown_ordered(void) {
     uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0};
@@ -3208,9 +3208,11 @@ static void shutdown_ordered(void) {
             int blocked = 0;
             if (!alive[i]) continue;
             if (term_at[i]) {
-                if (now - term_at[i] < SHUT_GRACE_MS) continue;
-                snprintf(msg, sizeof msg, "%s ignored SIGTERM for %d ms, killing",
-                         services[i].name, SHUT_GRACE_MS);
+                uint64_t grace = services[i].stop_timeout_sec ? (uint64_t)services[i].stop_timeout_sec * 1000
+                                                         : SHUT_GRACE_MS;
+                if (now - term_at[i] < grace) continue;
+                snprintf(msg, sizeof msg, "%s ignored SIGTERM for %llu ms, killing",
+                         services[i].name, (unsigned long long)grace);
                 shut_log(msg);
                 service_cgroup_kill(&services[i]);
                 if (services[i].child_pid > 0) kill(services[i].child_pid, SIGKILL);
