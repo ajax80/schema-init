@@ -66,7 +66,7 @@ rm -f "$XDG_RUNTIME_DIR/bus"
 
 if [ -n "$BROKER" ]; then
     SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus" \
-    SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/share/dbus-1/services" \
+    SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/local/lib/schema/dbus-1/services:/usr/share/dbus-1/services" \
     SCHEMA_DBUS_MASKFILE=/dev/null \
     "$BROKER" &
     BROKER_PID=$!

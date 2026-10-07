@@ -91,7 +91,11 @@ install -Dm0755 distros/fedora-kde/scripts/plasma-session-start.sh %{buildroot}/
 install -Dm0755 distros/fedora-kde/scripts/plasmashell-shim %{buildroot}/usr/local/bin/plasmashell-shim
 install -Dm0755 distros/fedora-kde/scripts/schema-autostart-runner.sh %{buildroot}/usr/local/lib/schema/schema-autostart-runner.sh
 install -Dm0755 distros/fedora-kde/scripts/schema-plasma-watchdog.sh %{buildroot}/usr/local/lib/schema/schema-plasma-watchdog.sh
+/usr/local/lib/schema/schema-wayland-wait
+/usr/local/lib/schema/dbus-1
 install -Dm0755 scripts/schema-dbus-session-run.sh %{buildroot}/usr/local/bin/schema-dbus-session-run.sh
+install -Dm0755 distros/fedora-kde/scripts/schema-wayland-wait %{buildroot}/usr/local/lib/schema/schema-wayland-wait
+install -Dm0644 -t %{buildroot}/usr/local/lib/schema/dbus-1/services distros/fedora-kde/config/dbus-1/services/org.freedesktop.impl.portal.desktop.kde.service
 install -Dm0755 mock_sd.so %{buildroot}/usr/local/lib/mock_sd.so
 install -Dm0644 distros/fedora-kde/config/plasma-env/zzz-environment-d.sh %{buildroot}/usr/local/lib/schema/zzz-environment-d.sh
 install -Dm0644 -t %{buildroot}/usr/local/lib/schema/plasma-env distros/fedora-kde/config/plasma-env/{05-kdedefaults,no-app-scope,ssh-agent-sock}.sh distros/fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh

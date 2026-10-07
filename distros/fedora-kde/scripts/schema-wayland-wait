@@ -1,0 +1,12 @@
+#!/bin/sh
+# Exec= wrapper for session-bus services that need the compositor. systemd
+# orders them after it; bus activation alone starts them whenever someone asks,
+# and one asked for while kwin is still coming up aborts with no display.
+w="${WAYLAND_DISPLAY:-wayland-0}"
+i=0
+while [ ! -S "$XDG_RUNTIME_DIR/$w" ] && [ $i -lt 200 ]; do
+    sleep 0.1
+    i=$((i+1))
+done
+export WAYLAND_DISPLAY="$w"
+exec "$@"
