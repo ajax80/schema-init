@@ -2688,10 +2688,8 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         snprintf(boot_argv0, sizeof boot_argv0, "%s", g.argv0);
     memcpy(evictions, ev, sizeof(eviction_t) * (size_t)nev);
     eviction_count = nev;
-    /* deadlines are monotonic now; an older image handed over wall-clock ones */
     for (int k = 0; k < eviction_count; k++)
-        if (evictions[k].deadline > mono_sec() + EVICT_GRACE_SECS)
-            evictions[k].deadline = mono_sec() + EVICT_GRACE_SECS;
+        evictions[k].deadline = mono_sec() + (evictions[k].deadline - time(NULL));
     init_start = g.init_start;
     if (g.nofile_soft)
         service_set_nofile_soft_at_boot((rlim_t)g.nofile_soft);
@@ -2750,7 +2748,13 @@ static int reexec_write_blob(int client, int oldexe, char *err, size_t errsz) {
         close(fd);
         return -1;
     }
-    state_write(f, &g, services, svc_count, evictions, eviction_count);
+    /* the blob keeps wall-clock deadlines, so older and newer images agree */
+    eviction_t wall_ev[MAX_EVICTIONS];
+    for (int k = 0; k < eviction_count; k++) {
+        wall_ev[k] = evictions[k];
+        wall_ev[k].deadline = time(NULL) + (evictions[k].deadline - mono_sec());
+    }
+    state_write(f, &g, services, svc_count, wall_ev, eviction_count);
     if (fclose(f) != 0 ||
         fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) < 0) {
         snprintf(err, errsz, "state blob: %s", strerror(errno));
