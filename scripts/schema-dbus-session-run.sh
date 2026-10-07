@@ -66,7 +66,7 @@ rm -f "$XDG_RUNTIME_DIR/bus"
 
 if [ -n "$BROKER" ]; then
     SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus" \
-    SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/share/dbus-1/services" \
+    SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/local/lib/schema/dbus-1/services:/usr/share/dbus-1/services" \
     SCHEMA_DBUS_MASKFILE=/dev/null \
     "$BROKER" &
     BROKER_PID=$!
@@ -78,7 +78,16 @@ if [ -z "$BROKER" ] || ! wait_for_socket; then
         echo "schema-dbus-session-run: no dbus-daemon to fall back to — no session bus" >&2
         exit 1
     fi
-    "$STOCK" --session --address="unix:path=$XDG_RUNTIME_DIR/bus" --nofork &
+    # Same activation dirs and order the broker gets: the user's, then ours, then
+    # the stock ones that session.conf adds (first definition wins).
+    CONF="$XDG_RUNTIME_DIR/schema-session-bus.conf"
+    printf '%s\n' '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">' \
+        '<busconfig>' \
+        "  <servicedir>$HOME/.local/share/dbus-1/services</servicedir>" \
+        '  <servicedir>/usr/local/lib/schema/dbus-1/services</servicedir>' \
+        '  <include>/usr/share/dbus-1/session.conf</include>' \
+        '</busconfig>' > "$CONF"
+    "$STOCK" --config-file="$CONF" --address="unix:path=$XDG_RUNTIME_DIR/bus" --nofork &
     STOCK_PID=$!
     wait_for_socket || echo "schema-dbus-session-run: socket still not up, continuing anyway" >&2
 fi
