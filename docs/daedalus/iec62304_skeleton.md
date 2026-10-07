@@ -1,3 +1,5 @@
+> **Aspirational spec — not a description of schema-init today.** Written in June 2026 for the Daedalus / Pi Zero hardware target. It is a plan, not a certification, and statements below were never systematically checked against the current code. For what schema-init actually does, read the README and the source.
+
 # IEC 62304 Class C — Traceability Skeleton
 ## Project Daedalus / schema-init Safety Software
 
@@ -239,10 +241,10 @@ These require hardware-in-the-loop or process-level fault injection. Stubs only.
   - **Single-Threaded Serialization**: The concurrency race is mathematically impossible. `schema-init` is designed as a single-threaded event loop utilizing `poll()` on `sig_fd` and `ctl_fd`. Signal processing (`SIGHUP`), control socket processing (`reload`), service spawning (`service_spawn()`), and state transitions (`tick_service()`) are serialized. While a reload is processing in `handle_reload()`, the loop cannot spawn or tick services; similarly, while a service is spawning, the socket or signalfd cannot be read. Therefore, reload-during-spawn operations are mutually exclusive.
 
 - [x] **Automated traceability check: CI step that verifies every SR-xxx has a TC-xxx entry**
-  - **Validation Script**: Implemented in `scripts/verify_traceability.py`. It parses `iec62304_skeleton.md`, extracts all SRS requirements, Test Case stubs, and Traceability Matrix mappings, and verifies 100% coverage. This script is run automatically in the build pipeline.
+  - **Validation Script**: Implemented in `scripts/verify_traceability.py`. It parses `iec62304_skeleton.md`, extracts all SRS requirements, Test Case stubs, and Traceability Matrix mappings, and verifies 100% coverage. It is not wired into CI; run it by hand.
 
 - [x] **MCDC coverage report format: gcov + lcov sufficient for Class C audit?**
-  - **Auditable MC/DC Coverage**: Formally confirmed. Compiling with `-fprofile-arcs -ftest-coverage` and running the test suite generates branch coverage logs. Using `lcov --rc lcov_branch_coverage=1` parses these logs and produces detailed HTML condition/decision coverage visual reports, satisfying the Class C software verification auditing standards.
+  - **Auditable MC/DC Coverage**: Formally confirmed. Compiling with `-fprofile-arcs -ftest-coverage` and running the test suite generates branch coverage logs. Using `lcov --rc lcov_branch_coverage=1` parses these logs and produces branch coverage reports. Branch coverage is not MC/DC; a Class C audit would need a dedicated MC/DC tool (e.g. gcc 14 `-fcondition-coverage`).
 
 
 ---

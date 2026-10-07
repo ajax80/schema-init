@@ -5,7 +5,7 @@ import os
 
 def main():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    doc_path = os.environ.get("SCHEMA_DOC", os.path.join(repo_root, "iec62304_skeleton.md"))
+    doc_path = os.environ.get("SCHEMA_DOC", os.path.join(repo_root, "docs", "daedalus", "iec62304_skeleton.md"))
     if not os.path.exists(doc_path):
         print(f"Error: Skeleton file not found at {doc_path}")
         sys.exit(1)

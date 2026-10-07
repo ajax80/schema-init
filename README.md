@@ -247,7 +247,7 @@ If you're reading the source to evaluate it, start here. PID 1 is ~4,800 lines o
 |-----|---------------|
 | `services/` | The reference service set — real `.svc` and `.grp` files for `sshd`, `dbus`, `udev`, `network-manager`, `display-manager`, and the `network-stack` / `display-stack` groups. Copy these as your starting templates. |
 | `desktop/` | `schema-desktop.c` — an SDL2 live visualizer that maps `schema_shm.h` into an 8-node grid and shows every service's weight-state in real time. This is how you *watch* the state machine run. |
-| `scripts/` | Build and integration tooling: `make-iso*.sh` / `make-usb.sh` / `fix-usb.sh` (bootable media), `schema-logind.py` (a logind compatibility shim), and `verify_traceability.py` (IEC 62304 requirement traceability). |
+| `scripts/` | Build and integration tooling: `make-iso*.sh` / `make-usb.sh` / `fix-usb.sh` (bootable media), `schema-logind.py` (a logind compatibility shim), and `verify_traceability.py` (traceability check for the aspirational Daedalus IEC 62304 spec in `docs/daedalus/`). |
 | `distros/` | Per-distribution profiles — `fedora-kde/` and `raspberry-pi-zero-w/`. Each carries the service files and boot glue that distro needs. |
 | `docs/`, `assets/` | Documentation and images. |
 
