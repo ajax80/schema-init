@@ -103,7 +103,7 @@ sudo schema-migrate --deploy --prebuilt        # uses the packaged binaries, no 
 # reboot, pick the (schema-init) entry; to undo:  sudo schema-migrate --uninstall
 ```
 
-`schema-init-wizard` is a guided GUI wrapper around that same reversible flow with a two-reboot safety ladder. It's the newest layer and hasn't yet been shipped-tested on a live desktop, so if you want the battle-tested route, use the `schema-migrate` CLI above; both do the same thing and back out the same way.
+`schema-init-wizard` is a guided GUI wrapper around that same reversible flow with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both) but hasn't yet been run on real hardware, so if you want the conservative route, use the `schema-migrate` CLI above; both do the same thing and back out the same way.
 
 The COPR builds three packages: `schema-init` (the init), `schema-init-migrate` (the migrator + `schema-udev`), and `schema-init-wizard` (the GUI).
 
@@ -1190,7 +1190,7 @@ cp services/dbus.svc.sp1 /etc/schema-init/services/dbus.svc   # the flip
 sudo reboot
 ```
 
-This is a manual step. The installer ISO and the migration wizard do not flip the bus yet: installed boxes run stock `dbus-daemon` on both the system and session bus.
+The installer ISO and the migration wizard both offer this flip as an optional step after the udev cutover, in its own reboot, with a seatbelt health check that rolls back to stock `dbus-daemon` automatically if the bus doesn't come up (shipped since v0.4.1, hardware-tested on a real install). The manual steps above are for source builds.
 
 Build needs `dbus-devel` (`make schema-dbus`). If the policy dissolve ever fails at boot, the launcher **self-heals to stock `dbus-daemon`** on the spot, so even a broken flip still comes up on a working bus; to roll back permanently, restore the stock `dbus.svc` (`exec=/usr/bin/dbus-daemon`, `args=--system`, `args=--nofork`) and reboot.
 
