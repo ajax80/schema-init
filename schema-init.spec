@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.8
+Version:        0.4.9
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -383,6 +383,16 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Oct 07 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.9-1
+- Services get /dev/null on stdin instead of PID 1's console; PID 1 fills
+  fds 0-2 at start so no socket can land there
+- schema-ctl only tries ./run/schema-init.sock with SCHEMA_CTL_FALLBACK set
+- Restart cooldown, socket idle exit and eviction grace use the monotonic
+  clock; stray fds are closed before a service execs
+- The importer skips StandardInput=tty units with a note
+- README: socket activation, conditions, env_file/exec_pre, drop-ins and
+  the real shutdown sequence documented
+
 * Wed Oct 07 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.8-1
 - schema-migrate --deploy imports every unit systemd had enabled (crond,
   firewalld, tuned, the fstrim/logrotate timers...), as ISO installs do;
