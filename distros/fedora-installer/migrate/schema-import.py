@@ -735,6 +735,27 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
         elif sec > 0:
             warns.append("WatchdogSec= without Type=notify has no socket to pet over, dropped")
 
+    # TimeoutStopSec= (or TimeoutSec=, which sets start and stop; the later of
+    # the two wins, as in systemd) is how long systemd waits after SIGTERM;
+    # schema-init's shutdown grace is 3 s unless stop_timeout_sec= says
+    # otherwise, capped at 300.
+    skey, stop = "", ""
+    for k, v in svc:
+        if k in ("TimeoutStopSec", "TimeoutSec"):
+            skey, stop = k, v
+    if stop:
+        sec = _timespan_sec(stop)
+        if stop.strip().lower() == "infinity" or sec == 0:
+            lines.append("stop_timeout_sec=300")
+            warns.append("%s=%s (no limit) capped at 300 s" % (skey, stop))
+        elif sec is None:
+            warns.append("%s=%s unrecognised, default stop grace" % (skey, stop))
+        elif sec > 300:
+            lines.append("stop_timeout_sec=300")
+            warns.append("%s=%s capped at 300 s" % (skey, stop))
+        else:
+            lines.append("stop_timeout_sec=%d" % sec)
+
     # [Install] presence is why the unit was queued; note if it's missing.
     notes = []
     if dropped_args:
