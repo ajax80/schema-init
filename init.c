@@ -3186,11 +3186,11 @@ static void shut_reap(void) {
 /* Stop in reverse dependency order: a service gets SIGTERM once nothing still
  * running depends on it, then has SHUT_GRACE_MS (or its stop_timeout_sec) to
  * exit before its cgroup is killed. A straggler holds back only what it depends on. Past SHUT_TOTAL_MS
- * everything left gets SIGTERM at once. */
+ * everything left gets SIGTERM at once. stop_first services go before all of it. */
 static void shutdown_ordered(void) {
     uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0};
     int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0};
-    int i, j, round = 0;
+    int i, j, round = 0, held = 0;
     char msg[320];
 
     for (;;) {
@@ -3204,6 +3204,13 @@ static void shutdown_ordered(void) {
             left += alive[i];
         }
         if (!left) break;
+        /* stop_first services (the desktop session) go before anything else:
+         * their clients would otherwise block on daemons stopping under them */
+        int hold = 0;
+        for (i = 0; i < svc_count; i++)
+            if (alive[i] && (services[i].flags & SVC_STOP_FIRST)) hold = 1;
+        if (held && !hold) start = now;
+        held = hold;
         for (i = 0; i < svc_count; i++) {
             int blocked = 0;
             if (!alive[i]) continue;
@@ -3219,6 +3226,7 @@ static void shutdown_ordered(void) {
                 killed[i] = 1;
                 continue;
             }
+            if (hold && !(services[i].flags & SVC_STOP_FIRST)) continue;
             if (now - start < SHUT_TOTAL_MS)
                 for (j = 0; j < svc_count && !blocked; j++)
                     blocked = j != i && alive[j] && shut_depends_on(&services[j], i);

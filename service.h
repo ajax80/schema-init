@@ -110,6 +110,7 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define SVC_TIMER_CALENDAR (1 << 5) /* timer_next is a CLOCK_REALTIME wall-clock target */
 #define SVC_TIMER_PERSIST  (1 << 6) /* persistent=1: catch up a calendar fire missed while down */
 #define SVC_NO_NEW_PRIVS   (1 << 7)  /* prctl(PR_SET_NO_NEW_PRIVS) in child   */
+#define SVC_STOP_FIRST     (1 << 8)  /* shutdown: stopped before anything else */
 
 typedef enum {
     PRIO_PERIPHERAL = 0,

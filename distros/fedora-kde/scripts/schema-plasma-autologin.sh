@@ -97,10 +97,35 @@ release_session() {
 # seat and go.
 SESSION_SCOPE=""
 SESSION_PID=""
+# Everything in the scope except the session's plumbing: the compositor, the
+# session bus and the scripts that hold them (plasma-session-start's TERM trap
+# takes kwin down with it).
+session_apps() {
+    for p in $(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null); do
+        case "$(cat "/proc/$p/comm" 2>/dev/null)" in
+            kwin_wayland|kwin_wayland_wr|Xwayland|schema-dbus|schema-dbus-ses|plasma-session-|runuser|sleep|"") ;;
+            *) printf '%s ' "$p" ;;
+        esac
+    done
+}
 stop_session() {
     if [ -n "$SESSION_SCOPE" ] && [ -r "$SESSION_SCOPE/cgroup.procs" ]; then
+        # Shell, apps and helpers first, while the compositor and the session
+        # bus they talk to on the way out are still up (systemd's order);
+        # then the plumbing.
+        # Wait for the ones signalled, not for an empty scope: services the
+        # exiting apps call on the way out get bus-activated anew, and those
+        # go with the plumbing.
+        apps=$(session_apps)
+        [ -n "$apps" ] && kill -TERM $apps 2>/dev/null
+        for _ in $(seq 1 150); do
+            alive=""
+            for p in $apps; do kill -0 "$p" 2>/dev/null && { alive=1; break; }; done
+            [ -n "$alive" ] || break
+            sleep 0.1
+        done
         kill -TERM $(cat "$SESSION_SCOPE/cgroup.procs") 2>/dev/null
-        for _ in $(seq 1 180); do
+        for _ in $(seq 1 20); do
             [ -n "$(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null)" ] || break
             sleep 0.1
         done
