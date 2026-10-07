@@ -1149,6 +1149,50 @@ def run_make_install(manifest, run=subprocess.run, dry_run=False, prebuilt=False
     return provision_binaries(manifest, run=run, dry_run=dry_run, prebuilt=prebuilt)
 
 
+IMPORTED_LIST = "var/lib/schema-init/migrate-imported.list"
+
+
+def _import_script():
+    src = find_source("distros/fedora-installer/migrate/schema-import.py")
+    if src:
+        return src
+    rpm = P("usr/bin/schema-import")
+    return rpm if os.path.exists(rpm) else None
+
+
+def import_enabled_units(manifest, run=subprocess.run, dry_run=False):
+    script = _import_script()
+    if dry_run or not script:
+        if not script:
+            print("WARN: schema-import not found; enabled units not imported")
+        return []
+    svcd = P("etc/schema-init/services")
+    before = set(os.listdir(svcd)) if os.path.isdir(svcd) else set()
+    env = dict(os.environ, MIGRATE_ROOT=ROOT)
+    r = run([sys.executable, script, "--enabled"], capture_output=True, text=True, env=env)
+    log = P("var/log/schema-init/migrate-import.log")
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    with open(log, "w") as f:
+        f.write((getattr(r, "stdout", "") or "") + (getattr(r, "stderr", "") or ""))
+    if r.returncode != 0:
+        print("WARN: some enabled units did not import; see /var/log/schema-init/migrate-import.log")
+    added = sorted(set(os.listdir(svcd)) - before) if os.path.isdir(svcd) else []
+    rec = P(IMPORTED_LIST)
+    try:
+        prior = open(rec).read().split()
+    except OSError:
+        prior = []
+    names = sorted(set(prior) | set(added))
+    os.makedirs(os.path.dirname(rec), exist_ok=True)
+    with open(rec, "w") as f:
+        f.write("".join(n + "\n" for n in names))
+    manifest.add_file("/" + IMPORTED_LIST)
+    for name in names:
+        if os.path.exists(os.path.join(svcd, name)):
+            manifest.add_file("/etc/schema-init/services/" + name)
+    return added
+
+
 def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     profile = build_profile(run=run)
     if profile["kernel"] not in stock_entries():
@@ -1175,6 +1219,7 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     install_unit_helpers(m, dry_run=dry_run)
     install_session_support(profile, m, dry_run=dry_run)
     install_packages(m, run=run, dry_run=dry_run)
+    import_enabled_units(m, run=run, dry_run=dry_run)
     # grub2-mkconfig FIRST: Fedora's BLS sync rewrites every loader entry's
     # options from the canonical cmdline, so it must run before the schema
     # entry is written or it strips the init= override we just added.
@@ -1196,7 +1241,8 @@ def finish_report():
         prof = json.load(open(P("var/lib/schema-init/migrate-profile.json")))
     except (OSError, ValueError):
         prof = {}
-    leftover = prof.get("services", {}).get("leftover", [])
+    leftover = [u for u in prof.get("services", {}).get("leftover", [])
+                if not os.path.exists(P("etc/schema-init/services/%s.svc" % u))]
     try:
         doctor = open(P("run/schema-init/doctor-status")).read().strip()
     except OSError:
@@ -1208,7 +1254,7 @@ def finish_report():
         lines.append("Services still running under the old system that were NOT ported:")
         lines += ["  - " + s for s in leftover]
         lines.append("")
-        lines.append("Run `schema-migrate --translate` to carry these over "
+        lines.append("Run `sudo schema-import <unit>.service` to carry one over "
                      "(simple units auto-convert; complex ones are named, not dropped).")
     else:
         lines.append("No un-ported services — nothing left to translate.")
