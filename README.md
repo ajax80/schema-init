@@ -7,7 +7,7 @@
 
 A minimal PID 1 init system for Linux that supervises services through a weight-state machine instead of unit files and dependency graphs — and, increasingly, a native, auditable replacement for the systemd daemons around it.
 
-No systemd. No OpenRC. No journal daemon. No socket activation engine. At its core, just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
+No systemd. No OpenRC. No journal daemon. At its core, just a statically linked binary that mounts your filesystems, spawns your services in dependency order, and watches them — then gets out of the way.
 
 **It doesn't stop at PID 1.** systemd's satellite daemons don't have to be systemd's. schema-init ships small, single-purpose, native replacements you opt into one at a time: `schema-logind` (sessions, power, seats — plus the `hostname1`/`timedate1`/`systemd1` D-Bus surfaces), `schema-udev` (device management, authoritative over `/dev`), `schema-journal-sink` (a journald-shaped endpoint that drains to a plain logfile — no journal database), and built-in `.svc` timers that retire `cron` and systemd `.timer` units. Alongside them sits `schema-dbus`, an alternative D-Bus broker serving both the system bus and the per-user session bus — `dbus-daemon` and `dbus-broker` were never part of systemd, so this one is a third option, not a reclamation. Each is a program you can read end to end, runs only if you list it, and backs out with a single reboot. So you can replace the init layer piece by piece — or keep the stock daemons underneath and just run a leaner PID 1. The point isn't only *less*; it's an init layer you can actually **read, top to bottom, and own**.
 
@@ -17,7 +17,7 @@ No systemd. No OpenRC. No journal daemon. No socket activation engine. At its co
 
 ## What it gives back
 
-systemd isn't just PID 1 — it's a constellation of always-on daemons: `journald`, `systemd-logind`, `dbus-broker`, `systemd-resolved`, resident `udevd` workers, timers firing on their own schedule. Each one holds RAM and wakes the CPU whether or not you're using it. schema-init replaces PID 1 with a single static binary and **does none of that** — no journal database, no socket-activation engine, no background event loops. What that machinery was holding comes back to you.
+A stock systemd boot isn't just PID 1 — it's a constellation of always-on daemons: `journald`, `systemd-logind`, `systemd-resolved`, resident `udevd` workers, timers firing on their own schedule, with `dbus-broker` alongside. Each one holds RAM and wakes the CPU whether or not you're using it. schema-init replaces PID 1 with a single static binary and **does none of that** — no journal database, no background event loops. (Socket activation is built into PID 1 itself; see [Socket activation](#socket-activation).) What that machinery was holding comes back to you.
 
 **Your RAM comes back.** On identical hardware running the identical desktop, schema-init frees roughly **half a gigabyte of RAM** that systemd's daemon stack was sitting on (~1.1 GB used at desktop vs ~1.6–2.0 GB — see [Real numbers](#real-numbers)), and idle swap drops from hundreds of MB to **zero**. In lived terms that is the difference between *a few browser tabs plus one other program before the machine starts thrashing* and **two or three browsers with ~20 tabs each and a game running at the same time** — same RAM, no upgrade. The computer you already own effectively gets bigger.
 
@@ -311,6 +311,8 @@ oneshot=1
 | `allowed_slot_max` | `-1` | Maximum hardware slot ID (inclusive). If `SLOT_ID` falls outside `[allowed_slot_min, allowed_slot_max]`, spawn is refused with a `HAZARD` log and `SVC_NO_RESTART` is set — the service will not retry. Both min and max must be ≥ 0 to activate the gate. |
 | `on_boot_sec` | `0` | Makes the service a **timer**: seconds after boot before the first fire (`0` = at boot). Implies `oneshot=1` — the service runs, exits, and re-arms. The analog of systemd's `OnBootSec=`. See [Timers](#timers) below. |
 | `on_active_sec` | `0` | Timer period: seconds after each completion before the next fire. Measured from completion (like systemd's `OnUnitInactiveSec=`), so a slow run never overlaps itself. Implies `oneshot=1`. |
+| `on_calendar` | — | Wall-clock timer: `HH:MM` daily, `Mon HH:MM` weekly, or `DD HH:MM` monthly. Implies `oneshot=1`. See [Timers](#timers). |
+| `persistent` | `0` | With `on_calendar`: a fire missed while the machine was off runs at the next boot (systemd `Persistent=`). |
 | `start_timeout_sec` | `90` for oneshots, `0` otherwise | Max seconds a service may sit in `FULL_TRUST` without promoting before it is killed and routed into the recovery arc — so a hung boot service can't stall its dependents. **Defaults on for oneshots** (the only services that can hang the chain; daemons promote via `stable_secs`). **Timers are exempt** (may run long). `0` disables. The analog of systemd's `TimeoutStartSec=`. |
 | `stop_timeout_sec` | `3` | Seconds a service gets to exit after SIGTERM at shutdown before its cgroup is killed (1–300). Raise it for anything that saves state on the way out: the Plasma session gets `20`, because plasmashell can need 12 s to finish writing a freshly built panel layout. The analog of systemd's `TimeoutStopSec=`. |
 | `stop_first` | `0` | At shutdown, this service gets SIGTERM before any other, and nothing else is stopped until it has exited (or its `stop_timeout_sec` ran out). For the desktop session: its apps talk to system daemons on the way out (KDE's printer client to CUPS, for one) and hang if those are stopping at the same time. systemd gets the same effect by stopping user sessions before system services. |
@@ -324,6 +326,8 @@ oneshot=1
 | `ready_poll_hz` | loop rate | How often a FUNDAMENTAL service's `ready_path` liveness check runs, when it should be slower than the main loop. |
 | *(default)* | | Services restart automatically through the F9/F6 recovery arc unless `no_restart` or `oneshot` is set |
 
+More keys, by topic, below: [Environment and pre-start commands](#environment-and-pre-start-commands), [Conditions](#conditions), [Socket activation](#socket-activation), [Drop-ins](#drop-ins), [Hardening](#hardening), [Timers](#timers).
+
 A full example using readiness probes:
 
 ```ini
@@ -335,6 +339,37 @@ needs_root=1
 stable_secs=2
 ready_path=/run/dbus/system_bus_socket
 ```
+
+### Environment and pre-start commands
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `env_file` | — | Read `KEY=VALUE` lines from this file into the service's environment at each spawn (systemd `EnvironmentFile=`). Repeatable, up to 4 files and 64 variables; only the first 64 KiB of a file is read. A leading `-` makes the file optional; a missing required file fails the spawn. |
+| `exec_pre` | — | A command run before `exec` at every spawn (systemd `ExecStartPre=`). Absolute path, arguments split like a shell would with quotes but no shell; up to 8. Prefix `+` to run it as root before hardening and the `user=` drop; without it the command runs as the service's user, after hardening. Prefix `-` to ignore its failure; otherwise a failing command fails the spawn and the service enters the recovery arc. |
+| `expand_args` | `0` | `1`: expand `$VAR` and `${VAR}` in `args` and `exec_pre` from the service's environment (`env`, `env_file`) at spawn. Off by default, since there is no shell. |
+
+### Conditions
+
+`condition=KIND:ARG`, repeatable up to 8, checked before every spawn (systemd `Condition*=`). If one doesn't hold, the service is not started and counts as done (PERFECT, logged `condition-skip`), not failed, so its dependents aren't blocked; a timer just re-arms. `!` negates (`path_exists:!/etc/foo`). A `|` before the argument puts the condition in an OR group: at least one `|` condition must hold, and every plain one must.
+
+Kinds: `path_exists`, `path_exists_glob`, `path_is_dir`, `path_is_symlink`, `path_is_mount`, `path_is_rw`, `dir_not_empty`, `file_not_empty`, `file_is_exec`, `ac_power` (`true`/`false`), `kernel_cmdline` (a word on `/proc/cmdline` equal to the argument; an argument without `=` also matches `arg=anything`).
+
+### Socket activation
+
+PID 1 can open a service's sockets itself and hand them over the way systemd does: at fd 3 onward, with `LISTEN_FDS`, `LISTEN_PID` and `LISTEN_FDNAMES` (`<name>.socket`) set. PID 1 keeps its copies across restarts, so connections queue instead of failing while the service restarts.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `listen` | — | A socket to open: `stream:`, `dgram:`, `seqpacket:` or `fifo:` followed by `/path`, `@abstract`, `PORT`, `ADDR:PORT` or `[ADDR]:PORT`. Up to 4. |
+| `listen_lazy` | `0` | `1`: bind the sockets at boot but don't start the service; it sits in PERFECT (`socket-wait`) and is started by the first connection. A lazy service that exits cleanly after running at least 2 s goes back to waiting; a quicker exit goes through the recovery arc instead of a wake loop. |
+| `socket_mode` | `0666` | Octal permissions for a filesystem socket or FIFO. |
+| `socket_user` / `socket_group` | root | Owner of a filesystem socket or FIFO. |
+
+When shutdown starts, PID 1 drops its copies: a running service keeps serving until it is stopped, and a client of one that isn't running is refused at once instead of hanging.
+
+### Drop-ins
+
+Override part of a `.svc` without editing it: put `*.conf` files in `<name>.svc.d/` next to it. They are applied after the main file, in byte order of their names; a template instance (`foo@bar.svc`) first reads `foo@.svc.d/`, then its own. A scalar key replaces the earlier value. List keys (`args`, `env`, `env_file`, `exec_pre`, `condition`, `listen`, `dep`, `landlock_ro`, `landlock_rw`) append; an empty `key=` clears that list first. `name=` is not allowed in a drop-in. `schema-ctl cat <name>` prints the file and its drop-ins in apply order.
 
 ### Hardening
 
@@ -580,11 +615,16 @@ sudo kill -TERM 1   # poweroff
 sudo kill -INT 1    # reboot
 ```
 
-On SIGTERM, schema-init sets system state to shutdown, sends SIGTERM to all child processes, waits 500ms for clean exit, then calls `reboot(RB_POWER_OFF)`.
+Both run the same sequence; SIGTERM ends in `reboot(RB_POWER_OFF)`, SIGINT in `reboot(RB_AUTOBOOT)`. `schema-ctl poweroff` / `reboot` start it too.
 
-On SIGINT, same sequence ends with `reboot(RB_AUTOBOOT)`.
+1. Hold 500 ms, so a desktop or display manager can show the shutdown state.
+2. SIGTERM container cgroups, and drop PID 1's copies of socket-activation sockets.
+3. Stop `stop_first=1` services (the desktop session) before anything else, and wait for them.
+4. Stop the rest in reverse dependency order: a service gets SIGTERM once nothing still running depends on it, then has its `stop_timeout_sec` (default 3 s) to exit before its cgroup is killed. A service is down only when its cgroup is empty. After 12 s, everything left gets SIGTERM at once.
+5. Kill every service cgroup and container cgroup, then `kill(-1, SIGKILL)` for anything outside them.
+6. Release the control and notify sockets, `sync` with a 10 s deadline (so one wedged filesystem can't hang shutdown), flush the shutdown log, remount everything read-only, and call `reboot()`.
 
-The 500ms hold is intentional — it gives any running desktop or display manager time to render a shutdown state before the process tree is torn down.
+Each step is logged to `/var/log/schema-init/shutdown.log`.
 
 ---
 
@@ -593,7 +633,6 @@ The 500ms hold is intentional — it gives any running desktop or display manage
 These are real gaps, not future features being teased:
 
 - **Young, and not independently audited.** `schema-dbus` and `schema-logind` sit on the system's authorization boundary — who may own a bus name, who may power off, who gets device access. Both are fuzzed and covered by tests, but neither has had an outside security review. Weigh that before running them on a machine other people log into.
-- **No socket activation** — services must manage their own sockets. There is no systemd-style socket hand-off (`LISTEN_FDS`).
 - **Log rotation is not scheduled by default.** The `logrotate` config ships, and an example timer (`services/logrotate.svc.example`) ships alongside it, but nothing fires the rotation until you enable that timer. See [Logs](#logs).
 - **`schema-logind.py` reimplements a subset of `org.freedesktop.login1`.** It models multiple concurrent sessions and seats — a session registry with one object per session, per-seat membership, and active-session tracking — which is enough for a Wayland compositor to take KMS and hand it back on a VT switch (see [Recovery console](#recovery-console)) and for `uaccess` device ACLs to follow the active session. It is a targeted reimplementation, not the full daemon. It also does not set `KDSKBMODE = K_OFF`, deliberately — if the daemon died while `K_OFF` were set the console keyboard would stay dead, and `K_OFF` would also disable the kernel's ctrl-alt-F<n> VT switch that is the recovery-console escape hatch — so keystrokes still reach the tty underneath a compositor. They are neutralised rather than blocked: when the session VT is handed to the compositor, echo is turned off and pending input is flushed, and no getty runs on the session VT to read what arrives.
 
@@ -639,7 +678,7 @@ If your system needs additional mounts (data partitions, network filesystems), r
 make
 ```
 
-Produces a fully static binary — no glibc version dependency, runs on any Linux kernel. Tested on:
+Produces a statically linked binary. One caveat: resolving `user=` and group names goes through glibc's NSS, which loads the host's `libnss_*` libraries at runtime, so build it on (or for) the distro you run it on. Tested on:
 
 - Debian Bookworm, kernel 6.1, x86_64 — headless and Cinnamon desktop
 - Fedora 44, kernel 7.0, x86_64 — full KDE Plasma desktop, btrfs subvolume boot
@@ -750,7 +789,7 @@ Tested on Dell Inspiron 3542 (Intel Core i3, 4GB RAM) running full Cinnamon desk
 | Swap used | **0 MB** | 200–500 MB |
 | Time to desktop | **~20.7s** | slower |
 
-The gap is structural. schema-init spawns your services and then sits in a 250ms tick loop. There is no journal daemon, no dbus-broker, no socket activation layer, no unit file parser running in the background.
+The gap is structural. schema-init spawns your services and then sleeps until something needs it. There is no journal daemon, no dbus-broker, no unit file parser running in the background.
 
 Boot timing breakdown (Dell Inspiron 3542, Debian Bookworm, kernel 6.1.0-49, times relative to PID1 start):
 
@@ -861,6 +900,7 @@ sudo schema-ctl timing          # per-service spawn→ready cost, boot critical 
 sudo schema-ctl analyze         # boot critical chain + waterfall; how each service proved ready (notify / bus-name / ready_path / stable timer / exit)
 sudo schema-ctl analyze <name>  # the dependency chain that held <name> back
 sudo schema-ctl list            # names and current states only
+sudo schema-ctl cat <name>      # the .svc file and its drop-ins, in apply order
 sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service
 sudo schema-ctl restart <name>  # stop + re-queue through the state machine

@@ -20,12 +20,12 @@ schema-init is a minimal PID 1 for Linux that supervises services with a weight-
 
 > ⚠️ **Honesty rule — say this if scale comes up:** these are single-node measurements on one i3 laptop. Don't multiply a per-node idle delta by a fleet size — an init's own power draw is a tiny slice of a server's total. At scale the real levers are density, footprint, boot time, attack surface, and determinism — not init power draw.
 
-## What it reclaims (opt in one at a time, reboot to undo)
+## What it replaces (opt in one at a time, reboot to undo)
 - `schema-logind` — sessions, power, seats + hostname1/timedate1/systemd1 D-Bus surfaces
 - `schema-udev` — device management, authoritative over `/dev`
 - `schema-journal-sink` — journald-shaped endpoint that drains to a plain logfile, no journal database
 - built-in `.svc` timers — retire cron and systemd `.timer` units
-- `schema-dbus` — the D-Bus system bus broker itself
+- `schema-dbus` — an alternative D-Bus broker (to dbus-daemon / dbus-broker, which were never systemd's)
 
 ## The privacy angle (lead with this for the Liberated-fork author)
 - schema-init replaces systemd's satellite daemons (logind, udev, journald) **wholesale** — none of systemd's birthdate/age baggage comes along.
