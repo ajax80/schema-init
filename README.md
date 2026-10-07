@@ -103,7 +103,7 @@ sudo schema-migrate --deploy --prebuilt        # uses the packaged binaries, no 
 # reboot, pick the (schema-init) entry; to undo:  sudo schema-migrate --uninstall
 ```
 
-`schema-init-wizard` is a guided GUI wrapper around that same reversible flow with a two-reboot safety ladder. It's the newest layer and hasn't yet been shipped-tested on a live desktop, so if you want the battle-tested route, use the `schema-migrate` CLI above; both do the same thing and back out the same way.
+`schema-init-wizard` is a guided GUI wrapper around that same reversible flow with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both) but hasn't yet been run on real hardware, so if you want the conservative route, use the `schema-migrate` CLI above; both do the same thing and back out the same way.
 
 The COPR builds three packages: `schema-init` (the init), `schema-init-migrate` (the migrator + `schema-udev`), and `schema-init-wizard` (the GUI).
 
@@ -132,7 +132,7 @@ sudo sed -i 's#/usr/local/lib/schema/schema-flip-apply#/usr/libexec/schema-init/
 
 The stock systemd boot entries stay in the GRUB menu as a fallback. SELinux is off while schema-init is PID 1, so files written then carry no labels, and the imported `selinux-autorelabel-mark` unit flags the disk for relabelling. The first boot of a systemd entry after running schema-init therefore relabels the whole filesystem and reboots once. That takes a few minutes and is expected; it is what makes the fallback safe to use.
 
-After the first login a wizard offers the *optional* **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev. Wi-Fi and wired profiles are unpinned from systemd's interface names before the switch, so the network survives it.
+After the first login a wizard offers the *optional* **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev. Wi-Fi and wired profiles are unpinned from systemd's interface names before the switch, so the network survives it. Once that's confirmed healthy, it offers a second optional step on its own reboot: switching both the system and session bus to **schema-dbus**, with the same automatic rollback if the bus doesn't come up.
 
 > ⚠️ **What the udev flip does:** it kills `systemd-udevd` and makes **schema-udev** authoritative over device management. This is the whole point — watching your init own `/dev` — but it *is* a real change to how the box handles hardware. It's optional and guided; skip it and you still get schema-init as PID 1 with stock udev underneath.
 
@@ -1190,7 +1190,7 @@ cp services/dbus.svc.sp1 /etc/schema-init/services/dbus.svc   # the flip
 sudo reboot
 ```
 
-This is a manual step. The installer ISO and the migration wizard do not flip the bus yet: installed boxes run stock `dbus-daemon` on both the system and session bus.
+The installer ISO and the migration wizard both offer this flip as an optional step after the udev cutover, in its own reboot, with a seatbelt health check that rolls back to stock `dbus-daemon` automatically if the bus doesn't come up (shipped since v0.4.1, hardware-tested on a real install). The manual steps above are for source builds.
 
 Build needs `dbus-devel` (`make schema-dbus`). If the policy dissolve ever fails at boot, the launcher **self-heals to stock `dbus-daemon`** on the spot, so even a broken flip still comes up on a working bus; to roll back permanently, restore the stock `dbus.svc` (`exec=/usr/bin/dbus-daemon`, `args=--system`, `args=--nofork`) and reboot.
 
