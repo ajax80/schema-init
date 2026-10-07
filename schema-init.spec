@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.4
+Version:        0.4.5
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -380,6 +380,11 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.5-1
+- The KDE portal backend no longer aborts at every login: when the session
+  bus starts it before kwin's display exists, it now waits for the display
+  instead of crashing (also under the stock dbus-daemon fallback)
+
 * Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.4-1
 - Upgrades bring the installer's fixes to existing ISO installs: udev is
   put under supervision live, and the services systemd had enabled are
