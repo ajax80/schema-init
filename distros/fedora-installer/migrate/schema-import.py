@@ -735,11 +735,14 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
         elif sec > 0:
             warns.append("WatchdogSec= without Type=notify has no socket to pet over, dropped")
 
-    # TimeoutStopSec= (or TimeoutSec=, which sets start and stop) is how long
-    # systemd waits after SIGTERM; schema-init's shutdown grace is 3 s unless
-    # stop_timeout_sec= says otherwise, capped at 300.
-    skey = "TimeoutStopSec" if _get_last(svc, "TimeoutStopSec") else "TimeoutSec"
-    stop = _get_last(svc, skey)
+    # TimeoutStopSec= (or TimeoutSec=, which sets start and stop; the later of
+    # the two wins, as in systemd) is how long systemd waits after SIGTERM;
+    # schema-init's shutdown grace is 3 s unless stop_timeout_sec= says
+    # otherwise, capped at 300.
+    skey, stop = "", ""
+    for k, v in svc:
+        if k in ("TimeoutStopSec", "TimeoutSec"):
+            skey, stop = k, v
     if stop:
         sec = _timespan_sec(stop)
         if stop.strip().lower() == "infinity" or sec == 0:
