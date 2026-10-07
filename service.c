@@ -1147,6 +1147,11 @@ int service_spawn(service_t *svc) {
         close(sync[1]);
         read(sync[0], &c, 1);
         close(sync[0]);
+        int null_fd = open("/dev/null", O_RDONLY);
+        if (null_fd >= 0) {
+            dup2(null_fd, STDIN_FILENO);
+            if (null_fd > 0) close(null_fd);
+        }
         char log_path[256];
         mkdir("/var/log/schema-init", 0755);
         snprintf(log_path, sizeof(log_path), "/var/log/schema-init/%s.log", svc->name);
