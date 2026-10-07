@@ -27,6 +27,14 @@ check("no User -> needs_root", "needs_root=1\n" in body)
 check("Restart absent -> no_restart", "no_restart=1\n" in body)
 check("critical default", "critical=0\n" in body)
 
+try:
+    si.unit_to_svc("console-getty", si.parse_unit(
+        "[Service]\nExecStart=-/sbin/agetty --noclear --keep-baud - 115200 $TERM\n"
+        "StandardInput=tty\nTTYPath=/dev/console\n"))
+    check("StandardInput=tty skipped", False)
+except si.Skip as e:
+    check("StandardInput=tty skipped", "StandardInput=tty" in str(e))
+
 # --- Restart / Type / User / Environment ---
 b2 = si.unit_to_svc("bar", si.parse_unit(
     "[Service]\nType=oneshot\nRestart=on-failure\nUser=nobody\n"

@@ -119,11 +119,15 @@ int main(int argc, char **argv) {
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         int first_errno = errno;
-        /* try local fallback */
-        memset(&addr, 0, sizeof(addr));
-        addr.sun_family = AF_UNIX;
-        strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
-        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int connected = 0;
+        /* try local fallback only when explicitly requested */
+        if (getenv("SCHEMA_CTL_FALLBACK")) {
+            memset(&addr, 0, sizeof(addr));
+            addr.sun_family = AF_UNIX;
+            strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
+            connected = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+        }
+        if (!connected) {
             fprintf(stderr, "%s: %s\n", CTL_SOCK_PATH, strerror(first_errno));
             if (first_errno == EACCES || first_errno == EPERM)
                 fprintf(stderr, "schema-ctl talks to PID 1 as root: try sudo schema-ctl %s", cmd);
