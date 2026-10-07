@@ -3209,7 +3209,12 @@ static void shutdown_ordered(void) {
         int hold = 0;
         for (i = 0; i < svc_count; i++)
             if (alive[i] && (services[i].flags & SVC_STOP_FIRST)) hold = 1;
-        if (held && !hold) start = now;
+        if (held && !hold) {
+            snprintf(msg, sizeof msg, "stop_first services down in %llu ms",
+                     (unsigned long long)(now - start));
+            shut_log(msg);
+            start = now;
+        }
         held = hold;
         for (i = 0; i < svc_count; i++) {
             int blocked = 0;
