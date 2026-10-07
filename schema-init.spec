@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.3
+Version:        0.4.4
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -375,6 +375,11 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.4-1
+- Upgrades bring the installer's fixes to existing ISO installs: udev is
+  put under supervision live, and the services systemd had enabled are
+  imported once (they start at next boot)
+
 * Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.3-1
 - Installer imports the systemd-enabled units (cron, firewalld, smartd,
   tuned, timers and the rest) so an ISO install no longer boots without them
