@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.5
+Version:        0.4.6
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -383,6 +383,13 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.6-1
+- Shutdown stops the desktop session before system services (new stop_first=
+  and stop_timeout_sec= service keys). plasmashell hung on exit while CUPS
+  was stopping and was killed at every shutdown; after a first login that
+  left a broken panel
+- Documented that the first systemd boot after schema-init relabels the disk
+
 * Tue Oct 06 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.5-1
 - The KDE portal backend no longer aborts at every login: when the session
   bus starts it before kwin's display exists, it now waits for the display
