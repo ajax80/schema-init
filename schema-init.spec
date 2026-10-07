@@ -28,9 +28,9 @@ ExclusiveArch:  x86_64 aarch64
 schema-init is a PID 1 init system for Linux that supervises services through a
 weight-state machine instead of unit files and dependency graphs. It mounts
 pseudo-filesystems, spawns services in dependency order, reaps children and
-supervises restarts with bounded backoff. There is no journal daemon, no
-socket-activation engine and no D-Bus event loop; PID 1 is a single statically
-linked binary holding a few MB of RSS in one thread.
+supervises restarts with bounded backoff, and does socket activation itself.
+There is no journal daemon and no D-Bus event loop; PID 1 is a single
+statically linked binary holding a few MB of RSS in one thread.
 
 Installing this package does NOT change your init system. It only places the
 binaries and reference service files on disk. Booting schema-init is an
