@@ -173,8 +173,14 @@ static void timer_arm_persistent(service_t *svc) {
     }
 }
 
+static time_t mono_sec(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec;
+}
+
 static void eviction_tick(void) {
-    time_t now = time(NULL);
+    time_t now = mono_sec();
     int i = 0;
     while (i < eviction_count) {
         if (now < evictions[i].deadline) { i++; continue; }
@@ -732,7 +738,7 @@ static void reap(void) {
                 !(services[i].flags & SVC_ONESHOT) &&
                 ((WIFEXITED(status) && WEXITSTATUS(status) == 0) ||
                  (services[i].flags & SVC_NO_RESTART)) &&
-                time(NULL) - services[i].start_time >= LISTEN_MIN_RUN_SECS) {
+                mono_sec() - services[i].spawn_time_mono.tv_sec >= LISTEN_MIN_RUN_SECS) {
                 /* idle exit of a socket service: PID 1 still holds its
                  * sockets, the next connection starts it again */
                 services[i].inst.state = STATE_PERFECT;
@@ -2239,7 +2245,7 @@ static int get_poll_timeout(void) {
         }
     }
     for (i = 0; i < eviction_count; i++)
-        best = wake_min(best, (int64_t)evictions[i].deadline * 1000, now_r, WAKE_CAL_CAP_MS);
+        best = wake_min(best, (int64_t)evictions[i].deadline * 1000, now_m, WAKE_NONE);
     if (watched)
         best = wake_min(best, ready_backstop_due, now_m, WAKE_NONE);
     if (critical)
@@ -2402,7 +2408,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                     kill(services[j].child_pid, SIGTERM);
                     if (eviction_count < MAX_EVICTIONS) {
                         evictions[eviction_count].pid      = services[j].child_pid;
-                        evictions[eviction_count].deadline = time(NULL) + EVICT_GRACE_SECS;
+                        evictions[eviction_count].deadline = mono_sec() + EVICT_GRACE_SECS;
                         memcpy(evictions[eviction_count].cgroup,
                                services[j].cgroup_path,
                                sizeof(evictions[eviction_count].cgroup));
@@ -2682,6 +2688,10 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         snprintf(boot_argv0, sizeof boot_argv0, "%s", g.argv0);
     memcpy(evictions, ev, sizeof(eviction_t) * (size_t)nev);
     eviction_count = nev;
+    /* deadlines are monotonic now; an older image handed over wall-clock ones */
+    for (int k = 0; k < eviction_count; k++)
+        if (evictions[k].deadline > mono_sec() + EVICT_GRACE_SECS)
+            evictions[k].deadline = mono_sec() + EVICT_GRACE_SECS;
     init_start = g.init_start;
     if (g.nofile_soft)
         service_set_nofile_soft_at_boot((rlim_t)g.nofile_soft);

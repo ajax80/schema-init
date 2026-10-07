@@ -143,12 +143,15 @@ uint32_t service_probe_f8(service_t *svc, service_t *table, int count) {
 
 uint32_t service_probe_f9(service_t *svc, service_t *table, int count) {
     uint32_t f = 0;
-    time_t now = time(NULL);
+    struct timespec now;
     long mem;
 
-    /* F9_RETRY_COUNT / F9_RETRY_WIN */
+    /* F9_RETRY_COUNT / F9_RETRY_WIN — monotonic: an NTP step can't stretch it */
+    clock_gettime(CLOCK_MONOTONIC, &now);
     if (svc->restart_count < svc->max_restarts)     f |= F9_RETRY_COUNT;
-    if (now - svc->last_start >= COOLDOWN_SECS)     f |= F9_RETRY_WIN;
+    if ((!svc->spawn_time_mono.tv_sec && !svc->spawn_time_mono.tv_nsec) ||
+        now.tv_sec - svc->spawn_time_mono.tv_sec >= COOLDOWN_SECS)
+        f |= F9_RETRY_WIN;
 
     /* F9_FALL_EXISTS / F9_FALL_HEALTH — no fallback system yet, reserved */
     (void)table; (void)count;
@@ -1282,6 +1285,7 @@ int service_spawn(service_t *svc) {
         }
         svc_apply_env(svc, file_env, file_envc);
         svc_pass_listen(svc);
+        close_range(3 + svc->listen_open, ~0U, 0);
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             xargv[service_expand_argv(svc->argv, xargv, 63)] = NULL;
