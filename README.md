@@ -130,6 +130,8 @@ sudo sed -i -E 's#^exec=/usr/local/lib/schema/(schema-dbus-run\.sh|schema-udev-f
 sudo sed -i 's#/usr/local/lib/schema/schema-flip-apply#/usr/libexec/schema-init/schema-flip-apply#' /etc/sudoers.d/schema-flip
 ```
 
+The stock systemd boot entries stay in the GRUB menu as a fallback. SELinux is off while schema-init is PID 1, so files written then carry no labels, and the imported `selinux-autorelabel-mark` unit flags the disk for relabelling. The first boot of a systemd entry after running schema-init therefore relabels the whole filesystem and reboots once. That takes a few minutes and is expected; it is what makes the fallback safe to use.
+
 After the first login a wizard offers the *optional* **guided udev cutover** — that step retires `systemd-udevd` and hands `/dev` to schema-udev. Wi-Fi and wired profiles are unpinned from systemd's interface names before the switch, so the network survives it.
 
 > ⚠️ **What the udev flip does:** it kills `systemd-udevd` and makes **schema-udev** authoritative over device management. This is the whole point — watching your init own `/dev` — but it *is* a real change to how the box handles hardware. It's optional and guided; skip it and you still get schema-init as PID 1 with stock udev underneath.
