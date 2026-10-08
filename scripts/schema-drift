@@ -6,11 +6,12 @@
                                           profile's services exec
 
 PROFILE defaults to distros/fedora-kde/hosts/blakbox. Services are compared
-file by file (drop-in dirs included); live files with a backup-style suffix
-are ignored. Scripts are the /usr/local paths named by exec= and exec_pre=,
-looked up in PROFILE/scripts, then scripts/, then distros/fedora-kde/scripts
-(migrate's order). Paths an RPM owns, and paths listed in PROFILE/drift-ignore,
-are not tracked.
+file by file (drop-in dirs included); a file with anything after its .svc,
+.grp or .conf extension is a backup and is ignored. Scripts are the paths named
+by exec= and exec_pre= outside the distro's own dirs, looked up in PROFILE/scripts, then migrate's helper
+dirs (scripts/, rail/scripts, fedora-kde/scripts), then tests/livetest. Paths
+an RPM owns, and paths listed in PROFILE/drift-ignore, are not tracked; files
+named only in args= (e.g. firewall rules) are not compared.
 """
 import filecmp
 import os
@@ -19,8 +20,11 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BACKUP = re.compile(r"\.(bak|retired|disabled|pre-|pilot)|\.bak-|\.retired-|\.disabled-|\.pre-")
-SEARCH = ("scripts", "../../../../scripts", "../../scripts")
+BACKUP = re.compile(r"\.(svc|grp|conf)\.[^/]+$")
+SEARCH = ("scripts", "../../../../scripts", "../../../fedora-installer/rail/scripts",
+          "../../scripts", "../../../../tests/livetest")
+ALIASES = {"schema-doctor": "schema-doctor.py"}
+SYSTEM = ("/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/", "/usr/lib/", "/usr/libexec/")
 
 
 def tree(d):
@@ -41,20 +45,22 @@ def exec_paths(svcdir):
                 k, _, v = line.strip().partition("=")
                 if k in ("exec", "exec_pre") and v:
                     p = v.split()[0].lstrip("-+")
-                    if p.startswith("/usr/local/"):
+                    if p.startswith("/") and not p.startswith(SYSTEM):
                         paths.add(p)
     return paths
 
 
-def rpm_owned(path):
+def rpm_owned(root, path):
     try:
-        return subprocess.run(["rpm", "-qf", path], capture_output=True).returncode == 0
+        return subprocess.run(["rpm", "--root", root, "-qf", path],
+                              capture_output=True).returncode == 0
     except FileNotFoundError:
         return False
 
 
 def resolve(profile, path):
     base = os.path.basename(path)
+    base = ALIASES.get(base, base)
     for d in SEARCH:
         src = os.path.normpath(os.path.join(profile, d, base))
         if os.path.isfile(src):
@@ -79,16 +85,18 @@ def main(argv):
     if os.path.isfile(ign):
         ignore = {l.strip() for l in open(ign) if l.strip() and not l.startswith("#")}
     scripts = sorted(p for p in exec_paths(svc) - ignore
-                     if not rpm_owned(os.path.join(root, p.lstrip("/"))))
+                     if not rpm_owned(root, p))
 
     if listing:
+        rc = 0
         for p in scripts:
             src = resolve(profile, p)
             if src:
                 print(src, p)
             else:
                 print("schema-drift: no repo copy of %s" % p, file=sys.stderr)
-        return 0
+                rc = 1
+        return rc
 
     live = os.path.join(root, "etc/schema-init/services")
     rs, ls = tree(svc), tree(live)

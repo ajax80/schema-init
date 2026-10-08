@@ -398,7 +398,9 @@ case "${DISTRO}+${DE}" in
 esac
 
 if [ -n "$FORCE_PROFILE" ]; then
-    if [ -d "distros/$FORCE_PROFILE" ]; then
+    if [ "$FORCE_PROFILE" = fedora-kde ]; then
+        echo -e "  ${RED}--profile fedora-kde: no installable profile; use the migrate wizard (sudo schema-migrate).${NC}"; exit 1
+    elif [ -d "distros/$FORCE_PROFILE" ]; then
         PROFILE="$FORCE_PROFILE"
         echo -e "  ${GREEN}Using --profile override: ${PROFILE}${NC}"
     else

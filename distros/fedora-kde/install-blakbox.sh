@@ -25,22 +25,28 @@ printf "==> ensuring 'schema' group (read-only schema-ctl without sudo)\n"
 getent group schema >/dev/null || groupadd --system schema
 id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx schema || usermod -aG schema "$TARGET_USER"
 
-printf "==> installing services (hosts/blakbox, backup of the old set first)\n"
+printf "==> installing services (hosts/blakbox; the old set is moved to /root)\n"
 HOST="$REPO/distros/fedora-kde/hosts/blakbox"
-[ -d "$SVC_DIR" ] && cp -a "$SVC_DIR" "/root/schema-services.bak-$(date +%Y%m%d-%H%M%S)"
+LIST="$(mktemp)"
+"$REPO/scripts/schema-drift" "$HOST" --list-scripts > "$LIST"
+[ -d "$SVC_DIR" ] && mv "$SVC_DIR" "/root/schema-services.bak-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$SVC_DIR"
 cp -a "$HOST/services/." "$SVC_DIR/"
+sed -i -e "s|^user=1000\$|user=$TARGET_UID|" -e "s|/run/user/1000/|/run/user/$TARGET_UID/|" \
+    "$SVC_DIR/pipewire.svc" "$SVC_DIR/pipewire-pulse.svc" "$SVC_DIR/wireplumber.svc"
 
-printf "==> installing scripts the services exec\n"
-"$REPO/scripts/schema-drift" "$HOST" --list-scripts | while read -r src dst; do
+printf "==> installing scripts (RPM-owned ones are left to the RPM)\n"
+put() { rpm -qf "$2" >/dev/null 2>&1 || install -Dm0755 "$1" "$2"; }
+# schema-plasma-autologin.sh calls these to claim and release its session id;
+# they go in first so a half-finished install never leaves it without them.
+put "$REPO/scripts/schema-session-register"   "$BIN_DIR/schema-session-register"
+put "$REPO/scripts/schema-session-unregister" "$BIN_DIR/schema-session-unregister"
+while read -r src dst; do
     install -Dm0755 "$src" "$dst"
-done
-cp "$REPO/distros/fedora-kde/scripts/plasma-session-start.sh" "$BIN_DIR/plasma-session-start.sh"
-cp "$REPO/distros/fedora-kde/scripts/plasmashell-shim"        "$BIN_DIR/plasmashell-shim"
-cp "$REPO/scripts/schema-session-register"                    "$BIN_DIR/schema-session-register"
-cp "$REPO/scripts/schema-session-unregister"                  "$BIN_DIR/schema-session-unregister"
-chmod +x "$BIN_DIR/plasma-session-start.sh" "$BIN_DIR/plasmashell-shim" \
-    "$BIN_DIR/schema-session-register" "$BIN_DIR/schema-session-unregister"
+done < "$LIST"
+rm -f "$LIST"
+put "$REPO/distros/fedora-kde/scripts/plasma-session-start.sh" "$BIN_DIR/plasma-session-start.sh"
+put "$REPO/distros/fedora-kde/scripts/plasmashell-shim"        "$BIN_DIR/plasmashell-shim"
 
 printf "==> building KDE Plasma sd_booted shim (fixes ~30%% idle CPU with no systemd user session)\n"
 gcc -shared -fPIC -o /usr/local/lib/mock_sd.so "$REPO/distros/fedora-kde/scripts/mock_sd.c" -ldl
