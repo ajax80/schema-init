@@ -1,2 +1,2 @@
 #!/bin/sh
-exec runuser -u ollama -- /usr/local/bin/ollama serve
+exec setpriv --reuid=ollama --regid="$(id -g ollama)" --init-groups -- env HOME="$(getent passwd ollama | cut -d: -f6)" USER=ollama LOGNAME=ollama /usr/local/bin/ollama serve

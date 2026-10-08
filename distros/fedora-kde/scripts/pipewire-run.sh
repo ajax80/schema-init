@@ -6,4 +6,4 @@ SCHEMA_UID="${SCHEMA_UID:-1000}"
 mkdir -p "/run/user/$SCHEMA_UID"
 chown "$SCHEMA_UID:$SCHEMA_UID" "/run/user/$SCHEMA_UID"
 chmod 700 "/run/user/$SCHEMA_UID"
-exec runuser -u "$SCHEMA_USER" -- env XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" /usr/bin/pipewire
+exec prlimit --rtprio=70 --nice=39 --memlock=4294967296 --nofile=1048576 -- setpriv --reuid="$SCHEMA_USER" --regid="$(id -g "$SCHEMA_USER")" --init-groups -- env HOME="$(getent passwd "$SCHEMA_USER" | cut -d: -f6)" USER="$SCHEMA_USER" LOGNAME="$SCHEMA_USER" XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" /usr/bin/pipewire

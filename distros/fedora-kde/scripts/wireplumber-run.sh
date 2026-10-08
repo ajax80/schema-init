@@ -32,7 +32,7 @@ while ! harvest; do
     sleep 1
 done
 
-exec runuser -u "$SCHEMA_USER" -- env \
+exec prlimit --rtprio=70 --nice=39 --memlock=4294967296 --nofile=1048576 -- setpriv --reuid="$SCHEMA_USER" --regid="$(id -g "$SCHEMA_USER")" --init-groups -- env HOME="$(getent passwd "$SCHEMA_USER" | cut -d: -f6)" USER="$SCHEMA_USER" LOGNAME="$SCHEMA_USER" \
     XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" \
     GIO_USE_VFS=local \
     ${DBUS_SESSION_BUS_ADDRESS:+DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"} \
