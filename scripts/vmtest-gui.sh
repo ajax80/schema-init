@@ -112,10 +112,10 @@ key)
     mon "sendkey $KEYS" >/dev/null && echo ">> sent $KEYS"
     ;;
 type)
-    # Type a line into the guest, one sendkey per character. The ISO ships
-    # getty-tty2 as `agetty --autologin root`, so ctrl-alt-f2 gives a root shell
-    # with no schema-ctl in the image -- reading the per-service logs from that
-    # shell is the only way to see why a service did not come up.
+    # Type a line into the guest, one sendkey per character. ctrl-alt-f2 gives a
+    # getty on tty2; log in as the installed user, then `sudo -i`. There is no
+    # schema-ctl in the image -- reading the per-service logs from that shell is
+    # the only way to see why a service did not come up.
     TEXT=${2?usage: $0 type \"<line>\"}
     declare -A K=(
         [' ']=spc ['/']=slash ['-']=minus ['.']=dot [',']=comma [';']=semicolon
