@@ -168,11 +168,11 @@ int main(void) {
     assert(service_expand_argv(in, out, 3) == 3);
 
     setenv("Q", "-r 0 --prefer '^(Web Content|Iso)$' --avoid \"a b\" c\\ d\ne", 1);
-    setenv("BADQ", "x 'y z", 1);
+    setenv("BADQ", "x\r\n'y z", 1);
     char *qin[] = {"/bin/e", "$Q", "$BADQ", NULL};
     m = service_expand_argv(qin, out, 31);
     const char *qexp[] = {"/bin/e", "-r", "0", "--prefer", "^(Web Content|Iso)$", "--avoid",
-                          "a b", "c d", "e", "x", "'y", "z"};
+                          "a b", "c d", "e", "x", "y z"};
     assert(m == (int)(sizeof qexp / sizeof qexp[0]));
     for (int i = 0; i < m; i++) assert(strcmp(out[i], qexp[i]) == 0);
 

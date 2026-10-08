@@ -597,19 +597,15 @@ int service_env_file_read(const char *path, char **pairs, int max) {
     return n;
 }
 
+static int split_words(const char *s, char **out, int max, int relax);
+
 int service_expand_argv(char *const *argv, char **out, int max) {
     int n = 0;
     for (int i = 0; argv[i] && n < max; i++) {
         const char *a = argv[i];
         if (a[0] == '$' && env_name_ok(a + 1, strlen(a + 1))) {
             const char *v = getenv(a + 1);
-            char *dup = strdup(v ? v : ""), *save = NULL;
-            for (char *c = dup; (c = strchr(c, '\n')); ) *c = ' ';
-            int k = service_split_cmdline(dup, out + n, max - n);
-            if (k >= 0) { n += k; continue; }
-            for (char *w = strtok_r(dup, " \t", &save); w && n < max;
-                 w = strtok_r(NULL, " \t", &save))
-                out[n++] = w;
+            n += split_words(v ? v : "", out + n, max - n, 1);
             continue;
         }
         char *res = NULL;
@@ -637,26 +633,26 @@ int service_expand_argv(char *const *argv, char **out, int max) {
     return n;
 }
 
-int service_split_cmdline(const char *s, char **out, int max) {
+static int split_words(const char *s, char **out, int max, int relax) {
     int n = 0;
     size_t len = strlen(s);
     while (n < max) {
-        s += strspn(s, " \t");
+        s += strspn(s, " \t\n\r");
         if (!*s) break;
         char *w = malloc(len + 1), *o = w;
         if (!w) break;
-        while (*s && *s != ' ' && *s != '\t') {
+        while (*s && !strchr(" \t\n\r", *s)) {
             if (*s == '\'') {
                 for (s++; *s && *s != '\''; ) *o++ = *s++;
-                if (!*s) { free(w); goto bad; }
-                s++;
+                if (!*s && !relax) { free(w); goto bad; }
+                if (*s) s++;
             } else if (*s == '"') {
                 for (s++; *s && *s != '"'; ) {
                     if (*s == '\\' && s[1]) s++;
                     *o++ = *s++;
                 }
-                if (!*s) { free(w); goto bad; }
-                s++;
+                if (!*s && !relax) { free(w); goto bad; }
+                if (*s) s++;
             } else if (*s == '\\' && s[1]) {
                 s++;
                 *o++ = *s++;
@@ -670,6 +666,10 @@ int service_split_cmdline(const char *s, char **out, int max) {
 bad:
     while (n) free(out[--n]);
     return -1;
+}
+
+int service_split_cmdline(const char *s, char **out, int max) {
+    return split_words(s, out, max, 0);
 }
 
 static void svc_apply_env(const service_t *svc, char **file_env, int file_envc) {
