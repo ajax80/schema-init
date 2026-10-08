@@ -82,53 +82,26 @@ Services marked `critical=1` never reach EXCISED — they enter DORMANT and retr
 
 ## Quickstart
 
-Replacing PID 1 sounds scary. It isn't, if you do it in the right order — you never lose your existing systemd boot, and you can back out with a single reboot at every step. Four lanes, safest first.
+Replacing PID 1 sounds scary. It isn't, if you do it in the right order: your systemd boot entries stay in the GRUB menu, and you can back out with one reboot at every step. Pick the row that matches what you want:
 
-### The easiest path — install from COPR (Fedora KDE)
+| You want to… | Do this | What it touches |
+|---|---|---|
+| Try it without risking a disk | [Build, test, boot it in a VM](#build-from-source-any-distro) — or boot the installer ISO in a VM | Nothing on your machine |
+| Put it on a spare machine | [Install from the ISO](#fresh-install--the-installer-iso) | The disk you pick in the installer |
+| Convert your Fedora KDE install | [COPR + `schema-migrate`](#convert-fedora-kde-in-place) | Adds a non-default boot entry; one command undoes it |
+| Run it on another distro | [`setup.sh` from source](#build-from-source-any-distro) | Adds a non-default boot entry |
 
-On Fedora you don't have to build anything or write a USB stick. Enable the COPR and install:
+### Fresh install — the installer ISO
 
-```sh
-sudo dnf copr enable ajax80/schema-init
-sudo dnf install schema-init-migrate      # the CLI migrator + schema-udev, prebuilt
-# optional GUI front-end:
-sudo dnf install schema-init-wizard
-```
-
-This installs schema-init alongside systemd and **changes nothing about how you boot** — the packages just put the tooling on your system. To actually convert a Fedora KDE box, run the in-place migrator (proven end-to-end in a VM), which writes a **non-default** `(schema-init)` boot entry your normal Fedora still overrides:
+Grab the prebuilt Fedora 44 installer (`schema-netinst44-installer-*.iso`) from the [latest release](https://github.com/ajax80/schema-init/releases/latest) and write it to a USB stick (or point a VM at it):
 
 ```sh
-sudo schema-migrate --discover                 # reads the system, changes nothing
-sudo schema-migrate --deploy --prebuilt        # uses the packaged binaries, no compiler
-# reboot, pick the (schema-init) entry; to undo:  sudo schema-migrate --uninstall
-```
-
-`schema-init-wizard` is a guided GUI wrapper around that same reversible flow with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both) but hasn't yet been run on real hardware, so if you want the conservative route, use the `schema-migrate` CLI above; both do the same thing and back out the same way.
-
-The COPR builds three packages: `schema-init` (the init), `schema-init-migrate` (the migrator + `schema-udev`), and `schema-init-wizard` (the GUI).
-
-`ajax80/schema-init` only gets tagged releases. Every commit to master also builds into `ajax80/schema-init-dev`. That repo is untested and meant for the author's own machines, so don't enable it on a box you depend on.
-
-### The fast path — boot a prebuilt installer (no compiler, no Docker)
-
-If you just want to *see it run*, grab the prebuilt Fedora 44 installer (`schema-netinst44-installer-*.iso`) from the [latest release](https://github.com/ajax80/schema-init/releases/latest):
-
-```sh
-# download the .iso from the release, then:
 sudo dd if=schema-netinst44-installer-<version>.iso of=/dev/sdX bs=4M status=progress oflag=direct && sync
 ```
 
-Boot that USB stick (or point a VM at the ISO) and the installer gives you a full KDE desktop running **schema-init as PID 1**. It is a netinst image: the machine needs a network connection during install (it pulls the KDE package set). Verified on real hardware — a clean install on a Dell i3 laptop boots straight to Plasma with no hand fixes.
+It is Fedora's normal installer: you pick the disk, user and timezone on the usual screens, and nothing is decided for you. It is a netinst image, so the machine needs a network connection during install (it pulls the KDE package set). The result is a full KDE desktop running **schema-init as PID 1**. Verified on real hardware — a clean install on a Dell i3 laptop boots straight to Plasma with no hand fixes.
 
-The install is package-managed: schema-init, -daemons, -session and -migrate are RPMs and the `ajax80/schema-init` COPR repo is enabled, so `sudo dnf upgrade` brings later builds and PID 1 re-execs onto them in place. -migrate also brings the flip tools and health checks (in `/usr/libexec/schema-init`), the `systemctl` stand-in, and the import of any systemd unit a later package installs. A box installed from the v0.4.1 ISO or earlier has the files but not the packages; convert it once, then reboot (the edited service files hold off reloads and re-execs until then):
-
-```sh
-sudo dnf copr enable ajax80/schema-init
-sudo dnf install schema-init schema-init-daemons schema-init-session schema-init-migrate
-sudo schema-ctl reexec && sudo rm -f /usr/local/bin/schema-ctl
-sudo sed -i -E 's#^exec=/usr/local/lib/schema/(schema-dbus-run\.sh|schema-udev-flip-healthcheck\.sh|schema-dbus-flip-healthcheck\.sh)$#exec=/usr/libexec/schema-init/\1#' /etc/schema-init/services/*.svc
-sudo sed -i 's#/usr/local/lib/schema/schema-flip-apply#/usr/libexec/schema-init/schema-flip-apply#' /etc/sudoers.d/schema-flip
-```
+The install is package-managed: schema-init, -daemons, -session and -migrate are RPMs and the `ajax80/schema-init` COPR repo is enabled, so `sudo dnf upgrade` brings later builds and PID 1 re-execs onto them in place. -migrate also brings the flip tools and health checks (in `/usr/libexec/schema-init`), the `systemctl` stand-in, and the import of any systemd unit a later package installs.
 
 The stock systemd boot entries stay in the GRUB menu as a fallback. SELinux is off while schema-init is PID 1, so files written then carry no labels, and the imported `selinux-autorelabel-mark` unit flags the disk for relabelling. The first boot of a systemd entry after running schema-init therefore relabels the whole filesystem and reboots once. That takes a few minutes and is expected; it is what makes the fallback safe to use.
 
@@ -138,15 +111,58 @@ After the first login a wizard offers the *optional* **guided udev cutover** —
 
 After the restart, just log back into your desktop — it finishes the switch on its own; you don't have to click anything. If you arm the switch but then never return to the desktop, a headless seatbelt safely undoes it after the next boot and puts you back on stock udev — no damage, nothing to clean up. (One consequence of that safety net: it's a *desktop* on-ramp — a machine you run headless won't keep the flip, because the confirmation comes from the graphical session coming up.)
 
-Prefer to build it yourself, or try it with zero risk to a real disk first? Take the lanes below instead — they compile from source and boot in a throwaway VM.
+<details>
+<summary>Installed from the v0.4.1 ISO or earlier? Convert it to packages once.</summary>
+
+Those installs have the files but not the packages. Convert once, then reboot (the edited service files hold off reloads and re-execs until then):
+
+```sh
+sudo dnf copr enable ajax80/schema-init
+sudo dnf install schema-init schema-init-daemons schema-init-session schema-init-migrate
+sudo schema-ctl reexec && sudo rm -f /usr/local/bin/schema-ctl
+sudo sed -i -E 's#^exec=/usr/local/lib/schema/(schema-dbus-run\.sh|schema-udev-flip-healthcheck\.sh|schema-dbus-flip-healthcheck\.sh)$#exec=/usr/libexec/schema-init/\1#' /etc/schema-init/services/*.svc
+sudo sed -i 's#/usr/local/lib/schema/schema-flip-apply#/usr/libexec/schema-init/schema-flip-apply#' /etc/sudoers.d/schema-flip
+```
+
+</details>
+
+### Convert Fedora KDE in place
+
+`schema-migrate` converts your running Fedora KDE install without a compiler. It reads your system, installs schema-init, ports the KDE session seam (seatd, `schema-logind`, autologin, PipeWire, polkit), bridges udev so the network and `/dev` come up, imports the units systemd had enabled, writes a **non-default** `(schema-init)` GRUB entry (your normal Fedora stays the default), makes the boot menu visible so you can pick it by hand, and heals the session gaps on first boot with `schema-doctor`.
+
+```sh
+sudo dnf copr enable ajax80/schema-init
+sudo dnf install schema-init-migrate            # the migrator + schema-udev, prebuilt
+sudo schema-migrate --discover                  # reads the system, changes nothing
+sudo schema-migrate --deploy --prebuilt         # uses the packaged binaries
+```
+
+Reboot, pick the entry ending **(schema-init)** from the boot menu. To go back: boot your normal Fedora entry and run `sudo schema-migrate --uninstall` — it reverses exactly what it wrote (manifest-tracked) and leaves pre-existing packages alone.
+
+Proven end-to-end in a Fedora-KDE VM: deploy → schema-init as PID 1 with a full Plasma desktop → `--uninstall` → back on systemd. It has not yet been run on real hardware. v1 is Fedora KDE only; on anything else use `setup.sh` below.
+
+`sudo dnf install schema-init-wizard` adds a guided GUI around the same reversible flow, with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both) but not on real hardware either; the CLI above does the same thing and backs out the same way.
+
+Without the COPR, run the migrator from a clone; without `--prebuilt` it builds from source and pulls gcc/make via dnf the first time:
+
+```sh
+git clone https://github.com/ajax80/schema-init && cd schema-init
+sudo python3 distros/fedora-installer/migrate/schema-migrate.py --deploy
+```
+
+**COPR channels.** `ajax80/schema-init` only gets tagged releases. Every commit to master also builds into `ajax80/schema-init-dev`; that repo is untested and meant for the author's own machines, so don't enable it on a box you depend on. The COPR builds `schema-init` (the init), `schema-init-daemons`, `schema-init-session`, `schema-init-migrate` (the migrator + `schema-udev`) and `schema-init-wizard` (the GUI).
+
+### Build from source (any distro)
+
+Four steps, safest first. Each one is worth doing before the next.
 
 **Requirements:**
 
-- **Build + test (Lane 0):** `gcc`, `make`, `pkg-config`, `libacl` headers (`libacl1-dev` on Debian/Ubuntu, `libacl-devel` on Fedora — the udev `uaccess` tests link `-lacl`), and `dbus-1` headers (`libdbus-1-dev` on Debian/Ubuntu, `dbus-devel` on Fedora — the default `make` target builds `schema-dbus` and `make test` compiles the sdbus tests against them). On Fedora the static link also needs `glibc-static` (Debian bundles `libc.a` in `libc6-dev`). Nothing else. The init itself is a single static binary with no runtime dependencies.
+- **Build + test:** `gcc`, `make`, `pkg-config`, `libacl` headers (`libacl1-dev` on Debian/Ubuntu, `libacl-devel` on Fedora — the udev `uaccess` tests link `-lacl`), and `dbus-1` headers (`libdbus-1-dev` on Debian/Ubuntu, `dbus-devel` on Fedora — the default `make` target builds `schema-dbus` and `make test` compiles the sdbus tests against them). On Fedora the static link also needs `glibc-static` (Debian bundles `libc.a` in `libc6-dev`). Nothing else. The init itself is a single static binary with no runtime dependencies.
 - **`schema-logind`:** additionally `python3-dbus` + `python3-gobject`.
-- **Build a bootable ISO (Lane 1):** additionally **Docker** (or podman) — the ISO is built from a `debian:bookworm` container — plus `squashfs-tools` (`mksquashfs`), and network access to pull the base image. To boot that ISO in a window: `qemu-system-x86_64`, `xorriso`, `socat`.
+- **Build a bootable ISO:** additionally **Docker** (or podman) — the ISO is built from a `debian:bookworm` container — plus `squashfs-tools` (`mksquashfs`), and network access to pull the base image. To boot that ISO in a window: `qemu-system-x86_64`, `xorriso`, `socat`.
 
-### Lane 0 — Build and test it (needs only a compiler, zero risk)
+#### 1. Build and test it (zero risk)
 
 ```sh
 git clone https://github.com/ajax80/schema-init && cd schema-init
@@ -154,18 +170,18 @@ make            # build the static binary
 make test       # ~30 unit tests: schema state machine, cgroup tiering, udev parity, …
 ```
 
-No root, no Docker, no VM — this just proves the code compiles clean and passes its test suite on your machine. Start here.
+No root, no Docker, no VM — this just proves the code compiles clean and passes its test suite on your machine.
 
-### Lane 1 — Watch it boot in a VM (still zero risk to your machine)
+#### 2. Watch it boot in a VM (zero risk)
 
 ```sh
 sudo scripts/make-iso.sh              # build a bootable schema-init ISO (needs Docker + squashfs-tools)
 scripts/vmtest-gui.sh boot ~/schema-init.iso   # boot that ISO in QEMU (needs qemu + xorriso + socat)
 ```
 
-`make-iso.sh` builds a full Debian + desktop live image with schema-init as PID 1 — it pulls a `debian:bookworm` container, so **Docker must be installed and running** and the first build downloads a few hundred MB. `vmtest-gui.sh` then boots the ISO you just built (it takes the ISO path as an argument — build it first). Nothing here touches your real bootloader or `/dev`; this is how you see it boot a real system before you trust it with yours.
+`make-iso.sh` builds a full Debian + desktop live image with schema-init as PID 1 — it pulls a `debian:bookworm` container, so **Docker must be installed and running** and the first build downloads a few hundred MB. `vmtest-gui.sh` then boots the ISO you just built (it takes the ISO path as an argument — build it first). Nothing here touches your real bootloader or `/dev`.
 
-### Lane 2 — Install alongside systemd (reversible)
+#### 3. Install alongside systemd (reversible)
 
 ```sh
 sudo ./setup.sh
@@ -177,31 +193,11 @@ The installer **does not replace systemd.** It compiles, installs the binaries, 
 - optionally **imports your enabled systemd services** as `.svc` stubs so the box comes up running what it ran before (`scripts/gen-services.sh`);
 - writes a **separate `schema-init (fallback)` GRUB entry** and leaves stock systemd as the default.
 
-Reboot, pick **schema-init (fallback)** from the boot menu, and try it. If anything is wrong, reboot and choose your normal systemd entry — you're back, untouched. Iterate on your service files, boot the schema-init entry again. In this lane `systemd-udevd` still runs; schema-init does not retire anything.
+Reboot, pick **schema-init (fallback)** from the boot menu, and try it. If anything is wrong, reboot and choose your normal systemd entry — you're back, untouched. Iterate on your service files, boot the schema-init entry again. In this step `systemd-udevd` still runs; schema-init does not retire anything.
 
 > Run `scripts/gen-mounts.sh` (preview) before rebooting and read the `mount-fstab.sh` snapshot — confirm every mount is right. It shows what your `/etc/fstab` decides; the boot reads the fstab itself, so fix any mistake there.
 
-### Fedora KDE — the in-place migration wizard (turnkey Lane 2)
-
-If your daily driver *is* Fedora KDE, `schema-migrate` is Lane 2 tuned for exactly that: it converts your running install in place, keeps your desktop working, and reverses with one command. It reads your system, builds and installs schema-init, ports the KDE session seam (seatd, `schema-logind`, autologin, PipeWire, polkit), bridges udev so the network and `/dev` come up, writes a **non-default** `(schema-init)` GRUB entry (your normal Fedora stays the default), makes the boot menu visible so you can pick it by hand, and heals the session gaps on first boot with `schema-doctor`.
-
-```sh
-git clone https://github.com/ajax80/schema-init   # e.g. onto a USB stick
-cd schema-init
-# preview only — reads the system, changes nothing:
-sudo python3 distros/fedora-installer/migrate/schema-migrate.py --discover
-# deploy (builds from source; pulls gcc/make via dnf the first time):
-sudo python3 distros/fedora-installer/migrate/schema-migrate.py --deploy
-# or, if schema-init is already installed (e.g. from the COPR package),
-# skip the compiler entirely and use the packaged /usr/bin binaries:
-sudo python3 distros/fedora-installer/migrate/schema-migrate.py --deploy --prebuilt
-```
-
-Reboot, pick the entry ending **(schema-init)** from the boot menu. To go back: boot your normal Fedora entry, then run the same command with `--uninstall` — it reverses exactly what it wrote (manifest-tracked) and leaves pre-existing packages alone.
-
-Proven end-to-end in a Fedora-KDE VM (legacy BIOS): deploy → schema-init as PID 1 with a full Plasma desktop → `--uninstall` → back on systemd. v1 is Fedora KDE only; other distros and desktops are the next milestone. The generic, distro-agnostic version of this path is Lane 2 above (`./setup.sh`).
-
-### Lane 3 — Make it the default (once you trust it)
+#### 4. Make it the default (once you trust it)
 
 When the schema-init entry has booted cleanly a few times, make it default (set `GRUB_DEFAULT` / your distro's boot-entry default to it). Only then, if you want the full reclamation, opt into the [authoritative udev cutover](#authoritative-mode-the-udevd-cutover) — a deliberate, checksum-backed, reversible flip that retires `systemd-udevd`. It is the advanced path; validate it in `schema-vmtest` LIVE mode first.
 
