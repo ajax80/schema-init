@@ -1,0 +1,10 @@
+name=cron-daily
+exec=/usr/bin/run-parts
+args=/etc/cron.daily
+needs_root=1
+on_calendar=03:15
+persistent=1
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

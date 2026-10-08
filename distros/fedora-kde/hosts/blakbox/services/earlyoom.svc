@@ -1,0 +1,12 @@
+# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)
+name=earlyoom
+exec=/usr/bin/earlyoom
+args=$EARLYOOM_ARGS
+env_file=-/etc/default/earlyoom
+expand_args=1
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=full
+protect_home=1

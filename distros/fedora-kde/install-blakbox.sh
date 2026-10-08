@@ -9,28 +9,11 @@ fi
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SVC_DIR="/etc/schema-init/services"
 BIN_DIR="/usr/local/bin"
-KERNEL="$(uname -r)"
 
 # Desktop user the session/audio services run as. Override: TARGET_USER=foo ./install-blakbox.sh
 TARGET_USER="${TARGET_USER:-${SUDO_USER:-$(id -un 1000 2>/dev/null)}}"
 TARGET_UID="$(id -u "$TARGET_USER")"
 USER_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-
-printf "==> building schema-init\n"
-cd "$REPO"
-make clean
-make
-
-printf "==> installing binaries\n"
-# /sbin/schema-init is the running PID 1; a plain cp hits ETXTBSY.
-# Copy to a temp on the same fs and rename atomically over the busy inode.
-cp schema-init /sbin/schema-init.new
-chmod 755 /sbin/schema-init.new
-mv -f /sbin/schema-init.new /sbin/schema-init
-cp schema-ctl "$BIN_DIR/schema-ctl"
-chmod 755 "$BIN_DIR/schema-ctl"
-cp schema-journal-sink "$BIN_DIR/schema-journal-sink"
-chmod 755 "$BIN_DIR/schema-journal-sink"
 
 printf "==> writing user.conf (session/audio services read this)\n"
 mkdir -p /etc/schema-init
@@ -42,60 +25,22 @@ printf "==> ensuring 'schema' group (read-only schema-ctl without sudo)\n"
 getent group schema >/dev/null || groupadd --system schema
 id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx schema || usermod -aG schema "$TARGET_USER"
 
-printf "==> installing services\n"
+printf "==> installing services (hosts/blakbox, backup of the old set first)\n"
+HOST="$REPO/distros/fedora-kde/hosts/blakbox"
+[ -d "$SVC_DIR" ] && cp -a "$SVC_DIR" "/root/schema-services.bak-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$SVC_DIR"
-cp "$REPO/distros/fedora-kde/services/"*.svc "$SVC_DIR/"
-cp "$REPO/distros/fedora-kde/services/"*.grp "$SVC_DIR/"
-sed -i -e "s|^user=1000\$|user=$TARGET_UID|" -e "s|/run/user/1000/|/run/user/$TARGET_UID/|" \
-    "$SVC_DIR/pipewire.svc" "$SVC_DIR/pipewire-pulse.svc" "$SVC_DIR/wireplumber.svc"
-cp "$REPO/services/avahi.svc"   "$SVC_DIR/"
-cp "$REPO/services/chronyd.svc" "$SVC_DIR/"
-# journald-compat shim (opt-in upstream; we enable it fleet-wide)
-cp "$REPO/services/journal-sink.svc.example" "$SVC_DIR/journal-sink.svc"
+cp -a "$HOST/services/." "$SVC_DIR/"
 
-printf "==> installing scripts\n"
-cp "$REPO/distros/fedora-kde/scripts/mount-efi.sh"         "$BIN_DIR/mount-efi.sh"
-cp "$REPO/distros/fedora-kde/scripts/mount-home-blakbox.sh" "$BIN_DIR/mount-home.sh"
-cp "$REPO/distros/fedora-kde/scripts/network-up.sh"        "$BIN_DIR/network-up.sh"
-cp "$REPO/distros/fedora-kde/scripts/polkitd-wrapper.sh"   "$BIN_DIR/polkitd-wrapper.sh"
-cp "$REPO/distros/fedora-kde/scripts/schema-audio-start.sh" "$BIN_DIR/schema-audio-start.sh"
-cp "$REPO/distros/fedora-kde/scripts/schema-logind.py"     "$BIN_DIR/schema-logind.py"
-cp "$REPO/distros/fedora-kde/scripts/schema-plasma-autologin.sh" "$BIN_DIR/schema-plasma-autologin.sh"
-# schema-plasma-autologin.sh calls these to claim and release its session id.
-# Copied before it so a half-finished install cannot leave a login path
-# referring to a register script that is not there yet.
-cp "$REPO/scripts/schema-session-register"                 "$BIN_DIR/schema-session-register"
-cp "$REPO/scripts/schema-session-unregister"               "$BIN_DIR/schema-session-unregister"
-cp "$REPO/distros/fedora-kde/scripts/sound-modules.sh"     "$BIN_DIR/sound-modules.sh"
-cp "$REPO/distros/fedora-kde/scripts/network-blakbox.sh" "$BIN_DIR/network-blakbox.sh"
-cp "$REPO/distros/fedora-kde/scripts/udhcpc.sh"         "$BIN_DIR/udhcpc.sh"
-cp "$REPO/distros/fedora-kde/scripts/seatd-run.sh"         "$BIN_DIR/seatd-run.sh"
+printf "==> installing scripts the services exec\n"
+"$REPO/scripts/schema-drift" "$HOST" --list-scripts | while read -r src dst; do
+    install -Dm0755 "$src" "$dst"
+done
 cp "$REPO/distros/fedora-kde/scripts/plasma-session-start.sh" "$BIN_DIR/plasma-session-start.sh"
-cp "$REPO/distros/fedora-kde/scripts/wireplumber-run.sh"   "$BIN_DIR/wireplumber-run.sh"
-cp "$REPO/distros/fedora-kde/scripts/nordvpnd-wrapper.sh"     "$BIN_DIR/nordvpnd-wrapper.sh"
 cp "$REPO/distros/fedora-kde/scripts/plasmashell-shim"        "$BIN_DIR/plasmashell-shim"
-cp "$REPO/distros/fedora-kde/scripts/zram-swap.sh"            "$BIN_DIR/zram-swap.sh"
-cp "$REPO/distros/fedora-kde/scripts/nvidia-modules.sh"       "$BIN_DIR/nvidia-modules.sh"
-chmod +x \
-    "$BIN_DIR/mount-efi.sh" \
-    "$BIN_DIR/mount-home.sh" \
-    "$BIN_DIR/network-up.sh" \
-    "$BIN_DIR/polkitd-wrapper.sh" \
-    "$BIN_DIR/schema-audio-start.sh" \
-    "$BIN_DIR/schema-logind.py" \
-    "$BIN_DIR/schema-plasma-autologin.sh" \
-    "$BIN_DIR/schema-session-register" \
-    "$BIN_DIR/schema-session-unregister" \
-    "$BIN_DIR/sound-modules.sh" \
-    "$BIN_DIR/network-blakbox.sh" \
-    "$BIN_DIR/udhcpc.sh" \
-    "$BIN_DIR/seatd-run.sh" \
-    "$BIN_DIR/plasma-session-start.sh" \
-    "$BIN_DIR/wireplumber-run.sh" \
-    "$BIN_DIR/nordvpnd-wrapper.sh" \
-    "$BIN_DIR/plasmashell-shim" \
-    "$BIN_DIR/zram-swap.sh" \
-    "$BIN_DIR/nvidia-modules.sh"
+cp "$REPO/scripts/schema-session-register"                    "$BIN_DIR/schema-session-register"
+cp "$REPO/scripts/schema-session-unregister"                  "$BIN_DIR/schema-session-unregister"
+chmod +x "$BIN_DIR/plasma-session-start.sh" "$BIN_DIR/plasmashell-shim" \
+    "$BIN_DIR/schema-session-register" "$BIN_DIR/schema-session-unregister"
 
 printf "==> building KDE Plasma sd_booted shim (fixes ~30%% idle CPU with no systemd user session)\n"
 gcc -shared -fPIC -o /usr/local/lib/mock_sd.so "$REPO/distros/fedora-kde/scripts/mock_sd.c" -ldl
@@ -130,24 +75,5 @@ printf "==> installing dbus policy\n"
 mkdir -p /usr/share/dbus-1/system.d
 cp "$REPO/distros/shared/dbus/schema-logind.conf" /usr/share/dbus-1/system.d/
 
-printf "==> installing plymouth theme\n"
-cd "$REPO/assets/plymouth-theme"
-python3 generate-frames.py
-THEME_DIR="/usr/share/plymouth/themes/airzdowne"
-mkdir -p "$THEME_DIR"
-cp airzdowne.plymouth "$THEME_DIR/"
-cp ./*.png "$THEME_DIR/" 2>/dev/null || true
-plymouth-set-default-theme airzdowne
-printf "==> rebuilding initramfs (this takes 1-2 minutes)\n"
-dracut --force "/boot/initramfs-${KERNEL}.img" "$KERNEL"
-
-printf "==> adding GRUB entry\n"
-grubby \
-    --add-kernel="/boot/vmlinuz-${KERNEL}" \
-    --initrd="/boot/initramfs-${KERNEL}.img" \
-    --title="Fedora (schema-init)" \
-    --args="root=UUID=90557be5-57a8-4ff5-bc32-e1bc83be6d75 ro rootflags=subvol=root quiet splash split_lock_detect=off pci=pcie_bus_perf nowatchdog nmi_watchdog=0 nvidia-drm.modeset=1 init=/sbin/schema-init"
-
 printf "\n==> done\n"
-printf "Reboot and select 'Fedora (schema-init)' from the GRUB menu.\n"
-printf "Your default systemd entry is unchanged.\n"
+printf "New services load at the next boot. schema-drift should now report no drift.\n"

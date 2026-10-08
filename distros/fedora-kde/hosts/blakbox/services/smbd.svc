@@ -1,0 +1,13 @@
+name=smbd
+exec=/usr/bin/smbd
+args=-F
+args=--no-process-group
+dep=samba-prep
+dep=network-manager
+needs_root=1
+critical=0
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=0
+notify=1

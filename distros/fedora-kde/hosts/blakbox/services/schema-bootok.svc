@@ -1,0 +1,11 @@
+name=schema-bootok
+exec=/usr/bin/schema-bootok
+dep=display-manager
+oneshot=1
+needs_root=1
+critical=0
+priority=peripheral
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

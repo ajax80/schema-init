@@ -1,0 +1,12 @@
+name=avahi
+exec=/usr/sbin/avahi-daemon
+args=--no-drop-root
+args=-s
+dep=dbus
+needs_root=1
+critical=0
+priority=peripheral
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

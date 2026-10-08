@@ -1,0 +1,13 @@
+name=logger
+exec=/usr/bin/logger
+args=-t schema-init
+args=schema-init heartbeat
+oneshot=1
+dep=journal-sink
+needs_root=0
+critical=0
+priority=peripheral
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

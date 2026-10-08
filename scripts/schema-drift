@@ -1,0 +1,117 @@
+#!/usr/bin/python3 -I
+"""Compare a host profile in the repo with what is live on this machine.
+
+  schema-drift [PROFILE] [--root DIR]     report drift, exit 1 if any
+  schema-drift [PROFILE] --list-scripts   print "SRC DST" for each script the
+                                          profile's services exec
+
+PROFILE defaults to distros/fedora-kde/hosts/blakbox. Services are compared
+file by file (drop-in dirs included); live files with a backup-style suffix
+are ignored. Scripts are the /usr/local paths named by exec= and exec_pre=,
+looked up in PROFILE/scripts, then scripts/, then distros/fedora-kde/scripts
+(migrate's order). Paths an RPM owns, and paths listed in PROFILE/drift-ignore,
+are not tracked.
+"""
+import filecmp
+import os
+import re
+import subprocess
+import sys
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKUP = re.compile(r"\.(bak|retired|disabled|pre-|pilot)|\.bak-|\.retired-|\.disabled-|\.pre-")
+SEARCH = ("scripts", "../../../../scripts", "../../scripts")
+
+
+def tree(d):
+    out = set()
+    for dp, _, fs in os.walk(d):
+        for f in fs:
+            rel = os.path.relpath(os.path.join(dp, f), d)
+            if not BACKUP.search(rel):
+                out.add(rel)
+    return out
+
+
+def exec_paths(svcdir):
+    paths = set()
+    for rel in sorted(tree(svcdir)):
+        with open(os.path.join(svcdir, rel)) as fh:
+            for line in fh:
+                k, _, v = line.strip().partition("=")
+                if k in ("exec", "exec_pre") and v:
+                    p = v.split()[0].lstrip("-+")
+                    if p.startswith("/usr/local/"):
+                        paths.add(p)
+    return paths
+
+
+def rpm_owned(path):
+    try:
+        return subprocess.run(["rpm", "-qf", path], capture_output=True).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def resolve(profile, path):
+    base = os.path.basename(path)
+    for d in SEARCH:
+        src = os.path.normpath(os.path.join(profile, d, base))
+        if os.path.isfile(src):
+            return src
+    return None
+
+
+def main(argv):
+    root, listing, profile = "/", False, None
+    it = iter(argv)
+    for a in it:
+        if a == "--root":
+            root = next(it)
+        elif a == "--list-scripts":
+            listing = True
+        else:
+            profile = a
+    profile = os.path.abspath(profile or os.path.join(REPO, "distros/fedora-kde/hosts/blakbox"))
+    svc = os.path.join(profile, "services")
+    ignore = set()
+    ign = os.path.join(profile, "drift-ignore")
+    if os.path.isfile(ign):
+        ignore = {l.strip() for l in open(ign) if l.strip() and not l.startswith("#")}
+    scripts = sorted(p for p in exec_paths(svc) - ignore
+                     if not rpm_owned(os.path.join(root, p.lstrip("/"))))
+
+    if listing:
+        for p in scripts:
+            src = resolve(profile, p)
+            if src:
+                print(src, p)
+            else:
+                print("schema-drift: no repo copy of %s" % p, file=sys.stderr)
+        return 0
+
+    live = os.path.join(root, "etc/schema-init/services")
+    rs, ls = tree(svc), tree(live)
+    drift = []
+    for rel in sorted(rs & ls):
+        if not filecmp.cmp(os.path.join(svc, rel), os.path.join(live, rel), shallow=False):
+            drift.append("changed      services/%s" % rel)
+    drift += ["live only    services/%s" % r for r in sorted(ls - rs)]
+    drift += ["repo only    services/%s" % r for r in sorted(rs - ls)]
+    for p in scripts:
+        src, dst = resolve(profile, p), os.path.join(root, p.lstrip("/"))
+        if not src:
+            drift.append("not in repo  %s" % p)
+        elif not os.path.isfile(dst):
+            drift.append("missing live %s" % p)
+        elif not filecmp.cmp(src, dst, shallow=False):
+            drift.append("changed      %s  (repo: %s)" % (p, os.path.relpath(src, REPO)))
+    for d in drift:
+        print(d)
+    if not drift:
+        print("no drift: %s matches %s" % (os.path.relpath(profile, REPO), root))
+    return 1 if drift else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

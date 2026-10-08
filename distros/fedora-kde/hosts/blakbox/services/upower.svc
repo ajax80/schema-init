@@ -1,0 +1,10 @@
+name=upower
+exec=/usr/bin/schema-subreaper
+args=/usr/libexec/upowerd
+dep=dbus
+needs_root=1
+critical=0
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

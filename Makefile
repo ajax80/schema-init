@@ -161,8 +161,6 @@ install-migrate: schema-udev schema-systemctl verify-rules-live schema-dbus
 	cp -a distros/fedora-installer/rail/services/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-installer/rail/services/
 	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-installer/rail/scripts
 	cp -a distros/fedora-installer/rail/scripts/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-installer/rail/scripts/
-	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/services
-	cp -a distros/fedora-kde/services/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/services/
 	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/scripts
 	cp -a distros/fedora-kde/scripts/. $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/scripts/
 	install -d $(DESTDIR)$(DATADIR)/schema-init/migrate/distros/fedora-kde/config

@@ -244,7 +244,7 @@ If you're reading the source to evaluate it, start here. PID 1 is ~4,800 lines o
 | `services/` | The reference service set — real `.svc` and `.grp` files for `sshd`, `dbus`, `udev`, `network-manager`, `display-manager`, and the `network-stack` / `display-stack` groups. Copy these as your starting templates. |
 | `desktop/` | `schema-desktop.c` — an SDL2 live visualizer that maps `schema_shm.h` into an 8-node grid and shows every service's weight-state in real time. This is how you *watch* the state machine run. |
 | `scripts/` | Build and integration tooling: `make-iso*.sh` / `make-usb.sh` / `fix-usb.sh` (bootable media), `schema-logind.py` (a logind compatibility shim), and `verify_traceability.py` (traceability check for the aspirational Daedalus IEC 62304 spec in `docs/daedalus/`). |
-| `distros/` | Per-distribution profiles — `fedora-kde/` and `raspberry-pi-zero-w/`. Each carries the service files and boot glue that distro needs. |
+| `distros/` | Per-distribution profiles — `fedora-installer/rail/` (the portable Fedora KDE set), `fedora-kde/` (desktop-session glue + `hosts/blakbox/`) and `raspberry-pi-zero-w/`. |
 | `docs/`, `assets/` | Documentation and images. |
 
 Top-level: `setup.sh` (newcomer bootstrap — dep check, desktop-environment detection, GRUB entry generation) and `Makefile` (static build; see [Building](#building)).
@@ -1341,7 +1341,7 @@ Full KDE Plasma 6 desktop on Fedora 44 with schema-init as PID 1. Boots from a b
 | `bluetoothd` | Starts `bluez` daemon — registers `org.bluez`, restores KDE Bluetooth applet |
 | `zram-swap` | oneshot — zstd-compressed zram swap device; replaces systemd's `zram-generator` |
 
-See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for full installation instructions and key fixes.
+Install it with the migrate wizard or the installer ISO; both use the portable service set in `distros/fedora-installer/rail/services`. `distros/fedora-kde/hosts/blakbox/` is the author's own machine, kept byte-for-byte in step with the live box by `scripts/schema-drift`. See [`distros/fedora-kde/README.md`](distros/fedora-kde/README.md) for the layout and key fixes.
 
 ### Raspberry Pi Zero W (`distros/raspberry-pi-zero-w/`)
 

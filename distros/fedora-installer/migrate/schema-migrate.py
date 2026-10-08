@@ -120,16 +120,13 @@ def deploy_prevent_set(manifest, dry_run=False):
     for name in ps["service"]:
         if name in skip:
             continue
-        for base in ("distros/fedora-installer/rail/services",
-                     "distros/fedora-kde/services"):
-            src = find_source(base + "/" + name + ".svc")
-            if src:
-                dst = P("etc/schema-init/services/" + name + ".svc")
-                _copy_into(src, dst, manifest, dry_run)
-                written.append(dst)
-                if not dry_run:
-                    manifest.add_file("/etc/schema-init/services/" + name + ".svc")
-                break
+        src = find_source("distros/fedora-installer/rail/services/" + name + ".svc")
+        if src:
+            dst = P("etc/schema-init/services/" + name + ".svc")
+            _copy_into(src, dst, manifest, dry_run)
+            written.append(dst)
+            if not dry_run:
+                manifest.add_file("/etc/schema-init/services/" + name + ".svc")
     return written
 
 

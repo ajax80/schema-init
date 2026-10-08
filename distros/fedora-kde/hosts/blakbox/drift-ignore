@@ -1,0 +1,2 @@
+# private: restic repo host + key paths; lives only on blakbox
+/usr/local/bin/blakbox-backup

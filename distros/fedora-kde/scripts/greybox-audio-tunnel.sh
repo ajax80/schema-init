@@ -1,9 +1,0 @@
-#!/bin/sh
-[ -r /etc/schema-init/user.conf ] && . /etc/schema-init/user.conf
-SCHEMA_USER="${SCHEMA_USER:-$(awk -F: '$3>=1000 && $3<65000 {print $1; exit}' /etc/passwd)}"
-SCHEMA_UID="${SCHEMA_UID:-1000}"
-[ -z "$SCHEMA_USER" ] && { echo "greybox-audio: no desktop user found — set SCHEMA_USER in /etc/schema-init/user.conf" >&2; exit 0; }
-SINK_SERVER="${SINK_SERVER:-}"
-[ -z "$SINK_SERVER" ] && { echo "greybox-audio: SINK_SERVER unset in /etc/schema-init/user.conf" >&2; exit 0; }
-exec runuser -u "$SCHEMA_USER" -- env XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" \
-    pactl load-module module-tunnel-sink server="$SINK_SERVER" sink_name=greybox latency_msec=500

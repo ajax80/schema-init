@@ -1,0 +1,14 @@
+name=wsdd
+exec=/usr/bin/wsdd
+args=--shortlog
+args=--interface
+args=eth0
+args=--workgroup
+args=AIRZDOWN
+user=wsdd
+dep=network-manager
+critical=0
+private_tmp=1
+protect_system=full
+protect_home=1
+no_new_privs=1

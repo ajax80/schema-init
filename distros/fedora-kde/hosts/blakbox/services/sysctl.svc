@@ -1,0 +1,9 @@
+name=sysctl
+exec=/usr/libexec/schema-init/schema-sysctl-apply
+oneshot=1
+needs_root=1
+critical=0
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

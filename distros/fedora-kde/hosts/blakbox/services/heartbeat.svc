@@ -1,0 +1,12 @@
+name=heartbeat
+exec=/bin/sleep
+args=infinity
+dep=logger
+oneshot=0
+needs_root=0
+critical=0
+priority=peripheral
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1
