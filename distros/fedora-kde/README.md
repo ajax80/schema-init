@@ -37,11 +37,11 @@ sudo mkdir -p /etc/schema-init/services
 sudo cp services/* /etc/schema-init/services/
 ```
 
-The session and audio services (`schema-plasma-autologin.sh`, `pipewire-run.sh`, etc.) run the desktop as a specific user. They read `SCHEMA_USER`/`SCHEMA_UID` from `/etc/schema-init/user.conf`, falling back to the first uid-1000 account if absent. Point them at your account:
+The session services (`schema-plasma-autologin.sh`, etc.) run the desktop as a specific user. They read `SCHEMA_USER`/`SCHEMA_UID` from `/etc/schema-init/user.conf`, falling back to the first uid-1000 account if absent. Point them at your account:
 ```
 printf 'SCHEMA_USER=%s\nSCHEMA_UID=%s\n' "$USER" "$(id -u)" | sudo tee /etc/schema-init/user.conf
 ```
-`install-blakbox.sh` writes this file automatically from the invoking user.
+`install-blakbox.sh` writes this file automatically from the invoking user, and rewrites `user=1000` in the audio services (`pipewire`, `pipewire-pulse`, `wireplumber`) to your uid.
 
 ### 3. Install scripts
 ```

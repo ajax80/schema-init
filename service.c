@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
@@ -1235,13 +1236,49 @@ int service_spawn(service_t *svc) {
                 close(ofd);
             }
         }
+        for (int i = 0; i < svc->rlim_count; i++) {
+            struct rlimit rl = { svc->rlim[i].cur, svc->rlim[i].max };
+            if (svc->rlim[i].res == RLIMIT_NOFILE &&
+                (rl.rlim_cur == RLIM_INFINITY || rl.rlim_max == RLIM_INFINITY)) {
+                FILE *f = fopen("/proc/sys/fs/nr_open", "r");
+                unsigned long nr = 1048576;
+                if (f) { fscanf(f, "%lu", &nr); fclose(f); }
+                if (rl.rlim_cur == RLIM_INFINITY) rl.rlim_cur = nr;
+                if (rl.rlim_max == RLIM_INFINITY) rl.rlim_max = nr;
+            }
+            if (setrlimit(svc->rlim[i].res, &rl) != 0) {
+                dprintf(2, "[schema-init] LIMIT FAILED for %s: resource %d: %d\n",
+                        svc->name, svc->rlim[i].res, errno);
+                _exit(126);
+            }
+        }
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
             svc_run_pre(svc, 1);
         }
         if (service_apply_hardening(svc) != 0)
             _exit(126);
+        if (svc->run_user[0] && !svc->run_uid && strcmp(svc->run_user, "root") != 0) {
+            char *end;
+            unsigned long id = strtoul(svc->run_user, &end, 10);
+            struct passwd *pw = !*end && id < (uid_t)-1 ? getpwuid((uid_t)id)
+                              : *end ? getpwnam(svc->run_user) : NULL;
+            if (!pw) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: no user %s\n",
+                        svc->name, svc->run_user);
+                _exit(126);
+            }
+            svc->run_uid = pw->pw_uid;
+            svc->run_gid = pw->pw_gid;
+        }
         if (svc->run_uid) {
+            struct passwd *pw = getpwuid(svc->run_uid);
+            if (pw) {
+                setenv("HOME", pw->pw_dir, 1);
+                setenv("USER", pw->pw_name, 1);
+                setenv("LOGNAME", pw->pw_name, 1);
+                setenv("SHELL", pw->pw_shell, 1);
+            }
             if (!svc->ns_protect_home) {
                 char xdg[48];
                 snprintf(xdg, sizeof(xdg), "/run/user/%u", (unsigned)svc->run_uid);
@@ -1713,6 +1750,76 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     return 1;
 }
 
+static const struct { const char *key; int res; } rlim_keys[] = {
+    { "limit_cpu", RLIMIT_CPU },         { "limit_fsize", RLIMIT_FSIZE },
+    { "limit_data", RLIMIT_DATA },       { "limit_stack", RLIMIT_STACK },
+    { "limit_core", RLIMIT_CORE },       { "limit_rss", RLIMIT_RSS },
+    { "limit_nofile", RLIMIT_NOFILE },   { "limit_as", RLIMIT_AS },
+    { "limit_nproc", RLIMIT_NPROC },     { "limit_memlock", RLIMIT_MEMLOCK },
+    { "limit_locks", RLIMIT_LOCKS },     { "limit_sigpending", RLIMIT_SIGPENDING },
+    { "limit_msgqueue", RLIMIT_MSGQUEUE }, { "limit_nice", RLIMIT_NICE },
+    { "limit_rtprio", RLIMIT_RTPRIO },   { "limit_rttime", RLIMIT_RTTIME },
+};
+
+/* systemd's Limit*= value: a number with an optional K/M/G/T (1024) suffix, or
+ * "infinity". limit_nice also takes a signed nice level, -20..19. */
+static int rlim_value(const char *s, int nice, rlim_t *out) {
+    char *end;
+    if (strcmp(s, "infinity") == 0) { *out = RLIM_INFINITY; return 0; }
+    if (nice && (*s == '-' || *s == '+')) {
+        long n = strtol(s, &end, 10);
+        if (*end || n < -20 || n > 19) return -1;
+        *out = (rlim_t)(20 - n);
+        return 0;
+    }
+    if (!isdigit((unsigned char)*s)) return -1;
+    errno = 0;
+    unsigned long long v = strtoull(s, &end, 10);
+    const char *suf = "KMGT", *k = *end ? strchr(suf, *end) : NULL;
+    if (errno || (*end && (!k || end[1]))) return -1;
+    if (k) {
+        int sh = 10 * (k - suf + 1);
+        if (v > (ULLONG_MAX >> sh)) return -1;
+        v <<= sh;
+    }
+    if ((rlim_t)v == RLIM_INFINITY) return -1;
+    *out = (rlim_t)v;
+    return 0;
+}
+
+/* limit_<name>=VALUE or SOFT:HARD. 1 = taken, 0 = not a limit key, -1 = bad value.
+ * An empty value drops that limit (drop-ins use this to undo the base file). */
+static int svc_parse_rlimit(service_t *svc, const char *key, const char *val) {
+    size_t i;
+    for (i = 0; i < sizeof rlim_keys / sizeof rlim_keys[0]; i++)
+        if (strcmp(key, rlim_keys[i].key) == 0) break;
+    if (i == sizeof rlim_keys / sizeof rlim_keys[0]) return 0;
+    int res = rlim_keys[i].res, slot;
+    for (slot = 0; slot < svc->rlim_count; slot++)
+        if (svc->rlim[slot].res == res) break;
+    if (!*val) {
+        if (slot < svc->rlim_count)
+            svc->rlim[slot] = svc->rlim[--svc->rlim_count];
+        return 1;
+    }
+    char buf[64], *colon;
+    rlim_t cur, max;
+    snprintf(buf, sizeof buf, "%s", val);
+    colon = strchr(buf, ':');
+    if (colon) *colon = '\0';
+    if (rlim_value(buf, res == RLIMIT_NICE, &cur) != 0) return -1;
+    if (colon) {
+        if (rlim_value(colon + 1, res == RLIMIT_NICE, &max) != 0) return -1;
+        if (max != RLIM_INFINITY && (cur == RLIM_INFINITY || cur > max)) return -1;
+    } else
+        max = cur;
+    svc->rlim[slot].res = res;
+    svc->rlim[slot].cur = cur;
+    svc->rlim[slot].max = max;
+    if (slot == svc->rlim_count) svc->rlim_count++;
+    return 1;
+}
+
 /* One key=value line. 0 = ok, -1 = the service must be rejected. */
 static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, const char *path) {
     char *eq = strchr(line, '=');
@@ -1725,6 +1832,12 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
 
     if (pc->dropin && (nsr = svc_parse_dropin_line(svc, pc, line, val, path)) != 0)
         return nsr < 0 ? -1 : 0;
+    if ((nsr = svc_parse_rlimit(svc, line, val)) != 0) {
+        if (nsr > 0) return 0;
+        fprintf(stderr, "[schema-init] %s: bad %s='%s' (want N, NK/M/G/T, "
+                "infinity, or SOFT:HARD)\n", path, line, val);
+        return -1;
+    }
     if (strcmp(line, "name") == 0)
         strncpy(svc->name, val, sizeof(svc->name) - 1);
     else if (strcmp(line, "exec") == 0) {
@@ -1909,12 +2022,19 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     } else if (strcmp(line, "persistent") == 0) {
         if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
     } else if (strcmp(line, "user") == 0) {
-        struct passwd *pw = getpwnam(val);
-        if (pw) {
-            svc->run_uid = pw->pw_uid;
-            svc->run_gid = pw->pw_gid;
-            strncpy(svc->run_user, val, sizeof(svc->run_user) - 1);
-        }
+        char *end;
+        errno = 0;
+        unsigned long id = strtoul(val, &end, 10);
+        int num = *val && !*end;
+        struct passwd *pw = !num ? getpwnam(val)
+                          : !errno && id < (uid_t)-1 ? getpwuid((uid_t)id) : NULL;
+        svc->run_uid = pw ? pw->pw_uid : 0;
+        svc->run_gid = pw ? pw->pw_gid : 0;
+        memset(svc->run_user, 0, sizeof svc->run_user);
+        strncpy(svc->run_user, pw ? pw->pw_name : val, sizeof(svc->run_user) - 1);
+        if (!pw && *val)
+            fprintf(stderr, "[schema-init] %s: user=%s does not exist yet — "
+                    "it will be looked up again at start\n", path, val);
     }
     return 0;
 }

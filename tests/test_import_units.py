@@ -143,6 +143,20 @@ check("last assignment wins", "private_tmp=0\n" in hard("PrivateTmp=yes\nPrivate
 hw = hard("ProtectSystem=strict\nProtectHome=tmpfs\n")
 check("warnings lead the file", hw.startswith(si.WARN_PREFIX) and hw.count(si.WARN_PREFIX) == 2)
 
+# --- Limit*= -> limit_*= ---
+hl = hard("LimitNOFILE=1024:524288\nLimitMEMLOCK=infinity\nLimitNICE=-19\nLimitRTPRIO=70\nLimitCORE=8M\n")
+check("Limit*= translated",
+      all(x in hl for x in ("limit_nofile=1024:524288\n", "limit_memlock=infinity\n",
+                            "limit_nice=-19\n", "limit_rtprio=70\n", "limit_core=8M\n")))
+check("Limit*= -> no warning", si.WARN_PREFIX not in hl)
+hb = hard("LimitCPU=30s\nLimitNOFILE=-5\nLimitAS=1P\n")
+check("unsupported Limit values dropped + warned",
+      "limit_" not in hb and hb.count(si.WARN_PREFIX) == 3)
+hr = hard("LimitNOFILE=infinity:4096\nLimitSTACK=8192:1024\nLimitNICE=-25\nLimitAS=99999999999999T\n")
+check("Limit values PID 1 rejects are dropped + warned",
+      "limit_" not in hr and hr.count(si.WARN_PREFIX) == 4)
+check("Limit last assignment wins", "limit_nofile=2048\n" in hard("LimitNOFILE=1024\nLimitNOFILE=2048\n"))
+
 # --- ratholes -> Skip ---
 def skipped(name, txt):
     try:

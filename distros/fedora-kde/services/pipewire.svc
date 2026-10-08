@@ -1,8 +1,12 @@
 name=pipewire
-exec=/usr/local/bin/pipewire-run.sh
+exec=/usr/bin/pipewire
 dep=sound-modules
 dep=dbus
-needs_root=1
+user=1000
+limit_rtprio=70
+limit_nice=-19
+limit_memlock=4G
+limit_nofile=1048576
 stable_secs=3
 ready_path=/run/user/1000/pipewire-0
 priority=critical

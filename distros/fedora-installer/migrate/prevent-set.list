@@ -9,9 +9,7 @@ script schema-plasma-watchdog.sh
 script schema-autostart-runner.sh
 script schema-logind.py
 script seatd-run.sh
-script pipewire-run.sh
 script wireplumber-run.sh
-script pipewire-pulse-run.sh
 
 # --- config (from distros/fedora-kde/config/) ---
 config plasma-env

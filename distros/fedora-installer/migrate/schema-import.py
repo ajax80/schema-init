@@ -179,6 +179,42 @@ _TRUE = ("1", "yes", "true", "on")
 _FALSE = ("", "0", "no", "false", "off")
 
 
+_LIMITS = ("CPU", "FSIZE", "DATA", "STACK", "CORE", "RSS", "NOFILE", "AS", "NPROC",
+           "MEMLOCK", "LOCKS", "SIGPENDING", "MSGQUEUE", "NICE", "RTPRIO", "RTTIME")
+_LIMIT_VAL = re.compile(r"^(infinity|\d+[KMGT]?|[-+]\d+)$")
+_INF = float("inf")
+
+
+def _limit_num(x, nice):
+    """A Limit value as PID 1 reads it, or None if PID 1 would reject it."""
+    if not _LIMIT_VAL.match(x):
+        return None
+    if x == "infinity":
+        return _INF
+    if x[0] in "+-":
+        return 20 - int(x) if nice and -20 <= int(x) <= 19 else None
+    n = int(x.rstrip("KMGT")) << (10 * ("KMGT".index(x[-1]) + 1) if x[-1] in "KMGT" else 0)
+    return n if n < 2 ** 64 - 1 else None
+
+
+def limit_lines(svc):
+    """Limit<X>=VALUE[:HARD] -> limit_<x>=. Values PID 1 can't parse (time
+    spans like LimitCPU=30s, P/E suffixes) are dropped with a warning."""
+    lines, warns = [], []
+    for name in _LIMITS:
+        v = _get_last(svc, "Limit" + name)
+        if not v:
+            continue
+        parts = v.split(":")
+        nums = [_limit_num(x, name == "NICE") for x in parts]
+        if len(parts) > 2 or None in nums or (
+                len(nums) == 2 and nums[1] != _INF and nums[0] > nums[1]):
+            warns.append("Limit%s=%s not translated (unsupported value)" % (name, v))
+            continue
+        lines.append("limit_%s=%s" % (name.lower(), v))
+    return lines, warns
+
+
 def _hardening(svc):
     """The four hardening knobs, always explicit so the unit means the same
     thing whatever the host's hardening-default is. Returns (lines, warnings);
@@ -726,6 +762,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
     lines.extend(hard)
+    lim, lim_warns = limit_lines(svc)
+    lines.extend(lim)
+    warns.extend(lim_warns)
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)

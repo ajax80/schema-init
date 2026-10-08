@@ -281,6 +281,8 @@ typedef struct {
     uid_t            run_uid;            /* if non-zero: drop to this uid before exec */
     gid_t            run_gid;            /* companion gid for run_uid                 */
     char             run_user[32];       /* username string for initgroups            */
+    struct { int res; rlim_t cur, max; } rlim[16]; /* limit_*= keys, set before the uid drop */
+    int              rlim_count;
 
 
 
