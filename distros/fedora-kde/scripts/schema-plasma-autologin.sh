@@ -62,9 +62,6 @@ udevadm trigger --subsystem-match=input --action=add 2>/dev/null || true
 udevadm settle --timeout=10 2>/dev/null || true
 stty -F "/dev/tty$SCHEMA_VTNR" -echo 2>/dev/null || true
 clear > "/dev/tty$SCHEMA_VTNR" 2>/dev/null || true
-# A respawn after the user switched consoles must take its VT back: kwin draws
-# without it, but the kernel keeps feeding keys to the active VT's tty.
-timeout 5 chvt "$SCHEMA_VTNR" 2>/dev/null || true
 
 # Hand the DRM master from plymouth to the compositor. plymouthd is started in
 # the initramfs and persists across switch-root holding /dev/dri; with no
@@ -81,6 +78,9 @@ if command -v plymouth >/dev/null 2>&1; then
         sleep 0.1
     done
 fi
+# A respawn after the user switched consoles must take its VT back: kwin draws
+# without it, but the kernel keeps feeding keys to the active VT's tty.
+timeout 5 chvt "$SCHEMA_VTNR" 2>/dev/null || true
 
 REGISTER=/usr/local/bin/schema-session-register
 UNREGISTER=/usr/local/bin/schema-session-unregister

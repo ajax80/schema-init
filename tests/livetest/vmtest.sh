@@ -152,6 +152,12 @@ name=test-crashdep
 exec=/usr/bin/slowloop.sh
 dep=test-crash
 EOF
+cat > "$ROOT/etc/schema-init/services/test-hangdep.svc" <<'EOF'
+name=test-hangdep
+exec=/usr/bin/slowloop.sh
+dep=test-hang
+stable_secs=5
+EOF
 
 # Readiness-lost probe: run 1 goes ready, then deletes its ready_path and
 # stays alive. That is readiness-lost; it must restart now, not go dormant.
@@ -572,6 +578,7 @@ echo "===== RESTARTS-TEST ====="
 echo "crash-retries: $(grep -c 'test-crash .*retry-deep' "$RAIL")"
 echo "crash-dormant: $(grep -c 'test-crash .*dormant ' "$RAIL")"
 echo "crashdep-spawn: $(grep -c 'test-crashdep .*spawn' "$RAIL")"
+echo "hangdep-promote: $(grep -c 'test-hangdep .*promote' "$RAIL")"
 echo "rplost-lost: $(grep -c 'test-rplost .*readiness-lost' "$RAIL")"
 echo "rplost-dormant: $(grep -c 'test-rplost .*dormant' "$RAIL")"
 echo "rplost-spawn: $(grep -c 'test-rplost .*spawn' "$RAIL")"
@@ -699,6 +706,7 @@ grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL"
 grep -Eq "crash-retries: 3"  "$SERIAL" || { echo "  MISS: test-crash did not retry exactly max_restarts=3 times"; pass=0; }
 grep -Eq "crash-dormant: [1-9]" "$SERIAL" || { echo "  MISS: test-crash never went dormant"; pass=0; }
 grep -Eq "crashdep-spawn: [1-9]" "$SERIAL" || { echo "  MISS: dependent of a dormant non-critical dep never started"; pass=0; }
+grep -Eq "hangdep-promote: [1-9]" "$SERIAL" || { echo "  MISS: dependent of an excised non-critical dep never promoted"; pass=0; }
 grep -Eq "rplost-lost: [1-9]"   "$SERIAL" || { echo "  MISS: test-rplost readiness-lost not detected"; pass=0; }
 grep -Eq "rplost-dormant: 0"    "$SERIAL" || { echo "  MISS: test-rplost went dormant after readiness-lost"; pass=0; }
 grep -Eq "rplost-spawn: [2-9]"  "$SERIAL" || { echo "  MISS: test-rplost not respawned after readiness-lost"; pass=0; }

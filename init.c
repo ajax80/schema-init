@@ -1102,8 +1102,12 @@ static int ready_live(const service_t *svc) {
 static void ready_lost(service_t *svc) {
     service_log(svc, "readiness-lost");
     active_kill_service(svc);
-    restart_budget_refresh(svc);
-    if (svc->failsafe_cmd[0]) start_failsafe(svc);
+    if (svc->flags & SVC_NO_RESTART) {
+        svc->inst.state = STATE_EXCISED;
+        service_log(svc, "76-no-restart");
+        return;
+    }
+    start_failsafe(svc);
     svc->inst.state = STATE_RECOVERY;
 }
 

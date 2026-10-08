@@ -117,9 +117,11 @@ uint32_t service_probe_f8(service_t *svc, service_t *table, int count) {
     for (i = 0; i < MAX_DEPS && svc->dep_idx[i] >= 0; i++) {
         int di = svc->dep_idx[i];
         if (di >= count) { dep_ok = 0; break; }
-        if (table[di].inst.state == STATE_DORMANT &&
-            !(table[di].flags & SVC_CRITICAL)) continue;
-        if (table[di].inst.state == STATE_EXCISED) { dep_ok = 0; break; }
+        if (table[di].inst.state == STATE_EXCISED ||
+            table[di].inst.state == STATE_DORMANT) {
+            if (table[di].flags & SVC_CRITICAL) { dep_ok = 0; break; }
+            continue;
+        }
         if (table[di].inst.state != STATE_FUNDAMENTAL &&
             table[di].inst.state != STATE_SETTLED     &&
             table[di].inst.state != STATE_PERFECT)
