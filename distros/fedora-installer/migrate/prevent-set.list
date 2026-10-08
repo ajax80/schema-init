@@ -32,6 +32,7 @@ service network-manager
 service schema-namewatch
 service sshd
 service zram
+service zram-recompress
 service schema-doctor
 service schema-doctor-periodic
 service schema-migrate-finish

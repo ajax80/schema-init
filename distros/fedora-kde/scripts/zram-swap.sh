@@ -4,6 +4,16 @@ set -e
 # zswap in front of zram compresses every page twice
 echo N > /sys/module/zswap/parameters/enabled 2>/dev/null || true
 
+# Timer mode (zram-recompress.svc): pages untouched since the last run move
+# from lz4 to zstd, then everything is marked idle again
+if [ "${1:-}" = recompress ]; then
+    B=/sys/block/zram0
+    [ -e $B/recomp_algorithm ] && [ "$(cat $B/disksize 2>/dev/null || echo 0)" != "0" ] || exit 0
+    echo type=idle > $B/recompress 2>/dev/null || true
+    echo all > $B/idle
+    exit 0
+fi
+
 # If already active swap, exit successfully
 if grep -q "/zram0[[:space:]]" /proc/swaps; then
     printf "/dev/zram0 is already active swap.\n"
@@ -32,7 +42,11 @@ if [ -z "${ZRAM_SIZE:-}" ]; then
 fi
 
 # Configure zram
-echo zstd > /sys/block/zram0/comp_algorithm
+if [ -e /sys/block/zram0/recomp_algorithm ] && echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null; then
+    echo "algo=zstd priority=1" > /sys/block/zram0/recomp_algorithm 2>/dev/null || echo zstd > /sys/block/zram0/comp_algorithm
+else
+    echo zstd > /sys/block/zram0/comp_algorithm
+fi
 echo "$ZRAM_SIZE" > /sys/block/zram0/disksize
 
 # Initialize and enable swap
