@@ -1,0 +1,16 @@
+name=sddm
+exec=/usr/local/bin/schema-plasma-autologin.sh
+dep=display-stack
+dep=nvidia-modules
+dep=x11-tmpfiles
+dep=mount-home
+dep=pipewire
+needs_root=1
+critical=1
+priority=critical
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
+ready_path=/run/schema-plasma-ready
+stable_secs=60

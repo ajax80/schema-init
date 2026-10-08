@@ -9,7 +9,22 @@ Runs KDE Plasma 6 on Fedora 44 under schema-init as PID 1 (no systemd).
 - systemd user units (pipewire, wireplumber) → KDE autostart
 - systemd-resolved → static /etc/resolv.conf written at boot
 
-## Prerequisites
+## Layout
+
+- `scripts/`, `config/`: the desktop-session pieces (autologin, plasmashell shim, autostart runner, env hooks, seatd and wireplumber helpers). The RPM, the migrate wizard and the installer ISO install them from here.
+- `hosts/blakbox/`: one real machine's whole service set (`services/`) and the host-only scripts those services exec (`scripts/`). It is not a profile for other machines: it mounts specific disks by UUID and runs that box's own services.
+- The portable service set is `distros/fedora-installer/rail/services`. On Fedora KDE, install with the migrate wizard (`sudo schema-migrate`) or the installer ISO.
+
+## Reproducing blakbox
+
+```
+sudo distros/fedora-kde/install-blakbox.sh   # services + the scripts they exec; old set backed up to /root
+scripts/schema-drift                         # repo vs live; lists every difference, exit 1 if any
+```
+
+New services load at the next boot: PID 1 refuses to reload a `.svc` that changed since boot. When blakbox is changed by hand, copy the change into `hosts/blakbox/` and rerun `schema-drift` until it reports no drift. Paths in `hosts/blakbox/drift-ignore` (private scripts) and paths an RPM owns are not tracked.
+
+## Manual desktop extras
 
 ### User groups
 Add your user to the required device groups:
@@ -18,46 +33,7 @@ sudo usermod -a -G video,input,audio,wheel YOUR_USER
 ```
 Log out and back in (or reboot) for groups to take effect.
 
-### Btrfs layout (GreyBox reference)
-- Root subvolume: `schema` on UUID d595d899-40f1-4c8b-9310-402fe56c0422
-- Home subvolume: `home` on same UUID, mounted by mount-home.sh at boot
-
-If your layout differs, edit `scripts/mount-home.sh` and `services/mount-home.svc`.
-
-## Installation
-
-### 1. Install schema-init binary
-```
-sudo cp schema-init /sbin/init
-```
-
-### 2. Install service files
-```
-sudo mkdir -p /etc/schema-init/services
-sudo cp services/* /etc/schema-init/services/
-```
-
-The session services (`schema-plasma-autologin.sh`, etc.) run the desktop as a specific user. They read `SCHEMA_USER`/`SCHEMA_UID` from `/etc/schema-init/user.conf`, falling back to the first uid-1000 account if absent. Point them at your account:
-```
-printf 'SCHEMA_USER=%s\nSCHEMA_UID=%s\n' "$USER" "$(id -u)" | sudo tee /etc/schema-init/user.conf
-```
-`install-blakbox.sh` writes this file automatically from the invoking user, and rewrites `user=1000` in the audio services (`pipewire`, `pipewire-pulse`, `wireplumber`) to your uid.
-
-### 3. Install scripts
-```
-sudo cp scripts/network-up.sh /usr/local/bin/
-sudo cp scripts/mount-home.sh /usr/local/bin/
-sudo cp scripts/sound-modules.sh /usr/local/bin/
-sudo cp scripts/schema-audio-start.sh /usr/local/bin/
-sudo cp scripts/schema-plasma-autologin.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/network-up.sh \
-               /usr/local/bin/mount-home.sh \
-               /usr/local/bin/sound-modules.sh \
-               /usr/local/bin/schema-audio-start.sh \
-               /usr/local/bin/schema-plasma-autologin.sh
-```
-
-### 4. Install user configs (as YOUR_USER)
+### User configs (as YOUR_USER)
 ```
 mkdir -p ~/.config/autostart
 cp config/ksplashrc ~/.config/
@@ -65,12 +41,12 @@ cp config/plasma-session.conf ~/.config/
 cp config/autostart/schema-audio.desktop ~/.config/autostart/
 ```
 
-### 5. Install polkit rule
+### Polkit rule
 ```
 sudo cp config/polkit/10-schema-nm.rules /etc/polkit-1/rules.d/
 ```
 
-### 6. Install Plymouth boot theme
+### Plymouth boot theme
 ```
 sudo mkdir -p /usr/share/plymouth/themes/airzdowne
 sudo cp assets/plymouth-theme/airzdowne.plymouth /usr/share/plymouth/themes/airzdowne/
@@ -117,9 +93,9 @@ sudo grubby --update-kernel=ALL --args="quiet rhgb"
 | plasmashell ~30% idle CPU (ksycoca rebuild loop) | KService gates cache validation on libsystemd `sd_booted()` = `access("/run/systemd/system/")`. With no systemd that dir is absent, so it never confirms the cache is fresh and self-feeds an in-process rebuild loop (rebuild → `databaseChanged` → AppsModel refresh → rebuild). `scripts/mock_sd.c` → `/usr/local/lib/mock_sd.so` is an `LD_PRELOAD` shim overriding `access`/`stat`/`statx` to report that dir exists, applied to plasmashell only via the `plasmashell-shim` wrapper (used by both `~/.config/autostart/org.kde.plasmashell.desktop` and `plasma-session-start.sh`). Drops to 0% idle. A session-bus `systemd1` D-Bus mock was tried first and did **not** work — the gate is the filesystem check, not D-Bus. Tradeoff: ksycoca no longer auto-polls, so run `kbuildsycoca6` (from a full session shell, with flatpak paths in `XDG_DATA_DIRS`) after installing new apps |
 | Plymouth black screen on AMD GPU | `script` plugin fails on AMD Picasso/Raven DRM; use `ModuleName=two-step` with pre-rendered frames |
 | Boot shows `^[[3~` escape sequences | Plymouth restores TTY echo on exit; `schema-plasma-autologin.sh` runs `stty -echo` and clears tty1 before quitting Plymouth |
-| KDE Connect not discovered on LAN | `avahi-daemon` not running; `services/avahi.svc` starts it after dbus |
-| Clock wrong after reboot | `chronyd` not running; `services/chronyd.svc` starts it after network-manager |
-| KDE Bluetooth applet dead, no controller | `bluetoothd` not running so `org.bluez` never registers on the system bus; `services/bluetoothd.svc` starts `/usr/libexec/bluetooth/bluetoothd -n` after dbus. Loadable live with `schema-ctl add` — no reboot |
+| KDE Connect not discovered on LAN | `avahi-daemon` not running; `avahi.svc` starts it after dbus |
+| Clock wrong after reboot | `chronyd` not running; `chronyd.svc` starts it after network-manager |
+| KDE Bluetooth applet dead, no controller | `bluetoothd` not running so `org.bluez` never registers on the system bus; `bluetoothd.svc` starts `/usr/libexec/bluetooth/bluetoothd -n` after dbus. Loadable live with `schema-ctl add` — no reboot |
 | Xbox One/Series controller won't pair over BT | Kernel ERTM (Enhanced Re-Transmission Mode); disable it: `echo "options bluetooth disable_ertm=1" > /etc/modprobe.d/bluetooth.conf` and `echo 1 > /sys/module/bluetooth/parameters/disable_ertm` to apply live |
 | Periodic stutter/hitching under memory pressure (e.g. gaming) | No systemd means `zram-generator` never runs, so the system boots with **zero swap**. Under RAM pressure the kernel thrashes — discarding and re-reading page cache from disk (high iowait, processes stuck in `D` state), producing a stutter every few seconds. `zram-swap.svc` creates a zstd-compressed zram swap device at boot (~3–4x compression), restoring the headroom systemd would normally provide |
 

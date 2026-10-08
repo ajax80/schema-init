@@ -1,0 +1,13 @@
+name=tailscaled
+exec=/usr/bin/tailscaled
+args=--state=/var/lib/tailscale/tailscaled.state
+args=--socket=/run/tailscale/tailscaled.sock
+args=--port=41641
+dep=network-manager
+needs_root=1
+critical=0
+no_new_privs=1
+private_tmp=1
+protect_system=1
+protect_home=1
+notify=1

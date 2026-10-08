@@ -1,0 +1,10 @@
+name=logrotate
+exec=/usr/sbin/logrotate
+args=/etc/logrotate.conf
+needs_root=1
+on_calendar=00:10
+persistent=1
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

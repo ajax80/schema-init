@@ -1,0 +1,11 @@
+name=schema-board
+exec=/usr/bin/schema-board
+args=--tty
+args=/dev/tty8
+args=--interactive
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

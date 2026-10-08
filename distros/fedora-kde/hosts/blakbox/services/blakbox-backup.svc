@@ -1,0 +1,9 @@
+name=blakbox-backup
+exec=/usr/local/bin/blakbox-backup
+needs_root=1
+on_calendar=03:30
+persistent=1
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

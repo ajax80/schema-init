@@ -1,0 +1,9 @@
+name=x11-tmpfiles
+exec=/usr/local/bin/x11-tmpfiles.sh
+oneshot=1
+needs_root=1
+critical=0
+no_new_privs=1
+private_tmp=0
+protect_system=full
+protect_home=1

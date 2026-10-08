@@ -1,0 +1,10 @@
+name=boot-timing
+exec=/home/ajax80/schema-livetest/boot-capture.sh
+on_boot_sec=360
+dep=mount-home
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

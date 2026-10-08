@@ -1,0 +1,14 @@
+name=pipewire-pulse
+exec=/usr/bin/pipewire-pulse
+dep=pipewire
+user=1000
+limit_rtprio=70
+limit_nice=-19
+limit_memlock=4G
+limit_nofile=1048576
+stable_secs=3
+priority=critical
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

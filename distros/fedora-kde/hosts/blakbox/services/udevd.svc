@@ -1,0 +1,11 @@
+name=udevd
+exec=/usr/bin/schema-udev
+needs_root=1
+critical=1
+priority=critical
+ready_path=/run/schema-udev/ready
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
+oom_score_adj=-900

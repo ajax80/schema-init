@@ -1,0 +1,4 @@
+# private: restic repo host + key paths; lives only on blakbox
+/usr/local/bin/blakbox-backup
+# dev rig: a symlink into tests/livetest, not installed by install-blakbox.sh
+/home/ajax80/schema-livetest/boot-capture.sh

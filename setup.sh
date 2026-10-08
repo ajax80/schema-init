@@ -384,7 +384,8 @@ echo -e "  Distro: ${DISTRO}  |  DE: ${DE}"
 
 case "${DISTRO}+${DE}" in
     fedora+kde|rhel+kde|centos+kde|almalinux+kde)
-        PROFILE="fedora-kde" ;;
+        echo -e "  ${YELLOW}Fedora KDE: the supported path is the migrate wizard (sudo schema-migrate,${NC}"
+        echo -e "  ${YELLOW}from the schema-init-migrate RPM). No desktop profile installed here.${NC}" ;;
     fedora+cinnamon|rhel+cinnamon)
         PROFILE="fedora-cinnamon" ;;
     debian+cinnamon|ubuntu+cinnamon|linuxmint+cinnamon)
@@ -397,7 +398,9 @@ case "${DISTRO}+${DE}" in
 esac
 
 if [ -n "$FORCE_PROFILE" ]; then
-    if [ -d "distros/$FORCE_PROFILE" ]; then
+    if [ "$FORCE_PROFILE" = fedora-kde ]; then
+        echo -e "  ${RED}--profile fedora-kde: no installable profile; use the migrate wizard (sudo schema-migrate).${NC}"; exit 1
+    elif [ -d "distros/$FORCE_PROFILE" ]; then
         PROFILE="$FORCE_PROFILE"
         echo -e "  ${GREEN}Using --profile override: ${PROFILE}${NC}"
     else
@@ -416,11 +419,6 @@ if [ -n "$PROFILE" ]; then
         [ -r /etc/schema-init/user.conf ] && RT_USER=$(. /etc/schema-init/user.conf 2>/dev/null; echo "$SCHEMA_USER")
         RT_USER="${RT_USER:-$SUDO_USER}"
         enable_rt_audio "$RT_USER"
-        RT_UID=$(id -u "$RT_USER" 2>/dev/null)
-        for a in pipewire pipewire-pulse wireplumber; do
-            [ -n "$RT_UID" ] && [ -f "$SVC_DIR/$a.svc" ] && sed -i -e "s|^user=1000\$|user=$RT_UID|" \
-                -e "s|/run/user/1000/|/run/user/$RT_UID/|" "$SVC_DIR/$a.svc"
-        done
         echo -e "${GREEN}Profile '${PROFILE}' installed.${NC}"
     else
         echo -e "  Skipped profile install."
