@@ -78,6 +78,9 @@ if command -v plymouth >/dev/null 2>&1; then
         sleep 0.1
     done
 fi
+# A respawn after the user switched consoles must take its VT back: kwin draws
+# without it, but the kernel keeps feeding keys to the active VT's tty.
+timeout 5 chvt "$SCHEMA_VTNR" 2>/dev/null || true
 
 REGISTER=/usr/local/bin/schema-session-register
 UNREGISTER=/usr/local/bin/schema-session-unregister

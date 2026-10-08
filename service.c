@@ -117,7 +117,11 @@ uint32_t service_probe_f8(service_t *svc, service_t *table, int count) {
     for (i = 0; i < MAX_DEPS && svc->dep_idx[i] >= 0; i++) {
         int di = svc->dep_idx[i];
         if (di >= count) { dep_ok = 0; break; }
-        if (table[di].inst.state == STATE_EXCISED) { dep_ok = 0; break; }
+        if (table[di].inst.state == STATE_EXCISED ||
+            table[di].inst.state == STATE_DORMANT) {
+            if (table[di].flags & SVC_CRITICAL) { dep_ok = 0; break; }
+            continue;
+        }
         if (table[di].inst.state != STATE_FUNDAMENTAL &&
             table[di].inst.state != STATE_SETTLED     &&
             table[di].inst.state != STATE_PERFECT)
@@ -1487,9 +1491,9 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
         if (di >= 0) {
             if (di >= scount) return 0;
             s = stable[di].inst.state;
-            if (s == STATE_EXCISED) {
+            if (s == STATE_EXCISED || s == STATE_DORMANT) {
                 if (stable[di].flags & SVC_CRITICAL) return 0;
-                continue;   /* non-critical excised dep: proceed without it */
+                continue;   /* non-critical excised/dormant dep: proceed without it */
             }
             if (s != STATE_FUNDAMENTAL && s != STATE_SETTLED &&
                 s != STATE_PERFECT)                              return 0;
