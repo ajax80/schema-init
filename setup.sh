@@ -152,8 +152,8 @@ install_profile() {
 # RT audio: pipewire ships /etc/security/limits.d/*-pw-rlimits.conf granting
 # @pipewire rtprio/memlock, but the group ships empty. The audio wrappers apply
 # the same grant themselves via prlimit (no PAM: runuser's supervisor sleeps 2 s
-# on SIGTERM, stalling shutdown); group membership still covers RTKit and any
-# session started through PAM.
+# on SIGTERM, stalling shutdown); group membership covers any session started
+# through PAM.
 enable_rt_audio() {
     local u="$1"
     [ -n "$u" ] || return 0
@@ -604,7 +604,7 @@ cat << 'GOTCHAS'
      - RT: the wrappers prlimit PipeWire's shipped grant (rtprio 70, memlock)
        before setpriv, or it never gets SCHED_FIFO and audio crackles under
        load. They bypass PAM on purpose (runuser sleeps 2 s on SIGTERM).
-       setup.sh also adds the desktop user to 'pipewire' for PAM/RTKit paths.
+       setup.sh also adds the desktop user to 'pipewire' for PAM-started sessions.
      - Session modules (mpris pause, device reservation): WirePlumber needs the
        graphical-session bus env, which wireplumber-run.sh harvests from a live
        Plasma/kwin process (no systemd --user to provide it).

@@ -10,4 +10,4 @@ while [ $i -lt 10 ] && ! arecord -l 2>/dev/null | grep -q "USB Audio"; do
     i=$((i+1))
 done
 
-exec prlimit --rtprio=70 --nice=39 --memlock=4294967296 -- setpriv --reuid=daedalus --regid=daedalus --init-groups --reset-env -- env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" /usr/bin/pipewire
+exec prlimit --rtprio=70 --nice=39 --memlock=4294967296 -- setpriv --reuid=daedalus --regid="$(id -g daedalus)" --init-groups -- env HOME="$(getent passwd daedalus | cut -d: -f6)" USER=daedalus LOGNAME=daedalus XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" /usr/bin/pipewire
