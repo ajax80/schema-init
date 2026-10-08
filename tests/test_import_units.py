@@ -152,6 +152,9 @@ check("Limit*= -> no warning", si.WARN_PREFIX not in hl)
 hb = hard("LimitCPU=30s\nLimitNOFILE=-5\nLimitAS=1P\n")
 check("unsupported Limit values dropped + warned",
       "limit_" not in hb and hb.count(si.WARN_PREFIX) == 3)
+hr = hard("LimitNOFILE=infinity:4096\nLimitSTACK=8192:1024\nLimitNICE=-25\nLimitAS=99999999999999T\n")
+check("Limit values PID 1 rejects are dropped + warned",
+      "limit_" not in hr and hr.count(si.WARN_PREFIX) == 4)
 check("Limit last assignment wins", "limit_nofile=2048\n" in hard("LimitNOFILE=1024\nLimitNOFILE=2048\n"))
 
 # --- ratholes -> Skip ---

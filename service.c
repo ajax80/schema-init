@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
@@ -1153,22 +1154,6 @@ int service_spawn(service_t *svc) {
         service_reset_child_sigmask();
         service_restore_child_nofile();
         coredump_raise_if_ours();
-        for (int i = 0; i < svc->rlim_count; i++) {
-            struct rlimit rl = { svc->rlim[i].cur, svc->rlim[i].max };
-            if (svc->rlim[i].res == RLIMIT_NOFILE &&
-                (rl.rlim_cur == RLIM_INFINITY || rl.rlim_max == RLIM_INFINITY)) {
-                FILE *f = fopen("/proc/sys/fs/nr_open", "r");
-                unsigned long nr = 1048576;
-                if (f) { fscanf(f, "%lu", &nr); fclose(f); }
-                if (rl.rlim_cur == RLIM_INFINITY) rl.rlim_cur = nr;
-                if (rl.rlim_max == RLIM_INFINITY) rl.rlim_max = nr;
-            }
-            if (setrlimit(svc->rlim[i].res, &rl) != 0) {
-                dprintf(2, "[schema-init] LIMIT FAILED for %s: resource %d: %d\n",
-                        svc->name, svc->rlim[i].res, errno);
-                _exit(126);
-            }
-        }
         setsid();
         close(sync[1]);
         read(sync[0], &c, 1);
@@ -1251,6 +1236,22 @@ int service_spawn(service_t *svc) {
                 close(ofd);
             }
         }
+        for (int i = 0; i < svc->rlim_count; i++) {
+            struct rlimit rl = { svc->rlim[i].cur, svc->rlim[i].max };
+            if (svc->rlim[i].res == RLIMIT_NOFILE &&
+                (rl.rlim_cur == RLIM_INFINITY || rl.rlim_max == RLIM_INFINITY)) {
+                FILE *f = fopen("/proc/sys/fs/nr_open", "r");
+                unsigned long nr = 1048576;
+                if (f) { fscanf(f, "%lu", &nr); fclose(f); }
+                if (rl.rlim_cur == RLIM_INFINITY) rl.rlim_cur = nr;
+                if (rl.rlim_max == RLIM_INFINITY) rl.rlim_max = nr;
+            }
+            if (setrlimit(svc->rlim[i].res, &rl) != 0) {
+                dprintf(2, "[schema-init] LIMIT FAILED for %s: resource %d: %d\n",
+                        svc->name, svc->rlim[i].res, errno);
+                _exit(126);
+            }
+        }
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
             svc_run_pre(svc, 1);
@@ -1258,7 +1259,10 @@ int service_spawn(service_t *svc) {
         if (service_apply_hardening(svc) != 0)
             _exit(126);
         if (svc->run_user[0] && !svc->run_uid && strcmp(svc->run_user, "root") != 0) {
-            struct passwd *pw = getpwnam(svc->run_user);
+            char *end;
+            unsigned long id = strtoul(svc->run_user, &end, 10);
+            struct passwd *pw = !*end && id < (uid_t)-1 ? getpwuid((uid_t)id)
+                              : *end ? getpwnam(svc->run_user) : NULL;
             if (!pw) {
                 dprintf(2, "[schema-init] UID DROP FAILED for %s: no user %s\n",
                         svc->name, svc->run_user);
@@ -1769,10 +1773,16 @@ static int rlim_value(const char *s, int nice, rlim_t *out) {
         return 0;
     }
     if (!isdigit((unsigned char)*s)) return -1;
+    errno = 0;
     unsigned long long v = strtoull(s, &end, 10);
     const char *suf = "KMGT", *k = *end ? strchr(suf, *end) : NULL;
-    if (*end && (!k || end[1])) return -1;
-    if (k) v <<= 10 * (k - suf + 1);
+    if (errno || (*end && (!k || end[1]))) return -1;
+    if (k) {
+        int sh = 10 * (k - suf + 1);
+        if (v > (ULLONG_MAX >> sh)) return -1;
+        v <<= sh;
+    }
+    if ((rlim_t)v == RLIM_INFINITY) return -1;
     *out = (rlim_t)v;
     return 0;
 }
@@ -2013,8 +2023,11 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
     } else if (strcmp(line, "user") == 0) {
         char *end;
+        errno = 0;
         unsigned long id = strtoul(val, &end, 10);
-        struct passwd *pw = *val && !*end ? getpwuid((uid_t)id) : getpwnam(val);
+        int num = *val && !*end;
+        struct passwd *pw = !num ? getpwnam(val)
+                          : !errno && id < (uid_t)-1 ? getpwuid((uid_t)id) : NULL;
         svc->run_uid = pw ? pw->pw_uid : 0;
         svc->run_gid = pw ? pw->pw_gid : 0;
         memset(svc->run_user, 0, sizeof svc->run_user);

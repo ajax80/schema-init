@@ -182,6 +182,19 @@ _FALSE = ("", "0", "no", "false", "off")
 _LIMITS = ("CPU", "FSIZE", "DATA", "STACK", "CORE", "RSS", "NOFILE", "AS", "NPROC",
            "MEMLOCK", "LOCKS", "SIGPENDING", "MSGQUEUE", "NICE", "RTPRIO", "RTTIME")
 _LIMIT_VAL = re.compile(r"^(infinity|\d+[KMGT]?|[-+]\d+)$")
+_INF = float("inf")
+
+
+def _limit_num(x, nice):
+    """A Limit value as PID 1 reads it, or None if PID 1 would reject it."""
+    if not _LIMIT_VAL.match(x):
+        return None
+    if x == "infinity":
+        return _INF
+    if x[0] in "+-":
+        return 20 - int(x) if nice and -20 <= int(x) <= 19 else None
+    n = int(x.rstrip("KMGT")) << (10 * ("KMGT".index(x[-1]) + 1) if x[-1] in "KMGT" else 0)
+    return n if n < 2 ** 64 - 1 else None
 
 
 def limit_lines(svc):
@@ -193,9 +206,9 @@ def limit_lines(svc):
         if not v:
             continue
         parts = v.split(":")
-        signed_ok = name == "NICE"
-        if len(parts) > 2 or not all(
-                _LIMIT_VAL.match(x) and (signed_ok or x[0] not in "+-") for x in parts):
+        nums = [_limit_num(x, name == "NICE") for x in parts]
+        if len(parts) > 2 or None in nums or (
+                len(nums) == 2 and nums[1] != _INF and nums[0] > nums[1]):
             warns.append("Limit%s=%s not translated (unsupported value)" % (name, v))
             continue
         lines.append("limit_%s=%s" % (name.lower(), v))

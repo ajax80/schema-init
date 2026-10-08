@@ -79,7 +79,8 @@ int main(void) {
     static const char *bad[] = {
         "limit_nofile=abc", "limit_nofile=10X", "limit_nofile=-5", "limit_nofile=8:4",
         "limit_nofile=infinity:10", "limit_nice=-21", "limit_nice=+20", "limit_rtprio=",
-        "limit_memlock=4GB",
+        "limit_memlock=4GB", "limit_fsize=99999999999999999999",
+        "limit_memlock=17179869184T", "limit_fsize=18446744073709551615",
     };
     for (size_t b = 0; b < sizeof bad / sizeof bad[0]; b++) {
         snprintf(body, sizeof body, "name=c\nexec=/bin/true\n%s\n", bad[b]);
@@ -149,6 +150,12 @@ int main(void) {
     write_svc(p, "name=f\nexec=/bin/true\nuser=65534\n");
     assert(service_load_one(p, &svc) == 0);
     assert(svc.run_uid == 65534 && svc.run_user[0]);
+
+    /* a uid past uid_t must not wrap onto a real account */
+    write_svc(p, "name=f\nexec=/bin/true\nuser=4295032830\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.run_uid == 0);
+    assert(run(&svc) == 126);
 
     if (getuid() == 0) {
         struct passwd *pw = getpwuid(65534);

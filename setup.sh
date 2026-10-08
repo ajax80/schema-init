@@ -416,6 +416,11 @@ if [ -n "$PROFILE" ]; then
         [ -r /etc/schema-init/user.conf ] && RT_USER=$(. /etc/schema-init/user.conf 2>/dev/null; echo "$SCHEMA_USER")
         RT_USER="${RT_USER:-$SUDO_USER}"
         enable_rt_audio "$RT_USER"
+        RT_UID=$(id -u "$RT_USER" 2>/dev/null)
+        for a in pipewire pipewire-pulse wireplumber; do
+            [ -n "$RT_UID" ] && [ -f "$SVC_DIR/$a.svc" ] && sed -i -e "s|^user=1000\$|user=$RT_UID|" \
+                -e "s|/run/user/1000/|/run/user/$RT_UID/|" "$SVC_DIR/$a.svc"
+        done
         echo -e "${GREEN}Profile '${PROFILE}' installed.${NC}"
     else
         echo -e "  Skipped profile install."
