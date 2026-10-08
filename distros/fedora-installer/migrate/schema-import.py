@@ -447,10 +447,13 @@ def host_facts():
     except OSError:
         pass
     ctl = _read("/sys/fs/cgroup/cgroup.controllers", None)
+    cpu = dict(ln.split(":", 1) for ln in reversed(_read("/proc/cpuinfo").splitlines()) if ":" in ln)
+    cpu = {k.strip(): v.strip() for k, v in cpu.items()}
     _FACTS = {"virt": virt, "virt_kind": kind, "security": sec,
               "cgroup_v2": ctl is not None, "controllers": set((ctl or "").split()),
               "cpus": len(os.sched_getaffinity(0)),
-              "arch": _ARCH.get(platform.machine(), platform.machine())}
+              "arch": _ARCH.get(platform.machine(), platform.machine()),
+              "cpu_vendor": cpu.get("vendor_id", ""), "cpu_flags": set(cpu.get("flags", "").split())}
     return _FACTS
 
 
@@ -564,11 +567,17 @@ _DENY = {"rsyslog": "journal-sink owns /dev/log under schema-init",
          "initial-setup-graphical": _FIRSTBOOT, "gnome-initial-setup": _FIRSTBOOT}
 
 
+_QUIRKS = {"intel_lpmd": lambda f: None if f.get("cpu_vendor") == "GenuineIntel" and "hybrid_cpu" in f.get("cpu_flags", ())
+           else "intel_lpmd supports only Intel hybrid CPUs and exits on this one"}
+
+
 def _denied(name):
     if name in _DENY:
         return _DENY[name]
     if name.startswith("abrt-"):
         return _DENY["abrtd"]
+    if name in _QUIRKS:
+        return _QUIRKS[name](host_facts())
     return None
 
 
@@ -1040,8 +1049,9 @@ def import_one(name, force=False, queued=()):
         sections = parse_unit(text)
         if "@" in name and sock_sections is not None:
             raise Skip("socket starts template %s — instances unsupported" % name)
-        if _denied(name):
-            raise Skip(_denied(name))
+        denied = _denied(name)
+        if denied:
+            raise Skip(denied)
         if timer:
             target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
             if "@" in target:
