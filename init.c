@@ -3149,6 +3149,7 @@ static void container_cgroups_kill(void) {
 
 #define SHUT_GRACE_MS   3000
 #define SHUT_TOTAL_MS  12000
+#define SHUT_SLOW_MS     250
 
 static int shut_depends_on(const service_t *s, int target) {
     int k, m;
@@ -3194,7 +3195,7 @@ static void shut_reap(void) {
  * everything left gets SIGTERM at once. stop_first services go before all of it. */
 static void shutdown_ordered(void) {
     uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0};
-    int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0};
+    int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0}, gone[MAX_SERVICES] = {0};
     int i, j, round = 0, held = 0;
     char msg[320];
 
@@ -3207,6 +3208,15 @@ static void shutdown_ordered(void) {
         for (i = 0; i < svc_count; i++) {
             alive[i] = !killed[i] && svc_signal_all(&services[i], 0) > 0;
             left += alive[i];
+            if (!alive[i] && term_at[i] && !killed[i] && !gone[i]) {
+                gone[i] = 1;
+                if (now - term_at[i] >= SHUT_SLOW_MS) {
+                    snprintf(msg, sizeof msg, "%s down at +%llu ms (%llu ms after SIGTERM)",
+                             services[i].name, (unsigned long long)(now - start),
+                             (unsigned long long)(now - term_at[i]));
+                    shut_log(msg);
+                }
+            }
         }
         if (!left) break;
         /* stop_first services (the desktop session) go before anything else:
