@@ -1102,22 +1102,9 @@ static int ready_live(const service_t *svc) {
 static void ready_lost(service_t *svc) {
     service_log(svc, "readiness-lost");
     active_kill_service(svc);
-    start_failsafe(svc);
-
-    svc->dormant_count++;
-    if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
-        svc->inst.state = STATE_EXCISED;
-        service_log(svc, "76-excised");
-    } else {
-        time_t delay = 300L << (svc->dormant_count - 1);
-        if (delay > 3600) delay = 3600;
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        svc->dormant_until.tv_sec  = now.tv_sec + delay;
-        svc->dormant_until.tv_nsec = now.tv_nsec;
-        svc->inst.state = STATE_DORMANT;
-        service_log(svc, "dormant");
-    }
+    restart_budget_refresh(svc);
+    if (svc->failsafe_cmd[0]) start_failsafe(svc);
+    svc->inst.state = STATE_RECOVERY;
 }
 
 static void ready_watch(service_t *svc) {

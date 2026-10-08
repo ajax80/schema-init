@@ -145,6 +145,30 @@ exec=/usr/bin/crashloop.sh
 max_restarts=3
 EOF
 
+# Dormant-dep probe: test-crashdep depends on test-crash (non-critical). Once
+# test-crash goes dormant its dependent must start without it, not wait.
+cat > "$ROOT/etc/schema-init/services/test-crashdep.svc" <<'EOF'
+name=test-crashdep
+exec=/usr/bin/slowloop.sh
+dep=test-crash
+EOF
+
+# Readiness-lost probe: run 1 goes ready, then deletes its ready_path and
+# stays alive. That is readiness-lost; it must restart now, not go dormant.
+cat > "$ROOT/usr/bin/rplost.sh" <<'EOF'
+#!/bin/sh
+n=$(cat /run/test-rplost.n 2>/dev/null || echo 0); n=$((n+1)); echo $n > /run/test-rplost.n
+touch /run/test-rplost.ready
+if [ "$n" = 1 ]; then sleep 3; rm -f /run/test-rplost.ready; fi
+while :; do sleep 1; done
+EOF
+chmod +x "$ROOT/usr/bin/rplost.sh"
+cat > "$ROOT/etc/schema-init/services/test-rplost.svc" <<'EOF'
+name=test-rplost
+exec=/usr/bin/rplost.sh
+ready_path=/run/test-rplost.ready
+EOF
+
 # analyze probe: test-slow has no readiness signal, so the 10s stable timer
 # promotes it; test-after waits on it. The chain to test-after must walk to
 # test-slow and flag it as timer-gated.
@@ -547,6 +571,11 @@ echo "DROPIN-CAT-BEGIN"; /bin/schema-ctl cat test-dropin; echo "DROPIN-CAT-END"
 echo "===== RESTARTS-TEST ====="
 echo "crash-retries: $(grep -c 'test-crash .*retry-deep' "$RAIL")"
 echo "crash-dormant: $(grep -c 'test-crash .*dormant ' "$RAIL")"
+echo "crashdep-spawn: $(grep -c 'test-crashdep .*spawn' "$RAIL")"
+echo "rplost-lost: $(grep -c 'test-rplost .*readiness-lost' "$RAIL")"
+echo "rplost-dormant: $(grep -c 'test-rplost .*dormant' "$RAIL")"
+echo "rplost-spawn: $(grep -c 'test-rplost .*spawn' "$RAIL")"
+echo "rplost-state: $(/bin/schema-ctl status test-rplost | head -1)"
 for s in test-crash test-timer test-readypath test-dependent; do
     echo "RESTARTS $s $(/bin/schema-ctl status $s | head -1)"
 done
@@ -669,6 +698,11 @@ grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL"
 # restart_count: first spawn, timer fires and ctl restart are not restarts.
 grep -Eq "crash-retries: 3"  "$SERIAL" || { echo "  MISS: test-crash did not retry exactly max_restarts=3 times"; pass=0; }
 grep -Eq "crash-dormant: [1-9]" "$SERIAL" || { echo "  MISS: test-crash never went dormant"; pass=0; }
+grep -Eq "crashdep-spawn: [1-9]" "$SERIAL" || { echo "  MISS: dependent of a dormant non-critical dep never started"; pass=0; }
+grep -Eq "rplost-lost: [1-9]"   "$SERIAL" || { echo "  MISS: test-rplost readiness-lost not detected"; pass=0; }
+grep -Eq "rplost-dormant: 0"    "$SERIAL" || { echo "  MISS: test-rplost went dormant after readiness-lost"; pass=0; }
+grep -Eq "rplost-spawn: [2-9]"  "$SERIAL" || { echo "  MISS: test-rplost not respawned after readiness-lost"; pass=0; }
+grep -Eq "rplost-state: .*FUNDAMENTAL" "$SERIAL" || { echo "  MISS: test-rplost not back to FUNDAMENTAL"; pass=0; }
 grep -Eq "RESTARTS test-crash .*restarts=3"     "$SERIAL" || { echo "  MISS: test-crash restarts != 3"; pass=0; }
 grep -Eq "RESTARTS test-timer .*restarts=0"     "$SERIAL" || { echo "  MISS: timer firings counted as restarts"; pass=0; }
 grep -Eq "RESTARTS test-readypath .*restarts=0" "$SERIAL" || { echo "  MISS: schema-ctl restart counted as a restart"; pass=0; }
