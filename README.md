@@ -944,9 +944,9 @@ needs no root to watch and keeps working when the control socket is wedged. Only
 opens the socket, and that needs root. The board can only ever issue a command you could have typed
 yourself. `ctrl-C` always works — `ISIG` is left on deliberately.
 
-Note that this lets anyone at the physical console restart a service. That is not a new privilege
-boundary — the shipped gettys autologin root on tty2 — but it is worth knowing before you enable it
-on a machine other people can walk up to.
+Note that this lets anyone at the physical console restart a service. The shipped gettys ask for a
+password, so this is a new privilege for whoever can reach the keyboard — worth knowing before you
+enable it on a machine other people can walk up to.
 
 It reads the shared-memory export rather than the control socket and depends on nothing graphical, so a frozen desktop, a wedged control socket, and a saturated D-Bus all leave the **process** working. Give it a VT no getty owns — `services/` ships gettys on tty2–tty6, and tty1 is the display manager, so tty7 and up are free.
 
