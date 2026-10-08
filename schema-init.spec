@@ -231,6 +231,18 @@ if [ -f "$svcd/sysprep.svc" ]; then
     fi
 fi
 
+# zram-recompress.svc joined the rail after some installs went out; give it to
+# a box whose zram.svc runs the rail script, once. It starts at next boot, when
+# zram0 comes up with the recompression tier. A copy put there by hand counts.
+if grep -qs '^exec=/usr/local/bin/schema-zram-start.sh$' "$svcd/zram.svc" &&
+   [ ! -e "$st/rail-zram-recompress-added" ]; then
+    mkdir -p "$st"
+    if [ -e "$svcd/zram-recompress.svc" ] ||
+       cp %{_datadir}/%{name}/migrate/distros/fedora-installer/rail/services/zram-recompress.svc "$svcd/zram-recompress.svc"; then
+        touch "$st/rail-zram-recompress-added"
+    fi
+fi
+
 %transfiletriggerin migrate -- /usr/bin/systemctl
 if [ ! -L /usr/bin/systemctl ] && [ -f /usr/bin/systemctl ]; then
     mv -f /usr/bin/systemctl /usr/bin/systemctl.real
