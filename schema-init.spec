@@ -232,16 +232,14 @@ if [ -f "$svcd/sysprep.svc" ]; then
 fi
 
 # zram-recompress.svc joined the rail after some installs went out; give it to
-# a box whose rail runs zram.svc, once. A copy put there by hand counts as done.
-if [ -f "$svcd/zram.svc" ] && [ ! -e "$st/rail-zram-recompress-added" ]; then
+# a box whose zram.svc runs the rail script, once. It starts at next boot, when
+# zram0 comes up with the recompression tier. A copy put there by hand counts.
+if grep -qs '^exec=/usr/local/bin/schema-zram-start.sh$' "$svcd/zram.svc" &&
+   [ ! -e "$st/rail-zram-recompress-added" ]; then
     mkdir -p "$st"
-    if [ -e "$svcd/zram-recompress.svc" ]; then
+    if [ -e "$svcd/zram-recompress.svc" ] ||
+       cp %{_datadir}/%{name}/migrate/distros/fedora-installer/rail/services/zram-recompress.svc "$svcd/zram-recompress.svc"; then
         touch "$st/rail-zram-recompress-added"
-    elif cp %{_datadir}/%{name}/migrate/distros/fedora-installer/rail/services/zram-recompress.svc "$svcd/zram-recompress.svc"; then
-        touch "$st/rail-zram-recompress-added"
-        if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && [ /proc/1/root -ef / ] && [ -S /run/schema-init.sock ]; then
-            %{_bindir}/schema-ctl add "$svcd/zram-recompress.svc" >/dev/null || echo "schema-init: zram-recompress comes under supervision at next boot"
-        fi
     fi
 fi
 

@@ -176,7 +176,7 @@ install -d /usr/local/lib
 # Static conditions (Virtualization, CPUs) are judged here, on the target box.
 if [ -n "$RPMS" ]; then
     mkdir -p /var/lib/schema-init
-    touch /var/lib/schema-init/rail-udevd-added  # the upgrade-time rail repair is for older installs only
+    touch /var/lib/schema-init/rail-udevd-added /var/lib/schema-init/rail-zram-recompress-added  # the upgrade-time rail repairs are for older installs only
     if schema-import --enabled; then
         touch /var/lib/schema-init/enabled-units-imported
     else
