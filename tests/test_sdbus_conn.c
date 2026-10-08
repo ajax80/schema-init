@@ -47,7 +47,7 @@ int main(void) {
     /* a normal enqueue tracks its unsent bytes and never flags overflow */
     sdbus_conn c3; memset(&c3, 0, sizeof c3);
     sdbus_conn_enqueue(&c3, body, sizeof body, NULL, 0);
-    assert(c3.oq_bytes == (long)sizeof body && c3.oq_over == 0 && c3.n_oq == 1);
+    assert(c3.oq_bytes == (long)(sizeof body + sizeof(sdbus_outchunk)) && c3.oq_over == 0 && c3.n_oq == 1);
     sdbus_conn_free_fields(&c3);
     assert(c3.oq_bytes == 0 && c3.oq_over == 0);
 
@@ -62,6 +62,30 @@ int main(void) {
     assert(!fd_open(bigfd));                     /* dropped msg's fd closed, no leak */
     close(big[1]);
     sdbus_conn_free_fields(&c4);
+
+    /* a reader that keeps up but never fully drains: one message always in
+       flight. The chunk array must stay bounded, not grow by one per message. */
+    sdbus_conn c5; memset(&c5, 0, sizeof c5);
+    sdbus_conn_enqueue(&c5, body, sizeof body, NULL, 0);
+    for (int i = 0; i < 100000; i++) {
+        sdbus_conn_enqueue(&c5, body, sizeof body, NULL, 0);
+        free(c5.oq[c5.oq_head].b);              /* simulate flush_conn sending the head */
+        c5.oq_bytes -= sizeof body + sizeof(sdbus_outchunk);
+        c5.oq_head++;
+    }
+    assert(c5.n_oq - c5.oq_head == 1 && c5.oq_cap <= 16 && c5.oq_over == 0);
+    assert(c5.oq_bytes == (long)(sizeof body + sizeof(sdbus_outchunk)));
+    sdbus_conn_free_fields(&c5);
+
+    /* tiny messages: the cap counts each chunk's struct, so a flood of 4-byte
+       messages stops at the ceiling instead of costing 20x it in structs */
+    sdbus_conn c6; memset(&c6, 0, sizeof c6);
+    long n6 = 0;
+    while (!c6.oq_over) { sdbus_conn_enqueue(&c6, body, sizeof body, NULL, 0); n6++; }
+    assert(c6.oq_bytes <= SDBUS_MAX_OUTGOING_BYTES);
+    assert((long)c6.oq_cap * (long)sizeof(sdbus_outchunk) <= 2L * SDBUS_MAX_OUTGOING_BYTES);
+    assert(n6 - 1 == SDBUS_MAX_OUTGOING_BYTES / (long)(sizeof body + sizeof(sdbus_outchunk)));
+    sdbus_conn_free_fields(&c6);
 
     printf("all sdbus_conn tests passed\n");
     return 0;

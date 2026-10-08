@@ -47,8 +47,8 @@ typedef struct {
     unsigned char *in;  int in_len, in_cap;
     unsigned char *out; int out_len, out_cap;   /* scratch for auth/driver bytes */
     int pending_fds[SDBUS_MAX_PENDING_FDS]; int n_pending_fds;   /* received, awaiting a full msg */
-    sdbus_outchunk *oq; int n_oq, oq_head;      /* ordered outbound queue */
-    long oq_bytes;                              /* unsent bytes across oq[oq_head..n_oq) */
+    sdbus_outchunk *oq; int n_oq, oq_head, oq_cap;   /* ordered outbound queue */
+    long oq_bytes;                              /* unsent bytes across oq[oq_head..n_oq), plus each live chunk's struct */
     int oq_over;                                /* backlog exceeded the cap -> reap */
     sdbus_matchset *matches;
     int is_monitor;                             /* BecomeMonitor: receive-only copy tap */
@@ -63,17 +63,26 @@ typedef struct {
 static inline void sdbus_conn_enqueue(sdbus_conn *c, const unsigned char *b, int len,
                                       const int *fds, int nfds) {
     int nf = nfds > SDBUS_MAX_PENDING_FDS ? SDBUS_MAX_PENDING_FDS : nfds;
-    if (c->oq_bytes + len > SDBUS_MAX_OUTGOING_BYTES) {
+    if (c->oq_bytes + len + (long)sizeof *c->oq > SDBUS_MAX_OUTGOING_BYTES) {
         c->oq_over = 1;
         for (int i = 0; i < nf; i++) close(fds[i]);
         return;
     }
-    c->oq = realloc(c->oq, (c->n_oq + 1) * sizeof *c->oq);
+    if (c->n_oq == c->oq_cap) {
+        if (c->oq_head > 0 && c->oq_head * 2 >= c->n_oq) {
+            memmove(c->oq, c->oq + c->oq_head, (c->n_oq - c->oq_head) * sizeof *c->oq);
+            c->n_oq -= c->oq_head;
+            c->oq_head = 0;
+        } else {
+            c->oq_cap = c->oq_cap ? c->oq_cap * 2 : 16;
+            c->oq = realloc(c->oq, c->oq_cap * sizeof *c->oq);
+        }
+    }
     sdbus_outchunk *ch = &c->oq[c->n_oq++];
     ch->b = malloc(len); memcpy(ch->b, b, len); ch->len = len; ch->off = 0;
     ch->nfds = nf;
     for (int i = 0; i < ch->nfds; i++) ch->fds[i] = fds[i];
-    c->oq_bytes += len;
+    c->oq_bytes += len + (long)sizeof *ch;
 }
 
 /* does the connection have unsent outbound data? */
@@ -144,7 +153,7 @@ static inline void sdbus_conn_free_fields(sdbus_conn *c) {
         for (int j = 0; j < c->oq[i].nfds; j++) close(c->oq[i].fds[j]);
         free(c->oq[i].b);
     }
-    free(c->oq); c->oq = NULL; c->n_oq = c->oq_head = 0;
+    free(c->oq); c->oq = NULL; c->n_oq = c->oq_head = c->oq_cap = 0;
     c->oq_bytes = 0; c->oq_over = 0;
     if (c->matches) sdbus_match_free(c->matches);
     if (c->mon_matches) sdbus_match_free(c->mon_matches);
