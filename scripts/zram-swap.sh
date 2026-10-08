@@ -1,8 +1,11 @@
 #!/bin/sh
 set -e
 
+# zswap in front of zram compresses every page twice
+echo N > /sys/module/zswap/parameters/enabled 2>/dev/null || true
+
 # If already active swap, exit successfully
-if grep -q "^/dev/zram0" /proc/swaps; then
+if grep -q "/zram0[[:space:]]" /proc/swaps; then
     printf "/dev/zram0 is already active swap.\n"
     exit 0
 fi

@@ -7,6 +7,8 @@
 modprobe zram num_devices=1 2>/dev/null || true
 DEV=/sys/block/zram0
 [ -d "$DEV" ] || exit 0
+# zswap in front of zram compresses every page twice.
+echo N > /sys/module/zswap/parameters/enabled 2>/dev/null || true
 # Make the kernel actually reach for it. Default swappiness (60) barely swaps
 # while RAM is only moderately pressured, so a zram device just sits idle — the
 # symptom "swap isn't being used." zram is near-free (RAM-backed, no seeks), so
