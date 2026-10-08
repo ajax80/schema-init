@@ -107,11 +107,11 @@ static int flush_conn(sdbus_conn *c) {
         }
         ch->off += (int)n;
         c->oq_bytes -= (int)n;
-        if (ch->off >= ch->len) { free(ch->b); c->oq_head++; }
+        if (ch->off >= ch->len) { free(ch->b); c->oq_bytes -= (long)sizeof *ch; c->oq_head++; }
         else return 0;                                 /* partial; wait for writable */
     }
     /* queue drained; compact */
-    c->n_oq = c->oq_head = 0;
+    c->n_oq = c->oq_head = c->oq_cap = 0;
     c->oq_bytes = 0;
     free(c->oq); c->oq = NULL;
     return 0;
