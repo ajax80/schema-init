@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <time.h>
 #include <limits.h>
+#include <poll.h>
 
 static inline int udev_argv_split(const char *cmd, char store[][UE_VAL_MAX],
                                   char *argv[], int max) {
@@ -30,7 +31,9 @@ static inline int udev_argv_split(const char *cmd, char store[][UE_VAL_MAX],
     return argc;
 }
 
+#ifndef UDEV_EXEC_TIMEOUT
 #define UDEV_EXEC_TIMEOUT 180
+#endif
 #define UDEV_EXEC_LIBDIR  "/usr/lib/udev"
 
 static inline int udev_run_capture(const char *cmd, char *out, size_t outlen) {
@@ -78,18 +81,25 @@ static inline int udev_run_capture(const char *cmd, char *out, size_t outlen) {
     fcntl(p[0], F_SETFL, O_NONBLOCK);
     size_t o = 0;
     int timed_out = 0;
-    time_t start = time(NULL);
+    struct timespec t0, now;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long long left = UDEV_EXEC_TIMEOUT * 1000LL - (now.tv_sec - t0.tv_sec) * 1000LL
+                         - (now.tv_nsec - t0.tv_nsec) / 1000000;
+        if (left <= 0) { timed_out = 1; break; }
+        struct pollfd pfd = { .fd = p[0], .events = POLLIN };
+        int n = poll(&pfd, 1, left > INT_MAX ? INT_MAX : (int)left);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) break;
+        if (n == 0) { timed_out = 1; break; }
         char buf[4096]; ssize_t r = read(p[0], buf, sizeof buf);
         if (r > 0) {
             for (ssize_t i = 0; i < r && o + 1 < outlen; i++) out[o++] = buf[i];
             continue;
         }
         if (r == 0) break;
-        if (errno != EAGAIN && errno != EWOULDBLOCK) break;
-        if (time(NULL) - start >= UDEV_EXEC_TIMEOUT) { timed_out = 1; break; }
-        struct timespec ts = {0, 20 * 1000 * 1000};
-        nanosleep(&ts, NULL);
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) break;
     }
     close(p[0]);
     if (o < outlen) out[o] = '\0';

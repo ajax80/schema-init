@@ -1,3 +1,4 @@
+#define UDEV_EXEC_TIMEOUT 1
 #include "../udev_ruleset.h"
 #include "../udev_builtins.h"
 #include "../udev_exec.h"
@@ -68,6 +69,25 @@ static void test_run_capture(void) {
     assert(udev_run_capture(cmd, out, sizeof out) == 3);
 
     assert(udev_run_capture("/nonexistent/xyz", out, sizeof out) == -1);
+
+    char slow[PATH_MAX]; snprintf(slow, sizeof slow, "%s/slow.sh", dir);
+    f = fopen(slow, "w"); assert(f);
+    fprintf(f, "#!/bin/sh\nprintf A=\nsleep 0.3\necho 1\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
+    snprintf(cmd, sizeof cmd, "%s", slow);
+    assert(udev_run_capture(cmd, out, sizeof out) == 0);
+    assert(!strcmp(out, "A=1\n"));
+
+    char hang[PATH_MAX]; snprintf(hang, sizeof hang, "%s/hang.sh", dir);
+    f = fopen(hang, "w"); assert(f);
+    fprintf(f, "#!/bin/sh\necho partial\nexec sleep 30\n");
+    assert(fchmod(fileno(f), 0755) == 0); fclose(f);
+    snprintf(cmd, sizeof cmd, "%s", hang);
+    struct timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+    assert(udev_run_capture(cmd, out, sizeof out) == -1);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    double el = (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
+    assert(el >= 0.9 && el < 3.0);
     printf("test_udev_r4b: run-capture OK\n");
 }
 
