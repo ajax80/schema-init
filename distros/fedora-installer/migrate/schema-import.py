@@ -179,6 +179,29 @@ _TRUE = ("1", "yes", "true", "on")
 _FALSE = ("", "0", "no", "false", "off")
 
 
+_LIMITS = ("CPU", "FSIZE", "DATA", "STACK", "CORE", "RSS", "NOFILE", "AS", "NPROC",
+           "MEMLOCK", "LOCKS", "SIGPENDING", "MSGQUEUE", "NICE", "RTPRIO", "RTTIME")
+_LIMIT_VAL = re.compile(r"^(infinity|\d+[KMGT]?|[-+]\d+)$")
+
+
+def limit_lines(svc):
+    """Limit<X>=VALUE[:HARD] -> limit_<x>=. Values PID 1 can't parse (time
+    spans like LimitCPU=30s, P/E suffixes) are dropped with a warning."""
+    lines, warns = [], []
+    for name in _LIMITS:
+        v = _get_last(svc, "Limit" + name)
+        if not v:
+            continue
+        parts = v.split(":")
+        signed_ok = name == "NICE"
+        if len(parts) > 2 or not all(
+                _LIMIT_VAL.match(x) and (signed_ok or x[0] not in "+-") for x in parts):
+            warns.append("Limit%s=%s not translated (unsupported value)" % (name, v))
+            continue
+        lines.append("limit_%s=%s" % (name.lower(), v))
+    return lines, warns
+
+
 def _hardening(svc):
     """The four hardening knobs, always explicit so the unit means the same
     thing whatever the host's hardening-default is. Returns (lines, warnings);
@@ -726,6 +749,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
     lines.extend(hard)
+    lim, lim_warns = limit_lines(svc)
+    lines.extend(lim)
+    warns.extend(lim_warns)
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)

@@ -46,6 +46,8 @@ printf "==> installing services\n"
 mkdir -p "$SVC_DIR"
 cp "$REPO/distros/fedora-kde/services/"*.svc "$SVC_DIR/"
 cp "$REPO/distros/fedora-kde/services/"*.grp "$SVC_DIR/"
+sed -i -e "s|^user=1000\$|user=$TARGET_UID|" -e "s|/run/user/1000/|/run/user/$TARGET_UID/|" \
+    "$SVC_DIR/pipewire.svc" "$SVC_DIR/pipewire-pulse.svc" "$SVC_DIR/wireplumber.svc"
 cp "$REPO/services/avahi.svc"   "$SVC_DIR/"
 cp "$REPO/services/chronyd.svc" "$SVC_DIR/"
 # journald-compat shim (opt-in upstream; we enable it fleet-wide)
@@ -69,9 +71,7 @@ cp "$REPO/distros/fedora-kde/scripts/network-blakbox.sh" "$BIN_DIR/network-blakb
 cp "$REPO/distros/fedora-kde/scripts/udhcpc.sh"         "$BIN_DIR/udhcpc.sh"
 cp "$REPO/distros/fedora-kde/scripts/seatd-run.sh"         "$BIN_DIR/seatd-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/plasma-session-start.sh" "$BIN_DIR/plasma-session-start.sh"
-cp "$REPO/distros/fedora-kde/scripts/pipewire-run.sh"       "$BIN_DIR/pipewire-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/wireplumber-run.sh"   "$BIN_DIR/wireplumber-run.sh"
-cp "$REPO/distros/fedora-kde/scripts/pipewire-pulse-run.sh" "$BIN_DIR/pipewire-pulse-run.sh"
 cp "$REPO/distros/fedora-kde/scripts/nordvpnd-wrapper.sh"     "$BIN_DIR/nordvpnd-wrapper.sh"
 cp "$REPO/distros/fedora-kde/scripts/plasmashell-shim"        "$BIN_DIR/plasmashell-shim"
 cp "$REPO/distros/fedora-kde/scripts/zram-swap.sh"            "$BIN_DIR/zram-swap.sh"
@@ -91,9 +91,7 @@ chmod +x \
     "$BIN_DIR/udhcpc.sh" \
     "$BIN_DIR/seatd-run.sh" \
     "$BIN_DIR/plasma-session-start.sh" \
-    "$BIN_DIR/pipewire-run.sh" \
     "$BIN_DIR/wireplumber-run.sh" \
-    "$BIN_DIR/pipewire-pulse-run.sh" \
     "$BIN_DIR/nordvpnd-wrapper.sh" \
     "$BIN_DIR/plasmashell-shim" \
     "$BIN_DIR/zram-swap.sh" \

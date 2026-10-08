@@ -150,9 +150,9 @@ install_profile() {
 }
 
 # RT audio: pipewire ships /etc/security/limits.d/*-pw-rlimits.conf granting
-# @pipewire rtprio/memlock, but the group ships empty. The audio wrappers apply
-# the same grant themselves via prlimit (no PAM: runuser's supervisor sleeps 2 s
-# on SIGTERM, stalling shutdown); group membership covers any session started
+# @pipewire rtprio/memlock, but the group ships empty. The audio .svc files
+# carry the same grant as limit_* keys, which PID 1 applies before user=
+# drops privileges (no PAM); group membership covers any session started
 # through PAM.
 enable_rt_audio() {
     local u="$1"
@@ -601,9 +601,9 @@ cat << 'GOTCHAS'
      chronyd will hang at startup waiting for its dep to be satisfied.
 
   9. Audio: two things beyond XDG_RUNTIME_DIR (see #2).
-     - RT: the wrappers prlimit PipeWire's shipped grant (rtprio 70, memlock)
-       before setpriv, or it never gets SCHED_FIFO and audio crackles under
-       load. They bypass PAM on purpose (runuser sleeps 2 s on SIGTERM).
+     - RT: the audio .svc files carry PipeWire's shipped grant (limit_rtprio=70,
+       limit_memlock) for PID 1 to set before user= drops privileges, or it
+       never gets SCHED_FIFO and audio crackles under load. No PAM involved.
        setup.sh also adds the desktop user to 'pipewire' for PAM-started sessions.
      - Session modules (mpris pause, device reservation): WirePlumber needs the
        graphical-session bus env, which wireplumber-run.sh harvests from a live

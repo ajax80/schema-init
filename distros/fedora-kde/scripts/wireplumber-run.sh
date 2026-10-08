@@ -1,19 +1,16 @@
 #!/bin/sh
-[ -r /etc/schema-init/user.conf ] && . /etc/schema-init/user.conf
-SCHEMA_USER="${SCHEMA_USER:-$(awk -F: '$3>=1000 && $3<65000 {print $1; exit}' /etc/passwd)}"
-SCHEMA_UID="${SCHEMA_UID:-1000}"
-[ -z "$SCHEMA_USER" ] && { echo "wireplumber-run: no desktop user found — set SCHEMA_USER in /etc/schema-init/user.conf" >&2; exit 0; }
-
 # schema-init has no `systemd --user`, so WP inherits no graphical-session env
 # and its session-bus modules (dbus, mpris, reserve-device) all fail. The
 # session bus is a random per-login /tmp/dbus-XXXX path, so it can't be
 # hardcoded. Harvest it (and Wayland/X vars) from a live Plasma/kwin process,
 # bounded-waiting for login, then hand it to WP. Degraded fallback (no session
 # integration) after the cap so a headless/SSH boot still starts audio.
+# PID 1 runs this as the desktop user (user=, limit_* in wireplumber.svc).
+UIDN=$(id -u)
 harvest() {
-    for p in $(pgrep -u "$SCHEMA_UID" -x plasmashell) \
-             $(pgrep -u "$SCHEMA_UID" -x kwin_wayland) \
-             $(pgrep -u "$SCHEMA_UID" -x kwin_x11); do
+    for p in $(pgrep -u "$UIDN" -x plasmashell) \
+             $(pgrep -u "$UIDN" -x kwin_wayland) \
+             $(pgrep -u "$UIDN" -x kwin_x11); do
         e="/proc/$p/environ"
         [ -r "$e" ] || continue
         for v in DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY DISPLAY XAUTHORITY; do
@@ -32,11 +29,5 @@ while ! harvest; do
     sleep 1
 done
 
-exec prlimit --rtprio=70 --nice=39 --memlock=4294967296 --nofile=1048576 -- setpriv --reuid="$SCHEMA_USER" --regid="$(id -g "$SCHEMA_USER")" --init-groups -- env HOME="$(getent passwd "$SCHEMA_USER" | cut -d: -f6)" USER="$SCHEMA_USER" LOGNAME="$SCHEMA_USER" \
-    XDG_RUNTIME_DIR="/run/user/$SCHEMA_UID" \
-    GIO_USE_VFS=local \
-    ${DBUS_SESSION_BUS_ADDRESS:+DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"} \
-    ${WAYLAND_DISPLAY:+WAYLAND_DISPLAY="$WAYLAND_DISPLAY"} \
-    ${DISPLAY:+DISPLAY="$DISPLAY"} \
-    ${XAUTHORITY:+XAUTHORITY="$XAUTHORITY"} \
-    /usr/bin/wireplumber
+export GIO_USE_VFS=local
+exec /usr/bin/wireplumber

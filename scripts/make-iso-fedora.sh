@@ -147,6 +147,10 @@ chmod +x "$MNT/usr/local/bin/mount-home.sh"
 LIVEUID=$(chroot "$MNT" id -u "$LIVEUSER" 2>/dev/null || printf '1000')
 sed -i "s|/run/user/1000|/run/user/$LIVEUID|g" \
     "$MNT/usr/local/bin/schema-plasma-autologin.sh"
+for a in pipewire pipewire-pulse wireplumber; do
+    [ -f "$SVCDIR/$a.svc" ] && sed -i -e "s|^user=1000\$|user=$LIVEUID|" \
+        -e "s|/run/user/1000/|/run/user/$LIVEUID/|" "$SVCDIR/$a.svc"
+done
 
 printf "=== Network (DHCP for live) ===\n"
 NETSCRIPT="$MNT/usr/local/bin/network-up.sh"
