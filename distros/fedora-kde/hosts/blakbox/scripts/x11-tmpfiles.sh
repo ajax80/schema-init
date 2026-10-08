@@ -7,6 +7,7 @@
 # stale sockets persist across reboots. Mirror the tmpfiles "D!" behaviour: empty
 # the dirs, set root:root 1777, and clear stale X lock files. Boot oneshot only.
 for d in /tmp/.X11-unix /tmp/.ICE-unix /tmp/.XIM-unix /tmp/.font-unix; do
+    [ -L "$d" ] && rm -f "$d"
     mkdir -p "$d"
     find "$d" -mindepth 1 -delete 2>/dev/null
     chown root:root "$d" && chmod 1777 "$d"
