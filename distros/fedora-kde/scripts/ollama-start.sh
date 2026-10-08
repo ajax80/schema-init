@@ -1,2 +1,2 @@
 #!/bin/sh
-exec runuser -u ollama -- /usr/local/bin/ollama serve
+exec setpriv --reuid=ollama --regid=ollama --init-groups --reset-env -- /usr/local/bin/ollama serve

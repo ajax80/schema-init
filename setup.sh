@@ -150,11 +150,10 @@ install_profile() {
 }
 
 # RT audio: pipewire ships /etc/security/limits.d/*-pw-rlimits.conf granting
-# @pipewire rtprio/memlock, but the group ships empty. Audio starts via runuser,
-# whose pam_limits applies that grant against the user's groups — so the desktop
-# user must be IN the pipewire group, or WirePlumber/PipeWire never get
-# SCHED_FIFO and audio xruns (crackles) under load. A PID1-level RLIMIT grant
-# does NOT work: pam_limits in the runuser path overrides it.
+# @pipewire rtprio/memlock, but the group ships empty. The audio wrappers apply
+# the same grant themselves via prlimit (no PAM: runuser's supervisor sleeps 2 s
+# on SIGTERM, stalling shutdown); group membership still covers RTKit and any
+# session started through PAM.
 enable_rt_audio() {
     local u="$1"
     [ -n "$u" ] || return 0
@@ -602,10 +601,10 @@ cat << 'GOTCHAS'
      chronyd will hang at startup waiting for its dep to be satisfied.
 
   9. Audio: two things beyond XDG_RUNTIME_DIR (see #2).
-     - RT: the desktop user must be in the 'pipewire' group or PipeWire never
-       gets SCHED_FIFO and audio crackles under load. setup.sh adds them when
-       a desktop profile is installed. (A PID1 RLIMIT grant won't work —
-       runuser's pam_limits overrides it; group membership is the lever.)
+     - RT: the wrappers prlimit PipeWire's shipped grant (rtprio 70, memlock)
+       before setpriv, or it never gets SCHED_FIFO and audio crackles under
+       load. They bypass PAM on purpose (runuser sleeps 2 s on SIGTERM).
+       setup.sh also adds the desktop user to 'pipewire' for PAM/RTKit paths.
      - Session modules (mpris pause, device reservation): WirePlumber needs the
        graphical-session bus env, which wireplumber-run.sh harvests from a live
        Plasma/kwin process (no systemd --user to provide it).
