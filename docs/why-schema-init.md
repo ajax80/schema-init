@@ -35,8 +35,8 @@ schema-init is a minimal PID 1 for Linux that supervises services with a weight-
 ## The ask — always low-barrier
 - **Not** "join the team." The ask is: *"boot it in a VM, tell me what breaks."*
 - Zero-risk paths exist and are the whole point of the on-ramp:
-  - **Lane 0:** `git clone` + `make` + `make test` — needs only a compiler, no root, no VM. Just proves it builds and passes ~30 unit tests.
-  - **Lane 1:** build a bootable ISO and watch it boot in QEMU — never touches their real bootloader or `/dev`.
+  - **Build + test:** `git clone` + `make` + `make test` — needs only a compiler, no root, no VM. Just proves it builds and passes ~30 unit tests.
+  - **VM boot:** build a bootable ISO and watch it boot in QEMU — never touches their real bootloader or `/dev`.
   - **Fedora:** prebuilt via COPR (`dnf copr enable ajax80/schema-init`) or a prebuilt installer ISO from the latest release.
 - Every step is reversible with a single reboot. Say that early — it's what makes people willing to try.
 
