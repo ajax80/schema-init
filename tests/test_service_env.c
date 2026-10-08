@@ -167,6 +167,15 @@ int main(void) {
     for (int i = 0; i < m; i++) assert(strcmp(out[i], exp[i]) == 0);
     assert(service_expand_argv(in, out, 3) == 3);
 
+    setenv("Q", "-r 0 --prefer '^(Web Content|Iso)$' --avoid \"a b\" c\\ d\ne", 1);
+    setenv("BADQ", "x 'y z", 1);
+    char *qin[] = {"/bin/e", "$Q", "$BADQ", NULL};
+    m = service_expand_argv(qin, out, 31);
+    const char *qexp[] = {"/bin/e", "-r", "0", "--prefer", "^(Web Content|Iso)$", "--avoid",
+                          "a b", "c d", "e", "x", "'y", "z"};
+    assert(m == (int)(sizeof qexp / sizeof qexp[0]));
+    for (int i = 0; i < m; i++) assert(strcmp(out[i], qexp[i]) == 0);
+
     char *w[32];
     int nw = service_split_cmdline("  /usr/bin/bash -c \"pkill abrt-dbus || :\"  'a b'c\\ d \"x\\\"y\" ", w, 32);
     const char *wexp[] = {"/usr/bin/bash", "-c", "pkill abrt-dbus || :", "a bc d", "x\"y"};

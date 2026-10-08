@@ -604,8 +604,11 @@ int service_expand_argv(char *const *argv, char **out, int max) {
         if (a[0] == '$' && env_name_ok(a + 1, strlen(a + 1))) {
             const char *v = getenv(a + 1);
             char *dup = strdup(v ? v : ""), *save = NULL;
-            for (char *w = strtok_r(dup, " \t\n", &save); w && n < max;
-                 w = strtok_r(NULL, " \t\n", &save))
+            for (char *c = dup; (c = strchr(c, '\n')); ) *c = ' ';
+            int k = service_split_cmdline(dup, out + n, max - n);
+            if (k >= 0) { n += k; continue; }
+            for (char *w = strtok_r(dup, " \t", &save); w && n < max;
+                 w = strtok_r(NULL, " \t", &save))
                 out[n++] = w;
             continue;
         }
