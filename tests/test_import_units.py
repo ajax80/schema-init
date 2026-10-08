@@ -418,6 +418,11 @@ check("a oneshot sharing a daemon's binary still imports", si.import_one("goodch
 for n in ("rsyslog", "abrtd", "abrt-oops", "plasma-setup", "initial-setup"):
     open(os.path.join(unitdir, n + ".service"), "w").write("[Service]\nExecStart=/usr/sbin/%s -n\n[Install]\nWantedBy=x\n" % n)
     check("deny-listed: " + n, si.import_one(n)[0] == "skipped")
+open(os.path.join(unitdir, "intel_lpmd.service"), "w").write("[Service]\nExecStart=/usr/bin/intel_lpmd --systemd\n[Install]\nWantedBy=x\n")
+for vendor, flags, want in (("GenuineIntel", {"fpu"}, "skipped"), ("AuthenticAMD", {"hybrid_cpu"}, "skipped"),
+                            ("GenuineIntel", {"fpu", "hybrid_cpu"}, "imported")):
+    si._FACTS["cpu_vendor"], si._FACTS["cpu_flags"] = vendor, flags
+    check("intel_lpmd quirk: %s %s -> %s" % (vendor, sorted(flags), want), si.import_one("intel_lpmd", force=True)[0] == want)
 open(os.path.join(unitdir, "vmonly.service"), "w").write("[Unit]\nConditionVirtualization=vm\n[Service]\nExecStart=/usr/bin/vmonly\n[Install]\nWantedBy=x\n")
 st, det = si.import_one("vmonly")
 check("condition failing on this host -> skip stub", st == "skipped" and "does not hold" in det[0])
