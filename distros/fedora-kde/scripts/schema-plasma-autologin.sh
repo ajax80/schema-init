@@ -119,13 +119,19 @@ stop_session() {
         # Paced to fit this service's stop budget (SCHEMA_STOP_TIMEOUT_SEC from
         # PID 1, else its 3 s default): 0.5 s margin, 2 s for the plumbing,
         # the rest for the apps.
+        # kded6 drops a TERM that lands before its event loop runs (its handler
+        # only calls qApp->quit()), and a first-login kded6 spends seconds
+        # loading modules: TERM it again every 0.5 s while it is in the scope.
         tenths=$(( ${SCHEMA_STOP_TIMEOUT_SEC:-3} * 10 - 25 ))
         apps=$(session_apps)
         [ -n "$apps" ] && kill -TERM $apps 2>/dev/null
-        for _ in $(seq 1 "$tenths"); do
+        for t in $(seq 1 "$tenths"); do
             alive=""
             for p in $apps; do kill -0 "$p" 2>/dev/null && { alive=1; break; }; done
             [ -n "$alive" ] || break
+            [ $((t % 5)) -eq 0 ] && for p in $(cat "$SESSION_SCOPE/cgroup.procs" 2>/dev/null); do
+                [ "$(cat "/proc/$p/comm" 2>/dev/null)" = kded6 ] && kill -TERM "$p" 2>/dev/null
+            done
             sleep 0.1
         done
         kill -TERM $(cat "$SESSION_SCOPE/cgroup.procs") 2>/dev/null
