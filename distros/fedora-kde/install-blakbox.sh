@@ -65,7 +65,6 @@ cp "$REPO/distros/fedora-kde/scripts/schema-plasma-autologin.sh" "$BIN_DIR/schem
 cp "$REPO/scripts/schema-session-register"                 "$BIN_DIR/schema-session-register"
 cp "$REPO/scripts/schema-session-unregister"               "$BIN_DIR/schema-session-unregister"
 cp "$REPO/distros/fedora-kde/scripts/sound-modules.sh"     "$BIN_DIR/sound-modules.sh"
-cp "$REPO/distros/fedora-kde/scripts/ollama-start.sh"      "$BIN_DIR/ollama-start.sh"
 cp "$REPO/distros/fedora-kde/scripts/network-blakbox.sh" "$BIN_DIR/network-blakbox.sh"
 cp "$REPO/distros/fedora-kde/scripts/udhcpc.sh"         "$BIN_DIR/udhcpc.sh"
 cp "$REPO/distros/fedora-kde/scripts/seatd-run.sh"         "$BIN_DIR/seatd-run.sh"
@@ -88,7 +87,6 @@ chmod +x \
     "$BIN_DIR/schema-session-register" \
     "$BIN_DIR/schema-session-unregister" \
     "$BIN_DIR/sound-modules.sh" \
-    "$BIN_DIR/ollama-start.sh" \
     "$BIN_DIR/network-blakbox.sh" \
     "$BIN_DIR/udhcpc.sh" \
     "$BIN_DIR/seatd-run.sh" \

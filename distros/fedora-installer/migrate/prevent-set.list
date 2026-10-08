@@ -41,7 +41,6 @@ service schema-migrate-finish
 exclude frigate
 exclude greybox-audio
 exclude nordvpnd
-exclude ollama
 exclude mount-home
 exclude network-blakbox
 exclude loop-module

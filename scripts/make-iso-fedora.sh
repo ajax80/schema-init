@@ -103,12 +103,12 @@ cp "$REPO"/distros/fedora-kde/services/*.svc \
 # all -- a dangling dep that stalls the whole display-stack chain.
 SVCDIR="$MNT/etc/schema-init/services"
 for hostsvc in mount-ocean mount-ocean-drives mount-efi network-blakbox \
-               nordvpnd tailscaled ollama greybox-audio nvidia-modules; do
+               nordvpnd tailscaled greybox-audio nvidia-modules; do
     rm -f "$SVCDIR/$hostsvc.svc"
 done
-sed -i -E '/^dep=(nvidia-modules|x11-tmpfiles|mount-ocean|mount-ocean-drives|mount-efi|network-blakbox|nordvpnd|tailscaled|ollama|greybox-audio)$/d' \
+sed -i -E '/^dep=(nvidia-modules|x11-tmpfiles|mount-ocean|mount-ocean-drives|mount-efi|network-blakbox|nordvpnd|tailscaled|greybox-audio)$/d' \
     "$SVCDIR"/*.svc
-sed -i -E '/^member=(nvidia-modules|mount-ocean|mount-ocean-drives|mount-efi|network-blakbox|nordvpnd|tailscaled|ollama|greybox-audio)$/d' \
+sed -i -E '/^member=(nvidia-modules|mount-ocean|mount-ocean-drives|mount-efi|network-blakbox|nordvpnd|tailscaled|greybox-audio)$/d' \
     "$SVCDIR"/*.grp
 printf 'live profile services: '; ls "$SVCDIR" | tr '\n' ' '; printf '\n'
 printf 'sddm deps: '; grep '^dep=' "$SVCDIR/sddm.svc" | tr '\n' ' '; printf '\n'
