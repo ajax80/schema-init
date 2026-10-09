@@ -637,20 +637,24 @@ def dep_lines(name, sections, known):
     cands = []
     unit = sections.get("Unit", [])
     svc = sections.get("Service", [])
-    aliases = " ".join(_get_all(sections.get("Install", []), "Alias")).split()
+    tokens = lambda sec, k: " ".join(_get_all(sec, k)).split()
+    part_of = {_UNIT_ALIAS.get(u.rsplit(".", 1)[0], u.rsplit(".", 1)[0])
+               for u in tokens(unit, "PartOf") if u.endswith((".service", ".socket"))}
     if (_get_last(svc, "Type").lower() == "dbus" or _get_last(svc, "BusName")
-            or any(a.startswith("dbus-org.") for a in aliases)
-            or "dbus.service" in " ".join(_get_all(unit, "PartOf")).split()):
+            or any(a.startswith("dbus-org.") for a in tokens(sections.get("Install", []), "Alias"))
+            or "dbus" in part_of):
         cands += ["dbus", "polkitd"]
     for k in ("Requires", "Requisite", "BindsTo"):
-        for v in _get_all(unit, k):
-            for u in v.split():
-                if u.endswith((".service", ".socket")) and "@" not in u:
-                    base = u.rsplit(".", 1)[0]
-                    cands.append(_UNIT_ALIAS.get(base, base))
+        for u in tokens(unit, k):
+            if u.endswith((".service", ".socket")) and "@" not in u:
+                base = u.rsplit(".", 1)[0]
+                cands.append(_UNIT_ALIAS.get(base, base))
+    raw = {v: k for k, v in _UNIT_ALIAS.items()}
+    self_names = {name, _UNIT_ALIAS.get(name, name)}
     deps = []
     for d in cands:
-        if d != _UNIT_ALIAS.get(name, name) and d in known and d not in deps:
+        d = d if d in known else raw.get(d, d)
+        if d not in self_names and _UNIT_ALIAS.get(d, d) not in self_names and d in known and d not in deps:
             deps.append(d)
     notes = []
     if len(deps) > 8:

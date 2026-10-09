@@ -330,6 +330,14 @@ dl, _ = si.dep_lines("x", si.parse_unit("[Service]\nExecStart=/bin/x\n[Install]\
 check("plain simple unit, non-dbus Alias -> no bus deps", dl == [])
 dl, _ = si.dep_lines("polkit", si.parse_unit("[Service]\nBusName=org.freedesktop.PolicyKit1\nExecStart=/p\n"), known)
 check("polkit never deps on itself via alias", dl == ["dep=dbus"])
+dl, _ = si.dep_lines("x", si.parse_unit("[Unit]\nPartOf=dbus-broker.service\n[Service]\nExecStart=/bin/x\n"), known)
+check("PartOf=dbus-broker.service -> bus daemon", dl == ["dep=dbus", "dep=polkitd"])
+dl, _ = si.dep_lines("x", si.parse_unit("[Unit]\nPartOf=dbus.socket\n[Service]\nExecStart=/bin/x\n"), known)
+check("PartOf=dbus.socket -> bus daemon", dl == ["dep=dbus", "dep=polkitd"])
+dl, _ = si.dep_lines("firewalld", si.parse_unit(fw), {"dbus", "polkit", "firewalld"})
+check("polkit queued under its raw name -> dep=polkit", dl == ["dep=dbus", "dep=polkit"])
+dl, _ = si.dep_lines("polkit", si.parse_unit("[Service]\nType=dbus\nBusName=org.freedesktop.PolicyKit1\nExecStart=/p\n"), {"dbus", "polkit"})
+check("raw-named polkit never deps on itself", dl == ["dep=dbus"])
 dl, _ = si.dep_lines("tuned", si.parse_unit(
     "[Unit]\nRequires=dbus.service polkit.service NetworkManager.service ghost.service\n"
     "BindsTo=dbus.service\nWants=auditd.service\nRequisite=cups.socket getty@tty1.service tuned.service\n"), known)
