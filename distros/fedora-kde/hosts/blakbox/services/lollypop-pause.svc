@@ -1,0 +1,12 @@
+name=lollypop-pause
+exec=/usr/sbin/playerctl
+args=-p
+args=Lollypop
+args=pause
+user=1000
+env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+on_calendar=21:30
+no_new_privs=1
+private_tmp=0
+protect_system=0
+protect_home=0
