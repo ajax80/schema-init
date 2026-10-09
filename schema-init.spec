@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.9
+Version:        0.4.10
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -395,6 +395,23 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Fri Oct 09 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.10-1
+- Migrate: bus daemons that aren't Type=dbus (firewalld) wait for polkitd;
+  fixes the first schema-init boot stalling before the desktop on stock
+  Fedora 44 KDE
+- Gettys ask for a password; no root autologin on any VT
+- .svc limit_* rlimit keys; user= accepts a uid, sets HOME, and an unknown
+  user fails closed instead of running as root
+- Readiness-lost services restart; non-critical dormant deps don't block
+  spawn; autologin takes its VT back after plymouth
+- Shutdown logs per-service exit time for slow stoppers; kded6 re-TERMed
+- expand_args honors quotes when splitting $VAR (systemd parity)
+- zram: lz4 hot tier + zstd recompression of idle pages, zswap disabled
+  in front of zram; existing rail installs get zram-recompress.svc
+- schema-dbus bounds its outbound chunk array; schema-udev polls helper
+  output instead of a 20 ms sleep loop
+- Importer skips intel_lpmd on CPUs it cannot run on
+
 * Wed Oct 07 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.9-1
 - Services get /dev/null on stdin instead of PID 1's console; PID 1 fills
   fds 0-2 at start so no socket can land there
