@@ -319,6 +319,17 @@ dl, dn = si.dep_lines("tuned-ppd", si.parse_unit(
 check("Type=dbus + Requires -> dbus, polkitd, then tuned; plain After= not a dep", dl == ["dep=dbus", "dep=polkitd", "dep=tuned"] and dn == [])
 dl, _ = si.dep_lines("bd", si.parse_unit("[Service]\nType=dbus\nBusName=x\n"), {"dbus"})
 check("Type=dbus without a polkitd.svc -> dbus only", dl == ["dep=dbus"])
+fw = "[Unit]\nPartOf=dbus.service\n[Service]\nExecStart=/usr/bin/firewalld --nofork\n[Install]\nAlias=dbus-org.fedoraproject.FirewallD1.service\n"
+dl, _ = si.dep_lines("firewalld", si.parse_unit(fw), known)
+check("simple bus daemon (firewalld: PartOf=dbus + Alias=dbus-org.*) -> dbus, polkitd", dl == ["dep=dbus", "dep=polkitd"])
+dl, _ = si.dep_lines("x", si.parse_unit("[Unit]\nPartOf=dbus.service\n[Service]\nExecStart=/bin/x\n"), known)
+check("PartOf=dbus.service alone -> bus daemon", dl == ["dep=dbus", "dep=polkitd"])
+dl, _ = si.dep_lines("x", si.parse_unit("[Service]\nBusName=org.x\nExecStart=/bin/x\n"), known)
+check("BusName= without Type=dbus -> bus daemon", dl == ["dep=dbus", "dep=polkitd"])
+dl, _ = si.dep_lines("x", si.parse_unit("[Service]\nExecStart=/bin/x\n[Install]\nAlias=x-alt.service\n"), known)
+check("plain simple unit, non-dbus Alias -> no bus deps", dl == [])
+dl, _ = si.dep_lines("polkit", si.parse_unit("[Service]\nBusName=org.freedesktop.PolicyKit1\nExecStart=/p\n"), known)
+check("polkit never deps on itself via alias", dl == ["dep=dbus"])
 dl, _ = si.dep_lines("tuned", si.parse_unit(
     "[Unit]\nRequires=dbus.service polkit.service NetworkManager.service ghost.service\n"
     "BindsTo=dbus.service\nWants=auditd.service\nRequisite=cups.socket getty@tty1.service tuned.service\n"), known)
