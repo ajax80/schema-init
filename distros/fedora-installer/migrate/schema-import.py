@@ -627,24 +627,34 @@ def dep_lines(name, sections, known):
     .svc (known) -> dep= lines; Type=dbus also waits for the bus, as systemd's
     implicit After=dbus.socket, and for polkitd: a bus daemon that asks for
     PolicyKit1 before polkitd.svc owns it gets a bus-activated polkitd, and
-    the supervised one then loses the name and crash-loops. Plain After= is ordering only in systemd and
+    the supervised one then loses the name and crash-loops. Bus daemons that
+    are not Type=dbus (firewalld) count too: BusName=, Alias=dbus-org.*, or
+    PartOf=dbus.service. Plain After= is ordering only in systemd and
     never keeps a unit from starting, while dep= waits for the dep to settle,
     so it is not translated. Returns (lines, notes)."""
     if not known:
         return [], []
     cands = []
-    if _get_last(sections.get("Service", []), "Type").lower() == "dbus":
-        cands += ["dbus", "polkitd"]
     unit = sections.get("Unit", [])
+    svc = sections.get("Service", [])
+    tokens = lambda sec, k: " ".join(_get_all(sec, k)).split()
+    part_of = {_UNIT_ALIAS.get(u.rsplit(".", 1)[0], u.rsplit(".", 1)[0])
+               for u in tokens(unit, "PartOf") if u.endswith((".service", ".socket"))}
+    if (_get_last(svc, "Type").lower() == "dbus" or _get_last(svc, "BusName")
+            or any(a.startswith("dbus-org.") for a in tokens(sections.get("Install", []), "Alias"))
+            or "dbus" in part_of):
+        cands += ["dbus", "polkitd"]
     for k in ("Requires", "Requisite", "BindsTo"):
-        for v in _get_all(unit, k):
-            for u in v.split():
-                if u.endswith((".service", ".socket")) and "@" not in u:
-                    base = u.rsplit(".", 1)[0]
-                    cands.append(_UNIT_ALIAS.get(base, base))
+        for u in tokens(unit, k):
+            if u.endswith((".service", ".socket")) and "@" not in u:
+                base = u.rsplit(".", 1)[0]
+                cands.append(_UNIT_ALIAS.get(base, base))
+    raw = {v: k for k, v in _UNIT_ALIAS.items()}
+    self_names = {name, _UNIT_ALIAS.get(name, name)}
     deps = []
     for d in cands:
-        if d != name and d in known and d not in deps:
+        d = d if d in known else raw.get(d, d)
+        if d not in self_names and _UNIT_ALIAS.get(d, d) not in self_names and d in known and d not in deps:
             deps.append(d)
     notes = []
     if len(deps) > 8:
