@@ -56,7 +56,7 @@ static char           g_bus_addr[256];
 static int            g_system_bus;   /* Decision 1, SP4 design doc: --system present
                                           vs absent is the single mode signal gating
                                           session-bus-specific behavior in this file. */
-#define SDBUS_SVC_DIR "/usr/share/dbus-1/system-services"
+#define SDBUS_SVC_DIRS "/etc/dbus-1/system-services:/usr/local/share/dbus-1/system-services:/usr/share/dbus-1/system-services"
 #define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
 
@@ -952,13 +952,13 @@ int main(int argc, char **argv) {
     struct passwd *self_pw = g_system_bus ? NULL : getpwuid(getuid());
     const char *default_user = g_system_bus ? "root" : (self_pw ? self_pw->pw_name : "root");
 
-    if (svcdirs_env) {
-        char *svcdirs_buf = strdup(svcdirs_env);   /* kept for ReloadConfig */
+    if (svcdir && !svcdirs_env) {
+        g_svcdirs[0] = svcdir;
+        g_nsvcdirs = 1;
+    } else {
+        char *svcdirs_buf = strdup(svcdirs_env ? svcdirs_env : SDBUS_SVC_DIRS);   /* kept for ReloadConfig */
         for (char *p = strtok(svcdirs_buf, ":"); p && g_nsvcdirs < SDBUS_MAX_SVCDIRS; p = strtok(NULL, ":"))
             g_svcdirs[g_nsvcdirs++] = p;
-    } else {
-        g_svcdirs[0] = svcdir ? svcdir : SDBUS_SVC_DIR;
-        g_nsvcdirs = 1;
     }
     g_maskfile = maskfile ? maskfile : SDBUS_MASK_FILE;
     g_default_user = default_user ? strdup(default_user) : "root";
