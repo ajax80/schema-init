@@ -17,6 +17,7 @@ import argparse
 import os
 import re
 import shlex
+import subprocess
 import sys
 
 _VAR_RE = re.compile(r"\$\{?(\w+)\}?")
@@ -1185,20 +1186,16 @@ BUS_HELPER = "/usr/libexec/schema-init/schema-bus-activate"
 
 
 def parse_activation(text):
-    kv = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if "=" in line and not line.startswith(("#", "[")):
-            k, v = line.split("=", 1)
-            kv[k.strip()] = v.strip()
-    return kv
+    sec = parse_unit(text).get("D-BUS Service", [])
+    return {k: _get_last(sec, k) for k in ("Name", "Exec", "User", "SystemdService")}
 
 
 def bus_override(act, svc):
-    if (act.get("User") or "root") != "root":
+    user, exe = act.get("User"), act.get("Exec") or "/bin/false"
+    if user != "root" and not (not user and exe in ("/bin/false", "/usr/bin/false")):
         return None
     lines = [BUS_MARK, "[D-BUS Service]", "Name=" + act["Name"],
-             "Exec=%s %s %s %s" % (BUS_HELPER, svc, act["Name"], act.get("Exec") or "/bin/false"),
+             "Exec=%s %s %s %s" % (BUS_HELPER, svc, act["Name"], exe),
              "User=root"]
     if act.get("SystemdService"):
         lines.append("SystemdService=" + act["SystemdService"])
@@ -1213,7 +1210,10 @@ def _svc_for_unit(unit):
     if not stem.endswith(".service") or "@" in stem:
         return None
     stem = stem[:-len(".service")]
-    return _UNIT_ALIAS.get(stem, stem)
+    for svc in (stem, _UNIT_ALIAS.get(stem)):
+        if svc and os.path.exists(os.path.join(svc_dir(), svc + ".svc")):
+            return svc
+    return None
 
 
 def act_dir():
@@ -1229,7 +1229,7 @@ def _generated(path):
     try:
         with open(path) as f:
             return f.readline().rstrip("\n") == BUS_MARK
-    except OSError:
+    except (OSError, ValueError):
         return False
 
 
@@ -1245,12 +1245,12 @@ def bus_overrides(dry_run=False, log=print):
         try:
             with open(os.path.join(act_dir(), fn)) as f:
                 act = parse_activation(f.read())
-        except OSError:
+        except (OSError, ValueError):
             continue
         if not act.get("Name") or not act.get("SystemdService"):
             continue
         svc = _svc_for_unit(act["SystemdService"])
-        if not svc or not os.path.exists(os.path.join(svc_dir(), svc + ".svc")):
+        if not svc:
             continue
         body = bus_override(act, svc)
         if body:
@@ -1269,7 +1269,7 @@ def bus_overrides(dry_run=False, log=print):
         try:
             with open(p) as f:
                 same = f.read() == body
-        except OSError:
+        except (OSError, ValueError):
             same = False
         if same:
             counts["kept"] += 1
@@ -1277,14 +1277,28 @@ def bus_overrides(dry_run=False, log=print):
         counts["written"] += 1
         log("bus-override  %s" % p)
         if not dry_run:
-            os.makedirs(out, exist_ok=True)
-            with open(p, "w") as f:
-                f.write(body)
+            try:
+                os.makedirs(out, exist_ok=True)
+                with open(p + ".tmp", "w") as f:
+                    f.write(body)
+                os.replace(p + ".tmp", p)
+            except OSError as e:
+                log("bus-override  %s: %s" % (p, e))
     for fn in sorted(have - set(want)):
         counts["removed"] += 1
         log("bus-override  remove %s" % os.path.join(out, fn))
         if not dry_run:
-            os.remove(os.path.join(out, fn))
+            try:
+                os.remove(os.path.join(out, fn))
+            except OSError:
+                pass
+    if not dry_run and (counts["written"] or counts["removed"]) and _root() == "/":
+        try:
+            subprocess.run(["dbus-send", "--system", "--type=method_call", "--dest=org.freedesktop.DBus",
+                            "/org/freedesktop/DBus", "org.freedesktop.DBus.ReloadConfig"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
     return counts
 
 
@@ -1313,7 +1327,10 @@ def main(argv=None):
     counts = drain(units=units, force=args.force, dry_run=args.dry_run)
     print("imported=%(imported)d exists=%(exists)d not-found=%(not-found)d "
           "skipped=%(skipped)d error=%(error)d" % counts)
-    bus_overrides(dry_run=args.dry_run)
+    try:
+        bus_overrides(dry_run=args.dry_run)
+    except Exception as e:
+        print("bus-overrides failed: %s" % e, file=sys.stderr)
     return 1 if counts["error"] else 0
 
 
