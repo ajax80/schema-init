@@ -14,10 +14,11 @@ arm)
         exit 1
     fi
     ls -la "$FLAG"
-    # schema-udev keeps kernel NIC names (wlan0/eth0); systemd-udev renames
-    # them (wlp0s29u1u1). An NM profile pinned to the old name never
-    # autoconnects after the flip, so unpin profiles bound to physical NICs.
-    if command -v nmcli >/dev/null 2>&1; then
+    # schema-udev applies systemd's .link naming, so profiles pinned to
+    # wlp0s29u1u1-style names keep working. Only with the net-naming=kernel
+    # escape hatch do NICs come up as wlan0/eth0; then a pinned profile never
+    # autoconnects, so unpin profiles bound to physical NICs.
+    if grep -qs '^kernel' /etc/schema-init/net-naming && command -v nmcli >/dev/null 2>&1; then
         nmcli -t -f UUID connection show 2>/dev/null | while read -r uuid; do
             ifn=$(nmcli -g connection.interface-name connection show "$uuid" 2>/dev/null)
             [ -n "$ifn" ] && [ -e "/sys/class/net/$ifn/device" ] || continue

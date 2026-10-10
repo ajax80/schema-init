@@ -112,6 +112,12 @@ The base package requires this one so a plain upgrade keeps them current.
 
 %post daemons
 md5sum %{_bindir}/schema-udev | cut -d' ' -f1 > %{_sysconfdir}/schema-init/schema-udev.ship-md5
+if [ $1 -gt 1 ] && [ -e %{_sysconfdir}/schema-init/schema-udev.live ] && [ ! -e %{_sysconfdir}/schema-init/net-naming ] &&
+   grep -lqsE '^interface-name=(eth|wlan)[0-9]+$' %{_sysconfdir}/NetworkManager/system-connections/*.nmconnection; then
+    echo kernel > %{_sysconfdir}/schema-init/net-naming
+    echo "schema-init: kept eth*/wlan* interface names because a NetworkManager profile is pinned to one."
+    echo "schema-init: unpin it (nmcli connection modify <name> connection.interface-name \"\") and delete /etc/schema-init/net-naming for systemd's predictable names."
+fi
 
 %postun daemons
 if [ $1 -eq 0 ]; then

@@ -320,4 +320,162 @@ static inline int net_id_build(const char *sysroot, const char *devpath, struct 
     return 0;
 }
 
+#include <fnmatch.h>
+#include <ctype.h>
+
+static const char *nsl_root = "";
+
+static inline int nsl_read_line(const char *path, char *out, size_t outsz) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    int ok = fgets(out, (int)outsz, f) != NULL;
+    fclose(f);
+    if (!ok) return -1;
+    out[strcspn(out, "\r\n")] = '\0';
+    return 0;
+}
+
+static inline int nsl_word_list_match(const char *list, const char *s, int glob) {
+    if (!s) return 0;
+    char buf[1024];
+    safe_copy(buf, list, sizeof buf);
+    for (char *t = strtok(buf, " \t"); t; t = strtok(NULL, " \t")) {
+        if (glob ? fnmatch(t, s, 0) == 0 : strcasecmp(t, s) == 0) return 1;
+    }
+    return 0;
+}
+
+struct nsl_link { char name[64]; char policy[256]; int matched; };
+
+static inline int nsl_parse(const char *path, const char *ifname, const char *mac,
+                            const char *driver, struct nsl_link *L) {
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[1024], sec[32] = "";
+    int ok = 1;
+    memset(L, 0, sizeof *L);
+    while (fgets(line, sizeof line, f)) {
+        char *l = line;
+        while (isspace((unsigned char)*l)) l++;
+        l[strcspn(l, "\r\n")] = '\0';
+        if (!*l || *l == '#' || *l == ';') continue;
+        if (*l == '[') { safe_copy(sec, l, sizeof sec); continue; }
+        char *eq = strchr(l, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *k = l, *v = eq + 1;
+        for (char *e = k + strlen(k); e > k && isspace((unsigned char)e[-1]); ) *--e = '\0';
+        while (isspace((unsigned char)*v)) v++;
+        if (!strcmp(sec, "[Match]")) {
+            if (!*v) continue;
+            if (!strcmp(k, "OriginalName"))    ok &= nsl_word_list_match(v, ifname, 1);
+            else if (!strcmp(k, "MACAddress")) ok &= nsl_word_list_match(v, mac, 0);
+            else if (!strcmp(k, "Driver"))     ok &= nsl_word_list_match(v, driver, 1);
+            else ok = 0;
+        } else if (!strcmp(sec, "[Link]")) {
+            if (!strcmp(k, "Name"))            safe_copy(L->name, v, sizeof L->name);
+            else if (!strcmp(k, "NamePolicy")) safe_copy(L->policy, v, sizeof L->policy);
+        }
+    }
+    fclose(f);
+    L->matched = ok;
+    return 0;
+}
+
+static int nsl_cmp(const void *a, const void *b) {
+    return strcmp(strrchr(*(char *const *)a, '/') + 1, strrchr(*(char *const *)b, '/') + 1);
+}
+
+static inline int nsl_find_link(const char *ifname, const char *mac, const char *driver,
+                                struct nsl_link *L, char *file, size_t filesz) {
+    static const char *dirs[] = { "/etc/systemd/network", "/run/systemd/network", "/usr/lib/systemd/network" };
+    char *paths[256];
+    int n = 0;
+    for (size_t d = 0; d < sizeof dirs / sizeof dirs[0]; d++) {
+        char dir[PATH_MAX];
+        if ((size_t)snprintf(dir, sizeof dir, "%s%s", nsl_root, dirs[d]) >= sizeof dir) continue;
+        DIR *dp = opendir(dir);
+        if (!dp) continue;
+        struct dirent *e;
+        while ((e = readdir(dp)) && n < 256) {
+            size_t l = strlen(e->d_name);
+            if (l < 6 || strcmp(e->d_name + l - 5, ".link")) continue;
+            int dup = 0;
+            for (int i = 0; i < n; i++)
+                if (!strcmp(strrchr(paths[i], '/') + 1, e->d_name)) { dup = 1; break; }
+            if (dup) continue;
+            char p[PATH_MAX];
+            if ((size_t)snprintf(p, sizeof p, "%s/%s", dir, e->d_name) >= sizeof p) continue;
+            paths[n++] = strdup(p);
+        }
+        closedir(dp);
+    }
+    qsort(paths, n, sizeof paths[0], nsl_cmp);
+    int found = -1;
+    for (int i = 0; i < n && found < 0; i++)
+        if (nsl_parse(paths[i], ifname, mac, driver, L) == 0 && L->matched) {
+            safe_copy(file, paths[i], filesz);
+            found = 0;
+        }
+    for (int i = 0; i < n; i++) free(paths[i]);
+    return found;
+}
+
+static inline int nsl_disabled(void) {
+    char p[PATH_MAX], line[256];
+    snprintf(p, sizeof p, "%s/etc/schema-init/net-naming", nsl_root);
+    if (nsl_read_line(p, line, sizeof line) == 0 && !strncmp(line, "kernel", 6)) return 1;
+    snprintf(p, sizeof p, "%s/proc/cmdline", nsl_root);
+    char cmd[4096];
+    if (nsl_read_line(p, cmd, sizeof cmd) == 0) {
+        for (char *t = strtok(cmd, " "); t; t = strtok(NULL, " "))
+            if (!strcmp(t, "net.ifnames=0")) return 1;
+    }
+    return 0;
+}
+
+static inline int net_setup_link_build(const char *sysroot, const char *devpath,
+                                       const struct uevent *ev, struct uevent *out) {
+    out->n = 0;
+    if (nsl_disabled()) return 0;
+    char netdir[PATH_MAX], p[PATH_MAX], mac[64] = "", driver[64] = "", tmp[64];
+    if ((size_t)snprintf(netdir, sizeof netdir, "%s%s", sysroot, devpath) >= sizeof netdir) return -1;
+    const char *ifname = strrchr(devpath, '/');
+    if (!ifname) return -1;
+    ifname++;
+    if ((size_t)snprintf(p, sizeof p, "%s/address", netdir) >= sizeof p) return -1;
+    nsl_read_line(p, mac, sizeof mac);
+    if ((size_t)snprintf(p, sizeof p, "%s/device/driver", netdir) >= sizeof p) return -1;
+    char lk[PATH_MAX];
+    ssize_t ll = readlink(p, lk, sizeof lk - 1);
+    if (ll > 0) { lk[ll] = '\0'; safe_copy(driver, strrchr(lk, '/') ? strrchr(lk, '/') + 1 : lk, sizeof driver); }
+
+    struct nsl_link L;
+    char file[PATH_MAX];
+    if (nsl_find_link(ifname, mac[0] ? mac : NULL, driver[0] ? driver : NULL, &L, file, sizeof file) < 0)
+        return 0;
+    nid_emit(out, "ID_NET_LINK_FILE", file);
+
+    int nat = -1;
+    if ((size_t)snprintf(p, sizeof p, "%s/name_assign_type", netdir) >= sizeof p) return -1;
+    if (nsl_read_line(p, tmp, sizeof tmp) == 0) nat = atoi(tmp);
+
+    char pol[256];
+    safe_copy(pol, L.policy, sizeof pol);
+    for (char *t = strtok(pol, " \t"); t; t = strtok(NULL, " \t")) {
+        const char *key = NULL;
+        if (!strcmp(t, "keep"))   { if (nat == 3 || nat == 4) return 0; continue; }
+        if (!strcmp(t, "kernel")) { if (nat == 2) return 0; continue; }
+        if (!strcmp(t, "database"))     key = "ID_NET_NAME_FROM_DATABASE";
+        else if (!strcmp(t, "onboard")) key = "ID_NET_NAME_ONBOARD";
+        else if (!strcmp(t, "slot"))    key = "ID_NET_NAME_SLOT";
+        else if (!strcmp(t, "path"))    key = "ID_NET_NAME_PATH";
+        else if (!strcmp(t, "mac"))     key = "ID_NET_NAME_MAC";
+        const char *v = key ? uevent_get(ev, key) : NULL;
+        if (v && *v) { nid_emit(out, "ID_NET_NAME", v); return 0; }
+    }
+    if (L.name[0]) nid_emit(out, "ID_NET_NAME", L.name);
+    return 0;
+}
+
 #endif /* SCHEMA_NET_ID_H */

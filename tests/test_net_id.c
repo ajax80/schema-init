@@ -256,12 +256,68 @@ static void test_build(void) {
     printf("test_build OK\n");
 }
 
+static void test_setup_link(void) {
+    char root[] = "/tmp/nsllinkXXXXXX"; assert(mkdtemp(root));
+    nsl_root = root;
+    char d[PATH_MAX], u[PATH_MAX], e2[PATH_MAX], net[PATH_MAX];
+    snprintf(u, sizeof u, "%s/usr/lib/systemd/network", root); nid_mkdirs(u);
+    snprintf(e2, sizeof e2, "%s/etc/systemd/network", root); nid_mkdirs(e2);
+    snprintf(d, sizeof d, "%s/etc/schema-init", root); nid_mkdirs(d);
+    snprintf(d, sizeof d, "%s/proc", root); nid_mkdirs(d);
+    nid_wf(d, "cmdline", "ro quiet");
+    nid_wf(u, "99-default.link", "[Match]\nOriginalName=*\n[Link]\nNamePolicy=keep kernel database onboard slot path\n");
+    nid_wf(u, "80-container-ve.link", "[Match]\nOriginalName=ve-*\nKind=veth\n[Link]\nName=never\n");
+    snprintf(net, sizeof net, "%s/devices/pci0000:00/0000:00:1f.6/net/eth0", root); nid_mkdirs(net);
+    nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
+    nid_wf(net, "name_assign_type", "1");
+    const char *dp = "/devices/pci0000:00/0000:00:1f.6/net/eth0";
+    struct uevent in = {0}, out;
+    nid_emit(&in, "ID_NET_NAME_PATH", "enp0s31f6");
+    nid_emit(&in, "ID_NET_NAME_ONBOARD", "eno1");
+
+    assert(net_setup_link_build(root, dp, &in, &out) == 0);
+    assert(nid_has_val(&out, "ID_NET_NAME", "eno1"));
+    assert(strstr(uevent_get(&out, "ID_NET_LINK_FILE"), "99-default.link"));
+
+    in.n = 0; nid_emit(&in, "ID_NET_NAME_PATH", "enp0s31f6");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "enp0s31f6"));
+
+    nid_wf(net, "name_assign_type", "4");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    nid_wf(net, "name_assign_type", "2");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    nid_wf(net, "name_assign_type", "1");
+
+    nid_wf(e2, "10-lan.link", "[Match]\nMACAddress=A8:A1:59:0B:E8:EF\n[Link]\nName=lan0\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "lan0"));
+    nid_wf(e2, "10-lan.link", "[Match]\nMACAddress=00:11:22:33:44:55\n[Link]\nName=lan0\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "enp0s31f6"));
+
+    nid_wf(e2, "99-default.link", "[Match]\nOriginalName=*\n[Link]\nNamePolicy=kernel\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    assert(strstr(uevent_get(&out, "ID_NET_LINK_FILE"), "/etc/systemd/network/99-default.link"));
+    snprintf(d, sizeof d, "%s/etc/systemd/network/99-default.link", root); unlink(d);
+
+    snprintf(d, sizeof d, "%s/etc/schema-init", root);
+    nid_wf(d, "net-naming", "kernel");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && out.n == 0);
+    snprintf(d, sizeof d, "%s/etc/schema-init/net-naming", root); unlink(d);
+
+    snprintf(d, sizeof d, "%s/proc", root);
+    nid_wf(d, "cmdline", "ro net.ifnames=0 quiet");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && out.n == 0);
+
+    nsl_root = "";
+    printf("test_setup_link OK\n");
+}
+
 int main(void) {
     test_gates();
     test_mac();
     test_pci();
     test_other_buses();
     test_build();
+    test_setup_link();
     printf("ALL net_id tests passed\n");
     return 0;
 }

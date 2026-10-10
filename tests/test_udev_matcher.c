@@ -68,9 +68,13 @@ int main(void) {
     assert(strcmp(o, "p=/devices/pci/ata1/block/sda/sda3") == 0);
     ruleset_subst("100%%$$done", &cs, o, sizeof o);
     assert(strcmp(o, "100%$done") == 0);
-    /* $result/%c now known (R4b); others deferred */
+    /* $result/%c (R4b) and $name known; $links deferred */
     ruleset_subst("x$result-$links-%c-$name", &cs, o, sizeof o);
-    assert(strcmp(o, "x-$links--$name") == 0);
+    assert(strcmp(o, "x-$links--sda3") == 0);
+    safe_copy(cs.name, "renamed0", sizeof cs.name);
+    ruleset_subst("/sys/subsystem/net/devices/$name", &cs, o, sizeof o);
+    assert(strcmp(o, "/sys/subsystem/net/devices/renamed0") == 0);
+    cs.name[0] = '\0';
     /* $id / %b reads matched_parent */
     safe_copy(cs.matched_parent, "0000:00:1f.2", sizeof cs.matched_parent);
     ruleset_subst("$id|%b", &cs, o, sizeof o);

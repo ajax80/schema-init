@@ -345,6 +345,7 @@ static inline int ruleset_subst_ex(const char *in, const struct dev_ctx *ctx, ch
         char tmp[UE_VAL_MAX];
         const char *rep = NULL; int known = 1;
         if      ((sig == '$' && !strcmp(name, "kernel"))  || (sig == '%' && !strcmp(name, "k"))) rep = kname;
+        else if  (sig == '$' && !strcmp(name, "name"))    rep = ctx->name[0] ? ctx->name : kname;
         else if ((sig == '$' && !strcmp(name, "number"))  || (sig == '%' && !strcmp(name, "n"))) {
             const char *d = kname + strlen(kname); while (d > kname && d[-1] >= '0' && d[-1] <= '9') d--; rep = d; }
         else if ((sig == '$' && !strcmp(name, "devpath")) || (sig == '%' && !strcmp(name, "p"))) rep = dp ? dp : "";
@@ -693,13 +694,14 @@ static inline int builtin_name_bit(const char *name) {
     if (!strcmp(name, "usb_id"))   return UB_USB;
     if (!strcmp(name, "input_id")) return UB_INPUT;
     if (!strcmp(name, "net_id"))   return UB_NET;
+    if (!strcmp(name, "net_setup_link")) return UB_NETLINK;
     if (!strcmp(name, "blkid"))    return UB_BLKID;
     if (!strcmp(name, "ata_id"))   return UB_ATA;
     if (!strcmp(name, "v4l_id"))   return UB_V4L;
     if (!strcmp(name, "cdrom_id")) return UB_CDROM;
     if (!strcmp(name, "fido_id"))  return UB_FIDO;
     if (!strcmp(name, "dissect_image")) return UB_DISSECT;
-    return 0;   /* keyboard, factory_reset, btrfs, net_setup_link, ... */
+    return 0;   /* keyboard, factory_reset, btrfs, ... */
 }
 
 /* 1 = continue applying rule; 0 = hard gate (stop this rule). */
