@@ -286,6 +286,9 @@ The onboarding wizard: a native Plasma (Qt/QML) GUI that walks a novice through
 the two-reboot in-place conversion, driving the migrate engine, the flip helper,
 and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 
+%post wizard
+[ "$1" -eq 1 ] && echo 'schema-wizard: run "schema-wizard" (or open "Set up schema" in the app menu) to start.' || :
+
 %files wizard
 %dir %{_libexecdir}/schema-init/wizard
 %dir %{_libexecdir}/schema-init/wizard/qml
@@ -293,6 +296,7 @@ and schema-doctor. Unprivileged; escalates only through the fixed helpers.
 %{_libexecdir}/schema-init/wizard/*.py
 %{_libexecdir}/schema-init/wizard/qml/*.qml
 %{_sysconfdir}/xdg/autostart/schema-wizard.desktop
+%{_datadir}/applications/schema-wizard.desktop
 
 %pre
 # The running login1 stub re-execs itself on SIGHUP, keeping its pid and the
