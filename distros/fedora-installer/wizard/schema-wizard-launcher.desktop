@@ -5,3 +5,4 @@ Comment=Convert this computer to schema-init
 Exec=/usr/bin/schema-wizard
 Icon=drive-harddisk
 Terminal=false
+Categories=System;

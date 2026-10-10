@@ -141,7 +141,15 @@ Reboot, pick the entry ending **(schema-init)** from the boot menu. To go back: 
 
 Proven end-to-end in a Fedora-KDE VM: deploy → schema-init as PID 1 with a full Plasma desktop → `--uninstall` → back on systemd. On real hardware, the deploy (through the wizard below) has converted a stock Fedora 44 KDE laptop; `--uninstall` has only been run in the VM. v1 is Fedora KDE only; on anything else use `setup.sh` below.
 
-`sudo dnf install schema-init-wizard` adds a guided GUI around the same reversible flow, with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both), and run on real hardware (2026-10-09): a stock Fedora 44 KDE laptop, `dnf install` from the COPR, all three stages healthy, no hand fixes ([numbers below](#fedora-44-kde-converted-in-place-stock-vs-migrated)). The forced rollbacks have only been exercised in the VM. The CLI above does the same thing and backs out the same way.
+Prefer a guided GUI? Install the wizard and start it:
+
+```sh
+sudo dnf copr enable ajax80/schema-init
+sudo dnf install schema-init-wizard
+schema-wizard                                   # or "Set up schema" in the app menu
+```
+
+`schema-init-wizard` adds a guided GUI around the same reversible flow, with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both), and run on real hardware (2026-10-09): a stock Fedora 44 KDE laptop, `dnf install` from the COPR, all three stages healthy, no hand fixes ([numbers below](#fedora-44-kde-converted-in-place-stock-vs-migrated)). The forced rollbacks have only been exercised in the VM. The CLI above does the same thing and backs out the same way.
 
 Without the COPR, run the migrator from a clone; without `--prebuilt` it builds from source and pulls gcc/make via dnf the first time:
 

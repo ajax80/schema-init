@@ -181,6 +181,8 @@ install-wizard:
 	install -m 0644 distros/fedora-installer/wizard/qml/Main.qml $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/qml/Main.qml
 	install -d $(DESTDIR)$(SYSCONFDIR)/xdg/autostart
 	install -m 0644 distros/fedora-installer/wizard/schema-wizard.desktop $(DESTDIR)$(SYSCONFDIR)/xdg/autostart/schema-wizard.desktop
+	install -d $(DESTDIR)$(PREFIX)/share/applications
+	install -m 0644 distros/fedora-installer/wizard/schema-wizard-launcher.desktop $(DESTDIR)$(PREFIX)/share/applications/schema-wizard.desktop
 
 release: all
 	rm -rf $(RELDIR)
