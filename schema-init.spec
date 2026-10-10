@@ -15,6 +15,7 @@ BuildRequires:  dbus-devel
 BuildRequires:  libzstd-devel
 BuildRequires:  pkgconf-pkg-config
 Requires:       python3
+Requires:       /usr/bin/gdbus
 # ISO-installed and migrated boxes run both daemons; an upgrade must pull them.
 Requires:       %{name}-daemons = %{version}-%{release}
 Recommends:     python3-dbus
@@ -390,6 +391,10 @@ fi
 %{_libexecdir}/schema-init/schema-sysctl-apply
 %{_libexecdir}/schema-init/schema-udevd-launch
 %{_libexecdir}/schema-init/schema-mount-fstab
+%{_libexecdir}/schema-init/schema-bus-activate
+%dir /usr/local/share/dbus-1
+%dir /usr/local/share/dbus-1/system-services
+/usr/local/share/dbus-1/system-services/org.freedesktop.PolicyKit1.service
 %{_sysconfdir}/grub.d/09_schema_fallback
 %{_prefix}/lib/kernel/install.d/99-schema-init.install
 %dir %{_sysconfdir}/%{name}
