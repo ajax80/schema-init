@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.10
+Version:        0.4.11
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -399,6 +399,11 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Fri Oct 09 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.11-1
+- schema-init-wizard: "Set up schema" in the app menu, a first-install
+  hint on how to start it, and the start step in the README
+- README: migrate benchmark on real hardware (stock vs migrated)
+
 * Fri Oct 09 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.10-1
 - Migrate: bus daemons that aren't Type=dbus (firewalld) wait for polkitd;
   fixes the first schema-init boot stalling before the desktop on stock
