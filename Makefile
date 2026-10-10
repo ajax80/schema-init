@@ -94,6 +94,8 @@ install: all
 	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
 	install -m 0755 scripts/schema-snapshot $(DESTDIR)$(BINDIR)/schema-snapshot
+	install -D -m 0755 scripts/schema-bus-activate $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-bus-activate
+	install -D -m 0644 config/dbus-1/system-services/org.freedesktop.PolicyKit1.service $(DESTDIR)/usr/local/share/dbus-1/system-services/org.freedesktop.PolicyKit1.service
 
 # Boot-durable rollback for btrfs + schema-init: snapshot / and /home into
 # writable sibling subvols with self-contained BLS entries before a risky

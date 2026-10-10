@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.freedesktop.PolicyKit1
+Exec=/usr/libexec/schema-init/schema-bus-activate polkitd org.freedesktop.PolicyKit1 /usr/lib/polkit-1/polkitd --no-debug
+User=root
+SystemdService=polkit.service
