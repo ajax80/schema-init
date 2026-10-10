@@ -1,0 +1,32 @@
+# DBox migrate-path bench 2026-10-09 — stock F44 KDE (fresh install, dnf-upgraded) vs schema-migrate 0.4.10; HDD WD5000LPCX, 3.7G RAM; temp plasmalogin autologin on systemd side
+### A0 discarded (first boot after upgrade)
+### A1 20:17:50
+init=systemd kernel=7.2.9-200.fc44.x86_64 uptime=246
+kwin=44.2 plasmashell=65.2 desktop_drawn=98.5 portal_kde=71.5
+mem_used_mb=1861 procs=239 load1=0.71 io_some_avg300=12.02
+Startup finished in 5.290s (firmware) + 11.717s (loader) + 3.362s (kernel) + 5.536s (initrd) + 28.678s (userspace) = 54.584s 
+### A2 20:22:17
+init=systemd kernel=7.2.9-200.fc44.x86_64 uptime=246
+kwin=44.6 plasmashell=63.9 desktop_drawn=98.6 portal_kde=72.5
+mem_used_mb=1872 procs=239 load1=0.66 io_some_avg300=12.22
+Startup finished in 5.290s (firmware) + 7.550s (loader) + 3.367s (kernel) + 5.969s (initrd) + 28.215s (userspace) = 50.392s 
+### A3 20:26:46
+init=systemd kernel=7.2.9-200.fc44.x86_64 uptime=247
+kwin=49.8 plasmashell=68.4 desktop_drawn=103.7 portal_kde=76.3
+mem_used_mb=1881 procs=242 load1=0.69 io_some_avg300=12.71
+Startup finished in 5.235s (firmware) + 7.550s (loader) + 3.365s (kernel) + 5.558s (initrd) + 30.029s (userspace) = 51.739s 
+### DONE 20:26:47
+### B0 discarded (first schema boot after migrate = arm/confirm boots)
+### B1 20:59:03
+init=schema-init kernel=7.2.9-200.fc44.x86_64 uptime=248
+kwin=28.9 plasmashell=43.7 desktop_drawn=68.9 portal_kde=44.4
+mem_used_mb=1418 procs=203 load1=0.43 io_some_avg300=7.97
+### B2 21:03:33
+init=schema-init kernel=7.2.9-200.fc44.x86_64 uptime=247
+kwin=28.7 plasmashell=42.9 desktop_drawn=71.7 portal_kde=42.9
+mem_used_mb=1433 procs=207 load1=0.58 io_some_avg300=7.81
+### B3 21:08:05
+init=schema-init kernel=7.2.9-200.fc44.x86_64 uptime=248
+kwin=28.4 plasmashell=43.1 desktop_drawn=71.1 portal_kde=43.9
+mem_used_mb=1442 procs=207 load1=0.77 io_some_avg300=7.77
+### DONE 21:08:05

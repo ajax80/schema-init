@@ -139,9 +139,9 @@ sudo schema-migrate --deploy --prebuilt         # uses the packaged binaries
 
 Reboot, pick the entry ending **(schema-init)** from the boot menu. To go back: boot your normal Fedora entry and run `sudo schema-migrate --uninstall` — it reverses exactly what it wrote (manifest-tracked) and leaves pre-existing packages alone.
 
-Proven end-to-end in a Fedora-KDE VM: deploy → schema-init as PID 1 with a full Plasma desktop → `--uninstall` → back on systemd. It has not yet been run on real hardware. v1 is Fedora KDE only; on anything else use `setup.sh` below.
+Proven end-to-end in a Fedora-KDE VM: deploy → schema-init as PID 1 with a full Plasma desktop → `--uninstall` → back on systemd. On real hardware, the deploy (through the wizard below) has converted a stock Fedora 44 KDE laptop; `--uninstall` has only been run in the VM. v1 is Fedora KDE only; on anything else use `setup.sh` below.
 
-`sudo dnf install schema-init-wizard` adds a guided GUI around the same reversible flow, with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both) but not on real hardware either; the CLI above does the same thing and backs out the same way.
+`sudo dnf install schema-init-wizard` adds a guided GUI around the same reversible flow, with a two-reboot safety ladder. It's been VM-tested end to end (deploy, udev flip, dbus flip, and forced rollbacks of both), and run on real hardware (2026-10-09): a stock Fedora 44 KDE laptop, `dnf install` from the COPR, all three stages healthy, no hand fixes ([numbers below](#fedora-44-kde-converted-in-place-stock-vs-migrated)). The forced rollbacks have only been exercised in the VM. The CLI above does the same thing and backs out the same way.
 
 Without the COPR, run the migrator from a clone; without `--prebuilt` it builds from source and pulls gcc/make via dnf the first time:
 
@@ -827,6 +827,23 @@ With the stock D-Bus daemon, both inits reach the compositor at the same moment,
 The last column (measured 2026-09-27, medians of 4 runs) adds schema's own message bus, [schema-dbus](#the-system-bus-itself-schema-dbus), on both the system and session bus. To isolate it, the same box with the same tuning was measured with the switch rolled back to the stock daemon (3 runs: kwin 46.0 s, plasmashell 61.1 s, desktop 83.5 s, 1050 MB — matching the 09-25 column), then switched back. schema-dbus alone brings the compositor up 7.6 s sooner and draws the desktop 6.6 s sooner, at the same RAM; the gain lands before the compositor starts. Raw data in [`tests/livetest/dbox-bench-20260927.txt`](tests/livetest/dbox-bench-20260927.txt). End to end, the desktop is drawn about 15 s sooner than on stock systemd.
 
 These are one laptop's numbers. The run-to-run spread was small (plasmashell 57.7–59.7 s on schema-init vs 63.5–64.4 s on systemd), but a different disk, CPU or desktop will give different figures.
+
+### Fedora 44 KDE, converted in place: stock vs migrated
+
+Measured 2026-10-09 on the same HP laptop (Celeron N4000, 3.7 GB RAM, 5400 rpm HDD), reinstalled from the official Fedora 44 KDE Live ISO and fully `dnf upgrade`d (kernel 7.2.9 on every run). The stock side was measured first; then `dnf install schema-init-wizard` from the COPR and three clicks through the wizard (deploy, schema-udev, schema-dbus), with no tuning and no hand fixes. Both sides autologin into Plasma 6 (the stock side through a temporary `plasmalogin` autologin, removed before migrating). Same method as above: warm reboots, readings 4 minutes after boot by [`tests/livetest/boot-metrics`](tests/livetest/boot-metrics), seconds from kernel start, medians of 3 runs after one discarded boot per side. Raw data in [`tests/livetest/dbox-bench-20261009.txt`](tests/livetest/dbox-bench-20261009.txt).
+
+| | systemd (stock Fedora) | schema-init (migrated) |
+|---|---|---|
+| kwin_wayland spawned | 44.6 s | **28.7 s** |
+| plasmashell spawned | 65.2 s | **43.1 s** |
+| desktop drawn (desktop.so kioworker) | 98.6 s | **71.1 s** |
+| xdg-desktop-portal-kde spawned | 72.5 s | **43.9 s** |
+| RAM used at idle | 1872 MB | **1433 MB** |
+| processes | 239 | 207 |
+| load average (1 min) at 4 min | 0.69 | 0.58 |
+| IO pressure (`some` avg300) | 12.2 | 7.8 |
+
+On a box nobody tuned, the migrated install draws the desktop 27.5 s sooner and carries 439 MB less RAM. Spread was small on both sides (desktop drawn 98.5–103.7 s stock, 68.9–71.7 s migrated). The stock baseline differs from the table above (Live-ISO install instead of netinst, a newer kernel and Plasma), so compare columns within one table, not across tables.
 
 ### PID 1 RSS — every measurement
 
