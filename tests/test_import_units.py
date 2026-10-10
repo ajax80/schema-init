@@ -485,4 +485,49 @@ open(os.path.join(tmp, "etc/systemd/system/dev-x.device.wants/qga.service"), "w"
 check("enabled_units: targets only, reclaimed/template/dup/non-unit dropped",
       si.enabled_units() == ["crond.service", "cupsd.service", "cups.socket", "fstrim.timer"])
 
+
+act = os.path.join(tmp, "usr/share/dbus-1/system-services")
+os.makedirs(act, exist_ok=True)
+def actfile(fn, body): open(os.path.join(act, fn), "w").write(body)
+actfile("org.x.Disks.service", "[D-BUS Service]\nName=org.x.Disks\nExec=/usr/libexec/disksd\nUser=root\nSystemdService=disksd.service\n")
+actfile("org.x.Alias.service", "[D-BUS Service]\nName=org.x.Alias\nExec=/bin/false\nUser=root\nSystemdService=dbus-org.x.Alias.service\n")
+actfile("org.x.Color.service", "[D-BUS Service]\nName=org.x.Color\nExec=/usr/libexec/colord\nUser=colord\nSystemdService=color.service\n")
+actfile("org.x.Nounit.service", "[D-BUS Service]\nName=org.x.Nounit\nExec=/usr/libexec/n\nUser=root\nSystemdService=nounit.service\n")
+actfile("org.x.Nosd.service", "[D-BUS Service]\nName=org.x.Nosd\nExec=/usr/libexec/k\nUser=root\n")
+actfile("org.x.Pk.service", "[D-BUS Service]\nName=org.x.Pk\nExec=/usr/lib/polkit-1/polkitd\nUser=root\nSystemdService=polkit.service\n")
+for u in ("disksd", "realalias", "color", "polkit"):
+    open(os.path.join(unitdir, u + ".service"), "w").write("[Service]\nExecStart=/usr/bin/" + u + "\n")
+os.symlink(os.path.join(unitdir, "realalias.service"), os.path.join(unitdir, "dbus-org.x.Alias.service"))
+for n in ("disksd", "realalias", "color", "polkitd"):
+    open(os.path.join(SD, n + ".svc"), "w").write("name=%s\nexec=/usr/bin/%s\n" % (n, n))
+bd = os.path.join(tmp, "usr/local/share/dbus-1/system-services")
+os.makedirs(bd, exist_ok=True)
+actfile("org.x.Raw.service", "[D-BUS Service]\nName=org.x.Raw\nExec=/usr/bin/bluetoothd\nUser=root\nSystemdService=bluetooth.service\n")
+open(os.path.join(unitdir, "bluetooth.service"), "w").write("[Service]\nExecStart=/usr/bin/bluetoothd\n")
+open(os.path.join(SD, "bluetooth.svc"), "w").write("name=bluetooth\nexec=/usr/bin/bluetoothd\n")
+actfile("org.x.NoUser.service", "[D-BUS Service]\nName=org.x.NoUser\nExec=/usr/libexec/disksd\nSystemdService=disksd.service\n")
+actfile("org.x.NoUserFalse.service", "[D-BUS Service]\nName=org.x.NoUserFalse\nExec=/bin/false\nSystemdService=disksd.service\n")
+open(os.path.join(act, "org.x.Latin.service"), "wb").write(b"[D-BUS Service]\n# caf\xe9\nName=org.x.Latin\n")
+open(os.path.join(bd, "org.x.Pk.service"), "w").write("hand-made\n")
+open(os.path.join(bd, "org.x.Gone.service"), "w").write(si.BUS_MARK + "\nName=org.x.Gone\n")
+c = si.bus_overrides(log=lambda *_: None)
+ov = lambda n: open(os.path.join(bd, n + ".service")).read()
+check("bus override routes a .svc-backed name through PID 1",
+      "Exec=%s disksd org.x.Disks /usr/libexec/disksd\n" % si.BUS_HELPER in ov("org.x.Disks")
+      and "SystemdService=disksd.service\n" in ov("org.x.Disks") and ov("org.x.Disks").startswith(si.BUS_MARK + "\n"))
+check("bus override follows a dbus-org alias to the real unit", " realalias org.x.Alias /bin/false\n" in ov("org.x.Alias"))
+check("bus override skips non-root User, missing .svc, no SystemdService",
+      not any(os.path.exists(os.path.join(bd, n + ".service")) for n in ("org.x.Color", "org.x.Nounit", "org.x.Nosd")))
+check("bus override never touches a hand-made file", ov("org.x.Pk") == "hand-made\n" and c["skipped"] == 1)
+check("stale generated override removed", not os.path.exists(os.path.join(bd, "org.x.Gone.service")) and c["removed"] == 1)
+check("bus override uses the raw-stem .svc when it exists (bluetooth, not bluetoothd)", " bluetooth org.x.Raw " in ov("org.x.Raw"))
+check("missing User= skipped unless the daemon is /bin/false",
+      not os.path.exists(os.path.join(bd, "org.x.NoUser.service")) and "User=root\n" in ov("org.x.NoUserFalse"))
+check("undecodable activation file skipped, pass still completes", not os.path.exists(os.path.join(bd, "org.x.Latin.service")))
+check("no .tmp left behind", not any(f.endswith(".tmp") for f in os.listdir(bd)))
+check("bus override rerun is a no-op", si.bus_overrides(log=lambda *_: None) == {"written": 0, "kept": 4, "removed": 0, "skipped": 1})
+os.remove(os.path.join(SD, "disksd.svc"))
+si.bus_overrides(log=lambda *_: None)
+check("override dropped when its .svc goes away", not os.path.exists(os.path.join(bd, "org.x.Disks.service")))
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
