@@ -15,6 +15,7 @@ BuildRequires:  dbus-devel
 BuildRequires:  libzstd-devel
 BuildRequires:  pkgconf-pkg-config
 Requires:       python3
+Requires:       /usr/bin/gdbus
 # ISO-installed and migrated boxes run both daemons; an upgrade must pull them.
 Requires:       %{name}-daemons = %{version}-%{release}
 Recommends:     python3-dbus

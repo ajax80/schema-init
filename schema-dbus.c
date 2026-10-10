@@ -56,7 +56,7 @@ static char           g_bus_addr[256];
 static int            g_system_bus;   /* Decision 1, SP4 design doc: --system present
                                           vs absent is the single mode signal gating
                                           session-bus-specific behavior in this file. */
-#define SDBUS_SVC_DIRS "/etc/dbus-1/system-services:/usr/local/share/dbus-1/system-services:/usr/share/dbus-1/system-services"
+#define SDBUS_SVC_DIRS "/usr/local/share/dbus-1/system-services:/usr/share/dbus-1/system-services"
 #define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
 

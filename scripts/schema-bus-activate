@@ -5,6 +5,7 @@ ctl=/usr/bin/schema-ctl
 [ -x "$ctl" ] || ctl=/usr/local/bin/schema-ctl
 if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && "$ctl" status "$svc" >/dev/null 2>&1; then
     "$ctl" start "$svc" >/dev/null 2>&1
-    exec gdbus wait --system --timeout 25 "$name"
+    "$ctl" status "$svc" 2>/dev/null | head -n1 | grep -q "state=DORMANT" && exit 1
+    exec gdbus wait --system --timeout 20 "$name"
 fi
 exec "$@"
