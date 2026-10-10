@@ -20,6 +20,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <linux/netlink.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
 
 #define DEV_DIR "/etc/schema-init/dev"
 
@@ -240,6 +242,40 @@ static void run_hook(const char *hook, const struct uevent *ev) {
     }
 }
 
+static void net_rename(struct uevent *ev, struct uevent *orig, const char *newname) {
+    const char *sub = uevent_get(ev, "SUBSYSTEM"), *old = uevent_get(ev, "INTERFACE");
+    const char *dp = uevent_get(ev, "DEVPATH");
+    if (!sub || strcmp(sub, "net") || !old || !dp || !strcmp(old, newname)) return;
+    if (strlen(newname) >= IFNAMSIZ || strchr(newname, '/')) {
+        fprintf(stderr, "[schema-udev] net: refusing name '%s' for %s\n", newname, old);
+        return;
+    }
+    char oldname[IFNAMSIZ];
+    safe_copy(oldname, old, sizeof oldname);
+    int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return;
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof ifr);
+    safe_copy(ifr.ifr_name, oldname, sizeof ifr.ifr_name);
+    safe_copy(ifr.ifr_newname, newname, sizeof ifr.ifr_newname);
+    int r = ioctl(fd, SIOCSIFNAME, &ifr);
+    int e = errno;
+    close(fd);
+    if (r < 0) {
+        fprintf(stderr, "[schema-udev] net: rename %s -> %s failed: %s\n", oldname, newname, strerror(e));
+        return;
+    }
+    fprintf(stderr, "[schema-udev] net: renamed %s -> %s\n", oldname, newname);
+    char ndp[UE_VAL_MAX];
+    const char *slash = strrchr(dp, '/');
+    if ((size_t)snprintf(ndp, sizeof ndp, "%.*s/%s", (int)(slash - dp), dp, newname) >= sizeof ndp) return;
+    struct uevent *evs[2] = { ev, orig };
+    for (int i = 0; i < 2; i++) {
+        uevent_set(evs[i], "INTERFACE", newname);
+        uevent_set(evs[i], "DEVPATH", ndp);
+    }
+}
+
 static void dispatch(struct uevent *ev) {
     const char *action = uevent_get(ev, "ACTION");
     if (!action) return;
@@ -251,12 +287,25 @@ static void dispatch(struct uevent *ev) {
         const char *dn = NULL;
         if (devname) { snprintf(devnode, sizeof devnode, "/dev/%s", devname); dn = devnode; }
         run_builtins("/sys", devpath, dn, ev);
+        if (g_live && strcmp(action, "move") == 0) {
+            char id[128], p[PATH_MAX];
+            struct uevent old;
+            if (udev_db_filename(ev, id, sizeof id) == 0 &&
+                (size_t)snprintf(p, sizeof p, "%s/%s", UDEV_DB_DIR, id) < sizeof p &&
+                udev_db_read_eprops(p, &old) == 0)
+                for (int i = 0; i < old.n; i++)
+                    if (!uevent_get(ev, old.key[i])) uevent_set(ev, old.key[i], old.val[i]);
+        }
         struct uevent shadow_ev = *ev;          /* deep copy: uevent is inline char[], no heap */
         int pre_rules_n = shadow_ev.n;
         struct dev_ctx rc;
         int ua_tagged = 0;
         if (dev_ctx_init(&rc, &shadow_ev, "/sys") == 0) {
             ruleset_apply(&g_ruleset, &rc);
+            if (g_live && strcmp(action, "add") == 0 && rc.name[0]) {
+                net_rename(&shadow_ev, ev, rc.name);
+                devpath = uevent_get(ev, "DEVPATH");
+            }
             for (int i = 0; i < rc.ntags; i++)
                 if (strcmp(rc.tags[i], "uaccess") == 0) { ua_tagged = 1; break; }
             /* Live mode is the sole device-DB authority: write the full record

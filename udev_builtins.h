@@ -58,7 +58,7 @@ static inline int ub_has_ata_ancestor(const char *devpath) {
     return 0;
 }
 
-enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128, UB_CDROM = 256, UB_FIDO = 512, UB_DISSECT = 1024 };
+enum { UB_HWDB = 1, UB_PATH = 2, UB_USB = 4, UB_INPUT = 8, UB_NET = 16, UB_BLKID = 32, UB_ATA = 64, UB_V4L = 128, UB_CDROM = 256, UB_FIDO = 512, UB_DISSECT = 1024, UB_NETLINK = 2048 };
 
 /* Pure guard logic: which builtins apply to this device? Mirrors the IMPORT{builtin}
  * conditions in systemd's shipped /usr/lib/udev/rules.d. Order of the bits is
@@ -173,6 +173,7 @@ static inline int run_builtin_bit(const char *sysroot, const char *devpath,
     case UB_USB:   tmp.n = 0; { int r = usb_id_build(sysroot, devpath, &tmp);    ub_absorb(ev, &tmp); return r; }
     case UB_INPUT: tmp.n = 0; { int r = input_id_build(sysroot, devpath, &tmp);  ub_absorb(ev, &tmp); return r; }
     case UB_NET:   tmp.n = 0; { int r = net_id_build(sysroot, devpath, &tmp);    ub_absorb(ev, &tmp); return r; }
+    case UB_NETLINK: tmp.n = 0; { int r = net_setup_link_build(sysroot, devpath, ev, &tmp); ub_absorb(ev, &tmp); return r; }
     case UB_V4L:   tmp.n = 0; { int r = v4l_id_build(sysroot, devpath, devnode, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }
     case UB_ATA:   tmp.n = 0; { int r = ata_id_build(sysroot, devpath, devnode, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }
     case UB_BLKID: {
