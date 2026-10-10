@@ -347,19 +347,25 @@ static inline int nsl_word_list_match(const char *list, const char *s, int glob)
 
 struct nsl_link { char name[64]; char policy[256]; int matched; };
 
-static inline int nsl_parse(const char *path, const char *ifname, const char *mac,
-                            const char *driver, struct nsl_link *L) {
+struct nsl_dev { const char *ifname, *mac, *driver, *type, *path; };
+
+static inline int nsl_parse(const char *path, const struct nsl_dev *D, struct nsl_link *L) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     char line[1024], sec[32] = "";
-    int ok = 1;
+    int ok = 1, nmatch = 0;
     memset(L, 0, sizeof *L);
     while (fgets(line, sizeof line, f)) {
         char *l = line;
         while (isspace((unsigned char)*l)) l++;
         l[strcspn(l, "\r\n")] = '\0';
         if (!*l || *l == '#' || *l == ';') continue;
-        if (*l == '[') { safe_copy(sec, l, sizeof sec); continue; }
+        if (*l == '[') {
+            char *e = strchr(l, ']');
+            if (e) e[1] = '\0';
+            safe_copy(sec, l, sizeof sec);
+            continue;
+        }
         char *eq = strchr(l, '=');
         if (!eq) continue;
         *eq = '\0';
@@ -368,9 +374,12 @@ static inline int nsl_parse(const char *path, const char *ifname, const char *ma
         while (isspace((unsigned char)*v)) v++;
         if (!strcmp(sec, "[Match]")) {
             if (!*v) continue;
-            if (!strcmp(k, "OriginalName"))    ok &= nsl_word_list_match(v, ifname, 1);
-            else if (!strcmp(k, "MACAddress")) ok &= nsl_word_list_match(v, mac, 0);
-            else if (!strcmp(k, "Driver"))     ok &= nsl_word_list_match(v, driver, 1);
+            nmatch++;
+            if (!strcmp(k, "OriginalName"))    ok &= nsl_word_list_match(v, D->ifname, 1);
+            else if (!strcmp(k, "MACAddress")) ok &= nsl_word_list_match(v, D->mac, 0);
+            else if (!strcmp(k, "Driver"))     ok &= nsl_word_list_match(v, D->driver, 1);
+            else if (!strcmp(k, "Type"))       ok &= nsl_word_list_match(v, D->type, 1);
+            else if (!strcmp(k, "Path"))       ok &= nsl_word_list_match(v, D->path, 1);
             else ok = 0;
         } else if (!strcmp(sec, "[Link]")) {
             if (!strcmp(k, "Name"))            safe_copy(L->name, v, sizeof L->name);
@@ -378,7 +387,7 @@ static inline int nsl_parse(const char *path, const char *ifname, const char *ma
         }
     }
     fclose(f);
-    L->matched = ok;
+    L->matched = ok && nmatch > 0;
     return 0;
 }
 
@@ -386,8 +395,7 @@ static int nsl_cmp(const void *a, const void *b) {
     return strcmp(strrchr(*(char *const *)a, '/') + 1, strrchr(*(char *const *)b, '/') + 1);
 }
 
-static inline int nsl_find_link(const char *ifname, const char *mac, const char *driver,
-                                struct nsl_link *L, char *file, size_t filesz) {
+static inline int nsl_find_link(const struct nsl_dev *D, struct nsl_link *L, char *file, size_t filesz) {
     static const char *dirs[] = { "/etc/systemd/network", "/run/systemd/network", "/usr/lib/systemd/network" };
     char *paths[256];
     int n = 0;
@@ -413,7 +421,7 @@ static inline int nsl_find_link(const char *ifname, const char *mac, const char 
     qsort(paths, n, sizeof paths[0], nsl_cmp);
     int found = -1;
     for (int i = 0; i < n && found < 0; i++)
-        if (nsl_parse(paths[i], ifname, mac, driver, L) == 0 && L->matched) {
+        if (nsl_parse(paths[i], D, L) == 0 && L->matched) {
             safe_copy(file, paths[i], filesz);
             found = 0;
         }
@@ -429,7 +437,8 @@ static inline int nsl_disabled(void) {
     char cmd[4096];
     if (nsl_read_line(p, cmd, sizeof cmd) == 0) {
         for (char *t = strtok(cmd, " "); t; t = strtok(NULL, " "))
-            if (!strcmp(t, "net.ifnames=0")) return 1;
+            if (!strcmp(t, "net.ifnames=0") || !strcmp(t, "net.ifnames=no") ||
+                !strcmp(t, "net.ifnames=false") || !strcmp(t, "net.ifnames=off")) return 1;
     }
     return 0;
 }
@@ -437,7 +446,7 @@ static inline int nsl_disabled(void) {
 static inline int net_setup_link_build(const char *sysroot, const char *devpath,
                                        const struct uevent *ev, struct uevent *out) {
     out->n = 0;
-    if (nsl_disabled()) return 0;
+    int policy_off = nsl_disabled();
     char netdir[PATH_MAX], p[PATH_MAX], mac[64] = "", driver[64] = "", tmp[64];
     if ((size_t)snprintf(netdir, sizeof netdir, "%s%s", sysroot, devpath) >= sizeof netdir) return -1;
     const char *ifname = strrchr(devpath, '/');
@@ -450,9 +459,14 @@ static inline int net_setup_link_build(const char *sysroot, const char *devpath,
     ssize_t ll = readlink(p, lk, sizeof lk - 1);
     if (ll > 0) { lk[ll] = '\0'; safe_copy(driver, strrchr(lk, '/') ? strrchr(lk, '/') + 1 : lk, sizeof driver); }
 
+    char type[16] = "", ue[64];
+    if (nid_uevent_val(netdir, "DEVTYPE", ue, sizeof ue) == 0 && ue[0]) safe_copy(type, ue, sizeof type);
+    else if (nid_arphrd(netdir) == NID_ARPHRD_ETHER) safe_copy(type, "ether", sizeof type);
+    struct nsl_dev D = { ifname, mac[0] ? mac : NULL, driver[0] ? driver : NULL,
+                         type[0] ? type : NULL, uevent_get(ev, "ID_PATH") };
     struct nsl_link L;
     char file[PATH_MAX];
-    if (nsl_find_link(ifname, mac[0] ? mac : NULL, driver[0] ? driver : NULL, &L, file, sizeof file) < 0)
+    if (nsl_find_link(&D, &L, file, sizeof file) < 0)
         return 0;
     nid_emit(out, "ID_NET_LINK_FILE", file);
 
@@ -461,7 +475,7 @@ static inline int net_setup_link_build(const char *sysroot, const char *devpath,
     if (nsl_read_line(p, tmp, sizeof tmp) == 0) nat = atoi(tmp);
 
     char pol[256];
-    safe_copy(pol, L.policy, sizeof pol);
+    safe_copy(pol, policy_off ? "" : L.policy, sizeof pol);
     for (char *t = strtok(pol, " \t"); t; t = strtok(NULL, " \t")) {
         const char *key = NULL;
         if (!strcmp(t, "keep"))   { if (nat == 3 || nat == 4) return 0; continue; }

@@ -1198,12 +1198,12 @@ class NmProfileIface(Check):
             return None
         return Finding(
             detail="NetworkManager profile(s) bound to an interface name that does not "
-                   "exist: " + "; ".join(bad) + " — schema-udev keeps kernel names "
-                   "(eth0/wlan0), so the profile never activates and NM shows the link "
-                   "as externally managed / disconnected. Fix with "
-                   "nmcli con modify <id> connection.interface-name <kernel name>",
-            oracle_said="udev net_setup_link renames NICs to predictable names "
-                        "(enp6s0) that the profile was saved against",
+                   "exist: " + "; ".join(bad) + " — the NIC came up under a different "
+                   "name than the profile was saved against (kernel eth0/wlan0 vs "
+                   "predictable enp6s0, see /etc/schema-init/net-naming), so the profile "
+                   "never activates and NM shows the link as disconnected. Fix with "
+                   "nmcli con modify <id> connection.interface-name \"\" (unpin)",
+            oracle_said="profile interface-name matches the NIC's current name",
             healable=False)
 
 

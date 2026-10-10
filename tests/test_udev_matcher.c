@@ -74,7 +74,11 @@ int main(void) {
     safe_copy(cs.name, "renamed0", sizeof cs.name);
     ruleset_subst("/sys/subsystem/net/devices/$name", &cs, o, sizeof o);
     assert(strcmp(o, "/sys/subsystem/net/devices/renamed0") == 0);
+    struct rule_clause nc; memset(&nc, 0, sizeof nc);
+    safe_copy(nc.key, "NAME", sizeof nc.key); nc.op = OP_MATCH_EQ; nc.val[0] = '\0';
+    assert(match_dev_clause(&nc, &cs) == 0);
     cs.name[0] = '\0';
+    assert(match_dev_clause(&nc, &cs) == 1);
     /* $id / %b reads matched_parent */
     safe_copy(cs.matched_parent, "0000:00:1f.2", sizeof cs.matched_parent);
     ruleset_subst("$id|%b", &cs, o, sizeof o);

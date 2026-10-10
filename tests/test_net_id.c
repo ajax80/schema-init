@@ -270,6 +270,8 @@ static void test_setup_link(void) {
     snprintf(net, sizeof net, "%s/devices/pci0000:00/0000:00:1f.6/net/eth0", root); nid_mkdirs(net);
     nid_wf(net, "address", "a8:a1:59:0b:e8:ef");
     nid_wf(net, "name_assign_type", "1");
+    nid_wf(net, "type", "1");
+    nid_wf(net, "uevent", "INTERFACE=eth0");
     const char *dp = "/devices/pci0000:00/0000:00:1f.6/net/eth0";
     struct uevent in = {0}, out;
     nid_emit(&in, "ID_NET_NAME_PATH", "enp0s31f6");
@@ -300,12 +302,29 @@ static void test_setup_link(void) {
 
     snprintf(d, sizeof d, "%s/etc/schema-init", root);
     nid_wf(d, "net-naming", "kernel");
-    assert(net_setup_link_build(root, dp, &in, &out) == 0 && out.n == 0);
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
     snprintf(d, sizeof d, "%s/etc/schema-init/net-naming", root); unlink(d);
 
     snprintf(d, sizeof d, "%s/proc", root);
     nid_wf(d, "cmdline", "ro net.ifnames=0 quiet");
-    assert(net_setup_link_build(root, dp, &in, &out) == 0 && out.n == 0);
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    nid_wf(d, "cmdline", "ro net.ifnames=no quiet");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    nid_wf(e2, "10-lan.link", "[Match]\nMACAddress=a8:a1:59:0b:e8:ef\n[Link]\nName=lan0\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "lan0"));
+    nid_wf(d, "cmdline", "ro quiet");
+
+    nid_wf(e2, "10-lan.link", "[Match]\nType=ether\nPath=pci-0000:00:1f.6\n[Link]\nName=lan1\n");
+    nid_emit(&in, "ID_PATH", "pci-0000:00:1f.6");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "lan1"));
+    nid_wf(e2, "10-lan.link", "[Match]\nType=wlan\n[Link]\nName=lan1\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "enp0s31f6"));
+    nid_wf(e2, "10-lan.link", "[Match]\nProperty=FOO=1\n[Link]\nName=lan1\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "enp0s31f6"));
+    nid_wf(e2, "10-lan.link", "[Link]\nName=lan1\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "enp0s31f6"));
+    nid_wf(e2, "10-lan.link", "[Match]  \nMACAddress=00:11:22:33:44:55\n[Link]\nName=lan1\n");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_has_val(&out, "ID_NET_NAME", "enp0s31f6"));
 
     nsl_root = "";
     printf("test_setup_link OK\n");

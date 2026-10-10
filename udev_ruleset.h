@@ -345,7 +345,9 @@ static inline int ruleset_subst_ex(const char *in, const struct dev_ctx *ctx, ch
         char tmp[UE_VAL_MAX];
         const char *rep = NULL; int known = 1;
         if      ((sig == '$' && !strcmp(name, "kernel"))  || (sig == '%' && !strcmp(name, "k"))) rep = kname;
-        else if  (sig == '$' && !strcmp(name, "name"))    rep = ctx->name[0] ? ctx->name : kname;
+        else if  (sig == '$' && !strcmp(name, "name")) {
+            const char *dvn = uevent_get(ctx->ev, "DEVNAME");
+            rep = ctx->name[0] ? ctx->name : (dvn && dvn[0]) ? (strncmp(dvn, "/dev/", 5) ? dvn : dvn + 5) : kname; }
         else if ((sig == '$' && !strcmp(name, "number"))  || (sig == '%' && !strcmp(name, "n"))) {
             const char *d = kname + strlen(kname); while (d > kname && d[-1] >= '0' && d[-1] <= '9') d--; rep = d; }
         else if ((sig == '$' && !strcmp(name, "devpath")) || (sig == '%' && !strcmp(name, "p"))) rep = dp ? dp : "";
@@ -475,6 +477,7 @@ static inline int match_dev_clause(const struct rule_clause *c, struct dev_ctx *
     }
     if (!strcmp(c->key, "TEST"))  return test_clause_match(c, ctx);
     if (!strcmp(c->key, "RESULT")) return rk_cmp(c->op, c->val, ctx->result);
+    if (!strcmp(c->key, "NAME"))   return rk_cmp(c->op, c->val, ctx->name);
     return -1;   /* parent key (SUBSYSTEMS/…) or R4 conditional (PROGRAM) */
 }
 
