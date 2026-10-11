@@ -93,6 +93,8 @@ install: all
 	install -m 0644 services/* $(DESTDIR)$(DATADIR)/schema-init/services/
 	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
+	[ -n "$(DESTDIR)" ] || [ -e $(SYSCONFDIR)/schema-init/services/logrotate.svc ] || \
+		install -m 0644 services/logrotate.svc $(SYSCONFDIR)/schema-init/services/logrotate.svc
 	install -m 0755 scripts/schema-snapshot $(DESTDIR)$(BINDIR)/schema-snapshot
 	install -D -m 0755 scripts/schema-bus-activate $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-bus-activate
 	install -D -m 0644 completion/schema-ctl.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/schema-ctl

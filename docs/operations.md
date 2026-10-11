@@ -243,27 +243,27 @@ There is no journal daemon. Logs are plain text, always.
 - `SIGHUP` to PID 1 means **reload configuration** (`init.c:1312`), not "reopen logs". A `postrotate kill -HUP 1` would silently trigger a config reload instead of rotating.
 - Every writer uses `O_APPEND` (`service.c:321`, `schema-journal-sink.c:344`), which is what makes truncation safe: writes resume at offset 0 instead of leaving a sparse hole at the old offset.
 
-**Something has to run logrotate.** There is no cron and no `logrotate.timer` here, so schedule it as an ordinary wall-clock timer — see `services/logrotate.svc.example`:
+**It is scheduled out of the box.** There is no cron and no `logrotate.timer` here, so rotation runs as an ordinary wall-clock timer, `logrotate.svc`:
 
 ```ini
 name=logrotate
 exec=/usr/sbin/logrotate
 args=/etc/logrotate.conf
+condition=path_exists:/usr/sbin/logrotate
 needs_root=1
 on_calendar=00:10
 persistent=1
 ```
 
-Copy it into your service directory to arm it:
+How it gets there depends on the install path:
 
-```bash
-sudo cp /usr/share/schema-init/services/logrotate.svc.example \
-        /etc/schema-init/services/logrotate.svc
-sudo schema-ctl reload
-```
+- **ISO install, or `schema-migrate --deploy` / the wizard** — Fedora enables `logrotate.timer`, and the importer translates every enabled unit, so `/etc/schema-init/services/logrotate.svc` is written for you.
+- **`make install` from a clone** — installs `services/logrotate.svc` into `/etc/schema-init/services/` unless one is already there. A staged install (`DESTDIR` set, as in the RPM build) leaves `/etc/schema-init/services/` alone.
+
+If logrotate isn't installed, the condition skips the timer instead of failing it.
 
 `persistent=1` matters here: a box that is powered off at 00:10 would otherwise skip that day's rotation entirely and only catch up the next night.
 
-Without that timer (or some other caller) the config sits inert and logs still grow unbounded. `maxsize 100M` is not a safety net on its own — it is only consulted when logrotate actually runs.
+Remove that file (or never have one) and the config sits inert and logs grow unbounded. `maxsize 100M` is not a safety net on its own — it is only consulted when logrotate actually runs.
 
 **`journalctl` shim (optional Track B)** — software and post-install scripts that shell out to `journalctl -u <svc>` would fail with no journald present. `scripts/journalctl` is a drop-in interceptor: install it to `/usr/local/bin/journalctl` and it serves the matching `*.log` from the directories above, swallows unknown flags, supports `-o json`, and always exits 0 so a caller piping it to `jq`/`awk` never hard-crashes. It does **not** read a binary journal — there isn't one.
