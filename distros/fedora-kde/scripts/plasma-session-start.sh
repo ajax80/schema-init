@@ -136,6 +136,22 @@ sleep 1
 # runs fine without the fake; schema-plasma-watchdog.sh's fallback respawn
 # (plain plasmashell, no shim) proved this live 2026-09-22, stable 15+ min.
 # Launch bare directly instead of waiting on the watchdog's ~60-90s recovery.
+#
+# kactivitymanagerd must own its bus name BEFORE plasmashell starts: plasmashell
+# calls org.kde.ActivityManager immediately, and if nobody owns it yet the bus
+# activates a second instance alongside the direct launch below. The loser
+# never claims the name but keeps the stats database open; the two lock each
+# other and plasmashell's main thread spins re-querying a locked database
+# (taskbar dead; 2026-10-10 blakbox, 1.6M "database is locked"/hour).
+if [ -x /usr/libexec/kactivitymanagerd ] && ! busctl --user status org.kde.ActivityManager >/dev/null 2>&1; then
+    pgrep -x kactivitymanage >/dev/null 2>&1 || /usr/libexec/kactivitymanagerd &
+    i=0
+    while [ $i -lt 20 ]; do
+        busctl --user status org.kde.ActivityManager >/dev/null 2>&1 && break
+        sleep 0.25
+        i=$((i+1))
+    done
+fi
 pgrep -x plasmashell >/dev/null || /usr/bin/plasmashell &
 
 # KDE session daemons ksmserver/startplasma normally start. Their
@@ -145,7 +161,7 @@ pgrep -x plasmashell >/dev/null || /usr/bin/plasmashell &
 # they inherit the logind session (polkit-kde needs it to resolve its subject).
 # Guarded against doubles (each is also a single-instance bus name).
 #
-# kactivitymanagerd and xdg-desktop-portal-kde are launched here too, not left
+# kactivitymanagerd (above, before plasmashell) and xdg-desktop-portal-kde are launched here too, not left
 # to D-Bus activation: both have .service files under
 # /usr/share/dbus-1/services, but an activated child only inherits
 # schema-dbus's own process environ (see sdbus_activate_build_env in
@@ -165,7 +181,6 @@ for _svc in /usr/bin/kded6 \
             /usr/libexec/org_kde_powerdevil \
             /usr/libexec/kglobalacceld \
             /usr/libexec/kf6/polkit-kde-authentication-agent-1 \
-            /usr/libexec/kactivitymanagerd \
             /usr/libexec/xdg-desktop-portal-kde; do
     [ -x "$_svc" ] && ! pgrep -f "$_svc" >/dev/null 2>&1 && "$_svc" &
 done
