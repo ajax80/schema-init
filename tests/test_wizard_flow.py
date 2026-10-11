@@ -19,6 +19,8 @@ class FakeBackend:
     def arm_dbus(self): self.calls.append(("arm_dbus",)); return self
     def confirm_dbus(self): self.calls.append(("confirm_dbus",)); return self
     def skip_dbus(self): self.calls.append(("skip_dbus",)); return self
+    def retry(self): self.calls.append(("retry",)); return self
+    def why(self): self.calls.append(("why",)); return getattr(self, "reason", "")
 
 def fresh(stg, extra=None):
     root = tempfile.mkdtemp(); os.makedirs(os.path.join(root, "var/lib"))
@@ -94,5 +96,22 @@ check("failed deploy -> deploy_failed", failing(None).advance(consent=True, reco
 check("failed arm -> arm_failed", failing(stage.R1_HEAL).advance(consent=True, recovery_ack=True, selections={}) == "arm_failed")
 
 check("recovery_text is the plain-language card", "black" in c.recovery_text().lower())
+
+
+# retry after a rollback
+c, be = fresh(stage.R3_ROLLED_BACK)
+check("rolled_back offers Try again", c.secondary_action("rolled_back") == "Try again")
+check("Try again re-arms through the backend", c.skip() == "retried" and be.calls[-1] == ("retry",))
+c, be = fresh(stage.ROLLED_BACK)
+be.reason = "system bus is not schema-dbus (launcher fell back"
+d = c.detail()
+check("rolled_back explains in plain words", "message bus didn't start" in d and "Trying again is safe" in d and "launcher fell back" in d)
+c.detail()
+check("reason fetched once per stage", be.calls.count(("why",)) == 1)
+be.reason = ""
+c2, be2 = fresh(stage.ROLLED_BACK)
+check("no recorded reason still gives the retry note", c2.detail() == core.RETRY_NOTE)
+check("unknown reason falls back", core.humanize_why("weird thing") == "The switch didn't pass its health check.")
+check("detail empty off the rolled_back screen", fresh(stage.R1_HEAL)[0].detail() == "")
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

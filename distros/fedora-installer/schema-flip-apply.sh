@@ -113,8 +113,8 @@ case "$cmd" in
     explain)
         # surface WHY the seatbelt rolled back, raw, from its own log. The GUI
         # translates this to plain language. Read-only.
-        grep -o 'flip UNHEALTHY ([^)]*)' /var/log/schema-init/flip-healthcheck.log 2>/dev/null \
-            | tail -1 | sed 's/^flip UNHEALTHY (//; s/)$//'
+        sed -n 's/.*flip UNHEALTHY (\(.*\)) — rolling back.*/\1/p' /var/log/schema-init/flip-healthcheck.log 2>/dev/null \
+            | tail -1
         ;;
     resolve)
         # remove the system autostart so the wizard never nags again (the user's

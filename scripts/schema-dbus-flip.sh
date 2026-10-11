@@ -114,8 +114,8 @@ case "${1:-}" in
         ;;
     state) cat "$STATE" 2>/dev/null || echo unknown ;;
     explain)
-        grep -o 'flip UNHEALTHY ([^)]*)' /var/log/schema-init/dbus-flip-healthcheck.log 2>/dev/null \
-            | tail -1 | sed 's/^flip UNHEALTHY (//; s/)$//'
+        sed -n 's/.*flip UNHEALTHY (\(.*\)) — rolling back.*/\1/p' /var/log/schema-init/dbus-flip-healthcheck.log 2>/dev/null \
+            | tail -1
         ;;
     *)
         echo "usage: schema-dbus-flip.sh {check|arm|confirm|rollback|is-authoritative|state|explain}" >&2

@@ -58,10 +58,14 @@ class WizardController(QObject):
     def _get_error(self):
         return self._error
 
+    def _get_detail(self):
+        return self._core.detail()
+
     screen = Property(str, _get_screen, notify=changed)
     primaryAction = Property(str, _get_primary_action, notify=changed)
     secondaryAction = Property(str, _get_secondary_action, notify=changed)
     error = Property(str, _get_error, notify=changed)
+    detail = Property(str, _get_detail, notify=changed)
     overall = Property(str, _get_overall, notify=changed)
     statusItems = Property('QVariantList', _get_status_items, notify=changed)
     recoveryAck = Property(bool, _get_recovery_ack, notify=changed)

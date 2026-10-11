@@ -56,4 +56,33 @@ try:
 finally:
     del os.environ["MIGRATE_ROOT"]
 
+
+# --retry / --why after a rollback
+import json as _json
+class _R:
+    def __init__(self, rc=0, out=""): self.returncode = rc; self.stdout = out
+def _flip_log():
+    calls = []
+    def f(*a):
+        calls.append(a)
+        return _R(0, "system bus is not schema-dbus (launcher fell back" if a[0].endswith("explain") else "")
+    return f, calls
+rr = tempfile.mkdtemp(); os.makedirs(os.path.join(rr, "home/jandoe")); os.makedirs(os.path.join(rr, "var/lib/schema-init"))
+_json.dump({"user": "jandoe", "uid": os.getuid()}, open(os.path.join(rr, "var/lib/schema-init/migrate-profile.json"), "w"))
+sm = _load(); stg = sm.stage
+stg.write_stage(stg.R3_ROLLED_BACK, root=rr)
+f, calls = _flip_log()
+check("--why reads the dbus seatbelt's reason", "launcher fell back" in sm.rollback_reason(root=rr, flip=f) and calls[-1] == ("dbus-explain",))
+check("retry re-arms the dbus flip", sm.retry_flip(root=rr, flip=f) == 0 and ("dbus-arm",) in calls)
+check("retry moves R3_ROLLED_BACK -> R3_PENDING, armed this boot",
+      stg.read_stage(rr) == stg.R3_PENDING and stg.read_extra(rr).get("dbus_armed_boot") == sm._boot_id())
+au = os.path.join(rr, "home/jandoe", sm.USER_AUTOSTART)
+check("retry restores the wizard's login autostart", os.path.exists(au) and "Exec=/usr/bin/schema-wizard" in open(au).read())
+stg.write_stage(stg.ROLLED_BACK, root=rr)
+f, calls = _flip_log()
+check("udev retry re-arms the udev flip", sm.retry_flip(root=rr, flip=f) == 0 and ("arm",) in calls and stg.read_stage(rr) == stg.R2_PENDING)
+check("nothing to retry outside a rollback", sm.retry_flip(root=rr, flip=f) == 1)
+stg.write_stage(stg.R3_ROLLED_BACK, root=rr)
+check("a failed arm leaves the stage alone", sm.retry_flip(root=rr, flip=lambda *a: _R(1)) == 1 and stg.read_stage(rr) == stg.R3_ROLLED_BACK)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
