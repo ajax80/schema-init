@@ -924,6 +924,7 @@ sudo schema-ctl analyze         # boot critical chain + waterfall; how each serv
 sudo schema-ctl analyze <name>  # the dependency chain that held <name> back
 sudo schema-ctl list            # names and current states only
 sudo schema-ctl cat <name>      # the .svc file and its drop-ins, in apply order
+schema-ctl graph [<name>] | dot -Tsvg > deps.svg   # dependency graph (all, or <name>'s chain); missing deps in red
 sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service
 sudo schema-ctl restart <name>  # stop + re-queue through the state machine

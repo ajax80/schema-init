@@ -412,6 +412,8 @@ fi
 %{_libexecdir}/schema-init/schema-udevd-launch
 %{_libexecdir}/schema-init/schema-mount-fstab
 %{_libexecdir}/schema-init/schema-bus-activate
+%{_datadir}/bash-completion/completions/schema-ctl
+%{_datadir}/zsh/site-functions/_schema-ctl
 %dir /usr/local/share/dbus-1
 %dir /usr/local/share/dbus-1/system-services
 /usr/local/share/dbus-1/system-services/org.freedesktop.PolicyKit1.service

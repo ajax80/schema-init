@@ -95,6 +95,8 @@ install: all
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
 	install -m 0755 scripts/schema-snapshot $(DESTDIR)$(BINDIR)/schema-snapshot
 	install -D -m 0755 scripts/schema-bus-activate $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-bus-activate
+	install -D -m 0644 completion/schema-ctl.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/schema-ctl
+	install -D -m 0644 completion/_schema-ctl $(DESTDIR)$(DATADIR)/zsh/site-functions/_schema-ctl
 	install -D -m 0644 config/dbus-1/system-services/org.freedesktop.PolicyKit1.service $(DESTDIR)/usr/local/share/dbus-1/system-services/org.freedesktop.PolicyKit1.service
 
 # Boot-durable rollback for btrfs + schema-init: snapshot / and /home into

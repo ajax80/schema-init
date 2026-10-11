@@ -1,0 +1,36 @@
+#compdef schema-ctl
+
+local -a cmds svcs
+cmds=(
+  'status:service table, or one service'
+  'list:service names'
+  'analyze:boot critical chain'
+  'timing:per-service cost'
+  'reload:re-read service files'
+  'reexec:replace the PID 1 binary in place'
+  'start:start a service'
+  'up:start a service'
+  'stop:stop a service and hold it down'
+  'down:stop a service and hold it down'
+  'restart:restart a service'
+  'add:load one .svc file'
+  'cat:print a .svc and its drop-ins'
+  'graph:dependency graph as Graphviz DOT'
+  'pet:feed a service watchdog'
+  'reset:clear restart/dormant counters'
+  'reboot:reboot'
+  'poweroff:power off'
+)
+svcs=(/etc/schema-init/services/*.(svc|grp)(N:t:r))
+
+if (( CURRENT == 2 )); then
+  _describe 'command' cmds
+  return
+fi
+case $words[2] in
+  status) _alternatives 'opts:option:(--json --kv)' "svcs:service:($svcs)" ;;
+  reload) _values option --evict ;;
+  add|reexec) _files ;;
+  analyze|start|up|stop|down|restart|cat|graph|pet|reset)
+    (( CURRENT == 3 )) && _values service $svcs ;;
+esac
