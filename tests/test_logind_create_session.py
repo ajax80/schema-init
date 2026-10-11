@@ -364,7 +364,7 @@ def main():
                       'a session was created')
             except dbus.DBusException as e:
                 check('%s (class=%s) is refused' % (svc, cls),
-                      'NotSupported' in e.get_dbus_name(), e.get_dbus_name())
+                      e.get_dbus_name() == 'org.freedesktop.login1.SessionBusy', e.get_dbus_name())
         check('no sessions were created for them', ids() == before, str(ids()))
 
         print("\n-- a pts login is refused too --")
@@ -372,7 +372,7 @@ def main():
             create(pid=leader.pid, service='sshd', class_='user', tty='pts/3')
             check('pts tty is refused', False, 'a session was created')
         except dbus.DBusException as e:
-            check('pts tty is refused', 'NotSupported' in e.get_dbus_name(),
+            check('pts tty is refused', e.get_dbus_name() == 'org.freedesktop.login1.SessionBusy',
                   e.get_dbus_name())
 
         print("\n-- vtnr is recovered from the tty name --")

@@ -16,6 +16,11 @@ import dbus.service
 import dbus.lowlevel
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
+try:
+    from gi.repository import GLibUnix
+    unix_signal_add = GLibUnix.signal_add
+except ImportError:
+    unix_signal_add = GLib.unix_signal_add
 import socket
 import pwd
 
@@ -998,8 +1003,8 @@ class Login1Session(dbus.service.Object):
         print(f"login1-stub: VT {self.vtnr} now mediated (VT_PROCESS)")
 
     def _arm_vt_signals(self):
-        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self._on_vt_release)
-        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, self._on_vt_acquire)
+        unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR1, self._on_vt_release)
+        unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGUSR2, self._on_vt_acquire)
 
     def _disarm_vt_flow_control(self, fd):
         # The session VT stays in KD_TEXT with a live line discipline
@@ -1977,13 +1982,17 @@ class Login1Manager(dbus.service.Object):
         class=background/background-light and no tty, and inventing seat
         sessions for those would fill `loginctl list-sessions` with noise for
         every sudo on the box.
+
+        The refusal is SessionBusy, what systemd-logind answers when the caller
+        is already in a session: pam_systemd treats that as success and stays
+        quiet, where any other error name is logged at err on every sudo.
         """
         vtnr = int(vtnr) or vtnr_from_tty(str(tty))
         if vtnr <= 0:
             raise dbus.exceptions.DBusException(
                 "schema-logind creates sessions only for real VTs; "
                 "'%s' class=%s tty=%s named none" % (service, class_, tty),
-                name='org.freedesktop.DBus.Error.NotSupported')
+                name='org.freedesktop.login1.SessionBusy')
 
         uid = int(uid)
         pid = int(pid)
@@ -2893,7 +2902,7 @@ def main():
         holder.reexec()
         return True
 
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, hup_handler)
+    unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, hup_handler)
 
     loop.run()
 
