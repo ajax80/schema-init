@@ -571,12 +571,12 @@ def uninstall(run=subprocess.run):
     if m.packages:
         run(["dnf", "remove", "-y"] + m.packages, check=False)
     remove_boot_entries(m.grub.get("saved_entry_was"), run=run)
-    for rel in (Manifest.PATH, stage.STAGE_PATH, UDEV_LIVE_FLAG, DBUS_BROKER_GATE):
+    for rel in (Manifest.PATH, stage.STAGE_PATH) + FLIP_ARTIFACTS:
         try:
             os.remove(P(rel))
         except OSError:
             pass
-    relabel = _selinux_configured()
+    relabel = bool(m.files or m.packages or m.grub) and _selinux_configured()
     if relabel:
         open(P("/.autorelabel"), "a").close()
     return {"files_removed": removed, "packages": m.packages, "relabel": relabel}
@@ -586,9 +586,9 @@ def _selinux_configured():
     try:
         with open(P("/etc/selinux/config")) as f:
             for line in f:
-                k, _, v = line.strip().partition("=")
-                if k == "SELINUX":
-                    return v.strip().lower() not in ("", "disabled")
+                k, _, v = line.split("#", 1)[0].partition("=")
+                if k.strip() == "SELINUX":
+                    return v.strip().strip('"').lower() not in ("", "disabled")
     except OSError:
         pass
     return False
@@ -745,7 +745,10 @@ UDEVD_PATHS = ["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd",
 
 UDEVD_LAUNCH = "/usr/local/bin/schema-udevd-launch.sh"
 UDEV_LIVE_FLAG = "/etc/schema-init/schema-udev.live"
-DBUS_BROKER_GATE = "/etc/schema-init/dbus-broker"
+FLIP_ARTIFACTS = (UDEV_LIVE_FLAG, "/etc/schema-init/dbus-broker", "/etc/schema-init/net-naming",
+                  "/var/lib/schema-init/dbus-flip.state", "/var/lib/schema-init/dbus-flip-armed-boots",
+                  "/var/lib/schema-init/dbus.svc.stock", "/var/lib/schema-init/flip-armed-boots",
+                  "/var/lib/schema-init/firstboot.state")
 
 
 def _udevd_path():

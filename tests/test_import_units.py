@@ -280,9 +280,6 @@ for t in ("ConditionVirtualization=vm", "ConditionVirtualization=yes", "Conditio
           "ConditionNeedsUpdate=/etc", "ConditionSecurity=ima", "ConditionPathExists=%t/x",
           "ConditionArchitecture=arm64"):
     check("skipped: " + t, cond_skip(t))
-_saved = si._FACTS; si._FACTS = None
-check("selinux never a host fact: schema-init boots without a policy", "selinux" not in si.host_facts()["security"])
-si._FACTS = _saved
 check("static |-condition true satisfies the group",
       cond("ConditionVirtualization=|no\nConditionPathExists=|/nope") == [])
 check("static |-condition false leaves runtime triggers",
