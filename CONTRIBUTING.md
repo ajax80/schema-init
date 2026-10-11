@@ -13,7 +13,7 @@ make test     # the unit suite: no root, no VM
 
 ## Before touching PID 1 on hardware
 
-Boot the change in a VM first: `scripts/vmtest-gui.sh` (see [Quickstart](README.md#quickstart)). Anything that changes boot, shutdown, udev or D-Bus behaviour should also be run on a real box, with a systemd boot entry kept as a fallback. Say in the PR what you ran it on.
+Boot the change in a VM first: `scripts/vmtest-gui.sh` (see [Quickstart](docs/install.md#quickstart)). Anything that changes boot, shutdown, udev or D-Bus behaviour should also be run on a real box, with a systemd boot entry kept as a fallback. Say in the PR what you ran it on.
 
 ## Pull requests
 

@@ -1,6 +1,6 @@
 # `.svc` reference
 
-Every key a schema-init service file understands. The [README](../README.md#service-files) has the basics and a few examples.
+Every key a schema-init service file understands. The [README](how-it-works.md#service-files) has the basics and a few examples.
 
 - [Keys](#keys)
 - [Environment and pre-start commands](#environment-and-pre-start-commands)
