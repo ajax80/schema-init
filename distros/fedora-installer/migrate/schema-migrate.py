@@ -901,13 +901,8 @@ def install_session_support(profile, manifest, dry_run=False):
     src = P(AUTOSTART)
     if home and os.path.isdir(home) and os.path.exists(src) and not dry_run:
         dst = os.path.join(home, USER_AUTOSTART)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(src, dst)
-        for d in (os.path.dirname(os.path.dirname(dst)), os.path.dirname(dst), dst):
-            try:
-                os.chown(d, uid, uid)
-            except (OSError, TypeError):
-                pass
+        with open(src) as fh:
+            _write_as_user(dst, fh.read(), uid)
         manifest.add_file("/home/%s/%s" % (user, USER_AUTOSTART))
         done.append("/home/%s/%s" % (user, USER_AUTOSTART))
     return done
@@ -1033,6 +1028,31 @@ AUTOSTART_ENTRY = ("[Desktop Entry]\nType=Application\nName=Finish setting up sc
                    "Exec=/usr/bin/schema-wizard\nIcon=drive-harddisk\nTerminal=false\n"
                    "X-KDE-autostart-phase=2\n")
 
+def _write_as_user(path, data, uid):
+    try:
+        import pwd
+        gid = pwd.getpwuid(uid).pw_gid
+    except (KeyError, TypeError, ImportError):
+        gid = uid
+    if uid is None:
+        return False
+    pid = os.fork()
+    if pid == 0:
+        try:
+            if os.getuid() == 0:
+                os.setgroups([])
+                os.setgid(gid)
+                os.setuid(uid)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+            os.write(fd, data.encode())
+            os.close(fd)
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    _, st = os.waitpid(pid, 0)
+    return os.WIFEXITED(st) and os.WEXITSTATUS(st) == 0
+
 def restore_autostart(root="/"):
     try:
         prof = json.load(open(os.path.join(root, "var/lib/schema-init/migrate-profile.json")))
@@ -1042,16 +1062,7 @@ def restore_autostart(root="/"):
     home = os.path.join(root, "home", user) if user else None
     if not home or not os.path.isdir(home):
         return False
-    dst = os.path.join(home, USER_AUTOSTART)
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    with open(dst, "w") as fh:
-        fh.write(AUTOSTART_ENTRY)
-    for d in (os.path.dirname(os.path.dirname(dst)), os.path.dirname(dst), dst):
-        try:
-            os.chown(d, uid, uid)
-        except (OSError, TypeError):
-            pass
-    return True
+    return _write_as_user(os.path.join(home, USER_AUTOSTART), AUTOSTART_ENTRY, uid)
 
 def retry_flip(root="/", flip=_default_flip):
     cur = stage.read_stage(root)
