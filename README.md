@@ -1241,7 +1241,7 @@ schema-init was built by Jonathan Ayers in 2026 as the operating layer for the *
 **AGPL-3.0-or-later** for open source use — full text in [LICENSE](LICENSE).  
 Commercial license available for embedding in proprietary systems — open an issue or contact via GitHub.
 
-Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). The people behind it are in [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ---
 
