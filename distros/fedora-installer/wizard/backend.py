@@ -29,6 +29,9 @@ class Backend:
     def retry(self):
         return self._sudo(self.MIGRATE, "--retry")
 
+    def dismiss(self):
+        return self._sudo(self.MIGRATE, "--dismiss")
+
     def why(self):
         return (self._sudo(self.MIGRATE, "--why").stdout or "").strip()
 

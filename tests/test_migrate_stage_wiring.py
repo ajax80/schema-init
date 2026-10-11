@@ -89,6 +89,41 @@ f, calls = _flip_log()
 check("udev retry re-arms the udev flip", sm.retry_flip(root=rr, flip=f) == 0 and ("arm",) in calls and stg.read_stage(rr) == stg.R2_PENDING)
 check("nothing to retry outside a rollback", sm.retry_flip(root=rr, flip=f) == 1)
 stg.write_stage(stg.R3_ROLLED_BACK, root=rr)
+shipped = open(os.path.join(REPO, "distros/fedora-installer/wizard/schema-wizard.desktop")).read()
+check("restored autostart matches the shipped entry", sm.AUTOSTART_ENTRY.strip() == shipped.strip())
+
+def _fl(states):
+    calls = []
+    def f(*a):
+        calls.append(a)
+        return _R(states.get(a[0], (0, ""))[0], states.get(a[0], (0, ""))[1])
+    return f, calls
+os.makedirs(os.path.dirname(au), exist_ok=True)
+logd = os.path.join(rr, "var/log/schema-init")
+stg.write_stage(stg.R3_PENDING, root=rr, extra={"dbus_armed_boot": "old"})
+open(au, "w").write("x")
+f, calls = _fl({"dbus-is-authoritative": (1, ""), "dbus-state": (0, "armed\n")})
+check("desktop-side dbus rollback", sm.confirm_dbus(root=rr, flip=f) == stg.R3_ROLLED_BACK and ("reboot",) in calls)
+check("...keeps the wizard autostart so Try again is shown after the reboot", os.path.exists(au))
+check("...logs its own reason for --why", "not schema-dbus when the desktop checked" in open(os.path.join(logd, "dbus-flip-healthcheck.log")).read())
+check("dismiss stops the autostart", sm.dismiss(root=rr) == 0 and not os.path.exists(au))
+check("dismiss refuses outside a rollback", (stg.write_stage(stg.R3_DONE, root=rr), sm.dismiss(root=rr))[1] == 1)
+
+stg.write_stage(stg.R2_PENDING, root=rr)
+open(au, "w").write("x")
+f, calls = _fl({"is-authoritative": (1, ""), "root-state": (0, "skipped\n")})
+check("udev seatbelt rollback at boot -> ROLLED_BACK", sm.advance_finish(root=rr, flip=f) == stg.ROLLED_BACK)
+check("...keeps the autostart", os.path.exists(au))
+check("...does not mask the seatbelt's own reason", not os.path.exists(os.path.join(logd, "flip-healthcheck.log")))
+stg.write_stage(stg.R2_PENDING, root=rr)
+f, calls = _fl({"is-authoritative": (1, ""), "root-state": (0, "armed\n")})
+sm.advance_finish(root=rr, flip=f)
+check("desktop-side udev rollback logs a reason", "not in charge when the desktop checked" in open(os.path.join(logd, "flip-healthcheck.log")).read())
+
+nr = tempfile.mkdtemp(); stg.write_stage(stg.R3_ROLLED_BACK, root=nr)
+f, calls = _flip_log()
+check("retry without a user profile fails before arming", sm.retry_flip(root=nr, flip=f) == 1 and calls == [] and stg.read_stage(nr) == stg.R3_ROLLED_BACK)
+stg.write_stage(stg.R3_ROLLED_BACK, root=rr)
 check("a failed arm leaves the stage alone", sm.retry_flip(root=rr, flip=lambda *a: _R(1)) == 1 and stg.read_stage(rr) == stg.R3_ROLLED_BACK)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

@@ -79,7 +79,7 @@ ApplicationWindow {
         Button {
             text: wizard.secondaryAction
             visible: wizard.secondaryAction !== ""
-            onClicked: wizard.skipClicked()
+            onClicked: wizard.secondaryClicked()
         }
 
         Button {

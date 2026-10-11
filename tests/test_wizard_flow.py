@@ -20,6 +20,7 @@ class FakeBackend:
     def confirm_dbus(self): self.calls.append(("confirm_dbus",)); return self
     def skip_dbus(self): self.calls.append(("skip_dbus",)); return self
     def retry(self): self.calls.append(("retry",)); return self
+    def dismiss(self): self.calls.append(("dismiss",)); return self
     def why(self): self.calls.append(("why",)); return getattr(self, "reason", "")
 
 def fresh(stg, extra=None):
@@ -101,7 +102,10 @@ check("recovery_text is the plain-language card", "black" in c.recovery_text().l
 # retry after a rollback
 c, be = fresh(stage.R3_ROLLED_BACK)
 check("rolled_back offers Try again", c.secondary_action("rolled_back") == "Try again")
-check("Try again re-arms through the backend", c.skip() == "retried" and be.calls[-1] == ("retry",))
+check("Try again re-arms through the backend", c.secondary() == "retried" and be.calls[-1] == ("retry",))
+check("skip() never re-arms", fresh(stage.R3_ROLLED_BACK)[0].skip() == "noop")
+c, be = fresh(stage.R3_ROLLED_BACK)
+check("Finish on rolled_back dismisses (stops the autostart)", c.advance(consent=True, recovery_ack=True, selections={}) == "finished" and be.calls[-1] == ("dismiss",))
 c, be = fresh(stage.ROLLED_BACK)
 be.reason = "system bus is not schema-dbus (launcher fell back"
 d = c.detail()
@@ -111,6 +115,9 @@ check("reason fetched once per stage", be.calls.count(("why",)) == 1)
 be.reason = ""
 c2, be2 = fresh(stage.ROLLED_BACK)
 check("no recorded reason still gives the retry note", c2.detail() == core.RETRY_NOTE)
+check("bus not answering at all is its own message", "didn't answer at all" in core.humanize_why("system bus not serving: GetId org.freedesktop.login1"))
+check("late services stay the late-services message", "didn't appear" in core.humanize_why("system bus not serving: org.freedesktop.NetworkManager"))
+check("desktop-side dbus rollback explained", "wasn't the one running" in core.humanize_why("the bus was not schema-dbus when the desktop checked"))
 check("unknown reason falls back", core.humanize_why("weird thing") == "The switch didn't pass its health check.")
 check("detail empty off the rolled_back screen", fresh(stage.R1_HEAL)[0].detail() == "")
 

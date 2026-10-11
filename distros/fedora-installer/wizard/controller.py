@@ -88,8 +88,9 @@ class WizardController(QObject):
         return self._core.recovery_text()
 
     @Slot()
-    def skipClicked(self):
-        self._error = _core.error_for(self._core.skip())
+    def secondaryClicked(self):
+        outcome = self._core.secondary()
+        self._error = _core.error_for(outcome)
         self.changed.emit()
 
     @Slot()

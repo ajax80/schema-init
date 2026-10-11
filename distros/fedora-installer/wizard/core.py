@@ -97,9 +97,15 @@ _SECONDARY = {
 _WHY = (
     (("launcher fell back", "is not schema-dbus"),
      "The new message bus didn't start, so your computer went back to the standard one."),
+    (("GetId",),
+     "The new message bus didn't answer at all."),
     (("not serving",),
      "The new message bus started, but some system services (networking, sign-in or permissions) "
      "didn't appear on it in time."),
+    (("not schema-dbus when the desktop checked",),
+     "When the desktop started, the new message bus wasn't the one running."),
+    (("not in charge when the desktop checked",),
+     "When the desktop started, the new device manager wasn't the one running."),
     (("never confirmed",),
      "The desktop didn't confirm the switch after two restarts."),
     (("schema-udev not running",),
@@ -151,6 +157,7 @@ class WizardCore:
     def __init__(self, backend=None, root="/"):
         self.backend = backend
         self.root = root
+        self._why = None
 
     def current_stage(self):
         return stage.read_stage(self.root)
@@ -185,19 +192,29 @@ class WizardCore:
     def recovery_text(self):
         return _migrate().RECOVERY_TEXT
 
-    def skip(self):
+    def secondary(self):
         screen = self.screen()
         if screen == "rolled_back":
-            return "retried" if _ok(self.backend.retry()) else "retry_failed"
-        if screen != "dbus_offer":
+            return self.retry()
+        if screen == "dbus_offer":
+            return self.skip()
+        return "noop"
+
+    def skip(self):
+        if self.screen() != "dbus_offer":
             return "noop"
         return "skipped" if _ok(self.backend.skip_dbus()) else "skip_failed"
+
+    def retry(self):
+        if self.screen() != "rolled_back":
+            return "noop"
+        return "retried" if _ok(self.backend.retry()) else "retry_failed"
 
     def detail(self):
         if self.screen() != "rolled_back":
             return ""
         cur = self.current_stage()
-        if getattr(self, "_why", (None,))[0] != cur:
+        if self._why is None or self._why[0] != cur:
             self._why = (cur, self.backend.why())
         raw = self._why[1]
         why = humanize_why(raw)
@@ -222,7 +239,9 @@ class WizardCore:
             return "dbus_armed" if _ok(self.backend.arm_dbus()) else "dbus_arm_failed"
         if screen == "confirming":
             return "dbus_confirmed" if _ok(self.backend.confirm_dbus()) else "confirm_failed"
-        if s in (stage.DONE, stage.ROLLED_BACK, stage.R3_DONE, stage.R3_ROLLED_BACK):
+        if s in (stage.ROLLED_BACK, stage.R3_ROLLED_BACK):
+            return "finished" if _ok(self.backend.dismiss()) else "finish_failed"
+        if s in (stage.DONE, stage.R3_DONE):
             r = self.backend.finish()
             return "finished" if _ok(r) else "finish_failed"
         return "noop"
