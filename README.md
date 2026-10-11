@@ -1,5 +1,10 @@
 # schema-init
 
+<p align="center">
+  <a href="assets/schema-init-trailer.mp4"><img src="assets/schema-init-trailer.gif" alt="schema-init — 30-second trailer" width="640"></a>
+</p>
+<p align="center"><sub>▶ 30-second trailer — <a href="assets/schema-init-trailer.mp4">watch in full resolution, with sound</a></sub></p>
+
 ## Documentation
 
 | | |
@@ -18,12 +23,7 @@
 
 ---
 
-<p align="center">
-  <a href="assets/schema-init-trailer.mp4"><img src="assets/schema-init-trailer.gif" alt="schema-init — 30-second trailer" width="640"></a>
-</p>
-<p align="center"><sub>▶ 30-second trailer — <a href="assets/schema-init-trailer.mp4">watch in full resolution, with sound</a></sub></p>
-
-## My machine got more useful after schema-init
+## My old machine got better
 
 I wrote schema-init as the operating layer for Project Daedalus, the controller for the Ungulate Leg (more in [Origin](#origin)). It had to be a PID 1 I could read end to end, with none of systemd's ideas about what a computer is for. In late May 2026 I tried it on my own desktop, a Ryzen 5 1600 with 16 GB of RAM and a GTX 1050 Ti. I was already shopping for a replacement, and that box was about to become the TV computer.
 
