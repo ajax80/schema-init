@@ -1,0 +1,42 @@
+# Roadmap
+
+## Roadmap
+
+- [x] Runtime service loading — `schema-ctl add <path>` loads a new service at runtime
+- [x] Runtime reload + removal — `schema-ctl reload [--evict]` re-reads config (cycle-checked); `--evict` SIGTERMs services dropped from config, no reboot
+- [x] login1 D-Bus stub — `schema-logind` restores KDE shutdown/restart buttons on no-systemd systems
+- [x] event-driven main loop — signalfd for SIGCHLD + poll() with 250ms timeout; wakes on child death and ctl commands instead of busy-polling
+- [x] Boot hang fix — dep_idx alignment bug in group dep resolution; poll() replaces epoll (PID 1 epoll deadlock on kernel 6.1.0-49)
+- [x] Boot timing — `schema-ctl timing` reports kernel→PID1 handoff and per-service FUNDAMENTAL/PERFECT timestamps (CLOCK_MONOTONIC)
+- [x] Boot time measurement — 29.5s → 20.7s with `ready_path` probes; `stable_secs` fallback per service
+- [x] Per-service readiness probes — `ready_path=` promotes on path existence; `stable_secs=` fallback timer
+- [x] Cgroup assignment race fix — pipe barrier guarantees cgroup.procs written before child exec
+- [x] Dynamic poll timeout — loop sleeps indefinitely once all services stable; 0% CPU idle
+- [x] Service log files — stdout/stderr per service at `/run/log/schema-init/<name>.log`
+- [x] D-Bus stubs — `hostname1` and `systemd1` Manager stubs in `schema-logind`; KDE Settings 25s → 2s
+- [x] Fedora KDE distribution — GreyBox daily driver, full KDE Plasma 6 on Fedora 44
+- [x] Fedora Cinnamon distribution — Eli (Dell Inspiron), keyboard/touchpad/ethernet working
+- [x] STATE_DORMANT (75) — exponential backoff before 76 verdict; critical services never excise
+- [x] Soft dep cascades — non-critical EXCISED deps skipped; dependents proceed without them
+- [x] aarch64 cross-compile — `make aarch64`; all three binaries static; Ungulate Leg target ready
+- [x] ARM bare-metal deploy — Pi Zero W (armv6l), Pi OS Trixie; SSH up in ~50s from cold boot
+- [x] schema-desktop — SDL2 live service viewer; `make desktop` + autostart entry in Cinnamon and KDE distros
+- [x] Dead Man Token hardware watchdog — `/dev/watchdog` driven by per-service check-in via `schema-ctl pet`; any critical service missing its `watchdog_timeout_ms` window stops WDT petting → hardware reboot; PID 1 deadlock covered implicitly
+- [x] Symlink template instances — `motor@12.svc → motor@.svc`; `$INSTANCE` injected at spawn; `$SLOT_ID` fallback for GPIO-strapped nodes; one SD card image per fleet
+- [x] Structured telemetry — `schema-ctl status --json` and `--kv` for machine-parseable supervisory loop consumption and IEC 62304 audit traceability
+- [x] Cgroup resource limits — `cpu_limit=` (1–100, % of one core), `mem_limit=` (MB), `cpuset=` (CPU affinity / core pinning, systemd `AllowedCPUs=` analog), and `cpuset_partition=` (`isolated`/`root` exclusive cores via cgroupv2 partitions — dynamic `isolcpus`) per `.svc`; written via sync-pipe window before child exec; IEC 62304 Class C blast-radius isolation
+- [x] zram swap — `zram-swap.svc` boots a zstd-compressed zram swap device, replacing systemd's `zram-generator`; eliminates disk thrashing / periodic stutter under memory pressure
+- [x] schema-udev — native `.dev`-rule device manager with an **authoritative cutover** that retires `systemd-udevd` and owns `/dev`: node creation, the `/dev/disk/by-*` + `/dev/char` + `/dev/block` symlink farm, `uaccess` seat ACLs, the libudev monitor broadcast, and the `/run/udev/data` database — checksum-backed, reversible, guarded by a headless seatbelt
+- [x] schema-journal-sink — a journald-shaped endpoint (`schema-journal-sink.c`) that drains `/dev/log` to a plain per-service logfile with a `journalctl` shim; no journal database
+- [x] schema-logind consolidation — one `schema-logind` process now serves `login1` **and** the `hostname1` / `timedate1` / `locale1` surfaces (sessions, seats, power, hostname, RTC/timezone, locale) — the "little-4" in a single readable program
+- [x] schema-systemd1 — the full `org.freedesktop.systemd1` management surface (ListUnits, GetUnit, Start/Stop/RestartUnit, per-unit ActiveState/SubState/MainPID/NRestarts, PropertiesChanged) served by its own `schema-systemd1` process driving `schema-ctl`; `systemctl status` and Cockpit's Services page work
+- [x] Built-in `.svc` timers — `on_calendar=` scheduling parsed in `service.c` retires `cron` and systemd `.timer` units (richer calendar forms tracked in `docs/timers-design.md`)
+- [x] In-place migrator + COPR — `schema-migrate --discover/--deploy/--uninstall` converts a live Fedora KDE box to schema-init as PID 1 and back (proven end-to-end in a VM); prebuilt via `dnf copr enable ajax80/schema-init` (three packages), with a guided `schema-init-wizard` GUI
+- [x] schema-dbus — native C broker replacing `dbus-daemon` on both the system bus and the session bus; enforces the dissolved `busconfig` policy (conformance-tested), does auth / name ownership / routing / match rules / unix-fd passing; serves a full KDE desktop as the live bus through reboots; opt-in, self-healing, reversible flip (on-demand activation, `BecomeMonitor`, full driver interface)
+- [x] systemctl compat translator — a `schema-systemctl` shim (`systemctl_shim.h`) that makes packaged RPM/deb scriptlets (`systemctl enable`/`daemon-reload`/…) succeed on a schema-init box and records enable-intent to `pending.list`, plus a `schema-import` runtime importer that drains the queue and translates `.service` units into native `.svc` (`ExecStart`/`Type`/`Restart`/`User`/`Environment` with `$VAR` resolution, `Type=notify` → `notify=1`, `Type=dbus` → `ready_bus_name=`; `Type=forking` + `PIDFile=` → `pid_file=`; templates logged-and-skipped); `dnf` install/remove round-trip verified, generated units load under the real `.svc` parser
+- [x] modules-load.d — PID 1 loads `/etc/modules-load.d/*.conf` at boot (systemd-modules-load parity)
+- [x] schema-doctor — health checks with self-heal (boot-entry integrity, NM profiles bound to missing interfaces, session agents, powerdevil / ksycoca loops, panel pins), run at boot and periodically
+- [x] Boot snapshots + GRUB fallback — known-good root snapshots with their own boot entries (separate `/boot`, initramfs and non-fstab `/home` handled) and a boot-success guard
+- [x] PID 1 re-exec — `schema-ctl reexec` swaps the init binary in place with a dry run, sealed state handoff and rollback; RPM upgrades re-exec automatically, so updating PID 1 is just `dnf upgrade`, no reboot
+- [x] Service watchdog — `watchdog_sec=` with `WATCHDOG=1` over `sd_notify` (systemd `WatchdogSec=` parity): missed window → SIGABRT + core, then SIGKILL, then the normal restart arc
+- [x] Fedora 44 installer ISO, verified on real hardware — netinst + kickstart installs KDE on schema-init as PID 1 with an optional guided schema-udev flip; clean install to desktop on a Dell i3 laptop with no hand fixes (v0.3.0)
