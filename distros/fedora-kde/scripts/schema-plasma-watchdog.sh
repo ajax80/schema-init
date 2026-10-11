@@ -133,7 +133,9 @@ while sleep 5; do
     # the launch cleared the wedge (new shell spawned the kioworker, rendered).
     # This is a NEW failure mode past the lock/env/headless ones. (Claire)
     kbuildsycoca6 --noincremental >/dev/null 2>&1
-    setsid nohup plasmashell >/dev/null 2>&1 &
+    # 9>&-: never hand the single-instance lock to plasmashell, or it outlives
+    # this watchdog holding the lock and no watchdog can start again.
+    setsid nohup plasmashell >/dev/null 2>&1 9>&- &
     # No post-launch "render verify": it waited for a desktop.so kioworker, but
     # current KIO runs that worker in-process, so the check never passed and
     # kill -9'd every healthy respawn (3x, until the crash-loop cap). On a first
