@@ -45,9 +45,61 @@ if [ -n "$psh" ] && ! grep -qz 'XDG_MENU_PREFIX=plasma-' /proc/"$psh"/environ 2>
     rm -f "${HOME}/.cache/ksycoca6"*.lock
 fi
 
+# Spin detector. A live plasmashell can still be dead to the user: its main
+# thread runs model/DB work in signal handlers, so a churning source (ksycoca
+# rebuild ping-pong 2026-06/08, duplicate kactivitymanagerd 2026-10-10) pins it
+# at 100% and the taskbar stops taking clicks. Respawning doesn't help while the
+# source churns, so capture evidence instead: main thread >=90% CPU for 60s ->
+# stack trace to SPIN_DIR + desktop notification, once per pid.
+SPIN_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/schema-plasma-spin"
+HZ=$(getconf CLK_TCK 2>/dev/null || echo 100)
+spin_pid=""; spin_prev=0; spin_hot=0; spin_reported=""
+
+spin_check() {
+    local pid=$1 t
+    t=$(awk '{print $14+$15}' "/proc/$pid/task/$pid/stat" 2>/dev/null) || return
+    if [ "$pid" != "$spin_pid" ]; then
+        spin_pid=$pid; spin_prev=$t; spin_hot=0; return
+    fi
+    if [ $((t - spin_prev)) -ge $((HZ * 5 * 9 / 10)) ]; then
+        spin_hot=$((spin_hot + 1))
+    else
+        spin_hot=0
+    fi
+    spin_prev=$t
+    [ "$spin_hot" -ge 12 ] && [ "$spin_reported" != "$pid" ] || return
+    spin_reported=$pid
+    mkdir -p "$SPIN_DIR"
+    local f="$SPIN_DIR/$(date +%Y%m%d-%H%M%S)-$pid.txt"
+    {
+        echo "plasmashell $pid main thread >=90% CPU for 60s at $(date)"
+        echo; echo "== main thread stack =="
+        if command -v gdb >/dev/null 2>&1; then
+            timeout 30 gdb -p "$pid" -batch -ex bt 2>/dev/null | grep '^#'
+        elif command -v eu-stack >/dev/null 2>&1; then
+            timeout 30 eu-stack -p "$pid" 2>/dev/null | sed -n "/^TID $pid:/,/^TID/p"
+        else
+            echo "(no gdb/eu-stack installed)"
+        fi
+        echo; echo "== duplicate session daemons =="
+        for d in kactivitymanagerd kded6 xdg-desktop-portal-kde; do
+            echo "$d: $(pgrep -fc "/$d\$" 2>/dev/null)"
+        done
+        echo; echo "== ksycoca mtimes =="
+        ls -l --time-style=+%T "$HOME"/.cache/ksycoca6_* 2>/dev/null
+    } >"$f" 2>&1
+    echo "plasmashell $pid spinning, evidence in $f $(date)" >>"$WD_LOG"
+    command -v notify-send >/dev/null 2>&1 && notify-send -u critical -a "schema-init" \
+        "Plasma panel is spinning" "plasmashell main thread pinned at 100% for 60s. Evidence saved to $f" &
+}
+
 while sleep 5; do
     pgrep -x kwin_wayland >/dev/null 2>&1 || { echo "compositor gone, exit $(date)" >>"$WD_LOG"; break; }
-    pgrep -x plasmashell  >/dev/null 2>&1 && continue
+    psh=$(pgrep -x plasmashell | head -1)
+    if [ -n "$psh" ]; then
+        spin_check "$psh"
+        continue
+    fi
     now=$(date +%s)
     [ $((now - window)) -gt 60 ] && { fails=0; window=$now; }
     fails=$((fails + 1))
@@ -81,7 +133,9 @@ while sleep 5; do
     # the launch cleared the wedge (new shell spawned the kioworker, rendered).
     # This is a NEW failure mode past the lock/env/headless ones. (Claire)
     kbuildsycoca6 --noincremental >/dev/null 2>&1
-    setsid nohup plasmashell >/dev/null 2>&1 &
+    # 9>&-: never hand the single-instance lock to plasmashell, or it outlives
+    # this watchdog holding the lock and no watchdog can start again.
+    setsid nohup plasmashell >/dev/null 2>&1 9>&- &
     # No post-launch "render verify": it waited for a desktop.so kioworker, but
     # current KIO runs that worker in-process, so the check never passed and
     # kill -9'd every healthy respawn (3x, until the crash-loop cap). On a first
