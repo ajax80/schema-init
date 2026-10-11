@@ -13,9 +13,11 @@
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
 #define G_MAX_NODES 512
-#define G_MAX_EDGES 16
+#define G_MAX_EDGES 8
+#define G_PID1_MAX_SERVICES 88
+#define G_PID1_MAX_GROUPS 16
 
-struct g_node { char name[64]; char deps[G_MAX_EDGES][64]; int ndeps; int group; int seen; };
+struct g_node { char name[64]; char file[64]; char deps[G_MAX_EDGES][64]; int ndeps; int group; int seen; };
 
 static struct g_node g_nodes[G_MAX_NODES];
 static int g_n;
@@ -25,22 +27,10 @@ static struct g_node *g_find(const char *name) {
     return NULL;
 }
 
-static void g_load_file(const char *path, struct g_node *n, const char *depkey) {
-    FILE *f = fopen(path, "r");
-    char line[512];
-    if (!f) return;
-    while (fgets(line, sizeof line, f)) {
-        char *eq = strchr(line, '=');
-        line[strcspn(line, "\r\n")] = '\0';
-        if (!eq || line[0] == '#') continue;
-        *eq = '\0';
-        if (!strcmp(line, "name") && eq[1]) snprintf(n->name, sizeof n->name, "%s", eq + 1);
-        else if (!strcmp(line, depkey)) {
-            if (!eq[1]) n->ndeps = 0;
-            else if (n->ndeps < G_MAX_EDGES) snprintf(n->deps[n->ndeps++], 64, "%s", eq + 1);
-        }
-    }
-    fclose(f);
+static struct g_node *g_find_arg(const char *arg) {
+    struct g_node *n = g_find(arg);
+    for (int i = 0; !n && i < g_n; i++) if (!strcmp(g_nodes[i].file, arg)) n = &g_nodes[i];
+    return n;
 }
 
 static const char *g_dir(void) {
@@ -48,28 +38,67 @@ static const char *g_dir(void) {
     return e && e[0] ? e : SVC_DIR;
 }
 
+static int g_load_file(const char *path, struct g_node *n, int dropin, int *has_exec) {
+    FILE *f = fopen(path, "r");
+    char line[512];
+    const char *depkey = n->group ? "member" : "dep";
+    if (!f) return -1;
+    while (fgets(line, sizeof line, f)) {
+        char *eq = strchr(line, '='), *val;
+        line[strcspn(line, "\r\n")] = '\0';
+        if (!eq || line[0] == '#') continue;
+        *eq = '\0';
+        val = eq + 1;
+        if (!strcmp(line, "name")) {
+            if (dropin) { fclose(f); return -1; }
+            if (val[0]) snprintf(n->name, sizeof n->name, "%s", val);
+        } else if (!strcmp(line, "exec") && val[0])
+            *has_exec = 1;
+        else if (!strcmp(line, depkey)) {
+            if (!val[strspn(val, " \t")]) { if (dropin) n->ndeps = 0; }
+            else if (n->ndeps < G_MAX_EDGES) snprintf(n->deps[n->ndeps++], 64, "%s", val);
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
 static void g_load(void) {
     DIR *d = opendir(g_dir());
     struct dirent *e;
+    int nsvc = 0, ngrp = 0;
     if (!d) return;
     while ((e = readdir(d)) && g_n < G_MAX_NODES) {
         size_t l = strlen(e->d_name);
         int grp = l > 4 && !strcmp(e->d_name + l - 4, ".grp");
-        char path[SVC_DROPIN_PATH], files[SVC_DROPIN_MAX][SVC_DROPIN_PATH];
+        char path[SVC_DROPIN_PATH], files[SVC_DROPIN_MAX][SVC_DROPIN_PATH], *at;
         struct g_node *n = &g_nodes[g_n];
+        int has_exec = 0, ok = 1;
         if (!grp && (l <= 4 || strcmp(e->d_name + l - 4, ".svc"))) continue;
         memset(n, 0, sizeof *n);
-        snprintf(n->name, sizeof n->name, "%.*s", (int)(l - 4), e->d_name);
+        snprintf(n->file, sizeof n->file, "%.*s", (int)(l - 4), e->d_name);
+        at = strchr(n->file, '@');
+        if (!grp && at && !at[1]) continue;
         snprintf(path, sizeof path, "%s/%s", g_dir(), e->d_name);
         n->group = grp;
-        g_load_file(path, n, grp ? "member" : "dep");
-        if (!grp) {
+        if (g_load_file(path, n, 0, &has_exec) < 0) continue;
+        if (grp) {
+            if (!n->name[0]) continue;
+            ngrp++;
+        } else {
             int nf = svc_dropin_list(path, files, SVC_DROPIN_MAX);
-            for (int i = 0; i < nf; i++) g_load_file(files[i], n, "dep");
+            for (int i = 0; i < nf && ok; i++) ok = g_load_file(files[i], n, 1, &has_exec) == 0;
+            if (!ok || !has_exec) continue;
+            if (at || !n->name[0]) snprintf(n->name, sizeof n->name, "%s", n->file);
+            nsvc++;
         }
         g_n++;
     }
     closedir(d);
+    if (nsvc > G_PID1_MAX_SERVICES)
+        fprintf(stderr, "schema-ctl: %d services; PID 1 loads only the first %d\n", nsvc, G_PID1_MAX_SERVICES);
+    if (ngrp > G_PID1_MAX_GROUPS)
+        fprintf(stderr, "schema-ctl: %d groups; PID 1 loads only the first %d\n", ngrp, G_PID1_MAX_GROUPS);
 }
 
 static void g_mark(const char *name) {
@@ -79,22 +108,41 @@ static void g_mark(const char *name) {
     for (int i = 0; i < n->ndeps; i++) g_mark(n->deps[i]);
 }
 
+static void g_q(const char *s) {
+    putchar('"');
+    for (; *s; s++) {
+        if (*s == '"' || *s == '\\') putchar('\\');
+        putchar(*s);
+    }
+    putchar('"');
+}
+
 static int cmd_graph(const char *root) {
+    char missing[G_MAX_NODES][64];
+    int nmiss = 0;
     g_load();
     if (root) {
-        if (!g_find(root)) { fprintf(stderr, "schema-ctl: no service or group named %s in %s\n", root, g_dir()); return 1; }
-        g_mark(root);
+        struct g_node *r = g_find_arg(root);
+        if (!r) { fprintf(stderr, "schema-ctl: no service or group named %s in %s\n", root, g_dir()); return 1; }
+        g_mark(r->name);
     } else
         for (int i = 0; i < g_n; i++) g_nodes[i].seen = 1;
     printf("digraph schema {\n  rankdir=LR;\n  node [shape=ellipse];\n");
     for (int i = 0; i < g_n; i++) {
         struct g_node *n = &g_nodes[i];
         if (!n->seen) continue;
-        printf("  \"%s\"%s;\n", n->name, n->group ? " [shape=box]" : "");
+        printf("  "); g_q(n->name); printf("%s;\n", n->group ? " [shape=box]" : "");
         for (int j = 0; j < n->ndeps; j++) {
-            if (!g_find(n->deps[j]))
-                printf("  \"%s\" [color=red, fontcolor=red, style=dashed];\n", n->deps[j]);
-            printf("  \"%s\" -> \"%s\"%s;\n", n->name, n->deps[j], n->group ? " [style=dashed]" : "");
+            if (!g_find(n->deps[j])) {
+                int dup = 0;
+                for (int k = 0; k < nmiss; k++) if (!strcmp(missing[k], n->deps[j])) { dup = 1; break; }
+                if (!dup && nmiss < G_MAX_NODES) {
+                    snprintf(missing[nmiss++], 64, "%s", n->deps[j]);
+                    printf("  "); g_q(n->deps[j]); printf(" [color=red, fontcolor=red, style=dashed];\n");
+                }
+            }
+            printf("  "); g_q(n->name); printf(" -> "); g_q(n->deps[j]);
+            printf("%s;\n", n->group ? " [style=dashed]" : "");
         }
     }
     printf("}\n");

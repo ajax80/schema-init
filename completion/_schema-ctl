@@ -21,14 +21,15 @@ cmds=(
   'reboot:reboot'
   'poweroff:power off'
 )
-svcs=(/etc/schema-init/services/*.(svc|grp)(N:t:r))
+svcs=(${SCHEMA_SVC_DIR:-/etc/schema-init/services}/*.(svc|grp)(N:t:r))
+svcs=(${svcs:#*@})
 
 if (( CURRENT == 2 )); then
   _describe 'command' cmds
   return
 fi
 case $words[2] in
-  status) _alternatives 'opts:option:(--json --kv)' "svcs:service:($svcs)" ;;
+  status) (( CURRENT == 3 )) && _alternatives 'opts:option:(--json --kv)' "svcs:service:($svcs)" ;;
   reload) _values option --evict ;;
   add|reexec) _files ;;
   analyze|start|up|stop|down|restart|cat|graph|pet|reset)
