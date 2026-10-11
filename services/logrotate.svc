@@ -1,6 +1,7 @@
 name=logrotate
 exec=/usr/sbin/logrotate
 args=/etc/logrotate.conf
+condition=path_exists:/usr/sbin/logrotate
 needs_root=1
 on_calendar=00:10
 persistent=1
