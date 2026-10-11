@@ -62,8 +62,20 @@ check("live resolved symlink removed too (deploy runs under systemd)", not os.pa
 check("original link recorded for uninstall", mn.links.get("/etc/resolv.conf") == "../run/systemd/resolve/stub-resolv.conf")
 mn.save()
 open(rc, "w").write("nameserver 10.0.2.3\n")
-sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
+os.makedirs(os.path.join(root, "etc/selinux"), exist_ok=True)
+open(os.path.join(root, "etc/selinux/config"), "w").write("# x\nSELINUX=enforcing\nSELINUXTYPE=targeted\n")
+for g in ("etc/schema-init/schema-udev.live", "etc/schema-init/dbus-broker"):
+    os.makedirs(os.path.dirname(os.path.join(root, g)), exist_ok=True)
+    open(os.path.join(root, g), "w").close()
+res = sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
 check("uninstall restores the resolved symlink", os.readlink(rc) == "../run/systemd/resolve/stub-resolv.conf")
+check("uninstall removes the udev and dbus flip gates",
+      not any(os.path.exists(os.path.join(root, g)) for g in ("etc/schema-init/schema-udev.live", "etc/schema-init/dbus-broker")))
+check("uninstall requests an SELinux relabel when SELinux is configured",
+      res["relabel"] and os.path.exists(os.path.join(root, ".autorelabel")))
+os.remove(os.path.join(root, ".autorelabel"))
+open(os.path.join(root, "etc/selinux/config"), "w").write("SELINUX=disabled\n")
+check("no relabel with SELINUX=disabled", not sm._selinux_configured())
 
 # a stock boot's tmpfiles (L! /etc/resolv.conf) puts the link back; every
 # schema-init boot must clear it again before NetworkManager starts

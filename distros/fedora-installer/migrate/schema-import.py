@@ -468,8 +468,6 @@ def host_facts():
         kind = "vm" if detect("--vm")[0] == 0 else "container" if detect("--container")[0] == 0 else None
     sb = glob.glob("/sys/firmware/efi/efivars/SecureBoot-*")
     sec = set()
-    if os.path.exists("/sys/fs/selinux/enforce"):
-        sec.add("selinux")
     if _read("/sys/module/apparmor/parameters/enabled") == "Y":
         sec.add("apparmor")
     if os.path.exists("/proc/self/loginuid"):

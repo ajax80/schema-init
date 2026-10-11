@@ -571,12 +571,27 @@ def uninstall(run=subprocess.run):
     if m.packages:
         run(["dnf", "remove", "-y"] + m.packages, check=False)
     remove_boot_entries(m.grub.get("saved_entry_was"), run=run)
-    for rel in (Manifest.PATH, stage.STAGE_PATH):
+    for rel in (Manifest.PATH, stage.STAGE_PATH, UDEV_LIVE_FLAG, DBUS_BROKER_GATE):
         try:
             os.remove(P(rel))
         except OSError:
             pass
-    return {"files_removed": removed, "packages": m.packages}
+    relabel = _selinux_configured()
+    if relabel:
+        open(P("/.autorelabel"), "a").close()
+    return {"files_removed": removed, "packages": m.packages, "relabel": relabel}
+
+
+def _selinux_configured():
+    try:
+        with open(P("/etc/selinux/config")) as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k == "SELINUX":
+                    return v.strip().lower() not in ("", "disabled")
+    except OSError:
+        pass
+    return False
 
 
 def _mount_slug(target):
@@ -730,6 +745,7 @@ UDEVD_PATHS = ["/usr/lib/systemd/systemd-udevd", "/lib/systemd/systemd-udevd",
 
 UDEVD_LAUNCH = "/usr/local/bin/schema-udevd-launch.sh"
 UDEV_LIVE_FLAG = "/etc/schema-init/schema-udev.live"
+DBUS_BROKER_GATE = "/etc/schema-init/dbus-broker"
 
 
 def _udevd_path():
@@ -1315,6 +1331,8 @@ def main(argv, run=subprocess.run):
     if args.uninstall:
         res = uninstall(run=run)
         print("uninstalled: %d files, packages=%s" % (res["files_removed"], res["packages"]))
+        if res.get("relabel"):
+            print("the next boot relabels SELinux file contexts (a few minutes, then it reboots once more)")
         return 0
 
     plat, why = detect_platform()
