@@ -5,7 +5,25 @@
 </p>
 <p align="center"><sub>▶ 30-second trailer — <a href="assets/schema-init-trailer.mp4">watch in full resolution, with sound</a></sub></p>
 
-## I never bought the new machine
+## Documentation
+
+| | |
+|---|---|
+| [Installing](docs/install.md) | ISO, in-place conversion, building from source, GRUB, filesystem setup |
+| [How it works](docs/how-it-works.md) | The state machine, `.svc` files, states, shutdown, the shared-memory interface |
+| [Service file reference](docs/svc-reference.md) | Every `.svc` key |
+| [The reclaimed daemons](docs/components.md) | schema-udev, schema-doctor, schema-logind, schema-dbus, running packaged software |
+| [Running a schema-init box](docs/operations.md) | `schema-ctl`, the recovery console, debugging, crashes, logs |
+| [Numbers](docs/benchmarks.md) | Every boot, RAM, power and footprint measurement, with method and raw data |
+| [Porting and distributions](docs/porting.md) | New distros, the shipped distro configs, repository layout |
+| [Roadmap](docs/roadmap.md) | What's done and what's next |
+| [Why schema-init](docs/why-schema-init.md) | Who it is for, and who it is not for |
+
+**License:** AGPL-3.0-or-later. A [commercial license](#license) is available for embedding in proprietary systems.
+
+---
+
+## My old machine got better
 
 I wrote schema-init as the operating layer for Project Daedalus, the controller for the Ungulate Leg (more in [Origin](#origin)). It had to be a PID 1 I could read end to end, with none of systemd's ideas about what a computer is for. In late May 2026 I tried it on my own desktop, a Ryzen 5 1600 with 16 GB of RAM and a GTX 1050 Ti. I was already shopping for a replacement, and that box was about to become the TV computer.
 
@@ -44,24 +62,6 @@ sudo dnf install schema-init-wizard
 ```
 
 then run `schema-wizard`. It walks you through three reversible stages with a rollback at each one.
-
-## Documentation
-
-| | |
-|---|---|
-| [Installing](docs/install.md) | ISO, in-place conversion, building from source, GRUB, filesystem setup |
-| [How it works](docs/how-it-works.md) | The state machine, `.svc` files, states, shutdown, the shared-memory interface |
-| [Service file reference](docs/svc-reference.md) | Every `.svc` key |
-| [The reclaimed daemons](docs/components.md) | schema-udev, schema-doctor, schema-logind, schema-dbus, running packaged software |
-| [Running a schema-init box](docs/operations.md) | `schema-ctl`, the recovery console, debugging, crashes, logs |
-| [Numbers](docs/benchmarks.md) | Every boot, RAM, power and footprint measurement, with method and raw data |
-| [Porting and distributions](docs/porting.md) | New distros, the shipped distro configs, repository layout |
-| [Roadmap](docs/roadmap.md) | What's done and what's next |
-| [Why schema-init](docs/why-schema-init.md) | Who it is for, and who it is not for |
-
-**License:** AGPL-3.0-or-later. A [commercial license](#license) is available for embedding in proprietary systems.
-
----
 
 ## Known limitations
 
