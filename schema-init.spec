@@ -257,6 +257,11 @@ if grep -qs '^exec=/usr/local/bin/schema-zram-start.sh$' "$svcd/zram.svc" &&
 fi
 
 %{_bindir}/schema-import --bus-overrides >/dev/null 2>&1 || :
+r=%{_sysconfdir}/schema-init/services/selinux-autorelabel-mark
+if [ -f "$r.svc.skipped" ] && [ ! -e "$r.svc" ] &&
+   %{_bindir}/schema-import selinux-autorelabel-mark >/dev/null 2>&1 && [ -e "$r.svc" ]; then
+    rm -f "$r.svc.skipped"
+fi
 
 %transfiletriggerin migrate -- /usr/bin/systemctl
 if [ ! -L /usr/bin/systemctl ] && [ -f /usr/bin/systemctl ]; then

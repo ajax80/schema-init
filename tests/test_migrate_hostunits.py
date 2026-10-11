@@ -62,8 +62,26 @@ check("live resolved symlink removed too (deploy runs under systemd)", not os.pa
 check("original link recorded for uninstall", mn.links.get("/etc/resolv.conf") == "../run/systemd/resolve/stub-resolv.conf")
 mn.save()
 open(rc, "w").write("nameserver 10.0.2.3\n")
-sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
+os.makedirs(os.path.join(root, "etc/selinux"), exist_ok=True)
+open(os.path.join(root, "etc/selinux/config"), "w").write("# x\nSELINUX=enforcing\nSELINUXTYPE=targeted\n")
+ARTS = ("etc/schema-init/schema-udev.live", "etc/schema-init/dbus-broker", "etc/schema-init/net-naming",
+        "var/lib/schema-init/dbus-flip.state", "var/lib/schema-init/dbus.svc.stock", "var/lib/schema-init/flip-armed-boots")
+for g in ARTS:
+    os.makedirs(os.path.dirname(os.path.join(root, g)), exist_ok=True)
+    open(os.path.join(root, g), "w").close()
+res = sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
 check("uninstall restores the resolved symlink", os.readlink(rc) == "../run/systemd/resolve/stub-resolv.conf")
+check("uninstall removes flip gates and flip state",
+      not any(os.path.exists(os.path.join(root, g)) for g in ARTS))
+check("uninstall requests an SELinux relabel when SELinux is configured",
+      res["relabel"] and os.path.exists(os.path.join(root, ".autorelabel")))
+os.remove(os.path.join(root, ".autorelabel"))
+res = sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
+check("no relabel when there was nothing to uninstall", not res["relabel"] and not os.path.exists(os.path.join(root, ".autorelabel")))
+for txt, want in (("SELINUX=disabled\n", False), ("SELINUX = enforcing\n", True),
+                  ("SELINUX=disabled # off\n", False), ('SELINUX="permissive"\n', True), ("# SELINUX=enforcing\n", False)):
+    open(os.path.join(root, "etc/selinux/config"), "w").write(txt)
+    check("selinux config %r -> %s" % (txt.strip(), want), sm._selinux_configured() == want)
 
 # a stock boot's tmpfiles (L! /etc/resolv.conf) puts the link back; every
 # schema-init boot must clear it again before NetworkManager starts

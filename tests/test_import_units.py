@@ -254,7 +254,7 @@ check("socket service: listen + lazy, no [Install] note", "listen=stream:/run/cu
       and "listen_lazy=1\n" in cu and "no [Install]" not in cu and "notify=1\n" in cu)
 
 # --- Condition*/Assert* ---
-si._FACTS = {"virt": "none", "virt_kind": None, "security": {"selinux", "audit"}, "cgroup_v2": True,
+si._FACTS = {"virt": "none", "virt_kind": None, "security": {"audit"}, "cgroup_v2": True,
              "controllers": {"cpu", "memory", "io"}, "cpus": 4, "arch": "x86-64"}
 def cond(txt):
     return si.condition_lines(si.parse_unit("[Unit]\n" + txt + "\n"))
@@ -272,10 +272,10 @@ check("runtime conditions translated with | and !",
 check("empty Condition resets", cond("ConditionPathExists=/a\nConditionPathExists=\nConditionPathExists=/b")
       == ["condition=path_exists:/b"])
 check("static true dropped", cond("ConditionVirtualization=no\nConditionCPUs=>1\nConditionVirtualization=!container\n"
-      "ConditionControlGroupController=v2\nConditionCapability=CAP_SYS_ADMIN\nConditionSecurity=selinux\n"
+      "ConditionControlGroupController=v2\nConditionCapability=CAP_SYS_ADMIN\nConditionSecurity=!selinux\n"
       "ConditionFirstBoot=no\nConditionArchitecture=x86-64") == [])
 for t in ("ConditionVirtualization=vm", "ConditionVirtualization=yes", "ConditionVirtualization=kvm",
-          "ConditionCPUs=>=8", "ConditionSecurity=!selinux", "ConditionFirstBoot=yes",
+          "ConditionCPUs=>=8", "ConditionSecurity=selinux", "ConditionFirstBoot=yes",
           "ConditionControlGroupController=v1", "ConditionControlGroupController=cpu rdma",
           "ConditionNeedsUpdate=/etc", "ConditionSecurity=ima", "ConditionPathExists=%t/x",
           "ConditionArchitecture=arm64"):
