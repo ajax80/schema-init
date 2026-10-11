@@ -10,7 +10,7 @@ Daemons cost the same on every machine, so they take a bigger share of a small o
 
 On the same laptop with the same desktop, a stock Fedora 44 KDE install converted to schema-init draws the desktop **27.5 s sooner** and carries **439 MB less RAM** at idle. On an older i3 laptop, idle swap dropped from hundreds of MB to zero. The method and raw data for both are in [Numbers](benchmarks.md).
 
-The author's own desktop was about to be retired. It wasn't retired, and it now does just about everything ([the story](../README.md#i-never-bought-the-new-machine)).
+The author's own desktop was about to be retired. It wasn't retired, and it now does just about everything ([the story](../README.md#my-machine-got-more-useful-after-schema-init)).
 
 ## You want to read the thing that runs your computer
 
