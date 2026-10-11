@@ -57,7 +57,7 @@ then run `schema-wizard`. It walks you through three reversible stages with a ro
 | [Numbers](docs/benchmarks.md) | Every boot, RAM, power and footprint measurement, with method and raw data |
 | [Porting and distributions](docs/porting.md) | New distros, the shipped distro configs, repository layout |
 | [Roadmap](docs/roadmap.md) | What's done and what's next |
-| [Why schema-init](docs/why-schema-init.md) | The longer argument |
+| [Why schema-init](docs/why-schema-init.md) | Who it is for, and who it is not for |
 
 **License:** AGPL-3.0-or-later. A [commercial license](#license) is available for embedding in proprietary systems.
 

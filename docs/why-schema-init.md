@@ -1,46 +1,51 @@
-# Why schema-init — one-page fact sheet
+# Why schema-init
 
-*Source of truth for outreach. Every claim here is measured or true as written — don't add to it, pull from it. If someone asks something not covered here, say "I'll check with the author" rather than guessing.*
+A modern Linux desktop boots into far more than its init. Next to PID 1 sit `journald`, `logind`, `udevd`, `resolved`, a D-Bus broker and a set of timers. Every one of them stays resident, holds memory and wakes the CPU on its own schedule, whether you need it or not. Most people never see any of this, and most people never need to.
 
----
+schema-init is for the people who do care about it. Here are the reasons someone would want it.
 
-## The one-line version
-schema-init is a minimal PID 1 for Linux that supervises services with a weight-state machine instead of unit files — and, piece by piece, a native, **readable** replacement for the systemd daemons around it. AGPL-3.0. `github.com/ajax80/schema-init`
+## Your machine is older than the software expects
 
-## The pitch in three sentences
-- systemd isn't just PID 1 — it's a constellation of always-on daemons (journald, logind, dbus-broker, resolved, udevd, timers) holding RAM and waking the CPU whether you use them or not.
-- schema-init replaces PID 1 with a **single static binary** and lets you retire those daemons **one at a time**, each backing out with a single reboot.
-- The point isn't only *less* — it's an init layer you can **read top to bottom and own**.
+Daemons cost the same on every machine, so they take a bigger share of a small one. On a 4 GB laptop the stack around PID 1 decides whether you can keep a browser and one more program open, or whether the machine starts swapping.
 
-## The numbers (all single-node, measured — never extrapolate to fleets)
-- **PID 1 footprint:** 1.2 MB RSS on a minimal boot; 3.3–4.0 MB running a 47-service KDE desktop. **One thread, in every case.**
-- **RAM returned:** ~½ GB freed on identical hardware/desktop vs systemd (~1.1 GB used vs ~1.6–2.0 GB). Idle swap drops from hundreds of MB to **zero**.
-- **Power:** 92–99% C10 residency, ~1.25 W full-SoC package draw at a working desktop, idle load average 0.03 (vs 0.10–0.20 under systemd). Read from Intel RAPL hardware counters, not estimated.
-- Test box: a salvaged Dell Inspiron (i3, 4 GB) that swapped constantly under systemd, now runs a full desktop with room to spare.
+On the same laptop with the same desktop, a stock Fedora 44 KDE install converted to schema-init draws the desktop **27.5 s sooner** and carries **439 MB less RAM** at idle. On an older i3 laptop, idle swap dropped from hundreds of MB to zero. The method and raw data for both are in [Numbers](benchmarks.md).
 
-> ⚠️ **Honesty rule — say this if scale comes up:** these are single-node measurements on one i3 laptop. Don't multiply a per-node idle delta by a fleet size — an init's own power draw is a tiny slice of a server's total. At scale the real levers are density, footprint, boot time, attack surface, and determinism — not init power draw.
+The author's own desktop was about to be retired. It wasn't retired, and it now does just about everything ([the story](../README.md#i-never-bought-the-new-machine)).
 
-## What it replaces (opt in one at a time, reboot to undo)
-- `schema-logind` — sessions, power, seats + hostname1/timedate1/systemd1 D-Bus surfaces
-- `schema-udev` — device management, authoritative over `/dev`
-- `schema-journal-sink` — journald-shaped endpoint that drains to a plain logfile, no journal database
-- built-in `.svc` timers — retire cron and systemd `.timer` units
-- `schema-dbus` — an alternative D-Bus broker (to dbus-daemon / dbus-broker, which were never systemd's)
+## You want to read the thing that runs your computer
 
-## The privacy angle (lead with this for the Liberated-fork author)
-- schema-init replaces systemd's satellite daemons (logind, udev, journald) **wholesale** — none of systemd's birthdate/age baggage comes along.
-- The repo just went through a **full privacy scrub**.
-- Shared value, not a cold pitch: this person already forked over exactly this concern.
+PID 1 is the most trusted process on the system. schema-init is one static binary of about 1.2 MB once stripped, and it runs a single thread. Each daemon it replaces is a separate, single-purpose program that you can read from top to bottom in an afternoon:
 
-## The ask — always low-barrier
-- **Not** "join the team." The ask is: *"boot it in a VM, tell me what breaks."*
-- Zero-risk paths exist and are the whole point of the on-ramp:
-  - **Build + test:** `git clone` + `make` + `make test` — needs only a compiler, no root, no VM. Just proves it builds and passes ~30 unit tests.
-  - **VM boot:** build a bootable ISO and watch it boot in QEMU — never touches their real bootloader or `/dev`.
-  - **Fedora:** prebuilt via COPR (`dnf copr enable ajax80/schema-init`) or a prebuilt installer ISO from the latest release.
-- Every step is reversible with a single reboot. Say that early — it's what makes people willing to try.
+- `schema-logind`: sessions, seats, power, plus the `hostname1`, `timedate1`, `locale1` and `systemd1` D-Bus surfaces
+- `schema-udev`: device management, authoritative over `/dev`
+- `schema-journal-sink`: accepts journald-style logging and writes plain text files, with no journal database
+- built-in `.svc` timers, which replace cron and systemd `.timer` units
+- `schema-dbus`: a third D-Bus broker, alongside `dbus-daemon` and `dbus-broker`
 
-## What NOT to claim
-- Don't promise fleet/server savings (see honesty rule above).
-- Don't call the GUI wizard battle-tested — it hasn't been shipped-tested on a live desktop yet; point people to the `schema-migrate` CLI for the proven route.
-- Don't guarantee it fits every distro — the tested on-ramps are Debian (ISO) and Fedora KDE (COPR/migrator).
+Services are described in small key=value [`.svc` files](svc-reference.md). The supervisor is a [state machine](how-it-works.md) you can draw on a napkin. When a service misbehaves, `schema-ctl` tells you which state it is in and why it got there.
+
+## You want to own the layer, not adopt a platform
+
+systemd keeps growing. Each release takes on more jobs: user records, home directories, network configuration, boot loading. That is a reasonable design, but it means the init layer is a project you follow, not a part you choose.
+
+With schema-init you pick each piece. Every replacement is opt-in, runs only if it is listed, and comes out with one reboot. You can run a lean PID 1 on top of the stock daemons, replace all of them, or stop anywhere in between. Your systemd boot entry stays in the GRUB menu the whole time.
+
+## You need a quiet machine
+
+Once every service is stable, schema-init's main loop sleeps until something actually happens. No timer wakes it. On an idle i3 laptop with a full desktop, the CPU spent 92–99% of its time in its deepest sleep state (C10). The whole chip drew about 1.25 W, read from the hardware's own energy counters, and the load average sat at 0.03, compared with 0.10–0.20 under systemd on the same hardware.
+
+That matters on battery. It matters even more on embedded hardware. schema-init was built as the operating layer for a robotic leg controller, where a deterministic boot and a hardware watchdog matter more than features. It has [cgroup limits, CPU pinning and a hardware watchdog](roadmap.md) for that kind of node, and it cross-compiles for aarch64 and ARMv6.
+
+## Who it is not for
+
+- **Anyone who needs it to be proven.** It is young. `schema-dbus` and `schema-logind` sit on the system's authorization boundary and have not had an outside security review. Don't put them on a machine other people log into until they have.
+- **Servers bought on a power-savings promise.** The power figures come from one laptop. An init's own draw is a tiny slice of a server's total, so don't multiply them by a fleet size. At scale, the reasons to consider it are density, footprint, attack surface and determinism.
+- **Distros beyond the tested paths.** The packaged path is Fedora KDE (COPR, the installer ISO, the in-place migrator and wizard). Other distros work from source with [`setup.sh`](install.md#build-from-source-any-distro), but you will be porting. See [Porting](porting.md).
+
+## Trying it costs one reboot
+
+- **No risk at all:** `git clone`, `make`, `make test`. You only need a compiler; no root, no VM.
+- **Watch it boot:** run it in a VM. Your real bootloader and `/dev` are never touched.
+- **On Fedora KDE:** `dnf copr enable ajax80/schema-init`, then `schema-migrate` or the `schema-wizard` GUI. Either one adds a non-default boot entry, and one command removes it.
+
+Every step is in [Installing](install.md). If something breaks, [open an issue](https://github.com/ajax80/schema-init/issues). That is the most useful thing a new user can do.
