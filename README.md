@@ -27,7 +27,7 @@
 
 I wrote schema-init as the operating layer for Project Daedalus, the controller for the Ungulate Leg (more in [Origin](#origin)). It had to be a PID 1 I could read end to end, with none of systemd's ideas about what a computer is for. In late May 2026 I tried it on my own desktop, a Ryzen 5 1600 with 16 GB of RAM and a GTX 1050 Ti. I was already shopping for a replacement, and that box was about to become the TV computer.
 
-Under systemd it ran out of memory with four Firefox tabs open and Cyberpunk running. Under schema-init it runs fifteen browser tabs and Cyberpunk. Or Control plus Obsidian, a password manager, two terminals, a file manager, Steam, KDE Connect and a TV app, all at once, with 7.6 GB of the 16 still free. (That last figure was measured with Control running. The rest is my experience on one machine, not a benchmark.)
+Under systemd it was sluggish, slow to boot, and ran out of memory all the time. Under schema-init it became useful. Between the 400–500 MB of RAM schema-init frees and its memory-pressure handling, I can run far more at once than I ever could on stock systemd.
 
 I never bought the new machine.
 
