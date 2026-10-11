@@ -91,7 +91,45 @@ _ACTION = {
 
 _SECONDARY = {
     "dbus_offer": "Skip — I'm done",
+    "rolled_back": "Try again",
 }
+
+_WHY = (
+    (("launcher fell back", "is not schema-dbus"),
+     "The new message bus didn't start, so your computer went back to the standard one."),
+    (("GetId",),
+     "The new message bus didn't answer at all."),
+    (("not serving",),
+     "The new message bus started, but some system services (networking, sign-in or permissions) "
+     "didn't appear on it in time."),
+    (("not schema-dbus when the desktop checked",),
+     "When the desktop started, the new message bus wasn't the one running."),
+    (("not in charge when the desktop checked",),
+     "When the desktop started, the new device manager wasn't the one running."),
+    (("never confirmed",),
+     "The desktop didn't confirm the switch after two restarts."),
+    (("schema-udev not running",),
+     "The new device manager didn't start."),
+    (("/dev/input",),
+     "No keyboard or mouse was found with the new device manager."),
+    (("/dev/dri",),
+     "The display couldn't be opened with the new device manager."),
+    (("by-uuid",),
+     "Your disks couldn't be found by their IDs with the new device manager."),
+    (("missing core node",),
+     "Basic system devices were missing with the new device manager."),
+)
+
+RETRY_NOTE = ("Trying again is safe: if it fails the same way, your computer puts itself back again. "
+              "It helps most after an update.")
+
+
+def humanize_why(raw):
+    raw = (raw or "").strip()
+    for keys, text in _WHY:
+        if any(k in raw for k in keys):
+            return text
+    return "The switch didn't pass its health check." if raw else ""
 
 
 def _ok(result):
@@ -107,6 +145,7 @@ _ERROR = {
                        "You can skip it — your computer is finished as it is.",
     "confirm_failed": "Couldn't check the message bus switch yet. Try Continue again.",
     "skip_failed": "Couldn't record that choice. Your computer is fine.",
+    "retry_failed": "Couldn't set up another try, so nothing was changed. Your computer is fine.",
 }
 
 
@@ -118,6 +157,7 @@ class WizardCore:
     def __init__(self, backend=None, root="/"):
         self.backend = backend
         self.root = root
+        self._why = None
 
     def current_stage(self):
         return stage.read_stage(self.root)
@@ -152,10 +192,35 @@ class WizardCore:
     def recovery_text(self):
         return _migrate().RECOVERY_TEXT
 
+    def secondary(self):
+        screen = self.screen()
+        if screen == "rolled_back":
+            return self.retry()
+        if screen == "dbus_offer":
+            return self.skip()
+        return "noop"
+
     def skip(self):
         if self.screen() != "dbus_offer":
             return "noop"
         return "skipped" if _ok(self.backend.skip_dbus()) else "skip_failed"
+
+    def retry(self):
+        if self.screen() != "rolled_back":
+            return "noop"
+        return "retried" if _ok(self.backend.retry()) else "retry_failed"
+
+    def detail(self):
+        if self.screen() != "rolled_back":
+            return ""
+        cur = self.current_stage()
+        if self._why is None or self._why[0] != cur:
+            self._why = (cur, self.backend.why())
+        raw = self._why[1]
+        why = humanize_why(raw)
+        if not why:
+            return RETRY_NOTE
+        return "%s\n\n%s\n\n(%s)" % (why, RETRY_NOTE, raw)
 
     def advance(self, consent, recovery_ack, selections):
         if not consent:
@@ -174,7 +239,9 @@ class WizardCore:
             return "dbus_armed" if _ok(self.backend.arm_dbus()) else "dbus_arm_failed"
         if screen == "confirming":
             return "dbus_confirmed" if _ok(self.backend.confirm_dbus()) else "confirm_failed"
-        if s in (stage.DONE, stage.ROLLED_BACK, stage.R3_DONE, stage.R3_ROLLED_BACK):
+        if s in (stage.ROLLED_BACK, stage.R3_ROLLED_BACK):
+            return "finished" if _ok(self.backend.dismiss()) else "finish_failed"
+        if s in (stage.DONE, stage.R3_DONE):
             r = self.backend.finish()
             return "finished" if _ok(r) else "finish_failed"
         return "noop"

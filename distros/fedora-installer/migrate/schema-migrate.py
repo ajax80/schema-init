@@ -901,13 +901,8 @@ def install_session_support(profile, manifest, dry_run=False):
     src = P(AUTOSTART)
     if home and os.path.isdir(home) and os.path.exists(src) and not dry_run:
         dst = os.path.join(home, USER_AUTOSTART)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(src, dst)
-        for d in (os.path.dirname(os.path.dirname(dst)), os.path.dirname(dst), dst):
-            try:
-                os.chown(d, uid, uid)
-            except (OSError, TypeError):
-                pass
+        with open(src) as fh:
+            _write_as_user(dst, fh.read(), uid)
         manifest.add_file("/home/%s/%s" % (user, USER_AUTOSTART))
         done.append("/home/%s/%s" % (user, USER_AUTOSTART))
     return done
@@ -997,8 +992,11 @@ def advance_finish(root="/", flip=_default_flip):
         if authoritative:
             flip("confirm")
         new = stage.DONE if authoritative else stage.ROLLED_BACK
+        if not authoritative and (flip("root-state").stdout or "").strip() != "skipped":
+            _log_rollback(root, "flip-healthcheck.log",
+                          "schema-udev was not in charge when the desktop checked", "systemd-udev")
         stage.transition(new, root=root)
-        if not (authoritative and dbus_offered(root)):
+        if authoritative and not dbus_offered(root):
             teardown(root)
         return new
     return cur
@@ -1020,14 +1018,90 @@ def confirm_dbus(root="/", flip=_default_flip):
     elif (flip("dbus-state").stdout or "").strip() == "skipped":
         new = stage.R3_ROLLED_BACK
     else:
+        _log_rollback(root, "dbus-flip-healthcheck.log",
+                      "the bus was not schema-dbus when the desktop checked", "dbus-daemon")
         flip("dbus-rollback")
         stage.transition(stage.R3_ROLLED_BACK, root=root)
-        teardown(root)
         flip("reboot")
         return stage.R3_ROLLED_BACK
     stage.transition(new, root=root)
-    teardown(root)
+    if new == stage.R3_DONE:
+        teardown(root)
     return new
+
+def _log_rollback(root, logname, reason, to):
+    p = os.path.join(root, "var/log/schema-init", logname)
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a") as fh:
+            fh.write("[%s] flip UNHEALTHY (%s) — rolling back to %s\n"
+                     % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), reason, to))
+    except OSError:
+        pass
+
+def dismiss(root="/"):
+    if stage.read_stage(root) not in (stage.ROLLED_BACK, stage.R3_ROLLED_BACK):
+        return 1
+    teardown(root)
+    return 0
+
+AUTOSTART_ENTRY = ("[Desktop Entry]\nType=Application\nName=Finish setting up schema\n"
+                   "Exec=/usr/bin/schema-wizard\nIcon=drive-harddisk\nTerminal=false\n"
+                   "X-KDE-autostart-phase=2\n")
+
+def _write_as_user(path, data, uid):
+    try:
+        import pwd
+        gid = pwd.getpwuid(uid).pw_gid
+    except (KeyError, TypeError, ImportError):
+        gid = uid
+    if uid is None:
+        return False
+    pid = os.fork()
+    if pid == 0:
+        try:
+            if os.getuid() == 0:
+                os.setgroups([])
+                os.setgid(gid)
+                os.setuid(uid)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+            os.write(fd, data.encode())
+            os.close(fd)
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    _, st = os.waitpid(pid, 0)
+    return os.WIFEXITED(st) and os.WEXITSTATUS(st) == 0
+
+def restore_autostart(root="/"):
+    try:
+        prof = json.load(open(os.path.join(root, "var/lib/schema-init/migrate-profile.json")))
+    except (OSError, ValueError):
+        return False
+    user, uid = prof.get("user"), prof.get("uid")
+    home = os.path.join(root, "home", user) if user else None
+    if not home or not os.path.isdir(home):
+        return False
+    return _write_as_user(os.path.join(home, USER_AUTOSTART), AUTOSTART_ENTRY, uid)
+
+def retry_flip(root="/", flip=_default_flip):
+    cur = stage.read_stage(root)
+    if cur not in (stage.ROLLED_BACK, stage.R3_ROLLED_BACK) or not restore_autostart(root):
+        return 1
+    if cur == stage.ROLLED_BACK:
+        if flip("arm").returncode != 0:
+            return 1
+        stage.transition(stage.R2_PENDING, root=root)
+    elif cur == stage.R3_ROLLED_BACK:
+        if flip("dbus-arm").returncode != 0:
+            return 1
+        stage.transition(stage.R3_PENDING, root=root, extra={"dbus_armed_boot": _boot_id()})
+    return 0
+
+def rollback_reason(root="/", flip=_default_flip):
+    sub = {stage.ROLLED_BACK: "explain", stage.R3_ROLLED_BACK: "dbus-explain"}.get(stage.read_stage(root))
+    return (flip(sub).stdout or "").strip() if sub else ""
 
 def skip_dbus(root="/"):
     if stage.read_stage(root) != stage.DONE:
@@ -1292,6 +1366,9 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--arm-dbus", action="store_true", help="R3: arm the schema-dbus flip")
     ap.add_argument("--confirm-dbus", action="store_true", help="R3: judge the dbus flip from the desktop")
     ap.add_argument("--skip-dbus", action="store_true", help="R3: decline the dbus flip")
+    ap.add_argument("--retry", action="store_true", help="re-arm the flip that rolled back (R2 or R3)")
+    ap.add_argument("--why", action="store_true", help="print why the last flip rolled back")
+    ap.add_argument("--dismiss", action="store_true", help="accept a rolled-back flip; stop the wizard autostart")
     ap.add_argument("--prebuilt", action="store_true",
                     help="consume RPM-installed binaries; never compile")
     ap.add_argument("--stage", action="store_true", help="print the current wizard stage")
@@ -1321,6 +1398,18 @@ def main(argv, run=subprocess.run):
 
     if args.skip_dbus:
         return skip_dbus(root=ROOT)
+
+    if args.retry:
+        rc = retry_flip(root=ROOT)
+        print("re-armed — restart to try again" if rc == 0 else "nothing to retry (no rolled-back flip)")
+        return rc
+
+    if args.why:
+        print(rollback_reason(root=ROOT))
+        return 0
+
+    if args.dismiss:
+        return dismiss(root=ROOT)
 
     if args.finish:
         if os.path.exists(P("run/schema-init/migrate-finished")):

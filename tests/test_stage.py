@@ -57,4 +57,17 @@ for end in (stage.R3_DONE, stage.R3_ROLLED_BACK):
     stage.transition(end, root=r)
     check("DONE -> R3_PENDING -> " + end, stage.read_stage(r) == end)
 
+for back, again in ((stage.ROLLED_BACK, stage.R2_PENDING), (stage.R3_ROLLED_BACK, stage.R3_PENDING)):
+    r = _root()
+    stage.write_stage(back, root=r)
+    stage.transition(again, root=r)
+    check(back + " -> " + again + " (retry)", stage.read_stage(r) == again)
+r = _root()
+stage.write_stage(stage.R3_DONE, root=r)
+try:
+    stage.transition(stage.R3_PENDING, root=r); ok = False
+except ValueError:
+    ok = True
+check("R3_DONE stays terminal", ok)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

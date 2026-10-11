@@ -22,7 +22,7 @@ ApplicationWindow {
         case "waiting_reboot": return "Please restart your computer to continue.";
         case "summary": return "First stage done. Here is what the doctor checked.";
         case "final": return "Schema is successfully installed.";
-        case "rolled_back": return "Your computer put itself back safely.";
+        case "rolled_back": return "Your computer put itself back safely. The switch was undone, and nothing is broken.";
         case "dbus_offer": return "One last optional step: use schema's own message bus — the channel your desktop and system services talk over. If anything looks wrong after the restart, your computer puts itself back automatically.";
         case "confirming": return "Checking the message bus switch…";
         default: return "";
@@ -39,6 +39,13 @@ ApplicationWindow {
             wrapMode: Text.WordWrap
             font.pixelSize: 18
             text: win.screenText()
+        }
+
+        Label {
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            visible: wizard.detail !== ""
+            text: wizard.detail
         }
 
         // Recovery-card acknowledgement, shown only before the first reboot.
@@ -72,7 +79,7 @@ ApplicationWindow {
         Button {
             text: wizard.secondaryAction
             visible: wizard.secondaryAction !== ""
-            onClicked: wizard.skipClicked()
+            onClicked: wizard.secondaryClicked()
         }
 
         Button {
