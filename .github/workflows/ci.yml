@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: >
+          dnf -y install gcc make glibc-static libacl-devel dbus-devel libzstd-devel
+          pkgconf-pkg-config python3 python3-dbus python3-gobject python3-pyside6
+          acl dbus-daemon rpm-build git util-linux
+      - name: unprivileged user
+        run: |
+          useradd -m ci && chown -R ci "$GITHUB_WORKSPACE"
+          install -d -o ci -m 0700 /run/user/$(id -u ci)
+      - name: build
+        run: su ci -c 'make'
+      - name: unit tests
+        run: su ci -c 'make test'
+      - name: python suite
+        run: su ci -c "XDG_RUNTIME_DIR=/run/user/$(id -u ci) sh .github/ci-python-suite.sh"
+
+  fuzz:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: dnf -y install clang compiler-rt make dbus-devel
+      - name: fuzz 60s per harness
+        run: make fuzz FUZZ_SECONDS=60
+      - name: keep crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: /tmp/schema-fuzz/crash_*
