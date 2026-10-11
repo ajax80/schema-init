@@ -22,6 +22,7 @@ if [ -s "$q" ]; then rc=$(head -1 "$q"); sed -i 1d "$q"; fi
 exit "$rc"
 '''
 SUDO = '''#!/bin/sh
+[ "$1" = -n ] && [ "$2" = -l ] && exit 0
 cmd="$2"
 echo "$cmd" >> "$FAKE/calls"
 [ -f "$FAKE/out.$cmd" ] && cat "$FAKE/out.$cmd"
