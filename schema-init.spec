@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.11
+Version:        0.4.12
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -431,6 +431,20 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sun Oct 11 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.12-1
+- schema-udev: predictable network interface names (enp*/wlp*, same as
+  systemd); upgrades of boxes still on eth*/wlan* keep kernel names via
+  /etc/schema-init/net-naming
+- D-Bus: PolicyKit1 and every imported bus daemon's activation routed to PID 1
+- schema-logind: refuse non-VT CreateSession with SessionBusy (silences the
+  per-sudo "only for real VTs" log flood)
+- Log rotation scheduled by default on install
+- schema-ctl graph, bash/zsh completion
+- Wizard: retry a rolled-back flip and say why it rolled back
+- Migrate uninstall clears flip gates and relabels SELinux
+- Plasma: own ActivityManager before plasmashell; watchdog for a spinning shell
+- CI on every PR; README rewritten around the story, docs/ map
+
 * Fri Oct 09 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.11-1
 - schema-init-wizard: "Set up schema" in the app menu, a first-install
   hint on how to start it, and the start step in the README
