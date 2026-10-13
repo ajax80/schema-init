@@ -217,9 +217,9 @@ analyze:
 	$(CARGO) build --release --locked --manifest-path analyze/Cargo.toml
 	cp analyze/target/release/schema-analyze .
 
-install-analyze: analyze
+install-analyze:
 	install -D -m 0755 schema-analyze $(DESTDIR)$(BINDIR)/schema-analyze
-	install -D -m 0644 services/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
+	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
 
 clean:
 	rm -f $(OBJS) schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-systemctl udev-parity libatomic_asneeded.a

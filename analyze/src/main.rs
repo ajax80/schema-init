@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 const SOCK: &str = "/run/schema-init.sock";
 const DIR: &str = "/var/lib/schema-init/boots";
@@ -19,6 +20,7 @@ struct Svc {
 #[derive(Debug, Clone, PartialEq, Default)]
 struct Boot {
     id: String,
+    boot_id: Option<String>,
     host: String,
     booted: String,
     kernel: String,
@@ -41,6 +43,9 @@ impl Boot {
     fn serialize(&self) -> String {
         let mut o = String::new();
         o += &format!("host {}\nbooted {}\nkernel {}\n", self.host, self.booted, self.kernel);
+        if let Some(v) = &self.boot_id {
+            o += &format!("boot_id {v}\n");
+        }
         if let Some(v) = self.kernel_s {
             o += &format!("kernel_s {v:.3}\n");
         }
@@ -66,6 +71,7 @@ impl Boot {
             let (k, v) = line.split_once(' ').unwrap_or((line, ""));
             match k {
                 "host" => b.host = v.to_string(),
+                "boot_id" => b.boot_id = Some(v.to_string()),
                 "booted" => b.booted = v.to_string(),
                 "kernel" => b.kernel = v.to_string(),
                 "kernel_s" => b.kernel_s = v.parse().ok(),
@@ -152,6 +158,7 @@ fn parse_report(text: &str) -> Option<Boot> {
     let host = field("hostname:").unwrap_or_default();
     Some(Boot {
         id: format!("{}-{}", stamp_of(&booted), host),
+        boot_id: None,
         host,
         booted,
         kernel: field("kernel:").unwrap_or_default(),
@@ -211,6 +218,8 @@ fn local_time(epoch: i64) -> String {
 
 fn ctl(cmd: &str) -> Result<String, String> {
     let mut s = UnixStream::connect(SOCK).map_err(|e| format!("{SOCK}: {e}"))?;
+    s.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
+    s.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
     s.write_all(format!("{cmd}\n").as_bytes()).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     let mut buf = [0u8; 8192];
@@ -239,6 +248,9 @@ fn read_trim(p: &str) -> String {
 fn snapshot() -> Result<Boot, String> {
     let timing = ctl("timing")?;
     let (kernel_s, svcs) = parse_timing(&timing);
+    if svcs.is_empty() {
+        return Err("PID 1 `timing` gave no service rows (output format changed?)".into());
+    }
     let head = ctl("analyze").ok().and_then(|t| parse_analyze_head(&t));
     let btime: i64 = read_trim("/proc/stat")
         .lines()
@@ -251,6 +263,7 @@ fn snapshot() -> Result<Boot, String> {
     let host = read_trim("/proc/sys/kernel/hostname");
     Ok(Boot {
         id: format!("{}-{}", stamp_of(&booted), host),
+        boot_id: Some(read_trim("/proc/sys/kernel/random/boot_id")),
         host,
         booted,
         kernel: read_trim("/proc/sys/kernel/osrelease"),
@@ -262,12 +275,38 @@ fn snapshot() -> Result<Boot, String> {
     })
 }
 
+fn stamp_secs(booted: &str) -> Option<(&str, i64)> {
+    let (date, time) = booted.split_once(' ')?;
+    let t: Vec<i64> = time.split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    match t[..] {
+        [h, m, sec] => Some((date, h * 3600 + m * 60 + sec)),
+        _ => None,
+    }
+}
+
+fn same_boot(a: &Boot, b: &Boot) -> bool {
+    if a.id == b.id {
+        return true;
+    }
+    if let (Some(x), Some(y)) = (&a.boot_id, &b.boot_id) {
+        return x == y;
+    }
+    match (stamp_secs(&a.booted), stamp_secs(&b.booted)) {
+        (Some((da, sa)), Some((db, sb))) => a.host == b.host && da == db && (sa - sb).abs() <= 2,
+        _ => false,
+    }
+}
+
 fn save(dir: &Path, b: &Boot, force: bool) -> Result<bool, String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = dir.join(format!("{}.boot", b.id));
-    if path.exists() && !force {
+    let dups: Vec<Boot> = load(dir).into_iter().filter(|o| same_boot(o, b)).collect();
+    if !dups.is_empty() && !force {
         return Ok(false);
     }
+    for d in dups.iter().filter(|d| d.id != b.id) {
+        let _ = fs::remove_file(dir.join(format!("{}.boot", d.id)));
+    }
+    let path = dir.join(format!("{}.boot", b.id));
     let tmp = dir.join(format!(".{}.tmp", b.id));
     fs::write(&tmp, b.serialize()).map_err(|e| format!("{}: {e}", tmp.display()))?;
     fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -306,21 +345,30 @@ fn load(dir: &Path) -> Vec<Boot> {
 
 fn pick<'a>(boots: &'a [Boot], sel: &str) -> Result<(usize, &'a Boot), String> {
     let hashed = sel.strip_prefix('#');
-    if let Ok(n) = hashed.unwrap_or(sel).parse::<i64>() {
+    let num = hashed.unwrap_or(sel).parse::<i64>().ok();
+    if let Some(n) = num {
         let i = if n < 0 { boots.len() as i64 + n } else { n - 1 };
         if i >= 0 && (i as usize) < boots.len() {
             return Ok((i as usize, &boots[i as usize]));
         }
-        if hashed.is_some() || n.unsigned_abs() <= 99_999 {
-            return Err(format!("no boot #{n} ({} recorded)", boots.len()));
-        }
     }
-    let hits: Vec<usize> = (0..boots.len()).filter(|&i| boots[i].id.starts_with(sel)).collect();
+    let hits: Vec<usize> = if hashed.is_some() || sel.starts_with('-') {
+        Vec::new()
+    } else {
+        (0..boots.len()).filter(|&i| boots[i].id.starts_with(sel)).collect()
+    };
     match hits[..] {
         [i] => Ok((i, &boots[i])),
+        [] if num.is_some() => Err(format!("no boot #{} ({} recorded)", num.unwrap(), boots.len())),
         [] => Err(format!("no boot matches {sel}")),
         _ => Err(format!("{sel} matches {} boots", hits.len())),
     }
+}
+
+fn default_pair(boots: &[Boot]) -> Option<(usize, usize)> {
+    let last = boots.len().checked_sub(1)?;
+    let prev = (0..last).rev().find(|&i| boots[i].host == boots[last].host)?;
+    Some((prev, last))
 }
 
 fn fmt_s(v: Option<f64>) -> String {
@@ -572,9 +620,19 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         "compare" => {
             let boots = load(&dir);
             let sel: Vec<&str> = opts.iter().map(String::as_str).filter(|o| !o.starts_with("--")).collect();
-            let a = sel.first().copied().unwrap_or("-2");
-            let b = sel.get(1).copied().unwrap_or("-1");
-            cmd_compare(&boots, a, b, flag("--all"))?;
+            let (a, b) = match sel[..] {
+                [] => {
+                    let (i, b) = default_pair(&boots).ok_or("need two boots from the same host to compare")?;
+                    (format!("#{}", i + 1), format!("#{}", b + 1))
+                }
+                [b] => {
+                    let (ib, _) = pick(&boots, b)?;
+                    let i = (0..ib).rev().find(|&i| boots[i].host == boots[ib].host).ok_or("no earlier boot from that host")?;
+                    (format!("#{}", i + 1), format!("#{}", ib + 1))
+                }
+                [a, b, ..] => (a.to_string(), b.to_string()),
+            };
+            cmd_compare(&boots, &a, &b, flag("--all"))?;
         }
         "regress" => {
             if cmd_regress(&load(&dir), num("--window", 10.0)? as usize, num("--min", 0.25)?) {
@@ -656,6 +714,7 @@ critical chain → schema-bootok
         let (kernel_s, svcs) = parse_timing(TIMING);
         let b = Boot {
             id: "20261011-185955-blakbox".into(),
+            boot_id: Some("8f1c2e4a-0000-4000-8000-000000000001".into()),
             host: "blakbox".into(),
             booted: "2026-10-11 18:59:55".into(),
             kernel: "7.0.12-cachyos1-schema.fc44.x86_64".into(),
@@ -695,6 +754,8 @@ critical chain → schema-bootok
         assert_eq!(pick(&boots, "#3").unwrap().0, 2);
         assert_eq!(pick(&boots, "20261002").unwrap().0, 1);
         assert!(pick(&boots, "2026100").is_err());
+        assert!(pick(&boots, "2026").is_err());
+        assert_eq!(pick(&boots, "20261003").unwrap().0, 2);
         assert!(pick(&boots, "4").is_err());
         assert!(pick(&boots, "-4").is_err());
     }
@@ -711,6 +772,54 @@ critical chain → schema-bootok
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].name, "udevd");
         assert_eq!(hits[0].base, 4.02);
+    }
+
+    #[test]
+    fn short_prefix_matches() {
+        let boots: Vec<Boot> = ["20261001-1-a", "20270101-1-a"].iter().map(|id| boot(id, "a", 1.0, &[])).collect();
+        assert_eq!(pick(&boots, "2027").unwrap().0, 1);
+        assert_eq!(pick(&boots, "#2").unwrap().0, 1);
+        assert!(pick(&boots, "#3").is_err());
+    }
+
+    #[test]
+    fn same_boot_rules() {
+        let mut a = boot("20261011-185955-blakbox", "blakbox", 1.0, &[]);
+        let mut b = boot("20261011-185956-blakbox", "blakbox", 1.0, &[]);
+        a.booted = "2026-10-11 18:59:55".into();
+        b.booted = "2026-10-11 18:59:56".into();
+        assert!(same_boot(&a, &b));
+        b.host = "eli".into();
+        assert!(!same_boot(&a, &b));
+        b.host = "blakbox".into();
+        a.boot_id = Some("x".into());
+        b.boot_id = Some("y".into());
+        assert!(!same_boot(&a, &b));
+        b.booted = "1970-01-01 00:00:09".into();
+        b.boot_id = Some("x".into());
+        assert!(same_boot(&a, &b));
+    }
+
+    #[test]
+    fn save_dedupes_and_force_replaces() {
+        let dir = std::env::temp_dir().join(format!("schema-analyze-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mut a = boot("20261011-185956-h", "h", 1.0, &[("x", 1.0)]);
+        a.booted = "2026-10-11 18:59:56".into();
+        let mut b = boot("20261011-185955-h", "h", 2.0, &[("x", 1.0)]);
+        b.booted = "2026-10-11 18:59:55".into();
+        assert!(save(&dir, &a, false).unwrap());
+        assert!(!save(&dir, &b, false).unwrap());
+        assert!(save(&dir, &b, true).unwrap());
+        assert_eq!(list_ids(&dir), vec!["20261011-185955-h".to_string()]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn default_pair_same_host() {
+        let boots = vec![boot("1", "a", 1.0, &[]), boot("2", "b", 1.0, &[]), boot("3", "a", 1.0, &[])];
+        assert_eq!(default_pair(&boots), Some((0, 2)));
+        assert_eq!(default_pair(&boots[..2]), None);
     }
 
     #[test]
