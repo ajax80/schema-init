@@ -14,6 +14,8 @@ BuildRequires:  libacl-devel
 BuildRequires:  dbus-devel
 BuildRequires:  libzstd-devel
 BuildRequires:  pkgconf-pkg-config
+BuildRequires:  cargo
+BuildRequires:  rust
 Requires:       python3
 Requires:       /usr/bin/gdbus
 # ISO-installed and migrated boxes run both daemons; an upgrade must pull them.
@@ -67,12 +69,15 @@ overwrite a service file a running system depends on.
 %global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump
 %global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
 %make_build BINS="%{core_bins} %{migrate_bins}" SCHEMA_VERSION="%{version}-%{release}"
+# schema-analyze is Rust with no crates, so it builds offline with nothing vendored.
+%make_build analyze
 gcc %{optflags} -shared -fPIC -o mock_sd.so distros/fedora-kde/scripts/mock_sd.c -ldl %{build_ldflags}
 
 %install
 %make_install PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir} BINS="%{core_bins}"
 make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
+make install-analyze DESTDIR=%{buildroot} PREFIX=%{_prefix}
 install -Dm0755 scripts/schema-bootok %{buildroot}%{_bindir}/schema-bootok
 install -Dm0755 scripts/schema-doctor.py %{buildroot}/usr/local/bin/schema-doctor
 install -Dm0755 scripts/schema-logind.py %{buildroot}/usr/local/bin/schema-logind.py
@@ -404,6 +409,7 @@ fi
 %{_bindir}/schema-coredump
 %{_bindir}/schema-snapshot
 %{_bindir}/schema-bootok
+%{_bindir}/schema-analyze
 /usr/local/bin/schema-doctor
 /usr/local/bin/schema-logind.py
 /usr/local/bin/schema-systemd1.py
