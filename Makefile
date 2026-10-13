@@ -12,6 +12,7 @@ CFLAGS += -DSCHEMA_INIT_VERSION='"$(SCHEMA_VERSION)"'
 endif
 CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?=
+CARGO   ?= cargo
 
 DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
 DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
@@ -212,10 +213,19 @@ srpm:
 	rpmbuild -bs --define "_sourcedir /tmp" --define "_srcrpmdir $(abspath $(RELDIR))" /tmp/schema-init.spec; \
 	ls -1 $(RELDIR)/*.src.rpm
 
+analyze:
+	$(CARGO) build --release --locked --manifest-path analyze/Cargo.toml
+	cp analyze/target/release/schema-analyze .
+
+install-analyze:
+	install -D -m 0755 schema-analyze $(DESTDIR)$(BINDIR)/schema-analyze
+	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
+
 clean:
-	rm -f $(OBJS) schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-systemctl udev-parity libatomic_asneeded.a
+	rm -f $(OBJS) schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-systemctl udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
+	rm -rf analyze/target
 
 aarch64:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
@@ -328,6 +338,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
 	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz verify-live verify-dbus-conformance
+.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz verify-live verify-dbus-conformance
 
 

@@ -28,3 +28,5 @@ tests/migratetest/artifacts/
 # schema-dbus SP0 learner: live corpus stays local, never pushed
 tests/dbus-corpus/*
 !tests/dbus-corpus/sample.jsonl
+/schema-analyze
+/analyze/target/
