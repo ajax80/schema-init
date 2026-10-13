@@ -214,7 +214,7 @@ srpm:
 	ls -1 $(RELDIR)/*.src.rpm
 
 analyze:
-	$(CARGO) build --release --locked --offline --manifest-path analyze/Cargo.toml
+	$(CARGO) build --release --locked --manifest-path analyze/Cargo.toml
 	cp analyze/target/release/schema-analyze .
 
 install-analyze:

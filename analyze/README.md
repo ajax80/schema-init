@@ -4,14 +4,20 @@ Boot timing across reboots. `schema-ctl analyze` shows one boot's critical chain
 PID 1 forgets it on reboot. `schema-analyze` keeps a file per boot and compares them.
 
 schema-init's first Rust component: std only, no crates, off the boot path
-(it only reads PID 1's control socket after boot). Building it is opt-in, so a
-plain `make` still needs no Rust toolchain.
+(it only reads PID 1's control socket after boot). The RPM ships it; recording
+is opt-in per box, like every reference service:
 
 ```
-make analyze            # as your user: cargo build --release, copies ./schema-analyze
-sudo make install-analyze   # installs the already-built binary; never runs cargo
 sudo cp /usr/share/schema-init/services/schema-analyze.svc.example \
         /etc/schema-init/services/schema-analyze.svc     # record each boot at +120s
+sudo schema-ctl reload
+```
+
+From source, without the RPM (a plain `make` needs no Rust toolchain):
+
+```
+make analyze                # as your user
+sudo make install-analyze   # installs the already-built binary; never runs cargo
 ```
 
 | command | |
