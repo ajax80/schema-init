@@ -1,0 +1,10 @@
+name=schema-analyze
+exec=/usr/bin/schema-analyze
+args=record
+on_boot_sec=120
+needs_root=1
+critical=0
+priority=peripheral
+no_new_privs=1
+private_tmp=1
+protect_home=1
