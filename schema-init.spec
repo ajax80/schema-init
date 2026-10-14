@@ -123,6 +123,33 @@ if [ $1 -gt 1 ] && [ -e %{_sysconfdir}/schema-init/schema-udev.live ] && [ ! -e 
     echo "schema-init: those references and delete /etc/schema-init/net-naming, then reboot."
 fi
 
+%posttrans daemons
+if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ]; then
+    for pid in $(pgrep -x schema-udev); do
+        case "$(readlink /proc/$pid/exe)" in *" (deleted)") ;; *) continue ;; esac
+        cmp -s /proc/$pid/exe %{_bindir}/schema-udev && continue
+        svc=$(%{_bindir}/schema-ctl status 2>/dev/null | awk -v p="pid=$pid" '$2 == p { print $1 }')
+        if [ -z "$svc" ]; then
+            echo "schema-init: schema-udev (pid $pid) is not supervised; restart it to pick up the upgrade"
+            continue
+        fi
+        stamp=$(mktemp /run/schema-udev-upgrade.XXXXXX) || continue
+        if %{_bindir}/schema-ctl restart "$svc" >/dev/null; then
+            n=0
+            until [ /run/schema-udev/ready -nt "$stamp" ] || [ $n -ge 60 ]; do sleep 0.5; n=$((n + 1)); done
+            [ /run/schema-udev/ready -nt "$stamp" ] || echo "schema-init: $svc restarted but has not finished coldplug after 30 s"
+        else
+            echo "schema-init: restart $svc to pick up the upgraded schema-udev"
+        fi
+        rm -f "$stamp"
+    done
+    for pid in $(pgrep -x schema-dbus); do
+        case "$(readlink /proc/$pid/exe)" in
+            *" (deleted)") echo "schema-init: schema-dbus picks up the upgrade at the next reboot"; break ;;
+        esac
+    done
+fi
+
 %postun daemons
 if [ $1 -eq 0 ]; then
     rm -f %{_sysconfdir}/schema-init/schema-udev.ship-md5
