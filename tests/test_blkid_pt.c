@@ -215,6 +215,46 @@ static void test_build(void) {
     printf("test_build OK\n");
 }
 
+static void test_root_disk_devnum(void) {
+    char root[] = "/tmp/bptrootXXXXXX"; assert(mkdtemp(root));
+    char p[PATH_MAX], q[PATH_MAX];
+    snprintf(p, sizeof p, "%s/sys/devices/nvme0n1/nvme0n1p3", root); bpt_mkdirs(p);
+    bpt_wf(p, "partition", "3");
+    bpt_wf(p, "dev", "259:3");
+    snprintf(p, sizeof p, "%s/sys/devices/nvme0n1", root);
+    bpt_wf(p, "dev", "259:0");
+    snprintf(p, sizeof p, "%s/sys/dev/block", root); bpt_mkdirs(p);
+    snprintf(p, sizeof p, "%s/sys/dev/block/259:3", root);
+    snprintf(q, sizeof q, "%s/sys/devices/nvme0n1/nvme0n1p3", root);
+    assert(symlink(q, p) == 0);
+    snprintf(p, sizeof p, "%s/sys/class/block/nvme0n1p3", root); bpt_mkdirs(p);
+    bpt_wf(p, "dev", "259:3");
+    bpt_wf(p, "uevent", "MAJOR=259\nMINOR=3\nDEVTYPE=partition\nPARTUUID=3e078549-8379-4ae4-9ae3-bacc2ea36956");
+
+    char mounts[PATH_MAX], cmd[PATH_MAX], out[64];
+    snprintf(mounts, sizeof mounts, "%s/mounts", root);
+    snprintf(cmd, sizeof cmd, "%s/cmdline", root);
+    bpt_wf(root, "mounts", "/dev/root / btrfs ro 0 0");
+
+    const char *cases[] = {
+        "BOOT_IMAGE=x root=PARTUUID=3E078549-8379-4AE4-9AE3-BACC2EA36956 ro",
+        "root=/dev/nvme0n1p3 ro",
+        "quiet root=259:3",
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        bpt_wf(root, "cmdline", cases[i]);
+        out[0] = '\0';
+        assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) == 0);
+        assert(!strcmp(out, "259:0"));
+    }
+
+    bpt_wf(root, "cmdline", "root=PARTUUID=00000000-0000-0000-0000-000000000000");
+    assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) != 0);
+    bpt_wf(root, "cmdline", "ro quiet");
+    assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) != 0);
+    printf("test_root_disk_devnum OK\n");
+}
+
 int main(void) {
     test_guid();
     test_le();
@@ -222,6 +262,7 @@ int main(void) {
     test_gpt_entry();
     test_dos();
     test_build();
+    test_root_disk_devnum();
     printf("ALL blkid_pt tests passed\n");
     return 0;
 }
