@@ -84,6 +84,7 @@ install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schem
 install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
 install -Dm0755 scripts/schema-sysctl-apply %{buildroot}%{_libexecdir}/schema-init/schema-sysctl-apply
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-udevd-launch %{buildroot}%{_libexecdir}/schema-init/schema-udevd-launch
+install -Dm0644 distros/fedora-installer/rail/services/udevd.svc %{buildroot}%{_datadir}/%{name}/udevd.svc
 install -Dm0755 scripts/schema-mount-fstab %{buildroot}%{_libexecdir}/schema-init/schema-mount-fstab
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sysprep.sh %{buildroot}/usr/local/bin/schema-sysprep.sh
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sshd-start.sh %{buildroot}/usr/local/bin/schema-sshd-start.sh
@@ -125,6 +126,30 @@ fi
 
 %posttrans daemons
 if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ]; then
+    svcd=%{_sysconfdir}/schema-init/services
+    pid=$(pgrep -x schema-udev)
+    if [ -f "$svcd/sysprep.svc" ] && [ ! -e "$svcd/udevd.svc" ] &&
+       [ -e %{_sysconfdir}/schema-init/schema-udev.live ] && [ "$(pgrep -cx schema-udev)" = 1 ] &&
+       st=$(%{_bindir}/schema-ctl status 2>/dev/null) &&
+       ! printf '%s\n' "$st" | awk -v p="pid=$pid" '$2 == p { f = 1 } END { exit !f }' &&
+       ! grep -qsE '^exec=.*/(schema-udev|schema-udevd-launch)$' "$svcd"/*.svc &&
+       cp %{_datadir}/%{name}/udevd.svc "$svcd/udevd.svc"; then
+        mkdir -p %{_sharedstatedir}/schema-init
+        touch %{_sharedstatedir}/schema-init/rail-udevd-added
+        stamp=$(mktemp /run/schema-udev-upgrade.XXXXXX)
+        if %{_bindir}/schema-ctl add "$svcd/udevd.svc" >/dev/null; then
+            n=0
+            until [ /run/schema-udev/ready -nt "$stamp" ] || [ $n -ge 60 ]; do sleep 0.5; n=$((n + 1)); done
+            if [ /run/schema-udev/ready -nt "$stamp" ]; then
+                echo "schema-init: schema-udev now runs supervised (udevd.svc)"
+            else
+                echo "schema-init: udevd.svc added but schema-udev has not finished coldplug after 30 s"
+            fi
+        else
+            echo "schema-init: added udevd.svc; udev comes under supervision at next boot"
+        fi
+        rm -f "$stamp"
+    fi
     for pid in $(pgrep -x schema-udev); do
         case "$(readlink /proc/$pid/exe)" in *" (deleted)") ;; *) continue ;; esac
         cmp -s /proc/$pid/exe %{_bindir}/schema-udev && continue
@@ -158,6 +183,7 @@ fi
 %files daemons
 %{_bindir}/schema-udev
 %{_bindir}/schema-dbus
+%{_datadir}/%{name}/udevd.svc
 %ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
 
 %package session
