@@ -26,29 +26,29 @@ struct rule_clause {
     const char *val;
 };
 
-/* clause[] and its strings live in one block owned by the rule */
 struct rule { struct rule_clause *clause; int nclause; int label_clause; };
 struct ruleset { struct rule *rules; int n; int cap; };
 
 struct rk_span { const char *k, *s, *v; size_t kl, sl, vl; enum rule_op op; };
 
-static inline int rk_parse_span(const char *s, struct rk_span *sp) {
+static inline int rk_parse_span(const char *s, const char *end, struct rk_span *sp) {
     memset(sp, 0, sizeof *sp);
-    while (*s == ' ' || *s == '\t') s++;
+    while (s < end && (*s == ' ' || *s == '\t')) s++;
     const char *p = s;
     /* key = leading [A-Z_] run */
-    while ((*p >= 'A' && *p <= 'Z') || *p == '_') p++;
+    while (p < end && ((*p >= 'A' && *p <= 'Z') || *p == '_')) p++;
     sp->k = s; sp->kl = (size_t)(p - s);
     if (sp->kl == 0 || sp->kl >= RK_KEY_MAX) return -1;
     /* optional {subkey} */
-    if (*p == '{') {
-        const char *e = strchr(p, '}');
+    if (p < end && *p == '{') {
+        const char *e = memchr(p, '}', (size_t)(end - p));
         if (!e) return -1;
         sp->s = p + 1; sp->sl = (size_t)(e - (p + 1));
         if (sp->sl >= RK_SUB_MAX) return -1;
         p = e + 1;
     }
     /* operator */
+    if (p >= end) return -1;
     if      (p[0] == '=' && p[1] == '=') { sp->op = OP_MATCH_EQ;     p += 2; }
     else if (p[0] == '!' && p[1] == '=') { sp->op = OP_MATCH_NE;     p += 2; }
     else if (p[0] == '+' && p[1] == '=') { sp->op = OP_ASSIGN_ADD;   p += 2; }
@@ -57,10 +57,10 @@ static inline int rk_parse_span(const char *s, struct rk_span *sp) {
     else if (p[0] == '=')                { sp->op = OP_ASSIGN;       p += 1; }
     else return -1;
     /* quoted value */
-    while (*p == ' ' || *p == '\t') p++;
-    if (*p != '"') return -1;
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    if (p >= end || *p != '"') return -1;
     p++;
-    const char *e = strchr(p, '"');
+    const char *e = memchr(p, '"', (size_t)(end - p));
     if (!e) return -1;
     sp->v = p; sp->vl = (size_t)(e - p);
     if (sp->vl >= RK_VAL_MAX) return -1;
@@ -74,18 +74,6 @@ static inline void rk_span_fill(const struct rk_span *sp, struct rule_clause *ou
     out->key = *w;    memcpy(*w, sp->k, sp->kl); *w += sp->kl; *(*w)++ = '\0';
     out->subkey = *w; if (sp->sl) memcpy(*w, sp->s, sp->sl); *w += sp->sl; *(*w)++ = '\0';
     out->val = *w;    memcpy(*w, sp->v, sp->vl); *w += sp->vl; *(*w)++ = '\0';
-}
-
-/* Parse "KEY{sub}OP\"val\"" -> clause. Returns 0 / -1. The strings are
- * malloc'd in one block at out->key. */
-static inline int ruleset_parse_clause(const char *s, struct rule_clause *out) {
-    struct rk_span sp;
-    memset(out, 0, sizeof *out);
-    if (rk_parse_span(s, &sp) != 0) return -1;
-    char *w = malloc(rk_span_size(&sp));
-    if (!w) return -1;
-    rk_span_fill(&sp, out, &w);
-    return 0;
 }
 
 /* Split on top-level commas (quotes are literal), parse each as a clause. */
@@ -105,15 +93,9 @@ static inline int ruleset_parse_line(const char *line, struct rule *out) {
         int inq = 0;
         while (*p && !(*p == ',' && !inq)) { if (*p == '"') inq = !inq; p++; }
         size_t seglen = (size_t)(p - seg);
-        char buf[RK_KEY_MAX + RK_SUB_MAX + RK_VAL_MAX + 8];
-        if (seglen == 0 || seglen >= sizeof buf) { if (*p == ',') p++; continue; }
+        if (seglen == 0 || seglen >= RK_KEY_MAX + RK_SUB_MAX + RK_VAL_MAX + 8) { if (*p == ',') p++; continue; }
         if (n >= RULE_MAX_CLAUSES) return -1;
-        memcpy(buf, seg, seglen); buf[seglen] = '\0';
-        if (rk_parse_span(buf, &sp[n]) != 0) return -1;
-        /* spans point into buf; rebase onto the line */
-        sp[n].k = seg + (sp[n].k - buf);
-        if (sp[n].s) sp[n].s = seg + (sp[n].s - buf);
-        sp[n].v = seg + (sp[n].v - buf);
+        if (rk_parse_span(seg, p, &sp[n]) != 0) return -1;
         text += rk_span_size(&sp[n]);
         n++;
         if (*p == ',') p++;

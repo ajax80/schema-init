@@ -171,7 +171,7 @@ int main(void) {
     ADD(&rs1, "ENV{PHASE}==\"two\", TAG+=\"reached\"");
     assert(ruleset_apply(&rs1, &dc) == 0);
     assert(dc.ntags == 1 && strcmp(dc.tags[0], "reached") == 0);
-    free(rs1.rules);
+    ruleset_free(&rs1);
 
     /* GOTO skips the intervening rule's assignment */
     struct dev_ctx gc; memset(&gc, 0, sizeof gc);
@@ -185,7 +185,7 @@ int main(void) {
     ADD(&rs2, "TAG+=\"after_label\"");
     assert(ruleset_apply(&rs2, &gc) == 0);
     assert(gc.ntags == 1 && strcmp(gc.tags[0], "after_label") == 0);
-    free(rs2.rules);
+    ruleset_free(&rs2);
 
     /* TEST now gates natively (R4a): a nonexistent path no longer applies at all */
     struct dev_ctx fc; memset(&fc, 0, sizeof fc);
@@ -197,7 +197,7 @@ int main(void) {
     assert(ruleset_apply(&rs3, &fc) == 0);
     assert(fc.ntags == 0);
     assert(fc.deferred_applies == 0);
-    free(rs3.rules);
+    ruleset_free(&rs3);
 
     /* TEST resolving true applies the rule without inflating the deferred counter */
     struct dev_ctx fc2; memset(&fc2, 0, sizeof fc2);
@@ -209,7 +209,7 @@ int main(void) {
     assert(ruleset_apply(&rs3b, &fc2) == 0);
     assert(fc2.ntags == 1 && strcmp(fc2.tags[0], "present") == 0);
     assert(fc2.deferred_applies == 0);
-    free(rs3b.rules);
+    ruleset_free(&rs3b);
 
     /* PROGRAM now gates natively (R4b): a nonexistent helper no longer applies at all */
     struct dev_ctx pc; memset(&pc, 0, sizeof pc);
@@ -221,7 +221,7 @@ int main(void) {
     ADD(&rs5, "SUBSYSTEM==\"drm\", PROGRAM=\"/nonexistent/helper\", TAG+=\"prog_gate\"");
     assert(ruleset_apply(&rs5, &pc) == 0);
     assert(pc.ntags == 0);
-    free(rs5.rules);
+    ruleset_free(&rs5);
 
     /* GOTO to a missing label stops cleanly (no crash, no later apply) */
     struct dev_ctx mc; memset(&mc, 0, sizeof mc);
@@ -233,7 +233,7 @@ int main(void) {
     ADD(&rs4, "TAG+=\"unreached\"");
     assert(ruleset_apply(&rs4, &mc) == 0);
     assert(mc.ntags == 0);
-    free(rs4.rules);
+    ruleset_free(&rs4);
     printf("test_udev_executor: driver OK\n");
 
     /* live smoke: apply the whole installed ruleset to a real device, no crash */
@@ -250,7 +250,7 @@ int main(void) {
         assert(ruleset_load_dirs(real, 3, &live) == 0);
         assert(ruleset_apply(&live, &lc) == 0);   /* must not crash */
         assert(lc.ntags >= 0);                    /* sda typically gets "systemd" */
-        free(live.rules);
+        ruleset_free(&live);
         printf("test_udev_executor: live-smoke OK (sda tags=%d symlinks=%d)\n", lc.ntags, lc.nsym);
     }
     /* IMPORT{program} must capture multi-line output beyond 512 bytes

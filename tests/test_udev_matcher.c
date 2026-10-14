@@ -248,7 +248,7 @@ int main(void) {
         int matched = 0;
         for (int i = 0; i < live.n; i++) if (rule_match(&live.rules[i], &cl)) matched++;
         assert(matched >= 0);
-        free(live.rules);
+        ruleset_free(&live);
     }
 
     printf("test_udev_matcher: ALL OK\n");

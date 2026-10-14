@@ -198,7 +198,7 @@ int main(void) {
         assert(ruleset_append(&rs, &sr) == 0);
         ruleset_apply(&rs, &sc2);
         assert(sc2.deferred_applies == 1);
-        free(rs.rules);
+        ruleset_free(&rs);
     }
     printf("test_udev_r4a: IMPORT-gate OK\n");
 
