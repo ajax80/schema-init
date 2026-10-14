@@ -75,6 +75,7 @@ static int64_t      ready_backstop_due = 0;
 #define CPU_CHECK_MS        2000            /* critical cpu.pressure avg10 read rate */
 static int64_t      cpu_check_due = 0;
 static int          cpu_stalled = 0;
+static int          last_stall_mem = 1;
 static struct timespec init_start;
 
 static void start_failsafe(service_t *svc);
@@ -2778,7 +2779,8 @@ static int reexec_start(int client, const char *path, char *err, size_t errsz) {
         return -1;
     }
     if (system_under_pressure) {
-        snprintf(err, errsz, "under memory pressure; try again when it clears");
+        snprintf(err, errsz, "%s; try again when it clears",
+                 last_stall_mem ? "under memory pressure" : "a critical service is starved for CPU");
         return -1;
     }
     if (path[0] != '/' || strlen(path) >= sizeof reexec_path) {
@@ -3696,6 +3698,8 @@ int main(int argc, char **argv) {
                 cpu_check_due = (int64_t)now + CPU_CHECK_MS;
                 cpu_stalled = critical_cpu_pressure();
             }
+            if (mem || cpu_stalled)
+                last_stall_mem = mem;
             int act = pressure_step(&system_under_pressure, now, &last_stall_ms,
                                     mem || cpu_stalled);
             if (act == PRESSURE_ENTER)
