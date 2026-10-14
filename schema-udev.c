@@ -185,6 +185,8 @@ static void run_ctx_runs(const struct dev_ctx *rc) {
             continue;
         }
 
+        const char *direct = udev_run_direct(argc, argv);
+        if (direct) { argv[0] = (char *)direct; argv[1] = NULL; }
         pid_t pid = fork();
         if (pid < 0) continue;
         if (pid == 0) {

@@ -200,6 +200,25 @@ static void test_import_builtin_args_strip(void) {
     printf("test_udev_r4b: import-builtin-args-strip OK\n");
 }
 
+static const char *direct_for(const char *cmd) {
+    static char store[32][UE_VAL_MAX]; static char *argv[33];
+    int argc = udev_argv_split(cmd, store, argv, 32);
+    return udev_run_direct(argc, argv);
+}
+
+static void test_run_direct(void) {
+    const char *vc = "/usr/lib/systemd/systemd-vconsole-setup";
+    assert(direct_for("/usr/bin/systemctl --no-block restart systemd-vconsole-setup.service") &&
+           !strcmp(direct_for("/usr/bin/systemctl --no-block restart systemd-vconsole-setup.service"), vc));
+    assert(direct_for("systemctl start systemd-vconsole-setup.service"));
+    assert(!direct_for("/usr/bin/systemctl stop systemd-vconsole-setup.service"));
+    assert(!direct_for("/usr/bin/systemctl --no-block restart other.service"));
+    assert(!direct_for("/usr/bin/systemctl restart systemd-vconsole-setup.service other.service"));
+    assert(!direct_for("/usr/bin/notsystemctl restart systemd-vconsole-setup.service"));
+    assert(!direct_for("/usr/bin/systemctl --no-block"));
+    printf("test_udev_r4b: run-direct OK\n");
+}
+
 int main(void) {
     test_result_subst();
     test_argv_split();
@@ -208,6 +227,7 @@ int main(void) {
     test_fido_id();
     test_import_program_bridge();
     test_import_builtin_args_strip();
+    test_run_direct();
     printf("test_udev_r4b: ALL OK\n");
     return 0;
 }
