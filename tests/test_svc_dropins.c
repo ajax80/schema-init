@@ -47,6 +47,7 @@ static uint32_t old_hash(const char *rel) {
 }
 
 int main(void) {
+    umask(022);
     service_t s;
     uint32_t h0, h1;
     snprintf(dir, sizeof dir, "/tmp/schema-dropinXXXXXX");

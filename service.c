@@ -2039,18 +2039,23 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     return 0;
 }
 
+int svc_refused;
+
 static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path) {
     char line[512];
     struct stat st;
-    FILE *f = fopen(path, "re");
-    if (!f) return -1;
-    if (fstat(fileno(f), &st) < 0 || !S_ISREG(st.st_mode) ||
+    int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -1;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) ||
         (st.st_uid != 0 && st.st_uid != geteuid()) || (st.st_mode & 022)) {
         fprintf(stderr, "[schema-init] REFUSED %s: not a regular file owned by root and "
                 "writable only by its owner — service not loaded (chown root:root; chmod go-w)\n", path);
-        fclose(f);
+        svc_refused++;
+        close(fd);
         return -1;
     }
+    FILE *f = fdopen(fd, "r");
+    if (!f) { close(fd); return -1; }
     while (fgets(line, sizeof(line), f)) {
         if (svc_parse_line(svc, pc, line, path) != 0) {
             if (pc->dropin)
@@ -2131,6 +2136,7 @@ bad:
 
 int services_load(const char *dir, service_t *table, int max) {
     DIR *d = opendir(dir);
+    svc_refused = 0;
     struct dirent *ent;
     int count = 0;
     int warned = 0;

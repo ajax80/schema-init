@@ -58,6 +58,7 @@ cp "$PRIVDROP" "$ROOT/bin/test_privdrop"
 cp "$MOUNTNS" "$ROOT/bin/test_mountns"
 cp "$SCTL" "$ROOT/bin/schema-ctl"
 ln -sf /bin/busybox "$ROOT/bin/rm"
+ln -sf /bin/busybox "$ROOT/bin/chmod"
 
 # ready_path service that deletes its readiness file on SIGTERM and lingers,
 # like pipewire removing pipewire-0 on shutdown. schema-ctl restart used to see
@@ -570,6 +571,10 @@ sleep 3
 echo "mountns-late-on: $(cat /run/mountns-late-on 2>&1)"
 echo "mountns-late-off: $(cat /run/mountns-late-off 2>&1)"
 echo "===== MOUNTNS-END ====="
+chmod g+w /etc/schema-init/services/test-readypath.svc
+echo "UNSAFE-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
+echo "UNSAFE-AFTER: $(/bin/schema-ctl status test-readypath 2>&1 | head -1)"
+chmod g-w /etc/schema-init/services/test-readypath.svc
 echo "mem_limit=32" > /etc/schema-init/services/test-dropin.svc.d/30-late.conf
 echo "DROPIN-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
 echo "DROPIN-REEXEC: $(/bin/schema-ctl reexec 2>&1 | head -1)"
@@ -693,12 +698,14 @@ grep -Eq "mountns-late-on: home=EMPTY" "$SERIAL" || { echo "  MISS: late host mo
 grep -Eq "mountns-late-off: home=OPEN" "$SERIAL" || { echo "  MISS: late-mount control did not see the new /home"; pass=0; }
 # Shutdown rail: every step must print, and PID 1 must reach reboot() itself.
 # A wedge here is the 2026-07-26 hang (unbounded sync never returned).
-for step in "stop 1 " "cgroups killed" "control socket and shm released" \
+for step in "services down in" "cgroups killed" "control socket and shm released" \
             "sync done" "filesystems read-only"; do
   grep -Eq "shutdown: $step" "$SERIAL" || { echo "  MISS: shutdown step '$step'"; pass=0; }
 done
 # .svc.d drop-ins: applied at boot, and a drop-in added after boot is "modified".
 grep -Eq "DROPIN-PROBE arg=\[dropin-arg\] argc=\[1\] var=\[dropin\] mem=\[67108864\]" "$SERIAL" || { echo "  MISS: drop-in not applied (args reset / env reset / mem_limit)"; pass=0; }
+grep -Eq "UNSAFE-RELOAD: err: .* 1 .svc file\(s\) refused" "$SERIAL" || { echo "  MISS: reload not refused with a group-writable .svc"; pass=0; }
+grep -Eq "UNSAFE-AFTER: .*FUNDAMENTAL" "$SERIAL" || { echo "  MISS: refused reload evicted a running service"; pass=0; }
 grep -Eq "DROPIN-RELOAD: err: .*'test-dropin' modified since boot" "$SERIAL" || { echo "  MISS: reload not refused after a drop-in was added"; pass=0; }
 grep -Eq "DROPIN-REEXEC: err: .*test-dropin" "$SERIAL" || { echo "  MISS: reexec not refused after a drop-in was added"; pass=0; }
 grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL" || { echo "  MISS: schema-ctl cat did not list the late drop-in"; pass=0; }

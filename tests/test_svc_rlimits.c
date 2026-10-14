@@ -36,6 +36,7 @@ static void slurp(const char *path, char *buf, size_t n) {
 }
 
 int main(void) {
+    umask(022);
     char tmpl[] = "/tmp/schema-svc-rlimXXXXXX";
     char *dir = mkdtemp(tmpl);
     assert(dir);
