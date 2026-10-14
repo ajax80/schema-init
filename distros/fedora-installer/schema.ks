@@ -64,7 +64,10 @@ selinux --permissive
 # --- environment ONLY — a chrooted %post cannot see it. So copy it into the new
 # --- root here (--nochroot), and the main %post below reads it from inside.
 %post --nochroot
-cp -a /run/install/repo/schema /mnt/sysroot/root/schema-payload
+# The ISO tree carries the build host's uid; on the target that uid is the
+# first user, so the payload (and the root-run .svc files copied from it) must
+# land owned by root.
+cp -r --preserve=mode,timestamps /run/install/repo/schema /mnt/sysroot/root/schema-payload
 %end
 
 %post --log=/root/schema-ks-post.log

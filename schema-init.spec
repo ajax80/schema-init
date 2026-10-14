@@ -381,6 +381,10 @@ if [ -f %{_sysconfdir}/kernel/install.d/99-schema-init.install ] &&
     echo "schema-init: kernel-install hook now ships in %{_prefix}/lib/kernel/install.d; old /etc copy kept as 99-schema-init.install.retired"
 fi
 mkdir -p %{_sharedstatedir}/schema-init && touch %{_sharedstatedir}/schema-init/kernel-hook-etc-retired || :
+# Installer ISOs before 0.4.13 copied the rail with the build host's uid,
+# which on the target is the first user: PID 1 runs those .svc files as root.
+n=$(find %{_sysconfdir}/schema-init -xdev \( ! -uid 0 -o ! -gid 0 \) -print -exec chown -h root:root {} + 2>/dev/null | wc -l)
+[ "$n" -gt 0 ] && echo "schema-init: $n file(s) under %{_sysconfdir}/schema-init were not owned by root; now root:root" || :
 
 %preun
 # Last removal on an opted-in box: drop the per-kernel schema entries (their
@@ -471,6 +475,9 @@ fi
 - schema-udev: resolve the root disk from root= when / is /dev/root, so
   /dev/disk/by-designator links appear on initramfs-less boots
 - Re-exec guard names the stall that blocked it
+- Installer ISO: rail .svc files were owned by the first user (the build
+  host's uid carried through the payload copy); now root, and upgrades fix
+  existing installs
 
 * Sun Oct 11 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.12-1
 - schema-udev: predictable network interface names (enp*/wlp*, same as
