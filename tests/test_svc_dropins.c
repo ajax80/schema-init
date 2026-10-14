@@ -208,6 +208,30 @@ int main(void) {
     assert(load("st.svc", &s) == 0 && (s.flags & SVC_STOP_FIRST) && s.stop_timeout_sec == 20);
     drop(&s);
 
+    {
+        char p[512];
+        snprintf(p, sizeof p, "%s/st.svc", dir);
+        assert(chmod(p, 0664) == 0);
+        assert(load("st.svc", &s) == -1);
+        assert(chmod(p, 0646) == 0);
+        assert(load("st.svc", &s) == -1);
+        assert(chmod(p, 0644) == 0);
+        assert(load("st.svc", &s) == 0);
+        drop(&s);
+        snprintf(p, sizeof p, "%s/st.svc.d/50-stop.conf", dir);
+        assert(chmod(p, 0666) == 0);
+        assert(load("st.svc", &s) == -1);
+        assert(chmod(p, 0644) == 0);
+        if (geteuid() == 0) {
+            snprintf(p, sizeof p, "%s/st.svc", dir);
+            assert(chown(p, 65534, 0) == 0);
+            assert(load("st.svc", &s) == -1);
+            assert(chown(p, 0, 0) == 0);
+        }
+        assert(load("st.svc", &s) == 0);
+        drop(&s);
+    }
+
     printf("all svc-dropins tests passed\n");
     return 0;
 }

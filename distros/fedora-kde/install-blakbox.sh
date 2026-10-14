@@ -31,7 +31,8 @@ LIST="$(mktemp)"
 "$REPO/scripts/schema-drift" "$HOST" --list-scripts > "$LIST"
 [ -d "$SVC_DIR" ] && mv "$SVC_DIR" "/root/schema-services.bak-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$SVC_DIR"
-cp -a "$HOST/services/." "$SVC_DIR/"
+cp -a --no-preserve=ownership "$HOST/services/." "$SVC_DIR/"
+chmod -R go-w "$SVC_DIR"
 sed -i -e "s|^user=1000\$|user=$TARGET_UID|" -e "s|/run/user/1000/|/run/user/$TARGET_UID/|" \
     "$SVC_DIR/pipewire.svc" "$SVC_DIR/pipewire-pulse.svc" "$SVC_DIR/wireplumber.svc"
 

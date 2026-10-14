@@ -180,7 +180,7 @@ busybox poweroff -f
 INIT
 chmod +x "$ROOT/init"
 
-( cd "$ROOT" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initramfs.gz"
+( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip ) > "$WORK/initramfs.gz"
 
 # 4. Boot.
 KERNEL="/lib/modules/$(uname -r)/vmlinuz"

@@ -613,7 +613,7 @@ dep=docker
 EOF
 
 # 3. Pack initramfs.
-( cd "$ROOT" && find . | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$WORK/initramfs.cpio.gz"
+( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9 ) > "$WORK/initramfs.cpio.gz"
 echo ">> initramfs: $(du -h "$WORK/initramfs.cpio.gz" | cut -f1)"
 
 # 4. Boot it.
@@ -693,7 +693,7 @@ grep -Eq "mountns-late-on: home=EMPTY" "$SERIAL" || { echo "  MISS: late host mo
 grep -Eq "mountns-late-off: home=OPEN" "$SERIAL" || { echo "  MISS: late-mount control did not see the new /home"; pass=0; }
 # Shutdown rail: every step must print, and PID 1 must reach reboot() itself.
 # A wedge here is the 2026-07-26 hang (unbounded sync never returned).
-for step in "SIGTERM sent" "cgroups killed" "control socket and shm released" \
+for step in "stop 1 " "cgroups killed" "control socket and shm released" \
             "sync done" "filesystems read-only"; do
   grep -Eq "shutdown: $step" "$SERIAL" || { echo "  MISS: shutdown step '$step'"; pass=0; }
 done

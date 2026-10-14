@@ -106,7 +106,7 @@ busybox poweroff -f
 EOF
 chmod +x "$ROOT/usr/bin/vmverdict.sh"
 
-( cd "$ROOT" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initramfs.gz"
+( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip ) > "$WORK/initramfs.gz"
 
 KERNEL="/lib/modules/$(uname -r)/vmlinuz"
 [ -f "$KERNEL" ] || KERNEL="/boot/vmlinuz-$(uname -r)"
