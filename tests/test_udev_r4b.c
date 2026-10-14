@@ -208,14 +208,19 @@ static const char *direct_for(const char *cmd) {
 
 static void test_run_direct(void) {
     const char *vc = "/usr/lib/systemd/systemd-vconsole-setup";
-    assert(direct_for("/usr/bin/systemctl --no-block restart systemd-vconsole-setup.service") &&
-           !strcmp(direct_for("/usr/bin/systemctl --no-block restart systemd-vconsole-setup.service"), vc));
-    assert(direct_for("systemctl start systemd-vconsole-setup.service"));
+    int have = access(vc, X_OK) == 0;
+    const char *r = direct_for("/usr/bin/systemctl --no-block restart systemd-vconsole-setup.service");
+    assert(have ? r && !strcmp(r, vc) : !r);
+    assert(!direct_for("systemctl start systemd-vconsole-setup.service") == !have);
+    assert(!direct_for("/usr/bin/systemctl try-restart systemd-vconsole-setup") == !have);
+    assert(!direct_for("systemctl reload-or-restart systemd-vconsole-setup.service") == !have);
     assert(!direct_for("/usr/bin/systemctl stop systemd-vconsole-setup.service"));
     assert(!direct_for("/usr/bin/systemctl --no-block restart other.service"));
     assert(!direct_for("/usr/bin/systemctl restart systemd-vconsole-setup.service other.service"));
     assert(!direct_for("/usr/bin/notsystemctl restart systemd-vconsole-setup.service"));
     assert(!direct_for("/usr/bin/systemctl --no-block"));
+    assert(!direct_for("systemctl restart systemd-vconsole-setup.socket"));
+    assert(!direct_for("systemctl restart systemd-vconsole-setup.servicex"));
     printf("test_udev_r4b: run-direct OK\n");
 }
 
