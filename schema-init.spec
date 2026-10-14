@@ -383,8 +383,15 @@ fi
 mkdir -p %{_sharedstatedir}/schema-init && touch %{_sharedstatedir}/schema-init/kernel-hook-etc-retired || :
 # Installer ISOs before 0.4.13 copied the rail with the build host's uid,
 # which on the target is the first user: PID 1 runs those .svc files as root.
-n=$(find %{_sysconfdir}/schema-init -xdev \( ! -uid 0 -o ! -gid 0 \) -print -exec chown -h root:root {} + 2>/dev/null | wc -l)
-[ "$n" -gt 0 ] && echo "schema-init: $n file(s) under %{_sysconfdir}/schema-init were not owned by root; now root:root" || :
+if [ -n "$(find %{_sysconfdir}/schema-init -xdev \( ! -uid 0 -o ! -gid 0 -o \( ! -type l -perm /022 \) \) -print -quit 2>/dev/null)" ]; then
+    find %{_sysconfdir}/schema-init -xdev \( ! -uid 0 -o ! -gid 0 \) -exec chown -h root:root {} + 2>/dev/null
+    find %{_sysconfdir}/schema-init -xdev ! -type l -perm /022 -exec chmod go-w {} + 2>/dev/null
+    if [ -n "$(find %{_sysconfdir}/schema-init -xdev \( ! -uid 0 -o ! -gid 0 -o \( ! -type l -perm /022 \) \) -print -quit 2>/dev/null)" ]; then
+        echo "schema-init: WARNING: files under %{_sysconfdir}/schema-init are still writable by non-root users; PID 1 runs them as root"
+    else
+        echo "schema-init: files under %{_sysconfdir}/schema-init were writable by non-root users; now root:root, go-w"
+    fi
+fi
 
 %preun
 # Last removal on an opted-in box: drop the per-kernel schema entries (their

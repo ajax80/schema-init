@@ -67,7 +67,7 @@ selinux --permissive
 # The ISO tree carries the build host's uid; on the target that uid is the
 # first user, so the payload (and the root-run .svc files copied from it) must
 # land owned by root.
-cp -r --preserve=mode,timestamps /run/install/repo/schema /mnt/sysroot/root/schema-payload
+cp -a --no-preserve=ownership /run/install/repo/schema /mnt/sysroot/root/schema-payload
 %end
 
 %post --log=/root/schema-ks-post.log
@@ -135,7 +135,8 @@ install -m0755 "$SRC/scripts/gen-mounts.sh"              /usr/local/lib/schema/
 #    fstab-derived mounts on top (a pure /etc/fstab read, which DOES work in
 #    the chroot).
 install -d /etc/schema-init/services /etc/schema-init/scripts
-cp -a "$SRC/services/." /etc/schema-init/services/
+cp -a --no-preserve=ownership "$SRC/services/." /etc/schema-init/services/
+chmod -R go-w /etc/schema-init/services
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
 rm -f /etc/schema-init/services/schema-migrate-finish.svc  # finishes an in-place migration; an ISO install never runs one
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
