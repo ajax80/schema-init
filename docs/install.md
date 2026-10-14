@@ -224,7 +224,7 @@ How it stays safe:
 - **Dry run first.** The new binary is started as a child with `--reexec-check` and must accept the state before PID 1 commits. A binary that crashes, is the wrong program, or can't read the state is refused, and the running PID 1 is untouched.
 - **State is handed over, not re-derived.** The runtime half of every service is serialized as versioned text into a sealed memfd. The control, notify and watchdog fds are inherited. The new image skips boot-only work (mounts, module loading, `/tmp` lock cleanup, watchdog arming) and adopts the running children.
 - **Fallback.** If the new image fails after the swap, it re-executes the old one (held open by fd) and the command replies `err: rolled back`.
-- **Refused** when a `.svc` changed since boot (those changes need a reboot), when the system is under memory pressure, or for a relative path. `schema-ctl` exits 1 on any refusal.
+- **Refused** when a `.svc` changed since boot (those changes need a reboot), while PID 1 is in its survival posture (a memory stall, or a critical service starved for CPU, within the last 5 s; the refusal names which), or for a relative path. `schema-ctl` exits 1 on any refusal.
 
 Measured on blakbox (60 services, full Plasma session): 53 ms per re-exec, `schema-ctl status` byte-identical before and after.
 
