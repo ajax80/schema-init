@@ -31,6 +31,28 @@ static inline int udev_argv_split(const char *cmd, char store[][UE_VAL_MAX],
     return argc;
 }
 
+static inline const char *udev_run_direct(int argc, char *const argv[]) {
+    static const char *const map[][2] = {
+        { "systemd-vconsole-setup", "/usr/lib/systemd/systemd-vconsole-setup" },
+    };
+    static const char *const verbs[] = { "start", "restart", "try-restart", "reload-or-restart" };
+    const char *b = strrchr(argv[0], '/');
+    if (strcmp(b ? b + 1 : argv[0], "systemctl")) return NULL;
+    int i = 1;
+    while (i < argc && argv[i][0] == '-') i++;
+    if (i + 2 != argc) return NULL;
+    size_t v = 0;
+    while (v < sizeof verbs / sizeof verbs[0] && strcmp(argv[i], verbs[v])) v++;
+    if (v == sizeof verbs / sizeof verbs[0]) return NULL;
+    const char *unit = argv[i + 1];
+    size_t ul = strlen(unit);
+    if (ul > 8 && !strcmp(unit + ul - 8, ".service")) ul -= 8;
+    for (size_t k = 0; k < sizeof map / sizeof map[0]; k++)
+        if (strlen(map[k][0]) == ul && !strncmp(unit, map[k][0], ul) && access(map[k][1], X_OK) == 0)
+            return map[k][1];
+    return NULL;
+}
+
 #ifndef UDEV_EXEC_TIMEOUT
 #define UDEV_EXEC_TIMEOUT 180
 #endif
