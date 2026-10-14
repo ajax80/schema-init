@@ -116,7 +116,7 @@ EOF
 boot() {
   local name="$1" switch="$2" extra="$3" dir="$WORK/$1"
   build_root "$dir/root" "$switch"
-  ( cd "$dir/root" && find . | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$dir/initramfs.cpio.gz"
+  ( cd "$dir/root" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9 ) > "$dir/initramfs.cpio.gz"
   timeout "$TIMEOUT" qemu-system-x86_64 \
     -enable-kvm -m 512 -smp 2 -no-reboot -nographic -nic none \
     -kernel "$KERNEL" -initrd "$dir/initramfs.cpio.gz" \

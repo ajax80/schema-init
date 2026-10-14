@@ -16,6 +16,7 @@ static void write_svc(const char *path, const char *body) {
 }
 
 int main(void) {
+    umask(022);
     uint8_t v;
     static service_t one, table[4];
     char dir[] = "/tmp/schema-test-mountns-XXXXXX";

@@ -80,7 +80,8 @@ gcc -shared -fPIC -o "$PAYLOAD/scripts/mock_sd.so" \
 # Plasma), boot-proven under schema-init as PID 1. NOT $REPO/services — that
 # reference rail's exec paths (schema-udev as udev, lightdm as DM) don't exist
 # on a fresh Fedora install and hang the box.
-cp -a "$HERE/rail/services/." "$PAYLOAD/services/"
+cp -a --no-preserve=ownership "$HERE/rail/services/." "$PAYLOAD/services/"
+chmod -R go-w "$PAYLOAD/services"
 
 # kernel-install plugin: regenerates a schema-init BLS entry on every dnf kernel
 # update (stock systemd entries stay pristine as a boot fallback). %post installs

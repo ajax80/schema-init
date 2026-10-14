@@ -20,6 +20,7 @@ static void write_svc(const char *path, const char *body) {
 }
 
 int main(void) {
+    umask(022);
     char tmpl[] = "/tmp/schema-svc-envXXXXXX";
     char *dir = mkdtemp(tmpl);
     assert(dir);
