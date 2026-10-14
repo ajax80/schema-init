@@ -126,33 +126,43 @@ fi
 
 %posttrans daemons
 if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ]; then
+    svcd=%{_sysconfdir}/schema-init/services
+    pid=$(pgrep -x schema-udev)
+    if [ -f "$svcd/sysprep.svc" ] && [ ! -e "$svcd/udevd.svc" ] &&
+       [ -e %{_sysconfdir}/schema-init/schema-udev.live ] && [ "$(pgrep -cx schema-udev)" = 1 ] &&
+       st=$(%{_bindir}/schema-ctl status 2>/dev/null) &&
+       ! printf '%s\n' "$st" | awk -v p="pid=$pid" '$2 == p { f = 1 } END { exit !f }' &&
+       ! grep -qsE '^exec=.*/(schema-udev|schema-udevd-launch)$' "$svcd"/*.svc &&
+       cp %{_datadir}/%{name}/udevd.svc "$svcd/udevd.svc"; then
+        mkdir -p %{_sharedstatedir}/schema-init
+        touch %{_sharedstatedir}/schema-init/rail-udevd-added
+        stamp=$(mktemp /run/schema-udev-upgrade.XXXXXX)
+        if %{_bindir}/schema-ctl add "$svcd/udevd.svc" >/dev/null; then
+            n=0
+            until [ /run/schema-udev/ready -nt "$stamp" ] || [ $n -ge 60 ]; do sleep 0.5; n=$((n + 1)); done
+            if [ /run/schema-udev/ready -nt "$stamp" ]; then
+                echo "schema-init: schema-udev now runs supervised (udevd.svc)"
+            else
+                echo "schema-init: udevd.svc added but schema-udev has not finished coldplug after 30 s"
+            fi
+        else
+            echo "schema-init: added udevd.svc; udev comes under supervision at next boot"
+        fi
+        rm -f "$stamp"
+    fi
     for pid in $(pgrep -x schema-udev); do
         case "$(readlink /proc/$pid/exe)" in *" (deleted)") ;; *) continue ;; esac
         cmp -s /proc/$pid/exe %{_bindir}/schema-udev && continue
         svc=$(%{_bindir}/schema-ctl status 2>/dev/null | awk -v p="pid=$pid" '$2 == p { print $1 }')
-        # An ISO rail whose udev predates udevd.svc: sysprep started it and
-        # left it orphaned under PID 1. Bring it under supervision; the
-        # launcher stops the orphan and execs the upgraded binary.
-        svcd=%{_sysconfdir}/schema-init/services
-        add=
-        if [ -z "$svc" ] && [ -f "$svcd/sysprep.svc" ] && [ ! -e "$svcd/udevd.svc" ] &&
-           [ -e %{_sysconfdir}/schema-init/schema-udev.live ] &&
-           cp %{_datadir}/%{name}/udevd.svc "$svcd/udevd.svc"; then
-            svc=udevd add=1
-        fi
         if [ -z "$svc" ]; then
             echo "schema-init: schema-udev (pid $pid) is not supervised; restart it to pick up the upgrade"
             continue
         fi
         stamp=$(mktemp /run/schema-udev-upgrade.XXXXXX) || continue
-        if [ -n "$add" ]; then set -- add "$svcd/udevd.svc"; else set -- restart "$svc"; fi
-        if %{_bindir}/schema-ctl "$@" >/dev/null; then
+        if %{_bindir}/schema-ctl restart "$svc" >/dev/null; then
             n=0
             until [ /run/schema-udev/ready -nt "$stamp" ] || [ $n -ge 60 ]; do sleep 0.5; n=$((n + 1)); done
             [ /run/schema-udev/ready -nt "$stamp" ] || echo "schema-init: $svc restarted but has not finished coldplug after 30 s"
-            [ -n "$add" ] && echo "schema-init: schema-udev now runs supervised (udevd.svc)"
-        elif [ -n "$add" ]; then
-            echo "schema-init: added udevd.svc; udev comes under supervision at next boot"
         else
             echo "schema-init: restart $svc to pick up the upgraded schema-udev"
         fi
