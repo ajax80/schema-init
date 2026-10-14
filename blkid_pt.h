@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/sysmacros.h>
+#include <dirent.h>
+#include <strings.h>
 
 static inline void bpt_emit(struct uevent *out, const char *k, const char *v) {
     if (out->n < UE_MAX_KEYS) {
@@ -172,25 +174,87 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
     bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
 }
 
+static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
+                                   char *out, size_t outsz) {
+    FILE *f = fopen(cmdline, "r");
+    if (!f) return -1;
+    char line[4096];
+    if (!fgets(line, sizeof line, f)) { fclose(f); return -1; }
+    fclose(f);
+    char val[256]; val[0] = '\0';
+    char *sv = NULL;
+    for (char *t = strtok_r(line, " \t\n", &sv); t; t = strtok_r(NULL, " \t\n", &sv)) {
+        if (!strcmp(t, "--")) break;
+        if (!strncmp(t, "root=", 5)) safe_copy(val, t + 5, sizeof val);
+    }
+    if (!val[0]) return -1;
+
+    unsigned maj, min; char extra;
+    if (sscanf(val, "%u:%u%c", &maj, &min, &extra) == 2) {
+        snprintf(out, outsz, "%u:%u", maj, min);
+        return 0;
+    }
+    char cls[PATH_MAX];
+    if ((size_t)snprintf(cls, sizeof cls, "%s/sys/class/block", sysroot) >= sizeof cls) return -1;
+    if (!strncmp(val, "/dev/", 5)) {
+        char d[PATH_MAX];
+        if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, val + 5) >= sizeof d) return -1;
+        return pi_sysattr(d, "dev", out, outsz);
+    }
+    if (strncasecmp(val, "PARTUUID=", 9) != 0) return -1;
+    const char *want = val + 9;
+    DIR *dir = opendir(cls);
+    if (!dir) return -1;
+    int rc = -1;
+    struct dirent *de;
+    while (rc && (de = readdir(dir))) {
+        if (de->d_name[0] == '.') continue;
+        char u[PATH_MAX];
+        if ((size_t)snprintf(u, sizeof u, "%s/%s/uevent", cls, de->d_name) >= sizeof u) continue;
+        FILE *uf = fopen(u, "r");
+        if (!uf) continue;
+        char l[256]; int hit = 0;
+        while (fgets(l, sizeof l, uf)) {
+            l[strcspn(l, "\n")] = '\0';
+            if (!strncmp(l, "PARTUUID=", 9) && !strcasecmp(l + 9, want)) hit = 1;
+        }
+        fclose(uf);
+        if (hit) {
+            char d[PATH_MAX];
+            if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, de->d_name) < sizeof d)
+                rc = pi_sysattr(d, "dev", out, outsz);
+        }
+    }
+    closedir(dir);
+    return rc;
+}
+
 /* Whole-disk devnum that backs the running root fs. stat("/")->st_dev is an
  * anonymous devnum on btrfs/zfs/overlay, so resolve the backing block device
- * from /proc/mounts instead: source node -> st_rdev -> walk /sys up to disk. */
-static inline int bpt_root_disk_devnum(char *out, size_t outsz) {
-    FILE *f = fopen("/proc/mounts", "r");
+ * from /proc/mounts instead: source node -> st_rdev -> walk /sys up to disk. A kernel-mounted root
+ * (no initramfs) shows as /dev/root, which has no node, until userspace first
+ * remounts it; then fall back to root= on the cmdline. */
+static inline int bpt_root_disk_devnum_at(const char *mounts, const char *cmdline,
+                                          const char *sysroot, char *out, size_t outsz) {
+    FILE *f = fopen(mounts, "r");
     if (!f) return -1;
     char dev[256]; char line[1024]; dev[0] = '\0';
     while (fgets(line, sizeof line, f)) {
         char d[256], m[256];
         if (sscanf(line, "%255s %255s", d, m) != 2) continue;
-        if (!strcmp(m, "/")) { safe_copy(dev, d, sizeof dev); break; }
+        if (!strcmp(m, "/")) safe_copy(dev, d, sizeof dev);
     }
     fclose(f);
-    if (strncmp(dev, "/dev/", 5) != 0) return -1;
+    char devnum[64];
     struct stat st;
-    if (stat(dev, &st) != 0 || !S_ISBLK(st.st_mode)) return -1;
-    unsigned maj = (unsigned)major(st.st_rdev), min = (unsigned)minor(st.st_rdev);
+    if (!strncmp(dev, "/dev/", 5) && stat(dev, &st) == 0 && S_ISBLK(st.st_mode))
+        snprintf(devnum, sizeof devnum, "%u:%u",
+                 (unsigned)major(st.st_rdev), (unsigned)minor(st.st_rdev));
+    else if (strcmp(dev, "/dev/root") != 0 ||
+             bpt_cmdline_root(cmdline, sysroot, devnum, sizeof devnum) != 0)
+        return -1;
     char sp[PATH_MAX];
-    if ((size_t)snprintf(sp, sizeof sp, "/sys/dev/block/%u:%u", maj, min) >= sizeof sp) return -1;
+    if ((size_t)snprintf(sp, sizeof sp, "%s/sys/dev/block/%s", sysroot, devnum) >= sizeof sp) return -1;
     char real[PATH_MAX];
     if (!realpath(sp, real)) return -1;
     char partbuf[64];
@@ -198,6 +262,10 @@ static inline int bpt_root_disk_devnum(char *out, size_t outsz) {
         if (pi_parent(real) != 0) return -1;   /* partition -> whole disk */
     }
     return pi_sysattr(real, "dev", out, outsz);   /* "MAJ:MIN" */
+}
+
+static inline int bpt_root_disk_devnum(char *out, size_t outsz) {
+    return bpt_root_disk_devnum_at("/proc/mounts", "/proc/cmdline", "", out, outsz);
 }
 
 static inline int bpt_is_root_backing_disk(const char *sysroot, const char *devpath) {
