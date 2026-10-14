@@ -252,6 +252,14 @@ static void test_root_disk_devnum(void) {
     assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) != 0);
     bpt_wf(root, "cmdline", "ro quiet");
     assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) != 0);
+    bpt_wf(root, "cmdline", "ro -- root=/dev/nvme0n1p3");
+    assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) != 0);
+    bpt_wf(root, "cmdline", "root=/dev/nvme0n1p3");
+    bpt_wf(root, "mounts", "overlay / overlay rw 0 0");
+    assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) != 0);
+    bpt_wf(root, "mounts", "rootfs / rootfs rw 0 0\n/dev/root / btrfs ro 0 0");
+    assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) == 0);
+    assert(!strcmp(out, "259:0"));
     printf("test_root_disk_devnum OK\n");
 }
 

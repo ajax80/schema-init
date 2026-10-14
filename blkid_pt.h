@@ -174,9 +174,6 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
     bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
 }
 
-/* Whole-disk devnum that backs the running root fs. stat("/")->st_dev is an
- * anonymous devnum on btrfs/zfs/overlay, so resolve the backing block device
- * from /proc/mounts instead: source node -> st_rdev -> walk /sys up to disk. */
 static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
                                    char *out, size_t outsz) {
     FILE *f = fopen(cmdline, "r");
@@ -186,8 +183,10 @@ static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
     fclose(f);
     char val[256]; val[0] = '\0';
     char *sv = NULL;
-    for (char *t = strtok_r(line, " \t\n", &sv); t; t = strtok_r(NULL, " \t\n", &sv))
+    for (char *t = strtok_r(line, " \t\n", &sv); t; t = strtok_r(NULL, " \t\n", &sv)) {
+        if (!strcmp(t, "--")) break;
         if (!strncmp(t, "root=", 5)) safe_copy(val, t + 5, sizeof val);
+    }
     if (!val[0]) return -1;
 
     unsigned maj, min; char extra;
@@ -230,6 +229,11 @@ static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
     return rc;
 }
 
+/* Whole-disk devnum that backs the running root fs. stat("/")->st_dev is an
+ * anonymous devnum on btrfs/zfs/overlay, so resolve the backing block device
+ * from /proc/mounts instead: source node -> st_rdev -> walk /sys up to disk. A kernel-mounted root
+ * (no initramfs) shows as /dev/root, which has no node, until userspace first
+ * remounts it; then fall back to root= on the cmdline. */
 static inline int bpt_root_disk_devnum_at(const char *mounts, const char *cmdline,
                                           const char *sysroot, char *out, size_t outsz) {
     FILE *f = fopen(mounts, "r");
@@ -238,7 +242,7 @@ static inline int bpt_root_disk_devnum_at(const char *mounts, const char *cmdlin
     while (fgets(line, sizeof line, f)) {
         char d[256], m[256];
         if (sscanf(line, "%255s %255s", d, m) != 2) continue;
-        if (!strcmp(m, "/")) { safe_copy(dev, d, sizeof dev); break; }
+        if (!strcmp(m, "/")) safe_copy(dev, d, sizeof dev);
     }
     fclose(f);
     char devnum[64];
@@ -246,7 +250,8 @@ static inline int bpt_root_disk_devnum_at(const char *mounts, const char *cmdlin
     if (!strncmp(dev, "/dev/", 5) && stat(dev, &st) == 0 && S_ISBLK(st.st_mode))
         snprintf(devnum, sizeof devnum, "%u:%u",
                  (unsigned)major(st.st_rdev), (unsigned)minor(st.st_rdev));
-    else if (bpt_cmdline_root(cmdline, sysroot, devnum, sizeof devnum) != 0)
+    else if (strcmp(dev, "/dev/root") != 0 ||
+             bpt_cmdline_root(cmdline, sysroot, devnum, sizeof devnum) != 0)
         return -1;
     char sp[PATH_MAX];
     if ((size_t)snprintf(sp, sizeof sp, "%s/sys/dev/block/%s", sysroot, devnum) >= sizeof sp) return -1;
