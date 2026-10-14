@@ -20,56 +20,68 @@
 enum rule_op { OP_MATCH_EQ, OP_MATCH_NE, OP_ASSIGN, OP_ASSIGN_ADD, OP_ASSIGN_SUB, OP_ASSIGN_FINAL };
 
 struct rule_clause {
-    char key[RK_KEY_MAX];
-    char subkey[RK_SUB_MAX];
+    const char *key;
+    const char *subkey;
     enum rule_op op;
-    char val[RK_VAL_MAX];
+    const char *val;
 };
 
-struct rule { struct rule_clause clause[RULE_MAX_CLAUSES]; int nclause; int label_clause; };
+struct rule { struct rule_clause *clause; int nclause; int label_clause; };
 struct ruleset { struct rule *rules; int n; int cap; };
 
-/* Parse "KEY{sub}OP\"val\"" -> clause. Returns 0 / -1. */
-static inline int ruleset_parse_clause(const char *s, struct rule_clause *out) {
-    memset(out, 0, sizeof *out);
-    while (*s == ' ' || *s == '\t') s++;
+struct rk_span { const char *k, *s, *v; size_t kl, sl, vl; enum rule_op op; };
+
+static inline int rk_parse_span(const char *s, const char *end, struct rk_span *sp) {
+    memset(sp, 0, sizeof *sp);
+    while (s < end && (*s == ' ' || *s == '\t')) s++;
     const char *p = s;
     /* key = leading [A-Z_] run */
-    while ((*p >= 'A' && *p <= 'Z') || *p == '_') p++;
-    size_t klen = (size_t)(p - s);
-    if (klen == 0 || klen >= RK_KEY_MAX) return -1;
-    memcpy(out->key, s, klen); out->key[klen] = '\0';
+    while (p < end && ((*p >= 'A' && *p <= 'Z') || *p == '_')) p++;
+    sp->k = s; sp->kl = (size_t)(p - s);
+    if (sp->kl == 0 || sp->kl >= RK_KEY_MAX) return -1;
     /* optional {subkey} */
-    if (*p == '{') {
-        const char *e = strchr(p, '}');
+    if (p < end && *p == '{') {
+        const char *e = memchr(p, '}', (size_t)(end - p));
         if (!e) return -1;
-        size_t sl = (size_t)(e - (p + 1));
-        if (sl >= RK_SUB_MAX) return -1;
-        memcpy(out->subkey, p + 1, sl); out->subkey[sl] = '\0';
+        sp->s = p + 1; sp->sl = (size_t)(e - (p + 1));
+        if (sp->sl >= RK_SUB_MAX) return -1;
         p = e + 1;
     }
     /* operator */
-    if      (p[0] == '=' && p[1] == '=') { out->op = OP_MATCH_EQ;     p += 2; }
-    else if (p[0] == '!' && p[1] == '=') { out->op = OP_MATCH_NE;     p += 2; }
-    else if (p[0] == '+' && p[1] == '=') { out->op = OP_ASSIGN_ADD;   p += 2; }
-    else if (p[0] == '-' && p[1] == '=') { out->op = OP_ASSIGN_SUB;   p += 2; }
-    else if (p[0] == ':' && p[1] == '=') { out->op = OP_ASSIGN_FINAL; p += 2; }
-    else if (p[0] == '=')                { out->op = OP_ASSIGN;       p += 1; }
+    if (p >= end) return -1;
+    if      (p[0] == '=' && p[1] == '=') { sp->op = OP_MATCH_EQ;     p += 2; }
+    else if (p[0] == '!' && p[1] == '=') { sp->op = OP_MATCH_NE;     p += 2; }
+    else if (p[0] == '+' && p[1] == '=') { sp->op = OP_ASSIGN_ADD;   p += 2; }
+    else if (p[0] == '-' && p[1] == '=') { sp->op = OP_ASSIGN_SUB;   p += 2; }
+    else if (p[0] == ':' && p[1] == '=') { sp->op = OP_ASSIGN_FINAL; p += 2; }
+    else if (p[0] == '=')                { sp->op = OP_ASSIGN;       p += 1; }
     else return -1;
     /* quoted value */
-    while (*p == ' ' || *p == '\t') p++;
-    if (*p != '"') return -1;
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    if (p >= end || *p != '"') return -1;
     p++;
-    const char *e = strchr(p, '"');
+    const char *e = memchr(p, '"', (size_t)(end - p));
     if (!e) return -1;
-    size_t vl = (size_t)(e - p);
-    if (vl >= RK_VAL_MAX) return -1;
-    memcpy(out->val, p, vl); out->val[vl] = '\0';
+    sp->v = p; sp->vl = (size_t)(e - p);
+    if (sp->vl >= RK_VAL_MAX) return -1;
     return 0;
+}
+
+static inline size_t rk_span_size(const struct rk_span *sp) { return sp->kl + sp->sl + sp->vl + 3; }
+
+static inline void rk_span_fill(const struct rk_span *sp, struct rule_clause *out, char **w) {
+    out->op = sp->op;
+    out->key = *w;    memcpy(*w, sp->k, sp->kl); *w += sp->kl; *(*w)++ = '\0';
+    out->subkey = *w; if (sp->sl) memcpy(*w, sp->s, sp->sl); *w += sp->sl; *(*w)++ = '\0';
+    out->val = *w;    memcpy(*w, sp->v, sp->vl); *w += sp->vl; *(*w)++ = '\0';
 }
 
 /* Split on top-level commas (quotes are literal), parse each as a clause. */
 static inline int ruleset_parse_line(const char *line, struct rule *out) {
+    struct rk_span sp[RULE_MAX_CLAUSES];
+    int n = 0;
+    size_t text = 0;
+    out->clause = NULL;
     out->nclause = 0;
     out->label_clause = -1;
     const char *p = line;
@@ -81,17 +93,25 @@ static inline int ruleset_parse_line(const char *line, struct rule *out) {
         int inq = 0;
         while (*p && !(*p == ',' && !inq)) { if (*p == '"') inq = !inq; p++; }
         size_t seglen = (size_t)(p - seg);
-        char buf[RK_KEY_MAX + RK_SUB_MAX + RK_VAL_MAX + 8];
-        if (seglen == 0 || seglen >= sizeof buf) { if (*p == ',') p++; continue; }
-        memcpy(buf, seg, seglen); buf[seglen] = '\0';
-        if (out->nclause >= RULE_MAX_CLAUSES) return -1;
-        if (ruleset_parse_clause(buf, &out->clause[out->nclause]) != 0) return -1;
-        if (out->label_clause < 0 && !strcmp(out->clause[out->nclause].key, "LABEL"))
-            out->label_clause = out->nclause;
-        out->nclause++;
+        if (seglen == 0 || seglen >= RK_KEY_MAX + RK_SUB_MAX + RK_VAL_MAX + 8) { if (*p == ',') p++; continue; }
+        if (n >= RULE_MAX_CLAUSES) return -1;
+        if (rk_parse_span(seg, p, &sp[n]) != 0) return -1;
+        text += rk_span_size(&sp[n]);
+        n++;
         if (*p == ',') p++;
     }
-    return out->nclause;
+    if (n == 0) return 0;
+    struct rule_clause *cl = malloc((size_t)n * sizeof *cl + text);
+    if (!cl) return -1;
+    char *w = (char *)(cl + n);
+    for (int i = 0; i < n; i++) {
+        rk_span_fill(&sp[i], &cl[i], &w);
+        if (out->label_clause < 0 && !strcmp(cl[i].key, "LABEL"))
+            out->label_clause = i;
+    }
+    out->clause = cl;
+    out->nclause = n;
+    return n;
 }
 
 static inline int ruleset_append(struct ruleset *rs, const struct rule *r) {
@@ -103,6 +123,12 @@ static inline int ruleset_append(struct ruleset *rs, const struct rule *r) {
     }
     rs->rules[rs->n++] = *r;
     return 0;
+}
+
+static inline void ruleset_free(struct ruleset *rs) {
+    for (int i = 0; i < rs->n; i++) free(rs->rules[i].clause);
+    free(rs->rules);
+    memset(rs, 0, sizeof *rs);
 }
 
 static inline int ruleset_load_file(const char *path, struct ruleset *rs) {
@@ -124,7 +150,8 @@ static inline int ruleset_load_file(const char *path, struct ruleset *rs) {
         if (cont) continue;
         if (llen && logical[0] != '#') {
             struct rule r;
-            if (ruleset_parse_line(logical, &r) > 0) ruleset_append(rs, &r);
+            if (ruleset_parse_line(logical, &r) > 0 && ruleset_append(rs, &r) != 0)
+                free(r.clause);
         }
         llen = 0; logical[0] = '\0';
     }

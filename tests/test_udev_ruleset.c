@@ -6,36 +6,38 @@
 #include <stdlib.h>
 
 int main(void) {
-    struct rule_clause c;
+    struct rule cr;
+    const struct rule_clause *c;
+#define CL(LINE) (ruleset_parse_line((LINE), &cr) == 1 ? (c = &cr.clause[0], 0) : -1)
 
     /* match, no subkey */
-    assert(ruleset_parse_clause("ACTION==\"add\"", &c) == 0);
-    assert(strcmp(c.key, "ACTION") == 0 && c.subkey[0] == '\0' &&
-           c.op == OP_MATCH_EQ && strcmp(c.val, "add") == 0);
+    assert(CL("ACTION==\"add\"") == 0);
+    assert(strcmp(c->key, "ACTION") == 0 && c->subkey[0] == '\0' &&
+           c->op == OP_MATCH_EQ && strcmp(c->val, "add") == 0);
 
     /* not-equal match */
-    assert(ruleset_parse_clause("ACTION!=\"remove\"", &c) == 0);
-    assert(c.op == OP_MATCH_NE && strcmp(c.val, "remove") == 0);
+    assert(CL("ACTION!=\"remove\"") == 0);
+    assert(c->op == OP_MATCH_NE && strcmp(c->val, "remove") == 0);
 
     /* subkey with slash/glob */
-    assert(ruleset_parse_clause("ATTR{parameters/events_dfl_poll_msecs}==\"0\"", &c) == 0);
-    assert(strcmp(c.key, "ATTR") == 0 &&
-           strcmp(c.subkey, "parameters/events_dfl_poll_msecs") == 0 &&
-           c.op == OP_MATCH_EQ && strcmp(c.val, "0") == 0);
+    assert(CL("ATTR{parameters/events_dfl_poll_msecs}==\"0\"") == 0);
+    assert(strcmp(c->key, "ATTR") == 0 &&
+           strcmp(c->subkey, "parameters/events_dfl_poll_msecs") == 0 &&
+           c->op == OP_MATCH_EQ && strcmp(c->val, "0") == 0);
 
     /* each assignment operator */
-    assert(ruleset_parse_clause("OPTIONS+=\"watch\"", &c) == 0 && c.op == OP_ASSIGN_ADD);
-    assert(ruleset_parse_clause("TAG-=\"seat\"", &c) == 0 && c.op == OP_ASSIGN_SUB);
-    assert(ruleset_parse_clause("MODE=\"660\"", &c) == 0 && c.op == OP_ASSIGN);
-    assert(ruleset_parse_clause("ENV{ID_X}:=\"1\"", &c) == 0 &&
-           c.op == OP_ASSIGN_FINAL && strcmp(c.subkey, "ID_X") == 0);
+    assert(CL("OPTIONS+=\"watch\"") == 0 && c->op == OP_ASSIGN_ADD);
+    assert(CL("TAG-=\"seat\"") == 0 && c->op == OP_ASSIGN_SUB);
+    assert(CL("MODE=\"660\"") == 0 && c->op == OP_ASSIGN);
+    assert(CL("ENV{ID_X}:=\"1\"") == 0 &&
+           c->op == OP_ASSIGN_FINAL && strcmp(c->subkey, "ID_X") == 0);
 
     /* value containing | alternation and glob preserved verbatim */
-    assert(ruleset_parse_clause("KERNEL==\"sd*|vd*\"", &c) == 0 &&
-           strcmp(c.val, "sd*|vd*") == 0);
+    assert(CL("KERNEL==\"sd*|vd*\"") == 0 &&
+           strcmp(c->val, "sd*|vd*") == 0);
 
     /* malformed: no operator */
-    assert(ruleset_parse_clause("ACTION add", &c) == -1);
+    assert(CL("ACTION add") == -1);
 
     printf("test_udev_ruleset: clause OK\n");
 
@@ -76,7 +78,7 @@ int main(void) {
     assert(strcmp(rs.rules[0].clause[2].key, "KERNEL") == 0 &&
            strcmp(rs.rules[0].clause[2].val, "sd*|vd*") == 0);
     assert(strcmp(rs.rules[1].clause[0].key, "LABEL") == 0);
-    free(rs.rules);
+    ruleset_free(&rs);
     unlink(tmpl);
 
     printf("test_udev_ruleset: file OK\n");
@@ -99,7 +101,7 @@ int main(void) {
     /* 50-a comes before 90-z lexically; 50-a resolved from d2 */
     assert(strcmp(rs2.rules[0].clause[0].val, "fromd2") == 0);
     assert(strcmp(rs2.rules[1].clause[0].val, "zlast") == 0);
-    free(rs2.rules);
+    ruleset_free(&rs2);
     unlink(pa); unlink(pb); unlink(pc); rmdir(d1); rmdir(d2);
 
     printf("test_udev_ruleset: dirs OK\n");
@@ -110,7 +112,7 @@ int main(void) {
     assert(ruleset_load_dirs(real, 3, &live) == 0);
     if (access("/usr/lib/udev/rules.d", F_OK) == 0)
         assert(live.n > 100);   /* 168 files on blakbox -> thousands of rules */
-    free(live.rules);
+    ruleset_free(&live);
 
     printf("test_udev_ruleset: ALL OK\n");
     return 0;
