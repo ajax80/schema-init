@@ -75,7 +75,7 @@ int main(void) {
     ruleset_subst("/sys/subsystem/net/devices/$name", &cs, o, sizeof o);
     assert(strcmp(o, "/sys/subsystem/net/devices/renamed0") == 0);
     struct rule_clause nc; memset(&nc, 0, sizeof nc);
-    safe_copy(nc.key, "NAME", sizeof nc.key); nc.op = OP_MATCH_EQ; nc.val[0] = '\0';
+    nc.key = "NAME"; nc.subkey = ""; nc.op = OP_MATCH_EQ; nc.val = "";
     assert(match_dev_clause(&nc, &cs) == 0);
     cs.name[0] = '\0';
     assert(match_dev_clause(&nc, &cs) == 1);

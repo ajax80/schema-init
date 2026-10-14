@@ -81,15 +81,14 @@ int main(void) {
     assert(oc.link_priority == -5);
 
     struct rule_clause c1; memset(&c1, 0, sizeof c1);
-    safe_copy(c1.key, "NAME", sizeof c1.key);
+    c1.key = "NAME"; c1.subkey = ""; c1.val = "";
     assert(ctx_key_final(&oc, &c1) == 0);
     ctx_lock_final(&oc, &c1);
     assert(ctx_key_final(&oc, &c1) == 1);
     ctx_lock_final(&oc, &c1);                          /* idempotent */
     assert(oc.nfinal == 1);
     struct rule_clause c2; memset(&c2, 0, sizeof c2);
-    safe_copy(c2.key, "ENV", sizeof c2.key);
-    safe_copy(c2.subkey, "FOO", sizeof c2.subkey);
+    c2.key = "ENV"; c2.subkey = "FOO"; c2.val = "";
     assert(ctx_key_final(&oc, &c2) == 0);              /* ENV{FOO} distinct from NAME */
     printf("test_udev_executor: options+final OK\n");
 
