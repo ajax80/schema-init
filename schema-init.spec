@@ -123,6 +123,16 @@ if [ $1 -gt 1 ] && [ -e %{_sysconfdir}/schema-init/schema-udev.live ] && [ ! -e 
     echo "schema-init: those references and delete /etc/schema-init/net-naming, then reboot."
 fi
 
+%posttrans daemons
+if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ]; then
+    for pid in $(pgrep -x schema-udev); do
+        case "$(readlink /proc/$pid/exe)" in *" (deleted)") ;; *) continue ;; esac
+        svc=$(%{_bindir}/schema-ctl status 2>/dev/null | awk -v p="pid=$pid" '$2 == p { print $1 }')
+        [ -n "$svc" ] || continue
+        %{_bindir}/schema-ctl restart "$svc" >/dev/null || echo "schema-init: restart $svc to pick up the upgraded schema-udev"
+    done
+fi
+
 %postun daemons
 if [ $1 -eq 0 ]; then
     rm -f %{_sysconfdir}/schema-init/schema-udev.ship-md5
