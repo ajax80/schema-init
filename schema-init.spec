@@ -84,6 +84,7 @@ install -Dm0755 scripts/schema-session-register %{buildroot}/usr/local/bin/schem
 install -Dm0755 scripts/schema-session-unregister %{buildroot}/usr/local/bin/schema-session-unregister
 install -Dm0755 scripts/schema-sysctl-apply %{buildroot}%{_libexecdir}/schema-init/schema-sysctl-apply
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-udevd-launch %{buildroot}%{_libexecdir}/schema-init/schema-udevd-launch
+install -Dm0644 distros/fedora-installer/rail/services/udevd.svc %{buildroot}%{_datadir}/%{name}/udevd.svc
 install -Dm0755 scripts/schema-mount-fstab %{buildroot}%{_libexecdir}/schema-init/schema-mount-fstab
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sysprep.sh %{buildroot}/usr/local/bin/schema-sysprep.sh
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sshd-start.sh %{buildroot}/usr/local/bin/schema-sshd-start.sh
@@ -129,15 +130,29 @@ if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ]; then
         case "$(readlink /proc/$pid/exe)" in *" (deleted)") ;; *) continue ;; esac
         cmp -s /proc/$pid/exe %{_bindir}/schema-udev && continue
         svc=$(%{_bindir}/schema-ctl status 2>/dev/null | awk -v p="pid=$pid" '$2 == p { print $1 }')
+        # An ISO rail whose udev predates udevd.svc: sysprep started it and
+        # left it orphaned under PID 1. Bring it under supervision; the
+        # launcher stops the orphan and execs the upgraded binary.
+        svcd=%{_sysconfdir}/schema-init/services
+        add=
+        if [ -z "$svc" ] && [ -f "$svcd/sysprep.svc" ] && [ ! -e "$svcd/udevd.svc" ] &&
+           [ -e %{_sysconfdir}/schema-init/schema-udev.live ] &&
+           cp %{_datadir}/%{name}/udevd.svc "$svcd/udevd.svc"; then
+            svc=udevd add=1
+        fi
         if [ -z "$svc" ]; then
             echo "schema-init: schema-udev (pid $pid) is not supervised; restart it to pick up the upgrade"
             continue
         fi
         stamp=$(mktemp /run/schema-udev-upgrade.XXXXXX) || continue
-        if %{_bindir}/schema-ctl restart "$svc" >/dev/null; then
+        if [ -n "$add" ]; then set -- add "$svcd/udevd.svc"; else set -- restart "$svc"; fi
+        if %{_bindir}/schema-ctl "$@" >/dev/null; then
             n=0
             until [ /run/schema-udev/ready -nt "$stamp" ] || [ $n -ge 60 ]; do sleep 0.5; n=$((n + 1)); done
             [ /run/schema-udev/ready -nt "$stamp" ] || echo "schema-init: $svc restarted but has not finished coldplug after 30 s"
+            [ -n "$add" ] && echo "schema-init: schema-udev now runs supervised (udevd.svc)"
+        elif [ -n "$add" ]; then
+            echo "schema-init: added udevd.svc; udev comes under supervision at next boot"
         else
             echo "schema-init: restart $svc to pick up the upgraded schema-udev"
         fi
@@ -158,6 +173,7 @@ fi
 %files daemons
 %{_bindir}/schema-udev
 %{_bindir}/schema-dbus
+%{_datadir}/%{name}/udevd.svc
 %ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
 
 %package session
