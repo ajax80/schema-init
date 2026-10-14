@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.12
+Version:        0.4.13
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -462,6 +462,16 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Oct 14 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.13-1
+- schema-analyze: boot timing recorded across reboots, history and regress
+  reports (first Rust component; shipped in the base package)
+- schema-udev: rules stored compactly (86 MB -> 0.8 MB resident)
+- schema-udev: restarted when an upgrade replaces it
+- schema-udev: run systemd-vconsole-setup directly for 90-vconsole.rules
+- schema-udev: resolve the root disk from root= when / is /dev/root, so
+  /dev/disk/by-designator links appear on initramfs-less boots
+- Re-exec guard names the stall that blocked it
+
 * Sun Oct 11 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.12-1
 - schema-udev: predictable network interface names (enp*/wlp*, same as
   systemd); upgrades of boxes still on eth*/wlan* keep kernel names via
