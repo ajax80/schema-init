@@ -175,7 +175,20 @@ int main(void) {
                          "pre$ONE", "$HOME", "${bad-name}", "${ONE"};
     assert(m == (int)(sizeof exp / sizeof exp[0]));
     for (int i = 0; i < m; i++) assert(strcmp(out[i], exp[i]) == 0);
-    assert(service_expand_argv(in, out, 3) == 3);
+    assert(service_expand_argv(in, out, 3) == -1);
+    assert(service_expand_argv(in, out, 11) == 11);
+    assert(service_expand_argv(in, out, 10) == -1);
+    setenv("MANY", "a b c d", 1);
+    char *min[] = {"/bin/f", "$MANY", NULL};
+    assert(service_expand_argv(min, out, 5) == 5);
+    assert(service_expand_argv(min, out, 4) == -1);
+    char *ein[] = {"/bin/f", "a", "$UNSET_V", NULL};
+    assert(service_expand_argv(ein, out, 2) == 2);
+    setenv("EMPTY_V", "  ", 1);
+    char *ein2[] = {"/bin/f", "a", "$EMPTY_V", NULL};
+    assert(service_expand_argv(ein2, out, 2) == 2);
+    setenv("MANY", "a b c d   ", 1);
+    assert(service_expand_argv(min, out, 5) == 5);
 
     setenv("Q", "-r 0 --prefer '^(Web Content|Iso)$' --avoid \"a b\" c\\ d\ne", 1);
     setenv("BADQ", "x\r\n'y z", 1);
@@ -194,7 +207,8 @@ int main(void) {
     assert(service_split_cmdline("/bin/sh -c \"unterminated", w, 32) == -1);
     assert(service_split_cmdline("/bin/sh 'x", w, 32) == -1);
     assert(service_split_cmdline("   ", w, 32) == 0);
-    assert(service_split_cmdline("a b c d", w, 2) == 2);
+    assert(service_split_cmdline("a b c d", w, 2) == -1);
+    assert(service_split_cmdline("a b c d ", w, 4) == 4);
 
     snprintf(p, sizeof p, "%s/m.svc", dir3);
     write_svc(p,
