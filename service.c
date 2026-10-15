@@ -1758,13 +1758,11 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     }
     if (val[strspn(val, " \t")] != '\0') return 0;
     if (strcmp(key, "args") == 0) {
-        int keep = svc->argv[0] == svc->exec ? 1 : 0;
-        for (int i = keep; i < MAX_ARGV; i++) {
-            if (svc->argv[i] != svc->exec) free(svc->argv[i]);
+        for (int i = 1; i < MAX_ARGV; i++) {
+            free(svc->argv[i]);
             svc->argv[i] = NULL;
         }
-        if (keep) svc->argv[0] = svc->exec;
-        pc->argc = keep;
+        pc->argc = 1;
     } else if (strcmp(key, "env") == 0) {
         for (int i = 0; i < svc->env_count; i++) {
             free(svc->envp[i]);
@@ -1895,9 +1893,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         strncpy(svc->exec, val, sizeof(svc->exec) - 1);
         if (svc->argv[0] != svc->exec) free(svc->argv[0]);
         svc->argv[0] = svc->exec;
-        if (pc->argc == 0) pc->argc = 1;
     } else if (strcmp(line, "args") == 0) {
-        if (pc->argc == 0) pc->argc = 1;
         if (pc->argc >= MAX_ARGV - 1) {
             fprintf(stderr, "[schema-init] %s: more than %d args= lines\n",
                     svc->name[0] ? svc->name : path, MAX_ARGV - 2);
@@ -2188,7 +2184,7 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
 }
 
 static int svc_load_file(const char *path, service_t *svc) {
-    struct parse_ctx pc = { 0, 0, 0 };
+    struct parse_ctx pc = { 1, 0, 0 };
     char dropins[SVC_DROPIN_MAX][SVC_DROPIN_PATH];
     int nd = svc_dropin_list(path, dropins, SVC_DROPIN_MAX);
     svc_init_defaults(svc);
