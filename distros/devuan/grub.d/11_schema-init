@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+export GRUB_CMDLINE_LINUX="${GRUB_CMDLINE_LINUX} init=/usr/bin/schema-init"
+export GRUB_DISABLE_RECOVERY=true GRUB_DISABLE_SUBMENU=y GRUB_DISABLE_OS_PROBER=true
+/etc/grub.d/10_linux | sed -e "s/^menuentry '/menuentry 'schema-init: /" -e "s/gnulinux-/schema-init-/g"

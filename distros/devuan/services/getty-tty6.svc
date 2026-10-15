@@ -1,0 +1,11 @@
+name=getty-tty6
+exec=/sbin/getty
+args=38400
+args=tty6
+dep=devuan-boot
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
