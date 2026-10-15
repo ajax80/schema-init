@@ -142,7 +142,19 @@ def _which(cmd):
     return None
 
 
-def _exec_pre(svc):
+def _specifiers(argv, name):
+    spec = {"n": name + ".service", "N": name, "p": name, "t": "/run", "%": "%"}
+    out = []
+    for w in argv:
+        def rep(m):
+            if m.group(1) not in spec:
+                raise Skip("specifier %%%s has no schema equivalent" % m.group(1))
+            return spec[m.group(1)]
+        out.append(re.sub(r"%(.?)", rep, w))
+    return out
+
+
+def _exec_pre(svc, name):
     out = []
     for v in _get_all(svc, "ExecStartPre"):
         if not v.strip():
@@ -166,7 +178,7 @@ def _exec_pre(svc):
             if not exe:
                 raise Skip("ExecStartPre command %s not found" % argv[0])
             argv[0] = exe
-        out.append(("".join(sorted(set(pre))), argv))
+        out.append(("".join(sorted(set(pre))), _specifiers(argv, name)))
     if len(out) > 8:
         raise Skip("%d ExecStartPre= lines (limit 8)" % len(out))
     return out
@@ -355,7 +367,7 @@ def timer_lines(sections):
     return lines, notes
 
 
-def timer_to_svc(name, timer_sections, svc_sections, known=None):
+def timer_to_svc(name, timer_sections, svc_sections, known=None, unit=None):
     """A .timer and the .service it starts as one schema timer .svc, named after
     the timer."""
     tlines, tnotes = timer_lines(timer_sections)
@@ -366,7 +378,7 @@ def timer_to_svc(name, timer_sections, svc_sections, known=None):
     if len(tconds) + len(sconds) > 8:
         raise Skip("%d conditions across timer and service (limit 8)" % (len(tconds) + len(sconds)))
     tlines += tconds
-    body = unit_to_svc(name, svc_sections, known=known)
+    body = unit_to_svc(name, svc_sections, known=known, unit=unit)
     out = []
     for ln in body.splitlines():
         if ln.startswith("# schema-import: "):
@@ -662,7 +674,7 @@ def dep_lines(name, sections, known):
     return ["dep=%s" % d for d in deps], notes
 
 
-def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
+def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     """Translate parsed unit sections into schema .svc text. sock: the parsed
     .socket that activates it; lazy: start on the first connection, not at boot.
 
@@ -693,6 +705,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
     argv = _exec_tokens(execstart)
     if not argv:
         raise Skip("no usable ExecStart")
+    argv = _specifiers(argv, unit or name)
 
     env_pairs = _env_pairs(_get_all(svc, "Environment"))
     env_files, env_file_notes = [], []
@@ -706,7 +719,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None):
     if len(env_files) > 4:
         env_file_notes.append("dropped EnvironmentFile=%s (limit 4)" % " ".join(env_files[4:]))
         env_files = env_files[:4]
-    pres = _exec_pre(svc)
+    pres = _exec_pre(svc, unit or name)
     expand = bool(env_files) and any("$" in a for a in argv[1:] + [w for _, pa in pres for w in pa])
     dropped_args = 0
     env_map = dict(p.split("=", 1) for p in env_pairs)
@@ -1108,7 +1121,8 @@ def import_one(name, force=False, queued=()):
             if not spath:
                 raise Skip("timer's %s not found" % target)
             with open(spath) as f:
-                body = timer_to_svc(name, sections, parse_unit(f.read()), known)
+                body = timer_to_svc(name, sections, parse_unit(f.read()), known,
+                                    target[:-len(".service")] if target.endswith(".service") else target)
         else:
             if not sections.get("Install") and _timer_for(name):
                 raise Skip("started by %s, which owns %s.svc — enable the timer"
