@@ -2325,9 +2325,9 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     int shadow_count = services_load(svc_dir, shadow_services, MAX_SERVICES);
     if (svc_refused) {
-        printf("[schema-init] reload rejected: %d file(s) refused on owner/mode\n", svc_refused);
-        if (err) snprintf(err, errsz, "%d .svc file(s) refused: not root-owned or writable by others "
-                          "(chown root:root; chmod go-w)", svc_refused);
+        printf("[schema-init] reload rejected: %d file(s)/dir(s) refused on owner/mode\n", svc_refused);
+        if (err) snprintf(err, errsz, "%d .svc file(s) or service dir(s) refused: not root-owned or writable "
+                          "by others — see the REFUSED/WARN lines (chown root:root; chmod go-w)", svc_refused);
         for (i = 0; i < shadow_count; i++) {
             for (j = 1; j < MAX_ARGV; j++)
                 free(shadow_services[i].argv[j]);

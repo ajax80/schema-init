@@ -95,6 +95,10 @@ static void g_load(void) {
             ngrp++;
         } else {
             int nf = svc_dropin_list(path, files, SVC_DROPIN_MAX);
+            if (nf < 0) {
+                fprintf(stderr, "schema-ctl: %s: a drop-in directory is not owned by root or is writable by others — not loaded\n", path);
+                continue;
+            }
             for (int i = 0; i < nf && ok; i++) ok = g_load_file(files[i], n, 1, &has_exec) == 0;
             if (!ok || !has_exec) continue;
             if (at || !n->name[0]) snprintf(n->name, sizeof n->name, "%s", n->file);
@@ -239,7 +243,13 @@ int main(int argc, char **argv) {
             return 1;
         }
         snprintf(files[0], sizeof files[0], "%s", path);
-        nf = 1 + svc_dropin_list(path, files + 1, SVC_DROPIN_MAX);
+        nf = svc_dropin_list(path, files + 1, SVC_DROPIN_MAX);
+        if (nf < 0) {
+            fprintf(stderr, "schema-ctl: %s: a drop-in directory is not owned by root or is writable by "
+                    "others — PID 1 refuses this service; drop-ins not shown\n", path);
+            nf = 0;
+        }
+        nf++;
         for (i = 0; i < nf; i++) {
             FILE *f = fopen(files[i], "r");
             char line[512];
