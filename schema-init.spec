@@ -298,9 +298,12 @@ if [ -f "$svcd/sysprep.svc" ]; then
         touch "$st/enabled-units-imported"
         echo "schema-init: imported the services systemd had enabled; they start at next boot"
     fi
-    if grep -qsx 'exec=/usr/local/bin/seatd-run.sh' "$svcd/seatd.svc" && [ ! -e /usr/local/bin/seatd-run.sh ]; then
-        rm -f "$svcd/seatd.svc"
-        echo "schema-init: removed seatd.svc; the installer never shipped the seatd-run.sh it starts"
+    if [ ! -e "$st/rail-seatd-removed" ]; then
+        if grep -qsx 'exec=/usr/local/bin/seatd-run.sh' "$svcd/seatd.svc" && [ ! -e /usr/local/bin/seatd-run.sh ]; then
+            rm -f "$svcd/seatd.svc"
+            echo "schema-init: removed seatd.svc (the installer never shipped its seatd-run.sh); it leaves schema-ctl status at next boot"
+        fi
+        touch "$st/rail-seatd-removed"
     fi
 fi
 

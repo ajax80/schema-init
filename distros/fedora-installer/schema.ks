@@ -139,6 +139,7 @@ cp -a --no-preserve=ownership "$SRC/services/." /etc/schema-init/services/
 chmod -R go-w /etc/schema-init/services
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
 rm -f /etc/schema-init/services/schema-migrate-finish.svc  # finishes an in-place migration; an ISO install never runs one
+rm -f /etc/schema-init/services/seatd.svc  # schema-migrate deploys seatd with its seatd-run.sh; an ISO install has neither
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
 [ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
@@ -180,7 +181,7 @@ install -d /usr/local/lib
 # Static conditions (Virtualization, CPUs) are judged here, on the target box.
 if [ -n "$RPMS" ]; then
     mkdir -p /var/lib/schema-init
-    touch /var/lib/schema-init/rail-udevd-added /var/lib/schema-init/rail-zram-recompress-added  # the upgrade-time rail repairs are for older installs only
+    touch /var/lib/schema-init/rail-udevd-added /var/lib/schema-init/rail-zram-recompress-added /var/lib/schema-init/rail-seatd-removed  # the upgrade-time rail repairs are for older installs only
     if schema-import --enabled; then
         touch /var/lib/schema-init/enabled-units-imported
     else
