@@ -1,7 +1,4 @@
 #!/bin/sh
-# Run from the top of the schema-init tree after `make`:
-#   sudo distros/devuan/install.sh            install
-#   sudo distros/devuan/install.sh --remove   undo (sysvinit stays the default either way)
 set -e
 P=distros/devuan
 L=/usr/local/libexec/schema-init
@@ -23,7 +20,16 @@ fi
 
 make install
 install -d -m 0755 /etc/schema-init/services $L/sysv
-install -m 0644 $P/services/*.svc /etc/schema-init/services/
+install -d -m 0755 $L/shipped
+for f in $P/services/*.svc; do
+    n=$(basename "$f"); t=/etc/schema-init/services/$n
+    if [ -e "$t" ] && ! cmp -s "$t" "$f" && ! cmp -s "$t" "$L/shipped/$n"; then
+        echo "kept your edited $t (new version: $f)"
+    else
+        install -m 0644 "$f" "$t"
+        install -m 0644 "$f" "$L/shipped/$n"
+    fi
+done
 install -m 0755 scripts/schema-mount-fstab $P/scripts/devuan-boot $P/scripts/devuan-coldplug $P/scripts/schema-halt $L/
 
 for f in halt shutdown; do
@@ -35,6 +41,9 @@ ln -sf /usr/sbin/shutdown.sysvinit $L/sysv/shutdown
 
 install -m 0755 $P/grub.d/11_schema-init /etc/grub.d/11_schema-init
 update-grub
+if [ "$(cat /proc/1/comm)" = schema-init ]; then
+    schema-ctl reexec || echo "PID 1 keeps running the previous schema-init until the next reboot."
+fi
 echo
 echo "Installed. sysvinit is still the default boot entry."
 echo "Reboot and pick a 'schema-init:' entry in the GRUB menu to try it."

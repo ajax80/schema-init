@@ -34,7 +34,8 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 
 - `make install`: binaries to `/usr/bin` (`schema-init`, `schema-ctl`,
   `schema-journal-sink`, ...).
-- Copies the service files in `services/` to `/etc/schema-init/services/`.
+- Copies the service files in `services/` to `/etc/schema-init/services/`,
+  keeping any you have edited (it prints which).
 - Copies the boot helpers in `scripts/` to `/usr/local/libexec/schema-init/`.
 - Diverts `/usr/sbin/halt` and `/usr/sbin/shutdown` with `dpkg-divert` and puts a
   small wrapper in their place (see Shutdown below). sysvinit's originals stay
@@ -49,7 +50,7 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 |---|---|---|
 | `udevd`, `udev-coldplug` | `eudev` | `/sbin/udevd`, then `udevadm trigger` + `settle` |
 | `mount-fstab` | `mountall.sh` | mounts `/etc/fstab` |
-| `devuan-boot` | `bootmisc.sh`, `x11-common`, `networking` (lo) | loopback up, `swapon -a`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
+| `devuan-boot` | `bootmisc.sh`, `x11-common`, `networking` (lo), `kmod`, `hwclock.sh` | loopback up, `swapon -a`, `/etc/modules`, RTC if `LOCAL`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
 | `sysctl` | `procps` | `sysctl --system` |
 | `journal-sink` | `rsyslog` | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
 | `dbus` | `dbus` | `dbus-daemon --system --nofork` |
@@ -91,6 +92,10 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
 
 ## Known
 
+- `tmpfs` lines in `/etc/fstab` (and `RAMTMP=yes`) are not mounted under
+  schema-init; `/tmp` stays on disk.
+- `halt` powers off. Under schema-init `shutdown` only takes `now` (no delayed
+  shutdown); `-w` and `--help` go to sysvinit's tools.
 - No fsck at boot under schema-init (sysvinit's `checkroot.sh`/`checkfs.sh` do
   that). Boot the sysvinit entry now and then, or `touch /forcefsck` before it.
 - `last` shows sessions ending in "crash": schema-init does not write wtmp

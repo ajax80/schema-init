@@ -1,6 +1,8 @@
 #!/bin/sh
 ip link set lo up
 swapon -a
+sed -e 's/#.*//' /etc/modules 2>/dev/null | while read -r m args; do [ -n "$m" ] && modprobe "$m" $args; done
+grep -qx LOCAL /etc/adjtime 2>/dev/null && command -v hwclock >/dev/null && hwclock --hctosys --localtime
 for d in /tmp/.X11-unix /tmp/.ICE-unix; do
     if [ -L "$d" ] || { [ -e "$d" ] && [ ! -d "$d" ]; } || { [ -d "$d" ] && [ "$(stat -c %u "$d")" != 0 ]; }; then
         rm -rf "$d"
