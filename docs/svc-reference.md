@@ -78,7 +78,7 @@ ready_path=/run/dbus/system_bus_socket
 |-----|---------|-------------|
 | `env_file` | — | Read `KEY=VALUE` lines from this file into the service's environment at each spawn (systemd `EnvironmentFile=`). Repeatable, up to 4 files and 64 variables; only the first 64 KiB of a file is read. A leading `-` makes the file optional; a missing required file fails the spawn. |
 | `exec_pre` | — | A command run before `exec` at every spawn (systemd `ExecStartPre=`). Absolute path, arguments split like a shell would with quotes but no shell; up to 8. Prefix `+` to run it as root before hardening and the `user=` drop; without it the command runs as the service's user, after hardening. Prefix `-` to ignore its failure; otherwise a failing command fails the spawn and the service enters the recovery arc. |
-| `expand_args` | `0` | `1`: expand `$VAR` and `${VAR}` in `args` and `exec_pre` from the service's environment (`env`, `env_file`) at spawn. Off by default, since there is no shell. |
+| `expand_args` | `0` | `1`: expand `$VAR` and `${VAR}` in `args` and `exec_pre` from the service's environment (`env`, `env_file`) at spawn. A bare `$VAR` splits into words; if the result passes 63 words (`args`) or 32 (`exec_pre`) the spawn fails instead of truncating. Off by default, since there is no shell. |
 
 ## Conditions
 

@@ -628,12 +628,15 @@ int service_env_file_read(const char *path, char **pairs, int max) {
 static int split_words(const char *s, char **out, int max, int relax);
 
 int service_expand_argv(char *const *argv, char **out, int max) {
-    int n = 0;
-    for (int i = 0; argv[i] && n < max; i++) {
+    int n = 0, i;
+    for (i = 0; argv[i]; i++) {
+        if (n >= max) return -1;
         const char *a = argv[i];
         if (a[0] == '$' && env_name_ok(a + 1, strlen(a + 1))) {
             const char *v = getenv(a + 1);
-            n += split_words(v ? v : "", out + n, max - n, 1);
+            int k = split_words(v ? v : "", out + n, max - n, 1);
+            if (k < 0) return -1;
+            n += k;
             continue;
         }
         char *res = NULL;
@@ -690,6 +693,7 @@ static int split_words(const char *s, char **out, int max, int relax) {
         *o = '\0';
         out[n++] = w;
     }
+    if (*(s + strspn(s, " \t\n\r"))) goto bad;
     return n;
 bad:
     while (n) free(out[--n]);
@@ -728,7 +732,13 @@ static void svc_run_pre(const service_t *svc, int privileged) {
         if (nw <= 0) _exit(1);
         w[nw] = NULL;
         if (svc->expand_args) {
-            x[service_expand_argv(w, x, 32)] = NULL;
+            int nx = service_expand_argv(w, x, 32);
+            if (nx < 0) {
+                dprintf(2, "[schema-init] %s: exec_pre %s expands to more than 32 words\n",
+                        svc->name, c);
+                _exit(1);
+            }
+            x[nx] = NULL;
         } else {
             memcpy(x, w, nw * sizeof *w);
             x[nw] = NULL;
@@ -1362,7 +1372,12 @@ int service_spawn(service_t *svc) {
         close_range(3 + svc->listen_open, ~0U, 0);
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
-            xargv[service_expand_argv(svc->argv, xargv, 63)] = NULL;
+            int nx = service_expand_argv(svc->argv, xargv, 63);
+            if (nx < 0) {
+                dprintf(2, "[schema-init] %s: args expand to more than 63 words\n", svc->name);
+                _exit(1);
+            }
+            xargv[nx] = NULL;
             argv = xargv;
         }
         execv(svc->exec, argv);
