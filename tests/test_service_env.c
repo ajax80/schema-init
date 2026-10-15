@@ -150,6 +150,12 @@ int main(void) {
         assert(strlen(svc.argv[1]) == 506 && strcmp(svc.argv[2], "y") == 0 && !svc.argv[3]);
         f = fopen(p, "w");
         assert(f);
+        fprintf(f, "name=o\nexec=/bin/true\n%*s\n", 600, "args=x");
+        fclose(f);
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(p, &svc) == -1);
+        f = fopen(p, "w");
+        assert(f);
         fprintf(f, "name=o\nexec=/bin/true\nenv=A=%0*d\n", 700, 0);
         fclose(f);
         memset(&svc, 0, sizeof svc);

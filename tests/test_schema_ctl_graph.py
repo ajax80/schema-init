@@ -69,8 +69,13 @@ check("path in name refused", rc == 1)
 
 w("longc.svc", "name=longc\nexec=/bin/true\n#" + "x" * 700 + "\ndep=dbus\n")
 w("longd.svc", "name=longd\nexec=/bin/true\ndep=" + "x" * 600 + "dep=evil\n")
-rc, out, _ = graph()
+w("longs.svc", "name=longs\nexec=/bin/true\n" + " " * 600 + "dep=evil\n")
+w("longg.grp", "name=longg\nmember=dbus\nmember=" + "x" * 600 + "member=evil\nmember=cups\n")
+rc, out, err = graph()
 check("long comment line skipped, later dep kept", '"longc" -> "dbus";' in out)
-check("over-long line drops the unit like PID 1", '"longd"' not in out and '"evil"' not in out)
+check("over-long line drops the unit like PID 1", '"longd"' not in out and "longd.svc: line longer than 511 bytes" in err)
+check("over-long blank line is not a comment", '"longs"' not in out)
+check("group keeps its other members, like PID 1",
+      '"longg" -> "dbus" [style=dashed];' in out and '"longg" -> "cups" [style=dashed];' in out and '"evil"' not in out)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
