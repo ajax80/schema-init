@@ -45,13 +45,14 @@ No systemd. No OpenRC. No journal daemon. At its core, just a statically linked 
 
 ## Try it
 
-Your systemd boot entries stay in the GRUB menu, and you can back out with one reboot at every step.
+Your existing boot entries (systemd, or sysvinit on Devuan) stay in the GRUB menu, and you can back out with one reboot at every step.
 
 | You want to… | Do this | What it touches |
 |---|---|---|
 | Try it without risking a disk | [Build, test, boot it in a VM](docs/install.md#build-from-source-any-distro) — or boot the installer ISO in a VM | Nothing on your machine |
 | Put it on a spare machine | [Install from the ISO](docs/install.md#fresh-install--the-installer-iso) | The disk you pick in the installer |
 | Convert your Fedora KDE install | [COPR + `schema-migrate`](docs/install.md#convert-fedora-kde-in-place) | Adds a non-default boot entry; one command undoes it |
+| Run it on Devuan (no systemd) | [`distros/devuan`](distros/devuan/README.md): `make` + `install.sh`, beside sysvinit | Adds a non-default boot entry; `install.sh --remove` undoes it |
 | Run it on another distro | [`setup.sh` from source](docs/install.md#build-from-source-any-distro) | Adds a non-default boot entry |
 
 On Fedora KDE the short version is:
