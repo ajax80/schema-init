@@ -107,6 +107,7 @@ for p in "$RPMTMP"/RPMS/x86_64/schema-init-[0-9]*.rpm "$RPMTMP"/RPMS/x86_64/sche
     install -m0644 "$p" "$PAYLOAD/rpms/"
 done
 ls "$PAYLOAD/rpms"
+"$REPO/scripts/check-rail-exec.sh" "$HERE/rail/services" "$HERE/schema.ks" "$PAYLOAD"/rpms/*.rpm
 
 echo "=== injecting kickstart + payload into the ISO ==="
 # --add drops the payload tree onto the ISO; the boot media mounts at
