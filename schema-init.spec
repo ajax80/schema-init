@@ -298,6 +298,10 @@ if [ -f "$svcd/sysprep.svc" ]; then
         touch "$st/enabled-units-imported"
         echo "schema-init: imported the services systemd had enabled; they start at next boot"
     fi
+    if grep -qsx 'exec=/usr/local/bin/seatd-run.sh' "$svcd/seatd.svc" && [ ! -e /usr/local/bin/seatd-run.sh ]; then
+        rm -f "$svcd/seatd.svc"
+        echo "schema-init: removed seatd.svc; the installer never shipped the seatd-run.sh it starts"
+    fi
 fi
 
 # zram-recompress.svc joined the rail after some installs went out; give it to

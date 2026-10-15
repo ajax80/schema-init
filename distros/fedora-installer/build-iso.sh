@@ -81,6 +81,7 @@ gcc -shared -fPIC -o "$PAYLOAD/scripts/mock_sd.so" \
 # reference rail's exec paths (schema-udev as udev, lightdm as DM) don't exist
 # on a fresh Fedora install and hang the box.
 cp -a --no-preserve=ownership "$HERE/rail/services/." "$PAYLOAD/services/"
+rm -f "$PAYLOAD/services/seatd.svc"
 chmod -R go-w "$PAYLOAD/services"
 
 # kernel-install plugin: regenerates a schema-init BLS entry on every dnf kernel
