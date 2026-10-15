@@ -56,7 +56,7 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 | `dbus` | `dbus` | `dbus-daemon --system --nofork` |
 | `elogind` | `elogind` | `/usr/libexec/elogind` |
 | `network-manager` | `network-manager` | `NetworkManager --no-daemon` |
-| `slim` | `slim` | `slim -n` |
+| `slim` or `lightdm` | `slim` / `lightdm` | `slim -n` / `lightdm`; install.sh picks the one in `/etc/X11/default-display-manager` |
 | `sshd`, `cron` | `ssh`, `cron` | `sshd -D`, `cron -f` |
 | `getty-tty1` … `getty-tty6` | `inittab` gettys | `getty 38400 ttyN` |
 | `logrotate` | cron.daily logrotate | `logrotate` at 00:10 |
@@ -100,8 +100,10 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
   that). Boot the sysvinit entry now and then, or `touch /forcefsck` before it.
 - `last` shows sessions ending in "crash": schema-init does not write wtmp
   boot/shutdown records.
-- Only the sysvinit + Xfce + SLiM install has been tested. Another display
-  manager needs its own `.svc` (run it in the foreground).
+- SLiM and LightDM are supported. Another display manager needs its own `.svc`
+  (run it in the foreground); install.sh says so when it finds none.
+- LightDM's very first start on a fresh install can fail once while it creates
+  `/var/lib/lightdm/data`; schema-init restarts it and it comes up.
 - No GUI wizard on Devuan; `install.sh` is the whole path.
 
 EXPERIMENTAL. Try it on a machine you can reinstall.

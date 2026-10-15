@@ -21,8 +21,16 @@ fi
 make install
 install -d -m 0755 /etc/schema-init/services $L/sysv
 install -d -m 0755 $L/shipped
+dm=$(basename "$(cat /etc/X11/default-display-manager 2>/dev/null)")
 for f in $P/services/*.svc; do
     n=$(basename "$f"); t=/etc/schema-init/services/$n
+    case "$n" in
+        slim.svc|lightdm.svc)
+            if [ "$n" != "$dm.svc" ]; then
+                cmp -s "$t" "$L/shipped/$n" && rm -f "$t" "$L/shipped/$n"
+                continue
+            fi ;;
+    esac
     if [ -e "$t" ] && ! cmp -s "$t" "$f" && ! cmp -s "$t" "$L/shipped/$n"; then
         echo "kept your edited $t (new version: $f)"
     else
@@ -44,6 +52,7 @@ update-grub
 if [ "$(cat /proc/1/comm)" = schema-init ]; then
     schema-ctl reexec || echo "PID 1 keeps running the previous schema-init until the next reboot."
 fi
+[ -e "/etc/schema-init/services/$dm.svc" ] || echo "No service for display manager '${dm:-none}': write /etc/schema-init/services/$dm.svc (run it in the foreground)."
 echo
 echo "Installed. sysvinit is still the default boot entry."
 echo "Reboot and pick a 'schema-init:' entry in the GRUB menu to try it."
