@@ -175,6 +175,12 @@ int main(void) {
         unlink(p);
         rmdir(gd);
     }
+    snprintf(p, sizeof p, "%s/q.svc", dir3);
+    write_svc(p, "name=q\nargs=-v\nargs=-x\nexec=/bin/true\nargs=-w\n");
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.argv[0] == svc.exec && !strcmp(svc.argv[1], "-v") && !strcmp(svc.argv[2], "-x")
+           && !strcmp(svc.argv[3], "-w") && !svc.argv[4]);
     snprintf(p, sizeof p, "%s/n.svc", dir3);
     for (int extra = 0; extra < 2; extra++) {
         FILE *f = fopen(p, "w");

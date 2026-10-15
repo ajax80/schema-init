@@ -1895,8 +1895,9 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         strncpy(svc->exec, val, sizeof(svc->exec) - 1);
         if (svc->argv[0] != svc->exec) free(svc->argv[0]);
         svc->argv[0] = svc->exec;
-        if (!pc->dropin || pc->argc == 0) pc->argc = 1;
+        if (pc->argc == 0) pc->argc = 1;
     } else if (strcmp(line, "args") == 0) {
+        if (pc->argc == 0) pc->argc = 1;
         if (pc->argc >= MAX_ARGV - 1) {
             fprintf(stderr, "[schema-init] %s: more than %d args= lines\n",
                     svc->name[0] ? svc->name : path, MAX_ARGV - 2);
