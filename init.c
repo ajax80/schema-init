@@ -269,8 +269,14 @@ static void load_configured_modules(void) {
         FILE *f = fopen(g.gl_pathv[i], "r");
         if (!f) continue;
         char line[256];
-        while (fgets(line, sizeof line, f)) {
+        int r;
+        while ((r = svc_read_line(f, line, sizeof line)) != 0) {
             char *p = line;
+            if (r < 0) {
+                printf("[schema-init] %s: line longer than %zu bytes — ignored\n",
+                       g.gl_pathv[i], sizeof line - 1);
+                continue;
+            }
             while (*p == ' ' || *p == '\t') p++;
             if (*p == '#' || *p == ';' || *p == '\0') continue;
             p[strcspn(p, " \t\r\n")] = '\0';
@@ -574,8 +580,14 @@ static void load_env_file(void) {
     if (!f) { close(fd); return; }
 
     char line[512];
-    while (fgets(line, sizeof(line), f)) {
+    int r;
+    while ((r = svc_read_line(f, line, sizeof(line))) != 0) {
         char *start = line;
+        if (r < 0) {
+            fprintf(stderr, "[schema-init] %s: line longer than %zu bytes — ignored\n",
+                    path, sizeof(line) - 1);
+            continue;
+        }
         while (*start == ' ' || *start == '\t') start++;
 
         char *end = start + strlen(start) - 1;
