@@ -559,4 +559,15 @@ for unit, why in (("ExecStart=/bin/x " + " ".join(["a"] * 63), "arguments (limit
         check("over-cap skipped: " + why, why in str(e))
 check("62 args kept", si.unit_to_svc("big", si.parse_unit("[Service]\nExecStart=/bin/x " + " ".join(["a"] * 62) + "\n")).count("args=a\n") == 62)
 
+try:
+    si.unit_to_svc("long", si.parse_unit("[Service]\nExecStart=/bin/x " + "a" * 600 + "\n")); check("over-long line skipped", False)
+except si.Skip as e:
+    check("over-long line skipped", "args= line is" in str(e))
+
+_names = ["d%03d%s" % (i, "x" * 20) for i in range(40)]
+_lb = si.unit_to_svc("deps", si.parse_unit("[Unit]\nRequires=" + " ".join(n + ".service" for n in _names)
+                                           + "\n[Service]\nExecStart=/bin/x\n"), known=set(_names))
+check("long notes comment does not skip the unit",
+      "exec=/bin/x\n" in _lb and max(len(l) for l in _lb.splitlines()) > 511)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
