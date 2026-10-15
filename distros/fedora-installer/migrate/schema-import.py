@@ -367,6 +367,12 @@ def timer_lines(sections):
     return lines, notes
 
 
+def _check_line_len(lines):
+    for ln in lines:
+        if not ln.lstrip().startswith(("#", ";")) and len(ln.encode()) > 511:
+            raise Skip("%s= line is %d bytes (limit 511)" % (ln.split("=", 1)[0], len(ln.encode())))
+
+
 def timer_to_svc(name, timer_sections, svc_sections, known=None, unit=None):
     """A .timer and the .service it starts as one schema timer .svc, named after
     the timer."""
@@ -394,6 +400,7 @@ def timer_to_svc(name, timer_sections, svc_sections, known=None, unit=None):
             out.append(ln)
     if tnotes:
         out.insert(0, "# schema-import: " + "; ".join(tnotes))
+    _check_line_len(out + tlines)
     return "\n".join(out + tlines) + "\n"
 
 
@@ -852,9 +859,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     for w in reversed(warns):
         lines.insert(0, "%s%s" % (WARN_PREFIX, w))
 
-    for ln in lines:
-        if len(ln.encode()) > 511:
-            raise Skip("%s= line is %d bytes (limit 511)" % (ln.split("=", 1)[0], len(ln.encode())))
+    _check_line_len(lines)
     return "\n".join(lines) + "\n"
 
 

@@ -564,4 +564,10 @@ try:
 except si.Skip as e:
     check("over-long line skipped", "args= line is" in str(e))
 
+_names = ["d%03d%s" % (i, "x" * 20) for i in range(40)]
+_lb = si.unit_to_svc("deps", si.parse_unit("[Unit]\nRequires=" + " ".join(n + ".service" for n in _names)
+                                           + "\n[Service]\nExecStart=/bin/x\n"), known=set(_names))
+check("long notes comment does not skip the unit",
+      "exec=/bin/x\n" in _lb and max(len(l) for l in _lb.splitlines()) > 511)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
