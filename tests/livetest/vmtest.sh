@@ -76,6 +76,15 @@ name=test-readypath
 exec=/usr/bin/readypath.sh
 ready_path=/run/test-rp.ready
 EOF
+printf 'ENVF_V=from-file\n' > "$ROOT/etc/test-env"
+cat > "$ROOT/etc/schema-init/services/test-envfile.svc" <<'EOF'
+name=test-envfile
+exec=/bin/sh
+args=-c
+args=echo "ENVF=$ENVF_V" > /run/test-envfile.out
+env_file=/etc/test-env
+oneshot=1
+EOF
 mkdir -p "$ROOT"/{boot/efi,home,root,tmp,var/tmp}
 
 # Stale ready_path probe: run 1 leaves its marker behind and crashes; run 2
@@ -571,6 +580,13 @@ sleep 3
 echo "mountns-late-on: $(cat /run/mountns-late-on 2>&1)"
 echo "mountns-late-off: $(cat /run/mountns-late-off 2>&1)"
 echo "===== MOUNTNS-END ====="
+echo "ENVFILE-OK: $(cat /run/test-envfile.out 2>&1)"
+chmod g+w /etc/test-env
+rm -f /run/test-envfile.out
+/bin/schema-ctl restart test-envfile >/dev/null 2>&1
+sleep 1
+echo "ENVFILE-UNSAFE: $(cat /run/test-envfile.out 2>&1 | head -1) | $(grep -h 'REFUSED env_file' /run/log/schema-init/test-envfile.log /var/log/schema-init/test-envfile.log 2>/dev/null | head -1)"
+chmod g-w /etc/test-env
 chmod g+w /etc/schema-init/services/test-readypath.svc
 echo "UNSAFE-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
 echo "UNSAFE-AFTER: $(/bin/schema-ctl status test-readypath 2>&1 | head -1)"
@@ -704,6 +720,8 @@ for step in "services down in" "cgroups killed" "control socket and shm released
 done
 # .svc.d drop-ins: applied at boot, and a drop-in added after boot is "modified".
 grep -Eq "DROPIN-PROBE arg=\[dropin-arg\] argc=\[1\] var=\[dropin\] mem=\[67108864\]" "$SERIAL" || { echo "  MISS: drop-in not applied (args reset / env reset / mem_limit)"; pass=0; }
+grep -Eq "ENVFILE-OK: ENVF=from-file" "$SERIAL" || { echo "  MISS: env_file not loaded"; pass=0; }
+grep -Eq "ENVFILE-UNSAFE: .*No such file.*REFUSED env_file /etc/test-env" "$SERIAL" || { echo "  MISS: group-writable env_file not refused"; pass=0; }
 grep -Eq "UNSAFE-RELOAD: err: .* 1 .svc file\(s\) refused" "$SERIAL" || { echo "  MISS: reload not refused with a group-writable .svc"; pass=0; }
 grep -Eq "UNSAFE-AFTER: .*FUNDAMENTAL" "$SERIAL" || { echo "  MISS: refused reload evicted a running service"; pass=0; }
 grep -Eq "DROPIN-RELOAD: err: .*'test-dropin' modified since boot" "$SERIAL" || { echo "  MISS: reload not refused after a drop-in was added"; pass=0; }

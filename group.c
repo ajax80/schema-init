@@ -1,7 +1,10 @@
 #include "group.h"
 #include "schema.h"
+#include "service.h"
 
 #include <stdio.h>
+#include <errno.h>
+#include <unistd.h>
 #include <string.h>
 #include <time.h>
 #include <dirent.h>
@@ -114,8 +117,17 @@ int groups_load(const char *dir, group_t *table, int max) {
         }
 
         snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
-        f = fopen(path, "r");
-        if (!f) continue;
+        int fd = service_open_trusted(path);
+        if (fd < 0) {
+            if (errno == EPERM) {
+                fprintf(stderr, "[schema-init] REFUSED %s: not a regular file owned by root and "
+                        "writable only by its owner — group not loaded (chown root:root; chmod go-w)\n", path);
+                svc_refused++;
+            }
+            continue;
+        }
+        f = fdopen(fd, "r");
+        if (!f) { close(fd); continue; }
 
         grp = &table[count];
         memset(grp, 0, sizeof(*grp));

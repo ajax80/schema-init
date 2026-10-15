@@ -561,8 +561,12 @@ static int env_name_ok(const char *s, size_t n) {
 }
 
 int service_env_file_read(const char *path, char **pairs, int max) {
-    FILE *f = fopen(path, "re");
-    if (!f) return -1;
+    int fd = service_open_trusted(path);
+    FILE *f = fd < 0 ? NULL : fdopen(fd, "r");
+    if (!f) {
+        if (fd >= 0) close(fd);
+        return -1;
+    }
     char *buf = malloc(65537);
     size_t len = buf ? fread(buf, 1, 65536, f) : 0;
     if (len == 65536 && fgetc(f) != EOF)
@@ -1207,6 +1211,11 @@ int service_spawn(service_t *svc) {
             int opt = *ef == '-';
             int got = service_env_file_read(ef + opt, file_env + file_envc, 64 - file_envc);
             if (got < 0) {
+                if (errno == EPERM) {
+                    dprintf(2, "[schema-init] %s: REFUSED env_file %s: not a regular file owned by root "
+                            "and writable only by its owner (chown root:root; chmod go-w)\n", svc->name, ef + opt);
+                    _exit(1);
+                }
                 if (opt) continue;
                 dprintf(2, "[schema-init] %s: env_file %s: %s\n", svc->name, ef, strerror(errno));
                 _exit(1);
@@ -2060,17 +2069,28 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
 
 int svc_refused;
 
-static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path) {
-    char line[512];
+int service_open_trusted(const char *path) {
     struct stat st;
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -1;
     if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) ||
         (st.st_uid != 0 && st.st_uid != geteuid()) || (st.st_mode & 022)) {
-        fprintf(stderr, "[schema-init] REFUSED %s: not a regular file owned by root and "
-                "writable only by its owner — service not loaded (chown root:root; chmod go-w)\n", path);
-        svc_refused++;
         close(fd);
+        errno = EPERM;
+        return -1;
+    }
+    return fd;
+}
+
+static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path) {
+    char line[512];
+    int fd = service_open_trusted(path);
+    if (fd < 0) {
+        if (errno == EPERM) {
+            fprintf(stderr, "[schema-init] REFUSED %s: not a regular file owned by root and "
+                    "writable only by its owner — service not loaded (chown root:root; chmod go-w)\n", path);
+            svc_refused++;
+        }
         return -1;
     }
     FILE *f = fdopen(fd, "r");

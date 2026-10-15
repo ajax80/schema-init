@@ -1,6 +1,7 @@
 #include "../service.h"
 #include <assert.h>
 #include <stdio.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
@@ -155,6 +156,13 @@ int main(void) {
     for (int i = 0; i < n; i++) assert(strcmp(pairs[i], want[i]) == 0);
     assert(service_env_file_read(p, pairs, 2) == 2);
     assert(service_env_file_read("/nonexistent/schema-env", pairs, 32) == -1);
+    assert(chmod(p, 0664) == 0);
+    errno = 0;
+    assert(service_env_file_read(p, pairs, 32) == -1 && errno == EPERM);
+    assert(chmod(p, 0646) == 0);
+    assert(service_env_file_read(p, pairs, 32) == -1 && errno == EPERM);
+    assert(chmod(p, 0644) == 0);
+    assert(service_env_file_read(p, pairs, 2) == 2);
 
     setenv("OPTS", " -a  -b\tc ", 1);
     setenv("ONE", "x y", 1);
