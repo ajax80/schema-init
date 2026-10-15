@@ -53,11 +53,12 @@ def _source_roots():
     return roots
 
 
-def find_source(relpath):
+def find_source(*relpaths):
     for root in _source_roots():
-        cand = os.path.join(root, relpath)
-        if os.path.exists(cand):
-            return cand
+        for relpath in relpaths:
+            cand = os.path.join(root, relpath)
+            if os.path.exists(cand):
+                return cand
     return None
 
 
@@ -95,6 +96,7 @@ def _adv():
 
 
 DOCTOR_TIMERS = {"schema-doctor-periodic"}
+SERVICE_DIRS = ["distros/fedora-installer/rail/services", "distros/fedora-kde/services"]
 
 
 def deploy_prevent_set(manifest, dry_run=False):
@@ -120,8 +122,7 @@ def deploy_prevent_set(manifest, dry_run=False):
     for name in ps["service"]:
         if name in skip:
             continue
-        src = (find_source("distros/fedora-installer/rail/services/" + name + ".svc")
-               or find_source("distros/fedora-kde/services/" + name + ".svc"))
+        src = find_source(*(d + "/" + name + ".svc" for d in SERVICE_DIRS))
         if src:
             dst = P("etc/schema-init/services/" + name + ".svc")
             _copy_into(src, dst, manifest, dry_run)
@@ -656,11 +657,7 @@ _LOCALBIN_RE = re.compile(r"/usr/local/bin/([A-Za-z0-9._-]+)")
 
 def _find_helper_src(name):
     base = HELPER_ALIASES.get(name, name)
-    for d in HELPER_DIRS:
-        cand = find_source(os.path.join(d, base))
-        if cand:
-            return cand
-    return None
+    return find_source(*(os.path.join(d, base) for d in HELPER_DIRS))
 
 
 def install_unit_helpers(manifest, dry_run=False):
