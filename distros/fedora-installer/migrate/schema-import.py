@@ -740,6 +740,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                 expanded.append((pre, pa))
         pres = expanded
 
+    if len(argv) > 63:
+        raise Skip("ExecStart= has %d arguments (limit 62)" % (len(argv) - 1))
+    for pre, pa in pres:
+        if len(pa) > 32:
+            raise Skip("ExecStartPre= has %d words (limit 32)" % len(pa))
+
     lines = ["name=%s" % name, "exec=%s" % argv[0]]
     for a in argv[1:]:
         lines.append("args=%s" % a)
