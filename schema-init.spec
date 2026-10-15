@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.13
+Version:        0.4.14
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -506,6 +506,22 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Thu Oct 15 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.14-1
+- PID 1 refuses a .svc, drop-in or .svc.d not owned by root or writable by
+  others; an unsafe services dir is warned about and reload is refused
+- env_file and PID 1's env file checked for owner/mode like a .svc
+- No more silent truncation: over-long .svc lines, args= past the word cap
+  (now 62) and expand_args overflow are refused instead of cut; schema-ctl,
+  .grp, the env file and modules-load.d read whole lines; args= before exec=
+  is kept
+- exec_pre: landlock covers plain exec_pre; importer maps %n/%N/%p/%t
+- schema-udev: an orphaned ISO-rail schema-udev is brought under
+  supervision on upgrade; root= accepts hex, PARTLABEL, PARTNROFF and
+  quotes; one /proc/cmdline tokenizer for root=, IMPORT{cmdline} and
+  net.ifnames
+- Installer: seatd.svc dropped from the ISO rail (healed on upgrade);
+  build-iso fails when a rail service's exec= is shipped by nothing
+
 * Wed Oct 14 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.13-1
 - schema-analyze: boot timing recorded across reboots, history and regress
   reports (first Rust component; shipped in the base package)
