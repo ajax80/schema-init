@@ -182,6 +182,11 @@ int main(void) {
     char *min[] = {"/bin/f", "$MANY", NULL};
     assert(service_expand_argv(min, out, 5) == 5);
     assert(service_expand_argv(min, out, 4) == -1);
+    char *ein[] = {"/bin/f", "a", "$UNSET_V", NULL};
+    assert(service_expand_argv(ein, out, 2) == 2);
+    setenv("EMPTY_V", "  ", 1);
+    char *ein2[] = {"/bin/f", "a", "$EMPTY_V", NULL};
+    assert(service_expand_argv(ein2, out, 2) == 2);
     setenv("MANY", "a b c d   ", 1);
     assert(service_expand_argv(min, out, 5) == 5);
 

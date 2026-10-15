@@ -628,9 +628,8 @@ int service_env_file_read(const char *path, char **pairs, int max) {
 static int split_words(const char *s, char **out, int max, int relax);
 
 int service_expand_argv(char *const *argv, char **out, int max) {
-    int n = 0, i;
-    for (i = 0; argv[i]; i++) {
-        if (n >= max) return -1;
+    int n = 0;
+    for (int i = 0; argv[i]; i++) {
         const char *a = argv[i];
         if (a[0] == '$' && env_name_ok(a + 1, strlen(a + 1))) {
             const char *v = getenv(a + 1);
@@ -639,6 +638,7 @@ int service_expand_argv(char *const *argv, char **out, int max) {
             n += k;
             continue;
         }
+        if (n >= max) return -1;
         char *res = NULL;
         size_t rlen = 0;
         FILE *m = open_memstream(&res, &rlen);
@@ -734,9 +734,10 @@ static void svc_run_pre(const service_t *svc, int privileged) {
         if (svc->expand_args) {
             int nx = service_expand_argv(w, x, 32);
             if (nx < 0) {
-                dprintf(2, "[schema-init] %s: exec_pre %s expands to more than 32 words\n",
-                        svc->name, c);
-                _exit(1);
+                dprintf(2, "[schema-init] %s: exec_pre %s expands to more than 32 words%s\n",
+                        svc->name, c, ignore ? ", ignored" : "");
+                if (!ignore) _exit(1);
+                continue;
             }
             x[nx] = NULL;
         } else {
