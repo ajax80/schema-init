@@ -233,6 +233,23 @@ int main(void) {
         drop(&s);
     }
 
+    put("pe.svc", "name=pe\nargs=-v\n");
+    mk("pe.svc.d");
+    put("pe.svc.d/10.conf", "args=\nexec=/bin/e\nargs=-w\n");
+    assert(load("pe.svc", &s) == 0);
+    assert(s.argv[0] == s.exec && !strcmp(s.exec, "/bin/e"));
+    assert(s.argv[1] && !strcmp(s.argv[1], "-w"));
+    assert(!s.argv[2]);
+    drop(&s);
+    put("pf.svc", "name=pf\nargs=-v\n");
+    mk("pf.svc.d");
+    put("pf.svc.d/10.conf", "exec=/bin/f\nargs=-w\n");
+    assert(load("pf.svc", &s) == 0);
+    assert(s.argv[1] && !strcmp(s.argv[1], "-v"));
+    assert(s.argv[2] && !strcmp(s.argv[2], "-w"));
+    assert(!s.argv[3]);
+    drop(&s);
+
     printf("all svc-dropins tests passed\n");
     return 0;
 }
