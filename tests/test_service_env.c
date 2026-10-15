@@ -128,6 +128,17 @@ int main(void) {
     snprintf(p, sizeof p, "%s/j.svc", dir3);
     write_svc(p, "name=j\nexec=/bin/true\nenv_file=-\n");
     assert(service_load_one(p, &svc) == -1);
+    snprintf(p, sizeof p, "%s/o.svc", dir3);
+    for (int len = 511; len <= 512; len++) {
+        for (int nl = 0; nl < 2; nl++) {
+            FILE *f = fopen(p, "w");
+            assert(f);
+            fprintf(f, "name=o\nexec=/bin/true\nargs=%0*d%s", len - 5, 0, nl ? "\n" : "");
+            fclose(f);
+            memset(&svc, 0, sizeof svc);
+            assert(service_load_one(p, &svc) == (len == 511 ? 0 : -1));
+        }
+    }
     snprintf(p, sizeof p, "%s/n.svc", dir3);
     for (int extra = 0; extra < 2; extra++) {
         FILE *f = fopen(p, "w");

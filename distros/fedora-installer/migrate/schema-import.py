@@ -852,6 +852,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     for w in reversed(warns):
         lines.insert(0, "%s%s" % (WARN_PREFIX, w))
 
+    for ln in lines:
+        if len(ln.encode()) > 511:
+            raise Skip("%s= line is %d bytes (limit 511)" % (ln.split("=", 1)[0], len(ln.encode())))
     return "\n".join(lines) + "\n"
 
 
