@@ -139,7 +139,6 @@ cp -a --no-preserve=ownership "$SRC/services/." /etc/schema-init/services/
 chmod -R go-w /etc/schema-init/services
 rm -f /etc/schema-init/services/*.example        # .svc.example are templates, not live
 rm -f /etc/schema-init/services/schema-migrate-finish.svc  # finishes an in-place migration; an ISO install never runs one
-rm -f /etc/schema-init/services/seatd.svc  # schema-migrate deploys seatd with its seatd-run.sh; an ISO install has neither
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sysprep.sh" /usr/local/bin/schema-sysprep.sh  # sysprep.svc execs this
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-sshd-start.sh" /usr/local/bin/schema-sshd-start.sh  # sshd.svc execs this
 [ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-sysctl-apply" /usr/libexec/schema-init/schema-sysctl-apply  # sysctl.svc execs this
