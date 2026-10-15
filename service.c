@@ -1213,7 +1213,9 @@ int service_spawn(service_t *svc) {
             if (got < 0) {
                 if (errno == EPERM) {
                     dprintf(2, "[schema-init] %s: REFUSED env_file %s: not a regular file owned by root "
-                            "and writable only by its owner (chown root:root; chmod go-w)\n", svc->name, ef + opt);
+                            "and writable only by its owner (chown root:root; chmod go-w)%s\n",
+                            svc->name, ef + opt, opt ? " — optional, skipped" : "");
+                    if (opt) continue;
                     _exit(1);
                 }
                 if (opt) continue;

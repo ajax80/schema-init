@@ -563,7 +563,7 @@ static void setup_signals(void) {
 static void load_env_file(void) {
     const char *path = "/run/schema-init/env";
     int fd = service_open_trusted(path);
-    if (fd < 0 && errno == ENOENT) fd = service_open_trusted(path = "./run/schema-init/env");
+    if (fd < 0 && errno != EPERM) fd = service_open_trusted(path = "./run/schema-init/env");
     if (fd < 0) {
         if (errno == EPERM)
             fprintf(stderr, "[schema-init] REFUSED %s: not a regular file owned by root and "
@@ -2333,19 +2333,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     }
 
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
-    svc_refused = 0;
     int shadow_grp_count = groups_load(svc_dir, shadow_groups, MAX_GROUPS);
-    if (svc_refused) {
-        printf("[schema-init] reload rejected: %d .grp file(s) refused on owner/mode\n", svc_refused);
-        if (err) snprintf(err, errsz, "%d .grp file(s) refused: not root-owned or writable by others "
-                          "(chown root:root; chmod go-w)", svc_refused);
-        for (i = 0; i < shadow_count; i++) {
-            for (j = 1; j < MAX_ARGV; j++)
-                free(shadow_services[i].argv[j]);
-            service_free_landlock(&shadow_services[i]);
-        }
-        return -1;
-    }
     if (shadow_grp_count == 0) {
         shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
     }

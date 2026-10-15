@@ -85,6 +85,14 @@ args=echo "ENVF=$ENVF_V" > /run/test-envfile.out
 env_file=/etc/test-env
 oneshot=1
 EOF
+cat > "$ROOT/etc/schema-init/services/test-envopt.svc" <<'EOF'
+name=test-envopt
+exec=/bin/sh
+args=-c
+args=echo "ENVO=[$ENVF_V]" > /run/test-envopt.out
+env_file=-/etc/test-env
+oneshot=1
+EOF
 mkdir -p "$ROOT"/{boot/efi,home,root,tmp,var/tmp}
 
 # Stale ready_path probe: run 1 leaves its marker behind and crashes; run 2
@@ -584,8 +592,12 @@ echo "ENVFILE-OK: $(cat /run/test-envfile.out 2>&1)"
 chmod g+w /etc/test-env
 rm -f /run/test-envfile.out
 /bin/schema-ctl restart test-envfile >/dev/null 2>&1
-sleep 1
+i=0; while [ $i -lt 20 ] && ! grep -qs 'REFUSED env_file' /run/log/schema-init/test-envfile.log /var/log/schema-init/test-envfile.log; do sleep 0.5; i=$((i+1)); done
 echo "ENVFILE-UNSAFE: $(cat /run/test-envfile.out 2>&1 | head -1) | $(grep -h 'REFUSED env_file' /run/log/schema-init/test-envfile.log /var/log/schema-init/test-envfile.log 2>/dev/null | head -1)"
+rm -f /run/test-envopt.out
+/bin/schema-ctl restart test-envopt >/dev/null 2>&1
+i=0; while [ $i -lt 20 ] && [ ! -s /run/test-envopt.out ]; do sleep 0.5; i=$((i+1)); done
+echo "ENVOPT-UNSAFE: $(cat /run/test-envopt.out 2>&1)"
 chmod g-w /etc/test-env
 chmod g+w /etc/schema-init/services/test-readypath.svc
 echo "UNSAFE-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
@@ -720,6 +732,7 @@ for step in "services down in" "cgroups killed" "control socket and shm released
 done
 # .svc.d drop-ins: applied at boot, and a drop-in added after boot is "modified".
 grep -Eq "DROPIN-PROBE arg=\[dropin-arg\] argc=\[1\] var=\[dropin\] mem=\[67108864\]" "$SERIAL" || { echo "  MISS: drop-in not applied (args reset / env reset / mem_limit)"; pass=0; }
+grep -Eq "ENVOPT-UNSAFE: ENVO=\[\]" "$SERIAL" || { echo "  MISS: optional group-writable env_file not skipped"; pass=0; }
 grep -Eq "ENVFILE-OK: ENVF=from-file" "$SERIAL" || { echo "  MISS: env_file not loaded"; pass=0; }
 grep -Eq "ENVFILE-UNSAFE: .*No such file.*REFUSED env_file /etc/test-env" "$SERIAL" || { echo "  MISS: group-writable env_file not refused"; pass=0; }
 grep -Eq "UNSAFE-RELOAD: err: .* 1 .svc file\(s\) refused" "$SERIAL" || { echo "  MISS: reload not refused with a group-writable .svc"; pass=0; }

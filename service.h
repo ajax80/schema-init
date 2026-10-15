@@ -442,7 +442,7 @@ int  service_hardening_default(void);
 
 int services_load(const char *dir, service_t *table, int max);
 
-/* .svc files, drop-ins and .grp files the last load refused on owner/mode */
+/* .svc files and drop-ins the last services_load refused on owner/mode */
 extern int svc_refused;
 
 /* open read-only; -1 with errno EPERM unless a regular file owned by root

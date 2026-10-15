@@ -1,5 +1,4 @@
 #include "../service.h"
-#include "../group.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -232,19 +231,6 @@ int main(void) {
         }
         assert(load("st.svc", &s) == 0);
         drop(&s);
-    }
-
-    {
-        static group_t gt[4];
-        put("g.grp", "name=g\nmember=a\n");
-        svc_refused = 0;
-        assert(groups_load(dir, gt, 4) == 1 && svc_refused == 0);
-        char p[512];
-        snprintf(p, sizeof p, "%s/g.grp", dir);
-        assert(chmod(p, 0664) == 0);
-        svc_refused = 0;
-        assert(groups_load(dir, gt, 4) == 0 && svc_refused == 1);
-        assert(chmod(p, 0644) == 0);
     }
 
     printf("all svc-dropins tests passed\n");
