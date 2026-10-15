@@ -85,7 +85,8 @@ arguments. `shutdown -c` and `-k` are refused under schema-init.
 sudo distros/devuan/install.sh --remove
 ```
 
-Removes the GRUB entries, the diversions and the boot helpers. `/etc/schema-init`
+Removes the GRUB entries, the diversions, the boot helpers and schema-init's
+polkit D-Bus activation file (Devuan's own takes over). `/etc/schema-init`
 and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
 
 ## Known

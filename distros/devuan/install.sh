@@ -15,6 +15,7 @@ if [ "${1:-}" = --remove ]; then
         dpkg-divert --quiet --rename --remove /usr/sbin/$f
     done
     rm -rf $L
+    rm -f /usr/local/share/dbus-1/system-services/org.freedesktop.PolicyKit1.service
     update-grub
     echo "schema-init boot entries removed. /etc/schema-init and the binaries in /usr/bin are left in place."
     exit 0
