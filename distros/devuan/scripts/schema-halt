@@ -1,0 +1,14 @@
+#!/bin/sh
+name=$(basename "$0")
+case "$(readlink /proc/1/exe)" in
+    */schema-init)
+        case "$name" in
+            reboot) exec /usr/bin/schema-ctl reboot ;;
+            shutdown)
+                for a in "$@"; do case "$a" in -c|-k) echo "shutdown $a: not supported under schema-init" >&2; exit 1 ;; esac; done
+                for a in "$@"; do case "$a" in -r|-*r*) exec /usr/bin/schema-ctl reboot ;; esac; done
+                exec /usr/bin/schema-ctl poweroff ;;
+            *) exec /usr/bin/schema-ctl poweroff ;;
+        esac ;;
+esac
+exec "/usr/local/libexec/schema-init/sysv/$name" "$@"

@@ -1,0 +1,8 @@
+name=journal-sink
+exec=/usr/bin/schema-journal-sink
+needs_root=1
+ready_path=/run/systemd/journal/socket
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

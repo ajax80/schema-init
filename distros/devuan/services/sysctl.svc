@@ -1,0 +1,10 @@
+name=sysctl
+exec=/sbin/sysctl
+args=--system
+oneshot=1
+needs_root=1
+critical=0
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

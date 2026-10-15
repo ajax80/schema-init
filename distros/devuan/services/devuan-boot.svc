@@ -1,0 +1,10 @@
+name=devuan-boot
+exec=/usr/local/libexec/schema-init/devuan-boot
+oneshot=1
+dep=mount-fstab
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

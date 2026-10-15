@@ -1,0 +1,17 @@
+#!/bin/sh
+ip link set lo up
+swapon -a
+for d in /tmp/.X11-unix /tmp/.ICE-unix; do
+    if [ -L "$d" ] || { [ -e "$d" ] && [ ! -d "$d" ]; } || { [ -d "$d" ] && [ "$(stat -c %u "$d")" != 0 ]; }; then
+        rm -rf "$d"
+    fi
+    mkdir -m 1777 "$d" 2>/dev/null || true
+    [ -d "$d" ] && [ ! -L "$d" ] && chown root:root "$d" && chmod 1777 "$d"
+done
+mkdir -p -m 0755 /run/sshd /run/dbus
+chown messagebus:messagebus /run/dbus
+dbus-uuidgen --ensure
+: > /run/utmp
+chgrp utmp /run/utmp && chmod 664 /run/utmp
+rm -f /run/nologin /etc/nologin
+exit 0
