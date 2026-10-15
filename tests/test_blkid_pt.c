@@ -292,6 +292,8 @@ static void test_root_forms(void) {
     snprintf(mounts, sizeof mounts, "%s/proc/mounts", root);
     snprintf(cmd, sizeof cmd, "%s/proc/cmdline", root);
     bpt_wf(root, "proc/mounts", "/dev/root / ext4 ro 0 0");
+    snprintf(p, sizeof p, "%s/sys/class/block/cciss!c0d0p1", root); bpt_mkdirs(p);
+    bpt_wf(p, "dev", "252:3");
 
     const char *ok[] = {
         "root=fc03",
@@ -301,6 +303,10 @@ static void test_root_forms(void) {
         "root=PARTUUID=AAAAAAAA-0000-0000-0000-000000000001/PARTNROFF=1",
         "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=2",
         "x=\"a root=nope b\" root=/dev/vda3",
+        "root=0xfc03",
+        "root=\"/dev/vda3\"",
+        "root=PARTUUID=AAAAAAAA-0000-0000-0000-00000000000",
+        "root=/dev/cciss/c0d0p1",
     };
     for (size_t i = 0; i < sizeof ok / sizeof *ok; i++) {
         bpt_wf(root, "proc/cmdline", ok[i]);
@@ -313,6 +319,13 @@ static void test_root_forms(void) {
         "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000003/PARTNROFF=1",
         "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/BOGUS=1",
         "root=sda1",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=xyz",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=1x",
+        "root=partlabel=boot",
+        "root=PARTLABEL=\"fedora root\"",
+        "root=PARTUUID=",
+        "root=0x",
     };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
         bpt_wf(root, "proc/cmdline", bad[i]);

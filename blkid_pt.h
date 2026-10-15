@@ -185,12 +185,25 @@ static inline int bpt_cmdline_param(const char *line, const char *key, char *val
         while (*p == ' ' || *p == '\t' || *p == '\n') p++;
         if (!*p) break;
         for (; *p && (q || (*p != ' ' && *p != '\t' && *p != '\n')); p++) {
-            if (*p == '"') { q = !q; continue; }
+            if (*p == '"') q = !q;
             if (n + 1 < sizeof tok) tok[n++] = *p;
         }
         tok[n] = '\0';
-        if (!strcmp(tok, "--")) break;
-        if (!strncmp(tok, key, kl) && tok[kl] == '=') { safe_copy(val, tok + kl + 1, valsz); found = 1; }
+        char *t = tok;
+        if (*t == '"') {
+            t++;
+            if (n > 1 && tok[n - 1] == '"') tok[n - 1] = '\0';
+        }
+        if (!strcmp(t, "--")) break;
+        if (strncmp(t, key, kl) || t[kl] != '=') continue;
+        char *v = t + kl + 1;
+        size_t vl = strlen(v);
+        if (*v == '"') {
+            v++;
+            if (vl > 1 && v[vl - 2] == '"') v[vl - 2] = '\0';
+        }
+        safe_copy(val, v, valsz);
+        found = 1;
     }
     return found ? 0 : -1;
 }
@@ -212,7 +225,7 @@ static inline int bpt_class_find(const char *cls, const char *key, const char *w
         while (rc && fgets(l, sizeof l, uf)) {
             l[strcspn(l, "\n")] = '\0';
             if (!strncmp(l, key, kl) && l[kl] == '=' &&
-                !(casefold ? strcasecmp(l + kl + 1, want) : strcmp(l + kl + 1, want))) {
+                !(casefold ? strncasecmp(l + kl + 1, want, strlen(want)) : strcmp(l + kl + 1, want))) {
                 safe_copy(name, de->d_name, namesz);
                 rc = 0;
             }
@@ -238,8 +251,9 @@ static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
         snprintf(out, outsz, "%u:%u", maj, min);
         return 0;
     }
-    if (strspn(val, "0123456789abcdefABCDEF") == strlen(val)) {
-        unsigned long d = strtoul(val, NULL, 16);
+    const char *hx = strncasecmp(val, "0x", 2) ? val : val + 2;
+    if (*hx && strspn(hx, "0123456789abcdefABCDEF") == strlen(hx)) {
+        unsigned long d = strtoul(hx, NULL, 16);
         snprintf(out, outsz, "%lu:%lu", (d & 0xfff00) >> 8, (d & 0xff) | ((d >> 12) & 0xfff00));
         return 0;
     }
@@ -247,25 +261,24 @@ static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
     if ((size_t)snprintf(cls, sizeof cls, "%s/sys/class/block", sysroot) >= sizeof cls) return -1;
     char name[256], d[PATH_MAX];
     if (!strncmp(val, "/dev/", 5)) {
-        struct stat st;
-        if ((size_t)snprintf(d, sizeof d, "%s%s", sysroot, val) < sizeof d &&
-            stat(d, &st) == 0 && S_ISBLK(st.st_mode)) {
-            snprintf(out, outsz, "%u:%u", (unsigned)major(st.st_rdev), (unsigned)minor(st.st_rdev));
-            return 0;
-        }
+        for (char *c = val + 5; *c; c++) if (*c == '/') *c = '!';
         if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, val + 5) >= sizeof d) return -1;
         return pi_sysattr(d, "dev", out, outsz);
     }
-    if (!strncasecmp(val, "PARTLABEL=", 10)) {
+    if (!strncmp(val, "PARTLABEL=", 10)) {
         if (bpt_class_find(cls, "PARTNAME", val + 10, 0, name, sizeof name) != 0) return -1;
-    } else if (!strncasecmp(val, "PARTUUID=", 9)) {
+    } else if (!strncmp(val, "PARTUUID=", 9)) {
         char *off = strchr(val + 9, '/');
         long nroff = 0;
         if (off) {
-            if (strncasecmp(off + 1, "PARTNROFF=", 10) != 0) return -1;
-            nroff = strtol(off + 11, NULL, 10);
+            char *end;
+            if (strncmp(off + 1, "PARTNROFF=", 10) != 0) return -1;
+            errno = 0;
+            nroff = strtol(off + 11, &end, 10);
+            if (end == off + 11 || *end || errno) return -1;
             *off = '\0';
         }
+        if (!val[9]) return -1;
         if (bpt_class_find(cls, "PARTUUID", val + 9, 1, name, sizeof name) != 0) return -1;
         if (nroff) {
             char pn[32], self[PATH_MAX], disk[PATH_MAX], want[32], cand[PATH_MAX];
