@@ -67,4 +67,10 @@ check("unknown name exits 1", rc == 1 and "nosuch" in err)
 rc, _, _ = graph("../x")
 check("path in name refused", rc == 1)
 
+w("longc.svc", "name=longc\nexec=/bin/true\n#" + "x" * 700 + "\ndep=dbus\n")
+w("longd.svc", "name=longd\nexec=/bin/true\ndep=" + "x" * 600 + "dep=evil\n")
+rc, out, _ = graph()
+check("long comment line skipped, later dep kept", '"longc" -> "dbus";' in out)
+check("over-long line drops the unit like PID 1", '"longd"' not in out and '"evil"' not in out)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

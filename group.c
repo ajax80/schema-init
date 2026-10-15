@@ -1,5 +1,6 @@
 #include "group.h"
 #include "schema.h"
+#include "svc_dropins.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -122,9 +123,15 @@ int groups_load(const char *dir, group_t *table, int max) {
         for (int i = 0; i < MAX_MEMBERS; i++) grp->member_idx[i] = -1;
         grp->state = STATE_NEW_PROCESS;
 
-        while (fgets(line, sizeof(line), f)) {
+        int r;
+        while ((r = svc_read_line(f, line, sizeof(line))) != 0) {
             char *eq = strchr(line, '=');
             char *val;
+            if (r < 0) {
+                fprintf(stderr, "[schema-init] WARN: %s: line longer than %zu bytes — ignored\n",
+                        path, sizeof(line) - 1);
+                continue;
+            }
             if (!eq) continue;
             *eq = 0;
             val = eq + 1;

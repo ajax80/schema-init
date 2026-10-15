@@ -2118,20 +2118,13 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
     }
     FILE *f = fdopen(fd, "r");
     if (!f) { close(fd); return -1; }
-    while (fgets(line, sizeof(line), f)) {
-        if (!strchr(line, '\n')) {
-            int c = getc(f);
-            if (c != '\n' && c != EOF && strchr("#;", line[strspn(line, " \t")])) {
-                while ((c = getc(f)) != '\n' && c != EOF)
-                    ;
-                continue;
-            }
-            if (c != '\n' && c != EOF) {
-                fprintf(stderr, "[schema-init] %s: line longer than %zu bytes — service not loaded\n",
-                        path, sizeof(line) - 1);
-                fclose(f);
-                return -1;
-            }
+    int r;
+    while ((r = svc_read_line(f, line, sizeof(line))) != 0) {
+        if (r < 0) {
+            fprintf(stderr, "[schema-init] %s: line longer than %zu bytes — service not loaded\n",
+                    path, sizeof(line) - 1);
+            fclose(f);
+            return -1;
         }
         if (svc_parse_line(svc, pc, line, path) != 0) {
             if (pc->dropin)

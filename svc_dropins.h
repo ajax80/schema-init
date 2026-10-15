@@ -16,6 +16,19 @@ static inline int svc_dropin_cmp(const struct dirent **a, const struct dirent **
     return strcmp((*a)->d_name, (*b)->d_name);
 }
 
+/* 1 = a whole line in buf, 0 = EOF, -1 = longer than len-1 bytes (drained).
+ * An over-long '#'/';' comment is drained and skipped. */
+static inline int svc_read_line(FILE *f, char *buf, size_t len) {
+    int c;
+    for (;;) {
+        if (!fgets(buf, len, f)) return 0;
+        if (strchr(buf, '\n') || (c = getc(f)) == '\n' || c == EOF) return 1;
+        while ((c = getc(f)) != '\n' && c != EOF)
+            ;
+        if (!strchr("#;", buf[strspn(buf, " \t")])) return -1;
+    }
+}
+
 static inline int svc_dropin_filter(const struct dirent *e) {
     size_t n = strlen(e->d_name);
     return e->d_name[0] != '.' && n > 5 && strcmp(e->d_name + n - 5, ".conf") == 0;

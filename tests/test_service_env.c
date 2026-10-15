@@ -1,4 +1,5 @@
 #include "../service.h"
+#include "../group.h"
 #include <assert.h>
 #include <stdio.h>
 #include <errno.h>
@@ -153,6 +154,20 @@ int main(void) {
         fclose(f);
         memset(&svc, 0, sizeof svc);
         assert(service_load_one(p, &svc) == -1);
+    }
+    {
+        char gd[] = "/tmp/schema-grp-XXXXXX";
+        assert(mkdtemp(gd));
+        snprintf(p, sizeof p, "%s/g.grp", gd);
+        FILE *f = fopen(p, "w");
+        assert(f);
+        fprintf(f, "name=g\nmember=a\nmember=%0*dmember=evil\n#%0*d\nmember=b\n", 600, 0, 700, 0);
+        fclose(f);
+        group_t gt[2];
+        assert(groups_load(gd, gt, 2) == 1);
+        assert(gt[0].member_count == 2 && !strcmp(gt[0].member_name[0], "a") && !strcmp(gt[0].member_name[1], "b"));
+        unlink(p);
+        rmdir(gd);
     }
     snprintf(p, sizeof p, "%s/n.svc", dir3);
     for (int extra = 0; extra < 2; extra++) {

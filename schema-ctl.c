@@ -42,9 +42,11 @@ static int g_load_file(const char *path, struct g_node *n, int dropin, int *has_
     FILE *f = fopen(path, "r");
     char line[512];
     const char *depkey = n->group ? "member" : "dep";
+    int r;
     if (!f) return -1;
-    while (fgets(line, sizeof line, f)) {
+    while ((r = svc_read_line(f, line, sizeof line)) != 0) {
         char *eq = strchr(line, '='), *val;
+        if (r < 0) { fclose(f); return -1; }
         line[strcspn(line, "\r\n")] = '\0';
         if (!eq || line[0] == '#') continue;
         *eq = '\0';
