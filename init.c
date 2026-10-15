@@ -561,11 +561,17 @@ static void setup_signals(void) {
 }
 
 static void load_env_file(void) {
-    FILE *f = fopen("/run/schema-init/env", "r");
-    if (!f) {
-        f = fopen("./run/schema-init/env", "r");
+    const char *path = "/run/schema-init/env";
+    int fd = service_open_trusted(path);
+    if (fd < 0 && errno != EPERM) fd = service_open_trusted(path = "./run/schema-init/env");
+    if (fd < 0) {
+        if (errno == EPERM)
+            fprintf(stderr, "[schema-init] REFUSED %s: not a regular file owned by root and "
+                    "writable only by its owner — not loaded\n", path);
+        return;
     }
-    if (!f) return;
+    FILE *f = fdopen(fd, "r");
+    if (!f) { close(fd); return; }
 
     char line[512];
     while (fgets(line, sizeof(line), f)) {
