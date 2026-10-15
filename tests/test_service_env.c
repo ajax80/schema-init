@@ -1,6 +1,7 @@
 #include "../service.h"
 #include <assert.h>
 #include <stdio.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
@@ -219,8 +220,17 @@ int main(void) {
     write_svc(p, "name=s\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\n"
                  "exec_pre=+/bin/sh -c x\nexec_pre=/usr/bin/env\n");
     assert(service_load_one(p, &svc) == 0);
-    write_svc(p, "name=s\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\nexec_pre=/bin/sh -c x\n");
+    write_svc(p, "name=s\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\nexec_pre=/opt/nope/x\n");
     assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=s\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\nexec_pre=-/opt/nope/x\n");
+    assert(service_load_one(p, &svc) == 0);
+    {
+        char r[PATH_MAX];
+        if (realpath("/bin/sh", r) && strncmp(r, "/usr/", 5) == 0) {
+            write_svc(p, "name=s\nexec=/usr/bin/true\nlandlock_ro=/usr\nno_new_privs=1\nexec_pre=/bin/sh -c x\n");
+            assert(service_load_one(p, &svc) == 0);
+        }
+    }
     snprintf(p, sizeof p, "%s/q.svc", dir3);
     f = fopen(p, "w");
     assert(f);

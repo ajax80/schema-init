@@ -96,6 +96,17 @@ try:
     check("unknown specifier skipped", False)
 except si.Skip:
     check("unknown specifier skipped", True)
+be = si.unit_to_svc("e", si.parse_unit("[Service]\nExecStart=/bin/e --pid %t/e.pid --unit %n 100%%\n[Install]\nWantedBy=x\n"))
+check("ExecStart specifiers expanded", "args=/run/e.pid\n" in be and "args=e.service\n" in be and "args=100%\n" in be)
+for bad in ("/bin/a 100%", "/bin/a %h"):
+    try:
+        si.unit_to_svc("u", si.parse_unit("[Service]\nExecStart=%s\n[Install]\nWantedBy=x\n" % bad))
+        check("unmappable ExecStart specifier skipped: " + bad, False)
+    except si.Skip:
+        check("unmappable ExecStart specifier skipped: " + bad, True)
+bt = si.timer_to_svc("foo", si.parse_unit("[Timer]\nOnCalendar=daily\nUnit=bar.service\n"),
+                     si.parse_unit("[Service]\nType=oneshot\nExecStartPre=/bin/prep %n\nExecStart=/bin/bar %N\n"), unit="bar")
+check("timer: specifiers name the service, not the timer", "exec_pre=/bin/prep bar.service\n" in bt and "args=bar\n" in bt)
 bo = si.unit_to_svc("o", si.parse_unit(
     "[Service]\nExecStartPre=/bin/a\nExecStartPre=+/bin/b\nExecStart=/bin/o\n[Install]\nWantedBy=x\n"))
 check("plain before + warns of reorder", "order changed" in bo)

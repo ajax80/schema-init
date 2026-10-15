@@ -496,10 +496,13 @@ static int landlock_check(service_t *svc) {
         size_t pl = strspn(c, "+-");
         char *w[32];
         int nw, covered = 0;
-        if (memchr(c, '+', pl)) continue;
+        if (memchr(c, '+', pl) || memchr(c, '-', pl)) continue;
         nw = service_split_cmdline(c + pl, w, 32);
-        for (i = 0; nw > 0 && i < svc->landlock_count && !covered; i++)
-            covered = landlock_beneath(w[0], svc->landlock[i]);
+        for (i = 0; nw > 0 && i < svc->landlock_count && !covered; i++) {
+            char a[PATH_MAX], b[PATH_MAX];
+            covered = landlock_beneath(w[0], svc->landlock[i]) ||
+                      (realpath(w[0], a) && realpath(svc->landlock[i], b) && landlock_beneath(a, b));
+        }
         for (i = 0; i < nw; i++) free(w[i]);
         if (!covered) {
             fprintf(stderr, "[schema-init] %s: landlock does not cover exec_pre=%s — not loaded\n",
