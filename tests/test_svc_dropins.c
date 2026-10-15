@@ -250,6 +250,34 @@ int main(void) {
     assert(!s.argv[3]);
     drop(&s);
 
+    {
+        char p[512];
+        put("dd.svc", "name=dd\nexec=/bin/dd\n");
+        mk("dd.svc.d");
+        put("dd.svc.d/10.conf", "args=-x\n");
+        snprintf(p, sizeof p, "%s/dd.svc.d", dir);
+        assert(load("dd.svc", &s) == 0);
+        drop(&s);
+        assert(chmod(p, 0777) == 0);
+        svc_refused = 0;
+        assert(load("dd.svc", &s) == -1 && svc_refused == 1);
+        assert(chmod(p, 01777) == 0);
+        assert(load("dd.svc", &s) == 0);
+        drop(&s);
+        assert(chmod(p, 0775) == 0);
+        assert(load("dd.svc", &s) == -1);
+        assert(chmod(p, 0755) == 0);
+
+        service_t tab[64];
+        int n = services_load(dir, tab, 64);
+        assert(n > 0 && svc_refused == 0);
+        for (int i = 0; i < n; i++) drop(&tab[i]);
+        assert(chmod(dir, 0777) == 0);
+        assert(services_load(dir, tab, 64) == n && svc_refused == 1);
+        for (int i = 0; i < n; i++) drop(&tab[i]);
+        assert(chmod(dir, 0700) == 0);
+    }
+
     printf("all svc-dropins tests passed\n");
     return 0;
 }

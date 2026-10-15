@@ -2187,6 +2187,12 @@ static int svc_load_file(const char *path, service_t *svc) {
     struct parse_ctx pc = { 1, 0, 0 };
     char dropins[SVC_DROPIN_MAX][SVC_DROPIN_PATH];
     int nd = svc_dropin_list(path, dropins, SVC_DROPIN_MAX);
+    if (nd < 0) {
+        fprintf(stderr, "[schema-init] REFUSED %s: a drop-in directory is not owned by root or is "
+                "writable by others — service not loaded (chown root:root; chmod go-w)\n", path);
+        svc_refused++;
+        return -1;
+    }
     svc_init_defaults(svc);
     if (svc_parse_file(svc, &pc, path) != 0) goto bad;
     pc.dropin = 1;
@@ -2200,9 +2206,28 @@ bad:
     return -1;
 }
 
+static int svc_dir_chain_trusted(const char *dir) {
+    char p[PATH_MAX];
+    if (!realpath(dir, p)) return 1;
+    for (;;) {
+        struct stat st;
+        char *s;
+        if (stat(p, &st) < 0 || !svc_dir_trusted(&st)) return 0;
+        s = strrchr(p, '/');
+        if (s != p) *s = '\0';
+        else if (p[1]) p[1] = '\0';
+        else return 1;
+    }
+}
+
 int services_load(const char *dir, service_t *table, int max) {
     DIR *d = opendir(dir);
     svc_refused = 0;
+    if (d && !svc_dir_chain_trusted(dir)) {
+        fprintf(stderr, "[schema-init] WARN: %s or a parent directory is not owned by root or is "
+                "writable by others — loading anyway; a live reload is refused (chown root:root; chmod go-w)\n", dir);
+        svc_refused++;
+    }
     struct dirent *ent;
     int count = 0;
     int warned = 0;

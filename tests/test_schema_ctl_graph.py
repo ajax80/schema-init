@@ -78,4 +78,11 @@ check("over-long blank line is not a comment", '"longs"' not in out)
 check("group keeps its other members, like PID 1",
       '"longg" -> "dbus" [style=dashed];' in out and '"longg" -> "cups" [style=dashed];' in out and '"evil"' not in out)
 
+w("opend.svc", "name=opend\nexec=/bin/true\ndep=dbus\n")
+w("opend.svc.d/10.conf", "dep=cups\n")
+os.chmod(os.path.join(d, "opend.svc.d"), 0o777)
+rc, out, err = graph()
+check("writable drop-in dir drops the unit like PID 1", '"opend"' not in out and "opend.svc: a drop-in directory" in err)
+os.chmod(os.path.join(d, "opend.svc.d"), 0o755)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
