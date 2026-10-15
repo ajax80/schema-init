@@ -174,38 +174,46 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
     bpt_emit(out, "ID_PART_ENTRY_DISK", diskdev);
 }
 
-static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
-                                   char *out, size_t outsz) {
-    FILE *f = fopen(cmdline, "r");
-    if (!f) return -1;
-    char line[4096];
-    if (!fgets(line, sizeof line, f)) { fclose(f); return -1; }
-    fclose(f);
-    char val[256]; val[0] = '\0';
-    char *sv = NULL;
-    for (char *t = strtok_r(line, " \t\n", &sv); t; t = strtok_r(NULL, " \t\n", &sv)) {
+static inline int bpt_cmdline_param(const char *line, const char *key, char *val, size_t valsz) {
+    size_t kl = strlen(key);
+    int found = 0;
+    const char *p = line;
+    while (*p) {
+        char tok[1024];
+        size_t n = 0;
+        int q = 0;
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (!*p) break;
+        for (; *p && (q || (*p != ' ' && *p != '\t' && *p != '\n')); p++) {
+            if (*p == '"') q = !q;
+            if (n + 1 < sizeof tok) tok[n++] = *p;
+        }
+        tok[n] = '\0';
+        char *t = tok;
+        if (*t == '"') {
+            t++;
+            if (n > 1 && tok[n - 1] == '"') tok[n - 1] = '\0';
+        }
         if (!strcmp(t, "--")) break;
-        if (!strncmp(t, "root=", 5)) safe_copy(val, t + 5, sizeof val);
+        if (strncmp(t, key, kl) || t[kl] != '=') continue;
+        char *v = t + kl + 1;
+        size_t vl = strlen(v);
+        if (*v == '"') {
+            v++;
+            if (vl > 1 && v[vl - 2] == '"') v[vl - 2] = '\0';
+        }
+        safe_copy(val, v, valsz);
+        found = 1;
     }
-    if (!val[0]) return -1;
+    return found ? 0 : -1;
+}
 
-    unsigned maj, min; char extra;
-    if (sscanf(val, "%u:%u%c", &maj, &min, &extra) == 2) {
-        snprintf(out, outsz, "%u:%u", maj, min);
-        return 0;
-    }
-    char cls[PATH_MAX];
-    if ((size_t)snprintf(cls, sizeof cls, "%s/sys/class/block", sysroot) >= sizeof cls) return -1;
-    if (!strncmp(val, "/dev/", 5)) {
-        char d[PATH_MAX];
-        if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, val + 5) >= sizeof d) return -1;
-        return pi_sysattr(d, "dev", out, outsz);
-    }
-    if (strncasecmp(val, "PARTUUID=", 9) != 0) return -1;
-    const char *want = val + 9;
+static inline int bpt_class_find(const char *cls, const char *key, const char *want,
+                                 int casefold, char *name, size_t namesz) {
     DIR *dir = opendir(cls);
     if (!dir) return -1;
     int rc = -1;
+    size_t kl = strlen(key);
     struct dirent *de;
     while (rc && (de = readdir(dir))) {
         if (de->d_name[0] == '.') continue;
@@ -213,20 +221,89 @@ static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
         if ((size_t)snprintf(u, sizeof u, "%s/%s/uevent", cls, de->d_name) >= sizeof u) continue;
         FILE *uf = fopen(u, "r");
         if (!uf) continue;
-        char l[256]; int hit = 0;
-        while (fgets(l, sizeof l, uf)) {
+        char l[256];
+        while (rc && fgets(l, sizeof l, uf)) {
             l[strcspn(l, "\n")] = '\0';
-            if (!strncmp(l, "PARTUUID=", 9) && !strcasecmp(l + 9, want)) hit = 1;
+            if (!strncmp(l, key, kl) && l[kl] == '=' &&
+                !(casefold ? strncasecmp(l + kl + 1, want, strlen(want)) : strcmp(l + kl + 1, want))) {
+                safe_copy(name, de->d_name, namesz);
+                rc = 0;
+            }
         }
         fclose(uf);
-        if (hit) {
-            char d[PATH_MAX];
-            if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, de->d_name) < sizeof d)
-                rc = pi_sysattr(d, "dev", out, outsz);
-        }
     }
     closedir(dir);
     return rc;
+}
+
+static inline int bpt_cmdline_root(const char *cmdline, const char *sysroot,
+                                   char *out, size_t outsz) {
+    FILE *f = fopen(cmdline, "r");
+    if (!f) return -1;
+    char line[4096];
+    if (!fgets(line, sizeof line, f)) { fclose(f); return -1; }
+    fclose(f);
+    char val[256];
+    if (bpt_cmdline_param(line, "root", val, sizeof val) != 0 || !val[0]) return -1;
+
+    unsigned maj, min; char extra;
+    if (sscanf(val, "%u:%u%c", &maj, &min, &extra) == 2) {
+        snprintf(out, outsz, "%u:%u", maj, min);
+        return 0;
+    }
+    const char *hx = strncasecmp(val, "0x", 2) ? val : val + 2;
+    if (*hx && strspn(hx, "0123456789abcdefABCDEF") == strlen(hx)) {
+        unsigned long d = strtoul(hx, NULL, 16);
+        snprintf(out, outsz, "%lu:%lu", (d & 0xfff00) >> 8, (d & 0xff) | ((d >> 12) & 0xfff00));
+        return 0;
+    }
+    char cls[PATH_MAX];
+    if ((size_t)snprintf(cls, sizeof cls, "%s/sys/class/block", sysroot) >= sizeof cls) return -1;
+    char name[256], d[PATH_MAX];
+    if (!strncmp(val, "/dev/", 5)) {
+        for (char *c = val + 5; *c; c++) if (*c == '/') *c = '!';
+        if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, val + 5) >= sizeof d) return -1;
+        return pi_sysattr(d, "dev", out, outsz);
+    }
+    if (!strncmp(val, "PARTLABEL=", 10)) {
+        if (bpt_class_find(cls, "PARTNAME", val + 10, 0, name, sizeof name) != 0) return -1;
+    } else if (!strncmp(val, "PARTUUID=", 9)) {
+        char *off = strchr(val + 9, '/');
+        long nroff = 0;
+        if (off) {
+            char *end;
+            if (strncmp(off + 1, "PARTNROFF=", 10) != 0) return -1;
+            errno = 0;
+            nroff = strtol(off + 11, &end, 10);
+            if (end == off + 11 || *end || errno) return -1;
+            *off = '\0';
+        }
+        if (!val[9]) return -1;
+        if (bpt_class_find(cls, "PARTUUID", val + 9, 1, name, sizeof name) != 0) return -1;
+        if (nroff) {
+            char pn[32], self[PATH_MAX], disk[PATH_MAX], want[32], cand[PATH_MAX];
+            if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, name) >= sizeof d ||
+                pi_sysattr(d, "partition", pn, sizeof pn) != 0 || !realpath(d, self)) return -1;
+            safe_copy(disk, self, sizeof disk);
+            if (pi_parent(disk) != 0) return -1;
+            snprintf(want, sizeof want, "%ld", atol(pn) + nroff);
+            DIR *dir = opendir(disk);
+            if (!dir) return -1;
+            struct dirent *de;
+            int hit = 0;
+            while (!hit && (de = readdir(dir))) {
+                if (de->d_name[0] == '.') continue;
+                if ((size_t)snprintf(cand, sizeof cand, "%s/%s", disk, de->d_name) >= sizeof cand) continue;
+                if (pi_sysattr(cand, "partition", pn, sizeof pn) == 0 && !strcmp(pn, want)) hit = 1;
+            }
+            closedir(dir);
+            return hit ? pi_sysattr(cand, "dev", out, outsz) : -1;
+        }
+    } else {
+        return -1;
+    }
+    if ((size_t)snprintf(d, sizeof d, "%s/%s", cls, name) >= sizeof d) return -1;
+    return pi_sysattr(d, "dev", out, outsz);
 }
 
 /* Whole-disk devnum that backs the running root fs. stat("/")->st_dev is an
@@ -247,7 +324,9 @@ static inline int bpt_root_disk_devnum_at(const char *mounts, const char *cmdlin
     fclose(f);
     char devnum[64];
     struct stat st;
-    if (!strncmp(dev, "/dev/", 5) && stat(dev, &st) == 0 && S_ISBLK(st.st_mode))
+    char devp[PATH_MAX];
+    if (!strncmp(dev, "/dev/", 5) && (size_t)snprintf(devp, sizeof devp, "%s%s", sysroot, dev) < sizeof devp &&
+        stat(devp, &st) == 0 && S_ISBLK(st.st_mode))
         snprintf(devnum, sizeof devnum, "%u:%u",
                  (unsigned)major(st.st_rdev), (unsigned)minor(st.st_rdev));
     else if (strcmp(dev, "/dev/root") != 0 ||
@@ -265,7 +344,11 @@ static inline int bpt_root_disk_devnum_at(const char *mounts, const char *cmdlin
 }
 
 static inline int bpt_root_disk_devnum(char *out, size_t outsz) {
-    return bpt_root_disk_devnum_at("/proc/mounts", "/proc/cmdline", "", out, outsz);
+    static char cached[64];
+    if (cached[0]) { safe_copy(out, cached, outsz); return 0; }
+    if (bpt_root_disk_devnum_at("/proc/mounts", "/proc/cmdline", "", out, outsz) != 0) return -1;
+    safe_copy(cached, out, sizeof cached);
+    return 0;
 }
 
 static inline int bpt_is_root_backing_disk(const char *sysroot, const char *devpath) {

@@ -212,6 +212,7 @@ static void test_build(void) {
     assert(pi_sysattr(ps, "partition", pb, sizeof pb) == 0 && atoi(pb) == 1);
 
     unlink(img);
+    char rm[PATH_MAX + 8]; snprintf(rm, sizeof rm, "rm -rf %s", root); assert(system(rm) == 0);
     printf("test_build OK\n");
 }
 
@@ -260,7 +261,79 @@ static void test_root_disk_devnum(void) {
     bpt_wf(root, "mounts", "rootfs / rootfs rw 0 0\n/dev/root / btrfs ro 0 0");
     assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) == 0);
     assert(!strcmp(out, "259:0"));
+    char rm[PATH_MAX + 8]; snprintf(rm, sizeof rm, "rm -rf %s", root); assert(system(rm) == 0);
     printf("test_root_disk_devnum OK\n");
+}
+
+static void bpt_part(const char *root, int n, const char *uevent_extra) {
+    char p[PATH_MAX], q[PATH_MAX], ue[256];
+    snprintf(p, sizeof p, "%s/sys/devices/vda/vda%d", root, n); bpt_mkdirs(p);
+    snprintf(q, sizeof q, "%d", n); bpt_wf(p, "partition", q);
+    snprintf(q, sizeof q, "252:%d", n); bpt_wf(p, "dev", q);
+    snprintf(ue, sizeof ue, "MAJOR=252\nMINOR=%d\nDEVTYPE=partition\nPARTN=%d\n%s", n, n, uevent_extra);
+    bpt_wf(p, "uevent", ue);
+    snprintf(q, sizeof q, "%s/sys/class/block/vda%d", root, n);
+    assert(symlink(p, q) == 0);
+    snprintf(q, sizeof q, "%s/sys/dev/block/252:%d", root, n);
+    assert(symlink(p, q) == 0);
+}
+
+static void test_root_forms(void) {
+    char root[] = "/tmp/bptformXXXXXX"; assert(mkdtemp(root));
+    char p[PATH_MAX], q[PATH_MAX], mounts[PATH_MAX], cmd[PATH_MAX], out[64];
+    snprintf(p, sizeof p, "%s/sys/devices/vda", root); bpt_mkdirs(p);
+    bpt_wf(p, "dev", "252:0");
+    snprintf(p, sizeof p, "%s/sys/class/block", root); bpt_mkdirs(p);
+    snprintf(p, sizeof p, "%s/sys/dev/block", root); bpt_mkdirs(p);
+    snprintf(p, sizeof p, "%s/proc", root); bpt_mkdirs(p);
+    bpt_part(root, 1, "PARTUUID=aaaaaaaa-0000-0000-0000-000000000001\nPARTNAME=EFI system");
+    bpt_part(root, 2, "PARTUUID=aaaaaaaa-0000-0000-0000-000000000002\nPARTNAME=boot");
+    bpt_part(root, 3, "PARTUUID=aaaaaaaa-0000-0000-0000-000000000003\nPARTNAME=fedora root");
+    snprintf(mounts, sizeof mounts, "%s/proc/mounts", root);
+    snprintf(cmd, sizeof cmd, "%s/proc/cmdline", root);
+    bpt_wf(root, "proc/mounts", "/dev/root / ext4 ro 0 0");
+    snprintf(p, sizeof p, "%s/sys/class/block/cciss!c0d0p1", root); bpt_mkdirs(p);
+    bpt_wf(p, "dev", "252:3");
+
+    const char *ok[] = {
+        "root=fc03",
+        "root=FC03 ro",
+        "root=PARTLABEL=boot",
+        "root=\"PARTLABEL=fedora root\" quiet",
+        "root=PARTUUID=AAAAAAAA-0000-0000-0000-000000000001/PARTNROFF=1",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=2",
+        "x=\"a root=nope b\" root=/dev/vda3",
+        "root=0xfc03",
+        "root=\"/dev/vda3\"",
+        "root=PARTUUID=AAAAAAAA-0000-0000-0000-00000000000",
+        "root=/dev/cciss/c0d0p1",
+    };
+    for (size_t i = 0; i < sizeof ok / sizeof *ok; i++) {
+        bpt_wf(root, "proc/cmdline", ok[i]);
+        out[0] = '\0';
+        assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) == 0);
+        assert(!strcmp(out, "252:0"));
+    }
+    const char *bad[] = {
+        "root=PARTLABEL=nope",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000003/PARTNROFF=1",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/BOGUS=1",
+        "root=sda1",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=xyz",
+        "root=PARTUUID=aaaaaaaa-0000-0000-0000-000000000001/PARTNROFF=1x",
+        "root=partlabel=boot",
+        "root=PARTLABEL=\"fedora root\"",
+        "root=PARTUUID=",
+        "root=0x",
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
+        bpt_wf(root, "proc/cmdline", bad[i]);
+        assert(bpt_root_disk_devnum_at(mounts, cmd, root, out, sizeof out) != 0);
+    }
+
+    snprintf(q, sizeof q, "rm -rf %s", root); assert(system(q) == 0);
+    printf("test_root_forms OK\n");
 }
 
 int main(void) {
@@ -271,6 +344,7 @@ int main(void) {
     test_dos();
     test_build();
     test_root_disk_devnum();
+    test_root_forms();
     printf("ALL blkid_pt tests passed\n");
     return 0;
 }
