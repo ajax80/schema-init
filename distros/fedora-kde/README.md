@@ -13,6 +13,7 @@ Runs KDE Plasma 6 on Fedora 44 under schema-init as PID 1 (no systemd).
 
 - `scripts/`, `config/`: the desktop-session pieces (autologin, plasmashell shim, autostart runner, env hooks, seatd and wireplumber helpers). The RPM, the migrate wizard and the installer ISO install them from here.
 - `hosts/blakbox/`: one real machine's whole service set (`services/`) and the host-only scripts those services exec (`scripts/`). It is not a profile for other machines: it mounts specific disks by UUID and runs that box's own services.
+- `services/`: KDE-profile services that need the scripts above (seatd); schema-migrate deploys them, the ISO rail does not.
 - The portable service set is `distros/fedora-installer/rail/services`. On Fedora KDE, install with the migrate wizard (`sudo schema-migrate`) or the installer ISO.
 
 ## Reproducing blakbox

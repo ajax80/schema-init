@@ -17,7 +17,7 @@ config plasma-workspace
 config polkit
 config autostart
 
-# --- services (from distros/fedora-installer/rail/services/) ---
+# --- services (from distros/fedora-installer/rail/services/, else distros/fedora-kde/services/) ---
 service dbus
 service seatd
 service schema-logind

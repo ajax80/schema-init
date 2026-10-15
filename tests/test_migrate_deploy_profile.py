@@ -5,14 +5,16 @@ root = tempfile.mkdtemp(); os.environ["MIGRATE_ROOT"] = root
 fakerepo = tempfile.mkdtemp(); os.environ["MIGRATE_REPO"] = fakerepo
 # minimal fake repo layout
 for d in ("distros/fedora-kde/scripts", "distros/fedora-kde/config/plasma-env",
-          "distros/fedora-installer/rail/services", "distros/fedora-installer/migrate"):
+          "distros/fedora-installer/rail/services", "distros/fedora-installer/migrate",
+          "distros/fedora-kde/services"):
     os.makedirs(os.path.join(fakerepo, d))
 open(os.path.join(fakerepo, "distros/fedora-kde/scripts/plasma-session-start.sh"), "w").write("#!/bin/sh\n")
 open(os.path.join(fakerepo, "distros/fedora-kde/config/plasma-env/env.sh"), "w").write("x=1\n")
 open(os.path.join(fakerepo, "distros/fedora-installer/rail/services/dbus.svc"), "w").write("name=dbus\n")
+open(os.path.join(fakerepo, "distros/fedora-kde/services/seatd.svc"), "w").write("name=seatd\n")
 # a tiny prevent-set naming just those + an excluded item
 psl = os.path.join(fakerepo, "distros/fedora-installer/migrate/prevent-set.list")
-open(psl, "w").write("script plasma-session-start.sh\nconfig plasma-env\nservice dbus\nexclude frigate\n")
+open(psl, "w").write("script plasma-session-start.sh\nconfig plasma-env\nservice dbus\nservice seatd\nexclude frigate\n")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(REPO, "distros/fedora-installer/migrate/schema-migrate.py")
 spec = importlib.util.spec_from_file_location("schema_migrate", MOD)
@@ -28,6 +30,7 @@ dst = sm.deploy_prevent_set(m)
 check("copied the script", os.path.exists(os.path.join(root, "usr/local/lib/schema-init/scripts/plasma-session-start.sh")))
 check("copied the config dir", os.path.exists(os.path.join(root, "etc/schema-init/config/plasma-env/env.sh")))
 check("copied the service", os.path.exists(os.path.join(root, "etc/schema-init/services/dbus.svc")))
+check("profile service falls back to fedora-kde/services", os.path.exists(os.path.join(root, "etc/schema-init/services/seatd.svc")))
 check("nothing frigate copied", not any("frigate" in p for p in dst))
 check("manifest recorded the copies", any("plasma-session-start.sh" in f for f in m.files))
 
