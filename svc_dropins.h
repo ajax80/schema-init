@@ -16,6 +16,18 @@ static inline int svc_dropin_cmp(const struct dirent **a, const struct dirent **
     return strcmp((*a)->d_name, (*b)->d_name);
 }
 
+static inline int svc_read_line(FILE *f, char *buf, size_t len) {
+    int c;
+    for (;;) {
+        if (!fgets(buf, len, f)) return 0;
+        if (strchr(buf, '\n') || (c = getc(f)) == '\n' || c == EOF) return 1;
+        while ((c = getc(f)) != '\n' && c != EOF)
+            ;
+        char c0 = buf[strspn(buf, " \t")];
+        if (c0 != '#' && c0 != ';') return -1;
+    }
+}
+
 static inline int svc_dropin_filter(const struct dirent *e) {
     size_t n = strlen(e->d_name);
     return e->d_name[0] != '.' && n > 5 && strcmp(e->d_name + n - 5, ".conf") == 0;
