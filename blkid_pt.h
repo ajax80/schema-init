@@ -175,37 +175,7 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
 }
 
 static inline int bpt_cmdline_param(const char *line, const char *key, char *val, size_t valsz) {
-    size_t kl = strlen(key);
-    int found = 0;
-    const char *p = line;
-    while (*p) {
-        char tok[1024];
-        size_t n = 0;
-        int q = 0;
-        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
-        if (!*p) break;
-        for (; *p && (q || (*p != ' ' && *p != '\t' && *p != '\n')); p++) {
-            if (*p == '"') q = !q;
-            if (n + 1 < sizeof tok) tok[n++] = *p;
-        }
-        tok[n] = '\0';
-        char *t = tok;
-        if (*t == '"') {
-            t++;
-            if (n > 1 && tok[n - 1] == '"') tok[n - 1] = '\0';
-        }
-        if (!strcmp(t, "--")) break;
-        if (strncmp(t, key, kl) || t[kl] != '=') continue;
-        char *v = t + kl + 1;
-        size_t vl = strlen(v);
-        if (*v == '"') {
-            v++;
-            if (vl > 1 && v[vl - 2] == '"') v[vl - 2] = '\0';
-        }
-        safe_copy(val, v, valsz);
-        found = 1;
-    }
-    return found ? 0 : -1;
+    return cmdline_get(line, key, 1, val, valsz) == 1 ? 0 : -1;
 }
 
 static inline int bpt_class_find(const char *cls, const char *key, const char *want,

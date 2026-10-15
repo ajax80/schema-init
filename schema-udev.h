@@ -311,6 +311,48 @@ static inline void safe_copy(char *dst, const char *src, size_t maxlen) {
     dst[l] = '\0';
 }
 
+static inline int cmdline_get(const char *line, const char *key, int need_val, char *val, size_t valsz) {
+    size_t kl = strlen(key);
+    int found = -1;
+    const char *p = line;
+    if (valsz) val[0] = '\0';
+    while (*p) {
+        char tok[1024];
+        size_t n = 0;
+        int q = 0;
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (!*p) break;
+        for (; *p && (q || (*p != ' ' && *p != '\t' && *p != '\n')); p++) {
+            if (*p == '"') q = !q;
+            if (n + 1 < sizeof tok) tok[n++] = *p;
+        }
+        tok[n] = '\0';
+        char *t = tok;
+        if (*t == '"') {
+            t++;
+            if (n > 1 && tok[n - 1] == '"') tok[n - 1] = '\0';
+        }
+        if (!strcmp(t, "--")) break;
+        if (strncmp(t, key, kl)) continue;
+        if (!t[kl]) {
+            if (need_val) continue;
+            if (valsz) val[0] = '\0';
+            found = 0;
+            continue;
+        }
+        if (t[kl] != '=') continue;
+        char *v = t + kl + 1;
+        size_t vl = strlen(v);
+        if (*v == '"') {
+            v++;
+            if (vl > 1 && v[vl - 2] == '"') v[vl - 2] = '\0';
+        }
+        if (valsz) safe_copy(val, v, valsz);
+        found = 1;
+    }
+    return found;
+}
+
 /* Synthesize a struct uevent from a sysfs device directory D (which contains a uevent file).
  * sysroot is the sysfs root path (usually "/sys", or a /tmp test root).
  * Strips sysroot from dirpath to yield DEVPATH starting with "/devices/". */
