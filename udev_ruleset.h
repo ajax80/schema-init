@@ -658,25 +658,11 @@ static inline int import_cmdline(struct dev_ctx *ctx, const char *key) {
     size_t n = fread(buf, 1, sizeof buf - 1, f);
     fclose(f);
     buf[n] = '\0';
-    size_t klen = strlen(key);
-    for (char *p = buf; *p; ) {
-        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
-        char *s = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-        size_t tlen = (size_t)(p - s);
-        if (tlen == 0) continue;
-        if (tlen >= klen && !strncmp(s, key, klen)) {
-            if (tlen == klen) { uevent_set(ctx->ev, key, "1"); return 1; }
-            if (s[klen] == '=') {
-                char val[UE_VAL_MAX];
-                size_t vlen = tlen - klen - 1;
-                if (vlen >= sizeof val) vlen = sizeof val - 1;
-                memcpy(val, s + klen + 1, vlen); val[vlen] = '\0';
-                uevent_set(ctx->ev, key, val); return 1;
-            }
-        }
-    }
-    return 0;
+    char val[UE_VAL_MAX];
+    int r = cmdline_get(buf, key, 0, 0, val, sizeof val);
+    if (r < 0) return 0;
+    uevent_set(ctx->ev, key, r ? val : "1");
+    return 1;
 }
 static inline void import_db(struct dev_ctx *ctx, const char *key) {
     char fn[128];

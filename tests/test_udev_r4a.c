@@ -243,6 +243,30 @@ int main(void) {
         assert(uevent_get(cc.ev, "absent") == NULL);
         unlink(cf);
     }
+    {
+        char cf[] = "/tmp/r4a_cmdlineXXXXXX";
+        int fd = mkstemp(cf); assert(fd >= 0);
+        dprintf(fd, "foo=1 bar=\"a b\" \"baz=c d\" foo=2 flag -- after=x\n"); close(fd);
+        struct uevent cev; memset(&cev, 0, sizeof cev);
+        ue_set(&cev, "ACTION", "add"); ue_set(&cev, "DEVPATH", "/devices/x");
+        struct dev_ctx cc; assert(dev_ctx_init(&cc, &cev, "/sys") == 0);
+        cc.cmdline_path = cf;
+        assert(import_cmdline(&cc, "foo") == 1 && !strcmp(uevent_get(cc.ev, "foo"), "2"));
+        assert(import_cmdline(&cc, "bar") == 1 && !strcmp(uevent_get(cc.ev, "bar"), "a b"));
+        assert(import_cmdline(&cc, "baz") == 1 && !strcmp(uevent_get(cc.ev, "baz"), "c d"));
+        assert(import_cmdline(&cc, "flag") == 1 && !strcmp(uevent_get(cc.ev, "flag"), "1"));
+        assert(import_cmdline(&cc, "after") == 1 && !strcmp(uevent_get(cc.ev, "after"), "x"));
+        assert(import_cmdline(&cc, "fo") == 0);
+        unlink(cf);
+
+        char v[32];
+        assert(cmdline_get("a=1 a a=", "a", 0, 0, v, sizeof v) == 1 && !v[0]);
+        assert(cmdline_get("a=1 a", "a", 0, 0, v, sizeof v) == 0 && !v[0]);
+        assert(cmdline_get("a=1 a", "a", 1, 0, v, sizeof v) == 1 && !strcmp(v, "1"));
+        assert(cmdline_get("ab=1", "a", 0, 0, v, sizeof v) == -1);
+        assert(cmdline_get("x -- a=1", "a", 0, 1, v, sizeof v) == -1);
+        assert(cmdline_get("x -- a=1", "a", 0, 0, v, sizeof v) == 1);
+    }
     printf("test_udev_r4a: IMPORT-cmdline OK\n");
 
     /* Task 6: IMPORT{db} */
