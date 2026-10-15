@@ -4,6 +4,7 @@
 #include "path_id.h"   /* transitively: schema-udev.h (struct uevent, safe_copy) + pi_* helpers */
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <dirent.h>
 
 #define NID_ARPHRD_ETHER       1
@@ -436,8 +437,9 @@ static inline int nsl_disabled(void) {
     snprintf(p, sizeof p, "%s/proc/cmdline", nsl_root);
     char cmd[4096];
     char v[16];
-    if (nsl_read_line(p, cmd, sizeof cmd) == 0 && cmdline_get(cmd, "net.ifnames", 1, v, sizeof v) == 1)
-        return !strcmp(v, "0") || !strcmp(v, "no") || !strcmp(v, "false") || !strcmp(v, "off");
+    if (nsl_read_line(p, cmd, sizeof cmd) == 0 && cmdline_get(cmd, "net.ifnames", 0, 0, v, sizeof v) == 1)
+        return !strcmp(v, "0") || !strcasecmp(v, "no") || !strcasecmp(v, "n") || !strcasecmp(v, "false") ||
+               !strcasecmp(v, "f") || !strcasecmp(v, "off");
     return 0;
 }
 

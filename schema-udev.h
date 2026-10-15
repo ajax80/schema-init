@@ -311,7 +311,8 @@ static inline void safe_copy(char *dst, const char *src, size_t maxlen) {
     dst[l] = '\0';
 }
 
-static inline int cmdline_get(const char *line, const char *key, int need_val, char *val, size_t valsz) {
+static inline int cmdline_get(const char *line, const char *key, int need_val, int stop_dashdash,
+                              char *val, size_t valsz) {
     size_t kl = strlen(key);
     int found = -1;
     const char *p = line;
@@ -332,7 +333,7 @@ static inline int cmdline_get(const char *line, const char *key, int need_val, c
             t++;
             if (n > 1 && tok[n - 1] == '"') tok[n - 1] = '\0';
         }
-        if (!strcmp(t, "--")) break;
+        if (stop_dashdash && !strcmp(t, "--")) break;
         if (strncmp(t, key, kl)) continue;
         if (!t[kl]) {
             if (need_val) continue;

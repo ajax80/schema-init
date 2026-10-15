@@ -175,7 +175,7 @@ static inline void bpt_emit_dos_entry(const unsigned char ent[16], unsigned n,
 }
 
 static inline int bpt_cmdline_param(const char *line, const char *key, char *val, size_t valsz) {
-    return cmdline_get(line, key, 1, val, valsz) == 1 ? 0 : -1;
+    return cmdline_get(line, key, 1, 1, val, valsz) == 1 ? 0 : -1;
 }
 
 static inline int bpt_class_find(const char *cls, const char *key, const char *want,

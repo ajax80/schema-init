@@ -659,7 +659,7 @@ static inline int import_cmdline(struct dev_ctx *ctx, const char *key) {
     fclose(f);
     buf[n] = '\0';
     char val[UE_VAL_MAX];
-    int r = cmdline_get(buf, key, 0, val, sizeof val);
+    int r = cmdline_get(buf, key, 0, 0, val, sizeof val);
     if (r < 0) return 0;
     uevent_set(ctx->ev, key, r ? val : "1");
     return 1;

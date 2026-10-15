@@ -255,15 +255,17 @@ int main(void) {
         assert(import_cmdline(&cc, "bar") == 1 && !strcmp(uevent_get(cc.ev, "bar"), "a b"));
         assert(import_cmdline(&cc, "baz") == 1 && !strcmp(uevent_get(cc.ev, "baz"), "c d"));
         assert(import_cmdline(&cc, "flag") == 1 && !strcmp(uevent_get(cc.ev, "flag"), "1"));
-        assert(import_cmdline(&cc, "after") == 0);
+        assert(import_cmdline(&cc, "after") == 1 && !strcmp(uevent_get(cc.ev, "after"), "x"));
         assert(import_cmdline(&cc, "fo") == 0);
         unlink(cf);
 
         char v[32];
-        assert(cmdline_get("a=1 a a=", "a", 0, v, sizeof v) == 1 && !v[0]);
-        assert(cmdline_get("a=1 a", "a", 0, v, sizeof v) == 0 && !v[0]);
-        assert(cmdline_get("a=1 a", "a", 1, v, sizeof v) == 1 && !strcmp(v, "1"));
-        assert(cmdline_get("ab=1", "a", 0, v, sizeof v) == -1);
+        assert(cmdline_get("a=1 a a=", "a", 0, 0, v, sizeof v) == 1 && !v[0]);
+        assert(cmdline_get("a=1 a", "a", 0, 0, v, sizeof v) == 0 && !v[0]);
+        assert(cmdline_get("a=1 a", "a", 1, 0, v, sizeof v) == 1 && !strcmp(v, "1"));
+        assert(cmdline_get("ab=1", "a", 0, 0, v, sizeof v) == -1);
+        assert(cmdline_get("x -- a=1", "a", 0, 1, v, sizeof v) == -1);
+        assert(cmdline_get("x -- a=1", "a", 0, 0, v, sizeof v) == 1);
     }
     printf("test_udev_r4a: IMPORT-cmdline OK\n");
 

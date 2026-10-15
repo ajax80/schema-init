@@ -317,6 +317,12 @@ static void test_setup_link(void) {
     nid_wf(d, "cmdline", "ro net.ifnames=0 net.ifnames=1 quiet");
     assert(net_setup_link_build(root, dp, &in, &out) == 0 && !nid_absent(&out, "ID_NET_NAME"));
     nid_wf(d, "cmdline", "ro -- net.ifnames=0");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    nid_wf(d, "cmdline", "ro net.ifnames=Off");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    nid_wf(d, "cmdline", "ro net.ifnames=N");
+    assert(net_setup_link_build(root, dp, &in, &out) == 0 && nid_absent(&out, "ID_NET_NAME"));
+    nid_wf(d, "cmdline", "ro net.ifnames=0 net.ifnames");
     assert(net_setup_link_build(root, dp, &in, &out) == 0 && !nid_absent(&out, "ID_NET_NAME"));
     nid_wf(d, "cmdline", "ro net.ifnames=no quiet");
     nid_wf(e2, "10-lan.link", "[Match]\nMACAddress=a8:a1:59:0b:e8:ef\n[Link]\nName=lan0\n");
