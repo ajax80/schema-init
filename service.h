@@ -15,7 +15,7 @@
 #include "landlock.h"
 
 #define MAX_SERVICES    88
-#define MAX_ARGV        16
+#define MAX_ARGV        64
 #define MAX_ENV         16
 #define MAX_ENV_FILES   4
 #define MAX_EXEC_PRE    8

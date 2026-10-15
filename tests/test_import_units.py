@@ -551,4 +551,12 @@ os.remove(os.path.join(SD, "disksd.svc"))
 si.bus_overrides(log=lambda *_: None)
 check("override dropped when its .svc goes away", not os.path.exists(os.path.join(bd, "org.x.Disks.service")))
 
+for unit, why in (("ExecStart=/bin/x " + " ".join(["a"] * 63), "arguments (limit 62)"),
+                  ("ExecStartPre=/bin/p " + " ".join(["a"] * 32) + "\nExecStart=/bin/x", "words (limit 32)")):
+    try:
+        si.unit_to_svc("big", si.parse_unit("[Service]\n" + unit + "\n")); check("over-cap skipped: " + why, False)
+    except si.Skip as e:
+        check("over-cap skipped: " + why, why in str(e))
+check("62 args kept", si.unit_to_svc("big", si.parse_unit("[Service]\nExecStart=/bin/x " + " ".join(["a"] * 62) + "\n")).count("args=a\n") == 62)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

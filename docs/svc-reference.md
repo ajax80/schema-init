@@ -18,7 +18,7 @@ Every key a schema-init service file understands. The [README](how-it-works.md#s
 |-----|---------|-------------|
 | `name` | *(required)* | Service name — used in logs, dep resolution, and schema-ctl commands |
 | `exec` | *(required)* | Absolute path to the binary to execute |
-| `args` | — | Argument string (repeat the key for multiple args) |
+| `args` | — | One argument per line (repeat the key for multiple args), at most 62; more refuses the unit |
 | `dep` | — | Dependency by name (repeat for multiple deps; can name a service or a group) |
 | `oneshot` | `0` | Exit 0 → PERFECT and don't restart; exit non-zero → RECOVERY arc |
 | `needs_root` | `0` | Abort spawn if uid ≠ 0 |

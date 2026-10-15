@@ -64,6 +64,7 @@ for u in $units; do
 
     bin=$(printf '%s' "$exec_line" | awk '{print $1}')
     rest=$(printf '%s' "$exec_line" | cut -s -d' ' -f2-)
+    [ "$(printf '%s' "$rest" | wc -w)" -le 62 ] || { n_skip=$((n_skip+1)); skipped="$skipped $base(>62-args)"; continue; }
     type=$(printf '%s\n' "$props" | sed -n 's/^Type=//p' | head -1)
     user=$(printf '%s\n' "$props" | sed -n 's/^User=//p' | head -1)
 
