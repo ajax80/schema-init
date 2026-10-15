@@ -735,7 +735,7 @@ grep -Eq "DROPIN-PROBE arg=\[dropin-arg\] argc=\[1\] var=\[dropin\] mem=\[671088
 grep -Eq "ENVOPT-UNSAFE: ENVO=\[\]" "$SERIAL" || { echo "  MISS: optional group-writable env_file not skipped"; pass=0; }
 grep -Eq "ENVFILE-OK: ENVF=from-file" "$SERIAL" || { echo "  MISS: env_file not loaded"; pass=0; }
 grep -Eq "ENVFILE-UNSAFE: .*No such file.*REFUSED env_file /etc/test-env" "$SERIAL" || { echo "  MISS: group-writable env_file not refused"; pass=0; }
-grep -Eq "UNSAFE-RELOAD: err: .* 1 .svc file\(s\) refused" "$SERIAL" || { echo "  MISS: reload not refused with a group-writable .svc"; pass=0; }
+grep -Eq "UNSAFE-RELOAD: err: .* 1 .svc file\(s\) or service dir\(s\) refused" "$SERIAL" || { echo "  MISS: reload not refused with a group-writable .svc"; pass=0; }
 grep -Eq "UNSAFE-AFTER: .*FUNDAMENTAL" "$SERIAL" || { echo "  MISS: refused reload evicted a running service"; pass=0; }
 grep -Eq "DROPIN-RELOAD: err: .*'test-dropin' modified since boot" "$SERIAL" || { echo "  MISS: reload not refused after a drop-in was added"; pass=0; }
 grep -Eq "DROPIN-REEXEC: err: .*test-dropin" "$SERIAL" || { echo "  MISS: reexec not refused after a drop-in was added"; pass=0; }

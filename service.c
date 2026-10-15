@@ -836,8 +836,7 @@ static int listen_dir(const char *path, const char **base) {
         int n = openat(dfd, p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         close(dfd);
         dfd = n;
-        if (dfd >= 0 && (fstat(dfd, &st) < 0 || (st.st_uid != 0 && st.st_uid != geteuid()) ||
-                         ((st.st_mode & 022) && !(st.st_mode & S_ISVTX)))) {
+        if (dfd >= 0 && (fstat(dfd, &st) < 0 || !svc_dir_trusted(&st, 1))) {
             close(dfd);
             dfd = -1;
             errno = EPERM;
@@ -2208,7 +2207,7 @@ bad:
 
 static int svc_dir_chain_trusted(const char *dir) {
     char p[PATH_MAX];
-    if (!realpath(dir, p)) return 1;
+    if (!realpath(dir, p)) return 0;
     for (int top = 1;; top = 0) {
         struct stat st;
         char *s;
@@ -2225,7 +2224,7 @@ int services_load(const char *dir, service_t *table, int max) {
     svc_refused = 0;
     if (d && !svc_dir_chain_trusted(dir)) {
         fprintf(stderr, "[schema-init] WARN: %s or a parent directory is not owned by root or is "
-                "writable by others — loading anyway; a live reload is refused (chown root:root; chmod go-w)\n", dir);
+                "writable by others — loading anyway; schema-ctl reload is refused until fixed (chown root:root; chmod go-w)\n", dir);
         svc_refused++;
     }
     struct dirent *ent;
