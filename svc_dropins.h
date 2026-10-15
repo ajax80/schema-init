@@ -29,9 +29,9 @@ static inline int svc_read_line(FILE *f, char *buf, size_t len) {
     }
 }
 
-static inline int svc_dir_trusted(const struct stat *st) {
+static inline int svc_dir_trusted(const struct stat *st, int allow_sticky) {
     return (st->st_uid == 0 || st->st_uid == geteuid()) &&
-           (!(st->st_mode & 022) || (st->st_mode & S_ISVTX));
+           (!(st->st_mode & 022) || (allow_sticky && (st->st_mode & S_ISVTX)));
 }
 
 static inline int svc_dropin_filter(const struct dirent *e) {
@@ -42,7 +42,7 @@ static inline int svc_dropin_filter(const struct dirent *e) {
 static inline int svc_dropin_scan(const char *dir, char (*out)[SVC_DROPIN_PATH], int count, int max) {
     struct dirent **ents;
     struct stat ds;
-    if (stat(dir, &ds) == 0 && S_ISDIR(ds.st_mode) && !svc_dir_trusted(&ds)) return -1;
+    if (stat(dir, &ds) == 0 && S_ISDIR(ds.st_mode) && !svc_dir_trusted(&ds, 0)) return -1;
     int n = scandir(dir, &ents, svc_dropin_filter, svc_dropin_cmp);
     if (n < 0) return count;
     for (int i = 0; i < n; i++) {

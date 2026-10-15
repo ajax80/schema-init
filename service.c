@@ -2209,10 +2209,10 @@ bad:
 static int svc_dir_chain_trusted(const char *dir) {
     char p[PATH_MAX];
     if (!realpath(dir, p)) return 1;
-    for (;;) {
+    for (int top = 1;; top = 0) {
         struct stat st;
         char *s;
-        if (stat(p, &st) < 0 || !svc_dir_trusted(&st)) return 0;
+        if (stat(p, &st) < 0 || !svc_dir_trusted(&st, !top)) return 0;
         s = strrchr(p, '/');
         if (s != p) *s = '\0';
         else if (p[1]) p[1] = '\0';

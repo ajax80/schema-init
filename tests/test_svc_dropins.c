@@ -262,8 +262,7 @@ int main(void) {
         svc_refused = 0;
         assert(load("dd.svc", &s) == -1 && svc_refused == 1);
         assert(chmod(p, 01777) == 0);
-        assert(load("dd.svc", &s) == 0);
-        drop(&s);
+        assert(load("dd.svc", &s) == -1);
         assert(chmod(p, 0775) == 0);
         assert(load("dd.svc", &s) == -1);
         assert(chmod(p, 0755) == 0);
@@ -273,6 +272,9 @@ int main(void) {
         assert(n > 0 && svc_refused == 0);
         for (int i = 0; i < n; i++) drop(&tab[i]);
         assert(chmod(dir, 0777) == 0);
+        assert(services_load(dir, tab, 64) == n && svc_refused == 1);
+        for (int i = 0; i < n; i++) drop(&tab[i]);
+        assert(chmod(dir, 01777) == 0);
         assert(services_load(dir, tab, 64) == n && svc_refused == 1);
         for (int i = 0; i < n; i++) drop(&tab[i]);
         assert(chmod(dir, 0700) == 0);
