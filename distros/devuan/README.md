@@ -157,6 +157,10 @@ schema-dbus starts D-Bus-activated services (UDisks2, UPower, polkit, …)
 itself. `sudo rm /etc/schema-init/dbus-broker` goes back to `dbus-daemon`.
 sysvinit boots always use `dbus-daemon`.
 
+On the HP laptop (LCOS, HDD) schema-dbus drew the desktop in 25.8 s against
+26.2 s for `dbus-daemon` (median of 3 boots each), with the same RAM: on par,
+within boot-to-boot noise ([raw](../../tests/livetest/dbox-bench-20261016-schema-dbus.txt)).
+
 Logs: `/var/log/schema-init/<service>.log`, boot and shutdown timing in
 `rail.log` and `shutdown.log`.
 
