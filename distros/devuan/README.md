@@ -20,6 +20,40 @@ On each: boots to the desktop under schema-init, the Restart/Shut Down buttons
 work, and the sysvinit entry still boots and shuts down normally with this
 installed.
 
+## Compared with sysvinit
+
+What you get:
+
+- **Supervision.** sysvinit starts a daemon and forgets it. If
+  NetworkManager or elogind dies, it stays dead. schema-init restarts it and
+  counts the restarts (`schema-ctl status`).
+- **Start on ready, not on order.** A service starts once the ones it depends
+  on are actually up (elogind waits for the D-Bus socket to exist, not for a
+  script before it to return).
+- **Ordered shutdown.** Services stop in reverse dependency order, then what
+  is left is killed and filesystems go read-only. On the LCOS VM the services
+  were down in 0.6 s.
+- **A log per service** in `/var/log/schema-init/`, plus boot and shutdown
+  timing.
+- **Live control.** `schema-ctl status`, `start`, `stop`, and `add` to load a
+  new service without a reboot. A new schema-init takes over PID 1 in place
+  (`schema-ctl reexec`).
+- **Timers without cron** (`logrotate` at 00:10).
+- **Per-service sandboxing** (`no_new_privs`, `protect_system`,
+  `private_tmp`, `protect_home`) is available; the Devuan services ship with
+  it off.
+
+What it costs:
+
+- Each daemon needs a `.svc` file. Devuan packages ship sysvinit scripts, not
+  these: a daemon you install later does not start under schema-init until
+  you write one.
+- No runlevels and no single-user boot (the only shell PID 1 drops to is an
+  emergency one when the service graph is broken). No fsck at boot, no wtmp:
+  see [Known](#known). For maintenance, boot the sysvinit entry.
+- sysvinit has decades of use behind it. This path was first tested in
+  October 2026.
+
 ## Install
 
 ```sh
