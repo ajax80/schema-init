@@ -59,6 +59,38 @@ def main():
                            capture_output=True, text=True, timeout=15)
         check('unarmed: falls back before touching the broker',
               'broker not armed' in r.stderr, r.stderr.strip().splitlines()[0] if r.stderr else '')
+
+        print("-- system launcher policy cache --")
+        open(gate, 'w').close()
+        broker = os.path.join(tmp, 'broker')
+        with open(broker, 'w') as f:
+            f.write('#!/bin/sh\necho "$SCHEMA_DBUS_POLICY"\n')
+        os.chmod(broker, 0o755)
+        cache = os.path.join(tmp, 'cache', 'dbus.policy')
+        poldir = os.path.join(tmp, 'run')
+        env = dict(os.environ, SCHEMA_DBUS_GATE=gate, SCHEMA_DBUS_BROKER=broker,
+                   SCHEMA_DBUS_CACHE=cache, SCHEMA_DBUS_POLDIR=poldir)
+
+        def launch(e=env):
+            return subprocess.run([SYSTEM], env=e, capture_output=True, text=True, timeout=30).stdout.strip()
+
+        if os.path.exists('/usr/share/dbus-1/system.conf'):
+            first = launch()
+            check('cold: dissolves into the run dir and fills the cache',
+                  first == os.path.join(poldir, 'dbus.policy') and os.path.getsize(cache) > 0
+                  and open(cache).read() == open(first).read(), first)
+            nopy = os.path.join(tmp, 'nopy')
+            os.mkdir(nopy)
+            with open(os.path.join(nopy, 'python3'), 'w') as f:
+                f.write('#!/bin/sh\nexit 1\n')
+            os.chmod(os.path.join(nopy, 'python3'), 0o755)
+            check('warm: broker reads the cache, python3 never runs',
+                  launch(dict(env, PATH=nopy + ':' + os.environ['PATH'])) == cache)
+            os.utime(cache, (0, 0))
+            check('D-Bus config newer than the cache: dissolves again',
+                  launch() == os.path.join(poldir, 'dbus.policy') and os.path.getmtime(cache) > 0)
+        else:
+            print("  SKIP  policy cache: no /usr/share/dbus-1/system.conf")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

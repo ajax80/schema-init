@@ -7,12 +7,14 @@
 # policy format at boot, then exec the broker on the system bus socket. If the
 # dissolve fails for any reason, fall back to stock dbus-daemon so the box still
 # boots with a working bus — the cutover is self-healing, never a dead bus.
-# The dissolved policy is cached in /var/cache/schema-init and reused until a
-# D-Bus config file or the dissolver is newer than the cache (python3 cold-start
-# is ~0.6 s on a spinning disk, and every bus client waits on it).
+# The dissolved policy is cached in /var/cache/schema-init and used as is until a
+# D-Bus config file or the dissolver is newer than the cache. Every bus client
+# waits on this script, so the cached path runs shell builtins only: on a
+# spinning disk python3 costs ~0.6 s cold and each coreutils exec tens of ms.
 set -u
 
-self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+case "$0" in */*) self_dir=${0%/*} ;; *) self_dir=. ;; esac
+self_dir=$(CDPATH= cd -- "$self_dir" && pwd)
 
 find_bin() {
     for p in /usr/local/bin/"$1" /usr/bin/"$1" /sbin/"$1" \
@@ -31,9 +33,9 @@ for p in "$self_dir/dissect_policy.py" \
     [ -f "$p" ] && { DISSECT="$p"; break; }
 done
 
-BROKER=$(find_bin schema-dbus)
+BROKER=${SCHEMA_DBUS_BROKER:-$(find_bin schema-dbus)}
 STOCK=$(find_bin dbus-daemon)
-POLDIR=/run/schema-init
+POLDIR=${SCHEMA_DBUS_POLDIR:-/run/schema-init}
 POL="$POLDIR/dbus.policy"
 
 fallback() {
@@ -46,13 +48,20 @@ fallback() {
 [ -n "$BROKER" ] || fallback "schema-dbus binary not found"
 [ -n "$DISSECT" ] || fallback "dissect_policy.py not found"
 
-CACHE=/var/cache/schema-init/dbus.policy
+CACHE=${SCHEMA_DBUS_CACHE:-/var/cache/schema-init/dbus.policy}
 
-mkdir -p "$POLDIR"
-if [ -s "$CACHE" ] && [ -z "$(find /usr/share/dbus-1/system.conf /usr/share/dbus-1/system.d /etc/dbus-1 "$DISSECT" -newer "$CACHE" 2>/dev/null | head -n1)" ] &&
-   cp "$CACHE" "$POL.tmp" 2>/dev/null; then
-    mv -f "$POL.tmp" "$POL"
-elif python3 "$DISSECT" /usr/share/dbus-1/system.conf > "$POL.tmp" 2>/dev/null && [ -s "$POL.tmp" ]; then
+cache_fresh() {
+    [ -s "$CACHE" ] || return 1
+    for f in /usr/share/dbus-1/system.conf /usr/share/dbus-1/system.d /usr/share/dbus-1/system.d/* \
+             /etc/dbus-1 /etc/dbus-1/* /etc/dbus-1/*/* "$DISSECT"; do
+        [ "$f" -nt "$CACHE" ] && return 1
+    done
+    return 0
+}
+
+if cache_fresh; then
+    POL=$CACHE
+elif mkdir -p "$POLDIR" && python3 "$DISSECT" /usr/share/dbus-1/system.conf > "$POL.tmp" 2>/dev/null && [ -s "$POL.tmp" ]; then
     mv -f "$POL.tmp" "$POL"
     mkdir -p "${CACHE%/*}" && cp "$POL" "$CACHE.tmp" 2>/dev/null && mv -f "$CACHE.tmp" "$CACHE"
 else
@@ -60,4 +69,5 @@ else
     fallback "policy dissolve failed"
 fi
 
-exec env SCHEMA_DBUS_POLICY="$POL" "$BROKER" --system
+export SCHEMA_DBUS_POLICY="$POL"
+exec "$BROKER" --system
