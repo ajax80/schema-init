@@ -7,6 +7,9 @@
 # policy format at boot, then exec the broker on the system bus socket. If the
 # dissolve fails for any reason, fall back to stock dbus-daemon so the box still
 # boots with a working bus — the cutover is self-healing, never a dead bus.
+# The dissolved policy is cached in /var/cache/schema-init and reused until a
+# D-Bus config file or the dissolver is newer than the cache (python3 cold-start
+# is ~0.6 s on a spinning disk, and every bus client waits on it).
 set -u
 
 self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -43,9 +46,15 @@ fallback() {
 [ -n "$BROKER" ] || fallback "schema-dbus binary not found"
 [ -n "$DISSECT" ] || fallback "dissect_policy.py not found"
 
+CACHE=/var/cache/schema-init/dbus.policy
+
 mkdir -p "$POLDIR"
-if python3 "$DISSECT" /usr/share/dbus-1/system.conf > "$POL.tmp" 2>/dev/null && [ -s "$POL.tmp" ]; then
+if [ -s "$CACHE" ] && [ -z "$(find /usr/share/dbus-1/system.conf /usr/share/dbus-1/system.d /etc/dbus-1 "$DISSECT" -newer "$CACHE" 2>/dev/null | head -n1)" ] &&
+   cp "$CACHE" "$POL.tmp" 2>/dev/null; then
     mv -f "$POL.tmp" "$POL"
+elif python3 "$DISSECT" /usr/share/dbus-1/system.conf > "$POL.tmp" 2>/dev/null && [ -s "$POL.tmp" ]; then
+    mv -f "$POL.tmp" "$POL"
+    mkdir -p "${CACHE%/*}" && cp "$POL" "$CACHE.tmp" 2>/dev/null && mv -f "$CACHE.tmp" "$CACHE"
 else
     rm -f "$POL.tmp"
     fallback "policy dissolve failed"
