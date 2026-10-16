@@ -145,7 +145,8 @@ Produces a statically linked binary. One caveat: resolving `user=` and group nam
 
 - Debian Bookworm, kernel 6.1, x86_64 — headless and Cinnamon desktop
 - Fedora 44, kernel 7.0, x86_64 — full KDE Plasma desktop, btrfs subvolume boot
-- Devuan 6 (Excalibur), kernel 6.12, x86_64 — Xfce + SLiM beside sysvinit, UEFI VM ([guide](../distros/devuan/README.md))
+- Devuan 6 (Excalibur), kernel 6.12, x86_64 — Xfce + SLiM or LightDM beside sysvinit, UEFI VM ([guide](../distros/devuan/README.md))
+- LCOS 0.9.3 (Devuan-based), kernel 7.2.6, x86_64 — Xfce + LightDM + XLibre beside sysvinit, UEFI VM
 
 **Cross-compile for aarch64 (ARM — Ungulate Leg target):**
 

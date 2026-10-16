@@ -1,14 +1,20 @@
-# schema-init on Devuan
+# schema-init on Devuan (and LCOS)
 
 Boot Devuan 6 (Excalibur) with schema-init as PID 1, side by side with sysvinit.
 Nothing about your sysvinit boot changes: it stays the default GRUB entry, and
 schema-init gets its own entries below it. Pick one at boot to try it; pick the
 normal entry to go back.
 
-Tested on a fresh Devuan 6.1.1 netinstall (sysvinit, Xfce, SLiM, elogind, eudev,
-NetworkManager) in a UEFI VM: boots to the Xfce desktop under schema-init, the
-Xfce Restart/Shut Down buttons work, and the sysvinit entry still boots and
-shuts down normally with this installed.
+Tested in UEFI VMs on:
+
+- **Devuan 6.1.1** netinstall (sysvinit, Xfce, SLiM, elogind, eudev,
+  NetworkManager), and the same with LightDM.
+- **LCOS 0.9.3** (Devuan Excalibur, LightDM, XLibre, chrony, kernel
+  7.2.6-lunduke).
+
+On each: boots to the desktop under schema-init, the Restart/Shut Down buttons
+work, and the sysvinit entry still boots and shuts down normally with this
+installed.
 
 ## Install
 
