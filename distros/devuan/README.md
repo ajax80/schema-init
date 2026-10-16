@@ -45,9 +45,10 @@ What you get:
 
 What it costs:
 
-- Each daemon needs a `.svc` file. Devuan packages ship sysvinit scripts, not
-  these: a daemon you install later does not start under schema-init until
-  you write one.
+- Services are translated, not native. Most Devuan packages ship a systemd
+  unit beside their init script, and schema-import reads it; the rest run their
+  init script once, as sysvinit does, without supervision. See
+  [Other services](#other-services).
 - No runlevels and no single-user boot (the only shell PID 1 drops to is an
   emergency one when the service graph is broken). No fsck at boot, no wtmp:
   see [Known](#known). For maintenance, boot the sysvinit entry.
@@ -84,6 +85,9 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
   are skipped at boot while the program isn't installed (LCOS has no cron) and
   start once it is.
 - Copies the boot helpers in `scripts/` to `/usr/local/libexec/schema-init/`.
+- Runs `schema-import --rc` for everything else sysvinit starts, and adds an
+  apt hook that reruns it after every install (see
+  [Other services](#other-services)).
 - Diverts `/usr/sbin/halt` and `/usr/sbin/shutdown` with `dpkg-divert` and puts a
   small wrapper in their place (see Shutdown below). sysvinit's originals stay
   as `halt.sysvinit` and `shutdown.sysvinit`.
@@ -112,9 +116,28 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 PID 1 itself mounts `/proc`, `/sys`, `/dev`, `/run`, remounts `/` read-write and
 sets the hostname from `/etc/hostname`.
 
-Not started under schema-init: rsyslog (journal-sink owns `/dev/log`), seatd
-(elogind manages the seat), anacron, avahi, cups, saned, ModemManager. To add one, write a `.svc` in `/etc/schema-init/services/`;
-`schema-ctl add <path>` loads it without a reboot.
+### Other services
+
+Everything else in `/etc/rc2.d` (what sysvinit starts in runlevel 2) gets a
+`.svc` from `schema-import --rc`:
+
+- If the package ships a systemd unit that boot starts (`WantedBy=`), the
+  `.svc` comes from the unit: supervised, with its socket, readiness, user,
+  environment file and sandboxing carried over (cups, avahi-daemon, rsync,
+  haveged, ...).
+- Otherwise (no unit, a masked one, or one only udev or D-Bus starts) it runs
+  `/etc/init.d/<name> start` once, as sysvinit does (rc.local, sudo,
+  rmnologin, saned, spice-vdagent, ...).
+
+The apt hook (`/etc/apt/apt.conf.d/80schema-init`) does the same after every
+`apt install`; under schema-init the new service starts right away.
+`/etc/schema-init/services/<name>.svc.skipped` says why a service was not
+translated (e.g. open-vm-tools outside VMware). A `.svc` you write or edit is
+never overwritten.
+
+Left out on purpose ([`sysv-covered`](sysv-covered)): scripts a service above
+already runs, plus rsyslog (journal-sink owns `/dev/log`), seatd (elogind
+manages the seat) and bootlogd.
 
 ### schema-dbus
 
@@ -155,6 +178,11 @@ polkit D-Bus activation file (Devuan's own takes over). `/etc/schema-init`
 and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
 
 ## Known
+
+- A `.svc` from `schema-import` stays after `update-rc.d <name> disable` or
+  `apt remove`; delete it by hand. Timers (`man-db.timer`, ...) are not
+  imported. `rc.local` is not held back until the end of boot as under
+  sysvinit.
 
 - `tmpfs` lines in `/etc/fstab` (and `RAMTMP=yes`) are not mounted under
   schema-init; `/tmp` stays on disk.

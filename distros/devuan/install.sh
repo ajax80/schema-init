@@ -50,7 +50,7 @@ done
 install -m 0755 distros/fedora-installer/migrate/schema-import.py $L/schema-import
 install -m 0644 $P/sysv-covered $L/sysv-covered
 $L/schema-import --rc --rc-skip $L/sysv-covered || echo "schema-import failed: the services above still boot; the rest of /etc/rc2.d does not run under schema-init."
-printf '%s\n' 'DPkg::Post-Invoke { "[ ! -x /usr/local/libexec/schema-init/schema-import ] || /usr/local/libexec/schema-init/schema-import --rc --rc-skip /usr/local/libexec/schema-init/sysv-covered >/dev/null 2>&1 || true"; };' > /etc/apt/apt.conf.d/80schema-init
+printf '%s\n' 'DPkg::Post-Invoke { "[ ! -x /usr/local/libexec/schema-init/schema-import ] || /usr/local/libexec/schema-init/schema-import --rc --start --rc-skip /usr/local/libexec/schema-init/sysv-covered >/dev/null 2>&1 || true"; };' > /etc/apt/apt.conf.d/80schema-init
 
 for f in halt shutdown; do
     dpkg-divert --quiet --rename --add --divert /usr/sbin/$f.sysvinit /usr/sbin/$f

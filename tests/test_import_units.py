@@ -580,20 +580,21 @@ open(os.path.join(rc, "etc/inittab"), "w").write("id:3:initdefault:\n")
 open(os.path.join(rc, "svc/mount-fstab.svc"), "w").write("name=mount-fstab\nexec=/bin/true\noneshot=1\n")
 _lsb = ("#!/bin/sh\n### BEGIN INIT INFO\n# Provides: %s\n# Required-Start:    $remote_fs $syslog %s\n"
         "# Default-Start: 2 3 4 5\n### END INIT INFO\nPIDFILE=/run/x.pid\n")
-for n, extra in (("plain", "dbus"), ("masked", ""), ("withunit", ""), ("covered", ""), ("noexec", "")):
+for n, extra in (("plain", "dbus"), ("masked", ""), ("withunit", ""), ("covered", ""), ("noexec", ""), ("udevonly", "")):
     open(os.path.join(rc, "etc/init.d", n), "w").write(_lsb % (n, extra))
     os.symlink("../init.d/" + n, os.path.join(rc, "etc/rc3.d", "S02" + n))
 os.symlink("../init.d/plain", os.path.join(rc, "etc/rc3.d", "K01plain"))
 os.symlink("/dev/null", os.path.join(rc, "lib/systemd/system/masked.service"))
-open(os.path.join(rc, "lib/systemd/system/withunit.service"), "w").write("[Service]\nExecStart=/usr/bin/withunitd -f\n")
+open(os.path.join(rc, "lib/systemd/system/withunit.service"), "w").write("[Service]\nExecStart=/usr/bin/withunitd -f\n[Install]\nWantedBy=multi-user.target\n")
+open(os.path.join(rc, "lib/systemd/system/udevonly.service"), "w").write("[Service]\nExecStart=/usr/bin/udevonlyd\n[Install]\nAlso=udevonly.socket\n")
 open(os.path.join(rc, "lib/systemd/system/noexec.service"), "w").write("[Unit]\nDescription=x\n")
 _skipf = os.path.join(rc, "skip")
 open(_skipf, "w").write("# comment\ncovered other  # trailing\n")
 check("read_skip: words, comments dropped", si.read_skip(_skipf) == {"covered", "other"})
 check("runlevel from inittab initdefault", si._runlevel() == "3")
 _u = si.rc_units(si.read_skip(_skipf))
-check("rc_units: unit when runnable, script when masked/no ExecStart, skip honored, K links ignored",
-      _u == ["/etc/init.d/masked", "/etc/init.d/noexec", "/etc/init.d/plain", "withunit.service"])
+check("rc_units: unit when boot starts it, script when masked/no ExecStart/no WantedBy, skip honored, K links ignored",
+      _u == ["/etc/init.d/masked", "/etc/init.d/noexec", "/etc/init.d/plain", "/etc/init.d/udevonly", "withunit.service"])
 si.drain(units=_u, log=lambda *_: None)
 _p = open(os.path.join(rc, "svc/plain.svc")).read()
 check("lsb: runs start once, like sysvinit", "exec=/etc/init.d/plain\nargs=start\noneshot=1\n" in _p)

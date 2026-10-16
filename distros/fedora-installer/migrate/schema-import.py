@@ -1138,16 +1138,22 @@ def _runlevel():
 
 
 def _runnable_unit(unit):
-    """unit exists and has an ExecStart (a masked unit, -> /dev/null, reads
-    empty). Debian masks the unit when the init script is the real thing."""
+    """unit has an ExecStart and an [Install] target boot pulls it into. A
+    masked unit (-> /dev/null) reads empty: Debian masks it when the init
+    script is the real thing. A unit with no WantedBy=/RequiredBy= is started
+    by something else on systemd (udev, a socket, D-Bus), so the init script,
+    with its own checks, is what sysvinit actually runs."""
     p = find_unit(unit)
     if not p:
         return False
     try:
         with open(p) as f:
-            return bool(_get_last(parse_unit(f.read()).get("Service", []), "ExecStart"))
+            sec = parse_unit(f.read())
     except OSError:
         return False
+    inst = sec.get("Install", [])
+    return bool(_get_last(sec.get("Service", []), "ExecStart")) and \
+        bool(_get_last(inst, "WantedBy") or _get_last(inst, "RequiredBy"))
 
 
 def rc_units(skip=()):
@@ -1265,7 +1271,7 @@ def import_one(name, force=False, queued=()):
     return ("imported", (out, body))
 
 
-def drain(units=None, force=False, dry_run=False, log=print):
+def drain(units=None, force=False, dry_run=False, log=print, written=None):
     """Drain the queue (or the given unit list). Writes .svc files, then rewrites
     the queue keeping only transient (not-found) entries. Returns a counts dict."""
     from_queue = units is None
@@ -1285,6 +1291,8 @@ def drain(units=None, force=False, dry_run=False, log=print):
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 with open(out, "w") as f:
                     f.write(body)
+                if written is not None:
+                    written.append(out)
         elif status == "exists":
             log("have    %s (%s exists; --force to overwrite)" % (name, detail))
         elif status == "not-found":
@@ -1455,6 +1463,8 @@ def main(argv=None):
                     help="only regenerate the D-Bus activation overrides that route bus names to PID 1")
     ap.add_argument("--rc", action="store_true",
                     help="import what sysvinit starts in the default runlevel (/etc/rcN.d)")
+    ap.add_argument("--start", action="store_true",
+                    help="when schema-init is PID 1, load and start each new .svc now (schema-ctl add)")
     ap.add_argument("--rc-skip", metavar="FILE",
                     help="init script names (whitespace-separated, # comments) --rc leaves out")
     args = ap.parse_args(argv)
@@ -1468,7 +1478,11 @@ def main(argv=None):
     if args.rc:
         skip = read_skip(args.rc_skip) if args.rc_skip else set()
         units = (units or []) + [u for u in rc_units(skip) if u not in (units or [])]
-    counts = drain(units=units, force=args.force, dry_run=args.dry_run)
+    written = []
+    counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written)
+    if args.start and written and _read("/proc/1/comm").strip() == "schema-init":
+        for out in written:
+            subprocess.run(["schema-ctl", "add", out])
     print("imported=%(imported)d exists=%(exists)d not-found=%(not-found)d "
           "skipped=%(skipped)d error=%(error)d" % counts)
     try:
