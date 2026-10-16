@@ -19,6 +19,7 @@ if [ "${1:-}" = --remove ]; then
 fi
 
 make install
+[ -x /usr/sbin/logrotate ] || { cmp -s /etc/schema-init/services/logrotate.svc services/logrotate.svc && rm -f /etc/schema-init/services/logrotate.svc; }
 install -d -m 0755 /etc/schema-init/services $L/sysv
 install -d -m 0755 $L/shipped
 dm=$(basename "$(cat /etc/X11/default-display-manager 2>/dev/null)")
@@ -31,6 +32,11 @@ for f in $P/services/*.svc; do
                 continue
             fi ;;
     esac
+    x=$(sed -n 's/^exec=//p' "$f")
+    if [ ! -x "$x" ]; then
+        cmp -s "$t" "$L/shipped/$n" && rm -f "$t" "$L/shipped/$n"
+        continue
+    fi
     if [ -e "$t" ] && ! cmp -s "$t" "$f" && ! cmp -s "$t" "$L/shipped/$n"; then
         echo "kept your edited $t (new version: $f)"
     else

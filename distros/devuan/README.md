@@ -35,7 +35,8 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 - `make install`: binaries to `/usr/bin` (`schema-init`, `schema-ctl`,
   `schema-journal-sink`, ...).
 - Copies the service files in `services/` to `/etc/schema-init/services/`,
-  keeping any you have edited (it prints which).
+  keeping any you have edited (it prints which) and skipping any whose program
+  isn't installed (LCOS, for example, has no cron).
 - Copies the boot helpers in `scripts/` to `/usr/local/libexec/schema-init/`.
 - Diverts `/usr/sbin/halt` and `/usr/sbin/shutdown` with `dpkg-divert` and puts a
   small wrapper in their place (see Shutdown below). sysvinit's originals stay
@@ -58,6 +59,7 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 | `network-manager` | `network-manager` | `NetworkManager --no-daemon` |
 | `slim` or `lightdm` | `slim` / `lightdm` | `slim -n` / `lightdm`; install.sh picks the one in `/etc/X11/default-display-manager` |
 | `sshd`, `cron` | `ssh`, `cron` | `sshd -D`, `cron -f` |
+| `chrony`, `bluetoothd` | `chrony`, `bluetooth` | `chronyd -n`, `bluetoothd -n` |
 | `getty-tty1` … `getty-tty6` | `inittab` gettys | `getty 38400 ttyN` |
 | `logrotate` | cron.daily logrotate | `logrotate` at 00:10 |
 
