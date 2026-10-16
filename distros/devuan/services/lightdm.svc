@@ -1,5 +1,6 @@
 name=lightdm
 exec=/usr/sbin/lightdm
+condition=file_is_exec:/usr/sbin/lightdm
 dep=elogind
 dep=udev-coldplug
 needs_root=1

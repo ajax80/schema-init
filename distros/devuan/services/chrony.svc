@@ -1,5 +1,6 @@
 name=chrony
 exec=/usr/sbin/chronyd
+condition=file_is_exec:/usr/sbin/chronyd
 args=-n
 dep=devuan-boot
 needs_root=1

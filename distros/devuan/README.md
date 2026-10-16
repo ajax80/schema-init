@@ -41,8 +41,10 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 - `make install`: binaries to `/usr/bin` (`schema-init`, `schema-ctl`,
   `schema-journal-sink`, ...).
 - Copies the service files in `services/` to `/etc/schema-init/services/`,
-  keeping any you have edited (it prints which) and skipping any whose program
-  isn't installed (LCOS, for example, has no cron).
+  keeping any you have edited (it prints which). Services for optional programs
+  (cron, chrony, bluetoothd, sshd, ...) carry `condition=file_is_exec:`, so they
+  are skipped at boot while the program isn't installed (LCOS has no cron) and
+  start once it is.
 - Copies the boot helpers in `scripts/` to `/usr/local/libexec/schema-init/`.
 - Diverts `/usr/sbin/halt` and `/usr/sbin/shutdown` with `dpkg-divert` and puts a
   small wrapper in their place (see Shutdown below). sysvinit's originals stay

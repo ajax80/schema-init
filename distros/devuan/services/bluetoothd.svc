@@ -1,5 +1,6 @@
 name=bluetoothd
 exec=/usr/sbin/bluetoothd
+condition=file_is_exec:/usr/sbin/bluetoothd
 args=-n
 dep=dbus
 dep=udev-coldplug

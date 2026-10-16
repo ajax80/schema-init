@@ -1,5 +1,6 @@
 name=network-manager
 exec=/usr/sbin/NetworkManager
+condition=file_is_exec:/usr/sbin/NetworkManager
 args=--no-daemon
 dep=dbus
 dep=udev-coldplug

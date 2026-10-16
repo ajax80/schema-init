@@ -1,5 +1,6 @@
 name=sshd
 exec=/usr/sbin/sshd
+condition=file_is_exec:/usr/sbin/sshd
 args=-D
 dep=devuan-boot
 needs_root=1
