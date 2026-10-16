@@ -1,0 +1,46 @@
+# LCOS 0.9.3 on DBox (HP 15, Celeron N4000, 3.7 GB RAM, 5400 rpm HDD), 2026-10-15
+# Same install, sysvinit vs schema-init (distros/devuan install.sh from master a0b7497), kernel 7.2.6-lunduke
+# Warm reboots alternating sides via efibootmgr -n + grub-reboot; LightDM autologin into Xfce on both;
+# tests/livetest/boot-metrics read 4 min after boot; run=0 discarded. Seconds from kernel start.
+
+=== run=0 side=sysv try=1 22:11:55
+init=init kernel=7.2.6-lunduke uptime=241
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=17.1 xfce4_session=22.8 xfce4_panel=26.7 xfdesktop=27.0
+mem_used_mb=430 procs=150 load1=0.22 io_some_avg300=
+=== run=0 side=schema try=1 22:16:30
+init=schema-init kernel=7.2.6-lunduke uptime=249
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.3 xfce4_session=20.8 xfce4_panel=25.2 xfdesktop=25.4
+mem_used_mb=420 procs=142 load1=0.10 io_some_avg300=
+=== run=1 side=sysv try=1 22:20:53
+init=init kernel=7.2.6-lunduke uptime=242
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=16.8 xfce4_session=22.6 xfce4_panel=26.9 xfdesktop=27.2
+mem_used_mb=428 procs=149 load1=0.17 io_some_avg300=
+=== run=1 side=schema try=1 22:25:29
+init=schema-init kernel=7.2.6-lunduke uptime=249
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.4 xfce4_session=20.8 xfce4_panel=25.5 xfdesktop=25.8
+mem_used_mb=419 procs=142 load1=0.12 io_some_avg300=
+=== run=2 side=sysv try=1 22:29:52
+init=init kernel=7.2.6-lunduke uptime=242
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=16.2 xfce4_session=22.6 xfce4_panel=27.0 xfdesktop=27.2
+mem_used_mb=431 procs=149 load1=0.15 io_some_avg300=
+=== run=2 side=schema try=1 22:34:28
+init=schema-init kernel=7.2.6-lunduke uptime=249
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.0 xfce4_session=20.6 xfce4_panel=24.8 xfdesktop=25.1
+mem_used_mb=424 procs=142 load1=0.13 io_some_avg300=
+=== run=3 side=sysv try=1 22:39:01
+init=init kernel=7.2.6-lunduke uptime=251
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=16.6 xfce4_session=22.4 xfce4_panel=26.8 xfdesktop=27.1
+mem_used_mb=429 procs=151 load1=0.18 io_some_avg300=
+=== run=3 side=schema try=1 22:43:36
+init=schema-init kernel=7.2.6-lunduke uptime=249
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.1 xfce4_session=20.4 xfce4_panel=25.0 xfdesktop=25.3
+mem_used_mb=420 procs=142 load1=0.12 io_some_avg300=
+DONE

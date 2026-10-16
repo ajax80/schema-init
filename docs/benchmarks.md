@@ -87,6 +87,21 @@ Measured 2026-10-09 on the same HP laptop (Celeron N4000, 3.7 GB RAM, 5400 rpm H
 
 On a box nobody tuned, the migrated install draws the desktop 27.5 s sooner and carries 439 MB less RAM. Spread was small on both sides (desktop drawn 98.5–103.7 s stock, 68.9–71.7 s migrated). The stock baseline differs from the table above (Live-ISO install instead of netinst, a newer kernel and Plasma), so compare columns within one table, not across tables.
 
+### LCOS 0.9.3 (Devuan-based, Xfce): sysvinit vs schema-init
+
+Measured 2026-10-15 on the same HP laptop (Celeron N4000, 3.7 GB RAM, 5400 rpm HDD), LCOS 0.9.3 installed from its ISO on a second partition, kernel 7.2.6-lunduke, schema-init added with [`distros/devuan/install.sh`](../distros/devuan/README.md) and no tuning. One install, two GRUB entries: the stock sysvinit entry and the `schema-init:` entry. Both sides autologin through LightDM into Xfce. Warm reboots alternating the two sides, readings 4 minutes after boot by [`tests/livetest/boot-metrics`](../tests/livetest/boot-metrics), seconds from kernel start, medians of 3 runs after one discarded boot per side. Raw data in [`tests/livetest/dbox-bench-20261015-lcos.txt`](../tests/livetest/dbox-bench-20261015-lcos.txt).
+
+| | sysvinit (stock LCOS) | schema-init |
+|---|---|---|
+| X server spawned | 16.6 s | **15.1 s** |
+| xfce4-session spawned | 22.6 s | **20.6 s** |
+| desktop drawn (xfdesktop spawned) | 27.2 s | **25.3 s** |
+| RAM used at idle | 429 MB | **420 MB** |
+| processes | 149 | **142** |
+| load average (1 min) at 4 min | 0.17 | 0.12 |
+
+A small gain: the desktop is drawn 1.9 s sooner and the machine carries 9 MB less. sysvinit on LCOS is already lean, so there is much less to take away than from systemd on Fedora. Spread was tight (desktop drawn 27.1–27.2 s on sysvinit, 25.1–25.8 s on schema-init). The kernel has no PSI, so there is no IO-pressure row.
+
 ### PID 1 RSS — every measurement
 
 One table, every number, each naming the machine, the build and the service count it came from. Anything not listed here is not a measurement we have.
