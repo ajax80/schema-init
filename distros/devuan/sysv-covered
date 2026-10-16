@@ -1,0 +1,8 @@
+# /etc/init.d scripts `schema-import --rc` leaves out on Devuan.
+
+# A distros/devuan service already runs these.
+dbus elogind lightdm slim network-manager ssh chrony bluetooth cron eudev udev procps
+
+# Not used under schema-init: journal-sink owns /dev/log; elogind manages the
+# seat; bootlogd's console log has no schema-init equivalent.
+rsyslog seatd bootlogs stop-bootlogd

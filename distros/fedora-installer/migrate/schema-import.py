@@ -1036,7 +1036,7 @@ def _known_svcs(queued):
     known = {n for n, (_, timer) in g.items() if not timer}
     for q in queued:
         if not q.endswith(".timer"):
-            known.add(re.sub(r"\.(service|socket)$", "", q))
+            known.add(re.sub(r"\.(service|socket)$", "", q[len(INITD):] if q.startswith(INITD) else q))
     return known
 
 
@@ -1070,10 +1070,134 @@ def _drop_cycles(name, body):
     return "\n".join(kept) + "\n"
 
 
+INITD = "/etc/init.d/"
+LSB_DEPS = {"$local_fs": "mount-fstab", "$remote_fs": "mount-fstab", "$syslog": "journal-sink",
+            "$network": "network-manager", "$time": "chrony", "udev": "udevd", "eudev": "udevd",
+            "ssh": "sshd", "procps": "sysctl"}
+OWNED = "its binary already runs as"
+
+
+def initd_dir():
+    return os.path.join(_root(), INITD.lstrip("/"))
+
+
+def lsb_header(text):
+    """Key -> value of the script's ### BEGIN INIT INFO block."""
+    hdr, inside = {}, False
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s == "### BEGIN INIT INFO":
+            inside = True
+        elif s == "### END INIT INFO":
+            break
+        elif inside and s.startswith("#") and ":" in s:
+            k, v = s.lstrip("# ").split(":", 1)
+            hdr[k.strip()] = v.strip()
+    return hdr
+
+
+def lsb_to_svc(name, text, known=None):
+    """An init script with no systemd unit, run the way sysvinit runs it:
+    `start` once, no supervision (a pid_file would restart-loop a script its
+    /etc/default turns off)."""
+    deps = []
+    for d in lsb_header(text).get("Required-Start", "").split():
+        svc = LSB_DEPS.get(d) or _UNIT_ALIAS.get(d, d)
+        if svc != name and svc not in deps and (known is None or svc in known):
+            deps.append(svc)
+    lines = ["# schema-import: from %s%s (init script; no usable systemd unit)" % (INITD, name),
+             "name=" + name, "exec=" + INITD + name, "args=start", "oneshot=1", "needs_root=1"]
+    lines += ["dep=" + d for d in deps]
+    return "\n".join(lines) + "\n"
+
+
+def _import_lsb(name, force, queued):
+    out = os.path.join(svc_dir(), name + ".svc")
+    if os.path.exists(out) and not force:
+        return ("exists", out)
+    path = os.path.join(initd_dir(), name)
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return ("not-found", INITD + name)
+    except OSError as e:
+        return ("error", str(e))
+    denied = _denied(name)
+    if denied:
+        return ("skipped", (denied, skip_stub(name, path, denied, text), out))
+    body = _drop_cycles(name, lsb_to_svc(name, text, _known_svcs(queued)))
+    return ("imported", (out, body))
+
+
+def _runlevel():
+    try:
+        with open(os.path.join(_root(), "etc/inittab")) as f:
+            for ln in f:
+                if ln.lstrip().startswith("#"):
+                    continue
+                p = ln.split(":")
+                if len(p) >= 3 and p[2] == "initdefault":
+                    return p[1]
+    except OSError:
+        pass
+    return "2"
+
+
+def _runnable_unit(unit):
+    """unit has an ExecStart and an [Install] target boot pulls it into. A
+    masked unit (-> /dev/null) reads empty: Debian masks it when the init
+    script is the real thing. A unit with no WantedBy=/RequiredBy= is started
+    by something else on systemd (udev, a socket, D-Bus), so the init script,
+    with its own checks, is what sysvinit actually runs."""
+    p = find_unit(unit)
+    if not p:
+        return False
+    try:
+        with open(p) as f:
+            sec = parse_unit(f.read())
+    except OSError:
+        return False
+    inst = sec.get("Install", [])
+    return bool(_get_last(sec.get("Service", []), "ExecStart")) and \
+        bool(_get_last(inst, "WantedBy") or _get_last(inst, "RequiredBy"))
+
+
+def rc_units(skip=()):
+    """What sysvinit starts in the default runlevel (/etc/rcN.d S links): the
+    same-named systemd unit where the package ships one, else the init script
+    itself (INITD + name). skip: script names to leave out."""
+    d = os.path.join(_root(), "etc/rc%s.d" % _runlevel())
+    try:
+        links = sorted(os.listdir(d))
+    except OSError:
+        return []
+    out = []
+    for ln in links:
+        m = re.match(r"S\d\d(.+)$", ln)
+        if not m or m.group(1) in skip:
+            continue
+        script = m.group(1)
+        item = script + ".service" if _runnable_unit(script + ".service") else INITD + script
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def read_skip(path):
+    try:
+        with open(path) as f:
+            return {w for ln in f for w in ln.split("#", 1)[0].split()}
+    except OSError:
+        return set()
+
+
 def import_one(name, force=False, queued=()):
     """Translate one queued unit. Returns (status, detail) where status is one
     of: imported, exists, not-found, skipped, error. queued: the other names
     in the same drain (an enabled .service makes its socket eager)."""
+    if name.startswith(INITD):
+        return _import_lsb(name[len(INITD):], force, queued)
     timer = name.endswith(".timer")
     socket = name.endswith(".socket")
     name = name[:-len(".service")] if name.endswith(".service") else name
@@ -1145,7 +1269,7 @@ def import_one(name, force=False, queued=()):
         body = _drop_cycles(name, body)
         owner = _exec_owner(body, out)
         if owner:
-            raise Skip("its binary already runs as %s — importing it would start a second copy"
+            raise Skip(OWNED + " %s — importing it would start a second copy"
                        % owner)
     except Skip as s:
         return ("skipped", (str(s), skip_stub(name, path, str(s), text), out))
@@ -1154,7 +1278,7 @@ def import_one(name, force=False, queued=()):
     return ("imported", (out, body))
 
 
-def drain(units=None, force=False, dry_run=False, log=print):
+def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_fallback=()):
     """Drain the queue (or the given unit list). Writes .svc files, then rewrites
     the queue keeping only transient (not-found) entries. Returns a counts dict."""
     from_queue = units is None
@@ -1163,6 +1287,9 @@ def drain(units=None, force=False, dry_run=False, log=print):
     keep = []
     for name in items:
         status, detail = import_one(name, force=force, queued=items)
+        if status == "skipped" and name in lsb_fallback and not detail[0].startswith(OWNED):
+            log("unit    %s: %s; using %s%s" % (name, detail[0], INITD, name[:-len(".service")]))
+            status, detail = _import_lsb(name[:-len(".service")], force, items)
         counts[status] += 1
         if status == "imported":
             out, body = detail
@@ -1174,6 +1301,8 @@ def drain(units=None, force=False, dry_run=False, log=print):
                 os.makedirs(os.path.dirname(out), exist_ok=True)
                 with open(out, "w") as f:
                     f.write(body)
+                if written is not None:
+                    written.append(out)
         elif status == "exists":
             log("have    %s (%s exists; --force to overwrite)" % (name, detail))
         elif status == "not-found":
@@ -1342,6 +1471,12 @@ def main(argv=None):
                     help="import every unit systemd enabled (/etc/systemd/system/*.target.wants)")
     ap.add_argument("-b", "--bus-overrides", action="store_true",
                     help="only regenerate the D-Bus activation overrides that route bus names to PID 1")
+    ap.add_argument("--rc", action="store_true",
+                    help="import what sysvinit starts in the default runlevel (/etc/rcN.d)")
+    ap.add_argument("--start", action="store_true",
+                    help="when schema-init is PID 1, load and start each new .svc now (schema-ctl add)")
+    ap.add_argument("--rc-skip", metavar="FILE",
+                    help="init script names (whitespace-separated, # comments) --rc leaves out")
     args = ap.parse_args(argv)
     if args.bus_overrides:
         c = bus_overrides(dry_run=args.dry_run)
@@ -1350,7 +1485,22 @@ def main(argv=None):
     units = args.units or None
     if args.enabled:
         units = (units or []) + [u for u in enabled_units() if u not in (units or [])]
-    counts = drain(units=units, force=args.force, dry_run=args.dry_run)
+    fallback = ()
+    if args.rc:
+        skip = read_skip(args.rc_skip) if args.rc_skip else set()
+        rc = rc_units(skip)
+        fallback = {u for u in rc if u.endswith(".service")}
+        units = (units or []) + [u for u in rc if u not in (units or [])]
+    written = []
+    counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written,
+                   lsb_fallback=fallback)
+    if args.start and written and _read("/proc/1/comm").strip() == "schema-init":
+        for out in written:
+            try:
+                if subprocess.run(["schema-ctl", "add", out]).returncode:
+                    print("schema-ctl add %s failed" % out, file=sys.stderr)
+            except OSError as e:
+                print("schema-ctl add %s: %s" % (out, e), file=sys.stderr)
     print("imported=%(imported)d exists=%(exists)d not-found=%(not-found)d "
           "skipped=%(skipped)d error=%(error)d" % counts)
     try:

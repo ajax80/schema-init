@@ -1,7 +1,5 @@
 name=dbus
-exec=/usr/bin/dbus-daemon
-args=--system
-args=--nofork
+exec=/usr/local/libexec/schema-init/schema-dbus-run.sh
 dep=devuan-boot
 needs_root=1
 critical=0
