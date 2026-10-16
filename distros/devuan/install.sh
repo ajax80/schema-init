@@ -21,7 +21,8 @@ fi
 make install
 install -d -m 0755 /etc/schema-init/services $L/sysv
 install -d -m 0755 $L/shipped
-install -m 0755 scripts/schema-mount-fstab $P/scripts/devuan-boot $P/scripts/devuan-coldplug $P/scripts/devuan-sysctl $P/scripts/schema-halt $L/
+install -m 0755 scripts/schema-mount-fstab $P/scripts/devuan-boot $P/scripts/devuan-coldplug $P/scripts/devuan-sysctl $P/scripts/schema-halt scripts/schema-dbus-run.sh $L/
+install -m 0644 tools/dbus-learn/dissect_policy.py $L/
 dm=$(basename "$(cat /etc/X11/default-display-manager 2>/dev/null)")
 for f in $P/services/*.svc; do
     n=$(basename "$f"); t=/etc/schema-init/services/$n

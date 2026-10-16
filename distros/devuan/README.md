@@ -66,7 +66,7 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 | `devuan-boot` | `bootmisc.sh`, `x11-common`, `networking` (lo), `kmod`, `hwclock.sh` | loopback up, `swapon -a`, `/etc/modules`, RTC if `LOCAL`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
 | `sysctl` | `procps` | `sysctl --system` (a key the kernel rejects is logged, not fatal) |
 | `journal-sink` | `rsyslog` | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
-| `dbus` | `dbus` | `dbus-daemon --system --nofork` |
+| `dbus` | `dbus` | `dbus-daemon --system --nofork`, or schema-dbus (below) |
 | `elogind` | `elogind` | `/usr/libexec/elogind` |
 | `network-manager` | `network-manager` | `NetworkManager --no-daemon` |
 | `slim` or `lightdm` | `slim` / `lightdm` | `slim -n` / `lightdm`; install.sh picks the one in `/etc/X11/default-display-manager` |
@@ -81,6 +81,22 @@ sets the hostname from `/etc/hostname`.
 Not started under schema-init: rsyslog (journal-sink owns `/dev/log`), seatd
 (elogind manages the seat), anacron, avahi, cups, saned, ModemManager. To add one, write a `.svc` in `/etc/schema-init/services/`;
 `schema-ctl add <path>` loads it without a reboot.
+
+### schema-dbus
+
+schema-dbus is schema-init's own system bus broker. It is off by default. To
+use it in place of `dbus-daemon` on the next schema-init boot:
+
+```sh
+sudo touch /etc/schema-init/dbus-broker
+```
+
+At boot the launcher turns `/usr/share/dbus-1/system.conf` (and the files it
+includes) into schema-dbus's policy, then starts schema-dbus. If the file is
+missing or the policy cannot be read, it starts `dbus-daemon` instead.
+schema-dbus starts D-Bus-activated services (UDisks2, UPower, polkit, …)
+itself. `sudo rm /etc/schema-init/dbus-broker` goes back to `dbus-daemon`.
+sysvinit boots always use `dbus-daemon`.
 
 Logs: `/var/log/schema-init/<service>.log`, boot and shutdown timing in
 `rail.log` and `shutdown.log`.
