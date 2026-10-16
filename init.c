@@ -291,9 +291,6 @@ static void load_configured_modules(void) {
     globfree(&g);
 }
 
-/* Rescue boot: a root-password shell on the console before any service
- * starts, with only PID 1's own mounts. Exiting it continues the boot. Runs
- * before watchdog_init so a long session cannot trip the hardware watchdog. */
 static void rescue_boot(void) {
     char cl[4096] = "";
     int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
@@ -301,7 +298,12 @@ static void rescue_boot(void) {
     if (!rescue_cmdline(cl)) return;
     fprintf(stderr, "[schema-init] rescue boot requested on the kernel command line\n");
     pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[schema-init] rescue shell: fork failed: %s\n", strerror(errno));
+        return;
+    }
     if (pid == 0) {
+        service_reset_child_sigmask();
         setsid();
         int tty = open("/dev/console", O_RDWR);
         if (tty >= 0) {
@@ -326,8 +328,7 @@ static void rescue_boot(void) {
         execl("/bin/sh", "sh", (char *)NULL);
         _exit(1);
     }
-    if (pid > 0)
-        while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) ;
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) ;
     fprintf(stderr, "[schema-init] rescue shell exited, continuing boot\n");
 }
 

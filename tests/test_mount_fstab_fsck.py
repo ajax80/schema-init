@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""schema-mount-fstab runs fsck before mounting a pass > 0 entry.
-
-Fake fsck/blkid/mount/sulogin on PATH; no root, no disks.
-
-  ./tests/test_mount_fstab_fsck.py     exit 0 all pass, 1 any fail
-"""
 import os
 import shutil
 import subprocess
@@ -92,6 +86,9 @@ check('unfixable, repaired in shell: sulogin, recheck, mounted',
 out, calls = run('LABEL=d @/m ext4 defaults 0 2', [4, 4])
 check('unfixable after shell: not mounted, boot goes on',
       'sulogin' in calls and not mounted(calls) and 'still fails' in out and 'done, with failures' in out, out)
+
+out, calls = run('LABEL=d @/m ext4 defaults 0 2', [4, 8])
+check('recheck failing (8) after shell: not mounted', not mounted(calls) and 'still fails (8)' in out, out)
 
 out, calls = run('LABEL=d @/m nosuchfs defaults 0 2')
 check('no fsck.nosuchfs: not checked, mounted', not any(c.startswith('fsck') for c in calls)

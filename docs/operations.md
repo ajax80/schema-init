@@ -188,7 +188,7 @@ above 0 (`fsck -a`) before mounting it; `/` is the initramfs's. When fsck
 cannot fix one, a `nofail` entry is left unmounted and any other gets the same
 sulogin shell; after it, the filesystem is mounted if fsck passes, otherwise
 left out. `forcefsck` / `fsck.mode=force` on the command line or `/forcefsck`
-force the check, `fastboot` / `fsck.mode=skip` or `/fastboot` skip it.
+force the check, `fastboot` / `fsck.mode=skip` or `/fastboot` skip it; both files count for one boot.
 
 **Dependency cycle.** When the service graph has a cycle, PID 1 starts no
 services and runs `/bin/sh` on tty1 without a password. Exiting it halts the

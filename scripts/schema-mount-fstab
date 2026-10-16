@@ -7,13 +7,6 @@
 # are skipped. Failures are logged and the run still exits 0: a non-zero
 # oneshot is retried, and each retry would wait out the timeouts again while
 # everything that depends on mount-fstab stays blocked.
-#
-# A filesystem with fstab pass > 0 gets `fsck -a` before it is mounted (/ is
-# the initramfs's). forcefsck / fsck.mode=force on the kernel command line or
-# /forcefsck force the check, fastboot / fsck.mode=skip or /fastboot skip it.
-# Errors fsck cannot fix: a nofail entry is left unmounted; any other gets a
-# root-password shell on the console first, and is mounted after it if fsck
-# then passes.
 
 FSTAB=${SCHEMA_FSTAB:-/etc/fstab}
 CONSOLE=${SCHEMA_CONSOLE:-/dev/console}
@@ -114,7 +107,8 @@ check() {
     [ $rc -le 3 ] && { [ $rc = 0 ] || log "$ctgt: fsck fixed errors on $cdev ($rc)"; return 0; }
     [ $nofail = 1 ] && { fail "$ctgt: fsck $cdev failed ($rc), not mounted"; return 1; }
     rescue "$ctgt: fsck $cdev found errors it could not fix ($rc)" "$cdev"
-    fsck -a -T -t "$cfs" "$cdev" >/dev/null 2>&1; rc=$?
+    mounted "$ctgt" && { log "$ctgt mounted in the rescue shell"; return 1; }
+    fsck -a -T $f -t "$cfs" "$cdev" >/dev/null 2>&1; rc=$?
     [ $rc -le 3 ] && { log "$ctgt: $cdev is clean now"; return 0; }
     fail "$ctgt: fsck $cdev still fails ($rc), not mounted"; return 1
 }
@@ -186,6 +180,6 @@ done <<EOF
 $rows
 EOF
 
-[ "$fsck_mode" = force ] && rm -f /forcefsck
+rm -f /forcefsck /fastboot
 [ $failed = 0 ] || { log "done, with failures"; exit 0; }
 log "done"

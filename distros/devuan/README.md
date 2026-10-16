@@ -179,7 +179,7 @@ shell and the boot goes on.
 At boot, `mount-fstab` runs `fsck -a` on each `/etc/fstab` filesystem with a
 pass number (the sixth field) above 0 before mounting it. `/` is checked by the
 initramfs, as under sysvinit. `forcefsck` on the kernel command line or
-`touch /forcefsck` forces the check; `fastboot` skips it. When fsck cannot fix
+`touch /forcefsck` forces the check; `fastboot` or `/fastboot` skips it. Both files are removed after one boot. When fsck cannot fix
 a filesystem, a `nofail` one is left unmounted; any other gets the same
 root-password shell, and is mounted after it if fsck then passes. Results are in
 `/var/log/schema-init/mount-fstab.log`.
