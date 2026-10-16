@@ -39,6 +39,10 @@ What you get:
   new service without a reboot. A new schema-init takes over PID 1 in place
   (`schema-ctl reexec`).
 - **Timers without cron** (`logrotate` at 00:10).
+- **A rescue boot and fsck at boot**, as with sysvinit (see
+  [Rescue](#rescue)). A filesystem fsck cannot fix stops the boot only until
+  you exit the rescue shell; it is then mounted if it checks clean, or left
+  out, so a machine with a locked root account still boots.
 - **Per-service sandboxing** (`no_new_privs`, `protect_system`,
   `private_tmp`, `protect_home`) is available; the Devuan services ship with
   it off.
@@ -49,9 +53,8 @@ What it costs:
   unit beside their init script, and schema-import reads it; the rest run their
   init script once, as sysvinit does, without supervision. See
   [Other services](#other-services).
-- No runlevels and no single-user boot (the only shell PID 1 drops to is an
-  emergency one when the service graph is broken). No fsck at boot, no wtmp:
-  see [Known](#known). For maintenance, boot the sysvinit entry.
+- No runlevels. The rescue boot is a shell before any service starts, not a
+  runlevel with some of them running. No wtmp: see [Known](#known).
 - sysvinit has decades of use behind it. This path was first tested in
   October 2026.
 
@@ -164,6 +167,23 @@ within boot-to-boot noise ([raw](../../tests/livetest/dbox-bench-20261016-schema
 Logs: `/var/log/schema-init/<service>.log`, boot and shutdown timing in
 `rail.log` and `shutdown.log`.
 
+## Rescue
+
+The **schema-init: … (recovery mode)** GRUB entry (or `schema.rescue`,
+`single` or `1` on the kernel command line) asks for root's password and gives
+a shell before any service starts. `/proc`, `/sys`, `/dev` and `/run` are
+mounted and `/` is writable; nothing from `/etc/fstab` is (`mount -a`). Exit
+the shell to boot normally. With the root account locked, sulogin gives no
+shell and the boot goes on.
+
+At boot, `mount-fstab` runs `fsck -a` on each `/etc/fstab` filesystem with a
+pass number (the sixth field) above 0 before mounting it. `/` is checked by the
+initramfs, as under sysvinit. `forcefsck` on the kernel command line or
+`touch /forcefsck` forces the check; `fastboot` skips it. When fsck cannot fix
+a filesystem, a `nofail` one is left unmounted; any other gets the same
+root-password shell, and is mounted after it if fsck then passes. Results are in
+`/var/log/schema-init/mount-fstab.log`.
+
 ## Shutdown
 
 elogind (the Xfce Shut Down / Restart buttons) and `sudo reboot` run
@@ -194,8 +214,9 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
   schema-init; `/tmp` stays on disk.
 - `halt` powers off. Under schema-init `shutdown` only takes `now` (no delayed
   shutdown); `-w` and `--help` go to sysvinit's tools.
-- No fsck at boot under schema-init (sysvinit's `checkroot.sh`/`checkfs.sh` do
-  that). Boot the sysvinit entry now and then, or `touch /forcefsck` before it.
+- `/forcefsck` forces the check of the other filesystems, not of `/`: the
+  initramfs checks `/` before schema-init starts. Use `forcefsck` on the kernel
+  command line for both.
 - `last` shows sessions ending in "crash": schema-init does not write wtmp
   boot/shutdown records.
 - SLiM and LightDM are supported. Another display manager needs its own `.svc`

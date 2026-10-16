@@ -7,8 +7,16 @@
 # are skipped. Failures are logged and the run still exits 0: a non-zero
 # oneshot is retried, and each retry would wait out the timeouts again while
 # everything that depends on mount-fstab stays blocked.
+#
+# A filesystem with fstab pass > 0 gets `fsck -a` before it is mounted (/ is
+# the initramfs's). forcefsck / fsck.mode=force on the kernel command line or
+# /forcefsck force the check, fastboot / fsck.mode=skip or /fastboot skip it.
+# Errors fsck cannot fix: a nofail entry is left unmounted; any other gets a
+# root-password shell on the console first, and is mounted after it if fsck
+# then passes.
 
 FSTAB=${SCHEMA_FSTAB:-/etc/fstab}
+CONSOLE=${SCHEMA_CONSOLE:-/dev/console}
 PSEUDO='proc|sysfs|tmpfs|devtmpfs|devpts|cgroup|cgroup2|mqueue|hugetlbfs|debugfs|securityfs|configfs|fusectl|bpf|tracefs|pstore|efivarfs|ramfs|rpc_pipefs|binfmt_misc|autofs|overlay|squashfs'
 
 log() { printf 'schema-mount-fstab: %s\n' "$*"; }
@@ -76,12 +84,47 @@ wait_dev() {
     done
 }
 
+fsck_mode=auto
+[ -e /forcefsck ] && fsck_mode=force
+[ -e /fastboot ] && fsck_mode=skip
+for w in $(cat /proc/cmdline 2>/dev/null); do
+    case "$w" in
+        forcefsck|fsck.mode=force) fsck_mode=force ;;
+        fastboot|fsck.mode=skip) fsck_mode=skip ;;
+    esac
+done
+
+rescue() {
+    log "$1"
+    plymouth --wait quit 2>/dev/null
+    printf '\n*** schema-mount-fstab: %s ***\nRepair it (fsck %s), then exit the shell to continue booting.\n\n' "$1" "$2" > "$CONSOLE"
+    if command -v sulogin >/dev/null; then sh=sulogin; else sh=/bin/sh; fi
+    setsid -w -c "$sh" < "$CONSOLE" > "$CONSOLE" 2>&1
+    log "rescue shell exited"
+}
+
+check() {
+    cdev=$1 ctgt=$2 cfs=$3
+    [ "$fsck_mode" = skip ] && return 0
+    [ "$cfs" = auto ] && cfs=$(blkid -o value -s TYPE "$cdev" 2>/dev/null)
+    command -v "fsck.$cfs" >/dev/null || { log "$ctgt: no fsck.$cfs, not checked"; return 0; }
+    f=; [ "$fsck_mode" = force ] && f=-f
+    out=$(fsck -a -T $f -t "$cfs" "$cdev" 2>&1); rc=$?
+    [ -z "$out" ] || printf '%s\n' "$out" | sed "s|^|schema-mount-fstab: fsck $cdev: |"
+    [ $rc -le 3 ] && { [ $rc = 0 ] || log "$ctgt: fsck fixed errors on $cdev ($rc)"; return 0; }
+    [ $nofail = 1 ] && { fail "$ctgt: fsck $cdev failed ($rc), not mounted"; return 1; }
+    rescue "$ctgt: fsck $cdev found errors it could not fix ($rc)" "$cdev"
+    fsck -a -T -t "$cfs" "$cdev" >/dev/null 2>&1; rc=$?
+    [ $rc -le 3 ] && { log "$ctgt: $cdev is clean now"; return 0; }
+    fail "$ctgt: fsck $cdev still fails ($rc), not mounted"; return 1
+}
+
 mounted() { findmnt -rno TARGET --mountpoint "$1" >/dev/null 2>&1; }
 
 failed=0
 
 do_entry() {
-    spec=$1 tgt=$2 fs=$3 opts=$4
+    spec=$1 tgt=$2 fs=$3 opts=$4 fpass=$5
     nofail=0; has_opt "$opts" nofail && nofail=1
     raw=$(opt_val "$opts" x-systemd.device-timeout)
     t=""
@@ -108,6 +151,7 @@ do_entry() {
         dev=$spec
     else
         dev=$(wait_dev "$spec" "$t") || { fail "$tgt: $spec not present after ${t}s"; return; }
+        [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "$fs" || return
     fi
     mkdir -p "$tgt"
     case "$fs" in auto|none) set -- ;; *) set -- -t "$fs" ;; esac
@@ -118,7 +162,7 @@ do_entry() {
     fi
 }
 
-# parents first: kind<TAB>depth<TAB>spec<TAB>target<TAB>fstype<TAB>opts
+# parents first: kind<TAB>depth<TAB>spec<TAB>target<TAB>fstype<TAB>opts<TAB>fsck pass
 rows=$(awk -v pseudo="$PSEUDO" '
     /^[[:space:]]*#/ || NF < 3 { next }
     {
@@ -130,17 +174,18 @@ rows=$(awk -v pseudo="$PSEUDO" '
         pass="m"
         depth=(fs == "swap") ? 0 : gsub(/\//, "/", tgt)
         if (o ~ /,bind,/) { src=spec; d=gsub(/\//, "/", src) + 1; if (d > depth) depth=d }
-        print pass "\t" depth "\t" spec "\t" $2 "\t" fs "\t" opts
+        print pass "\t" depth "\t" spec "\t" $2 "\t" fs "\t" opts "\t" (NF >= 6 ? $6 : 0)
     }' "$FSTAB" | sort -t "$(printf '\t')" -k2,2n)
 
 tab=$(printf '\t')
-while IFS=$tab read -r pass depth spec tgt fs opts; do
+while IFS=$tab read -r pass depth spec tgt fs opts fpass; do
     [ -n "$spec" ] || continue
     if [ "$pass" = skip ]; then log "$tgt skipped (_netdev: no network ordering here)"; continue; fi
-    do_entry "$spec" "$tgt" "$fs" "$opts"
+    do_entry "$spec" "$tgt" "$fs" "$opts" "$fpass"
 done <<EOF
 $rows
 EOF
 
+[ "$fsck_mode" = force ] && rm -f /forcefsck
 [ $failed = 0 ] || { log "done, with failures"; exit 0; }
 log "done"
