@@ -410,6 +410,12 @@ static inline int cmdline_word_match(const char *cmdline, const char *arg) {
     }
     return 0;
 }
+static inline int rescue_cmdline(const char *cmdline) {
+    static const char *w[] = { "schema.rescue", "single", "s", "S", "1", "rescue", NULL };
+    for (int i = 0; w[i]; i++)
+        if (cmdline_word_match(cmdline, w[i])) return 1;
+    return 0;
+}
 int  service_conditions_met(const service_t *svc, char *why, size_t n);
 
 /* PID 1 holds the sockets and the service has exited: a connection starts it */

@@ -174,16 +174,30 @@ Fix options:
 
 ### Rescue shell
 
-If schema-init drops to a rescue shell at boot (cycle detected, or fatal probe failure), you have a minimal `/bin/sh` with access to the mounted filesystems. From there:
+**Rescue boot.** Add `schema.rescue` (or `single`, `s`, `S`, `1`, `rescue`) to
+the kernel command line; on Devuan/LCOS pick the **schema-init: … (recovery
+mode)** GRUB entry. PID 1 mounts `/proc`, `/sys`, `/dev`, `/run`, makes `/`
+writable and runs `sulogin` on the console before any service starts: no udev,
+no network, nothing from `/etc/fstab` (`mount -a`). Exit the shell and the boot
+continues normally. sulogin asks for root's password; with the root account
+locked (Fedora's default) it gives no shell and the boot goes on, so use
+`init=/bin/sh` there.
+
+**fsck.** `mount-fstab` checks each `/etc/fstab` filesystem with a pass number
+above 0 (`fsck -a`) before mounting it; `/` is the initramfs's. When fsck
+cannot fix one, a `nofail` entry is left unmounted and any other gets the same
+sulogin shell; after it, the filesystem is mounted if fsck passes, otherwise
+left out. `forcefsck` / `fsck.mode=force` on the command line or `/forcefsck`
+force the check, `fastboot` / `fsck.mode=skip` or `/fastboot` skip it; both files count for one boot.
+
+**Dependency cycle.** When the service graph has a cycle, PID 1 starts no
+services and runs `/bin/sh` on tty1 without a password. Exiting it halts the
+machine. Fix the `.svc` files, then reboot:
 
 ```sh
-# inspect service files
 ls /etc/schema-init/services/
-cat /etc/schema-init/services/broken.svc
-
-# fix and re-exec
 vi /etc/schema-init/services/broken.svc
-exec /sbin/schema-init
+exit
 ```
 
 ---

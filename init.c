@@ -291,6 +291,47 @@ static void load_configured_modules(void) {
     globfree(&g);
 }
 
+static void rescue_boot(void) {
+    char cl[4096] = "";
+    int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) { ssize_t n = read(fd, cl, sizeof(cl) - 1); if (n > 0) cl[n] = '\0'; close(fd); }
+    if (!rescue_cmdline(cl)) return;
+    fprintf(stderr, "[schema-init] rescue boot requested on the kernel command line\n");
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "[schema-init] rescue shell: fork failed: %s\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        service_reset_child_sigmask();
+        setsid();
+        int tty = open("/dev/console", O_RDWR);
+        if (tty >= 0) {
+            ioctl(tty, TIOCSCTTY, 1);
+            dup2(tty, STDIN_FILENO);
+            dup2(tty, STDOUT_FILENO);
+            dup2(tty, STDERR_FILENO);
+            if (tty > STDERR_FILENO) close(tty);
+        }
+        pid_t q = fork();
+        if (q == 0) {
+            execlp("plymouth", "plymouth", "--wait", "quit", (char *)NULL);
+            _exit(1);
+        }
+        if (q > 0) waitpid(q, NULL, 0);
+        printf("\n*** schema-init: rescue boot ***\n"
+               "No services are running and /etc/fstab is not mounted (mount -a).\n"
+               "Exit the shell to continue booting.\n\n");
+        fflush(stdout);
+        execl("/usr/sbin/sulogin", "sulogin", (char *)NULL);
+        execl("/sbin/sulogin", "sulogin", (char *)NULL);
+        execl("/bin/sh", "sh", (char *)NULL);
+        _exit(1);
+    }
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) ;
+    fprintf(stderr, "[schema-init] rescue shell exited, continuing boot\n");
+}
+
 static void watchdog_init(void) {
     const char *paths[] = { "/dev/watchdog0", "/dev/watchdog", NULL };
     int i;
@@ -3524,6 +3565,7 @@ int main(int argc, char **argv) {
         load_watchdog_module();
         load_configured_modules();
         pstore_harvest();
+        rescue_boot();
         watchdog_init();
     }
     /* Before the control socket opens or a single service spawns, so the

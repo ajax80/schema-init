@@ -445,6 +445,9 @@ int main(void) {
         assert(cmdline_word_match(cl, "audit=0") && !cmdline_word_match(cl, "audit=off"));
         assert(cmdline_word_match(cl, "rd.live.image") && !cmdline_word_match(cl, "rd.live"));
         assert(!cmdline_word_match(cl, "qui") && !cmdline_word_match("", "x"));
+        assert(!rescue_cmdline(cl) && !rescue_cmdline("") && !rescue_cmdline("ro quiet sysrq=1 S1 singleuser"));
+        assert(rescue_cmdline("ro single") && rescue_cmdline("quiet S splash") && rescue_cmdline("1\n"));
+        assert(rescue_cmdline("root=/dev/vda2 schema.rescue") && rescue_cmdline("rescue ro"));
 
         char d[200], f[200], e[200], c[300];
         snprintf(d, sizeof d, "%s/cdir", dir3);
