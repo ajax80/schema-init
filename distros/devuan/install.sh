@@ -21,8 +21,22 @@ fi
 make install
 install -d -m 0755 /etc/schema-init/services $L/sysv
 install -d -m 0755 $L/shipped
+install -m 0755 scripts/schema-mount-fstab $P/scripts/devuan-boot $P/scripts/devuan-coldplug $P/scripts/devuan-sysctl $P/scripts/schema-halt $L/
+dm=$(basename "$(cat /etc/X11/default-display-manager 2>/dev/null)")
 for f in $P/services/*.svc; do
     n=$(basename "$f"); t=/etc/schema-init/services/$n
+    case "$n" in
+        slim.svc|lightdm.svc)
+            [ -n "$dm" ] || continue
+            if [ "$n" != "$dm.svc" ]; then
+                if [ -e "$t" ] && ! cmp -s "$t" "$L/shipped/$n"; then
+                    echo "WARNING: you edited $t but $dm is the default display manager; both will start. Remove $t if you no longer use it."
+                else
+                    rm -f "$t" "$L/shipped/$n"
+                fi
+                continue
+            fi ;;
+    esac
     if [ -e "$t" ] && ! cmp -s "$t" "$f" && ! cmp -s "$t" "$L/shipped/$n"; then
         echo "kept your edited $t (new version: $f)"
     else
@@ -30,7 +44,6 @@ for f in $P/services/*.svc; do
         install -m 0644 "$f" "$L/shipped/$n"
     fi
 done
-install -m 0755 scripts/schema-mount-fstab $P/scripts/devuan-boot $P/scripts/devuan-coldplug $P/scripts/schema-halt $L/
 
 for f in halt shutdown; do
     dpkg-divert --quiet --rename --add --divert /usr/sbin/$f.sysvinit /usr/sbin/$f
@@ -44,6 +57,7 @@ update-grub
 if [ "$(cat /proc/1/comm)" = schema-init ]; then
     schema-ctl reexec || echo "PID 1 keeps running the previous schema-init until the next reboot."
 fi
+[ -z "$dm" ] || [ -e "/etc/schema-init/services/$dm.svc" ] || echo "No service for display manager '$dm': write /etc/schema-init/services/$dm.svc (run it in the foreground)."
 echo
 echo "Installed. sysvinit is still the default boot entry."
 echo "Reboot and pick a 'schema-init:' entry in the GRUB menu to try it."

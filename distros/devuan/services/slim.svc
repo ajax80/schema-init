@@ -1,5 +1,6 @@
 name=slim
 exec=/usr/bin/slim
+condition=file_is_exec:/usr/bin/slim
 args=-n
 dep=elogind
 dep=udev-coldplug

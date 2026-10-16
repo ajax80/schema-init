@@ -1,14 +1,20 @@
-# schema-init on Devuan
+# schema-init on Devuan (and LCOS)
 
 Boot Devuan 6 (Excalibur) with schema-init as PID 1, side by side with sysvinit.
 Nothing about your sysvinit boot changes: it stays the default GRUB entry, and
 schema-init gets its own entries below it. Pick one at boot to try it; pick the
 normal entry to go back.
 
-Tested on a fresh Devuan 6.1.1 netinstall (sysvinit, Xfce, SLiM, elogind, eudev,
-NetworkManager) in a UEFI VM: boots to the Xfce desktop under schema-init, the
-Xfce Restart/Shut Down buttons work, and the sysvinit entry still boots and
-shuts down normally with this installed.
+Tested in UEFI VMs on:
+
+- **Devuan 6.1.1** netinstall (sysvinit, Xfce, SLiM, elogind, eudev,
+  NetworkManager), and the same with LightDM.
+- **LCOS 0.9.3** (Devuan Excalibur, LightDM, XLibre, chrony, kernel
+  7.2.6-lunduke).
+
+On each: boots to the desktop under schema-init, the Restart/Shut Down buttons
+work, and the sysvinit entry still boots and shuts down normally with this
+installed.
 
 ## Install
 
@@ -35,7 +41,10 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 - `make install`: binaries to `/usr/bin` (`schema-init`, `schema-ctl`,
   `schema-journal-sink`, ...).
 - Copies the service files in `services/` to `/etc/schema-init/services/`,
-  keeping any you have edited (it prints which).
+  keeping any you have edited (it prints which). Services for optional programs
+  (cron, chrony, bluetoothd, sshd, ...) carry `condition=file_is_exec:`, so they
+  are skipped at boot while the program isn't installed (LCOS has no cron) and
+  start once it is.
 - Copies the boot helpers in `scripts/` to `/usr/local/libexec/schema-init/`.
 - Diverts `/usr/sbin/halt` and `/usr/sbin/shutdown` with `dpkg-divert` and puts a
   small wrapper in their place (see Shutdown below). sysvinit's originals stay
@@ -51,13 +60,14 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 | `udevd`, `udev-coldplug` | `eudev` | `/sbin/udevd`, then `udevadm trigger` + `settle` |
 | `mount-fstab` | `mountall.sh` | mounts `/etc/fstab` |
 | `devuan-boot` | `bootmisc.sh`, `x11-common`, `networking` (lo), `kmod`, `hwclock.sh` | loopback up, `swapon -a`, `/etc/modules`, RTC if `LOCAL`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
-| `sysctl` | `procps` | `sysctl --system` |
+| `sysctl` | `procps` | `sysctl --system` (a key the kernel rejects is logged, not fatal) |
 | `journal-sink` | `rsyslog` | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
 | `dbus` | `dbus` | `dbus-daemon --system --nofork` |
 | `elogind` | `elogind` | `/usr/libexec/elogind` |
 | `network-manager` | `network-manager` | `NetworkManager --no-daemon` |
-| `slim` | `slim` | `slim -n` |
+| `slim` or `lightdm` | `slim` / `lightdm` | `slim -n` / `lightdm`; install.sh picks the one in `/etc/X11/default-display-manager` |
 | `sshd`, `cron` | `ssh`, `cron` | `sshd -D`, `cron -f` |
+| `chrony`, `bluetoothd` | `chrony`, `bluetooth` | `chronyd -n`, `bluetoothd -n` |
 | `getty-tty1` … `getty-tty6` | `inittab` gettys | `getty 38400 ttyN` |
 | `logrotate` | cron.daily logrotate | `logrotate` at 00:10 |
 
@@ -100,8 +110,10 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
   that). Boot the sysvinit entry now and then, or `touch /forcefsck` before it.
 - `last` shows sessions ending in "crash": schema-init does not write wtmp
   boot/shutdown records.
-- Only the sysvinit + Xfce + SLiM install has been tested. Another display
-  manager needs its own `.svc` (run it in the foreground).
+- SLiM and LightDM are supported. Another display manager needs its own `.svc`
+  (run it in the foreground); install.sh says so when it finds none.
+- LightDM's very first start on a fresh install can fail once while it creates
+  `/var/lib/lightdm/data`; schema-init restarts it and it comes up.
 - No GUI wizard on Devuan; `install.sh` is the whole path.
 
 EXPERIMENTAL. Try it on a machine you can reinstall.

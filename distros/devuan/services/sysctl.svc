@@ -1,6 +1,5 @@
 name=sysctl
-exec=/sbin/sysctl
-args=--system
+exec=/usr/local/libexec/schema-init/devuan-sysctl
 oneshot=1
 dep=udev-coldplug
 needs_root=1

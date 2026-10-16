@@ -1,5 +1,6 @@
 name=cron
 exec=/usr/sbin/cron
+condition=file_is_exec:/usr/sbin/cron
 args=-f
 dep=devuan-boot
 needs_root=1
