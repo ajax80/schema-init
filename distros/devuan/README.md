@@ -52,7 +52,7 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 | `udevd`, `udev-coldplug` | `eudev` | `/sbin/udevd`, then `udevadm trigger` + `settle` |
 | `mount-fstab` | `mountall.sh` | mounts `/etc/fstab` |
 | `devuan-boot` | `bootmisc.sh`, `x11-common`, `networking` (lo), `kmod`, `hwclock.sh` | loopback up, `swapon -a`, `/etc/modules`, RTC if `LOCAL`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
-| `sysctl` | `procps` | `sysctl --system` |
+| `sysctl` | `procps` | `sysctl --system` (a key the kernel rejects is logged, not fatal) |
 | `journal-sink` | `rsyslog` | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
 | `dbus` | `dbus` | `dbus-daemon --system --nofork` |
 | `elogind` | `elogind` | `/usr/libexec/elogind` |
