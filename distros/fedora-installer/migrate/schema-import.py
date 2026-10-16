@@ -1071,8 +1071,10 @@ def _drop_cycles(name, body):
 
 
 INITD = "/etc/init.d/"
-LSB_DEPS = {"$local_fs": "mount-fstab", "$remote_fs": "mount-fstab",
-            "$syslog": "journal-sink", "$network": "network-manager"}
+LSB_DEPS = {"$local_fs": "mount-fstab", "$remote_fs": "mount-fstab", "$syslog": "journal-sink",
+            "$network": "network-manager", "$time": "chrony", "udev": "udevd", "eudev": "udevd",
+            "ssh": "sshd", "procps": "sysctl"}
+OWNED = "its binary already runs as"
 
 
 def initd_dir():
@@ -1100,7 +1102,7 @@ def lsb_to_svc(name, text, known=None):
     /etc/default turns off)."""
     deps = []
     for d in lsb_header(text).get("Required-Start", "").split():
-        svc = LSB_DEPS.get(d, d)
+        svc = LSB_DEPS.get(d) or _UNIT_ALIAS.get(d, d)
         if svc != name and svc not in deps and (known is None or svc in known):
             deps.append(svc)
     lines = ["# schema-import: from %s%s (init script; no usable systemd unit)" % (INITD, name),
@@ -1121,6 +1123,9 @@ def _import_lsb(name, force, queued):
         return ("not-found", INITD + name)
     except OSError as e:
         return ("error", str(e))
+    denied = _denied(name)
+    if denied:
+        return ("skipped", (denied, skip_stub(name, path, denied, text), out))
     body = _drop_cycles(name, lsb_to_svc(name, text, _known_svcs(queued)))
     return ("imported", (out, body))
 
@@ -1129,6 +1134,8 @@ def _runlevel():
     try:
         with open(os.path.join(_root(), "etc/inittab")) as f:
             for ln in f:
+                if ln.lstrip().startswith("#"):
+                    continue
                 p = ln.split(":")
                 if len(p) >= 3 and p[2] == "initdefault":
                     return p[1]
@@ -1262,7 +1269,7 @@ def import_one(name, force=False, queued=()):
         body = _drop_cycles(name, body)
         owner = _exec_owner(body, out)
         if owner:
-            raise Skip("its binary already runs as %s — importing it would start a second copy"
+            raise Skip(OWNED + " %s — importing it would start a second copy"
                        % owner)
     except Skip as s:
         return ("skipped", (str(s), skip_stub(name, path, str(s), text), out))
@@ -1271,7 +1278,7 @@ def import_one(name, force=False, queued=()):
     return ("imported", (out, body))
 
 
-def drain(units=None, force=False, dry_run=False, log=print, written=None):
+def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_fallback=()):
     """Drain the queue (or the given unit list). Writes .svc files, then rewrites
     the queue keeping only transient (not-found) entries. Returns a counts dict."""
     from_queue = units is None
@@ -1280,6 +1287,9 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None):
     keep = []
     for name in items:
         status, detail = import_one(name, force=force, queued=items)
+        if status == "skipped" and name in lsb_fallback and not detail[0].startswith(OWNED):
+            log("unit    %s: %s; using %s%s" % (name, detail[0], INITD, name[:-len(".service")]))
+            status, detail = _import_lsb(name[:-len(".service")], force, items)
         counts[status] += 1
         if status == "imported":
             out, body = detail
@@ -1475,14 +1485,22 @@ def main(argv=None):
     units = args.units or None
     if args.enabled:
         units = (units or []) + [u for u in enabled_units() if u not in (units or [])]
+    fallback = ()
     if args.rc:
         skip = read_skip(args.rc_skip) if args.rc_skip else set()
-        units = (units or []) + [u for u in rc_units(skip) if u not in (units or [])]
+        rc = rc_units(skip)
+        fallback = {u for u in rc if u.endswith(".service")}
+        units = (units or []) + [u for u in rc if u not in (units or [])]
     written = []
-    counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written)
+    counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written,
+                   lsb_fallback=fallback)
     if args.start and written and _read("/proc/1/comm").strip() == "schema-init":
         for out in written:
-            subprocess.run(["schema-ctl", "add", out])
+            try:
+                if subprocess.run(["schema-ctl", "add", out]).returncode:
+                    print("schema-ctl add %s failed" % out, file=sys.stderr)
+            except OSError as e:
+                print("schema-ctl add %s: %s" % (out, e), file=sys.stderr)
     print("imported=%(imported)d exists=%(exists)d not-found=%(not-found)d "
           "skipped=%(skipped)d error=%(error)d" % counts)
     try:

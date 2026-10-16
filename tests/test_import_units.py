@@ -576,7 +576,7 @@ os.environ["SCHEMA_SVC_DIR"] = os.path.join(rc, "svc")
 os.environ["SCHEMA_STATE_DIR"] = os.path.join(rc, "state")
 for d in ("etc/init.d", "etc/rc3.d", "lib/systemd/system", "svc"):
     os.makedirs(os.path.join(rc, d))
-open(os.path.join(rc, "etc/inittab"), "w").write("id:3:initdefault:\n")
+open(os.path.join(rc, "etc/inittab"), "w").write("#id:5:initdefault:\nid:3:initdefault:\n")
 open(os.path.join(rc, "svc/mount-fstab.svc"), "w").write("name=mount-fstab\nexec=/bin/true\noneshot=1\n")
 _lsb = ("#!/bin/sh\n### BEGIN INIT INFO\n# Provides: %s\n# Required-Start:    $remote_fs $syslog %s\n"
         "# Default-Start: 2 3 4 5\n### END INIT INFO\nPIDFILE=/run/x.pid\n")
@@ -606,5 +606,20 @@ check("lsb: runnable unit translated from the unit, not the script",
 check("lsb: rerun leaves existing .svc", si.import_one("/etc/init.d/plain")[0] == "exists")
 check("lsb: missing script -> not-found", si.import_one("/etc/init.d/gone")[0] == "not-found")
 check("lsb_header parses the INFO block only", si.lsb_header(_lsb % ("h", ""))["Provides"] == "h")
+open(os.path.join(rc, "svc/udevd.svc"), "w").write("name=udevd\nexec=/sbin/udevd\n")
+check("lsb: Devuan dep names mapped (udev -> udevd, bluetooth alias)",
+      "dep=udevd\n" in si.lsb_to_svc("x", _lsb % ("x", "udev bluetooth"), {"udevd", "bluetoothd", "mount-fstab"})
+      and "dep=bluetoothd\n" in si.lsb_to_svc("x", _lsb % ("x", "bluetooth"), {"bluetoothd"}))
+open(os.path.join(rc, "etc/init.d/rsyslog"), "w").write(_lsb % ("rsyslog", ""))
+check("lsb: denied script skipped with a stub", si.import_one("/etc/init.d/rsyslog")[0] == "skipped")
+for n, unit in (("ttyd", "[Service]\nExecStart=/usr/bin/ttyd\nStandardInput=tty\n[Install]\nWantedBy=multi-user.target\n"),
+                ("twin", "[Service]\nExecStart=/usr/bin/withunitd\n[Install]\nWantedBy=multi-user.target\n")):
+    open(os.path.join(rc, "lib/systemd/system", n + ".service"), "w").write(unit)
+    open(os.path.join(rc, "etc/init.d", n), "w").write(_lsb % (n, ""))
+si.drain(units=["ttyd.service", "twin.service"], log=lambda *_: None, lsb_fallback={"ttyd.service", "twin.service"})
+check("rc: unit the importer refuses falls back to its init script",
+      "exec=/etc/init.d/ttyd\n" in open(os.path.join(rc, "svc/ttyd.svc")).read())
+check("rc: no fallback when another .svc already runs the daemon (no second copy)",
+      not os.path.exists(os.path.join(rc, "svc/twin.svc")) and os.path.exists(os.path.join(rc, "svc/twin.svc.skipped")))
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

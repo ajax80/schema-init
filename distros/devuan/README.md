@@ -125,9 +125,11 @@ Everything else in `/etc/rc2.d` (what sysvinit starts in runlevel 2) gets a
   `.svc` comes from the unit: supervised, with its socket, readiness, user,
   environment file and sandboxing carried over (cups, avahi-daemon, rsync,
   haveged, ...).
-- Otherwise (no unit, a masked one, or one only udev or D-Bus starts) it runs
-  `/etc/init.d/<name> start` once, as sysvinit does (rc.local, sudo,
-  rmnologin, saned, spice-vdagent, ...).
+- Otherwise (no unit, a masked one, one only udev or D-Bus starts, or one
+  schema-import cannot translate) it runs `/etc/init.d/<name> start` once, as
+  sysvinit does (rc.local, sudo, rmnologin, saned, spice-vdagent, ...). These
+  are not supervised and get no `stop` at shutdown: whatever they started is
+  killed with the rest after the services stop.
 
 The apt hook (`/etc/apt/apt.conf.d/80schema-init`) does the same after every
 `apt install`; under schema-init the new service starts right away.

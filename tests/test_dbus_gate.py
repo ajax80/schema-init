@@ -86,6 +86,9 @@ def main():
             os.chmod(os.path.join(nopy, 'python3'), 0o755)
             check('warm: broker reads the cache, python3 never runs',
                   launch(dict(env, PATH=nopy + ':' + os.environ['PATH'])) == cache)
+            st = os.path.getmtime(cache)
+            os.utime(broker, (st + 10, st + 10))
+            check('broker newer than the cache: dissolves again', launch() == os.path.join(poldir, 'dbus.policy'))
             os.utime(cache, (0, 0))
             check('D-Bus config newer than the cache: dissolves again',
                   launch() == os.path.join(poldir, 'dbus.policy') and os.path.getmtime(cache) > 0)

@@ -53,7 +53,7 @@ CACHE=${SCHEMA_DBUS_CACHE:-/var/cache/schema-init/dbus.policy}
 cache_fresh() {
     [ -s "$CACHE" ] || return 1
     for f in /usr/share/dbus-1/system.conf /usr/share/dbus-1/system.d /usr/share/dbus-1/system.d/* \
-             /etc/dbus-1 /etc/dbus-1/* /etc/dbus-1/*/* "$DISSECT"; do
+             /etc/dbus-1 /etc/dbus-1/* /etc/dbus-1/*/* "$DISSECT" "$BROKER"; do
         [ "$f" -nt "$CACHE" ] && return 1
     done
     return 0
@@ -61,9 +61,12 @@ cache_fresh() {
 
 if cache_fresh; then
     POL=$CACHE
-elif mkdir -p "$POLDIR" && python3 "$DISSECT" /usr/share/dbus-1/system.conf > "$POL.tmp" 2>/dev/null && [ -s "$POL.tmp" ]; then
+elif mkdir -p "$POLDIR" && : > "$POL.start" && python3 "$DISSECT" /usr/share/dbus-1/system.conf > "$POL.tmp" 2>/dev/null && [ -s "$POL.tmp" ]; then
     mv -f "$POL.tmp" "$POL"
-    mkdir -p "${CACHE%/*}" && cp "$POL" "$CACHE.tmp" 2>/dev/null && mv -f "$CACHE.tmp" "$CACHE"
+    # stamped with the dissolve's start, so a file changed during it is newer
+    mkdir -p "${CACHE%/*}" && cp "$POL" "$CACHE.tmp" 2>/dev/null && touch -r "$POL.start" "$CACHE.tmp" &&
+        mv -f "$CACHE.tmp" "$CACHE"
+    rm -f "$POL.start"
 else
     rm -f "$POL.tmp"
     fallback "policy dissolve failed"
