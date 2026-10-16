@@ -12,6 +12,10 @@ Tested in UEFI VMs on:
 - **LCOS 0.9.3** (Devuan Excalibur, LightDM, XLibre, chrony, kernel
   7.2.6-lunduke).
 
+- **LCOS 0.9.3 on real hardware**: HP 15 laptop (Celeron N4000, 4 GB, HDD,
+  Wi-Fi), dual-booted beside Fedora. Measured: desktop 1.9 s sooner and 9 MB
+  less RAM than sysvinit ([numbers](../../docs/benchmarks.md#lcos-093-devuan-based-xfce-sysvinit-vs-schema-init)).
+
 On each: boots to the desktop under schema-init, the Restart/Shut Down buttons
 work, and the sysvinit entry still boots and shuts down normally with this
 installed.
@@ -112,6 +116,11 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
   boot/shutdown records.
 - SLiM and LightDM are supported. Another display manager needs its own `.svc`
   (run it in the foreground); install.sh says so when it finds none.
+- LightDM autologin: on the HP laptop, 1 schema-init boot in 14 came up at the
+  LightDM login screen instead of the desktop (the session exited with "Authorization
+  required" after a 10 s stall); 0 in 13 sysvinit boots. Logging in by hand works.
+  The cause is not found yet; LCOS works around a similar X cookie race in
+  `lcos-display-fix`.
 - LightDM's very first start on a fresh install can fail once while it creates
   `/var/lib/lightdm/data`; schema-init restarts it and it comes up.
 - No GUI wizard on Devuan; `install.sh` is the whole path.
