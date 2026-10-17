@@ -9,8 +9,12 @@ Tested in a UEFI VM on **Void glibc** (rootfs 20250202, updated October 2026:
 kernel 6.18, runit-void 20250212), headless and with Xfce 4.20 + LightDM +
 elogind. On each: boots under schema-init, the services you enabled for runit
 run, and Xfce's Restart and Shut Down work. The runit entry still boots and
-shuts down normally with this installed. **musl is not tested yet.** Not yet
-run on real hardware.
+shuts down normally with this installed. **Void musl** (rootfs 20250202,
+updated October 2026, musl 1.2.6) is tested headless: it builds and passes
+`make test`, boots under schema-init, and `reboot` works; sshd started 1.28 s
+after switch-root against runit's 1.95 s (medians of 4; runit's fastest boot
+matched schema-init's). Xfce on musl is not tested. Not yet run on real
+hardware.
 
 ## Compared with runit
 

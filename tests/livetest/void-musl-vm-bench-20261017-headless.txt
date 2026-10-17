@@ -1,0 +1,41 @@
+=== run=0 side=runit 01:04:28
+init=runit uptime=61
+dhcpcd=4.08 sshd=4.08 agetty_tty1=4.02 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=266 procs=137
+switch_root=1.739387 sshd_after_switch=2.34
+=== run=0 side=schema 01:05:44
+init=schema-init uptime=64
+dhcpcd=3.57 sshd=3.57 agetty_tty1=3.57 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=276 procs=127
+switch_root=1.672109 sshd_after_switch=1.90
+=== run=1 side=runit 01:06:59
+init=runit uptime=64
+dhcpcd=3.65 sshd=3.66 agetty_tty1=3.61 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=279 procs=137
+switch_root=1.665136 sshd_after_switch=1.99
+=== run=1 side=schema 01:08:14
+init=schema-init uptime=64
+dhcpcd=2.98 sshd=2.98 agetty_tty1=2.99 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=266 procs=130
+switch_root=1.657694 sshd_after_switch=1.32
+=== run=2 side=runit 01:09:29
+init=runit uptime=64
+dhcpcd=3.58 sshd=3.59 agetty_tty1=3.54 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=274 procs=137
+switch_root=1.691012 sshd_after_switch=1.90
+=== run=2 side=schema 01:10:45
+init=schema-init uptime=64
+dhcpcd=2.95 sshd=2.95 agetty_tty1=2.95 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=281 procs=128
+switch_root=1.738767 sshd_after_switch=1.21
+=== run=3 side=runit 01:12:00
+init=runit uptime=65
+dhcpcd=2.95 sshd=2.95 agetty_tty1=2.95 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=276 procs=136
+switch_root=1.722937 sshd_after_switch=1.23
+=== run=3 side=schema 01:13:15
+init=schema-init uptime=64
+dhcpcd=2.98 sshd=2.98 agetty_tty1=2.99 xorg=- xfce4_session=- xfdesktop=-
+mem_used_mb=270 procs=128
+switch_root=1.736164 sshd_after_switch=1.24
+DONE
