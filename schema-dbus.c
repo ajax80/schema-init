@@ -874,6 +874,12 @@ static int make_listen_socket(const char *path) {
     struct sockaddr_un sa = {0};
     sa.sun_family = AF_UNIX;
     strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
+    int probe = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (probe >= 0) {
+        int live = connect(probe, (struct sockaddr *)&sa, sizeof sa) == 0;
+        close(probe);
+        if (live) { close(fd); errno = EADDRINUSE; return -1; }
+    }
     unlink(path);
     if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
     chmod(path, 0777);            /* system bus is world-connectable; policy gates use */
@@ -913,7 +919,13 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr) {
 
 int main(int argc, char **argv) {
     int system_bus = 0;
-    for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--system")) system_bus = 1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--system")) system_bus = 1;
+        else if (strcmp(argv[i], "--watch-names")) {
+            fprintf(stderr, "usage: schema-dbus [--system] [--watch-names]\n");
+            return 2;
+        }
+    }
     g_system_bus = system_bus;
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "--watch-names")) { g_system_bus = 1; return watch_names(); }
