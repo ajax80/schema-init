@@ -1,0 +1,30 @@
+#!/bin/sh
+# runit's sv(8) for scripts and habits; under schema-init it drives schema-ctl.
+[ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] || exec /usr/bin/sv "$@"
+
+while :; do
+    case "$1" in
+        -v) shift ;;
+        -w) shift 2 ;;
+        -w*) shift ;;
+        *) break ;;
+    esac
+done
+cmd=$1
+[ $# -ge 2 ] || { echo "usage: sv [-v] [-w sec] command service..." >&2; exit 100; }
+shift
+rc=0
+for s in "$@"; do
+    s=${s%/}; s=${s##*/}
+    case "$cmd" in
+        s|status) /usr/bin/schema-ctl status "$s" | head -1 || rc=1 ;;
+        c|check)
+            st=$(/usr/bin/schema-ctl status --kv | sed -n "s/^service\.$s\.state=//p")
+            case "$st" in FUNDAMENTAL|PERFECT) ;; *) rc=1 ;; esac ;;
+        u|up|start) /usr/bin/schema-ctl start "$s" || rc=1 ;;
+        d|down|stop|x|exit) /usr/bin/schema-ctl stop "$s" || rc=1 ;;
+        t|term|restart|force-restart) /usr/bin/schema-ctl restart "$s" || rc=1 ;;
+        *) echo "sv $cmd: not supported under schema-init" >&2; rc=1 ;;
+    esac
+done
+exit $rc

@@ -1036,7 +1036,7 @@ def _known_svcs(queued):
     known = {n for n, (_, timer) in g.items() if not timer}
     for q in queued:
         if not q.endswith(".timer"):
-            known.add(re.sub(r"\.(service|socket)$", "", q[len(INITD):] if q.startswith(INITD) else q))
+            known.add(re.sub(r"\.(service|socket)$", "", q.rsplit("/", 1)[-1]))
     return known
 
 
@@ -1184,6 +1184,54 @@ def rc_units(skip=()):
     return out
 
 
+SV = "/etc/sv/"
+RUNSVDIR = "etc/runit/runsvdir/default"
+runit_after = None
+
+
+def runit_units(skip=()):
+    """What runit starts at boot: the default runsvdir's links, minus those
+    with a down file. skip: service names to leave out."""
+    d = os.path.join(_root(), RUNSVDIR)
+    try:
+        links = sorted(os.listdir(d))
+    except OSError:
+        return []
+    return [SV + n for n in links
+            if n not in skip and not os.path.exists(os.path.join(d, n, "down"))]
+
+
+def runit_to_svc(name, text, known=None, after=None):
+    """A runit service run the way runsv runs it: ./run from its own directory,
+    restarted when it dies. `sv check X` / `sv start X` lines become dep=X;
+    after: the service standing in for runit's stage 1, which all of them wait for."""
+    deps = [after] if after and after != name else []
+    for m in re.finditer(r"\bsv\s+(?:-\S+\s+(?:\d+\s+)?)*(?:check|start|status|up)\s+([^\s;|&)]+)", text):
+        d = m.group(1).rstrip("/").rsplit("/", 1)[-1]
+        if d != name and d not in deps and (known is None or d in known):
+            deps.append(d)
+    lines = ["# schema-import: from %s%s (runit)" % (SV, name),
+             "name=" + name, "exec=/bin/sh", "args=-c",
+             "args=cd %s%s && exec ./run" % (SV, name), "needs_root=1"]
+    lines += ["dep=" + d for d in deps]
+    return "\n".join(lines) + "\n"
+
+
+def _import_runit(name, force, queued):
+    out = os.path.join(svc_dir(), name + ".svc")
+    if os.path.exists(out) and not force:
+        return ("exists", out)
+    path = os.path.join(_root(), SV.lstrip("/"), name, "run")
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return ("not-found", SV + name)
+    except OSError as e:
+        return ("error", str(e))
+    return ("imported", (out, _drop_cycles(name, runit_to_svc(name, text, _known_svcs(queued), runit_after))))
+
+
 def read_skip(path):
     try:
         with open(path) as f:
@@ -1198,6 +1246,8 @@ def import_one(name, force=False, queued=()):
     in the same drain (an enabled .service makes its socket eager)."""
     if name.startswith(INITD):
         return _import_lsb(name[len(INITD):], force, queued)
+    if name.startswith(SV):
+        return _import_runit(name[len(SV):], force, queued)
     timer = name.endswith(".timer")
     socket = name.endswith(".socket")
     name = name[:-len(".service")] if name.endswith(".service") else name
@@ -1473,10 +1523,15 @@ def main(argv=None):
                     help="only regenerate the D-Bus activation overrides that route bus names to PID 1")
     ap.add_argument("--rc", action="store_true",
                     help="import what sysvinit starts in the default runlevel (/etc/rcN.d)")
+    ap.add_argument("--runit", action="store_true",
+                    help="import what runit starts at boot (/etc/runit/runsvdir/default)")
+    ap.add_argument("--after", metavar="SVC",
+                    help="with --runit: every imported service also waits for SVC (the boot oneshot)")
     ap.add_argument("--start", action="store_true",
                     help="when schema-init is PID 1, load and start each new .svc now (schema-ctl add)")
     ap.add_argument("--rc-skip", metavar="FILE",
-                    help="init script names (whitespace-separated, # comments) --rc leaves out")
+                    help="init script or runit service names (whitespace-separated, # comments) "
+                         "--rc or --runit leaves out")
     args = ap.parse_args(argv)
     if args.bus_overrides:
         c = bus_overrides(dry_run=args.dry_run)
@@ -1491,6 +1546,11 @@ def main(argv=None):
         rc = rc_units(skip)
         fallback = {u for u in rc if u.endswith(".service")}
         units = (units or []) + [u for u in rc if u not in (units or [])]
+    if args.runit:
+        global runit_after
+        runit_after = args.after
+        skip = read_skip(args.rc_skip) if args.rc_skip else set()
+        units = (units or []) + [u for u in runit_units(skip) if u not in (units or [])]
     written = []
     counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written,
                    lsb_fallback=fallback)
