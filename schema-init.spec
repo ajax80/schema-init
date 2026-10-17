@@ -90,6 +90,8 @@ install -Dm0755 distros/fedora-installer/rail/scripts/schema-sysprep.sh %{buildr
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-sshd-start.sh %{buildroot}/usr/local/bin/schema-sshd-start.sh
 install -Dm0755 distros/fedora-installer/rail/scripts/schema-zram-start.sh %{buildroot}/usr/local/bin/schema-zram-start.sh
 install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_schema_fallback
+install -Dm0755 scripts/09_schema_bls_save %{buildroot}%{_sysconfdir}/grub.d/09_schema_bls_save
+install -Dm0755 scripts/11_schema_bls_restore %{buildroot}%{_sysconfdir}/grub.d/11_schema_bls_restore
 install -Dm0755 distros/shared/kernel-install/99-schema-init.install %{buildroot}%{_prefix}/lib/kernel/install.d/99-schema-init.install
 install -Dm0755 distros/fedora-kde/scripts/schema-plasma-autologin.sh %{buildroot}/usr/local/bin/schema-plasma-autologin.sh
 install -Dm0755 distros/fedora-kde/scripts/plasma-session-start.sh %{buildroot}/usr/local/bin/plasma-session-start.sh
@@ -498,6 +500,8 @@ fi
 %dir /usr/local/share/dbus-1/system-services
 /usr/local/share/dbus-1/system-services/org.freedesktop.PolicyKit1.service
 %{_sysconfdir}/grub.d/09_schema_fallback
+%{_sysconfdir}/grub.d/09_schema_bls_save
+%{_sysconfdir}/grub.d/11_schema_bls_restore
 %{_prefix}/lib/kernel/install.d/99-schema-init.install
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
