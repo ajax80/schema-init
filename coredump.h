@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 #include <unistd.h>
 #include <sys/resource.h>
 
@@ -26,6 +27,20 @@
 #define COREDUMP_FREE_PCT    10             /* never fill the filesystem past this */
 #define COREDUMP_KEEP        200            /* metadata records kept */
 #define COREDUMP_RATE_SECS   60             /* one stored core per comm per window */
+
+static inline const char *sig_abbrev(int sig) {
+    static const char *const n[] = {
+        [SIGHUP] = "HUP", [SIGINT] = "INT", [SIGQUIT] = "QUIT", [SIGILL] = "ILL",
+        [SIGTRAP] = "TRAP", [SIGABRT] = "ABRT", [SIGBUS] = "BUS", [SIGFPE] = "FPE",
+        [SIGKILL] = "KILL", [SIGUSR1] = "USR1", [SIGSEGV] = "SEGV", [SIGUSR2] = "USR2",
+        [SIGPIPE] = "PIPE", [SIGALRM] = "ALRM", [SIGTERM] = "TERM", [SIGCHLD] = "CHLD",
+        [SIGCONT] = "CONT", [SIGSTOP] = "STOP", [SIGTSTP] = "TSTP", [SIGTTIN] = "TTIN",
+        [SIGTTOU] = "TTOU", [SIGURG] = "URG", [SIGXCPU] = "XCPU", [SIGXFSZ] = "XFSZ",
+        [SIGVTALRM] = "VTALRM", [SIGPROF] = "PROF", [SIGWINCH] = "WINCH", [SIGIO] = "IO",
+        [SIGPWR] = "PWR", [SIGSYS] = "SYS",
+    };
+    return sig > 0 && sig < (int)(sizeof n / sizeof *n) ? n[sig] : NULL;
+}
 
 /* 1: CUR is the pattern to replace; 2: it is ours already; 0: leave it. */
 static inline int coredump_pattern_classify(const char *cur) {

@@ -1,5 +1,6 @@
 #include "../service.h"
 #include <assert.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -148,9 +149,13 @@ int main(void) {
     assert(run(&svc) == 126);
 
     /* numeric user= resolves to the account */
-    write_svc(p, "name=f\nexec=/bin/true\nuser=65534\n");
+    struct passwd *nb = getpwnam("nobody");
+    assert(nb);
+    char nbody[96];
+    snprintf(nbody, sizeof nbody, "name=f\nexec=/bin/true\nuser=%u\n", (unsigned)nb->pw_uid);
+    write_svc(p, nbody);
     assert(service_load_one(p, &svc) == 0);
-    assert(svc.run_uid == 65534 && svc.run_user[0]);
+    assert(svc.run_uid == nb->pw_uid && svc.run_user[0]);
 
     /* a uid past uid_t must not wrap onto a real account */
     write_svc(p, "name=f\nexec=/bin/true\nuser=4295032830\n");

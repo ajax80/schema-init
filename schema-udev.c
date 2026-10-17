@@ -49,7 +49,8 @@ static ssize_t netlink_recv(int fd, char *buf, size_t bufsz) {
     struct iovec iov = { buf, bufsz };
     struct sockaddr_nl sa;
     char cbuf[CMSG_SPACE(sizeof(struct ucred))];
-    struct msghdr msg = { &sa, sizeof sa, &iov, 1, cbuf, sizeof cbuf, 0 };
+    struct msghdr msg = { .msg_name = &sa, .msg_namelen = sizeof sa, .msg_iov = &iov, .msg_iovlen = 1,
+                          .msg_control = cbuf, .msg_controllen = sizeof cbuf };
     ssize_t n = recvmsg(fd, &msg, 0);
     if (n < 0) return -1;                 /* errno set by recvmsg */
     if (sa.nl_pid != 0) { errno = 0; return -1; }   /* not from kernel */
@@ -92,7 +93,7 @@ static void monitor_broadcast(const struct uevent *ev) {
     dst.nl_pid    = 0;
     dst.nl_groups = 2;   /* UDEV_MONITOR_UDEV */
     struct iovec iov = { frame, (size_t)len };
-    struct msghdr msg = { &dst, sizeof dst, &iov, 1, NULL, 0, 0 };
+    struct msghdr msg = { .msg_name = &dst, .msg_namelen = sizeof dst, .msg_iov = &iov, .msg_iovlen = 1 };
     (void)sendmsg(g_monfd, &msg, 0);
 }
 
