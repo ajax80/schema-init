@@ -102,6 +102,8 @@ Measured 2026-10-15 on the same HP laptop (Celeron N4000, 3.7 GB RAM, 5400 rpm H
 
 A small gain: the desktop is drawn 1.9 s sooner and the machine carries 9 MB less. sysvinit on LCOS is already lean, so there is much less to take away than from systemd on Fedora. Spread was tight (desktop drawn 27.1–27.2 s on sysvinit, 25.1–25.8 s on schema-init). The kernel has no PSI, so there is no IO-pressure row.
 
+Re-measured 2026-10-16 evening after PID 1 stopped waiting for its 250 ms tick before the first spawn and between a `ready_path` and its dependents (same laptop, same method, all 4 runs, schema-dbus on): desktop drawn 27.35 s on sysvinit vs **25.35 s** on schema-init (was 27.1 vs 26.0 that morning); RAM 427 vs 432 MB. Raw data in [`tests/livetest/dbox-bench-20261016-pid1fix.txt`](../tests/livetest/dbox-bench-20261016-pid1fix.txt).
+
 ### Void Linux (glibc, Xfce): runit vs schema-init
 
 Measured 2026-10-16 in a UEFI VM on blakbox (QEMU/KVM, 4 vCPU, 6 GB, virtio disk), Void glibc updated that day (kernel 6.18.57, runit-void 20250212), schema-init added with [`distros/void/install.sh`](../distros/void/README.md). One install, two GRUB entries. Both sides autologin through LightDM into Xfce 4.20. Reboots alternating the two sides, readings 60 s after boot by [`tests/livetest/void-metrics`](../tests/livetest/void-metrics), **seconds from dracut's switch-root** (when PID 1 takes over; kernel + initramfs time varied 1.5–2.2 s between VM boots and is the same code on both sides), medians of 4 runs. Raw data in [`tests/livetest/void-vm-bench-20261016-desktop.txt`](../tests/livetest/void-vm-bench-20261016-desktop.txt) and [`-headless.txt`](../tests/livetest/void-vm-bench-20261016-headless.txt).
