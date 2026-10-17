@@ -4,6 +4,7 @@ needs_root=1
 critical=1
 priority=critical
 stable_secs=1
+ready_path=/run/udev/control
 no_new_privs=0
 private_tmp=0
 protect_system=0
