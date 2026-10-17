@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.14
+Version:        0.4.15
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -510,6 +510,28 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sat Oct 17 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.15-1
+- grub2-mkconfig no longer clobbers schema-init boot entries: 10_linux
+  rewrote every BLS options line, dropping init= (the schema-init entry
+  booted systemd) and a snapshot's rootflags=subvol=; new grub.d
+  09_schema_bls_save / 11_schema_bls_restore put them back, twins re-cloned
+  by the kernel-install hook (new reclone verb)
+- schema-dbus never takes over a live bus socket; unknown arguments print
+  usage and exit 2
+- Rescue boot: schema.rescue / single / s / S / 1 / rescue on the cmdline
+  runs sulogin before any service; Ctrl-D continues the boot
+- fsck at boot: schema-mount-fstab runs fsck -a on fstab entries with
+  pass > 0 (forcefsck / fsck.mode= honoured); fsck.fat skipped when the
+  FAT dirty bit is clear
+- PID 1: first pass runs at once, a pass that moves a service triggers the
+  next immediately, ready_path polled every 10 ms after spawn; answers
+  runit's stopit/reboot + SIGCONT handshake
+- Builds and passes make test on musl
+- Devuan / LCOS profile beside sysvinit (install.sh, LightDM/SLiM, chrony,
+  bluetoothd, opt-in schema-dbus system bus, schema-import --rc, udevd
+  ready on its control socket); Void Linux profile beside runit
+  (install.sh, schema-import --runit, sv wrapper), glibc and musl
+
 * Thu Oct 15 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.14-1
 - PID 1 refuses a .svc, drop-in or .svc.d not owned by root or writable by
   others; an unsafe services dir is warned about and reload is refused
