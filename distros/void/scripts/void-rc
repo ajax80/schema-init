@@ -1,0 +1,22 @@
+#!/bin/sh
+# runit stage 2's /etc/rc.local before the services start, and at shutdown
+# stage 3's /etc/runit/shutdown.d, minus what schema-init does itself (stop
+# services, stop udevd, kill the rest, unmount, reboot).
+PATH=/usr/bin:/usr/sbin
+. /etc/runit/functions
+[ -r /etc/rc.conf ] && . /etc/rc.conf
+detect_container
+stop() {
+    for f in /etc/runit/shutdown.d/*.sh; do
+        case "${f##*/}" in 10-sv-stop.sh|60-udev.sh|70-pkill.sh|80-filesystems.sh|90-kexec.sh) continue ;; esac
+        [ -r "$f" ] && . "$f"
+    done
+    exit 0
+}
+trap stop TERM
+[ -x /etc/rc.local ] && /etc/rc.local
+: > /run/runit/rc-ready
+while :; do
+    sleep 86400 &
+    wait $!
+done

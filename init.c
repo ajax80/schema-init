@@ -37,7 +37,8 @@
 #include <mntent.h>
 
 #define TICK_USEC       250000   /* 250ms main loop tick */
-#define READY_POLL_MS   10       /* while a starting service's ready_path is awaited */
+#define READY_POLL_MS   10       /* while a starting service's ready_path is awaited, */
+#define READY_POLL_SECS 3        /* ...for this long after its spawn */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
 #define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
 #define PID_FILE_WAIT_SECS 5
@@ -2292,7 +2293,9 @@ static int get_poll_timeout(void) {
         service_t *svc = &services[i];
         uint8_t s = svc->inst.state;
         if (s == STATE_FULL_TRUST && svc->ready_path[0] && svc->child_pid > 0 &&
-            !(svc->flags & SVC_ONESHOT))
+            !(svc->flags & SVC_ONESHOT) &&
+            now_m - ((int64_t)svc->spawn_time_mono.tv_sec * 1000 + svc->spawn_time_mono.tv_nsec / 1000000)
+                < READY_POLL_SECS * 1000)
             awaiting = 1;
         if (tick)
             continue;
@@ -3840,7 +3843,7 @@ int main(int argc, char **argv) {
             int moved = 0;
             for (i = 0; i < svc_count && !moved; i++)
                 moved = services[i].inst.state != before[i];
-            streak = moved ? streak + 1 : 0;
+            streak = moved ? (pass_changed ? streak + 1 : 1) : 0;
             pass_changed = moved && streak <= PASS_RERUN_MAX;
         }
         monitor_failsafes();

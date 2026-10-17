@@ -635,11 +635,14 @@ for n, run in (("dbus", "#!/bin/sh\nexec dbus-daemon --system --nofork\n"),
     open(os.path.join(rv, "etc/sv", n, "run"), "w").write(run)
     os.symlink("/etc/sv/" + n, os.path.join(rv, "etc/runit/runsvdir/default", n))
 os.symlink("/etc/sv/gone", os.path.join(rv, "etc/runit/runsvdir/default/gone"))
-os.makedirs(os.path.join(rv, "etc/runit/runsvdir/default/parked-down"))
-open(os.path.join(rv, "etc/runit/runsvdir/default/parked-down/down"), "w").close()
+os.makedirs(os.path.join(rv, "etc/sv/held"))
+open(os.path.join(rv, "etc/sv/held/down"), "w").close()
+os.symlink("/etc/sv/held", os.path.join(rv, "etc/runit/runsvdir/default/held"))
+os.symlink("../../../sv/parked", os.path.join(rv, "etc/runit/runsvdir/default/alias"))
+os.symlink("/home/x/sv/mine", os.path.join(rv, "etc/runit/runsvdir/default/mine"))
 _r = si.runit_units({"covered"})
-check("runit_units: default runsvdir links, skip honored, down file left out",
-      _r == ["/etc/sv/dbus", "/etc/sv/elogind", "/etc/sv/gone", "/etc/sv/nm", "/etc/sv/parked"])
+check("runit_units: link targets in /etc/sv (relative too), skip honored, down file left out, outside /etc/sv refused",
+      _r == ["/etc/sv/parked", "/etc/sv/dbus", "/etc/sv/elogind", "/etc/sv/gone", "/etc/sv/nm"])
 si.runit_after = "void-boot"
 _c = si.drain(units=_r, log=lambda *_: None)
 si.runit_after = None

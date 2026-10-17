@@ -17,7 +17,7 @@ fi
 
 make install
 install -d -m 0755 /etc/schema-init/services $L/shipped
-install -m 0755 scripts/schema-mount-fstab $P/scripts/void-boot $P/scripts/void-coldplug $L/
+install -m 0755 scripts/schema-mount-fstab $P/scripts/void-boot $P/scripts/void-rc $P/scripts/void-coldplug $L/
 for f in $P/services/*.svc; do
     n=$(basename "$f"); t=/etc/schema-init/services/$n
     if [ -e "$t" ] && ! cmp -s "$t" "$f" && ! cmp -s "$t" "$L/shipped/$n"; then
@@ -30,7 +30,21 @@ done
 
 install -m 0755 distros/fedora-installer/migrate/schema-import.py $L/schema-import
 install -m 0644 $P/void-covered $L/void-covered
-$L/schema-import --runit --after void-boot --rc-skip $L/void-covered || echo "schema-import failed: the services above still boot; the rest of /var/service does not run under schema-init."
+# Re-import the .svc files an earlier install generated and you have not edited.
+install -d -m 0755 $L/imported
+for f in $L/imported/*.svc; do
+    [ -e "$f" ] || continue
+    t=/etc/schema-init/services/${f##*/}
+    if cmp -s "$f" "$t"; then rm -f "$t"; fi
+    rm -f "$f"
+done
+if out=$($L/schema-import --runit --after void-rc --rc-skip $L/void-covered); then
+    printf '%s\n' "$out"
+else
+    printf '%s\n' "$out"
+    echo "schema-import failed: the services above still boot; the rest of /var/service does not run under schema-init."
+fi
+printf '%s\n' "$out" | sed -n 's/^import .* -> //p' | while read -r f; do cp "$f" $L/imported/; done
 
 install -m 0755 $P/scripts/sv /usr/local/bin/sv
 
@@ -43,4 +57,4 @@ echo
 echo "Installed. runit is still the default boot entry."
 echo "Reboot and pick a 'schema-init:' entry in the GRUB menu to try it."
 echo "After enabling a runit service (ln -s /etc/sv/X /var/service/), run:"
-echo "  $L/schema-import --runit --after void-boot --rc-skip $L/void-covered --start"
+echo "  $L/schema-import --runit --after void-rc --rc-skip $L/void-covered --start"

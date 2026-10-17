@@ -1191,15 +1191,26 @@ RUNIT_READY = {"dbus": "ready_path=/run/dbus/system_bus_socket"}
 
 
 def runit_units(skip=()):
-    """What runit starts at boot: the default runsvdir's links, minus those
-    with a down file. skip: service names to leave out."""
+    """What runit starts at boot: the services the default runsvdir links to
+    in /etc/sv, minus those with a down file. skip: service names to leave out."""
     d = os.path.join(_root(), RUNSVDIR)
     try:
         links = sorted(os.listdir(d))
     except OSError:
         return []
-    return [SV + n for n in links
-            if n not in skip and not os.path.exists(os.path.join(d, n, "down"))]
+    out = []
+    for n in links:
+        p = os.path.join(d, n)
+        t = os.readlink(p) if os.path.islink(p) else os.path.join("/", RUNSVDIR, n)
+        t = os.path.normpath(t if t.startswith("/") else os.path.join("/", RUNSVDIR, t))
+        name = os.path.basename(t)
+        if os.path.dirname(t) + "/" != SV:
+            print("runit: %s -> %s is outside %s, not imported" % (n, t, SV), file=sys.stderr)
+            continue
+        if name in skip or SV + name in out or os.path.exists(os.path.join(_root(), t.lstrip("/"), "down")):
+            continue
+        out.append(SV + name)
+    return out
 
 
 def runit_to_svc(name, text, known=None, after=None, check=False):

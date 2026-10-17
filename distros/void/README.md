@@ -52,8 +52,9 @@ What you get:
 What it costs:
 
 - Your runit services run unmodified, but schema-init runs their `run`
-  scripts itself. runit's `log/` loggers, `finish` scripts and runlevels other
-  than `default` are not used. A `check` script is translated only for dbus;
+  scripts itself. runit's `log/` loggers (output goes to the service's
+  schema-init log instead), `finish` scripts and runlevels other than
+  `default` are not used. A `check` script is translated only for dbus;
   any other service with one is treated as ready one second after it starts
   (the `.svc` says so).
 - No xbps hook: after enabling a service, run the import command below (or
@@ -104,6 +105,7 @@ To remove the boot entries: `sudo distros/void/install.sh --remove`.
 | `udevd`, `udev-coldplug` | `02-udev.sh` | `udevd`, then `udevadm trigger` + `settle` |
 | `mount-fstab` | `03-filesystems.sh`, `04-swap.sh` | fsck and mount `/etc/fstab`, swap |
 | `void-boot` | the rest of `/etc/runit/core-services` | Void's own scripts: modules, console, hostname, seedrng, sysctl, dmesg, wtmp |
+| `void-rc` | stage 2's `/etc/rc.local`, stage 3's `/etc/runit/shutdown.d` | `rc.local` before your services start; at shutdown `rc.shutdown`, seed save, `hwclock`, wtmp |
 | `journal-sink` | — | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
 
 PID 1 itself mounts `/proc`, `/sys`, `/dev`, `/run`, cgroup2, and remounts `/`
@@ -126,12 +128,12 @@ args=-c
 args=cd /etc/sv/lightdm && exec ./run
 needs_root=1
 stable_secs=0
-dep=void-boot
+dep=void-rc
 dep=dbus
 ```
 
-`dep=dbus` comes from the script's `sv check dbus` line. A link with a `down`
-file is skipped, as runit leaves it down. `void-covered` lists the services
+`dep=dbus` comes from the script's `sv check dbus` line. A service with a `down`
+file is not imported (see [Known](#known)). `void-covered` lists the services
 `distros/void` runs itself (`udevd`).
 
 Enabling a service works as on runit (`/var/service` still resolves under
@@ -139,7 +141,7 @@ schema-init); then load it:
 
 ```sh
 sudo ln -s /etc/sv/<name> /var/service/
-sudo /usr/local/libexec/schema-init/schema-import --runit --after void-boot \
+sudo /usr/local/libexec/schema-init/schema-import --runit --after void-rc \
      --rc-skip /usr/local/libexec/schema-init/void-covered --start
 ```
 
@@ -148,8 +150,10 @@ sudo /usr/local/libexec/schema-init/schema-import --runit --after void-boot \
 ### sv
 
 `/usr/local/bin/sv` hands everything to runit's `sv` when runit is PID 1.
-Under schema-init it maps `status`, `check`, `up`/`start`, `down`/`stop`/`exit`
-and `restart`/`term` to `schema-ctl`; other commands print "not supported".
+Under schema-init it maps `status` (runit's `run:`/`down:` lines), `check`,
+`up`/`start`/`once`, `down`/`stop`/`exit` and `restart`/`term` to `schema-ctl`,
+and sends `hup`/`reload`, `alarm`, `interrupt`, `quit`, `kill`, `pause`, `cont`,
+`1` and `2` as signals to the service's process.
 
 ## Shutdown
 
@@ -157,6 +161,10 @@ runit's own `halt`, `reboot`, `poweroff` and `shutdown` work unchanged: they
 mark `/etc/runit/stopit` (and `/etc/runit/reboot` for a reboot) executable and
 send PID 1 `SIGCONT`, and schema-init answers that the way runit does. That is
 also the path elogind takes, so the desktop's Restart and Shut Down work.
+Before services stop, `void-rc` runs the rest of runit's stage 3
+(`/etc/runit/shutdown.d`): `/etc/rc.shutdown`, saving the random seed,
+`hwclock --systohc` if `HARDWARECLOCK` is set, and the wtmp record. Stopping
+services, udevd, unmounting and rebooting are schema-init's own.
 `shutdown` without `-h` or `-r` asks runit for single-user mode
 (`runsvchdir single`), which schema-init does not have.
 
@@ -165,7 +173,10 @@ also the path elogind takes, so the desktop's Restart and Shut Down work.
 - **LVM, RAID, dm-crypt, ZFS and multi-device btrfs** are activated by runit's
   `03-filesystems.sh`, which schema-init does not run. A root on them is set up
   by the initramfs and boots; other filesystems on them are not activated.
-- Void's elogind wrapper mounts a tmpfs on `/run/systemd` if there is none;
-  `journal-sink` mounts it first so its socket is not hidden.
+- A service parked with a `down` file is not imported, so `sv up` cannot
+  start it under schema-init; remove `down` and import it.
+- Void's elogind wrapper mounts a tmpfs on `/run/systemd` unless it is a
+  mountpoint; `journal-sink` bind-mounts it onto itself first, so the journal
+  socket and `/run/systemd/system` stay visible.
 - Enabling elogind without rebooting leaves the seat without devices until the
   next boot (its udev rules arrived after coldplug). Same under runit.

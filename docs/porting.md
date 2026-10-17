@@ -116,6 +116,7 @@ schema-init beside runit: runit stays the default GRUB entry, and `install.sh` a
 | `udevd`, `udev-coldplug` | eudev, then coldplug trigger + settle |
 | `mount-fstab` | fsck + mount `/etc/fstab`, swap |
 | `void-boot` | Oneshot — the rest of Void's own `/etc/runit/core-services` |
+| `void-rc` | `/etc/rc.local` before the services; runit's `shutdown.d` (rc.shutdown, seed, hwclock, wtmp) at shutdown |
 | `journal-sink` | `/dev/log` |
 | imported | dbus, elogind, lightdm, sshd, dhcpcd, agettys, ... |
 

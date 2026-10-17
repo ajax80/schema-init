@@ -13,18 +13,33 @@ done
 cmd=$1
 [ $# -ge 2 ] || { echo "usage: sv [-v] [-w sec] command service..." >&2; exit 100; }
 shift
+kv=$(/usr/bin/schema-ctl status --kv) || exit 1
 rc=0
 for s in "$@"; do
     s=${s%/}; s=${s##*/}
+    st=$(printf '%s\n' "$kv" | sed -n "s/^service\.$s\.state=//p")
+    pid=$(printf '%s\n' "$kv" | sed -n "s/^service\.$s\.pid=//p")
+    if [ -z "$st" ]; then
+        echo "fail: $s: unable to change to service directory: file does not exist" >&2; rc=1; continue
+    fi
+    sig=
     case "$cmd" in
-        s|status) out=$(/usr/bin/schema-ctl status "$s") || rc=1; printf '%s\n' "$out" | head -1 ;;
-        c|check)
-            st=$(/usr/bin/schema-ctl status --kv | sed -n "s/^service\.$s\.state=//p")
-            case "$st" in FUNDAMENTAL|PERFECT) ;; *) rc=1 ;; esac ;;
-        u|up|start) /usr/bin/schema-ctl start "$s" || rc=1 ;;
-        d|down|stop|x|exit) /usr/bin/schema-ctl stop "$s" || rc=1 ;;
-        t|term|restart|force-restart) /usr/bin/schema-ctl restart "$s" || rc=1 ;;
-        *) echo "sv $cmd: not supported under schema-init" >&2; rc=1 ;;
+        s|status) if [ "${pid:-0}" -gt 0 ]; then echo "run: $s: (pid $pid)"; else echo "down: $s"; fi; continue ;;
+        check) case "$st" in FUNDAMENTAL|PERFECT) echo "ok: $s" ;; *) echo "timeout: $s" >&2; rc=1 ;; esac; continue ;;
+        u|up|start|o|once) /usr/bin/schema-ctl start "$s" >/dev/null || rc=1; continue ;;
+        d|down|stop|x|exit|shutdown) /usr/bin/schema-ctl stop "$s" >/dev/null || rc=1; continue ;;
+        t|term|restart) /usr/bin/schema-ctl restart "$s" >/dev/null || rc=1; continue ;;
+        h|hup|reload) sig=HUP ;;
+        a|alarm) sig=ALRM ;;
+        i|interrupt) sig=INT ;;
+        q|quit) sig=QUIT ;;
+        k|kill) sig=KILL ;;
+        p|pause) sig=STOP ;;
+        c|cont) sig=CONT ;;
+        1) sig=USR1 ;;
+        2) sig=USR2 ;;
+        *) echo "sv $cmd: not supported under schema-init" >&2; rc=1; continue ;;
     esac
+    if [ "${pid:-0}" -gt 0 ]; then kill -s "$sig" "$pid" || rc=1; else echo "fail: $s: not running" >&2; rc=1; fi
 done
 exit $rc
