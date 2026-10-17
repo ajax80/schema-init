@@ -18,6 +18,7 @@ import subprocess
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAVE = os.path.join(REPO, 'scripts/09_schema_bls_save')
 RESTORE = os.path.join(REPO, 'scripts/11_schema_bls_restore')
+HOOK = os.path.join(REPO, 'distros/shared/kernel-install/99-schema-init.install')
 TOKEN = '8ac661a02a5647aaa4f14e6f78f77879'
 VER = '7.1.12-200.fc44.x86_64'
 OLD_STOCK = 'root=UUID=abc ro rootflags=subvol=root rhgb quiet'
@@ -44,7 +45,7 @@ def opts(path):
     return next((l[len('options '):].rstrip('\n') for l in open(path) if l.startswith('options ')), None)
 
 
-def new_tree(extras=True):
+def new_tree(extras=True, marker=True):
     root = tempfile.mkdtemp(prefix='schema-bls-')
     entries = os.path.join(root, 'entries')
     os.makedirs(entries)
@@ -54,6 +55,8 @@ def new_tree(extras=True):
         os.makedirs(os.path.join(conf_root, 'kernel-cmdline.d'))
         with open(os.path.join(conf_root, 'kernel-cmdline.d/10-radeon.conf'), 'w') as f:
             f.write('# optiplex GPU\nmodprobe.blacklist=radeon\n')
+    if marker:
+        open(os.path.join(conf_root, 'boot-default'), 'w').close()
     e = {
         'stock': os.path.join(entries, f'{TOKEN}-{VER}.conf'),
         'twin': os.path.join(entries, f'schema-{VER}.conf'),
@@ -77,6 +80,10 @@ def env_for(root, entries, conf_root):
     env['SCHEMA_INIT_BLS_STASH'] = os.path.join(root, 'stash')
     env['SCHEMA_INIT_CONF_ROOT'] = conf_root
     env['SCHEMA_INIT_BIN'] = '/usr/bin/schema-init'
+    env['SCHEMA_INIT_KI_HOOK'] = HOOK
+    env['KERNEL_INSTALL_ENTRY_TOKEN'] = TOKEN
+    env.pop('GRUB_CMDLINE_LINUX', None)
+    env.pop('GRUB_CMDLINE_LINUX_DEFAULT', None)
     return env
 
 
@@ -96,6 +103,7 @@ def ten_linux(entries, cmdline):
 
 def mkconfig(root, entries, conf_root, cmdline=NEW_STOCK, save=True):
     env = env_for(root, entries, conf_root)
+    env['GRUB_CMDLINE_LINUX'] = cmdline   # grub2-mkconfig exports it to every grub.d script
     s = run(SAVE, env) if save else None
     ten_linux(entries, cmdline)
     r = run(RESTORE, env)
@@ -132,6 +140,30 @@ def test_global_init_cmdline_still_restores_snapshot():
           'rootflags=subvol=schema-snap-20261011' in (opts(e['snap']) or ''), opts(e['snap']))
     o = opts(e['twin']) or ''
     check('global init=: twin has exactly one init=', o.count('init=') == 1, o)
+    new = f'{NEW_STOCK} init=/sbin/schema-init'
+    check('global init=: stock entry takes the new mkconfig line', opts(e['stock']) == new, opts(e['stock']))
+    check('global init=: non schema-* entry is mkconfig\'s to rewrite', opts(e['custom']) == new, opts(e['custom']))
+
+
+def test_no_marker_twin_verbatim():
+    # a box that never opted in: the hook does not own the twin, so it comes
+    # back exactly as it was
+    root, entries, conf_root, e = new_tree(marker=False)
+    mkconfig(root, entries, conf_root)
+    check('no marker: twin options restored verbatim',
+          opts(e['twin']) == f'{OLD_STOCK} {INIT} modprobe.blacklist=radeon', opts(e['twin']))
+
+
+def test_interrupted_run_keeps_stash():
+    # mkconfig died after 10_linux, before the restore: the next run's save
+    # must not throw the only good copy away
+    root, entries, conf_root, e = new_tree()
+    env = env_for(root, entries, conf_root)
+    run(SAVE, env)
+    ten_linux(entries, NEW_STOCK)
+    mkconfig(root, entries, conf_root)
+    check('interrupted run: snapshot subvol recovered on the next mkconfig',
+          'rootflags=subvol=schema-snap-20261011' in (opts(e['snap']) or ''), opts(e['snap']))
 
 
 def test_restore_without_stash_fixes_twin():
@@ -198,7 +230,8 @@ def test_odd_characters_survive():
 def main():
     print('schema-init grub.d BLS preserve tests\n')
     for fn in (test_mkconfig_preserves_entries, test_global_init_cmdline_still_restores_snapshot,
-               test_restore_without_stash_fixes_twin, test_trailing_space_from_10_linux, test_no_extras, test_idempotent,
+               test_restore_without_stash_fixes_twin, test_trailing_space_from_10_linux, test_no_extras,
+               test_no_marker_twin_verbatim, test_interrupted_run_keeps_stash, test_idempotent,
                test_missing_entries_dir, test_entry_removed_between, test_odd_characters_survive):
         print(fn.__name__)
         fn()

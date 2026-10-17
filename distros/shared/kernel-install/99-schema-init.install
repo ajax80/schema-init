@@ -18,7 +18,7 @@ set -eu
 
 COMMAND="${1:-}"
 KERNEL_VERSION="${2:-}"
-[ -n "$KERNEL_VERSION" ] || exit 0
+[ -n "$KERNEL_VERSION" ] || [ "$COMMAND" = reclone ] || exit 0
 
 BOOT_ROOT="${KERNEL_INSTALL_BOOT_ROOT:-/boot}"
 ENTRIES="$BOOT_ROOT/loader/entries"
@@ -105,6 +105,8 @@ clone() {
                 line="$line (schema-init)"
                 ;;
             "options "*)
+                # 10_linux writes a trailing space when GRUB_CMDLINE_LINUX_DEFAULT is empty
+                line="$(printf '%s' "$line" | sed 's/[[:space:]]*$//')"
                 case "$line" in
                     *init=*schema-init*) : ;;   # already a schema-init entry, any path
                     *) line="$line init=$INIT_PATH" ;;
@@ -132,6 +134,17 @@ add)
         [ "$v" = "$KERNEL_VERSION" ] || clone "$v" || true
     done
     set_default_to "$KERNEL_VERSION"
+    ;;
+reclone)
+    # not a kernel-install verb: grub.d/11_schema_bls_restore calls it after
+    # grub2-mkconfig's 10_linux rewrote every entry's options. Re-clone each
+    # twin from its (new) stock entry; the default is left alone.
+    xtra="$(extra_args)"
+    for e in "$ENTRIES"/schema-*.conf; do
+        [ -f "$e" ] || continue
+        v="${e##*/schema-}"; v="${v%.conf}"
+        clone "$v" || true
+    done
     ;;
 remove)
     rm -f "$SCHEMA_CONF"

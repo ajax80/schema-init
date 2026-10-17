@@ -2,16 +2,29 @@
 # Runs before 10_linux. Fedora's 10_linux (update_bls_cmdline) rewrites the
 # options line of every BLS entry to GRUB_CMDLINE_LINUX: schema entries lose
 # init= and snapshot entries lose rootflags=subvol=<snapshot> (DBox, 10-17).
-# Stash every entry that boots schema-init; 11_schema_bls_restore puts them back.
+# Stash every schema-*.conf that boots schema-init, and any other entry that
+# does when GRUB_CMDLINE_LINUX itself does not (a hand-made entry); when the
+# global cmdline carries init= (blakbox), stock entries are mkconfig's to
+# rewrite. 11_schema_bls_restore puts the stash back.
+# The stash is overwritten per entry, never wiped: if the last mkconfig died
+# between 10_linux and the restore, the clobbered entry no longer matches and
+# its good copy from that run is kept.
 # Prints nothing: stdout of a grub.d script lands in grub.cfg.
 ENTRIES="${SCHEMA_INIT_GRUB_ENTRIES:-/boot/loader/entries}"
 STASH="${SCHEMA_INIT_BLS_STASH:-/run/schema-init-bls-stash}"
 
 [ -d "$ENTRIES" ] || exit 0
-rm -rf "$STASH"
 mkdir -p "$STASH" 2>/dev/null || { echo "09_schema_bls_save: cannot create $STASH" >&2; exit 0; }
+case " ${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-} " in
+    *" init="*schema-init*) global=1 ;;
+    *) global= ;;
+esac
 for e in "$ENTRIES"/*.conf; do
     [ -f "$e" ] || continue
+    case "${e##*/}" in
+        schema-*) : ;;
+        *) [ -z "$global" ] || continue ;;
+    esac
     grep -q '^options .*init=[^ ]*schema-init' "$e" && cp -p "$e" "$STASH/"
 done
 exit 0

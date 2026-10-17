@@ -118,6 +118,8 @@ safe-install: snapshot install
 install-bootguard:
 	install -m 0755 scripts/schema-bootok $(DESTDIR)$(BINDIR)/schema-bootok
 	install -m 0755 scripts/09_schema_fallback $(DESTDIR)$(SYSCONFDIR)/grub.d/09_schema_fallback
+	install -m 0755 scripts/09_schema_bls_save $(DESTDIR)$(SYSCONFDIR)/grub.d/09_schema_bls_save
+	install -m 0755 scripts/11_schema_bls_restore $(DESTDIR)$(SYSCONFDIR)/grub.d/11_schema_bls_restore
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
 	install -m 0644 services/schema-bootok.svc.example $(DESTDIR)$(SYSCONFDIR)/schema-init/services/schema-bootok.svc
 

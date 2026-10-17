@@ -1,18 +1,15 @@
 #!/usr/bin/sh
 # Runs after 10_linux and puts back the schema-init entries its options sync
-# clobbered (see 09_schema_bls_save). A kernel-install twin schema-<kver>.conf
-# is rebuilt from its stock entry exactly as 99-schema-init.install does, so a
-# GRUB_CMDLINE_LINUX change still reaches it; every other stashed entry
-# (snapshots, schema-good-*, hand-made) gets its own options line back verbatim.
+# clobbered (see 09_schema_bls_save). On an opted-in box (boot-default marker)
+# kernel-install twins schema-<kver>.conf are re-cloned from their stock entry
+# by 99-schema-init.install itself, so a GRUB_CMDLINE_LINUX change still
+# reaches them; every other stashed entry (snapshots, schema-good-*, hand-made,
+# twins on a box that never opted in) gets its own options line back verbatim.
 # Prints nothing: stdout of a grub.d script lands in grub.cfg.
 ENTRIES="${SCHEMA_INIT_GRUB_ENTRIES:-/boot/loader/entries}"
 STASH="${SCHEMA_INIT_BLS_STASH:-/run/schema-init-bls-stash}"
-CMDLINE_D="${SCHEMA_INIT_CONF_ROOT:-/etc/schema-init}/kernel-cmdline.d"
-INIT_PATH="${SCHEMA_INIT_BIN:-}"
-if [ -z "$INIT_PATH" ]; then
-    INIT_PATH="$(command -v schema-init 2>/dev/null || true)"
-    [ -n "$INIT_PATH" ] || INIT_PATH="/usr/bin/schema-init"
-fi
+HOOK="${SCHEMA_INIT_KI_HOOK:-/usr/lib/kernel/install.d/99-schema-init.install}"
+MARKER="${SCHEMA_INIT_CONF_ROOT:-/etc/schema-init}/boot-default"
 
 [ -d "$ENTRIES" ] || exit 0
 
@@ -20,48 +17,22 @@ options_of() {
     sed -n 's/^options //p' "$1" | head -1 | sed 's/[[:space:]]*$//'
 }
 
-set_options() {
-    # $1 = entry, $2 = new options (passed via the environment: awk -v would
-    # eat backslashes)
-    [ "$(options_of "$1")" = "$2" ] && return 0
-    tmp="$1.tmp.$$"
-    OPTS="$2" awk '/^options /{ print "options " ENVIRON["OPTS"]; next } { print }' "$1" > "$tmp" &&
-        mv "$tmp" "$1"
-}
-
-stock_twin() {
-    for s in "$ENTRIES"/*-"$1".conf; do
-        [ -f "$s" ] || continue
-        case "${s##*/}" in
+has_stock() {
+    for t in "$ENTRIES"/*-"$1".conf; do
+        [ -f "$t" ] || continue
+        case "${t##*/}" in
             schema-*|*rescue*) continue ;;
         esac
-        printf '%s\n' "$s"
-        return
+        return 0
     done
+    return 1
 }
 
-extra_args() {
-    [ -d "$CMDLINE_D" ] || return 0
-    for f in "$CMDLINE_D"/*.conf; do
-        [ -f "$f" ] || continue
-        sed 's/#.*//' "$f"
-    done | tr '\n' ' ' | tr -s ' ' | sed 's/^ *//; s/ *$//'
-}
-
-xtra="$(extra_args)"
-for e in "$ENTRIES"/schema-*.conf; do
-    [ -f "$e" ] || continue
-    v="${e##*/schema-}"; v="${v%.conf}"
-    stock="$(stock_twin "$v")"
-    [ -n "$stock" ] || continue
-    o="$(options_of "$stock")"
-    case " $o " in
-        *" init="*schema-init*) : ;;
-        *) o="$o init=$INIT_PATH" ;;
-    esac
-    [ -n "$xtra" ] && o="$o $xtra"
-    set_options "$e" "$o"
-done
+recloned=
+if [ -f "$MARKER" ] && [ -x "$HOOK" ]; then
+    KERNEL_INSTALL_BOOT_ROOT="${ENTRIES%/loader/entries}" SCHEMA_INIT_GRUB_ENTRIES="$ENTRIES" \
+        "$HOOK" reclone >&2 && recloned=1
+fi
 
 [ -d "$STASH" ] || exit 0
 for s in "$STASH"/*.conf; do
@@ -71,10 +42,14 @@ for s in "$STASH"/*.conf; do
     case "${s##*/}" in
         schema-*)
             v="${s##*/schema-}"; v="${v%.conf}"
-            [ -n "$(stock_twin "$v")" ] && continue
+            [ -n "$recloned" ] && has_stock "$v" && continue
             ;;
     esac
-    set_options "$e" "$(options_of "$s")"
+    o="$(options_of "$s")"
+    [ "$(options_of "$e")" = "$o" ] && continue
+    # via the environment: awk -v would eat backslashes
+    OPTS="$o" awk '/^options /{ print "options " ENVIRON["OPTS"]; next } { print }' "$e" > "$e.tmp.$$" &&
+        mv "$e.tmp.$$" "$e"
 done
 rm -rf "$STASH"
 exit 0
