@@ -184,7 +184,9 @@ locked (Fedora's default) it gives no shell and the boot goes on, so use
 `init=/bin/sh` there.
 
 **fsck.** `mount-fstab` checks each `/etc/fstab` filesystem with a pass number
-above 0 (`fsck -a`) before mounting it; `/` is the initramfs's. When fsck
+above 0 (`fsck -a`) before mounting it; `/` is the initramfs's. FAT filesystems are
+skipped when the boot-sector dirty bit and the FAT[1] clean-shutdown bits say
+they were unmounted cleanly, unless forced. When fsck
 cannot fix one, a `nofail` entry is left unmounted and any other gets the same
 sulogin shell; after it, the filesystem is mounted if fsck passes, otherwise
 left out. `forcefsck` / `fsck.mode=force` on the command line or `/forcefsck`

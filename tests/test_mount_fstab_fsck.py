@@ -11,7 +11,7 @@ SCRIPT = os.path.join(REPO, 'scripts', 'schema-mount-fstab')
 FAKES = {
     'blkid': '''#!/bin/sh
 case "$*" in
-  *"-s TYPE"*) echo ext4 ;;
+  *"-s TYPE"*) echo "${FAKE_TYPE:-ext4}" ;;
   *LABEL=*) for a; do l=$a; done; echo "/dev/fake-${l#LABEL=}" ;;
 esac
 ''',
@@ -21,6 +21,8 @@ rc=$(head -1 "$T/rcs" 2>/dev/null); sed -i 1d "$T/rcs" 2>/dev/null
 exit ${rc:-0}
 ''',
     'fsck.ext4': '#!/bin/sh\n',
+    'fsck.vfat': '#!/bin/sh\n',
+    'fsck.msdos': '#!/bin/sh\n',
     'mount': '#!/bin/sh\necho "mount $*" >> "$T/calls"\n',
     'findmnt': '#!/bin/sh\nexit 1\n',
     'sulogin': '#!/bin/sh\necho sulogin >> "$T/calls"\n',
@@ -36,7 +38,7 @@ def check(name, ok, detail=''):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ''))
 
 
-def run(fstab_line, rcs=()):
+def run(fstab_line, rcs=(), fat=None, cmdline='', ftype='ext4'):
     t = tempfile.mkdtemp(prefix='schema-fsck-')
     try:
         b = os.path.join(t, 'bin')
@@ -45,10 +47,23 @@ def run(fstab_line, rcs=()):
             p = os.path.join(b, n)
             open(p, 'w').write(body)
             os.chmod(p, 0o755)
+        if fat is not None:
+            sz16, flag, sig, fat1 = fat
+            bs = bytearray(1024)
+            bs[11:13] = (512).to_bytes(2, 'little')
+            bs[14:16] = (1).to_bytes(2, 'little')
+            bs[22:24] = sz16.to_bytes(2, 'little')
+            o = 37 if sz16 else 65
+            bs[o], bs[o + 1] = flag, sig
+            w = 2 if sz16 else 4
+            bs[512 + w:512 + 2 * w] = fat1.to_bytes(w, 'little')
+            open(os.path.join(t, 'fat'), 'wb').write(bs)
+        open(os.path.join(t, 'cmdline'), 'w').write(cmdline + '\n')
         open(os.path.join(t, 'rcs'), 'w').write(''.join(f'{r}\n' for r in rcs))
         open(os.path.join(t, 'fstab'), 'w').write(fstab_line.replace('@', t) + '\n')
         env = dict(os.environ, T=t, PATH=b + ':' + os.environ['PATH'],
-                   SCHEMA_FSTAB=os.path.join(t, 'fstab'), SCHEMA_CONSOLE=os.path.join(t, 'console'))
+                   SCHEMA_FSTAB=os.path.join(t, 'fstab'), SCHEMA_CONSOLE=os.path.join(t, 'console'),
+                   SCHEMA_CMDLINE=os.path.join(t, 'cmdline'), FAKE_TYPE=ftype)
         out = subprocess.run(['sh', SCRIPT], env=env, capture_output=True, text=True, timeout=30).stdout
         cp = os.path.join(t, 'calls')
         calls = open(cp).read().splitlines() if os.path.exists(cp) else []
@@ -93,6 +108,40 @@ check('recheck failing (8) after shell: not mounted', not mounted(calls) and 'st
 out, calls = run('LABEL=d @/m nosuchfs defaults 0 2')
 check('no fsck.nosuchfs: not checked, mounted', not any(c.startswith('fsck') for c in calls)
       and mounted(calls) and 'not checked' in out, out)
+
+fsck_called = lambda calls: any(c.startswith('fsck') for c in calls)
+F32, F16 = 0x0FFFFFFF, 0xFFFF
+cases = [
+    ('FAT32 clean: no fsck', (0, 0, 0x29, F32), False),
+    ('FAT32 dirty bit: fsck', (0, 1, 0x29, F32), True),
+    ('FAT32 surface-scan bit: fsck', (0, 2, 0x29, F32), True),
+    ('FAT32 dirty among other flags: fsck', (0, 0x41, 0x29, F32), True),
+    ('FAT32 no extended BPB signature: fsck', (0, 0, 0, F32), True),
+    ('FAT32 FAT[1] clean-shutdown bit clear (Windows): fsck', (0, 0, 0x29, F32 & ~(1 << 27)), True),
+    ('FAT32 FAT[1] hard-error bit clear: fsck', (0, 0, 0x29, F32 & ~(1 << 26)), True),
+    ('FAT16 clean: no fsck', (200, 0, 0x29, F16), False),
+    ('FAT16 dirty bit: fsck', (200, 1, 0x29, F16), True),
+    ('FAT16 FAT[1] clean-shutdown bit clear: fsck', (200, 0, 0x29, F16 & ~(1 << 15)), True),
+    ('FAT16 FAT[1] hard-error bit clear: fsck', (200, 0, 0x29, F16 & ~(1 << 14)), True),
+]
+for name, fat, want in cases:
+    out, calls = run('@/fat @/m vfat defaults 0 2', fat=fat)
+    check(name, fsck_called(calls) == want and mounted(calls), calls)
+
+out, calls = run('@/fat @/m vfat defaults 0 2', fat=(0, 0, 0x29, F32), cmdline='ro forcefsck')
+check('FAT32 clean, forcefsck: fsck -f', any(c.startswith('fsck -a -T -f') for c in calls), calls)
+
+out, calls = run('@/fat @/m vfat defaults 0 2', fat=(0, 0, 0x29, F32), cmdline='fsck.mode=skip')
+check('fsck.mode=skip: no fsck', not fsck_called(calls) and mounted(calls), calls)
+
+out, calls = run('@/fat @/m auto defaults 0 2', fat=(0, 0, 0x29, F32), ftype='vfat')
+check('type auto -> vfat, clean: no fsck', not fsck_called(calls) and 'unmounted cleanly' in out, out)
+
+out, calls = run('@/fat @/m msdos defaults 0 2', fat=(0, 1, 0x29, F32))
+check('msdos dirty: fsck', fsck_called(calls), calls)
+
+out, calls = run('@/nofile @/m vfat defaults 0 2')
+check('FAT unreadable: fsck', fsck_called(calls), calls)
 
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

@@ -178,7 +178,11 @@ shell and the boot goes on.
 
 At boot, `mount-fstab` runs `fsck -a` on each `/etc/fstab` filesystem with a
 pass number (the sixth field) above 0 before mounting it. `/` is checked by the
-initramfs, as under sysvinit. `forcefsck` on the kernel command line or
+initramfs, as under sysvinit. A FAT filesystem (the EFI partition) is not scanned
+when its boot sector and FAT both say it was unmounted cleanly (Linux and
+Windows each mark it dirty while mounted): on the HP laptop's HDD that scan
+cost about 0.6 s of boot. Damage that a clean unmount does not record, such as
+a bad sector, is then found only by a forced check. `forcefsck` on the kernel command line or
 `touch /forcefsck` forces the check; `fastboot` or `/fastboot` skips it. Both files are removed after one boot. When fsck cannot fix
 a filesystem, a `nofail` one is left unmounted; any other gets the same
 root-password shell, and is mounted after it if fsck then passes. Results are in

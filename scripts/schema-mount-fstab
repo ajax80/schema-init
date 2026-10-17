@@ -80,7 +80,7 @@ wait_dev() {
 fsck_mode=auto
 [ -e /forcefsck ] && fsck_mode=force
 [ -e /fastboot ] && fsck_mode=skip
-for w in $(cat /proc/cmdline 2>/dev/null); do
+for w in $(cat "${SCHEMA_CMDLINE:-/proc/cmdline}" 2>/dev/null); do
     case "$w" in
         forcefsck|fsck.mode=force) fsck_mode=force ;;
         fastboot|fsck.mode=skip) fsck_mode=skip ;;
@@ -96,11 +96,25 @@ rescue() {
     log "rescue shell exited"
 }
 
+fat_clean() {
+    set -- $(od -v -An -tu1 -N72 "$1" 2>/dev/null) "$1"
+    [ $# = 73 ] || return 1
+    fdev=${73} bps=$((${12} + ${13} * 256)) rsvd=$((${15} + ${16} * 256))
+    if [ $((${23} + ${24})) = 0 ]; then fflag=${66} fsig=${67} fw=4 fmask=12; else fflag=${38} fsig=${39} fw=2 fmask=192; fi
+    [ "$bps" -gt 0 ] && [ "$fsig" = 41 ] && [ $((fflag & 3)) = 0 ] || return 1
+    fhb=
+    for x in $(od -v -An -tu1 -j$((bps * rsvd + fw)) -N$fw "$fdev" 2>/dev/null); do fhb=$x; done
+    [ -n "$fhb" ] && [ $((fhb & fmask)) = $fmask ]
+}
+
 check() {
     cdev=$1 ctgt=$2 cfs=$3
     [ "$fsck_mode" = skip ] && return 0
     [ "$cfs" = auto ] && cfs=$(blkid -o value -s TYPE "$cdev" 2>/dev/null)
     command -v "fsck.$cfs" >/dev/null || { log "$ctgt: no fsck.$cfs, not checked"; return 0; }
+    case "$cfs" in vfat|fat|msdos)
+        [ "$fsck_mode" = auto ] && fat_clean "$cdev" && { log "$ctgt: $cdev was unmounted cleanly, not checked"; return 0; } ;;
+    esac
     f=; [ "$fsck_mode" = force ] && f=-f
     out=$(fsck -a -T $f -t "$cfs" "$cdev" 2>&1); rc=$?
     [ -z "$out" ] || printf '%s\n' "$out" | sed "s|^|schema-mount-fstab: fsck $cdev: |"
