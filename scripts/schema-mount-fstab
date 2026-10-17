@@ -96,11 +96,21 @@ rescue() {
     log "rescue shell exited"
 }
 
+fat_clean() {
+    z=$(od -An -tu2 -j22 -N2 "$1" 2>/dev/null | tr -d ' ')
+    o=37; [ "$z" = 0 ] && o=65
+    b=$(od -An -tu1 -j$o -N1 "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$b" ] && [ $((b & 1)) = 0 ]
+}
+
 check() {
     cdev=$1 ctgt=$2 cfs=$3
     [ "$fsck_mode" = skip ] && return 0
     [ "$cfs" = auto ] && cfs=$(blkid -o value -s TYPE "$cdev" 2>/dev/null)
     command -v "fsck.$cfs" >/dev/null || { log "$ctgt: no fsck.$cfs, not checked"; return 0; }
+    case "$cfs" in vfat|fat|msdos)
+        [ "$fsck_mode" = auto ] && fat_clean "$cdev" && { log "$ctgt: $cdev was unmounted cleanly, not checked"; return 0; } ;;
+    esac
     f=; [ "$fsck_mode" = force ] && f=-f
     out=$(fsck -a -T $f -t "$cfs" "$cdev" 2>&1); rc=$?
     [ -z "$out" ] || printf '%s\n' "$out" | sed "s|^|schema-mount-fstab: fsck $cdev: |"

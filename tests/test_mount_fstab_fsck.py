@@ -21,6 +21,7 @@ rc=$(head -1 "$T/rcs" 2>/dev/null); sed -i 1d "$T/rcs" 2>/dev/null
 exit ${rc:-0}
 ''',
     'fsck.ext4': '#!/bin/sh\n',
+    'fsck.vfat': '#!/bin/sh\n',
     'mount': '#!/bin/sh\necho "mount $*" >> "$T/calls"\n',
     'findmnt': '#!/bin/sh\nexit 1\n',
     'sulogin': '#!/bin/sh\necho sulogin >> "$T/calls"\n',
@@ -36,7 +37,7 @@ def check(name, ok, detail=''):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ''))
 
 
-def run(fstab_line, rcs=()):
+def run(fstab_line, rcs=(), fat=None):
     t = tempfile.mkdtemp(prefix='schema-fsck-')
     try:
         b = os.path.join(t, 'bin')
@@ -45,6 +46,11 @@ def run(fstab_line, rcs=()):
             p = os.path.join(b, n)
             open(p, 'w').write(body)
             os.chmod(p, 0o755)
+        if fat is not None:
+            bs = bytearray(512)
+            bs[22:24] = fat[0].to_bytes(2, 'little')
+            bs[37 if fat[0] else 65] = fat[1]
+            open(os.path.join(t, 'fat'), 'wb').write(bs)
         open(os.path.join(t, 'rcs'), 'w').write(''.join(f'{r}\n' for r in rcs))
         open(os.path.join(t, 'fstab'), 'w').write(fstab_line.replace('@', t) + '\n')
         env = dict(os.environ, T=t, PATH=b + ':' + os.environ['PATH'],
@@ -93,6 +99,25 @@ check('recheck failing (8) after shell: not mounted', not mounted(calls) and 'st
 out, calls = run('LABEL=d @/m nosuchfs defaults 0 2')
 check('no fsck.nosuchfs: not checked, mounted', not any(c.startswith('fsck') for c in calls)
       and mounted(calls) and 'not checked' in out, out)
+
+fsck_called = lambda calls: any(c.startswith('fsck') for c in calls)
+out, calls = run('@/fat @/m vfat defaults 0 2', fat=(0, 0))
+check('FAT32 clean: no fsck, mounted', not fsck_called(calls) and mounted(calls) and 'unmounted cleanly' in out, calls)
+
+out, calls = run('@/fat @/m vfat defaults 0 2', fat=(0, 1))
+check('FAT32 dirty: fsck', fsck_called(calls) and mounted(calls), calls)
+
+out, calls = run('@/fat @/m vfat defaults 0 2', fat=(0, 0x41))
+check('FAT32 dirty among other flags: fsck', fsck_called(calls), calls)
+
+out, calls = run('@/fat @/m vfat defaults 0 2', fat=(200, 0))
+check('FAT16 clean: no fsck', not fsck_called(calls) and mounted(calls), calls)
+
+out, calls = run('@/fat @/m vfat defaults 0 2', fat=(200, 1))
+check('FAT16 dirty: fsck', fsck_called(calls), calls)
+
+out, calls = run('@/nofile @/m vfat defaults 0 2')
+check('FAT unreadable: fsck', fsck_called(calls), calls)
 
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)
