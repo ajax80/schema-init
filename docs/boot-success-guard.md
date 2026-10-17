@@ -57,6 +57,13 @@ If it does not, the counter runs down and GRUB boots the pre-deploy snapshot.
     ln -s schema-bootok.svc <rail>         # add to the boot rail (dep=display-manager)
     grub2-mkconfig -o /boot/grub2/grub.cfg # pick up 09_schema_fallback
 
+`grub2-mkconfig` is safe to run on Fedora: its `10_linux` rewrites the options
+line of every BLS entry to `GRUB_CMDLINE_LINUX`, which would drop `init=` and a
+snapshot entry's `rootflags=subvol=`, so the package ships `09_schema_bls_save` /
+`11_schema_bls_restore` around it to put the schema-init entries back. Without
+the package (hand install), check `grep options /boot/loader/entries/schema-*`
+after every mkconfig.
+
 Validate the counting logic under vmtest (boot, withhold `boot_success`, reboot,
 assert the fallback id is chosen) before trusting it on hardware.
 

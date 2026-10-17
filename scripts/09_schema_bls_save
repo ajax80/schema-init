@@ -1,0 +1,17 @@
+#!/usr/bin/sh
+# Runs before 10_linux. Fedora's 10_linux (update_bls_cmdline) rewrites the
+# options line of every BLS entry to GRUB_CMDLINE_LINUX: schema entries lose
+# init= and snapshot entries lose rootflags=subvol=<snapshot> (DBox, 10-17).
+# Stash every entry that boots schema-init; 11_schema_bls_restore puts them back.
+# Prints nothing: stdout of a grub.d script lands in grub.cfg.
+ENTRIES="${SCHEMA_INIT_GRUB_ENTRIES:-/boot/loader/entries}"
+STASH="${SCHEMA_INIT_BLS_STASH:-/run/schema-init-bls-stash}"
+
+[ -d "$ENTRIES" ] || exit 0
+rm -rf "$STASH"
+mkdir -p "$STASH" 2>/dev/null || { echo "09_schema_bls_save: cannot create $STASH" >&2; exit 0; }
+for e in "$ENTRIES"/*.conf; do
+    [ -f "$e" ] || continue
+    grep -q '^options .*init=[^ ]*schema-init' "$e" && cp -p "$e" "$STASH/"
+done
+exit 0
