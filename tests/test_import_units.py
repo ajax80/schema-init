@@ -652,5 +652,10 @@ check("runit: sv -w N check /path/ -> dep on the name; unknown service dropped",
       "dep=dbus\n" in _n and "ghost" not in _n)
 check("runit: after= not added to itself", "dep=" not in si.runit_to_svc("void-boot", "", set(), "void-boot"))
 check("runit: missing run -> not-found, rest imported", _c["not-found"] == 1 and _c["imported"] == 4)
+check("runit: no check script -> ready once running (stable_secs=0)", "stable_secs=0\n" in _e)
+check("runit: dbus check -> its socket", "ready_path=/run/dbus/system_bus_socket\n" in si.runit_to_svc("dbus", "", set(), None, True)
+      and "stable_secs" not in si.runit_to_svc("dbus", "", set(), None, True))
+check("runit: unknown check -> 1 s, noted", "not translated" in si.runit_to_svc("pg", "", set(), None, True)
+      and "stable_secs=1\n" in si.runit_to_svc("pg", "", set(), None, True))
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

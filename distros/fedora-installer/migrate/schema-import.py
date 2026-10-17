@@ -1187,6 +1187,7 @@ def rc_units(skip=()):
 SV = "/etc/sv/"
 RUNSVDIR = "etc/runit/runsvdir/default"
 runit_after = None
+RUNIT_READY = {"dbus": "ready_path=/run/dbus/system_bus_socket"}
 
 
 def runit_units(skip=()):
@@ -1201,10 +1202,12 @@ def runit_units(skip=()):
             if n not in skip and not os.path.exists(os.path.join(d, n, "down"))]
 
 
-def runit_to_svc(name, text, known=None, after=None):
+def runit_to_svc(name, text, known=None, after=None, check=False):
     """A runit service run the way runsv runs it: ./run from its own directory,
     restarted when it dies. `sv check X` / `sv start X` lines become dep=X;
-    after: the service standing in for runit's stage 1, which all of them wait for."""
+    after: the service standing in for runit's stage 1, which all of them wait for.
+    Ready as soon as it runs, as `sv check` sees it, unless it has a ./check
+    script: then a known readiness signal, else one second."""
     deps = [after] if after and after != name else []
     for m in re.finditer(r"\bsv\s+(?:-\S+\s+(?:\d+\s+)?)*(?:check|start|status|up)\s+([^\s;|&)]+)", text):
         d = m.group(1).rstrip("/").rsplit("/", 1)[-1]
@@ -1213,6 +1216,13 @@ def runit_to_svc(name, text, known=None, after=None):
     lines = ["# schema-import: from %s%s (runit)" % (SV, name),
              "name=" + name, "exec=/bin/sh", "args=-c",
              "args=cd %s%s && exec ./run" % (SV, name), "needs_root=1"]
+    if not check:
+        lines.append("stable_secs=0")
+    elif name in RUNIT_READY:
+        lines.append(RUNIT_READY[name])
+    else:
+        lines += ["# schema-import: %s%s/check not translated; ready after 1 s" % (SV, name),
+                  "stable_secs=1"]
     lines += ["dep=" + d for d in deps]
     return "\n".join(lines) + "\n"
 
@@ -1229,7 +1239,9 @@ def _import_runit(name, force, queued):
         return ("not-found", SV + name)
     except OSError as e:
         return ("error", str(e))
-    return ("imported", (out, _drop_cycles(name, runit_to_svc(name, text, _known_svcs(queued), runit_after))))
+    check = os.path.exists(os.path.join(os.path.dirname(path), "check"))
+    return ("imported", (out, _drop_cycles(name, runit_to_svc(name, text, _known_svcs(queued),
+                                                              runit_after, check))))
 
 
 def read_skip(path):
