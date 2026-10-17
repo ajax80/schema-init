@@ -1,0 +1,41 @@
+=== run=0 side=runit 21:19:35
+init=runit uptime=65
+dhcpcd=2.85 sshd=2.85 agetty_tty1=2.85 xorg=3.38 xfce4_session=3.81 xfdesktop=7.84
+mem_used_mb=456 procs=173
+switch_root=1.586768 sshd_after_switch=1.26
+=== run=0 side=schema 21:20:51
+init=schema-init uptime=64
+dhcpcd=2.86 sshd=2.86 agetty_tty1=2.85 xorg=3.03 xfce4_session=3.41 xfdesktop=7.31
+mem_used_mb=461 procs=157
+switch_root=1.611032 sshd_after_switch=1.25
+=== run=1 side=runit 21:22:01
+init=runit uptime=60
+dhcpcd=2.93 sshd=2.93 agetty_tty1=2.93 xorg=3.46 xfce4_session=3.82 xfdesktop=7.87
+mem_used_mb=448 procs=174
+switch_root=1.685708 sshd_after_switch=1.24
+=== run=1 side=schema 21:23:17
+init=schema-init uptime=64
+dhcpcd=2.89 sshd=2.89 agetty_tty1=2.88 xorg=3.07 xfce4_session=3.40 xfdesktop=7.30
+mem_used_mb=469 procs=157
+switch_root=1.593611 sshd_after_switch=1.30
+=== run=2 side=runit 21:24:32
+init=runit uptime=65
+dhcpcd=2.95 sshd=2.95 agetty_tty1=2.95 xorg=3.49 xfce4_session=3.83 xfdesktop=7.52
+mem_used_mb=449 procs=175
+switch_root=1.697602 sshd_after_switch=1.25
+=== run=2 side=schema 21:25:48
+init=schema-init uptime=64
+dhcpcd=3.00 sshd=2.99 agetty_tty1=2.97 xorg=3.12 xfce4_session=3.47 xfdesktop=7.44
+mem_used_mb=460 procs=157
+switch_root=1.645733 sshd_after_switch=1.34
+=== run=3 side=runit 21:26:58
+init=runit uptime=60
+dhcpcd=2.91 sshd=2.91 agetty_tty1=2.91 xorg=4.06 xfce4_session=4.48 xfdesktop=8.38
+mem_used_mb=463 procs=175
+switch_root=1.519158 sshd_after_switch=1.39
+=== run=3 side=schema 21:28:14
+init=schema-init uptime=64
+dhcpcd=2.88 sshd=2.87 agetty_tty1=2.86 xorg=3.03 xfce4_session=3.41 xfdesktop=7.53
+mem_used_mb=454 procs=157
+switch_root=1.600633 sshd_after_switch=1.27
+DONE

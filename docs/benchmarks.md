@@ -102,6 +102,21 @@ Measured 2026-10-15 on the same HP laptop (Celeron N4000, 3.7 GB RAM, 5400 rpm H
 
 A small gain: the desktop is drawn 1.9 s sooner and the machine carries 9 MB less. sysvinit on LCOS is already lean, so there is much less to take away than from systemd on Fedora. Spread was tight (desktop drawn 27.1–27.2 s on sysvinit, 25.1–25.8 s on schema-init). The kernel has no PSI, so there is no IO-pressure row.
 
+### Void Linux (glibc, Xfce): runit vs schema-init
+
+Measured 2026-10-16 in a UEFI VM on blakbox (QEMU/KVM, 4 vCPU, 6 GB, virtio disk), Void glibc updated that day (kernel 6.18.57, runit-void 20250212), schema-init added with [`distros/void/install.sh`](../distros/void/README.md). One install, two GRUB entries. Both sides autologin through LightDM into Xfce 4.20. Reboots alternating the two sides, readings 60 s after boot by [`tests/livetest/void-metrics`](../tests/livetest/void-metrics), **seconds from dracut's switch-root** (when PID 1 takes over; kernel + initramfs time varied 1.5–2.2 s between VM boots and is the same code on both sides), medians of 4 runs. Raw data in [`tests/livetest/void-vm-bench-20261016-desktop.txt`](../tests/livetest/void-vm-bench-20261016-desktop.txt) and [`-headless.txt`](../tests/livetest/void-vm-bench-20261016-headless.txt).
+
+| | runit (stock Void) | schema-init |
+|---|---|---|
+| Headless: sshd spawned | 1.34 s | **1.29 s** |
+| X server spawned | 1.79 s | **1.45 s** |
+| xfce4-session spawned | 2.18 s | **1.81 s** |
+| desktop drawn (xfdesktop spawned) | 6.22 s | **5.75 s** |
+| RAM used after boot | **452 MB** | 460 MB |
+| processes | 174 | **157** |
+
+runit is the leanest rival so far, and headless the two are even. The desktop gain is ordering: Void's lightdm run script exits when `sv check dbus` fails and runsv retries a second later; schema-init starts it once the bus socket exists. schema-init carries 8 MB more (not investigated). The first measurement had schema-init 0.7 s *behind* runit headless ([raw](../tests/livetest/void-vm-bench-20261016-headless-before.txt)): PID 1 waited one 250 ms tick before its first spawn and polled `ready_path` on that tick. Both were fixed for every distro, not just Void, before these numbers. A VM, not real hardware.
+
 ### PID 1 RSS — every measurement
 
 One table, every number, each naming the machine, the build and the service count it came from. Anything not listed here is not a measurement we have.

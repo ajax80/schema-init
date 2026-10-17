@@ -53,6 +53,7 @@ Your existing boot entries (systemd, or sysvinit on Devuan) stay in the GRUB men
 | Put it on a spare machine | [Install from the ISO](docs/install.md#fresh-install--the-installer-iso) | The disk you pick in the installer |
 | Convert your Fedora KDE install | [COPR + `schema-migrate`](docs/install.md#convert-fedora-kde-in-place) | Adds a non-default boot entry; one command undoes it |
 | Run it on Devuan (no systemd) | [`distros/devuan`](distros/devuan/README.md): `make` + `install.sh`, beside sysvinit | Adds a non-default boot entry; `install.sh --remove` undoes it |
+| Run it on Void (no systemd) | [`distros/void`](distros/void/README.md): `make` + `install.sh`, beside runit | Adds a non-default boot entry; `install.sh --remove` undoes it |
 | Run it on another distro | [`setup.sh` from source](docs/install.md#build-from-source-any-distro) | Adds a non-default boot entry |
 
 On Fedora KDE the short version is:
