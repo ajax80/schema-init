@@ -17,7 +17,7 @@ rc=0
 for s in "$@"; do
     s=${s%/}; s=${s##*/}
     case "$cmd" in
-        s|status) /usr/bin/schema-ctl status "$s" | head -1 || rc=1 ;;
+        s|status) out=$(/usr/bin/schema-ctl status "$s") || rc=1; printf '%s\n' "$out" | head -1 ;;
         c|check)
             st=$(/usr/bin/schema-ctl status --kv | sed -n "s/^service\.$s\.state=//p")
             case "$st" in FUNDAMENTAL|PERFECT) ;; *) rc=1 ;; esac ;;

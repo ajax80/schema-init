@@ -37,6 +37,7 @@
 #include <mntent.h>
 
 #define TICK_USEC       250000   /* 250ms main loop tick */
+#define READY_POLL_MS   10       /* while a starting service's ready_path is awaited */
 #define CTL_SOCK_PATH   "/run/schema-init.sock"
 #define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
 #define PID_FILE_WAIT_SECS 5
@@ -66,6 +67,8 @@ static int          sig_fd   = -1;
 static int          watchdog_fd = -1;
 static int64_t      watchdog_pet_ms = 5000;
 static int          system_under_pressure = 0;
+static int          pass_changed = 0;   /* last pass moved a service: run the next one at once */
+#define PASS_RERUN_MAX  16                /* ...at most this many passes in a row */
 static uint64_t     last_stall_ms = 0;
 static uint64_t     last_reclaim_ms = 0;
 static int          psi_fd = -1;
@@ -2260,16 +2263,24 @@ static void schema_boot_log(void) {
 static int get_poll_timeout(void) {
     struct timespec ts;
     int64_t now_m, now_r, best = WAKE_NONE;
-    int i, tick = system_under_pressure || psi_fd < 0, watched = 0, critical = 0;
+    int i, tick = system_under_pressure || psi_fd < 0, watched = 0, critical = 0, awaiting = 0;
+
+    if (pass_changed)
+        return 0;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     now_m = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
     clock_gettime(CLOCK_REALTIME, &ts);
     now_r = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
-    for (i = 0; i < svc_count && !tick; i++) {
+    for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
         uint8_t s = svc->inst.state;
+        if (s == STATE_FULL_TRUST && svc->ready_path[0] && svc->child_pid > 0 &&
+            !(svc->flags & SVC_ONESHOT))
+            awaiting = 1;
+        if (tick)
+            continue;
         if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0)
             critical = 1;
         if (svc->wd_armed_sec > 0 && svc->child_pid > 0 && svc->notify_ready && !svc->ctl_killed &&
@@ -2307,7 +2318,7 @@ static int get_poll_timeout(void) {
         best = wake_min(best, now_m + watchdog_pet_ms, now_m, WAKE_NONE);
     if (reexec_check_pid > 0 && !reexec_check_killed)
         best = wake_min(best, reexec_check_due, now_m, WAKE_NONE);
-    return wake_timeout(best, tick, TICK_USEC / 1000);
+    return wake_timeout(best, tick || awaiting, awaiting ? READY_POLL_MS : TICK_USEC / 1000);
 }
 
 static int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count) {
@@ -3802,8 +3813,19 @@ int main(int argc, char **argv) {
                 svc_states[i] = s;
             }
         }
+        uint8_t before[MAX_SERVICES];
+        for (i = 0; i < svc_count; i++)
+            before[i] = services[i].inst.state;
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i], grp_states, grp_count);
+        {
+            static int streak;
+            int moved = 0;
+            for (i = 0; i < svc_count && !moved; i++)
+                moved = services[i].inst.state != before[i];
+            streak = moved ? streak + 1 : 0;
+            pass_changed = moved && streak <= PASS_RERUN_MAX;
+        }
         monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
