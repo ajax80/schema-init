@@ -229,7 +229,7 @@ static void write_meta(int dfd, const struct crash *c) {
     unlinkat(dfd, tmp, 0);
     int fd = openat(dfd, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) return;
-    const char *sn = sigabbrev_np((int)c->sig);
+    const char *sn = sig_abbrev((int)c->sig);
     dprintf(fd,
             "PID=%ld\nUID=%ld\nGID=%ld\nSIGNAL=%ld\nSIGNAL_NAME=SIG%s\nTIME=%ld\nBOOT_ID=%s\n"
             "COMM=%s\nEXE=%s\nCMDLINE=%s\nCGROUP=%s\nSERVICE=%s\nDUMPABLE=%d\n"
@@ -349,7 +349,7 @@ int main(int argc, char **argv) {
     int dfd = open_dir(dir, 1);
     if (dfd < 0) {
         syslog(LOG_ERR, "%s[%ld] (%s) SIG%s: cannot open %s: %m", c.comm, c.pid, c.exe,
-               sigabbrev_np((int)c.sig) ? sigabbrev_np((int)c.sig) : "?", dir);
+               sig_abbrev((int)c.sig) ? sig_abbrev((int)c.sig) : "?", dir);
         return 1;
     }
     flock(dfd, LOCK_EX);
@@ -368,7 +368,7 @@ int main(int argc, char **argv) {
 
     vacuum(dfd, c.core);
     write_meta(dfd, &c);
-    const char *sn = sigabbrev_np((int)c.sig);
+    const char *sn = sig_abbrev((int)c.sig);
     if (c.core[0])
         syslog(LOG_ERR, "%s%s%s[%ld] (%s) killed by SIG%s, core %s/%s (%llu -> %llu bytes%s)",
                c.service, c.service[0] ? ": " : "", c.comm, c.pid, c.exe, sn ? sn : "?",

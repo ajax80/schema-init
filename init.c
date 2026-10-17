@@ -685,7 +685,7 @@ static void note_exit(service_t *svc, int status) {
     svc->has_exited  = 1;
     if (svc->term_signal) {
         char ev[48];
-        const char *ab = sigabbrev_np(svc->term_signal);
+        const char *ab = sig_abbrev(svc->term_signal);
         snprintf(ev, sizeof ev, "killed-SIG%s%s", ab ? ab : "?", svc->core_dumped ? "-core" : "");
         service_log(svc, ev);
     }
@@ -1769,7 +1769,7 @@ static const char *hard_source(const service_t *s, uint8_t bit) {
 static const char *last_exit_str(const service_t *s) {
     static char b[48];
     if (s->term_signal) {
-        const char *ab = sigabbrev_np(s->term_signal);
+        const char *ab = sig_abbrev(s->term_signal);
         snprintf(b, sizeof b, "SIG%s%s", ab ? ab : "?", s->core_dumped ? " (core dumped)" : "");
     } else if (s->has_exited && s->exit_status >= 0) {
         snprintf(b, sizeof b, "exit %d", s->exit_status);

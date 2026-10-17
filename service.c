@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
@@ -1369,7 +1370,7 @@ int service_spawn(service_t *svc) {
         }
         svc_apply_env(svc, file_env, file_envc);
         svc_pass_listen(svc);
-        close_range(3 + svc->listen_open, ~0U, 0);
+        syscall(SYS_close_range, 3 + svc->listen_open, ~0U, 0);
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             int nx = service_expand_argv(svc->argv, xargv, 63);

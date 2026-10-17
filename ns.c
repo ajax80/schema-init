@@ -19,7 +19,7 @@ int parse_protect_system(const char *val, uint8_t *out) {
 }
 
 static int make_readonly(const char *p) {
-    struct mount_attr attr = { .attr_set = MOUNT_ATTR_RDONLY };
+    struct { uint64_t attr_set, attr_clr, propagation, userns_fd; } attr = { .attr_set = 0x1 };
     if (mount(p, p, NULL, MS_BIND | MS_REC, NULL) != 0)
         return errno == ENOENT ? 0 : -1;
     return (int)syscall(SYS_mount_setattr, AT_FDCWD, p, AT_RECURSIVE,
