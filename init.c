@@ -67,7 +67,7 @@ static int          sig_fd   = -1;
 static int          watchdog_fd = -1;
 static int64_t      watchdog_pet_ms = 5000;
 static int          system_under_pressure = 0;
-static int          pass_changed = 0;   /* last pass moved a service: run the next one at once */
+static int          pass_changed = 1;   /* first pass, or last pass moved a service: run at once */
 #define PASS_RERUN_MAX  16                /* ...at most this many passes in a row */
 static uint64_t     last_stall_ms = 0;
 static uint64_t     last_reclaim_ms = 0;
