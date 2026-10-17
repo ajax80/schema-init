@@ -1,0 +1,16 @@
+#!/bin/sh
+# Void's own runit stage 1 (/etc/runit/core-services), minus what schema-init
+# already did: PID 1 mounted the pseudo filesystems, udevd + udev-coldplug
+# ran, mount-fstab checked and mounted /etc/fstab and its swap.
+PATH=/usr/bin:/usr/sbin
+mkdir -p /run/runit/runsvdir
+ln -sfn /etc/runit/runsvdir/default /run/runit/runsvdir/current
+. /etc/runit/functions
+emergency_shell() { msg_error "$f failed"; }
+[ -r /etc/rc.conf ] && . /etc/rc.conf
+detect_container
+for f in /etc/runit/core-services/*.sh; do
+    case "${f##*/}" in 00-pseudofs.sh|02-udev.sh|03-filesystems.sh|04-swap.sh) continue ;; esac
+    [ -r "$f" ] && . "$f"
+done
+exit 0

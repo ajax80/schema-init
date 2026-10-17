@@ -1,0 +1,45 @@
+#!/bin/sh
+# runit's sv(8) for scripts and habits; under schema-init it drives schema-ctl.
+[ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] || exec /usr/bin/sv "$@"
+
+while :; do
+    case "$1" in
+        -v) shift ;;
+        -w) shift 2 ;;
+        -w*) shift ;;
+        *) break ;;
+    esac
+done
+cmd=$1
+[ $# -ge 2 ] || { echo "usage: sv [-v] [-w sec] command service..." >&2; exit 100; }
+shift
+kv=$(/usr/bin/schema-ctl status --kv) || exit 1
+rc=0
+for s in "$@"; do
+    s=${s%/}; s=${s##*/}
+    st=$(printf '%s\n' "$kv" | sed -n "s/^service\.$s\.state=//p")
+    pid=$(printf '%s\n' "$kv" | sed -n "s/^service\.$s\.pid=//p")
+    if [ -z "$st" ]; then
+        echo "fail: $s: unable to change to service directory: file does not exist" >&2; rc=1; continue
+    fi
+    sig=
+    case "$cmd" in
+        s|status) if [ "${pid:-0}" -gt 0 ]; then echo "run: $s: (pid $pid)"; else echo "down: $s"; fi; continue ;;
+        check) case "$st" in FUNDAMENTAL|PERFECT) echo "ok: $s" ;; *) echo "timeout: $s" >&2; rc=1 ;; esac; continue ;;
+        u|up|start|o|once) /usr/bin/schema-ctl start "$s" >/dev/null || rc=1; continue ;;
+        d|down|stop|x|exit|shutdown) /usr/bin/schema-ctl stop "$s" >/dev/null || rc=1; continue ;;
+        t|term|restart) /usr/bin/schema-ctl restart "$s" >/dev/null || rc=1; continue ;;
+        h|hup|reload) sig=HUP ;;
+        a|alarm) sig=ALRM ;;
+        i|interrupt) sig=INT ;;
+        q|quit) sig=QUIT ;;
+        k|kill) sig=KILL ;;
+        p|pause) sig=STOP ;;
+        c|cont) sig=CONT ;;
+        1) sig=USR1 ;;
+        2) sig=USR2 ;;
+        *) echo "sv $cmd: not supported under schema-init" >&2; rc=1; continue ;;
+    esac
+    if [ "${pid:-0}" -gt 0 ]; then kill -s "$sig" "$pid" || rc=1; else echo "fail: $s: not running" >&2; rc=1; fi
+done
+exit $rc

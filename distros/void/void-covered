@@ -1,0 +1,4 @@
+# /etc/sv services `schema-import --runit` leaves out on Void.
+
+# A distros/void service already runs these.
+udevd

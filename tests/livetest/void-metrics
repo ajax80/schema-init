@@ -1,0 +1,16 @@
+#!/bin/bash
+tck=$(getconf CLK_TCK)
+since_boot() {
+    local p; p=$(pgrep -o -f -- "$1" 2>/dev/null) || { echo "-"; return; }
+    awk -v t="$tck" '{printf "%.2f", $22/t}' /proc/$p/stat
+}
+read -r up _ < /proc/uptime
+mem_used=$(awk '/MemTotal/{t=$2}/MemAvailable/{a=$2}END{printf "%d", (t-a)/1024}' /proc/meminfo)
+printf 'init=%s uptime=%.0f\n' "$(cat /proc/1/comm)" "$up"
+printf 'dhcpcd=%s sshd=%s agetty_tty1=%s xorg=%s xfce4_session=%s xfdesktop=%s\n' \
+    "$(since_boot '^dhcpcd')" "$(since_boot 'sshd.*listener')" "$(since_boot 'agetty.*tty1')" \
+    "$(since_boot '(^|/)(Xorg|X)( |$)')" "$(since_boot '^xfce4-session( |$)')" "$(since_boot '^xfdesktop( |$)')"
+printf 'mem_used_mb=%s procs=%s\n' "$mem_used" "$(ls -d /proc/[0-9]* | wc -l)"
+sw=$(sudo dmesg | sed -n 's/^\[ *\([0-9.]*\)\] dracut: Switching root/\1/p')
+sshd=$(since_boot 'sshd.*listener')
+printf 'switch_root=%s sshd_after_switch=%s\n' "$sw" "$(awk -v a="$sshd" -v b="$sw" 'BEGIN{printf "%.2f", a-b}')"

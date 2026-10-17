@@ -1,0 +1,49 @@
+=== run=0 side=sysv try=1 21:44:31
+init=init kernel=7.2.6-lunduke uptime=242
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=17.1 xfce4_session=22.7 xfce4_panel=26.9 xfdesktop=27.2
+mem_used_mb=427 procs=150 load1=0.16 io_some_avg300=
+1046 /usr/bin/dbus-daemon --system
+=== run=0 side=schemabus try=1 21:49:06
+init=schema-init kernel=7.2.6-lunduke uptime=248
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.3 xfce4_session=20.5 xfce4_panel=24.7 xfdesktop=24.9
+mem_used_mb=431 procs=150 load1=0.12 io_some_avg300=
+346 /usr/bin/schema-dbus --system
+=== run=1 side=sysv try=1 21:53:29
+init=init kernel=7.2.6-lunduke uptime=241
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=16.9 xfce4_session=22.6 xfce4_panel=27.1 xfdesktop=27.4
+mem_used_mb=426 procs=150 load1=0.20 io_some_avg300=
+1042 /usr/bin/dbus-daemon --system
+=== run=1 side=schemabus try=1 21:58:04
+init=schema-init kernel=7.2.6-lunduke uptime=249
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.4 xfce4_session=20.7 xfce4_panel=25.3 xfdesktop=25.6
+mem_used_mb=430 procs=147 load1=0.11 io_some_avg300=
+342 /usr/bin/schema-dbus --system
+=== run=2 side=sysv try=1 22:02:27
+init=init kernel=7.2.6-lunduke uptime=241
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=17.1 xfce4_session=22.6 xfce4_panel=27.0 xfdesktop=27.3
+mem_used_mb=429 procs=151 load1=0.46 io_some_avg300=
+1045 /usr/bin/dbus-daemon --system
+=== run=2 side=schemabus try=1 22:07:02
+init=schema-init kernel=7.2.6-lunduke uptime=249
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.3 xfce4_session=20.6 xfce4_panel=24.9 xfdesktop=25.1
+mem_used_mb=433 procs=149 load1=0.17 io_some_avg300=
+343 /usr/bin/schema-dbus --system
+=== run=3 side=sysv try=1 22:11:26
+init=init kernel=7.2.6-lunduke uptime=241
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=16.3 xfce4_session=22.8 xfce4_panel=27.2 xfdesktop=27.5
+mem_used_mb=424 procs=150 load1=0.23 io_some_avg300=
+1045 /usr/bin/dbus-daemon --system
+=== run=3 side=schemabus try=1 22:16:01
+init=schema-init kernel=7.2.6-lunduke uptime=248
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.8 xfce4_session=21.2 xfce4_panel=25.7 xfdesktop=25.9
+mem_used_mb=434 procs=150 load1=0.21 io_some_avg300=
+345 /usr/bin/schema-dbus --system
+DONE

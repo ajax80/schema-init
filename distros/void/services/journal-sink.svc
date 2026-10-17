@@ -1,0 +1,13 @@
+name=journal-sink
+exec=/usr/bin/schema-journal-sink
+# Void's elogind wrapper mounts a tmpfs on /run/systemd unless it is a
+# mountpoint, which would hide the journal socket; make it one, keeping what
+# PID 1 put there (/run/systemd/system).
+exec_pre=+/bin/sh -c "mountpoint -q /run/systemd || mount --bind /run/systemd /run/systemd"
+dep=mount-fstab
+needs_root=1
+ready_path=/run/systemd/journal/socket
+no_new_privs=1
+private_tmp=1
+protect_system=full
+protect_home=1

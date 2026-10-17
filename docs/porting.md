@@ -107,6 +107,21 @@ schema-init beside sysvinit on a stock Devuan desktop install: sysvinit stays th
 
 Shutdown from Xfce works through a `dpkg-divert`ed `halt`/`shutdown` wrapper that calls `schema-ctl` under schema-init and sysvinit's originals otherwise. See [`distros/devuan/README.md`](../distros/devuan/README.md) for install, removal and known gaps.
 
+### Void Linux + Xfce (`distros/void/`)
+
+schema-init beside runit: runit stays the default GRUB entry, and `install.sh` adds `schema-init:` entries for every kernel. Your runit services run unmodified: `schema-import --runit` gives each service in `/var/service` a `.svc` that runs its `run` script from its own directory, with `sv check X` lines turned into `dep=X`.
+
+| Service | Role |
+|---------|------|
+| `udevd`, `udev-coldplug` | eudev, then coldplug trigger + settle |
+| `mount-fstab` | fsck + mount `/etc/fstab`, swap |
+| `void-boot` | Oneshot — the rest of Void's own `/etc/runit/core-services` |
+| `void-rc` | `/etc/rc.local` before the services; runit's `shutdown.d` (rc.shutdown, seed, hwclock, wtmp) at shutdown |
+| `journal-sink` | `/dev/log` |
+| imported | dbus, elogind, lightdm, sshd, dhcpcd, agettys, ... |
+
+runit's `halt`/`reboot`/`poweroff` (and elogind through them) work unchanged: PID 1 answers runit's `stopit` + `SIGCONT` handshake. See [`distros/void/README.md`](../distros/void/README.md) for install, removal and known gaps.
+
 ### Raspberry Pi Zero W (`distros/raspberry-pi-zero-w/`)
 
 WiFi headless deploy on a Pi Zero W (BCM2835, armv6l, 32-bit ARM). No Ethernet, no HDMI — schema-init as PID 1, WiFi up, SSH accessible in ~50 seconds from cold boot. First ARM bare-metal target.
@@ -163,7 +178,7 @@ If you're reading the source to evaluate it, start here. PID 1 is ~4,800 lines o
 | `services/` | The reference service set — real `.svc` and `.grp` files for `sshd`, `dbus`, `udev`, `network-manager`, `display-manager`, and the `network-stack` / `display-stack` groups. Copy these as your starting templates. |
 | `desktop/` | `schema-desktop.c` — an SDL2 live visualizer that maps `schema_shm.h` into an 8-node grid and shows every service's weight-state in real time. This is how you *watch* the state machine run. |
 | `scripts/` | Build and integration tooling: `make-iso*.sh` / `make-usb.sh` / `fix-usb.sh` (bootable media), `schema-logind.py` (a logind compatibility shim), `check-rail-exec.sh` (`build-iso.sh` fails if an ISO rail service's `exec=` is shipped by no payload RPM, kickstart install or Fedora package), and `verify_traceability.py` (traceability check for the aspirational Daedalus IEC 62304 spec in `docs/daedalus/`). |
-| `distros/` | Per-distribution profiles — `fedora-installer/rail/` (the portable Fedora KDE set), `fedora-kde/` (desktop-session glue + `hosts/blakbox/`), `devuan/` (beside sysvinit, with `install.sh`) and `raspberry-pi-zero-w/`. |
+| `distros/` | Per-distribution profiles — `fedora-installer/rail/` (the portable Fedora KDE set), `fedora-kde/` (desktop-session glue + `hosts/blakbox/`), `devuan/` (beside sysvinit, with `install.sh`), `void/` (beside runit, with `install.sh`) and `raspberry-pi-zero-w/`. |
 | `docs/`, `assets/` | Documentation and images. |
 
 Top-level: `setup.sh` (newcomer bootstrap — dep check, desktop-environment detection, GRUB entry generation) and `Makefile` (static build; see [Building](install.md#building)).

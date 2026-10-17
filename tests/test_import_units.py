@@ -622,4 +622,43 @@ check("rc: unit the importer refuses falls back to its init script",
 check("rc: no fallback when another .svc already runs the daemon (no second copy)",
       not os.path.exists(os.path.join(rc, "svc/twin.svc")) and os.path.exists(os.path.join(rc, "svc/twin.svc.skipped")))
 
+rv = tempfile.mkdtemp()
+os.environ["MIGRATE_ROOT"] = rv
+os.environ["SCHEMA_SVC_DIR"] = os.path.join(rv, "svc")
+os.makedirs(os.path.join(rv, "etc/runit/runsvdir/default"))
+os.makedirs(os.path.join(rv, "svc"))
+for n, run in (("dbus", "#!/bin/sh\nexec dbus-daemon --system --nofork\n"),
+               ("elogind", "#!/bin/sh\nsv check dbus >/dev/null || exit 1\nexec /usr/libexec/elogind\n"),
+               ("nm", "#!/bin/sh\nsv -w 30 check /var/service/dbus/ || exit 1\nsv start ghost || exit 1\nexec NetworkManager -n\n"),
+               ("parked", "#!/bin/sh\nexec parkedd\n"), ("covered", "#!/bin/sh\nexec x\n")):
+    os.makedirs(os.path.join(rv, "etc/sv", n))
+    open(os.path.join(rv, "etc/sv", n, "run"), "w").write(run)
+    os.symlink("/etc/sv/" + n, os.path.join(rv, "etc/runit/runsvdir/default", n))
+os.symlink("/etc/sv/gone", os.path.join(rv, "etc/runit/runsvdir/default/gone"))
+os.makedirs(os.path.join(rv, "etc/sv/held"))
+open(os.path.join(rv, "etc/sv/held/down"), "w").close()
+os.symlink("/etc/sv/held", os.path.join(rv, "etc/runit/runsvdir/default/held"))
+os.symlink("../../../sv/parked", os.path.join(rv, "etc/runit/runsvdir/default/alias"))
+os.symlink("/home/x/sv/mine", os.path.join(rv, "etc/runit/runsvdir/default/mine"))
+_r = si.runit_units({"covered"})
+check("runit_units: link targets in /etc/sv (relative too), skip honored, down file left out, outside /etc/sv refused",
+      _r == ["/etc/sv/parked", "/etc/sv/dbus", "/etc/sv/elogind", "/etc/sv/gone", "/etc/sv/nm"])
+si.runit_after = "void-boot"
+_c = si.drain(units=_r, log=lambda *_: None)
+si.runit_after = None
+_e = open(os.path.join(rv, "svc/elogind.svc")).read()
+check("runit: ./run from its own directory, supervised",
+      "exec=/bin/sh\nargs=-c\nargs=cd /etc/sv/elogind && exec ./run\n" in _e and "oneshot" not in _e)
+check("runit: sv check -> dep, after= first", "dep=void-boot\ndep=dbus\n" in _e)
+_n = open(os.path.join(rv, "svc/nm.svc")).read()
+check("runit: sv -w N check /path/ -> dep on the name; unknown service dropped",
+      "dep=dbus\n" in _n and "ghost" not in _n)
+check("runit: after= not added to itself", "dep=" not in si.runit_to_svc("void-boot", "", set(), "void-boot"))
+check("runit: missing run -> not-found, rest imported", _c["not-found"] == 1 and _c["imported"] == 4)
+check("runit: no check script -> ready once running (stable_secs=0)", "stable_secs=0\n" in _e)
+check("runit: dbus check -> its socket", "ready_path=/run/dbus/system_bus_socket\n" in si.runit_to_svc("dbus", "", set(), None, True)
+      and "stable_secs" not in si.runit_to_svc("dbus", "", set(), None, True))
+check("runit: unknown check -> 1 s, noted", "not translated" in si.runit_to_svc("pg", "", set(), None, True)
+      and "stable_secs=1\n" in si.runit_to_svc("pg", "", set(), None, True))
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
