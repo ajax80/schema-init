@@ -2232,11 +2232,26 @@ static void ctl_poll(void) {
     close(cfd);
 }
 
+/* runit's halt, reboot and poweroff (runit-init 0|6, which elogind runs too)
+ * make /etc/runit/stopit executable, and /etc/runit/reboot as well for a
+ * reboot, then send PID 1 SIGCONT. */
+static void runit_stop_request(void) {
+    struct stat st;
+    if (stat("/etc/runit/stopit", &st) != 0 || !(st.st_mode & S_IXUSR))
+        return;
+    chmod("/etc/runit/stopit", 0);
+    do_reboot = stat("/etc/runit/reboot", &st) == 0 && (st.st_mode & S_IXUSR);
+    printf("[schema-init] runit-init %s: %s\n", do_reboot ? "6" : "0", do_reboot ? "rebooting" : "powering off");
+    if (shm_ptr) shm_ptr->system_state = do_reboot ? 14 : 13;
+    running = 0;
+}
+
 static void signalfd_init(void) {
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGCHLD);
     sigaddset(&mask, SIGHUP);
+    sigaddset(&mask, SIGCONT);
     sigprocmask(SIG_BLOCK, &mask, NULL);
     sig_fd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     if (sig_fd >= 0) {
@@ -3754,6 +3769,8 @@ int main(int argc, char **argv) {
                                 /* No socket to answer on — the console message
                                  * inside handle_reload is the only report. */
                                 (void)handle_reload(0, NULL, 0);
+                            } else if (ssi.ssi_signo == SIGCONT) {
+                                runit_stop_request();
                             }
                         }
                     } else if (fds[e].fd == ctl_fd) {

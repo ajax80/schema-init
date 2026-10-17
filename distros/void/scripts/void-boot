@@ -8,7 +8,7 @@ emergency_shell() { msg_error "$f failed"; }
 [ -r /etc/rc.conf ] && . /etc/rc.conf
 detect_container
 for f in /etc/runit/core-services/*.sh; do
-    case "${f##*/}" in 00-pseudofs.sh|02-udev.sh|03-filesystems.sh|04-swap.sh|10-runit-control.sh) continue ;; esac
+    case "${f##*/}" in 00-pseudofs.sh|02-udev.sh|03-filesystems.sh|04-swap.sh) continue ;; esac
     [ -r "$f" ] && . "$f"
 done
 mkdir -p /run/runit/runsvdir
