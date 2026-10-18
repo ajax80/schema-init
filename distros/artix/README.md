@@ -20,21 +20,22 @@ hardware.
 
 Measured in the same kind of VM (4 vCPU, virtio disk), one install per init,
 each booted both ways 9 times alternating, medians of 8 (first discarded),
-seconds from the kernel mounting the root filesystem:
+seconds from the kernel mounting the root filesystem. dinit and OpenRC were
+measured on 2026-10-17; s6 again on 2026-10-18, after NetworkManager stopped
+waiting for udev to settle:
 
 | | dinit | schema-init | s6 | schema-init | OpenRC | schema-init |
 |---|---|---|---|---|---|---|
-| sshd started | 3.17 s | **1.52 s** | **1.40 s** | 1.56 s | 6.18 s | **1.48 s** |
-| NetworkManager started | 3.17 s | **1.92 s** | **1.38 s** | 1.90 s | 5.03 s | **1.85 s** |
-| desktop drawn (xfdesktop) | 4.21 s | **2.89 s** | 2.80 s | **2.60 s** | 7.04 s | **2.79 s** |
-| RAM used after boot | **507 MB** | 512 MB | 516 MB | **514 MB** | 513 MB | **512 MB** |
-| processes | **154** | 156 | 192 | **157** | 164 | **155** |
+| sshd started | 1.93 s | **0.24 s** | **0.10 s** | 0.20 s | 4.98 s | **0.24 s** |
+| NetworkManager started | 1.92 s | **0.65 s** | **0.08 s** | 0.23 s | 3.83 s | **0.63 s** |
+| desktop drawn (xfdesktop) | 4.21 s | **2.89 s** | 2.75 s | **2.48 s** | 7.04 s | **2.79 s** |
+| RAM used after boot | **507 MB** | 512 MB | 518 MB | **510 MB** | 513 MB | **512 MB** |
+| processes | **154** | 156 | 192 | **156** | 164 | **154** |
 
-s6 is the closest: it starts sshd and NetworkManager sooner, because it does
-not hold NetworkManager until udev coldplug has settled; schema-init draws the
-desktop 0.2 s sooner. Stock s6 and OpenRC on Artix can also lose udev's
-coldplug events at boot and come up with no network and no desktop. Method,
-raw data and the details: [Compared](../../docs/compared.md#measured).
+s6 is the closest: it starts sshd and NetworkManager about 0.1 s sooner;
+schema-init draws the desktop 0.27 s sooner. Stock s6 and OpenRC on Artix can
+also lose udev's coldplug events at boot and come up with no network and no
+desktop. Method, raw data and the details: [Compared](../../docs/compared.md#measured).
 
 ## Install
 
