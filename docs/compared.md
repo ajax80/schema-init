@@ -57,7 +57,7 @@ machine as another, so compare columns within a table, not across tables.
 | sysvinit | LCOS 0.9.3 (Devuan) Xfce, same laptop, from kernel start | 27.35 s | **25.35 s** | 2.0 s sooner |
 | runit | Void glibc Xfce, VM, from switch-root | 6.22 s | **5.75 s** | 0.47 s sooner |
 | dinit | Artix Xfce, VM, from root mount | 4.21 s | **2.89 s** | 1.32 s sooner |
-| s6 (s6-rc) | Artix Xfce, VM, from root mount | 2.80 s | **2.60 s** | 0.20 s sooner |
+| s6 (s6-rc) | Artix Xfce, VM, from root mount | 2.75 s | **2.48 s** | 0.27 s sooner |
 | OpenRC | Artix Xfce, VM, from root mount | 7.04 s | **2.79 s** | 4.25 s sooner |
 
 ### Memory and processes after boot
@@ -68,7 +68,7 @@ machine as another, so compare columns within a table, not across tables.
 | sysvinit (LCOS Xfce) | **427 MB** | 432 MB | 150 | 150 | — | — |
 | runit (Void Xfce) | **452 MB** | 460 MB | 174 | **157** | — | — |
 | dinit (Artix Xfce) | **507 MB** | 512 MB | **154** | 156 | 4.5 MB | **1.6 MB** |
-| s6 (Artix Xfce) | 516 MB | **514 MB** | 192 | **157** | 2.2 MB | **1.6 MB** |
+| s6 (Artix Xfce) | 518 MB | **510 MB** | 192 | **156** | 2.2 MB | **1.6 MB** |
 | OpenRC (Artix Xfce) | 513 MB | **512 MB** | 164 | **155** | 2.0 MB | **1.6 MB** |
 
 Against systemd the gain is large, because schema-init replaces journald,
@@ -78,11 +78,18 @@ is sometimes the heavier one.
 
 ### Where it is behind
 
-- **s6 starts sshd and NetworkManager sooner** (1.40 s and 1.38 s from root
-  mount, against 1.56 s and 1.90 s). schema-init starts NetworkManager after
-  udev coldplug has settled, so it sees every network device; s6 starts it
-  without waiting. The desktop still comes up sooner under schema-init.
-- **runit, sysvinit and dinit use less RAM** after boot, by 5 to 8 MB.
+- **s6 starts sshd and NetworkManager sooner**: 0.10 s and 0.08 s after
+  root mount, against 0.20 s and 0.23 s. Until 2026-10-18 schema-init held
+  NetworkManager until udev coldplug had settled (0.60 s); it now starts it
+  once the coldplug events are queued, as s6 and systemd do. The rest of the
+  gap is PID 1's own order: udevd, then `mount-fstab` and `artix-boot`, before
+  sshd. The desktop still comes up sooner under schema-init.
+- **runit, sysvinit and dinit used less RAM** after boot in these runs, by 5
+  to 8 MB, but the spread between boots of the same init is wider (dinit
+  503–514 MB, schema-init 501–518 MB): Xorg and the window manager alone vary
+  by up to 18 MB from one boot to the next. On a pair of dinit and schema-init
+  boots compared process by process, schema-init's own processes (PID 1 and
+  `journal-sink`) took about 1 MB more than dinit's PID 1.
 - **dinit runs two fewer processes** than schema-init on Artix.
 
 ### Lost device events at boot
@@ -106,7 +113,13 @@ returns only once udevd is ready. schema-init had a window too: its udevd
 service promoted on `/run/udev/control`, most likely a moment before udevd
 listens for device events, and one of its first dozen boots on Artix came up
 without network the same way. Its coldplug now runs `udevadm control --ping` before
-triggering; the 45 benchmark boots since had no failures. For s6, adding a
+triggering, retried up to 30 times a second apart. Since then, one boot of about 100 came up
+without network: during the first s6 run on 2026-10-18, while blakbox itself
+was stalled for memory, alongside three failed boots of stock s6 in the same
+half hour. 35 boots repeated on the same disk the same day, with a log of the
+ping and the coldplug events on each, had no failures. eudev (Void, Devuan)
+has no `--ping`, and needs none: its udevd starts listening for device
+events before it creates its control socket. For s6, adding a
 `notification-fd` and `s6-notifyoncheck -c "udevadm control --ping"` to the
 udevd service closed the window (0 failures in 9 boots,
 [raw](../tests/livetest/artix-vm-bench-20261017-s6-notify.txt)), and drew the desktop
@@ -130,6 +143,9 @@ initramfs time, the same code on both sides, is left out. Raw data:
 [dinit](../tests/livetest/artix-vm-bench-20261017-dinit.txt),
 [s6](../tests/livetest/artix-vm-bench-20261017-s6.txt),
 [s6 stock boots](../tests/livetest/artix-vm-bench-20261017-s6-stock-boots.txt),
+[s6 on 2026-10-18](../tests/livetest/artix-vm-bench-20261018-s6.txt) (a first run that day,
+taken while blakbox was short of memory and its VMs stalled, is kept
+[here](../tests/livetest/artix-vm-bench-20261018-s6-hoststall.txt) and not used),
 [OpenRC](../tests/livetest/artix-vm-bench-20261017-openrc.txt).
 
 The OpenRC VM ran with QEMU's HPET off (`-machine q35,hpet=off`). With it on,

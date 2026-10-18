@@ -1,0 +1,90 @@
+=== run=0 side=stock 13:05:02
+init=s6-svscan uptime=63
+nm=1.34 sshd=1.37 agetty_tty1=1.29 xorg=2.08 xfce4_session=3.35 xfdesktop=4.03
+mem_used_mb=529 procs=192 pid1_rss_kb=2224
+root_mounted=1.266183 xfdesktop_after_root=2.76
+=== run=0 side=schema 13:06:18
+init=schema-init uptime=63
+nm=1.45 sshd=1.43 agetty_tty1=1.43 xorg=1.79 xfce4_session=3.07 xfdesktop=3.75
+mem_used_mb=512 procs=158 pid1_rss_kb=1560
+root_mounted=1.232864 xfdesktop_after_root=2.52
+=== run=1 side=stock 13:07:33
+init=s6-svscan uptime=61
+nm=1.32 sshd=1.34 agetty_tty1=1.26 xorg=1.93 xfce4_session=3.14 xfdesktop=3.85
+mem_used_mb=515 procs=191 pid1_rss_kb=2244
+root_mounted=1.243904 xfdesktop_after_root=2.61
+=== run=1 side=schema 13:08:46
+init=schema-init uptime=62
+nm=1.46 sshd=1.43 agetty_tty1=1.43 xorg=1.86 xfce4_session=3.01 xfdesktop=3.65
+mem_used_mb=506 procs=157 pid1_rss_kb=1564
+root_mounted=1.228826 xfdesktop_after_root=2.42
+=== run=2 side=stock 13:10:01
+init=s6-svscan uptime=62
+nm=1.27 sshd=1.29 agetty_tty1=1.21 xorg=1.93 xfce4_session=3.04 xfdesktop=3.76
+mem_used_mb=518 procs=193 pid1_rss_kb=2240
+root_mounted=1.184502 xfdesktop_after_root=2.58
+=== run=2 side=schema 13:11:34
+init=schema-init uptime=62
+nm=1.42 sshd=1.39 agetty_tty1=1.39 xorg=1.75 xfce4_session=3.01 xfdesktop=3.69
+mem_used_mb=510 procs=157 pid1_rss_kb=1564
+root_mounted=1.192373 xfdesktop_after_root=2.50
+=== run=3 side=stock 13:12:47
+init=s6-svscan uptime=61
+nm=1.32 sshd=1.35 agetty_tty1=1.24 xorg=1.94 xfce4_session=3.10 xfdesktop=3.85
+mem_used_mb=518 procs=192 pid1_rss_kb=2212
+root_mounted=1.215924 xfdesktop_after_root=2.63
+=== run=3 side=schema 13:14:00
+init=schema-init uptime=62
+nm=1.46 sshd=1.43 agetty_tty1=1.43 xorg=1.86 xfce4_session=3.09 xfdesktop=3.82
+mem_used_mb=512 procs=155 pid1_rss_kb=1560
+root_mounted=1.246566 xfdesktop_after_root=2.57
+=== run=4 side=stock 13:15:15
+init=s6-svscan uptime=62
+nm=1.32 sshd=1.34 agetty_tty1=1.26 xorg=1.93 xfce4_session=3.36 xfdesktop=4.07
+mem_used_mb=521 procs=192 pid1_rss_kb=2236
+root_mounted=1.245008 xfdesktop_after_root=2.82
+=== run=4 side=schema 13:16:28
+init=schema-init uptime=62
+nm=1.46 sshd=1.44 agetty_tty1=1.43 xorg=1.79 xfce4_session=2.99 xfdesktop=3.81
+mem_used_mb=510 procs=156 pid1_rss_kb=1564
+root_mounted=1.263851 xfdesktop_after_root=2.55
+=== run=5 side=stock 13:17:44
+init=s6-svscan uptime=61
+nm=1.30 sshd=1.33 agetty_tty1=1.25 xorg=1.97 xfce4_session=3.27 xfdesktop=4.10
+mem_used_mb=510 procs=192 pid1_rss_kb=2228
+root_mounted=1.235148 xfdesktop_after_root=2.86
+=== run=5 side=schema 13:18:56
+init=schema-init uptime=62
+nm=1.48 sshd=1.46 agetty_tty1=1.46 xorg=1.81 xfce4_session=2.94 xfdesktop=3.59
+mem_used_mb=507 procs=158 pid1_rss_kb=1564
+root_mounted=1.246988 xfdesktop_after_root=2.34
+=== run=6 side=stock 13:20:12
+init=s6-svscan uptime=61
+nm=1.39 sshd=1.41 agetty_tty1=1.30 xorg=1.98 xfce4_session=3.34 xfdesktop=4.05
+mem_used_mb=519 procs=192 pid1_rss_kb=2212
+root_mounted=1.255298 xfdesktop_after_root=2.79
+=== run=6 side=schema 13:21:25
+init=schema-init uptime=62
+nm=1.40 sshd=1.38 agetty_tty1=1.38 xorg=1.81 xfce4_session=3.01 xfdesktop=3.79
+mem_used_mb=513 procs=157 pid1_rss_kb=1560
+root_mounted=1.185497 xfdesktop_after_root=2.60
+=== run=7 side=stock 13:22:40
+init=s6-svscan uptime=61
+nm=1.30 sshd=1.32 agetty_tty1=1.25 xorg=1.93 xfce4_session=3.26 xfdesktop=3.95
+mem_used_mb=519 procs=193 pid1_rss_kb=2216
+root_mounted=1.233207 xfdesktop_after_root=2.72
+=== run=7 side=schema 13:23:53
+init=schema-init uptime=62
+nm=1.46 sshd=1.43 agetty_tty1=1.43 xorg=1.79 xfce4_session=2.99 xfdesktop=3.69
+mem_used_mb=510 procs=155 pid1_rss_kb=1564
+root_mounted=1.237496 xfdesktop_after_root=2.45
+=== run=8 side=stock 13:25:08
+init=s6-svscan uptime=62
+nm=2.33 sshd=2.39 agetty_tty1=1.53 xorg=3.18 xfce4_session=4.34 xfdesktop=4.99
+mem_used_mb=516 procs=192 pid1_rss_kb=2244
+root_mounted=1.238932 xfdesktop_after_root=3.75
+=== run=8 side=schema 13:26:22
+init=schema-init uptime=62
+nm=1.68 sshd=1.63 agetty_tty1=1.63 xorg=1.84 xfce4_session=3.00 xfdesktop=3.67
+mem_used_mb=506 procs=156 pid1_rss_kb=1560
+root_mounted=1.213190 xfdesktop_after_root=2.46

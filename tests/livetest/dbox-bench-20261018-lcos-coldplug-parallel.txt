@@ -1,0 +1,58 @@
+=== branch run=1 13:44:29
+init=schema-init kernel=7.2.6-lunduke uptime=244
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=19.1 xfce4_session=24.4 xfce4_panel=28.8 xfdesktop=29.0
+mem_used_mb=433 procs=147 load1=0.12 io_some_avg300=
+boot: kernel 10.509s + userspace 8.020s = 18.529s   (last ready: sysctl)
+* udevd                      1.630s   0.345s  ready_path |   ██
+  mount-fstab                2.130s   2.104s  exit       |    ██████
+* udev-trigger               2.135s   0.117s  exit       |    ██
+* udev-coldplug              2.252s   5.449s  exit       |     █████████████
+  devuan-boot                4.239s   0.567s  exit       |         ██
+  sshd                       4.812s   9.790s  timer      |          ░░░░░░░░░░░░░░░░░░░░░░░░
+  dbus                       4.813s   1.679s  timer      |          ░░░░░
+  network-manager            6.493s  10.114s  timer      |              ░░░░░░░░░░░░░░░░░░░░░░░░
+  elogind                    6.496s   0.031s  ready_path |              █
+  lightdm                    7.730s   9.821s  timer      |                 ░░░░░░░░░░░░░░░░░░░░░░░
+wlan0:connected
+p2p-dev-wlan0:disconnected
+eth0:unavailable
+=== branch run=2 13:49:01
+init=schema-init kernel=7.2.6-lunduke uptime=245
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=15.8 xfce4_session=21.0 xfce4_panel=25.4 xfdesktop=25.7
+mem_used_mb=435 procs=149 load1=0.27 io_some_avg300=
+boot: kernel 7.225s + userspace 8.286s = 15.510s   (last ready: sysctl)
+* udevd                      0.843s   0.488s  ready_path | ███
+  mount-fstab                1.366s   3.023s  exit       |   ████████
+* udev-trigger               1.369s   0.246s  exit       |   █
+* udev-coldplug              1.615s   6.041s  exit       |   ████████████████
+  devuan-boot                4.395s   0.597s  exit       |          ██
+  sshd                       4.999s   9.936s  timer      |           ░░░░░░░░░░░░░░░░░░░░░░░░░
+  dbus                       5.000s   0.831s  ready_path |           ███
+  network-manager            5.831s  10.106s  timer      |             ░░░░░░░░░░░░░░░░░░░░░░░░░
+  elogind                    5.838s   0.052s  ready_path |             █
+  lightdm                    7.682s   9.264s  timer      |                  ░░░░░░░░░░░░░░░░░░░░░░
+wlan0:connected
+p2p-dev-wlan0:disconnected
+eth0:unavailable
+=== branch run=3 13:53:33
+init=schema-init kernel=7.2.6-lunduke uptime=245
+kwin=- plasmashell=- desktop_drawn=- portal_kde=-
+xorg=16.0 xfce4_session=21.0 xfce4_panel=25.3 xfdesktop=25.6
+mem_used_mb=433 procs=149 load1=0.54 io_some_avg300=
+boot: kernel 7.234s + userspace 8.363s = 15.598s   (last ready: sysctl)
+* udevd                      0.843s   0.436s  ready_path | ██
+  mount-fstab                1.399s   1.019s  exit       |   ███
+* udev-trigger               1.402s   0.118s  exit       |   █
+* udev-coldplug              1.521s   6.362s  exit       |   ███████████████
+  devuan-boot                2.425s   1.712s  exit       |     █████
+  sshd                       4.143s   9.712s  timer      |         ░░░░░░░░░░░░░░░░░░░░░░
+  dbus                       4.144s   1.449s  ready_path |         ████
+  network-manager            5.593s   9.209s  timer      |            ░░░░░░░░░░░░░░░░░░░░░
+  elogind                    5.600s   0.031s  ready_path |            █
+  lightdm                    7.915s  10.086s  timer      |                 ░░░░░░░░░░░░░░░░░░░░░░░
+wlan0:connected
+p2p-dev-wlan0:disconnected
+eth0:unavailable
+DONE

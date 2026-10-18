@@ -1,7 +1,7 @@
 name=sysctl
 exec=/usr/local/libexec/schema-init/artix-sysctl
 oneshot=1
-dep=udev-coldplug
+dep=udev-trigger
 needs_root=1
 critical=0
 no_new_privs=1
