@@ -102,14 +102,14 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 
 | Service | Replaces (sysvinit) | Runs |
 |---|---|---|
-| `udevd`, `udev-trigger`, `udev-coldplug` | `eudev` | `/sbin/udevd`, then `udevadm trigger`, then `settle` |
-| `mount-fstab` | `mountall.sh` | mounts `/etc/fstab`; waits for each device itself, so it starts with `udevd`, not after coldplug |
+| `udevd`, `udev-coldplug` | `eudev` | `/sbin/udevd`, then `udevadm trigger` + `settle` |
+| `mount-fstab` | `mountall.sh` | mounts `/etc/fstab`, after coldplug: on a laptop with a 5400 rpm disk, starting it alongside coldplug (as on Artix and Void) brought sshd and NetworkManager up 1–2 s sooner but slowed coldplug by 1.5–2 s, so LightDM started 0.6 s later and the desktop was no sooner ([before](../../tests/livetest/dbox-bench-20261018-lcos-coldplug-before.txt), [alongside](../../tests/livetest/dbox-bench-20261018-lcos-coldplug-parallel.txt)) |
 | `devuan-boot` | `bootmisc.sh`, `x11-common`, `networking` (lo), `kmod`, `hwclock.sh` | loopback up, `swapon -a`, `/etc/modules`, RTC if `LOCAL`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
 | `sysctl` | `procps` | `sysctl --system` (a key the kernel rejects is logged, not fatal) |
 | `journal-sink` | `rsyslog` | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
 | `dbus` | `dbus` | `dbus-daemon --system --nofork`, or schema-dbus (below) |
 | `elogind` | `elogind` | `/usr/libexec/elogind` |
-| `network-manager` | `network-manager` | `NetworkManager --no-daemon`, once the coldplug events are queued (`udev-trigger`), not after they settle |
+| `network-manager` | `network-manager` | `NetworkManager --no-daemon` |
 | `slim` or `lightdm` | `slim` / `lightdm` | `slim -n` / `lightdm`; install.sh picks the one in `/etc/X11/default-display-manager` |
 | `sshd`, `cron` | `ssh`, `cron` | `sshd -D`, `cron -f` |
 | `chrony`, `bluetoothd` | `chrony`, `bluetooth` | `chronyd -n`, `bluetoothd -n` |

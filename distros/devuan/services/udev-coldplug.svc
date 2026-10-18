@@ -1,8 +1,7 @@
 name=udev-coldplug
 exec=/usr/local/libexec/schema-init/devuan-coldplug
-args=settle
 oneshot=1
-dep=udev-trigger
+dep=udevd
 needs_root=1
 critical=0
 no_new_privs=0
