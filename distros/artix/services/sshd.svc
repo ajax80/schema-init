@@ -1,0 +1,11 @@
+name=sshd
+exec=/usr/bin/sshd
+condition=file_is_exec:/usr/bin/sshd
+args=-D
+dep=artix-boot
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

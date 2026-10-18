@@ -1,0 +1,6 @@
+#!/bin/sh
+udevadm control --ping --timeout=10 2>/dev/null
+udevadm trigger --type=subsystems --action=add
+udevadm trigger --type=devices --action=add
+udevadm settle --timeout=30
+exit 0

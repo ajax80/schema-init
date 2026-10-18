@@ -1,0 +1,90 @@
+=== run=0 side=stock 23:36:06
+init=init uptime=63
+nm=5.26 sshd=6.47 agetty_tty1=6.56 xorg=6.35 xfce4_session=8.06 xfdesktop=8.75
+mem_used_mb=512 procs=165 pid1_rss_kb=2016
+root_mounted=1.163007 xfdesktop_after_root=7.59
+=== run=0 side=schema 23:37:22
+init=schema-init uptime=62
+nm=2.30 sshd=2.07 agetty_tty1=2.06 xorg=2.33 xfce4_session=4.84 xfdesktop=5.55
+mem_used_mb=499 procs=155 pid1_rss_kb=1560
+root_mounted=1.160099 xfdesktop_after_root=4.39
+=== run=1 side=stock 23:38:38
+init=init uptime=62
+nm=5.05 sshd=6.24 agetty_tty1=6.32 xorg=6.13 xfce4_session=7.87 xfdesktop=8.52
+mem_used_mb=518 procs=164 pid1_rss_kb=2020
+root_mounted=1.150631 xfdesktop_after_root=7.37
+=== run=1 side=schema 23:39:43
+init=schema-init uptime=61
+nm=1.84 sshd=1.43 agetty_tty1=1.43 xorg=1.87 xfce4_session=3.76 xfdesktop=4.65
+mem_used_mb=514 procs=156 pid1_rss_kb=1556
+root_mounted=1.205092 xfdesktop_after_root=3.44
+=== run=2 side=stock 23:41:07
+init=init uptime=63
+nm=4.88 sshd=6.08 agetty_tty1=6.18 xorg=5.96 xfce4_session=7.61 xfdesktop=8.34
+mem_used_mb=510 procs=164 pid1_rss_kb=2012
+root_mounted=1.165163 xfdesktop_after_root=7.17
+=== run=2 side=schema 23:42:22
+init=schema-init uptime=61
+nm=1.81 sshd=1.57 agetty_tty1=1.57 xorg=1.83 xfce4_session=3.59 xfdesktop=4.41
+mem_used_mb=505 procs=154 pid1_rss_kb=1556
+root_mounted=1.175962 xfdesktop_after_root=3.23
+=== run=3 side=stock 23:43:38
+init=init uptime=61
+nm=5.02 sshd=6.16 agetty_tty1=6.22 xorg=6.12 xfce4_session=7.60 xfdesktop=8.29
+mem_used_mb=513 procs=165 pid1_rss_kb=2016
+root_mounted=1.185353 xfdesktop_after_root=7.10
+=== run=3 side=schema 23:44:40
+init=schema-init uptime=62
+nm=1.87 sshd=1.49 agetty_tty1=1.48 xorg=1.89 xfce4_session=3.35 xfdesktop=4.03
+mem_used_mb=512 procs=154 pid1_rss_kb=1556
+root_mounted=1.227608 xfdesktop_after_root=2.80
+=== run=4 side=stock 23:46:01
+init=init uptime=61
+nm=4.48 sshd=5.60 agetty_tty1=5.67 xorg=5.58 xfce4_session=6.84 xfdesktop=7.47
+mem_used_mb=521 procs=163 pid1_rss_kb=2020
+root_mounted=1.204454 xfdesktop_after_root=6.27
+=== run=4 side=schema 23:47:08
+init=schema-init uptime=62
+nm=1.83 sshd=1.43 agetty_tty1=1.43 xorg=1.85 xfce4_session=3.35 xfdesktop=4.00
+mem_used_mb=506 procs=154 pid1_rss_kb=1560
+root_mounted=1.204947 xfdesktop_after_root=2.80
+=== run=5 side=stock 23:48:29
+init=init uptime=61
+nm=5.04 sshd=6.19 agetty_tty1=6.28 xorg=6.15 xfce4_session=7.34 xfdesktop=8.04
+mem_used_mb=513 procs=163 pid1_rss_kb=2020
+root_mounted=1.168446 xfdesktop_after_root=6.87
+=== run=5 side=schema 23:49:36
+init=schema-init uptime=62
+nm=1.85 sshd=1.47 agetty_tty1=1.47 xorg=1.88 xfce4_session=3.30 xfdesktop=3.98
+mem_used_mb=511 procs=157 pid1_rss_kb=1556
+root_mounted=1.242434 xfdesktop_after_root=2.74
+=== run=6 side=stock 23:51:11
+init=init uptime=62
+nm=5.38 sshd=6.50 agetty_tty1=6.58 xorg=6.46 xfce4_session=7.71 xfdesktop=8.41
+mem_used_mb=512 procs=163 pid1_rss_kb=2016
+root_mounted=1.124692 xfdesktop_after_root=7.29
+=== run=6 side=schema 23:52:21
+init=schema-init uptime=61
+nm=1.86 sshd=1.53 agetty_tty1=1.53 xorg=1.88 xfce4_session=3.18 xfdesktop=3.89
+mem_used_mb=514 procs=155 pid1_rss_kb=1560
+root_mounted=1.254118 xfdesktop_after_root=2.64
+=== run=7 side=stock 23:53:46
+init=init uptime=61
+nm=5.04 sshd=6.20 agetty_tty1=6.31 xorg=6.16 xfce4_session=7.47 xfdesktop=8.21
+mem_used_mb=513 procs=164 pid1_rss_kb=2020
+root_mounted=1.218207 xfdesktop_after_root=6.99
+=== run=7 side=schema 23:54:48
+init=schema-init uptime=62
+nm=1.85 sshd=1.48 agetty_tty1=1.48 xorg=1.88 xfce4_session=3.30 xfdesktop=4.00
+mem_used_mb=508 procs=156 pid1_rss_kb=1552
+root_mounted=1.221042 xfdesktop_after_root=2.78
+=== run=8 side=stock 23:56:08
+init=init uptime=61
+nm=4.90 sshd=6.06 agetty_tty1=6.15 xorg=6.03 xfce4_session=7.26 xfdesktop=7.91
+mem_used_mb=508 procs=165 pid1_rss_kb=2016
+root_mounted=1.185291 xfdesktop_after_root=6.72
+=== run=8 side=schema 23:57:15
+init=schema-init uptime=61
+nm=1.81 sshd=1.44 agetty_tty1=1.44 xorg=1.84 xfce4_session=3.10 xfdesktop=3.73
+mem_used_mb=516 procs=154 pid1_rss_kb=1556
+root_mounted=1.209594 xfdesktop_after_root=2.52
