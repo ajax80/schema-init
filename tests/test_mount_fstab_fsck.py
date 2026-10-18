@@ -28,6 +28,12 @@ exit ${rc:-0}
     'sulogin': '#!/bin/sh\necho sulogin >> "$T/calls"\n',
     'setsid': '#!/bin/sh\nshift 2\nexec "$@"\n',
     'plymouth': '#!/bin/sh\n',
+    'btrfs': '''#!/bin/sh
+echo "btrfs $*" >> "$T/calls"
+[ "$2" = ready ] || exit 0
+n=$(($(cat "$T/ready" 2>/dev/null || echo 0) + 1)); echo $n > "$T/ready"
+[ $n -ge ${FAKE_READY_AFTER:-1} ]
+''',
 }
 
 results = []
@@ -38,7 +44,7 @@ def check(name, ok, detail=''):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ''))
 
 
-def run(fstab_line, rcs=(), fat=None, cmdline='', ftype='ext4'):
+def run(fstab_line, rcs=(), fat=None, cmdline='', ftype='ext4', ready_after=1):
     t = tempfile.mkdtemp(prefix='schema-fsck-')
     try:
         b = os.path.join(t, 'bin')
@@ -63,7 +69,8 @@ def run(fstab_line, rcs=(), fat=None, cmdline='', ftype='ext4'):
         open(os.path.join(t, 'fstab'), 'w').write(fstab_line.replace('@', t) + '\n')
         env = dict(os.environ, T=t, PATH=b + ':' + os.environ['PATH'],
                    SCHEMA_FSTAB=os.path.join(t, 'fstab'), SCHEMA_CONSOLE=os.path.join(t, 'console'),
-                   SCHEMA_CMDLINE=os.path.join(t, 'cmdline'), FAKE_TYPE=ftype)
+                   SCHEMA_CMDLINE=os.path.join(t, 'cmdline'), FAKE_TYPE=ftype,
+                   FAKE_READY_AFTER=str(ready_after))
         out = subprocess.run(['sh', SCRIPT], env=env, capture_output=True, text=True, timeout=30).stdout
         cp = os.path.join(t, 'calls')
         calls = open(cp).read().splitlines() if os.path.exists(cp) else []
@@ -142,6 +149,31 @@ check('msdos dirty: fsck', fsck_called(calls), calls)
 
 out, calls = run('@/nofile @/m vfat defaults 0 2')
 check('FAT unreadable: fsck', fsck_called(calls), calls)
+
+btrfs_calls = lambda calls: [c for c in calls if c.startswith('btrfs')]
+
+out, calls = run('LABEL=d @/m btrfs defaults 0 0')
+check('btrfs: scan, ready, then mounted',
+      btrfs_calls(calls) == ['btrfs device scan', 'btrfs device ready /dev/fake-d'] and mounted(calls)
+      and calls.index('btrfs device ready /dev/fake-d') < [i for i, c in enumerate(calls) if c.startswith('mount')][0], calls)
+
+out, calls = run('LABEL=d @/m btrfs defaults 0 0', ready_after=3)
+check('btrfs member late: scanned until ready, then mounted',
+      btrfs_calls(calls).count('btrfs device ready /dev/fake-d') == 3 and mounted(calls), calls)
+
+out, calls = run('LABEL=d @/m btrfs defaults,x-systemd.device-timeout=1 0 0', ready_after=10**6)
+check('btrfs member never appears: not mounted after the timeout',
+      not mounted(calls) and 'not all devices' in out and 'done, with failures' in out, out)
+
+out, calls = run('LABEL=d @/m btrfs defaults,degraded 0 0', ready_after=10**6)
+check('btrfs degraded: scanned once, mounted without waiting',
+      btrfs_calls(calls) == ['btrfs device scan'] and mounted(calls), calls)
+
+out, calls = run('LABEL=d @/m auto defaults 0 0', ftype='btrfs')
+check('type auto -> btrfs: waits for ready', 'btrfs device ready /dev/fake-d' in calls and mounted(calls), calls)
+
+out, calls = run('LABEL=d @/m ext4 defaults 0 0')
+check('ext4: no btrfs calls', not btrfs_calls(calls) and mounted(calls), calls)
 
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

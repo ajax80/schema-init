@@ -117,7 +117,7 @@ sudo ./setup.sh
 
 The installer **does not replace systemd.** It compiles, installs the binaries, and:
 
-- installs a `mount-fstab` service that mounts your disks, swap, and bind mounts from `/etc/fstab`, read fresh at every boot (`schema-mount-fstab`: parents first, waits for each device up to `x-systemd.device-timeout=` — 90 s, or 10 s with `nofail` — and a `nofail` entry never fails the boot; `noauto` and `_netdev` entries are skipped). `scripts/gen-mounts.sh` writes the service plus a `mount-fstab.sh` snapshot to check;
+- installs a `mount-fstab` service that mounts your disks, swap, and bind mounts from `/etc/fstab`, read fresh at every boot (`schema-mount-fstab`: parents first, waits for each device, and for every member of a multi-device btrfs (unless `degraded`), up to `x-systemd.device-timeout=` — 90 s, or 10 s with `nofail` — and a `nofail` entry never fails the boot; `noauto` and `_netdev` entries are skipped). `scripts/gen-mounts.sh` writes the service plus a `mount-fstab.sh` snapshot to check;
 - optionally **imports your enabled systemd services** as `.svc` stubs so the box comes up running what it ran before (`scripts/gen-services.sh`);
 - writes a **separate `schema-init (fallback)` GRUB entry** and leaves stock systemd as the default.
 

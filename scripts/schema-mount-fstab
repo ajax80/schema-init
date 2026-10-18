@@ -77,6 +77,20 @@ wait_dev() {
     done
 }
 
+# A multi-device btrfs mounts only once the kernel knows every member, which
+# udev's 64-btrfs.rules arranges during coldplug; this may run before that.
+btrfs_wait() {
+    command -v btrfs >/dev/null || return 0
+    if has_opt "$3" degraded; then btrfs device scan >/dev/null 2>&1; return 0; fi
+    end=$(($(date +%s) + $2))
+    while :; do
+        btrfs device scan >/dev/null 2>&1
+        btrfs device ready "$1" >/dev/null 2>&1 && return 0
+        [ "$2" -ne 0 ] && [ "$(date +%s)" -ge $end ] && return 1
+        sleep 0.2
+    done
+}
+
 fsck_mode=auto
 [ -e /forcefsck ] && fsck_mode=force
 [ -e /fastboot ] && fsck_mode=skip
@@ -159,6 +173,10 @@ do_entry() {
         dev=$spec
     else
         dev=$(wait_dev "$spec" "$t") || { fail "$tgt: $spec not present after ${t}s"; return; }
+        btype=$fs; [ "$fs" = auto ] && btype=$(blkid -o value -s TYPE "$dev" 2>/dev/null)
+        if [ "$btype" = btrfs ]; then
+            btrfs_wait "$dev" "$t" "$opts" || { fail "$tgt: btrfs on $dev: not all devices present after ${t}s"; return; }
+        fi
         [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "$fs" || return
     fi
     mkdir -p "$tgt"
