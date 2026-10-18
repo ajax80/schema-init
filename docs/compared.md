@@ -113,7 +113,7 @@ returns only once udevd is ready. schema-init had a window too: its udevd
 service promoted on `/run/udev/control`, most likely a moment before udevd
 listens for device events, and one of its first dozen boots on Artix came up
 without network the same way. Its coldplug now runs `udevadm control --ping` before
-triggering, retried for up to 30 s. Since then, one boot of about 100 came up
+triggering, retried up to 30 times a second apart. Since then, one boot of about 100 came up
 without network: during the first s6 run on 2026-10-18, while blakbox itself
 was stalled for memory, alongside three failed boots of stock s6 in the same
 half hour. 35 boots repeated on the same disk the same day, with a log of the

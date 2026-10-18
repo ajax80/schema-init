@@ -107,8 +107,8 @@ To remove the boot entries: `sudo distros/void/install.sh --remove`.
 | Service | Replaces (runit stage 1) | Runs |
 |---|---|---|
 | `udevd`, `udev-coldplug` | `02-udev.sh` | `udevd`, then `udevadm trigger` + `settle` |
-| `mount-fstab` | `03-filesystems.sh`, `04-swap.sh` | fsck and mount `/etc/fstab`, swap; waits for each device itself, so it runs alongside coldplug |
-| `void-boot` | the rest of `/etc/runit/core-services` | after coldplug has settled, as in runit; Void's own scripts: modules, console, hostname, seedrng, sysctl, dmesg, wtmp |
+| `mount-fstab` | `03-filesystems.sh`, `04-swap.sh` | fsck and mount `/etc/fstab`, swap |
+| `void-boot` | the rest of `/etc/runit/core-services` | Void's own scripts: modules, console, hostname, seedrng, sysctl, dmesg, wtmp |
 | `void-rc` | stage 2's `/etc/rc.local`, stage 3's `/etc/runit/shutdown.d` | `rc.local` before your services start; at shutdown `rc.shutdown`, seed save, `hwclock`, wtmp |
 | `journal-sink` | — | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
 

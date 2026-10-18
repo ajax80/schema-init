@@ -256,7 +256,7 @@ static int sp5100_present(void) {
         if (e->d_name[0] == '.') continue;
         unsigned v = pci_hex(e->d_name, "vendor"), dv = pci_hex(e->d_name, "device");
         for (size_t i = 0; i < sizeof ids / sizeof ids[0]; i++)
-            if (v == ids[i][0] && dv == ids[i][1]) found = 1;
+            if (v == ids[i][0] && dv == ids[i][1]) { found = 1; break; }
     }
     closedir(d);
     return found;

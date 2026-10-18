@@ -2,7 +2,6 @@ name=void-boot
 exec=/usr/local/libexec/schema-init/void-boot
 oneshot=1
 dep=mount-fstab
-dep=udev-coldplug
 needs_root=1
 critical=0
 no_new_privs=0

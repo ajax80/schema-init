@@ -1,11 +1,25 @@
 #!/bin/sh
+ping() {
+    i=0
+    until udevadm control --ping --timeout=10; do
+        i=$((i + 1))
+        [ $i -ge 30 ] && break
+        sleep 1
+    done
+}
 case $1 in
 trigger)
-    for i in 1 2 3; do udevadm control --ping --timeout=10 && break; done
+    ping
     udevadm trigger --type=subsystems --action=add
     udevadm trigger --type=devices --action=add
     ;;
+settle)
+    udevadm settle --timeout=30
+    ;;
 *)
+    ping
+    udevadm trigger --type=subsystems --action=add
+    udevadm trigger --type=devices --action=add
     udevadm settle --timeout=30
     ;;
 esac
