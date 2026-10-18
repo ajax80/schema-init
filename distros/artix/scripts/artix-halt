@@ -1,0 +1,14 @@
+#!/bin/sh
+name=${0##*/}
+action=poweroff
+[ "$name" = reboot ] && action=reboot
+for a in "$@"; do
+    case "$a" in
+        -r|--reboot) action=reboot ;;
+        -w|--wtmp-only) exit 0 ;;
+        -c|-k) echo "$name $a: not supported under schema-init" >&2; exit 1 ;;
+        -h|-H|-P|-p|--halt|--poweroff|now|-f|--force|-n|-d|-i|-t*|+0) ;;
+        *) echo "$name $a: only 'now' is supported under schema-init" >&2; exit 1 ;;
+    esac
+done
+exec /usr/bin/schema-ctl "$action"

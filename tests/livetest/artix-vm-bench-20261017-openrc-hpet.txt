@@ -1,0 +1,87 @@
+=== run=0 side=stock 23:01:25
+init=init uptime=61
+nm=14.55 sshd=15.69 agetty_tty1=15.79 xorg=15.65 xfce4_session=16.98 xfdesktop=17.65
+mem_used_mb=514 procs=166 pid1_rss_kb=2016
+root_mounted=1.247952 xfdesktop_after_root=16.40
+=== run=0 side=schema 23:02:30
+init=schema-init uptime=61
+nm=2.00 sshd=1.71 agetty_tty1=1.71 xorg=2.03 xfce4_session=3.60 xfdesktop=4.42
+mem_used_mb=512 procs=155 pid1_rss_kb=1560
+root_mounted=1.288172 xfdesktop_after_root=3.13
+=== run=1 side=stock 23:09:36
+FAIL no ssh 195 s after reboot
+=== run=1 side=schema 23:10:22
+init=schema-init uptime=63
+nm=2.05 sshd=2.03 agetty_tty1=2.03 xorg=2.08 xfce4_session=3.68 xfdesktop=4.37
+mem_used_mb=519 procs=153 pid1_rss_kb=1560
+root_mounted=1.207038 xfdesktop_after_root=3.16
+=== run=2 side=stock 23:11:52
+init=init uptime=62
+nm=14.63 sshd=15.75 agetty_tty1=15.84 xorg=15.72 xfce4_session=17.14 xfdesktop=17.82
+mem_used_mb=505 procs=164 pid1_rss_kb=2020
+root_mounted=1.221714 xfdesktop_after_root=16.60
+=== run=2 side=schema 23:13:11
+init=schema-init uptime=62
+nm=1.84 sshd=1.45 agetty_tty1=1.45 xorg=1.85 xfce4_session=3.39 xfdesktop=4.07
+mem_used_mb=517 procs=155 pid1_rss_kb=1560
+root_mounted=1.212769 xfdesktop_after_root=2.86
+=== run=3 side=stock 23:14:45
+init=init uptime=62
+nm=14.68 sshd=15.81 agetty_tty1=15.95 xorg=15.78 xfce4_session=17.60 xfdesktop=18.29
+mem_used_mb=519 procs=163 pid1_rss_kb=2020
+root_mounted=1.249872 xfdesktop_after_root=17.04
+=== run=3 side=schema 23:15:49
+init=schema-init uptime=61
+nm=1.87 sshd=1.53 agetty_tty1=1.53 xorg=1.88 xfce4_session=3.92 xfdesktop=4.62
+mem_used_mb=506 procs=155 pid1_rss_kb=1556
+root_mounted=1.201844 xfdesktop_after_root=3.42
+=== run=4 side=stock 23:17:15
+init=init uptime=62
+nm=14.60 sshd=15.82 agetty_tty1=15.98 xorg=15.78 xfce4_session=17.34 xfdesktop=18.04
+mem_used_mb=522 procs=164 pid1_rss_kb=2020
+root_mounted=1.233099 xfdesktop_after_root=16.81
+=== run=4 side=schema 23:18:09
+init=schema-init uptime=61
+nm=1.85 sshd=1.56 agetty_tty1=1.56 xorg=1.87 xfce4_session=3.91 xfdesktop=4.86
+mem_used_mb=511 procs=154 pid1_rss_kb=1560
+root_mounted=1.209106 xfdesktop_after_root=3.65
+=== run=5 side=stock 23:19:39
+init=init uptime=62
+nm=14.46 sshd=15.67 agetty_tty1=15.85 xorg=15.63 xfce4_session=17.26 xfdesktop=17.96
+mem_used_mb=520 procs=164 pid1_rss_kb=2016
+root_mounted=1.268704 xfdesktop_after_root=16.69
+=== run=5 side=schema 23:20:38
+init=schema-init uptime=61
+nm=1.93 sshd=1.59 agetty_tty1=1.59 xorg=1.94 xfce4_session=4.02 xfdesktop=4.96
+mem_used_mb=508 procs=154 pid1_rss_kb=1560
+root_mounted=1.239921 xfdesktop_after_root=3.72
+=== run=6 side=stock 23:22:12
+init=init uptime=62
+nm=14.52 sshd=15.74 agetty_tty1=15.85 xorg=15.70 xfce4_session=17.43 xfdesktop=18.11
+mem_used_mb=522 procs=163 pid1_rss_kb=2016
+root_mounted=1.260842 xfdesktop_after_root=16.85
+=== run=6 side=schema 23:23:16
+init=schema-init uptime=62
+nm=1.87 sshd=1.59 agetty_tty1=1.59 xorg=1.89 xfce4_session=3.88 xfdesktop=4.79
+mem_used_mb=514 procs=154 pid1_rss_kb=1556
+root_mounted=1.226330 xfdesktop_after_root=3.56
+=== run=7 side=stock 23:24:43
+init=init uptime=62
+nm=14.70 sshd=15.83 agetty_tty1=15.90 xorg=15.79 xfce4_session=17.33 xfdesktop=18.03
+mem_used_mb=507 procs=163 pid1_rss_kb=2016
+root_mounted=1.258527 xfdesktop_after_root=16.77
+=== run=7 side=schema 23:25:46
+init=schema-init uptime=62
+nm=1.96 sshd=1.62 agetty_tty1=1.62 xorg=2.02 xfce4_session=4.10 xfdesktop=4.81
+mem_used_mb=510 procs=153 pid1_rss_kb=1560
+root_mounted=1.266967 xfdesktop_after_root=3.54
+=== run=8 side=stock 23:27:07
+init=init uptime=62
+nm=14.51 sshd=15.71 agetty_tty1=15.82 xorg=15.69 xfce4_session=17.59 xfdesktop=18.31
+mem_used_mb=520 procs=165 pid1_rss_kb=2020
+root_mounted=1.244410 xfdesktop_after_root=17.07
+=== run=8 side=schema 23:28:06
+init=schema-init uptime=61
+nm=1.84 sshd=1.60 agetty_tty1=1.52 xorg=1.91 xfce4_session=4.25 xfdesktop=5.04
+mem_used_mb=510 procs=153 pid1_rss_kb=1556
+root_mounted=1.190290 xfdesktop_after_root=3.85

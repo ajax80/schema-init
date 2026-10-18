@@ -15,6 +15,7 @@
 | [The reclaimed daemons](docs/components.md) | schema-udev, schema-doctor, schema-logind, schema-dbus, running packaged software |
 | [Running a schema-init box](docs/operations.md) | `schema-ctl`, the recovery console, debugging, crashes, logs |
 | [Numbers](docs/benchmarks.md) | Every boot, RAM, power and footprint measurement, with method and raw data |
+| [Compared](docs/compared.md) | schema-init next to systemd, sysvinit, OpenRC, runit, s6, dinit, Shepherd and BusyBox init, with head-to-head boot numbers |
 | [Porting and distributions](docs/porting.md) | New distros, the shipped distro configs, repository layout |
 | [Roadmap](docs/roadmap.md) | What's done and what's next |
 | [Why schema-init](docs/why-schema-init.md) | Who it is for, and who it is not for |
@@ -45,7 +46,7 @@ No systemd. No OpenRC. No journal daemon. At its core, just a statically linked 
 
 ## Try it
 
-Your existing boot entries (systemd, or sysvinit on Devuan) stay in the GRUB menu, and you can back out with one reboot at every step.
+Your existing boot entries (systemd, or the stock init on Devuan, Void or Artix) stay in the GRUB menu, and you can back out with one reboot at every step.
 
 | You want to… | Do this | What it touches |
 |---|---|---|
@@ -54,6 +55,7 @@ Your existing boot entries (systemd, or sysvinit on Devuan) stay in the GRUB men
 | Convert your Fedora KDE install | [COPR + `schema-migrate`](docs/install.md#convert-fedora-kde-in-place) | Adds a non-default boot entry; one command undoes it |
 | Run it on Devuan (no systemd) | [`distros/devuan`](distros/devuan/README.md): `make` + `install.sh`, beside sysvinit | Adds a non-default boot entry; `install.sh --remove` undoes it |
 | Run it on Void (no systemd) | [`distros/void`](distros/void/README.md): `make` + `install.sh`, beside runit | Adds a non-default boot entry; `install.sh --remove` undoes it |
+| Run it on Artix (no systemd) | [`distros/artix`](distros/artix/README.md): `make` + `install.sh`, beside dinit, s6 or OpenRC | Adds a non-default boot entry; `install.sh --remove` undoes it |
 | Run it on another distro | [`setup.sh` from source](docs/install.md#build-from-source-any-distro) | Adds a non-default boot entry |
 
 On Fedora KDE the short version is:

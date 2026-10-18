@@ -1,0 +1,146 @@
+# stock s6 boots, fstab with no entries (builder bug), 2026-10-17
+=== run=0 side=stock 20:27:53
+init=s6-svscan uptime=62
+nm=- sshd=2.55 agetty_tty1=2.46 xorg=3.64 xfce4_session=4.95 xfdesktop=5.66
+mem_used_mb=513 procs=194 pid1_rss_kb=2240
+root_mounted=2.440831 xfdesktop_after_root=3.22
+=== run=1 side=stock 20:28:59
+init=s6-svscan uptime=63
+nm=- sshd=1.35 agetty_tty1=1.27 xorg=1.93 xfce4_session=3.24 xfdesktop=3.89
+mem_used_mb=515 procs=193 pid1_rss_kb=2236
+root_mounted=1.241504 xfdesktop_after_root=2.65
+=== run=2 side=stock 20:30:15
+init=s6-svscan uptime=63
+nm=- sshd=1.31 agetty_tty1=1.22 xorg=1.94 xfce4_session=3.39 xfdesktop=4.04
+mem_used_mb=522 procs=191 pid1_rss_kb=2236
+root_mounted=1.205024 xfdesktop_after_root=2.83
+=== run=3 side=stock 20:37:32
+FAIL no ssh 195 s after reboot
+=== run=4 side=stock 20:43:53
+FAIL no ssh 195 s after reboot
+=== run=5 side=stock 20:44:15
+init=s6-svscan uptime=61
+nm=- sshd=1.75 agetty_tty1=1.68 xorg=3.94 xfce4_session=12.81 xfdesktop=19.57
+mem_used_mb=513 procs=193 pid1_rss_kb=2220
+root_mounted=1.651368 xfdesktop_after_root=17.92
+=== run=6 side=stock 20:45:23
+init=s6-svscan uptime=62
+nm=- sshd=1.33 agetty_tty1=1.24 xorg=1.96 xfce4_session=3.44 xfdesktop=4.14
+mem_used_mb=519 procs=192 pid1_rss_kb=2240
+root_mounted=1.217172 xfdesktop_after_root=2.92
+=== run=7 side=stock 20:46:38
+init=s6-svscan uptime=63
+nm=- sshd=1.32 agetty_tty1=1.25 xorg=2.05 xfce4_session=3.33 xfdesktop=4.02
+mem_used_mb=515 procs=192 pid1_rss_kb=2220
+root_mounted=1.230961 xfdesktop_after_root=2.79
+=== run=8 side=stock 20:47:54
+init=s6-svscan uptime=62
+nm=- sshd=1.33 agetty_tty1=1.26 xorg=1.93 xfce4_session=3.32 xfdesktop=3.96
+mem_used_mb=519 procs=194 pid1_rss_kb=2240
+root_mounted=1.250969 xfdesktop_after_root=2.71
+=== run=9 side=stock 20:49:30
+init=s6-svscan uptime=61
+nm=- sshd=1.32 agetty_tty1=1.24 xorg=1.89 xfce4_session=3.26 xfdesktop=3.93
+mem_used_mb=518 procs=191 pid1_rss_kb=2244
+root_mounted=1.214357 xfdesktop_after_root=2.72
+# stock s6 boots, normal fstab
+=== run=0 side=stock 21:38:09
+init=s6-svscan uptime=62
+nm=1.38 sshd=1.39 agetty_tty1=1.30 xorg=2.05 xfce4_session=3.52 xfdesktop=4.29
+mem_used_mb=518 procs=191 pid1_rss_kb=2224
+root_mounted=1.272254 xfdesktop_after_root=3.02
+=== run=1 side=stock 21:39:22
+init=s6-svscan uptime=63
+nm=1.37 sshd=1.38 agetty_tty1=1.30 xorg=2.14 xfce4_session=3.48 xfdesktop=4.22
+mem_used_mb=522 procs=193 pid1_rss_kb=2244
+root_mounted=1.277726 xfdesktop_after_root=2.94
+=== run=2 side=stock 21:40:39
+init=s6-svscan uptime=61
+nm=1.42 sshd=1.44 agetty_tty1=1.35 xorg=2.21 xfce4_session=3.45 xfdesktop=4.28
+mem_used_mb=514 procs=194 pid1_rss_kb=2240
+root_mounted=1.317948 xfdesktop_after_root=2.96
+=== run=3 side=stock 21:41:52
+init=s6-svscan uptime=63
+nm=1.40 sshd=1.42 agetty_tty1=1.32 xorg=2.06 xfce4_session=3.50 xfdesktop=4.22
+mem_used_mb=516 procs=193 pid1_rss_kb=2208
+root_mounted=1.286278 xfdesktop_after_root=2.93
+=== run=4 side=stock 21:43:08
+init=s6-svscan uptime=63
+nm=1.30 sshd=1.32 agetty_tty1=1.25 xorg=1.90 xfce4_session=3.12 xfdesktop=3.82
+mem_used_mb=528 procs=190 pid1_rss_kb=2240
+root_mounted=1.221484 xfdesktop_after_root=2.60
+=== run=5 side=stock 21:44:24
+init=s6-svscan uptime=60
+nm=1.42 sshd=1.43 agetty_tty1=1.34 xorg=2.08 xfce4_session=3.50 xfdesktop=4.28
+mem_used_mb=519 procs=194 pid1_rss_kb=2244
+root_mounted=1.312870 xfdesktop_after_root=2.97
+=== run=6 side=stock 21:45:38
+init=s6-svscan uptime=63
+nm=1.37 sshd=1.39 agetty_tty1=1.30 xorg=2.00 xfce4_session=3.50 xfdesktop=4.18
+mem_used_mb=520 procs=191 pid1_rss_kb=2244
+root_mounted=1.277956 xfdesktop_after_root=2.90
+=== run=7 side=stock 21:47:14
+init=s6-svscan uptime=61
+nm=1.40 sshd=1.43 agetty_tty1=1.33 xorg=2.07 xfce4_session=3.46 xfdesktop=4.25
+mem_used_mb=512 procs=192 pid1_rss_kb=2240
+root_mounted=1.311486 xfdesktop_after_root=2.94
+=== run=8 side=stock 21:48:24
+init=s6-svscan uptime=62
+nm=1.36 sshd=1.38 agetty_tty1=1.30 xorg=2.31 xfce4_session=3.58 xfdesktop=4.36
+mem_used_mb=521 procs=192 pid1_rss_kb=2236
+root_mounted=1.271779 xfdesktop_after_root=3.09
+=== run=9 side=stock 21:49:40
+init=s6-svscan uptime=62
+nm=1.31 sshd=1.34 agetty_tty1=1.26 xorg=2.01 xfce4_session=3.18 xfdesktop=3.92
+mem_used_mb=516 procs=193 pid1_rss_kb=2236
+root_mounted=1.232068 xfdesktop_after_root=2.69
+=== run=0 side=stock 21:51:06
+init=s6-svscan uptime=61
+nm=1.39 sshd=1.41 agetty_tty1=1.31 xorg=2.17 xfce4_session=3.40 xfdesktop=4.20
+mem_used_mb=509 procs=190 pid1_rss_kb=2216
+root_mounted=1.292093 xfdesktop_after_root=2.91
+=== run=1 side=stock 21:52:20
+init=s6-svscan uptime=61
+nm=1.36 sshd=1.38 agetty_tty1=1.29 xorg=1.98 xfce4_session=3.57 xfdesktop=4.27
+mem_used_mb=514 procs=190 pid1_rss_kb=2236
+root_mounted=1.261350 xfdesktop_after_root=3.01
+=== run=2 side=stock 21:53:33
+init=s6-svscan uptime=61
+nm=1.37 sshd=1.39 agetty_tty1=1.31 xorg=1.98 xfce4_session=3.24 xfdesktop=4.01
+mem_used_mb=523 procs=192 pid1_rss_kb=2208
+root_mounted=1.283185 xfdesktop_after_root=2.73
+=== run=3 side=stock 21:54:47
+init=s6-svscan uptime=63
+nm=1.35 sshd=1.37 agetty_tty1=1.28 xorg=2.35 xfce4_session=3.63 xfdesktop=4.39
+mem_used_mb=520 procs=191 pid1_rss_kb=2236
+root_mounted=1.246484 xfdesktop_after_root=3.14
+=== run=4 side=stock 21:56:03
+init=s6-svscan uptime=63
+nm=1.39 sshd=1.42 agetty_tty1=1.33 xorg=2.06 xfce4_session=3.25 xfdesktop=4.03
+mem_used_mb=512 procs=192 pid1_rss_kb=2240
+root_mounted=1.296141 xfdesktop_after_root=2.73
+=== run=5 side=stock 21:57:19
+init=s6-svscan uptime=62
+nm=1.32 sshd=1.33 agetty_tty1=1.24 xorg=1.94 xfce4_session=3.20 xfdesktop=3.90
+mem_used_mb=523 procs=191 pid1_rss_kb=2244
+root_mounted=1.216641 xfdesktop_after_root=2.68
+=== run=6 side=stock 21:58:34
+init=s6-svscan uptime=62
+nm=1.31 sshd=1.33 agetty_tty1=1.25 xorg=1.95 xfce4_session=3.34 xfdesktop=4.01
+mem_used_mb=514 procs=190 pid1_rss_kb=2240
+root_mounted=1.221154 xfdesktop_after_root=2.79
+=== run=7 side=stock 21:59:50
+init=s6-svscan uptime=62
+nm=1.39 sshd=1.40 agetty_tty1=1.31 xorg=2.06 xfce4_session=3.30 xfdesktop=4.03
+mem_used_mb=520 procs=192 pid1_rss_kb=2232
+root_mounted=1.288829 xfdesktop_after_root=2.74
+=== run=8 side=stock 22:01:05
+init=s6-svscan uptime=62
+nm=1.30 sshd=1.33 agetty_tty1=1.26 xorg=1.98 xfce4_session=3.36 xfdesktop=4.06
+mem_used_mb=523 procs=194 pid1_rss_kb=2244
+root_mounted=1.240627 xfdesktop_after_root=2.82
+=== run=9 side=stock 22:02:21
+init=s6-svscan uptime=62
+nm=1.44 sshd=1.45 agetty_tty1=1.36 xorg=2.30 xfce4_session=3.60 xfdesktop=4.35
+mem_used_mb=519 procs=191 pid1_rss_kb=2236
+root_mounted=1.333931 xfdesktop_after_root=3.02
