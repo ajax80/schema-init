@@ -1,7 +1,8 @@
 name=udev-coldplug
 exec=/usr/local/libexec/schema-init/artix-coldplug
+args=settle
 oneshot=1
-dep=udevd
+dep=udev-trigger
 needs_root=1
 critical=0
 no_new_privs=0

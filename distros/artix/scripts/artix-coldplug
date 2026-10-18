@@ -1,6 +1,12 @@
 #!/bin/sh
-udevadm control --ping --timeout=10 2>/dev/null
-udevadm trigger --type=subsystems --action=add
-udevadm trigger --type=devices --action=add
-udevadm settle --timeout=30
+case $1 in
+trigger)
+    for i in 1 2 3; do udevadm control --ping --timeout=10 && break; done
+    udevadm trigger --type=subsystems --action=add
+    udevadm trigger --type=devices --action=add
+    ;;
+*)
+    udevadm settle --timeout=30
+    ;;
+esac
 exit 0

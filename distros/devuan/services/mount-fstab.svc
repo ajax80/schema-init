@@ -1,7 +1,7 @@
 name=mount-fstab
 exec=/usr/local/libexec/schema-init/schema-mount-fstab
 oneshot=1
-dep=udev-coldplug
+dep=udevd
 needs_root=1
 critical=0
 start_timeout_sec=0

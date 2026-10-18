@@ -234,26 +234,40 @@ static int modprobe_one(const char *mod) {
     return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
 
-static int cpu_is_amd(void) {
-    FILE *f = fopen("/proc/cpuinfo", "r");
+static unsigned pci_hex(const char *dir, const char *attr) {
+    char path[300], buf[16] = "";
+    snprintf(path, sizeof path, "/sys/bus/pci/devices/%s/%s", dir, attr);
+    FILE *f = fopen(path, "r");
     if (!f) return 0;
-    char line[256];
-    int amd = 0;
-    while (fgets(line, sizeof line, f)) {
-        if (strncmp(line, "vendor_id", 9) == 0) {
-            amd = strstr(line, "AuthenticAMD") || strstr(line, "HygonGenuine");
-            break;
-        }
-    }
+    if (!fgets(buf, sizeof buf, f)) buf[0] = '\0';
     fclose(f);
-    return amd;
+    return (unsigned)strtoul(buf, NULL, 16);
 }
 
-/* sp5100_tco only drives AMD/Hygon chipset TCO timers; on anything else
- * modprobe fails with "No such device" on the boot console. */
+static int sp5100_present(void) {
+    static const unsigned ids[][2] = {
+        { 0x1002, 0x4385 }, { 0x1022, 0x780b }, { 0x1022, 0x790b }, { 0x1d94, 0x790b },
+    };
+    DIR *d = opendir("/sys/bus/pci/devices");
+    if (!d) return 0;
+    struct dirent *e;
+    int found = 0;
+    while (!found && (e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        unsigned v = pci_hex(e->d_name, "vendor"), dv = pci_hex(e->d_name, "device");
+        for (size_t i = 0; i < sizeof ids / sizeof ids[0]; i++)
+            if (v == ids[i][0] && dv == ids[i][1]) found = 1;
+    }
+    closedir(d);
+    return found;
+}
+
+/* sp5100_tco only drives the AMD/Hygon FCH SMBus devices in its PCI id
+ * table; on anything else (an AMD guest on q35 included) modprobe costs a
+ * fork+exec on the boot path and fails with "No such device". */
 static void load_watchdog_module(void) {
     if (getpid() != 1) return;
-    if (!cpu_is_amd()) return;
+    if (access("/sys/module/sp5100_tco", F_OK) == 0 || !sp5100_present()) return;
     if (modprobe_one("sp5100_tco") == 0)
         printf("[schema-init] loaded watchdog module (sp5100_tco)\n");
     else
