@@ -40,3 +40,5 @@
 - [x] PID 1 re-exec — `schema-ctl reexec` swaps the init binary in place with a dry run, sealed state handoff and rollback; RPM upgrades re-exec automatically, so updating PID 1 is just `dnf upgrade`, no reboot
 - [x] Service watchdog — `watchdog_sec=` with `WATCHDOG=1` over `sd_notify` (systemd `WatchdogSec=` parity): missed window → SIGABRT + core, then SIGKILL, then the normal restart arc
 - [x] Fedora 44 installer ISO, verified on real hardware — netinst + kickstart installs KDE on schema-init as PID 1 with an optional guided schema-udev flip; clean install to desktop on a Dell i3 laptop with no hand fixes (v0.3.0)
+- [ ] Per-user supervisor — a schema supervisor per logged-in user (and per lingering user from boot), reading systemd user units through `schema-import` and owning `org.freedesktop.systemd1` on the session bus, scopes included: `systemd --user` parity for GNOME, rootless podman/Quadlet, user timers and per-app scopes
+- [ ] btrfs device scan — `schema-mount-fstab` runs `btrfs device scan` before mounting a btrfs entry, so a multi-device btrfs mounts when fstab runs alongside coldplug (Artix)
