@@ -48,8 +48,8 @@ schema-init: $(OBJS)
 schema-init-static:
 	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
 
-schema-ctl: schema-ctl.c svc_dropins.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+schema-ctl: schema-ctl.c svc_dropins.h recorder.h recorder_logic.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
@@ -66,7 +66,7 @@ schema-recorder: schema-recorder.c recorder.h recorder_logic.h
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-board: schema-board.c schema.h schema_shm.h
+schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h

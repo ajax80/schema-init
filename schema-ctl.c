@@ -4,12 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
 #include "schema.h"
 #include "svc_dropins.h"
 #include "schema_shm.h"
+#include "recorder_logic.h"
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
@@ -170,6 +173,80 @@ static int cmd_graph(const char *root) {
     return 0;
 }
 
+static int trace_ev(const rec_event_t *e, const char *msg) {
+    char tb[32], who[100];
+    time_t t = (time_t)e->ts;
+    struct tm tm;
+    localtime_r(&t, &tm);
+    strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", &tm);
+    if (e->subj[0] && e->comm[0] && strcmp(e->subj, e->comm)) snprintf(who, sizeof who, "%s/%s", e->comm, e->subj);
+    else snprintf(who, sizeof who, "%s", e->subj[0] ? e->subj : e->comm);
+    printf("%s  %s  %s  %s  pid=%d  rc=%d\n", tb, e->src >= 1 && e->src <= REC_SRC_PSI ? rec_src_names[e->src] : "?",
+           e->kind, who, (int)e->pid, (int)e->rc);
+    if (msg[0]) printf("    %s\n", msg);
+    return e->src == REC_SRC_PSI;
+}
+
+static int cmd_trace(const char *since_arg) {
+    const char *name = getenv("SCHEMA_RECORDER_SHM"), *dir = getenv("SCHEMA_RECORDER_DIR");
+    uint64_t since = 0;
+    int fd, psi = 0;
+    static rec_shm_t snap;
+    const rec_shm_t *m;
+    uint32_t i;
+
+    if (since_arg) {
+        int h, mi;
+        char *end;
+        if (sscanf(since_arg, "%d:%d", &h, &mi) == 2 && h >= 0 && h < 24 && mi >= 0 && mi < 60) {
+            time_t now = time(NULL);
+            struct tm tm;
+            localtime_r(&now, &tm);
+            tm.tm_hour = h; tm.tm_min = mi; tm.tm_sec = 0;
+            since = (uint64_t)mktime(&tm);
+        } else {
+            since = strtoull(since_arg, &end, 10);
+            if (*end || !*since_arg) { fprintf(stderr, "usage: schema-ctl trace [--since <epoch|HH:MM>]\n"); return 1; }
+        }
+    }
+    fd = shm_open(name ? name : REC_SHM_NAME, O_RDONLY, 0);
+    m = fd < 0 ? NULL : rec_shm_map(fd);
+    if (fd >= 0) close(fd);
+    if (!m || rec_snapshot_ring(m, &snap) != 0) {
+        fprintf(stderr, "schema-ctl: no flight recorder running (enable schema-recorder.svc)\n");
+        return 1;
+    }
+    if (geteuid() == 0) {
+        struct dirent **nl;
+        int n, k;
+        uint64_t lo = since;
+        if (!lo && snap.count) lo = snap.ring[(snap.head - snap.count) % REC_RING].ts;
+        n = scandir(dir ? dir : REC_EVENTS_DIR, &nl, NULL, alphasort);
+        for (k = 0; k < n; k++) {
+            char path[512], line[1024];
+            FILE *f;
+            if (!strncmp(nl[k]->d_name, "events-", 7) && strstr(nl[k]->d_name, ".log")) {
+                snprintf(path, sizeof path, "%s/%s", dir ? dir : REC_EVENTS_DIR, nl[k]->d_name);
+                f = fopen(path, "r");
+                while (f && fgets(line, sizeof line, f)) {
+                    rec_event_t e;
+                    if (rec_parse(line, &e) == 0 && e.ts >= lo) (void)trace_ev(&e, e.msg);
+                }
+                if (f) fclose(f);
+            }
+            free(nl[k]);
+        }
+        if (n >= 0) free(nl);
+        return 0;
+    }
+    for (i = 0; i < snap.count; i++) {
+        const rec_event_t *e = &snap.ring[(snap.head - snap.count + i) % REC_RING];
+        if (e->ts >= since) psi |= trace_ev(e, e->msg);
+    }
+    if (psi) puts("(run as root for full command lines)");
+    return 0;
+}
+
 static void usage(FILE *out) {
     fprintf(out,
         "usage: schema-ctl <command> [args]\n"
@@ -196,6 +273,10 @@ static void usage(FILE *out) {
         "  graph [<svc>]          dependency graph as Graphviz DOT (A -> B: A waits\n"
         "                         for B; boxes are groups, red = missing); read\n"
         "                         from disk. View: schema-ctl graph | dot -Tsvg\n"
+        "  trace [--since <t>]    flight recorder: recent crashes, session ends and\n"
+        "                         pressure episodes, oldest first; <t> is an epoch\n"
+        "                         or HH:MM today. Read from shared memory; root sees\n"
+        "                         full command lines\n"
         "  pet <svc>              feed a service's watchdog\n"
         "  reset [<svc>]          clear restart/dormant counters and retry;\n"
         "                         no argument resets every service\n"
@@ -238,6 +319,13 @@ int main(int argc, char **argv) {
             return 1;
         }
         return cmd_graph(argc == 3 ? argv[2] : NULL);
+    }
+
+    if (strcmp(argv[1], "trace") == 0) {
+        if (argc == 2) return cmd_trace(NULL);
+        if (argc == 4 && !strcmp(argv[2], "--since")) return cmd_trace(argv[3]);
+        fprintf(stderr, "usage: schema-ctl trace [--since <epoch|HH:MM>]\n");
+        return 1;
     }
 
     if (strcmp(argv[1], "cat") == 0) {

@@ -16,6 +16,7 @@ cmds=(
   'add:load one .svc file'
   'cat:print a .svc and its drop-ins'
   'graph:dependency graph as Graphviz DOT'
+  'trace:flight recorder: recent crashes and pressure'
   'pet:feed a service watchdog'
   'reset:clear restart/dormant counters'
   'reboot:reboot'
@@ -30,6 +31,7 @@ if (( CURRENT == 2 )); then
 fi
 case $words[2] in
   status) (( CURRENT == 3 )) && _alternatives 'opts:option:(--json --kv)' "svcs:service:($svcs)" ;;
+  trace) _values option --since ;;
   reload) _values option --evict ;;
   add|reexec) _files ;;
   analyze|start|up|stop|down|restart|cat|graph|pet|reset)

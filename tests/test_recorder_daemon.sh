@@ -9,16 +9,27 @@ export SCHEMA_RECORDER_SHM=/schema-recorder-test-$$
 export SCHEMA_RECORDER_DIR=$T/ev
 export SCHEMA_RECORDER_NOPSI=1
 PID=
-cleanup() { [ -n "$PID" ] && kill "$PID" 2>/dev/null; rm -rf "$T"; [ -x "$T.chk" ] && "$T.chk" unlink; rm -f "$T.chk" "$T.chk.c"; }
+cleanup() { [ -n "$PID" ] && kill "$PID" 2>/dev/null; rm -rf "$T"; [ -x "$T.chk" ] && { "$T.chk" unlink; "$T.chk" rm "${FAKE:-/x}"; }; rm -f "$T.chk" "$T.chk.c"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*"; exit 1; }
 
 cat > "$T.chk.c" <<'CEOF'
 #include "recorder_logic.h"
+#include "schema_shm.h"
 #include <fcntl.h>
 int main(int c, char **v) {
-    int fd = shm_open(getenv("SCHEMA_RECORDER_SHM"), O_RDONLY, 0);
+    int fd = c > 2 ? -1 : shm_open(getenv("SCHEMA_RECORDER_SHM"), O_RDONLY, 0);
     rec_shm_t s;
+    if (c > 2) {
+        int f;
+        if (!strcmp(v[1], "rm")) { shm_unlink(v[2]); return 0; }
+        f = shm_open(v[2], O_RDWR | O_CREAT, 0644);
+        schema_shm_t z;
+        memset(&z, 0, sizeof z);
+        z.magic = SCHEMA_SHM_MAGIC;
+        if (f < 0 || write(f, &z, sizeof z) != (ssize_t)sizeof z) return 1;
+        return 0;
+    }
     if (c > 1) { shm_unlink(getenv("SCHEMA_RECORDER_SHM")); return 0; }
     const rec_shm_t *m = fd < 0 ? NULL : rec_shm_map(fd);
     (void)v;
@@ -52,6 +63,23 @@ set -- $OUT
 [ "$3" = 2 ] || fail "arrow state $3 != 2"
 echo "$OUT" | grep -q "kwin_wayland crashed (SIGSEGV)" || fail "arrow line: $OUT"
 S1=$1
+
+FAKE=/schema-board-fake-$$
+"$T.chk" mk "$FAKE" || fail "fake pid1 shm"
+export SCHEMA_BOARD_SHM=$FAKE
+[ -x ./schema-ctl ] && [ -x ./schema-board ] || fail "no schema-ctl/schema-board"
+TR=$(./schema-ctl trace) || fail "trace exit"
+echo "$TR" | grep -q kwin_wayland || fail "trace lacks kwin_wayland: $TR"
+echo "$TR" | grep -q plasma-exit || fail "trace lacks plasma-exit: $TR"
+BO=$(./schema-board --once) || fail "board exit"
+echo "$BO" | grep -q "desktop session ended" || fail "board lacks arrow: $BO"
+echo "$BO" | grep -q kwin_wayland || fail "board lacks culprit: $BO"
+BO=$(SCHEMA_RECORDER_FAKETIME=$(( $(date +%s) + 133200 )) ./schema-board --once) || fail "board faketime exit"
+echo "$BO" | grep -q "desktop session ended" && fail "stale arrow still shown: $BO"
+BO=$(SCHEMA_RECORDER_SHM=/schema-nonexistent-$$ ./schema-board --once) || fail "board no-recorder exit"
+echo "$BO" | grep -q "▶" && fail "arrow without recorder"
+SCHEMA_RECORDER_SHM=/schema-nonexistent-$$ ./schema-ctl trace 2>&1 | grep -q "no flight recorder running" || fail "trace missing-shm message"
+unset SCHEMA_BOARD_SHM
 
 i=0
 while [ $i -lt 1000 ]; do $BIN send src=pid1 kind=started subj=flood$i; i=$((i+1)); done
