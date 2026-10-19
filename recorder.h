@@ -70,6 +70,14 @@ static inline void rec_copy(char *dst, size_t n, const char *s) {
     dst[l] = '\0';
 }
 
+static inline void rec_scrub(char *s) {
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < 0x20 || c == 0x7f) *s = '?';
+        else if (c == 0xc2 && ((unsigned char)s[1] & 0xe0) == 0x80) { *s = '?'; s[1] = '?'; }
+    }
+}
+
 static inline int rec_format(char *buf, size_t n, const rec_event_t *e) {
     char kind[sizeof e->kind], comm[sizeof e->comm], subj[sizeof e->subj], msg[sizeof e->msg];
     size_t i;

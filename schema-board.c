@@ -242,7 +242,7 @@ static int rec_poll(void) {
     if (rmap && rec_snapshot_arrow(rmap, &a) == 0) {
         seq = __atomic_load_n(&rmap->seq, __ATOMIC_ACQUIRE);
         shade = rec_arrow_shade(&a, (uint64_t)((long)time(NULL) + roff));
-        if (shade) { memcpy(arrow_line, a.line, sizeof arrow_line); arrow_line[sizeof arrow_line - 1] = '\0'; }
+        if (shade) { memcpy(arrow_line, a.line, sizeof arrow_line); arrow_line[sizeof arrow_line - 1] = '\0'; rec_scrub(arrow_line); }
     }
     changed = seq != arrow_seq || shade != arrow_shade;
     arrow_seq = seq;

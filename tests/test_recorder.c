@@ -468,7 +468,14 @@ static void forward_kinds(void) {
     assert(!rec_forward_kind("oneshot-done"));
 }
 
+static void scrub_ctl(void) {
+    char b[] = "a\033[2J\ab\x7f" "c\xc2\x9b" "d\xe2\x96\xb6 \xc2\xa0 \xc3\x97";
+    rec_scrub(b);
+    assert(!strcmp(b, "a?[2J?b?c??d\xe2\x96\xb6 \xc2\xa0 \xc3\x97"));
+}
+
 int main(void) {
+    scrub_ctl();
     roundtrip();
     forward_kinds();
     hostile_comm();

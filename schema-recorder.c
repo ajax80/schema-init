@@ -138,6 +138,7 @@ static int scan(rec_proc_t *out) {
         if (l >= sizeof out[n].comm) l = sizeof out[n].comm - 1;
         memcpy(out[n].comm, lp + 1, l);
         out[n].comm[l] = '\0';
+        rec_scrub(out[n].comm);
         out[n].pid = atoi(buf);
         out[n].ppid = ppid;
         out[n].ticks = ut + st;
@@ -174,6 +175,7 @@ static void cmdline_of(int pid, char *out, size_t n) {
     if (r < 0) r = 0;
     out[r] = '\0';
     for (i = 0; i < r; i++) if (!out[i]) out[i] = ' ';
+    rec_scrub(out);
     while (r > 0 && out[r - 1] == ' ') out[--r] = '\0';
 }
 

@@ -174,16 +174,21 @@ static int cmd_graph(const char *root) {
 }
 
 static int trace_ev(const rec_event_t *e, const char *msg) {
-    char tb[32], who[100];
+    char tb[32], who[100], kind[sizeof e->kind], body[sizeof e->msg];
     time_t t = (time_t)e->ts;
     struct tm tm;
     localtime_r(&t, &tm);
     strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", &tm);
     if (e->subj[0] && e->comm[0] && strcmp(e->subj, e->comm)) snprintf(who, sizeof who, "%s/%s", e->comm, e->subj);
     else snprintf(who, sizeof who, "%s", e->subj[0] ? e->subj : e->comm);
+    rec_copy(kind, sizeof kind, e->kind);
+    rec_copy(body, sizeof body, msg);
+    rec_scrub(who);
+    rec_scrub(kind);
+    rec_scrub(body);
     printf("%s  %s  %s  %s  pid=%d  rc=%d\n", tb, e->src >= 1 && e->src <= REC_SRC_PSI ? rec_src_names[e->src] : "?",
-           e->kind, who, (int)e->pid, (int)e->rc);
-    if (msg[0]) printf("    %s\n", msg);
+           kind, who, (int)e->pid, (int)e->rc);
+    if (body[0]) printf("    %s\n", body);
     return e->src == REC_SRC_PSI;
 }
 

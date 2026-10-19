@@ -79,6 +79,9 @@ echo "$BO" | grep -q "desktop session ended" && fail "stale arrow still shown: $
 BO=$(SCHEMA_RECORDER_SHM=/schema-nonexistent-$$ ./schema-board --once) || fail "board no-recorder exit"
 echo "$BO" | grep -q "▶" && fail "arrow without recorder"
 SCHEMA_RECORDER_SHM=/schema-nonexistent-$$ ./schema-ctl trace 2>&1 | grep -q "no flight recorder running" || fail "trace missing-shm message"
+$BIN send src=earlyoom kind=kill comm="$(printf 'x\033[2Jy')" msg=m
+sleep 0.3
+./schema-ctl trace | grep -q "$(printf '\033')" && fail "trace leaks ESC"
 unset SCHEMA_BOARD_SHM
 
 i=0
