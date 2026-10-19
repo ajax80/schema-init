@@ -79,15 +79,19 @@ wait_dev() {
 
 # A multi-device btrfs mounts only once the kernel knows every member, which
 # udev's 64-btrfs.rules arranges during coldplug; this may run before that.
+now_cs() { awk '{ printf "%d", $1 * 100 }' /proc/uptime; }
+
 btrfs_wait() {
     command -v btrfs >/dev/null || return 0
+    modprobe -q btrfs 2>/dev/null
     if has_opt "$3" degraded; then btrfs device scan >/dev/null 2>&1; return 0; fi
-    end=$(($(date +%s) + $2))
+    n=0
     while :; do
-        btrfs device scan >/dev/null 2>&1
+        [ $((n % 10)) = 0 ] && btrfs device scan >/dev/null 2>&1
         btrfs device ready "$1" >/dev/null 2>&1 && return 0
-        [ "$2" -ne 0 ] && [ "$(date +%s)" -ge $end ] && return 1
+        [ "$2" -ne 0 ] && [ "$(now_cs)" -ge "$2" ] && return 1
         sleep 0.2
+        n=$((n + 1))
     done
 }
 
@@ -172,12 +176,14 @@ do_entry() {
     if has_opt "$opts" bind; then
         dev=$spec
     else
+        start=$(now_cs)
         dev=$(wait_dev "$spec" "$t") || { fail "$tgt: $spec not present after ${t}s"; return; }
         btype=$fs; [ "$fs" = auto ] && btype=$(blkid -o value -s TYPE "$dev" 2>/dev/null)
-        if [ "$btype" = btrfs ]; then
-            btrfs_wait "$dev" "$t" "$opts" || { fail "$tgt: btrfs on $dev: not all devices present after ${t}s"; return; }
+        if [ "$btype" = btrfs ] && [ ! -f "$dev" ] && ! has_opt "$opts" loop; then
+            dl=0; [ "$t" -ne 0 ] && dl=$((start + t * 100))
+            btrfs_wait "$dev" "$dl" "$opts" || log "$tgt: btrfs on $dev: not all devices present after ${t}s, mounting anyway"
         fi
-        [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "$fs" || return
+        [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "${btype:-$fs}" || return
     fi
     mkdir -p "$tgt"
     case "$fs" in auto|none) set -- ;; *) set -- -t "$fs" ;; esac

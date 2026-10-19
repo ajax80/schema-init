@@ -28,6 +28,7 @@ exit ${rc:-0}
     'sulogin': '#!/bin/sh\necho sulogin >> "$T/calls"\n',
     'setsid': '#!/bin/sh\nshift 2\nexec "$@"\n',
     'plymouth': '#!/bin/sh\n',
+    'modprobe': '#!/bin/sh\necho "modprobe $*" >> "$T/calls"\n',
     'btrfs': '''#!/bin/sh
 echo "btrfs $*" >> "$T/calls"
 [ "$2" = ready ] || exit 0
@@ -162,8 +163,17 @@ check('btrfs member late: scanned until ready, then mounted',
       btrfs_calls(calls).count('btrfs device ready /dev/fake-d') == 3 and mounted(calls), calls)
 
 out, calls = run('LABEL=d @/m btrfs defaults,x-systemd.device-timeout=1 0 0', ready_after=10**6)
-check('btrfs member never appears: not mounted after the timeout',
-      not mounted(calls) and 'not all devices' in out and 'done, with failures' in out, out)
+check('btrfs member never appears: logged after the timeout, mount still tried',
+      'not all devices' in out and mounted(calls) and 1 <= btrfs_calls(calls).count('btrfs device scan') <= 2, out)
+
+out, calls = run('LABEL=d @/m btrfs defaults 0 0')
+check('btrfs: module loaded before the scan', calls.index('modprobe -q btrfs') < calls.index('btrfs device scan'), calls)
+
+out, calls = run('@/img @/m btrfs loop 0 0')
+check('btrfs loop entry: no wait, mounted', not btrfs_calls(calls) and mounted(calls), calls)
+
+out, calls = run('@/fat @/m btrfs defaults 0 0', fat=(0, 0, 0x29, 0x0FFFFFFF))
+check('btrfs on a regular file: no wait, mounted', not btrfs_calls(calls) and mounted(calls), calls)
 
 out, calls = run('LABEL=d @/m btrfs defaults,degraded 0 0', ready_after=10**6)
 check('btrfs degraded: scanned once, mounted without waiting',

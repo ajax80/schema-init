@@ -76,7 +76,7 @@ To remove the boot entries: `sudo distros/artix/install.sh --remove`.
 |---|---|
 | `udevd`, `udev-trigger`, `udev-coldplug` | Artix's `udevd`, ready when `/run/udev/control` exists; then `udevadm control --ping`, retried up to 30 times a second apart (so udevd is listening for device events) and `udevadm trigger`; then `settle` |
 | `network-manager` | starts once the coldplug events are queued (`udev-trigger`) and `sysctl` has run, not after they settle; NetworkManager picks up each device as udev finishes it |
-| `mount-fstab` | fsck and mount `/etc/fstab`, swap; waits for each device itself, and for every member of a multi-device btrfs (`btrfs device scan`), so it starts with `udevd`, not after coldplug |
+| `mount-fstab` | fsck and mount `/etc/fstab`, swap; waits for each device itself, and for every member of a multi-device btrfs unless `degraded` (`btrfs device scan`), so it starts with `udevd`, not after coldplug |
 | `artix-boot` | hostname, loopback, `modules-load.d`, `hwclock --systz`, kmod static nodes, `etmpfiles`, utmp/wtmp/btmp, machine-id, sshd host keys |
 | `sysctl` | `sysctl --system`, once the coldplug events are queued, before NetworkManager |
 | `sysusers` | `esysusers`, off the boot chain (pacman's hook already runs it when a package adds a user) |
