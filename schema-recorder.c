@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <sys/signalfd.h>
 #include <sys/timerfd.h>
 
 #define MAXPROC 4096
@@ -20,7 +21,6 @@ static uint64_t live_ts[3];
 static int tfd = -1, pending;
 static rec_proc_t snap_a[MAXPROC], snap_b[MAXPROC];
 static int na, nb;
-static volatile sig_atomic_t quit;
 
 static uint64_t now_wall(void) { return (uint64_t)((long)time(NULL) + wall_off); }
 
@@ -62,32 +62,40 @@ static void append_line(const rec_event_t *e) {
     struct tm tm;
     int n, fd;
     localtime_r(&t, &tm);
-    snprintf(path, sizeof path, "%s/events-%04d%02d%02d.log", dir_path, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    snprintf(path, sizeof path, "%s/events-%04d-%02d-%02d.log", dir_path, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
     n = rec_format(buf, sizeof buf - 1, e);
     if (n < 0) return;
     buf[n++] = '\n';
-    fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+    fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0) return;
     if (write(fd, buf, (size_t)n) < 0) {}
     if (e->tier >= REC_TIER_CRIT) fdatasync(fd);
     close(fd);
 }
 
+static void strip_cmd(rec_event_t *e) {
+    char *p;
+    if (e->src == REC_SRC_PSI && (p = strstr(e->msg, " ["))) *p = '\0';
+}
+
 static void record(rec_event_t *e, int pick) {
     uint64_t now = now_wall();
+    rec_event_t ring = *e;
     uint32_t r;
     e->tier = (uint8_t)rec_tier(e);
-    if (e->src == REC_SRC_PSI) e->crit = e->tier;
+    ring.tier = e->tier;
     append_line(e);
-    rec_ring_push(shm, e);
-    r = count_culprit(e, now);
-    if (pick && rec_arrow_pick(&shm->arrow, e, now)) arrow_take(e, r, 0, now);
+    strip_cmd(&ring);
+    rec_ring_push(shm, &ring);
+    r = count_culprit(&ring, now);
+    if (pick && rec_arrow_pick(&shm->arrow, &ring, now)) arrow_take(&ring, r, 0, now);
 }
 
 static void handle_datagram(char *buf) {
     rec_event_t e;
     if (rec_parse(buf, &e) != 0) return;
     if (e.src == REC_SRC_PSI) return;
+    e.tier = 0;
     if (e.src == REC_SRC_SESSION && !strcmp(e.kind, "plasma-exit")) {
         char why[160];
         rec_episode_t none;
@@ -202,6 +210,7 @@ static void end_episode(int k, uint64_t mono) {
         rec_arrow_t a = shm->arrow;
         if (a.state == 1 && a.event_ts == live_ts[k]) {
             a.state = 2;
+            a.tier = REC_TIER_MINOR;
             a.resolved_ts = now;
             rec_arrow_set(shm, &a);
         }
@@ -228,14 +237,8 @@ static void on_sample(uint64_t mono) {
     }
 }
 
-static void on_timer(void) {
-    uint64_t x, mono = mono_s();
+static int check_episodes(uint64_t mono) {
     int k, any = 0;
-    if (read(tfd, &x, sizeof x) < 0) return;
-    if (pending) {
-        on_sample(mono);
-        pending = 0;
-    }
     for (k = 1; k <= 2; k++) {
         if (!ep[k].active) continue;
         if (rec_episode_check(&ep[k], mono)) { end_episode(k, mono); continue; }
@@ -246,11 +249,24 @@ static void on_timer(void) {
             psi_event(k, "episode-live", REC_TIER_LIVE, mono);
         }
     }
-    if (!any) return;
-    if (pending) return;
-    na = scan(snap_a);
-    pending = 1;
-    arm(1);
+    return any;
+}
+
+static void on_timer(void) {
+    uint64_t x, mono = mono_s();
+    int was = pending;
+    if (read(tfd, &x, sizeof x) < 0) return;
+    if (pending) {
+        on_sample(mono);
+        pending = 0;
+    }
+    if (!check_episodes(mono)) return;
+    if (was) arm(20);
+    else {
+        na = scan(snap_a);
+        pending = 1;
+        arm(1);
+    }
 }
 
 static void on_psi(int k) {
@@ -273,6 +289,8 @@ static void load(uint64_t now) {
     DIR *d = opendir(dir_path);
     struct dirent *de;
     char *names[32];
+    char last[512] = "";
+    uint64_t live_open = 0;
     int n = 0, i;
     if (!d) return;
     while ((de = readdir(d)) && n < 32) {
@@ -291,6 +309,7 @@ static void load(uint64_t now) {
         char path[512], line[1024];
         FILE *f;
         snprintf(path, sizeof path, "%s/%s", dir_path, names[i]);
+        rec_copy(last, sizeof last, path);
         free(names[i]);
         f = fopen(path, "r");
         if (!f) continue;
@@ -298,18 +317,42 @@ static void load(uint64_t now) {
             rec_event_t e;
             uint32_t r;
             if (rec_parse(line, &e) != 0) continue;
-            if (e.src == REC_SRC_PSI) e.tier = e.crit;
             e.tier = (uint8_t)rec_tier(&e);
+            strip_cmd(&e);
             r = count_culprit(&e, now);
             if (e.ts + 36 * 3600 < now) continue;
+            if (e.src == REC_SRC_PSI && e.tier == REC_TIER_LIVE) e.tier = REC_TIER_MINOR;
             rec_ring_push(shm, &e);
-            if (rec_arrow_pick(&shm->arrow, &e, now)) arrow_take(&e, r, 1, now);
+            if (e.src == REC_SRC_PSI && !strcmp(e.kind, "episode-end") && live_open && shm->arrow.event_ts == live_open) {
+                rec_arrow_t a = shm->arrow;
+                a.resolved_ts = e.ts;
+                rec_arrow_set(shm, &a);
+                live_open = 0;
+            }
+            if (rec_arrow_pick(&shm->arrow, &e, now)) {
+                arrow_take(&e, r, 1, now);
+                if (e.src == REC_SRC_PSI && !strcmp(e.kind, "episode-live")) live_open = e.ts;
+            }
         }
         fclose(f);
     }
+    if (live_open && shm->arrow.event_ts == live_open) {
+        rec_arrow_t a = shm->arrow;
+        a.resolved_ts = now;
+        rec_arrow_set(shm, &a);
+    }
+    if (last[0]) {
+        char c;
+        int fd = open(last, O_RDWR | O_APPEND | O_CLOEXEC);
+        if (fd >= 0) {
+            off_t sz = lseek(fd, 0, SEEK_END);
+            if (sz > 0 && pread(fd, &c, 1, sz - 1) == 1 && c != '\n') {
+                if (write(fd, "\n", 1) < 0) {}
+            }
+            close(fd);
+        }
+    }
 }
-
-static void on_term(int s) { (void)s; quit = 1; }
 
 static int send_mode(int argc, char **argv) {
     char line[700];
@@ -324,12 +367,13 @@ static int send_mode(int argc, char **argv) {
 
 int main(int argc, char **argv) {
     const char *env;
-    struct pollfd pf[4];
+    struct pollfd pf[5];
     struct sockaddr_un a;
-    struct sigaction sa;
+    sigset_t sm;
     char parent[256], *sl;
-    int sfd, shm_fd, nopsi, cpu_fd = -1, mem_fd = -1;
+    int sfd, sigfd, quit = 0, shm_fd, nopsi, cpu_fd = -1, mem_fd = -1;
     uint64_t now;
+    mode_t um;
 
     if ((env = getenv("SCHEMA_RECORDER_SOCK"))) sock_path = env;
     if ((env = getenv("SCHEMA_RECORDER_DIR"))) dir_path = env;
@@ -337,17 +381,20 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "send")) return send_mode(argc, argv);
 
     now = now_wall();
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_term;
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
+    sigemptyset(&sm);
+    sigaddset(&sm, SIGTERM);
+    sigaddset(&sm, SIGINT);
+    sigprocmask(SIG_BLOCK, &sm, NULL);
+    sigfd = signalfd(-1, &sm, SFD_CLOEXEC);
 
-    mkdir(dir_path, 0755);
+    mkdir(dir_path, 0700);
     rec_copy(parent, sizeof parent, sock_path);
     if ((sl = strrchr(parent, '/')) && sl != parent) { *sl = '\0'; mkdir(parent, 0755); }
 
     env = getenv("SCHEMA_RECORDER_SHM");
-    shm_fd = shm_open(env ? env : REC_SHM_NAME, O_RDWR | O_CREAT, 0644);
+    if (!env) env = REC_SHM_NAME;
+    shm_unlink(env);
+    shm_fd = shm_open(env, O_RDWR | O_CREAT | O_EXCL, 0644);
     if (shm_fd < 0 || ftruncate(shm_fd, sizeof(rec_shm_t)) < 0) { perror("schema-recorder: shm"); return 1; }
     fchmod(shm_fd, 0644);
     shm = mmap(NULL, sizeof *shm, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
@@ -361,7 +408,9 @@ int main(int argc, char **argv) {
     a.sun_family = AF_UNIX;
     rec_copy(a.sun_path, sizeof a.sun_path, sock_path);
     unlink(sock_path);
+    um = umask(0177);
     if (sfd < 0 || bind(sfd, (struct sockaddr *)&a, sizeof a) < 0) { perror("schema-recorder: bind"); return 1; }
+    umask(um);
     chmod(sock_path, 0600);
 
     nopsi = getenv("SCHEMA_RECORDER_NOPSI") != NULL;
@@ -380,8 +429,9 @@ int main(int argc, char **argv) {
     pf[1] = (struct pollfd){ cpu_fd, POLLPRI, 0 };
     pf[2] = (struct pollfd){ mem_fd, POLLPRI, 0 };
     pf[3] = (struct pollfd){ tfd, POLLIN, 0 };
+    pf[4] = (struct pollfd){ sigfd, POLLIN, 0 };
     while (!quit) {
-        if (poll(pf, 4, -1) < 0) continue;
+        if (poll(pf, 5, -1) < 0) continue;
         if (pf[0].revents & POLLIN) {
             char buf[1024];
             ssize_t r;
@@ -395,6 +445,7 @@ int main(int argc, char **argv) {
         if (pf[1].revents & POLLERR) pf[1].fd = -1;
         if (pf[2].revents & POLLERR) pf[2].fd = -1;
         if (pf[3].revents & POLLIN) on_timer();
+        if (pf[4].revents & POLLIN) quit = 1;
     }
     unlink(sock_path);
     return 0;

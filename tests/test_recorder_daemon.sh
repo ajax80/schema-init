@@ -63,12 +63,32 @@ set -- $OUT
 [ "$1" -gt "$S1" ] || fail "seq did not advance"
 
 stop
-printf 'ts=17000 src=cor\n' >> "$(ls "$SCHEMA_RECORDER_DIR"/events-*.log | tail -1)"
+printf 'ts=17000 src=cor' >> "$(ls "$SCHEMA_RECORDER_DIR"/events-*.log | tail -1)"
 start
 OUT=$("$T.chk") || fail "shm after restart"
 set -- $OUT
 [ "$2" -gt 0 ] || fail "ring empty after restart"
+$BIN send src=pid1 kind=died subj=afterTorn
+sleep 0.3
+grep -q '^ts=17000 src=cor$' "$SCHEMA_RECORDER_DIR"/events-*.log || fail "torn line not terminated"
+grep -q 'subj=afterTorn' "$SCHEMA_RECORDER_DIR"/events-*.log || fail "post-restart line missing"
+[ "$(stat -c %a "$(ls "$SCHEMA_RECORDER_DIR"/events-*.log | tail -1)")" = 600 ] || fail "events file mode"
+ls "$SCHEMA_RECORDER_DIR" | grep -q '^events-[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]\.log$' || fail "file name format"
 stop
+
+NOW=$(date +%s)
+export SCHEMA_RECORDER_DIR=$T/ev2
+mkdir -p "$SCHEMA_RECORDER_DIR"
+printf 'ts=%s src=psi kind=episode-live comm=sh pid=1 rc=0 crit=0 subj=sh tier=4 msg=CPU pinned 3 min by sh\n' $((NOW - 14400)) > "$SCHEMA_RECORDER_DIR/events-x.log"
+printf 'ts=%s src=psi kind=episode-end comm=sh pid=1 rc=0 crit=0 subj=sh tier=1 msg=CPU pinned 120 min by sh\n' $((NOW - 7200)) >> "$SCHEMA_RECORDER_DIR/events-x.log"
+start
+$BIN send src=coredump kind=crash comm=kwin_wayland pid=7 rc=11
+$BIN send src=session kind=plasma-exit rc=1
+sleep 0.5
+OUT=$("$T.chk") || fail "shm reload"
+echo "$OUT" | grep -q "kwin_wayland crashed" || fail "session arrow did not replace resolved live: $OUT"
+stop
+export SCHEMA_RECORDER_DIR=$T/ev
 
 s=$(date +%s%N)
 $BIN send src=pid1 kind=died subj=x || fail "send nonzero"

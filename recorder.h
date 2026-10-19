@@ -79,10 +79,10 @@ static inline int rec_format(char *buf, size_t n, const rec_event_t *e) {
     rec_word(subj, sizeof subj, e->subj);
     snprintf(msg, sizeof msg, "%.*s", (int)sizeof e->msg - 1, e->msg);
     for (i = 0; msg[i]; i++) if (msg[i] == '\n' || msg[i] == '\r') msg[i] = ' ';
-    r = snprintf(buf, n, "ts=%llu src=%s kind=%s comm=%s pid=%d rc=%d crit=%d subj=%s msg=%s",
+    r = snprintf(buf, n, "ts=%llu src=%s kind=%s comm=%s pid=%d rc=%d crit=%d subj=%s tier=%d msg=%s",
                  (unsigned long long)e->ts,
                  e->src >= 1 && e->src <= REC_SRC_PSI ? rec_src_names[e->src] : "?",
-                 kind, comm, (int)e->pid, (int)e->rc, (int)e->crit, subj, msg);
+                 kind, comm, (int)e->pid, (int)e->rc, (int)e->crit, subj, (int)e->tier, msg);
     return r < 0 || (size_t)r >= n ? -1 : r;
 }
 
@@ -122,6 +122,7 @@ static inline int rec_parse(const char *line, rec_event_t *out) {
         else if (!strcmp(key, "msg")) rec_copy(out->msg, sizeof out->msg, val);
         else if (!strcmp(key, "pid")) out->pid = (int32_t)strtol(val, NULL, 10);
         else if (!strcmp(key, "rc")) out->rc = (int32_t)strtol(val, NULL, 10);
+        else if (!strcmp(key, "tier")) out->tier = (uint8_t)strtoul(val, NULL, 10);
         else if (!strcmp(key, "crit")) out->crit = (uint8_t)strtoul(val, NULL, 10);
         p = end;
     }
