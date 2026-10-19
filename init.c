@@ -1957,8 +1957,11 @@ static void ctl_cmd(int fd, char *line) {
                     char ports[MAX_LANDLOCK * 7 + 8] = "none";
                     size_t o = 0;
                     if (s->landlock_tcp_n[t] < 0) continue;
-                    for (int k = 0; k < s->landlock_tcp_n[t]; k++)
-                        o += snprintf(ports + o, sizeof ports - o, "%s%u", k ? "," : "", s->landlock_tcp[t][k]);
+                    for (int k = 0; k < s->landlock_tcp_n[t]; k++) {
+                        int w = snprintf(ports + o, sizeof ports - o, "%s%u", k ? "," : "", s->landlock_tcp[t][k]);
+                        if (w < 0 || (size_t)w >= sizeof ports - o) break;
+                        o += (size_t)w;
+                    }
                     ctl_writef(fd, "  %-15s %s\n", t ? "connect_tcp" : "bind_tcp", ports);
                 }
             }
