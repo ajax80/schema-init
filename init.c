@@ -684,14 +684,73 @@ static void restart_budget_refresh(service_t *svc) {
     if (now.tv_sec - svc->spawn_time_mono.tv_sec >= RESTART_RESET_SECS) {
         svc->restart_count = 0;
         svc->card_next = 0;
+        svc->fallback_live = 0;
+    }
+}
+
+static void fallback_up(service_t *fb) {
+    fb->standby_up = 1;
+    fb->flags &= ~SVC_NO_RESTART;
+    if (fb->child_pid <= 0 && (fb->inst.state == STATE_EXCISED || fb->inst.state == STATE_PERFECT)) {
+        fb->inst.state = STATE_NEW_PROCESS;
+        fb->restart_count = 0;
+    }
+    service_log(fb, "fallback-up");
+}
+
+static void fallback_down(service_t *fb) {
+    if (!fb->standby_up) return;
+    fb->standby_up = 0;
+    fb->flags |= SVC_NO_RESTART;
+    if (fb->child_pid > 0) {
+        fb->ctl_killed = 1;
+        kill(fb->child_pid, SIGTERM);
+    } else {
+        fb->inst.state = STATE_EXCISED;
+    }
+    service_log(fb, "fallback-down");
+}
+
+static void park(service_t *svc) {
+    struct timespec now;
+    time_t delay;
+    svc->dormant_count++;
+    delay = 300L << (svc->dormant_count - 1);
+    if (delay > 3600) delay = 3600;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    svc->dormant_until.tv_sec  = now.tv_sec + delay;
+    svc->dormant_until.tv_nsec = now.tv_nsec;
+    svc->inst.state = STATE_DORMANT;
+    service_log(svc, "dormant");
+}
+
+static void ctl_rearm(service_t *svc, int start) {
+    svc->card_next = 0;
+    if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
+    if (svc->fallback_live) {
+        service_t *fb = service_fallback(svc, services, svc_count);
+        if (fb) fallback_down(fb);
     }
 }
 
 static void play_card(service_t *svc) {
     char ev[32];
     if (svc->card_pid > 0 || svc->card_next >= svc->card_count) return;
-    pid_t pid = service_card_spawn(svc, svc->card_next);
     snprintf(ev, sizeof ev, "card-%d/%d", svc->card_next + 1, svc->card_count);
+    if (strncmp(svc->card[svc->card_next], "fallback:", 9) == 0) {
+        service_t *fb = service_fallback(svc, services, svc_count);
+        svc->card_next++;
+        service_log(svc, ev);
+        if (!fb) {
+            service_log(svc, "card-no-fallback");
+            return;
+        }
+        svc->fallback_live = 1;
+        fallback_up(fb);
+        park(svc);
+        return;
+    }
+    pid_t pid = service_card_spawn(svc, svc->card_next);
     svc->card_next++;
     if (pid < 0) {
         service_log(svc, "card-fork-fail");
@@ -1289,6 +1348,16 @@ static void tick_service(service_t *svc,
 
         case STATE_NEW_PROCESS:
             if (svc->failsafe_pid > 0 || svc->card_pid > 0) break;
+            if (!svc->standby_up && service_is_standby(svc, services, svc_count)) {
+                svc->flags |= SVC_NO_RESTART;
+                svc->inst.state = STATE_EXCISED;
+                service_log(svc, "standby");
+                break;
+            }
+            if (svc->fallback_live) {
+                service_t *fb = service_fallback(svc, services, svc_count);
+                if (fb && fb->child_pid > 0) break;
+            }
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
@@ -1425,14 +1494,12 @@ static void tick_service(service_t *svc,
                 if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
                     service_log(svc, "76-excised");
                 } else {
-                    time_t delay = 300L << (svc->dormant_count - 1);
-                    if (delay > 3600) delay = 3600;
-                    struct timespec _now;
-                    clock_gettime(CLOCK_MONOTONIC, &_now);
-                    svc->dormant_until.tv_sec  = _now.tv_sec + delay;
-                    svc->dormant_until.tv_nsec = _now.tv_nsec;
-                    svc->inst.state = STATE_DORMANT;
-                    service_log(svc, "dormant");
+                    svc->dormant_count--;
+                    park(svc);
+                }
+                if (svc->fallback_live) {
+                    service_t *fb = service_fallback(svc, services, svc_count);
+                    if (fb) fallback_up(fb);
                 }
             }
             break;
@@ -1444,6 +1511,10 @@ static void tick_service(service_t *svc,
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
                 service_log(svc, "dormant-wake");
+                if (svc->fallback_live) {
+                    service_t *fb = service_fallback(svc, services, svc_count);
+                    if (fb) fallback_down(fb);
+                }
                 play_card(svc);
             }
             break;
@@ -1523,6 +1594,12 @@ static void shm_update(void) {
         shm_ptr->svc[i].weight        = services[i].inst.weight;
         shm_ptr->svc[i].child_pid     = (int32_t)services[i].child_pid;
         shm_ptr->svc[i].restart_count = services[i].restart_count;
+        shm_ptr->svc[i].card_played   = (uint8_t)services[i].card_next;
+        shm_ptr->svc[i].card_count    = (uint8_t)services[i].card_count;
+        service_t *fb = services[i].fallback_live ? service_fallback(&services[i], services, svc_count) : NULL;
+        shm_ptr->svc[i].limp = (fb && fb->standby_up ? SHM_LIMP_FALLBACK : 0)
+            | (service_is_standby(&services[i], services, svc_count)
+               ? (services[i].standby_up ? SHM_LIMP_STANDIN : SHM_LIMP_STANDBY) : 0);
     }
     shm_ptr->count = svc_count;
     for (i = 0; i < grp_count; i++) {
@@ -1916,7 +1993,7 @@ static void ctl_cmd(int fd, char *line) {
                 services[i].listen_hold  = 0;
                 services[i].inst.state   = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
-                services[i].card_next    = 0;
+                ctl_rearm(&services[i], 1);
                 ctl_writef(fd, "ok: %s queued\n", name);
             } else {
                 ctl_writef(fd, "err: %s is %s\n",
@@ -1967,7 +2044,7 @@ static void ctl_cmd(int fd, char *line) {
                 }
                 services[i].inst.state    = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
-                services[i].card_next     = 0;
+                ctl_rearm(&services[i], 1);
                 ctl_writef(fd, "ok: %s requeued\n", name);
             }
             write(fd, ".\n", 2);
@@ -1982,7 +2059,7 @@ static void ctl_cmd(int fd, char *line) {
             for (i = 0; i < svc_count; i++) {
                 services[i].restart_count = 0;
                 services[i].dormant_count = 0;
-                services[i].card_next = 0;
+                ctl_rearm(&services[i], 0);
                 services[i].flags &= ~SVC_NO_RESTART;
                 if (services[i].inst.state == STATE_EXCISED ||
                     services[i].inst.state == STATE_DORMANT ||
@@ -1996,7 +2073,7 @@ static void ctl_cmd(int fd, char *line) {
                 if (strcmp(services[i].name, name) != 0) continue;
                 services[i].restart_count = 0;
                 services[i].dormant_count = 0;
-                services[i].card_next = 0;
+                ctl_rearm(&services[i], 0);
                 services[i].flags &= ~SVC_NO_RESTART;
                 if (services[i].inst.state == STATE_EXCISED ||
                     services[i].inst.state == STATE_DORMANT ||

@@ -207,8 +207,8 @@ static void render(const schema_shm_t *s) {
     printf("\033[1m schema-init — limp-mode board   "
            "system: %s   seq:%u   services:%d\033[0m\n",
            sys_name(s->system_state), s->seq, s->count);
-    printf(" %-28s %-13s %4s %8s %5s\n",
-           "SERVICE", "STATE", "WT", "PID", "RST");
+    printf(" %-28s %-13s %4s %8s %5s %5s\n",
+           "SERVICE", "STATE", "WT", "PID", "RST", "CARDS");
     printf(" ------------------------------------------------------------------\n");
 
     valid = s->count;
@@ -219,10 +219,16 @@ static void render(const schema_shm_t *s) {
         char name[65];
         memcpy(name, v->name, 64);
         name[64] = '\0';
-        printf("%s %-28.28s %s%-13s\033[0m %4u %8d %5d%s\n",
+        char deck[8] = "";
+        if (v->card_count) snprintf(deck, sizeof deck, "%u/%u", v->card_played, v->card_count);
+        int held = (v->limp & SHM_LIMP_STANDBY) && v->state == STATE_EXCISED;
+        printf("%s %-28.28s %s%-13s\033[0m %4u %8d %5d %5s%s%s\n",
                (interactive && i == sel) ? "\033[7m" : "",
-               name, st_color(v->state), st_name(v->state),
-               v->weight, v->child_pid, v->restart_count,
+               name, held ? "\033[2m" : st_color(v->state), held ? "STANDBY" : st_name(v->state),
+               v->weight, v->child_pid, v->restart_count, deck,
+               v->limp & SHM_LIMP_FALLBACK ? "  \033[33mlimping: fallback in play\033[0m"
+               : v->limp & SHM_LIMP_STANDIN ? "  \033[33mstanding in\033[0m"
+               : "",
                (interactive && i == sel) ? "\033[0m" : "");
     }
 

@@ -9,7 +9,7 @@
 #define SCHEMA_SHM_NAME       "/schema-init"
 #define SCHEMA_SHM_MAX        128
 #define SCHEMA_SHM_MAX_GROUPS 16
-#define SCHEMA_SHM_MAGIC      0x53434d02u   /* "SCM", layout 2: 128 slots */
+#define SCHEMA_SHM_MAGIC      0x53434d03u   /* "SCM", layout 3: 128 slots, cards */
 
 typedef struct {
     char    name[64];
@@ -17,7 +17,14 @@ typedef struct {
     uint8_t weight;
     int32_t child_pid;
     int32_t restart_count;
+    uint8_t card_played;
+    uint8_t card_count;
+    uint8_t limp;           /* SHM_LIMP_* */
 } shm_svc_t;
+
+#define SHM_LIMP_STANDBY   1   /* named by a card=fallback:, held until played */
+#define SHM_LIMP_STANDIN   2   /* that standby, started by the card */
+#define SHM_LIMP_FALLBACK  4   /* this service's fallback card is in play */
 
 typedef struct {
     char    name[64];

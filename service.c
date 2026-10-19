@@ -159,8 +159,13 @@ uint32_t service_probe_f9(service_t *svc, service_t *table, int count) {
         now.tv_sec - svc->spawn_time_mono.tv_sec >= COOLDOWN_SECS)
         f |= F9_RETRY_WIN;
 
-    /* F9_FALL_EXISTS / F9_FALL_HEALTH — no fallback system yet, reserved */
-    (void)table; (void)count;
+    /* F9_FALL_EXISTS / F9_FALL_HEALTH — a card=fallback: service, and whether it is up */
+    service_t *fb = service_fallback(svc, table, count);
+    if (fb) {
+        f |= F9_FALL_EXISTS;
+        if (fb->child_pid > 0 && (fb->inst.state == STATE_FUNDAMENTAL || fb->inst.state == STATE_PERFECT))
+            f |= F9_FALL_HEALTH;
+    }
 
     /* F9_MEM_FREE / F9_MEM_SUFF */
     mem = free_mem_kb();
@@ -1193,6 +1198,23 @@ static void svc_child_log(const service_t *svc) {
     }
 }
 
+service_t *service_fallback(const service_t *svc, service_t *table, int count) {
+    for (int c = 0; c < svc->card_count; c++) {
+        if (strncmp(svc->card[c], "fallback:", 9) != 0) continue;
+        for (int j = 0; j < count; j++)
+            if (&table[j] != svc && strcmp(table[j].name, svc->card[c] + 9) == 0) return &table[j];
+    }
+    return NULL;
+}
+
+int service_is_standby(const service_t *svc, const service_t *table, int count) {
+    for (int i = 0; i < count; i++)
+        for (int c = 0; &table[i] != svc && c < table[i].card_count; c++)
+            if (strncmp(table[i].card[c], "fallback:", 9) == 0 && strcmp(table[i].card[c] + 9, svc->name) == 0)
+                return 1;
+    return 0;
+}
+
 pid_t service_card_spawn(const service_t *svc, int idx) {
     pid_t pid = fork();
     if (pid != 0) return pid;
@@ -2010,8 +2032,10 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->exec_pre[svc->exec_pre_count++] = strdup(val + strspn(val, " \t"));
     } else if (strcmp(line, "card") == 0) {
         const char *c = val + strspn(val, " \t");
-        if (strncmp(c, "exec:", 5) != 0 || !svc_cmd_ok(c + 5) || svc->card_count >= MAX_CARDS) {
-            fprintf(stderr, "[schema-init] %s: card=%s needs exec: and an absolute command of at most 32 words, at most %d per service\n",
+        int ok = strncmp(c, "exec:", 5) == 0 ? svc_cmd_ok(c + 5)
+               : strncmp(c, "fallback:", 9) == 0 && c[9] && strlen(c + 9) < 64 && !strpbrk(c + 9, "/ \t");
+        if (!ok || svc->card_count >= MAX_CARDS) {
+            fprintf(stderr, "[schema-init] %s: card=%s needs exec: and an absolute command of at most 32 words, or fallback: and a service name; at most %d per service\n",
                     svc->name[0] ? svc->name : path, val, MAX_CARDS);
             return -1;
         }

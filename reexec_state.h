@@ -57,6 +57,11 @@ typedef struct {
     X(TS,   fork_wait)           \
     X(INT,  listen_hold)         \
     X(INT,  listen_open)         \
+    X(INT,  card_next)           \
+    X(PID,  card_pid)            \
+    X(TS,   card_start)          \
+    X(U8,   fallback_live)       \
+    X(U8,   standby_up)          \
     X(FDS,  listen_fd)
 
 /* SVC_NO_RESTART is the one flag PID 1 changes at runtime: schema-ctl stop

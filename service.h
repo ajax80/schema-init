@@ -264,6 +264,8 @@ typedef struct {
     int              card_next;           /* next card to play; reset with the restart budget */
     pid_t            card_pid;            /* running card, 0 if none; the spawn waits for it */
     struct timespec  card_start;
+    uint8_t          fallback_live;       /* card=fallback: played; its service runs while this is down */
+    uint8_t          standby_up;          /* named by a card=fallback:, and started by it */
     char             listen[MAX_LISTEN][112]; /* listen= specs: stream|dgram|seqpacket|fifo:ADDR */
     int              listen_count;
     int              listen_lazy;         /* bind at boot, spawn on the first connection */
@@ -380,6 +382,8 @@ uint32_t service_probe_f6(service_t *svc);
 /* fork+exec the service; sets child_pid and last_start */
 int service_spawn(service_t *svc);
 pid_t service_card_spawn(const service_t *svc, int idx);
+service_t *service_fallback(const service_t *svc, service_t *table, int count);
+int  service_is_standby(const service_t *svc, const service_t *table, int count);
 
 /* apply opt-in hardening in the child, before setuid/execv; -1 -> fail closed */
 int service_apply_hardening(const service_t *svc);

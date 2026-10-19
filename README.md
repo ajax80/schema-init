@@ -44,6 +44,26 @@ No systemd. No OpenRC. No journal daemon. At its core, just a statically linked 
 
 **PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every figure names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](docs/benchmarks.md#pid-1-rss--every-measurement).
 
+## Limp mode
+
+The Ungulate Leg has a get-home mode: when a joint fails it doesn't fall over, it limps. schema-init does the same for services.
+
+When a service fails, the recovery arc doesn't only retry it. It plays the **cards** the service's `.svc` declares, cheapest first, one per retry:
+
+```ini
+name=camera-stream
+exec=/usr/bin/camera-stream
+card=exec:/usr/bin/camera-reset --usb      # run as root before the next try
+card=fallback:camera-stream-lowres         # give up for now, run the degraded service instead
+```
+
+- **`card=exec:CMD`** runs a fix-up command (reset a device, clear a stale cache) in its own process, and the service waits for it before trying again.
+- **`card=fallback:SVC`** names a standby service that does the job in a reduced way. It sits idle until the card is played, then runs while the main service is parked, and is stopped again before the main service gets its next try. If the main service never comes back, the standby keeps going.
+
+Each card is played once; the deck starts over after the service has run for 5 minutes. Nothing here can lose work behind your back: cards are only what the service file declares.
+
+**The board** (`schema-board`) shows it live: every service's state in the leg's LED colours, which card it is on, which service is limping and which one is standing in for it. It runs on its own console and keeps working when the desktop has frozen. See [`card=` in the service file reference](docs/svc-reference.md) and [the recovery console](docs/operations.md#recovery-console).
+
 ## Try it
 
 Your existing boot entries (systemd, or the stock init on Devuan, Void or Artix) stay in the GRUB menu, and you can back out with one reboot at every step.

@@ -368,6 +368,13 @@ int main(void) {
     assert(service_load_one(p, &svc) == 0);
     assert(svc.card_count == 2 && svc.card_next == 0 && svc.card_pid == 0);
     assert(strcmp(svc.card[1], "exec:/usr/bin/touch /run/healed") == 0);
+    write_svc(p, "name=cards\nexec=/bin/true\ncard=exec:/bin/true\ncard=fallback:cam-lite\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.card_count == 2 && strcmp(svc.card[1], "fallback:cam-lite") == 0);
+    write_svc(p, "name=cards\nexec=/bin/true\ncard=fallback:\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=cards\nexec=/bin/true\ncard=fallback:a/b\n");
+    assert(service_load_one(p, &svc) == -1);
     write_svc(p, "name=cards\nexec=/bin/true\ncard=reboot:now\n");
     assert(service_load_one(p, &svc) == -1);
     write_svc(p, "name=cards\nexec=/bin/true\ncard=exec:touch /run/x\n");
