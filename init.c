@@ -2304,12 +2304,15 @@ static void notify_poll(void) {
     for (int batch = 0; batch < NOTIFY_BATCH_MAX; batch++) {
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
-        ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid, &uid);
+        int rfds[NOTIFY_MAX_FDS], nrfds = 0;
+        ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid, &uid, rfds, &nrfds);
         if (n == 0) return;
         if (n == -2) return;
         if (n < 0) continue;
         struct notify_msg m;
-        if (!notify_parse(buf, (size_t)n, &m)) continue;
+        int acted = notify_parse(buf, (size_t)n, &m);
+        for (int i = 0; i < nrfds; i++) close(rfds[i]);
+        if (!acted) continue;
         char cgtext[NOTIFY_CGROUP_TEXT_MAX];
         int have_cg = -1;                           /* read lazily, once per message */
         if (m.busname[0]) {

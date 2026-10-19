@@ -1,7 +1,44 @@
 #include "../notify.h"
 #include <assert.h>
+#include <dirent.h>
 #include <stdlib.h>
 #include <sys/wait.h>
+
+static int count_fds(void) {
+    int c = 0;
+    DIR *d = opendir("/proc/self/fd");
+    assert(d);
+    while (readdir(d)) c++;
+    closedir(d);
+    return c - 1;
+}
+
+static void send_fds(const char *path, const char *msg, const int *fds, int nfds) {
+    int s = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    assert(s >= 0);
+    struct sockaddr_un a;
+    memset(&a, 0, sizeof a);
+    a.sun_family = AF_UNIX;
+    strcpy(a.sun_path, path);
+    struct iovec iov = { (void *)msg, strlen(msg) };
+    struct msghdr mh;
+    memset(&mh, 0, sizeof mh);
+    mh.msg_name = &a;
+    mh.msg_namelen = sizeof a;
+    mh.msg_iov = &iov;
+    mh.msg_iovlen = 1;
+    static char ctl[CMSG_SPACE(sizeof(int) * NOTIFY_MAX_FDS)];
+    memset(ctl, 0, sizeof ctl);
+    mh.msg_control = ctl;
+    mh.msg_controllen = CMSG_SPACE(sizeof(int) * (size_t)nfds);
+    struct cmsghdr *c = CMSG_FIRSTHDR(&mh);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(int) * (size_t)nfds);
+    memcpy(CMSG_DATA(c), fds, sizeof(int) * (size_t)nfds);
+    assert(sendmsg(s, &mh, 0) == (ssize_t)strlen(msg));
+    close(s);
+}
 
 static void send_dgram(const char *path, const char *msg, int pass_fd) {
     int s = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
@@ -95,24 +132,62 @@ int main(void) {
     int fd = notify_open(path);
     assert(fd >= 0);
     char buf[NOTIFY_MSG_MAX];
+    int rf[NOTIFY_MAX_FDS], nrf = 0;
     pid_t pid = 0;
     uid_t uid = 0;
-    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid) == 0);          /* empty: drained */
+    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid, rf, &nrf) == 0);          /* empty: drained */
     send_dgram(path, "READY=1", -1);
-    ssize_t n = notify_recv(fd, buf, sizeof buf, &pid, &uid);
+    ssize_t n = notify_recv(fd, buf, sizeof buf, &pid, &uid, rf, &nrf);
     assert(n == 7 && pid == getpid() && uid == getuid() && strcmp(buf, "READY=1") == 0);
     printf("test_notify recv creds: OK\n");
 
-    /* ---- a message carrying fds is discarded and the fd is not leaked ---- */
-    int probe = open("/dev/null", O_RDONLY | O_CLOEXEC);
-    send_dgram(path, "READY=1\nFDSTORE=1", probe);
-    close(probe);
-    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid) == -1);
-    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid) == 0);
-    int nxt = open("/dev/null", O_RDONLY | O_CLOEXEC);
-    assert(nxt == probe);                                          /* lowest fd free again */
-    close(nxt);
-    printf("test_notify reject fds: OK\n");
+    /* ---- FDSTORE keys ---- */
+    const char *f1 = "FDSTORE=1\nFDNAME=conn";
+    assert(notify_parse(f1, strlen(f1), &m) == 1);
+    assert(m.fdstore == 1 && !m.fdstore_remove && strcmp(m.fdname, "conn") == 0);
+    const char *f2 = "FDSTOREREMOVE=1\nFDNAME=state";
+    assert(notify_parse(f2, strlen(f2), &m) == 1);
+    assert(m.fdstore_remove == 1 && !m.fdstore && strcmp(m.fdname, "state") == 0);
+    printf("test_notify parse fdstore: OK\n");
+
+    /* ---- fds are handed to the caller ---- */
+    int base = count_fds();
+    int pp[3][2], sendv[3];
+    for (int i = 0; i < 3; i++) { assert(pipe(pp[i]) == 0); sendv[i] = pp[i][0]; }
+    send_fds(path, "FDSTORE=1", sendv, 3);
+    n = notify_recv(fd, buf, sizeof buf, &pid, &uid, rf, &nrf);
+    assert(n == 9 && nrf == 3);
+    for (int i = 0; i < 3; i++) {
+        assert(fcntl(rf[i], F_GETFD) & FD_CLOEXEC);
+        close(rf[i]);
+        close(pp[i][0]);
+        close(pp[i][1]);
+    }
+    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid, rf, &nrf) == 0 && nrf == 0);
+    assert(count_fds() == base);
+    printf("test_notify recv fds: OK\n");
+
+    int many[NOTIFY_MAX_FDS];
+    for (int i = 0; i < NOTIFY_MAX_FDS; i++) { many[i] = open("/dev/null", O_RDONLY | O_CLOEXEC); assert(many[i] >= 0); }
+    send_fds(path, "FDSTORE=1", many, NOTIFY_MAX_FDS);
+    n = notify_recv(fd, buf, sizeof buf, &pid, &uid, rf, &nrf);
+    assert(n == 9 && nrf == NOTIFY_MAX_FDS);
+    for (int i = 0; i < NOTIFY_MAX_FDS; i++) { close(rf[i]); close(many[i]); }
+    assert(count_fds() == base);
+    printf("test_notify recv 253 fds: OK\n");
+
+    /* ---- truncated datagram: discarded, fds closed ---- */
+    int tr[2];
+    tr[0] = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    tr[1] = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    send_fds(path, "FDSTORE=1\nFDNAME=0123456789", tr, 2);
+    close(tr[0]);
+    close(tr[1]);
+    char small[8];
+    assert(notify_recv(fd, small, sizeof small, &pid, &uid, rf, &nrf) == -1 && nrf == 0);
+    assert(notify_recv(fd, buf, sizeof buf, &pid, &uid, rf, &nrf) == 0);
+    assert(count_fds() == base);
+    printf("test_notify truncated closes fds: OK\n");
 
     close(fd);
     unlink(path);
