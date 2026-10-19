@@ -64,6 +64,18 @@ Each card is played once; the deck starts over after the service has run for 5 m
 
 **The board** (`schema-board`) shows it live: every service's state in the leg's LED colours, which card it is on, which service is limping and which one is standing in for it. It runs on its own console and keeps working when the desktop has frozen. See [`card=` in the service file reference](docs/svc-reference.md) and [the recovery console](docs/operations.md#recovery-console).
 
+## Flight recorder
+
+When something dies without a service failing (a runaway process pins the CPU, the kernel runs out of memory, the desktop session drops you to a console), every service can still look green. `schema-recorder` keeps a short rolling record of what happened and the board shows the latest line, for example `desktop session ended - CPU pinned 20 min by cosmic-player x8`. It is opt-in, and costs PID 1 nothing:
+
+```sh
+sudo cp /usr/share/schema-init/services/schema-recorder.svc.example /etc/schema-init/services/schema-recorder.svc && sudo schema-ctl add schema-recorder
+schema-ctl trace                 # what happened
+schema-ctl trace --since 21:00   # from a time (or an epoch) onward
+```
+
+To record earlyoom kills too, run it with `-N /usr/local/bin/schema-recorder-earlyoom`. See [the flight recorder in the operations guide](docs/operations.md#flight-recorder).
+
 ## Try it
 
 Your existing boot entries (systemd, or the stock init on Devuan, Void or Artix) stay in the GRUB menu, and you can back out with one reboot at every step.

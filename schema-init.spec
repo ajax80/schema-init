@@ -65,7 +65,7 @@ overwrite a service file a running system depends on.
 # but retiring systemd-udevd is a manual, hardware-specific cutover, not a
 # package upgrade. It is built here (migrate_bins) only so the -migrate
 # subpackage below can ship it; the base %%files list never references it.
-%global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump
+%global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder
 %global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
 %make_build BINS="%{core_bins} %{migrate_bins}" SCHEMA_VERSION="%{version}-%{release}"
 RUSTFLAGS="%{build_rustflags}" CARGO_PROFILE_RELEASE_STRIP=false %make_build analyze CARGO="cargo --offline"
@@ -478,10 +478,12 @@ fi
 %{_bindir}/schema-journal-sink
 %{_bindir}/schema-board
 %{_bindir}/schema-coredump
+%{_bindir}/schema-recorder
 %{_bindir}/schema-snapshot
 %{_bindir}/schema-bootok
 %{_bindir}/schema-analyze
 /usr/local/bin/schema-doctor
+/usr/local/bin/schema-recorder-earlyoom
 /usr/local/bin/schema-logind.py
 /usr/local/bin/schema-systemd1.py
 /usr/local/bin/schema-session-register
@@ -510,6 +512,11 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Mon Oct 19 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.15-1
+- Flight recorder (opt-in): schema-recorder keeps a rolling record of what
+  happened (service events, CPU/memory pressure, earlyoom kills); the board
+  shows the latest line and `schema-ctl trace` prints the history
+
 * Sat Oct 17 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.15-1
 - grub2-mkconfig no longer clobbers schema-init boot entries: 10_linux
   rewrote every BLS options line, dropping init= (the schema-init entry

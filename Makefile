@@ -100,6 +100,7 @@ install: all
 	[ -n "$(DESTDIR)" ] || [ -e $(SYSCONFDIR)/schema-init/services/logrotate.svc ] || \
 		install -m 0644 services/logrotate.svc $(SYSCONFDIR)/schema-init/services/logrotate.svc
 	install -m 0755 scripts/schema-snapshot $(DESTDIR)$(BINDIR)/schema-snapshot
+	install -D -m 0755 scripts/schema-recorder-earlyoom $(DESTDIR)/usr/local/bin/schema-recorder-earlyoom
 	install -D -m 0755 scripts/schema-bus-activate $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-bus-activate
 	install -D -m 0644 completion/schema-ctl.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/schema-ctl
 	install -D -m 0644 completion/_schema-ctl $(DESTDIR)$(DATADIR)/zsh/site-functions/_schema-ctl
