@@ -42,6 +42,24 @@ static void msg_last(void) {
     assert(!strcmp(p.msg, "a=b c=d"));
 }
 
+static void msg_unterminated(void) {
+    rec_event_t e, p;
+    char buf[1024];
+    memset(&e, 0, sizeof e);
+    e.ts = 1; e.src = REC_SRC_PID1;
+    strcpy(e.kind, "k");
+    memset(e.msg, 'x', sizeof e.msg);
+    assert(rec_format(buf, sizeof buf, &e) > 0);
+    assert(strlen(buf) < 400);
+    assert(rec_parse(buf, &p) == 0);
+    assert(strlen(p.msg) == sizeof p.msg - 1);
+    memset(&e, 0, sizeof e);
+    e.ts = 1; e.src = REC_SRC_PID1;
+    strcpy(e.kind, "k"); strcpy(e.msg, "a\nb\rc");
+    assert(rec_format(buf, sizeof buf, &e) > 0);
+    assert(!strpbrk(buf, "\n\r"));
+}
+
 static void missing_required(void) {
     rec_event_t e;
     assert(rec_parse("pid=3 msg=x", &e) == -1);
@@ -60,6 +78,7 @@ int main(void) {
     roundtrip();
     hostile_comm();
     msg_last();
+    msg_unterminated();
     missing_required();
     send_no_listener();
     printf("test_recorder: OK\n");

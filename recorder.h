@@ -76,7 +76,7 @@ static inline int rec_format(char *buf, size_t n, const rec_event_t *e) {
     rec_word(kind, sizeof kind, e->kind);
     rec_word(comm, sizeof comm, e->comm);
     rec_word(subj, sizeof subj, e->subj);
-    snprintf(msg, sizeof msg, "%s", e->msg);
+    snprintf(msg, sizeof msg, "%.*s", (int)sizeof e->msg - 1, e->msg);
     for (i = 0; msg[i]; i++) if (msg[i] == '\n' || msg[i] == '\r') msg[i] = ' ';
     r = snprintf(buf, n, "ts=%llu src=%s kind=%s comm=%s pid=%d rc=%d crit=%d subj=%s msg=%s",
                  (unsigned long long)e->ts,
