@@ -1,4 +1,4 @@
-#include "../recorder.h"
+#include "../recorder_logic.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -74,6 +74,161 @@ static void send_no_listener(void) {
     alarm(0);
 }
 
+
+static rec_event_t mk(int src, const char *kind, const char *comm, const char *subj, int rc, uint64_t ts) {
+    rec_event_t e;
+    memset(&e, 0, sizeof e);
+    e.src = (uint8_t)src; e.rc = rc; e.ts = ts;
+    strcpy(e.kind, kind); strcpy(e.comm, comm); strcpy(e.subj, subj);
+    return e;
+}
+
+static void tier_app_crash_trace(void) {
+    rec_event_t e = mk(REC_SRC_COREDUMP, "dump", "obsidian", "", 7, 1);
+    assert(rec_tier(&e) == REC_TIER_TRACE);
+}
+
+static void tier_kwin_session(void) {
+    rec_event_t e = mk(REC_SRC_COREDUMP, "dump", "kwin_wayland", "", 11, 1);
+    assert(rec_tier(&e) == REC_TIER_SESSION);
+    e = mk(REC_SRC_COREDUMP, "dump", "foo", "foo.svc", 11, 1);
+    assert(rec_tier(&e) == REC_TIER_CRIT);
+}
+
+static void tier_logout(void) {
+    rec_event_t e = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1);
+    assert(rec_tier(&e) == REC_TIER_TRACE);
+    e.rc = 1;
+    assert(rec_tier(&e) == REC_TIER_SESSION);
+}
+
+static void tier_misc(void) {
+    rec_event_t e = mk(REC_SRC_PID1, "died", "", "x.svc", 0, 1);
+    assert(rec_tier(&e) == REC_TIER_MINOR);
+    e.crit = 1;
+    assert(rec_tier(&e) == REC_TIER_CRIT);
+    strcpy(e.kind, "survival-enter");
+    assert(rec_tier(&e) == REC_TIER_MINOR);
+    strcpy(e.kind, "started");
+    assert(rec_tier(&e) == REC_TIER_TRACE);
+    e = mk(REC_SRC_EARLYOOM, "kill", "x", "", 0, 1);
+    assert(rec_tier(&e) == REC_TIER_MINOR);
+    e = mk(REC_SRC_PSI, "cpu", "x", "", 0, 1);
+    e.tier = REC_TIER_LIVE;
+    assert(rec_tier(&e) == REC_TIER_LIVE);
+}
+
+static void pick_precedence(void) {
+    rec_arrow_t a;
+    rec_event_t c;
+    memset(&a, 0, sizeof a);
+    a.state = 2; a.tier = REC_TIER_CRIT; a.event_ts = 100; a.resolved_ts = 150;
+    c = mk(REC_SRC_PID1, "died", "", "x", 0, 200);
+    assert(rec_tier(&c) == REC_TIER_MINOR);
+    assert(rec_arrow_pick(&a, &c, 300) == 0);
+    c = mk(REC_SRC_SESSION, "plasma-exit", "", "", 1, 50);
+    assert(rec_arrow_pick(&a, &c, 300) == 1);
+    c = mk(REC_SRC_PID1, "died", "", "x", 0, 200);
+    assert(rec_arrow_pick(&a, &c, 150 + 36 * 3600 + 1) == 1);
+    a.tier = REC_TIER_MINOR;
+    assert(rec_arrow_pick(&a, &c, 300) == 1);
+    c.ts = 50;
+    assert(rec_arrow_pick(&a, &c, 300) == 0);
+}
+
+static void shade(void) {
+    rec_arrow_t a;
+    memset(&a, 0, sizeof a);
+    assert(rec_arrow_shade(&a, 5) == 0);
+    a.state = 1;
+    assert(rec_arrow_shade(&a, 999999) == 1);
+    a.state = 2; a.resolved_ts = 1000;
+    assert(rec_arrow_shade(&a, 1000 + 11 * 3600 + 59 * 60) == 1);
+    assert(rec_arrow_shade(&a, 1000 + 12 * 3600 + 60) == 2);
+    assert(rec_arrow_shade(&a, 1000 + 36 * 3600 + 60) == 0);
+    assert(rec_arrow_shade(&a, 500) == 1);
+}
+
+static void recurrence(void) {
+    rec_culprit_t tab[4];
+    int n = 0;
+    uint64_t d = 86400, b = 1000000;
+    memset(tab, 0, sizeof tab);
+    assert(rec_culprit_count(tab, &n, 4, "cosmic-player", b, b) == 1);
+    assert(rec_culprit_count(tab, &n, 4, "cosmic-player", b + 2 * d, b + 2 * d) == 2);
+    assert(rec_culprit_count(tab, &n, 4, "cosmic-player", b + 5 * d, b + 5 * d) == 3);
+    assert(rec_culprit_count(tab, &n, 4, "cosmic-player", b + 8 * d, b + 8 * d) == 3);
+    assert(rec_culprit_count(tab, &n, 4, "cosmic-player", b + 13 * d, b + 13 * d) == 2);
+    assert(rec_culprit_count(tab, &n, 4, "other", b + 13 * d, b + 13 * d) == 1);
+    assert(n == 2);
+}
+
+static void render_example(void) {
+    rec_event_t e = mk(REC_SRC_PSI, "cpu", "cosmic-player", "", 0, 20000ull * 86400 + 21 * 3600 + 42 * 60);
+    char buf[256];
+    setenv("TZ", "UTC", 1);
+    tzset();
+    strcpy(e.msg, "CPU pinned 20 min by cosmic-player \xc3\x97" "8");
+    rec_render(buf, sizeof buf, &e, 1);
+    assert(!strcmp(buf, "\xe2\x96\xb6 21:42 CPU pinned 20 min by cosmic-player \xc3\x97" "8"));
+    rec_render(buf, sizeof buf, &e, 2);
+    assert(strstr(buf, "8 (2nd time this week)"));
+    rec_render(buf, sizeof buf, &e, 3);
+    assert(strstr(buf, "(3rd time this week)"));
+    rec_render(buf, sizeof buf, &e, 12);
+    assert(strstr(buf, "(12th time this week)"));
+    rec_render(buf, sizeof buf, &e, 21);
+    assert(strstr(buf, "(21st time this week)"));
+}
+
+static void render_session(void) {
+    rec_event_t e = mk(REC_SRC_SESSION, "plasma-exit", "", "", 1, 20000ull * 86400 + 21 * 3600 + 42 * 60);
+    char buf[256];
+    setenv("TZ", "UTC", 1);
+    tzset();
+    strcpy(e.msg, "kwin_wayland crashed (SIGSEGV)");
+    rec_render(buf, sizeof buf, &e, 1);
+    assert(!strcmp(buf, "\xe2\x96\xb6 21:42 desktop session ended \xe2\x80\x94 kwin_wayland crashed (SIGSEGV)"));
+    e.msg[0] = 0;
+    rec_render(buf, sizeof buf, &e, 1);
+    assert(!strcmp(buf, "\xe2\x96\xb6 21:42 desktop session ended"));
+}
+
+static void render_others(void) {
+    rec_event_t e = mk(REC_SRC_COREDUMP, "dump", "foo", "", 11, 20000ull * 86400);
+    char buf[256];
+    setenv("TZ", "UTC", 1);
+    tzset();
+    rec_render(buf, sizeof buf, &e, 1);
+    assert(strstr(buf, "foo crashed (SIGSEGV)"));
+    e = mk(REC_SRC_EARLYOOM, "kill", "bar", "", 9, 20000ull * 86400);
+    rec_render(buf, sizeof buf, &e, 1);
+    assert(strstr(buf, "earlyoom killed bar"));
+    e = mk(REC_SRC_PID1, "died", "", "x.svc", 0, 20000ull * 86400);
+    rec_render(buf, sizeof buf, &e, 1);
+    assert(strstr(buf, "x.svc died"));
+}
+
+static void seqlock(void) {
+    static rec_shm_t m, s;
+    rec_arrow_t a;
+    int i;
+    memset(&m, 0, sizeof m);
+    m.magic = REC_SHM_MAGIC;
+    for (i = 0; i < 300; i++) {
+        rec_event_t e = mk(REC_SRC_PID1, "died", "", "x", 0, (uint64_t)i + 1);
+        rec_ring_push(&m, &e);
+    }
+    assert(m.count == REC_RING);
+    assert(m.ring[(m.head - 1) % REC_RING].ts == 300);
+    assert((m.seq & 1) == 0);
+    assert(rec_snapshot_ring(&m, &s) == 0);
+    assert(s.count == REC_RING && s.head == m.head);
+    assert(rec_snapshot_arrow(&m, &a) == 0);
+    m.seq = 1;
+    assert(rec_snapshot_ring(&m, &s) == -1);
+}
+
 int main(void) {
     roundtrip();
     hostile_comm();
@@ -81,6 +236,17 @@ int main(void) {
     msg_unterminated();
     missing_required();
     send_no_listener();
+    tier_app_crash_trace();
+    tier_kwin_session();
+    tier_logout();
+    tier_misc();
+    pick_precedence();
+    shade();
+    recurrence();
+    render_example();
+    render_session();
+    render_others();
+    seqlock();
     printf("test_recorder: OK\n");
     return 0;
 }

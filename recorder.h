@@ -36,6 +36,7 @@ typedef struct {
 
 typedef struct {
     uint8_t  state;          /* 0 none, 1 live, 2 resolved */
+    uint8_t  tier;
     uint64_t event_ts;
     uint64_t resolved_ts;
     uint32_t recurrence;
