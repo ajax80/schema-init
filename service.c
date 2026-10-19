@@ -1370,7 +1370,11 @@ int service_spawn(service_t *svc) {
         }
         svc_apply_env(svc, file_env, file_envc);
         svc_pass_listen(svc);
-        syscall(SYS_close_range, 3 + svc->listen_open, ~0U, 0);
+        if (syscall(SYS_close_range, 3 + svc->listen_open, ~0U, 0) < 0) {
+            long max = sysconf(_SC_OPEN_MAX);
+            if (max < 0 || max > 65536) max = 65536;
+            for (int fd = 3 + svc->listen_open; fd < max; fd++) close(fd);
+        }
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             int nx = service_expand_argv(svc->argv, xargv, 63);
@@ -1901,8 +1905,13 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         }
         while (*val == ' ' || *val == '\t') val++;
         svc->argv[pc->argc++] = strdup(val);
-    } else if (strcmp(line, "env") == 0 && svc->env_count < MAX_ENV) {
+    } else if (strcmp(line, "env") == 0) {
         while (*val == ' ' || *val == '\t') val++;
+        if (strchr(val, '=') && svc->env_count >= MAX_ENV) {
+            fprintf(stderr, "[schema-init] %s: more than %d env= lines\n",
+                    svc->name[0] ? svc->name : path, MAX_ENV);
+            return -1;
+        }
         if (strchr(val, '='))
             svc->envp[svc->env_count++] = strdup(val);
     } else if (strcmp(line, "env_file") == 0) {
@@ -1966,7 +1975,12 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         snprintf(svc->socket_group, sizeof svc->socket_group, "%s", val);
     } else if (strcmp(line, "expand_args") == 0) {
         svc->expand_args = atoi(val) != 0;
-    } else if (strcmp(line, "dep") == 0 && pc->dep_slot < MAX_DEPS) {
+    } else if (strcmp(line, "dep") == 0) {
+        if (pc->dep_slot >= MAX_DEPS) {
+            fprintf(stderr, "[schema-init] %s: more than %d dep= lines\n",
+                    svc->name[0] ? svc->name : path, MAX_DEPS);
+            return -1;
+        }
         strncpy(svc->dep_name[pc->dep_slot++], val, 63);
     } else if (strcmp(line, "oneshot") == 0 && atoi(val))
         svc->flags |= SVC_ONESHOT;

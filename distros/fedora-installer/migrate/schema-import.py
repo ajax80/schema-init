@@ -749,6 +749,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
 
     if len(argv) > 63:
         raise Skip("ExecStart= has %d arguments (limit 62)" % (len(argv) - 1))
+    if len(env_pairs) > 16:
+        raise Skip("Environment= sets %d variables (limit 16)" % len(env_pairs))
     for pre, pa in pres:
         if len(pa) > 32:
             raise Skip("ExecStartPre= has %d words (limit 32)" % len(pa))
@@ -1107,7 +1109,9 @@ def lsb_to_svc(name, text, known=None):
             deps.append(svc)
     lines = ["# schema-import: from %s%s (init script; no usable systemd unit)" % (INITD, name),
              "name=" + name, "exec=" + INITD + name, "args=start", "oneshot=1", "needs_root=1"]
-    lines += ["dep=" + d for d in deps]
+    if len(deps) > 8:
+        lines.append("# schema-import: dropped dep on %s (limit 8)" % " ".join(deps[8:]))
+    lines += ["dep=" + d for d in deps[:8]]
     return "\n".join(lines) + "\n"
 
 
@@ -1234,7 +1238,9 @@ def runit_to_svc(name, text, known=None, after=None, check=False):
     else:
         lines += ["# schema-import: %s%s/check not translated; ready after 1 s" % (SV, name),
                   "stable_secs=1"]
-    lines += ["dep=" + d for d in deps]
+    if len(deps) > 8:
+        lines.append("# schema-import: dropped dep on %s (limit 8)" % " ".join(deps[8:]))
+    lines += ["dep=" + d for d in deps[:8]]
     return "\n".join(lines) + "\n"
 
 

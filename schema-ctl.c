@@ -14,7 +14,7 @@
 
 #define G_MAX_NODES 512
 #define G_MAX_EDGES 8
-#define G_PID1_MAX_SERVICES 88
+#define G_PID1_MAX_SERVICES 128
 #define G_PID1_MAX_GROUPS 16
 
 struct g_node { char name[64]; char file[64]; char deps[G_MAX_EDGES][64]; int ndeps; int group; int seen; };

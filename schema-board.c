@@ -358,6 +358,13 @@ int main(int argc, char **argv) {
                 SCHEMA_SHM_NAME);
         return 1;
     }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || (size_t)st.st_size < sizeof(*live)) {
+        fprintf(stderr, "schema-board: shm %s is from another schema-init version; reboot or schema-ctl reexec\n",
+                SCHEMA_SHM_NAME);
+        close(fd);
+        return 1;
+    }
     live = mmap(NULL, sizeof(*live), PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
     if (live == MAP_FAILED) {

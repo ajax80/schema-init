@@ -139,8 +139,15 @@ int groups_load(const char *dir, group_t *table, int max) {
 
             if (strcmp(line, "name") == 0)
                 strncpy(grp->name, val, sizeof(grp->name) - 1);
-            else if (strcmp(line, "member") == 0 && grp->member_count < MAX_MEMBERS)
+            else if (strcmp(line, "member") == 0) {
+                if (grp->member_count >= MAX_MEMBERS) {
+                    fprintf(stderr, "[schema-init] %s: more than %d member= lines — group not loaded\n",
+                            path, MAX_MEMBERS);
+                    grp->name[0] = 0;
+                    break;
+                }
                 strncpy(grp->member_name[grp->member_count++], val, 63);
+            }
         }
         fclose(f);
 

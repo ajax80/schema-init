@@ -557,6 +557,13 @@ for unit, why in (("ExecStart=/bin/x " + " ".join(["a"] * 63), "arguments (limit
         si.unit_to_svc("big", si.parse_unit("[Service]\n" + unit + "\n")); check("over-cap skipped: " + why, False)
     except si.Skip as e:
         check("over-cap skipped: " + why, why in str(e))
+try:
+    si.unit_to_svc("env", si.parse_unit("[Service]\nEnvironment=" + " ".join("K%d=v" % i for i in range(17)) + "\nExecStart=/bin/x\n"))
+    check("over-cap skipped: 17 Environment= variables", False)
+except si.Skip as e:
+    check("over-cap skipped: 17 Environment= variables", "limit 16" in str(e))
+check("16 Environment= variables kept", si.unit_to_svc("env", si.parse_unit(
+    "[Service]\nEnvironment=" + " ".join("K%d=v" % i for i in range(16)) + "\nExecStart=/bin/x\n")).count("\nenv=K") == 16)
 check("62 args kept", si.unit_to_svc("big", si.parse_unit("[Service]\nExecStart=/bin/x " + " ".join(["a"] * 62) + "\n")).count("args=a\n") == 62)
 
 try:
@@ -605,6 +612,8 @@ check("lsb: runnable unit translated from the unit, not the script",
       "exec=/usr/bin/withunitd\n" in open(os.path.join(rc, "svc/withunit.svc")).read())
 check("lsb: rerun leaves existing .svc", si.import_one("/etc/init.d/plain")[0] == "exists")
 check("lsb: missing script -> not-found", si.import_one("/etc/init.d/gone")[0] == "not-found")
+_ld = si.lsb_to_svc("many", _lsb % ("many", " ".join("s%d" % i for i in range(9))), {"s%d" % i for i in range(9)})
+check("lsb: more than 8 deps capped at 8, the rest noted", _ld.count("\ndep=") == 8 and "dropped dep on s8 (limit 8)" in _ld)
 check("lsb_header parses the INFO block only", si.lsb_header(_lsb % ("h", ""))["Provides"] == "h")
 open(os.path.join(rc, "svc/udevd.svc"), "w").write("name=udevd\nexec=/sbin/udevd\n")
 check("lsb: Devuan dep names mapped (udev -> udevd, bluetooth alias)",
@@ -653,6 +662,9 @@ check("runit: sv check -> dep, after= first", "dep=void-boot\ndep=dbus\n" in _e)
 _n = open(os.path.join(rv, "svc/nm.svc")).read()
 check("runit: sv -w N check /path/ -> dep on the name; unknown service dropped",
       "dep=dbus\n" in _n and "ghost" not in _n)
+_nine = ["s%d" % i for i in range(9)]
+_rd = si.runit_to_svc("many", "".join("sv check %s\n" % d for d in _nine), set(_nine))
+check("runit: more than 8 deps capped at 8, the rest noted", _rd.count("\ndep=") == 8 and "dropped dep on s8 (limit 8)" in _rd)
 check("runit: after= not added to itself", "dep=" not in si.runit_to_svc("void-boot", "", set(), "void-boot"))
 check("runit: missing run -> not-found, rest imported", _c["not-found"] == 1 and _c["imported"] == 4)
 check("runit: no check script -> ready once running (stable_secs=0)", "stable_secs=0\n" in _e)

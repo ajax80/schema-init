@@ -1,6 +1,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -62,6 +63,12 @@ int main(void) {
     int fd = shm_open(SCHEMA_SHM_NAME, O_RDONLY, 0);
     if (fd < 0) {
         fprintf(stderr, "schema-desktop: shm not found — is schema-init running?\n");
+        return 1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || (size_t)st.st_size < sizeof(schema_shm_t)) {
+        fprintf(stderr, "schema-desktop: shm is from another schema-init version; reboot or schema-ctl reexec\n");
+        close(fd);
         return 1;
     }
     schema_shm_t *shm = mmap(NULL, sizeof(schema_shm_t), PROT_READ, MAP_SHARED, fd, 0);
