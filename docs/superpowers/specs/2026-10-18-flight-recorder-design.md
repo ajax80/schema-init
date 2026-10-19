@@ -130,7 +130,12 @@ needs root for `/proc` and PSI):
 - **Culprit identity** (my call): process `comm` (`cosmic-player`) for hogs,
   crashes and kills; service name for PID 1 events. Same comm from a different
   parent still counts as the same culprit.
-- Zero wakeups while calm: it sleeps in `poll()` on the socket and the two PSI fds.
+- Zero wakeups while calm: it sleeps in `poll(..., -1)` on the socket, the two PSI
+  fds and one `timerfd`. Timer state machine (Greg): calm = disarmed; trigger fired
+  = 1 s (snapshot 2); active episode = 15–30 s re-samples / quiet-period tracking;
+  quiet period expired = record the resolution, disarm, back to `poll(-1)`.
+- Creates its shm with explicit `fchmod(fd, 0644)` (root daemons run with umask
+  0077; without it, non-root board/trace readers get `EACCES`).
 
 Why a separate daemon rather than inside PID 1: PID 1 size/RSS is a kill
 criterion, and the `/proc` scanning and correlation logic doesn't belong in PID 1.
@@ -150,7 +155,12 @@ goals; C next to `schema-coredump.c` / `schema-board.c` is the natural fit.
   count. The same culprit returning goes straight back to red with "2nd time",
   "3rd time this week".
 - One line, the most recent/most severe failure. Format like the example above.
-  Precedence: live problem > recent session crash > held/recent (newest first).
+  Precedence: live problem > recent session crash > held critical-service death >
+  held minor failure; newest wins within a tier.
+- The recorder stores `resolved_time`; **the board computes bright vs grey vs gone
+  from `now - resolved_time`** on its own redraw, so the recorder never needs a
+  12 h / 36 h wakeup (Greg). The board needs a slow redraw tick (e.g. once a
+  minute) for the fade, in addition to redraws on seq change.
 - Placed directly above the service table header, truncated to the terminal
   width (≤ cols − 2) so it never wraps; parent chains and command lines live in
   `schema-ctl trace` (Greg).
@@ -214,8 +224,7 @@ pressure capture is off.
 
 ## Left to the builder
 
-- Datagram wire format, ring entry size, ring length.
-- Exact PSI thresholds/windows and the episode quiet period.
-- How many hogs to keep, and sampling details.
-- Correlation window lengths.
+- Ring entry size and ring length.
+- How many hog groups to keep, and sampling details.
 - `schema-ctl trace` flags and output layout.
+- Tuning the starting defaults above after measuring.
