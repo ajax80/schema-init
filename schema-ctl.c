@@ -189,7 +189,8 @@ static void usage(FILE *out) {
         "  start <svc>            start a service (alias: up)\n"
         "  stop <svc>             stop it and hold it down (alias: down)\n"
         "  restart <svc>\n"
-        "  add <path>             load one .svc file at runtime\n"
+        "  add <svc|path>         load one .svc file at runtime; a bare name\n"
+        "                         means %s/<name>.svc\n"
         "  cat <svc>              print <svc>.svc and its drop-ins in the order\n"
         "                         they apply (read from disk, not from PID 1)\n"
         "  graph [<svc>]          dependency graph as Graphviz DOT (A -> B: A waits\n"
@@ -204,7 +205,7 @@ static void usage(FILE *out) {
         "  --help                 this text\n"
         "  --version              print version and exit\n"
         "\n"
-        "Talks to PID 1 over %s.\nExits 1 when PID 1 replies \"err:\".\n", CTL_SOCK_PATH);
+        "Talks to PID 1 over %s.\nExits 1 when PID 1 replies \"err:\".\n", SVC_DIR, CTL_SOCK_PATH);
 }
 
 int main(int argc, char **argv) {
@@ -273,6 +274,13 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    char addpath[SVC_DROPIN_PATH];
+    if (strcmp(argv[1], "add") == 0 && argc == 3 && argv[2][0] && !strchr(argv[2], '/')) {
+        size_t l = strlen(argv[2]);
+        int has_ext = l > 4 && strcmp(argv[2] + l - 4, ".svc") == 0;
+        snprintf(addpath, sizeof addpath, "%s/%s%s", SVC_DIR, argv[2], has_ext ? "" : ".svc");
+        argv[2] = addpath;
+    }
 
     cmd[0] = '\0';
     for (i = 1; i < argc; i++) {
