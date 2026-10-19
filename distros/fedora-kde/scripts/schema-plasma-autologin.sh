@@ -215,6 +215,6 @@ while true; do
     SESSION_PID=""
     release_session
     printf 'plasma_exited rc=%d\n' $RC
-    [ $RC -ne 0 ] && break
+    [ $RC -ne 0 ] && exit "$RC"
     sleep 2
 done
