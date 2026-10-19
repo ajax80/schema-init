@@ -18,7 +18,7 @@ schema-ctl graph [<name>] | dot -Tsvg > deps.svg   # dependency graph (all, or <
 sudo schema-ctl start <name>    # start a stopped or EXCISED service
 sudo schema-ctl stop <name>     # send SIGTERM to a running service
 sudo schema-ctl restart <name>  # stop + re-queue through the state machine
-sudo schema-ctl add <path>      # load a new .svc file at runtime, no reboot needed
+sudo schema-ctl add <svc|path>  # load a new .svc at runtime (bare name = /etc/schema-init/services/<name>.svc)
 sudo schema-ctl reload          # re-read the services directory (rejected if new config has a cycle)
 sudo schema-ctl reload --evict  # reload + SIGTERM any running service no longer present in config
 sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
