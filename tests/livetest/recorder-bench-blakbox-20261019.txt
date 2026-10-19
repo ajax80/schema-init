@@ -1,0 +1,22 @@
+# Flight recorder bench — blakbox 2026-10-19
+
+## Step 1: replay of the 09-22 incident (blakbox, 12 cores, 0.4.13-1.1249)
+Second recorder instance (test sock/shm/dir, real PSI). 8 bash busy-loops comm=cosmic-player under kioworker<-dolphin, pinned to cpus 10-11 (taskset) to create contention; desktop untouched.
+
+Run 1 (150 s + plasma-exit): board `▶ 12:22 desktop session ended — CPU pinned 2 min by cosmic-player ×8` — PASS
+  (chain lacked dolphin: bash exec-optimised the last command; script fixed)
+Run 2 (recorder restarted, history from disk, 150 s + plasma-exit): board `▶ 12:25 desktop session ended — CPU pinned 2 min by cosmic-player ×8 (2nd time this week)`; chain cosmic-player<-kioworker<-dolphin — PASS
+Run 3 (fresh state, 60 s, no exit): episode-start tier=0, episode-end tier=0, no arrow — PASS
+PSI cpu some avg10 during hold: ~37-42%.
+
+Events:
+```
+ts=1792430407 src=psi kind=episode-start comm=cosmic-player pid=484284 rc=0 crit=0 subj=cosmic-player←kioworker←recorder-replay←sudo←zsh tier=0 boot=b78f13d1 msg=CPU pinned 0 min by cosmic-player ×8 | cpu=3% mem=0% swap=1538M/16383M zram=1458M>373M [/tmp/schema-recorder-replay/bin/cosmic-player -c while :; do :; done]
+ts=1792430532 src=psi kind=episode-live comm=cosmic-player pid=484284 rc=0 crit=0 subj=cosmic-player←kioworker←recorder-replay←sudo←zsh tier=4 boot=b78f13d1 msg=CPU pinned 2 min by cosmic-player ×8 | cpu=42% mem=0% swap=1537M/16383M zram=1458M>373M [/tmp/schema-recorder-replay/bin/cosmic-player -c while :; do :; done]
+ts=1792430557 src=session kind=plasma-exit comm=cosmic-player pid=0 rc=0 crit=0 subj= tier=3 boot=b78f13d1 msg=CPU pinned 2 min by cosmic-player ×8
+ts=1792430576 src=psi kind=episode-start comm=cosmic-player pid=485800 rc=0 crit=0 subj=cosmic-player←kioworker←dolphin←recorder-replay←sudo tier=0 boot=b78f13d1 msg=CPU pinned 0 min by cosmic-player ×8 | cpu=9% mem=0% swap=1537M/16383M zram=1457M>373M [/run/schema-recorder-replay/bin/cosmic-player -c while :; do :; done]
+ts=1792430702 src=psi kind=episode-live comm=cosmic-player pid=485800 rc=0 crit=0 subj=cosmic-player←kioworker←dolphin←recorder-replay←sudo tier=4 boot=b78f13d1 msg=CPU pinned 2 min by cosmic-player ×8 | cpu=37% mem=0% swap=1537M/16383M zram=1457M>373M [/run/schema-recorder-replay/bin/cosmic-player -c while :; do :; done]
+ts=1792430727 src=session kind=plasma-exit comm=cosmic-player pid=0 rc=0 crit=0 subj= tier=3 boot=b78f13d1 msg=CPU pinned 2 min by cosmic-player ×8
+ts=1792430756 src=psi kind=episode-start comm=cosmic-player pid=487403 rc=0 crit=0 subj=cosmic-player←kioworker←dolphin←recorder-replay←sudo tier=0 boot=b78f13d1 msg=CPU pinned 0 min by cosmic-player ×8 | cpu=2% mem=0% swap=1536M/16383M zram=1457M>372M [/run/schema-recorder-replay/bin/cosmic-player -c while :; do :; done]
+ts=1792430860 src=psi kind=episode-end comm=ghostty pid=5359 rc=0 crit=0 subj=ghostty←python3←schema-dbus←plasma-session-←runuser tier=0 boot=b78f13d1 msg=CPU pinned 1 min by ghostty | cpu=3% mem=0% swap=1536M/16383M zram=1456M>371M [/usr/sbin/ghostty -e /home/ajax80/.local/bin/claude --dangerously-skip-permissio
+```
