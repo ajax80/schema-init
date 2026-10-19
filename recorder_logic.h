@@ -7,7 +7,7 @@ enum { REC_TIER_TRACE = 0, REC_TIER_MINOR = 1, REC_TIER_CRIT = 2, REC_TIER_SESSI
 
 typedef struct { char key[64]; uint64_t ts[32]; int n; } rec_culprit_t;
 
-static inline int rec_tier(const rec_event_t *e) {
+static inline int rec_tier_base(const rec_event_t *e) {
     static const char *const pid1_kinds[] = { "died", "dormant", "76-excised", "watchdog-kill",
         "watchdog-abort", "start-timeout", "spawn-fail", "readiness-lost", "fuse-tripped" };
     static const char *const session_comms[] = { "kwin_wayland", "plasmashell", "ksmserver",
@@ -32,6 +32,11 @@ static inline int rec_tier(const rec_event_t *e) {
     return REC_TIER_TRACE;
 }
 
+static inline int rec_tier(const rec_event_t *e) {
+    int b = rec_tier_base(e);
+    return b > e->tier ? b : e->tier;
+}
+
 static inline void rec_ring_push(rec_shm_t *m, const rec_event_t *e) {
     uint32_t s = __atomic_load_n(&m->seq, __ATOMIC_RELAXED);
     __atomic_store_n(&m->seq, s + 1, __ATOMIC_RELAXED);
@@ -39,6 +44,14 @@ static inline void rec_ring_push(rec_shm_t *m, const rec_event_t *e) {
     m->ring[m->head % REC_RING] = *e;
     m->head++;
     if (m->count < REC_RING) m->count++;
+    __atomic_store_n(&m->seq, s + 2, __ATOMIC_RELEASE);
+}
+
+static inline void rec_arrow_set(rec_shm_t *m, const rec_arrow_t *a) {
+    uint32_t s = __atomic_load_n(&m->seq, __ATOMIC_RELAXED);
+    __atomic_store_n(&m->seq, s + 1, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    m->arrow = *a;
     __atomic_store_n(&m->seq, s + 2, __ATOMIC_RELEASE);
 }
 
@@ -73,8 +86,19 @@ static inline int rec_culprit_count(rec_culprit_t *tab, int *ntab, int max, cons
     for (i = 0; i < *ntab; i++)
         if (!strcmp(tab[i].key, key)) { c = &tab[i]; break; }
     if (!c) {
+        if (ts < floor) return 0;
         if (*ntab < max) c = &tab[(*ntab)++];
-        else c = &tab[0];
+        else {
+            uint64_t best = 0;
+            int bi = -1;
+            for (i = 0; i < *ntab; i++) {
+                uint64_t newest = 0;
+                for (j = 0; j < tab[i].n; j++) if (tab[i].ts[j] > newest) newest = tab[i].ts[j];
+                if (newest < floor) { bi = i; break; }
+                if (bi < 0 || newest < best) { bi = i; best = newest; }
+            }
+            c = &tab[bi];
+        }
         memset(c, 0, sizeof *c);
         rec_copy(c->key, sizeof c->key, key);
     }
@@ -82,7 +106,7 @@ static inline int rec_culprit_count(rec_culprit_t *tab, int *ntab, int max, cons
         if (c->ts[i] >= floor) c->ts[j++] = c->ts[i];
     c->n = j;
     if (c->n == 32) { memmove(c->ts, c->ts + 1, 31 * sizeof c->ts[0]); c->n--; }
-    c->ts[c->n++] = ts;
+    if (ts >= floor) c->ts[c->n++] = ts;
     return c->n;
 }
 
@@ -136,6 +160,7 @@ static inline void rec_render(char *buf, size_t n, const rec_event_t *e, uint32_
 
 static inline int rec_arrow_pick(const rec_arrow_t *cur, const rec_event_t *cand, uint64_t now) {
     int ct = rec_tier(cand);
+    if (ct == REC_TIER_TRACE) return 0;
     if (cur->state == 0) return 1;
     if (cur->state == 2 && now >= cur->resolved_ts && now - cur->resolved_ts >= 36 * 3600) return 1;
     if (ct != cur->tier) return ct > cur->tier;

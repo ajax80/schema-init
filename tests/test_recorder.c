@@ -136,6 +136,48 @@ static void pick_precedence(void) {
     assert(rec_arrow_pick(&a, &c, 300) == 0);
 }
 
+static void pick_upgrade_and_trace(void) {
+    rec_arrow_t a;
+    rec_event_t c = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 200);
+    memset(&a, 0, sizeof a);
+    a.state = 2; a.tier = REC_TIER_CRIT; a.event_ts = 100; a.resolved_ts = 150;
+    assert(rec_arrow_pick(&a, &c, 300) == 0);
+    c.tier = REC_TIER_SESSION;
+    assert(rec_arrow_pick(&a, &c, 300) == 1);
+    memset(&a, 0, sizeof a);
+    c.tier = 0;
+    assert(rec_arrow_pick(&a, &c, 300) == 0);
+    a.state = 2; a.resolved_ts = 10;
+    assert(rec_arrow_pick(&a, &c, 10 + 40 * 3600) == 0);
+}
+
+static void culprit_evict(void) {
+    rec_culprit_t tab[3];
+    int n = 0;
+    uint64_t d = 86400, b = 1000000, now = b + 10 * d;
+    memset(tab, 0, sizeof tab);
+    rec_culprit_count(tab, &n, 3, "keep", b, b);
+    rec_culprit_count(tab, &n, 3, "stale", b + d, b + d);
+    rec_culprit_count(tab, &n, 3, "mid", b + 2 * d, b + 2 * d);
+    assert(rec_culprit_count(tab, &n, 3, "keep", now - d, now - d) == 1);
+    assert(rec_culprit_count(tab, &n, 3, "mid", now - 2 * d, now - 2 * d) == 2);
+    assert(rec_culprit_count(tab, &n, 3, "new", now, now) == 1);
+    assert(rec_culprit_count(tab, &n, 3, "keep", now, now) == 2);
+    assert(!strcmp(tab[1].key, "new"));
+    assert(rec_culprit_count(tab, &n, 3, "old", b, now) == 0);
+}
+
+static void arrow_set(void) {
+    static rec_shm_t m;
+    rec_arrow_t a, o;
+    memset(&a, 0, sizeof a);
+    a.state = 1; a.tier = REC_TIER_CRIT; a.event_ts = 77; strcpy(a.line, "x");
+    rec_arrow_set(&m, &a);
+    assert((m.seq & 1) == 0 && m.seq == 2);
+    assert(rec_snapshot_arrow(&m, &o) == 0);
+    assert(!memcmp(&a, &o, sizeof a));
+}
+
 static void shade(void) {
     rec_arrow_t a;
     memset(&a, 0, sizeof a);
@@ -241,6 +283,9 @@ int main(void) {
     tier_logout();
     tier_misc();
     pick_precedence();
+    pick_upgrade_and_trace();
+    culprit_evict();
+    arrow_set();
     shade();
     recurrence();
     render_example();
