@@ -61,11 +61,10 @@ static void prune(uint64_t now) {
     struct dirent *de;
     if (!d) return;
     while ((de = readdir(d))) {
-        char path[512];
         struct stat st;
         if (strncmp(de->d_name, "events-", 7) || !strstr(de->d_name, ".log")) continue;
-        snprintf(path, sizeof path, "%s/%s", dir_path, de->d_name);
-        if (stat(path, &st) == 0 && (uint64_t)st.st_mtime + 7 * 86400 < now) unlink(path);
+        if (fstatat(dirfd(d), de->d_name, &st, AT_SYMLINK_NOFOLLOW) == 0 && (uint64_t)st.st_mtime + 7 * 86400 < now)
+            unlinkat(dirfd(d), de->d_name, 0);
     }
     closedir(d);
 }

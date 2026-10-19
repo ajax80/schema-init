@@ -71,6 +71,21 @@ static void use_dir(const char *sub) {
     dir_path = d;
 }
 
+static void find_line(const char *needle, char *line, size_t n) {
+    DIR *d = opendir(dir_path);
+    struct dirent *de;
+    line[0] = 0;
+    while (d && (de = readdir(d))) {
+        FILE *f;
+        if (strncmp(de->d_name, "events-", 7) || !strstr(de->d_name, ".log")) continue;
+        f = fdopen(openat(dirfd(d), de->d_name, O_RDONLY | O_CLOEXEC), "r");
+        while (f && fgets(line, (int)n, f)) if (strstr(line, needle)) { fclose(f); closedir(d); return; }
+        if (f) fclose(f);
+        line[0] = 0;
+    }
+    if (d) closedir(d);
+}
+
 static void scenario_a(void) {
     puts("== A: live at 120 s, session exits 20 min in, hogs stop 5 min later");
     use_dir("a");
@@ -141,7 +156,6 @@ static void grey_yields(void) {
 
 static void earlyoom_strip(void) {
     char b[300], line[1024] = "";
-    FILE *f;
     puts("== earlyoom cmdline stays out of the ring");
     use_dir("e");
     reset(0);
@@ -150,15 +164,12 @@ static void earlyoom_strip(void) {
              (unsigned long long)now_wall());
     handle_datagram(b);
     check(shm->ring[(shm->head - 1) % REC_RING].msg[0] == '\0', "earlyoom ring msg empty");
-    snprintf(b, sizeof b, "grep -h 'secret-token' %s/events-*.log", dir_path);
-    f = popen(b, "r");
-    if (f) { if (!fgets(line, sizeof line, f)) line[0] = 0; pclose(f); }
+    find_line("secret-token", line, sizeof line);
     check(strstr(line, "secret-token") != NULL, "earlyoom file keeps cmdline");
 }
 
 static void chain_box_boot(void) {
     char line[1024] = "", cmd[400], *p;
-    FILE *f;
     rec_hog_t h;
     const rec_event_t *r;
     puts("== parent chain, box state, boot id");
@@ -182,9 +193,7 @@ static void chain_box_boot(void) {
     tick(1125);
     r = &shm->ring[(shm->head - 1) % REC_RING];
     check(!strcmp(r->msg, "CPU pinned 2 min by cosmic-player " TIMES "8") && !strcmp(r->boot, "0f3a9c21"), "ring msg has no box state or cmdline; boot set");
-    snprintf(cmd, sizeof cmd, "grep -h 'kind=episode-live' %s/events-*.log", dir_path);
-    f = popen(cmd, "r");
-    if (f) { if (!fgets(line, sizeof line, f)) line[0] = 0; pclose(f); }
+    find_line("kind=episode-live", line, sizeof line);
     p = strstr(line, " boot=0f3a9c21 msg=CPU pinned 2 min by cosmic-player " TIMES "8 | cpu=91% mem=0% swap=512M/8192M temp=71C [cosmic-player --thumbnail a.mkv]");
     check(p != NULL, "file line carries boot, box state and cmdline");
     if (!p) printf("     file: %s", line);
