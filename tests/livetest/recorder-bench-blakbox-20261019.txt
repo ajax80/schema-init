@@ -20,3 +20,13 @@ ts=1792430727 src=session kind=plasma-exit comm=cosmic-player pid=0 rc=0 crit=0 
 ts=1792430756 src=psi kind=episode-start comm=cosmic-player pid=487403 rc=0 crit=0 subj=cosmic-player←kioworker←dolphin←recorder-replay←sudo tier=0 boot=b78f13d1 msg=CPU pinned 0 min by cosmic-player ×8 | cpu=2% mem=0% swap=1536M/16383M zram=1457M>372M [/run/schema-recorder-replay/bin/cosmic-player -c while :; do :; done]
 ts=1792430860 src=psi kind=episode-end comm=ghostty pid=5359 rc=0 crit=0 subj=ghostty←python3←schema-dbus←plasma-session-←runuser tier=0 boot=b78f13d1 msg=CPU pinned 1 min by ghostty | cpu=3% mem=0% swap=1536M/16383M zram=1456M>371M [/usr/sbin/ghostty -e /home/ajax80/.local/bin/claude --dangerously-skip-permissio
 ```
+
+## Step 2/3: Eli (3 reboots on 1.1272, recorder enabled) — tests/livetest/eli-bench-20261019-recorder-1272.txt
+userspace 6.394 / 6.529 / 6.769 s  (baseline 1249: 6.684 / 6.672 / 6.871)
+desktop_drawn 20.7 / 20.7 / 20.3 s (baseline 20.5 / 20.3 / 20.6)
+PID1 VmRSS 4392 / 4208 / 4204 kB (pre-install live 4256)
+recorder VmRSS 1920 / 2060 / 2064 kB — of which RssFile 1848 (shared glibc), RssAnon 176; PSS 279 kB, Private_Dirty 216 kB
+Each boot logs a trace-tier PSI episode (modprobe<-schema-udev, boot load); no arrow.
+
+## blakbox live (pre-reboot) calm 10 min
+recorder voluntary_ctxt_switches 2 -> 2 (delta 0); VmRSS 1604 kB (RssAnon 100, RssFile 1464)

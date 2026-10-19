@@ -1,0 +1,30 @@
+== new boot 1
+schema-init-0.4.15-1.1272.20261019gita7a46c8.fc44.x86_64
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=84
+kwin=8.8 plasmashell=14.0 desktop_drawn=20.7 portal_kde=13.5
+xorg=- xfce4_session=- xfce4_panel=- xfdesktop=-
+mem_used_mb=1356 procs=231 load1=0.23 io_some_avg300=0.61
+boot: kernel 3.699s + userspace 6.394s = 10.094s   (last ready: plasma-autologin)
+pid1_VmRSS: 4392 kB
+recorder_pid=444 VmRSS: 1920 kB voluntary_ctxt_switches: 19
+ schema-init — limp-mode board   system: RUNNING   seq:405   services:49
+== new boot 2
+schema-init-0.4.15-1.1272.20261019gita7a46c8.fc44.x86_64
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=80
+kwin=8.8 plasmashell=14.0 desktop_drawn=20.7 portal_kde=13.5
+xorg=- xfce4_session=- xfce4_panel=- xfdesktop=-
+mem_used_mb=1355 procs=231 load1=0.44 io_some_avg300=0.59
+boot: kernel 3.659s + userspace 6.529s = 10.188s   (last ready: plasma-autologin)
+pid1_VmRSS: 4208 kB
+recorder_pid=447 VmRSS: 2060 kB voluntary_ctxt_switches: 23
+ schema-init — limp-mode board   system: RUNNING   seq:436   services:49
+== new boot 3
+schema-init-0.4.15-1.1272.20261019gita7a46c8.fc44.x86_64
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=80
+kwin=8.9 plasmashell=13.8 desktop_drawn=20.3 portal_kde=13.6
+xorg=- xfce4_session=- xfce4_panel=- xfdesktop=-
+mem_used_mb=1355 procs=231 load1=0.44 io_some_avg300=0.63
+boot: kernel 3.685s + userspace 6.769s = 10.454s   (last ready: plasma-autologin)
+pid1_VmRSS: 4204 kB
+recorder_pid=439 VmRSS: 2064 kB voluntary_ctxt_switches: 20
+ schema-init — limp-mode board   system: RUNNING   seq:423   services:49
