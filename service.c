@@ -159,15 +159,21 @@ uint32_t service_probe_f9(service_t *svc, service_t *table, int count) {
         now.tv_sec - svc->spawn_time_mono.tv_sec >= COOLDOWN_SECS)
         f |= F9_RETRY_WIN;
 
-    /* F9_FALL_EXISTS / F9_FALL_HEALTH — no fallback system yet, reserved */
-    (void)table; (void)count;
+    /* F9_FALL_EXISTS / F9_FALL_HEALTH — a card=fallback: service, and whether it is up */
+    service_t *fb = service_fallback(svc, table, count);
+    if (fb) {
+        f |= F9_FALL_EXISTS;
+        if (fb->child_pid > 0 && (fb->inst.state == STATE_FUNDAMENTAL || fb->inst.state == STATE_PERFECT))
+            f |= F9_FALL_HEALTH;
+    }
 
     /* F9_MEM_FREE / F9_MEM_SUFF */
     mem = free_mem_kb();
     if (mem > 0)            f |= F9_MEM_FREE;
     if (mem >= MEM_MIN_KB)  f |= F9_MEM_SUFF;
 
-    /* F9_ESC_PATH / F9_ESC_AUTH — no escalation path yet */
+    /* F9_ESC_PATH / F9_ESC_AUTH — a declared card is still in hand */
+    if (svc->card_next < svc->card_count) f |= F9_ESC_PATH | F9_ESC_AUTH;
 
     /* F9_TIMEOUT_WIN / F9_TIMEOUT_EXT */
     if (svc->restart_count < svc->max_restarts) {
@@ -1171,6 +1177,65 @@ static void close_fds_from(int lo) {
     }
 }
 
+static void svc_child_log(const service_t *svc) {
+    char log_path[256];
+    mkdir("/var/log/schema-init", 0755);
+    snprintf(log_path, sizeof(log_path), "/var/log/schema-init/%s.log", svc->name);
+    int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
+    if (fd < 0) {
+        mkdir("/run/log", 0755);
+        mkdir("/run/log/schema-init", 0755);
+        snprintf(log_path, sizeof(log_path), "/run/log/schema-init/%s.log", svc->name);
+        fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
+    }
+    if (fd < 0) {
+        fd = open("/dev/null", O_WRONLY);
+    }
+    if (fd >= 0) {
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+}
+
+service_t *service_fallback(const service_t *svc, service_t *table, int count) {
+    for (int c = 0; c < svc->card_count; c++) {
+        if (strncmp(svc->card[c], "fallback:", 9) != 0) continue;
+        for (int j = 0; j < count; j++)
+            if (&table[j] != svc && strcmp(table[j].name, svc->card[c] + 9) == 0) return &table[j];
+    }
+    return NULL;
+}
+
+int service_is_standby(const service_t *svc, const service_t *table, int count) {
+    for (int i = 0; i < count; i++)
+        for (int c = 0; &table[i] != svc && c < table[i].card_count; c++)
+            if (strncmp(table[i].card[c], "fallback:", 9) == 0 && strcmp(table[i].card[c] + 9, svc->name) == 0)
+                return 1;
+    return 0;
+}
+
+pid_t service_card_spawn(const service_t *svc, int idx) {
+    pid_t pid = fork();
+    if (pid != 0) return pid;
+    service_reset_child_sigmask();
+    setsid();
+    int null_fd = open("/dev/null", O_RDONLY);
+    if (null_fd >= 0) {
+        dup2(null_fd, STDIN_FILENO);
+        if (null_fd > 0) close(null_fd);
+    }
+    svc_child_log(svc);
+    syscall(SYS_close_range, 3, ~0U, 0);
+    char *w[33];
+    int nw = service_split_cmdline(svc->card[idx] + 5, w, 32);
+    if (nw <= 0) _exit(127);
+    w[nw] = NULL;
+    execv(w[0], w);
+    dprintf(2, "[schema-init] %s: card %s: %s\n", svc->name, w[0], strerror(errno));
+    _exit(127);
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -1224,24 +1289,7 @@ int service_spawn(service_t *svc) {
             dup2(null_fd, STDIN_FILENO);
             if (null_fd > 0) close(null_fd);
         }
-        char log_path[256];
-        mkdir("/var/log/schema-init", 0755);
-        snprintf(log_path, sizeof(log_path), "/var/log/schema-init/%s.log", svc->name);
-        int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
-        if (fd < 0) {
-            mkdir("/run/log", 0755);
-            mkdir("/run/log/schema-init", 0755);
-            snprintf(log_path, sizeof(log_path), "/run/log/schema-init/%s.log", svc->name);
-            fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
-        }
-        if (fd < 0) {
-            fd = open("/dev/null", O_WRONLY);
-        }
-        if (fd >= 0) {
-            dup2(fd, STDOUT_FILENO);
-            dup2(fd, STDERR_FILENO);
-            close(fd);
-        }
+        svc_child_log(svc);
         char *file_env[64];
         int file_envc = 0;
         for (int i = 0; i < svc->env_file_count; i++) {
@@ -1723,6 +1771,11 @@ void service_free_landlock(service_t *svc) {
         svc->exec_pre[i] = NULL;
     }
     svc->exec_pre_count = 0;
+    for (int i = 0; i < svc->card_count; i++) {
+        free(svc->card[i]);
+        svc->card[i] = NULL;
+    }
+    svc->card_count = 0;
     for (int i = 0; i < svc->landlock_count; i++) {
         free(svc->landlock[i]);
         svc->landlock[i] = NULL;
@@ -1803,6 +1856,12 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
             svc->exec_pre[i] = NULL;
         }
         svc->exec_pre_count = 0;
+    } else if (strcmp(key, "card") == 0) {
+        for (int i = 0; i < svc->card_count; i++) {
+            free(svc->card[i]);
+            svc->card[i] = NULL;
+        }
+        svc->card_count = 0;
     } else if (strcmp(key, "condition") == 0) {
         memset(svc->cond, 0, sizeof svc->cond);
         svc->cond_count = 0;
@@ -1893,6 +1952,14 @@ static int svc_parse_rlimit(service_t *svc, const char *key, const char *val) {
 }
 
 /* One key=value line. 0 = ok, -1 = the service must be rejected. */
+static int svc_cmd_ok(const char *cmd) {
+    char *w[33];
+    int nw = service_split_cmdline(cmd, w, 33);
+    int ok = nw > 0 && nw <= 32 && w[0][0] == '/';
+    for (int i = 0; i < nw; i++) free(w[i]);
+    return ok;
+}
+
 static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, const char *path) {
     char *eq = strchr(line, '=');
     char *val;
@@ -1956,18 +2023,23 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         }
         strncpy(svc->env_file[svc->env_file_count++], val, sizeof svc->env_file[0] - 1);
     } else if (strcmp(line, "exec_pre") == 0) {
-        char *w[33];
         const char *cmd = val + strspn(val, " \t");
-        cmd += strspn(cmd, "+-");
-        int nw = service_split_cmdline(cmd, w, 33);
-        int ok = nw > 0 && nw <= 32 && w[0][0] == '/' && svc->exec_pre_count < MAX_EXEC_PRE;
-        for (int i = 0; i < nw; i++) free(w[i]);
-        if (!ok) {
+        if (!svc_cmd_ok(cmd + strspn(cmd, "+-")) || svc->exec_pre_count >= MAX_EXEC_PRE) {
             fprintf(stderr, "[schema-init] %s: exec_pre=%s needs an absolute command with balanced quotes and at most 32 words, at most %d per service\n",
                     svc->name[0] ? svc->name : path, val, MAX_EXEC_PRE);
             return -1;
         }
         svc->exec_pre[svc->exec_pre_count++] = strdup(val + strspn(val, " \t"));
+    } else if (strcmp(line, "card") == 0) {
+        const char *c = val + strspn(val, " \t");
+        int ok = strncmp(c, "exec:", 5) == 0 ? svc_cmd_ok(c + 5)
+               : strncmp(c, "fallback:", 9) == 0 && c[9] && strlen(c + 9) < 64 && !strpbrk(c + 9, "/ \t");
+        if (!ok || svc->card_count >= MAX_CARDS) {
+            fprintf(stderr, "[schema-init] %s: card=%s needs exec: and an absolute command of at most 32 words, or fallback: and a service name; at most %d per service\n",
+                    svc->name[0] ? svc->name : path, val, MAX_CARDS);
+            return -1;
+        }
+        svc->card[svc->card_count++] = strdup(c);
     } else if (strcmp(line, "listen") == 0) {
         struct sockaddr_storage ss;
         socklen_t len;

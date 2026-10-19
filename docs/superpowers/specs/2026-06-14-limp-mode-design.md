@@ -166,6 +166,26 @@ is the first external reader; no producer changes needed for the read-only incre
   ⚠️ **Physical-console access can now restart services.** This is not a new boundary — tty2 already
   autologins root — but it is worth stating rather than discovering.
 - Increment 4 — `.svc` card-ladder syntax + auto-healer (C) playing declared decks.
+  **First card type DONE (2026-10-18):** `card=exec:CMD`, up to 4 per service. On each retry
+  of the recovery arc PID 1 arms the next card; the spawned child runs it as root before
+  hardening and `exec_pre`, so PID 1 never blocks on it. A failing card is logged and
+  ignored. One pass through the deck, reset with the restart budget (a 300 s run) or
+  `schema-ctl reset`. A card in hand sets the reserved `F9_ESC_PATH`/`F9_ESC_AUTH`.
+  Verified on DBox (Artix): a service that crashes until a file exists, with a no-op card
+  then a fixing card, ran card 1 (as uid 0 under `user=nobody`), card 2, then stayed up,
+  `cards=2/2`. Cost: +1.1 KB text, +18 KB BSS, PID 1 RSS unchanged (1572 kB).
+  After the review, cards run as their own process forked by PID 1 at the retry (as
+  `failsafe=` does): the service waits in NEW_PROCESS until the card exits, 30 s limit.
+  **`card=fallback:SVC` DONE (2026-10-18):** SVC is a standby (held at boot, STANDBY on the
+  board). Playing the card starts it and parks the primary with the dormant backoff; on the
+  primary's wake the standby is stopped and the primary spawns only after it exits; on the
+  primary's next dormancy or excision the standby comes back. Fills `F9_FALL_EXISTS` /
+  `F9_FALL_HEALTH`. Card state rides the re-exec/reload runtime fields.
+  **Board DONE:** shm layout 3 carries cards played/total and limp bits; `schema-board`
+  shows a CARDS column, "limping: fallback in play" and "standing in".
+  Verified on DBox (Artix): crash → card 1 → fallback card → cam-lite up, cam parked; heal +
+  reset → cam-lite stopped first, then cam; break again → park 300 s → wake stops cam-lite,
+  cam fails with an empty deck → parked → cam-lite back; state survives `schema-ctl reexec`.
 - Increment 5 — generative fallback card from F8/F9/F6 flags when the deck is empty.
 - Increment 6 — compositor tile bridged to `schema-plasma-watchdog`, surgical→nuclear
   ladder, nuke-on-confirm-only with unsaved-work warning.
