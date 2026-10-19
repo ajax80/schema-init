@@ -66,7 +66,7 @@ Each card is played once; the deck starts over after the service has run for 5 m
 
 ## Flight recorder
 
-When something dies without a service failing (a runaway process pins the CPU, the kernel runs out of memory, the desktop session drops you to a console), every service can still look green. `schema-recorder` keeps a short rolling record of what happened and the board shows the latest line, for example `desktop session ended - CPU pinned 20 min by cosmic-player x8`. It is opt-in, and costs PID 1 nothing:
+When something dies without a service failing (a runaway process pins the CPU, the kernel runs out of memory, the desktop session drops you to a console), every service can still look green. `schema-recorder` keeps a short rolling record of what happened and the board shows the latest line, for example `desktop session ended - CPU pinned 20 min by cosmic-player x8`. It is opt-in. PID 1 only sends it a short message per event. On a real desktop the recorder uses about 0.2–0.3 MB (PSS) and doesn't wake up while nothing is happening; boot time and PID 1 memory didn't change across 6 reboots on two machines:
 
 ```sh
 sudo cp /usr/share/schema-init/services/schema-recorder.svc.example /etc/schema-init/services/schema-recorder.svc && sudo schema-ctl add schema-recorder
