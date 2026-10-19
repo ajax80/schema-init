@@ -415,6 +415,38 @@ int main(void) {
             assert(service_load_one(p, &svc) == 0);
         }
     }
+    snprintf(p, sizeof p, "%s/t.svc", dir3);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\n"
+                 "landlock_bind_tcp=80, 443\nlandlock_bind_tcp=8080\nlandlock_connect_tcp=none\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.landlock_count == 0 && svc.landlock_tcp_n[0] == 3 && svc.landlock_tcp_n[1] == 0);
+    assert(svc.landlock_tcp[0][0] == 80 && svc.landlock_tcp[0][1] == 443 && svc.landlock_tcp[0][2] == 8080);
+    write_svc(p, "name=t\nexec=/usr/bin/true\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.landlock_tcp_n[0] == -1 && svc.landlock_tcp_n[1] == -1);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_connect_tcp=65536\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_connect_tcp=http\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_bind_tcp=\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_bind_tcp=80,443\nlandlock_bind_tcp=none\n");
+    assert(service_load_one(p, &svc) == 0 && svc.landlock_tcp_n[0] == 0);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_bind_tcp=80,none\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_bind_tcp=-0\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_bind_tcp=+80\n");
+    assert(service_load_one(p, &svc) == -1);
+    {
+        char body[512] = "name=t\nexec=/usr/bin/true\nno_new_privs=1\nlandlock_connect_tcp=";
+        for (int i = 0; i < 300; i++) strcat(body, " ");
+        strcat(body, "8080\n");
+        write_svc(p, body);
+        assert(service_load_one(p, &svc) == -1);
+    }
+    write_svc(p, "name=t\nexec=/usr/bin/true\nkeep_caps=CAP_NET_BIND_SERVICE\nlandlock_bind_tcp=80\n");
+    assert(service_load_one(p, &svc) == -1);
     snprintf(p, sizeof p, "%s/q.svc", dir3);
     f = fopen(p, "w");
     assert(f);

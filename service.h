@@ -349,6 +349,8 @@ typedef struct {
     char            *landlock[MAX_LANDLOCK]; /* landlock_ro= / landlock_rw= paths    */
     uint32_t         landlock_rw;      /* bit i: landlock[i] is read-write          */
     int              landlock_count;
+    int              landlock_tcp_n[2];   /* bind / connect: ports allowed, -1 = unrestricted */
+    uint16_t         landlock_tcp[2][MAX_LANDLOCK];
     uint8_t          hard_set;          /* HARD_* knobs given explicitly in .svc   */
     uint8_t          hard_default;      /* HARD_* knobs taken from host default    */
     uint8_t          hard_dropped;      /* HARD_* defaults dropped (ns conflict)   */
@@ -390,6 +392,7 @@ int service_apply_hardening(const service_t *svc);
 
 /* free the landlock_ro=/landlock_rw= path and exec_pre= strings */
 void service_free_landlock(service_t *svc);
+int  service_landlock_on(const service_t *svc);
 int service_env_file_read(const char *path, char **pairs, int max);
 int service_expand_argv(char *const *argv, char **out, int max);
 int service_split_cmdline(const char *s, char **out, int max);
