@@ -155,7 +155,7 @@ def main():
 
         print("\n-- derived files describe both --")
         seat = open(os.path.join(rundir, 'seats', 'seat0')).read()
-        check('seat file lists both sessions', 'SESSIONS=1 2' in seat,
+        check('seat file lists both sessions', sorted(next((l.split('=', 1)[1] for l in seat.splitlines() if l.startswith('SESSIONS=')), '').split()) == ['1', '2'],
               seat.replace('\n', ' '))
         check('seat file names the active one', 'ACTIVE=1\n' in seat,
               seat.replace('\n', ' '))

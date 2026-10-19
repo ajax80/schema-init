@@ -173,7 +173,7 @@ def main():
         check('seat file exists', bool(body), seatf)
         check('seat file names the active session', 'ACTIVE=1' in body,
               body.replace('\n', ' '))
-        check('seat file lists both sessions', 'SESSIONS=1 2' in body,
+        check('seat file lists both sessions', sorted(next((l.split('=', 1)[1] for l in body.splitlines() if l.startswith('SESSIONS=')), '').split()) == ['1', '2'],
               body.replace('\n', ' '))
         userf = os.path.join(rundir, 'users', '1000')
         ubody = open(userf).read() if os.path.exists(userf) else ''
@@ -183,7 +183,7 @@ def main():
         check('user file ACTIVE_SESSIONS is only the active one',
               'ACTIVE_SESSIONS=1' in ulines, ubody.replace('\n', ' '))
         check('user file ONLINE_SESSIONS lists both',
-              'ONLINE_SESSIONS=1 2' in ulines, ubody.replace('\n', ' '))
+              sorted(next((l.split('=', 1)[1] for l in ubody.splitlines() if l.startswith('ONLINE_SESSIONS=')), '').split()) == ['1', '2'], ubody.replace('\n', ' '))
         check('user file ONLINE_SEATS names the seat',
               'ONLINE_SEATS=seat0' in ulines, ubody.replace('\n', ' '))
 
