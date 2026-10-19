@@ -18,7 +18,7 @@ DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
 DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-dbus schema-systemctl
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -59,6 +59,9 @@ schema-subreaper: schema-subreaper.c
 
 schema-coredump: schema-coredump.c coredump.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lzstd
+
+schema-recorder: schema-recorder.c recorder.h recorder_logic.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
@@ -228,7 +231,7 @@ install-analyze:
 	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
 
 clean:
-	rm -f $(OBJS) schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-systemctl udev-parity libatomic_asneeded.a
+	rm -f $(OBJS) schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-systemctl udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
@@ -241,8 +244,9 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test: schema-coredump
+test: schema-coredump schema-recorder
 	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
+	sh tests/test_recorder_daemon.sh
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
