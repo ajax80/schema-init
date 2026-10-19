@@ -30,9 +30,11 @@ int landlock_beneath(const char *path, const char *p) {
     return path[n] == '\0' || path[n] == '/' || (n == 1 && p[0] == '/');
 }
 
-int apply_landlock(char *const *paths, uint32_t rw_mask, int n, const char **step) {
-    struct landlock_ruleset_attr attr = { .handled_access_fs = (1ULL << 16) - 1 };
-    int abi, rs, i;
+int apply_landlock(char *const *paths, uint32_t rw_mask, int n,
+                   const int tcp_n[2], const uint16_t tcp[2][MAX_LANDLOCK], const char **step) {
+    static const uint64_t net[2] = { LANDLOCK_ACCESS_NET_BIND_TCP, LANDLOCK_ACCESS_NET_CONNECT_TCP };
+    struct landlock_ruleset_attr attr = { .handled_access_fs = n ? (1ULL << 16) - 1 : 0 };
+    int abi, rs, i, k;
 
     *step = "abi";
     abi = (int)syscall(SYS_landlock_create_ruleset, NULL, 0,
@@ -41,6 +43,13 @@ int apply_landlock(char *const *paths, uint32_t rw_mask, int n, const char **ste
     if (abi < 2) attr.handled_access_fs &= ~LANDLOCK_ACCESS_FS_REFER;
     if (abi < 3) attr.handled_access_fs &= ~LANDLOCK_ACCESS_FS_TRUNCATE;
     if (abi < 5) attr.handled_access_fs &= ~LANDLOCK_ACCESS_FS_IOCTL_DEV;
+    for (k = 0; k < 2; k++)
+        if (tcp_n[k] >= 0) attr.handled_access_net |= net[k];
+    if (attr.handled_access_net && abi < 4) {
+        *step = "TCP rules need Landlock ABI 4 (kernel 6.7)";
+        errno = EOPNOTSUPP;
+        return -1;
+    }
 
     *step = "create_ruleset";
     rs = (int)syscall(SYS_landlock_create_ruleset, &attr, sizeof(attr), 0);
@@ -72,6 +81,19 @@ int apply_landlock(char *const *paths, uint32_t rw_mask, int n, const char **ste
             return -1;
         }
         close(fd);
+    }
+
+    for (k = 0; k < 2; k++) {
+        for (i = 0; i < tcp_n[k]; i++) {
+            struct landlock_net_port_attr np = { .allowed_access = net[k], .port = tcp[k][i] };
+            if (syscall(SYS_landlock_add_rule, rs, LANDLOCK_RULE_NET_PORT, &np, 0) != 0) {
+                int e = errno;
+                *step = k ? "connect_tcp port" : "bind_tcp port";
+                close(rs);
+                errno = e;
+                return -1;
+            }
+        }
     }
 
     *step = "restrict_self";
