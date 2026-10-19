@@ -19,6 +19,7 @@
 #define MAX_ENV         16
 #define MAX_ENV_FILES   4
 #define MAX_EXEC_PRE    8
+#define MAX_CARDS       4
 #define MAX_LISTEN      4
 #define MAX_COND        8
 #define MAX_DEPS        8
@@ -257,6 +258,10 @@ typedef struct {
     int              expand_args;
     char            *exec_pre[MAX_EXEC_PRE];
     int              exec_pre_count;
+    char            *card[MAX_CARDS];    /* card=exec:CMD, played one per retry, in order */
+    int              card_count;
+    int              card_next;           /* next card to play; reset with the restart budget */
+    int              card_armed;          /* card to run in the next spawn, -1 none */
     char             listen[MAX_LISTEN][112]; /* listen= specs: stream|dgram|seqpacket|fifo:ADDR */
     int              listen_count;
     int              listen_lazy;         /* bind at boot, spawn on the first connection */

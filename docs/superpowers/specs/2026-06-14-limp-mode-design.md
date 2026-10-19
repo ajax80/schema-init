@@ -166,6 +166,16 @@ is the first external reader; no producer changes needed for the read-only incre
   ⚠️ **Physical-console access can now restart services.** This is not a new boundary — tty2 already
   autologins root — but it is worth stating rather than discovering.
 - Increment 4 — `.svc` card-ladder syntax + auto-healer (C) playing declared decks.
+  **First card type DONE (2026-10-18):** `card=exec:CMD`, up to 4 per service. On each retry
+  of the recovery arc PID 1 arms the next card; the spawned child runs it as root before
+  hardening and `exec_pre`, so PID 1 never blocks on it. A failing card is logged and
+  ignored. One pass through the deck, reset with the restart budget (a 300 s run) or
+  `schema-ctl reset`. A card in hand sets the reserved `F9_ESC_PATH`/`F9_ESC_AUTH`.
+  Verified on DBox (Artix): a service that crashes until a file exists, with a no-op card
+  then a fixing card, ran card 1 (as uid 0 under `user=nobody`), card 2, then stayed up,
+  `cards=2/2`. Cost: +1.1 KB text, +18 KB BSS, PID 1 RSS unchanged (1572 kB).
+  **Next:** `card=fallback:SVC` (start a standby service while this one is down; fills the
+  reserved `F9_FALL_EXISTS`/`F9_FALL_HEALTH`), then showing the card in play on the board.
 - Increment 5 — generative fallback card from F8/F9/F6 flags when the deck is empty.
 - Increment 6 — compositor tile bridged to `schema-plasma-watchdog`, surgical→nuclear
   ladder, nuke-on-confirm-only with unsaved-work warning.

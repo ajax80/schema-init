@@ -681,8 +681,20 @@ static void load_env_file(void) {
 static void restart_budget_refresh(service_t *svc) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    if (now.tv_sec - svc->spawn_time_mono.tv_sec >= RESTART_RESET_SECS)
+    if (now.tv_sec - svc->spawn_time_mono.tv_sec >= RESTART_RESET_SECS) {
         svc->restart_count = 0;
+        svc->card_next = 0;
+    }
+}
+
+/* Limp-mode: before a retry, arm the next declared card; the spawned child
+ * runs it as root before exec. One card per retry, in file order. */
+static void play_card(service_t *svc) {
+    char ev[32];
+    if (svc->card_next >= svc->card_count) return;
+    svc->card_armed = svc->card_next++;
+    snprintf(ev, sizeof ev, "card-%d/%d", svc->card_next, svc->card_count);
+    service_log(svc, ev);
 }
 
 static void mark_boot_ready(service_t *svc, int how) {
@@ -1370,6 +1382,7 @@ static void tick_service(service_t *svc,
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
                 service_log(svc, "retry");
+                play_card(svc);
             } else if (svc->inst.state == STATE_FRICTION) {
                 service_log(svc, "friction");
             }
@@ -1382,6 +1395,7 @@ static void tick_service(service_t *svc,
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
                 service_log(svc, "retry-deep");
+                play_card(svc);
             } else if (svc->inst.state == STATE_EXCISED) {
                 service_cgroup_kill(svc);
                 svc->dormant_count++;
@@ -1407,6 +1421,7 @@ static void tick_service(service_t *svc,
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
                 service_log(svc, "dormant-wake");
+                play_card(svc);
             }
             break;
         }
@@ -1841,12 +1856,16 @@ static void ctl_cmd(int fd, char *line) {
             }
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
-            for (i = 0; i < svc_count; i++)
-                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s\n",
+            for (i = 0; i < svc_count; i++) {
+                char deck[24] = "";
+                if (services[i].card_count)
+                    snprintf(deck, sizeof deck, "  cards=%d/%d", services[i].card_next, services[i].card_count);
+                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s\n",
                     services[i].name, (int)services[i].child_pid,
-                    state_name(services[i].inst.state), services[i].restart_count,
+                    state_name(services[i].inst.state), services[i].restart_count, deck,
                     services[i].term_signal ? "  last=" : "",
                     services[i].term_signal ? last_exit_str(&services[i]) : "");
+            }
         }
 
     } else if (strncmp(line, "pet ", 4) == 0) {
@@ -1938,6 +1957,7 @@ static void ctl_cmd(int fd, char *line) {
             for (i = 0; i < svc_count; i++) {
                 services[i].restart_count = 0;
                 services[i].dormant_count = 0;
+                services[i].card_next = 0;
                 services[i].flags &= ~SVC_NO_RESTART;
                 if (services[i].inst.state == STATE_EXCISED ||
                     services[i].inst.state == STATE_DORMANT ||
@@ -1951,6 +1971,7 @@ static void ctl_cmd(int fd, char *line) {
                 if (strcmp(services[i].name, name) != 0) continue;
                 services[i].restart_count = 0;
                 services[i].dormant_count = 0;
+                services[i].card_next = 0;
                 services[i].flags &= ~SVC_NO_RESTART;
                 if (services[i].inst.state == STATE_EXCISED ||
                     services[i].inst.state == STATE_DORMANT ||

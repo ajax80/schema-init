@@ -167,7 +167,8 @@ uint32_t service_probe_f9(service_t *svc, service_t *table, int count) {
     if (mem > 0)            f |= F9_MEM_FREE;
     if (mem >= MEM_MIN_KB)  f |= F9_MEM_SUFF;
 
-    /* F9_ESC_PATH / F9_ESC_AUTH — no escalation path yet */
+    /* F9_ESC_PATH / F9_ESC_AUTH — a declared card is still in hand */
+    if (svc->card_next < svc->card_count) f |= F9_ESC_PATH | F9_ESC_AUTH;
 
     /* F9_TIMEOUT_WIN / F9_TIMEOUT_EXT */
     if (svc->restart_count < svc->max_restarts) {
@@ -722,43 +723,47 @@ static void svc_apply_env(const service_t *svc, char **file_env, int file_envc) 
     }
 }
 
+static void svc_run_cmd(const service_t *svc, const char *what, const char *c, int ignore) {
+    char *w[33], *x[33], **argv = x;
+    int nw = service_split_cmdline(c, w, 32);
+    if (nw <= 0) _exit(1);
+    w[nw] = NULL;
+    if (svc->expand_args) {
+        int nx = service_expand_argv(w, x, 32);
+        if (nx < 0) {
+            dprintf(2, "[schema-init] %s: %s %s expands to more than 32 words%s\n",
+                    svc->name, what, c, ignore ? ", ignored" : "");
+            if (!ignore) _exit(1);
+            return;
+        }
+        x[nx] = NULL;
+    } else {
+        memcpy(x, w, nw * sizeof *w);
+        x[nw] = NULL;
+    }
+    pid_t p = fork();
+    if (p == 0) {
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    int st = 0;
+    while (p > 0 && waitpid(p, &st, 0) < 0 && errno == EINTR) ;
+    if (p < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        dprintf(2, "[schema-init] %s: %s %s failed (%s %d)%s\n", svc->name, what, c,
+                p < 0 ? "fork" : WIFEXITED(st) ? "exit" : "signal",
+                p < 0 ? errno : WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st),
+                ignore ? ", ignored" : "");
+        if (!ignore) _exit(1);
+    }
+}
+
 static void svc_run_pre(const service_t *svc, int privileged) {
     for (int i = 0; i < svc->exec_pre_count; i++) {
         const char *c = svc->exec_pre[i];
         size_t pl = strspn(c, "+-");
         int plus = memchr(c, '+', pl) != NULL, ignore = memchr(c, '-', pl) != NULL;
         if (plus != privileged) continue;
-        char *w[33], *x[33], **argv = x;
-        int nw = service_split_cmdline(c + pl, w, 32);
-        if (nw <= 0) _exit(1);
-        w[nw] = NULL;
-        if (svc->expand_args) {
-            int nx = service_expand_argv(w, x, 32);
-            if (nx < 0) {
-                dprintf(2, "[schema-init] %s: exec_pre %s expands to more than 32 words%s\n",
-                        svc->name, c, ignore ? ", ignored" : "");
-                if (!ignore) _exit(1);
-                continue;
-            }
-            x[nx] = NULL;
-        } else {
-            memcpy(x, w, nw * sizeof *w);
-            x[nw] = NULL;
-        }
-        pid_t p = fork();
-        if (p == 0) {
-            execv(argv[0], argv);
-            _exit(127);
-        }
-        int st = 0;
-        while (p > 0 && waitpid(p, &st, 0) < 0 && errno == EINTR) ;
-        if (p < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-            dprintf(2, "[schema-init] %s: exec_pre %s failed (%s %d)%s\n", svc->name, c,
-                    p < 0 ? "fork" : WIFEXITED(st) ? "exit" : "signal",
-                    p < 0 ? errno : WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st),
-                    ignore ? ", ignored" : "");
-            if (!ignore) _exit(1);
-        }
+        svc_run_cmd(svc, "exec_pre", c + pl, ignore);
     }
 }
 
@@ -1320,10 +1325,12 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
-        if (svc->exec_pre_count) {
+        if (svc->exec_pre_count || svc->card_armed >= 0)
             svc_apply_env(svc, file_env, file_envc);
+        if (svc->card_armed >= 0 && svc->card_armed < svc->card_count)
+            svc_run_cmd(svc, "card", svc->card[svc->card_armed] + 5, 1);
+        if (svc->exec_pre_count)
             svc_run_pre(svc, 1);
-        }
         if (service_apply_hardening(svc) != 0)
             _exit(126);
         if (svc->run_user[0] && !svc->run_uid && strcmp(svc->run_user, "root") != 0) {
@@ -1415,6 +1422,7 @@ int service_spawn(service_t *svc) {
 
     close(sync[0]);
     svc->child_pid  = pid;
+    svc->card_armed = -1;
     svc->fork_state = 0;
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
@@ -1697,6 +1705,7 @@ static void svc_init_defaults(service_t *svc) {
     svc->allowed_slot_min = -1;
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
+    svc->card_armed = -1;
     svc->timer_cal_hour = -1;
     svc->timer_cal_dow = -1;
     svc->timer_cal_dom = -1;
@@ -1723,6 +1732,11 @@ void service_free_landlock(service_t *svc) {
         svc->exec_pre[i] = NULL;
     }
     svc->exec_pre_count = 0;
+    for (int i = 0; i < svc->card_count; i++) {
+        free(svc->card[i]);
+        svc->card[i] = NULL;
+    }
+    svc->card_count = 0;
     for (int i = 0; i < svc->landlock_count; i++) {
         free(svc->landlock[i]);
         svc->landlock[i] = NULL;
@@ -1803,6 +1817,12 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
             svc->exec_pre[i] = NULL;
         }
         svc->exec_pre_count = 0;
+    } else if (strcmp(key, "card") == 0) {
+        for (int i = 0; i < svc->card_count; i++) {
+            free(svc->card[i]);
+            svc->card[i] = NULL;
+        }
+        svc->card_count = 0;
     } else if (strcmp(key, "condition") == 0) {
         memset(svc->cond, 0, sizeof svc->cond);
         svc->cond_count = 0;
@@ -1968,6 +1988,18 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         svc->exec_pre[svc->exec_pre_count++] = strdup(val + strspn(val, " \t"));
+    } else if (strcmp(line, "card") == 0) {
+        char *w[33];
+        const char *c = val + strspn(val, " \t");
+        int nw = strncmp(c, "exec:", 5) == 0 ? service_split_cmdline(c + 5, w, 33) : 0;
+        int ok = nw > 0 && nw <= 32 && w[0][0] == '/' && svc->card_count < MAX_CARDS;
+        for (int i = 0; i < nw; i++) free(w[i]);
+        if (!ok) {
+            fprintf(stderr, "[schema-init] %s: card=%s needs exec: and an absolute command of at most 32 words, at most %d per service\n",
+                    svc->name[0] ? svc->name : path, val, MAX_CARDS);
+            return -1;
+        }
+        svc->card[svc->card_count++] = strdup(c);
     } else if (strcmp(line, "listen") == 0) {
         struct sockaddr_storage ss;
         socklen_t len;

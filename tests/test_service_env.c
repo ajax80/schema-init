@@ -360,6 +360,21 @@ int main(void) {
     assert(svc.exec_pre_count == 3);
     assert(strcmp(svc.exec_pre[0], "+-/bin/chown -f -R root:sssd /etc/sssd") == 0);
     assert(strcmp(svc.exec_pre[2], "-/usr/sbin/modprobe vboxguest") == 0);
+    snprintf(p, sizeof p, "%s/cards.svc", dir3);
+    write_svc(p,
+        "name=cards\nexec=/bin/true\n"
+        "card=exec:/bin/sh -c \"echo one\"\n"
+        "card= exec:/usr/bin/touch /run/healed\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.card_count == 2 && svc.card_next == 0 && svc.card_armed == -1);
+    assert(strcmp(svc.card[1], "exec:/usr/bin/touch /run/healed") == 0);
+    write_svc(p, "name=cards\nexec=/bin/true\ncard=reboot:now\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=cards\nexec=/bin/true\ncard=exec:touch /run/x\n");
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=cards\nexec=/bin/true\ncard=exec:/bin/true\ncard=exec:/bin/true\n"
+                 "card=exec:/bin/true\ncard=exec:/bin/true\ncard=exec:/bin/true\n");
+    assert(service_load_one(p, &svc) == -1);
     snprintf(p, sizeof p, "%s/n.svc", dir3);
     write_svc(p, "name=n\nexec=/bin/true\nexec_pre=-udevadm settle\n");
     assert(service_load_one(p, &svc) == -1);
