@@ -21,6 +21,7 @@
 #include <sys/resource.h>
 #include "group.h"
 #include "schema_shm.h"
+#include "recorder.h"
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -1099,6 +1100,11 @@ static void reclaim_pass(void) {
 
 static void execute_survival_posture(int under_pressure) {
     int i;
+    rec_event_t ev;
+    memset(&ev, 0, sizeof ev);
+    ev.src = REC_SRC_PID1;
+    rec_copy(ev.kind, sizeof ev.kind, under_pressure ? "survival-enter" : "survival-leave");
+    rec_send(REC_SOCK_PATH, &ev);
     for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
         if (svc->child_pid <= 0) continue;

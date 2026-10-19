@@ -35,7 +35,7 @@ OBJS    = $(SRCS:.c=.o)
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h
+CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
 
 all: $(BINS)
 

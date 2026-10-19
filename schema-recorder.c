@@ -355,12 +355,21 @@ static void load(uint64_t now) {
 }
 
 static int send_mode(int argc, char **argv) {
-    char line[700];
+    char line[700], tmp[200];
+    const char *msg = NULL;
     rec_event_t e;
     int i, n;
     n = snprintf(line, sizeof line, "ts=%llu", (unsigned long long)now_wall());
-    for (i = 2; i < argc && n > 0 && (size_t)n < sizeof line; i++)
-        n += snprintf(line + n, sizeof line - (size_t)n, " %s", argv[i]);
+    for (i = 2; i < argc && n > 0 && (size_t)n < sizeof line; i++) {
+        char *eq;
+        if (!strncmp(argv[i], "msg=", 4)) { msg = argv[i] + 4; continue; }
+        rec_copy(tmp, sizeof tmp, argv[i]);
+        eq = strchr(tmp, '=');
+        if (eq) rec_word(eq + 1, sizeof tmp - (size_t)(eq + 1 - tmp), argv[i] + (eq + 1 - tmp));
+        n += snprintf(line + n, sizeof line - (size_t)n, " %s", tmp);
+    }
+    if (msg && n > 0 && (size_t)n < sizeof line)
+        snprintf(line + n, sizeof line - (size_t)n, " msg=%s", msg);
     if (rec_parse(line, &e) == 0) rec_send(sock_path, &e);
     return 0;
 }

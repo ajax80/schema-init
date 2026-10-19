@@ -215,6 +215,7 @@ while true; do
     SESSION_PID=""
     release_session
     printf 'plasma_exited rc=%d\n' $RC
+    command -v schema-recorder >/dev/null 2>&1 && schema-recorder send src=session kind=plasma-exit rc=$RC 2>/dev/null || :
     [ $RC -ne 0 ] && exit "$RC"
     sleep 2
 done

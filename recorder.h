@@ -129,6 +129,15 @@ static inline int rec_parse(const char *line, rec_event_t *out) {
     return have_ts && have_src && have_kind ? 0 : -1;
 }
 
+static inline int rec_forward_kind(const char *event) {
+    static const char *const k[] = { "died", "dormant", "76-excised", "watchdog-kill",
+        "watchdog-abort", "start-timeout", "spawn-fail", "readiness-lost", "fuse-tripped" };
+    size_t i;
+    for (i = 0; i < sizeof k / sizeof *k; i++)
+        if (!strcmp(event, k[i])) return 1;
+    return 0;
+}
+
 static inline void rec_send(const char *sock_path, const rec_event_t *e) {
     rec_event_t c = *e;
     char buf[640];

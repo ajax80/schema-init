@@ -460,8 +460,17 @@ static void correlate_unordered_ring(void) {
     assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && strstr(why, "kwin_wayland"));
 }
 
+static void forward_kinds(void) {
+    assert(rec_forward_kind("died") && rec_forward_kind("dormant"));
+    assert(rec_forward_kind("76-excised") && rec_forward_kind("watchdog-kill"));
+    assert(!rec_forward_kind("spawn") && !rec_forward_kind("promote"));
+    assert(!rec_forward_kind("timer-failed") && !rec_forward_kind("ctl-restart"));
+    assert(!rec_forward_kind("oneshot-done"));
+}
+
 int main(void) {
     roundtrip();
+    forward_kinds();
     hostile_comm();
     msg_last();
     msg_unterminated();
