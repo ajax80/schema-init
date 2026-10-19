@@ -687,14 +687,24 @@ static void restart_budget_refresh(service_t *svc) {
     }
 }
 
-/* Limp-mode: before a retry, arm the next declared card; the spawned child
- * runs it as root before exec. One card per retry, in file order. */
 static void play_card(service_t *svc) {
     char ev[32];
-    if (svc->card_next >= svc->card_count) return;
-    svc->card_armed = svc->card_next++;
-    snprintf(ev, sizeof ev, "card-%d/%d", svc->card_next, svc->card_count);
+    if (svc->card_pid > 0 || svc->card_next >= svc->card_count) return;
+    pid_t pid = service_card_spawn(svc, svc->card_next);
+    snprintf(ev, sizeof ev, "card-%d/%d", svc->card_next + 1, svc->card_count);
+    svc->card_next++;
+    if (pid < 0) {
+        service_log(svc, "card-fork-fail");
+        return;
+    }
+    svc->card_pid = pid;
+    clock_gettime(CLOCK_MONOTONIC, &svc->card_start);
     service_log(svc, ev);
+}
+
+static void card_done(service_t *svc, int status) {
+    svc->card_pid = 0;
+    service_log(svc, WIFEXITED(status) && WEXITSTATUS(status) == 0 ? "card-done" : "card-failed");
 }
 
 static void mark_boot_ready(service_t *svc, int how) {
@@ -797,6 +807,10 @@ static void reap(void) {
             continue;
         }
         for (i = 0; i < svc_count; i++) {
+            if (services[i].card_pid == pid) {
+                card_done(&services[i], status);
+                break;
+            }
             if (services[i].child_pid != pid) continue;
 
             services[i].child_pid  = 0;
@@ -1100,6 +1114,15 @@ static void monitor_failsafes(void) {
     
     for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
+        if (svc->card_pid > 0 && now.tv_sec - svc->card_start.tv_sec >= CARD_TIMEOUT_SECS) {
+            int st;
+            kill(-svc->card_pid, SIGKILL);
+            kill(svc->card_pid, SIGKILL);
+            if (waitpid(svc->card_pid, &st, 0) == svc->card_pid || errno == ECHILD) {
+                svc->card_pid = 0;
+                service_log(svc, "card-timeout");
+            }
+        }
         if (svc->failsafe_pid <= 0) continue;
         
         int status;
@@ -1265,7 +1288,7 @@ static void tick_service(service_t *svc,
     switch (svc->inst.state) {
 
         case STATE_NEW_PROCESS:
-            if (svc->failsafe_pid > 0) break;
+            if (svc->failsafe_pid > 0 || svc->card_pid > 0) break;
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
@@ -1893,6 +1916,7 @@ static void ctl_cmd(int fd, char *line) {
                 services[i].listen_hold  = 0;
                 services[i].inst.state   = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
+                services[i].card_next    = 0;
                 ctl_writef(fd, "ok: %s queued\n", name);
             } else {
                 ctl_writef(fd, "err: %s is %s\n",
@@ -1943,6 +1967,7 @@ static void ctl_cmd(int fd, char *line) {
                 }
                 services[i].inst.state    = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
+                services[i].card_next     = 0;
                 ctl_writef(fd, "ok: %s requeued\n", name);
             }
             write(fd, ".\n", 2);
@@ -2341,7 +2366,7 @@ static int get_poll_timeout(void) {
             !svc->is_frozen)
             best = wake_min(best, svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec),
                             now_m, WAKE_NONE);
-        if (svc->failsafe_pid > 0 || (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
+        if (svc->failsafe_pid > 0 || svc->card_pid > 0 || (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
             tick = 1;
         else if (s == STATE_DORMANT)
             best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);

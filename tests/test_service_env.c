@@ -366,7 +366,7 @@ int main(void) {
         "card=exec:/bin/sh -c \"echo one\"\n"
         "card= exec:/usr/bin/touch /run/healed\n");
     assert(service_load_one(p, &svc) == 0);
-    assert(svc.card_count == 2 && svc.card_next == 0 && svc.card_armed == -1);
+    assert(svc.card_count == 2 && svc.card_next == 0 && svc.card_pid == 0);
     assert(strcmp(svc.card[1], "exec:/usr/bin/touch /run/healed") == 0);
     write_svc(p, "name=cards\nexec=/bin/true\ncard=reboot:now\n");
     assert(service_load_one(p, &svc) == -1);

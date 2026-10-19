@@ -20,6 +20,7 @@
 #define MAX_ENV_FILES   4
 #define MAX_EXEC_PRE    8
 #define MAX_CARDS       4
+#define CARD_TIMEOUT_SECS 30
 #define MAX_LISTEN      4
 #define MAX_COND        8
 #define MAX_DEPS        8
@@ -261,7 +262,8 @@ typedef struct {
     char            *card[MAX_CARDS];    /* card=exec:CMD, played one per retry, in order */
     int              card_count;
     int              card_next;           /* next card to play; reset with the restart budget */
-    int              card_armed;          /* card to run in the next spawn, -1 none */
+    pid_t            card_pid;            /* running card, 0 if none; the spawn waits for it */
+    struct timespec  card_start;
     char             listen[MAX_LISTEN][112]; /* listen= specs: stream|dgram|seqpacket|fifo:ADDR */
     int              listen_count;
     int              listen_lazy;         /* bind at boot, spawn on the first connection */
@@ -377,6 +379,7 @@ uint32_t service_probe_f6(service_t *svc);
 
 /* fork+exec the service; sets child_pid and last_start */
 int service_spawn(service_t *svc);
+pid_t service_card_spawn(const service_t *svc, int idx);
 
 /* apply opt-in hardening in the child, before setuid/execv; -1 -> fail closed */
 int service_apply_hardening(const service_t *svc);
