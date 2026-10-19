@@ -17,8 +17,9 @@ static rec_culprit_t cul[64];
 static int ncul;
 static rec_episode_t ep[3];
 static int live[3], started[3];
-static uint64_t live_ts[3];
+static uint64_t live_ts[3], t0;
 static int tfd = -1, pending;
+static char boot_id[12], box[96], cur_day[40];
 static rec_proc_t snap_a[MAXPROC], snap_b[MAXPROC];
 static int na, nb;
 
@@ -30,39 +31,54 @@ static uint64_t mono_s(void) {
     return (uint64_t)t.tv_sec;
 }
 
-static const char *culprit_key(const rec_event_t *e) {
-    return e->src == REC_SRC_PID1 ? e->subj : e->src == REC_SRC_SESSION ? "" : e->comm;
-}
-
 static int counted(const rec_event_t *e) {
-    return e->tier != REC_TIER_TRACE && !(e->src == REC_SRC_PSI && !strcmp(e->kind, "episode-end"));
+    return e->tier != REC_TIER_TRACE && e->src != REC_SRC_SESSION &&
+           !(e->src == REC_SRC_PSI && !strcmp(e->kind, "episode-end"));
 }
 
-static uint32_t count_culprit(const rec_event_t *e, uint64_t now) {
-    const char *k = culprit_key(e);
-    if (!counted(e) || !*k) return 0;
-    return (uint32_t)rec_culprit_count(cul, &ncul, 64, k, e->ts, now);
+static void count_culprit(const rec_event_t *e, uint64_t now) {
+    const char *k = rec_culprit_key(e);
+    if (counted(e) && *k) rec_culprit_count(cul, &ncul, 64, k, e->ts, now);
 }
 
-static void arrow_take(const rec_event_t *e, uint32_t recurrence, int loading, uint64_t now) {
+static void repick(void) {
+    rec_live_t lv[3];
     rec_arrow_t a;
-    memset(&a, 0, sizeof a);
-    a.state = e->tier == REC_TIER_LIVE && !loading ? 1 : 2;
-    a.tier = e->tier;
-    a.event_ts = e->ts;
-    a.resolved_ts = a.state == 2 ? (loading && e->tier == REC_TIER_LIVE ? now : e->ts) : 0;
-    a.recurrence = recurrence;
-    rec_render(a.line, sizeof a.line, e, recurrence);
-    rec_arrow_set(shm, &a);
+    int k;
+    memset(lv, 0, sizeof lv);
+    for (k = 1; k <= 2; k++) {
+        if (!ep[k].active) continue;
+        lv[k].start = ep[k].start_wall;
+        lv[k].live_ts = live[k] ? live_ts[k] : 0;
+        rec_episode_text(&ep[k], ep[k].last_fire_mono, lv[k].text, sizeof lv[k].text);
+    }
+    rec_best_arrow(shm, lv, t0, now_wall(), cul, ncul, &a);
+    if (memcmp(&a, &shm->arrow, sizeof a)) rec_arrow_set(shm, &a);
+}
+
+static void prune(uint64_t now) {
+    DIR *d = opendir(dir_path);
+    struct dirent *de;
+    if (!d) return;
+    while ((de = readdir(d))) {
+        char path[512];
+        struct stat st;
+        if (strncmp(de->d_name, "events-", 7) || !strstr(de->d_name, ".log")) continue;
+        snprintf(path, sizeof path, "%s/%s", dir_path, de->d_name);
+        if (stat(path, &st) == 0 && (uint64_t)st.st_mtime + 7 * 86400 < now) unlink(path);
+    }
+    closedir(d);
 }
 
 static void append_line(const rec_event_t *e) {
-    char buf[700], path[512];
+    char buf[700], path[512], day[40];
     time_t t = (time_t)e->ts;
     struct tm tm;
     int n, fd;
     localtime_r(&t, &tm);
-    snprintf(path, sizeof path, "%s/events-%04d-%02d-%02d.log", dir_path, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    snprintf(day, sizeof day, "%04d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    if (strcmp(day, cur_day)) { rec_copy(cur_day, sizeof cur_day, day); prune(now_wall()); }
+    snprintf(path, sizeof path, "%s/events-%s.log", dir_path, day);
     n = rec_format(buf, sizeof buf - 1, e);
     if (n < 0) return;
     buf[n++] = '\n';
@@ -73,22 +89,24 @@ static void append_line(const rec_event_t *e) {
     close(fd);
 }
 
-static void strip_cmd(rec_event_t *e) {
+static void ring_strip(rec_event_t *e) {
     char *p;
-    if (e->src == REC_SRC_PSI && (p = strstr(e->msg, " ["))) *p = '\0';
+    if (e->src == REC_SRC_EARLYOOM) e->msg[0] = '\0';
+    if (e->src != REC_SRC_PSI) return;
+    if ((p = strstr(e->msg, " | "))) *p = '\0';
+    if ((p = strstr(e->msg, " ["))) *p = '\0';
 }
 
-static void record(rec_event_t *e, int pick) {
-    uint64_t now = now_wall();
-    rec_event_t ring = *e;
-    uint32_t r;
+static void record(rec_event_t *e) {
+    rec_event_t ring;
     e->tier = (uint8_t)rec_tier(e);
-    ring.tier = e->tier;
+    rec_copy(e->boot, sizeof e->boot, boot_id);
+    ring = *e;
     append_line(e);
-    strip_cmd(&ring);
+    ring_strip(&ring);
     rec_ring_push(shm, &ring);
-    r = count_culprit(&ring, now);
-    if (pick && rec_arrow_pick(&shm->arrow, &ring, now)) arrow_take(&ring, r, 0, now);
+    count_culprit(&ring, now_wall());
+    repick();
 }
 
 static void handle_datagram(char *buf) {
@@ -97,19 +115,20 @@ static void handle_datagram(char *buf) {
     if (e.src == REC_SRC_PSI) return;
     e.tier = 0;
     if (e.src == REC_SRC_SESSION && !strcmp(e.kind, "plasma-exit")) {
-        char why[160];
+        char why[160], key[32];
         rec_episode_t none;
         int k, hit = 0;
         memset(&none, 0, sizeof none);
-        if (rec_correlate(shm, &none, &e, why, sizeof why)) hit = 1;
+        if (rec_correlate(shm, &none, &e, why, sizeof why, key, sizeof key)) hit = 1;
         else for (k = 1; k <= 2 && !hit; k++)
-            if (rec_correlate(shm, &ep[k], &e, why, sizeof why)) { hit = 1; ep[k].overlapped = 1; }
+            if (rec_correlate(shm, &ep[k], &e, why, sizeof why, key, sizeof key)) { hit = 1; ep[k].overlapped = 1; }
         if (hit) {
             e.tier = REC_TIER_SESSION;
             rec_copy(e.msg, sizeof e.msg, why);
+            rec_copy(e.comm, sizeof e.comm, key);
         }
     }
-    record(&e, 1);
+    record(&e);
 }
 
 static int scan(rec_proc_t *out) {
@@ -157,8 +176,8 @@ static void chain_of(const rec_hog_t *top, char *chain, size_t n) {
         const rec_proc_t *q = NULL;
         size_t l = strlen(chain);
         for (i = 0; i < nb; i++) if (snap_b[i].pid == p->ppid) { q = &snap_b[i]; break; }
-        if (!q || l + strlen(q->comm) + 5 >= n) break;
-        snprintf(chain + l, n - l, " " ARROW_L " %.31s", q->comm);
+        if (!q || l + strlen(q->comm) + 4 >= n) break;
+        snprintf(chain + l, n - l, ARROW_L "%.31s", q->comm);
         p = q;
     }
 }
@@ -186,11 +205,57 @@ static void arm(int sec) {
     timerfd_settime(tfd, 0, &its, NULL);
 }
 
-static void psi_event(int k, const char *kind, int tier, uint64_t end_mono) {
+static int slurp(const char *path, char *buf, size_t n) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC), r;
+    if (fd < 0) return -1;
+    r = (int)read(fd, buf, n - 1);
+    close(fd);
+    if (r < 0) return -1;
+    buf[r] = '\0';
+    return r;
+}
+
+static void box_add(size_t *l, const char *fmt, unsigned long long a, unsigned long long b) {
+    int r;
+    if (*l >= sizeof box) return;
+    r = snprintf(box + *l, sizeof box - *l, fmt, a, b);
+    if (r > 0) *l += (size_t)r;
+}
+
+static void box_state(void) {
+    char b[4096], path[64], *p;
+    unsigned long long st = 0, sf = 0, o, c;
+    double v;
+    long mx = -1;
+    size_t l = 0;
+    int i;
+    box[0] = '\0';
+    if (slurp("/proc/pressure/cpu", b, sizeof b) > 0 && sscanf(b, "some avg10=%lf", &v) == 1)
+        box_add(&l, " cpu=%llu%%", (unsigned long long)v, 0);
+    if (slurp("/proc/pressure/memory", b, sizeof b) > 0 && sscanf(b, "some avg10=%lf", &v) == 1)
+        box_add(&l, " mem=%llu%%", (unsigned long long)v, 0);
+    if (slurp("/proc/meminfo", b, sizeof b) > 0) {
+        if ((p = strstr(b, "SwapTotal:"))) st = strtoull(p + 10, NULL, 10);
+        if ((p = strstr(b, "SwapFree:"))) sf = strtoull(p + 9, NULL, 10);
+        if (st) box_add(&l, " swap=%lluM/%lluM", (st - sf) >> 10, st >> 10);
+    }
+    if (slurp("/sys/block/zram0/mm_stat", b, sizeof b) > 0 && sscanf(b, "%llu %llu", &o, &c) == 2)
+        box_add(&l, " zram=%lluM>%lluM", o >> 20, c >> 20);
+    for (i = 0; i < 32; i++) {
+        snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/temp", i);
+        if (slurp(path, b, sizeof b) <= 0) break;
+        if (atol(b) > mx) mx = atol(b);
+    }
+    if (mx >= 0) box_add(&l, " temp=%lluC", (unsigned long long)(mx / 1000), 0);
+    if (l >= sizeof box) box[sizeof box - 1] = '\0';
+}
+
+static void psi_event(int k, const char *kind, int tier, uint64_t end_mono, uint64_t ts) {
     rec_event_t e;
     char txt[700];
+    size_t l;
     memset(&e, 0, sizeof e);
-    e.ts = now_wall();
+    e.ts = ts;
     e.src = REC_SRC_PSI;
     e.tier = (uint8_t)tier;
     rec_copy(e.kind, sizeof e.kind, kind);
@@ -198,33 +263,27 @@ static void psi_event(int k, const char *kind, int tier, uint64_t end_mono) {
     e.pid = ep[k].top.top_pid;
     rec_copy(e.subj, sizeof e.subj, ep[k].chain);
     rec_episode_text(&ep[k], end_mono, txt, sizeof txt);
-    if (ep[k].cmdline[0] && strlen(txt) + strlen(ep[k].cmdline) + 4 < sizeof txt)
-        snprintf(txt + strlen(txt), sizeof txt - strlen(txt), " [%s]", ep[k].cmdline);
+    l = strlen(txt);
+    if (box[0]) l += (size_t)snprintf(txt + l, sizeof txt - l, " |%s", box);
+    if (ep[k].cmdline[0]) snprintf(txt + l, sizeof txt - l, " [%s]", ep[k].cmdline);
     rec_copy(e.msg, sizeof e.msg, txt);
-    record(&e, !(k && !strcmp(kind, "episode-end") && live[k]));
+    record(&e);
 }
 
 static void end_episode(int k, uint64_t mono) {
     int arrow = rec_episode_arrow(&ep[k], mono);
-    uint64_t now = now_wall();
-    psi_event(k, "episode-end", ep[k].top.comm[0] && arrow ? REC_TIER_MINOR : REC_TIER_TRACE, ep[k].last_fire_mono);
-    if (live[k]) {
-        rec_arrow_t a = shm->arrow;
-        if (a.state == 1 && a.event_ts == live_ts[k]) {
-            a.state = 2;
-            a.tier = REC_TIER_MINOR;
-            a.resolved_ts = now;
-            rec_arrow_set(shm, &a);
-        }
-    }
+    psi_event(k, "episode-end", ep[k].top.comm[0] && arrow ? REC_TIER_MINOR : REC_TIER_TRACE, ep[k].last_fire_mono, now_wall());
     live[k] = started[k] = 0;
+    live_ts[k] = 0;
     ep[k].active = 0;
+    repick();
 }
 
 static void on_sample(uint64_t mono) {
     rec_hog_t top[1];
     int k;
     nb = scan(snap_b);
+    box_state();
     if (rec_hogs(snap_a, na, snap_b, nb, top, 1) > 0) {
         for (k = 1; k <= 2; k++) {
             if (!ep[k].active) continue;
@@ -233,10 +292,11 @@ static void on_sample(uint64_t mono) {
             cmdline_of(top[0].top_pid, ep[k].cmdline, sizeof ep[k].cmdline);
             if (!started[k]) {
                 started[k] = 1;
-                psi_event(k, "episode-start", REC_TIER_TRACE, mono);
+                psi_event(k, "episode-start", REC_TIER_TRACE, mono, now_wall());
             }
         }
     }
+    repick();
 }
 
 static int check_episodes(uint64_t mono) {
@@ -248,7 +308,7 @@ static int check_episodes(uint64_t mono) {
         if (!live[k] && ep[k].top.comm[0] && (ep[k].overlapped || mono - ep[k].start_mono >= 120)) {
             live[k] = 1;
             live_ts[k] = now_wall();
-            psi_event(k, "episode-live", REC_TIER_LIVE, mono);
+            psi_event(k, "episode-live", REC_TIER_LIVE, mono, live_ts[k]);
         }
     }
     return any;
@@ -288,21 +348,15 @@ static int psi_open(const char *path, const char *trig, size_t len) {
 }
 
 static void load(uint64_t now) {
-    DIR *d = opendir(dir_path);
+    DIR *d;
     struct dirent *de;
     char *names[32];
     char last[512] = "";
-    uint64_t live_open = 0;
     int n = 0, i;
-    if (!d) return;
-    while ((de = readdir(d)) && n < 32) {
-        char path[512];
-        struct stat st;
-        if (strncmp(de->d_name, "events-", 7) || !strstr(de->d_name, ".log")) continue;
-        snprintf(path, sizeof path, "%s/%s", dir_path, de->d_name);
-        if (stat(path, &st) == 0 && (uint64_t)st.st_mtime + 7 * 86400 < now) { unlink(path); continue; }
-        names[n++] = strdup(de->d_name);
-    }
+    prune(now);
+    if (!(d = opendir(dir_path))) return;
+    while ((de = readdir(d)) && n < 32)
+        if (!strncmp(de->d_name, "events-", 7) && strstr(de->d_name, ".log")) names[n++] = strdup(de->d_name);
     closedir(d);
     for (i = 0; i < n; i++)
         for (int j = i + 1; j < n; j++)
@@ -317,32 +371,16 @@ static void load(uint64_t now) {
         if (!f) continue;
         while (fgets(line, sizeof line, f)) {
             rec_event_t e;
-            uint32_t r;
             if (rec_parse(line, &e) != 0) continue;
             e.tier = (uint8_t)rec_tier(&e);
-            strip_cmd(&e);
-            r = count_culprit(&e, now);
+            ring_strip(&e);
+            count_culprit(&e, now);
             if (e.ts + 36 * 3600 < now) continue;
-            if (e.src == REC_SRC_PSI && e.tier == REC_TIER_LIVE) e.tier = REC_TIER_MINOR;
             rec_ring_push(shm, &e);
-            if (e.src == REC_SRC_PSI && !strcmp(e.kind, "episode-end") && live_open && shm->arrow.event_ts == live_open) {
-                rec_arrow_t a = shm->arrow;
-                a.resolved_ts = e.ts;
-                rec_arrow_set(shm, &a);
-                live_open = 0;
-            }
-            if (rec_arrow_pick(&shm->arrow, &e, now)) {
-                arrow_take(&e, r, 1, now);
-                if (e.src == REC_SRC_PSI && !strcmp(e.kind, "episode-live")) live_open = e.ts;
-            }
         }
         fclose(f);
     }
-    if (live_open && shm->arrow.event_ts == live_open) {
-        rec_arrow_t a = shm->arrow;
-        a.resolved_ts = now;
-        rec_arrow_set(shm, &a);
-    }
+    repick();
     if (last[0]) {
         char c;
         int fd = open(last, O_RDWR | O_APPEND | O_CLOEXEC);
@@ -391,12 +429,17 @@ int main(int argc, char **argv) {
     if ((env = getenv("SCHEMA_RECORDER_FAKETIME"))) wall_off = atol(env) - (long)time(NULL);
     if (argc > 1 && !strcmp(argv[1], "send")) return send_mode(argc, argv);
 
-    now = now_wall();
+    now = t0 = now_wall();
     sigemptyset(&sm);
     sigaddset(&sm, SIGTERM);
     sigaddset(&sm, SIGINT);
     sigprocmask(SIG_BLOCK, &sm, NULL);
     sigfd = signalfd(-1, &sm, SFD_CLOEXEC);
+    if (sigfd < 0) sigprocmask(SIG_UNBLOCK, &sm, NULL);
+    if (slurp("/proc/sys/kernel/random/boot_id", parent, sizeof parent) > 0) {
+        parent[8] = '\0';
+        rec_copy(boot_id, sizeof boot_id, parent);
+    }
 
     mkdir(dir_path, 0700);
     rec_copy(parent, sizeof parent, sock_path);

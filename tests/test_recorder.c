@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 static void roundtrip(void) {
     rec_event_t e, p;
@@ -10,10 +11,12 @@ static void roundtrip(void) {
     memset(&e, 0, sizeof e);
     e.ts = 1760000000; e.src = REC_SRC_EARLYOOM; e.crit = 1; e.tier = 3; e.pid = 42; e.rc = 9;
     strcpy(e.kind, "kill"); strcpy(e.comm, "cosmic-player"); strcpy(e.subj, "unit.svc");
-    strcpy(e.msg, "--thumbnail a b.mkv");
+    strcpy(e.msg, "--thumbnail a b.mkv"); strcpy(e.boot, "0f3a9c21");
     assert(rec_format(buf, sizeof buf, &e) > 0);
+    assert(strstr(buf, " boot=0f3a9c21 msg="));
     memset(&p, 0, sizeof p);
     assert(rec_parse(buf, &p) == 0);
+    assert(!strcmp(p.boot, "0f3a9c21"));
     assert(p.ts == e.ts && p.src == e.src && p.crit == e.crit && p.tier == 3 && p.pid == 42 && p.rc == 9);
     assert(!strcmp(p.kind, "kill") && !strcmp(p.comm, "cosmic-player"));
     assert(!strcmp(p.subj, "unit.svc") && !strcmp(p.msg, "--thumbnail a b.mkv"));
@@ -92,7 +95,9 @@ static void tier_kwin_session(void) {
     rec_event_t e = mk(REC_SRC_COREDUMP, "dump", "kwin_wayland", "", 11, 1);
     assert(rec_tier(&e) == REC_TIER_SESSION);
     e = mk(REC_SRC_COREDUMP, "dump", "foo", "foo.svc", 11, 1);
-    assert(rec_tier(&e) == REC_TIER_CRIT);
+    assert(rec_tier(&e) == REC_TIER_MINOR);
+    e = mk(REC_SRC_COREDUMP, "dump", "plasmashell", "sddm", 11, 1);
+    assert(rec_tier(&e) == REC_TIER_SESSION);
 }
 
 static void tier_logout(void) {
@@ -118,40 +123,117 @@ static void tier_misc(void) {
     assert(rec_tier(&e) == REC_TIER_LIVE);
 }
 
-static void pick_precedence(void) {
+static rec_arrow_t arw(int state, int tier, int src, uint64_t ts, uint64_t res) {
     rec_arrow_t a;
-    rec_event_t c;
     memset(&a, 0, sizeof a);
-    a.state = 2; a.tier = REC_TIER_CRIT; a.event_ts = 100; a.resolved_ts = 150;
-    c = mk(REC_SRC_PID1, "died", "", "x", 0, 200);
-    assert(rec_tier(&c) == REC_TIER_MINOR);
-    assert(rec_arrow_pick(&a, &c, 300) == 0);
-    c = mk(REC_SRC_SESSION, "plasma-exit", "", "", 1, 50);
-    assert(rec_arrow_pick(&a, &c, 300) == 1);
-    c = mk(REC_SRC_PID1, "died", "", "x", 0, 200);
-    assert(rec_arrow_pick(&a, &c, 150 + 36 * 3600 + 1) == 1);
-    a.tier = REC_TIER_MINOR;
-    assert(rec_arrow_pick(&a, &c, 300) == 1);
-    c.ts = 50;
-    assert(rec_arrow_pick(&a, &c, 300) == 0);
-    c.ts = 100;
-    a.event_ts = 100;
-    assert(rec_arrow_pick(&a, &c, 300) == 1);
+    a.state = (uint8_t)state; a.tier = (uint8_t)tier; a.src = (uint8_t)src; a.event_ts = ts; a.resolved_ts = res;
+    return a;
 }
 
-static void pick_upgrade_and_trace(void) {
-    rec_arrow_t a;
-    rec_event_t c = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 200);
+static void pick_precedence(void) {
+    rec_arrow_t a = arw(2, REC_TIER_CRIT, REC_SRC_PID1, 100, 150), c;
+    c = arw(2, REC_TIER_MINOR, REC_SRC_PID1, 200, 200);
+    assert(rec_arrow_beats(&c, &a, 300) == 0);
+    c = arw(2, REC_TIER_SESSION, REC_SRC_SESSION, 50, 50);
+    assert(rec_arrow_beats(&c, &a, 300) == 1);
+    c = arw(2, REC_TIER_MINOR, REC_SRC_PID1, 200, 200);
+    assert(rec_arrow_beats(&c, &a, 150 + 36 * 3600 + 1) == 1);
+    a.tier = REC_TIER_MINOR;
+    assert(rec_arrow_beats(&c, &a, 300) == 1);
+    c.event_ts = 50;
+    assert(rec_arrow_beats(&c, &a, 300) == 0);
+    c.event_ts = 100;
+    assert(rec_arrow_beats(&c, &a, 300) == 1);
+    a = arw(1, REC_TIER_LIVE, REC_SRC_PSI, 100, 0);
+    c = arw(1, REC_TIER_LIVE, REC_SRC_SESSION, 90, 0);
+    assert(rec_arrow_beats(&c, &a, 300) == 1);
+    assert(rec_arrow_beats(&a, &c, 300) == 0);
+}
+
+static void pick_trace_and_empty(void) {
+    rec_arrow_t a, c = arw(2, REC_TIER_TRACE, REC_SRC_SESSION, 200, 200);
     memset(&a, 0, sizeof a);
-    a.state = 2; a.tier = REC_TIER_CRIT; a.event_ts = 100; a.resolved_ts = 150;
-    assert(rec_arrow_pick(&a, &c, 300) == 0);
+    assert(rec_arrow_beats(&c, &a, 300) == 0);
     c.tier = REC_TIER_SESSION;
-    assert(rec_arrow_pick(&a, &c, 300) == 1);
-    memset(&a, 0, sizeof a);
-    c.tier = 0;
-    assert(rec_arrow_pick(&a, &c, 300) == 0);
-    a.state = 2; a.resolved_ts = 10;
-    assert(rec_arrow_pick(&a, &c, 10 + 40 * 3600) == 0);
+    assert(rec_arrow_beats(&c, &a, 300) == 1);
+    c.tier = REC_TIER_MINOR; c.resolved_ts = 10;
+    assert(rec_arrow_beats(&c, &a, 10 + 40 * 3600) == 0);
+}
+
+static void grey_yields(void) {
+    uint64_t h = 3600;
+    rec_arrow_t cur = arw(2, REC_TIER_CRIT, REC_SRC_PID1, 1000, 1000), c;
+    c = arw(2, REC_TIER_MINOR, REC_SRC_PID1, 1000 + 13 * h, 1000 + 13 * h);
+    assert(rec_arrow_beats(&c, &cur, 1000 + 13 * h) == 1);
+    c.event_ts = c.resolved_ts = 1000 + 11 * h;
+    assert(rec_arrow_beats(&c, &cur, 1000 + 11 * h) == 0);
+    cur = arw(1, REC_TIER_LIVE, REC_SRC_PSI, 1000, 0);
+    c = arw(2, REC_TIER_MINOR, REC_SRC_PID1, 1000 + 13 * h, 1000 + 13 * h);
+    assert(rec_arrow_beats(&c, &cur, 1000 + 13 * h) == 0);
+}
+
+static void best_end_by_kind(void) {
+    static rec_shm_t m;
+    rec_live_t lv[3];
+    rec_arrow_t a;
+    rec_event_t e;
+    memset(&m, 0, sizeof m);
+    memset(lv, 0, sizeof lv);
+    e = mk(REC_SRC_PSI, "episode-live", "hog", "", 0, 1000); e.tier = REC_TIER_LIVE;
+    strcpy(e.msg, "CPU pinned 2 min by hog");
+    rec_ring_push(&m, &e);
+    e = mk(REC_SRC_PSI, "episode-live", "mem", "", 0, 1010); e.tier = REC_TIER_LIVE;
+    strcpy(e.msg, "memory pressure 2 min by mem");
+    rec_ring_push(&m, &e);
+    e = mk(REC_SRC_PSI, "episode-end", "mem", "", 0, 1100); e.tier = REC_TIER_MINOR;
+    strcpy(e.msg, "memory pressure 4 min by mem");
+    rec_ring_push(&m, &e);
+    lv[1].start = 880; lv[1].live_ts = 1000;
+    strcpy(lv[1].text, "CPU pinned 7 min by hog");
+    rec_best_arrow(&m, lv, 500, 1200, NULL, 0, &a);
+    assert(a.state == 1 && a.tier == REC_TIER_LIVE && a.event_ts == 1000 && strstr(a.line, "CPU pinned 7 min"));
+    memset(lv, 0, sizeof lv);
+    rec_best_arrow(&m, lv, 1150, 1200, NULL, 0, &a);
+    assert(a.state == 2 && a.tier == REC_TIER_MINOR && a.event_ts == 1010 && a.resolved_ts == 1100 && strstr(a.line, "memory pressure 4 min"));
+    e = mk(REC_SRC_PSI, "episode-end", "hog", "", 0, 1300); e.tier = REC_TIER_MINOR;
+    strcpy(e.msg, "CPU pinned 9 min by hog");
+    rec_ring_push(&m, &e);
+    rec_best_arrow(&m, lv, 1150, 1400, NULL, 0, &a);
+    assert(a.state == 2 && a.event_ts == 1010 && a.resolved_ts == 1100);
+    m.ring[1].ts = 990;
+    rec_best_arrow(&m, lv, 1150, 1400, NULL, 0, &a);
+    assert(a.event_ts == 1000 && a.resolved_ts == 1300 && strstr(a.line, "CPU pinned 9 min"));
+}
+
+static void shm_owner(void) {
+    char name[64];
+    int fd;
+    const rec_shm_t *m;
+    snprintf(name, sizeof name, "/schema-recorder-unit-%d", (int)getpid());
+    shm_unlink(name);
+    fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0644);
+    assert(fd >= 0);
+    assert(ftruncate(fd, sizeof(rec_shm_t)) == 0);
+    {
+        rec_shm_t *w = mmap(NULL, sizeof *w, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        assert(w != MAP_FAILED);
+        w->magic = REC_SHM_MAGIC;
+        munmap(w, sizeof *w);
+    }
+    fchmod(fd, 0644);
+    unsetenv("SCHEMA_RECORDER_SHM");
+    if (geteuid() != 0) assert(rec_shm_map(fd) == NULL);
+    setenv("SCHEMA_RECORDER_SHM", name, 1);
+    m = rec_shm_map(fd);
+    assert(m != NULL);
+    munmap((void *)m, sizeof *m);
+    fchmod(fd, 0666);
+    assert(rec_shm_map(fd) == NULL);
+    fchmod(fd, 0664);
+    assert(rec_shm_map(fd) == NULL);
+    unsetenv("SCHEMA_RECORDER_SHM");
+    close(fd);
+    shm_unlink(name);
 }
 
 static void culprit_evict(void) {
@@ -352,7 +434,7 @@ static void correlate_kwin(void) {
     e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 995);
     rec_ring_push(&m, &e);
     x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 1);
     assert(!strcmp(why, "kwin_wayland crashed (SIGSEGV)"));
 }
 
@@ -366,10 +448,10 @@ static void correlate_none_logout(void) {
     e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 975);
     rec_ring_push(&m, &e);
     x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 0);
     e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 1001);
     rec_ring_push(&m, &e);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 0);
 }
 
 static void correlate_episode(void) {
@@ -383,16 +465,20 @@ static void correlate_episode(void) {
     rec_episode_fire(&ep, 1, 1200, 1300);
     strcpy(ep.top.comm, "cosmic-player"); ep.top.count = 8;
     x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1310);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1);
+    {
+        char key[32] = "";
+        assert(rec_correlate(&m, &ep, &x, why, sizeof why, key, sizeof key) == 1);
+        assert(!strcmp(key, "cosmic-player"));
+    }
     assert(!strcmp(why, "CPU pinned 20 min by cosmic-player \xc3\x97" "8"));
     assert(!ep.overlapped);
     ep.active = 0;
     x.ts = 1320;
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 1);
     x.ts = 1321;
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 0);
     x.ts = 1400;
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 0);
 }
 
 static void correlate_priority(void) {
@@ -408,15 +494,15 @@ static void correlate_priority(void) {
     x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
     e = mk(REC_SRC_PID1, "died", "", "foo.svc", 0, 995);
     rec_ring_push(&m, &e);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "foo.svc died"));
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 1 && !strcmp(why, "foo.svc died"));
     e = mk(REC_SRC_EARLYOOM, "kill", "plasmashell", "", 9, 990);
     rec_ring_push(&m, &e);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "earlyoom killed plasmashell"));
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 1 && !strcmp(why, "earlyoom killed plasmashell"));
     e = mk(REC_SRC_COREDUMP, "", "ksmserver", "", 6, 985);
     rec_ring_push(&m, &e);
     e = mk(REC_SRC_COREDUMP, "", "plasmashell", "", 99, 992);
     rec_ring_push(&m, &e);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "plasmashell crashed (SIG99)"));
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 1 && !strcmp(why, "plasmashell crashed (SIG99)"));
 }
 
 static void hogs_max_heaviest(void) {
@@ -439,10 +525,10 @@ static void correlate_app_crash_ignored(void) {
     e = mk(REC_SRC_COREDUMP, "", "obsidian", "", 11, 995);
     rec_ring_push(&m, &e);
     x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 0);
     e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 996);
     rec_ring_push(&m, &e);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && strstr(why, "kwin_wayland"));
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 1 && strstr(why, "kwin_wayland"));
 }
 
 static void correlate_unordered_ring(void) {
@@ -457,7 +543,7 @@ static void correlate_unordered_ring(void) {
     e = mk(REC_SRC_PID1, "died", "", "old.svc", 0, 900);
     rec_ring_push(&m, &e);
     x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && strstr(why, "kwin_wayland"));
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why, NULL, 0) == 1 && strstr(why, "kwin_wayland"));
 }
 
 static void forward_kinds(void) {
@@ -488,7 +574,10 @@ int main(void) {
     tier_logout();
     tier_misc();
     pick_precedence();
-    pick_upgrade_and_trace();
+    pick_trace_and_empty();
+    grey_yields();
+    best_end_by_kind();
+    shm_owner();
     culprit_evict();
     arrow_set();
     shade();

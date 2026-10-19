@@ -23,7 +23,7 @@ static inline int rec_tier_base(const rec_event_t *e) {
     case REC_SRC_COREDUMP:
         for (i = 0; i < sizeof session_comms / sizeof *session_comms; i++)
             if (!strcmp(e->comm, session_comms[i])) return REC_TIER_SESSION;
-        return e->subj[0] ? REC_TIER_CRIT : REC_TIER_TRACE;
+        return e->subj[0] ? REC_TIER_MINOR : REC_TIER_TRACE;
     case REC_SRC_EARLYOOM:
         return !strcmp(e->kind, "kill") ? REC_TIER_MINOR : REC_TIER_TRACE;
     case REC_SRC_PSI:
@@ -158,15 +158,6 @@ static inline void rec_render(char *buf, size_t n, const rec_event_t *e, uint32_
     if (len > 0 && (size_t)len < n) snprintf(buf + len, n - (size_t)len, "%s", suf);
 }
 
-static inline int rec_arrow_pick(const rec_arrow_t *cur, const rec_event_t *cand, uint64_t now) {
-    int ct = rec_tier(cand);
-    if (ct == REC_TIER_TRACE) return 0;
-    if (cur->state == 0) return 1;
-    if (cur->state == 2 && now >= cur->resolved_ts && now - cur->resolved_ts >= 36 * 3600) return 1;
-    if (ct != cur->tier) return ct > cur->tier;
-    return cand->ts >= cur->event_ts;
-}
-
 static inline int rec_arrow_shade(const rec_arrow_t *a, uint64_t now) {
     uint64_t age;
     if (a->state == 0) return 0;
@@ -174,6 +165,31 @@ static inline int rec_arrow_shade(const rec_arrow_t *a, uint64_t now) {
     age = now - a->resolved_ts;
     if (age < 12 * 3600) return 1;
     if (age < 36 * 3600) return 2;
+    return 0;
+}
+
+static inline int rec_arrow_beats(const rec_arrow_t *cand, const rec_arrow_t *cur, uint64_t now) {
+    int cs = rec_arrow_shade(cand, now), us = rec_arrow_shade(cur, now);
+    if (!cs || cand->tier == REC_TIER_TRACE) return 0;
+    if (!us) return 1;
+    if (cs != us) return cs < us;
+    if (cand->tier != cur->tier) return cand->tier > cur->tier;
+    if (cand->tier == REC_TIER_LIVE && (cand->src == REC_SRC_SESSION) != (cur->src == REC_SRC_SESSION))
+        return cand->src == REC_SRC_SESSION;
+    return cand->event_ts >= cur->event_ts;
+}
+
+static inline int rec_culprit_seen(const rec_culprit_t *tab, int ntab, const char *key, uint64_t lo, uint64_t hi) {
+    int i, j, n = 0;
+    for (i = 0; i < ntab; i++)
+        if (!strcmp(tab[i].key, key))
+            for (j = 0; j < tab[i].n; j++) if (tab[i].ts[j] >= lo && tab[i].ts[j] <= hi) n++;
+    return n;
+}
+
+static inline int rec_psi_kind(const char *msg) {
+    if (!strncmp(msg, "CPU pinned ", 11)) return 1;
+    if (!strncmp(msg, "memory pressure ", 16)) return 2;
     return 0;
 }
 
@@ -247,7 +263,7 @@ static inline void rec_episode_text(const rec_episode_t *ep, uint64_t end_mono, 
         snprintf(buf, n, "%s %llu min by %s", what, mins, ep->top.comm);
 }
 
-static inline int rec_correlate(const rec_shm_t *m, const rec_episode_t *ep, const rec_event_t *x, char *why, size_t n) {
+static inline int rec_correlate(const rec_shm_t *m, const rec_episode_t *ep, const rec_event_t *x, char *why, size_t n, char *key, size_t kn) {
     uint64_t lo = x->ts > 20 ? x->ts - 20 : 0;
     const rec_event_t *crash = NULL, *oom = NULL, *svc = NULL;
     uint32_t i;
@@ -262,16 +278,91 @@ static inline int rec_correlate(const rec_shm_t *m, const rec_episode_t *ep, con
         const char *sn = rec_signame(crash->rc);
         if (sn) snprintf(why, n, "%s crashed (%s)", crash->comm, sn);
         else snprintf(why, n, "%s crashed (SIG%d)", crash->comm, (int)crash->rc);
+        if (key) rec_copy(key, kn, crash->comm);
         return 1;
     }
-    if (oom) { snprintf(why, n, "earlyoom killed %s", oom->comm); return 1; }
-    if (svc) { snprintf(why, n, "%s %s", svc->subj, svc->kind); return 1; }
+    if (oom) { snprintf(why, n, "earlyoom killed %s", oom->comm); if (key) rec_copy(key, kn, oom->comm); return 1; }
+    if (svc) { snprintf(why, n, "%s %s", svc->subj, svc->kind); if (key) rec_copy(key, kn, svc->subj); return 1; }
     if (ep->kind && ep->start_wall <= x->ts &&
         (ep->active || ep->start_wall + (ep->last_fire_mono - ep->start_mono) >= lo)) {
         rec_episode_text(ep, ep->last_fire_mono, why, n);
+        if (key) rec_copy(key, kn, ep->top.comm);
         return 1;
     }
     return 0;
+}
+
+typedef struct { uint64_t start, live_ts; char text[160]; } rec_live_t;
+
+static inline const char *rec_culprit_key(const rec_event_t *e) {
+    return e->src == REC_SRC_PID1 ? e->subj : e->comm;
+}
+
+static inline void rec_best_arrow(const rec_shm_t *m, const rec_live_t lv[3], uint64_t t0, uint64_t now,
+                                  const rec_culprit_t *tab, int ntab, rec_arrow_t *out) {
+    short endi[REC_RING], pend[3][REC_RING];
+    char skip[REC_RING];
+    int open[3] = { 0, 0, 0 }, np[3] = { 0, 0, 0 }, saw_live[3] = { 0, 0, 0 }, best = -1, k, j;
+    uint32_t i, n = m->count, base = m->head - n;
+    const char *best_text = NULL;
+    rec_arrow_t cand;
+    rec_event_t r;
+    memset(out, 0, sizeof *out);
+    for (i = 0; i < n; i++) {
+        const rec_event_t *e = &m->ring[(base + i) % REC_RING];
+        endi[i] = -1;
+        skip[i] = 0;
+        k = rec_psi_kind(e->msg);
+        if (!k) continue;
+        if (e->src == REC_SRC_PSI) {
+            if (!strcmp(e->kind, "episode-end")) {
+                for (j = 0; j < np[k]; j++) endi[pend[k][j]] = (short)i;
+                skip[i] = (char)saw_live[k];
+                np[k] = open[k] = saw_live[k] = 0;
+            } else if (!strcmp(e->kind, "episode-start")) open[k] = 1;
+            else if (!strcmp(e->kind, "episode-live")) {
+                open[k] = saw_live[k] = 1;
+                endi[i] = -2;
+                pend[k][np[k]++] = (short)i;
+            }
+        } else if (e->src == REC_SRC_SESSION && open[k] && rec_tier(e) != REC_TIER_TRACE) {
+            endi[i] = -2;
+            pend[k][np[k]++] = (short)i;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        const rec_event_t *e = &m->ring[(base + i) % REC_RING];
+        const char *text = e->msg;
+        int t = rec_tier(e);
+        if (t == REC_TIER_TRACE || skip[i]) continue;
+        memset(&cand, 0, sizeof cand);
+        cand.src = e->src;
+        cand.event_ts = e->ts;
+        cand.state = 2;
+        cand.tier = (uint8_t)t;
+        cand.resolved_ts = e->ts;
+        if (endi[i] != -1) {
+            k = rec_psi_kind(e->msg);
+            cand.tier = e->src == REC_SRC_SESSION ? REC_TIER_SESSION : REC_TIER_MINOR;
+            if (endi[i] >= 0) {
+                const rec_event_t *x = &m->ring[(base + (uint32_t)endi[i]) % REC_RING];
+                cand.resolved_ts = x->ts;
+                text = x->msg;
+            } else if (e->src == REC_SRC_PSI ? lv[k].live_ts && e->ts == lv[k].live_ts : lv[k].start && e->ts >= lv[k].start) {
+                cand.state = 1;
+                cand.tier = REC_TIER_LIVE;
+                cand.resolved_ts = 0;
+                text = lv[k].text;
+            } else cand.resolved_ts = t0;
+        }
+        if (rec_arrow_beats(&cand, out, now)) { *out = cand; best = (int)i; best_text = text; }
+    }
+    if (best < 0) { memset(out, 0, sizeof *out); return; }
+    r = m->ring[(base + (uint32_t)best) % REC_RING];
+    rec_copy(r.msg, sizeof r.msg, best_text);
+    if (*rec_culprit_key(&r))
+        out->recurrence = (uint32_t)rec_culprit_seen(tab, ntab, rec_culprit_key(&r), now > 7 * 86400 ? now - 7 * 86400 : 0, r.ts + 60);
+    rec_render(out->line, sizeof out->line, &r, out->recurrence);
 }
 
 #endif

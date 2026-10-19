@@ -57,7 +57,7 @@ schema-systemctl: schema-systemctl.c systemctl_shim.h
 schema-subreaper: schema-subreaper.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-coredump: schema-coredump.c coredump.h
+schema-coredump: schema-coredump.c coredump.h recorder.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lzstd
 
 schema-recorder: schema-recorder.c recorder.h recorder_logic.h
@@ -245,8 +245,9 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test: schema-coredump schema-recorder
+test: schema-coredump schema-recorder schema-ctl schema-board
 	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
+	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o /tmp/schema-test-recorder-scenario -lrt && /tmp/schema-test-recorder-scenario
 	sh tests/test_recorder_daemon.sh
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure

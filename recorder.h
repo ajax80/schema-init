@@ -29,6 +29,7 @@ typedef struct {
     int32_t  pid;
     int32_t  rc;
     char     kind[24];
+    char     boot[12];
     char     comm[32];
     char     subj[64];
     char     msg[160];
@@ -37,6 +38,7 @@ typedef struct {
 typedef struct {
     uint8_t  state;          /* 0 none, 1 live, 2 resolved */
     uint8_t  tier;
+    uint8_t  src;
     uint64_t event_ts;
     uint64_t resolved_ts;
     uint32_t recurrence;
@@ -79,18 +81,19 @@ static inline void rec_scrub(char *s) {
 }
 
 static inline int rec_format(char *buf, size_t n, const rec_event_t *e) {
-    char kind[sizeof e->kind], comm[sizeof e->comm], subj[sizeof e->subj], msg[sizeof e->msg];
+    char kind[sizeof e->kind], boot[sizeof e->boot], comm[sizeof e->comm], subj[sizeof e->subj], msg[sizeof e->msg];
     size_t i;
     int r;
     rec_word(kind, sizeof kind, e->kind);
     rec_word(comm, sizeof comm, e->comm);
     rec_word(subj, sizeof subj, e->subj);
+    rec_word(boot, sizeof boot, e->boot);
     snprintf(msg, sizeof msg, "%.*s", (int)sizeof e->msg - 1, e->msg);
     for (i = 0; msg[i]; i++) if (msg[i] == '\n' || msg[i] == '\r') msg[i] = ' ';
-    r = snprintf(buf, n, "ts=%llu src=%s kind=%s comm=%s pid=%d rc=%d crit=%d subj=%s tier=%d msg=%s",
+    r = snprintf(buf, n, "ts=%llu src=%s kind=%s comm=%s pid=%d rc=%d crit=%d subj=%s tier=%d boot=%s msg=%s",
                  (unsigned long long)e->ts,
                  e->src >= 1 && e->src <= REC_SRC_PSI ? rec_src_names[e->src] : "?",
-                 kind, comm, (int)e->pid, (int)e->rc, (int)e->crit, subj, (int)e->tier, msg);
+                 kind, comm, (int)e->pid, (int)e->rc, (int)e->crit, subj, (int)e->tier, boot, msg);
     return r < 0 || (size_t)r >= n ? -1 : r;
 }
 
@@ -127,6 +130,7 @@ static inline int rec_parse(const char *line, rec_event_t *out) {
         else if (!strcmp(key, "kind")) { rec_copy(out->kind, sizeof out->kind, val); have_kind = 1; }
         else if (!strcmp(key, "comm")) rec_copy(out->comm, sizeof out->comm, val);
         else if (!strcmp(key, "subj")) rec_copy(out->subj, sizeof out->subj, val);
+        else if (!strcmp(key, "boot")) rec_copy(out->boot, sizeof out->boot, val);
         else if (!strcmp(key, "msg")) rec_copy(out->msg, sizeof out->msg, val);
         else if (!strcmp(key, "pid")) out->pid = (int32_t)strtol(val, NULL, 10);
         else if (!strcmp(key, "rc")) out->rc = (int32_t)strtol(val, NULL, 10);
@@ -166,7 +170,9 @@ static inline void rec_send(const char *sock_path, const rec_event_t *e) {
 static inline const rec_shm_t *rec_shm_map(int fd) {
     struct stat st;
     const rec_shm_t *m;
+    uid_t ok = getenv("SCHEMA_RECORDER_SHM") ? geteuid() : 0;
     if (fstat(fd, &st) != 0 || (size_t)st.st_size < sizeof *m) return NULL;
+    if ((st.st_uid != 0 && st.st_uid != ok) || (st.st_mode & 022)) return NULL;
     m = mmap(NULL, sizeof *m, PROT_READ, MAP_SHARED, fd, 0);
     if (m == MAP_FAILED) return NULL;
     if (m->magic != REC_SHM_MAGIC) { munmap((void *)m, sizeof *m); return NULL; }
