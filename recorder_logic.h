@@ -164,7 +164,7 @@ static inline int rec_arrow_pick(const rec_arrow_t *cur, const rec_event_t *cand
     if (cur->state == 0) return 1;
     if (cur->state == 2 && now >= cur->resolved_ts && now - cur->resolved_ts >= 36 * 3600) return 1;
     if (ct != cur->tier) return ct > cur->tier;
-    return cand->ts > cur->event_ts;
+    return cand->ts >= cur->event_ts;
 }
 
 static inline int rec_arrow_shade(const rec_arrow_t *a, uint64_t now) {

@@ -134,6 +134,9 @@ static void pick_precedence(void) {
     assert(rec_arrow_pick(&a, &c, 300) == 1);
     c.ts = 50;
     assert(rec_arrow_pick(&a, &c, 300) == 0);
+    c.ts = 100;
+    a.event_ts = 100;
+    assert(rec_arrow_pick(&a, &c, 300) == 1);
 }
 
 static void pick_upgrade_and_trace(void) {

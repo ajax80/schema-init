@@ -86,7 +86,7 @@ $BIN send src=coredump kind=crash comm=kwin_wayland pid=7 rc=11
 $BIN send src=session kind=plasma-exit rc=1
 sleep 0.5
 OUT=$("$T.chk") || fail "shm reload"
-echo "$OUT" | grep -q "kwin_wayland crashed" || fail "session arrow did not replace resolved live: $OUT"
+echo "$OUT" | grep -q "desktop session ended . kwin_wayland crashed" || fail "session arrow did not replace resolved live: $OUT"
 stop
 export SCHEMA_RECORDER_DIR=$T/ev
 
