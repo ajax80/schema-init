@@ -17,6 +17,7 @@
 #include "svc_dropins.h"
 #include "reexec_state.h"
 #include "notify.h"
+#include "fdstore.h"
 #include "coredump.h"
 #include <sys/resource.h>
 #include "group.h"
@@ -1975,9 +1976,12 @@ static void ctl_cmd(int fd, char *line) {
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++) {
-                char deck[24] = "";
+                char deck[48] = "";
                 if (services[i].card_count)
                     snprintf(deck, sizeof deck, "  cards=%d/%d", services[i].card_next, services[i].card_count);
+                int sk = services[i].fdstore_max > 0 ? fdstore_count(services[i].name) : 0;
+                if (sk > 0)
+                    snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  fds=%d", sk);
                 ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count, deck,
@@ -2311,13 +2315,16 @@ static void notify_poll(void) {
         if (n < 0) continue;
         struct notify_msg m;
         int acted = notify_parse(buf, (size_t)n, &m);
-        for (int i = 0; i < nrfds; i++) close(rfds[i]);
-        if (!acted) continue;
+        if (!acted) {
+            for (int i = 0; i < nrfds; i++) close(rfds[i]);
+            continue;
+        }
         char cgtext[NOTIFY_CGROUP_TEXT_MAX];
         int have_cg = -1;                           /* read lazily, once per message */
         if (m.busname[0]) {
             /* "this name now has an owner": only the broker may say so, and it
              * counts for the service whose cgroup holds the owning pid. */
+            for (int i = 0; i < nrfds; i++) close(rfds[i]);
             if (m.bus_owner_pid <= 0 || !notify_sender_is_broker(pid, uid)) continue;
             for (int i = 0; i < svc_count; i++) {
                 service_t *svc = &services[i];
@@ -2335,12 +2342,23 @@ static void notify_poll(void) {
         }
         for (int i = 0; i < svc_count; i++) {
             service_t *svc = &services[i];
-            if (!svc->notify || svc->child_pid <= 0) continue;
+            int stores = svc->fdstore_max > 0 && (m.fdstore || m.fdstore_remove);
+            if (!(svc->notify || stores) || svc->child_pid <= 0) continue;
             if (svc->child_pid != pid) {
                 if (!svc->cgroup_path[0]) continue;
                 if (have_cg < 0) have_cg = notify_read_cgroup(pid, cgtext, sizeof cgtext);
                 if (!have_cg || !notify_cgroup_text_matches(cgtext, svc->cgroup_path)) continue;
             }
+            if (stores && m.fdstore) {
+                int refused = 0;
+                for (int k = 0; k < nrfds; k++)
+                    if (fdstore_add(svc->name, rfds[k], m.fdname, svc->fdstore_max) < 0) refused = 1;
+                nrfds = 0;
+                if (refused) service_log(svc, "fdstore-full");
+            }
+            if (stores && m.fdstore_remove)
+                fdstore_remove(svc->name, m.fdname);
+            if (!svc->notify) break;
             if (m.status[0])
                 snprintf(svc->notify_status, sizeof svc->notify_status, "%s", m.status);
             if (m.watchdog)
@@ -2352,7 +2370,18 @@ static void notify_poll(void) {
             }
             break;
         }
+        for (int k = 0; k < nrfds; k++) close(rfds[k]);
     }
+}
+
+static int fdstore_keep(const char *name, void *ctx) {
+    (void)ctx;
+    for (int i = 0; i < svc_count; i++) {
+        if (strcmp(services[i].name, name) != 0) continue;
+        return services[i].fdstore_max > 0 && services[i].inst.state != STATE_EXCISED &&
+               services[i].inst.state != STATE_DORMANT;
+    }
+    return 0;
 }
 
 static void ctl_poll(void) {
@@ -3926,6 +3955,7 @@ int main(int argc, char **argv) {
                         struct signalfd_siginfo ssi;
                         while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi)) {
                             if (ssi.ssi_signo == SIGCHLD) {
+                                if (notify_fd >= 0) notify_poll();
                                 reap();
                             } else if (ssi.ssi_signo == SIGHUP) {
                                 /* No socket to answer on — the console message
@@ -4005,6 +4035,7 @@ int main(int argc, char **argv) {
             streak = moved ? (pass_changed ? streak + 1 : 1) : 0;
             pass_changed = moved && streak <= PASS_RERUN_MAX;
         }
+        if (fdstore_n > 0) fdstore_sweep(fdstore_keep, NULL);
         monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();

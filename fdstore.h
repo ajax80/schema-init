@@ -2,6 +2,7 @@
 #define FDSTORE_H
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -10,8 +11,9 @@
 
 typedef struct { char svc[64]; char name[64]; int fd; } fdstore_ent;
 
-static fdstore_ent *fdstore_v;
-static int fdstore_n, fdstore_cap;
+fdstore_ent *fdstore_v __attribute__((weak));
+int fdstore_n __attribute__((weak));
+int fdstore_cap __attribute__((weak));
 
 static inline int fdstore_valid_name(const char *name) {
     size_t n = name ? strlen(name) : 0;
@@ -91,6 +93,32 @@ static inline int fdstore_collect(const char *svc, int *fds, const char **names,
         n++;
     }
     return n;
+}
+
+static inline int fdstore_fdnames(const char *svc, int listen_open, char *out, size_t n) {
+    size_t o = 0;
+    int first = 1;
+    for (int i = 0; i < listen_open + fdstore_n; i++) {
+        const char *nm;
+        char tmp[80];
+        if (i < listen_open) {
+            snprintf(tmp, sizeof tmp, "%s.socket", svc);
+            nm = tmp;
+        } else {
+            const fdstore_ent *e = &fdstore_v[i - listen_open];
+            if (strcmp(e->svc, svc)) continue;
+            nm = e->name;
+        }
+        size_t l = strlen(nm);
+        if (o + l + (first ? 0 : 1) + 1 > n) return -1;
+        if (!first) out[o++] = ':';
+        memcpy(out + o, nm, l);
+        o += l;
+        first = 0;
+    }
+    if (n < 1) return -1;
+    out[o] = '\0';
+    return (int)o;
 }
 
 static inline void fdstore_set_cloexec(int on) {

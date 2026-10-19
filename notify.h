@@ -54,9 +54,13 @@ static inline int notify_parse(const char *buf, size_t len, struct notify_msg *m
         else if (l == 15 && !memcmp(p, "FDSTOREREMOVE=1", 15)) { m->fdstore_remove = 1; any = 1; }
         else if (l > 7 && !memcmp(p, "FDNAME=", 7)) {
             size_t nl2 = l - 7;
-            if (nl2 >= sizeof m->fdname) nl2 = sizeof m->fdname - 1;
-            memcpy(m->fdname, p + 7, nl2);
-            m->fdname[nl2] = '\0';
+            if (nl2 >= sizeof m->fdname) {
+                m->fdname[0] = ':';
+                m->fdname[1] = '\0';
+            } else {
+                memcpy(m->fdname, p + 7, nl2);
+                m->fdname[nl2] = '\0';
+            }
         }
         else if (l > 8 && l - 8 < sizeof m->busname && !memcmp(p, "BUSNAME=", 8)) {
             memcpy(m->busname, p + 8, l - 8);

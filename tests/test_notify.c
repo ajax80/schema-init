@@ -148,6 +148,12 @@ int main(void) {
     const char *f2 = "FDSTOREREMOVE=1\nFDNAME=state";
     assert(notify_parse(f2, strlen(f2), &m) == 1);
     assert(m.fdstore_remove == 1 && !m.fdstore && strcmp(m.fdname, "state") == 0);
+    char lg[200];
+    snprintf(lg, sizeof lg, "FDSTORE=1\nFDNAME=%0*d", 64, 0);
+    assert(notify_parse(lg, strlen(lg), &m) == 1 && m.fdstore == 1);
+    assert(strcmp(m.fdname, ":") == 0);
+    snprintf(lg, sizeof lg, "FDSTORE=1\nFDNAME=%0*d", 63, 0);
+    assert(notify_parse(lg, strlen(lg), &m) == 1 && strlen(m.fdname) == 63);
     printf("test_notify parse fdstore: OK\n");
 
     /* ---- fds are handed to the caller ---- */

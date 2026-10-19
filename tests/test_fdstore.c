@@ -73,6 +73,22 @@ int main(void) {
     assert(fdstore_count("a") == 1 && fdstore_count("b") == 0);
     assert(fdstore_drop("a") == 1);
 
+    assert(fdstore_add("dbus", mkfd(), "listen", 8) == 0);
+    assert(fdstore_add("dbus", mkfd(), "state", 8) == 0);
+    assert(fdstore_add("dbus", mkfd(), "conn", 8) == 0);
+    char nm[16384];
+    assert(fdstore_fdnames("dbus", 1, nm, sizeof nm) > 0);
+    assert(strcmp(nm, "dbus.socket:listen:state:conn") == 0);
+    assert(fdstore_fdnames("dbus", 0, nm, sizeof nm) > 0 && strcmp(nm, "listen:state:conn") == 0);
+    char tiny[32];
+    assert(fdstore_fdnames("dbus", 1, tiny, sizeof tiny) > 0);
+    assert(fdstore_drop("dbus") == 3);
+    for (int i = 0; i < 300; i++) assert(fdstore_add("dbus", mkfd(), "conn", 400) == 0);
+    assert(fdstore_fdnames("dbus", 1, nm, sizeof nm) > 0);
+    assert(strncmp(nm, "dbus.socket:conn:conn", 21) == 0);
+    assert(fdstore_fdnames("dbus", 1, tiny, sizeof tiny) == -1);
+    assert(fdstore_drop("dbus") == 300);
+
     printf("test_fdstore: OK\n");
     return 0;
 }
