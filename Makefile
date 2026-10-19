@@ -242,6 +242,7 @@ armhf:
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
 test: schema-coredump
+	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
