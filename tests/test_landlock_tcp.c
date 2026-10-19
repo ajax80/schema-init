@@ -63,8 +63,8 @@ int main(void) {
         return 0;
     }
     int la = sock_at(SOCK_STREAM, 0, 1), lb = sock_at(SOCK_STREAM, 0, 1);
-    int pa = port_of(la), pb = port_of(lb), b1 = free_port(), b2 = free_port();
-    assert(la >= 0 && lb >= 0 && pa != pb && b1 != b2);
+    int pa = port_of(la), pb = port_of(lb), b1 = free_port();
+    assert(la >= 0 && lb >= 0 && pa != pb && b1 != pa && b1 != pb);
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -72,10 +72,10 @@ int main(void) {
         uint16_t ports[2][MAX_LANDLOCK] = { { b1 }, { pa } };
         if (confined(n, ports) != 0) _exit(10);
         if (try_bind(SOCK_STREAM, b1) != 0) _exit(11);
-        if (try_bind(SOCK_STREAM, b2) != EACCES) _exit(12);
+        if (try_bind(SOCK_STREAM, pb) != EACCES) _exit(12);
         if (try_connect(pa) != 0) _exit(13);
         if (try_connect(pb) != EACCES) _exit(14);
-        if (try_bind(SOCK_DGRAM, b2) != 0) _exit(15);
+        if (try_bind(SOCK_DGRAM, 0) != 0) _exit(15);
         _exit(0);
     }
     int st;

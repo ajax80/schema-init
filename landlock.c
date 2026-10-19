@@ -17,6 +17,13 @@
 #define LANDLOCK_ACCESS_FS_IOCTL_DEV (1ULL << 15)
 #endif
 
+/* Our own copies: uapi headers before 6.7 lack the network half. */
+struct sch_ll_ruleset_attr { uint64_t handled_access_fs, handled_access_net; };
+struct sch_ll_net_port_attr { uint64_t allowed_access, port; };
+#define SCH_LL_RULE_NET_PORT    2
+#define SCH_LL_NET_BIND_TCP     (1ULL << 0)
+#define SCH_LL_NET_CONNECT_TCP  (1ULL << 1)
+
 #define FS_RO   (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE | \
                  LANDLOCK_ACCESS_FS_READ_DIR)
 #define FS_FILE (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE | \
@@ -32,8 +39,8 @@ int landlock_beneath(const char *path, const char *p) {
 
 int apply_landlock(char *const *paths, uint32_t rw_mask, int n,
                    const int tcp_n[2], const uint16_t tcp[2][MAX_LANDLOCK], const char **step) {
-    static const uint64_t net[2] = { LANDLOCK_ACCESS_NET_BIND_TCP, LANDLOCK_ACCESS_NET_CONNECT_TCP };
-    struct landlock_ruleset_attr attr = { .handled_access_fs = n ? (1ULL << 16) - 1 : 0 };
+    static const uint64_t net[2] = { SCH_LL_NET_BIND_TCP, SCH_LL_NET_CONNECT_TCP };
+    struct sch_ll_ruleset_attr attr = { .handled_access_fs = n ? (1ULL << 16) - 1 : 0 };
     int abi, rs, i, k;
 
     *step = "abi";
@@ -85,8 +92,8 @@ int apply_landlock(char *const *paths, uint32_t rw_mask, int n,
 
     for (k = 0; k < 2; k++) {
         for (i = 0; i < tcp_n[k]; i++) {
-            struct landlock_net_port_attr np = { .allowed_access = net[k], .port = tcp[k][i] };
-            if (syscall(SYS_landlock_add_rule, rs, LANDLOCK_RULE_NET_PORT, &np, 0) != 0) {
+            struct sch_ll_net_port_attr np = { .allowed_access = net[k], .port = tcp[k][i] };
+            if (syscall(SYS_landlock_add_rule, rs, SCH_LL_RULE_NET_PORT, &np, 0) != 0) {
                 int e = errno;
                 *step = k ? "connect_tcp port" : "bind_tcp port";
                 close(rs);

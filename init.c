@@ -1953,6 +1953,14 @@ static void ctl_cmd(int fd, char *line) {
                 for (int k = 0; k < s->landlock_count; k++)
                     ctl_writef(fd, "  %-15s %s\n", ((s->landlock_rw >> k) & 1) ? "landlock_rw" : "landlock_ro",
                         s->landlock[k]);
+                for (int t = 0; t < 2; t++) {
+                    char ports[MAX_LANDLOCK * 7 + 8] = "none";
+                    size_t o = 0;
+                    if (s->landlock_tcp_n[t] < 0) continue;
+                    for (int k = 0; k < s->landlock_tcp_n[t]; k++)
+                        o += snprintf(ports + o, sizeof ports - o, "%s%u", k ? "," : "", s->landlock_tcp[t][k]);
+                    ctl_writef(fd, "  %-15s %s\n", t ? "connect_tcp" : "bind_tcp", ports);
+                }
             }
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);

@@ -392,6 +392,7 @@ int service_apply_hardening(const service_t *svc);
 
 /* free the landlock_ro=/landlock_rw= path and exec_pre= strings */
 void service_free_landlock(service_t *svc);
+int  service_landlock_on(const service_t *svc);
 int service_env_file_read(const char *path, char **pairs, int max);
 int service_expand_argv(char *const *argv, char **out, int max);
 int service_split_cmdline(const char *s, char **out, int max);

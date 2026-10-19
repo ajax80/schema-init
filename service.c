@@ -488,33 +488,39 @@ static int ns_hides(service_t *svc, uint8_t bit, uint8_t *knob, const char *knob
     return -1;
 }
 
+int service_landlock_on(const service_t *svc) {
+    return svc->landlock_count || svc->landlock_tcp_n[0] >= 0 || svc->landlock_tcp_n[1] >= 0;
+}
+
 static int landlock_check(service_t *svc) {
     int i;
-    if (!svc->landlock_count && svc->landlock_tcp_n[0] < 0 && svc->landlock_tcp_n[1] < 0) return 0;
-    for (i = 0; svc->landlock_count && i < svc->landlock_count; i++)
-        if (landlock_beneath(svc->exec, svc->landlock[i])) break;
-    if (svc->landlock_count && i == svc->landlock_count) {
-        fprintf(stderr, "[schema-init] %s: landlock does not cover exec — not loaded\n",
-                svc->name);
-        return -1;
-    }
-    for (int p = 0; svc->landlock_count && p < svc->exec_pre_count; p++) {
-        const char *c = svc->exec_pre[p];
-        size_t pl = strspn(c, "+-");
-        char *w[32];
-        int nw, covered = 0;
-        if (memchr(c, '+', pl) || memchr(c, '-', pl)) continue;
-        nw = service_split_cmdline(c + pl, w, 32);
-        for (i = 0; nw > 0 && i < svc->landlock_count && !covered; i++) {
-            char a[PATH_MAX], b[PATH_MAX];
-            covered = landlock_beneath(w[0], svc->landlock[i]) ||
-                      (realpath(w[0], a) && realpath(svc->landlock[i], b) && landlock_beneath(a, b));
-        }
-        for (i = 0; i < nw; i++) free(w[i]);
-        if (!covered) {
-            fprintf(stderr, "[schema-init] %s: landlock does not cover exec_pre=%s — not loaded\n",
-                    svc->name, c);
+    if (!service_landlock_on(svc)) return 0;
+    if (svc->landlock_count) {
+        for (i = 0; i < svc->landlock_count; i++)
+            if (landlock_beneath(svc->exec, svc->landlock[i])) break;
+        if (i == svc->landlock_count) {
+            fprintf(stderr, "[schema-init] %s: landlock does not cover exec — not loaded\n",
+                    svc->name);
             return -1;
+        }
+        for (int p = 0; p < svc->exec_pre_count; p++) {
+            const char *c = svc->exec_pre[p];
+            size_t pl = strspn(c, "+-");
+            char *w[32];
+            int nw, covered = 0;
+            if (memchr(c, '+', pl) || memchr(c, '-', pl)) continue;
+            nw = service_split_cmdline(c + pl, w, 32);
+            for (i = 0; nw > 0 && i < svc->landlock_count && !covered; i++) {
+                char a[PATH_MAX], b[PATH_MAX];
+                covered = landlock_beneath(w[0], svc->landlock[i]) ||
+                          (realpath(w[0], a) && realpath(svc->landlock[i], b) && landlock_beneath(a, b));
+            }
+            for (i = 0; i < nw; i++) free(w[i]);
+            if (!covered) {
+                fprintf(stderr, "[schema-init] %s: landlock does not cover exec_pre=%s — not loaded\n",
+                        svc->name, c);
+                return -1;
+            }
         }
     }
     if (!(svc->flags & SVC_NO_NEW_PRIVS) && svc->cap_restrict &&
@@ -1413,7 +1419,7 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
-        if (svc->landlock_count || svc->landlock_tcp_n[0] >= 0 || svc->landlock_tcp_n[1] >= 0) {
+        if (service_landlock_on(svc)) {
             const char *step = "";
             if (apply_landlock(svc->landlock, svc->landlock_rw, svc->landlock_count,
                                svc->landlock_tcp_n, svc->landlock_tcp, &step) != 0) {
@@ -2119,28 +2125,24 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->landlock[svc->landlock_count++] = strdup(val);
     }
     else if (strcmp(line, "landlock_bind_tcp") == 0 || strcmp(line, "landlock_connect_tcp") == 0) {
-        int k = line[9] == 'c';
-        char *tok, *save = NULL, buf[256];
-        snprintf(buf, sizeof buf, "%s", val);
-        int ntok = 0;
+        int k = line[9] == 'c', ntok = 0, none = 0, bad = strlen(val) >= 256;
+        char *tok, *save = NULL, buf[256] = "";
+        if (!bad) memcpy(buf, val, strlen(val) + 1);
         if (svc->landlock_tcp_n[k] < 0) svc->landlock_tcp_n[k] = 0;
-        for (tok = strtok_r(buf, ", \t", &save); tok; tok = strtok_r(NULL, ", \t", &save)) {
+        for (tok = strtok_r(buf, ", \t", &save); tok && !bad; tok = strtok_r(NULL, ", \t", &save)) {
             char *end;
             long port = strtol(tok, &end, 10);
             ntok++;
-            if (!strcmp(tok, "none")) continue;
-            if (end == tok || *end || port < 0 || port > 65535 || svc->landlock_tcp_n[k] >= MAX_LANDLOCK) {
-                fprintf(stderr, "[schema-init] %s: bad %s=%s (TCP ports 0-65535 or none, at most %d)\n",
-                        svc->name[0] ? svc->name : path, line, val, MAX_LANDLOCK);
-                return -1;
-            }
-            svc->landlock_tcp[k][svc->landlock_tcp_n[k]++] = (uint16_t)port;
+            if (!strcmp(tok, "none")) { none = 1; continue; }
+            bad = !isdigit((unsigned char)*tok) || *end || port > 65535 || svc->landlock_tcp_n[k] >= MAX_LANDLOCK;
+            if (!bad) svc->landlock_tcp[k][svc->landlock_tcp_n[k]++] = (uint16_t)port;
         }
-        if (!ntok) {
-            fprintf(stderr, "[schema-init] %s: %s= needs TCP ports or none\n",
-                    svc->name[0] ? svc->name : path, line);
+        if (bad || !ntok || (none && ntok > 1)) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s (TCP ports 0-65535, at most %d, or none alone)\n",
+                    svc->name[0] ? svc->name : path, line, val, MAX_LANDLOCK);
             return -1;
         }
+        if (none) svc->landlock_tcp_n[k] = 0;
     }
     else if (strcmp(line, "critical") == 0 && atoi(val))
         svc->flags |= SVC_CRITICAL;
