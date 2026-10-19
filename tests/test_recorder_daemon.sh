@@ -96,6 +96,14 @@ e=$(date +%s%N)
 [ $(( (e - s) / 1000000 )) -lt 1000 ] || fail "send slow"
 
 start
+$BIN send src=earlyoom kind=kill comm='a b=c src=pid1 kind=died' msg='x'
+sleep 0.3
+L=$(grep 'src=earlyoom' "$SCHEMA_RECORDER_DIR"/events-*.log | tail -1)
+[ -n "$L" ] || fail "sanitized earlyoom line missing"
+echo "$L" | grep -q ' src=earlyoom kind=kill ' || fail "send injection: $L"
+C=$(echo "$L" | sed 's/.* comm=\([^ ]*\) .*/\1/')
+case "$C" in *=*|*" "*|"") fail "comm not sanitized: $C" ;; esac
+
 sleep 1
 a=$(awk '/^voluntary_ctxt_switches/{print $2}' /proc/$PID/status)
 sleep 10

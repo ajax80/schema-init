@@ -308,6 +308,23 @@ static int list(const char *dir) {
     return 0;
 }
 
+static void send_crash(const struct crash *c) {
+    rec_event_t ev;
+    char sg[24];
+    const char *sn = sig_abbrev((int)c->sig);
+    memset(&ev, 0, sizeof ev);
+    ev.ts = (uint64_t)c->time;
+    ev.src = REC_SRC_COREDUMP;
+    rec_copy(ev.kind, sizeof ev.kind, "crash");
+    rec_copy(ev.comm, sizeof ev.comm, c->comm);
+    rec_copy(ev.subj, sizeof ev.subj, c->service);
+    ev.pid = (int32_t)c->pid;
+    ev.rc = (int32_t)c->sig;
+    snprintf(sg, sizeof sg, "SIG%s", sn ? sn : "?");
+    rec_copy(ev.msg, sizeof ev.msg, sg);
+    rec_send(REC_SOCK_PATH, &ev);
+}
+
 int main(int argc, char **argv) {
     for (int fd = 0; fd < 3; fd++)
         if (fcntl(fd, F_GETFD) < 0) {
@@ -351,6 +368,7 @@ int main(int argc, char **argv) {
     if (dfd < 0) {
         syslog(LOG_ERR, "%s[%ld] (%s) SIG%s: cannot open %s: %m", c.comm, c.pid, c.exe,
                sig_abbrev((int)c.sig) ? sig_abbrev((int)c.sig) : "?", dir);
+        send_crash(&c);
         return 1;
     }
     flock(dfd, LOCK_EX);
@@ -377,20 +395,7 @@ int main(int argc, char **argv) {
     else
         syslog(LOG_ERR, "%s%s%s[%ld] (%s) killed by SIG%s, no core (%s)",
                c.service, c.service[0] ? ": " : "", c.comm, c.pid, c.exe, sn ? sn : "?", c.reason);
-    {
-        rec_event_t ev;
-        char sg[24];
-        memset(&ev, 0, sizeof ev);
-        ev.src = REC_SRC_COREDUMP;
-        rec_copy(ev.kind, sizeof ev.kind, "crash");
-        rec_copy(ev.comm, sizeof ev.comm, c.comm);
-        rec_copy(ev.subj, sizeof ev.subj, c.service);
-        ev.pid = (int32_t)c.pid;
-        ev.rc = (int32_t)c.sig;
-        snprintf(sg, sizeof sg, "SIG%s", sn ? sn : "?");
-        rec_copy(ev.msg, sizeof ev.msg, sg);
-        rec_send(REC_SOCK_PATH, &ev);
-    }
+    send_crash(&c);
     close(dfd);
     return 0;
 }
