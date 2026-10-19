@@ -188,6 +188,7 @@ typedef struct {
 } rec_episode_t;
 
 static inline int rec_hogs(const rec_proc_t *a, int na, const rec_proc_t *b, int nb, rec_hog_t *out, int max) {
+    rec_hog_t g[512];
     int i, j, k, n = 0;
     for (i = 0; i < nb; i++) {
         uint64_t d;
@@ -196,22 +197,24 @@ static inline int rec_hogs(const rec_proc_t *a, int na, const rec_proc_t *b, int
             if (a[j].pid == b[i].pid && !strcmp(a[j].comm, b[i].comm)) { pa = &a[j]; break; }
         if (!pa || b[i].ticks <= pa->ticks) continue;
         d = b[i].ticks - pa->ticks;
-        for (k = 0; k < n; k++) if (!strcmp(out[k].comm, b[i].comm)) break;
+        for (k = 0; k < n; k++) if (!strcmp(g[k].comm, b[i].comm)) break;
         if (k == n) {
-            if (n == max) continue;
-            memset(&out[n], 0, sizeof out[n]);
-            rec_copy(out[n].comm, sizeof out[n].comm, b[i].comm);
+            if (n == 512) continue;
+            memset(&g[n], 0, sizeof g[n]);
+            rec_copy(g[n].comm, sizeof g[n].comm, b[i].comm);
             n++;
         }
-        out[k].count++;
-        out[k].ticks += d;
-        if (b[i].pid > out[k].top_pid) out[k].top_pid = b[i].pid;
+        g[k].count++;
+        g[k].ticks += d;
+        if (b[i].pid > g[k].top_pid) g[k].top_pid = b[i].pid;
     }
     for (i = 1; i < n; i++) {
-        rec_hog_t t = out[i];
-        for (j = i - 1; j >= 0 && out[j].ticks < t.ticks; j--) out[j + 1] = out[j];
-        out[j + 1] = t;
+        rec_hog_t t = g[i];
+        for (j = i - 1; j >= 0 && g[j].ticks < t.ticks; j--) g[j + 1] = g[j];
+        g[j + 1] = t;
     }
+    if (n > max) n = max;
+    for (i = 0; i < n; i++) out[i] = g[i];
     return n;
 }
 
@@ -250,9 +253,8 @@ static inline int rec_correlate(const rec_shm_t *m, const rec_episode_t *ep, con
     uint32_t i;
     for (i = 0; i < m->count; i++) {
         const rec_event_t *e = &m->ring[(m->head - 1 - i) % REC_RING];
-        if (e->ts < lo) break;
-        if (e->ts > x->ts) continue;
-        if (e->src == REC_SRC_COREDUMP) { if (!crash) crash = e; }
+        if (e->ts < lo || e->ts > x->ts) continue;
+        if (e->src == REC_SRC_COREDUMP) { if (!crash && rec_tier_base(e) != REC_TIER_TRACE) crash = e; }
         else if (e->src == REC_SRC_EARLYOOM) { if (!oom && !strcmp(e->kind, "kill")) oom = e; }
         else if (e->src == REC_SRC_PID1) { if (!svc && rec_tier_base(e) != REC_TIER_TRACE) svc = e; }
     }

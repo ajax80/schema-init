@@ -409,11 +409,52 @@ static void correlate_priority(void) {
     e = mk(REC_SRC_EARLYOOM, "kill", "plasmashell", "", 9, 990);
     rec_ring_push(&m, &e);
     assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "earlyoom killed plasmashell"));
-    e = mk(REC_SRC_COREDUMP, "", "old", "", 6, 985);
+    e = mk(REC_SRC_COREDUMP, "", "ksmserver", "", 6, 985);
     rec_ring_push(&m, &e);
-    e = mk(REC_SRC_COREDUMP, "", "new", "", 99, 992);
+    e = mk(REC_SRC_COREDUMP, "", "plasmashell", "", 99, 992);
     rec_ring_push(&m, &e);
-    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "new crashed (SIG99)"));
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "plasmashell crashed (SIG99)"));
+}
+
+static void hogs_max_heaviest(void) {
+    rec_proc_t a[6], b[6];
+    rec_hog_t out[1];
+    int i;
+    for (i = 0; i < 5; i++) { a[i] = mkp(10 + i, "light", 0); b[i] = mkp(10 + i, "light", 5 + (uint64_t)i); }
+    a[5] = mkp(900, "heavy", 0); b[5] = mkp(900, "heavy", 500);
+    assert(rec_hogs(a, 6, b, 6, out, 1) == 1);
+    assert(!strcmp(out[0].comm, "heavy") && out[0].ticks == 500);
+}
+
+static void correlate_app_crash_ignored(void) {
+    static rec_shm_t m;
+    rec_event_t e, x;
+    rec_episode_t ep;
+    char why[160];
+    memset(&m, 0, sizeof m);
+    memset(&ep, 0, sizeof ep);
+    e = mk(REC_SRC_COREDUMP, "", "obsidian", "", 11, 995);
+    rec_ring_push(&m, &e);
+    x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 996);
+    rec_ring_push(&m, &e);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && strstr(why, "kwin_wayland"));
+}
+
+static void correlate_unordered_ring(void) {
+    static rec_shm_t m;
+    rec_event_t e, x;
+    rec_episode_t ep;
+    char why[160];
+    memset(&m, 0, sizeof m);
+    memset(&ep, 0, sizeof ep);
+    e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 995);
+    rec_ring_push(&m, &e);
+    e = mk(REC_SRC_PID1, "died", "", "old.svc", 0, 900);
+    rec_ring_push(&m, &e);
+    x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && strstr(why, "kwin_wayland"));
 }
 
 int main(void) {
@@ -446,6 +487,9 @@ int main(void) {
     correlate_none_logout();
     correlate_episode();
     correlate_priority();
+    hogs_max_heaviest();
+    correlate_app_crash_ignored();
+    correlate_unordered_ring();
     printf("test_recorder: OK\n");
     return 0;
 }
