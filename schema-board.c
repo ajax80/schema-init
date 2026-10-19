@@ -41,6 +41,8 @@
 
 #include "schema.h"
 #include "schema_shm.h"
+#include "recorder_logic.h"
+#include <sys/ioctl.h>
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
@@ -201,12 +203,74 @@ static int snapshot(const schema_shm_t *live, schema_shm_t *out) {
     return -1;
 }
 
+static const rec_shm_t *rmap;
+static dev_t rdev;
+static ino_t rino;
+static long roff;
+static time_t rlast;
+static char arrow_line[sizeof ((rec_arrow_t *)0)->line];
+static int arrow_shade;
+static uint32_t arrow_seq;
+
+static void rec_remap(void) {
+    const char *name = getenv("SCHEMA_RECORDER_SHM");
+    struct stat st;
+    int fd = shm_open(name ? name : REC_SHM_NAME, O_RDONLY, 0);
+    if (fd < 0 || fstat(fd, &st) != 0) {
+        if (fd >= 0) close(fd);
+        if (rmap) { munmap((void *)rmap, sizeof *rmap); rmap = NULL; }
+        return;
+    }
+    if (!rmap || st.st_dev != rdev || st.st_ino != rino) {
+        const rec_shm_t *m = rec_shm_map(fd);
+        if (rmap) munmap((void *)rmap, sizeof *rmap);
+        rmap = m;
+        rdev = st.st_dev;
+        rino = st.st_ino;
+    }
+    close(fd);
+}
+
+static int rec_poll(void) {
+    struct timespec ts;
+    rec_arrow_t a;
+    int shade = 0, changed;
+    uint32_t seq = 0;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    if (!rlast || ts.tv_sec - rlast >= 10) { rlast = ts.tv_sec; rec_remap(); }
+    arrow_line[0] = '\0';
+    if (rmap && rec_snapshot_arrow(rmap, &a) == 0) {
+        seq = __atomic_load_n(&rmap->seq, __ATOMIC_ACQUIRE);
+        shade = rec_arrow_shade(&a, (uint64_t)((long)time(NULL) + roff));
+        if (shade) { memcpy(arrow_line, a.line, sizeof arrow_line); arrow_line[sizeof arrow_line - 1] = '\0'; rec_scrub(arrow_line); }
+    }
+    changed = seq != arrow_seq || shade != arrow_shade;
+    arrow_seq = seq;
+    arrow_shade = shade;
+    return changed;
+}
+
+static void put_arrow(void) {
+    struct winsize ws;
+    int cols = 80, left, i = 0;
+    if (!arrow_shade || !arrow_line[0]) return;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) cols = ws.ws_col;
+    left = cols - 2;
+    while (arrow_line[i] && left > 0) {
+        i++;
+        while (((unsigned char)arrow_line[i] & 0xc0) == 0x80) i++;
+        left--;
+    }
+    printf(" %s%.*s\033[0m\n", arrow_shade == 1 ? "\033[1;31m" : "\033[90m", i, arrow_line);
+}
+
 static void render(const schema_shm_t *s) {
     int i, valid;
     fputs("\033[2J\033[H", stdout);                       /* clear + home */
     printf("\033[1m schema-init — limp-mode board   "
            "system: %s   seq:%u   services:%d\033[0m\n",
            sys_name(s->system_state), s->seq, s->count);
+    put_arrow();
     printf(" %-28s %-13s %4s %8s %5s %5s\n",
            "SERVICE", "STATE", "WT", "PID", "RST", "CARDS");
     printf(" ------------------------------------------------------------------\n");
@@ -321,6 +385,7 @@ int main(int argc, char **argv) {
     int fd, i;
     int dirty, valid;
     const schema_shm_t *live;
+    const char *env;
     schema_shm_t snap;
     uint32_t last_seq = (uint32_t)-1;
 
@@ -358,7 +423,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    fd = shm_open(SCHEMA_SHM_NAME, O_RDONLY, 0);
+    fd = shm_open((env = getenv("SCHEMA_BOARD_SHM")) ? env : SCHEMA_SHM_NAME, O_RDONLY, 0);
     if (fd < 0) {
         fprintf(stderr, "schema-board: cannot open shm %s (is schema-init PID 1?)\n",
                 SCHEMA_SHM_NAME);
@@ -372,6 +437,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if ((env = getenv("SCHEMA_RECORDER_FAKETIME"))) roff = atol(env) - (long)time(NULL);
+    rec_poll();
+
     while (running) {
         if (snapshot(live, &snap) != 0) {
             if (once) { fprintf(stderr, "schema-board: shm churning, no stable read\n"); return 2; }
@@ -382,6 +450,7 @@ int main(int argc, char **argv) {
 
         dirty = 0;
         if (snap.seq != last_seq) { dirty = 1; last_seq = snap.seq; }
+        if (rec_poll()) dirty = 1;
 
         valid = snap.count;
         if (valid < 0) valid = 0;

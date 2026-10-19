@@ -1,0 +1,2 @@
+#!/bin/sh
+exec schema-recorder send src=earlyoom kind=kill pid="$EARLYOOM_PID" comm="$EARLYOOM_NAME" msg="$EARLYOOM_CMDLINE"

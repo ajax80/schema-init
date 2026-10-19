@@ -4,6 +4,7 @@
 #include "ns.h"
 #include <linux/capability.h>
 #include "coredump.h"
+#include "recorder.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1627,7 +1628,8 @@ void service_log(const service_t *svc, const char *event) {
     struct tm *t = localtime(&now);
 
     n = snprintf(line, sizeof(line),
-                 "[%02d:%02d:%02d] %-20s  %-12s  state=%-12s  wt=%d  pid=%d\n",
+                 "[%04d-%02d-%02d %02d:%02d:%02d] %-20s  %-12s  state=%-12s  wt=%d  pid=%d\n",
+                 t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
                  t->tm_hour, t->tm_min, t->tm_sec,
                  svc->name, event,
                  state_name(svc->inst.state),
@@ -1639,6 +1641,18 @@ void service_log(const service_t *svc, const char *event) {
     fflush(stdout);
 
     rail_write(line, (size_t)n);
+
+    if (rec_forward_kind(event)) {
+        rec_event_t e;
+        memset(&e, 0, sizeof e);
+        e.src = REC_SRC_PID1;
+        rec_copy(e.kind, sizeof e.kind, event);
+        rec_copy(e.subj, sizeof e.subj, svc->name);
+        e.pid = (int32_t)(svc->child_pid ? svc->child_pid : svc->last_pid);
+        e.rc = svc->term_signal ? 128 + svc->term_signal : svc->exit_status;
+        e.crit = !!(svc->flags & SVC_CRITICAL);
+        rec_send(REC_SOCK_PATH, &e);
+    }
 }
 
 /* ── dependency readiness ───────────────────────────────────────────── */

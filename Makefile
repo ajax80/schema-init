@@ -18,7 +18,7 @@ DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
 DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-dbus schema-systemctl
+BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -35,7 +35,7 @@ OBJS    = $(SRCS:.c=.o)
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h
+CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
 
 all: $(BINS)
 
@@ -48,8 +48,8 @@ schema-init: $(OBJS)
 schema-init-static:
 	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
 
-schema-ctl: schema-ctl.c svc_dropins.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+schema-ctl: schema-ctl.c svc_dropins.h recorder.h recorder_logic.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
@@ -57,13 +57,16 @@ schema-systemctl: schema-systemctl.c systemctl_shim.h
 schema-subreaper: schema-subreaper.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-coredump: schema-coredump.c coredump.h
+schema-coredump: schema-coredump.c coredump.h recorder.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lzstd
+
+schema-recorder: schema-recorder.c recorder.h recorder_logic.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-board: schema-board.c schema.h schema_shm.h
+schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h
@@ -97,6 +100,7 @@ install: all
 	[ -n "$(DESTDIR)" ] || [ -e $(SYSCONFDIR)/schema-init/services/logrotate.svc ] || \
 		install -m 0644 services/logrotate.svc $(SYSCONFDIR)/schema-init/services/logrotate.svc
 	install -m 0755 scripts/schema-snapshot $(DESTDIR)$(BINDIR)/schema-snapshot
+	install -D -m 0755 scripts/schema-recorder-earlyoom $(DESTDIR)/usr/local/bin/schema-recorder-earlyoom
 	install -D -m 0755 scripts/schema-bus-activate $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-bus-activate
 	install -D -m 0644 completion/schema-ctl.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/schema-ctl
 	install -D -m 0644 completion/_schema-ctl $(DESTDIR)$(DATADIR)/zsh/site-functions/_schema-ctl
@@ -228,7 +232,7 @@ install-analyze:
 	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
 
 clean:
-	rm -f $(OBJS) schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-udev schema-systemctl udev-parity libatomic_asneeded.a
+	rm -f $(OBJS) schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-systemctl udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
@@ -241,7 +245,10 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test: schema-coredump
+test: schema-coredump schema-recorder schema-ctl schema-board
+	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
+	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o /tmp/schema-test-recorder-scenario -lrt && /tmp/schema-test-recorder-scenario
+	sh tests/test_recorder_daemon.sh
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake

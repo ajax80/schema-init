@@ -204,6 +204,21 @@ exit
 
 ---
 
+## Flight recorder
+
+`schema-recorder` is an opt-in service that answers "what just happened" when nothing looks failed. It keeps a rolling record of service events, CPU and memory pressure (read from `/proc`), and kills reported to it, in `/var/lib/schema-init/` (root-only, `0600`). It is not started by default:
+
+```sh
+sudo cp /usr/share/schema-init/services/schema-recorder.svc.example /etc/schema-init/services/schema-recorder.svc
+sudo schema-ctl add schema-recorder
+```
+
+The board shows the latest event on its arrow line. `schema-ctl trace` prints the history; `--since <epoch|HH:MM>` limits it.
+
+Other programs report to it with `schema-recorder send src=NAME kind=KIND msg=TEXT`. For earlyoom, add `-N /usr/local/bin/schema-recorder-earlyoom` to its arguments and each kill is recorded with the pid, name and command line.
+
+---
+
 ## Crashes
 
 Fedora's initrd points `kernel.core_pattern` at `systemd-coredump`, which hands each core to a socket-activated `systemd-coredump.socket` that does not exist under schema-init, so every crash is logged as "Failed to connect to coredump service" and the core is thrown away. At boot PID 1 replaces **that** pattern, or the kernel's default `core` when the initrd sets none, with `schema-coredump` (apport, abrt or a pattern you set by hand is left alone), then raises its soft `RLIMIT_CORE` to the hard limit so services inherit a limit the helper can honour.
