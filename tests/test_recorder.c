@@ -271,6 +271,151 @@ static void seqlock(void) {
     assert(rec_snapshot_ring(&m, &s) == -1);
 }
 
+static rec_proc_t mkp(int pid, const char *comm, uint64_t ticks) {
+    rec_proc_t p;
+    memset(&p, 0, sizeof p);
+    p.pid = pid; p.ppid = 1; p.ticks = ticks;
+    strcpy(p.comm, comm);
+    return p;
+}
+
+static void hogs_group(void) {
+    rec_proc_t a[10], b[10];
+    rec_hog_t out[4];
+    int i, n;
+    for (i = 0; i < 8; i++) { a[i] = mkp(100 + i, "cosmic-player", 50); b[i] = mkp(100 + i, "cosmic-player", 185); }
+    a[8] = mkp(200, "kwin_wayland", 10); b[8] = mkp(200, "kwin_wayland", 30);
+    a[9] = mkp(300, "foo", 0); b[9] = mkp(300, "bar", 5000);
+    n = rec_hogs(a, 10, b, 10, out, 4);
+    assert(n == 2);
+    assert(!strcmp(out[0].comm, "cosmic-player") && out[0].count == 8 && out[0].ticks == 1080 && out[0].top_pid == 107);
+    assert(!strcmp(out[1].comm, "kwin_wayland") && out[1].ticks == 20);
+}
+
+static void episode_short_no_arrow(void) {
+    rec_episode_t ep;
+    uint64_t t;
+    memset(&ep, 0, sizeof ep);
+    for (t = 0; t <= 90; t++) rec_episode_fire(&ep, 1, t, 1000 + t);
+    assert(ep.active && ep.start_mono == 0 && ep.last_fire_mono == 90 && ep.start_wall == 1000);
+    assert(!rec_episode_check(&ep, 119));
+    assert(rec_episode_check(&ep, 121));
+    assert(!rec_episode_arrow(&ep, 121));
+}
+
+static void episode_long_arrow(void) {
+    rec_episode_t ep;
+    uint64_t t;
+    memset(&ep, 0, sizeof ep);
+    for (t = 0; t <= 1200; t++) rec_episode_fire(&ep, 1, t, 1000 + t);
+    assert(!rec_episode_check(&ep, 1210));
+    assert(rec_episode_check(&ep, 1231));
+    assert(rec_episode_arrow(&ep, 1231));
+}
+
+static void episode_overlap_arrow(void) {
+    rec_episode_t ep;
+    uint64_t t;
+    memset(&ep, 0, sizeof ep);
+    for (t = 0; t <= 60; t++) rec_episode_fire(&ep, 1, t, 1000 + t);
+    assert(!rec_episode_arrow(&ep, 91));
+    ep.overlapped = 1;
+    assert(rec_episode_arrow(&ep, 91));
+}
+
+static void episode_text(void) {
+    rec_episode_t ep;
+    char buf[128];
+    memset(&ep, 0, sizeof ep);
+    ep.kind = 1; ep.start_mono = 100;
+    strcpy(ep.top.comm, "cosmic-player"); ep.top.count = 8;
+    rec_episode_text(&ep, 1300, buf, sizeof buf);
+    assert(!strcmp(buf, "CPU pinned 20 min by cosmic-player \xc3\x97" "8"));
+    ep.top.count = 1;
+    rec_episode_text(&ep, 1300, buf, sizeof buf);
+    assert(!strcmp(buf, "CPU pinned 20 min by cosmic-player"));
+    ep.kind = 2;
+    rec_episode_text(&ep, 50, buf, sizeof buf);
+    assert(!strcmp(buf, "memory pressure 0 min by cosmic-player"));
+}
+
+static void correlate_kwin(void) {
+    static rec_shm_t m;
+    rec_event_t e, x;
+    rec_episode_t ep;
+    char why[160];
+    memset(&m, 0, sizeof m);
+    memset(&ep, 0, sizeof ep);
+    e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 995);
+    rec_ring_push(&m, &e);
+    x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1);
+    assert(!strcmp(why, "kwin_wayland crashed (SIGSEGV)"));
+}
+
+static void correlate_none_logout(void) {
+    static rec_shm_t m;
+    rec_event_t e, x;
+    rec_episode_t ep;
+    char why[160];
+    memset(&m, 0, sizeof m);
+    memset(&ep, 0, sizeof ep);
+    e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 975);
+    rec_ring_push(&m, &e);
+    x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    e = mk(REC_SRC_COREDUMP, "", "kwin_wayland", "", 11, 1001);
+    rec_ring_push(&m, &e);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+}
+
+static void correlate_episode(void) {
+    static rec_shm_t m;
+    rec_event_t x;
+    rec_episode_t ep;
+    char why[160];
+    memset(&m, 0, sizeof m);
+    memset(&ep, 0, sizeof ep);
+    rec_episode_fire(&ep, 1, 0, 100);
+    rec_episode_fire(&ep, 1, 1200, 1300);
+    strcpy(ep.top.comm, "cosmic-player"); ep.top.count = 8;
+    x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1310);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1);
+    assert(!strcmp(why, "CPU pinned 20 min by cosmic-player \xc3\x97" "8"));
+    assert(!ep.overlapped);
+    ep.active = 0;
+    x.ts = 1320;
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1);
+    x.ts = 1321;
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+    x.ts = 1400;
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 0);
+}
+
+static void correlate_priority(void) {
+    static rec_shm_t m;
+    rec_event_t e, x;
+    rec_episode_t ep;
+    char why[160];
+    memset(&m, 0, sizeof m);
+    memset(&ep, 0, sizeof ep);
+    rec_episode_fire(&ep, 1, 0, 100);
+    rec_episode_fire(&ep, 1, 900, 1000);
+    strcpy(ep.top.comm, "hog"); ep.top.count = 2;
+    x = mk(REC_SRC_SESSION, "plasma-exit", "", "", 0, 1000);
+    e = mk(REC_SRC_PID1, "died", "", "foo.svc", 0, 995);
+    rec_ring_push(&m, &e);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "foo.svc died"));
+    e = mk(REC_SRC_EARLYOOM, "kill", "plasmashell", "", 9, 990);
+    rec_ring_push(&m, &e);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "earlyoom killed plasmashell"));
+    e = mk(REC_SRC_COREDUMP, "", "old", "", 6, 985);
+    rec_ring_push(&m, &e);
+    e = mk(REC_SRC_COREDUMP, "", "new", "", 99, 992);
+    rec_ring_push(&m, &e);
+    assert(rec_correlate(&m, &ep, &x, why, sizeof why) == 1 && !strcmp(why, "new crashed (SIG99)"));
+}
+
 int main(void) {
     roundtrip();
     hostile_comm();
@@ -292,6 +437,15 @@ int main(void) {
     render_session();
     render_others();
     seqlock();
+    hogs_group();
+    episode_short_no_arrow();
+    episode_long_arrow();
+    episode_overlap_arrow();
+    episode_text();
+    correlate_kwin();
+    correlate_none_logout();
+    correlate_episode();
+    correlate_priority();
     printf("test_recorder: OK\n");
     return 0;
 }

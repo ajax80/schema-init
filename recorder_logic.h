@@ -177,4 +177,99 @@ static inline int rec_arrow_shade(const rec_arrow_t *a, uint64_t now) {
     return 0;
 }
 
+typedef struct { int32_t pid, ppid; char comm[32]; uint64_t ticks; } rec_proc_t;
+typedef struct { char comm[32]; int count; uint64_t ticks; int32_t top_pid; } rec_hog_t;
+typedef struct {
+    uint8_t active, kind;
+    uint64_t start_mono, last_fire_mono, start_wall;
+    rec_hog_t top;
+    char chain[96], cmdline[96];
+    uint8_t overlapped;
+} rec_episode_t;
+
+static inline int rec_hogs(const rec_proc_t *a, int na, const rec_proc_t *b, int nb, rec_hog_t *out, int max) {
+    int i, j, k, n = 0;
+    for (i = 0; i < nb; i++) {
+        uint64_t d;
+        const rec_proc_t *pa = NULL;
+        for (j = 0; j < na; j++)
+            if (a[j].pid == b[i].pid && !strcmp(a[j].comm, b[i].comm)) { pa = &a[j]; break; }
+        if (!pa || b[i].ticks <= pa->ticks) continue;
+        d = b[i].ticks - pa->ticks;
+        for (k = 0; k < n; k++) if (!strcmp(out[k].comm, b[i].comm)) break;
+        if (k == n) {
+            if (n == max) continue;
+            memset(&out[n], 0, sizeof out[n]);
+            rec_copy(out[n].comm, sizeof out[n].comm, b[i].comm);
+            n++;
+        }
+        out[k].count++;
+        out[k].ticks += d;
+        if (b[i].pid > out[k].top_pid) out[k].top_pid = b[i].pid;
+    }
+    for (i = 1; i < n; i++) {
+        rec_hog_t t = out[i];
+        for (j = i - 1; j >= 0 && out[j].ticks < t.ticks; j--) out[j + 1] = out[j];
+        out[j + 1] = t;
+    }
+    return n;
+}
+
+static inline void rec_episode_fire(rec_episode_t *ep, int kind, uint64_t mono, uint64_t wall) {
+    if (!ep->active) {
+        memset(ep, 0, sizeof *ep);
+        ep->active = 1;
+        ep->kind = (uint8_t)kind;
+        ep->start_mono = mono;
+        ep->start_wall = wall;
+    }
+    ep->last_fire_mono = mono;
+}
+
+static inline int rec_episode_check(rec_episode_t *ep, uint64_t mono) {
+    return ep->active && mono - ep->last_fire_mono >= 30;
+}
+
+static inline int rec_episode_arrow(const rec_episode_t *ep, uint64_t end_mono) {
+    if (end_mono > ep->last_fire_mono) end_mono = ep->last_fire_mono;
+    return ep->overlapped || end_mono - ep->start_mono >= 120;
+}
+
+static inline void rec_episode_text(const rec_episode_t *ep, uint64_t end_mono, char *buf, size_t n) {
+    unsigned long long mins = end_mono > ep->start_mono ? (end_mono - ep->start_mono) / 60 : 0;
+    const char *what = ep->kind == 2 ? "memory pressure" : "CPU pinned";
+    if (ep->top.count > 1)
+        snprintf(buf, n, "%s %llu min by %s \xc3\x97%d", what, mins, ep->top.comm, ep->top.count);
+    else
+        snprintf(buf, n, "%s %llu min by %s", what, mins, ep->top.comm);
+}
+
+static inline int rec_correlate(const rec_shm_t *m, const rec_episode_t *ep, const rec_event_t *x, char *why, size_t n) {
+    uint64_t lo = x->ts > 20 ? x->ts - 20 : 0;
+    const rec_event_t *crash = NULL, *oom = NULL, *svc = NULL;
+    uint32_t i;
+    for (i = 0; i < m->count; i++) {
+        const rec_event_t *e = &m->ring[(m->head - 1 - i) % REC_RING];
+        if (e->ts < lo) break;
+        if (e->ts > x->ts) continue;
+        if (e->src == REC_SRC_COREDUMP) { if (!crash) crash = e; }
+        else if (e->src == REC_SRC_EARLYOOM) { if (!oom && !strcmp(e->kind, "kill")) oom = e; }
+        else if (e->src == REC_SRC_PID1) { if (!svc && rec_tier_base(e) != REC_TIER_TRACE) svc = e; }
+    }
+    if (crash) {
+        const char *sn = rec_signame(crash->rc);
+        if (sn) snprintf(why, n, "%s crashed (%s)", crash->comm, sn);
+        else snprintf(why, n, "%s crashed (SIG%d)", crash->comm, (int)crash->rc);
+        return 1;
+    }
+    if (oom) { snprintf(why, n, "earlyoom killed %s", oom->comm); return 1; }
+    if (svc) { snprintf(why, n, "%s %s", svc->subj, svc->kind); return 1; }
+    if (ep->kind && ep->start_wall <= x->ts &&
+        (ep->active || ep->start_wall + (ep->last_fire_mono - ep->start_mono) >= lo)) {
+        rec_episode_text(ep, ep->last_fire_mono, why, n);
+        return 1;
+    }
+    return 0;
+}
+
 #endif
