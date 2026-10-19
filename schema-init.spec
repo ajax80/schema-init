@@ -516,8 +516,6 @@ fi
 - Flight recorder (opt-in): schema-recorder keeps a rolling record of what
   happened (service events, CPU/memory pressure, earlyoom kills); the board
   shows the latest line and `schema-ctl trace` prints the history
-
-* Sat Oct 17 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.15-1
 - grub2-mkconfig no longer clobbers schema-init boot entries: 10_linux
   rewrote every BLS options line, dropping init= (the schema-init entry
   booted systemd) and a snapshot's rootflags=subvol=; new grub.d
