@@ -198,7 +198,9 @@ static int cmd_trace(const char *since_arg) {
     int fd, psi = 0;
     static rec_shm_t snap;
     const rec_shm_t *m;
+    struct dirent **nl;
     uint32_t i;
+    int n;
 
     if (since_arg) {
         int h, mi;
@@ -209,6 +211,7 @@ static int cmd_trace(const char *since_arg) {
             localtime_r(&now, &tm);
             tm.tm_hour = h; tm.tm_min = mi; tm.tm_sec = 0;
             since = (uint64_t)mktime(&tm);
+            if (since > (uint64_t)now) since -= 86400;
         } else {
             since = strtoull(since_arg, &end, 10);
             if (*end || !*since_arg) { fprintf(stderr, "usage: schema-ctl trace [--since <epoch|HH:MM>]\n"); return 1; }
@@ -221,12 +224,10 @@ static int cmd_trace(const char *since_arg) {
         fprintf(stderr, "schema-ctl: no flight recorder running (enable schema-recorder.svc)\n");
         return 1;
     }
-    if (geteuid() == 0) {
-        struct dirent **nl;
-        int n, k;
+    if (geteuid() == 0 && (n = scandir(dir ? dir : REC_EVENTS_DIR, &nl, NULL, alphasort)) >= 0) {
+        int k;
         uint64_t lo = since;
         if (!lo && snap.count) lo = snap.ring[(snap.head - snap.count) % REC_RING].ts;
-        n = scandir(dir ? dir : REC_EVENTS_DIR, &nl, NULL, alphasort);
         for (k = 0; k < n; k++) {
             char path[512], line[1024];
             FILE *f;
@@ -241,7 +242,7 @@ static int cmd_trace(const char *since_arg) {
             }
             free(nl[k]);
         }
-        if (n >= 0) free(nl);
+        free(nl);
         return 0;
     }
     for (i = 0; i < snap.count; i++) {

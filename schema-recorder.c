@@ -502,5 +502,6 @@ int main(int argc, char **argv) {
         if (pf[4].revents & POLLIN) quit = 1;
     }
     unlink(sock_path);
+    shm_unlink(env);
     return 0;
 }

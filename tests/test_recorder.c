@@ -369,11 +369,12 @@ static void hogs_group(void) {
     rec_hog_t out[4];
     int i, n;
     for (i = 0; i < 8; i++) { a[i] = mkp(100 + i, "cosmic-player", 50); b[i] = mkp(100 + i, "cosmic-player", 185); }
+    b[3].ticks = 285;
     a[8] = mkp(200, "kwin_wayland", 10); b[8] = mkp(200, "kwin_wayland", 30);
     a[9] = mkp(300, "foo", 0); b[9] = mkp(300, "bar", 5000);
     n = rec_hogs(a, 10, b, 10, out, 4);
     assert(n == 2);
-    assert(!strcmp(out[0].comm, "cosmic-player") && out[0].count == 8 && out[0].ticks == 1080 && out[0].top_pid == 107);
+    assert(!strcmp(out[0].comm, "cosmic-player") && out[0].count == 8 && out[0].ticks == 1180 && out[0].top_pid == 103);
     assert(!strcmp(out[1].comm, "kwin_wayland") && out[1].ticks == 20);
 }
 

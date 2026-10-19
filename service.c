@@ -1648,7 +1648,7 @@ void service_log(const service_t *svc, const char *event) {
         e.src = REC_SRC_PID1;
         rec_copy(e.kind, sizeof e.kind, event);
         rec_copy(e.subj, sizeof e.subj, svc->name);
-        e.pid = (int32_t)svc->child_pid;
+        e.pid = (int32_t)(svc->child_pid ? svc->child_pid : svc->last_pid);
         e.rc = svc->term_signal ? 128 + svc->term_signal : svc->exit_status;
         e.crit = !!(svc->flags & SVC_CRITICAL);
         rec_send(REC_SOCK_PATH, &e);

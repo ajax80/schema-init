@@ -284,6 +284,7 @@ typedef struct {
 
     schema_instance_t inst;
     pid_t            child_pid;
+    pid_t            last_pid;
     int              restart_count;
     int              max_restarts;
     time_t           last_start;

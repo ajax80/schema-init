@@ -873,6 +873,7 @@ static void reap(void) {
             }
             if (services[i].child_pid != pid) continue;
 
+            services[i].last_pid   = pid;
             services[i].child_pid  = 0;
             note_exit(&services[i], status);
 

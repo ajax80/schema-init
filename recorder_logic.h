@@ -2,6 +2,7 @@
 #define SCHEMA_RECORDER_LOGIC_H
 
 #include "recorder.h"
+#include "coredump.h"
 
 enum { REC_TIER_TRACE = 0, REC_TIER_MINOR = 1, REC_TIER_CRIT = 2, REC_TIER_SESSION = 3, REC_TIER_LIVE = 4 };
 
@@ -110,19 +111,6 @@ static inline int rec_culprit_count(rec_culprit_t *tab, int *ntab, int max, cons
     return c->n;
 }
 
-static inline const char *rec_signame(int sig) {
-    switch (sig) {
-    case 4: return "SIGILL";
-    case 6: return "SIGABRT";
-    case 7: return "SIGBUS";
-    case 8: return "SIGFPE";
-    case 9: return "SIGKILL";
-    case 11: return "SIGSEGV";
-    case 31: return "SIGSYS";
-    }
-    return NULL;
-}
-
 static inline void rec_render(char *buf, size_t n, const rec_event_t *e, uint32_t recurrence) {
     time_t t = (time_t)e->ts;
     struct tm tm;
@@ -135,8 +123,8 @@ static inline void rec_render(char *buf, size_t n, const rec_event_t *e, uint32_
         snprintf(what, sizeof what, "desktop session ended%s%s", e->msg[0] ? " \xe2\x80\x94 " : "", e->msg);
         break;
     case REC_SRC_COREDUMP:
-        sn = rec_signame(e->rc);
-        if (sn) snprintf(what, sizeof what, "%s crashed (%s)", e->comm, sn);
+        sn = sig_abbrev(e->rc);
+        if (sn) snprintf(what, sizeof what, "%s crashed (SIG%s)", e->comm, sn);
         else snprintf(what, sizeof what, "%s crashed (SIG%d)", e->comm, (int)e->rc);
         break;
     case REC_SRC_EARLYOOM:
@@ -194,7 +182,7 @@ static inline int rec_psi_kind(const char *msg) {
 }
 
 typedef struct { int32_t pid, ppid; char comm[32]; uint64_t ticks; } rec_proc_t;
-typedef struct { char comm[32]; int count; uint64_t ticks; int32_t top_pid; } rec_hog_t;
+typedef struct { char comm[32]; int count; uint64_t ticks, top_ticks; int32_t top_pid; } rec_hog_t;
 typedef struct {
     uint8_t active, kind;
     uint64_t start_mono, last_fire_mono, start_wall;
@@ -222,7 +210,7 @@ static inline int rec_hogs(const rec_proc_t *a, int na, const rec_proc_t *b, int
         }
         g[k].count++;
         g[k].ticks += d;
-        if (b[i].pid > g[k].top_pid) g[k].top_pid = b[i].pid;
+        if (d > g[k].top_ticks) { g[k].top_ticks = d; g[k].top_pid = b[i].pid; }
     }
     for (i = 1; i < n; i++) {
         rec_hog_t t = g[i];
@@ -275,8 +263,8 @@ static inline int rec_correlate(const rec_shm_t *m, const rec_episode_t *ep, con
         else if (e->src == REC_SRC_PID1) { if (!svc && rec_tier_base(e) != REC_TIER_TRACE) svc = e; }
     }
     if (crash) {
-        const char *sn = rec_signame(crash->rc);
-        if (sn) snprintf(why, n, "%s crashed (%s)", crash->comm, sn);
+        const char *sn = sig_abbrev(crash->rc);
+        if (sn) snprintf(why, n, "%s crashed (SIG%s)", crash->comm, sn);
         else snprintf(why, n, "%s crashed (SIG%d)", crash->comm, (int)crash->rc);
         if (key) rec_copy(key, kn, crash->comm);
         return 1;
