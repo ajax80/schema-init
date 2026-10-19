@@ -78,6 +78,75 @@ int main(void) {
     assert(service_load_one(p, &svc) == 0);
     assert(svc.env_count == MAX_ENV);
 
+    /* one env= past MAX_ENV refuses the load instead of dropping it */
+    f = fopen(p, "a");
+    assert(f);
+    fputs("env=EXTRA=v\n", f);
+    fclose(f);
+    assert(service_load_one(p, &svc) == -1);
+
+    /* a repeated key replaces its value and does not count again */
+    snprintf(p, sizeof p, "%s/dup.svc", dir);
+    f = fopen(p, "w");
+    assert(f);
+    fputs("name=dup\nexec=/bin/true\n", f);
+    for (int i = 0; i < MAX_ENV; i++)
+        fprintf(f, "env=K%d=v\n", i);
+    fputs("env=K0=last\n", f);
+    fclose(f);
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.env_count == MAX_ENV);
+    assert(strcmp(svc.envp[0], "K0=last") == 0);
+
+    /* MAX_DEPS dep= lines load; one more refuses the load */
+    snprintf(p, sizeof p, "%s/deps.svc", dir);
+    f = fopen(p, "w");
+    assert(f);
+    fputs("name=deps\nexec=/bin/true\n", f);
+    for (int i = 0; i < MAX_DEPS; i++)
+        fprintf(f, "dep=d%d\n", i);
+    fclose(f);
+    assert(service_load_one(p, &svc) == 0);
+    assert(strcmp(svc.dep_name[MAX_DEPS - 1], "d7") == 0);
+    f = fopen(p, "a");
+    assert(f);
+    fputs("dep=d8\n", f);
+    fclose(f);
+    assert(service_load_one(p, &svc) == -1);
+
+    /* a group with MAX_MEMBERS loads; one with more is held EXCISED */
+    {
+        char gt[] = "/tmp/schema-grpXXXXXX";
+        char *gd = mkdtemp(gt);
+        assert(gd);
+        group_t gtab[4];
+        snprintf(p, sizeof p, "%s/ok.grp", gd);
+        f = fopen(p, "w");
+        assert(f);
+        fputs("name=ok\n", f);
+        for (int i = 0; i < MAX_MEMBERS; i++)
+            fprintf(f, "member=m%d\n", i);
+        fclose(f);
+        snprintf(p, sizeof p, "%s/big.grp", gd);
+        f = fopen(p, "w");
+        assert(f);
+        fputs("name=big\n", f);
+        for (int i = 0; i <= MAX_MEMBERS; i++)
+            fprintf(f, "member=m%d\n", i);
+        fclose(f);
+        assert(groups_load(gd, gtab, 4) == 2);
+        int big = strcmp(gtab[0].name, "big") == 0 ? 0 : 1;
+        assert(strcmp(gtab[big].name, "big") == 0 && gtab[big].refused);
+        assert(strcmp(gtab[!big].name, "ok") == 0 && !gtab[!big].refused);
+        assert(gtab[!big].member_count == MAX_MEMBERS);
+        groups_update(gtab, 2, NULL, 0);
+        assert(gtab[big].state == STATE_EXCISED);
+        unlink(p);
+        snprintf(p, sizeof p, "%s/ok.grp", gd);
+        unlink(p);
+        rmdir(gd);
+    }
+
     /* exec= with inline args is refused by both parsers */
     snprintf(p, sizeof p, "%s/f.svc", dir);
     write_svc(p, "name=f\nexec=/usr/bin/foo --bar\n");

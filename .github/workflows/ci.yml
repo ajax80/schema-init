@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: deps
         run: >
-          dnf -y install gcc make glibc-static libacl-devel dbus-devel libzstd-devel
+          dnf -y --disablerepo=fedora-cisco-openh264 install gcc make glibc-static libacl-devel dbus-devel libzstd-devel
           pkgconf-pkg-config python3 python3-dbus python3-gobject python3-pyside6
           acl dbus-daemon rpm-build git util-linux
       - name: unprivileged user
@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: deps
-        run: dnf -y install clang compiler-rt make dbus-devel
+        run: dnf -y --disablerepo=fedora-cisco-openh264 install clang compiler-rt make dbus-devel
       - name: fuzz 60s per harness
         run: make fuzz FUZZ_SECONDS=60
       - name: keep crash inputs

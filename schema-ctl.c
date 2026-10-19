@@ -9,12 +9,13 @@
 
 #include "schema.h"
 #include "svc_dropins.h"
+#include "schema_shm.h"
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
 #define G_MAX_NODES 512
 #define G_MAX_EDGES 8
-#define G_PID1_MAX_SERVICES 88
+#define G_PID1_MAX_SERVICES SCHEMA_SHM_MAX
 #define G_PID1_MAX_GROUPS 16
 
 struct g_node { char name[64]; char file[64]; char deps[G_MAX_EDGES][64]; int ndeps; int group; int seen; };
@@ -42,7 +43,7 @@ static int g_load_file(const char *path, struct g_node *n, int dropin, int *has_
     FILE *f = fopen(path, "r");
     char line[512];
     const char *depkey = n->group ? "member" : "dep";
-    int r;
+    int r, over = 0;
     if (!f) return -1;
     while ((r = svc_read_line(f, line, sizeof line)) != 0) {
         char *eq = strchr(line, '='), *val;
@@ -65,6 +66,14 @@ static int g_load_file(const char *path, struct g_node *n, int dropin, int *has_
         else if (!strcmp(line, depkey)) {
             if (!val[strspn(val, " \t")]) { if (dropin) n->ndeps = 0; }
             else if (n->ndeps < G_MAX_EDGES) snprintf(n->deps[n->ndeps++], 64, "%s", val);
+            else if (n->group) {
+                if (!over++)
+                    fprintf(stderr, "schema-ctl: %s: more than %d member= lines — PID 1 holds the group EXCISED\n", path, G_MAX_EDGES);
+            } else {
+                fprintf(stderr, "schema-ctl: %s: more than %d dep= lines — not loaded\n", path, G_MAX_EDGES);
+                fclose(f);
+                return -1;
+            }
         }
     }
     fclose(f);

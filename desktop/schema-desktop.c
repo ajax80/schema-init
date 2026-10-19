@@ -1,6 +1,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -64,9 +65,12 @@ int main(void) {
         fprintf(stderr, "schema-desktop: shm not found — is schema-init running?\n");
         return 1;
     }
-    schema_shm_t *shm = mmap(NULL, sizeof(schema_shm_t), PROT_READ, MAP_SHARED, fd, 0);
+    const schema_shm_t *shm = schema_shm_map(fd);
     close(fd);
-    if (shm == MAP_FAILED) { perror("mmap"); return 1; }
+    if (!shm) {
+        fprintf(stderr, "schema-desktop: shm is from another schema-init version; reboot or schema-ctl reexec\n");
+        return 1;
+    }
 
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
@@ -202,6 +206,6 @@ int main(void) {
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
-    munmap(shm, sizeof(schema_shm_t));
+    munmap((void *)shm, sizeof(schema_shm_t));
     return 0;
 }

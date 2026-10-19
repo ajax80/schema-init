@@ -674,11 +674,13 @@ def dep_lines(name, sections, known):
         d = d if d in known else raw.get(d, d)
         if d not in self_names and _UNIT_ALIAS.get(d, d) not in self_names and d in known and d not in deps:
             deps.append(d)
-    notes = []
-    if len(deps) > 8:
-        notes.append("dropped dep on %s (limit 8)" % " ".join(deps[8:]))
-        deps = deps[:8]
-    return ["dep=%s" % d for d in deps], notes
+    return _cap_deps(deps)
+
+
+def _cap_deps(deps):
+    """PID 1 refuses a ninth dep=: keep the first 8, note the rest."""
+    notes = ["dropped dep on %s (limit 8)" % " ".join(deps[8:])] if len(deps) > 8 else []
+    return ["dep=%s" % d for d in deps[:8]], notes
 
 
 def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
@@ -749,6 +751,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
 
     if len(argv) > 63:
         raise Skip("ExecStart= has %d arguments (limit 62)" % (len(argv) - 1))
+    env_pairs = list({p.split("=", 1)[0]: p for p in env_pairs}.values())
+    if len(env_pairs) > 16:
+        raise Skip("Environment= sets %d variables (limit 16)" % len(env_pairs))
     for pre, pa in pres:
         if len(pa) > 32:
             raise Skip("ExecStartPre= has %d words (limit 32)" % len(pa))
@@ -1107,7 +1112,8 @@ def lsb_to_svc(name, text, known=None):
             deps.append(svc)
     lines = ["# schema-import: from %s%s (init script; no usable systemd unit)" % (INITD, name),
              "name=" + name, "exec=" + INITD + name, "args=start", "oneshot=1", "needs_root=1"]
-    lines += ["dep=" + d for d in deps]
+    dl, notes = _cap_deps(deps)
+    lines += ["# schema-import: " + n for n in notes] + dl
     return "\n".join(lines) + "\n"
 
 
@@ -1234,7 +1240,8 @@ def runit_to_svc(name, text, known=None, after=None, check=False):
     else:
         lines += ["# schema-import: %s%s/check not translated; ready after 1 s" % (SV, name),
                   "stable_secs=1"]
-    lines += ["dep=" + d for d in deps]
+    dl, notes = _cap_deps(deps)
+    lines += ["# schema-import: " + n for n in notes] + dl
     return "\n".join(lines) + "\n"
 
 

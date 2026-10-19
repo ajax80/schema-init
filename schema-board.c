@@ -314,7 +314,7 @@ int main(int argc, char **argv) {
     int once = 0;
     int fd, i;
     int dirty, valid;
-    schema_shm_t *live;
+    const schema_shm_t *live;
     schema_shm_t snap;
     uint32_t last_seq = (uint32_t)-1;
 
@@ -358,10 +358,11 @@ int main(int argc, char **argv) {
                 SCHEMA_SHM_NAME);
         return 1;
     }
-    live = mmap(NULL, sizeof(*live), PROT_READ, MAP_SHARED, fd, 0);
+    live = schema_shm_map(fd);
     close(fd);
-    if (live == MAP_FAILED) {
-        fprintf(stderr, "schema-board: mmap failed\n");
+    if (!live) {
+        fprintf(stderr, "schema-board: shm %s is from another schema-init version; reboot or schema-ctl reexec\n",
+                SCHEMA_SHM_NAME);
         return 1;
     }
 
@@ -446,6 +447,6 @@ int main(int argc, char **argv) {
     }
 
     if (tty) { fputs("\033[?25h\n", stdout); fflush(stdout); }
-    munmap(live, sizeof(*live));
+    munmap((void *)live, sizeof(*live));
     return 0;
 }

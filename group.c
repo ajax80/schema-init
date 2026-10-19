@@ -53,7 +53,7 @@ void groups_update(group_t *gtable, int gcount,
     uint8_t prev;
     for (i = 0; i < gcount; i++) {
         prev = gtable[i].state;
-        gtable[i].state = aggregate(NULL,
+        gtable[i].state = gtable[i].refused ? STATE_EXCISED : aggregate(NULL,
                                     gtable[i].member_idx,
                                     gtable[i].member_count,
                                     svc_states, scount);
@@ -139,8 +139,15 @@ int groups_load(const char *dir, group_t *table, int max) {
 
             if (strcmp(line, "name") == 0)
                 strncpy(grp->name, val, sizeof(grp->name) - 1);
-            else if (strcmp(line, "member") == 0 && grp->member_count < MAX_MEMBERS)
+            else if (strcmp(line, "member") == 0) {
+                if (grp->member_count >= MAX_MEMBERS) {
+                    fprintf(stderr, "[schema-init] %s: more than %d member= lines — group held EXCISED, its dependents wait\n",
+                            path, MAX_MEMBERS);
+                    grp->refused = 1;
+                    continue;
+                }
                 strncpy(grp->member_name[grp->member_count++], val, 63);
+            }
         }
         fclose(f);
 

@@ -1144,6 +1144,33 @@ static void svc_pass_listen(const service_t *svc) {
     setenv("LISTEN_FDNAMES", names, 1);
 }
 
+/* close_range fallback: no allocation, we are in the forked child */
+static void close_fds_from(int lo) {
+    char buf[4096];
+    int closed = 1;
+    while (closed) {
+        int dfd = open("/proc/self/fd", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        long n;
+        closed = 0;
+        if (dfd < 0) {
+            for (int fd = lo; fd < 65536; fd++) close(fd);
+            return;
+        }
+        while ((n = syscall(SYS_getdents64, dfd, buf, sizeof buf)) > 0) {
+            for (long off = 0; off < n; ) {
+                unsigned short reclen = *(unsigned short *)(buf + off + 16);
+                const char *name = buf + off + 19;
+                char *end;
+                long fd = strtol(name, &end, 10);
+                if (*name != '.' && !*end && fd >= lo && fd != dfd && close((int)fd) == 0)
+                    closed = 1;
+                off += reclen;
+            }
+        }
+        close(dfd);
+    }
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
@@ -1370,7 +1397,8 @@ int service_spawn(service_t *svc) {
         }
         svc_apply_env(svc, file_env, file_envc);
         svc_pass_listen(svc);
-        syscall(SYS_close_range, 3 + svc->listen_open, ~0U, 0);
+        if (syscall(SYS_close_range, 3 + svc->listen_open, ~0U, 0) < 0)
+            close_fds_from(3 + svc->listen_open);
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             int nx = service_expand_argv(svc->argv, xargv, 63);
@@ -1901,10 +1929,23 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         }
         while (*val == ' ' || *val == '\t') val++;
         svc->argv[pc->argc++] = strdup(val);
-    } else if (strcmp(line, "env") == 0 && svc->env_count < MAX_ENV) {
+    } else if (strcmp(line, "env") == 0) {
         while (*val == ' ' || *val == '\t') val++;
-        if (strchr(val, '='))
-            svc->envp[svc->env_count++] = strdup(val);
+        char *eqv = strchr(val, '=');
+        int e = 0;
+        if (eqv) {
+            size_t kl = (size_t)(eqv - val) + 1;
+            while (e < svc->env_count && strncmp(svc->envp[e], val, kl) != 0) e++;
+            if (e < svc->env_count) {
+                free(svc->envp[e]);
+                svc->envp[e] = strdup(val);
+            } else if (svc->env_count >= MAX_ENV) {
+                fprintf(stderr, "[schema-init] %s: more than %d env= variables\n",
+                        svc->name[0] ? svc->name : path, MAX_ENV);
+                return -1;
+            } else
+                svc->envp[svc->env_count++] = strdup(val);
+        }
     } else if (strcmp(line, "env_file") == 0) {
         while (*val == ' ' || *val == '\t') val++;
         if (val[*val == '-'] != '/' || strlen(val) >= sizeof svc->env_file[0]
@@ -1966,7 +2007,12 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         snprintf(svc->socket_group, sizeof svc->socket_group, "%s", val);
     } else if (strcmp(line, "expand_args") == 0) {
         svc->expand_args = atoi(val) != 0;
-    } else if (strcmp(line, "dep") == 0 && pc->dep_slot < MAX_DEPS) {
+    } else if (strcmp(line, "dep") == 0) {
+        if (pc->dep_slot >= MAX_DEPS) {
+            fprintf(stderr, "[schema-init] %s: more than %d dep= lines\n",
+                    svc->name[0] ? svc->name : path, MAX_DEPS);
+            return -1;
+        }
         strncpy(svc->dep_name[pc->dep_slot++], val, 63);
     } else if (strcmp(line, "oneshot") == 0 && atoi(val))
         svc->flags |= SVC_ONESHOT;

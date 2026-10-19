@@ -700,9 +700,12 @@ def _add_unit_dep(unit, dep, dry_run=False):
     if dry_run or not os.path.exists(path):
         return
     lines = open(path).read().splitlines()
-    for ln in lines:
-        if ln.strip() == "dep=" + dep:
-            return
+    deps = [ln.strip() for ln in lines if ln.strip().startswith("dep=")]
+    if "dep=" + dep in deps:
+        return
+    if len(deps) >= 8:
+        print("warning: %s.svc already has 8 dep= lines; dep=%s not added" % (unit, dep))
+        return
     with open(path, "a") as fh:
         fh.write("dep=" + dep + "\n")
 
