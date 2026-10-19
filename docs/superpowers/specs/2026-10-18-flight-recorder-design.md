@@ -194,7 +194,7 @@ Prototype on a branch, then measure on blakbox and Eli (3 boots before, 3 after)
 
 - boot time (`schema-ctl analyze` / boot-timing log) — no regression beyond noise
 - PID 1 RSS — unchanged beyond noise
-- recorder RSS — small (target well under 2 MB)
+- recorder memory — PSS well under 2 MB (Jonathan 2026-10-19: PSS, not RSS — RSS bills shared glibc; RSS recorded for reference)
 - idle wakeups — recorder `voluntary_ctxt_switches` delta over 10 calm minutes ≈ 0
 - LOC added, per part
 

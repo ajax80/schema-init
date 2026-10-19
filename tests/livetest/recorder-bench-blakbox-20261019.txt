@@ -30,3 +30,32 @@ Each boot logs a trace-tier PSI episode (modprobe<-schema-udev, boot load); no a
 
 ## blakbox live (pre-reboot) calm 10 min
 recorder voluntary_ctxt_switches 2 -> 2 (delta 0); VmRSS 1604 kB (RssAnon 100, RssFile 1464)
+
+## blakbox reboot 1/3 (1.1272, recorder enabled) — boot 2026-10-19 12:47:33
+boot-history: 20261019-125118,2026-10-19 12:47:33,3.993,1.997,10.002,getty-tty3,54,4356,541
+analyze: kernel 3.993 + userspace 6.734 = 10.726 s; sddm +1.997 s ready_path
+PID1 VmRSS 4356 kB
+recorder pid 360 VmRSS 1868 kB (RssAnon 112, RssFile 1716), PSS 188 kB, vcs 6 @ ~4 min
+
+## blakbox reboot 2/3 (1.1272, recorder enabled) — boot 2026-10-19 14:25:30
+boot-history: 20261019-142722,2026-10-19 14:25:30,3.984,1.998,9.926,getty-tty3,54,4308,535
+analyze: userspace 6.504 s; sddm +1.998 s ready_path
+PID1 VmRSS 4308 kB
+recorder VmRSS 2020 kB, PSS 284 kB
+
+## blakbox reboot 3/3 (1.1272, recorder enabled) — boot 2026-10-19 14:28:03
+analyze: kernel 4.003 + userspace 6.555 = 10.557 s; sddm +2.002 s ready_path
+PID1 VmRSS 4488 kB
+recorder pid 360 VmRSS 1860 kB (RssAnon 104, RssFile 1716), PSS 181 kB, vcs 6 @ ~2 min
+
+## blakbox post-reboot 3 calm 10 min (14:29:33-14:39:38)
+recorder voluntary_ctxt_switches 6 -> 13 (delta 7) — all PSI trace-tier episodes from live use (claude start, helium audio), not idle; VmRSS 2060 kB (RssAnon 240, RssFile 1780), PSS 317 kB
+boot-history: 20261019-143407,2026-10-19 14:28:03,4.003,2.002,9.926,getty-tty3,54,4488,514
+
+## Step 4 verdict (blakbox, 3 reboots)
+sddm 1.997/1.998/2.002 s (base 2.0-2.4) — no regression
+PID1 VmRSS 4356/4308/4488 kB (base 4.0-4.4 MB) — reboot 3 +88 kB over band, steady at 4488 after 11 min; noise-level
+recorder PSS 188/284/181, 317 after 10 min use — PASS (kill line PSS <= 2 MB)
+
+## LOC vs master
+ 28 files changed, 2917 insertions(+), 14 deletions(-)
