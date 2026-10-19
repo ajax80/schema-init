@@ -282,7 +282,7 @@ static void test_is_active_from_shm(void) {
     setenv("SCHEMA_CTL", p, 1);
     static schema_shm_t t;
     memset(&t, 0, sizeof t);
-    t.seq = 7; t.count = 3;
+    t.magic = SCHEMA_SHM_MAGIC; t.seq = 7; t.count = 3;
     snprintf(t.svc[0].name, sizeof t.svc[0].name, "network-manager"); t.svc[0].state = STATE_FULL_TRUST;
     snprintf(t.svc[1].name, sizeof t.svc[1].name, "sleeper");         t.svc[1].state = STATE_DORMANT;
     snprintf(t.svc[2].name, sizeof t.svc[2].name, "gone");            t.svc[2].state = STATE_EXCISED;

@@ -1470,6 +1470,7 @@ static void shm_init(void) {
     shm_ptr = mmap(NULL, sizeof(schema_shm_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (shm_ptr == MAP_FAILED) shm_ptr = NULL;
+    else shm_ptr->magic = SCHEMA_SHM_MAGIC;
 }
 
 _Static_assert(SCHEMA_SHM_MAX >= MAX_SERVICES, "shm svc table smaller than MAX_SERVICES");

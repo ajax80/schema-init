@@ -85,6 +85,19 @@ int main(void) {
     fclose(f);
     assert(service_load_one(p, &svc) == -1);
 
+    /* a repeated key replaces its value and does not count again */
+    snprintf(p, sizeof p, "%s/dup.svc", dir);
+    f = fopen(p, "w");
+    assert(f);
+    fputs("name=dup\nexec=/bin/true\n", f);
+    for (int i = 0; i < MAX_ENV; i++)
+        fprintf(f, "env=K%d=v\n", i);
+    fputs("env=K0=last\n", f);
+    fclose(f);
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.env_count == MAX_ENV);
+    assert(strcmp(svc.envp[0], "K0=last") == 0);
+
     /* MAX_DEPS dep= lines load; one more refuses the load */
     snprintf(p, sizeof p, "%s/deps.svc", dir);
     f = fopen(p, "w");
@@ -101,7 +114,7 @@ int main(void) {
     fclose(f);
     assert(service_load_one(p, &svc) == -1);
 
-    /* a group with MAX_MEMBERS loads; one with more is skipped */
+    /* a group with MAX_MEMBERS loads; one with more is held EXCISED */
     {
         char gt[] = "/tmp/schema-grpXXXXXX";
         char *gd = mkdtemp(gt);
@@ -121,9 +134,13 @@ int main(void) {
         for (int i = 0; i <= MAX_MEMBERS; i++)
             fprintf(f, "member=m%d\n", i);
         fclose(f);
-        assert(groups_load(gd, gtab, 4) == 1);
-        assert(strcmp(gtab[0].name, "ok") == 0);
-        assert(gtab[0].member_count == MAX_MEMBERS);
+        assert(groups_load(gd, gtab, 4) == 2);
+        int big = strcmp(gtab[0].name, "big") == 0 ? 0 : 1;
+        assert(strcmp(gtab[big].name, "big") == 0 && gtab[big].refused);
+        assert(strcmp(gtab[!big].name, "ok") == 0 && !gtab[!big].refused);
+        assert(gtab[!big].member_count == MAX_MEMBERS);
+        groups_update(gtab, 2, NULL, 0);
+        assert(gtab[big].state == STATE_EXCISED);
         unlink(p);
         snprintf(p, sizeof p, "%s/ok.grp", gd);
         unlink(p);

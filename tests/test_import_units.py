@@ -562,6 +562,8 @@ try:
     check("over-cap skipped: 17 Environment= variables", False)
 except si.Skip as e:
     check("over-cap skipped: 17 Environment= variables", "limit 16" in str(e))
+check("repeated Environment= key counts once, last wins", si.unit_to_svc("env", si.parse_unit(
+    "[Service]\nEnvironment=" + " ".join("K%d=v" % i for i in range(16)) + "\nEnvironment=K0=last\nExecStart=/bin/x\n")).count("\nenv=K") == 16)
 check("16 Environment= variables kept", si.unit_to_svc("env", si.parse_unit(
     "[Service]\nEnvironment=" + " ".join("K%d=v" % i for i in range(16)) + "\nExecStart=/bin/x\n")).count("\nenv=K") == 16)
 check("62 args kept", si.unit_to_svc("big", si.parse_unit("[Service]\nExecStart=/bin/x " + " ".join(["a"] * 62) + "\n")).count("args=a\n") == 62)

@@ -65,15 +65,12 @@ int main(void) {
         fprintf(stderr, "schema-desktop: shm not found — is schema-init running?\n");
         return 1;
     }
-    struct stat st;
-    if (fstat(fd, &st) != 0 || (size_t)st.st_size < sizeof(schema_shm_t)) {
+    const schema_shm_t *shm = schema_shm_map(fd);
+    close(fd);
+    if (!shm) {
         fprintf(stderr, "schema-desktop: shm is from another schema-init version; reboot or schema-ctl reexec\n");
-        close(fd);
         return 1;
     }
-    schema_shm_t *shm = mmap(NULL, sizeof(schema_shm_t), PROT_READ, MAP_SHARED, fd, 0);
-    close(fd);
-    if (shm == MAP_FAILED) { perror("mmap"); return 1; }
 
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
@@ -209,6 +206,6 @@ int main(void) {
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
-    munmap(shm, sizeof(schema_shm_t));
+    munmap((void *)shm, sizeof(schema_shm_t));
     return 0;
 }

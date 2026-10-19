@@ -49,7 +49,7 @@ Every key a schema-init service file understands. The [README](how-it-works.md#s
 | `stop_first` | `0` | At shutdown, this service gets SIGTERM before any other, and nothing else is stopped until it has exited (or its `stop_timeout_sec` ran out). For the desktop session: its apps talk to system daemons on the way out (KDE's printer client to CUPS, for one) and hang if those are stopping at the same time. systemd gets the same effect by stopping user sessions before system services. |
 | `user` | — | Run as this user — a name or a numeric uid — with its primary group and supplementary groups, instead of root. `HOME`, `USER`, `LOGNAME`, `SHELL` and `XDG_RUNTIME_DIR` are set from the account (an `env=` line still wins). Resolved when the file is loaded; a user that does not exist yet is looked up again at start, and if it is still missing the start fails rather than running as root. |
 | `limit_<name>` | — | Resource limit set before `user=` drops privileges, systemd's `Limit<NAME>=`: `limit_nofile`, `limit_memlock`, `limit_rtprio`, `limit_nice`, `limit_core`, `limit_stack`, `limit_nproc`, `limit_as`, `limit_cpu`, `limit_fsize`, `limit_data`, `limit_rss`, `limit_locks`, `limit_sigpending`, `limit_msgqueue`, `limit_rttime`. Value `N`, `N` with a `K`/`M`/`G`/`T` suffix (1024), or `infinity`; `SOFT:HARD` sets the two apart. `limit_nice` also takes a nice level (`-19`). `limit_nofile=infinity` means `fs.nr_open`. A bad value rejects the service; a limit that cannot be set fails the start. An empty value in a drop-in removes the limit. |
-| `env` | — | `KEY=VALUE` set in the child before exec (repeat for several, up to 16; more refuses the load). There is no shell, so no expansion. |
+| `env` | — | `KEY=VALUE` set in the child before exec (repeat for several, up to 16 variables; a repeated key replaces the earlier value; more refuses the load). There is no shell, so no expansion. |
 | `no_excise` | `0` | Like `critical=1` for the excision gate only: the service backs off in DORMANT forever instead of reaching EXCISED, without hard-blocking its dependents the way a critical dep does. |
 | `fuse` | `0` | Quarantine fuse: if any dependency enters FRICTION or EXCISED, kill this service and excise it at once (for something that must not run on a broken foundation). |
 | `fuse_cmd` | — | Shell command (`sh -c`) run when the fuse trips. |
@@ -180,7 +180,7 @@ A group's state is the worst-case view of its members:
 - All members FUNDAMENTAL or better → group is FUNDAMENTAL
 - All members PERFECT → group is PERFECT
 
-Maximum 16 groups, 8 members per group; a group with more members is not loaded. Names and members are matched at load time.
+Maximum 16 groups, 8 members per group; a group with more is held EXCISED, so services that depend on it wait. Names and members are matched at load time.
 
 ## Timers
 

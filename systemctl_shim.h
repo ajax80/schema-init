@@ -184,11 +184,9 @@ __attribute__((unused)) static const char *shim_shm_path(void) {
 __attribute__((unused)) static int shm_is_active(const char *name) {
     int fd = open(shim_shm_path(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
-    struct stat st;
-    if (fstat(fd, &st) != 0 || (size_t)st.st_size < sizeof(schema_shm_t)) { close(fd); return -1; }
-    const schema_shm_t *live = mmap(NULL, sizeof *live, PROT_READ, MAP_SHARED, fd, 0);
+    const schema_shm_t *live = schema_shm_map(fd);
     close(fd);
-    if (live == MAP_FAILED) return -1;
+    if (!live) return -1;
     static schema_shm_t snap;
     const volatile uint32_t *seqp = &live->seq;
     int tries, stable = 0;

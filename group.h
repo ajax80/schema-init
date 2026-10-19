@@ -12,6 +12,7 @@ typedef struct {
     int     member_idx[MAX_MEMBERS];   /* resolved service indices, -1=none */
     int     member_count;
     uint8_t state;
+    uint8_t refused;                   /* over MAX_MEMBERS: held EXCISED */
 } group_t;
 
 /* parse .grp files from dir; returns number loaded */
