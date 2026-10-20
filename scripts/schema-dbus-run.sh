@@ -34,13 +34,45 @@ for p in "$self_dir/dissect_policy.py" \
 done
 
 BROKER=${SCHEMA_DBUS_BROKER:-$(find_bin schema-dbus)}
-STOCK=$(find_bin dbus-daemon)
+STOCK=${SCHEMA_DBUS_STOCK:-$(find_bin dbus-daemon)}
 POLDIR=${SCHEMA_DBUS_POLDIR:-/run/schema-init}
 POL="$POLDIR/dbus.policy"
 
 fallback() {
     echo "schema-dbus-run: $1 — falling back to stock dbus-daemon" >&2
     [ -n "$STOCK" ] || { echo "schema-dbus-run: no dbus-daemon to fall back to — no system bus" >&2; exit 1; }
+    if [ -n "${LISTEN_FDS:-}" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            exec python3 -c '
+import os,sys,socket
+p=os.environ.get("NOTIFY_SOCKET","")
+if p:
+    s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+    for n in set(os.environ.get("LISTEN_FDNAMES","").split(":"))&{"listen","state","conn","pfd"}:
+        try: s.sendto(("FDSTOREREMOVE=1\nFDNAME="+n).encode(),"\0"+p[1:] if p[0]=="@" else p)
+        except OSError: pass
+for k in ("LISTEN_FDS","LISTEN_PID","LISTEN_FDNAMES","NOTIFY_SOCKET"): os.environ.pop(k,None)
+os.closerange(3, 1 << 20); os.execv(sys.argv[1], sys.argv[1:])' "$STOCK" --system --nofork
+        fi
+        if command -v perl >/dev/null 2>&1; then
+            exec perl -e '
+use POSIX (); use Socket;
+if (my $p = $ENV{NOTIFY_SOCKET}) {
+    $p = "\0" . substr($p, 1) if $p =~ /^@/;
+    my %w = map { $_ => 1 } grep { /^(listen|state|conn|pfd)$/ } split /:/, $ENV{LISTEN_FDNAMES} // "";
+    if (socket(my $s, AF_UNIX, SOCK_DGRAM, 0)) { send($s, "FDSTOREREMOVE=1\nFDNAME=$_", 0, pack_sockaddr_un($p)) for keys %w }
+}
+delete @ENV{qw(LISTEN_FDS LISTEN_PID LISTEN_FDNAMES NOTIFY_SOCKET)};
+POSIX::close($_) for 3..1048575; exec {$ARGV[0]} @ARGV' "$STOCK" --system --nofork
+        fi
+        unset LISTEN_FDS LISTEN_PID LISTEN_FDNAMES NOTIFY_SOCKET
+        fdd=/proc/self/fd
+        [ -d "$fdd" ] || fdd=/dev/fd
+        for f in "$fdd"/*; do
+            n=${f##*/}
+            case $n in [3-9]) eval "exec $n>&-" 2>/dev/null || : ;; esac
+        done
+    fi
     exec "$STOCK" --system --nofork
 }
 

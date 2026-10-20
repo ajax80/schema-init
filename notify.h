@@ -21,7 +21,9 @@
 #define NOTIFY_MSG_MAX   4096
 #define NOTIFY_STATUS_MAX 128
 #define NOTIFY_BATCH_MAX  32
+#define NOTIFY_DRAIN_MAX  1024
 #define NOTIFY_CGROUP_TEXT_MAX 4096
+#define NOTIFY_MAX_FDS    253
 
 struct notify_msg {
     int  ready;
@@ -31,6 +33,9 @@ struct notify_msg {
     char status[NOTIFY_STATUS_MAX];
     char busname[256];          /* BUSNAME= (from the schema-dbus broker only) */
     int  bus_owner_pid;         /* BUSOWNERPID= */
+    int  fdstore;               /* FDSTORE=1 */
+    int  fdstore_remove;        /* FDSTOREREMOVE=1 */
+    char fdname[64];            /* FDNAME= */
 };
 
 /* Parse one datagram. Unknown keys are ignored, as sd_notify expects.
@@ -46,6 +51,18 @@ static inline int notify_parse(const char *buf, size_t len, struct notify_msg *m
         else if (l == 11 && !memcmp(p, "RELOADING=1", 11)) { m->reloading = 1; any = 1; }
         else if (l == 10 && !memcmp(p, "STOPPING=1", 10))  { m->stopping = 1; any = 1; }
         else if (l == 10 && !memcmp(p, "WATCHDOG=1", 10))  { m->watchdog = 1; any = 1; }
+        else if (l == 9 && !memcmp(p, "FDSTORE=1", 9))     { m->fdstore = 1; any = 1; }
+        else if (l == 15 && !memcmp(p, "FDSTOREREMOVE=1", 15)) { m->fdstore_remove = 1; any = 1; }
+        else if (l > 7 && !memcmp(p, "FDNAME=", 7)) {
+            size_t nl2 = l - 7;
+            if (nl2 >= sizeof m->fdname) {
+                m->fdname[0] = ':';
+                m->fdname[1] = '\0';
+            } else {
+                memcpy(m->fdname, p + 7, nl2);
+                m->fdname[nl2] = '\0';
+            }
+        }
         else if (l > 8 && l - 8 < sizeof m->busname && !memcmp(p, "BUSNAME=", 8)) {
             memcpy(m->busname, p + 8, l - 8);
             m->busname[l - 8] = '\0';
@@ -152,12 +169,15 @@ static inline int notify_open(const char *path) {
 
 /* Receive one datagram. Returns its length (NUL-terminated in buf) and the
  * sender pid, 0 when drained, -2 on a socket error, -1 for a message to
- * discard: no credentials, truncated, or carrying fds (FDSTORE is not
- * supported; they are closed). */
-static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid, uid_t *uid) {
+ * discard: no credentials, truncated, or empty. Received fds go to FDS
+ * (room for NOTIFY_MAX_FDS) with their count in *NFDS; the caller owns them
+ * on every return except -1, where they have all been closed. */
+static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid, uid_t *uid,
+                                  int *fds, int *nfds) {
+    *nfds = 0;
     struct iovec iov = { buf, bufsz - 1 };
     union {
-        char b[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int) * 16)];
+        char b[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(sizeof(int) * NOTIFY_MAX_FDS)];
         struct cmsghdr align;
     } ctl;
     struct msghdr mh;
@@ -178,18 +198,22 @@ static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid, u
             *uid = uc.uid;
             have_cred = 1;
         } else if (c->cmsg_type == SCM_RIGHTS) {
-            int nfd = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-            for (int i = 0; i < nfd; i++) {
+            int cnt = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+            for (int i = 0; i < cnt; i++) {
                 int x;
                 memcpy(&x, CMSG_DATA(c) + i * sizeof(int), sizeof x);
-                close(x);
+                if (*nfds < NOTIFY_MAX_FDS) fds[(*nfds)++] = x;
+                else close(x);
             }
-            bad = 1;
         }
     }
-    if (!have_cred || bad || *pid <= 0) return -1;
+    if (!have_cred || bad || *pid <= 0 || n == 0) {
+        for (int i = 0; i < *nfds; i++) close(fds[i]);
+        *nfds = 0;
+        return -1;
+    }
     buf[n] = '\0';
-    return n > 0 ? n : -1;
+    return n;
 }
 
 #endif /* NOTIFY_H */

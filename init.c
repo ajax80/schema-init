@@ -17,6 +17,7 @@
 #include "svc_dropins.h"
 #include "reexec_state.h"
 #include "notify.h"
+#include "fdstore.h"
 #include "coredump.h"
 #include <sys/resource.h>
 #include "group.h"
@@ -856,12 +857,15 @@ static void timer_rearm(service_t *svc) {
     }
 }
 
+static void notify_poll(int max_batch);
+
 static void reap(void) {
     int status;
     pid_t pid;
     int i;
 
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (notify_fd >= 0) notify_poll(NOTIFY_DRAIN_MAX);
         if (pid == reexec_check_pid) {
             reexec_check_done(status);
             continue;
@@ -1975,9 +1979,12 @@ static void ctl_cmd(int fd, char *line) {
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++) {
-                char deck[24] = "";
+                char deck[48] = "";
                 if (services[i].card_count)
                     snprintf(deck, sizeof deck, "  cards=%d/%d", services[i].card_next, services[i].card_count);
+                int sk = services[i].fdstore_max > 0 ? fdstore_count(services[i].name) : 0;
+                if (sk > 0)
+                    snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  fds=%d", sk);
                 ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count, deck,
@@ -2297,24 +2304,30 @@ static int ctl_is_readonly(const char *line) {
 
 /* Drain the sd_notify socket. A message counts only for a notify=1 service
  * whose cgroup (or main pid, when cgroups are unavailable) holds the sender. */
-static void notify_poll(void) {
+static void notify_poll(int max_batch) {
     char buf[NOTIFY_MSG_MAX];
     /* The socket is world-writable, so a sender must never be able to hold
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
-    for (int batch = 0; batch < NOTIFY_BATCH_MAX; batch++) {
+    for (int batch = 0; batch < max_batch; batch++) {
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
-        ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid, &uid);
+        int rfds[NOTIFY_MAX_FDS], nrfds = 0;
+        ssize_t n = notify_recv(notify_fd, buf, sizeof buf, &pid, &uid, rfds, &nrfds);
         if (n == 0) return;
         if (n == -2) return;
         if (n < 0) continue;
         struct notify_msg m;
-        if (!notify_parse(buf, (size_t)n, &m)) continue;
+        int acted = notify_parse(buf, (size_t)n, &m);
+        if (!acted) {
+            for (int i = 0; i < nrfds; i++) close(rfds[i]);
+            continue;
+        }
         char cgtext[NOTIFY_CGROUP_TEXT_MAX];
         int have_cg = -1;                           /* read lazily, once per message */
         if (m.busname[0]) {
             /* "this name now has an owner": only the broker may say so, and it
              * counts for the service whose cgroup holds the owning pid. */
+            for (int i = 0; i < nrfds; i++) close(rfds[i]);
             if (m.bus_owner_pid <= 0 || !notify_sender_is_broker(pid, uid)) continue;
             for (int i = 0; i < svc_count; i++) {
                 service_t *svc = &services[i];
@@ -2332,12 +2345,23 @@ static void notify_poll(void) {
         }
         for (int i = 0; i < svc_count; i++) {
             service_t *svc = &services[i];
-            if (!svc->notify || svc->child_pid <= 0) continue;
+            int stores = svc->fdstore_max > 0 && (m.fdstore || m.fdstore_remove) && svc->child_pid == pid;
+            if (!(svc->notify || stores) || svc->child_pid <= 0) continue;
             if (svc->child_pid != pid) {
                 if (!svc->cgroup_path[0]) continue;
                 if (have_cg < 0) have_cg = notify_read_cgroup(pid, cgtext, sizeof cgtext);
                 if (!have_cg || !notify_cgroup_text_matches(cgtext, svc->cgroup_path)) continue;
             }
+            if (stores && m.fdstore) {
+                int refused = 0;
+                for (int k = 0; k < nrfds; k++)
+                    if (fdstore_add(svc->name, rfds[k], m.fdname, svc->fdstore_max) < 0) refused = 1;
+                nrfds = 0;
+                if (refused) service_log(svc, "fdstore-refused");
+            }
+            if (stores && m.fdstore_remove)
+                fdstore_remove(svc->name, m.fdname);
+            if (!svc->notify) break;
             if (m.status[0])
                 snprintf(svc->notify_status, sizeof svc->notify_status, "%s", m.status);
             if (m.watchdog)
@@ -2349,7 +2373,18 @@ static void notify_poll(void) {
             }
             break;
         }
+        for (int k = 0; k < nrfds; k++) close(rfds[k]);
     }
+}
+
+static int fdstore_keep(const char *name, void *ctx) {
+    (void)ctx;
+    for (int i = 0; i < svc_count; i++) {
+        if (strcmp(services[i].name, name) != 0) continue;
+        return services[i].fdstore_max > 0 && services[i].inst.state != STATE_EXCISED &&
+               services[i].inst.state != STATE_DORMANT;
+    }
+    return 0;
 }
 
 static void ctl_poll(void) {
@@ -2744,7 +2779,8 @@ static int load_tables(const char *svc_dir) {
 }
 
 static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
-                            eviction_t *ev, int *nev, char *err, size_t errsz) {
+                            eviction_t *ev, int *nev, fdstore_ent *fs, int maxfs, int *nfs,
+                            char *err, size_t errsz) {
     int d;
     FILE *f;
     if (lseek(fd, 0, SEEK_SET) < 0 || (d = dup(fd)) < 0) {
@@ -2756,7 +2792,7 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
         close(d);
         return -1;
     }
-    int rc = state_parse(f, g, reexec_svcs, MAX_SERVICES, nrs, ev, nev, err, errsz);
+    int rc = state_parse(f, g, reexec_svcs, MAX_SERVICES, nrs, ev, nev, fs, maxfs, nfs, err, errsz);
     fclose(f);
     return rc;
 }
@@ -2764,7 +2800,8 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
 /* Everything the new image must prove before it touches anything: the config
  * parses without a cycle, the blob parses, and the two agree. */
 static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
-                           eviction_t *ev, int *nev, char *err, size_t errsz) {
+                           eviction_t *ev, int *nev, fdstore_ent *fs, int maxfs, int *nfs,
+                           char *err, size_t errsz) {
     if (load_tables(SVC_DIR) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
         return -1;
@@ -2773,7 +2810,7 @@ static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
         snprintf(err, errsz, "no services loaded from %s", SVC_DIR);
         return -1;
     }
-    if (reexec_read_blob(blob_fd, g, nrs, ev, nev, err, errsz) < 0)
+    if (reexec_read_blob(blob_fd, g, nrs, ev, nev, fs, maxfs, nfs, err, errsz) < 0)
         return -1;
     return reexec_compare(reexec_svcs, *nrs, services, svc_count, err, errsz);
 }
@@ -2782,13 +2819,13 @@ static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
 static int reexec_check_main(int blob_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs, nev, rc;
+    int nrs, nev, nfs, rc;
     char err[320];
     /* stdout is the verdict pipe: the loader's chatter goes to stderr, so
      * the verdict is the only thing on it however much the loader says */
     int verdict = dup(STDOUT_FILENO);
     dup2(STDERR_FILENO, STDOUT_FILENO);
-    rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err);
+    rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, sizeof err);
     fflush(stdout);
     if (rc < 0) {
         dprintf(verdict, "err: %s\n", err);
@@ -2868,20 +2905,23 @@ static void listen_adopt(service_t *svc) {
 static void reexec_adopt(int blob_fd, int oldexe_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs = 0, nev = 0, adopted = 0, fresh = 0, rolled_back = oldexe_fd < 0;
+    int nrs = 0, nev = 0, nfs = 0, adopted = 0, fresh = 0, rolled_back = oldexe_fd < 0;
     char err[320];
+    fdstore_ent *fs = calloc(FDSTORE_MAX_TOTAL, sizeof *fs);
+    if (!fs)
+        fprintf(stderr, "[schema-init] re-exec: out of memory, fdstore dropped across re-exec\n");
 
     memset(&g, 0, sizeof g);
     g.fd_ctl = g.fd_notify = g.fd_watchdog = g.fd_client = g.fd_oldexe = -1;
     if (oldexe_fd >= 0) {
-        if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+        if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, fs, fs ? FDSTORE_MAX_TOTAL : 0, &nfs, err, sizeof err) < 0)
             reexec_fallback(blob_fd, oldexe_fd, g.fd_client, err);
     } else {
         /* We ARE the fallback: nowhere further back to go, so refusing would
          * loop. Adopt whatever the config and blob allow; only a blob we
          * cannot read at all stops us, since then there is nothing to adopt. */
         int cycles = load_tables(SVC_DIR);
-        if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+        if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, fs, fs ? FDSTORE_MAX_TOTAL : 0, &nfs, err, sizeof err) < 0)
             reexec_fallback(blob_fd, -1, g.fd_client, err);
         if (cycles > 0)
             fprintf(stderr, "[schema-init] re-exec fallback: dependency cycle in %s, adopting anyway\n", SVC_DIR);
@@ -2890,14 +2930,38 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     }
 
     {
-        int keep[6 + MAX_SERVICES * MAX_LISTEN] = { g.fd_ctl, g.fd_notify, g.fd_watchdog,
-                                                   g.fd_client, blob_fd, oldexe_fd };
-        int nkeep = 6;
+        static int keep[6 + MAX_SERVICES * MAX_LISTEN + FDSTORE_MAX_TOTAL];
+        int nkeep = 0, nres;
+        keep[nkeep++] = g.fd_ctl; keep[nkeep++] = g.fd_notify; keep[nkeep++] = g.fd_watchdog;
+        keep[nkeep++] = g.fd_client; keep[nkeep++] = blob_fd; keep[nkeep++] = oldexe_fd;
         for (int j = 0; j < nrs; j++)
             for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
                 keep[nkeep++] = reexec_svcs[j].rt.listen_fd[k];
+        nres = nkeep;
+        for (int j = 0; j < nfs; j++)
+            keep[nkeep++] = fs[j].fd;
         reexec_close_strays(keep, nkeep);
+        for (int j = 0; j < nfs; j++) {
+            int fd = fs[j].fd, dup = 0;
+            for (int k = 0; k < nres && !dup; k++)
+                dup = keep[k] == fd;
+            for (int k = 0; k < fdstore_n && !dup; k++)
+                dup = fdstore_v[k].fd == fd;
+            if (dup) {
+                fprintf(stderr, "[schema-init] re-exec: fdstore %s/%s: fd %d is not ours, skipped\n",
+                        fs[j].svc, fs[j].name, fd);
+                continue;
+            }
+            if (fcntl(fd, F_GETFD) < 0) {
+                fprintf(stderr, "[schema-init] re-exec: fdstore %s/%s: fd %d is not open, skipped\n",
+                        fs[j].svc, fs[j].name, fd);
+                continue;
+            }
+            if (fdstore_add(fs[j].svc, fd, fs[j].name, FDSTORE_MAX_TOTAL) == 0)
+                fcntl(fd, F_SETFD, FD_CLOEXEC);
+        }
     }
+    free(fs);
 
     ctl_fd = g.fd_ctl;
     notify_fd = g.fd_notify;
@@ -3001,7 +3065,7 @@ static int reexec_write_blob(int client, int oldexe, char *err, size_t errsz) {
         wall_ev[k] = evictions[k];
         wall_ev[k].deadline = time(NULL) + (evictions[k].deadline - mono_sec());
     }
-    state_write(f, &g, services, svc_count, wall_ev, eviction_count);
+    state_write(f, &g, services, svc_count, wall_ev, eviction_count, fdstore_v, fdstore_n);
     if (fclose(f) != 0 ||
         fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) < 0) {
         snprintf(err, errsz, "state blob: %s", strerror(errno));
@@ -3113,7 +3177,7 @@ static void reexec_check_deadline(void) {
 static int reexec_recheck(int blob, char *err, size_t errsz) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs, nev, shadow_count, shadow_grp_count, rc;
+    int nrs, nev, nfs, shadow_count, shadow_grp_count, rc;
 
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
@@ -3127,7 +3191,7 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
         rc = -1;
-    } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, err, errsz)) == 0) {
+    } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, errsz)) == 0) {
         rc = reexec_compare(reexec_svcs, nrs, shadow_services, shadow_count, err, errsz);
     }
     for (int k = 0; k < shadow_count; k++)
@@ -3171,6 +3235,7 @@ static void reexec_commit(void) {
         for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
             set_cloexec(fds[k], 0);
         listen_set_cloexec(0);
+        fdstore_set_cloexec(0);
         snprintf(b, sizeof b, "%d", blob);
         snprintf(o, sizeof o, "%d", oldexe);
         printf("[schema-init] re-exec: %s\n", reexec_path);
@@ -3185,6 +3250,7 @@ static void reexec_commit(void) {
         for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
             set_cloexec(fds[k], 1);
         listen_set_cloexec(1);
+        fdstore_set_cloexec(1);
     }
     sigprocmask(SIG_SETMASK, &prev, NULL);
     if (blob >= 0) close(blob);
@@ -3935,7 +4001,7 @@ int main(int argc, char **argv) {
                     } else if (fds[e].fd == ctl_fd) {
                         ctl_poll();
                     } else if (fds[e].fd == notify_fd) {
-                        notify_poll();
+                        notify_poll(NOTIFY_BATCH_MAX);
                     } else if (fds[e].fd == ino_fd) {
                         ready_inotify_drain();
                     }
@@ -4002,6 +4068,7 @@ int main(int argc, char **argv) {
             streak = moved ? (pass_changed ? streak + 1 : 1) : 0;
             pass_changed = moved && streak <= PASS_RERUN_MAX;
         }
+        if (fdstore_n > 0) fdstore_sweep(fdstore_keep, NULL);
         monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();

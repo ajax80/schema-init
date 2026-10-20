@@ -1,5 +1,9 @@
 #include "service.h"
 #include "notify.h"
+#include "fdstore.h"
+
+fdstore_ent *fdstore_v;
+int fdstore_n, fdstore_cap;
 #include "caps.h"
 #include "ns.h"
 #include <linux/capability.h>
@@ -1132,29 +1136,32 @@ static void svc_set_invocation_id(void) {
 }
 
 /* sd_listen_fds(3): the sockets at fd 3.., LISTEN_PID our own pid */
-static void svc_pass_listen(const service_t *svc) {
-    int n = svc->listen_open, tmp[MAX_LISTEN];
+static int svc_pass_listen(const service_t *svc) {
+    int lo = svc->listen_open, stored = fdstore_count(svc->name);
+    int n = lo + stored;
     if (!n) {
         unsetenv("LISTEN_FDS");
         unsetenv("LISTEN_PID");
         unsetenv("LISTEN_FDNAMES");
-        return;
+        return 0;
     }
-    for (int i = 0; i < n; i++)
-        if ((tmp[i] = fcntl(svc->listen_fd[i], F_DUPFD, 3 + n)) < 0) _exit(126);
-    for (int i = 0; i < n; i++) {
-        if (dup2(tmp[i], 3 + i) < 0) _exit(126);
-        close(tmp[i]);
-    }
-    char v[24], names[MAX_LISTEN * 72] = "";
+    int *src = malloc((size_t)n * sizeof *src);
+    const char **sn = malloc((size_t)(stored ? stored : 1) * sizeof *sn);
+    if (!src || !sn) _exit(126);
+    for (int i = 0; i < lo; i++) src[i] = svc->listen_fd[i];
+    stored = fdstore_collect(svc->name, src + lo, sn, stored);
+    n = lo + stored;
+    if (fdstore_place_fds(src, n) < 0) _exit(126);
+    size_t cap = (size_t)n * 72 + 1;
+    char *names = malloc(cap);
+    if (!names || fdstore_fdnames(svc->name, lo, names, cap) < 0) _exit(126);
+    char v[24];
     snprintf(v, sizeof v, "%d", n);
     setenv("LISTEN_FDS", v, 1);
     snprintf(v, sizeof v, "%d", (int)getpid());
     setenv("LISTEN_PID", v, 1);
-    for (int i = 0; i < n; i++)
-        snprintf(names + strlen(names), sizeof names - strlen(names), "%s%s.socket",
-                 i ? ":" : "", svc->name);
     setenv("LISTEN_FDNAMES", names, 1);
+    return stored;
 }
 
 /* close_range fallback: no allocation, we are in the forked child */
@@ -1438,7 +1445,7 @@ int service_spawn(service_t *svc) {
             svc_apply_env(svc, file_env, file_envc);
             svc_run_pre(svc, 0);
         }
-        if (svc->notify) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
+        if (svc->notify || svc->fdstore_max > 0) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
         else unsetenv("NOTIFY_SOCKET");
         if (svc->notify && svc->watchdog_sec > 0) {
             char wv[24];
@@ -1451,9 +1458,9 @@ int service_spawn(service_t *svc) {
             unsetenv("WATCHDOG_PID");
         }
         svc_apply_env(svc, file_env, file_envc);
-        svc_pass_listen(svc);
-        if (syscall(SYS_close_range, 3 + svc->listen_open, ~0U, 0) < 0)
-            close_fds_from(3 + svc->listen_open);
+        int stored = svc_pass_listen(svc);
+        if (syscall(SYS_close_range, 3 + svc->listen_open + stored, ~0U, 0) < 0)
+            close_fds_from(3 + svc->listen_open + stored);
         char **argv = svc->argv, *xargv[64];
         if (svc->expand_args) {
             int nx = service_expand_argv(svc->argv, xargv, 63);
@@ -2174,6 +2181,10 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         snprintf(svc->ready_bus_name, sizeof svc->ready_bus_name, "%s", val);
     else if (strcmp(line, "notify") == 0)
         svc->notify = atoi(val) ? 1 : 0;
+    else if (strcmp(line, "fdstore") == 0) {
+        int v = atoi(val);
+        if (v >= 0 && v <= 4096) svc->fdstore_max = v;
+    }
     else if (strcmp(line, "ready_path") == 0)
         strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
     else if (strcmp(line, "pid_file") == 0)

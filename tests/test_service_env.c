@@ -624,6 +624,14 @@ int main(void) {
         }
     }
 
+    snprintf(p, sizeof p, "%s/fds.svc", dir);
+    write_svc(p, "name=fds\nexec=/bin/true\nfdstore=300\n");
+    assert(service_load_one(p, &svc) == 0 && svc.fdstore_max == 300);
+    write_svc(p, "name=fds\nexec=/bin/true\nfdstore=5000\n");
+    assert(service_load_one(p, &svc) == 0 && svc.fdstore_max == 0);
+    write_svc(p, "name=fds\nexec=/bin/true\nfdstore=-1\n");
+    assert(service_load_one(p, &svc) == 0 && svc.fdstore_max == 0);
+
     printf("all service env tests passed\n");
     return 0;
 }

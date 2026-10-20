@@ -9,10 +9,12 @@ static FILE *blob(const char *text) {
     return f;
 }
 
+static int nfs0;
+
 static int parse_text(const char *text, reexec_global_t *g, int *nsvc, eviction_t *ev, int *nev,
                       char *err, size_t errsz) {
     FILE *f = blob(text);
-    int rc = state_parse(f, g, out, MAX_SERVICES, nsvc, ev, nev, err, errsz);
+    int rc = state_parse(f, g, out, MAX_SERVICES, nsvc, ev, nev, NULL, 0, &nfs0, err, errsz);
     fclose(f);
     return rc;
 }
@@ -65,7 +67,7 @@ int main(void) {
     strcpy(ev[0].cgroup, "/sys/fs/cgroup/schema-init/old one");
 
     FILE *w = open_memstream(&buf, &blen);
-    state_write(w, &g, svcs, 3, ev, 1);
+    state_write(w, &g, svcs, 3, ev, 1, NULL, 0);
     fclose(w);
 
     /* round trip */
@@ -157,8 +159,51 @@ int main(void) {
     /* capacity */
     {
         FILE *f = blob("schema-init-state 1\nsvc name=a\nsvc name=b\nend\n");
-        assert(state_parse(f, &pg, out, 1, &nsvc, pev, &nev, err, sizeof err) == -1);
+        assert(state_parse(f, &pg, out, 1, &nsvc, pev, &nev, NULL, 0, &nfs0, err, sizeof err) == -1);
         fclose(f);
+    }
+
+    /* fdstore */
+    {
+        static fdstore_ent wfs[2], pfs[4];
+        char *fb = NULL;
+        size_t fl = 0;
+        int nfs = -1;
+        memset(wfs, 0, sizeof wfs);
+        strcpy(wfs[0].svc, "web"); strcpy(wfs[0].name, "a b"); wfs[0].fd = 11;
+        strcpy(wfs[1].svc, "db"); strcpy(wfs[1].name, "conn"); wfs[1].fd = 12;
+        FILE *fw = open_memstream(&fb, &fl);
+        state_write(fw, &g, svcs, 3, ev, 1, wfs, 2);
+        fclose(fw);
+        assert(strstr(fb, "fdstore svc=web name=a%20b fd=11\n"));
+        FILE *f = blob(fb);
+        assert(state_parse(f, &pg, out, MAX_SERVICES, &nsvc, pev, &nev, pfs, 4, &nfs, err, sizeof err) == 0);
+        fclose(f);
+        assert(nfs == 2 && nsvc == 3 && nev == 1);
+        assert(!strcmp(pfs[0].svc, "web") && !strcmp(pfs[0].name, "a b") && pfs[0].fd == 11);
+        assert(!strcmp(pfs[1].svc, "db") && !strcmp(pfs[1].name, "conn") && pfs[1].fd == 12);
+        assert(strstr(fb, "evict ") < strstr(fb, "fdstore "));
+
+        assert(parse_text(fb, &pg, &nsvc, pev, &nev, err, sizeof err) == 0);
+        assert(nfs0 == 0 && nsvc == 3 && nev == 1 && strcmp(out[0].name, "dbus") == 0);
+
+        f = blob(fb);
+        assert(state_parse(f, &pg, out, MAX_SERVICES, &nsvc, pev, &nev, pfs, 1, &nfs, err, sizeof err) == -1);
+        fclose(f);
+        free(fb);
+
+        const char *bad[] = {
+            "schema-init-state 1\nfdstore svc=a name=b fd=-3\nend\n",
+            "schema-init-state 1\nfdstore svc=a name=b fd=abc\nend\n",
+            "schema-init-state 1\nfdstore svc=a name=b\nend\n",
+            "schema-init-state 1\nfdstore name=b fd=4\nend\n",
+        };
+        for (int i = 0; i < 4; i++) {
+            f = blob(bad[i]);
+            assert(state_parse(f, &pg, out, MAX_SERVICES, &nsvc, pev, &nev, pfs, 4, &nfs, err, sizeof err) == -1);
+            fclose(f);
+            assert(strstr(err, "line 2"));
+        }
     }
 
     /* reexec_compare */

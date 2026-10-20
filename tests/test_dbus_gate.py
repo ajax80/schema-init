@@ -60,6 +60,77 @@ def main():
         check('unarmed: falls back before touching the broker',
               'broker not armed' in r.stderr, r.stderr.strip().splitlines()[0] if r.stderr else '')
 
+        print("-- system launcher stored fds --")
+        probe = os.path.join(tmp, 'probe')
+        with open(probe, 'w') as f:
+            f.write('#!/bin/sh\necho "$0 LISTEN_FDS=${LISTEN_FDS-unset} LISTEN_PID=${LISTEN_PID-unset} '
+                    'LISTEN_FDNAMES=${LISTEN_FDNAMES-unset} NOTIFY_SOCKET=${NOTIFY_SOCKET-unset}"\n'
+                    'for f in /proc/self/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] && [ "$(readlink "$f")" = /dev/null ] && echo "fd $n"; done\n')
+        os.chmod(probe, 0o755)
+        keep = [os.open('/dev/null', os.O_RDONLY) for _ in range(14)]
+        stored = [fd for fd in keep if fd >= 3]
+        senv = dict(os.environ, LISTEN_FDS='2', LISTEN_PID='1', LISTEN_FDNAMES='a:b', NOTIFY_SOCKET='/x')
+        fdl = lambda out: sorted(int(l.split()[1]) for l in out.splitlines() if l.startswith('fd '))
+        r = subprocess.run([SYSTEM], env=dict(senv, SCHEMA_DBUS_GATE=gate + '.absent', SCHEMA_DBUS_STOCK=probe),
+                           pass_fds=stored, capture_output=True, text=True, timeout=15)
+        check('fallback: stock daemon gets no LISTEN_*/NOTIFY_SOCKET',
+              'LISTEN_FDS=unset LISTEN_PID=unset LISTEN_FDNAMES=unset NOTIFY_SOCKET=unset' in r.stdout, r.stdout.splitlines()[0] if r.stdout else r.stderr)
+        check('fallback: stock daemon inherits no fds >= 3', fdl(r.stdout) == [] and 'fd ' not in r.stdout, str(fdl(r.stdout)))
+        import socket
+        nopld = os.path.join(tmp, 'nopy')
+        os.makedirs(nopld)
+        if shutil.which('perl'):
+            os.symlink(shutil.which('perl'), os.path.join(nopld, 'perl'))
+        for label, path in (('python', os.environ['PATH']), ('perl', nopld)):
+            if label == 'perl' and not shutil.which('perl'):
+                print("  SKIP  fallback (perl): perl not installed")
+                continue
+            nsp = os.path.join(tmp, 'notify-' + label)
+            ns = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            ns.bind(nsp)
+            ns.settimeout(0.2)
+            r = subprocess.run(['/bin/sh', SYSTEM], env=dict(senv, PATH=path, LISTEN_FDNAMES='listen:state:conn:conn:other', NOTIFY_SOCKET=nsp,
+                               SCHEMA_DBUS_GATE=gate + '.absent', SCHEMA_DBUS_STOCK=probe),
+                               pass_fds=stored, capture_output=True, text=True, timeout=15)
+            got = set()
+            try:
+                while True:
+                    got.add(ns.recv(256).decode())
+            except socket.timeout:
+                pass
+            ns.close()
+            want = {'FDSTOREREMOVE=1\nFDNAME=' + n for n in ('listen', 'state', 'conn')}
+            check('fallback (%s): empties the broker store in PID 1' % label, got == want, repr(sorted(got)))
+            if label == 'perl':
+                check('fallback (perl): stock daemon gets no LISTEN_*/NOTIFY_SOCKET', 'LISTEN_FDS=unset' in r.stdout and 'NOTIFY_SOCKET=unset' in r.stdout, r.stdout + r.stderr)
+        nopyd = os.path.join(tmp, 'nopyfd')
+        os.makedirs(nopyd)
+        for t in ('readlink', 'dirname', 'cat', 'sed', 'tr', 'ls'):
+            src = shutil.which(t)
+            if src:
+                os.symlink(src, os.path.join(nopyd, t))
+        low = lambda out: [n for n in fdl(out) if n <= 9]
+        for sh in [None] + ([shutil.which('dash')] if shutil.which('dash') else []):
+            argv = [SYSTEM] if sh is None else [sh, SYSTEM]
+            label = 'sh' if sh is None else 'dash'
+            r = subprocess.run(argv, env=dict(senv, PATH=nopyd, SCHEMA_DBUS_GATE=gate + '.absent', SCHEMA_DBUS_STOCK=probe),
+                               pass_fds=stored, capture_output=True, text=True, timeout=15)
+            check('fallback without python3/perl (%s): no LISTEN_*, no fds 3-9' % label,
+                  'LISTEN_FDS=unset' in r.stdout and low(r.stdout) == [], r.stdout + r.stderr)
+        if not shutil.which('dash'):
+            print("  SKIP  fallback without python3/perl (dash): dash not installed")
+        open(gate, 'w').close()
+        r = subprocess.run([SYSTEM], env=dict(senv, SCHEMA_DBUS_GATE=gate, SCHEMA_DBUS_BROKER=probe,
+                           SCHEMA_DBUS_CACHE=os.path.join(tmp, 'c2', 'x'), SCHEMA_DBUS_POLDIR=os.path.join(tmp, 'r2')),
+                           pass_fds=stored, capture_output=True, text=True, timeout=30)
+        if 'LISTEN_FDS=2' in r.stdout:
+            check('broker path: variables untouched', 'LISTEN_PID=1 LISTEN_FDNAMES=a:b NOTIFY_SOCKET=/x' in r.stdout)
+            check('broker path: stored fds kept', fdl(r.stdout) == sorted(stored), str(fdl(r.stdout)))
+        else:
+            print("  SKIP  broker path: dissolve unavailable")
+        for fd in keep:
+            os.close(fd)
+
         print("-- system launcher policy cache --")
         open(gate, 'w').close()
         broker = os.path.join(tmp, 'broker')

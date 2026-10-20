@@ -1,0 +1,73 @@
+# fdstore PR1 — verification bench (2026-10-19)
+
+## vmtest (busybox initramfs, PID 1 rail) — branch fdstore @ 69aed05
+>> RESULT: PASS (timer fired, hang excised at timeout, dependent ran anyway)
+
+## Devuan VM (~/Ocean/vm/devuan), schema-init PID 1, schema-dbus --system armed, dbus.svc fdstore=1024, /bin/sh = dash
+Clients on bus: NetworkManager, elogind (login1), polkit, Accounts, Avahi, ModemManager, LightDM.
+restart 1 (`schema-ctl restart dbus`): broker log "stored 8 connections, 0 passed fds" → "resumed 8 connections from the fdstore";
+  new broker pid in ~40 ms; every well-known name owner identical (diff before/after empty); nmcli + loginctl answer; 0 service restarts.
+restart 2: same (8/8), owners identical.
+restart 3 with a root dbus-monitor (BecomeMonitor) attached: stored 9 / resumed 9; monitor alive afterwards and kept receiving
+  (1719 lines after restart); 0 NameOwnerChanged during the restart; next new client got :1.74 (numbering continued, no reuse).
+PID 1 re-exec with a held store: test svc fdstore=4 stored 2 pipes (ino 7188, 7189) → fds=2 → `schema-ctl reexec`
+  ("32 services adopted") → still fds=2 → restart svc → LISTEN_FDS=2 LISTEN_FDNAMES=pipe:pipe, same inodes 7188/7189.
+stop drops the store: `schema-ctl stop fdtest` → EXCISED, no fds; start → fresh (LISTEN_FDS=0, new pipes).
+dash fallback (tests/test_dbus_gate.py on the VM, dash installed): 13/13 incl "fallback without python3/perl (dash)".
+Memory after 3 restarts: broker VmRSS 2676 kB (RssAnon 432), PSS 630 kB; PID 1 VmRSS 1712 kB.
+
+Found (pre-existing, not fdstore): BecomeMonitor rejects a filtered rule "type=signal,member=NameOwnerChanged"
+  as "invalid match rule"; non-root BecomeMonitor denied (policy). Unfiltered root monitor works.
+
+## blakbox HW, 1.1269, reboot 1/3 + live restart (2026-10-19 22:14)
+boot: kernel 3.977s, sddm login 1.964s, PID1 VmRSS 4308 kB, broker 358 VmRSS 4708 kB PSS 1316 kB, fresh boot no resume line
+live schema-ctl restart dbus: 358 -> 6012, restarts=0, "resumed 52 connections from the fdstore"
+owners 18/18 identical; kwin 2023, plasmashell 2528, NM 463 unchanged; 0 failed
+com.redhat.NewPrinterNotification :1.33
+fi.w1.wpa_supplicant1 :1.2
+org.bluez :1.8
+org.freedesktop.Accounts :1.1
+org.freedesktop.Avahi :1.6
+org.freedesktop.ConsoleKit :1.14
+org.freedesktop.DBus org.freedesktop.DBus
+org.freedesktop.hostname1 :1.14
+org.freedesktop.locale1 :1.14
+org.freedesktop.login1 :1.14
+org.freedesktop.ModemManager1 :1.54
+org.freedesktop.NetworkManager :1.7
+org.freedesktop.PolicyKit1 :1.4
+org.freedesktop.RealtimeKit1 :1.25
+org.freedesktop.systemd1 :1.13
+org.freedesktop.timedate1 :1.14
+org.freedesktop.UDisks2 :1.5
+org.freedesktop.UPower :1.3
+
+## blakbox HW, 1.1269, reboot 2/3 (2026-10-19 22:16)
+boot: kernel 3.994s, userspace 6.375s, PID1 VmRSS 4300 kB, broker 355 VmRSS 4636 kB PSS 1241 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, sddm 1.989s (dbus start +0.36s tracks udevd +0.68s; sddm unchanged)
+
+## blakbox HW, 1.1269, reboot 3/3 (2026-10-19 22:18)
+boot: kernel 3.997s, userspace 6.763s, PID1 VmRSS 4172 kB, broker 357 VmRSS 4796 kB PSS 1273 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, dbus cost 0.631s, sddm 2.320s (spawned @4.118 behind nvidia-modules 3.978s; sddm does not wait on a resume, fresh boot path identical to reboot 2 -> HW noise, re-check at next natural boot)
+shutdown note: broker logs "stored 3 connections" on SIGTERM at shutdown; PID1 drops store on stop, next boot shows no resume (correct)
+
+## Review fixes @ 46f0da4 (2026-10-19 22:38)
+vmtest: PASS. Devuan VM (fresh boot on 46f0da4 PID1 + broker + wrapper): 3x live `schema-ctl restart dbus` -> "resumed 8 connections" each, owner diff 0/8 each, dbus restarts=0, nmcli + loginctl answer.
+(lightdm restarts=1 is from boot +3 s, before the restarts; same pattern at 18:46 boot = known LightDM race, not fdstore)
+Unit: test_fdstore place_fds with 40 inherited fds: old code fails, fixed passes; test_dbus_gate: python fallback sends FDSTOREREMOVE for listen/state/conn only.
+
+## /code-review fixes @ dbb0f26 (2026-10-19 22:50)
+vmtest: PASS. Devuan VM: live PID1 reexec onto dbb0f26 (31 adopted), then 3x live restart dbus -> "resumed 8 connections" each, owner diff 0/8, restarts=0.
+Unit: place_fds with soft=1500 + 200 inherited fds: old fails, fixed passes; perl fallback sends FDSTOREREMOVE + clears env.
+
+## Layer 2 + headroom @ 013f8be (2026-10-19 23:10)
+vmtest: PASS. Devuan: live reexec, then 3x live restart dbus -> "resumed 8 connections" each, owner diff 0/8, no identity-check false reject on real clients (NM, elogind, polkit, LightDM...).
+Unit: forged conn (socket from another pid) and plain-file state each -> "fails the identity check", clients EOF, bus fresh; both fail on the pre-check broker. fdstore_add refuses fd within 256 of soft NOFILE.
+
+## blakbox HW, 1.1277, reboot 1/3 (2026-10-19 23:08)
+boot: kernel 3.970s, userspace 6.531s, PID1 VmRSS 4448 kB, broker 359 VmRSS 4672 kB PSS 1292 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, dbus cost 0.262s, sddm 1.991s
+
+## blakbox HW, 1.1277, reboot 2/3 (2026-10-19 23:11)
+boot: kernel 3.989s, userspace 6.364s, PID1 VmRSS 4168 kB, broker 362 VmRSS 4800 kB PSS 1278 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, dbus cost 0.608s, sddm 2.004s
+
+## blakbox HW, 1.1277, reboot 3/3 (2026-10-19 23:13)
+boot: kernel 3.988s, userspace 6.592s, PID1 VmRSS 4384 kB, broker 358 VmRSS 4660 kB PSS 1292 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, dbus cost 0.260s, sddm 1.982s
+Summary 1277: sddm 1.991/2.004/1.982 (base 1.96-2.32), PID1 4.2-4.4 MB, broker PSS 1.28-1.29 MB. No regression.

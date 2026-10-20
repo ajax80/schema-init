@@ -317,6 +317,7 @@ typedef struct {
     int              oom_adj_set;      /* oom_score_adj= given in the .svc */
     int              oom_score_adj;    /* -1000..1000, written before exec; inherited by children */
     int              notify;           /* notify=1: gets NOTIFY_SOCKET; READY=1 promotes (fallback: stable_secs) */
+    int              fdstore_max;      /* fdstore=N: PID 1 keeps up to N fds the daemon sends (FDSTORE=1) */
     int              notify_ready;     /* READY=1 received since the last spawn */
     char             ready_bus_name[256]; /* promote once this system-bus name has an owner in our cgroup */
     char             notify_status[128]; /* last STATUS= from the daemon */

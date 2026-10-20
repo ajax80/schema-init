@@ -219,6 +219,32 @@ Other programs report to it with `schema-recorder send src=NAME kind=KIND msg=TE
 
 ---
 
+## Descriptor store (fdstore)
+
+A service with `fdstore=N` in its `.svc` file (0 to 4096, default 0 = off) can hand PID 1 file descriptors to keep across its own restarts. It sends them over `NOTIFY_SOCKET` with `FDSTORE=1` and an `FDNAME=` label; PID 1 holds them and passes them back on the next start, after any `listen=` sockets, through `LISTEN_FDS` and `LISTEN_FDNAMES`. `FDSTOREREMOVE=1` with an `FDNAME=` removes them again. PID 1 never reads or polls a stored descriptor.
+
+| Event | Stored fds |
+|---|---|
+| `schema-ctl restart`, crash and automatic restart | kept |
+| PID 1 re-exec (`dnf upgrade`), config reload | kept |
+| `schema-ctl stop`, dormant, excised, removed from config | dropped |
+| System shutdown | dropped |
+
+`schema-ctl status` shows `fds=K` for a service holding K descriptors.
+
+**schema-dbus uses it.** On SIGTERM the broker stops taking new work, drains for up to 2000 ms, snapshots its state into a memfd, and stores its listen sockets, the snapshot, and every client connection with its pending fds. Its `dbus.svc` sets `fdstore=1024`, room for every system-bus connection plus the listen and state descriptors. The next start resumes from them, so `sudo schema-ctl restart dbus` keeps every client connected. A client that has not read for 2 s while the broker drains is dropped alone. If the snapshot is unreadable, or PID 1 refused part of the store, the broker starts fresh and clients reconnect, as before.
+
+To update the broker live by hand, install the new package, then restart it:
+
+```sh
+sudo dnf upgrade schema-init
+sudo schema-ctl restart dbus
+```
+
+The package does not restart the broker for you yet. The fallback launcher (`schema-dbus-run.sh`) clears `LISTEN_*` and `NOTIFY_SOCKET` and closes the stored descriptors before it runs stock `dbus-daemon`, which would otherwise inherit them. That needs python3 or perl; with neither, only descriptors 3 to 9 are closed.
+
+---
+
 ## Crashes
 
 Fedora's initrd points `kernel.core_pattern` at `systemd-coredump`, which hands each core to a socket-activated `systemd-coredump.socket` that does not exist under schema-init, so every crash is logged as "Failed to connect to coredump service" and the core is thrown away. At boot PID 1 replaces **that** pattern, or the kernel's default `core` when the initrd sets none, with `schema-coredump` (apport, abrt or a pattern you set by hand is left alone), then raises its soft `RLIMIT_CORE` to the hard limit so services inherit a limit the helper can honour.
