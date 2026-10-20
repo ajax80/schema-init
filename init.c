@@ -2905,6 +2905,8 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     int nrs = 0, nev = 0, nfs = 0, adopted = 0, fresh = 0, rolled_back = oldexe_fd < 0;
     char err[320];
     fdstore_ent *fs = calloc(FDSTORE_MAX_TOTAL, sizeof *fs);
+    if (!fs)
+        fprintf(stderr, "[schema-init] re-exec: out of memory, fdstore dropped across re-exec\n");
 
     memset(&g, 0, sizeof g);
     g.fd_ctl = g.fd_notify = g.fd_watchdog = g.fd_client = g.fd_oldexe = -1;
@@ -2925,26 +2927,36 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     }
 
     {
-        int *keep = malloc((size_t)(6 + MAX_SERVICES * MAX_LISTEN + nfs) * sizeof *keep);
-        if (keep) {
-            int nkeep = 0;
-            keep[nkeep++] = g.fd_ctl; keep[nkeep++] = g.fd_notify; keep[nkeep++] = g.fd_watchdog;
-            keep[nkeep++] = g.fd_client; keep[nkeep++] = blob_fd; keep[nkeep++] = oldexe_fd;
-            for (int j = 0; j < nrs; j++)
-                for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
-                    keep[nkeep++] = reexec_svcs[j].rt.listen_fd[k];
-            for (int j = 0; j < nfs; j++)
-                keep[nkeep++] = fs[j].fd;
-            reexec_close_strays(keep, nkeep);
-            free(keep);
-        } else {
-            nfs = 0;
+        static int keep[6 + MAX_SERVICES * MAX_LISTEN + FDSTORE_MAX_TOTAL];
+        int nkeep = 0, nres;
+        keep[nkeep++] = g.fd_ctl; keep[nkeep++] = g.fd_notify; keep[nkeep++] = g.fd_watchdog;
+        keep[nkeep++] = g.fd_client; keep[nkeep++] = blob_fd; keep[nkeep++] = oldexe_fd;
+        for (int j = 0; j < nrs; j++)
+            for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
+                keep[nkeep++] = reexec_svcs[j].rt.listen_fd[k];
+        nres = nkeep;
+        for (int j = 0; j < nfs; j++)
+            keep[nkeep++] = fs[j].fd;
+        reexec_close_strays(keep, nkeep);
+        for (int j = 0; j < nfs; j++) {
+            int fd = fs[j].fd, dup = 0;
+            for (int k = 0; k < nres && !dup; k++)
+                dup = keep[k] == fd;
+            for (int k = 0; k < fdstore_n && !dup; k++)
+                dup = fdstore_v[k].fd == fd;
+            if (dup) {
+                fprintf(stderr, "[schema-init] re-exec: fdstore %s/%s: fd %d is not ours, skipped\n",
+                        fs[j].svc, fs[j].name, fd);
+                continue;
+            }
+            if (fcntl(fd, F_GETFD) < 0) {
+                fprintf(stderr, "[schema-init] re-exec: fdstore %s/%s: fd %d is not open, skipped\n",
+                        fs[j].svc, fs[j].name, fd);
+                continue;
+            }
+            if (fdstore_add(fs[j].svc, fd, fs[j].name, FDSTORE_MAX_TOTAL) == 0)
+                fcntl(fd, F_SETFD, FD_CLOEXEC);
         }
-    }
-    for (int j = 0; j < nfs; j++) {
-        int fd = fs[j].fd;
-        if (fdstore_add(fs[j].svc, fd, fs[j].name, FDSTORE_MAX_TOTAL) == 0)
-            fcntl(fd, F_SETFD, FD_CLOEXEC);
     }
     free(fs);
 
