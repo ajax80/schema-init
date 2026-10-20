@@ -3298,8 +3298,11 @@ static void reexec_commit(void) {
         reexec_reply_end("err: %s\n", "shutting down");
         return;
     }
-    if (fdclose_quiesce() < 0) {
-        reexec_reply_end("err: %s\n", "an fd closer has not reached close() yet, try again");
+    int q = fdclose_quiesce();
+    if (q < 0) {
+        reexec_reply_end("err: %s\n", q == -2
+            ? "an fd closer outlived SIGKILL (stuck in D state); try again later, or reboot"
+            : "an fd closer has not reached close() yet, try again");
         return;
     }
     notify_pause_track();

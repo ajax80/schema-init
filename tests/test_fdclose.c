@@ -1,3 +1,6 @@
+#include <sys/types.h>
+static int fake_kill(pid_t p, int s);
+#define FDCLOSE_KILL fake_kill
 #include "../fdclose.h"
 #include <arpa/inet.h>
 #include <assert.h>
@@ -11,6 +14,11 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
+
+static int kill_works = 1;
+static int fake_kill(pid_t p, int s) {
+    return kill_works ? kill(p, s) : 0;
+}
 
 static double now(void) {
     struct timespec t;
@@ -173,6 +181,19 @@ int main(void) {
     waitpid(idle, NULL, 0);
     fdclose_n = 0;
     printf("test_fdclose quiesce: refuses while a closer is not in close(), leaves it alone\n");
+
+    int l3, c3 = lingering(&l3, 3);
+    fd_close_detached(&c3, 1);
+    usleep(300000);
+    pid_t dst = fdclose_pids[0];
+    assert(fdclose_n == 1 && fdclose_in_close(dst));
+    kill_works = 0;
+    t0 = now();
+    assert(fdclose_quiesce() == -2 && fdclose_n == 1 && fdclose_pids[0] == dst && now() - t0 > 0.9);
+    kill_works = 1;
+    assert(waitpid(dst, NULL, 0) == dst && fdclose_reaped(dst) == 1 && fdclose_n == 0);
+    close(l3);
+    printf("test_fdclose quiesce: a closer that outlives SIGKILL refuses re-exec and stays tracked\n");
 
     for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) fdclose_pids[i] = 1000000 + i;
     fdclose_n = FDCLOSE_MAX_INFLIGHT;
