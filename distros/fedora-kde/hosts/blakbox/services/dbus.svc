@@ -4,6 +4,7 @@ oneshot=0
 needs_root=1
 critical=0
 ready_path=/run/dbus/system_bus_socket
+fdstore=1024
 # SP1 cutover form of dbus.svc: the schema-dbus C broker (schema-reclamation of
 # dbus-daemon) instead of stock dbus-daemon. schema-dbus-run.sh dissolves the
 # live busconfig into /run/schema-init/dbus.policy and execs

@@ -76,6 +76,10 @@ schema-ctl trace --since 21:00   # from a time (or an epoch) onward
 
 To record earlyoom kills too, run it with `-N /usr/local/bin/schema-recorder-earlyoom`. See [the flight recorder in the operations guide](docs/operations.md#flight-recorder).
 
+## Restarting the D-Bus broker
+
+`schema-dbus` hands its sockets and client connections to PID 1 before it stops, then picks them up again, so `sudo schema-ctl restart dbus` no longer drops every client on the bus. Any service can do the same with `fdstore=N`. See [the descriptor store in the operations guide](docs/operations.md#descriptor-store-fdstore).
+
 ## Try it
 
 Your existing boot entries (systemd, or the stock init on Devuan, Void or Artix) stay in the GRUB menu, and you can back out with one reboot at every step.
