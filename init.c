@@ -865,8 +865,8 @@ static void reap(void) {
     int i;
 
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        /* read what the dead sent before handling its death: an FDSTORE sent
-         * just before exit must land before the exit drops the store */
+        /* read what the dead sent before handling its death, so an FDSTORE
+         * sent just before exit lands before the exit drops the store */
         if (notify_fd >= 0) notify_poll(NOTIFY_DRAIN_MAX);
         if (pid == reexec_check_pid) {
             reexec_check_done(status);
@@ -2312,7 +2312,8 @@ static void notify_poll(int max_batch) {
     /* The socket is world-writable, so a sender must never be able to hold
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
     for (int batch = 0; batch < max_batch; batch++) {
-        /* every received fd needs a closer; at the cap, stop until one exits */
+        /* every received fd needs a closer. At the cap this is 1 only where
+         * SO_PASSRIGHTS could not be shut (pre-6.16): stop until one exits */
         if (fdclose_full()) return;
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
@@ -3962,7 +3963,7 @@ int main(int argc, char **argv) {
             fds[nfds].revents = 0;
             nfds++;
         }
-        /* at the closer cap notify_poll reads nothing; polling it would spin */
+        /* pre-6.16 at the closer cap notify_poll reads nothing; polling would spin */
         if (notify_fd >= 0 && !fdclose_full()) {
             fds[nfds].fd = notify_fd;
             fds[nfds].events = POLLIN;

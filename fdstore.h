@@ -69,7 +69,7 @@ static inline int fdstore_take(const char *svc, const char *name) {
     int *gone = malloc((size_t)(fdstore_n ? fdstore_n : 1) * sizeof *gone);
     for (int i = 0; i < fdstore_n; i++) {
         if (!strcmp(fdstore_v[i].svc, svc) && (!name || !strcmp(fdstore_v[i].name, name))) {
-            /* a stored fd came from a service: it closes through a closer */
+            /* a stored fd came from a service: closer, inline only on OOM */
             if (gone) gone[removed] = fdstore_v[i].fd;
             else close(fdstore_v[i].fd);
             removed++;
