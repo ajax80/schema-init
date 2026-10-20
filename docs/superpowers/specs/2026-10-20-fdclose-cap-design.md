@@ -72,6 +72,24 @@ With at most 33 closers, `fdclose_pids` becomes a static array of 33. There
 is no realloc left to fail, so every closer is tracked and `fdclose_quiesce`
 waits for every one.
 
+## Review of #393 (folded in)
+
+- Received fds are CLOEXEC, so at re-exec `execve` would close parked fds,
+  and the ones the overflow closer had not reached, inside PID 1 itself.
+  They now lose CLOEXEC across the exec, and the new image closes them as
+  strays through closers. The overflow batch is kept so a quiesce kill does
+  not forget it.
+- Re-exec settles a pause first, so the start_timeout credit is written into
+  the state the new image adopts.
+- The pause is marked the moment notify_poll stops, not one loop pass later.
+- Resume credits min(pause, time since spawn), not the whole pause.
+- The overflow closer is tagged with the sender of the first parked fd.
+- start_timeout never fires on a service already marked ready. That bug
+  predates this PR: a READY read in the same pass as the deadline was killed.
+- Not changed: the pause holds supervision for as long as the attacker can
+  keep closers stuck. That is the trade-off approved above (stall, never kill
+  or reboot).
+
 ## Found on the way (not in this PR)
 
 - A notify message is attributed to its sender's cgroup by reading
@@ -109,3 +127,4 @@ setsockopt(SO_PASSRIGHTS).
 | this PR | old | paused 24 s, logged `pid 69 uid 65534`; late ready on resume; 0 missed pets; max 33 closers; clean poweroff |
 | master | new | no pause, late ready at 8 s, max 32 closers |
 | this PR | new | same as master |
+| this PR | old, `schema-ctl reexec` mid-attack | re-exec in under 1 s with 800+ stuck fds; late ready after; 0 missed pets; no reboot |

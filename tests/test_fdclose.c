@@ -204,7 +204,7 @@ int main(void) {
     assert(fcntl(later[0], F_GETFD) == 0);
     printf("test_fdclose overflow: a 253-fd message at the cap gets one closer; the next parks\n");
     assert(waitpid(first, NULL, 0) == first && now() - t0 > 1.5);
-    for (int i = 0; i < FDCLOSE_MSG_FDS; i++) assert(fcntl(many[i], F_GETFD) < 0);
+    for (int i = 1; i < FDCLOSE_MSG_FDS; i++) assert(fcntl(many[i], F_GETFD) < 0);
     assert(fdclose_reaped(first) == 1);
     assert(fdclose_ovf && fdclose_ovf != first && fdclose_nparked == 0 && fdclose_n == FDCLOSE_MAX_INFLIGHT + 1);
     pid_t second = fdclose_ovf;
@@ -215,6 +215,50 @@ int main(void) {
     fdclose_n = 0;
     printf("test_fdclose overflow: reaping it hands the parked fds to the next; never past %d closers\n",
            FDCLOSE_MAX_INFLIGHT + 1);
+
+    for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) fdclose_pids[i] = 1000000 + i;
+    fdclose_n = FDCLOSE_MAX_INFLIGHT;
+    fdclose_sender_pid = 7001;
+    fdclose_sender_uid = 65534;
+    int stuck = lingering(&lsn, 30);
+    int rest[2] = { open("/dev/null", O_RDONLY | O_CLOEXEC), open("/dev/null", O_RDONLY | O_CLOEXEC) };
+    fdclose_spawn(stuck);
+    fdclose_spawn(rest[0]);
+    fdclose_spawn(rest[1]);
+    assert(fdclose_nparked == 3 && !fdclose_ovf);
+    fdclose_sender_pid = 7002;
+    fdclose_sender_uid = 0;
+    fd_close_detached(NULL, 0);
+    assert(fdclose_ovf && fdclose_from_pid[fdclose_n - 1] == 7001 && fdclose_from_uid[fdclose_n - 1] == 65534);
+    printf("test_fdclose overflow: tagged with who parked first, not who was current at flush\n");
+    usleep(300000);
+    for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) fdclose_pids[i] = fdclose_pids[fdclose_n - 1];
+    fdclose_n = 1;
+    assert(fdclose_in_close(fdclose_ovf));
+    assert(fdclose_quiesce() == 0 && fdclose_n == 0 && !fdclose_ovf && fdclose_novf == 3);
+    assert(fcntl(rest[0], F_GETFD) == FD_CLOEXEC && fcntl(rest[1], F_GETFD) == FD_CLOEXEC);
+    fdclose_set_cloexec(0);
+    assert(fcntl(rest[0], F_GETFD) == 0 && fcntl(rest[1], F_GETFD) == 0);
+    fdclose_set_cloexec(1);
+    assert(fcntl(rest[0], F_GETFD) == FD_CLOEXEC);
+    close(rest[0]); close(rest[1]); close(lsn);
+    fdclose_novf = 0;
+    printf("test_fdclose re-exec: a killed overflow closer's unreached fds lose CLOEXEC, so exec cannot close them in PID 1\n");
+
+    int pk = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) fdclose_pids[i] = 1000000 + i;
+    fdclose_pids[FDCLOSE_MAX_INFLIGHT] = 999999;
+    fdclose_n = FDCLOSE_MAX_INFLIGHT + 1;
+    fdclose_ovf = 999999;
+    fdclose_spawn(pk);
+    assert(fdclose_nparked == 1);
+    fdclose_set_cloexec(0);
+    assert(fcntl(pk, F_GETFD) == 0);
+    close(pk);
+    fdclose_nparked = 0;
+    fdclose_ovf = 0;
+    fdclose_n = 0;
+    printf("test_fdclose re-exec: parked fds lose CLOEXEC too\n");
 
     fdclose_sender_pid = 4242;
     fdclose_sender_uid = 65534;

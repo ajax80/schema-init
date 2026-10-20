@@ -2,8 +2,10 @@
 #define FDCLOSE_H
 
 #include <sched.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -41,6 +43,10 @@ static int fdclose_n;
 static pid_t fdclose_ovf;
 static int fdclose_parked[FDCLOSE_PARK_MAX];
 static int fdclose_nparked;
+static pid_t fdclose_park_pid;
+static uid_t fdclose_park_uid;
+static int fdclose_ovf_fds[FDCLOSE_PARK_MAX];
+static int fdclose_novf;
 static int fdclose_sock = -1;
 static int fdclose_shut;
 static pid_t fdclose_sender_pid;
@@ -87,15 +93,38 @@ static inline void fdclose_flush(void) {
         _exit(0);
     }
     if (pid < 0) return;
+    pid_t sp = fdclose_sender_pid;
+    uid_t su = fdclose_sender_uid;
+    fdclose_sender_pid = fdclose_park_pid;
+    fdclose_sender_uid = fdclose_park_uid;
     fdclose_ovf = (pid_t)pid;
     fdclose_track(fdclose_ovf);
+    fdclose_sender_pid = sp;
+    fdclose_sender_uid = su;
+    memcpy(fdclose_ovf_fds, fdclose_parked, (size_t)fdclose_nparked * sizeof *fdclose_parked);
+    fdclose_novf = fdclose_nparked;
     fdclose_nparked = 0;
+}
+
+/* Received fds are CLOEXEC. At re-exec, execve would close the parked ones,
+ * and any the overflow closer has not reached, inside PID 1 itself. Kept open
+ * across the exec, the new image closes them as strays through closers. */
+static inline void fdclose_set_cloexec(int on) {
+    for (int i = 0; i < fdclose_nparked + fdclose_novf; i++) {
+        int fd = i < fdclose_nparked ? fdclose_parked[i] : fdclose_ovf_fds[i - fdclose_nparked];
+        int fl = fcntl(fd, F_GETFD);
+        if (fl >= 0) fcntl(fd, F_SETFD, on ? (fl | FD_CLOEXEC) : (fl & ~FD_CLOEXEC));
+    }
 }
 
 static inline void fdclose_spawn(int fd) {
     if (fdclose_perfd() >= FDCLOSE_MAX_INFLIGHT) {
         fdclose_full();
         if (fdclose_nparked < FDCLOSE_PARK_MAX) {
+            if (!fdclose_nparked) {
+                fdclose_park_pid = fdclose_sender_pid;
+                fdclose_park_uid = fdclose_sender_uid;
+            }
             fdclose_parked[fdclose_nparked++] = fd;
             return;
         }
@@ -124,6 +153,7 @@ static inline void fd_close_detached(const int *fds, int n) {
 static inline int fdclose_reaped(pid_t pid) {
     for (int i = 0; i < fdclose_n; i++) {
         if (fdclose_pids[i] != pid) continue;
+        if (pid == fdclose_ovf) fdclose_novf = 0;
         fdclose_untrack(i);
         fdclose_flush();
         if (fdclose_perfd() < FDCLOSE_MAX_INFLIGHT) fdclose_passrights(1);

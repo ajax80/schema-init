@@ -1,6 +1,6 @@
 c[?7l[2J[0mSeaBIOS (version 1.17.0-10.fc44)
 Booting from ROM...
-Probing EDD (edd=off to disable)... oc[?7l[2J[0mkPREINIT softdog loaded
+Probing EDD (edd=off to disable)... oc[?7l[2JPREINIT softdog loaded
 [schema-init] opened hardware watchdog (/dev/watchdog0, timeout 10s, pet every 3333ms)
 [schema-init] hardening default: off
 [schema-init] dependency graph: no cycles
@@ -12,36 +12,36 @@ Probing EDD (edd=off to disable)... oc[?7l[2J[0mkPREINIT softdog loaded
   [4] env load
   [5] env active
   [7] settled — 4 service(s) queued
-[2026-10-20 17:59:00] mon                   spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 17:59:00] attack                spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 17:59:00] late                  spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 17:59:00] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 17:59:00] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=78
-[2026-10-20 17:59:00] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=78
-MON t=4.52 closers=32
-LATE READY sent 8.50
-[2026-10-20 17:59:08] late                  notify-ready  state=FULL_TRUST    wt=8  pid=75
-[2026-10-20 17:59:08] late                  promote       state=FUNDAMENTAL   wt=8  pid=75
-MON t=9.53 closers=32
-[2026-10-20 17:59:10] mon                   promote       state=FUNDAMENTAL   wt=8  pid=69
-[2026-10-20 17:59:10] attack                promote       state=FUNDAMENTAL   wt=8  pid=70
-MON t=14.55 closers=32
-MON t=19.57 closers=32
-MON t=24.60 closers=32
-MON t=29.62 closers=0
-MON t=34.64 closers=0
-MON t=39.65 closers=0
-MON t=44.67 closers=0
-MON t=49.69 closers=0
+[2026-10-20 18:17:15] mon                   spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] attack                spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] late                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=77
+[2026-10-20 18:17:15] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=77
+MON t=4.48 closers=32
+LATE READY sent 8.47
+[2026-10-20 18:17:23] late                  notify-ready  state=FULL_TRUST    wt=8  pid=76
+[2026-10-20 18:17:23] late                  promote       state=FUNDAMENTAL   wt=8  pid=76
+MON t=9.49 closers=32
+[2026-10-20 18:17:25] mon                   promote       state=FUNDAMENTAL   wt=8  pid=69
+[2026-10-20 18:17:25] attack                promote       state=FUNDAMENTAL   wt=8  pid=75
+MON t=14.52 closers=32
+MON t=19.53 closers=32
+MON t=24.55 closers=32
+MON t=29.57 closers=0
+MON t=34.60 closers=0
+MON t=39.62 closers=0
+MON t=44.64 closers=0
+MON t=49.66 closers=0
 MAXCLOSERS 32
-POWEROFF-AT 50.69
+POWEROFF-AT 50.66
 [schema-init] shutting down
 [schema-init] shutdown: stop 1 (+0 ms): mon attack late wdog
-[schema-init] shutdown: services down in 22 ms
+[schema-init] shutdown: services down in 24 ms
 [schema-init] shutdown: cgroups killed
 [schema-init] shutdown: SIGKILL broadcast
 [schema-init] shutdown: control socket and shm released
 [schema-init] shutdown: sync done
 [schema-init] shutdown: filesystems read-only
 [schema-init] PID 1 poweroff
-[   52.365960] reboot: Power down
+[   52.339875] reboot: Power down

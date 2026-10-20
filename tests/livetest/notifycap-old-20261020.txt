@@ -14,38 +14,40 @@ PREINIT pre-6.16 simulated: SO_PASSRIGHTS -> ENOPROTOOPT
   [4] env load
   [5] env active
   [7] settled — 4 service(s) queued
-[2026-10-20 18:00:27] mon                   spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 18:00:27] attack                spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 18:00:27] late                  spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 18:00:27] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
-[2026-10-20 18:00:27] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=77
-[2026-10-20 18:00:27] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=77
+[2026-10-20 18:17:15] mon                   spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] attack                spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] late                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=76
+[2026-10-20 18:17:15] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=76
 [schema-init] notify: reads paused, 33 fd closers stuck, 800 fds parked; senders: pid 69 uid 65534
-MON t=4.46 closers=33
-LATE READY sent 8.45
-MON t=9.48 closers=33
-[2026-10-20 18:00:37] mon                   promote       state=FUNDAMENTAL   wt=8  pid=68
-[2026-10-20 18:00:37] attack                promote       state=FUNDAMENTAL   wt=8  pid=69
-MON t=14.50 closers=33
-MON t=19.52 closers=33
+MON t=4.48 closers=33
+LATE READY sent 8.47
+MON t=9.49 closers=33
+[2026-10-20 18:17:25] mon                   promote       state=FUNDAMENTAL   wt=8  pid=68
+[2026-10-20 18:17:25] attack                promote       state=FUNDAMENTAL   wt=8  pid=69
+MON t=14.51 closers=33
+MON t=19.53 closers=33
 MON t=24.55 closers=33
 [schema-init] notify: reads resumed after 24s
-[2026-10-20 18:00:55] late                  notify-ready  state=FULL_TRUST    wt=8  pid=74
-[2026-10-20 18:00:55] late                  promote       state=FUNDAMENTAL   wt=8  pid=74
-MON t=29.57 closers=0
-MON t=34.58 closers=0
-MON t=39.60 closers=0
+[schema-init] notify: reads paused, 33 fd closers stuck, 999 fds parked; senders: pid 69 uid 65534
+[2026-10-20 18:17:43] late                  notify-ready  state=FULL_TRUST    wt=8  pid=75
+[2026-10-20 18:17:43] late                  promote       state=FUNDAMENTAL   wt=8  pid=75
+[schema-init] notify: reads resumed after 0s
+MON t=29.58 closers=0
+MON t=34.59 closers=0
+MON t=39.61 closers=0
 MON t=44.62 closers=0
 MON t=49.63 closers=0
 MAXCLOSERS 33
 POWEROFF-AT 50.64
 [schema-init] shutting down
 [schema-init] shutdown: stop 1 (+0 ms): mon attack late wdog
-[schema-init] shutdown: services down in 24 ms
+[schema-init] shutdown: services down in 22 ms
 [schema-init] shutdown: cgroups killed
 [schema-init] shutdown: SIGKILL broadcast
 [schema-init] shutdown: control socket and shm released
 [schema-init] shutdown: sync done
 [schema-init] shutdown: filesystems read-only
 [schema-init] PID 1 poweroff
-[   52.311915] reboot: Power down
+[   52.309035] reboot: Power down

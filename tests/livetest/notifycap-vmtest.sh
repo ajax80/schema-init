@@ -3,6 +3,7 @@
 # An unprivileged sender fills PID 1's fd closers with SO_LINGER sockets, then
 # floods the notify socket with fds. old = pre-6.16 simulated by a seccomp
 # wrapper failing setsockopt(SO_PASSRIGHTS); softdog stands in for hardware.
+# REEXEC=1: schema-ctl reexec at t=12, mid-attack.
 # Pass: no watchdog-abort, no start-timeout, no softdog reboot, <= 33 closers.
 set -e
 BIN="$1"; CTL="$2"; MODE="$3"; OUT="$4"; H="$(cd "$(dirname "$0")" && pwd)/notifycap"
@@ -28,6 +29,7 @@ max=0
 for t in $(seq 1 50); do
   n=$(grep -l '^schema-init' /proc/[0-9]*/comm 2>/dev/null | wc -l); n=$((n-1))
   [ $n -gt $max ] && max=$n
+  [ "$t" = 12 ] && [ -f /etc/reexec ] && echo "REEXEC $(/usr/bin/schema-ctl reexec 2>&1 | head -3 | tr '\\n' ' ') at $(cut -d' ' -f1 /proc/uptime)" >/dev/console
   [ $((t % 5)) = 0 ] && echo "MON t=$(cut -d' ' -f1 /proc/uptime) closers=$n" >/dev/console
   sleep 1
 done
@@ -42,9 +44,11 @@ printf 'name=late\nexec=/usr/bin/late.sh\nnotify=1\nstart_timeout_sec=10\nstable
 printf 'name=attack\nexec=/usr/bin/fdattack\nneeds_root=1\n' > $S/attack.svc
 printf 'name=mon\nexec=/usr/bin/mon.sh\nneeds_root=1\n' > $S/mon.svc
 ln -sf /bin/busybox "$ROOT/bin/seq"
+for a in head tr; do ln -sf /bin/busybox "$ROOT/bin/$a"; done
+[ -n "$REEXEC" ] && touch "$ROOT/etc/reexec"
 chmod +x $B/*.sh; chmod -R go-w "$ROOT"
 ( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9 ) > "$WORK/i.gz"
 timeout 120 qemu-system-x86_64 -enable-kvm -m 512 -smp 2 -no-reboot -nographic -nic none \
   -kernel "$KERNEL" -initrd "$WORK/i.gz" \
   -append "console=ttyS0 rdinit=/init panic=1 loglevel=4" </dev/null >"$OUT" 2>&1 || true
-grep -aE "PREINIT|ATTACK|LATE|MON|MAXCLOSERS|^ST |POWEROFF|notify: reads|watchdog|start-timeout|notify-ready|promote|excised|softdog|reboot|PID 1 poweroff|Kernel panic" "$OUT" | grep -v 'opened hardware' | head -60
+grep -aE "PREINIT|ATTACK|LATE|MON|MAXCLOSERS|^ST |POWEROFF|notify: reads|watchdog|start-timeout|notify-ready|promote|excised|softdog|reboot|PID 1 poweroff|REEXEC|re-exec|Kernel panic" "$OUT" | grep -v 'opened hardware' | head -60

@@ -859,6 +859,7 @@ static void timer_rearm(service_t *svc) {
 }
 
 static void notify_poll(int max_batch);
+static void notify_pause_track(void);
 
 static void reap(void) {
     int status;
@@ -1422,7 +1423,7 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FULL_TRUST:
-            if (svc->start_timeout_sec > 0 && svc->child_pid > 0 && !notify_paused_since &&
+            if (svc->start_timeout_sec > 0 && svc->child_pid > 0 && !notify_paused_since && !svc->notify_ready &&
                 now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->start_timeout_sec) {
                 /* stuck in FULL_TRUST past its window — kill it.
                  * active_kill_service() reaps the child itself, so reap() won't
@@ -2317,7 +2318,10 @@ static void notify_poll(int max_batch) {
         fdclose_sender_uid = (uid_t)-1;
         /* every received fd needs a closer or a parking place: stop while
          * a full message might not fit */
-        if (fdclose_full()) return;
+        if (fdclose_full()) {
+            notify_pause_track();
+            return;
+        }
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
         int rfds[NOTIFY_MAX_FDS], nrfds = 0;
@@ -2425,8 +2429,10 @@ static void notify_pause_track(void) {
                 svc->wd_abort_at = pet;
         }
         if (svc->inst.state == STATE_FULL_TRUST && svc->child_pid > 0 && !svc->notify_ready &&
-            (svc->notify || svc->ready_bus_name[0]))
-            svc->spawn_time_mono.tv_sec += dt;
+            (svc->notify || svc->ready_bus_name[0])) {
+            time_t ran = now - svc->spawn_time_mono.tv_sec;
+            svc->spawn_time_mono.tv_sec += dt < ran ? dt : ran;
+        }
     }
     printf("[schema-init] notify: reads resumed after %lds\n", (long)dt);
 }
@@ -3296,6 +3302,7 @@ static void reexec_commit(void) {
         reexec_reply_end("err: %s\n", "an fd closer has not reached close() yet, try again");
         return;
     }
+    notify_pause_track();
     oldexe = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
 
     /* execve resets our handlers to SIG_DFL and the kernel drops SIG_DFL
@@ -3312,6 +3319,7 @@ static void reexec_commit(void) {
             set_cloexec(fds[k], 0);
         listen_set_cloexec(0);
         fdstore_set_cloexec(0);
+        fdclose_set_cloexec(0);
         snprintf(b, sizeof b, "%d", blob);
         snprintf(o, sizeof o, "%d", oldexe);
         printf("[schema-init] re-exec: %s\n", reexec_path);
@@ -3327,6 +3335,7 @@ static void reexec_commit(void) {
             set_cloexec(fds[k], 1);
         listen_set_cloexec(1);
         fdstore_set_cloexec(1);
+        fdclose_set_cloexec(1);
     }
     sigprocmask(SIG_SETMASK, &prev, NULL);
     if (blob >= 0) close(blob);
