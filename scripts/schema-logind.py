@@ -1896,6 +1896,11 @@ class Login1Manager(dbus.service.Object):
     def CanReboot(self):
         return "yes"
 
+    # The 50 ms delay on these four "na" replies is load-bearing. KDE's
+    # LogindSessionBackend sends six CanXxx calls but counts only five
+    # replies, so the last one is dropped. The delay makes CanPowerOff and
+    # CanReboot land first; without it Plasma loses its Shut Down/Restart
+    # buttons. "na" by design: schema-init has no suspend or hibernate.
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='s',
                          async_callbacks=('reply_cb', 'error_cb'))
     def CanSuspend(self, reply_cb, error_cb):

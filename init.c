@@ -865,6 +865,8 @@ static void reap(void) {
     int i;
 
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        /* read what the dead sent before handling its death: an FDSTORE sent
+         * just before exit must land before the exit drops the store */
         if (notify_fd >= 0) notify_poll(NOTIFY_DRAIN_MAX);
         if (pid == reexec_check_pid) {
             reexec_check_done(status);
@@ -2310,6 +2312,7 @@ static void notify_poll(int max_batch) {
     /* The socket is world-writable, so a sender must never be able to hold
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
     for (int batch = 0; batch < max_batch; batch++) {
+        /* every received fd needs a closer; at the cap, stop until one exits */
         if (fdclose_full()) return;
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
@@ -2950,6 +2953,8 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         for (int j = 0; j < nfs; j++)
             keep[nkeep++] = fs[j].fd;
         reexec_close_strays(keep, nkeep);
+        /* a blob entry naming an fd PID 1 already holds would make the store
+         * own, and later close, PID 1's own socket: skip it */
         for (int j = 0; j < nfs; j++) {
             int fd = fs[j].fd, dup = 0;
             for (int k = 0; k < nres && !dup; k++)
@@ -2977,6 +2982,8 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     ctl_fd = g.fd_ctl;
     notify_fd = g.fd_notify;
     fdclose_sock = notify_fd;
+    /* the old image may have shut fd passing at the cap; this image starts
+     * with fdclose_shut = 0, so fdclose_passrights(1) would skip it */
     if (notify_fd >= 0) {
         int on = 1;
         setsockopt(notify_fd, SOL_SOCKET, SO_PASSRIGHTS, &on, sizeof on);
@@ -3955,6 +3962,7 @@ int main(int argc, char **argv) {
             fds[nfds].revents = 0;
             nfds++;
         }
+        /* at the closer cap notify_poll reads nothing; polling it would spin */
         if (notify_fd >= 0 && !fdclose_full()) {
             fds[nfds].fd = notify_fd;
             fds[nfds].events = POLLIN;

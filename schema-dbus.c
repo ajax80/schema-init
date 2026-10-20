@@ -871,7 +871,7 @@ static int on_readable(sdbus_conn *c) {
 }
 
 /* ---- planned restart through the PID 1 fdstore ---- */
-#define FDSTORE_BATCH 253
+#define FDSTORE_BATCH 253   /* the kernel's SCM_MAX_FD: more in one message is refused */
 
 static int notify_fds(const char *msg, const int *fds, int nfds) {
     static int fd = -1;
