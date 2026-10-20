@@ -1,6 +1,11 @@
 #include "../fdstore.h"
 #include <assert.h>
 #include <stdio.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+
+fdstore_ent *fdstore_v;
+int fdstore_n, fdstore_cap;
 
 static int mkfd(void) {
     int p[2];
@@ -88,6 +93,27 @@ int main(void) {
     assert(strncmp(nm, "dbus.socket:conn:conn", 21) == 0);
     assert(fdstore_fdnames("dbus", 1, tiny, sizeof tiny) == -1);
     assert(fdstore_drop("dbus") == 300);
+
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        struct rlimit rl;
+        assert(getrlimit(RLIMIT_NOFILE, &rl) == 0);
+        rl.rlim_cur = 1024;
+        if (rl.rlim_max < 1500) _exit(0);
+        assert(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+        int src[700];
+        for (int i = 0; i < 700; i++) {
+            src[i] = open("/dev/null", O_RDONLY | O_CLOEXEC);
+            assert(src[i] >= 0);
+        }
+        assert(fdstore_place_fds(src, 700) == 0);
+        for (int i = 0; i < 700; i++) assert(is_open(3 + i));
+        assert(getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur == 1024);
+        _exit(0);
+    }
+    int st;
+    assert(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
 
     printf("test_fdstore: OK\n");
     return 0;

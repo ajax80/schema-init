@@ -2301,11 +2301,11 @@ static int ctl_is_readonly(const char *line) {
 
 /* Drain the sd_notify socket. A message counts only for a notify=1 service
  * whose cgroup (or main pid, when cgroups are unavailable) holds the sender. */
-static void notify_poll(void) {
+static void notify_poll(int drain) {
     char buf[NOTIFY_MSG_MAX];
     /* The socket is world-writable, so a sender must never be able to hold
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
-    for (int batch = 0; batch < NOTIFY_BATCH_MAX; batch++) {
+    for (int batch = 0; drain || batch < NOTIFY_BATCH_MAX; batch++) {
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
         int rfds[NOTIFY_MAX_FDS], nrfds = 0;
@@ -2354,7 +2354,7 @@ static void notify_poll(void) {
                 for (int k = 0; k < nrfds; k++)
                     if (fdstore_add(svc->name, rfds[k], m.fdname, svc->fdstore_max) < 0) refused = 1;
                 nrfds = 0;
-                if (refused) service_log(svc, "fdstore-full");
+                if (refused) service_log(svc, "fdstore-refused");
             }
             if (stores && m.fdstore_remove)
                 fdstore_remove(svc->name, m.fdname);
@@ -3955,7 +3955,7 @@ int main(int argc, char **argv) {
                         struct signalfd_siginfo ssi;
                         while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi)) {
                             if (ssi.ssi_signo == SIGCHLD) {
-                                if (notify_fd >= 0) notify_poll();
+                                if (notify_fd >= 0) notify_poll(1);
                                 reap();
                             } else if (ssi.ssi_signo == SIGHUP) {
                                 /* No socket to answer on — the console message
@@ -3968,7 +3968,7 @@ int main(int argc, char **argv) {
                     } else if (fds[e].fd == ctl_fd) {
                         ctl_poll();
                     } else if (fds[e].fd == notify_fd) {
-                        notify_poll();
+                        notify_poll(0);
                     } else if (fds[e].fd == ino_fd) {
                         ready_inotify_drain();
                     }

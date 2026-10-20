@@ -1,6 +1,9 @@
 #include "service.h"
 #include "notify.h"
 #include "fdstore.h"
+
+fdstore_ent *fdstore_v;
+int fdstore_n, fdstore_cap;
 #include "caps.h"
 #include "ns.h"
 #include <linux/capability.h>
@@ -1148,12 +1151,7 @@ static int svc_pass_listen(const service_t *svc) {
     for (int i = 0; i < lo; i++) src[i] = svc->listen_fd[i];
     stored = fdstore_collect(svc->name, src + lo, sn, stored);
     n = lo + stored;
-    for (int i = 0; i < n; i++)
-        if ((src[i] = fcntl(src[i], F_DUPFD, 3 + n)) < 0) _exit(126);
-    for (int i = 0; i < n; i++) {
-        if (dup2(src[i], 3 + i) < 0) _exit(126);
-        close(src[i]);
-    }
+    if (fdstore_place_fds(src, n) < 0) _exit(126);
     size_t cap = (size_t)n * 72 + 1;
     char *names = malloc(cap);
     if (!names || fdstore_fdnames(svc->name, lo, names, cap) < 0) _exit(126);

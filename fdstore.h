@@ -3,6 +3,7 @@
 
 #include <fcntl.h>
 #include <stdio.h>
+#include <sys/resource.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -11,9 +12,8 @@
 
 typedef struct { char svc[64]; char name[64]; int fd; } fdstore_ent;
 
-fdstore_ent *fdstore_v __attribute__((weak));
-int fdstore_n __attribute__((weak));
-int fdstore_cap __attribute__((weak));
+extern fdstore_ent *fdstore_v;
+extern int fdstore_n, fdstore_cap;
 
 static inline int fdstore_valid_name(const char *name) {
     size_t n = name ? strlen(name) : 0;
@@ -119,6 +119,33 @@ static inline int fdstore_fdnames(const char *svc, int listen_open, char *out, s
     if (n < 1) return -1;
     out[o] = '\0';
     return (int)o;
+}
+
+static inline int fdstore_place_fds(const int *src, int n) {
+    struct rlimit old, cur;
+    int raised = 0, rc = -1, i, made = 0;
+    int *tmp = malloc((size_t)(n ? n : 1) * sizeof *tmp);
+    if (!tmp) return -1;
+    if (getrlimit(RLIMIT_NOFILE, &old) != 0) { free(tmp); return -1; }
+    cur = old;
+    rlim_t need = (rlim_t)n * 2 + 3 + 16;
+    if (old.rlim_cur != RLIM_INFINITY && old.rlim_cur < need) {
+        cur.rlim_cur = old.rlim_max != RLIM_INFINITY && old.rlim_max < need ? old.rlim_max : need;
+        if (cur.rlim_cur < (rlim_t)n + 3 || setrlimit(RLIMIT_NOFILE, &cur) != 0) { free(tmp); return -1; }
+        raised = 1;
+    }
+    for (i = 0; i < n; i++) {
+        if ((tmp[i] = fcntl(src[i], F_DUPFD, 3 + n)) < 0) goto out;
+        made++;
+    }
+    for (i = 0; i < n; i++)
+        if (dup2(tmp[i], 3 + i) < 0) goto out;
+    rc = 0;
+out:
+    for (i = 0; i < made; i++) close(tmp[i]);
+    if (raised) setrlimit(RLIMIT_NOFILE, &old);
+    free(tmp);
+    return rc;
 }
 
 static inline void fdstore_set_cloexec(int on) {
