@@ -32,7 +32,10 @@ While notify reads are paused by the closer cap (`fdclose_full()` returns 1):
   now, the same treatment a frozen service already gets. No service is
   aborted, and `/dev/watchdog` keeps getting pets.
 - **`start_timeout` is frozen** for notify services still waiting on READY:
-  the time spent paused does not count.
+  it is not checked while paused, and on resume their spawn time moves
+  forward by the pause.
+- **On resume every running service's pet clock restarts**, so the pause is
+  not counted against a service whose READY had not been read yet.
 - **One log line when reads pause and one when they resume**, naming the uid
   and pid of the senders whose fds the stuck closers hold. The admin can see
   who is doing it.
@@ -54,9 +57,10 @@ one closer per fd. One message can carry 253 fds (`NOTIFY_MAX_FDS`), and on
   closes the list in order. Its memory is a copy taken at clone, so PID 1
   clears its own list right away. Fds that arrive while it runs park for the
   next one.
-- The parked list is bounded by the fd headroom that `fdstore_room` already
-  uses. When it is full, `fdclose_full()` returns 1 and section 1's pause
-  applies.
+- The parked list holds up to 4096 (PID 1's hard NOFILE), so any batch
+  fits. Notify reads pause once more than 1024 - 253 are parked, so the next
+  message is sure to fit; that is section 1's pause. Before 6.16 reads now go
+  on at the cap until then, instead of stopping at 32 closers.
 
 There are never more than 33 closers. A hung fd in the overflow batch holds
 back the fds behind it in that batch, but they are capped by the headroom.
@@ -68,21 +72,40 @@ With at most 33 closers, `fdclose_pids` becomes a static array of 33. There
 is no realloc left to fail, so every closer is tracked and `fdclose_quiesce`
 waits for every one.
 
+## Found on the way (not in this PR)
+
+- A notify message is attributed to its sender's cgroup by reading
+  `/proc/<pid>/cgroup`. A message from a short-lived helper (`systemd-notify`
+  from a shell script) that has exited by the time PID 1 reads it is dropped.
+  Any read delay, including this pause, loses it. The main pid is matched
+  directly, so daemons that notify themselves are unaffected.
+
 ## Not in this PR
 
 - A closer stuck in D state can survive `fdclose_quiesce` (review item 4).
   That is the next PR.
 
-## Tests (tests/test_fdclose.c, make test)
+## Tests
 
+`make test` (tests/test_fdclose.c):
 - At the cap, a 253-fd message spawns exactly one overflow closer, and
   `fdclose_n` never goes past 33.
 - A second message at the cap parks while the overflow closer runs, then goes
   in the next batch once it is reaped.
-- When the parked list is full, `fdclose_full()` returns 1 even with
-  SO_PASSRIGHTS shut.
-- Paused: a watchdog service's `last_pet` advances, `/dev/watchdog` gets a
-  pet, and `start_timeout` does not fire. There is no watchdog test yet, so
-  this adds a new one on a fake service table.
-- Live on blakbox (7.0): 6.16+ behaviour unchanged, re-run of the #390 attack.
-  Pre-6.16 is simulated by forcing setsockopt to fail in a test build.
+- With the cap reached, `fdclose_full()` is 0 until a full message might not
+  park, then 1.
+- A closer records the pid and uid of the sender.
+
+VM, `tests/livetest/notifycap-vmtest.sh` (host kernel 7.0, softdog as
+`/dev/watchdog`, margin 10 s). Uid 65534 sends 33 SO_LINGER sockets (25 s),
+then 1000 more fds. `wdog` is notify with watchdog_sec=3 and
+watchdog_timeout_ms=4000. `late` sends READY at 8 s, with start_timeout_sec=10
+and stable_secs=600. `old` simulates pre-6.16 with a seccomp wrapper that fails
+setsockopt(SO_PASSRIGHTS).
+
+| binary | kernel | result |
+|---|---|---|
+| master | old | wdog watchdog-abort, late start-timeout + excised, **softdog reboot at 20 s** |
+| this PR | old | paused 24 s, logged `pid 69 uid 65534`; late ready on resume; 0 missed pets; max 33 closers; clean poweroff |
+| master | new | no pause, late ready at 8 s, max 32 closers |
+| this PR | new | same as master |

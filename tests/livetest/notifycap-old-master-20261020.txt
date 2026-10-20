@@ -1,0 +1,80 @@
+c[?7l[2J[0mSeaBIOS (version 1.17.0-10.fc44)
+Booting from ROM...
+Probing EDD (edd=off to disable)... oc[?7l[2J[0mkPREINIT softdog loaded
+PREINIT pre-6.16 simulated: SO_PASSRIGHTS -> ENOPROTOOPT
+[schema-init] opened hardware watchdog (/dev/watchdog0, timeout 10s, pet every 3333ms)
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] boot rail
+  [1] kernel core alive
+  [2] init
+  [3] runlevel
+  [4] env load
+  [5] env active
+  [7] settled — 4 service(s) queued
+[2026-10-20 17:59:00] mon                   spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 17:59:00] attack                spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 17:59:00] late                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 17:59:00] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 17:59:00] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=78
+[2026-10-20 17:59:00] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=78
+MON t=4.51 closers=32
+[schema-init] watchdog: 'wdog' sent no WATCHDOG=1 for 3s — SIGABRT
+[2026-10-20 17:59:06] wdog                  watchdog-abort  state=FUNDAMENTAL   wt=8  pid=78
+[2026-10-20 17:59:06] wdog                  killed-SIGABRT  state=FUNDAMENTAL   wt=8  pid=0
+[2026-10-20 17:59:06] wdog                  died          state=RECOVERY      wt=8  pid=0
+[2026-10-20 17:59:06] wdog                  friction      state=FRICTION      wt=6  pid=0
+[2026-10-20 17:59:06] wdog                  retry-deep    state=NEW_PROCESS   wt=4  pid=0
+[2026-10-20 17:59:06] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
+LATE READY sent 8.50
+MON t=9.53 closers=32
+[2026-10-20 17:59:10] mon                   promote       state=FUNDAMENTAL   wt=8  pid=69
+[2026-10-20 17:59:10] attack                promote       state=FUNDAMENTAL   wt=8  pid=70
+[2026-10-20 17:59:10] late                  start-timeout  state=FULL_TRUST    wt=8  pid=76
+[2026-10-20 17:59:10] late                  killed-SIGTERM  state=FULL_TRUST    wt=8  pid=76
+[2026-10-20 17:59:10] late                  76-excised    state=EXCISED       wt=8  pid=0
+[schema-init] watchdog: service 'wdog' missed pet window (4042ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (4292ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (4544ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (4794ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (5043ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (5294ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (5545ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (5795ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (6045ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (6295ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (6547ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (6797ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (7046ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (7297ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (7548ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (7799ms > 4000ms)
+MON t=14.55 closers=32
+[schema-init] watchdog: service 'wdog' missed pet window (8048ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (8298ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (8550ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (8800ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (9049ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (9300ms > 4000ms)
+[2026-10-20 17:59:16] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=136
+[schema-init] watchdog: service 'wdog' missed pet window (9551ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (9551ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (9802ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (10051ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (10301ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (10553ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (10803ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (11052ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (11303ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (11554ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (11805ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (12054ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (12304ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (12556ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (12806ms > 4000ms)
+MON t=19.57 closers=32
+[schema-init] watchdog: service 'wdog' missed pet window (13055ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (13306ms > 4000ms)
+[schema-init] watchdog: service 'wdog' missed pet window (13557ms > 4000ms)
+[   20.477658] softdog: Initiating system reboot

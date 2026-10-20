@@ -2402,16 +2402,28 @@ static void notify_pause_track(void) {
         notify_paused_since = now ? now : 1;
         printf("[schema-init] notify: reads paused, %d fd closers stuck, %d fds parked; senders:",
                fdclose_n, fdclose_nparked);
-        for (int i = 0; i < fdclose_n && i < 8; i++)
-            if (fdclose_from_pid[i] > 0)
-                printf(" pid %d uid %d", (int)fdclose_from_pid[i], (int)fdclose_from_uid[i]);
+        for (int i = 0, shown = 0; i < fdclose_n && shown < 8; i++) {
+            int seen = fdclose_from_pid[i] <= 0;
+            for (int j = 0; j < i && !seen; j++)
+                seen = fdclose_from_pid[j] == fdclose_from_pid[i];
+            if (seen) continue;
+            printf(" pid %d uid %d", (int)fdclose_from_pid[i], (int)fdclose_from_uid[i]);
+            shown++;
+        }
         printf("\n");
         return;
     }
     time_t dt = now - notify_paused_since;
+    struct timespec pet;
+    clock_gettime(CLOCK_MONOTONIC, &pet);
     notify_paused_since = 0;
     for (int i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
+        if (svc->child_pid > 0) {
+            svc->last_pet = pet;
+            if (svc->wd_abort_at.tv_sec || svc->wd_abort_at.tv_nsec)
+                svc->wd_abort_at = pet;
+        }
         if (svc->inst.state == STATE_FULL_TRUST && svc->child_pid > 0 && !svc->notify_ready &&
             (svc->notify || svc->ready_bus_name[0]))
             svc->spawn_time_mono.tv_sec += dt;
