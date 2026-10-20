@@ -12,20 +12,22 @@
 #include <time.h>
 #include <unistd.h>
 
-/* PID 1 never close()s an fd someone else sent it. close() of a foreign fd
+/* PID 1 hands every fd someone else sent it to a closer child. close() of one
  * can block as long as its maker likes (FUSE flush, TCP linger, even a pipe
  * whose writer faults on a FUSE mmap), and any local user can send one to the
  * 0666 notify socket. A CLONE_FILES child shares PID 1's fd table, so its
  * close() removes the fd for PID 1 too and only the child waits. Do not add
- * an inline fast path for "safe" fd types: there is none (#390). */
+ * an inline fast path for "safe" fd types: there is none (#390). The only
+ * inline closes are last resorts when no closer can be made. */
 
 /* Linux 6.16+. Older headers lack it; setsockopt then just fails. */
 #ifndef SO_PASSRIGHTS
 #define SO_PASSRIGHTS 83
 #endif
 
-/* At the cap, fd passing on the notify socket is shut until a closer exits,
- * so a sender cannot fork-bomb PID 1 one closer per fd. */
+/* At the cap, fd passing on the notify socket is shut until a closer exits;
+ * where SO_PASSRIGHTS is missing, notify reads pause instead. A soft bound:
+ * fds already queued, up to NOTIFY_MAX_FDS a message, each still get one. */
 #define FDCLOSE_MAX_INFLIGHT 32
 
 static pid_t *fdclose_pids;
@@ -53,7 +55,7 @@ static inline void fdclose_spawn(int fd) {
         _exit(0);
     }
     if (pid < 0) {
-        /* no closer possible: closing inline risks a block, leaking is worse */
+        /* no closer possible: last-resort inline close, which can block */
         close(fd);
         return;
     }
@@ -96,7 +98,8 @@ static inline int fdclose_in_close(pid_t pid) {
 
 /* Before re-exec: no closer may outlive the old image still sharing its fd
  * table, and the new image cannot track them. Wait until each has exited or
- * reached close(), then kill the rest. -1 = one never got there; refuse the
+ * reached close(), then kill the rest and give them 1 s to die; one stuck in
+ * D state can still survive. -1 = one never reached close(); refuse the
  * re-exec rather than kill it with its fd still in PID 1's table. */
 static inline int fdclose_quiesce(void) {
     struct timespec tick = { 0, 10000000 };

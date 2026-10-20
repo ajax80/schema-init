@@ -9,9 +9,10 @@
  * each service's own log fd); this exists only so foreign libsystemd / syslog(3)
  * software finds a journald-shaped endpoint. See docs/journal-sink-design.md.
  *
- * This replaces rsyslog as well: it owns /dev/log. Do not run rsyslogd beside
- * it; both would bind the same socket. An empty /var/log/messages is by design,
- * not breakage. If facility-split files are wanted, fan out here.
+ * This replaces rsyslog as well: it owns /dev/log, unlinking and rebinding it
+ * at start. An rsyslogd beside it is left on a dead socket, silently getting
+ * nothing. An empty /var/log/messages is by design, not breakage. If
+ * facility-split files are wanted, fan out here.
  */
 #include <stdio.h>
 #include <stddef.h>
