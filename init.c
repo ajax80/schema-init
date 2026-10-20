@@ -857,12 +857,15 @@ static void timer_rearm(service_t *svc) {
     }
 }
 
+static void notify_poll(int max_batch);
+
 static void reap(void) {
     int status;
     pid_t pid;
     int i;
 
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (notify_fd >= 0) notify_poll(NOTIFY_DRAIN_MAX);
         if (pid == reexec_check_pid) {
             reexec_check_done(status);
             continue;
@@ -3986,7 +3989,6 @@ int main(int argc, char **argv) {
                         struct signalfd_siginfo ssi;
                         while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi)) {
                             if (ssi.ssi_signo == SIGCHLD) {
-                                if (notify_fd >= 0) notify_poll(NOTIFY_DRAIN_MAX);
                                 reap();
                             } else if (ssi.ssi_signo == SIGHUP) {
                                 /* No socket to answer on — the console message

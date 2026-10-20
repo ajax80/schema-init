@@ -76,13 +76,20 @@ def main():
         check('fallback: stock daemon gets no LISTEN_*/NOTIFY_SOCKET',
               'LISTEN_FDS=unset LISTEN_PID=unset LISTEN_FDNAMES=unset NOTIFY_SOCKET=unset' in r.stdout, r.stdout.splitlines()[0] if r.stdout else r.stderr)
         check('fallback: stock daemon inherits no fds >= 3', fdl(r.stdout) == [] and 'fd ' not in r.stdout, str(fdl(r.stdout)))
-        if shutil.which('python3'):
-            import socket
-            nsp = os.path.join(tmp, 'notify')
+        import socket
+        nopld = os.path.join(tmp, 'nopy')
+        os.makedirs(nopld)
+        if shutil.which('perl'):
+            os.symlink(shutil.which('perl'), os.path.join(nopld, 'perl'))
+        for label, path in (('python', os.environ['PATH']), ('perl', nopld)):
+            if label == 'perl' and not shutil.which('perl'):
+                print("  SKIP  fallback (perl): perl not installed")
+                continue
+            nsp = os.path.join(tmp, 'notify-' + label)
             ns = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
             ns.bind(nsp)
             ns.settimeout(0.2)
-            r = subprocess.run([SYSTEM], env=dict(senv, LISTEN_FDNAMES='listen:state:conn:conn:other', NOTIFY_SOCKET=nsp,
+            r = subprocess.run(['/bin/sh', SYSTEM], env=dict(senv, PATH=path, LISTEN_FDNAMES='listen:state:conn:conn:other', NOTIFY_SOCKET=nsp,
                                SCHEMA_DBUS_GATE=gate + '.absent', SCHEMA_DBUS_STOCK=probe),
                                pass_fds=stored, capture_output=True, text=True, timeout=15)
             got = set()
@@ -93,7 +100,9 @@ def main():
                 pass
             ns.close()
             want = {'FDSTOREREMOVE=1\nFDNAME=' + n for n in ('listen', 'state', 'conn')}
-            check('fallback: empties the broker store in PID 1', got == want, repr(sorted(got)))
+            check('fallback (%s): empties the broker store in PID 1' % label, got == want, repr(sorted(got)))
+            if label == 'perl':
+                check('fallback (perl): stock daemon gets no LISTEN_*/NOTIFY_SOCKET', 'LISTEN_FDS=unset' in r.stdout and 'NOTIFY_SOCKET=unset' in r.stdout, r.stdout + r.stderr)
         nopyd = os.path.join(tmp, 'nopyfd')
         os.makedirs(nopyd)
         for t in ('readlink', 'dirname', 'cat', 'sed', 'tr', 'ls'):

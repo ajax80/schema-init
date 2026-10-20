@@ -116,6 +116,27 @@ int main(void) {
     int st;
     assert(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
 
+    pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        struct rlimit rl;
+        assert(getrlimit(RLIMIT_NOFILE, &rl) == 0);
+        rl.rlim_cur = 1500;
+        if (rl.rlim_max < 2000) _exit(0);
+        assert(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+        for (int i = 0; i < 200; i++) assert(open("/dev/null", O_RDONLY) >= 0);
+        int src[700];
+        for (int i = 0; i < 700; i++) {
+            src[i] = open("/dev/null", O_RDONLY | O_CLOEXEC);
+            assert(src[i] >= 0);
+        }
+        assert(fdstore_place_fds(src, 700) == 0);
+        for (int i = 0; i < 700; i++) assert(is_open(3 + i));
+        assert(getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur == 1500);
+        _exit(0);
+    }
+    assert(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+
     printf("test_fdstore: OK\n");
     return 0;
 }

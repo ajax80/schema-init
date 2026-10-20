@@ -54,10 +54,18 @@ if p:
 for k in ("LISTEN_FDS","LISTEN_PID","LISTEN_FDNAMES","NOTIFY_SOCKET"): os.environ.pop(k,None)
 os.closerange(3, 1 << 20); os.execv(sys.argv[1], sys.argv[1:])' "$STOCK" --system --nofork
         fi
-        unset LISTEN_FDS LISTEN_PID LISTEN_FDNAMES NOTIFY_SOCKET
         if command -v perl >/dev/null 2>&1; then
-            exec perl -e 'use POSIX (); POSIX::close($_) for 3..1048575; exec {$ARGV[0]} @ARGV' "$STOCK" --system --nofork
+            exec perl -e '
+use POSIX (); use Socket;
+if (my $p = $ENV{NOTIFY_SOCKET}) {
+    $p = "\0" . substr($p, 1) if $p =~ /^@/;
+    my %w = map { $_ => 1 } grep { /^(listen|state|conn|pfd)$/ } split /:/, $ENV{LISTEN_FDNAMES} // "";
+    if (socket(my $s, AF_UNIX, SOCK_DGRAM, 0)) { send($s, "FDSTOREREMOVE=1\nFDNAME=$_", 0, pack_sockaddr_un($p)) for keys %w }
+}
+delete @ENV{qw(LISTEN_FDS LISTEN_PID LISTEN_FDNAMES NOTIFY_SOCKET)};
+POSIX::close($_) for 3..1048575; exec {$ARGV[0]} @ARGV' "$STOCK" --system --nofork
         fi
+        unset LISTEN_FDS LISTEN_PID LISTEN_FDNAMES NOTIFY_SOCKET
         fdd=/proc/self/fd
         [ -d "$fdd" ] || fdd=/dev/fd
         for f in "$fdd"/*; do

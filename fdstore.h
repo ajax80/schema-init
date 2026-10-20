@@ -129,9 +129,10 @@ static inline int fdstore_place_fds(const int *src, int n) {
     if (getrlimit(RLIMIT_NOFILE, &old) != 0) { free(tmp); return -1; }
     cur = old;
     rlim_t need = (rlim_t)n * 2 + 3 + 16;
-    if (old.rlim_cur != RLIM_INFINITY && old.rlim_cur < need) {
+    if (old.rlim_max != RLIM_INFINITY && old.rlim_max < need) { free(tmp); return -1; }
+    if (old.rlim_cur != old.rlim_max) {
         cur.rlim_cur = old.rlim_max;
-        if ((old.rlim_max != RLIM_INFINITY && old.rlim_max < need) || setrlimit(RLIMIT_NOFILE, &cur) != 0) { free(tmp); return -1; }
+        if (setrlimit(RLIMIT_NOFILE, &cur) != 0) { free(tmp); return -1; }
         raised = 1;
     }
     for (i = 0; i < n; i++) {
