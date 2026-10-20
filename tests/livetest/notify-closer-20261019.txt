@@ -26,3 +26,6 @@ unit + make test + vmtest PASS. Devuan: attack status 0.020 s, live re-exec with
 rpm -Uvh --oldpackage: live re-exec, 63 adopted, kwin 2112/plasma 2553 kept, 0 failed. Backup /root/svc-bak-20261020-precloser.
 Attack as nobody (linger 20): PID1 poll_schedule_timeout, closer wait_woken, status 0.023 s; closer reaped, 0 zombies.
 Live restart dbus: resumed 54 connections, owners 114 identical (only the busctl client's own unique name differs), kwin/NM kept, 0 failed.
+
+## blakbox HW, 1.1260, reboot 1/3 (2026-10-20 00:16)
+boot: kernel 3.983s, userspace 6.795s, PID1 VmRSS 4308 kB, broker 357 VmRSS 4624 kB PSS 1288 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, 0 zombies, dbus cost 0.247s, sddm 2.186s (@4.258)
