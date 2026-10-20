@@ -2776,7 +2776,8 @@ static int load_tables(const char *svc_dir) {
 }
 
 static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
-                            eviction_t *ev, int *nev, char *err, size_t errsz) {
+                            eviction_t *ev, int *nev, fdstore_ent *fs, int maxfs, int *nfs,
+                            char *err, size_t errsz) {
     int d;
     FILE *f;
     if (lseek(fd, 0, SEEK_SET) < 0 || (d = dup(fd)) < 0) {
@@ -2788,7 +2789,7 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
         close(d);
         return -1;
     }
-    int rc = state_parse(f, g, reexec_svcs, MAX_SERVICES, nrs, ev, nev, err, errsz);
+    int rc = state_parse(f, g, reexec_svcs, MAX_SERVICES, nrs, ev, nev, fs, maxfs, nfs, err, errsz);
     fclose(f);
     return rc;
 }
@@ -2796,7 +2797,8 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
 /* Everything the new image must prove before it touches anything: the config
  * parses without a cycle, the blob parses, and the two agree. */
 static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
-                           eviction_t *ev, int *nev, char *err, size_t errsz) {
+                           eviction_t *ev, int *nev, fdstore_ent *fs, int maxfs, int *nfs,
+                           char *err, size_t errsz) {
     if (load_tables(SVC_DIR) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
         return -1;
@@ -2805,7 +2807,7 @@ static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
         snprintf(err, errsz, "no services loaded from %s", SVC_DIR);
         return -1;
     }
-    if (reexec_read_blob(blob_fd, g, nrs, ev, nev, err, errsz) < 0)
+    if (reexec_read_blob(blob_fd, g, nrs, ev, nev, fs, maxfs, nfs, err, errsz) < 0)
         return -1;
     return reexec_compare(reexec_svcs, *nrs, services, svc_count, err, errsz);
 }
@@ -2814,13 +2816,13 @@ static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
 static int reexec_check_main(int blob_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs, nev, rc;
+    int nrs, nev, nfs, rc;
     char err[320];
     /* stdout is the verdict pipe: the loader's chatter goes to stderr, so
      * the verdict is the only thing on it however much the loader says */
     int verdict = dup(STDOUT_FILENO);
     dup2(STDERR_FILENO, STDOUT_FILENO);
-    rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err);
+    rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, sizeof err);
     fflush(stdout);
     if (rc < 0) {
         dprintf(verdict, "err: %s\n", err);
@@ -2900,20 +2902,21 @@ static void listen_adopt(service_t *svc) {
 static void reexec_adopt(int blob_fd, int oldexe_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs = 0, nev = 0, adopted = 0, fresh = 0, rolled_back = oldexe_fd < 0;
+    int nrs = 0, nev = 0, nfs = 0, adopted = 0, fresh = 0, rolled_back = oldexe_fd < 0;
     char err[320];
+    fdstore_ent *fs = calloc(FDSTORE_MAX_TOTAL, sizeof *fs);
 
     memset(&g, 0, sizeof g);
     g.fd_ctl = g.fd_notify = g.fd_watchdog = g.fd_client = g.fd_oldexe = -1;
     if (oldexe_fd >= 0) {
-        if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+        if (reexec_validate(blob_fd, &g, &nrs, ev, &nev, fs, fs ? FDSTORE_MAX_TOTAL : 0, &nfs, err, sizeof err) < 0)
             reexec_fallback(blob_fd, oldexe_fd, g.fd_client, err);
     } else {
         /* We ARE the fallback: nowhere further back to go, so refusing would
          * loop. Adopt whatever the config and blob allow; only a blob we
          * cannot read at all stops us, since then there is nothing to adopt. */
         int cycles = load_tables(SVC_DIR);
-        if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, err, sizeof err) < 0)
+        if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, fs, fs ? FDSTORE_MAX_TOTAL : 0, &nfs, err, sizeof err) < 0)
             reexec_fallback(blob_fd, -1, g.fd_client, err);
         if (cycles > 0)
             fprintf(stderr, "[schema-init] re-exec fallback: dependency cycle in %s, adopting anyway\n", SVC_DIR);
@@ -2922,14 +2925,28 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     }
 
     {
-        int keep[6 + MAX_SERVICES * MAX_LISTEN] = { g.fd_ctl, g.fd_notify, g.fd_watchdog,
-                                                   g.fd_client, blob_fd, oldexe_fd };
-        int nkeep = 6;
-        for (int j = 0; j < nrs; j++)
-            for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
-                keep[nkeep++] = reexec_svcs[j].rt.listen_fd[k];
-        reexec_close_strays(keep, nkeep);
+        int *keep = malloc((size_t)(6 + MAX_SERVICES * MAX_LISTEN + nfs) * sizeof *keep);
+        if (keep) {
+            int nkeep = 0;
+            keep[nkeep++] = g.fd_ctl; keep[nkeep++] = g.fd_notify; keep[nkeep++] = g.fd_watchdog;
+            keep[nkeep++] = g.fd_client; keep[nkeep++] = blob_fd; keep[nkeep++] = oldexe_fd;
+            for (int j = 0; j < nrs; j++)
+                for (int k = 0; k < reexec_svcs[j].rt.listen_open && k < MAX_LISTEN; k++)
+                    keep[nkeep++] = reexec_svcs[j].rt.listen_fd[k];
+            for (int j = 0; j < nfs; j++)
+                keep[nkeep++] = fs[j].fd;
+            reexec_close_strays(keep, nkeep);
+            free(keep);
+        } else {
+            nfs = 0;
+        }
     }
+    for (int j = 0; j < nfs; j++) {
+        int fd = fs[j].fd;
+        if (fdstore_add(fs[j].svc, fd, fs[j].name, FDSTORE_MAX_TOTAL) == 0)
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    free(fs);
 
     ctl_fd = g.fd_ctl;
     notify_fd = g.fd_notify;
@@ -3033,7 +3050,7 @@ static int reexec_write_blob(int client, int oldexe, char *err, size_t errsz) {
         wall_ev[k] = evictions[k];
         wall_ev[k].deadline = time(NULL) + (evictions[k].deadline - mono_sec());
     }
-    state_write(f, &g, services, svc_count, wall_ev, eviction_count);
+    state_write(f, &g, services, svc_count, wall_ev, eviction_count, fdstore_v, fdstore_n);
     if (fclose(f) != 0 ||
         fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL) < 0) {
         snprintf(err, errsz, "state blob: %s", strerror(errno));
@@ -3145,7 +3162,7 @@ static void reexec_check_deadline(void) {
 static int reexec_recheck(int blob, char *err, size_t errsz) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];
-    int nrs, nev, shadow_count, shadow_grp_count, rc;
+    int nrs, nev, nfs, shadow_count, shadow_grp_count, rc;
 
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
@@ -3159,7 +3176,7 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
         rc = -1;
-    } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, err, errsz)) == 0) {
+    } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, errsz)) == 0) {
         rc = reexec_compare(reexec_svcs, nrs, shadow_services, shadow_count, err, errsz);
     }
     for (int k = 0; k < shadow_count; k++)
@@ -3203,6 +3220,7 @@ static void reexec_commit(void) {
         for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
             set_cloexec(fds[k], 0);
         listen_set_cloexec(0);
+        fdstore_set_cloexec(0);
         snprintf(b, sizeof b, "%d", blob);
         snprintf(o, sizeof o, "%d", oldexe);
         printf("[schema-init] re-exec: %s\n", reexec_path);
@@ -3217,6 +3235,7 @@ static void reexec_commit(void) {
         for (size_t k = 0; k < sizeof fds / sizeof fds[0]; k++)
             set_cloexec(fds[k], 1);
         listen_set_cloexec(1);
+        fdstore_set_cloexec(1);
     }
     sigprocmask(SIG_SETMASK, &prev, NULL);
     if (blob >= 0) close(blob);

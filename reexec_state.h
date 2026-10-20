@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <errno.h>
 #include "service.h"
+#include "fdstore.h"
 
 #define MAX_EVICTIONS     16
 
@@ -217,7 +218,8 @@ static inline int rx_get_INST(const char *v, schema_instance_t *d, size_t n) {
 
 static inline void state_write(FILE *out, const reexec_global_t *g,
                                const service_t *svcs, int nsvc,
-                               const eviction_t *ev, int nev) {
+                               const eviction_t *ev, int nev,
+                               const fdstore_ent *fs, int nfs) {
     fprintf(out, "schema-init-state %d\n", REEXEC_FORMAT);
     fprintf(out, "global");
     rx_put_STR(out, "version", g->version);
@@ -247,6 +249,12 @@ static inline void state_write(FILE *out, const reexec_global_t *g,
         rx_escape(out, ev[i].cgroup);
         fputc('\n', out);
     }
+    for (int i = 0; i < nfs; i++) {
+        fprintf(out, "fdstore");
+        rx_put_STR(out, "svc", fs[i].svc);
+        rx_put_STR(out, "name", fs[i].name);
+        fprintf(out, " fd=%d\n", fs[i].fd);
+    }
     fprintf(out, "end\n");
 }
 
@@ -255,6 +263,7 @@ static inline void state_write(FILE *out, const reexec_global_t *g,
 static inline int state_parse(FILE *in, reexec_global_t *g,
                               reexec_svc_t *svcs, int maxsvc, int *nsvc,
                               eviction_t *ev, int *nev,
+                              fdstore_ent *fs, int maxfs, int *nfs,
                               char *err, size_t errsz) {
     char *line = NULL;
     size_t cap = 0;
@@ -265,6 +274,7 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
     g->fd_ctl = g->fd_notify = g->fd_watchdog = g->fd_client = g->fd_oldexe = -1;
     *nsvc = 0;
     *nev = 0;
+    *nfs = 0;
 
 #define FAIL(...) do { snprintf(err, errsz, __VA_ARGS__); goto out; } while (0)
     while ((len = getline(&line, &cap, in)) > 0) {
@@ -286,6 +296,7 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
 
         reexec_svc_t *sv = NULL;
         eviction_t *e = NULL;
+        fdstore_ent *fe = NULL;
         if (!strcmp(rec, "svc")) {
             if (*nsvc >= maxsvc) FAIL("line %d: more than %d services", lineno, maxsvc);
             sv = &svcs[*nsvc];
@@ -294,6 +305,12 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
             if (*nev >= MAX_EVICTIONS) FAIL("line %d: more than %d evictions", lineno, MAX_EVICTIONS);
             e = &ev[*nev];
             memset(e, 0, sizeof *e);
+        } else if (!strcmp(rec, "fdstore")) {
+            if (maxfs <= 0) continue;
+            if (*nfs >= maxfs) FAIL("line %d: more than %d stored fds", lineno, maxfs);
+            fe = &fs[*nfs];
+            memset(fe, 0, sizeof *fe);
+            fe->fd = -1;
         } else if (strcmp(rec, "global") && strcmp(rec, "fd")) {
             continue;                                   /* unknown record: newer writer */
         }
@@ -321,6 +338,10 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
                 if (!strcmp(k, "pid"))           bad = rx_get_PID(v, &e->pid, 0);
                 else if (!strcmp(k, "deadline")) bad = rx_get_TIME(v, &e->deadline, 0);
                 else if (!strcmp(k, "cgroup"))   bad = rx_unescape(v, e->cgroup, sizeof e->cgroup);
+            } else if (fe) {
+                if (!strcmp(k, "svc"))       bad = rx_unescape(v, fe->svc, sizeof fe->svc);
+                else if (!strcmp(k, "name")) bad = rx_unescape(v, fe->name, sizeof fe->name);
+                else if (!strcmp(k, "fd"))   bad = rx_get_INT(v, &fe->fd, 0) || fe->fd < 0;
             } else if (!strcmp(rec, "global")) {
                 if (!strcmp(k, "version"))             bad = rx_unescape(v, g->version, sizeof g->version);
                 else if (!strcmp(k, "argv0"))          bad = rx_unescape(v, g->argv0, sizeof g->argv0);
@@ -342,6 +363,10 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
             (*nsvc)++;
         }
         if (e) (*nev)++;
+        if (fe) {
+            if (!fe->svc[0] || !fe->name[0] || fe->fd < 0) FAIL("line %d: incomplete fdstore record", lineno);
+            (*nfs)++;
+        }
     }
     if (lineno == 0) FAIL("empty state blob");
     if (!ended) FAIL("truncated state blob (no end line)");
