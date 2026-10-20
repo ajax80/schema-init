@@ -46,14 +46,12 @@ static inline int fdstore_add(const char *svc, int fd, const char *name, int max
     if (!name || !*name) name = "stored";
     if (max <= 0 || !fdstore_room(fd) || strlen(svc) >= sizeof fdstore_v->svc ||
         !fdstore_valid_name(name) || fdstore_n >= FDSTORE_MAX_TOTAL ||
-        fdstore_count(svc) >= max) {
-        fd_close_detached(&fd, 1);
+        fdstore_count(svc) >= max)
         return -1;
-    }
     if (fdstore_n == fdstore_cap) {
         int nc = fdstore_cap ? fdstore_cap * 2 : 16;
         fdstore_ent *nv = realloc(fdstore_v, (size_t)nc * sizeof *nv);
-        if (!nv) { fd_close_detached(&fd, 1); return -1; }
+        if (!nv) return -1;
         fdstore_v = nv;
         fdstore_cap = nc;
     }

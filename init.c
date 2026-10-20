@@ -2354,11 +2354,11 @@ static void notify_poll(int max_batch) {
                 if (!have_cg || !notify_cgroup_text_matches(cgtext, svc->cgroup_path)) continue;
             }
             if (stores && m.fdstore) {
-                int refused = 0;
+                int kept = 0;
                 for (int k = 0; k < nrfds; k++)
-                    if (fdstore_add(svc->name, rfds[k], m.fdname, svc->fdstore_max) < 0) refused = 1;
-                nrfds = 0;
-                if (refused) service_log(svc, "fdstore-refused");
+                    if (fdstore_add(svc->name, rfds[k], m.fdname, svc->fdstore_max) < 0) rfds[kept++] = rfds[k];
+                nrfds = kept;
+                if (kept) service_log(svc, "fdstore-refused");
             }
             if (stores && m.fdstore_remove)
                 fdstore_remove(svc->name, m.fdname);
@@ -2866,6 +2866,7 @@ static void reexec_fallback(int blob_fd, int oldexe_fd, int client_fd, const cha
 static void reexec_close_strays(const int *keep, int nkeep) {
     DIR *d = opendir("/proc/self/fd");
     struct dirent *e;
+    int strays[256], n = 0;
     if (!d) return;
     int dfd = dirfd(d);
     while ((e = readdir(d))) {
@@ -2875,9 +2876,15 @@ static void reexec_close_strays(const int *keep, int nkeep) {
         int k;
         for (k = 0; k < nkeep; k++)
             if (keep[k] == fd) break;
-        if (k == nkeep) close((int)fd);
+        if (k < nkeep) continue;
+        strays[n++] = (int)fd;
+        if (n == (int)(sizeof strays / sizeof strays[0])) {
+            fd_close_detached(strays, n);
+            n = 0;
+        }
     }
     closedir(d);
+    fd_close_detached(strays, n);
 }
 
 /* Sockets the old image held: CLOEXEC again, and only while they are still
@@ -2960,6 +2967,8 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
             }
             if (fdstore_add(fs[j].svc, fd, fs[j].name, FDSTORE_MAX_TOTAL) == 0)
                 fcntl(fd, F_SETFD, FD_CLOEXEC);
+            else
+                fd_close_detached(&fd, 1);
         }
     }
     free(fs);
@@ -2967,8 +2976,10 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     ctl_fd = g.fd_ctl;
     notify_fd = g.fd_notify;
     fdclose_sock = notify_fd;
-    fdclose_shut = 1;
-    fdclose_passrights(1);
+    if (notify_fd >= 0) {
+        int on = 1;
+        setsockopt(notify_fd, SOL_SOCKET, SO_PASSRIGHTS, &on, sizeof on);
+    }
     watchdog_fd = g.fd_watchdog;
     if (ctl_fd >= 0) fcntl(ctl_fd, F_SETFD, FD_CLOEXEC);
     if (notify_fd >= 0) fcntl(notify_fd, F_SETFD, FD_CLOEXEC);
@@ -3246,6 +3257,7 @@ static void reexec_commit(void) {
         if (watchdog_fd >= 0)
             write(watchdog_fd, "\0", 1);
         fflush(NULL);
+        fdclose_kill_all();
         {
             char *av[] = { reexec_path, "--reexec", b, o, NULL };
             fexecve(reexec_target, av, environ);
@@ -3513,9 +3525,11 @@ static int svc_signal_all(service_t *svc, int sig) {
 static void shut_reap(void) {
     pid_t pid;
     int i;
-    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0)
+    while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+        if (fdclose_reaped(pid)) continue;
         for (i = 0; i < svc_count; i++)
             if (services[i].child_pid == pid) { services[i].child_pid = 0; break; }
+    }
 }
 
 /* Stop in reverse dependency order: a service gets SIGTERM once nothing still

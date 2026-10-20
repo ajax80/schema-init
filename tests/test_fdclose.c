@@ -17,9 +17,7 @@ static double now(void) {
     return t.tv_sec + t.tv_nsec / 1e9;
 }
 
-/* A TCP socket whose peer never reads, send queue full, SO_LINGER 2 s:
- * close() blocks until the linger runs out. */
-static int lingering(int *lsn) {
+static int lingering(int *lsn, int secs) {
     struct sockaddr_in a;
     socklen_t al = sizeof a;
     memset(&a, 0, sizeof a);
@@ -39,7 +37,7 @@ static int lingering(int *lsn) {
     while (write(c, junk, sizeof junk) > 0) {}
     assert(errno == EAGAIN);
     fcntl(c, F_SETFL, 0);
-    struct linger lg = { 1, 2 };
+    struct linger lg = { 1, secs };
     assert(setsockopt(c, SOL_SOCKET, SO_LINGER, &lg, sizeof lg) == 0);
     return c;
 }
@@ -71,16 +69,16 @@ static int send_fd(const char *path, int fd) {
 }
 
 int main(void) {
-    int lsn, c = lingering(&lsn);
+    int lsn, c = lingering(&lsn, 2);
     double t0 = now();
     close(c);
     assert(now() - t0 > 1.5);
     close(lsn);
     printf("test_fdclose control: plain close blocked %.1f s\n", now() - t0);
 
-    c = lingering(&lsn);
+    c = lingering(&lsn, 2);
     t0 = now();
-    assert(fd_close_detached(&c, 1) == 1);
+    fd_close_detached(&c, 1);
     assert(now() - t0 < 0.5);
     assert(fdclose_n == 1);
     usleep(300000);
@@ -105,21 +103,49 @@ int main(void) {
     a.sun_family = AF_UNIX;
     strcpy(a.sun_path, path);
     assert(bind(r, (struct sockaddr *)&a, sizeof a) == 0);
-    fdclose_sock = r;
-    for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) fdclose_pids[fdclose_n++] = 1000000 + i;
-    int k = open("/dev/null", O_RDONLY);
-    assert(fd_close_detached(&k, 1) == -1);
-    assert(fcntl(k, F_GETFD) >= 0 && fdclose_shut == 1);
-    assert(send_fd(path, k) == EPERM);
-    assert(fdclose_reaped(1000000) == 1 && fdclose_shut == 0);
-    assert(send_fd(path, k) == 0);
-    close(k);
-    fdclose_sock = -1;
-    fdclose_n = 0;
+    int on = 0;
+    if (setsockopt(r, SOL_SOCKET, SO_PASSRIGHTS, &on, sizeof on) == 0) {
+        on = 1;
+        assert(setsockopt(r, SOL_SOCKET, SO_PASSRIGHTS, &on, sizeof on) == 0);
+        fdclose_sock = r;
+        pid_t big[FDCLOSE_MAX_INFLIGHT + 1];
+        for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) big[i] = 1000000 + i;
+        fdclose_pids = big;
+        fdclose_n = FDCLOSE_MAX_INFLIGHT;
+        fdclose_cap = FDCLOSE_MAX_INFLIGHT + 1;
+        int k = open("/dev/null", O_RDONLY);
+        int k2 = dup(k);
+        fd_close_detached(&k2, 1);
+        assert(fdclose_shut == 1 && fdclose_n == FDCLOSE_MAX_INFLIGHT + 1);
+        pid_t real = big[FDCLOSE_MAX_INFLIGHT];
+        assert(waitpid(real, NULL, 0) == real && fdclose_reaped(real) == 1);
+        assert(fcntl(k2, F_GETFD) < 0);
+        assert(fdclose_shut == 1);
+        assert(send_fd(path, k) == EPERM);
+        assert(fdclose_reaped(1000000) == 1 && fdclose_shut == 0);
+        assert(send_fd(path, k) == 0);
+        close(k);
+        fdclose_sock = -1;
+        fdclose_n = 0;
+        fdclose_pids = NULL;
+        fdclose_cap = 0;
+        printf("test_fdclose cap: over the cap still closes, fd passing refused until a closer exits\n");
+    } else {
+        printf("test_fdclose cap: SKIP (no SO_PASSRIGHTS)\n");
+    }
     close(r);
     unlink(path);
     rmdir(dir);
-    printf("test_fdclose cap: fd passing refused while closers are stuck, back after one exits\n");
+
+    c = lingering(&lsn, 30);
+    fd_close_detached(&c, 1);
+    usleep(300000);
+    assert(fdclose_n == 1);
+    t0 = now();
+    fdclose_kill_all();
+    assert(fdclose_n == 0 && now() - t0 < 1.0);
+    close(lsn);
+    printf("test_fdclose kill_all: stuck closer killed and reaped\n");
 
     printf("test_fdclose: OK\n");
     return 0;

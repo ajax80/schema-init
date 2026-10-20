@@ -8,3 +8,7 @@ make test: PASS. vmtest: PASS.
 RED  (installed PID1, master code): PID1 wchan wait_woken, sudo schema-ctl status took 33.75 s.
 GREEN (branch, live reexec, 31 adopted, 0 new): PID1 wchan do_sys_poll, closer child wait_woken, status 0.013 s; closer exited + reaped after the linger, no zombie, 0 failed.
 fdstore unaffected: live restart dbus x4 -> resumed 8 connections each, dbus restarts=0.
+
+## after /code-review fixes (2026-10-19 23:55)
+unit blakbox: test_fdclose control 2.0 s / detached instant / cap: over the cap still closes, SO_PASSRIGHTS off until a closer exits / kill_all reaps a stuck closer <1 s. make test PASS, vmtest PASS.
+Devuan 6.12: test_fdclose cap SKIP (no SO_PASSRIGHTS), rest OK. Live reexec onto fix (31 adopted). Attack (linger 90): PID1 do_sys_poll, closer wait_woken, status 0.014 s; live reexec WITH closer stuck 0.043 s, closer killed + reaped, 0 failed, no zombie; restart dbus resumed (17->18).
