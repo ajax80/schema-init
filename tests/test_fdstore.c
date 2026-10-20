@@ -137,6 +137,21 @@ int main(void) {
     }
     assert(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
 
+    pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        struct rlimit rl;
+        assert(getrlimit(RLIMIT_NOFILE, &rl) == 0);
+        rl.rlim_cur = 300;
+        assert(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+        int hi = fcntl(0, F_DUPFD, 60), lo = fcntl(0, F_DUPFD, 3);
+        assert(hi >= 60 && lo >= 0 && lo + FDSTORE_HEADROOM < 300);
+        assert(fdstore_add("room", hi, "x", 8) == -1 && !is_open(hi));
+        assert(fdstore_add("room", lo, "x", 8) == 0 && fdstore_count("room") == 1);
+        _exit(0);
+    }
+    assert(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+
     printf("test_fdstore: OK\n");
     return 0;
 }

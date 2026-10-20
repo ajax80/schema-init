@@ -976,6 +976,19 @@ static void store_and_exit(int lfd, int sigfd) {
 
 static int name_is(const char *p, size_t len, const char *s) { return len == strlen(s) && !memcmp(p, s, len); }
 
+static int state_fd_ours(int fd) {
+    struct stat st;
+    return fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid() && fcntl(fd, F_GET_SEALS) >= 0;
+}
+
+static int peer_matches(const sdbus_conn *c) {
+    struct ucred cred;
+    socklen_t len = sizeof cred;
+    if (getsockopt(c->fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0)
+        return c->uid == (uid_t)-1 && c->pid == 0;
+    return cred.uid == c->uid && cred.gid == c->gid && cred.pid == c->pid;
+}
+
 /* PID 1 handed back what the last broker stored, from fd 3 in LISTEN_FDNAMES
    order. A good snapshot resumes every connection untouched; otherwise they are
    closed and the bus starts fresh, on the stored listen socket if there is one.
@@ -1001,7 +1014,14 @@ static int resume_from_fds(const char *fdnames, int n) {
         sdbus_state_hdr h;
         sdbus_conn **cs = calloc(nconn + 1, sizeof *cs);
         int nc = 0;
-        rc = sdbus_state_read(sfd, &h, cs, nconn, &nc, cfds, nconn, pfds, npfd, g_names, g_replies);
+        rc = state_fd_ours(sfd) ? sdbus_state_read(sfd, &h, cs, nconn, &nc, cfds, nconn, pfds, npfd, g_names, g_replies) : -3;
+        for (int i = 0; rc == 0 && i < nc; i++)
+            if (!peer_matches(cs[i])) {
+                sdbus__state_drop(cs, nc);
+                sdbus_names_free(g_names); g_names = sdbus_names_new();
+                sdbus_replies_free(g_replies); g_replies = sdbus_replies_new();
+                rc = -3;
+            }
         if (rc == 0) {
             g_conns = realloc(g_conns, (g_nconns + nc + 1) * sizeof *g_conns);
             for (int i = 0; i < nc; i++) {
@@ -1019,7 +1039,7 @@ static int resume_from_fds(const char *fdnames, int n) {
     }
     if (rc != 0) {
         fprintf(stderr, "schema-dbus: fdstore state %s, starting fresh\n",
-                sfd < 0 ? "missing" : rc == -2 ? "has an unknown version" : "is malformed");
+                sfd < 0 ? "missing" : rc == -2 ? "has an unknown version" : rc == -3 ? "fails the identity check" : "is malformed");
         for (int i = 0; i < nconn; i++) close(cfds[i]);
         for (int i = 0; i < npfd; i++) close(pfds[i]);
     }

@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #define FDSTORE_MAX_TOTAL 4096
+#define FDSTORE_HEADROOM 256
 
 typedef struct { char svc[64]; char name[64]; int fd; } fdstore_ent;
 
@@ -34,9 +35,15 @@ static inline int fdstore_count(const char *svc) {
     return c;
 }
 
+static inline int fdstore_room(int fd) {
+    struct rlimit rl;
+    return getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY ||
+           (rlim_t)fd + FDSTORE_HEADROOM < rl.rlim_cur;
+}
+
 static inline int fdstore_add(const char *svc, int fd, const char *name, int max) {
     if (!name || !*name) name = "stored";
-    if (max <= 0 || strlen(svc) >= sizeof fdstore_v->svc ||
+    if (max <= 0 || !fdstore_room(fd) || strlen(svc) >= sizeof fdstore_v->svc ||
         !fdstore_valid_name(name) || fdstore_n >= FDSTORE_MAX_TOTAL ||
         fdstore_count(svc) >= max) {
         close(fd);

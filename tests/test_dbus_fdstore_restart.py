@@ -492,6 +492,44 @@ class FdstoreRestart(unittest.TestCase):
         self.assertTrue(c.unique.startswith(':1.'))
         self.assertIsNone(self.broker.poll())
 
+    def test_foreign_conn_starts_fresh(self):
+        self.start()
+        a, b = self.client(), self.client()
+        self.stop()
+        here, there = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        pid = os.fork()
+        if pid == 0:
+            x, y = socket.socketpair()
+            socket.send_fds(there, [b'x'], [x.fileno()])
+            os._exit(0)
+        os.waitpid(pid, 0)
+        _, fds, _, _ = socket.recv_fds(here, 1, 1)
+        here.close(); there.close()
+        self.pid1.replace('conn', fds[0])
+        self.resume()
+        self.assertIn('fails the identity check', self.broker.output())
+        for c in (a, b):
+            with self.assertRaises(EOFError):
+                c.recv(5)
+        self.assertTrue(self.client().unique.startswith(':1.'))
+        self.assertIsNone(self.broker.poll())
+
+    def test_foreign_state_starts_fresh(self):
+        self.start()
+        a = self.client()
+        self.stop()
+        state = dict(self.pid1.snapshot())['state']
+        blob = os.pread(state, os.fstat(state).st_size, 0)
+        path = os.path.join(self.dir, 'plain-state')
+        with open(path, 'wb') as f:
+            f.write(blob)
+        self.pid1.replace('state', os.open(path, os.O_RDONLY))
+        self.resume()
+        self.assertIn('fails the identity check', self.broker.output())
+        with self.assertRaises(EOFError):
+            a.recv(5)
+        self.assertIsNone(self.broker.poll())
+
 
 if __name__ == '__main__':
     unittest.main()
