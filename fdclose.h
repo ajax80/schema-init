@@ -1,7 +1,6 @@
 #ifndef FDCLOSE_H
 #define FDCLOSE_H
 
-#include <fcntl.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
@@ -36,10 +35,6 @@ static inline int fdclose_full(void) {
     return !fdclose_shut;
 }
 
-static inline int fdclose_safe(int fd) {
-    return fcntl(fd, F_GETPIPE_SZ) >= 0 || fcntl(fd, F_GET_SEALS) >= 0;
-}
-
 static inline void fdclose_spawn(int fd) {
     fdclose_full();
     long pid = syscall(SYS_clone, CLONE_FILES | SIGCHLD, NULL, NULL, NULL, NULL);
@@ -62,10 +57,7 @@ static inline void fdclose_spawn(int fd) {
 }
 
 static inline void fd_close_detached(const int *fds, int n) {
-    for (int i = 0; i < n; i++) {
-        if (fdclose_safe(fds[i])) close(fds[i]);
-        else fdclose_spawn(fds[i]);
-    }
+    for (int i = 0; i < n; i++) fdclose_spawn(fds[i]);
 }
 
 static inline int fdclose_reaped(pid_t pid) {

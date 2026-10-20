@@ -141,11 +141,15 @@ int main(void) {
     int pp[2];
     assert(pipe(pp) == 0);
     int mf = memfd_create("x", MFD_CLOEXEC);
-    int safe[] = { pp[0], pp[1], mf };
-    fd_close_detached(safe, 3);
-    assert(fdclose_n == 0);
-    for (int i = 0; i < 3; i++) assert(fcntl(safe[i], F_GETFD) < 0);
-    printf("test_fdclose fast path: pipe + memfd closed inline, no child\n");
+    int each[] = { pp[0], pp[1], mf };
+    fd_close_detached(each, 3);
+    assert(fdclose_n == 3);
+    for (int i = 0; i < 3; i++) {
+        pid_t q = waitpid(-1, NULL, 0);
+        assert(fdclose_reaped(q) == 1);
+    }
+    for (int i = 0; i < 3; i++) assert(fcntl(each[i], F_GETFD) < 0);
+    printf("test_fdclose per-fd: pipe + memfd each get their own closer, none inline\n");
 
     int l2, c1 = lingering(&lsn, 30), c2 = lingering(&l2, 30);
     int two[] = { c1, c2 };
