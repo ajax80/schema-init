@@ -53,3 +53,7 @@ shutdown note: broker logs "stored 3 connections" on SIGTERM at shutdown; PID1 d
 vmtest: PASS. Devuan VM (fresh boot on 46f0da4 PID1 + broker + wrapper): 3x live `schema-ctl restart dbus` -> "resumed 8 connections" each, owner diff 0/8 each, dbus restarts=0, nmcli + loginctl answer.
 (lightdm restarts=1 is from boot +3 s, before the restarts; same pattern at 18:46 boot = known LightDM race, not fdstore)
 Unit: test_fdstore place_fds with 40 inherited fds: old code fails, fixed passes; test_dbus_gate: python fallback sends FDSTOREREMOVE for listen/state/conn only.
+
+## /code-review fixes @ dbb0f26 (2026-10-19 22:50)
+vmtest: PASS. Devuan VM: live PID1 reexec onto dbb0f26 (31 adopted), then 3x live restart dbus -> "resumed 8 connections" each, owner diff 0/8, restarts=0.
+Unit: place_fds with soft=1500 + 200 inherited fds: old fails, fixed passes; perl fallback sends FDSTOREREMOVE + clears env.
