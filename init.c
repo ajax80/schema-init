@@ -2310,6 +2310,7 @@ static void notify_poll(int max_batch) {
     /* The socket is world-writable, so a sender must never be able to hold
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
     for (int batch = 0; batch < max_batch; batch++) {
+        if (fdclose_full()) return;
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
         int rfds[NOTIFY_MAX_FDS], nrfds = 0;
@@ -3235,6 +3236,10 @@ static void reexec_commit(void) {
         reexec_reply_end("err: %s\n", "shutting down");
         return;
     }
+    if (fdclose_quiesce() < 0) {
+        reexec_reply_end("err: %s\n", "an fd closer has not reached close() yet, try again");
+        return;
+    }
     oldexe = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
 
     /* execve resets our handlers to SIG_DFL and the kernel drops SIG_DFL
@@ -3257,7 +3262,6 @@ static void reexec_commit(void) {
         if (watchdog_fd >= 0)
             write(watchdog_fd, "\0", 1);
         fflush(NULL);
-        fdclose_kill_all();
         {
             char *av[] = { reexec_path, "--reexec", b, o, NULL };
             fexecve(reexec_target, av, environ);
@@ -3951,7 +3955,7 @@ int main(int argc, char **argv) {
             fds[nfds].revents = 0;
             nfds++;
         }
-        if (notify_fd >= 0) {
+        if (notify_fd >= 0 && !fdclose_full()) {
             fds[nfds].fd = notify_fd;
             fds[nfds].events = POLLIN;
             fds[nfds].revents = 0;

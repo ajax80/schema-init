@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -137,15 +138,56 @@ int main(void) {
     unlink(path);
     rmdir(dir);
 
-    c = lingering(&lsn, 30);
-    fd_close_detached(&c, 1);
-    usleep(300000);
-    assert(fdclose_n == 1);
+    int pp[2];
+    assert(pipe(pp) == 0);
+    int mf = memfd_create("x", MFD_CLOEXEC);
+    int safe[] = { pp[0], pp[1], mf };
+    fd_close_detached(safe, 3);
+    assert(fdclose_n == 0);
+    for (int i = 0; i < 3; i++) assert(fcntl(safe[i], F_GETFD) < 0);
+    printf("test_fdclose fast path: pipe + memfd closed inline, no child\n");
+
+    int l2, c1 = lingering(&lsn, 30), c2 = lingering(&l2, 30);
+    int two[] = { c1, c2 };
     t0 = now();
-    fdclose_kill_all();
+    fd_close_detached(two, 2);
+    assert(now() - t0 < 0.5 && fdclose_n == 2);
+    usleep(300000);
+    assert(fcntl(c1, F_GETFD) < 0 && fcntl(c2, F_GETFD) < 0);
+    assert(fdclose_in_close(fdclose_pids[0]) && fdclose_in_close(fdclose_pids[1]));
+    printf("test_fdclose per-fd: two stuck fds, two closers, both out of the table\n");
+    t0 = now();
+    assert(fdclose_quiesce() == 0);
     assert(fdclose_n == 0 && now() - t0 < 1.0);
     close(lsn);
-    printf("test_fdclose kill_all: stuck closer killed and reaped\n");
+    close(l2);
+    printf("test_fdclose quiesce: closers in close() killed and reaped\n");
+
+    pid_t idle = fork();
+    if (idle == 0) { pause(); _exit(0); }
+    pid_t one[1] = { idle };
+    fdclose_pids = one;
+    fdclose_n = fdclose_cap = 1;
+    t0 = now();
+    assert(fdclose_quiesce() == -1 && fdclose_n == 1 && now() - t0 > 0.9);
+    assert(kill(idle, 0) == 0);
+    kill(idle, SIGKILL);
+    waitpid(idle, NULL, 0);
+    fdclose_n = 0;
+    printf("test_fdclose quiesce: refuses while a closer is not in close(), leaves it alone\n");
+
+    pid_t fakes[FDCLOSE_MAX_INFLIGHT];
+    for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) fakes[i] = 1000000 + i;
+    fdclose_pids = fakes;
+    fdclose_cap = fdclose_n = FDCLOSE_MAX_INFLIGHT;
+    fdclose_sock = -1;
+    assert(fdclose_full() == 1);
+    fdclose_n--;
+    assert(fdclose_full() == 0);
+    fdclose_n = 0;
+    fdclose_pids = NULL;
+    fdclose_cap = 0;
+    printf("test_fdclose backpressure: at the cap without SO_PASSRIGHTS the caller must stop reading\n");
 
     printf("test_fdclose: OK\n");
     return 0;

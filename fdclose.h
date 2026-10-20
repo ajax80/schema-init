@@ -1,8 +1,10 @@
 #ifndef FDCLOSE_H
 #define FDCLOSE_H
 
+#include <fcntl.h>
 #include <sched.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -28,16 +30,25 @@ static inline void fdclose_passrights(int on) {
         fdclose_shut = !on;
 }
 
-static inline void fd_close_detached(const int *fds, int n) {
-    if (n <= 0) return;
-    if (fdclose_n >= FDCLOSE_MAX_INFLIGHT) fdclose_passrights(0);
+static inline int fdclose_full(void) {
+    if (fdclose_n < FDCLOSE_MAX_INFLIGHT) return 0;
+    fdclose_passrights(0);
+    return !fdclose_shut;
+}
+
+static inline int fdclose_safe(int fd) {
+    return fcntl(fd, F_GETPIPE_SZ) >= 0 || fcntl(fd, F_GET_SEALS) >= 0;
+}
+
+static inline void fdclose_spawn(int fd) {
+    fdclose_full();
     long pid = syscall(SYS_clone, CLONE_FILES | SIGCHLD, NULL, NULL, NULL, NULL);
     if (pid == 0) {
-        for (int i = 0; i < n; i++) close(fds[i]);
+        close(fd);
         _exit(0);
     }
     if (pid < 0) {
-        for (int i = 0; i < n; i++) close(fds[i]);
+        close(fd);
         return;
     }
     if (fdclose_n == fdclose_cap) {
@@ -50,6 +61,13 @@ static inline void fd_close_detached(const int *fds, int n) {
     fdclose_pids[fdclose_n++] = (pid_t)pid;
 }
 
+static inline void fd_close_detached(const int *fds, int n) {
+    for (int i = 0; i < n; i++) {
+        if (fdclose_safe(fds[i])) close(fds[i]);
+        else fdclose_spawn(fds[i]);
+    }
+}
+
 static inline int fdclose_reaped(pid_t pid) {
     for (int i = 0; i < fdclose_n; i++) {
         if (fdclose_pids[i] != pid) continue;
@@ -60,9 +78,34 @@ static inline int fdclose_reaped(pid_t pid) {
     return 0;
 }
 
-static inline void fdclose_kill_all(void) {
-    for (int i = 0; i < fdclose_n; i++) kill(fdclose_pids[i], SIGKILL);
+static inline int fdclose_in_close(pid_t pid) {
+    char p[64], line[64];
+    snprintf(p, sizeof p, "/proc/%d/syscall", (int)pid);
+    FILE *f = fopen(p, "re");
+    if (!f) return 0;
+    long nr = -1;
+    if (fgets(line, sizeof line, f)) sscanf(line, "%ld", &nr);
+    fclose(f);
+    return nr == SYS_close;
+}
+
+static inline int fdclose_quiesce(void) {
     struct timespec tick = { 0, 10000000 };
+    for (int t = 0; t < 100; t++) {
+        int pending = 0;
+        for (int i = 0; i < fdclose_n; ) {
+            if (waitpid(fdclose_pids[i], NULL, WNOHANG) != 0) {
+                fdclose_pids[i] = fdclose_pids[--fdclose_n];
+                continue;
+            }
+            if (!fdclose_in_close(fdclose_pids[i])) pending = 1;
+            i++;
+        }
+        if (!pending) break;
+        nanosleep(&tick, NULL);
+        if (t == 99) return -1;
+    }
+    for (int i = 0; i < fdclose_n; i++) kill(fdclose_pids[i], SIGKILL);
     for (int t = 0; t < 100 && fdclose_n; t++) {
         for (int i = 0; i < fdclose_n; ) {
             if (waitpid(fdclose_pids[i], NULL, WNOHANG) != 0) fdclose_pids[i] = fdclose_pids[--fdclose_n];
@@ -70,6 +113,7 @@ static inline void fdclose_kill_all(void) {
         }
         if (fdclose_n) nanosleep(&tick, NULL);
     }
+    return 0;
 }
 
 #endif
