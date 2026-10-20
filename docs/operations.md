@@ -232,7 +232,7 @@ A service with `fdstore=N` in its `.svc` file (0 to 4096, default 0 = off) can h
 
 `schema-ctl status` shows `fds=K` for a service holding K descriptors.
 
-**schema-dbus uses it.** On SIGTERM the broker stops taking new work, drains for up to 2000 ms, snapshots its state into a memfd, and stores its listen sockets, the snapshot, and every client connection with its pending fds. The next start resumes from them, so `sudo schema-ctl restart dbus` keeps every client connected. A client that has not read for 2 s while the broker drains is dropped alone. If the snapshot is unreadable, or PID 1 refused part of the store, the broker starts fresh and clients reconnect, as before.
+**schema-dbus uses it.** On SIGTERM the broker stops taking new work, drains for up to 2000 ms, snapshots its state into a memfd, and stores its listen sockets, the snapshot, and every client connection with its pending fds. Its `dbus.svc` sets `fdstore=1024`, room for every system-bus connection plus the listen and state descriptors. The next start resumes from them, so `sudo schema-ctl restart dbus` keeps every client connected. A client that has not read for 2 s while the broker drains is dropped alone. If the snapshot is unreadable, or PID 1 refused part of the store, the broker starts fresh and clients reconnect, as before.
 
 To update the broker live by hand, install the new package, then restart it:
 
@@ -241,7 +241,7 @@ sudo dnf upgrade schema-init
 sudo schema-ctl restart dbus
 ```
 
-The package does not restart the broker for you yet. The fallback launcher (`schema-dbus-run.sh`) closes the stored descriptors and clears `LISTEN_*` before it runs stock `dbus-daemon`, which would otherwise inherit them.
+The package does not restart the broker for you yet. The fallback launcher (`schema-dbus-run.sh`) clears `LISTEN_*` and `NOTIFY_SOCKET` and closes the stored descriptors before it runs stock `dbus-daemon`, which would otherwise inherit them. That needs python3 or perl; with neither, only descriptors 3 to 9 are closed.
 
 ---
 

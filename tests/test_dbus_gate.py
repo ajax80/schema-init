@@ -76,16 +76,22 @@ def main():
         check('fallback: stock daemon gets no LISTEN_*/NOTIFY_SOCKET',
               'LISTEN_FDS=unset LISTEN_PID=unset LISTEN_FDNAMES=unset NOTIFY_SOCKET=unset' in r.stdout, r.stdout.splitlines()[0] if r.stdout else r.stderr)
         check('fallback: stock daemon inherits no fds >= 3', fdl(r.stdout) == [] and 'fd ' not in r.stdout, str(fdl(r.stdout)))
-        nopy = os.path.join(tmp, 'nopyfd')
-        os.makedirs(nopy)
+        nopyd = os.path.join(tmp, 'nopyfd')
+        os.makedirs(nopyd)
         for t in ('readlink', 'dirname', 'cat', 'sed', 'tr', 'ls'):
             src = shutil.which(t)
             if src:
-                os.symlink(src, os.path.join(nopy, t))
-        r = subprocess.run([SYSTEM], env=dict(senv, PATH=nopy, SCHEMA_DBUS_GATE=gate + '.absent', SCHEMA_DBUS_STOCK=probe),
-                           pass_fds=stored, capture_output=True, text=True, timeout=15)
-        check('fallback without python3: no fds >= 3, no LISTEN_*',
-              'LISTEN_FDS=unset' in r.stdout and fdl(r.stdout) == [] and 'fd ' not in r.stdout, r.stdout + r.stderr)
+                os.symlink(src, os.path.join(nopyd, t))
+        low = lambda out: [n for n in fdl(out) if n <= 9]
+        for sh in [None] + ([shutil.which('dash')] if shutil.which('dash') else []):
+            argv = [SYSTEM] if sh is None else [sh, SYSTEM]
+            label = 'sh' if sh is None else 'dash'
+            r = subprocess.run(argv, env=dict(senv, PATH=nopyd, SCHEMA_DBUS_GATE=gate + '.absent', SCHEMA_DBUS_STOCK=probe),
+                               pass_fds=stored, capture_output=True, text=True, timeout=15)
+            check('fallback without python3/perl (%s): no LISTEN_*, no fds 3-9' % label,
+                  'LISTEN_FDS=unset' in r.stdout and low(r.stdout) == [], r.stdout + r.stderr)
+        if not shutil.which('dash'):
+            print("  SKIP  fallback without python3/perl (dash): dash not installed")
         open(gate, 'w').close()
         r = subprocess.run([SYSTEM], env=dict(senv, SCHEMA_DBUS_GATE=gate, SCHEMA_DBUS_BROKER=probe,
                            SCHEMA_DBUS_CACHE=os.path.join(tmp, 'c2', 'x'), SCHEMA_DBUS_POLDIR=os.path.join(tmp, 'r2')),
@@ -117,7 +123,7 @@ def main():
             check('cold: dissolves into the run dir and fills the cache',
                   first == os.path.join(poldir, 'dbus.policy') and os.path.getsize(cache) > 0
                   and open(cache).read() == open(first).read(), first)
-            nopy = os.path.join(tmp, 'nopyfd')
+            nopy = os.path.join(tmp, 'nopy')
             os.mkdir(nopy)
             with open(os.path.join(nopy, 'python3'), 'w') as f:
                 f.write('#!/bin/sh\nexit 1\n')

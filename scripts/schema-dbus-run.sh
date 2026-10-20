@@ -46,10 +46,14 @@ fallback() {
         if command -v python3 >/dev/null 2>&1; then
             exec python3 -c 'import os,sys; os.closerange(3, 1 << 20); os.execv(sys.argv[1], sys.argv[1:])' "$STOCK" --system --nofork
         fi
-        for f in /proc/self/fd/* /dev/fd/*; do
+        if command -v perl >/dev/null 2>&1; then
+            exec perl -e 'use POSIX (); POSIX::close($_) for 3..1048575; exec {$ARGV[0]} @ARGV' "$STOCK" --system --nofork
+        fi
+        fdd=/proc/self/fd
+        [ -d "$fdd" ] || fdd=/dev/fd
+        for f in "$fdd"/*; do
             n=${f##*/}
-            case $n in ''|*[!0-9]*|[012]) continue ;; esac
-            eval "exec $n>&-" 2>/dev/null
+            case $n in [3-9]) eval "exec $n>&-" 2>/dev/null || : ;; esac
         done
     fi
     exec "$STOCK" --system --nofork
