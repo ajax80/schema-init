@@ -21,3 +21,8 @@ Devuan 6.12: 40 attackers -> 28 closers, status 0.015 s, live re-exec with 28 st
 ## fast path removed (2026-10-20 00:10)
 Security review: pipe_release takes pipe->mutex, which a writer can hold while faulting on a FUSE-mmapped buffer -> PID1 close of a pipe can block. memfd/shmem eviction not provably lock-free either. Every received fd now gets its own closer, no inline close.
 unit + make test + vmtest PASS. Devuan: attack status 0.020 s, live re-exec with closer stuck ok, restart dbus resumed (19->20), 0 failed, 0 zombies.
+
+## blakbox HW (kernel 7.0), local RPM 0.4.15-1.1260.20261020git8e75872 (2026-10-20 00:15)
+rpm -Uvh --oldpackage: live re-exec, 63 adopted, kwin 2112/plasma 2553 kept, 0 failed. Backup /root/svc-bak-20261020-precloser.
+Attack as nobody (linger 20): PID1 poll_schedule_timeout, closer wait_woken, status 0.023 s; closer reaped, 0 zombies.
+Live restart dbus: resumed 54 connections, owners 114 identical (only the busctl client's own unique name differs), kwin/NM kept, 0 failed.
