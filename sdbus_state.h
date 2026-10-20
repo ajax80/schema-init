@@ -8,6 +8,7 @@
    together. Native-endian fixed-width integers; strings and blobs are u32 len +
    bytes. */
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@
 
 #define SDBUS_STATE_MAGIC 0x53444253u
 #define SDBUS_STATE_VERSION 1u
+#define SDBUS_STATE_MAX_BYTES (64u * 1024 * 1024)
 
 typedef struct { unsigned next_id; unsigned next_unique; uint32_t driver_serial; } sdbus_state_hdr;
 
@@ -55,7 +57,7 @@ static inline int sdbus_state_write(int memfd, const sdbus_state_hdr *h, sdbus_c
     sdbus__sw_u32(&w, SDBUS_STATE_MAGIC);
     sdbus__sw_u32(&w, SDBUS_STATE_VERSION);
     sdbus__sw_u32(&w, h->next_id);
-    sdbus__sw_u32(&w, h->next_unique);
+    sdbus__sw_u32(&w, names->next_unique);
     sdbus__sw_u32(&w, h->driver_serial);
 
     sdbus__sw_u32(&w, (uint32_t)nconns);
@@ -169,7 +171,7 @@ static inline int sdbus_state_read(int memfd, sdbus_state_hdr *h, sdbus_conn **c
                                    sdbus_replies *replies) {
     *nconns = 0;
     struct stat st;
-    if (fstat(memfd, &st) != 0 || st.st_size < 0) return -1;
+    if (fstat(memfd, &st) != 0 || st.st_size < 0 || (uint64_t)st.st_size > SDBUS_STATE_MAX_BYTES) return -1;
     size_t sz = (size_t)st.st_size;
     unsigned char *buf = malloc(sz ? sz : 1);
     if (!buf) return -1;
@@ -182,6 +184,11 @@ static inline int sdbus_state_read(int memfd, sdbus_state_hdr *h, sdbus_conn **c
 
     sdbus__sr r = { buf, sz, 0, 0 };
     int rc = -1, built = 0, used_pfds = 0;
+    if (names->n_names || names->n_uniques) { free(buf); return -1; }
+    sdbus_names *sn = sdbus_names_new();
+    sdbus_reply_ent *rents = NULL;
+    uint32_t nrents = 0;
+    if (!sn) { free(buf); return -1; }
     uint32_t nc = 0;
     if (sdbus__sr_u32(&r) != SDBUS_STATE_MAGIC) goto out;
     if (sdbus__sr_u32(&r) != SDBUS_STATE_VERSION) { rc = r.bad ? -1 : -2; goto out; }
@@ -210,15 +217,15 @@ static inline int sdbus_state_read(int memfd, sdbus_state_hdr *h, sdbus_conn **c
         char *uq = sdbus__sr_str(&r);
         if (!uq) goto out;
         if (*uq) {
-            names->uniques = realloc(names->uniques, (names->n_uniques + 1) * sizeof *names->uniques);
-            names->uniques[names->n_uniques].conn_id = c->id;
-            names->uniques[names->n_uniques].unique = uq;
-            c->unique = names->uniques[names->n_uniques++].unique;
+            sn->uniques = realloc(sn->uniques, (sn->n_uniques + 1) * sizeof *sn->uniques);
+            sn->uniques[sn->n_uniques].conn_id = c->id;
+            sn->uniques[sn->n_uniques].unique = uq;
+            c->unique = sn->uniques[sn->n_uniques++].unique;
         } else {
             free(uq);
         }
         uint32_t inl = sdbus__sr_u32(&r);
-        if (r.bad || inl > r.len - r.off) goto out;
+        if (r.bad || inl > r.len - r.off || inl > INT_MAX) goto out;
         if (inl) { sdbus_conn_in_append(c, r.p + r.off, (int)inl); r.off += inl; }
         uint32_t np = sdbus__sr_u32(&r);
         if (r.bad || np > SDBUS_MAX_PENDING_FDS || (int)np > npfds - used_pfds) goto out;
@@ -235,7 +242,7 @@ static inline int sdbus_state_read(int memfd, sdbus_state_hdr *h, sdbus_conn **c
     for (uint32_t i = 0; i < nn; i++) {
         char *nm = sdbus__sr_str(&r);
         if (!nm) goto out;
-        sdbus_name_ent *e = sdbus__name_intern(names, nm);
+        sdbus_name_ent *e = sdbus__name_intern(sn, nm);
         free(nm);
         uint32_t nh = sdbus__sr_u32(&r);
         if (r.bad || nh > r.len - r.off) goto out;
@@ -258,15 +265,28 @@ static inline int sdbus_state_read(int memfd, sdbus_state_hdr *h, sdbus_conn **c
         e.deadline = now + (long)sdbus__sr_u32(&r);
         e.live = 1;
         if (r.bad) goto out;
-        replies->ents = realloc(replies->ents, (replies->n + 1) * sizeof *replies->ents);
-        replies->ents[replies->n++] = e;
+        sdbus_reply_ent *ne = realloc(rents, (nrents + 1) * sizeof *rents);
+        if (!ne) goto out;
+        rents = ne;
+        rents[nrents++] = e;
     }
 
-    names->next_unique = h->next_unique;
+    if (used_pfds != npfds) goto out;
+    sn->next_unique = h->next_unique;
+    {
+        sdbus_names tmp = *names;
+        *names = *sn;
+        *sn = tmp;
+    }
+    replies->ents = realloc(replies->ents, (replies->n + nrents) * sizeof *replies->ents);
+    if (!replies->ents) replies->n = 0;
+    else { for (uint32_t i = 0; i < nrents; i++) replies->ents[replies->n++] = rents[i]; }
     *nconns = (int)nc;
     rc = 0;
 out:
     if (rc != 0) sdbus__state_drop(conns, built);
+    sdbus_names_free(sn);
+    free(rents);
     free(buf);
     return rc;
 }

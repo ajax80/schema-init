@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "../sdbus_state.h"
 #include <assert.h>
 #include <stdio.h>
@@ -22,6 +21,7 @@ static int rule_has(sdbus_matchset *m, const char *raw) {
 static int snapshot(int mfd, sdbus_conn **cs, int n, sdbus_names *nm, sdbus_replies *rp,
                     unsigned next_id, unsigned next_unique) {
     sdbus_state_hdr h = { next_id, next_unique, 99 };
+    nm->next_unique = next_unique;
     return sdbus_state_write(mfd, &h, cs, n, nm, rp);
 }
 
@@ -34,6 +34,7 @@ int main(void) {
     sdbus_conn *cs[3];
     cs[0] = mk(1, 10); cs[1] = mk(2, 11); cs[2] = mk(3, 12);
     cs[0]->authed = 1; cs[0]->saw_nul = 1;
+    sdbus_conn_in_append(cs[0], "AUTH EXTERNAL", 13);
     cs[1]->authed = cs[1]->auth_ok = cs[1]->said_hello = cs[1]->negotiated_fd = cs[1]->saw_nul = 1;
     cs[1]->uid = 1000; cs[1]->gid = 1001; cs[1]->pid = 4242;
     cs[1]->gids[0] = 1001; cs[1]->gids[1] = 27; cs[1]->n_gids = 2;
@@ -57,6 +58,14 @@ int main(void) {
     rp->ents[0].deadline = sdbus__now_ms() + 5000;
 
     assert(snapshot(mfd, cs, 3, nm, rp, 41, 17) == 0);
+    {
+        sdbus_names *nx = sdbus_names_new(); sdbus_replies *rx = sdbus_replies_new();
+        sdbus_state_hdr hx = {0}; sdbus_conn *ox[8]; int nox = 0; int fx[3] = {20, 21, 22};
+        int p3[2] = {88, 89};
+        assert(sdbus_state_read(mfd, &hx, ox, 8, &nox, fx, 3, p3, 2, nx, rx) == -1);
+        assert(nox == 0 && nx->n_names == 0 && nx->n_uniques == 0 && rx->n == 0);
+        sdbus_names_free(nx); sdbus_replies_free(rx);
+    }
     free_conns(cs, 3);
     sdbus_names_free(nm); sdbus_replies_free(rp);
 
@@ -74,6 +83,7 @@ int main(void) {
     assert(rc[0]->fd == 20 && rc[1]->fd == 21 && rc[2]->fd == 22);
     assert(rc[0]->authed && !rc[0]->auth_ok && !rc[0]->said_hello && rc[0]->saw_nul && !rc[0]->negotiated_fd);
     assert(rc[0]->unique == NULL);
+    assert(rc[0]->in_len == 13 && !memcmp(rc[0]->in, "AUTH EXTERNAL", 13));
     assert(rc[1]->authed && rc[1]->auth_ok && rc[1]->said_hello && rc[1]->negotiated_fd && rc[1]->saw_nul);
     assert(rc[1]->uid == 1000 && rc[1]->gid == 1001 && rc[1]->pid == 4242);
     assert(rc[1]->n_gids == 2 && rc[1]->gids[0] == 1001 && rc[1]->gids[1] == 27);
@@ -162,6 +172,32 @@ int main(void) {
         assert(no == 0);
         free_conns(c3, 3);
         sdbus_names_free(n3); sdbus_replies_free(r3); sdbus_names_free(n4); sdbus_replies_free(r4);
+    }
+
+    {
+        sdbus_names *n3 = sdbus_names_new();
+        sdbus_replies *r3 = sdbus_replies_new();
+        sdbus_conn *c3[3] = { mk(1, 5), mk(2, 6), mk(3, 7) };
+        c3[1]->unique = sdbus_names_alloc_unique(n3, 2);
+        sdbus_transition t3[2]; int nt3;
+        sdbus_names_request(n3, 2, "org.z", 0, t3, &nt3);
+        sdbus_replies_record(r3, 2, 9, 1);
+        n3->next_unique = 17;
+        assert(snapshot(mfd, c3, 3, n3, r3, 4, 17) == 0);
+        off_t sz = lseek(mfd, 0, SEEK_END);
+        for (off_t cut = sz - 1; cut > sz - 40; cut--) {
+            assert(ftruncate(mfd, cut) == 0);
+            sdbus_state_hdr h3 = {0};
+            sdbus_names *n4 = sdbus_names_new();
+            sdbus_replies *r4 = sdbus_replies_new();
+            n4->next_unique = 5;
+            sdbus_conn *o[4]; int no = 0; int f3[3] = {30, 31, 32};
+            assert(sdbus_state_read(mfd, &h3, o, 4, &no, f3, 3, NULL, 0, n4, r4) == -1);
+            assert(no == 0 && n4->n_uniques == 0 && n4->n_names == 0 && r4->n == 0 && n4->next_unique == 5);
+            sdbus_names_free(n4); sdbus_replies_free(r4);
+        }
+        free_conns(c3, 3);
+        sdbus_names_free(n3); sdbus_replies_free(r3);
     }
 
     close(mfd);
