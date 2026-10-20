@@ -69,6 +69,7 @@ static int          notify_fd = -1;
 static int          sig_fd   = -1;
 static int          watchdog_fd = -1;
 static int64_t      watchdog_pet_ms = 5000;
+static time_t       notify_paused_since = 0;   /* mono sec, 0 = notify reads flowing */
 static int          system_under_pressure = 0;
 static int          pass_changed = 1;   /* first pass, or last pass moved a service: run at once */
 #define PASS_RERUN_MAX  16                /* ...at most this many passes in a row */
@@ -385,7 +386,7 @@ static void watchdog_pet(void) {
 
     int i;
     int pet_ok = 1;
-    for (i = 0; i < svc_count; i++) {
+    for (i = 0; i < svc_count && !notify_paused_since; i++) {
         service_t *svc = &services[i];
         if (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0) {
             long elapsed_ms = (now.tv_sec - svc->last_pet.tv_sec) * 1000 +
@@ -412,7 +413,7 @@ static void service_watchdog_tick(void) {
         service_t *svc = &services[i];
         if (svc->wd_armed_sec <= 0 || svc->child_pid <= 0 || !svc->notify_ready || svc->ctl_killed)
             continue;
-        if (svc->is_frozen) {
+        if (svc->is_frozen || notify_paused_since) {
             svc->last_pet = now;
             if (svc->wd_abort_at.tv_sec || svc->wd_abort_at.tv_nsec)
                 svc->wd_abort_at = now;
@@ -1421,7 +1422,7 @@ static void tick_service(service_t *svc,
             break;
 
         case STATE_FULL_TRUST:
-            if (svc->start_timeout_sec > 0 && svc->child_pid > 0 &&
+            if (svc->start_timeout_sec > 0 && svc->child_pid > 0 && !notify_paused_since &&
                 now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->start_timeout_sec) {
                 /* stuck in FULL_TRUST past its window — kill it.
                  * active_kill_service() reaps the child itself, so reap() won't
@@ -2312,8 +2313,10 @@ static void notify_poll(int max_batch) {
     /* The socket is world-writable, so a sender must never be able to hold
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
     for (int batch = 0; batch < max_batch; batch++) {
-        /* every received fd needs a closer. At the cap this is 1 only where
-         * SO_PASSRIGHTS could not be shut (pre-6.16): stop until one exits */
+        fdclose_sender_pid = 0;
+        fdclose_sender_uid = (uid_t)-1;
+        /* every received fd needs a closer or a parking place: stop while
+         * a full message might not fit */
         if (fdclose_full()) return;
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
@@ -2322,6 +2325,8 @@ static void notify_poll(int max_batch) {
         if (n == 0) return;
         if (n == -2) return;
         if (n < 0) continue;
+        fdclose_sender_pid = pid;
+        fdclose_sender_uid = uid;
         struct notify_msg m;
         int acted = notify_parse(buf, (size_t)n, &m);
         if (!acted) {
@@ -2381,6 +2386,37 @@ static void notify_poll(int max_batch) {
         }
         fd_close_detached(rfds, nrfds);
     }
+    fdclose_sender_pid = 0;
+    fdclose_sender_uid = (uid_t)-1;
+}
+
+/* Notify reads paused because every closer is stuck: READY and WATCHDOG
+ * cannot arrive, and any local user can cause it. Hold watchdog judgment and
+ * start_timeout while it lasts, so the stall cannot kill services or stop
+ * the hardware watchdog's pets. Logged with who sent the stuck fds. */
+static void notify_pause_track(void) {
+    int paused = notify_fd >= 0 && fdclose_full();
+    if (paused == (notify_paused_since != 0)) return;
+    time_t now = mono_sec();
+    if (paused) {
+        notify_paused_since = now ? now : 1;
+        printf("[schema-init] notify: reads paused, %d fd closers stuck, %d fds parked; senders:",
+               fdclose_n, fdclose_nparked);
+        for (int i = 0; i < fdclose_n && i < 8; i++)
+            if (fdclose_from_pid[i] > 0)
+                printf(" pid %d uid %d", (int)fdclose_from_pid[i], (int)fdclose_from_uid[i]);
+        printf("\n");
+        return;
+    }
+    time_t dt = now - notify_paused_since;
+    notify_paused_since = 0;
+    for (int i = 0; i < svc_count; i++) {
+        service_t *svc = &services[i];
+        if (svc->inst.state == STATE_FULL_TRUST && svc->child_pid > 0 && !svc->notify_ready &&
+            (svc->notify || svc->ready_bus_name[0]))
+            svc->spawn_time_mono.tv_sec += dt;
+    }
+    printf("[schema-init] notify: reads resumed after %lds\n", (long)dt);
 }
 
 static int fdstore_keep(const char *name, void *ctx) {
@@ -3963,8 +3999,9 @@ int main(int argc, char **argv) {
             fds[nfds].revents = 0;
             nfds++;
         }
-        /* pre-6.16 at the closer cap notify_poll reads nothing; polling would spin */
-        if (notify_fd >= 0 && !fdclose_full()) {
+        /* paused, notify_poll reads nothing; polling would spin */
+        notify_pause_track();
+        if (notify_fd >= 0 && !notify_paused_since) {
             fds[nfds].fd = notify_fd;
             fds[nfds].events = POLLIN;
             fds[nfds].revents = 0;

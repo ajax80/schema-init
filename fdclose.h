@@ -4,7 +4,6 @@
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -25,15 +24,31 @@
 #define SO_PASSRIGHTS 83
 #endif
 
-/* At the cap, fd passing on the notify socket is shut until a closer exits;
- * where SO_PASSRIGHTS is missing, notify reads pause instead. A soft bound:
- * fds already queued, up to NOTIFY_MAX_FDS a message, each still get one. */
+/* At most MAX_INFLIGHT closers with one fd each, plus one overflow closer.
+ * At the cap, fd passing on the notify socket is shut until a closer exits.
+ * Fds that still arrive (queued before the shut, or no SO_PASSRIGHTS before
+ * 6.16) park here, and the overflow closer takes the whole parked list at
+ * once. Its memory is a copy taken at clone, so PID 1 empties its own list. */
 #define FDCLOSE_MAX_INFLIGHT 32
+#define FDCLOSE_PARK_MAX     4096   /* PID 1's hard NOFILE: room for any batch */
+#define FDCLOSE_PARK_PAUSE   1024   /* notify reads stop past this many parked */
+#define FDCLOSE_MSG_FDS      253    /* SCM_MAX_FD: most one message can carry */
 
-static pid_t *fdclose_pids;
-static int fdclose_n, fdclose_cap;
+static pid_t fdclose_pids[FDCLOSE_MAX_INFLIGHT + 1];
+static pid_t fdclose_from_pid[FDCLOSE_MAX_INFLIGHT + 1];
+static uid_t fdclose_from_uid[FDCLOSE_MAX_INFLIGHT + 1];
+static int fdclose_n;
+static pid_t fdclose_ovf;
+static int fdclose_parked[FDCLOSE_PARK_MAX];
+static int fdclose_nparked;
 static int fdclose_sock = -1;
 static int fdclose_shut;
+static pid_t fdclose_sender_pid;
+static uid_t fdclose_sender_uid = (uid_t)-1;
+
+static inline int fdclose_perfd(void) {
+    return fdclose_n - (fdclose_ovf != 0);
+}
 
 static inline void fdclose_passrights(int on) {
     if (fdclose_sock < 0 || fdclose_shut == !on) return;
@@ -41,14 +56,53 @@ static inline void fdclose_passrights(int on) {
         fdclose_shut = !on;
 }
 
+/* 1 = the caller must stop reading the notify socket: the next message could
+ * carry more fds than are left to park. */
 static inline int fdclose_full(void) {
-    if (fdclose_n < FDCLOSE_MAX_INFLIGHT) return 0;
+    if (fdclose_perfd() < FDCLOSE_MAX_INFLIGHT) return 0;
     fdclose_passrights(0);
-    return !fdclose_shut;
+    return fdclose_nparked > FDCLOSE_PARK_PAUSE - FDCLOSE_MSG_FDS;
+}
+
+static inline void fdclose_track(pid_t pid) {
+    fdclose_pids[fdclose_n] = pid;
+    fdclose_from_pid[fdclose_n] = fdclose_sender_pid;
+    fdclose_from_uid[fdclose_n] = fdclose_sender_uid;
+    fdclose_n++;
+}
+
+static inline void fdclose_untrack(int i) {
+    if (fdclose_pids[i] == fdclose_ovf) fdclose_ovf = 0;
+    fdclose_n--;
+    fdclose_pids[i] = fdclose_pids[fdclose_n];
+    fdclose_from_pid[i] = fdclose_from_pid[fdclose_n];
+    fdclose_from_uid[i] = fdclose_from_uid[fdclose_n];
+}
+
+static inline void fdclose_flush(void) {
+    if (fdclose_ovf || !fdclose_nparked) return;
+    long pid = syscall(SYS_clone, CLONE_FILES | SIGCHLD, NULL, NULL, NULL, NULL);
+    if (pid == 0) {
+        for (int i = 0; i < fdclose_nparked; i++) close(fdclose_parked[i]);
+        _exit(0);
+    }
+    if (pid < 0) return;
+    fdclose_ovf = (pid_t)pid;
+    fdclose_track(fdclose_ovf);
+    fdclose_nparked = 0;
 }
 
 static inline void fdclose_spawn(int fd) {
-    fdclose_full();
+    if (fdclose_perfd() >= FDCLOSE_MAX_INFLIGHT) {
+        fdclose_full();
+        if (fdclose_nparked < FDCLOSE_PARK_MAX) {
+            fdclose_parked[fdclose_nparked++] = fd;
+            return;
+        }
+        /* no room to park: last-resort inline close, which can block */
+        close(fd);
+        return;
+    }
     long pid = syscall(SYS_clone, CLONE_FILES | SIGCHLD, NULL, NULL, NULL, NULL);
     if (pid == 0) {
         close(fd);
@@ -59,25 +113,20 @@ static inline void fdclose_spawn(int fd) {
         close(fd);
         return;
     }
-    if (fdclose_n == fdclose_cap) {
-        int nc = fdclose_cap ? fdclose_cap * 2 : FDCLOSE_MAX_INFLIGHT;
-        pid_t *np = realloc(fdclose_pids, (size_t)nc * sizeof *np);
-        if (!np) return;
-        fdclose_pids = np;
-        fdclose_cap = nc;
-    }
-    fdclose_pids[fdclose_n++] = (pid_t)pid;
+    fdclose_track((pid_t)pid);
 }
 
 static inline void fd_close_detached(const int *fds, int n) {
     for (int i = 0; i < n; i++) fdclose_spawn(fds[i]);
+    fdclose_flush();
 }
 
 static inline int fdclose_reaped(pid_t pid) {
     for (int i = 0; i < fdclose_n; i++) {
         if (fdclose_pids[i] != pid) continue;
-        fdclose_pids[i] = fdclose_pids[--fdclose_n];
-        if (fdclose_n < FDCLOSE_MAX_INFLIGHT) fdclose_passrights(1);
+        fdclose_untrack(i);
+        fdclose_flush();
+        if (fdclose_perfd() < FDCLOSE_MAX_INFLIGHT) fdclose_passrights(1);
         return 1;
     }
     return 0;
@@ -99,7 +148,8 @@ static inline int fdclose_in_close(pid_t pid) {
 /* Before re-exec: no closer may outlive the old image still sharing its fd
  * table, and the new image cannot track them. Wait until each has exited or
  * reached close(), then kill the rest and give them 1 s to die; one stuck in
- * D state can still survive. -1 = one never reached close(); refuse the
+ * D state can still survive. Fds an overflow closer had not reached, and any
+ * still parked, stay in the table: the new image closes them as strays. -1 = one never reached close(); refuse the
  * re-exec rather than kill it with its fd still in PID 1's table. */
 static inline int fdclose_quiesce(void) {
     struct timespec tick = { 0, 10000000 };
@@ -107,7 +157,7 @@ static inline int fdclose_quiesce(void) {
         int pending = 0;
         for (int i = 0; i < fdclose_n; ) {
             if (waitpid(fdclose_pids[i], NULL, WNOHANG) != 0) {
-                fdclose_pids[i] = fdclose_pids[--fdclose_n];
+                fdclose_untrack(i);
                 continue;
             }
             if (!fdclose_in_close(fdclose_pids[i])) pending = 1;
@@ -120,7 +170,7 @@ static inline int fdclose_quiesce(void) {
     for (int i = 0; i < fdclose_n; i++) kill(fdclose_pids[i], SIGKILL);
     for (int t = 0; t < 100 && fdclose_n; t++) {
         for (int i = 0; i < fdclose_n; ) {
-            if (waitpid(fdclose_pids[i], NULL, WNOHANG) != 0) fdclose_pids[i] = fdclose_pids[--fdclose_n];
+            if (waitpid(fdclose_pids[i], NULL, WNOHANG) != 0) fdclose_untrack(i);
             else i++;
         }
         if (fdclose_n) nanosleep(&tick, NULL);
