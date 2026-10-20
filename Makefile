@@ -286,6 +286,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
 	$(CC) $(CFLAGS) tests/test_notify.c -o /tmp/schema-test-notify && /tmp/schema-test-notify
 	$(CC) $(CFLAGS) tests/test_fdstore.c -o /tmp/schema-test-fdstore && /tmp/schema-test-fdstore
+	$(CC) $(CFLAGS) tests/test_fdclose.c -o /tmp/schema-test-fdclose && /tmp/schema-test-fdclose
 	$(CC) $(CFLAGS) tests/test_coredump.c -o /tmp/schema-test-coredump && /tmp/schema-test-coredump
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess -lacl && /tmp/schema-test-uaccess
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o /tmp/schema-test-uaccess-apply -lacl && /tmp/schema-test-uaccess-apply

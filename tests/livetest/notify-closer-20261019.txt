@@ -1,0 +1,10 @@
+# notify-closer — PID 1 never close()s a received fd itself (2026-10-19)
+
+## unit (blakbox, 7.0)
+tests/test_fdclose.c: control plain close of a SO_LINGER=2 TCP socket with full send queue blocked 2.0 s; fd_close_detached returned <0.5 s, child waited the linger; cap: SO_PASSRIGHTS off -> sender EPERM, back on after one closer reaped.
+make test: PASS. vmtest: PASS.
+
+## Devuan VM (kernel 6.12, no SO_PASSRIGHTS), unprivileged attacker (nobody) sends a SO_LINGER=40 TCP socket fd to /run/schema-init/notify
+RED  (installed PID1, master code): PID1 wchan wait_woken, sudo schema-ctl status took 33.75 s.
+GREEN (branch, live reexec, 31 adopted, 0 new): PID1 wchan do_sys_poll, closer child wait_woken, status 0.013 s; closer exited + reaped after the linger, no zombie, 0 failed.
+fdstore unaffected: live restart dbus x4 -> resumed 8 connections each, dbus restarts=0.

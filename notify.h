@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "fdclose.h"
 
 #define NOTIFY_SOCK_PATH "/run/schema-init/notify"
 #define NOTIFY_MSG_MAX   4096
@@ -203,12 +204,12 @@ static inline ssize_t notify_recv(int fd, char *buf, size_t bufsz, pid_t *pid, u
                 int x;
                 memcpy(&x, CMSG_DATA(c) + i * sizeof(int), sizeof x);
                 if (*nfds < NOTIFY_MAX_FDS) fds[(*nfds)++] = x;
-                else close(x);
+                else fd_close_detached(&x, 1);
             }
         }
     }
     if (!have_cred || bad || *pid <= 0 || n == 0) {
-        for (int i = 0; i < *nfds; i++) close(fds[i]);
+        fd_close_detached(fds, *nfds);
         *nfds = 0;
         return -1;
     }

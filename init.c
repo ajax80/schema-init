@@ -870,6 +870,7 @@ static void reap(void) {
             reexec_check_done(status);
             continue;
         }
+        if (fdclose_reaped(pid)) continue;
         for (i = 0; i < svc_count; i++) {
             if (services[i].card_pid == pid) {
                 card_done(&services[i], status);
@@ -2319,7 +2320,7 @@ static void notify_poll(int max_batch) {
         struct notify_msg m;
         int acted = notify_parse(buf, (size_t)n, &m);
         if (!acted) {
-            for (int i = 0; i < nrfds; i++) close(rfds[i]);
+            fd_close_detached(rfds, nrfds);
             continue;
         }
         char cgtext[NOTIFY_CGROUP_TEXT_MAX];
@@ -2327,7 +2328,7 @@ static void notify_poll(int max_batch) {
         if (m.busname[0]) {
             /* "this name now has an owner": only the broker may say so, and it
              * counts for the service whose cgroup holds the owning pid. */
-            for (int i = 0; i < nrfds; i++) close(rfds[i]);
+            fd_close_detached(rfds, nrfds);
             if (m.bus_owner_pid <= 0 || !notify_sender_is_broker(pid, uid)) continue;
             for (int i = 0; i < svc_count; i++) {
                 service_t *svc = &services[i];
@@ -2373,7 +2374,7 @@ static void notify_poll(int max_batch) {
             }
             break;
         }
-        for (int k = 0; k < nrfds; k++) close(rfds[k]);
+        fd_close_detached(rfds, nrfds);
     }
 }
 
@@ -2965,6 +2966,9 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
 
     ctl_fd = g.fd_ctl;
     notify_fd = g.fd_notify;
+    fdclose_sock = notify_fd;
+    fdclose_shut = 1;
+    fdclose_passrights(1);
     watchdog_fd = g.fd_watchdog;
     if (ctl_fd >= 0) fcntl(ctl_fd, F_SETFD, FD_CLOEXEC);
     if (notify_fd >= 0) fcntl(notify_fd, F_SETFD, FD_CLOEXEC);
@@ -3862,6 +3866,7 @@ int main(int argc, char **argv) {
     if (reexec_fd < 0) {
         ctl_init();
         notify_fd = notify_open(NOTIFY_SOCK_PATH);
+        fdclose_sock = notify_fd;
     }
     psi_open();
     ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);

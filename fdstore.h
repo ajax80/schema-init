@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "fdclose.h"
 
 #define FDSTORE_MAX_TOTAL 4096
 #define FDSTORE_HEADROOM 256
@@ -46,13 +47,13 @@ static inline int fdstore_add(const char *svc, int fd, const char *name, int max
     if (max <= 0 || !fdstore_room(fd) || strlen(svc) >= sizeof fdstore_v->svc ||
         !fdstore_valid_name(name) || fdstore_n >= FDSTORE_MAX_TOTAL ||
         fdstore_count(svc) >= max) {
-        close(fd);
+        fd_close_detached(&fd, 1);
         return -1;
     }
     if (fdstore_n == fdstore_cap) {
         int nc = fdstore_cap ? fdstore_cap * 2 : 16;
         fdstore_ent *nv = realloc(fdstore_v, (size_t)nc * sizeof *nv);
-        if (!nv) { close(fd); return -1; }
+        if (!nv) { fd_close_detached(&fd, 1); return -1; }
         fdstore_v = nv;
         fdstore_cap = nc;
     }
@@ -63,32 +64,30 @@ static inline int fdstore_add(const char *svc, int fd, const char *name, int max
     return 0;
 }
 
-static inline int fdstore_remove(const char *svc, const char *name) {
+static inline int fdstore_take(const char *svc, const char *name) {
     int removed = 0, w = 0;
+    int *gone = malloc((size_t)(fdstore_n ? fdstore_n : 1) * sizeof *gone);
     for (int i = 0; i < fdstore_n; i++) {
-        if (!strcmp(fdstore_v[i].svc, svc) && !strcmp(fdstore_v[i].name, name)) {
-            close(fdstore_v[i].fd);
+        if (!strcmp(fdstore_v[i].svc, svc) && (!name || !strcmp(fdstore_v[i].name, name))) {
+            if (gone) gone[removed] = fdstore_v[i].fd;
+            else close(fdstore_v[i].fd);
             removed++;
         } else {
             fdstore_v[w++] = fdstore_v[i];
         }
     }
     fdstore_n = w;
+    if (gone) fd_close_detached(gone, removed);
+    free(gone);
     return removed;
 }
 
+static inline int fdstore_remove(const char *svc, const char *name) {
+    return fdstore_take(svc, name);
+}
+
 static inline int fdstore_drop(const char *svc) {
-    int removed = 0, w = 0;
-    for (int i = 0; i < fdstore_n; i++) {
-        if (!strcmp(fdstore_v[i].svc, svc)) {
-            close(fdstore_v[i].fd);
-            removed++;
-        } else {
-            fdstore_v[w++] = fdstore_v[i];
-        }
-    }
-    fdstore_n = w;
-    return removed;
+    return fdstore_take(svc, NULL);
 }
 
 static inline int fdstore_collect(const char *svc, int *fds, const char **names, int max) {

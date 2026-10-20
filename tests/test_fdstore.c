@@ -14,7 +14,12 @@ static int mkfd(void) {
     return p[0];
 }
 
-static int is_open(int fd) { return fcntl(fd, F_GETFD) >= 0; }
+static void settle(void) {
+    pid_t p;
+    while (fdclose_n && (p = waitpid(-1, NULL, 0)) > 0) fdclose_reaped(p);
+}
+
+static int is_open(int fd) { settle(); return fcntl(fd, F_GETFD) >= 0; }
 
 static int keep_a(const char *svc, void *ctx) {
     (void)ctx;
@@ -93,6 +98,7 @@ int main(void) {
     assert(strncmp(nm, "dbus.socket:conn:conn", 21) == 0);
     assert(fdstore_fdnames("dbus", 1, tiny, sizeof tiny) == -1);
     assert(fdstore_drop("dbus") == 300);
+    settle();
 
     pid_t pid = fork();
     assert(pid >= 0);
