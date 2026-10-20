@@ -1137,7 +1137,7 @@ static void svc_set_invocation_id(void) {
 
 /* sd_listen_fds(3): the sockets at fd 3.., LISTEN_PID our own pid */
 static int svc_pass_listen(const service_t *svc) {
-    int lo = svc->listen_open, stored = svc->fdstore_max > 0 ? fdstore_count(svc->name) : 0;
+    int lo = svc->listen_open, stored = fdstore_count(svc->name);
     int n = lo + stored;
     if (!n) {
         unsetenv("LISTEN_FDS");

@@ -2342,7 +2342,7 @@ static void notify_poll(int max_batch) {
         }
         for (int i = 0; i < svc_count; i++) {
             service_t *svc = &services[i];
-            int stores = svc->fdstore_max > 0 && (m.fdstore || m.fdstore_remove);
+            int stores = svc->fdstore_max > 0 && (m.fdstore || m.fdstore_remove) && svc->child_pid == pid;
             if (!(svc->notify || stores) || svc->child_pid <= 0) continue;
             if (svc->child_pid != pid) {
                 if (!svc->cgroup_path[0]) continue;

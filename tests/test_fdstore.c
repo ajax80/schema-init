@@ -102,6 +102,7 @@ int main(void) {
         rl.rlim_cur = 1024;
         if (rl.rlim_max < 1500) _exit(0);
         assert(setrlimit(RLIMIT_NOFILE, &rl) == 0);
+        for (int i = 0; i < 40; i++) assert(open("/dev/null", O_RDONLY) >= 0);
         int src[700];
         for (int i = 0; i < 700; i++) {
             src[i] = open("/dev/null", O_RDONLY | O_CLOEXEC);

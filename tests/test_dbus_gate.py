@@ -76,6 +76,24 @@ def main():
         check('fallback: stock daemon gets no LISTEN_*/NOTIFY_SOCKET',
               'LISTEN_FDS=unset LISTEN_PID=unset LISTEN_FDNAMES=unset NOTIFY_SOCKET=unset' in r.stdout, r.stdout.splitlines()[0] if r.stdout else r.stderr)
         check('fallback: stock daemon inherits no fds >= 3', fdl(r.stdout) == [] and 'fd ' not in r.stdout, str(fdl(r.stdout)))
+        if shutil.which('python3'):
+            import socket
+            nsp = os.path.join(tmp, 'notify')
+            ns = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            ns.bind(nsp)
+            ns.settimeout(0.2)
+            r = subprocess.run([SYSTEM], env=dict(senv, LISTEN_FDNAMES='listen:state:conn:conn:other', NOTIFY_SOCKET=nsp,
+                               SCHEMA_DBUS_GATE=gate + '.absent', SCHEMA_DBUS_STOCK=probe),
+                               pass_fds=stored, capture_output=True, text=True, timeout=15)
+            got = set()
+            try:
+                while True:
+                    got.add(ns.recv(256).decode())
+            except socket.timeout:
+                pass
+            ns.close()
+            want = {'FDSTOREREMOVE=1\nFDNAME=' + n for n in ('listen', 'state', 'conn')}
+            check('fallback: empties the broker store in PID 1', got == want, repr(sorted(got)))
         nopyd = os.path.join(tmp, 'nopyfd')
         os.makedirs(nopyd)
         for t in ('readlink', 'dirname', 'cat', 'sed', 'tr', 'ls'):

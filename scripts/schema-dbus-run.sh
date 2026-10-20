@@ -42,10 +42,19 @@ fallback() {
     echo "schema-dbus-run: $1 — falling back to stock dbus-daemon" >&2
     [ -n "$STOCK" ] || { echo "schema-dbus-run: no dbus-daemon to fall back to — no system bus" >&2; exit 1; }
     if [ -n "${LISTEN_FDS:-}" ]; then
-        unset LISTEN_FDS LISTEN_PID LISTEN_FDNAMES NOTIFY_SOCKET
         if command -v python3 >/dev/null 2>&1; then
-            exec python3 -c 'import os,sys; os.closerange(3, 1 << 20); os.execv(sys.argv[1], sys.argv[1:])' "$STOCK" --system --nofork
+            exec python3 -c '
+import os,sys,socket
+p=os.environ.get("NOTIFY_SOCKET","")
+if p:
+    s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM)
+    for n in set(os.environ.get("LISTEN_FDNAMES","").split(":"))&{"listen","state","conn","pfd"}:
+        try: s.sendto(("FDSTOREREMOVE=1\nFDNAME="+n).encode(),"\0"+p[1:] if p[0]=="@" else p)
+        except OSError: pass
+for k in ("LISTEN_FDS","LISTEN_PID","LISTEN_FDNAMES","NOTIFY_SOCKET"): os.environ.pop(k,None)
+os.closerange(3, 1 << 20); os.execv(sys.argv[1], sys.argv[1:])' "$STOCK" --system --nofork
         fi
+        unset LISTEN_FDS LISTEN_PID LISTEN_FDNAMES NOTIFY_SOCKET
         if command -v perl >/dev/null 2>&1; then
             exec perl -e 'use POSIX (); POSIX::close($_) for 3..1048575; exec {$ARGV[0]} @ARGV' "$STOCK" --system --nofork
         fi
