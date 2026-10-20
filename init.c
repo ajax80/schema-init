@@ -2301,11 +2301,11 @@ static int ctl_is_readonly(const char *line) {
 
 /* Drain the sd_notify socket. A message counts only for a notify=1 service
  * whose cgroup (or main pid, when cgroups are unavailable) holds the sender. */
-static void notify_poll(int drain) {
+static void notify_poll(int max_batch) {
     char buf[NOTIFY_MSG_MAX];
     /* The socket is world-writable, so a sender must never be able to hold
      * PID 1 here: bounded batch per wakeup, and a hard recv error ends it. */
-    for (int batch = 0; drain || batch < NOTIFY_BATCH_MAX; batch++) {
+    for (int batch = 0; batch < max_batch; batch++) {
         pid_t pid = 0;
         uid_t uid = (uid_t)-1;
         int rfds[NOTIFY_MAX_FDS], nrfds = 0;
@@ -3955,7 +3955,7 @@ int main(int argc, char **argv) {
                         struct signalfd_siginfo ssi;
                         while (read(sig_fd, &ssi, sizeof(ssi)) == (ssize_t)sizeof(ssi)) {
                             if (ssi.ssi_signo == SIGCHLD) {
-                                if (notify_fd >= 0) notify_poll(1);
+                                if (notify_fd >= 0) notify_poll(NOTIFY_DRAIN_MAX);
                                 reap();
                             } else if (ssi.ssi_signo == SIGHUP) {
                                 /* No socket to answer on — the console message
@@ -3968,7 +3968,7 @@ int main(int argc, char **argv) {
                     } else if (fds[e].fd == ctl_fd) {
                         ctl_poll();
                     } else if (fds[e].fd == notify_fd) {
-                        notify_poll(0);
+                        notify_poll(NOTIFY_BATCH_MAX);
                     } else if (fds[e].fd == ino_fd) {
                         ready_inotify_drain();
                     }
