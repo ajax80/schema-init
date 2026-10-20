@@ -32,9 +32,6 @@
  * 6.16) park here, and the overflow closer takes the whole parked list at
  * once. Its memory is a copy taken at clone, so PID 1 empties its own list. */
 #define FDCLOSE_MAX_INFLIGHT 32
-#ifndef FDCLOSE_KILL
-#define FDCLOSE_KILL kill
-#endif
 #define FDCLOSE_PARK_MAX     4096   /* PID 1's hard NOFILE: room for any batch */
 #define FDCLOSE_PARK_PAUSE   1024   /* notify reads stop past this many parked */
 #define FDCLOSE_MSG_FDS      253    /* SCM_MAX_FD: most one message can carry */
@@ -178,6 +175,26 @@ static inline int fdclose_in_close(pid_t pid) {
     return nr == SYS_close;
 }
 
+/* A re-exec that killed closers and then did not exec: the old image runs
+ * on. Fds a killed overflow closer never reached are still in the table
+ * (close() removes one before it blocks), so they park again for a new
+ * closer, and fd passing reopens. Must run before PID 1 opens anything that
+ * could reuse a number the dead closer freed. */
+static inline void fdclose_resume(void) {
+    if (!fdclose_ovf) {
+        for (int i = 0; i < fdclose_novf && fdclose_nparked < FDCLOSE_PARK_MAX; i++)
+            if (fcntl(fdclose_ovf_fds[i], F_GETFD) >= 0)
+                fdclose_parked[fdclose_nparked++] = fdclose_ovf_fds[i];
+        fdclose_novf = 0;
+    }
+    fdclose_flush();
+    if (fdclose_perfd() < FDCLOSE_MAX_INFLIGHT) fdclose_passrights(1);
+}
+
+#ifndef FDCLOSE_KILL
+#define FDCLOSE_KILL kill
+#endif
+
 /* Before re-exec: no closer may outlive the old image. After execve PID 1
  * gets a fresh fd table, but a surviving closer keeps the old one, pinning
  * every socket and memfd PID 1 held, and the new image cannot track it.
@@ -211,7 +228,9 @@ static inline int fdclose_quiesce(void) {
         }
         if (fdclose_n) nanosleep(&tick, NULL);
     }
-    return fdclose_n ? -2 : 0;
+    if (!fdclose_n) return 0;
+    fdclose_resume();
+    return -2;
 }
 
 #endif

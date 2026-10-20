@@ -3343,6 +3343,8 @@ static void reexec_commit(void) {
     sigprocmask(SIG_SETMASK, &prev, NULL);
     if (blob >= 0) close(blob);
     if (oldexe >= 0) close(oldexe);
+    /* after the two above: either may hold a number a killed closer freed */
+    fdclose_resume();
     close(reexec_target);
     reexec_target = -1;
     printf("[schema-init] re-exec refused: %s\n", err);
