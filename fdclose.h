@@ -12,10 +12,20 @@
 #include <time.h>
 #include <unistd.h>
 
+/* PID 1 never close()s an fd someone else sent it. close() of a foreign fd
+ * can block as long as its maker likes (FUSE flush, TCP linger, even a pipe
+ * whose writer faults on a FUSE mmap), and any local user can send one to the
+ * 0666 notify socket. A CLONE_FILES child shares PID 1's fd table, so its
+ * close() removes the fd for PID 1 too and only the child waits. Do not add
+ * an inline fast path for "safe" fd types: there is none (#390). */
+
+/* Linux 6.16+. Older headers lack it; setsockopt then just fails. */
 #ifndef SO_PASSRIGHTS
 #define SO_PASSRIGHTS 83
 #endif
 
+/* At the cap, fd passing on the notify socket is shut until a closer exits,
+ * so a sender cannot fork-bomb PID 1 one closer per fd. */
 #define FDCLOSE_MAX_INFLIGHT 32
 
 static pid_t *fdclose_pids;
@@ -43,6 +53,7 @@ static inline void fdclose_spawn(int fd) {
         _exit(0);
     }
     if (pid < 0) {
+        /* no closer possible: closing inline risks a block, leaking is worse */
         close(fd);
         return;
     }
@@ -70,6 +81,8 @@ static inline int fdclose_reaped(pid_t pid) {
     return 0;
 }
 
+/* close() drops the fd from the shared table before it blocks, so a closer
+ * already inside close() has done its job for PID 1 and is safe to kill. */
 static inline int fdclose_in_close(pid_t pid) {
     char p[64], line[64];
     snprintf(p, sizeof p, "/proc/%d/syscall", (int)pid);
@@ -81,6 +94,10 @@ static inline int fdclose_in_close(pid_t pid) {
     return nr == SYS_close;
 }
 
+/* Before re-exec: no closer may outlive the old image still sharing its fd
+ * table, and the new image cannot track them. Wait until each has exited or
+ * reached close(), then kill the rest. -1 = one never got there; refuse the
+ * re-exec rather than kill it with its fd still in PID 1's table. */
 static inline int fdclose_quiesce(void) {
     struct timespec tick = { 0, 10000000 };
     for (int t = 0; t < 100; t++) {

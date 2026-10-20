@@ -36,6 +36,8 @@ static inline int fdstore_count(const char *svc) {
     return c;
 }
 
+/* Stored fds must never eat the descriptors PID 1 needs for its own work
+ * (spawning, logging, the control socket): keep HEADROOM below the limit. */
 static inline int fdstore_room(int fd) {
     struct rlimit rl;
     return getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur == RLIM_INFINITY ||
@@ -67,6 +69,7 @@ static inline int fdstore_take(const char *svc, const char *name) {
     int *gone = malloc((size_t)(fdstore_n ? fdstore_n : 1) * sizeof *gone);
     for (int i = 0; i < fdstore_n; i++) {
         if (!strcmp(fdstore_v[i].svc, svc) && (!name || !strcmp(fdstore_v[i].name, name))) {
+            /* a stored fd came from a service: it closes through a closer */
             if (gone) gone[removed] = fdstore_v[i].fd;
             else close(fdstore_v[i].fd);
             removed++;
@@ -125,6 +128,11 @@ static inline int fdstore_fdnames(const char *svc, int listen_open, char *out, s
     return (int)o;
 }
 
+/* In the child, before exec: put the n fds at 3..3+n-1 for LISTEN_FDS.
+ * Each is first dup'd above 3+n so no dup2 into 3+i can clobber a source
+ * still waiting its turn. That briefly needs ~2n fds, which can pass the soft
+ * NOFILE limit, so the soft limit is raised to the hard one for the shuffle
+ * and put back so the service execs with the limit it was given. */
 static inline int fdstore_place_fds(const int *src, int n) {
     struct rlimit old, cur;
     int raised = 0, rc = -1, i, made = 0;
@@ -166,6 +174,7 @@ typedef int (*fdstore_keep_fn)(const char *svc, void *ctx);
 static inline int fdstore_sweep(fdstore_keep_fn keep, void *ctx) {
     int closed = 0;
     for (int i = 0; i < fdstore_n; ) {
+        /* a copy: fdstore_drop compacts the array under fdstore_v[i] */
         char svc[64];
         strcpy(svc, fdstore_v[i].svc);
         if (keep(svc, ctx)) { i++; continue; }
