@@ -5,6 +5,7 @@
 
 #include <dbus/dbus.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -31,6 +32,7 @@
 #include "sdbus_driver.h"
 #include "sdbus_route.h"
 #include "sdbus_activate.h"
+#include "sdbus_state.h"
 
 #define DEFAULT_SOCKET "/run/dbus/system_bus_socket"
 #define MAX_TARGETS 256
@@ -56,6 +58,8 @@ static char           g_bus_addr[256];
 static int            g_system_bus;   /* Decision 1, SP4 design doc: --system present
                                           vs absent is the single mode signal gating
                                           session-bus-specific behavior in this file. */
+static int            g_draining;     /* SIGTERM: flushing for a planned restart, no more reads */
+static char          *g_notify_sock;  /* NOTIFY_SOCKET: PID 1 keeps our fds across a restart */
 #define SDBUS_SVC_DIRS "/usr/local/share/dbus-1/system-services:/usr/share/dbus-1/system-services"
 #define SDBUS_MASK_FILE "/etc/schema-dbus/masked"
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
@@ -65,9 +69,16 @@ static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
 /* ---- epoll registration ---- */
 static void ep_update(sdbus_conn *c) {
     struct epoll_event ev = {0};
-    ev.events = EPOLLIN | (sdbus_conn_has_out(c) ? EPOLLOUT : 0);
+    ev.events = (g_draining ? 0 : EPOLLIN) | (sdbus_conn_has_out(c) ? EPOLLOUT : 0);
     ev.data.ptr = c;
     epoll_ctl(g_epfd, EPOLL_CTL_MOD, c->fd, &ev);
+}
+
+static void ep_add(sdbus_conn *c) {
+    struct epoll_event ev = {0};
+    ev.events = EPOLLIN;
+    ev.data.ptr = c;
+    epoll_ctl(g_epfd, EPOLL_CTL_ADD, c->fd, &ev);
 }
 
 static sdbus_conn *conn_by_id(int id) {
@@ -782,10 +793,7 @@ static void add_conn(int fd) {
     }
     g_conns = realloc(g_conns, (g_nconns + 1) * sizeof *g_conns);
     g_conns[g_nconns++] = c;
-    struct epoll_event ev = {0};
-    ev.events = EPOLLIN;
-    ev.data.ptr = c;
-    epoll_ctl(g_epfd, EPOLL_CTL_ADD, fd, &ev);
+    ep_add(c);
 }
 
 static void remove_conn(sdbus_conn *c) {
@@ -862,6 +870,164 @@ static int on_readable(sdbus_conn *c) {
     return 1;
 }
 
+/* ---- planned restart through the PID 1 fdstore ---- */
+#define FDSTORE_BATCH 253
+
+static int notify_fds(const char *msg, const int *fds, int nfds) {
+    static int fd = -1;
+    if (fd < 0) fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un a;
+    memset(&a, 0, sizeof a);
+    a.sun_family = AF_UNIX;
+    snprintf(a.sun_path, sizeof a.sun_path, "%s", g_notify_sock);
+    struct iovec iov = { (void *)msg, strlen(msg) };
+    struct msghdr mh = {0};
+    mh.msg_name = &a; mh.msg_namelen = sizeof a;
+    mh.msg_iov = &iov; mh.msg_iovlen = 1;
+    char cbuf[CMSG_SPACE(sizeof(int) * FDSTORE_BATCH)];
+    if (nfds > 0) {
+        memset(cbuf, 0, sizeof cbuf);
+        mh.msg_control = cbuf;
+        mh.msg_controllen = CMSG_SPACE(sizeof(int) * nfds);
+        struct cmsghdr *cm = CMSG_FIRSTHDR(&mh);
+        cm->cmsg_level = SOL_SOCKET;
+        cm->cmsg_type = SCM_RIGHTS;
+        cm->cmsg_len = CMSG_LEN(sizeof(int) * nfds);
+        memcpy(CMSG_DATA(cm), fds, sizeof(int) * nfds);
+    }
+    return sendmsg(fd, &mh, MSG_NOSIGNAL) < 0 ? -1 : 0;
+}
+
+static int store_fds(const char *name, const int *fds, int n) {
+    char msg[64];
+    snprintf(msg, sizeof msg, "FDSTORE=1\nFDNAME=%s", name);
+    for (int off = 0; off < n; off += FDSTORE_BATCH)
+        if (notify_fds(msg, fds + off, n - off < FDSTORE_BATCH ? n - off : FDSTORE_BATCH) < 0) return -1;
+    return 0;
+}
+
+static void store_remove_all(void) {
+    static const char *names[] = { "listen", "state", "conn", "pfd" };
+    if (!g_notify_sock) return;
+    for (int i = 0; i < 4; i++) {
+        char msg[64];
+        snprintf(msg, sizeof msg, "FDSTOREREMOVE=1\nFDNAME=%s", names[i]);
+        notify_fds(msg, NULL, 0);
+    }
+}
+
+/* SIGTERM: stop accepting and reading, run what is already buffered, flush the
+   outbound queues for up to 2 s and drop whoever is still behind. Then, under
+   PID 1, hand the listen socket, every connection and a state snapshot to the
+   fdstore so the next broker carries on where this one stopped. */
+static void store_and_exit(int lfd, int sigfd) {
+    g_draining = 1;
+    epoll_ctl(g_epfd, EPOLL_CTL_DEL, lfd, NULL);
+    epoll_ctl(g_epfd, EPOLL_CTL_DEL, sigfd, NULL);
+    for (int i = 0; i < g_nconns; i++) if (g_conns[i]->authed) process_inbound(g_conns[i]);
+    while (g_acts->n > 0) {
+        sdbus_held_msg *held = NULL; int nh = 0;
+        sdbus__acts_pop(g_acts, 0, &held, &nh);
+        fail_held(held, nh, DBUS_ERROR_SPAWN_FAILED, "Message bus is restarting");
+    }
+    long deadline = sdbus__now_ms() + 2000;
+    struct epoll_event evs[64];
+    for (;;) {
+        for (int j = 0; j < g_nconns; j++)
+            if (g_conns[j]->oq_over || (sdbus_conn_has_out(g_conns[j]) && flush_conn(g_conns[j]) < 0)) {
+                remove_conn(g_conns[j]);
+                j = -1;
+            }
+        int behind = 0;
+        for (int j = 0; j < g_nconns; j++) { ep_update(g_conns[j]); behind += sdbus_conn_has_out(g_conns[j]); }
+        if (!behind) break;
+        long left = deadline - sdbus__now_ms();
+        if (left > 0) {
+            int nev = epoll_wait(g_epfd, evs, 64, (int)left);
+            for (int i = 0; i < nev; i++)
+                if (evs[i].events & (EPOLLHUP | EPOLLERR)) remove_conn(evs[i].data.ptr);
+            continue;
+        }
+        int *ids = malloc(behind * sizeof *ids), nb = 0;
+        for (int j = 0; j < g_nconns; j++) if (sdbus_conn_has_out(g_conns[j])) ids[nb++] = g_conns[j]->id;
+        for (int j = 0; j < nb; j++) { sdbus_conn *c = conn_by_id(ids[j]); if (c) remove_conn(c); }
+        free(ids);
+    }
+    if (g_notify_sock) {
+        int npfd = 0, k = 0;
+        for (int i = 0; i < g_nconns; i++) npfd += g_conns[i]->n_pending_fds;
+        int *cfds = malloc((g_nconns + 1) * sizeof *cfds), *pfds = malloc((npfd + 1) * sizeof *pfds);
+        for (int i = 0; i < g_nconns; i++) {
+            cfds[i] = g_conns[i]->fd;
+            for (int j = 0; j < g_conns[i]->n_pending_fds; j++) pfds[k++] = g_conns[i]->pending_fds[j];
+        }
+        sdbus_state_hdr h = { g_next_id, g_names->next_unique, g_bcast_serial };
+        int mfd = memfd_create("schema-dbus-state", MFD_CLOEXEC);
+        if (mfd < 0 || sdbus_state_write(mfd, &h, g_conns, g_nconns, g_names, g_replies) != 0
+            || store_fds("listen", &lfd, 1) < 0 || store_fds("state", &mfd, 1) < 0
+            || store_fds("conn", cfds, g_nconns) < 0 || store_fds("pfd", pfds, npfd) < 0)
+            fprintf(stderr, "schema-dbus: fdstore hand-off failed: %s\n", strerror(errno));
+        else
+            fprintf(stderr, "schema-dbus: stored %d connections, %d passed fds for restart\n", g_nconns, npfd);
+    }
+    exit(0);
+}
+
+static int name_is(const char *p, size_t len, const char *s) { return len == strlen(s) && !memcmp(p, s, len); }
+
+/* PID 1 handed back what the last broker stored, from fd 3 in LISTEN_FDNAMES
+   order. A good snapshot resumes every connection untouched; otherwise they are
+   closed and the bus starts fresh, on the stored listen socket if there is one.
+   Returns that listen fd, or -1 to bind as usual. */
+static int resume_from_fds(const char *fdnames, int n) {
+    int lfd = -1, sfd = -1, nconn = 0, npfd = 0, rc = -1;
+    int *cfds = malloc((n + 1) * sizeof *cfds), *pfds = malloc((n + 1) * sizeof *pfds);
+    const char *p = fdnames;
+    for (int i = 0; i < n; i++) {
+        int fd = 3 + i;
+        const char *e = p ? strchr(p, ':') : NULL;
+        size_t len = p ? (e ? (size_t)(e - p) : strlen(p)) : 0;
+        fcntl(fd, F_SETFD, FD_CLOEXEC);
+        if (name_is(p, len, "listen") && lfd < 0) lfd = fd;
+        else if (name_is(p, len, "state") && sfd < 0) sfd = fd;
+        else if (name_is(p, len, "conn")) cfds[nconn++] = fd;
+        else if (name_is(p, len, "pfd")) pfds[npfd++] = fd;
+        else close(fd);
+        p = e ? e + 1 : NULL;
+    }
+    if (lfd >= 0) fcntl(lfd, F_SETFL, fcntl(lfd, F_GETFL) | O_NONBLOCK);
+    if (sfd >= 0) {
+        sdbus_state_hdr h;
+        sdbus_conn **cs = calloc(nconn + 1, sizeof *cs);
+        int nc = 0;
+        rc = sdbus_state_read(sfd, &h, cs, nconn, &nc, cfds, nconn, pfds, npfd, g_names, g_replies);
+        if (rc == 0) {
+            g_conns = realloc(g_conns, (g_nconns + nc + 1) * sizeof *g_conns);
+            for (int i = 0; i < nc; i++) {
+                fcntl(cs[i]->fd, F_SETFL, fcntl(cs[i]->fd, F_GETFL) | O_NONBLOCK);
+                g_conns[g_nconns++] = cs[i];
+                if (cs[i]->is_monitor) g_nmonitors++;
+                ep_add(cs[i]);
+            }
+            g_next_id = h.next_id;
+            g_bcast_serial = h.driver_serial;
+            fprintf(stderr, "schema-dbus: resumed %d connections from the fdstore\n", nc);
+        }
+        free(cs);
+        close(sfd);
+    }
+    if (rc != 0) {
+        fprintf(stderr, "schema-dbus: fdstore state %s, starting fresh\n",
+                sfd < 0 ? "missing" : rc == -2 ? "has an unknown version" : "is malformed");
+        for (int i = 0; i < nconn; i++) close(cfds[i]);
+        for (int i = 0; i < npfd; i++) close(pfds[i]);
+    }
+    free(cfds); free(pfds);
+    store_remove_all();
+    return lfd;
+}
+
 static int make_listen_socket(const char *path) {
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
@@ -930,6 +1096,12 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "--watch-names")) { g_system_bus = 1; return watch_names(); }
 
+    const char *lpid = getenv("LISTEN_PID"), *lfds = getenv("LISTEN_FDS"), *lnames = getenv("LISTEN_FDNAMES");
+    int nlisten = lpid && lfds && atoi(lpid) == (int)getpid() ? atoi(lfds) : 0;
+    char *listen_names = nlisten > 0 ? strdup(lnames ? lnames : "") : NULL;
+    if (getenv("NOTIFY_SOCKET")) g_notify_sock = strdup(getenv("NOTIFY_SOCKET"));
+    unsetenv("LISTEN_PID"); unsetenv("LISTEN_FDS"); unsetenv("LISTEN_FDNAMES"); unsetenv("NOTIFY_SOCKET");
+
     const char *sock = getenv("SCHEMA_DBUS_SOCKET");
     if (!sock) sock = DEFAULT_SOCKET;
     snprintf(g_bus_addr, sizeof g_bus_addr, "unix:path=%s", sock);
@@ -982,7 +1154,10 @@ int main(int argc, char **argv) {
     g_acts = sdbus_acts_new();
     fprintf(stderr, "schema-dbus: %d activatable services\n", g_svctab->n);
 
-    int lfd = make_listen_socket(sock);
+    g_epfd = epoll_create1(EPOLL_CLOEXEC);
+    int lfd = nlisten > 0 ? resume_from_fds(listen_names, nlisten) : -1;
+    free(listen_names);
+    if (lfd < 0) lfd = make_listen_socket(sock);
     if (lfd < 0) { fprintf(stderr, "schema-dbus: cannot bind %s: %s\n", sock, strerror(errno)); return 1; }
 
     /* SIGCHLD via signalfd so activated children are reaped in the event loop */
@@ -990,10 +1165,10 @@ int main(int argc, char **argv) {
     sigset_t scmask;
     sigemptyset(&scmask);
     sigaddset(&scmask, SIGCHLD);
+    sigaddset(&scmask, SIGTERM);
     sigprocmask(SIG_BLOCK, &scmask, NULL);
     int sigfd = signalfd(-1, &scmask, SFD_NONBLOCK | SFD_CLOEXEC);
 
-    g_epfd = epoll_create1(EPOLL_CLOEXEC);
     struct epoll_event lev = {0};
     lev.events = EPOLLIN; lev.data.ptr = NULL;   /* NULL ptr marks the listen fd */
     epoll_ctl(g_epfd, EPOLL_CTL_ADD, lfd, &lev);
@@ -1027,7 +1202,8 @@ int main(int argc, char **argv) {
             }
             if (evs[i].data.ptr == &sigfd_marker) {   /* SIGCHLD: reap activated children */
                 struct signalfd_siginfo si;
-                while (read(sigfd, &si, sizeof si) == (ssize_t)sizeof si) { }  /* drain */
+                int term = 0;
+                while (read(sigfd, &si, sizeof si) == (ssize_t)sizeof si) term |= si.ssi_signo == SIGTERM;
                 int st; pid_t p;
                 while ((p = waitpid(-1, &st, WNOHANG)) > 0) {
                     sdbus_pending_act *pa = sdbus_acts_by_pid(g_acts, (int)p);
@@ -1037,6 +1213,7 @@ int main(int argc, char **argv) {
                     fail_held(held, nh, DBUS_ERROR_SPAWN_CHILD_EXITED,
                               "Activated service exited before acquiring its name");
                 }
+                if (term) store_and_exit(lfd, sigfd);
                 continue;
             }
             sdbus_conn *c = evs[i].data.ptr;
