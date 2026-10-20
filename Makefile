@@ -81,7 +81,7 @@ verify-rules-live: tools/verify-rules-live.c tools/flip_classify.h udev_db.h ude
 verify-eprops-live: tools/verify-eprops-live.c udev_db.h udev_rules.h udev_builtins.h hwdb.h udev_ruleset.h path_id.h udev_exec.h fido_id.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h dissect_image.h schema-udev.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o verify-eprops-live tools/verify-eprops-live.c
 
-schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match.h sdbus_reply.h sdbus_codec.h sdbus_auth.h sdbus_conn.h sdbus_route.h sdbus_driver.h sdbus_activate.h
+schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match.h sdbus_reply.h sdbus_codec.h sdbus_auth.h sdbus_conn.h sdbus_state.h sdbus_route.h sdbus_driver.h sdbus_activate.h
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) $(LDFLAGS) schema-dbus.c -o $@ $(DBUS_LIBS)
 
 $(OBJS): $(CORE_HDRS)
@@ -295,6 +295,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board
 	$(CC) $(CFLAGS) tests/test_sdbus_names.c -o /tmp/schema-test-sdbus-names && /tmp/schema-test-sdbus-names
 	$(CC) $(CFLAGS) tests/test_sdbus_match.c -o /tmp/schema-test-sdbus-match && /tmp/schema-test-sdbus-match
 	$(CC) $(CFLAGS) tests/test_sdbus_reply.c -o /tmp/schema-test-sdbus-reply && /tmp/schema-test-sdbus-reply
+	$(CC) $(CFLAGS) tests/test_sdbus_state.c -o /tmp/schema-test-sdbus-state && /tmp/schema-test-sdbus-state
 	$(CC) $(CFLAGS) tests/test_sdbus_conn.c -o /tmp/schema-test-sdbus-conn && /tmp/schema-test-sdbus-conn
 	$(CC) $(CFLAGS) tests/test_sdbus_auth.c -o /tmp/schema-test-sdbus-auth && /tmp/schema-test-sdbus-auth
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_driver.c -o /tmp/schema-test-sdbus-driver $(DBUS_LIBS) && /tmp/schema-test-sdbus-driver
