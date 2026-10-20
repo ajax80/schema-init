@@ -1,0 +1,62 @@
+c[?7l[2J[0mSeaBIOS (version 1.17.0-10.fc44)
+Booting from ROM...
+Probing EDD (edd=off to disable)... ok
+c[?7l[2JPREINIT softdog loaded
+PREINIT pre-6.16 simulated: SO_PASSRIGHTS -> ENOPROTOOPT
+[schema-init] opened hardware watchdog (/dev/watchdog0, timeout 10s, pet every 3333ms)
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] boot rail
+  [1] kernel core alive
+  [2] init
+  [3] runlevel
+  [4] env load
+  [5] env active
+  [7] settled — 4 service(s) queued
+[2026-10-20 18:16:07] mon                   spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:16:07] attack                spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:16:07] late                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:16:07] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:16:07] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=78
+[2026-10-20 18:16:07] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=78
+[schema-init] notify: reads paused, 33 fd closers stuck, 800 fds parked; senders: pid 70 uid 65534
+MON t=4.46 closers=33
+LATE READY sent 8.45
+MON t=9.49 closers=33
+[2026-10-20 18:16:17] mon                   promote       state=FUNDAMENTAL   wt=8  pid=69
+[2026-10-20 18:16:17] attack                promote       state=FUNDAMENTAL   wt=8  pid=70
+[schema-init] re-exec: dry run of /init (pid 163)
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] notify: reads resumed after 7s
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /init
+PREINIT pre-6.16 simulated: SO_PASSRIGHTS -> ENOPROTOOPT
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-22-gd4c54b3-dirty -> v0.4.15-22-gd4c54b3-dirty: 4 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[2026-10-20 18:16:18] late                  notify-ready  state=FULL_TRUST    wt=8  pid=76
+[2026-10-20 18:16:18] late                  promote       state=FUNDAMENTAL   wt=8  pid=76
+REEXEC ok: re-executed i to v0.4.15-22-gd4c54b3-dirty, 4 services adopted, 0  ew at 11.55
+MON t=14.57 closers=0
+MON t=19.58 closers=0
+MON t=24.60 closers=0
+MON t=29.62 closers=0
+MON t=34.64 closers=0
+MON t=39.65 closers=0
+MON t=44.67 closers=0
+MON t=49.69 closers=0
+MAXCLOSERS 33
+POWEROFF-AT 50.69
+[schema-init] shutting down
+[schema-init] shutdown: stop 1 (+0 ms): mon attack late wdog
+[schema-init] shutdown: services down in 25 ms
+[schema-init] shutdown: cgroups killed
+[schema-init] shutdown: SIGKILL broadcast
+[schema-init] shutdown: control socket and shm released
+[schema-init] shutdown: sync done
+[schema-init] shutdown: filesystems read-only
+[schema-init] PID 1 poweroff
+[   52.369438] reboot: Power down

@@ -1,0 +1,53 @@
+c[?7l[2J[0mSeaBIOS (version 1.17.0-10.fc44)
+Booting from ROM...
+Probing EDD (edd=off to disable)... ok
+c[?7l[2JPREINIT softdog loaded
+PREINIT pre-6.16 simulated: SO_PASSRIGHTS -> ENOPROTOOPT
+[schema-init] opened hardware watchdog (/dev/watchdog0, timeout 10s, pet every 3333ms)
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] boot rail
+  [1] kernel core alive
+  [2] init
+  [3] runlevel
+  [4] env load
+  [5] env active
+  [7] settled — 4 service(s) queued
+[2026-10-20 18:17:15] mon                   spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] attack                spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] late                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] wdog                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-20 18:17:15] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=76
+[2026-10-20 18:17:15] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=76
+[schema-init] notify: reads paused, 33 fd closers stuck, 800 fds parked; senders: pid 69 uid 65534
+MON t=4.48 closers=33
+LATE READY sent 8.47
+MON t=9.49 closers=33
+[2026-10-20 18:17:25] mon                   promote       state=FUNDAMENTAL   wt=8  pid=68
+[2026-10-20 18:17:25] attack                promote       state=FUNDAMENTAL   wt=8  pid=69
+MON t=14.51 closers=33
+MON t=19.53 closers=33
+MON t=24.55 closers=33
+[schema-init] notify: reads resumed after 24s
+[schema-init] notify: reads paused, 33 fd closers stuck, 999 fds parked; senders: pid 69 uid 65534
+[2026-10-20 18:17:43] late                  notify-ready  state=FULL_TRUST    wt=8  pid=75
+[2026-10-20 18:17:43] late                  promote       state=FUNDAMENTAL   wt=8  pid=75
+[schema-init] notify: reads resumed after 0s
+MON t=29.58 closers=0
+MON t=34.59 closers=0
+MON t=39.61 closers=0
+MON t=44.62 closers=0
+MON t=49.63 closers=0
+MAXCLOSERS 33
+POWEROFF-AT 50.64
+[schema-init] shutting down
+[schema-init] shutdown: stop 1 (+0 ms): mon attack late wdog
+[schema-init] shutdown: services down in 22 ms
+[schema-init] shutdown: cgroups killed
+[schema-init] shutdown: SIGKILL broadcast
+[schema-init] shutdown: control socket and shm released
+[schema-init] shutdown: sync done
+[schema-init] shutdown: filesystems read-only
+[schema-init] PID 1 poweroff
+[   52.309035] reboot: Power down
