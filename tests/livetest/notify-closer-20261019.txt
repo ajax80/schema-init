@@ -29,3 +29,7 @@ Live restart dbus: resumed 54 connections, owners 114 identical (only the busctl
 
 ## blakbox HW, 1.1260, reboot 1/3 (2026-10-20 00:16)
 boot: kernel 3.983s, userspace 6.795s, PID1 VmRSS 4308 kB, broker 357 VmRSS 4624 kB PSS 1288 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, 0 zombies, dbus cost 0.247s, sddm 2.186s (@4.258)
+
+## blakbox HW, 1.1260, reboot 2/3 (2026-10-20 00:16)
+boot: kernel 3.996s, userspace 6.394s, PID1 VmRSS 4492 kB, broker 356 VmRSS 4624 kB PSS 1229 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, 0 zombies, dbus cost 0.573s, sddm 1.988s (@4.104)
+note: reboot 1/3 CSV row (20261019-231834) is a stale re-capture of the 23:12:30 boot; this row is the real one.
