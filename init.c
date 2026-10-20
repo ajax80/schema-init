@@ -3298,8 +3298,11 @@ static void reexec_commit(void) {
         reexec_reply_end("err: %s\n", "shutting down");
         return;
     }
-    if (fdclose_quiesce() < 0) {
-        reexec_reply_end("err: %s\n", "an fd closer has not reached close() yet, try again");
+    int q = fdclose_quiesce();
+    if (q < 0) {
+        reexec_reply_end("err: %s\n", q == -2
+            ? "an fd closer outlived SIGKILL (stuck in D state); try again later, or reboot"
+            : "an fd closer has not reached close() yet, try again");
         return;
     }
     notify_pause_track();
@@ -3340,6 +3343,8 @@ static void reexec_commit(void) {
     sigprocmask(SIG_SETMASK, &prev, NULL);
     if (blob >= 0) close(blob);
     if (oldexe >= 0) close(oldexe);
+    /* after the two above: either may hold a number a killed closer freed */
+    fdclose_resume();
     close(reexec_target);
     reexec_target = -1;
     printf("[schema-init] re-exec refused: %s\n", err);

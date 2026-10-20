@@ -1,3 +1,6 @@
+#include <sys/types.h>
+static int fake_kill(pid_t p, int s);
+#define FDCLOSE_KILL fake_kill
 #include "../fdclose.h"
 #include <arpa/inet.h>
 #include <assert.h>
@@ -11,6 +14,12 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
+
+static int kill_works = 1;
+static pid_t unkillable;
+static int fake_kill(pid_t p, int s) {
+    return kill_works && p != unkillable ? kill(p, s) : 0;
+}
 
 static double now(void) {
     struct timespec t;
@@ -173,6 +182,61 @@ int main(void) {
     waitpid(idle, NULL, 0);
     fdclose_n = 0;
     printf("test_fdclose quiesce: refuses while a closer is not in close(), leaves it alone\n");
+
+    int l3, c3 = lingering(&l3, 3);
+    fd_close_detached(&c3, 1);
+    usleep(300000);
+    pid_t dst = fdclose_pids[0];
+    assert(fdclose_n == 1 && fdclose_in_close(dst));
+    kill_works = 0;
+    t0 = now();
+    assert(fdclose_quiesce() == -2 && fdclose_n == 1 && fdclose_pids[0] == dst && now() - t0 > 0.9);
+    kill_works = 1;
+    assert(waitpid(dst, NULL, 0) == dst && fdclose_reaped(dst) == 1 && fdclose_n == 0);
+    close(l3);
+    printf("test_fdclose quiesce: a closer that outlives SIGKILL refuses re-exec and stays tracked\n");
+
+    char d2[] = "/tmp/schema-fdclose-XXXXXX";
+    assert(mkdtemp(d2));
+    char p2[128];
+    snprintf(p2, sizeof p2, "%s/sock", d2);
+    int r2 = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    struct sockaddr_un a2;
+    memset(&a2, 0, sizeof a2);
+    a2.sun_family = AF_UNIX;
+    strcpy(a2.sun_path, p2);
+    assert(bind(r2, (struct sockaddr *)&a2, sizeof a2) == 0);
+    int l4, l5, dz = lingering(&l4, 30), st5 = lingering(&l5, 30);
+    fd_close_detached(&dz, 1);
+    pid_t surv = fdclose_pids[0];
+    for (int i = 1; i < FDCLOSE_MAX_INFLIGHT; i++) fdclose_pids[i] = fdclose_pids[0];
+    fdclose_n = FDCLOSE_MAX_INFLIGHT;
+    int un[2] = { open("/dev/null", O_RDONLY), open("/dev/null", O_RDONLY) };
+    int batch[3] = { st5, un[0], un[1] };
+    fd_close_detached(batch, 3);
+    pid_t ovf1 = fdclose_ovf;
+    assert(ovf1 && fdclose_novf == 3);
+    usleep(300000);
+    assert(fdclose_in_close(surv) && fdclose_in_close(ovf1));
+    fdclose_n = 2;
+    fdclose_pids[1] = ovf1;
+    int off = 0, haspr = setsockopt(r2, SOL_SOCKET, SO_PASSRIGHTS, &off, sizeof off) == 0;
+    fdclose_sock = haspr ? r2 : -1;
+    fdclose_shut = haspr;
+    unkillable = surv;
+    assert(fdclose_quiesce() == -2);
+    assert(fdclose_n == 2 && fdclose_pids[0] == surv && fdclose_ovf && fdclose_ovf != ovf1);
+    assert(fdclose_novf == 2 && fdclose_nparked == 0 && fdclose_shut == 0);
+    pid_t ovf2 = fdclose_ovf;
+    assert(waitpid(ovf2, NULL, 0) == ovf2 && fdclose_reaped(ovf2) == 1);
+    assert(fcntl(un[0], F_GETFD) < 0 && fcntl(un[1], F_GETFD) < 0 && fdclose_novf == 0);
+    unkillable = 0;
+    kill(surv, SIGKILL);
+    assert(waitpid(surv, NULL, 0) == surv && fdclose_reaped(surv) == 1 && fdclose_n == 0);
+    fdclose_sock = -1;
+    close(r2); unlink(p2); rmdir(d2); close(l4); close(l5);
+    printf("test_fdclose quiesce: after a refusal, a killed overflow closer's unreached fds get a new closer%s\n",
+           haspr ? ", fd passing reopens" : "");
 
     for (int i = 0; i < FDCLOSE_MAX_INFLIGHT; i++) fdclose_pids[i] = 1000000 + i;
     fdclose_n = FDCLOSE_MAX_INFLIGHT;

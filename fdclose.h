@@ -175,12 +175,35 @@ static inline int fdclose_in_close(pid_t pid) {
     return nr == SYS_close;
 }
 
-/* Before re-exec: no closer may outlive the old image still sharing its fd
- * table, and the new image cannot track them. Wait until each has exited or
- * reached close(), then kill the rest and give them 1 s to die; one stuck in
- * D state can still survive. Fds an overflow closer had not reached, and any
- * still parked, stay in the table: the new image closes them as strays. -1 = one never reached close(); refuse the
- * re-exec rather than kill it with its fd still in PID 1's table. */
+/* A re-exec that killed closers and then did not exec: the old image runs
+ * on. Fds a killed overflow closer never reached are still in the table
+ * (close() removes one before it blocks), so they park again for a new
+ * closer, and fd passing reopens. Must run before PID 1 opens anything that
+ * could reuse a number the dead closer freed. */
+static inline void fdclose_resume(void) {
+    if (!fdclose_ovf) {
+        for (int i = 0; i < fdclose_novf && fdclose_nparked < FDCLOSE_PARK_MAX; i++)
+            if (fcntl(fdclose_ovf_fds[i], F_GETFD) >= 0)
+                fdclose_parked[fdclose_nparked++] = fdclose_ovf_fds[i];
+        fdclose_novf = 0;
+    }
+    fdclose_flush();
+    if (fdclose_perfd() < FDCLOSE_MAX_INFLIGHT) fdclose_passrights(1);
+}
+
+#ifndef FDCLOSE_KILL
+#define FDCLOSE_KILL kill
+#endif
+
+/* Before re-exec: no closer may outlive the old image. After execve PID 1
+ * gets a fresh fd table, but a surviving closer keeps the old one, pinning
+ * every socket and memfd PID 1 held, and the new image cannot track it.
+ * Wait until each has exited or reached close(), then kill them all.
+ * Fds an overflow closer had not reached, and any still parked, stay in the
+ * table: the new image closes them as strays.
+ * -1 = one never reached close(): refuse rather than kill it with its fd
+ * still in PID 1's table. -2 = one outlived SIGKILL by 1 s (D state): refuse,
+ * it stays tracked. */
 static inline int fdclose_quiesce(void) {
     struct timespec tick = { 0, 10000000 };
     for (int t = 0; t < 100; t++) {
@@ -197,7 +220,7 @@ static inline int fdclose_quiesce(void) {
         nanosleep(&tick, NULL);
         if (t == 99) return -1;
     }
-    for (int i = 0; i < fdclose_n; i++) kill(fdclose_pids[i], SIGKILL);
+    for (int i = 0; i < fdclose_n; i++) FDCLOSE_KILL(fdclose_pids[i], SIGKILL);
     for (int t = 0; t < 100 && fdclose_n; t++) {
         for (int i = 0; i < fdclose_n; ) {
             if (waitpid(fdclose_pids[i], NULL, WNOHANG) != 0) fdclose_untrack(i);
@@ -205,7 +228,9 @@ static inline int fdclose_quiesce(void) {
         }
         if (fdclose_n) nanosleep(&tick, NULL);
     }
-    return 0;
+    if (!fdclose_n) return 0;
+    fdclose_resume();
+    return -2;
 }
 
 #endif
