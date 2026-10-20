@@ -1,0 +1,38 @@
+# notify-closer — PID 1 never close()s a received fd itself (2026-10-19)
+
+## unit (blakbox, 7.0)
+tests/test_fdclose.c: control plain close of a SO_LINGER=2 TCP socket with full send queue blocked 2.0 s; fd_close_detached returned <0.5 s, child waited the linger; cap: SO_PASSRIGHTS off -> sender EPERM, back on after one closer reaped.
+make test: PASS. vmtest: PASS.
+
+## Devuan VM (kernel 6.12, no SO_PASSRIGHTS), unprivileged attacker (nobody) sends a SO_LINGER=40 TCP socket fd to /run/schema-init/notify
+RED  (installed PID1, master code): PID1 wchan wait_woken, sudo schema-ctl status took 33.75 s.
+GREEN (branch, live reexec, 31 adopted, 0 new): PID1 wchan do_sys_poll, closer child wait_woken, status 0.013 s; closer exited + reaped after the linger, no zombie, 0 failed.
+fdstore unaffected: live restart dbus x4 -> resumed 8 connections each, dbus restarts=0.
+
+## after /code-review fixes (2026-10-19 23:55)
+unit blakbox: test_fdclose control 2.0 s / detached instant / cap: over the cap still closes, SO_PASSRIGHTS off until a closer exits / kill_all reaps a stuck closer <1 s. make test PASS, vmtest PASS.
+Devuan 6.12: test_fdclose cap SKIP (no SO_PASSRIGHTS), rest OK. Live reexec onto fix (31 adopted). Attack (linger 90): PID1 do_sys_poll, closer wait_woken, status 0.014 s; live reexec WITH closer stuck 0.043 s, closer killed + reaped, 0 failed, no zombie; restart dbus resumed (17->18).
+
+## Greg rulings (2026-10-20 00:05)
+fast path: pipes (F_GETPIPE_SZ) + shmem/memfd (F_GET_SEALS) close inline; sockets NOT (TCP linger; AF_UNIX carries in-flight fds). One closer per risky fd (a closer stuck on fd 1 of N left N-1 in PID1's table). Re-exec: fdclose_quiesce waits <=1 s until every closer has exited or sits in close() (/proc/PID/syscall), else refuses; then SIGKILL + reap. <6.16: at cap stop reading notify (backpressure).
+unit: fast path no child; 2 stuck fds -> 2 closers, both out of the table; quiesce kills closers in close() <1 s; quiesce refuses (-1, ~1 s) while a closer is not in close(), leaves it; backpressure at cap w/o SO_PASSRIGHTS. make test PASS, vmtest PASS.
+Devuan 6.12: 40 attackers -> 28 closers, status 0.015 s, live re-exec with 28 stuck 'ok' (quiesced, killed, 0 left). 60 attackers (62 sent) -> closers capped at 32, status 0.015 s; drained, 0 zombies, 0 failed, restart dbus resumed (18->19).
+
+## fast path removed (2026-10-20 00:10)
+Security review: pipe_release takes pipe->mutex, which a writer can hold while faulting on a FUSE-mmapped buffer -> PID1 close of a pipe can block. memfd/shmem eviction not provably lock-free either. Every received fd now gets its own closer, no inline close.
+unit + make test + vmtest PASS. Devuan: attack status 0.020 s, live re-exec with closer stuck ok, restart dbus resumed (19->20), 0 failed, 0 zombies.
+
+## blakbox HW (kernel 7.0), local RPM 0.4.15-1.1260.20261020git8e75872 (2026-10-20 00:15)
+rpm -Uvh --oldpackage: live re-exec, 63 adopted, kwin 2112/plasma 2553 kept, 0 failed. Backup /root/svc-bak-20261020-precloser.
+Attack as nobody (linger 20): PID1 poll_schedule_timeout, closer wait_woken, status 0.023 s; closer reaped, 0 zombies.
+Live restart dbus: resumed 54 connections, owners 114 identical (only the busctl client's own unique name differs), kwin/NM kept, 0 failed.
+
+## blakbox HW, 1.1260, reboot 1/3 (2026-10-20 00:16)
+boot: kernel 3.983s, userspace 6.795s, PID1 VmRSS 4308 kB, broker 357 VmRSS 4624 kB PSS 1288 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, 0 zombies, dbus cost 0.247s, sddm 2.186s (@4.258)
+
+## blakbox HW, 1.1260, reboot 2/3 (2026-10-20 00:16)
+boot: kernel 3.996s, userspace 6.394s, PID1 VmRSS 4492 kB, broker 356 VmRSS 4624 kB PSS 1229 kB, fresh boot no resume line, dbus FUNDAMENTAL restarts=0, 0 failed, 0 zombies, dbus cost 0.573s, sddm 1.988s (@4.104)
+note: reboot 1/3 CSV row (20261019-231834) is a stale re-capture of the 23:12:30 boot; this row is the real one.
+
+## blakbox HW, 1.1260, reboot 3/3 (2026-10-20 00:18)
+boot: kernel 3.978s, PID1 VmRSS 4316 kB, broker 356 VmRSS 4768 kB PSS 1276 kB, fresh boot (broker restarts=0; dbus.log resumed line is the 00:15 live restart, log not per-boot), dbus FUNDAMENTAL, 0 failed, 0 zombies, dbus cost 0.257s, sddm 1.994s (@6.254 from power-on)

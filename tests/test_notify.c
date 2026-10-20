@@ -5,6 +5,8 @@
 #include <sys/wait.h>
 
 static int count_fds(void) {
+    pid_t p;
+    while (fdclose_n && (p = waitpid(-1, NULL, 0)) > 0) fdclose_reaped(p);
     int c = 0;
     DIR *d = opendir("/proc/self/fd");
     assert(d);

@@ -14,7 +14,12 @@ static int mkfd(void) {
     return p[0];
 }
 
-static int is_open(int fd) { return fcntl(fd, F_GETFD) >= 0; }
+static void settle(void) {
+    pid_t p;
+    while (fdclose_n && (p = waitpid(-1, NULL, 0)) > 0) fdclose_reaped(p);
+}
+
+static int is_open(int fd) { settle(); return fcntl(fd, F_GETFD) >= 0; }
 
 static int keep_a(const char *svc, void *ctx) {
     (void)ctx;
@@ -58,16 +63,19 @@ int main(void) {
     assert(fdstore_add("cap", c1, "x", 2) == 0);
     assert(fdstore_add("cap", c2, "y", 2) == 0);
     assert(fdstore_add("cap", c3, "z", 2) == -1);
-    assert(!is_open(c3) && is_open(c1) && is_open(c2));
+    assert(is_open(c3) && is_open(c1) && is_open(c2));
+    close(c3);
     assert(fdstore_add("cap", mkfd(), "w", 0) == -1);
     assert(fdstore_drop("cap") == 2);
 
     int b1 = mkfd(), b2 = mkfd();
-    assert(fdstore_add("bad", b1, "a:b", 8) == -1 && !is_open(b1));
+    assert(fdstore_add("bad", b1, "a:b", 8) == -1 && is_open(b1));
+    close(b1);
     char longname[65];
     memset(longname, 'n', 64);
     longname[64] = 0;
-    assert(fdstore_add("bad", b2, longname, 8) == -1 && !is_open(b2));
+    assert(fdstore_add("bad", b2, longname, 8) == -1 && is_open(b2));
+    close(b2);
     assert(fdstore_count("bad") == 0);
 
     int sa = mkfd(), sb = mkfd();
@@ -93,6 +101,7 @@ int main(void) {
     assert(strncmp(nm, "dbus.socket:conn:conn", 21) == 0);
     assert(fdstore_fdnames("dbus", 1, tiny, sizeof tiny) == -1);
     assert(fdstore_drop("dbus") == 300);
+    settle();
 
     pid_t pid = fork();
     assert(pid >= 0);
@@ -146,7 +155,7 @@ int main(void) {
         assert(setrlimit(RLIMIT_NOFILE, &rl) == 0);
         int hi = fcntl(0, F_DUPFD, 60), lo = fcntl(0, F_DUPFD, 3);
         assert(hi >= 60 && lo >= 0 && lo + FDSTORE_HEADROOM < 300);
-        assert(fdstore_add("room", hi, "x", 8) == -1 && !is_open(hi));
+        assert(fdstore_add("room", hi, "x", 8) == -1 && is_open(hi));
         assert(fdstore_add("room", lo, "x", 8) == 0 && fdstore_count("room") == 1);
         _exit(0);
     }
