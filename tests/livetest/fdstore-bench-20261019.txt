@@ -1,0 +1,20 @@
+# fdstore PR1 — verification bench (2026-10-19)
+
+## vmtest (busybox initramfs, PID 1 rail) — branch fdstore @ 69aed05
+>> RESULT: PASS (timer fired, hang excised at timeout, dependent ran anyway)
+
+## Devuan VM (~/Ocean/vm/devuan), schema-init PID 1, schema-dbus --system armed, dbus.svc fdstore=1024, /bin/sh = dash
+Clients on bus: NetworkManager, elogind (login1), polkit, Accounts, Avahi, ModemManager, LightDM.
+restart 1 (`schema-ctl restart dbus`): broker log "stored 8 connections, 0 passed fds" → "resumed 8 connections from the fdstore";
+  new broker pid in ~40 ms; every well-known name owner identical (diff before/after empty); nmcli + loginctl answer; 0 service restarts.
+restart 2: same (8/8), owners identical.
+restart 3 with a root dbus-monitor (BecomeMonitor) attached: stored 9 / resumed 9; monitor alive afterwards and kept receiving
+  (1719 lines after restart); 0 NameOwnerChanged during the restart; next new client got :1.74 (numbering continued, no reuse).
+PID 1 re-exec with a held store: test svc fdstore=4 stored 2 pipes (ino 7188, 7189) → fds=2 → `schema-ctl reexec`
+  ("32 services adopted") → still fds=2 → restart svc → LISTEN_FDS=2 LISTEN_FDNAMES=pipe:pipe, same inodes 7188/7189.
+stop drops the store: `schema-ctl stop fdtest` → EXCISED, no fds; start → fresh (LISTEN_FDS=0, new pipes).
+dash fallback (tests/test_dbus_gate.py on the VM, dash installed): 13/13 incl "fallback without python3/perl (dash)".
+Memory after 3 restarts: broker VmRSS 2676 kB (RssAnon 432), PSS 630 kB; PID 1 VmRSS 1712 kB.
+
+Found (pre-existing, not fdstore): BecomeMonitor rejects a filtered rule "type=signal,member=NameOwnerChanged"
+  as "invalid match rule"; non-root BecomeMonitor denied (policy). Unfiltered root monitor works.
