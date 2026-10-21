@@ -63,6 +63,7 @@ timeout 90 qemu-system-x86_64 -enable-kvm -m 512 -smp 2 -no-reboot -nographic -n
 grep -aE "^(PIDS|CG|RELOAD|REEXEC|T\+|ST |POWEROFF|STUB|POLITE|LEAKY|ok:|error)|re-exec|evict|orphaned|unmanaged|force-killed|PID 1 poweroff|Kernel panic" "$OUT"
 SP=$(grep -aoE '^PIDS stub=[0-9]+' "$OUT" | cut -d= -f2); PP=$(grep -aoE 'polite=[0-9]+' "$OUT" | head -1 | cut -d= -f2); LP=$(grep -aoE ' leaky=[0-9]+' "$OUT" | head -1 | cut -d= -f2)
 fail=0
+[ -n "$SP" ] && [ -n "$PP" ] && [ -n "$LP" ] || { echo "MISS: PIDS line"; fail=1; SP=x PP=x LP=x; }
 grep -aqE "force-killed.*pid=$SP\b" "$OUT" || { echo "MISS: stub not force-killed"; fail=1; }
 [ -n "${NEXT:-}" ] || { grep -aqE "force-killed.*pid=$PP\b" "$OUT" && { echo "BAD: polite exited on SIGTERM but was reported force-killed"; fail=1; }; }
 [ -n "${NEXT:-}" ] || { grep -aqE "force-killed.*pid=$LP\b" "$OUT" && { echo "BAD: leaky main exited on SIGTERM but was reported force-killed"; fail=1; }; }

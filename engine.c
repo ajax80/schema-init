@@ -178,18 +178,20 @@ static int cgroup_populated(const char *cg) {
 
 /* An evicted child that exits on SIGTERM must not leave a live pid in the
  * table: by the deadline it may be reused, and the log would claim a kill
- * that never happened. With a cgroup the entry stays, marked reaped, to
- * catch descendants that ignored SIGTERM; without one there is nothing left
- * to do. The pid itself is kept so an older image after a re-exec, which
- * ignores reaped=, behaves as it always did instead of seeing pid 0. */
-static int eviction_reaped(pid_t pid) {
+ * that never happened. While its cgroup still holds descendants that
+ * ignored SIGTERM the entry stays, marked reaped, to cgroup.kill them at the
+ * deadline; otherwise there is nothing left to do. The pid itself is kept
+ * so an older image after a re-exec, which ignores reaped=, behaves as it
+ * always did instead of seeing pid 0. */
+static void eviction_reaped(pid_t pid) {
     for (int i = 0; i < eviction_count; i++) {
         if (evictions[i].pid != pid || evictions[i].reaped) continue;
-        if (evictions[i].cgroup[0]) evictions[i].reaped = 1;
-        else evictions[i] = evictions[--eviction_count];
-        return 1;
+        if (evictions[i].cgroup[0] && cgroup_populated(evictions[i].cgroup))
+            evictions[i].reaped = 1;
+        else
+            evictions[i] = evictions[--eviction_count];
+        return;
     }
-    return 0;
 }
 
 static void eviction_tick(void) {
@@ -208,7 +210,9 @@ static void eviction_tick(void) {
         /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
          * previously this whole branch was gated on cgroup[0], so an orphan
          * with no cgroup that ignored SIGTERM survived eviction entirely.
-         * an unreaped pid is still our child, so it cannot have been reused. */
+         * an unreaped pid is still our child, so it cannot have been reused
+         * (bar an entry adopted from an older image, which may have reaped
+         * it before the re-exec). */
         if (live && !killed && !evictions[i].reaped) {
             kill(evictions[i].pid, SIGKILL);
             killed = 1;
@@ -499,7 +503,6 @@ static void reap(void) {
         if (engine_hooks.on_reaped(pid, status))
             continue;
         if (fdclose_reaped(pid)) continue;
-        if (eviction_reaped(pid)) continue;
         for (i = 0; i < svc_count; i++) {
             if (services[i].card_pid == pid) {
                 card_done(&services[i], status);
@@ -580,6 +583,9 @@ static void reap(void) {
             }
             break;
         }
+        /* only a pid no live service claims: an entry adopted from an older
+         * image may name a pid it already reaped, now reused by a service */
+        if (i == svc_count) eviction_reaped(pid);
     }
 }
 
