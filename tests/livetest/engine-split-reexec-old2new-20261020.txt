@@ -1,0 +1,711 @@
+S0:
+  rp-svc pid=80 restarts=0
+  sleeper pid=77 restarts=0
+  sock-eager pid=78 restarts=0
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 176)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-21-g100e971 -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 184)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 252)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 259)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 310)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 316)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 380)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 386)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 444)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 513)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 519)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 525)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 577)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 584)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 589)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 594)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 601)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 607)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 645)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 694)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+HAMMER: 450 calls, 0 failed
+[2026-10-21 00:33:27] watcher               promote       state=FUNDAMENTAL   wt=8  pid=69
+[2026-10-21 00:33:27] dep5                  promote       state=FUNDAMENTAL   wt=8  pid=70
+[2026-10-21 00:33:27] dep4                  promote       state=FUNDAMENTAL   wt=8  pid=73
+[2026-10-21 00:33:27] dep3                  promote       state=FUNDAMENTAL   wt=8  pid=74
+[2026-10-21 00:33:27] dep2                  promote       state=FUNDAMENTAL   wt=8  pid=75
+[2026-10-21 00:33:27] dep1                  promote       state=FUNDAMENTAL   wt=8  pid=76
+[2026-10-21 00:33:27] sleeper               promote       state=FUNDAMENTAL   wt=8  pid=77
+[2026-10-21 00:33:27] sock-eager            promote       state=FUNDAMENTAL   wt=8  pid=78
+[2026-10-21 00:33:27] crash-svc             promote       state=FUNDAMENTAL   wt=8  pid=79
+LOOP: 20/20 ok
+SOCK-FDS-SAME: PASS (5 sockets)
+SOCK-LAZY-PARKED: pid=0 state=PERFECT
+[2026-10-21 00:33:28] sock-lazy             socket-wake   state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:33:28] sock-lazy             spawn         state=FULL_TRUST    wt=8  pid=0
+SOCK-WAKE-AFTER: LAZY pid=720 fds=1 names=sock-lazy.socket
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 724)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 14 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+  ok: re-executed into v0.4.15-28-gb539739-dirty, 14 services adopted, 0 new
+[2026-10-21 00:33:31] sock-lazy             socket-idle   state=PERFECT       wt=8  pid=0
+[2026-10-21 00:33:32] tick-timer            timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:33:32] tick-timer            spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:33:32] tick-timer            timer-done    state=PERFECT       wt=8  pid=0
+SOCK-IDLE-AFTER: pid=0 state=PERFECT
+[2026-10-21 00:33:33] sock-lazy             socket-wake   state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:33:33] sock-lazy             spawn         state=FULL_TRUST    wt=8  pid=0
+SOCK-WAKE-AGAIN: LAZY pid=782 fds=1 names=sock-lazy.socket
+SOCK-POST: EAGER pid=78 fds=1 names=sock-eager.socket
+[2026-10-21 00:33:33] sock-gone             socket-wake   state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:33:33] sock-gone             spawn         state=FULL_TRUST    wt=8  pid=0
+SOCK-GONE-BEFORE: GONE pid=785 fds=1 names=sock-gone.socket
+[2026-10-21 00:33:36] sock-lazy             socket-idle   state=PERFECT       wt=8  pid=0
+[2026-10-21 00:33:36] sock-gone             socket-idle   state=PERFECT       wt=8  pid=0
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 844)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 13 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+  ok: re-executed into v0.4.15-28-gb539739-dirty, 13 services adopted, 0 new
+SOCK-GONE-AFTER: CONNECT-FAIL Connection refused pid1-sockets 5 -> 4
+STATE-SAME: PASS
+ONCE-FIRES: 1
+CRASH-MIDSWAP:
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 862)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 13 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+  ok: re-executed into v0.4.15-28-gb539739-dirty, 13 services adopted, 0 new
+[2026-10-21 00:33:38] crash-svc             died          state=RECOVERY      wt=8  pid=0
+[2026-10-21 00:33:38] crash-svc             friction      state=FRICTION      wt=6  pid=0
+[2026-10-21 00:33:38] crash-svc             retry-deep    state=NEW_PROCESS   wt=4  pid=0
+[2026-10-21 00:33:38] crash-svc             spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:33:42] tick-timer            timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:33:42] tick-timer            spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:33:42] tick-timer            timer-done    state=PERFECT       wt=8  pid=0
+    crash-svc                 pid=866     state=FULL_TRUST      restarts=1
+NOFILE-RESPAWNED: 1024/4096 (pid1 boot soft was 1024)
+REFUSE-BADCHECK:
+[schema-init] re-exec: dry run of /usr/bin/badcheck (pid 950)
+  err: synthetic check failure
+REFUSE-FALSE:
+[schema-init] re-exec: dry run of /bin/false (pid 954)
+  err: dry run failed without a reason
+REFUSE-RELATIVE:
+  err: 'sbin/schema-init' is not an absolute path
+REFUSE-MODIFIED:
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 962)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+  err: 'sleeper' modified since boot; a changed .svc takes effect at next boot, so re-exec is refused
+REFUSE-ORPHAN:
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 969)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+  err: 'sleeper' is running (pid 77) but has no .svc on disk; run schema-ctl reload --evict first
+AFTER-RESTORE:
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 974)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 13 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+  ok: re-executed into v0.4.15-28-gb539739-dirty, 13 services adopted, 0 new
+FALLBACK:
+[schema-init] re-exec: dry run of /usr/bin/refuser (pid 979)
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /usr/bin/refuser
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 13 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+  err: rolled back to v0.4.15-28-gb539739-dirty, 13 services adopted
+STATE-AFTER-FALLBACK: PASS
+STOP-HOLD:
+[2026-10-21 00:33:45] sleeper               killed-SIGTERM  state=FUNDAMENTAL   wt=8  pid=0
+[2026-10-21 00:33:45] sleeper               76-no-restart  state=EXCISED       wt=8  pid=0
+[schema-init] re-exec: dry run of /sbin/schema-init.next (pid 991)
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /sbin/schema-init.next
+[schema-init] hardening default: off
+[schema-init] WARNING: service 'dep5' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep4' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep3' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep2' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] WARNING: service 'dep1' depends on timer service 'tick-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-28-gb539739-dirty -> v0.4.15-28-gb539739-dirty: 13 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+  ok: re-executed into v0.4.15-28-gb539739-dirty, 13 services adopted, 0 new
+[2026-10-21 00:33:48] crash-svc             promote       state=FUNDAMENTAL   wt=8  pid=866
+    sleeper                   pid=0       state=EXCISED         restarts=0  last=SIGTERM
+[2026-10-21 00:33:48] sleeper               spawn         state=FULL_TRUST    wt=8  pid=0
+  after start:   sleeper                   pid=1030    state=FULL_TRUST      restarts=0  last=SIGTERM
+PID1: schema-init.nex voluntary_ctxt_switches:	836
+REEXEC-END
+[schema-init] PID 1 reboot

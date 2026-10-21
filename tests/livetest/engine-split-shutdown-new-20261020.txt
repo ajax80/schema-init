@@ -1,0 +1,25 @@
+POWEROFF-AT 25.35
+[schema-init] shutdown: container SIGTERM sent
+[schema-init] shutdown: stop 1 (+0 ms): watcher ignorer wrapsvc grpuser top
+STOP grpuser 26.16
+[schema-init] shutdown: grpuser down at +325 ms (325 ms after SIGTERM)
+STOP top 26.26
+[schema-init] shutdown: top down at +405 ms (405 ms after SIGTERM)
+[schema-init] shutdown: stop 2 (+405 ms): mid
+STOP mid 26.47
+STOP container 26.86
+STOP worker 26.86
+[schema-init] shutdown: wrapsvc down at +1012 ms (1012 ms after SIGTERM)
+[schema-init] shutdown: stop 3 (+1012 ms): base
+STOP base 26.97
+[schema-init] shutdown: ignorer ignored SIGTERM for 3000 ms, killing
+[schema-init] shutdown: services down in 3033 ms
+[schema-init] shutdown: container cgroups killed
+[schema-init] shutdown: cgroups killed
+[schema-init] shutdown: SIGKILL broadcast
+[schema-init] shutdown: control socket and shm released
+[schema-init] shutdown: sync done
+[schema-init] shutdown: filesystems read-only
+[schema-init] PID 1 poweroff
+ORDER: grpuser top mid container worker base 
+>> RESULT: PASS
