@@ -2131,6 +2131,14 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         snprintf(svc->cond[svc->cond_count++], sizeof svc->cond[0], "%s", val);
+    } else if (strcmp(line, "wait_socket") == 0) {
+        while (*val == ' ' || *val == '\t') val++;
+        if (val[0] != '/' || strlen(val) >= sizeof svc->wait_socket) {
+            fprintf(stderr, "[schema-init] %s: bad wait_socket=%s (absolute path, under %zu bytes)\n",
+                    svc->name[0] ? svc->name : path, val, sizeof svc->wait_socket);
+            return -1;
+        }
+        snprintf(svc->wait_socket, sizeof svc->wait_socket, "%s", val);
     } else if (strcmp(line, "listen_lazy") == 0) {
         svc->listen_lazy = svc->listen_hold = atoi(val) != 0;
     } else if (strcmp(line, "socket_mode") == 0) {

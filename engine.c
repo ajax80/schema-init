@@ -794,6 +794,21 @@ static void active_kill_service(service_t *svc) {
 
 /* ── schema tick for one service ────────────────────────────────────── */
 
+/* A socket file can outlive its listener (the bus died), so only a completed
+ * connect counts. A listener whose backlog is full refuses with EAGAIN and is
+ * retried on the next pass. */
+static int socket_accepts(const char *path) {
+    struct sockaddr_un a;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0), ok;
+    if (fd < 0) return 0;
+    memset(&a, 0, sizeof a);
+    a.sun_family = AF_UNIX;
+    strncpy(a.sun_path, path, sizeof a.sun_path - 1);
+    ok = connect(fd, (struct sockaddr *)&a, sizeof a) == 0;
+    close(fd);
+    return ok;
+}
+
 /* A ready_path counts only once it is not the file that was already there
  * at spawn: a marker or socket left by a crashed run must not promote the new
  * one. ctime catches a rewrite in place and a new file on a reused inode. */
@@ -911,6 +926,14 @@ static void tick_service(service_t *svc,
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
+            if (svc->wait_socket[0] && !socket_accepts(svc->wait_socket)) {
+                if (!svc->sock_waiting) {
+                    svc->sock_waiting = 1;
+                    service_log(svc, "wait-socket");
+                }
+                break;
+            }
+            svc->sock_waiting = 0;
             if (svc->cond_count) {
                 char why[160];
                 if (!service_conditions_met(svc, why, sizeof why)) {
@@ -1482,6 +1505,8 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));
                 ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
                 ctl_writef(fd, "service.%s.last_exit=%s\n", services[i].name, last_exit_str(&services[i]));
+                if (services[i].sock_waiting)
+                    ctl_writef(fd, "service.%s.waiting=%s\n", services[i].name, services[i].wait_socket);
             }
         } else if (*opt) {
             for (i = 0; i < svc_count && strcmp(services[i].name, opt) != 0; i++) ;
@@ -1524,11 +1549,13 @@ static void ctl_cmd(int fd, char *line) {
                 int sk = services[i].fdstore_max > 0 ? fdstore_count(services[i].name) : 0;
                 if (sk > 0)
                     snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  fds=%d", sk);
-                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s\n",
+                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s%s%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count, deck,
                     services[i].term_signal ? "  last=" : "",
-                    services[i].term_signal ? last_exit_str(&services[i]) : "");
+                    services[i].term_signal ? last_exit_str(&services[i]) : "",
+                    services[i].sock_waiting ? "  waiting=" : "",
+                    services[i].sock_waiting ? services[i].wait_socket : "");
             }
         }
 
@@ -2055,6 +2082,8 @@ static int get_poll_timeout(void) {
             tick = 1;
         else if (s == STATE_DORMANT)
             best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);
+        else if (svc->sock_waiting)
+            best = wake_min(best, now_m + 1000, now_m, WAKE_NONE);
         else if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED)
             tick = 1;
         else if (s == STATE_FUNDAMENTAL && svc->ready_path[0] && svc->child_pid > 0) {

@@ -6,9 +6,10 @@ cd "$(dirname "$0")/.."
 T=$(mktemp -d)
 export XDG_RUNTIME_DIR=$T/run XDG_STATE_HOME=$T/state/nested XDG_CONFIG_HOME=$T/cfg
 unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS
-PID=
+PID= LPID=
 cleanup() {
     [ -n "$PID" ] && kill -KILL "$PID" 2>/dev/null
+    [ -n "$LPID" ] && kill -KILL "$LPID" 2>/dev/null
     pkill -KILL -f "$T/sl" 2>/dev/null
     rm -rf "$T"
 }
@@ -30,6 +31,7 @@ sleeper() {
 }
 sleeper a > "$S/a.svc"
 { sleeper b; echo dep=a; } > "$S/b.svc"
+{ sleeper busy; echo "wait_socket=$T/run/bus"; } > "$S/busy.svc"
 printf 'name=flap\nexec=/bin/sh\nargs=-c\nargs=sleep 0.2; exit 1\n' > "$S/flap.svc"
 printf 'name=dbl\nexec=/bin/sh\nargs=-c\nargs=sh -c '"'"'sleep 0.5; cut -d" " -f4 /proc/$$/stat > %s/dbl.ppid; exec %s/sl 30'"'"' & exit 0\noneshot=1\n' \
     "$T" "$T" > "$S/dbl.svc"
@@ -68,10 +70,32 @@ env -u XDG_RUNTIME_DIR ./schema-user 2>/dev/null && fail "ran without XDG_RUNTIM
 XDG_RUNTIME_DIR=/nonexistent ./schema-user 2>/dev/null && fail "ran with a missing XDG_RUNTIME_DIR"
 
 ./schema-ctl --user stop flap > /dev/null || fail "stop flap"
+ctxsw() { awk '/^voluntary_ctxt_switches/ {print $2}' "/proc/$PID/status"; }
+
+# wait_socket=: held while the socket is missing, and while it is stale
+busy_waiting() { st | grep -Eq "^ +busy +pid=0 .*  waiting=$T/run/bus\$"; }
+sleep 2
+busy_waiting || { st; fail "busy not held on a missing socket"; }
+python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()' "$T/run/bus"
+[ -S "$T/run/bus" ] || fail "no stale socket made"
+c0=$(ctxsw)
+sleep 2
+c1=$(ctxsw)
+# a held service is re-checked once a second, not on the 250 ms tick (8)
+[ $((c1 - c0)) -le 4 ] || fail "held service ticks: $((c1 - c0)) wakeups in 2 s"
+busy_waiting || { st; fail "busy not held on a stale socket"; }
+python3 -c 'import os, socket, sys, time
+os.unlink(sys.argv[1]); s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(8); time.sleep(30)' "$T/run/bus" &
+LPID=$!
+until_ok 'st | grep -Eq "^ +busy +pid=[1-9][0-9]* +state=(FULL_TRUST|FUNDAMENTAL)"' \
+    || { st; fail "busy not started once the socket accepts"; }
+until_ok 'st | grep -Eq "^ +busy +pid=[1-9][0-9]* +state=FUNDAMENTAL"' || { st; fail "busy not FUNDAMENTAL"; }
+st | grep -q "waiting=" && { st; fail "waiting= still shown"; }
+
 sleep 0.5
-c0=$(awk '/^voluntary_ctxt_switches/ {print $2}' "/proc/$PID/status")
+c0=$(ctxsw)
 sleep 3
-c1=$(awk '/^voluntary_ctxt_switches/ {print $2}' "/proc/$PID/status")
+c1=$(ctxsw)
 # idle measures 0; a 250 ms tick is 12
 [ $((c1 - c0)) -le 3 ] || fail "not idle: $((c1 - c0)) wakeups in 3 s"
 

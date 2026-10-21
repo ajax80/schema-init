@@ -300,6 +300,8 @@ typedef struct {
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
     char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */
     char             pid_file[256];    /* forking daemon: launcher exits 0, main PID read from here */
+    char             wait_socket[108]; /* if set, hold in NEW_PROCESS until this AF_UNIX socket accepts */
+    uint8_t          sock_waiting;     /* runtime: held on wait_socket (recomputed each pass) */
     int              fork_state;       /* pid_file: 0 launcher running, 1 main PID adopted, -1 waiting for the file */
     struct timespec  fork_wait;        /* fork_state -1: give up at this CLOCK_MONOTONIC time */
     prio_t           priority;         /* priority class for resource throttling */
