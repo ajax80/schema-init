@@ -172,3 +172,15 @@ Finish line: GNOME and stock `startplasma-wayland` log in unmodified on a test V
 - logind adopts running `schema-user` instances on restart/re-exec; never kill-and-replace.
 - PipeWire real-time via rtkit (stock Fedora), verified per host; fall back to keeping the system `.svc` on any host where rtkit doesn't deliver.
 - Session D-Bus activation routing only under schema-dbus; stock `dbus-daemon` hosts keep today's activation.
+
+## Carried into PR B (from the PR A final review, 2026-10-20)
+
+PID-1-only behaviour still inside `engine.c` that `schema-user` must parameterise or bypass:
+- `service.h` `cgroup_path[128]`: `user.slice/user-<uid>.slice/user@<uid>.service/<root>/<name>` can exceed 128 → widen `cgroup_path` or bound root length when set.
+- `ctl_poll` refuses mutating verbs when `peer_uid != 0` → must accept the supervisor's own uid.
+- `./run/schema-init.sock` and `./run/schema-init/env` cwd fallbacks; `engine_load`'s `/proc/cmdline` + `/etc/schema-init/hardening-default` reads and `./services` fallback.
+- `timer_stamp_write` creates only the last component of `timer_stamp_dir` (and hard-codes `mkdir /var/lib/schema-init`) → `mkdir -p` semantics for `$XDG_STATE_HOME/schema-user/timers`.
+- `ctl_init` chowns the socket to `0:schema`; log prefixes are hard-coded `[schema-init]`.
+- `get_poll_timeout`: `psi_fd < 0` forces the 250 ms tick — needs a flag so `schema-user` sleeps to real deadlines.
+- `engine.h` exports generic-named globals (`psi_fd`, `watchdog_fd`, `reexec_check_*`) — watch for clashes in the new binary.
+- `service_notify_sock` must be set alongside `engine_paths.notify_sock`.
