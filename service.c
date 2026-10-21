@@ -213,20 +213,30 @@ uint32_t service_probe_f6(service_t *svc) {
 
 /* ── fork + exec ────────────────────────────────────────────────────── */
 
+const char *service_cgroup_root = "/sys/fs/cgroup/schema-init";
+const char *service_notify_sock = NOTIFY_SOCK_PATH;
+
+const char *service_cgroup_path_for(const service_t *svc) {
+    static char buf[sizeof svc->cgroup_path];
+    snprintf(buf, sizeof buf, "%s/%s", service_cgroup_root, svc->name);
+    return buf;
+}
+
 static void cgroup_assign(service_t *svc, pid_t pid) {
     char path[160];
     int fd;
     char buf[32];
     int n;
 
-    mkdir("/sys/fs/cgroup/schema-init", 0755);
-    int sub_fd = open("/sys/fs/cgroup/schema-init/cgroup.subtree_control", O_WRONLY);
+    mkdir(service_cgroup_root, 0755);
+    snprintf(path, sizeof(path), "%s/cgroup.subtree_control", service_cgroup_root);
+    int sub_fd = open(path, O_WRONLY);
     if (sub_fd >= 0) {
         write(sub_fd, "+cpu +memory +cpuset +pids +io", 30);
         close(sub_fd);
     }
-    snprintf(svc->cgroup_path, sizeof(svc->cgroup_path),
-             "/sys/fs/cgroup/schema-init/%s", svc->name);
+    snprintf(svc->cgroup_path, sizeof(svc->cgroup_path), "%s",
+             service_cgroup_path_for(svc));
     mkdir(svc->cgroup_path, 0755);
 
     snprintf(path, sizeof(path), "%s/cgroup.procs", svc->cgroup_path);
@@ -333,8 +343,10 @@ static void cgroup_apply_limits(service_t *svc) {
         {
             char excl[512] = {0};
             char merged[640];
-            int rfd = open("/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive",
-                           O_RDONLY);
+            char excl_path[160];
+            snprintf(excl_path, sizeof excl_path, "%s/cpuset.cpus.exclusive",
+                     service_cgroup_root);
+            int rfd = open(excl_path, O_RDONLY);
             int truncated = 0;
             if (rfd >= 0) {
                 r = read(rfd, excl, sizeof(excl) - 1);
@@ -354,8 +366,7 @@ static void cgroup_apply_limits(service_t *svc) {
                         " partition will degrade to plain pinning\n",
                         svc->name);
             } else {
-                fd = open("/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive",
-                          O_WRONLY);
+                fd = open(excl_path, O_WRONLY);
                 if (fd >= 0) { write(fd, merged, strlen(merged)); close(fd); }
             }
         }
@@ -1445,7 +1456,7 @@ int service_spawn(service_t *svc) {
             svc_apply_env(svc, file_env, file_envc);
             svc_run_pre(svc, 0);
         }
-        if (svc->notify || svc->fdstore_max > 0) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
+        if (svc->notify || svc->fdstore_max > 0) setenv("NOTIFY_SOCKET", service_notify_sock, 1);
         else unsetenv("NOTIFY_SOCKET");
         if (svc->notify && svc->watchdog_sec > 0) {
             char wv[24];
@@ -1545,8 +1556,9 @@ void service_cgroup_kill(service_t *svc) {
      * reverse order of the apply: demote the child to member so it stops
      * claiming the cores, then subtract them from the parent union. */
     if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0]) {
-        const char *excl_path =
-            "/sys/fs/cgroup/schema-init/cpuset.cpus.exclusive";
+        char excl_path[160];
+        snprintf(excl_path, sizeof excl_path, "%s/cpuset.cpus.exclusive",
+                 service_cgroup_root);
         unsigned char have[128] = {0}, mine[128] = {0};
         char excl[512] = {0}, out[512];
         ssize_t r;

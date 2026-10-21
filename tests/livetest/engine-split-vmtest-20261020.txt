@@ -1,0 +1,314 @@
+>> workdir: /var/tmp/schema-vmtest.l3uANo
+>> building schema-init (schema-user-engine)
+/home/ajax80/schema-livetest/test_mountns.c:6:9: warning: ‘_GNU_SOURCE’ redefined
+    6 | #define _GNU_SOURCE
+      |         ^~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+/home/ajax80/schema-livetest/test_privdrop.c:6:9: warning: ‘_GNU_SOURCE’ redefined
+    6 | #define _GNU_SOURCE
+      |         ^~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+>> initramfs: 9.2M
+>> booting QEMU (timeout 170s, kernel 7.0.12-cachyos1-schema.fc44.x86_64)...
+
+================ SERIAL TAIL ================
+===== VMTEST-REPORT =====
+-rw-r--r--    1 root     root             0 Oct 21 00:24 [0;0m/run/test-dependent.ran[m
+-rw-r--r--    1 root     root             0 Oct 21 00:23 [0;0m/run/test-timer.fired[m
+SDBOOTED-DIR: present
+RAIL-LOG: /run/log/schema-init/rail.log
+RAIL| [2026-10-21 00:23:21] docker-modules        oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-mountns-prep     oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-argtrim          oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-rlim             oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-dropin           oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-cond-or          oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-cond-yes         oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-prexp            oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-noexpand         oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-envfile          oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-env              oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-pre              oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-cond-dep         oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:21] test-coreprobe        oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:23] test-rlim-report      oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:23] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:27] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:31] test-after            oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:31] test-viagrp           oneshot-done  state=PERFECT       wt=8  pid=0
+RAIL| [2026-10-21 00:23:31] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:35] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:39] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:41] test-runonce          timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:44] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:48] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:51] test-timer            timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:52] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:23:56] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:00] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:04] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:08] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:12] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:16] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:20] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:24] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:28] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:32] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:36] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:40] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:44] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:48] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+RAIL| [2026-10-21 00:24:51] test-hang             start-timeout  state=FULL_TRUST    wt=8  pid=135
+RAIL| [2026-10-21 00:24:51] test-dependent        oneshot-done  state=PERFECT       wt=8  pid=0
+argtrim-val: [TRIMMED]
+===== NOFILE-TEST =====
+PID1-NOFILE: soft=4096 hard=4096
+CHILD-NOFILE: pid=95 soft=1024 hard=4096
+NOFILE-CHILD: PASS (child kept the original soft 1024)
+NOFILE-PID1: PASS (soft raised to hard)
+===== NOFILE-END =====
+===== CTL-RESTART-TEST =====
+ok: SIGTERM → test-readypath — recovery arc will respawn
+[2026-10-21 00:24:51] test-timer            timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:24:51] test-timer            spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:24:51] test-timer            timer-done    state=PERFECT       wt=8  pid=0
+[2026-10-21 00:24:52] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:24:52] test-cond-timer       condition-skip path_exists:/run/cond-timer-go  state=PERFECT       wt=0  pid=0
+[2026-10-21 00:24:53] test-readypath        ctl-restart   state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:24:53] test-readypath        spawn         state=FULL_TRUST    wt=8  pid=0
+[00:24:53] [group] test-group            state-change  state=new-process  members=2
+[2026-10-21 00:24:53] test-readypath        promote       state=FUNDAMENTAL   wt=8  pid=605
+[00:24:53] [group] test-group            state-change  state=fundamental  members=2
+rp-pid: 141 -> 605
+CTL-RESTART: PASS (respawned, new pid)
+===== CTL-RESTART-END =====
+===== STALE-READY-TEST =====
+[2026-10-21 00:24:56] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:24:56] test-hangdep          promote       state=FUNDAMENTAL   wt=8  pid=574
+[2026-10-21 00:24:56] test-cond-timer       condition-skip path_exists:/run/cond-timer-go  state=PERFECT       wt=0  pid=0
+stale-runs: 2
+STALE-READY: PASS (respawn promoted on its own marker)
+STALE-INPLACE: PASS (in-place rewrite promoted the respawn)
+===== STALE-READY-END =====
+===== RELOAD-REFIRE-TEST =====
+RUNONCE-BEFORE: 1
+[schema-init] reloading configuration (SIGHUP)... 
+[schema-init] WARN: 'test-noset' cpuset_partition set without cpuset= — ignoring (no cores to isolate)
+[schema-init] /etc/schema-init/services/test-nouser.svc: user=ghost-no-such-user does not exist yet — it will be looked up again at start
+[schema-init] WARNING: service 'test-viagrp' depends on timer service 'test-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] configuration reload completed successfully (generation updated)
+[00:24:56] [group] test-group            state-change  state=fundamental  members=2
+RUNONCE-AFTER: 1
+RELOAD-REFIRE: PASS (run-once boot timer stayed terminal)
+===== RELOAD-REFIRE-END =====
+===== CPUSET-REPORT =====
+root-subtree: cpuset cpu io memory pids
+schema-init-subtree: cpuset cpu io memory pids
+docker-modules-controllers: cpuset cpu io memory pids
+docker-sock: -rw-r--r--    1 root     root             0 Oct 21 00:23 /var/run/docker.sock
+iso-partition: isolated
+iso-affinity: Cpus_allowed_list:	3
+sigmask-child: SigBlk:	0000000000000000
+hardened-nnp: NoNewPrivs:	1
+hardened-capbnd: CapBnd:	0000000000000400
+privdrop-result: PRIVDROP_OK
+privdrop-uid: Uid:	996	996	996	996
+privdrop-nnp: NoNewPrivs:	1
+privdrop-capbnd: CapBnd:	00000000020004c3
+privdrop-capeff: CapEff:	0000000002000000
+root-partition: root
+share-effective: 0-1
+iso2-partition: member
+schema-excl: 2-3
+===== CPUSET-END =====
+===== MOUNTNS-REPORT =====
+mountns-on: usr=RO etc=RO efi=RO home=EMPTY root=EMPTY tmpwrite=OK
+mountns-off: usr=OPEN etc=OPEN efi=OPEN home=OPEN root=OPEN tmpwrite=OK
+MOUNTNS-TMP: PASS
+MOUNTNS-TMP-CONTROL: PASS
+mountns-ns: on=mnt:[4026532122] pid1=mnt:[4026531832]
+MOUNTNS-NS: PASS
+MOUNTNS-HOSTUSR: PASS
+[2026-10-21 00:25:00] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:25:00] test-cond-timer       condition-skip path_exists:/run/cond-timer-go  state=PERFECT       wt=0  pid=0
+mountns-late-on: home=EMPTY
+mountns-late-off: home=OPEN
+===== MOUNTNS-END =====
+===== COND-TEST =====
+COND-FILE cond-yes: yes
+COND-FILE cond-no: no
+COND-FILE cond-dep: yes
+COND-FILE cond-or: yes
+COND-FILE cond-timer.fired: no
+COND-NO-STATE: test-cond-no  pid=0  state=PERFECT  restarts=0
+COND-TIMER-SKIPS: 25
+CONDSOCK-PARKED: test-cond-sock  pid=0  state=PERFECT  restarts=0
+[2026-10-21 00:25:02] test-cond-sock        socket-wake   state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:25:02] test-cond-sock        condition-skip path_exists:/etc/schema-init  state=PERFECT       wt=0  pid=0
+[2026-10-21 00:25:04] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:25:04] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:04] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+CONDSOCK-SKIPS: 1 pid1-ctxsw-3s=13
+CONDSOCK-AFTER: CONNECT-FAIL Connection refused
+[2026-10-21 00:25:08] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:08] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:08] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+COND-TIMER-AFTER-GO: fired
+===== SOCKET-TEST =====
+SOCK-PARKED: test-sock-lazy  pid=0  state=PERFECT  restarts=0
+SOCK-MODE: srw------- prw-------
+[2026-10-21 00:25:11] test-sock-lazy        socket-wake   state=NEW_PROCESS   wt=0  pid=0
+[2026-10-21 00:25:11] test-sock-lazy        spawn         state=FULL_TRUST    wt=8  pid=0
+SOCK-WAKE1: LAZY pid=766 fds=2 names=test-sock-lazy.socket:test-sock-lazy.socket
+[2026-10-21 00:25:12] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:12] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:12] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+[2026-10-21 00:25:14] test-sock-lazy        socket-idle   state=PERFECT       wt=8  pid=0
+[2026-10-21 00:25:16] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:16] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:16] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+SOCK-IDLE: test-sock-lazy  pid=0  state=PERFECT  restarts=0
+[2026-10-21 00:25:17] test-sock-lazy        socket-wake   state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:17] test-sock-lazy        spawn         state=FULL_TRUST    wt=8  pid=0
+SOCK-WAKE2: LAZY pid=799 fds=2 names=test-sock-lazy.socket:test-sock-lazy.socket
+SOCK-EAGER: EAGER pid=111 fds=1 names=test-sock-eager.socket
+[2026-10-21 00:25:20] test-sock-lazy        socket-idle   state=PERFECT       wt=8  pid=0
+[2026-10-21 00:25:21] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:21] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:21] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+[schema-init] reloading configuration (SIGHUP)... 
+[schema-init] WARN: 'test-noset' cpuset_partition set without cpuset= — ignoring (no cores to isolate)
+[schema-init] /etc/schema-init/services/test-nouser.svc: user=ghost-no-such-user does not exist yet — it will be looked up again at start
+[schema-init] WARNING: service 'test-viagrp' depends on timer service 'test-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+[schema-init] configuration reload completed successfully (generation updated)
+[00:25:23] [group] test-group            state-change  state=fundamental  members=2
+SOCK-RELOAD: ok: reload (graceful)
+[2026-10-21 00:25:23] test-sock-lazy        socket-wake   state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:23] test-sock-lazy        spawn         state=FULL_TRUST    wt=8  pid=0
+SOCK-WAKE3: LAZY pid=836 fds=2 names=test-sock-lazy.socket:test-sock-lazy.socket
+SOCK-EAGER2: EAGER pid=111 fds=1 names=test-sock-eager.socket
+[2026-10-21 00:25:25] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:25] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:25] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+[2026-10-21 00:25:26] test-sock-lazy        socket-idle   state=PERFECT       wt=8  pid=0
+[2026-10-21 00:25:29] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:29] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:29] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+SOCK-STOPPED: NOREPLY test-sock-lazy  pid=0  state=EXCISED  restarts=0
+[2026-10-21 00:25:32] test-sock-lazy        spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:33] test-cond-timer       timer-fire    state=NEW_PROCESS   wt=8  pid=0
+[2026-10-21 00:25:33] test-cond-timer       spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 00:25:33] test-cond-timer       timer-done    state=PERFECT       wt=8  pid=0
+SOCK-STARTED: LAZY pid=886 fds=2 names=test-sock-lazy.socket:test-sock-lazy.socket
+SOCK-WAKES: 3 idles=3
+===== SOCKET-END =====
+[schema-init] reloading configuration (SIGHUP)... 
+[schema-init] WARN: 'test-noset' cpuset_partition set without cpuset= — ignoring (no cores to isolate)
+[schema-init] /etc/schema-init/services/test-nouser.svc: user=ghost-no-such-user does not exist yet — it will be looked up again at start
+[schema-init] INTEGRITY: 'test-dropin' hash mismatch — file modified since boot; reload rejected
+DROPIN-RELOAD: err: reload rejected — 'test-dropin' modified since boot — integrity check rejected the reload; a changed .svc takes effect at next boot
+[schema-init] re-exec: dry run of /sbin/schema-init (pid 902)
+[schema-init] hardening default: off
+[schema-init] WARN: 'test-noset' cpuset_partition set without cpuset= — ignoring (no cores to isolate)
+[schema-init] /etc/schema-init/services/test-nouser.svc: user=ghost-no-such-user does not exist yet — it will be looked up again at start
+[schema-init] WARNING: service 'test-viagrp' depends on timer service 'test-timer'. Dependents of timer services may be transiently blocked when the timer fires.
+[schema-init] dependency graph: no cycles
+DROPIN-REEXEC: err: 'test-dropin' modified since boot; a changed .svc takes effect at next boot, so re-exec is refused
+DROPIN-CAT-BEGIN
+# /etc/schema-init/services/test-dropin.svc
+name=test-dropin
+exec=/usr/bin/dropprobe.sh
+args=base-arg
+env=DVAR=base
+oneshot=1
+needs_root=1
+
+# /etc/schema-init/services/test-dropin.svc.d/10-override.conf
+args=
+args=dropin-arg
+env=
+env=DVAR=dropin
+mem_limit=64
+
+# /etc/schema-init/services/test-dropin.svc.d/30-late.conf
+mem_limit=32
+DROPIN-CAT-END
+===== RESTARTS-TEST =====
+crash-retries: 3
+crash-dormant: 1
+crashdep-spawn: 1
+hangdep-promote: 1
+rplost-lost: 1
+rplost-dormant: 0
+rplost-spawn: 2
+rplost-state: test-rplost  pid=199  state=FUNDAMENTAL  restarts=1
+RESTARTS test-crash test-crash  pid=0  state=DORMANT  restarts=3
+RESTARTS test-timer test-timer  pid=0  state=PERFECT  restarts=0
+RESTARTS test-readypath test-readypath  pid=605  state=FUNDAMENTAL  restarts=0
+RESTARTS test-dependent test-dependent  pid=0  state=PERFECT  restarts=0
+===== ANALYZE-TEST =====
+boot: kernel 0.427s + userspace 89.806s = 90.233s   (last ready: test-dependent)
+
+critical chain → test-dependent   (@ spawned, + spawn→ready)
+  test-dependent @89.806s +0.000s exit
+    └─test-hang never ready (EXCISED)
+
+  service                     spawn     cost  ready-by   0                                    94.7s
+  docker-modules             0.033s   0.089s  exit       |█
+  test-mountns-prep          0.048s   0.075s  exit       |█
+  test-privdrop              0.049s   9.714s  timer      |░░░░░
+  test-argtrim               0.050s   0.073s  exit       |█
+  test-hardened              0.051s   9.717s  timer      |░░░░░
+  test-noset                 0.051s   9.720s  timer      |░░░░░
+  test-share                 0.052s   9.723s  timer      |░░░░░
+  test-root                  0.052s   9.726s  timer      |░░░░░
+  test-iso                   0.053s   9.728s  timer      |░░░░░
+  test-coreprobe             0.074s   0.193s  exit       |█
+  test-rlim                  0.079s   0.045s  exit       |█
+  test-dropin                0.082s   0.043s  exit       |█
+  test-cond-or               0.085s   0.040s  exit       |█
+  test-cond-yes              0.086s   0.044s  exit       |█
+  test-sock-eager            0.088s   9.696s  timer      |░░░░░
+  test-prexp                 0.094s   0.037s  exit       |█
+  test-pre                   0.095s   0.039s  exit       |█
+  test-noexpand              0.097s   0.034s  exit       |█
+  test-envfile               0.099s   0.035s  exit       |█
+  test-env                   0.100s   0.034s  exit       |█
+  test-slow                  0.117s   9.670s  timer      |░░░░░
+  test-rplost                0.118s   0.021s  ready_path |█
+  test-stale2                0.120s   0.019s  ready_path |█
+  test-stale                 0.121s   0.018s  ready_path |█
+  test-readypath             0.122s   0.018s  ready_path |█
+  docker                     0.135s   1.025s  ready_path |█
+  test-mountns-off           0.136s   9.617s  timer      |░░░░░
+  test-mountns-on            0.137s   9.621s  timer      |░░░░░
+  test-rlim-report           0.138s   2.007s  exit       |█
+  test-cond-dep              0.139s   0.002s  exit       |█
+  test-crashdep              0.239s   9.551s  timer      |░░░░░
+  test-iso2                  9.795s   9.794s  timer      |    ░░░░░
+  test-after                 9.806s   0.004s  exit       |    █
+  test-viagrp                9.810s   0.005s  exit       |    █
+  test-leaf                  9.812s   2.009s  timer      |    ░
+  test-hangdep              89.796s   4.927s  timer      |                                     ░░░
+* test-dependent            89.806s   0.000s  exit       |                                     █
+
+* = on the critical chain   █ readiness signalled   ░ promoted by stable timer
+timer-gated with dependents (2): test-iso, test-slow — notify=1 or ready_path= would release them sooner
+not counted in boot (13, timer-promoted, nothing counted waits on them): test-privdrop, test-hardened, test-noset, test-share, test-root, test-iso, test-sock-eager, test-mountns-off, test-mountns-on, test-crashdep, test-iso2, test-leaf, test-hangdep
+started after boot (1): test-sock-lazy @110s
+ANALYZE-ONE-BEGIN
+critical chain → test-after   (@ spawned, + spawn→ready)
+  test-after @9.806s +0.004s exit
+    └─test-slow @0.117s +9.670s timer
+ANALYZE-ONE-END
+ANALYZE-GRP-BEGIN
+critical chain → test-viagrp   (@ spawned, + spawn→ready)
+  test-viagrp @9.810s +0.005s exit
+    └─test-slow (via test-group) @0.117s +9.670s timer
+ANALYZE-GRP-END
+ANALYZE-MISSING: err: not found: no-such-svc
+===== VMTEST-END =====
+=============================================
+>> RESULT: PASS  (timer fired, hang excised at timeout, dependent ran anyway)

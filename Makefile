@@ -29,13 +29,13 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c schema.c service.c group.c caps.c ns.c landlock.c
+SRCS    = init.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c
 OBJS    = $(SRCS:.c=.o)
 # The core objects share these headers. Without this dependency an incremental
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = schema.h schema_shm.h service.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
+CORE_HDRS = engine.h schema.h schema_shm.h service.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
 
 all: $(BINS)
 
@@ -245,7 +245,8 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test: schema-coredump schema-recorder schema-ctl schema-board
+test: schema-coredump schema-recorder schema-ctl schema-board $(OBJS)
+	sh tests/check_tu_statics.sh init.o engine.o
 	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o /tmp/schema-test-recorder-scenario -lrt && /tmp/schema-test-recorder-scenario
 	sh tests/test_recorder_daemon.sh
@@ -311,6 +312,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-rlimits && /tmp/schema-test-rlimits
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cycles && /tmp/schema-test-cycles
 	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o /tmp/schema-test-landlock-tcp && /tmp/schema-test-landlock-tcp
+	$(CC) $(CFLAGS) tests/test_engine_conf.c engine_conf.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-engine-conf && /tmp/schema-test-engine-conf
 
 # libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
 # + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.

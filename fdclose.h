@@ -36,21 +36,32 @@
 #define FDCLOSE_PARK_PAUSE   1024   /* notify reads stop past this many parked */
 #define FDCLOSE_MSG_FDS      253    /* SCM_MAX_FD: most one message can carry */
 
-static pid_t fdclose_pids[FDCLOSE_MAX_INFLIGHT + 1];
-static pid_t fdclose_from_pid[FDCLOSE_MAX_INFLIGHT + 1];
-static uid_t fdclose_from_uid[FDCLOSE_MAX_INFLIGHT + 1];
-static int fdclose_n;
-static pid_t fdclose_ovf;
-static int fdclose_parked[FDCLOSE_PARK_MAX];
-static int fdclose_nparked;
-static pid_t fdclose_park_pid;
-static uid_t fdclose_park_uid;
-static int fdclose_ovf_fds[FDCLOSE_PARK_MAX];
-static int fdclose_novf;
-static int fdclose_sock = -1;
-static int fdclose_shut;
-static pid_t fdclose_sender_pid;
-static uid_t fdclose_sender_uid = (uid_t)-1;
+/* schema-init links init.c and engine.c into one PID 1: one copy of this
+ * state, defined in engine.c (FDCLOSE_DEFINE), declared in init.c
+ * (FDCLOSE_EXTERN). Every other includer keeps a private static copy. */
+#if defined(FDCLOSE_EXTERN)
+#define FDCLOSE_STATE(decl, init) extern decl
+#elif defined(FDCLOSE_DEFINE)
+#define FDCLOSE_STATE(decl, init) decl init
+#else
+#define FDCLOSE_STATE(decl, init) static decl init
+#endif
+
+FDCLOSE_STATE(pid_t fdclose_pids[FDCLOSE_MAX_INFLIGHT + 1], );
+FDCLOSE_STATE(pid_t fdclose_from_pid[FDCLOSE_MAX_INFLIGHT + 1], );
+FDCLOSE_STATE(uid_t fdclose_from_uid[FDCLOSE_MAX_INFLIGHT + 1], );
+FDCLOSE_STATE(int fdclose_n, );
+FDCLOSE_STATE(pid_t fdclose_ovf, );
+FDCLOSE_STATE(int fdclose_parked[FDCLOSE_PARK_MAX], );
+FDCLOSE_STATE(int fdclose_nparked, );
+FDCLOSE_STATE(pid_t fdclose_park_pid, );
+FDCLOSE_STATE(uid_t fdclose_park_uid, );
+FDCLOSE_STATE(int fdclose_ovf_fds[FDCLOSE_PARK_MAX], );
+FDCLOSE_STATE(int fdclose_novf, );
+FDCLOSE_STATE(int fdclose_sock, = -1);
+FDCLOSE_STATE(int fdclose_shut, );
+FDCLOSE_STATE(pid_t fdclose_sender_pid, );
+FDCLOSE_STATE(uid_t fdclose_sender_uid, = (uid_t)-1);
 
 static inline int fdclose_perfd(void) {
     return fdclose_n - (fdclose_ovf != 0);

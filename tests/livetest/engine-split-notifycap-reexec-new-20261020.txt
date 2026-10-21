@@ -1,0 +1,26 @@
+c[?7l[2JPREINIT softdog loaded
+[2026-10-21 00:44:21] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=78
+[2026-10-21 00:44:21] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=78
+MON t=4.44 closers=32
+LATE READY sent 8.43
+[2026-10-21 00:44:29] late                  notify-ready  state=FULL_TRUST    wt=8  pid=75
+[2026-10-21 00:44:29] late                  promote       state=FUNDAMENTAL   wt=8  pid=75
+MON t=9.46 closers=32
+[2026-10-21 00:44:31] mon                   promote       state=FUNDAMENTAL   wt=8  pid=69
+[2026-10-21 00:44:31] attack                promote       state=FUNDAMENTAL   wt=8  pid=70
+[schema-init] re-exec: dry run of /init (pid 162)
+[schema-init] re-exec: /init
+[schema-init] re-exec v0.4.15-30-g871cfd1-dirty -> v0.4.15-30-g871cfd1-dirty: 4 adopted, 0 new
+REEXEC ok: re-executed i to v0.4.15-30-g871cfd1-dirty, 4 services adopted, 0  ew at 11.52
+MON t=14.54 closers=0
+MON t=19.56 closers=0
+MON t=24.57 closers=0
+MON t=29.59 closers=0
+MON t=34.61 closers=0
+MON t=39.63 closers=0
+MON t=44.65 closers=0
+MON t=49.67 closers=0
+MAXCLOSERS 32
+POWEROFF-AT 50.67
+[schema-init] PID 1 poweroff
+[   52.336139] reboot: Power down

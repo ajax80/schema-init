@@ -1,0 +1,52 @@
+c[?7l[2J[0mSeaBIOS (version 1.17.0-10.fc44)
+Booting from ROM...
+Probing EDD (edd=off to disable)... ok
+c[?7l[2J[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] boot rail
+  [1] kernel core alive
+  [2] init
+  [3] runlevel
+  [4] env load
+  [5] env active
+  [7] settled — 7 service(s) queued
+[2026-10-21 01:15:59] watcher               spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 01:15:59] ignorer               spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 01:15:59] base                  spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 01:16:09] watcher               promote       state=FUNDAMENTAL   wt=8  pid=69
+[2026-10-21 01:16:09] ignorer               promote       state=FUNDAMENTAL   wt=8  pid=70
+[2026-10-21 01:16:09] base                  promote       state=FUNDAMENTAL   wt=8  pid=77
+[2026-10-21 01:16:09] wrapsvc               spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 01:16:09] mid                   spawn         state=FULL_TRUST    wt=8  pid=0
+[01:16:09] [group] coregrp               state-change  state=fundamental  members=1
+[2026-10-21 01:16:09] grpuser               spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 01:16:19] wrapsvc               promote       state=FUNDAMENTAL   wt=8  pid=106
+[2026-10-21 01:16:19] grpuser               promote       state=FUNDAMENTAL   wt=8  pid=111
+[2026-10-21 01:16:19] mid                   promote       state=FUNDAMENTAL   wt=8  pid=107
+[2026-10-21 01:16:19] top                   spawn         state=FULL_TRUST    wt=8  pid=0
+POWEROFF-AT 25.37
+[schema-init] shutting down
+[schema-init] shutdown: container SIGTERM sent
+[schema-init] shutdown: stop 1 (+0 ms): watcher ignorer wrapsvc grpuser top
+STOP grpuser 26.18
+[schema-init] shutdown: grpuser down at +325 ms (325 ms after SIGTERM)
+STOP top 26.28
+[schema-init] shutdown: top down at +406 ms (406 ms after SIGTERM)
+[schema-init] shutdown: stop 2 (+406 ms): mid
+STOP mid 26.49
+STOP container 26.88
+STOP worker 26.88
+[schema-init] shutdown: wrapsvc down at +1013 ms (1013 ms after SIGTERM)
+[schema-init] shutdown: stop 3 (+1013 ms): base
+STOP base 26.99
+[schema-init] shutdown: ignorer ignored SIGTERM for 3000 ms, killing
+[schema-init] shutdown: services down in 3042 ms
+[schema-init] shutdown: container cgroups killed
+[schema-init] shutdown: cgroups killed
+[schema-init] shutdown: SIGKILL broadcast
+[schema-init] shutdown: control socket and shm released
+[schema-init] shutdown: sync done
+[schema-init] shutdown: filesystems read-only
+[schema-init] PID 1 poweroff
+[   30.067558] reboot: Power down

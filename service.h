@@ -445,6 +445,9 @@ void service_log(const service_t *svc, const char *event);
 
 /* kill all processes in the service's cgroup and remove it */
 void service_cgroup_kill(service_t *svc);
+extern const char *service_cgroup_root;
+extern const char *service_notify_sock;
+const char *service_cgroup_path_for(const service_t *svc);
 
 /* 1 if all deps (service and group) are stable, 0 otherwise */
 int service_deps_ready(service_t *svc, service_t *stable, int scount,

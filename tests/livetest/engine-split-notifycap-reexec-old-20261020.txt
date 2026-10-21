@@ -1,0 +1,30 @@
+c[?7l[2JPREINIT softdog loaded
+PREINIT pre-6.16 simulated: SO_PASSRIGHTS -> ENOPROTOOPT
+[2026-10-21 00:45:18] wdog                  notify-ready  state=FULL_TRUST    wt=8  pid=77
+[2026-10-21 00:45:18] wdog                  promote       state=FUNDAMENTAL   wt=8  pid=77
+[schema-init] notify: reads paused, 33 fd closers stuck, 800 fds parked; senders: pid 75 uid 65534
+MON t=4.46 closers=33
+LATE READY sent 8.45
+MON t=9.48 closers=33
+[2026-10-21 00:45:28] mon                   promote       state=FUNDAMENTAL   wt=8  pid=69
+[2026-10-21 00:45:28] attack                promote       state=FUNDAMENTAL   wt=8  pid=75
+[schema-init] re-exec: dry run of /init (pid 163)
+[schema-init] notify: reads resumed after 7s
+[schema-init] re-exec: /init
+PREINIT pre-6.16 simulated: SO_PASSRIGHTS -> ENOPROTOOPT
+[schema-init] re-exec v0.4.15-30-g871cfd1-dirty -> v0.4.15-30-g871cfd1-dirty: 4 adopted, 0 new
+[2026-10-21 00:45:29] late                  notify-ready  state=FULL_TRUST    wt=8  pid=76
+[2026-10-21 00:45:29] late                  promote       state=FUNDAMENTAL   wt=8  pid=76
+REEXEC ok: re-executed i to v0.4.15-30-g871cfd1-dirty, 4 services adopted, 0  ew at 11.54
+MON t=14.55 closers=0
+MON t=19.57 closers=0
+MON t=24.59 closers=0
+MON t=29.61 closers=0
+MON t=34.63 closers=0
+MON t=39.65 closers=0
+MON t=44.66 closers=0
+MON t=49.69 closers=0
+MAXCLOSERS 33
+POWEROFF-AT 50.69
+[schema-init] PID 1 poweroff
+[   52.357809] reboot: Power down
