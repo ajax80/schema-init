@@ -46,6 +46,7 @@ extern int          svc_count;
 extern group_t     *shadow_groups;
 extern eviction_t evictions[MAX_EVICTIONS];
 extern int        eviction_count;
+void eviction_readded(void);
 extern volatile int engine_running;
 extern volatile int engine_do_reboot;
 extern schema_shm_t *shm_ptr;

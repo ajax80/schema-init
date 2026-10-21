@@ -1,6 +1,7 @@
 #!/bin/bash
 # reload --evict grace force-kill under QEMU: [REEXEC=1] [NEXT=<old schema-init>] evict-vm.sh <schema-init> <schema-ctl> <serial-out>
-# REEXEC/NEXT re-exec PID 1 (into itself / into NEXT) inside the grace window; schema-ctl must be static
+# REEXEC/NEXT re-exec PID 1 (into itself / into NEXT) inside the grace window; READD_REEXEC=1 brings
+# phoenix back with a re-exec instead of a reload; schema-ctl must be static
 set -e
 BIN="$1"; CTL="$2"; OUT="$3"
 KERNEL=/lib/modules/$(uname -r)/vmlinuz; [ -r "$KERNEL" ] || KERNEL=/boot/vmlinuz-$(uname -r)
@@ -30,6 +31,7 @@ printf 'name=stub\nexec=/usr/bin/stub.sh\n' > $S/stub.svc
 printf 'name=leaky\nexec=/usr/bin/leaky.sh\n' > $S/leaky.svc
 [ -n "${NEXT:-}" ] && { cp "$NEXT" "$ROOT/sbin/schema-init.next"; echo /sbin/schema-init.next > "$ROOT/etc/evict-reexec"; }
 [ -n "${REEXEC:-}" ] && touch "$ROOT/etc/evict-reexec"
+[ -n "${READD_REEXEC:-}" ] && touch "$ROOT/etc/readd-reexec"
 printf 'name=polite\nexec=/usr/bin/polite.sh\n' > $S/polite.svc
 cat > $B/phoenix.sh <<'EOF'
 #!/bin/sh
@@ -55,12 +57,12 @@ echo "RELOAD-AT $(up)" >/dev/console
 sleep 1
 cp /etc/phoenix.svc.save /etc/schema-init/services/phoenix.svc
 echo "READD-AT $(up)" >/dev/console
-/usr/bin/schema-ctl reload >/dev/console 2>&1
+if [ -f /etc/readd-reexec ]; then /usr/bin/schema-ctl reexec 2>&1 | head -3 >/dev/console; else /usr/bin/schema-ctl reload >/dev/console 2>&1; fi
 echo "T+1 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP) leaky=$(alive $LP) leakykid=$(alive $LK)" >/dev/console
 sleep 1
 echo "T+2 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP) leaky=$(alive $LP) leakykid=$(alive $LK) phoenixkid=$(alive $XK)" >/dev/console
 sleep 4
-echo "T+6 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP) leaky=$(alive $LP) leakykid=$(alive $LK)" >/dev/console
+echo "T+6 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP) leaky=$(alive $LP) leakykid=$(alive $LK) phoenixkid=$(alive $XK)" >/dev/console
 NX=$(cat /run/phoenix.pid)
 echo "PHOENIX old=$XP new=$NX new-$( [ "$NX" != "$XP" ] && echo $(alive $NX) || echo missing)" >/dev/console
 d() { [ -d /sys/fs/cgroup/schema-init/$1 ] && echo present || echo absent; }
@@ -87,7 +89,7 @@ grep -aqE 'force-killed (leftovers in .*/leaky|pid='"$LP"'\b)' "$OUT" || { echo 
 T6="stub=gone kid=gone polite=gone leaky=gone leakykid=gone"
 grep -aqE "^T\+6 .*$T6" "$OUT" || { echo "MISS: not all gone at T+6"; fail=1; }
 if [ -z "${NEXT:-}" ]; then
-  grep -aq 'phoenix. is back in the configuration' "$OUT" || { echo "MISS: re-added phoenix leftovers not killed at reload"; fail=1; }
+  grep -aq 'phoenix. is back in the configuration' "$OUT" || { echo "MISS: re-added phoenix leftovers not killed when it came back"; fail=1; }
   grep -aqE '^T\+2 .*phoenixkid=gone' "$OUT" || { echo "MISS: old phoenix kid alive after re-add"; fail=1; }
   grep -aqE '^PHOENIX .*new-alive' "$OUT" && grep -aqE '^ST +phoenix .*restarts=0' "$OUT" || { echo "BAD: re-added phoenix did not survive the old deadline"; fail=1; }
   grep -aqE '^CGDIRS stub=absent polite=absent leaky=absent phoenix=present' "$OUT" || { echo "MISS: evicted cgroup dirs not removed"; fail=1; }

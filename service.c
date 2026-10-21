@@ -1567,7 +1567,7 @@ int cgroup_kill_path(const char *cg) {
     return 1;
 }
 
-void service_cgroup_kill(service_t *svc) {
+void service_cgroup_release_partition(service_t *svc) {
     char path[160];
     int fd;
 
@@ -1612,7 +1612,11 @@ void service_cgroup_kill(service_t *svc) {
             close(fd);
         }
     }
+}
 
+void service_cgroup_kill(service_t *svc) {
+    if (!svc->cgroup_path[0]) return;
+    service_cgroup_release_partition(svc);
     cgroup_kill_path(svc->cgroup_path);
     rmdir(svc->cgroup_path);
     svc->cgroup_path[0] = '\0';

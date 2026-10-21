@@ -58,6 +58,7 @@ group_t     *shadow_groups = groups_b;
 static int          grp_count = 0;
 #define EVICT_GRACE_SECS  3
 #define EVICT_KILL_WAIT_SECS 5
+#define EVICT_STUCK_RECHECK_SECS 60
 
 eviction_t evictions[MAX_EVICTIONS];
 int        eviction_count = 0;
@@ -163,14 +164,15 @@ time_t mono_sec(void) {
     return ts.tv_sec;
 }
 
-/* cgroup.events "populated 0" once every process in the subtree is gone.
- * Unreadable counts as populated so the kill is still attempted. */
+/* cgroup.events "populated 0" once every process in the subtree is gone,
+ * and a cgroup that no longer exists holds nothing. Otherwise unreadable
+ * counts as populated so the kill is still attempted. */
 static int cgroup_populated(const char *cg) {
     char path[160], line[64];
     FILE *f;
     int pop = 1;
     snprintf(path, sizeof path, "%s/cgroup.events", cg);
-    if (!(f = fopen(path, "r"))) return 1;
+    if (!(f = fopen(path, "r"))) return errno != ENOENT;
     while (fgets(line, sizeof line, f))
         if (sscanf(line, "populated %d", &pop) == 1) break;
     fclose(f);
@@ -197,26 +199,29 @@ static void eviction_reaped(pid_t pid) {
     int i;
     for (i = 0; i < eviction_count; i++) {
         if (evictions[i].pid != pid || evictions[i].reaped) continue;
-        if (!evictions[i].cgroup[0]) { eviction_drop(i); return; }
-        evictions[i].reaped = 1;
+        if (evictions[i].cgroup[0]) evictions[i].reaped = 1;
+        else eviction_drop(i);
         break;
     }
     for (i = 0; i < eviction_count; ) {
-        if (evictions[i].cgroup[0] && !cgroup_populated(evictions[i].cgroup))
+        if (evictions[i].cgroup[0] && (evictions[i].reaped || evictions[i].killed) &&
+            !cgroup_populated(evictions[i].cgroup))
             eviction_drop(i);
         else
             i++;
     }
 }
 
-/* A reload that brings an evicted service's name back would spawn the new
- * instance into the old cgroup, and the deadline kill would take it down
- * with the leftovers. Kill the leftovers now, before the new one starts. */
-static void eviction_readded(void) {
+/* A reload or re-exec that brings an evicted service's name back would spawn
+ * the new instance into the old cgroup (cgroup v2 cannot rename it aside),
+ * and the deadline kill would take it down with the leftovers. Kill the
+ * leftovers now, before the new one starts. A running service is skipped: it
+ * was re-added by an older image, which kept the entry, and is in there. */
+void eviction_readded(void) {
     for (int i = 0; i < eviction_count; ) {
         int s;
         for (s = 0; s < svc_count; s++)
-            if (evictions[i].cgroup[0] &&
+            if (services[s].child_pid == 0 && evictions[i].cgroup[0] &&
                 strcmp(evictions[i].cgroup, service_cgroup_path_for(&services[s])) == 0)
                 break;
         if (s == svc_count) { i++; continue; }
@@ -236,10 +241,15 @@ static void eviction_tick(void) {
         if (now < evictions[i].deadline) { i++; continue; }
         int live = evictions[i].cgroup[0] ? cgroup_populated(evictions[i].cgroup) : 1;
         if (evictions[i].killed) {
-            if (live)
+            if (!live) { eviction_drop(i); continue; }
+            /* a task stuck in D state outlives SIGKILL; dropping the entry
+             * would leak the cgroup once it finally dies, so keep checking */
+            if (evictions[i].killed == 1)
                 printf("[schema-init] eviction: %s still populated %d s after SIGKILL\n",
                        evictions[i].cgroup, EVICT_KILL_WAIT_SECS);
-            eviction_drop(i);
+            evictions[i].killed   = 2;
+            evictions[i].deadline = now + EVICT_STUCK_RECHECK_SECS;
+            i++;
             continue;
         }
         if (!live) { eviction_drop(i); continue; }
@@ -2209,6 +2219,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 printf("[schema-init] evicting orphaned service '%s' (pid=%d)\n", services[j].name, (int)services[j].child_pid);
                 if (services[j].child_pid > 0) {
                     kill(services[j].child_pid, SIGTERM);
+                    /* the service struct goes with this reload, and with it
+                     * the cpuset needed to give an isolated partition's
+                     * cores back; eviction_drop() only rmdirs, so do it now */
+                    service_cgroup_release_partition(&services[j]);
                     if (eviction_count < MAX_EVICTIONS) {
                         evictions[eviction_count].pid      = services[j].child_pid;
                         evictions[eviction_count].deadline = mono_sec() + EVICT_GRACE_SECS;
