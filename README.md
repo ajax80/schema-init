@@ -42,6 +42,8 @@ No systemd. No OpenRC. No journal daemon. At its core, just a statically linked 
 
 **It doesn't stop at PID 1.** schema-init ships small, single-purpose, native replacements for systemd's satellite daemons, which you opt into one at a time: `schema-logind` (sessions, power, seats, plus the `hostname1`/`timedate1`/`systemd1` D-Bus surfaces), `schema-udev` (device management, authoritative over `/dev`), `schema-journal-sink` (a journald-shaped endpoint that drains to a plain logfile), and built-in `.svc` timers that retire `cron` and systemd `.timer` units. Alongside them sits `schema-dbus`, a third D-Bus broker for both the system and session bus. Each is a program you can read end to end, runs only if you list it, and backs out with a single reboot. The point isn't only *less*; it's an init layer you can actually **read, top to bottom, and own**.
 
+**Services can be fenced in by the kernel, one key at a time.** Besides the usual `no_new_privs`, `private_tmp` and `protect_system`, a service can be held to the paths it lists (`landlock_ro=`/`landlock_rw=`) and to the TCP ports it lists: `landlock_bind_tcp=80,443` and `landlock_connect_tcp=5432` let a web server listen only on 80/443 and reach only its database, enforced by Landlock (kernel 6.7+), with no firewall and no eBPF. See [Hardening](docs/svc-reference.md#hardening).
+
 **PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every figure names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](docs/benchmarks.md#pid-1-rss--every-measurement).
 
 ## Limp mode

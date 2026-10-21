@@ -59,7 +59,7 @@ All items cross-reference each other. No orphan requirements. No untested safety
 | SR-030 | On `reload`, the system SHALL compute FNV-1a hash of each `.svc` file and compare against `content_hash` stored at load time | Detect tampered or externally modified service files before activating them | SHALL |
 | SR-031 | If any `.svc` file fails hash verification, the system SHALL reject the reload and log the offending file name | Partial reload from a tampered config is worse than no reload | SHALL |
 | SR-032 | The shadow graph buffer SHALL be fully validated before the live pointer is swapped | Atomic swap — no partially-applied config | SHALL |
-| SR-033 | On `reload --evict`, removed services SHALL receive SIGTERM; if still alive after `EVICT_GRACE_SECS`, the system SHALL cgroup-kill them | Ordered teardown before new config activates | SHALL |
+| SR-033 | On `reload --evict`, removed services SHALL receive SIGTERM; if still alive after `EVICT_GRACE_SECS`, the system SHALL cgroup-kill them, including descendants left behind by a main process that did exit | Ordered teardown before new config activates | SHALL |
 
 ### 2.5 Dependency Ordering
 
@@ -89,12 +89,12 @@ All items cross-reference each other. No orphan requirements. No untested safety
 | AC-02 | Service loader | `service.c` | `services_load()`, `service_load_one()` | Parsing, template expansion, hash |
 | AC-03 | Spawn engine | `service.c` | `service_spawn()` | Fork, exec, sync pipe, cgroup assign |
 | AC-04 | Slot boundary guard | `service.c` | (inline in `service_spawn()`) | AllowedSlot gate, HAZARD log |
-| AC-05 | WDT engine | `init.c` | `watchdog_pet()`, `ctl_cmd()` (pet) | Token window tracking, /dev/watchdog |
+| AC-05 | WDT engine | `init.c`, `engine.c` | `watchdog_pet()`, `ctl_cmd()` (pet) | Token window tracking, /dev/watchdog |
 | AC-06 | Cgroup manager | `service.c` | `cgroup_apply_limits()`, `service_cgroup_kill()` | cpu.max, memory.max, teardown |
-| AC-07 | Shadow graph reloader | `init.c` | `handle_reload()`, `eviction_tick()` | Double-buffer swap, hash verify, eviction |
+| AC-07 | Shadow graph reloader | `engine.c` | `handle_reload()`, `eviction_tick()` | Double-buffer swap, hash verify, eviction |
 | AC-08 | Hash verifier | `service.c` | `fnv1a_file()` | FNV-1a file digest |
-| AC-09 | Dep resolver | `service.c`, `init.c` | `service_deps_ready()`, `services_check_cycles()` | Ordering, cycle detection |
-| AC-10 | Control socket | `init.c` | `ctl_cmd()` | IPC: start/stop/reload/pet/status |
+| AC-09 | Dep resolver | `service.c` | `service_deps_ready()`, `services_check_cycles()` | Ordering, cycle detection |
+| AC-10 | Control socket | `engine.c` | `ctl_cmd()` | IPC: start/stop/reload/pet/status |
 
 ### 3.2 Safety-Critical Boundaries
 
@@ -126,8 +126,8 @@ These boundaries must hold at all times. Any code path that crosses them without
 | SR-021 | memory.max before child exec | AC-06 | Cgroup manager | `service.c:cgroup_apply_limits()` before `write(sync[1])` | TC-021 |
 | SR-022 | OOM isolated to cgroup | AC-06 | Cgroup manager | cgroupv2 kernel boundary | TC-022 |
 | SR-023 | Limit ordering invariant | AC-06, AC-03 | Cgroup + spawn | Code inspection: `cgroup_assign()` → `cgroup_apply_limits()` → `write(sync[1])` | TC-023 |
-| SR-030 | Hash verify on reload | AC-08, AC-07 | Hash + reloader | `init.c:handle_reload()` hash loop | TC-030 |
-| SR-031 | Reject reload on hash fail | AC-07 | Shadow graph reloader | `init.c:handle_reload()` early return on mismatch | TC-031 |
+| SR-030 | Hash verify on reload | AC-08, AC-07 | Hash + reloader | `engine.c:handle_reload()` hash loop | TC-030 |
+| SR-031 | Reject reload on hash fail | AC-07 | Shadow graph reloader | `engine.c:handle_reload()` early return on mismatch | TC-031 |
 | SR-032 | Atomic pointer swap | AC-07 | Shadow graph reloader | `services = shadow_services` after full validation | TC-032 |
 | SR-033 | SIGTERM then cgroup-kill on evict | AC-07 | Shadow graph reloader | `eviction_tick()` deadline check | TC-033 |
 | SR-040 | Dep ordering | AC-09 | Dep resolver | `service_deps_ready()` | TC-040 |
