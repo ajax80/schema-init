@@ -29,7 +29,7 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c
+SRCS    = init.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c
 OBJS    = $(SRCS:.c=.o)
 # The core objects share these headers. Without this dependency an incremental
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
