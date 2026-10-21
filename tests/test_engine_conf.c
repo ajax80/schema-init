@@ -2,6 +2,7 @@
 #include "../service.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -48,7 +49,9 @@ int main(void) {
     char line[] = "reboot";
     assert(engine_hooks.loop_pressure && engine_hooks.loop_tail && engine_hooks.ctl_extra
            && engine_hooks.shut_log && engine_hooks.on_sigcont && engine_hooks.on_reaped);
-    engine_hooks.loop_pressure();
+    engine_hooks.loop_pressure(1);
+    int tick = 7;
+    assert(engine_hooks.wake_due && engine_hooks.wake_due(1000, &tick) == INT64_MAX && tick == 7);
     engine_hooks.loop_tail();
     engine_hooks.on_sigcont();
     engine_hooks.shut_log("test");

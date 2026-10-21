@@ -2022,13 +2022,18 @@ static void signalfd_init(void) {
 static int get_poll_timeout(void) {
     struct timespec ts;
     int64_t now_m, now_r, best = WAKE_NONE;
-    int i, tick = system_under_pressure || psi_fd < 0, watched = 0, critical = 0, awaiting = 0;
+    int64_t host;
+    int i, tick = 0, watched = 0, awaiting = 0;
 
     if (pass_changed)
         return 0;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     now_m = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    host = engine_hooks.wake_due(now_m, &tick);
+    /* WAKE_NONE through wake_min would become a finite ~INT64_MAX timeout */
+    if (host != WAKE_NONE)
+        best = wake_min(best, host, now_m, WAKE_NONE);
     clock_gettime(CLOCK_REALTIME, &ts);
     now_r = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
@@ -2042,8 +2047,6 @@ static int get_poll_timeout(void) {
             awaiting = 1;
         if (tick)
             continue;
-        if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0)
-            critical = 1;
         if (svc->wd_armed_sec > 0 && svc->child_pid > 0 && svc->notify_ready && !svc->ctl_killed &&
             !svc->is_frozen)
             best = wake_min(best, svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec),
@@ -2071,14 +2074,8 @@ static int get_poll_timeout(void) {
         best = wake_min(best, (int64_t)evictions[i].deadline * 1000, now_m, WAKE_NONE);
     if (watched)
         best = wake_min(best, ready_backstop_due, now_m, WAKE_NONE);
-    if (critical)
-        best = wake_min(best, cpu_check_due, now_m, WAKE_NONE);
     if (ready_event_due)
         best = wake_min(best, ready_event_due, now_m, WAKE_NONE);
-    if (watchdog_fd >= 0)
-        best = wake_min(best, now_m + watchdog_pet_ms, now_m, WAKE_NONE);
-    if (reexec_check_pid > 0 && !reexec_check_killed)
-        best = wake_min(best, reexec_check_due, now_m, WAKE_NONE);
     return wake_timeout(best, tick || awaiting, awaiting ? READY_POLL_MS : TICK_USEC / 1000);
 }
 
@@ -2439,7 +2436,6 @@ static void shutdown_ordered(void) {
     engine_hooks.shut_log(msg);
 }
 
-int loop_psi_fired;
 
 void engine_open(int adopting) {
     service_notify_sock = engine_paths.notify_sock;
@@ -2590,8 +2586,7 @@ void engine_run(void) {
             usleep(TICK_USEC);
         }
 
-        loop_psi_fired = psi_fired;
-        engine_hooks.loop_pressure();
+        engine_hooks.loop_pressure(psi_fired);
 
         {
             int64_t now = (int64_t)monotonic_ms();

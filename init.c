@@ -1525,8 +1525,8 @@ static void remount_all_ro(void) {
 /* Survival posture: enter on the first stalled pass, thaw after
  * THAW_DELAY_MS without one. With a psi trigger armed, memory stall is
  * the trigger alone; avg10's ~14 s decay would hold the thaw. */
-static void pid1_loop_pressure(void) {
-    int mem = loop_psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
+static void pid1_loop_pressure(int psi_fired) {
+    int mem = psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
     uint64_t now = monotonic_ms();
     /* avg10 only moves every 2 s; reading it faster returns the same value. */
     if ((int64_t)now >= cpu_check_due) {
@@ -1544,6 +1544,26 @@ static void pid1_loop_pressure(void) {
     }
     if (system_under_pressure && mem)
         reclaim_maybe();
+}
+
+/* Without a psi trigger, or in survival posture, pressure is polled on the
+ * tick. The cpu check only matters while a critical service runs, and under
+ * the tick it rides that instead. */
+static int64_t pid1_wake_due(int64_t now_m, int *tick) {
+    int64_t due = WAKE_NONE;
+    int i;
+    if (system_under_pressure || psi_fd < 0)
+        *tick = 1;
+    for (i = 0; !*tick && i < svc_count; i++)
+        if (services[i].priority == PRIO_CRITICAL && services[i].child_pid > 0) {
+            due = cpu_check_due;
+            break;
+        }
+    if (watchdog_fd >= 0 && now_m + watchdog_pet_ms < due)
+        due = now_m + watchdog_pet_ms;
+    if (reexec_check_pid > 0 && !reexec_check_killed && reexec_check_due < due)
+        due = reexec_check_due;
+    return due;
 }
 
 static int pid1_on_reaped(pid_t pid, int status) {
@@ -1693,6 +1713,7 @@ int main(int argc, char **argv) {
     if (reexec_fd < 0 && coredump_take_pattern() == 1)
         coredump_raise_if_ours();
     engine_hooks.loop_pressure = pid1_loop_pressure;
+    engine_hooks.wake_due      = pid1_wake_due;
     engine_hooks.loop_tail     = pid1_loop_tail;
     engine_hooks.after_sockets = psi_open;
     engine_hooks.ctl_extra     = pid1_ctl_extra;
