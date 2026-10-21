@@ -306,6 +306,7 @@ int main(int argc, char **argv) {
     engine_paths.env_fallback    = NULL;
     engine_paths.svc_fallback    = NULL;
     engine_paths.tag             = "schema-user";
+    engine_reload_integrity      = 0;
     if (engine_mkdir_p(log_dir, 0700) == 0)
         service_log_dir = log_dir;
     else

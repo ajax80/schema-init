@@ -32,6 +32,7 @@ sleeper() {
 sleeper a > "$S/a.svc"
 { sleeper b; echo dep=a; } > "$S/b.svc"
 { sleeper busy; echo "wait_socket=$T/run/bus"; } > "$S/busy.svc"
+{ sleeper held; echo "wait_socket=$T/run/never"; } > "$S/held.svc"
 printf 'name=flap\nexec=/bin/sh\nargs=-c\nargs=sleep 0.2; exit 1\n' > "$S/flap.svc"
 printf 'name=dbl\nexec=/bin/sh\nargs=-c\nargs=sh -c '"'"'sleep 0.5; cut -d" " -f4 /proc/$$/stat > %s/dbl.ppid; exec %s/sl 30'"'"' & exit 0\noneshot=1\n' \
     "$T" "$T" > "$S/dbl.svc"
@@ -63,6 +64,12 @@ until_ok '[ -s "$T/dbl.ppid" ]' || fail "dbl grandchild never wrote ppid"
 
 [ -f "$T/state/nested/schema-user/timers/tmr.stamp" ] || fail "no timer stamp"
 [ -f "$T/state/nested/schema-user/log/a.log" ] || fail "no service log"
+SHM=/dev/shm/schema-user-$(id -u)
+[ "$(stat -c %a "$SHM")" = 600 ] || fail "shm $SHM mode $(stat -c %a "$SHM")"
+
+# a user may edit their own .svc and reload it; PID 1's since-boot rule is not theirs
+echo "stable_secs=2" >> "$S/a.svc"
+./schema-ctl --user reload > "$T/reload" 2>&1 || fail "reload of an edited .svc: $(cat "$T/reload")"
 
 ./schema-user > "$T/second" 2>&1 && fail "second instance started"
 grep -q "already running" "$T/second" || fail "second instance: $(cat "$T/second")"
@@ -90,7 +97,10 @@ LPID=$!
 until_ok 'st | grep -Eq "^ +busy +pid=[1-9][0-9]* +state=(FULL_TRUST|FUNDAMENTAL)"' \
     || { st; fail "busy not started once the socket accepts"; }
 until_ok 'st | grep -Eq "^ +busy +pid=[1-9][0-9]* +state=FUNDAMENTAL"' || { st; fail "busy not FUNDAMENTAL"; }
-st | grep -q "waiting=" && { st; fail "waiting= still shown"; }
+st | grep "waiting=" | grep -vq "^ *held " && { st; fail "waiting= still shown"; }
+# a held service that is stopped is no longer waiting, and no longer wakes us
+./schema-ctl --user stop held > /dev/null || fail "stop held"
+st | grep -q "waiting=" && { st; fail "stopped service still shown waiting"; }
 
 sleep 0.5
 c0=$(ctxsw)

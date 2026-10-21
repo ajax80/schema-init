@@ -803,10 +803,18 @@ static int socket_accepts(const char *path) {
     if (fd < 0) return 0;
     memset(&a, 0, sizeof a);
     a.sun_family = AF_UNIX;
-    strncpy(a.sun_path, path, sizeof a.sun_path - 1);
+    size_t n = strlen(path);
+    if (n >= sizeof a.sun_path) { close(fd); return 0; }
+    memcpy(a.sun_path, path, n + 1);
     ok = connect(fd, (struct sockaddr *)&a, sizeof a) == 0;
     close(fd);
     return ok;
+}
+
+/* sock_waiting is only recomputed in NEW_PROCESS; a held service that is
+ * stopped or excised keeps the stale flag. */
+static int svc_held_on_socket(const service_t *svc) {
+    return svc->sock_waiting && svc->inst.state == STATE_NEW_PROCESS;
 }
 
 /* A ready_path counts only once it is not the file that was already there
@@ -1146,7 +1154,16 @@ static void tick_service(service_t *svc,
 /* ── shared memory export ───────────────────────────────────────────── */
 
 static void shm_init(void) {
-    int fd = shm_open(engine_paths.shm_name, O_CREAT | O_RDWR, 0644);
+    int fd;
+    /* /dev/shm is shared by every user: a non-root supervisor's export is
+     * its own, fresh and private. A name another user already holds can't be
+     * unlinked by us, and then there is simply no export. */
+    if (geteuid() != 0) {
+        shm_unlink(engine_paths.shm_name);
+        fd = shm_open(engine_paths.shm_name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    } else {
+        fd = shm_open(engine_paths.shm_name, O_CREAT | O_RDWR, 0644);
+    }
     if (fd < 0) return;
     ftruncate(fd, (off_t)sizeof(schema_shm_t));
     shm_ptr = mmap(NULL, sizeof(schema_shm_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -1505,7 +1522,7 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));
                 ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
                 ctl_writef(fd, "service.%s.last_exit=%s\n", services[i].name, last_exit_str(&services[i]));
-                if (services[i].sock_waiting)
+                if (svc_held_on_socket(&services[i]))
                     ctl_writef(fd, "service.%s.waiting=%s\n", services[i].name, services[i].wait_socket);
             }
         } else if (*opt) {
@@ -1554,8 +1571,8 @@ static void ctl_cmd(int fd, char *line) {
                     state_name(services[i].inst.state), services[i].restart_count, deck,
                     services[i].term_signal ? "  last=" : "",
                     services[i].term_signal ? last_exit_str(&services[i]) : "",
-                    services[i].sock_waiting ? "  waiting=" : "",
-                    services[i].sock_waiting ? services[i].wait_socket : "");
+                    svc_held_on_socket(&services[i]) ? "  waiting=" : "",
+                    svc_held_on_socket(&services[i]) ? services[i].wait_socket : "");
             }
         }
 
@@ -2082,7 +2099,7 @@ static int get_poll_timeout(void) {
             tick = 1;
         else if (s == STATE_DORMANT)
             best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);
-        else if (svc->sock_waiting)
+        else if (svc_held_on_socket(svc))
             best = wake_min(best, now_m + 1000, now_m, WAKE_NONE);
         else if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED)
             tick = 1;
@@ -2190,7 +2207,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     }
 
     /* hash integrity check — reject any .svc file modified since boot */
-    for (i = 0; i < shadow_count; i++) {
+    for (i = 0; engine_reload_integrity && i < shadow_count; i++) {
         for (j = 0; j < svc_count; j++) {
             if (strcmp(shadow_services[i].name, services[j].name) != 0) continue;
             if (shadow_services[i].content_hash != services[j].content_hash &&

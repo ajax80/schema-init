@@ -13,6 +13,7 @@ static void test_pid1_defaults(void) {
     assert(!strcmp(engine_paths.svc_fallback, "./services"));
     assert(!strcmp(engine_paths.tag, "schema-init"));
     assert(service_log_dir == NULL);
+    assert(engine_reload_integrity == 1);
     assert(sizeof(((service_t *)0)->cgroup_path) == 256);
 }
 

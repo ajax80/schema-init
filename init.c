@@ -1094,11 +1094,11 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
     shadow_count = services_load(engine_paths.svc_dir, shadow_services, MAX_SERVICES);
-    if (shadow_count == 0)
-        shadow_count = services_load("./services", shadow_services, MAX_SERVICES);
+    if (shadow_count == 0 && engine_paths.svc_fallback)
+        shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
     shadow_grp_count = groups_load(engine_paths.svc_dir, shadow_groups, MAX_GROUPS);
-    if (shadow_grp_count == 0)
-        shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
+    if (shadow_grp_count == 0 && engine_paths.svc_fallback)
+        shadow_grp_count = groups_load(engine_paths.svc_fallback, shadow_groups, MAX_GROUPS);
 
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", engine_paths.svc_dir);

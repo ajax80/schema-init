@@ -16,6 +16,8 @@ engine_paths_t engine_paths = {
     .tag             = "schema-init",
 };
 
+int engine_reload_integrity = 1;
+
 void engine_hook_noop(void) {}
 void engine_hook_pressure_none(int psi_fired) { (void)psi_fired; }
 int64_t engine_hook_wake_none(int64_t now_m, int *tick) { (void)now_m; (void)tick; return WAKE_NONE; }

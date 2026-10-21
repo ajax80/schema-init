@@ -229,6 +229,12 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     char buf[32];
     int n;
 
+    /* the user supervisor lives in <root>/init.scope; a service of that name
+     * would share its cgroup, and stopping it would kill the supervisor */
+    if (strcmp(svc->name, "init.scope") == 0) {
+        svc->cgroup_path[0] = '\0';
+        return;
+    }
     mkdir(service_cgroup_root, 0755);
     snprintf(path, sizeof(path), "%s/cgroup.subtree_control", service_cgroup_root);
     int sub_fd = open(path, O_WRONLY);
@@ -344,7 +350,7 @@ static void cgroup_apply_limits(service_t *svc) {
         {
             char excl[512] = {0};
             char merged[640];
-            char excl_path[160];
+            char excl_path[320];
             snprintf(excl_path, sizeof excl_path, "%s/cpuset.cpus.exclusive",
                      service_cgroup_root);
             int rfd = open(excl_path, O_RDONLY);
@@ -1589,7 +1595,7 @@ void service_cgroup_release_partition(service_t *svc) {
      * reverse order of the apply: demote the child to member so it stops
      * claiming the cores, then subtract them from the parent union. */
     if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0]) {
-        char excl_path[160];
+        char excl_path[320];
         snprintf(excl_path, sizeof excl_path, "%s/cpuset.cpus.exclusive",
                  service_cgroup_root);
         unsigned char have[128] = {0}, mine[128] = {0};

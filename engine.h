@@ -29,6 +29,10 @@ extern engine_paths_t engine_paths;
 
 int engine_mkdir_p(const char *path, mode_t mode);
 
+/* 1 = reload refuses a .svc changed since boot (PID 1: config edits wait for
+ * the next boot). A user supervisor's files are its user's to edit. */
+extern int engine_reload_integrity;
+
 typedef struct {
     void (*loop_pressure)(int psi_fired);
     /* absolute monotonic-ms deadline of the next host wake, or WAKE_NONE;
