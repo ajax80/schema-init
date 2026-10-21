@@ -27,6 +27,8 @@ sudo schema-ctl reexec [<path>] # replace the PID 1 binary in place, services ke
 sudo schema-ctl reboot          # orderly shutdown sweep, then reboot (also: poweroff)
 ```
 
+**`reload --evict`** sends SIGTERM to each running service that is no longer in the config, then gives it 3 seconds. Whatever is still in its cgroup after that is killed with `cgroup.kill`, including children left behind by a main process that did exit. A service that exits on SIGTERM in time is not reported as killed. Once the cgroup is empty its directory is removed. If a later `reload` or `reexec` brings the same service name back within those 3 seconds, the old instance's leftovers are killed first, so the new instance starts in a clean cgroup and is not caught by the old deadline. A task still in the cgroup 5 seconds after the kill (stuck in D state) is logged once, and the directory is removed when it finally dies. Without `--evict`, removed services keep running unmanaged until they exit on their own.
+
 `schema-ctl` exits 1 when PID 1 refuses a command (`err:` reply), so scripts can check it. The socket is `chmod 0600` — root only. Build alongside the init binary:
 
 ```sh
