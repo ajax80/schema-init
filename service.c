@@ -214,6 +214,7 @@ uint32_t service_probe_f6(service_t *svc) {
 /* ── fork + exec ────────────────────────────────────────────────────── */
 
 const char *service_cgroup_root = "/sys/fs/cgroup/schema-init";
+const char *service_notify_sock = NOTIFY_SOCK_PATH;
 
 const char *service_cgroup_path_for(const service_t *svc) {
     static char buf[sizeof svc->cgroup_path];
@@ -1455,7 +1456,7 @@ int service_spawn(service_t *svc) {
             svc_apply_env(svc, file_env, file_envc);
             svc_run_pre(svc, 0);
         }
-        if (svc->notify || svc->fdstore_max > 0) setenv("NOTIFY_SOCKET", NOTIFY_SOCK_PATH, 1);
+        if (svc->notify || svc->fdstore_max > 0) setenv("NOTIFY_SOCKET", service_notify_sock, 1);
         else unsetenv("NOTIFY_SOCKET");
         if (svc->notify && svc->watchdog_sec > 0) {
             char wv[24];

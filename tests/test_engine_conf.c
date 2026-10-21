@@ -12,6 +12,7 @@ int main(void) {
     assert(!strcmp(engine_paths.timer_stamp_dir, "/var/lib/schema-init/timers"));
     assert(!strcmp(engine_paths.svc_dir, "/etc/schema-init/services"));
     assert(!strcmp(service_cgroup_root, "/sys/fs/cgroup/schema-init"));
+    assert(!strcmp(service_notify_sock, "/run/schema-init/notify"));
 
     service_t s;
     memset(&s, 0, sizeof s);
