@@ -16,6 +16,7 @@ typedef struct {
     pid_t  pid;
     char   cgroup[128];
     time_t deadline;
+    int    reaped;     /* pid already waited for: only the cgroup is left */
 } eviction_t;
 
 /* The runtime half of service_t: everything a running PID 1 learned that a
@@ -247,6 +248,7 @@ static inline void state_write(FILE *out, const reexec_global_t *g,
     for (int i = 0; i < nev; i++) {
         fprintf(out, "evict pid=%d deadline=%lld cgroup=", (int)ev[i].pid, (long long)ev[i].deadline);
         rx_escape(out, ev[i].cgroup);
+        if (ev[i].reaped) fputs(" reaped=1", out);
         fputc('\n', out);
     }
     for (int i = 0; i < nfs; i++) {
@@ -338,6 +340,7 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
                 if (!strcmp(k, "pid"))           bad = rx_get_PID(v, &e->pid, 0);
                 else if (!strcmp(k, "deadline")) bad = rx_get_TIME(v, &e->deadline, 0);
                 else if (!strcmp(k, "cgroup"))   bad = rx_unescape(v, e->cgroup, sizeof e->cgroup);
+                else if (!strcmp(k, "reaped"))   bad = rx_get_INT(v, &e->reaped, 0);
             } else if (fe) {
                 if (!strcmp(k, "svc"))       bad = rx_unescape(v, fe->svc, sizeof fe->svc);
                 else if (!strcmp(k, "name")) bad = rx_unescape(v, fe->name, sizeof fe->name);

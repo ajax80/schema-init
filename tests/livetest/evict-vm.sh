@@ -1,5 +1,6 @@
 #!/bin/bash
-# reload --evict grace force-kill under QEMU: evict-vm.sh <schema-init> <schema-ctl> <serial-out>
+# reload --evict grace force-kill under QEMU: [REEXEC=1] [NEXT=<old schema-init>] evict-vm.sh <schema-init> <schema-ctl> <serial-out>
+# REEXEC/NEXT re-exec PID 1 (into itself / into NEXT) inside the grace window; schema-ctl must be static
 set -e
 BIN="$1"; CTL="$2"; OUT="$3"
 KERNEL=/lib/modules/$(uname -r)/vmlinuz; [ -r "$KERNEL" ] || KERNEL=/boot/vmlinuz-$(uname -r)
@@ -18,26 +19,37 @@ sh -c 'trap "" TERM; echo $$ > /run/stubkid.pid; exec sleep 1000' &
 while :; do sleep 1; done
 EOF
 printf '#!/bin/sh\ntrap "echo POLITE-TERM \\$(cut -d\\" \\" -f1 /proc/uptime) >/dev/console; exit 0" TERM\necho $$ > /run/polite.pid\nwhile :; do sleep 1 & wait $!; done\n' > $B/polite.sh
+cat > $B/leaky.sh <<'EOF'
+#!/bin/sh
+echo $$ > /run/leaky.pid
+sh -c 'trap "" TERM; echo $$ > /run/leakykid.pid; exec sleep 1000' &
+trap 'echo "LEAKY-TERM $(cut -d" " -f1 /proc/uptime)" >/dev/console; exit 0' TERM
+while :; do sleep 1 & wait $!; done
+EOF
 printf 'name=stub\nexec=/usr/bin/stub.sh\n' > $S/stub.svc
+printf 'name=leaky\nexec=/usr/bin/leaky.sh\n' > $S/leaky.svc
+[ -n "${NEXT:-}" ] && { cp "$NEXT" "$ROOT/sbin/schema-init.next"; echo /sbin/schema-init.next > "$ROOT/etc/evict-reexec"; }
+[ -n "${REEXEC:-}" ] && touch "$ROOT/etc/evict-reexec"
 printf 'name=polite\nexec=/usr/bin/polite.sh\n' > $S/polite.svc
 cat > $B/watch.sh <<'EOF'
 #!/bin/sh
 up() { cut -d' ' -f1 /proc/uptime; }
 alive() { [ -d /proc/$1 ] && ! grep -q '^State:.*Z' /proc/$1/status && echo alive || echo gone; }
 sleep 5
-SP=$(cat /run/stub.pid); KP=$(cat /run/stubkid.pid); PP=$(cat /run/polite.pid)
-echo "PIDS stub=$SP kid=$KP polite=$PP" >/dev/console
+SP=$(cat /run/stub.pid); KP=$(cat /run/stubkid.pid); PP=$(cat /run/polite.pid); LP=$(cat /run/leaky.pid); LK=$(cat /run/leakykid.pid)
+echo "PIDS stub=$SP kid=$KP polite=$PP leaky=$LP leakykid=$LK" >/dev/console
 echo "CG stub=$(cat /proc/$SP/cgroup) kid=$(cat /proc/$KP/cgroup)" >/dev/console
-rm /etc/schema-init/services/stub.svc /etc/schema-init/services/polite.svc
+rm /etc/schema-init/services/stub.svc /etc/schema-init/services/polite.svc /etc/schema-init/services/leaky.svc
 echo "RELOAD-AT $(up)" >/dev/console
 /usr/bin/schema-ctl reload --evict >/dev/console 2>&1
+[ -f /etc/evict-reexec ] && { echo "REEXEC-AT $(up)" >/dev/console; /usr/bin/schema-ctl reexec $(cat /etc/evict-reexec) 2>&1 | head -3 >/dev/console; }
 sleep 1
-echo "T+1 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP)" >/dev/console
+echo "T+1 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP) leaky=$(alive $LP) leakykid=$(alive $LK)" >/dev/console
 sleep 1
-echo "T+2 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP)" >/dev/console
+echo "T+2 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP) leaky=$(alive $LP) leakykid=$(alive $LK)" >/dev/console
 sleep 4
-echo "T+6 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP)" >/dev/console
-/usr/bin/schema-ctl status 2>&1 | grep -E 'stub|polite' | sed 's/^/ST /' >/dev/console
+echo "T+6 $(up) stub=$(alive $SP) kid=$(alive $KP) polite=$(alive $PP) leaky=$(alive $LP) leakykid=$(alive $LK)" >/dev/console
+/usr/bin/schema-ctl status 2>&1 | grep -E 'stub|polite|leaky' | sed 's/^/ST /' >/dev/console
 echo "POWEROFF-AT $(up)" >/dev/console
 kill -USR2 1
 while :; do sleep 1; done
@@ -48,4 +60,14 @@ chmod +x $B/*.sh
 timeout 90 qemu-system-x86_64 -enable-kvm -m 512 -smp 2 -no-reboot -nographic -nic none \
   -kernel "$KERNEL" -initrd "$WORK/i.gz" \
   -append "console=ttyS0 rdinit=/init panic=1 loglevel=4" </dev/null >"$OUT" 2>&1 || true
-grep -aE "^(PIDS|CG|RELOAD|T\+|ST |POWEROFF|STUB|POLITE|ok:|error)|evict|orphaned|unmanaged|force-killed|PID 1 poweroff|Kernel panic" "$OUT"
+grep -aE "^(PIDS|CG|RELOAD|REEXEC|T\+|ST |POWEROFF|STUB|POLITE|LEAKY|ok:|error)|re-exec|evict|orphaned|unmanaged|force-killed|PID 1 poweroff|Kernel panic" "$OUT"
+SP=$(grep -aoE '^PIDS stub=[0-9]+' "$OUT" | cut -d= -f2); PP=$(grep -aoE 'polite=[0-9]+' "$OUT" | head -1 | cut -d= -f2); LP=$(grep -aoE ' leaky=[0-9]+' "$OUT" | head -1 | cut -d= -f2)
+fail=0
+grep -aqE "force-killed.*pid=$SP\b" "$OUT" || { echo "MISS: stub not force-killed"; fail=1; }
+[ -n "${NEXT:-}" ] || { grep -aqE "force-killed.*pid=$PP\b" "$OUT" && { echo "BAD: polite exited on SIGTERM but was reported force-killed"; fail=1; }; }
+[ -n "${NEXT:-}" ] || { grep -aqE "force-killed.*pid=$LP\b" "$OUT" && { echo "BAD: leaky main exited on SIGTERM but was reported force-killed"; fail=1; }; }
+grep -aqE 'force-killed (leftovers in .*/leaky|pid='"$LP"'\b)' "$OUT" || { echo "MISS: leaky leftover child not force-killed"; fail=1; }
+T6="stub=gone kid=gone polite=gone leaky=gone leakykid=gone"
+grep -aqE "^T\+6 .*$T6" "$OUT" || { echo "MISS: not all gone at T+6"; fail=1; }
+grep -aq 'PID 1 poweroff' "$OUT" || { echo "MISS: clean poweroff"; fail=1; }
+[ $fail = 0 ] && echo ">> RESULT: PASS" || { echo ">> RESULT: FAIL"; exit 1; }

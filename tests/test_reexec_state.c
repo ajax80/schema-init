@@ -65,9 +65,11 @@ int main(void) {
 
     ev[0].pid = 4411; ev[0].deadline = 1759284000;
     strcpy(ev[0].cgroup, "/sys/fs/cgroup/schema-init/old one");
+    ev[1].pid = 4412; ev[1].deadline = 1759284001; ev[1].reaped = 1;
+    strcpy(ev[1].cgroup, "/sys/fs/cgroup/schema-init/leaky");
 
     FILE *w = open_memstream(&buf, &blen);
-    state_write(w, &g, svcs, 3, ev, 1, NULL, 0);
+    state_write(w, &g, svcs, 3, ev, 2, NULL, 0);
     fclose(w);
 
     /* round trip */
@@ -80,7 +82,7 @@ int main(void) {
     assert(out[0].rt.flags & SVC_NO_RESTART);
     assert(!(out[2].rt.flags & SVC_NO_RESTART));
     assert(pg.fd_ctl == 3 && pg.fd_notify == 4 && pg.fd_watchdog == -1 && pg.fd_client == 6 && pg.fd_oldexe == 7);
-    assert(nsvc == 3 && nev == 1);
+    assert(nsvc == 3 && nev == 2);
     assert(strcmp(out[0].name, "dbus") == 0 && out[0].hash == 4000000000u && out[0].timer == 0);
     assert(out[0].rt.child_pid == 199 && out[0].rt.restart_count == 1);
     assert(out[0].rt.inst.state == 4 && out[0].rt.inst.prev_state == 3 && out[0].rt.inst.weight == 8);
@@ -99,6 +101,7 @@ int main(void) {
     assert(out[2].rt.ready_stale_dev == 66306 && out[2].rt.ready_stale_ino == UINT64_MAX);
     assert(pev[0].pid == 4411 && pev[0].deadline == 1759284000);
     assert(strcmp(pev[0].cgroup, "/sys/fs/cgroup/schema-init/old one") == 0);
+    assert(pev[0].reaped == 0 && pev[1].pid == 4412 && pev[1].reaped == 1);
 
     /* a single escaped line: no raw space, newline or '=' leaks into a value */
     assert(strstr(buf, "notify_status=100%25%20ready%20%3D%20yes%09ok%0A "));

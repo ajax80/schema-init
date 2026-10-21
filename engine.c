@@ -162,27 +162,63 @@ time_t mono_sec(void) {
     return ts.tv_sec;
 }
 
+/* cgroup.events "populated 0" once every process in the subtree is gone.
+ * Unreadable counts as populated so the kill is still attempted. */
+static int cgroup_populated(const char *cg) {
+    char path[160], line[64];
+    FILE *f;
+    int pop = 1;
+    snprintf(path, sizeof path, "%s/cgroup.events", cg);
+    if (!(f = fopen(path, "r"))) return 1;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "populated %d", &pop) == 1) break;
+    fclose(f);
+    return pop;
+}
+
+/* An evicted child that exits on SIGTERM must not leave a live pid in the
+ * table: by the deadline it may be reused, and the log would claim a kill
+ * that never happened. With a cgroup the entry stays, marked reaped, to
+ * catch descendants that ignored SIGTERM; without one there is nothing left
+ * to do. The pid itself is kept so an older image after a re-exec, which
+ * ignores reaped=, behaves as it always did instead of seeing pid 0. */
+static int eviction_reaped(pid_t pid) {
+    for (int i = 0; i < eviction_count; i++) {
+        if (evictions[i].pid != pid || evictions[i].reaped) continue;
+        if (evictions[i].cgroup[0]) evictions[i].reaped = 1;
+        else evictions[i] = evictions[--eviction_count];
+        return 1;
+    }
+    return 0;
+}
+
 static void eviction_tick(void) {
     time_t now = mono_sec();
     int i = 0;
     while (i < eviction_count) {
         if (now < evictions[i].deadline) { i++; continue; }
-        int killed = 0;
+        int killed = 0, live = 1;
         if (evictions[i].cgroup[0]) {
             char path[160];
             int fd;
+            live = cgroup_populated(evictions[i].cgroup);
             snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
-            fd = open(path, O_WRONLY);
-            if (fd >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
+            if (live && (fd = open(path, O_WRONLY)) >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
         }
         /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
          * previously this whole branch was gated on cgroup[0], so an orphan
-         * with no cgroup that ignored SIGTERM survived eviction entirely. */
-        if (!killed) {
+         * with no cgroup that ignored SIGTERM survived eviction entirely.
+         * an unreaped pid is still our child, so it cannot have been reused. */
+        if (live && !killed && !evictions[i].reaped) {
             kill(evictions[i].pid, SIGKILL);
+            killed = 1;
         }
-        printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
-               (int)evictions[i].pid);
+        if (killed && !evictions[i].reaped)
+            printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
+                   (int)evictions[i].pid);
+        else if (killed)
+            printf("[schema-init] eviction grace expired: force-killed leftovers in %s\n",
+                   evictions[i].cgroup);
         evictions[i] = evictions[--eviction_count];
     }
 }
@@ -463,6 +499,7 @@ static void reap(void) {
         if (engine_hooks.on_reaped(pid, status))
             continue;
         if (fdclose_reaped(pid)) continue;
+        if (eviction_reaped(pid)) continue;
         for (i = 0; i < svc_count; i++) {
             if (services[i].card_pid == pid) {
                 card_done(&services[i], status);
@@ -2124,6 +2161,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                     if (eviction_count < MAX_EVICTIONS) {
                         evictions[eviction_count].pid      = services[j].child_pid;
                         evictions[eviction_count].deadline = mono_sec() + EVICT_GRACE_SECS;
+                        evictions[eviction_count].reaped   = 0;
                         memcpy(evictions[eviction_count].cgroup,
                                services[j].cgroup_path,
                                sizeof(evictions[eviction_count].cgroup));

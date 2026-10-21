@@ -1,0 +1,60 @@
+c[?7l[2J[0mSeaBIOS (version 1.17.0-10.fc44)
+Booting from ROM...
+Probing EDD (edd=off to disable)... ok
+c[?7l[2J[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] boot rail
+  [1] kernel core alive
+  [2] init
+  [3] runlevel
+  [4] env load
+  [5] env active
+  [7] settled — 4 service(s) queued
+[2026-10-21 03:01:22] watcher               spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 03:01:22] polite                spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 03:01:22] leaky                 spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 03:01:22] stub                  spawn         state=FULL_TRUST    wt=8  pid=0
+PIDS stub=72 kid=76 polite=69 leaky=70 leakykid=74
+CG stub=0::/schema-init/stub kid=0::/schema-init/stub
+RELOAD-AT 5.37
+[schema-init] reloading configuration (SIGHUP)... 
+[schema-init] dependency graph: no cycles
+[schema-init] service 'polite' is orphaned in new configuration
+[schema-init] evicting orphaned service 'polite' (pid=69)
+[schema-init] service 'leaky' is orphaned in new configuration
+POLITE-TERM 5.39
+[schema-init] evicting orphaned service 'leaky' (pid=70)
+[schema-init] service 'stub' is orphaned in new configuration
+LEAKY-TERM 5.40
+[schema-init] evicting orphaned service 'stub' (pid=72)
+[schema-init] configuration reload completed successfully (generation updated)
+ok: reload (evict mode)
+REEXEC-AT 5.41
+[schema-init] re-exec: dry run of /init (pid 112)
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /init
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec v0.4.15-35-g79f7cd9-dirty -> v0.4.15-35-g79f7cd9-dirty: 1 adopted, 0 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+STUB-TERM-IGNORED 6.37
+T+1 6.44 stub=alive kid=alive polite=gone leaky=gone leakykid=alive
+T+2 7.44 stub=alive kid=alive polite=gone leaky=gone leakykid=alive
+[schema-init] eviction grace expired: force-killed pid=72
+[schema-init] eviction grace expired: force-killed leftovers in /sys/fs/cgroup/schema-init/leaky
+[2026-10-21 03:01:32] watcher               promote       state=FUNDAMENTAL   wt=8  pid=68
+T+6 11.45 stub=gone kid=gone polite=gone leaky=gone leakykid=gone
+POWEROFF-AT 11.45
+[schema-init] shutting down
+[schema-init] shutdown: stop 1 (+0 ms): watcher
+[schema-init] shutdown: services down in 20 ms
+[schema-init] shutdown: cgroups killed
+[schema-init] shutdown: SIGKILL broadcast
+[schema-init] shutdown: control socket and shm released
+[schema-init] shutdown: sync done
+[schema-init] shutdown: filesystems read-only
+[schema-init] PID 1 poweroff
+[   13.113696] reboot: Power down
