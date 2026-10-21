@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.15
+Version:        0.4.16
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -512,7 +512,7 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
-* Mon Oct 19 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.16-1
+* Wed Oct 21 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.16-1
 - Flight recorder (opt-in): schema-recorder keeps a rolling record of what
   happened (service events, CPU/memory pressure, earlyoom kills); the board
   shows the latest line and `schema-ctl trace` prints the history
@@ -520,6 +520,22 @@ fi
   across restarts (`schema-ctl status` shows `fds=K`); schema-dbus uses it so
   `schema-ctl restart dbus` keeps every client connected. The package does
   not restart the broker itself yet
+- Limp mode: `card=exec:` / `card=fallback:` give a failing service a
+  mitigation ladder before it is excised; the board shows the deck
+- Landlock TCP rules: `landlock_bind_tcp=` / `landlock_connect_tcp=`
+- Eviction on reload: an evicted service's cgroup is killed and removed,
+  a reaped eviction no longer reports a false force-kill, and a name that
+  comes back kills its old leftovers first
+- PID 1 never closes a received descriptor itself; descriptor closers are
+  capped and a stuck one refuses re-exec instead of hanging PID 1
+- The supervisor engine moved out of init.c into engine.c (groundwork for
+  a per-user supervisor); PID 1 behaviour unchanged
+- Over-limit dep=/env=/member= lines are refused; up to 128 services;
+  close_range fallback for older kernels
+- schema-mount-fstab waits for every member of a multi-device btrfs
+- Artix port beside dinit, s6 and OpenRC
+- schema-ctl add accepts a bare service name; autologin exits with
+  Plasma's code after a crash
 
 * Sat Oct 17 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.15-1
 - grub2-mkconfig no longer clobbers schema-init boot entries: 10_linux
