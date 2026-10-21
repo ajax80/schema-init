@@ -15,4 +15,18 @@ typedef struct {
 
 extern engine_paths_t engine_paths;
 
+typedef struct {
+    void (*loop_pressure)(void);
+    void (*loop_tail)(void);
+    int  (*ctl_extra)(int fd, char *line);
+    void (*shut_log)(const char *msg);
+    void (*on_sigcont)(void);
+} engine_hooks_t;
+
+extern engine_hooks_t engine_hooks;
+
+void engine_hook_noop(void);
+int  engine_hook_ctl_none(int fd, char *line);
+void engine_hook_log_none(const char *msg);
+
 #endif

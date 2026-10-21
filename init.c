@@ -1927,7 +1927,7 @@ static const char *last_exit_str(const service_t *s) {
 }
 
 static void ctl_cmd(int fd, char *line) {
-    int i;
+    int i, extra;
     line[strcspn(line, "\r\n")] = '\0';
 
     if (strncmp(line, "status", 6) == 0) {
@@ -2232,25 +2232,9 @@ static void ctl_cmd(int fd, char *line) {
         while (*arg == ' ') arg++;
         ctl_analyze(fd, arg);
 
-    } else if (strcmp(line, "reexec") == 0 || strncmp(line, "reexec ", 7) == 0) {
-        char rerr[320];
-        const char *path = line[6] ? line + 7 : boot_argv0;
-        while (*path == ' ') path++;
-        if (reexec_start(fd, path, rerr, sizeof rerr) == 0)
-            return;                     /* the reply comes when the dry run ends */
-        ctl_writef(fd, "err: %s\n", rerr);
-
-    } else if (strcmp(line, "reboot") == 0) {
-        ctl_writef(fd, "ok: rebooting\n");
-        if (shm_ptr) shm_ptr->system_state = 14;
-        do_reboot = 1;
-        running = 0;
-
-    } else if (strcmp(line, "poweroff") == 0) {
-        ctl_writef(fd, "ok: powering off\n");
-        if (shm_ptr) shm_ptr->system_state = 13;
-        do_reboot = 0;
-        running = 0;
+    } else if ((extra = engine_hooks.ctl_extra(fd, line)) != 0) {
+        if (extra == 2)
+            return;                     /* the reply comes later */
 
     } else {
         ctl_writef(fd, "err: unknown: %s\n", line);
@@ -3632,7 +3616,7 @@ static void shutdown_ordered(void) {
                     snprintf(msg, sizeof msg, "%s down at +%llu ms (%llu ms after SIGTERM)",
                              services[i].name, (unsigned long long)(now - start),
                              (unsigned long long)(now - term_at[i]));
-                    shut_log(msg);
+                    engine_hooks.shut_log(msg);
                 }
             }
         }
@@ -3645,7 +3629,7 @@ static void shutdown_ordered(void) {
         if (held && !hold) {
             snprintf(msg, sizeof msg, "stop_first services down in %llu ms",
                      (unsigned long long)(now - start));
-            shut_log(msg);
+            engine_hooks.shut_log(msg);
             start = now;
         }
         held = hold;
@@ -3658,7 +3642,7 @@ static void shutdown_ordered(void) {
                 if (now - term_at[i] < grace) continue;
                 snprintf(msg, sizeof msg, "%s ignored SIGTERM for %llu ms, killing",
                          services[i].name, (unsigned long long)grace);
-                shut_log(msg);
+                engine_hooks.shut_log(msg);
                 service_cgroup_kill(&services[i]);
                 if (services[i].child_pid > 0) kill(services[i].child_pid, SIGKILL);
                 killed[i] = 1;
@@ -3677,12 +3661,12 @@ static void shutdown_ordered(void) {
             if (off < sizeof msg)
                 off += snprintf(msg + off, sizeof msg - off, " %s", services[i].name);
         }
-        if (sent) shut_log(msg);
+        if (sent) engine_hooks.shut_log(msg);
         usleep(20000);
     }
     snprintf(msg, sizeof msg, "services down in %llu ms",
              (unsigned long long)(monotonic_ms() - start));
-    shut_log(msg);
+    engine_hooks.shut_log(msg);
 }
 
 /* sync() is unbounded: one wedged filesystem and PID 1 never reaches
@@ -3813,6 +3797,64 @@ static void remount_all_ro(void) {
     }
 }
 
+static int loop_psi_fired;
+
+/* Survival posture: enter on the first stalled pass, thaw after
+ * THAW_DELAY_MS without one. With a psi trigger armed, memory stall is
+ * the trigger alone; avg10's ~14 s decay would hold the thaw. */
+static void pid1_loop_pressure(void) {
+    int mem = loop_psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
+    uint64_t now = monotonic_ms();
+    /* avg10 only moves every 2 s; reading it faster returns the same value. */
+    if ((int64_t)now >= cpu_check_due) {
+        cpu_check_due = (int64_t)now + CPU_CHECK_MS;
+        cpu_stalled = critical_cpu_pressure();
+    }
+    stall_causes |= (mem ? 1 : 0) | (cpu_stalled ? 2 : 0);
+    int act = pressure_step(&system_under_pressure, now, &last_stall_ms,
+                            mem || cpu_stalled);
+    if (act == PRESSURE_ENTER)
+        execute_survival_posture(1);
+    else if (act == PRESSURE_EXIT) {
+        execute_survival_posture(0);
+        stall_causes = 0;
+    }
+    if (system_under_pressure && mem)
+        reclaim_maybe();
+}
+
+static void pid1_loop_tail(void) {
+    eviction_tick();
+    watchdog_pet();
+    reexec_check_deadline();
+}
+
+static int pid1_ctl_extra(int fd, char *line) {
+    if (strcmp(line, "reexec") == 0 || strncmp(line, "reexec ", 7) == 0) {
+        char rerr[320];
+        const char *path = line[6] ? line + 7 : boot_argv0;
+        while (*path == ' ') path++;
+        if (reexec_start(fd, path, rerr, sizeof rerr) == 0)
+            return 2;                   /* the reply comes when the dry run ends */
+        ctl_writef(fd, "err: %s\n", rerr);
+
+    } else if (strcmp(line, "reboot") == 0) {
+        ctl_writef(fd, "ok: rebooting\n");
+        if (shm_ptr) shm_ptr->system_state = 14;
+        do_reboot = 1;
+        running = 0;
+
+    } else if (strcmp(line, "poweroff") == 0) {
+        ctl_writef(fd, "ok: powering off\n");
+        if (shm_ptr) shm_ptr->system_state = 13;
+        do_reboot = 0;
+        running = 0;
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
 int main(int argc, char **argv) {
     int i;
     const char *svc_dir = engine_paths.svc_dir;
@@ -3921,6 +3963,11 @@ int main(int argc, char **argv) {
      * limit survives execve anyway. */
     if (reexec_fd < 0 && coredump_take_pattern() == 1)
         coredump_raise_if_ours();
+    engine_hooks.loop_pressure = pid1_loop_pressure;
+    engine_hooks.loop_tail     = pid1_loop_tail;
+    engine_hooks.ctl_extra     = pid1_ctl_extra;
+    engine_hooks.shut_log      = shut_log;
+    engine_hooks.on_sigcont    = runit_stop_request;
     setup_signals();
 
     if (reexec_fd >= 0)
@@ -4091,7 +4138,7 @@ int main(int argc, char **argv) {
                                  * inside handle_reload is the only report. */
                                 (void)handle_reload(0, NULL, 0);
                             } else if (ssi.ssi_signo == SIGCONT) {
-                                runit_stop_request();
+                                engine_hooks.on_sigcont();
                             }
                         }
                     } else if (fds[e].fd == ctl_fd) {
@@ -4109,29 +4156,8 @@ int main(int argc, char **argv) {
             usleep(TICK_USEC);
         }
 
-        /* Survival posture: enter on the first stalled pass, thaw after
-         * THAW_DELAY_MS without one. With a psi trigger armed, memory stall is
-         * the trigger alone; avg10's ~14 s decay would hold the thaw. */
-        {
-            int mem = psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
-            uint64_t now = monotonic_ms();
-            /* avg10 only moves every 2 s; reading it faster returns the same value. */
-            if ((int64_t)now >= cpu_check_due) {
-                cpu_check_due = (int64_t)now + CPU_CHECK_MS;
-                cpu_stalled = critical_cpu_pressure();
-            }
-            stall_causes |= (mem ? 1 : 0) | (cpu_stalled ? 2 : 0);
-            int act = pressure_step(&system_under_pressure, now, &last_stall_ms,
-                                    mem || cpu_stalled);
-            if (act == PRESSURE_ENTER)
-                execute_survival_posture(1);
-            else if (act == PRESSURE_EXIT) {
-                execute_survival_posture(0);
-                stall_causes = 0;
-            }
-            if (system_under_pressure && mem)
-                reclaim_maybe();
-        }
+        loop_psi_fired = psi_fired;
+        engine_hooks.loop_pressure();
 
         {
             int64_t now = (int64_t)monotonic_ms();
@@ -4168,10 +4194,8 @@ int main(int argc, char **argv) {
         monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
-        eviction_tick();
         service_watchdog_tick();
-        watchdog_pet();
-        reexec_check_deadline();
+        engine_hooks.loop_tail();
     }
 
     /* shutdown: hold briefly so viewers see system_state 13/14, then kill */

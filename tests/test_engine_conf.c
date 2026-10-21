@@ -21,6 +21,15 @@ int main(void) {
     service_cgroup_root = "/tmp/cg-test";
     assert(!strcmp(service_cgroup_path_for(&s), "/tmp/cg-test/foo"));
 
+    char line[] = "reboot";
+    assert(engine_hooks.loop_pressure && engine_hooks.loop_tail && engine_hooks.ctl_extra
+           && engine_hooks.shut_log && engine_hooks.on_sigcont);
+    engine_hooks.loop_pressure();
+    engine_hooks.loop_tail();
+    engine_hooks.on_sigcont();
+    engine_hooks.shut_log("test");
+    assert(engine_hooks.ctl_extra(-1, line) == 0);
+
     printf("test_engine_conf: ok\n");
     return 0;
 }
