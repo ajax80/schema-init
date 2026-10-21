@@ -716,6 +716,8 @@ static int reexec_check_main(int blob_fd) {
      * the verdict is the only thing on it however much the loader says */
     int verdict = dup(STDOUT_FILENO);
     dup2(STDERR_FILENO, STDOUT_FILENO);
+    /* the default changes what a .svc loads as, so the check must see it too */
+    pid1_hardening_default();
     rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, sizeof err);
     fflush(stdout);
     if (rc < 0) {
