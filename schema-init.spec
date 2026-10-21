@@ -65,7 +65,7 @@ overwrite a service file a running system depends on.
 # but retiring systemd-udevd is a manual, hardware-specific cutover, not a
 # package upgrade. It is built here (migrate_bins) only so the -migrate
 # subpackage below can ship it; the base %%files list never references it.
-%global core_bins schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder
+%global core_bins schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder
 %global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
 %make_build BINS="%{core_bins} %{migrate_bins}" SCHEMA_VERSION="%{version}-%{release}"
 RUSTFLAGS="%{build_rustflags}" CARGO_PROFILE_RELEASE_STRIP=false %make_build analyze CARGO="cargo --offline"
@@ -473,6 +473,7 @@ fi
 %license LICENSE
 %doc README.md docs/
 %{_bindir}/schema-init
+%{_bindir}/schema-user
 %{_bindir}/schema-ctl
 %{_bindir}/schema-subreaper
 %{_bindir}/schema-journal-sink
