@@ -184,3 +184,9 @@ PID-1-only behaviour still inside `engine.c` that `schema-user` must parameteris
 - `get_poll_timeout`: `psi_fd < 0` forces the 250 ms tick — needs a flag so `schema-user` sleeps to real deadlines.
 - `engine.h` exports generic-named globals (`psi_fd`, `watchdog_fd`, `reexec_check_*`) — watch for clashes in the new binary.
 - `service_notify_sock` must be set alongside `engine_paths.notify_sock`.
+
+From the PR #395 /code-review (2026-10-20):
+- `timer_stamp_write` still does `mkdir("/var/lib/schema-init")`: a non-default `timer_stamp_dir` whose parent is missing never gets stamps → persistent timers re-fire every start. Create the parent chain from `timer_stamp_dir`.
+- `ctl_init`/`engine_release` fallback `./run/schema-init.sock` is outside `engine_paths`: a second instance could bind or unlink PID 1's fallback name. Derive it from `engine_paths`.
+- `get_poll_timeout` reads PID-1 globals (`psi_fd`, `cpu_check_due`, `reexec_check_*`, `watchdog_fd`): with no PSI fd the engine ticks every 250 ms idle. Let hooks return their next deadline; pass `psi_fired` to `loop_pressure` instead of `loop_psi_fired`.
+- `pstore_harvest` mkdirs `engine_paths.run_dir` but writes the hardcoded `PSTORE_MARKER` (PID-1-only today; derive or hardcode both).

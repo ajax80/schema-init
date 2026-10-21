@@ -24,4 +24,5 @@ engine_hooks_t engine_hooks = {
     .shut_log      = engine_hook_log_none,
     .on_sigcont    = engine_hook_noop,
     .on_reaped     = engine_hook_reaped_none,
+    .after_sockets = engine_hook_noop,
 };

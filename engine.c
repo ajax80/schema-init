@@ -162,6 +162,31 @@ time_t mono_sec(void) {
     return ts.tv_sec;
 }
 
+static void eviction_tick(void) {
+    time_t now = mono_sec();
+    int i = 0;
+    while (i < eviction_count) {
+        if (now < evictions[i].deadline) { i++; continue; }
+        int killed = 0;
+        if (evictions[i].cgroup[0]) {
+            char path[160];
+            int fd;
+            snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
+            fd = open(path, O_WRONLY);
+            if (fd >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
+        }
+        /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
+         * previously this whole branch was gated on cgroup[0], so an orphan
+         * with no cgroup that ignored SIGTERM survived eviction entirely. */
+        if (!killed) {
+            kill(evictions[i].pid, SIGKILL);
+        }
+        printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
+               (int)evictions[i].pid);
+        evictions[i] = evictions[--eviction_count];
+    }
+}
+
 static void service_watchdog_tick(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -2301,6 +2326,7 @@ static void shutdown_ordered(void) {
 int loop_psi_fired;
 
 void engine_open(int adopting) {
+    service_notify_sock = engine_paths.notify_sock;
     shm_init();
     mkdir(engine_paths.run_dir, 0755);
     if (!adopting) {
@@ -2308,6 +2334,7 @@ void engine_open(int adopting) {
         notify_fd = notify_open(engine_paths.notify_sock);
         fdclose_sock = notify_fd;
     }
+    engine_hooks.after_sockets();
     ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (adopting) {
         /* Children that exited during the swap are zombies only the restored
@@ -2485,6 +2512,7 @@ void engine_run(void) {
         monitor_failsafes();
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
+        eviction_tick();
         service_watchdog_tick();
         engine_hooks.loop_tail();
     }

@@ -30,6 +30,7 @@ typedef struct {
     void (*shut_log)(const char *msg);
     void (*on_sigcont)(void);
     int  (*on_reaped)(pid_t pid, int status);
+    void (*after_sockets)(void);
 } engine_hooks_t;
 
 extern engine_hooks_t engine_hooks;

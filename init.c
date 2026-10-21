@@ -64,31 +64,6 @@ static void held_signals(sigset_t *set) {
     sigaddset(set, SIGUSR2);
 }
 
-static void eviction_tick(void) {
-    time_t now = mono_sec();
-    int i = 0;
-    while (i < eviction_count) {
-        if (now < evictions[i].deadline) { i++; continue; }
-        int killed = 0;
-        if (evictions[i].cgroup[0]) {
-            char path[160];
-            int fd;
-            snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
-            fd = open(path, O_WRONLY);
-            if (fd >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
-        }
-        /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
-         * previously this whole branch was gated on cgroup[0], so an orphan
-         * with no cgroup that ignored SIGTERM survived eviction entirely. */
-        if (!killed) {
-            kill(evictions[i].pid, SIGKILL);
-        }
-        printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
-               (int)evictions[i].pid);
-        evictions[i] = evictions[--eviction_count];
-    }
-}
-
 /*
  * IEC 62304 / ISO 26262 Safety Audit Traceability:
  * 
@@ -1566,7 +1541,6 @@ static int pid1_on_reaped(pid_t pid, int status) {
 }
 
 static void pid1_loop_tail(void) {
-    eviction_tick();
     watchdog_pet();
     reexec_check_deadline();
 }
@@ -1707,6 +1681,7 @@ int main(int argc, char **argv) {
         coredump_raise_if_ours();
     engine_hooks.loop_pressure = pid1_loop_pressure;
     engine_hooks.loop_tail     = pid1_loop_tail;
+    engine_hooks.after_sockets = psi_open;
     engine_hooks.ctl_extra     = pid1_ctl_extra;
     engine_hooks.shut_log      = shut_log;
     engine_hooks.on_sigcont    = runit_stop_request;
@@ -1740,7 +1715,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    psi_open();
     engine_open(reexec_fd >= 0);
     if (reexec_fd < 0)
         schema_boot_log();
