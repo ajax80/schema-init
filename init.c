@@ -61,8 +61,8 @@ static int          grp_count = 0;
 static eviction_t evictions[MAX_EVICTIONS];
 static int        eviction_count = 0;
 
-static volatile int running   = 1;
-static volatile int do_reboot = 0;
+volatile int engine_running = 1;
+volatile int engine_do_reboot = 0;
 static schema_shm_t *shm_ptr = NULL;
 static int          ctl_fd   = -1;
 static int          notify_fd = -1;
@@ -592,10 +592,10 @@ static void cleanup_tmp_locks(void) {
     }
 }
 
-static void sig_term(int s)   { (void)s; running = 0; do_reboot = 0; if (shm_ptr) shm_ptr->system_state = 13; }
-static void sig_int(int s)    { (void)s; running = 0; do_reboot = 1; if (shm_ptr) shm_ptr->system_state = 14; }
-static void sig_usr1(int s)   { (void)s; running = 0; do_reboot = 0; }  /* halt */
-static void sig_usr2(int s)   { (void)s; running = 0; do_reboot = 0; }  /* poweroff */
+static void sig_term(int s)   { (void)s; engine_running = 0; engine_do_reboot = 0; if (shm_ptr) shm_ptr->system_state = 13; }
+static void sig_int(int s)    { (void)s; engine_running = 0; engine_do_reboot = 1; if (shm_ptr) shm_ptr->system_state = 14; }
+static void sig_usr1(int s)   { (void)s; engine_running = 0; engine_do_reboot = 0; }  /* halt */
+static void sig_usr2(int s)   { (void)s; engine_running = 0; engine_do_reboot = 0; }  /* poweroff */
 
 static void setup_signals(void) {
     struct sigaction sa;
@@ -2477,10 +2477,10 @@ static void runit_stop_request(void) {
     if (stat("/etc/runit/stopit", &st) != 0 || !(st.st_mode & S_IXUSR))
         return;
     chmod("/etc/runit/stopit", 0);
-    do_reboot = stat("/etc/runit/reboot", &st) == 0 && (st.st_mode & S_IXUSR);
-    printf("[schema-init] runit-init %s: %s\n", do_reboot ? "6" : "0", do_reboot ? "rebooting" : "powering off");
-    if (shm_ptr) shm_ptr->system_state = do_reboot ? 14 : 13;
-    running = 0;
+    engine_do_reboot = stat("/etc/runit/reboot", &st) == 0 && (st.st_mode & S_IXUSR);
+    printf("[schema-init] runit-init %s: %s\n", engine_do_reboot ? "6" : "0", engine_do_reboot ? "rebooting" : "powering off");
+    if (shm_ptr) shm_ptr->system_state = engine_do_reboot ? 14 : 13;
+    engine_running = 0;
 }
 
 static void signalfd_init(void) {
@@ -2803,7 +2803,7 @@ static reexec_svc_t reexec_svcs[MAX_SERVICES];
 static int reexec_reply_fd = -1;
 static char reexec_reply[160];
 
-static int load_tables(const char *svc_dir) {
+int engine_load(const char *svc_dir) {
     char cmdline[4096] = "", hd[64] = "";
     int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
     if (fd >= 0) { ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1); if (n > 0) cmdline[n] = '\0'; close(fd); }
@@ -2847,7 +2847,7 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
 static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
                            eviction_t *ev, int *nev, fdstore_ent *fs, int maxfs, int *nfs,
                            char *err, size_t errsz) {
-    if (load_tables(engine_paths.svc_dir) > 0) {
+    if (engine_load(engine_paths.svc_dir) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", engine_paths.svc_dir);
         return -1;
     }
@@ -2972,7 +2972,7 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         /* We ARE the fallback: nowhere further back to go, so refusing would
          * loop. Adopt whatever the config and blob allow; only a blob we
          * cannot read at all stops us, since then there is nothing to adopt. */
-        int cycles = load_tables(engine_paths.svc_dir);
+        int cycles = engine_load(engine_paths.svc_dir);
         if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, fs, fs ? FDSTORE_MAX_TOTAL : 0, &nfs, err, sizeof err) < 0)
             reexec_fallback(blob_fd, -1, g.fd_client, err);
         if (cycles > 0)
@@ -3152,7 +3152,7 @@ static void reexec_reply_end(const char *fmt, const char *arg) {
 static int reexec_start(int client, const char *path, char *err, size_t errsz) {
     struct stat st;
     int out[2], blob;
-    if (!running) {
+    if (!engine_running) {
         snprintf(err, errsz, "shutting down");
         return -1;
     }
@@ -3279,7 +3279,7 @@ static void reexec_commit(void) {
     sigset_t held, prev;
     int oldexe, blob;
 
-    if (!running) {
+    if (!engine_running) {
         reexec_reply_end("err: %s\n", "shutting down");
         return;
     }
@@ -3841,218 +3841,64 @@ static int pid1_ctl_extra(int fd, char *line) {
     } else if (strcmp(line, "reboot") == 0) {
         ctl_writef(fd, "ok: rebooting\n");
         if (shm_ptr) shm_ptr->system_state = 14;
-        do_reboot = 1;
-        running = 0;
+        engine_do_reboot = 1;
+        engine_running = 0;
 
     } else if (strcmp(line, "poweroff") == 0) {
         ctl_writef(fd, "ok: powering off\n");
         if (shm_ptr) shm_ptr->system_state = 13;
-        do_reboot = 0;
-        running = 0;
+        engine_do_reboot = 0;
+        engine_running = 0;
     } else {
         return 0;
     }
     return 1;
 }
 
-int main(int argc, char **argv) {
-    int i;
-    const char *svc_dir = engine_paths.svc_dir;
-    int have_dir = 0;
-    int reexec_fd = -1, reexec_oldexe = -1, reexec_check_fd = -1;
-
-    /* An initrd's systemd runs with umask 0 and switch-root hands that to us;
-     * every service would inherit it and create world-writable files.
-     * The kernel hands PID 1 no PATH either; sh falls back to a built-in
-     * one, but Go and execvp-less code can't find helpers without it. */
-    if (getpid() == 1) {
-        umask(022);
-        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 0);
-        /* No console (or a container) leaves 0-2 closed; the next socket or
-         * file would land there and a child's stdio dup2 would clobber it. */
-        int nfd;
-        while ((nfd = open("/dev/null", O_RDWR)) >= 0 && nfd < 3)
-            ;
-        if (nfd > 2) close(nfd);
-    }
-
-    for (i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            usage(stdout);
-            return 0;
-        }
-        if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
-            printf("schema-init %s\n", SCHEMA_INIT_VERSION);
-            return 0;
-        }
-        /* Written by our own previous image, never by the kernel: it
-         * appends only words it didn't consume, and none start "--reexec". */
-        if (!strcmp(argv[i], "--reexec") && i + 2 < argc) {
-            reexec_fd = atoi(argv[++i]);
-            reexec_oldexe = atoi(argv[++i]);
-            continue;
-        }
-        if (!strcmp(argv[i], "--reexec-check") && i + 1 < argc) {
-            reexec_check_fd = atoi(argv[++i]);
-            continue;
-        }
-        /* As PID 1 the kernel appends every boot-cmdline word it didn't
-         * consume (rhgb, splash, quiet, plymouth.debug, ...) to our argv.
-         * Those tokens are not ours: letting a stray one become svc_dir makes
-         * services_load() open a bogus directory and silently start zero
-         * services. Only a hand-run invocation may name a services dir; as
-         * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir. */
-        if (getpid() == 1)
-            continue;
-        if (argv[i][0] == '-') {
-            fprintf(stderr, "schema-init: unknown option '%s'\n", argv[i]);
-            usage(stderr);
-            return 1;
-        }
-        if (have_dir) {
-            fprintf(stderr, "schema-init: too many arguments\n");
-            usage(stderr);
-            return 1;
-        }
-        svc_dir = argv[i];
-        have_dir = 1;
-    }
-
-    if (reexec_check_fd >= 0)
-        return getpid() == 1 ? 1 : reexec_check_main(reexec_check_fd);
-
-    if (argv[0] && argv[0][0] == '/' && strlen(argv[0]) < sizeof boot_argv0)
-        snprintf(boot_argv0, sizeof boot_argv0, "%s", argv[0]);
-
-    if (getpid() != 1) {
-        fprintf(stderr,
-            "schema-init: refusing to run as pid %d — schema-init must be PID 1.\n"
-            "Running it by hand would take the control socket (%s) away from the\n"
-            "real PID 1 and start a second copy of every service.\n"
-            "\n"
-            "Did you mean:  schema-ctl status\n",
-            (int)getpid(), CTL_SOCK_PATH);
-        return 1;
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &init_start);
-
-    /* A re-exec skips what the first boot already did. cleanup_tmp_locks
-     * above all: run again it deletes live X/Xwayland locks. */
-    if (reexec_fd < 0) {
-        /* Detach from controlling terminal to prevent receiving SIGINT on Ctrl+C */
-        int fd = open("/dev/tty", O_RDWR | O_NOCTTY);
-        if (fd >= 0) {
-            ioctl(fd, TIOCNOTTY);
-            close(fd);
-        }
-        mount_pseudo();
-        cleanup_tmp_locks();
-        load_watchdog_module();
-        load_configured_modules();
-        pstore_harvest();
-        rescue_boot();
-        watchdog_init();
-    }
-    /* Before the control socket opens or a single service spawns, so the
-     * raised limit covers every descriptor PID 1 will ever hold. */
-    service_raise_pid1_nofile();
-    /* With the pattern ours, every service inherits a core limit the helper
-     * can honour; a process that wants no core still lowers its own. Boot
-     * only: a pattern set after boot is the admin's, and the raised core
-     * limit survives execve anyway. */
-    if (reexec_fd < 0 && coredump_take_pattern() == 1)
-        coredump_raise_if_ours();
-    engine_hooks.loop_pressure = pid1_loop_pressure;
-    engine_hooks.loop_tail     = pid1_loop_tail;
-    engine_hooks.ctl_extra     = pid1_ctl_extra;
-    engine_hooks.shut_log      = shut_log;
-    engine_hooks.on_sigcont    = runit_stop_request;
-    setup_signals();
-
-    if (reexec_fd >= 0)
-        reexec_adopt(reexec_fd, reexec_oldexe);
-    else if (load_tables(svc_dir) > 0) {
-        fprintf(stderr, "schema-init: dependency cycles detected — dropping to rescue shell\n");
-        pid_t rsh = fork();
-        if (rsh == 0) {
-            service_reset_child_sigmask();
-            setsid();
-            int tty = open("/dev/tty1", O_RDWR);
-            if (tty >= 0) {
-                dup2(tty, STDIN_FILENO);
-                dup2(tty, STDOUT_FILENO);
-                dup2(tty, STDERR_FILENO);
-                write(tty, "\n\n*** schema-init: DEPENDENCY CYCLE DETECTED ***\n", 50);
-                write(tty, "Dropping to emergency rescue shell. Type 'exit' to halt.\n\n", 58);
-                close(tty);
-            }
-            execl("/bin/sh", "sh", NULL);
-            _exit(1);
-        }
-        if (rsh > 0)
-            waitpid(rsh, NULL, 0);
-        sync();
-        reboot(RB_HALT_SYSTEM);
-        return 1;
-    }
-
+void engine_open(int adopting) {
     shm_init();
     mkdir(engine_paths.run_dir, 0755);
-    if (reexec_fd < 0) {
+    if (!adopting) {
         ctl_init();
         notify_fd = notify_open(engine_paths.notify_sock);
         fdclose_sock = notify_fd;
     }
-    psi_open();
     ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-    if (reexec_fd >= 0) {
+    if (adopting) {
         /* Children that exited during the swap are zombies only the restored
          * child_pid can attribute; their SIGCHLD stays pending for signalfd. */
         reap();
         ready_event_due = (int64_t)monotonic_ms();
     }
     signalfd_init();
-    if (reexec_fd < 0)
-        schema_boot_log();
+}
 
-    /* arm timer services: born "already ran", first fire = boot + on_boot_sec.
-     * After a re-exec only timers new to the config (timer_next still 0). */
-    {
-        struct timespec tnow;
-        clock_gettime(CLOCK_MONOTONIC, &tnow);
-        for (int ti = 0; ti < svc_count; ti++) {
-            if ((services[ti].flags & SVC_TIMER) &&
-                (reexec_fd < 0 || services[ti].timer_next.tv_sec == 0)) {
-                services[ti].inst.state = STATE_PERFECT;
-                if (services[ti].flags & SVC_TIMER_CALENDAR) {
-                    if (services[ti].flags & SVC_TIMER_PERSIST)
-                        timer_arm_persistent(&services[ti]);
-                    else
-                        timer_arm_calendar(&services[ti]);
-                } else {
-                    services[ti].timer_next = tnow;
-                    services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
-                }
+/* arm timer services: born "already ran", first fire = boot + on_boot_sec.
+ * After a re-exec only timers new to the config (timer_next still 0). */
+void engine_arm_timers(int adopting) {
+    struct timespec tnow;
+    clock_gettime(CLOCK_MONOTONIC, &tnow);
+    for (int ti = 0; ti < svc_count; ti++) {
+        if ((services[ti].flags & SVC_TIMER) &&
+            (!adopting || services[ti].timer_next.tv_sec == 0)) {
+            services[ti].inst.state = STATE_PERFECT;
+            if (services[ti].flags & SVC_TIMER_CALENDAR) {
+                if (services[ti].flags & SVC_TIMER_PERSIST)
+                    timer_arm_persistent(&services[ti]);
+                else
+                    timer_arm_calendar(&services[ti]);
+            } else {
+                services[ti].timer_next = tnow;
+                services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
             }
         }
     }
+}
 
-    if (reexec_fd >= 0) {
-        /* Handlers are installed: let a reboot/poweroff sent during the swap,
-         * held pending since the old image blocked it, arrive now. */
-        sigset_t held;
-        held_signals(&held);
-        sigprocmask(SIG_UNBLOCK, &held, NULL);
-        if (reexec_reply_fd >= 0) {
-            ctl_writef(reexec_reply_fd, "%s", reexec_reply);
-            write(reexec_reply_fd, ".\n", 2);
-            close(reexec_reply_fd);
-            reexec_reply_fd = -1;
-        }
-    }
+void engine_run(void) {
+    int i;
 
-    while (running) {
+    while (engine_running) {
         struct pollfd fds[5 + MAX_SERVICES * MAX_LISTEN];
         int fd_svc[5 + MAX_SERVICES * MAX_LISTEN];
         int nfds = 0, nfixed;
@@ -4197,6 +4043,221 @@ int main(int argc, char **argv) {
         service_watchdog_tick();
         engine_hooks.loop_tail();
     }
+}
+
+void engine_stop_services(void) {
+    int i;
+
+    for (i = 0; i < svc_count; i++)
+        service_listen_close(&services[i]);
+    shutdown_ordered();
+}
+
+void engine_kill_services(void) {
+    int i;
+
+    for (i = 0; i < svc_count; i++) {
+        service_cgroup_kill(&services[i]);
+    }
+}
+
+void engine_release(void) {
+    if (notify_fd >= 0) {
+        close(notify_fd);
+        unlink(engine_paths.notify_sock);
+    }
+    if (ctl_fd >= 0) {
+        close(ctl_fd);
+        unlink(engine_paths.ctl_sock);
+        unlink("./run/schema-init.sock");
+    }
+
+    if (shm_ptr) {
+        munmap(shm_ptr, sizeof(schema_shm_t));
+        shm_unlink(engine_paths.shm_name);
+    }
+}
+
+void engine_free(void) {
+    int i;
+
+    /* free duplicated arguments to prevent memory leaks */
+    for (i = 0; i < svc_count; i++) {
+        int j;
+        for (j = 1; j < MAX_ARGV; j++) {
+            if (services[i].argv[j]) {
+                free(services[i].argv[j]);
+                services[i].argv[j] = NULL;
+            }
+        }
+        service_free_landlock(&services[i]);
+    }
+}
+
+int main(int argc, char **argv) {
+    int i;
+    const char *svc_dir = engine_paths.svc_dir;
+    int have_dir = 0;
+    int reexec_fd = -1, reexec_oldexe = -1, reexec_check_fd = -1;
+
+    /* An initrd's systemd runs with umask 0 and switch-root hands that to us;
+     * every service would inherit it and create world-writable files.
+     * The kernel hands PID 1 no PATH either; sh falls back to a built-in
+     * one, but Go and execvp-less code can't find helpers without it. */
+    if (getpid() == 1) {
+        umask(022);
+        setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 0);
+        /* No console (or a container) leaves 0-2 closed; the next socket or
+         * file would land there and a child's stdio dup2 would clobber it. */
+        int nfd;
+        while ((nfd = open("/dev/null", O_RDWR)) >= 0 && nfd < 3)
+            ;
+        if (nfd > 2) close(nfd);
+    }
+
+    for (i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            usage(stdout);
+            return 0;
+        }
+        if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
+            printf("schema-init %s\n", SCHEMA_INIT_VERSION);
+            return 0;
+        }
+        /* Written by our own previous image, never by the kernel: it
+         * appends only words it didn't consume, and none start "--reexec". */
+        if (!strcmp(argv[i], "--reexec") && i + 2 < argc) {
+            reexec_fd = atoi(argv[++i]);
+            reexec_oldexe = atoi(argv[++i]);
+            continue;
+        }
+        if (!strcmp(argv[i], "--reexec-check") && i + 1 < argc) {
+            reexec_check_fd = atoi(argv[++i]);
+            continue;
+        }
+        /* As PID 1 the kernel appends every boot-cmdline word it didn't
+         * consume (rhgb, splash, quiet, plymouth.debug, ...) to our argv.
+         * Those tokens are not ours: letting a stray one become svc_dir makes
+         * services_load() open a bogus directory and silently start zero
+         * services. Only a hand-run invocation may name a services dir; as
+         * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir. */
+        if (getpid() == 1)
+            continue;
+        if (argv[i][0] == '-') {
+            fprintf(stderr, "schema-init: unknown option '%s'\n", argv[i]);
+            usage(stderr);
+            return 1;
+        }
+        if (have_dir) {
+            fprintf(stderr, "schema-init: too many arguments\n");
+            usage(stderr);
+            return 1;
+        }
+        svc_dir = argv[i];
+        have_dir = 1;
+    }
+
+    if (reexec_check_fd >= 0)
+        return getpid() == 1 ? 1 : reexec_check_main(reexec_check_fd);
+
+    if (argv[0] && argv[0][0] == '/' && strlen(argv[0]) < sizeof boot_argv0)
+        snprintf(boot_argv0, sizeof boot_argv0, "%s", argv[0]);
+
+    if (getpid() != 1) {
+        fprintf(stderr,
+            "schema-init: refusing to run as pid %d — schema-init must be PID 1.\n"
+            "Running it by hand would take the control socket (%s) away from the\n"
+            "real PID 1 and start a second copy of every service.\n"
+            "\n"
+            "Did you mean:  schema-ctl status\n",
+            (int)getpid(), CTL_SOCK_PATH);
+        return 1;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &init_start);
+
+    /* A re-exec skips what the first boot already did. cleanup_tmp_locks
+     * above all: run again it deletes live X/Xwayland locks. */
+    if (reexec_fd < 0) {
+        /* Detach from controlling terminal to prevent receiving SIGINT on Ctrl+C */
+        int fd = open("/dev/tty", O_RDWR | O_NOCTTY);
+        if (fd >= 0) {
+            ioctl(fd, TIOCNOTTY);
+            close(fd);
+        }
+        mount_pseudo();
+        cleanup_tmp_locks();
+        load_watchdog_module();
+        load_configured_modules();
+        pstore_harvest();
+        rescue_boot();
+        watchdog_init();
+    }
+    /* Before the control socket opens or a single service spawns, so the
+     * raised limit covers every descriptor PID 1 will ever hold. */
+    service_raise_pid1_nofile();
+    /* With the pattern ours, every service inherits a core limit the helper
+     * can honour; a process that wants no core still lowers its own. Boot
+     * only: a pattern set after boot is the admin's, and the raised core
+     * limit survives execve anyway. */
+    if (reexec_fd < 0 && coredump_take_pattern() == 1)
+        coredump_raise_if_ours();
+    engine_hooks.loop_pressure = pid1_loop_pressure;
+    engine_hooks.loop_tail     = pid1_loop_tail;
+    engine_hooks.ctl_extra     = pid1_ctl_extra;
+    engine_hooks.shut_log      = shut_log;
+    engine_hooks.on_sigcont    = runit_stop_request;
+    setup_signals();
+
+    if (reexec_fd >= 0)
+        reexec_adopt(reexec_fd, reexec_oldexe);
+    else if (engine_load(svc_dir) > 0) {
+        fprintf(stderr, "schema-init: dependency cycles detected — dropping to rescue shell\n");
+        pid_t rsh = fork();
+        if (rsh == 0) {
+            service_reset_child_sigmask();
+            setsid();
+            int tty = open("/dev/tty1", O_RDWR);
+            if (tty >= 0) {
+                dup2(tty, STDIN_FILENO);
+                dup2(tty, STDOUT_FILENO);
+                dup2(tty, STDERR_FILENO);
+                write(tty, "\n\n*** schema-init: DEPENDENCY CYCLE DETECTED ***\n", 50);
+                write(tty, "Dropping to emergency rescue shell. Type 'exit' to halt.\n\n", 58);
+                close(tty);
+            }
+            execl("/bin/sh", "sh", NULL);
+            _exit(1);
+        }
+        if (rsh > 0)
+            waitpid(rsh, NULL, 0);
+        sync();
+        reboot(RB_HALT_SYSTEM);
+        return 1;
+    }
+
+    psi_open();
+    engine_open(reexec_fd >= 0);
+    if (reexec_fd < 0)
+        schema_boot_log();
+
+    engine_arm_timers(reexec_fd >= 0);
+
+    if (reexec_fd >= 0) {
+        /* Handlers are installed: let a reboot/poweroff sent during the swap,
+         * held pending since the old image blocked it, arrive now. */
+        sigset_t held;
+        held_signals(&held);
+        sigprocmask(SIG_UNBLOCK, &held, NULL);
+        if (reexec_reply_fd >= 0) {
+            ctl_writef(reexec_reply_fd, "%s", reexec_reply);
+            write(reexec_reply_fd, ".\n", 2);
+            close(reexec_reply_fd);
+            reexec_reply_fd = -1;
+        }
+    }
+
+    engine_run();
 
     /* shutdown: hold briefly so viewers see system_state 13/14, then kill */
     watchdog_close();
@@ -4213,14 +4274,10 @@ int main(int argc, char **argv) {
      * client hung on cups.sock this way). Drop PID 1's copies: a running
      * service keeps the fds it was handed and serves until it is stopped; a
      * parked one is refused at once. */
-    for (i = 0; i < svc_count; i++)
-        service_listen_close(&services[i]);
-    shutdown_ordered();
+    engine_stop_services();
     while (container_cgroups_signal(0) && monotonic_ms() - ct < SHUT_GRACE_MS)
         usleep(20000);
-    for (i = 0; i < svc_count; i++) {
-        service_cgroup_kill(&services[i]);
-    }
+    engine_kill_services();
     /* Recursively SIGKILL any container subtree that ignored the SIGTERM,
      * before the kill(-1) backstop, so their files are released for remount. */
     container_cgroups_kill();
@@ -4238,20 +4295,7 @@ int main(int argc, char **argv) {
         ;
     shut_log("SIGKILL broadcast");
 
-    if (notify_fd >= 0) {
-        close(notify_fd);
-        unlink(engine_paths.notify_sock);
-    }
-    if (ctl_fd >= 0) {
-        close(ctl_fd);
-        unlink(engine_paths.ctl_sock);
-        unlink("./run/schema-init.sock");
-    }
-
-    if (shm_ptr) {
-        munmap(shm_ptr, sizeof(schema_shm_t));
-        shm_unlink(engine_paths.shm_name);
-    }
+    engine_release();
     shut_log("control socket and shm released");
 
     if (getpid() == 1) {
@@ -4259,7 +4303,7 @@ int main(int argc, char **argv) {
         bounded_sync(10);
         shut_flush_log();        /* the sweep is the last thing that can lose it */
         remount_all_ro();
-        if (do_reboot) {
+        if (engine_do_reboot) {
             shut_write("[schema-init] PID 1 reboot\n");
             reboot(RB_AUTOBOOT);
         } else {
@@ -4268,17 +4312,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* free duplicated arguments to prevent memory leaks */
-    for (i = 0; i < svc_count; i++) {
-        int j;
-        for (j = 1; j < MAX_ARGV; j++) {
-            if (services[i].argv[j]) {
-                free(services[i].argv[j]);
-                services[i].argv[j] = NULL;
-            }
-        }
-        service_free_landlock(&services[i]);
-    }
+    engine_free();
 
     return 0;
 }
