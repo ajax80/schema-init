@@ -1,3 +1,4 @@
+#define FDCLOSE_DEFINE
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
