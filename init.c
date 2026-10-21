@@ -13,6 +13,7 @@
 #include <errno.h>
 
 #include "schema.h"
+#include "engine.h"
 #include "service.h"
 #include "svc_dropins.h"
 #include "reexec_state.h"
@@ -41,7 +42,6 @@
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define READY_POLL_MS   10       /* while a starting service's ready_path is awaited, */
 #define READY_POLL_SECS 3        /* ...for this long after its spawn */
-#define CTL_SOCK_PATH   "/run/schema-init.sock"
 #define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
 #define PID_FILE_WAIT_SECS 5
 
@@ -126,10 +126,9 @@ static void timer_arm_calendar(service_t *svc) {
 
 /* ── persistent calendar timers (persistent=1): catch up a fire missed while
  * the machine was down. Last run is stamped to /var/lib/schema-init/timers/. ── */
-#define TIMER_STAMP_DIR "/var/lib/schema-init/timers"
 
 static void timer_stamp_path(const service_t *svc, char *buf, size_t n) {
-    snprintf(buf, n, "%s/%s.stamp", TIMER_STAMP_DIR, svc->name);
+    snprintf(buf, n, "%s/%s.stamp", engine_paths.timer_stamp_dir, svc->name);
 }
 
 static time_t timer_stamp_read(const service_t *svc) {
@@ -145,7 +144,7 @@ static time_t timer_stamp_read(const service_t *svc) {
 static void timer_stamp_write(const service_t *svc, time_t t) {
     mkdir("/var/lib", 0755);
     mkdir("/var/lib/schema-init", 0755);
-    mkdir(TIMER_STAMP_DIR, 0755);
+    mkdir(engine_paths.timer_stamp_dir, 0755);
     char path[256]; timer_stamp_path(svc, path, sizeof path);
     FILE *f = fopen(path, "w");
     if (!f) return;
@@ -567,7 +566,7 @@ static void pstore_harvest(void) {
     fsync(outdir);
     close(outdir);
     closedir(d);
-    mkdir("/run/schema-init", 0755);
+    mkdir(engine_paths.run_dir, 0755);
     FILE *mk = fopen(PSTORE_MARKER, "w");
     if (mk) { fprintf(mk, "%s\n", dest); fclose(mk); }
     fprintf(stderr, "schema-init: pstore: %d record(s) from the previous boot -> %s%s\n",
@@ -629,7 +628,9 @@ static void setup_signals(void) {
 }
 
 static void load_env_file(void) {
-    const char *path = "/run/schema-init/env";
+    char envp[160];
+    const char *path = envp;
+    snprintf(envp, sizeof envp, "%s/env", engine_paths.run_dir);
     int fd = service_open_trusted(path);
     if (fd < 0 && errno != EPERM) fd = service_open_trusted(path = "./run/schema-init/env");
     if (fd < 0) {
@@ -1589,7 +1590,7 @@ static void tick_service(service_t *svc,
 /* ── shared memory export ───────────────────────────────────────────── */
 
 static void shm_init(void) {
-    int fd = shm_open(SCHEMA_SHM_NAME, O_CREAT | O_RDWR, 0644);
+    int fd = shm_open(engine_paths.shm_name, O_CREAT | O_RDWR, 0644);
     if (fd < 0) return;
     ftruncate(fd, (off_t)sizeof(schema_shm_t));
     shm_ptr = mmap(NULL, sizeof(schema_shm_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -2267,13 +2268,13 @@ static void set_nonblock(int fd) {
 
 static void ctl_init(void) {
     struct sockaddr_un addr;
-    unlink(CTL_SOCK_PATH);
+    unlink(engine_paths.ctl_sock);
     ctl_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (ctl_fd < 0) return;
     set_nonblock(ctl_fd);
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, CTL_SOCK_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, engine_paths.ctl_sock, sizeof(addr.sun_path) - 1);
     if (bind(ctl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         /* try local fallback path */
         mkdir("./run", 0755);
@@ -2642,7 +2643,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     int i, j;
     printf("[schema-init] reloading configuration (SIGHUP)... \n");
 
-    const char *svc_dir = SVC_DIR;
+    const char *svc_dir = engine_paths.svc_dir;
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     int shadow_count = services_load(svc_dir, shadow_services, MAX_SERVICES);
     if (svc_refused) {
@@ -2862,12 +2863,12 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
 static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
                            eviction_t *ev, int *nev, fdstore_ent *fs, int maxfs, int *nfs,
                            char *err, size_t errsz) {
-    if (load_tables(SVC_DIR) > 0) {
-        snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
+    if (load_tables(engine_paths.svc_dir) > 0) {
+        snprintf(err, errsz, "dependency cycle in %s", engine_paths.svc_dir);
         return -1;
     }
     if (svc_count <= 0) {
-        snprintf(err, errsz, "no services loaded from %s", SVC_DIR);
+        snprintf(err, errsz, "no services loaded from %s", engine_paths.svc_dir);
         return -1;
     }
     if (reexec_read_blob(blob_fd, g, nrs, ev, nev, fs, maxfs, nfs, err, errsz) < 0)
@@ -2987,11 +2988,11 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         /* We ARE the fallback: nowhere further back to go, so refusing would
          * loop. Adopt whatever the config and blob allow; only a blob we
          * cannot read at all stops us, since then there is nothing to adopt. */
-        int cycles = load_tables(SVC_DIR);
+        int cycles = load_tables(engine_paths.svc_dir);
         if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, fs, fs ? FDSTORE_MAX_TOTAL : 0, &nfs, err, sizeof err) < 0)
             reexec_fallback(blob_fd, -1, g.fd_client, err);
         if (cycles > 0)
-            fprintf(stderr, "[schema-init] re-exec fallback: dependency cycle in %s, adopting anyway\n", SVC_DIR);
+            fprintf(stderr, "[schema-init] re-exec fallback: dependency cycle in %s, adopting anyway\n", engine_paths.svc_dir);
         if (reexec_compare(reexec_svcs, nrs, services, svc_count, err, sizeof err) < 0)
             fprintf(stderr, "[schema-init] re-exec fallback: adopting despite: %s\n", err);
     }
@@ -3259,15 +3260,15 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
 
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
-    shadow_count = services_load(SVC_DIR, shadow_services, MAX_SERVICES);
+    shadow_count = services_load(engine_paths.svc_dir, shadow_services, MAX_SERVICES);
     if (shadow_count == 0)
         shadow_count = services_load("./services", shadow_services, MAX_SERVICES);
-    shadow_grp_count = groups_load(SVC_DIR, shadow_groups, MAX_GROUPS);
+    shadow_grp_count = groups_load(engine_paths.svc_dir, shadow_groups, MAX_GROUPS);
     if (shadow_grp_count == 0)
         shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
 
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
-        snprintf(err, errsz, "dependency cycle in %s", SVC_DIR);
+        snprintf(err, errsz, "dependency cycle in %s", engine_paths.svc_dir);
         rc = -1;
     } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, errsz)) == 0) {
         rc = reexec_compare(reexec_svcs, nrs, shadow_services, shadow_count, err, errsz);
@@ -3398,7 +3399,7 @@ static void usage(FILE *out) {
         "\n"
         "To inspect or control a running schema-init, use schema-ctl:\n"
         "  schema-ctl status | timing | list | reload | start NAME | stop NAME\n",
-        SVC_DIR);
+        engine_paths.svc_dir);
 }
 
 /* PID 1 must never be able to block on a tty. /dev/console follows the
@@ -3814,7 +3815,7 @@ static void remount_all_ro(void) {
 
 int main(int argc, char **argv) {
     int i;
-    const char *svc_dir = SVC_DIR;
+    const char *svc_dir = engine_paths.svc_dir;
     int have_dir = 0;
     int reexec_fd = -1, reexec_oldexe = -1, reexec_check_fd = -1;
 
@@ -3858,7 +3859,7 @@ int main(int argc, char **argv) {
          * Those tokens are not ours: letting a stray one become svc_dir makes
          * services_load() open a bogus directory and silently start zero
          * services. Only a hand-run invocation may name a services dir; as
-         * PID 1, ignore all positional arguments and keep the built-in SVC_DIR. */
+         * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir. */
         if (getpid() == 1)
             continue;
         if (argv[i][0] == '-') {
@@ -3950,10 +3951,10 @@ int main(int argc, char **argv) {
     }
 
     shm_init();
-    mkdir("/run/schema-init", 0755);
+    mkdir(engine_paths.run_dir, 0755);
     if (reexec_fd < 0) {
         ctl_init();
-        notify_fd = notify_open(NOTIFY_SOCK_PATH);
+        notify_fd = notify_open(engine_paths.notify_sock);
         fdclose_sock = notify_fd;
     }
     psi_open();
@@ -4215,17 +4216,17 @@ int main(int argc, char **argv) {
 
     if (notify_fd >= 0) {
         close(notify_fd);
-        unlink(NOTIFY_SOCK_PATH);
+        unlink(engine_paths.notify_sock);
     }
     if (ctl_fd >= 0) {
         close(ctl_fd);
-        unlink(CTL_SOCK_PATH);
+        unlink(engine_paths.ctl_sock);
         unlink("./run/schema-init.sock");
     }
 
     if (shm_ptr) {
         munmap(shm_ptr, sizeof(schema_shm_t));
-        shm_unlink(SCHEMA_SHM_NAME);
+        shm_unlink(engine_paths.shm_name);
     }
     shut_log("control socket and shm released");
 
