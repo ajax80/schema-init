@@ -898,6 +898,7 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
     eviction_count = nev;
     for (int k = 0; k < eviction_count; k++)
         evictions[k].deadline = mono_sec() + (evictions[k].deadline - time(NULL));
+    eviction_readded();
     init_start = g.init_start;
     if (g.nofile_soft)
         service_set_nofile_soft_at_boot((rlim_t)g.nofile_soft);

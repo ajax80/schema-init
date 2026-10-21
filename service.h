@@ -444,6 +444,8 @@ static inline int service_listen_waiting(const service_t *svc) {
 void service_log(const service_t *svc, const char *event);
 
 /* kill all processes in the service's cgroup and remove it */
+int  cgroup_kill_path(const char *cg);
+void service_cgroup_release_partition(service_t *svc);
 void service_cgroup_kill(service_t *svc);
 extern const char *service_cgroup_root;
 extern const char *service_notify_sock;

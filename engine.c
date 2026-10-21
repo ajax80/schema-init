@@ -57,6 +57,8 @@ static group_t     *groups = groups_a;
 group_t     *shadow_groups = groups_b;
 static int          grp_count = 0;
 #define EVICT_GRACE_SECS  3
+#define EVICT_KILL_WAIT_SECS 5
+#define EVICT_STUCK_RECHECK_SECS 60
 
 eviction_t evictions[MAX_EVICTIONS];
 int        eviction_count = 0;
@@ -162,35 +164,73 @@ time_t mono_sec(void) {
     return ts.tv_sec;
 }
 
-/* cgroup.events "populated 0" once every process in the subtree is gone.
- * Unreadable counts as populated so the kill is still attempted. */
+/* cgroup.events "populated 0" once every process in the subtree is gone,
+ * and a cgroup that no longer exists holds nothing. Otherwise unreadable
+ * counts as populated so the kill is still attempted. */
 static int cgroup_populated(const char *cg) {
     char path[160], line[64];
     FILE *f;
     int pop = 1;
     snprintf(path, sizeof path, "%s/cgroup.events", cg);
-    if (!(f = fopen(path, "r"))) return 1;
+    if (!(f = fopen(path, "r"))) return errno != ENOENT;
     while (fgets(line, sizeof line, f))
         if (sscanf(line, "populated %d", &pop) == 1) break;
     fclose(f);
     return pop;
 }
 
+static void eviction_drop(int i) {
+    if (evictions[i].cgroup[0]) rmdir(evictions[i].cgroup);
+    evictions[i] = evictions[--eviction_count];
+}
+
 /* An evicted child that exits on SIGTERM must not leave a live pid in the
  * table: by the deadline it may be reused, and the log would claim a kill
  * that never happened. While its cgroup still holds descendants that
  * ignored SIGTERM the entry stays, marked reaped, to cgroup.kill them at the
- * deadline; otherwise there is nothing left to do. The pid itself is kept
- * so an older image after a re-exec, which ignores reaped=, behaves as it
- * always did instead of seeing pid 0. */
+ * deadline. The pid itself is kept so an older image after a re-exec, which
+ * ignores reaped=, behaves as it always did instead of seeing pid 0.
+ *
+ * Leftovers are reparented to PID 1, so each one lands here too: the entry
+ * whose cgroup has just emptied is dropped and its directory removed, with
+ * no polling. The service is gone from the config, so nothing else would
+ * ever rmdir it. */
 static void eviction_reaped(pid_t pid) {
-    for (int i = 0; i < eviction_count; i++) {
+    int i;
+    for (i = 0; i < eviction_count; i++) {
         if (evictions[i].pid != pid || evictions[i].reaped) continue;
-        if (evictions[i].cgroup[0] && cgroup_populated(evictions[i].cgroup))
-            evictions[i].reaped = 1;
+        if (evictions[i].cgroup[0]) evictions[i].reaped = 1;
+        else eviction_drop(i);
+        break;
+    }
+    for (i = 0; i < eviction_count; ) {
+        if (evictions[i].cgroup[0] && (evictions[i].reaped || evictions[i].killed) &&
+            !cgroup_populated(evictions[i].cgroup))
+            eviction_drop(i);
         else
-            evictions[i] = evictions[--eviction_count];
-        return;
+            i++;
+    }
+}
+
+/* A reload or re-exec that brings an evicted service's name back would spawn
+ * the new instance into the old cgroup (cgroup v2 cannot rename it aside),
+ * and the deadline kill would take it down with the leftovers. Kill the
+ * leftovers now, before the new one starts. A running service is skipped: it
+ * was re-added by an older image, which kept the entry, and is in there. */
+void eviction_readded(void) {
+    for (int i = 0; i < eviction_count; ) {
+        int s;
+        for (s = 0; s < svc_count; s++)
+            if (services[s].child_pid == 0 && evictions[i].cgroup[0] &&
+                strcmp(evictions[i].cgroup, service_cgroup_path_for(&services[s])) == 0)
+                break;
+        if (s == svc_count) { i++; continue; }
+        if (cgroup_populated(evictions[i].cgroup)) {
+            cgroup_kill_path(evictions[i].cgroup);
+            printf("[schema-init] '%s' is back in the configuration: force-killed what its evicted instance left in %s\n",
+                   services[s].name, evictions[i].cgroup);
+        }
+        eviction_drop(i);
     }
 }
 
@@ -199,21 +239,28 @@ static void eviction_tick(void) {
     int i = 0;
     while (i < eviction_count) {
         if (now < evictions[i].deadline) { i++; continue; }
-        int killed = 0, live = 1;
-        if (evictions[i].cgroup[0]) {
-            char path[160];
-            int fd;
-            live = cgroup_populated(evictions[i].cgroup);
-            snprintf(path, sizeof(path), "%s/cgroup.kill", evictions[i].cgroup);
-            if (live && (fd = open(path, O_WRONLY)) >= 0) { write(fd, "1", 1); close(fd); killed = 1; }
+        int live = evictions[i].cgroup[0] ? cgroup_populated(evictions[i].cgroup) : 1;
+        if (evictions[i].killed) {
+            if (!live) { eviction_drop(i); continue; }
+            /* a task stuck in D state outlives SIGKILL; dropping the entry
+             * would leak the cgroup once it finally dies, so keep checking */
+            if (evictions[i].killed == 1)
+                printf("[schema-init] eviction: %s still populated %d s after SIGKILL\n",
+                       evictions[i].cgroup, EVICT_KILL_WAIT_SECS);
+            evictions[i].killed   = 2;
+            evictions[i].deadline = now + EVICT_STUCK_RECHECK_SECS;
+            i++;
+            continue;
         }
-        /* no cgroup, or cgroup.kill unavailable: fall back to a direct SIGKILL.
-         * previously this whole branch was gated on cgroup[0], so an orphan
-         * with no cgroup that ignored SIGTERM survived eviction entirely.
-         * an unreaped pid is still our child, so it cannot have been reused
-         * (bar an entry adopted from an older image, which may have reaped
-         * it before the re-exec). */
-        if (live && !killed && !evictions[i].reaped) {
+        if (!live) { eviction_drop(i); continue; }
+        int killed = evictions[i].cgroup[0] && cgroup_kill_path(evictions[i].cgroup);
+        /* no cgroup, or neither cgroup.kill nor cgroup.procs usable: fall back
+         * to a direct SIGKILL. previously this whole branch was gated on
+         * cgroup[0], so an orphan with no cgroup that ignored SIGTERM survived
+         * eviction entirely. an unreaped pid is still our child, so it cannot
+         * have been reused (bar an entry adopted from an older image, which
+         * may have reaped it before the re-exec). */
+        if (!killed && !evictions[i].reaped) {
             kill(evictions[i].pid, SIGKILL);
             killed = 1;
         }
@@ -223,7 +270,15 @@ static void eviction_tick(void) {
         else if (killed)
             printf("[schema-init] eviction grace expired: force-killed leftovers in %s\n",
                    evictions[i].cgroup);
-        evictions[i] = evictions[--eviction_count];
+        if (killed && evictions[i].cgroup[0]) {
+            /* SIGKILL lands asynchronously; eviction_reaped() removes the
+             * cgroup once the dead are reaped, this deadline is the backstop */
+            evictions[i].killed   = 1;
+            evictions[i].deadline = now + EVICT_KILL_WAIT_SECS;
+            i++;
+            continue;
+        }
+        eviction_drop(i);
     }
 }
 
@@ -2164,10 +2219,15 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 printf("[schema-init] evicting orphaned service '%s' (pid=%d)\n", services[j].name, (int)services[j].child_pid);
                 if (services[j].child_pid > 0) {
                     kill(services[j].child_pid, SIGTERM);
+                    /* the service struct goes with this reload, and with it
+                     * the cpuset needed to give an isolated partition's
+                     * cores back; eviction_drop() only rmdirs, so do it now */
+                    service_cgroup_release_partition(&services[j]);
                     if (eviction_count < MAX_EVICTIONS) {
                         evictions[eviction_count].pid      = services[j].child_pid;
                         evictions[eviction_count].deadline = mono_sec() + EVICT_GRACE_SECS;
                         evictions[eviction_count].reaped   = 0;
+                        evictions[eviction_count].killed   = 0;
                         memcpy(evictions[eviction_count].cgroup,
                                services[j].cgroup_path,
                                sizeof(evictions[eviction_count].cgroup));
@@ -2204,6 +2264,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     grp_count = shadow_grp_count;
 
     printf("[schema-init] configuration reload completed successfully (generation updated)\n");
+    eviction_readded();
 
     /* Arm newly introduced timer services or ensure they are scheduled */
     struct timespec tnow;

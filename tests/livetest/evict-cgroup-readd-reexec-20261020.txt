@@ -1,0 +1,69 @@
+c[?7l[2J[0mSeaBIOS (version 1.17.0-10.fc44)
+Booting from ROM...
+Probing EDD (edd=off to disable)... ok
+c[?7l[2J[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[schema-init] boot rail
+  [1] kernel core alive
+  [2] init
+  [3] runlevel
+  [4] env load
+  [5] env active
+  [7] settled — 5 service(s) queued
+[2026-10-21 03:57:28] watcher               spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 03:57:28] phoenix               spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 03:57:28] polite                spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 03:57:28] leaky                 spawn         state=FULL_TRUST    wt=8  pid=0
+[2026-10-21 03:57:28] stub                  spawn         state=FULL_TRUST    wt=8  pid=0
+PIDS stub=74 kid=80 polite=72 leaky=73 leakykid=78 phoenix=70 phoenixkid=75
+CG stub=0::/schema-init/stub kid=0::/schema-init/stub
+RELOAD-AT 5.38
+[schema-init] reloading configuration (SIGHUP)... 
+[schema-init] dependency graph: no cycles
+[schema-init] service 'phoenix' is orphaned in new configuration
+[schema-init] evicting orphaned service 'phoenix' (pid=70)
+[schema-init] service 'polite' is orphaned in new configuration
+[schema-init] evicting orphaned service 'polite' (pid=72)
+[schema-init] service 'leaky' is orphaned in new configuration
+[schema-init] evicting orphaned service 'leaky' (pid=73)
+[schema-init] service 'stub' is orphaned in new configuration
+[schema-init] evicting orphaned service 'stub' (pid=74)
+[schema-init] configuration reload completed successfully (generation updated)
+ok: reload (evict mode)
+LEAKY-TERM 5.39
+POLITE-TERM 5.40
+STUB-TERM-IGNORED 6.38
+READD-AT 6.39
+[schema-init] re-exec: dry run of /init (pid 123)
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] dependency graph: no cycles
+[schema-init] re-exec: /init
+[schema-init] hardening default: off
+[schema-init] dependency graph: no cycles
+[schema-init] 'phoenix' is back in the configuration: force-killed what its evicted instance left in /sys/fs/cgroup/schema-init/phoenix
+[schema-init] re-exec v0.4.15-24-gbd94933-dirty -> v0.4.15-24-gbd94933-dirty: 1 adopted, 1 new
+[schema-init] memory pressure: psi trigger armed (some 100000 1000000)
+[2026-10-21 03:57:34] phoenix               spawn         state=FULL_TRUST    wt=8  pid=0
+T+1 6.42 stub=alive kid=alive polite=gone leaky=gone leakykid=alive
+T+2 7.43 stub=alive kid=alive polite=gone leaky=gone leakykid=alive phoenixkid=gone
+[schema-init] eviction grace expired: force-killed leftovers in /sys/fs/cgroup/schema-init/leaky
+[schema-init] eviction grace expired: force-killed pid=74
+[2026-10-21 03:57:38] watcher               promote       state=FUNDAMENTAL   wt=8  pid=69
+T+6 11.43 stub=gone kid=gone polite=gone leaky=gone leakykid=gone phoenixkid=gone
+PHOENIX old=70 new=125 new-alive
+CGDIRS stub=absent polite=absent leaky=absent phoenix=present
+ST   phoenix                   pid=125     state=FULL_TRUST      restarts=0
+POWEROFF-AT 11.45
+[schema-init] shutting down
+[schema-init] shutdown: stop 1 (+0 ms): phoenix watcher
+[schema-init] shutdown: phoenix ignored SIGTERM for 3000 ms, killing
+[schema-init] shutdown: services down in 3031 ms
+[schema-init] shutdown: cgroups killed
+[schema-init] shutdown: SIGKILL broadcast
+[schema-init] shutdown: control socket and shm released
+[schema-init] shutdown: sync done
+[schema-init] shutdown: filesystems read-only
+[schema-init] PID 1 poweroff
+[   16.126905] reboot: Power down
