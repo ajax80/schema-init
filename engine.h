@@ -19,9 +19,15 @@ typedef struct {
     const char *shm_name;
     const char *timer_stamp_dir;
     const char *svc_dir;
+    const char *ctl_fallback;   /* NULL = no fallback */
+    const char *env_fallback;
+    const char *svc_fallback;
+    const char *tag;            /* log line prefix */
 } engine_paths_t;
 
 extern engine_paths_t engine_paths;
+
+int engine_mkdir_p(const char *path, mode_t mode);
 
 typedef struct {
     void (*loop_pressure)(void);

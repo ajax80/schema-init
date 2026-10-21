@@ -10,6 +10,10 @@ engine_paths_t engine_paths = {
     .shm_name        = SCHEMA_SHM_NAME,
     .timer_stamp_dir = TIMER_STAMP_DIR,
     .svc_dir         = SVC_DIR,
+    .ctl_fallback    = "./run/schema-init.sock",
+    .env_fallback    = "./run/schema-init/env",
+    .svc_fallback    = "./services",
+    .tag             = "schema-init",
 };
 
 void engine_hook_noop(void) {}

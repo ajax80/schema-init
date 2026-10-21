@@ -215,6 +215,7 @@ uint32_t service_probe_f6(service_t *svc) {
 
 const char *service_cgroup_root = "/sys/fs/cgroup/schema-init";
 const char *service_notify_sock = NOTIFY_SOCK_PATH;
+const char *service_log_dir;
 
 const char *service_cgroup_path_for(const service_t *svc) {
     static char buf[sizeof svc->cgroup_path];
@@ -223,7 +224,7 @@ const char *service_cgroup_path_for(const service_t *svc) {
 }
 
 static void cgroup_assign(service_t *svc, pid_t pid) {
-    char path[160];
+    char path[320];
     int fd;
     char buf[32];
     int n;
@@ -250,7 +251,7 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
 /* best-effort single-value cgroup write: silently ignores a missing file (the
  * controller isn't enabled on this cgroup) or a value the kernel rejects. */
 static void cg_write(const char *cgroup_path, const char *file, const char *val) {
-    char path[160];
+    char path[320];
     int fd;
     snprintf(path, sizeof(path), "%s/%s", cgroup_path, file);
     fd = open(path, O_WRONLY);
@@ -260,7 +261,7 @@ static void cg_write(const char *cgroup_path, const char *file, const char *val)
 }
 
 static void cgroup_apply_limits(service_t *svc) {
-    char path[160];
+    char path[320];
     char buf[64];
     int fd;
     int n;
@@ -1203,11 +1204,18 @@ static void close_fds_from(int lo) {
 }
 
 static void svc_child_log(const service_t *svc) {
-    char log_path[256];
-    mkdir("/var/log/schema-init", 0755);
-    snprintf(log_path, sizeof(log_path), "/var/log/schema-init/%s.log", svc->name);
-    int fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
-    if (fd < 0) {
+    char log_path[320];
+    int fd;
+    if (service_log_dir) {
+        mkdir(service_log_dir, 0700);
+        snprintf(log_path, sizeof(log_path), "%s/%s.log", service_log_dir, svc->name);
+        fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
+    } else {
+        mkdir("/var/log/schema-init", 0755);
+        snprintf(log_path, sizeof(log_path), "/var/log/schema-init/%s.log", svc->name);
+        fd = open(log_path, O_WRONLY | O_CREAT | O_APPEND, 0640);
+    }
+    if (fd < 0 && !service_log_dir) {
         mkdir("/run/log", 0755);
         mkdir("/run/log/schema-init", 0755);
         snprintf(log_path, sizeof(log_path), "/run/log/schema-init/%s.log", svc->name);
@@ -1499,7 +1507,7 @@ int service_spawn(service_t *svc) {
     svc->wd_armed_sec = svc->notify && svc->watchdog_sec > 0 ? svc->watchdog_sec : 0;
     svc->notify_ready = 0;
     svc->notify_status[0] = '\0';
-    cgroup_assign(svc, pid);
+    if (service_cgroup_root[0]) cgroup_assign(svc, pid);
     /* cgroup v2 partition order: child cpuset.cpus → parent cpuset.cpus.exclusive
      * → child cpuset.cpus.exclusive → child cpuset.cpus.partition; any other
      * order breaks partition formation. */
@@ -1545,7 +1553,7 @@ static void cpulist_emit(const unsigned char *bits, int nbits,
 /* SIGKILL everything in a cgroup. Returns 0 when neither file could be
  * opened, so the caller knows nothing was signalled. */
 int cgroup_kill_path(const char *cg) {
-    char path[160];
+    char path[320];
     FILE *f;
     pid_t p;
     int fd;
@@ -1568,7 +1576,7 @@ int cgroup_kill_path(const char *cg) {
 }
 
 void service_cgroup_release_partition(service_t *svc) {
-    char path[160];
+    char path[320];
     int fd;
 
     if (!svc->cgroup_path[0]) return;
@@ -1637,9 +1645,17 @@ void service_cgroup_kill(service_t *svc) {
 static void rail_write(const char *line, size_t len) {
     int fd;
 
-    mkdir("/var/log/schema-init", 0755);
-    fd = open("/var/log/schema-init/rail.log",
-              O_WRONLY | O_CREAT | O_APPEND, 0640);
+    if (service_log_dir) {
+        char path[320];
+        mkdir(service_log_dir, 0700);
+        snprintf(path, sizeof path, "%s/rail.log", service_log_dir);
+        fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0640);
+        if (fd < 0) return;
+    } else {
+        mkdir("/var/log/schema-init", 0755);
+        fd = open("/var/log/schema-init/rail.log",
+                  O_WRONLY | O_CREAT | O_APPEND, 0640);
+    }
     if (fd < 0) {
         mkdir("/run/log", 0755);
         mkdir("/run/log/schema-init", 0755);

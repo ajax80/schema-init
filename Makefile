@@ -313,7 +313,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board $(OBJS)
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cycles && /tmp/schema-test-cycles
 	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cgkill && /tmp/schema-test-cgkill
 	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o /tmp/schema-test-landlock-tcp && /tmp/schema-test-landlock-tcp
-	$(CC) $(CFLAGS) tests/test_engine_conf.c engine_conf.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-engine-conf && /tmp/schema-test-engine-conf
+	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-engine-conf && /tmp/schema-test-engine-conf
 
 # libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
 # + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.

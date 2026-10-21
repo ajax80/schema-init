@@ -164,6 +164,18 @@ static void load_configured_modules(void) {
     globfree(&g);
 }
 
+static void pid1_hardening_default(void) {
+    char cmdline[4096] = "", hd[64] = "";
+    int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) { ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1); if (n > 0) cmdline[n] = '\0'; close(fd); }
+    fd = open("/etc/schema-init/hardening-default", O_RDONLY | O_CLOEXEC);
+    int have = fd >= 0;
+    if (have) { ssize_t n = read(fd, hd, sizeof(hd) - 1); if (n > 0) hd[n] = '\0'; close(fd); }
+    int on = hardening_default_resolve(cmdline, have ? hd : NULL);
+    service_set_hardening_default(on);
+    fprintf(stderr, "[schema-init] hardening default: %s\n", on ? "ON" : "off");
+}
+
 static void rescue_boot(void) {
     char cl[4096] = "";
     int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
@@ -453,7 +465,7 @@ static void setup_signals(void) {
 /* ── resource pressure and quarantine executive ─────────────────────── */
 
 static double read_cpu_pressure(const char *cgroup_path) {
-    char path[256];
+    char path[320];
     FILE *f;
     double avg10 = 0.0;
     if (!cgroup_path[0]) return 0.0;
@@ -510,7 +522,7 @@ static void psi_open(void) {
 }
 
 static void set_cgroup_freeze(service_t *svc, int freeze) {
-    char path[256];
+    char path[320];
     int fd;
     if (!svc->cgroup_path[0]) return;
     if (svc->is_frozen == freeze) return;
@@ -531,7 +543,7 @@ static void set_cgroup_freeze(service_t *svc, int freeze) {
 }
 
 static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
-    char path[256];
+    char path[320];
     int fd;
     if (!svc->cgroup_path[0]) return;
     snprintf(path, sizeof(path), "%s/cpu.max", svc->cgroup_path);
@@ -546,7 +558,7 @@ static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
  * skip. Critical services and tiny cgroups are left alone. Cheap (a single
  * memory.current read) — safe to run inline in PID 1. */
 static long reclaim_read_target(const service_t *svc) {
-    char path[256];
+    char path[320];
     long cur;
     FILE *f;
     if (!svc->cgroup_path[0]) return 0;
@@ -562,7 +574,7 @@ static long reclaim_read_target(const service_t *svc) {
 /* The memory.reclaim write is SYNCHRONOUS — the kernel reclaims in the writer's
  * context. Run it only in the forked child (reclaim_pass), never in PID 1. */
 static void reclaim_cgroup_write(const service_t *svc, long target) {
-    char path[256], buf[32];
+    char path[320], buf[32];
     int fd, n;
     snprintf(path, sizeof(path), "%s/memory.reclaim", svc->cgroup_path);
     fd = open(path, O_WRONLY);
@@ -1689,6 +1701,7 @@ int main(int argc, char **argv) {
     engine_hooks.on_reaped     = pid1_on_reaped;
     setup_signals();
 
+    pid1_hardening_default();
     if (reexec_fd >= 0)
         reexec_adopt(reexec_fd, reexec_oldexe);
     else if (engine_load(svc_dir) > 0) {
