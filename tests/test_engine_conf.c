@@ -23,12 +23,13 @@ int main(void) {
 
     char line[] = "reboot";
     assert(engine_hooks.loop_pressure && engine_hooks.loop_tail && engine_hooks.ctl_extra
-           && engine_hooks.shut_log && engine_hooks.on_sigcont);
+           && engine_hooks.shut_log && engine_hooks.on_sigcont && engine_hooks.on_reaped);
     engine_hooks.loop_pressure();
     engine_hooks.loop_tail();
     engine_hooks.on_sigcont();
     engine_hooks.shut_log("test");
     assert(engine_hooks.ctl_extra(-1, line) == 0);
+    assert(engine_hooks.on_reaped(12345, 0) == 0);
 
     printf("test_engine_conf: ok\n");
     return 0;

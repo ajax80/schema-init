@@ -871,10 +871,8 @@ static void reap(void) {
         /* read what the dead sent before handling its death, so an FDSTORE
          * sent just before exit lands before the exit drops the store */
         if (notify_fd >= 0) notify_poll(NOTIFY_DRAIN_MAX);
-        if (pid == reexec_check_pid) {
-            reexec_check_done(status);
+        if (engine_hooks.on_reaped(pid, status))
             continue;
-        }
         if (fdclose_reaped(pid)) continue;
         for (i = 0; i < svc_count; i++) {
             if (services[i].card_pid == pid) {
@@ -3823,6 +3821,13 @@ static void pid1_loop_pressure(void) {
         reclaim_maybe();
 }
 
+static int pid1_on_reaped(pid_t pid, int status) {
+    if (pid != reexec_check_pid)
+        return 0;
+    reexec_check_done(status);
+    return 1;
+}
+
 static void pid1_loop_tail(void) {
     eviction_tick();
     watchdog_pet();
@@ -4207,6 +4212,7 @@ int main(int argc, char **argv) {
     engine_hooks.ctl_extra     = pid1_ctl_extra;
     engine_hooks.shut_log      = shut_log;
     engine_hooks.on_sigcont    = runit_stop_request;
+    engine_hooks.on_reaped     = pid1_on_reaped;
     setup_signals();
 
     if (reexec_fd >= 0)

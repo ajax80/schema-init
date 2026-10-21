@@ -15,6 +15,7 @@ engine_paths_t engine_paths = {
 void engine_hook_noop(void) {}
 int  engine_hook_ctl_none(int fd, char *line) { (void)fd; (void)line; return 0; }
 void engine_hook_log_none(const char *msg) { (void)msg; }
+int  engine_hook_reaped_none(pid_t pid, int status) { (void)pid; (void)status; return 0; }
 
 engine_hooks_t engine_hooks = {
     .loop_pressure = engine_hook_noop,
@@ -22,4 +23,5 @@ engine_hooks_t engine_hooks = {
     .ctl_extra     = engine_hook_ctl_none,
     .shut_log      = engine_hook_log_none,
     .on_sigcont    = engine_hook_noop,
+    .on_reaped     = engine_hook_reaped_none,
 };
