@@ -65,7 +65,7 @@ int main(void) {
 
     ev[0].pid = 4411; ev[0].deadline = 1759284000;
     strcpy(ev[0].cgroup, "/sys/fs/cgroup/schema-init/old one");
-    ev[1].pid = 4412; ev[1].deadline = 1759284001; ev[1].reaped = 1;
+    ev[1].pid = 4412; ev[1].deadline = 1759284001; ev[1].reaped = 1; ev[1].killed = 1;
     strcpy(ev[1].cgroup, "/sys/fs/cgroup/schema-init/leaky");
 
     FILE *w = open_memstream(&buf, &blen);
@@ -102,6 +102,7 @@ int main(void) {
     assert(pev[0].pid == 4411 && pev[0].deadline == 1759284000);
     assert(strcmp(pev[0].cgroup, "/sys/fs/cgroup/schema-init/old one") == 0);
     assert(pev[0].reaped == 0 && pev[1].pid == 4412 && pev[1].reaped == 1);
+    assert(pev[0].killed == 0 && pev[1].killed == 1);
 
     /* a single escaped line: no raw space, newline or '=' leaks into a value */
     assert(strstr(buf, "notify_status=100%25%20ready%20%3D%20yes%09ok%0A "));

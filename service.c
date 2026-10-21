@@ -1542,6 +1542,31 @@ static void cpulist_emit(const unsigned char *bits, int nbits,
     }
 }
 
+/* SIGKILL everything in a cgroup. Returns 0 when neither file could be
+ * opened, so the caller knows nothing was signalled. */
+int cgroup_kill_path(const char *cg) {
+    char path[160];
+    FILE *f;
+    pid_t p;
+    int fd;
+
+    /* Linux 5.14+: write 1 to cgroup.kill nukes the whole subtree */
+    snprintf(path, sizeof(path), "%s/cgroup.kill", cg);
+    fd = open(path, O_WRONLY);
+    if (fd >= 0) {
+        write(fd, "1", 1);
+        close(fd);
+        return 1;
+    }
+    /* fallback: read cgroup.procs and kill each PID individually */
+    snprintf(path, sizeof(path), "%s/cgroup.procs", cg);
+    if (!(f = fopen(path, "r"))) return 0;
+    while (fscanf(f, "%d", &p) == 1)
+        if (p > 1) kill(p, SIGKILL);
+    fclose(f);
+    return 1;
+}
+
 void service_cgroup_kill(service_t *svc) {
     char path[160];
     int fd;
@@ -1588,25 +1613,7 @@ void service_cgroup_kill(service_t *svc) {
         }
     }
 
-    /* Linux 5.14+: write 1 to cgroup.kill nukes the whole subtree */
-    snprintf(path, sizeof(path), "%s/cgroup.kill", svc->cgroup_path);
-    fd = open(path, O_WRONLY);
-    if (fd >= 0) {
-        write(fd, "1", 1);
-        close(fd);
-    } else {
-        /* fallback: read cgroup.procs and kill each PID individually */
-        FILE *f;
-        pid_t p;
-        snprintf(path, sizeof(path), "%s/cgroup.procs", svc->cgroup_path);
-        f = fopen(path, "r");
-        if (f) {
-            while (fscanf(f, "%d", &p) == 1)
-                kill(p, SIGKILL);
-            fclose(f);
-        }
-    }
-
+    cgroup_kill_path(svc->cgroup_path);
     rmdir(svc->cgroup_path);
     svc->cgroup_path[0] = '\0';
 }
