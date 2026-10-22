@@ -1558,6 +1558,9 @@ _USER_ROOTS = ("default.target", "sockets.target", "timers.target", "basic.targe
 _SESSION_TARGETS = ("graphical-session.target", "graphical-session-pre.target",
                     "plasma-*.target", "gnome-session*.target")
 _UNIT_SUFFIXES = (".service", ".socket", ".timer", ".path", ".target", ".mount")
+# The session script runs the session bus; a generated copy would listen on
+# $XDG_RUNTIME_DIR/bus too. Never generated, whatever pulls them in.
+_NEVER = ("dbus.socket", "dbus.service", "dbus-broker.service")
 
 
 class Masked(Exception):
@@ -1666,6 +1669,18 @@ def user_enabled_set(skip):
         if u in seen:
             continue
         seen.add(u)
+        if u in _NEVER:
+            skipped.append((u, "the session bus is started by the session"))
+            continue
+        if u.endswith(".target"):
+            # never expanded: a target's .wants are the distro's choice, not
+            # the user's (graphical-session.target -> basic.target ->
+            # sockets.target.wants/dbus.socket)
+            if any(fnmatch.fnmatch(u, pat) for pat in _SESSION_TARGETS):
+                skipped.append((u, "phase 2 session target"))
+            continue
+        if not u.endswith((".service", ".socket", ".timer", ".path")):
+            continue
         if u in skip:
             skipped.append((u, "handled elsewhere (skip list)"))
             continue
@@ -1680,6 +1695,9 @@ def user_enabled_set(skip):
         except Masked:
             skipped.append((u, "masked"))
             continue
+        except ValueError as e:
+            skipped.append((u, "unreadable: %s" % e))
+            continue
         if text is None:
             skipped.append((u, "not found"))
             continue
@@ -1687,9 +1705,8 @@ def user_enabled_set(skip):
         for key in ("Wants", "Requires"):
             for v in _get_all(unit, key):
                 queue += v.split()
-        queue += _wants_dir_units(_unit_dirs(), u)
-        if not u.endswith(".target"):
-            units.append(u)
+        queue += _wants_dir_units([cfg], u)
+        units.append(u)
     try:
         entries = sorted(os.listdir(cfg))
     except OSError:
@@ -1720,13 +1737,15 @@ def _base(unit):
     return unit.rsplit(".", 1)[0]
 
 
-def _user_translate(unit, known, enabled):
+def _user_translate(unit, known, enabled, skip=()):
     """(svc name, .svc body) for one unit of the user set. Raises Skip."""
     sections = _user_sections(unit)
     name = _base(unit)
     if unit.endswith(".socket"):
         socket_lines(sections)
         target = _get_last(sections.get("Socket", []), "Service") or name + ".service"
+        if target in skip:
+            raise Skip("activates skip-listed %s" % target)
         name = _base(target)
         body = unit_to_svc(name, _user_sections(target), sections,
                            target not in enabled, known)
@@ -1765,7 +1784,8 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
     saved = os.environ.get("SCHEMA_SVC_DIR")
     counts = {"generated": 0, "skipped": 0, "error": 0}
     try:
-        units, skipped = user_enabled_set(read_skip_list(skip_paths))
+        skip = read_skip_list(skip_paths)
+        units, skipped = user_enabled_set(skip)
         enabled = set(units)
         known = {_base(u) for u in units if not u.endswith(".timer")}
         if not dry_run:
@@ -1776,11 +1796,14 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
         # sockets first: a socket's .svc carries its service
         for u in sorted(units, key=lambda u: not u.endswith(".socket")):
             try:
-                name, body = _user_translate(u, known, enabled)
+                name, body = _user_translate(u, known, enabled, skip)
                 if name in done:
                     raise Skip("started by %s" % done[name])
             except Skip as e:
                 skipped.append((u, str(e)))
+                continue
+            except ValueError as e:
+                skipped.append((u, "unreadable: %s" % e))
                 continue
             done[name] = u
             log("import  %s -> %s.svc" % (u, name))

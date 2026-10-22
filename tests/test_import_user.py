@@ -176,6 +176,48 @@ check("fleet_blakbox", gen(si.read_skip_list([skip])) ==
       ([], [("syncthing.service", "handled elsewhere (skip list)")]))
 t.done()
 
+# --- review fix: deps never reach distro .wants or dbus.socket ---
+t = Tree()
+L = "/usr/lib/systemd/user"
+t.write(t.sys(L, "dbus.socket"), "[Socket]\nListenStream=%t/bus\n")
+t.write(t.sys(L, "dbus.service"), SIMPLE)
+t.write(t.sys(L, "mpris-proxy.service"), "[Unit]\nWants=dbus.socket\n" + SIMPLE)
+t.enable("mpris-proxy.service", src=t.sys(L, "mpris-proxy.service"))
+u, sk = gen()
+check("deps: mpris-proxy Wants=dbus.socket -> no dbus", u == ["mpris-proxy.service"]
+      and ("dbus.socket", "the session bus is started by the session") in sk)
+t.done()
+
+t = Tree()
+t.write(t.sys(L, "dbus.socket"), "[Socket]\nListenStream=%t/bus\n")
+t.write(t.sys(L, "uresourced.service"), SIMPLE)
+t.write(t.sys(L, "graphical-session.target"), "[Unit]\nRequires=basic.target\n")
+t.write(t.sys(L, "basic.target"), "[Unit]\nWants=sockets.target timers.target\n")
+t.write(t.sys(L, "sockets.target"), "[Unit]\n")
+t.link(t.sys("/etc/systemd/user", "sockets.target.wants/dbus.socket"), t.sys(L, "dbus.socket"))
+t.link(t.sys(L, "graphical-session.target.wants/uresourced.service"), "../uresourced.service")
+t.write(t.cfg("mine.service"), "[Unit]\nWants=graphical-session.target network-online.target foo.slice\n" + SIMPLE)
+t.enable("mine.service")
+u, sk = gen()
+check("deps: target chain never expanded", u == ["mine.service"]
+      and sk == [("graphical-session.target", "phase 2 session target")])
+t.done()
+
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE)
+t.write(t.sys(L, "x.service"), SIMPLE)
+t.link(t.sys(L, "a.service.wants/x.service"), "../x.service")
+t.enable("a.service")
+check("deps: unit .wants read from ~/.config only", gen() == (["a.service"], []))
+t.done()
+
+t = Tree()
+t.write(t.cfg("dbus.socket"), "[Socket]\nListenStream=%t/bus\n")
+t.enable("dbus.socket", target="sockets.target")
+check("deps: dbus.socket never generated even if user-enabled",
+      gen() == ([], [("dbus.socket", "the session bus is started by the session")]))
+t.done()
+
 # =========================== Task 2: translation + output ===========================
 
 def run(t, skip_paths=()):
@@ -329,6 +371,32 @@ c, out = run(t)
 check("no_writes_outside", files_under(t.root) == before_root and files_under(t.home) == before_home
       and files_under(t.run) == ["schema-user/services/a.svc", "schema-user/skipped"])
 check("svc mode 0600", (os.stat(os.path.join(out, "a.svc")).st_mode & 0o777) == 0o600)
+t.done()
+
+# --- review fix: one unreadable unit does not abort the import ---
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE)
+with open(t.cfg("b.service"), "wb") as f:
+    f.write(b"[Service]\nExecStart=/bin/caf\xe9\n")
+t.enable("a.service"); t.enable("b.service")
+c, out = run(t)
+with open(os.path.join(t.run, "schema-user/skipped")) as f:
+    m = f.read()
+check("unreadable unit skipped, rest generated", os.listdir(out) == ["a.svc"]
+      and m.startswith("b.service\tunreadable: ") and c["error"] == 0)
+t.done()
+
+# --- review fix: a socket never starts a skip-listed service ---
+t = Tree()
+t.write(t.cfg("foo.socket"), "[Socket]\nListenStream=%t/foo.sock\n")
+t.write(t.cfg("foo.service"), SIMPLE)
+t.enable("foo.socket", target="sockets.target")
+skip = t.write(os.path.join(t.ctx["config"], "schema-user/skip"), "foo\n")
+c, out = run(t, [skip])
+with open(os.path.join(t.run, "schema-user/skipped")) as f:
+    m = f.read()
+check("socket of skip-listed service not generated", os.listdir(out) == []
+      and "foo.socket\tactivates skip-listed foo.service\n" in m)
 t.done()
 
 # --- CLI: no XDG_RUNTIME_DIR -> 2 ---
