@@ -494,6 +494,28 @@ def test_start_waits_for_populated_tree():
         cleanup(sv)
 
 
+
+def test_clean_exit_not_restarted():
+    sv = fresh()
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: execd(pid))
+        os.kill(pid, signal.SIGTERM)
+        wait_for(lambda: dead(pid))
+        sv.reconcile({UID}, 1)
+        sv.reconcile({UID}, 100)
+        check('clean exit (PID 1 shutdown, a deliberate kill): not restarted',
+              sv.pid(UID) is None, repr(sv.pid(UID)))
+        check('clean exit: not counted as a crash',
+              sv.state.get(UID, {}).get('crashes') == [])
+        sv.reconcile(set(), 101)
+        sv.reconcile({UID}, 102)
+        check('clean exit: next login starts it', sv.pid(UID) is not None)
+    finally:
+        cleanup(sv)
+
+
 # -- Task 3: linger -----------------------------------------------------------
 
 def test_set_linger_roundtrip():
@@ -554,6 +576,7 @@ TESTS = [
     test_crash_kills_leftovers,
     test_start_clears_stale_tree,
     test_start_waits_for_populated_tree,
+    test_clean_exit_not_restarted,
     test_set_linger_roundtrip,
     test_set_linger_unknown_uid,
     test_linger_auth,

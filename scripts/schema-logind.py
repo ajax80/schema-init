@@ -1887,12 +1887,15 @@ class UserSupervisors:
             st['pid'], st['start'] = pid, proc_starttime_ticks(pid)
             print(f"login1-stub: schema-user uid={uid} pid={pid} adopted")
 
-    def _alive(self, st):
+    def _exit_status(self, st):
+        """None while alive; the wait status once dead, or -1 when it was not
+        our child (adopted from before a cold start) and so has none."""
         pid = st['pid']
         try:
-            return os.waitpid(pid, os.WNOHANG)[0] != pid
+            got, status = os.waitpid(pid, os.WNOHANG)
+            return status if got == pid else None
         except ChildProcessError:
-            return proc_starttime_ticks(pid) == st['start']
+            return None if proc_starttime_ticks(pid) == st['start'] else -1
 
     def _signal(self, st, sig):
         if proc_starttime_ticks(st['pid']) == st['start']:
@@ -1954,12 +1957,21 @@ class UserSupervisors:
         wanted = (set(session_uids) | linger_uids()) - {0}
         for uid in wanted | set(self.state):
             st = self._st(uid)
-            if st['pid'] and not self._alive(st):
+            status = self._exit_status(st) if st['pid'] else None
+            if status is not None:
                 st['pid'] = None
                 if st['stopping']:
                     remove_user_cgroup(uid)
                     del self.state[uid]
                     print(f"login1-stub: schema-user uid={uid} stopped")
+                    continue
+                # schema-user exits 0 only after an ordered stop on SIGTERM or
+                # SIGINT: PID 1 shutting down, or someone stopping it on purpose.
+                # Restarting it there would spawn a fresh one mid-shutdown.
+                if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
+                    st['gave_up'] = True
+                    print(f"login1-stub: schema-user uid={uid} exited cleanly — "
+                          f"not restarting until next login")
                     continue
                 # Its services outlive it (it was their subreaper) and would run
                 # unsupervised, then twice once the next instance starts them.
