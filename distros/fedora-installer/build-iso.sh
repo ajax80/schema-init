@@ -45,6 +45,8 @@ install -m0755 "$HERE/rail/scripts/schema-udevd-launch"        "$PAYLOAD/scripts
 install -m0755 "$HERE/rail/scripts/schema-sshd-start.sh"       "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-sysctl-apply"              "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-mount-fstab"               "$PAYLOAD/scripts/"
+install -m0755 "$HERE/migrate/schema-import.py"                "$PAYLOAD/scripts/"
+install -m0644 "$REPO/config/user-skip"                        "$PAYLOAD/scripts/"
 install -m0755 "$HERE/rail/scripts/schema-zram-start.sh"       "$PAYLOAD/scripts/"
 install -m0755 "$HERE/../fedora-kde/scripts/schema-plasma-autologin.sh" "$PAYLOAD/scripts/"
 # Desktop-session pipeline, generalized from distros/fedora-kde: the native

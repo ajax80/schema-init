@@ -107,6 +107,8 @@ install: all
 	install -m 0755 scripts/schema-snapshot $(DESTDIR)$(BINDIR)/schema-snapshot
 	install -D -m 0755 scripts/schema-recorder-earlyoom $(DESTDIR)/usr/local/bin/schema-recorder-earlyoom
 	install -D -m 0755 scripts/schema-bus-activate $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-bus-activate
+	install -D -m 0755 distros/fedora-installer/migrate/schema-import.py $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-import
+	install -D -m 0644 config/user-skip $(DESTDIR)$(SYSCONFDIR)/schema-init/user-skip
 	install -D -m 0644 completion/schema-ctl.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/schema-ctl
 	install -D -m 0644 completion/_schema-ctl $(DESTDIR)$(DATADIR)/zsh/site-functions/_schema-ctl
 	install -D -m 0644 config/dbus-1/system-services/org.freedesktop.PolicyKit1.service $(DESTDIR)/usr/local/share/dbus-1/system-services/org.freedesktop.PolicyKit1.service
