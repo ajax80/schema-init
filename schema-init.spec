@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.16
+Version:        0.4.17
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -513,6 +513,21 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Oct 21 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.17-1
+- Per-user supervisor: schema-user runs a user's own services (deps, stop
+  order, restarts, timers, logs) in their own cgroups under a delegated
+  user@<uid>.service; `schema-ctl --user` talks to it
+- schema-logind starts schema-user at a user's first login, restarts it
+  with backoff, stops it at last logout, and adopts a running one across
+  re-exec; a dead instance's leftovers are killed first
+- Linger: SetUserLinger and the Linger property keep a user's schema-user
+  running with no session; existing /var/lib/systemd/linger entries count
+- Kill switch: /etc/schema-init/user-supervisor.disabled keeps logind from
+  starting schema-user on that machine
+- PID 1 shutdown SIGTERMs each schema-user with the containers, so user
+  services stop in order before the final SIGKILL
+- `wait_socket=` holds a service until a unix socket accepts
+
 * Wed Oct 21 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.16-1
 - Flight recorder (opt-in): schema-recorder keeps a rolling record of what
   happened (service events, CPU/memory pressure, earlyoom kills); the board
