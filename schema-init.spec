@@ -186,7 +186,7 @@ fi
 %{_bindir}/schema-udev
 %{_bindir}/schema-dbus
 %{_datadir}/%{name}/udevd.svc
-%ghost %{_sysconfdir}/schema-init/schema-udev.ship-md5
+%ghost %attr(0644,root,root) %{_sysconfdir}/schema-init/schema-udev.ship-md5
 
 %package session
 Summary:   Autologin Plasma session pipeline for installer-built boxes

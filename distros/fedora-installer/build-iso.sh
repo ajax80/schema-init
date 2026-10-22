@@ -25,12 +25,12 @@ trap 'rm -rf "$(dirname "$PAYLOAD")"' EXIT
 command -v mkksiso >/dev/null || { echo "need mkksiso: sudo dnf install lorax" >&2; exit 1; }
 
 echo "=== building schema-init binaries (current branch) ==="
-make -C "$REPO" schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev schema-dbus >/dev/null
+make -C "$REPO" schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev schema-dbus schema-user >/dev/null
 make -C "$REPO" verify-rules-live >/dev/null 2>&1 || true   # if it has a make target
 
 echo "=== staging payload the %post copies from (ISO:/schema) ==="
 mkdir -p "$PAYLOAD/bin" "$PAYLOAD/scripts" "$PAYLOAD/services"
-for b in schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev schema-dbus verify-rules-live; do
+for b in schema-init schema-ctl schema-journal-sink schema-subreaper schema-board schema-udev schema-dbus schema-user verify-rules-live; do
     install -m0755 "$REPO/$b" "$PAYLOAD/bin/$b"
 done
 install -m0755 "$REPO/scripts/schema-udev-flip-arm.sh"    "$PAYLOAD/scripts/"
