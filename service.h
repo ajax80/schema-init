@@ -360,6 +360,8 @@ typedef struct {
     uint8_t          hard_dropped;      /* HARD_* defaults dropped (ns conflict)   */
     char             cgroup_path[256]; /* /sys/fs/cgroup/schema-init/<name>   */
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
+    int              restart_sec;      /* wait this long before respawning a dead service; 0 = at once */
+    struct timespec  restart_at;       /* CLOCK_MONOTONIC before which a retry may not spawn */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
     int              stop_timeout_sec;   /* shutdown SIGTERM->SIGKILL grace; 0 = default */
@@ -375,6 +377,27 @@ typedef struct {
     int              timer_cal_dom;      /* on_calendar day-of-month 1..31; -1 = any          */
     struct timespec  timer_next;         /* next-fire deadline: CLOCK_MONOTONIC, or CLOCK_REALTIME if SVC_TIMER_CALENDAR */
 } service_t;
+
+/* restart_sec: systemd's RestartSec=. Without it a service that dies at once
+ * (no network yet) burns its retries within one pass and goes DORMANT. */
+static inline void svc_hold_retry(service_t *svc, const struct timespec *now) {
+    svc->restart_at.tv_sec  = svc->restart_sec > 0 ? now->tv_sec + svc->restart_sec : 0;
+    svc->restart_at.tv_nsec = svc->restart_sec > 0 ? now->tv_nsec : 0;
+}
+
+static inline int svc_retry_held(const service_t *svc, const struct timespec *now) {
+    return svc->restart_at.tv_sec &&
+           (now->tv_sec < svc->restart_at.tv_sec ||
+            (now->tv_sec == svc->restart_at.tv_sec && now->tv_nsec < svc->restart_at.tv_nsec));
+}
+
+/* reload/re-exec carry restart_at but parse restart_sec fresh: a lowered or
+ * removed restart_sec must not leave the old, longer hold in place */
+static inline void svc_clamp_hold(service_t *svc, const struct timespec *now) {
+    if (!svc_retry_held(svc, now)) return;
+    if (svc->restart_sec <= 0 || svc->restart_at.tv_sec > now->tv_sec + svc->restart_sec)
+        svc_hold_retry(svc, now);
+}
 
 /* build the F8 flag word by inspecting the real system */
 uint32_t service_probe_f8(service_t *svc, service_t *table, int count);

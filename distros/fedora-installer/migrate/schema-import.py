@@ -789,6 +789,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     restart = _get_last(svc, "Restart").lower()
     if restart in ("", "no"):
         lines.append("no_restart=1")
+    else:
+        rsec = _timespan_sec(_get_last(svc, "RestartSec"))
+        if rsec:
+            lines.append("restart_sec=%d" % min(rsec, 3600))
 
     user = _get_last(svc, "User")
     if user and user != "root":

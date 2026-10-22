@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 
 int main(void) {
     struct timespec ts = { 10, 1 };
@@ -40,6 +41,36 @@ int main(void) {
     assert(wd_pet_ms(1) == 333);
     assert(wd_pet_ms(0) == 5000);
     assert(wd_pet_ms(-1) == 5000);
+
+    service_t r;
+    memset(&r, 0, sizeof r);
+    struct timespec now = { 100, 500 };
+    svc_hold_retry(&r, &now);
+    assert(!svc_retry_held(&r, &now));
+    r.restart_sec = 5;
+    svc_hold_retry(&r, &now);
+    assert(r.restart_at.tv_sec == 105 && r.restart_at.tv_nsec == 500);
+    assert(svc_retry_held(&r, &now));
+    struct timespec later = { 105, 499 };
+    assert(svc_retry_held(&r, &later));
+    later.tv_nsec = 500;
+    assert(!svc_retry_held(&r, &later));
+    r.restart_sec = 0;
+    svc_hold_retry(&r, &now);
+    assert(!svc_retry_held(&r, &now));
+
+    r.restart_sec = 3600;
+    svc_hold_retry(&r, &now);
+    r.restart_sec = 5;
+    svc_clamp_hold(&r, &now);
+    assert(r.restart_at.tv_sec == 105);
+    svc_clamp_hold(&r, &later);
+    assert(r.restart_at.tv_sec == 105);
+    r.restart_sec = 3600;
+    svc_hold_retry(&r, &now);
+    r.restart_sec = 0;
+    svc_clamp_hold(&r, &now);
+    assert(!svc_retry_held(&r, &now) && r.restart_at.tv_sec == 0);
 
     printf("all next_wake tests passed\n");
     return 0;

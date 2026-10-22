@@ -433,8 +433,15 @@ static void park(service_t *svc) {
     service_log(svc, "dormant");
 }
 
+static int held_now(const service_t *svc) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return svc_retry_held(svc, &now);
+}
+
 static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
+    svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
         service_t *fb = service_fallback(svc, services, svc_count);
@@ -921,6 +928,7 @@ static void tick_service(service_t *svc,
 
         case STATE_NEW_PROCESS:
             if (svc->failsafe_pid > 0 || svc->card_pid > 0) break;
+            if (svc_retry_held(svc, &now_mono)) break;
             if (!svc->standby_up && service_is_standby(svc, services, svc_count)) {
                 svc->flags |= SVC_NO_RESTART;
                 svc->inst.state = STATE_EXCISED;
@@ -1054,7 +1062,9 @@ static void tick_service(service_t *svc,
                 /* recovery resolved → re-queue for spawn */
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
+                svc_hold_retry(svc, &now_mono);
                 service_log(svc, "retry");
+                if (svc->restart_sec > 0) service_log(svc, "restart-hold");
                 play_card(svc);
             } else if (svc->inst.state == STATE_FRICTION) {
                 service_log(svc, "friction");
@@ -1067,7 +1077,9 @@ static void tick_service(service_t *svc,
             if (svc->inst.state == STATE_RECOVERY) {
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
+                svc_hold_retry(svc, &now_mono);
                 service_log(svc, "retry-deep");
+                if (svc->restart_sec > 0) service_log(svc, "restart-hold");
                 play_card(svc);
             } else if (svc->inst.state == STATE_EXCISED) {
                 service_cgroup_kill(svc);
@@ -1603,6 +1615,9 @@ static void ctl_cmd(int fd, char *line) {
                 services[i].restart_count = 0;
                 ctl_rearm(&services[i], 1);
                 ctl_writef(fd, "ok: %s queued\n", name);
+            } else if (services[i].inst.state == STATE_NEW_PROCESS && held_now(&services[i])) {
+                ctl_rearm(&services[i], 1);
+                ctl_writef(fd, "ok: %s restart_sec hold cleared\n", name);
             } else {
                 ctl_writef(fd, "err: %s is %s\n",
                     name, state_name(services[i].inst.state));
@@ -1617,6 +1632,7 @@ static void ctl_cmd(int fd, char *line) {
         for (i = 0; i < svc_count; i++) {
             if (strcmp(services[i].name, name) != 0) continue;
             services[i].flags |= SVC_NO_RESTART;
+            services[i].restart_at.tv_sec = services[i].restart_at.tv_nsec = 0;
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
                 kill(services[i].child_pid, SIGTERM);
@@ -2099,6 +2115,8 @@ static int get_poll_timeout(void) {
             tick = 1;
         else if (s == STATE_DORMANT)
             best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);
+        else if (s == STATE_NEW_PROCESS && ts_ms_ceil(&svc->restart_at) > now_m)
+            best = wake_min(best, ts_ms_ceil(&svc->restart_at), now_m, WAKE_NONE);
         else if (svc_held_on_socket(svc))
             best = wake_min(best, now_m + 1000, now_m, WAKE_NONE);
         else if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED)
@@ -2244,6 +2262,8 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     }
 
     /* Merge running state from live to shadow */
+    struct timespec reload_now;
+    clock_gettime(CLOCK_MONOTONIC, &reload_now);
     for (i = 0; i < shadow_count; i++) {
         for (j = 0; j < svc_count; j++) {
             if (strcmp(shadow_services[i].name, services[j].name) == 0) {
@@ -2251,6 +2271,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                  * without them the PSI freeze/reclaim executive no-ops after a
                  * reload, and a service frozen at reload time can never thaw. */
                 svc_runtime_copy(&shadow_services[i], &services[j]);
+                svc_clamp_hold(&shadow_services[i], &reload_now);
 
                 /* A run-once timer (on_boot_sec with no interval) marks itself
                  * terminal by clearing SVC_TIMER when it completes. The shadow

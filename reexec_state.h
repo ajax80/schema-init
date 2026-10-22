@@ -30,6 +30,7 @@ typedef struct {
     X(INT,  restart_count)       \
     X(U8,   dormant_count)       \
     X(TS,   dormant_until)       \
+    X(TS,   restart_at)          \
     X(TIME, last_start)          \
     X(TIME, start_time)          \
     X(TS,   stable_time)         \
