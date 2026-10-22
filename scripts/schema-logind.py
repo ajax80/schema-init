@@ -416,6 +416,30 @@ def find_user_supervisors():
     return found
 
 
+def user_supervisor_disabled():
+    if os.path.exists(USER_KILLSWITCH):
+        return True
+    try:
+        with open(KERNEL_CMDLINE) as f:
+            return 'schema.user=0' in f.read().split()
+    except OSError:
+        return False
+
+
+def linger_uids():
+    try:
+        names = os.listdir(LINGER_DIR)
+    except OSError:
+        return set()
+    uids = set()
+    for name in names:
+        try:
+            uids.add(pwd.getpwnam(name).pw_uid)
+        except KeyError:
+            pass
+    return uids
+
+
 def _rebase_devname(devname):
     """An absolute E:DEVNAME (/dev/...) resolved under DEV_DIR for test trees."""
     if devname.startswith('/dev/'):
@@ -1440,6 +1464,7 @@ class SessionRegistry:
         self._seat_uaccess_fp = {}   # seat_id -> {path: (ino, mtime_ns)} last granted
         self._seat_uaccess_nodes = {}  # seat_id -> cached node paths
         self._seat_udev_mtime = {}   # seat_id -> udev-DB mtime at last enumeration
+        self.supervisors = None      # UserSupervisors, attached by main()
 
     # -- lookup --------------------------------------------------------------
 
@@ -1465,6 +1490,13 @@ class SessionRegistry:
             if uid not in seen:
                 seen.append(uid)
         return seen
+
+    def session_uids(self):
+        # The synthesised legacy record stands for "nobody registered yet",
+        # not a login: starting a supervisor for it would run one at boot
+        # for whoever owns the lowest /run/user entry.
+        return {obj.record.uid for obj in self.sessions.values()
+                if not obj.record.synthesised}
 
     def seats(self):
         seen = []
@@ -1597,6 +1629,13 @@ class SessionRegistry:
 
         self._sync_users()
         self._write_derived()
+        if self.supervisors:
+            # A bug here must never stop the session projection above.
+            try:
+                self.supervisors.reconcile(self.session_uids())
+            except Exception as e:
+                print(f"login1-stub: schema-user reconcile failed: {e}",
+                      file=sys.stderr)
         return True
 
     def _sync_users(self):
@@ -1759,6 +1798,133 @@ class SessionRegistry:
                     'ActiveSession': dbus.Struct(
                         (dbus.String(sid), dbus.ObjectPath(path)), signature='so'),
                 }, [])
+
+
+USER_GRACE_S = 30
+USER_STOP_TIMEOUT_S = 20
+USER_BACKOFF_S = (1, 2, 4, 8, 16, 32, 60)
+USER_CRASH_LIMIT = 5
+USER_CRASH_WINDOW_S = 300
+
+
+class UserSupervisors:
+    """One schema-user per user with a session or a linger file.
+
+    Driven from SessionRegistry.sync() on the existing 250 ms tick, for the
+    same reason the registry is: no child watch, no pidfd, nothing new held
+    open in the GLib loop. Liveness is a waitpid(WNOHANG) per tick for our own
+    children; an instance adopted after a re-exec or found at startup is
+    checked by its /proc start ticks instead, which also guards every signal
+    against a recycled pid.
+    """
+
+    def __init__(self):
+        self.state = {}         # uid -> dict, see _st()
+
+    def _st(self, uid):
+        return self.state.setdefault(uid, {
+            'pid': None, 'start': None, 'absent_since': None, 'term_at': None,
+            'crashes': [], 'next_start': 0, 'gave_up': False,
+            'stopping': False, 'killed': False, 'held': False,
+        })
+
+    def pid(self, uid):
+        st = self.state.get(uid)
+        return st['pid'] if st else None
+
+    def adopt(self):
+        for uid, pid in find_user_supervisors().items():
+            st = self._st(uid)
+            st['pid'], st['start'] = pid, proc_starttime_ticks(pid)
+            print(f"login1-stub: schema-user uid={uid} pid={pid} adopted")
+
+    def _alive(self, st):
+        pid = st['pid']
+        try:
+            return os.waitpid(pid, os.WNOHANG)[0] != pid
+        except ChildProcessError:
+            return proc_starttime_ticks(pid) == st['start']
+
+    def _signal(self, st, sig):
+        if proc_starttime_ticks(st['pid']) == st['start']:
+            try:
+                os.kill(st['pid'], sig)
+            except OSError:
+                pass
+
+    def _crashed(self, uid, st, now):
+        st['crashes'] = [t for t in st['crashes']
+                         if now - t < USER_CRASH_WINDOW_S] + [now]
+        n = len(st['crashes'])
+        if n >= USER_CRASH_LIMIT:
+            st['gave_up'] = True
+            print(f"login1-stub: schema-user uid={uid} crashed {n} times in "
+                  f"{USER_CRASH_WINDOW_S} s — giving up until next login",
+                  file=sys.stderr)
+            return
+        delay = USER_BACKOFF_S[min(n - 1, len(USER_BACKOFF_S) - 1)]
+        st['next_start'] = now + delay
+        print(f"login1-stub: schema-user uid={uid} exited — restart in {delay} s",
+              file=sys.stderr)
+
+    def _start(self, uid, st, now):
+        if st['gave_up'] or now < st['next_start']:
+            return
+        if user_supervisor_disabled():
+            if not st['held']:
+                st['held'] = True
+                print(f"login1-stub: schema-user uid={uid} not started: kill switch")
+            return
+        try:
+            pwd.getpwuid(uid)
+        except KeyError:
+            return
+        ensure_runtime_dir(uid)
+        delegate_user_cgroup(uid)
+        try:
+            pid = spawn_user_supervisor(uid)
+        except OSError as e:
+            print(f"login1-stub: schema-user uid={uid} spawn failed: {e}",
+                  file=sys.stderr)
+            self._crashed(uid, st, now)
+            return
+        st['pid'], st['start'] = pid, proc_starttime_ticks(pid)
+        print(f"login1-stub: schema-user uid={uid} started pid={pid}")
+
+    def reconcile(self, session_uids, now=None):
+        now = time.monotonic() if now is None else now
+        wanted = (set(session_uids) | linger_uids()) - {0}
+        for uid in wanted | set(self.state):
+            st = self._st(uid)
+            if st['pid'] and not self._alive(st):
+                st['pid'] = None
+                if st['stopping']:
+                    remove_user_cgroup(uid)
+                    del self.state[uid]
+                    print(f"login1-stub: schema-user uid={uid} stopped")
+                    continue
+                self._crashed(uid, st, now)
+            if uid in wanted:
+                st['absent_since'] = None
+                if st['pid'] is None:
+                    self._start(uid, st, now)
+            elif st['pid'] is None:
+                # Forgetting resets gave_up: the next login starts fresh.
+                del self.state[uid]
+            elif not st['stopping']:
+                if st['absent_since'] is None:
+                    st['absent_since'] = now
+                elif now - st['absent_since'] >= USER_GRACE_S:
+                    self._signal(st, signal.SIGTERM)
+                    st['stopping'], st['term_at'] = True, now
+            elif not st['killed'] and now - st['term_at'] >= USER_STOP_TIMEOUT_S:
+                st['killed'] = True
+                try:
+                    with open(user_service_cgroup(uid) + '/cgroup.kill', 'w') as f:
+                        f.write('1')
+                except OSError as e:
+                    print(f"login1-stub: schema-user uid={uid} cgroup.kill: {e}",
+                          file=sys.stderr)
 
 
 class Login1User(dbus.service.Object):
@@ -2938,6 +3104,9 @@ def main():
     # scan_session_files() covers a login script that never allocated an id.
     # The manager is attached only afterwards so the initial population does
     # not emit SessionNew for sessions that predate us.
+    supervisors = UserSupervisors()
+    supervisors.adopt()
+    registry.supervisors = supervisors
     registry.sync(handoff)
     registry.manager = manager
 

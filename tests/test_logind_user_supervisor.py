@@ -240,6 +240,217 @@ def test_remove():
           os.path.isdir(CG + '/user.slice/user-%d.slice' % UID))
 
 
+# -- Task 2: lifecycle --------------------------------------------------------
+
+def dead(pid):
+    st = read('/proc/%d/stat' % pid)
+    return not st or st.rsplit(') ', 1)[1].split()[0] == 'Z'
+
+
+def cleanup(*svs):
+    for sv in svs:
+        for st in list(sv.state.values()):
+            if st.get('pid'):
+                kill_reap(st['pid'])
+        sv.state.clear()
+    for name in os.listdir(LINGER):
+        os.unlink(os.path.join(LINGER, name))
+    for p in (KILLSWITCH,):
+        if os.path.exists(p):
+            os.unlink(p)
+    with open(CMDLINE, 'w') as f:
+        f.write('BOOT_IMAGE=/vmlinuz root=/dev/sda1 rw quiet\n')
+
+
+def fresh(body=SLEEPER):
+    wipe_user_tree()
+    fake_user_tree()
+    set_bin(body)
+    return L.UserSupervisors()
+
+
+class _Stub:
+    def __init__(self, record):
+        self.record = record
+
+
+def test_session_uids_skips_synthesised():
+    reg = L.SessionRegistry.__new__(L.SessionRegistry)
+    reg.sessions = {
+        '31': _Stub(L.SessionRecord('31', None, synthesised=True)),
+        '4': _Stub(L.SessionRecord('4', {'UID': str(UID)})),
+    }
+    check('session_uids: real session counted', reg.session_uids() == {UID},
+          repr(reg.session_uids()))
+    reg.sessions = {'31': _Stub(L.SessionRecord('31', None, synthesised=True))}
+    check('session_uids: synthesised only -> empty', reg.session_uids() == set(),
+          repr(reg.session_uids()))
+
+
+def test_start_on_session():
+    sv = fresh()
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        check('start: pid on session', bool(pid) and wait_for(lambda: execd(pid)))
+        sv.reconcile({UID}, 1)
+        check('start: no second spawn', sv.pid(UID) == pid)
+    finally:
+        cleanup(sv)
+
+
+def test_kill_switch_file():
+    sv = fresh()
+    try:
+        open(KILLSWITCH, 'w').close()
+        sv.reconcile({UID}, 0)
+        check('kill switch file: not started', sv.pid(UID) is None)
+    finally:
+        cleanup(sv)
+
+
+def test_kill_switch_cmdline():
+    sv = fresh()
+    try:
+        with open(CMDLINE, 'w') as f:
+            f.write('quiet schema.user=0 rw\n')
+        sv.reconcile({UID}, 0)
+        check('kill switch cmdline: not started', sv.pid(UID) is None)
+        with open(CMDLINE, 'w') as f:
+            f.write('quiet schema.user=01 rw\n')
+        sv.reconcile({UID}, 1)
+        check('schema.user=01 is not the switch', sv.pid(UID) is not None)
+    finally:
+        cleanup(sv)
+
+
+def test_grace():
+    sv = fresh()
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: execd(pid))
+        sv.reconcile(set(), 10)
+        sv.reconcile({UID}, 30)
+        check('grace: back inside the window keeps it', sv.pid(UID) == pid and not dead(pid))
+        sv.reconcile(set(), 40)
+        sv.reconcile(set(), 69)
+        check('grace: alive at 29 s', not dead(pid))
+        sv.reconcile(set(), 70)
+        check('grace: SIGTERM at 30 s', wait_for(lambda: dead(pid)))
+        for name in os.listdir(svc_dir()):
+            p = os.path.join(svc_dir(), name)
+            if os.path.isfile(p):
+                os.unlink(p)
+        for name in os.listdir(svc_dir() + '/init.scope'):
+            os.unlink(os.path.join(svc_dir() + '/init.scope', name))
+        sv.reconcile(set(), 71)
+        check('grace: uid forgotten', UID not in sv.state)
+        check('grace: user@ cgroup removed', not os.path.exists(svc_dir()))
+    finally:
+        cleanup(sv)
+
+
+def test_stop_timeout_kill():
+    sv = fresh(STUBBORN)
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: execd(pid))
+        sv.reconcile(set(), 1)
+        sv.reconcile(set(), 31)
+        time.sleep(0.2)
+        check('stop timeout: TERM ignored', not dead(pid))
+        sv.reconcile(set(), 50)
+        check('stop timeout: no kill before 20 s', read(svc_dir() + '/cgroup.kill') == '')
+        sv.reconcile(set(), 51)
+        check('stop timeout: cgroup.kill at 20 s', read(svc_dir() + '/cgroup.kill').strip() == '1')
+    finally:
+        cleanup(sv)
+
+
+def test_backoff_and_give_up():
+    sv = fresh(CRASHER)
+    try:
+        spawns, last, t = [], None, 0.0
+        while t <= 60:
+            sv.reconcile({UID}, t)
+            pid = sv.pid(UID)
+            if pid and pid != last:
+                spawns.append(t)
+                last = pid
+                wait_for(lambda: dead(pid))
+            t += 0.5
+        gaps = [b - a for a, b in zip(spawns, spawns[1:])]
+        check('backoff: 5 spawns then give up', len(spawns) == 5, repr(spawns))
+        check('backoff: gaps 1/2/4/8 s (+0.5 detection tick)',
+              gaps == [1.5, 2.5, 4.5, 8.5], repr(gaps))
+        check('backoff: gave_up', sv.state.get(UID, {}).get('gave_up') is True)
+        sv.reconcile(set(), 61)
+        sv.reconcile({UID}, 62)
+        check('backoff: next login starts fresh', sv.pid(UID) is not None)
+    finally:
+        cleanup(sv)
+
+
+def test_adopt_after_reexec():
+    sv = fresh()
+    sv2 = L.UserSupervisors()
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: execd(pid))
+        with open(svc_dir() + '/cgroup.procs', 'w') as f:
+            f.write('')
+        with open(svc_dir() + '/init.scope/cgroup.procs', 'w') as f:
+            f.write('%d\n' % pid)
+        sv2.adopt()
+        sv2.reconcile({UID}, 0)
+        check('adopt: same pid', sv2.pid(UID) == pid, repr(sv2.pid(UID)))
+        check('adopt: nothing spawned', read(svc_dir() + '/cgroup.procs') == '')
+    finally:
+        sv.state.clear()
+        cleanup(sv2)
+
+
+def test_adopt_wrong_uid():
+    sv = fresh()
+    other = UID + 1
+    fake_user_tree(other)
+    sv2 = L.UserSupervisors()
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: execd(pid))
+        with open(svc_dir() + '/cgroup.procs', 'w') as f:
+            f.write('')
+        with open(svc_dir(other) + '/init.scope/cgroup.procs', 'w') as f:
+            f.write('%d\n' % pid)
+        sv.state.clear()
+        sv2.adopt()
+        check('adopt: uid from the cgroup path', sv2.pid(other) == pid and sv2.pid(UID) is None,
+              repr(sv2.state))
+        sv2.reconcile({UID}, 0)
+        check('adopt: own uid gets its own instance',
+              sv2.pid(UID) is not None and sv2.pid(UID) != pid)
+    finally:
+        cleanup(sv2)
+
+
+def test_linger_without_session():
+    sv = fresh()
+    try:
+        open(os.path.join(LINGER, ME), 'w').close()
+        sv.reconcile(set(), 0)
+        pid = sv.pid(UID)
+        check('linger: started with no session', pid is not None)
+        sv.reconcile(set(), 100)
+        check('linger: never stopped for lack of a session',
+              sv.pid(UID) == pid and not dead(pid))
+    finally:
+        cleanup(sv)
+
+
 TESTS = [
     test_cgroup_path,
     test_delegate,
@@ -247,6 +458,16 @@ TESTS = [
     test_spawn_moves_then_execs,
     test_find,
     test_remove,
+    test_session_uids_skips_synthesised,
+    test_start_on_session,
+    test_kill_switch_file,
+    test_kill_switch_cmdline,
+    test_grace,
+    test_stop_timeout_kill,
+    test_backoff_and_give_up,
+    test_adopt_after_reexec,
+    test_adopt_wrong_uid,
+    test_linger_without_session,
 ]
 
 
