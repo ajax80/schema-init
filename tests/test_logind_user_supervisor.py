@@ -451,6 +451,49 @@ def test_linger_without_session():
         cleanup(sv)
 
 
+
+def test_crash_kills_leftovers():
+    sv = fresh(CRASHER)
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: dead(pid))
+        sv.reconcile({UID}, 0.5)
+        check('crash: orphaned services killed via cgroup.kill',
+              read(svc_dir() + '/cgroup.kill').strip() == '1')
+    finally:
+        cleanup(sv)
+
+
+def test_start_clears_stale_tree():
+    sv = fresh()
+    try:
+        os.makedirs(svc_dir() + '/probe', exist_ok=True)
+        sv.reconcile({UID}, 0)
+        check('start: stale per-service dir from a dead instance removed',
+              not os.path.exists(svc_dir() + '/probe'))
+        check('start: still started', sv.pid(UID) is not None)
+    finally:
+        cleanup(sv)
+
+
+
+def test_start_waits_for_populated_tree():
+    sv = fresh()
+    try:
+        with open(svc_dir() + '/cgroup.events', 'w') as f:
+            f.write('populated 1\nfrozen 0\n')
+        sv.reconcile({UID}, 0)
+        check('populated leftover tree: killed, not started yet',
+              sv.pid(UID) is None and read(svc_dir() + '/cgroup.kill').strip() == '1')
+        with open(svc_dir() + '/cgroup.events', 'w') as f:
+            f.write('populated 0\nfrozen 0\n')
+        sv.reconcile({UID}, 0.25)
+        check('populated leftover tree: started once empty', sv.pid(UID) is not None)
+    finally:
+        cleanup(sv)
+
+
 # -- Task 3: linger -----------------------------------------------------------
 
 def test_set_linger_roundtrip():
@@ -508,6 +551,9 @@ TESTS = [
     test_adopt_after_reexec,
     test_adopt_wrong_uid,
     test_linger_without_session,
+    test_crash_kills_leftovers,
+    test_start_clears_stale_tree,
+    test_start_waits_for_populated_tree,
     test_set_linger_roundtrip,
     test_set_linger_unknown_uid,
     test_linger_auth,

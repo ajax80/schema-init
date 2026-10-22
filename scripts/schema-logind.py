@@ -24,6 +24,7 @@ except ImportError:
 import socket
 import pwd
 import glob
+import errno
 
 def read_file_line(path):
     try:
@@ -338,6 +339,24 @@ def remove_user_cgroup(uid):
             os.rmdir(root)
         except OSError:
             pass
+
+
+def kill_user_cgroup(uid):
+    try:
+        with open(user_service_cgroup(uid) + '/cgroup.kill', 'w') as f:
+            f.write('1')
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            print(f"login1-stub: schema-user uid={uid} cgroup.kill: {e}",
+                  file=sys.stderr)
+
+
+def user_cgroup_populated(uid):
+    try:
+        with open(user_service_cgroup(uid) + '/cgroup.events') as f:
+            return 'populated 1' in f.read().splitlines()
+    except OSError:
+        return False
 
 
 def ensure_runtime_dir(uid):
@@ -1909,7 +1928,16 @@ class UserSupervisors:
             pwd.getpwuid(uid)
         except KeyError:
             return
+        # Leftovers of an instance that died unseen (while logind was down):
+        # kill them and start on a later tick, once the tree is empty.
+        if user_cgroup_populated(uid):
+            kill_user_cgroup(uid)
+            return
         ensure_runtime_dir(uid)
+        # A dead instance's tree has controllers enabled for its children, and
+        # cgroup v2 refuses a process in such a cgroup (EBUSY): start from an
+        # empty user@ every time.
+        remove_user_cgroup(uid)
         delegate_user_cgroup(uid)
         try:
             pid = spawn_user_supervisor(uid)
@@ -1933,6 +1961,9 @@ class UserSupervisors:
                     del self.state[uid]
                     print(f"login1-stub: schema-user uid={uid} stopped")
                     continue
+                # Its services outlive it (it was their subreaper) and would run
+                # unsupervised, then twice once the next instance starts them.
+                kill_user_cgroup(uid)
                 self._crashed(uid, st, now)
             if uid in wanted:
                 st['absent_since'] = None
@@ -1949,12 +1980,7 @@ class UserSupervisors:
                     st['stopping'], st['term_at'] = True, now
             elif not st['killed'] and now - st['term_at'] >= USER_STOP_TIMEOUT_S:
                 st['killed'] = True
-                try:
-                    with open(user_service_cgroup(uid) + '/cgroup.kill', 'w') as f:
-                        f.write('1')
-                except OSError as e:
-                    print(f"login1-stub: schema-user uid={uid} cgroup.kill: {e}",
-                          file=sys.stderr)
+                kill_user_cgroup(uid)
 
 
 class Login1User(dbus.service.Object):
