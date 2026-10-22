@@ -112,6 +112,7 @@ fi
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-board"       /usr/bin/schema-board
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-udev"        /usr/bin/schema-udev   # staged, NOT armed
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-dbus"        /usr/bin/schema-dbus   # dormant until /etc/schema-init/dbus-broker
+[ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-user"        /usr/bin/schema-user   # schema-logind starts it per user
 
 # flip tooling + parity gates the wizard calls. With the packages they come
 # from schema-init-migrate under /usr/libexec/schema-init and update through
