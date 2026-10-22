@@ -249,6 +249,7 @@ static void sig_stop(int s) {
 
 #define IMPORT_DEFAULT "/usr/libexec/schema-init/schema-import"
 #define IMPORT_SECS 10
+#define IMPORT_LOG_MAX (256 * 1024)
 
 /* Generate the services dir from the user's unit files. Login must never
  * depend on it: a failing or hung importer is logged and we run with
@@ -272,6 +273,10 @@ static void run_import(const char *imp, const char *cfg_home, const char *state_
     if (pid == 0) {
         int in = open("/dev/null", O_RDONLY | O_CLOEXEC);
         int out = open(logp, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        struct stat st;
+        /* sized on the fd, not the path: nothing to race */
+        if (out >= 0 && fstat(out, &st) == 0 && st.st_size > IMPORT_LOG_MAX)
+            ftruncate(out, 0);
         if (in >= 0) dup2(in, 0);
         if (out >= 0) { dup2(out, 1); dup2(out, 2); }
         setenv("XDG_CONFIG_HOME", cfg_home, 1);
@@ -280,7 +285,9 @@ static void run_import(const char *imp, const char *cfg_home, const char *state_
         _exit(127);
     }
     int status;
-    for (int i = 0; i < IMPORT_SECS * 20; i++) {
+    /* a logout during the import must not wait out IMPORT_SECS: the importer
+     * swaps its output in atomically, so killing it leaves the old set */
+    for (int i = 0; i < IMPORT_SECS * 20 && engine_running; i++) {
         if (waitpid(pid, &status, WNOHANG) == pid) {
             if (WIFEXITED(status))
                 printf(TAG "import: exit %d\n", WEXITSTATUS(status));
@@ -292,7 +299,10 @@ static void run_import(const char *imp, const char *cfg_home, const char *state_
     }
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
-    printf(TAG "import: killed after %d s\n", IMPORT_SECS);
+    if (engine_running)
+        printf(TAG "import: killed after %d s\n", IMPORT_SECS);
+    else
+        printf(TAG "import: killed, stopping\n");
 }
 
 static void user_shut_log(const char *msg) {
@@ -376,6 +386,8 @@ int main(int argc, char **argv) {
     engine_hooks.shut_log = user_shut_log;
 
     run_import(imp, cfg_home, state_home);
+    if (!engine_running)
+        _exit(0);
     if (engine_load(svc_dir) > 0)
         die("dependency cycle in the service configuration");
     engine_open(0);

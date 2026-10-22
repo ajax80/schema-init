@@ -454,7 +454,18 @@ _COND_RUNTIME = {
     "KernelCommandLine": "kernel_cmdline",
 }
 _COND_STATIC = ("Virtualization", "Security", "ControlGroupController", "Capability",
-                "CPUs", "FirstBoot", "Architecture")
+                "CPUs", "FirstBoot", "Architecture", "User")
+def _sys_uid_max():
+    # systemd's @system: uid <= SYS_UID_MAX from login.defs (999 when unset)
+    try:
+        with open(os.path.join(os.environ.get("MIGRATE_ROOT") or "/", "etc/login.defs")) as f:
+            for ln in f:
+                w = ln.split()
+                if len(w) >= 2 and w[0] == "SYS_UID_MAX" and w[1].isdigit():
+                    return int(w[1])
+    except OSError:
+        pass
+    return 999
 _ARCH = {"x86_64": "x86-64", "aarch64": "arm64", "i686": "x86", "armv7l": "arm",
          "riscv64": "riscv64", "ppc64le": "ppc64-le", "s390x": "s390x"}
 _FACTS = None   # tests inject host facts here
@@ -551,6 +562,15 @@ def _static_condition(name, arg, facts):
         return a not in _TRUE             # a migrated system is past its first boot
     if name == "Architecture":
         return a == "native" or a == facts["arch"]
+    if name == "User":
+        # the manager's user: the importing user under --user, root for PID 1
+        user, uid = (_USER["user"], _USER["uid"]) if _USER else ("root", 0)
+        a = {"%u": user, "%U": str(uid)}.get(arg.strip(), arg.strip())
+        if "%" in a:
+            return None
+        if a == "@system":
+            return uid <= _sys_uid_max()
+        return a == str(uid) if a.isdigit() else a == user
     return None
 
 
@@ -1850,6 +1870,12 @@ def _keep_hand_written(out_dir, stage):
 
 def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
     # built in out_dir.new and swapped in, so a failure leaves out_dir as it was
+    out_dir = out_dir.rstrip("/") or "/"
+    old = out_dir + ".old"
+    # killed between the two renames of a previous swap: put the old set back,
+    # or _keep_hand_written finds nothing and its hand-written .svc are lost
+    if not os.path.isdir(out_dir) and os.path.isdir(old) and not dry_run:
+        os.rename(old, out_dir)
     set_user_mode(ctx)
     stage = out_dir + ".new"
     saved = os.environ.get("SCHEMA_SVC_DIR")
@@ -1898,7 +1924,6 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
             log(manifest, end="")
             return counts
         _keep_hand_written(out_dir, stage)
-        old = out_dir + ".old"
         shutil.rmtree(old, ignore_errors=True)
         if os.path.isdir(out_dir):
             os.rename(out_dir, old)
