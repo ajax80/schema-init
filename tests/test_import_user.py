@@ -299,6 +299,38 @@ check("obsidian_svc", "exec=/usr/bin/ssh\n" in b and "args=-N\n" in b and "args=
       and "no_restart=1" not in b and c == {"generated": 1, "skipped": 0, "error": 0})
 t.done()
 
+# --- network-online.target -> nm-online wait before the start ---
+NMO = "exec_pre=-/usr/bin/nm-online -s -q -t 60\n"
+t = Tree()
+t.write(t.sys("/usr/bin", "nm-online"), ""); os.chmod(t.sys("/usr/bin", "nm-online"), 0o755)
+t.write(t.cfg("obsidian-tunnel.service"), OBSIDIAN)
+t.write(t.cfg("plain.service"), SIMPLE)
+t.write(t.cfg("wants.service"), "[Unit]\nWants=network-online.target\n" + SIMPLE)
+t.write(t.cfg("pre.service"), "[Unit]\nAfter=network-online.target\n"
+        "[Service]\nExecStartPre=/bin/true\nExecStart=/usr/bin/sleep infinity\n")
+t.write(t.cfg("tick.timer"), "[Timer]\nOnCalendar=daily\n")
+t.write(t.cfg("tick.service"), "[Unit]\nAfter=network.target network-online.target\n"
+        "[Service]\nType=oneshot\nExecStart=/usr/bin/true\n")
+for u in ("obsidian-tunnel.service", "plain.service", "wants.service", "pre.service"):
+    t.enable(u)
+t.enable("tick.timer", target="timers.target")
+c, out = run(t)
+check("netonline_after", NMO in svc(out, "obsidian-tunnel"))
+check("netonline_wants", NMO in svc(out, "wants"))
+check("netonline_plain_untouched", "nm-online" not in svc(out, "plain"))
+b = svc(out, "pre")
+check("netonline_first_pre", NMO in b and b.index(NMO) < b.index("exec_pre=/bin/true"))
+check("netonline_timer_target", NMO in svc(out, "tick"))
+t.done()
+
+t = Tree()
+t.write(t.cfg("obsidian-tunnel.service"), OBSIDIAN)
+t.enable("obsidian-tunnel.service")
+c, out = run(t)
+b = svc(out, "obsidian-tunnel")
+check("netonline_no_nm", "exec_pre" not in b and "not waited for: no nm-online" in b and c["generated"] == 1)
+t.done()
+
 # --- drop-in ExecStart reset wins ---
 t = Tree()
 t.write(t.cfg("foo.service"), "[Service]\nExecStart=/bin/old\n")

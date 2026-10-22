@@ -1747,25 +1747,52 @@ def _activation_guard(target, skip):
         raise Skip("activates skip-listed %s" % target)
 
 
+_NM_ONLINE_PRE = "exec_pre=-%s -s -q -t 60"
+
+
+def _wait_online(lines, svc_sections):
+    """schema-user has no network-online.target, so a unit ordered after it
+    started before DHCP and burned its retries on "Network is unreachable".
+    Run nm-online first, as NetworkManager-wait-online does; the - prefix
+    keeps systemd's semantics: the wait orders the start, it never fails it."""
+    unit = svc_sections.get("Unit", [])
+    if not any("network-online.target" in " ".join(_get_all(unit, k)).split()
+               for k in ("After", "Wants", "Requires")):
+        return lines
+    nm = _which("nm-online")
+    if not nm:
+        return ["%sAfter=network-online.target not waited for: no nm-online" % WARN_PREFIX] + lines
+    pres = [i for i, ln in enumerate(lines) if ln.startswith("exec_pre=")]
+    if len(pres) >= 8:
+        return ["%sAfter=network-online.target not waited for: 8 ExecStartPre= already"
+                % WARN_PREFIX] + lines
+    at = pres[0] if pres else max(i for i, ln in enumerate(lines)
+                                  if ln.startswith(("exec=", "args=", "env=", "env_file=",
+                                                    "expand_args="))) + 1
+    return lines[:at] + [_NM_ONLINE_PRE % nm] + lines[at:]
+
+
 def _user_translate(unit, known, enabled, skip=()):
     sections = _user_sections(unit)
     name = _base(unit)
+    svc_sections = sections
     if unit.endswith(".socket"):
         socket_lines(sections)
         target = _get_last(sections.get("Socket", []), "Service") or name + ".service"
         _activation_guard(target, skip)
         name = _base(target)
-        body = unit_to_svc(name, _user_sections(target), sections,
-                           target not in enabled, known)
+        svc_sections = _user_sections(target)
+        body = unit_to_svc(name, svc_sections, sections, target not in enabled, known)
     elif unit.endswith(".timer"):
         target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
         if "@" in target:
             raise Skip("timer starts template instance %s — instances unsupported" % target)
         _activation_guard(target, skip)
-        body = timer_to_svc(name, sections, _user_sections(target), known, _base(target))
+        svc_sections = _user_sections(target)
+        body = timer_to_svc(name, sections, svc_sections, known, _base(target))
     else:
         body = unit_to_svc(name, sections, None, False, known)
-    body = _drop_cycles(name, body)
+    body = "\n".join(_wait_online(_drop_cycles(name, body).splitlines(), svc_sections))
     lines = []
     for ln in body.splitlines():
         if ln == "needs_root=1":
