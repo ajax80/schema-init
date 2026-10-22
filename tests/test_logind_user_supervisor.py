@@ -562,12 +562,27 @@ def test_linger_auth():
 # -- review fixes -------------------------------------------------------------
 
 # BIN detached, so not our child: what logind sees after a cold restart
-# adopts an instance an earlier logind started.
+# adopts an instance an earlier logind started.  We are its subreaper only so
+# kill_orphan can reap it: CI's container PID 1 never reaps, and an unreaped
+# zombie keeps /proc/<pid> and its start time, so it reads as alive.
 def spawn_orphan():
+    import ctypes
     import subprocess
-    out = subprocess.run(['sh', '-c', '"$0" >/dev/null 2>&1 & echo $!', BIN],
-                         capture_output=True, text=True).stdout
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    prctl(36, 1, 0, 0, 0)   # PR_SET_CHILD_SUBREAPER
+    try:
+        out = subprocess.run(['sh', '-c', '"$0" >/dev/null 2>&1 & echo $!', BIN],
+                             capture_output=True, text=True).stdout
+    finally:
+        prctl(36, 0, 0, 0, 0)
     return int(out.strip())
+
+
+# Reap before reconcile so the supervisor's waitpid gets ChildProcessError and
+# takes the adopted path, not the own-child path.
+def kill_orphan(pid, sig):
+    os.kill(pid, sig)
+    os.waitpid(pid, 0)
 
 
 def ctl_sock(uid=UID):
@@ -588,8 +603,7 @@ def test_adopted_clean_exit_not_restarted():
     try:
         pid = adopt_orphan(sv)
         check('adopted orphan tracked', sv.pid(UID) == pid)
-        os.kill(pid, signal.SIGTERM)    # its clean exit unlinks ctl.sock
-        wait_for(lambda: not os.path.exists('/proc/%d' % pid))
+        kill_orphan(pid, signal.SIGTERM)    # its clean exit unlinks ctl.sock
         sv.reconcile({UID}, 0)
         sv.reconcile({UID}, 10)
         check('adopted clean exit (no ctl.sock): not restarted', sv.pid(UID) is None)
@@ -603,8 +617,7 @@ def test_adopted_crash_restarted():
         pid = adopt_orphan(sv)
         os.makedirs(os.path.dirname(ctl_sock()), exist_ok=True)
         open(ctl_sock(), 'w').close()   # a SIGKILLed instance leaves it behind
-        os.kill(pid, signal.SIGKILL)
-        wait_for(lambda: not os.path.exists('/proc/%d' % pid))
+        kill_orphan(pid, signal.SIGKILL)
         sv.reconcile({UID}, 0)
         sv.reconcile({UID}, 2)
         check('adopted crash (ctl.sock left): restarted',
