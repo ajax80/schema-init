@@ -204,15 +204,18 @@ int main(void) {
     put("st.svc.d/50-stop.conf", "stop_timeout_sec=9999\n");
     assert(load("st.svc", &s) == 0 && s.stop_timeout_sec == 0);
     drop(&s);
+    assert(!(s.flags & SVC_STOP_FIRST));
+    put("st.svc.d/50-stop.conf", "stop_first=1\nstop_timeout_sec=20\n");
+    assert(load("st.svc", &s) == 0 && (s.flags & SVC_STOP_FIRST) && s.stop_timeout_sec == 20);
+    drop(&s);
     put("st.svc.d/50-stop.conf", "restart_sec=5\n");
     assert(load("st.svc", &s) == 0 && s.restart_sec == 5);
     drop(&s);
     put("st.svc.d/50-stop.conf", "restart_sec=99999\n");
-    assert(load("st.svc", &s) == 0 && s.restart_sec == 0);
+    assert(load("st.svc", &s) == 0 && s.restart_sec == 3600);
     drop(&s);
-    assert(!(s.flags & SVC_STOP_FIRST));
-    put("st.svc.d/50-stop.conf", "stop_first=1\nstop_timeout_sec=20\n");
-    assert(load("st.svc", &s) == 0 && (s.flags & SVC_STOP_FIRST) && s.stop_timeout_sec == 20);
+    put("st.svc.d/50-stop.conf", "restart_sec=-4\n");
+    assert(load("st.svc", &s) == 0 && s.restart_sec == 0);
     drop(&s);
 
     {

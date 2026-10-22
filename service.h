@@ -386,8 +386,17 @@ static inline void svc_hold_retry(service_t *svc, const struct timespec *now) {
 }
 
 static inline int svc_retry_held(const service_t *svc, const struct timespec *now) {
-    return now->tv_sec < svc->restart_at.tv_sec ||
-           (now->tv_sec == svc->restart_at.tv_sec && now->tv_nsec < svc->restart_at.tv_nsec);
+    return svc->restart_at.tv_sec &&
+           (now->tv_sec < svc->restart_at.tv_sec ||
+            (now->tv_sec == svc->restart_at.tv_sec && now->tv_nsec < svc->restart_at.tv_nsec));
+}
+
+/* reload/re-exec carry restart_at but parse restart_sec fresh: a lowered or
+ * removed restart_sec must not leave the old, longer hold in place */
+static inline void svc_clamp_hold(service_t *svc, const struct timespec *now) {
+    if (!svc_retry_held(svc, now)) return;
+    if (svc->restart_sec <= 0 || svc->restart_at.tv_sec > now->tv_sec + svc->restart_sec)
+        svc_hold_retry(svc, now);
 }
 
 /* build the F8 flag word by inspecting the real system */

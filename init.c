@@ -887,12 +887,15 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         write(watchdog_fd, "\0", 1);
     }
 
+    struct timespec now_mono;
+    clock_gettime(CLOCK_MONOTONIC, &now_mono);
     for (int i = 0; i < svc_count; i++) {
         int j;
         for (j = 0; j < nrs; j++)
             if (!strcmp(services[i].name, reexec_svcs[j].name)) break;
         if (j == nrs) { fresh++; continue; }
         svc_runtime_copy(&services[i], &reexec_svcs[j].rt);
+        svc_clamp_hold(&services[i], &now_mono);
         svc_carry_timer_done(&services[i], !reexec_svcs[j].timer);
         listen_adopt(&services[i]);
         adopted++;

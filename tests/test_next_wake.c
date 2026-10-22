@@ -59,6 +59,19 @@ int main(void) {
     svc_hold_retry(&r, &now);
     assert(!svc_retry_held(&r, &now));
 
+    r.restart_sec = 3600;
+    svc_hold_retry(&r, &now);
+    r.restart_sec = 5;
+    svc_clamp_hold(&r, &now);
+    assert(r.restart_at.tv_sec == 105);
+    svc_clamp_hold(&r, &later);
+    assert(r.restart_at.tv_sec == 105);
+    r.restart_sec = 3600;
+    svc_hold_retry(&r, &now);
+    r.restart_sec = 0;
+    svc_clamp_hold(&r, &now);
+    assert(!svc_retry_held(&r, &now) && r.restart_at.tv_sec == 0);
+
     printf("all next_wake tests passed\n");
     return 0;
 }
