@@ -23,6 +23,7 @@ except ImportError:
     unix_signal_add = GLib.unix_signal_add
 import socket
 import pwd
+import glob
 
 def read_file_line(path):
     try:
@@ -287,6 +288,132 @@ SESSION_UNREGISTER = os.environ.get(
 UDEV_DATA_DIR = os.environ.get('SCHEMA_LOGIND_UDEV_DATA', '/run/udev/data')
 DEV_DIR = os.environ.get('SCHEMA_LOGIND_DEV_DIR', '/dev')
 _UDEV_DB_RE = re.compile(r'([cb])(\d+):(\d+)')
+
+# --- per-user supervisor (schema-user) --------------------------------------
+# Overridable for the same reason as the dirs above: a test aims these at a
+# temp tree and a shell stand-in instead of the live box.
+LINGER_DIR = os.environ.get('SCHEMA_LINGER_DIR', '/var/lib/systemd/linger')
+SCHEMA_USER_BIN = os.environ.get('SCHEMA_USER_BIN', '/usr/bin/schema-user')
+USER_KILLSWITCH = os.environ.get('SCHEMA_USER_KILLSWITCH',
+                                 '/etc/schema-init/user-supervisor.disabled')
+KERNEL_CMDLINE = os.environ.get('SCHEMA_LOGIND_CMDLINE', '/proc/cmdline')
+USER_LOG_DIR = os.environ.get('SCHEMA_USER_LOG_DIR', '/var/log/schema-init')
+_USER_SVC_RE = re.compile(r'/user@(\d+)\.service/')
+
+
+def user_service_cgroup(uid):
+    return '%s/user.slice/user-%d.slice/user@%d.service' % (CGROUP_ROOT, uid, uid)
+
+
+def delegate_user_cgroup(uid):
+    path = user_service_cgroup(uid)
+    try:
+        pw = pwd.getpwuid(uid)
+        os.makedirs(path, exist_ok=True)
+        with open(CGROUP_ROOT + '/cgroup.subtree_control') as f:
+            ctls = f.read().split()
+        # A controller is only available in user@ if every ancestor enables
+        # it for its children; schema-user enables its own level itself.
+        for d in (CGROUP_ROOT + '/user.slice',
+                  '%s/user.slice/user-%d.slice' % (CGROUP_ROOT, uid)):
+            for c in ctls:
+                try:
+                    with open(d + '/cgroup.subtree_control', 'w') as f:
+                        f.write('+' + c)
+                except OSError:
+                    pass
+        for p in ('', '/cgroup.procs', '/cgroup.subtree_control', '/cgroup.threads'):
+            os.chown(path + p, uid, pw.pw_gid)
+    except (OSError, KeyError) as e:
+        print(f"login1-stub: schema-user uid={uid}: cgroup delegation failed: {e}",
+              file=sys.stderr)
+        return None
+    return path
+
+
+def remove_user_cgroup(uid):
+    path = user_service_cgroup(uid)
+    for root, _dirs, _files in os.walk(path, topdown=False):
+        try:
+            os.rmdir(root)
+        except OSError:
+            pass
+
+
+def ensure_runtime_dir(uid):
+    runtime_dir = f'/run/user/{uid}'
+    try:
+        os.makedirs(runtime_dir, exist_ok=True)
+        if os.geteuid() == 0:
+            os.chmod(runtime_dir, 0o700)
+            os.chown(runtime_dir, uid, -1)
+    except OSError as e:
+        print(f"login1-stub: {runtime_dir}: {e}", file=sys.stderr)
+    return runtime_dir
+
+
+def spawn_user_supervisor(uid):
+    pw = pwd.getpwuid(uid)
+    os.makedirs(USER_LOG_DIR, exist_ok=True)
+    env = {
+        'HOME': pw.pw_dir, 'USER': pw.pw_name, 'LOGNAME': pw.pw_name,
+        'SHELL': pw.pw_shell or '/bin/sh', 'PATH': '/usr/local/bin:/usr/bin:/bin',
+        'XDG_RUNTIME_DIR': f'/run/user/{uid}',
+    }
+    # Moving a process between cgroups needs write access to the common
+    # ancestor's cgroup.procs, which the user never has: the shell moves
+    # itself while still root, and only then becomes the user.
+    if os.geteuid() == 0:
+        script = ('echo $$ > "$1" && { cd "$5" || cd /; } && '
+                  'exec setpriv --reuid="$2" --regid="$3" --init-groups -- "$4"')
+    else:
+        script = 'echo $$ > "$1" && { cd "$5" || cd /; } && exec "$4"'
+    argv = ['/bin/sh', '-c', script, 'sh',
+            user_service_cgroup(uid) + '/cgroup.procs', str(uid), str(pw.pw_gid),
+            SCHEMA_USER_BIN, pw.pw_dir]
+    log = os.path.join(USER_LOG_DIR, 'schema-user-%d.log' % uid)
+    # posix_spawn, not subprocess: a Popen object reaps behind our back, and
+    # the tick's own waitpid is what tells a crash from a stop.
+    return os.posix_spawn('/bin/sh', argv, env, setsid=True, file_actions=[
+        (os.POSIX_SPAWN_OPEN, 0, '/dev/null', os.O_RDONLY, 0),
+        (os.POSIX_SPAWN_OPEN, 1, log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640),
+        (os.POSIX_SPAWN_DUP2, 1, 2),
+    ])
+
+
+def _is_schema_user(pid):
+    try:
+        exe = os.readlink('/proc/%d/exe' % pid)
+    except OSError:
+        exe = ''
+    if exe.removesuffix(' (deleted)') == SCHEMA_USER_BIN:
+        return True
+    try:
+        with open('/proc/%d/cmdline' % pid, 'rb') as f:
+            argv = f.read().decode(errors='replace').split('\0')
+    except OSError:
+        return False
+    return SCHEMA_USER_BIN in argv[:2]
+
+
+def find_user_supervisors():
+    found = {}
+    pattern = CGROUP_ROOT + '/user.slice/user-*.slice/user@*.service'
+    for procs in glob.glob(pattern + '/init.scope/cgroup.procs') + \
+            glob.glob(pattern + '/cgroup.procs'):
+        m = _USER_SVC_RE.search(procs)
+        if not m:
+            continue
+        uid = int(m.group(1))
+        try:
+            with open(procs) as f:
+                pids = [int(p) for p in f.read().split()]
+        except (OSError, ValueError):
+            continue
+        for pid in pids:
+            if uid not in found and _is_schema_user(pid):
+                found[uid] = pid
+    return found
 
 
 def _rebase_devname(devname):
@@ -2786,14 +2913,7 @@ def main():
     # it as a directory makes root systemctl fail with "Connection refused" instead of
     # cleanly falling through. Non-root systemctl uses the D-Bus system bus and works.
 
-    uid = get_active_uid()
-    runtime_dir = f'/run/user/{uid}'
-    os.makedirs(runtime_dir, exist_ok=True)
-    os.chmod(runtime_dir, 0o700)
-    try:
-        os.chown(runtime_dir, uid, -1)
-    except Exception:
-        pass
+    ensure_runtime_dir(get_active_uid())
 
     # systemctl on this systemd talks plain D-Bus to org.freedesktop.systemd1.Manager
     # over /run/dbus/system_bus_socket — it does NOT use varlink here. Creating a
