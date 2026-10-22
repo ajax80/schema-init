@@ -10,6 +10,11 @@ echo "runner start $(date)" > "$LOG"
 
 for _ in $(seq 1 40); do pgrep -x plasmashell >/dev/null && break; sleep 0.5; done
 sleep 2
+# The env hooks start us before kwin exists, so the session's WAYLAND_DISPLAY
+# (plasma-session-start.sh exports it once kwin is up) never reached us, and
+# every entry launched without it: flatpak Kodi fell back to GBM and never
+# showed, mpv lost its KWin rules.
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 
 # No Xwayland cookie step: Plasma 6 kwin starts Xwayland on demand with no
 # -auth and grants SI:localuser, so there is nothing to merge -- waiting for it
