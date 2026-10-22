@@ -59,8 +59,18 @@ for f in "$HOME"/.config/autostart/*.desktop; do
     case "${prog##*/}" in
         sh|bash|dash|zsh|env|python|python2|python3|perl|ruby|node) shift; [ -n "$1" ] && prog=$1 ;;
     esac
+    # `sh -c "sleep 5; exec foo"` leaves prog=-c, and `pgrep -f -- -c` matches
+    # nearly any process, so such entries were always skipped as running. Use the
+    # exec target if the script names one; otherwise launch without the check.
+    case "$prog" in
+        -*) prog=""
+            while [ $# -gt 1 ]; do
+                [ "$1" = exec ] && { prog=${2%[\"\']}; break; }
+                shift
+            done ;;
+    esac
     key=${prog##*/}
-    if pgrep -f -- "$prog" >/dev/null 2>&1 || pgrep -x "$key" >/dev/null 2>&1; then
+    if [ -n "$prog" ] && { pgrep -f -- "$prog" >/dev/null 2>&1 || pgrep -x "$key" >/dev/null 2>&1; }; then
         echo "skip running $name ($key)" >>"$LOG"; continue
     fi
 
