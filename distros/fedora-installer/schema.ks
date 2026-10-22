@@ -113,6 +113,8 @@ fi
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-udev"        /usr/bin/schema-udev   # staged, NOT armed
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-dbus"        /usr/bin/schema-dbus   # dormant until /etc/schema-init/dbus-broker
 [ -n "$RPMS" ] || install -m0755 "$SRC/bin/schema-user"        /usr/bin/schema-user   # schema-logind starts it per user
+[ -n "$RPMS" ] || install -Dm0755 "$SRC/scripts/schema-import.py" /usr/libexec/schema-init/schema-import  # schema-user runs it at start
+[ -n "$RPMS" ] || install -Dm0644 "$SRC/scripts/user-skip" /etc/schema-init/user-skip
 
 # flip tooling + parity gates the wizard calls. With the packages they come
 # from schema-init-migrate under /usr/libexec/schema-init and update through

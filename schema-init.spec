@@ -497,6 +497,8 @@ fi
 %{_libexecdir}/schema-init/schema-udevd-launch
 %{_libexecdir}/schema-init/schema-mount-fstab
 %{_libexecdir}/schema-init/schema-bus-activate
+%{_libexecdir}/schema-init/schema-import
+%config(noreplace) %{_sysconfdir}/schema-init/user-skip
 %{_datadir}/bash-completion/completions/schema-ctl
 %{_datadir}/zsh/site-functions/_schema-ctl
 %dir /usr/local/share/dbus-1

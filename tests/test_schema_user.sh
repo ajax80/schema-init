@@ -5,6 +5,8 @@ cd "$(dirname "$0")/.."
 [ -x ./schema-user ] || { echo "FAIL: no ./schema-user"; exit 1; }
 T=$(mktemp -d)
 export XDG_RUNTIME_DIR=$T/run XDG_STATE_HOME=$T/state/nested XDG_CONFIG_HOME=$T/cfg
+# hand-written .svc files below: no import over them
+export SCHEMA_USER_IMPORT=
 unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS
 PID= LPID=
 cleanup() {
@@ -117,4 +119,71 @@ PID=
 [ -s "$T/a.stop" ] && [ -s "$T/b.stop" ] || fail "sleepers saw no SIGTERM"
 [ "$(cat "$T/b.stop")" -le "$(cat "$T/a.stop")" ] || fail "a stopped before its dependent b"
 pgrep -f "$T/sl" > /dev/null && fail "dbl orphan survived"
+# --- schema-user runs schema-import --user at start (SCHEMA_USER_IMPORT) ---
+# start a fresh instance on its own tree; $1 = importer path ("" = none)
+istart() {
+    I=$(mktemp -d "$T/imp.XXXX")
+    mkdir -m700 "$I/run"
+    SCHEMA_USER_IMPORT=$1 XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HOME=$I/cfg \
+        ./schema-user > "$I/out" 2>&1 &
+    PID=$!
+}
+ist() { XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status 2>/dev/null; }
+istop() { kill -TERM "$PID"; wait "$PID"; PID=; }
+stub() { printf '#!/bin/sh\n%s\n' "$2" > "$T/$1"; chmod 755 "$T/$1"; echo "$T/$1"; }
+
+# import_runs: the stub's .svc lands in --out and runs
+S1=$(stub imp-ok 'while [ $# -gt 0 ]; do [ "$1" = --out ] && o=$2; shift; done
+printf "name=x\nexec=%s\nargs=30\n" "'"$T/sl"'" > "$o/x.svc"; chmod 600 "$o/x.svc"')
+istart "$S1"
+until_ok 'ist | grep -Eq "^ +x +pid=[1-9]"' || { ist; cat "$I/out"; fail "import_runs: x not running"; }
+grep -q "import: exit 0" "$I/out" || fail "import_runs: no exit line"
+istop
+
+# import_fail: exit 1 -> still serves status
+S2=$(stub imp-fail 'exit 1')
+istart "$S2"
+until_ok 'ist | grep -q "^services:"' || fail "import_fail: no status"
+grep -q "import: exit 1" "$I/out" || fail "import_fail: no exit 1 line"
+istop
+
+# import_hang: killed after 10 s, then serves status
+S3=$(stub imp-hang "exec $T/sl 60")
+istart "$S3"
+i=0; until ist | grep -q "^services:"; do i=$((i + 1)); [ $i -ge 130 ] && fail "import_hang: no status in 13 s"; sleep 0.1; done
+grep -q "import: killed after 10 s" "$I/out" || fail "import_hang: no kill line"
+pgrep -f "$T/sl 60" > /dev/null && fail "import_hang: importer left running"
+istop
+
+# import_real: the real importer, under schema-user's own environment, turns
+# an enabled unit in $XDG_CONFIG_HOME/systemd/user into a running service
+I=$(mktemp -d "$T/imp.XXXX"); mkdir -m700 "$I/run"
+mkdir -p "$I/cfg/systemd/user/default.target.wants"
+printf '[Service]\nExecStart=%s 31\nRestart=always\n' "$T/sl" > "$I/cfg/systemd/user/e2e.service"
+ln -s ../e2e.service "$I/cfg/systemd/user/default.target.wants/e2e.service"
+install -m755 distros/fedora-installer/migrate/schema-import.py "$T/schema-import"  # 0755 as packaged
+SCHEMA_USER_IMPORT=$T/schema-import XDG_RUNTIME_DIR=$I/run \
+    XDG_STATE_HOME=$I/state XDG_CONFIG_HOME=$I/cfg ./schema-user > "$I/out" 2>&1 &
+PID=$!
+until_ok 'ist | grep -Eq "^ +e2e +pid=[1-9]"' || { ist; cat "$I/out" "$I/state/schema-user/log/import.log"; fail "import_real: e2e not running"; }
+grep -q "import: exit 0" "$I/out" || fail "import_real: importer did not exit 0"
+istop
+
+# import_disabled: empty SCHEMA_USER_IMPORT keeps a hand-written .svc
+I0=$(mktemp -d "$T/imp.XXXX"); mkdir -m700 "$I0/run" "$I0/run/schema-user"; mkdir -m700 "$I0/run/schema-user/services"
+printf 'name=h\nexec=%s\nargs=30\n' "$T/sl" > "$I0/run/schema-user/services/h.svc"; chmod 600 "$I0/run/schema-user/services/h.svc"
+I=$I0
+SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HOME=$I/cfg ./schema-user > "$I/out" 2>&1 &
+PID=$!
+until_ok 'ist | grep -Eq "^ +h +pid=[1-9]"' || { ist; fail "import_disabled: h not running"; }
+grep -q "import: not run" "$I/out" || fail "import_disabled: no 'not run' line"
+# status lists the skip manifest (text and --kv), never in --json
+printf 'syncthing.service\thandled elsewhere (skip list)\n' > "$I/run/schema-user/skipped"
+ist | grep -Eq '^ +syncthing\.service +skipped \(handled elsewhere \(skip list\)\)$' || { ist; fail "status: no skipped line"; }
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv | grep -qx 'service.syncthing.service.state=skipped' || fail "status --kv: no skipped state"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv | grep -qx 'service.syncthing.service.reason=handled elsewhere (skip list)' || fail "status --kv: no reason"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | grep -q syncthing && fail "status --json: lists skipped"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status h | grep -q syncthing && fail "status <svc>: lists skipped"
+istop
+
 echo "test_schema_user: ok"

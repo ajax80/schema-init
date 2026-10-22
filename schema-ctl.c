@@ -301,6 +301,27 @@ static void usage(FILE *out) {
         "Talks to PID 1 over %s.\nExits 1 when PID 1 replies \"err:\".\n", SVC_DIR, CTL_SOCK_PATH);
 }
 
+/* schema-import --user's manifest: enabled user units it did not generate,
+ * one "<unit>\t<reason>" per line. Shown so none is silently dead. */
+static const char *skip_manifest;
+
+static void print_skipped(int kv) {
+    char line[1024];
+    FILE *f = fopen(skip_manifest, "re");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        char *tab = strchr(line, '\t'), *nl = strchr(line, '\n');
+        if (!tab) continue;
+        *tab = '\0';
+        if (nl) *nl = '\0';
+        if (kv)
+            printf("service.%s.state=skipped\nservice.%s.reason=%s\n", line, line, tab + 1);
+        else
+            printf("  %-24s skipped (%s)\n", line, tab + 1);
+    }
+    fclose(f);
+}
+
 int main(int argc, char **argv) {
     char cmd[256];
     char *rbuf;
@@ -311,7 +332,7 @@ int main(int argc, char **argv) {
     struct sockaddr_un addr;
 
     if (argc > 1 && strcmp(argv[1], "--user") == 0) {
-        static char usock[PATH_MAX], udir[PATH_MAX];
+        static char usock[PATH_MAX], udir[PATH_MAX], uskip[PATH_MAX];
         const char *xdg = getenv("XDG_RUNTIME_DIR");
         if (!xdg || !xdg[0]) {
             fprintf(stderr, "schema-ctl --user: XDG_RUNTIME_DIR is not set\n");
@@ -319,6 +340,8 @@ int main(int argc, char **argv) {
         }
         snprintf(usock, sizeof usock, "%s/schema-user/ctl.sock", xdg);
         snprintf(udir, sizeof udir, "%s/schema-user/services", xdg);
+        snprintf(uskip, sizeof uskip, "%s/schema-user/skipped", xdg);
+        skip_manifest = uskip;
         ctl_sock = usock;
         svc_dir = udir;
         user_mode = 1;
@@ -465,6 +488,9 @@ int main(int argc, char **argv) {
 
     printf("%s", rbuf);
     i = strncmp(rbuf, "err:", 4) == 0;
+    if (skip_manifest && !i && !strcmp(argv[1], "status") &&
+        (argc == 2 || (argc == 3 && !strcmp(argv[2], "--kv"))))
+        print_skipped(argc == 3);
     close(fd);
     free(rbuf);
     return i;
