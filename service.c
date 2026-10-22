@@ -2276,6 +2276,9 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->allowed_slot_max = atoi(val);
     } else if (strcmp(line, "max_restarts") == 0) {
         svc->max_restarts = atoi(val);
+    } else if (strcmp(line, "restart_sec") == 0) {
+        int v = atoi(val);
+        svc->restart_sec = (v >= 1 && v <= 3600) ? v : 0;
     } else if (strcmp(line, "start_timeout_sec") == 0) {
         svc->start_timeout_sec = atoi(val);
     } else if (strcmp(line, "stop_timeout_sec") == 0) {

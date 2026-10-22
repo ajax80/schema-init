@@ -435,6 +435,7 @@ static void park(service_t *svc) {
 
 static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
+    svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
         service_t *fb = service_fallback(svc, services, svc_count);
@@ -921,6 +922,7 @@ static void tick_service(service_t *svc,
 
         case STATE_NEW_PROCESS:
             if (svc->failsafe_pid > 0 || svc->card_pid > 0) break;
+            if (svc->restart_at.tv_sec && svc_retry_held(svc, &now_mono)) break;
             if (!svc->standby_up && service_is_standby(svc, services, svc_count)) {
                 svc->flags |= SVC_NO_RESTART;
                 svc->inst.state = STATE_EXCISED;
@@ -1054,6 +1056,7 @@ static void tick_service(service_t *svc,
                 /* recovery resolved → re-queue for spawn */
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
+                svc_hold_retry(svc, &now_mono);
                 service_log(svc, "retry");
                 play_card(svc);
             } else if (svc->inst.state == STATE_FRICTION) {
@@ -1067,6 +1070,7 @@ static void tick_service(service_t *svc,
             if (svc->inst.state == STATE_RECOVERY) {
                 svc->inst.state = STATE_NEW_PROCESS;
                 svc->restart_count++;
+                svc_hold_retry(svc, &now_mono);
                 service_log(svc, "retry-deep");
                 play_card(svc);
             } else if (svc->inst.state == STATE_EXCISED) {
@@ -2099,6 +2103,8 @@ static int get_poll_timeout(void) {
             tick = 1;
         else if (s == STATE_DORMANT)
             best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);
+        else if (s == STATE_NEW_PROCESS && svc->restart_at.tv_sec && ts_ms_ceil(&svc->restart_at) > now_m)
+            best = wake_min(best, ts_ms_ceil(&svc->restart_at), now_m, WAKE_NONE);
         else if (svc_held_on_socket(svc))
             best = wake_min(best, now_m + 1000, now_m, WAKE_NONE);
         else if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED)
