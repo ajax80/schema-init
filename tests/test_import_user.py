@@ -346,6 +346,27 @@ for label, kw in (("no_nm_online", {"nm": False}), ("no_nm_svc", {"nm_svc": Fals
           and not os.path.exists(os.path.join(out, "network-online.svc")))
     t.done()
 
+# --- ConditionUser= judged against the importing user ---
+t = Tree()
+for n, cond in (("notsys", "!@system"), ("sys", "@system"), ("me", "tess"), ("uid", "1000"),
+                ("other", "root")):
+    t.write(t.cfg(n + ".service"), "[Unit]\nConditionUser=%s\n" % cond + SIMPLE)
+    t.enable(n + ".service")
+c, out = run(t)
+made = {f[:-4] for f in os.listdir(out)}
+check("condition_user", made == {"notsys", "me", "uid"} and c["skipped"] == 2)
+t.done()
+
+# --- --out with a trailing slash swaps the dir, not a dir/.new inside it ---
+t = Tree()
+t.write(t.cfg("foo.service"), SIMPLE)
+t.enable("foo.service")
+out = os.path.join(t.run, "schema-user/services")
+si.run_user_import(t.ctx, out + "/", [])
+check("out_trailing_slash", os.path.exists(os.path.join(out, "foo.svc"))
+      and not os.path.exists(os.path.join(out, ".new")) and not os.path.exists(out + ".new"))
+t.done()
+
 # --- drop-in ExecStart reset wins ---
 t = Tree()
 t.write(t.cfg("foo.service"), "[Service]\nExecStart=/bin/old\n")

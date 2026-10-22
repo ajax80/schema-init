@@ -314,8 +314,13 @@ static void print_skipped(int kv) {
         if (!tab) continue;
         *tab = '\0';
         if (nl) *nl = '\0';
-        if (kv)
+        if (kv) {
+            /* keyed like a running service (the shim asks for service.<name>.state);
+             * .timer/.socket keep their suffix so they cannot collide with one */
+            size_t l = strlen(line);
+            if (l > 8 && !strcmp(line + l - 8, ".service")) line[l - 8] = '\0';
             printf("service.%s.state=skipped\nservice.%s.reason=%s\n", line, line, tab + 1);
+        }
         else
             printf("  %-24s skipped (%s)\n", line, tab + 1);
     }

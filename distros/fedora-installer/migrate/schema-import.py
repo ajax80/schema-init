@@ -454,7 +454,8 @@ _COND_RUNTIME = {
     "KernelCommandLine": "kernel_cmdline",
 }
 _COND_STATIC = ("Virtualization", "Security", "ControlGroupController", "Capability",
-                "CPUs", "FirstBoot", "Architecture")
+                "CPUs", "FirstBoot", "Architecture", "User")
+_SYSTEM_UID_MAX = 999   # Fedora's SYS_UID_MAX: ConditionUser=@system
 _ARCH = {"x86_64": "x86-64", "aarch64": "arm64", "i686": "x86", "armv7l": "arm",
          "riscv64": "riscv64", "ppc64le": "ppc64-le", "s390x": "s390x"}
 _FACTS = None   # tests inject host facts here
@@ -551,6 +552,12 @@ def _static_condition(name, arg, facts):
         return a not in _TRUE             # a migrated system is past its first boot
     if name == "Architecture":
         return a == "native" or a == facts["arch"]
+    if name == "User":
+        # the manager's user: the importing user under --user, root for PID 1
+        user, uid = (_USER["user"], _USER["uid"]) if _USER else ("root", 0)
+        if a == "@system":
+            return uid <= _SYSTEM_UID_MAX
+        return a == str(uid) if a.isdigit() else a == user
     return None
 
 
@@ -1850,6 +1857,7 @@ def _keep_hand_written(out_dir, stage):
 
 def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
     # built in out_dir.new and swapped in, so a failure leaves out_dir as it was
+    out_dir = out_dir.rstrip("/") or "/"
     set_user_mode(ctx)
     stage = out_dir + ".new"
     saved = os.environ.get("SCHEMA_SVC_DIR")
