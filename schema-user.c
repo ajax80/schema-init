@@ -247,6 +247,54 @@ static void sig_stop(int s) {
     kill(getpid(), SIGCONT);
 }
 
+#define IMPORT_DEFAULT "/usr/libexec/schema-init/schema-import"
+#define IMPORT_SECS 10
+
+/* Generate the services dir from the user's unit files. Login must never
+ * depend on it: a failing or hung importer is logged and we run with
+ * whatever the dir holds. */
+static void run_import(const char *imp, const char *cfg_home, const char *state_home) {
+    char logp[PATH_MAX];
+    if (!imp[0]) {
+        printf(TAG "import: not run (SCHEMA_USER_IMPORT is empty)\n");
+        return;
+    }
+    if (access(imp, X_OK) != 0) {
+        printf(TAG "import: not run (%s: %s)\n", imp, strerror(errno));
+        return;
+    }
+    join(logp, log_dir, "/import.log");
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf(TAG "import: not run (fork: %s)\n", strerror(errno));
+        return;
+    }
+    if (pid == 0) {
+        int in = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        int out = open(logp, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        if (in >= 0) dup2(in, 0);
+        if (out >= 0) { dup2(out, 1); dup2(out, 2); }
+        setenv("XDG_CONFIG_HOME", cfg_home, 1);
+        setenv("XDG_STATE_HOME", state_home, 1);
+        execl(imp, imp, "--user", "--out", svc_dir, (char *)NULL);
+        _exit(127);
+    }
+    int status;
+    for (int i = 0; i < IMPORT_SECS * 20; i++) {
+        if (waitpid(pid, &status, WNOHANG) == pid) {
+            if (WIFEXITED(status))
+                printf(TAG "import: exit %d\n", WEXITSTATUS(status));
+            else
+                printf(TAG "import: killed by signal %d\n", WTERMSIG(status));
+            return;
+        }
+        usleep(50000);
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    printf(TAG "import: killed after %d s\n", IMPORT_SECS);
+}
+
 static void user_shut_log(const char *msg) {
     printf(TAG "%s\n", msg);
 }
@@ -254,6 +302,8 @@ static void user_shut_log(const char *msg) {
 int main(int argc, char **argv) {
     const char *xdg = getenv("XDG_RUNTIME_DIR");
     const char *state = getenv("XDG_STATE_HOME"), *cfg = getenv("XDG_CONFIG_HOME");
+    const char *imp_env = getenv("SCHEMA_USER_IMPORT");
+    char imp[PATH_MAX];
     char state_home[PATH_MAX], cfg_home[PATH_MAX];
     struct passwd *pw;
     struct sigaction sa;
@@ -270,6 +320,8 @@ int main(int argc, char **argv) {
     }
     if (argc > 1) die("takes no arguments (see -h)");
     if (geteuid() == 0) die("schema-user runs as a user; PID 1 supervises root");
+    /* read before service_environment() clears the environment */
+    snprintf(imp, sizeof imp, "%s", imp_env ? imp_env : IMPORT_DEFAULT);
     runtime_dir_check(xdg);
 
     pw = getpwuid(geteuid());
@@ -323,6 +375,7 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
     engine_hooks.shut_log = user_shut_log;
 
+    run_import(imp, cfg_home, state_home);
     if (engine_load(svc_dir) > 0)
         die("dependency cycle in the service configuration");
     engine_open(0);
