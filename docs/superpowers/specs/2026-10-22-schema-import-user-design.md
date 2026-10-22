@@ -79,7 +79,7 @@
 
 ### 4. Status shows skipped units
 
-`schema-ctl --user status` appends the skip manifest after the service table, one line per unit: `  <unit>  skipped (<reason>)`. `status --json` includes them as `{"name":…, "state":"skipped", "reason":…}`. System-mode status is unchanged.
+`schema-ctl --user status` appends the skip manifest after the service table, one line per unit: `  <unit>  skipped (<reason>)`. `status --kv` gets `state=skipped reason=…` lines. `status --json` is unchanged in this PR *(plan call: JSON is built server-side; it moves with the PR E shim, which consumes it)*. System-mode status is unchanged.
 
 ### 5. Packaging
 
