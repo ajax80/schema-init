@@ -19,12 +19,25 @@ typedef struct {
     const char *shm_name;
     const char *timer_stamp_dir;
     const char *svc_dir;
+    const char *ctl_fallback;   /* NULL = no fallback */
+    const char *env_fallback;
+    const char *svc_fallback;
+    const char *tag;            /* log line prefix */
 } engine_paths_t;
 
 extern engine_paths_t engine_paths;
 
+int engine_mkdir_p(const char *path, mode_t mode);
+
+/* 1 = reload refuses a .svc changed since boot (PID 1: config edits wait for
+ * the next boot). A user supervisor's files are its user's to edit. */
+extern int engine_reload_integrity;
+
 typedef struct {
-    void (*loop_pressure)(void);
+    void (*loop_pressure)(int psi_fired);
+    /* absolute monotonic-ms deadline of the next host wake, or WAKE_NONE;
+     * sets *tick for a source that needs the fixed tick */
+    int64_t (*wake_due)(int64_t now_m, int *tick);
     void (*loop_tail)(void);
     int  (*ctl_extra)(int fd, char *line);
     void (*shut_log)(const char *msg);
@@ -36,6 +49,8 @@ typedef struct {
 extern engine_hooks_t engine_hooks;
 
 void engine_hook_noop(void);
+void engine_hook_pressure_none(int psi_fired);
+int64_t engine_hook_wake_none(int64_t now_m, int *tick);
 int  engine_hook_ctl_none(int fd, char *line);
 void engine_hook_log_none(const char *msg);
 int  engine_hook_reaped_none(pid_t pid, int status);
@@ -71,7 +86,6 @@ int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, 
 int engine_load(const char *svc_dir);
 
 #define SHUT_GRACE_MS   3000
-extern int loop_psi_fired;
 void engine_open(int adopting);
 void engine_arm_timers(int adopting);
 void engine_run(void);

@@ -247,6 +247,31 @@ The package does not restart the broker for you yet. The fallback launcher (`sch
 
 ---
 
+## Per-user supervisor (schema-user)
+
+`schema-user` runs the same engine as PID 1, as an ordinary user, for that user's own services. It refuses to run as root.
+
+**Status: run by hand only.** Nothing starts it at login yet; logind will start and stop it in a later release. Your desktop session does not depend on it.
+
+| What | Where |
+|---|---|
+| Service files | `$XDG_RUNTIME_DIR/schema-user/services/*.svc` (same syntax as PID 1's) |
+| Control socket | `$XDG_RUNTIME_DIR/schema-user/ctl.sock`, mode 0600 |
+| Notify socket | `$XDG_RUNTIME_DIR/schema-user/notify` |
+| Service and rail logs | `$XDG_STATE_HOME/schema-user/log/` (default `~/.local/state/schema-user/log/`) |
+| Persistent timer stamps | `$XDG_STATE_HOME/schema-user/timers/` |
+
+Drive it with `schema-ctl --user`, e.g. `schema-ctl --user status` or `schema-ctl --user restart <svc>`.
+
+- `XDG_RUNTIME_DIR` must be set and be a directory you own, or it exits 1. A second copy for the same user exits 1 with "already running".
+- Services start with `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus`, plus `KEY=VALUE` lines from `*.conf` in `/usr/lib/environment.d`, `/etc/environment.d` and `$XDG_CONFIG_HOME/environment.d`, in that order (later wins). `$VAR` and `${VAR}` are expanded; nothing else is. The environment `schema-user` itself was started with is not passed on, so `WAYLAND_DISPLAY` and `DISPLAY` never leak in.
+- It gives each service its own cgroup only if the cgroup it was started in was delegated to you (you can write its `cgroup.procs` and create directories in it). It moves itself into `init.scope` there. Otherwise it says so once and runs without per-service cgroups.
+- Without a delegated cgroup, `notify=` (and so `watchdog_sec=`) and `ready_bus_name=` cannot attribute a message to a service and fall back to `ready_path`/`stable_secs`, and a `pid_file=` service is excised. These need the delegation logind will set up.
+- It is a child subreaper: a service's double-forked daemon stays its child. On SIGTERM or SIGINT it stops services in reverse dependency order, kills anything still reparented to it, and exits 0.
+- `wait_socket=<path>` in a `.svc` holds a service until a connection to that `AF_UNIX` socket succeeds (a socket file left by a dead listener does not count). Point session services at `$XDG_RUNTIME_DIR/bus` to start them once the session bus is up; `schema-ctl --user status` shows `waiting=<path>` meanwhile.
+
+---
+
 ## Crashes
 
 Fedora's initrd points `kernel.core_pattern` at `systemd-coredump`, which hands each core to a socket-activated `systemd-coredump.socket` that does not exist under schema-init, so every crash is logged as "Failed to connect to coredump service" and the core is thrown away. At boot PID 1 replaces **that** pattern, or the kernel's default `core` when the initrd sets none, with `schema-coredump` (apport, abrt or a pattern you set by hand is left alone), then raises its soft `RLIMIT_CORE` to the hard limit so services inherit a limit the helper can honour.

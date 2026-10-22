@@ -40,6 +40,27 @@
 #include <dirent.h>
 #include <mntent.h>
 
+static void elog(FILE *f, const char *fmt, ...) {
+    va_list ap;
+    fprintf(f, "[%s] ", engine_paths.tag);
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+}
+
+int engine_mkdir_p(const char *path, mode_t mode) {
+    char buf[PATH_MAX];
+    if (snprintf(buf, sizeof buf, "%s", path) >= (int)sizeof buf) { errno = ENAMETOOLONG; return -1; }
+    for (char *p = buf + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        if (mkdir(buf, mode) < 0 && errno != EEXIST) return -1;
+        *p = '/';
+    }
+    if (mkdir(buf, mode) < 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
 #define TICK_USEC       250000   /* 250ms main loop tick */
 #define READY_POLL_MS   10       /* while a starting service's ready_path is awaited, */
 #define READY_POLL_SECS 3        /* ...for this long after its spawn */
@@ -103,7 +124,7 @@ static void timer_arm_calendar(service_t *svc) {
 }
 
 /* ── persistent calendar timers (persistent=1): catch up a fire missed while
- * the machine was down. Last run is stamped to /var/lib/schema-init/timers/. ── */
+ * the machine was down. Last run is stamped under engine_paths.timer_stamp_dir. ── */
 
 static void timer_stamp_path(const service_t *svc, char *buf, size_t n) {
     snprintf(buf, n, "%s/%s.stamp", engine_paths.timer_stamp_dir, svc->name);
@@ -120,9 +141,7 @@ static time_t timer_stamp_read(const service_t *svc) {
 }
 
 static void timer_stamp_write(const service_t *svc, time_t t) {
-    mkdir("/var/lib", 0755);
-    mkdir("/var/lib/schema-init", 0755);
-    mkdir(engine_paths.timer_stamp_dir, 0755);
+    engine_mkdir_p(engine_paths.timer_stamp_dir, 0755);
     char path[256]; timer_stamp_path(svc, path, sizeof path);
     FILE *f = fopen(path, "w");
     if (!f) return;
@@ -168,7 +187,7 @@ time_t mono_sec(void) {
  * and a cgroup that no longer exists holds nothing. Otherwise unreadable
  * counts as populated so the kill is still attempted. */
 static int cgroup_populated(const char *cg) {
-    char path[160], line[64];
+    char path[320], line[64];
     FILE *f;
     int pop = 1;
     snprintf(path, sizeof path, "%s/cgroup.events", cg);
@@ -227,7 +246,7 @@ void eviction_readded(void) {
         if (s == svc_count) { i++; continue; }
         if (cgroup_populated(evictions[i].cgroup)) {
             cgroup_kill_path(evictions[i].cgroup);
-            printf("[schema-init] '%s' is back in the configuration: force-killed what its evicted instance left in %s\n",
+            elog(stdout, "'%s' is back in the configuration: force-killed what its evicted instance left in %s\n",
                    services[s].name, evictions[i].cgroup);
         }
         eviction_drop(i);
@@ -245,7 +264,7 @@ static void eviction_tick(void) {
             /* a task stuck in D state outlives SIGKILL; dropping the entry
              * would leak the cgroup once it finally dies, so keep checking */
             if (evictions[i].killed == 1)
-                printf("[schema-init] eviction: %s still populated %d s after SIGKILL\n",
+                elog(stdout, "eviction: %s still populated %d s after SIGKILL\n",
                        evictions[i].cgroup, EVICT_KILL_WAIT_SECS);
             evictions[i].killed   = 2;
             evictions[i].deadline = now + EVICT_STUCK_RECHECK_SECS;
@@ -265,10 +284,10 @@ static void eviction_tick(void) {
             killed = 1;
         }
         if (killed && !evictions[i].reaped)
-            printf("[schema-init] eviction grace expired: force-killed pid=%d\n",
+            elog(stdout, "eviction grace expired: force-killed pid=%d\n",
                    (int)evictions[i].pid);
         else if (killed)
-            printf("[schema-init] eviction grace expired: force-killed leftovers in %s\n",
+            elog(stdout, "eviction grace expired: force-killed leftovers in %s\n",
                    evictions[i].cgroup);
         if (killed && evictions[i].cgroup[0]) {
             /* SIGKILL lands asynchronously; eviction_reaped() removes the
@@ -303,7 +322,7 @@ static void service_watchdog_tick(void) {
             svc->wd_abort_at = (struct timespec){0, 0};
             svc->last_pet = now;
         } else {
-            printf("[schema-init] watchdog: '%s' sent no WATCHDOG=1 for %ds — SIGABRT\n",
+            elog(stdout, "watchdog: '%s' sent no WATCHDOG=1 for %ds — SIGABRT\n",
                    svc->name, svc->wd_armed_sec);
             service_log(svc, "watchdog-abort");
             kill(svc->child_pid, SIGABRT);
@@ -317,10 +336,11 @@ static void load_env_file(void) {
     const char *path = envp;
     snprintf(envp, sizeof envp, "%s/env", engine_paths.run_dir);
     int fd = service_open_trusted(path);
-    if (fd < 0 && errno != EPERM) fd = service_open_trusted(path = "./run/schema-init/env");
+    if (fd < 0 && errno != EPERM && engine_paths.env_fallback)
+        fd = service_open_trusted(path = engine_paths.env_fallback);
     if (fd < 0) {
         if (errno == EPERM)
-            fprintf(stderr, "[schema-init] REFUSED %s: not a regular file owned by root and "
+            elog(stderr, "REFUSED %s: not a regular file owned by root and "
                     "writable only by its owner — not loaded\n", path);
         return;
     }
@@ -332,7 +352,7 @@ static void load_env_file(void) {
     while ((r = svc_read_line(f, line, sizeof(line))) != 0) {
         char *start = line;
         if (r < 0) {
-            fprintf(stderr, "[schema-init] %s: line longer than %zu bytes — ignored\n",
+            elog(stderr, "%s: line longer than %zu bytes — ignored\n",
                     path, sizeof(line) - 1);
             continue;
         }
@@ -479,7 +499,7 @@ static void note_exit(service_t *svc, int status) {
  * service's cgroup, so a stale or planted file cannot hand PID 1 some other
  * process to supervise and kill. 0 if not (yet) valid. */
 static pid_t pid_file_read(const service_t *svc) {
-    char path[160], buf[32];
+    char path[320], buf[32];
     struct stat st;
     FILE *f;
     long p = 0, q;
@@ -774,6 +794,29 @@ static void active_kill_service(service_t *svc) {
 
 /* ── schema tick for one service ────────────────────────────────────── */
 
+/* A socket file can outlive its listener (the bus died), so only a completed
+ * connect counts. A listener whose backlog is full refuses with EAGAIN and is
+ * retried on the next pass. */
+static int socket_accepts(const char *path) {
+    struct sockaddr_un a;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0), ok;
+    if (fd < 0) return 0;
+    memset(&a, 0, sizeof a);
+    a.sun_family = AF_UNIX;
+    size_t n = strlen(path);
+    if (n >= sizeof a.sun_path) { close(fd); return 0; }
+    memcpy(a.sun_path, path, n + 1);
+    ok = connect(fd, (struct sockaddr *)&a, sizeof a) == 0;
+    close(fd);
+    return ok;
+}
+
+/* sock_waiting is only recomputed in NEW_PROCESS; a held service that is
+ * stopped or excised keeps the stale flag. */
+static int svc_held_on_socket(const service_t *svc) {
+    return svc->sock_waiting && svc->inst.state == STATE_NEW_PROCESS;
+}
+
 /* A ready_path counts only once it is not the file that was already there
  * at spawn: a marker or socket left by a crashed run must not promote the new
  * one. ctime catches a rewrite in place and a new file on a reused inode. */
@@ -891,6 +934,14 @@ static void tick_service(service_t *svc,
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
+            if (svc->wait_socket[0] && !socket_accepts(svc->wait_socket)) {
+                if (!svc->sock_waiting) {
+                    svc->sock_waiting = 1;
+                    service_log(svc, "wait-socket");
+                }
+                break;
+            }
+            svc->sock_waiting = 0;
             if (svc->cond_count) {
                 char why[160];
                 if (!service_conditions_met(svc, why, sizeof why)) {
@@ -1103,7 +1154,16 @@ static void tick_service(service_t *svc,
 /* ── shared memory export ───────────────────────────────────────────── */
 
 static void shm_init(void) {
-    int fd = shm_open(engine_paths.shm_name, O_CREAT | O_RDWR, 0644);
+    int fd;
+    /* /dev/shm is shared by every user: a non-root supervisor's export is
+     * its own, fresh and private. A name another user already holds can't be
+     * unlinked by us, and then there is simply no export. */
+    if (geteuid() != 0) {
+        shm_unlink(engine_paths.shm_name);
+        fd = shm_open(engine_paths.shm_name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    } else {
+        fd = shm_open(engine_paths.shm_name, O_CREAT | O_RDWR, 0644);
+    }
     if (fd < 0) return;
     ftruncate(fd, (off_t)sizeof(schema_shm_t));
     shm_ptr = mmap(NULL, sizeof(schema_shm_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -1462,6 +1522,8 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));
                 ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
                 ctl_writef(fd, "service.%s.last_exit=%s\n", services[i].name, last_exit_str(&services[i]));
+                if (svc_held_on_socket(&services[i]))
+                    ctl_writef(fd, "service.%s.waiting=%s\n", services[i].name, services[i].wait_socket);
             }
         } else if (*opt) {
             for (i = 0; i < svc_count && strcmp(services[i].name, opt) != 0; i++) ;
@@ -1504,11 +1566,13 @@ static void ctl_cmd(int fd, char *line) {
                 int sk = services[i].fdstore_max > 0 ? fdstore_count(services[i].name) : 0;
                 if (sk > 0)
                     snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  fds=%d", sk);
-                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s\n",
+                ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s%s%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count, deck,
                     services[i].term_signal ? "  last=" : "",
-                    services[i].term_signal ? last_exit_str(&services[i]) : "");
+                    services[i].term_signal ? last_exit_str(&services[i]) : "",
+                    svc_held_on_socket(&services[i]) ? "  waiting=" : "",
+                    svc_held_on_socket(&services[i]) ? services[i].wait_socket : "");
             }
         }
 
@@ -1773,19 +1837,20 @@ static void ctl_init(void) {
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, engine_paths.ctl_sock, sizeof(addr.sun_path) - 1);
     if (bind(ctl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        /* try local fallback path */
+        if (!engine_paths.ctl_fallback) { close(ctl_fd); ctl_fd = -1; return; }
         mkdir("./run", 0755);
-        unlink("./run/schema-init.sock");
-        strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
+        unlink(engine_paths.ctl_fallback);
+        strncpy(addr.sun_path, engine_paths.ctl_fallback, sizeof(addr.sun_path) - 1);
         if (bind(ctl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
             close(ctl_fd); ctl_fd = -1; return;
         }
     }
     /* If a "schema" group exists, grant it read-only access (status/list/timing)
      * by opening the socket to root:schema 0660. Writes are still gated per-call
-     * by peer uid in ctl_poll(). No group → root-only 0600 as before. */
+     * by peer uid in ctl_poll(). No group → root-only 0600 as before. A non-root
+     * supervisor can't chown to root, so its socket is owner-only. */
     {
-        struct group *g = getgrnam("schema");
+        struct group *g = geteuid() == 0 ? getgrnam("schema") : NULL;
         if (g && chown(addr.sun_path, 0, g->gr_gid) == 0)
             chmod(addr.sun_path, 0660);
         else
@@ -1902,7 +1967,7 @@ void notify_pause_track(void) {
     time_t now = mono_sec();
     if (paused) {
         notify_paused_since = now ? now : 1;
-        printf("[schema-init] notify: reads paused, %d fd closers stuck, %d fds parked; senders:",
+        elog(stdout, "notify: reads paused, %d fd closers stuck, %d fds parked; senders:",
                fdclose_n, fdclose_nparked);
         for (int i = 0, shown = 0; i < fdclose_n && shown < 8; i++) {
             int seen = fdclose_from_pid[i] <= 0;
@@ -1932,7 +1997,7 @@ void notify_pause_track(void) {
             svc->spawn_time_mono.tv_sec += dt < ran ? dt : ran;
         }
     }
-    printf("[schema-init] notify: reads resumed after %lds\n", (long)dt);
+    elog(stdout, "notify: reads resumed after %lds\n", (long)dt);
 }
 
 static int fdstore_keep(const char *name, void *ctx) {
@@ -1955,8 +2020,8 @@ static void ctl_poll(void) {
     if (cfd < 0) return;
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    /* Peer identity: root may run everything; schema-group members (allowed in
-     * by the 0660 socket) get read-only verbs only. */
+    /* Peer identity: root and our own uid may run everything; schema-group
+     * members (allowed in by the 0660 socket) get read-only verbs only. */
     struct ucred cred;
     socklen_t clen = sizeof(cred);
     uid_t peer_uid = (uid_t)-1;
@@ -1971,7 +2036,7 @@ static void ctl_poll(void) {
     if (pos > 0) {
         buf[pos] = '\0';
         buf[strcspn(buf, "\r\n")] = '\0';
-        if (peer_uid != 0 && !ctl_is_readonly(buf)) {
+        if (peer_uid != 0 && peer_uid != geteuid() && !ctl_is_readonly(buf)) {
             ctl_writef(cfd, "err: '%s' requires root (uid %d has read-only access)\n",
                        buf, (int)peer_uid);
             write(cfd, ".\n", 2);
@@ -2001,13 +2066,18 @@ static void signalfd_init(void) {
 static int get_poll_timeout(void) {
     struct timespec ts;
     int64_t now_m, now_r, best = WAKE_NONE;
-    int i, tick = system_under_pressure || psi_fd < 0, watched = 0, critical = 0, awaiting = 0;
+    int64_t host;
+    int i, tick = 0, watched = 0, awaiting = 0;
 
     if (pass_changed)
         return 0;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     now_m = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    host = engine_hooks.wake_due(now_m, &tick);
+    /* WAKE_NONE through wake_min would become a finite ~INT64_MAX timeout */
+    if (host != WAKE_NONE)
+        best = wake_min(best, host, now_m, WAKE_NONE);
     clock_gettime(CLOCK_REALTIME, &ts);
     now_r = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
@@ -2021,8 +2091,6 @@ static int get_poll_timeout(void) {
             awaiting = 1;
         if (tick)
             continue;
-        if (svc->priority == PRIO_CRITICAL && svc->child_pid > 0)
-            critical = 1;
         if (svc->wd_armed_sec > 0 && svc->child_pid > 0 && svc->notify_ready && !svc->ctl_killed &&
             !svc->is_frozen)
             best = wake_min(best, svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec),
@@ -2031,6 +2099,8 @@ static int get_poll_timeout(void) {
             tick = 1;
         else if (s == STATE_DORMANT)
             best = wake_min(best, ts_ms_ceil(&svc->dormant_until), now_m, WAKE_NONE);
+        else if (svc_held_on_socket(svc))
+            best = wake_min(best, now_m + 1000, now_m, WAKE_NONE);
         else if (s != STATE_FUNDAMENTAL && s != STATE_PERFECT && s != STATE_EXCISED)
             tick = 1;
         else if (s == STATE_FUNDAMENTAL && svc->ready_path[0] && svc->child_pid > 0) {
@@ -2050,14 +2120,8 @@ static int get_poll_timeout(void) {
         best = wake_min(best, (int64_t)evictions[i].deadline * 1000, now_m, WAKE_NONE);
     if (watched)
         best = wake_min(best, ready_backstop_due, now_m, WAKE_NONE);
-    if (critical)
-        best = wake_min(best, cpu_check_due, now_m, WAKE_NONE);
     if (ready_event_due)
         best = wake_min(best, ready_event_due, now_m, WAKE_NONE);
-    if (watchdog_fd >= 0)
-        best = wake_min(best, now_m + watchdog_pet_ms, now_m, WAKE_NONE);
-    if (reexec_check_pid > 0 && !reexec_check_killed)
-        best = wake_min(best, reexec_check_due, now_m, WAKE_NONE);
     return wake_timeout(best, tick || awaiting, awaiting ? READY_POLL_MS : TICK_USEC / 1000);
 }
 
@@ -2086,7 +2150,7 @@ int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, 
                 if (strcmp(svc_table[j].name, svc_table[s].dep_name[d]) == 0) {
                     svc_table[s].dep_idx[d] = j;
                     if (svc_table[j].flags & SVC_TIMER) {
-                        printf("[schema-init] WARNING: service '%s' depends on timer service '%s'. Dependents of timer services may be transiently blocked when the timer fires.\n",
+                        elog(stdout, "WARNING: service '%s' depends on timer service '%s'. Dependents of timer services may be transiently blocked when the timer fires.\n",
                                svc_table[s].name, svc_table[j].name);
                     }
                     break;
@@ -2111,13 +2175,13 @@ int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, 
  * channel they asked on. */
 static int handle_reload(int evict_mode, char *err, size_t errsz) {
     int i, j;
-    printf("[schema-init] reloading configuration (SIGHUP)... \n");
+    elog(stdout, "reloading configuration (SIGHUP)... \n");
 
     const char *svc_dir = engine_paths.svc_dir;
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     int shadow_count = services_load(svc_dir, shadow_services, MAX_SERVICES);
     if (svc_refused) {
-        printf("[schema-init] reload rejected: %d file(s)/dir(s) refused on owner/mode\n", svc_refused);
+        elog(stdout, "reload rejected: %d file(s)/dir(s) refused on owner/mode\n", svc_refused);
         if (err) snprintf(err, errsz, "%d .svc file(s) or service dir(s) refused: not root-owned or writable "
                           "by others — see the REFUSED/WARN lines (chown root:root; chmod go-w)", svc_refused);
         for (i = 0; i < shadow_count; i++) {
@@ -2127,28 +2191,28 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
         }
         return -1;
     }
-    if (shadow_count == 0) {
-        shadow_count = services_load("./services", shadow_services, MAX_SERVICES);
+    if (shadow_count == 0 && engine_paths.svc_fallback) {
+        shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
     }
     if (shadow_count <= 0) {
-        printf("[schema-init] reload failed: no services loaded from configuration\n");
+        elog(stdout, "reload failed: no services loaded from configuration\n");
         if (err) snprintf(err, errsz, "no services loaded from configuration");
         return -1;
     }
 
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
     int shadow_grp_count = groups_load(svc_dir, shadow_groups, MAX_GROUPS);
-    if (shadow_grp_count == 0) {
-        shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
+    if (shadow_grp_count == 0 && engine_paths.svc_fallback) {
+        shadow_grp_count = groups_load(engine_paths.svc_fallback, shadow_groups, MAX_GROUPS);
     }
 
     /* hash integrity check — reject any .svc file modified since boot */
-    for (i = 0; i < shadow_count; i++) {
+    for (i = 0; engine_reload_integrity && i < shadow_count; i++) {
         for (j = 0; j < svc_count; j++) {
             if (strcmp(shadow_services[i].name, services[j].name) != 0) continue;
             if (shadow_services[i].content_hash != services[j].content_hash &&
                 shadow_services[i].content_hash != 0) {
-                printf("[schema-init] INTEGRITY: '%s' hash mismatch — file modified since boot; reload rejected\n",
+                elog(stdout, "INTEGRITY: '%s' hash mismatch — file modified since boot; reload rejected\n",
                        shadow_services[i].name);
                 if (err) snprintf(err, errsz,
                     "'%s' modified since boot — integrity check rejected the reload; "
@@ -2165,7 +2229,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     }
 
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
-        printf("[schema-init] reload rejected: dependency cycles detected in new configuration\n");
+        elog(stdout, "reload rejected: dependency cycles detected in new configuration\n");
         if (err) snprintf(err, errsz, "dependency cycle in new configuration");
         /* free duplicated arguments in shadow array to prevent leaks */
         for (i = 0; i < shadow_count; i++) {
@@ -2214,9 +2278,9 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     /* Identify and clean up orphaned running services */
     for (j = 0; j < svc_count; j++) {
         if (services[j].child_pid > 0 || services[j].failsafe_pid > 0) {
-            printf("[schema-init] service '%s' is orphaned in new configuration\n", services[j].name);
+            elog(stdout, "service '%s' is orphaned in new configuration\n", services[j].name);
             if (evict_mode) {
-                printf("[schema-init] evicting orphaned service '%s' (pid=%d)\n", services[j].name, (int)services[j].child_pid);
+                elog(stdout, "evicting orphaned service '%s' (pid=%d)\n", services[j].name, (int)services[j].child_pid);
                 if (services[j].child_pid > 0) {
                     kill(services[j].child_pid, SIGTERM);
                     /* the service struct goes with this reload, and with it
@@ -2238,7 +2302,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                     kill(services[j].failsafe_pid, SIGTERM);
                 }
             } else {
-                printf("[schema-init] service '%s' (pid=%d) running unmanaged to natural death\n", services[j].name, (int)services[j].child_pid);
+                elog(stdout, "service '%s' (pid=%d) running unmanaged to natural death\n", services[j].name, (int)services[j].child_pid);
             }
         }
         service_listen_close(&services[j]);
@@ -2263,7 +2327,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     shadow_groups = tmp_grp;
     grp_count = shadow_grp_count;
 
-    printf("[schema-init] configuration reload completed successfully (generation updated)\n");
+    elog(stdout, "configuration reload completed successfully (generation updated)\n");
     eviction_readded();
 
     /* Arm newly introduced timer services or ensure they are scheduled */
@@ -2289,22 +2353,12 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
 }
 
 int engine_load(const char *svc_dir) {
-    char cmdline[4096] = "", hd[64] = "";
-    int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
-    if (fd >= 0) { ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1); if (n > 0) cmdline[n] = '\0'; close(fd); }
-    fd = open("/etc/schema-init/hardening-default", O_RDONLY | O_CLOEXEC);
-    int have = fd >= 0;
-    if (have) { ssize_t n = read(fd, hd, sizeof(hd) - 1); if (n > 0) hd[n] = '\0'; close(fd); }
-    int on = hardening_default_resolve(cmdline, have ? hd : NULL);
-    service_set_hardening_default(on);
-    fprintf(stderr, "[schema-init] hardening default: %s\n", on ? "ON" : "off");
-
     svc_count = services_load(svc_dir, services, MAX_SERVICES);
-    if (svc_count == 0)
-        svc_count = services_load("./services", services, MAX_SERVICES);
+    if (svc_count == 0 && engine_paths.svc_fallback)
+        svc_count = services_load(engine_paths.svc_fallback, services, MAX_SERVICES);
     grp_count = groups_load(svc_dir, groups, MAX_GROUPS);
-    if (grp_count == 0)
-        grp_count = groups_load("./services", groups, MAX_GROUPS);
+    if (grp_count == 0 && engine_paths.svc_fallback)
+        grp_count = groups_load(engine_paths.svc_fallback, groups, MAX_GROUPS);
     return validate_and_resolve(services, svc_count, groups, grp_count);
 }
 #define SHUT_TOTAL_MS  12000
@@ -2325,7 +2379,7 @@ static int shut_depends_on(const service_t *s, int target) {
 /* Signal every process in a service's cgroup, main PID included; sig 0 just
  * counts the live ones. A service is down only when this reaches 0. */
 static int svc_signal_all(service_t *svc, int sig) {
-    char path[160];
+    char path[320];
     FILE *f;
     pid_t p;
     int live = 0;
@@ -2428,7 +2482,6 @@ static void shutdown_ordered(void) {
     engine_hooks.shut_log(msg);
 }
 
-int loop_psi_fired;
 
 void engine_open(int adopting) {
     service_notify_sock = engine_paths.notify_sock;
@@ -2544,7 +2597,7 @@ void engine_run(void) {
                         if (fds[e].revents & (POLLERR | POLLNVAL)) {
                             close(psi_fd);
                             psi_fd = -1;
-                            printf("[schema-init] memory pressure: psi trigger lost, avg10 polling\n");
+                            elog(stdout, "memory pressure: psi trigger lost, avg10 polling\n");
                         } else if (fds[e].revents & POLLPRI) {
                             psi_fired = 1;
                         }
@@ -2579,8 +2632,7 @@ void engine_run(void) {
             usleep(TICK_USEC);
         }
 
-        loop_psi_fired = psi_fired;
-        engine_hooks.loop_pressure();
+        engine_hooks.loop_pressure(psi_fired);
 
         {
             int64_t now = (int64_t)monotonic_ms();
@@ -2647,7 +2699,7 @@ void engine_release(void) {
     if (ctl_fd >= 0) {
         close(ctl_fd);
         unlink(engine_paths.ctl_sock);
-        unlink("./run/schema-init.sock");
+        if (engine_paths.ctl_fallback) unlink(engine_paths.ctl_fallback);
     }
 
     if (shm_ptr) {

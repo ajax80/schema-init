@@ -14,7 +14,7 @@
 
 typedef struct {
     pid_t  pid;
-    char   cgroup[128];
+    char   cgroup[256];
     time_t deadline;
     int    reaped;     /* pid already waited for: only the cgroup is left */
     int    killed;     /* SIGKILL sent; waiting for the cgroup to empty */

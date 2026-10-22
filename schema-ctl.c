@@ -37,9 +37,14 @@ static struct g_node *g_find_arg(const char *arg) {
     return n;
 }
 
+/* --user points both at $XDG_RUNTIME_DIR/schema-user */
+static const char *ctl_sock = CTL_SOCK_PATH;
+static const char *svc_dir = SVC_DIR;
+static int user_mode;
+
 static const char *g_dir(void) {
     const char *e = getenv("SCHEMA_SVC_DIR");
-    return e && e[0] ? e : SVC_DIR;
+    return e && e[0] ? e : svc_dir;
 }
 
 static int g_load_file(const char *path, struct g_node *n, int dropin, int *has_exec) {
@@ -289,6 +294,7 @@ static void usage(FILE *out) {
         "  reboot\n"
         "  poweroff\n"
         "\n"
+        "  --user <cmd...>        talk to this user's schema-user instead of PID 1\n"
         "  --help                 this text\n"
         "  --version              print version and exit\n"
         "\n"
@@ -303,6 +309,22 @@ int main(int argc, char **argv) {
     size_t rlen;
     ssize_t n;
     struct sockaddr_un addr;
+
+    if (argc > 1 && strcmp(argv[1], "--user") == 0) {
+        static char usock[PATH_MAX], udir[PATH_MAX];
+        const char *xdg = getenv("XDG_RUNTIME_DIR");
+        if (!xdg || !xdg[0]) {
+            fprintf(stderr, "schema-ctl --user: XDG_RUNTIME_DIR is not set\n");
+            return 1;
+        }
+        snprintf(usock, sizeof usock, "%s/schema-user/ctl.sock", xdg);
+        snprintf(udir, sizeof udir, "%s/schema-user/services", xdg);
+        ctl_sock = usock;
+        svc_dir = udir;
+        user_mode = 1;
+        argv++;
+        argc--;
+    }
 
     if (argc < 2) {
         usage(stderr);
@@ -341,7 +363,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "usage: schema-ctl cat <svc>\n");
             return 1;
         }
-        snprintf(path, sizeof path, "%s/%s.svc", SVC_DIR, argv[2]);
+        snprintf(path, sizeof path, "%s/%s.svc", svc_dir, argv[2]);
         if (access(path, R_OK) < 0) {
             fprintf(stderr, "schema-ctl: %s: %s\n", path, strerror(errno));
             return 1;
@@ -372,7 +394,7 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "add") == 0 && argc == 3 && argv[2][0] && !strchr(argv[2], '/')) {
         size_t l = strlen(argv[2]);
         int has_ext = l > 4 && strcmp(argv[2] + l - 4, ".svc") == 0;
-        snprintf(addpath, sizeof addpath, "%s/%s%s", SVC_DIR, argv[2], has_ext ? "" : ".svc");
+        snprintf(addpath, sizeof addpath, "%s/%s%s", svc_dir, argv[2], has_ext ? "" : ".svc");
         argv[2] = addpath;
     }
 
@@ -393,21 +415,25 @@ int main(int argc, char **argv) {
 
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, CTL_SOCK_PATH, sizeof(addr.sun_path) - 1);
+    strncpy(addr.sun_path, ctl_sock, sizeof(addr.sun_path) - 1);
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         int first_errno = errno;
         int connected = 0;
         /* try local fallback only when explicitly requested */
-        if (getenv("SCHEMA_CTL_FALLBACK")) {
+        if (!user_mode && getenv("SCHEMA_CTL_FALLBACK")) {
             memset(&addr, 0, sizeof(addr));
             addr.sun_family = AF_UNIX;
             strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
             connected = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
         }
         if (!connected) {
-            fprintf(stderr, "%s: %s\n", CTL_SOCK_PATH, strerror(first_errno));
-            if (first_errno == EACCES || first_errno == EPERM)
+            fprintf(stderr, "%s: %s\n", ctl_sock, strerror(first_errno));
+            if (user_mode && first_errno == ENOENT)
+                fprintf(stderr, "no socket there — is schema-user running for this user?\n");
+            else if (user_mode)
+                ;
+            else if (first_errno == EACCES || first_errno == EPERM)
                 fprintf(stderr, "schema-ctl talks to PID 1 as root: try sudo schema-ctl %s", cmd);
             else if (first_errno == ENOENT)
                 fprintf(stderr, "no socket there — is schema-init running as PID 1?\n");

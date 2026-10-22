@@ -164,6 +164,18 @@ static void load_configured_modules(void) {
     globfree(&g);
 }
 
+static void pid1_hardening_default(void) {
+    char cmdline[4096] = "", hd[64] = "";
+    int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) { ssize_t n = read(fd, cmdline, sizeof(cmdline) - 1); if (n > 0) cmdline[n] = '\0'; close(fd); }
+    fd = open("/etc/schema-init/hardening-default", O_RDONLY | O_CLOEXEC);
+    int have = fd >= 0;
+    if (have) { ssize_t n = read(fd, hd, sizeof(hd) - 1); if (n > 0) hd[n] = '\0'; close(fd); }
+    int on = hardening_default_resolve(cmdline, have ? hd : NULL);
+    service_set_hardening_default(on);
+    fprintf(stderr, "[schema-init] hardening default: %s\n", on ? "ON" : "off");
+}
+
 static void rescue_boot(void) {
     char cl[4096] = "";
     int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
@@ -453,7 +465,7 @@ static void setup_signals(void) {
 /* ── resource pressure and quarantine executive ─────────────────────── */
 
 static double read_cpu_pressure(const char *cgroup_path) {
-    char path[256];
+    char path[320];
     FILE *f;
     double avg10 = 0.0;
     if (!cgroup_path[0]) return 0.0;
@@ -510,7 +522,7 @@ static void psi_open(void) {
 }
 
 static void set_cgroup_freeze(service_t *svc, int freeze) {
-    char path[256];
+    char path[320];
     int fd;
     if (!svc->cgroup_path[0]) return;
     if (svc->is_frozen == freeze) return;
@@ -531,7 +543,7 @@ static void set_cgroup_freeze(service_t *svc, int freeze) {
 }
 
 static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
-    char path[256];
+    char path[320];
     int fd;
     if (!svc->cgroup_path[0]) return;
     snprintf(path, sizeof(path), "%s/cpu.max", svc->cgroup_path);
@@ -546,7 +558,7 @@ static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
  * skip. Critical services and tiny cgroups are left alone. Cheap (a single
  * memory.current read) — safe to run inline in PID 1. */
 static long reclaim_read_target(const service_t *svc) {
-    char path[256];
+    char path[320];
     long cur;
     FILE *f;
     if (!svc->cgroup_path[0]) return 0;
@@ -562,7 +574,7 @@ static long reclaim_read_target(const service_t *svc) {
 /* The memory.reclaim write is SYNCHRONOUS — the kernel reclaims in the writer's
  * context. Run it only in the forked child (reclaim_pass), never in PID 1. */
 static void reclaim_cgroup_write(const service_t *svc, long target) {
-    char path[256], buf[32];
+    char path[320], buf[32];
     int fd, n;
     snprintf(path, sizeof(path), "%s/memory.reclaim", svc->cgroup_path);
     fd = open(path, O_WRONLY);
@@ -704,6 +716,8 @@ static int reexec_check_main(int blob_fd) {
      * the verdict is the only thing on it however much the loader says */
     int verdict = dup(STDOUT_FILENO);
     dup2(STDERR_FILENO, STDOUT_FILENO);
+    /* the default changes what a .svc loads as, so the check must see it too */
+    pid1_hardening_default();
     rc = reexec_validate(blob_fd, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, sizeof err);
     fflush(stdout);
     if (rc < 0) {
@@ -1080,11 +1094,11 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
     shadow_count = services_load(engine_paths.svc_dir, shadow_services, MAX_SERVICES);
-    if (shadow_count == 0)
-        shadow_count = services_load("./services", shadow_services, MAX_SERVICES);
+    if (shadow_count == 0 && engine_paths.svc_fallback)
+        shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
     shadow_grp_count = groups_load(engine_paths.svc_dir, shadow_groups, MAX_GROUPS);
-    if (shadow_grp_count == 0)
-        shadow_grp_count = groups_load("./services", shadow_groups, MAX_GROUPS);
+    if (shadow_grp_count == 0 && engine_paths.svc_fallback)
+        shadow_grp_count = groups_load(engine_paths.svc_fallback, shadow_groups, MAX_GROUPS);
 
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", engine_paths.svc_dir);
@@ -1513,8 +1527,8 @@ static void remount_all_ro(void) {
 /* Survival posture: enter on the first stalled pass, thaw after
  * THAW_DELAY_MS without one. With a psi trigger armed, memory stall is
  * the trigger alone; avg10's ~14 s decay would hold the thaw. */
-static void pid1_loop_pressure(void) {
-    int mem = loop_psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
+static void pid1_loop_pressure(int psi_fired) {
+    int mem = psi_fired || (psi_fd < 0 && read_system_mem_pressure() > 10.0);
     uint64_t now = monotonic_ms();
     /* avg10 only moves every 2 s; reading it faster returns the same value. */
     if ((int64_t)now >= cpu_check_due) {
@@ -1532,6 +1546,26 @@ static void pid1_loop_pressure(void) {
     }
     if (system_under_pressure && mem)
         reclaim_maybe();
+}
+
+/* Without a psi trigger, or in survival posture, pressure is polled on the
+ * tick. The cpu check only matters while a critical service runs, and under
+ * the tick it rides that instead. */
+static int64_t pid1_wake_due(int64_t now_m, int *tick) {
+    int64_t due = WAKE_NONE;
+    int i;
+    if (system_under_pressure || psi_fd < 0)
+        *tick = 1;
+    for (i = 0; !*tick && i < svc_count; i++)
+        if (services[i].priority == PRIO_CRITICAL && services[i].child_pid > 0) {
+            due = cpu_check_due;
+            break;
+        }
+    if (watchdog_fd >= 0 && now_m + watchdog_pet_ms < due)
+        due = now_m + watchdog_pet_ms;
+    if (reexec_check_pid > 0 && !reexec_check_killed && reexec_check_due < due)
+        due = reexec_check_due;
+    return due;
 }
 
 static int pid1_on_reaped(pid_t pid, int status) {
@@ -1681,6 +1715,7 @@ int main(int argc, char **argv) {
     if (reexec_fd < 0 && coredump_take_pattern() == 1)
         coredump_raise_if_ours();
     engine_hooks.loop_pressure = pid1_loop_pressure;
+    engine_hooks.wake_due      = pid1_wake_due;
     engine_hooks.loop_tail     = pid1_loop_tail;
     engine_hooks.after_sockets = psi_open;
     engine_hooks.ctl_extra     = pid1_ctl_extra;
@@ -1689,6 +1724,7 @@ int main(int argc, char **argv) {
     engine_hooks.on_reaped     = pid1_on_reaped;
     setup_signals();
 
+    pid1_hardening_default();
     if (reexec_fd >= 0)
         reexec_adopt(reexec_fd, reexec_oldexe);
     else if (engine_load(svc_dir) > 0) {

@@ -18,7 +18,7 @@ DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
 DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 RELDIR ?= release
-BINS   ?= schema-init schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl
+BINS   ?= schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -31,6 +31,7 @@ endif
 
 SRCS    = init.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c
 OBJS    = $(SRCS:.c=.o)
+ENGINE_OBJS = engine.o engine_conf.o schema.o service.o group.o caps.o ns.o landlock.o
 # The core objects share these headers. Without this dependency an incremental
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
@@ -42,8 +43,12 @@ all: $(BINS)
 desktop:
 	$(MAKE) -C desktop
 
-schema-init: $(OBJS)
+schema-init: init.o $(ENGINE_OBJS)
 	$(CC) -static -o $@ $^ -lrt
+
+# Dynamic, unlike PID 1: it runs in a session where libc is always there.
+schema-user: schema-user.o $(ENGINE_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ -lrt
 
 schema-init-static:
 	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
@@ -84,7 +89,7 @@ verify-eprops-live: tools/verify-eprops-live.c udev_db.h udev_rules.h udev_built
 schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match.h sdbus_reply.h sdbus_codec.h sdbus_auth.h sdbus_conn.h sdbus_state.h sdbus_route.h sdbus_driver.h sdbus_activate.h
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) $(LDFLAGS) schema-dbus.c -o $@ $(DBUS_LIBS)
 
-$(OBJS): $(CORE_HDRS)
+$(OBJS) schema-user.o: $(CORE_HDRS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -232,7 +237,7 @@ install-analyze:
 	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
 
 clean:
-	rm -f $(OBJS) schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-systemctl udev-parity libatomic_asneeded.a
+	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-systemctl udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
@@ -245,11 +250,12 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test: schema-coredump schema-recorder schema-ctl schema-board $(OBJS)
+test: schema-coredump schema-recorder schema-ctl schema-board schema-user $(OBJS)
 	sh tests/check_tu_statics.sh init.o engine.o
 	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o /tmp/schema-test-recorder-scenario -lrt && /tmp/schema-test-recorder-scenario
 	sh tests/test_recorder_daemon.sh
+	sh tests/test_schema_user.sh
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
@@ -313,7 +319,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board $(OBJS)
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cycles && /tmp/schema-test-cycles
 	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cgkill && /tmp/schema-test-cgkill
 	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o /tmp/schema-test-landlock-tcp && /tmp/schema-test-landlock-tcp
-	$(CC) $(CFLAGS) tests/test_engine_conf.c engine_conf.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-engine-conf && /tmp/schema-test-engine-conf
+	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-engine-conf && /tmp/schema-test-engine-conf
 
 # libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
 # + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.

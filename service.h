@@ -300,6 +300,8 @@ typedef struct {
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
     char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */
     char             pid_file[256];    /* forking daemon: launcher exits 0, main PID read from here */
+    char             wait_socket[108]; /* if set, hold in NEW_PROCESS until this AF_UNIX socket accepts */
+    uint8_t          sock_waiting;     /* runtime: held on wait_socket (recomputed each pass) */
     int              fork_state;       /* pid_file: 0 launcher running, 1 main PID adopted, -1 waiting for the file */
     struct timespec  fork_wait;        /* fork_state -1: give up at this CLOCK_MONOTONIC time */
     prio_t           priority;         /* priority class for resource throttling */
@@ -356,7 +358,7 @@ typedef struct {
     uint8_t          hard_set;          /* HARD_* knobs given explicitly in .svc   */
     uint8_t          hard_default;      /* HARD_* knobs taken from host default    */
     uint8_t          hard_dropped;      /* HARD_* defaults dropped (ns conflict)   */
-    char             cgroup_path[128]; /* /sys/fs/cgroup/schema-init/<name>   */
+    char             cgroup_path[256]; /* /sys/fs/cgroup/schema-init/<name>   */
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
@@ -447,7 +449,10 @@ void service_log(const service_t *svc, const char *event);
 int  cgroup_kill_path(const char *cg);
 void service_cgroup_release_partition(service_t *svc);
 void service_cgroup_kill(service_t *svc);
-extern const char *service_cgroup_root;
+extern const char *service_cgroup_root;   /* "" = no cgroups */
+/* NULL = /var/log/schema-init, falling back to /run/log/schema-init. Set:
+ * logs go only here, and the caller has already created its parents. */
+extern const char *service_log_dir;
 extern const char *service_notify_sock;
 const char *service_cgroup_path_for(const service_t *svc);
 
