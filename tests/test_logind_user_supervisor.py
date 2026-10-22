@@ -24,7 +24,8 @@ LOGS = os.path.join(TMP, 'log')
 KILLSWITCH = os.path.join(TMP, 'user-supervisor.disabled')
 CMDLINE = os.path.join(TMP, 'cmdline')
 BIN = os.path.join(TMP, 'schema-user')
-for _d in (RUNDIR + '/sessions', RUNDIR + '/seats', RUNDIR + '/users', CG, LINGER, LOGS):
+RUNUSER = os.path.join(TMP, 'run-user')
+for _d in (RUNDIR + '/sessions', RUNDIR + '/seats', RUNDIR + '/users', CG, LINGER, LOGS, RUNUSER):
     os.makedirs(_d, exist_ok=True)
 with open(CMDLINE, 'w') as f:
     f.write('BOOT_IMAGE=/vmlinuz root=/dev/sda1 rw quiet\n')
@@ -39,6 +40,7 @@ os.environ.update({
     'SCHEMA_USER_KILLSWITCH': KILLSWITCH,
     'SCHEMA_LOGIND_CMDLINE': CMDLINE,
     'SCHEMA_USER_LOG_DIR': LOGS,
+    'SCHEMA_LOGIND_RUN_USER': RUNUSER,
 })
 
 sys.path.insert(0, os.path.join(REPO, 'scripts'))
@@ -190,7 +192,7 @@ def test_spawn_moves_then_execs():
         check('spawn: execs the binary',
               wait_for(lambda: execd(pid)))
         env = environ_of(pid)
-        check('spawn: XDG_RUNTIME_DIR', env.get('XDG_RUNTIME_DIR') == '/run/user/%d' % UID,
+        check('spawn: XDG_RUNTIME_DIR', env.get('XDG_RUNTIME_DIR') == '%s/%d' % (RUNUSER, UID),
               repr(env.get('XDG_RUNTIME_DIR')))
         check('spawn: HOME/USER from passwd',
               env.get('HOME') == pwd.getpwuid(UID).pw_dir and env.get('USER') == ME)
@@ -556,6 +558,153 @@ def test_linger_auth():
         check('linger_allowed%r' % (args,), got == want, repr(got))
 
 
+
+# -- review fixes -------------------------------------------------------------
+
+# BIN detached, so not our child: what logind sees after a cold restart
+# adopts an instance an earlier logind started.
+def spawn_orphan():
+    import subprocess
+    out = subprocess.run(['sh', '-c', '"$0" >/dev/null 2>&1 & echo $!', BIN],
+                         capture_output=True, text=True).stdout
+    return int(out.strip())
+
+
+def ctl_sock(uid=UID):
+    return '%s/%d/schema-user/ctl.sock' % (RUNUSER, uid)
+
+
+def adopt_orphan(sv):
+    pid = spawn_orphan()
+    wait_for(lambda: execd(pid))
+    with open(svc_dir() + '/init.scope/cgroup.procs', 'w') as f:
+        f.write('%d\n' % pid)
+    sv.adopt()
+    return pid
+
+
+def test_adopted_clean_exit_not_restarted():
+    sv = fresh()
+    try:
+        pid = adopt_orphan(sv)
+        check('adopted orphan tracked', sv.pid(UID) == pid)
+        os.kill(pid, signal.SIGTERM)    # its clean exit unlinks ctl.sock
+        wait_for(lambda: not os.path.exists('/proc/%d' % pid))
+        sv.reconcile({UID}, 0)
+        sv.reconcile({UID}, 10)
+        check('adopted clean exit (no ctl.sock): not restarted', sv.pid(UID) is None)
+    finally:
+        cleanup(sv)
+
+
+def test_adopted_crash_restarted():
+    sv = fresh()
+    try:
+        pid = adopt_orphan(sv)
+        os.makedirs(os.path.dirname(ctl_sock()), exist_ok=True)
+        open(ctl_sock(), 'w').close()   # a SIGKILLed instance leaves it behind
+        os.kill(pid, signal.SIGKILL)
+        wait_for(lambda: not os.path.exists('/proc/%d' % pid))
+        sv.reconcile({UID}, 0)
+        sv.reconcile({UID}, 2)
+        check('adopted crash (ctl.sock left): restarted',
+              sv.pid(UID) is not None and sv.pid(UID) != pid)
+    finally:
+        try:
+            os.unlink(ctl_sock())
+        except OSError:
+            pass
+        cleanup(sv)
+
+
+def test_active_uid_prefers_session_uids():
+    a, b = UID + 1000, UID + 2000      # lingering lower uid, session higher uid
+    for u in (a, b):
+        os.makedirs('%s/%d' % (RUNUSER, u), exist_ok=True)
+    try:
+        with open(os.path.join(RUNDIR, 'sessions', '9'), 'w') as f:
+            f.write('UID=%d\nUSER=x\nSEAT=seat0\nACTIVE=1\n' % b)
+        got = L.get_active_uid()
+        check('active uid: the session owner, not the lowest /run/user dir',
+              got == b, repr(got))
+    finally:
+        os.unlink(os.path.join(RUNDIR, 'sessions', '9'))
+        for u in (a, b):
+            os.rmdir('%s/%d' % (RUNUSER, u))
+
+
+def test_active_uid_skips_linger_without_session():
+    import shutil
+    shutil.rmtree('%s/%d' % (RUNUSER, UID), ignore_errors=True)   # earlier tests' runtime dir
+    a, b = UID + 1000, UID + 2000
+    for u in (a, b):
+        os.makedirs('%s/%d' % (RUNUSER, u), exist_ok=True)
+    saved = L.linger_uids
+    L.linger_uids = lambda: {a}
+    try:
+        got = L.get_active_uid()
+        check('active uid: a lingering runtime dir is not a login', got == b, repr(got))
+    finally:
+        L.linger_uids = saved
+        for u in (a, b):
+            os.rmdir('%s/%d' % (RUNUSER, u))
+
+
+def test_adopt_skips_dead_pid():
+    sv = L.UserSupervisors()
+    saved = L.find_user_supervisors
+    L.find_user_supervisors = lambda: {UID: 4194303}
+    try:
+        sv.adopt()
+        check('adopt: a pid gone before its start time was read is skipped',
+              sv.pid(UID) is None, repr(sv.state))
+    finally:
+        L.find_user_supervisors = saved
+
+
+def test_adopt_reaps_zombies():
+    pid = os.posix_spawn('/bin/true', ['/bin/true'], {})
+    wait_for(lambda: dead(pid))
+    L.UserSupervisors().adopt()
+    try:
+        os.waitpid(pid, os.WNOHANG)
+        check('adopt: zombies left from before a re-exec reaped', False)
+    except ChildProcessError:
+        check('adopt: zombies left from before a re-exec reaped', True)
+
+
+def test_start_without_delegation():
+    sv = fresh()
+    saved = L.CGROUP_ROOT
+    blocker = os.path.join(TMP, 'not-a-dir')
+    open(blocker, 'w').close()
+    L.CGROUP_ROOT = blocker
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        check('no delegation: still runs (no cgroup move)',
+              bool(pid) and wait_for(lambda: execd(pid)))
+    finally:
+        L.CGROUP_ROOT = saved
+        cleanup(sv)
+
+
+def test_stop_escalates_after_relogin():
+    sv = fresh(STUBBORN)
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: execd(pid))
+        sv.reconcile(set(), 1)
+        sv.reconcile(set(), 31)          # SIGTERM, ignored
+        sv.reconcile({UID}, 33)          # user back while it is stopping
+        sv.reconcile({UID}, 51)
+        check('stop hung, user back: cgroup.kill still sent',
+              read(svc_dir() + '/cgroup.kill').strip() == '1')
+    finally:
+        cleanup(sv)
+
+
 TESTS = [
     test_cgroup_path,
     test_delegate,
@@ -580,6 +729,14 @@ TESTS = [
     test_set_linger_roundtrip,
     test_set_linger_unknown_uid,
     test_linger_auth,
+    test_adopted_clean_exit_not_restarted,
+    test_adopted_crash_restarted,
+    test_active_uid_prefers_session_uids,
+    test_active_uid_skips_linger_without_session,
+    test_adopt_skips_dead_pid,
+    test_adopt_reaps_zombies,
+    test_start_without_delegation,
+    test_stop_escalates_after_relogin,
 ]
 
 
