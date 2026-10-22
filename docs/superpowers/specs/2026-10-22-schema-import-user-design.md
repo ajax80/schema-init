@@ -58,6 +58,7 @@
   - `User=`/`Group=` in a user unit → dropped with a WARN line (services run as the user anyway).
   - No `needs_root`; hardening keys emitted as today (schema-user already runs with hardening default 0).
   - `dep=` lines only to other units in the same user set; deps on system units (`network-online.target` etc.) are dropped with a note, as system mode does for unknown deps.
+  - *Follow-up (2026-10-22):* `After=network-online.target` (on the unit, or on its timer/socket) becomes `dep=network-online`, a generated user oneshot running `exec_pre=-nm-online -s -q -t 60` then `true` (NetworkManager-wait-online's job). Without it, Optiplex's obsidian-tunnel started before DHCP and went DORMANT. A oneshot settles only on exit, so a dependent doesn't count as running during the wait; the `-` lets dependents start after a timeout, as in systemd. Only `After=` orders (bare `Wants=` doesn't). Generated only when some unit needs it and the system runs `network-manager.svc` (with no NM, nm-online waits out its whole timeout, measured); else a WARN line.
   - **No cycles:** the importer runs the existing `_drop_cycles` logic against the graph of the `--out` set being written (parameterise `_svc_graph` by directory), because `schema-user` exits on a cyclic config (`schema-user.c:326`). Test it *(builder-check call)*.
   - `.socket` → `listen=` path (PipeWire's `pipewire.socket` is the proving case, though it is skip-listed by default).
   - `.timer` → existing timer keys.

@@ -1747,27 +1747,59 @@ def _activation_guard(target, skip):
         raise Skip("activates skip-listed %s" % target)
 
 
-def _user_translate(unit, known, enabled, skip=()):
+NET_ONLINE = "network-online"
+
+
+def _after_online(*sections):
+    return any("network-online.target" in " ".join(_get_all(sec.get("Unit", []), "After")).split()
+               for sec in sections)
+
+
+def _net_online_svc():
+    # schema-user has no network-online.target: one oneshot that After= units
+    # dep= on, as NetworkManager-wait-online. Only where the system runs NM:
+    # otherwise nm-online waits out its whole timeout for an NM that never comes.
+    nm, true = _which("nm-online"), _which("true")
+    if not (nm and true and os.path.exists(
+            os.path.join(_root(), "etc/schema-init/services/network-manager.svc"))):
+        return None
+    # - : a timed-out wait still lets the dependents start, as in systemd
+    return "%s\nname=%s\nexec=%s\nexec_pre=-%s -s -q -t 60\noneshot=1\ncritical=0\n" % (
+        USER_MARK, NET_ONLINE, true, nm)
+
+
+def _user_translate(unit, known, enabled, skip=(), net=False):
     sections = _user_sections(unit)
     name = _base(unit)
+    svc_sections = sections
     if unit.endswith(".socket"):
         socket_lines(sections)
         target = _get_last(sections.get("Socket", []), "Service") or name + ".service"
         _activation_guard(target, skip)
         name = _base(target)
-        body = unit_to_svc(name, _user_sections(target), sections,
-                           target not in enabled, known)
+        svc_sections = _user_sections(target)
+        body = unit_to_svc(name, svc_sections, sections, target not in enabled, known)
     elif unit.endswith(".timer"):
         target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
         if "@" in target:
             raise Skip("timer starts template instance %s — instances unsupported" % target)
         _activation_guard(target, skip)
-        body = timer_to_svc(name, sections, _user_sections(target), known, _base(target))
+        svc_sections = _user_sections(target)
+        body = timer_to_svc(name, sections, svc_sections, known, _base(target))
     else:
         body = unit_to_svc(name, sections, None, False, known)
-    body = _drop_cycles(name, body)
     lines = []
-    for ln in body.splitlines():
+    if _after_online(sections, svc_sections):
+        deps = sum(1 for ln in body.splitlines() if ln.startswith("dep="))
+        if not net:
+            lines.append("%sAfter=network-online.target not waited for: no NetworkManager"
+                         % WARN_PREFIX)
+        elif deps >= 8:
+            lines.append("%sAfter=network-online.target not waited for: 8 dep= already"
+                         % WARN_PREFIX)
+        else:
+            body = body.rstrip("\n") + "\ndep=%s\n" % NET_ONLINE
+    for ln in _drop_cycles(name, body).splitlines():
         if ln == "needs_root=1":
             continue
         if ln.startswith(_USER_NO_HARDEN):
@@ -1823,17 +1855,18 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
         units, skipped = user_enabled_set(skip)
         enabled = set(units)
         known = {_base(u) for u in units if not u.endswith(".timer")}
+        net_svc = None if NET_ONLINE in known else _net_online_svc()
         if not dry_run:
             shutil.rmtree(stage, ignore_errors=True)
             os.makedirs(stage, mode=0o700)
         os.environ["SCHEMA_SVC_DIR"] = stage
-        done = {}
+        done, bodies = {}, []
         # sockets, then timers: a socket's .svc carries its service, and a
         # timer's schedule must not lose to its same-name service
         order = lambda u: 0 if u.endswith(".socket") else 1 if u.endswith(".timer") else 2
         for u in sorted(units, key=order):
             try:
-                name, body = _user_translate(u, known, enabled, skip)
+                name, body = _user_translate(u, known, enabled, skip, net_svc is not None)
                 if name in done:
                     if done[name] == name + ".socket" and u == name + ".service":
                         continue   # runs through its socket's .svc
@@ -1845,9 +1878,15 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
                 skipped.append((u, "unreadable: %s" % e))
                 continue
             done[name] = u
+            bodies.append(body)
             log("import  %s -> %s.svc" % (u, name))
             if not dry_run:
                 _write_svc(os.path.join(stage, name + ".svc"), body)
+            counts["generated"] += 1
+        if net_svc and any("\ndep=%s\n" % NET_ONLINE in b for b in bodies):
+            log("import  network-online.target -> %s.svc" % NET_ONLINE)
+            if not dry_run:
+                _write_svc(os.path.join(stage, NET_ONLINE + ".svc"), net_svc)
             counts["generated"] += 1
         counts["skipped"] = len(skipped)
         manifest = "".join("%s\t%s\n" % (u, r) for u, r in skipped)
