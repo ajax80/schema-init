@@ -163,6 +163,13 @@ SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HO
 PID=$!
 until_ok 'ist | grep -Eq "^ +h +pid=[1-9]"' || { ist; fail "import_disabled: h not running"; }
 grep -q "import: not run" "$I/out" || fail "import_disabled: no 'not run' line"
+# status lists the skip manifest (text and --kv), never in --json
+printf 'syncthing.service\thandled elsewhere (skip list)\n' > "$I/run/schema-user/skipped"
+ist | grep -Eq '^ +syncthing\.service +skipped \(handled elsewhere \(skip list\)\)$' || { ist; fail "status: no skipped line"; }
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv | grep -qx 'service.syncthing.service.state=skipped' || fail "status --kv: no skipped state"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv | grep -qx 'service.syncthing.service.reason=handled elsewhere (skip list)' || fail "status --kv: no reason"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | grep -q syncthing && fail "status --json: lists skipped"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status h | grep -q syncthing && fail "status <svc>: lists skipped"
 istop
 
 echo "test_schema_user: ok"
