@@ -892,6 +892,9 @@ def queue_path():
 
 def _unit_dirs():
     r = _root()
+    if _USER:
+        return [os.path.join(_USER["config"], "systemd/user")] + [
+            os.path.join(r, d) for d in _USER_SYS_DIRS]
     return [os.path.join(r, d.lstrip("/")) for d in (
         "etc/systemd/system", "run/systemd/system",
         "usr/lib/systemd/system", "lib/systemd/system")]
@@ -1535,6 +1538,167 @@ def bus_overrides(dry_run=False, log=print):
         except (OSError, subprocess.SubprocessError):
             pass
     return counts
+
+
+# ---------------------------------------------------------------------------
+# User mode (--user): the user's own enabled units, for schema-user.
+# ---------------------------------------------------------------------------
+
+_USER = None
+_USER_SYS_DIRS = ("etc/systemd/user", "run/systemd/user",
+                  "usr/local/lib/systemd/user", "usr/lib/systemd/user")
+# Phase 1 reads only what the user enabled: distro defaults under /etc and
+# /usr/lib include dbus.socket, which would start a second session bus.
+_USER_ROOTS = ("default.target", "sockets.target", "timers.target", "basic.target")
+_SESSION_TARGETS = ("graphical-session.target", "graphical-session-pre.target",
+                    "plasma-*.target", "gnome-session*.target")
+_UNIT_SUFFIXES = (".service", ".socket", ".timer", ".path", ".target", ".mount")
+
+
+class Masked(Exception):
+    pass
+
+
+def user_context(home, uid, user, env):
+    def xdg(var, default):
+        v = env.get(var)
+        return v if v and os.path.isabs(v) else os.path.join(home, default)
+    return {"home": home, "uid": uid, "user": user,
+            "config": xdg("XDG_CONFIG_HOME", ".config"),
+            "state": xdg("XDG_STATE_HOME", ".local/state"),
+            "cache": xdg("XDG_CACHE_HOME", ".cache"),
+            "runtime": env.get("XDG_RUNTIME_DIR", "")}
+
+
+def set_user_mode(ctx):
+    global _USER
+    _USER = ctx
+
+
+def _masked(path):
+    if os.path.islink(path) and os.readlink(path) == "/dev/null":
+        return True
+    try:
+        return os.path.getsize(path) == 0
+    except OSError:
+        return False
+
+
+def user_unit_text(name):
+    """The winning unit file plus its drop-ins, in systemd's order. None if no
+    dir has it; Masked if the winning entry is /dev/null or empty."""
+    text = None
+    for d in _unit_dirs():
+        p = os.path.join(d, name)
+        if os.path.lexists(p):
+            if _masked(p):
+                raise Masked(name)
+            try:
+                with open(p) as f:
+                    text = f.read()
+            except OSError:
+                return None
+            break
+    if text is None:
+        return None
+    drop = {}
+    for d in _unit_dirs():
+        dd = os.path.join(d, name + ".d")
+        try:
+            for e in os.listdir(dd):
+                if e.endswith(".conf"):
+                    drop.setdefault(e, os.path.join(dd, e))
+        except OSError:
+            continue
+    for e in sorted(drop):
+        try:
+            with open(drop[e]) as f:
+                text += "\n" + f.read()
+        except OSError:
+            pass
+    return text
+
+
+def _unit_name(n):
+    return n if n.endswith(_UNIT_SUFFIXES) else n + ".service"
+
+
+def read_skip_list(paths):
+    out = set()
+    for p in paths:
+        try:
+            with open(p) as f:
+                for ln in f:
+                    ln = ln.split("#", 1)[0].strip()
+                    if ln:
+                        out.add(_unit_name(ln))
+        except OSError:
+            pass
+    return out
+
+
+def _wants_dir_units(dirs, unit):
+    out = []
+    for d in dirs:
+        for kind in (".wants", ".requires"):
+            try:
+                out += sorted(os.listdir(os.path.join(d, unit + kind)))
+            except OSError:
+                pass
+    return out
+
+
+def user_enabled_set(skip):
+    """(units to generate, [(unit, reason)] enabled but not generated)."""
+    import fnmatch
+    cfg = _unit_dirs()[0]
+    queue = []
+    for root in _USER_ROOTS:
+        queue += _wants_dir_units([cfg], root)
+    units, skipped, seen = [], [], set()
+    while queue:
+        u = queue.pop(0)
+        if u in seen:
+            continue
+        seen.add(u)
+        if u in skip:
+            skipped.append((u, "handled elsewhere (skip list)"))
+            continue
+        if "@" in u:
+            skipped.append((u, "template unit"))
+            continue
+        if u.endswith(".path"):
+            skipped.append((u, "path unit"))
+            continue
+        try:
+            text = user_unit_text(u)
+        except Masked:
+            skipped.append((u, "masked"))
+            continue
+        if text is None:
+            skipped.append((u, "not found"))
+            continue
+        unit = parse_unit(text).get("Unit", [])
+        for key in ("Wants", "Requires"):
+            for v in _get_all(unit, key):
+                queue += v.split()
+        queue += _wants_dir_units(_unit_dirs(), u)
+        if not u.endswith(".target"):
+            units.append(u)
+    try:
+        entries = sorted(os.listdir(cfg))
+    except OSError:
+        entries = []
+    for e in entries:
+        tgt = e.rsplit(".", 1)[0]
+        if not e.endswith((".wants", ".requires")) or \
+                not any(fnmatch.fnmatch(tgt, pat) for pat in _SESSION_TARGETS):
+            continue
+        for u in _wants_dir_units([cfg], tgt):
+            if u not in seen:
+                seen.add(u)
+                skipped.append((u, "phase 2 session target"))
+    return units, skipped
 
 
 def main(argv=None):
