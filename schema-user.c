@@ -265,12 +265,6 @@ static void run_import(const char *imp, const char *cfg_home, const char *state_
         return;
     }
     join(logp, log_dir, "/import.log");
-    struct stat st;
-    if (stat(logp, &st) == 0 && st.st_size > IMPORT_LOG_MAX) {
-        char old[PATH_MAX];
-        join(old, log_dir, "/import.log.old");
-        rename(logp, old);
-    }
     pid_t pid = fork();
     if (pid < 0) {
         printf(TAG "import: not run (fork: %s)\n", strerror(errno));
@@ -279,6 +273,10 @@ static void run_import(const char *imp, const char *cfg_home, const char *state_
     if (pid == 0) {
         int in = open("/dev/null", O_RDONLY | O_CLOEXEC);
         int out = open(logp, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        struct stat st;
+        /* sized on the fd, not the path: nothing to race */
+        if (out >= 0 && fstat(out, &st) == 0 && st.st_size > IMPORT_LOG_MAX)
+            ftruncate(out, 0);
         if (in >= 0) dup2(in, 0);
         if (out >= 0) { dup2(out, 1); dup2(out, 2); }
         setenv("XDG_CONFIG_HOME", cfg_home, 1);
