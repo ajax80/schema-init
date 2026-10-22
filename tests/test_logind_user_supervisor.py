@@ -451,6 +451,46 @@ def test_linger_without_session():
         cleanup(sv)
 
 
+# -- Task 3: linger -----------------------------------------------------------
+
+def test_set_linger_roundtrip():
+    try:
+        L.set_linger(UID, True)
+        check('linger: file created', os.path.exists(os.path.join(LINGER, ME)))
+        check('linger: linger_uids follows', UID in L.linger_uids())
+        L.set_linger(UID, False)
+        check('linger: file removed', not os.path.exists(os.path.join(LINGER, ME)))
+        check('linger: linger_uids follows off', UID not in L.linger_uids())
+        L.set_linger(UID, False)
+        check('linger: disabling twice is fine', True)
+    finally:
+        cleanup()
+
+
+def test_set_linger_unknown_uid():
+    try:
+        L.set_linger(4000000000, True)
+        check('linger: unknown uid raises ValueError', False)
+    except ValueError:
+        check('linger: unknown uid raises ValueError', True)
+
+
+def test_linger_auth():
+    U = 0xFFFFFFFF
+    cases = [
+        ((0, 1000, set()), 1000),
+        ((1000, 1000, {1000}), 1000),
+        ((1000, U, {1000}), 1000),
+        ((0, 0, set()), None),
+        ((1000, 1001, {1000, 1001}), None),
+        ((1000, 1000, set()), None),
+        ((None, 1000, {1000}), None),
+    ]
+    for args, want in cases:
+        got = L.linger_allowed(*args)
+        check('linger_allowed%r' % (args,), got == want, repr(got))
+
+
 TESTS = [
     test_cgroup_path,
     test_delegate,
@@ -468,6 +508,9 @@ TESTS = [
     test_adopt_after_reexec,
     test_adopt_wrong_uid,
     test_linger_without_session,
+    test_set_linger_roundtrip,
+    test_set_linger_unknown_uid,
+    test_linger_auth,
 ]
 
 

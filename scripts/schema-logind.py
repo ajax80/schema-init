@@ -440,6 +440,36 @@ def linger_uids():
     return uids
 
 
+def set_linger(uid, enable):
+    try:
+        name = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        raise ValueError('no such user: %d' % uid)
+    path = os.path.join(LINGER_DIR, name)
+    if enable:
+        os.makedirs(LINGER_DIR, mode=0o755, exist_ok=True)
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o644))
+    else:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+def linger_allowed(caller, target, session_uids):
+    """The uid SetUserLinger may act on for this caller, or None."""
+    if caller is None:
+        return None
+    # UID_INVALID is systemd's "the caller", what a bare `loginctl enable-linger` sends.
+    if target == 0xFFFFFFFF:
+        target = caller
+    if target == 0:
+        return None
+    if caller == 0 or (caller == target and target in session_uids):
+        return target
+    return None
+
+
 def _rebase_devname(devname):
     """An absolute E:DEVNAME (/dev/...) resolved under DEV_DIR for test trees."""
     if devname.startswith('/dev/'):
@@ -1960,6 +1990,7 @@ class Login1User(dbus.service.Object):
                 'Name': dbus.String(username),
                 'Display': dbus.ObjectPath(display),
                 'State': dbus.String(state),
+                'Linger': dbus.Boolean(uid in linger_uids()),
             }
         return {}
 
@@ -2121,9 +2152,26 @@ class Login1Manager(dbus.service.Object):
     def TerminateSeat(self, seat_id):
         print(f"login1-stub: TerminateSeat({seat_id}) (no-op; not managed here)")
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ubb', out_signature='')
-    def SetUserLinger(self, uid, enable, interactive):
-        print(f"login1-stub: SetUserLinger({uid}, {enable}) (no-op)")
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ubb', out_signature='',
+                         sender_keyword='sender')
+    def SetUserLinger(self, uid, enable, interactive, sender=None):
+        caller = caller_uid(self._connection, sender)
+        target = linger_allowed(caller, int(uid),
+                                self.registry.session_uids() if self.registry else set())
+        if target is None:
+            print(f"login1-stub: DENY SetUserLinger({uid}) from uid={caller}",
+                  file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "Not allowed to change linger for this user",
+                name='org.freedesktop.login1.AccessDenied')
+        try:
+            set_linger(target, bool(enable))
+        except (ValueError, OSError) as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.DBus.Error.InvalidArgs')
+        print(f"login1-stub: SetUserLinger({target}, {bool(enable)})")
+        if self.registry:
+            self.registry.sync()
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='st', out_signature='')
     def ScheduleShutdown(self, shutdown_type, usec):
