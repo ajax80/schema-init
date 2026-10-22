@@ -399,6 +399,113 @@ check("socket of skip-listed service not generated", os.listdir(out) == []
       and "foo.socket\tactivates skip-listed foo.service\n" in m)
 t.done()
 
+# =========================== /code-review 405 fixes ===========================
+
+def manifest(t):
+    with open(os.path.join(t.run, "schema-user/skipped")) as f:
+        return f.read()
+
+# 1. a .svc the importer did not generate survives the next run
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE); t.enable("a.service")
+c, out = run(t)
+check("generated .svc marked", svc(out, "a").startswith(si.USER_MARK + "\n"))
+with open(os.path.join(out, "hand.svc"), "w") as f:
+    f.write("name=hand\nexec=/bin/true\n")
+c, out = run(t)
+check("hand-written .svc kept", sorted(os.listdir(out)) == ["a.svc", "hand.svc"])
+t.done()
+
+# 2. hardening a non-root supervisor cannot set up is dropped, with a warning
+t = Tree()
+t.write(t.cfg("h.service"), "[Service]\nExecStart=/bin/h\nPrivateTmp=yes\nProtectSystem=full\nProtectHome=yes\n")
+t.enable("h.service")
+c, out = run(t)
+b = svc(out, "h")
+keys = [l for l in b.splitlines() if not l.startswith("#")]
+check("mount-ns hardening dropped", not any(l.startswith(("private_tmp=", "protect_system=", "protect_home="))
+      for l in keys) and sum(l.startswith(si.WARN_PREFIX) and "dropped" in l for l in b.splitlines()) == 3)
+t.done()
+
+# 3. foo.timer and foo.service both enabled: the timer's schedule wins
+t = Tree()
+t.write(t.cfg("foo.service"), SIMPLE)
+t.write(t.cfg("foo.timer"), "[Timer]\nOnCalendar=daily\n")
+t.enable("foo.service"); t.enable("foo.timer", target="timers.target")
+c, out = run(t)
+check("timer beats same-name service", "on_calendar=" in svc(out, "foo")
+      and "foo.service\tstarted by foo.timer\n" in manifest(t))
+t.done()
+
+# 4. a timer never starts a skip-listed or session-bus service
+t = Tree()
+t.write(t.sys(L, "syncthing.service"), SIMPLE)
+t.write(t.cfg("syncthing.timer"), "[Timer]\nOnCalendar=daily\n")
+t.write(t.cfg("bus.timer"), "[Timer]\nOnCalendar=daily\nUnit=dbus.service\n")
+t.write(t.sys(L, "dbus.service"), SIMPLE)
+t.enable("syncthing.timer", target="timers.target"); t.enable("bus.timer", target="timers.target")
+skip = t.write(t.sys("/etc/schema-init", "user-skip"), "syncthing\n")
+c, out = run(t, [skip])
+check("timer of skip-listed/dbus service not generated", os.listdir(out) == []
+      and "syncthing.timer\tactivates skip-listed syncthing.service\n" in manifest(t)
+      and "bus.timer\tactivates dbus.service: the session bus is started by the session\n" in manifest(t))
+t.done()
+
+# 5. a failed swap puts the previous dir back
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE); t.enable("a.service")
+c, out = run(t)
+real_rename, calls = os.rename, [0]
+def bad_rename(a, b):
+    calls[0] += 1
+    if a.endswith(".new") and b == out:
+        raise OSError("EXDEV")
+    real_rename(a, b)
+si.os.rename = bad_rename
+c, out = run(t)
+si.os.rename = real_rename
+check("failed swap restores old dir", os.listdir(out) == ["a.svc"] and c["error"] == 1
+      and not os.path.exists(out + ".old"))
+t.done()
+
+# 6. units installed under the user's data dir and /usr/share are found
+t = Tree()
+t.write(os.path.join(t.home, ".local/share/systemd/user/d.service"), SIMPLE)
+t.write(t.sys("/usr/share/systemd/user", "s.service"), SIMPLE)
+t.enable("d.service", src=os.path.join(t.home, ".local/share/systemd/user/d.service"))
+t.enable("s.service", src=t.sys("/usr/share/systemd/user", "s.service"))
+check("data-home and /usr/share search dirs", gen() == (["d.service", "s.service"], []))
+t.done()
+
+# 7. a user's own target expands its ~/.config wants; enabled .mount is listed
+t = Tree()
+t.write(t.cfg("my.target"), "[Unit]\nWants=sockets.target\n")
+t.write(t.cfg("x.service"), SIMPLE)
+t.link(t.cfg("my.target.wants/x.service"), t.cfg("x.service"))
+t.enable("my.target")
+t.write(t.cfg("m.mount"), "[Mount]\nWhat=/a\nWhere=/b\n")
+t.enable("m.mount")
+t.write(t.sys(L, "dbus.socket"), "[Socket]\nListenStream=%t/bus\n")
+t.link(t.sys("/etc/systemd/user", "sockets.target.wants/dbus.socket"), t.sys(L, "dbus.socket"))
+check("own target expanded, mount listed, no dbus", gen() ==
+      (["x.service"], [("m.mount", "unsupported unit type")]))
+t.done()
+
+# 8. a service started by its own socket is not listed as skipped
+t = Tree()
+t.write(t.cfg("foo.socket"), "[Socket]\nListenStream=%t/foo.sock\n")
+t.write(t.cfg("foo.service"), SIMPLE)
+t.enable("foo.socket", target="sockets.target"); t.enable("foo.service")
+c, out = run(t)
+check("socket-started service not in manifest", os.listdir(out) == ["foo.svc"] and manifest(t) == "")
+t.done()
+
+# 9. skip files parse like read_skip: whitespace-separated names
+t = Tree()
+p = t.write(t.sys("/etc/schema-init", "user-skip"), "a b.socket  # c\n")
+check("skip list shares read_skip parsing", si.read_skip_list([p]) == {"a.service", "b.socket"})
+t.done()
+
 # --- CLI: no XDG_RUNTIME_DIR -> 2 ---
 saved = os.environ.pop("XDG_RUNTIME_DIR", None)
 check("cli_no_runtime", si.main(["--user"]) == 2)
