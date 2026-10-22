@@ -17,6 +17,7 @@ import argparse
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -144,6 +145,10 @@ def _which(cmd):
 
 def _specifiers(argv, name):
     spec = {"n": name + ".service", "N": name, "p": name, "t": "/run", "%": "%"}
+    if _USER:
+        spec.update({"h": _USER["home"], "t": _USER["runtime"], "S": _USER["state"],
+                     "C": _USER["cache"], "E": _USER["config"], "u": _USER["user"],
+                     "U": str(_USER["uid"]), "T": "/tmp", "V": "/var/tmp"})
     out = []
     for w in argv:
         def rep(m):
@@ -421,7 +426,7 @@ def socket_lines(sections):
             if v == "":
                 listens = []
                 continue
-            v = v.replace("%t", "/run")
+            v = v.replace("%t", _USER["runtime"] if _USER else "/run")
             if "%" in v or not _LISTEN_ADDR.fullmatch(v) or (k == "ListenFIFO" and v[0] != "/"):
                 raise Skip("%s=%s not understood" % (k, v))
             listens.append("listen=%s:%s" % (_LISTEN_KINDS[k], v))
@@ -1701,6 +1706,132 @@ def user_enabled_set(skip):
     return units, skipped
 
 
+def _user_sections(unit):
+    try:
+        text = user_unit_text(unit)
+    except Masked:
+        raise Skip("%s is masked" % unit)
+    if text is None:
+        raise Skip("%s not found" % unit)
+    return parse_unit(text)
+
+
+def _base(unit):
+    return unit.rsplit(".", 1)[0]
+
+
+def _user_translate(unit, known, enabled):
+    """(svc name, .svc body) for one unit of the user set. Raises Skip."""
+    sections = _user_sections(unit)
+    name = _base(unit)
+    if unit.endswith(".socket"):
+        socket_lines(sections)
+        target = _get_last(sections.get("Socket", []), "Service") or name + ".service"
+        name = _base(target)
+        body = unit_to_svc(name, _user_sections(target), sections,
+                           target not in enabled, known)
+    elif unit.endswith(".timer"):
+        target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
+        if "@" in target:
+            raise Skip("timer starts template instance %s — instances unsupported" % target)
+        body = timer_to_svc(name, sections, _user_sections(target), known, _base(target))
+    else:
+        body = unit_to_svc(name, sections, None, False, known)
+    body = _drop_cycles(name, body)
+    lines = []
+    for ln in body.splitlines():
+        if ln == "needs_root=1":
+            continue
+        if ln.startswith("user="):
+            lines.insert(0, "%sUser=%s dropped: user services run as the user"
+                         % (WARN_PREFIX, ln[5:]))
+            continue
+        lines.append(ln)
+    return name, "\n".join(lines) + "\n"
+
+
+def _write_svc(path, body):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+
+
+def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
+    """Generate the user's .svc set into out_dir (built in out_dir.new, then
+    swapped in) and the skip manifest beside it. A failure leaves out_dir as
+    it was."""
+    set_user_mode(ctx)
+    stage = out_dir + ".new"
+    saved = os.environ.get("SCHEMA_SVC_DIR")
+    counts = {"generated": 0, "skipped": 0, "error": 0}
+    try:
+        units, skipped = user_enabled_set(read_skip_list(skip_paths))
+        enabled = set(units)
+        known = {_base(u) for u in units if not u.endswith(".timer")}
+        if not dry_run:
+            shutil.rmtree(stage, ignore_errors=True)
+            os.makedirs(stage, mode=0o700)
+        os.environ["SCHEMA_SVC_DIR"] = stage
+        done = {}
+        # sockets first: a socket's .svc carries its service
+        for u in sorted(units, key=lambda u: not u.endswith(".socket")):
+            try:
+                name, body = _user_translate(u, known, enabled)
+                if name in done:
+                    raise Skip("started by %s" % done[name])
+            except Skip as e:
+                skipped.append((u, str(e)))
+                continue
+            done[name] = u
+            log("import  %s -> %s.svc" % (u, name))
+            if not dry_run:
+                _write_svc(os.path.join(stage, name + ".svc"), body)
+            counts["generated"] += 1
+        counts["skipped"] = len(skipped)
+        manifest = "".join("%s\t%s\n" % (u, r) for u, r in skipped)
+        if dry_run:
+            log(manifest, end="")
+            return counts
+        old = out_dir + ".old"
+        shutil.rmtree(old, ignore_errors=True)
+        if os.path.isdir(out_dir):
+            os.rename(out_dir, old)
+        os.rename(stage, out_dir)
+        shutil.rmtree(old, ignore_errors=True)
+        mpath = os.path.join(os.path.dirname(out_dir), "skipped")
+        fd = os.open(mpath + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(manifest)
+        os.rename(mpath + ".new", mpath)
+    except OSError as e:
+        print("user import failed: %s" % e, file=sys.stderr)
+        counts["error"] += 1
+        shutil.rmtree(stage, ignore_errors=True)
+    finally:
+        if saved is None:
+            os.environ.pop("SCHEMA_SVC_DIR", None)
+        else:
+            os.environ["SCHEMA_SVC_DIR"] = saved
+        set_user_mode(None)
+    return counts
+
+
+def _user_main(args):
+    import pwd
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if not xdg:
+        print("schema-import --user: XDG_RUNTIME_DIR is not set", file=sys.stderr)
+        return 2
+    pw = pwd.getpwuid(os.getuid())
+    ctx = user_context(os.environ.get("HOME") or pw.pw_dir, pw.pw_uid, pw.pw_name, os.environ)
+    out = args.out or os.path.join(xdg, "schema-user/services")
+    skips = [os.path.join(_root(), "etc/schema-init/user-skip"),
+             os.path.join(ctx["config"], "schema-user/skip")]
+    c = run_user_import(ctx, out, skips, dry_run=args.dry_run)
+    print("user-import generated=%(generated)d skipped=%(skipped)d error=%(error)d" % c)
+    return 1 if c["error"] else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="schema-import",
@@ -1726,7 +1857,14 @@ def main(argv=None):
     ap.add_argument("--rc-skip", metavar="FILE",
                     help="init script or runit service names (whitespace-separated, # comments) "
                          "--rc or --runit leaves out")
+    ap.add_argument("--user", action="store_true",
+                    help="generate this user's enabled user units into "
+                         "$XDG_RUNTIME_DIR/schema-user/services for schema-user")
+    ap.add_argument("--out", metavar="DIR",
+                    help="with --user: write the .svc files here instead")
     args = ap.parse_args(argv)
+    if args.user:
+        return _user_main(args)
     if args.bus_overrides:
         c = bus_overrides(dry_run=args.dry_run)
         print("bus-overrides written=%(written)d kept=%(kept)d removed=%(removed)d skipped=%(skipped)d" % c)

@@ -176,5 +176,166 @@ check("fleet_blakbox", gen(si.read_skip_list([skip])) ==
       ([], [("syncthing.service", "handled elsewhere (skip list)")]))
 t.done()
 
+# =========================== Task 2: translation + output ===========================
+
+def run(t, skip_paths=()):
+    out = os.path.join(t.run, "schema-user/services")
+    c = si.run_user_import(t.ctx, out, list(skip_paths))
+    return c, out
+
+
+def svc(out, name):
+    with open(os.path.join(out, name + ".svc")) as f:
+        return f.read()
+
+
+def files_under(base):
+    return sorted(os.path.relpath(os.path.join(dp, f), base)
+                  for dp, _, fs in os.walk(base) for f in fs)
+
+
+# --- specifiers ---
+t = Tree()
+t.write(t.cfg("s.service"), "[Service]\nExecStart=/bin/x %h/b --run %t/sock --s %S --c %C --e %E "
+        "--u %u --U %U --tmp %T %V\n")
+t.enable("s.service")
+c, out = run(t)
+b = svc(out, "s")
+h = t.home
+check("specifiers", all(("args=%s\n" % a) in b for a in (
+    h + "/b", t.run + "/sock", h + "/.local/state", h + "/.cache", h + "/.config",
+    "tess", "1000", "/tmp", "/var/tmp")))
+t.done()
+
+# --- no needs_root / user= ---
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE)
+t.write(t.cfg("n.service"), "[Service]\nExecStart=/bin/n\nUser=nobody\n")
+t.enable("a.service"); t.enable("n.service")
+c, out = run(t)
+check("no_root_lines", "needs_root" not in svc(out, "a") and "needs_root" not in svc(out, "n")
+      and "\nuser=" not in svc(out, "n"))
+check("User= warned", any(ln.startswith(si.WARN_PREFIX) and "User=" in ln
+                          for ln in svc(out, "n").splitlines()))
+t.done()
+
+# --- socket %t -> runtime dir ---
+t = Tree()
+t.write(t.cfg("c.socket"), "[Socket]\nListenStream=%t/foo.sock\n")
+t.write(t.cfg("c.service"), SIMPLE)
+t.enable("c.socket", target="sockets.target")
+c, out = run(t)
+check("socket_runtime", ("listen=stream:%s/foo.sock\n" % t.run) in svc(out, "c"))
+t.done()
+
+# --- deps only within the user set ---
+t = Tree()
+t.write(t.cfg("a.service"), "[Unit]\nRequires=b.service network-online.target\nAfter=network-online.target\n" + SIMPLE)
+t.write(t.cfg("b.service"), SIMPLE)
+t.enable("a.service")
+c, out = run(t)
+check("deps_in_set_only", "dep=b\n" in svc(out, "a") and "network" not in
+      "".join(l for l in svc(out, "a").splitlines(True) if l.startswith("dep=")))
+t.done()
+
+# --- cycle dropped ---
+t = Tree()
+t.write(t.cfg("a.service"), "[Unit]\nRequires=b.service\n" + SIMPLE)
+t.write(t.cfg("b.service"), "[Unit]\nRequires=a.service\n" + SIMPLE)
+t.enable("a.service")
+c, out = run(t)
+check("cycle_dropped", ("dep=b\n" in svc(out, "a")) + ("dep=a\n" in svc(out, "b")) <= 1)
+t.done()
+
+# --- Optiplex obsidian-tunnel ---
+t = Tree()
+t.write(t.cfg("obsidian-tunnel.service"), OBSIDIAN)
+t.enable("obsidian-tunnel.service")
+c, out = run(t)
+b = svc(out, "obsidian-tunnel")
+check("obsidian_svc", "exec=/usr/bin/ssh\n" in b and "args=-N\n" in b and "args=blakbox\n" in b
+      and "no_restart=1" not in b and c == {"generated": 1, "skipped": 0, "error": 0})
+t.done()
+
+# --- drop-in ExecStart reset wins ---
+t = Tree()
+t.write(t.cfg("foo.service"), "[Service]\nExecStart=/bin/old\n")
+t.write(t.cfg("foo.service.d/override.conf"), "[Service]\nExecStart=\nExecStart=/bin/new\n")
+t.enable("foo.service")
+c, out = run(t)
+check("dropin_execstart_reset", "exec=/bin/new\n" in svc(out, "foo"))
+t.done()
+
+# --- stale .svc removed on the next run ---
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE)
+t.enable("a.service")
+c, out = run(t)
+os.unlink(t.cfg("default.target.wants/a.service"))
+c, out = run(t)
+check("stale_svc_removed", not os.path.exists(os.path.join(out, "a.svc")))
+t.done()
+
+# --- a failed run keeps the previous dir; next good run leaves no staging ---
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE)
+t.write(t.cfg("b.service"), SIMPLE)
+t.enable("a.service"); t.enable("b.service")
+c, out = run(t)
+before = sorted(os.listdir(out))
+real, n = si._write_svc, [0]
+def boom(path, body):
+    n[0] += 1
+    if n[0] > 1:
+        raise OSError("disk full")
+    real(path, body)
+si._write_svc = boom
+os.unlink(t.cfg("default.target.wants/b.service"))
+t.write(t.cfg("c.service"), SIMPLE); t.enable("c.service")
+c, out = run(t)
+si._write_svc = real
+check("crash_leaves_old_dir", sorted(os.listdir(out)) == before and c["error"] == 1)
+c, out = run(t)
+check("no staging left", not os.path.exists(out + ".new") and not os.path.exists(out + ".old")
+      and sorted(os.listdir(out)) == ["a.svc", "c.svc"])
+t.done()
+
+# --- manifest, blakbox shape ---
+t = Tree()
+t.write(t.sys("/usr/lib/systemd/user", "syncthing.service"), SIMPLE)
+t.enable("syncthing.service", src=t.sys("/usr/lib/systemd/user", "syncthing.service"))
+skip = t.write(t.sys("/etc/schema-init", "user-skip"), "syncthing.service\n")
+c, out = run(t, [skip])
+with open(os.path.join(t.run, "schema-user/skipped")) as f:
+    check("manifest", f.read() == "syncthing.service\thandled elsewhere (skip list)\n")
+check("manifest counts", c == {"generated": 0, "skipped": 1, "error": 0} and os.listdir(out) == [])
+t.done()
+
+# --- translation Skip lands in the manifest ---
+t = Tree()
+t.write(t.cfg("x.service"), "[Service]\nType=oneshot\n")
+t.enable("x.service")
+c, out = run(t)
+with open(os.path.join(t.run, "schema-user/skipped")) as f:
+    check("translation skip in manifest", f.read().startswith("x.service\t"))
+t.done()
+
+# --- nothing written outside out/ and the manifest ---
+t = Tree()
+t.write(t.cfg("a.service"), SIMPLE)
+t.enable("a.service")
+before_root, before_home = files_under(t.root), files_under(t.home)
+c, out = run(t)
+check("no_writes_outside", files_under(t.root) == before_root and files_under(t.home) == before_home
+      and files_under(t.run) == ["schema-user/services/a.svc", "schema-user/skipped"])
+check("svc mode 0600", (os.stat(os.path.join(out, "a.svc")).st_mode & 0o777) == 0o600)
+t.done()
+
+# --- CLI: no XDG_RUNTIME_DIR -> 2 ---
+saved = os.environ.pop("XDG_RUNTIME_DIR", None)
+check("cli_no_runtime", si.main(["--user"]) == 2)
+if saved is not None:
+    os.environ["XDG_RUNTIME_DIR"] = saved
+
 print("%d/%d passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)
