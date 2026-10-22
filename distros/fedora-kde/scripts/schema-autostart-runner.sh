@@ -10,11 +10,19 @@ echo "runner start $(date)" > "$LOG"
 
 for _ in $(seq 1 40); do pgrep -x plasmashell >/dev/null && break; sleep 0.5; done
 sleep 2
-# The env hooks start us before kwin exists, so the session's WAYLAND_DISPLAY
-# (plasma-session-start.sh exports it once kwin is up) never reached us, and
-# every entry launched without it: flatpak Kodi fell back to GBM and never
-# showed, mpv lost its KWin rules.
-export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+# The env hooks start us before kwin exists, so the compositor's variables
+# never reached us, and every entry launched without them: flatpak Kodi fell
+# back to GBM and never showed, mpv lost its KWin rules. plasmashell started
+# after kwin, so take them from it.
+_ps=$(pgrep -x -u "$(id -u)" plasmashell | head -1)
+if [ -n "$_ps" ]; then
+    while IFS= read -r -d '' _kv; do
+        case "$_kv" in
+            WAYLAND_DISPLAY=*|DISPLAY=*|XAUTHORITY=*) export "$_kv" ;;
+        esac
+    done < "/proc/$_ps/environ"
+fi
+unset _ps _kv
 
 # No Xwayland cookie step: Plasma 6 kwin starts Xwayland on demand with no
 # -auth and grants SI:localuser, so there is nothing to merge -- waiting for it
@@ -59,20 +67,19 @@ for f in "$HOME"/.config/autostart/*.desktop; do
     cmd=$(val Exec | sed 's/ *%[A-Za-z]//g')
     [ -z "$cmd" ] && continue
 
-    set -- $cmd
+    set -f; set -- $cmd; set +f
     prog=$1
     case "${prog##*/}" in
         sh|bash|dash|zsh|env|python|python2|python3|perl|ruby|node) shift; [ -n "$1" ] && prog=$1 ;;
     esac
-    # `sh -c "sleep 5; exec foo"` leaves prog=-c, and `pgrep -f -- -c` matches
+    # `sh -c "sleep 5; exec foo"` left prog=-c, and `pgrep -f -- -c` matches
     # nearly any process, so such entries were always skipped as running. Use the
-    # exec target if the script names one; otherwise launch without the check.
+    # last exec target in the command; with none, launch without the check.
     case "$prog" in
         -*) prog=""
-            while [ $# -gt 1 ]; do
-                [ "$1" = exec ] && { prog=${2%[\"\']}; break; }
-                shift
-            done ;;
+            case "$cmd" in
+                *exec\ *) _t=${cmd##*exec }; _t=${_t#[\"\']}; prog=${_t%%[ ;&|\"\']*} ;;
+            esac ;;
     esac
     key=${prog##*/}
     if [ -n "$prog" ] && { pgrep -f -- "$prog" >/dev/null 2>&1 || pgrep -x "$key" >/dev/null 2>&1; }; then
