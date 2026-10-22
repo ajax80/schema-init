@@ -357,6 +357,28 @@ made = {f[:-4] for f in os.listdir(out)}
 check("condition_user", made == {"notsys", "me", "uid"} and c["skipped"] == 2)
 t.done()
 
+t = Tree()
+t.ctx["user"] = "Tess"
+for n, cond in (("case", "Tess"), ("spec", "%u"), ("specuid", "%U"), ("nspec", "!%u")):
+    t.write(t.cfg(n + ".service"), "[Unit]\nConditionUser=%s\n" % cond + SIMPLE)
+    t.enable(n + ".service")
+t.write(t.sys("/etc", "login.defs"), "SYS_UID_MAX 1000\n")
+t.write(t.cfg("sys.service"), "[Unit]\nConditionUser=@system\n" + SIMPLE)
+t.enable("sys.service")
+c, out = run(t)
+made = {f[:-4] for f in os.listdir(out)}
+check("condition_user_case_spec_logindefs", made == {"case", "spec", "specuid", "sys"})
+t.done()
+
+# --- a swap killed between its renames: the old set (hand-written .svc) comes back ---
+t = Tree()
+out = os.path.join(t.run, "schema-user/services")
+t.write(os.path.join(out + ".old", "mine.svc"), "name=mine\nexec=/bin/true\n")
+c, out = run(t)
+check("swap_recovery", os.path.exists(os.path.join(out, "mine.svc"))
+      and not os.path.exists(out + ".old"))
+t.done()
+
 # --- --out with a trailing slash swaps the dir, not a dir/.new inside it ---
 t = Tree()
 t.write(t.cfg("foo.service"), SIMPLE)

@@ -388,6 +388,8 @@ int main(int argc, char **argv) {
     engine_hooks.shut_log = user_shut_log;
 
     run_import(imp, cfg_home, state_home);
+    if (!engine_running)
+        _exit(0);
     if (engine_load(svc_dir) > 0)
         die("dependency cycle in the service configuration");
     engine_open(0);
