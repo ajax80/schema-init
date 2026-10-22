@@ -251,7 +251,13 @@ The package does not restart the broker for you yet. The fallback launcher (`sch
 
 `schema-user` runs the same engine as PID 1, as an ordinary user, for that user's own services. It refuses to run as root.
 
-**Status: run by hand only.** Nothing starts it at login yet; logind will start and stop it in a later release. Your desktop session does not depend on it.
+**Started by logind.** schema-logind starts one `schema-user` for you at your first session and stops it 30 s after your last session closes (a new session inside those 30 s, such as an autologin desktop restarting, keeps it running). Your desktop session never waits for it: if it fails to start or keeps crashing, the login goes on as before.
+
+- **Restarts:** if it crashes, logind kills whatever services it left behind and starts it again after 1, 2, 4, 8, 16, 32, then 60 s. After 5 crashes within 5 minutes it gives up, and says so in schema-logind's log. A clean exit (you sent it SIGTERM, or the system is shutting down) is not a crash, and it stays stopped too. Either way it starts again once all your sessions have closed (and you do not linger) and you log in again, or when schema-logind restarts.
+- **Linger:** `loginctl enable-linger` (as yourself, from a session, or as root for anyone) starts it at boot and keeps it running with no session; `loginctl disable-linger` undoes that. The flag is `/var/lib/systemd/linger/<user>`.
+- **logind restarts:** a `kill -HUP` re-exec of schema-logind, or a stop and start, picks up the running instance instead of starting another. Your services never restart because logind did.
+- **Shutdown:** PID 1 sends it SIGTERM along with the containers, so your services get their ordered stop before the final kill.
+- **Kill switch:** create `/etc/schema-init/user-supervisor.disabled`, or add `schema.user=0` to the kernel command line at the boot menu, and logind starts no `schema-user` at all. An instance already running is left alone.
 
 | What | Where |
 |---|---|
@@ -260,13 +266,15 @@ The package does not restart the broker for you yet. The fallback launcher (`sch
 | Notify socket | `$XDG_RUNTIME_DIR/schema-user/notify` |
 | Service and rail logs | `$XDG_STATE_HOME/schema-user/log/` (default `~/.local/state/schema-user/log/`) |
 | Persistent timer stamps | `$XDG_STATE_HOME/schema-user/timers/` |
+| Cgroup (delegated to you) | `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/` |
+| Its own output | `/var/log/schema-init/schema-user-<uid>.log` (root-readable) |
 
 Drive it with `schema-ctl --user`, e.g. `schema-ctl --user status` or `schema-ctl --user restart <svc>`.
 
 - `XDG_RUNTIME_DIR` must be set and be a directory you own, or it exits 1. A second copy for the same user exits 1 with "already running".
 - Services start with `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus`, plus `KEY=VALUE` lines from `*.conf` in `/usr/lib/environment.d`, `/etc/environment.d` and `$XDG_CONFIG_HOME/environment.d`, in that order (later wins). `$VAR` and `${VAR}` are expanded; nothing else is. The environment `schema-user` itself was started with is not passed on, so `WAYLAND_DISPLAY` and `DISPLAY` never leak in.
-- It gives each service its own cgroup only if the cgroup it was started in was delegated to you (you can write its `cgroup.procs` and create directories in it). It moves itself into `init.scope` there. Otherwise it says so once and runs without per-service cgroups.
-- Without a delegated cgroup, `notify=` (and so `watchdog_sec=`) and `ready_bus_name=` cannot attribute a message to a service and fall back to `ready_path`/`stable_secs`, and a `pid_file=` service is excised. These need the delegation logind will set up.
+- Run by hand, it gives each service its own cgroup only if the cgroup it was started in was delegated to you (you can write its `cgroup.procs` and create directories in it). It moves itself into `init.scope` there. Otherwise it says so once and runs without per-service cgroups.
+- Without a delegated cgroup, `notify=` (and so `watchdog_sec=`) and `ready_bus_name=` cannot attribute a message to a service and fall back to `ready_path`/`stable_secs`, and a `pid_file=` service is excised. Started by logind, it has the delegation unless setting it up failed (logged in schema-logind.log).
 - It is a child subreaper: a service's double-forked daemon stays its child. On SIGTERM or SIGINT it stops services in reverse dependency order, kills anything still reparented to it, and exits 0.
 - `wait_socket=<path>` in a `.svc` holds a service until a connection to that `AF_UNIX` socket succeeds (a socket file left by a dead listener does not count). Point session services at `$XDG_RUNTIME_DIR/bus` to start them once the session bus is up; `schema-ctl --user status` shows `waiting=<path>` meanwhile.
 

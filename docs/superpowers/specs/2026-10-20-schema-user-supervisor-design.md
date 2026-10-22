@@ -154,8 +154,8 @@ Finish line: GNOME and stock `startplasma-wayland` log in unmodified on a test V
 ## Left to the builder
 
 - Exact shape of the engine context struct / callback seam in PR A, and which file(s) the engine moves to — constrained by "no PID 1 behaviour change, re-exec blob compatible".
-- Whether cgroup delegation lands in PR B or a separate PR C.
-- logind restart backoff numbers and crash-window limits.
+- Whether cgroup delegation lands in PR B or a separate PR C. **Decided: PR C**, with the lifecycle (schema-user only consumes it).
+- logind restart backoff numbers and crash-window limits. **Decided (PR C):** 1, 2, 4, 8, 16, 32, 60 s; give up after 5 crashes in 300 s until the next login; stop = SIGTERM, `cgroup.kill` after 20 s.
 - How `schema-user` waits on the bus (inotify on `$XDG_RUNTIME_DIR` vs. reuse of the `ready_*` path watchers).
 - Test layout for `schema-import --user` (extend `test_import_units.py` with a fake user tree via `MIGRATE_ROOT`).
 

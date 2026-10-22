@@ -23,6 +23,8 @@ except ImportError:
     unix_signal_add = GLib.unix_signal_add
 import socket
 import pwd
+import glob
+import errno
 
 def read_file_line(path):
     try:
@@ -77,8 +79,15 @@ def get_active_uid():
     # deterministic pick from the trusted set; true foreground-session selection
     # on a multi-user box is a follow-up that must use a trusted seat source.
     # See docs/reviews/logind_authz_gate_review.md.
+    #
+    # A lingering user gets a /run/user entry with no login behind it, so a
+    # uid that owns a (root-written) session file wins, and a lingering uid
+    # without one never counts.
     try:
-        uids = [int(d) for d in os.listdir('/run/user') if d.isdigit() and int(d) >= 1000]
+        uids = {int(d) for d in os.listdir(RUN_USER_DIR) if d.isdigit() and int(d) >= 1000}
+        with_session = uids & {r.uid for r in scan_session_files().values()
+                               if not r.synthesised}
+        uids = with_session or (uids - linger_uids())
         if uids:
             return min(uids)
     except Exception:
@@ -287,6 +296,208 @@ SESSION_UNREGISTER = os.environ.get(
 UDEV_DATA_DIR = os.environ.get('SCHEMA_LOGIND_UDEV_DATA', '/run/udev/data')
 DEV_DIR = os.environ.get('SCHEMA_LOGIND_DEV_DIR', '/dev')
 _UDEV_DB_RE = re.compile(r'([cb])(\d+):(\d+)')
+
+# --- per-user supervisor (schema-user) --------------------------------------
+# Overridable for the same reason as the dirs above: a test aims these at a
+# temp tree and a shell stand-in instead of the live box.
+LINGER_DIR = os.environ.get('SCHEMA_LINGER_DIR', '/var/lib/systemd/linger')
+SCHEMA_USER_BIN = os.environ.get('SCHEMA_USER_BIN', '/usr/bin/schema-user')
+USER_KILLSWITCH = os.environ.get('SCHEMA_USER_KILLSWITCH',
+                                 '/etc/schema-init/user-supervisor.disabled')
+KERNEL_CMDLINE = os.environ.get('SCHEMA_LOGIND_CMDLINE', '/proc/cmdline')
+RUN_USER_DIR = os.environ.get('SCHEMA_LOGIND_RUN_USER', '/run/user')
+USER_LOG_DIR = os.environ.get('SCHEMA_USER_LOG_DIR', '/var/log/schema-init')
+_USER_SVC_RE = re.compile(r'/user@(\d+)\.service/')
+
+
+def user_service_cgroup(uid):
+    return '%s/user.slice/user-%d.slice/user@%d.service' % (CGROUP_ROOT, uid, uid)
+
+
+def delegate_user_cgroup(uid):
+    path = user_service_cgroup(uid)
+    try:
+        pw = pwd.getpwuid(uid)
+        os.makedirs(path, exist_ok=True)
+        with open(CGROUP_ROOT + '/cgroup.subtree_control') as f:
+            ctls = f.read().split()
+        # A controller is only available in user@ if every ancestor enables
+        # it for its children; schema-user enables its own level itself.
+        for d in (CGROUP_ROOT + '/user.slice',
+                  '%s/user.slice/user-%d.slice' % (CGROUP_ROOT, uid)):
+            for c in ctls:
+                try:
+                    with open(d + '/cgroup.subtree_control', 'w') as f:
+                        f.write('+' + c)
+                except OSError:
+                    pass
+        for p in ('', '/cgroup.procs', '/cgroup.subtree_control', '/cgroup.threads'):
+            os.chown(path + p, uid, pw.pw_gid)
+    except (OSError, KeyError) as e:
+        print(f"login1-stub: schema-user uid={uid}: cgroup delegation failed: {e}",
+              file=sys.stderr)
+        return None
+    return path
+
+
+def remove_user_cgroup(uid):
+    path = user_service_cgroup(uid)
+    for root, _dirs, _files in os.walk(path, topdown=False):
+        try:
+            os.rmdir(root)
+        except OSError:
+            pass
+
+
+def kill_user_cgroup(uid):
+    try:
+        with open(user_service_cgroup(uid) + '/cgroup.kill', 'w') as f:
+            f.write('1')
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            print(f"login1-stub: schema-user uid={uid} cgroup.kill: {e}",
+                  file=sys.stderr)
+
+
+def user_cgroup_populated(uid):
+    try:
+        with open(user_service_cgroup(uid) + '/cgroup.events') as f:
+            return 'populated 1' in f.read().splitlines()
+    except OSError:
+        return False
+
+
+def ensure_runtime_dir(uid):
+    runtime_dir = f'{RUN_USER_DIR}/{uid}'
+    try:
+        os.makedirs(runtime_dir, exist_ok=True)
+        if os.geteuid() == 0:
+            os.chmod(runtime_dir, 0o700)
+            os.chown(runtime_dir, uid, -1)
+    except OSError as e:
+        print(f"login1-stub: {runtime_dir}: {e}", file=sys.stderr)
+    return runtime_dir
+
+
+def spawn_user_supervisor(uid, delegated=True):
+    pw = pwd.getpwuid(uid)
+    os.makedirs(USER_LOG_DIR, exist_ok=True)
+    env = {
+        'HOME': pw.pw_dir, 'USER': pw.pw_name, 'LOGNAME': pw.pw_name,
+        'SHELL': pw.pw_shell or '/bin/sh', 'PATH': '/usr/local/bin:/usr/bin:/bin',
+        'XDG_RUNTIME_DIR': f'{RUN_USER_DIR}/{uid}',
+    }
+    # Moving a process between cgroups needs write access to the common
+    # ancestor's cgroup.procs, which the user never has: the shell moves
+    # itself while still root, and only then becomes the user.
+    # With no delegated cgroup $1 is empty and it runs where it is, without
+    # per-service cgroups, rather than failing every start.
+    move = '{ [ -z "$1" ] || echo $$ > "$1"; } && { cd "$5" || cd /; } && '
+    if os.geteuid() == 0:
+        script = move + 'exec setpriv --reuid="$2" --regid="$3" --init-groups -- "$4"'
+    else:
+        script = move + 'exec "$4"'
+    argv = ['/bin/sh', '-c', script, 'sh',
+            user_service_cgroup(uid) + '/cgroup.procs' if delegated else '',
+            str(uid), str(pw.pw_gid),
+            SCHEMA_USER_BIN, pw.pw_dir]
+    log = os.path.join(USER_LOG_DIR, 'schema-user-%d.log' % uid)
+    # posix_spawn, not subprocess: a Popen object reaps behind our back, and
+    # the tick's own waitpid is what tells a crash from a stop.
+    return os.posix_spawn('/bin/sh', argv, env, setsid=True, file_actions=[
+        (os.POSIX_SPAWN_OPEN, 0, '/dev/null', os.O_RDONLY, 0),
+        (os.POSIX_SPAWN_OPEN, 1, log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o640),
+        (os.POSIX_SPAWN_DUP2, 1, 2),
+    ])
+
+
+def _is_schema_user(pid):
+    try:
+        exe = os.readlink('/proc/%d/exe' % pid)
+    except OSError:
+        exe = ''
+    if exe.removesuffix(' (deleted)') == SCHEMA_USER_BIN:
+        return True
+    try:
+        with open('/proc/%d/cmdline' % pid, 'rb') as f:
+            argv = f.read().decode(errors='replace').split('\0')
+    except OSError:
+        return False
+    return SCHEMA_USER_BIN in argv[:2]
+
+
+def find_user_supervisors():
+    found = {}
+    pattern = CGROUP_ROOT + '/user.slice/user-*.slice/user@*.service'
+    for procs in glob.glob(pattern + '/init.scope/cgroup.procs') + \
+            glob.glob(pattern + '/cgroup.procs'):
+        m = _USER_SVC_RE.search(procs)
+        if not m:
+            continue
+        uid = int(m.group(1))
+        try:
+            with open(procs) as f:
+                pids = [int(p) for p in f.read().split()]
+        except (OSError, ValueError):
+            continue
+        for pid in pids:
+            if uid not in found and _is_schema_user(pid):
+                found[uid] = pid
+    return found
+
+
+def user_supervisor_disabled():
+    if os.path.exists(USER_KILLSWITCH):
+        return True
+    try:
+        with open(KERNEL_CMDLINE) as f:
+            return 'schema.user=0' in f.read().split()
+    except OSError:
+        return False
+
+
+def linger_uids():
+    try:
+        names = os.listdir(LINGER_DIR)
+    except OSError:
+        return set()
+    uids = set()
+    for name in names:
+        try:
+            uids.add(pwd.getpwnam(name).pw_uid)
+        except KeyError:
+            pass
+    return uids
+
+
+def set_linger(uid, enable):
+    try:
+        name = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        raise ValueError('no such user: %d' % uid)
+    path = os.path.join(LINGER_DIR, name)
+    if enable:
+        os.makedirs(LINGER_DIR, mode=0o755, exist_ok=True)
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT, 0o644))
+    else:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+# The uid SetUserLinger may act on for this caller, or None.
+def linger_allowed(caller, target, session_uids):
+    if caller is None:
+        return None
+    # UID_INVALID is systemd's "the caller", what a bare `loginctl enable-linger` sends.
+    if target == 0xFFFFFFFF:
+        target = caller
+    if target == 0:
+        return None
+    if caller == 0 or (caller == target and target in session_uids):
+        return target
+    return None
 
 
 def _rebase_devname(devname):
@@ -1313,6 +1524,7 @@ class SessionRegistry:
         self._seat_uaccess_fp = {}   # seat_id -> {path: (ino, mtime_ns)} last granted
         self._seat_uaccess_nodes = {}  # seat_id -> cached node paths
         self._seat_udev_mtime = {}   # seat_id -> udev-DB mtime at last enumeration
+        self.supervisors = None      # UserSupervisors, attached by main()
 
     # -- lookup --------------------------------------------------------------
 
@@ -1338,6 +1550,13 @@ class SessionRegistry:
             if uid not in seen:
                 seen.append(uid)
         return seen
+
+    def session_uids(self):
+        # The synthesised legacy record stands for "nobody registered yet",
+        # not a login: starting a supervisor for it would run one at boot
+        # for whoever owns the lowest /run/user entry.
+        return {obj.record.uid for obj in self.sessions.values()
+                if not obj.record.synthesised}
 
     def seats(self):
         seen = []
@@ -1470,6 +1689,13 @@ class SessionRegistry:
 
         self._sync_users()
         self._write_derived()
+        if self.supervisors:
+            # A bug here must never stop the session projection above.
+            try:
+                self.supervisors.reconcile(self.session_uids())
+            except Exception as e:
+                print(f"login1-stub: schema-user reconcile failed: {e}",
+                      file=sys.stderr)
         return True
 
     def _sync_users(self):
@@ -1634,6 +1860,164 @@ class SessionRegistry:
                 }, [])
 
 
+USER_GRACE_S = 30
+USER_STOP_TIMEOUT_S = 20
+USER_BACKOFF_S = (1, 2, 4, 8, 16, 32, 60)
+USER_CRASH_LIMIT = 5
+USER_CRASH_WINDOW_S = 300
+
+
+# One schema-user per user with a session or a linger file. Driven from
+# SessionRegistry.sync() on the existing 250 ms tick, for the same reason the
+# registry is: no child watch, no pidfd, nothing new held open in the GLib
+# loop. Liveness is a waitpid(WNOHANG) per tick for our own children; an
+# instance adopted from an earlier logind is checked by its /proc start ticks
+# instead, which also guards every signal against a recycled pid.
+class UserSupervisors:
+
+    def __init__(self):
+        self.state = {}         # uid -> dict, see _st()
+
+    def _st(self, uid):
+        return self.state.setdefault(uid, {
+            'pid': None, 'start': None, 'absent_since': None, 'term_at': None,
+            'crashes': [], 'next_start': 0, 'gave_up': False,
+            'stopping': False, 'killed': False, 'held': False,
+        })
+
+    def pid(self, uid):
+        st = self.state.get(uid)
+        return st['pid'] if st else None
+
+    def adopt(self):
+        # An instance that exited just before a re-exec is a zombie of this
+        # image, invisible in cgroup.procs; nothing else would ever reap it.
+        try:
+            while os.waitpid(-1, os.WNOHANG)[0] > 0:
+                pass
+        except ChildProcessError:
+            pass
+        for uid, pid in find_user_supervisors().items():
+            start = proc_starttime_ticks(pid)
+            if start is None:
+                continue
+            st = self._st(uid)
+            st['pid'], st['start'] = pid, start
+            print(f"login1-stub: schema-user uid={uid} pid={pid} adopted")
+
+    # None while alive, else a wait status. An instance an earlier logind
+    # started is not our child and has none; its clean exit unlinks ctl.sock
+    # (engine_release) and a crash leaves it, so that stands in for 0 / -1.
+    def _exit_status(self, uid, st):
+        pid = st['pid']
+        try:
+            got, status = os.waitpid(pid, os.WNOHANG)
+            return status if got == pid else None
+        except ChildProcessError:
+            if proc_starttime_ticks(pid) == st['start']:
+                return None
+            sock = f'{RUN_USER_DIR}/{uid}/schema-user/ctl.sock'
+            return -1 if os.path.exists(sock) else 0
+
+    def _signal(self, st, sig):
+        if proc_starttime_ticks(st['pid']) == st['start']:
+            try:
+                os.kill(st['pid'], sig)
+            except OSError:
+                pass
+
+    def _crashed(self, uid, st, now):
+        st['crashes'] = [t for t in st['crashes']
+                         if now - t < USER_CRASH_WINDOW_S] + [now]
+        n = len(st['crashes'])
+        if n >= USER_CRASH_LIMIT:
+            st['gave_up'] = True
+            print(f"login1-stub: schema-user uid={uid} crashed {n} times in "
+                  f"{USER_CRASH_WINDOW_S} s — giving up until next login",
+                  file=sys.stderr)
+            return
+        delay = USER_BACKOFF_S[min(n - 1, len(USER_BACKOFF_S) - 1)]
+        st['next_start'] = now + delay
+        print(f"login1-stub: schema-user uid={uid} exited — restart in {delay} s",
+              file=sys.stderr)
+
+    def _start(self, uid, st, now):
+        if st['gave_up'] or now < st['next_start']:
+            return
+        if user_supervisor_disabled():
+            if not st['held']:
+                st['held'] = True
+                print(f"login1-stub: schema-user uid={uid} not started: kill switch")
+            return
+        try:
+            pwd.getpwuid(uid)
+        except KeyError:
+            return
+        # Leftovers of an instance that died unseen (while logind was down):
+        # kill them and start on a later tick, once the tree is empty.
+        if user_cgroup_populated(uid):
+            kill_user_cgroup(uid)
+            return
+        ensure_runtime_dir(uid)
+        # A dead instance's tree has controllers enabled for its children, and
+        # cgroup v2 refuses a process in such a cgroup (EBUSY): start from an
+        # empty user@ every time.
+        remove_user_cgroup(uid)
+        delegated = delegate_user_cgroup(uid) is not None
+        try:
+            pid = spawn_user_supervisor(uid, delegated)
+        except OSError as e:
+            print(f"login1-stub: schema-user uid={uid} spawn failed: {e}",
+                  file=sys.stderr)
+            self._crashed(uid, st, now)
+            return
+        st['pid'], st['start'] = pid, proc_starttime_ticks(pid)
+        print(f"login1-stub: schema-user uid={uid} started pid={pid}")
+
+    def reconcile(self, session_uids, now=None):
+        now = time.monotonic() if now is None else now
+        wanted = (set(session_uids) | linger_uids()) - {0}
+        for uid in wanted | set(self.state):
+            st = self._st(uid)
+            status = self._exit_status(uid, st) if st['pid'] else None
+            if status is not None:
+                st['pid'] = None
+                if st['stopping']:
+                    remove_user_cgroup(uid)
+                    del self.state[uid]
+                    print(f"login1-stub: schema-user uid={uid} stopped")
+                    continue
+                # schema-user exits 0 only after an ordered stop on SIGTERM or
+                # SIGINT: PID 1 shutting down, or someone stopping it on purpose.
+                # Restarting it there would spawn a fresh one mid-shutdown.
+                if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
+                    st['gave_up'] = True
+                    print(f"login1-stub: schema-user uid={uid} exited cleanly — "
+                          f"not restarting until next login")
+                    continue
+                # Its services outlive it (it was their subreaper) and would run
+                # unsupervised, then twice once the next instance starts them.
+                kill_user_cgroup(uid)
+                self._crashed(uid, st, now)
+            if (st['stopping'] and not st['killed']
+                    and now - st['term_at'] >= USER_STOP_TIMEOUT_S):
+                st['killed'] = True
+                kill_user_cgroup(uid)
+            if uid in wanted:
+                st['absent_since'] = None
+                if st['pid'] is None:
+                    self._start(uid, st, now)
+            elif st['pid'] is None:
+                # Forgetting resets gave_up: the next login starts fresh.
+                del self.state[uid]
+            elif not st['stopping']:
+                if st['absent_since'] is None:
+                    st['absent_since'] = now
+                elif now - st['absent_since'] >= USER_GRACE_S:
+                    self._signal(st, signal.SIGTERM)
+                    st['stopping'], st['term_at'] = True, now
+
+
 class Login1User(dbus.service.Object):
     def __init__(self, bus, uid=1000, registry=None):
         self.uid = uid
@@ -1667,6 +2051,7 @@ class Login1User(dbus.service.Object):
                 'Name': dbus.String(username),
                 'Display': dbus.ObjectPath(display),
                 'State': dbus.String(state),
+                'Linger': dbus.Boolean(uid in linger_uids()),
             }
         return {}
 
@@ -1828,9 +2213,26 @@ class Login1Manager(dbus.service.Object):
     def TerminateSeat(self, seat_id):
         print(f"login1-stub: TerminateSeat({seat_id}) (no-op; not managed here)")
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ubb', out_signature='')
-    def SetUserLinger(self, uid, enable, interactive):
-        print(f"login1-stub: SetUserLinger({uid}, {enable}) (no-op)")
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='ubb', out_signature='',
+                         sender_keyword='sender')
+    def SetUserLinger(self, uid, enable, interactive, sender=None):
+        caller = caller_uid(self._connection, sender)
+        target = linger_allowed(caller, int(uid),
+                                self.registry.session_uids() if self.registry else set())
+        if target is None:
+            print(f"login1-stub: DENY SetUserLinger({uid}) from uid={caller}",
+                  file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "Not allowed to change linger for this user",
+                name='org.freedesktop.login1.AccessDenied')
+        try:
+            set_linger(target, bool(enable))
+        except (ValueError, OSError) as e:
+            raise dbus.exceptions.DBusException(
+                str(e), name='org.freedesktop.DBus.Error.InvalidArgs')
+        print(f"login1-stub: SetUserLinger({target}, {bool(enable)})")
+        if self.registry:
+            self.registry.sync()
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='st', out_signature='')
     def ScheduleShutdown(self, shutdown_type, usec):
@@ -2786,14 +3188,7 @@ def main():
     # it as a directory makes root systemctl fail with "Connection refused" instead of
     # cleanly falling through. Non-root systemctl uses the D-Bus system bus and works.
 
-    uid = get_active_uid()
-    runtime_dir = f'/run/user/{uid}'
-    os.makedirs(runtime_dir, exist_ok=True)
-    os.chmod(runtime_dir, 0o700)
-    try:
-        os.chown(runtime_dir, uid, -1)
-    except Exception:
-        pass
+    ensure_runtime_dir(get_active_uid())
 
     # systemctl on this systemd talks plain D-Bus to org.freedesktop.systemd1.Manager
     # over /run/dbus/system_bus_socket — it does NOT use varlink here. Creating a
@@ -2818,6 +3213,9 @@ def main():
     # scan_session_files() covers a login script that never allocated an id.
     # The manager is attached only afterwards so the initial population does
     # not emit SessionNew for sessions that predate us.
+    supervisors = UserSupervisors()
+    supervisors.adopt()
+    registry.supervisors = supervisors
     registry.sync(handoff)
     registry.manager = manager
 

@@ -1335,8 +1335,13 @@ static void fuse_abort_all(void) {
  * leaving a dirty ext4 journal for the next boot to replay. kill(-1) does clear
  * them, but only by SIGKILL -- no chance to flush. Signalling the container
  * processes here, in the same grace window the services get, lets a container
- * shut down cleanly first; the cgroup.kill pass is the recursive backstop. */
+ * shut down cleanly first; the cgroup.kill pass is the recursive backstop.
+ *
+ * schema-user lives outside schema-init/ too. Only its init.scope is signalled:
+ * on SIGTERM it stops its own services in reverse dependency order, which a
+ * signal to every process in user@<uid>.service would defeat. */
 static const char *CONTAINER_CGROUP_PROC_GLOBS[] = {
+    "/sys/fs/cgroup/user.slice/user-*.slice/user@*.service/init.scope/cgroup.procs",
     "/sys/fs/cgroup/docker/*/cgroup.procs",
     "/sys/fs/cgroup/docker/*/*/cgroup.procs",
     "/sys/fs/cgroup/libpod_parent/*/cgroup.procs",
@@ -1366,7 +1371,7 @@ static int container_cgroups_signal(int sig) {
             if (p > 1 && kill(p, sig) == 0) live++;
         fclose(f);
     }
-    if (sig && live) shut_log("container SIGTERM sent");
+    if (sig && live) shut_log("container/user-supervisor SIGTERM sent");
     globfree(&g);
     return live;
 }
