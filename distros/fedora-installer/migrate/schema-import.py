@@ -1728,10 +1728,26 @@ def user_enabled_set(skip):
         if text is None:
             skipped.append((u, "not found"))
             continue
-        unit = parse_unit(text).get("Unit", [])
-        for key in ("Wants", "Requires"):
-            for v in _get_all(unit, key):
-                queue += [(w, False) for w in v.split()]
+        parsed = parse_unit(text)
+        deps = [parsed.get("Unit", [])]
+        # a socket's or timer's .svc runs its service, so that service's
+        # deps must be in the set too or their dep= lines are dropped
+        act = None
+        if u.endswith(".socket"):
+            act = _get_last(parsed.get("Socket", []), "Service") or _base(u) + ".service"
+        elif u.endswith(".timer"):
+            act = _get_last(parsed.get("Timer", []), "Unit") or _base(u) + ".service"
+        if act and act not in skip and act not in _NEVER and "@" not in act:
+            try:
+                atext = user_unit_text(act)
+            except (Masked, ValueError):
+                atext = None
+            if atext:
+                deps.append(parse_unit(atext).get("Unit", []))
+        for unit in deps:
+            for key in ("Wants", "Requires"):
+                for v in _get_all(unit, key):
+                    queue += [(w, False) for w in v.split()]
         queue += [(w, True) for w in _wants_dir_units([cfg], u)]
         units.append(u)
     try:
