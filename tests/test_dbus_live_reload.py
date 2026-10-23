@@ -149,7 +149,7 @@ def denied(a, b, name):
         return False
 
 
-class Reload(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.envs = []
 
@@ -162,6 +162,8 @@ class Reload(unittest.TestCase):
         self.envs.append(e)
         return e
 
+
+class Reload(Base):
     def test_sighup_does_not_kill(self):
         e = self.env()
         os.kill(e.proc.pid, signal.SIGHUP)
@@ -293,6 +295,66 @@ class Reload(unittest.TestCase):
         e.proc.wait(5)
         out = subprocess.run(["pgrep", "-f", os.path.join(e.dir, "dissect.py")], capture_output=True)
         self.assertEqual(out.stdout, b"")
+
+
+class Inotify(Base):
+    FAST = {"SCHEMA_DBUS_DEBOUNCE_MS": "300"}
+
+    def test_inotify_new_activation_file(self):
+        e = self.env(extra_env=self.FAST)
+        a = Client(e.bus)
+        marker = os.path.join(e.dir, "auto.ran")
+        e.activatable("org.test.Auto", marker)
+        self.assertTrue(e.wait_reloads(1, trigger="inotify"), e.logtext())
+        poke(a, "org.test.Auto")
+        self.assertTrue(wait_file(marker))
+
+    def test_inotify_policy_change(self):
+        sysd = tempfile.mkdtemp()
+        try:
+            e = self.env(extra_env=dict(self.FAST, SCHEMA_DBUS_WATCH_EXTRA=sysd))
+            a, b = Client(e.bus), Client(e.bus)
+            b.driver("RequestName", "su", ("org.test.Deny", 0))
+            self.assertFalse(denied(a, b, "org.test.Deny"))
+            e.set_next(BASE + "deny = send_destination:org.test.Deny\n")
+            e.write(os.path.join(sysd, "zz-test.conf"), "<busconfig/>\n")
+            self.assertTrue(e.wait_reloads(1, trigger="inotify"), e.logtext())
+            self.assertTrue(denied(a, b, "org.test.Deny"))
+        finally:
+            shutil.rmtree(sysd)
+
+    def test_inotify_burst_one_reload(self):
+        e = self.env(extra_env=self.FAST)
+        for i in range(20):
+            e.write(os.path.join(e.svcdir, "org.test.B%d.service" % i),
+                    "[D-BUS Service]\nName=org.test.B%d\nExec=/bin/true\n" % i)
+            time.sleep(0.05)
+        self.assertTrue(e.wait_reloads(1, trigger="inotify"), e.logtext())
+        time.sleep(1)
+        self.assertEqual(len(e.reloads("inotify")), 1, e.logtext())
+        self.assertIn("20 activatable services", e.reloads("inotify")[0])
+
+    def test_watched_dir_removed(self):
+        e = self.env(extra_env=self.FAST)
+        marker = os.path.join(e.dir, "gone.ran")
+        e.activatable("org.test.Gone", marker)
+        self.assertTrue(e.wait_reloads(1, trigger="inotify"), e.logtext())
+        shutil.rmtree(e.svcdir)
+        self.assertTrue(e.wait_reloads(2, trigger="inotify"), e.logtext())
+        self.assertIsNone(e.proc.poll())
+        a = Client(e.bus)
+        m = poke(a, "org.test.Gone")
+        self.assertEqual(m.fields.get(4), "org.freedesktop.DBus.Error.ServiceUnknown")
+        self.assertFalse(os.path.exists(marker))
+
+    def test_session_bus_inotify(self):
+        e = self.env(extra_env=self.FAST, system=False, dissect=False)
+        a = Client(e.bus)
+        marker = os.path.join(e.dir, "sess.ran")
+        e.activatable("org.test.Sess", marker)
+        self.assertTrue(e.wait_reloads(1, trigger="inotify"), e.logtext())
+        poke(a, "org.test.Sess")
+        self.assertTrue(wait_file(marker))
 
 
 if __name__ == "__main__":

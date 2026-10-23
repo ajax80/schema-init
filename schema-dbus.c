@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/signalfd.h>
+#include <sys/inotify.h>
 #include <sys/wait.h>
 #include <pwd.h>
 #include <grp.h>
@@ -1077,6 +1078,76 @@ static void reload_abort(void) {
     g_rl.nrun = g_rl.nnext = 0;
 }
 
+/* ---- automatic pickup: inotify on the D-Bus config, like dbus-daemon ----
+   A dnf transaction drops many files, so any event only pushes a quiet-window
+   deadline out; the reload runs once the watched set has been still for it. */
+typedef struct { int wd; char *only; } cfg_watch;   /* only: a file name in a watched dir, NULL = any */
+static cfg_watch *g_watches;
+static int g_nwatches, g_ifd = -1;
+static long g_debounce_ms = 1000, g_debounce_at;
+
+static void watch_add(const char *path, const char *only) {
+    int wd = inotify_add_watch(g_ifd, path, IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
+                                            IN_CLOSE_WRITE | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF |
+                                            IN_ONLYDIR | IN_MASK_ADD);
+    if (wd < 0) return;                      /* missing at start: not watched */
+    g_watches = realloc(g_watches, (g_nwatches + 1) * sizeof *g_watches);
+    g_watches[g_nwatches++] = (cfg_watch){ wd, only ? strdup(only) : NULL };
+}
+
+static void watch_file(const char *path) {
+    char dir[1024];
+    const char *slash = strrchr(path, '/');
+    if (!slash) return;
+    snprintf(dir, sizeof dir, "%.*s", (int)(slash - path), path);
+    watch_add(*dir ? dir : "/", slash + 1);
+}
+
+static void watch_setup(void) {
+    g_ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (g_ifd < 0) { fprintf(stderr, "schema-dbus: inotify unavailable, config changes need a reload\n"); return; }
+    for (int i = 0; i < g_nsvcdirs; i++) watch_add(g_svcdirs[i], NULL);
+    if (g_maskfile) watch_file(g_maskfile);
+    if (g_system_bus) {
+        watch_file(g_system_conf);
+        watch_add("/usr/share/dbus-1/system.d", NULL);
+        watch_add("/etc/dbus-1", NULL);
+        watch_add("/etc/dbus-1/system.d", NULL);
+    }
+    const char *extra = getenv("SCHEMA_DBUS_WATCH_EXTRA");
+    if (extra) {
+        char *buf = strdup(extra), *save = NULL;
+        for (char *p = strtok_r(buf, ":", &save); p; p = strtok_r(NULL, ":", &save)) watch_add(p, NULL);
+        free(buf);
+    }
+}
+
+static void watch_read(void) {
+    char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+    ssize_t n;
+    int hit = 0;
+    while ((n = read(g_ifd, buf, sizeof buf)) > 0) {
+        for (char *p = buf; p < buf + n; ) {
+            struct inotify_event *ev = (struct inotify_event *)p;
+            p += sizeof *ev + ev->len;
+            if (ev->mask & IN_Q_OVERFLOW) { hit = 1; continue; }
+            for (int i = 0; i < g_nwatches; i++) {
+                if (g_watches[i].wd != ev->wd) continue;
+                if (!g_watches[i].only || (ev->mask & (IN_DELETE_SELF | IN_MOVE_SELF | IN_IGNORED))
+                    || (ev->len && !strcmp(ev->name, g_watches[i].only)))
+                    hit = 1;
+            }
+            if (ev->mask & IN_IGNORED)       /* dir gone: its watch is dead */
+                for (int i = 0; i < g_nwatches; i++)
+                    if (g_watches[i].wd == ev->wd) {
+                        free(g_watches[i].only);
+                        g_watches[i--] = g_watches[--g_nwatches];
+                    }
+        }
+    }
+    if (hit) g_debounce_at = sdbus__now_ms() + g_debounce_ms;
+}
+
 /* ---- planned restart through the PID 1 fdstore ---- */
 #define FDSTORE_BATCH 253   /* the kernel's SCM_MAX_FD: more in one message is refused */
 
@@ -1384,6 +1455,8 @@ int main(int argc, char **argv) {
     g_override_dir = getenv("SCHEMA_DBUS_OVERRIDE_DIR") ? getenv("SCHEMA_DBUS_OVERRIDE_DIR")
                                                        : "/usr/local/share/dbus-1/system-services";
     if (getenv("SCHEMA_DBUS_RELOAD_TIMEOUT_MS")) g_reload_timeout_ms = atol(getenv("SCHEMA_DBUS_RELOAD_TIMEOUT_MS"));
+    if (getenv("SCHEMA_DBUS_DEBOUNCE_MS")) g_debounce_ms = atol(getenv("SCHEMA_DBUS_DEBOUNCE_MS"));
+    watch_setup();
     if (!g_system_bus) {
         extern char **environ;
         g_actenv = sdbus_activate_env_dup(environ);
@@ -1413,6 +1486,12 @@ int main(int argc, char **argv) {
     struct epoll_event sev = {0};
     sev.events = EPOLLIN; sev.data.ptr = &sigfd_marker;
     epoll_ctl(g_epfd, EPOLL_CTL_ADD, sigfd, &sev);
+    static int inotify_marker;
+    if (g_ifd >= 0) {
+        struct epoll_event iev = {0};
+        iev.events = EPOLLIN; iev.data.ptr = &inotify_marker;
+        epoll_ctl(g_epfd, EPOLL_CTL_ADD, g_ifd, &iev);
+    }
 
     int vmaj = 0, vmin = 0, vmic = 0;
     dbus_get_version(&vmaj, &vmin, &vmic);
@@ -1427,6 +1506,7 @@ int main(int argc, char **argv) {
         long ad = sdbus_acts_next_deadline(g_acts);
         if (ad >= 0 && (nd < 0 || ad < nd)) nd = ad;
         if (g_rl.pid && (nd < 0 || g_rl.deadline < nd)) nd = g_rl.deadline;
+        if (g_debounce_at && (nd < 0 || g_debounce_at < nd)) nd = g_debounce_at;
         if (nd >= 0) { long now = sdbus__now_ms(); wait_ms = nd <= now ? 0 : (int)(nd - now); }
         int nev = epoll_wait(g_epfd, evs, 64, wait_ms);
         if (nev < 0) { if (errno == EINTR) continue; break; }
@@ -1439,6 +1519,7 @@ int main(int argc, char **argv) {
                 }
                 continue;
             }
+            if (evs[i].data.ptr == &inotify_marker) { watch_read(); continue; }
             if (evs[i].data.ptr == &sigfd_marker) {   /* SIGCHLD: reap activated children */
                 struct signalfd_siginfo si;
                 int term = 0, hup = 0;
@@ -1482,6 +1563,10 @@ int main(int argc, char **argv) {
             free(callers); free(serials);
         }
         reload_check_timeout();
+        if (g_debounce_at && sdbus__now_ms() >= g_debounce_at) {
+            g_debounce_at = 0;
+            reload_request("inotify", 0, 0);
+        }
         /* time out activations whose service never claimed its name */
         for (;;) {
             long now = sdbus__now_ms();
