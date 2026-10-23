@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """schema-init-migrate subpackage + narrow sudoers spec tests — script-style."""
-import os, sys, subprocess
+import os, re, sys, subprocess
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 results = []
@@ -21,8 +21,9 @@ check("schema-udev not in base package", out.count("/bin/schema-udev") <= 1)
 # -migrate (by hand, or a future rail) still gets launcher/dissolver fixes
 spec = open(os.path.join(REPO, "schema-init.spec")).read()
 def files_section(pkg):
-    body = spec.split("\n%files " + pkg + "\n", 1)[1]
-    return body.split("\n\n", 1)[0]
+    m = re.search(r"^%files " + pkg + r"\b.*?$(.*?)(?=^%(?:package|files|description|pre|post|changelog)\b|\Z)",
+                  spec, re.M | re.S)
+    return m.group(1) if m else ""
 daemons, migrate = files_section("daemons"), files_section("migrate")
 for f in ("schema-dbus-run.sh", "dissect_policy.py", "schema-dbus-flip.sh",
           "schema-dbus-flip-healthcheck.sh", "schema-dbus/masked"):
