@@ -351,9 +351,10 @@ __attribute__((unused)) static int user_links(const char *unit, int rm) {
     while ((de = readdir(d))) {
         if (!ends_with(de->d_name, ".wants") && !ends_with(de->d_name, ".requires")) continue;
         snprintf(p, sizeof p, "%.3500s/%.255s/%.255s", conf, de->d_name, unit);
-        if (lstat(p, &st) != 0) continue;
+        /* removing: unlink outright, no lstat first to race against */
+        if (rm ? unlink(p) != 0 : lstat(p, &st) != 0) continue;
         found = 1;
-        if (rm && unlink(p) == 0) fprintf(stderr, "Removed \"%s\".\n", p);
+        if (rm) fprintf(stderr, "Removed \"%s\".\n", p);
     }
     closedir(d);
     return found;
