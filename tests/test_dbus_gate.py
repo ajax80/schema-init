@@ -163,6 +163,13 @@ def main():
             os.utime(cache, (0, 0))
             check('D-Bus config newer than the cache: dissolves again',
                   launch() == os.path.join(poldir, 'dbus.policy') and os.path.getmtime(cache) > 0)
+            envb = os.path.join(tmp, 'envbroker')
+            with open(envb, 'w') as f:
+                f.write('#!/bin/sh\necho "$SCHEMA_DBUS_DISSECT|$SCHEMA_DBUS_CACHE"\n')
+            os.chmod(envb, 0o755)
+            d, _, c = launch(dict(env, SCHEMA_DBUS_BROKER=envb)).partition('|')
+            check('launcher exports dissolver and cache',
+                  d.endswith('/dissect_policy.py') and os.path.isfile(d) and c == cache, d + '|' + c)
         else:
             print("  SKIP  policy cache: no /usr/share/dbus-1/system.conf")
     finally:

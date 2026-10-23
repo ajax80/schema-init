@@ -53,6 +53,21 @@ def svc_name(unit):
             return unit[:-len(suffix)]
     return unit
 
+def _reload_dbus(done, fail):
+    # what dbus-broker's ExecReload= does; safe on every schema-dbus version and
+    # on stock dbus-daemon, unlike SIGHUP, which kills a pre-reload broker.
+    # Async: the dissolve can take seconds and a blocking call would stall every
+    # other systemd1 caller; the caller's reply waits instead (async_callbacks).
+    bus = dbus.SystemBus()
+    bus.call_async('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                   'ReloadConfig', '', [], reply_handler=lambda *a: done(), error_handler=fail,
+                   timeout=60)
+
+
+def _is_bus_unit(name):
+    return str(name) in ('dbus.service', 'dbus-broker.service', 'dbus-daemon.service')
+
+
 def svc_files(path):
     """path, then its drop-ins in the order PID 1 applies them (svc_dropins.h)."""
     d, base = os.path.split(path)
@@ -168,6 +183,9 @@ class Systemd1Unit(dbus.service.Object):
         """
         if hasattr(self, 'can_reload'):
             return self.can_reload
+        if self.short_name == 'dbus':      # ReloadUnit routes it to ReloadConfig
+            self.can_reload = True
+            return True
         self.can_reload = False
         try:
             for path in svc_files('/etc/schema-init/services/%s.svc' % self.short_name):
@@ -625,8 +643,9 @@ class Systemd1Manager(dbus.service.Object):
             schema_ctl('restart', svc_name(str(name)))
         return self._trigger_job_signals(str(name))
 
-    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
-    def ReloadUnit(self, name, mode):
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o',
+                         async_callbacks=('reply', 'error'))
+    def ReloadUnit(self, name, mode, reply, error):
         """SIGHUP the service's own pid — the reopen/reload signal daemons expect.
 
         This is what logrotate's postrotate hooks call: rsyslog reopens its
@@ -642,6 +661,9 @@ class Systemd1Manager(dbus.service.Object):
         """
         name = str(name)
         print(f"systemd1: ReloadUnit({name}, {mode})")
+        if _is_bus_unit(name):
+            _reload_dbus(lambda: reply(self._trigger_job_signals(name)), error)
+            return
         self.poll_and_update()
         unit = self.units.get(name)
         if unit is None:
@@ -663,21 +685,29 @@ class Systemd1Manager(dbus.service.Object):
             raise dbus.exceptions.DBusException(
                 "Could not signal %s (pid %d): %s" % (name, unit.pid, e),
                 name='org.freedesktop.systemd1.NoSuchUnit')
-        return self._trigger_job_signals(name)
+        reply(self._trigger_job_signals(name))
 
-    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
-    def ReloadOrRestartUnit(self, name, mode):
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o',
+                         async_callbacks=('reply', 'error'))
+    def ReloadOrRestartUnit(self, name, mode, reply, error):
         print(f"systemd1: ReloadOrRestartUnit({name}, {mode})")
+        if _is_bus_unit(name):
+            _reload_dbus(lambda: reply(self._trigger_job_signals(str(name))), error)
+            return
         schema_ctl('restart', svc_name(str(name)))
-        return self._trigger_job_signals(str(name))
+        reply(self._trigger_job_signals(str(name)))
 
-    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
-    def ReloadOrTryRestartUnit(self, name, mode):
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o',
+                         async_callbacks=('reply', 'error'))
+    def ReloadOrTryRestartUnit(self, name, mode, reply, error):
         print(f"systemd1: ReloadOrTryRestartUnit({name}, {mode})")
+        if _is_bus_unit(name):
+            _reload_dbus(lambda: reply(self._trigger_job_signals(str(name))), error)
+            return
         self.poll_and_update()
         if self._is_active(str(name)):
             schema_ctl('restart', svc_name(str(name)))
-        return self._trigger_job_signals(str(name))
+        reply(self._trigger_job_signals(str(name)))
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='ao')
     def EnqueueMarkedJobs(self):

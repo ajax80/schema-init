@@ -266,7 +266,7 @@ int main(void) {
     }
 
     /* ListActivatableNames: driver name + every service-table entry */
-    sdbus_svc_ent ents[2] = { { "org.act.one", NULL, NULL }, { "org.act.two", NULL, NULL } };
+    sdbus_svc_ent ents[2] = { { .name = "org.act.one" }, { .name = "org.act.two" } };
     sdbus_svctab tab = { ents, 2 };
     g_tab = &tab;
     DBusMessage *lan = mkcall("ListActivatableNames");

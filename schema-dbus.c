@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/signalfd.h>
+#include <sys/inotify.h>
 #include <sys/wait.h>
 #include <pwd.h>
 #include <grp.h>
@@ -33,6 +34,7 @@
 #include "sdbus_route.h"
 #include "sdbus_activate.h"
 #include "sdbus_state.h"
+#include "sdbus_reload.h"
 
 #define DEFAULT_SOCKET "/run/dbus/system_bus_socket"
 #define MAX_TARGETS 256
@@ -65,6 +67,7 @@ static char          *g_notify_sock;  /* NOTIFY_SOCKET: PID 1 keeps our fds acro
 #define SDBUS_SPAWN_TIMEOUT_MS 25000
 
 static pid_t spawn_service(const sdbus_svc_ent *e, const char *bus_addr);
+static void reload_request(const char *trigger, int conn_id, uint32_t serial);
 
 /* ---- epoll registration ---- */
 static void ep_update(sdbus_conn *c) {
@@ -666,11 +669,10 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         } else if (!strcmp(w->member, "ReloadConfig")) {
             if (!privileged) {
                 sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED, "ReloadConfig not permitted");
+            } else if (g_draining) {   /* restarting: the next broker reads the new config */
+                synth_error_wire(c, w->serial, DBUS_ERROR_FAILED, "Message bus is restarting");
             } else {
-                sdbus_svctab_free(g_svctab);
-                g_svctab = sdbus_svctab_parse_dirs_masked(g_svcdirs, g_nsvcdirs, g_maskfile, g_default_user);
-                fprintf(stderr, "schema-dbus: ReloadConfig: %d activatable services\n", g_svctab->n);
-                sdbus__reply_empty(c, dm.msg);
+                reload_request("ReloadConfig", c->id, w->serial);
             }
         } else if (g_system_bus) {
             sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED,
@@ -870,6 +872,330 @@ static int on_readable(sdbus_conn *c) {
     return 1;
 }
 
+/* ---- live config reload ----
+   SIGHUP, ReloadConfig and (debounced) inotify all land here. A reload rebuilds
+   the activation table and, on the system bus, re-dissolves the busconfig in a
+   child so the event loop never waits on python3. Nothing is swapped until the
+   new policy dissolved, parsed and passed sdbus_reload_policy_ok; any failure
+   keeps the old policy and table. Never a restart: connections, names, matches
+   and pending replies are untouched. */
+typedef struct { int conn_id; uint32_t serial; } reload_waiter;
+static struct {
+    pid_t pid;                        /* dissolve child, 0 = none running */
+    long deadline;
+    int running, dirty;
+    const char *trigger, *next_trigger;
+    reload_waiter *run, *next; int nrun, nnext;
+    sdbus_svctab *tab;                /* new table, swapped with the policy */
+    struct timespec started;          /* the dissolve's start: the cache's mtime */
+} g_rl;
+static const char *g_dissect, *g_system_conf, *g_cache, *g_override_dir, *g_polfile;
+static long g_reload_timeout_ms = 30000;
+
+static void synth_return_wire(sdbus_conn *c, uint32_t reply_serial) {
+    DBusMessage *r = dbus_message_new(DBUS_MESSAGE_TYPE_METHOD_RETURN);
+    dbus_message_set_reply_serial(r, reply_serial);
+    dbus_message_set_serial(r, ++g_bcast_serial);
+    dbus_message_set_sender(r, SDBUS_DRIVER_NAME);
+    if (c->unique) dbus_message_set_destination(r, c->unique);
+    char *b = NULL; int len = 0;
+    if (dbus_message_marshal(r, &b, &len)) {
+        sdbus_conn_enqueue(c, (unsigned char *)b, len, NULL, 0);
+        if (!c->is_monitor) monitor_copy((unsigned char *)b, len, NULL, 0, -1);
+        dbus_free(b);
+    }
+    dbus_message_unref(r);
+}
+
+static void reload_reply(reload_waiter *v, int n, const char *err) {
+    for (int i = 0; i < n; i++) {
+        sdbus_conn *c = conn_by_id(v[i].conn_id);
+        if (!c) continue;
+        if (err) synth_error_wire(c, v[i].serial, DBUS_ERROR_FAILED, err);
+        else     synth_return_wire(c, v[i].serial);
+        ep_update(c);
+    }
+}
+
+static char *slurp(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *t = n >= 0 ? malloc(n + 1) : NULL;
+    if (t && fread(t, 1, n, f) != (size_t)n) { free(t); t = NULL; }
+    if (t) t[n] = '\0';
+    fclose(f);
+    return t;
+}
+
+static void reload_tmp(char *buf, size_t n) { snprintf(buf, n, "%s.reload.tmp", g_polfile); }
+
+static void reload_start(void);
+
+/* one outcome per reload: policy (if dissolved) and table swap together or not
+   at all. pol is the parsed new policy, NULL when this reload dissolved none. */
+static void reload_finish(sdbus_policy *pol, const char *err) {
+    char why[256];
+    if (!err && pol) {
+        int n = 0;
+        for (int i = 0; i < g_names->n_names; i++) n += g_names->names[i].n_holders > 0;
+        sdbus_owner *own = calloc(n + 1, sizeof *own);
+        int k = 0;
+        for (int i = 0; i < g_names->n_names; i++) {
+            sdbus_name_ent *e = &g_names->names[i];
+            sdbus_conn *o = e->n_holders > 0 ? conn_by_id(e->holders[0].conn_id) : NULL;
+            if (!o) continue;
+            own[k++] = (sdbus_owner){ e->name, (int)o->uid, o->gids, o->n_gids };
+        }
+        if (!sdbus_reload_policy_ok(g_policy, pol, own, k, why, sizeof why)) err = why;
+        else if (why[0]) fprintf(stderr, "schema-dbus: reload (%s): %s\n", g_rl.trigger, why);
+        free(own);
+    }
+    char tmp[1100];
+    if (g_polfile) reload_tmp(tmp, sizeof tmp);
+    if (err) {
+        if (pol) sdbus_policy_free(pol);
+        sdbus_svctab_free(g_rl.tab);
+        if (g_polfile) unlink(tmp);
+        fprintf(stderr, "schema-dbus: reload (%s) failed: %s, keeping the old policy\n", g_rl.trigger, err);
+    } else {
+        if (pol) {
+            int nr = sdbus_policy_rule_count(pol);
+            sdbus_policy_free(g_policy);
+            g_policy = pol;
+            if (rename(tmp, g_polfile) != 0)
+                fprintf(stderr, "schema-dbus: reload: %s not updated: %s\n", g_polfile, strerror(errno));
+            else if (g_cache) {
+                /* the launcher's boot cache, so the next boot needn't dissolve again */
+                char ctmp[1100];
+                snprintf(ctmp, sizeof ctmp, "%s.tmp", g_cache);
+                char *t = slurp(g_polfile);
+                FILE *f = t ? fopen(ctmp, "w") : NULL;
+                /* stamped with the dissolve's start, as the launcher does, so a
+                   conf changed during it still looks newer at the next boot */
+                struct timespec ts[2] = { g_rl.started, g_rl.started };
+                if (f && fputs(t, f) >= 0 && fflush(f) == 0 && futimens(fileno(f), ts) == 0 && fclose(f) == 0)
+                    rename(ctmp, g_cache);
+                else { if (f) fclose(f); unlink(ctmp); }
+                free(t);
+            }
+            fprintf(stderr, "schema-dbus: reload (%s): policy %d rules, %d activatable services\n",
+                    g_rl.trigger, nr, g_rl.tab->n);
+        } else {
+            fprintf(stderr, "schema-dbus: reload (%s): policy unchanged, %d activatable services\n",
+                    g_rl.trigger, g_rl.tab->n);
+        }
+        sdbus_svctab_free(g_svctab);
+        g_svctab = g_rl.tab;
+    }
+    g_rl.tab = NULL;
+    reload_reply(g_rl.run, g_rl.nrun, err);
+    free(g_rl.run); g_rl.run = NULL; g_rl.nrun = 0;
+    g_rl.running = 0;
+    if (g_rl.dirty) {
+        g_rl.dirty = 0;
+        g_rl.run = g_rl.next; g_rl.nrun = g_rl.nnext;
+        g_rl.next = NULL; g_rl.nnext = 0;
+        g_rl.trigger = g_rl.next_trigger;
+        reload_start();
+    }
+}
+
+static void reload_start(void) {
+    g_rl.running = 1;
+    g_rl.tab = sdbus_svctab_parse_dirs_masked(g_svcdirs, g_nsvcdirs, g_maskfile, g_default_user);
+    if (g_system_bus) sdbus_svctab_hold_raw(g_rl.tab, g_svctab, g_override_dir);
+    if (!g_system_bus || !g_dissect || !g_polfile) { reload_finish(NULL, NULL); return; }
+    char tmp[1100];
+    reload_tmp(tmp, sizeof tmp);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) { reload_finish(NULL, "cannot write the new policy"); return; }
+    clock_gettime(CLOCK_REALTIME, &g_rl.started);
+    pid_t pid = fork();
+    if (pid == 0) {
+        sigset_t none;
+        sigemptyset(&none);
+        sigprocmask(SIG_SETMASK, &none, NULL);
+        int ofd = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);   /* not the broker's OOM shield */
+        if (ofd >= 0) { (void)!write(ofd, "0\n", 2); close(ofd); }
+        dup2(fd, 1);
+        execlp("python3", "python3", g_dissect, g_system_conf, (char *)NULL);
+        _exit(127);
+    }
+    close(fd);
+    if (pid < 0) { reload_finish(NULL, "fork failed"); return; }
+    g_rl.pid = pid;
+    g_rl.deadline = sdbus__now_ms() + g_reload_timeout_ms;
+}
+
+static void reload_request(const char *trigger, int conn_id, uint32_t serial) {
+    reload_waiter **v = g_rl.running ? &g_rl.next : &g_rl.run;
+    int *n = g_rl.running ? &g_rl.nnext : &g_rl.nrun;
+    if (conn_id) {
+        *v = realloc(*v, (*n + 1) * sizeof **v);
+        (*v)[(*n)++] = (reload_waiter){ conn_id, serial };
+    }
+    if (g_rl.running) {
+        /* covered by one more reload after this one: the files may have changed
+           after the running dissolve read them */
+        if (!g_rl.dirty || !strcmp(trigger, "ReloadConfig")) g_rl.next_trigger = trigger;
+        g_rl.dirty = 1;
+        return;
+    }
+    g_rl.trigger = trigger;
+    reload_start();
+}
+
+/* SIGCHLD path: 1 if p was the dissolve child */
+static int reload_reaped(pid_t p, int st) {
+    if (!g_rl.pid || p != g_rl.pid) return 0;
+    g_rl.pid = 0;
+    char why[64];
+    if (!WIFEXITED(st)) { snprintf(why, sizeof why, "dissolver killed by signal %d", WTERMSIG(st)); reload_finish(NULL, why); return 1; }
+    if (WEXITSTATUS(st)) { snprintf(why, sizeof why, "dissolver exited %d", WEXITSTATUS(st)); reload_finish(NULL, why); return 1; }
+    char tmp[1100];
+    reload_tmp(tmp, sizeof tmp);
+    char *t = slurp(tmp);
+    if (!t || !*t) { free(t); reload_finish(NULL, "dissolver produced no policy"); return 1; }
+    sdbus_policy *pol = sdbus_policy_parse(t);
+    free(t);
+    reload_finish(pol, pol ? NULL : "new policy did not parse");
+    return 1;
+}
+
+static void reload_kill_child(void) {
+    if (!g_rl.pid) return;
+    kill(g_rl.pid, SIGKILL);
+    waitpid(g_rl.pid, NULL, 0);
+    g_rl.pid = 0;
+}
+
+static void reload_check_timeout(void) {
+    if (g_rl.pid && sdbus__now_ms() >= g_rl.deadline) {
+        reload_kill_child();
+        reload_finish(NULL, "dissolver timed out");
+    }
+}
+
+/* SIGTERM: a planned restart must not leave a dissolver behind or a caller
+   waiting on a reply the next broker knows nothing about */
+static void reload_abort(void) {
+    reload_kill_child();
+    if (g_polfile && g_rl.running) { char tmp[1100]; reload_tmp(tmp, sizeof tmp); unlink(tmp); }
+    reload_reply(g_rl.run, g_rl.nrun, "Message bus is restarting");
+    reload_reply(g_rl.next, g_rl.nnext, "Message bus is restarting");
+    g_rl.nrun = g_rl.nnext = 0;
+}
+
+/* ---- automatic pickup: inotify on the D-Bus config, like dbus-daemon ----
+   A dnf transaction drops many files, so any event only pushes a quiet-window
+   deadline out; the reload runs once the watched set has been still for it. */
+typedef struct { int wd; char *only; } cfg_watch;   /* only: a file name in a watched dir, NULL = any */
+static cfg_watch *g_watches;
+static int g_nwatches, g_ifd = -1;
+static long g_debounce_ms = 1000, g_debounce_at;
+/* every dir we mean to watch. One missing (or deleted) is covered by a watch on
+   its parent for its name, and watched itself once it appears: the override dir
+   may first be created by schema-import mid-dnf, and a held SystemdService=
+   entry is released only when inotify sees its override land. */
+typedef struct { char *path, *only; int wd; } cfg_want;
+static cfg_want *g_wants;
+static int g_nwants;
+
+static int watch_add(const char *path, const char *only) {
+    int wd = inotify_add_watch(g_ifd, path, IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
+                                            IN_CLOSE_WRITE | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF |
+                                            IN_ONLYDIR | IN_MASK_ADD);
+    if (wd < 0) return -1;
+    for (int i = 0; i < g_nwatches; i++)
+        if (g_watches[i].wd == wd && (only ? g_watches[i].only && !strcmp(g_watches[i].only, only)
+                                           : !g_watches[i].only))
+            return wd;
+    g_watches = realloc(g_watches, (g_nwatches + 1) * sizeof *g_watches);
+    g_watches[g_nwatches++] = (cfg_watch){ wd, only ? strdup(only) : NULL };
+    return wd;
+}
+
+static void watch_sync(void) {
+    for (int i = 0; i < g_nwants; i++) {
+        cfg_want *w = &g_wants[i];
+        if (w->wd >= 0) continue;
+        if ((w->wd = watch_add(w->path, w->only)) >= 0) continue;
+        const char *slash = strrchr(w->path, '/');
+        if (!slash || slash == w->path) continue;
+        char parent[1024];
+        snprintf(parent, sizeof parent, "%.*s", (int)(slash - w->path), w->path);
+        watch_add(parent, slash + 1);
+    }
+}
+
+static void watch_want(const char *path, const char *only) {
+    g_wants = realloc(g_wants, (g_nwants + 1) * sizeof *g_wants);
+    g_wants[g_nwants++] = (cfg_want){ strdup(path), only ? strdup(only) : NULL, -1 };
+}
+
+static void watch_file(const char *path) {
+    char dir[1024];
+    const char *slash = strrchr(path, '/');
+    if (!slash) return;
+    snprintf(dir, sizeof dir, "%.*s", (int)(slash - path), path);
+    watch_want(*dir ? dir : "/", slash + 1);
+}
+
+static void watch_setup(void) {
+    g_ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (g_ifd < 0) { fprintf(stderr, "schema-dbus: inotify unavailable, config changes need a reload\n"); return; }
+    for (int i = 0; i < g_nsvcdirs; i++) watch_want(g_svcdirs[i], NULL);
+    if (g_maskfile) watch_file(g_maskfile);
+    if (g_system_bus) {
+        watch_file(g_system_conf);
+        watch_want("/usr/share/dbus-1/system.d", NULL);
+        watch_want("/etc/dbus-1", NULL);
+        watch_want("/etc/dbus-1/system.d", NULL);
+    }
+    const char *extra = getenv("SCHEMA_DBUS_WATCH_EXTRA");
+    if (extra) {
+        char *buf = strdup(extra), *save = NULL;
+        for (char *p = strtok_r(buf, ":", &save); p; p = strtok_r(NULL, ":", &save)) watch_want(p, NULL);
+        free(buf);
+    }
+    watch_sync();
+}
+
+static void watch_read(void) {
+    char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+    ssize_t n;
+    int hit = 0;
+    while ((n = read(g_ifd, buf, sizeof buf)) > 0) {
+        for (char *p = buf; p < buf + n; ) {
+            struct inotify_event *ev = (struct inotify_event *)p;
+            p += sizeof *ev + ev->len;
+            if (ev->mask & IN_Q_OVERFLOW) { hit = 1; continue; }
+            for (int i = 0; i < g_nwatches; i++) {
+                if (g_watches[i].wd != ev->wd) continue;
+                if (!g_watches[i].only || (ev->mask & (IN_DELETE_SELF | IN_MOVE_SELF | IN_IGNORED))
+                    || (ev->len && !strcmp(ev->name, g_watches[i].only)))
+                    hit = 1;
+            }
+            if (ev->mask & IN_IGNORED) {     /* dir gone: its watch is dead */
+                for (int i = 0; i < g_nwatches; i++)
+                    if (g_watches[i].wd == ev->wd) {
+                        free(g_watches[i].only);
+                        g_watches[i--] = g_watches[--g_nwatches];
+                    }
+                for (int i = 0; i < g_nwants; i++)
+                    if (g_wants[i].wd == ev->wd) g_wants[i].wd = -1;
+            }
+        }
+    }
+    if (hit) {
+        watch_sync();
+        g_debounce_at = sdbus__now_ms() + g_debounce_ms;
+    }
+}
+
 /* ---- planned restart through the PID 1 fdstore ---- */
 #define FDSTORE_BATCH 253   /* the kernel's SCM_MAX_FD: more in one message is refused */
 
@@ -926,6 +1252,7 @@ static void store_and_exit(int lfd, int sigfd) {
     epoll_ctl(g_epfd, EPOLL_CTL_DEL, lfd, NULL);
     epoll_ctl(g_epfd, EPOLL_CTL_DEL, sigfd, NULL);
     for (int i = 0; i < g_nconns; i++) if (g_conns[i]->authed) process_inbound(g_conns[i]);
+    reload_abort();
     while (g_acts->n > 0) {
         sdbus_held_msg *held = NULL; int nh = 0;
         sdbus__acts_pop(g_acts, 0, &held, &nh);
@@ -1128,23 +1455,7 @@ int main(int argc, char **argv) {
 
     /* load the dissolved policy: prefer a precompiled file, else dissolve live */
     const char *polfile = getenv("SCHEMA_DBUS_POLICY");
-    char *poltext = NULL;
-    if (polfile) {
-        FILE *f = fopen(polfile, "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long n = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            poltext = malloc(n + 1);
-            if (fread(poltext, 1, n, f) != (size_t)n) {
-                free(poltext);
-                poltext = NULL;
-            } else {
-                poltext[n] = '\0';
-            }
-            fclose(f);
-        }
-    }
+    char *poltext = polfile ? slurp(polfile) : NULL;
     g_policy = sdbus_policy_parse(poltext ? poltext : SDBUS_NO_POLICY_FILE_DEFAULT);
     free(poltext);
     g_names = sdbus_names_new();
@@ -1167,6 +1478,17 @@ int main(int argc, char **argv) {
     g_maskfile = maskfile ? maskfile : SDBUS_MASK_FILE;
     g_default_user = default_user ? strdup(default_user) : "root";
     g_svctab = sdbus_svctab_parse_dirs_masked(g_svcdirs, g_nsvcdirs, g_maskfile, g_default_user);
+    /* handed over by schema-dbus-run.sh; without a dissolver a reload rebuilds
+       the activation table only */
+    g_polfile = polfile;
+    g_dissect = getenv("SCHEMA_DBUS_DISSECT");
+    g_cache = getenv("SCHEMA_DBUS_CACHE");
+    g_system_conf = getenv("SCHEMA_DBUS_SYSTEM_CONF") ? getenv("SCHEMA_DBUS_SYSTEM_CONF") : "/usr/share/dbus-1/system.conf";
+    g_override_dir = getenv("SCHEMA_DBUS_OVERRIDE_DIR") ? getenv("SCHEMA_DBUS_OVERRIDE_DIR")
+                                                       : "/usr/local/share/dbus-1/system-services";
+    if (getenv("SCHEMA_DBUS_RELOAD_TIMEOUT_MS")) g_reload_timeout_ms = atol(getenv("SCHEMA_DBUS_RELOAD_TIMEOUT_MS"));
+    if (getenv("SCHEMA_DBUS_DEBOUNCE_MS")) g_debounce_ms = atol(getenv("SCHEMA_DBUS_DEBOUNCE_MS"));
+    watch_setup();
     if (!g_system_bus) {
         extern char **environ;
         g_actenv = sdbus_activate_env_dup(environ);
@@ -1186,6 +1508,7 @@ int main(int argc, char **argv) {
     sigemptyset(&scmask);
     sigaddset(&scmask, SIGCHLD);
     sigaddset(&scmask, SIGTERM);
+    sigaddset(&scmask, SIGHUP);        /* reload; its default action would kill the bus */
     sigprocmask(SIG_BLOCK, &scmask, NULL);
     int sigfd = signalfd(-1, &scmask, SFD_NONBLOCK | SFD_CLOEXEC);
 
@@ -1195,6 +1518,12 @@ int main(int argc, char **argv) {
     struct epoll_event sev = {0};
     sev.events = EPOLLIN; sev.data.ptr = &sigfd_marker;
     epoll_ctl(g_epfd, EPOLL_CTL_ADD, sigfd, &sev);
+    static int inotify_marker;
+    if (g_ifd >= 0) {
+        struct epoll_event iev = {0};
+        iev.events = EPOLLIN; iev.data.ptr = &inotify_marker;
+        epoll_ctl(g_epfd, EPOLL_CTL_ADD, g_ifd, &iev);
+    }
 
     int vmaj = 0, vmin = 0, vmic = 0;
     dbus_get_version(&vmaj, &vmin, &vmic);
@@ -1208,6 +1537,8 @@ int main(int argc, char **argv) {
         long nd = sdbus_replies_next_deadline(g_replies);
         long ad = sdbus_acts_next_deadline(g_acts);
         if (ad >= 0 && (nd < 0 || ad < nd)) nd = ad;
+        if (g_rl.pid && (nd < 0 || g_rl.deadline < nd)) nd = g_rl.deadline;
+        if (g_debounce_at && (nd < 0 || g_debounce_at < nd)) nd = g_debounce_at;
         if (nd >= 0) { long now = sdbus__now_ms(); wait_ms = nd <= now ? 0 : (int)(nd - now); }
         int nev = epoll_wait(g_epfd, evs, 64, wait_ms);
         if (nev < 0) { if (errno == EINTR) continue; break; }
@@ -1220,12 +1551,17 @@ int main(int argc, char **argv) {
                 }
                 continue;
             }
+            if (evs[i].data.ptr == &inotify_marker) { watch_read(); continue; }
             if (evs[i].data.ptr == &sigfd_marker) {   /* SIGCHLD: reap activated children */
                 struct signalfd_siginfo si;
-                int term = 0;
-                while (read(sigfd, &si, sizeof si) == (ssize_t)sizeof si) term |= si.ssi_signo == SIGTERM;
+                int term = 0, hup = 0;
+                while (read(sigfd, &si, sizeof si) == (ssize_t)sizeof si) {
+                    term |= si.ssi_signo == SIGTERM;
+                    hup |= si.ssi_signo == SIGHUP;
+                }
                 int st; pid_t p;
                 while ((p = waitpid(-1, &st, WNOHANG)) > 0) {
+                    if (reload_reaped(p, st)) continue;
                     sdbus_pending_act *pa = sdbus_acts_by_pid(g_acts, (int)p);
                     if (!pa) continue;               /* exited after claiming its name: normal */
                     sdbus_held_msg *held = NULL; int nh = 0;
@@ -1234,6 +1570,7 @@ int main(int argc, char **argv) {
                               "Activated service exited before acquiring its name");
                 }
                 if (term) store_and_exit(lfd, sigfd);
+                if (hup) reload_request("sighup", 0, 0);
                 continue;
             }
             sdbus_conn *c = evs[i].data.ptr;
@@ -1256,6 +1593,11 @@ int main(int argc, char **argv) {
                 send_no_reply_to(callers[i], serials[i],
                     "Did not receive a reply within the bus timeout");
             free(callers); free(serials);
+        }
+        reload_check_timeout();
+        if (g_debounce_at && sdbus__now_ms() >= g_debounce_at) {
+            g_debounce_at = 0;
+            reload_request("inotify", 0, 0);
         }
         /* time out activations whose service never claimed its name */
         for (;;) {

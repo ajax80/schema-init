@@ -105,4 +105,6 @@ else
 fi
 
 export SCHEMA_DBUS_POLICY="$POL"
+# the broker re-runs the dissolver itself on a live reload, and refreshes the cache
+export SCHEMA_DBUS_DISSECT="$DISSECT" SCHEMA_DBUS_CACHE="$CACHE"
 exec "$BROKER" --system

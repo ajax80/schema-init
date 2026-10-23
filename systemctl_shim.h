@@ -561,12 +561,46 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         run_ctl(shim_user ? "daemon-reload" : "reload", NULL);
         return 0;
     }
+    /* reload of the bus is ReloadConfig, what dbus-broker's ExecReload= does.
+     * Falling through would turn it into `schema-ctl restart dbus`: a live
+     * restart of the system bus from inside a package transaction. */
+    int skip_bus = 0;
+    if (!shim_user && (strcmp(verb, "reload") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
+                       strcmp(verb, "try-reload-or-restart") == 0)) {
+        int bus = 0, other = 0;
+        for (i = verb_idx + 1; i < argc; i++) {
+            if (argv[i][0] == '-') continue;
+            char name[256];
+            svc_name_for(argv[i], name, sizeof name);
+            if (strcmp(name, "dbus") == 0 || strcmp(name, "dbus-daemon") == 0) bus = 1;
+            else other = 1;
+        }
+        if (bus) {
+            pid_t pid = fork();
+            if (pid < 0) return 1;
+            if (pid == 0) {
+                /* the empty reply ("()") is not the caller's output */
+                int dn = open("/dev/null", O_WRONLY);
+                if (dn >= 0) { dup2(dn, 1); close(dn); }
+                execlp("gdbus", "gdbus", "call", "--system", "--dest", "org.freedesktop.DBus",
+                       "--object-path", "/org/freedesktop/DBus",
+                       "--method", "org.freedesktop.DBus.ReloadConfig", (char *)NULL);
+                execlp("dbus-send", "dbus-send", "--system", "--print-reply", "--dest=org.freedesktop.DBus",
+                       "/org/freedesktop/DBus", "org.freedesktop.DBus.ReloadConfig", (char *)NULL);
+                _exit(127);
+            }
+            int st, rc = waitpid(pid, &st, 0) < 0 ? 1 : WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+            if (!other) return rc;
+            skip_bus = 1;
+        }
+    }
     if (strcmp(verb, "start") == 0 || strcmp(verb, "stop") == 0 ||
         strcmp(verb, "restart") == 0 || strcmp(verb, "try-restart") == 0 ||
-        strcmp(verb, "reload") == 0 || strcmp(verb, "reload-or-restart") == 0) {
+        strcmp(verb, "reload") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
+        strcmp(verb, "try-reload-or-restart") == 0) {
         const char *ctlverb = verb;
         if (strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
-            strcmp(verb, "reload") == 0)
+            strcmp(verb, "reload") == 0 || strcmp(verb, "try-reload-or-restart") == 0)
             ctlverb = "restart";
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
@@ -577,9 +611,11 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
                 strcmp(verb, "stop") != 0) continue;
             char name[256];
             svc_name_for(argv[i], name, sizeof name);
+            if (skip_bus && (strcmp(name, "dbus") == 0 || strcmp(name, "dbus-daemon") == 0)) continue;
             if (!svc_exists(name)) continue;
             if ((strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload") == 0 ||
-                 strcmp(verb, "reload-or-restart") == 0) && !ctl_is_active(name)) continue;
+                 strcmp(verb, "reload-or-restart") == 0 || strcmp(verb, "try-reload-or-restart") == 0)
+                && !ctl_is_active(name)) continue;
             run_ctl(ctlverb, name);
         }
         return 0;
