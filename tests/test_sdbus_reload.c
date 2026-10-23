@@ -14,7 +14,7 @@ static void check(const char *name, int ok) {
 static char *rules(int n, const char *ctx) {
     static char buf[4096];
     int o = snprintf(buf, sizeof buf, "context = %s\n", ctx);
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n && o < (int)sizeof buf; i++)
         o += snprintf(buf + o, sizeof buf - o, "allow = send_destination:org.r%d\n", i);
     return buf;
 }
