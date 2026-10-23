@@ -66,7 +66,7 @@ rm -f "$XDG_RUNTIME_DIR/bus"
 
 # schema-user's routed activation files come first: schema-import --user
 # writes one only for a name whose SystemdService= it runs, built from the
-# file that would have won below (stock dbus-daemon below does not get them)
+# file that would have won below
 if [ -n "$BROKER" ]; then
     SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus" \
     SCHEMA_DBUS_SVCDIRS="$XDG_RUNTIME_DIR/schema-user/dbus-services:$HOME/.local/share/dbus-1/services:/usr/local/lib/schema/dbus-1/services:/usr/share/dbus-1/services" \
@@ -81,11 +81,13 @@ if [ -z "$BROKER" ] || ! wait_for_socket; then
         echo "schema-dbus-session-run: no dbus-daemon to fall back to — no session bus" >&2
         exit 1
     fi
-    # Same activation dirs and order the broker gets: the user's, then ours, then
+    # Same activation dirs and order the broker gets: schema-user's routed ones,
+    # the user's, then ours, then
     # the stock ones that session.conf adds (first definition wins).
     CONF="$XDG_RUNTIME_DIR/schema-session-bus.conf"
     printf '%s\n' '<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">' \
         '<busconfig>' \
+        "  <servicedir>$XDG_RUNTIME_DIR/schema-user/dbus-services</servicedir>" \
         "  <servicedir>$HOME/.local/share/dbus-1/services</servicedir>" \
         '  <servicedir>/usr/local/lib/schema/dbus-1/services</servicedir>' \
         '  <include>/usr/share/dbus-1/session.conf</include>' \

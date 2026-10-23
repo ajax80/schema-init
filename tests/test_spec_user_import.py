@@ -39,5 +39,8 @@ check("activation file execs the packaged shim", "Exec=/usr/local/bin/schema-sys
 run = read("scripts/schema-dbus-session-run.sh")
 check("schema-dbus searches schema-user's routed dir first",
       'SCHEMA_DBUS_SVCDIRS="$XDG_RUNTIME_DIR/schema-user/dbus-services:' in run)
+check("stock dbus-daemon fallback searches it first too",
+      run.index("<servicedir>$XDG_RUNTIME_DIR/schema-user/dbus-services</servicedir>")
+      < run.index("<servicedir>$HOME/.local/share/dbus-1/services</servicedir>"))
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

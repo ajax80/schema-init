@@ -424,32 +424,36 @@ _UP_STATES = ("FUNDAMENTAL", "FRICTION", "SETTLED", "NEW_PROCESS",
 
 
 def _schema_user_ctl(*args):
-    # stdout of `schema-ctl --user ...`, or None when it failed
+    # (exit status, stdout) of `schema-ctl --user ...`; status None = no run
     ctl = os.environ.get("SCHEMA_CTL") or "schema-ctl"
     try:
         r = subprocess.run([ctl, "--user"] + list(args), stdout=subprocess.PIPE,
                            stderr=subprocess.DEVNULL, timeout=10, text=True)
     except (OSError, subprocess.SubprocessError):
-        return None
-    return r.stdout if r.returncode == 0 else None
+        return None, ""
+    return r.returncode, r.stdout
 
 
-def _schema_user_state(unit_name):
-    # (svc, state) when schema-user runs this unit, else None. The name may
-    # be an Alias= (dbus-org.*): the file it links to names the .svc.
-    if not unit_name.endswith(".service"):
+def _unit_name(name):
+    return (name if name.endswith((".service", ".target", ".socket", ".scope"))
+            else name + ".service")
+
+
+def _schema_user_svc(unit_name):
+    # the .svc schema-user runs this unit as, from schema-import --user's map;
+    # an Alias= (dbus-org.*) resolves through the file it links to
+    rt = os.environ.get("XDG_RUNTIME_DIR")
+    if not rt or not unit_name.endswith(".service"):
         return None
+    try:
+        with open(os.path.join(rt, "schema-user/units")) as f:
+            m = dict(ln.rstrip("\n").split("\t", 1) for ln in f if "\t" in ln)
+    except OSError:
+        return None
+    if unit_name in m:
+        return m[unit_name]
     path = _find_user_unit(unit_name)
-    names = [unit_name] + ([os.path.basename(os.path.realpath(path))] if path else [])
-    for n in names:
-        if not n.endswith(".service"):
-            continue
-        svc = n[:-len(".service")]
-        out = _schema_user_ctl("status", svc)
-        m = out and re.search(r"\bstate=(\w+)", out)
-        if m:
-            return svc, m.group(1)
-    return None
+    return m.get(os.path.basename(os.path.realpath(path))) if path else None
 
 
 def _schema_user_verb(member, state):
@@ -465,16 +469,16 @@ def handle_schema_user_unit(session, msg, member):
         name = str(msg.get_args_list(byte_arrays=True)[0])
     except Exception:  # noqa: BLE001
         return False
-    unit_name = name if "." in name else name + ".service"
-    st = _schema_user_state(unit_name)
-    if not st:
+    svc = _schema_user_svc(_unit_name(name))
+    if not svc:
         return False
-    svc, state = st
-    verb = _schema_user_verb(member, state)
-    _log("%s(%s): schema-user %s %s (was %s)" % (member, name, verb or "no-op", svc, state))
-    # schema-ctl answers "err:" for a start of a running service: that is
-    # systemd's no-op success too, so only an unreachable schema-user fails
-    if verb and _schema_user_ctl(verb, svc) is None and _schema_user_state(unit_name) is None:
+    rc, out = _schema_user_ctl("status", svc)
+    m = rc == 0 and re.search(r"\bstate=(\w+)", out)
+    if not m:
+        return False            # schema-user not up, or not running it (yet)
+    verb = _schema_user_verb(member, m.group(1))
+    _log("%s(%s): schema-user %s %s (was %s)" % (member, name, verb or "no-op", svc, m.group(1)))
+    if verb and _schema_user_ctl(verb, svc)[0] != 0:
         session.send_message(ll.ErrorMessage(
             msg, "org.freedesktop.DBus.Error.Failed", "schema-user: %s %s failed" % (verb, svc)))
         return True
@@ -494,8 +498,7 @@ def handle_start_unit(session, msg, member="StartUnit"):
     except Exception as e:  # noqa: BLE001
         _log("%s args error: %r" % (member, e))
         return False
-    unit_name = (name if name.endswith((".service", ".target", ".socket", ".scope"))
-                 else name + ".service")
+    unit_name = _unit_name(name)
 
     action = _restart_action(member, _unit_alive(unit_name))
     if action == "noop":
