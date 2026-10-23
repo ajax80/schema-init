@@ -124,7 +124,7 @@ restart or stall the bus. A reload that fails in any way leaves the bus running 
 - `systemctl reload dbus` → `ReloadConfig` instead of `reload=1` + SIGHUP (builder check found the
   SIGHUP route kills the old broker on upgraded-but-not-rebooted boxes). This replaces the
   "`dbus.svc` gets `reload=1`" in my playback. SIGHUP is still handled, as a safety net.
-- Sanity check before the swap: rule count can't halve; owned names keep `own`.
+- Sanity check before the swap: rule count can't halve; an owned name whose rules now deny `own` is refused. One with no rules left (its conf removed, daemon still up) applies with a logged note, or every later reload would be blocked until that daemon exits (#414 review).
 - Raw `SystemdService=` activation entries wait for their override or the next boot.
 - Debounce instead of per-event reloads; a "dirty" flag instead of queuing.
 - Failed reload = old config, logged; never a fallback to stock dbus-daemon at runtime (that's a
@@ -145,7 +145,7 @@ restart or stall the bus. A reload that fails in any way leaves the bus running 
   answering; ReloadConfig replies after the swap; existing connections and owned names survive a
   reload; a burst of file changes produces one reload; `systemctl reload dbus` goes through
   ReloadConfig (and works against stock dbus-daemon); a new policy that halves the rules or takes
-  `own` from a current owner is refused; a raw `SystemdService=` entry without an override does
+  `own` from a current owner (rules still naming it now deny it) is refused; a raw `SystemdService=` entry without an override does
   not become activatable live, and does once its override appears.
 - HW proof on blakbox before the fleet: drop a test `system.d` conf + system service file, watch
   the log line, call the service; then `dnf reinstall imsettings` and see the reload succeed.

@@ -54,10 +54,24 @@ int main(void) {
 
     sdbus_owner o2[] = {{ "org.freedesktop.login1", 0, NULL, 0 }};
     why[0] = '\0';
-    check("refuse_own_lost",
+    check("conf_removed_applies_with_note",
           ok("context = default\nallow = own:org.freedesktop.login1\nallow = send_destination:*\n",
              "context = default\nallow = send_destination:*\nallow = send_type:signal\n",
-             o2, 1, why) == 0 && strstr(why, "org.freedesktop.login1"));
+             o2, 1, why) == 1 && strstr(why, "no rules left"));
+    check("refuse_own_now_denied",
+          ok("context = default\nallow = own:org.freedesktop.login1\nallow = send_destination:*\n",
+             "context = default\ndeny = own:org.freedesktop.login1\nallow = send_destination:*\n",
+             o2, 1, why) == 0 && strstr(why, "would deny own org.freedesktop.login1"));
+    check("refuse_own_wrong_user",
+          ok("context = default\nallow = own:org.freedesktop.login1\nallow = send_destination:*\n",
+             "context = user:999\nallow = own:org.freedesktop.login1\ncontext = default\nallow = send_destination:*\n",
+             o2, 1, why) == 0);
+    check("refuse_own_prefix_denied",
+          ok("context = default\nallow = own:org.freedesktop.login1\nallow = send_destination:*\n",
+             "context = default\ndeny = own_prefix:org.freedesktop\nallow = send_destination:*\n",
+             o2, 1, why) == 0);
+    why[0] = 'x';
+    check("ok_clears_why", ok(same, same, o1, 1, why) == 1 && why[0] == '\0');
 
     check("old_empty_any_new_ok", ok("", "context = default\nallow = own:*\n", NULL, 0, why) == 1);
 

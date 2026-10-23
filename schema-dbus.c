@@ -950,6 +950,7 @@ static void reload_finish(sdbus_policy *pol, const char *err) {
             own[k++] = (sdbus_owner){ e->name, (int)o->uid, o->gids, o->n_gids };
         }
         if (!sdbus_reload_policy_ok(g_policy, pol, own, k, why, sizeof why)) err = why;
+        else if (why[0]) fprintf(stderr, "schema-dbus: reload (%s): %s\n", g_rl.trigger, why);
         free(own);
     }
     char tmp[1100];

@@ -247,11 +247,21 @@ class Reload(Base):
         a = Client(e.bus)
         a.driver("RequestName", "su", ("org.test.Keep", 0))
         e.set_next("context = default\nallow = send_destination:*\nallow = send_type:signal\n"
-                   "allow = own:org.test.Other\n")
+                   "allow = own:org.test.Other\ndeny = own:org.test.Keep\n")
         m = reload_config(a)
         self.assertEqual(m.mtype, ERROR)
         self.assertIn("org.test.Keep", " ".join(m.args))
         self.assertEqual(a.driver("GetNameOwner", "s", ("org.test.Keep",)).args[0], a.unique)
+
+    def test_owner_conf_removed_applies(self):
+        e = self.env()
+        a = Client(e.bus)
+        a.driver("RequestName", "su", ("org.test.Gone", 0))
+        e.set_next("context = default\nallow = send_destination:*\nallow = send_type:signal\n"
+                   "allow = own:org.test.Other\n")
+        self.assertEqual(reload_config(a).mtype, RETURN, e.logtext())
+        self.assertIn("own org.test.Gone: no rules left", e.logtext())
+        self.assertEqual(a.driver("GetNameOwner", "s", ("org.test.Gone",)).args[0], a.unique)
 
     def test_new_activation_file_after_reload(self):
         e = self.env()
