@@ -669,6 +669,8 @@ static void handle_message(sdbus_conn *c, sdbus_wire_msg *w, const unsigned char
         } else if (!strcmp(w->member, "ReloadConfig")) {
             if (!privileged) {
                 sdbus__reply_error(c, dm.msg, DBUS_ERROR_ACCESS_DENIED, "ReloadConfig not permitted");
+            } else if (g_draining) {   /* restarting: the next broker reads the new config */
+                synth_error_wire(c, w->serial, DBUS_ERROR_FAILED, "Message bus is restarting");
             } else {
                 reload_request("ReloadConfig", c->id, w->serial);
             }
@@ -1015,6 +1017,8 @@ static void reload_start(void) {
         sigset_t none;
         sigemptyset(&none);
         sigprocmask(SIG_SETMASK, &none, NULL);
+        int ofd = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);   /* not the broker's OOM shield */
+        if (ofd >= 0) { (void)!write(ofd, "0\n", 2); close(ofd); }
         dup2(fd, 1);
         execlp("python3", "python3", g_dissect, g_system_conf, (char *)NULL);
         _exit(127);
@@ -1091,14 +1095,44 @@ typedef struct { int wd; char *only; } cfg_watch;   /* only: a file name in a wa
 static cfg_watch *g_watches;
 static int g_nwatches, g_ifd = -1;
 static long g_debounce_ms = 1000, g_debounce_at;
+/* every dir we mean to watch. One missing (or deleted) is covered by a watch on
+   its parent for its name, and watched itself once it appears: the override dir
+   may first be created by schema-import mid-dnf, and a held SystemdService=
+   entry is released only when inotify sees its override land. */
+typedef struct { char *path, *only; int wd; } cfg_want;
+static cfg_want *g_wants;
+static int g_nwants;
 
-static void watch_add(const char *path, const char *only) {
+static int watch_add(const char *path, const char *only) {
     int wd = inotify_add_watch(g_ifd, path, IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
                                             IN_CLOSE_WRITE | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF |
                                             IN_ONLYDIR | IN_MASK_ADD);
-    if (wd < 0) return;                      /* missing at start: not watched */
+    if (wd < 0) return -1;
+    for (int i = 0; i < g_nwatches; i++)
+        if (g_watches[i].wd == wd && (only ? g_watches[i].only && !strcmp(g_watches[i].only, only)
+                                           : !g_watches[i].only))
+            return wd;
     g_watches = realloc(g_watches, (g_nwatches + 1) * sizeof *g_watches);
     g_watches[g_nwatches++] = (cfg_watch){ wd, only ? strdup(only) : NULL };
+    return wd;
+}
+
+static void watch_sync(void) {
+    for (int i = 0; i < g_nwants; i++) {
+        cfg_want *w = &g_wants[i];
+        if (w->wd >= 0) continue;
+        if ((w->wd = watch_add(w->path, w->only)) >= 0) continue;
+        const char *slash = strrchr(w->path, '/');
+        if (!slash || slash == w->path) continue;
+        char parent[1024];
+        snprintf(parent, sizeof parent, "%.*s", (int)(slash - w->path), w->path);
+        watch_add(parent, slash + 1);
+    }
+}
+
+static void watch_want(const char *path, const char *only) {
+    g_wants = realloc(g_wants, (g_nwants + 1) * sizeof *g_wants);
+    g_wants[g_nwants++] = (cfg_want){ strdup(path), only ? strdup(only) : NULL, -1 };
 }
 
 static void watch_file(const char *path) {
@@ -1106,26 +1140,27 @@ static void watch_file(const char *path) {
     const char *slash = strrchr(path, '/');
     if (!slash) return;
     snprintf(dir, sizeof dir, "%.*s", (int)(slash - path), path);
-    watch_add(*dir ? dir : "/", slash + 1);
+    watch_want(*dir ? dir : "/", slash + 1);
 }
 
 static void watch_setup(void) {
     g_ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (g_ifd < 0) { fprintf(stderr, "schema-dbus: inotify unavailable, config changes need a reload\n"); return; }
-    for (int i = 0; i < g_nsvcdirs; i++) watch_add(g_svcdirs[i], NULL);
+    for (int i = 0; i < g_nsvcdirs; i++) watch_want(g_svcdirs[i], NULL);
     if (g_maskfile) watch_file(g_maskfile);
     if (g_system_bus) {
         watch_file(g_system_conf);
-        watch_add("/usr/share/dbus-1/system.d", NULL);
-        watch_add("/etc/dbus-1", NULL);
-        watch_add("/etc/dbus-1/system.d", NULL);
+        watch_want("/usr/share/dbus-1/system.d", NULL);
+        watch_want("/etc/dbus-1", NULL);
+        watch_want("/etc/dbus-1/system.d", NULL);
     }
     const char *extra = getenv("SCHEMA_DBUS_WATCH_EXTRA");
     if (extra) {
         char *buf = strdup(extra), *save = NULL;
-        for (char *p = strtok_r(buf, ":", &save); p; p = strtok_r(NULL, ":", &save)) watch_add(p, NULL);
+        for (char *p = strtok_r(buf, ":", &save); p; p = strtok_r(NULL, ":", &save)) watch_want(p, NULL);
         free(buf);
     }
+    watch_sync();
 }
 
 static void watch_read(void) {
@@ -1143,15 +1178,21 @@ static void watch_read(void) {
                     || (ev->len && !strcmp(ev->name, g_watches[i].only)))
                     hit = 1;
             }
-            if (ev->mask & IN_IGNORED)       /* dir gone: its watch is dead */
+            if (ev->mask & IN_IGNORED) {     /* dir gone: its watch is dead */
                 for (int i = 0; i < g_nwatches; i++)
                     if (g_watches[i].wd == ev->wd) {
                         free(g_watches[i].only);
                         g_watches[i--] = g_watches[--g_nwatches];
                     }
+                for (int i = 0; i < g_nwants; i++)
+                    if (g_wants[i].wd == ev->wd) g_wants[i].wd = -1;
+            }
         }
     }
-    if (hit) g_debounce_at = sdbus__now_ms() + g_debounce_ms;
+    if (hit) {
+        watch_sync();
+        g_debounce_at = sdbus__now_ms() + g_debounce_ms;
+    }
 }
 
 /* ---- planned restart through the PID 1 fdstore ---- */
@@ -1413,23 +1454,7 @@ int main(int argc, char **argv) {
 
     /* load the dissolved policy: prefer a precompiled file, else dissolve live */
     const char *polfile = getenv("SCHEMA_DBUS_POLICY");
-    char *poltext = NULL;
-    if (polfile) {
-        FILE *f = fopen(polfile, "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long n = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            poltext = malloc(n + 1);
-            if (fread(poltext, 1, n, f) != (size_t)n) {
-                free(poltext);
-                poltext = NULL;
-            } else {
-                poltext[n] = '\0';
-            }
-            fclose(f);
-        }
-    }
+    char *poltext = polfile ? slurp(polfile) : NULL;
     g_policy = sdbus_policy_parse(poltext ? poltext : SDBUS_NO_POLICY_FILE_DEFAULT);
     free(poltext);
     g_names = sdbus_names_new();

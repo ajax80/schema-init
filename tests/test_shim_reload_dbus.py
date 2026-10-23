@@ -19,7 +19,7 @@ bin_ = os.path.join(t, "bin"); os.makedirs(bin_)
 ctllog, buslog = os.path.join(t, "ctl.log"), os.path.join(t, "gdbus.log")
 for name, log, rc in (("fake-ctl", ctllog, 0), ("gdbus", buslog, 0)):
     p = os.path.join(bin_, name)
-    open(p, "w").write('#!/bin/sh\necho "$*" >> %s\nexit ${FAKE_RC:-%d}\n' % (log, rc))
+    open(p, "w").write('#!/bin/sh\necho "$*" >> %s\necho "()"\nexit ${FAKE_RC:-%d}\n' % (log, rc))
     os.chmod(p, 0o755)
 env = dict(os.environ, PATH=bin_ + ":" + os.environ["PATH"], SCHEMA_SVC_DIR=svc,
            SCHEMA_CTL=os.path.join(bin_, "fake-ctl"), SCHEMA_PID1_COMM=comm,
@@ -46,6 +46,15 @@ check("mixed list: bus reloaded, never restarted", "org.freedesktop.DBus.ReloadC
 
 rc, ctl, bus = run("reload", "dbus.service", FAKE_RC="1")
 check("failed ReloadConfig -> nonzero exit", rc != 0, "rc=%d" % rc)
+
+r = subprocess.run([SHIM, "reload", "dbus.service"], env=env, capture_output=True, text=True)
+check("ReloadConfig reply not printed", r.returncode == 0 and r.stdout == "", "out=%r" % r.stdout)
+
+os.rename(os.path.join(bin_, "gdbus"), os.path.join(bin_, "dbus-send"))
+rc, ctl, bus = run("reload", "dbus.service", PATH=bin_)   # bin_ only: the host's gdbus must not answer
+check("no gdbus -> dbus-send ReloadConfig", rc == 0 and "org.freedesktop.DBus.ReloadConfig" in bus
+      and "--system" in bus, "rc=%d bus=%r" % (rc, bus))
+os.rename(os.path.join(bin_, "dbus-send"), os.path.join(bin_, "gdbus"))
 
 rc, ctl, bus = run("restart", "dbus.service")
 check("explicit restart dbus still goes to schema-ctl", "restart dbus" in ctl and bus == "", "ctl=%r" % ctl)

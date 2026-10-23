@@ -579,9 +579,14 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             pid_t pid = fork();
             if (pid < 0) return 1;
             if (pid == 0) {
+                /* the empty reply ("()") is not the caller's output */
+                int dn = open("/dev/null", O_WRONLY);
+                if (dn >= 0) { dup2(dn, 1); close(dn); }
                 execlp("gdbus", "gdbus", "call", "--system", "--dest", "org.freedesktop.DBus",
                        "--object-path", "/org/freedesktop/DBus",
                        "--method", "org.freedesktop.DBus.ReloadConfig", (char *)NULL);
+                execlp("dbus-send", "dbus-send", "--system", "--print-reply", "--dest=org.freedesktop.DBus",
+                       "/org/freedesktop/DBus", "org.freedesktop.DBus.ReloadConfig", (char *)NULL);
                 _exit(127);
             }
             int st, rc = waitpid(pid, &st, 0) < 0 ? 1 : WIFEXITED(st) ? WEXITSTATUS(st) : 1;

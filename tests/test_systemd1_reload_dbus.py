@@ -33,9 +33,15 @@ class Mgr:
 
 
 calls, kills = [], []
-m._reload_dbus = lambda: calls.append("ReloadConfig")
+def fake_reload(done, fail):
+    calls.append("ReloadConfig"); done()
+m._reload_dbus = fake_reload
 m.os.kill = lambda pid, sig: kills.append((pid, sig))
-reload_unit = m.Systemd1Manager.ReloadUnit
+def call(meth, mgr, unit):
+    out = []
+    meth(mgr, unit, "replace", reply=out.append, error=lambda e: out.append(e))
+    return out[0] if out else None
+reload_unit = lambda mgr, unit, mode: call(m.Systemd1Manager.ReloadUnit, mgr, unit)
 
 mgr = Mgr()
 r = reload_unit(mgr, "dbus.service", "replace")
@@ -43,15 +49,13 @@ check("dbus.service reload calls ReloadConfig", calls == ["ReloadConfig"] and r 
 check("dbus.service reload never signals the broker", kills == [])
 
 
-def boom():
-    raise m.dbus.exceptions.DBusException("reload failed: rules 412 -> 3",
-                                          name="org.freedesktop.DBus.Error.Failed")
+def boom(done, fail):
+    fail(m.dbus.exceptions.DBusException("reload failed: rules 412 -> 3",
+                                         name="org.freedesktop.DBus.Error.Failed"))
 m._reload_dbus = boom
-try:
-    reload_unit(Mgr(), "dbus.service", "replace")
-    check("failing ReloadConfig raises", False)
-except m.dbus.exceptions.DBusException as e:
-    check("failing ReloadConfig raises", "rules 412 -> 3" in str(e))
+r = reload_unit(Mgr(), "dbus.service", "replace")
+check("failing ReloadConfig reaches the caller as an error",
+      isinstance(r, m.dbus.exceptions.DBusException) and "rules 412 -> 3" in str(r))
 
 try:
     reload_unit(Mgr(), "foo.service", "replace")
@@ -61,13 +65,13 @@ except m.dbus.exceptions.DBusException as e:
 
 ctl = []
 m.schema_ctl = lambda action, name: ctl.append((action, name))
-m._reload_dbus = lambda: calls.append("ReloadConfig")
+m._reload_dbus = fake_reload
 for meth in ("ReloadOrRestartUnit", "ReloadOrTryRestartUnit"):
     for unit in ("dbus.service", "dbus-broker.service"):
         calls.clear(); ctl.clear()
         mg = Mgr()
         mg._is_active = lambda n: True
-        getattr(m.Systemd1Manager, meth)(mg, unit, "replace")
+        call(getattr(m.Systemd1Manager, meth), mg, unit)
         check("%s(%s) reloads, never restarts" % (meth, unit), calls == ["ReloadConfig"] and ctl == [])
 calls.clear()
 reload_unit(Mgr(), "dbus-broker.service", "replace")

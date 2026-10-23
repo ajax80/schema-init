@@ -363,6 +363,21 @@ class Inotify(Base):
         self.assertEqual(m.fields.get(4), "org.freedesktop.DBus.Error.ServiceUnknown")
         self.assertFalse(os.path.exists(marker))
 
+    def test_override_dir_created_late_releases_hold(self):
+        e = self.env(extra_env=self.FAST)
+        a = Client(e.bus)
+        shutil.rmtree(e.ovrdir)
+        self.assertTrue(e.wait_reloads(1, trigger="inotify"), e.logtext())
+        e.activatable("org.test.Late", os.path.join(e.dir, "raw.ran"), systemd=True)
+        self.assertTrue(e.wait_reloads(2, trigger="inotify"), e.logtext())
+        os.makedirs(e.ovrdir)
+        self.assertTrue(e.wait_reloads(3, trigger="inotify"), e.logtext())
+        ovr = os.path.join(e.dir, "ovr.ran")
+        e.activatable("org.test.Late", ovr, systemd=True, d=e.ovrdir)
+        self.assertTrue(e.wait_reloads(4, trigger="inotify"), e.logtext())
+        poke(a, "org.test.Late")
+        self.assertTrue(wait_file(ovr), e.logtext())
+
     def test_session_bus_inotify(self):
         e = self.env(extra_env=self.FAST, system=False, dissect=False)
         a = Client(e.bus)
