@@ -258,6 +258,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board schema-user schema
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o /tmp/schema-test-recorder-scenario -lrt && /tmp/schema-test-recorder-scenario
 	sh tests/test_recorder_daemon.sh
 	sh tests/test_schema_user.sh
+	sh tests/test_bus_activate.sh
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake

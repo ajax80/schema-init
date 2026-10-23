@@ -87,6 +87,54 @@ def main():
     assert "FOO=bar" in envl and "BAZ=qux" in envl, envl
     print("test_systemd1_session: parse OK")
 
+    # schema-user hand-off: verb table, then state lookup through a stub schema-ctl
+    v = m._schema_user_verb
+    assert v("StartUnit", "DORMANT") == "start"
+    assert v("StartUnit", "FULL_TRUST") is None
+    assert v("RestartUnit", "FULL_TRUST") == "restart"
+    assert v("RestartUnit", "EXCISED") == "start"
+    assert v("TryRestartUnit", "DORMANT") is None
+    assert v("ReloadOrTryRestartUnit", "PERFECT") == "restart"
+    assert v("StopUnit", "FULL_TRUST") == "stop"
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "systemd/user"))
+    os.makedirs(os.path.join(d, "schema-user"))
+    with open(os.path.join(d, "systemd/user/kded.service"), "w") as f:
+        f.write("[Service]\nExecStart=/bin/true\n")
+    os.symlink("kded.service", os.path.join(d, "systemd/user/dbus-org.kde.kded.service"))
+    with open(os.path.join(d, "systemd/user/x.service"), "w") as f:
+        f.write("[Service]\nExecStart=/bin/true\n")
+    # x.svc exists (a timer's) but x.service is not in the map: not schema-user's
+    with open(os.path.join(d, "schema-user/units"), "w") as f:
+        f.write("kded.service\tkded\nbar.service\tbar\nfoo.socket\tbar\n")
+    saved_dirs, saved_rt = m.USER_UNIT_DIRS, os.environ.get("XDG_RUNTIME_DIR")
+    m.USER_UNIT_DIRS = (os.path.join(d, "systemd/user"),)
+    os.environ["XDG_RUNTIME_DIR"] = d
+    assert m._schema_user_svc("kded.service") == "kded"
+    assert m._schema_user_svc("dbus-org.kde.kded.service") == "kded"   # alias
+    assert m._schema_user_svc("bar.service") == "bar"                  # socket Service=
+    assert m._schema_user_svc("x.service") is None
+    assert m._schema_user_svc("foo.socket") is None                    # only .service
+    assert m._unit_name("org.kde.kded6") == "org.kde.kded6.service"
+    os.unlink(os.path.join(d, "schema-user/units"))
+    assert m._schema_user_svc("kded.service") is None                  # no map, no schema-user
+    ctl = os.path.join(d, "ctl")
+    with open(ctl, "w") as f:
+        f.write('#!/bin/sh\necho "$*"; [ "$2" = status ]\n')
+    os.chmod(ctl, 0o755)
+    os.environ["SCHEMA_CTL"] = ctl
+    assert m._schema_user_ctl("status", "kded") == (0, "--user status kded\n")
+    assert m._schema_user_ctl("stop", "kded")[0] == 1
+    os.environ["SCHEMA_CTL"] = os.path.join(d, "missing")
+    assert m._schema_user_ctl("status", "kded") == (None, "")
+    del os.environ["SCHEMA_CTL"]
+    m.USER_UNIT_DIRS = saved_dirs
+    if saved_rt is None:
+        os.environ.pop("XDG_RUNTIME_DIR", None)
+    else:
+        os.environ["XDG_RUNTIME_DIR"] = saved_rt
+    print("test_systemd1_session: schema-user hand-off OK")
+
     print("test_systemd1_session: OK")
 
 
