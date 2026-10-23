@@ -150,7 +150,7 @@ def main():
             check('cold: dissolves into the run dir and fills the cache',
                   first == os.path.join(poldir, 'dbus.policy') and os.path.getsize(cache) > 0
                   and open(cache).read() == open(first).read(), first)
-            nopy = os.path.join(tmp, 'nopy')
+            nopy = os.path.join(tmp, 'failpy')
             os.mkdir(nopy)
             with open(os.path.join(nopy, 'python3'), 'w') as f:
                 f.write('#!/bin/sh\nexit 1\n')
