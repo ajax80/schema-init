@@ -309,12 +309,28 @@ static void user_shut_log(const char *msg) {
     printf(TAG "%s\n", msg);
 }
 
+static char imp[PATH_MAX], state_home[PATH_MAX], cfg_home[PATH_MAX];
+
+/* daemon-reload = re-import the unit files, then reload in evict mode: a
+ * unit no longer enabled is stopped. A graceful reload would leave it running
+ * with no .svc and no table entry, so nothing could stop it (systemd keeps a
+ * disabled unit loaded; we have no "loaded but not enabled"). Blocks the loop
+ * for up to IMPORT_SECS, as the import at start does. */
+static int user_ctl_extra(int fd, char *line) {
+    char err[256] = "";
+    if (strcmp(line, "daemon-reload") != 0) return 0;
+    run_import(imp, cfg_home, state_home);
+    if (engine_reload(1, err, sizeof err) == 0)
+        ctl_writef(fd, "ok: daemon-reload\n");
+    else
+        ctl_writef(fd, "err: reload rejected — %s\n", err[0] ? err : "see the log");
+    return 1;
+}
+
 int main(int argc, char **argv) {
     const char *xdg = getenv("XDG_RUNTIME_DIR");
     const char *state = getenv("XDG_STATE_HOME"), *cfg = getenv("XDG_CONFIG_HOME");
     const char *imp_env = getenv("SCHEMA_USER_IMPORT");
-    char imp[PATH_MAX];
-    char state_home[PATH_MAX], cfg_home[PATH_MAX];
     struct passwd *pw;
     struct sigaction sa;
 
@@ -369,6 +385,7 @@ int main(int argc, char **argv) {
     engine_paths.svc_fallback    = NULL;
     engine_paths.tag             = "schema-user";
     engine_reload_integrity      = 0;
+    engine_reload_allow_empty    = 1;
     if (engine_mkdir_p(log_dir, 0700) == 0)
         service_log_dir = log_dir;
     else
@@ -383,7 +400,8 @@ int main(int argc, char **argv) {
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
-    engine_hooks.shut_log = user_shut_log;
+    engine_hooks.shut_log  = user_shut_log;
+    engine_hooks.ctl_extra = user_ctl_extra;
 
     run_import(imp, cfg_home, state_home);
     if (!engine_running)

@@ -2212,7 +2212,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     if (shadow_count == 0 && engine_paths.svc_fallback) {
         shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
     }
-    if (shadow_count <= 0) {
+    /* a missing dir also loads zero: that is a half-done import swap, not
+     * "nothing enabled" */
+    if (shadow_count < 0 || (shadow_count == 0 &&
+        (!engine_reload_allow_empty || access(svc_dir, F_OK) != 0))) {
         elog(stdout, "reload failed: no services loaded from configuration\n");
         if (err) snprintf(err, errsz, "no services loaded from configuration");
         return -1;
@@ -2371,6 +2374,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
         }
     }
     return 0;
+}
+
+int engine_reload(int evict, char *err, size_t errsz) {
+    return handle_reload(evict, err, errsz);
 }
 
 int engine_load(const char *svc_dir) {

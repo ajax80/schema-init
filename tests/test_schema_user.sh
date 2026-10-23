@@ -3,6 +3,7 @@ set -u
 cd "$(dirname "$0")/.."
 [ "$(id -u)" = 0 ] && { echo "test_schema_user: skipped (root)"; exit 0; }
 [ -x ./schema-user ] || { echo "FAIL: no ./schema-user"; exit 1; }
+[ -x ./schema-systemctl ] || { echo "FAIL: no ./schema-systemctl"; exit 1; }
 T=$(mktemp -d)
 export XDG_RUNTIME_DIR=$T/run XDG_STATE_HOME=$T/state/nested XDG_CONFIG_HOME=$T/cfg
 # hand-written .svc files below: no import over them
@@ -167,6 +168,23 @@ SCHEMA_USER_IMPORT=$T/schema-import XDG_RUNTIME_DIR=$I/run \
 PID=$!
 until_ok 'ist | grep -Eq "^ +e2e +pid=[1-9]"' || { ist; cat "$I/out" "$I/state/schema-user/log/import.log"; fail "import_real: e2e not running"; }
 grep -q "import: exit 0" "$I/out" || fail "import_real: importer did not exit 0"
+# systemctl --user enable --now: link, daemon-reload (re-import), start
+printf '[Service]\nExecStart=%s 32\n[Install]\nWantedBy=default.target\n' "$T/sl" > "$I/cfg/systemd/user/e2f.service"
+usc() { SCHEMA_CTL=./schema-ctl XDG_RUNTIME_DIR=$I/run XDG_CONFIG_HOME=$I/cfg ./schema-systemctl --user "$@"; }
+usc enable --now e2f.service 2>/dev/null || fail "enable --now e2f: exit $?"
+[ -L "$I/cfg/systemd/user/default.target.wants/e2f.service" ] || fail "enable: no .wants link"
+until_ok 'ist | grep -Eq "^ +e2f +pid=[1-9]"' || { ist; cat "$I/out"; fail "enable --now: e2f not running"; }
+usc is-active e2f > /dev/null || fail "is-active e2f"
+usc is-enabled e2f > /dev/null || fail "is-enabled e2f"
+usc disable --now e2f 2>/dev/null || fail "disable --now e2f"
+ist | grep -q e2f && { ist; fail "disable: e2f still in the table"; }
+until_ok '! pgrep -f "$T/sl 32" > /dev/null' || fail "disable --now: e2f still running"
+# without --now too: the evicting reload stops it, never left running unmanaged
+usc enable --now e2f.service 2>/dev/null || fail "re-enable e2f"
+until_ok 'ist | grep -Eq "^ +e2f +pid=[1-9]"' || fail "re-enable: e2f not running"
+usc disable e2f 2>/dev/null || fail "disable e2f"
+until_ok '! pgrep -f "$T/sl 32" > /dev/null' || fail "disable: e2f left running"
+ist | grep -Eq "^ +e2e +pid=[1-9]" || fail "daemon-reload: e2e lost"
 istop
 
 # import_disabled: empty SCHEMA_USER_IMPORT keeps a hand-written .svc
@@ -177,13 +195,31 @@ SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HO
 PID=$!
 until_ok 'ist | grep -Eq "^ +h +pid=[1-9]"' || { ist; fail "import_disabled: h not running"; }
 grep -q "import: not run" "$I/out" || fail "import_disabled: no 'not run' line"
-# status lists the skip manifest (text and --kv), never in --json
+# status lists the skip manifest (text, --kv and --json)
 printf 'syncthing.service\thandled elsewhere (skip list)\n' > "$I/run/schema-user/skipped"
 ist | grep -Eq '^ +syncthing\.service +skipped \(handled elsewhere \(skip list\)\)$' || { ist; fail "status: no skipped line"; }
 XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv | grep -qx 'service.syncthing.service.state=skipped' || fail "status --kv: no skipped state"
 XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv | grep -qx 'service.syncthing.service.reason=handled elsewhere (skip list)' || fail "status --kv: no reason"
-XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | grep -q syncthing && fail "status --json: lists skipped"
+jcheck() {
+    XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+# a running service'"'"'s state moves on its own: only skipped ones are pinned
+got = sorted((s["name"], s["state"] if s["state"] == "skipped" else "up", s.get("reason"))
+             for s in d["services"])
+want = eval(sys.argv[1])
+assert got == want, got' "$1" || fail "status --json: wanted $1"
+}
+jcheck '[("h", "up", None), ("syncthing.service", "skipped", "handled elsewhere (skip list)")]'
 XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status h | grep -q syncthing && fail "status <svc>: lists skipped"
+# daemon-reload to zero services is a normal user state, not a broken config
+rm "$I/run/schema-user/services/h.svc"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user daemon-reload | grep -qx "ok: daemon-reload" || fail "daemon-reload to empty"
+jcheck '[("syncthing.service", "skipped", "handled elsewhere (skip list)")]'
+# ...but a missing services dir is a half-done import, refused
+mv "$I/run/schema-user/services" "$I/run/schema-user/gone"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user daemon-reload > /dev/null && fail "daemon-reload of a missing dir"
+mv "$I/run/schema-user/gone" "$I/run/schema-user/services"
 istop
 
 echo "test_schema_user: ok"
