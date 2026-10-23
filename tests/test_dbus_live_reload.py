@@ -183,6 +183,22 @@ class Reload(Base):
         self.assertTrue(denied(a, b, "org.test.Deny"))
         self.assertIn("deny = send_destination:org.test.Deny", open(e.policy).read())
 
+    def test_cache_stamped_with_dissolve_start(self):
+        # like the launcher: a conf changed during the dissolve must look newer
+        # than the cache, or the next boot trusts a cache that lacks it
+        cache = os.path.join(tempfile.gettempdir(), "sdbus-reload-cache-%d" % os.getpid())
+        try:
+            e = self.env(extra_env={"SCHEMA_DBUS_CACHE": cache})
+            a = Client(e.bus)
+            e.ctl("sleep 0.6")
+            t0 = time.time()
+            self.assertEqual(reload_config(a).mtype, RETURN)
+            self.assertEqual(open(cache).read(), open(e.policy).read())
+            self.assertLess(os.path.getmtime(cache), t0 + 0.3)
+        finally:
+            if os.path.exists(cache):
+                os.unlink(cache)
+
     def test_existing_connections_survive(self):
         e = self.env()
         a = Client(e.bus)

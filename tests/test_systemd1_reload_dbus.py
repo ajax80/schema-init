@@ -59,6 +59,20 @@ try:
 except m.dbus.exceptions.DBusException as e:
     check("other units without reload=1 still refuse", "does not support reload" in str(e) and kills == [])
 
+ctl = []
+m.schema_ctl = lambda action, name: ctl.append((action, name))
+m._reload_dbus = lambda: calls.append("ReloadConfig")
+for meth in ("ReloadOrRestartUnit", "ReloadOrTryRestartUnit"):
+    for unit in ("dbus.service", "dbus-broker.service"):
+        calls.clear(); ctl.clear()
+        mg = Mgr()
+        mg._is_active = lambda n: True
+        getattr(m.Systemd1Manager, meth)(mg, unit, "replace")
+        check("%s(%s) reloads, never restarts" % (meth, unit), calls == ["ReloadConfig"] and ctl == [])
+calls.clear()
+reload_unit(Mgr(), "dbus-broker.service", "replace")
+check("ReloadUnit(dbus-broker.service) calls ReloadConfig", calls == ["ReloadConfig"] and kills == [])
+
 u = m.Systemd1Unit.__new__(m.Systemd1Unit)
 u.short_name = "dbus"
 check("dbus.service reports CanReload", m.Systemd1Unit._read_can_reload(u) is True)

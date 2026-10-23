@@ -885,6 +885,7 @@ static struct {
     const char *trigger, *next_trigger;
     reload_waiter *run, *next; int nrun, nnext;
     sdbus_svctab *tab;                /* new table, swapped with the policy */
+    struct timespec started;          /* the dissolve's start: the cache's mtime */
 } g_rl;
 static const char *g_dissect, *g_system_conf, *g_cache, *g_override_dir, *g_polfile;
 static long g_reload_timeout_ms = 30000;
@@ -969,7 +970,11 @@ static void reload_finish(sdbus_policy *pol, const char *err) {
                 snprintf(ctmp, sizeof ctmp, "%s.tmp", g_cache);
                 char *t = slurp(g_polfile);
                 FILE *f = t ? fopen(ctmp, "w") : NULL;
-                if (f && fputs(t, f) >= 0 && fclose(f) == 0) rename(ctmp, g_cache);
+                /* stamped with the dissolve's start, as the launcher does, so a
+                   conf changed during it still looks newer at the next boot */
+                struct timespec ts[2] = { g_rl.started, g_rl.started };
+                if (f && fputs(t, f) >= 0 && fflush(f) == 0 && futimens(fileno(f), ts) == 0 && fclose(f) == 0)
+                    rename(ctmp, g_cache);
                 else { if (f) fclose(f); unlink(ctmp); }
                 free(t);
             }
@@ -1004,6 +1009,7 @@ static void reload_start(void) {
     reload_tmp(tmp, sizeof tmp);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) { reload_finish(NULL, "cannot write the new policy"); return; }
+    clock_gettime(CLOCK_REALTIME, &g_rl.started);
     pid_t pid = fork();
     if (pid == 0) {
         sigset_t none;

@@ -61,6 +61,10 @@ def _reload_dbus():
                       'ReloadConfig', '', [], timeout=60)
 
 
+def _is_bus_unit(name):
+    return str(name) in ('dbus.service', 'dbus-broker.service', 'dbus-daemon.service')
+
+
 def svc_files(path):
     """path, then its drop-ins in the order PID 1 applies them (svc_dropins.h)."""
     d, base = os.path.split(path)
@@ -653,7 +657,7 @@ class Systemd1Manager(dbus.service.Object):
         """
         name = str(name)
         print(f"systemd1: ReloadUnit({name}, {mode})")
-        if name == 'dbus.service':
+        if _is_bus_unit(name):
             _reload_dbus()
             return self._trigger_job_signals(name)
         self.poll_and_update()
@@ -682,12 +686,18 @@ class Systemd1Manager(dbus.service.Object):
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
     def ReloadOrRestartUnit(self, name, mode):
         print(f"systemd1: ReloadOrRestartUnit({name}, {mode})")
+        if _is_bus_unit(name):
+            _reload_dbus()
+            return self._trigger_job_signals(str(name))
         schema_ctl('restart', svc_name(str(name)))
         return self._trigger_job_signals(str(name))
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
     def ReloadOrTryRestartUnit(self, name, mode):
         print(f"systemd1: ReloadOrTryRestartUnit({name}, {mode})")
+        if _is_bus_unit(name):
+            _reload_dbus()
+            return self._trigger_job_signals(str(name))
         self.poll_and_update()
         if self._is_active(str(name)):
             schema_ctl('restart', svc_name(str(name)))
