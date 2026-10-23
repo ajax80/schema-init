@@ -8,7 +8,10 @@
 #include <string.h>
 #include <sys/types.h>
 
-typedef struct { char *name; char **argv; char *user; } sdbus_svc_ent;
+/* systemd_service: the file named a SystemdService= (a live reload holds such a
+   new raw entry back until its schema override exists); dir: the dirs[] string
+   it was read from, borrowed */
+typedef struct { char *name; char **argv; char *user; int systemd_service; const char *dir; } sdbus_svc_ent;
 typedef struct { sdbus_svc_ent *v; int n; } sdbus_svctab;
 
 /* split "a b c" into a NULL-terminated argv (whitespace-delimited, no quoting —
@@ -28,12 +31,15 @@ static inline char **sdbus__split_argv(const char *s) {
 
 static inline void sdbus__svc_add(sdbus_svctab *t, const char *name,
                                   const char *exec, const char *user,
-                                  const char *default_user) {
+                                  const char *default_user, int systemd_service,
+                                  const char *dir) {
     t->v = realloc(t->v, (t->n + 1) * sizeof *t->v);
     sdbus_svc_ent *e = &t->v[t->n++];
     e->name = strdup(name);
     e->argv = sdbus__split_argv(exec);
     e->user = strdup(user && *user ? user : default_user);
+    e->systemd_service = systemd_service;
+    e->dir = dir;
 }
 
 /* Names schema-init runs as first-class managed services; the broker must never
@@ -89,18 +95,20 @@ static inline sdbus_svctab *sdbus_svctab_parse_dir_masked(const char *dir, const
         FILE *f = fopen(path, "r");
         if (!f) continue;
         char line[2048], name[2048] = "", exec[2048] = "", user[2048] = "";
+        int sdsvc = 0;
         while (fgets(line, sizeof line, f)) {
             line[strcspn(line, "\r\n")] = '\0';
             if (!strncmp(line, "Name=", 5))      snprintf(name, sizeof name, "%s", line + 5);
             else if (!strncmp(line, "Exec=", 5)) snprintf(exec, sizeof exec, "%s", line + 5);
             else if (!strncmp(line, "User=", 5)) snprintf(user, sizeof user, "%s", line + 5);
+            else if (!strncmp(line, "SystemdService=", 15) && line[15]) sdsvc = 1;
         }
         fclose(f);
         if (!name[0] || !exec[0]) continue;                 /* need both */
         /* skip Exec=/bin/false (systemd-only activatables) */
         if (!strcmp(exec, "/bin/false") || !strcmp(exec, "/usr/bin/false")) continue;
         if (sdbus_masklist_has(mask, name)) continue;       /* schema-managed: never bus-activate */
-        sdbus__svc_add(t, name, exec, user, "root");   /* unchanged behavior for this back-compat path */
+        sdbus__svc_add(t, name, exec, user, "root", sdsvc, dir);   /* unchanged behavior for this back-compat path */
     }
     closedir(d);
     sdbus_masklist_free(mask);
@@ -111,7 +119,7 @@ static inline sdbus_svctab *sdbus_svctab_parse_dir(const char *dir) {
     return sdbus_svctab_parse_dir_masked(dir, NULL);
 }
 
-static inline const sdbus_svc_ent *sdbus_svctab_find(sdbus_svctab *t, const char *name) {
+static inline const sdbus_svc_ent *sdbus_svctab_find(const sdbus_svctab *t, const char *name) {
     if (!name) return NULL;
     for (int i = 0; i < t->n; i++)
         if (!strcmp(t->v[i].name, name)) return &t->v[i];
@@ -240,18 +248,20 @@ static inline sdbus_svctab *sdbus_svctab_parse_dirs_masked(const char **dirs, in
             FILE *f = fopen(path, "r");
             if (!f) continue;
             char line[2048], name[2048] = "", exec[2048] = "", user[2048] = "";
+            int sdsvc = 0;
             while (fgets(line, sizeof line, f)) {
                 line[strcspn(line, "\r\n")] = '\0';
                 if (!strncmp(line, "Name=", 5))      snprintf(name, sizeof name, "%s", line + 5);
                 else if (!strncmp(line, "Exec=", 5)) snprintf(exec, sizeof exec, "%s", line + 5);
                 else if (!strncmp(line, "User=", 5)) snprintf(user, sizeof user, "%s", line + 5);
+                else if (!strncmp(line, "SystemdService=", 15) && line[15]) sdsvc = 1;
             }
             fclose(f);
             if (!name[0] || !exec[0]) continue;
             if (!strcmp(exec, "/bin/false") || !strcmp(exec, "/usr/bin/false")) continue;
             if (sdbus_masklist_has(mask, name)) continue;
             if (sdbus_svctab_find(t, name)) continue;   /* first dir wins */
-            sdbus__svc_add(t, name, exec, user, default_user);
+            sdbus__svc_add(t, name, exec, user, default_user, sdsvc, dirs[di]);
         }
         closedir(d);
     }
