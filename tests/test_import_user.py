@@ -114,24 +114,36 @@ t.enable("a.service")
 check("closure", gen() == (["a.service", "b.service", "c.socket"], []))
 t.done()
 
-# --- the service a socket or timer starts has its own Wants=/Requires= followed ---
+# --- the service a socket or timer starts has its hard deps followed ---
 t = Tree()
 t.write(t.cfg("c.socket"), "[Socket]\nListenStream=%t/c.sock\n")
-t.write(t.cfg("c.service"), "[Unit]\nWants=d.service\n" + SIMPLE)
+t.write(t.cfg("c.service"), "[Unit]\nRequires=d.service\nWants=w.service\n" + SIMPLE)
 t.write(t.cfg("d.service"), SIMPLE)
+t.write(t.cfg("w.service"), SIMPLE)
+t.write(t.cfg("r.service"), SIMPLE)
+t.link(t.cfg("c.service.requires/r.service"), t.cfg("r.service"))
 t.write(t.cfg("j.timer"), "[Timer]\nOnCalendar=daily\nUnit=job.service\n")
-t.write(t.cfg("job.service"), "[Unit]\nRequires=e.service\n" + SIMPLE)
+t.write(t.cfg("job.service"), "[Unit]\nBindsTo=e.service\n" + SIMPLE)
 t.write(t.cfg("e.service"), SIMPLE)
 t.enable("c.socket", target="sockets.target")
 t.enable("j.timer", target="timers.target")
-check("closure: socket's and timer's service deps followed",
-      gen() == (["c.socket", "d.service", "e.service", "j.timer"], []))
+check("closure: socket's and timer's service hard deps followed, not Wants=",
+      gen() == (["c.socket", "d.service", "e.service", "j.timer", "r.service"], []))
+t.done()
+
+# --- ... not for a socket the import will skip ---
+t = Tree()
+t.write(t.cfg("a.socket"), "[Socket]\nListenStream=%t/a.sock\nAccept=yes\n")
+t.write(t.cfg("a.service"), "[Unit]\nRequires=d.service\n" + SIMPLE)
+t.write(t.cfg("d.service"), SIMPLE)
+t.enable("a.socket", target="sockets.target")
+check("closure: Accept=yes socket's service deps not followed", gen() == (["a.socket"], []))
 t.done()
 
 # --- ... but not when that service is skip-listed or never generated ---
 t = Tree()
 t.write(t.cfg("foo.socket"), "[Socket]\nListenStream=%t/foo.sock\n")
-t.write(t.cfg("foo.service"), "[Unit]\nWants=bar.service\n" + SIMPLE)
+t.write(t.cfg("foo.service"), "[Unit]\nRequires=bar.service\n" + SIMPLE)
 t.write(t.cfg("bar.service"), SIMPLE)
 t.enable("foo.socket", target="sockets.target")
 check("closure: skip-listed socket service's deps not followed",
