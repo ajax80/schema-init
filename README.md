@@ -82,6 +82,8 @@ To record earlyoom kills too, run it with `-N /usr/local/bin/schema-recorder-ear
 
 `schema-dbus` hands its sockets and client connections to PID 1 before it stops, then picks them up again, so `sudo schema-ctl restart dbus` no longer drops every client on the bus. Any service can do the same with `fdstore=N`. See [the descriptor store in the operations guide](docs/operations.md#descriptor-store-fdstore).
 
+Mostly you won't need to restart it: like `dbus-daemon`, it picks up new or changed D-Bus config on its own, so a `dnf` transaction that installs a service's bus policy takes effect without a restart or a reboot. See [config changes apply live](docs/components.md).
+
 ## Try it
 
 Your existing boot entries (systemd, or the stock init on Devuan, Void or Artix) stay in the GRUB menu, and you can back out with one reboot at every step.

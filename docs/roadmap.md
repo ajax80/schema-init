@@ -40,10 +40,14 @@
 - [x] PID 1 re-exec — `schema-ctl reexec` swaps the init binary in place with a dry run, sealed state handoff and rollback; RPM upgrades re-exec automatically, so updating PID 1 is just `dnf upgrade`, no reboot
 - [x] Service watchdog — `watchdog_sec=` with `WATCHDOG=1` over `sd_notify` (systemd `WatchdogSec=` parity): missed window → SIGABRT + core, then SIGKILL, then the normal restart arc
 - [x] Fedora 44 installer ISO, verified on real hardware — netinst + kickstart installs KDE on schema-init as PID 1 with an optional guided schema-udev flip; clean install to desktop on a Dell i3 laptop with no hand fixes (v0.3.0)
-- [ ] Per-user supervisor — a schema supervisor per logged-in user (and per lingering user from boot), reading systemd user units through `schema-import` and owning `org.freedesktop.systemd1` on the session bus, scopes included: `systemd --user` parity for GNOME, rootless podman/Quadlet, user timers and per-app scopes
+- [x] Per-user supervisor — `schema-user`, one per logged-in user and per lingering user from boot, started, supervised, stopped and adopted by `schema-logind`; `schema-ctl --user`; `schema-import --user` runs the user's enabled systemd user units (socket/timer service deps, `ConditionUser=`, network-online wait); a `systemctl --user` shim; session D-Bus activation routed through it; `org.freedesktop.systemd1` on the session bus (`schema-systemd1-session`)
+- [ ] Per-user supervisor, phase 2 — session targets, a native session `systemd1` with scopes, and verified GNOME, rootless podman/Quadlet and per-app scopes
 - [x] Landlock TCP rules — `landlock_bind_tcp=` / `landlock_connect_tcp=`: the kernel limits which TCP ports a service may listen on and connect to, with no firewall and no eBPF
 - [ ] schema-logind in C — rewrite `schema-logind.py` (~127 KB of Python) in C as `schema-dbus` was, so the Fedora desktop boots without Python on the session path and drops the interpreter's memory
 - [ ] Alpine port — `distros/alpine/` beside OpenRC, built on the musl support from the Void musl port
 - [ ] schema-ctl polish — `schema-top` (live status over ssh from the shared-memory table, per-service memory and CPU from cgroups), colour in `schema-ctl status` on a terminal, `schema-ctl log [-f] <svc>`, and `schema-ctl tree` (the dependency graph as text)
 - [ ] schema-import: map systemd `SocketBindAllow=tcp:PORT` to `landlock_bind_tcp=`
 - [x] btrfs device scan — `schema-mount-fstab` runs `btrfs device scan` before mounting a btrfs entry, so a multi-device btrfs mounts when fstab runs alongside coldplug (Artix)
+- [x] Descriptor store — `fdstore=N`: a service hands its sockets and client fds to PID 1 before it stops and gets them back on restart; `schema-dbus` restarts without dropping a client
+- [x] `restart_sec=` — a wait between a death and the respawn (systemd `RestartSec=`)
+- [x] schema-dbus live config reload — new or changed D-Bus config applies on its own (inotify, debounced), on `SIGHUP` and on `ReloadConfig`, with the policy re-dissolved off the event loop and sanity-checked before it goes live; `systemctl reload dbus` from a package scriptlet reloads, never restarts the bus
