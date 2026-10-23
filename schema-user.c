@@ -311,13 +311,16 @@ static void user_shut_log(const char *msg) {
 
 static char imp[PATH_MAX], state_home[PATH_MAX], cfg_home[PATH_MAX];
 
-/* daemon-reload = re-import the unit files, then a graceful reload: like
- * systemd, a unit no longer enabled is left running until stopped */
+/* daemon-reload = re-import the unit files, then reload in evict mode: a
+ * unit no longer enabled is stopped. A graceful reload would leave it running
+ * with no .svc and no table entry, so nothing could stop it (systemd keeps a
+ * disabled unit loaded; we have no "loaded but not enabled"). Blocks the loop
+ * for up to IMPORT_SECS, as the import at start does. */
 static int user_ctl_extra(int fd, char *line) {
     char err[256] = "";
     if (strcmp(line, "daemon-reload") != 0) return 0;
     run_import(imp, cfg_home, state_home);
-    if (engine_reload(err, sizeof err) == 0)
+    if (engine_reload(1, err, sizeof err) == 0)
         ctl_writef(fd, "ok: daemon-reload\n");
     else
         ctl_writef(fd, "err: reload rejected — %s\n", err[0] ? err : "see the log");

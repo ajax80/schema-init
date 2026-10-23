@@ -2376,8 +2376,8 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     return 0;
 }
 
-int engine_reload(char *err, size_t errsz) {
-    return handle_reload(0, err, errsz);
+int engine_reload(int evict, char *err, size_t errsz) {
+    return handle_reload(evict, err, errsz);
 }
 
 int engine_load(const char *svc_dir) {

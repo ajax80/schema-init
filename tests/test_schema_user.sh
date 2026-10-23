@@ -179,6 +179,11 @@ usc is-enabled e2f > /dev/null || fail "is-enabled e2f"
 usc disable --now e2f 2>/dev/null || fail "disable --now e2f"
 ist | grep -q e2f && { ist; fail "disable: e2f still in the table"; }
 until_ok '! pgrep -f "$T/sl 32" > /dev/null' || fail "disable --now: e2f still running"
+# without --now too: the evicting reload stops it, never left running unmanaged
+usc enable --now e2f.service 2>/dev/null || fail "re-enable e2f"
+until_ok 'ist | grep -Eq "^ +e2f +pid=[1-9]"' || fail "re-enable: e2f not running"
+usc disable e2f 2>/dev/null || fail "disable e2f"
+until_ok '! pgrep -f "$T/sl 32" > /dev/null' || fail "disable: e2f left running"
 ist | grep -Eq "^ +e2e +pid=[1-9]" || fail "daemon-reload: e2e lost"
 istop
 

@@ -203,6 +203,16 @@ __attribute__((unused)) static const char *shim_shm_path(void) {
 /* PID 1 publishes its service table world-readable, so any user can ask
  * is-active; the control socket is root-only. 1/0 = active/not, -1 = no
  * table (PID 1 is not schema-init) or no stable read. */
+/* The running states, by shm value and by the name status --kv prints.
+ * Anything else (DORMANT, EXCISED, schema-user's "skipped") is inactive. */
+static const struct { uint8_t st; const char *name; } shim_up_states[] = {
+    { STATE_FUNDAMENTAL, "FUNDAMENTAL" }, { STATE_FRICTION, "FRICTION" },
+    { STATE_SETTLED, "SETTLED" },         { STATE_NEW_PROCESS, "NEW_PROCESS" },
+    { STATE_RECOVERY, "RECOVERY" },       { STATE_FULL_TRUST, "FULL_TRUST" },
+    { STATE_PERFECT, "PERFECT" },
+};
+#define SHIM_N_UP ((int)(sizeof shim_up_states / sizeof shim_up_states[0]))
+
 __attribute__((unused)) static int shm_is_active(const char *name) {
     int fd = open(shim_shm_path(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
@@ -224,14 +234,9 @@ __attribute__((unused)) static int shm_is_active(const char *name) {
     if (n > SCHEMA_SHM_MAX) n = SCHEMA_SHM_MAX;
     for (i = 0; i < n; i++) {
         if (strncmp(snap.svc[i].name, name, sizeof snap.svc[i].name) != 0) continue;
-        switch (snap.svc[i].state) {
-            case STATE_FUNDAMENTAL: case STATE_FRICTION: case STATE_SETTLED:
-            case STATE_NEW_PROCESS: case STATE_RECOVERY: case STATE_FULL_TRUST:
-            case STATE_PERFECT:
-                return 1;
-            default:
-                return 0;
-        }
+        for (int k = 0; k < SHIM_N_UP; k++)
+            if (snap.svc[i].state == shim_up_states[k].st) return 1;
+        return 0;
     }
     return 0;
 }
@@ -251,12 +256,8 @@ __attribute__((unused)) static int ctl_is_active(const char *name) {
         if (eq != line) continue;
         char *st = line + strlen(want);
         st[strcspn(st, "\n")] = '\0';
-        /* the running states, as shm_is_active counts them: anything else
-         * (DORMANT, EXCISED, schema-user's "skipped") is inactive */
-        static const char *up[] = { "FUNDAMENTAL", "FRICTION", "SETTLED", "NEW_PROCESS",
-                                    "RECOVERY", "FULL_TRUST", "PERFECT", NULL };
-        for (int k = 0; up[k]; k++)
-            if (strcmp(st, up[k]) == 0) active = 1;
+        for (int k = 0; k < SHIM_N_UP; k++)
+            if (strcmp(st, shim_up_states[k].name) == 0) active = 1;
         break;
     }
     pclose(p);
@@ -315,16 +316,22 @@ __attribute__((unused)) static int user_install_dirs(const char *path, char out[
     int n = 0, inst = 0;
     if (!f) return 0;
     while (fgets(line, sizeof line, f)) {
+        char *l = line, *eq, *e;
         line[strcspn(line, "\r\n")] = '\0';
-        if (line[0] == '[') { inst = strcmp(line, "[Install]") == 0; continue; }
-        if (!inst) continue;
-        const char *kind = NULL, *v = NULL;
-        if (strncmp(line, "WantedBy=", 9) == 0)        kind = "wants",    v = line + 9;
-        else if (strncmp(line, "RequiredBy=", 11) == 0) kind = "requires", v = line + 11;
+        while (*l == ' ' || *l == '\t') l++;
+        for (e = l + strlen(l); e > l && (e[-1] == ' ' || e[-1] == '\t'); ) *--e = '\0';
+        if (*l == '[') { inst = strcmp(l, "[Install]") == 0; continue; }
+        if (!inst || !(eq = strchr(l, '='))) continue;
+        for (e = eq; e > l && (e[-1] == ' ' || e[-1] == '\t'); ) e--;
+        *e = '\0';
+        char *v = eq + 1;
+        while (*v == ' ' || *v == '\t') v++;
+        const char *kind = strcmp(l, "WantedBy") == 0 ? "wants"
+                         : strcmp(l, "RequiredBy") == 0 ? "requires" : NULL;
         if (!kind) continue;
         if (!*v) { n = 0; continue; }
         char *save = NULL, *t;
-        for (t = strtok_r((char *)v, " \t", &save); t && n < USER_INSTALL_MAX; t = strtok_r(NULL, " \t", &save))
+        for (t = strtok_r(v, " \t", &save); t && n < USER_INSTALL_MAX; t = strtok_r(NULL, " \t", &save))
             snprintf(out[n++], 300, "%s.%s", t, kind);
     }
     fclose(f);
@@ -429,12 +436,12 @@ __attribute__((unused)) static const char *power_action(int argc, char **argv) {
 }
 
 __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
+    shim_user = 0;
     const char *power = power_action(argc, argv);
     if (power) return *power ? (run_ctl(power, NULL) == 0 ? 0 : 1) : 0;
     if (argc < 2) return 0;
     int j;
     int now = 0, global = 0;
-    shim_user = 0;
     for (j = 1; j < argc; j++) {
         if (strcmp(argv[j], "--now") == 0) now = 1;
         else if (strcmp(argv[j], "--user") == 0) shim_user = 1;
@@ -443,6 +450,8 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     if (global) return 0;
     if (shim_user) {
         const char *x = getenv("XDG_RUNTIME_DIR");
+        /* root has no schema-user: a scriptlet's --user call stays the no-op it always was */
+        if (geteuid() == 0) return 0;
         if (!x || !*x) {
             fprintf(stderr, "systemctl --user: XDG_RUNTIME_DIR is not set\n");
             return 1;
@@ -459,7 +468,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     if (shim_user && (strcmp(verb, "enable") == 0 || strcmp(verb, "disable") == 0 ||
                       strcmp(verb, "is-enabled") == 0)) {
         int rc = 0, seen = 0, changed = 0;
-        char qn[300], name[256];
+        char qn[300], name[256], loaded[64] = { 0 };
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             seen = 1;
@@ -470,6 +479,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             }
             unit_queue_name(argv[i], qn, sizeof qn);
             svc_name_for(argv[i], name, sizeof name);
+            if (i < 64) loaded[i] = svc_exists(name);
             if (strcmp(verb, "is-enabled") == 0) {
                 if (user_is_enabled(qn)) rc = 1;
             } else if (strcmp(verb, "enable") == 0) {
@@ -483,11 +493,16 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             }
         }
         if (verb[0] == 'i') return seen ? rc : 1;
-        if (changed) run_ctl("daemon-reload", NULL);
-        /* timers and sockets are armed by being loaded, and the reload starts a
-         * new service itself: start only one that is still down */
-        for (i = verb_idx + 1; now && verb[0] == 'e' && i < argc; i++) {
-            if (argv[i][0] == '-' || !unit_supported(argv[i])) continue;
+        if (changed && run_ctl("daemon-reload", NULL) != 0) {
+            fprintf(stderr, "systemctl --user: daemon-reload failed; the links are written, "
+                    "nothing was (re)loaded\n");
+            return 1;
+        }
+        /* timers and sockets are armed by being loaded, and the reload starts
+         * a newly loaded service itself (a oneshot must not run twice): start
+         * only one that was already loaded, i.e. enabled but stopped */
+        for (i = verb_idx + 1; now && verb[0] == 'e' && i < argc && i < 64; i++) {
+            if (argv[i][0] == '-' || !unit_supported(argv[i]) || !loaded[i]) continue;
             if (ends_with(argv[i], ".timer") || ends_with(argv[i], ".socket")) continue;
             svc_name_for(argv[i], name, sizeof name);
             if (svc_exists(name) && !ctl_is_active(name)) run_ctl("start", name);

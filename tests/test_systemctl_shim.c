@@ -127,6 +127,7 @@ static void make_ctl_stub(const char *active_name) {
         "#!/bin/sh\n"
         "echo \"$@\" >> \"%s/ctl.log\"\n"
         "[ \"$1\" = --user ] && shift\n"
+        "[ \"$1\" = daemon-reload ] && [ -n \"$SHIM_FAIL_RELOAD\" ] && exit 1\n"
         "if [ \"$1\" = status ]; then\n"
         "  echo 'service.%s.state=FULL_TRUST'\n"
         "  echo 'service.sleeper.state=DORMANT'\n"
@@ -249,6 +250,8 @@ static void test_user(void) {
     put("root/usr/lib/systemd/user/foo.service", "[Unit]\n[Service]\nExecStart=/bin/foo\n[Install]\nWantedBy=default.target\n");
     put("root/usr/lib/systemd/user/bar.service", "[Service]\nExecStart=/bin/bar\n");
     put("root/usr/lib/systemd/user/tick.timer", "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n");
+    put("root/usr/lib/systemd/user/ws.service", "  [Install] \n  WantedBy = default.target  \n");
+    put("root/usr/lib/systemd/user/fresh.service", "[Install]\nWantedBy=default.target\n");
     put("root/usr/lib/systemd/user/reset.service",
         "[Install]\nWantedBy=a.target\nWantedBy=\nRequiredBy=b.target\n");
     put("run/schema-user/services/foo.svc", "name=foo\n");
@@ -274,6 +277,20 @@ static void test_user(void) {
     ctl_log_clear();
     assert(urun("enable", "--now", "up") == 0);
     assert(ctl_log_has("--user daemon-reload") && !ctl_log_has("start up"));
+
+    /* not loaded before: the reload starts it, a second start would rerun a oneshot */
+    ctl_log_clear();
+    assert(urun("enable", "--now", "fresh") == 0);
+    assert(ctl_log_has("--user daemon-reload") && !ctl_log_has("start fresh"));
+
+    /* whitespace around the section, key and value */
+    assert(urun("enable", "ws.service", NULL) == 0);
+    assert(access(sb("conf/systemd/user/default.target.wants/ws.service"), F_OK) == 0);
+
+    /* a failed reload fails the enable */
+    setenv("SHIM_FAIL_RELOAD", "1", 1);
+    assert(urun("disable", "ws.service", NULL) == 1);
+    unsetenv("SHIM_FAIL_RELOAD");
 
     /* a timer is armed by the reload: no start */
     ctl_log_clear();
