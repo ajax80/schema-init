@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """schema-init-migrate subpackage + narrow sudoers spec tests — script-style."""
-import os, sys, subprocess
+import os, re, sys, subprocess
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 results = []
@@ -16,6 +16,18 @@ check("schema-init-migrate subpackage declared", "schema-init-migrate" in out)
 out = subprocess.run(["rpmspec", "-q", "--qf", "[%{FILENAMES}\\n]", os.path.join(REPO, "schema-init.spec")],
                      capture_output=True, text=True).stdout
 check("schema-udev not in base package", out.count("/bin/schema-udev") <= 1)
+
+# the broker's boot-time runtime ships in -daemons, so a box flipped without
+# -migrate (by hand, or a future rail) still gets launcher/dissolver fixes
+spec = open(os.path.join(REPO, "schema-init.spec")).read()
+def files_section(pkg):
+    m = re.search(r"^%files " + pkg + r"\b.*?$(.*?)(?=^%(?:package|files|description|pre|post|changelog)\b|\Z)",
+                  spec, re.M | re.S)
+    return m.group(1) if m else ""
+daemons, migrate = files_section("daemons"), files_section("migrate")
+for f in ("schema-dbus-run.sh", "dissect_policy.py", "schema-dbus-flip.sh",
+          "schema-dbus-flip-healthcheck.sh", "schema-dbus/masked"):
+    check(f + " owned by -daemons, not -migrate", f in daemons and f not in migrate)
 
 # sudoers grant is narrow (no blanket ALL)
 s = open(os.path.join(REPO, "distros/fedora-installer/migrate/schema-wizard.sudoers")).read()

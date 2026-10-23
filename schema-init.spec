@@ -112,10 +112,14 @@ install -Dm0644 -t %{buildroot}/usr/local/lib/schema/plasma-env distros/fedora-k
 Summary:   schema-udev and schema-dbus, schema-init's udev and D-Bus daemons
 Requires:  %{name} = %{version}-%{release}
 Conflicts: %{name}-migrate < %{version}-%{release}
+# dissect_policy.py runs under python3 every boot on a flipped box
+Requires:  python3
 %description daemons
 The reclaimed udev daemon and D-Bus broker. A box whose udev or D-Bus was
 flipped onto them (ISO install, migrate wizard) needs these kept current;
 installing them changes nothing until a flip points a service at them.
+The D-Bus launcher, policy dissolver and flip/rollback helpers live here too:
+they run every boot on a flipped box, however it was flipped.
 The base package requires this one so a plain upgrade keeps them current.
 
 %post daemons
@@ -187,6 +191,12 @@ fi
 %files daemons
 %{_bindir}/schema-udev
 %{_bindir}/schema-dbus
+%{_libexecdir}/schema-init/schema-dbus-run.sh
+%{_libexecdir}/schema-init/schema-dbus-flip.sh
+%{_libexecdir}/schema-init/schema-dbus-flip-healthcheck.sh
+%{_libexecdir}/schema-init/dissect_policy.py
+%dir %{_sysconfdir}/schema-dbus
+%config(noreplace) %{_sysconfdir}/schema-dbus/masked
 %{_datadir}/%{name}/udevd.svc
 %ghost %attr(0644,root,root) %{_sysconfdir}/schema-init/schema-udev.ship-md5
 
@@ -237,8 +247,9 @@ Prebuilt engine that converts a running Fedora KDE box onto schema-init in
 place across two reboots, keeping a systemd fallback boot entry. Drives the
 foundation flip (schema-init PID 1) and the desktop-seam flip (schema-udev)
 from the schema-migrate CLI. Front-ended by schema-wizard. The D-Bus broker
-(schema-dbus) ships dormant: both launchers run stock dbus-daemon until
-/etc/schema-init/dbus-broker exists, and nothing here creates it.
+and its launchers live in -daemons and stay dormant: both buses run stock
+dbus-daemon until /etc/schema-init/dbus-broker exists, and nothing here
+creates it.
 
 %post migrate
 if alternatives --display systemctl >/dev/null 2>&1; then
@@ -361,17 +372,11 @@ fi
 %{_libexecdir}/schema-init/schema-udev-flip-backup.sh
 %{_libexecdir}/schema-init/schema-udev-flip-healthcheck.sh
 %{_libexecdir}/schema-init/verify-rules-live
-%{_libexecdir}/schema-init/schema-dbus-run.sh
-%{_libexecdir}/schema-init/schema-dbus-flip.sh
-%{_libexecdir}/schema-init/schema-dbus-flip-healthcheck.sh
-%{_libexecdir}/schema-init/dissect_policy.py
 %{_libexecdir}/schema-init/stage.py
 %{_datadir}/%{name}/migrate/prevent-set.list
 %{_datadir}/%{name}/migrate/distros
 %{_datadir}/%{name}/migrate/scripts
 %config(noreplace) %{_sysconfdir}/sudoers.d/schema-wizard
-%dir %{_sysconfdir}/schema-dbus
-%config(noreplace) %{_sysconfdir}/schema-dbus/masked
 
 %package wizard
 Summary:   Guided PySide6 GUI that converts a Fedora KDE box onto schema-init
