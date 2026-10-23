@@ -1728,10 +1728,33 @@ def user_enabled_set(skip):
         if text is None:
             skipped.append((u, "not found"))
             continue
-        unit = parse_unit(text).get("Unit", [])
+        parsed = parse_unit(text)
+        unit = parsed.get("Unit", [])
         for key in ("Wants", "Requires"):
             for v in _get_all(unit, key):
                 queue += [(w, False) for w in v.split()]
+        # a socket's or timer's .svc runs its service, so that service's hard
+        # deps must be in the set or their dep= lines are dropped. Not its
+        # Wants=: systemd starts those at first activation, here they would
+        # start at every login.
+        try:
+            act = _user_activates(u, parsed, skip)
+        except Skip:
+            act = None
+        if act and "@" not in act:
+            try:
+                atext = user_unit_text(act)
+            except (Masked, ValueError):
+                atext = None
+            if atext:
+                aunit = parse_unit(atext).get("Unit", [])
+                for key in ("Requires", "BindsTo"):
+                    for v in _get_all(aunit, key):
+                        queue += [(w, False) for w in v.split()]
+                try:
+                    queue += [(w, True) for w in sorted(os.listdir(os.path.join(cfg, act + ".requires")))]
+                except OSError:
+                    pass
         queue += [(w, True) for w in _wants_dir_units([cfg], u)]
         units.append(u)
     try:
@@ -1771,6 +1794,22 @@ def _activation_guard(target, skip):
         raise Skip("activates skip-listed %s" % target)
 
 
+def _user_activates(unit, sections, skip):
+    """The service a .socket or .timer runs, or None for other units. Raises
+    Skip where _user_translate would skip the unit."""
+    if unit.endswith(".socket"):
+        socket_lines(sections)
+        target = _get_last(sections.get("Socket", []), "Service") or _base(unit) + ".service"
+    elif unit.endswith(".timer"):
+        target = _get_last(sections.get("Timer", []), "Unit") or _base(unit) + ".service"
+        if "@" in target:
+            raise Skip("timer starts template instance %s — instances unsupported" % target)
+    else:
+        return None
+    _activation_guard(target, skip)
+    return target
+
+
 NET_ONLINE = "network-online"
 
 
@@ -1796,18 +1835,12 @@ def _user_translate(unit, known, enabled, skip=(), net=False):
     sections = _user_sections(unit)
     name = _base(unit)
     svc_sections = sections
+    target = _user_activates(unit, sections, skip)
     if unit.endswith(".socket"):
-        socket_lines(sections)
-        target = _get_last(sections.get("Socket", []), "Service") or name + ".service"
-        _activation_guard(target, skip)
         name = _base(target)
         svc_sections = _user_sections(target)
         body = unit_to_svc(name, svc_sections, sections, target not in enabled, known)
     elif unit.endswith(".timer"):
-        target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
-        if "@" in target:
-            raise Skip("timer starts template instance %s — instances unsupported" % target)
-        _activation_guard(target, skip)
         svc_sections = _user_sections(target)
         body = timer_to_svc(name, sections, svc_sections, known, _base(target))
     else:
