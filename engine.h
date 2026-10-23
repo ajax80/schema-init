@@ -32,6 +32,9 @@ int engine_mkdir_p(const char *path, mode_t mode);
 /* 1 = reload refuses a .svc changed since boot (PID 1: config edits wait for
  * the next boot). A user supervisor's files are its user's to edit. */
 extern int engine_reload_integrity;
+/* 1 = a reload to zero services is adopted. PID 1 refuses it (an empty
+ * config there is a broken box); a user with nothing enabled is normal. */
+extern int engine_reload_allow_empty;
 
 typedef struct {
     void (*loop_pressure)(int psi_fired);
@@ -84,6 +87,7 @@ void set_nonblock(int fd);
 void notify_pause_track(void);
 int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 int engine_load(const char *svc_dir);
+int engine_reload(char *err, size_t errsz);
 
 #define SHUT_GRACE_MS   3000
 void engine_open(int adopting);

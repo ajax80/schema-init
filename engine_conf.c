@@ -17,6 +17,7 @@ engine_paths_t engine_paths = {
 };
 
 int engine_reload_integrity = 1;
+int engine_reload_allow_empty = 0;
 
 void engine_hook_noop(void) {}
 void engine_hook_pressure_none(int psi_fired) { (void)psi_fired; }

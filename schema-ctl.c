@@ -295,6 +295,7 @@ static void usage(FILE *out) {
         "  poweroff\n"
         "\n"
         "  --user <cmd...>        talk to this user's schema-user instead of PID 1\n"
+        "  --user daemon-reload   re-import the user's unit files, then reload\n"
         "  --help                 this text\n"
         "  --version              print version and exit\n"
         "\n"
@@ -305,7 +306,20 @@ static void usage(FILE *out) {
  * one "<unit>\t<reason>" per line. Shown so none is silently dead. */
 static const char *skip_manifest;
 
-static void print_skipped(int kv) {
+static void json_str(const char *s) {
+    putchar('"');
+    for (; *s; s++) {
+        if (*s == '"' || *s == '\\') printf("\\%c", *s);
+        else if ((unsigned char)*s < 0x20) printf("\\u%04x", (unsigned char)*s);
+        else putchar(*s);
+    }
+    putchar('"');
+}
+
+enum { SKIP_TEXT, SKIP_KV, SKIP_JSON };
+
+/* json: `comma` = the engine's array already has entries */
+static void print_skipped(int mode, int comma) {
     char line[1024];
     FILE *f = fopen(skip_manifest, "re");
     if (!f) return;
@@ -314,10 +328,18 @@ static void print_skipped(int kv) {
         if (!tab) continue;
         *tab = '\0';
         if (nl) *nl = '\0';
-        if (kv)
+        if (mode == SKIP_KV) {
             printf("service.%s.state=skipped\nservice.%s.reason=%s\n", line, line, tab + 1);
-        else
+        } else if (mode == SKIP_JSON) {
+            printf("%s\n    {\n      \"name\": ", comma ? "," : "");
+            json_str(line);
+            printf(",\n      \"pid\": 0,\n      \"state\": \"skipped\",\n      \"restarts\": 0,\n      \"reason\": ");
+            json_str(tab + 1);
+            printf("\n    }");
+            comma = 1;
+        } else {
             printf("  %-24s skipped (%s)\n", line, tab + 1);
+        }
     }
     fclose(f);
 }
@@ -486,11 +508,22 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("%s", rbuf);
     i = strncmp(rbuf, "err:", 4) == 0;
+    char *jend = NULL;
+    if (skip_manifest && !i && argc == 3 && !strcmp(argv[1], "status") && !strcmp(argv[2], "--json"))
+        jend = strstr(rbuf, "\n  ]\n}");
+    if (jend) {
+        /* splice the skipped units in before the engine's closing "]" */
+        *jend = '\0';
+        printf("%s", rbuf);
+        print_skipped(SKIP_JSON, jend > rbuf && jend[-1] == '}');
+        printf("\n  ]\n}\n");
+    } else {
+        printf("%s", rbuf);
+    }
     if (skip_manifest && !i && !strcmp(argv[1], "status") &&
         (argc == 2 || (argc == 3 && !strcmp(argv[2], "--kv"))))
-        print_skipped(argc == 3);
+        print_skipped(argc == 3 ? SKIP_KV : SKIP_TEXT, 0);
     close(fd);
     free(rbuf);
     return i;

@@ -126,9 +126,11 @@ static void make_ctl_stub(const char *active_name) {
     fprintf(f,
         "#!/bin/sh\n"
         "echo \"$@\" >> \"%s/ctl.log\"\n"
+        "[ \"$1\" = --user ] && shift\n"
         "if [ \"$1\" = status ]; then\n"
         "  echo 'service.%s.state=FULL_TRUST'\n"
         "  echo 'service.sleeper.state=DORMANT'\n"
+        "  echo 'service.handled.state=skipped'\n"
         "fi\n"
         "exit 0\n", sandbox, active_name);
     fchmod(fileno(f), 0755);
@@ -161,6 +163,7 @@ static void test_lifecycle(void) {
     assert(run("is-active", "running") == 0);
     assert(run("is-active", "sleeper") == 3);
     assert(run("is-active", "nope") == 3);
+    assert(run("is-active", "handled") == 3);   /* schema-user's skip manifest */
     /* a timer: start/restart would fire the job, stop passes through */
     snprintf(svc, sizeof svc, "%s/svc/tick.svc", sandbox);
     f = fopen(svc, "w"); assert(f); fputs("name=tick\non_calendar=00:00\n", f); fclose(f);
@@ -189,7 +192,10 @@ static void test_flags_and_safety(void) {
     assert(shim_dispatch(1, argv) == 0);
     setup_sandbox();
     write_unit("bar.service");
-    assert(run3("--user", "enable", "bar.service") == 0);
+    assert(run3("--global", "enable", "bar.service") == 0);
+    assert(run("is-enabled", "bar") == 1);
+    unsetenv("XDG_RUNTIME_DIR");
+    assert(run3("--user", "enable", "bar.service") == 1);
     assert(run("is-enabled", "bar") == 1);
     make_ctl_stub("baz");
     char svc[512];
@@ -198,6 +204,124 @@ static void test_flags_and_safety(void) {
     write_unit("baz.service");
     assert(run3("enable", "--now", "baz.service") == 0);
     assert(ctl_log_has("start baz"));
+}
+
+static void ctl_log_clear(void) {
+    char p[400]; snprintf(p, sizeof p, "%s/ctl.log", sandbox); unlink(p);
+}
+
+static char *sb(const char *rel) {
+    static char b[4][512];
+    static int k;
+    k = (k + 1) % 4;
+    snprintf(b[k], sizeof b[k], "%s/%s", sandbox, rel);
+    return b[k];
+}
+
+static void put(const char *rel, const char *text) {
+    char p[512], *c;
+    snprintf(p, sizeof p, "%s", sb(rel));
+    for (c = p + 1; *c; c++)
+        if (*c == '/') { *c = '\0'; mkdir(p, 0755); *c = '/'; }
+    FILE *f = fopen(p, "w"); assert(f); fputs(text, f); fclose(f);
+}
+
+static int urun(const char *a, const char *b, const char *c) {
+    char *argv[6]; int n = 0;
+    argv[n++] = (char *)"systemctl";
+    argv[n++] = (char *)"--user";
+    argv[n++] = (char *)a;
+    if (b) argv[n++] = (char *)b;
+    if (c) argv[n++] = (char *)c;
+    argv[n] = NULL;
+    return shim_dispatch(n, argv);
+}
+
+static void test_user(void) {
+    char link[512], tgt[512];
+    ssize_t n;
+    setup_sandbox();
+    make_ctl_stub("up");
+    setenv("XDG_RUNTIME_DIR", sb("run"), 1);
+    setenv("XDG_CONFIG_HOME", sb("conf"), 1);
+    setenv("XDG_DATA_HOME", sb("data"), 1);
+    setenv("SCHEMA_UNIT_ROOT", sb("root"), 1);
+    put("root/usr/lib/systemd/user/foo.service", "[Unit]\n[Service]\nExecStart=/bin/foo\n[Install]\nWantedBy=default.target\n");
+    put("root/usr/lib/systemd/user/bar.service", "[Service]\nExecStart=/bin/bar\n");
+    put("root/usr/lib/systemd/user/tick.timer", "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n");
+    put("root/usr/lib/systemd/user/reset.service",
+        "[Install]\nWantedBy=a.target\nWantedBy=\nRequiredBy=b.target\n");
+    put("run/schema-user/services/foo.svc", "name=foo\n");
+    put("run/schema-user/services/tick.svc", "name=tick\non_calendar=daily\n");
+    put("run/schema-user/services/up.svc", "name=up\n");
+    put("root/usr/lib/systemd/user/up.service", "[Install]\nWantedBy=default.target\n");
+    mkdir(sb("conf"), 0755); mkdir(sb("conf/systemd"), 0755); mkdir(sb("conf/systemd/user"), 0755);
+    assert(symlink("/dev/null", sb("conf/systemd/user/masked.service")) == 0);
+    /* PID 1's .svc dir and pending queue are never touched */
+    put("svc/foo.svc", "name=foo\n");
+
+    assert(urun("is-enabled", "foo", NULL) == 1);
+    assert(urun("enable", "--now", "foo.service") == 0);
+    snprintf(link, sizeof link, "%s", sb("conf/systemd/user/default.target.wants/foo.service"));
+    n = readlink(link, tgt, sizeof tgt - 1); assert(n > 0); tgt[n] = '\0';
+    assert(strcmp(tgt, sb("root/usr/lib/systemd/user/foo.service")) == 0);
+    assert(ctl_log_has("--user daemon-reload"));
+    assert(ctl_log_has("--user start foo"));
+    assert(urun("is-enabled", "foo", NULL) == 0);
+    assert(access(sb("state/pending.list"), F_OK) != 0);
+
+    /* already up after the reload: no second start */
+    ctl_log_clear();
+    assert(urun("enable", "--now", "up") == 0);
+    assert(ctl_log_has("--user daemon-reload") && !ctl_log_has("start up"));
+
+    /* a timer is armed by the reload: no start */
+    ctl_log_clear();
+    assert(urun("enable", "--now", "tick.timer") == 0);
+    assert(access(sb("conf/systemd/user/timers.target.wants/tick.timer"), F_OK) == 0);
+    assert(ctl_log_has("--user daemon-reload") && !ctl_log_has("start tick"));
+
+    /* no [Install]: static, nothing linked */
+    ctl_log_clear();
+    assert(urun("enable", "bar", NULL) == 0);
+    assert(urun("is-enabled", "bar.service", NULL) == 0);
+    assert(!ctl_log_has("daemon-reload"));
+
+    /* an empty WantedBy= resets the list */
+    assert(urun("enable", "reset.service", NULL) == 0);
+    assert(access(sb("conf/systemd/user/a.target.wants/reset.service"), F_OK) != 0);
+    assert(access(sb("conf/systemd/user/b.target.requires/reset.service"), F_OK) == 0);
+    assert(urun("is-enabled", "reset", NULL) == 0);
+
+    assert(urun("enable", "masked.service", NULL) == 1);
+    assert(urun("is-enabled", "masked", NULL) == 1);
+    assert(urun("enable", "nope.service", NULL) == 1);
+    assert(urun("is-enabled", "nope.service", NULL) == 1);
+    assert(urun("preset", "foo.service", NULL) == 0);
+
+    ctl_log_clear();
+    assert(urun("disable", "--now", "foo") == 0);
+    assert(access(link, F_OK) != 0);
+    assert(ctl_log_has("--user stop foo") && ctl_log_has("--user daemon-reload"));
+    assert(urun("is-enabled", "foo", NULL) == 1);
+    assert(urun("disable", "reset.service", NULL) == 0);
+    assert(access(sb("conf/systemd/user/b.target.requires/reset.service"), F_OK) != 0);
+
+    ctl_log_clear();
+    assert(urun("restart", "foo.service", NULL) == 0);
+    assert(ctl_log_has("--user restart foo"));
+    assert(urun("start", "ghost.service", NULL) == 0);
+    assert(!ctl_log_has("ghost"));
+    assert(urun("daemon-reload", NULL, NULL) == 0);
+    assert(ctl_log_has("--user daemon-reload"));
+    assert(urun("is-active", "up", NULL) == 0);
+    assert(urun("is-active", "foo", NULL) == 3);
+    assert(urun("is-active", "handled", NULL) == 3);
+    assert(urun("is-active", "sleeper", NULL) == 3);
+
+    unsetenv("XDG_RUNTIME_DIR");
+    assert(urun("start", "foo", NULL) == 1);
+    unsetenv("XDG_CONFIG_HOME"); unsetenv("XDG_DATA_HOME"); unsetenv("SCHEMA_UNIT_ROOT");
 }
 
 static void test_flag_before_verb(void) {
@@ -226,10 +350,6 @@ static int run_as(const char *argv0, const char *a, const char *b) {
     if (b) argv[n++] = (char *)b;
     argv[n] = NULL;
     return shim_dispatch(n, argv);
-}
-
-static void ctl_log_clear(void) {
-    char p[400]; snprintf(p, sizeof p, "%s/ctl.log", sandbox); unlink(p);
 }
 
 static void test_power(void) {
@@ -342,5 +462,7 @@ int main(void) {
     test_unit_aliases();
     test_is_active_from_shm();
     printf("passthrough systemctl-shim tests passed\n");
+    test_user();
+    printf("user systemctl-shim tests passed\n");
     return 0;
 }

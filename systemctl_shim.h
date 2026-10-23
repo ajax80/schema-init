@@ -9,6 +9,9 @@
 #include <sys/wait.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <dirent.h>
+#include <errno.h>
+#include <limits.h>
 #include "schema.h"
 #include "schema_shm.h"
 
@@ -16,7 +19,16 @@ __attribute__((unused)) static const char *shim_state_dir(void) {
     const char *e = getenv("SCHEMA_STATE_DIR");
     return (e && *e) ? e : "/var/lib/schema-init";
 }
+/* systemctl --user: talk to schema-user (schema-ctl --user) about the
+ * services it generated into $XDG_RUNTIME_DIR/schema-user/services */
+__attribute__((unused)) static int shim_user;
+
 __attribute__((unused)) static const char *shim_svc_dir(void) {
+    static char ubuf[PATH_MAX];
+    if (shim_user) {
+        snprintf(ubuf, sizeof ubuf, "%s/schema-user/services", getenv("XDG_RUNTIME_DIR"));
+        return ubuf;
+    }
     const char *e = getenv("SCHEMA_SVC_DIR");
     return (e && *e) ? e : "/etc/schema-init/services";
 }
@@ -155,7 +167,7 @@ __attribute__((unused)) static const char *unit_alias(const char *base) {
 
 __attribute__((unused)) static char *svc_name_for(const char *unit, char *buf, size_t n) {
     strip_service_suffix(unit, buf, n);
-    const char *alias = unit_alias(buf);
+    const char *alias = shim_user ? NULL : unit_alias(buf);
     if (alias && !svc_exists(buf)) snprintf(buf, n, "%s", alias);
     return buf;
 }
@@ -164,8 +176,14 @@ __attribute__((unused)) static int run_ctl(const char *verb, const char *name) {
     pid_t pid = fork();
     if (pid < 0) return -1;
     if (pid == 0) {
-        if (name) execlp(shim_ctl(), shim_ctl(), verb, name, (char *)NULL);
-        else      execlp(shim_ctl(), shim_ctl(), verb, (char *)NULL);
+        const char *a[5];
+        int k = 0;
+        a[k++] = shim_ctl();
+        if (shim_user) a[k++] = "--user";
+        a[k++] = verb;
+        if (name) a[k++] = name;
+        a[k] = NULL;
+        execvp(a[0], (char **)a);
         _exit(127);
     }
     int st;
@@ -174,8 +192,12 @@ __attribute__((unused)) static int run_ctl(const char *verb, const char *name) {
 }
 
 __attribute__((unused)) static const char *shim_shm_path(void) {
+    static char ubuf[64];
     const char *e = getenv("SCHEMA_SHM_PATH");
-    return (e && *e) ? e : "/dev/shm/schema-init";
+    if (e && *e) return e;
+    if (!shim_user) return "/dev/shm/schema-init";
+    snprintf(ubuf, sizeof ubuf, "/dev/shm/schema-user-%u", (unsigned)geteuid());
+    return ubuf;
 }
 
 /* PID 1 publishes its service table world-readable, so any user can ask
@@ -218,7 +240,7 @@ __attribute__((unused)) static int ctl_is_active(const char *name) {
     int shm = shm_is_active(name);
     if (shm >= 0) return shm;
     char cmd[512];
-    snprintf(cmd, sizeof cmd, "%s status --kv 2>/dev/null", shim_ctl());
+    snprintf(cmd, sizeof cmd, "%s%s status --kv 2>/dev/null", shim_ctl(), shim_user ? " --user" : "");
     FILE *p = popen(cmd, "r");
     if (!p) return 0;
     char want[300], line[512];
@@ -229,12 +251,155 @@ __attribute__((unused)) static int ctl_is_active(const char *name) {
         if (eq != line) continue;
         char *st = line + strlen(want);
         st[strcspn(st, "\n")] = '\0';
-        if (strcmp(st, "DORMANT") && strcmp(st, "EXCISED") && strcmp(st, "UNKNOWN"))
-            active = 1;
+        /* the running states, as shm_is_active counts them: anything else
+         * (DORMANT, EXCISED, schema-user's "skipped") is inactive */
+        static const char *up[] = { "FUNDAMENTAL", "FRICTION", "SETTLED", "NEW_PROCESS",
+                                    "RECOVERY", "FULL_TRUST", "PERFECT", NULL };
+        for (int k = 0; up[k]; k++)
+            if (strcmp(st, up[k]) == 0) active = 1;
         break;
     }
     pclose(p);
     return active;
+}
+
+__attribute__((unused)) static void user_dir(char *buf, size_t n, const char *xdg_var,
+                                             const char *home_rel, const char *sub) {
+    const char *e = getenv(xdg_var), *h = getenv("HOME");
+    if (e && *e) snprintf(buf, n, "%.3500s/%s", e, sub);
+    else         snprintf(buf, n, "%.3500s/%s/%s", h ? h : "", home_rel, sub);
+}
+
+/* ~/.config/systemd/user: the only place --user enable writes, and the only
+ * .wants/ schema-import --user reads (Phase 1: user-enabled units only) */
+__attribute__((unused)) static void user_conf_dir(char *buf, size_t n) {
+    user_dir(buf, n, "XDG_CONFIG_HOME", ".config", "systemd/user");
+}
+
+/* The unit file, searched in schema-import's user order (_unit_dirs). A
+ * dangling symlink still names it. 0 = found. */
+__attribute__((unused)) static int user_unit_path(const char *unit, char *out, size_t n) {
+    static const char *sys[] = { "/usr/local/share/systemd/user", "/usr/share/systemd/user",
+        "/usr/local/lib/systemd/user", "/usr/lib/systemd/user" };
+    const char *root = getenv("SCHEMA_UNIT_ROOT");
+    char dirs[9][PATH_MAX];
+    struct stat st;
+    int i, k = 0;
+    if (!root) root = "";
+    user_conf_dir(dirs[k++], PATH_MAX);
+    snprintf(dirs[k++], PATH_MAX, "%s/etc/systemd/user", root);
+    snprintf(dirs[k++], PATH_MAX, "%.4000s/systemd/user", getenv("XDG_RUNTIME_DIR"));
+    snprintf(dirs[k++], PATH_MAX, "%s/run/systemd/user", root);
+    user_dir(dirs[k++], PATH_MAX, "XDG_DATA_HOME", ".local/share", "systemd/user");
+    for (i = 0; i < 4; i++)
+        snprintf(dirs[k++], PATH_MAX, "%.3000s%s", root, sys[i]);
+    for (i = 0; i < k; i++) {
+        if ((size_t)snprintf(out, n, "%.3800s/%.255s", dirs[i], unit) >= n) continue;
+        if (lstat(out, &st) == 0) return 0;
+    }
+    return -1;
+}
+
+__attribute__((unused)) static int user_unit_masked(const char *path) {
+    char r[PATH_MAX];
+    return realpath(path, r) && strcmp(r, "/dev/null") == 0;
+}
+
+#define USER_INSTALL_MAX 16
+
+/* [Install] WantedBy=/RequiredBy= as "<target>.wants"/"<target>.requires";
+ * an empty assignment resets the list, as in systemd. Returns the count. */
+__attribute__((unused)) static int user_install_dirs(const char *path, char out[][300]) {
+    FILE *f = fopen(path, "re");
+    char line[1024];
+    int n = 0, inst = 0;
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (line[0] == '[') { inst = strcmp(line, "[Install]") == 0; continue; }
+        if (!inst) continue;
+        const char *kind = NULL, *v = NULL;
+        if (strncmp(line, "WantedBy=", 9) == 0)        kind = "wants",    v = line + 9;
+        else if (strncmp(line, "RequiredBy=", 11) == 0) kind = "requires", v = line + 11;
+        if (!kind) continue;
+        if (!*v) { n = 0; continue; }
+        char *save = NULL, *t;
+        for (t = strtok_r((char *)v, " \t", &save); t && n < USER_INSTALL_MAX; t = strtok_r(NULL, " \t", &save))
+            snprintf(out[n++], 300, "%s.%s", t, kind);
+    }
+    fclose(f);
+    return n;
+}
+
+/* 1 if some ~/.config/systemd/user/<x>.wants|.requires/ holds the unit;
+ * with `rm`, unlink every such link instead */
+__attribute__((unused)) static int user_links(const char *unit, int rm) {
+    char conf[PATH_MAX], p[PATH_MAX];
+    struct dirent *de;
+    struct stat st;
+    int found = 0;
+    user_conf_dir(conf, sizeof conf);
+    DIR *d = opendir(conf);
+    if (!d) return 0;
+    while ((de = readdir(d))) {
+        if (!ends_with(de->d_name, ".wants") && !ends_with(de->d_name, ".requires")) continue;
+        snprintf(p, sizeof p, "%.3500s/%.255s/%.255s", conf, de->d_name, unit);
+        if (lstat(p, &st) != 0) continue;
+        found = 1;
+        if (rm && unlink(p) == 0) fprintf(stderr, "Removed \"%s\".\n", p);
+    }
+    closedir(d);
+    return found;
+}
+
+/* 1 = linked, 0 = nothing to link, -1 = failed */
+__attribute__((unused)) static int user_enable(const char *unit) {
+    char path[PATH_MAX], conf[PATH_MAX], dirs[USER_INSTALL_MAX][300], d[PATH_MAX], link[PATH_MAX];
+    int i, n;
+    if (user_unit_path(unit, path, sizeof path) != 0) {
+        fprintf(stderr, "Failed to enable unit: Unit file %s does not exist.\n", unit);
+        return -1;
+    }
+    if (user_unit_masked(path)) {
+        fprintf(stderr, "Failed to enable unit: Unit %s is masked.\n", unit);
+        return -1;
+    }
+    n = user_install_dirs(path, dirs);
+    if (n == 0) {
+        fprintf(stderr, "The unit files have no installation config (WantedBy=, RequiredBy=); "
+                "%s was not enabled.\n", unit);
+        return 0;
+    }
+    user_conf_dir(conf, sizeof conf);
+    for (i = 0; i < n; i++) {
+        snprintf(d, sizeof d, "%.3700s/%.299s", conf, dirs[i]);
+        snprintf(link, sizeof link, "%.3800s/%.255s", d, unit);
+        /* mkdir -p: a fresh home has no ~/.config/systemd/user yet */
+        for (char *c = d + 1; *c; c++)
+            if (*c == '/') { *c = '\0'; mkdir(d, 0755); *c = '/'; }
+        mkdir(d, 0755);
+        if (symlink(path, link) == 0)
+            fprintf(stderr, "Created symlink '%s' → '%s'.\n", link, path);
+        else if (errno != EEXIST) {
+            fprintf(stderr, "Failed to enable unit: %s: %s\n", link, strerror(errno));
+            return -1;
+        }
+    }
+    return 1;
+}
+
+/* enabled / static / disabled / masked, as systemctl prints them */
+__attribute__((unused)) static int user_is_enabled(const char *unit) {
+    char path[PATH_MAX], dirs[USER_INSTALL_MAX][300];
+    if (user_unit_path(unit, path, sizeof path) != 0) {
+        fprintf(stderr, "Failed to get unit file state for %s: No such file or directory\n", unit);
+        return 1;
+    }
+    if (user_unit_masked(path))         { printf("masked\n");   return 1; }
+    if (user_links(unit, 0))            { printf("enabled\n");  return 0; }
+    if (!user_install_dirs(path, dirs)) { printf("static\n");   return 0; }
+    printf("disabled\n");
+    return 1;
 }
 
 /* reboot/poweroff/halt/shutdown are symlinks to systemctl, so they land here
@@ -268,13 +433,21 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     if (power) return *power ? (run_ctl(power, NULL) == 0 ? 0 : 1) : 0;
     if (argc < 2) return 0;
     int j;
-    int now = 0, user_scope = 0;
+    int now = 0, global = 0;
+    shim_user = 0;
     for (j = 1; j < argc; j++) {
         if (strcmp(argv[j], "--now") == 0) now = 1;
-        else if (strcmp(argv[j], "--user") == 0 || strcmp(argv[j], "--global") == 0)
-            user_scope = 1;
+        else if (strcmp(argv[j], "--user") == 0) shim_user = 1;
+        else if (strcmp(argv[j], "--global") == 0) global = 1;
     }
-    if (user_scope) return 0;
+    if (global) return 0;
+    if (shim_user) {
+        const char *x = getenv("XDG_RUNTIME_DIR");
+        if (!x || !*x) {
+            fprintf(stderr, "systemctl --user: XDG_RUNTIME_DIR is not set\n");
+            return 1;
+        }
+    }
     const char *verb = NULL;
     int verb_idx = 0;
     for (j = 1; j < argc; j++) {
@@ -282,6 +455,47 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     }
     if (!verb) return 0;
     int i;
+
+    if (shim_user && (strcmp(verb, "enable") == 0 || strcmp(verb, "disable") == 0 ||
+                      strcmp(verb, "is-enabled") == 0)) {
+        int rc = 0, seen = 0, changed = 0;
+        char qn[300], name[256];
+        for (i = verb_idx + 1; i < argc; i++) {
+            if (argv[i][0] == '-') continue;
+            seen = 1;
+            if (!unit_supported(argv[i])) {
+                fprintf(stderr, "%s: not supported under schema-user, skipped\n", argv[i]);
+                if (verb[0] == 'i') { printf("disabled\n"); rc = 1; }
+                continue;
+            }
+            unit_queue_name(argv[i], qn, sizeof qn);
+            svc_name_for(argv[i], name, sizeof name);
+            if (strcmp(verb, "is-enabled") == 0) {
+                if (user_is_enabled(qn)) rc = 1;
+            } else if (strcmp(verb, "enable") == 0) {
+                int r = user_enable(qn);
+                if (r < 0) rc = 1;
+                else if (r) changed = 1;
+            } else {
+                if (now && svc_exists(name)) run_ctl("stop", name);
+                user_links(qn, 1);
+                changed = 1;
+            }
+        }
+        if (verb[0] == 'i') return seen ? rc : 1;
+        if (changed) run_ctl("daemon-reload", NULL);
+        /* timers and sockets are armed by being loaded, and the reload starts a
+         * new service itself: start only one that is still down */
+        for (i = verb_idx + 1; now && verb[0] == 'e' && i < argc; i++) {
+            if (argv[i][0] == '-' || !unit_supported(argv[i])) continue;
+            if (ends_with(argv[i], ".timer") || ends_with(argv[i], ".socket")) continue;
+            svc_name_for(argv[i], name, sizeof name);
+            if (svc_exists(name) && !ctl_is_active(name)) run_ctl("start", name);
+        }
+        return rc;
+    }
+    /* user presets are Phase 2 (the distro .wants are not imported yet) */
+    if (shim_user && strcmp(verb, "preset") == 0) return 0;
 
     if (strcmp(verb, "enable") == 0 || strcmp(verb, "preset") == 0) {
         for (i = verb_idx + 1; i < argc; i++) {
@@ -328,7 +542,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         return seen ? rc : 1;
     }
     if (strcmp(verb, "daemon-reload") == 0 || strcmp(verb, "daemon-reexec") == 0) {
-        run_ctl("reload", NULL);
+        run_ctl(shim_user ? "daemon-reload" : "reload", NULL);
         return 0;
     }
     if (strcmp(verb, "start") == 0 || strcmp(verb, "stop") == 0 ||
