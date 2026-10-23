@@ -53,6 +53,14 @@ def svc_name(unit):
             return unit[:-len(suffix)]
     return unit
 
+def _reload_dbus():
+    # what dbus-broker's ExecReload= does; safe on every schema-dbus version and
+    # on stock dbus-daemon, unlike SIGHUP, which kills a pre-reload broker
+    bus = dbus.SystemBus()
+    bus.call_blocking('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                      'ReloadConfig', '', [], timeout=60)
+
+
 def svc_files(path):
     """path, then its drop-ins in the order PID 1 applies them (svc_dropins.h)."""
     d, base = os.path.split(path)
@@ -168,6 +176,9 @@ class Systemd1Unit(dbus.service.Object):
         """
         if hasattr(self, 'can_reload'):
             return self.can_reload
+        if self.short_name == 'dbus':      # ReloadUnit routes it to ReloadConfig
+            self.can_reload = True
+            return True
         self.can_reload = False
         try:
             for path in svc_files('/etc/schema-init/services/%s.svc' % self.short_name):
@@ -642,6 +653,9 @@ class Systemd1Manager(dbus.service.Object):
         """
         name = str(name)
         print(f"systemd1: ReloadUnit({name}, {mode})")
+        if name == 'dbus.service':
+            _reload_dbus()
+            return self._trigger_job_signals(name)
         self.poll_and_update()
         unit = self.units.get(name)
         if unit is None:
