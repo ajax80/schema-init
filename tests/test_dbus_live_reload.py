@@ -129,6 +129,18 @@ def poke(c, dest, timeout=3):
         return None
 
 
+def running(arg):
+    """pids whose cmdline has arg (no pgrep: CI has no procps)"""
+    pids = []
+    for d in os.listdir("/proc"):
+        try:
+            if d.isdigit() and arg.encode() in open("/proc/%s/cmdline" % d, "rb").read().split(b"\0"):
+                pids.append(int(d))
+        except OSError:
+            pass
+    return pids
+
+
 def wait_file(path, timeout=5):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
@@ -239,8 +251,7 @@ class Reload(Base):
         self.assertLess(time.monotonic() - t0, 5)
         self.assertIn("timed out", " ".join(m.args))
         a.driver("ListNames")
-        out = subprocess.run(["pgrep", "-f", os.path.join(e.dir, "dissect.py")], capture_output=True)
-        self.assertEqual(out.stdout, b"")
+        self.assertEqual(running(os.path.join(e.dir, "dissect.py")), [])
 
     def test_sanity_refuses_lost_own(self):
         e = self.env()
@@ -319,8 +330,7 @@ class Reload(Base):
         m = a.wait(lambda m: m.mtype in (RETURN, ERROR) and m.reply_serial == s, 5)
         self.assertEqual(m.mtype, ERROR)
         e.proc.wait(5)
-        out = subprocess.run(["pgrep", "-f", os.path.join(e.dir, "dissect.py")], capture_output=True)
-        self.assertEqual(out.stdout, b"")
+        self.assertEqual(running(os.path.join(e.dir, "dissect.py")), [])
 
 
 class Inotify(Base):
