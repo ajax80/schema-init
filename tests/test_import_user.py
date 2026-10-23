@@ -596,6 +596,35 @@ p = t.write(t.sys("/etc/schema-init", "user-skip"), "a b.socket  # c\n")
 check("skip list shares read_skip parsing", si.read_skip_list([p]) == {"a.service", "b.socket"})
 t.done()
 
+# 10. session activation of a unit schema-user runs is routed to it
+t = Tree()
+t.write(t.cfg("kded.service"), SIMPLE + "[Install]\nWantedBy=default.target\n")
+t.enable("kded.service")
+t.link(t.cfg("dbus-org.kde.kded.service"), t.cfg("kded.service"))   # Alias=
+act = lambda n, exe, unit: "[D-BUS Service]\nName=%s\nExec=%s\nSystemdService=%s\n" % (n, exe, unit)
+U = "/usr/share/dbus-1/services"
+t.write(t.sys(U, "org.kde.kded.service"), act("org.kde.kded", "/usr/bin/kded6", "dbus-org.kde.kded.service"))
+t.write(t.sys(U, "org.other.service"), act("org.other", "/usr/bin/other", "other.service"))
+t.write(t.sys(U, "org.plain.service"), "[D-BUS Service]\nName=org.plain\nExec=/usr/bin/plain\n")
+# the user's own file wins over /usr/share for the same Name, as on the bus
+t.write(os.path.join(t.ctx["data"], "dbus-1/services/org.kde.kded.service"),
+        act("org.kde.kded", "/opt/kded", "dbus-org.kde.kded.service"))
+c, out = run(t)
+bus = os.path.join(t.run, "schema-user/dbus-services")
+body = open(os.path.join(bus, "org.kde.kded.service")).read()
+check("bus route: only the unit schema-user runs, via its alias", os.listdir(bus) == ["org.kde.kded.service"])
+check("bus route: helper wraps the winning Exec",
+      body.startswith(si.USER_BUS_MARK + "\n") and
+      "Exec=/usr/libexec/schema-init/schema-bus-activate --user kded org.kde.kded /opt/kded\n" in body)
+si.set_user_mode(t.ctx)
+check("bus route: unchanged set reports no change",
+      si.user_bus_overrides({"kded.service": "kded"}, bus, log=lambda *a, **k: None) is False)
+si.set_user_mode(None)
+os.unlink(t.cfg("default.target.wants/kded.service"))
+c, out = run(t)
+check("bus route: removed once the unit is no longer enabled", os.listdir(bus) == [])
+t.done()
+
 # --- CLI: no XDG_RUNTIME_DIR -> 2 ---
 saved = os.environ.pop("XDG_RUNTIME_DIR", None)
 check("cli_no_runtime", si.main(["--user"]) == 2)

@@ -1,11 +1,23 @@
 #!/bin/sh
+# schema-bus-activate [--user] <svc> <bus-name> <exec...>
+# Bus activation for a name a schema-init service owns: start the service and
+# wait for the name, instead of letting the broker spawn a second copy. When
+# the supervisor is not there or does not know <svc>, run <exec...> as the bus
+# would have (--user: schema-user on the session bus; else PID 1, system bus).
+user= bus=--system
+if [ "$1" = --user ]; then
+    user=--user bus=--session
+    shift
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+fi
 svc=$1 name=$2
 shift 2
-ctl=/usr/bin/schema-ctl
+ctl=${SCHEMA_CTL:-/usr/bin/schema-ctl}
 [ -x "$ctl" ] || ctl=/usr/local/bin/schema-ctl
-if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && "$ctl" status "$svc" >/dev/null 2>&1; then
-    "$ctl" start "$svc" >/dev/null 2>&1
-    "$ctl" status "$svc" 2>/dev/null | head -n1 | grep -q "state=DORMANT" && exit 1
-    exec gdbus wait --system --timeout 20 "$name"
+if { [ -n "$user" ] || [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ]; } &&
+   "$ctl" $user status "$svc" >/dev/null 2>&1; then
+    "$ctl" $user start "$svc" >/dev/null 2>&1
+    "$ctl" $user status "$svc" 2>/dev/null | head -n1 | grep -q "state=DORMANT" && exit 1
+    exec gdbus wait $bus --timeout 20 "$name"
 fi
 exec "$@"

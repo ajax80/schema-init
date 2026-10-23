@@ -87,6 +87,39 @@ def main():
     assert "FOO=bar" in envl and "BAZ=qux" in envl, envl
     print("test_systemd1_session: parse OK")
 
+    # schema-user hand-off: verb table, then state lookup through a stub schema-ctl
+    v = m._schema_user_verb
+    assert v("StartUnit", "DORMANT") == "start"
+    assert v("StartUnit", "FULL_TRUST") is None
+    assert v("RestartUnit", "FULL_TRUST") == "restart"
+    assert v("RestartUnit", "EXCISED") == "start"
+    assert v("TryRestartUnit", "DORMANT") is None
+    assert v("ReloadOrTryRestartUnit", "PERFECT") == "restart"
+    assert v("StopUnit", "FULL_TRUST") == "stop"
+    d = tempfile.mkdtemp()
+    ctl = os.path.join(d, "ctl")
+    with open(ctl, "w") as f:
+        f.write('#!/bin/sh\n[ "$1" = --user ] && [ "$2" = status ] && [ "$3" = kded ] && '
+                '{ echo "  kded pid=7 state=FULL_TRUST"; exit 0; }\n'
+                'echo "err: not found: $3"; exit 1\n')
+    os.chmod(ctl, 0o755)
+    os.makedirs(os.path.join(d, "systemd/user"))
+    with open(os.path.join(d, "systemd/user/kded.service"), "w") as f:
+        f.write("[Service]\nExecStart=/bin/true\n")
+    os.symlink("kded.service", os.path.join(d, "systemd/user/dbus-org.kde.kded.service"))
+    saved_dirs = m.USER_UNIT_DIRS
+    m.USER_UNIT_DIRS = (os.path.join(d, "systemd/user"),)
+    os.environ["SCHEMA_CTL"] = ctl
+    assert m._schema_user_state("kded.service") == ("kded", "FULL_TRUST")
+    assert m._schema_user_state("dbus-org.kde.kded.service") == ("kded", "FULL_TRUST")
+    assert m._schema_user_state("other.service") is None
+    assert m._schema_user_state("kded.timer") is None
+    os.environ["SCHEMA_CTL"] = os.path.join(d, "missing")
+    assert m._schema_user_state("kded.service") is None      # schema-user unreachable
+    del os.environ["SCHEMA_CTL"]
+    m.USER_UNIT_DIRS = saved_dirs
+    print("test_systemd1_session: schema-user hand-off OK")
+
     print("test_systemd1_session: OK")
 
 

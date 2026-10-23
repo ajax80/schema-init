@@ -102,6 +102,8 @@ install -Dm0755 scripts/schema-dbus-session-run.sh %{buildroot}/usr/local/bin/sc
 install -Dm0755 distros/fedora-kde/scripts/schema-wayland-wait %{buildroot}/usr/local/lib/schema/schema-wayland-wait
 install -Dm0644 distros/fedora-kde/config/plasma-autologin.svc.d/50-stop-timeout.conf %{buildroot}%{_sysconfdir}/schema-init/services/plasma-autologin.svc.d/50-stop-timeout.conf
 install -Dm0644 -t %{buildroot}/usr/local/lib/schema/dbus-1/services distros/fedora-kde/config/dbus-1/services/org.freedesktop.impl.portal.desktop.kde.service
+install -Dm0644 -t %{buildroot}/usr/local/lib/schema/dbus-1/services distros/fedora-kde/config/dbus-1/services/org.freedesktop.systemd1.service
+install -Dm0755 scripts/schema-systemd1-session.py %{buildroot}/usr/local/bin/schema-systemd1-session
 install -Dm0755 mock_sd.so %{buildroot}/usr/local/lib/mock_sd.so
 install -Dm0644 distros/fedora-kde/config/plasma-env/zzz-environment-d.sh %{buildroot}/usr/local/lib/schema/zzz-environment-d.sh
 install -Dm0644 -t %{buildroot}/usr/local/lib/schema/plasma-env distros/fedora-kde/config/plasma-env/{05-kdedefaults,no-app-scope,ssh-agent-sock}.sh distros/fedora-kde/config/plasma-workspace/env/zz-schema-autostart.sh
@@ -192,6 +194,9 @@ fi
 Summary:   Autologin Plasma session pipeline for installer-built boxes
 Requires:  %{name} = %{version}-%{release}
 Requires:  %{name}-daemons = %{version}-%{release}
+# schema-systemd1-session (session-bus org.freedesktop.systemd1)
+Requires:  python3-dbus
+Requires:  python3-gobject-base
 %description session
 The Fedora KDE desktop session the installer ISO lays down: the autologin
 launcher, the session-bus wrapper, the direct kwin/plasmashell session start,
@@ -207,6 +212,7 @@ dbus-daemon otherwise.
 /usr/local/bin/schema-dbus-session-run.sh
 /usr/local/bin/plasma-session-start.sh
 /usr/local/bin/plasmashell-shim
+/usr/local/bin/schema-systemd1-session
 /usr/local/lib/mock_sd.so
 %dir /usr/local/lib/schema
 %dir /usr/local/lib/schema/plasma-env

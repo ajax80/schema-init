@@ -26,4 +26,18 @@ names = [l.strip() for l in read("config/user-skip").splitlines() if l.strip() a
 check("default skip list", names == ["pipewire.service", "pipewire.socket", "pipewire-pulse.service",
                                      "pipewire-pulse.socket", "wireplumber.service", "syncthing.service"])
 
+# PR E2: the session-bus systemd1 provider ships in -session; routed activation dir first
+sess = re.search(r"^%files session\n(.*?)(?=^%package|^%files|\Z)", SPEC, re.S | re.M).group(1)
+sess_pkg = re.search(r"^%package session\n(.*?)(?=^%description)", SPEC, re.S | re.M).group(1)
+check("-session ships schema-systemd1-session", "/usr/local/bin/schema-systemd1-session\n" in sess)
+check("-session installs its activation file",
+      "dbus-1/services distros/fedora-kde/config/dbus-1/services/org.freedesktop.systemd1.service" in SPEC)
+check("-session requires python3-dbus + gobject",
+      "python3-dbus" in sess_pkg and "python3-gobject-base" in sess_pkg)
+act = read("distros/fedora-kde/config/dbus-1/services/org.freedesktop.systemd1.service")
+check("activation file execs the packaged shim", "Exec=/usr/local/bin/schema-systemd1-session\n" in act)
+run = read("scripts/schema-dbus-session-run.sh")
+check("schema-dbus searches schema-user's routed dir first",
+      'SCHEMA_DBUS_SVCDIRS="$XDG_RUNTIME_DIR/schema-user/dbus-services:' in run)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

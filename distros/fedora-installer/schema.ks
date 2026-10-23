@@ -158,6 +158,8 @@ rm -f /etc/schema-init/services/schema-migrate-finish.svc  # finishes an in-plac
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-session-register"    /usr/local/bin/schema-session-register
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-session-unregister"  /usr/local/bin/schema-session-unregister
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-dbus-session-run.sh"   /usr/local/bin/schema-dbus-session-run.sh
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-systemd1-session.py"   /usr/local/bin/schema-systemd1-session
+[ -n "$RPMS" ] || install -Dm0644 "$SRC/scripts/org.freedesktop.systemd1.service" /usr/local/lib/schema/dbus-1/services/org.freedesktop.systemd1.service
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/plasma-session-start.sh"    /usr/local/bin/plasma-session-start.sh
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/plasmashell-shim"           /usr/local/bin/plasmashell-shim
 install -d /usr/local/lib/schema

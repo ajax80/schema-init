@@ -57,6 +57,8 @@ install -m0755 "$REPO/scripts/schema-doctor.py"               "$PAYLOAD/scripts/
 install -m0755 "$REPO/scripts/schema-session-register"        "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-session-unregister"      "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-dbus-session-run.sh"      "$PAYLOAD/scripts/"
+install -m0755 "$REPO/scripts/schema-systemd1-session.py"      "$PAYLOAD/scripts/"
+install -m0644 "$HERE/../fedora-kde/config/dbus-1/services/org.freedesktop.systemd1.service" "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-dbus-run.sh"              "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-dbus-flip.sh"             "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-dbus-flip-healthcheck.sh" "$PAYLOAD/scripts/"

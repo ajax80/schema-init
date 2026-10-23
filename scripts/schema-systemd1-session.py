@@ -415,6 +415,73 @@ def _restart_action(member, alive):
     return "noop" if try_only else "spawn"
 
 
+# --- units schema-user runs: hand them to it -----------------------------------
+# One supervisor, not two: a unit schema-user generated is started/stopped by
+# schema-user, never spawned here beside it. Anything it does not run (or a
+# schema-user that is not up) keeps the paths below.
+_UP_STATES = ("FUNDAMENTAL", "FRICTION", "SETTLED", "NEW_PROCESS",
+              "RECOVERY", "FULL_TRUST", "PERFECT")
+
+
+def _schema_user_ctl(*args):
+    # stdout of `schema-ctl --user ...`, or None when it failed
+    ctl = os.environ.get("SCHEMA_CTL") or "schema-ctl"
+    try:
+        r = subprocess.run([ctl, "--user"] + list(args), stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, timeout=10, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _schema_user_state(unit_name):
+    # (svc, state) when schema-user runs this unit, else None. The name may
+    # be an Alias= (dbus-org.*): the file it links to names the .svc.
+    if not unit_name.endswith(".service"):
+        return None
+    path = _find_user_unit(unit_name)
+    names = [unit_name] + ([os.path.basename(os.path.realpath(path))] if path else [])
+    for n in names:
+        if not n.endswith(".service"):
+            continue
+        svc = n[:-len(".service")]
+        out = _schema_user_ctl("status", svc)
+        m = out and re.search(r"\bstate=(\w+)", out)
+        if m:
+            return svc, m.group(1)
+    return None
+
+
+def _schema_user_verb(member, state):
+    # schema-ctl verb for a manager call on a unit in `state`; None = nothing to do
+    if member == "StopUnit":
+        return "stop"
+    return {"spawn": "start", "restart": "restart"}.get(
+        _restart_action(member, state in _UP_STATES))
+
+
+def handle_schema_user_unit(session, msg, member):
+    try:
+        name = str(msg.get_args_list(byte_arrays=True)[0])
+    except Exception:  # noqa: BLE001
+        return False
+    unit_name = name if "." in name else name + ".service"
+    st = _schema_user_state(unit_name)
+    if not st:
+        return False
+    svc, state = st
+    verb = _schema_user_verb(member, state)
+    _log("%s(%s): schema-user %s %s (was %s)" % (member, name, verb or "no-op", svc, state))
+    # schema-ctl answers "err:" for a start of a running service: that is
+    # systemd's no-op success too, so only an unreachable schema-user fails
+    if verb and _schema_user_ctl(verb, svc) is None and _schema_user_state(unit_name) is None:
+        session.send_message(ll.ErrorMessage(
+            msg, "org.freedesktop.DBus.Error.Failed", "schema-user: %s %s failed" % (verb, svc)))
+        return True
+    _reply_job_and_done(session, msg, name)
+    return True
+
+
 def handle_start_unit(session, msg, member="StartUnit"):
     # KDE portal .service files carry SystemdService=, so dbus delegates their
     # activation to org.freedesktop.systemd1.Manager.StartUnit on the session
@@ -526,6 +593,9 @@ def main():
         if path == PATH_PREFIX and msg.get_interface() == MGR_IFACE:
             if member == "StartTransientUnit":
                 handle_start_transient_unit(session, msg)
+                return ll.HANDLER_RESULT_HANDLED
+            if (member in _START_MEMBERS or member == "StopUnit") and \
+                    handle_schema_user_unit(session, msg, member):
                 return ll.HANDLER_RESULT_HANDLED
             if member in _START_MEMBERS and handle_start_unit(session, msg, member):
                 return ll.HANDLER_RESULT_HANDLED

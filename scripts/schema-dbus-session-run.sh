@@ -64,9 +64,12 @@ STOCK_PID=""
 # since this script only runs once per fresh session attempt.
 rm -f "$XDG_RUNTIME_DIR/bus"
 
+# schema-user's routed activation files come first: schema-import --user
+# writes one only for a name whose SystemdService= it runs, built from the
+# file that would have won below (stock dbus-daemon below does not get them)
 if [ -n "$BROKER" ]; then
     SCHEMA_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus" \
-    SCHEMA_DBUS_SVCDIRS="$HOME/.local/share/dbus-1/services:/usr/local/lib/schema/dbus-1/services:/usr/share/dbus-1/services" \
+    SCHEMA_DBUS_SVCDIRS="$XDG_RUNTIME_DIR/schema-user/dbus-services:$HOME/.local/share/dbus-1/services:/usr/local/lib/schema/dbus-1/services:/usr/share/dbus-1/services" \
     SCHEMA_DBUS_MASKFILE=/dev/null \
     "$BROKER" &
     BROKER_PID=$!
