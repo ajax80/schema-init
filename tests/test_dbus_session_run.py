@@ -64,9 +64,20 @@ def stop(p):
         pass
 
 
+def procs():   # (pid, pgid, comm, cmdline) from /proc; CI has no procps
+    for pid in filter(str.isdigit, os.listdir('/proc')):
+        try:
+            stat = open(f'/proc/{pid}/stat').read()
+            cmdline = open(f'/proc/{pid}/cmdline', 'rb').read().decode(errors='replace')
+        except OSError:
+            continue
+        comm = stat[stat.index('(') + 1:stat.rindex(')')]
+        pgid = int(stat[stat.rindex(')') + 2:].split()[2])
+        yield pid, pgid, comm, cmdline
+
+
 def group(p, comm):
-    r = subprocess.run(['pgrep', '-g', str(p.pid), '-x', comm], capture_output=True, text=True)
-    return r.stdout.split()
+    return [pid for pid, pgid, c, _ in procs() if pgid == p.pid and c == comm]
 
 
 def signal_all(pids, sig):
@@ -144,7 +155,12 @@ def main():
             ok, detail = r if isinstance(r, tuple) else (r, '')
             check(name, ok, detail)
         finally:
-            subprocess.run(['pkill', '-f', run], capture_output=True)
+            for pid, _, _, cmdline in procs():
+                if run in cmdline:
+                    try:
+                        os.kill(int(pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
             shutil.rmtree(run, ignore_errors=True)
     return 0 if all(results) else 1
 
