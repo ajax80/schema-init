@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.18
+Version:        0.4.19
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,13 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sat Oct 24 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.19-1
+- Session bus launcher: one bus per session attempt. A slow first broker
+  start no longer races the dbus-daemon fallback, a dead broker no longer
+  kills the fallback session, and a previous attempt's bus is stopped
+  before the new one binds (it unlinked the new socket on exit: black
+  screen after the message-bus flip)
+
 * Sat Oct 24 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.18-1
 - Migrate: a mount-fstab barrier; imported units with DefaultDependencies,
   After=local-fs.target or RequiresMountsFor= wait on it, so a separate
