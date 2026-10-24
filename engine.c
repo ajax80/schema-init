@@ -1042,7 +1042,8 @@ static void tick_service(service_t *svc,
                 } else if (svc->pid_file[0]) {
                     if (svc->fork_state == 1) ready = READY_PIDFILE;
                 } else if (ready_timer_due(now_mono.tv_sec - svc->spawn_time_mono.tv_sec, svc->stable_secs,
-                                           svc->ready_bus_name[0] && bus_reporter_seen)) {
+                                           svc->ready_bus_name[0] != 0, svc->cgroup_path[0] != 0,
+                                           bus_reporter_seen)) {
                     ready = READY_TIMER;
                 }
                 if (ready) {
@@ -2530,6 +2531,9 @@ void engine_open(int adopting) {
          * child_pid can attribute; their SIGCHLD stays pending for signalfd. */
         reap();
         ready_event_due = (int64_t)monotonic_ms();
+        /* the flag isn't carried; a service already promoted on its name proves a reporter */
+        for (int i = 0; i < svc_count; i++)
+            if (services[i].ready_bus_name[0] && services[i].notify_ready) bus_reporter_seen = 1;
     }
     signalfd_init();
 }

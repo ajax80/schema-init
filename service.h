@@ -71,11 +71,13 @@ static inline int pressure_step(int *under, uint64_t now_ms, uint64_t *last_stal
  * name instead (up to BUS_NAME_WAIT_SECS, systemd's start timeout) once a
  * reporter has proven it is live: promoting a slow claimer like TuneD (~18 s)
  * on the 10 s timer lets its dependents start, find no name, and die. Without
- * a reporter nothing would ever say the name appeared, so the timer stays.
+ * a reporter, or a cgroup to attribute a helper-held name to, nothing may ever
+ * say the name appeared, so the timer stays.
  * Pure — unit-tested in tests/test_ready_timer.c. */
 #define BUS_NAME_WAIT_SECS 90
-static inline int ready_timer_due(long ran_s, int stable_secs, int await_bus_name) {
-    if (await_bus_name && ran_s < BUS_NAME_WAIT_SECS) return 0;
+static inline int ready_timer_due(long ran_s, int stable_secs, int has_bus_name, int has_cgroup,
+                                  int reporter_seen) {
+    if (has_bus_name && has_cgroup && reporter_seen && ran_s < BUS_NAME_WAIT_SECS) return 0;
     return ran_s >= stable_secs;
 }
 
