@@ -17,3 +17,13 @@
     compress
     copytruncate
 }
+
+/var/log/schema-autologin.log {
+    daily
+    maxsize 100M
+    rotate 4
+    missingok
+    notifempty
+    compress
+    copytruncate
+}
