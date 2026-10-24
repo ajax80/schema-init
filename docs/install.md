@@ -51,6 +51,7 @@ sudo sed -i 's#/usr/local/lib/schema/schema-flip-apply#/usr/libexec/schema-init/
 `schema-migrate` converts your running Fedora KDE install without a compiler. It reads your system, installs schema-init, ports the KDE session seam (seatd, `schema-logind`, autologin, PipeWire, polkit), bridges udev so the network and `/dev` come up, imports the units systemd had enabled, writes a **non-default** `(schema-init)` GRUB entry (your normal Fedora stays the default), makes the boot menu visible so you can pick it by hand, and heals the session gaps on first boot with `schema-doctor`.
 
 ```sh
+sudo dnf upgrade --refresh && sudo reboot       # first: deploy targets the running kernel
 sudo dnf copr enable ajax80/schema-init
 sudo dnf install schema-init-migrate            # the migrator + schema-udev, prebuilt
 sudo schema-migrate --discover                  # reads the system, changes nothing
@@ -64,6 +65,7 @@ Proven end-to-end in a Fedora-KDE VM: deploy → schema-init as PID 1 with a ful
 Prefer a guided GUI? Install the wizard and start it:
 
 ```sh
+sudo dnf upgrade --refresh && sudo reboot       # first: the wizard's Qt dep drags KDE forward
 sudo dnf copr enable ajax80/schema-init
 sudo dnf install schema-init-wizard
 schema-wizard                                   # or "Set up schema" in the app menu
