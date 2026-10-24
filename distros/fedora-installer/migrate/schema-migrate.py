@@ -80,6 +80,23 @@ def load_prevent_set(path=None):
     return out
 
 
+def _src_files(src):
+    """paths under a source dir, relative to it; "." for a plain file"""
+    if not os.path.isdir(src):
+        return ["."]
+    return [os.path.relpath(os.path.join(d, f), src) for d, _, fs in os.walk(src) for f in fs]
+
+
+def _prune_empty_dirs(rel, stop="/etc/schema-init"):
+    d = os.path.dirname(rel)
+    while d.startswith(stop + "/"):
+        try:
+            os.rmdir(P(d))
+        except OSError:
+            return
+        d = os.path.dirname(d)
+
+
 def _copy_into(src, dst, manifest, dry_run):
     if dry_run:
         return dst
@@ -119,10 +136,8 @@ def deploy_prevent_set(manifest, dry_run=False):
             written.append(dst)
             if not dry_run:
                 # a dir is recorded file by file: uninstall removes files, not trees
-                rels = [os.path.relpath(os.path.join(d, f), src)
-                        for d, _, fs in os.walk(src) for f in fs] if os.path.isdir(src) else [""]
-                for r in rels:
-                    manifest.add_file(os.path.join("/etc/schema-init/config", name, r).rstrip("/"))
+                for r in _src_files(src):
+                    manifest.add_file(os.path.normpath(os.path.join("/etc/schema-init/config", name, r)))
     for name in ps["service"]:
         if name in skip:
             continue
@@ -560,15 +575,19 @@ def uninstall(run=subprocess.run):
     for rel in m.files:
         if _rpm_owned(rel):
             continue
-        try:
-            # older deploys recorded a config dir itself rather than its files
-            if os.path.isdir(P(rel)) and not os.path.islink(P(rel)):
-                shutil.rmtree(P(rel))
-            else:
-                os.remove(P(rel))
-            removed += 1
-        except OSError:
-            pass
+        # older deploys recorded a config dir itself rather than its files: take
+        # back only what came from our source, never files the user added there
+        targets = [rel]
+        if os.path.isdir(P(rel)) and not os.path.islink(P(rel)):
+            src = find_source("distros/fedora-kde/config/" + os.path.relpath(rel, "/etc/schema-init/config"))
+            targets = [os.path.normpath(os.path.join(rel, r)) for r in _src_files(src)] if src else []
+        for t in targets:
+            try:
+                os.remove(P(t))
+                removed += 1
+            except OSError:
+                pass
+            _prune_empty_dirs(t)
     for rel, target in m.links.items():
         try:
             if os.path.lexists(P(rel)):
@@ -587,6 +606,8 @@ def uninstall(run=subprocess.run):
         except OSError:
             pass
     shutil.rmtree(P(UDEV_FLIP_SVCBAK), ignore_errors=True)
+    for d in glob.glob(P("etc/schema-init/services.pre-rollback-*")):   # the flip's rollback copies
+        shutil.rmtree(d, ignore_errors=True)
     relabel = bool(m.files or m.packages or m.grub) and _selinux_configured()
     if relabel:
         open(P("/.autorelabel"), "a").close()

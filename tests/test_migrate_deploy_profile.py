@@ -44,13 +44,25 @@ open(os.path.join(root, "etc/schema-init/services.bak-preflip/dbus.svc"), "w").c
 open(os.path.join(root, "etc/schema-init/schema-udev.preflip-manifest"), "w").close()
 os.makedirs(os.path.join(root, "usr/bin"), exist_ok=True)
 open(os.path.join(root, "usr/bin/schema-udev.bak-preflip"), "w").close()
-# a manifest from an older deploy that recorded the dir itself
-legacy = sm.Manifest.load(); legacy.files.append("/etc/schema-init/config/plasma-env"); legacy.save()
-sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
-check("uninstall removes the config dir's files", not os.path.exists(os.path.join(root, "etc/schema-init/config/plasma-env/env.sh")))
-check("uninstall removes the udev flip's backups",
+os.makedirs(os.path.join(root, "etc/schema-init/services.pre-rollback-20261023-120000"))
+fake_run = lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})()
+sm.uninstall(run=fake_run)
+check("uninstall removes the config dir's files and the emptied dirs",
+      not os.path.exists(os.path.join(root, "etc/schema-init/config")))
+check("uninstall removes the udev flip's backups and rollback copies",
       not any(os.path.exists(os.path.join(root, p)) for p in
-              ("etc/schema-init/services.bak-preflip", "etc/schema-init/schema-udev.preflip-manifest", "usr/bin/schema-udev.bak-preflip")))
+              ("etc/schema-init/services.bak-preflip", "etc/schema-init/schema-udev.preflip-manifest",
+               "usr/bin/schema-udev.bak-preflip", "etc/schema-init/services.pre-rollback-20261023-120000")))
+
+# an older deploy's manifest recorded the dir itself: take back our files, keep the user's
+os.makedirs(os.path.join(root, "etc/schema-init/config/plasma-env"), exist_ok=True)
+open(os.path.join(root, "etc/schema-init/config/plasma-env/env.sh"), "w").close()
+open(os.path.join(root, "etc/schema-init/config/plasma-env/mine.sh"), "w").close()
+legacy = sm.Manifest(); legacy.files.append("/etc/schema-init/config/plasma-env"); legacy.save()
+sm.uninstall(run=fake_run)
+check("legacy dir entry: our file removed, the user's kept",
+      not os.path.exists(os.path.join(root, "etc/schema-init/config/plasma-env/env.sh"))
+      and os.path.exists(os.path.join(root, "etc/schema-init/config/plasma-env/mine.sh")))
 
 # dry-run writes nothing
 root2 = tempfile.mkdtemp(); os.environ["MIGRATE_ROOT"] = root2
