@@ -101,11 +101,12 @@ Your existing boot entries (systemd, or the stock init on Devuan, Void or Artix)
 On Fedora KDE the short version is:
 
 ```sh
+sudo dnf upgrade --refresh
 sudo dnf copr enable ajax80/schema-init
 sudo dnf install schema-init-wizard
 ```
 
-then run `schema-wizard`. It walks you through three reversible stages with a rollback at each one.
+then run `schema-wizard`. It walks you through three reversible stages with a rollback at each one. Upgrade first: on a fresh-from-the-image install the wizard's Qt dependency pulls half of KDE forward, and that partial upgrade can fail on Fedora package conflicts.
 
 ## Known limitations
 

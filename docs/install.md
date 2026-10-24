@@ -64,6 +64,7 @@ Proven end-to-end in a Fedora-KDE VM: deploy → schema-init as PID 1 with a ful
 Prefer a guided GUI? Install the wizard and start it:
 
 ```sh
+sudo dnf upgrade --refresh                     # first: the wizard's Qt dep drags KDE forward
 sudo dnf copr enable ajax80/schema-init
 sudo dnf install schema-init-wizard
 schema-wizard                                   # or "Set up schema" in the app menu
