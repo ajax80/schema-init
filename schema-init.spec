@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.17
+Version:        0.4.18
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,24 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sat Oct 24 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.18-1
+- Migrate: a mount-fstab barrier; imported units with DefaultDependencies,
+  After=local-fs.target or RequiresMountsFor= wait on it, so a separate
+  /var is mounted before they start (stage no longer sticks at R1_PENDING)
+- Importer: ExecStart=! and ExecStart=+ run as root (!! keeps User=)
+- Uninstall removes config dirs and the flip backups it left behind
+- Wizard summary screen shows the doctor's results
+- schema-user: runs the user's enabled units; systemctl --user shim and
+  daemon-reload; session D-Bus activation through schema-user;
+  ConditionUser=, import.log rotation
+- restart_sec= waits between a death and the respawn (RestartSec=)
+- schema-dbus: live config reload (SIGHUP, ReloadConfig, inotify); its
+  runtime ships in -daemons
+- schema-import --user: socket/timer units follow the deps of the service
+  they start; one network-online oneshot
+- Session autostart runs `sh -c` entries and passes WAYLAND_DISPLAY
+- Docs: run `dnf upgrade --refresh` and reboot before installing
+
 * Wed Oct 21 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.17-1
 - Per-user supervisor: schema-user runs a user's own services (deps, stop
   order, restarts, timers, logs) in their own cgroups under a delegated
