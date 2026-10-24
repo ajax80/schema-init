@@ -118,7 +118,11 @@ def deploy_prevent_set(manifest, dry_run=False):
             _copy_into(src, dst, manifest, dry_run)
             written.append(dst)
             if not dry_run:
-                manifest.add_file("/etc/schema-init/config/" + name)
+                # a dir is recorded file by file: uninstall removes files, not trees
+                rels = [os.path.relpath(os.path.join(d, f), src)
+                        for d, _, fs in os.walk(src) for f in fs] if os.path.isdir(src) else [""]
+                for r in rels:
+                    manifest.add_file(os.path.join("/etc/schema-init/config", name, r).rstrip("/"))
     for name in ps["service"]:
         if name in skip:
             continue
@@ -557,7 +561,11 @@ def uninstall(run=subprocess.run):
         if _rpm_owned(rel):
             continue
         try:
-            os.remove(P(rel))
+            # older deploys recorded a config dir itself rather than its files
+            if os.path.isdir(P(rel)) and not os.path.islink(P(rel)):
+                shutil.rmtree(P(rel))
+            else:
+                os.remove(P(rel))
             removed += 1
         except OSError:
             pass
@@ -578,6 +586,7 @@ def uninstall(run=subprocess.run):
             os.remove(P(rel))
         except OSError:
             pass
+    shutil.rmtree(P(UDEV_FLIP_SVCBAK), ignore_errors=True)
     relabel = bool(m.files or m.packages or m.grub) and _selinux_configured()
     if relabel:
         open(P("/.autorelabel"), "a").close()
@@ -804,7 +813,10 @@ UDEV_LIVE_FLAG = "/etc/schema-init/schema-udev.live"
 FLIP_ARTIFACTS = (UDEV_LIVE_FLAG, "/etc/schema-init/dbus-broker", "/etc/schema-init/net-naming",
                   "/var/lib/schema-init/dbus-flip.state", "/var/lib/schema-init/dbus-flip-armed-boots",
                   "/var/lib/schema-init/dbus.svc.stock", "/var/lib/schema-init/flip-armed-boots",
-                  "/var/lib/schema-init/firstboot.state")
+                  "/var/lib/schema-init/firstboot.state",
+                  # the udev flip's rollback copies (schema-udev-flip-backup.sh)
+                  "/etc/schema-init/schema-udev.preflip-manifest", "/usr/bin/schema-udev.bak-preflip")
+UDEV_FLIP_SVCBAK = "/etc/schema-init/services.bak-preflip"
 
 
 def _udevd_path():

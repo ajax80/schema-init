@@ -35,6 +35,22 @@ check("profile service falls back to fedora-kde/services, repo before the instal
       os.path.exists(_seatd) and "exec=/fake/from-repo" in open(_seatd).read())
 check("nothing frigate copied", not any("frigate" in p for p in dst))
 check("manifest recorded the copies", any("plasma-session-start.sh" in f for f in m.files))
+# a config dir is recorded file by file: uninstall's os.remove can't take a dir
+check("config dir recorded as its files, not the dir",
+      "/etc/schema-init/config/plasma-env/env.sh" in m.files and "/etc/schema-init/config/plasma-env" not in m.files)
+m.save()
+os.makedirs(os.path.join(root, "etc/schema-init/services.bak-preflip"))
+open(os.path.join(root, "etc/schema-init/services.bak-preflip/dbus.svc"), "w").close()
+open(os.path.join(root, "etc/schema-init/schema-udev.preflip-manifest"), "w").close()
+os.makedirs(os.path.join(root, "usr/bin"), exist_ok=True)
+open(os.path.join(root, "usr/bin/schema-udev.bak-preflip"), "w").close()
+# a manifest from an older deploy that recorded the dir itself
+legacy = sm.Manifest.load(); legacy.files.append("/etc/schema-init/config/plasma-env"); legacy.save()
+sm.uninstall(run=lambda *a, **k: type("R", (), {"returncode": 0, "stdout": ""})())
+check("uninstall removes the config dir's files", not os.path.exists(os.path.join(root, "etc/schema-init/config/plasma-env/env.sh")))
+check("uninstall removes the udev flip's backups",
+      not any(os.path.exists(os.path.join(root, p)) for p in
+              ("etc/schema-init/services.bak-preflip", "etc/schema-init/schema-udev.preflip-manifest", "usr/bin/schema-udev.bak-preflip")))
 
 # dry-run writes nothing
 root2 = tempfile.mkdtemp(); os.environ["MIGRATE_ROOT"] = root2
