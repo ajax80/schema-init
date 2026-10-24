@@ -33,14 +33,19 @@ find_bin() {
     command -v "$1" 2>/dev/null
 }
 
-BROKER=$(find_bin schema-dbus)
+BROKER=${SCHEMA_DBUS_BROKER:-$(find_bin schema-dbus)}
 [ -e "${SCHEMA_DBUS_GATE:-/etc/schema-init/dbus-broker}" ] || BROKER=""
 STOCK=$(find_bin dbus-daemon)
 
-wait_for_socket() {   # up to 2s; a local fork+bind is normally near-instant
+# wait_for_socket <pid> <tries>: 0.2s per try; gives up early if <pid> dies.
+# The broker's first start after a cold boot took over 2s (v0.4.18 ISO VM,
+# 2026-10-24), so it gets 15s: falling back while it is still coming up left
+# two buses racing for one path.
+wait_for_socket() {
     i=0
-    while [ "$i" -lt 10 ]; do
+    while [ "$i" -lt "$2" ]; do
         [ -S "$XDG_RUNTIME_DIR/bus" ] && return 0
+        [ -d /proc/"$1" ] || return 1
         sleep 0.2
         i=$((i + 1))
     done
@@ -62,6 +67,25 @@ STOCK_PID=""
 # here -- by this point any previous broker's reaper watchdog (below) has
 # either already unlinked it or the process holding it is already gone,
 # since this script only runs once per fresh session attempt.
+#
+# A previous attempt's bus can also still be ALIVE: its reaper only fires
+# once that attempt's session pid is gone, polling once a second. If it
+# reaps after we bind, a stock dbus-daemon unlinks the socket path on exit
+# -- ours -- and every client of this session gets ENOENT (plasmashell
+# crash-looped on a black screen, v0.4.18 ISO VM, 2026-10-24). Stop it
+# first, so nothing is left to unlink our socket.
+PIDFILE="$XDG_RUNTIME_DIR/schema-session-bus.pid"
+old=$(cat "$PIDFILE" 2>/dev/null)
+if [ -n "$old" ] && [ -d /proc/"$old" ]; then
+    case $(cat /proc/"$old"/comm 2>/dev/null) in
+    schema-dbus|dbus-daemon)
+        kill "$old" 2>/dev/null
+        i=0
+        while [ -d /proc/"$old" ] && [ "$i" -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+        [ -d /proc/"$old" ] && kill -9 "$old" 2>/dev/null
+        ;;
+    esac
+fi
 rm -f "$XDG_RUNTIME_DIR/bus"
 
 # schema-user's routed activation files come first: schema-import --user
@@ -75,8 +99,16 @@ if [ -n "$BROKER" ]; then
     BROKER_PID=$!
 fi
 
-if [ -z "$BROKER" ] || ! wait_for_socket; then
+if [ -z "$BROKER" ] || ! wait_for_socket "$BROKER_PID" 75; then
     echo "schema-dbus-session-run: broker unavailable — falling back to stock dbus-daemon" >&2
+    # The watcher below must watch the bus that actually serves the session,
+    # or a broker that dies here kills a healthy fallback session.
+    if [ -n "$BROKER_PID" ]; then
+        kill "$BROKER_PID" 2>/dev/null
+        wait "$BROKER_PID" 2>/dev/null
+        BROKER_PID=""
+        rm -f "$XDG_RUNTIME_DIR/bus"
+    fi
     if [ -z "$STOCK" ]; then
         echo "schema-dbus-session-run: no dbus-daemon to fall back to — no session bus" >&2
         exit 1
@@ -94,7 +126,7 @@ if [ -z "$BROKER" ] || ! wait_for_socket; then
         '</busconfig>' > "$CONF"
     "$STOCK" --config-file="$CONF" --address="unix:path=$XDG_RUNTIME_DIR/bus" --nofork &
     STOCK_PID=$!
-    wait_for_socket || echo "schema-dbus-session-run: socket still not up, continuing anyway" >&2
+    wait_for_socket "$STOCK_PID" 25 || echo "schema-dbus-session-run: socket still not up, continuing anyway" >&2
 fi
 
 # We're about to exec into $@, which keeps this same PID alive as the session
@@ -106,6 +138,7 @@ fi
 # this, every session crash-restart orphaned a live schema-dbus still holding
 # the old $XDG_RUNTIME_DIR/bus socket open (found 2026-09-22, SP4 cutover).
 SESSION_PID=$$
+echo "${BROKER_PID:-$STOCK_PID}" > "$PIDFILE"
 if [ -n "$BROKER_PID" ] || [ -n "$STOCK_PID" ]; then
     (
         # $$ is this script's own PID -- preserved across the exec below, so
