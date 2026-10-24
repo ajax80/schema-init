@@ -645,6 +645,44 @@ def generate_host_units(profile, manifest, dry_run=False):
             os.makedirs(os.path.dirname(P(rel)), exist_ok=True)
             open(P(rel), "w").write(body)
             manifest.add_file("/" + rel)
+    written += _write_mount_barrier(mounts, manifest, dry_run)
+    return written
+
+
+def _write_mount_barrier(mounts, manifest, dry_run):
+    # mount-fstab = "every fstab mount is up". plasma-autologin, schema-doctor and
+    # imported $local_fs units wait on it; with /var or /home on its own subvol
+    # (Fedora's aarch64 images, btrfs installs) they otherwise run before the
+    # mount and read or write the empty directory underneath it.
+    # An ISO rail ships its own mount-fstab that does the mounting; keep it.
+    if os.path.exists(P("etc/schema-init/services/mount-fstab.svc")):
+        return []
+    # like local-fs.target: an absent nofail/noauto drive must not hold the desktop
+    targets = [m["target"] for m in mounts if m["target"] not in SKIP_MOUNT_TARGETS
+               and not {"nofail", "noauto"} & set(m.get("opts", "").split(","))]
+    leaves = ["mount-" + _mount_slug(t) for t in targets
+              if not any(o != t and o.startswith(t.rstrip("/") + "/") for o in targets)]
+    # schema-init reads at most 8 dep= lines, so fan in through sub-barriers
+    level, n = leaves, 0
+    units = []
+    while len(level) > 8:
+        nxt = []
+        for i in range(0, len(level), 8):
+            n += 1
+            units.append(("mount-fstab-%d" % n, level[i:i + 8]))
+            nxt.append("mount-fstab-%d" % n)
+        level = nxt
+    units.append(("mount-fstab", level))
+    written = []
+    for name, deps in units:
+        rel = "etc/schema-init/services/%s.svc" % name
+        body = ("name=%s\nexec=/usr/bin/true\noneshot=1\nneeds_root=0\ncritical=0\n" % name
+                + "".join("dep=%s\n" % d for d in deps) + NO_HARDENING)
+        written.append(P(rel))
+        if not dry_run:
+            os.makedirs(os.path.dirname(P(rel)), exist_ok=True)
+            open(P(rel), "w").write(body)
+            manifest.add_file("/" + rel)
     return written
 
 
@@ -1307,6 +1345,9 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     _add_unit_dep("network-manager", "coldplug-modules", dry_run=dry_run)
     _add_unit_dep("network-manager", "udev-trigger", dry_run=dry_run)
     _add_unit_dep("network-manager", "resolv-unstub", dry_run=dry_run)
+    # both read and write /var/lib/schema-init (the wizard stage, timer stamps)
+    _add_unit_dep("schema-doctor", "mount-fstab", dry_run=dry_run)
+    _add_unit_dep("schema-migrate-finish", "mount-fstab", dry_run=dry_run)
     install_unit_helpers(m, dry_run=dry_run)
     install_session_support(profile, m, dry_run=dry_run)
     install_packages(m, run=run, dry_run=dry_run)
