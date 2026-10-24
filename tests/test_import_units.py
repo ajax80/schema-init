@@ -57,6 +57,8 @@ for pfx in ("!", "+", "-!"):
     bp = si.unit_to_svc("chronyd", si.parse_unit(
         "[Service]\nType=notify\nUser=chrony\nExecStart=%s/usr/sbin/chronyd -n\n" % pfx))
     check("ExecStart=%s ignores User= -> needs_root" % pfx, "needs_root=1\n" in bp and "user=" not in bp)
+bp = si.unit_to_svc("capd", si.parse_unit("[Service]\nUser=foo\nExecStart=!!/usr/bin/foo\n"))
+check("ExecStart=!! keeps User= (ambient caps exist on F44)", "user=foo\n" in bp)
 check("quoted env pair", "env=FOO=a b\n" in b2)
 check("second env pair", "env=BAR=c\n" in b2)
 

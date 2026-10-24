@@ -74,6 +74,24 @@ sm.generate_host_units(usb, sm.Manifest())
 ub = open(os.path.join(r4, "etc/schema-init/services/mount-fstab.svc")).read()
 check("barrier skips nofail/noauto mounts (an absent USB drive can't hold the desktop)",
       "dep=mount-home\n" in ub and "mnt-usb" not in ub and "mnt-nas" not in ub)
+check("noauto gets no mount unit at all", not os.path.exists(os.path.join(r4, "etc/schema-init/services/mount-mnt-nas.svc")))
+r5 = tempfile.mkdtemp(); sm.ROOT = r5
+net = {"mounts": [{"src": "UUID=h", "target": "/home", "fstype": "btrfs", "opts": "subvol=home"},
+                  {"src": "srv:/x", "target": "/mnt/nfs", "fstype": "nfs", "opts": "defaults"},
+                  {"src": "//s/y", "target": "/mnt/smb", "fstype": "ext4", "opts": "_netdev"},
+                  {"src": "UUID=u", "target": "/mnt/usb", "fstype": "ext4", "opts": "nofail"},
+                  {"src": "UUID=d", "target": "/mnt/usb/data", "fstype": "ext4", "opts": "defaults"}]}
+sm.generate_host_units(net, sm.Manifest())
+nb = open(os.path.join(r5, "etc/schema-init/services/mount-fstab.svc")).read()
+check("barrier skips network shares and anything under a nofail mount",
+      [l for l in nb.splitlines() if l.startswith("dep=")] == ["dep=mount-home"])
+r6 = tempfile.mkdtemp(); sm.ROOT = r6
+os.makedirs(os.path.join(r6, "etc/schema-init/services"))
+open(os.path.join(r6, "etc/schema-init/services/mount-fstab.svc"), "w").write("name=mount-fstab\nexec=/usr/bin/true\ndep=mount-gone\n")
+m6 = sm.Manifest(); sm.generate_host_units(profile, m6)
+check("a stale barrier from a failed deploy is rewritten and recorded",
+      "mount-gone" not in open(os.path.join(r6, "etc/schema-init/services/mount-fstab.svc")).read()
+      and "/etc/schema-init/services/mount-fstab.svc" in m6.files)
 
 r3 = tempfile.mkdtemp(); sm.ROOT = r3
 os.makedirs(os.path.join(r3, "etc/schema-init/services"))

@@ -826,7 +826,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # chrony: User=chrony + ExecStart=!, the daemon drops privileges itself)
     lead = execstart.strip()
     pfx = lead[:len(lead) - len(lead.lstrip(_EXEC_PREFIX))]
-    if "!" in pfx or "+" in pfx:
+    # (!! is only the fallback for kernels without ambient caps; F44 has them)
+    if "+" in pfx or ("!" in pfx and "!!" not in pfx):
         user = ""
     if user and user != "root":
         lines.append("user=%s" % user)
