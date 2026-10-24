@@ -47,6 +47,8 @@ die() { printf '\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 # TCG boots take ~6 min, and an SELinux relabel boot (first boot, uninstall) ~20
 if [ "$ARCH" = aarch64 ]; then RAM=${RAM:-6144}; CPUS=${CPUS:-6}; BOOTWAIT=${BOOTWAIT:-2400}
 else RAM=${RAM:-3072}; CPUS=${CPUS:-2}; BOOTWAIT=${BOOTWAIT:-300}; fi
+# verify's polls (stage advance, desktop, doctor) stretch with it
+[ "$ARCH" = aarch64 ] && SLOW=4 || SLOW=1
 have_kvm() { [ -w /dev/kvm ] && echo "-accel kvm -cpu host" || echo "-accel tcg"; }
 
 # ---- shared qemu invocation for an installed disk ---------------------------
@@ -96,7 +98,7 @@ do_install() {
     [ -f "$STOCK" ] && { log "stock-clean.qcow2 exists — skipping install (rm it to rebuild)"; return 0; }
 
     log "generating kickstart with harness pubkey"
-    local pub; pub="$(cat "$ART/id_migrate.pub")"
+    local pub; pub="$(cat "$SSHKEY.pub")"
     sed "s|@@PUBKEY@@|$pub|g" "$HERE/kickstart.cfg" > "$ART/kickstart.gen.cfg"
 
     log "serving kickstart on :8000"
@@ -129,10 +131,14 @@ do_install_a64() {
     [ -f "$A64_IMG" ] || die "missing $A64_IMG (dl.fedoraproject.org .../44/KDE/aarch64/images/)"
     [ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] || die "no aarch64 binfmt handler (qemu-user-static-aarch64, binfmt_misc mounted)"
     [ -f "$SSHKEY" ] || ssh-keygen -q -t ed25519 -N '' -f "$SSHKEY" -C schema-migratetest || die "keygen"
-    local raw="$ART/prep.raw" mnt; mnt=$(mktemp -d)
+    local fw=/usr/share/edk2/aarch64
+    [ -f $fw/QEMU_EFI-pflash.raw ] && [ -f $fw/QEMU_EFI-qemuvars-pflash.raw ] || die "no UEFI firmware (edk2-aarch64)"
+    local raw="$ART/prep.raw" mnt loop=""; mnt=$(mktemp -d)
+    # a die anywhere below must not leave the image mounted or the loop device held
+    trap 'sudo umount -R "$mnt" 2>/dev/null; [ -n "$loop" ] && sudo losetup -d "$loop" 2>/dev/null; rmdir "$mnt" 2>/dev/null; vm_kill' EXIT
     log "unpacking the disk image"
     xz -dc "$A64_IMG" > "$raw" || die "xz"
-    local loop; loop=$(sudo losetup -fP --show "$raw") || die "losetup"
+    loop=$(sudo losetup -fP --show "$raw") || die "losetup"
     sudo mount -o subvol=root "${loop}p3" "$mnt" && sudo mount -o subvol=home "${loop}p3" "$mnt/home" \
         && sudo mount -o subvol=var "${loop}p3" "$mnt/var" && sudo mount "${loop}p2" "$mnt/boot" \
         && sudo mount "${loop}p1" "$mnt/boot/efi" || die "mount image"
@@ -150,14 +156,13 @@ do_install_a64() {
         # files written from the host carry no SELinux label; enforcing then
         # breaks logind and sshd until the first boot relabels them
         touch /.autorelabel" || die "chroot prep"
-    sudo umount "$mnt"/{proc,sys,dev,boot/efi,boot,var,home} "$mnt"; sudo losetup -d "$loop"; rmdir "$mnt"
+    sudo umount "$mnt"/{proc,sys,dev,boot/efi,boot,var,home} "$mnt"; sudo losetup -d "$loop"; rmdir "$mnt"; loop=""
     qemu-img convert -O qcow2 "$raw" "$ART/stock.qcow2" && rm -f "$raw" || die "convert"
-    cp /usr/share/edk2/aarch64/QEMU_EFI-pflash.raw "$ART/efi-code.raw"
-    cp /usr/share/edk2/aarch64/QEMU_EFI-qemuvars-pflash.raw "$ART/efi-vars.raw"
+    cp $fw/QEMU_EFI-pflash.raw "$ART/efi-code.raw" && cp $fw/QEMU_EFI-qemuvars-pflash.raw "$ART/efi-vars.raw" || die "firmware copy"
 
     log "first boot (growfs + SELinux relabel + reboot) — slow under TCG"
     boot_bg "$ART/stock.qcow2"
-    wait_ssh 2400 || die "first boot never reached ssh"
+    wait_ssh $BOOTWAIT || die "first boot never reached ssh"
     # off by default: ~2,000 rpm steps take hours under TCG
     if [ "${UPGRADE:-0}" = 1 ]; then
         log "dnf upgrade --refresh (what the README asks a stranger to do first)"
@@ -165,6 +170,7 @@ do_install_a64() {
     fi
     vm_poweroff || die "first boot did not power off"
     mv "$ART/stock.qcow2" "$STOCK" && cp "$ART/efi-vars.raw" "$ART/efi-vars-stock.raw" || die "rename stock"
+    trap - EXIT
     log "install complete -> $STOCK"
 }
 
@@ -214,7 +220,7 @@ do_migrate() {
 
     if [ "$ARCH" = aarch64 ]; then
         # -migrate, not -wizard: the wizard's PySide6 drags the Qt/KDE stack
-        # forward, which wants the dnf upgrade above. Its backend runs the same
+        # forward, which wants a full dnf upgrade first (install's UPGRADE=1). Its backend runs the same
         # schema-migrate calls this harness makes.
         log "dnf install schema-init-migrate from COPR $COPR"
         rootc "dnf copr enable -y $COPR && dnf install -y schema-init-migrate" > "$ART/copr-install.log" 2>&1 \
@@ -225,12 +231,20 @@ do_migrate() {
             # copy, so unreleased migrate fixes run on aarch64 without a build
             log "overlaying this repo's migrate tree onto the packaged one"
             tar -C "$REPO" -cf - distros/fedora-installer/migrate distros/fedora-installer/rail distros/fedora-kde/scripts \
-                distros/fedora-kde/services distros/fedora-kde/config | rootc "
+                distros/fedora-kde/services distros/fedora-kde/config scripts \
+                distros/fedora-installer/schema-flip-apply.sh distros/fedora-installer/schema-udev-flip-healthcheck.sh | rootc "
                 set -e; d=/usr/share/schema-init/migrate; t=\$(mktemp -d); tar -C \$t -xf -
-                install -m0755 \$t/distros/fedora-installer/migrate/schema-migrate.py /usr/bin/schema-migrate
-                install -m0755 \$t/distros/fedora-installer/migrate/schema-import.py /usr/bin/schema-import
-                install -m0755 \$t/distros/fedora-installer/migrate/schema-import.py /usr/libexec/schema-init/schema-import
-                install -m0644 \$t/distros/fedora-installer/migrate/stage.py /usr/libexec/schema-init/stage.py
+                # only over files a package put there: nothing unowned survives uninstall
+                ov() { [ -e \"\$2\" ] && install -m\$3 \"\$t/\$1\" \"\$2\" || :; }
+                L=/usr/libexec/schema-init
+                ov distros/fedora-installer/migrate/schema-migrate.py /usr/bin/schema-migrate 0755
+                ov distros/fedora-installer/migrate/schema-import.py /usr/bin/schema-import 0755
+                ov distros/fedora-installer/migrate/schema-import.py \$L/schema-import 0755
+                ov distros/fedora-installer/migrate/stage.py \$L/stage.py 0644
+                ov distros/fedora-installer/schema-flip-apply.sh \$L/schema-flip-apply 0755
+                ov distros/fedora-installer/schema-udev-flip-healthcheck.sh \$L/schema-udev-flip-healthcheck.sh 0755
+                for h in schema-udev-flip-arm.sh schema-udev-flip-backup.sh schema-mount-fstab schema-dbus-run.sh \\
+                         schema-dbus-flip.sh schema-dbus-flip-healthcheck.sh; do ov scripts/\$h \$L/\$h 0755; done
                 install -m0644 \$t/distros/fedora-installer/migrate/prevent-set.list \$d/prevent-set.list
                 for sub in distros/fedora-installer/rail/services distros/fedora-installer/rail/scripts \
                            distros/fedora-kde/scripts distros/fedora-kde/services distros/fedora-kde/config; do
@@ -239,7 +253,7 @@ do_migrate() {
                 rm -rf \$t" || die "overlay"
         fi
         log "running schema-migrate --deploy --prebuilt (what the wizard's Continue runs)"
-        rootc "$MIG --deploy --prebuilt" 2>&1 | tee "$ART/deploy.log"
+        rootc "$MIG --deploy --prebuilt" 2>&1 | tee "$ART/deploy.log" || die "deploy failed (see $ART/deploy.log)"
     else
     log "staging the repo onto the VM (simulating the USB)"
     tar -C "$REPO" --exclude=.git --exclude=tests/migratetest/artifacts --exclude='*.o' -cf - . \
@@ -268,7 +282,7 @@ do_migrate() {
     log "running schema-migrate --deploy --prebuilt on the VM"
     rootc "MIGRATE_REPO=/home/tester/schema-init python3 \
           /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --deploy --prebuilt" \
-          2>&1 | tee "$ART/deploy.log"
+          2>&1 | tee "$ART/deploy.log" || die "deploy failed (see $ART/deploy.log)"
     fi
 
     log "post-deploy checks (before any reboot into schema)"
@@ -318,7 +332,7 @@ do_verify() {
     # this boot with NO manual --finish. Poll to avoid racing the oneshot.
     log "checking the finish oneshot advanced the stage on its own (up to 45s):"
     local stg=""
-    for _ in $(seq 1 15); do
+    for _ in $(seq 1 $((15 * SLOW))); do
         stg=$(rootc "$MIG --stage" 2>/dev/null)
         [ "$stg" = "R1_HEAL" ] && break
         sleep 3
@@ -346,7 +360,7 @@ do_verify() {
     # never a bare --check, which reports an un-healed snapshot and lies.
     log "schema-doctor healed status (waiting up to 45s for the boot heal):"
     local st=""
-    for _ in $(seq 1 15); do
+    for _ in $(seq 1 $((15 * SLOW))); do
         st=$(rootc "cat /run/schema-init/doctor-status 2>/dev/null")
         [ -n "$st" ] && break
         sleep 3
@@ -372,7 +386,10 @@ do_flips() {
     rootc "$MIG --arm-dbus" || die "arm-dbus"
     rootc "systemctl reboot" || true; sleep 5
     wait_ssh $BOOTWAIT || die "never came back after the dbus flip"
-    for _ in $(seq 1 30); do rootc "pgrep -x plasmashell >/dev/null" && break; sleep 10; done
+    stg=$(rootc "$MIG --stage"); [ "$stg" = R3_ROLLED_BACK ] && die "dbus flip rolled back ($(rootc "$MIG --why" 2>/dev/null))"
+    local up=""
+    for _ in $(seq 1 30); do rootc "pgrep -x plasmashell >/dev/null" && { up=1; break; }; sleep 10; done
+    [ -n "$up" ] || die "no plasma session on schema-dbus (stage $stg)"
     rootc "$MIG --confirm-dbus" || die "confirm-dbus ($(rootc "$MIG --stage"))"
     stg=$(rootc "$MIG --stage"); [ "$stg" = R3_DONE ] || die "dbus flip: stage $stg"
     echo "  OK  dbus flip R3_DONE; system bus: $(rootc 'readlink -f /proc/$(pgrep -o -f -- "--system")/exe')"
@@ -393,9 +410,11 @@ do_uninstall() {
     local exe; exe=$(pid1); echo "  PID1 = $exe"
     [[ "$exe" == *systemd ]] || die "expected systemd back after uninstall, got '$exe'"
     # what --uninstall left behind that no package owns: it should be nothing
-    rootc 'cd /etc/schema-init 2>/dev/null && find . -type f | while read -r f; do
+    rootc 'cd /etc/schema-init 2>/dev/null && find . \( -type f -o -type l \) | while read -r f; do
                rpm -qf "/etc/schema-init/${f#./}" >/dev/null 2>&1 || echo "${f#./}"; done' > "$ART/uninstall-leftovers.txt"
-    echo "  unowned files left under /etc/schema-init: $(wc -l < "$ART/uninstall-leftovers.txt") (list: $ART/uninstall-leftovers.txt)"
+    local left; left=$(wc -l < "$ART/uninstall-leftovers.txt")
+    echo "  unowned files left under /etc/schema-init: $left (list: $ART/uninstall-leftovers.txt)"
+    [ "$left" -eq 0 ] || die "--uninstall left $left files no package owns"
     log "UNINSTALL OK — box is back on stock systemd"
 }
 
