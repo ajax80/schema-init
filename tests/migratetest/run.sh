@@ -11,17 +11,31 @@
 #
 # The VM is deliberately close to Optiplex: SeaBIOS/legacy boot, msdos MBR disk,
 # GRUB in the MBR, real BLS entries under a BIOS GRUB, plasma+sddm, uid-1000 user.
+#
+# ARCH=aarch64 instead runs what a stranger on a Pi has: the official Fedora KDE
+# aarch64 disk image (UEFI, plasmalogin, btrfs root/home/var) under TCG, with
+# schema-init from the COPR rather than the repo's x86_64 binaries. `install`
+# preps that image (needs sudo, qemu-user-static-aarch64 and binfmt_misc);
+# `migrate` then runs the wizard's own deploy. Expect ~6 min per boot.
+#   ART=~/Ocean/vm/aarch64 SSHKEY=~/.cache/schema-a64/id_migrate ARCH=aarch64 ./run.sh all
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ART="$HERE/artifacts"
+ARCH=${ARCH:-x86_64}
+ART="${ART:-$HERE/artifacts}"
 REPO="$(cd "$HERE/../.." && pwd)"
 ISO="$ART/Fedora-Everything-netinst-44.iso"
 ISO_LABEL="Fedora-E-dvd-x86_64-44"
+A64_IMG="$ART/Fedora-KDE-Desktop-Disk-44-1.7.aarch64.raw.xz"
+COPR=${COPR:-ajax80/schema-init}
 STOCK="$ART/stock-clean.qcow2"     # pristine post-install snapshot
 WORK="$ART/work.qcow2"             # mutable copy the migration runs against
-SSHKEY="$ART/id_migrate"
+# ssh refuses a key with loose modes, and some filesystems (mergerfs) won't keep 0600.
+SSHKEY="${SSHKEY:-$ART/id_migrate}"
 SSHPORT=2222
+# x86 runs the migrator from the staged repo; aarch64 runs the packaged one.
+if [ "$ARCH" = aarch64 ]; then MIG=/usr/bin/schema-migrate
+else MIG="MIGRATE_REPO=/home/tester/schema-init python3 /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py"; fi
 MON="$ART/qmp.sock"
 KEY_SSH=(ssh -i "$SSHKEY" -p "$SSHPORT" -o StrictHostKeyChecking=no \
          -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o LogLevel=ERROR)
@@ -29,18 +43,37 @@ KEY_SSH=(ssh -i "$SSHKEY" -p "$SSHPORT" -o StrictHostKeyChecking=no \
 log() { printf '\n\033[1;36m>> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
-RAM=${RAM:-3072}; CPUS=${CPUS:-2}
+if [ "$ARCH" = aarch64 ]; then RAM=${RAM:-6144}; CPUS=${CPUS:-6}; else RAM=${RAM:-3072}; CPUS=${CPUS:-2}; fi
 have_kvm() { [ -w /dev/kvm ] && echo "-accel kvm -cpu host" || echo "-accel tcg"; }
 
-# ---- shared qemu invocation for an installed disk (legacy BIOS) --------------
+# ---- shared qemu invocation for an installed disk ---------------------------
+vm_qemu() {  # $1=image  then extra qemu args
+    local img="$1"; shift
+    if [ "$ARCH" = aarch64 ]; then
+        # cortex-a72 = a Pi 4's core, and much faster under TCG than -cpu max.
+        # i6300esb gives schema-init a real /dev/watchdog to pet, like the Pi's.
+        qemu-system-aarch64 \
+            -name schema-migrate-vm -M virt -cpu cortex-a72 -m "$RAM" -smp "$CPUS" \
+            -accel tcg,thread=multi,tb-size=512 \
+            -drive if=pflash,format=raw,readonly=on,file="$ART/efi-code.raw" \
+            -drive if=pflash,format=raw,file="$ART/efi-vars.raw" \
+            -drive file="$img",if=virtio,format=qcow2,cache=writeback \
+            -device virtio-gpu-pci -device qemu-xhci -device usb-kbd -device usb-tablet -device i6300esb \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:${SSHPORT}-:22 \
+            -device virtio-net-pci,netdev=n0 "$@"
+    else
+        qemu-system-x86_64 \
+            -name schema-migrate-vm -machine pc -m "$RAM" -smp "$CPUS" $(have_kvm) \
+            -drive file="$img",if=virtio,format=qcow2,cache=writeback \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:${SSHPORT}-:22 \
+            -device virtio-net-pci,netdev=n0,csum=off,gso=off,guest_csum=off,guest_tso4=off,guest_tso6=off,host_tso4=off,host_tso6=off \
+            "$@"
+    fi
+}
+
 boot_disk() {  # $1=image  $2=extra qemu args...  (foreground, serial console)
     local img="$1"; shift
-    qemu-system-x86_64 \
-        -name schema-migrate-vm -machine pc -m "$RAM" -smp "$CPUS" $(have_kvm) \
-        -drive file="$img",if=virtio,format=qcow2,cache=writeback \
-        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:${SSHPORT}-:22 \
-        -device virtio-net-pci,netdev=n0,csum=off,gso=off,guest_csum=off,guest_tso4=off,guest_tso6=off,host_tso4=off,host_tso6=off \
-        -nographic -serial mon:stdio "$@"
+    vm_qemu "$img" -nographic -serial mon:stdio "$@"
 }
 
 wait_ssh() {  # $1=timeout seconds
@@ -87,11 +120,56 @@ do_install() {
     log "install complete -> $STOCK"
 }
 
+# ---- install (aarch64): prep the official KDE disk image into stock-clean ----
+do_install_a64() {
+    [ -f "$STOCK" ] && { log "stock-clean.qcow2 exists — skipping install (rm it to rebuild)"; return 0; }
+    [ -f "$A64_IMG" ] || die "missing $A64_IMG (dl.fedoraproject.org .../44/KDE/aarch64/images/)"
+    [ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] || die "no aarch64 binfmt handler (qemu-user-static-aarch64, binfmt_misc mounted)"
+    [ -f "$SSHKEY" ] || ssh-keygen -q -t ed25519 -N '' -f "$SSHKEY" -C schema-migratetest || die "keygen"
+    local raw="$ART/prep.raw" mnt; mnt=$(mktemp -d)
+    log "unpacking the disk image"
+    xz -dc "$A64_IMG" > "$raw" || die "xz"
+    local loop; loop=$(sudo losetup -fP --show "$raw") || die "losetup"
+    sudo mount -o subvol=root "${loop}p3" "$mnt" && sudo mount -o subvol=home "${loop}p3" "$mnt/home" \
+        && sudo mount -o subvol=var "${loop}p3" "$mnt/var" && sudo mount "${loop}p2" "$mnt/boot" \
+        && sudo mount "${loop}p1" "$mnt/boot/efi" || die "mount image"
+    for d in proc sys dev; do sudo mount --bind /$d "$mnt/$d"; done
+    log "chroot: tester (uid 1000) + root keys, sshd, no first-run setup, plasmalogin autologin"
+    local pub; pub="$(cat "$SSHKEY.pub")"
+    sudo chroot "$mnt" /bin/bash -ec "
+        useradd -m -u 1000 -G wheel tester
+        echo tester:schema123 | chpasswd; echo root:schemaroot | chpasswd
+        for h in /root /home/tester; do install -d -m700 \$h/.ssh; echo '$pub' > \$h/.ssh/authorized_keys; chmod 600 \$h/.ssh/authorized_keys; done
+        chown -R tester:tester /home/tester/.ssh
+        systemctl enable sshd.service serial-getty@ttyAMA0.service
+        systemctl mask plasma-setup.service
+        printf '[Autologin]\nUser=tester\nSession=plasma\n' > /etc/plasmalogin.conf.d/autologin.conf
+        # files written from the host carry no SELinux label; enforcing then
+        # breaks logind and sshd until the first boot relabels them
+        touch /.autorelabel" || die "chroot prep"
+    sudo umount "$mnt"/{proc,sys,dev,boot/efi,boot,var,home} "$mnt"; sudo losetup -d "$loop"; rmdir "$mnt"
+    qemu-img convert -O qcow2 "$raw" "$ART/stock.qcow2" && rm -f "$raw" || die "convert"
+    cp /usr/share/edk2/aarch64/QEMU_EFI-pflash.raw "$ART/efi-code.raw"
+    cp /usr/share/edk2/aarch64/QEMU_EFI-qemuvars-pflash.raw "$ART/efi-vars.raw"
+
+    log "first boot (growfs + SELinux relabel + reboot) — slow under TCG"
+    boot_bg "$ART/stock.qcow2"
+    wait_ssh 2400 || die "first boot never reached ssh"
+    if [ "${UPGRADE:-1}" = 1 ]; then
+        log "dnf upgrade --refresh (what the README asks a stranger to do first)"
+        rootc "dnf upgrade -y --refresh" > "$ART/upgrade.log" 2>&1 || die "dnf upgrade (see $ART/upgrade.log)"
+    fi
+    vm_poweroff || die "first boot did not power off"
+    mv "$ART/stock.qcow2" "$STOCK" && cp "$ART/efi-vars.raw" "$ART/efi-vars-stock.raw" || die "rename stock"
+    log "install complete -> $STOCK"
+}
+
 fresh_work() {
     [ -f "$STOCK" ] || die "no stock-clean.qcow2 — run './run.sh install' first"
     log "creating work overlay on pristine stock (copy-on-write)"
     rm -f "$WORK"
     qemu-img create -f qcow2 -F qcow2 -b "$STOCK" "$WORK" >/dev/null || die "overlay create"
+    [ "$ARCH" = aarch64 ] && { cp "$ART/efi-vars-stock.raw" "$ART/efi-vars.raw" || die "efi vars"; }
 }
 
 VMPID="$ART/vm.pid"
@@ -100,17 +178,19 @@ SERLOG="$ART/boot-serial.log"
 boot_bg() {  # $1=image — detached qemu, serial appended to log, survives guest reboot
     local img="$1"
     : > "$SERLOG"
-    qemu-system-x86_64 \
-        -name schema-migrate-vm -machine pc -m "$RAM" -smp "$CPUS" $(have_kvm) \
-        -drive file="$img",if=virtio,format=qcow2,cache=writeback \
-        -netdev user,id=n0,hostfwd=tcp:127.0.0.1:${SSHPORT}-:22 \
-        -device virtio-net-pci,netdev=n0,csum=off,gso=off,guest_csum=off,guest_tso4=off,guest_tso6=off,host_tso4=off,host_tso6=off -display none \
+    vm_qemu "$img" -display none \
         -chardev file,id=ser0,path="$SERLOG",append=on -serial chardev:ser0 \
         -monitor unix:"$MON",server,nowait -pidfile "$VMPID" &
     disown
     sleep 2
 }
 vm_kill() { [ -f "$VMPID" ] && kill "$(cat "$VMPID")" 2>/dev/null; rm -f "$VMPID" "$MON"; }
+vm_poweroff() {  # clean guest shutdown; never pull the plug on a disk we keep
+    local p; p=$(cat "$VMPID" 2>/dev/null) || return 1
+    rootc "systemctl poweroff" 2>/dev/null
+    for _ in $(seq 1 120); do kill -0 "$p" 2>/dev/null || { rm -f "$VMPID" "$MON"; return 0; }; sleep 5; done
+    return 1
+}
 sshc()  { "${KEY_SSH[@]}" tester@127.0.0.1 "$@"; }
 # tester's sudo needs a password (no tty over ssh); root has the harness key in
 # its authorized_keys, so privileged steps run as root directly.
@@ -128,6 +208,14 @@ do_migrate() {
     local exe; exe=$(pid1); log "stock PID1 = $exe"
     [[ "$exe" == *systemd ]] || die "expected systemd on stock, got '$exe'"
 
+    if [ "$ARCH" = aarch64 ]; then
+        log "dnf install schema-init-wizard from COPR $COPR (the README path)"
+        rootc "dnf copr enable -y $COPR && dnf install -y schema-init-wizard" > "$ART/copr-install.log" 2>&1 \
+            || { tail -20 "$ART/copr-install.log"; die "COPR install failed (see $ART/copr-install.log)"; }
+        rootc "rpm -q schema-init schema-init-migrate schema-init-wizard" | sed 's/^/  /'
+        log "running schema-migrate --deploy --prebuilt (what the wizard's Continue runs)"
+        rootc "$MIG --deploy --prebuilt" 2>&1 | tee "$ART/deploy.log"
+    else
     log "staging the repo onto the VM (simulating the USB)"
     tar -C "$REPO" --exclude=.git --exclude=tests/migratetest/artifacts --exclude='*.o' -cf - . \
         | sshc "rm -rf /home/tester/schema-init && mkdir -p /home/tester/schema-init && tar -C /home/tester/schema-init -xf -" \
@@ -156,6 +244,7 @@ do_migrate() {
     rootc "MIGRATE_REPO=/home/tester/schema-init python3 \
           /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --deploy --prebuilt" \
           2>&1 | tee "$ART/deploy.log"
+    fi
 
     log "post-deploy checks (before any reboot into schema)"
     if rootc "test -x /usr/bin/schema-init"; then
@@ -175,7 +264,7 @@ do_migrate() {
     else
         die "FIX#1 REGRESSION: finish oneshot was not deployed"
     fi
-    local stg; stg=$(rootc "python3 /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --stage")
+    local stg; stg=$(rootc "$MIG --stage")
     echo "  post-deploy stage: $stg"
     [ "$stg" = "R1_PENDING" ] || die "expected R1_PENDING after deploy, got '$stg'"
 
@@ -205,7 +294,7 @@ do_verify() {
     log "checking the finish oneshot advanced the stage on its own (up to 45s):"
     local stg=""
     for _ in $(seq 1 15); do
-        stg=$(rootc "python3 /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --stage" 2>/dev/null)
+        stg=$(rootc "$MIG --stage" 2>/dev/null)
         [ "$stg" = "R1_HEAL" ] && break
         sleep 3
     done
@@ -246,8 +335,7 @@ do_uninstall() {
     trap vm_kill EXIT
     [ -f "$VMPID" ] || { boot_bg "$WORK"; wait_ssh 300 || die "VM not up for uninstall"; }
     log "running schema-migrate --uninstall"
-    rootc "MIGRATE_REPO=/home/tester/schema-init python3 \
-          /home/tester/schema-init/distros/fedora-installer/migrate/schema-migrate.py --uninstall" \
+    rootc "$MIG --uninstall" \
           2>&1 | tee "$ART/uninstall.log"
     log "rebooting into stock (default entry)"
     rootc "systemctl reboot" || true
@@ -258,8 +346,10 @@ do_uninstall() {
     log "UNINSTALL OK — box is back on stock systemd"
 }
 
+do_install_any() { if [ "$ARCH" = aarch64 ]; then do_install_a64; else do_install; fi; }
+
 case "${1:-}" in
-    install)   do_install ;;
+    install)   do_install_any ;;
     fresh)     fresh_work ;;
     boot)      boot_disk "${2:-$WORK}" ;;
     boot-bg)   boot_bg "${2:-$WORK}" ; echo "backgrounded; serial: $SERLOG" ;;
@@ -268,6 +358,6 @@ case "${1:-}" in
     uninstall) do_uninstall ;;
     kill)      vm_kill ;;
     ssh)       shift; sshc "$@" ;;
-    all)       do_install; do_migrate; do_uninstall ;;
+    all)       do_install_any; do_migrate; do_uninstall ;;
     *) echo "usage: $0 {install|migrate|verify|uninstall|all|boot|boot-bg|ssh|kill|fresh}"; exit 2 ;;
 esac
