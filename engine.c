@@ -93,6 +93,7 @@ static int          sig_fd   = -1;
 int          watchdog_fd = -1;
 int64_t      watchdog_pet_ms = 5000;
 time_t       notify_paused_since = 0;   /* mono sec, 0 = notify reads flowing */
+static int          bus_reporter_seen = 0;  /* a broker BUSNAME= report was accepted: ready_bus_name waits for its name */
 int          system_under_pressure = 0;
 static int          pass_changed = 1;   /* first pass, or last pass moved a service: run at once */
 #define PASS_RERUN_MAX  16                /* ...at most this many passes in a row */
@@ -1040,7 +1041,8 @@ static void tick_service(service_t *svc,
                     svc->ready_path_verified = 1;
                 } else if (svc->pid_file[0]) {
                     if (svc->fork_state == 1) ready = READY_PIDFILE;
-                } else if (now_mono.tv_sec - svc->spawn_time_mono.tv_sec >= svc->stable_secs) {
+                } else if (ready_timer_due(now_mono.tv_sec - svc->spawn_time_mono.tv_sec, svc->stable_secs,
+                                           svc->ready_bus_name[0] && bus_reporter_seen)) {
                     ready = READY_TIMER;
                 }
                 if (ready) {
@@ -1923,6 +1925,7 @@ static void notify_poll(int max_batch) {
              * counts for the service whose cgroup holds the owning pid. */
             fd_close_detached(rfds, nrfds);
             if (m.bus_owner_pid <= 0 || !notify_sender_is_broker(pid, uid)) continue;
+            bus_reporter_seen = 1;
             for (int i = 0; i < svc_count; i++) {
                 service_t *svc = &services[i];
                 if (!svc->ready_bus_name[0] || svc->child_pid <= 0 || svc->notify_ready) continue;
