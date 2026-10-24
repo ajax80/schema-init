@@ -80,6 +80,16 @@ def group(p, comm):
     return [pid for pid, pgid, c, _ in procs() if pgid == p.pid and c == comm]
 
 
+def settled(p):   # launcher exec'd into the session and its two watchers forked
+    name = os.path.basename(SESSION)[:15]
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if open(f'/proc/{p.pid}/comm').read().strip() == 'sleep' and len(group(p, name)) == 2:
+            return group(p, name)
+        time.sleep(0.1)
+    raise RuntimeError('launcher never settled')
+
+
 def signal_all(pids, sig):
     for pid in pids:
         os.kill(int(pid), sig)
@@ -87,10 +97,9 @@ def signal_all(pids, sig):
 
 def dead_session_bus_stopped(run):
     a1 = start(run)
-    bus_answers(run)
     # Hold attempt 1's reaper (the launcher's forked subshells) so it fires
     # after attempt 2 binds, as it did in the VM.
-    reapers = group(a1, os.path.basename(SESSION)[:15])
+    reapers = settled(a1)
     signal_all(reapers, signal.SIGSTOP)
     a1.kill()
     a1.wait()               # reaped, as the autologin loop does; a zombie keeps /proc/<pid>
@@ -106,7 +115,7 @@ def dead_session_bus_stopped(run):
 
 def live_session_bus_kept(run):
     a1 = start(run)
-    bus_answers(run)
+    settled(a1)
     first = group(a1, 'dbus-daemon')[0]
     a2 = start(run)
     time.sleep(2)
