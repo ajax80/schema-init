@@ -46,6 +46,6 @@ That matters on battery. It matters even more on embedded hardware. schema-init 
 
 - **No risk at all:** `git clone`, `make`, `make test`. You only need a compiler; no root, no VM.
 - **Watch it boot:** run it in a VM. Your real bootloader and `/dev` are never touched.
-- **On Fedora KDE:** `dnf copr enable ajax80/schema-init`, then `schema-migrate` or the `schema-wizard` GUI. Either one adds a non-default boot entry, and one command removes it.
+- **On Fedora KDE:** `dnf upgrade` and reboot, `dnf copr enable ajax80/schema-init`, then `schema-migrate` or the `schema-wizard` GUI. Either one adds a non-default boot entry, and one command removes it.
 
 Every step is in [Installing](install.md). If something breaks, [open an issue](https://github.com/ajax80/schema-init/issues). That is the most useful thing a new user can do.
