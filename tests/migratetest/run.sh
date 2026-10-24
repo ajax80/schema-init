@@ -18,6 +18,7 @@
 # preps that image (needs sudo, qemu-user-static-aarch64 and binfmt_misc);
 # `migrate` then runs the wizard's own deploy. Expect ~6 min per boot.
 #   ART=~/Ocean/vm/aarch64 SSHKEY=~/.cache/schema-a64/id_migrate ARCH=aarch64 ./run.sh all
+# MIGRATE_SRC=repo overlays this tree's migrator on the COPR one; FLIPS=0 skips stages 2-3.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,7 +44,9 @@ KEY_SSH=(ssh -i "$SSHKEY" -p "$SSHPORT" -o StrictHostKeyChecking=no \
 log() { printf '\n\033[1;36m>> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
-if [ "$ARCH" = aarch64 ]; then RAM=${RAM:-6144}; CPUS=${CPUS:-6}; else RAM=${RAM:-3072}; CPUS=${CPUS:-2}; fi
+# TCG boots take ~6 min, and an SELinux relabel boot (first boot, uninstall) ~20
+if [ "$ARCH" = aarch64 ]; then RAM=${RAM:-6144}; CPUS=${CPUS:-6}; BOOTWAIT=${BOOTWAIT:-2400}
+else RAM=${RAM:-3072}; CPUS=${CPUS:-2}; BOOTWAIT=${BOOTWAIT:-300}; fi
 have_kvm() { [ -w /dev/kvm ] && echo "-accel kvm -cpu host" || echo "-accel tcg"; }
 
 # ---- shared qemu invocation for an installed disk ---------------------------
@@ -155,7 +158,8 @@ do_install_a64() {
     log "first boot (growfs + SELinux relabel + reboot) — slow under TCG"
     boot_bg "$ART/stock.qcow2"
     wait_ssh 2400 || die "first boot never reached ssh"
-    if [ "${UPGRADE:-1}" = 1 ]; then
+    # off by default: ~2,000 rpm steps take hours under TCG
+    if [ "${UPGRADE:-0}" = 1 ]; then
         log "dnf upgrade --refresh (what the README asks a stranger to do first)"
         rootc "dnf upgrade -y --refresh" > "$ART/upgrade.log" 2>&1 || die "dnf upgrade (see $ART/upgrade.log)"
     fi
@@ -204,15 +208,36 @@ do_migrate() {
     trap vm_kill EXIT
     log "booting stock (systemd) VM"
     boot_bg "$WORK"
-    wait_ssh 300 || die "stock VM never reached ssh"
+    wait_ssh $BOOTWAIT || die "stock VM never reached ssh"
     local exe; exe=$(pid1); log "stock PID1 = $exe"
     [[ "$exe" == *systemd ]] || die "expected systemd on stock, got '$exe'"
 
     if [ "$ARCH" = aarch64 ]; then
-        log "dnf install schema-init-wizard from COPR $COPR (the README path)"
-        rootc "dnf copr enable -y $COPR && dnf install -y schema-init-wizard" > "$ART/copr-install.log" 2>&1 \
+        # -migrate, not -wizard: the wizard's PySide6 drags the Qt/KDE stack
+        # forward, which wants the dnf upgrade above. Its backend runs the same
+        # schema-migrate calls this harness makes.
+        log "dnf install schema-init-migrate from COPR $COPR"
+        rootc "dnf copr enable -y $COPR && dnf install -y schema-init-migrate" > "$ART/copr-install.log" 2>&1 \
             || { tail -20 "$ART/copr-install.log"; die "COPR install failed (see $ART/copr-install.log)"; }
-        rootc "rpm -q schema-init schema-init-migrate schema-init-wizard" | sed 's/^/  /'
+        rootc "rpm -q schema-init schema-init-migrate" | sed 's/^/  /'
+        if [ "${MIGRATE_SRC:-}" = repo ]; then
+            # the migrator is Python + data: lay this tree's over the packaged
+            # copy, so unreleased migrate fixes run on aarch64 without a build
+            log "overlaying this repo's migrate tree onto the packaged one"
+            tar -C "$REPO" -cf - distros/fedora-installer/migrate distros/fedora-installer/rail distros/fedora-kde/scripts \
+                distros/fedora-kde/services distros/fedora-kde/config | rootc "
+                set -e; d=/usr/share/schema-init/migrate; t=\$(mktemp -d); tar -C \$t -xf -
+                install -m0755 \$t/distros/fedora-installer/migrate/schema-migrate.py /usr/bin/schema-migrate
+                install -m0755 \$t/distros/fedora-installer/migrate/schema-import.py /usr/bin/schema-import
+                install -m0755 \$t/distros/fedora-installer/migrate/schema-import.py /usr/libexec/schema-init/schema-import
+                install -m0644 \$t/distros/fedora-installer/migrate/stage.py /usr/libexec/schema-init/stage.py
+                install -m0644 \$t/distros/fedora-installer/migrate/prevent-set.list \$d/prevent-set.list
+                for sub in distros/fedora-installer/rail/services distros/fedora-installer/rail/scripts \
+                           distros/fedora-kde/scripts distros/fedora-kde/services distros/fedora-kde/config; do
+                    cp -a \$t/\$sub/. \$d/\$sub/
+                done
+                rm -rf \$t" || die "overlay"
+        fi
         log "running schema-migrate --deploy --prebuilt (what the wizard's Continue runs)"
         rootc "$MIG --deploy --prebuilt" 2>&1 | tee "$ART/deploy.log"
     else
@@ -280,7 +305,7 @@ do_migrate() {
     log "rebooting into the default (schema) entry"
     rootc "systemctl reboot" || true
     sleep 5
-    wait_ssh 300 || { panic_in_serial && die "schema boot PANICKED (see $SERLOG)"; die "schema VM never came back on ssh"; }
+    wait_ssh $BOOTWAIT || { panic_in_serial && die "schema boot PANICKED (see $SERLOG)"; die "schema VM never came back on ssh"; }
     do_verify
 }
 
@@ -331,18 +356,46 @@ do_verify() {
     log "VERIFY OK — schema-init is PID1 on the migrated box"
 }
 
+# stages 2 and 3, as the wizard's Continue drives them: schema-udev, then schema-dbus
+do_flips() {
+    local stg
+    log "stage 2: arm the schema-udev flip, reboot"
+    rootc "$MIG --arm-flip" || die "arm-flip"
+    rootc "systemctl reboot" || true; sleep 5
+    wait_ssh $BOOTWAIT || die "never came back after the udev flip"
+    for _ in $(seq 1 30); do
+        stg=$(rootc "$MIG --stage" 2>/dev/null); case $stg in DONE|ROLLED_BACK) break ;; esac; sleep 10
+    done
+    [ "$stg" = DONE ] || die "udev flip: stage $stg ($(rootc "$MIG --why" 2>/dev/null))"
+    echo "  OK  udev flip DONE; $(rootc 'pgrep -a -x schema-udev')"
+    log "stage 3: arm the schema-dbus flip, reboot, confirm"
+    rootc "$MIG --arm-dbus" || die "arm-dbus"
+    rootc "systemctl reboot" || true; sleep 5
+    wait_ssh $BOOTWAIT || die "never came back after the dbus flip"
+    for _ in $(seq 1 30); do rootc "pgrep -x plasmashell >/dev/null" && break; sleep 10; done
+    rootc "$MIG --confirm-dbus" || die "confirm-dbus ($(rootc "$MIG --stage"))"
+    stg=$(rootc "$MIG --stage"); [ "$stg" = R3_DONE ] || die "dbus flip: stage $stg"
+    echo "  OK  dbus flip R3_DONE; system bus: $(rootc 'readlink -f /proc/$(pgrep -o -f -- "--system")/exe')"
+    rootc "schema-ctl status" | grep -vE "PERFECT|FUNDAMENTAL|SETTLED" | sed 's/^/    /'
+    rootc "$MIG --finish" >/dev/null
+}
+
 do_uninstall() {
     trap vm_kill EXIT
-    [ -f "$VMPID" ] || { boot_bg "$WORK"; wait_ssh 300 || die "VM not up for uninstall"; }
+    [ -f "$VMPID" ] || { boot_bg "$WORK"; wait_ssh $BOOTWAIT || die "VM not up for uninstall"; }
     log "running schema-migrate --uninstall"
     rootc "$MIG --uninstall" \
           2>&1 | tee "$ART/uninstall.log"
     log "rebooting into stock (default entry)"
     rootc "systemctl reboot" || true
     sleep 5
-    wait_ssh 300 || die "VM never came back after uninstall reboot"
+    wait_ssh $BOOTWAIT || die "VM never came back after uninstall reboot"
     local exe; exe=$(pid1); echo "  PID1 = $exe"
     [[ "$exe" == *systemd ]] || die "expected systemd back after uninstall, got '$exe'"
+    # what --uninstall left behind that no package owns: it should be nothing
+    rootc 'cd /etc/schema-init 2>/dev/null && find . -type f | while read -r f; do
+               rpm -qf "/etc/schema-init/${f#./}" >/dev/null 2>&1 || echo "${f#./}"; done' > "$ART/uninstall-leftovers.txt"
+    echo "  unowned files left under /etc/schema-init: $(wc -l < "$ART/uninstall-leftovers.txt") (list: $ART/uninstall-leftovers.txt)"
     log "UNINSTALL OK — box is back on stock systemd"
 }
 
@@ -358,6 +411,7 @@ case "${1:-}" in
     uninstall) do_uninstall ;;
     kill)      vm_kill ;;
     ssh)       shift; sshc "$@" ;;
-    all)       do_install_any; do_migrate; do_uninstall ;;
-    *) echo "usage: $0 {install|migrate|verify|uninstall|all|boot|boot-bg|ssh|kill|fresh}"; exit 2 ;;
+    flips)     do_flips ;;
+    all)       do_install_any; do_migrate; [ "${FLIPS:-1}" = 1 ] && do_flips; do_uninstall; vm_poweroff ;;
+    *) echo "usage: $0 {install|migrate|verify|flips|uninstall|all|boot|boot-bg|ssh|kill|fresh}"; exit 2 ;;
 esac
