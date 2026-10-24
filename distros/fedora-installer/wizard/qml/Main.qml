@@ -12,7 +12,9 @@ ApplicationWindow {
 
     Timer {
         interval: 2000; repeat: true
+        // summary: the wizard autostarts at login, before the doctor's heal run writes its status
         running: wizard.screen === "waiting_reboot"
+                 || (wizard.screen === "summary" && wizard.statusItems.length === 0)
         onTriggered: wizard.refresh()
     }
 
@@ -49,13 +51,14 @@ ApplicationWindow {
         }
 
         ScrollView {
+            id: results
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: wizard.screen === "summary"
             clip: true
 
             ColumnLayout {
-                width: parent.width
+                width: results.availableWidth
                 spacing: 6
 
                 Label {
@@ -79,7 +82,8 @@ ApplicationWindow {
                             Layout.alignment: Qt.AlignTop
                             Layout.topMargin: 3
                             color: modelData.color === "GREEN" ? "#27ae60"
-                                 : modelData.color === "AMBER" ? "#e67e22" : "#c0392b"
+                                 : modelData.color === "AMBER" ? "#e67e22"
+                                 : modelData.color === "RED" ? "#c0392b" : "#95a5a6"
                         }
                         Label {
                             Layout.fillWidth: true
@@ -111,7 +115,7 @@ ApplicationWindow {
             }
         }
 
-        Item { Layout.fillHeight: true }
+        Item { Layout.fillHeight: true; visible: wizard.screen !== "summary" }
 
         Label {
             Layout.fillWidth: true
