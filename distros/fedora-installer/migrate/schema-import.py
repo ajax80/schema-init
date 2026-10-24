@@ -681,6 +681,13 @@ def dep_lines(name, sections, known):
     unit = sections.get("Unit", [])
     svc = sections.get("Service", [])
     tokens = lambda sec, k: " ".join(_get_all(sec, k)).split()
+    # DefaultDependencies=yes orders a service after local-fs.target, and early
+    # units (auditd) say so themselves: crond and auditd die when started before
+    # a separate /var subvol is mounted. First, so the 8-dep cap never drops it.
+    if (_get_last(unit, "DefaultDependencies").lower() not in ("no", "false", "0", "off")
+            or {"local-fs.target", "remote-fs.target"} & set(tokens(unit, "After"))
+            or _get_all(unit, "RequiresMountsFor")):
+        cands.append("mount-fstab")
     part_of = {_UNIT_ALIAS.get(u.rsplit(".", 1)[0], u.rsplit(".", 1)[0])
                for u in tokens(unit, "PartOf") if u.endswith((".service", ".socket"))}
     if (_get_last(svc, "Type").lower() == "dbus" or _get_last(svc, "BusName")
@@ -815,6 +822,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             lines.append("restart_sec=%d" % min(rsec, 3600))
 
     user = _get_last(svc, "User")
+    # ExecStart=! / + run the main process as root whatever User= says (F44 GA
+    # chrony: User=chrony + ExecStart=!, the daemon drops privileges itself)
+    lead = execstart.strip()
+    pfx = lead[:len(lead) - len(lead.lstrip(_EXEC_PREFIX))]
+    if "!" in pfx or "+" in pfx:
+        user = ""
     if user and user != "root":
         lines.append("user=%s" % user)
     else:
