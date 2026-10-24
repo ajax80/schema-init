@@ -12,7 +12,9 @@ ApplicationWindow {
 
     Timer {
         interval: 2000; repeat: true
+        // summary: the wizard autostarts at login, before the doctor's heal run writes its status
         running: wizard.screen === "waiting_reboot"
+                 || (wizard.screen === "summary" && wizard.statusItems.length === 0)
         onTriggered: wizard.refresh()
     }
 
@@ -48,6 +50,53 @@ ApplicationWindow {
             text: wizard.detail
         }
 
+        ScrollView {
+            id: results
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: wizard.screen === "summary"
+            clip: true
+
+            ColumnLayout {
+                width: results.availableWidth
+                spacing: 6
+
+                Label {
+                    text: "Overall: " + wizard.overall
+                    font.bold: true
+                }
+                Label {
+                    visible: wizard.statusItems.length === 0
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                    text: "The doctor hasn't reported yet."
+                }
+                Repeater {
+                    model: wizard.statusItems
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Rectangle {
+                            width: 12; height: 12; radius: 6
+                            Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: 3
+                            color: modelData.color === "GREEN" ? "#27ae60"
+                                 : modelData.color === "AMBER" ? "#e67e22"
+                                 : modelData.color === "RED" ? "#c0392b" : "#95a5a6"
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            text: modelData.name
+                                  + (modelData.detail ? " — " + modelData.detail : "")
+                                  + (modelData.action ? "\n" + modelData.action : "")
+                        }
+                    }
+                }
+            }
+        }
+
         // Recovery-card acknowledgement, shown only before the first reboot.
         ColumnLayout {
             Layout.fillWidth: true
@@ -66,7 +115,7 @@ ApplicationWindow {
             }
         }
 
-        Item { Layout.fillHeight: true }
+        Item { Layout.fillHeight: true; visible: wizard.screen !== "summary" }
 
         Label {
             Layout.fillWidth: true
