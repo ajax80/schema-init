@@ -41,6 +41,67 @@ check("each mount arg on its own args= line", alines == [
     "args=-t", "args=xfs", "args=-o", "args=defaults", "args=UUID=bbb", "args=/home"])
 check("manifest recorded units", any("mount-home.svc" in f for f in m.files))
 
+# mount-fstab: the barrier plasma-autologin (and doctor/finish) wait on. Without
+# it a separate /var or /home subvol mounts after they already ran.
+fstab_unit = os.path.join(root, "etc/schema-init/services/mount-fstab.svc")
+check("mount-fstab barrier written", os.path.exists(fstab_unit))
+fb = open(fstab_unit).read()
+fdeps = sorted(l[4:] for l in fb.splitlines() if l.startswith("dep="))
+check("barrier waits on every leaf mount (parents come via the leaf)",
+      fdeps == ["mount-boot-efi", "mount-home", "mount-mnt-data"])
+check("barrier is a oneshot", "oneshot=1" in fb and "exec=/usr/bin/true" in fb)
+check("manifest recorded the barrier", "/etc/schema-init/services/mount-fstab.svc" in m.files)
+
+many = {"mounts": [{"src": "UUID=m%d" % i, "target": "/srv/m%d" % i, "fstype": "ext4"} for i in range(19)]}
+r2 = tempfile.mkdtemp(); sm.ROOT = r2
+m2 = sm.Manifest(); sm.generate_host_units(many, m2)
+sd2 = os.path.join(r2, "etc/schema-init/services")
+def _deps(n): return [l[4:] for l in open(os.path.join(sd2, n + ".svc")).read().splitlines() if l.startswith("dep=")]
+def _reach(n):
+    out = set()
+    for d in _deps(n):
+        out |= _reach(d) if d.startswith("mount-fstab") else {d}
+    return out
+check("no barrier exceeds schema-init's 8 deps",
+      all(len(_deps(f[:-4])) <= 8 for f in os.listdir(sd2) if f.startswith("mount-fstab")))
+check("19 mounts all reachable from mount-fstab", _reach("mount-fstab") == {"mount-srv-m%d" % i for i in range(19)})
+
+r4 = tempfile.mkdtemp(); sm.ROOT = r4
+usb = {"mounts": [{"src": "UUID=h", "target": "/home", "fstype": "btrfs", "opts": "subvol=home"},
+                  {"src": "UUID=u", "target": "/mnt/usb", "fstype": "ext4", "opts": "defaults,nofail"},
+                  {"src": "UUID=n", "target": "/mnt/nas", "fstype": "ext4", "opts": "noauto,user"}]}
+sm.generate_host_units(usb, sm.Manifest())
+ub = open(os.path.join(r4, "etc/schema-init/services/mount-fstab.svc")).read()
+check("barrier skips nofail/noauto mounts (an absent USB drive can't hold the desktop)",
+      "dep=mount-home\n" in ub and "mnt-usb" not in ub and "mnt-nas" not in ub)
+check("noauto gets no mount unit at all", not os.path.exists(os.path.join(r4, "etc/schema-init/services/mount-mnt-nas.svc")))
+r5 = tempfile.mkdtemp(); sm.ROOT = r5
+net = {"mounts": [{"src": "UUID=h", "target": "/home", "fstype": "btrfs", "opts": "subvol=home"},
+                  {"src": "srv:/x", "target": "/mnt/nfs", "fstype": "nfs", "opts": "defaults"},
+                  {"src": "//s/y", "target": "/mnt/smb", "fstype": "ext4", "opts": "_netdev"},
+                  {"src": "UUID=u", "target": "/mnt/usb", "fstype": "ext4", "opts": "nofail"},
+                  {"src": "UUID=d", "target": "/mnt/usb/data", "fstype": "ext4", "opts": "defaults"}]}
+sm.generate_host_units(net, sm.Manifest())
+nb = open(os.path.join(r5, "etc/schema-init/services/mount-fstab.svc")).read()
+check("barrier skips network shares and anything under a nofail mount",
+      [l for l in nb.splitlines() if l.startswith("dep=")] == ["dep=mount-home"])
+r6 = tempfile.mkdtemp(); sm.ROOT = r6
+os.makedirs(os.path.join(r6, "etc/schema-init/services"))
+open(os.path.join(r6, "etc/schema-init/services/mount-fstab.svc"), "w").write("name=mount-fstab\nexec=/usr/bin/true\ndep=mount-gone\n")
+m6 = sm.Manifest(); sm.generate_host_units(profile, m6)
+check("a stale barrier from a failed deploy is rewritten and recorded",
+      "mount-gone" not in open(os.path.join(r6, "etc/schema-init/services/mount-fstab.svc")).read()
+      and "/etc/schema-init/services/mount-fstab.svc" in m6.files)
+
+r3 = tempfile.mkdtemp(); sm.ROOT = r3
+os.makedirs(os.path.join(r3, "etc/schema-init/services"))
+open(os.path.join(r3, "etc/schema-init/services/mount-fstab.svc"), "w").write("name=mount-fstab\nexec=/usr/libexec/schema-init/schema-mount-fstab\n")
+m3 = sm.Manifest(); sm.generate_host_units(profile, m3)
+check("an existing mount-fstab (ISO rail) is left alone",
+      "schema-mount-fstab" in open(os.path.join(r3, "etc/schema-init/services/mount-fstab.svc")).read()
+      and "/etc/schema-init/services/mount-fstab.svc" not in m3.files)
+sm.ROOT = root
+
 # NM DNS: under schema-init resolved is absent, so resolv.conf must be a real
 # file NM writes, not a dangling symlink to resolved's stub.
 os.makedirs(os.path.join(root, "etc"), exist_ok=True)

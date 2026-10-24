@@ -622,7 +622,8 @@ def generate_host_units(profile, manifest, dry_run=False):
     mounts = profile.get("mounts", [])
     targets = [m["target"] for m in mounts]
     for mnt in mounts:
-        if mnt["target"] in SKIP_MOUNT_TARGETS:
+        # noauto: mounted by hand, never at boot (an explicit mount ignores it)
+        if mnt["target"] in SKIP_MOUNT_TARGETS or "noauto" in _opts(mnt):
             continue
         slug = _mount_slug(mnt["target"])
         rel = "etc/schema-init/services/mount-%s.svc" % slug
@@ -640,6 +641,60 @@ def generate_host_units(profile, manifest, dry_run=False):
                 + "oneshot=1\nneeds_root=1\ncritical=0\n"
                 + "".join("dep=%s\n" % d for d in deps)
                 + NO_HARDENING)
+        written.append(P(rel))
+        if not dry_run:
+            os.makedirs(os.path.dirname(P(rel)), exist_ok=True)
+            open(P(rel), "w").write(body)
+            manifest.add_file("/" + rel)
+    written += _write_mount_barrier(mounts, manifest, dry_run)
+    return written
+
+
+NET_FSTYPES = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "sshfs", "fuse.sshfs", "glusterfs", "ceph"}
+
+
+def _opts(mnt):
+    return set(mnt.get("opts", "").split(","))
+
+
+def _write_mount_barrier(mounts, manifest, dry_run):
+    # mount-fstab = "every fstab mount is up". plasma-autologin, schema-doctor and
+    # imported $local_fs units wait on it; with /var or /home on its own subvol
+    # (Fedora's aarch64 images, btrfs installs) they otherwise run before the
+    # mount and read or write the empty directory underneath it.
+    # An ISO rail ships its own mount-fstab that does the mounting; keep it.
+    # (One left by an earlier, failed deploy is ours to rewrite.)
+    try:
+        if "schema-mount-fstab" in open(P("etc/schema-init/services/mount-fstab.svc")).read():
+            return []
+    except OSError:
+        pass
+    # like local-fs.target: an absent nofail drive or a network share (no
+    # network ordering here) must not hold the desktop, nor anything under one,
+    # since its unit waits on that parent
+    off = [m["target"] for m in mounts if m["target"] not in SKIP_MOUNT_TARGETS
+           and ({"nofail", "noauto", "_netdev"} & _opts(m) or m.get("fstype") in NET_FSTYPES)]
+    targets = [m["target"] for m in mounts if m["target"] not in SKIP_MOUNT_TARGETS
+               and m["target"] not in off
+               and not any(m["target"].startswith(o.rstrip("/") + "/") for o in off)]
+    leaves = ["mount-" + _mount_slug(t) for t in targets
+              if not any(o != t and o.startswith(t.rstrip("/") + "/") for o in targets)]
+    # schema-init reads at most 8 dep= lines, so fan in through sub-barriers
+    level, n = leaves, 0
+    units = []
+    while len(level) > 8:
+        nxt = []
+        for i in range(0, len(level), 8):
+            n += 1
+            units.append(("mount-fstab-%d" % n, level[i:i + 8]))
+            nxt.append("mount-fstab-%d" % n)
+        level = nxt
+    units.append(("mount-fstab", level))
+    written = []
+    for name, deps in units:
+        rel = "etc/schema-init/services/%s.svc" % name
+        body = ("name=%s\nexec=/usr/bin/true\noneshot=1\nneeds_root=0\ncritical=0\n" % name
+                + "".join("dep=%s\n" % d for d in deps) + NO_HARDENING)
         written.append(P(rel))
         if not dry_run:
             os.makedirs(os.path.dirname(P(rel)), exist_ok=True)
@@ -1307,6 +1362,11 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     _add_unit_dep("network-manager", "coldplug-modules", dry_run=dry_run)
     _add_unit_dep("network-manager", "udev-trigger", dry_run=dry_run)
     _add_unit_dep("network-manager", "resolv-unstub", dry_run=dry_run)
+    # both read and write /var/lib/schema-init (the wizard stage, timer stamps);
+    # journal-sink writes /var/log (the other rails gate it the same way)
+    _add_unit_dep("schema-doctor", "mount-fstab", dry_run=dry_run)
+    _add_unit_dep("journal-sink", "mount-fstab", dry_run=dry_run)
+    _add_unit_dep("schema-migrate-finish", "mount-fstab", dry_run=dry_run)
     install_unit_helpers(m, dry_run=dry_run)
     install_session_support(profile, m, dry_run=dry_run)
     install_packages(m, run=run, dry_run=dry_run)

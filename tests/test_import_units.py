@@ -51,6 +51,14 @@ check("RestartSec=0 -> none", "restart_sec" not in _rs("0"))
 check("RestartSec with Restart=no -> none", "restart_sec" not in _rs("5", "no"))
 check("RestartSec=2h clamped to 3600", "restart_sec=3600\n" in _rs("2h"))
 check("User=nobody -> user=, no needs_root", "user=nobody\n" in b2 and "needs_root" not in b2)
+# F44 GA chrony: User=chrony with ExecStart=! — systemd runs the main process as
+# root (chronyd drops privileges itself); as user=chrony it dies "Not superuser".
+for pfx in ("!", "+", "-!"):
+    bp = si.unit_to_svc("chronyd", si.parse_unit(
+        "[Service]\nType=notify\nUser=chrony\nExecStart=%s/usr/sbin/chronyd -n\n" % pfx))
+    check("ExecStart=%s ignores User= -> needs_root" % pfx, "needs_root=1\n" in bp and "user=" not in bp)
+bp = si.unit_to_svc("capd", si.parse_unit("[Service]\nUser=foo\nExecStart=!!/usr/bin/foo\n"))
+check("ExecStart=!! keeps User= (ambient caps exist on F44)", "user=foo\n" in bp)
 check("quoted env pair", "env=FOO=a b\n" in b2)
 check("second env pair", "env=BAR=c\n" in b2)
 
@@ -354,6 +362,21 @@ dl, _ = si.dep_lines("firewalld", si.parse_unit(fw), known)
 check("simple bus daemon (firewalld: PartOf=dbus + Alias=dbus-org.*) -> dbus, polkitd", dl == ["dep=dbus", "dep=polkitd"])
 dl, _ = si.dep_lines("x", si.parse_unit("[Unit]\nPartOf=dbus.service\n[Service]\nExecStart=/bin/x\n"), known)
 check("PartOf=dbus.service alone -> bus daemon", dl == ["dep=dbus", "dep=polkitd"])
+# DefaultDependencies=yes = after local-fs.target: crond/auditd died before a
+# separate /var subvol mounted. Only when the box has the barrier.
+kf = known | {"mount-fstab"}
+dl, _ = si.dep_lines("crond", si.parse_unit("[Service]\nExecStart=/usr/sbin/crond -n\n"), kf)
+check("default deps -> dep=mount-fstab", dl == ["dep=mount-fstab"])
+dl, _ = si.dep_lines("crond", si.parse_unit("[Service]\nExecStart=/usr/sbin/crond -n\n"), known)
+check("no mount-fstab.svc -> no dangling dep", dl == [])
+dl, _ = si.dep_lines("early", si.parse_unit("[Unit]\nDefaultDependencies=no\n[Service]\nExecStart=/bin/x\n"), kf)
+check("DefaultDependencies=no -> no mount-fstab", dl == [])
+for extra in ("After=local-fs.target systemd-tmpfiles-setup.service", "RequiresMountsFor=/var/log/audit"):
+    dl, _ = si.dep_lines("auditd", si.parse_unit("[Unit]\nDefaultDependencies=no\n%s\n[Service]\nExecStart=/usr/bin/auditd\n" % extra), kf)
+    check("DefaultDependencies=no + %s -> mount-fstab" % extra.split("=")[0], dl == ["dep=mount-fstab"])
+many = "[Unit]\nRequires=" + " ".join("s%d.service" % i for i in range(9)) + "\n[Service]\nExecStart=/bin/x\n"
+dl, _ = si.dep_lines("x", si.parse_unit(many), kf | {"s%d" % i for i in range(9)})
+check("mount-fstab survives the 8-dep cap", dl[0] == "dep=mount-fstab" and len(dl) == 8)
 dl, _ = si.dep_lines("x", si.parse_unit("[Service]\nBusName=org.x\nExecStart=/bin/x\n"), known)
 check("BusName= without Type=dbus -> bus daemon", dl == ["dep=dbus", "dep=polkitd"])
 dl, _ = si.dep_lines("x", si.parse_unit("[Service]\nExecStart=/bin/x\n[Install]\nAlias=x-alt.service\n"), known)
