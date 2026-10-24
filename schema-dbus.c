@@ -267,20 +267,45 @@ static void release_activation(const char *name) {
 
 /* Tell PID 1 a well-known system-bus name now has an owner, and which pid
    holds it: a service with ready_bus_name= promotes on this (the bus-name
-   readiness of systemd Type=dbus). Best-effort; PID 1 may not listen. */
-static void report_name_to_pid1(const char *name, pid_t owner_pid) {
+   readiness of systemd Type=dbus). PID 1 may not listen; but once it has
+   heard one report it waits up to 90 s for the rest instead of its 10 s
+   timer, so a report dropped on a full queue (net.unix.max_dgram_qlen is 10
+   off Fedora) is kept and resent from the main loop. */
+#define REPORT_PENDING_MAX 32
+#define REPORT_RETRY_MS    200
+static struct { char name[256]; pid_t pid; } g_report_pending[REPORT_PENDING_MAX];
+static int g_report_npending;
+
+static int report_send(const char *name, pid_t owner_pid) {
     static int fd = -1;
-    if (!g_system_bus || name[0] == ':' || owner_pid <= 0) return;
     if (fd < 0) fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-    if (fd < 0) return;
+    if (fd < 0) return 0;
     struct sockaddr_un a;
     memset(&a, 0, sizeof a);
     a.sun_family = AF_UNIX;
     snprintf(a.sun_path, sizeof a.sun_path, "%s", "/run/schema-init/notify");
     char msg[320];
     int len = snprintf(msg, sizeof msg, "BUSNAME=%s\nBUSOWNERPID=%d", name, (int)owner_pid);
-    if (len > 0 && (size_t)len < sizeof msg)
-        (void)sendto(fd, msg, (size_t)len, MSG_DONTWAIT | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a);
+    if (len <= 0 || (size_t)len >= sizeof msg) return 1;
+    if (sendto(fd, msg, (size_t)len, MSG_DONTWAIT | MSG_NOSIGNAL, (struct sockaddr *)&a, sizeof a) >= 0)
+        return 1;
+    return errno != EAGAIN && errno != ENOBUFS;   /* no listener at all: nothing to retry for */
+}
+
+static void report_name_to_pid1(const char *name, pid_t owner_pid) {
+    if (!g_system_bus || name[0] == ':' || owner_pid <= 0) return;
+    if (g_report_npending == 0 && report_send(name, owner_pid)) return;
+    if (g_report_npending == REPORT_PENDING_MAX || strlen(name) >= sizeof g_report_pending[0].name) return;
+    snprintf(g_report_pending[g_report_npending].name, sizeof g_report_pending[0].name, "%s", name);
+    g_report_pending[g_report_npending++].pid = owner_pid;
+}
+
+/* resend held reports in order; stop at the first that still doesn't fit */
+static void report_flush(void) {
+    int i = 0;
+    while (i < g_report_npending && report_send(g_report_pending[i].name, g_report_pending[i].pid)) i++;
+    memmove(g_report_pending, g_report_pending + i, (size_t)(g_report_npending - i) * sizeof g_report_pending[0]);
+    g_report_npending -= i;
 }
 
 /* --watch-names: a client of whatever system bus is running (stock
@@ -322,7 +347,8 @@ static int watch_names(void) {
         }
     }
     if (r) dbus_message_unref(r);
-    while (dbus_connection_read_write(c, -1)) {
+    while (dbus_connection_read_write(c, g_report_npending ? REPORT_RETRY_MS : -1)) {
+        report_flush();
         while ((m = dbus_connection_pop_message(c))) {
             const char *name, *oldo, *newo;
             if (dbus_message_is_signal(m, "org.freedesktop.DBus", "NameOwnerChanged")
@@ -1540,7 +1566,9 @@ int main(int argc, char **argv) {
         if (g_rl.pid && (nd < 0 || g_rl.deadline < nd)) nd = g_rl.deadline;
         if (g_debounce_at && (nd < 0 || g_debounce_at < nd)) nd = g_debounce_at;
         if (nd >= 0) { long now = sdbus__now_ms(); wait_ms = nd <= now ? 0 : (int)(nd - now); }
+        if (g_report_npending && (wait_ms < 0 || wait_ms > REPORT_RETRY_MS)) wait_ms = REPORT_RETRY_MS;
         int nev = epoll_wait(g_epfd, evs, 64, wait_ms);
+        report_flush();
         if (nev < 0) { if (errno == EINTR) continue; break; }
         for (int i = 0; i < nev; i++) {
             if (evs[i].data.ptr == NULL) {           /* listen socket */
