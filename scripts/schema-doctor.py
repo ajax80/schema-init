@@ -658,6 +658,102 @@ class OrphanDropins(Check):
 REGISTRY.append(OrphanDropins())
 
 
+_TIMER_KEYS = ("on_calendar=", "on_boot_sec=", "on_active_sec=")
+# PID 1 owns these jobs itself (tmpfiles, journal, …); schema-import skips them too.
+_RECLAIMED_TIMERS = ("systemd-",)
+
+
+def _unit_sections(path):
+    out, sec = {}, None
+    try:
+        for ln in open(path, errors="replace"):
+            ln = ln.strip()
+            if ln.startswith("[") and ln.endswith("]"):
+                sec = ln[1:-1]
+            elif sec and "=" in ln and not ln.startswith(("#", ";")):
+                k, v = ln.split("=", 1)
+                out.setdefault(sec, {})[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
+
+
+def _find_unit(name):
+    for d in ("etc/systemd/system", "run/systemd/system", "usr/lib/systemd/system", "lib/systemd/system"):
+        p = os.path.join(ROOT, d, name)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _real(exe):
+    return os.path.realpath(os.path.join(ROOT, exe.lstrip("/")))
+
+
+def unported_timers():
+    """[(timer, shipped equivalent or None)] for timers systemd enabled that no
+    .svc schedules. Matched by the name schema-import gives it, or by a timer
+    .svc running the same binary as the timer's service."""
+    svcdir = os.path.join(ROOT, "etc/schema-init/services")
+    names, timer_exes = set(), set()
+    for p in glob.glob(os.path.join(svcdir, "*.svc")):
+        names.add(os.path.basename(p)[:-4])
+        try:
+            lines = open(p, errors="replace").read().splitlines()
+        except OSError:
+            continue
+        exe = [ln[5:].strip() for ln in lines if ln.startswith("exec=")]
+        if exe and any(ln.startswith(_TIMER_KEYS) for ln in lines):
+            timer_exes.add(_real(exe[-1]))
+    out = []
+    for link in sorted(glob.glob(os.path.join(ROOT, "etc/systemd/system/*.wants/*.timer"))):
+        t = os.path.basename(link)
+        if "@" in t or t.startswith(_RECLAIMED_TIMERS) or any(t == o for o, _ in out):
+            continue
+        if os.path.islink(link) and os.readlink(link) == "/dev/null":
+            continue
+        stem = t[:-6]
+        unit = _unit_sections(_find_unit(t) or "").get("Timer", {}).get("Unit") or stem + ".service"
+        if {stem, unit.rsplit(".", 1)[0]} & names:
+            continue
+        svc = _find_unit(unit)
+        if not svc:
+            continue                    # nothing to run; systemd would fail it too
+        argv = _unit_sections(svc).get("Service", {}).get("ExecStart", "").lstrip("@-:+!").split()
+        if argv and argv[0].startswith("/") and _real(argv[0]) in timer_exes:
+            continue
+        shipped = os.path.join(ROOT, "usr/share/schema-init/services", stem + ".svc")
+        out.append((t, shipped if os.path.exists(shipped) else None))
+    return out
+
+
+class UnportedTimers(Check):
+    name = "unported-timers"
+    summary = "every timer systemd enabled has a schema .svc that schedules it"
+    grade = DEFERRED
+
+    def detect(self):
+        bad = unported_timers()
+        if not bad:
+            return None
+        fixes = []
+        for t, shipped in bad:
+            if shipped:
+                fixes.append(f"{t}: cp {shipped[len(ROOT.rstrip('/')):]} /etc/schema-init/services/ "
+                             f"&& schema-ctl add /etc/schema-init/services/{os.path.basename(shipped)}")
+            else:
+                fixes.append(f"{t}: schema-import {t}")
+        return Finding(
+            detail=f"{len(bad)} enabled systemd timer(s) never run under schema-init — "
+                   + "; ".join(fixes)
+                   + " (or remove its timers.target.wants link if the job is moot here)",
+            oracle_said="systemd fires each enabled .timer from timers.target",
+            healable=False)
+
+
+REGISTRY.append(UnportedTimers())
+
+
 class PowerDevilRunning(Check):
     name = "powerdevil-running"
     summary = "PowerDevil is running so power and screen-lock settings load"
