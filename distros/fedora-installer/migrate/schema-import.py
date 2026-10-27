@@ -20,6 +20,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 
 _VAR_RE = re.compile(r"\$\{?(\w+)\}?")
 _BRACED_RE = re.compile(r"\$\{(\w+)\}")
@@ -143,7 +144,7 @@ def _which(cmd):
     return None
 
 
-def _specifiers(argv, name):
+def _specifiers(argv, name, strict=True):
     spec = {"n": name + ".service", "N": name, "p": name, "t": "/run", "%": "%"}
     if _USER:
         spec.update({"h": _USER["home"], "t": _USER["runtime"], "S": _USER["state"],
@@ -153,6 +154,8 @@ def _specifiers(argv, name):
     for w in argv:
         def rep(m):
             if m.group(1) not in spec:
+                if not strict:
+                    return m.group(0)
                 raise Skip("specifier %%%s has no schema equivalent" % m.group(1))
             return spec[m.group(1)]
         out.append(re.sub(r"%(.?)", rep, w))
@@ -851,6 +854,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     argv = _specifiers(argv, unit or name)
 
     env_pairs = _env_pairs(_get_all(svc, "Environment"))
+    if _USER:
+        # user mode only, so system re-imports don't change; unknown specifiers
+        # stay literal: a value is data, not argv
+        env_pairs = _specifiers(env_pairs, unit or name, strict=False)
     env_files, env_file_notes = [], []
     for ef in _get_all(svc, "EnvironmentFile"):
         if ef == "":
@@ -1058,7 +1065,15 @@ def _unit_dirs():
         if _USER["runtime"]:
             dirs.append(os.path.join(_USER["runtime"], "systemd/user"))
         dirs += [os.path.join(r, "run/systemd/user"), os.path.join(_USER["data"], "systemd/user")]
-        return dirs + [os.path.join(r, d) for d in _USER_SYS_DIRS]
+        dirs += [os.path.join(r, d) for d in _USER_SYS_DIRS]
+        g = _generator_root()
+        if g:
+            # systemd.unit(5) user search path: early beats config, normal
+            # sits right after /run/systemd/user, late comes last
+            dirs.insert(0, os.path.join(g, "early"))
+            dirs.insert(dirs.index(os.path.join(r, "run/systemd/user")) + 1, os.path.join(g, "normal"))
+            dirs.append(os.path.join(g, "late"))
+        return dirs
     return [os.path.join(r, d.lstrip("/")) for d in (
         "etc/systemd/system", "run/systemd/system",
         "usr/lib/systemd/system", "lib/systemd/system")]
@@ -1810,13 +1825,92 @@ def _wants_dir_units(dirs, unit):
     return out
 
 
+# highest precedence first: a name found earlier hides (or, as /dev/null, masks) later ones
+GENERATOR_DIRS = ("run/systemd/user-generators", "etc/systemd/user-generators",
+                  "usr/local/lib/systemd/user-generators", "usr/lib/systemd/user-generators")
+GENERATOR_BUDGET = 4   # seconds for all of them: schema-user kills the import at 10
+GENERATOR_EACH = 2     # one hung generator must not starve Quadlet
+PODMAN_WAIT = "podman-user-wait-network-online.service"
+
+
+def _generator_root():
+    if not _USER:
+        return None
+    if _USER.get("gen"):
+        return _USER["gen"]
+    if not _USER["runtime"]:
+        return None
+    return os.path.join(_USER["runtime"], "schema-user/generator")
+
+
+def run_user_generators(log=print):
+    # systemd.generator(7): argv normal early late; Quadlet writes its units and
+    # their .wants links into normal. Emptied first so a deleted .container
+    # takes its unit with it. Never fatal: units from ~/.config still import.
+    g = _generator_root()
+    if not g:
+        return
+    outs = [os.path.join(g, d) for d in ("normal", "early", "late")]
+    try:
+        for d in outs:
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d, mode=0o700, exist_ok=True)
+    except OSError as e:
+        log("WARN    generator dir %s: %s" % (g, e))
+        for d in outs:
+            shutil.rmtree(d, ignore_errors=True)
+        return
+    import time
+    deadline = time.monotonic() + GENERATOR_BUDGET
+    seen = set()
+    for gd in GENERATOR_DIRS:
+        gd = os.path.join(_root(), gd)
+        try:
+            names = sorted(os.listdir(gd))
+        except OSError:
+            continue
+        for n in names:
+            path = os.path.join(gd, n)
+            if n in seen:
+                continue
+            seen.add(n)
+            if _masked(path) or os.path.isdir(path) or not os.access(path, os.X_OK):
+                continue
+            left = min(deadline - time.monotonic(), GENERATOR_EACH)
+            if left <= 0:
+                log("WARN    generator %s: not run, %d s budget spent" % (n, GENERATOR_BUDGET))
+                continue
+            # stderr to a file, own session: a background grandchild holding a
+            # pipe can't stall us, and a timeout kills the whole group
+            with tempfile.TemporaryFile() as err:
+                try:
+                    p = subprocess.Popen([path] + outs, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.DEVNULL, stderr=err,
+                                         start_new_session=True)
+                except OSError as e:
+                    log("WARN    generator %s: %s" % (n, e))
+                    continue
+                try:
+                    rc = p.wait(timeout=left)
+                except subprocess.TimeoutExpired:
+                    os.killpg(p.pid, 9)
+                    p.wait()
+                    log("WARN    generator %s: killed after %.1f s" % (n, left))
+                    continue
+                if rc != 0:
+                    err.seek(0)
+                    last = err.read().decode(errors="replace").strip().splitlines()
+                    log("WARN    generator %s: exit %d%s" % (n, rc, (": " + last[-1]) if last else ""))
+
 def user_enabled_set(skip):
     import fnmatch
-    cfg = _unit_dirs()[0]
+    cfg = os.path.join(_USER["config"], "systemd/user")
+    g = _generator_root()
+    wants_dirs = [cfg] + ([os.path.join(g, "normal")] if g else [])
     # (unit, enabled directly by a .wants link rather than reached by Wants=)
     queue = []
     for root in _USER_ROOTS:
-        queue += [(u, True) for u in _wants_dir_units([cfg], root)]
+        queue += [(u, True) for u in _wants_dir_units(wants_dirs, root)]
     units, skipped, seen = [], [], set()
     while queue:
         u, direct = queue.pop(0)
@@ -1826,6 +1920,8 @@ def user_enabled_set(skip):
         if u in _NEVER:
             skipped.append((u, "the session bus is started by the session"))
             continue
+        if u == PODMAN_WAIT:
+            continue
         if u.endswith(".target"):
             # only the user's own .wants of a target, never its Wants= or the
             # distro's .wants (graphical-session.target -> basic.target ->
@@ -1833,7 +1929,7 @@ def user_enabled_set(skip):
             if any(fnmatch.fnmatch(u, pat) for pat in _SESSION_TARGETS):
                 skipped.append((u, "phase 2 session target"))
             else:
-                queue += [(w, True) for w in _wants_dir_units([cfg], u)]
+                queue += [(w, True) for w in _wants_dir_units(wants_dirs, u)]
             continue
         if not u.endswith((".service", ".socket", ".timer", ".path")):
             if direct:
@@ -1882,22 +1978,25 @@ def user_enabled_set(skip):
                 for key in ("Requires", "BindsTo"):
                     for v in _get_all(aunit, key):
                         queue += [(w, False) for w in v.split()]
-                try:
-                    queue += [(w, True) for w in sorted(os.listdir(os.path.join(cfg, act + ".requires")))]
-                except OSError:
-                    pass
-        queue += [(w, True) for w in _wants_dir_units([cfg], u)]
+                for d in wants_dirs:
+                    try:
+                        queue += [(w, True) for w in sorted(os.listdir(os.path.join(d, act + ".requires")))]
+                    except OSError:
+                        pass
+        queue += [(w, True) for w in _wants_dir_units(wants_dirs, u)]
         units.append(u)
-    try:
-        entries = sorted(os.listdir(cfg))
-    except OSError:
-        entries = []
-    for e in entries:
+    entries = set()
+    for d in wants_dirs:
+        try:
+            entries.update(os.listdir(d))
+        except OSError:
+            pass
+    for e in sorted(entries):
         tgt = e.rsplit(".", 1)[0]
         if not e.endswith((".wants", ".requires")) or \
                 not any(fnmatch.fnmatch(tgt, pat) for pat in _SESSION_TARGETS):
             continue
-        for u in _wants_dir_units([cfg], tgt):
+        for u in _wants_dir_units(wants_dirs, tgt):
             if u not in seen:
                 seen.add(u)
                 skipped.append((u, "phase 2 session target"))
@@ -1945,7 +2044,8 @@ NET_ONLINE = "network-online"
 
 
 def _after_online(*sections):
-    return any("network-online.target" in " ".join(_get_all(sec.get("Unit", []), "After")).split()
+    return any({"network-online.target", PODMAN_WAIT} &
+               set(" ".join(_get_all(sec.get("Unit", []), "After")).split())
                for sec in sections)
 
 
@@ -2157,11 +2257,25 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
     # or _keep_hand_written finds nothing and its hand-written .svc are lost
     if not os.path.isdir(out_dir) and os.path.isdir(old) and not dry_run:
         os.rename(old, out_dir)
+    ctx = dict(ctx)
+    if dry_run:
+        ctx["gen"] = tempfile.mkdtemp(prefix="schema-gen.")
     set_user_mode(ctx)
     stage = out_dir + ".new"
     saved = os.environ.get("SCHEMA_SVC_DIR")
     counts = {"generated": 0, "skipped": 0, "error": 0}
+    lock = None
     try:
+        if not dry_run and ctx["runtime"]:
+            # one import at a time: another one emptying generator/ mid-read
+            # would drop every Quadlet unit from this one's swap
+            import fcntl
+            try:
+                lock = open(os.path.join(ctx["runtime"], "schema-user/import.lock"), "a")
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            except OSError:
+                lock = None
+        run_user_generators(log)
         skip = read_skip_list(skip_paths)
         units, skipped = user_enabled_set(skip)
         enabled = set(units)
@@ -2245,6 +2359,10 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
         else:
             os.environ["SCHEMA_SVC_DIR"] = saved
         set_user_mode(None)
+        if lock:
+            lock.close()
+        if ctx.get("gen"):
+            shutil.rmtree(ctx["gen"], ignore_errors=True)
     return counts
 
 
