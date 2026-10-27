@@ -244,13 +244,20 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     }
     snprintf(svc->cgroup_path, sizeof(svc->cgroup_path), "%s",
              service_cgroup_path_for(svc));
+    /* a previous run's nested cgroups (still there if its processes were
+     * slow to die) make <svc> a non-leaf, and the pid write below would fail */
+    cgroup_rmdir_tree(svc->cgroup_path);
     mkdir(svc->cgroup_path, 0755);
 
     snprintf(path, sizeof(path), "%s/cgroup.procs", svc->cgroup_path);
     fd = open(path, O_WRONLY);
     if (fd < 0) { svc->cgroup_path[0] = '\0'; return; }
     n = snprintf(buf, sizeof(buf), "%d\n", (int)pid);
-    write(fd, buf, (size_t)n);
+    if (write(fd, buf, (size_t)n) != n) {
+        /* a previous run's nested cgroups still populated: <svc> is not a leaf */
+        fprintf(stderr, "[schema-init] %s: cannot join %s: %s\n", svc->name, svc->cgroup_path, strerror(errno));
+        svc->cgroup_path[0] = '\0';
+    }
     close(fd);
 }
 
@@ -1620,6 +1627,32 @@ int cgroup_kill_path(const char *cg) {
     return 1;
 }
 
+int cgroup_has_children(const char *cg) {
+    DIR *d = opendir(cg);
+    struct dirent *e;
+    int any = 0;
+    if (!d) return 0;
+    while (!any && (e = readdir(d)))
+        any = e->d_type == DT_DIR && e->d_name[0] != '.';
+    closedir(d);
+    return any;
+}
+
+void cgroup_rmdir_tree(const char *cg) {
+    DIR *d = opendir(cg);
+    if (d) {
+        struct dirent *e;
+        char sub[512];
+        while ((e = readdir(d))) {
+            if (e->d_type != DT_DIR || e->d_name[0] == '.') continue;
+            if (snprintf(sub, sizeof sub, "%s/%s", cg, e->d_name) < (int)sizeof sub)
+                cgroup_rmdir_tree(sub);
+        }
+        closedir(d);
+    }
+    rmdir(cg);
+}
+
 void service_cgroup_release_partition(service_t *svc) {
     char path[320];
     int fd;
@@ -1671,7 +1704,9 @@ void service_cgroup_kill(service_t *svc) {
     if (!svc->cgroup_path[0]) return;
     service_cgroup_release_partition(svc);
     cgroup_kill_path(svc->cgroup_path);
-    rmdir(svc->cgroup_path);
+    /* a service may have nested cgroups of its own (podman --cgroups=split:
+     * <svc>/runtime, <svc>/libpod-payload-*); rmdir of the top alone fails */
+    cgroup_rmdir_tree(svc->cgroup_path);
     svc->cgroup_path[0] = '\0';
 }
 
