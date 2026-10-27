@@ -121,9 +121,14 @@ One real `.container` with `PublishPort=8080:80`, `Memory=64m`,
 `schema-import --user` runs the user generator
 (`/usr/lib/systemd/user-generators/podman-user-generator`, or any executable in
 the user-generators dirs — builder's call how general) into a per-user output
-dir under `$XDG_RUNTIME_DIR/schema-user/`, before reading units. Generated
-units are treated as distro-level units; units the generator enables via its
-`.wants` symlinks count as enabled, as `~/.config` `.wants` links do today.
+dir under `$XDG_RUNTIME_DIR/schema-user/generator/`, before reading units.
+Follow the generator contract (systemd.generator(7)): create `normal/`,
+`early/` and `late/` and pass all three as positional args; clear them before
+each run so a deleted `.container` disappears. Read generated units from all
+three (early > config > normal > late precedence is fine to simplify to
+"generated units are distro-level"). The `.wants`/`.requires` symlinks Quadlet
+writes in `normal/` (e.g. `default.target.wants/foo.service`) count as enabled,
+exactly as `~/.config/systemd/user/*.wants` links do today. *(Greg, 10-27.)*
 Runs on every import, so the existing `daemon-reload` shim path re-generates.
 The 10 s import cap stays; Quadlet is fast.
 
@@ -134,11 +139,25 @@ Opt-in, so no existing service changes: a new key `main_pid_notify=1` (needs
 is what Quadlet emits). Without the key, `MAINPID=` stays ignored as today.
 *(Claire's call — the anti-goal rules out a global change.)* Such a service may
 send `MAINPID=<pid>`. Accept it only when that pid is
-alive and inside the service's cgroup — the same rule `pid_file_read()` uses.
-Then supervise that pid as the main process exactly as `pid_file` adoption
-does (`fork_adopt` path): the launcher's exit 0 is not a death; the adopted
-pid's death enters the recovery arc; stop signals it. A launcher that exits
-non-zero before READY is a failed start.
+alive and inside the service's cgroup **or a descendant of it** — use
+`notify_read_cgroup()` + `notify_cgroup_text_matches()` (notify.h), not
+`pid_file_read()`'s scan of the top-level `cgroup.procs`: with `delegate=1`
+that file is empty (no-internal-process rule) and conmon lives in a child.
+
+Two pids, explicit state, both orders handled *(Greg, 10-27)*:
+- `child_pid` stays the launcher until it is reaped; a new runtime field
+  (`main_pid`) records a valid `MAINPID=` when it arrives. A `MAINPID=` before
+  the launcher exits must not overwrite `child_pid`, or the launcher's exit
+  status is lost.
+- Launcher exits non-zero → failed start: kill the cgroup, recovery arc.
+- Launcher exits 0 with `main_pid` already set → `main_pid` becomes the
+  supervised main process (same machinery as `fork_adopt`).
+- Launcher exits 0 before `MAINPID=` → bounded adopting wait (like
+  `fork_state = -1`); no `MAINPID=` within it → failed start.
+- After adoption: the adopted pid's death enters the recovery arc; stop and
+  shutdown signal it.
+- The new field(s) go in `SVC_RUNTIME_FIELDS` (reexec_state.h) so PID 1
+  re-exec and reload keep the adopted pid.
 
 ### 3. Stop commands
 
@@ -146,12 +165,19 @@ New `.svc` keys `exec_stop=` and `exec_stop_post=` (repeatable, same argv form
 as `exec_pre`), run on stop: `exec_stop` before signalling the main process,
 `exec_stop_post` after the service is gone (also after a crash, matching
 systemd's `ExecStopPost`). The importer maps `ExecStop=` / `ExecStopPost=`
-(with the `-` ignore-failure prefix). Bounded by `stop_timeout_sec`.
+(with the `-` ignore-failure prefix, handled like `svc_run_pre` does). They
+run on **every** stop: `schema-ctl [--user] stop`, `restart`, eviction, and
+shutdown — success test 6 depends on it. They are run **by the supervisor
+asynchronously** (spawned, reaped from the main loop, killed at
+`stop_timeout_sec`): a synchronous `waitpid` on a hung `podman rm` would
+freeze PID 1 / schema-user's event loop. *(Greg, 10-27.)*
 
 ### 4. Importer fixes
 
-- Expand `%n` (unit name with suffix) wherever `%N` already is, and audit the
-  other specifiers Quadlet emits (`%t`, `%N`, `%n`, `%h`, `%U`, `%S`).
+- Specifiers, in every field they reach (`ExecStart*`, `ExecStop*`,
+  `Environment=`, paths): `%n` unit name with suffix, `%N` without, `%t`
+  `$XDG_RUNTIME_DIR`, `%h` `$HOME`, `%u`/`%U` user name/uid, `%S` state dir.
+  Today `%n` is left literal in `env=`.
 - `Restart=` from the `.container`'s `[Service]` is already mapped; check the
   Quadlet output carries it through.
 - `podman-user-wait-network-online.service` (calls `systemctl is-active
@@ -181,9 +207,14 @@ schema-user finds the container's cgroup under the service cgroup and
 compares `memory.max`, `cpu.max` and `pids.max` with what the unit asked for
 (`--memory`, `--cpus`, `--pids-limit` in the podman argv, which Quadlet's
 `Memory=`/`PodmanArgs=` become). A mismatch logs the expected and actual
-values and fails the service (recovery arc), never runs on unlimited. How
-the expected values reach schema-user (importer writes `.svc` keys vs
-schema-user parsing argv vs `podman inspect`) is the builder's call. Own PR.
+values and fails the service (recovery arc), never runs on unlimited. Own PR.
+
+Expected values come from the **importer** *(Greg, 10-27)*: schema-import
+parses `--memory`, `--cpus`, `--pids-limit` from the podman argv and writes
+canonical `.svc` keys in sysfs form, e.g. `verify_memory_max=67108864`,
+`verify_cpu_max=150000 100000`, `verify_pids_max=100`. schema-user only
+compares strings against the container cgroup's files. Not `podman inspect`
+(forks a Go binary from the event loop) and not unit parsing in C.
 
 ### 6. LAN reachability
 
@@ -210,11 +241,10 @@ success test also runs once with the image removed first. *(Claire's call.)*
 
 ## Left to the builder
 
-- PR split (suggested: importer generator+specifiers → engine MAINPID →
-  exec_stop → delegate/limits → limit verification → end-to-end test).
-- Cgroup layout under the service (§5), generator-dir layout, how general the
-  generator runner is.
+- PR split. Suggested (Greg's order): importer (generator, `.wants`,
+  specifiers) → engine `exec_stop*` → `main_pid_notify` + state machine +
+  reexec fields → `delegate=1` → `verify_*` keys + check → end-to-end test.
+- Cgroup layout under the service (§5), how general the generator runner is
+  (podman's only, or every executable in the user-generators dirs).
 - Test container image for the success test (a small web server serving on
   80 inside, published on 8080).
-- Whether `exec_stop*` also serves `schema-ctl --user stop` and shutdown, and
-  how the `-` prefix is represented.
