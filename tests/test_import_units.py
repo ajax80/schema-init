@@ -314,10 +314,28 @@ check("verify_keys_forms: non-podman exec -> no keys", "verify_" not in hard("Ex
 check("verify: --cpus truncated like podman", "verify_cpu_max=28999 100000\n" in pod("--cpus=0.29"))
 check("verify: zero means no limit", "verify_" not in pod("--memory=0 --cpus=0 --pids-limit=0"))
 check("verify: attached -m512m", "verify_memory_max=536870912\n" in pod("-m512m"))
-nf = si.unit_to_svc("p", si.parse_unit("[X-Container]\nImage=other\n[Service]\nType=notify\nExecStart=/usr/bin/podman run --memory 64m -d img\n"))
-check("verify: image not in argv -> warning, not silence", "verify_" not in nf and "not verified" in nf)
+nf = si.unit_to_svc("p", si.parse_unit("[X-Container]\nImage=img\nExec=a b c d e f g\n[Service]\nType=notify\nExecStart=/usr/bin/podman run --memory 64m -d img\n"))
+check("verify: image position unknown -> warning, not silence", "verify_" not in nf and "not verified" in nf)
 nn = si.unit_to_svc("p", si.parse_unit("[X-Container]\nImage=img\n[Service]\nType=simple\nExecStart=/usr/bin/podman run --memory 64m img\n"))
 check("verify: no keys without Type=notify", "verify_" not in nn)
+# final review (I2-I4)
+def quad(xc, args, image, tail=""):
+    return si.unit_to_svc("q", si.parse_unit(
+        "[X-Container]\n%s\n[Service]\nType=notify\nExecStart=/usr/bin/podman run --name x %s -d %s%s\n"
+        "[Install]\nWantedBy=x\n" % (xc, args, image, tail)))
+qh = quad("Image=nginx\nExec=app run", "--memory 1g --hostname nginx --cpus=1.5 --pids-limit 100", "nginx", " app run")
+check("I3: image found by position, not first match",
+      "verify_memory_max=1073741824\n" in qh and "verify_cpu_max=150000 100000\n" in qh and "verify_pids_max=100\n" in qh)
+qi = quad("Image=web.image", "--memory 64m", "docker.io/library/nginx:latest")
+check("I3: .image unit -> resolved image still found", "verify_memory_max=67108864\n" in qi)
+for form, want in (("1.5g", 1610612736), ("512MiB", 536870912), ("64mb", 67108864), ("1t", 1 << 40), ("2048", 2048)):
+    check("I4: memory %s" % form, "verify_memory_max=%d\n" % want in pod("--memory %s" % form))
+check("I4: cpus .5", "verify_cpu_max=50000 100000\n" in pod("--cpus .5"))
+check("I2: Quadlet unit without TimeoutStopSec -> stop grace past podman's 10 s",
+      "stop_timeout_sec=15\n" in quad("Image=img", "", "img"))
+check("I2: StopTimeout= honoured", "stop_timeout_sec=35\n" in quad("Image=img\nStopTimeout=30", "", "img"))
+check("I2: TimeoutStopSec= still wins", "stop_timeout_sec=7\n" in si.unit_to_svc("q", si.parse_unit(
+      "[X-Container]\nImage=img\n[Service]\nType=notify\nTimeoutStopSec=7\nExecStart=/usr/bin/podman run -d img\n")))
 si.set_user_mode(None)
 check("verify_keys_forms: system mode -> no keys", "verify_" not in pod("--memory=64m"))
 

@@ -1560,6 +1560,15 @@ int service_spawn(service_t *svc) {
     svc->notify_ready = 0;
     svc->notify_status[0] = '\0';
     if (service_cgroup_root[0]) cgroup_assign(svc, pid);
+    if (!svc->cgroup_path[0] && (service_verifies_limits(svc) || (svc->flags & SVC_MAIN_PID_NOTIFY))) {
+        /* nothing to check limits or MAINPID= against: never let it start */
+        fprintf(stderr, "[schema-init] %s: no cgroup — limits and MAINPID= cannot be checked, not started\n", svc->name);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        close(sync[1]);
+        svc->child_pid = 0;
+        return -1;
+    }
     /* cgroup v2 partition order: child cpuset.cpus → parent cpuset.cpus.exclusive
      * → child cpuset.cpus.exclusive → child cpuset.cpus.partition; any other
      * order breaks partition formation. */

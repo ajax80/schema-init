@@ -84,6 +84,18 @@ int main(void) {
     memset(&svc, 0, sizeof svc);
     assert(service_load_one(p, &svc) == 0 && !service_verifies_limits(&svc));
 
+    /* I1: no cgroup to check against: the spawn fails, nothing is left running */
+    snprintf(q, sizeof q, "%s/c.svc", root);
+    put(root, "c.svc", "name=c\nexec=/bin/sleep\nargs=30\nnotify=1\nverify_memory_max=67108864\n");
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(q, &svc) == 0);
+    service_cgroup_root = "";
+    assert(service_spawn(&svc) < 0 && svc.child_pid <= 0);
+    put(root, "c.svc", "name=c\nexec=/bin/sleep\nargs=30\nnotify=1\nmain_pid_notify=1\n");
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(q, &svc) == 0);
+    assert(service_spawn(&svc) < 0 && svc.child_pid <= 0);
+
     char cmd[600];
     snprintf(cmd, sizeof cmd, "rm -rf %s", root);
     assert(system(cmd) == 0);

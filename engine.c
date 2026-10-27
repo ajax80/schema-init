@@ -772,6 +772,7 @@ static void reap(void) {
                     /* nothing to check a MAINPID= against: refuse, as pid_file does */
                     services[i].inst.state = STATE_EXCISED;
                     service_log(&services[i], "main-pid-no-cgroup");
+                    stop_cmds_begin(&services[i], 2);
                     break;
                 }
                 if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
@@ -2582,7 +2583,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 } else if (services[j].child_pid > 0 &&
                            (services[j].exec_stop_count || services[j].exec_stop_post_count)) {
                     pid_t sp = service_stop_spawn(&services[j], 3);
-                    if (sp > 0) eviction_add(sp, "");
+                    /* the service's own stop budget: podman rm -f waits 10 s */
+                    int g = services[j].stop_timeout_sec > EVICT_GRACE_SECS ? services[j].stop_timeout_sec
+                                                                           : EVICT_GRACE_SECS;
+                    if (sp > 0) eviction_add_as(sp, "", 0, 0, g);
                 }
                 if (services[j].failsafe_pid > 0) {
                     kill(services[j].failsafe_pid, SIGTERM);
