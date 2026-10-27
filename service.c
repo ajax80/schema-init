@@ -758,8 +758,9 @@ static void svc_apply_env(const service_t *svc, char **file_env, int file_envc) 
 }
 
 /* Run CMDS in order in this (child) process; PRIVILEGED -1 runs every one,
- * else only those whose '+' prefix matches. A failure without '-' exits 1. */
-static void svc_run_cmds(const service_t *svc, char *const *cmds, int n,
+ * else only those whose '+' prefix matches. A failure without '-' stops the
+ * list and returns -1. */
+static int svc_run_cmds(const service_t *svc, char *const *cmds, int n,
                          const char *what, int privileged) {
     for (int i = 0; i < n; i++) {
         const char *c = cmds[i];
@@ -768,14 +769,14 @@ static void svc_run_cmds(const service_t *svc, char *const *cmds, int n,
         if (privileged >= 0 && plus != privileged) continue;
         char *w[33], *x[33], **argv = x;
         int nw = service_split_cmdline(c + pl, w, 32);
-        if (nw <= 0) _exit(1);
+        if (nw <= 0) return -1;
         w[nw] = NULL;
         if (svc->expand_args) {
             int nx = service_expand_argv(w, x, 32);
             if (nx < 0) {
                 dprintf(2, "[schema-init] %s: %s %s expands to more than 32 words%s\n",
                         svc->name, what, c, ignore ? ", ignored" : "");
-                if (!ignore) _exit(1);
+                if (!ignore) return -1;
                 continue;
             }
             x[nx] = NULL;
@@ -795,13 +796,14 @@ static void svc_run_cmds(const service_t *svc, char *const *cmds, int n,
                     p < 0 ? "fork" : WIFEXITED(st) ? "exit" : "signal",
                     p < 0 ? errno : WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st),
                     ignore ? ", ignored" : "");
-            if (!ignore) _exit(1);
+            if (!ignore) return -1;
         }
     }
+    return 0;
 }
 
 static void svc_run_pre(const service_t *svc, int privileged) {
-    svc_run_cmds(svc, svc->exec_pre, svc->exec_pre_count, "exec_pre", privileged);
+    if (svc_run_cmds(svc, svc->exec_pre, svc->exec_pre_count, "exec_pre", privileged) < 0) _exit(1);
 }
 
 int service_listen_parse(const char *spec, int *type, struct sockaddr_storage *ss,
@@ -1282,9 +1284,11 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
             _exit(126);
         }
     }
-    if (phase & 1) svc_run_cmds(svc, svc->exec_stop, svc->exec_stop_count, "exec_stop", -1);
-    if (phase & 2) svc_run_cmds(svc, svc->exec_stop_post, svc->exec_stop_post_count, "exec_stop_post", -1);
-    _exit(0);
+    /* a failing exec_stop skips the rest of its own list, never exec_stop_post */
+    int bad = (phase & 1) && svc_run_cmds(svc, svc->exec_stop, svc->exec_stop_count, "exec_stop", -1) < 0;
+    if ((phase & 2) && svc_run_cmds(svc, svc->exec_stop_post, svc->exec_stop_post_count, "exec_stop_post", -1) < 0)
+        bad = 1;
+    _exit(bad);
 }
 
 pid_t service_card_spawn(const service_t *svc, int idx) {

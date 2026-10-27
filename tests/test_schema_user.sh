@@ -45,7 +45,11 @@ printf 'name=tmr\nexec=/bin/echo\nargs=tick\non_calendar=03:00\npersistent=1\n' 
 { sleeper sc; printf 'exec_stop=/bin/sh -c "date +%%s%%N > %s/sc.stopcmd"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/sc.post"\n' "$T" "$T"; } > "$S/sc.svc"
 { sleeper cr; printf 'exec_stop_post=/bin/sh -c "date +%%s%%N > %s/cr.post"\nno_restart=1\n' "$T"; } > "$S/cr.svc"
 { sleeper hg; printf 'exec_stop=/bin/sleep 100\nstop_timeout_sec=2\n'; } > "$S/hg.svc"
-{ sleeper sd; printf 'exec_stop=/bin/sh -c "date +%%s%%N > %s/sd.stopcmd"\n' "$T"; } > "$S/sd.svc"
+{ sleeper sd; printf 'exec_stop=/bin/sh -c "date +%%s%%N > %s/sd.stopcmd"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/sd.post"\n' "$T" "$T"; } > "$S/sd.svc"
+# exec_stop kills main itself and outlives it: exec_stop_post must still run (#433)
+printf 'name=pk\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/pk.pid; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nexec_stop=/bin/sh -c "kill $(cat %s/pk.pid); sleep 1"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/pk.post"\n' "$T" "$T" "$T" > "$S/pk.svc"
+# a timer run gets exec_stop_post too (#433)
+printf 'name=tp\nexec=/bin/true\non_boot_sec=0\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/tp.post"\n' "$T" > "$S/tp.svc"
 chmod 600 "$S"/*.svc
 # the orphan runs as $T/sl so its cmdline is unique to this run
 ln -s "$(command -v sleep)" "$T/sl"
@@ -96,13 +100,6 @@ until_ok '[ -s "$T/sc.stop" ] && [ -s "$T/sc.post" ]' || { st; fail "sc: stop/po
 [ "$(cat "$T/sc.stop")" -le "$(cat "$T/sc.post")" ] || fail "sc: exec_stop_post ran before the service stopped"
 kill -KILL "$(pid_of cr)"
 until_ok '[ -s "$T/cr.post" ]' || { st; fail "cr: exec_stop_post not run after a crash"; }
-t0=$(date +%s%N)
-./schema-ctl --user stop hg > /dev/null || fail "stop hg"
-st > /dev/null
-[ $(( ($(date +%s%N) - t0) / 1000000 )) -lt 1000 ] || fail "status blocked behind a hung exec_stop"
-i=0; while [ "$(pid_of hg)" != 0 ] && [ $i -lt 40 ]; do sleep 0.1; i=$((i + 1)); done
-[ "$(pid_of hg)" = 0 ] || { st; fail "hg still running 4 s after stop with a hung exec_stop"; }
-pgrep -f "^/bin/sleep 100" > /dev/null && fail "hung exec_stop not killed"
 ctxsw() { awk '/^voluntary_ctxt_switches/ {print $2}' "/proc/$PID/status"; }
 
 # wait_socket=: held while the socket is missing, and while it is stale
@@ -134,6 +131,18 @@ sleep 3
 c1=$(ctxsw)
 # idle measures 0; a 250 ms tick is 12
 [ $((c1 - c0)) -le 3 ] || fail "not idle: $((c1 - c0)) wakeups in 3 s"
+# a hung exec_stop on an idle supervisor is still timed out (#433: poll never woke)
+t0=$(date +%s%N)
+./schema-ctl --user stop hg > /dev/null || fail "stop hg"
+st > /dev/null
+[ $(( ($(date +%s%N) - t0) / 1000000 )) -lt 1000 ] || fail "status blocked behind a hung exec_stop"
+# no status polling here: each ctl request wakes the loop and would hide it
+sleep 4
+pgrep -f "^/bin/sleep 100" > /dev/null && fail "hung exec_stop not killed after stop_timeout_sec on an idle loop"
+[ "$(pid_of hg)" = 0 ] || { st; fail "hg still running 4 s after stop with a hung exec_stop"; }
+./schema-ctl --user stop pk > /dev/null
+until_ok '[ -s "$T/pk.post" ]' || { st; fail "pk: exec_stop_post skipped when exec_stop outlived main"; }
+until_ok '[ -s "$T/tp.post" ]' || { st; fail "tp: timer run got no exec_stop_post"; }
 
 kill -TERM "$PID"
 until_ok '! kill -0 "$PID" 2>/dev/null' || fail "still running 5 s after SIGTERM"
@@ -143,6 +152,7 @@ PID=
 [ -s "$T/a.stop" ] && [ -s "$T/b.stop" ] || fail "sleepers saw no SIGTERM"
 [ "$(cat "$T/b.stop")" -le "$(cat "$T/a.stop")" ] || fail "a stopped before its dependent b"
 [ -s "$T/sd.stopcmd" ] || fail "sd: exec_stop not run at shutdown"
+[ -s "$T/sd.post" ] || fail "sd: exec_stop_post not run at shutdown"
 [ "$(cat "$T/sd.stopcmd")" -le "$(cat "$T/sd.stop")" ] || fail "sd: exec_stop ran after SIGTERM at shutdown"
 pgrep -f "$T/sl" > /dev/null && fail "dbl orphan survived"
 # --- schema-user runs schema-import --user at start (SCHEMA_USER_IMPORT) ---

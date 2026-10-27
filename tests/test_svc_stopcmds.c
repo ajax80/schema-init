@@ -81,6 +81,18 @@ int main(void) {
     slurp(out, buf, sizeof buf);
     assert(strcmp(buf, "stop\npost\n") == 0);
 
+    /* phase 3: a failing exec_stop still lets exec_stop_post run (#433) */
+    unlink(out);
+    snprintf(body, sizeof body,
+             "name=s\nexec=/bin/true\nexec_stop=/bin/false\n"
+             "exec_stop_post=/bin/sh -c \"echo post >> %s\"\n", out);
+    write_svc(p, body);
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(p, &svc) == 0);
+    assert(runner(&svc, 3) != 0);
+    slurp(out, buf, sizeof buf);
+    assert(strcmp(buf, "post\n") == 0);
+
     /* an empty value in a drop-in clears the list */
     char dd[320], dp[340];
     write_svc(p, "name=s\nexec=/bin/true\nexec_stop=/bin/true\n");

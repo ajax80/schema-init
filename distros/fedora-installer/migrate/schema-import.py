@@ -915,16 +915,25 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # and a re-import must not change that. The runner drops to the service's
     # user, so + and ! can't be honoured.
     stop_warns = []
-    for key, out_key in (("ExecStop", "exec_stop"), ("ExecStopPost", "exec_stop_post")):
-        if not _USER:
-            break
-        try:
-            stops = _exec_pre(svc, unit or name, key, "-")
-        except Skip as e:
-            stop_warns.append("%s not translated: %s" % (key, e))
-            continue
-        for pre, pa in stops:
-            lines.append("%s=%s%s" % (out_key, pre, " ".join(_cmd_quote(w) for w in pa)))
+    if _USER:
+        for key, out_key in (("ExecStop", "exec_stop"), ("ExecStopPost", "exec_stop_post")):
+            try:
+                stops = _exec_pre(svc, unit or name, key, "-")
+            except Skip as e:
+                stop_warns.append("%s not translated: %s" % (key, e))
+                continue
+            for pre, pa in stops:
+                shown = "%s=%s%s" % (key, pre, " ".join(pa))
+                # the runner has no main pid to hand; SIGTERM already does `kill $MAINPID`
+                if any("$MAINPID" in w or "${MAINPID}" in w for w in pa):
+                    stop_warns.append("%s dropped: $MAINPID has no equivalent" % shown)
+                    continue
+                pa, _ = _expand_argv(pa, env_map)
+                if not pa or len(pa) > 32:
+                    stop_warns.append("%s dropped: %s" % (shown, "empty after $VAR expansion"
+                                                          if not pa else "more than 32 words"))
+                    continue
+                lines.append("%s=%s%s" % (out_key, pre, " ".join(_cmd_quote(w) for w in pa)))
 
     if stype == "oneshot":
         lines.append("oneshot=1")

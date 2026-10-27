@@ -271,6 +271,12 @@ check("empty ExecStop resets",
       "exec_stop=" not in hard("ExecStop=/bin/a\nExecStop=\n"))
 check("ExecStop=+ dropped with a warning, unit still imported",
       "exec_stop" not in hard("ExecStop=+/bin/a\n") and "ExecStop not translated" in hard("ExecStop=+/bin/a\n"))
+hv = hard("Environment=OPT=-q\nExecStop=/bin/foo $OPT\nExecStop=/bin/kill -s TERM $MAINPID\n")
+check("ExecStop $VAR expanded from Environment=", "exec_stop=/bin/foo -q\n" in hv)
+check("ExecStop with $MAINPID dropped with a warning",
+      "exec_stop=/bin/kill" not in hv and si.WARN_PREFIX + "ExecStop=/bin/kill" in hv)
+hl40 = hard("ExecStop=/bin/a " + " ".join(["x"] * 40) + "\n")
+check("ExecStop over 32 words dropped with a warning", "exec_stop=" not in hl40 and "ExecStop" in hl40)
 si.set_user_mode(None)
 check("system mode: ExecStop not mapped", "exec_stop" not in hard("ExecStop=/bin/a\n"))
 
