@@ -633,6 +633,65 @@ check("config_shadows_generated", os.path.exists(os.path.join(out, "foo.svc"))
       and "exec=/bin/mine\n" in svc(out, "foo"))
 t.done()
 
+# 2d. review fixes (#432)
+t = gen_tree(GEN)
+os.makedirs(t.sys("/etc/systemd/user-generators", ""), exist_ok=True)
+os.symlink("/dev/null", t.sys("/etc/systemd/user-generators", "fake"))
+out, logged = gen_run(t)
+check("generator_masked_in_etc", not os.path.exists(os.path.join(out, "foo.svc")))
+t.done()
+
+t = gen_tree(GEN)
+t.write(t.sys("/etc/systemd/user-generators", "fake"),
+        "#!/bin/sh\nprintf '[Service]\\nExecStart=/bin/etc\\n' > \"$1/foo.service\"\n"
+        "mkdir -p \"$1/default.target.wants\"\nln -s ../foo.service \"$1/default.target.wants/foo.service\"\n")
+os.chmod(t.sys("/etc/systemd/user-generators", "fake"), 0o755)
+out, logged = gen_run(t)
+check("generator_etc_overrides_usr", os.path.exists(os.path.join(out, "foo.svc"))
+      and "exec=/bin/etc\n" in svc(out, "foo"))
+t.done()
+
+POD = GEN.replace("WantedBy=default.target", "WantedBy=pods.target")
+t = gen_tree(POD)
+gdir = t.sys("/usr/lib/systemd/user-generators", "")
+t.write(os.path.join(gdir, "fake"),
+        '#!/bin/sh\ncp %s "$1/foo.service"\nmkdir -p "$1/pods.target.wants"\n'
+        'ln -s ../foo.service "$1/pods.target.wants/foo.service"\n' % t.unit_text)
+t.write(t.cfg("pods.target"), "[Unit]\n")
+t.enable("pods.target")
+out, logged = gen_run(t)
+check("generated_wants_of_nested_target", os.path.exists(os.path.join(out, "foo.svc")))
+t.done()
+
+t = gen_tree(GEN)
+t.write(os.path.join(t.root, "run/systemd/user/foo.service"), "[Service]\nExecStart=/bin/runsys\n")
+out, logged = gen_run(t)
+check("run_dir_beats_generator_normal", "exec=/bin/runsys\n" in svc(out, "foo"))
+t.done()
+
+import time as _time
+t = gen_tree(GEN, "#!/bin/sh\n(sleep 60) &\nsleep 60\n")
+t0 = _time.time()
+out, logged = gen_run(t)
+check("hung_generator_bounded", _time.time() - t0 < 8 and os.path.exists(os.path.join(out, "foo.svc"))
+      and any("generator aaa-broken" in l for l in logged))
+t.done()
+
+t = gen_tree(GEN)
+os.makedirs(os.path.join(t.run, "schema-user"), exist_ok=True)
+t.write(os.path.join(t.run, "schema-user/generator"), "not a dir")
+out, logged = gen_run(t)
+check("generator_dir_unusable_logged_not_fatal",
+      any(l.startswith("WARN    generator") for l in logged) and si._USER is None)
+t.done()
+
+t = gen_tree(GEN)
+out, logged = gen_run(t)
+check("podman_wait_not_in_skipped",
+      "podman-user-wait-network-online" not in open(os.path.join(t.run, "schema-user/skipped")).read()
+      if os.path.exists(os.path.join(t.run, "schema-user/skipped")) else True)
+t.done()
+
 # 3. foo.timer and foo.service both enabled: the timer's schedule wins
 t = Tree()
 t.write(t.cfg("foo.service"), SIMPLE)

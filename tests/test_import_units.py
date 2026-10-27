@@ -253,6 +253,9 @@ check("no Landlock TCP -> not translated + warning",
       "\nlandlock_bind_tcp=" not in s13 and "kernel lacks Landlock" in s13)
 si._landlock_tcp_ok = lambda: True
 
+check("system mode: Environment= specifiers left alone",
+      "env=FMT=100%%\n" in hard("Environment=FMT=100%%\n"))
+
 # --- Limit*= -> limit_*= ---
 hl = hard("LimitNOFILE=1024:524288\nLimitMEMLOCK=infinity\nLimitNICE=-19\nLimitRTPRIO=70\nLimitCORE=8M\n")
 check("Limit*= translated",
