@@ -12,6 +12,7 @@
 #include <sys/un.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +38,7 @@ struct notify_msg {
     int  fdstore;               /* FDSTORE=1 */
     int  fdstore_remove;        /* FDSTOREREMOVE=1 */
     char fdname[64];            /* FDNAME= */
+    pid_t mainpid;              /* MAINPID=, 0 if absent or not a pid */
 };
 
 /* Parse one datagram. Unknown keys are ignored, as sd_notify expects.
@@ -75,6 +77,12 @@ static inline int notify_parse(const char *buf, size_t len, struct notify_msg *m
             tmp[l - 12] = '\0';
             m->bus_owner_pid = atoi(tmp);
             any = 1;
+        }
+        else if (l > 8 && l < 19 && !memcmp(p, "MAINPID=", 8)) {
+            long v = 0;
+            size_t k;
+            for (k = 8; k < l && p[k] >= '0' && p[k] <= '9'; k++) v = v * 10 + (p[k] - '0');
+            if (k == l && v > 0 && v <= INT_MAX) { m->mainpid = (pid_t)v; any = 1; }
         }
         else if (l > 7 && !memcmp(p, "STATUS=", 7)) {
             size_t sl = l - 7;

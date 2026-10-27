@@ -65,6 +65,7 @@ int engine_mkdir_p(const char *path, mode_t mode) {
 #define READY_POLL_MS   10       /* while a starting service's ready_path is awaited, */
 #define READY_POLL_SECS 3        /* ...for this long after its spawn */
 #define PID_FILE_WAIT_SECS 5
+#define MAINPID_WAIT_SECS 10
 
 static service_t    services_a[MAX_SERVICES];
 static service_t    services_b[MAX_SERVICES];
@@ -667,6 +668,40 @@ static void timer_rearm(service_t *svc) {
     }
 }
 
+/* MAINPID=: alive and inside the service's cgroup or below it. Not
+ * pid_file_read()'s scan of the top-level cgroup.procs: a delegated service
+ * keeps that empty and its processes in children. */
+static int mainpid_ok(const service_t *svc, pid_t p) {
+    char text[NOTIFY_CGROUP_TEXT_MAX];
+    return p > 1 && kill(p, 0) == 0 && svc->cgroup_path[0] &&
+           notify_read_cgroup(p, text, sizeof text) &&
+           notify_cgroup_text_matches(text, svc->cgroup_path);
+}
+
+/* the pid's parent: only our own children (orphans reparented to PID 1 or
+ * to schema-user, a subreaper) are ever reaped by us */
+static pid_t pid_parent(pid_t p) {
+    char path[64], buf[512], *rp;
+    int fd, ppid = 0;
+    ssize_t n;
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)p);
+    if ((fd = open(path, O_RDONLY | O_CLOEXEC)) < 0) return 0;
+    n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    if (!(rp = strrchr(buf, ')')) || sscanf(rp + 1, " %*c %d", &ppid) != 1) return 0;
+    return (pid_t)ppid;
+}
+
+static void main_adopt(service_t *svc, pid_t p) {
+    char ev[48];
+    svc->child_pid = svc->main_pid = p;
+    svc->main_wait = 0;
+    snprintf(ev, sizeof ev, "main-pid pid=%d", (int)p);
+    service_log(svc, ev);
+}
+
 static void notify_poll(int max_batch);
 
 static void reap(void) {
@@ -695,6 +730,39 @@ static void reap(void) {
             services[i].last_pid   = pid;
             services[i].child_pid  = 0;
             note_exit(&services[i], status);
+
+            /* main_pid_notify: the launcher exiting is a handover, not a death */
+            /* only a launcher: a daemon that sent READY=1 itself and then exits
+             * 0 has simply ended, and timers, oneshots and socket services
+             * keep their own exit handling */
+            if ((services[i].flags & SVC_MAIN_PID_NOTIFY) && pid != services[i].main_pid &&
+                !services[i].ctl_killed &&
+                !(services[i].flags & (SVC_TIMER | SVC_ONESHOT)) && !services[i].listen_open &&
+                (services[i].main_pid || !services[i].notify_ready)) {
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 0 && !services[i].cgroup_path[0]) {
+                    /* nothing to check a MAINPID= against: refuse, as pid_file does */
+                    services[i].inst.state = STATE_EXCISED;
+                    service_log(&services[i], "main-pid-no-cgroup");
+                    break;
+                }
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                    if (services[i].main_pid && mainpid_ok(&services[i], services[i].main_pid) &&
+                        pid_parent(services[i].main_pid) == getpid()) {
+                        main_adopt(&services[i], services[i].main_pid);
+                    } else {
+                        struct timespec t;
+                        clock_gettime(CLOCK_MONOTONIC, &t);
+                        t.tv_sec += MAINPID_WAIT_SECS;
+                        services[i].main_pid = 0;
+                        services[i].main_wait = 1;
+                        services[i].main_wait_due = t;
+                    }
+                    break;
+                }
+                /* a failed launcher takes what it started with it */
+                service_cgroup_kill(&services[i]);
+            }
+            services[i].main_pid = 0;
 
             if (services[i].flags & SVC_TIMER) {
                 timer_rearm(&services[i]);
@@ -752,7 +820,8 @@ static void reap(void) {
                  * cgroup on any later start. */
                 service_cgroup_kill(&services[i]);
             } else if (services[i].ctl_killed) {
-                if (services[i].pid_file[0]) service_cgroup_kill(&services[i]);
+                if (services[i].pid_file[0] || (services[i].flags & SVC_MAIN_PID_NOTIFY))
+                    service_cgroup_kill(&services[i]);
                 services[i].inst.state = STATE_NEW_PROCESS;
                 service_log(&services[i], "ctl-restart");
             } else {
@@ -840,6 +909,15 @@ static void monitor_failsafes(void) {
                 svc->card_pid = 0;
                 service_log(svc, "card-timeout");
             }
+        }
+        if (svc->main_wait && now.tv_sec >= svc->main_wait_due.tv_sec) {
+            svc->main_wait = 0;
+            service_cgroup_kill(svc);
+            service_log(svc, "main-pid-timeout");
+            restart_budget_refresh(svc);
+            if (svc->failsafe_cmd[0]) start_failsafe(svc);
+            svc->inst.state = (svc->flags & SVC_NO_RESTART) ? STATE_EXCISED : STATE_RECOVERY;
+            stop_cmds_begin(svc, 2);
         }
         if (svc->stop_pid > 0 && !(svc->stop_phase & STOP_TIMED_OUT)) {
             uint64_t ran = (uint64_t)(now.tv_sec - svc->stop_start.tv_sec) * 1000 +
@@ -1757,9 +1835,10 @@ static void ctl_cmd(int fd, char *line) {
                     services[i].stop_pid > 0 ? "exec_stop" : "SIGTERM",
                     name, (int)services[i].child_pid);
             } else {
-                if (services[i].fork_state < 0) {
+                if (services[i].fork_state < 0 || services[i].main_wait) {
                     service_cgroup_kill(&services[i]);
                     services[i].fork_state = 0;
+                    services[i].main_wait = 0;
                 }
                 services[i].inst.state = STATE_EXCISED;
                 ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
@@ -1780,9 +1859,10 @@ static void ctl_cmd(int fd, char *line) {
                 stop_main(&services[i]);
                 ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
             } else {
-                if (services[i].fork_state < 0) {
+                if (services[i].fork_state < 0 || services[i].main_wait) {
                     service_cgroup_kill(&services[i]);
                     services[i].fork_state = 0;
+                    services[i].main_wait = 0;
                 }
                 services[i].inst.state    = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
@@ -2059,7 +2139,7 @@ static void notify_poll(int max_batch) {
         for (int i = 0; i < svc_count; i++) {
             service_t *svc = &services[i];
             int stores = svc->fdstore_max > 0 && (m.fdstore || m.fdstore_remove) && svc->child_pid == pid;
-            if (!(svc->notify || stores) || svc->child_pid <= 0) continue;
+            if (!(svc->notify || stores) || (svc->child_pid <= 0 && !svc->main_wait)) continue;
             if (svc->child_pid != pid) {
                 if (!svc->cgroup_path[0]) continue;
                 if (have_cg < 0) have_cg = notify_read_cgroup(pid, cgtext, sizeof cgtext);
@@ -2075,6 +2155,15 @@ static void notify_poll(int max_batch) {
             if (stores && m.fdstore_remove)
                 fdstore_remove(svc->name, m.fdname);
             if (!svc->notify) break;
+            if (m.mainpid && (svc->flags & SVC_MAIN_PID_NOTIFY) && mainpid_ok(svc, m.mainpid)) {
+                int adopted = svc->main_pid && svc->child_pid == svc->main_pid;
+                if (svc->main_wait || adopted) {
+                    if (pid_parent(m.mainpid) == getpid()) main_adopt(svc, m.mainpid);
+                    else service_log(svc, "main-pid-not-ours");
+                } else if (m.mainpid != svc->child_pid) {
+                    svc->main_pid = m.mainpid;   /* launcher still running: adopt at its exit */
+                }
+            }
             if (m.status[0])
                 snprintf(svc->notify_status, sizeof svc->notify_status, "%s", m.status);
             if (m.watchdog)
@@ -2230,7 +2319,7 @@ static int get_poll_timeout(void) {
             !svc->is_frozen)
             best = wake_min(best, svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec),
                             now_m, WAKE_NONE);
-        if (svc->failsafe_pid > 0 || svc->card_pid > 0 || svc->stop_pid > 0 ||
+        if (svc->failsafe_pid > 0 || svc->card_pid > 0 || svc->stop_pid > 0 || svc->main_wait ||
             (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
             tick = 1;
         else if (s == STATE_DORMANT)

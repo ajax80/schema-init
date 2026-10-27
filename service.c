@@ -1540,6 +1540,8 @@ int service_spawn(service_t *svc) {
     close(sync[0]);
     svc->child_pid  = pid;
     svc->fork_state = 0;
+    svc->main_pid = 0;
+    svc->main_wait = 0;
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
@@ -1928,6 +1930,7 @@ static int dropin_flag(service_t *svc, const char *key, const char *val) {
         { "oneshot", SVC_ONESHOT }, { "needs_root", SVC_NEEDS_ROOT },
         { "critical", SVC_CRITICAL }, { "no_restart", SVC_NO_RESTART },
         { "persistent", SVC_TIMER_PERSIST }, { "stop_first", SVC_STOP_FIRST },
+        { "main_pid_notify", SVC_MAIN_PID_NOTIFY },
     };
     for (size_t i = 0; i < sizeof f / sizeof f[0]; i++) {
         if (strcmp(key, f[i].key) != 0) continue;
@@ -2278,6 +2281,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->flags |= SVC_NO_RESTART;
     else if (strcmp(line, "stop_first") == 0 && atoi(val))
         svc->flags |= SVC_STOP_FIRST;
+    else if (strcmp(line, "main_pid_notify") == 0 && atoi(val))
+        svc->flags |= SVC_MAIN_PID_NOTIFY;
     else if (strcmp(line, "stable_secs") == 0 && (atoi(val) > 0 || strcmp(val, "0") == 0))
         svc->stable_secs = atoi(val);
     else if (strcmp(line, "oom_score_adj") == 0) {
@@ -2420,6 +2425,10 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
     if (hardening_finalize(svc) != 0) return -1;
+    if ((svc->flags & SVC_MAIN_PID_NOTIFY) && !svc->notify) {
+        fprintf(stderr, "[schema-init] %s: main_pid_notify=1 needs notify=1 — not loaded\n", svc->name);
+        return -1;
+    }
     if (svc->cpuset_partition != PART_MEMBER && svc->cpuset[0] == '\0') {
         fprintf(stderr,
                 "[schema-init] WARN: '%s' cpuset_partition set without cpuset= "

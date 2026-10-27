@@ -280,6 +280,15 @@ check("ExecStop over 32 words dropped with a warning", "exec_stop=" not in hl40 
 si.set_user_mode(None)
 check("system mode: ExecStop not mapped", "exec_stop" not in hard("ExecStop=/bin/a\n"))
 
+check("system mode: no main_pid_notify", "main_pid_notify" not in hard("Type=notify\nNotifyAccess=all\n"))
+si.set_user_mode(si.user_context("/home/u", 1000, "u", {"XDG_RUNTIME_DIR": "/run/user/1000"}))
+check("Type=notify + NotifyAccess=all -> main_pid_notify=1",
+      "main_pid_notify=1\n" in hard("Type=notify\nNotifyAccess=all\n"))
+check("Type=notify alone -> no main_pid_notify", "main_pid_notify" not in hard("Type=notify\n"))
+check("NotifyAccess=all without notify -> no main_pid_notify",
+      "main_pid_notify" not in hard("NotifyAccess=all\n"))
+si.set_user_mode(None)
+
 # --- Limit*= -> limit_*= ---
 hl = hard("LimitNOFILE=1024:524288\nLimitMEMLOCK=infinity\nLimitNICE=-19\nLimitRTPRIO=70\nLimitCORE=8M\n")
 check("Limit*= translated",

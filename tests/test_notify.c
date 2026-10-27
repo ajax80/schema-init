@@ -77,6 +77,14 @@ int main(void) {
     const char *a = "READY=1\nSTATUS=Processing requests...\nMAINPID=42";
     assert(notify_parse(a, strlen(a), &m) == 1);
     assert(m.ready && !m.stopping && strcmp(m.status, "Processing requests...") == 0);
+    assert(m.mainpid == 42);
+    const char *mp = "MAINPID=1234\nREADY=1";
+    assert(notify_parse(mp, strlen(mp), &m) == 1 && m.mainpid == 1234 && m.ready);
+    const char *mpo = "MAINPID=777";
+    assert(notify_parse(mpo, strlen(mpo), &m) == 1 && m.mainpid == 777);
+    const char *mpbad[] = { "MAINPID=abc", "MAINPID=0", "MAINPID=-5", "MAINPID=12x", "MAINPID=", "MAINPID=99999999999" };
+    for (size_t i = 0; i < sizeof mpbad / sizeof mpbad[0]; i++)
+        assert(notify_parse(mpbad[i], strlen(mpbad[i]), &m) == 0 && m.mainpid == 0);
     const char *b = "READY=0\nFOO=bar";
     assert(notify_parse(b, strlen(b), &m) == 0 && !m.ready);
     const char *c = "READY=10\nREADY=1x";                 /* exact match only */
