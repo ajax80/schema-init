@@ -837,6 +837,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.append("critical=0")
 
     hard, warns = _hardening(svc)
+    if "+" in pfx:
+        # + is full privileges: systemd skips the sandbox too, not just User=
+        hard = [ln.split("=", 1)[0] + "=0" for ln in hard]
+        warns = []
     seen_plain = False
     for pre, _ in pres:
         if "+" not in pre:
