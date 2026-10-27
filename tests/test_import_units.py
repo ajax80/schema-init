@@ -191,6 +191,44 @@ check("last assignment wins", "private_tmp=0\n" in hard("PrivateTmp=yes\nPrivate
 hw = hard("ProtectSystem=strict\nProtectHome=tmpfs\n")
 check("warnings lead the file", hw.startswith(si.WARN_PREFIX) and hw.count(si.WARN_PREFIX) == 2)
 
+# --- SocketBindAllow/Deny= -> landlock_bind_tcp= ---
+def sb(txt):
+    return hard(txt)
+s1 = sb("SocketBindAllow=tcp:443\nSocketBindAllow=80\nSocketBindDeny=any\n")
+check("SocketBind allow-list over deny any -> landlock_bind_tcp (+0 for ephemeral)",
+      "landlock_bind_tcp=0,80,443\n" in s1)
+check("SocketBind deny any -> UDP-not-enforced warning", si.WARN_PREFIX + "SocketBindDeny" in s1 and "UDP" in s1)
+s2 = sb("SocketBindAllow=tcp:8000-8002\nSocketBindDeny=tcp\n")
+check("port range expanded, TCP-only deny -> no warning",
+      "landlock_bind_tcp=0,8000,8001,8002\n" in s2 and si.WARN_PREFIX not in s2)
+check("deny all TCP, no allow -> ephemeral only", "landlock_bind_tcp=0\n" in sb("SocketBindDeny=tcp\n"))
+check("allow without deny -> nothing (systemd allows anyway)",
+      "\nlandlock_bind_tcp=" not in sb("SocketBindAllow=tcp:443\n"))
+s3 = sb("SocketBindAllow=tcp\nSocketBindDeny=any\n")
+check("all TCP allowed -> no landlock_bind_tcp", "\nlandlock_bind_tcp=" not in s3)
+s4 = sb("SocketBindAllow=10000-65535\nSocketBindDeny=tcp\n")
+check("more than 15 ports -> not translated + warning",
+      "\nlandlock_bind_tcp=" not in s4 and si.WARN_PREFIX + "SocketBindAllow" in s4)
+s5 = sb("SocketBindDeny=tcp:22\n")
+check("partial deny -> not translated + warning",
+      "\nlandlock_bind_tcp=" not in s5 and si.WARN_PREFIX + "SocketBindDeny" in s5)
+s6 = sb("SocketBindDeny=ipv6:tcp\n")
+check("one-family deny -> not translated + warning",
+      "\nlandlock_bind_tcp=" not in s6 and si.WARN_PREFIX + "SocketBindDeny" in s6)
+s7 = sb("SocketBindAllow=ipv4:tcp:80\nSocketBindDeny=tcp\n")
+check("one-family allow -> both families + warning",
+      "landlock_bind_tcp=0,80\n" in s7 and si.WARN_PREFIX + "SocketBindAllow" in s7)
+check("same ports both families -> no warning",
+      si.WARN_PREFIX not in sb("SocketBindAllow=ipv4:tcp:80\nSocketBindAllow=ipv6:tcp:80\nSocketBindDeny=tcp\n"))
+check("empty assignment resets the list",
+      "landlock_bind_tcp=0,443\n" in sb("SocketBindAllow=80\nSocketBindAllow=\nSocketBindAllow=443\nSocketBindDeny=tcp\n"))
+check("udp-only allow ignored", "landlock_bind_tcp=0\n" in sb("SocketBindAllow=udp:53\nSocketBindDeny=tcp\n"))
+s8 = sb("SocketBindAllow=tcp:http\nSocketBindDeny=tcp\n")
+check("bad rule -> not translated + warning", "\nlandlock_bind_tcp=" not in s8 and "tcp:http" in s8)
+s9 = si.unit_to_svc("p", si.parse_unit(
+    "[Service]\nExecStart=+/bin/p\nSocketBindAllow=443\nSocketBindDeny=tcp\n[Install]\nWantedBy=x\n"))
+check("ExecStart=+ keeps SocketBind (cgroup-level in systemd)", "landlock_bind_tcp=0,443\n" in s9)
+
 # --- Limit*= -> limit_*= ---
 hl = hard("LimitNOFILE=1024:524288\nLimitMEMLOCK=infinity\nLimitNICE=-19\nLimitRTPRIO=70\nLimitCORE=8M\n")
 check("Limit*= translated",

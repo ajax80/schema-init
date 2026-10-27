@@ -274,6 +274,79 @@ def _hardening(svc):
     return lines, warns
 
 
+_BIND_RULE = re.compile(r"^(?:(ipv4|ipv6)(?::|$))?(?:(tcp|udp)(?::|$))?(?:(\d+)(?:-(\d+))?)?$")
+
+
+def _bind_rules(svc, directive):
+    """SocketBind{Allow,Deny}= as (families, proto, ports) tuples; families is a
+    set, proto None = any, ports None = every positive port. None if a rule
+    doesn't parse."""
+    rules = []
+    for v in _get_all(svc, directive):
+        v = v.strip()
+        if not v:
+            rules = []
+            continue
+        if v == "any":
+            rules.append(({4, 6}, None, None))
+            continue
+        m = _BIND_RULE.match(v)
+        if not m or not any(m.groups()):
+            return None
+        fam, proto, lo, hi = m.groups()
+        ports = None
+        if lo:
+            lo, hi = int(lo), int(hi or lo)
+            if not 1 <= lo <= hi <= 65535:
+                return None
+            ports = range(lo, hi + 1)
+        rules.append(({int(fam[3])} if fam else {4, 6}, proto, ports))
+    return rules
+
+
+def socket_bind_lines(svc):
+    """SocketBindAllow/Deny= -> landlock_bind_tcp=. systemd allows a bind that
+    matches Allow, else denies one that matches Deny; Landlock is a per-port
+    TCP allow-list blind to address family, so only "deny all TCP, allow these
+    ports" translates. Returns (lines, warnings)."""
+    allow, deny = _bind_rules(svc, "SocketBindAllow"), _bind_rules(svc, "SocketBindDeny")
+    if allow is None or deny is None:
+        bad = [v for d in ("SocketBindAllow", "SocketBindDeny") for v in _get_all(svc, d)]
+        return [], ["SocketBind rule not understood (%s), not translated" % " ".join(bad)]
+    if not deny:
+        return [], []
+    warns = []
+    if any(p != "tcp" for _, p, _ in deny):
+        warns.append("SocketBindDeny for UDP not enforced (Landlock is TCP-only)")
+    denied = set()
+    for fams, p, ports in deny:
+        if p != "udp" and ports is None:
+            denied |= fams
+    if denied != {4, 6}:
+        if any(p != "udp" for _, p, _ in deny):
+            warns.append("SocketBindDeny not translated: only denying all TCP on both "
+                         "IPv4 and IPv6 maps to landlock_bind_tcp")
+        return [], warns
+    allowed = {4: set(), 6: set()}
+    for fams, p, ports in allow:
+        if p == "udp":
+            continue
+        for f in fams:
+            if allowed[f] is not None:
+                allowed[f] = None if ports is None else allowed[f] | set(ports)
+    if allowed[4] != allowed[6]:
+        warns.append("SocketBindAllow for one address family applied to both")
+    if allowed[4] is None or allowed[6] is None:
+        return [], warns
+    ports = sorted(allowed[4] | allowed[6])
+    # systemd rules only match positive ports, so binding port 0 stays allowed
+    if len(ports) > 15:
+        warns.append("SocketBindAllow not translated: %d ports, landlock_bind_tcp "
+                     "takes 15 plus port 0" % len(ports))
+        return [], warns
+    return ["landlock_bind_tcp=%s" % ",".join(str(x) for x in [0] + ports)], warns
+
+
 _SPAN_UNITS = {"us": 1e-6, "usec": 1e-6, "ms": 1e-3, "msec": 1e-3, "": 1, "s": 1,
                "sec": 1, "second": 1, "seconds": 1, "m": 60, "min": 60,
                "minute": 60, "minutes": 60, "h": 3600, "hr": 3600,
@@ -854,6 +927,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
     lines.extend(hard)
+    # after the + handling: systemd enforces SocketBind on the cgroup, + or not
+    sb, sb_warns = socket_bind_lines(svc)
+    lines.extend(sb)
+    warns.extend(sb_warns)
     lim, lim_warns = limit_lines(svc)
     lines.extend(lim)
     warns.extend(lim_warns)
