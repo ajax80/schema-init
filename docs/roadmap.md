@@ -45,7 +45,7 @@
 - [x] Landlock TCP rules — `landlock_bind_tcp=` / `landlock_connect_tcp=`: the kernel limits which TCP ports a service may listen on and connect to, with no firewall and no eBPF
 - [ ] Alpine port — `distros/alpine/` beside OpenRC, built on the musl support from the Void musl port
 - [ ] schema-ctl polish — `schema-top` (live status over ssh from the shared-memory table, per-service memory and CPU from cgroups), colour in `schema-ctl status` on a terminal, and `schema-ctl log [-f] <svc>` (the dependency graph as text is `schema-ctl graph`)
-- [ ] schema-import: map systemd `SocketBindAllow=tcp:PORT` to `landlock_bind_tcp=`
+- [x] schema-import: `SocketBindDeny=` all TCP + `SocketBindAllow=` ports → `landlock_bind_tcp=` (port 0 kept for ephemeral binds, as systemd does); deny-lists, UDP rules and sets of more than 15 ports are warned, not translated
 - [ ] schema-logind in C (shelved) — rewrite `schema-logind.py` (~127 KB of Python) in C as `schema-dbus` was. Measured: it would save 0–1 s of boot (logind is often off the critical path) and ~27 MB RSS, and the system still needs Python for `schema-systemd1.py` and dnf. Revisit only for a minimal distro target, porting logind and `schema-systemd1` together
 - [x] btrfs device scan — `schema-mount-fstab` runs `btrfs device scan` before mounting a btrfs entry, so a multi-device btrfs mounts when fstab runs alongside coldplug (Artix)
 - [x] Descriptor store — `fdstore=N`: a service hands its sockets and client fds to PID 1 before it stops and gets them back on restart; `schema-dbus` restarts without dropping a client

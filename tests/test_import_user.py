@@ -563,6 +563,17 @@ check("mount-ns hardening dropped", not any(l.startswith(("private_tmp=", "prote
       for l in keys) and sum(l.startswith(si.WARN_PREFIX) and "dropped" in l for l in b.splitlines()) == 3)
 t.done()
 
+# 2b. landlock_bind_tcp needs no_new_privs as a non-root supervisor: dropped
+si._landlock_tcp_ok = lambda: True
+t = Tree()
+t.write(t.cfg("sb.service"), "[Service]\nExecStart=/bin/sb\nSocketBindAllow=8080\nSocketBindDeny=tcp\n")
+t.enable("sb.service")
+c, out = run(t)
+b = svc(out, "sb")
+check("SocketBind dropped in user mode, with a warning",
+      "\nlandlock_bind_tcp=" not in b and si.WARN_PREFIX + "SocketBind dropped" in b)
+t.done()
+
 # 3. foo.timer and foo.service both enabled: the timer's schedule wins
 t = Tree()
 t.write(t.cfg("foo.service"), SIMPLE)
