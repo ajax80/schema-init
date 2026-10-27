@@ -366,7 +366,6 @@ fi
 %{_bindir}/schema-migrate
 %{_bindir}/schema-systemctl
 %{_prefix}/lib/dracut/dracut.conf.d/90-schema-systemctl.conf
-%{_bindir}/schema-import
 %{_libexecdir}/schema-init/schema-flip-apply
 %{_libexecdir}/schema-init/schema-udev-flip-arm.sh
 %{_libexecdir}/schema-init/schema-udev-flip-backup.sh
@@ -509,6 +508,7 @@ fi
 %{_libexecdir}/schema-init/schema-mount-fstab
 %{_libexecdir}/schema-init/schema-bus-activate
 %{_libexecdir}/schema-init/schema-import
+%{_bindir}/schema-import
 %config(noreplace) %{_sysconfdir}/schema-init/user-skip
 %{_datadir}/bash-completion/completions/schema-ctl
 %{_datadir}/zsh/site-functions/_schema-ctl

@@ -43,6 +43,29 @@ def check(n, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {n}"
 def fake_run(argv, **kw):
     return type("R", (), {"returncode": 1 if argv[:2] == ["rpm", "-q"] else 0, "stdout": ""})()
 
+# a pending reboot (grubby's default is a kernel installed after this boot)
+# refuses discover, dry-run and deploy
+def grubby_run(path):
+    def r(argv, **kw):
+        if argv[:2] == ["grubby", "--default-kernel"]:
+            return type("R", (), {"returncode": 0, "stdout": path + "\n"})()
+        return fake_run(argv, **kw)
+    return r
+open(os.path.join(root, "boot/vmlinuz-6.11.0"), "w").close()   # mtime now: after boot
+pending_run = grubby_run("/root/boot/vmlinuz-6.11.0")
+for mode in ("--discover", "--dry-run", "--deploy"):
+    check("%s refuses on pending reboot" % mode, sm.main([mode], run=pending_run) == sm.REBOOT_PENDING_RC)
+check("pending reboot wrote nothing",
+      not os.path.exists(os.path.join(root, "var/lib/schema-init/migrate-profile.json"))
+      and not os.path.exists(os.path.join(root, "etc/schema-init")))
+# a default installed before this boot (older kernel picked in GRUB, custom kernel) is a choice
+open(os.path.join(root, "boot/vmlinuz-6.9.0"), "w").close()
+os.utime(os.path.join(root, "boot/vmlinuz-6.9.0"), (1, 1))
+check("discover runs when the default predates this boot",
+      sm.main(["--discover"], run=grubby_run("/boot/vmlinuz-6.9.0")) == 0)
+check("discover runs when next boot is the running kernel",
+      sm.main(["--discover"], run=grubby_run("/boot/vmlinuz-" + os.uname().release)) == 0)
+
 # dry-run writes nothing
 rc = sm.main(["--dry-run"], run=fake_run)
 check("dry-run exits 0", rc == 0)

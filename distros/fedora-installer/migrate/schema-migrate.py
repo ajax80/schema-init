@@ -1448,6 +1448,32 @@ def finish_report():
     return "\n".join(lines)
 
 
+REBOOT_PENDING_RC = 3   # the wizard tells this apart from a plain failure
+
+
+# The kernel the next boot picks, when a dnf upgrade installed it after this
+# boot and it isn't the running one: profiling or flipping now would target the
+# old kernel. One installed before this boot (an older kernel picked in GRUB,
+# a custom kernel beside a stock default, rescue) is a choice, not pending.
+def reboot_pending(run=subprocess.run):
+    try:
+        r = run(["grubby", "--default-kernel"], capture_output=True, text=True)
+    except OSError:
+        return None
+    # btrfs /boot-in-subvol prints /root/boot/vmlinuz-...
+    name = os.path.basename((r.stdout or "").strip())
+    if r.returncode != 0 or not name.startswith("vmlinuz-"):
+        return None
+    nxt = name[len("vmlinuz-"):]
+    if nxt == os.uname().release:
+        return None
+    try:
+        btime = next(int(ln.split()[1]) for ln in open("/proc/stat") if ln.startswith("btime "))
+        return nxt if os.path.getmtime(P("boot/" + name)) > btime else None
+    except (OSError, StopIteration, ValueError):
+        return None
+
+
 def main(argv, run=subprocess.run):
     import argparse
     ap = argparse.ArgumentParser(prog="schema-migrate")
@@ -1525,6 +1551,11 @@ def main(argv, run=subprocess.run):
     if plat is None:
         print("refusing: " + why)
         return 2
+
+    pending = reboot_pending(run=run)
+    if pending:
+        print("refusing: a reboot is pending (next boot is %s) — reboot first, then re-run" % pending)
+        return REBOOT_PENDING_RC
 
     if args.discover:
         profile = build_profile(run=run)

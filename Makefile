@@ -108,6 +108,8 @@ install: all
 	install -D -m 0755 scripts/schema-recorder-earlyoom $(DESTDIR)/usr/local/bin/schema-recorder-earlyoom
 	install -D -m 0755 scripts/schema-bus-activate $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-bus-activate
 	install -D -m 0755 distros/fedora-installer/migrate/schema-import.py $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-import
+	# on PATH from the base package: RPM-only boxes without -migrate still import
+	ln -sf ../libexec/schema-init/schema-import $(DESTDIR)$(BINDIR)/schema-import
 	install -D -m 0644 config/user-skip $(DESTDIR)$(SYSCONFDIR)/schema-init/user-skip
 	install -D -m 0644 completion/schema-ctl.bash $(DESTDIR)$(DATADIR)/bash-completion/completions/schema-ctl
 	install -D -m 0644 completion/_schema-ctl $(DESTDIR)$(DATADIR)/zsh/site-functions/_schema-ctl
@@ -156,7 +158,6 @@ install-migrate: schema-udev schema-systemctl verify-rules-live schema-dbus
 	install -m 0755 distros/fedora-installer/migrate/schema-migrate.py $(DESTDIR)$(BINDIR)/schema-migrate
 	install -m 0755 schema-udev $(DESTDIR)$(BINDIR)/schema-udev
 	install -m 0755 schema-systemctl $(DESTDIR)$(BINDIR)/schema-systemctl
-	install -m 0755 distros/fedora-installer/migrate/schema-import.py $(DESTDIR)$(BINDIR)/schema-import
 	install -m 0755 distros/fedora-installer/schema-flip-apply.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-flip-apply
 	install -m 0755 scripts/schema-udev-flip-arm.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-arm.sh
 	install -m 0755 scripts/schema-udev-flip-backup.sh $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-udev-flip-backup.sh

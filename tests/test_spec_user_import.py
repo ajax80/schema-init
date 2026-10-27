@@ -14,7 +14,9 @@ base = re.search(r"^%files\n(.*?)(?=^%files|^%changelog|\Z)", SPEC, re.S | re.M)
 check("base %files ships libexec importer", "%{_libexecdir}/schema-init/schema-import\n" in base)
 check("base %files ships user-skip noreplace",
       "%config(noreplace) %{_sysconfdir}/schema-init/user-skip\n" in base)
-check("migrate keeps /usr/bin/schema-import", "%{_bindir}/schema-import\n" in SPEC)
+check("base %files ships /usr/bin/schema-import (no -migrate needed)", "%{_bindir}/schema-import\n" in base)
+check("Makefile links /usr/bin/schema-import to the libexec importer",
+      "ln -sf ../libexec/schema-init/schema-import $(DESTDIR)$(BINDIR)/schema-import" in MK)
 check("Makefile installs libexec importer",
       "distros/fedora-installer/migrate/schema-import.py $(DESTDIR)$(PREFIX)/libexec/schema-init/schema-import" in MK)
 check("Makefile installs user-skip", "config/user-skip $(DESTDIR)$(SYSCONFDIR)/schema-init/user-skip" in MK)

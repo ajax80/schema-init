@@ -59,6 +59,16 @@ for pfx in ("!", "+", "-!"):
     check("ExecStart=%s ignores User= -> needs_root" % pfx, "needs_root=1\n" in bp and "user=" not in bp)
 bp = si.unit_to_svc("capd", si.parse_unit("[Service]\nUser=foo\nExecStart=!!/usr/bin/foo\n"))
 check("ExecStart=!! keeps User= (ambient caps exist on F44)", "user=foo\n" in bp)
+# + is full privileges: the sandbox goes too; ! only drops User=
+_sb = "[Service]\nUser=foo\nNoNewPrivileges=yes\nPrivateTmp=yes\nProtectSystem=strict\nProtectHome=yes\nExecStart=%s/usr/bin/foo\n"
+bp = si.unit_to_svc("sbx", si.parse_unit(_sb % "+"))
+check("ExecStart=+ drops the sandbox", all(k + "=0\n" in bp for k in
+      ("no_new_privs", "private_tmp", "protect_system", "protect_home")) and "unsandboxed" in bp)
+bp = si.unit_to_svc("sbx", si.parse_unit(_sb.replace("ExecStart=", "ExecStartPre=/usr/bin/setup\nExecStart=") % "+"))
+check("ExecStart=+ with a plain ExecStartPre keeps the sandbox",
+      "protect_system=full\n" in bp and "kept the sandbox" in bp)
+bp = si.unit_to_svc("sbx", si.parse_unit(_sb % "!"))
+check("ExecStart=! keeps the sandbox", "protect_system=full\n" in bp and "private_tmp=1\n" in bp)
 check("quoted env pair", "env=FOO=a b\n" in b2)
 check("second env pair", "env=BAR=c\n" in b2)
 

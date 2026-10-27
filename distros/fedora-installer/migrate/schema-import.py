@@ -837,6 +837,15 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.append("critical=0")
 
     hard, warns = _hardening(svc)
+    if "+" in pfx:
+        # + is full privileges: systemd skips the sandbox too, not just User=.
+        # The sandbox is service-wide here, so plain ExecStartPre lines that
+        # systemd still confines keep it for all.
+        if any("+" not in pre for pre, _ in pres):
+            warns.append("ExecStart=+ main process kept the sandbox: plain ExecStartPre lines need it")
+        else:
+            hard = [ln.split("=", 1)[0] + "=0" for ln in hard]
+            warns = ["ExecStart=+ runs unsandboxed: hardening directives dropped"]
     seen_plain = False
     for pre, _ in pres:
         if "+" not in pre:

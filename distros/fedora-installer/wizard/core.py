@@ -137,6 +137,8 @@ def _ok(result):
 
 
 _ERROR = {
+    "reboot_pending": "An update is waiting for a restart, so nothing was changed. "
+                      "Restart your computer, then open setup again.",
     "deploy_failed": "Setup couldn't start, so nothing was changed. "
                      "Check that you can run admin commands, then try again.",
     "arm_failed": "Couldn't arm the switch, so nothing was changed. Try again.",
@@ -230,6 +232,8 @@ class WizardCore:
             if not recovery_ack:
                 return "need_recovery_ack"
             r = self.backend.deploy(self.deploy_opts(selections))
+            if getattr(r, "returncode", 0) == _migrate().REBOOT_PENDING_RC:
+                return "reboot_pending"
             return "deployed" if _ok(r) else "deploy_failed"
         if s == stage.R1_HEAL:
             r = self.backend.arm_flip()
