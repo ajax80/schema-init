@@ -222,4 +222,18 @@ XDG_RUNTIME_DIR=$I/run ./schema-ctl --user daemon-reload > /dev/null && fail "da
 mv "$I/run/schema-user/gone" "$I/run/schema-user/services"
 istop
 
+# persistent catch-up waits for mount-fstab: it "mounts" /var by dropping in
+# a 3-day-old stamp; read before that, the stamp looks new and cu never runs
+I=$(mktemp -d "$T/imp.XXXX"); mkdir -m700 "$I/run" "$I/run/schema-user" "$I/run/schema-user/services"
+old=$(( $(date +%s) - 3 * 86400 ))
+printf 'name=mount-fstab\nexec=/bin/sh\nargs=-c\nargs=sleep 1; mkdir -p %s/state/schema-user/timers; echo %s > %s/state/schema-user/timers/cu.stamp\noneshot=1\n' \
+    "$I" "$old" "$I" > "$I/run/schema-user/services/mount-fstab.svc"
+printf 'name=cu\nexec=/bin/sh\nargs=-c\nargs=touch %s/cu.ran\non_calendar=03:00\npersistent=1\n' "$I" > "$I/run/schema-user/services/cu.svc"
+chmod 600 "$I/run/schema-user/services"/*.svc
+SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HOME=$I/cfg ./schema-user > "$I/out" 2>&1 &
+PID=$!
+until_ok '[ -f "$I/cu.ran" ]' || { ist; cat "$I/out"; fail "catch-up: cu did not run after mount-fstab"; }
+[ "$(cat "$I/state/schema-user/timers/cu.stamp")" -gt "$old" ] || fail "catch-up: stamp not advanced"
+istop
+
 echo "test_schema_user: ok"

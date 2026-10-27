@@ -390,6 +390,7 @@ typedef struct {
     int              timer_cal_dow;      /* on_calendar weekday 0=Sun..6=Sat; -1 = any day    */
     int              timer_cal_dom;      /* on_calendar day-of-month 1..31; -1 = any          */
     struct timespec  timer_next;         /* next-fire deadline: CLOCK_MONOTONIC, or CLOCK_REALTIME if SVC_TIMER_CALENDAR */
+    int              timer_catchup_wait; /* persistent: boot-armed, stamp not read until mount-fstab is done */
 } service_t;
 
 /* restart_sec: systemd's RestartSec=. Without it a service that dies at once

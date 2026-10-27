@@ -178,6 +178,28 @@ static void timer_arm_persistent(service_t *svc) {
     }
 }
 
+/* A separate /var is mounted by mount-fstab, after the timers are armed: a
+ * stamp read before then comes from the empty shadow /var, reads as "never
+ * stamped" and the catch-up is lost. Boot-armed persistent timers wait for
+ * mount-fstab to finish (or fail); with no mount-fstab, /var is already up. */
+static int timer_catchup_waiting;
+
+static void timer_catchup_tick(void) {
+    if (!timer_catchup_waiting) return;
+    for (int i = 0; i < svc_count; i++)
+        if (strcmp(services[i].name, "mount-fstab") == 0 &&
+            services[i].inst.state != STATE_PERFECT &&
+            services[i].inst.state != STATE_EXCISED)
+            return;
+    timer_catchup_waiting = 0;
+    for (int i = 0; i < svc_count; i++) {
+        if (!services[i].timer_catchup_wait) continue;
+        services[i].timer_catchup_wait = 0;
+        if (services[i].inst.state == STATE_PERFECT)
+            timer_arm_persistent(&services[i]);
+    }
+}
+
 time_t mono_sec(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -2548,10 +2570,13 @@ void engine_arm_timers(int adopting) {
             (!adopting || services[ti].timer_next.tv_sec == 0)) {
             services[ti].inst.state = STATE_PERFECT;
             if (services[ti].flags & SVC_TIMER_CALENDAR) {
-                if (services[ti].flags & SVC_TIMER_PERSIST)
+                if ((services[ti].flags & SVC_TIMER_PERSIST) && adopting) {
                     timer_arm_persistent(&services[ti]);
-                else
+                } else {
+                    if (services[ti].flags & SVC_TIMER_PERSIST)
+                        services[ti].timer_catchup_wait = timer_catchup_waiting = 1;
                     timer_arm_calendar(&services[ti]);
+                }
             } else {
                 services[ti].timer_next = tnow;
                 services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
@@ -2690,6 +2715,7 @@ void engine_run(void) {
         uint8_t before[MAX_SERVICES];
         for (i = 0; i < svc_count; i++)
             before[i] = services[i].inst.state;
+        timer_catchup_tick();
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i], grp_states, grp_count);
         {
