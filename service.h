@@ -273,6 +273,13 @@ typedef struct {
     int              expand_args;
     char            *exec_pre[MAX_EXEC_PRE];
     int              exec_pre_count;
+    char            *exec_stop[MAX_EXEC_PRE];       /* run before SIGTERM on every stop */
+    int              exec_stop_count;
+    char            *exec_stop_post[MAX_EXEC_PRE];  /* run once the service is gone, crash included */
+    int              exec_stop_post_count;
+    pid_t            stop_pid;            /* runner for exec_stop(_post), 0 if none; a respawn waits for it */
+    int              stop_phase;          /* 1 exec_stop, 2 exec_stop_post, 3 both (eviction) */
+    struct timespec  stop_start;
     char            *card[MAX_CARDS];    /* card=exec:CMD, played one per retry, in order */
     int              card_count;
     int              card_next;           /* next card to play; reset with the restart budget */
@@ -426,6 +433,9 @@ uint32_t service_probe_f6(service_t *svc);
 /* fork+exec the service; sets child_pid and last_start */
 int service_spawn(service_t *svc);
 pid_t service_card_spawn(const service_t *svc, int idx);
+/* one child running PHASE's commands in order (1 exec_stop, 2 exec_stop_post,
+ * 3 both); exits non-zero when a command without '-' fails */
+pid_t service_stop_spawn(const service_t *svc, int phase);
 service_t *service_fallback(const service_t *svc, service_t *table, int count);
 int  service_is_standby(const service_t *svc, const service_t *table, int count);
 

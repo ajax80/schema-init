@@ -162,9 +162,9 @@ def _specifiers(argv, name, strict=True):
     return out
 
 
-def _exec_pre(svc, name):
+def _exec_pre(svc, name, key="ExecStartPre", prefixes="+-"):
     out = []
-    for v in _get_all(svc, "ExecStartPre"):
+    for v in _get_all(svc, key):
         if not v.strip():
             out = []
             continue
@@ -173,22 +173,22 @@ def _exec_pre(svc, name):
         while s and s[0] in _EXEC_PREFIX:
             pre += s[0]
             s = s[1:]
-        if set(pre) - set("+-"):
-            raise Skip("ExecStartPre=%s uses a prefix schema-init can't honour" % v)
+        if set(pre) - set(prefixes):
+            raise Skip("%s=%s uses a prefix schema-init can't honour" % (key, v))
         try:
             argv = shlex.split(s)
         except ValueError:
-            raise Skip("ExecStartPre=%s has unbalanced quotes" % v)
+            raise Skip("%s=%s has unbalanced quotes" % (key, v))
         if not argv:
             continue
         if not argv[0].startswith("/"):
             exe = _which(argv[0])
             if not exe:
-                raise Skip("ExecStartPre command %s not found" % argv[0])
+                raise Skip("%s command %s not found" % (key, argv[0]))
             argv[0] = exe
         out.append(("".join(sorted(set(pre))), _specifiers(argv, name)))
     if len(out) > 8:
-        raise Skip("%d ExecStartPre= lines (limit 8)" % len(out))
+        raise Skip("%d %s= lines (limit 8)" % (len(out), key))
     return out
 
 
@@ -911,6 +911,29 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         lines.append("expand_args=1")
     for pre, pa in pres:
         lines.append("exec_pre=%s%s" % (pre, " ".join(_cmd_quote(w) for w in pa)))
+    # user mode only: system units have always been stopped by SIGTERM alone,
+    # and a re-import must not change that. The runner drops to the service's
+    # user, so + and ! can't be honoured.
+    stop_warns = []
+    if _USER:
+        for key, out_key in (("ExecStop", "exec_stop"), ("ExecStopPost", "exec_stop_post")):
+            try:
+                stops = _exec_pre(svc, unit or name, key, "-")
+            except Skip as e:
+                stop_warns.append("%s not translated: %s" % (key, e))
+                continue
+            for pre, pa in stops:
+                shown = "%s=%s%s" % (key, pre, " ".join(pa))
+                # the runner has no main pid to hand; SIGTERM already does `kill $MAINPID`
+                if any("$MAINPID" in w or "${MAINPID}" in w for w in pa):
+                    stop_warns.append("%s dropped: $MAINPID has no equivalent" % shown)
+                    continue
+                pa, _ = _expand_argv(pa, env_map)
+                if not pa or len(pa) > 32:
+                    stop_warns.append("%s dropped: %s" % (shown, "empty after $VAR expansion"
+                                                          if not pa else "more than 32 words"))
+                    continue
+                lines.append("%s=%s%s" % (out_key, pre, " ".join(_cmd_quote(w) for w in pa)))
 
     if stype == "oneshot":
         lines.append("oneshot=1")
@@ -966,6 +989,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.extend(hard)
     # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
     # here only the main process is confined
+    warns.extend(stop_warns)
     sb, sb_warns = socket_bind_lines(svc)
     lines.extend(sb)
     warns.extend(sb_warns)
