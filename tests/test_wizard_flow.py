@@ -94,6 +94,11 @@ def failing(stg):
     return core.WizardCore(backend=FailBackend(), root=root)
 
 check("failed deploy -> deploy_failed", failing(None).advance(consent=True, recovery_ack=True, selections={}) == "deploy_failed")
+class PendingBackend(FakeBackend):
+    def deploy(self, opts=None): return type("R", (), {"returncode": 3})()
+pr = tempfile.mkdtemp(); os.makedirs(os.path.join(pr, "var/lib"))
+po = core.WizardCore(backend=PendingBackend(), root=pr).advance(consent=True, recovery_ack=True, selections={})
+check("reboot-pending deploy -> its own message", po == "reboot_pending" and "restart" in core.error_for(po).lower())
 check("failed arm -> arm_failed", failing(stage.R1_HEAL).advance(consent=True, recovery_ack=True, selections={}) == "arm_failed")
 
 check("recovery_text is the plain-language card", "black" in c.recovery_text().lower())
