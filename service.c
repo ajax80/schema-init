@@ -1540,6 +1540,8 @@ int service_spawn(service_t *svc) {
     close(sync[0]);
     svc->child_pid  = pid;
     svc->fork_state = 0;
+    svc->main_pid = 0;
+    svc->main_wait = 0;
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);

@@ -191,6 +191,10 @@ mpsvc mp-outside '/usr/bin/notifier "MAINPID=1" hold & sleep 1; exit 0' 'no_rest
 mpsvc mp-restart "sh -c '/usr/bin/notifier \"\$(printf \"MAINPID=%s\\\\nREADY=1\" \$\$)\" hold & sleep 3; exit 0' & sleep 1; exit 0" 'max_restarts=2\n'
 mpsvc mp-norestart "sh -c '/usr/bin/notifier \"\$(printf \"MAINPID=%s\\\\nREADY=1\" \$\$)\" hold & sleep 3; exit 0' & sleep 1; exit 0" 'no_restart=1\n'
 printf '#!/bin/sh\n%s & echo $! > /run/mp-nokey.pid; sleep 1; exit 0\n' "$HAND" > "$ROOT/usr/bin/mp-nokey.sh"; chmod +x "$ROOT/usr/bin/mp-nokey.sh"
+# a plain notify daemon that is ready, then exits 0: an exit, not a handover (#434)
+mpsvc mp-cleanexit '/usr/bin/notifier READY=1 hold & N=$!; sleep 2; kill $N; exit 0' 'no_restart=1\n'
+# a launcher that never names a main pid, stopped while PID 1 waits for one (#434)
+mpsvc mp-waitstop 'exit 0' 'no_restart=1\n'
 printf 'name=mp-nokey\nexec=/usr/bin/mp-nokey.sh\nnotify=1\nno_restart=1\n' > "$ROOT/etc/schema-init/services/mp-nokey.svc"
 
 cat > "$ROOT/etc/schema-init/services/test-crash.svc" <<'EOF'
@@ -656,6 +660,17 @@ echo "MP-outside: $(grep -c 'mp-outside .*main-pid-timeout' "$RAIL") adopted=$(g
 echo "MP-restart: $(grep -c 'mp-restart .*main-pid pid' "$RAIL")"
 echo "MP-norestart: $(grep -c 'mp-norestart .*main-pid pid' "$RAIL") $(mpst mp-norestart | grep -o 'state=[A-Z_]*')"
 echo "MP-nokey: $( [ "$(mppid mp-nokey)" = "$(cat /run/mp-nokey.pid)" ] && echo adopted || echo not-adopted)"
+echo "MP-cleanexit: timeouts=$(grep -c 'mp-cleanexit .*main-pid-timeout' "$RAIL") $(mpst mp-cleanexit | grep -o 'state=[A-Z_]*')"
+WT0=$(grep -c 'mp-waitstop .*main-pid-timeout' "$RAIL")
+/bin/schema-ctl reset mp-waitstop >/dev/null 2>&1
+sleep 2
+/bin/schema-ctl stop mp-waitstop >/dev/null 2>&1
+sleep 12
+echo "MP-waitstop: new-timeouts=$(( $(grep -c 'mp-waitstop .*main-pid-timeout' "$RAIL") - WT0 )) $(mpst mp-waitstop | grep -o 'state=[A-Z_]*')"
+MPR=$(mppid mp-after)
+/bin/schema-ctl restart mp-after >/dev/null 2>&1
+i=0; while [ $i -lt 20 ] && kill -0 "$MPR" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
+echo "MP-restart-old: $(kill -0 "$MPR" 2>/dev/null && echo alive || echo gone)"
 MPB=$(cat /run/mp-before.pid)
 /bin/schema-ctl stop mp-before >/dev/null 2>&1
 i=0; while [ $i -lt 20 ] && kill -0 "$MPB" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
@@ -799,7 +814,8 @@ grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL"
 # restart_count: first spawn, timer fires and ctl restart are not restarts.
 for c in "MP-before: adopted" "MP-after: adopted" "MP-fail: [1-9][0-9]* adopted=0 child=gone" "MP-never: [1-9]" \
          "MP-outside: [1-9][0-9]* adopted=0" "MP-restart: [2-9]" "MP-norestart: 1 state=EXCISED" \
-         "MP-nokey: not-adopted" "MP-stop: gone" "MP-reexec: kept"; do
+         "MP-nokey: not-adopted" "MP-stop: gone" "MP-reexec: kept" \
+         "MP-cleanexit: timeouts=0 state=EXCISED" "MP-waitstop: new-timeouts=0 state=EXCISED" "MP-restart-old: gone"; do
     grep -Eq "$c" "$SERIAL" || { echo "  MISS: main_pid_notify: $c ($(grep -o "${c%%:*}:.*" "$SERIAL" | head -1))"; pass=0; }
 done
 grep -Eq "STOPCMD-ORDER: stop term post" "$SERIAL" || { echo "  MISS: exec_stop / SIGTERM / exec_stop_post out of order"; pass=0; }
