@@ -1267,6 +1267,8 @@ static void tick_service(service_t *svc,
                     /* not before the launcher has exited and the daemon is adopted */
                 } else if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
                     ready = svc->ready_bus_name[0] ? READY_BUS : READY_NOTIFY;
+                } else if (service_verifies_limits(svc)) {
+                    /* its limits are checked on READY=1: no other road to ready */
                 } else if (svc->ready_path[0] && ready_path_fresh(svc)) {
                     ready = READY_PATH;
                     svc->ready_path_verified = 1;
@@ -2214,7 +2216,7 @@ static void notify_poll(int max_batch) {
                 if (service_verifies_limits(svc)) {
                     /* a limit asked for but not in force fails the service,
                      * never runs it unlimited */
-                    char why[160] = "no cgroup", ev[200];
+                    char why[160] = "service has no cgroup", ev[200];
                     if (!svc->cgroup_path[0] || !verify_limits_match(svc->cgroup_path, svc, why, sizeof why)) {
                         snprintf(ev, sizeof ev, "limits-mismatch %s", why);
                         service_log(svc, ev);

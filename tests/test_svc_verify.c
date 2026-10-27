@@ -55,10 +55,26 @@ int main(void) {
     put(pl, "cgroup.events", "populated 0\nfrozen 0\n");
     assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
 
+    /* no populated cgroup at all: the reason says so, not "no cgroup" */
+    put(pl, "cgroup.events", "populated 0\nfrozen 0\n");
+    put(rt, "cgroup.events", "populated 0\nfrozen 0\n");
+    why[0] = '\0';
+    assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
+    assert(strstr(why, "no populated cgroup"));
+    put(pl, "cgroup.events", "populated 1\nfrozen 0\n");
+    put(rt, "cgroup.events", "populated 1\nfrozen 0\n");
+
+    /* verify_* needs notify=1: refused, like main_pid_notify */
+    char q[300];
+    snprintf(q, sizeof q, "%s/n.svc", root);
+    put(root, "n.svc", "name=n\nexec=/bin/true\nverify_memory_max=67108864\n");
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(q, &svc) != 0);
+
     /* parse: the keys load, and a service without them has nothing to verify */
     char p[300];
     snprintf(p, sizeof p, "%s/v.svc", root);
-    put(root, "v.svc", "name=v\nexec=/bin/true\nverify_memory_max=67108864\nverify_cpu_max=150000 100000\nverify_pids_max=100\n");
+    put(root, "v.svc", "name=v\nexec=/bin/true\nnotify=1\nverify_memory_max=67108864\nverify_cpu_max=150000 100000\nverify_pids_max=100\n");
     memset(&svc, 0, sizeof svc);
     assert(service_load_one(p, &svc) == 0);
     assert(!strcmp(svc.verify_memory_max, "67108864") && !strcmp(svc.verify_cpu_max, "150000 100000") &&

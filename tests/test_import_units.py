@@ -293,7 +293,7 @@ si.set_user_mode(None)
 si.set_user_mode(si.user_context("/home/u", 1000, "u", {"XDG_RUNTIME_DIR": "/run/user/1000"}))
 def pod(args, tail=""):
     return si.unit_to_svc("p", si.parse_unit(
-        "[X-Container]\nImage=img\n[Service]\nExecStart=/usr/bin/podman run --name x %s -d img%s\n"
+        "[X-Container]\nImage=img\n[Service]\nType=notify\nExecStart=/usr/bin/podman run --name x %s -d img%s\n"
         "[Install]\nWantedBy=x\n" % (args, tail)))
 check("verify_keys_forms: --memory=64m", "verify_memory_max=67108864\n" in pod("--memory=64m"))
 check("verify_keys_forms: -m 1g", "verify_memory_max=1073741824\n" in pod("-m 1g"))
@@ -311,6 +311,13 @@ check("verify_keys_forms: args after the image are the container's",
 check("verify_keys_forms: not a Quadlet unit -> no keys",
       "verify_" not in hard("ExecStart=/usr/bin/podman run --memory 64m -d img\n"))
 check("verify_keys_forms: non-podman exec -> no keys", "verify_" not in hard("ExecStart=/usr/bin/foo --memory 64m\n"))
+check("verify: --cpus truncated like podman", "verify_cpu_max=28999 100000\n" in pod("--cpus=0.29"))
+check("verify: zero means no limit", "verify_" not in pod("--memory=0 --cpus=0 --pids-limit=0"))
+check("verify: attached -m512m", "verify_memory_max=536870912\n" in pod("-m512m"))
+nf = si.unit_to_svc("p", si.parse_unit("[X-Container]\nImage=other\n[Service]\nType=notify\nExecStart=/usr/bin/podman run --memory 64m -d img\n"))
+check("verify: image not in argv -> warning, not silence", "verify_" not in nf and "not verified" in nf)
+nn = si.unit_to_svc("p", si.parse_unit("[X-Container]\nImage=img\n[Service]\nType=simple\nExecStart=/usr/bin/podman run --memory 64m img\n"))
+check("verify: no keys without Type=notify", "verify_" not in nn)
 si.set_user_mode(None)
 check("verify_keys_forms: system mode -> no keys", "verify_" not in pod("--memory=64m"))
 

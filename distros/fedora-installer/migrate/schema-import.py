@@ -326,44 +326,6 @@ def _landlock_tcp_ok():
 # systemd allows a bind that matches Allow, else denies one that matches Deny;
 # Landlock is a per-port TCP allow-list blind to address family, so only "deny
 # all TCP, allow these ports" translates. Returns (lines, warnings).
-_POD_LIMITS = {"--memory": "memory", "-m": "memory", "--cpus": "cpus", "--pids-limit": "pids"}
-
-
-# podman run's own limit flags -> verify_*_max= in the cgroup files' form.
-# Only the options before IMAGE are podman's; after it they are the container's.
-def podman_limit_lines(argv, image):
-    if not argv or os.path.basename(argv[0]) != "podman" or "run" not in argv or not image:
-        return [], []
-    start = argv.index("run") + 1
-    end = argv.index(image, start) if image in argv[start:] else None
-    if end is None:
-        return [], []
-    found, warns, i = {}, [], start
-    while i < end:
-        tok, val = argv[i], None
-        name = tok.split("=", 1)[0]
-        if name in _POD_LIMITS:
-            if "=" in tok:
-                val = tok.split("=", 1)[1]
-            elif i + 1 < end:
-                val = argv[i + 1]
-                i += 1
-            found[_POD_LIMITS[name]] = (tok if "=" in tok else "%s %s" % (tok, val), val)
-        i += 1
-    lines = []
-    for kind, (shown, v) in sorted(found.items()):
-        m = re.fullmatch(r"(\d+)([bkmg]?)", (v or "").lower()) if kind == "memory" else None
-        if kind == "memory" and m:
-            lines.append("verify_memory_max=%d" % (int(m.group(1)) << (10 * "bkmg".index(m.group(2) or "b"))))
-        elif kind == "cpus" and re.fullmatch(r"\d+(\.\d+)?", v or ""):
-            lines.append("verify_cpu_max=%d 100000" % round(float(v) * 100000))
-        elif kind == "pids" and re.fullmatch(r"\d+", v or ""):
-            lines.append("verify_pids_max=%s" % v)
-        else:
-            warns.append("podman %s not verified: value not understood" % shown)
-    return lines, warns
-
-
 def socket_bind_lines(svc):
     allow, deny = _bind_rules(svc, "SocketBindAllow"), _bind_rules(svc, "SocketBindDeny")
     for d, r in (("SocketBindAllow", allow), ("SocketBindDeny", deny)):
@@ -415,6 +377,53 @@ def socket_bind_lines(svc):
         return [], warns
     # systemd rules only match positive ports, so binding port 0 stays allowed
     return ["landlock_bind_tcp=%s" % ",".join(str(x) for x in [0] + ports)], warns
+
+
+_POD_LIMITS = {"--memory": "memory", "-m": "memory", "--cpus": "cpus", "--pids-limit": "pids"}
+
+
+# podman run's own limit flags -> verify_*_max= in the cgroup files' form.
+# Only the options before IMAGE are podman's; after it they are the container's.
+def podman_limit_lines(argv, image):
+    if not argv or os.path.basename(argv[0]) != "podman" or "run" not in argv or not image:
+        return [], []
+    start = argv.index("run") + 1
+    end = argv.index(image, start) if image in argv[start:] else None
+    if end is None:
+        if any(t.split("=", 1)[0] in _POD_LIMITS or t.startswith("-m") for t in argv[start:]):
+            return [], ["podman limits not verified: image %s not found in ExecStart" % image]
+        return [], []
+    found, warns, i = {}, [], start
+    while i < end:
+        tok, val = argv[i], None
+        name = tok.split("=", 1)[0]
+        if tok.startswith("-m") and len(tok) > 2 and tok[2] != "=":
+            found["memory"] = (tok, tok[2:])
+        elif name in _POD_LIMITS:
+            if "=" in tok:
+                val = tok.split("=", 1)[1]
+            elif i + 1 < end:
+                val = argv[i + 1]
+                i += 1
+            found[_POD_LIMITS[name]] = (tok if "=" in tok else "%s %s" % (tok, val), val)
+        i += 1
+    lines = []
+    for kind, (shown, v) in sorted(found.items()):
+        m = re.fullmatch(r"(\d+)([bkmg]?)", (v or "").lower()) if kind == "memory" else None
+        # 0 is podman's "no limit": the file reads max, nothing to verify
+        if kind == "memory" and m:
+            if int(m.group(1)):
+                lines.append("verify_memory_max=%d" % (int(m.group(1)) << (10 * "bkmg".index(m.group(2) or "b"))))
+        elif kind == "cpus" and re.fullmatch(r"\d+(\.\d+)?", v or ""):
+            # truncated, as podman's int64(cores * 100000) does
+            if int(float(v) * 100000):
+                lines.append("verify_cpu_max=%d 100000" % int(float(v) * 100000))
+        elif kind == "pids" and re.fullmatch(r"\d+", v or ""):
+            if int(v):
+                lines.append("verify_pids_max=%s" % v)
+        else:
+            warns.append("podman %s not verified: value not understood" % shown)
+    return lines, warns
 
 
 _SPAN_UNITS = {"us": 1e-6, "usec": 1e-6, "ms": 1e-3, "msec": 1e-3, "": 1, "s": 1,
@@ -1032,9 +1041,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
     # here only the main process is confined
     warns.extend(stop_warns)
-    if _USER:
-        # Quadlet's [X-Container] Image= says where podman's options end
+    if _USER and stype in ("notify", "notify-reload"):
+        # Quadlet's [X-Container] Image= says where podman's options end;
+        # the check runs on READY=1, so only notify units can have it
         image = _get_last(sections.get("X-Container", []), "Image")
+        if image:
+            image = _specifiers([image], unit or name, strict=False)[0]
         vl, vl_warns = podman_limit_lines(argv, image)
         lines.extend(vl)
         warns.extend(vl_warns)

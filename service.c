@@ -1663,35 +1663,29 @@ static int verify_one(const char *dir, const char *file, const char *want, char 
     return ok;
 }
 
-int verify_limits_match(const char *cg, const service_t *svc, char *why, size_t n) {
+static int verify_walk(const char *cg, const service_t *svc, char *why, size_t n) {
     DIR *d = opendir(cg);
     struct dirent *e;
-    char sub[512], ev[64];
+    char sub[512], ev[32];
     int found = 0;
     if (!d) return 0;
     while (!found && (e = readdir(d))) {
         if (e->d_type != DT_DIR || e->d_name[0] == '.') continue;
         if (snprintf(sub, sizeof sub, "%s/%s", cg, e->d_name) >= (int)sizeof sub) continue;
-        char evs[256] = "";
-        FILE *f;
-        snprintf(ev, sizeof ev, "cgroup.events");
-        char p[600];
-        snprintf(p, sizeof p, "%s/%s", sub, ev);
-        if ((f = fopen(p, "r"))) {
-            size_t r = fread(evs, 1, sizeof evs - 1, f);
-            evs[r] = '\0';
-            fclose(f);
-        }
-        if (strstr(evs, "populated 1") &&
-            verify_one(sub, "memory.max", svc->verify_memory_max, why, n) &&
-            verify_one(sub, "cpu.max", svc->verify_cpu_max, why, n) &&
-            verify_one(sub, "pids.max", svc->verify_pids_max, why, n))
-            found = 1;
-        else
-            found = verify_limits_match(sub, svc, why, n);
+        /* first line of cgroup.events; an empty subtree can't hold the payload */
+        if (!cg_read(sub, "cgroup.events", ev, sizeof ev) || strcmp(ev, "populated 1") != 0) continue;
+        found = (verify_one(sub, "memory.max", svc->verify_memory_max, why, n) &&
+                 verify_one(sub, "cpu.max", svc->verify_cpu_max, why, n) &&
+                 verify_one(sub, "pids.max", svc->verify_pids_max, why, n)) ||
+                verify_walk(sub, svc, why, n);
     }
     closedir(d);
     return found;
+}
+
+int verify_limits_match(const char *cg, const service_t *svc, char *why, size_t n) {
+    snprintf(why, n, "no populated cgroup below the service");
+    return verify_walk(cg, svc, why, n);
 }
 
 void cgroup_rmdir_tree(const char *cg) {
@@ -2528,6 +2522,10 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
     if (hardening_finalize(svc) != 0) return -1;
+    if (service_verifies_limits(svc) && !svc->notify) {
+        fprintf(stderr, "[schema-init] %s: verify_*_max needs notify=1 (checked on READY=1) — not loaded\n", svc->name);
+        return -1;
+    }
     if ((svc->flags & SVC_MAIN_PID_NOTIFY) && !svc->notify) {
         fprintf(stderr, "[schema-init] %s: main_pid_notify=1 needs notify=1 — not loaded\n", svc->name);
         return -1;
