@@ -206,13 +206,29 @@ CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
 mkdir "$CG/runtime" "$CG/payload"
 echo $$ > "$CG/runtime/cgroup.procs"
 echo +memory > "$CG/cgroup.subtree_control"
-echo "$CG" > /run/cgnest.path
+echo "$CG" > "${1:-/run/cgnest.path}"
 while :; do sleep 1; done
 EOF
 chmod +x "$ROOT/usr/bin/cgnest.sh"
 cat > "$ROOT/etc/schema-init/services/test-cgnest.svc" <<'EOF'
 name=test-cgnest
 exec=/usr/bin/cgnest.sh
+EOF
+# a forking daemon that nests: its launcher's exit 0 is a handover, the
+# tree must survive it (#435)
+cat > "$ROOT/usr/bin/cgfork.sh" <<'EOF'
+#!/bin/sh
+/usr/bin/cgnest.sh /run/cgfork.path &
+echo $! > /run/cgfork.pid
+sleep 1
+exit 0
+EOF
+chmod +x "$ROOT/usr/bin/cgfork.sh"
+cat > "$ROOT/etc/schema-init/services/test-cgfork.svc" <<'EOF'
+name=test-cgfork
+exec=/usr/bin/cgfork.sh
+pid_file=/run/cgfork.pid
+no_restart=1
 EOF
 
 cat > "$ROOT/etc/schema-init/services/test-crash.svc" <<'EOF'
@@ -693,6 +709,7 @@ MPB=$(cat /run/mp-before.pid)
 /bin/schema-ctl stop mp-before >/dev/null 2>&1
 i=0; while [ $i -lt 20 ] && kill -0 "$MPB" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
 echo "MP-stop: $(kill -0 "$MPB" 2>/dev/null && echo alive || echo gone)"
+echo "CGFORK: $(/bin/schema-ctl status test-cgfork 2>&1 | head -1 | grep -o 'state=[A-Z_]*') daemon=$(kill -0 "$(cat /run/cgfork.pid)" 2>/dev/null && echo alive || echo dead)"
 CGN=$(cat /run/cgnest.path 2>/dev/null)
 echo "CGNEST-UP: $( [ -n "$CGN" ] && [ -d "$CGN/runtime" ] && echo nested || echo "no ($CGN)")"
 /bin/schema-ctl restart test-cgnest >/dev/null 2>&1
@@ -844,6 +861,7 @@ for c in "MP-before: adopted" "MP-after: adopted" "MP-fail: [1-9][0-9]* adopted=
          "MP-cleanexit: timeouts=0 state=EXCISED" "MP-waitstop: new-timeouts=0 state=EXCISED" "MP-restart-old: gone"; do
     grep -Eq "$c" "$SERIAL" || { echo "  MISS: main_pid_notify: $c ($(grep -o "${c%%:*}:.*" "$SERIAL" | head -1))"; pass=0; }
 done
+grep -Eq "CGFORK: state=FUNDAMENTAL daemon=alive" "$SERIAL" || { echo "  MISS: nested pid_file daemon killed at handover ($(grep -o 'CGFORK:.*' "$SERIAL"))"; pass=0; }
 grep -Eq "CGNEST-UP: nested" "$SERIAL" || { echo "  MISS: test-cgnest never nested its cgroup"; pass=0; }
 grep -Eq "CGNEST-RESTART: state=[A-Z_]* runtime=present procs=[1-9]" "$SERIAL" || { echo "  MISS: nested service lost its cgroup on restart ($(grep -o 'CGNEST-RESTART:.*' "$SERIAL"))"; pass=0; }
 grep -Eq "CGNEST-STOP: removed" "$SERIAL" || { echo "  MISS: stop left the nested cgroup tree ($(grep -o 'CGNEST-STOP:.*' "$SERIAL"))"; pass=0; }

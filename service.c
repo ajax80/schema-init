@@ -253,7 +253,11 @@ static void cgroup_assign(service_t *svc, pid_t pid) {
     fd = open(path, O_WRONLY);
     if (fd < 0) { svc->cgroup_path[0] = '\0'; return; }
     n = snprintf(buf, sizeof(buf), "%d\n", (int)pid);
-    write(fd, buf, (size_t)n);
+    if (write(fd, buf, (size_t)n) != n) {
+        /* a previous run's nested cgroups still populated: <svc> is not a leaf */
+        fprintf(stderr, "[schema-init] %s: cannot join %s: %s\n", svc->name, svc->cgroup_path, strerror(errno));
+        svc->cgroup_path[0] = '\0';
+    }
     close(fd);
 }
 
@@ -1600,6 +1604,29 @@ static void cpulist_emit(const unsigned char *bits, int nbits,
 
 /* SIGKILL everything in a cgroup. Returns 0 when neither file could be
  * opened, so the caller knows nothing was signalled. */
+int cgroup_kill_path(const char *cg) {
+    char path[320];
+    FILE *f;
+    pid_t p;
+    int fd;
+
+    /* Linux 5.14+: write 1 to cgroup.kill nukes the whole subtree */
+    snprintf(path, sizeof(path), "%s/cgroup.kill", cg);
+    fd = open(path, O_WRONLY);
+    if (fd >= 0) {
+        write(fd, "1", 1);
+        close(fd);
+        return 1;
+    }
+    /* fallback: read cgroup.procs and kill each PID individually */
+    snprintf(path, sizeof(path), "%s/cgroup.procs", cg);
+    if (!(f = fopen(path, "r"))) return 0;
+    while (fscanf(f, "%d", &p) == 1)
+        if (p > 1) kill(p, SIGKILL);
+    fclose(f);
+    return 1;
+}
+
 int cgroup_has_children(const char *cg) {
     DIR *d = opendir(cg);
     struct dirent *e;
@@ -1624,29 +1651,6 @@ void cgroup_rmdir_tree(const char *cg) {
         closedir(d);
     }
     rmdir(cg);
-}
-
-int cgroup_kill_path(const char *cg) {
-    char path[320];
-    FILE *f;
-    pid_t p;
-    int fd;
-
-    /* Linux 5.14+: write 1 to cgroup.kill nukes the whole subtree */
-    snprintf(path, sizeof(path), "%s/cgroup.kill", cg);
-    fd = open(path, O_WRONLY);
-    if (fd >= 0) {
-        write(fd, "1", 1);
-        close(fd);
-        return 1;
-    }
-    /* fallback: read cgroup.procs and kill each PID individually */
-    snprintf(path, sizeof(path), "%s/cgroup.procs", cg);
-    if (!(f = fopen(path, "r"))) return 0;
-    while (fscanf(f, "%d", &p) == 1)
-        if (p > 1) kill(p, SIGKILL);
-    fclose(f);
-    return 1;
 }
 
 void service_cgroup_release_partition(service_t *svc) {

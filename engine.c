@@ -108,6 +108,7 @@ struct timespec init_start;
 static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
 static void stop_main(service_t *svc);
+static void svc_cgroup_kill_tree(service_t *svc);
 static int handle_reload(int evict_mode, char *err, size_t errsz);
 pid_t   reexec_check_pid = 0;
 int64_t reexec_check_due = 0;
@@ -233,14 +234,29 @@ static int cgroup_populated(const char *cg) {
     return pop;
 }
 
-static void eviction_add(pid_t pid, const char *cgroup) {
+static void eviction_add_as(pid_t pid, const char *cgroup, int reaped, int killed, int grace) {
     if (eviction_count >= MAX_EVICTIONS) return;
     evictions[eviction_count].pid      = pid;
-    evictions[eviction_count].deadline = mono_sec() + EVICT_GRACE_SECS;
-    evictions[eviction_count].reaped   = 0;
-    evictions[eviction_count].killed   = 0;
+    evictions[eviction_count].deadline = mono_sec() + grace;
+    evictions[eviction_count].reaped   = reaped;
+    evictions[eviction_count].killed   = killed;
     snprintf(evictions[eviction_count].cgroup, sizeof evictions[eviction_count].cgroup, "%s", cgroup);
     eviction_count++;
+}
+
+
+static void eviction_add(pid_t pid, const char *cgroup) {
+    eviction_add_as(pid, cgroup, 0, 0, EVICT_GRACE_SECS);
+}
+
+/* A service spawning into CG owns it again: a leftover-tree entry for it
+ * would judge the new instance */
+static void eviction_forget(const char *cg) {
+    for (int i = 0; i < eviction_count; )
+        if (evictions[i].pid == 0 && !strcmp(evictions[i].cgroup, cg))
+            evictions[i] = evictions[--eviction_count];
+        else
+            i++;
 }
 
 /* A killed tree can't be rmdir'ed until its processes are gone, and
@@ -250,11 +266,10 @@ static void svc_cgroup_kill_tree(service_t *svc) {
     char cg[sizeof svc->cgroup_path];
     snprintf(cg, sizeof cg, "%s", svc->cgroup_path);
     service_cgroup_kill(svc);
-    if (cg[0] && access(cg, F_OK) == 0 && eviction_count < MAX_EVICTIONS) {
-        eviction_add(0, cg);
-        evictions[eviction_count - 1].reaped = 1;
-        evictions[eviction_count - 1].killed = 1;
-        evictions[eviction_count - 1].deadline = mono_sec() + 1;
+    if (cg[0] && access(cg, F_OK) == 0) {
+        eviction_forget(cg);
+        /* pid 0: nothing to signal, only the tree to rmdir once empty */
+        eviction_add_as(0, cg, 1, 1, 1);
     }
 }
 
@@ -339,7 +354,7 @@ static void eviction_tick(void) {
          * eviction entirely. an unreaped pid is still our child, so it cannot
          * have been reused (bar an entry adopted from an older image, which
          * may have reaped it before the re-exec). */
-        if (!killed && !evictions[i].reaped) {
+        if (!killed && !evictions[i].reaped && evictions[i].pid > 0) {
             /* a stop runner leads its own group: take what it started too */
             kill(-evictions[i].pid, SIGKILL);
             kill(evictions[i].pid, SIGKILL);
@@ -617,10 +632,9 @@ static void note_exit(service_t *svc, int status) {
  * service's cgroup, so a stale or planted file cannot hand PID 1 some other
  * process to supervise and kill. 0 if not (yet) valid. */
 static pid_t pid_file_read(const service_t *svc) {
-    char path[320], buf[32];
+    char buf[32];
     struct stat st;
-    FILE *f;
-    long p = 0, q;
+    long p = 0;
     int fd, found = 0;
     ssize_t n;
 
@@ -634,10 +648,10 @@ static pid_t pid_file_read(const service_t *svc) {
     if (sscanf(buf, "%ld", &p) != 1) return 0;
     if (p <= 1 || p > INT_MAX || kill((pid_t)p, 0) != 0) return 0;
     if (!svc->cgroup_path[0]) return 0;
-    snprintf(path, sizeof path, "%s/cgroup.procs", svc->cgroup_path);
-    if (!(f = fopen(path, "r"))) return 0;
-    while (!found && fscanf(f, "%ld", &q) == 1) found = q == p;
-    fclose(f);
+    /* in the cgroup or below it: a daemon may move itself into a child */
+    char text[NOTIFY_CGROUP_TEXT_MAX];
+    found = notify_read_cgroup((pid_t)p, text, sizeof text) &&
+            notify_cgroup_text_matches(text, svc->cgroup_path);
     return found ? (pid_t)p : 0;
 }
 
@@ -775,14 +789,17 @@ static void reap(void) {
                     break;
                 }
                 /* a failed launcher takes what it started with it */
-                service_cgroup_kill(&services[i]);
+                svc_cgroup_kill_tree(&services[i]);
             }
             services[i].main_pid = 0;
             /* a service that made cgroups of its own (podman's runtime/ and
-             * payload) leaves <svc> a non-leaf: the next spawn could not join
-             * it, so its death takes the whole tree, as systemd's KillMode does */
-            if (services[i].cgroup_path[0] && !(services[i].flags & SVC_TIMER) &&
-                cgroup_has_children(services[i].cgroup_path))
+             * payload) leaves <svc> a non-leaf: the next run could not join
+             * it, so any exit takes the whole tree (systemd's KillMode does
+             * too) — except a forking launcher's exit 0, which hands over */
+            int handover = services[i].pid_file[0] && services[i].fork_state == 0 &&
+                           services[i].inst.state == STATE_FULL_TRUST && !services[i].ctl_killed &&
+                           WIFEXITED(status) && WEXITSTATUS(status) == 0;
+            if (!handover && services[i].cgroup_path[0] && cgroup_has_children(services[i].cgroup_path))
                 svc_cgroup_kill_tree(&services[i]);
 
             if (services[i].flags & SVC_TIMER) {
@@ -839,10 +856,10 @@ static void reap(void) {
                  * cpuset.cpus.exclusive union) until reboot. Release here so
                  * stop frees the reservation; cgroup_assign() rebuilds the
                  * cgroup on any later start. */
-                service_cgroup_kill(&services[i]);
+                svc_cgroup_kill_tree(&services[i]);
             } else if (services[i].ctl_killed) {
                 if (services[i].pid_file[0] || (services[i].flags & SVC_MAIN_PID_NOTIFY))
-                    service_cgroup_kill(&services[i]);
+                    svc_cgroup_kill_tree(&services[i]);
                 services[i].inst.state = STATE_NEW_PROCESS;
                 service_log(&services[i], "ctl-restart");
             } else {
@@ -933,7 +950,7 @@ static void monitor_failsafes(void) {
         }
         if (svc->main_wait && now.tv_sec >= svc->main_wait_due.tv_sec) {
             svc->main_wait = 0;
-            service_cgroup_kill(svc);
+            svc_cgroup_kill_tree(svc);
             service_log(svc, "main-pid-timeout");
             restart_budget_refresh(svc);
             if (svc->failsafe_cmd[0]) start_failsafe(svc);
@@ -985,7 +1002,7 @@ static void active_kill_service(service_t *svc) {
         if (res == svc->child_pid) {
             note_exit(svc, status);
             svc->child_pid = 0;
-            service_cgroup_kill(svc);
+            svc_cgroup_kill_tree(svc);
             stop_cmds_begin(svc, 2);
             return;
         }
@@ -1009,7 +1026,7 @@ static void active_kill_service(service_t *svc) {
      * cause is recorded now: the SIGKILL we just sent. */
     note_exit(svc, reaped ? status : SIGKILL);
     svc->child_pid = 0;
-    service_cgroup_kill(svc);
+    svc_cgroup_kill_tree(svc);
     stop_cmds_begin(svc, 2);
 }
 
@@ -1130,7 +1147,7 @@ static void tick_service(service_t *svc,
                 service_log(svc, "fuse-tripped");
                 if (svc->child_pid > 0) {
                     kill(svc->child_pid, SIGKILL);
-                    service_cgroup_kill(svc);
+                    svc_cgroup_kill_tree(svc);
                     svc->child_pid = 0;
                 }
                 break;
@@ -1200,6 +1217,7 @@ static void tick_service(service_t *svc,
             schema_step(&svc->inst, flags);
             if (svc->inst.state == STATE_FULL_TRUST) {
                 service_log(svc, "spawn");
+                eviction_forget(service_cgroup_path_for(svc));
                 if (service_spawn(svc) < 0) {
                     svc->inst.state = STATE_RECOVERY;
                     service_log(svc, "spawn-fail");
@@ -1235,7 +1253,7 @@ static void tick_service(service_t *svc,
                 fork_adopt(svc);
                 if (svc->fork_state < 0 && now_mono.tv_sec >= svc->fork_wait.tv_sec) {
                     svc->fork_state = 0;
-                    service_cgroup_kill(svc);
+                    svc_cgroup_kill_tree(svc);
                     restart_budget_refresh(svc);
                     if (svc->failsafe_cmd[0]) start_failsafe(svc);
                     svc->inst.state = STATE_RECOVERY;
@@ -1298,7 +1316,7 @@ static void tick_service(service_t *svc,
                 if (svc->restart_sec > 0) service_log(svc, "restart-hold");
                 play_card(svc);
             } else if (svc->inst.state == STATE_EXCISED) {
-                service_cgroup_kill(svc);
+                svc_cgroup_kill_tree(svc);
                 svc->dormant_count++;
                 if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
                     service_log(svc, "76-excised");
@@ -1857,7 +1875,7 @@ static void ctl_cmd(int fd, char *line) {
                     name, (int)services[i].child_pid);
             } else {
                 if (services[i].fork_state < 0 || services[i].main_wait) {
-                    service_cgroup_kill(&services[i]);
+                    svc_cgroup_kill_tree(&services[i]);
                     services[i].fork_state = 0;
                     services[i].main_wait = 0;
                 }
@@ -1881,7 +1899,7 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
             } else {
                 if (services[i].fork_state < 0 || services[i].main_wait) {
-                    service_cgroup_kill(&services[i]);
+                    svc_cgroup_kill_tree(&services[i]);
                     services[i].fork_state = 0;
                     services[i].main_wait = 0;
                 }
@@ -2725,7 +2743,7 @@ static void shutdown_ordered(void) {
                 snprintf(msg, sizeof msg, "%s ignored SIGTERM for %llu ms, killing",
                          services[i].name, (unsigned long long)grace);
                 engine_hooks.shut_log(msg);
-                service_cgroup_kill(&services[i]);
+                svc_cgroup_kill_tree(&services[i]);
                 if (services[i].child_pid > 0) kill(services[i].child_pid, SIGKILL);
                 killed[i] = 1;
                 continue;
@@ -2971,7 +2989,7 @@ void engine_kill_services(void) {
     int i;
 
     for (i = 0; i < svc_count; i++) {
-        service_cgroup_kill(&services[i]);
+        svc_cgroup_kill_tree(&services[i]);
     }
 }
 
