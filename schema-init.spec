@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.19
+Version:        0.4.20
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,27 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Mon Oct 26 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.20-1
+- Persistent timers on a box with a separate /var: the catch-up for a run
+  missed while the machine was off now fires. The stamp was read before
+  mount-fstab mounted /var, from the empty directory beneath it, so every
+  boot looked like a first deploy (a box off at 00:10 skipped that day's
+  logrotate). Timers now wait for mount-fstab's first attempt
+- ready_bus_name services wait for their bus name once a readiness
+  reporter is live (up to 90 s), instead of being promoted on the stable
+  timer: tuned-ppd no longer starts before TuneD is on the bus and excises
+- schema-doctor unported-timers: flags systemd timers that are enabled but
+  have no schema-init schedule (logrotate on an RPM-only install,
+  plocate-updatedb, dnf-makecache) and names the fix
+- logrotate covers /var/log/schema-autologin.log (grew to 6.9G unrotated)
+- schema-import is on PATH from the base package; it shipped only in
+  -migrate, so an RPM-only install had it only under /usr/libexec
+- Importer: ExecStart=+ drops the sandbox as systemd does, not just User=
+  (kept, with a warning, when plain ExecStartPre lines need it)
+- schema-migrate and the wizard refuse while a kernel installed by an
+  update is waiting for a reboot, and the wizard says to restart instead
+  of showing a generic error
+
 * Sat Oct 24 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.19-1
 - Session bus launcher: one bus per session attempt. A slow first broker
   start no longer races the dbus-daemon fallback, a dead broker no longer
