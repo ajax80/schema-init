@@ -1560,6 +1560,15 @@ int service_spawn(service_t *svc) {
     svc->notify_ready = 0;
     svc->notify_status[0] = '\0';
     if (service_cgroup_root[0]) cgroup_assign(svc, pid);
+    if (!svc->cgroup_path[0] && (service_verifies_limits(svc) || (svc->flags & SVC_MAIN_PID_NOTIFY))) {
+        /* nothing to check limits or MAINPID= against: never let it start */
+        fprintf(stderr, "[schema-init] %s: no cgroup — limits and MAINPID= cannot be checked, not started\n", svc->name);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        close(sync[1]);
+        svc->child_pid = 0;
+        return -1;
+    }
     /* cgroup v2 partition order: child cpuset.cpus → parent cpuset.cpus.exclusive
      * → child cpuset.cpus.exclusive → child cpuset.cpus.partition; any other
      * order breaks partition formation. */
@@ -1636,6 +1645,56 @@ int cgroup_has_children(const char *cg) {
         any = e->d_type == DT_DIR && e->d_name[0] != '.';
     closedir(d);
     return any;
+}
+
+static int cg_read(const char *dir, const char *file, char *buf, size_t n) {
+    char p[600];
+    snprintf(p, sizeof p, "%s/%s", dir, file);
+    FILE *f = fopen(p, "r");
+    if (!f) return 0;
+    if (!fgets(buf, (int)n, f)) buf[0] = '\0';
+    fclose(f);
+    buf[strcspn(buf, "\n")] = '\0';
+    return 1;
+}
+
+/* memory.max is rounded down to a page by the kernel */
+static int verify_one(const char *dir, const char *file, const char *want, char *why, size_t n) {
+    char got[64];
+    if (!want[0]) return 1;
+    if (!cg_read(dir, file, got, sizeof got)) snprintf(got, sizeof got, "missing");
+    int ok = !strcmp(got, want);
+    if (!ok && !strcmp(file, "memory.max") && strcmp(got, "max") != 0) {
+        unsigned long long w = strtoull(want, NULL, 10), g = strtoull(got, NULL, 10);
+        ok = g <= w && w - g < (unsigned long long)sysconf(_SC_PAGESIZE);
+    }
+    if (!ok) snprintf(why, n, "%s want=%s got=%s", file, want, got);
+    return ok;
+}
+
+static int verify_walk(const char *cg, const service_t *svc, char *why, size_t n) {
+    DIR *d = opendir(cg);
+    struct dirent *e;
+    char sub[512], ev[32];
+    int found = 0;
+    if (!d) return 0;
+    while (!found && (e = readdir(d))) {
+        if (e->d_type != DT_DIR || e->d_name[0] == '.') continue;
+        if (snprintf(sub, sizeof sub, "%s/%s", cg, e->d_name) >= (int)sizeof sub) continue;
+        /* first line of cgroup.events; an empty subtree can't hold the payload */
+        if (!cg_read(sub, "cgroup.events", ev, sizeof ev) || strcmp(ev, "populated 1") != 0) continue;
+        found = (verify_one(sub, "memory.max", svc->verify_memory_max, why, n) &&
+                 verify_one(sub, "cpu.max", svc->verify_cpu_max, why, n) &&
+                 verify_one(sub, "pids.max", svc->verify_pids_max, why, n)) ||
+                verify_walk(sub, svc, why, n);
+    }
+    closedir(d);
+    return found;
+}
+
+int verify_limits_match(const char *cg, const service_t *svc, char *why, size_t n) {
+    snprintf(why, n, "no populated cgroup below the service");
+    return verify_walk(cg, svc, why, n);
 }
 
 void cgroup_rmdir_tree(const char *cg) {
@@ -2334,6 +2393,18 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     }
     else if (strcmp(line, "ready_path") == 0)
         strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
+    else if (strncmp(line, "verify_", 7) == 0 &&
+             (!strcmp(line + 7, "memory_max") || !strcmp(line + 7, "cpu_max") || !strcmp(line + 7, "pids_max"))) {
+        char *dst = line[7] == 'm' ? svc->verify_memory_max : line[7] == 'c' ? svc->verify_cpu_max : svc->verify_pids_max;
+        size_t dn = line[7] == 'm' ? sizeof svc->verify_memory_max : line[7] == 'c' ? sizeof svc->verify_cpu_max
+                                                                                : sizeof svc->verify_pids_max;
+        if (strlen(val) >= dn || strspn(val, "0123456789 ") != strlen(val)) {
+            fprintf(stderr, "[schema-init] %s: %s=%s must be the cgroup file's numbers\n",
+                    svc->name[0] ? svc->name : path, line, val);
+            return -1;
+        }
+        snprintf(dst, dn, "%s", val);
+    }
     else if (strcmp(line, "pid_file") == 0)
         snprintf(svc->pid_file, sizeof svc->pid_file, "%s", val);
     else if (strcmp(line, "priority") == 0) {
@@ -2460,6 +2531,10 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
     if (hardening_finalize(svc) != 0) return -1;
+    if (service_verifies_limits(svc) && !svc->notify) {
+        fprintf(stderr, "[schema-init] %s: verify_*_max needs notify=1 (checked on READY=1) — not loaded\n", svc->name);
+        return -1;
+    }
     if ((svc->flags & SVC_MAIN_PID_NOTIFY) && !svc->notify) {
         fprintf(stderr, "[schema-init] %s: main_pid_notify=1 needs notify=1 — not loaded\n", svc->name);
         return -1;

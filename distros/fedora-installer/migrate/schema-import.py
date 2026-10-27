@@ -379,6 +379,58 @@ def socket_bind_lines(svc):
     return ["landlock_bind_tcp=%s" % ",".join(str(x) for x in [0] + ports)], warns
 
 
+_POD_LIMITS = {"--memory": "memory", "-m": "memory", "--cpus": "cpus", "--pids-limit": "pids"}
+
+
+# podman run's own limit flags -> verify_*_max= in the cgroup files' form.
+# Only the options before IMAGE are podman's; after it they are the container's.
+# Quadlet ends podman's argv with IMAGE then Exec='s words, so the image sits
+# at a fixed distance from the end whatever Image= said (a .image unit is
+# resolved to the real name, a HostName= may repeat it earlier).
+def podman_limit_lines(argv, image, exec_words=0):
+    if not argv or os.path.basename(argv[0]) != "podman" or "run" not in argv or not image:
+        return [], []
+    start = argv.index("run") + 1
+    end = len(argv) - exec_words - 1
+    if end < start or argv[end].startswith("-"):
+        if any(t.split("=", 1)[0] in _POD_LIMITS or t.startswith("-m") for t in argv[start:]):
+            return [], ["podman limits not verified: image position unknown in ExecStart"]
+        return [], []
+    found, warns, i = {}, [], start
+    while i < end:
+        tok, val = argv[i], None
+        name = tok.split("=", 1)[0]
+        if tok.startswith("-m") and len(tok) > 2 and tok[2] != "=":
+            found["memory"] = (tok, tok[2:])
+        elif name in _POD_LIMITS:
+            if "=" in tok:
+                val = tok.split("=", 1)[1]
+            elif i + 1 < end:
+                val = argv[i + 1]
+                i += 1
+            found[_POD_LIMITS[name]] = (tok if "=" in tok else "%s %s" % (tok, val), val)
+        i += 1
+    lines = []
+    for kind, (shown, v) in sorted(found.items()):
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)\s?([kmgtp]?)i?b?", (v or "").lower()) if kind == "memory" else None
+        # 0 is podman's "no limit": the file reads max, nothing to verify
+        if kind == "memory" and m:
+            # go-units RAMInBytes: binary multiples, truncated
+            b = int(float(m.group(1)) * 1024 ** " kmgtp".index(m.group(2) or " "))
+            if b:
+                lines.append("verify_memory_max=%d" % b)
+        elif kind == "cpus" and re.fullmatch(r"\d*\.?\d+", v or ""):
+            # truncated, as podman's int64(cores * 100000) does
+            if int(float(v) * 100000):
+                lines.append("verify_cpu_max=%d 100000" % int(float(v) * 100000))
+        elif kind == "pids" and re.fullmatch(r"\d+", v or ""):
+            if int(v):
+                lines.append("verify_pids_max=%s" % v)
+        else:
+            warns.append("podman %s not verified: value not understood" % shown)
+    return lines, warns
+
+
 _SPAN_UNITS = {"us": 1e-6, "usec": 1e-6, "ms": 1e-3, "msec": 1e-3, "": 1, "s": 1,
                "sec": 1, "second": 1, "seconds": 1, "m": 60, "min": 60,
                "minute": 60, "minutes": 60, "h": 3600, "hr": 3600,
@@ -994,6 +1046,19 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
     # here only the main process is confined
     warns.extend(stop_warns)
+    if _USER and stype in ("notify", "notify-reload"):
+        # Quadlet's [X-Container] Image= says where podman's options end;
+        # the check runs on READY=1, so only notify units can have it
+        xc = sections.get("X-Container", [])
+        image = _get_last(xc, "Image")
+        try:
+            exec_words = len(shlex.split(_get_last(xc, "Exec")))
+        except ValueError:
+            exec_words = -1
+        vl, vl_warns = podman_limit_lines(argv, image, exec_words) if exec_words >= 0 else \
+            ([], ["podman limits not verified: X-Container Exec= not understood"])
+        lines.extend(vl)
+        warns.extend(vl_warns)
     sb, sb_warns = socket_bind_lines(svc)
     lines.extend(sb)
     warns.extend(sb_warns)
@@ -1041,6 +1106,11 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("%s=%s capped at 300 s" % (skey, stop))
         else:
             lines.append("stop_timeout_sec=%d" % sec)
+    elif sections.get("X-Container") is not None:
+        # exec_stop is podman rm -f, which waits StopTimeout= (10 s) for the
+        # container before SIGKILL: 3 s would cut it short and leave debris
+        st = _timespan_sec(_get_last(sections["X-Container"], "StopTimeout") or "10") or 10
+        lines.append("stop_timeout_sec=%d" % min(st + 5, 300))
 
     # [Install] presence is why the unit was queued; note if it's missing.
     notes = []
@@ -1927,8 +1997,11 @@ def run_user_generators(log=print):
                     continue
                 if rc != 0:
                     err.seek(0)
-                    last = err.read().decode(errors="replace").strip().splitlines()
-                    log("WARN    generator %s: exit %d%s" % (n, rc, (": " + last[-1]) if last else ""))
+                    text = err.read().decode(errors="replace").strip().splitlines()
+                    # Quadlet's last line is a generic summary; the one naming
+                    # the broken file says "converting"
+                    keep = [l for l in text if "converting" in l or "error" in l.lower()][:10] or text[-1:]
+                    log("WARN    generator %s: exit %d%s" % (n, rc, (": " + " | ".join(keep)) if keep else ""))
 
 def user_enabled_set(skip):
     import fnmatch

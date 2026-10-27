@@ -325,6 +325,9 @@ typedef struct {
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
     char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */
     char             pid_file[256];    /* forking daemon: launcher exits 0, main PID read from here */
+    char             verify_memory_max[24];  /* after READY=1 some populated cgroup below the */
+    char             verify_cpu_max[40];     /* service must carry these values (podman's own */
+    char             verify_pids_max[24];    /* limits), else the service is failed */
     char             wait_socket[108]; /* if set, hold in NEW_PROCESS until this AF_UNIX socket accepts */
     uint8_t          sock_waiting;     /* runtime: held on wait_socket (recomputed each pass) */
     int              fork_state;       /* pid_file: 0 launcher running, 1 main PID adopted, -1 waiting for the file */
@@ -499,6 +502,12 @@ void service_log(const service_t *svc, const char *event);
 
 /* kill all processes in the service's cgroup and remove it */
 int  cgroup_kill_path(const char *cg);
+static inline int service_verifies_limits(const service_t *s) {
+    return s->verify_memory_max[0] || s->verify_cpu_max[0] || s->verify_pids_max[0];
+}
+/* 1 if a populated cgroup below CG carries every verify_* value of SVC;
+ * else 0 with the last mismatch in WHY */
+int  verify_limits_match(const char *cg, const service_t *svc, char *why, size_t n);
 /* rmdir CG and every cgroup below it, deepest first; best effort */
 void cgroup_rmdir_tree(const char *cg);
 /* 1 if CG has a cgroup below it */

@@ -231,6 +231,29 @@ pid_file=/run/cgfork.pid
 no_restart=1
 EOF
 
+# verify_*_max probe: like podman, the service puts its payload in a child
+# cgroup with a memory limit, then sends READY=1. verify-ok's limit lands,
+# verify-bad's never does (the limit write is skipped).
+cat > "$ROOT/usr/bin/verifycg.sh" <<'EOF'
+#!/bin/sh
+CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
+mkdir -p "$CG/runtime" "$CG/libpod-payload-x"
+echo $$ > "$CG/runtime/cgroup.procs"
+# the controller write fails while anything else is still in $CG: retry, and
+# say so if it never lands, or verify-ok would really be missing its limit
+i=0; until echo +memory > "$CG/cgroup.subtree_control" 2>/dev/null; do i=$((i+1)); [ $i -ge 50 ] && { echo "VERIFYCG +memory failed" > /dev/console; break; }; sleep 0.1; done
+[ "$1" = ok ] && echo 67108864 > "$CG/libpod-payload-x/memory.max"
+[ "$1" = noready ] && exec sleep 1000
+sh -c 'echo $$ > "$0/cgroup.procs"; exec sleep 1000' "$CG/libpod-payload-x" &
+sleep 1
+exec /usr/bin/notifier READY=1 hold
+EOF
+chmod +x "$ROOT/usr/bin/verifycg.sh"
+for v in ok bad noready; do
+printf 'name=verify-%s\nexec=/usr/bin/verifycg.sh\nargs=%s\nnotify=1\nverify_memory_max=67108864\nno_restart=1\nstable_secs=1\n' "$v" "$v" \
+    > "$ROOT/etc/schema-init/services/verify-$v.svc"
+done
+
 cat > "$ROOT/etc/schema-init/services/test-crash.svc" <<'EOF'
 name=test-crash
 exec=/usr/bin/crashloop.sh
@@ -709,6 +732,10 @@ MPB=$(cat /run/mp-before.pid)
 /bin/schema-ctl stop mp-before >/dev/null 2>&1
 i=0; while [ $i -lt 20 ] && kill -0 "$MPB" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
 echo "MP-stop: $(kill -0 "$MPB" 2>/dev/null && echo alive || echo gone)"
+for d in /sys/fs/cgroup/schema-init/verify-ok /sys/fs/cgroup/schema-init/verify-ok/*/; do [ -d "$d" ] && echo "VERIFY-TREE: $d mem=$(cat $d/memory.max 2>&1) ev=$(grep populated $d/cgroup.events 2>&1)"; done
+echo "VERIFY-OK: $(/bin/schema-ctl status verify-ok 2>&1 | head -1 | grep -o 'state=[A-Z_]*') mismatch=$(grep -c 'verify-ok .*limits-mismatch' "$RAIL")"
+echo "VERIFY-NOREADY: $(/bin/schema-ctl status verify-noready 2>&1 | head -1 | grep -o 'state=[A-Z_]*')"
+echo "VERIFY-BAD: $(/bin/schema-ctl status verify-bad 2>&1 | head -1 | grep -o 'state=[A-Z_]*') mismatch=$(grep -c 'verify-bad .*limits-mismatch' "$RAIL")"
 echo "CGFORK: $(/bin/schema-ctl status test-cgfork 2>&1 | head -1 | grep -o 'state=[A-Z_]*') daemon=$(kill -0 "$(cat /run/cgfork.pid)" 2>/dev/null && echo alive || echo dead)"
 CGN=$(cat /run/cgnest.path 2>/dev/null)
 echo "CGNEST-UP: $( [ -n "$CGN" ] && [ -d "$CGN/runtime" ] && echo nested || echo "no ($CGN)")"
@@ -861,6 +888,10 @@ for c in "MP-before: adopted" "MP-after: adopted" "MP-fail: [1-9][0-9]* adopted=
          "MP-cleanexit: timeouts=0 state=EXCISED" "MP-waitstop: new-timeouts=0 state=EXCISED" "MP-restart-old: gone"; do
     grep -Eq "$c" "$SERIAL" || { echo "  MISS: main_pid_notify: $c ($(grep -o "${c%%:*}:.*" "$SERIAL" | head -1))"; pass=0; }
 done
+grep -Eq "VERIFY-OK: state=FUNDAMENTAL mismatch=0" "$SERIAL" || { echo "  MISS: verify-ok ($(grep -o 'VERIFY-OK:.*' "$SERIAL"))"; pass=0; }
+grep -Eq "VERIFY-NOREADY: state=FULL_TRUST" "$SERIAL" || { echo "  MISS: verify-noready promoted without READY=1, limits unchecked ($(grep -o 'VERIFY-NOREADY:.*' "$SERIAL"))"; pass=0; }
+grep -Eq "VERIFYCG \+memory failed" "$SERIAL" && { echo "  MISS: verify fixture could not enable memory"; pass=0; }
+grep -Eq "VERIFY-BAD: state=EXCISED mismatch=1" "$SERIAL" || { echo "  MISS: verify-bad ran without its limit ($(grep -o 'VERIFY-BAD:.*' "$SERIAL"))"; pass=0; }
 grep -Eq "CGFORK: state=FUNDAMENTAL daemon=alive" "$SERIAL" || { echo "  MISS: nested pid_file daemon killed at handover ($(grep -o 'CGFORK:.*' "$SERIAL"))"; pass=0; }
 grep -Eq "CGNEST-UP: nested" "$SERIAL" || { echo "  MISS: test-cgnest never nested its cgroup"; pass=0; }
 grep -Eq "CGNEST-RESTART: state=[A-Z_]* runtime=present procs=[1-9]" "$SERIAL" || { echo "  MISS: nested service lost its cgroup on restart ($(grep -o 'CGNEST-RESTART:.*' "$SERIAL"))"; pass=0; }

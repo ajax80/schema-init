@@ -772,6 +772,7 @@ static void reap(void) {
                     /* nothing to check a MAINPID= against: refuse, as pid_file does */
                     services[i].inst.state = STATE_EXCISED;
                     service_log(&services[i], "main-pid-no-cgroup");
+                    stop_cmds_begin(&services[i], 2);
                     break;
                 }
                 if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
@@ -1267,6 +1268,8 @@ static void tick_service(service_t *svc,
                     /* not before the launcher has exited and the daemon is adopted */
                 } else if ((svc->notify || svc->ready_bus_name[0]) && svc->notify_ready) {
                     ready = svc->ready_bus_name[0] ? READY_BUS : READY_NOTIFY;
+                } else if (service_verifies_limits(svc)) {
+                    /* its limits are checked on READY=1: no other road to ready */
                 } else if (svc->ready_path[0] && ready_path_fresh(svc)) {
                     ready = READY_PATH;
                     svc->ready_path_verified = 1;
@@ -2211,6 +2214,17 @@ static void notify_poll(int max_batch) {
                 svc->notify_ready = 1;
                 clock_gettime(CLOCK_MONOTONIC, &svc->last_pet);
                 service_log(svc, "notify-ready");
+                if (service_verifies_limits(svc)) {
+                    /* a limit asked for but not in force fails the service,
+                     * never runs it unlimited */
+                    char why[160] = "service has no cgroup", ev[200];
+                    if (!svc->cgroup_path[0] || !verify_limits_match(svc->cgroup_path, svc, why, sizeof why)) {
+                        snprintf(ev, sizeof ev, "limits-mismatch %s", why);
+                        service_log(svc, ev);
+                        svc->notify_ready = 0;
+                        svc_cgroup_kill_tree(svc);
+                    }
+                }
             }
             break;
         }
@@ -2569,7 +2583,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 } else if (services[j].child_pid > 0 &&
                            (services[j].exec_stop_count || services[j].exec_stop_post_count)) {
                     pid_t sp = service_stop_spawn(&services[j], 3);
-                    if (sp > 0) eviction_add(sp, "");
+                    /* the service's own stop budget: podman rm -f waits 10 s */
+                    int g = services[j].stop_timeout_sec > EVICT_GRACE_SECS ? services[j].stop_timeout_sec
+                                                                           : EVICT_GRACE_SECS;
+                    if (sp > 0) eviction_add_as(sp, "", 0, 0, g);
                 }
                 if (services[j].failsafe_pid > 0) {
                     kill(services[j].failsafe_pid, SIGTERM);

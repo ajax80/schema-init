@@ -620,8 +620,10 @@ out, logged = gen_run(t)
 check("deleted_container_drops_unit", b != "" and not os.path.exists(os.path.join(out, "foo.svc")))
 t.done()
 
-t = gen_tree(GEN, "#!/bin/sh\necho boom >&2\nexit 1\n")
+t = gen_tree(GEN, "#!/bin/sh\necho 'converting \"broken.container\": unsupported key BogusKey' >&2\necho 'processing encountered some errors' >&2\nexit 1\n")
 out, logged = gen_run(t)
+check("I5: generator log keeps the line naming the broken file",
+      any("broken.container" in l and "BogusKey" in l for l in logged))
 check("generator_failure_tolerated", os.path.exists(os.path.join(out, "foo.svc"))
       and any(l.startswith("WARN    generator") for l in logged))
 t.done()
