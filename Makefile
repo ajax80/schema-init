@@ -322,6 +322,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board schema-user schema
 	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-mountns && /tmp/schema-test-mountns
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-dropins && /tmp/schema-test-dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-rlimits && /tmp/schema-test-rlimits
+	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-stopcmds && /tmp/schema-test-stopcmds
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cycles && /tmp/schema-test-cycles
 	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cgkill && /tmp/schema-test-cgkill
 	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o /tmp/schema-test-landlock-tcp && /tmp/schema-test-landlock-tcp

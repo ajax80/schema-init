@@ -49,7 +49,7 @@ mkdir -p "$ROOT"/{sbin,bin,usr/bin,etc/schema-init/services,proc,sys,dev,run,sys
 cp "$BIN" "$ROOT/sbin/schema-init"
 ln -sf /sbin/schema-init "$ROOT/init"   # kernel initramfs entry point is /init
 cp "$BB"  "$ROOT/bin/busybox"
-for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill readlink; do
+for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill readlink tr; do
   ln -sf /bin/busybox "$ROOT/bin/$a"
 done
 ln -sf /bin/busybox "$ROOT/usr/bin/touch"   # test svcs call /usr/bin/touch
@@ -157,6 +157,21 @@ cat > "$ROOT/usr/bin/crashloop.sh" <<'EOF'
 exit 1
 EOF
 chmod +x "$ROOT/usr/bin/crashloop.sh"
+# exec_stop / exec_stop_post probe: stop runs the stop command before
+# SIGTERM and the post command after the service is gone
+cat > "$ROOT/usr/bin/stopprobe.sh" <<'EOF'
+#!/bin/sh
+trap 'echo term >> /run/stopprobe.order; exit 0' TERM
+while :; do sleep 1 & wait; done
+EOF
+chmod +x "$ROOT/usr/bin/stopprobe.sh"
+cat > "$ROOT/etc/schema-init/services/test-stopcmd.svc" <<'EOF'
+name=test-stopcmd
+exec=/usr/bin/stopprobe.sh
+exec_stop=/bin/sh -c "echo stop >> /run/stopprobe.order"
+exec_stop_post=/bin/sh -c "echo post >> /run/stopprobe.order"
+EOF
+
 cat > "$ROOT/etc/schema-init/services/test-crash.svc" <<'EOF'
 name=test-crash
 exec=/usr/bin/crashloop.sh
@@ -607,6 +622,9 @@ echo "mem_limit=32" > /etc/schema-init/services/test-dropin.svc.d/30-late.conf
 echo "DROPIN-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
 echo "DROPIN-REEXEC: $(/bin/schema-ctl reexec 2>&1 | head -1)"
 echo "DROPIN-CAT-BEGIN"; /bin/schema-ctl cat test-dropin; echo "DROPIN-CAT-END"
+/bin/schema-ctl stop test-stopcmd >/dev/null 2>&1
+i=0; while [ $i -lt 20 ] && ! grep -qs post /run/stopprobe.order; do sleep 0.5; i=$((i+1)); done
+echo "STOPCMD-ORDER: $(tr '\n' ' ' < /run/stopprobe.order 2>&1)"
 echo "===== RESTARTS-TEST ====="
 echo "crash-retries: $(grep -c 'test-crash .*retry-deep' "$RAIL")"
 echo "crash-dormant: $(grep -c 'test-crash .*dormant ' "$RAIL")"
@@ -741,6 +759,7 @@ grep -Eq "DROPIN-RELOAD: err: .*'test-dropin' modified since boot" "$SERIAL" || 
 grep -Eq "DROPIN-REEXEC: err: .*test-dropin" "$SERIAL" || { echo "  MISS: reexec not refused after a drop-in was added"; pass=0; }
 grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL" || { echo "  MISS: schema-ctl cat did not list the late drop-in"; pass=0; }
 # restart_count: first spawn, timer fires and ctl restart are not restarts.
+grep -Eq "STOPCMD-ORDER: stop term post" "$SERIAL" || { echo "  MISS: exec_stop / SIGTERM / exec_stop_post out of order"; pass=0; }
 grep -Eq "crash-retries: 3"  "$SERIAL" || { echo "  MISS: test-crash did not retry exactly max_restarts=3 times"; pass=0; }
 grep -Eq "crash-dormant: [1-9]" "$SERIAL" || { echo "  MISS: test-crash never went dormant"; pass=0; }
 grep -Eq "crashdep-spawn: [1-9]" "$SERIAL" || { echo "  MISS: dependent of a dormant non-critical dep never started"; pass=0; }

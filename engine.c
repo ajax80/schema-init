@@ -515,6 +515,38 @@ static void card_done(service_t *svc, int status) {
     service_log(svc, WIFEXITED(status) && WEXITSTATUS(status) == 0 ? "card-done" : "card-failed");
 }
 
+/* exec_stop / exec_stop_post: one runner child, reaped by reap() and bounded
+ * by stop_timeout_sec in monitor_failsafes(); PID 1 never waits on it. */
+static int stop_cmds_begin(service_t *svc, int phase) {
+    int n = (phase & 1 ? svc->exec_stop_count : 0) + (phase & 2 ? svc->exec_stop_post_count : 0);
+    if (!n || svc->stop_pid > 0) return 0;
+    pid_t pid = service_stop_spawn(svc, phase);
+    if (pid < 0) {
+        service_log(svc, "stop-cmd-fork-fail");
+        return 0;
+    }
+    svc->stop_pid = pid;
+    svc->stop_phase = phase;
+    clock_gettime(CLOCK_MONOTONIC, &svc->stop_start);
+    service_log(svc, phase == 2 ? "stop-post" : "stop-cmd");
+    return 1;
+}
+
+/* SIGTERM the main process, after its exec_stop commands when it has any */
+static void stop_main(service_t *svc) {
+    if (svc->child_pid <= 0) return;
+    if (svc->stop_pid > 0 && svc->stop_phase == 1) return;
+    if (!stop_cmds_begin(svc, 1)) kill(svc->child_pid, SIGTERM);
+}
+
+static void stop_cmds_done(service_t *svc, int status) {
+    int phase = svc->stop_phase;
+    svc->stop_pid = 0;
+    svc->stop_phase = 0;
+    service_log(svc, WIFEXITED(status) && WEXITSTATUS(status) == 0 ? "stop-cmd-done" : "stop-cmd-failed");
+    if (phase == 1 && svc->child_pid > 0) kill(svc->child_pid, SIGTERM);
+}
+
 static void mark_boot_ready(service_t *svc, int how) {
     if (svc->boot_ready.tv_sec || svc->boot_ready.tv_nsec) return;
     svc->boot_ready = svc->stable_time;
@@ -624,6 +656,10 @@ static void reap(void) {
                 card_done(&services[i], status);
                 break;
             }
+            if (services[i].stop_pid == pid) {
+                stop_cmds_done(&services[i], status);
+                break;
+            }
             if (services[i].child_pid != pid) continue;
 
             services[i].last_pid   = pid;
@@ -697,6 +733,7 @@ static void reap(void) {
                 services[i].inst.state = STATE_RECOVERY;
                 service_log(&services[i], "died");
             }
+            stop_cmds_begin(&services[i], 2);
             break;
         }
         /* only a pid no live service claims: an entry adopted from an older
@@ -773,6 +810,17 @@ static void monitor_failsafes(void) {
                 service_log(svc, "card-timeout");
             }
         }
+        if (svc->stop_pid > 0 && svc->stop_phase != 4) {
+            int lim = svc->stop_timeout_sec ? svc->stop_timeout_sec : 3;
+            if (now.tv_sec - svc->stop_start.tv_sec >= lim) {
+                kill(-svc->stop_pid, SIGKILL);
+                kill(svc->stop_pid, SIGKILL);
+                service_log(svc, "stop-cmd-timeout");
+                /* SIGTERM the main process now; reap() still collects the runner */
+                if (svc->stop_phase == 1 && svc->child_pid > 0) kill(svc->child_pid, SIGTERM);
+                svc->stop_phase = 4;
+            }
+        }
         if (svc->failsafe_pid <= 0) continue;
         
         int status;
@@ -808,6 +856,7 @@ static void active_kill_service(service_t *svc) {
             note_exit(svc, status);
             svc->child_pid = 0;
             service_cgroup_kill(svc);
+            stop_cmds_begin(svc, 2);
             return;
         }
         usleep(1000);
@@ -831,6 +880,7 @@ static void active_kill_service(service_t *svc) {
     note_exit(svc, reaped ? status : SIGKILL);
     svc->child_pid = 0;
     service_cgroup_kill(svc);
+    stop_cmds_begin(svc, 2);
 }
 
 /* ── schema tick for one service ────────────────────────────────────── */
@@ -961,7 +1011,7 @@ static void tick_service(service_t *svc,
     switch (svc->inst.state) {
 
         case STATE_NEW_PROCESS:
-            if (svc->failsafe_pid > 0 || svc->card_pid > 0) break;
+            if (svc->failsafe_pid > 0 || svc->card_pid > 0 || svc->stop_pid > 0) break;
             if (svc_retry_held(svc, &now_mono)) break;
             if (!svc->standby_up && service_is_standby(svc, services, svc_count)) {
                 svc->flags |= SVC_NO_RESTART;
@@ -1671,8 +1721,9 @@ static void ctl_cmd(int fd, char *line) {
             services[i].restart_at.tv_sec = services[i].restart_at.tv_nsec = 0;
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
-                kill(services[i].child_pid, SIGTERM);
-                ctl_writef(fd, "ok: SIGTERM → %s (pid %d)\n",
+                stop_main(&services[i]);
+                ctl_writef(fd, "ok: %s → %s (pid %d)\n",
+                    services[i].stop_pid > 0 ? "exec_stop" : "SIGTERM",
                     name, (int)services[i].child_pid);
             } else {
                 if (services[i].fork_state < 0) {
@@ -1695,7 +1746,7 @@ static void ctl_cmd(int fd, char *line) {
             services[i].listen_hold = 0;
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
-                kill(services[i].child_pid, SIGTERM);
+                stop_main(&services[i]);
                 ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
             } else {
                 if (services[i].fork_state < 0) {
@@ -2343,6 +2394,21 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
             if (evict_mode) {
                 elog(stdout, "evicting orphaned service '%s' (pid=%d)\n", services[j].name, (int)services[j].child_pid);
                 if (services[j].child_pid > 0) {
+                    /* the service struct goes with this reload: its stop
+                     * commands can't be sequenced, so they run beside the
+                     * SIGTERM as an eviction entry of their own */
+                    if ((services[j].exec_stop_count || services[j].exec_stop_post_count) &&
+                        services[j].stop_pid <= 0 && eviction_count < MAX_EVICTIONS) {
+                        pid_t sp = service_stop_spawn(&services[j], 3);
+                        if (sp > 0) {
+                            evictions[eviction_count].pid      = sp;
+                            evictions[eviction_count].deadline = mono_sec() + EVICT_GRACE_SECS;
+                            evictions[eviction_count].reaped   = 0;
+                            evictions[eviction_count].killed   = 0;
+                            evictions[eviction_count].cgroup[0] = '\0';
+                            eviction_count++;
+                        }
+                    }
                     kill(services[j].child_pid, SIGTERM);
                     /* the service struct goes with this reload, and with it
                      * the cpuset needed to give an isolated partition's
@@ -2464,8 +2530,10 @@ static void shut_reap(void) {
     int i;
     while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
         if (fdclose_reaped(pid)) continue;
-        for (i = 0; i < svc_count; i++)
+        for (i = 0; i < svc_count; i++) {
+            if (services[i].stop_pid == pid) { services[i].stop_pid = 0; break; }
             if (services[i].child_pid == pid) { services[i].child_pid = 0; break; }
+        }
     }
 }
 
@@ -2474,7 +2542,7 @@ static void shut_reap(void) {
  * exit before its cgroup is killed. A straggler holds back only what it depends on. Past SHUT_TOTAL_MS
  * everything left gets SIGTERM at once. stop_first services go before all of it. */
 static void shutdown_ordered(void) {
-    uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0};
+    uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0}, stop_at[MAX_SERVICES] = {0};
     int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0}, gone[MAX_SERVICES] = {0};
     int i, j, round = 0, held = 0;
     char msg[320];
@@ -2531,6 +2599,19 @@ static void shutdown_ordered(void) {
                 for (j = 0; j < svc_count && !blocked; j++)
                     blocked = j != i && alive[j] && shut_depends_on(&services[j], i);
             if (blocked) continue;
+            /* exec_stop first; SIGTERM once it is done or out of time */
+            if (!stop_at[i] && services[i].exec_stop_count && services[i].stop_pid <= 0 &&
+                stop_cmds_begin(&services[i], 1)) {
+                stop_at[i] = now;
+                continue;
+            }
+            if (stop_at[i] && services[i].stop_pid > 0) {
+                uint64_t lim = services[i].stop_timeout_sec ? (uint64_t)services[i].stop_timeout_sec * 1000
+                                                         : SHUT_GRACE_MS;
+                if (now - stop_at[i] < lim) continue;
+                kill(-services[i].stop_pid, SIGKILL);
+                kill(services[i].stop_pid, SIGKILL);
+            }
             svc_signal_all(&services[i], SIGTERM);
             term_at[i] = now;
             if (!sent++)

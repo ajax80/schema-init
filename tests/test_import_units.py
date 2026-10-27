@@ -256,6 +256,24 @@ si._landlock_tcp_ok = lambda: True
 check("system mode: Environment= specifiers left alone",
       "env=FMT=100%%\n" in hard("Environment=FMT=100%%\n"))
 
+# --- ExecStop= / ExecStopPost= -> exec_stop= / exec_stop_post= ---
+si.set_user_mode(si.user_context("/home/u", 1000, "u", {"XDG_RUNTIME_DIR": "/run/user/1000"}))
+q = si.unit_to_svc("probe", si.parse_unit(
+    "[Service]\nType=notify\nExecStart=/usr/bin/podman run --name systemd-%N -d img\n"
+    "ExecStop=/usr/bin/podman rm -v -f -i systemd-%N\n"
+    "ExecStopPost=-/usr/bin/podman rm -v -f -i systemd-%N\n[Install]\nWantedBy=x\n"))
+check("ExecStop mapped, specifiers expanded",
+      "exec_stop=/usr/bin/podman rm -v -f -i systemd-probe\n" in q)
+check("ExecStopPost keeps its - prefix",
+      "exec_stop_post=-/usr/bin/podman rm -v -f -i systemd-probe\n" in q)
+check("no ExecStop -> no exec_stop", "exec_stop" not in hard(""))
+check("empty ExecStop resets",
+      "exec_stop=" not in hard("ExecStop=/bin/a\nExecStop=\n"))
+check("ExecStop=+ dropped with a warning, unit still imported",
+      "exec_stop" not in hard("ExecStop=+/bin/a\n") and "ExecStop not translated" in hard("ExecStop=+/bin/a\n"))
+si.set_user_mode(None)
+check("system mode: ExecStop not mapped", "exec_stop" not in hard("ExecStop=/bin/a\n"))
+
 # --- Limit*= -> limit_*= ---
 hl = hard("LimitNOFILE=1024:524288\nLimitMEMLOCK=infinity\nLimitNICE=-19\nLimitRTPRIO=70\nLimitCORE=8M\n")
 check("Limit*= translated",

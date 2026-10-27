@@ -757,12 +757,15 @@ static void svc_apply_env(const service_t *svc, char **file_env, int file_envc) 
     }
 }
 
-static void svc_run_pre(const service_t *svc, int privileged) {
-    for (int i = 0; i < svc->exec_pre_count; i++) {
-        const char *c = svc->exec_pre[i];
+/* Run CMDS in order in this (child) process; PRIVILEGED -1 runs every one,
+ * else only those whose '+' prefix matches. A failure without '-' exits 1. */
+static void svc_run_cmds(const service_t *svc, char *const *cmds, int n,
+                         const char *what, int privileged) {
+    for (int i = 0; i < n; i++) {
+        const char *c = cmds[i];
         size_t pl = strspn(c, "+-");
         int plus = memchr(c, '+', pl) != NULL, ignore = memchr(c, '-', pl) != NULL;
-        if (plus != privileged) continue;
+        if (privileged >= 0 && plus != privileged) continue;
         char *w[33], *x[33], **argv = x;
         int nw = service_split_cmdline(c + pl, w, 32);
         if (nw <= 0) _exit(1);
@@ -770,8 +773,8 @@ static void svc_run_pre(const service_t *svc, int privileged) {
         if (svc->expand_args) {
             int nx = service_expand_argv(w, x, 32);
             if (nx < 0) {
-                dprintf(2, "[schema-init] %s: exec_pre %s expands to more than 32 words%s\n",
-                        svc->name, c, ignore ? ", ignored" : "");
+                dprintf(2, "[schema-init] %s: %s %s expands to more than 32 words%s\n",
+                        svc->name, what, c, ignore ? ", ignored" : "");
                 if (!ignore) _exit(1);
                 continue;
             }
@@ -788,13 +791,17 @@ static void svc_run_pre(const service_t *svc, int privileged) {
         int st = 0;
         while (p > 0 && waitpid(p, &st, 0) < 0 && errno == EINTR) ;
         if (p < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-            dprintf(2, "[schema-init] %s: exec_pre %s failed (%s %d)%s\n", svc->name, c,
+            dprintf(2, "[schema-init] %s: %s %s failed (%s %d)%s\n", svc->name, what, c,
                     p < 0 ? "fork" : WIFEXITED(st) ? "exit" : "signal",
                     p < 0 ? errno : WIFEXITED(st) ? WEXITSTATUS(st) : WTERMSIG(st),
                     ignore ? ", ignored" : "");
             if (!ignore) _exit(1);
         }
     }
+}
+
+static void svc_run_pre(const service_t *svc, int privileged) {
+    svc_run_cmds(svc, svc->exec_pre, svc->exec_pre_count, "exec_pre", privileged);
 }
 
 int service_listen_parse(const char *spec, int *type, struct sockaddr_storage *ss,
@@ -1252,6 +1259,32 @@ int service_is_standby(const service_t *svc, const service_t *table, int count) 
             if (strncmp(table[i].card[c], "fallback:", 9) == 0 && strcmp(table[i].card[c] + 9, svc->name) == 0)
                 return 1;
     return 0;
+}
+
+pid_t service_stop_spawn(const service_t *svc, int phase) {
+    pid_t pid = fork();
+    if (pid != 0) return pid;
+    service_reset_child_sigmask();
+    /* own group: a timed-out runner is killed with what it started */
+    setsid();
+    int null_fd = open("/dev/null", O_RDONLY);
+    if (null_fd >= 0) {
+        dup2(null_fd, STDIN_FILENO);
+        if (null_fd > 0) close(null_fd);
+    }
+    svc_child_log(svc);
+    syscall(SYS_close_range, 3, ~0U, 0);
+    svc_apply_env(svc, NULL, 0);
+    if (svc->run_uid) {
+        if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0 ||
+            setgid(svc->run_gid) != 0 || setuid(svc->run_uid) != 0) {
+            dprintf(2, "[schema-init] UID DROP FAILED for %s: stop commands: %d\n", svc->name, errno);
+            _exit(126);
+        }
+    }
+    if (phase & 1) svc_run_cmds(svc, svc->exec_stop, svc->exec_stop_count, "exec_stop", -1);
+    if (phase & 2) svc_run_cmds(svc, svc->exec_stop_post, svc->exec_stop_post_count, "exec_stop_post", -1);
+    _exit(0);
 }
 
 pid_t service_card_spawn(const service_t *svc, int idx) {
@@ -1838,12 +1871,18 @@ static void svc_free_strings(service_t *svc) {
     service_free_landlock(svc);
 }
 
-void service_free_landlock(service_t *svc) {
-    for (int i = 0; i < svc->exec_pre_count; i++) {
-        free(svc->exec_pre[i]);
-        svc->exec_pre[i] = NULL;
+static void svc_free_cmds(char **cmds, int *n) {
+    for (int i = 0; i < *n; i++) {
+        free(cmds[i]);
+        cmds[i] = NULL;
     }
-    svc->exec_pre_count = 0;
+    *n = 0;
+}
+
+void service_free_landlock(service_t *svc) {
+    svc_free_cmds(svc->exec_pre, &svc->exec_pre_count);
+    svc_free_cmds(svc->exec_stop, &svc->exec_stop_count);
+    svc_free_cmds(svc->exec_stop_post, &svc->exec_stop_post_count);
     for (int i = 0; i < svc->card_count; i++) {
         free(svc->card[i]);
         svc->card[i] = NULL;
@@ -1924,11 +1963,11 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
         }
         svc->env_count = 0;
     } else if (strcmp(key, "exec_pre") == 0) {
-        for (int i = 0; i < svc->exec_pre_count; i++) {
-            free(svc->exec_pre[i]);
-            svc->exec_pre[i] = NULL;
-        }
-        svc->exec_pre_count = 0;
+        svc_free_cmds(svc->exec_pre, &svc->exec_pre_count);
+    } else if (strcmp(key, "exec_stop") == 0) {
+        svc_free_cmds(svc->exec_stop, &svc->exec_stop_count);
+    } else if (strcmp(key, "exec_stop_post") == 0) {
+        svc_free_cmds(svc->exec_stop_post, &svc->exec_stop_post_count);
     } else if (strcmp(key, "card") == 0) {
         for (int i = 0; i < svc->card_count; i++) {
             free(svc->card[i]);
@@ -2105,6 +2144,17 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         svc->exec_pre[svc->exec_pre_count++] = strdup(val + strspn(val, " \t"));
+    } else if (strcmp(line, "exec_stop") == 0 || strcmp(line, "exec_stop_post") == 0) {
+        int post = line[9] == '_';
+        char **cmds = post ? svc->exec_stop_post : svc->exec_stop;
+        int *n = post ? &svc->exec_stop_post_count : &svc->exec_stop_count;
+        const char *cmd = val + strspn(val, " \t");
+        if (!svc_cmd_ok(cmd + strspn(cmd, "-")) || *n >= MAX_EXEC_PRE) {
+            fprintf(stderr, "[schema-init] %s: %s=%s needs an absolute command with balanced quotes and at most 32 words, at most %d per service\n",
+                    svc->name[0] ? svc->name : path, line, val, MAX_EXEC_PRE);
+            return -1;
+        }
+        cmds[(*n)++] = strdup(cmd);
     } else if (strcmp(line, "card") == 0) {
         const char *c = val + strspn(val, " \t");
         int ok = strncmp(c, "exec:", 5) == 0 ? svc_cmd_ok(c + 5)
