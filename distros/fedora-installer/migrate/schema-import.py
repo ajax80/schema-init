@@ -274,13 +274,12 @@ def _hardening(svc):
     return lines, warns
 
 
-_BIND_RULE = re.compile(r"^(?:(ipv4|ipv6)(?::|$))?(?:(tcp|udp)(?::|$))?(?:(\d+)(?:-(\d+))?)?$")
+_PORTS = re.compile(r"^(\d+)(?:-(\d+))?$")
 
 
+# SocketBind{Allow,Deny}= as (families, proto, ports) tuples: proto None = any,
+# ports None = every positive port. A bad rule comes back as the string itself.
 def _bind_rules(svc, directive):
-    """SocketBind{Allow,Deny}= as (families, proto, ports) tuples; families is a
-    set, proto None = any, ports None = every positive port. None if a rule
-    doesn't parse."""
     rules = []
     for v in _get_all(svc, directive):
         v = v.strip()
@@ -290,29 +289,45 @@ def _bind_rules(svc, directive):
         if v == "any":
             rules.append(({4, 6}, None, None))
             continue
-        m = _BIND_RULE.match(v)
-        if not m or not any(m.groups()):
-            return None
-        fam, proto, lo, hi = m.groups()
-        ports = None
-        if lo:
-            lo, hi = int(lo), int(hi or lo)
+        parts = v.split(":")
+        fams, proto, ports = {4, 6}, None, None
+        if parts[0] in ("ipv4", "ipv6"):
+            fams = {int(parts.pop(0)[3])}
+        if parts and parts[0] in ("tcp", "udp"):
+            proto = parts.pop(0)
+        if parts:
+            m = _PORTS.match(parts.pop(0))
+            if not m:
+                return v
+            lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
             if not 1 <= lo <= hi <= 65535:
-                return None
+                return v
             ports = range(lo, hi + 1)
-        rules.append(({int(fam[3])} if fam else {4, 6}, proto, ports))
+        # parts left over covers "tcp:" and other trailing junk systemd rejects
+        if parts:
+            return v
+        rules.append((fams, proto, ports))
     return rules
 
 
+def _landlock_tcp_ok():
+    import ctypes
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        # landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION): 444 on every arch
+        return libc.syscall(444, None, ctypes.c_size_t(0), ctypes.c_uint32(1)) >= 4
+    except (OSError, AttributeError):
+        return False
+
+
+# systemd allows a bind that matches Allow, else denies one that matches Deny;
+# Landlock is a per-port TCP allow-list blind to address family, so only "deny
+# all TCP, allow these ports" translates. Returns (lines, warnings).
 def socket_bind_lines(svc):
-    """SocketBindAllow/Deny= -> landlock_bind_tcp=. systemd allows a bind that
-    matches Allow, else denies one that matches Deny; Landlock is a per-port
-    TCP allow-list blind to address family, so only "deny all TCP, allow these
-    ports" translates. Returns (lines, warnings)."""
     allow, deny = _bind_rules(svc, "SocketBindAllow"), _bind_rules(svc, "SocketBindDeny")
-    if allow is None or deny is None:
-        bad = [v for d in ("SocketBindAllow", "SocketBindDeny") for v in _get_all(svc, d)]
-        return [], ["SocketBind rule not understood (%s), not translated" % " ".join(bad)]
+    for d, r in (("SocketBindAllow", allow), ("SocketBindDeny", deny)):
+        if isinstance(r, str):
+            return [], ["%s=%s not understood, SocketBind not translated" % (d, r)]
     if not deny:
         return [], []
     warns = []
@@ -327,23 +342,37 @@ def socket_bind_lines(svc):
             warns.append("SocketBindDeny not translated: only denying all TCP on both "
                          "IPv4 and IPv6 maps to landlock_bind_tcp")
         return [], warns
-    allowed = {4: set(), 6: set()}
+    allowed, too_many = {4: set(), 6: set()}, False
     for fams, p, ports in allow:
         if p == "udp":
             continue
         for f in fams:
-            if allowed[f] is not None:
-                allowed[f] = None if ports is None else allowed[f] | set(ports)
+            if ports is None:
+                allowed[f] = None
+            elif allowed[f] is not None:
+                # a huge range never fits; don't build its set
+                too_many = too_many or len(ports) > 15
+                if not too_many:
+                    allowed[f] |= set(ports)
+    if allowed[4] is None and allowed[6] is None:
+        return [], warns
+    if allowed[4] is None or allowed[6] is None:
+        warns.append("SocketBindAllow not translated: one address family unrestricted, "
+                     "the other limited")
+        return [], warns
     if allowed[4] != allowed[6]:
         warns.append("SocketBindAllow for one address family applied to both")
-    if allowed[4] is None or allowed[6] is None:
-        return [], warns
     ports = sorted(allowed[4] | allowed[6])
-    # systemd rules only match positive ports, so binding port 0 stays allowed
-    if len(ports) > 15:
-        warns.append("SocketBindAllow not translated: %d ports, landlock_bind_tcp "
-                     "takes 15 plus port 0" % len(ports))
+    if too_many or len(ports) > 15:
+        warns.append("SocketBindAllow not translated: more than 15 ports "
+                     "(landlock_bind_tcp takes 15 plus port 0)")
         return [], warns
+    # Without Landlock ABI 4 the service would fail every start; systemd just
+    # skips SocketBind when cgroup BPF is missing.
+    if not _landlock_tcp_ok():
+        warns.append("SocketBind not translated: kernel lacks Landlock TCP rules (6.7+)")
+        return [], warns
+    # systemd rules only match positive ports, so binding port 0 stays allowed
     return ["landlock_bind_tcp=%s" % ",".join(str(x) for x in [0] + ports)], warns
 
 
@@ -918,7 +947,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("ExecStart=+ main process kept the sandbox: plain ExecStartPre lines need it")
         else:
             hard = [ln.split("=", 1)[0] + "=0" for ln in hard]
-            warns = ["ExecStart=+ runs unsandboxed: hardening directives dropped"]
+            warns = ["ExecStart=+ runs unsandboxed: hardening directives dropped"
+                     " (SocketBind kept; exec_pre lines are not bind-restricted)"]
     seen_plain = False
     for pre, _ in pres:
         if "+" not in pre:
@@ -927,7 +957,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
     lines.extend(hard)
-    # after the + handling: systemd enforces SocketBind on the cgroup, + or not
+    # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
+    # here only the main process is confined
     sb, sb_warns = socket_bind_lines(svc)
     lines.extend(sb)
     warns.extend(sb_warns)
@@ -1964,6 +1995,11 @@ def _user_translate(unit, known, enabled, skip=(), net=False):
             if v != "0":
                 lines.insert(0, "%s%s=%s dropped: schema-user cannot set up a mount "
                              "namespace" % (WARN_PREFIX, k, v))
+            continue
+        if ln.startswith("landlock_bind_tcp="):
+            # unprivileged schema-user can't restrict_self without no_new_privs
+            lines.insert(0, "%sSocketBind dropped: schema-user cannot apply "
+                         "landlock_bind_tcp" % WARN_PREFIX)
             continue
         if ln.startswith("user="):
             lines.insert(0, "%sUser=%s dropped: user services run as the user"

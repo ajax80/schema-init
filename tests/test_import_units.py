@@ -192,6 +192,7 @@ hw = hard("ProtectSystem=strict\nProtectHome=tmpfs\n")
 check("warnings lead the file", hw.startswith(si.WARN_PREFIX) and hw.count(si.WARN_PREFIX) == 2)
 
 # --- SocketBindAllow/Deny= -> landlock_bind_tcp= ---
+si._landlock_tcp_ok = lambda: True
 def sb(txt):
     return hard(txt)
 s1 = sb("SocketBindAllow=tcp:443\nSocketBindAllow=80\nSocketBindDeny=any\n")
@@ -228,6 +229,29 @@ check("bad rule -> not translated + warning", "\nlandlock_bind_tcp=" not in s8 a
 s9 = si.unit_to_svc("p", si.parse_unit(
     "[Service]\nExecStart=+/bin/p\nSocketBindAllow=443\nSocketBindDeny=tcp\n[Install]\nWantedBy=x\n"))
 check("ExecStart=+ keeps SocketBind (cgroup-level in systemd)", "landlock_bind_tcp=0,443\n" in s9)
+
+s10 = sb("SocketBindAllow=ipv4\nSocketBindAllow=ipv6:tcp:443\nSocketBindDeny=tcp\n")
+check("one family all, other limited -> not translated, honest warning",
+      "\nlandlock_bind_tcp=" not in s10 and "not translated: one address family" in s10
+      and "applied to both" not in s10)
+for bad in ("tcp:", "ipv4:", "ipv6:tcp:", "tcp:80:"):
+    sx = sb("SocketBindDeny=%s\n" % bad)
+    check("trailing colon %r rejected like systemd" % bad,
+          "\nlandlock_bind_tcp=" not in sx and "SocketBindDeny=%s not understood" % bad in sx)
+s11 = sb("SocketBindAllow=443\nSocketBindAllow=\nSocketBindAllow=tcp:http\nSocketBindDeny=tcp\n")
+check("bad-rule warning names only the bad rule", "SocketBindAllow=tcp:http not understood" in s11)
+check("all TCP + ports allowed -> no bogus too-many warning",
+      si.WARN_PREFIX not in sb("SocketBindAllow=tcp\nSocketBindAllow=443\nSocketBindDeny=tcp\n"))
+check("huge range repeated -> too-many warning", "more than 15 ports" in
+      sb("SocketBindAllow=1-65535\n" * 128 + "SocketBindDeny=tcp\n"))
+s12 = si.unit_to_svc("p", si.parse_unit(
+    "[Service]\nExecStart=+/bin/p\nSocketBindAllow=443\nSocketBindDeny=tcp\n[Install]\nWantedBy=x\n"))
+check("ExecStart=+ warning admits SocketBind kept", "SocketBind kept" in s12)
+si._landlock_tcp_ok = lambda: False
+s13 = sb("SocketBindAllow=443\nSocketBindDeny=tcp\n")
+check("no Landlock TCP -> not translated + warning",
+      "\nlandlock_bind_tcp=" not in s13 and "kernel lacks Landlock" in s13)
+si._landlock_tcp_ok = lambda: True
 
 # --- Limit*= -> limit_*= ---
 hl = hard("LimitNOFILE=1024:524288\nLimitMEMLOCK=infinity\nLimitNICE=-19\nLimitRTPRIO=70\nLimitCORE=8M\n")
