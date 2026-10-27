@@ -2211,6 +2211,17 @@ static void notify_poll(int max_batch) {
                 svc->notify_ready = 1;
                 clock_gettime(CLOCK_MONOTONIC, &svc->last_pet);
                 service_log(svc, "notify-ready");
+                if (service_verifies_limits(svc)) {
+                    /* a limit asked for but not in force fails the service,
+                     * never runs it unlimited */
+                    char why[160] = "no cgroup", ev[200];
+                    if (!svc->cgroup_path[0] || !verify_limits_match(svc->cgroup_path, svc, why, sizeof why)) {
+                        snprintf(ev, sizeof ev, "limits-mismatch %s", why);
+                        service_log(svc, ev);
+                        svc->notify_ready = 0;
+                        svc_cgroup_kill_tree(svc);
+                    }
+                }
             }
             break;
         }
