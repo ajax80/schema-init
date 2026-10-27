@@ -51,7 +51,7 @@ mkdir -p "$ROOT"/{sbin,bin,usr/bin,etc/schema-init/services,proc,sys,dev,run,sys
 cp "$BIN" "$ROOT/sbin/schema-init"
 ln -sf /sbin/schema-init "$ROOT/init"   # kernel initramfs entry point is /init
 cp "$BB"  "$ROOT/bin/busybox"
-for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill readlink tr cut; do
+for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill readlink tr cut wc; do
   ln -sf /bin/busybox "$ROOT/bin/$a"
 done
 ln -sf /bin/busybox "$ROOT/usr/bin/touch"   # test svcs call /usr/bin/touch
@@ -196,6 +196,24 @@ mpsvc mp-cleanexit '/usr/bin/notifier READY=1 hold & N=$!; sleep 2; kill $N; exi
 # a launcher that never names a main pid, stopped while PID 1 waits for one (#434)
 mpsvc mp-waitstop 'exit 0' 'no_restart=1\n'
 printf 'name=mp-nokey\nexec=/usr/bin/mp-nokey.sh\nnotify=1\nno_restart=1\n' > "$ROOT/etc/schema-init/services/mp-nokey.svc"
+
+# nested cgroup probe (what podman --cgroups=split does): the service moves
+# itself into <svc>/runtime and enables controllers on <svc>. Stop must remove
+# the whole tree, and a restart must get a cgroup again.
+cat > "$ROOT/usr/bin/cgnest.sh" <<'EOF'
+#!/bin/sh
+CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
+mkdir "$CG/runtime" "$CG/payload"
+echo $$ > "$CG/runtime/cgroup.procs"
+echo +memory > "$CG/cgroup.subtree_control"
+echo "$CG" > /run/cgnest.path
+while :; do sleep 1; done
+EOF
+chmod +x "$ROOT/usr/bin/cgnest.sh"
+cat > "$ROOT/etc/schema-init/services/test-cgnest.svc" <<'EOF'
+name=test-cgnest
+exec=/usr/bin/cgnest.sh
+EOF
 
 cat > "$ROOT/etc/schema-init/services/test-crash.svc" <<'EOF'
 name=test-crash
@@ -675,6 +693,14 @@ MPB=$(cat /run/mp-before.pid)
 /bin/schema-ctl stop mp-before >/dev/null 2>&1
 i=0; while [ $i -lt 20 ] && kill -0 "$MPB" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
 echo "MP-stop: $(kill -0 "$MPB" 2>/dev/null && echo alive || echo gone)"
+CGN=$(cat /run/cgnest.path 2>/dev/null)
+echo "CGNEST-UP: $( [ -n "$CGN" ] && [ -d "$CGN/runtime" ] && echo nested || echo "no ($CGN)")"
+/bin/schema-ctl restart test-cgnest >/dev/null 2>&1
+sleep 3
+echo "CGNEST-RESTART: $(/bin/schema-ctl status test-cgnest 2>&1 | head -1 | grep -o 'state=[A-Z_]*') runtime=$( [ -d "$CGN/runtime" ] && echo present || echo gone) procs=$(cat "$CGN/runtime/cgroup.procs" 2>/dev/null | wc -l)"
+/bin/schema-ctl stop test-cgnest >/dev/null 2>&1
+sleep 2
+echo "CGNEST-STOP: $( [ -d "$CGN" ] && echo "left $(ls -d "$CGN"/*/ 2>/dev/null | wc -l) children" || echo removed)"
 /bin/schema-ctl stop test-stopcmd >/dev/null 2>&1
 i=0; while [ $i -lt 20 ] && ! grep -qs post /run/stopprobe.order; do sleep 0.5; i=$((i+1)); done
 echo "STOPCMD-ORDER: $(tr '\n' ' ' < /run/stopprobe.order 2>&1)"
@@ -818,6 +844,9 @@ for c in "MP-before: adopted" "MP-after: adopted" "MP-fail: [1-9][0-9]* adopted=
          "MP-cleanexit: timeouts=0 state=EXCISED" "MP-waitstop: new-timeouts=0 state=EXCISED" "MP-restart-old: gone"; do
     grep -Eq "$c" "$SERIAL" || { echo "  MISS: main_pid_notify: $c ($(grep -o "${c%%:*}:.*" "$SERIAL" | head -1))"; pass=0; }
 done
+grep -Eq "CGNEST-UP: nested" "$SERIAL" || { echo "  MISS: test-cgnest never nested its cgroup"; pass=0; }
+grep -Eq "CGNEST-RESTART: state=[A-Z_]* runtime=present procs=[1-9]" "$SERIAL" || { echo "  MISS: nested service lost its cgroup on restart ($(grep -o 'CGNEST-RESTART:.*' "$SERIAL"))"; pass=0; }
+grep -Eq "CGNEST-STOP: removed" "$SERIAL" || { echo "  MISS: stop left the nested cgroup tree ($(grep -o 'CGNEST-STOP:.*' "$SERIAL"))"; pass=0; }
 grep -Eq "STOPCMD-ORDER: stop term post" "$SERIAL" || { echo "  MISS: exec_stop / SIGTERM / exec_stop_post out of order"; pass=0; }
 grep -Eq "crash-retries: 3"  "$SERIAL" || { echo "  MISS: test-crash did not retry exactly max_restarts=3 times"; pass=0; }
 grep -Eq "crash-dormant: [1-9]" "$SERIAL" || { echo "  MISS: test-crash never went dormant"; pass=0; }

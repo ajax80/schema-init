@@ -243,8 +243,23 @@ static void eviction_add(pid_t pid, const char *cgroup) {
     eviction_count++;
 }
 
+/* A killed tree can't be rmdir'ed until its processes are gone, and
+ * cgroup.kill is asynchronous: leave the leftover to the eviction sweep,
+ * which rmdirs it once it is empty (or at the 1 s backstop). */
+static void svc_cgroup_kill_tree(service_t *svc) {
+    char cg[sizeof svc->cgroup_path];
+    snprintf(cg, sizeof cg, "%s", svc->cgroup_path);
+    service_cgroup_kill(svc);
+    if (cg[0] && access(cg, F_OK) == 0 && eviction_count < MAX_EVICTIONS) {
+        eviction_add(0, cg);
+        evictions[eviction_count - 1].reaped = 1;
+        evictions[eviction_count - 1].killed = 1;
+        evictions[eviction_count - 1].deadline = mono_sec() + 1;
+    }
+}
+
 static void eviction_drop(int i) {
-    if (evictions[i].cgroup[0]) rmdir(evictions[i].cgroup);
+    if (evictions[i].cgroup[0]) cgroup_rmdir_tree(evictions[i].cgroup);
     evictions[i] = evictions[--eviction_count];
 }
 
@@ -763,6 +778,12 @@ static void reap(void) {
                 service_cgroup_kill(&services[i]);
             }
             services[i].main_pid = 0;
+            /* a service that made cgroups of its own (podman's runtime/ and
+             * payload) leaves <svc> a non-leaf: the next spawn could not join
+             * it, so its death takes the whole tree, as systemd's KillMode does */
+            if (services[i].cgroup_path[0] && !(services[i].flags & SVC_TIMER) &&
+                cgroup_has_children(services[i].cgroup_path))
+                svc_cgroup_kill_tree(&services[i]);
 
             if (services[i].flags & SVC_TIMER) {
                 timer_rearm(&services[i]);

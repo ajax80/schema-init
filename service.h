@@ -499,6 +499,10 @@ void service_log(const service_t *svc, const char *event);
 
 /* kill all processes in the service's cgroup and remove it */
 int  cgroup_kill_path(const char *cg);
+/* rmdir CG and every cgroup below it, deepest first; best effort */
+void cgroup_rmdir_tree(const char *cg);
+/* 1 if CG has a cgroup below it */
+int  cgroup_has_children(const char *cg);
 void service_cgroup_release_partition(service_t *svc);
 void service_cgroup_kill(service_t *svc);
 extern const char *service_cgroup_root;   /* "" = no cgroups */
