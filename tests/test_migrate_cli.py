@@ -43,6 +43,22 @@ def check(n, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {n}"
 def fake_run(argv, **kw):
     return type("R", (), {"returncode": 1 if argv[:2] == ["rpm", "-q"] else 0, "stdout": ""})()
 
+# a pending reboot (grubby's default isn't the running kernel) refuses discover + deploy
+def pending_run(argv, **kw):
+    if argv[:2] == ["grubby", "--default-kernel"]:
+        return type("R", (), {"returncode": 0, "stdout": "/root/boot/vmlinuz-6.11.0\n"})()
+    return fake_run(argv, **kw)
+check("discover refuses on pending reboot", sm.main(["--discover"], run=pending_run) == 2)
+check("deploy refuses on pending reboot", sm.main(["--deploy"], run=pending_run) == 2)
+check("pending reboot wrote nothing",
+      not os.path.exists(os.path.join(root, "var/lib/schema-init/migrate-profile.json"))
+      and not os.path.exists(os.path.join(root, "etc/schema-init")))
+def same_run(argv, **kw):
+    if argv[:2] == ["grubby", "--default-kernel"]:
+        return type("R", (), {"returncode": 0, "stdout": "/boot/vmlinuz-6.10.0\n"})()
+    return fake_run(argv, **kw)
+check("discover runs when next boot is the running kernel", sm.main(["--discover"], run=same_run) == 0)
+
 # dry-run writes nothing
 rc = sm.main(["--dry-run"], run=fake_run)
 check("dry-run exits 0", rc == 0)

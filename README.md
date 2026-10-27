@@ -106,7 +106,7 @@ sudo dnf copr enable ajax80/schema-init
 sudo dnf install schema-init-wizard
 ```
 
-then run `schema-wizard`. It walks you through three reversible stages with a rollback at each one. Upgrade and reboot first: on a fresh-from-the-image install the wizard's Qt dependency pulls half of KDE forward, and that partial upgrade can fail on Fedora package conflicts; the reboot puts you on the new kernel, which is the one the schema boot entry is made for.
+then run `schema-wizard`. It walks you through three reversible stages with a rollback at each one. Upgrade and reboot first: on a fresh-from-the-image install the wizard's Qt dependency pulls half of KDE forward, and that partial upgrade can fail on Fedora package conflicts; the reboot puts you on the new kernel, which is the one the schema boot entry is made for. `schema-migrate` refuses to profile or deploy while the default boot entry is not the running kernel.
 
 ## Known limitations
 
