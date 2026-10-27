@@ -51,6 +51,7 @@ typedef struct {
     X(INT,  core_dumped)         \
     X(INT,  has_exited)          \
     X(TS,   timer_next)          \
+    X(INT,  timer_catchup_wait)  \
     X(TS,   spawn_time_mono)     \
     X(TS,   boot_spawn)          \
     X(TS,   boot_ready)          \

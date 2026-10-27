@@ -158,10 +158,10 @@ static time_t calendar_recent_occurrence(const service_t *svc, time_t now) {
                                         svc->timer_cal_dow, svc->timer_cal_dom, now);
 }
 
-/* Initial arm for a persistent calendar timer: if a scheduled fire passed while
- * we were down, fire now; otherwise arm normally. A never-stamped timer is
- * seeded (no replay of history on first deploy). */
-static void timer_arm_persistent(service_t *svc) {
+/* If a scheduled fire passed while we were down, fire now; otherwise arm
+ * normally. A never-stamped timer is seeded (no replay of history on first
+ * deploy). */
+static void timer_catchup_check(service_t *svc) {
     time_t now = time(NULL);
     time_t stamp = timer_stamp_read(svc);
     if (stamp == 0) {
@@ -175,6 +175,38 @@ static void timer_arm_persistent(service_t *svc) {
         service_log(svc, "timer-catchup");
     } else {
         timer_arm_calendar(svc);
+    }
+}
+
+/* A separate /var is mounted by mount-fstab, after the timers are armed: a
+ * stamp read before then comes from the empty shadow /var, reads as "never
+ * stamped" and the catch-up is lost. So a persistent timer arms on the
+ * calendar and reads its stamp once mount-fstab has made one attempt (a
+ * failing one never mounts /var, and must not hold timers forever); with no
+ * mount-fstab, on the next pass. */
+static void timer_arm_persistent(service_t *svc) {
+    svc->timer_catchup_wait = 1;
+    timer_arm_calendar(svc);
+}
+
+static void timer_catchup_tick(void) {
+    int i, any = 0;
+    for (i = 0; i < svc_count && !any; i++)
+        any = services[i].timer_catchup_wait;
+    if (!any) return;
+    for (i = 0; i < svc_count; i++) {
+        if (strcmp(services[i].name, "mount-fstab") != 0) continue;
+        uint8_t st = services[i].inst.state;
+        if (st != STATE_PERFECT && st != STATE_EXCISED &&
+            st != STATE_DORMANT && st != STATE_RECOVERY)
+            return;
+    }
+    for (i = 0; i < svc_count; i++) {
+        if (!services[i].timer_catchup_wait) continue;
+        services[i].timer_catchup_wait = 0;
+        /* not PERFECT: it is firing on the calendar right now, that is the run */
+        if (services[i].inst.state == STATE_PERFECT)
+            timer_catchup_check(&services[i]);
     }
 }
 
@@ -558,6 +590,7 @@ static void fork_adopt(service_t *svc) {
  * terminal instead of re-firing every tick. */
 static void timer_rearm(service_t *svc) {
     svc->inst.state = STATE_PERFECT;
+    svc->timer_catchup_wait = 0;
     if (svc->flags & SVC_TIMER_CALENDAR) {
         if (svc->flags & SVC_TIMER_PERSIST)
             timer_stamp_write(svc, time(NULL));
@@ -2690,6 +2723,7 @@ void engine_run(void) {
         uint8_t before[MAX_SERVICES];
         for (i = 0; i < svc_count; i++)
             before[i] = services[i].inst.state;
+        timer_catchup_tick();
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i], grp_states, grp_count);
         {
