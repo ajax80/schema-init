@@ -238,3 +238,7 @@ Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if t
 **Not yet implemented:** several times per day, ranges and lists in one key. See `docs/timers-design.md`.
 
 ---
+
+## Rootless podman / Quadlet
+
+`schema-import --user` runs Quadlet (and any other user generator), so a `.container` file in `~/.config/containers/systemd/` becomes a schema-user service with no extra step; `systemctl --user daemon-reload` picks up edits (then `restart` the service to apply them, as on systemd). With lingering on, it starts at boot before anyone logs in. The generated `.svc` uses `main_pid_notify` (supervises conmon after `podman run -d` exits), `exec_stop`/`exec_stop_post` (the container is removed on stop), `verify_*_max` (a `Memory=`/`--cpus`/`--pids-limit` that did not land fails the service) and a `stop_timeout_sec` past podman's own stop timeout. Rootless ports are ≥ 1024. Known gap: `podman exec` from a login shell is refused (crun cannot move a process from the session's cgroup into the service's; systemd solves this with a transient scope, a later phase here) — run it from a user service instead. `tests/livetest/podman-quadlet-e2e.sh` is the end-to-end check.
