@@ -143,7 +143,7 @@ def _which(cmd):
     return None
 
 
-def _specifiers(argv, name):
+def _specifiers(argv, name, strict=True):
     spec = {"n": name + ".service", "N": name, "p": name, "t": "/run", "%": "%"}
     if _USER:
         spec.update({"h": _USER["home"], "t": _USER["runtime"], "S": _USER["state"],
@@ -153,6 +153,8 @@ def _specifiers(argv, name):
     for w in argv:
         def rep(m):
             if m.group(1) not in spec:
+                if not strict:
+                    return m.group(0)
                 raise Skip("specifier %%%s has no schema equivalent" % m.group(1))
             return spec[m.group(1)]
         out.append(re.sub(r"%(.?)", rep, w))
@@ -850,7 +852,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         raise Skip("no usable ExecStart")
     argv = _specifiers(argv, unit or name)
 
-    env_pairs = _env_pairs(_get_all(svc, "Environment"))
+    # unknown specifiers in a value stay literal: a value is data, not argv
+    env_pairs = _specifiers(_env_pairs(_get_all(svc, "Environment")), unit or name, strict=False)
     env_files, env_file_notes = [], []
     for ef in _get_all(svc, "EnvironmentFile"):
         if ef == "":
@@ -1058,7 +1061,15 @@ def _unit_dirs():
         if _USER["runtime"]:
             dirs.append(os.path.join(_USER["runtime"], "systemd/user"))
         dirs += [os.path.join(r, "run/systemd/user"), os.path.join(_USER["data"], "systemd/user")]
-        return dirs + [os.path.join(r, d) for d in _USER_SYS_DIRS]
+        dirs += [os.path.join(r, d) for d in _USER_SYS_DIRS]
+        g = _generator_root()
+        if g:
+            # systemd's order: early beats config, normal sits after the runtime
+            # dirs, late comes last
+            dirs.insert(0, os.path.join(g, "early"))
+            dirs.insert(dirs.index(os.path.join(r, "run/systemd/user")), os.path.join(g, "normal"))
+            dirs.append(os.path.join(g, "late"))
+        return dirs
     return [os.path.join(r, d.lstrip("/")) for d in (
         "etc/systemd/system", "run/systemd/system",
         "usr/lib/systemd/system", "lib/systemd/system")]
@@ -1810,13 +1821,67 @@ def _wants_dir_units(dirs, unit):
     return out
 
 
+GENERATOR_DIRS = ("usr/lib/systemd/user-generators", "usr/local/lib/systemd/user-generators",
+                  "etc/systemd/user-generators")
+PODMAN_WAIT = "podman-user-wait-network-online.service"
+
+
+_GEN_ROOT = None   # a dry run generates into a temp dir instead
+
+
+def _generator_root():
+    if _GEN_ROOT:
+        return _GEN_ROOT
+    if not _USER or not _USER["runtime"]:
+        return None
+    return os.path.join(_USER["runtime"], "schema-user/generator")
+
+
+def run_user_generators(ctx, log=print):
+    # systemd.generator(7): argv normal early late; Quadlet writes its units and
+    # their .wants links into normal. Emptied first so a deleted .container
+    # takes its unit with it.
+    set_user_mode(ctx)
+    g = _generator_root()
+    if not g:
+        return None
+    outs = [os.path.join(g, d) for d in ("normal", "early", "late")]
+    for d in outs:
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, mode=0o700)
+    seen = set()
+    for gd in GENERATOR_DIRS:
+        gd = os.path.join(_root(), gd)
+        try:
+            names = sorted(os.listdir(gd))
+        except OSError:
+            continue
+        for n in names:
+            path = os.path.join(gd, n)
+            if n in seen or not os.access(path, os.X_OK) or os.path.isdir(path):
+                continue
+            seen.add(n)
+            try:
+                r = subprocess.run([path] + outs, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.PIPE, timeout=5)
+                err = r.stderr.decode(errors="replace").strip().splitlines()
+                if r.returncode != 0:
+                    log("WARN    generator %s: exit %d%s" % (n, r.returncode,
+                                                          (": " + err[-1]) if err else ""))
+            except (OSError, subprocess.TimeoutExpired) as e:
+                log("WARN    generator %s: %s" % (n, e))
+    return g
+
+
 def user_enabled_set(skip):
     import fnmatch
-    cfg = _unit_dirs()[0]
+    cfg = os.path.join(_USER["config"], "systemd/user")
+    g = _generator_root()
+    wants_dirs = [cfg] + ([os.path.join(g, "normal")] if g else [])
     # (unit, enabled directly by a .wants link rather than reached by Wants=)
     queue = []
     for root in _USER_ROOTS:
-        queue += [(u, True) for u in _wants_dir_units([cfg], root)]
+        queue += [(u, True) for u in _wants_dir_units(wants_dirs, root)]
     units, skipped, seen = [], [], set()
     while queue:
         u, direct = queue.pop(0)
@@ -1825,6 +1890,9 @@ def user_enabled_set(skip):
         seen.add(u)
         if u in _NEVER:
             skipped.append((u, "the session bus is started by the session"))
+            continue
+        if u == PODMAN_WAIT:
+            skipped.append((u, "mapped to the network-online wait"))
             continue
         if u.endswith(".target"):
             # only the user's own .wants of a target, never its Wants= or the
@@ -1886,7 +1954,7 @@ def user_enabled_set(skip):
                     queue += [(w, True) for w in sorted(os.listdir(os.path.join(cfg, act + ".requires")))]
                 except OSError:
                     pass
-        queue += [(w, True) for w in _wants_dir_units([cfg], u)]
+        queue += [(w, True) for w in _wants_dir_units(wants_dirs, u)]
         units.append(u)
     try:
         entries = sorted(os.listdir(cfg))
@@ -1945,7 +2013,8 @@ NET_ONLINE = "network-online"
 
 
 def _after_online(*sections):
-    return any("network-online.target" in " ".join(_get_all(sec.get("Unit", []), "After")).split()
+    return any({"network-online.target", PODMAN_WAIT} &
+               set(" ".join(_get_all(sec.get("Unit", []), "After")).split())
                for sec in sections)
 
 
@@ -2157,7 +2226,11 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
     # or _keep_hand_written finds nothing and its hand-written .svc are lost
     if not os.path.isdir(out_dir) and os.path.isdir(old) and not dry_run:
         os.rename(old, out_dir)
-    set_user_mode(ctx)
+    global _GEN_ROOT
+    if dry_run:
+        import tempfile
+        _GEN_ROOT = tempfile.mkdtemp(prefix="schema-gen.")
+    run_user_generators(ctx, log)
     stage = out_dir + ".new"
     saved = os.environ.get("SCHEMA_SVC_DIR")
     counts = {"generated": 0, "skipped": 0, "error": 0}
@@ -2245,6 +2318,9 @@ def run_user_import(ctx, out_dir, skip_paths, dry_run=False, log=print):
         else:
             os.environ["SCHEMA_SVC_DIR"] = saved
         set_user_mode(None)
+        if _GEN_ROOT:
+            shutil.rmtree(_GEN_ROOT, ignore_errors=True)
+            _GEN_ROOT = None
     return counts
 
 
