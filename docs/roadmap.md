@@ -43,6 +43,8 @@
 - [x] Per-user supervisor — `schema-user`, one per logged-in user and per lingering user from boot, started, supervised, stopped and adopted by `schema-logind`; `schema-ctl --user`; `schema-import --user` runs the user's enabled systemd user units (socket/timer service deps, `ConditionUser=`, network-online wait); a `systemctl --user` shim; session D-Bus activation routed through it; `org.freedesktop.systemd1` on the session bus (`schema-systemd1-session`)
 - [ ] Per-user supervisor, phase 2 — session targets, a native session `systemd1` with scopes, and verified GNOME, rootless podman/Quadlet and per-app scopes
 - [x] Landlock TCP rules — `landlock_bind_tcp=` / `landlock_connect_tcp=`: the kernel limits which TCP ports a service may listen on and connect to, with no firewall and no eBPF
+- [ ] Rootless podman + Quadlet on `schema-user` — `.container` files run as supervised user services (boot with lingering, restart on crash, limits verified, LAN ports); spec `docs/superpowers/specs/2026-10-27-rootless-podman-quadlet-design.md`
+- [ ] `schema-user` re-adopts running services across its own restart, so containers survive an upgrade
 - [ ] Alpine port — `distros/alpine/` beside OpenRC, built on the musl support from the Void musl port
 - [ ] schema-ctl polish — `schema-top` (live status over ssh from the shared-memory table, per-service memory and CPU from cgroups), colour in `schema-ctl status` on a terminal, and `schema-ctl log [-f] <svc>` (the dependency graph as text is `schema-ctl graph`)
 - [x] schema-import: `SocketBindDeny=` all TCP + `SocketBindAllow=` ports → `landlock_bind_tcp=` (port 0 kept for ephemeral binds, as systemd does); deny-lists, UDP rules and sets of more than 15 ports are warned, not translated
