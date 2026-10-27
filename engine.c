@@ -2284,7 +2284,7 @@ static int get_poll_timeout(void) {
             !svc->is_frozen)
             best = wake_min(best, svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec),
                             now_m, WAKE_NONE);
-        if (svc->failsafe_pid > 0 || svc->card_pid > 0 || svc->stop_pid > 0 ||
+        if (svc->failsafe_pid > 0 || svc->card_pid > 0 || svc->stop_pid > 0 || svc->main_wait ||
             (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
             tick = 1;
         else if (s == STATE_DORMANT)
