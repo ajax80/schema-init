@@ -127,6 +127,7 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define SVC_TIMER_PERSIST  (1 << 6) /* persistent=1: catch up a calendar fire missed while down */
 #define SVC_NO_NEW_PRIVS   (1 << 7)  /* prctl(PR_SET_NO_NEW_PRIVS) in child   */
 #define SVC_STOP_FIRST     (1 << 8)  /* shutdown: stopped before anything else */
+#define SVC_MAIN_PID_NOTIFY (1 << 9) /* main_pid_notify=1: MAINPID= hands supervision to that pid */
 
 typedef enum {
     PRIO_PERIPHERAL = 0,
@@ -280,6 +281,9 @@ typedef struct {
     pid_t            stop_pid;            /* runner for exec_stop(_post), 0 if none; a respawn waits for it */
     int              stop_phase;          /* 1 exec_stop, 2 exec_stop_post, 3 both (eviction) */
     struct timespec  stop_start;
+    pid_t            main_pid;            /* main_pid_notify: pid from MAINPID=, supervised once the launcher exits 0 */
+    int              main_wait;           /* launcher exited 0 before MAINPID=: waiting until main_wait_due */
+    struct timespec  main_wait_due;
     char            *card[MAX_CARDS];    /* card=exec:CMD, played one per retry, in order */
     int              card_count;
     int              card_next;           /* next card to play; reset with the restart budget */

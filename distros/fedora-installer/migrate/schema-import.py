@@ -939,6 +939,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         lines.append("oneshot=1")
     elif stype in ("notify", "notify-reload"):
         lines.append("notify=1")
+        # user mode only, like exec_stop: a system re-import must not change
+        # which pid PID 1 supervises
+        if _USER and _get_last(svc, "NotifyAccess").lower() == "all":
+            lines.append("main_pid_notify=1")
     elif stype == "dbus":
         lines.append("ready_bus_name=%s" % busname)
     elif stype == "forking":

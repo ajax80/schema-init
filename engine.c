@@ -65,6 +65,7 @@ int engine_mkdir_p(const char *path, mode_t mode) {
 #define READY_POLL_MS   10       /* while a starting service's ready_path is awaited, */
 #define READY_POLL_SECS 3        /* ...for this long after its spawn */
 #define PID_FILE_WAIT_SECS 5
+#define MAINPID_WAIT_SECS 10
 
 static service_t    services_a[MAX_SERVICES];
 static service_t    services_b[MAX_SERVICES];
@@ -667,6 +668,24 @@ static void timer_rearm(service_t *svc) {
     }
 }
 
+/* MAINPID=: alive and inside the service's cgroup or below it. Not
+ * pid_file_read()'s scan of the top-level cgroup.procs: a delegated service
+ * keeps that empty and its processes in children. */
+static int mainpid_ok(const service_t *svc, pid_t p) {
+    char text[NOTIFY_CGROUP_TEXT_MAX];
+    return p > 1 && kill(p, 0) == 0 && svc->cgroup_path[0] &&
+           notify_read_cgroup(p, text, sizeof text) &&
+           notify_cgroup_text_matches(text, svc->cgroup_path);
+}
+
+static void main_adopt(service_t *svc, pid_t p) {
+    char ev[48];
+    svc->child_pid = svc->main_pid = p;
+    svc->main_wait = 0;
+    snprintf(ev, sizeof ev, "main-pid pid=%d", (int)p);
+    service_log(svc, ev);
+}
+
 static void notify_poll(int max_batch);
 
 static void reap(void) {
@@ -695,6 +714,27 @@ static void reap(void) {
             services[i].last_pid   = pid;
             services[i].child_pid  = 0;
             note_exit(&services[i], status);
+
+            /* main_pid_notify: the launcher exiting is a handover, not a death */
+            if ((services[i].flags & SVC_MAIN_PID_NOTIFY) && pid != services[i].main_pid &&
+                !services[i].ctl_killed) {
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                    if (services[i].main_pid && mainpid_ok(&services[i], services[i].main_pid)) {
+                        main_adopt(&services[i], services[i].main_pid);
+                    } else {
+                        struct timespec t;
+                        clock_gettime(CLOCK_MONOTONIC, &t);
+                        t.tv_sec += MAINPID_WAIT_SECS;
+                        services[i].main_pid = 0;
+                        services[i].main_wait = 1;
+                        services[i].main_wait_due = t;
+                    }
+                    break;
+                }
+                /* a failed launcher takes what it started with it */
+                service_cgroup_kill(&services[i]);
+            }
+            services[i].main_pid = 0;
 
             if (services[i].flags & SVC_TIMER) {
                 timer_rearm(&services[i]);
@@ -840,6 +880,14 @@ static void monitor_failsafes(void) {
                 svc->card_pid = 0;
                 service_log(svc, "card-timeout");
             }
+        }
+        if (svc->main_wait && now.tv_sec >= svc->main_wait_due.tv_sec) {
+            svc->main_wait = 0;
+            service_cgroup_kill(svc);
+            service_log(svc, "main-pid-timeout");
+            restart_budget_refresh(svc);
+            svc->inst.state = (svc->flags & SVC_NO_RESTART) ? STATE_EXCISED : STATE_RECOVERY;
+            stop_cmds_begin(svc, 2);
         }
         if (svc->stop_pid > 0 && !(svc->stop_phase & STOP_TIMED_OUT)) {
             uint64_t ran = (uint64_t)(now.tv_sec - svc->stop_start.tv_sec) * 1000 +
@@ -2059,7 +2107,7 @@ static void notify_poll(int max_batch) {
         for (int i = 0; i < svc_count; i++) {
             service_t *svc = &services[i];
             int stores = svc->fdstore_max > 0 && (m.fdstore || m.fdstore_remove) && svc->child_pid == pid;
-            if (!(svc->notify || stores) || svc->child_pid <= 0) continue;
+            if (!(svc->notify || stores) || (svc->child_pid <= 0 && !svc->main_wait)) continue;
             if (svc->child_pid != pid) {
                 if (!svc->cgroup_path[0]) continue;
                 if (have_cg < 0) have_cg = notify_read_cgroup(pid, cgtext, sizeof cgtext);
@@ -2075,6 +2123,12 @@ static void notify_poll(int max_batch) {
             if (stores && m.fdstore_remove)
                 fdstore_remove(svc->name, m.fdname);
             if (!svc->notify) break;
+            if (m.mainpid && (svc->flags & SVC_MAIN_PID_NOTIFY) && mainpid_ok(svc, m.mainpid)) {
+                if (svc->main_wait || (svc->main_pid && svc->child_pid == svc->main_pid))
+                    main_adopt(svc, m.mainpid);
+                else
+                    svc->main_pid = m.mainpid;   /* launcher still running: adopt at its exit */
+            }
             if (m.status[0])
                 snprintf(svc->notify_status, sizeof svc->notify_status, "%s", m.status);
             if (m.watchdog)

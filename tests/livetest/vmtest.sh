@@ -43,18 +43,21 @@ cc -static -O2 -std=c99 -D_GNU_SOURCE -I"$REPO" -o "$SCTL" "$REPO/schema-ctl.c" 
 PRIVDROP="$WORK/test_privdrop"
 cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c" \
   || { echo "PRIVDROP HELPER BUILD FAILED"; cc -static -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c"; exit 1; }
+NOTIFIER="$WORK/notifier"
+cc -static -O2 -D_GNU_SOURCE -o "$NOTIFIER" "$HERE/notifycap/notifier.c" || { echo "NOTIFIER BUILD FAILED"; exit 1; }
 
 # 2. Assemble a minimal initramfs root.
 mkdir -p "$ROOT"/{sbin,bin,usr/bin,etc/schema-init/services,proc,sys,dev,run,sys/fs/cgroup}
 cp "$BIN" "$ROOT/sbin/schema-init"
 ln -sf /sbin/schema-init "$ROOT/init"   # kernel initramfs entry point is /init
 cp "$BB"  "$ROOT/bin/busybox"
-for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill readlink tr; do
+for a in sh ls cat sleep touch poweroff mount mkdir echo grep head kill readlink tr cut; do
   ln -sf /bin/busybox "$ROOT/bin/$a"
 done
 ln -sf /bin/busybox "$ROOT/usr/bin/touch"   # test svcs call /usr/bin/touch
 ln -sf /bin/busybox "$ROOT/bin/sleep"       # and /bin/sleep
 cp "$PRIVDROP" "$ROOT/bin/test_privdrop"
+cp "$NOTIFIER" "$ROOT/usr/bin/notifier"
 cp "$MOUNTNS" "$ROOT/bin/test_mountns"
 cp "$SCTL" "$ROOT/bin/schema-ctl"
 ln -sf /bin/busybox "$ROOT/bin/rm"
@@ -171,6 +174,24 @@ exec=/usr/bin/stopprobe.sh
 exec_stop=/bin/sh -c "echo stop >> /run/stopprobe.order"
 exec_stop_post=/bin/sh -c "echo post >> /run/stopprobe.order"
 EOF
+
+# main_pid_notify probes: a launcher hands over to a child via MAINPID=. The
+# child that holds the notify sender keeps it alive, so PID 1 can attribute it.
+mpsvc() {  # name script [extra .svc lines]
+    printf '#!/bin/sh\n%s\n' "$2" > "$ROOT/usr/bin/$1.sh"; chmod +x "$ROOT/usr/bin/$1.sh"
+    printf 'name=%s\nexec=/usr/bin/%s.sh\nnotify=1\nmain_pid_notify=1\n%b' "$1" "$1" "${3:-}" \
+        > "$ROOT/etc/schema-init/services/$1.svc"
+}
+HAND='sh -c '"'"'exec /usr/bin/notifier "$(printf "MAINPID=%s\\nREADY=1" $$)" hold'"'"''
+mpsvc mp-before "$HAND & echo \$! > /run/mp-before.pid; sleep 1; exit 0"
+mpsvc mp-after "sh -c 'sleep 2; exec /usr/bin/notifier \"\$(printf \"MAINPID=%s\\\\nREADY=1\" \$\$)\" hold' & echo \$! > /run/mp-after.pid; exit 0"
+mpsvc mp-fail "$HAND & echo \$! > /run/mp-fail.pid; sleep 1; exit 1" 'no_restart=1\n'
+mpsvc mp-never 'exit 0' 'no_restart=1\n'
+mpsvc mp-outside '/usr/bin/notifier "MAINPID=1" hold & sleep 1; exit 0' 'no_restart=1\n'
+mpsvc mp-restart "sh -c '/usr/bin/notifier \"\$(printf \"MAINPID=%s\\\\nREADY=1\" \$\$)\" hold & sleep 3; exit 0' & sleep 1; exit 0" 'max_restarts=2\n'
+mpsvc mp-norestart "sh -c '/usr/bin/notifier \"\$(printf \"MAINPID=%s\\\\nREADY=1\" \$\$)\" hold & sleep 3; exit 0' & sleep 1; exit 0" 'no_restart=1\n'
+printf '#!/bin/sh\n%s & echo $! > /run/mp-nokey.pid; sleep 1; exit 0\n' "$HAND" > "$ROOT/usr/bin/mp-nokey.sh"; chmod +x "$ROOT/usr/bin/mp-nokey.sh"
+printf 'name=mp-nokey\nexec=/usr/bin/mp-nokey.sh\nnotify=1\nno_restart=1\n' > "$ROOT/etc/schema-init/services/mp-nokey.svc"
 
 cat > "$ROOT/etc/schema-init/services/test-crash.svc" <<'EOF'
 name=test-crash
@@ -620,8 +641,25 @@ echo "UNSAFE-AFTER: $(/bin/schema-ctl status test-readypath 2>&1 | head -1)"
 chmod g-w /etc/schema-init/services/test-readypath.svc
 echo "mem_limit=32" > /etc/schema-init/services/test-dropin.svc.d/30-late.conf
 echo "DROPIN-RELOAD: $(/bin/schema-ctl reload 2>&1 | head -1)"
+MPA_PRE=$(/bin/schema-ctl status mp-after 2>&1 | head -1 | grep -o ' pid=[0-9]*' | head -1 | cut -d= -f2)
 echo "DROPIN-REEXEC: $(/bin/schema-ctl reexec 2>&1 | head -1)"
+sleep 2
+echo "MP-reexec: $( [ -n "$MPA_PRE" ] && [ "$MPA_PRE" = "$(/bin/schema-ctl status mp-after 2>&1 | head -1 | grep -o ' pid=[0-9]*' | head -1 | cut -d= -f2)" ] && [ "$MPA_PRE" = "$(cat /run/mp-after.pid)" ] && echo kept || echo "lost ($MPA_PRE)")"
 echo "DROPIN-CAT-BEGIN"; /bin/schema-ctl cat test-dropin; echo "DROPIN-CAT-END"
+mpst() { /bin/schema-ctl status "$1" 2>&1 | head -1; }
+mppid() { mpst "$1" | grep -o ' pid=[0-9]*' | head -1 | cut -d= -f2; }
+echo "MP-before: $( [ "$(mppid mp-before)" = "$(cat /run/mp-before.pid)" ] && echo adopted || echo "no ($(mpst mp-before) want $(cat /run/mp-before.pid))")"
+echo "MP-after: $( [ "$(mppid mp-after)" = "$(cat /run/mp-after.pid)" ] && echo adopted || echo "no ($(mpst mp-after) want $(cat /run/mp-after.pid))")"
+echo "MP-fail: $(grep -Ec 'mp-fail .*(died|76-no-restart)' "$RAIL") adopted=$(grep -c 'mp-fail .*main-pid pid' "$RAIL") child=$(kill -0 "$(cat /run/mp-fail.pid)" 2>/dev/null && echo alive || echo gone)"
+echo "MP-never: $(grep -c 'mp-never .*main-pid-timeout' "$RAIL")"
+echo "MP-outside: $(grep -c 'mp-outside .*main-pid-timeout' "$RAIL") adopted=$(grep -c 'mp-outside .*main-pid pid' "$RAIL")"
+echo "MP-restart: $(grep -c 'mp-restart .*main-pid pid' "$RAIL")"
+echo "MP-norestart: $(grep -c 'mp-norestart .*main-pid pid' "$RAIL") $(mpst mp-norestart | grep -o 'state=[A-Z_]*')"
+echo "MP-nokey: $( [ "$(mppid mp-nokey)" = "$(cat /run/mp-nokey.pid)" ] && echo adopted || echo not-adopted)"
+MPB=$(cat /run/mp-before.pid)
+/bin/schema-ctl stop mp-before >/dev/null 2>&1
+i=0; while [ $i -lt 20 ] && kill -0 "$MPB" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
+echo "MP-stop: $(kill -0 "$MPB" 2>/dev/null && echo alive || echo gone)"
 /bin/schema-ctl stop test-stopcmd >/dev/null 2>&1
 i=0; while [ $i -lt 20 ] && ! grep -qs post /run/stopprobe.order; do sleep 0.5; i=$((i+1)); done
 echo "STOPCMD-ORDER: $(tr '\n' ' ' < /run/stopprobe.order 2>&1)"
@@ -759,6 +797,11 @@ grep -Eq "DROPIN-RELOAD: err: .*'test-dropin' modified since boot" "$SERIAL" || 
 grep -Eq "DROPIN-REEXEC: err: .*test-dropin" "$SERIAL" || { echo "  MISS: reexec not refused after a drop-in was added"; pass=0; }
 grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL" || { echo "  MISS: schema-ctl cat did not list the late drop-in"; pass=0; }
 # restart_count: first spawn, timer fires and ctl restart are not restarts.
+for c in "MP-before: adopted" "MP-after: adopted" "MP-fail: [1-9][0-9]* adopted=0 child=gone" "MP-never: [1-9]" \
+         "MP-outside: [1-9][0-9]* adopted=0" "MP-restart: [2-9]" "MP-norestart: 1 state=EXCISED" \
+         "MP-nokey: not-adopted" "MP-stop: gone" "MP-reexec: kept"; do
+    grep -Eq "$c" "$SERIAL" || { echo "  MISS: main_pid_notify: $c ($(grep -o "${c%%:*}:.*" "$SERIAL" | head -1))"; pass=0; }
+done
 grep -Eq "STOPCMD-ORDER: stop term post" "$SERIAL" || { echo "  MISS: exec_stop / SIGTERM / exec_stop_post out of order"; pass=0; }
 grep -Eq "crash-retries: 3"  "$SERIAL" || { echo "  MISS: test-crash did not retry exactly max_restarts=3 times"; pass=0; }
 grep -Eq "crash-dormant: [1-9]" "$SERIAL" || { echo "  MISS: test-crash never went dormant"; pass=0; }
