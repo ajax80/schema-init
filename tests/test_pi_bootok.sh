@@ -142,3 +142,15 @@ for tg in current known-good; do
     fi
 done
 echo "ok bootok_restore_old"
+
+# bootok_promote_only
+reset
+env_run sh "$BOOTOK" --promote > "$T/log" 2>&1 || fail "bootok_promote_only: exit"
+cmp -s "$KG/schema-init" "$R/usr/bin/schema-init" || fail "bootok_promote_only: kg not populated"
+[ ! -e "$MARK" ] || fail "bootok_promote_only: marker written"
+[ "$(cat "$STATE")" = "attempts=2
+last_target=current" ] || fail "bootok_promote_only: state touched"
+rm "$R/usr/bin/schema-ctl"
+env_run sh "$BOOTOK" --promote > "$T/log" 2>&1 && fail "bootok_promote_only: should fail"
+cmp -s "$KG/schema-init" "$R/usr/bin/schema-init" || fail "bootok_promote_only: good set lost"
+echo "ok bootok_promote_only"
