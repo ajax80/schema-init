@@ -1,0 +1,124 @@
+name: deb
+
+# master -> dev channel, v* tags -> stable. pi-* branches build and upload the
+# artifact but never dispatch, so they can be published by hand for testing.
+on:
+  push:
+    branches: [master, 'pi-*']
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'stable' || 'dev' }}
+  BUILD_DEPS: build-essential debhelper libzstd-dev libacl1-dev pkgconf libdbus-1-dev python3
+
+jobs:
+  native:
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-latest }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: debian:trixie
+    steps:
+      # git before checkout, or checkout falls back to a tarball with no history
+      # for deb-changelog.sh's rev-list --count.
+      - name: git
+        run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: build deps
+        run: apt-get install -y --no-install-recommends $BUILD_DEPS
+      # Unprivileged like ci.yml; under /build so dpkg-buildpackage can write
+      # the .deb to the parent dir. umask 022: the svc loader refuses
+      # group-writable files and Debian's user-private-group umask is 002.
+      - name: unprivileged copy
+        run: useradd -m ci && mkdir /build && cp -a . /build/src && chown -R ci /build
+      - name: make test
+        run: su ci -c 'umask 022; cd /build/src && make test'
+      - name: build deb
+        run: |
+          su ci -c "umask 022; cd /build/src && sh tools/deb-changelog.sh $CHANNEL && dpkg-buildpackage -b -us -uc"
+          mkdir out && mv /build/schema-init_*.deb out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: out/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  armhf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: paths
+        run: |
+          echo "ROOTFS=$RUNNER_TEMP/rootfs" >> "$GITHUB_ENV"
+          echo "ROOTFS_TAR=$RUNNER_TEMP/raspbian-rootfs.tar" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: host deps
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static binfmt-support debootstrap
+      - id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      # A tarball, not the tree: actions/cache runs unprivileged and would lose
+      # root ownership and device nodes.
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ROOTFS_TAR }}
+          key: raspbian-trixie-armhf-${{ steps.week.outputs.week }}-${{ hashFiles('tools/raspbian-rootfs.sh') }}
+      - name: debootstrap
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo sh tools/raspbian-rootfs.sh "$ROOTFS"
+          sudo tar -C "$ROOTFS" --numeric-owner -cf "$ROOTFS_TAR" .
+      - name: unpack cached rootfs
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: sudo mkdir "$ROOTFS" && sudo tar -C "$ROOTFS" --numeric-owner -xpf "$ROOTFS_TAR"
+      - name: enter chroot
+        run: |
+          for m in proc sys dev dev/pts; do sudo mount --bind /$m "$ROOTFS/$m"; done
+          sudo mkdir "$ROOTFS/build" && sudo cp -a . "$ROOTFS/build/src"
+          sudo chroot "$ROOTFS" sh -c 'useradd -m ci && chown -R ci /build'
+      - name: make test (qemu)
+        run: sudo chroot "$ROOTFS" su ci -c 'umask 022; cd /build/src && make test'
+      - name: build deb (qemu)
+        run: |
+          sudo chroot "$ROOTFS" su ci -c "umask 022; cd /build/src && sh tools/deb-changelog.sh $CHANNEL && dpkg-buildpackage -b -us -uc"
+          mkdir out && cp "$ROOTFS"/build/schema-init_*.deb out/
+      - name: ARMv6 gate
+        run: sh tools/check-armv6.sh out/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-armhf
+          path: out/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [native, armhf]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          merge-multiple: true
+          path: debs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ env.CHANNEL }}
+          path: debs/schema-init_*.deb
+          if-no-files-found: error
+      - name: dispatch to schema-init-apt
+        if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.APT_DISPATCH_TOKEN }}
+        run: >
+          gh api repos/ajax80/schema-init-apt/dispatches -f event_type=pi-debs
+          -f "client_payload[run_id]=$GITHUB_RUN_ID" -f "client_payload[channel]=$CHANNEL"
