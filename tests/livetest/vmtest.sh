@@ -117,6 +117,8 @@ EOT
   cat > "$PR/lib/systemd/systemd" <<'EOT'
 #!/bin/sh
 echo "PI-SYSTEMD-REACHED argv0=$0"
+mount -t proc proc /proc
+echo "PI-SD-ROOT: $(grep ' / ext4 ' /proc/mounts | cut -d' ' -f4 | cut -d, -f1)"
 sync
 poweroff -f
 EOT
@@ -162,14 +164,15 @@ EOT
         "cd services" "write $WORK/kg-marker.svc kg-marker.svc" "sif kg-marker.svc uid 0" "sif kg-marker.svc gid 0"
   pi_boot 2 rw
   pi_seed 3 known-good
-  pi_boot 3 rw
+  # ro on the cmdline as on Pi OS: systemd-fsck-root needs / still ro when systemd starts
+  pi_boot 3 ro
   # no seed: boot 3's reset to attempts=0 must carry over on the disk
   pi_boot 4 ro
   # Both engine execs fail after to_boot_log(), so the stub's stdout can only
   # reach serial if the wrapper reopened the console. Last: the disk stays broken.
   pi_seed 0 current
   pi_fs "sif /usr/bin/schema-init mode 0100644" "rm /var/lib/schema-init/known-good/schema-init"
-  pi_boot 5 rw
+  pi_boot 5 ro
 
   pass=1
   pi_has() { grep -Eq "$2" "$WORK/pi-serial-$1.log"; }
@@ -189,10 +192,12 @@ EOT
   grep -Eq "^[0-9]+ fallback=known-good attempts=2$" "$WORK/pi-fallback-2" || pi_miss "PI-knowngood: fallback.log"
   pi_has 3 "PI-SYSTEMD-REACHED argv0=/lib/systemd/systemd" || pi_miss "PI-systemd: systemd stub never reached the console"
   pi_has 3 "PI-EXE:"                       && pi_miss "PI-systemd: an engine ran on the systemd boot"
+  pi_has 3 "PI-SD-ROOT: ro"                || pi_miss "PI-systemd: / handed to systemd rw (wrapper did not restore ro)"
   pi_state 3 "attempts=0 last_target=systemd" || pi_miss "PI-systemd: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-3"))"
   grep -Eq "^[0-9]+ fallback=systemd attempts=3$" "$WORK/pi-fallback-3" || pi_miss "PI-systemd: fallback.log"
   pi_has 5 "PI-SYSTEMD-REACHED argv0=/lib/systemd/systemd" || pi_miss "PI-reopen: stub output stuck in boot.log, console not reopened"
   pi_has 5 "PI-EXE:"                       && pi_miss "PI-reopen: an engine ran with both engines unexecutable"
+  pi_has 5 "PI-SD-ROOT: ro"                || pi_miss "PI-reopen: / handed to systemd rw (wrapper did not restore ro)"
   pi_state 5 "attempts=1 last_target=current" || pi_miss "PI-reopen: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-5"))"
   pi_has 4 "PI-CMDLINE: .* ro "            || pi_miss "PI-ro: kernel cmdline lacked ro"
   pi_has 4 "remount / rw failed"           && pi_miss "PI-ro: wrapper could not remount / rw"
@@ -208,7 +213,7 @@ EOT
     grep -q needs_recovery "$WORK/pi-fsflags-$b" && pi_miss "PI-shutdown: boot $b left the ext4 journal needing recovery"
   done
   if [ "$pass" = 1 ]; then
-    echo ">> RESULT: PASS  (Pi wrapper: current, known-good, systemd fallback, console reopen, ro root)"
+    echo ">> RESULT: PASS  (Pi wrapper: current, known-good, systemd fallback, console reopen, ro root, ro handed to systemd)"
   else
     echo ">> RESULT: FAIL / INCONCLUSIVE — serial of every Pi boot: $OUT/last-vmtest-serial.log"
     trap - EXIT; echo "   workdir kept: $WORK"

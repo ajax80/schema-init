@@ -4,10 +4,12 @@
 #include <fcntl.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 
 static char root[PATH_MAX / 2];
+static int root_was_ro;
 
 static const char *P(char *buf, const char *rel) {
     snprintf(buf, PATH_MAX, "%s%s", root, rel);
@@ -141,6 +143,15 @@ static void exec_target(enum pi_target t, int pid1, char **argv) {
             dup2(fd, 2);
             if (fd > 2) close(fd);
         }
+        /* systemd-fsck-root skips a rw root, so fsck.repair=yes needs / back the way the kernel mounted it */
+        if (root_was_ro && mount("", "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
+            int k = open("/dev/kmsg", O_WRONLY);
+            if (k >= 0) {
+                static const char m[] = "<3>schema-init-pi: remount / ro failed, systemd gets a rw root\n";
+                write_all(k, m, sizeof m - 1);
+                close(k);
+            }
+        }
     }
     P(path, "/lib/systemd/systemd");
     argv[0] = path;
@@ -155,6 +166,8 @@ int main(int argc, char **argv) {
     const char *r = pid1 ? NULL : getenv("SCHEMA_PI_ROOT");
     if (r) snprintf(root, sizeof root, "%s", r);
 
+    struct statvfs sv0;
+    root_was_ro = pid1 && statvfs("/", &sv0) == 0 && (sv0.f_flag & ST_RDONLY);
     if (pid1 && mount("", "/", NULL, MS_REMOUNT, NULL) != 0) {
         int k = open("/dev/kmsg", O_WRONLY);
         if (k >= 0) {
