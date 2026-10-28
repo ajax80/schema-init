@@ -1,0 +1,3 @@
+# PID 1 and the boot wrapper run before /usr (or any shared library) is guaranteed to be usable.
+schema-init: statically-linked-binary [usr/bin/schema-init]
+schema-init: statically-linked-binary [usr/sbin/schema-init-pi]

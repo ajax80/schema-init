@@ -1,0 +1,22 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+configure)
+    dpkg-trigger --no-await schema-init-reexec || :
+    if [ -z "$2" ]; then
+        echo "schema-init: installed, PID 1 unchanged. On a Raspberry Pi run 'schema-pi enable' to boot with it."
+    fi
+    ;;
+triggered)
+    # PID 1 swaps itself onto the upgraded binary in place; a refusal leaves
+    # the running one untouched and never fails the transaction.
+    if [ "$(cat "${SCHEMA_PROC1:-/proc/1/comm}" 2>/dev/null)" = schema-init ] && [ "${SCHEMA_PROC1_ROOT:-/proc/1/root}" -ef / ] && [ -S "${SCHEMA_CTL_SOCK:-/run/schema-init.sock}" ]; then
+        schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; run 'schema-ctl reexec' or reboot to pick up the upgrade"
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+BINS = schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder
+
+%:
+	dh $@
+
+# Not `make install`: it writes into /usr/local.
+override_dh_auto_build:
+	$(MAKE) BINS="$(BINS)" all schema-init-pi
+	if command -v cargo >/dev/null 2>&1; then $(MAKE) analyze || true; fi
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+
+override_dh_auto_clean:
+	$(MAKE) clean
+
+override_dh_install:
+	dh_install
+	@if [ -n "$$(find debian/schema-init/usr/local 2>/dev/null)" ]; then echo "packaged files under /usr/local" >&2; exit 1; fi

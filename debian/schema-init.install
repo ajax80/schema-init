@@ -1,0 +1,4 @@
+schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder usr/bin
+schema-init-pi scripts/schema-pi usr/sbin
+scripts/schema-pi-bootok scripts/schema-pi-deadline usr/libexec/schema-init
+services/*.svc.example usr/share/schema-init

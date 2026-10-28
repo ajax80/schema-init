@@ -1,0 +1,19 @@
+Source: schema-init
+Section: admin
+Priority: optional
+Maintainer: Jonathan Ayers <ayersjon80@gmail.com>
+Build-Depends: debhelper-compat (= 13), libzstd-dev, libacl1-dev, pkgconf
+Standards-Version: 4.6.2
+Homepage: https://github.com/ajax80/schema-init
+Rules-Requires-Root: no
+
+Package: schema-init
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, systemd, python3
+Description: custom Linux init system (PID 1 replacement)
+ schema-init is a small init system and service supervisor, with a
+ control tool, journal sink, recorder and a Raspberry Pi boot wrapper
+ that keeps a known-good copy to fall back on.
+ .
+ Installing the package never changes PID 1; run "schema-pi enable" to
+ opt in on a Raspberry Pi.

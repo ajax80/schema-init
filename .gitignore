@@ -35,3 +35,4 @@ tests/dbus-corpus/*
 !tests/dbus-corpus/sample.jsonl
 /schema-analyze
 /analyze/target/
+debian/changelog
