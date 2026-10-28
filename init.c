@@ -1830,10 +1830,11 @@ int main(int argc, char **argv) {
         bounded_sync(10);
         shut_flush_log();        /* the sweep is the last thing that can lose it */
         /* stdio inherited from the Pi wrapper (boot.log) pins / writable */
-        fflush(NULL);
         for (int sfd = 0; sfd <= 2; sfd++) {
             struct stat sst;
             if (fstat(sfd, &sst) != 0 || !S_ISREG(sst.st_mode)) continue;
+            if (sfd == 1) fflush(stdout);
+            if (sfd == 2) fflush(stderr);
             int cfd = open("/dev/console", O_RDWR | O_NOCTTY | O_NONBLOCK);
             if (cfd < 0) cfd = open("/dev/null", O_RDWR);
             if (cfd < 0) continue;
