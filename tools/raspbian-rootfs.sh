@@ -8,7 +8,7 @@ MIRROR=http://raspbian.raspberrypi.com/raspbian
 KEY_URL=https://archive.raspbian.org/raspbian.public.key
 # Raspbian archive signing key (Mike Thompson, Raspberry Pi Debian armhf ARMv6+VFP).
 KEY_FPR=A0DA38D0D76E8B5D638872819165938D90FDDD2E
-PKGS=build-essential,debhelper,libzstd-dev,libacl1-dev,pkgconf,libdbus-1-dev,python3,git
+PKGS=build-essential,debhelper,libzstd-dev,libacl1-dev,pkgconf,libdbus-1-dev,python3,git,procps
 
 K=$(mktemp -d)
 trap 'rm -rf "$K"' EXIT

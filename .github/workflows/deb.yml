@@ -12,7 +12,7 @@ permissions:
 
 env:
   CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'stable' || 'dev' }}
-  BUILD_DEPS: build-essential debhelper libzstd-dev libacl1-dev pkgconf libdbus-1-dev python3
+  BUILD_DEPS: build-essential debhelper libzstd-dev libacl1-dev pkgconf libdbus-1-dev python3 procps
 
 jobs:
   native:
