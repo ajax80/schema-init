@@ -63,10 +63,12 @@ enable() {
         [ -e "$SVC/$s.svc" ] || cp "$SHARE/$s.svc.example" "$SVC/$s.svc" || die "cannot install $s.svc"
     done
 
-    # known-good must exist before the wrapper can ever fall back to it
-    SCHEMA_PI_ROOT=$R "${SCHEMA_PI_BOOTOK:-/usr/libexec/schema-init/schema-pi-bootok}" --promote ||
-        die "known-good seeding failed"
-    printf 'attempts=0\nlast_target=current\n' > "$D/pi-boot"
+    # re-enable after a fallback must not overwrite the last good set with a possibly broken current
+    if [ ! -d "$KG" ]; then
+        SCHEMA_PI_ROOT=$R "${SCHEMA_PI_BOOTOK:-/usr/libexec/schema-init/schema-pi-bootok}" --promote ||
+            die "known-good seeding failed"
+    fi
+    status_enabled || printf 'attempts=0\nlast_target=current\n' > "$D/pi-boot"
 
     line=$(firstline | strip_init)
     write_cmdline "$line $ARG"
@@ -80,8 +82,12 @@ disable() {
     echo "schema-pi: disabled; systemd boots next time"
 }
 
+status_enabled() {
+    [ -f "$CL" ] && firstline | grep -q "\(^\|[$BL]\)$ARG\([$BL]\|\$\)"
+}
+
 status() {
-    if [ -f "$CL" ] && firstline | grep -q "\(^\|[$BL]\)$ARG\([$BL]\|\$\)"; then
+    if status_enabled; then
         echo "enabled: yes"
     else
         echo "enabled: no"

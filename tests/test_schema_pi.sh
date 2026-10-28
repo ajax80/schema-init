@@ -55,6 +55,15 @@ printf '%s\n' "$STOCK" | cmp -s - "$BAK" || fail "enable_twice: backup rewritten
 [ "$(cat "$R/etc/schema-init/services/pi-bootok.svc")" = mine ] || fail "enable_twice: svc overwritten"
 echo "ok enable_twice"
 
+# enable_twice_keeps_kg
+echo changed > "$R/usr/bin/schema-init"
+printf 'attempts=2\nlast_target=current\n' > "$R/var/lib/schema-init/pi-boot"
+pi enable > "$T/log" 2>&1 || fail "enable_twice_keeps_kg: exit"
+[ "$(cat "$R/var/lib/schema-init/known-good/schema-init")" = bin-init ] || fail "enable_twice_keeps_kg: kg overwritten"
+[ "$(cat "$R/var/lib/schema-init/pi-boot")" = "attempts=2
+last_target=current" ] || fail "enable_twice_keeps_kg: state reset"
+echo "ok enable_twice_keeps_kg"
+
 # enable_replaces_old_init
 reset
 printf 'console=tty1 init=/sbin/schema-init-log rootwait init=/x quiet\n' > "$CL"
