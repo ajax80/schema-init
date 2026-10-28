@@ -46,6 +46,156 @@ cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c" \
 NOTIFIER="$WORK/notifier"
 cc -static -O2 -D_GNU_SOURCE -o "$NOTIFIER" "$HERE/notifycap/notifier.c" || { echo "NOTIFIER BUILD FAILED"; exit 1; }
 
+# Pi boot fallback: schema-init-pi is /init on a real ext4 root, booted four
+# times from one disk so state, known-good and logs carry over as on the SD card.
+if [ "${PI_WRAPPER:-0}" = 1 ]; then
+  if [ "$REBUILD" = 1 ]; then
+    make -C "$REPO" schema-init-pi >/dev/null 2>&1 || { echo "PI WRAPPER BUILD FAILED"; make -C "$REPO" schema-init-pi; exit 1; }
+  fi
+  PIW="$REPO/schema-init-pi"
+  [ -x "$PIW" ] || { echo "no wrapper at $PIW"; exit 1; }
+  PR="$WORK/piroot"
+  IMG="$WORK/pi.img"
+  mkdir -p "$PR"/{bin,dev,proc,sys,run,tmp,lib/systemd,usr/bin,usr/libexec/schema-init,etc/schema-init/services,var/lib/schema-init,var/log/schema-init}
+  cp "$PIW" "$PR/init"
+  cp "$BIN" "$PR/usr/bin/schema-init"
+  cp "$SCTL" "$PR/usr/bin/schema-ctl"
+  cp "$BB" "$PR/bin/busybox"
+  for a in sh cat sleep touch poweroff mount mkdir echo grep head tail kill readlink tr cut awk sed date sync mv cp rm; do
+    ln -sf /bin/busybox "$PR/bin/$a"
+  done
+  # pi-bootok promotes both scripts into known-good, so both must exist
+  cp "$REPO/scripts/schema-pi-bootok" "$REPO/scripts/schema-pi-deadline" "$PR/usr/libexec/schema-init/"
+  cp "$REPO/services/pi-bootok.svc.example" "$PR/etc/schema-init/services/pi-bootok.svc"
+  # pi-bootok will not confirm a boot without an sshd service up
+  cat > "$PR/etc/schema-init/services/sshd.svc" <<'EOT'
+name=sshd
+exec=/bin/sh
+args=-c
+args=touch /run/sshd.ready; exec sleep 100000
+ready_path=/run/sshd.ready
+needs_root=1
+EOT
+  # Long-running and ready at once: pi-bootok waits on every service, this one too.
+  cat > "$PR/usr/bin/pi-report.sh" <<'EOT'
+#!/bin/sh
+touch /run/pi-report.ready
+L=/var/log/schema-init
+n=0
+until grep -q 'boot confirmed' $L/pi-bootok.log 2>/dev/null || [ $n -ge 120 ]; do
+    n=$((n + 1)); sleep 1
+done
+sleep 2
+exec >/dev/console 2>&1   # service stdout is captured to a logfile; force serial
+echo "===== PI-REPORT ====="
+echo "PI-EXE: $(readlink /proc/1/exe)"
+echo "PI-ENV: [$(tr '\0' '\n' < /proc/1/environ | grep '^SCHEMA_SVC_DIR=')]"
+echo "PI-ROOT: $(grep ' / ext4 ' /proc/mounts | cut -d' ' -f4 | cut -d, -f1)"
+echo "PI-CMDLINE: $(cat /proc/cmdline)"
+echo "PI-SVCS: $(schema-ctl status --kv | grep '\.state=' | tr '\n' ' ')"
+while read -r l; do echo "BOOTOK| $l"; done < $L/pi-bootok.log
+grep -E ' (spawn|oneshot-done) ' $L/boot.log | while read -r l; do echo "RAIL| $l"; done
+while read -r l; do echo "FALLBACK| $l"; done < $L/fallback.log
+echo "===== PI-REPORT-END ====="
+( sleep 45; echo "SHUTDOWN-WEDGED: forcing poweroff"; poweroff -f ) &
+kill -INT 1
+while :; do sleep 1; done
+EOT
+  chmod +x "$PR/usr/bin/pi-report.sh"
+  cat > "$PR/etc/schema-init/services/pi-report.svc" <<'EOT'
+name=pi-report
+exec=/usr/bin/pi-report.sh
+ready_path=/run/pi-report.ready
+needs_root=1
+EOT
+  # The wrapper reopened the console before exec, so plain stdout must reach serial.
+  cat > "$PR/lib/systemd/systemd" <<'EOT'
+#!/bin/sh
+echo "PI-SYSTEMD-REACHED argv0=$0"
+sync
+poweroff -f
+EOT
+  chmod +x "$PR/lib/systemd/systemd"
+  # fakeroot: the engine refuses .svc files not owned by root
+  fakeroot -- mkfs.ext4 -q -F -d "$PR" "$IMG" 128M >/dev/null || { echo "PI IMAGE BUILD FAILED"; exit 1; }
+  # debugfs edits the image between boots without root or a loop mount. It
+  # bypasses the journal, so replay it first or the next mount undoes the edit.
+  pi_replay() { e2fsck -y -E journal_only "$IMG" >/dev/null 2>&1 || true; }
+  pi_fs() { pi_replay; printf '%s\n' "$@" > "$WORK/pi-fs.cmd"; debugfs -w -f "$WORK/pi-fs.cmd" "$IMG" >/dev/null 2>&1; }
+  pi_seed() {
+    printf 'attempts=%s\nlast_target=%s\n' "$1" "$2" > "$WORK/pi-seed"
+    pi_fs "cd /var/lib/schema-init" "rm pi-boot" "write $WORK/pi-seed pi-boot"
+  }
+  pi_boot() {
+    local s="$WORK/pi-serial-$1.log"
+    # both logs append across boots; a stale line must not satisfy this boot
+    pi_fs "rm /var/log/schema-init/pi-bootok.log" "rm /var/log/schema-init/fallback.log"
+    echo ">> PI boot $1 (root $2), timeout ${TIMEOUT}s"
+    timeout "$TIMEOUT" qemu-system-x86_64 \
+      -enable-kvm -m 512 -smp 2 -no-reboot -nographic -nic none \
+      -kernel "$KERNEL" -drive "file=$IMG,format=raw,if=virtio" \
+      -append "console=ttyS0 root=/dev/vda rootfstype=ext4 $2 init=/init panic=1 loglevel=4" \
+      < /dev/null > "$s" 2>&1 || true
+    { echo "===== PI BOOT $1 (root $2) ====="; cat "$s"; } >> "$OUT/last-vmtest-serial.log"
+    pi_replay
+    debugfs -R "cat /var/lib/schema-init/pi-boot" "$IMG" > "$WORK/pi-state-$1" 2>/dev/null
+    debugfs -R "cat /var/log/schema-init/fallback.log" "$IMG" > "$WORK/pi-fallback-$1" 2>/dev/null
+  }
+  : > "$OUT/last-vmtest-serial.log"
+  pi_seed 0 current
+  pi_boot 1 rw
+  debugfs -R "dump /var/lib/schema-init/known-good/schema-init $WORK/pi-kg-1" "$IMG" >/dev/null 2>&1
+  pi_seed 2 current
+  # a differing known-good that still runs: trailing bytes past the ELF are ignored
+  cp "$BIN" "$WORK/pi-kg-bin"; printf 'known-good' >> "$WORK/pi-kg-bin"
+  # only the known-good svc dir has this, so seeing it proves the engine read that dir
+  printf 'name=kg-marker\nexec=/bin/sh\nargs=-c\nargs=touch /run/kg.ready; exec sleep 100000\nready_path=/run/kg.ready\nneeds_root=1\n' > "$WORK/kg-marker.svc"
+  chmod 644 "$WORK/kg-marker.svc"
+  pi_fs "cd /var/lib/schema-init/known-good" "rm schema-init" "write $WORK/pi-kg-bin schema-init" \
+        "cd services" "write $WORK/kg-marker.svc kg-marker.svc" "sif kg-marker.svc uid 0" "sif kg-marker.svc gid 0"
+  pi_boot 2 rw
+  pi_seed 3 known-good
+  pi_boot 3 rw
+  # no seed: boot 3's reset to attempts=0 must carry over on the disk
+  pi_boot 4 ro
+
+  pass=1
+  pi_has() { grep -Eq "$2" "$WORK/pi-serial-$1.log"; }
+  pi_miss() { echo "  MISS: $1"; pass=0; }
+  pi_state() { [ "$(tr '\n' ' ' < "$WORK/pi-state-$1")" = "$2 " ]; }
+  pi_has 1 "PI-EXE: /usr/bin/schema-init" || pi_miss "PI-current: engine was not /usr/bin/schema-init"
+  pi_has 1 "PI-ENV: \[\]"                  || pi_miss "PI-current: SCHEMA_SVC_DIR set on a current boot"
+  pi_has 1 "RAIL\| .*sshd +spawn"          || pi_miss "PI-current: rail did not run"
+  pi_has 1 "BOOTOK\| pi-bootok: boot confirmed .*\(target=current\)" || pi_miss "PI-current: pi-bootok did not confirm"
+  pi_state 1 "attempts=0 last_target=current" || pi_miss "PI-current: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-1"))"
+  cmp -s "$WORK/pi-kg-1" "$BIN"           || pi_miss "PI-current: known-good not promoted from the current engine"
+  pi_has 2 "PI-EXE: /var/lib/schema-init/known-good/schema-init" || pi_miss "PI-knowngood: engine was not the known-good copy"
+  pi_has 2 "PI-ENV: \[SCHEMA_SVC_DIR=/var/lib/schema-init/known-good/services\]" || pi_miss "PI-knowngood: svc dir not handed over"
+  pi_has 2 "PI-SVCS: .*service\.kg-marker\.state=" || pi_miss "PI-knowngood: engine did not load the known-good svc dir"
+  pi_has 2 "RAIL\| .*sshd +spawn"          || pi_miss "PI-knowngood: rail did not run"
+  pi_has 2 "BOOTOK\| pi-bootok: boot confirmed .*\(target=known-good\)" || pi_miss "PI-knowngood: pi-bootok did not confirm"
+  grep -Eq "^[0-9]+ fallback=known-good attempts=2$" "$WORK/pi-fallback-2" || pi_miss "PI-knowngood: fallback.log"
+  pi_has 3 "PI-SYSTEMD-REACHED argv0=/lib/systemd/systemd" || pi_miss "PI-systemd: systemd stub never reached the console"
+  pi_has 3 "PI-EXE:"                       && pi_miss "PI-systemd: an engine ran on the systemd boot"
+  pi_state 3 "attempts=0 last_target=systemd" || pi_miss "PI-systemd: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-3"))"
+  grep -Eq "^[0-9]+ fallback=systemd attempts=3$" "$WORK/pi-fallback-3" || pi_miss "PI-systemd: fallback.log"
+  pi_has 4 "PI-CMDLINE: .* ro "            || pi_miss "PI-ro: kernel cmdline lacked ro"
+  pi_has 4 "remount / rw failed"           && pi_miss "PI-ro: wrapper could not remount / rw"
+  pi_has 4 "PI-ROOT: rw"                   || pi_miss "PI-ro: / still read-only under the engine"
+  pi_has 4 "PI-EXE: /usr/bin/schema-init" || pi_miss "PI-ro: engine was not /usr/bin/schema-init"
+  pi_has 4 "RAIL\| .*sshd +spawn"          || pi_miss "PI-ro: rail did not run"
+  pi_has 4 "BOOTOK\| pi-bootok: boot confirmed .*\(target=current\)" || pi_miss "PI-ro: pi-bootok did not confirm"
+  pi_state 4 "attempts=0 last_target=current" || pi_miss "PI-ro: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-4"))"
+  grep -q "SHUTDOWN-WEDGED" "$OUT/last-vmtest-serial.log" && pi_miss "a Pi boot wedged on shutdown, forced off"
+  if [ "$pass" = 1 ]; then
+    echo ">> RESULT: PASS  (Pi wrapper: current, known-good, systemd fallback, ro root)"
+  else
+    echo ">> RESULT: FAIL / INCONCLUSIVE — serial of all four boots: $OUT/last-vmtest-serial.log"
+    trap - EXIT; echo "   workdir kept: $WORK"
+  fi
+  exit 0
+fi
+
 # 2. Assemble a minimal initramfs root.
 mkdir -p "$ROOT"/{sbin,bin,usr/bin,etc/schema-init/services,proc,sys,dev,run,sys/fs/cgroup}
 cp "$BIN" "$ROOT/sbin/schema-init"
