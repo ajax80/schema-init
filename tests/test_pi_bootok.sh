@@ -204,3 +204,21 @@ PATH=$T/mvfail:$PATH env_run sh "$BOOTOK" --promote > "$T/log" 2>&1 && fail "boo
 [ ! -e "$KG.new" ] && [ ! -e "$KG.old" ] || fail "bootok_swap_fails: leftover dirs"
 grep -q 'known-good promotion failed' "$T/log" || fail "bootok_swap_fails: not logged"
 echo "ok bootok_swap_fails"
+
+# deadline_retries_reboot: a failed reboot must be retried, not left to sleep forever
+reset
+cat > "$T/flaky" <<EOT
+#!/bin/sh
+echo try >> "$T/tries"
+[ "\$(wc -l < "$T/tries")" -ge 3 ] || exit 1
+echo reboot >> "$T/reboots"
+EOT
+chmod +x "$T/flaky"; rm -f "$T/tries"
+SCHEMA_PI_ROOT=$R SCHEMA_CTL=$T/flaky SCHEMA_PI_DEADLINE=0.1 SCHEMA_PI_REBOOT_RETRY=0.2 sh "$DEADLINE" > "$T/log" 2>&1 &
+pid=$!
+sleep 2
+pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+[ "$(wc -l < "$T/tries" 2>/dev/null)" = 3 ] || fail "deadline_retries_reboot: tries: $(cat "$T/tries" 2>/dev/null)"
+[ "$(cat "$T/reboots" 2>/dev/null)" = reboot ] || fail "deadline_retries_reboot: no reboot"
+[ "$(grep -c '^pi-deadline: reboot failed, retrying in 0.2s$' "$T/log")" = 2 ] || fail "deadline_retries_reboot: log: $(cat "$T/log")"
+echo "ok deadline_retries_reboot"

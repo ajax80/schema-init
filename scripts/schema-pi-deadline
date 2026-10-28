@@ -5,11 +5,16 @@ CTL=schema-ctl
 [ -x "${0%/*}/schema-ctl" ] && CTL=${0%/*}/schema-ctl
 CTL=${SCHEMA_CTL:-$CTL}
 DL=${SCHEMA_PI_DEADLINE:-300}
+RETRY=${SCHEMA_PI_REBOOT_RETRY:-60}
 
 sleep "$DL"
 if [ ! -e "$R/run/schema-init/pi-boot-ok" ]; then
     echo "pi-deadline: no boot-ok after ${DL}s, rebooting"
-    "$CTL" reboot
+    # a stuck Pi stays stuck if one failed reboot ends in the idle sleep below
+    until "$CTL" reboot; do
+        echo "pi-deadline: reboot failed, retrying in ${RETRY}s"
+        sleep "$RETRY"
+    done
 fi
 # oneshot=0: exiting would make the engine restart us and re-arm the deadline
 while :; do sleep 86400; done
