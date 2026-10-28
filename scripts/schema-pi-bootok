@@ -44,7 +44,7 @@ esac
 # the wrapper parses this strictly; tmp+mv keeps it whole across power loss
 tmp=$STATE.tmp.$$
 printf 'attempts=0\nlast_target=%s\n' "$target" > "$tmp"
-sync "$tmp" 2>/dev/null
+sync
 mv "$tmp" "$STATE"
 
 mkdir -p "$R/run/schema-init"
@@ -58,8 +58,11 @@ if [ "$target" = current ]; then
         cp -pR "$R/etc/schema-init/services/." "$KG.new/services/" &&
         cp -p "$R/usr/libexec/schema-init/schema-pi-bootok" \
               "$R/usr/libexec/schema-init/schema-pi-deadline" "$KG.new/"; then
+        # data must be on disk before the rename, or a power cut leaves truncated known-good files
+        sync
         [ -d "$KG" ] && mv "$KG" "$KG.old"
         mv "$KG.new" "$KG"
+        sync
         rm -rf "$KG.old"
     else
         echo "pi-bootok: known-good promotion failed" >&2
