@@ -154,3 +154,7 @@ rm "$R/usr/bin/schema-ctl"
 env_run sh "$BOOTOK" --promote > "$T/log" 2>&1 && fail "bootok_promote_only: should fail"
 cmp -s "$KG/schema-init" "$R/usr/bin/schema-init" || fail "bootok_promote_only: good set lost"
 echo "ok bootok_promote_only"
+
+# bootok_svc_no_timeout: the default 90 s oneshot timeout kills a slow Zero W boot before it confirms
+grep -qx 'start_timeout_sec=0' services/pi-bootok.svc.example || fail "bootok_svc_no_timeout: pi-bootok.svc.example keeps the oneshot timeout"
+echo "ok bootok_svc_no_timeout"
