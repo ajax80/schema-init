@@ -11,6 +11,33 @@ static void test_handler(struct uevent *ev) {
     if (strcmp(uevent_get(ev, "ACTION"), "add") == 0) g_coldplug_events++;
 }
 
+static char g_seq[8][32];
+static int g_seq_n = 0, g_seq_framed = 0;
+static void seq_handler(struct uevent *ev) {
+    const char *sq = uevent_get(ev, "SEQNUM");
+    if (g_seq_n < 8) safe_copy(g_seq[g_seq_n++], sq ? sq : "", 32);
+    if (uevent_get(ev, "SUBSYSTEM")) {
+        char frame[8192], want[48];
+        ssize_t flen = libudev_frame_build(ev, frame, sizeof frame);
+        snprintf(want, sizeof want, "SEQNUM=%s", sq);
+        assert(flen > 0 && memmem(frame, (size_t)flen, want, strlen(want) + 1));
+        g_seq_framed++;
+    }
+}
+
+static void walk_seq(const char *sysroot, const char *content, const char *want, int nev) {
+    char kp[1024];
+    snprintf(kp, sizeof kp, "%s/kernel", sysroot);
+    mkdir(kp, 0755);
+    strcat(kp, "/uevent_seqnum");
+    if (content) { FILE *f = fopen(kp, "w"); assert(f); fputs(content, f); fclose(f); }
+    else unlink(kp);
+    g_seq_n = 0;
+    assert(coldplug_walk_root(sysroot, seq_handler) == 0);
+    assert(g_seq_n == nev);
+    for (int i = 0; i < g_seq_n; i++) assert(strcmp(g_seq[i], want) == 0);
+}
+
 static char g_order[16][64];
 static int g_order_n = 0;
 static void order_handler(struct uevent *ev) {
@@ -56,6 +83,8 @@ int main(void) {
     assert(strcmp(uevent_get(&ev, "DEVNAME"), "ttyUSB0") == 0);
     assert(strcmp(uevent_get(&ev, "MAJOR"), "188") == 0);
     assert(strcmp(uevent_get(&ev, "PRODUCT"), "10c4/ea60/100") == 0);
+    /* SEQNUM is stamped by the coldplug walk only, not on IMPORT{parent} ancestors */
+    assert(!uevent_get(&ev, "SEQNUM"));
 
     /* Assert matching rule fires */
     struct dev_rule r; memset(&r, 0, sizeof r);
@@ -88,6 +117,14 @@ int main(void) {
     g_coldplug_events = 0;
     assert(coldplug_walk_root(sysroot2, test_handler) == 0);
     assert(g_coldplug_events == 2);
+
+    /* sd-device drops monitor frames with a missing or zero SEQNUM */
+    walk_seq(sysroot2, NULL, "1", 2);
+    walk_seq(sysroot2, "2822\n", "2822", 2);
+    walk_seq(sysroot2, "0\n", "1", 2);
+    walk_seq(sysroot2, "garbage\n", "1", 2);
+    walk_seq(sysroot, "2822\n", "2822", 1);
+    assert(g_seq_framed == 1);
 
     printf("test_coldplug (coldplug_walk_root): OK\n");
 
