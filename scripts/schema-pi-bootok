@@ -1,0 +1,70 @@
+#!/bin/sh
+R=${SCHEMA_PI_ROOT:-}
+CTL=${SCHEMA_CTL:-schema-ctl}
+POLL=${SCHEMA_PI_POLL:-5}
+D=$R/var/lib/schema-init
+STATE=$D/pi-boot
+KG=$D/known-good
+MARK=$R/run/schema-init/pi-boot-ok
+
+blockers() {
+    "$CTL" status --kv 2>/dev/null | awk -F= '
+        /^service\..*\.state=/ {
+            n = $1; sub(/^service\./, "", n); sub(/\.state$/, "", n)
+            s = $2
+            if (n == "pi-bootok" || n == "pi-deadline" || s == "skipped") next
+            if (n == "sshd") sshd = 1
+            if (s != "FUNDAMENTAL" && s != "PERFECT") print n "=" s
+        }
+        END { if (!sshd) print "sshd=MISSING" }'
+}
+
+now() { date +%s; }
+
+start=$(now)
+last=
+while :; do
+    b=$(blockers)
+    [ -z "$b" ] && break
+    t=$(now)
+    # elapsed seconds, not poll counts: POLL is overridable and may be fractional
+    if [ -z "$last" ] || [ $((t - last)) -ge 60 ]; then
+        echo "$b" | while read -r l; do echo "pi-bootok: waiting on $l"; done
+        last=$t
+    fi
+    sleep "$POLL"
+done
+
+target=$(sed -n 's/^last_target=//p' "$STATE" 2>/dev/null | head -n 1)
+case $target in
+    current|known-good|systemd) ;;
+    *) target=current ;;
+esac
+
+# the wrapper parses this strictly; tmp+mv keeps it whole across power loss
+tmp=$STATE.tmp.$$
+printf 'attempts=0\nlast_target=%s\n' "$target" > "$tmp"
+sync "$tmp" 2>/dev/null
+mv "$tmp" "$STATE"
+
+mkdir -p "$R/run/schema-init"
+: > "$MARK"
+
+if [ "$target" = current ]; then
+    rm -rf "$KG.new" "$KG.old"
+    # a failed copy must not replace a good known-good set
+    if mkdir -p "$KG.new/services" &&
+        cp -p "$R/usr/bin/schema-init" "$R/usr/bin/schema-ctl" "$KG.new/" &&
+        cp -pR "$R/etc/schema-init/services/." "$KG.new/services/" &&
+        cp -p "$R/usr/libexec/schema-init/schema-pi-bootok" \
+              "$R/usr/libexec/schema-init/schema-pi-deadline" "$KG.new/"; then
+        [ -d "$KG" ] && mv "$KG" "$KG.old"
+        mv "$KG.new" "$KG"
+        rm -rf "$KG.old"
+    else
+        echo "pi-bootok: known-good promotion failed" >&2
+        rm -rf "$KG.new"
+    fi
+fi
+
+echo "pi-bootok: boot confirmed after $(($(now) - start))s (target=$target)"

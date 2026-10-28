@@ -1,0 +1,12 @@
+#!/bin/sh
+R=${SCHEMA_PI_ROOT:-}
+CTL=${SCHEMA_CTL:-schema-ctl}
+DL=${SCHEMA_PI_DEADLINE:-300}
+
+sleep "$DL"
+if [ ! -e "$R/run/schema-init/pi-boot-ok" ]; then
+    echo "pi-deadline: no boot-ok after ${DL}s, rebooting"
+    "$CTL" reboot
+fi
+# oneshot=0: exiting would make the engine restart us and re-arm the deadline
+while :; do sleep 86400; done
