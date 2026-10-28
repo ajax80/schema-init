@@ -496,6 +496,30 @@ def test_start_waits_for_populated_tree():
         cleanup(sv)
 
 
+# The 10-27 zombie: an instance adoption missed was still our child; the
+# populated-tree kill took it, and nothing ever waited on it.
+def test_start_reaps_what_it_kills():
+    sv = fresh()
+    child = os.posix_spawn('/bin/sleep', ['/bin/sleep', '30'], {})
+    try:
+        with open(svc_dir() + '/init.scope/cgroup.procs', 'w') as f:
+            f.write('%d\n' % child)
+        with open(svc_dir() + '/cgroup.events', 'w') as f:
+            f.write('populated 1\nfrozen 0\n')
+        sv.reconcile({UID}, 0)
+        os.kill(child, signal.SIGKILL)   # what cgroup.kill does on a real tree
+        wait_for(lambda: dead(child))
+        sv.reconcile({UID}, 0.25)
+        try:
+            os.waitpid(child, os.WNOHANG)
+            reaped = False
+        except ChildProcessError:
+            reaped = True
+        check('populated tree: an own child it killed is reaped', reaped)
+    finally:
+        kill_reap(child)
+        cleanup(sv)
+
 
 def test_clean_exit_not_restarted():
     sv = fresh()
@@ -738,6 +762,7 @@ TESTS = [
     test_crash_kills_leftovers,
     test_start_clears_stale_tree,
     test_start_waits_for_populated_tree,
+    test_start_reaps_what_it_kills,
     test_clean_exit_not_restarted,
     test_set_linger_roundtrip,
     test_set_linger_unknown_uid,

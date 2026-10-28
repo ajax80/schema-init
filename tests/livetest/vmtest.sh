@@ -194,7 +194,7 @@ printf '#!/bin/sh\n%s & echo $! > /run/mp-nokey.pid; sleep 1; exit 0\n' "$HAND" 
 # a plain notify daemon that is ready, then exits 0: an exit, not a handover (#434)
 mpsvc mp-cleanexit '/usr/bin/notifier READY=1 hold & N=$!; sleep 2; kill $N; exit 0' 'no_restart=1\n'
 # a launcher that never names a main pid, stopped while PID 1 waits for one (#434)
-mpsvc mp-waitstop 'exit 0' 'no_restart=1\n'
+mpsvc mp-waitstop 'exit 0' 'no_restart=1\nexec_stop_post=/bin/sh -c "echo ran > /run/mp-waitstop.post"\n'
 printf 'name=mp-nokey\nexec=/usr/bin/mp-nokey.sh\nnotify=1\nno_restart=1\n' > "$ROOT/etc/schema-init/services/mp-nokey.svc"
 
 # nested cgroup probe (what podman --cgroups=split does): the service moves
@@ -713,17 +713,18 @@ echo "MP-before: $( [ "$(mppid mp-before)" = "$(cat /run/mp-before.pid)" ] && ec
 echo "MP-after: $( [ "$(mppid mp-after)" = "$(cat /run/mp-after.pid)" ] && echo adopted || echo "no ($(mpst mp-after) want $(cat /run/mp-after.pid))")"
 echo "MP-fail: $(grep -Ec 'mp-fail .*(died|76-no-restart)' "$RAIL") adopted=$(grep -c 'mp-fail .*main-pid pid' "$RAIL") child=$(kill -0 "$(cat /run/mp-fail.pid)" 2>/dev/null && echo alive || echo gone)"
 echo "MP-never: $(grep -c 'mp-never .*main-pid-timeout' "$RAIL")"
-echo "MP-outside: $(grep -c 'mp-outside .*main-pid-timeout' "$RAIL") adopted=$(grep -c 'mp-outside .*main-pid pid' "$RAIL")"
+echo "MP-outside: $(grep -c 'mp-outside .*main-pid-timeout' "$RAIL") adopted=$(grep -c 'mp-outside .*main-pid pid' "$RAIL") rejected=$(grep -c 'mp-outside .*main-pid-rejected pid=1 invalid' "$RAIL")"
 echo "MP-restart: $(grep -c 'mp-restart .*main-pid pid' "$RAIL")"
 echo "MP-norestart: $(grep -c 'mp-norestart .*main-pid pid' "$RAIL") $(mpst mp-norestart | grep -o 'state=[A-Z_]*')"
 echo "MP-nokey: $( [ "$(mppid mp-nokey)" = "$(cat /run/mp-nokey.pid)" ] && echo adopted || echo not-adopted)"
 echo "MP-cleanexit: timeouts=$(grep -c 'mp-cleanexit .*main-pid-timeout' "$RAIL") $(mpst mp-cleanexit | grep -o 'state=[A-Z_]*')"
 WT0=$(grep -c 'mp-waitstop .*main-pid-timeout' "$RAIL")
+rm -f /run/mp-waitstop.post
 /bin/schema-ctl reset mp-waitstop >/dev/null 2>&1
 sleep 2
 /bin/schema-ctl stop mp-waitstop >/dev/null 2>&1
 sleep 12
-echo "MP-waitstop: new-timeouts=$(( $(grep -c 'mp-waitstop .*main-pid-timeout' "$RAIL") - WT0 )) $(mpst mp-waitstop | grep -o 'state=[A-Z_]*')"
+echo "MP-waitstop: new-timeouts=$(( $(grep -c 'mp-waitstop .*main-pid-timeout' "$RAIL") - WT0 )) $(mpst mp-waitstop | grep -o 'state=[A-Z_]*') post=$(cat /run/mp-waitstop.post 2>/dev/null || echo none)"
 MPR=$(mppid mp-after)
 /bin/schema-ctl restart mp-after >/dev/null 2>&1
 i=0; while [ $i -lt 20 ] && kill -0 "$MPR" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
@@ -883,9 +884,9 @@ grep -Eq "DROPIN-REEXEC: err: .*test-dropin" "$SERIAL" || { echo "  MISS: reexec
 grep -Eq "^# /etc/schema-init/services/test-dropin.svc.d/30-late.conf" "$SERIAL" || { echo "  MISS: schema-ctl cat did not list the late drop-in"; pass=0; }
 # restart_count: first spawn, timer fires and ctl restart are not restarts.
 for c in "MP-before: adopted" "MP-after: adopted" "MP-fail: [1-9][0-9]* adopted=0 child=gone" "MP-never: [1-9]" \
-         "MP-outside: [1-9][0-9]* adopted=0" "MP-restart: [2-9]" "MP-norestart: 1 state=EXCISED" \
+         "MP-outside: [1-9][0-9]* adopted=0 rejected=[1-9]" "MP-restart: [2-9]" "MP-norestart: 1 state=EXCISED" \
          "MP-nokey: not-adopted" "MP-stop: gone" "MP-reexec: kept" \
-         "MP-cleanexit: timeouts=0 state=EXCISED" "MP-waitstop: new-timeouts=0 state=EXCISED" "MP-restart-old: gone"; do
+         "MP-cleanexit: timeouts=0 state=EXCISED" "MP-waitstop: new-timeouts=0 state=EXCISED post=ran" "MP-restart-old: gone"; do
     grep -Eq "$c" "$SERIAL" || { echo "  MISS: main_pid_notify: $c ($(grep -o "${c%%:*}:.*" "$SERIAL" | head -1))"; pass=0; }
 done
 grep -Eq "VERIFY-OK: state=FUNDAMENTAL mismatch=0" "$SERIAL" || { echo "  MISS: verify-ok ($(grep -o 'VERIFY-OK:.*' "$SERIAL"))"; pass=0; }
