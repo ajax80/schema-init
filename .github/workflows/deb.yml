@@ -83,7 +83,9 @@ jobs:
         run: sudo mkdir "$ROOTFS" && sudo tar -C "$ROOTFS" --numeric-owner -xpf "$ROOTFS_TAR"
       - name: enter chroot
         run: |
-          for m in proc sys dev dev/pts; do sudo mount --bind /$m "$ROOTFS/$m"; done
+          # rbind so /dev/shm and /dev/pts come along (shm_open, su).
+          sudo mount -t proc proc "$ROOTFS/proc"
+          for m in sys dev; do sudo mount --rbind /$m "$ROOTFS/$m"; done
           sudo mkdir "$ROOTFS/build" && sudo cp -a . "$ROOTFS/build/src"
           sudo chroot "$ROOTFS" sh -c 'useradd -m ci && chown -R ci /build'
       - name: make test (qemu)
