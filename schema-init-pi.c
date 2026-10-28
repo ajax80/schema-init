@@ -1,0 +1,163 @@
+#include "pi_bootguard.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+static char root[PATH_MAX / 2];
+
+static const char *P(char *buf, const char *rel) {
+    snprintf(buf, PATH_MAX, "%s%s", root, rel);
+    return buf;
+}
+
+static void mkdirs(const char *rel) {
+    char buf[PATH_MAX];
+    P(buf, rel);
+    for (char *p = buf + strlen(root) + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = 0;
+        mkdir(buf, 0755);
+        *p = '/';
+    }
+    mkdir(buf, 0755);
+}
+
+static void write_all(int fd, const char *b, size_t n) {
+    while (n) {
+        ssize_t w = write(fd, b, n);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) return;
+        b += w;
+        n -= (size_t)w;
+    }
+}
+
+/* Streamed, not mmap'd: the Pi may be short on memory this early. */
+static int files_differ(const char *a, const char *b) {
+    struct stat sa, sb;
+    if (stat(a, &sa) != 0) return 0;
+    if (stat(b, &sb) != 0) return 1;
+    if (sa.st_size != sb.st_size) return 1;
+    int fa = open(a, O_RDONLY), fb = open(b, O_RDONLY), diff = 0;
+    if (fa < 0 || fb < 0) diff = fa != fb;
+    else {
+        char x[4096], y[4096];
+        for (;;) {
+            ssize_t nx = read(fa, x, sizeof x), ny = read(fb, y, sizeof y);
+            if (nx != ny || (nx > 0 && memcmp(x, y, (size_t)nx) != 0)) { diff = 1; break; }
+            if (nx <= 0) break;
+        }
+    }
+    if (fa >= 0) close(fa);
+    if (fb >= 0) close(fb);
+    return diff;
+}
+
+static void write_state(const struct pi_state *st) {
+    char dir[PATH_MAX], tmp[PATH_MAX], fin[PATH_MAX], buf[64];
+    P(dir, "/var/lib/schema-init");
+    P(tmp, "/var/lib/schema-init/pi-boot.tmp");
+    P(fin, "/var/lib/schema-init/pi-boot");
+    int n = pi_state_format(st, buf, sizeof buf);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || n < 0) return;
+    write_all(fd, buf, (size_t)n);
+    fsync(fd);
+    close(fd);
+    if (rename(tmp, fin) != 0) return;
+    int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+    if (dfd >= 0) { fsync(dfd); close(dfd); }
+}
+
+static void log_fallback(enum pi_target t, int attempts) {
+    char path[PATH_MAX], line[96];
+    int fd = open(P(path, "/var/log/schema-init/fallback.log"), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return;
+    int n = snprintf(line, sizeof line, "%lld fallback=%s attempts=%d\n", (long long)time(NULL),
+                     t == PI_KNOWN_GOOD ? "known-good" : "systemd", attempts);
+    write_all(fd, line, (size_t)n);
+    fsync(fd);
+    close(fd);
+}
+
+static void to_boot_log(void) {
+    char path[PATH_MAX];
+    int fd = open(P(path, "/var/log/schema-init/boot.log"), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    dup2(fd, 1);
+    dup2(fd, 2);
+    if (fd > 2) close(fd);
+}
+
+static void exec_target(enum pi_target t, int pid1, char **argv) {
+    char path[PATH_MAX];
+    if (t == PI_CURRENT) {
+        to_boot_log();
+        execv(P(path, "/usr/bin/schema-init"), argv);
+        t = PI_KNOWN_GOOD;
+    }
+    if (t == PI_KNOWN_GOOD) {
+        char svc[PATH_MAX];
+        to_boot_log();
+        setenv("SCHEMA_SVC_DIR", P(svc, "/var/lib/schema-init/known-good/services"), 1);
+        execv(P(path, "/var/lib/schema-init/known-good/schema-init"), argv);
+        unsetenv("SCHEMA_SVC_DIR");
+    }
+    if (pid1) {
+        int fd = open("/dev/console", O_RDWR);
+        if (fd >= 0) {
+            dup2(fd, 0);
+            dup2(fd, 1);
+            dup2(fd, 2);
+            if (fd > 2) close(fd);
+        }
+    }
+    P(path, "/lib/systemd/systemd");
+    argv[0] = path;
+    execv(path, argv);
+}
+
+int main(int argc, char **argv) {
+    (void)argc;
+    int pid1 = getpid() == 1;
+    const char *r = pid1 ? NULL : getenv("SCHEMA_PI_ROOT");
+    if (r) snprintf(root, sizeof root, "%s", r);
+
+    if (pid1 && mount("", "/", NULL, MS_REMOUNT, NULL) != 0) {
+        int k = open("/dev/kmsg", O_WRONLY);
+        if (k >= 0) {
+            static const char m[] = "<3>schema-init-pi: remount / rw failed, booting current without state\n";
+            write_all(k, m, sizeof m - 1);
+            close(k);
+        }
+        exec_target(PI_CURRENT, pid1, argv);
+        for (;;) pause();
+    }
+
+    mkdirs("/var/lib/schema-init");
+    mkdirs("/var/log/schema-init");
+
+    char path[PATH_MAX], kg[PATH_MAX], buf[256];
+    struct pi_state st;
+    ssize_t n = 0;
+    int fd = open(P(path, "/var/lib/schema-init/pi-boot"), O_RDONLY);
+    if (fd >= 0) {
+        n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+    }
+    buf[n > 0 ? n : 0] = 0;
+    pi_state_parse(buf, &st);
+
+    int differs = files_differ(P(kg, "/var/lib/schema-init/known-good/schema-init"),
+                               P(path, "/usr/bin/schema-init"));
+    int before = st.attempts;
+    enum pi_target t = pi_decide(&st, differs);
+    write_state(&st);
+    if (t != PI_CURRENT) log_fallback(t, before);
+
+    exec_target(t, pid1, argv);
+    for (;;) pause();
+}

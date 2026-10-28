@@ -1625,6 +1625,9 @@ int main(int argc, char **argv) {
      * The kernel hands PID 1 no PATH either; sh falls back to a built-in
      * one, but Go and execvp-less code can't find helpers without it. */
     if (getpid() == 1) {
+        /* Reload and re-exec read the global, so set it, not just the local. */
+        engine_paths.svc_dir = svc_dir_from_env(engine_paths.svc_dir);
+        svc_dir = engine_paths.svc_dir;
         umask(022);
         setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 0);
         /* No console (or a container) leaves 0-2 closed; the next socket or
@@ -1660,7 +1663,8 @@ int main(int argc, char **argv) {
          * Those tokens are not ours: letting a stray one become svc_dir makes
          * services_load() open a bogus directory and silently start zero
          * services. Only a hand-run invocation may name a services dir; as
-         * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir. */
+         * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir.
+         * (SCHEMA_SVC_DIR is honoured above: the environment is not kernel cmdline.) */
         if (getpid() == 1)
             continue;
         if (argv[i][0] == '-') {

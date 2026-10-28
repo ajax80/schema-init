@@ -1,5 +1,6 @@
 *.o
 schema-init
+schema-init-pi
 schema-user
 schema-ctl
 schema-journal-sink
