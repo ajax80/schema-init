@@ -55,20 +55,22 @@ It takes effect on the next boot. `schema-init-pi` is a small static program, so
 
 ## Boot fallback
 
-"Boot OK" means `sshd` is up and every service is FUNDAMENTAL or PERFECT (none failed, excised or given up). A network address is not required: a router outage is not a schema failure and costs no reboots. A failed `wpa-supplicant` or `dhcpcd` still counts.
+"Boot OK" means `sshd` is up and every service is FUNDAMENTAL or PERFECT (none failed, excised or given up). Services still starting count as not ready, so boot OK waits for them. Skipped services and `pi-bootok` / `pi-deadline` themselves are ignored. A network address is not required: a router outage is not a schema failure and costs no reboots. A failed `wpa-supplicant` or `dhcpcd` still counts.
 
 - Each boot of schema-init increments a counter before exec. Boot OK resets it to 0.
-- If boot OK has not happened 300 s after PID 1 starts, `pi-deadline` reboots the Pi (`schema-ctl reboot`).
+- If boot OK has not happened 300 s after `pi-deadline` starts, `pi-deadline` reboots the Pi (`schema-ctl reboot`).
 - After two failed boots in a row, the third boot goes to the known-good set if it differs from the current one (engine binary or services). Otherwise it goes to systemd.
-- systemd is for that one boot. `init=` stays in `cmdline.txt` and the next boot tries schema-init again. If known-good fails too, the boot after it is systemd.
-- On boot OK the current set is promoted to known-good, when the boot was the current one.
+- A known-good or systemd boot lasts one boot only. `init=` stays in `cmdline.txt`. A successful known-good boot resets the counter but does not promote anything, so the next reboot tries the current set again. The cycle (two failed boots, one fallback boot) repeats until the current set is fixed or you run `schema-pi disable`. If known-good fails too, the boot after it is systemd.
+- On boot OK the current set is promoted to known-good, only when that boot ran the current set.
 
-State is in `/var/lib/schema-init/pi-boot` (`attempts=`, `last_target=`). Every fallback is appended to `/var/log/schema-init/fallback.log`; the boot log is `/var/log/schema-init/boot.log`. PID 1 also holds `/dev/watchdog` for true hangs.
+State is in `/var/lib/schema-init/pi-boot` (`attempts=`, `last_target=`). Every fallback is appended to `/var/log/schema-init/fallback.log`; the boot log is `/var/log/schema-init/boot.log`. PID 1 also holds `/dev/watchdog` for true hangs, which needs the `bcm2835_wdt` driver loaded (check `ls /dev/watchdog`).
+
+`apt upgrade` of `schema-init` while schema-init is PID 1 re-execs PID 1 onto the new binary in place (`schema-ctl reexec`); services keep running. If it refuses, the old binary keeps running until reboot.
 
 ## Status
 
 ```sh
-schema-pi status
+sudo schema-pi status
 ```
 
 Prints `enabled`, `pid1`, `attempts`, `last_target`, `last_fallback` (last line of `fallback.log`) and `known_good` (version of the known-good engine).
@@ -84,4 +86,6 @@ Strips `init=` from `cmdline.txt`; systemd boots next time. `panic=10` stays in 
 
 ## Recovery by hand
 
-If the Pi will not come back: power off, put the SD card in another computer, mount the boot partition, and delete the `init=/usr/sbin/schema-init-pi` word from the first line of `cmdline.txt`. Keep it one line. Or copy `cmdline.txt.schema-bak` over `cmdline.txt`. Put the card back; the Pi boots systemd.
+If the Pi will not come back: power off, put the SD card in another computer, mount the boot partition, and delete the `init=/usr/sbin/schema-init-pi` word from the first line of `cmdline.txt`. Keep it one line. Put the card back; the Pi boots systemd.
+
+`cmdline.txt.schema-bak` is the line from the first `enable`. It may hold an older `init=` (for example a hand-installed wrapper) and may be stale, so edit the current line rather than copying the backup over it.

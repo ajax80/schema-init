@@ -62,7 +62,7 @@ The PSK must be quoted (passphrase format). An unquoted PSK is interpreted as a 
 
 ## Building
 
-The Pi Zero W is armv6l. Fedora's `arm-linux-gnu-gcc` cross-compiler does not ship an arm sysroot, so cross-compilation from Fedora is not practical. **Compile natively on the Pi:**
+The Pi Zero W is armv6l. Fedora's `arm-linux-gnu-gcc` cross-compiler does not ship an arm sysroot, so cross-compilation from Fedora is not practical. **The apt package ships `armhf` (ARMv6) binaries, so building is optional.** To build anyway, compile natively on the Pi:
 
 ```sh
 # on the Pi (via SSH once it's up, or from another Pi OS machine)
@@ -75,7 +75,16 @@ The `armhf` Makefile target exists for completeness but requires a full arm sysr
 
 ## Installation
 
-Install from the apt repo and enable with `schema-pi`: see [distros/raspberry-pi](../raspberry-pi/README.md). It also covers boot fallback; `schema-init-pi` writes the boot log to `/var/log/schema-init/boot.log`, so the old `schema-init-log` wrapper is no longer needed. The Zero W service files and wrapper scripts from this directory still go in `/etc/schema-init/services/` and `/usr/local/bin/`, and the WiFi configuration above still applies.
+Install from the apt repo and enable with `schema-pi`: see [distros/raspberry-pi](../raspberry-pi/README.md). It also covers boot fallback; `schema-init-pi` writes the boot log to `/var/log/schema-init/boot.log`, so the old `schema-init-log` wrapper is no longer needed. The Zero W service files and wrapper scripts are not in the package. From this directory:
+
+```sh
+sudo mkdir -p /etc/schema-init/services
+sudo cp services/* /etc/schema-init/services/
+sudo cp scripts/schema-*.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/schema-*.sh
+```
+
+Then configure WiFi as above, run `sudo schema-pi enable` and reboot.
 
 ## Boot timeline (measured)
 
