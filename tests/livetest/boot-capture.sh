@@ -1,8 +1,9 @@
 #!/bin/bash
 # boot-capture.sh — full boot-analysis snapshot for schema-init.
-# Run after a boot (needs sudo for dmesg + ctl). Writes a timestamped report
-# under boot-logs/ and appends one CSV row to boot-logs/boot-history.csv so
-# you can track boot performance across reboots over time.
+# Run after a boot (re-execs under sudo). Writes a timestamped report under
+# /var/lib/schema-init/boot-logs/ and appends one CSV row to boot-history.csv
+# there so you can track boot performance across reboots over time. Kept out
+# of the repo: per-boot rows kept leaking into commits.
 #
 # schema-init gives children NO PATH (PID 1 environ is HOME/TERM/split_lock_detect
 # only, and service.c spawns via execv) — so an absolute shebang and an explicit
@@ -11,13 +12,13 @@
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 set -u
 
-LOGDIR="$(dirname "$(readlink -f "$0")")/boot-logs"
+[ "$(id -u)" -eq 0 ] || exec sudo "$(readlink -f "$0")" "$@"
+
+LOGDIR=/var/lib/schema-init/boot-logs
 mkdir -p "$LOGDIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 REPORT="$LOGDIR/boot-$STAMP.txt"
 CSV="$LOGDIR/boot-history.csv"
-if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
-SCTL="$SUDO schema-ctl"
 
 {
   printf '====================================================\n'
@@ -25,7 +26,7 @@ SCTL="$SUDO schema-ctl"
   printf '====================================================\n\n'
 
   printf '### HOST\n'
-  printf 'node:        %s\n' "$(cat ~/.claude/NODE 2>/dev/null || hostname)"
+  printf 'node:        %s\n' "$(cat "$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)/.claude/NODE" 2>/dev/null || hostname)"
   printf 'hostname:    %s\n' "$(hostname)"
   printf 'kernel:      %s\n' "$(uname -r)"
   printf 'booted at:   %s\n' "$(uptime -s)"
@@ -41,18 +42,18 @@ SCTL="$SUDO schema-ctl"
   printf 'threads:     %s\n\n' "$(ps -eLf --no-headers | wc -l)"
 
   printf '### KERNEL → USERSPACE TIMELINE (dmesg, seconds since power-on)\n'
-  $SUDO dmesg 2>/dev/null | grep -iE \
+  dmesg 2>/dev/null | grep -iE \
     'Freeing unused kernel image \(initmem\)|switch_root|Run /sbin/init|crng init done|EXT4-fs.*mounted|Btrfs loaded' \
     | head -12
-  KFREE="$($SUDO dmesg 2>/dev/null | awk -F'[][]' '/Freeing unused kernel image \(initmem\)/{print $2; exit}' | tr -d ' ')"
+  KFREE="$(dmesg 2>/dev/null | awk -F'[][]' '/Freeing unused kernel image \(initmem\)/{print $2; exit}' | tr -d ' ')"
   printf 'kernel-init-freed at: %ss (kernel hardware init essentially done)\n\n' "${KFREE:-?}"
 
   printf '### SCHEMA-INIT TIMING (kernel→PID1, then per-service time-to-stable)\n'
-  $SCTL timing 2>/dev/null
+  schema-ctl timing 2>/dev/null
   printf '\n'
 
   printf '### SCHEMA-INIT STATUS (pid / state / restarts)\n'
-  $SCTL status 2>/dev/null
+  schema-ctl status 2>/dev/null
   printf '\n'
 
   printf '### CGROUP RESOURCE USE (schema-init managed services)\n'
@@ -70,7 +71,7 @@ SCTL="$SUDO schema-ctl"
   printf '\n'
 
   printf '### JOURNAL-SINK TAIL (last 15 lines of unified log)\n'
-  $SUDO tail -15 /var/log/schema-init/journal.log 2>/dev/null || printf '  (no journal.log)\n'
+  tail -15 /var/log/schema-init/journal.log 2>/dev/null || printf '  (no journal.log)\n'
   printf '\n'
 
   PP1="$(awk '/PPid/{print $2}' /proc/"$(pgrep -f '[s]chema-journal-sink' | head -1)"/status 2>/dev/null)"
@@ -84,7 +85,7 @@ SCTL="$SUDO schema-ctl"
 } | tee "$REPORT"
 
 # --- append one CSV row for cross-boot trend tracking ---
-TIMING="$($SCTL timing 2>/dev/null)"
+TIMING="$(schema-ctl timing 2>/dev/null)"
 K2P="$(printf '%s\n' "$TIMING" | awk -F: '/kernel/{gsub(/[^0-9.]/,"",$2); print $2}')"
 # time-to-login: sddm reaching stable is what a boot actually "feels" like
 SDDM="$(printf '%s\n' "$TIMING" | awk '$1=="sddm"{gsub(/[^0-9.]/,"",$2); print $2}')"
