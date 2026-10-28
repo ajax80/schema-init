@@ -359,6 +359,17 @@ def kill_user_cgroup(uid):
                   file=sys.stderr)
 
 
+def user_cgroup_pids(uid):
+    pids = set()
+    for d, _, _ in os.walk(user_service_cgroup(uid)):
+        try:
+            with open(d + '/cgroup.procs') as f:
+                pids.update(int(p) for p in f.read().split())
+        except (OSError, ValueError):
+            pass
+    return pids
+
+
 def user_cgroup_populated(uid):
     try:
         with open(user_service_cgroup(uid) + '/cgroup.events') as f:
@@ -1877,6 +1888,7 @@ class UserSupervisors:
 
     def __init__(self):
         self.state = {}         # uid -> dict, see _st()
+        self.killed = set()     # pids _start cgroup-killed: waited on so ours never linger as zombies
 
     def _st(self, uid):
         return self.state.setdefault(uid, {
@@ -1956,6 +1968,7 @@ class UserSupervisors:
         # Leftovers of an instance that died unseen (while logind was down):
         # kill them and start on a later tick, once the tree is empty.
         if user_cgroup_populated(uid):
+            self.killed |= user_cgroup_pids(uid)
             kill_user_cgroup(uid)
             return
         ensure_runtime_dir(uid)
@@ -1974,8 +1987,25 @@ class UserSupervisors:
         st['pid'], st['start'] = pid, proc_starttime_ticks(pid)
         print(f"login1-stub: schema-user uid={uid} started pid={pid}")
 
+    # An instance adoption missed is still our child when _start kills it,
+    # and no state entry would ever wait on it. Only pids that were in the
+    # user's tree, and only while they stay ours: a pid is not reused before
+    # it is reaped, so this never takes another child's status.
+    def _reap_killed(self):
+        for pid in list(self.killed):
+            try:
+                got, status = os.waitpid(pid, os.WNOHANG)
+                if got == 0:
+                    continue
+                print(f"login1-stub: reaped pid={pid} from a killed user tree "
+                      f"(status {status:#x})", file=sys.stderr)
+            except ChildProcessError:
+                pass
+            self.killed.discard(pid)
+
     def reconcile(self, session_uids, now=None):
         now = time.monotonic() if now is None else now
+        self._reap_killed()
         wanted = (set(session_uids) | linger_uids()) - {0}
         for uid in wanted | set(self.state):
             st = self._st(uid)

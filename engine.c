@@ -700,11 +700,22 @@ static void timer_rearm(service_t *svc) {
 /* MAINPID=: alive and inside the service's cgroup or below it. Not
  * pid_file_read()'s scan of the top-level cgroup.procs: a delegated service
  * keeps that empty and its processes in children. */
-static int mainpid_ok(const service_t *svc, pid_t p) {
+static const char *mainpid_why(const service_t *svc, pid_t p) {
     char text[NOTIFY_CGROUP_TEXT_MAX];
-    return p > 1 && kill(p, 0) == 0 && svc->cgroup_path[0] &&
-           notify_read_cgroup(p, text, sizeof text) &&
-           notify_cgroup_text_matches(text, svc->cgroup_path);
+    if (p <= 1) return "invalid";
+    if (kill(p, 0) != 0) return "gone";
+    if (!svc->cgroup_path[0]) return "no-cgroup";
+    if (!notify_read_cgroup(p, text, sizeof text) ||
+        !notify_cgroup_text_matches(text, svc->cgroup_path)) return "outside-cgroup";
+    return NULL;
+}
+
+static void mainpid_rejected(service_t *svc, pid_t p, const char *why) {
+    char ev[64];
+    if (p == svc->main_rejected) return;
+    svc->main_rejected = p;
+    snprintf(ev, sizeof ev, "main-pid-rejected pid=%d %s", (int)p, why);
+    service_log(svc, ev);
 }
 
 /* the pid's parent: only our own children (orphans reparented to PID 1 or
@@ -721,6 +732,18 @@ static pid_t pid_parent(pid_t p) {
     buf[n] = '\0';
     if (!(rp = strrchr(buf, ')')) || sscanf(rp + 1, " %*c %d", &ppid) != 1) return 0;
     return (pid_t)ppid;
+}
+
+/* ctl stop/restart of a service with no child yet: drop a forking or
+ * MAINPID= wait. Only the MAINPID= wait gets post, as its timeout does;
+ * the pid_file timeout runs none. */
+static void ctl_wait_abort(service_t *svc) {
+    if (svc->fork_state >= 0 && !svc->main_wait) return;
+    int post = svc->main_wait;
+    svc_cgroup_kill_tree(svc);
+    svc->fork_state = 0;
+    svc->main_wait = 0;
+    if (post) stop_cmds_begin(svc, 2);
 }
 
 static void main_adopt(service_t *svc, pid_t p) {
@@ -776,10 +799,13 @@ static void reap(void) {
                     break;
                 }
                 if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-                    if (services[i].main_pid && mainpid_ok(&services[i], services[i].main_pid) &&
-                        pid_parent(services[i].main_pid) == getpid()) {
-                        main_adopt(&services[i], services[i].main_pid);
+                    pid_t mp = services[i].main_pid;
+                    const char *why = mp ? mainpid_why(&services[i], mp) : NULL;
+                    if (mp && !why && pid_parent(mp) != getpid()) why = "not-ours";
+                    if (mp && !why) {
+                        main_adopt(&services[i], mp);
                     } else {
+                        if (why) mainpid_rejected(&services[i], mp, why);
                         struct timespec t;
                         clock_gettime(CLOCK_MONOTONIC, &t);
                         t.tv_sec += MAINPID_WAIT_SECS;
@@ -1877,11 +1903,7 @@ static void ctl_cmd(int fd, char *line) {
                     services[i].stop_pid > 0 ? "exec_stop" : "SIGTERM",
                     name, (int)services[i].child_pid);
             } else {
-                if (services[i].fork_state < 0 || services[i].main_wait) {
-                    svc_cgroup_kill_tree(&services[i]);
-                    services[i].fork_state = 0;
-                    services[i].main_wait = 0;
-                }
+                ctl_wait_abort(&services[i]);
                 services[i].inst.state = STATE_EXCISED;
                 ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
             }
@@ -1901,11 +1923,7 @@ static void ctl_cmd(int fd, char *line) {
                 stop_main(&services[i]);
                 ctl_writef(fd, "ok: SIGTERM → %s — recovery arc will respawn\n", name);
             } else {
-                if (services[i].fork_state < 0 || services[i].main_wait) {
-                    svc_cgroup_kill_tree(&services[i]);
-                    services[i].fork_state = 0;
-                    services[i].main_wait = 0;
-                }
+                ctl_wait_abort(&services[i]);
                 services[i].inst.state    = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
                 ctl_rearm(&services[i], 1);
@@ -2197,11 +2215,13 @@ static void notify_poll(int max_batch) {
             if (stores && m.fdstore_remove)
                 fdstore_remove(svc->name, m.fdname);
             if (!svc->notify) break;
-            if (m.mainpid && (svc->flags & SVC_MAIN_PID_NOTIFY) && mainpid_ok(svc, m.mainpid)) {
+            const char *mp_why = m.mainpid && (svc->flags & SVC_MAIN_PID_NOTIFY) ? mainpid_why(svc, m.mainpid) : NULL;
+            if (mp_why) mainpid_rejected(svc, m.mainpid, mp_why);
+            else if (m.mainpid && (svc->flags & SVC_MAIN_PID_NOTIFY)) {
                 int adopted = svc->main_pid && svc->child_pid == svc->main_pid;
                 if (svc->main_wait || adopted) {
                     if (pid_parent(m.mainpid) == getpid()) main_adopt(svc, m.mainpid);
-                    else service_log(svc, "main-pid-not-ours");
+                    else mainpid_rejected(svc, m.mainpid, "not-ours");
                 } else if (m.mainpid != svc->child_pid) {
                     svc->main_pid = m.mainpid;   /* launcher still running: adopt at its exit */
                 }
