@@ -378,22 +378,6 @@ static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, st
     safe_copy(ev->val[ev->n], devpath, UE_VAL_MAX);
     ev->n++;
 
-    /* sd-device rejects a monitor frame without a nonzero SEQNUM, so a coldplug
-     * broadcast lacking one is dropped by every libudev consumer: NetworkManager
-     * never saw lo initialized and held Startup (nm-online -s) forever. */
-    char seq[32] = "1", spath[1024];
-    if ((size_t)snprintf(spath, sizeof spath, "%s/kernel/uevent_seqnum", sysroot) < sizeof spath) {
-        FILE *sf = fopen(spath, "r");
-        if (sf) {
-            if (fgets(seq, sizeof seq, sf)) seq[strcspn(seq, "\r\n")] = '\0';
-            fclose(sf);
-            if (!seq[0] || strcmp(seq, "0") == 0) strcpy(seq, "1");
-        }
-    }
-    safe_copy(ev->key[ev->n], "SEQNUM", UE_KEY_MAX);
-    safe_copy(ev->val[ev->n], seq, UE_VAL_MAX);
-    ev->n++;
-
     /* Resolve SUBSYSTEM from subsystem symlink */
     char sublink[1024], subtarget[1024];
     if ((size_t)snprintf(sublink, sizeof sublink, "%s/subsystem", dirpath) < sizeof sublink) {
@@ -471,10 +455,29 @@ static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struc
      * dispatches every parent before its children — required so a child's
      * IMPORT{parent} finds the parent's DB record already written. */
     qsort(g_coldplug_paths, g_coldplug_np, sizeof *g_coldplug_paths, coldplug_path_cmp);
+    /* sd-device rejects a monitor frame without a nonzero SEQNUM, so a coldplug
+     * broadcast lacking one is dropped by every libudev consumer: NetworkManager
+     * never saw lo initialized and held Startup (nm-online -s) forever. */
+    unsigned long long seqnum = 0;
+    char seq[32], spath[1024];
+    if ((size_t)snprintf(spath, sizeof spath, "%s/kernel/uevent_seqnum", sysroot) < sizeof spath) {
+        FILE *sf = fopen(spath, "r");
+        if (sf) {
+            if (fgets(seq, sizeof seq, sf)) seqnum = strtoull(seq, NULL, 10);
+            fclose(sf);
+        }
+    }
+    snprintf(seq, sizeof seq, "%llu", seqnum ? seqnum : 1);
     for (size_t i = 0; i < g_coldplug_np; i++) {
         struct uevent ev;
-        if (uevent_from_sysfs(sysroot, g_coldplug_paths[i], &ev) == 0 && on_event)
+        if (uevent_from_sysfs(sysroot, g_coldplug_paths[i], &ev) == 0 && on_event) {
+            if (ev.n < UE_MAX_KEYS) {
+                safe_copy(ev.key[ev.n], "SEQNUM", UE_KEY_MAX);
+                safe_copy(ev.val[ev.n], seq, UE_VAL_MAX);
+                ev.n++;
+            }
             on_event(&ev);
+        }
         free(g_coldplug_paths[i]);
     }
     free(g_coldplug_paths);
