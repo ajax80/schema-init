@@ -36,7 +36,7 @@ echo systemd > "$T/comm"
 # enable_fresh
 reset
 pi enable > "$T/log" 2>&1 || fail "enable_fresh: exit: $(cat "$T/log")"
-[ "$(cat "$CL")" = "$STOCK init=/usr/sbin/schema-init-pi" ] || fail "enable_fresh: line"
+[ "$(cat "$CL")" = "$STOCK panic=10 init=/usr/sbin/schema-init-pi" ] || fail "enable_fresh: line"
 [ "$(wc -l < "$CL")" -eq 1 ] || fail "enable_fresh: newline count"
 printf '%s\n' "$STOCK" | cmp -s - "$BAK" || fail "enable_fresh: backup"
 [ "$(cat "$R/etc/schema-init/services/pi-bootok.svc")" = bootok-svc ] || fail "enable_fresh: bootok svc"
@@ -68,17 +68,30 @@ echo "ok enable_twice_keeps_kg"
 reset
 printf 'console=tty1 init=/sbin/schema-init-log rootwait init=/x quiet\n' > "$CL"
 pi enable > "$T/log" 2>&1 || fail "enable_replaces_old_init: exit"
-[ "$(cat "$CL")" = "console=tty1 rootwait quiet init=/usr/sbin/schema-init-pi" ] || fail "enable_replaces_old_init: $(cat "$CL")"
+[ "$(cat "$CL")" = "console=tty1 rootwait quiet panic=10 init=/usr/sbin/schema-init-pi" ] || fail "enable_replaces_old_init: $(cat "$CL")"
 echo "ok enable_replaces_old_init"
 
 # enable_crlf (and extra lines dropped)
 reset
 printf '%s\r\nsecond line\r\n' "$STOCK" > "$CL"
 pi enable > "$T/log" 2>&1 || fail "enable_crlf: exit"
-[ "$(cat "$CL")" = "$STOCK init=/usr/sbin/schema-init-pi" ] || fail "enable_crlf: line"
+[ "$(cat "$CL")" = "$STOCK panic=10 init=/usr/sbin/schema-init-pi" ] || fail "enable_crlf: line"
 [ "$(wc -l < "$CL")" -eq 1 ] || fail "enable_crlf: line count"
 [ -z "$(tr -d '\r' < "$CL" | cmp - "$CL" 2>&1)" ] || fail "enable_crlf: CR remains"
 echo "ok enable_crlf"
+
+# enable_adds_panic: an early PID 1 crash must reboot, not hang, so the counter advances
+reset
+pi enable > "$T/log" 2>&1 || fail "enable_adds_panic: exit"
+[ "$(grep -o 'panic=[^[:blank:]]*' "$CL")" = panic=10 ] || fail "enable_adds_panic: $(cat "$CL")"
+pi enable > "$T/log" 2>&1 || fail "enable_adds_panic: re-enable"
+[ "$(grep -o 'panic=[^[:blank:]]*' "$CL")" = panic=10 ] || fail "enable_adds_panic: duplicated: $(cat "$CL")"
+[ "$(wc -l < "$CL")" -eq 1 ] || fail "enable_adds_panic: line count"
+reset
+printf 'console=tty1 panic=5 rootwait\n' > "$CL"
+pi enable > "$T/log" 2>&1 || fail "enable_adds_panic: existing"
+[ "$(cat "$CL")" = "console=tty1 panic=5 rootwait init=/usr/sbin/schema-init-pi" ] || fail "enable_adds_panic: existing kept: $(cat "$CL")"
+echo "ok enable_adds_panic"
 
 refuses() {
     name=$1
@@ -114,10 +127,10 @@ reset; rm "$R/etc/schema-init/services/sshd.svc"; refuses enable_refuses_no_sshd
 
 # disable_roundtrip
 reset
-cp "$CL" "$T/stock"
 pi enable > "$T/log" 2>&1 || fail "disable_roundtrip: enable"
 pi disable > "$T/log" 2>&1 || fail "disable_roundtrip: disable"
-cmp -s "$CL" "$T/stock" || fail "disable_roundtrip: bytes differ"
+# panic=10 is left in on purpose
+printf '%s panic=10\n' "$STOCK" | cmp -s - "$CL" || fail "disable_roundtrip: $(cat "$CL")"
 echo "ok disable_roundtrip"
 
 # disable_keeps_whitespace

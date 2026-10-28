@@ -71,6 +71,11 @@ enable() {
     status_enabled || printf 'attempts=0\nlast_target=current\n' > "$D/pi-boot"
 
     line=$(firstline | strip_init)
+    # without panic= an early PID 1 crash hangs the kernel for good and the attempt counter never advances
+    case " $line" in
+        *[$BL]panic=*) ;;
+        *) line="$line panic=10" ;;
+    esac
     write_cmdline "$line $ARG"
     echo "schema-pi: enabled; takes effect on next boot"
 }
@@ -78,8 +83,9 @@ enable() {
 disable() {
     need_root
     [ -f "$CL" ] || die "$CL not found"
+    # panic= stays: rebooting on a kernel panic is harmless under systemd too
     write_cmdline "$(firstline | strip_init)"
-    echo "schema-pi: disabled; systemd boots next time"
+    echo "schema-pi: disabled; systemd boots next time (panic= left in cmdline.txt)"
 }
 
 status_enabled() {
