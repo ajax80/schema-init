@@ -41,12 +41,12 @@ static void write_all(int fd, const char *b, size_t n) {
 /* Streamed, not mmap'd: the Pi may be short on memory this early. */
 static int files_differ(const char *a, const char *b) {
     struct stat sa, sb;
-    if (stat(a, &sa) != 0) return 0;
-    if (stat(b, &sb) != 0) return 1;
-    if (sa.st_size != sb.st_size) return 1;
-    int fa = open(a, O_RDONLY), fb = open(b, O_RDONLY), diff = 0;
-    if (fa < 0 || fb < 0) diff = fa != fb;
-    else {
+    int fa = open(a, O_RDONLY | O_CLOEXEC);
+    if (fa < 0) return 0;
+    int fb = open(b, O_RDONLY | O_CLOEXEC);
+    if (fb < 0) { close(fa); return 1; }
+    int diff = fstat(fa, &sa) != 0 || fstat(fb, &sb) != 0 || sa.st_size != sb.st_size;
+    if (!diff) {
         char x[4096], y[4096];
         for (;;) {
             ssize_t nx = read(fa, x, sizeof x), ny = read(fb, y, sizeof y);
@@ -54,8 +54,8 @@ static int files_differ(const char *a, const char *b) {
             if (nx <= 0) break;
         }
     }
-    if (fa >= 0) close(fa);
-    if (fb >= 0) close(fb);
+    close(fa);
+    close(fb);
     return diff;
 }
 
