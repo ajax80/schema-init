@@ -1,8 +1,8 @@
 # schema-init — Raspberry Pi Zero W
 
-Runs schema-init as PID 1 on a Raspberry Pi Zero W (BCM2835, armv6l, 32-bit ARM). WiFi headless — no Ethernet, no HDMI required. Network comes up via wpa_supplicant + dhcpcd; sshd is the first usable interface.
+Runs schema-init as PID 1 on a Raspberry Pi Zero W (BCM2835, armv6l, 32-bit ARM). WiFi headless — no Ethernet, no HDMI required. Install, enable and boot fallback are in [the Raspberry Pi README](../raspberry-pi/README.md). Network comes up via wpa_supplicant + dhcpcd; sshd is the first usable interface.
 
-Tested on Pi OS Trixie (Debian Bookworm, 32-bit), kernel 6.12.75+rpt-rpi-v6.
+Tested on Pi OS Trixie (Debian 13, 32-bit), kernel 6.12.75+rpt-rpi-v6.
 
 ## What this replaces
 
@@ -60,19 +60,6 @@ network={
 
 The PSK must be quoted (passphrase format). An unquoted PSK is interpreted as a 64-character hex string and will fail.
 
-## Persistent logging
-
-schema-init redirects per-service logs to `/run/log/schema-init/` (tmpfs — lost on power cut). A wrapper is needed to persist boot logs. Install `/sbin/schema-init-log`:
-
-```sh
-#!/bin/sh
-mount -o remount,rw / 2>/dev/null
-mkdir -p /var/log/schema-init
-exec /sbin/schema-init >/var/log/schema-init/boot.log 2>&1
-```
-
-Then set `init=/sbin/schema-init-log` in `/boot/firmware/cmdline.txt`. The wrapper scripts in this distro also redirect their per-service output to `/var/log/schema-init/` (wpa.log, dbus.log, dhcpcd.log).
-
 ## Building
 
 The Pi Zero W is armv6l. Fedora's `arm-linux-gnu-gcc` cross-compiler does not ship an arm sysroot, so cross-compilation from Fedora is not practical. **Compile natively on the Pi:**
@@ -88,54 +75,7 @@ The `armhf` Makefile target exists for completeness but requires a full arm sysr
 
 ## Installation
 
-### 1. Build binary on the Pi (see Building above)
-
-### 2. Install schema-init
-
-```sh
-sudo cp schema-init /sbin/schema-init
-sudo cp schema-ctl /usr/local/bin/schema-ctl
-sudo mkdir -p /etc/schema-init/services
-```
-
-### 3. Install service files
-
-```sh
-sudo cp services/* /etc/schema-init/services/
-```
-
-### 4. Install wrapper scripts
-
-```sh
-sudo cp scripts/schema-dbus.sh /usr/local/bin/schema-dbus.sh
-sudo cp scripts/schema-udev-trigger.sh /usr/local/bin/schema-udev-trigger.sh
-sudo cp scripts/schema-wpa.sh /usr/local/bin/schema-wpa.sh
-sudo cp scripts/schema-dhcpcd.sh /usr/local/bin/schema-dhcpcd.sh
-sudo cp scripts/schema-sshd.sh /usr/local/bin/schema-sshd.sh
-sudo chmod +x /usr/local/bin/schema-*.sh
-```
-
-### 5. Install logging wrapper
-
-```sh
-sudo cp scripts/schema-init-log /sbin/schema-init-log
-sudo chmod +x /sbin/schema-init-log
-```
-
-### 6. Configure WiFi
-
-```sh
-sudo nano /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
-# add country=, ssid=, psk= — see WiFi configuration above
-```
-
-### 7. Set init in cmdline.txt
-
-Edit `/boot/firmware/cmdline.txt` and add `init=/sbin/schema-init-log` to the kernel line. Keep it on one line.
-
-### 8. Boot
-
-Power cycle. After ~50 seconds the Pi will be reachable via SSH at its DHCP address.
+Install from the apt repo and enable with `schema-pi`: see [distros/raspberry-pi](../raspberry-pi/README.md). It also covers boot fallback; `schema-init-pi` writes the boot log to `/var/log/schema-init/boot.log`, so the old `schema-init-log` wrapper is no longer needed. The Zero W service files and wrapper scripts from this directory still go in `/etc/schema-init/services/` and `/usr/local/bin/`, and the WiFi configuration above still applies.
 
 ## Boot timeline (measured)
 

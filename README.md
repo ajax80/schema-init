@@ -96,6 +96,7 @@ Your existing boot entries (systemd, or the stock init on Devuan, Void or Artix)
 | Run it on Devuan (no systemd) | [`distros/devuan`](distros/devuan/README.md): `make` + `install.sh`, beside sysvinit | Adds a non-default boot entry; `install.sh --remove` undoes it |
 | Run it on Void (no systemd) | [`distros/void`](distros/void/README.md): `make` + `install.sh`, beside runit | Adds a non-default boot entry; `install.sh --remove` undoes it |
 | Run it on Artix (no systemd) | [`distros/artix`](distros/artix/README.md): `make` + `install.sh`, beside dinit, s6 or OpenRC | Adds a non-default boot entry; `install.sh --remove` undoes it |
+| Run it on a Raspberry Pi | [`distros/raspberry-pi`](distros/raspberry-pi/README.md): apt repo (`armhf`, `arm64`), `schema-pi enable` | Edits `cmdline.txt`; `schema-pi disable` undoes it, boot fallback to systemd |
 | Run it on another distro | [`setup.sh` from source](docs/install.md#build-from-source-any-distro) | Adds a non-default boot entry |
 
 On Fedora KDE the short version is:
