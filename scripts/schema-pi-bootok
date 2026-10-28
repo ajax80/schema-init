@@ -1,10 +1,14 @@
 #!/bin/sh
 R=${SCHEMA_PI_ROOT:-}
-CTL=${SCHEMA_CTL:-schema-ctl}
+# run from known-good, the known-good schema-ctl must drive the known-good engine
+CTL=schema-ctl
+[ -x "${0%/*}/schema-ctl" ] && CTL=${0%/*}/schema-ctl
+CTL=${SCHEMA_CTL:-$CTL}
 POLL=${SCHEMA_PI_POLL:-5}
 D=$R/var/lib/schema-init
 STATE=$D/pi-boot
-KG=$D/known-good
+KGP=/var/lib/schema-init/known-good
+KG=$R$KGP
 MARK=$R/run/schema-init/pi-boot-ok
 
 blockers() {
@@ -27,6 +31,16 @@ restore_old() {
     return 0
 }
 
+# the snapshot's svc files still name /usr/libexec; known-good must run its own copies
+point_at_kg() {
+    for s in pi-bootok pi-deadline; do
+        f=$KG.new/services/$s.svc
+        [ -f "$f" ] || continue
+        # rewrite in place, not via mv: keeps the file's root ownership the engine requires
+        c=$(sed "s|^exec=.*|exec=$KGP/schema-$s|" "$f") && printf '%s\n' "$c" > "$f" || return 1
+    done
+}
+
 promote() {
     # stale .new from a cut mid-copy would overlay deleted files into the new set
     rm -rf "$KG.new" "$KG.old"
@@ -35,7 +49,8 @@ promote() {
         cp -p "$R/usr/bin/schema-init" "$R/usr/bin/schema-ctl" "$KG.new/" &&
         cp -pR "$R/etc/schema-init/services/." "$KG.new/services/" &&
         cp -p "$R/usr/libexec/schema-init/schema-pi-bootok" \
-              "$R/usr/libexec/schema-init/schema-pi-deadline" "$KG.new/"; then
+              "$R/usr/libexec/schema-init/schema-pi-deadline" "$KG.new/" &&
+        point_at_kg; then
         # data must be on disk before the rename, or a power cut leaves truncated known-good files
         sync
         # without the guard a failed move-aside would nest .new inside $KG

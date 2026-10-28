@@ -1,6 +1,9 @@
 #!/bin/sh
 R=${SCHEMA_PI_ROOT:-}
-CTL=${SCHEMA_CTL:-schema-ctl}
+# run from known-good, the known-good schema-ctl must drive the known-good engine
+CTL=schema-ctl
+[ -x "${0%/*}/schema-ctl" ] && CTL=${0%/*}/schema-ctl
+CTL=${SCHEMA_CTL:-$CTL}
 DL=${SCHEMA_PI_DEADLINE:-300}
 
 sleep "$DL"

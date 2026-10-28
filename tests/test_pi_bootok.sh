@@ -158,3 +158,36 @@ echo "ok bootok_promote_only"
 # bootok_svc_no_timeout: the default 90 s oneshot timeout kills a slow Zero W boot before it confirms
 grep -qx 'start_timeout_sec=0' services/pi-bootok.svc.example || fail "bootok_svc_no_timeout: pi-bootok.svc.example keeps the oneshot timeout"
 echo "ok bootok_svc_no_timeout"
+
+# bootok_kg_runs_kg: the known-good svc files must run the known-good scripts
+reset
+printf 'name=pi-bootok\nexec=/usr/libexec/schema-init/schema-pi-bootok\noneshot=1\n' > "$R/etc/schema-init/services/pi-bootok.svc"
+printf 'name=pi-deadline\nexec=/usr/libexec/schema-init/schema-pi-deadline\noneshot=0\n' > "$R/etc/schema-init/services/pi-deadline.svc"
+env_run sh "$BOOTOK" --promote > "$T/log" 2>&1 || fail "bootok_kg_runs_kg: exit: $(cat "$T/log")"
+[ "$(grep '^exec=' "$KG/services/pi-bootok.svc")" = exec=/var/lib/schema-init/known-good/schema-pi-bootok ] ||
+    fail "bootok_kg_runs_kg: pi-bootok.svc: $(cat "$KG/services/pi-bootok.svc")"
+[ "$(grep '^exec=' "$KG/services/pi-deadline.svc")" = exec=/var/lib/schema-init/known-good/schema-pi-deadline ] ||
+    fail "bootok_kg_runs_kg: pi-deadline.svc: $(cat "$KG/services/pi-deadline.svc")"
+grep -qx oneshot=1 "$KG/services/pi-bootok.svc" || fail "bootok_kg_runs_kg: other lines lost"
+grep -q '^exec=/usr/libexec/' "$R/etc/schema-init/services/pi-bootok.svc" || fail "bootok_kg_runs_kg: live svc rewritten"
+echo "ok bootok_kg_runs_kg"
+
+# ctl_beside_script: a script run from known-good must use the known-good schema-ctl
+reset; good_kv
+mkdir -p "$T/kgbin"
+cp "$BOOTOK" "$DEADLINE" "$T/kgbin/"
+cp "$T/ctl" "$T/kgbin/schema-ctl"
+# the host may have a real schema-ctl on PATH: a fallback to it must never reach a real reboot
+mkdir -p "$T/pathctl"
+printf '#!/bin/sh\necho "path-ctl $*" >> "%s/pathctl.log"\nexit 1\n' "$T" > "$T/pathctl/schema-ctl"
+chmod +x "$T/pathctl/schema-ctl"
+SCHEMA_PI_ROOT=$R SCHEMA_PI_POLL=0.1 PATH=$T/pathctl:$PATH timeout 5 sh "$T/kgbin/schema-pi-bootok" > "$T/log" 2>&1 ||
+    fail "ctl_beside_script: bootok: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "ctl_beside_script: bootok did not use the beside ctl"
+rm -f "$MARK"
+SCHEMA_PI_ROOT=$R SCHEMA_PI_DEADLINE=1 PATH=$T/pathctl:$PATH sh "$T/kgbin/schema-pi-deadline" > "$T/log" 2>&1 &
+pid=$!
+sleep 2
+pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+[ "$(cat "$T/reboots" 2>/dev/null)" = reboot ] || fail "ctl_beside_script: deadline did not use the beside ctl: $(cat "$T/log")"
+echo "ok ctl_beside_script"
