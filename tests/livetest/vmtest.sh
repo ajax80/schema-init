@@ -162,6 +162,11 @@ EOT
   pi_boot 3 rw
   # no seed: boot 3's reset to attempts=0 must carry over on the disk
   pi_boot 4 ro
+  # Both engine execs fail after to_boot_log(), so the stub's stdout can only
+  # reach serial if the wrapper reopened the console. Last: the disk stays broken.
+  pi_seed 0 current
+  pi_fs "sif /usr/bin/schema-init mode 0100644" "rm /var/lib/schema-init/known-good/schema-init"
+  pi_boot 5 rw
 
   pass=1
   pi_has() { grep -Eq "$2" "$WORK/pi-serial-$1.log"; }
@@ -183,6 +188,9 @@ EOT
   pi_has 3 "PI-EXE:"                       && pi_miss "PI-systemd: an engine ran on the systemd boot"
   pi_state 3 "attempts=0 last_target=systemd" || pi_miss "PI-systemd: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-3"))"
   grep -Eq "^[0-9]+ fallback=systemd attempts=3$" "$WORK/pi-fallback-3" || pi_miss "PI-systemd: fallback.log"
+  pi_has 5 "PI-SYSTEMD-REACHED argv0=/lib/systemd/systemd" || pi_miss "PI-reopen: stub output stuck in boot.log, console not reopened"
+  pi_has 5 "PI-EXE:"                       && pi_miss "PI-reopen: an engine ran with both engines unexecutable"
+  pi_state 5 "attempts=1 last_target=current" || pi_miss "PI-reopen: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-5"))"
   pi_has 4 "PI-CMDLINE: .* ro "            || pi_miss "PI-ro: kernel cmdline lacked ro"
   pi_has 4 "remount / rw failed"           && pi_miss "PI-ro: wrapper could not remount / rw"
   pi_has 4 "PI-ROOT: rw"                   || pi_miss "PI-ro: / still read-only under the engine"
@@ -191,15 +199,15 @@ EOT
   pi_has 4 "BOOTOK\| pi-bootok: boot confirmed .*\(target=current\)" || pi_miss "PI-ro: pi-bootok did not confirm"
   pi_state 4 "attempts=0 last_target=current" || pi_miss "PI-ro: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-4"))"
   grep -q "SHUTDOWN-WEDGED" "$OUT/last-vmtest-serial.log" && pi_miss "a Pi boot wedged on shutdown, forced off"
-  # boot 3 is the systemd stub's poweroff -f, not the engine's shutdown
+  # boots 3 and 5 are the systemd stub's poweroff -f, not the engine's shutdown
   for b in 1 2 4; do
     pi_has $b "remount-ro / failed" && pi_miss "PI-shutdown: boot $b could not remount / ro ($(grep -a -o 'remount-ro / failed.*' "$WORK/pi-serial-$b.log" | tr -d '\r'); $(grep -a -o 'PI-FD[12]: .*' "$WORK/pi-serial-$b.log" | tr -d '\r' | tr '\n' ' '))"
     grep -q needs_recovery "$WORK/pi-fsflags-$b" && pi_miss "PI-shutdown: boot $b left the ext4 journal needing recovery"
   done
   if [ "$pass" = 1 ]; then
-    echo ">> RESULT: PASS  (Pi wrapper: current, known-good, systemd fallback, ro root)"
+    echo ">> RESULT: PASS  (Pi wrapper: current, known-good, systemd fallback, console reopen, ro root)"
   else
-    echo ">> RESULT: FAIL / INCONCLUSIVE — serial of all four boots: $OUT/last-vmtest-serial.log"
+    echo ">> RESULT: FAIL / INCONCLUSIVE — serial of every Pi boot: $OUT/last-vmtest-serial.log"
     trap - EXIT; echo "   workdir kept: $WORK"
   fi
   exit 0
