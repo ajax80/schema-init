@@ -67,9 +67,10 @@ jobs:
       - id: week
         run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
       # A tarball, not the tree: actions/cache runs unprivileged and would lose
-      # root ownership and device nodes.
+      # root ownership and device nodes. Saved right away so a later failing
+      # step does not throw the debootstrap away.
       - id: cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.ROOTFS_TAR }}
           key: raspbian-trixie-armhf-${{ steps.week.outputs.week }}-${{ hashFiles('tools/raspbian-rootfs.sh') }}
@@ -78,6 +79,11 @@ jobs:
         run: |
           sudo sh tools/raspbian-rootfs.sh "$ROOTFS"
           sudo tar -C "$ROOTFS" --numeric-owner -cf "$ROOTFS_TAR" .
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.ROOTFS_TAR }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - name: unpack cached rootfs
         if: steps.cache.outputs.cache-hit == 'true'
         run: sudo mkdir "$ROOTFS" && sudo tar -C "$ROOTFS" --numeric-owner -xpf "$ROOTFS_TAR"
@@ -88,8 +94,27 @@ jobs:
           for m in sys dev; do sudo mount --rbind /$m "$ROOTFS/$m"; done
           sudo mkdir "$ROOTFS/build" && sudo cp -a . "$ROOTFS/build/src"
           sudo chroot "$ROOTFS" sh -c 'useradd -m ci && chown -R ci /build'
+      # Same commands as `make test`, one at a time, minus QEMU_SKIP: tests
+      # qemu-user cannot run, matched as a substring of the recipe line.
+      #   tests/test_schema_user.sh  orphans reparent to 1, not the
+      #                              PR_SET_CHILD_SUBREAPER parent, under qemu-user
       - name: make test (qemu)
-        run: sudo chroot "$ROOTFS" su ci -c 'umask 022; cd /build/src && make test'
+        env:
+          QEMU_SKIP: >-
+            tests/test_schema_user.sh
+        run: |
+          sudo tee "$ROOTFS/build/make-test.sh" > /dev/null <<'EOF'
+          cd /build/src && make -n test > /tmp/test-cmds || exit 1
+          fail=0
+          while IFS= read -r c; do
+              skip=
+              for p in $QEMU_SKIP; do case $c in *"$p"*) skip=$p ;; esac; done
+              if [ -n "$skip" ]; then echo "SKIPPED under qemu-user: $skip"; continue; fi
+              sh -c "$c" < /dev/null || { echo "FAILED: $c"; fail=1; }
+          done < /tmp/test-cmds
+          exit $fail
+          EOF
+          sudo chroot "$ROOTFS" su ci -c "umask 022; QEMU_SKIP='$QEMU_SKIP' sh /build/make-test.sh"
       - name: build deb (qemu)
         run: |
           sudo chroot "$ROOTFS" su ci -c "umask 022; cd /build/src && sh tools/deb-changelog.sh $CHANNEL && dpkg-buildpackage -b -us -uc"
