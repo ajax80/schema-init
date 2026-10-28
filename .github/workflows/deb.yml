@@ -96,12 +96,18 @@ jobs:
           sudo chroot "$ROOTFS" sh -c 'useradd -m ci && chown -R ci /build'
       # Same commands as `make test`, one at a time, minus QEMU_SKIP: tests
       # qemu-user cannot run, matched as a substring of the recipe line.
-      #   tests/test_schema_user.sh  orphans reparent to 1, not the
-      #                              PR_SET_CHILD_SUBREAPER parent, under qemu-user
+      #   test_schema_user.sh  qemu 8.2 returns EINVAL for PR_SET_CHILD_SUBREAPER,
+      #                        so orphans reparent to 1
+      #   test_svc_rlimits.c   qemu ignores setrlimit(RLIMIT_STACK) (it would
+      #                        bind qemu itself); the child sees the old stack limit
+      #   test_fdclose.c       asserts a close completes in < 0.5 s; too tight
+      #                        under emulation (passes natively on 32-bit i386)
       - name: make test (qemu)
         env:
           QEMU_SKIP: >-
             tests/test_schema_user.sh
+            tests/test_svc_rlimits.c
+            tests/test_fdclose.c
         run: |
           sudo tee "$ROOTFS/build/make-test.sh" > /dev/null <<'EOF'
           cd /build/src && make -n test > /tmp/test-cmds || exit 1
