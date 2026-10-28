@@ -263,6 +263,7 @@ test: schema-coredump schema-recorder schema-ctl schema-board schema-user schema
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
+	$(CC) $(CFLAGS) tests/test_pi_bootguard.c -o /tmp/schema-test-pi-bootguard && /tmp/schema-test-pi-bootguard
 	$(CC) $(CFLAGS) tests/test_ready_timer.c -o /tmp/schema-test-ready-timer && /tmp/schema-test-ready-timer
 	$(CC) $(CFLAGS) tests/test_runtime_copy.c -o /tmp/schema-test-runtime-copy && /tmp/schema-test-runtime-copy
 	$(CC) $(CFLAGS) tests/test_reexec_state.c -o /tmp/schema-test-reexec-state && /tmp/schema-test-reexec-state
