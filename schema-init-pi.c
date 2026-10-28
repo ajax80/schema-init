@@ -96,14 +96,16 @@ static void exec_target(enum pi_target t, int pid1, char **argv) {
     char path[PATH_MAX];
     if (t == PI_CURRENT) {
         to_boot_log();
-        execv(P(path, "/usr/bin/schema-init"), argv);
+        argv[0] = (char *)P(path, "/usr/bin/schema-init");
+        execv(path, argv);
         t = PI_KNOWN_GOOD;
     }
     if (t == PI_KNOWN_GOOD) {
         char svc[PATH_MAX];
         to_boot_log();
         setenv("SCHEMA_SVC_DIR", P(svc, "/var/lib/schema-init/known-good/services"), 1);
-        execv(P(path, "/var/lib/schema-init/known-good/schema-init"), argv);
+        argv[0] = (char *)P(path, "/var/lib/schema-init/known-good/schema-init");
+        execv(path, argv);
         unsetenv("SCHEMA_SVC_DIR");
     }
     if (pid1) {
@@ -122,6 +124,8 @@ static void exec_target(enum pi_target t, int pid1, char **argv) {
 
 int main(int argc, char **argv) {
     (void)argc;
+    /* The kernel forwards unrecognised cmdline KEY=val words as env: only the known-good exec may set this. */
+    unsetenv("SCHEMA_SVC_DIR");
     int pid1 = getpid() == 1;
     const char *r = pid1 ? NULL : getenv("SCHEMA_PI_ROOT");
     if (r) snprintf(root, sizeof root, "%s", r);

@@ -8,7 +8,7 @@ fail() { echo "FAIL: $*"; exit 1; }
 
 R=$T/root
 mkdir -p "$R/usr/bin" "$R/lib/systemd" "$R/var/lib/schema-init/known-good"
-stub() { printf '#!/bin/sh\necho "%s dir=${SCHEMA_SVC_DIR:-} args=$*"\n' "$1" > "$2"; chmod +x "$2"; }
+stub() { printf '#!/bin/sh\necho "%s dir=${SCHEMA_SVC_DIR:-} argv0=$0 args=$*"\n' "$1" > "$2"; chmod +x "$2"; }
 stub schema-init "$R/usr/bin/schema-init"
 stub known-good "$R/var/lib/schema-init/known-good/schema-init"
 stub systemd "$R/lib/systemd/systemd"
@@ -22,12 +22,15 @@ run() {
 : > "$T/seq"
 for n in 1 2 3 4 5; do run >> "$T/seq"; done
 KG=$R/var/lib/schema-init/known-good/services
+CUR=$R/usr/bin/schema-init
+KGB=$R/var/lib/schema-init/known-good/schema-init
+SD=$R/lib/systemd/systemd
 cat > "$T/want" <<EOT
-schema-init dir= args=a b
-schema-init dir= args=a b
-known-good dir=$KG args=a b
-systemd dir= args=a b
-schema-init dir= args=a b
+schema-init dir= argv0=$CUR args=a b
+schema-init dir= argv0=$CUR args=a b
+known-good dir=$KG argv0=$KGB args=a b
+systemd dir= argv0=$SD args=a b
+schema-init dir= argv0=$CUR args=a b
 EOT
 cmp -s "$T/seq" "$T/want" || { diff "$T/want" "$T/seq"; fail "sequence"; }
 grep -qx 'attempts=1' "$R/var/lib/schema-init/pi-boot" || fail "state after 5th run"
@@ -45,6 +48,9 @@ rm -rf "$R/var"; mkdir -p "$R/var/lib/schema-init/known-good"
 cp "$R/usr/bin/schema-init" "$R/var/lib/schema-init/known-good/schema-init"
 : > "$T/same"
 for n in 1 2 3; do run >> "$T/same"; done
-printf 'schema-init dir= args=a b\nschema-init dir= args=a b\nsystemd dir= args=a b\n' > "$T/want"
+printf 'schema-init dir= argv0=%s args=a b\nschema-init dir= argv0=%s args=a b\nsystemd dir= argv0=%s args=a b\n' "$CUR" "$CUR" "$SD" > "$T/want"
 cmp -s "$T/same" "$T/want" || { diff "$T/want" "$T/same"; fail "identical known-good sequence"; }
+rm -rf "$R/var"; mkdir -p "$R/var/lib/schema-init"
+SCHEMA_SVC_DIR=$T run > "$T/leak"
+grep -q '^schema-init dir= ' "$T/leak" || fail "inherited SCHEMA_SVC_DIR leaked into current"
 echo "test_pi_wrapper: ok"

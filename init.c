@@ -1664,7 +1664,7 @@ int main(int argc, char **argv) {
          * services_load() open a bogus directory and silently start zero
          * services. Only a hand-run invocation may name a services dir; as
          * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir.
-         * (SCHEMA_SVC_DIR is honoured above: the environment is not kernel cmdline.) */
+         * (SCHEMA_SVC_DIR is honoured above: env reaches PID 1 only via a deliberate KEY=val on the cmdline or from the Pi wrapper, and is validated as an absolute dir.) */
         if (getpid() == 1)
             continue;
         if (argv[i][0] == '-') {
