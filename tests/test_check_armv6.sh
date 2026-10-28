@@ -46,6 +46,9 @@ expect 1 "$T/deb/v7.deb" "usr/bin/prog1: Tag_CPU_arch=v7"
 expect 0 "$T/deb/v6.deb"
 expect 1 "$T/deb/mixed.deb" "usr/bin/prog2: Tag_CPU_arch=v7"
 expect 1 "$T/deb/noelf.deb" "no ELF"
+sh "$CHECK" "$T/deb/v6.deb" "$T/deb/noelf.deb" > "$T/out" 2>&1 && fail "v6+noelf passed"
+grep -q "no ELF files in $T/deb/noelf.deb" "$T/out" || fail "v6+noelf: no per-deb message"
+echo "ok: v6.deb + noelf.deb -> 1"
 
 for a; do
     case $a in
