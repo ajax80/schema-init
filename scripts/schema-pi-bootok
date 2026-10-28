@@ -55,10 +55,13 @@ promote() {
         sync
         # without the guard a failed move-aside would nest .new inside $KG
         if [ ! -d "$KG" ] || mv "$KG" "$KG.old"; then
-            mv "$KG.new" "$KG"
-            sync
-            rm -rf "$KG.old"
-            return 0
+            if mv "$KG.new" "$KG"; then
+                sync
+                rm -rf "$KG.old"
+                return 0
+            fi
+            # a failed swap must not leave the Pi with no known-good set
+            [ ! -e "$KG" ] && [ -d "$KG.old" ] && mv "$KG.old" "$KG"
         fi
     fi
     echo "pi-bootok: known-good promotion failed" >&2

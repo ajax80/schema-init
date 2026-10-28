@@ -191,3 +191,16 @@ sleep 2
 pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 [ "$(cat "$T/reboots" 2>/dev/null)" = reboot ] || fail "ctl_beside_script: deadline did not use the beside ctl: $(cat "$T/log")"
 echo "ok ctl_beside_script"
+
+# bootok_swap_fails: a failed .new -> known-good rename must put the old set back
+reset
+env_run sh "$BOOTOK" --promote > "$T/log" 2>&1 || fail "bootok_swap_fails: seed"
+echo bin-init-2 > "$R/usr/bin/schema-init"
+mkdir -p "$T/mvfail"
+printf '#!/bin/sh\ncase "$1" in *.new) exit 1 ;; esac\nexec %s "$@"\n' "$(command -v mv)" > "$T/mvfail/mv"
+chmod +x "$T/mvfail/mv"
+PATH=$T/mvfail:$PATH env_run sh "$BOOTOK" --promote > "$T/log" 2>&1 && fail "bootok_swap_fails: reported success"
+[ "$(cat "$KG/schema-init" 2>/dev/null)" = bin-init ] || fail "bootok_swap_fails: old set not restored"
+[ ! -e "$KG.new" ] && [ ! -e "$KG.old" ] || fail "bootok_swap_fails: leftover dirs"
+grep -q 'known-good promotion failed' "$T/log" || fail "bootok_swap_fails: not logged"
+echo "ok bootok_swap_fails"
