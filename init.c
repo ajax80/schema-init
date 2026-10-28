@@ -559,14 +559,14 @@ static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
  * memory.current read) — safe to run inline in PID 1. */
 static long reclaim_read_target(const service_t *svc) {
     char path[320];
-    long cur;
+    long long cur;   /* bytes: > LONG_MAX on 32-bit once a cgroup holds 2 GiB */
     FILE *f;
     if (!svc->cgroup_path[0]) return 0;
     if (svc->priority == PRIO_CRITICAL) return 0;
     snprintf(path, sizeof(path), "%s/memory.current", svc->cgroup_path);
     f = fopen(path, "r");
     if (!f) return 0;
-    if (fscanf(f, "%ld", &cur) != 1) { fclose(f); return 0; }
+    if (fscanf(f, "%lld", &cur) != 1) { fclose(f); return 0; }
     fclose(f);
     return reclaim_target(cur, RECLAIM_CAP);
 }

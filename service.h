@@ -37,11 +37,11 @@
 /* how many bytes of cold memory to ask the kernel to reclaim from a cgroup
  * currently holding `current` bytes: half of it, never more than `cap`, and
  * nothing at all below the floor. Pure — unit-tested in tests/test_reclaim.c. */
-static inline long reclaim_target(long current, long cap) {
-    long half;
+static inline long reclaim_target(long long current, long cap) {
+    long long half;
     if (current < RECLAIM_FLOOR) return 0;
     half = current / 2;
-    return half < cap ? half : cap;
+    return half < cap ? (long)half : cap;
 }
 
 #define PSI_MEM_TRIGGER        "some 100000 1000000"
@@ -161,9 +161,9 @@ static inline cgroup_tier_t cgroup_tiering(prio_t priority) {
 
 /* soft reclaim buffer (memory.high): 90% of the hard cap, in bytes; 0 (no
  * memory.high) when the service has no mem_limit. Pure. */
-static inline long mem_high_bytes(long mem_limit_mb) {
+static inline long long mem_high_bytes(long mem_limit_mb) {
     if (mem_limit_mb <= 0) return 0;
-    return (mem_limit_mb * 1024L * 1024L * 9L) / 10L;
+    return (mem_limit_mb * 1024LL * 1024LL * 9LL) / 10LL;
 }
 
 /* on_calendar day-of-week token -> tm_wday index (Sun=0..Sat=6), or -1 if the

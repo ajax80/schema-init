@@ -295,7 +295,7 @@ static void cgroup_apply_limits(service_t *svc) {
         snprintf(path, sizeof(path), "%s/memory.max", svc->cgroup_path);
         fd = open(path, O_WRONLY);
         if (fd >= 0) {
-            n = snprintf(buf, sizeof(buf), "%ld\n", svc->mem_limit_mb * 1024L * 1024L);
+            n = snprintf(buf, sizeof(buf), "%lld\n", svc->mem_limit_mb * 1024LL * 1024LL);
             write(fd, buf, (size_t)n);
             close(fd);
         }
@@ -305,9 +305,9 @@ static void cgroup_apply_limits(service_t *svc) {
      * pages under gentle back-pressure before ever hitting the OOM path. Pairs
      * with the PSI reclaim executive. Only when a hard mem_limit exists. */
     {
-        long high = mem_high_bytes(svc->mem_limit_mb);
+        long long high = mem_high_bytes(svc->mem_limit_mb);
         if (high > 0) {
-            n = snprintf(buf, sizeof(buf), "%ld\n", high);
+            n = snprintf(buf, sizeof(buf), "%lld\n", high);
             cg_write(svc->cgroup_path, "memory.high", buf);
         }
     }
