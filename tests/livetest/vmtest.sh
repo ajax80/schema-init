@@ -61,7 +61,7 @@ if [ "${PI_WRAPPER:-0}" = 1 ]; then
   cp "$BIN" "$PR/usr/bin/schema-init"
   cp "$SCTL" "$PR/usr/bin/schema-ctl"
   cp "$BB" "$PR/bin/busybox"
-  for a in sh cat sleep touch poweroff mount mkdir echo grep head tail kill readlink tr cut awk sed date sync mv cp rm; do
+  for a in sh cat ls sleep touch poweroff mount mkdir echo grep head tail kill readlink tr cut awk sed date sync mv cp rm; do
     ln -sf /bin/busybox "$PR/bin/$a"
   done
   # pi-bootok promotes both scripts into known-good, so both must exist
@@ -96,6 +96,8 @@ echo "PI-SVCS: $(schema-ctl status --kv | grep '\.state=' | tr '\n' ' ')"
 while read -r l; do echo "BOOTOK| $l"; done < $L/pi-bootok.log
 grep -E ' (spawn|oneshot-done) ' $L/boot.log | while read -r l; do echo "RAIL| $l"; done
 while read -r l; do echo "FALLBACK| $l"; done < $L/fallback.log
+# a regular file on PID 1's fds pins / writable and fails the shutdown remount-ro
+for f in 0 1 2; do echo "PI-FD$f: $(readlink /proc/1/fd/$f)"; done
 echo "===== PI-REPORT-END ====="
 ( sleep 45; echo "SHUTDOWN-WEDGED: forcing poweroff"; poweroff -f ) &
 kill -INT 1
@@ -137,6 +139,8 @@ EOT
       -append "console=ttyS0 root=/dev/vda rootfstype=ext4 $2 init=/init panic=1 loglevel=4" \
       < /dev/null > "$s" 2>&1 || true
     { echo "===== PI BOOT $1 (root $2) ====="; cat "$s"; } >> "$OUT/last-vmtest-serial.log"
+    # before the replay, which would clear it: a clean ro remount leaves no journal to recover
+    dumpe2fs -h "$IMG" 2>/dev/null | grep '^Filesystem features:' > "$WORK/pi-fsflags-$1"
     pi_replay
     debugfs -R "cat /var/lib/schema-init/pi-boot" "$IMG" > "$WORK/pi-state-$1" 2>/dev/null
     debugfs -R "cat /var/log/schema-init/fallback.log" "$IMG" > "$WORK/pi-fallback-$1" 2>/dev/null
@@ -187,6 +191,11 @@ EOT
   pi_has 4 "BOOTOK\| pi-bootok: boot confirmed .*\(target=current\)" || pi_miss "PI-ro: pi-bootok did not confirm"
   pi_state 4 "attempts=0 last_target=current" || pi_miss "PI-ro: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-4"))"
   grep -q "SHUTDOWN-WEDGED" "$OUT/last-vmtest-serial.log" && pi_miss "a Pi boot wedged on shutdown, forced off"
+  # boot 3 is the systemd stub's poweroff -f, not the engine's shutdown
+  for b in 1 2 4; do
+    pi_has $b "remount-ro / failed" && pi_miss "PI-shutdown: boot $b could not remount / ro ($(grep -a -o 'remount-ro / failed.*' "$WORK/pi-serial-$b.log" | tr -d '\r'); $(grep -a -o 'PI-FD[12]: .*' "$WORK/pi-serial-$b.log" | tr -d '\r' | tr '\n' ' '))"
+    grep -q needs_recovery "$WORK/pi-fsflags-$b" && pi_miss "PI-shutdown: boot $b left the ext4 journal needing recovery"
+  done
   if [ "$pass" = 1 ]; then
     echo ">> RESULT: PASS  (Pi wrapper: current, known-good, systemd fallback, ro root)"
   else
