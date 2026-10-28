@@ -49,6 +49,9 @@ cc -static -O2 -D_GNU_SOURCE -o "$NOTIFIER" "$HERE/notifycap/notifier.c" || { ec
 # Pi boot fallback: schema-init-pi is /init on a real ext4 root, booted four
 # times from one disk so state, known-good and logs carry over as on the SD card.
 if [ "${PI_WRAPPER:-0}" = 1 ]; then
+  for t in fakeroot debugfs dumpe2fs e2fsck; do
+    command -v "$t" >/dev/null || { echo "PI_WRAPPER needs $t (e2fsprogs, fakeroot) on PATH"; exit 1; }
+  done
   if [ "$REBUILD" = 1 ]; then
     make -C "$REPO" schema-init-pi >/dev/null 2>&1 || { echo "PI WRAPPER BUILD FAILED"; make -C "$REPO" schema-init-pi; exit 1; }
   fi
