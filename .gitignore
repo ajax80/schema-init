@@ -19,6 +19,8 @@ schema-dbus
 schema-systemctl
 tests/livetest/dbus-probe
 tests/livetest/boot-logs/boot-*.txt
+# older branches still write here; the live log is /var/lib/schema-init/boot-logs
+tests/livetest/boot-logs/boot-history.csv
 udev-parity
 verify-rules-live
 verify-eprops-live

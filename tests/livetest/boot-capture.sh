@@ -12,7 +12,7 @@
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 set -u
 
-[ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+[ "$(id -u)" -eq 0 ] || exec sudo "$(readlink -f "$0")" "$@"
 
 LOGDIR=/var/lib/schema-init/boot-logs
 mkdir -p "$LOGDIR"
@@ -26,7 +26,7 @@ CSV="$LOGDIR/boot-history.csv"
   printf '====================================================\n\n'
 
   printf '### HOST\n'
-  printf 'node:        %s\n' "$(cat ~/.claude/NODE 2>/dev/null || hostname)"
+  printf 'node:        %s\n' "$(cat "$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)/.claude/NODE" 2>/dev/null || hostname)"
   printf 'hostname:    %s\n' "$(hostname)"
   printf 'kernel:      %s\n' "$(uname -r)"
   printf 'booted at:   %s\n' "$(uptime -s)"
