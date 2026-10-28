@@ -378,6 +378,22 @@ static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, st
     safe_copy(ev->val[ev->n], devpath, UE_VAL_MAX);
     ev->n++;
 
+    /* sd-device rejects a monitor frame without a nonzero SEQNUM, so a coldplug
+     * broadcast lacking one is dropped by every libudev consumer: NetworkManager
+     * never saw lo initialized and held Startup (nm-online -s) forever. */
+    char seq[32] = "1", spath[1024];
+    if ((size_t)snprintf(spath, sizeof spath, "%s/kernel/uevent_seqnum", sysroot) < sizeof spath) {
+        FILE *sf = fopen(spath, "r");
+        if (sf) {
+            if (fgets(seq, sizeof seq, sf)) seq[strcspn(seq, "\r\n")] = '\0';
+            fclose(sf);
+            if (!seq[0] || strcmp(seq, "0") == 0) strcpy(seq, "1");
+        }
+    }
+    safe_copy(ev->key[ev->n], "SEQNUM", UE_KEY_MAX);
+    safe_copy(ev->val[ev->n], seq, UE_VAL_MAX);
+    ev->n++;
+
     /* Resolve SUBSYSTEM from subsystem symlink */
     char sublink[1024], subtarget[1024];
     if ((size_t)snprintf(sublink, sizeof sublink, "%s/subsystem", dirpath) < sizeof sublink) {

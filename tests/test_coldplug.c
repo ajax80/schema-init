@@ -56,6 +56,22 @@ int main(void) {
     assert(strcmp(uevent_get(&ev, "DEVNAME"), "ttyUSB0") == 0);
     assert(strcmp(uevent_get(&ev, "MAJOR"), "188") == 0);
     assert(strcmp(uevent_get(&ev, "PRODUCT"), "10c4/ea60/100") == 0);
+    /* sd-device drops monitor frames with no SEQNUM: no uevent_seqnum -> 1 */
+    assert(uevent_get(&ev, "SEQNUM") && strcmp(uevent_get(&ev, "SEQNUM"), "1") == 0);
+
+    char kdir[1024];
+    snprintf(kdir, sizeof kdir, "%s/kernel", sysroot);
+    assert(mkdir(kdir, 0755) == 0);
+    strcat(kdir, "/uevent_seqnum");
+    f = fopen(kdir, "w");
+    assert(f);
+    fputs("2822\n", f);
+    fclose(f);
+    assert(uevent_from_sysfs(sysroot, devdir, &ev) == 0);
+    assert(strcmp(uevent_get(&ev, "SEQNUM"), "2822") == 0);
+    char frame[8192];
+    ssize_t flen = libudev_frame_build(&ev, frame, sizeof frame);
+    assert(flen > 0 && memmem(frame, (size_t)flen, "SEQNUM=2822", 12));
 
     /* Assert matching rule fires */
     struct dev_rule r; memset(&r, 0, sizeof r);
