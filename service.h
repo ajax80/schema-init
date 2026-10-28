@@ -284,6 +284,7 @@ typedef struct {
     pid_t            main_pid;            /* main_pid_notify: pid from MAINPID=, supervised once the launcher exits 0 */
     int              main_wait;           /* launcher exited 0 before MAINPID=: waiting until main_wait_due */
     struct timespec  main_wait_due;
+    pid_t            main_rejected;       /* last refused MAINPID=: a resend is not logged again */
     char            *card[MAX_CARDS];    /* card=exec:CMD, played one per retry, in order */
     int              card_count;
     int              card_next;           /* next card to play; reset with the restart budget */

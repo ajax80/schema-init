@@ -1994,8 +1994,11 @@ class UserSupervisors:
     def _reap_killed(self):
         for pid in list(self.killed):
             try:
-                if os.waitpid(pid, os.WNOHANG)[0] == 0:
+                got, status = os.waitpid(pid, os.WNOHANG)
+                if got == 0:
                     continue
+                print(f"login1-stub: reaped pid={pid} from a killed user tree "
+                      f"(status {status:#x})", file=sys.stderr)
             except ChildProcessError:
                 pass
             self.killed.discard(pid)
