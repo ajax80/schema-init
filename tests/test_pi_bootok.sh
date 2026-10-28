@@ -119,3 +119,26 @@ pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 [ "$alive" = 1 ] || fail "deadline_quiet: exited"
 ! grep -q pi-deadline "$T/log" || fail "deadline_quiet: not quiet: $(cat "$T/log")"
 echo "ok deadline_quiet"
+
+# bootok_stale_new
+reset; good_kv
+mkdir -p "$KG.new/services"; echo x > "$KG.new/services/old.svc"
+env_run sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_stale_new: exit"
+[ ! -e "$KG/services/old.svc" ] || fail "bootok_stale_new: stale file survived"
+[ -f "$KG/services/sshd.svc" ] || fail "bootok_stale_new: not populated"
+echo "ok bootok_stale_new"
+
+# bootok_restore_old (current and known-good targets)
+for tg in current known-good; do
+    reset "$tg"; good_kv
+    mkdir -p "$KG.old"; echo kept > "$KG.old/schema-init"
+    env_run sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_restore_old($tg): exit"
+    [ -d "$KG" ] && [ -f "$KG/schema-init" ] || fail "bootok_restore_old($tg): known-good missing"
+    [ ! -e "$KG.old" ] || fail "bootok_restore_old($tg): .old remains"
+    if [ "$tg" = known-good ]; then
+        [ "$(cat "$KG/schema-init")" = kept ] || fail "bootok_restore_old: not restored"
+    else
+        [ -f "$KG/services/sshd.svc" ] || fail "bootok_restore_old: not populated"
+    fi
+done
+echo "ok bootok_restore_old"

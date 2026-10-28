@@ -50,7 +50,11 @@ mv "$tmp" "$STATE"
 mkdir -p "$R/run/schema-init"
 : > "$MARK"
 
+# a power cut between the swap's two mv calls leaves only .old: put the good set back
+[ ! -d "$KG" ] && [ -d "$KG.old" ] && mv "$KG.old" "$KG"
+
 if [ "$target" = current ]; then
+    # stale .new from a cut mid-copy would overlay deleted files into the new set
     rm -rf "$KG.new" "$KG.old"
     # a failed copy must not replace a good known-good set
     if mkdir -p "$KG.new/services" &&
@@ -60,10 +64,15 @@ if [ "$target" = current ]; then
               "$R/usr/libexec/schema-init/schema-pi-deadline" "$KG.new/"; then
         # data must be on disk before the rename, or a power cut leaves truncated known-good files
         sync
-        [ -d "$KG" ] && mv "$KG" "$KG.old"
-        mv "$KG.new" "$KG"
-        sync
-        rm -rf "$KG.old"
+        # without the guard a failed move-aside would nest .new inside $KG
+        if [ ! -d "$KG" ] || mv "$KG" "$KG.old"; then
+            mv "$KG.new" "$KG"
+            sync
+            rm -rf "$KG.old"
+        else
+            echo "pi-bootok: known-good promotion failed" >&2
+            rm -rf "$KG.new"
+        fi
     else
         echo "pi-bootok: known-good promotion failed" >&2
         rm -rf "$KG.new"
