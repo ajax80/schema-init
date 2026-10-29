@@ -16,35 +16,60 @@ SVC=$R/etc/schema-init/services
 REQ=$R/etc/schema-init/pi-boot-required
 
 # importer shim: a test must never reach the real schema-import against /.
-# Like the real one it never overwrites an existing .svc.
+# Mirrors the real one: explicit units first, then *.target.wants minus
+# _RECLAIMED (systemd-*, dbus*, NetworkManager-wait-online), never overwrites,
+# and a unit whose binary a hand set already runs is skipped with OWNED's text.
+# import.decline: units it writes nothing for; import.owned: "<unit> <owner>".
 mkdir -p "$T/shim"
-printf '%s\n' '#!/bin/sh' \
-    'echo "$MIGRATE_ROOT|$SCHEMA_SVC_DIR|$*" >> "$SHIM_T/import.log"' \
-    'i=0; e=0' \
-    'for n in $(cat "$SHIM_T/import.units"); do' \
-    '    if [ -e "$SCHEMA_SVC_DIR/$n.svc" ]; then' \
-    '        echo "have    $n.service ($SCHEMA_SVC_DIR/$n.svc exists; --force to overwrite)"; e=$((e + 1))' \
-    '    else' \
-    '        echo "name=$n" > "$SCHEMA_SVC_DIR/$n.svc"' \
-    '        echo "import  $n.service -> $SCHEMA_SVC_DIR/$n.svc"; i=$((i + 1))' \
-    '    fi' \
-    'done' \
-    'cat "$SHIM_T/import.extra"' \
-    'echo "imported=$i exists=$e not-found=0 skipped=$(grep -c "^skip" "$SHIM_T/import.extra") error=0"' \
-    > "$T/shim/schema-import"
+cat > "$T/shim/schema-import" <<'SHIM'
+#!/bin/sh
+echo "$MIGRATE_ROOT|$SCHEMA_SVC_DIR|$*" >> "$SHIM_T/import.log"
+units=
+for a in "$@"; do
+    case $a in -*) ;; *) units="$units ${a%.service}" ;; esac
+done
+for p in "$MIGRATE_ROOT"/etc/systemd/system/*.target.wants/*.service; do
+    [ -L "$p" ] || [ -e "$p" ] || continue
+    u=$(basename "$p" .service)
+    case $u in systemd-*|dbus*|NetworkManager-wait-online) continue ;; esac
+    case " $units " in *" $u "*) continue ;; esac
+    units="$units $u"
+done
+i=0; e=0; s=0
+for n in $units; do
+    grep -qx "$n" "$SHIM_T/import.decline" 2>/dev/null && continue
+    o=$(sed -n "s/^$n //p" "$SHIM_T/import.owned" 2>/dev/null)
+    if [ -e "$SCHEMA_SVC_DIR/$n.svc" ]; then
+        echo "have    $n.service ($SCHEMA_SVC_DIR/$n.svc exists; --force to overwrite)"; e=$((e + 1))
+    elif [ -n "$o" ]; then
+        echo "skip    $n.service: its binary already runs as $o.svc — importing it would start a second copy (see $SCHEMA_SVC_DIR/$n.svc.skipped)"
+        s=$((s + 1))
+    else
+        echo "name=$n" > "$SCHEMA_SVC_DIR/$n.svc"
+        echo "import  $n.service -> $SCHEMA_SVC_DIR/$n.svc"; i=$((i + 1))
+    fi
+done
+cat "$SHIM_T/import.extra"
+s=$((s + $(grep -c "^skip" "$SHIM_T/import.extra")))
+echo "imported=$i exists=$e not-found=0 skipped=$s error=0"
+SHIM
 chmod +x "$T/shim/schema-import"
 
-# wants links dangle in a fake root: they point at /lib, not $R/lib
+# wants links dangle in a fake root (they point at /lib, not $R/lib); the unit files are real
 wants() {
-    rm -rf "$R/etc/systemd/system"
-    mkdir -p "$R/etc/systemd/system/multi-user.target.wants"
+    rm -rf "$R/etc/systemd/system" "$R/lib/systemd/system"
+    mkdir -p "$R/etc/systemd/system/multi-user.target.wants" "$R/lib/systemd/system"
     for u in "$@"; do
         ln -s "/lib/systemd/system/$u.service" "$R/etc/systemd/system/multi-user.target.wants/$u.service"
+        echo "[Service]" > "$R/lib/systemd/system/$u.service"
     done
 }
 
+# find+cksum of $SVC: a refused enable must leave it byte-identical
+snap() { (cd "$SVC" && find . -print | sort && find . -type f -exec cksum {} + | sort); }
+
 reset() {
-    rm -rf "$R" "$T/bin" "$T/import.log"
+    rm -rf "$R" "$T/bin" "$T/import.log" "$T/import.decline" "$T/import.owned"
     mkdir -p "$R/boot/firmware" "$R/lib/systemd" "$R/usr/bin" "$R/usr/libexec/schema-init" \
         "$R/usr/share/schema-init" "$R/etc/schema-init/services" "$R/var/lib"
     printf '%s\n' "$STOCK" > "$CL"
@@ -55,7 +80,6 @@ reset() {
     echo d > "$R/usr/libexec/schema-init/schema-pi-deadline"
     for k in $KIT; do echo "$k-svc" > "$R/usr/share/schema-init/$k.svc.example"; done
     wants ssh NetworkManager
-    echo "ssh NetworkManager" > "$T/import.units"
     echo "skip    foo.service: Type=forking without PIDFile= (see $SVC/foo.svc.skipped)" > "$T/import.extra"
 }
 
@@ -162,12 +186,14 @@ reset; rm "$CL"; refuses enable_refuses_no_cmdline
 [ ! -e "$CL" ] || fail "enable_refuses_no_cmdline: created"
 
 # enable_imports: kit first, then the importer, then the network drop-in
+# umask 0: the engine ignores a group/other-writable .svc.d, so the mode must not depend on it
 reset
-pi enable > "$T/log" 2>&1 || fail "enable_imports: exit: $(cat "$T/log")"
+(umask 0; pi enable) > "$T/log" 2>&1 || fail "enable_imports: exit: $(cat "$T/log")"
 [ "$(cat "$T/import.log")" = "$R|$SVC|--enabled" ] || fail "enable_imports: call: $(cat "$T/import.log")"
 [ "$(cat "$SVC/ssh.svc")" = name=ssh ] || fail "enable_imports: ssh.svc"
 printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
     fail "enable_imports: drop-in: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf" 2>&1)"
+[ "$(stat -c %a "$SVC/NetworkManager.svc.d")" = 755 ] || fail "enable_imports: drop-in dir mode"
 [ "$(sed -n 1p "$T/log")" = "schema-pi: imported 2, skipped 1" ] || fail "enable_imports: summary: $(cat "$T/log")"
 [ "$(sed -n 2p "$T/log")" = "skip foo.service: Type=forking without PIDFile=" ] || fail "enable_imports: skip line: $(cat "$T/log")"
 echo "ok enable_imports"
@@ -178,39 +204,98 @@ echo "ok enable_imports"
 echo "ok boot_required"
 
 # boot_required_pihole: unbound counts only beside pihole-FTL
-reset; echo "ssh NetworkManager pihole-FTL unbound" > "$T/import.units"
+reset; wants ssh NetworkManager pihole-FTL unbound
 pi enable > "$T/log" 2>&1 || fail "boot_required_pihole: exit: $(cat "$T/log")"
 [ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early ssh NetworkManager pihole-FTL unbound " ] ||
     fail "boot_required_pihole: $(cat "$REQ")"
-reset; echo "ssh NetworkManager pihole-FTL" > "$T/import.units"
+reset; wants ssh NetworkManager pihole-FTL
 pi enable > "$T/log" 2>&1 || fail "boot_required_pihole: alone exit"
 [ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early ssh NetworkManager pihole-FTL " ] ||
     fail "boot_required_pihole: alone: $(cat "$REQ")"
-reset; echo "ssh NetworkManager unbound" > "$T/import.units"
+reset; wants ssh NetworkManager unbound
 pi enable > "$T/log" 2>&1 || fail "boot_required_pihole: unbound exit"
 ! required | grep -qx unbound || fail "boot_required_pihole: unbound without pihole"
 echo "ok boot_required_pihole"
 
 # network_order: first enabled in the fixed order wins
-reset; wants ssh wpa_supplicant; echo "ssh wpa_supplicant" > "$T/import.units"
+reset; wants ssh wpa_supplicant
 pi enable > "$T/log" 2>&1 || fail "network_wifi: exit: $(cat "$T/log")"
 [ "$(required | tail -n 1)" = wpa_supplicant ] || fail "network_wifi: $(cat "$REQ")"
 [ -f "$SVC/wpa_supplicant.svc.d/pi-kit.conf" ] || fail "network_wifi: drop-in"
 reset; wants ssh dhcpcd systemd-networkd wpa_supplicant
-echo "ssh dhcpcd systemd-networkd wpa_supplicant" > "$T/import.units"
 pi enable > "$T/log" 2>&1 || fail "network_order: exit: $(cat "$T/log")"
 [ "$(required | tail -n 1)" = systemd-networkd ] || fail "network_order: $(cat "$REQ")"
 [ ! -e "$SVC/dhcpcd.svc.d" ] || fail "network_order: drop-in on the loser"
 echo "ok network_order"
 
+# networkd_explicit: --enabled drops systemd-*, so networkd must be named on the command line
+reset; wants ssh systemd-networkd
+pi enable > "$T/log" 2>&1 || fail "networkd_explicit: exit: $(cat "$T/log")"
+[ "$(cat "$T/import.log")" = "$R|$SVC|--enabled systemd-networkd.service" ] ||
+    fail "networkd_explicit: call: $(cat "$T/import.log")"
+[ -f "$SVC/systemd-networkd.svc.d/pi-kit.conf" ] || fail "networkd_explicit: drop-in"
+required | grep -qx systemd-networkd || fail "networkd_explicit: $(cat "$REQ")"
+echo "ok networkd_explicit"
+
 # sshd_name: the importer may name it sshd
-reset; wants sshd NetworkManager; echo "sshd NetworkManager" > "$T/import.units"
+reset; wants sshd NetworkManager
 pi enable > "$T/log" 2>&1 || fail "sshd_name: exit: $(cat "$T/log")"
 required | grep -qx sshd || fail "sshd_name: $(cat "$REQ")"
 echo "ok sshd_name"
 
-# no_ssh_after_import: replaces the old pre-import sshd.svc precondition
-reset; echo "NetworkManager" > "$T/import.units"
+# owned: a hand set already running the binary stands in for the unit
+reset; echo "name=networkmanager" > "$SVC/networkmanager.svc"; echo "name=sshd" > "$SVC/sshd.svc"
+printf 'NetworkManager networkmanager\nssh sshd\n' > "$T/import.owned"
+pi enable > "$T/log" 2>&1 || fail "owned: exit: $(cat "$T/log")"
+grep -qx 'skip NetworkManager.service: its binary already runs as networkmanager.svc — importing it would start a second copy' "$T/log" ||
+    fail "owned: skip line: $(cat "$T/log")"
+[ ! -e "$SVC/NetworkManager.svc.d" ] || fail "owned: drop-in on the skipped unit"
+printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/networkmanager.svc.d/pi-kit.conf" || fail "owned: owner drop-in"
+[ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early sshd networkmanager " ] || fail "owned: $(cat "$REQ")"
+# an owner named in the skip line but absent is no stand-in
+reset; printf 'NetworkManager networkmanager\n' > "$T/import.owned"
+pi enable > "$T/log" 2>&1 && fail "owned_missing: enabled"
+grep -q 'NetworkManager.svc missing after import' "$T/log" || fail "owned_missing: message: $(cat "$T/log")"
+echo "ok owned"
+
+# dropin_dedup: a dep the base already has is not repeated (MAX_DEPS is 8)
+reset; printf 'name=NetworkManager\ndep=dbus\n' > "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "dropin_dedup: exit: $(cat "$T/log")"
+printf 'dep=udev-trigger\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "dropin_dedup: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+printf 'name=NetworkManager\ndep=dbus\ndep=udev-trigger\n' > "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "dropin_dedup: both exit"
+[ ! -e "$SVC/NetworkManager.svc.d/pi-kit.conf" ] || fail "dropin_dedup: empty drop-in kept"
+echo "ok dropin_dedup"
+
+# warn_lines: importer WARN and ERROR reach stderr
+reset; printf 'WARN    foo.service: odd\nERROR   bar.service: broken\n' >> "$T/import.extra"
+pi enable > "$T/log" 2> "$T/err" || fail "warn_lines: exit: $(cat "$T/err")"
+grep -qx 'WARN    foo.service: odd' "$T/err" && grep -qx 'ERROR   bar.service: broken' "$T/err" ||
+    fail "warn_lines: $(cat "$T/err")"
+echo "ok warn_lines"
+
+# refused_untouched: a refusal before the import leaves $SVC byte-identical
+for c in no_ssh no_net no_net_unit; do
+    reset; echo mine > "$SVC/pi-bootok.svc"
+    case $c in
+        no_ssh) wants NetworkManager; msg='no ssh service enabled: schema-init would boot without ssh' ;;
+        no_net) wants ssh; msg='no enabled network service' ;;
+        no_net_unit) rm "$R/lib/systemd/system/NetworkManager.service"; msg='NetworkManager.service not found' ;;
+    esac
+    snap > "$T/snap1"
+    pi enable > "$T/log" 2>&1; rc=$?
+    [ $rc -eq 1 ] || fail "refused_untouched $c: exit $rc"
+    grep -q "$msg" "$T/log" || fail "refused_untouched $c: message: $(cat "$T/log")"
+    snap | cmp -s - "$T/snap1" || fail "refused_untouched $c: \$SVC changed"
+    [ ! -e "$T/import.log" ] || fail "refused_untouched $c: importer ran"
+    [ ! -e "$R/var/lib/schema-init" ] || fail "refused_untouched $c: state dir created"
+    printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "refused_untouched $c: cmdline changed"
+done
+echo "ok refused_untouched"
+
+# no_ssh_after_import: enabled, but the importer declined it
+reset; echo ssh > "$T/import.decline"
 pi enable > "$T/log" 2>&1; rc=$?
 [ $rc -eq 1 ] || fail "no_ssh: exit $rc"
 grep -qx 'schema-pi: no ssh service after import: schema-init would boot without ssh' "$T/log" ||
@@ -221,12 +306,11 @@ printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "no_ssh: cmdline changed"
 echo "ok no_ssh_after_import"
 
 # no_network: ssh running on an unreachable box must not pass as a good boot
-reset; wants ssh; echo "ssh" > "$T/import.units"
+reset; wants ssh
 pi enable > "$T/log" 2>&1; rc=$?
 [ $rc -eq 1 ] || fail "no_network: exit $rc"
 grep -q 'no enabled network service' "$T/log" || fail "no_network: message: $(cat "$T/log")"
-printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "no_network: cmdline changed"
-reset; echo "ssh" > "$T/import.units"
+reset; echo NetworkManager > "$T/import.decline"
 pi enable > "$T/log" 2>&1; rc=$?
 [ $rc -eq 1 ] || fail "no_network_svc: exit $rc"
 grep -q 'NetworkManager.svc missing after import' "$T/log" || fail "no_network_svc: message: $(cat "$T/log")"
@@ -248,7 +332,7 @@ pi enable > "$T/log" 2>&1 || fail "user_files_win: exit: $(cat "$T/log")"
 [ "$(cat "$SVC/dbus.svc")" = my-dbus ] || fail "user_files_win: dbus.svc"
 echo "ok user_files_win"
 
-# rerun: list rewritten identically, drop-in not duplicated
+# rerun: list and drop-in identical, drop-in not duplicated
 reset; pi enable > "$T/log" 2>&1 || fail "rerun: first"
 cp "$REQ" "$T/req1"; cp "$SVC/NetworkManager.svc.d/pi-kit.conf" "$T/drop1"
 pi enable > "$T/log" 2>&1 || fail "rerun: second: $(cat "$T/log")"
@@ -256,6 +340,18 @@ cmp -s "$REQ" "$T/req1" || fail "rerun: list differs"
 cmp -s "$SVC/NetworkManager.svc.d/pi-kit.conf" "$T/drop1" || fail "rerun: drop-in differs"
 [ "$(ls "$SVC/NetworkManager.svc.d")" = pi-kit.conf ] || fail "rerun: extra drop-ins"
 echo "ok rerun"
+
+# required_merge: hand lines survive re-enable, a missing generated name is appended, none removed
+reset; pi enable > "$T/log" 2>&1 || fail "required_merge: first"
+grep -vx udev-trigger "$REQ" > "$T/req"; printf '# mine\nmy-thing' >> "$T/req"; cp "$T/req" "$REQ"
+pi enable > "$T/log" 2>&1 || fail "required_merge: second: $(cat "$T/log")"
+grep -qx '# mine' "$REQ" && grep -qx my-thing "$REQ" || fail "required_merge: hand lines lost: $(cat "$REQ")"
+[ "$(tail -n 1 "$REQ")" = udev-trigger ] || fail "required_merge: not appended: $(cat "$REQ")"
+[ "$(grep -cx udev "$REQ")" = 1 ] || fail "required_merge: duplicated"
+wants ssh wpa_supplicant
+pi enable > "$T/log" 2>&1 || fail "required_merge: third: $(cat "$T/log")"
+grep -qx NetworkManager "$REQ" && grep -qx wpa_supplicant "$REQ" || fail "required_merge: removed or not added: $(cat "$REQ")"
+echo "ok required_merge"
 
 # disable_roundtrip
 reset
