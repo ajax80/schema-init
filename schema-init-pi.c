@@ -184,6 +184,12 @@ int main(int argc, char **argv) {
     unsetenv("SCHEMA_SVC_DIR");
     int pid1 = getpid() == 1;
     const char *r = pid1 ? NULL : getenv("SCHEMA_PI_ROOT");
+    /* off PID 1 the real root is never right: it would rewrite live boot state and exec the real inits */
+    if (!pid1 && !r) {
+        static const char m[] = "schema-init-pi: not PID 1; set SCHEMA_PI_ROOT to test against a fake root\n";
+        write_all(2, m, sizeof m - 1);
+        return 1;
+    }
     if (r) snprintf(root, sizeof root, "%s", r);
 
     struct statvfs sv0;

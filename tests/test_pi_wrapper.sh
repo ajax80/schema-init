@@ -94,4 +94,27 @@ grep -q '^systemd' "$T/noexec2" || fail "noexec both: $(cat "$T/noexec2")"
 printf 'attempts=0\nlast_target=systemd\n' | cmp -s - "$R/var/lib/schema-init/pi-boot" || fail "noexec both: state $(cat "$R/var/lib/schema-init/pi-boot")"
 grep -Eq '^[0-9]+ fallback=systemd attempts=[0-9]+$' "$R/var/log/schema-init/fallback.log" || fail "noexec both: fallback.log"
 chmod +x "$CUR"
+# no state is saved, so the deadline reboot loop could never be broken: systemd, which has none
+rm -rf "$R/var"; mkdir -p "$R/var/lib/schema-init/known-good" "$R/dev"
+stub known-good "$KGB"
+: > "$R/dev/kmsg"
+chmod 555 "$R/var/lib/schema-init"
+run > "$T/rostate"
+chmod 755 "$R/var/lib/schema-init"
+grep -q '^systemd' "$T/rostate" || fail "unsaveable state: $(cat "$T/rostate")"
+[ ! -e "$R/var/lib/schema-init/pi-boot" ] || fail "unsaveable state: pi-boot written"
+grep -q 'cannot save boot state' "$R/dev/kmsg" || fail "unsaveable state: kmsg: $(cat "$R/dev/kmsg")"
+rm -rf "$R/dev"
+
+# off PID 1 with no fake root it would rewrite the real /var/lib state and exec the real binaries
+if command -v bwrap > /dev/null 2>&1 && bwrap --dev-bind / / true 2> /dev/null; then
+    E=$T/empty; mkdir "$E"
+    timeout 10 bwrap --bind "$E" / --ro-bind "$PWD/schema-init-pi" /pi --dev /dev \
+        /pi a b > "$T/noroot" 2>&1; rc=$?
+    [ $rc -eq 1 ] || fail "no SCHEMA_PI_ROOT: exit $rc"
+    [ "$(wc -l < "$T/noroot")" -eq 1 ] || fail "no SCHEMA_PI_ROOT: message: $(cat "$T/noroot")"
+    [ -z "$(find "$E" -mindepth 1 ! -name pi ! -name dev)" ] || fail "no SCHEMA_PI_ROOT: touched $(find "$E")"
+else
+    echo "skipped no_root_env (needs bwrap)"
+fi
 echo "test_pi_wrapper: ok"
