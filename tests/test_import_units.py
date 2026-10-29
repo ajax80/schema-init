@@ -865,4 +865,79 @@ check("runit: dbus check -> its socket", "ready_path=/run/dbus/system_bus_socket
 check("runit: unknown check -> 1 s, noted", "not translated" in si.runit_to_svc("pg", "", set(), None, True)
       and "stable_secs=1\n" in si.runit_to_svc("pg", "", set(), None, True))
 
+# --- AmbientCapabilities= / RuntimeDirectory= / multi-hour OnCalendar= (Debian) ---
+_amb = si.unit_to_svc("pihole-FTL", si.parse_unit(
+    "[Service]\nUser=pihole\nAmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW\nExecStart=/usr/bin/pihole-FTL -f\n"))
+check("AmbientCapabilities= + User= -> ambient_caps= comma list",
+      "ambient_caps=CAP_NET_BIND_SERVICE,CAP_NET_RAW\n" in _amb and "user=pihole\n" in _amb)
+check("AmbientCapabilities= never brings keep_caps=", "keep_caps" not in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit(
+    "[Service]\nUser=a\nAmbientCapabilities=cap_net_raw\nAmbientCapabilities=CAP_SYS_TIME CAP_NET_RAW\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= lines merge, upper-cased, deduped", "ambient_caps=CAP_NET_RAW,CAP_SYS_TIME\n" in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit(
+    "[Service]\nUser=a\nAmbientCapabilities=CAP_NET_RAW\nAmbientCapabilities=\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= empty resets", "ambient_caps" not in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit("[Service]\nAmbientCapabilities=CAP_NET_RAW\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= without User= -> no ambient_caps (root has them), noted",
+      "ambient_caps" not in _amb and "dropped AmbientCapabilities" in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit("[Service]\nUser=a\nAmbientCapabilities=~CAP_NET_RAW\nExecStart=/bin/a\n"))
+check("AmbientCapabilities=~ -> not translated, warned", "ambient_caps" not in _amb and "AmbientCapabilities=~" in _amb)
+
+_rt = si.unit_to_svc("ssh", si.parse_unit(
+    "[Service]\nEnvironmentFile=-/etc/default/ssh\nExecStartPre=/usr/sbin/sshd -t\nExecStart=/usr/sbin/sshd -D $SSHD_OPTS\n"
+    "Type=notify\nRuntimeDirectory=sshd\nRuntimeDirectoryMode=0755\n"))
+check("RuntimeDirectory= -> root install -d exec_pre before ExecStartPre",
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/sshd\nexec_pre=/usr/sbin/sshd -t\n" in _rt)
+check("RuntimeDirectory= adds no order-changed warning", "order changed" not in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=r\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= + User= -> owned by user, default mode 0755",
+      "exec_pre=+/usr/bin/install -d -m 0755 -o foo -g foo /run/r\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nGroup=bar\nRuntimeDirectory=r\nRuntimeDirectoryMode=750\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= + Group= -> -g group", "exec_pre=+/usr/bin/install -d -m 750 -o foo -g bar /run/r\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a b/c\nRuntimeDirectory=%N\nExecStart=/bin/r\n"))
+check("several RuntimeDirectory= entries, one line each, %N expanded",
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/a\nexec_pre=+/usr/bin/install -d -m 0755 /run/b/c\n"
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/r\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a\nRuntimeDirectory=\nRuntimeDirectory=b\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= empty resets", "/run/a" not in _rt and "/run/b\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=../x /abs ok %Z\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= bad entries dropped and noted, good kept",
+      _rt.count("install -d") == 1 and "/run/ok\n" in _rt and "dropped RuntimeDirectory=../x" in _rt
+      and "dropped RuntimeDirectory=/abs" in _rt and "dropped RuntimeDirectory=%Z" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=r\nRuntimeDirectoryMode=bogus\nExecStart=/bin/r\n"))
+check("RuntimeDirectoryMode= unrecognised -> 0755, warned", "-m 0755 /run/r\n" in _rt and "RuntimeDirectoryMode=bogus" in _rt)
+check("RuntimeDirectory= counts toward the 8 exec_pre limit", skipped("r",
+      "[Service]\nRuntimeDirectory=a b\n" + "".join("ExecStartPre=/bin/p%d\n" % i for i in range(7)) + "ExecStart=/bin/r\n"))
+
+for cal, want in (("*-*-* 6,18:00", "6,18:00"), ("Mon 18,6:30", "Mon 6,18:30"),
+                  ("*-*-15 0,12:00:00", "15 0,12:00"), ("*-*-* 6,24:00", None), ("*-*-* 6,,18:00", None)):
+    check("calendar %r -> %r" % (cal, want), si._calendar(cal) == want)
+_ad = si.timer_to_svc("apt-daily", si.parse_unit("[Timer]\nOnCalendar=*-*-* 6,18:00\nRandomizedDelaySec=12h\nPersistent=true\n"),
+                      si.parse_unit("[Service]\nType=oneshot\nExecStart=/usr/lib/apt/apt.systemd.daily update\n"))
+check("apt-daily.timer imports with on_calendar=6,18:00", "on_calendar=6,18:00\npersistent=1\n" in _ad)
+
+# Fedora units that use none of the new keys: byte-identical to the output before they existed
+_F_SSHD = ("[Unit]\nAfter=network.target sshd-keygen.target\nWants=sshd-keygen.target\n[Service]\nType=notify\nEnvironment=OPTIONS=\n"
+           "EnvironmentFile=-/etc/sysconfig/sshd\nExecStart=/usr/sbin/sshd -D $OPTIONS\nExecReload=/bin/kill -HUP $MAINPID\n"
+           "KillMode=process\nRestart=on-failure\nRestartSec=42s\n[Install]\nWantedBy=multi-user.target\n")
+_F_CHRONY = ("[Service]\nType=notify\nPIDFile=/run/chrony/chronyd.pid\nEnvironment=\"OPTIONS=\"\nEnvironmentFile=-/etc/sysconfig/chronyd\n"
+             "ExecStart=/usr/sbin/chronyd -n $OPTIONS\nCapabilityBoundingSet=~CAP_AUDIT_CONTROL CAP_AUDIT_READ\nNoNewPrivileges=yes\n"
+             "PrivateTmp=yes\nProtectHome=yes\nProtectSystem=strict\nReadWritePaths=/run /var/lib/chrony -/var/log\nNoNewPrivileges=no\n"
+             "[Install]\nWantedBy=multi-user.target\n")
+_F_FSTRIM_T = "[Timer]\nOnCalendar=weekly\nAccuracySec=1h\nPersistent=true\nRandomizedDelaySec=100min\n[Install]\nWantedBy=timers.target\n"
+_F_FSTRIM_S = ("[Service]\nType=oneshot\nExecStart=/usr/bin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose "
+               "--quiet-unsupported\nProtectKernelTunables=yes\n")
+check("Fedora sshd.service output unchanged", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
+      'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nnotify=1\n'
+      'restart_sec=42\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
+check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
+      '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\nname=chronyd\n'
+      'exec=/usr/sbin/chronyd\nargs=-n\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/chronyd\nexpand_args=1\nnotify=1\n'
+      'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\n')
+check("Fedora fstrim.timer output unchanged",
+      si.timer_to_svc("fstrim", si.parse_unit(_F_FSTRIM_T), si.parse_unit(_F_FSTRIM_S)) ==
+      '# schema-import: dropped RandomizedDelaySec; dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
+      'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
+      'private_tmp=0\nprotect_system=0\nprotect_home=0\non_calendar=Mon 00:00\npersistent=1\n')
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
