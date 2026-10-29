@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.20
+Version:        0.4.21
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,32 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Oct 28 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.21-1
+- Raspberry Pi: signed apt repo (ajax80.github.io/schema-init-apt) with
+  amd64, arm64 and armhf debs; armhf is ARMv6, built on Raspbian, so Zero
+  and Pi 1 run it. `schema-pi enable` boots through schema-init-pi, a
+  static boot guard: two failed boots fall back to the last known-good set,
+  else systemd for one boot. A 300 s deadline reboots a boot that never
+  confirms, panic=10 reboots a crashed PID 1, and `schema-pi disable`
+  returns to systemd. apt upgrades re-exec PID 1 in place
+- Shutdown: PID 1 stdio left on a regular file under / (the Pi guard's
+  boot.log) no longer keeps / busy, so the remount read-only succeeds
+- 32-bit: memory.high, memory.max and reclaim byte math no longer
+  overflow at 1 GiB; udev input_id reads capability words at the kernel's
+  word width, so keyboards and mice are tagged on 32-bit Pis
+- Rootless podman + Quadlet under schema-user: `schema-import --user` runs
+  user generators; exec_stop=/exec_stop_post=; opt-in main_pid_notify=1
+  follows MAINPID=; services whose cgroup podman splits clean up fully;
+  verify_memory_max/cpu_max/pids_max check the container's limits after
+  READY
+- schema-import: SocketBindAllow/Deny= become landlock_bind_tcp=
+- schema-udev: coldplug events carry a SEQNUM, so libudev consumers stop
+  dropping them (NetworkManager no longer waits forever on lo)
+- schema-logind reaps the processes it cgroup-kills; a refused main pid
+  is logged; stopping a service still waiting on its main pid runs
+  exec_stop_post
+- livetest boot-capture logs moved out of the repo
+
 * Mon Oct 26 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.20-1
 - Persistent timers on a box with a separate /var: the catch-up for a run
   missed while the machine was off now fires. The stamp was read before
