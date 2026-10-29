@@ -418,6 +418,14 @@ SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up: exit2"
 ! grep -q '^not up' "$T/log" || fail "status_not_up: printed when all up"
 echo "ok status_not_up"
 
+# status_not_up_missing: listed names with no state line
+reset
+printf 'ssh\nnet\nghost\n# c\n' > "$REQ"
+printf '#!/bin/sh\nprintf "service.sshd.state=FUNDAMENTAL\\nservice.net.state=PERFECT\\nservice.avahi-daemon.state=EXCISED\\n"\n' > "$T/ctl"
+SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up_missing: exit"
+grep -qx 'not up: avahi-daemon=EXCISED ghost=MISSING' "$T/log" || fail "status_not_up_missing: $(cat "$T/log")"
+echo "ok status_not_up_missing"
+
 # firmware_mount: schema-init has no fstab automount, so /boot/firmware may not be mounted
 # shims only: a real mount must never run here
 fw_shims() {

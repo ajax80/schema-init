@@ -224,10 +224,24 @@ status() {
     echo "last_fallback: ${f:--}"
     v=$("$KG/schema-init" --version 2>/dev/null | head -n 1)
     echo "known_good: ${v:--}"
-    n=$("${SCHEMA_CTL:-schema-ctl}" status --kv 2>/dev/null | awk -F= '
+    req=$(tr -d '\r' < "$REQ" 2>/dev/null | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+        $0 != "" && !/^#/ { printf "%s ", $0 }')
+    n=$("${SCHEMA_CTL:-schema-ctl}" status --kv 2>/dev/null | awk -F= -v req="$req" '
+        function add(x) { printf "%s%s", sep, x; sep = " " }
         $1 ~ /^service\..*\.state$/ {
             n = $1; sub(/^service\./, "", n); sub(/\.state$/, "", n)
-            if ($2 != "FUNDAMENTAL" && $2 != "PERFECT") { printf "%s%s=%s", sep, n, $2; sep = " " }
+            seen[n] = 1
+            if ($2 != "FUNDAMENTAL" && $2 != "PERFECT") add(n "=" $2)
+        }
+        END {
+            if (!NR) exit
+            nr = split(req, want, " ")
+            for (i = 1; i <= nr; i++) {
+                w = want[i]
+                if (w == "pi-bootok" || w == "pi-deadline") continue
+                if (w == "ssh" || w == "sshd") { if (("ssh" in seen) || ("sshd" in seen)) continue }
+                if (!(w in seen)) add(w "=MISSING")
+            }
         }')
     [ -z "$n" ] || echo "not up: $n"
 }

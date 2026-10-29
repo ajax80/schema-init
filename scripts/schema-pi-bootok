@@ -27,9 +27,11 @@ blockers() {
     listed=0; req=
     if [ -f "$f" ]; then
         listed=1
-        # CR: a list edited on another OS must still match names
+        # pi-bootok/pi-deadline are the watchers, never counted: listing them must not block forever. CR: a list edited on another OS must still match names
         req=$(tr -d '\r' < "$f" | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
-            $0 != "" && !/^#/ { printf "%s ", $0 }')
+            $0 != "" && !/^#/ && $0 != "pi-bootok" && $0 != "pi-deadline" { printf "%s ", $0 }')
+        # a list with no names would confirm without even ssh
+        [ -n "$req" ] || listed=0
     fi
     "$CTL" status --kv 2>/dev/null | awk -F= -v listed=$listed -v req="$req" '
         BEGIN { nreq = split(req, want, " ") }

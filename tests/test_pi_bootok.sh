@@ -127,6 +127,17 @@ waits_on || fail "bootok_list_ssh_either: confirmed without ssh"
 grep -qx 'pi-bootok: waiting on sshd=MISSING' "$T/log" || fail "bootok_list_ssh_either: log: $(cat "$T/log")"
 echo "ok bootok_list_ssh_either"
 
+# bootok_list_self_and_empty: the deadline/bootok names never block; a list with no names is no list
+reset; list_kv
+printf 'ssh\npi-bootok\npi-deadline\n' > "$R/etc/schema-init/pi-boot-required"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_list_self: exit: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_list_self: no marker"
+reset; list_kv
+printf '# nothing\n\n' > "$R/etc/schema-init/pi-boot-required"
+waits_on || fail "bootok_list_empty: confirmed"
+grep -qx 'pi-bootok: waiting on avahi-daemon=EXCISED' "$T/log" || fail "bootok_list_empty: old rule not applied: $(cat "$T/log")"
+echo "ok bootok_list_self_and_empty"
+
 # bootok_promote_copies_list
 reset; list_kv
 printf '# hand\nssh\n' > "$R/etc/schema-init/pi-boot-required"
