@@ -112,6 +112,8 @@ grep -qx 'private_tmp=0' services/pi-mounts.svc.example && grep -qx 'protect_sys
     grep -qx 'protect_home=0' services/pi-mounts.svc.example || fail "pi-mounts: sandbox must be off"
 grep -qx 'oneshot=0' services/pi-timesync.svc.example || fail "pi-timesync must be long-running"
 grep -qx 'ready_path=/run/dbus/system_bus_socket' services/dbus.svc.example || fail "dbus ready_path"
+# Debian's system.conf names /run/dbus/pid: one left by a crash makes the restart refuse to start
+grep -q '^exec /usr/bin/dbus-daemon --system --nofork --nopidfile ' scripts/schema-pi-dbus || fail "dbus: no --nopidfile"
 grep -qx 'exec=/usr/bin/schema-journal-sink' services/journal-sink.svc.example || fail "journal-sink exec"
 
 grep -q schema-import debian/rules || fail "schema-import not packaged"
