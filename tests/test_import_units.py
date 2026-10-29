@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """schema-import unit tests — pure translation + a temp-tree drain. No systemctl."""
-import os, sys, tempfile, importlib.util
+import os, sys, tempfile, subprocess, importlib.util
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(REPO, "distros/fedora-installer/migrate/schema-import.py")
 spec = importlib.util.spec_from_file_location("schema_import", MOD)
@@ -787,6 +787,22 @@ check("missing User= skipped unless the daemon is /bin/false",
 check("undecodable activation file skipped, pass still completes", not os.path.exists(os.path.join(bd, "org.x.Latin.service")))
 check("no .tmp left behind", not any(f.endswith(".tmp") for f in os.listdir(bd)))
 check("bus override rerun is a no-op", si.bus_overrides(log=lambda *_: None) == {"written": 0, "kept": 4, "removed": 0, "skipped": 1})
+# schema-pi's trial run writes overrides to scratch on a live root: the bus must not be told to reload
+_calls, _ud, _orig = [], si._unit_dirs(), (si._unit_dirs, si._root, si.act_dir, si.subprocess, si.bus_dir)
+class _FakeSP:
+    SubprocessError, DEVNULL = subprocess.SubprocessError, subprocess.DEVNULL
+    @staticmethod
+    def run(a, **k): _calls.append(a)
+si._unit_dirs, si._root, si.act_dir, si.subprocess = (lambda: _ud), (lambda: "/"), (lambda: act), _FakeSP
+os.environ["SCHEMA_BUS_OVERRIDE_DIR"] = tempfile.mkdtemp()
+_c = si.bus_overrides(log=lambda *_: None)
+os.environ.pop("SCHEMA_BUS_OVERRIDE_DIR")
+check("redirected override dir on / -> written, no bus reload", _c["written"] > 0 and not _calls)
+_bd = tempfile.mkdtemp()
+si.bus_dir = lambda: _bd
+si.bus_overrides(log=lambda *_: None)
+check("default override dir on / -> bus reloaded", len(_calls) == 1 and "ReloadConfig" in " ".join(_calls[0]))
+si._unit_dirs, si._root, si.act_dir, si.subprocess, si.bus_dir = _orig
 os.remove(os.path.join(SD, "disksd.svc"))
 si.bus_overrides(log=lambda *_: None)
 check("override dropped when its .svc goes away", not os.path.exists(os.path.join(bd, "org.x.Disks.service")))

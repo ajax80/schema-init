@@ -1973,7 +1973,9 @@ def bus_overrides(dry_run=False, log=print):
                 os.remove(os.path.join(out, fn))
             except OSError:
                 pass
-    if not dry_run and (counts["written"] or counts["removed"]) and _root() == "/":
+    # a redirected dir is not one the bus reads (schema-pi's trial run on a live root)
+    if not dry_run and (counts["written"] or counts["removed"]) and _root() == "/" \
+            and not os.environ.get("SCHEMA_BUS_OVERRIDE_DIR"):
         try:
             subprocess.run(["dbus-send", "--system", "--type=method_call", "--dest=org.freedesktop.DBus",
                             "/org/freedesktop/DBus", "org.freedesktop.DBus.ReloadConfig"],
