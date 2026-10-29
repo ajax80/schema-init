@@ -13,7 +13,7 @@ MARK=$R/run/schema-init/pi-boot-ok
 
 blockers() {
     "$CTL" status --kv 2>/dev/null | awk -F= '
-        /^service\..*\.state=/ {
+        $1 ~ /^service\..*\.state$/ {
             n = $1; sub(/^service\./, "", n); sub(/\.state$/, "", n)
             s = $2
             if (n == "pi-bootok" || n == "pi-deadline" || s == "skipped") next
@@ -47,7 +47,8 @@ promote() {
     # a failed copy must not replace a good known-good set
     if mkdir -p "$KG.new/services" &&
         cp -p "$R/usr/bin/schema-init" "$R/usr/bin/schema-ctl" "$KG.new/" &&
-        cp -pR "$R/etc/schema-init/services/." "$KG.new/services/" &&
+        # -L: a symlinked svc would follow later edits instead of holding the set that booted
+        cp -pRL "$R/etc/schema-init/services/." "$KG.new/services/" &&
         cp -p "$R/usr/libexec/schema-init/schema-pi-bootok" \
               "$R/usr/libexec/schema-init/schema-pi-deadline" "$KG.new/" &&
         point_at_kg; then

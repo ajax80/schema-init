@@ -31,6 +31,8 @@ reset() {
     echo b > "$R/usr/libexec/schema-init/schema-pi-bootok"
     echo d > "$R/usr/libexec/schema-init/schema-pi-deadline"
     printf 'attempts=2\nlast_target=%s\n' "${1:-current}" > "$STATE"
+    mkdir -p "$R/proc"
+    echo 'console=tty1 panic=10 init=/usr/sbin/schema-init-pi' > "$R/proc/cmdline"
 }
 
 env_run() {
@@ -222,3 +224,34 @@ pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 [ "$(cat "$T/reboots" 2>/dev/null)" = reboot ] || fail "deadline_retries_reboot: no reboot"
 [ "$(grep -c '^pi-deadline: reboot failed, retrying in 0.2s$' "$T/log")" = 2 ] || fail "deadline_retries_reboot: log: $(cat "$T/log")"
 echo "ok deadline_retries_reboot"
+
+# bootok_reason_not_state: a .reason= value that happens to contain .state= is not a service state
+reset; good_kv
+echo 'service.net.reason=dep.state=FAILED' >> "$T/kv"
+env_run sh "$BOOTOK" > "$T/log" 2>&1 &
+pid=$!
+sleep 1
+kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+[ -f "$MARK" ] || fail "bootok_reason_not_state: blocked: $(cat "$T/log")"
+echo "ok bootok_reason_not_state"
+
+# bootok_snapshot_real_files: a symlinked svc must land in known-good as its contents, not a link
+reset; good_kv
+echo linked > "$T/linked.svc"
+ln -s "$T/linked.svc" "$R/etc/schema-init/services/linked.svc"
+env_run sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_snapshot_real_files: exit"
+[ -f "$KG/services/linked.svc" ] && [ ! -L "$KG/services/linked.svc" ] || fail "bootok_snapshot_real_files: still a link"
+[ "$(cat "$KG/services/linked.svc")" = linked ] || fail "bootok_snapshot_real_files: contents"
+echo "ok bootok_snapshot_real_files"
+
+# deadline_needs_wrapper: booted without the wrapper (systemd, or schema-init direct) there is no fallback to reboot into
+reset
+echo 'console=tty1 init=/sbin/schema-init' > "$R/proc/cmdline"
+SCHEMA_PI_ROOT=$R SCHEMA_CTL=$T/ctl SCHEMA_PI_DEADLINE=0.1 sh "$DEADLINE" > "$T/log" 2>&1 &
+pid=$!
+sleep 1
+alive=0; kill -0 "$pid" 2>/dev/null && alive=1
+pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+[ ! -e "$T/reboots" ] || fail "deadline_needs_wrapper: rebooted"
+[ "$alive" = 1 ] || fail "deadline_needs_wrapper: exited"
+echo "ok deadline_needs_wrapper"
