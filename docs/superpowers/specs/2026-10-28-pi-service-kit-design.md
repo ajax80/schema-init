@@ -20,8 +20,9 @@ running under systemd keeps running.
 
 1. **A shipped core kit** covering what systemd does early on Pi OS and
    schema-init does not, plus the clock:
-   - loopback up, hostname from `/etc/hostname`, `/dev/shm` mounted, fstab
-     mounts (`/boot/firmware`), swap on;
+   - loopback up, hostname from `/etc/hostname`, fstab mounts
+     (`/boot/firmware`), swap on (`/dev/shm` is already mounted by PID 1,
+     `init.c` early mounts — the kit does not repeat it);
    - udev and the coldplug trigger;
    - the system D-Bus;
    - the clock, set at boot without an RTC and without needing DNS
@@ -145,6 +146,51 @@ running under systemd keeps running.
 - The builder may read BlakPi's hand set (a copy is in the session
   scratchpad; the live files are on BlakPi under `/etc/schema-init/services`
   and `/usr/local/bin`).
+
+## Folded in from Greg's review (10-28), each checked against the code
+
+- **`RuntimeDirectory=` is not translated** (`schema-import.py` has no
+  handling; `service.c` has no `runtime_dir` key). Debian's `ssh.service`
+  relies on it for `/run/sshd`; without it `sshd -D` aborts and, since ssh
+  counts toward boot OK, every boot fails. The importer must emit a
+  privileged pre-step (`exec_pre=+/usr/bin/install -d -m <mode> -o <user>
+  /run/<dir>`) or the engine gains a `runtime_dir=` key. Builder's choice;
+  tested on ssh.
+- **Ambient capabilities need the post-setuid sequence.** `service.c` has no
+  `PR_CAP_AMBIENT` today. Ambient caps are cleared on the UID change, so the
+  engine must: `PR_SET_KEEPCAPS` while root, set inheritable, drop
+  groups/gid/uid, then raise each ambient cap, then exec. The svc key is a
+  dedicated `ambient_caps=` (1:1 with `AmbientCapabilities=`); `keep_caps=`
+  stays the bounding set.
+- **Network services wait for coldplug.** The importer drops `After=` by
+  design (ordering-only in systemd, while `dep=` waits for readiness), so
+  imported network units start beside udev. On Wi-Fi, wpa_supplicant /
+  NetworkManager can start before `wlan0` exists. Enable adds `dep=` on the
+  kit's udev-trigger (and dbus for bus daemons, where the importer's
+  implicit rule has not) to the detected network service, without editing
+  the imported file's other lines.
+- **Network detection order:** NetworkManager, systemd-networkd, networking
+  (ifupdown), dhcpcd, wpa_supplicant — the first enabled one is the network
+  service written to the boot-OK list.
+- **ssh naming:** Debian's unit is `ssh.service`, imported as `ssh.svc`.
+  `schema-pi` and `schema-pi-bootok` accept `ssh` or `sshd` (bootok
+  hardcodes `sshd` today).
+- **`promote()` copies `pi-boot-required` into known-good**, and bootok reads
+  the known-good copy on a known-good boot.
+- **unbound counts only when Pi-hole is installed and unbound is enabled**
+  (coupled pair) — same as the call above.
+- **Existing bugs to fix in passing:** `journal-sink.svc.example` points at
+  `/usr/local/bin/schema-journal-sink`, but the deb installs
+  `/usr/bin/schema-journal-sink`. `schema-pi` passes its test root to
+  `schema-import` as `MIGRATE_ROOT=$SCHEMA_PI_ROOT`.
+- **apt-daily's `6,18:00`:** multi-hour `on_calendar` (an hour mask in the
+  calendar parser) rather than duplicate services.
+- **Declined:** Greg suggests a missing `pi-boot-required` should mean
+  "ssh + detected network" rather than today's rule. Kept: missing file =
+  today's behaviour. The file is only missing on a Pi enabled before this
+  PR (BlakPi), whose hand-picked set already passes today's rule; changing
+  its gate silently on upgrade is the riskier path. Enable writes the file
+  on every new or re-run enable.
 
 ## Left to the builder
 
