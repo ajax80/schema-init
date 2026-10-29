@@ -988,7 +988,7 @@ def runtime_dir_lines(svc, name):
         return [], ["dropped RuntimeDirectory=%s (no XDG_RUNTIME_DIR)" % " ".join(dirs)], warns
     for d in dirs:
         try:
-            x = _specifiers([d], name)[0]
+            x = _specifiers([d], name)[0].rstrip("/")
         except Skip:
             x = None
         # dir:symlink (systemd 254) is not translated, and nothing nested: a root install -d -o

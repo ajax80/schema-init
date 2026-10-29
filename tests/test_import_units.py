@@ -988,6 +988,8 @@ check("RuntimeDirectory= nested entry dropped and noted",
       and "# schema-import:" in _rt and "dropped RuntimeDirectory=a/b" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=. ..\nExecStart=/bin/r\n"))
 check("RuntimeDirectory=. and .. dropped (would chown /run or /)", "install -d" not in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=irqbalance/\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= trailing slash is not nesting (Fedora irqbalance)", "-m 0755 /run/irqbalance\n" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a\nRuntimeDirectory=\nRuntimeDirectory=b\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= empty resets", "/run/a" not in _rt and "/run/b\n" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=../x /abs ok %Z\nExecStart=/bin/r\n"))
