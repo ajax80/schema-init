@@ -119,12 +119,25 @@ static void to_boot_log(void) {
     if (fd > 2) close(fd);
 }
 
-static void exec_target(enum pi_target t, int pid1, char **argv) {
+static void kmsg(const char *m) {
+    char path[PATH_MAX];
+    int k = open(P(path, "/dev/kmsg"), O_WRONLY);
+    if (k < 0) return;
+    write_all(k, m, strlen(m));
+    close(k);
+}
+
+/* A target that cannot exec must not stay in the state: bootok would promote it into known-good. */
+static void exec_target(enum pi_target t, struct pi_state *st, int pid1, char **argv) {
     char path[PATH_MAX];
     if (t == PI_CURRENT) {
         to_boot_log();
         argv[0] = (char *)P(path, "/usr/bin/schema-init");
         execv(path, argv);
+        log_fallback(PI_KNOWN_GOOD, st->attempts);
+        st->last_target = PI_KNOWN_GOOD;
+        write_state(st);
+        kmsg("<3>schema-init-pi: exec current failed, trying known-good\n");
         t = PI_KNOWN_GOOD;
     }
     if (t == PI_KNOWN_GOOD) {
@@ -134,6 +147,11 @@ static void exec_target(enum pi_target t, int pid1, char **argv) {
         argv[0] = (char *)P(path, "/var/lib/schema-init/known-good/schema-init");
         execv(path, argv);
         unsetenv("SCHEMA_SVC_DIR");
+        log_fallback(PI_SYSTEMD, st->attempts);
+        st->attempts = 0;
+        st->last_target = PI_SYSTEMD;
+        write_state(st);
+        kmsg("<3>schema-init-pi: exec known-good failed, booting systemd\n");
     }
     if (pid1) {
         int fd = open("/dev/console", O_RDWR);
@@ -144,14 +162,8 @@ static void exec_target(enum pi_target t, int pid1, char **argv) {
             if (fd > 2) close(fd);
         }
         /* systemd-fsck-root skips a rw root, so fsck.repair=yes needs / back the way the kernel mounted it */
-        if (root_was_ro && mount("", "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0) {
-            int k = open("/dev/kmsg", O_WRONLY);
-            if (k >= 0) {
-                static const char m[] = "<3>schema-init-pi: remount / ro failed, systemd gets a rw root\n";
-                write_all(k, m, sizeof m - 1);
-                close(k);
-            }
-        }
+        if (root_was_ro && mount("", "/", NULL, MS_REMOUNT | MS_RDONLY, NULL) != 0)
+            kmsg("<3>schema-init-pi: remount / ro failed, systemd gets a rw root\n");
     }
     P(path, "/lib/systemd/systemd");
     argv[0] = path;
@@ -169,13 +181,9 @@ int main(int argc, char **argv) {
     struct statvfs sv0;
     root_was_ro = pid1 && statvfs("/", &sv0) == 0 && (sv0.f_flag & ST_RDONLY);
     if (pid1 && mount("", "/", NULL, MS_REMOUNT, NULL) != 0) {
-        int k = open("/dev/kmsg", O_WRONLY);
-        if (k >= 0) {
-            static const char m[] = "<3>schema-init-pi: remount / rw failed, booting current without state\n";
-            write_all(k, m, sizeof m - 1);
-            close(k);
-        }
-        exec_target(PI_CURRENT, pid1, argv);
+        kmsg("<3>schema-init-pi: remount / rw failed, booting current without state\n");
+        struct pi_state none = { 0, PI_CURRENT };
+        exec_target(PI_CURRENT, &none, pid1, argv);
         for (;;) pause();
     }
 
@@ -208,6 +216,6 @@ int main(int argc, char **argv) {
     write_state(&st);
     if (t != PI_CURRENT) log_fallback(t, before);
 
-    exec_target(t, pid1, argv);
+    exec_target(t, &st, pid1, argv);
     for (;;) pause();
 }
