@@ -1947,15 +1947,17 @@ static int parse_partition(const char *val) {
     return PART_MEMBER;
 }
 
-/* parse on_calendar into svc->timer_cal_{hour,min,dow,dom} and set the timer
- * flags. Accepts "HH:MM" (daily), "Mon HH:MM" (weekly), "15 HH:MM" (monthly).
+/* parse on_calendar into svc->timer_cal_{hours,min,dow,dom} and set the timer
+ * flags. Accepts "HH:MM" (daily), "Mon HH:MM" (weekly), "15 HH:MM" (monthly);
+ * HH may be a comma list of hours ("6,18:00").
  * Returns 0 on success, -1 on malformed input (caller leaves the service
  * non-timer so a typo can't silently schedule garbage). Field parsing is the
  * pure, unit-tested parse_calendar_fields() in service.h. */
 static int parse_calendar(service_t *svc, const char *val) {
-    int h, m, dw, dm;
+    uint32_t h;
+    int m, dw, dm;
     if (parse_calendar_fields(val, &h, &m, &dw, &dm) != 0) return -1;
-    svc->timer_cal_hour = h;
+    svc->timer_cal_hours = h;
     svc->timer_cal_min  = m;
     svc->timer_cal_dow  = dw;
     svc->timer_cal_dom  = dm;
@@ -1975,7 +1977,6 @@ static void svc_init_defaults(service_t *svc) {
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
     svc->landlock_tcp_n[0] = svc->landlock_tcp_n[1] = -1;
-    svc->timer_cal_hour = -1;
     svc->timer_cal_dow = -1;
     svc->timer_cal_dom = -1;
 }
@@ -2489,8 +2490,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     } else if (strcmp(line, "on_calendar") == 0) {
         if (parse_calendar(svc, val) != 0)
             fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
-                    "(want HH:MM, or 'Mon HH:MM' weekly, or 'DD HH:MM' "
-                    "monthly) — ignoring\n", svc->name, val);
+                    "(want HH:MM or H,H:MM, optionally after 'Mon' weekly "
+                    "or 'DD' monthly) — ignoring\n", svc->name, val);
     } else if (strcmp(line, "persistent") == 0) {
         if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
     } else if (strcmp(line, "user") == 0) {
