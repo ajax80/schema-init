@@ -93,6 +93,16 @@ grep -qx 'ready_path=/run/dbus/system_bus_socket' services/dbus.svc.example || f
 grep -qx 'exec=/usr/bin/schema-journal-sink' services/journal-sink.svc.example || fail "journal-sink exec"
 
 grep -q schema-import debian/rules || fail "schema-import not packaged"
+# every kit exec and the bus-activation helper the importer's overrides run must be in the deb
+for f in services/*.svc.example; do
+    e=$(sed -n 's|^exec=/usr/libexec/schema-init/||p' "$f")
+    [ -z "$e" ] || grep -q "scripts/$e " debian/schema-init.install || fail "$e not in debian/schema-init.install"
+done
+grep -q 'scripts/schema-bus-activate ' debian/schema-init.install || fail "schema-bus-activate not packaged"
+grep -q 'libexec/schema-init/schema-bus-activate' distros/fedora-installer/migrate/schema-import.py ||
+    fail "importer no longer execs schema-bus-activate: recheck the deb"
+grep -q '^Recommends:.*libglib2.0-bin' debian/control || fail "gdbus (libglib2.0-bin) not recommended"
+grep -q '^Recommends:.*curl' debian/control || fail "curl not recommended"
 grep -qx 'usr/libexec/schema-init/schema-import usr/bin/schema-import' debian/schema-init.links || fail "schema-import symlink"
 
 echo "test_pi_kit: PASS"

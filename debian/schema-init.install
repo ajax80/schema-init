@@ -1,4 +1,4 @@
 schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder usr/bin
 schema-init-pi scripts/schema-pi usr/sbin
-scripts/schema-pi-bootok scripts/schema-pi-deadline scripts/schema-pi-mount-firmware scripts/schema-pi-early scripts/schema-pi-timesync scripts/schema-pi-udev-trigger scripts/schema-pi-dbus usr/libexec/schema-init
+scripts/schema-pi-bootok scripts/schema-pi-deadline scripts/schema-pi-mount-firmware scripts/schema-pi-early scripts/schema-pi-timesync scripts/schema-pi-udev-trigger scripts/schema-pi-dbus scripts/schema-bus-activate usr/libexec/schema-init
 services/*.svc.example usr/share/schema-init
