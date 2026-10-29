@@ -23,7 +23,8 @@ int ambient_caps_prep(uint64_t mask, const char **step);
 int ambient_caps_raise(uint64_t mask, const char **step);
 
 /* prep + initgroups/setgid/setuid + raise, for a path with nothing between. */
-int apply_ambient_caps(uint64_t mask, uid_t uid, gid_t gid, const char *user);
+int apply_ambient_caps(uint64_t mask, uid_t uid, gid_t gid, const char *user,
+                       const char **step);
 
 /* prctl(PR_SET_NO_NEW_PRIVS). Returns 0 on success, -1 on failure. */
 int apply_no_new_privs(void);

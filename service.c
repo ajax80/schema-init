@@ -1286,9 +1286,10 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
     syscall(SYS_close_range, 3, ~0U, 0);
     svc_apply_env(svc, NULL, 0);
     if (svc->run_uid && svc->cap_ambient_mask) {
+        const char *step = "";
         if (apply_ambient_caps(svc->cap_ambient_mask, svc->run_uid, svc->run_gid,
-                               svc->run_user[0] ? svc->run_user : "nobody") != 0) {
-            dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: stop commands: %d\n", svc->name, errno);
+                               svc->run_user[0] ? svc->run_user : "nobody", &step) != 0) {
+            dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n", svc->name, step, errno);
             _exit(126);
         }
     } else if (svc->run_uid) {

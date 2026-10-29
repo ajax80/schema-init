@@ -128,7 +128,7 @@ int ambient_caps_raise(uint64_t mask, const char **step) {
      * permitted, so mask can be put back and raised now */
     *step = "capset";
     if (caps_set(mask, mask, 0) != 0) return -1;
-    *step = "ambient_raise";
+    *step = "ambient";
     for (int c = 0; c < 64; c++)
         if ((mask & ((uint64_t)1 << c)) &&
             prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, c, 0, 0) != 0)
@@ -136,11 +136,16 @@ int ambient_caps_raise(uint64_t mask, const char **step) {
     return 0;
 }
 
-int apply_ambient_caps(uint64_t mask, uid_t uid, gid_t gid, const char *user) {
-    const char *step;
-    if (ambient_caps_prep(mask, &step) != 0) return -1;
-    if (initgroups(user, gid) != 0 || setgid(gid) != 0 || setuid(uid) != 0) return -1;
-    return ambient_caps_raise(mask, &step);
+int apply_ambient_caps(uint64_t mask, uid_t uid, gid_t gid, const char *user,
+                       const char **step) {
+    if (ambient_caps_prep(mask, step) != 0) return -1;
+    *step = "initgroups";
+    if (initgroups(user, gid) != 0) return -1;
+    *step = "setgid";
+    if (setgid(gid) != 0) return -1;
+    *step = "setuid";
+    if (setuid(uid) != 0) return -1;
+    return ambient_caps_raise(mask, step);
 }
 
 int apply_no_new_privs(void) {
