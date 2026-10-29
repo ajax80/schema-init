@@ -5,11 +5,11 @@ DATE=${SCHEMA_PI_DATE:-date}
 # baked from SOURCE_DATE_EPOCH by debian/rules; empty in an unbuilt copy, which uses its own mtime
 BUILD_EPOCH=
 
-# the Date header is unauthenticated: never let it set the clock back before the build or the current clock
+# the Date header is unauthenticated: never take a time from before this package was built.
+# Later times, earlier than the running clock, are allowed: a clock that ran ahead must come back.
 floor() {
     b=${BUILD_EPOCH:-$(stat -c %Y "$0" 2>/dev/null)}
-    n=$($DATE +%s)
-    if [ "${b:-0}" -gt "${n:-0}" ]; then echo "$b"; else echo "${n:-0}"; fi
+    echo "${b:-0}"
 }
 
 while :; do

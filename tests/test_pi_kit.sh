@@ -70,13 +70,10 @@ PATH=$T/bin:$PATH SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" >/dev/null 2>&1 ||
 grep -q '^date' "$T/calls" && fail "timesync set a date with no source"
 grep -qx 'sleep 7' "$T/calls" || fail "timesync: no retry sleep"
 
-# timesync floor: never set the clock before the current clock
+# a clock that ran ahead is set back to a Date after the build
 : > "$T/calls"
-PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" > "$T/out" 2>&1 || fail "timesync floor: exit"
-grep -q '^date' "$T/calls" && fail "timesync floor: set the clock back: $(cat "$T/calls")"
-grep -q '^timesync: ignored Mon, 02 Nov 2026 03:04:05 GMT from 1.1.1.1' "$T/out" || fail "timesync floor: not logged: $(cat "$T/out")"
-# an answer below the floor is not an outage: no 30 s retry loop on a clock a second ahead
-grep -qx 'sleep 21600' "$T/calls" || fail "timesync floor: retried: $(cat "$T/calls")"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" > "$T/out" 2>&1 || fail "timesync back: exit"
+grep -qx 'date -s Mon, 02 Nov 2026 03:04:05 GMT' "$T/calls" || fail "timesync: a clock ahead was not set back: $(cat "$T/calls")"
 # ...nor before the build epoch baked in at package build
 sed 's/^BUILD_EPOCH=.*/BUILD_EPOCH=1793620000/' "$TS" > "$T/ts-baked"
 : > "$T/calls"

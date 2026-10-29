@@ -1394,9 +1394,10 @@ def _socket_used(name, sections, queued):
     sock = name + ".socket"
     if sock in queued or _unit_enabled(sock, _unit_dirs()):
         return True
-    # Sockets= is the service claiming it; Also= enables it alongside
+    # Sockets= is the service claiming it. Not Also=: that only acts at enable time,
+    # and an enabled Also= socket is already in a wants/ dir.
     keys = [("Unit", k) for k in ("Requires", "Wants", "BindsTo", "Requisite")] + \
-        [("Service", "Sockets"), ("Install", "Also")]
+        [("Service", "Sockets")]
     return any(sock in v.split() for sec, k in keys for v in _get_all(sections.get(sec, []), k))
 
 
