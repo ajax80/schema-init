@@ -2,6 +2,7 @@
 set -u
 cd "$(dirname "$0")/.."
 POSTINST=$PWD/debian/schema-init.postinst
+PRERM=$PWD/debian/schema-init.prerm
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 fail() { echo "FAIL: $*"; exit 1; }
@@ -17,6 +18,30 @@ run() {
     PATH=$T/bin:$PATH SCHEMA_PROC1=$T/comm SCHEMA_PROC1_ROOT=/ SCHEMA_CTL_SOCK=${SOCK:-$T/sock} \
         sh "$POSTINST" "$@" > "$T/out" 2>&1
 }
+# prerm: removing the package must not leave cmdline.txt pointing at a deleted init
+prerm() {
+    rm -f "$T/pi.log"
+    PATH=$T/bin:$PATH sh "$PRERM" "$@" > "$T/out" 2>&1
+}
+pi_shim() {
+    printf '#!/bin/sh\necho "$*" >> "%s/pi.log"\n[ "$1" = status ] && echo "enabled: %s"\n[ "$1" = disable ] && exit %s\nexit 0\n' "$T" "$1" "$2" > "$T/bin/schema-pi"
+    chmod +x "$T/bin/schema-pi"
+}
+pi_shim yes 0
+prerm remove || fail "prerm remove exit"
+grep -qx disable "$T/pi.log" || fail "prerm remove did not disable: $(cat "$T/pi.log" 2>/dev/null)"
+prerm upgrade 0.4.20-1 || fail "prerm upgrade exit"
+! grep -q disable "$T/pi.log" 2>/dev/null || fail "prerm upgrade disabled"
+pi_shim no 0
+prerm remove || fail "prerm remove/not enabled exit"
+! grep -q disable "$T/pi.log" || fail "prerm disabled when not enabled"
+pi_shim yes 1
+prerm remove || fail "prerm remove must not fail when disable does"
+# an empty PATH, not just no shim: the host's real schema-pi must never run here
+mkdir "$T/empty"
+PATH=$T/empty /bin/sh "$PRERM" remove > "$T/out" 2>&1 || fail "prerm remove without schema-pi"
+echo ok prerm
+
 # The postinst checks -S, which needs a real unix socket.
 if command -v python3 >/dev/null 2>&1; then
     rm -f "$T/sock"

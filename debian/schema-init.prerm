@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+    # init= would point at a deleted wrapper and the next boot would panic; never fail the removal over it
+    if schema-pi status 2>/dev/null | grep -qx 'enabled: yes'; then
+        schema-pi disable || true
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0
