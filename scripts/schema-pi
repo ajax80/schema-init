@@ -60,9 +60,25 @@ import_enabled() {
     [ -n "$sum" ] || die "schema-import failed"
     echo "schema-pi: imported $sum"
     printf '%s\n' "$out" | sed -n 's/^skip  *\([^ :]*\): \(.*\) (see [^)]*)$/skip \1: \2/p'
+    # the importer leaves no marker in a plain file, so enable keeps its own list for the next run's hand-set check
+    printf '%s\n' "$out" | sed -n 's|^import .* -> .*/\([^/]*\)\.svc$|\1|p' >> "$D/pi-imported"
     # not fatal to enable, but must not vanish
     printf '%s\n' "$out" | grep -e '^ERROR' -e '^WARN' >&2
     return 0
+}
+
+# a .svc that is neither kit nor something an earlier enable imported was written by hand
+warn_hand() {
+    hand=
+    for f in "$SVC"/*.svc; do
+        [ -f "$f" ] || continue
+        n=${f##*/}; n=${n%.svc}
+        [ -f "$SHARE/$n.svc.example" ] && continue
+        grep -qxF "$n" "$D/pi-imported" 2>/dev/null && continue
+        hand="$hand${hand:+, }$n"
+    done
+    [ -z "$hand" ] ||
+        echo "schema-pi: warning: hand-written services found: $hand. If they run the same daemons as systemd's units (NetworkManager, sshd, ...) remove them first, or you'll get duplicates." >&2
 }
 
 # links dangle under a fake root (they point at /lib, not $R/lib), hence -L
@@ -160,6 +176,7 @@ enable() {
         die "no ssh service enabled: schema-init would boot without ssh"
 
     mkdir -p "$SVC" "$D"
+    warn_hand
     # an existing .svc is the user's: install only what is absent
     for s in $KIT; do
         [ -e "$SVC/$s.svc" ] || cp "$SHARE/$s.svc.example" "$SVC/$s.svc" || die "cannot install $s.svc"
