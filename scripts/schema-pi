@@ -61,7 +61,8 @@ import_enabled() {
     echo "schema-pi: imported $sum"
     printf '%s\n' "$out" | sed -n 's/^skip  *\([^ :]*\): \(.*\) (see [^)]*)$/skip \1: \2/p'
     # the importer leaves no marker in a plain file, so enable keeps its own list for the next run's hand-set check
-    printf '%s\n' "$out" | sed -n 's|^import .* -> .*/\([^/]*\)\.svc$|\1|p' >> "$D/pi-imported"
+    { cat "$D/pi-imported" 2>/dev/null; printf '%s\n' "$out" | sed -n 's|^import .* -> .*/\([^/]*\)\.svc$|\1|p'; } | sort -u > "$D/pi-imported.tmp" &&
+        mv "$D/pi-imported.tmp" "$D/pi-imported"
     # not fatal to enable, but must not vanish
     printf '%s\n' "$out" | grep -e '^ERROR' -e '^WARN' >&2
     return 0

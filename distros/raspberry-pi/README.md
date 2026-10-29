@@ -65,11 +65,9 @@ You can add your own lines (a service you cannot boot without). Later `enable` r
 
 ### Remove a hand-written set before enable
 
-If you wrote `.svc` files by hand for daemons that systemd's units also run (NetworkManager, sshd, ...), `enable` imports those units too and you get two copies. `enable` warns on stderr, before importing, about every `.svc` that is neither a kit file nor imported by an earlier `enable`: `hand-written services found: <names>`. It only warns. Remove the duplicates first. When a hand-written `.svc` already runs the same binary as a unit, the importer skips that unit and reports it, and `enable` uses your file.
+If you wrote `.svc` files by hand for daemons that systemd's units also run (NetworkManager, sshd, ...), check how they start them. When your `.svc` runs the daemon's binary directly, the importer sees it, skips that unit, and `enable` uses your file. When it starts the daemon through a wrapper script, the importer cannot tell, imports the unit too, and you get two copies. Remove those first. `enable` warns on stderr, before importing, about every `.svc` that is neither a kit file nor imported by an earlier `enable`: `hand-written services found: <names>`. It only warns. A Pi enabled before this warning existed lists its earlier imports once, on the next enable.
 
-### Status
-
-`sudo schema-pi status` lists what is not up in a `not up:` line (`name=STATE`, or `name=MISSING` for a listed service with no `.svc`). No line means everything counted is up.
+Pi Zero W notes and gotchas: [Pi Zero W](../raspberry-pi-zero-w/README.md).
 
 ## Enable
 
@@ -116,7 +114,7 @@ State is in `/var/lib/schema-init/pi-boot` (`attempts=`, `last_target=`). Every 
 sudo schema-pi status
 ```
 
-Prints `enabled`, `pid1`, `attempts`, `last_target`, `last_fallback` (last line of `fallback.log`), `known_good` (version of the known-good engine) and, when something listed is not up, `not up:`.
+Prints `enabled`, `pid1`, `attempts`, `last_target`, `last_fallback` (last line of `fallback.log`), `known_good` (version of the known-good engine) and, when something is not up, a `not up:` line (`name=STATE`, or `name=MISSING` for a listed service with no state). No line means everything counted is up.
 
 ## Disable
 
