@@ -376,6 +376,7 @@ typedef struct {
     uint32_t         content_hash;     /* FNV-1a hash of the parsed .svc file at load time */
     uint64_t         cap_keep_mask;    /* keep_caps allowlist; bit N = CAP_N       */
     uint8_t          cap_restrict;     /* 1 if keep_caps= was present in the .svc  */
+    uint64_t         cap_ambient_mask; /* ambient_caps= raised after the uid drop  */
     uint8_t          ns_private_tmp;    /* private /tmp + /var/tmp                 */
     uint8_t          ns_protect_system; /* PROTECT_SYSTEM_* (ns.h)                 */
     uint8_t          ns_protect_home;   /* hide /home /root /run/user              */

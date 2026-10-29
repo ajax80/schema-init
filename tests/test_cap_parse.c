@@ -1,7 +1,20 @@
 #include "../caps.h"
+#include "../service.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <linux/capability.h>
+
+static int load(const char *dir, const char *body, service_t *svc) {
+    char p[256];
+    snprintf(p, sizeof p, "%s/a.svc", dir);
+    FILE *f = fopen(p, "w");
+    assert(f);
+    fputs(body, f);
+    fclose(f);
+    return service_load_one(p, svc);
+}
 
 int main(void) {
     uint64_t m;
@@ -22,6 +35,24 @@ int main(void) {
     assert(cap_name_to_val("CAP_CHOWN") == CAP_CHOWN);
     assert(cap_name_to_val("not_a_cap") == -1);
 
+    char tmpl[] = "/tmp/schema-cap-parseXXXXXX";
+    char *dir = mkdtemp(tmpl);
+    assert(dir);
+    service_t svc;
+
+    assert(load(dir, "name=a\nexec=/bin/true\nuser=nobody\n"
+                "ambient_caps=CAP_NET_BIND_SERVICE,CAP_NET_RAW\n", &svc) == 0);
+    assert(svc.cap_ambient_mask == ((1ULL << 10) | (1ULL << 13)));
+    assert(!svc.cap_restrict);
+
+    assert(load(dir, "name=a\nexec=/bin/true\n", &svc) == 0);
+    assert(svc.cap_ambient_mask == 0);
+
+    assert(load(dir, "name=a\nexec=/bin/true\nambient_caps=CAP_BOGUS\n", &svc) != 0);
+
+    char cmd[300];
+    snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
+    system(cmd);
     printf("all cap-parse tests passed\n");
     return 0;
 }

@@ -117,6 +117,7 @@ Per-service confinement, applied in the child between fork and exec. Each is opt
 |-----|---------|-------------|
 | `no_new_privs` | `0` | `PR_SET_NO_NEW_PRIVS`: setuid binaries and file capabilities can no longer raise privilege in the service or anything it runs. |
 | `keep_caps` | — | Comma-separated capability names (`CAP_NET_BIND_SERVICE,CAP_SYS_TIME`); every other capability is dropped from the bounding set. An unknown name refuses the load. |
+| `ambient_caps` | — | Same list syntax as `keep_caps`. With `user=` set, these capabilities are raised as ambient caps after the uid drop, so the program keeps them across `exec` (e.g. `CAP_NET_BIND_SERVICE` for a non-root DNS server on port 53). They are added to the bounding set when `keep_caps` is set. Ignored for root services. Also applied to `exec_pre` commands that run after the drop and to `exec_stop`. An unknown name refuses the load. |
 | `private_tmp` | `0` | Fresh `/tmp` and `/var/tmp` for this service (private mount namespace). |
 | `protect_system` | `0` | `1`: `/usr`, `/boot`, `/efi` read-only. `full`: `/etc` too. |
 | `protect_home` | `0` | `/home`, `/root` and `/run/user` replaced by empty read-only mounts. |

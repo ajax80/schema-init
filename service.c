@@ -580,7 +580,8 @@ int service_apply_hardening(const service_t *svc) {
         return -1;
     }
     if (svc->cap_restrict) {
-        if (apply_capabilities(svc->cap_keep_mask) != 0) {
+        /* an ambient cap outside the bounding set could never be raised */
+        if (apply_capabilities(svc->cap_keep_mask | svc->cap_ambient_mask) != 0) {
             dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
                     svc->name, errno);
             return -1;
@@ -1284,7 +1285,13 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
     svc_child_log(svc);
     syscall(SYS_close_range, 3, ~0U, 0);
     svc_apply_env(svc, NULL, 0);
-    if (svc->run_uid) {
+    if (svc->run_uid && svc->cap_ambient_mask) {
+        if (apply_ambient_caps(svc->cap_ambient_mask, svc->run_uid, svc->run_gid,
+                               svc->run_user[0] ? svc->run_user : "nobody") != 0) {
+            dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: stop commands: %d\n", svc->name, errno);
+            _exit(126);
+        }
+    } else if (svc->run_uid) {
         if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0 ||
             setgid(svc->run_gid) != 0 || setuid(svc->run_uid) != 0) {
             dprintf(2, "[schema-init] UID DROP FAILED for %s: stop commands: %d\n", svc->name, errno);
@@ -1485,6 +1492,14 @@ int service_spawn(service_t *svc) {
                 chown(xdg, svc->run_uid, svc->run_gid);
                 setenv("XDG_RUNTIME_DIR", xdg, 1);
             }
+            if (svc->cap_ambient_mask) {
+                const char *step = "";
+                if (ambient_caps_prep(svc->cap_ambient_mask, &step) != 0) {
+                    dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n",
+                            svc->name, step, errno);
+                    _exit(126);
+                }
+            }
             if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0) {
                 dprintf(2, "[schema-init] UID DROP FAILED for %s: initgroups: %d\n",
                         svc->name, errno);
@@ -1509,6 +1524,14 @@ int service_spawn(service_t *svc) {
             dprintf(2, "[schema-init] UID DROP FAILED for %s: setuid: %d\n",
                     svc->name, errno);
             _exit(126);
+        }
+        if (svc->run_uid && svc->cap_ambient_mask) {
+            const char *step = "";
+            if (ambient_caps_raise(svc->cap_ambient_mask, &step) != 0) {
+                dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n",
+                        svc->name, step, errno);
+                _exit(126);
+            }
         }
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
@@ -2335,6 +2358,13 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         svc->cap_restrict = 1;
+    }
+    else if (strcmp(line, "ambient_caps") == 0) {
+        if (parse_cap_list(val, &svc->cap_ambient_mask) != 0) {
+            fprintf(stderr, "[schema-init] %s: unknown capability in ambient_caps=%s\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
     }
     else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
         if (nsr < 0) return -1;

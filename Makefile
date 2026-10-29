@@ -332,6 +332,8 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-mountns && /tmp/schema-test-mountns
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-dropins && /tmp/schema-test-dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-rlimits && /tmp/schema-test-rlimits
+	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cap-parse && /tmp/schema-test-cap-parse
+	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o /tmp/schema-test-ambient-caps && /tmp/schema-test-ambient-caps
 	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-stopcmds && /tmp/schema-test-stopcmds
 	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-verify && /tmp/schema-test-verify
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cycles && /tmp/schema-test-cycles
