@@ -33,9 +33,43 @@ sudo apt update
 sudo apt install schema-init
 ```
 
-## Services first
+## What enable sets up
 
-The package ships example units only (`/usr/share/schema-init/*.svc.example`). Put your real service files in `/etc/schema-init/services/` before enabling. `schema-pi enable` refuses without `sshd.svc` there, so a failed boot can still be reached. See [Pi Zero W](../raspberry-pi-zero-w/README.md) for a working Wi-Fi chain (udev, wpa_supplicant, dhcpcd, sshd).
+`schema-pi enable` installs a small core service kit, imports everything systemd had enabled, and writes the boot-OK list. You do not write service files first. Kit files come from `/usr/share/schema-init/<name>.svc.example` and are copied into `/etc/schema-init/services/` only when absent, so your edits are never overwritten.
+
+The core kit:
+
+- `pi-early`: oneshot that brings `lo` up (127.0.0.1 and ::1), sets the hostname from `/etc/hostname` and runs `swapon -a`. It always exits 0.
+- `udev`: `systemd-udevd`, after `pi-early`.
+- `udev-trigger`: oneshot coldplug (`udevadm trigger`, then `settle` for up to 15 s), after `udev`. Best effort, never fails the boot.
+- `dbus`: the system bus daemon, after `pi-early`; ready when `/run/dbus/system_bus_socket` exists. It must keep the name `dbus`, because imported services that need the bus depend on that name.
+- `pi-timesync`: Pis have no clock battery. It waits for a default route, then sets the clock from the HTTP `Date` header of `http://1.1.1.1/` (then `http://8.8.8.8/`), so it needs no DNS. It retries until it succeeds, then resyncs every 6 hours, and never fails the boot.
+- `journal-sink`: owns `/dev/log` and the journal socket (`schema-journal-sink`). Do not add an `rsyslog.svc`.
+- `pi-boot-firmware`, `pi-bootok`, `pi-deadline`: mount `/boot/firmware`, confirm boot OK, and reboot if it never happens (see Boot fallback).
+
+Then `enable` imports every service systemd had enabled (NetworkManager, sshd, pihole-FTL, ...). It prints `imported N, skipped M` and one `skip <unit>: <reason>` line per unit it did not import. A unit is skipped, for example, when its binary already runs as one of your own `.svc` files, or when its type cannot be translated. Look at the skip lines: anything you need there you must write by hand. `systemd-*` units are not imported (schema-init replaces them), except the network service when that is `systemd-networkd`.
+
+The network service is the first enabled of NetworkManager, systemd-networkd, networking, dhcpcd, wpa_supplicant. `enable` refuses if none is enabled, or if no ssh service (`ssh` or `sshd`) exists, so a failed boot can still be reached. The network service gets `udev-trigger` and `dbus` as dependencies if it lacks them (written to a `pi-kit.conf` drop-in, never into your file).
+
+### Boot-OK list
+
+`/etc/schema-init/pi-boot-required` holds one service name per line; `#` comments and blank lines are ignored. Boot OK waits for exactly these to be FUNDAMENTAL or PERFECT. `enable` writes:
+
+- `udev`, `udev-trigger`, `dbus`, `pi-early`
+- ssh (`ssh` or `sshd`, whichever was imported) and the detected network service
+- `pihole-FTL` when its `.svc` exists, and `unbound` only when both `pihole-FTL.svc` and `unbound.svc` exist
+
+`pi-timesync`, `journal-sink`, `pi-boot-firmware` and every other import are not in it: they may fail without costing a reboot. `pi-bootok` and `pi-deadline` are never counted even if listed.
+
+You can add your own lines (a service you cannot boot without). Later `enable` runs keep your lines and comments and add any missing generated names. A line whose `.svc` is gone is dropped, with a message, because boot OK would wait on it forever and the deadline would fall back. If the file is missing (or lists no names), every service must be FUNDAMENTAL or PERFECT, as described under Boot fallback. A known-good boot reads the copy of the list saved in known-good.
+
+### Remove a hand-written set before enable
+
+If you wrote `.svc` files by hand for daemons that systemd's units also run (NetworkManager, sshd, ...), `enable` imports those units too and you get two copies. `enable` warns on stderr, before importing, about every `.svc` that is neither a kit file nor imported by an earlier `enable`: `hand-written services found: <names>`. It only warns. Remove the duplicates first. When a hand-written `.svc` already runs the same binary as a unit, the importer skips that unit and reports it, and `enable` uses your file.
+
+### Status
+
+`sudo schema-pi status` lists what is not up in a `not up:` line (`name=STATE`, or `name=MISSING` for a listed service with no `.svc`). No line means everything counted is up.
 
 ## Enable
 
@@ -44,26 +78,26 @@ sudo schema-pi enable
 sudo reboot
 ```
 
-`enable` and `disable` first mount `/boot/firmware` if `/etc/fstab` lists it and it is not mounted (schema-init does not automount fstab), and stop if that fails. `enable` refuses unless `/boot/firmware/cmdline.txt` exists, `/lib/systemd/systemd` exists, `/var/lib` is not `noexec`, and `sshd.svc` is present. Then it:
+`enable` and `disable` first mount `/boot/firmware` if `/etc/fstab` lists it and it is not mounted (schema-init does not automount fstab), and stop if that fails. `enable` refuses unless `/boot/firmware/cmdline.txt` exists, `/lib/systemd/systemd` exists, `/var/lib` is not `noexec`, a network service and an ssh service are enabled. Then it:
 
 - backs up `cmdline.txt` to `cmdline.txt.schema-bak` (first run only)
-- installs `pi-bootok.svc`, `pi-deadline.svc` and `pi-boot-firmware.svc` into `/etc/schema-init/services/` if missing (`pi-boot-firmware` mounts `/boot/firmware` at boot, so `cmdline.txt` and firmware updates land on the real partition)
+- installs the kit and imports the enabled systemd services (above)
 - seeds `/var/lib/schema-init/known-good/` if it does not exist
 - on the first line of `cmdline.txt`: replaces any `init=` with `init=/usr/sbin/schema-init-pi`, and appends `panic=10` if the line has no `panic=`
 
-These three `pi-*.svc` files are copied once. Later package updates ship new `/usr/share/schema-init/pi-*.svc.example` files but never overwrite your copies. To pick up a changed example, copy it over by hand and reboot:
+Kit files are copied once. Later package updates ship new `/usr/share/schema-init/*.svc.example` files but never overwrite your copies. To pick up a changed example, copy it over by hand and reboot:
 
 ```sh
 sudo cp /usr/share/schema-init/pi-bootok.svc.example /etc/schema-init/services/pi-bootok.svc
 ```
 
-(the same for `pi-deadline` and `pi-boot-firmware`). Compare first with `diff` if you edited them.
+(the same for any other kit file). Compare first with `diff` if you edited them.
 
 It takes effect on the next boot. `schema-init-pi` is a small static program, so a broken `/bin/sh` or library after an upgrade cannot kill it.
 
 ## Boot fallback
 
-"Boot OK" means `sshd` is up and every service is FUNDAMENTAL or PERFECT (none failed, excised or given up). Services still starting count as not ready, so boot OK waits for them. Skipped services and `pi-bootok` / `pi-deadline` themselves are ignored. A network address is not required: a router outage is not a schema failure and costs no reboots. A failed `wpa-supplicant` or `dhcpcd` still counts.
+"Boot OK" means every service in `pi-boot-required` is FUNDAMENTAL or PERFECT (none failed, excised or given up). Services still starting count as not ready, so boot OK waits for them. Without the list, `sshd` must be up and every service must be FUNDAMENTAL or PERFECT; skipped services and `pi-bootok` / `pi-deadline` themselves are ignored. A network address is not required: a router outage is not a schema failure and costs no reboots. With the list, a failed network service still counts because it is listed.
 
 - Each boot of schema-init increments a counter before exec. Boot OK resets it to 0.
 - If boot OK has not happened 300 s after `pi-deadline` starts, `pi-deadline` reboots the Pi (`schema-ctl reboot`). It does nothing unless the kernel was booted with `init=/usr/sbin/schema-init-pi`.
@@ -82,7 +116,7 @@ State is in `/var/lib/schema-init/pi-boot` (`attempts=`, `last_target=`). Every 
 sudo schema-pi status
 ```
 
-Prints `enabled`, `pid1`, `attempts`, `last_target`, `last_fallback` (last line of `fallback.log`) and `known_good` (version of the known-good engine).
+Prints `enabled`, `pid1`, `attempts`, `last_target`, `last_fallback` (last line of `fallback.log`), `known_good` (version of the known-good engine) and, when something listed is not up, `not up:`.
 
 ## Disable
 
