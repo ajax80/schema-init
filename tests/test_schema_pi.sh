@@ -24,6 +24,7 @@ reset() {
     echo d > "$R/usr/libexec/schema-init/schema-pi-deadline"
     echo bootok-svc > "$R/usr/share/schema-init/pi-bootok.svc.example"
     echo deadline-svc > "$R/usr/share/schema-init/pi-deadline.svc.example"
+    echo firmware-svc > "$R/usr/share/schema-init/pi-boot-firmware.svc.example"
 }
 
 pi() {
@@ -41,6 +42,7 @@ pi enable > "$T/log" 2>&1 || fail "enable_fresh: exit: $(cat "$T/log")"
 printf '%s\n' "$STOCK" | cmp -s - "$BAK" || fail "enable_fresh: backup"
 [ "$(cat "$R/etc/schema-init/services/pi-bootok.svc")" = bootok-svc ] || fail "enable_fresh: bootok svc"
 [ "$(cat "$R/etc/schema-init/services/pi-deadline.svc")" = deadline-svc ] || fail "enable_fresh: deadline svc"
+[ "$(cat "$R/etc/schema-init/services/pi-boot-firmware.svc")" = firmware-svc ] || fail "enable_fresh: firmware svc"
 [ "$(cat "$R/var/lib/schema-init/pi-boot")" = "attempts=0
 last_target=current" ] || fail "enable_fresh: state"
 cmp -s "$R/var/lib/schema-init/known-good/schema-init" "$R/usr/bin/schema-init" || fail "enable_fresh: known-good"
@@ -160,6 +162,52 @@ grep -qx 'enabled: yes' "$T/log" && grep -qx 'pid1: schema-init-pi' "$T/log" &&
     grep -qx 'last_fallback: 2 fallback=systemd attempts=3' "$T/log" &&
     grep -qx 'known_good: schema-init 9.9' "$T/log" || fail "status_prints: full: $(cat "$T/log")"
 echo "ok status_prints"
+
+# firmware_mount: schema-init has no fstab automount, so /boot/firmware may not be mounted
+# shims only: a real mount must never run here
+fw_shims() {
+    rm -rf "$T/bin"; mkdir "$T/bin"
+    printf '#!/bin/sh\necho "$*" >> "%s/mount.log"\nexit %s\n' "$T" "$1" > "$T/bin/mount"
+    printf '#!/bin/sh\necho "$*" >> "%s/mountpoint.log"\nexit %s\n' "$T" "$2" > "$T/bin/mountpoint"
+    chmod +x "$T/bin/mount" "$T/bin/mountpoint"
+    rm -f "$T/mount.log" "$T/mountpoint.log"
+}
+FSTAB='PARTUUID=abcd-01  /boot/firmware  vfat    defaults          0       2'
+for cmd in enable disable; do
+    reset; printf '%s\n' "$FSTAB" > "$R/etc/fstab"
+    fw_shims 0 1
+    PATH=$T/bin:$PATH pi $cmd > "$T/log" 2>&1 || fail "firmware_mount $cmd: exit: $(cat "$T/log")"
+    [ "$(cat "$T/mount.log" 2>/dev/null)" = "$R/boot/firmware" ] || fail "firmware_mount $cmd: mount: $(cat "$T/mount.log" 2>/dev/null)"
+    fw_shims 0 0
+    PATH=$T/bin:$PATH pi $cmd > "$T/log" 2>&1 || fail "firmware_mount $cmd: mounted exit"
+    [ ! -e "$T/mount.log" ] || fail "firmware_mount $cmd: remounted a mountpoint"
+    # a failed mount must stop before cmdline.txt is touched
+    cp "$CL" "$T/orig"
+    fw_shims 32 1
+    PATH=$T/bin:$PATH pi $cmd > "$T/log" 2>&1; rc=$?
+    [ $rc -eq 1 ] || fail "firmware_mount $cmd: failed mount exit $rc"
+    grep -q 'cannot mount' "$T/log" || fail "firmware_mount $cmd: message: $(cat "$T/log")"
+    cmp -s "$CL" "$T/orig" || fail "firmware_mount $cmd: cmdline touched"
+done
+reset; printf '# %s\n/dev/sda1 /boot ext4 defaults 0 2\n' "$FSTAB" > "$R/etc/fstab"
+fw_shims 0 1
+PATH=$T/bin:$PATH pi enable > "$T/log" 2>&1 || fail "firmware_mount unlisted: exit"
+[ ! -e "$T/mount.log" ] && [ ! -e "$T/mountpoint.log" ] || fail "firmware_mount unlisted: mount called"
+echo "ok firmware_mount"
+
+# firmware_helper: the boot oneshot mounts it the same way and never fails the boot
+FW=$PWD/scripts/schema-pi-mount-firmware
+reset; printf '%s\n' "$FSTAB" > "$R/etc/fstab"
+fw_shims 32 1
+PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$R sh "$FW" > "$T/log" 2>&1 || fail "firmware_helper: failed mount exit"
+[ "$(cat "$T/mount.log")" = "$R/boot/firmware" ] || fail "firmware_helper: mount"
+fw_shims 0 0
+PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$R sh "$FW" > "$T/log" 2>&1 || fail "firmware_helper: exit"
+[ ! -e "$T/mount.log" ] || fail "firmware_helper: remounted"
+rm "$R/etc/fstab"; fw_shims 0 1
+PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$R sh "$FW" > "$T/log" 2>&1 || fail "firmware_helper: no fstab exit"
+[ ! -e "$T/mount.log" ] || fail "firmware_helper: mounted without fstab entry"
+echo "ok firmware_helper"
 
 # usage
 pi > /dev/null 2>&1; [ $? -eq 2 ] || fail "usage: none"

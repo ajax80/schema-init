@@ -1,0 +1,7 @@
+#!/bin/sh
+R=${SCHEMA_PI_ROOT:-}
+# schema-init has no fstab automount; schema-pi and a hand edit both need the real cmdline.txt
+awk '$1 !~ /^#/ && $2 == "/boot/firmware" { f = 1 } END { exit !f }' "$R/etc/fstab" 2>/dev/null || exit 0
+mountpoint -q "$R/boot/firmware" || mount "$R/boot/firmware" || echo "pi-boot-firmware: cannot mount /boot/firmware" >&2
+# a missing /boot/firmware is no reason to fail the boot
+exit 0
