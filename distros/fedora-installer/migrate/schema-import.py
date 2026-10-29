@@ -274,7 +274,50 @@ def _hardening(svc):
         if v not in _FALSE:
             warns.append("ProtectHome=%s has no equivalent, mapped to protect_home=0" % v)
         lines.append("protect_home=0")
+    _writable_lower(svc, lines, warns)
     return lines, warns
+
+
+# protect_system/protect_home levels, strongest first, with the dirs each makes
+# read-only (ns.c apply_mount_ns)
+_RO_LEVELS = {"protect_system": (("full", ("/usr", "/boot", "/efi", "/etc")),
+                                 ("1", ("/usr", "/boot", "/efi")), ("0", ())),
+              "protect_home": (("1", ("/home", "/root", "/run/user")), ("0", ()))}
+
+
+# only paths inside a read-only dir: systemd lets the more specific mount win,
+# so ReadWritePaths=/run leaves ProtectHome's /run/user alone
+def _under(path, ro):
+    path = path.rstrip("/") or "/"
+    return path == ro or path.startswith(ro + "/")
+
+
+# schema-init has no ReadWritePaths= exception inside a read-only mount, so a
+# declared writable path under one lowers the level until it is writable
+# (pihole-FTL: ProtectSystem=full + ReadWriteDirectories=/etc/pihole)
+def _writable_lower(svc, lines, warns):
+    rw = []
+    for k, v in svc:
+        if k in ("ReadWritePaths", "ReadWriteDirectories"):
+            rw = rw + [(k, w) for w in v.split()] if v.strip() else []
+    for i, ln in enumerate(lines):
+        key, val = ln.split("=", 1)
+        levels = _RO_LEVELS.get(key)
+        if not levels:
+            continue
+        idx = [lv for lv, _ in levels].index(val)
+        hit = []
+        for k, w in rw:
+            path = w.lstrip("-+")
+            if "%" in path or not path.startswith("/"):
+                continue
+            while any(_under(path, ro) for ro in levels[idx][1]):
+                idx += 1
+                hit.append("%s=%s" % (k, w))
+        if hit:
+            lines[i] = "%s=%s" % (key, levels[idx][0])
+            warns.append("%s is read-only under %s=%s, lowered to %s=%s"
+                         % (" ".join(dict.fromkeys(hit)), key, val, key, levels[idx][0]))
 
 
 _PORTS = re.compile(r"^(\d+)(?:-(\d+))?$")

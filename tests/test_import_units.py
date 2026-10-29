@@ -193,6 +193,27 @@ check("warnings lead the file", hw.startswith(si.WARN_PREFIX) and hw.count(si.WA
 
 # --- SocketBindAllow/Deny= -> landlock_bind_tcp= ---
 si._landlock_tcp_ok = lambda: True
+# ReadWritePaths= under a read-only protect_system/protect_home level: schema-init
+# has no writable exception, so the level is lowered and warned
+hp = hard("User=pihole\nProtectSystem=full\nReadWriteDirectories=/etc/pihole\n")
+check("pihole-FTL: ReadWriteDirectories=/etc/pihole lowers full -> 1, warned",
+      "protect_system=1\n" in hp and "protect_system=full\n" not in hp
+      and si.WARN_PREFIX + "ReadWriteDirectories=/etc/pihole" in hp)
+hp = hard("ProtectSystem=strict\nReadWritePaths=/etc/x\n")
+check("strict + /etc path -> 1", "protect_system=1\n" in hp and "/etc/x" in hp)
+hp = hard("ProtectSystem=yes\nReadWritePaths=-/usr/local/state\n")
+check("ProtectSystem=yes + -/usr path -> 0", "protect_system=0\n" in hp and "/usr/local/state" in hp)
+hp = hard("ProtectSystem=full\nProtectHome=yes\nReadWritePaths=/ /run\n")
+check("a parent of the read-only dirs (/, /run) -> unchanged: the narrower mount wins",
+      "protect_system=full\n" in hp and "protect_home=1\n" in hp)
+hp = hard("ProtectSystem=full\nProtectHome=yes\nReadWritePaths=/var/lib/x /run/x\n")
+check("paths outside the read-only dirs -> unchanged, no warning",
+      "protect_system=full\n" in hp and "protect_home=1\n" in hp and si.WARN_PREFIX not in hp)
+hp = hard("ProtectHome=yes\nReadWritePaths=/home/x\n")
+check("ProtectHome=yes + /home path -> protect_home=0, warned", "protect_home=0\n" in hp and "/home/x" in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=/etc/a\nReadWritePaths=\nReadWritePaths=/var/b\n")
+check("ReadWritePaths= empty resets", "protect_system=full\n" in hp)
+
 def sb(txt):
     return hard(txt)
 s1 = sb("SocketBindAllow=tcp:443\nSocketBindAllow=80\nSocketBindDeny=any\n")
