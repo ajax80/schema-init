@@ -1300,11 +1300,29 @@ def _timer_for(name):
     return None
 
 
+def _unit_enabled(unit, dirs=None):
+    import glob
+    return any(glob.glob(os.path.join(d, "*.wants", unit))
+               for d in (dirs if dirs is not None else _unit_dirs()[:2]))
+
+
 def _service_enabled(name):
     """name.service has a .wants/ symlink of its own (systemd enabled it)."""
-    import glob
-    return any(glob.glob(os.path.join(d, "*.wants", name + ".service"))
-               for d in _unit_dirs()[:2])
+    return _unit_enabled(name + ".service")
+
+
+# systemd listens on a same-name socket only when it is enabled, queued with
+# the service, or pulled in by it; a disabled one (Debian's ssh.socket) is
+# just a file, and attaching it makes PID 1 hold the daemon's own port.
+# Every unit dir: vendor wants/ (/usr/lib/systemd/user/sockets.target.wants)
+# enable too.
+def _socket_used(name, sections, queued):
+    sock = name + ".socket"
+    if sock in queued or _unit_enabled(sock, _unit_dirs()):
+        return True
+    u = sections.get("Unit", [])
+    return any(sock in v.split() for k in ("Requires", "Wants", "BindsTo", "Requisite")
+               for v in _get_all(u, k))
 
 
 _RECLAIMED = ("systemd-", "dbus", "NetworkManager-wait-online")
@@ -1633,7 +1651,7 @@ def import_one(name, force=False, queued=()):
     socket = name.endswith(".socket")
     name = name[:-len(".service")] if name.endswith(".service") else name
     name = name[:-len(".timer")] if timer else name
-    sock_sections = None
+    sock_sections = sibling = None
     if socket:
         name = name[:-len(".socket")]
         spath = find_unit(name + ".socket")
@@ -1661,7 +1679,7 @@ def import_one(name, force=False, queued=()):
                 svc_target = _get_last(cand.get("Socket", []), "Service") or name + ".service"
                 if svc_target == name + ".service":
                     socket_lines(cand)
-                    sock_sections = cand
+                    sibling = cand
             except (OSError, Skip):
                 pass
     out = os.path.join(svc_dir(), name + ".svc")
@@ -1677,6 +1695,8 @@ def import_one(name, force=False, queued=()):
         with open(path) as f:
             text = f.read()
         sections = parse_unit(text)
+        if sibling is not None and _socket_used(name, sections, queued):
+            sock_sections = sibling
         if "@" in name and sock_sections is not None:
             raise Skip("socket starts template %s — instances unsupported" % name)
         denied = _denied(name)
