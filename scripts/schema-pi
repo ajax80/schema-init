@@ -109,14 +109,25 @@ write_dropin() {
     printf '%s' "$deps" > "$f" || die "cannot write $f"
 }
 
-# merge-add: hand-added names stay, missing generated names are appended, nothing is removed
+# merge: hand lines and comments stay, missing generated names are appended;
+# a name with no .svc is dropped, since bootok would wait on it forever and the deadline falls back
 write_required() {
     tmp=$REQ.tmp.$$
     if [ -f "$REQ" ]; then
-        cp "$REQ" "$tmp" || die "cannot write $tmp"
-        if [ -n "$(tail -c 1 "$tmp")" ]; then echo >> "$tmp"; fi
+        : > "$tmp" || die "cannot write $tmp"
+        while IFS= read -r l || [ -n "$l" ]; do
+            t=$(printf '%s' "$l" | sed 's/^[[:blank:]]*//; s/[[:blank:]]*$//')
+            case $t in
+                '' | '#'*) ;;
+                *) if [ ! -f "$SVC/$t.svc" ]; then
+                       echo "schema-pi: dropped $t from pi-boot-required (no .svc)"
+                       continue
+                   fi ;;
+            esac
+            printf '%s\n' "$l" >> "$tmp" || die "cannot write $tmp"
+        done < "$REQ"
     else
-        echo "# written by schema-pi enable; later enables only append" > "$tmp" || die "cannot write $tmp"
+        echo "# written by schema-pi enable; later enables keep hand lines" > "$tmp" || die "cannot write $tmp"
     fi
     gen="udev udev-trigger dbus pi-early $1 $2"
     if [ -f "$SVC/pihole-FTL.svc" ]; then

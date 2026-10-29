@@ -343,6 +343,7 @@ echo "ok rerun"
 
 # required_merge: hand lines survive re-enable, a missing generated name is appended, none removed
 reset; pi enable > "$T/log" 2>&1 || fail "required_merge: first"
+echo name=my-thing > "$SVC/my-thing.svc"
 grep -vx udev-trigger "$REQ" > "$T/req"; printf '# mine\nmy-thing' >> "$T/req"; cp "$T/req" "$REQ"
 pi enable > "$T/log" 2>&1 || fail "required_merge: second: $(cat "$T/log")"
 grep -qx '# mine' "$REQ" && grep -qx my-thing "$REQ" || fail "required_merge: hand lines lost: $(cat "$REQ")"
@@ -352,6 +353,20 @@ wants ssh wpa_supplicant
 pi enable > "$T/log" 2>&1 || fail "required_merge: third: $(cat "$T/log")"
 grep -qx NetworkManager "$REQ" && grep -qx wpa_supplicant "$REQ" || fail "required_merge: removed or not added: $(cat "$REQ")"
 echo "ok required_merge"
+
+# required_prune: a stale name with no .svc is dropped and reported; hand names with a .svc and comments stay
+reset; pi enable > "$T/log" 2>&1 || fail "required_prune: first"
+echo name=foo > "$SVC/foo.svc"
+printf '# keep me\n\nfoo\n' >> "$REQ"
+wants ssh wpa_supplicant; rm "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "required_prune: second: $(cat "$T/log")"
+grep -qx 'schema-pi: dropped NetworkManager from pi-boot-required (no .svc)' "$T/log" ||
+    fail "required_prune: not reported: $(cat "$T/log")"
+! grep -qx NetworkManager "$REQ" || fail "required_prune: stale kept: $(cat "$REQ")"
+grep -qx foo "$REQ" && grep -qx '# keep me' "$REQ" && grep -qx '' "$REQ" || fail "required_prune: hand lines lost: $(cat "$REQ")"
+grep -qx wpa_supplicant "$REQ" || fail "required_prune: new net missing"
+[ "$(grep -c dropped "$T/log")" = 1 ] || fail "required_prune: over-reported: $(cat "$T/log")"
+echo "ok required_prune"
 
 # disable_roundtrip
 reset
