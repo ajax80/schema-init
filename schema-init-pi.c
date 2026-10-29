@@ -138,7 +138,6 @@ static void exec_target(enum pi_target t, struct pi_state *st, int pid1, char **
         to_boot_log();
         argv[0] = (char *)P(path, "/usr/bin/schema-init");
         execv(path, argv);
-        log_fallback(PI_KNOWN_GOOD, st->attempts);
         st->last_target = PI_KNOWN_GOOD;
         if (write_state(st) == 0) {
             kmsg("<3>schema-init-pi: exec current failed, trying known-good\n");
@@ -147,6 +146,7 @@ static void exec_target(enum pi_target t, struct pi_state *st, int pid1, char **
             kmsg("<3>schema-init-pi: exec current failed and cannot save boot state, booting systemd\n");
             t = PI_SYSTEMD;
         }
+        log_fallback(t, st->attempts);
     }
     if (t == PI_KNOWN_GOOD) {
         char svc[PATH_MAX];

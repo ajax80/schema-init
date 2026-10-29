@@ -198,7 +198,11 @@ EOT
   pi_has 5 "PI-SYSTEMD-REACHED argv0=/lib/systemd/systemd" || pi_miss "PI-reopen: stub output stuck in boot.log, console not reopened"
   pi_has 5 "PI-EXE:"                       && pi_miss "PI-reopen: an engine ran with both engines unexecutable"
   pi_has 5 "PI-SD-ROOT: ro"                || pi_miss "PI-reopen: / handed to systemd rw (wrapper did not restore ro)"
-  pi_state 5 "attempts=1 last_target=current" || pi_miss "PI-reopen: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-5"))"
+  # each failed exec moves the state on, so a broken current is never left there for bootok to promote
+  pi_state 5 "attempts=0 last_target=systemd" || pi_miss "PI-reopen: state after boot ($(tr '\n' ' ' < "$WORK/pi-state-5"))"
+  grep -Eq "^[0-9]+ fallback=known-good attempts=1$" "$WORK/pi-fallback-5" || pi_miss "PI-reopen: failed current exec not logged"
+  grep -Eq "^[0-9]+ fallback=systemd attempts=1$" "$WORK/pi-fallback-5" || pi_miss "PI-reopen: failed known-good exec not logged"
+  pi_has 5 "exec current failed, trying known-good" || pi_miss "PI-reopen: no kmsg for the failed current exec"
   pi_has 4 "PI-CMDLINE: .* ro "            || pi_miss "PI-ro: kernel cmdline lacked ro"
   pi_has 4 "remount / rw failed"           && pi_miss "PI-ro: wrapper could not remount / rw"
   pi_has 4 "PI-ROOT: rw"                   || pi_miss "PI-ro: / still read-only under the engine"
