@@ -191,10 +191,26 @@ static inline int calendar_dow_from_name(const char *s) {
 static inline int parse_calendar_fields(const char *val, uint32_t *hour_mask,
                                         int *min, int *dow, int *dom) {
     int dw = -1, dm = -1;
-    char tok[16], when[128], extra;
-    const char *p;
-    int n = sscanf(val, "%15s %127s %c", tok, when, &extra);
-    if (n == 2) {
+    char tok[16];
+    /* Split by shape, not by buffer: one token is the time spec at any length,
+     * two are prefix + time spec. A fixed %s width would cut a long hour list
+     * in two and read its head as a day-of-month. */
+    const char *a = val;
+    while (isspace((unsigned char)*a)) a++;
+    const char *b = a;
+    while (*b && !isspace((unsigned char)*b)) b++;
+    const char *c = b;
+    while (isspace((unsigned char)*c)) c++;
+    const char *d = c;
+    while (*d && !isspace((unsigned char)*d)) d++;
+    const char *z = d;
+    while (isspace((unsigned char)*z)) z++;
+    if (a == b || *z) return -1;
+    const char *p = a, *pe = b;
+    if (c != d) {
+        if ((size_t)(b - a) >= sizeof tok) return -1;
+        memcpy(tok, a, (size_t)(b - a));
+        tok[b - a] = '\0';
         if (isalpha((unsigned char)tok[0])) {
             dw = calendar_dow_from_name(tok);
             if (dw < 0) return -1;
@@ -206,11 +222,7 @@ static inline int parse_calendar_fields(const char *val, uint32_t *hour_mask,
         } else {
             return -1;
         }
-        p = when;
-    } else if (n == 1) {
-        p = tok;
-    } else {
-        return -1;
+        p = c; pe = d;
     }
     uint32_t mask = 0;
     char *end;
@@ -226,7 +238,7 @@ static inline int parse_calendar_fields(const char *val, uint32_t *hour_mask,
     p = end + 1;
     if (!isdigit((unsigned char)*p)) return -1;
     long m = strtol(p, &end, 10);
-    if (*end != '\0' || m > 59) return -1;
+    if (end != pe || m > 59) return -1;
     *hour_mask = mask; *min = (int)m; *dow = dw; *dom = dm;
     return 0;
 }

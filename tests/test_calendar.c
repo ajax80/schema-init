@@ -80,6 +80,16 @@ int main(void) {
     assert(pc("Mon 6,18:00", &h, &m, &dw, &dm) == 0 && h == (H(6) | H(18)) && dw == 1);
     assert(pc("1 0,12,23:30", &h, &m, &dw, &dm) == 0);
     assert(h == (H(0) | H(12) | H(23)) && m == 30 && dm == 1);
+    /* lists longer than any prefix token, bare and prefixed */
+    uint32_t one_to_8 = H(1) | H(2) | H(3) | H(4) | H(5) | H(6) | H(7) | H(8);
+    assert(pc("1,2,3,4,5,6,7,8:00", &h, &m, &dw, &dm) == 0);
+    assert(h == one_to_8 && m == 0 && dw == -1 && dm == -1);
+    assert(pc("Mon 1,2,3,4,5,6,7,8:00", &h, &m, &dw, &dm) == 0 && h == one_to_8 && dw == 1);
+    assert(pc("15 1,2,3,4,5,6,7,8:00", &h, &m, &dw, &dm) == 0 && h == one_to_8 && dm == 15);
+    assert(pc("0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23:05",
+              &h, &m, &dw, &dm) == 0);
+    assert(h == 0xffffffu && m == 5);
+    assert(pc("Monday12345678901 03:15", &h, &m, &dw, &dm) == -1); /* long prefix */
     assert(pc("24,1:00", &h, &m, &dw, &dm) == -1);   /* hour > 23 in list */
     assert(pc("6,,18:00", &h, &m, &dw, &dm) == -1);  /* empty element */
     assert(pc("6,18", &h, &m, &dw, &dm) == -1);      /* no minute */
