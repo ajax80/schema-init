@@ -35,7 +35,7 @@ write_cmdline() {
     tmp=$CL.tmp.$$
     printf '%s\n' "$1" > "$tmp" || die "cannot write $tmp"
     sync
-    mv "$tmp" "$CL"
+    mv "$tmp" "$CL" || die "cannot replace $CL"
     sync
 }
 

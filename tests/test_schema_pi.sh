@@ -209,6 +209,15 @@ PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$R sh "$FW" > "$T/log" 2>&1 || fail "firmware_h
 [ ! -e "$T/mount.log" ] || fail "firmware_helper: mounted without fstab entry"
 echo "ok firmware_helper"
 
+# write_fails: a failed mv must not report success
+reset; rm -rf "$T/bin"; mkdir "$T/bin"
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/mv"; chmod +x "$T/bin/mv"
+PATH=$T/bin:$PATH pi disable > "$T/log" 2>&1; rc=$?
+[ $rc -eq 1 ] || fail "write_fails: exit $rc"
+grep -q 'cannot replace' "$T/log" || fail "write_fails: message: $(cat "$T/log")"
+rm -rf "$T/bin" "$CL".tmp.*
+echo "ok write_fails"
+
 # usage
 pi > /dev/null 2>&1; [ $? -eq 2 ] || fail "usage: none"
 pi bogus > /dev/null 2>&1; [ $? -eq 2 ] || fail "usage: bogus"
