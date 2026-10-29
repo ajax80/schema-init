@@ -404,6 +404,20 @@ grep -qx 'enabled: yes' "$T/log" && grep -qx 'pid1: schema-init-pi' "$T/log" &&
     grep -qx 'known_good: schema-init 9.9' "$T/log" || fail "status_prints: full: $(cat "$T/log")"
 echo "ok status_prints"
 
+# status_not_up
+reset
+cat > "$T/ctl" <<'EOT'
+#!/bin/sh
+printf 'service.ssh.state=FUNDAMENTAL\nservice.avahi-daemon.state=EXCISED\nservice.net.state=PERFECT\n'
+EOT
+chmod +x "$T/ctl"
+SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up: exit"
+grep -qx 'not up: avahi-daemon=EXCISED' "$T/log" || fail "status_not_up: $(cat "$T/log")"
+printf '#!/bin/sh\nprintf "service.ssh.state=FUNDAMENTAL\\n"\n' > "$T/ctl"
+SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up: exit2"
+! grep -q '^not up' "$T/log" || fail "status_not_up: printed when all up"
+echo "ok status_not_up"
+
 # firmware_mount: schema-init has no fstab automount, so /boot/firmware may not be mounted
 # shims only: a real mount must never run here
 fw_shims() {

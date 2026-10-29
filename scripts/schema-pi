@@ -224,6 +224,12 @@ status() {
     echo "last_fallback: ${f:--}"
     v=$("$KG/schema-init" --version 2>/dev/null | head -n 1)
     echo "known_good: ${v:--}"
+    n=$("${SCHEMA_CTL:-schema-ctl}" status --kv 2>/dev/null | awk -F= '
+        $1 ~ /^service\..*\.state$/ {
+            n = $1; sub(/^service\./, "", n); sub(/\.state$/, "", n)
+            if ($2 != "FUNDAMENTAL" && $2 != "PERFECT") { printf "%s%s=%s", sep, n, $2; sep = " " }
+        }')
+    [ -z "$n" ] || echo "not up: $n"
 }
 
 case ${1:-} in

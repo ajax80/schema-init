@@ -11,16 +11,54 @@ KGP=/var/lib/schema-init/known-good
 KG=$R$KGP
 MARK=$R/run/schema-init/pi-boot-ok
 
+# a known-good boot reads the known-good copy of the list: /etc may have been edited since it was promoted,
+# and last_target is the wrapper's own record of which set it booted. An old known-good with no list keeps today's rule.
+boot_list() {
+    t=$(sed -n 's/^last_target=//p' "$STATE" 2>/dev/null | head -n 1)
+    if [ "$t" = known-good ]; then
+        echo "$KG/pi-boot-required"
+    else
+        echo "$R/etc/schema-init/pi-boot-required"
+    fi
+}
+
 blockers() {
-    "$CTL" status --kv 2>/dev/null | awk -F= '
+    f=$(boot_list)
+    listed=0; req=
+    if [ -f "$f" ]; then
+        listed=1
+        # CR: a list edited on another OS must still match names
+        req=$(tr -d '\r' < "$f" | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
+            $0 != "" && !/^#/ { printf "%s ", $0 }')
+    fi
+    "$CTL" status --kv 2>/dev/null | awk -F= -v listed=$listed -v req="$req" '
+        BEGIN { nreq = split(req, want, " ") }
         $1 ~ /^service\..*\.state$/ {
             n = $1; sub(/^service\./, "", n); sub(/\.state$/, "", n)
             s = $2
-            if (n == "pi-bootok" || n == "pi-deadline" || s == "skipped") next
+            if (n == "pi-bootok" || n == "pi-deadline") next
+            seen[n] = s
+            if (listed) next
+            if (s == "skipped") next
             if (n == "sshd") sshd = 1
             if (s != "FUNDAMENTAL" && s != "PERFECT") print n "=" s
         }
-        END { if (!sshd) print "sshd=MISSING" }'
+        function up(n) { return (n in seen) && (seen[n] == "FUNDAMENTAL" || seen[n] == "PERFECT") }
+        END {
+            if (!listed) { if (!sshd) print "sshd=MISSING"; exit }
+            for (i = 1; i <= nreq; i++) {
+                n = want[i]
+                if (n == "ssh" || n == "sshd") { needssh = 1; continue }
+                if (!(n in seen)) print n "=MISSING"
+                else if (!up(n)) print n "=" seen[n]
+            }
+            # ssh and sshd are one requirement: either name, whichever is loaded
+            if (needssh && !up("ssh") && !up("sshd")) {
+                if ("ssh" in seen) print "ssh=" seen["ssh"]
+                else if ("sshd" in seen) print "sshd=" seen["sshd"]
+                else print "sshd=MISSING"
+            }
+        }'
 }
 
 now() { date +%s; }
@@ -51,7 +89,9 @@ promote() {
         cp -pRL "$R/etc/schema-init/services/." "$KG.new/services/" &&
         cp -p "$R/usr/libexec/schema-init/schema-pi-bootok" \
               "$R/usr/libexec/schema-init/schema-pi-deadline" "$KG.new/" &&
-        point_at_kg; then
+        point_at_kg &&
+        { [ ! -f "$R/etc/schema-init/pi-boot-required" ] ||
+          cp -p "$R/etc/schema-init/pi-boot-required" "$KG.new/"; }; then
         # data must be on disk before the rename, or a power cut leaves truncated known-good files
         sync
         # without the guard a failed move-aside would nest .new inside $KG
