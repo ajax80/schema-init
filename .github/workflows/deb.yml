@@ -52,6 +52,33 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # A clean trixie, not the build container: proves the deb's Depends resolve
+  # and the installed binary is the one the package claims to be.
+  install:
+    needs: native
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-26.04 }
+          - { arch: arm64, runner: ubuntu-26.04-arm }
+    name: install ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: debian:trixie
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: debs
+      - name: install and check version
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ./debs/schema-init_*.deb
+          want="schema-init $(dpkg-deb -f debs/schema-init_*.deb Version)"
+          got=$(schema-init --version)
+          echo "want: $want"; echo "got:  $got"
+          [ "$got" = "$want" ]
+          apt-get remove -y schema-init
+
   armhf:
     runs-on: ubuntu-26.04
     steps:
@@ -128,6 +155,16 @@ jobs:
           mkdir out && cp "$ROOTFS"/build/schema-init_*.deb out/
       - name: ARMv6 gate
         run: sh tools/check-armv6.sh out/*.deb
+      # The buildd rootfs has no systemd, so apt resolves Depends from the Raspbian mirror.
+      - name: install and check version (qemu)
+        run: |
+          sudo cp -L /etc/resolv.conf "$ROOTFS/etc/resolv.conf"
+          sudo chroot "$ROOTFS" sh -c 'apt-get update && apt-get install -y --no-install-recommends /build/schema-init_*.deb'
+          want="schema-init $(dpkg-deb -f out/schema-init_*.deb Version)"
+          got=$(sudo chroot "$ROOTFS" schema-init --version)
+          echo "want: $want"; echo "got:  $got"
+          [ "$got" = "$want" ]
+          sudo chroot "$ROOTFS" apt-get remove -y schema-init
       - uses: actions/upload-artifact@v4
         with:
           name: deb-armhf
@@ -136,7 +173,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: [native, armhf]
+    needs: [native, install, armhf]
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/download-artifact@v4
