@@ -1,0 +1,6 @@
+#!/bin/sh
+# schema-init has no fstab automount: mount what local-fs.target would. no_netdev: a network mount would hang this early
+out=$(mount -a -O no_netdev 2>&1)
+[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/pi-mounts: /' >&2
+# a missing disk is no reason to fail the boot
+exit 0

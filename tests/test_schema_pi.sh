@@ -11,7 +11,7 @@ CL=$R/boot/firmware/cmdline.txt
 BAK=$CL.schema-bak
 STOCK='console=serial0,115200 console=tty1 root=PARTUUID=abcd-02 rootfstype=ext4 fsck.repair=yes rootwait quiet'
 
-KIT="pi-early udev udev-trigger dbus pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
+KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
 SVC=$R/etc/schema-init/services
 REQ=$R/etc/schema-init/pi-boot-required
 

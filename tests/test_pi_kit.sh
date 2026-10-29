@@ -61,14 +61,30 @@ PATH=$T/bin:$PATH SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$D/scripts/schema-pi-ti
 grep -q '^date' "$T/calls" && fail "timesync set a date with no source"
 grep -qx 'sleep 7' "$T/calls" || fail "timesync: no retry sleep"
 
+# mounts: the rest of fstab, best effort, network mounts left out; a failure is logged, never fatal
+cat > "$T/bin/mount" <<EOT
+#!/bin/sh
+echo "mount \$*" >> "$T/calls"
+[ -n "\${T_MOUNT_FAIL:-}" ] || exit 0
+echo "mount: /srv/usb: special device /dev/sda1 does not exist." >&2
+exit 32
+EOT
+chmod +x "$T/bin/mount"
+: > "$T/calls"
+PATH=$T/bin:$PATH sh "$D/scripts/schema-pi-mounts" > "$T/out" 2>&1 || fail "mounts exited non-zero"
+grep -qx 'mount -a -O no_netdev' "$T/calls" || fail "mounts: $(cat "$T/calls")"
+[ ! -s "$T/out" ] || fail "mounts: noisy on success: $(cat "$T/out")"
+PATH=$T/bin:$PATH T_MOUNT_FAIL=1 sh "$D/scripts/schema-pi-mounts" > "$T/out" 2>&1 || fail "mounts: failed mount exited non-zero"
+grep -qx 'pi-mounts: mount: /srv/usb: special device /dev/sda1 does not exist.' "$T/out" || fail "mounts: failure not logged: $(cat "$T/out")"
+
 # every other script parses under a strict POSIX shell
-for s in early timesync udev-trigger dbus; do
+for s in early timesync udev-trigger dbus mounts; do
     [ -f "scripts/schema-pi-$s" ] || fail "scripts/schema-pi-$s missing"
     sh -n "scripts/schema-pi-$s" || fail "schema-pi-$s syntax"
     [ -x "scripts/schema-pi-$s" ] || fail "schema-pi-$s not executable"
 done
 
-KIT="pi-early udev udev-trigger dbus pi-timesync journal-sink"
+KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink"
 for n in $KIT; do
     f=services/$n.svc.example
     [ -f "$f" ] || fail "$f missing"
@@ -88,6 +104,12 @@ deps() { sed -n 's/^dep=//p' "services/$1.svc.example" | tr '\n' ' '; }
 [ "$(deps dbus)" = "pi-early " ] || fail "dbus deps"
 [ "$(deps journal-sink)" = "pi-early " ] || fail "journal-sink deps"
 [ -z "$(deps pi-timesync)" ] || fail "pi-timesync has deps"
+[ "$(deps pi-mounts)" = "udev-trigger " ] || fail "pi-mounts deps"
+grep -qx 'oneshot=1' services/pi-mounts.svc.example && grep -qx 'needs_root=1' services/pi-mounts.svc.example ||
+    fail "pi-mounts: oneshot needs_root"
+# a private mount namespace would keep the mounts from the rest of the system
+grep -qx 'private_tmp=0' services/pi-mounts.svc.example && grep -qx 'protect_system=0' services/pi-mounts.svc.example &&
+    grep -qx 'protect_home=0' services/pi-mounts.svc.example || fail "pi-mounts: sandbox must be off"
 grep -qx 'oneshot=0' services/pi-timesync.svc.example || fail "pi-timesync must be long-running"
 grep -qx 'ready_path=/run/dbus/system_bus_socket' services/dbus.svc.example || fail "dbus ready_path"
 grep -qx 'exec=/usr/bin/schema-journal-sink' services/journal-sink.svc.example || fail "journal-sink exec"

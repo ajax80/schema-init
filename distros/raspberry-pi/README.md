@@ -43,6 +43,7 @@ The core kit:
 - `udev`: `systemd-udevd`, after `pi-early`.
 - `udev-trigger`: oneshot coldplug (`udevadm trigger`, then `settle` for up to 15 s), after `udev`. Best effort, never fails the boot.
 - `dbus`: the system bus daemon, after `pi-early`; ready when `/run/dbus/system_bus_socket` exists. It must keep the name `dbus`, because imported services that need the bus depend on that name.
+- `pi-mounts`: oneshot `mount -a -O no_netdev` after `udev-trigger`, so the rest of `/etc/fstab` (a USB disk, a bind mount) is mounted; schema-init has no fstab automount. Network mounts are left out. Best effort: a mount that fails is logged and the boot goes on, and it is not in the boot-OK list.
 - `pi-timesync`: Pis have no clock battery. It waits for a default route, then sets the clock from the HTTP `Date` header of `http://1.1.1.1/` (then `http://8.8.8.8/`), so it needs no DNS. It retries until it succeeds, then resyncs every 6 hours, and never fails the boot.
 - `journal-sink`: owns `/dev/log` and the journal socket (`schema-journal-sink`). Do not add an `rsyslog.svc`.
 - `pi-boot-firmware`, `pi-bootok`, `pi-deadline`: mount `/boot/firmware`, confirm boot OK, and reboot if it never happens (see Boot fallback).
@@ -59,7 +60,7 @@ The network service is the first enabled of NetworkManager, systemd-networkd, ne
 - ssh (`ssh` or `sshd`, whichever was imported) and the detected network service
 - `pihole-FTL` when its `.svc` exists, and `unbound` only when both `pihole-FTL.svc` and `unbound.svc` exist
 
-`pi-timesync`, `journal-sink`, `pi-boot-firmware` and every other import are not in it: they may fail without costing a reboot. `pi-bootok` and `pi-deadline` are never counted even if listed.
+`pi-mounts`, `pi-timesync`, `journal-sink`, `pi-boot-firmware` and every other import are not in it: they may fail without costing a reboot. `pi-bootok` and `pi-deadline` are never counted even if listed.
 
 You can add your own lines (a service you cannot boot without). Later `enable` runs keep your lines and comments and add any missing generated names. A line whose `.svc` is gone is dropped, with a message, because boot OK would wait on it forever and the deadline would fall back. If the file is missing (or lists no names), every service must be FUNDAMENTAL, SETTLED or PERFECT, as described under Boot fallback. A known-good boot reads the copy of the list saved in known-good.
 

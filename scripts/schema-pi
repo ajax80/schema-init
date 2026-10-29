@@ -7,7 +7,7 @@ KG=$D/known-good
 SVC=$R/etc/schema-init/services
 SHARE=$R/usr/share/schema-init
 REQ=$R/etc/schema-init/pi-boot-required
-KIT="pi-early udev udev-trigger dbus pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
+KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
 NETS="NetworkManager systemd-networkd networking dhcpcd wpa_supplicant"
 ARG=init=/usr/sbin/schema-init-pi
 BL=$(printf ' \t')
