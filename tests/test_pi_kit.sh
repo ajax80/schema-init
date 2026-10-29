@@ -58,9 +58,9 @@ PATH=$T/bin:$PATH T_G_OK=1 SCHEMA_PI_ONCE=1 SCHEMA_PI_RESYNC=0 sh "$TS" >/dev/nu
 grep -qx 'date -s Tue, 03 Nov 2026 04:05:06 GMT' "$T/calls" || fail "timesync: fallback date not set: $(cat "$T/calls")"
 grep -qx 'sleep 0' "$T/calls" || fail "timesync: no resync sleep"
 
-# primary wins when both answer
+# primary wins when both answer and agree
 : > "$T/calls"
-PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 SCHEMA_PI_ONCE=1 sh "$TS" >/dev/null 2>&1
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_G_DATE='Mon, 02 Nov 2026 03:04:35 GMT' SCHEMA_PI_ONCE=1 sh "$TS" >/dev/null 2>&1
 grep -qx 'date -s Mon, 02 Nov 2026 03:04:05 GMT' "$T/calls" || fail "timesync: primary date not set"
 grep -qx 'sleep 21600' "$T/calls" || fail "timesync: default resync interval"
 
@@ -74,11 +74,16 @@ grep -qx 'sleep 7' "$T/calls" || fail "timesync: no retry sleep"
 : > "$T/calls"
 PATH=$T/bin:$PATH T_CF_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" > "$T/out" 2>&1 || fail "timesync back1: exit"
 grep -q '^date' "$T/calls" && fail "timesync: one source set the clock back: $(cat "$T/calls")"
-grep -q 'second source does not agree' "$T/out" || fail "timesync back1: not logged: $(cat "$T/out")"
+grep -q 'behind the clock, no second source' "$T/out" || fail "timesync back1: not logged: $(cat "$T/out")"
 grep -qx 'sleep 21600' "$T/calls" || fail "timesync back1: retried every 30 s: $(cat "$T/calls")"
 : > "$T/calls"
 PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1
 grep -q '^date' "$T/calls" && fail "timesync: two disagreeing sources set the clock back: $(cat "$T/calls")"
+# both answer but disagree: neither moves the clock, even forward from boot
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1
+grep -q '^date' "$T/calls" && fail "timesync: disagreeing sources moved the clock forward: $(cat "$T/calls")"
+grep -q 'second source does not agree' "$T/out" || fail "timesync disagree: not logged: $(cat "$T/out")"
 # ...two that agree within 60 s can
 : > "$T/calls"
 PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_G_DATE='Mon, 02 Nov 2026 03:04:35 GMT' T_NOW=1793700000 SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1
@@ -108,7 +113,7 @@ EOT
 chmod +x "$T/bin/mount"
 : > "$T/calls"
 PATH=$T/bin:$PATH sh "$D/scripts/schema-pi-mounts" > "$T/out" 2>&1 || fail "mounts exited non-zero"
-grep -qx 'mount -a -O no_netdev' "$T/calls" || fail "mounts: $(cat "$T/calls")"
+grep -qx 'mount -a -O no_netdev -t nonfs,nfs4,cifs,smb3,smbfs,ceph,glusterfs,fuse.sshfs,9p,davfs' "$T/calls" || fail "mounts: $(cat "$T/calls")"
 [ ! -s "$T/out" ] || fail "mounts: noisy on success: $(cat "$T/out")"
 PATH=$T/bin:$PATH T_MOUNT_FAIL=1 sh "$D/scripts/schema-pi-mounts" > "$T/out" 2>&1 || fail "mounts: failed mount exited non-zero"
 grep -qx 'pi-mounts: mount: /srv/usb: special device /dev/sda1 does not exist.' "$T/out" || fail "mounts: failure not logged: $(cat "$T/out")"
