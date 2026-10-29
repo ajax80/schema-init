@@ -10,6 +10,8 @@ REQ=$R/etc/schema-init/pi-boot-required
 KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
 NETS="NetworkManager systemd-networkd networking dhcpcd wpa_supplicant"
 ARG=init=/usr/sbin/schema-init-pi
+IMPORT=${SCHEMA_IMPORT:-/usr/libexec/schema-init/schema-import}
+MAX_DEPS=8
 BL=$(printf ' \t')
 
 usage() {
@@ -53,11 +55,26 @@ need_root() {
     [ "$(id -u)" = 0 ] || die "must run as root"
 }
 
+# $1: services dir; $2: scratch dir for a trial run (bus overrides and state go there too).
 # stdout kept in $out for owner lookups; stderr passes through
-import_enabled() {
-    out=$(MIGRATE_ROOT=$R SCHEMA_SVC_DIR=$SVC "${SCHEMA_IMPORT:-/usr/libexec/schema-init/schema-import}" --enabled "$@")
+run_import() {
+    out=$(
+        d=$1
+        if [ -n "${2:-}" ]; then
+            export SCHEMA_BUS_OVERRIDE_DIR="$2/bus" SCHEMA_STATE_DIR="$2/state"
+        fi
+        # --enabled drops every systemd-* unit as reclaimed; an explicit unit bypasses that filter
+        case $net in
+            systemd-*) set -- "$net.service" ;;
+            *) set -- ;;
+        esac
+        MIGRATE_ROOT=$R SCHEMA_SVC_DIR=$d "$IMPORT" --enabled "$@"
+    )
     sum=$(printf '%s\n' "$out" | sed -n 's/^imported=\([0-9]*\) .* skipped=\([0-9]*\) .*/\1, skipped \2/p' | tail -n 1)
     [ -n "$sum" ] || die "schema-import failed"
+}
+
+report_import() {
     echo "schema-pi: imported $sum"
     printf '%s\n' "$out" | sed -n 's/^skip  *\([^ :]*\): \(.*\) (see [^)]*)$/skip \1: \2/p'
     # the importer leaves no marker in a plain file, so enable keeps its own list for the next run's hand-set check
@@ -65,7 +82,22 @@ import_enabled() {
         mv "$D/pi-imported.tmp" "$D/pi-imported"
     # not fatal to enable, but must not vanish
     printf '%s\n' "$out" | grep -e '^ERROR' -e '^WARN' >&2
+    # --enabled drops these as reclaimed; named, or a missing timesyncd looks like an import bug
+    rn=$(for w in "$R"/etc/systemd/system/*.target.wants/systemd-*; do
+            [ -L "$w" ] || [ -e "$w" ] || continue
+            n=${w##*/}
+            [ "$n" = "$net.service" ] && continue
+            case $n in *@*) ;; *.service | *.socket | *.timer) echo "$n" ;; esac
+        done | sort -u | awk '{ printf "%s%s", sep, $0; sep = ", " }')
+    [ -z "$rn" ] || echo "schema-pi: not imported (schema-init replaces): $rn"
     return 0
+}
+
+# an existing .svc is the user's: install only what is absent
+install_kit() {
+    for s in $KIT; do
+        [ -e "$1/$s.svc" ] || cp "$SHARE/$s.svc.example" "$1/$s.svc" || die "cannot install $s.svc"
+    done
 }
 
 # a .svc that is neither kit nor something an earlier enable imported was written by hand
@@ -104,26 +136,36 @@ detect_net() {
     return 1
 }
 
-# the .svc that runs $1: its own, or the hand set the importer found already running its binary
+# the .svc in dir $1 that runs $2: its own, or the hand set the importer found already running its binary
 resolve() {
-    if [ -f "$SVC/$1.svc" ]; then echo "$1"; return 0; fi
-    o=$(printf '%s\n' "$out" | sed -n "s/^skip  *$1\.service: its binary already runs as \([^ ]*\)\.svc .*/\1/p" | head -n 1)
-    [ -n "$o" ] && [ -f "$SVC/$o.svc" ] && echo "$o"
+    if [ -f "$1/$2.svc" ]; then echo "$2"; return 0; fi
+    o=$(printf '%s\n' "$out" | sed -n "s/^skip  *$2\.service: its binary already runs as \([^ ]*\)\.svc .*/\1/p" | head -n 1)
+    [ -n "$o" ] && [ -f "$1/$o.svc" ] && echo "$o"
 }
 
 # only deps the base lacks: a duplicate dep= still takes one of the engine's 8 slots
+dropin_deps() {
+    for d in udev-trigger dbus; do
+        grep -q "^dep=[[:blank:]]*$d[[:blank:]]*\$" "$1" || echo "dep=$d"
+    done
+}
+
+# the engine refuses a .svc with more than MAX_DEPS dep= lines: the network service would never start
+check_deps() {
+    have=$(grep -c '^[[:blank:]]*dep=' "$1/$2.svc")
+    add=$(dropin_deps "$1/$2.svc" | grep -c .)
+    [ $((have + add)) -le $MAX_DEPS ] ||
+        die "$2.svc has $have dep= lines and the pi-kit drop-in adds $add: over the engine limit of $MAX_DEPS"
+}
+
 write_dropin() {
     f=$SVC/$1.svc.d/pi-kit.conf
-    deps=
-    for d in udev-trigger dbus; do
-        grep -q "^dep=[[:blank:]]*$d[[:blank:]]*\$" "$SVC/$1.svc" || deps="${deps}dep=$d
-"
-    done
+    deps=$(dropin_deps "$SVC/$1.svc")
     if [ -z "$deps" ]; then rm -f "$f"; return 0; fi
     mkdir -p "$SVC/$1.svc.d" || die "cannot create $1.svc.d"
     # the engine ignores a group/other-writable drop-in dir
     chmod 755 "$SVC/$1.svc.d"
-    printf '%s' "$deps" > "$f" || die "cannot write $f"
+    printf '%s\n' "$deps" > "$f" || die "cannot write $f"
 }
 
 # merge: hand lines and comments stay, missing generated names are appended;
@@ -133,6 +175,8 @@ write_required() {
     if [ -f "$REQ" ]; then
         : > "$tmp" || die "cannot write $tmp"
         while IFS= read -r l || [ -n "$l" ]; do
+            # CRs stripped, as bootok does: a list edited on another OS must still match names
+            l=$(printf '%s' "$l" | tr -d '\r')
             t=$(printf '%s' "$l" | sed 's/^[[:blank:]]*//; s/[[:blank:]]*$//')
             case $t in
                 '' | '#'*) ;;
@@ -176,22 +220,29 @@ enable() {
     enabled ssh || enabled sshd || [ -f "$SVC/ssh.svc" ] || [ -f "$SVC/sshd.svc" ] ||
         die "no ssh service enabled: schema-init would boot without ssh"
 
-    mkdir -p "$SVC" "$D"
     warn_hand
-    # an existing .svc is the user's: install only what is absent
-    for s in $KIT; do
-        [ -e "$SVC/$s.svc" ] || cp "$SHARE/$s.svc.example" "$SVC/$s.svc" || die "cannot install $s.svc"
-    done
-    # --enabled drops every systemd-* unit as reclaimed; an explicit unit bypasses that filter
-    case $net in
-        systemd-*) import_enabled "$net.service" ;;
-        *) import_enabled ;;
-    esac
+    # trial: the same import into a scratch copy, so every refusal below comes before the first write
+    S=$(mktemp -d) || die "cannot create a scratch dir"
+    trap 'rm -rf "$S"' EXIT
+    mkdir "$S/svc" || die "cannot create $S/svc"
+    if [ -d "$SVC" ]; then cp -pR "$SVC/." "$S/svc/" || die "cannot copy $SVC"; fi
+    install_kit "$S/svc"
+    run_import "$S/svc" "$S"
+    netsvc=$(resolve "$S/svc" "$net") || die "$net is enabled but $net.svc missing after import"
+    check_deps "$S/svc" "$netsvc"
+    resolve "$S/svc" ssh > /dev/null || resolve "$S/svc" sshd > /dev/null ||
+        die "no ssh service after import: schema-init would boot without ssh"
 
-    # backstops: the importer may still have declined them
-    netsvc=$(resolve "$net") || die "$net is enabled but $net.svc missing after import"
+    mkdir -p "$SVC" "$D"
+    install_kit "$SVC"
+    run_import "$SVC"
+    report_import
+
+    # backstops: the trial saw the same root, but the importer may still decide otherwise
+    netsvc=$(resolve "$SVC" "$net") || die "$net is enabled but $net.svc missing after import"
+    check_deps "$SVC" "$netsvc"
     write_dropin "$netsvc"
-    ssh=$(resolve ssh) || ssh=$(resolve sshd) ||
+    ssh=$(resolve "$SVC" ssh) || ssh=$(resolve "$SVC" sshd) ||
         die "no ssh service after import: schema-init would boot without ssh"
     write_required "$ssh" "$netsvc"
 

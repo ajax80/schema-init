@@ -24,6 +24,7 @@ mkdir -p "$T/shim"
 cat > "$T/shim/schema-import" <<'SHIM'
 #!/bin/sh
 echo "$MIGRATE_ROOT|$SCHEMA_SVC_DIR|$*" >> "$SHIM_T/import.log"
+echo "${SCHEMA_BUS_OVERRIDE_DIR:-}|${SCHEMA_STATE_DIR:-}" >> "$SHIM_T/import.env"
 units=
 for a in "$@"; do
     case $a in -*) ;; *) units="$units ${a%.service}" ;; esac
@@ -69,7 +70,7 @@ wants() {
 snap() { (cd "$SVC" && find . -print | sort && find . -type f -exec cksum {} + | sort); }
 
 reset() {
-    rm -rf "$R" "$T/bin" "$T/import.log" "$T/import.decline" "$T/import.owned"
+    rm -rf "$R" "$T/bin" "$T/import.log" "$T/import.env" "$T/import.decline" "$T/import.owned"
     mkdir -p "$R/boot/firmware" "$R/lib/systemd" "$R/usr/bin" "$R/usr/libexec/schema-init" \
         "$R/usr/share/schema-init" "$R/etc/schema-init/services" "$R/var/lib"
     printf '%s\n' "$STOCK" > "$CL"
@@ -191,7 +192,15 @@ reset; rm "$CL"; refuses enable_refuses_no_cmdline
 # umask 0: the engine ignores a group/other-writable .svc.d, so the mode must not depend on it
 reset
 (umask 0; pi enable) > "$T/log" 2>&1 || fail "enable_imports: exit: $(cat "$T/log")"
-[ "$(cat "$T/import.log")" = "$R|$SVC|--enabled" ] || fail "enable_imports: call: $(cat "$T/import.log")"
+# a trial run into scratch first (every refusal before the first write), then the real one
+[ "$(wc -l < "$T/import.log")" = 2 ] || fail "enable_imports: runs: $(cat "$T/import.log")"
+[ "$(sed -n 2p "$T/import.log")" = "$R|$SVC|--enabled" ] || fail "enable_imports: call: $(cat "$T/import.log")"
+trial=$(sed -n 1p "$T/import.log")
+case $trial in "$R|$R"/*|"$R|$SVC|"*) fail "enable_imports: trial writes under the root: $trial" ;; "$R|"*"|--enabled") ;; *) fail "enable_imports: trial: $trial" ;; esac
+case $(sed -n 1p "$T/import.env") in "$R"*|*"|$R"*|"|"*|*"|") fail "enable_imports: trial bus/state dirs: $(cat "$T/import.env")" ;; esac
+[ "$(sed -n 2p "$T/import.env")" = "|" ] || fail "enable_imports: real run redirected: $(cat "$T/import.env")"
+t_dir=${trial#"$R|"}; t_dir=${t_dir%%|*}
+[ ! -e "$t_dir" ] || fail "enable_imports: scratch left behind: $t_dir"
 [ "$(cat "$SVC/ssh.svc")" = name=ssh ] || fail "enable_imports: ssh.svc"
 printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
     fail "enable_imports: drop-in: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf" 2>&1)"
@@ -233,7 +242,7 @@ echo "ok network_order"
 # networkd_explicit: --enabled drops systemd-*, so networkd must be named on the command line
 reset; wants ssh systemd-networkd
 pi enable > "$T/log" 2>&1 || fail "networkd_explicit: exit: $(cat "$T/log")"
-[ "$(cat "$T/import.log")" = "$R|$SVC|--enabled systemd-networkd.service" ] ||
+[ "$(sed -n 2p "$T/import.log")" = "$R|$SVC|--enabled systemd-networkd.service" ] ||
     fail "networkd_explicit: call: $(cat "$T/import.log")"
 [ -f "$SVC/systemd-networkd.svc.d/pi-kit.conf" ] || fail "networkd_explicit: drop-in"
 required | grep -qx systemd-networkd || fail "networkd_explicit: $(cat "$REQ")"
@@ -255,8 +264,9 @@ grep -qx 'skip NetworkManager.service: its binary already runs as networkmanager
 printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/networkmanager.svc.d/pi-kit.conf" || fail "owned: owner drop-in"
 [ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early sshd networkmanager " ] || fail "owned: $(cat "$REQ")"
 # an owner named in the skip line but absent is no stand-in
-reset; printf 'NetworkManager networkmanager\n' > "$T/import.owned"
+reset; printf 'NetworkManager networkmanager\n' > "$T/import.owned"; snap > "$T/snap1"
 pi enable > "$T/log" 2>&1 && fail "owned_missing: enabled"
+snap | cmp -s - "$T/snap1" || fail "owned_missing: \$SVC changed"
 grep -q 'NetworkManager.svc missing after import' "$T/log" || fail "owned_missing: message: $(cat "$T/log")"
 echo "ok owned"
 
@@ -269,6 +279,35 @@ printf 'name=NetworkManager\ndep=dbus\ndep=udev-trigger\n' > "$SVC/NetworkManage
 pi enable > "$T/log" 2>&1 || fail "dropin_dedup: both exit"
 [ ! -e "$SVC/NetworkManager.svc.d/pi-kit.conf" ] || fail "dropin_dedup: empty drop-in kept"
 echo "ok dropin_dedup"
+
+# dropin_max_deps: the engine refuses a .svc with more than 8 dep= lines; refuse before any write
+reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=f\ndep=g\n' > "$SVC/NetworkManager.svc"
+snap > "$T/snap1"
+pi enable > "$T/log" 2>&1; rc=$?
+[ $rc -eq 1 ] || fail "dropin_max_deps: exit $rc"
+grep -qx 'schema-pi: NetworkManager.svc has 7 dep= lines and the pi-kit drop-in adds 2: over the engine limit of 8' "$T/log" ||
+    fail "dropin_max_deps: message: $(cat "$T/log")"
+snap | cmp -s - "$T/snap1" || fail "dropin_max_deps: \$SVC changed"
+[ ! -e "$R/var/lib/schema-init" ] || fail "dropin_max_deps: state dir created"
+printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "dropin_max_deps: cmdline changed"
+reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=dbus\ndep=g\n' > "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "dropin_max_deps: exactly 8: $(cat "$T/log")"
+printf 'dep=udev-trigger\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" || fail "dropin_max_deps: 8 drop-in"
+echo "ok dropin_max_deps"
+
+# not_imported: enabled systemd-* units the importer drops are named; the networkd net service is not
+reset; wants ssh NetworkManager systemd-timesyncd systemd-resolved
+pi enable > "$T/log" 2>&1 || fail "not_imported: exit: $(cat "$T/log")"
+grep -qx 'schema-pi: not imported (schema-init replaces): systemd-resolved.service, systemd-timesyncd.service' "$T/log" ||
+    fail "not_imported: $(cat "$T/log")"
+reset; wants ssh systemd-networkd systemd-timesyncd
+pi enable > "$T/log" 2>&1 || fail "not_imported: networkd exit: $(cat "$T/log")"
+grep -qx 'schema-pi: not imported (schema-init replaces): systemd-timesyncd.service' "$T/log" ||
+    fail "not_imported: networkd: $(cat "$T/log")"
+reset
+pi enable > "$T/log" 2>&1 || fail "not_imported: none exit"
+! grep -q 'not imported' "$T/log" || fail "not_imported: printed with none: $(cat "$T/log")"
+echo "ok not_imported"
 
 # warn_lines: importer WARN and ERROR reach stderr
 reset; printf 'WARN    foo.service: odd\nERROR   bar.service: broken\n' >> "$T/import.extra"
@@ -296,9 +335,12 @@ for c in no_ssh no_net no_net_unit; do
 done
 echo "ok refused_untouched"
 
-# no_ssh_after_import: enabled, but the importer declined it
-reset; echo ssh > "$T/import.decline"
+# no_ssh_after_import: enabled, but the importer declined it; the trial run refuses before any write
+reset; echo ssh > "$T/import.decline"; echo mine > "$SVC/pi-bootok.svc"; snap > "$T/snap1"
 pi enable > "$T/log" 2>&1; rc=$?
+snap | cmp -s - "$T/snap1" || fail "no_ssh: \$SVC changed"
+[ ! -e "$R/var/lib/schema-init" ] || fail "no_ssh: state dir created"
+[ "$(wc -l < "$T/import.log")" = 1 ] || fail "no_ssh: real import ran"
 [ $rc -eq 1 ] || fail "no_ssh: exit $rc"
 grep -qx 'schema-pi: no ssh service after import: schema-init would boot without ssh' "$T/log" ||
     fail "no_ssh: message: $(cat "$T/log")"
@@ -312,8 +354,10 @@ reset; wants ssh
 pi enable > "$T/log" 2>&1; rc=$?
 [ $rc -eq 1 ] || fail "no_network: exit $rc"
 grep -q 'no enabled network service' "$T/log" || fail "no_network: message: $(cat "$T/log")"
-reset; echo NetworkManager > "$T/import.decline"
+reset; echo NetworkManager > "$T/import.decline"; snap > "$T/snap1"
 pi enable > "$T/log" 2>&1; rc=$?
+snap | cmp -s - "$T/snap1" || fail "no_network_svc: \$SVC changed"
+[ ! -e "$R/var/lib/schema-init" ] || fail "no_network_svc: state dir created"
 [ $rc -eq 1 ] || fail "no_network_svc: exit $rc"
 grep -q 'NetworkManager.svc missing after import' "$T/log" || fail "no_network_svc: message: $(cat "$T/log")"
 printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "no_network_svc: cmdline changed"
@@ -355,6 +399,17 @@ wants ssh wpa_supplicant
 pi enable > "$T/log" 2>&1 || fail "required_merge: third: $(cat "$T/log")"
 grep -qx NetworkManager "$REQ" && grep -qx wpa_supplicant "$REQ" || fail "required_merge: removed or not added: $(cat "$REQ")"
 echo "ok required_merge"
+
+# required_crlf: a list edited on another OS keeps its names and gets no duplicates
+reset; pi enable > "$T/log" 2>&1 || fail "required_crlf: first"
+echo name=my-thing > "$SVC/my-thing.svc"
+printf '# mine\r\nudev\r\nudev-trigger\r\ndbus\r\npi-early\r\nssh\r\nNetworkManager\r\nmy-thing\r\n' > "$REQ"
+pi enable > "$T/log" 2>&1 || fail "required_crlf: second: $(cat "$T/log")"
+! grep -q dropped "$T/log" || fail "required_crlf: dropped: $(cat "$T/log")"
+[ "$(tr -d '\r' < "$REQ" | grep -cx ssh)" = 1 ] && [ "$(tr -d '\r' < "$REQ" | grep -cx udev)" = 1 ] ||
+    fail "required_crlf: duplicated: $(cat -A "$REQ")"
+tr -d '\r' < "$REQ" | grep -qx my-thing || fail "required_crlf: hand line lost"
+echo "ok required_crlf"
 
 # required_prune: a stale name with no .svc is dropped and reported; hand names with a .svc and comments stay
 reset; pi enable > "$T/log" 2>&1 || fail "required_prune: first"
