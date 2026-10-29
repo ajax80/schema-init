@@ -991,8 +991,9 @@ def runtime_dir_lines(svc, name):
             x = _specifiers([d], name)[0]
         except Skip:
             x = None
-        # dir:symlink (systemd 254) and anything leaving base are not translated
-        if not x or x.startswith("/") or ":" in x or ".." in x.split("/"):
+        # dir:symlink (systemd 254) is not translated, and nothing nested: a root install -d -o
+        # through a parent the user owns follows a symlink the user put there
+        if not x or "/" in x or ":" in x or x in (".", ".."):
             notes.append("dropped RuntimeDirectory=%s" % d)
             continue
         out.append("exec_pre=%s/usr/bin/install -d -m %s%s %s"

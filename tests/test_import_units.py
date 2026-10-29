@@ -952,10 +952,17 @@ check("primary gid with no group name -> user name", "-o orph -g orph /run/r\n" 
 os.environ.pop("MIGRATE_ROOT")
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nGroup=bar\nRuntimeDirectory=r\nRuntimeDirectoryMode=750\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= + Group= -> -g group", "exec_pre=+/usr/bin/install -d -m 750 -o foo -g bar /run/r\n" in _rt)
-_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a b/c\nRuntimeDirectory=%N\nExecStart=/bin/r\n"))
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a b\nRuntimeDirectory=%N\nExecStart=/bin/r\n"))
 check("several RuntimeDirectory= entries, one line each, %N expanded",
-      "exec_pre=+/usr/bin/install -d -m 0755 /run/a\nexec_pre=+/usr/bin/install -d -m 0755 /run/b/c\n"
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/a\nexec_pre=+/usr/bin/install -d -m 0755 /run/b\n"
       "exec_pre=+/usr/bin/install -d -m 0755 /run/r\n" in _rt)
+# root install -d -o under a parent the user owns follows a symlink the user planted there
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=a/b ok\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= nested entry dropped and noted",
+      "/run/a" not in _rt and _rt.count("install -d") == 1 and "-o foo -g foo /run/ok\n" in _rt
+      and "# schema-import:" in _rt and "dropped RuntimeDirectory=a/b" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=. ..\nExecStart=/bin/r\n"))
+check("RuntimeDirectory=. and .. dropped (would chown /run or /)", "install -d" not in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a\nRuntimeDirectory=\nRuntimeDirectory=b\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= empty resets", "/run/a" not in _rt and "/run/b\n" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=../x /abs ok %Z\nExecStart=/bin/r\n"))
