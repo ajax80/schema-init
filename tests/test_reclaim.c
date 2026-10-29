@@ -15,6 +15,7 @@ int main(void) {
 
     /* half exceeds cap -> clamp to cap */
     assert(reclaim_target(400L * 1024 * 1024, CAP) == CAP);
+    assert(reclaim_target(3LL * 1024 * 1024 * 1024, CAP) == CAP);   /* > 32-bit LONG_MAX */
 
     printf("all reclaim_target tests passed\n");
     return 0;

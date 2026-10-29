@@ -171,7 +171,8 @@ static inline int run_builtin_bit(const char *sysroot, const char *devpath,
         return -1;
     }
     case UB_USB:   tmp.n = 0; { int r = usb_id_build(sysroot, devpath, &tmp);    ub_absorb(ev, &tmp); return r; }
-    case UB_INPUT: tmp.n = 0; { int r = input_id_build(sysroot, devpath, &tmp);  ub_absorb(ev, &tmp); return r; }
+    case UB_INPUT: tmp.n = 0; { static int wb; if (!wb) wb = iid_kernel_word_bits();
+                   int r = input_id_build(sysroot, devpath, (unsigned)wb, &tmp); ub_absorb(ev, &tmp); return r; }
     case UB_NET:   tmp.n = 0; { int r = net_id_build(sysroot, devpath, &tmp);    ub_absorb(ev, &tmp); return r; }
     case UB_NETLINK: tmp.n = 0; { int r = net_setup_link_build(sysroot, devpath, ev, &tmp); ub_absorb(ev, &tmp); return r; }
     case UB_V4L:   tmp.n = 0; { int r = v4l_id_build(sysroot, devpath, devnode, &tmp);   ub_absorb(ev, &tmp); return r > 0 ? 0 : -1; }

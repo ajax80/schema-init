@@ -1,5 +1,6 @@
 *.o
 schema-init
+schema-init-pi
 schema-user
 schema-ctl
 schema-journal-sink
@@ -34,3 +35,4 @@ tests/dbus-corpus/*
 !tests/dbus-corpus/sample.jsonl
 /schema-analyze
 /analyze/target/
+debian/changelog

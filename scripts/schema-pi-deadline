@@ -1,0 +1,27 @@
+#!/bin/sh
+R=${SCHEMA_PI_ROOT:-}
+# run from known-good, the known-good schema-ctl must drive the known-good engine
+CTL=schema-ctl
+[ -x "${0%/*}/schema-ctl" ] && CTL=${0%/*}/schema-ctl
+CTL=${SCHEMA_CTL:-$CTL}
+DL=${SCHEMA_PI_DEADLINE:-300}
+RETRY=${SCHEMA_PI_REBOOT_RETRY:-60}
+
+# only the wrapper turns a reboot into a fallback; booted any other way a reboot just loops.
+# Never exit, though: oneshot=0 would restart us.
+case " $(cat "$R/proc/cmdline" 2>/dev/null) " in
+    *" init=/usr/sbin/schema-init-pi "*) ;;
+    *) while :; do sleep 86400; done ;;
+esac
+
+sleep "$DL"
+if [ ! -e "$R/run/schema-init/pi-boot-ok" ]; then
+    echo "pi-deadline: no boot-ok after ${DL}s, rebooting"
+    # a stuck Pi stays stuck if one failed reboot ends in the idle sleep below
+    until "$CTL" reboot; do
+        echo "pi-deadline: reboot failed, retrying in ${RETRY}s"
+        sleep "$RETRY"
+    done
+fi
+# oneshot=0: exiting would make the engine restart us and re-arm the deadline
+while :; do sleep 86400; done

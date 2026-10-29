@@ -11,7 +11,7 @@ cat > /tmp/inputid_driver.c <<'EOF'
 int main(int argc, char **argv) {
     if (argc < 2) return 2;
     struct uevent ev;
-    if (input_id_build("/sys", argv[1], &ev) != 0) return 0;
+    if (input_id_build("/sys", argv[1], (unsigned)iid_kernel_word_bits(), &ev) != 0) return 0;
     for (int i = 0; i < ev.n; i++) printf("%s=%s\n", ev.key[i], ev.val[i]);
     return 0;
 }

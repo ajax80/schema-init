@@ -25,6 +25,7 @@ int main(void) {
     /* 90% of the hard cap, in bytes */
     assert(mem_high_bytes(100) == 94371840L);          /* 100*MiB*9/10 */
     assert(mem_high_bytes(1024) == 966367641L);        /* 1 GiB*9/10, integer trunc, no overflow */
+    assert(mem_high_bytes(4096) == 3865470566LL);      /* 4 GiB*9/10: > 32-bit LONG_MAX */
 
     printf("all cgroup_tiering tests passed\n");
     return 0;

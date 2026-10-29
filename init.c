@@ -559,14 +559,14 @@ static void set_cgroup_cpu_limit(service_t *svc, const char *limit) {
  * memory.current read) — safe to run inline in PID 1. */
 static long reclaim_read_target(const service_t *svc) {
     char path[320];
-    long cur;
+    long long cur;   /* bytes: > LONG_MAX on 32-bit once a cgroup holds 2 GiB */
     FILE *f;
     if (!svc->cgroup_path[0]) return 0;
     if (svc->priority == PRIO_CRITICAL) return 0;
     snprintf(path, sizeof(path), "%s/memory.current", svc->cgroup_path);
     f = fopen(path, "r");
     if (!f) return 0;
-    if (fscanf(f, "%ld", &cur) != 1) { fclose(f); return 0; }
+    if (fscanf(f, "%lld", &cur) != 1) { fclose(f); return 0; }
     fclose(f);
     return reclaim_target(cur, RECLAIM_CAP);
 }
@@ -1625,6 +1625,9 @@ int main(int argc, char **argv) {
      * The kernel hands PID 1 no PATH either; sh falls back to a built-in
      * one, but Go and execvp-less code can't find helpers without it. */
     if (getpid() == 1) {
+        /* Reload and re-exec read the global, so set it, not just the local. */
+        engine_paths.svc_dir = svc_dir_from_env(engine_paths.svc_dir);
+        svc_dir = engine_paths.svc_dir;
         umask(022);
         setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", 0);
         /* No console (or a container) leaves 0-2 closed; the next socket or
@@ -1660,7 +1663,8 @@ int main(int argc, char **argv) {
          * Those tokens are not ours: letting a stray one become svc_dir makes
          * services_load() open a bogus directory and silently start zero
          * services. Only a hand-run invocation may name a services dir; as
-         * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir. */
+         * PID 1, ignore all positional arguments and keep the built-in engine_paths.svc_dir.
+         * (SCHEMA_SVC_DIR is honoured above: env reaches PID 1 only via a deliberate KEY=val on the cmdline or from the Pi wrapper, and is validated as an absolute dir.) */
         if (getpid() == 1)
             continue;
         if (argv[i][0] == '-') {
@@ -1825,6 +1829,18 @@ int main(int argc, char **argv) {
         fuse_abort_all();
         bounded_sync(10);
         shut_flush_log();        /* the sweep is the last thing that can lose it */
+        /* stdio inherited from the Pi wrapper (boot.log) pins / writable */
+        for (int sfd = 0; sfd <= 2; sfd++) {
+            struct stat sst;
+            if (fstat(sfd, &sst) != 0 || !S_ISREG(sst.st_mode)) continue;
+            if (sfd == 1) fflush(stdout);
+            if (sfd == 2) fflush(stderr);
+            int cfd = open("/dev/console", O_RDWR | O_NOCTTY | O_NONBLOCK);
+            if (cfd < 0) cfd = open("/dev/null", O_RDWR);
+            if (cfd < 0) continue;
+            dup2(cfd, sfd);
+            if (cfd > 2) close(cfd);
+        }
         remount_all_ro();
         if (engine_do_reboot) {
             shut_write("[schema-init] PID 1 reboot\n");

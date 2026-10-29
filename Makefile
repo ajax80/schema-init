@@ -18,7 +18,7 @@ DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
 DBUS_LIBS   := $(shell pkg-config --libs dbus-1)
 
 RELDIR ?= release
-BINS   ?= schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl
+BINS   ?= schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl schema-init-pi
 
 PREFIX     ?= /usr
 BINDIR     ?= $(PREFIX)/bin
@@ -239,8 +239,11 @@ install-analyze:
 	install -D -m 0755 schema-analyze $(DESTDIR)$(BINDIR)/schema-analyze
 	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
 
+schema-init-pi: schema-init-pi.c pi_bootguard.h
+	$(CC) $(CFLAGS) -static -o $@ $<
+
 clean:
-	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-systemctl udev-parity libatomic_asneeded.a
+	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-systemctl schema-init-pi udev-parity libatomic_asneeded.a
 	rm -rf $(RELDIR)
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
@@ -253,7 +256,7 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test: schema-coredump schema-recorder schema-ctl schema-board schema-user schema-systemctl $(OBJS)
+test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board schema-user schema-systemctl $(OBJS)
 	sh tests/check_tu_statics.sh init.o engine.o
 	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o /tmp/schema-test-recorder-scenario -lrt && /tmp/schema-test-recorder-scenario
@@ -263,6 +266,13 @@ test: schema-coredump schema-recorder schema-ctl schema-board schema-user schema
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
+	$(CC) $(CFLAGS) tests/test_pi_bootguard.c -o /tmp/schema-test-pi-bootguard && /tmp/schema-test-pi-bootguard
+	$(CC) $(CFLAGS) tests/test_svc_dir_env.c -o /tmp/schema-test-svc-dir-env && /tmp/schema-test-svc-dir-env
+	sh tests/test_pi_wrapper.sh
+	sh tests/test_pi_bootok.sh
+	sh tests/test_schema_pi.sh
+	sh tests/test_deb_trigger.sh
+	sh tests/test_deb_version.sh
 	$(CC) $(CFLAGS) tests/test_ready_timer.c -o /tmp/schema-test-ready-timer && /tmp/schema-test-ready-timer
 	$(CC) $(CFLAGS) tests/test_runtime_copy.c -o /tmp/schema-test-runtime-copy && /tmp/schema-test-runtime-copy
 	$(CC) $(CFLAGS) tests/test_reexec_state.c -o /tmp/schema-test-reexec-state && /tmp/schema-test-reexec-state

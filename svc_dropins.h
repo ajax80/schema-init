@@ -12,6 +12,15 @@
 #define SVC_DROPIN_MAX  32
 #define SVC_DROPIN_PATH 512
 
+/* Opt-in for the Pi wrapper's known-good boot; anything not an absolute existing dir falls back. */
+static inline const char *svc_dir_from_env(const char *builtin) {
+    const char *e = getenv("SCHEMA_SVC_DIR");
+    struct stat st;
+    if (e && e[0] == '/' && stat(e, &st) == 0 && S_ISDIR(st.st_mode))
+        return e;
+    return builtin;
+}
+
 /* Locale-free: PID 1 and schema-ctl cat must agree on the order. */
 static inline int svc_dropin_cmp(const struct dirent **a, const struct dirent **b) {
     return strcmp((*a)->d_name, (*b)->d_name);

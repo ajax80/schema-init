@@ -1,0 +1,31 @@
+#!/usr/bin/make -f
+BINS = schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder
+
+include /usr/share/dpkg/pkg-info.mk
+
+%:
+	dh $@
+
+# Not `make install`: it writes into /usr/local. SCHEMA_VERSION makes --version
+# report the package version instead of git describe.
+override_dh_auto_build:
+	$(MAKE) SCHEMA_VERSION=$(DEB_VERSION) BINS="$(BINS)" all schema-init-pi
+	if command -v cargo >/dev/null 2>&1; then $(MAKE) analyze || true; fi
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+
+override_dh_auto_clean:
+	$(MAKE) clean
+
+override_dh_install:
+	dh_install
+	@if [ -n "$$(find debian/schema-init/usr/local 2>/dev/null)" ]; then echo "packaged files under /usr/local" >&2; exit 1; fi
+
+# Only schema-init_*.deb is published; no -dbgsym package. dh_dwz off too, or its
+# .dwz multifile lands in the main package once there is no dbgsym to hold it.
+override_dh_dwz:
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym
