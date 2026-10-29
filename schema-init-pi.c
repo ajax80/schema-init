@@ -28,14 +28,15 @@ static void mkdirs(const char *rel) {
     mkdir(buf, 0755);
 }
 
-static void write_all(int fd, const char *b, size_t n) {
+static int write_all(int fd, const char *b, size_t n) {
     while (n) {
         ssize_t w = write(fd, b, n);
         if (w < 0 && errno == EINTR) continue;
-        if (w <= 0) return;
+        if (w <= 0) return -1;
         b += w;
         n -= (size_t)w;
     }
+    return 0;
 }
 
 /* Streamed, not mmap'd: the Pi may be short on memory this early. */
@@ -83,20 +84,23 @@ static int dir_one_way(const char *a, const char *b, int depth) {
     return diff;
 }
 
-static void write_state(const struct pi_state *st) {
+/* A half-written state must never replace a whole one: the rename only follows a durable write. */
+static int write_state(const struct pi_state *st) {
     char dir[PATH_MAX], tmp[PATH_MAX], fin[PATH_MAX], buf[64];
     P(dir, "/var/lib/schema-init");
     P(tmp, "/var/lib/schema-init/pi-boot.tmp");
     P(fin, "/var/lib/schema-init/pi-boot");
     int n = pi_state_format(st, buf, sizeof buf);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0 || n < 0) return;
-    write_all(fd, buf, (size_t)n);
-    fsync(fd);
-    close(fd);
-    if (rename(tmp, fin) != 0) return;
+    if (fd < 0) return -1;
+    int bad = n < 0 || write_all(fd, buf, (size_t)n) != 0 || fsync(fd) != 0;
+    if (close(fd) != 0 || bad || rename(tmp, fin) != 0) {
+        unlink(tmp);
+        return -1;
+    }
     int dfd = open(dir, O_RDONLY | O_DIRECTORY);
     if (dfd >= 0) { fsync(dfd); close(dfd); }
+    return 0;
 }
 
 static void log_fallback(enum pi_target t, int attempts) {
@@ -136,9 +140,13 @@ static void exec_target(enum pi_target t, struct pi_state *st, int pid1, char **
         execv(path, argv);
         log_fallback(PI_KNOWN_GOOD, st->attempts);
         st->last_target = PI_KNOWN_GOOD;
-        write_state(st);
-        kmsg("<3>schema-init-pi: exec current failed, trying known-good\n");
-        t = PI_KNOWN_GOOD;
+        if (write_state(st) == 0) {
+            kmsg("<3>schema-init-pi: exec current failed, trying known-good\n");
+            t = PI_KNOWN_GOOD;
+        } else {
+            kmsg("<3>schema-init-pi: exec current failed and cannot save boot state, booting systemd\n");
+            t = PI_SYSTEMD;
+        }
     }
     if (t == PI_KNOWN_GOOD) {
         char svc[PATH_MAX];
@@ -181,9 +189,10 @@ int main(int argc, char **argv) {
     struct statvfs sv0;
     root_was_ro = pid1 && statvfs("/", &sv0) == 0 && (sv0.f_flag & ST_RDONLY);
     if (pid1 && mount("", "/", NULL, MS_REMOUNT, NULL) != 0) {
-        kmsg("<3>schema-init-pi: remount / rw failed, booting current without state\n");
-        struct pi_state none = { 0, PI_CURRENT };
-        exec_target(PI_CURRENT, &none, pid1, argv);
+        /* no counter means the deadline reboot loop never ends; systemd has no deadline */
+        kmsg("<3>schema-init-pi: remount / rw failed, cannot save boot state, booting systemd\n");
+        struct pi_state none = { 0, PI_SYSTEMD };
+        exec_target(PI_SYSTEMD, &none, pid1, argv);
         for (;;) pause();
     }
 
@@ -213,7 +222,10 @@ int main(int argc, char **argv) {
     }
     int before = st.attempts;
     enum pi_target t = pi_decide(&st, differs);
-    write_state(&st);
+    if (write_state(&st) != 0) {
+        kmsg("<3>schema-init-pi: cannot save boot state, booting systemd\n");
+        t = PI_SYSTEMD;
+    }
     if (t != PI_CURRENT) log_fallback(t, before);
 
     exec_target(t, &st, pid1, argv);
