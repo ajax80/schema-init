@@ -1394,9 +1394,10 @@ def _socket_used(name, sections, queued):
     sock = name + ".socket"
     if sock in queued or _unit_enabled(sock, _unit_dirs()):
         return True
-    u = sections.get("Unit", [])
-    return any(sock in v.split() for k in ("Requires", "Wants", "BindsTo", "Requisite")
-               for v in _get_all(u, k))
+    # Sockets= is the service claiming it; Also= enables it alongside
+    keys = [("Unit", k) for k in ("Requires", "Wants", "BindsTo", "Requisite")] + \
+        [("Service", "Sockets"), ("Install", "Also")]
+    return any(sock in v.split() for sec, k in keys for v in _get_all(sections.get(sec, []), k))
 
 
 _RECLAIMED = ("systemd-", "dbus", "NetworkManager-wait-online")
