@@ -1,0 +1,23 @@
+#!/bin/sh
+# No RTC, and systemd-timesyncd is reclaimed by the importer: take the time from an HTTP Date header by IP, so the clock needs no DNS (unbound's DNSSEC needs a sane clock first).
+CURL=${SCHEMA_PI_CURL:-curl}
+DATE=${SCHEMA_PI_DATE:-date}
+while :; do
+    until [ -n "$(ip route show default 2>/dev/null)" ]; do sleep 2; done
+    ok=
+    for addr in 1.1.1.1 8.8.8.8; do
+        d=$($CURL -sI --max-time 10 "http://$addr/" | awk -F': ' 'tolower($1) == "date" { print $2 }' | tr -d '\r')
+        if [ -n "$d" ] && $DATE -s "$d" >/dev/null; then
+            echo "timesync: $d from $addr"
+            ok=1
+            break
+        fi
+    done
+    if [ -n "$ok" ]; then
+        sleep "${SCHEMA_PI_RESYNC:-21600}"
+    else
+        echo "timesync: no time source reached"
+        sleep "${SCHEMA_PI_RETRY:-30}"
+    fi
+    [ -z "${SCHEMA_PI_ONCE:-}" ] || exit 0
+done

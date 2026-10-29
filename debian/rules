@@ -21,6 +21,7 @@ override_dh_auto_clean:
 
 override_dh_install:
 	dh_install
+	install -D -m 0755 distros/fedora-installer/migrate/schema-import.py debian/schema-init/usr/libexec/schema-init/schema-import
 	@if [ -n "$$(find debian/schema-init/usr/local 2>/dev/null)" ]; then echo "packaged files under /usr/local" >&2; exit 1; fi
 
 # Only schema-init_*.deb is published; no -dbgsym package. dh_dwz off too, or its

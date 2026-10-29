@@ -270,6 +270,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_svc_dir_env.c -o /tmp/schema-test-svc-dir-env && /tmp/schema-test-svc-dir-env
 	sh tests/test_pi_wrapper.sh
 	sh tests/test_pi_bootok.sh
+	sh tests/test_pi_kit.sh
 	sh tests/test_schema_pi.sh
 	sh tests/test_deb_trigger.sh
 	sh tests/test_deb_version.sh
