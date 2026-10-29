@@ -21,8 +21,10 @@ run() {
 # prerm: removing the package must not leave cmdline.txt pointing at a deleted init
 prerm() {
     rm -f "$T/pi.log"
-    PATH=$T/bin:$PATH sh "$PRERM" "$@" > "$T/out" 2>&1
+    PATH=$T/bin:$PATH SCHEMA_PI_MOUNT_FIRMWARE=$T/bin/mount-fw sh "$PRERM" "$@" > "$T/out" 2>&1
 }
+printf '#!/bin/sh\necho mount >> "%s/pi.log"\n' "$T" > "$T/bin/mount-fw"
+chmod +x "$T/bin/mount-fw"
 pi_shim() {
     printf '#!/bin/sh\necho "$*" >> "%s/pi.log"\n[ "$1" = status ] && echo "enabled: %s"\n[ "$1" = disable ] && exit %s\nexit 0\n' "$T" "$1" "$2" > "$T/bin/schema-pi"
     chmod +x "$T/bin/schema-pi"
@@ -30,6 +32,7 @@ pi_shim() {
 pi_shim yes 0
 prerm remove || fail "prerm remove exit"
 grep -qx disable "$T/pi.log" || fail "prerm remove did not disable: $(cat "$T/pi.log" 2>/dev/null)"
+[ "$(head -n 1 "$T/pi.log")" = mount ] || fail "prerm must mount /boot/firmware before status: $(cat "$T/pi.log")"
 prerm upgrade 0.4.20-1 || fail "prerm upgrade exit"
 ! grep -q disable "$T/pi.log" 2>/dev/null || fail "prerm upgrade disabled"
 pi_shim no 0
