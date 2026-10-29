@@ -30,9 +30,14 @@ case "\$*" in
 *8.8.8.8*) [ -n "\${T_G_OK:-}" ] || exit 7; printf 'HTTP/1.1 302\r\nDate: Tue, 03 Nov 2026 04:05:06 GMT\r\n\r\n' ;;
 esac
 EOT
+# date: -s is logged, -d parses with the real date, +%s is the clock (T_NOW, default the epoch: a Pi with no RTC)
 cat > "$T/bin/date" <<EOT
 #!/bin/sh
-echo "date \$*" >> "$T/calls"
+case "\$1" in
+-s) echo "date \$*" >> "$T/calls" ;;
+-d) exec $(command -v date) -u "\$@" ;;
++%s) echo "\${T_NOW:-0}" ;;
+esac
 EOT
 chmod +x "$T/bin/"*
 
@@ -43,23 +48,48 @@ grep -qx 'ip link set lo up' "$T/calls" || fail "early: no lo up"
 grep -qx 'hostname pidev' "$T/calls" || fail "early: hostname"
 grep -qx 'swapon -a' "$T/calls" || fail "early: swapon"
 
+# timesync runs from a copy: its floor falls back to its own mtime, which a checkout sets to now
+TS=$T/schema-pi-timesync
+cp "$D/scripts/schema-pi-timesync" "$TS"; touch -d 2020-01-01 "$TS"
+
 # timesync: 1.1.1.1 down, 8.8.8.8 answers
 : > "$T/calls"
-PATH=$T/bin:$PATH T_G_OK=1 SCHEMA_PI_ONCE=1 SCHEMA_PI_RESYNC=0 sh "$D/scripts/schema-pi-timesync" >/dev/null 2>&1 || fail "timesync (fallback) exited non-zero"
+PATH=$T/bin:$PATH T_G_OK=1 SCHEMA_PI_ONCE=1 SCHEMA_PI_RESYNC=0 sh "$TS" >/dev/null 2>&1 || fail "timesync (fallback) exited non-zero"
 grep -qx 'date -s Tue, 03 Nov 2026 04:05:06 GMT' "$T/calls" || fail "timesync: fallback date not set: $(cat "$T/calls")"
 grep -qx 'sleep 0' "$T/calls" || fail "timesync: no resync sleep"
 
 # primary wins when both answer
 : > "$T/calls"
-PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 SCHEMA_PI_ONCE=1 sh "$D/scripts/schema-pi-timesync" >/dev/null 2>&1
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 SCHEMA_PI_ONCE=1 sh "$TS" >/dev/null 2>&1
 grep -qx 'date -s Mon, 02 Nov 2026 03:04:05 GMT' "$T/calls" || fail "timesync: primary date not set"
 grep -qx 'sleep 21600' "$T/calls" || fail "timesync: default resync interval"
 
 # both down: retry sleep, no date, exit 0
 : > "$T/calls"
-PATH=$T/bin:$PATH SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$D/scripts/schema-pi-timesync" >/dev/null 2>&1 || fail "timesync (down) exited non-zero"
+PATH=$T/bin:$PATH SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" >/dev/null 2>&1 || fail "timesync (down) exited non-zero"
 grep -q '^date' "$T/calls" && fail "timesync set a date with no source"
 grep -qx 'sleep 7' "$T/calls" || fail "timesync: no retry sleep"
+
+# timesync floor: never set the clock before the current clock
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" > "$T/out" 2>&1 || fail "timesync floor: exit"
+grep -q '^date' "$T/calls" && fail "timesync floor: set the clock back: $(cat "$T/calls")"
+grep -q '^timesync: ignored Mon, 02 Nov 2026 03:04:05 GMT from 1.1.1.1' "$T/out" || fail "timesync floor: not logged: $(cat "$T/out")"
+# an answer below the floor is not an outage: no 30 s retry loop on a clock a second ahead
+grep -qx 'sleep 21600' "$T/calls" || fail "timesync floor: retried: $(cat "$T/calls")"
+# ...nor before the build epoch baked in at package build
+sed 's/^BUILD_EPOCH=.*/BUILD_EPOCH=1793620000/' "$TS" > "$T/ts-baked"
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 SCHEMA_PI_ONCE=1 sh "$T/ts-baked" > "$T/out" 2>&1 || fail "timesync baked: exit"
+[ "$(grep '^date' "$T/calls")" = 'date -s Tue, 03 Nov 2026 04:05:06 GMT' ] || fail "timesync baked: $(cat "$T/calls") $(cat "$T/out")"
+# ...nor, unbaked, before the script's own mtime
+touch -d '2026-11-02 12:00 UTC' "$TS"
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1 || fail "timesync mtime: exit"
+[ "$(grep '^date' "$T/calls")" = 'date -s Tue, 03 Nov 2026 04:05:06 GMT' ] || fail "timesync mtime: $(cat "$T/calls") $(cat "$T/out")"
+touch -d 2020-01-01 "$TS"
+grep -q '^BUILD_EPOCH=$' scripts/schema-pi-timesync || fail "timesync: BUILD_EPOCH must ship unbaked in the source"
+grep -q 's/^BUILD_EPOCH=.*/BUILD_EPOCH=$(SOURCE_DATE_EPOCH)/' debian/rules || fail "debian/rules does not bake BUILD_EPOCH"
 
 # mounts: the rest of fstab, best effort, network mounts left out; a failure is logged, never fatal
 cat > "$T/bin/mount" <<EOT

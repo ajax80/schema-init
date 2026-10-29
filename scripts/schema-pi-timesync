@@ -2,12 +2,31 @@
 # No RTC, and systemd-timesyncd is reclaimed by the importer: take the time from an HTTP Date header by IP, so the clock needs no DNS (unbound's DNSSEC needs a sane clock first).
 CURL=${SCHEMA_PI_CURL:-curl}
 DATE=${SCHEMA_PI_DATE:-date}
+# baked from SOURCE_DATE_EPOCH by debian/rules; empty in an unbuilt copy, which uses its own mtime
+BUILD_EPOCH=
+
+# the Date header is unauthenticated: never let it set the clock back before the build or the current clock
+floor() {
+    b=${BUILD_EPOCH:-$(stat -c %Y "$0" 2>/dev/null)}
+    n=$($DATE +%s)
+    if [ "${b:-0}" -gt "${n:-0}" ]; then echo "$b"; else echo "${n:-0}"; fi
+}
+
 while :; do
     until [ -n "$(ip route show default 2>/dev/null)" ]; do sleep 2; done
     ok=
     for addr in 1.1.1.1 8.8.8.8; do
         d=$($CURL -sI --max-time 10 "http://$addr/" | awk -F': ' 'tolower($1) == "date" { print $2 }' | tr -d '\r')
-        if [ -n "$d" ] && $DATE -s "$d" >/dev/null; then
+        [ -n "$d" ] || continue
+        t=$($DATE -d "$d" +%s 2>/dev/null)
+        f=$(floor)
+        if [ -z "$t" ] || [ "$t" -lt "$f" ]; then
+            echo "timesync: ignored $d from $addr (before $f)"
+            # an answer is no outage: a clock a second ahead must not retry every 30 s
+            ok=0
+            continue
+        fi
+        if $DATE -s "$d" >/dev/null; then
             echo "timesync: $d from $addr"
             ok=1
             break
