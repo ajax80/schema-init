@@ -159,4 +159,12 @@ grep -q '^Recommends:.*libglib2.0-bin' debian/control || fail "gdbus (libglib2.0
 grep -q '^Recommends:.*curl' debian/control || fail "curl not recommended"
 grep -qx 'usr/libexec/schema-init/schema-import usr/bin/schema-import' debian/schema-init.links || fail "schema-import symlink"
 
+# the Pi kit examples are the deb's; the Fedora RPM's services dir must not carry them
+line=$(make -s -n install DESTDIR=/nonexistent 2>/dev/null | grep 'schema-init/services/$' | grep '^install -m 0644 ')
+[ -n "$line" ] || fail "make install: services line not found"
+for f in pi-early pi-mounts pi-timesync pi-boot-firmware pi-bootok pi-deadline udev udev-trigger dbus; do
+    case " $line " in *" services/$f.svc.example "*) fail "make install ships $f.svc.example to the RPM" ;; esac
+done
+case " $line " in *" services/journal-sink.svc.example "*) ;; *) fail "make install dropped a shared example: $line" ;; esac
+
 echo "test_pi_kit: PASS"

@@ -94,12 +94,16 @@ $(OBJS) schema-user.o: $(CORE_HDRS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# the Raspberry Pi kit ships in the deb (debian/schema-init.install), not the Fedora RPM
+PI_KIT_EXAMPLES = $(wildcard services/pi-*.svc.example) services/udev.svc.example services/udev-trigger.svc.example \
+	services/dbus.svc.example
+
 install: all
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(BINS) $(DESTDIR)$(BINDIR)/
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
 	install -d $(DESTDIR)$(DATADIR)/schema-init/services
-	install -m 0644 services/* $(DESTDIR)$(DATADIR)/schema-init/services/
+	install -m 0644 $(filter-out $(PI_KIT_EXAMPLES),$(wildcard services/*)) $(DESTDIR)$(DATADIR)/schema-init/services/
 	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
 	[ -n "$(DESTDIR)" ] || [ -e $(SYSCONFDIR)/schema-init/services/logrotate.svc ] || \
