@@ -27,7 +27,7 @@ cat > "$T/bin/curl" <<EOT
 #!/bin/sh
 case "\$*" in
 *1.1.1.1*) [ -n "\${T_CF_OK:-}" ] || exit 7; printf 'HTTP/1.1 301\r\nDate: Mon, 02 Nov 2026 03:04:05 GMT\r\n\r\n' ;;
-*8.8.8.8*) [ -n "\${T_G_OK:-}" ] || exit 7; printf 'HTTP/1.1 302\r\nDate: Tue, 03 Nov 2026 04:05:06 GMT\r\n\r\n' ;;
+*8.8.8.8*) [ -n "\${T_G_OK:-}" ] || exit 7; printf 'HTTP/1.1 302\r\nDate: %s\r\n\r\n' "\${T_G_DATE:-Tue, 03 Nov 2026 04:05:06 GMT}" ;;
 esac
 EOT
 # date: -s is logged, -d parses with the real date, +%s is the clock (T_NOW, default the epoch: a Pi with no RTC)
@@ -70,10 +70,19 @@ PATH=$T/bin:$PATH SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" >/dev/null 2>&1 ||
 grep -q '^date' "$T/calls" && fail "timesync set a date with no source"
 grep -qx 'sleep 7' "$T/calls" || fail "timesync: no retry sleep"
 
-# a clock that ran ahead is set back to a Date after the build
+# a clock that ran ahead: one source, or two that disagree, cannot set it back
 : > "$T/calls"
-PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" > "$T/out" 2>&1 || fail "timesync back: exit"
-grep -qx 'date -s Mon, 02 Nov 2026 03:04:05 GMT' "$T/calls" || fail "timesync: a clock ahead was not set back: $(cat "$T/calls")"
+PATH=$T/bin:$PATH T_CF_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 SCHEMA_PI_RETRY=7 sh "$TS" > "$T/out" 2>&1 || fail "timesync back1: exit"
+grep -q '^date' "$T/calls" && fail "timesync: one source set the clock back: $(cat "$T/calls")"
+grep -q 'second source does not agree' "$T/out" || fail "timesync back1: not logged: $(cat "$T/out")"
+grep -qx 'sleep 21600' "$T/calls" || fail "timesync back1: retried every 30 s: $(cat "$T/calls")"
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_NOW=1793700000 SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1
+grep -q '^date' "$T/calls" && fail "timesync: two disagreeing sources set the clock back: $(cat "$T/calls")"
+# ...two that agree within 60 s can
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_G_DATE='Mon, 02 Nov 2026 03:04:35 GMT' T_NOW=1793700000 SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1
+grep -qx 'date -s Mon, 02 Nov 2026 03:04:05 GMT' "$T/calls" || fail "timesync: agreeing sources did not set the clock back: $(cat "$T/calls")"
 # ...nor before the build epoch baked in at package build
 sed 's/^BUILD_EPOCH=.*/BUILD_EPOCH=1793620000/' "$TS" > "$T/ts-baked"
 : > "$T/calls"

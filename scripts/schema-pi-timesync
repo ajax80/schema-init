@@ -5,26 +5,39 @@ DATE=${SCHEMA_PI_DATE:-date}
 # baked from SOURCE_DATE_EPOCH by debian/rules; empty in an unbuilt copy, which uses its own mtime
 BUILD_EPOCH=
 
-# the Date header is unauthenticated: never take a time from before this package was built.
-# Later times, earlier than the running clock, are allowed: a clock that ran ahead must come back.
+# The Date header is unauthenticated, so never take a time from before this package was built.
+# A step back from the running clock needs both sources to agree within 60 s: one spoofed
+# answer can move the clock forward from boot, but cannot wind it back.
 floor() {
     b=${BUILD_EPOCH:-$(stat -c %Y "$0" 2>/dev/null)}
     echo "${b:-0}"
 }
 
+ask() {
+    $CURL -sI --max-time 10 "http://$1/" | awk -F': ' 'tolower($1) == "date" { print $2 }' | tr -d '\r'
+}
+
 while :; do
     until [ -n "$(ip route show default 2>/dev/null)" ]; do sleep 2; done
-    ok=
-    for addr in 1.1.1.1 8.8.8.8; do
-        d=$($CURL -sI --max-time 10 "http://$addr/" | awk -F': ' 'tolower($1) == "date" { print $2 }' | tr -d '\r')
+    ok= d1=$(ask 1.1.1.1) d2=$(ask 8.8.8.8)
+    t1=$([ -n "$d1" ] && $DATE -d "$d1" +%s 2>/dev/null)
+    t2=$([ -n "$d2" ] && $DATE -d "$d2" +%s 2>/dev/null)
+    f=$(floor) now=$($DATE +%s)
+    for pick in 1 2; do
+        if [ $pick = 1 ]; then d=$d1 t=$t1 o=$t2 addr=1.1.1.1; else d=$d2 t=$t2 o=$t1 addr=8.8.8.8; fi
         [ -n "$d" ] || continue
-        t=$($DATE -d "$d" +%s 2>/dev/null)
-        f=$(floor)
+        # an answer is no outage: a refused time waits for the resync, not the 30 s retry
+        ok=${ok:-0}
         if [ -z "$t" ] || [ "$t" -lt "$f" ]; then
-            echo "timesync: ignored $d from $addr (before $f)"
-            # an answer is no outage: a clock a second ahead must not retry every 30 s
-            ok=0
+            echo "timesync: ignored $d from $addr (before build $f)"
             continue
+        fi
+        if [ "$t" -lt "${now:-0}" ]; then
+            dd=$((t - ${o:-0})); [ "$dd" -lt 0 ] && dd=$((-dd))
+            if [ -z "$o" ] || [ "$dd" -gt 60 ]; then
+                echo "timesync: ignored $d from $addr (behind the clock, second source does not agree)"
+                continue
+            fi
         fi
         if $DATE -s "$d" >/dev/null; then
             echo "timesync: $d from $addr"
