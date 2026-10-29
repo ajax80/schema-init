@@ -933,6 +933,16 @@ check("RuntimeDirectory= adds no order-changed warning", "order changed" not in 
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=r\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= + User= -> owned by user, default mode 0755",
       "exec_pre=+/usr/bin/install -d -m 0755 -o foo -g foo /run/r\n" in _rt)
+_pg = tempfile.mkdtemp(); os.makedirs(os.path.join(_pg, "etc"))
+open(os.path.join(_pg, "etc/passwd"), "w").write("root:x:0:0::/root:/bin/sh\nsvcu:x:990:991::/:/sbin/nologin\norph:x:992:4242::/:/sbin/nologin\n")
+open(os.path.join(_pg, "etc/group"), "w").write("root:x:0:\nsvcgrp:x:991:\n")
+os.environ["MIGRATE_ROOT"] = _pg
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=svcu\nRuntimeDirectory=r\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= owner group = User='s primary group from MIGRATE_ROOT passwd/group",
+      "-o svcu -g svcgrp /run/r\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=orph\nRuntimeDirectory=r\nExecStart=/bin/r\n"))
+check("primary gid with no group name -> user name", "-o orph -g orph /run/r\n" in _rt)
+os.environ.pop("MIGRATE_ROOT")
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nGroup=bar\nRuntimeDirectory=r\nRuntimeDirectoryMode=750\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= + Group= -> -g group", "exec_pre=+/usr/bin/install -d -m 750 -o foo -g bar /run/r\n" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a b/c\nRuntimeDirectory=%N\nExecStart=/bin/r\n"))

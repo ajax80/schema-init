@@ -936,6 +936,18 @@ def _ambient_caps(svc):
     return list(caps), warns
 
 
+# what systemd chowns to when Group= is unset; the user name if it can't be read
+def _primary_group(user):
+    def rows(f):
+        try:
+            with open(os.path.join(_root(), "etc", f)) as fh:
+                return [ln.rstrip("\n").split(":") for ln in fh]
+        except OSError:
+            return []
+    gid = next((r[3] for r in rows("passwd") if len(r) > 3 and r[0] == user), None)
+    return next((r[0] for r in rows("group") if len(r) > 2 and r[2] == gid), user)
+
+
 # systemd creates RuntimeDirectory= dirs before ExecStartPre=, and schema-init
 # does not: a root install -d ahead of the unit's own exec_pre lines does
 # (Debian ssh.service's sshd -t needs /run/sshd). Returns (lines, notes, warns).
@@ -954,7 +966,7 @@ def runtime_dir_lines(svc, name):
     base, pfx = (_USER["runtime"], "") if _USER else ("/run", "+")
     user, own = _get_last(svc, "User"), ""
     if not _USER and user and user != "root":
-        own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(_get_last(svc, "Group") or user))
+        own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(_get_last(svc, "Group") or _primary_group(user)))
     out = []
     for d in dirs:
         try:
