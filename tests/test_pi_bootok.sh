@@ -138,6 +138,33 @@ waits_on || fail "bootok_list_empty: confirmed"
 grep -qx 'pi-bootok: waiting on avahi-daemon=EXCISED' "$T/log" || fail "bootok_list_empty: old rule not applied: $(cat "$T/log")"
 echo "ok bootok_list_self_and_empty"
 
+# bootok_settled: the engine counts SETTLED as ready (a recovered daemon), so must boot OK
+reset; printf 'service.sshd.state=SETTLED\nservice.net.state=SETTLED\n' > "$T/kv"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_settled: no list: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_settled: no list: no marker"
+reset; printf 'service.ssh.state=SETTLED\nservice.net.state=SETTLED\nservice.avahi-daemon.state=EXCISED\n' > "$T/kv"
+printf 'ssh\nnet\n' > "$R/etc/schema-init/pi-boot-required"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_settled: list: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_settled: list: no marker"
+echo "ok bootok_settled"
+
+# bootok_blockers: prints the blockers once, exits 0, touches nothing
+reset; printf 'service.ssh.state=DORMANT\nservice.net.state=SETTLED\nservice.avahi-daemon.state=EXCISED\nservice.pi-bootok.state=NEW_PROCESS\n' > "$T/kv"
+printf 'ssh\nnet\nghost\n' > "$R/etc/schema-init/pi-boot-required"
+cp "$STATE" "$T/state0"
+env_to sh "$BOOTOK" --blockers > "$T/log" 2>&1 || fail "bootok_blockers: exit"
+[ "$(cat "$T/log")" = "ghost=MISSING
+ssh=DORMANT" ] || fail "bootok_blockers: $(cat "$T/log")"
+[ ! -e "$MARK" ] && cmp -s "$STATE" "$T/state0" && [ ! -e "$KG" ] || fail "bootok_blockers: wrote state"
+env_to sh "$BOOTOK" --blockers --all > "$T/log" 2>&1 || fail "bootok_blockers --all: exit"
+[ "$(cat "$T/log")" = "avahi-daemon=EXCISED
+ghost=MISSING
+ssh=DORMANT" ] || fail "bootok_blockers --all: $(cat "$T/log")"
+: > "$T/kv"
+env_to sh "$BOOTOK" --blockers --all > "$T/log" 2>&1 || fail "bootok_blockers no engine: exit"
+[ ! -s "$T/log" ] || fail "bootok_blockers --all: printed with no engine: $(cat "$T/log")"
+echo "ok bootok_blockers"
+
 # bootok_promote_copies_list
 reset; list_kv
 printf '# hand\nssh\n' > "$R/etc/schema-init/pi-boot-required"

@@ -87,12 +87,14 @@ reset() {
 required() { grep -v '^[[:blank:]]*#' "$REQ" | grep -v '^[[:blank:]]*$'; }
 
 pi() {
-    SCHEMA_PI_ROOT=$R SCHEMA_PI_BOOTOK=$PWD/scripts/schema-pi-bootok \
-        SCHEMA_IMPORT=$T/shim/schema-import SHIM_T=$T \
+    SCHEMA_PI_ROOT=$R SCHEMA_PI_BOOTOK=${SCHEMA_PI_BOOTOK:-$PWD/scripts/schema-pi-bootok} \
+        SCHEMA_IMPORT=${SCHEMA_IMPORT:-$T/shim/schema-import} SHIM_T=$T SCHEMA_CTL=${SCHEMA_CTL:-$T/noctl} \
         SCHEMA_PROC1=$T/comm ${TEST_SH:-sh} "$PI" "$@"
 }
 
 echo systemd > "$T/comm"
+# status must never reach the live engine; no output is "not running schema-init"
+printf '#!/bin/sh\n' > "$T/noctl"; chmod +x "$T/noctl"
 
 # enable_fresh
 reset
@@ -408,20 +410,26 @@ echo "ok status_prints"
 reset
 cat > "$T/ctl" <<'EOT'
 #!/bin/sh
-printf 'service.ssh.state=FUNDAMENTAL\nservice.avahi-daemon.state=EXCISED\nservice.net.state=PERFECT\n'
+printf 'service.sshd.state=FUNDAMENTAL\nservice.avahi-daemon.state=EXCISED\nservice.net.state=PERFECT\n'
 EOT
 chmod +x "$T/ctl"
 SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up: exit"
 grep -qx 'not up: avahi-daemon=EXCISED' "$T/log" || fail "status_not_up: $(cat "$T/log")"
-printf '#!/bin/sh\nprintf "service.ssh.state=FUNDAMENTAL\\n"\n' > "$T/ctl"
+printf '#!/bin/sh\nprintf "service.sshd.state=FUNDAMENTAL\\nservice.net.state=SETTLED\\n"\n' > "$T/ctl"
 SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up: exit2"
-! grep -q '^not up' "$T/log" || fail "status_not_up: printed when all up"
+! grep -q '^not up' "$T/log" || fail "status_not_up: printed when all up (SETTLED is up): $(cat "$T/log")"
+pi status > "$T/log" 2>&1 || fail "status_not_up: no engine exit"
+! grep -q '^not up' "$T/log" || fail "status_not_up: printed with no engine: $(cat "$T/log")"
+# the line comes from bootok's own rule, not a second parse
+printf '#!/bin/sh\n[ "$*" = "--blockers --all" ] && printf "a=B\\nc=MISSING\\n"\n' > "$T/fakebootok"; chmod +x "$T/fakebootok"
+SCHEMA_PI_BOOTOK=$T/fakebootok pi status > "$T/log" 2>&1 || fail "status_not_up: fake exit"
+grep -qx 'not up: a=B c=MISSING' "$T/log" || fail "status_not_up: not from bootok: $(cat "$T/log")"
 echo "ok status_not_up"
 
 # status_not_up_missing: listed names with no state line
 reset
 printf 'ssh\nnet\nghost\n# c\n' > "$REQ"
-printf '#!/bin/sh\nprintf "service.sshd.state=FUNDAMENTAL\\nservice.net.state=PERFECT\\nservice.avahi-daemon.state=EXCISED\\n"\n' > "$T/ctl"
+printf '#!/bin/sh\nprintf "service.sshd.state=FUNDAMENTAL\\nservice.net.state=SETTLED\\nservice.avahi-daemon.state=EXCISED\\n"\n' > "$T/ctl"
 SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up_missing: exit"
 grep -qx 'not up: avahi-daemon=EXCISED ghost=MISSING' "$T/log" || fail "status_not_up_missing: $(cat "$T/log")"
 echo "ok status_not_up_missing"

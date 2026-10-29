@@ -53,7 +53,7 @@ The network service is the first enabled of NetworkManager, systemd-networkd, ne
 
 ### Boot-OK list
 
-`/etc/schema-init/pi-boot-required` holds one service name per line; `#` comments and blank lines are ignored. Boot OK waits for exactly these to be FUNDAMENTAL or PERFECT. `enable` writes:
+`/etc/schema-init/pi-boot-required` holds one service name per line; `#` comments and blank lines are ignored. Boot OK waits for exactly these to be FUNDAMENTAL, SETTLED or PERFECT. `enable` writes:
 
 - `udev`, `udev-trigger`, `dbus`, `pi-early`
 - ssh (`ssh` or `sshd`, whichever was imported) and the detected network service
@@ -61,7 +61,7 @@ The network service is the first enabled of NetworkManager, systemd-networkd, ne
 
 `pi-timesync`, `journal-sink`, `pi-boot-firmware` and every other import are not in it: they may fail without costing a reboot. `pi-bootok` and `pi-deadline` are never counted even if listed.
 
-You can add your own lines (a service you cannot boot without). Later `enable` runs keep your lines and comments and add any missing generated names. A line whose `.svc` is gone is dropped, with a message, because boot OK would wait on it forever and the deadline would fall back. If the file is missing (or lists no names), every service must be FUNDAMENTAL or PERFECT, as described under Boot fallback. A known-good boot reads the copy of the list saved in known-good.
+You can add your own lines (a service you cannot boot without). Later `enable` runs keep your lines and comments and add any missing generated names. A line whose `.svc` is gone is dropped, with a message, because boot OK would wait on it forever and the deadline would fall back. If the file is missing (or lists no names), every service must be FUNDAMENTAL, SETTLED or PERFECT, as described under Boot fallback. A known-good boot reads the copy of the list saved in known-good.
 
 ### Remove a hand-written set before enable
 
@@ -95,7 +95,7 @@ It takes effect on the next boot. `schema-init-pi` is a small static program, so
 
 ## Boot fallback
 
-"Boot OK" means every service in `pi-boot-required` is FUNDAMENTAL or PERFECT (none failed, excised or given up). Services still starting count as not ready, so boot OK waits for them. Without the list, `sshd` must be up and every service must be FUNDAMENTAL or PERFECT; skipped services and `pi-bootok` / `pi-deadline` themselves are ignored. A network address is not required: a router outage is not a schema failure and costs no reboots. With the list, a failed network service still counts because it is listed.
+"Boot OK" means every service in `pi-boot-required` is FUNDAMENTAL, SETTLED or PERFECT (none failed, excised or given up). Services still starting count as not ready, so boot OK waits for them. Without the list, `sshd` must be up and every service must be FUNDAMENTAL, SETTLED or PERFECT; skipped services and `pi-bootok` / `pi-deadline` themselves are ignored. A network address is not required: a router outage is not a schema failure and costs no reboots. With the list, a failed network service still counts because it is listed.
 
 - Each boot of schema-init increments a counter before exec. Boot OK resets it to 0.
 - If boot OK has not happened 300 s after `pi-deadline` starts, `pi-deadline` reboots the Pi (`schema-ctl reboot`). It does nothing unless the kernel was booted with `init=/usr/sbin/schema-init-pi`.
@@ -114,7 +114,7 @@ State is in `/var/lib/schema-init/pi-boot` (`attempts=`, `last_target=`). Every 
 sudo schema-pi status
 ```
 
-Prints `enabled`, `pid1`, `attempts`, `last_target`, `last_fallback` (last line of `fallback.log`), `known_good` (version of the known-good engine) and, when something is not up, a `not up:` line (`name=STATE`, or `name=MISSING` for a listed service with no state). No line means everything counted is up.
+Prints `enabled`, `pid1`, `attempts`, `last_target`, `last_fallback` (last line of `fallback.log`), `known_good` (version of the known-good engine) and, when something is not up, a `not up:` line (`name=STATE`, or `name=MISSING` for a listed service with no state), from the same rule boot OK uses. It names what blocks boot OK and also any uncounted service that is not up. No line means everything is up.
 
 ## Disable
 

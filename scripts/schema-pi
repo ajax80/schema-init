@@ -242,25 +242,9 @@ status() {
     echo "last_fallback: ${f:--}"
     v=$("$KG/schema-init" --version 2>/dev/null | head -n 1)
     echo "known_good: ${v:--}"
-    req=$(tr -d '\r' < "$REQ" 2>/dev/null | awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]+$/, "") }
-        $0 != "" && !/^#/ { printf "%s ", $0 }')
-    n=$("${SCHEMA_CTL:-schema-ctl}" status --kv 2>/dev/null | awk -F= -v req="$req" '
-        function add(x) { printf "%s%s", sep, x; sep = " " }
-        $1 ~ /^service\..*\.state$/ {
-            n = $1; sub(/^service\./, "", n); sub(/\.state$/, "", n)
-            seen[n] = 1
-            if ($2 != "FUNDAMENTAL" && $2 != "PERFECT") add(n "=" $2)
-        }
-        END {
-            if (!NR) exit
-            nr = split(req, want, " ")
-            for (i = 1; i <= nr; i++) {
-                w = want[i]
-                if (w == "pi-bootok" || w == "pi-deadline") continue
-                if (w == "ssh" || w == "sshd") { if (("ssh" in seen) || ("sshd" in seen)) continue }
-                if (!(w in seen)) add(w "=MISSING")
-            }
-        }')
+    # bootok's rule, so status and boot OK cannot disagree on what is up
+    n=$(SCHEMA_PI_ROOT=$R "${SCHEMA_PI_BOOTOK:-/usr/libexec/schema-init/schema-pi-bootok}" --blockers --all 2>/dev/null |
+        tr '\n' ' ' | sed 's/ *$//')
     [ -z "$n" ] || echo "not up: $n"
 }
 
