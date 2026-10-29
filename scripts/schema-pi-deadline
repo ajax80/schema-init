@@ -7,6 +7,13 @@ CTL=${SCHEMA_CTL:-$CTL}
 DL=${SCHEMA_PI_DEADLINE:-300}
 RETRY=${SCHEMA_PI_REBOOT_RETRY:-60}
 
+# only the wrapper turns a reboot into a fallback; booted any other way a reboot just loops.
+# Never exit, though: oneshot=0 would restart us.
+case " $(cat "$R/proc/cmdline" 2>/dev/null) " in
+    *" init=/usr/sbin/schema-init-pi "*) ;;
+    *) while :; do sleep 86400; done ;;
+esac
+
 sleep "$DL"
 if [ ! -e "$R/run/schema-init/pi-boot-ok" ]; then
     echo "pi-deadline: no boot-ok after ${DL}s, rebooting"
