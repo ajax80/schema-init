@@ -44,12 +44,20 @@ sudo schema-pi enable
 sudo reboot
 ```
 
-`enable` refuses unless `/boot/firmware/cmdline.txt` exists, `/lib/systemd/systemd` exists, `/var/lib` is not `noexec`, and `sshd.svc` is present. Then it:
+`enable` and `disable` first mount `/boot/firmware` if `/etc/fstab` lists it and it is not mounted (schema-init does not automount fstab), and stop if that fails. `enable` refuses unless `/boot/firmware/cmdline.txt` exists, `/lib/systemd/systemd` exists, `/var/lib` is not `noexec`, and `sshd.svc` is present. Then it:
 
 - backs up `cmdline.txt` to `cmdline.txt.schema-bak` (first run only)
-- installs `pi-bootok.svc` and `pi-deadline.svc` into `/etc/schema-init/services/` if missing
+- installs `pi-bootok.svc`, `pi-deadline.svc` and `pi-boot-firmware.svc` into `/etc/schema-init/services/` if missing (`pi-boot-firmware` mounts `/boot/firmware` at boot, so `cmdline.txt` and firmware updates land on the real partition)
 - seeds `/var/lib/schema-init/known-good/` if it does not exist
 - on the first line of `cmdline.txt`: replaces any `init=` with `init=/usr/sbin/schema-init-pi`, and appends `panic=10` if the line has no `panic=`
+
+These three `pi-*.svc` files are copied once. Later package updates ship new `/usr/share/schema-init/pi-*.svc.example` files but never overwrite your copies. To pick up a changed example, copy it over by hand and reboot:
+
+```sh
+sudo cp /usr/share/schema-init/pi-bootok.svc.example /etc/schema-init/services/pi-bootok.svc
+```
+
+(the same for `pi-deadline` and `pi-boot-firmware`). Compare first with `diff` if you edited them.
 
 It takes effect on the next boot. `schema-init-pi` is a small static program, so a broken `/bin/sh` or library after an upgrade cannot kill it.
 
@@ -58,7 +66,8 @@ It takes effect on the next boot. `schema-init-pi` is a small static program, so
 "Boot OK" means `sshd` is up and every service is FUNDAMENTAL or PERFECT (none failed, excised or given up). Services still starting count as not ready, so boot OK waits for them. Skipped services and `pi-bootok` / `pi-deadline` themselves are ignored. A network address is not required: a router outage is not a schema failure and costs no reboots. A failed `wpa-supplicant` or `dhcpcd` still counts.
 
 - Each boot of schema-init increments a counter before exec. Boot OK resets it to 0.
-- If boot OK has not happened 300 s after `pi-deadline` starts, `pi-deadline` reboots the Pi (`schema-ctl reboot`).
+- If boot OK has not happened 300 s after `pi-deadline` starts, `pi-deadline` reboots the Pi (`schema-ctl reboot`). It does nothing unless the kernel was booted with `init=/usr/sbin/schema-init-pi`.
+- If a binary will not exec, the wrapper records the next target (known-good, then systemd) before trying it, so a broken current is never promoted. If the boot state cannot be saved at all (read-only or full `/var`), the wrapper boots systemd: without a counter the deadline would reboot forever.
 - After two failed boots in a row, the third boot goes to the known-good set if it differs from the current one (engine binary or services). Otherwise it goes to systemd.
 - A known-good or systemd boot lasts one boot only. `init=` stays in `cmdline.txt`. A successful known-good boot resets the counter but does not promote anything, so the next reboot tries the current set again. The cycle (two failed boots, one fallback boot) repeats until the current set is fixed or you run `schema-pi disable`. If known-good fails too, the boot after it is systemd.
 - On boot OK the current set is promoted to known-good, only when that boot ran the current set.
@@ -82,7 +91,7 @@ sudo schema-pi disable
 sudo reboot
 ```
 
-Strips `init=` from `cmdline.txt`; systemd boots next time. `panic=10` stays in place: rebooting on a kernel panic is harmless under systemd. Packages and known-good stay on disk.
+Strips `init=` from `cmdline.txt`; systemd boots next time. `apt remove schema-init` runs this for you (an upgrade does not). `panic=10` stays in place: rebooting on a kernel panic is harmless under systemd. Packages and known-good stay on disk.
 
 ## Recovery by hand
 
