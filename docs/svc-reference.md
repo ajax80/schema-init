@@ -46,7 +46,7 @@ Every key a schema-init service file understands. The [README](how-it-works.md#s
 | `allowed_slot_max` | `-1` | Maximum hardware slot ID (inclusive). If `SLOT_ID` falls outside `[allowed_slot_min, allowed_slot_max]`, spawn is refused with a `HAZARD` log and `SVC_NO_RESTART` is set — the service will not retry. Both min and max must be ≥ 0 to activate the gate. |
 | `on_boot_sec` | `0` | Makes the service a **timer**: seconds after boot before the first fire (`0` = at boot). Implies `oneshot=1` — the service runs, exits, and re-arms. The analog of systemd's `OnBootSec=`. See [Timers](#timers) below. |
 | `on_active_sec` | `0` | Timer period: seconds after each completion before the next fire. Measured from completion (like systemd's `OnUnitInactiveSec=`), so a slow run never overlaps itself. Implies `oneshot=1`. |
-| `on_calendar` | — | Wall-clock timer: `HH:MM` daily, `Mon HH:MM` weekly, or `DD HH:MM` monthly. Implies `oneshot=1`. See [Timers](#timers). |
+| `on_calendar` | — | Wall-clock timer: `HH:MM` daily, `Mon HH:MM` weekly, or `DD HH:MM` monthly. `HH` may be a comma list of hours (`6,18:00`). Implies `oneshot=1`. See [Timers](#timers). |
 | `persistent` | `0` | With `on_calendar`: a fire missed while the machine was off runs at the next boot (systemd `Persistent=`). |
 | `start_timeout_sec` | `90` for oneshots, `0` otherwise | Max seconds a service may sit in `FULL_TRUST` without promoting before it is killed and routed into the recovery arc — so a hung boot service can't stall its dependents. **Defaults on for oneshots** (the only services that can hang the chain; daemons promote via `stable_secs`). **Timers are exempt** (may run long). `0` disables. The analog of systemd's `TimeoutStartSec=`. |
 | `stop_timeout_sec` | `3` | Seconds a service gets to exit after SIGTERM at shutdown before its cgroup is killed (1–300). Raise it for anything that saves state on the way out: the Plasma session gets `20`, because plasmashell can need 12 s to finish writing a freshly built panel layout. The analog of systemd's `TimeoutStopSec=`. |
@@ -117,6 +117,7 @@ Per-service confinement, applied in the child between fork and exec. Each is opt
 |-----|---------|-------------|
 | `no_new_privs` | `0` | `PR_SET_NO_NEW_PRIVS`: setuid binaries and file capabilities can no longer raise privilege in the service or anything it runs. |
 | `keep_caps` | — | Comma-separated capability names (`CAP_NET_BIND_SERVICE,CAP_SYS_TIME`); every other capability is dropped from the bounding set. An unknown name refuses the load. |
+| `ambient_caps` | — | Same list syntax as `keep_caps`. With `user=` set, these capabilities are raised as ambient caps after the uid drop, so the program keeps them across `exec` (e.g. `CAP_NET_BIND_SERVICE` for a non-root DNS server on port 53). They are added to the bounding set when `keep_caps` is set. Ignored for root services. Also applied to `exec_pre` commands that run after the drop and to `exec_stop`. An unknown name refuses the load. |
 | `private_tmp` | `0` | Fresh `/tmp` and `/var/tmp` for this service (private mount namespace). |
 | `protect_system` | `0` | `1`: `/usr`, `/boot`, `/efi` read-only. `full`: `/etc` too. |
 | `protect_home` | `0` | `/home`, `/root` and `/run/user` replaced by empty read-only mounts. |
@@ -212,7 +213,7 @@ A timer is a oneshot that re-arms on a `CLOCK_MONOTONIC` deadline instead of sta
 
 The period is measured from completion, so a slow job never overlaps itself. Fires on the 250 ms tick (±1 tick) — cron-class precision, not sub-second. For real-time work use `watchdog_timeout_ms` and the control loop instead.
 
-**Wall-clock timers** — set `on_calendar=HH:MM` to fire at a fixed local time every day, `on_calendar=Mon HH:MM` for weekly, or `on_calendar=15 HH:MM` for a day of the month, the way you'd write a cron line. This is the form you want for "3am backup", "midnight log rotation", "nightly cert renewal":
+**Wall-clock timers** — set `on_calendar=HH:MM` to fire at a fixed local time every day, `on_calendar=Mon HH:MM` for weekly, or `on_calendar=15 HH:MM` for a day of the month, the way you'd write a cron line. A comma list of hours fires at each one: `on_calendar=6,18:00` runs at 06:00 and 18:00. This is the form you want for "3am backup", "midnight log rotation", "nightly cert renewal":
 
 ```ini
 name=nightly-backup

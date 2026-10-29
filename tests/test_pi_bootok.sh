@@ -59,7 +59,7 @@ echo "ok bootok_confirms"
 # bootok_names_blocker (also: DORMANT blocks, sshd missing blocks)
 reset
 printf 'service.sshd.state=FUNDAMENTAL\nservice.wpa-supplicant.state=RECOVERY\nservice.dead.state=DORMANT\n' > "$T/kv"
-env_run sh "$BOOTOK" > "$T/log" 2>&1 &
+SCHEMA_PI_ROOT=$R SCHEMA_CTL=$T/ctl SCHEMA_PI_POLL=0.1 sh "$BOOTOK" > "$T/log" 2>&1 &
 pid=$!
 sleep 0.5
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
@@ -69,13 +69,123 @@ grep -qx 'pi-bootok: waiting on dead=DORMANT' "$T/log" || fail "bootok_names_blo
 [ "$(grep -c 'waiting on wpa' "$T/log")" = 1 ] || fail "bootok_names_blocker: repeated inside 60s"
 reset
 printf 'service.net.state=FUNDAMENTAL\n' > "$T/kv"
-env_run sh "$BOOTOK" > "$T/log" 2>&1 &
+SCHEMA_PI_ROOT=$R SCHEMA_CTL=$T/ctl SCHEMA_PI_POLL=0.1 sh "$BOOTOK" > "$T/log" 2>&1 &
 pid=$!
 sleep 0.5
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 [ ! -e "$MARK" ] || fail "bootok_names_blocker: confirmed without sshd"
 grep -qx 'pi-bootok: waiting on sshd=MISSING' "$T/log" || fail "bootok_names_blocker: sshd=MISSING not logged"
 echo "ok bootok_names_blocker"
+
+# list kv: avahi excised, everything else up
+list_kv() {
+    printf 'service.ssh.state=FUNDAMENTAL\nservice.avahi-daemon.state=EXCISED\nservice.pi-bootok.state=NEW_PROCESS\n' > "$T/kv"
+}
+env_to() { SCHEMA_PI_ROOT=$R SCHEMA_CTL=$T/ctl SCHEMA_PI_POLL=0.1 timeout 10 "$@"; }
+waits_on() {
+    # not via env_run: backgrounding a function leaves the sh orphaned past the kill, and it would confirm in the next case
+    SCHEMA_PI_ROOT=$R SCHEMA_CTL=$T/ctl SCHEMA_PI_POLL=0.1 sh "$BOOTOK" > "$T/log" 2>&1 &
+    pid=$!
+    sleep 0.5
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    [ ! -e "$MARK" ]
+}
+
+# bootok_list_confirms: only listed services can block
+reset; list_kv
+printf '# hand\n\nssh\r\n' > "$R/etc/schema-init/pi-boot-required"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_list_confirms: exit: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_list_confirms: no marker"
+echo "ok bootok_list_confirms"
+
+# bootok_list_waits: a listed service that is down blocks; unlisted missing does not
+reset; printf 'service.ssh.state=DORMANT\nservice.avahi-daemon.state=FUNDAMENTAL\n' > "$T/kv"
+printf 'ssh\n' > "$R/etc/schema-init/pi-boot-required"
+waits_on || fail "bootok_list_waits: confirmed"
+grep -qx 'pi-bootok: waiting on ssh=DORMANT' "$T/log" || fail "bootok_list_waits: log: $(cat "$T/log")"
+reset; list_kv
+printf 'ssh\nnetworkmanager\n' > "$R/etc/schema-init/pi-boot-required"
+waits_on || fail "bootok_list_missing: confirmed"
+grep -qx 'pi-bootok: waiting on networkmanager=MISSING' "$T/log" || fail "bootok_list_missing: log: $(cat "$T/log")"
+echo "ok bootok_list_waits"
+
+# bootok_no_list_old_rule
+reset; list_kv
+printf 'service.sshd.state=FUNDAMENTAL\nservice.avahi-daemon.state=EXCISED\n' > "$T/kv"
+waits_on || fail "bootok_no_list_old_rule: confirmed"
+grep -qx 'pi-bootok: waiting on avahi-daemon=EXCISED' "$T/log" || fail "bootok_no_list_old_rule: log: $(cat "$T/log")"
+echo "ok bootok_no_list_old_rule"
+
+# bootok_list_ssh_either: sshd listed, only ssh loaded
+reset; list_kv
+printf 'sshd\n' > "$R/etc/schema-init/pi-boot-required"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_list_ssh_either: exit"
+[ -f "$MARK" ] || fail "bootok_list_ssh_either: no marker"
+reset; printf 'service.net.state=FUNDAMENTAL\n' > "$T/kv"
+printf 'ssh\n' > "$R/etc/schema-init/pi-boot-required"
+waits_on || fail "bootok_list_ssh_either: confirmed without ssh"
+grep -qx 'pi-bootok: waiting on sshd=MISSING' "$T/log" || fail "bootok_list_ssh_either: log: $(cat "$T/log")"
+echo "ok bootok_list_ssh_either"
+
+# bootok_list_self_and_empty: the deadline/bootok names never block; a list with no names is no list
+reset; list_kv
+printf 'ssh\npi-bootok\npi-deadline\n' > "$R/etc/schema-init/pi-boot-required"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_list_self: exit: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_list_self: no marker"
+reset; list_kv
+printf '# nothing\n\n' > "$R/etc/schema-init/pi-boot-required"
+waits_on || fail "bootok_list_empty: confirmed"
+grep -qx 'pi-bootok: waiting on avahi-daemon=EXCISED' "$T/log" || fail "bootok_list_empty: old rule not applied: $(cat "$T/log")"
+echo "ok bootok_list_self_and_empty"
+
+# bootok_settled: the engine counts SETTLED as ready (a recovered daemon), so must boot OK
+reset; printf 'service.sshd.state=SETTLED\nservice.net.state=SETTLED\n' > "$T/kv"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_settled: no list: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_settled: no list: no marker"
+reset; printf 'service.ssh.state=SETTLED\nservice.net.state=SETTLED\nservice.avahi-daemon.state=EXCISED\n' > "$T/kv"
+printf 'ssh\nnet\n' > "$R/etc/schema-init/pi-boot-required"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_settled: list: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_settled: list: no marker"
+echo "ok bootok_settled"
+
+# bootok_blockers: prints the blockers once, exits 0, touches nothing
+reset; printf 'service.ssh.state=DORMANT\nservice.net.state=SETTLED\nservice.avahi-daemon.state=EXCISED\nservice.pi-bootok.state=NEW_PROCESS\n' > "$T/kv"
+printf 'ssh\nnet\nghost\n' > "$R/etc/schema-init/pi-boot-required"
+cp "$STATE" "$T/state0"
+env_to sh "$BOOTOK" --blockers > "$T/log" 2>&1 || fail "bootok_blockers: exit"
+[ "$(cat "$T/log")" = "ghost=MISSING
+ssh=DORMANT" ] || fail "bootok_blockers: $(cat "$T/log")"
+[ ! -e "$MARK" ] && cmp -s "$STATE" "$T/state0" && [ ! -e "$KG" ] || fail "bootok_blockers: wrote state"
+env_to sh "$BOOTOK" --blockers --all > "$T/log" 2>&1 || fail "bootok_blockers --all: exit"
+[ "$(cat "$T/log")" = "avahi-daemon=EXCISED
+ghost=MISSING
+ssh=DORMANT" ] || fail "bootok_blockers --all: $(cat "$T/log")"
+: > "$T/kv"
+env_to sh "$BOOTOK" --blockers --all > "$T/log" 2>&1 || fail "bootok_blockers no engine: exit"
+[ ! -s "$T/log" ] || fail "bootok_blockers --all: printed with no engine: $(cat "$T/log")"
+echo "ok bootok_blockers"
+
+# bootok_promote_copies_list
+reset; list_kv
+printf '# hand\nssh\n' > "$R/etc/schema-init/pi-boot-required"
+env_to sh "$BOOTOK" --promote > "$T/log" 2>&1 || fail "bootok_promote_copies_list: exit"
+cmp -s "$KG/pi-boot-required" "$R/etc/schema-init/pi-boot-required" || fail "bootok_promote_copies_list: differs"
+reset
+env_to sh "$BOOTOK" --promote > "$T/log" 2>&1 || fail "bootok_promote_copies_list: exit2"
+[ ! -e "$KG/pi-boot-required" ] || fail "bootok_promote_copies_list: copied a missing list"
+echo "ok bootok_promote_copies_list"
+
+# bootok_kg_uses_kg_list: on a known-good boot the /etc list is ignored
+reset known-good; list_kv
+printf 'ssh\navahi-daemon\n' > "$R/etc/schema-init/pi-boot-required"
+mkdir -p "$KG"; printf 'ssh\n' > "$KG/pi-boot-required"
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_kg_uses_kg_list: exit: $(cat "$T/log")"
+[ -f "$MARK" ] || fail "bootok_kg_uses_kg_list: no marker"
+reset known-good; list_kv
+printf 'ssh\n' > "$R/etc/schema-init/pi-boot-required"
+mkdir -p "$KG"
+waits_on || fail "bootok_kg_uses_kg_list: old known-good without a list must keep today's rule"
+echo "ok bootok_kg_uses_kg_list"
 
 # bootok_no_promote_on_kg
 reset known-good; good_kv

@@ -1,0 +1,11 @@
+name=udev
+exec=/lib/systemd/systemd-udevd
+dep=pi-early
+oneshot=0
+critical=1
+stable_secs=5
+ready_path=/run/udev/control
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0

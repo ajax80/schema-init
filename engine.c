@@ -115,12 +115,13 @@ int64_t reexec_check_due = 0;
 int     reexec_check_killed = 0;
 
 /* Arm a calendar timer: set timer_next to the next CLOCK_REALTIME instant at
- * which local wall-clock reaches HH:MM on a day matching the timer's dow/dom
- * constraints, strictly in the future. Walks forward day-by-day (mktime per
- * step re-normalizes wday/mday and self-corrects DST/NTP each cycle). Daily
- * timers (dow=dom=-1) match the first or second day and behave as before. */
+ * which local wall-clock reaches one of its HH:MM slots on a day matching the
+ * timer's dow/dom constraints, strictly in the future. Walks forward
+ * day-by-day (mktime per step re-normalizes wday/mday and self-corrects
+ * DST/NTP each cycle). Daily timers (dow=dom=-1) match the first or second
+ * day and behave as before. */
 static void timer_arm_calendar(service_t *svc) {
-    svc->timer_next.tv_sec  = calendar_next_after(svc->timer_cal_hour,
+    svc->timer_next.tv_sec  = calendar_next_after(svc->timer_cal_hours,
                                                   svc->timer_cal_min,
                                                   svc->timer_cal_dow,
                                                   svc->timer_cal_dom, time(NULL));
@@ -153,11 +154,12 @@ static void timer_stamp_write(const service_t *svc, time_t t) {
     fclose(f);
 }
 
-/* most recent past (or current) occurrence of the timer's HH:MM on a day
- * matching its dow/dom constraints, <= now. Walks backward day-by-day; returns
- * 0 if none in the last ~400 days (constraint never satisfiable). */
+/* most recent past (or current) occurrence of any of the timer's HH:MM slots
+ * on a day matching its dow/dom constraints, <= now. Walks backward
+ * day-by-day; returns 0 if none in the last ~400 days (constraint never
+ * satisfiable). */
 static time_t calendar_recent_occurrence(const service_t *svc, time_t now) {
-    return calendar_recent_at_or_before(svc->timer_cal_hour, svc->timer_cal_min,
+    return calendar_recent_at_or_before(svc->timer_cal_hours, svc->timer_cal_min,
                                         svc->timer_cal_dow, svc->timer_cal_dom, now);
 }
 

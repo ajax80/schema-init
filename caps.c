@@ -2,6 +2,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <grp.h>
 #include <linux/capability.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -99,6 +100,52 @@ int apply_capabilities(uint64_t keep_mask) {
         (uint32_t)(keep_mask >> 32);
     if (syscall(SYS_capset, &hdr, data) != 0) return -1;
     return 0;
+}
+
+static int caps_set(uint64_t pe, uint64_t inh, int keep_pe) {
+    struct __user_cap_header_struct hdr = { _LINUX_CAPABILITY_VERSION_3, 0 };
+    struct __user_cap_data_struct data[2];
+    memset(data, 0, sizeof(data));
+    if (keep_pe && syscall(SYS_capget, &hdr, data) != 0) return -1;
+    if (!keep_pe) {
+        data[0].permitted = data[0].effective = (uint32_t)(pe & 0xffffffffu);
+        data[1].permitted = data[1].effective = (uint32_t)(pe >> 32);
+    }
+    data[0].inheritable = (uint32_t)(inh & 0xffffffffu);
+    data[1].inheritable = (uint32_t)(inh >> 32);
+    return syscall(SYS_capset, &hdr, data) == 0 ? 0 : -1;
+}
+
+int ambient_caps_prep(uint64_t mask, const char **step) {
+    *step = "keepcaps";
+    if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) return -1;
+    *step = "inheritable";
+    return caps_set(0, mask, 1);
+}
+
+int ambient_caps_raise(uint64_t mask, const char **step) {
+    /* setuid cleared the effective set and every ambient cap; KEEPCAPS kept
+     * permitted, so mask can be put back and raised now */
+    *step = "capset";
+    if (caps_set(mask, mask, 0) != 0) return -1;
+    *step = "ambient";
+    for (int c = 0; c < 64; c++)
+        if ((mask & ((uint64_t)1 << c)) &&
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, c, 0, 0) != 0)
+            return -1;
+    return 0;
+}
+
+int apply_ambient_caps(uint64_t mask, uid_t uid, gid_t gid, const char *user,
+                       const char **step) {
+    if (ambient_caps_prep(mask, step) != 0) return -1;
+    *step = "initgroups";
+    if (initgroups(user, gid) != 0) return -1;
+    *step = "setgid";
+    if (setgid(gid) != 0) return -1;
+    *step = "setuid";
+    if (setuid(uid) != 0) return -1;
+    return ambient_caps_raise(mask, step);
 }
 
 int apply_no_new_privs(void) {

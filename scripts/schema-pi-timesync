@@ -1,0 +1,58 @@
+#!/bin/sh
+# No RTC, and systemd-timesyncd is reclaimed by the importer: take the time from an HTTP Date header by IP, so the clock needs no DNS (unbound's DNSSEC needs a sane clock first).
+CURL=${SCHEMA_PI_CURL:-curl}
+DATE=${SCHEMA_PI_DATE:-date}
+# baked from SOURCE_DATE_EPOCH by debian/rules; empty in an unbuilt copy, which uses its own mtime
+BUILD_EPOCH=
+
+# The Date header is unauthenticated, so never take a time from before this package was built.
+# When both sources answer they must agree within 60 s; a lone answer may only move the clock
+# forward, so one spoofed path cannot wind it back or fight an honest second source.
+floor() {
+    b=${BUILD_EPOCH:-$(stat -c %Y "$0" 2>/dev/null)}
+    echo "${b:-0}"
+}
+
+ask() {
+    $CURL -sI --max-time 10 "http://$1/" | awk -F': ' 'tolower($1) == "date" { print $2 }' | tr -d '\r'
+}
+
+while :; do
+    until [ -n "$(ip route show default 2>/dev/null)" ]; do sleep 2; done
+    ok= d1=$(ask 1.1.1.1) d2=$(ask 8.8.8.8)
+    t1=$([ -n "$d1" ] && $DATE -d "$d1" +%s 2>/dev/null)
+    t2=$([ -n "$d2" ] && $DATE -d "$d2" +%s 2>/dev/null)
+    f=$(floor) now=$($DATE +%s)
+    # an answer is no outage: a refused time waits for the resync, not the 30 s retry
+    [ -z "$d1$d2" ] || ok=0
+    # an unparseable or pre-build answer counts as no answer, so it cannot veto the other source
+    if [ -n "$d1" ] && { [ -z "$t1" ] || [ "$t1" -lt "$f" ]; }; then echo "timesync: ignored $d1 from 1.1.1.1 (before build $f)"; d1= t1=; fi
+    if [ -n "$d2" ] && { [ -z "$t2" ] || [ "$t2" -lt "$f" ]; }; then echo "timesync: ignored $d2 from 8.8.8.8 (before build $f)"; d2= t2=; fi
+    for pick in 1 2; do
+        if [ $pick = 1 ]; then d=$d1 t=$t1 o=$t2 addr=1.1.1.1; else d=$d2 t=$t2 o=$t1 addr=8.8.8.8; fi
+        [ -n "$d" ] || continue
+        # when both answer they must agree; a lone answer may only move the clock forward
+        if [ -n "$o" ]; then
+            dd=$((t - o)); [ "$dd" -lt 0 ] && dd=$((-dd))
+            if [ "$dd" -gt 60 ]; then
+                echo "timesync: ignored $d from $addr (second source does not agree)"
+                continue
+            fi
+        elif [ "$t" -lt "${now:-0}" ]; then
+            echo "timesync: ignored $d from $addr (behind the clock, no second source)"
+            continue
+        fi
+        if $DATE -s "$d" >/dev/null; then
+            echo "timesync: $d from $addr"
+            ok=1
+            break
+        fi
+    done
+    if [ -n "$ok" ]; then
+        sleep "${SCHEMA_PI_RESYNC:-21600}"
+    else
+        echo "timesync: no time source reached"
+        sleep "${SCHEMA_PI_RETRY:-30}"
+    fi
+    [ -z "${SCHEMA_PI_ONCE:-}" ] || exit 0
+done

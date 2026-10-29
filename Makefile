@@ -94,12 +94,16 @@ $(OBJS) schema-user.o: $(CORE_HDRS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# the Raspberry Pi kit ships in the deb (debian/schema-init.install), not the Fedora RPM
+PI_KIT_EXAMPLES = $(wildcard services/pi-*.svc.example) services/udev.svc.example services/udev-trigger.svc.example \
+	services/dbus.svc.example
+
 install: all
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(BINS) $(DESTDIR)$(BINDIR)/
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
 	install -d $(DESTDIR)$(DATADIR)/schema-init/services
-	install -m 0644 services/* $(DESTDIR)$(DATADIR)/schema-init/services/
+	install -m 0644 $(filter-out $(PI_KIT_EXAMPLES),$(wildcard services/*)) $(DESTDIR)$(DATADIR)/schema-init/services/
 	install -d $(DESTDIR)$(SYSCONFDIR)/logrotate.d
 	install -m 0644 schema-init.logrotate $(DESTDIR)$(SYSCONFDIR)/logrotate.d/schema-init
 	[ -n "$(DESTDIR)" ] || [ -e $(SYSCONFDIR)/schema-init/services/logrotate.svc ] || \
@@ -270,6 +274,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_svc_dir_env.c -o /tmp/schema-test-svc-dir-env && /tmp/schema-test-svc-dir-env
 	sh tests/test_pi_wrapper.sh
 	sh tests/test_pi_bootok.sh
+	sh tests/test_pi_kit.sh
 	sh tests/test_schema_pi.sh
 	sh tests/test_deb_trigger.sh
 	sh tests/test_deb_version.sh
@@ -332,6 +337,8 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-mountns && /tmp/schema-test-mountns
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-dropins && /tmp/schema-test-dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-rlimits && /tmp/schema-test-rlimits
+	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cap-parse && /tmp/schema-test-cap-parse
+	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o /tmp/schema-test-ambient-caps && /tmp/schema-test-ambient-caps
 	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-stopcmds && /tmp/schema-test-stopcmds
 	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-verify && /tmp/schema-test-verify
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cycles && /tmp/schema-test-cycles

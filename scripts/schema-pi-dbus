@@ -1,0 +1,7 @@
+#!/bin/sh
+# /run is tmpfs: the dbus-daemon package's tmpfiles.d entry never runs without systemd
+mkdir -p /run/dbus /var/log/schema-init
+chown messagebus:messagebus /run/dbus
+chmod 755 /run/dbus
+# --nopidfile: a /run/dbus/pid left by a crash would make every restart fail (the engine supervises, no pid file needed)
+exec /usr/bin/dbus-daemon --system --nofork --nopidfile >>/var/log/schema-init/dbus.log 2>&1

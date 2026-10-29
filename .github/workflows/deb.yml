@@ -29,7 +29,7 @@ jobs:
       # for deb-changelog.sh's rev-list --count.
       - name: git
         run: apt-get update && apt-get install -y --no-install-recommends git ca-certificates
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: build deps
@@ -45,7 +45,7 @@ jobs:
         run: |
           su ci -c "umask 022; cd /build/src && sh tools/deb-changelog.sh $CHANNEL && dpkg-buildpackage -b -us -uc"
           mkdir out && mv /build/schema-init_*.deb out/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb-${{ matrix.arch }}
           path: out/*.deb
@@ -65,7 +65,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: debian:trixie
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: deb-${{ matrix.arch }}
           path: debs
@@ -86,7 +86,7 @@ jobs:
         run: |
           echo "ROOTFS=$RUNNER_TEMP/rootfs" >> "$GITHUB_ENV"
           echo "ROOTFS_TAR=$RUNNER_TEMP/raspbian-rootfs.tar" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # 26.04 split qemu-user-static: qemu-user ships the static binaries,
@@ -101,7 +101,7 @@ jobs:
       # root ownership and device nodes. Saved right away so a later failing
       # step does not throw the debootstrap away.
       - id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.ROOTFS_TAR }}
           key: raspbian-trixie-armhf-${{ steps.week.outputs.week }}-${{ hashFiles('tools/raspbian-rootfs.sh') }}
@@ -111,7 +111,7 @@ jobs:
           sudo sh tools/raspbian-rootfs.sh "$ROOTFS"
           sudo tar -C "$ROOTFS" --numeric-owner -cf "$ROOTFS_TAR" .
       - if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ env.ROOTFS_TAR }}
           key: ${{ steps.cache.outputs.cache-primary-key }}
@@ -165,7 +165,7 @@ jobs:
           echo "want: $want"; echo "got:  $got"
           [ "$got" = "$want" ]
           sudo chroot "$ROOTFS" apt-get remove -y schema-init
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb-armhf
           path: out/*.deb
@@ -176,12 +176,12 @@ jobs:
     needs: [native, install, armhf]
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: deb-*
           merge-multiple: true
           path: debs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: debs-${{ env.CHANNEL }}
           path: debs/schema-init_*.deb

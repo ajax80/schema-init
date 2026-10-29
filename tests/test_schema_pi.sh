@@ -11,28 +11,91 @@ CL=$R/boot/firmware/cmdline.txt
 BAK=$CL.schema-bak
 STOCK='console=serial0,115200 console=tty1 root=PARTUUID=abcd-02 rootfstype=ext4 fsck.repair=yes rootwait quiet'
 
+KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
+SVC=$R/etc/schema-init/services
+REQ=$R/etc/schema-init/pi-boot-required
+
+# importer shim: a test must never reach the real schema-import against /.
+# Mirrors the real one: explicit units first, then *.target.wants minus
+# _RECLAIMED (systemd-*, dbus*, NetworkManager-wait-online), never overwrites,
+# and a unit whose binary a hand set already runs is skipped with OWNED's text.
+# import.decline: units it writes nothing for; import.owned: "<unit> <owner>".
+mkdir -p "$T/shim"
+cat > "$T/shim/schema-import" <<'SHIM'
+#!/bin/sh
+echo "$MIGRATE_ROOT|$SCHEMA_SVC_DIR|$*" >> "$SHIM_T/import.log"
+echo "${SCHEMA_BUS_OVERRIDE_DIR:-}|${SCHEMA_STATE_DIR:-}" >> "$SHIM_T/import.env"
+units=
+for a in "$@"; do
+    case $a in -*) ;; *) units="$units ${a%.service}" ;; esac
+done
+for p in "$MIGRATE_ROOT"/etc/systemd/system/*.target.wants/*.service; do
+    [ -L "$p" ] || [ -e "$p" ] || continue
+    u=$(basename "$p" .service)
+    case $u in systemd-*|dbus*|NetworkManager-wait-online) continue ;; esac
+    case " $units " in *" $u "*) continue ;; esac
+    units="$units $u"
+done
+i=0; e=0; s=0
+for n in $units; do
+    grep -qx "$n" "$SHIM_T/import.decline" 2>/dev/null && continue
+    o=$(sed -n "s/^$n //p" "$SHIM_T/import.owned" 2>/dev/null)
+    if [ -e "$SCHEMA_SVC_DIR/$n.svc" ]; then
+        echo "have    $n.service ($SCHEMA_SVC_DIR/$n.svc exists; --force to overwrite)"; e=$((e + 1))
+    elif [ -n "$o" ]; then
+        echo "skip    $n.service: its binary already runs as $o.svc — importing it would start a second copy (see $SCHEMA_SVC_DIR/$n.svc.skipped)"
+        s=$((s + 1))
+    else
+        echo "name=$n" > "$SCHEMA_SVC_DIR/$n.svc"
+        echo "import  $n.service -> $SCHEMA_SVC_DIR/$n.svc"; i=$((i + 1))
+    fi
+done
+cat "$SHIM_T/import.extra"
+s=$((s + $(grep -c "^skip" "$SHIM_T/import.extra")))
+echo "imported=$i exists=$e not-found=0 skipped=$s error=0"
+SHIM
+chmod +x "$T/shim/schema-import"
+
+# wants links dangle in a fake root (they point at /lib, not $R/lib); the unit files are real
+wants() {
+    rm -rf "$R/etc/systemd/system" "$R/lib/systemd/system"
+    mkdir -p "$R/etc/systemd/system/multi-user.target.wants" "$R/lib/systemd/system"
+    for u in "$@"; do
+        ln -s "/lib/systemd/system/$u.service" "$R/etc/systemd/system/multi-user.target.wants/$u.service"
+        echo "[Service]" > "$R/lib/systemd/system/$u.service"
+    done
+}
+
+# find+cksum of $SVC: a refused enable must leave it byte-identical
+snap() { (cd "$SVC" && find . -print | sort && find . -type f -exec cksum {} + | sort); }
+
 reset() {
-    rm -rf "$R" "$T/bin"
+    rm -rf "$R" "$T/bin" "$T/import.log" "$T/import.env" "$T/import.decline" "$T/import.owned"
     mkdir -p "$R/boot/firmware" "$R/lib/systemd" "$R/usr/bin" "$R/usr/libexec/schema-init" \
         "$R/usr/share/schema-init" "$R/etc/schema-init/services" "$R/var/lib"
     printf '%s\n' "$STOCK" > "$CL"
     printf '#!/bin/sh\n' > "$R/lib/systemd/systemd"; chmod +x "$R/lib/systemd/systemd"
     echo bin-init > "$R/usr/bin/schema-init"
     echo bin-ctl > "$R/usr/bin/schema-ctl"
-    echo svc > "$R/etc/schema-init/services/sshd.svc"
     echo b > "$R/usr/libexec/schema-init/schema-pi-bootok"
     echo d > "$R/usr/libexec/schema-init/schema-pi-deadline"
-    echo bootok-svc > "$R/usr/share/schema-init/pi-bootok.svc.example"
-    echo deadline-svc > "$R/usr/share/schema-init/pi-deadline.svc.example"
-    echo firmware-svc > "$R/usr/share/schema-init/pi-boot-firmware.svc.example"
+    for k in $KIT; do echo "$k-svc" > "$R/usr/share/schema-init/$k.svc.example"; done
+    wants ssh NetworkManager
+    echo "skip    foo.service: Type=forking without PIDFile= (see $SVC/foo.svc.skipped)" > "$T/import.extra"
 }
 
+# the boot-OK list minus comments and blanks
+required() { grep -v '^[[:blank:]]*#' "$REQ" | grep -v '^[[:blank:]]*$'; }
+
 pi() {
-    SCHEMA_PI_ROOT=$R SCHEMA_PI_BOOTOK=$PWD/scripts/schema-pi-bootok \
+    SCHEMA_PI_ROOT=$R SCHEMA_PI_BOOTOK=${SCHEMA_PI_BOOTOK:-$PWD/scripts/schema-pi-bootok} \
+        SCHEMA_IMPORT=${SCHEMA_IMPORT:-$T/shim/schema-import} SHIM_T=$T SCHEMA_CTL=${SCHEMA_CTL:-$T/noctl} \
         SCHEMA_PROC1=$T/comm ${TEST_SH:-sh} "$PI" "$@"
 }
 
 echo systemd > "$T/comm"
+# status must never reach the live engine; no output is "not running schema-init"
+printf '#!/bin/sh\n' > "$T/noctl"; chmod +x "$T/noctl"
 
 # enable_fresh
 reset
@@ -40,9 +103,9 @@ pi enable > "$T/log" 2>&1 || fail "enable_fresh: exit: $(cat "$T/log")"
 [ "$(cat "$CL")" = "$STOCK panic=10 init=/usr/sbin/schema-init-pi" ] || fail "enable_fresh: line"
 [ "$(wc -l < "$CL")" -eq 1 ] || fail "enable_fresh: newline count"
 printf '%s\n' "$STOCK" | cmp -s - "$BAK" || fail "enable_fresh: backup"
-[ "$(cat "$R/etc/schema-init/services/pi-bootok.svc")" = bootok-svc ] || fail "enable_fresh: bootok svc"
-[ "$(cat "$R/etc/schema-init/services/pi-deadline.svc")" = deadline-svc ] || fail "enable_fresh: deadline svc"
-[ "$(cat "$R/etc/schema-init/services/pi-boot-firmware.svc")" = firmware-svc ] || fail "enable_fresh: firmware svc"
+for k in $KIT; do
+    [ "$(cat "$SVC/$k.svc")" = "$k-svc" ] || fail "enable_fresh: kit $k.svc"
+done
 [ "$(cat "$R/var/lib/schema-init/pi-boot")" = "attempts=0
 last_target=current" ] || fail "enable_fresh: state"
 cmp -s "$R/var/lib/schema-init/known-good/schema-init" "$R/usr/bin/schema-init" || fail "enable_fresh: known-good"
@@ -104,6 +167,7 @@ refuses() {
     [ ! -e "$BAK" ] || fail "$name: backup written"
     [ ! -e "$R/etc/schema-init/services/pi-bootok.svc" ] || fail "$name: svc installed"
     [ ! -e "$R/var/lib/schema-init" ] || fail "$name: state dir created"
+    [ ! -e "$T/import.log" ] || fail "$name: importer ran"
     [ ! -e "$T/orig" ] || cmp -s "$CL" "$T/orig" || fail "$name: file modified"
     echo "ok $name"
 }
@@ -124,8 +188,242 @@ echo "ok noexec_wholeword"
 reset; rm "$CL"; refuses enable_refuses_no_cmdline
 [ ! -e "$CL" ] || fail "enable_refuses_no_cmdline: created"
 
-# enable_refuses_no_sshd
-reset; rm "$R/etc/schema-init/services/sshd.svc"; refuses enable_refuses_no_sshd
+# enable_imports: kit first, then the importer, then the network drop-in
+# umask 0: the engine ignores a group/other-writable .svc.d, so the mode must not depend on it
+reset
+(umask 0; pi enable) > "$T/log" 2>&1 || fail "enable_imports: exit: $(cat "$T/log")"
+# a trial run into scratch first (every refusal before the first write), then the real one
+[ "$(wc -l < "$T/import.log")" = 2 ] || fail "enable_imports: runs: $(cat "$T/import.log")"
+[ "$(sed -n 2p "$T/import.log")" = "$R|$SVC|--enabled" ] || fail "enable_imports: call: $(cat "$T/import.log")"
+trial=$(sed -n 1p "$T/import.log")
+case $trial in "$R|$R"/*|"$R|$SVC|"*) fail "enable_imports: trial writes under the root: $trial" ;; "$R|"*"|--enabled") ;; *) fail "enable_imports: trial: $trial" ;; esac
+case $(sed -n 1p "$T/import.env") in "$R"*|*"|$R"*|"|"*|*"|") fail "enable_imports: trial bus/state dirs: $(cat "$T/import.env")" ;; esac
+[ "$(sed -n 2p "$T/import.env")" = "|" ] || fail "enable_imports: real run redirected: $(cat "$T/import.env")"
+t_dir=${trial#"$R|"}; t_dir=${t_dir%%|*}
+[ ! -e "$t_dir" ] || fail "enable_imports: scratch left behind: $t_dir"
+[ "$(cat "$SVC/ssh.svc")" = name=ssh ] || fail "enable_imports: ssh.svc"
+printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "enable_imports: drop-in: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf" 2>&1)"
+[ "$(stat -c %a "$SVC/NetworkManager.svc.d")" = 755 ] || fail "enable_imports: drop-in dir mode"
+[ "$(sed -n 1p "$T/log")" = "schema-pi: imported 2, skipped 1" ] || fail "enable_imports: summary: $(cat "$T/log")"
+[ "$(sed -n 2p "$T/log")" = "skip foo.service: Type=forking without PIDFile=" ] || fail "enable_imports: skip line: $(cat "$T/log")"
+echo "ok enable_imports"
+
+# boot_required: the kit core, ssh and the network, nothing else
+[ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early ssh NetworkManager " ] ||
+    fail "boot_required: $(cat "$REQ")"
+echo "ok boot_required"
+
+# boot_required_pihole: unbound counts only beside pihole-FTL
+reset; wants ssh NetworkManager pihole-FTL unbound
+pi enable > "$T/log" 2>&1 || fail "boot_required_pihole: exit: $(cat "$T/log")"
+[ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early ssh NetworkManager pihole-FTL unbound " ] ||
+    fail "boot_required_pihole: $(cat "$REQ")"
+reset; wants ssh NetworkManager pihole-FTL
+pi enable > "$T/log" 2>&1 || fail "boot_required_pihole: alone exit"
+[ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early ssh NetworkManager pihole-FTL " ] ||
+    fail "boot_required_pihole: alone: $(cat "$REQ")"
+reset; wants ssh NetworkManager unbound
+pi enable > "$T/log" 2>&1 || fail "boot_required_pihole: unbound exit"
+! required | grep -qx unbound || fail "boot_required_pihole: unbound without pihole"
+echo "ok boot_required_pihole"
+
+# network_order: first enabled in the fixed order wins
+reset; wants ssh wpa_supplicant
+pi enable > "$T/log" 2>&1 || fail "network_wifi: exit: $(cat "$T/log")"
+[ "$(required | tail -n 1)" = wpa_supplicant ] || fail "network_wifi: $(cat "$REQ")"
+[ -f "$SVC/wpa_supplicant.svc.d/pi-kit.conf" ] || fail "network_wifi: drop-in"
+reset; wants ssh dhcpcd systemd-networkd wpa_supplicant
+pi enable > "$T/log" 2>&1 || fail "network_order: exit: $(cat "$T/log")"
+[ "$(required | tail -n 1)" = systemd-networkd ] || fail "network_order: $(cat "$REQ")"
+[ ! -e "$SVC/dhcpcd.svc.d" ] || fail "network_order: drop-in on the loser"
+echo "ok network_order"
+
+# networkd_explicit: --enabled drops systemd-*, so networkd must be named on the command line
+reset; wants ssh systemd-networkd
+pi enable > "$T/log" 2>&1 || fail "networkd_explicit: exit: $(cat "$T/log")"
+[ "$(sed -n 2p "$T/import.log")" = "$R|$SVC|--enabled systemd-networkd.service" ] ||
+    fail "networkd_explicit: call: $(cat "$T/import.log")"
+[ -f "$SVC/systemd-networkd.svc.d/pi-kit.conf" ] || fail "networkd_explicit: drop-in"
+required | grep -qx systemd-networkd || fail "networkd_explicit: $(cat "$REQ")"
+echo "ok networkd_explicit"
+
+# sshd_name: the importer may name it sshd
+reset; wants sshd NetworkManager
+pi enable > "$T/log" 2>&1 || fail "sshd_name: exit: $(cat "$T/log")"
+required | grep -qx sshd || fail "sshd_name: $(cat "$REQ")"
+echo "ok sshd_name"
+
+# owned: a hand set already running the binary stands in for the unit
+reset; echo "name=networkmanager" > "$SVC/networkmanager.svc"; echo "name=sshd" > "$SVC/sshd.svc"
+printf 'NetworkManager networkmanager\nssh sshd\n' > "$T/import.owned"
+pi enable > "$T/log" 2>&1 || fail "owned: exit: $(cat "$T/log")"
+grep -qx 'skip NetworkManager.service: its binary already runs as networkmanager.svc — importing it would start a second copy' "$T/log" ||
+    fail "owned: skip line: $(cat "$T/log")"
+[ ! -e "$SVC/NetworkManager.svc.d" ] || fail "owned: drop-in on the skipped unit"
+printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/networkmanager.svc.d/pi-kit.conf" || fail "owned: owner drop-in"
+[ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early sshd networkmanager " ] || fail "owned: $(cat "$REQ")"
+# an owner named in the skip line but absent is no stand-in
+reset; printf 'NetworkManager networkmanager\n' > "$T/import.owned"; snap > "$T/snap1"
+pi enable > "$T/log" 2>&1 && fail "owned_missing: enabled"
+snap | cmp -s - "$T/snap1" || fail "owned_missing: \$SVC changed"
+grep -q 'NetworkManager.svc missing after import' "$T/log" || fail "owned_missing: message: $(cat "$T/log")"
+echo "ok owned"
+
+# dropin_dedup: a dep the base already has is not repeated (MAX_DEPS is 8)
+reset; printf 'name=NetworkManager\ndep=dbus\n' > "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "dropin_dedup: exit: $(cat "$T/log")"
+printf 'dep=udev-trigger\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "dropin_dedup: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+printf 'name=NetworkManager\ndep=dbus\ndep=udev-trigger\n' > "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "dropin_dedup: both exit"
+[ ! -e "$SVC/NetworkManager.svc.d/pi-kit.conf" ] || fail "dropin_dedup: empty drop-in kept"
+echo "ok dropin_dedup"
+
+# dropin_max_deps: the engine refuses a .svc with more than 8 dep= lines; refuse before any write
+reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=f\ndep=g\n' > "$SVC/NetworkManager.svc"
+snap > "$T/snap1"
+pi enable > "$T/log" 2>&1; rc=$?
+[ $rc -eq 1 ] || fail "dropin_max_deps: exit $rc"
+grep -qx 'schema-pi: NetworkManager.svc has 7 dep= lines and the pi-kit drop-in adds 2: over the engine limit of 8' "$T/log" ||
+    fail "dropin_max_deps: message: $(cat "$T/log")"
+snap | cmp -s - "$T/snap1" || fail "dropin_max_deps: \$SVC changed"
+[ ! -e "$R/var/lib/schema-init" ] || fail "dropin_max_deps: state dir created"
+printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "dropin_max_deps: cmdline changed"
+reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=dbus\ndep=g\n' > "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "dropin_max_deps: exactly 8: $(cat "$T/log")"
+printf 'dep=udev-trigger\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" || fail "dropin_max_deps: 8 drop-in"
+echo "ok dropin_max_deps"
+
+# not_imported: enabled systemd-* units the importer drops are named; the networkd net service is not
+reset; wants ssh NetworkManager systemd-timesyncd systemd-resolved
+pi enable > "$T/log" 2>&1 || fail "not_imported: exit: $(cat "$T/log")"
+grep -qx 'schema-pi: not imported (schema-init replaces): systemd-resolved.service, systemd-timesyncd.service' "$T/log" ||
+    fail "not_imported: $(cat "$T/log")"
+reset; wants ssh systemd-networkd systemd-timesyncd
+pi enable > "$T/log" 2>&1 || fail "not_imported: networkd exit: $(cat "$T/log")"
+grep -qx 'schema-pi: not imported (schema-init replaces): systemd-timesyncd.service' "$T/log" ||
+    fail "not_imported: networkd: $(cat "$T/log")"
+reset
+pi enable > "$T/log" 2>&1 || fail "not_imported: none exit"
+! grep -q 'not imported' "$T/log" || fail "not_imported: printed with none: $(cat "$T/log")"
+echo "ok not_imported"
+
+# warn_lines: importer WARN and ERROR reach stderr
+reset; printf 'WARN    foo.service: odd\nERROR   bar.service: broken\n' >> "$T/import.extra"
+pi enable > "$T/log" 2> "$T/err" || fail "warn_lines: exit: $(cat "$T/err")"
+grep -qx 'WARN    foo.service: odd' "$T/err" && grep -qx 'ERROR   bar.service: broken' "$T/err" ||
+    fail "warn_lines: $(cat "$T/err")"
+echo "ok warn_lines"
+
+# refused_untouched: a refusal before the import leaves $SVC byte-identical
+for c in no_ssh no_net no_net_unit; do
+    reset; echo mine > "$SVC/pi-bootok.svc"
+    case $c in
+        no_ssh) wants NetworkManager; msg='no ssh service enabled: schema-init would boot without ssh' ;;
+        no_net) wants ssh; msg='no enabled network service' ;;
+        no_net_unit) rm "$R/lib/systemd/system/NetworkManager.service"; msg='NetworkManager.service not found' ;;
+    esac
+    snap > "$T/snap1"
+    pi enable > "$T/log" 2>&1; rc=$?
+    [ $rc -eq 1 ] || fail "refused_untouched $c: exit $rc"
+    grep -q "$msg" "$T/log" || fail "refused_untouched $c: message: $(cat "$T/log")"
+    snap | cmp -s - "$T/snap1" || fail "refused_untouched $c: \$SVC changed"
+    [ ! -e "$T/import.log" ] || fail "refused_untouched $c: importer ran"
+    [ ! -e "$R/var/lib/schema-init" ] || fail "refused_untouched $c: state dir created"
+    printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "refused_untouched $c: cmdline changed"
+done
+echo "ok refused_untouched"
+
+# no_ssh_after_import: enabled, but the importer declined it; the trial run refuses before any write
+reset; echo ssh > "$T/import.decline"; echo mine > "$SVC/pi-bootok.svc"; snap > "$T/snap1"
+pi enable > "$T/log" 2>&1; rc=$?
+snap | cmp -s - "$T/snap1" || fail "no_ssh: \$SVC changed"
+[ ! -e "$R/var/lib/schema-init" ] || fail "no_ssh: state dir created"
+[ "$(wc -l < "$T/import.log")" = 1 ] || fail "no_ssh: real import ran"
+[ $rc -eq 1 ] || fail "no_ssh: exit $rc"
+grep -qx 'schema-pi: no ssh service after import: schema-init would boot without ssh' "$T/log" ||
+    fail "no_ssh: message: $(cat "$T/log")"
+printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "no_ssh: cmdline changed"
+[ ! -e "$BAK" ] || fail "no_ssh: backup written"
+[ ! -e "$REQ" ] || fail "no_ssh: list written"
+echo "ok no_ssh_after_import"
+
+# no_network: ssh running on an unreachable box must not pass as a good boot
+reset; wants ssh
+pi enable > "$T/log" 2>&1; rc=$?
+[ $rc -eq 1 ] || fail "no_network: exit $rc"
+grep -q 'no enabled network service' "$T/log" || fail "no_network: message: $(cat "$T/log")"
+reset; echo NetworkManager > "$T/import.decline"; snap > "$T/snap1"
+pi enable > "$T/log" 2>&1; rc=$?
+snap | cmp -s - "$T/snap1" || fail "no_network_svc: \$SVC changed"
+[ ! -e "$R/var/lib/schema-init" ] || fail "no_network_svc: state dir created"
+[ $rc -eq 1 ] || fail "no_network_svc: exit $rc"
+grep -q 'NetworkManager.svc missing after import' "$T/log" || fail "no_network_svc: message: $(cat "$T/log")"
+printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "no_network_svc: cmdline changed"
+echo "ok no_network"
+
+# import_fails: no summary line means the importer died
+reset; printf '#!/bin/sh\necho boom >&2\nexit 1\n' > "$T/badimport"; chmod +x "$T/badimport"
+SCHEMA_IMPORT=$T/badimport SCHEMA_PI_ROOT=$R SCHEMA_PROC1=$T/comm sh "$PI" enable > "$T/log" 2>&1; rc=$?
+[ $rc -eq 1 ] || fail "import_fails: exit $rc"
+grep -q 'schema-import failed' "$T/log" || fail "import_fails: message: $(cat "$T/log")"
+printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "import_fails: cmdline changed"
+echo "ok import_fails"
+
+# user_files_win: an existing .svc keeps its bytes
+reset; echo my-ssh > "$SVC/ssh.svc"; echo my-dbus > "$SVC/dbus.svc"
+pi enable > "$T/log" 2>&1 || fail "user_files_win: exit: $(cat "$T/log")"
+[ "$(cat "$SVC/ssh.svc")" = my-ssh ] || fail "user_files_win: ssh.svc"
+[ "$(cat "$SVC/dbus.svc")" = my-dbus ] || fail "user_files_win: dbus.svc"
+echo "ok user_files_win"
+
+# rerun: list and drop-in identical, drop-in not duplicated
+reset; pi enable > "$T/log" 2>&1 || fail "rerun: first"
+cp "$REQ" "$T/req1"; cp "$SVC/NetworkManager.svc.d/pi-kit.conf" "$T/drop1"
+pi enable > "$T/log" 2>&1 || fail "rerun: second: $(cat "$T/log")"
+cmp -s "$REQ" "$T/req1" || fail "rerun: list differs"
+cmp -s "$SVC/NetworkManager.svc.d/pi-kit.conf" "$T/drop1" || fail "rerun: drop-in differs"
+[ "$(ls "$SVC/NetworkManager.svc.d")" = pi-kit.conf ] || fail "rerun: extra drop-ins"
+echo "ok rerun"
+
+# required_merge: hand lines survive re-enable, a missing generated name is appended, none removed
+reset; pi enable > "$T/log" 2>&1 || fail "required_merge: first"
+echo name=my-thing > "$SVC/my-thing.svc"
+grep -vx udev-trigger "$REQ" > "$T/req"; printf '# mine\nmy-thing' >> "$T/req"; cp "$T/req" "$REQ"
+pi enable > "$T/log" 2>&1 || fail "required_merge: second: $(cat "$T/log")"
+grep -qx '# mine' "$REQ" && grep -qx my-thing "$REQ" || fail "required_merge: hand lines lost: $(cat "$REQ")"
+[ "$(tail -n 1 "$REQ")" = udev-trigger ] || fail "required_merge: not appended: $(cat "$REQ")"
+[ "$(grep -cx udev "$REQ")" = 1 ] || fail "required_merge: duplicated"
+wants ssh wpa_supplicant
+pi enable > "$T/log" 2>&1 || fail "required_merge: third: $(cat "$T/log")"
+grep -qx NetworkManager "$REQ" && grep -qx wpa_supplicant "$REQ" || fail "required_merge: removed or not added: $(cat "$REQ")"
+echo "ok required_merge"
+
+# required_crlf: a list edited on another OS keeps its names and gets no duplicates
+reset; pi enable > "$T/log" 2>&1 || fail "required_crlf: first"
+echo name=my-thing > "$SVC/my-thing.svc"
+printf '# mine\r\nudev\r\nudev-trigger\r\ndbus\r\npi-early\r\nssh\r\nNetworkManager\r\nmy-thing\r\n' > "$REQ"
+pi enable > "$T/log" 2>&1 || fail "required_crlf: second: $(cat "$T/log")"
+! grep -q dropped "$T/log" || fail "required_crlf: dropped: $(cat "$T/log")"
+[ "$(tr -d '\r' < "$REQ" | grep -cx ssh)" = 1 ] && [ "$(tr -d '\r' < "$REQ" | grep -cx udev)" = 1 ] ||
+    fail "required_crlf: duplicated: $(cat -A "$REQ")"
+tr -d '\r' < "$REQ" | grep -qx my-thing || fail "required_crlf: hand line lost"
+echo "ok required_crlf"
+
+# required_prune: a stale name with no .svc is dropped and reported; hand names with a .svc and comments stay
+reset; pi enable > "$T/log" 2>&1 || fail "required_prune: first"
+echo name=foo > "$SVC/foo.svc"
+printf '# keep me\n\nfoo\n' >> "$REQ"
+wants ssh wpa_supplicant; rm "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "required_prune: second: $(cat "$T/log")"
+grep -qx 'schema-pi: dropped NetworkManager from pi-boot-required (no .svc)' "$T/log" ||
+    fail "required_prune: not reported: $(cat "$T/log")"
+! grep -qx NetworkManager "$REQ" || fail "required_prune: stale kept: $(cat "$REQ")"
+grep -qx foo "$REQ" && grep -qx '# keep me' "$REQ" && grep -qx '' "$REQ" || fail "required_prune: hand lines lost: $(cat "$REQ")"
+grep -qx wpa_supplicant "$REQ" || fail "required_prune: new net missing"
+[ "$(grep -c dropped "$T/log")" = 1 ] || fail "required_prune: over-reported: $(cat "$T/log")"
+echo "ok required_prune"
 
 # disable_roundtrip
 reset
@@ -162,6 +460,34 @@ grep -qx 'enabled: yes' "$T/log" && grep -qx 'pid1: schema-init-pi' "$T/log" &&
     grep -qx 'last_fallback: 2 fallback=systemd attempts=3' "$T/log" &&
     grep -qx 'known_good: schema-init 9.9' "$T/log" || fail "status_prints: full: $(cat "$T/log")"
 echo "ok status_prints"
+
+# status_not_up
+reset
+cat > "$T/ctl" <<'EOT'
+#!/bin/sh
+printf 'service.sshd.state=FUNDAMENTAL\nservice.avahi-daemon.state=EXCISED\nservice.net.state=PERFECT\n'
+EOT
+chmod +x "$T/ctl"
+SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up: exit"
+grep -qx 'not up: avahi-daemon=EXCISED' "$T/log" || fail "status_not_up: $(cat "$T/log")"
+printf '#!/bin/sh\nprintf "service.sshd.state=FUNDAMENTAL\\nservice.net.state=SETTLED\\n"\n' > "$T/ctl"
+SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up: exit2"
+! grep -q '^not up' "$T/log" || fail "status_not_up: printed when all up (SETTLED is up): $(cat "$T/log")"
+pi status > "$T/log" 2>&1 || fail "status_not_up: no engine exit"
+! grep -q '^not up' "$T/log" || fail "status_not_up: printed with no engine: $(cat "$T/log")"
+# the line comes from bootok's own rule, not a second parse
+printf '#!/bin/sh\n[ "$*" = "--blockers --all" ] && printf "a=B\\nc=MISSING\\n"\n' > "$T/fakebootok"; chmod +x "$T/fakebootok"
+SCHEMA_PI_BOOTOK=$T/fakebootok pi status > "$T/log" 2>&1 || fail "status_not_up: fake exit"
+grep -qx 'not up: a=B c=MISSING' "$T/log" || fail "status_not_up: not from bootok: $(cat "$T/log")"
+echo "ok status_not_up"
+
+# status_not_up_missing: listed names with no state line
+reset
+printf 'ssh\nnet\nghost\n# c\n' > "$REQ"
+printf '#!/bin/sh\nprintf "service.sshd.state=FUNDAMENTAL\\nservice.net.state=SETTLED\\nservice.avahi-daemon.state=EXCISED\\n"\n' > "$T/ctl"
+SCHEMA_CTL=$T/ctl pi status > "$T/log" 2>&1 || fail "status_not_up_missing: exit"
+grep -qx 'not up: avahi-daemon=EXCISED ghost=MISSING' "$T/log" || fail "status_not_up_missing: $(cat "$T/log")"
+echo "ok status_not_up_missing"
 
 # firmware_mount: schema-init has no fstab automount, so /boot/firmware may not be mounted
 # shims only: a real mount must never run here
@@ -217,6 +543,20 @@ PATH=$T/bin:$PATH pi disable > "$T/log" 2>&1; rc=$?
 grep -q 'cannot replace' "$T/log" || fail "write_fails: message: $(cat "$T/log")"
 rm -rf "$T/bin" "$CL".tmp.*
 echo "ok write_fails"
+
+# hand_warning: warns on hand-written .svc, never on kit or imported ones, never refuses
+reset
+echo mine > "$SVC/sshd.svc"; echo mine > "$SVC/pi-bootok.svc"
+pi enable > "$T/log" 2>&1 || fail "hand_warning: exit"
+grep -q "warning: hand-written services found: sshd\. If they run the same daemons" "$T/log" || fail "hand_warning: missing: $(cat "$T/log")"
+[ "$(sed -n 's/.*found: \([^.]*\)\. If.*/\1/p' "$T/log")" = sshd ] || fail "hand_warning: kit or import named: $(cat "$T/log")"
+pi enable > "$T/log" 2>&1 || fail "hand_warning: re-enable"
+grep -q "hand-written services found: sshd\." "$T/log" || fail "hand_warning: gone on re-enable"
+[ "$(sed -n 's/.*found: \([^.]*\)\. If.*/\1/p' "$T/log")" = sshd ] || fail "hand_warning: earlier import named: $(cat "$T/log")"
+reset
+pi enable > "$T/log" 2>&1 || fail "hand_warning: clean exit"
+grep -q "hand-written" "$T/log" && fail "hand_warning: warned on a clean root: $(cat "$T/log")"
+echo "ok hand_warning"
 
 # usage
 pi > /dev/null 2>&1; [ $? -eq 2 ] || fail "usage: none"

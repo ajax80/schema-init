@@ -580,7 +580,8 @@ int service_apply_hardening(const service_t *svc) {
         return -1;
     }
     if (svc->cap_restrict) {
-        if (apply_capabilities(svc->cap_keep_mask) != 0) {
+        /* an ambient cap outside the bounding set could never be raised */
+        if (apply_capabilities(svc->cap_keep_mask | svc->cap_ambient_mask) != 0) {
             dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
                     svc->name, errno);
             return -1;
@@ -1284,7 +1285,14 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
     svc_child_log(svc);
     syscall(SYS_close_range, 3, ~0U, 0);
     svc_apply_env(svc, NULL, 0);
-    if (svc->run_uid) {
+    if (svc->run_uid && svc->cap_ambient_mask) {
+        const char *step = "";
+        if (apply_ambient_caps(svc->cap_ambient_mask, svc->run_uid, svc->run_gid,
+                               svc->run_user[0] ? svc->run_user : "nobody", &step) != 0) {
+            dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n", svc->name, step, errno);
+            _exit(126);
+        }
+    } else if (svc->run_uid) {
         if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0 ||
             setgid(svc->run_gid) != 0 || setuid(svc->run_uid) != 0) {
             dprintf(2, "[schema-init] UID DROP FAILED for %s: stop commands: %d\n", svc->name, errno);
@@ -1485,6 +1493,14 @@ int service_spawn(service_t *svc) {
                 chown(xdg, svc->run_uid, svc->run_gid);
                 setenv("XDG_RUNTIME_DIR", xdg, 1);
             }
+            if (svc->cap_ambient_mask) {
+                const char *step = "";
+                if (ambient_caps_prep(svc->cap_ambient_mask, &step) != 0) {
+                    dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n",
+                            svc->name, step, errno);
+                    _exit(126);
+                }
+            }
             if (initgroups(svc->run_user[0] ? svc->run_user : "nobody", svc->run_gid) != 0) {
                 dprintf(2, "[schema-init] UID DROP FAILED for %s: initgroups: %d\n",
                         svc->name, errno);
@@ -1509,6 +1525,14 @@ int service_spawn(service_t *svc) {
             dprintf(2, "[schema-init] UID DROP FAILED for %s: setuid: %d\n",
                     svc->name, errno);
             _exit(126);
+        }
+        if (svc->run_uid && svc->cap_ambient_mask) {
+            const char *step = "";
+            if (ambient_caps_raise(svc->cap_ambient_mask, &step) != 0) {
+                dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n",
+                        svc->name, step, errno);
+                _exit(126);
+            }
         }
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
@@ -1923,15 +1947,17 @@ static int parse_partition(const char *val) {
     return PART_MEMBER;
 }
 
-/* parse on_calendar into svc->timer_cal_{hour,min,dow,dom} and set the timer
- * flags. Accepts "HH:MM" (daily), "Mon HH:MM" (weekly), "15 HH:MM" (monthly).
+/* parse on_calendar into svc->timer_cal_{hours,min,dow,dom} and set the timer
+ * flags. Accepts "HH:MM" (daily), "Mon HH:MM" (weekly), "15 HH:MM" (monthly);
+ * HH may be a comma list of hours ("6,18:00").
  * Returns 0 on success, -1 on malformed input (caller leaves the service
  * non-timer so a typo can't silently schedule garbage). Field parsing is the
  * pure, unit-tested parse_calendar_fields() in service.h. */
 static int parse_calendar(service_t *svc, const char *val) {
-    int h, m, dw, dm;
+    uint32_t h;
+    int m, dw, dm;
     if (parse_calendar_fields(val, &h, &m, &dw, &dm) != 0) return -1;
-    svc->timer_cal_hour = h;
+    svc->timer_cal_hours = h;
     svc->timer_cal_min  = m;
     svc->timer_cal_dow  = dw;
     svc->timer_cal_dom  = dm;
@@ -1951,7 +1977,6 @@ static void svc_init_defaults(service_t *svc) {
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
     svc->landlock_tcp_n[0] = svc->landlock_tcp_n[1] = -1;
-    svc->timer_cal_hour = -1;
     svc->timer_cal_dow = -1;
     svc->timer_cal_dom = -1;
 }
@@ -2336,6 +2361,13 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         }
         svc->cap_restrict = 1;
     }
+    else if (strcmp(line, "ambient_caps") == 0) {
+        if (parse_cap_list(val, &svc->cap_ambient_mask) != 0) {
+            fprintf(stderr, "[schema-init] %s: unknown capability in ambient_caps=%s\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+    }
     else if ((nsr = parse_ns_field(svc, line, val)) != 0) {
         if (nsr < 0) return -1;
     }
@@ -2458,8 +2490,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     } else if (strcmp(line, "on_calendar") == 0) {
         if (parse_calendar(svc, val) != 0)
             fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
-                    "(want HH:MM, or 'Mon HH:MM' weekly, or 'DD HH:MM' "
-                    "monthly) — ignoring\n", svc->name, val);
+                    "(want HH:MM or H,H:MM, optionally after 'Mon' weekly "
+                    "or 'DD' monthly) — ignoring\n", svc->name, val);
     } else if (strcmp(line, "persistent") == 0) {
         if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
     } else if (strcmp(line, "user") == 0) {

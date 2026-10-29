@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """schema-import unit tests — pure translation + a temp-tree drain. No systemctl."""
-import os, sys, tempfile, importlib.util
+import os, sys, tempfile, subprocess, importlib.util
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MOD = os.path.join(REPO, "distros/fedora-installer/migrate/schema-import.py")
 spec = importlib.util.spec_from_file_location("schema_import", MOD)
@@ -193,6 +193,27 @@ check("warnings lead the file", hw.startswith(si.WARN_PREFIX) and hw.count(si.WA
 
 # --- SocketBindAllow/Deny= -> landlock_bind_tcp= ---
 si._landlock_tcp_ok = lambda: True
+# ReadWritePaths= under a read-only protect_system/protect_home level: schema-init
+# has no writable exception, so the level is lowered and warned
+hp = hard("User=pihole\nProtectSystem=full\nReadWriteDirectories=/etc/pihole\n")
+check("pihole-FTL: ReadWriteDirectories=/etc/pihole lowers full -> 1, warned",
+      "protect_system=1\n" in hp and "protect_system=full\n" not in hp
+      and si.WARN_PREFIX + "ReadWriteDirectories=/etc/pihole" in hp)
+hp = hard("ProtectSystem=strict\nReadWritePaths=/etc/x\n")
+check("strict + /etc path -> 1", "protect_system=1\n" in hp and "/etc/x" in hp)
+hp = hard("ProtectSystem=yes\nReadWritePaths=-/usr/local/state\n")
+check("ProtectSystem=yes + -/usr path -> 0", "protect_system=0\n" in hp and "/usr/local/state" in hp)
+hp = hard("ProtectSystem=full\nProtectHome=yes\nReadWritePaths=/ /run\n")
+check("a parent of the read-only dirs (/, /run) -> unchanged: the narrower mount wins",
+      "protect_system=full\n" in hp and "protect_home=1\n" in hp)
+hp = hard("ProtectSystem=full\nProtectHome=yes\nReadWritePaths=/var/lib/x /run/x\n")
+check("paths outside the read-only dirs -> unchanged, no warning",
+      "protect_system=full\n" in hp and "protect_home=1\n" in hp and si.WARN_PREFIX not in hp)
+hp = hard("ProtectHome=yes\nReadWritePaths=/home/x\n")
+check("ProtectHome=yes + /home path -> protect_home=0, warned", "protect_home=0\n" in hp and "/home/x" in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=/etc/a\nReadWritePaths=\nReadWritePaths=/var/b\n")
+check("ReadWritePaths= empty resets", "protect_system=full\n" in hp)
+
 def sb(txt):
     return hard(txt)
 s1 = sb("SocketBindAllow=tcp:443\nSocketBindAllow=80\nSocketBindDeny=any\n")
@@ -656,6 +677,35 @@ open(os.path.join(unitdir, "other.socket"), "w").write("[Socket]\nListenStream=/
 open(os.path.join(unitdir, "other.service"), "w").write("[Service]\nExecStart=/usr/bin/other\n")
 st, det = si.import_one("other")
 check("a same-name socket for another Service= is not attached", st == "imported" and "listen=" not in det[1])
+# systemd only uses a socket that is enabled or pulled in (Debian ssh.socket ships disabled)
+open(os.path.join(unitdir, "ssh.socket"), "w").write("[Socket]\nListenStream=22\nAccept=no\n[Install]\nWantedBy=sockets.target\n")
+open(os.path.join(unitdir, "ssh.service"), "w").write("[Service]\nExecStart=/usr/sbin/sshd -D\n[Install]\nWantedBy=multi-user.target\n")
+os.symlink(os.path.join(unitdir, "ssh.service"), os.path.join(wants, "ssh.service"))
+st, det = si.import_one("ssh.service", force=True, queued=si.enabled_units())
+check("--enabled: service enabled, its socket not -> no listen=", st == "imported" and "listen=" not in det[1])
+st, det = si.import_one("ssh", force=True)
+check("direct import: a disabled sibling socket is not attached", st == "imported" and "listen=" not in det[1])
+st, det = si.import_one("ssh.service", force=True, queued=["ssh.service", "ssh.socket"])
+check("socket queued in the same drain -> attached", "listen=stream:22\n" in det[1])
+_sw = os.path.join(tmp, "etc/systemd/system/sockets.target.wants")
+os.makedirs(_sw, exist_ok=True)
+os.symlink(os.path.join(unitdir, "ssh.socket"), os.path.join(_sw, "ssh.socket"))
+st, det = si.import_one("ssh.service", force=True, queued=si.enabled_units())
+check("--enabled: socket enabled too -> listen= stays", st == "imported" and "listen=stream:22\n" in det[1])
+os.unlink(os.path.join(_sw, "ssh.socket"))
+open(os.path.join(unitdir, "ssh.service"), "w").write("[Unit]\nRequires=ssh.socket\n[Service]\nExecStart=/usr/sbin/sshd -D\n")
+st, det = si.import_one("ssh", force=True)
+check("Requires= pulls the socket in -> attached", "listen=stream:22\n" in det[1])
+open(os.path.join(unitdir, "ssh.service"), "w").write("[Service]\nSockets=ssh.socket\nExecStart=/usr/sbin/sshd -D\n")
+st, det = si.import_one("ssh", force=True)
+check("[Service] Sockets= names the socket -> attached", "listen=stream:22\n" in det[1])
+open(os.path.join(unitdir, "ssh.service"), "w").write("[Service]\nExecStart=/usr/sbin/sshd -D\n[Install]\nWantedBy=x\nAlso=foo.socket ssh.socket\n")
+st, det = si.import_one("ssh", force=True)
+check("[Install] Also= alone does not attach (enable-time only)", "listen=" not in det[1])
+open(os.path.join(unitdir, "ssh.service"), "w").write("[Service]\nSockets=other.socket\nExecStart=/usr/sbin/sshd -D\n")
+st, det = si.import_one("ssh", force=True)
+check("Sockets= naming another socket -> same-name one not attached", "listen=" not in det[1])
+os.unlink(os.path.join(wants, "ssh.service"))
 open(os.path.join(unitdir, "goodcheck.service"), "w").write("[Service]\nType=oneshot\nExecStart=/usr/bin/good --check\n")
 check("a oneshot sharing a daemon's binary still imports", si.import_one("goodcheck")[0] == "imported")
 
@@ -737,6 +787,22 @@ check("missing User= skipped unless the daemon is /bin/false",
 check("undecodable activation file skipped, pass still completes", not os.path.exists(os.path.join(bd, "org.x.Latin.service")))
 check("no .tmp left behind", not any(f.endswith(".tmp") for f in os.listdir(bd)))
 check("bus override rerun is a no-op", si.bus_overrides(log=lambda *_: None) == {"written": 0, "kept": 4, "removed": 0, "skipped": 1})
+# schema-pi's trial run writes overrides to scratch on a live root: the bus must not be told to reload
+_calls, _ud, _orig = [], si._unit_dirs(), (si._unit_dirs, si._root, si.act_dir, si.subprocess, si.bus_dir)
+class _FakeSP:
+    SubprocessError, DEVNULL = subprocess.SubprocessError, subprocess.DEVNULL
+    @staticmethod
+    def run(a, **k): _calls.append(a)
+si._unit_dirs, si._root, si.act_dir, si.subprocess = (lambda: _ud), (lambda: "/"), (lambda: act), _FakeSP
+os.environ["SCHEMA_BUS_OVERRIDE_DIR"] = tempfile.mkdtemp()
+_c = si.bus_overrides(log=lambda *_: None)
+os.environ.pop("SCHEMA_BUS_OVERRIDE_DIR")
+check("redirected override dir on / -> written, no bus reload", _c["written"] > 0 and not _calls)
+_bd = tempfile.mkdtemp()
+si.bus_dir = lambda: _bd
+si.bus_overrides(log=lambda *_: None)
+check("default override dir on / -> bus reloaded", len(_calls) == 1 and "ReloadConfig" in " ".join(_calls[0]))
+si._unit_dirs, si._root, si.act_dir, si.subprocess, si.bus_dir = _orig
 os.remove(os.path.join(SD, "disksd.svc"))
 si.bus_overrides(log=lambda *_: None)
 check("override dropped when its .svc goes away", not os.path.exists(os.path.join(bd, "org.x.Disks.service")))
@@ -864,5 +930,106 @@ check("runit: dbus check -> its socket", "ready_path=/run/dbus/system_bus_socket
       and "stable_secs" not in si.runit_to_svc("dbus", "", set(), None, True))
 check("runit: unknown check -> 1 s, noted", "not translated" in si.runit_to_svc("pg", "", set(), None, True)
       and "stable_secs=1\n" in si.runit_to_svc("pg", "", set(), None, True))
+
+# --- AmbientCapabilities= / RuntimeDirectory= / multi-hour OnCalendar= (Debian) ---
+_amb = si.unit_to_svc("pihole-FTL", si.parse_unit(
+    "[Service]\nUser=pihole\nAmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW\nExecStart=/usr/bin/pihole-FTL -f\n"))
+check("AmbientCapabilities= + User= -> ambient_caps= comma list",
+      "ambient_caps=CAP_NET_BIND_SERVICE,CAP_NET_RAW\n" in _amb and "user=pihole\n" in _amb)
+check("AmbientCapabilities= never brings keep_caps=", "keep_caps" not in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit(
+    "[Service]\nUser=a\nAmbientCapabilities=cap_net_raw\nAmbientCapabilities=CAP_SYS_TIME CAP_NET_RAW\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= lines merge, upper-cased, deduped", "ambient_caps=CAP_NET_RAW,CAP_SYS_TIME\n" in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit(
+    "[Service]\nUser=a\nAmbientCapabilities=CAP_NET_RAW\nAmbientCapabilities=\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= empty resets", "ambient_caps" not in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit("[Service]\nAmbientCapabilities=CAP_NET_RAW\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= without User= -> no ambient_caps (root has them), noted",
+      "ambient_caps" not in _amb and "dropped AmbientCapabilities" in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit("[Service]\nUser=a\nAmbientCapabilities=CAP_NET_RAW CAP_NET_RAWW CAP_FUTURE\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= unknown names dropped with a WARN, known kept",
+      "ambient_caps=CAP_NET_RAW\n" in _amb and si.WARN_PREFIX + "AmbientCapabilities= CAP_NET_RAWW" in _amb
+      and "CAP_FUTURE" in _amb.split("ambient_caps=")[0])
+import re as _re
+_engine_caps = set(_re.findall(r'\{ "(CAP_[A-Z_]+)",', open(os.path.join(REPO, "caps.c")).read()))
+check("importer cap list matches caps.c cap_table", _engine_caps and set(si._ENGINE_CAPS) == _engine_caps)
+_amb = si.unit_to_svc("a", si.parse_unit("[Service]\nUser=a\nAmbientCapabilities=~CAP_NET_RAW\nExecStart=/bin/a\n"))
+check("AmbientCapabilities=~ -> not translated, warned", "ambient_caps" not in _amb and "AmbientCapabilities=~" in _amb)
+
+_rt = si.unit_to_svc("ssh", si.parse_unit(
+    "[Service]\nEnvironmentFile=-/etc/default/ssh\nExecStartPre=/usr/sbin/sshd -t\nExecStart=/usr/sbin/sshd -D $SSHD_OPTS\n"
+    "Type=notify\nRuntimeDirectory=sshd\nRuntimeDirectoryMode=0755\n"))
+check("RuntimeDirectory= -> root install -d exec_pre before ExecStartPre",
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/sshd\nexec_pre=/usr/sbin/sshd -t\n" in _rt)
+check("RuntimeDirectory= adds no order-changed warning", "order changed" not in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=r\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= + User= -> owned by user, default mode 0755",
+      "exec_pre=+/usr/bin/install -d -m 0755 -o foo -g foo /run/r\n" in _rt)
+_pg = tempfile.mkdtemp(); os.makedirs(os.path.join(_pg, "etc"))
+open(os.path.join(_pg, "etc/passwd"), "w").write("root:x:0:0::/root:/bin/sh\nsvcu:x:990:991::/:/sbin/nologin\norph:x:992:4242::/:/sbin/nologin\n")
+open(os.path.join(_pg, "etc/group"), "w").write("root:x:0:\nsvcgrp:x:991:\n")
+os.environ["MIGRATE_ROOT"] = _pg
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=svcu\nRuntimeDirectory=r\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= owner group = User='s primary group from MIGRATE_ROOT passwd/group",
+      "-o svcu -g svcgrp /run/r\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=orph\nRuntimeDirectory=r\nExecStart=/bin/r\n"))
+check("primary gid with no group name -> user name", "-o orph -g orph /run/r\n" in _rt)
+os.environ.pop("MIGRATE_ROOT")
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nGroup=bar\nRuntimeDirectory=r\nRuntimeDirectoryMode=750\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= + Group= -> -g group", "exec_pre=+/usr/bin/install -d -m 750 -o foo -g bar /run/r\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a b\nRuntimeDirectory=%N\nExecStart=/bin/r\n"))
+check("several RuntimeDirectory= entries, one line each, %N expanded",
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/a\nexec_pre=+/usr/bin/install -d -m 0755 /run/b\n"
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/r\n" in _rt)
+# root install -d -o under a parent the user owns follows a symlink the user planted there
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=a/b ok\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= nested entry dropped and noted",
+      "/run/a" not in _rt and _rt.count("install -d") == 1 and "-o foo -g foo /run/ok\n" in _rt
+      and "# schema-import:" in _rt and "dropped RuntimeDirectory=a/b" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=. ..\nExecStart=/bin/r\n"))
+check("RuntimeDirectory=. and .. dropped (would chown /run or /)", "install -d" not in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=irqbalance/\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= trailing slash is not nesting (Fedora irqbalance)", "-m 0755 /run/irqbalance\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a\nRuntimeDirectory=\nRuntimeDirectory=b\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= empty resets", "/run/a" not in _rt and "/run/b\n" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=../x /abs ok %Z\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= bad entries dropped and noted, good kept",
+      _rt.count("install -d") == 1 and "/run/ok\n" in _rt and "dropped RuntimeDirectory=../x" in _rt
+      and "dropped RuntimeDirectory=/abs" in _rt and "dropped RuntimeDirectory=%Z" in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=r\nRuntimeDirectoryMode=bogus\nExecStart=/bin/r\n"))
+check("RuntimeDirectoryMode= unrecognised -> 0755, warned", "-m 0755 /run/r\n" in _rt and "RuntimeDirectoryMode=bogus" in _rt)
+check("RuntimeDirectory= counts toward the 8 exec_pre limit", skipped("r",
+      "[Service]\nRuntimeDirectory=a b\n" + "".join("ExecStartPre=/bin/p%d\n" % i for i in range(7)) + "ExecStart=/bin/r\n"))
+
+for cal, want in (("*-*-* 6,18:00", "6,18:00"), ("Mon 18,6:30", "Mon 6,18:30"),
+                  ("*-*-15 0,12:00:00", "15 0,12:00"), ("*-*-* 6,24:00", None), ("*-*-* 6,,18:00", None)):
+    check("calendar %r -> %r" % (cal, want), si._calendar(cal) == want)
+_ad = si.timer_to_svc("apt-daily", si.parse_unit("[Timer]\nOnCalendar=*-*-* 6,18:00\nRandomizedDelaySec=12h\nPersistent=true\n"),
+                      si.parse_unit("[Service]\nType=oneshot\nExecStart=/usr/lib/apt/apt.systemd.daily update\n"))
+check("apt-daily.timer imports with on_calendar=6,18:00", "on_calendar=6,18:00\npersistent=1\n" in _ad)
+
+# Fedora units that use none of the new keys: byte-identical to the output before they existed
+_F_SSHD = ("[Unit]\nAfter=network.target sshd-keygen.target\nWants=sshd-keygen.target\n[Service]\nType=notify\nEnvironment=OPTIONS=\n"
+           "EnvironmentFile=-/etc/sysconfig/sshd\nExecStart=/usr/sbin/sshd -D $OPTIONS\nExecReload=/bin/kill -HUP $MAINPID\n"
+           "KillMode=process\nRestart=on-failure\nRestartSec=42s\n[Install]\nWantedBy=multi-user.target\n")
+_F_CHRONY = ("[Service]\nType=notify\nPIDFile=/run/chrony/chronyd.pid\nEnvironment=\"OPTIONS=\"\nEnvironmentFile=-/etc/sysconfig/chronyd\n"
+             "ExecStart=/usr/sbin/chronyd -n $OPTIONS\nCapabilityBoundingSet=~CAP_AUDIT_CONTROL CAP_AUDIT_READ\nNoNewPrivileges=yes\n"
+             "PrivateTmp=yes\nProtectHome=yes\nProtectSystem=strict\nReadWritePaths=/run /var/lib/chrony -/var/log\nNoNewPrivileges=no\n"
+             "[Install]\nWantedBy=multi-user.target\n")
+_F_FSTRIM_T = "[Timer]\nOnCalendar=weekly\nAccuracySec=1h\nPersistent=true\nRandomizedDelaySec=100min\n[Install]\nWantedBy=timers.target\n"
+_F_FSTRIM_S = ("[Service]\nType=oneshot\nExecStart=/usr/bin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose "
+               "--quiet-unsupported\nProtectKernelTunables=yes\n")
+check("Fedora sshd.service output unchanged", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
+      'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nnotify=1\n'
+      'restart_sec=42\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
+check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
+      '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\nname=chronyd\n'
+      'exec=/usr/sbin/chronyd\nargs=-n\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/chronyd\nexpand_args=1\nnotify=1\n'
+      'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\n')
+check("Fedora fstrim.timer output unchanged",
+      si.timer_to_svc("fstrim", si.parse_unit(_F_FSTRIM_T), si.parse_unit(_F_FSTRIM_S)) ==
+      '# schema-import: dropped RandomizedDelaySec; dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
+      'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
+      'private_tmp=0\nprotect_system=0\nprotect_home=0\non_calendar=Mon 00:00\npersistent=1\n')
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

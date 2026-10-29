@@ -274,7 +274,50 @@ def _hardening(svc):
         if v not in _FALSE:
             warns.append("ProtectHome=%s has no equivalent, mapped to protect_home=0" % v)
         lines.append("protect_home=0")
+    _writable_lower(svc, lines, warns)
     return lines, warns
+
+
+# protect_system/protect_home levels, strongest first, with the dirs each makes
+# read-only (ns.c apply_mount_ns)
+_RO_LEVELS = {"protect_system": (("full", ("/usr", "/boot", "/efi", "/etc")),
+                                 ("1", ("/usr", "/boot", "/efi")), ("0", ())),
+              "protect_home": (("1", ("/home", "/root", "/run/user")), ("0", ()))}
+
+
+# only paths inside a read-only dir: systemd lets the more specific mount win,
+# so ReadWritePaths=/run leaves ProtectHome's /run/user alone
+def _under(path, ro):
+    path = path.rstrip("/") or "/"
+    return path == ro or path.startswith(ro + "/")
+
+
+# schema-init has no ReadWritePaths= exception inside a read-only mount, so a
+# declared writable path under one lowers the level until it is writable
+# (pihole-FTL: ProtectSystem=full + ReadWriteDirectories=/etc/pihole)
+def _writable_lower(svc, lines, warns):
+    rw = []
+    for k, v in svc:
+        if k in ("ReadWritePaths", "ReadWriteDirectories"):
+            rw = rw + [(k, w) for w in v.split()] if v.strip() else []
+    for i, ln in enumerate(lines):
+        key, val = ln.split("=", 1)
+        levels = _RO_LEVELS.get(key)
+        if not levels:
+            continue
+        idx = [lv for lv, _ in levels].index(val)
+        hit = []
+        for k, w in rw:
+            path = w.lstrip("-+")
+            if "%" in path or not path.startswith("/"):
+                continue
+            while any(_under(path, ro) for ro in levels[idx][1]):
+                idx += 1
+                hit.append("%s=%s" % (k, w))
+        if hit:
+            lines[i] = "%s=%s" % (key, levels[idx][0])
+            warns.append("%s is read-only under %s=%s, lowered to %s=%s"
+                         % (" ".join(dict.fromkeys(hit)), key, val, key, levels[idx][0]))
 
 
 _PORTS = re.compile(r"^(\d+)(?:-(\d+))?$")
@@ -469,13 +512,16 @@ def _calendar(v):
     if v in ("hourly", "*:00", "*:00:00", "*-*-* *:00", "*-*-* *:00:00"):
         return ("interval", 3600)
     m = re.fullmatch(r"(?:([a-z]{3})[a-z]*\s+)?(?:\*-\*-(\*|\d{1,2})\s+)?"
-                     r"(\d{1,2}):(\d{2})(?::00)?", v)
+                     r"(\d{1,2}(?:,\d{1,2})*):(\d{2})(?::00)?", v)
     if not m:
         return None
-    dow, dom, h, mi = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
-    if h > 23 or mi > 59 or (dow and dow not in _DOW):
+    dow, dom, mi = m.group(1), m.group(2), int(m.group(4))
+    hours = sorted(set(int(h) for h in m.group(3).split(",")))
+    if hours[-1] > 23 or mi > 59 or (dow and dow not in _DOW):
         return None
-    hm = "%02d:%02d" % (h, mi)
+    # one hour keeps the zero-padded form every existing import was written with
+    hm = "%02d:%02d" % (hours[0], mi) if len(hours) == 1 else \
+        "%s:%02d" % (",".join(str(h) for h in hours), mi)
     if dow and dom not in (None, "*"):
         return None
     if dow:
@@ -872,6 +918,89 @@ def _cap_deps(deps):
     return ["dep=%s" % d for d in deps[:8]], notes
 
 
+# caps.c cap_table, the names PID 1 parses: one it doesn't know rejects the
+# whole .svc. test_import_units.py checks this list against caps.c.
+_ENGINE_CAPS = frozenset((
+    "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_FSETID",
+    "CAP_KILL", "CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP", "CAP_LINUX_IMMUTABLE",
+    "CAP_NET_BIND_SERVICE", "CAP_NET_BROADCAST", "CAP_NET_ADMIN", "CAP_NET_RAW",
+    "CAP_IPC_LOCK", "CAP_IPC_OWNER", "CAP_SYS_MODULE", "CAP_SYS_RAWIO",
+    "CAP_SYS_CHROOT", "CAP_SYS_PTRACE", "CAP_SYS_PACCT", "CAP_SYS_ADMIN",
+    "CAP_SYS_BOOT", "CAP_SYS_NICE", "CAP_SYS_RESOURCE", "CAP_SYS_TIME",
+    "CAP_SYS_TTY_CONFIG", "CAP_MKNOD", "CAP_LEASE", "CAP_AUDIT_WRITE",
+    "CAP_AUDIT_CONTROL", "CAP_SETFCAP", "CAP_MAC_OVERRIDE", "CAP_MAC_ADMIN",
+    "CAP_SYSLOG", "CAP_WAKE_ALARM", "CAP_BLOCK_SUSPEND", "CAP_AUDIT_READ",
+    "CAP_PERFMON", "CAP_BPF", "CAP_CHECKPOINT_RESTORE",
+))
+
+
+def _ambient_caps(svc):
+    caps, warns = {}, []
+    for v in _get_all(svc, "AmbientCapabilities"):
+        v = v.strip()
+        if not v:
+            caps = {}
+        elif v.startswith("~"):
+            warns.append("AmbientCapabilities=%s (inverted) not translated" % v)
+            return [], warns
+        else:
+            for c in v.upper().split():
+                if c in _ENGINE_CAPS:
+                    caps[c] = True
+                else:
+                    warns.append("AmbientCapabilities= %s not a capability schema-init knows, dropped" % c)
+    return list(caps), warns
+
+
+# what systemd chowns to when Group= is unset; the user name if it can't be read
+def _primary_group(user):
+    def rows(f):
+        try:
+            with open(os.path.join(_root(), "etc", f)) as fh:
+                return [ln.rstrip("\n").split(":") for ln in fh]
+        except OSError:
+            return []
+    gid = next((r[3] for r in rows("passwd") if len(r) > 3 and r[0] == user), None)
+    return next((r[0] for r in rows("group") if len(r) > 2 and r[2] == gid), user)
+
+
+# systemd creates RuntimeDirectory= dirs before ExecStartPre=, and schema-init
+# does not: a root install -d ahead of the unit's own exec_pre lines does
+# (Debian ssh.service's sshd -t needs /run/sshd). Returns (lines, notes, warns).
+def runtime_dir_lines(svc, name):
+    dirs = []
+    for v in _get_all(svc, "RuntimeDirectory"):
+        dirs = dirs + v.split() if v.strip() else []
+    if not dirs:
+        return [], [], []
+    notes, warns = [], []
+    mode = _get_last(svc, "RuntimeDirectoryMode") or "0755"
+    if not re.fullmatch(r"[0-7]{3,4}", mode):
+        warns.append("RuntimeDirectoryMode=%s unrecognised, 0755 used" % mode)
+        mode = "0755"
+    # user mode: under $XDG_RUNTIME_DIR, and the runner is the user already
+    base, pfx = (_USER["runtime"], "") if _USER else ("/run", "+")
+    user, own = _get_last(svc, "User"), ""
+    if not _USER and user and user != "root":
+        own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(_get_last(svc, "Group") or _primary_group(user)))
+    out = []
+    if not base:
+        return [], ["dropped RuntimeDirectory=%s (no XDG_RUNTIME_DIR)" % " ".join(dirs)], warns
+    for d in dirs:
+        try:
+            x = _specifiers([d], name)[0].rstrip("/")
+        except Skip:
+            x = None
+        # dir:symlink (systemd 254) is not translated, and nothing nested: a root install -d -o
+        # through a parent the user owns follows a symlink the user put there
+        if not x or "/" in x or ":" in x or x in (".", ".."):
+            notes.append("dropped RuntimeDirectory=%s" % d)
+            continue
+        out.append("exec_pre=%s/usr/bin/install -d -m %s%s %s"
+                   % (pfx, mode, own, _cmd_quote(base + "/" + x)))
+    return out, notes, warns
+
+
 def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     """Translate parsed unit sections into schema .svc text. sock: the parsed
     .socket that activates it; lazy: start on the first connection, not at boot.
@@ -942,6 +1071,11 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                 expanded.append((pre, pa))
         pres = expanded
 
+    rt_pres, rt_notes, rt_warns = runtime_dir_lines(svc, unit or name)
+    if len(rt_pres) + len(pres) > 8:
+        raise Skip("%d RuntimeDirectory= + %d ExecStartPre= lines (limit 8 exec_pre)"
+                   % (len(rt_pres), len(pres)))
+
     if len(argv) > 63:
         raise Skip("ExecStart= has %d arguments (limit 62)" % (len(argv) - 1))
     env_pairs = list({p.split("=", 1)[0]: p for p in env_pairs}.values())
@@ -961,6 +1095,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         lines.append("env_file=%s" % ef)
     if expand:
         lines.append("expand_args=1")
+    lines.extend(rt_pres)
     for pre, pa in pres:
         lines.append("exec_pre=%s%s" % (pre, " ".join(_cmd_quote(w) for w in pa)))
     # user mode only: system units have always been stopped by SIGTERM alone,
@@ -1017,10 +1152,18 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # (!! is only the fallback for kernels without ambient caps; F44 has them)
     if "+" in pfx or ("!" in pfx and "!!" not in pfx):
         user = ""
+    amb, amb_warns = _ambient_caps(svc)
     if user and user != "root":
         lines.append("user=%s" % user)
+        # ambient only: keep_caps= with user= fails initgroups unless
+        # CAP_SETUID/CAP_SETGID are kept, and the engine widens the bounding
+        # set for ambient caps on its own
+        if amb:
+            lines.append("ambient_caps=%s" % ",".join(amb))
     else:
         lines.append("needs_root=1")
+        if amb:
+            rt_notes.append("dropped AmbientCapabilities= (runs as root)")
 
     lines.append("critical=0")
 
@@ -1046,6 +1189,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
     # here only the main process is confined
     warns.extend(stop_warns)
+    warns.extend(amb_warns + rt_warns)
     if _USER and stype in ("notify", "notify-reload"):
         # Quadlet's [X-Container] Image= says where podman's options end;
         # the check runs on READY=1, so only notify units can have it
@@ -1119,6 +1263,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if not inst and sock is None:
         notes.append("no [Install] section")
     notes += env_file_notes
+    notes += rt_notes
     notes += dep_notes
     notes += ["socket: " + n for n in sock_notes]
     for k in ("WorkingDirectory",):
@@ -1229,11 +1374,31 @@ def _timer_for(name):
     return None
 
 
+def _unit_enabled(unit, dirs=None):
+    import glob
+    return any(glob.glob(os.path.join(d, "*.wants", unit))
+               for d in (dirs if dirs is not None else _unit_dirs()[:2]))
+
+
 def _service_enabled(name):
     """name.service has a .wants/ symlink of its own (systemd enabled it)."""
-    import glob
-    return any(glob.glob(os.path.join(d, "*.wants", name + ".service"))
-               for d in _unit_dirs()[:2])
+    return _unit_enabled(name + ".service")
+
+
+# systemd listens on a same-name socket only when it is enabled, queued with
+# the service, or pulled in by it; a disabled one (Debian's ssh.socket) is
+# just a file, and attaching it makes PID 1 hold the daemon's own port.
+# Every unit dir: vendor wants/ (/usr/lib/systemd/user/sockets.target.wants)
+# enable too.
+def _socket_used(name, sections, queued):
+    sock = name + ".socket"
+    if sock in queued or _unit_enabled(sock, _unit_dirs()):
+        return True
+    # Sockets= is the service claiming it. Not Also=: that only acts at enable time,
+    # and an enabled Also= socket is already in a wants/ dir.
+    keys = [("Unit", k) for k in ("Requires", "Wants", "BindsTo", "Requisite")] + \
+        [("Service", "Sockets")]
+    return any(sock in v.split() for sec, k in keys for v in _get_all(sections.get(sec, []), k))
 
 
 _RECLAIMED = ("systemd-", "dbus", "NetworkManager-wait-online")
@@ -1562,7 +1727,7 @@ def import_one(name, force=False, queued=()):
     socket = name.endswith(".socket")
     name = name[:-len(".service")] if name.endswith(".service") else name
     name = name[:-len(".timer")] if timer else name
-    sock_sections = None
+    sock_sections = sibling = None
     if socket:
         name = name[:-len(".socket")]
         spath = find_unit(name + ".socket")
@@ -1590,7 +1755,7 @@ def import_one(name, force=False, queued=()):
                 svc_target = _get_last(cand.get("Socket", []), "Service") or name + ".service"
                 if svc_target == name + ".service":
                     socket_lines(cand)
-                    sock_sections = cand
+                    sibling = cand
             except (OSError, Skip):
                 pass
     out = os.path.join(svc_dir(), name + ".svc")
@@ -1606,6 +1771,8 @@ def import_one(name, force=False, queued=()):
         with open(path) as f:
             text = f.read()
         sections = parse_unit(text)
+        if sibling is not None and _socket_used(name, sections, queued):
+            sock_sections = sibling
         if "@" in name and sock_sections is not None:
             raise Skip("socket starts template %s — instances unsupported" % name)
         denied = _denied(name)
@@ -1807,7 +1974,9 @@ def bus_overrides(dry_run=False, log=print):
                 os.remove(os.path.join(out, fn))
             except OSError:
                 pass
-    if not dry_run and (counts["written"] or counts["removed"]) and _root() == "/":
+    # a redirected dir is not one the bus reads (schema-pi's trial run on a live root)
+    if not dry_run and (counts["written"] or counts["removed"]) and _root() == "/" \
+            and not os.environ.get("SCHEMA_BUS_OVERRIDE_DIR"):
         try:
             subprocess.run(["dbus-send", "--system", "--type=method_call", "--dest=org.freedesktop.DBus",
                             "/org/freedesktop/DBus", "org.freedesktop.DBus.ReloadConfig"],

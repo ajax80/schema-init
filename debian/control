@@ -10,6 +10,7 @@ Rules-Requires-Root: no
 Package: schema-init
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, systemd, python3
+Recommends: curl, libglib2.0-bin
 Description: custom Linux init system (PID 1 replacement)
  schema-init is a small init system and service supervisor, with a
  control tool, journal sink, recorder and a Raspberry Pi boot wrapper

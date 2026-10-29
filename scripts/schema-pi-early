@@ -1,0 +1,10 @@
+#!/bin/sh
+# What systemd's early units do on Pi OS and schema-init does not. /dev/shm is PID 1's, /boot/firmware is pi-boot-firmware's.
+R=${SCHEMA_PI_ROOT:-}
+ip link set lo up
+ip addr add 127.0.0.1/8 dev lo 2>/dev/null
+ip addr add ::1/128 dev lo 2>/dev/null
+hostname "$(head -n 1 "$R/etc/hostname")"
+swapon -a
+# a failed step here must not fail the boot
+exit 0

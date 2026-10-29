@@ -1,0 +1,7 @@
+#!/bin/sh
+# schema-init has no fstab automount: mount what local-fs.target would. Network filesystems are
+# left out by type as well as by _netdev: Debian fstab lines often omit _netdev, and this runs before the network
+out=$(mount -a -O no_netdev -t nonfs,nfs4,cifs,smb3,smbfs,ceph,glusterfs,fuse.sshfs,9p,davfs 2>&1)
+[ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/pi-mounts: /' >&2
+# a missing disk is no reason to fail the boot
+exit 0

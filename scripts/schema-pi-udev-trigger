@@ -1,0 +1,5 @@
+#!/bin/sh
+# coldplug is best effort: a slow or failing device must not fail the boot
+udevadm trigger --action=add || true
+udevadm settle --timeout=15 || true
+exit 0
