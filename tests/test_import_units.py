@@ -921,6 +921,13 @@ check("AmbientCapabilities= empty resets", "ambient_caps" not in _amb)
 _amb = si.unit_to_svc("a", si.parse_unit("[Service]\nAmbientCapabilities=CAP_NET_RAW\nExecStart=/bin/a\n"))
 check("AmbientCapabilities= without User= -> no ambient_caps (root has them), noted",
       "ambient_caps" not in _amb and "dropped AmbientCapabilities" in _amb)
+_amb = si.unit_to_svc("a", si.parse_unit("[Service]\nUser=a\nAmbientCapabilities=CAP_NET_RAW CAP_NET_RAWW CAP_FUTURE\nExecStart=/bin/a\n"))
+check("AmbientCapabilities= unknown names dropped with a WARN, known kept",
+      "ambient_caps=CAP_NET_RAW\n" in _amb and si.WARN_PREFIX + "AmbientCapabilities= CAP_NET_RAWW" in _amb
+      and "CAP_FUTURE" in _amb.split("ambient_caps=")[0])
+import re as _re
+_engine_caps = set(_re.findall(r'\{ "(CAP_[A-Z_]+)",', open(os.path.join(REPO, "caps.c")).read()))
+check("importer cap list matches caps.c cap_table", _engine_caps and set(si._ENGINE_CAPS) == _engine_caps)
 _amb = si.unit_to_svc("a", si.parse_unit("[Service]\nUser=a\nAmbientCapabilities=~CAP_NET_RAW\nExecStart=/bin/a\n"))
 check("AmbientCapabilities=~ -> not translated, warned", "ambient_caps" not in _amb and "AmbientCapabilities=~" in _amb)
 

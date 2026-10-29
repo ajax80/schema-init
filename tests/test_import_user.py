@@ -311,6 +311,11 @@ t = Tree()
 _b = si.unit_to_svc("rd", si.parse_unit("[Service]\nUser=tess\nRuntimeDirectory=rd\nExecStart=/bin/rd\n"))
 check("user RuntimeDirectory= -> install -d under XDG_RUNTIME_DIR, no +, no owner",
       ("exec_pre=/usr/bin/install -d -m 0755 %s/rd\n" % t.run) in _b)
+_saved = t.ctx["runtime"]; t.ctx["runtime"] = ""
+_b = si.unit_to_svc("rd", si.parse_unit("[Service]\nRuntimeDirectory=rd\nExecStart=/bin/rd\n"))
+t.ctx["runtime"] = _saved
+check("user RuntimeDirectory= with no XDG_RUNTIME_DIR -> no line, noted",
+      "install -d" not in _b and "dropped RuntimeDirectory=rd" in _b)
 t.done()
 
 # --- a socket's .svc keeps its service's dep= now the dep is generated ---

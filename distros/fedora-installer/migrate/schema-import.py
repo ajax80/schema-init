@@ -918,6 +918,22 @@ def _cap_deps(deps):
     return ["dep=%s" % d for d in deps[:8]], notes
 
 
+# caps.c cap_table, the names PID 1 parses: one it doesn't know rejects the
+# whole .svc. test_import_units.py checks this list against caps.c.
+_ENGINE_CAPS = frozenset((
+    "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_FSETID",
+    "CAP_KILL", "CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP", "CAP_LINUX_IMMUTABLE",
+    "CAP_NET_BIND_SERVICE", "CAP_NET_BROADCAST", "CAP_NET_ADMIN", "CAP_NET_RAW",
+    "CAP_IPC_LOCK", "CAP_IPC_OWNER", "CAP_SYS_MODULE", "CAP_SYS_RAWIO",
+    "CAP_SYS_CHROOT", "CAP_SYS_PTRACE", "CAP_SYS_PACCT", "CAP_SYS_ADMIN",
+    "CAP_SYS_BOOT", "CAP_SYS_NICE", "CAP_SYS_RESOURCE", "CAP_SYS_TIME",
+    "CAP_SYS_TTY_CONFIG", "CAP_MKNOD", "CAP_LEASE", "CAP_AUDIT_WRITE",
+    "CAP_AUDIT_CONTROL", "CAP_SETFCAP", "CAP_MAC_OVERRIDE", "CAP_MAC_ADMIN",
+    "CAP_SYSLOG", "CAP_WAKE_ALARM", "CAP_BLOCK_SUSPEND", "CAP_AUDIT_READ",
+    "CAP_PERFMON", "CAP_BPF", "CAP_CHECKPOINT_RESTORE",
+))
+
+
 def _ambient_caps(svc):
     caps, warns = {}, []
     for v in _get_all(svc, "AmbientCapabilities"):
@@ -929,10 +945,10 @@ def _ambient_caps(svc):
             return [], warns
         else:
             for c in v.upper().split():
-                if re.fullmatch(r"CAP_[A-Z_]+", c):
+                if c in _ENGINE_CAPS:
                     caps[c] = True
                 else:
-                    warns.append("AmbientCapabilities= %s not a capability, dropped" % c)
+                    warns.append("AmbientCapabilities= %s not a capability schema-init knows, dropped" % c)
     return list(caps), warns
 
 
@@ -968,6 +984,8 @@ def runtime_dir_lines(svc, name):
     if not _USER and user and user != "root":
         own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(_get_last(svc, "Group") or _primary_group(user)))
     out = []
+    if not base:
+        return [], ["dropped RuntimeDirectory=%s (no XDG_RUNTIME_DIR)" % " ".join(dirs)], warns
     for d in dirs:
         try:
             x = _specifiers([d], name)[0]
