@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <errno.h>
 
 static void put(const char *path, const char *text) {
     FILE *f = fopen(path, "w");
@@ -128,6 +129,8 @@ static void perms_precedence(void) {
     char *r = mkroot();
     char out[256], want[256];
     assert(sn_find_perm_file(r, out, sizeof out) == -1);
+    mkpermfile(r, "run/tmpfiles.d", "");
+    assert(sn_find_perm_file(r, out, sizeof out) == -1);
     mkpermfile(r, "usr/lib/tmpfiles.d", "");
     snprintf(want, sizeof want, "%s/usr/lib/tmpfiles.d/static-nodes-permissions.conf", r);
     assert(sn_find_perm_file(r, out, sizeof out) == 0 && strcmp(out, want) == 0);
@@ -210,7 +213,40 @@ static void devname_file_fallback(void) {
     assert(sn_find_devname_file(r, "6.19.10", out, sizeof out) == 0 && strcmp(out, want) == 0);
 }
 
+/* a root+path too long for the buffer must be skipped, not truncated onto a
+ * shorter node that happens to exist */
+static void perms_truncation_skipped(void) {
+    if (geteuid() != 0) { printf("SKIP  perms_truncation_skipped (not root)\n"); return; }
+    char *base = mkroot();
+    char r[512], p[600];
+    size_t want = 511 - strlen("/dev/ne");
+    snprintf(r, sizeof r, "%s/", base);
+    while (strlen(r) < want) {
+        size_t left = want - strlen(r);
+        char comp[201];
+        size_t n = left > 200 ? 200 : left;
+        if (left > 200 && left - 200 < 2) n = left - 2;
+        memset(comp, 'a', n); comp[n] = '\0';
+        strcat(r, comp);
+        if (strlen(r) < want) strcat(r, "/");
+        assert(mkdir(r, 0755) == 0 || errno == EEXIST);
+    }
+    assert(strlen(r) == want);
+    snprintf(p, sizeof p, "%s/dev", r);
+    assert(mkdir(p, 0755) == 0);
+    snprintf(p, sizeof p, "%s/dev/ne", r);
+    assert(mknod(p, S_IFCHR | 0600, makedev(10, 200)) == 0);
+    char f[256];
+    snprintf(f, sizeof f, "%s/perm.conf", base);
+    put(f, "z /dev/net/tun 0666 - - -\n");
+    sn_apply_perms(r, f);
+    struct stat st;
+    assert(stat(p, &st) == 0 && (st.st_mode & 07777) == 0600);
+}
+
 int main(void) {
+    umask(077);
+    perms_truncation_skipped();
     devname_file_fallback();
     perm_parse();
     perm_parse_skip();

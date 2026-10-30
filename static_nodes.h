@@ -9,6 +9,8 @@
 #include <sys/types.h>
 #include <sys/sysmacros.h>
 #include <sys/utsname.h>
+#include <sys/vfs.h>
+#include <linux/magic.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -39,6 +41,11 @@ static inline int sn_parse_devname_line(const char *line, struct sn_node *out) {
     return sn_path_ok(out->devname);
 }
 
+/* chmod after mkdir: a 0700 /dev/net under a strict umask would hide tun */
+static inline void sn_mkdir(const char *path) {
+    if (mkdir(path, 0755) == 0) chmod(path, 0755);
+}
+
 static inline void sn_mkparents(char *path) {
     char *slash = strrchr(path, '/');
     if (!slash) return;
@@ -46,10 +53,10 @@ static inline void sn_mkparents(char *path) {
     for (char *p = path + 1; *p; p++) {
         if (*p != '/') continue;
         *p = '\0';
-        mkdir(path, 0755);
+        sn_mkdir(path);
         *p = '/';
     }
-    mkdir(path, 0755);
+    sn_mkdir(path);
     *slash = '/';
 }
 
@@ -100,9 +107,10 @@ static inline int sn_parse_perm_line(const char *line, struct sn_perm *out) {
     return 1;
 }
 
-/* systemd-tmpfiles search order; the first directory holding the file wins. */
+/* first directory holding the file wins */
 static inline int sn_find_perm_file(const char *root, char *out, size_t sz) {
-    static const char *dirs[] = { "/etc", "/run", "/usr/local/lib", "/usr/lib" };
+    /* systemd's order minus /run: PID 1 has just mounted it empty */
+    static const char *dirs[] = { "/etc", "/usr/local/lib", "/usr/lib" };
     for (size_t i = 0; i < sizeof dirs / sizeof *dirs; i++) {
         snprintf(out, sz, "%s%s/tmpfiles.d/static-nodes-permissions.conf", root, dirs[i]);
         if (access(out, F_OK) == 0) return 0;
@@ -129,7 +137,8 @@ static inline void sn_apply_perms(const char *root, const char *perm_file) {
         struct sn_perm pm;
         if (!sn_parse_perm_line(line, &pm)) continue;
         char path[512];
-        snprintf(path, sizeof path, "%s%s", root, pm.path);
+        if ((size_t)snprintf(path, sizeof path, "%s%s", root, pm.path) >= sizeof path)
+            continue;
         /* Same discipline as schema-udev's node_apply_perms: O_PATH doesn't open
          * the device (no autoload), O_NOFOLLOW refuses a symlink, and every
          * change goes through the fd's procfs alias so it lands on this inode. */
@@ -181,7 +190,13 @@ static inline int sn_find_devname_file(const char *root, const char *release,
 /* First boot only, after mount_pseudo(): devtmpfs and /proc are mounted. */
 static inline void static_nodes_boot(void) {
     struct utsname u;
+    struct statfs fs;
     char path[512], created[512];
+    /* devtmpfs reports tmpfs (or ramfs without CONFIG_TMPFS). Anything else
+     * means the mount failed and /dev is a directory on the root fs, where
+     * nodes would persist across boots. */
+    if (statfs("/dev", &fs) != 0 ||
+        (fs.f_type != TMPFS_MAGIC && fs.f_type != RAMFS_MAGIC)) return;
     if (uname(&u) == 0 && sn_find_devname_file("", u.release, path, sizeof path) == 0) {
         int n = sn_create_nodes("", path, created, sizeof created);
         if (n > 0) printf("[schema-init] static nodes: created %d (%s)\n", n, created);

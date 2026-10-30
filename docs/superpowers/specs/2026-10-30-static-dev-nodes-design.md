@@ -69,8 +69,8 @@ then `mknod(path, (type=='c' ? S_IFCHR : S_IFBLK) | 0600, makedev(maj,min))`
 skip silently.
 
 **Permissions** — file `static-nodes-permissions.conf`, systemd's tmpfiles
-search order: `/etc/tmpfiles.d/` → `/run/tmpfiles.d/` →
-`/usr/local/lib/tmpfiles.d/` → `/usr/lib/tmpfiles.d/` (first found wins, whole
+search order minus `/run` (PID 1 has just mounted it empty): `/etc/tmpfiles.d/`
+→ `/usr/local/lib/tmpfiles.d/` → `/usr/lib/tmpfiles.d/` (first found wins, whole
 file). Only `z` lines whose path starts with `/dev/` and contains no `..` are
 used; fields `path mode user group`, `-` = leave as is (tmpfiles semantics, not
 udev's "group without mode ⇒ 0660"); mode is plain octal (anything else → skip
@@ -86,6 +86,10 @@ differs, and PID 1 shouldn't include the 550-line udev header for 30 lines.
 
 **Log:** `[schema-init] static nodes: created 6 (net/tun uinput …)`; errors as
 `[schema-init] static node <path>: <strerror>`.
+
+**Guard:** skipped unless `statfs("/dev")` reports tmpfs/ramfs (devtmpfs) —
+a failed devtmpfs mount would otherwise leave nodes on the root fs. Parent dirs
+are chmod'ed 0755 after mkdir so a strict umask can't hide them.
 
 **Re-exec:** inside the existing `reexec_fd < 0` block, so it runs once per
 boot.

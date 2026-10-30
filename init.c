@@ -1712,7 +1712,7 @@ int main(int argc, char **argv) {
         }
         mount_pseudo();
         /* before modules-load.d, so a module it loads finds its node there */
-        if (getpid() == 1) static_nodes_boot();
+        static_nodes_boot();
         cleanup_tmp_locks();
         load_watchdog_module();
         load_configured_modules();
