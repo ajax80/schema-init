@@ -311,6 +311,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o /tmp/schema-test-cdromid && /tmp/schema-test-cdromid
 	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o /tmp/schema-test-cdrommedia && /tmp/schema-test-cdrommedia
 	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
+	$(CC) $(CFLAGS) tests/test_static_nodes.c -o /tmp/schema-test-staticnodes && /tmp/schema-test-staticnodes
 	$(CC) $(CFLAGS) tests/test_notify.c -o /tmp/schema-test-notify && /tmp/schema-test-notify
 	$(CC) $(CFLAGS) tests/test_fdstore.c -o /tmp/schema-test-fdstore && /tmp/schema-test-fdstore
 	$(CC) $(CFLAGS) tests/test_fdclose.c -o /tmp/schema-test-fdclose && /tmp/schema-test-fdclose
