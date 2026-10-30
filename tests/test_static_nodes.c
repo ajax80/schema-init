@@ -196,7 +196,22 @@ static void perms_on_nodes(void) {
     assert(stat(p, &st) == 0 && (st.st_mode & 07777) == 0660);
 }
 
+static void devname_file_fallback(void) {
+    char *r = mkroot();
+    char out[256], want[256];
+    assert(sn_find_devname_file(r, "6.19.10", out, sizeof out) == -1);
+    mkpermfile(r, "usr/lib/modules/6.19.10", "");
+    snprintf(want, sizeof want, "%s/usr/lib/modules/6.19.10/modules.devname", r);
+    put(want, "");
+    assert(sn_find_devname_file(r, "6.19.10", out, sizeof out) == 0 && strcmp(out, want) == 0);
+    mkpermfile(r, "lib/modules/6.19.10", "");
+    snprintf(want, sizeof want, "%s/lib/modules/6.19.10/modules.devname", r);
+    put(want, "");
+    assert(sn_find_devname_file(r, "6.19.10", out, sizeof out) == 0 && strcmp(out, want) == 0);
+}
+
 int main(void) {
+    devname_file_fallback();
     perm_parse();
     perm_parse_skip();
     perms_precedence();

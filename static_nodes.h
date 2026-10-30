@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/sysmacros.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -163,6 +164,29 @@ static inline void sn_apply_perms(const char *root, const char *perm_file) {
         close(fd);
     }
     fclose(f);
+}
+
+/* /lib is a symlink to usr/lib on merged-/usr systems; the fallback covers a
+ * box where it isn't. */
+static inline int sn_find_devname_file(const char *root, const char *release,
+                                       char *out, size_t sz) {
+    static const char *dirs[] = { "/lib/modules", "/usr/lib/modules" };
+    for (size_t i = 0; i < sizeof dirs / sizeof *dirs; i++) {
+        snprintf(out, sz, "%s%s/%s/modules.devname", root, dirs[i], release);
+        if (access(out, F_OK) == 0) return 0;
+    }
+    return -1;
+}
+
+/* First boot only, after mount_pseudo(): devtmpfs and /proc are mounted. */
+static inline void static_nodes_boot(void) {
+    struct utsname u;
+    char path[512], created[512];
+    if (uname(&u) == 0 && sn_find_devname_file("", u.release, path, sizeof path) == 0) {
+        int n = sn_create_nodes("", path, created, sizeof created);
+        if (n > 0) printf("[schema-init] static nodes: created %d (%s)\n", n, created);
+    }
+    if (sn_find_perm_file("", path, sizeof path) == 0) sn_apply_perms("", path);
 }
 
 #endif
