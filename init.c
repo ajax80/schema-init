@@ -290,7 +290,7 @@ static void mount_pseudo(void) {
     symlink("/proc/self/fd/2", "/dev/stderr");
     mkdir("/dev/pts", 0755);
     mount("devpts",  "/dev/pts", "devpts", MS_NOSUID|MS_NOEXEC,        "gid=5,mode=620,ptmxmode=666");
-    mkdir("/dev/shm", 1777);
+    mkdir("/dev/shm", 01777);
     mount("tmpfs",   "/dev/shm", "tmpfs", MS_NOSUID|MS_NODEV,          "mode=1777");
     mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755");
     mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
@@ -301,8 +301,9 @@ static void mount_pseudo(void) {
         close(cg_fd);
     }
     mkdir("/run/dbus",     0755);
-    mkdir("/run/lock",     1777);
-    mkdir("/run/shm",      1777);
+    /* chmod too: mkdir is masked by the umask, and these must be world-writable */
+    mkdir("/run/lock",     01777); chmod("/run/lock", 01777);
+    mkdir("/run/shm",      01777); chmod("/run/shm",  01777);
     mkdir("/run/user",              0755);
     mkdir("/run/user/0",            0700);
     mkdir("/run/systemd",           0755);
