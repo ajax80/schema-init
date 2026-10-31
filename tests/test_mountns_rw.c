@@ -50,6 +50,21 @@ int main(void) {
         return 1;
     }
 
+    /* an rw path above protect_home's /run/user must not make that tmpfs writable */
+    pid = fork();
+    if (pid == 0) {
+        const char *run[] = { "/run" };
+        const char *step = "";
+        if (apply_mount_ns(0, 0, 1, run, 1, &step) != 0) _exit(30);
+        if (try_create("/run/user/schema-test-rw") != EROFS) _exit(31);
+        _exit(0);
+    }
+    assert(waitpid(pid, &st, 0) == pid);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        fprintf(stderr, "test_mountns_rw: protect_home child status %d\n", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+        return 1;
+    }
+
     /* no read-only knob: rw paths alone create no namespace */
     const char *paths[] = { "/etc" };
     const char *step = "";

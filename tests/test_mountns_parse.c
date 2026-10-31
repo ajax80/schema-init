@@ -118,7 +118,7 @@ int main(void) {
 
     snprintf(path, sizeof(path), "%s/rw.svc", dir);
     write_svc(path, "name=rw\nexec=/usr/bin/true\nprotect_system=full\n"
-                    "rw_path=/etc/pihole/\nrw_path=/var/lib/my data\n");
+                    "rw_path= /etc/pihole/ \nrw_path=/var/lib/my data\t\n");
     assert(service_load_one(path, &one) == 0);
     assert(one.rw_path_count == 2);
     assert(strcmp(one.rw_path[0], "/etc/pihole") == 0);

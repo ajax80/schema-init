@@ -572,10 +572,10 @@ rm "$SVC/pi-mounts.svc"
 pi refresh > "$T/log" 2>&1 || fail "refresh: exit: $(cat "$T/log")"
 [ "$(cat "$SVC/pi-timesync.svc")" = new-timesync ] || fail "refresh: unedited not replaced"
 [ "$(cat "$SVC/udev.svc")" = mine ] || fail "refresh: edited overwritten"
-[ "$(cat "$SVC/pi-mounts.svc")" = pi-mounts-svc ] || fail "refresh: missing kit file not installed"
-grep -qx "schema-pi: udev.svc was edited; kept (shipped version: $R/usr/share/schema-init/udev.svc.example)" "$T/log" ||
+[ ! -e "$SVC/pi-mounts.svc" ] || fail "refresh: a kit file removed after it was recorded came back"
+grep -qx "schema-pi: udev.svc differs from what schema-pi installed; kept (shipped version: $R/usr/share/schema-init/udev.svc.example)" "$T/log" ||
     fail "refresh: edited notice: $(cat "$T/log")"
-grep -qx "schema-pi: refreshed: pi-mounts pi-timesync; takes effect on next boot" "$T/log" ||
+grep -qx "schema-pi: refreshed: pi-timesync; takes effect on next boot" "$T/log" ||
     fail "refresh: summary: $(cat "$T/log")"
 pi refresh > "$T/log" 2>&1 || fail "refresh: second exit"
 grep -q refreshed "$T/log" && fail "refresh: second run refreshed again: $(cat "$T/log")"
@@ -587,7 +587,12 @@ rm "$R/var/lib/schema-init/kit.sums"
 echo new-dbus > "$R/usr/share/schema-init/dbus.svc.example"
 pi refresh > "$T/log" 2>&1 || fail "refresh_legacy: exit"
 [ "$(cat "$SVC/dbus.svc")" = dbus-svc ] || fail "refresh_legacy: unrecorded different file replaced"
-grep -q "dbus.svc was edited; kept" "$T/log" || fail "refresh_legacy: notice: $(cat "$T/log")"
+grep -q "dbus.svc differs from the shipped version and has no record; kept" "$T/log" || fail "refresh_legacy: notice: $(cat "$T/log")"
+# a kit file never recorded and absent (new in this package) is installed
+grep -v ' journal-sink$' "$R/var/lib/schema-init/kit.sums" > "$T/s" && mv "$T/s" "$R/var/lib/schema-init/kit.sums"
+rm "$SVC/journal-sink.svc"
+pi refresh > "$T/log" 2>&1
+[ "$(cat "$SVC/journal-sink.svc")" = journal-sink-svc ] || fail "refresh_new: unrecorded missing kit file not installed"
 grep -q ' pi-early$' "$R/var/lib/schema-init/kit.sums" || fail "refresh_legacy: identical file not adopted"
 grep -q ' dbus$' "$R/var/lib/schema-init/kit.sums" && fail "refresh_legacy: different file adopted"
 echo "ok refresh"

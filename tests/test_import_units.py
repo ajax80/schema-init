@@ -229,6 +229,9 @@ check("more than 8 rw paths -> level lowered (all of /etc writable), no stale rw
       "rw_path" not in hp and "protect_system=1\n" in hp and si.WARN_PREFIX + "ReadWritePaths=/etc/p8" in hp)
 hp = hard("ProtectSystem=full\nReadWritePaths=/etc/a /etc/a/\n")
 check("duplicate rw paths collapse", hp.count("rw_path=") == 1)
+hp = si.unit_to_svc("h", si.parse_unit("[Service]\nExecStart=+/bin/h\nProtectSystem=full\nReadWritePaths=/etc/x\n"))
+check("ExecStart=+ drops rw_path instead of writing rw_path=0",
+      "rw_path" not in hp and "protect_system=0\n" in hp)
 hp = hard("ProtectSystem=full\nReadWritePaths=-/etc/gdm/custom.conf /etc\n")
 check("an rw path inside another kept one is dropped (accounts-daemon)",
       hp.count("rw_path=") == 1 and "rw_path=/etc\n" in hp)

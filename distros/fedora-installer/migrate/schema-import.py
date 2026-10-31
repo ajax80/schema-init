@@ -238,7 +238,8 @@ def limit_lines(svc):
 
 def _hardening(svc):
     """The four hardening knobs, always explicit so the unit means the same
-    thing whatever the host's hardening-default is. Returns (lines, warnings);
+    thing whatever the host's hardening-default is, then any rw_path= lines
+    (paths, not knobs). Returns (lines, warnings);
     a warning names each directive mapped weaker than the unit asked."""
     lines, warns = [], []
 
@@ -1205,7 +1206,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         if any("+" not in pre for pre, _ in pres):
             warns.append("ExecStart=+ main process kept the sandbox: plain ExecStartPre lines need it")
         else:
-            hard = [ln.split("=", 1)[0] + "=0" for ln in hard]
+            hard = [ln.split("=", 1)[0] + "=0" for ln in hard if not ln.startswith("rw_path=")]
             warns = ["ExecStart=+ runs unsandboxed: hardening directives dropped"
                      " (SocketBind kept; exec_pre lines are not bind-restricted)"]
     seen_plain = False

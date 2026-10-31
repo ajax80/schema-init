@@ -2013,9 +2013,11 @@ static void rw_path_clear(service_t *svc) {
     svc->rw_path_count = 0;
 }
 
-/* absolute, not "/", no ".." component; trailing '/' stripped in place */
+/* absolute, not "/", no ".." component; surrounding blanks and trailing '/'
+ * stripped in place: a stray space would name a missing path, silently skipped */
 static int rw_path_ok(char *v) {
     size_t n = strlen(v);
+    while (n && (v[n - 1] == ' ' || v[n - 1] == '\t')) v[--n] = '\0';
     while (n > 1 && v[n - 1] == '/') v[--n] = '\0';
     if (v[0] != '/' || n < 2) return 0;
     for (const char *p = v; (p = strstr(p, "..")); p += 2)
@@ -2404,6 +2406,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->landlock[svc->landlock_count++] = strdup(val);
     }
     else if (strcmp(line, "rw_path") == 0) {
+        while (*val == ' ' || *val == '\t') val++;
         if (!rw_path_ok(val) || svc->rw_path_count >= MAX_RW_PATHS) {
             fprintf(stderr, "[schema-init] %s: bad rw_path=%s (absolute, no '..', at most %d)\n",
                     svc->name[0] ? svc->name : path, val, MAX_RW_PATHS);

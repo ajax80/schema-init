@@ -130,12 +130,16 @@ refresh() {
         ex=$SHARE/$s.svc.example
         [ -f "$ex" ] || continue
         cmp -s "$f" "$ex" 2>/dev/null && continue
-        if [ -e "$f" ]; then
-            r=$(recorded "$s")
-            if [ -z "$r" ] || [ "$r" != "$(kit_sum "$f")" ]; then
-                echo "schema-pi: $s.svc was edited; kept (shipped version: $ex)"
-                continue
-            fi
+        r=$(recorded "$s")
+        if [ ! -e "$f" ]; then
+            # recorded then gone: removed on purpose; never recorded: new in this package
+            [ -z "$r" ] || continue
+        elif [ -z "$r" ]; then
+            echo "schema-pi: $s.svc differs from the shipped version and has no record; kept (shipped version: $ex)"
+            continue
+        elif [ "$r" != "$(kit_sum "$f")" ]; then
+            echo "schema-pi: $s.svc differs from what schema-pi installed; kept (shipped version: $ex)"
+            continue
         fi
         cp "$ex" "$f.tmp.$$" && mv "$f.tmp.$$" "$f" || die "cannot replace $f"
         new="$new $s"
