@@ -8,7 +8,7 @@ fail() { echo "FAIL: $*"; exit 1; }
 
 mkdir -p "$T/bin" "$T/root/etc"
 echo pidev > "$T/root/etc/hostname"
-for c in ip hostname swapon sleep; do
+for c in ip hostname swapon sleep systemd-tmpfiles; do
     printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n%s\n' "$c" "$T" "${SHIM_TAIL:-exit 1}" > "$T/bin/$c"
     chmod +x "$T/bin/$c"
 done
@@ -47,6 +47,12 @@ PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$T/root sh "$D/scripts/schema-pi-early" >/dev/n
 grep -qx 'ip link set lo up' "$T/calls" || fail "early: no lo up"
 grep -qx 'hostname pidev' "$T/calls" || fail "early: hostname"
 grep -qx 'swapon -a' "$T/calls" || fail "early: swapon"
+grep -qx 'systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev' "$T/calls" || fail "early: tmpfiles"
+
+# Pi OS's systemd-nologin.conf creates /run/nologin; nothing else removes it
+mkdir -p "$T/root/run"; : > "$T/root/run/nologin"
+PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$T/root sh "$D/scripts/schema-pi-early" >/dev/null 2>&1
+[ ! -e "$T/root/run/nologin" ] || fail "early: /run/nologin left behind"
 
 # timesync runs from a copy: its floor falls back to its own mtime, which a checkout sets to now
 TS=$T/schema-pi-timesync
