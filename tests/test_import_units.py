@@ -235,6 +235,28 @@ check("ExecStart=+ drops rw_path instead of writing rw_path=0",
 hp = hard("ProtectSystem=full\nReadWritePaths=-/etc/gdm/custom.conf /etc\n")
 check("an rw path inside another kept one is dropped (accounts-daemon)",
       hp.count("rw_path=") == 1 and "rw_path=/etc\n" in hp)
+# the cap counts emitted paths only: a covered path takes no slot
+hp = hard("ProtectSystem=full\nReadWritePaths=/etc " + " ".join("/etc/p%d" % i for i in range(9)) + "\n")
+check("paths under a kept parent take no cap slot",
+      "protect_system=full\n" in hp and hp.count("rw_path=") == 1 and "rw_path=/etc\n" in hp and si.WARN_PREFIX not in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=" + " ".join("/etc/p%d" % i for i in range(8)) + " /etc /etc/q\n")
+check("a parent arriving after a full cap replaces its children",
+      "protect_system=full\n" in hp and hp.count("rw_path=") == 1 and "rw_path=/etc\n" in hp and si.WARN_PREFIX not in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=" + " ".join("/etc/p%d" % i for i in range(8)) + " /etc/p0/sub\n")
+check("a child of a kept path with a full cap keeps the level",
+      "protect_system=full\n" in hp and hp.count("rw_path=") == 8 and si.WARN_PREFIX not in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=" + " ".join("/etc/p%d" % i for i in range(9)) + " /etc\n")
+check("a parent arriving after an overflow still collapses its children",
+      "protect_system=full\n" in hp and hp.count("rw_path=") == 1 and "rw_path=/etc\n" in hp and si.WARN_PREFIX not in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=" + " ".join("/etc/p%d" % i for i in range(9)) + " /usr/lib/x\n")
+check("an /etc overflow lowers to 1 and keeps the /usr path",
+      "protect_system=1\n" in hp and hp.count("rw_path=") == 1 and "rw_path=/usr/lib/x\n" in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=" + " ".join("/etc/p%d" % i for i in range(8)) + " /etc//p0\n")
+check("a doubled-slash spelling of a kept path takes no cap slot",
+      "protect_system=full\n" in hp and hp.count("rw_path=") == 8 and si.WARN_PREFIX not in hp)
+with open(os.path.join(REPO, "ns.h")) as f:
+    ns_max = next(int(l.split()[2]) for l in f if l.startswith("#define MAX_RW_PATHS"))
+check("_MAX_RW_PATHS matches ns.h MAX_RW_PATHS", getattr(si, "_MAX_RW_PATHS", None) == ns_max)
 
 def sb(txt):
     return hard(txt)
