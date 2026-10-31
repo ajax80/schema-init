@@ -146,26 +146,36 @@ refresh() {
     done
     record_kit
     # a new kit dep (sysctl) reaches the network service only through its drop-in, which enable alone wrote
+    seen=
     for f in "$SVC"/*.svc.d/pi-kit.conf; do
         n=${f%.svc.d/pi-kit.conf}
         [ -f "$n.svc" ] && refresh_dropin "${n##*/}"
     done
-    # its base already had every dep, so enable wrote no drop-in
+    # its base already had every dep, so enable wrote no drop-in. No import ran, so a
+    # hand-set owner under another name is found only through its drop-in above
     out=
     if net=$(detect_net) && n=$(resolve "$SVC" "$net"); then refresh_dropin "$n"; fi
     [ -z "$new" ] || echo "schema-pi: refreshed:$new; takes effect on next boot"
 }
 
+# append-only: lines the user added to pi-kit.conf survive an upgrade
 refresh_dropin() {
+    case " $seen " in *" $1 "*) return 0 ;; esac
+    seen="$seen $1"
     f=$SVC/$1.svc.d/pi-kit.conf
-    [ "$(dropin_deps "$SVC/$1.svc")" = "$(cat "$f" 2>/dev/null)" ] && return 0
-    have=$(grep -c '^[[:blank:]]*dep=' "$SVC/$1.svc")
-    add=$(dropin_deps "$SVC/$1.svc" | grep -c .)
+    miss=$(dropin_deps "$SVC" "$1" | while IFS= read -r l; do
+            grep -q "^[[:blank:]]*$l[[:blank:]]*\$" "$f" 2>/dev/null || echo "$l"
+        done)
+    [ -n "$miss" ] || return 0
+    have=$(($(other_deps "$SVC" "$1") + $(cat "$f" 2>/dev/null | grep -c '^[[:blank:]]*dep=')))
+    add=$(printf '%s\n' "$miss" | grep -c .)
     if [ $((have + add)) -gt $MAX_DEPS ]; then
-        echo "schema-pi: $1.svc has $have dep= lines and the pi-kit drop-in would add $add: over the engine limit of $MAX_DEPS; drop-in kept"
+        echo "schema-pi: $1 has $have dep= lines with its drop-ins; adding $(echo $miss) is over the engine limit of $MAX_DEPS, so $1 is not ordered after them"
         return 0
     fi
-    write_dropin "$1"
+    mkdir -p "$SVC/$1.svc.d" || die "cannot create $1.svc.d"
+    chmod 755 "$SVC/$1.svc.d"
+    printf '%s\n' "$miss" >> "$f" || die "cannot write $f"
     new="$new $1.svc.d/pi-kit.conf"
 }
 
@@ -212,26 +222,34 @@ resolve() {
     [ -n "$o" ] && [ -f "$1/$o.svc" ] && echo "$o"
 }
 
-# only deps the base lacks: a duplicate dep= still takes one of the engine's 8 slots.
-# A kit .svc the user removed is not a dep: the network would wait on it forever
+# the base and every drop-in but pi-kit.conf: the engine's 8 dep slots span them all
+own_lines() {
+    for f in "$1/$2.svc" "$1/$2.svc.d"/*.conf; do
+        [ -f "$f" ] && [ "${f##*/}" != pi-kit.conf ] && cat "$f"
+    done
+}
+
+other_deps() { own_lines "$1" "$2" | grep -c '^[[:blank:]]*dep='; }
+
+# only deps the service lacks: a duplicate dep= still takes a slot
 dropin_deps() {
+    l=$(own_lines "$1" "$2")
     for d in udev-trigger dbus sysctl; do
-        [ -f "${1%/*}/$d.svc" ] || continue
-        grep -q "^dep=[[:blank:]]*$d[[:blank:]]*\$" "$1" || echo "dep=$d"
+        printf '%s\n' "$l" | grep -q "^[[:blank:]]*dep=[[:blank:]]*$d[[:blank:]]*\$" || echo "dep=$d"
     done
 }
 
 # the engine refuses a .svc with more than MAX_DEPS dep= lines: the network service would never start
 check_deps() {
-    have=$(grep -c '^[[:blank:]]*dep=' "$1/$2.svc")
-    add=$(dropin_deps "$1/$2.svc" | grep -c .)
+    have=$(other_deps "$1" "$2")
+    add=$(dropin_deps "$1" "$2" | grep -c .)
     [ $((have + add)) -le $MAX_DEPS ] ||
-        die "$2.svc has $have dep= lines and the pi-kit drop-in adds $add: over the engine limit of $MAX_DEPS"
+        die "$2.svc has $have dep= lines with its drop-ins and the pi-kit drop-in adds $add: over the engine limit of $MAX_DEPS"
 }
 
 write_dropin() {
     f=$SVC/$1.svc.d/pi-kit.conf
-    deps=$(dropin_deps "$SVC/$1.svc")
+    deps=$(dropin_deps "$SVC" "$1")
     if [ -z "$deps" ]; then rm -f "$f"; return 0; fi
     mkdir -p "$SVC/$1.svc.d" || die "cannot create $1.svc.d"
     # the engine ignores a group/other-writable drop-in dir

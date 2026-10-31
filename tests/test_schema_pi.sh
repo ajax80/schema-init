@@ -285,7 +285,7 @@ reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=f\nde
 snap > "$T/snap1"
 pi enable > "$T/log" 2>&1; rc=$?
 [ $rc -eq 1 ] || fail "dropin_max_deps: exit $rc"
-grep -qx 'schema-pi: NetworkManager.svc has 7 dep= lines and the pi-kit drop-in adds 3: over the engine limit of 8' "$T/log" ||
+grep -qx 'schema-pi: NetworkManager.svc has 7 dep= lines with its drop-ins and the pi-kit drop-in adds 3: over the engine limit of 8' "$T/log" ||
     fail "dropin_max_deps: message: $(cat "$T/log")"
 snap | cmp -s - "$T/snap1" || fail "dropin_max_deps: \$SVC changed"
 [ ! -e "$R/var/lib/schema-init" ] || fail "dropin_max_deps: state dir created"
@@ -621,20 +621,32 @@ rm -r "$SVC/NetworkManager.svc.d"
 pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_none: exit"
 printf 'dep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
     fail "refresh_dropin_none: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf" 2>&1)"
-# a sysctl.svc the user removed is never waited on
+# a sysctl.svc the user removed stays gone; the engine skips a dep with no .svc
 old_pi
 echo "$(echo sysctl-svc | sha256sum | cut -d" " -f1)  sysctl" >> "$R/var/lib/schema-init/kit.sums"
 pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_removed: exit"
 [ ! -e "$SVC/sysctl.svc" ] || fail "refresh_dropin_removed: sysctl.svc came back"
+# a line the user added to pi-kit.conf survives
+old_pi
+echo dep=pi-mounts >> "$SVC/NetworkManager.svc.d/pi-kit.conf"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_hand: exit"
+printf 'dep=udev-trigger\ndep=dbus\ndep=pi-mounts\ndep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "refresh_dropin_hand: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+# the engine's 8 slots span every drop-in: 4 base + 2 local + 2 pi-kit leaves no room
+old_pi
+printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\n' > "$SVC/NetworkManager.svc"
+printf 'dep=e\ndep=f\n' > "$SVC/NetworkManager.svc.d/10-local.conf"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_local: exit"
 printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
-    fail "refresh_dropin_removed: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+    fail "refresh_dropin_local: over the limit: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
 # over the engine's 8: the old drop-in stays, the network still starts
 old_pi
 printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=f\n' > "$SVC/NetworkManager.svc"
 pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_max: exit"
 printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
     fail "refresh_dropin_max: drop-in changed: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
-grep -qx "schema-pi: NetworkManager.svc has 6 dep= lines and the pi-kit drop-in would add 3: over the engine limit of 8; drop-in kept" "$T/log" ||
+[ "$(grep -c 'not ordered after' "$T/log")" -eq 1 ] || fail "refresh_dropin_max: message count: $(cat "$T/log")"
+grep -qx "schema-pi: NetworkManager has 8 dep= lines with its drop-ins; adding dep=sysctl is over the engine limit of 8, so NetworkManager is not ordered after them" "$T/log" ||
     fail "refresh_dropin_max: message: $(cat "$T/log")"
 echo "ok refresh_dropin"
 

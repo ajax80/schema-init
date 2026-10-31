@@ -125,6 +125,7 @@ PATH=$T/bin:$PATH T_MOUNT_FAIL=1 sh "$D/scripts/schema-pi-mounts" > "$T/out" 2>&
 grep -qx 'pi-mounts: mount: /srv/usb: special device /dev/sda1 does not exist.' "$T/out" || fail "mounts: failure not logged: $(cat "$T/out")"
 
 # every other script parses under a strict POSIX shell
+sh -n scripts/schema-sysctl-apply || fail "schema-sysctl-apply syntax"
 for s in early timesync udev-trigger dbus mounts; do
     [ -f "scripts/schema-pi-$s" ] || fail "scripts/schema-pi-$s missing"
     sh -n "scripts/schema-pi-$s" || fail "schema-pi-$s syntax"
