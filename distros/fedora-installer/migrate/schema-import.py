@@ -312,12 +312,16 @@ def _rw_path_ok(path):
 # dirs are an empty tmpfs with nothing to bind back, so a path there (or one
 # rw_path= can't carry) still lowers the level until it is writable
 # (pihole-FTL: ProtectSystem=full + ReadWriteDirectories=/etc/pihole).
+# The cap is ns.h MAX_RW_PATHS: service.c refuses an rw_path= past it.
+_MAX_RW_PATHS = 8
+
+
 def _writable_lower(svc, lines, warns):
     rw = []
     for k, v in svc:
         if k in ("ReadWritePaths", "ReadWriteDirectories"):
             rw = rw + [(k, w) for w in _list(k, v, warns)] if v.strip() else []
-    keep = []
+    keep, ro = [], ()
     for i, ln in enumerate(lines):
         key, val = ln.split("=", 1)
         levels = _RO_LEVELS.get(key)
@@ -332,10 +336,14 @@ def _writable_lower(svc, lines, warns):
             if not any(_under(path, ro) for ro in levels[idx][1]):
                 continue
             p = path.rstrip("/")
-            if key == "protect_system" and _rw_path_ok(path) and (p in keep or len(keep) < 8):
-                if p not in keep:
-                    keep.append(p)
-                continue
+            # keep holds no path under another, so the cap counts only what is emitted
+            if key == "protect_system" and _rw_path_ok(path):
+                if any(_under(p, q) for q in keep):
+                    continue
+                kids = [q for q in keep if _under(q, p)]
+                if kids or len(keep) < _MAX_RW_PATHS:
+                    keep = [q for q in keep if q not in kids] + [p]
+                    continue
             while any(_under(path, ro) for ro in levels[idx][1]):
                 idx += 1
                 hit.append("%s=%s" % (k, w))
@@ -343,10 +351,10 @@ def _writable_lower(svc, lines, warns):
             lines[i] = "%s=%s" % (key, levels[idx][0])
             warns.append("%s is read-only under %s=%s, lowered to %s=%s"
                          % (" ".join(dict.fromkeys(hit)), key, val, key, levels[idx][0]))
+        if key == "protect_system":
+            ro = levels[idx][1]
     # a lowered protect_system no longer covers every kept path
-    ro = dict(_RO_LEVELS["protect_system"])[next(ln for ln in lines if ln.startswith("protect_system=")).split("=", 1)[1]]
-    keep = [p for p in keep if any(_under(p, d) for d in ro)
-            and not any(q != p and _under(p, q) for q in keep)]
+    keep = [p for p in keep if any(_under(p, d) for d in ro)]
     lines.extend("rw_path=%s" % p for p in keep)
 
 
