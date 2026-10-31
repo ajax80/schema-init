@@ -8,7 +8,7 @@ SVC=$R/etc/schema-init/services
 SHARE=$R/usr/share/schema-init
 REQ=$R/etc/schema-init/pi-boot-required
 SUMS=$D/kit.sums
-KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
+KIT="pi-early udev udev-trigger dbus sysctl pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
 NETS="NetworkManager systemd-networkd networking dhcpcd wpa_supplicant"
 ARG=init=/usr/sbin/schema-init-pi
 IMPORT=${SCHEMA_IMPORT:-/usr/libexec/schema-init/schema-import}
@@ -145,7 +145,28 @@ refresh() {
         new="$new $s"
     done
     record_kit
+    # a new kit dep (sysctl) reaches the network service only through its drop-in, which enable alone wrote
+    for f in "$SVC"/*.svc.d/pi-kit.conf; do
+        n=${f%.svc.d/pi-kit.conf}
+        [ -f "$n.svc" ] && refresh_dropin "${n##*/}"
+    done
+    # its base already had every dep, so enable wrote no drop-in
+    out=
+    if net=$(detect_net) && n=$(resolve "$SVC" "$net"); then refresh_dropin "$n"; fi
     [ -z "$new" ] || echo "schema-pi: refreshed:$new; takes effect on next boot"
+}
+
+refresh_dropin() {
+    f=$SVC/$1.svc.d/pi-kit.conf
+    [ "$(dropin_deps "$SVC/$1.svc")" = "$(cat "$f" 2>/dev/null)" ] && return 0
+    have=$(grep -c '^[[:blank:]]*dep=' "$SVC/$1.svc")
+    add=$(dropin_deps "$SVC/$1.svc" | grep -c .)
+    if [ $((have + add)) -gt $MAX_DEPS ]; then
+        echo "schema-pi: $1.svc has $have dep= lines and the pi-kit drop-in would add $add: over the engine limit of $MAX_DEPS; drop-in kept"
+        return 0
+    fi
+    write_dropin "$1"
+    new="$new $1.svc.d/pi-kit.conf"
 }
 
 # a .svc that is neither kit nor something an earlier enable imported was written by hand
@@ -191,9 +212,11 @@ resolve() {
     [ -n "$o" ] && [ -f "$1/$o.svc" ] && echo "$o"
 }
 
-# only deps the base lacks: a duplicate dep= still takes one of the engine's 8 slots
+# only deps the base lacks: a duplicate dep= still takes one of the engine's 8 slots.
+# A kit .svc the user removed is not a dep: the network would wait on it forever
 dropin_deps() {
-    for d in udev-trigger dbus; do
+    for d in udev-trigger dbus sysctl; do
+        [ -f "${1%/*}/$d.svc" ] || continue
         grep -q "^dep=[[:blank:]]*$d[[:blank:]]*\$" "$1" || echo "dep=$d"
     done
 }

@@ -96,7 +96,7 @@ $(OBJS) schema-user.o: $(CORE_HDRS)
 
 # the Raspberry Pi kit ships in the deb (debian/schema-init.install), not the Fedora RPM
 PI_KIT_EXAMPLES = $(wildcard services/pi-*.svc.example) services/udev.svc.example services/udev-trigger.svc.example \
-	services/dbus.svc.example
+	services/dbus.svc.example services/sysctl.svc.example
 
 install: all
 	install -d $(DESTDIR)$(BINDIR)
