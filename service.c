@@ -574,7 +574,8 @@ static int hardening_finalize(service_t *svc) {
 int service_apply_hardening(const service_t *svc) {
     const char *step = "";
     if (apply_mount_ns(svc->ns_private_tmp, svc->ns_protect_system,
-                       svc->ns_protect_home, &step) != 0) {
+                       svc->ns_protect_home, (const char *const *)svc->rw_path,
+                       svc->rw_path_count, &step) != 0) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: mount_ns: %s: %d\n",
                 svc->name, step, errno);
         return -1;
@@ -2004,6 +2005,24 @@ static void svc_free_cmds(char **cmds, int *n) {
     *n = 0;
 }
 
+static void rw_path_clear(service_t *svc) {
+    for (int i = 0; i < svc->rw_path_count; i++) {
+        free(svc->rw_path[i]);
+        svc->rw_path[i] = NULL;
+    }
+    svc->rw_path_count = 0;
+}
+
+/* absolute, not "/", no ".." component; trailing '/' stripped in place */
+static int rw_path_ok(char *v) {
+    size_t n = strlen(v);
+    while (n > 1 && v[n - 1] == '/') v[--n] = '\0';
+    if (v[0] != '/' || n < 2) return 0;
+    for (const char *p = v; (p = strstr(p, "..")); p += 2)
+        if (p[-1] == '/' && (p[2] == '/' || p[2] == '\0')) return 0;
+    return 1;
+}
+
 void service_free_landlock(service_t *svc) {
     svc_free_cmds(svc->exec_pre, &svc->exec_pre_count);
     svc_free_cmds(svc->exec_stop, &svc->exec_stop_count);
@@ -2019,6 +2038,7 @@ void service_free_landlock(service_t *svc) {
     }
     svc->landlock_count = 0;
     svc->landlock_rw = 0;
+    rw_path_clear(svc);
 }
 
 static void landlock_clear(service_t *svc, int rw) {
@@ -2114,6 +2134,8 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
         pc->dep_slot = 0;
     } else if (strcmp(key, "landlock_ro") == 0 || strcmp(key, "landlock_rw") == 0) {
         landlock_clear(svc, key[10] == 'w');
+    } else if (strcmp(key, "rw_path") == 0) {
+        rw_path_clear(svc);
     } else if (strcmp(key, "landlock_bind_tcp") == 0 || strcmp(key, "landlock_connect_tcp") == 0) {
         svc->landlock_tcp_n[key[9] == 'c'] = -1;
     } else
@@ -2380,6 +2402,14 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         }
         if (line[10] == 'w') svc->landlock_rw |= 1U << svc->landlock_count;
         svc->landlock[svc->landlock_count++] = strdup(val);
+    }
+    else if (strcmp(line, "rw_path") == 0) {
+        if (!rw_path_ok(val) || svc->rw_path_count >= MAX_RW_PATHS) {
+            fprintf(stderr, "[schema-init] %s: bad rw_path=%s (absolute, no '..', at most %d)\n",
+                    svc->name[0] ? svc->name : path, val, MAX_RW_PATHS);
+            return -1;
+        }
+        svc->rw_path[svc->rw_path_count++] = strdup(val);
     }
     else if (strcmp(line, "landlock_bind_tcp") == 0 || strcmp(line, "landlock_connect_tcp") == 0) {
         int k = line[9] == 'c', ntok = 0, none = 0, bad = strlen(val) >= 256;

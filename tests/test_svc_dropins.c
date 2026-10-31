@@ -136,6 +136,14 @@ int main(void) {
     assert(load("l.svc", &s) == -1);
     drop(&s);
 
+    /* an empty rw_path= in a drop-in clears the list */
+    put("w.svc", "exec=/usr/bin/w\nprotect_system=full\nrw_path=/etc/a\nrw_path=/etc/b\n");
+    mk("w.svc.d");
+    put("w.svc.d/10.conf", "rw_path=\nrw_path=/etc/c\n");
+    assert(load("w.svc", &s) == 0 && s.rw_path_count == 1);
+    assert(strcmp(s.rw_path[0], "/etc/c") == 0);
+    drop(&s);
+
     /* base files keep their old meaning: empty args= is an argument, =0 is a no-op */
     put("c.svc", "exec=/bin/c\nno_restart=1\nno_restart=0\nargs=\n");
     assert(load("c.svc", &s) == 0);

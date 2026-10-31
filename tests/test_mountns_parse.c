@@ -116,6 +116,38 @@ int main(void) {
     assert(service_load_one(path, &one) == 0);
     unlink(path);
 
+    snprintf(path, sizeof(path), "%s/rw.svc", dir);
+    write_svc(path, "name=rw\nexec=/usr/bin/true\nprotect_system=full\n"
+                    "rw_path=/etc/pihole/\nrw_path=/var/lib/my data\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(one.rw_path_count == 2);
+    assert(strcmp(one.rw_path[0], "/etc/pihole") == 0);
+    assert(strcmp(one.rw_path[1], "/var/lib/my data") == 0);
+    assert(services_load(dir, table, 4) == 1);
+    assert(table[0].rw_path_count == 2 && strcmp(table[0].rw_path[0], "/etc/pihole") == 0);
+    unlink(path);
+
+    struct { const char *body; } rwbad[] = {
+        { "name=b\nexec=/usr/bin/true\nrw_path=etc/x\n" },
+        { "name=b\nexec=/usr/bin/true\nrw_path=\n" },
+        { "name=b\nexec=/usr/bin/true\nrw_path=/etc/../root\n" },
+        { "name=b\nexec=/usr/bin/true\nrw_path=/etc/x/..\n" },
+        { "name=b\nexec=/usr/bin/true\nrw_path=/\n" },
+        { "name=b\nexec=/usr/bin/true\nrw_path=/a\nrw_path=/b\nrw_path=/c\nrw_path=/d\n"
+          "rw_path=/e\nrw_path=/f\nrw_path=/g\nrw_path=/h\nrw_path=/i\n" },
+    };
+    for (size_t i = 0; i < sizeof(rwbad) / sizeof(rwbad[0]); i++) {
+        snprintf(path, sizeof(path), "%s/b.svc", dir);
+        write_svc(path, rwbad[i].body);
+        assert(service_load_one(path, &one) == -1);
+        assert(services_load(dir, table, 4) == 0);
+        unlink(path);
+    }
+    snprintf(path, sizeof(path), "%s/ok.svc", dir);
+    write_svc(path, "name=ok\nexec=/usr/bin/true\nrw_path=/etc/..x\n");
+    assert(service_load_one(path, &one) == 0 && strcmp(one.rw_path[0], "/etc/..x") == 0);
+    unlink(path);
+
     assert(hardening_default_resolve(NULL, NULL) == 0);
     assert(hardening_default_resolve(NULL, "on") == 1);
     assert(hardening_default_resolve(NULL, " on \n") == 1);
