@@ -6,5 +6,9 @@ ip addr add 127.0.0.1/8 dev lo 2>/dev/null
 ip addr add ::1/128 dev lo 2>/dev/null
 hostname "$(head -n 1 "$R/etc/hostname")"
 swapon -a
+# systemd-tmpfiles-setup's job; /dev is PID 1's (static nodes)
+systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev
+# systemd-nologin.conf just created it and systemd-user-sessions would remove it: non-root logins are refused until then
+rm -f "$R/run/nologin"
 # a failed step here must not fail the boot
 exit 0
