@@ -336,6 +336,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o /tmp/schema-test-systemctl && /tmp/schema-test-systemctl
 	$(CC) $(CFLAGS) tests/test_service_env.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-env && /tmp/schema-test-env
 	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-mountns && /tmp/schema-test-mountns
+	$(CC) $(CFLAGS) tests/test_mountns_rw.c ns.c -o /tmp/schema-test-mountns-rw && /tmp/schema-test-mountns-rw
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-dropins && /tmp/schema-test-dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-rlimits && /tmp/schema-test-rlimits
 	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cap-parse && /tmp/schema-test-cap-parse

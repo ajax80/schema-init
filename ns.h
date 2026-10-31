@@ -13,10 +13,14 @@ int parse_ns_bool(const char *val, uint8_t *out);
 /* "0" / "1" / "full" -> PROTECT_SYSTEM_*. Returns 0 on success, -1 otherwise. */
 int parse_protect_system(const char *val, uint8_t *out);
 
+#define MAX_RW_PATHS 8
+
 /* Build the private mount view in the forked child, before caps are dropped.
- * No-op (0) when nothing is requested. On failure returns -1 with errno set
- * and *step naming the failing operation. */
+ * rw paths are made writable again inside the read-only mounts; a missing one
+ * is skipped. No-op (0) when no read-only/tmp knob is set. On failure returns
+ * -1 with errno set and *step naming the failing operation. */
 int apply_mount_ns(uint8_t private_tmp, uint8_t protect_system,
-                   uint8_t protect_home, const char **step);
+                   uint8_t protect_home, const char *const *rw, int n_rw,
+                   const char **step);
 
 #endif

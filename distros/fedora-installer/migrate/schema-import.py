@@ -238,7 +238,8 @@ def limit_lines(svc):
 
 def _hardening(svc):
     """The four hardening knobs, always explicit so the unit means the same
-    thing whatever the host's hardening-default is. Returns (lines, warnings);
+    thing whatever the host's hardening-default is, then any rw_path= lines
+    (paths, not knobs). Returns (lines, warnings);
     a warning names each directive mapped weaker than the unit asked."""
     lines, warns = [], []
 
@@ -292,14 +293,31 @@ def _under(path, ro):
     return path == ro or path.startswith(ro + "/")
 
 
-# schema-init has no ReadWritePaths= exception inside a read-only mount, so a
-# declared writable path under one lowers the level until it is writable
-# (pihole-FTL: ProtectSystem=full + ReadWriteDirectories=/etc/pihole)
+# systemd list values (RuntimeDirectory=, ReadWritePaths=) may quote an entry
+# that holds spaces; an unbalanced quote falls back to a plain split
+def _list(directive, v, warns):
+    try:
+        return shlex.split(v)
+    except ValueError:
+        warns.append("%s=%s has unbalanced quotes, split on whitespace" % (directive, v))
+        return v.split()
+
+
+def _rw_path_ok(path):
+    return path.startswith("/") and ".." not in path.split("/") and path.rstrip("/")
+
+
+# A declared writable path under protect_system's read-only dirs becomes an
+# rw_path= (the engine binds it writable again, like systemd). protect_home's
+# dirs are an empty tmpfs with nothing to bind back, so a path there (or one
+# rw_path= can't carry) still lowers the level until it is writable
+# (pihole-FTL: ProtectSystem=full + ReadWriteDirectories=/etc/pihole).
 def _writable_lower(svc, lines, warns):
     rw = []
     for k, v in svc:
         if k in ("ReadWritePaths", "ReadWriteDirectories"):
-            rw = rw + [(k, w) for w in v.split()] if v.strip() else []
+            rw = rw + [(k, w) for w in _list(k, v, warns)] if v.strip() else []
+    keep = []
     for i, ln in enumerate(lines):
         key, val = ln.split("=", 1)
         levels = _RO_LEVELS.get(key)
@@ -311,6 +329,13 @@ def _writable_lower(svc, lines, warns):
             path = w.lstrip("-+")
             if "%" in path or not path.startswith("/"):
                 continue
+            if not any(_under(path, ro) for ro in levels[idx][1]):
+                continue
+            p = path.rstrip("/")
+            if key == "protect_system" and _rw_path_ok(path) and (p in keep or len(keep) < 8):
+                if p not in keep:
+                    keep.append(p)
+                continue
             while any(_under(path, ro) for ro in levels[idx][1]):
                 idx += 1
                 hit.append("%s=%s" % (k, w))
@@ -318,6 +343,11 @@ def _writable_lower(svc, lines, warns):
             lines[i] = "%s=%s" % (key, levels[idx][0])
             warns.append("%s is read-only under %s=%s, lowered to %s=%s"
                          % (" ".join(dict.fromkeys(hit)), key, val, key, levels[idx][0]))
+    # a lowered protect_system no longer covers every kept path
+    ro = dict(_RO_LEVELS["protect_system"])[next(ln for ln in lines if ln.startswith("protect_system=")).split("=", 1)[1]]
+    keep = [p for p in keep if any(_under(p, d) for d in ro)
+            and not any(q != p and _under(p, q) for q in keep)]
+    lines.extend("rw_path=%s" % p for p in keep)
 
 
 _PORTS = re.compile(r"^(\d+)(?:-(\d+))?$")
@@ -968,12 +998,11 @@ def _primary_group(user):
 # does not: a root install -d ahead of the unit's own exec_pre lines does
 # (Debian ssh.service's sshd -t needs /run/sshd). Returns (lines, notes, warns).
 def runtime_dir_lines(svc, name):
-    dirs = []
+    dirs, notes, warns = [], [], []
     for v in _get_all(svc, "RuntimeDirectory"):
-        dirs = dirs + v.split() if v.strip() else []
+        dirs = dirs + _list("RuntimeDirectory", v, warns) if v.strip() else []
     if not dirs:
-        return [], [], []
-    notes, warns = [], []
+        return [], [], warns
     mode = _get_last(svc, "RuntimeDirectoryMode") or "0755"
     if not re.fullmatch(r"[0-7]{3,4}", mode):
         warns.append("RuntimeDirectoryMode=%s unrecognised, 0755 used" % mode)
@@ -991,9 +1020,11 @@ def runtime_dir_lines(svc, name):
             x = _specifiers([d], name)[0].rstrip("/")
         except Skip:
             x = None
-        # dir:symlink (systemd 254) is not translated, and nothing nested: a root install -d -o
-        # through a parent the user owns follows a symlink the user put there
-        if not x or "/" in x or ":" in x or x in (".", ".."):
+        # dir:symlink (systemd 254) is not translated. Nested only without -o: a root
+        # install -d -o through a parent the user owns follows a symlink the user put there
+        parts = x.split("/") if x else []
+        if (not parts or ":" in x or any(c in ("", ".", "..") for c in parts)
+                or (own and len(parts) > 1)):
             notes.append("dropped RuntimeDirectory=%s" % d)
             continue
         out.append("exec_pre=%s/usr/bin/install -d -m %s%s %s"
@@ -1175,7 +1206,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         if any("+" not in pre for pre, _ in pres):
             warns.append("ExecStart=+ main process kept the sandbox: plain ExecStartPre lines need it")
         else:
-            hard = [ln.split("=", 1)[0] + "=0" for ln in hard]
+            hard = [ln.split("=", 1)[0] + "=0" for ln in hard if not ln.startswith("rw_path=")]
             warns = ["ExecStart=+ runs unsandboxed: hardening directives dropped"
                      " (SocketBind kept; exec_pre lines are not bind-restricted)"]
     seen_plain = False
@@ -1997,7 +2028,7 @@ _USER_SYS_DIRS = ("usr/local/share/systemd/user", "usr/share/systemd/user",
 USER_MARK = "# generated by schema-import --user"
 # schema-user is unprivileged: it cannot unshare a mount namespace, so a unit
 # carrying these would fail at every start
-_USER_NO_HARDEN = ("private_tmp=", "protect_system=", "protect_home=")
+_USER_NO_HARDEN = ("private_tmp=", "protect_system=", "protect_home=", "rw_path=")
 # Phase 1 reads only what the user enabled: distro defaults under /etc and
 # /usr/lib include dbus.socket, which would start a second session bus.
 _USER_ROOTS = ("default.target", "sockets.target", "timers.target", "basic.target")
@@ -2362,7 +2393,8 @@ def _user_translate(unit, known, enabled, skip=(), net=False):
             continue
         if ln.startswith(_USER_NO_HARDEN):
             k, v = ln.split("=", 1)
-            if v != "0":
+            # rw_path only loosens protect_system, whose own warning covers it
+            if v != "0" and k != "rw_path":
                 lines.insert(0, "%s%s=%s dropped: schema-user cannot set up a mount "
                              "namespace" % (WARN_PREFIX, k, v))
             continue

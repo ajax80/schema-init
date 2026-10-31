@@ -6,6 +6,9 @@ configure)
     dpkg-trigger --no-await schema-init-reexec || :
     if [ -z "$2" ]; then
         echo "schema-init: installed, PID 1 unchanged. On a Raspberry Pi run 'schema-pi enable' to boot with it."
+    elif command -v schema-pi > /dev/null 2>&1; then
+        # kit .svc changes reach an enabled Pi; edited ones are kept, and nothing here fails the upgrade
+        schema-pi refresh || :
     fi
     ;;
 triggered)

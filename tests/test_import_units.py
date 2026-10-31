@@ -193,26 +193,48 @@ check("warnings lead the file", hw.startswith(si.WARN_PREFIX) and hw.count(si.WA
 
 # --- SocketBindAllow/Deny= -> landlock_bind_tcp= ---
 si._landlock_tcp_ok = lambda: True
-# ReadWritePaths= under a read-only protect_system/protect_home level: schema-init
-# has no writable exception, so the level is lowered and warned
+# ReadWritePaths= under protect_system's read-only dirs -> rw_path= (engine
+# re-binds it writable); under protect_home's empty tmpfs there is nothing to
+# bind back, so that level is still lowered and warned
 hp = hard("User=pihole\nProtectSystem=full\nReadWriteDirectories=/etc/pihole\n")
-check("pihole-FTL: ReadWriteDirectories=/etc/pihole lowers full -> 1, warned",
-      "protect_system=1\n" in hp and "protect_system=full\n" not in hp
-      and si.WARN_PREFIX + "ReadWriteDirectories=/etc/pihole" in hp)
+check("pihole-FTL: ReadWriteDirectories=/etc/pihole -> full + rw_path, no warning",
+      "protect_system=full\n" in hp and "rw_path=/etc/pihole\n" in hp and si.WARN_PREFIX not in hp)
 hp = hard("ProtectSystem=strict\nReadWritePaths=/etc/x\n")
-check("strict + /etc path -> 1", "protect_system=1\n" in hp and "/etc/x" in hp)
+check("strict + /etc path -> full + rw_path", "protect_system=full\n" in hp and "rw_path=/etc/x\n" in hp)
 hp = hard("ProtectSystem=yes\nReadWritePaths=-/usr/local/state\n")
-check("ProtectSystem=yes + -/usr path -> 0", "protect_system=0\n" in hp and "/usr/local/state" in hp)
+check("ProtectSystem=yes + -/usr path -> 1 + rw_path without the -",
+      "protect_system=1\n" in hp and "rw_path=/usr/local/state\n" in hp)
+hp = hard("ProtectSystem=yes\nReadWritePaths=/etc/x\n")
+check("ProtectSystem=yes + /etc path (not read-only at 1) -> no rw_path", "rw_path" not in hp)
 hp = hard("ProtectSystem=full\nProtectHome=yes\nReadWritePaths=/ /run\n")
 check("a parent of the read-only dirs (/, /run) -> unchanged: the narrower mount wins",
-      "protect_system=full\n" in hp and "protect_home=1\n" in hp)
+      "protect_system=full\n" in hp and "protect_home=1\n" in hp and "rw_path" not in hp)
 hp = hard("ProtectSystem=full\nProtectHome=yes\nReadWritePaths=/var/lib/x /run/x\n")
 check("paths outside the read-only dirs -> unchanged, no warning",
-      "protect_system=full\n" in hp and "protect_home=1\n" in hp and si.WARN_PREFIX not in hp)
+      "protect_system=full\n" in hp and "protect_home=1\n" in hp and si.WARN_PREFIX not in hp and "rw_path" not in hp)
 hp = hard("ProtectHome=yes\nReadWritePaths=/home/x\n")
 check("ProtectHome=yes + /home path -> protect_home=0, warned", "protect_home=0\n" in hp and "/home/x" in hp)
 hp = hard("ProtectSystem=full\nReadWritePaths=/etc/a\nReadWritePaths=\nReadWritePaths=/var/b\n")
-check("ReadWritePaths= empty resets", "protect_system=full\n" in hp)
+check("ReadWritePaths= empty resets", "protect_system=full\n" in hp and "rw_path" not in hp)
+hp = hard('ProtectSystem=full\nReadWritePaths="/etc/my app" -"/etc/b c"\n')
+check("quoted ReadWritePaths= entries keep their spaces",
+      "rw_path=/etc/my app\n" in hp and "rw_path=/etc/b c\n" in hp and '"' not in hp)
+hp = hard('ProtectSystem=full\nReadWritePaths="/etc/x\n')
+check("unbalanced quote -> whitespace split, warned", si.WARN_PREFIX in hp and "unbalanced" in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=/etc/a/../b\n")
+check("a .. path is never an rw_path: level lowered as before",
+      "rw_path" not in hp and "protect_system=1\n" in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=" + " ".join("/etc/p%d" % i for i in range(9)) + "\n")
+check("more than 8 rw paths -> level lowered (all of /etc writable), no stale rw_path",
+      "rw_path" not in hp and "protect_system=1\n" in hp and si.WARN_PREFIX + "ReadWritePaths=/etc/p8" in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=/etc/a /etc/a/\n")
+check("duplicate rw paths collapse", hp.count("rw_path=") == 1)
+hp = si.unit_to_svc("h", si.parse_unit("[Service]\nExecStart=+/bin/h\nProtectSystem=full\nReadWritePaths=/etc/x\n"))
+check("ExecStart=+ drops rw_path instead of writing rw_path=0",
+      "rw_path" not in hp and "protect_system=0\n" in hp)
+hp = hard("ProtectSystem=full\nReadWritePaths=-/etc/gdm/custom.conf /etc\n")
+check("an rw path inside another kept one is dropped (accounts-daemon)",
+      hp.count("rw_path=") == 1 and "rw_path=/etc\n" in hp)
 
 def sb(txt):
     return hard(txt)
@@ -982,8 +1004,18 @@ check("several RuntimeDirectory= entries, one line each, %N expanded",
       "exec_pre=+/usr/bin/install -d -m 0755 /run/a\nexec_pre=+/usr/bin/install -d -m 0755 /run/b\n"
       "exec_pre=+/usr/bin/install -d -m 0755 /run/r\n" in _rt)
 # root install -d -o under a parent the user owns follows a symlink the user planted there
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=cockpit/tls\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= nested kept for a root unit (cockpit, networkd)",
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/cockpit/tls\n" in _rt and "dropped" not in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=root\nRuntimeDirectory=systemd/netif\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= nested kept for User=root", "/run/systemd/netif\n" in _rt and "-o " not in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a//b a/./b a/../b\nExecStart=/bin/r\n"))
+check("RuntimeDirectory= nested with empty, . or .. component dropped", "install -d" not in _rt)
+_rt = si.unit_to_svc("r", si.parse_unit('[Service]\nRuntimeDirectory="my dir" b\nExecStart=/bin/r\n'))
+check("RuntimeDirectory= quoted entry keeps its space",
+      'exec_pre=+/usr/bin/install -d -m 0755 "/run/my dir"\n' in _rt and "/run/b\n" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=a/b ok\nExecStart=/bin/r\n"))
-check("RuntimeDirectory= nested entry dropped and noted",
+check("RuntimeDirectory= nested entry dropped and noted when User= is not root",
       "/run/a" not in _rt and _rt.count("install -d") == 1 and "-o foo -g foo /run/ok\n" in _rt
       and "# schema-import:" in _rt and "dropped RuntimeDirectory=a/b" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=. ..\nExecStart=/bin/r\n"))
