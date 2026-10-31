@@ -321,7 +321,11 @@ def _writable_lower(svc, lines, warns):
     for k, v in svc:
         if k in ("ReadWritePaths", "ReadWriteDirectories"):
             rw = rw + [(k, w) for w in _list(k, v, warns)] if v.strip() else []
-    keep, ro = [], ()
+    # (entry, raw path, normalised path): raw for _rw_path_ok, which must see
+    # a .. that normpath would fold away
+    rw = [("%s=%s" % (k, w), w.lstrip("-+"), os.path.normpath(w.lstrip("-+"))) for k, w in rw
+          if "%" not in w and w.lstrip("-+").startswith("/")]
+    keep = []
     for i, ln in enumerate(lines):
         key, val = ln.split("=", 1)
         levels = _RO_LEVELS.get(key)
@@ -329,32 +333,24 @@ def _writable_lower(svc, lines, warns):
             continue
         idx = [lv for lv, _ in levels].index(val)
         hit = []
-        for k, w in rw:
-            path = w.lstrip("-+")
-            if "%" in path or not path.startswith("/"):
-                continue
-            if not any(_under(path, ro) for ro in levels[idx][1]):
-                continue
-            p = path.rstrip("/")
-            # keep holds no path under another, so the cap counts only what is emitted
-            if key == "protect_system" and _rw_path_ok(path):
-                if any(_under(p, q) for q in keep):
-                    continue
-                kids = [q for q in keep if _under(q, p)]
-                if kids or len(keep) < _MAX_RW_PATHS:
-                    keep = [q for q in keep if q not in kids] + [p]
-                    continue
-            while any(_under(path, ro) for ro in levels[idx][1]):
-                idx += 1
-                hit.append("%s=%s" % (k, w))
+        # judge the whole list per level, so the result never depends on its order
+        while True:
+            under = [e for e in rw if any(_under(e[2], d) for d in levels[idx][1])]
+            ok = [p for _, raw, p in under if key == "protect_system" and _rw_path_ok(raw)]
+            cover = list(dict.fromkeys(p for p in ok if not any(q != p and _under(p, q) for q in ok)))
+            over = cover[_MAX_RW_PATHS:]
+            bad = [e for e, raw, p in under
+                   if p in over or not (key == "protect_system" and _rw_path_ok(raw))]
+            if not bad:
+                break
+            hit += bad
+            idx += 1
         if hit:
             lines[i] = "%s=%s" % (key, levels[idx][0])
             warns.append("%s is read-only under %s=%s, lowered to %s=%s"
                          % (" ".join(dict.fromkeys(hit)), key, val, key, levels[idx][0]))
         if key == "protect_system":
-            ro = levels[idx][1]
-    # a lowered protect_system no longer covers every kept path
-    keep = [p for p in keep if any(_under(p, d) for d in ro)]
+            keep = cover
     lines.extend("rw_path=%s" % p for p in keep)
 
 
