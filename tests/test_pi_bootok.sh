@@ -338,7 +338,8 @@ echo "ok deadline_retries_reboot"
 # bootok_reason_not_state: a .reason= value that happens to contain .state= is not a service state
 reset; good_kv
 echo 'service.net.reason=dep.state=FAILED' >> "$T/kv"
-env_run sh "$BOOTOK" > "$T/log" 2>&1 &
+# not via env_run: see waits_on
+SCHEMA_PI_ROOT=$R SCHEMA_CTL=$T/ctl SCHEMA_PI_POLL=0.1 sh "$BOOTOK" > "$T/log" 2>&1 &
 pid=$!
 sleep 1
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
