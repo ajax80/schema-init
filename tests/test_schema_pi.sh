@@ -11,7 +11,7 @@ CL=$R/boot/firmware/cmdline.txt
 BAK=$CL.schema-bak
 STOCK='console=serial0,115200 console=tty1 root=PARTUUID=abcd-02 rootfstype=ext4 fsck.repair=yes rootwait quiet'
 
-KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
+KIT="pi-early udev udev-trigger dbus sysctl pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
 SVC=$R/etc/schema-init/services
 REQ=$R/etc/schema-init/pi-boot-required
 
@@ -202,7 +202,7 @@ case $(sed -n 1p "$T/import.env") in "$R"*|*"|$R"*|"|"*|*"|") fail "enable_impor
 t_dir=${trial#"$R|"}; t_dir=${t_dir%%|*}
 [ ! -e "$t_dir" ] || fail "enable_imports: scratch left behind: $t_dir"
 [ "$(cat "$SVC/ssh.svc")" = name=ssh ] || fail "enable_imports: ssh.svc"
-printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+printf 'dep=udev-trigger\ndep=dbus\ndep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
     fail "enable_imports: drop-in: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf" 2>&1)"
 [ "$(stat -c %a "$SVC/NetworkManager.svc.d")" = 755 ] || fail "enable_imports: drop-in dir mode"
 [ "$(sed -n 1p "$T/log")" = "schema-pi: imported 2, skipped 1" ] || fail "enable_imports: summary: $(cat "$T/log")"
@@ -261,7 +261,7 @@ pi enable > "$T/log" 2>&1 || fail "owned: exit: $(cat "$T/log")"
 grep -qx 'skip NetworkManager.service: its binary already runs as networkmanager.svc — importing it would start a second copy' "$T/log" ||
     fail "owned: skip line: $(cat "$T/log")"
 [ ! -e "$SVC/NetworkManager.svc.d" ] || fail "owned: drop-in on the skipped unit"
-printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/networkmanager.svc.d/pi-kit.conf" || fail "owned: owner drop-in"
+printf 'dep=udev-trigger\ndep=dbus\ndep=sysctl\n' | cmp -s - "$SVC/networkmanager.svc.d/pi-kit.conf" || fail "owned: owner drop-in"
 [ "$(required | tr '\n' ' ')" = "udev udev-trigger dbus pi-early sshd networkmanager " ] || fail "owned: $(cat "$REQ")"
 # an owner named in the skip line but absent is no stand-in
 reset; printf 'NetworkManager networkmanager\n' > "$T/import.owned"; snap > "$T/snap1"
@@ -273,10 +273,10 @@ echo "ok owned"
 # dropin_dedup: a dep the base already has is not repeated (MAX_DEPS is 8)
 reset; printf 'name=NetworkManager\ndep=dbus\n' > "$SVC/NetworkManager.svc"
 pi enable > "$T/log" 2>&1 || fail "dropin_dedup: exit: $(cat "$T/log")"
-printf 'dep=udev-trigger\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+printf 'dep=udev-trigger\ndep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
     fail "dropin_dedup: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
-printf 'name=NetworkManager\ndep=dbus\ndep=udev-trigger\n' > "$SVC/NetworkManager.svc"
-pi enable > "$T/log" 2>&1 || fail "dropin_dedup: both exit"
+printf 'name=NetworkManager\ndep=dbus\ndep=udev-trigger\ndep=sysctl\n' > "$SVC/NetworkManager.svc"
+pi enable > "$T/log" 2>&1 || fail "dropin_dedup: all exit"
 [ ! -e "$SVC/NetworkManager.svc.d/pi-kit.conf" ] || fail "dropin_dedup: empty drop-in kept"
 echo "ok dropin_dedup"
 
@@ -285,14 +285,14 @@ reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=f\nde
 snap > "$T/snap1"
 pi enable > "$T/log" 2>&1; rc=$?
 [ $rc -eq 1 ] || fail "dropin_max_deps: exit $rc"
-grep -qx 'schema-pi: NetworkManager.svc has 7 dep= lines and the pi-kit drop-in adds 2: over the engine limit of 8' "$T/log" ||
+grep -qx 'schema-pi: NetworkManager.svc has 7 dep= lines with its drop-ins and the pi-kit drop-in adds 3: over the engine limit of 8' "$T/log" ||
     fail "dropin_max_deps: message: $(cat "$T/log")"
 snap | cmp -s - "$T/snap1" || fail "dropin_max_deps: \$SVC changed"
 [ ! -e "$R/var/lib/schema-init" ] || fail "dropin_max_deps: state dir created"
 printf '%s\n' "$STOCK" | cmp -s - "$CL" || fail "dropin_max_deps: cmdline changed"
-reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=dbus\ndep=g\n' > "$SVC/NetworkManager.svc"
+reset; printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=dbus\n' > "$SVC/NetworkManager.svc"
 pi enable > "$T/log" 2>&1 || fail "dropin_max_deps: exactly 8: $(cat "$T/log")"
-printf 'dep=udev-trigger\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" || fail "dropin_max_deps: 8 drop-in"
+printf 'dep=udev-trigger\ndep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" || fail "dropin_max_deps: 8 drop-in"
 echo "ok dropin_max_deps"
 
 # not_imported: enabled systemd-* units the importer drops are named; the networkd net service is not
@@ -564,7 +564,7 @@ pi refresh > "$T/log" 2>&1 || fail "refresh_off: exit"
 [ ! -e "$SVC/pi-early.svc" ] || fail "refresh_off: installed kit while not enabled"
 [ ! -s "$T/log" ] || fail "refresh_off: output: $(cat "$T/log")"
 pi enable > /dev/null 2>&1 || fail "refresh: enable"
-[ "$(wc -l < "$R/var/lib/schema-init/kit.sums")" -eq 10 ] || fail "refresh: enable recorded $(cat "$R/var/lib/schema-init/kit.sums")"
+[ "$(wc -l < "$R/var/lib/schema-init/kit.sums")" -eq 11 ] || fail "refresh: enable recorded $(cat "$R/var/lib/schema-init/kit.sums")"
 echo new-timesync > "$R/usr/share/schema-init/pi-timesync.svc.example"
 echo new-udev > "$R/usr/share/schema-init/udev.svc.example"
 echo mine > "$SVC/udev.svc"
@@ -596,6 +596,59 @@ pi refresh > "$T/log" 2>&1
 grep -q ' pi-early$' "$R/var/lib/schema-init/kit.sums" || fail "refresh_legacy: identical file not adopted"
 grep -q ' dbus$' "$R/var/lib/schema-init/kit.sums" && fail "refresh_legacy: different file adopted"
 echo "ok refresh"
+
+# refresh_dropin: a Pi enabled before sysctl joined the kit gets the .svc and the network's dep on it
+old_pi() {
+    reset
+    pi enable > /dev/null 2>&1 || fail "refresh_dropin: enable"
+    rm "$SVC/sysctl.svc"
+    grep -v ' sysctl$' "$R/var/lib/schema-init/kit.sums" > "$T/s" && mv "$T/s" "$R/var/lib/schema-init/kit.sums"
+    printf 'dep=udev-trigger\ndep=dbus\n' > "$SVC/NetworkManager.svc.d/pi-kit.conf"
+}
+old_pi
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin: exit: $(cat "$T/log")"
+[ "$(cat "$SVC/sysctl.svc")" = sysctl-svc ] || fail "refresh_dropin: sysctl.svc not installed"
+printf 'dep=udev-trigger\ndep=dbus\ndep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "refresh_dropin: drop-in: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+grep -qx "schema-pi: refreshed: sysctl NetworkManager.svc.d/pi-kit.conf; takes effect on next boot" "$T/log" ||
+    fail "refresh_dropin: summary: $(cat "$T/log")"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin: second exit"
+[ ! -s "$T/log" ] || fail "refresh_dropin: second run: $(cat "$T/log")"
+# a base that had both old deps got no drop-in from enable
+old_pi
+printf 'name=NetworkManager\ndep=udev-trigger\ndep=dbus\n' > "$SVC/NetworkManager.svc"
+rm -r "$SVC/NetworkManager.svc.d"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_none: exit"
+printf 'dep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "refresh_dropin_none: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf" 2>&1)"
+# a sysctl.svc the user removed stays gone; the engine skips a dep with no .svc
+old_pi
+echo "$(echo sysctl-svc | sha256sum | cut -d" " -f1)  sysctl" >> "$R/var/lib/schema-init/kit.sums"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_removed: exit"
+[ ! -e "$SVC/sysctl.svc" ] || fail "refresh_dropin_removed: sysctl.svc came back"
+# a line the user added to pi-kit.conf survives
+old_pi
+echo dep=pi-mounts >> "$SVC/NetworkManager.svc.d/pi-kit.conf"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_hand: exit"
+printf 'dep=udev-trigger\ndep=dbus\ndep=pi-mounts\ndep=sysctl\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "refresh_dropin_hand: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+# the engine's 8 slots span every drop-in: 4 base + 2 local + 2 pi-kit leaves no room
+old_pi
+printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\n' > "$SVC/NetworkManager.svc"
+printf 'dep=e\ndep=f\n' > "$SVC/NetworkManager.svc.d/10-local.conf"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_local: exit"
+printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "refresh_dropin_local: over the limit: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+# over the engine's 8: the old drop-in stays, the network still starts
+old_pi
+printf 'name=NetworkManager\ndep=a\ndep=b\ndep=c\ndep=d\ndep=e\ndep=f\n' > "$SVC/NetworkManager.svc"
+pi refresh > "$T/log" 2>&1 || fail "refresh_dropin_max: exit"
+printf 'dep=udev-trigger\ndep=dbus\n' | cmp -s - "$SVC/NetworkManager.svc.d/pi-kit.conf" ||
+    fail "refresh_dropin_max: drop-in changed: $(cat "$SVC/NetworkManager.svc.d/pi-kit.conf")"
+[ "$(grep -c 'not ordered after' "$T/log")" -eq 1 ] || fail "refresh_dropin_max: message count: $(cat "$T/log")"
+grep -qx "schema-pi: NetworkManager has 8 dep= lines with its drop-ins; adding dep=sysctl is over the engine limit of 8, so NetworkManager is not ordered after them" "$T/log" ||
+    fail "refresh_dropin_max: message: $(cat "$T/log")"
+echo "ok refresh_dropin"
 
 # usage
 pi > /dev/null 2>&1; [ $? -eq 2 ] || fail "usage: none"

@@ -125,13 +125,14 @@ PATH=$T/bin:$PATH T_MOUNT_FAIL=1 sh "$D/scripts/schema-pi-mounts" > "$T/out" 2>&
 grep -qx 'pi-mounts: mount: /srv/usb: special device /dev/sda1 does not exist.' "$T/out" || fail "mounts: failure not logged: $(cat "$T/out")"
 
 # every other script parses under a strict POSIX shell
+sh -n scripts/schema-sysctl-apply || fail "schema-sysctl-apply syntax"
 for s in early timesync udev-trigger dbus mounts; do
     [ -f "scripts/schema-pi-$s" ] || fail "scripts/schema-pi-$s missing"
     sh -n "scripts/schema-pi-$s" || fail "schema-pi-$s syntax"
     [ -x "scripts/schema-pi-$s" ] || fail "schema-pi-$s not executable"
 done
 
-KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink"
+KIT="pi-early udev udev-trigger dbus sysctl pi-mounts pi-timesync journal-sink"
 for n in $KIT; do
     f=services/$n.svc.example
     [ -f "$f" ] || fail "$f missing"
@@ -152,6 +153,9 @@ deps() { sed -n 's/^dep=//p' "services/$1.svc.example" | tr '\n' ' '; }
 [ "$(deps journal-sink)" = "pi-early " ] || fail "journal-sink deps"
 [ -z "$(deps pi-timesync)" ] || fail "pi-timesync has deps"
 [ "$(deps pi-mounts)" = "udev-trigger " ] || fail "pi-mounts deps"
+# after coldplug: keys of modules udev loads exist, and sysctl.d globs reach interfaces already up
+[ "$(deps sysctl)" = "udev-trigger " ] || fail "sysctl deps"
+grep -qx 'exec=/usr/libexec/schema-init/schema-sysctl-apply' services/sysctl.svc.example || fail "sysctl exec"
 grep -qx 'oneshot=1' services/pi-mounts.svc.example && grep -qx 'needs_root=1' services/pi-mounts.svc.example ||
     fail "pi-mounts: oneshot needs_root"
 # a private mount namespace would keep the mounts from the rest of the system
@@ -179,7 +183,7 @@ grep -qx 'usr/libexec/schema-init/schema-import usr/bin/schema-import' debian/sc
 # the Pi kit examples are the deb's; the Fedora RPM's services dir must not carry them
 line=$(make -s -n install DESTDIR=/nonexistent 2>/dev/null | grep 'schema-init/services/$' | grep '^install -m 0644 ')
 [ -n "$line" ] || fail "make install: services line not found"
-for f in pi-early pi-mounts pi-timesync pi-boot-firmware pi-bootok pi-deadline udev udev-trigger dbus; do
+for f in pi-early pi-mounts pi-timesync pi-boot-firmware pi-bootok pi-deadline udev udev-trigger dbus sysctl; do
     case " $line " in *" services/$f.svc.example "*) fail "make install ships $f.svc.example to the RPM" ;; esac
 done
 case " $line " in *" services/journal-sink.svc.example "*) ;; *) fail "make install dropped a shared example: $line" ;; esac
