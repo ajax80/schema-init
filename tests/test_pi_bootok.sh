@@ -338,10 +338,7 @@ echo "ok deadline_retries_reboot"
 # bootok_reason_not_state: a .reason= value that happens to contain .state= is not a service state
 reset; good_kv
 echo 'service.net.reason=dep.state=FAILED' >> "$T/kv"
-env_run sh "$BOOTOK" > "$T/log" 2>&1 &
-pid=$!
-sleep 1
-kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+env_to sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_reason_not_state: exit: $(cat "$T/log")"
 [ -f "$MARK" ] || fail "bootok_reason_not_state: blocked: $(cat "$T/log")"
 echo "ok bootok_reason_not_state"
 
