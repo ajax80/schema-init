@@ -311,6 +311,9 @@ t = Tree()
 _b = si.unit_to_svc("rd", si.parse_unit("[Service]\nUser=tess\nRuntimeDirectory=rd\nExecStart=/bin/rd\n"))
 check("user RuntimeDirectory= -> install -d under XDG_RUNTIME_DIR, no +, no owner",
       ("exec_pre=/usr/bin/install -d -m 0755 %s/rd\n" % t.run) in _b)
+_b = si.unit_to_svc("rd", si.parse_unit("[Service]\nUser=tess\nRuntimeDirectory=rd/sub\nExecStart=/bin/rd\n"))
+check("user RuntimeDirectory= nested kept (the runner is the user already)",
+      ("exec_pre=/usr/bin/install -d -m 0755 %s/rd/sub\n" % t.run) in _b)
 _saved = t.ctx["runtime"]; t.ctx["runtime"] = ""
 _b = si.unit_to_svc("rd", si.parse_unit("[Service]\nRuntimeDirectory=rd\nExecStart=/bin/rd\n"))
 t.ctx["runtime"] = _saved
@@ -573,6 +576,9 @@ b = svc(out, "h")
 keys = [l for l in b.splitlines() if not l.startswith("#")]
 check("mount-ns hardening dropped", not any(l.startswith(("private_tmp=", "protect_system=", "protect_home="))
       for l in keys) and sum(l.startswith(si.WARN_PREFIX) and "dropped" in l for l in b.splitlines()) == 3)
+t.write(t.cfg("h.service"), "[Service]\nExecStart=/bin/h\nProtectSystem=full\nReadWritePaths=/etc/h\n")
+c, out = run(t)
+check("user mode emits no rw_path", "rw_path" not in svc(out, "h"))
 t.done()
 
 # 2b. landlock_bind_tcp needs no_new_privs as a non-root supervisor: dropped
