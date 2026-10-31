@@ -558,6 +558,40 @@ pi enable > "$T/log" 2>&1 || fail "hand_warning: clean exit"
 grep -q "hand-written" "$T/log" && fail "hand_warning: warned on a clean root: $(cat "$T/log")"
 echo "ok hand_warning"
 
+# refresh: a kit .svc still as schema-pi wrote it follows the package; an edited one is kept
+reset
+pi refresh > "$T/log" 2>&1 || fail "refresh_off: exit"
+[ ! -e "$SVC/pi-early.svc" ] || fail "refresh_off: installed kit while not enabled"
+[ ! -s "$T/log" ] || fail "refresh_off: output: $(cat "$T/log")"
+pi enable > /dev/null 2>&1 || fail "refresh: enable"
+[ "$(wc -l < "$R/var/lib/schema-init/kit.sums")" -eq 10 ] || fail "refresh: enable recorded $(cat "$R/var/lib/schema-init/kit.sums")"
+echo new-timesync > "$R/usr/share/schema-init/pi-timesync.svc.example"
+echo new-udev > "$R/usr/share/schema-init/udev.svc.example"
+echo mine > "$SVC/udev.svc"
+rm "$SVC/pi-mounts.svc"
+pi refresh > "$T/log" 2>&1 || fail "refresh: exit: $(cat "$T/log")"
+[ "$(cat "$SVC/pi-timesync.svc")" = new-timesync ] || fail "refresh: unedited not replaced"
+[ "$(cat "$SVC/udev.svc")" = mine ] || fail "refresh: edited overwritten"
+[ "$(cat "$SVC/pi-mounts.svc")" = pi-mounts-svc ] || fail "refresh: missing kit file not installed"
+grep -qx "schema-pi: udev.svc was edited; kept (shipped version: $R/usr/share/schema-init/udev.svc.example)" "$T/log" ||
+    fail "refresh: edited notice: $(cat "$T/log")"
+grep -qx "schema-pi: refreshed: pi-mounts pi-timesync; takes effect on next boot" "$T/log" ||
+    fail "refresh: summary: $(cat "$T/log")"
+pi refresh > "$T/log" 2>&1 || fail "refresh: second exit"
+grep -q refreshed "$T/log" && fail "refresh: second run refreshed again: $(cat "$T/log")"
+echo new2-timesync > "$R/usr/share/schema-init/pi-timesync.svc.example"
+pi refresh > /dev/null 2>&1
+[ "$(cat "$SVC/pi-timesync.svc")" = new2-timesync ] || fail "refresh: a refreshed file is not tracked"
+# an install from before kit.sums: identical files are adopted, different ones kept
+rm "$R/var/lib/schema-init/kit.sums"
+echo new-dbus > "$R/usr/share/schema-init/dbus.svc.example"
+pi refresh > "$T/log" 2>&1 || fail "refresh_legacy: exit"
+[ "$(cat "$SVC/dbus.svc")" = dbus-svc ] || fail "refresh_legacy: unrecorded different file replaced"
+grep -q "dbus.svc was edited; kept" "$T/log" || fail "refresh_legacy: notice: $(cat "$T/log")"
+grep -q ' pi-early$' "$R/var/lib/schema-init/kit.sums" || fail "refresh_legacy: identical file not adopted"
+grep -q ' dbus$' "$R/var/lib/schema-init/kit.sums" && fail "refresh_legacy: different file adopted"
+echo "ok refresh"
+
 # usage
 pi > /dev/null 2>&1; [ $? -eq 2 ] || fail "usage: none"
 pi bogus > /dev/null 2>&1; [ $? -eq 2 ] || fail "usage: bogus"

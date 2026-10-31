@@ -7,6 +7,7 @@ KG=$D/known-good
 SVC=$R/etc/schema-init/services
 SHARE=$R/usr/share/schema-init
 REQ=$R/etc/schema-init/pi-boot-required
+SUMS=$D/kit.sums
 KIT="pi-early udev udev-trigger dbus pi-mounts pi-timesync journal-sink pi-boot-firmware pi-bootok pi-deadline"
 NETS="NetworkManager systemd-networkd networking dhcpcd wpa_supplicant"
 ARG=init=/usr/sbin/schema-init-pi
@@ -15,7 +16,7 @@ MAX_DEPS=8
 BL=$(printf ' \t')
 
 usage() {
-    echo "usage: schema-pi enable|disable|status" >&2
+    echo "usage: schema-pi enable|disable|status|refresh" >&2
     exit 2
 }
 
@@ -98,6 +99,49 @@ install_kit() {
     for s in $KIT; do
         [ -e "$1/$s.svc" ] || cp "$SHARE/$s.svc.example" "$1/$s.svc" || die "cannot install $s.svc"
     done
+}
+
+kit_sum() { sha256sum < "$1" | cut -d' ' -f1; }
+recorded() { sed -n "s/^\([0-9a-f]*\)  $1\$/\1/p" "$SUMS" 2>/dev/null; }
+
+# sha256 of each kit .svc as schema-pi last wrote it, so refresh can tell an
+# untouched file from an edited one. A file identical to its example is
+# (re)recorded; any other keeps its old record, or stays unrecorded.
+record_kit() {
+    for s in $KIT; do
+        f=$SVC/$s.svc
+        if [ -f "$f" ] && cmp -s "$f" "$SHARE/$s.svc.example"; then
+            echo "$(kit_sum "$f")  $s"
+        else
+            r=$(recorded "$s")
+            [ -z "$r" ] || echo "$r  $s"
+        fi
+    done > "$SUMS.tmp" && mv "$SUMS.tmp" "$SUMS" || die "cannot write $SUMS"
+}
+
+# package upgrade: shipped kit changes reach an enabled Pi, edits never get overwritten
+refresh() {
+    need_root
+    mount_firmware
+    status_enabled || return 0
+    new=
+    for s in $KIT; do
+        f=$SVC/$s.svc
+        ex=$SHARE/$s.svc.example
+        [ -f "$ex" ] || continue
+        cmp -s "$f" "$ex" 2>/dev/null && continue
+        if [ -e "$f" ]; then
+            r=$(recorded "$s")
+            if [ -z "$r" ] || [ "$r" != "$(kit_sum "$f")" ]; then
+                echo "schema-pi: $s.svc was edited; kept (shipped version: $ex)"
+                continue
+            fi
+        fi
+        cp "$ex" "$f.tmp.$$" && mv "$f.tmp.$$" "$f" || die "cannot replace $f"
+        new="$new $s"
+    done
+    record_kit
+    [ -z "$new" ] || echo "schema-pi: refreshed:$new; takes effect on next boot"
 }
 
 # a .svc that is neither kit nor something an earlier enable imported was written by hand
@@ -235,6 +279,7 @@ enable() {
 
     mkdir -p "$SVC" "$D"
     install_kit "$SVC"
+    record_kit
     run_import "$SVC"
     report_import
 
@@ -303,5 +348,6 @@ case ${1:-} in
     enable) enable ;;
     disable) disable ;;
     status) status ;;
+    refresh) refresh ;;
     *) usage ;;
 esac

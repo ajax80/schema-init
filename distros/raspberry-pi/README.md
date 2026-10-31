@@ -109,6 +109,8 @@ State is in `/var/lib/schema-init/pi-boot` (`attempts=`, `last_target=`). Every 
 
 `apt upgrade` of `schema-init` while schema-init is PID 1 re-execs PID 1 onto the new binary in place (`schema-ctl reexec`); services keep running. If it refuses, the old binary keeps running until reboot.
 
+The upgrade also runs `schema-pi refresh` when the kit is enabled. Each kit `.svc` (`pi-*`, `udev`, `udev-trigger`, `dbus`, `journal-sink`) that is still byte-identical to what `schema-pi` last installed is replaced with the new shipped version, and a missing one is reinstalled. One you edited is kept, with a line naming the shipped copy in `/usr/share/schema-init/`. The record is `/var/lib/schema-init/kit.sums`. Refreshed files take effect at the next boot.
+
 ## Status
 
 ```sh

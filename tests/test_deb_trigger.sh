@@ -75,7 +75,19 @@ grep -q "schema-init-reexec" "$T/dpkg-trigger.log" || fail "configure did not ca
 grep -q -- --no-await "$T/dpkg-trigger.log" || fail "dpkg-trigger without --no-await"
 [ ! -e "$T/ctl.log" ] || fail "configure called schema-ctl"
 grep -q "schema-pi enable" "$T/out" || fail "no enable hint on first install"
+rm -f "$T/bin/schema-pi"
 run configure 0.4.19-1 || fail "upgrade configure exit"
 ! grep -q "schema-pi enable" "$T/out" || fail "enable hint on upgrade"
+
+# upgrade refreshes the Pi kit; a fresh install doesn't, and a failed refresh never fails configure
+pi_shim yes 0
+rm -f "$T/pi.log"
+run configure || fail "configure exit with schema-pi"
+[ ! -e "$T/pi.log" ] || fail "fresh install ran schema-pi: $(cat "$T/pi.log")"
+run configure 0.4.19-1 || fail "upgrade configure exit with schema-pi"
+grep -qx refresh "$T/pi.log" || fail "upgrade did not refresh: $(cat "$T/pi.log" 2>&1)"
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/schema-pi"
+run configure 0.4.19-1 || fail "failed refresh failed configure"
+rm -f "$T/bin/schema-pi"
 
 echo ok test_deb_trigger
