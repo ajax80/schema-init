@@ -27,7 +27,7 @@ cat > "$T/bin/curl" <<EOT
 #!/bin/sh
 case "\$*" in
 *1.1.1.1*) [ -n "\${T_CF_OK:-}" ] || exit 7; printf 'HTTP/1.1 301\r\nDate: Mon, 02 Nov 2026 03:04:05 GMT\r\n\r\n' ;;
-*8.8.8.8*) [ -n "\${T_G_OK:-}" ] || exit 7; printf 'HTTP/1.1 302\r\nDate: %s\r\n\r\n' "\${T_G_DATE:-Tue, 03 Nov 2026 04:05:06 GMT}" ;;
+*208.67.222.222*) [ -n "\${T_G_OK:-}" ] || exit 7; printf 'HTTP/1.1 302\r\nDate: %s\r\n\r\n' "\${T_G_DATE:-Tue, 03 Nov 2026 04:05:06 GMT}" ;;
 esac
 EOT
 # date: -s is logged, -d parses with the real date, +%s is the clock (T_NOW, default the epoch: a Pi with no RTC)
@@ -58,7 +58,7 @@ PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$T/root sh "$D/scripts/schema-pi-early" >/dev/n
 TS=$T/schema-pi-timesync
 cp "$D/scripts/schema-pi-timesync" "$TS"; touch -d 2020-01-01 "$TS"
 
-# timesync: 1.1.1.1 down, 8.8.8.8 answers
+# timesync: 1.1.1.1 down, 208.67.222.222 answers
 : > "$T/calls"
 PATH=$T/bin:$PATH T_G_OK=1 SCHEMA_PI_ONCE=1 SCHEMA_PI_RESYNC=0 sh "$TS" >/dev/null 2>&1 || fail "timesync (fallback) exited non-zero"
 grep -qx 'date -s Tue, 03 Nov 2026 04:05:06 GMT' "$T/calls" || fail "timesync: fallback date not set: $(cat "$T/calls")"
