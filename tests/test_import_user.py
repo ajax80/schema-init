@@ -838,6 +838,50 @@ check("unit map: lazy socket and timer left out",
       "lazy" not in units and "tick" not in units and "listen_lazy=1" in svc(out, "lazy"))
 t.done()
 
+# 12. a Quadlet Pod= container: BindsTo= pulls its pod in, and the pod's
+# PIDFile=%t/%N.pid resolves like its ExecStartPre= does (was: no such pod).
+# Units as podman 5.8's generator writes them.
+t = Tree()
+t.write(t.cfg("web-pod.service"),
+        "[X-Pod]\nPodName=web\n\n[Unit]\nWants=podman-user-wait-network-online.service\n"
+        "After=podman-user-wait-network-online.service\nRequiresMountsFor=%t/containers\n"
+        "Wants=web.service\nBefore=web.service\n\n[Service]\nSyslogIdentifier=%N\n"
+        "ExecStart=/usr/bin/podman pod start web\n"
+        "ExecStop=/usr/bin/podman pod stop --ignore --time=10 web\n"
+        "ExecStopPost=/usr/bin/podman pod rm --ignore --force web\n"
+        "ExecStartPre=/usr/bin/podman pod create --infra-conmon-pidfile=%t/%N.pid --replace "
+        "--exit-policy stop --infra-name web-infra --name web\n"
+        "Environment=PODMAN_SYSTEMD_UNIT=%n\nType=forking\nRestart=on-failure\nPIDFile=%t/%N.pid\n")
+t.write(t.cfg("web.service"),
+        "[X-Container]\nImage=docker.io/library/debian:trixie\nPod=web.pod\n\n[Unit]\n"
+        "Wants=podman-user-wait-network-online.service\nAfter=podman-user-wait-network-online.service\n"
+        "RequiresMountsFor=%t/containers\nBindsTo=web-pod.service\nAfter=web-pod.service\n\n"
+        "[Service]\nEnvironment=PODMAN_SYSTEMD_UNIT=%n\nKillMode=mixed\n"
+        "ExecStop=/usr/bin/podman rm -v -f -i systemd-%N\nExecStopPost=-/usr/bin/podman rm -v -f -i systemd-%N\n"
+        "Delete=%t/%N.cid\nDelegate=yes\nType=notify\nNotifyAccess=all\nSyslogIdentifier=%N\n"
+        "ExecStart=/usr/bin/podman run --name systemd-%N --replace --rm --cgroups=split "
+        "--pids-limit 50 --memory 64m --sdnotify=conmon -d --pod web docker.io/library/debian:trixie sleep 600\n"
+        "\n[Install]\nWantedBy=default.target\n")
+t.enable("web.service")
+units, _ = gen()
+check("BindsTo= pulls the pod into the set", "web-pod.service" in units)
+c, out = run(t)
+check("pod's PIDFile=%t/%N.pid expanded",
+      os.path.exists(os.path.join(out, "web-pod.svc"))
+      and "pid_file=%s/web-pod.pid\n" % t.run in svc(out, "web-pod")
+      and "--infra-conmon-pidfile=%s/web-pod.pid" % t.run in svc(out, "web-pod"))
+check("container waits on its pod, limits verified",
+      "dep=web-pod\n" in svc(out, "web") and "verify_memory_max=67108864\n" in svc(out, "web"))
+t.done()
+
+# PIDFile= specifiers: only a forking unit's is read; %% stays a literal %
+t = Tree()
+b = si.unit_to_svc("n", si.parse_unit("[Service]\nType=notify\nPIDFile=%H/n.pid\nExecStart=/bin/n\n"))
+check("non-forking PIDFile= with an unknown specifier still imports", "exec=/bin/n\n" in b)
+b = si.unit_to_svc("f", si.parse_unit("[Service]\nType=forking\nPIDFile=%t/f%%1.pid\nExecStart=/bin/f\n"))
+check("PIDFile=%t/f%%1.pid -> literal %", "pid_file=%s/f%%1.pid\n" % t.run in b)
+t.done()
+
 # --- CLI: no XDG_RUNTIME_DIR -> 2 ---
 saved = os.environ.pop("XDG_RUNTIME_DIR", None)
 check("cli_no_runtime", si.main(["--user"]) == 2)
