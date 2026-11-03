@@ -113,7 +113,12 @@ def main():
     assert m._stop_unit("chain.service") is True
     g.wait()
     time.sleep(0.1)
-    assert m._proc_starttime(kid) is None, "chain step orphaned"
+    try:  # killed but unreaped (container pid 1 may not reap) still counts as dead
+        with open("/proc/%d/stat" % kid) as f:
+            state = f.read().rsplit(")", 1)[1].split()[0]
+    except OSError:
+        state = "gone"
+    assert state in ("gone", "Z", "X"), "chain step orphaned (state %s)" % state
     print("test_systemd1_session: tracking OK")
 
     # ExecStart parse: leading modifier, line continuation, Environment=
