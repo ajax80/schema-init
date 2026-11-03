@@ -144,8 +144,16 @@ def _which(cmd):
     return None
 
 
+def _unescape(s):
+    return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s.replace("-", "/"))
+
+
 def _specifiers(argv, name, strict=True):
-    spec = {"n": name + ".service", "N": name, "p": name, "t": "/run", "%": "%"}
+    # %i/%I are empty on a non-instance unit, as in systemd; name only carries
+    # an instance when a timer points at one (templates themselves are skipped).
+    prefix, _, inst = name.partition("@")
+    spec = {"n": name + ".service", "N": name, "p": prefix, "i": inst, "I": _unescape(inst),
+            "t": "/run", "%": "%"}
     if _USER:
         spec.update({"h": _USER["home"], "t": _USER["runtime"], "S": _USER["state"],
                      "C": _USER["cache"], "E": _USER["config"], "u": _USER["user"],
