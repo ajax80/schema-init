@@ -1381,6 +1381,7 @@ int service_spawn(service_t *svc) {
     svc->ready_path_verified = 0;
     svc->ready_watched = 0;
     svc->ctl_killed = 0;
+    svc->excise_reason = EXC_NONE;   /* the reason belongs to the run that was excised */
     svc->ready_stale_ino = 0;
     if (svc->ready_path[0]) {
         struct stat st;
@@ -1625,7 +1626,6 @@ int service_spawn(service_t *svc) {
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
-    svc->excise_reason = EXC_NONE;
     if (!svc->boot_spawn.tv_sec && !svc->boot_spawn.tv_nsec)
         svc->boot_spawn = svc->spawn_time_mono;
     svc->last_pet   = svc->spawn_time_mono;

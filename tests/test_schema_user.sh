@@ -303,9 +303,11 @@ XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | python3 -c '
 import json, sys
 r = {s["name"]: s.get("excise_reason") for s in json.load(sys.stdin)["services"]}
 assert r["xc"] == "exit-code" and r["xok"] == "none", r' || fail "status --json: excise_reason"
-# a restart clears it: the reason belongs to the run that was excised
-XDG_RUNTIME_DIR=$I/run ./schema-ctl --user start xt > /dev/null || fail "start xt"
-until_ok 'kv | grep -qx "service.xt.excise_reason=none"' || { kv | grep "^service.xt\."; fail "start xt: reason not cleared"; }
+# start clears it: with a socket dir it can bind in, xl runs and nothing re-excises it
+rm "$I/notadir"; mkdir "$I/notadir"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user start xl > /dev/null || fail "start xl"
+until_ok 'kv | grep -Eqx "service.xl.pid=[1-9][0-9]*"' || { kv | grep "^service.xl\."; fail "start xl: not running"; }
+kv | grep -qx "service.xl.excise_reason=none" || { kv | grep "^service.xl\."; fail "start xl: reason not cleared"; }
 istop
 
 echo "test_schema_user: ok"

@@ -80,11 +80,15 @@ EXCISE_RESULT = {
     'no-cgroup': 'resources',
     'listen-fail': 'resources',
     'fuse': 'resources',
+    'probe-failed': 'resources',
 }
 
 
 def excise_result(status_dict):
-    # circuit_broken still wins: it survives a re-exec from a PID 1 that predates excise_reason
+    # a reason is a failure only while the unit sits excised
+    if status_dict.get('state') != 'EXCISED':
+        return 'success'
+    # circuit_broken still counts: it survives a re-exec from a PID 1 that predates excise_reason
     if status_dict.get('circuit_broken'):
         return 'start-limit-hit'
     return EXCISE_RESULT.get(status_dict.get('excise_reason'), 'success')

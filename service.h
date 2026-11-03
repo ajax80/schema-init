@@ -143,6 +143,7 @@ enum {
     EXC_NO_CGROUP,
     EXC_LISTEN_FAIL,
     EXC_FUSE,
+    EXC_PROBE,            /* ready, but its binary and deps probed absent */
 };
 
 typedef enum {

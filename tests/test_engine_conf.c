@@ -82,6 +82,7 @@ static void test_excise_reason_from_exit(void) {
     assert(excise_reason_from_exit(&s) == EXC_NONE);
     assert(strcmp(excise_reason_name(EXC_START_TIMEOUT), "start-timeout") == 0);
     assert(strcmp(excise_reason_name(EXC_FUSE), "fuse") == 0);
+    assert(strcmp(excise_reason_name(EXC_PROBE), "probe-failed") == 0);
     assert(strcmp(excise_reason_name(200), "unknown") == 0);
 }
 

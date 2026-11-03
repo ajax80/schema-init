@@ -519,16 +519,13 @@ static void park(service_t *svc) {
     service_log(svc, "dormant");
 }
 
-/* FRICTION gave up on the service: park it with backoff, or after the fifth
- * time trip the crash-loop breaker. Only this path sets circuit_broken; a
- * start-timeout or fallback-down excise is not a crash loop. */
 const char *excise_reason_name(uint8_t r) {
     static const char *const n[] = {
         [EXC_NONE] = "none", [EXC_BREAKER] = "breaker", [EXC_START_TIMEOUT] = "start-timeout",
         [EXC_MAIN_PID_TIMEOUT] = "main-pid-timeout", [EXC_EXIT_CODE] = "exit-code",
         [EXC_SIGNAL] = "signal", [EXC_CORE_DUMP] = "core-dump",
         [EXC_READINESS_LOST] = "readiness-lost", [EXC_NO_CGROUP] = "no-cgroup",
-        [EXC_LISTEN_FAIL] = "listen-fail", [EXC_FUSE] = "fuse",
+        [EXC_LISTEN_FAIL] = "listen-fail", [EXC_FUSE] = "fuse", [EXC_PROBE] = "probe-failed",
     };
     return r < sizeof n / sizeof n[0] ? n[r] : "unknown";
 }
@@ -540,6 +537,9 @@ uint8_t excise_reason_from_exit(const service_t *svc) {
     return svc->has_exited && svc->exit_status != 0 ? EXC_EXIT_CODE : EXC_NONE;
 }
 
+/* FRICTION gave up on the service: park it with backoff, or after the fifth
+ * time trip the crash-loop breaker. Only this path sets circuit_broken; a
+ * start-timeout or fallback-down excise is not a crash loop. */
 void engine_friction_verdict(service_t *svc) {
     if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count >= 4) {
         svc->dormant_count++;
@@ -560,6 +560,7 @@ static int held_now(const service_t *svc) {
 static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
     breaker_clear(svc);
+    svc->excise_reason = EXC_NONE;
     svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
@@ -918,9 +919,7 @@ static void reap(void) {
                 }
             } else if (services[i].flags & SVC_NO_RESTART) {
                 services[i].inst.state = STATE_EXCISED;
-                /* keep a reason a timeout already set: its kill is not the cause */
-                if (!services[i].excise_reason)
-                    services[i].excise_reason = excise_reason_from_exit(&services[i]);
+                services[i].excise_reason = excise_reason_from_exit(&services[i]);
                 service_log(&services[i], "76-no-restart");
                 /* Explicit stop/down lands here straight from reap() — it
                  * never crosses the FRICTION→EXCISED transition that the tick
@@ -1240,6 +1239,7 @@ static void tick_service(service_t *svc,
             if (!svc->standby_up && service_is_standby(svc, services, svc_count)) {
                 svc->flags |= SVC_NO_RESTART;
                 svc->inst.state = STATE_EXCISED;
+                svc->excise_reason = EXC_NONE;
                 service_log(svc, "standby");
                 break;
             }
@@ -1361,6 +1361,7 @@ static void tick_service(service_t *svc,
                 if (ready) {
                     flags = service_probe_f8(svc, services, svc_count);
                     schema_step(&svc->inst, flags);
+                    if (svc->inst.state == STATE_EXCISED) svc->excise_reason = EXC_PROBE;
                     if (svc->inst.state != prev) {
                         clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
                         mark_boot_ready(svc, ready);
@@ -1964,6 +1965,7 @@ static void ctl_cmd(int fd, char *line) {
             } else {
                 ctl_wait_abort(&services[i]);
                 services[i].inst.state = STATE_EXCISED;
+                services[i].excise_reason = EXC_NONE;
                 ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
             }
             write(fd, ".\n", 2);
