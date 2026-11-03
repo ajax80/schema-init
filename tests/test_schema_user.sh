@@ -49,7 +49,12 @@ printf 'name=tmr\nexec=/bin/echo\nargs=tick\non_calendar=03:00\npersistent=1\n' 
 # exec_stop kills main itself and outlives it: exec_stop_post must still run (#433)
 printf 'name=pk\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/pk.pid; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nexec_stop=/bin/sh -c "kill $(cat %s/pk.pid); sleep 1"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/pk.post"\n' "$T" "$T" "$T" > "$S/pk.svc"
 # ...and at shutdown too (M2): exec_stop kills main and outlives it, no SIGTERM is ever sent
-printf 'name=pks\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/pks.pid; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nexec_stop=/bin/sh -c "kill $(cat %s/pks.pid); sleep 1"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/pks.post"\n' "$T" "$T" "$T" > "$S/pks.svc"
+printf 'name=pks\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/pks.pid; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nexec_stop=/bin/sh -c "kill $(cat %s/pks.pid); sleep 1; date +%%s%%N > %s/pks.stopcmd"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/pks.post"\n' "$T" "$T" "$T" "$T" > "$S/pks.svc"
+# ...and when that exec_stop then hangs: held for its grace (2 s) only, killed, post still runs
+printf 'name=pkh\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/pkh.pid; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nexec_stop=/bin/sh -c "kill $(cat %s/pkh.pid); exec %s/sl 100"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/pkh.post"\nstop_timeout_sec=2\n' "$T" "$T" "$T" "$T" > "$S/pkh.svc"
+# ...and when main exits on its own during shutdown, before its turn (blocked by a dependent)
+printf 'name=sx\nexec=/bin/sh\nargs=-c\nargs=trap "" TERM; while [ ! -e %s/sx.go ]; do sleep 0.1; done\nstable_secs=1\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/sx.post"\n' "$T" "$T" > "$S/sx.svc"
+{ sleeper sxd; printf 'dep=sx\nexec_stop=/bin/sh -c "touch %s/sx.go; sleep 1"\n' "$T"; } > "$S/sxd.svc"
 # a timer run gets exec_stop_post too (#433)
 printf 'name=tp\nexec=/bin/true\non_boot_sec=0\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/tp.post"\n' "$T" > "$S/tp.svc"
 chmod 600 "$S"/*.svc
@@ -155,6 +160,9 @@ PID=
 [ "$(cat "$T/b.stop")" -le "$(cat "$T/a.stop")" ] || fail "a stopped before its dependent b"
 [ -s "$T/sd.stopcmd" ] || fail "sd: exec_stop not run at shutdown"
 [ -s "$T/pks.post" ] || fail "pks: exec_stop_post skipped at shutdown when exec_stop took main down"
+[ "$(cat "$T/pks.stopcmd")" -le "$(cat "$T/pks.post")" ] || fail "pks: exec_stop_post ran before exec_stop finished"
+[ -s "$T/sx.post" ] || fail "sx: exec_stop_post skipped when main exited on its own during shutdown"
+[ -s "$T/pkh.post" ] || fail "pkh: exec_stop_post skipped after a hung exec_stop was killed"
 [ -s "$T/sd.post" ] || fail "sd: exec_stop_post not run at shutdown"
 [ "$(cat "$T/sd.stopcmd")" -le "$(cat "$T/sd.stop")" ] || fail "sd: exec_stop ran after SIGTERM at shutdown"
 pgrep -f "$T/sl" > /dev/null && fail "dbl orphan survived"
