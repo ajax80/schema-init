@@ -193,6 +193,19 @@ int main(void) {
     write_svc(path, "name=plain\nexec=/home/me/run.sh\nprotect_home=1\n");
     assert(service_load_one(path, &one) == -1);
     assert(services_load(dir, table, 4) == 0);
+
+    /* working_dir: a defaulted knob that hides it is dropped, an explicit one kept */
+    write_svc(path, "name=plain\nexec=/usr/bin/true\nworking_dir=-~\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(one.hard_dropped == HARD_PH && !one.ns_protect_home && one.ns_private_tmp == 1);
+    write_svc(path, "name=plain\nexec=/usr/bin/true\nworking_dir=/tmp\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(one.hard_dropped == HARD_PT && !one.ns_private_tmp);
+    write_svc(path, "name=plain\nexec=/usr/bin/true\nworking_dir=/tmp/w\nprivate_tmp=1\n");
+    assert(service_load_one(path, &one) == 0);
+    assert(one.ns_private_tmp == 1 && !(one.hard_dropped & HARD_PT));
+    write_svc(path, "name=plain\nexec=/usr/bin/true\nworking_dir=/srv/w\n");
+    assert(service_load_one(path, &one) == 0 && !one.hard_dropped);
     service_set_hardening_default(0);
 
     unlink(path);

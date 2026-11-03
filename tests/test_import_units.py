@@ -101,6 +101,20 @@ bb = si.unit_to_svc("bx", si.parse_unit(
 check("binary from Environment= resolved even with env file",
       "exec=/usr/sbin/x\n" in bb and "args=$OPTS\n" in bb and "expand_args=1\n" in bb)
 
+# --- WorkingDirectory -> working_dir= ---
+def _wd(v, name="w"):
+    return si.unit_to_svc(name, si.parse_unit(
+        "[Service]\nWorkingDirectory=%s\nExecStart=/bin/w\n[Install]\nWantedBy=x\n" % v), unit=name)
+check("WorkingDirectory absolute", "working_dir=/etc/openvpn/client\n" in _wd("/etc/openvpn/client"))
+check("WorkingDirectory - prefix kept", "working_dir=-/root\n" in _wd("-/root"))
+check("WorkingDirectory ~ kept", "working_dir=~\n" in _wd("~"))
+check("WorkingDirectory specifier resolved", "working_dir=/run/wsvc\n" in _wd("%t/%N", "wsvc"))
+bw = _wd("relative")
+check("relative WorkingDirectory dropped with note",
+      "working_dir" not in bw and "dropped WorkingDirectory=relative" in bw)
+bw = _wd("%Q/x")
+check("unknown specifier dropped with note", "working_dir" not in bw and "dropped WorkingDirectory" in bw)
+
 # --- ExecStartPre -> exec_pre= ---
 bp = si.unit_to_svc("sssd", si.parse_unit(
     "[Service]\nUser=sssd\nExecStartPre=+-/bin/chown -f -R root:sssd /etc/sssd\n"
