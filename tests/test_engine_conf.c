@@ -28,8 +28,46 @@ static void test_mkdir_p(void) {
     assert(engine_mkdir_p(leaf, 0700) == 0);
 }
 
+/* crash-loop breaker: four parks with backoff, the fifth verdict excises and
+ * marks circuit_broken; critical / no_excise services park forever. */
+static void test_circuit_breaker(void) {
+    service_t s;
+    int k;
+    memset(&s, 0, sizeof s);
+    strcpy(s.name, "loopy");
+    for (k = 1; k <= 4; k++) {
+        s.inst.state = STATE_EXCISED;
+        engine_friction_verdict(&s);
+        assert(s.inst.state == STATE_DORMANT && s.dormant_count == k && !s.circuit_broken);
+    }
+    s.inst.state = STATE_EXCISED;
+    engine_friction_verdict(&s);
+    assert(s.inst.state == STATE_EXCISED && s.circuit_broken == 1);
+    s.inst.state = STATE_EXCISED;   /* a breaker that has tripped trips again on the next verdict */
+    engine_friction_verdict(&s);
+    assert(s.circuit_broken == 1);
+
+    memset(&s, 0, sizeof s);
+    strcpy(s.name, "crit");
+    s.flags = SVC_CRITICAL;
+    for (k = 0; k < 8; k++) {
+        s.inst.state = STATE_EXCISED;
+        engine_friction_verdict(&s);
+        assert(s.inst.state == STATE_DORMANT && !s.circuit_broken);
+    }
+    memset(&s, 0, sizeof s);
+    strcpy(s.name, "keep");
+    s.no_excise = 1;
+    for (k = 0; k < 8; k++) {
+        s.inst.state = STATE_EXCISED;
+        engine_friction_verdict(&s);
+        assert(s.inst.state == STATE_DORMANT && !s.circuit_broken);
+    }
+}
+
 int main(void) {
     test_pid1_defaults();
+    test_circuit_breaker();
     test_mkdir_p();
     assert(!strcmp(engine_paths.ctl_sock, "/run/schema-init.sock"));
     assert(!strcmp(engine_paths.run_dir, "/run/schema-init"));

@@ -81,4 +81,13 @@ u = m.Systemd1Unit.__new__(m.Systemd1Unit)
 u.short_name = "dbus"
 check("dbus.service reports CanReload", m.Systemd1Unit._read_can_reload(u) is True)
 
+class _M: recently_stopped = set()
+v = m.Systemd1Unit.__new__(m.Systemd1Unit)
+v.name, v.short_name, v.manager = "loopy.service", "loopy", _M()
+v.update_state({"pid": 0, "state": "EXCISED", "restarts": 9, "circuit_broken": True})
+check("breaker-excised unit: failed + Result=start-limit-hit",
+      v.active_state == "failed" and v.result == "start-limit-hit")
+v.update_state({"pid": 7, "state": "SETTLED", "restarts": 0, "circuit_broken": False})
+check("after reset: Result=success", v.result == "success")
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

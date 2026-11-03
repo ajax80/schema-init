@@ -16,6 +16,7 @@ static inline int rec_tier_base(const rec_event_t *e) {
     size_t i;
     switch (e->src) {
     case REC_SRC_PID1:
+        if (!strcmp(e->kind, "breaker-tripped")) return REC_TIER_CRIT;
         for (i = 0; i < sizeof pid1_kinds / sizeof *pid1_kinds; i++)
             if (!strcmp(e->kind, pid1_kinds[i])) return e->crit ? REC_TIER_CRIT : REC_TIER_MINOR;
         return !strcmp(e->kind, "survival-enter") ? REC_TIER_MINOR : REC_TIER_TRACE;

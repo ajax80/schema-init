@@ -143,7 +143,8 @@ static inline int rec_parse(const char *line, rec_event_t *out) {
 
 static inline int rec_forward_kind(const char *event) {
     static const char *const k[] = { "died", "dormant", "76-excised", "watchdog-kill",
-        "watchdog-abort", "start-timeout", "spawn-fail", "readiness-lost", "fuse-tripped" };
+        "watchdog-abort", "start-timeout", "spawn-fail", "readiness-lost", "fuse-tripped",
+        "breaker-tripped" };
     size_t i;
     for (i = 0; i < sizeof k / sizeof *k; i++)
         if (!strcmp(event, k[i])) return 1;
