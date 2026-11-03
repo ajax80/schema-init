@@ -1732,13 +1732,14 @@ static int cg_read(const char *dir, const char *file, char *buf, size_t n) {
     return 1;
 }
 
-/* memory.max is rounded down to a page by the kernel */
+/* memory.max is rounded down to a page by the kernel; only a number gets
+ * that slack, never "max", an empty read or a missing file */
 static int verify_one(const char *dir, const char *file, const char *want, char *why, size_t n) {
     char got[64];
     if (!want[0]) return 1;
     if (!cg_read(dir, file, got, sizeof got)) snprintf(got, sizeof got, "missing");
     int ok = !strcmp(got, want);
-    if (!ok && !strcmp(file, "memory.max") && strcmp(got, "max") != 0) {
+    if (!ok && !strcmp(file, "memory.max") && got[0] && strspn(got, "0123456789") == strlen(got)) {
         unsigned long long w = strtoull(want, NULL, 10), g = strtoull(got, NULL, 10);
         ok = g <= w && w - g < (unsigned long long)sysconf(_SC_PAGESIZE);
     }
@@ -1746,10 +1747,16 @@ static int verify_one(const char *dir, const char *file, const char *want, char 
     return ok;
 }
 
-static int verify_walk(const char *cg, const service_t *svc, char *why, size_t n) {
+#define VERIFY_MISS_MAX 4
+typedef struct { int n; char e[VERIFY_MISS_MAX][112]; } verify_miss_t;
+
+/* Every populated cgroup's first mismatch is kept: which one should hold the
+ * limits isn't knowable here (podman's split puts conmon in runtime/, never
+ * limited, beside libpod-payload-<id>), so none is allowed to hide another. */
+static int verify_walk(const char *cg, const service_t *svc, verify_miss_t *miss) {
     DIR *d = opendir(cg);
     struct dirent *e;
-    char sub[512], ev[32];
+    char sub[512], ev[32], m[96];
     int found = 0;
     if (!d) return 0;
     while (!found && (e = readdir(d))) {
@@ -1757,18 +1764,30 @@ static int verify_walk(const char *cg, const service_t *svc, char *why, size_t n
         if (snprintf(sub, sizeof sub, "%s/%s", cg, e->d_name) >= (int)sizeof sub) continue;
         /* first line of cgroup.events; an empty subtree can't hold the payload */
         if (!cg_read(sub, "cgroup.events", ev, sizeof ev) || strcmp(ev, "populated 1") != 0) continue;
-        found = (verify_one(sub, "memory.max", svc->verify_memory_max, why, n) &&
-                 verify_one(sub, "cpu.max", svc->verify_cpu_max, why, n) &&
-                 verify_one(sub, "pids.max", svc->verify_pids_max, why, n)) ||
-                verify_walk(sub, svc, why, n);
+        found = verify_one(sub, "memory.max", svc->verify_memory_max, m, sizeof m) &&
+                verify_one(sub, "cpu.max", svc->verify_cpu_max, m, sizeof m) &&
+                verify_one(sub, "pids.max", svc->verify_pids_max, m, sizeof m);
+        /* a payload id is ~80 chars: 40 tells runtime/ from libpod-payload-<id> */
+        if (!found && miss->n < VERIFY_MISS_MAX)
+            snprintf(miss->e[miss->n++], sizeof miss->e[0], "%.40s: %s", e->d_name, m);
+        found = found || verify_walk(sub, svc, miss);
     }
     closedir(d);
     return found;
 }
 
+static int miss_cmp(const void *a, const void *b) { return strcmp(a, b); }
+
 int verify_limits_match(const char *cg, const service_t *svc, char *why, size_t n) {
+    verify_miss_t miss = { 0 };
+    size_t off = 0;
+    if (verify_walk(cg, svc, &miss)) return 1;
     snprintf(why, n, "no populated cgroup below the service");
-    return verify_walk(cg, svc, why, n);
+    /* sorted: the same tree reads the same whatever order readdir gave */
+    qsort(miss.e, (size_t)miss.n, sizeof miss.e[0], miss_cmp);
+    for (int i = 0; i < miss.n && off < n; i++)
+        off += (size_t)snprintf(why + off, n - off, "%s%s", i ? "; " : "", miss.e[i]);
+    return 0;
 }
 
 void cgroup_rmdir_tree(const char *cg) {
@@ -1881,20 +1900,25 @@ static void rail_write(const char *line, size_t len) {
 }
 
 void service_log(const service_t *svc, const char *event) {
-    char line[256];
+    char line[512];
     int n;
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
 
+    /* the event is bounded so a long one (limits-mismatch) can't cut off state/pid */
     n = snprintf(line, sizeof(line),
-                 "[%04d-%02d-%02d %02d:%02d:%02d] %-20s  %-12s  state=%-12s  wt=%d  pid=%d\n",
+                 "[%04d-%02d-%02d %02d:%02d:%02d] %-20s  %-12.300s  state=%-12s  wt=%d  pid=%d\n",
                  t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
                  t->tm_hour, t->tm_min, t->tm_sec,
                  svc->name, event,
                  state_name(svc->inst.state),
                  svc->inst.weight,
                  (int)svc->child_pid);
-    if (n > (int)sizeof(line) - 1) n = (int)sizeof(line) - 1;
+    if (n < 0) return;
+    if (n > (int)sizeof(line) - 1) {
+        n = (int)sizeof(line) - 1;
+        line[n - 1] = '\n';   /* a cut line still ends: the next one starts on its own */
+    }
 
     fputs(line, stdout);
     fflush(stdout);
