@@ -419,6 +419,23 @@ check("I2: Quadlet unit without TimeoutStopSec -> stop grace past podman's 10 s"
 check("I2: StopTimeout= honoured", "stop_timeout_sec=35\n" in quad("Image=img\nStopTimeout=30", "", "img"))
 check("I2: TimeoutStopSec= still wins", "stop_timeout_sec=7\n" in si.unit_to_svc("q", si.parse_unit(
       "[X-Container]\nImage=img\n[Service]\nType=notify\nTimeoutStopSec=7\nExecStart=/usr/bin/podman run -d img\n")))
+POD = ("[X-Pod]\nPodName=web\n%s\n[Service]\nType=forking\nPIDFile=/run/web-pod.pid\n"
+       "ExecStart=/usr/bin/podman pod start web\nExecStop=/usr/bin/podman pod stop --ignore --time=%s web\n")
+pod_svc = lambda st, t: si.unit_to_svc("web-pod", si.parse_unit(POD % (st, t)))
+check("I2: Quadlet pod -> stop grace past podman pod stop's 10 s", "stop_timeout_sec=15\n" in pod_svc("", "10"))
+check("I2: pod StopTimeout= honoured", "stop_timeout_sec=35\n" in pod_svc("StopTimeout=30", "30"))
+check("I2: StopTimeout=0 is 0, not unset", "stop_timeout_sec=5\n" in pod_svc("StopTimeout=0", "0"))
+check("I2: a larger --time in ExecStop wins (drop-in)", "stop_timeout_sec=65\n" in pod_svc("", "60"))
+b = pod_svc("StopTimeout=2min30x", "10")
+check("I2: unparseable StopTimeout= warns, 10 s assumed",
+      "stop_timeout_sec=15\n" in b and "StopTimeout=2min30x unrecognised" in b)
+check("I2: Quadlet kube -> kube down's 10 s", "stop_timeout_sec=15\n" in si.unit_to_svc("k", si.parse_unit(
+      "[X-Kube]\n[Service]\nType=notify\nExecStart=/usr/bin/podman kube play --replace k.yaml\n"
+      "ExecStopPost=/usr/bin/podman kube down k.yaml\n")))
+check("I2: hand-written podman stop -t 20 -> 25", "stop_timeout_sec=25\n" in si.unit_to_svc("h", si.parse_unit(
+      "[Service]\nExecStart=/usr/bin/podman run img\nExecStop=/usr/bin/podman stop -t 20 h\n")))
+check("I2: plain unit keeps the default grace", "stop_timeout_sec" not in si.unit_to_svc("p", si.parse_unit(
+      "[Service]\nExecStart=/bin/p\nExecStop=/bin/kill -t 5\n")))
 si.set_user_mode(None)
 check("verify_keys_forms: system mode -> no keys", "verify_" not in pod("--memory=64m"))
 
