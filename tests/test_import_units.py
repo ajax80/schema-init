@@ -419,6 +419,12 @@ check("I2: Quadlet unit without TimeoutStopSec -> stop grace past podman's 10 s"
 check("I2: StopTimeout= honoured", "stop_timeout_sec=35\n" in quad("Image=img\nStopTimeout=30", "", "img"))
 check("I2: TimeoutStopSec= still wins", "stop_timeout_sec=7\n" in si.unit_to_svc("q", si.parse_unit(
       "[X-Container]\nImage=img\n[Service]\nType=notify\nTimeoutStopSec=7\nExecStart=/usr/bin/podman run -d img\n")))
+POD = ("[X-Pod]\nPodName=web\n%s\n[Service]\nType=forking\nPIDFile=/run/web-pod.pid\n"
+       "ExecStart=/usr/bin/podman pod start web\nExecStop=/usr/bin/podman pod stop --ignore --time=10 web\n")
+check("I2: Quadlet pod -> stop grace past podman pod stop's 10 s",
+      "stop_timeout_sec=15\n" in si.unit_to_svc("web-pod", si.parse_unit(POD % "")))
+check("I2: pod StopTimeout= honoured",
+      "stop_timeout_sec=35\n" in si.unit_to_svc("web-pod", si.parse_unit(POD % "StopTimeout=30")))
 si.set_user_mode(None)
 check("verify_keys_forms: system mode -> no keys", "verify_" not in pod("--memory=64m"))
 

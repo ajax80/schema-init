@@ -1306,10 +1306,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("%s=%s capped at 300 s" % (skey, stop))
         else:
             lines.append("stop_timeout_sec=%d" % sec)
-    elif sections.get("X-Container") is not None:
-        # exec_stop is podman rm -f, which waits StopTimeout= (10 s) for the
-        # container before SIGKILL: 3 s would cut it short and leave debris
-        st = _timespan_sec(_get_last(sections["X-Container"], "StopTimeout") or "10") or 10
+    elif sections.get("X-Container") is not None or sections.get("X-Pod") is not None:
+        # exec_stop is podman rm -f / podman pod stop --time=N, which wait
+        # StopTimeout= (10 s) before SIGKILL: 3 s would cut it short and leave
+        # debris (a pod left Exited, its pod rm never reached)
+        q = sections.get("X-Container") if sections.get("X-Container") is not None else sections["X-Pod"]
+        st = _timespan_sec(_get_last(q, "StopTimeout") or "10") or 10
         lines.append("stop_timeout_sec=%d" % min(st + 5, 300))
 
     # [Install] presence is why the unit was queued; note if it's missing.
