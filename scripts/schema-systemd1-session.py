@@ -303,7 +303,7 @@ def _parse_unit_execstart(path):
             exec_path = argv[0]
             if "@" in pre:
                 argv = argv[1:] or [exec_path]
-            cmds.append(("-" in pre, exec_path, argv))
+            cmds.append(("-" in pre, ":" in pre, exec_path, argv))
         elif key == "Environment":
             if not val:
                 env = []
@@ -312,8 +312,8 @@ def _parse_unit_execstart(path):
                 env.extend(shlex.split(val))
             except ValueError:
                 env.extend(val.split())
-        elif key == "Type" and val:
-            stype = val
+        elif key == "Type":
+            stype = val or "simple"
     return cmds, env, stype
 
 
@@ -325,11 +325,11 @@ def _plan(cmds, stype="simple"):
     if not cmds:
         return None
     if len(cmds) == 1:
-        return cmds[0][1], cmds[0][2]
+        return cmds[0][-2], cmds[0][-1]
     if stype != "oneshot":
         return "multi"
     parts = []
-    for i, (ignore, exe, argv) in enumerate(cmds):
+    for i, (ignore, _, exe, argv) in enumerate(cmds):
         words = shlex.join([exe] + argv[1:])
         if i == len(cmds) - 1:
             parts.append("exec " + words)
@@ -358,7 +358,7 @@ def _runtime_dir():
     return os.environ.get("XDG_RUNTIME_DIR") or ("/run/user/%d" % os.getuid())
 
 
-def _expand(s, env, unit_name=""):
+def _expand(s, env, unit_name="", variables=True):
     base = unit_name
     for suf in (".service", ".target", ".socket", ".scope"):
         if base.endswith(suf):
@@ -389,6 +389,8 @@ def _expand(s, env, unit_name=""):
         out.append(c)
         i += 1
     expanded = "".join(out)
+    if not variables:  # ExecStart=: prefix -- specifiers only, $VAR left literal
+        return expanded
     return _VAR_RE.sub(lambda m: env.get(m.group(1) or m.group(2), ""), expanded)
 
 
@@ -433,6 +435,20 @@ def _unit_alive(name):
     return True
 
 
+def _signal_group(pid, sig):
+    # Spawns lead their own session (pgid == pid), so signal the group: a oneshot
+    # chain's sh would otherwise die and leave its running step behind. Fall back
+    # to the pid when it is not a group leader (it setsid'd away, or a test child).
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, sig)
+        else:
+            os.kill(pid, sig)
+        return True
+    except OSError:
+        return False
+
+
 def _stop_unit(name):
     rec = _spawned.pop(name, None)
     if not rec:
@@ -440,9 +456,7 @@ def _stop_unit(name):
     pid, st = rec
     if _proc_starttime(pid) != st:   # gone or recycled -> never signal a stranger
         return False
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
+    if not _signal_group(pid, signal.SIGTERM):
         return False
     # Wait (bounded) for it to exit before the respawn races it for the unit's
     # well-known bus name; escalate to SIGKILL if it will not go.
@@ -455,10 +469,7 @@ def _stop_unit(name):
             break
         time.sleep(0.05)
     else:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+        _signal_group(pid, signal.SIGKILL)
     _log("stopped %s pid=%d" % (name, pid))
     return True
 
@@ -589,8 +600,9 @@ def handle_start_unit(session, msg, member="StartUnit"):
         v = _expand(v, scratch, unit_name)
         scratch[k] = v
         expanded_env.append("%s=%s" % (k, v))
-    plan = _plan([(ign, _expand(exe, scratch, unit_name), [_expand(a, scratch, unit_name) for a in av])
-                  for ign, exe, av in cmds], stype)
+    plan = _plan([(ign, nv, _expand(exe, scratch, unit_name, not nv),
+                   [_expand(a, scratch, unit_name, not nv) for a in av])
+                  for ign, nv, exe, av in cmds], stype)
     if plan == "multi":
         session.send_message(ll.ErrorMessage(
             msg, "org.freedesktop.DBus.Error.Failed",

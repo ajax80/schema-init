@@ -2,6 +2,7 @@
 import os
 import sys
 import signal
+import time
 import subprocess
 import tempfile
 import importlib.util
@@ -93,6 +94,15 @@ def main():
     assert m._stop_unit("stale.service") is False
     os.kill(q.pid, 0)                            # innocent process untouched
     q.terminate(); q.wait()
+    # restart of a oneshot chain must not orphan the step it is running
+    g = subprocess.Popen(["/bin/sh", "-c", "sleep 30 || exit $?; exec sleep 31"], start_new_session=True)
+    time.sleep(0.2)
+    kid = int(subprocess.check_output(["pgrep", "-P", str(g.pid)]).split()[0])
+    m._spawned["chain.service"] = (g.pid, m._proc_starttime(g.pid))
+    assert m._stop_unit("chain.service") is True
+    g.wait()
+    time.sleep(0.1)
+    assert m._proc_starttime(kid) is None, "chain step orphaned"
     print("test_systemd1_session: tracking OK")
 
     # ExecStart parse: leading modifier, line continuation, Environment=
@@ -104,7 +114,7 @@ def main():
         unit = f.name
     cmds, envl, stype = m._parse_unit_execstart(unit)
     os.unlink(unit)
-    assert cmds == [(True, "/usr/bin/tool", ["/usr/bin/tool", "--flag", "--home", "%h"])], cmds
+    assert cmds == [(True, False, "/usr/bin/tool", ["/usr/bin/tool", "--flag", "--home", "%h"])], cmds
     assert "FOO=bar" in envl and "BAZ=qux" in envl, envl
     assert stype == "simple", stype
 
@@ -118,25 +128,28 @@ def main():
             os.unlink(f.name)
     cmds, envl, stype = parse("[Service]\nType=oneshot\nEnvironment=A=1\nExecStart=/bin/old\n"
                               "ExecStart=\nEnvironment=\nEnvironment=B=2\n"
-                              "ExecStart=/bin/a x\nExecStart=-@/bin/b bee y\n")
+                              "ExecStart=/bin/a x\nExecStart=-@/bin/b bee y\nExecStart=:/bin/c $X\n")
     assert stype == "oneshot"
-    assert cmds == [(False, "/bin/a", ["/bin/a", "x"]), (True, "/bin/b", ["bee", "y"])], cmds
+    assert cmds == [(False, False, "/bin/a", ["/bin/a", "x"]), (True, False, "/bin/b", ["bee", "y"]),
+                    (False, True, "/bin/c", ["/bin/c", "$X"])], cmds
+    assert parse("[Service]\nType=oneshot\nType=\nExecStart=/bin/a\n")[2] == "simple"
+    assert m._expand("$HOME %N", {"HOME": "/h"}, "u.service", False) == "$HOME u"
     assert envl == ["B=2"], envl
 
     assert m._plan([]) is None
-    assert m._plan([(False, "/bin/a", ["a0", "x"])]) == ("/bin/a", ["a0", "x"])
-    assert m._plan([(False, "/bin/a", ["/bin/a"]), (False, "/bin/b", ["/bin/b"])], "simple") == "multi"
-    ex, av = m._plan([(False, "/bin/a", ["/bin/a", "x y"]), (True, "/bin/b", ["bee"]),
-                      (False, "/bin/c", ["/bin/c", "$z"])], "oneshot")
+    assert m._plan([(False, False, "/bin/a", ["a0", "x"])]) == ("/bin/a", ["a0", "x"])
+    assert m._plan([(False, False, "/bin/a", ["/bin/a"]), (False, False, "/bin/b", ["/bin/b"])], "simple") == "multi"
+    ex, av = m._plan([(False, False, "/bin/a", ["/bin/a", "x y"]), (True, False, "/bin/b", ["bee"]),
+                      (False, False, "/bin/c", ["/bin/c", "$z"])], "oneshot")
     assert ex == "/bin/sh" and av[:2] == ["/bin/sh", "-c"], av
     assert av[2] == "/bin/a 'x y' || exit $?; /bin/b; exec /bin/c '$z'", av[2]
     # and it really runs in order, stopping at the first unignored failure
     with tempfile.TemporaryDirectory() as d:
         log = os.path.join(d, "log")
-        ex, av = m._plan([(False, "/bin/sh", ["/bin/sh", "-c", "echo 1 >>" + log]),
-                          (True, "/bin/false", ["/bin/false"]),
-                          (False, "/bin/sh", ["/bin/sh", "-c", "echo 2 >>%s; exit 3" % log]),
-                          (False, "/bin/sh", ["/bin/sh", "-c", "echo 3 >>" + log])], "oneshot")
+        ex, av = m._plan([(False, False, "/bin/sh", ["/bin/sh", "-c", "echo 1 >>" + log]),
+                          (True, False, "/bin/false", ["/bin/false"]),
+                          (False, False, "/bin/sh", ["/bin/sh", "-c", "echo 2 >>%s; exit 3" % log]),
+                          (False, False, "/bin/sh", ["/bin/sh", "-c", "echo 3 >>" + log])], "oneshot")
         assert subprocess.run(av, executable=ex).returncode == 3
         assert open(log).read() == "1\n2\n", open(log).read()
     print("test_systemd1_session: parse OK")
