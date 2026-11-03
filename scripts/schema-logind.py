@@ -834,6 +834,16 @@ class SessionRecord:
         return live == stored   # same incarnation; a mismatch means the pid was recycled
 
 
+def _uptime():
+    try:
+        if os.environ.get('SCHEMA_LOGIND_UPTIME'):     # tests
+            return float(os.environ['SCHEMA_LOGIND_UPTIME'])
+        with open('/proc/uptime') as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
 def scan_session_files():
     """All /run/systemd/sessions/<id> as {sid: SessionRecord}.
 
@@ -1542,33 +1552,30 @@ class SessionRegistry:
     def get(self, sid):
         return self.sessions.get(str(sid))
 
-    # A lookup that misses re-reads the directory before answering: a
-    # compositor asks for its session a few ms after the login script's
-    # rename, inside the 250 ms poll, and an answer from the last poll was
-    # NoSuchSession -- or, via the seat, the placeholder #31 (the boot race).
-    # Only when the directory moved since the last sync: polkit asks
-    # GetSessionByPID for pids in no session at all, and those must stay cheap.
-    def _resync_if_changed(self):
-        try:
-            m = os.stat(SESSIONS_DIR).st_mtime_ns
-        except OSError:
-            return
-        if m != getattr(self, '_dir_mtime', None):
-            self.sync()
+    # A lookup that misses re-reads the directory before answering when it
+    # holds an entry the registry doesn't: a compositor asks for its session a
+    # few ms after the login script's rename, inside the 250 ms poll, and the
+    # last poll's answer was NoSuchSession. Only then: polkit asks for pids in
+    # no session at all, and those cost one listdir. The seat and other reads
+    # are covered by the login script asking once (GetSession) before it
+    # starts the desktop -- see schema-plasma-autologin.sh.
+    def _resolve(self, lookup, key):
+        obj = lookup(key)
+        if obj is None:
+            try:
+                names = os.listdir(SESSIONS_DIR)
+            except OSError:
+                names = []
+            if any(n.isalnum() and n not in self.sessions for n in names):
+                self.sync()
+                obj = lookup(key)
+        return obj
 
     def find(self, sid):
-        obj = self.get(sid)
-        if obj is None:
-            self._resync_if_changed()
-            obj = self.get(sid)
-        return obj
+        return self._resolve(self.get, str(sid))
 
     def find_pid(self, pid):
-        obj = self.session_for_pid(pid)
-        if obj is None:
-            self._resync_if_changed()
-            obj = self.session_for_pid(pid)
-        return obj
+        return self._resolve(self.session_for_pid, pid)
 
     def primary(self):
         """The session an unqualified request means: the active one, else any.
@@ -1655,10 +1662,6 @@ class SessionRegistry:
 
     def sync(self, handoff=None):
         """Diff the directory against the live objects. Returns True (GLib)."""
-        try:
-            self._dir_mtime = os.stat(SESSIONS_DIR).st_mtime_ns
-        except OSError:
-            self._dir_mtime = None
         try:
             records = scan_session_files()
         except Exception as e:
@@ -3282,9 +3285,11 @@ def main():
     registry.manager = manager
 
     for obj in registry.sessions.values():
-        # not the placeholder: it stands for "nobody registered yet", which is
-        # every cold boot, not a desktop running under us
-        if handoff is None and obj.record.active and obj.vt_fd is None and not obj.record.synthesised:
+        # Not the placeholder at boot: it stands for "nobody registered yet",
+        # which is every cold boot. Later it can be a legacy login running as
+        # #31 under a restarted logind, which is what this warning is for.
+        if handoff is None and obj.record.active and obj.vt_fd is None and \
+                not (obj.record.synthesised and _uptime() < 120):
             # Cold start under a session that is already running: its compositor
             # took control of a bridge that no longer exists, so we hold none of
             # its fds and _setup_vt_mediation() is never called for it. Before

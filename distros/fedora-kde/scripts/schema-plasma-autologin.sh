@@ -174,6 +174,12 @@ while true; do
                           --display --service schema-autologin --leader $$ 2>/dev/null)
     fi
     [ -n "$SID" ] || SID=31
+    # Have logind take the session in before the desktop asks for it: it only
+    # polls the directory every 250 ms, and a kwin that read the seat inside
+    # that window got the placeholder #31 (the boot race). A lookup that
+    # misses makes logind re-read; bounded, never blocks the login.
+    busctl --timeout=2 call org.freedesktop.login1 /org/freedesktop/login1 \
+        org.freedesktop.login1.Manager GetSession s "$SID" >/dev/null 2>&1 || true
     SESSION_SCOPE="/sys/fs/cgroup/user.slice/user-$SCHEMA_UID.slice/session-$SID.scope"
     mkdir -p "$SESSION_SCOPE" 2>/dev/null || true
 

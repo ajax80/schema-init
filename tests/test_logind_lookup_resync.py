@@ -67,6 +67,21 @@ def main():
                     'SCHEMA_LOGIND_RUN_DIR': rundir, 'SCHEMA_LOGIND_UDEV_DATA': rundir,
                     'SCHEMA_LOGIND_DEV_DIR': rundir, 'SCHEMA_CGROUP_ROOT': cgroot})
         env.pop('SCHEMA_LOGIND_VTNR', None)
+        # a legacy #31 under a logind restarted long after boot still warns
+        late_log = open(os.path.join(rundir, 'late'), 'w+')
+        late = subprocess.Popen([sys.executable, LOGIND], env=dict(env, SCHEMA_LOGIND_UPTIME='500'),
+                                stdout=late_log, stderr=subprocess.STDOUT, text=True)
+        for _ in range(100):
+            late_log.seek(0)
+            if 'watching /sys/class/tty' in late_log.read():
+                break
+            time.sleep(0.05)
+        late.terminate()
+        late.wait(5)
+        late_log.seek(0)
+        check('placeholder long after boot: ORPHANED SESSION still warned',
+              'ORPHANED SESSION' in late_log.read())
+        env['SCHEMA_LOGIND_UPTIME'] = '5'
         log = open(os.path.join(rundir, 'out'), 'w+')
         stub = subprocess.Popen([sys.executable, LOGIND], env=env, stdout=log,
                                 stderr=subprocess.STDOUT, text=True)
@@ -85,8 +100,23 @@ def main():
             return
 
         log.seek(0)
-        check('cold start with no sessions: no ORPHANED SESSION warning',
+        check('cold boot with no sessions: no ORPHANED SESSION warning',
               'ORPHANED SESSION' not in log.read())
+
+        # the autologin script's poke: GetSession once, then the seat already
+        # names the real session -- never the placeholder -- with no wait
+        seat = dbus.Interface(bus.get_object('org.freedesktop.login1',
+                                             '/org/freedesktop/login1/seat/seat0'),
+                              'org.freedesktop.DBus.Properties')
+        first = subprocess.Popen(['sleep', '60'], start_new_session=True)
+        leaders.append(first)
+        write_session(rundir, '30', first.pid)
+        try:
+            mgr.GetSession('30')
+            act = str(seat.Get('org.freedesktop.login1.Seat', 'ActiveSession')[0])
+        except dbus.exceptions.DBusException as e:
+            act = e.get_dbus_name()
+        check('after the poke the seat names the real session, not #31', act == '30', act)
 
         # a session leader of its own (getsid() == its pid), as the login script's is
         misses = []

@@ -59,7 +59,8 @@ except Exception as e:
     rc = "raised %r" % e
 finally:
     os.chmod(logd, 0o755)
-check("unwritable report dir: exit 0, results printed, says why",
-      rc == 0 and "boom" in buf.getvalue() and "report not written" in err.getvalue())
+if os.geteuid() != 0:   # root writes through a 0555 dir
+    check("unwritable report dir: exit 0, results printed, says why",
+          rc == 0 and "boom" in buf.getvalue() and "report not written" in err.getvalue())
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
