@@ -243,7 +243,9 @@ def _find_user_unit(name):
     # systemd's order for foo@bar.service.
     cands = [name]
     stem, dot, suf = name.rpartition(".")
-    if "@" in stem and not stem.endswith("@"):
+    if stem.endswith("@"):
+        return None  # systemd refuses to start a bare template
+    if "@" in stem:
         cands.append(stem.split("@", 1)[0] + "@." + suf)
     for c in cands:
         for d in USER_UNIT_DIRS:
@@ -255,6 +257,10 @@ def _find_user_unit(name):
 
 def _unescape(s):
     return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s.replace("-", "/"))
+
+
+def _path_unescape(s):
+    return "/" if s == "-" else "/" + _unescape(s)
 
 
 def _parse_unit_execstart(path):
@@ -328,7 +334,7 @@ def _expand(s, env, unit_name=""):
         "I": lambda: _unescape(inst),
         "p": lambda: prefix,
         "P": lambda: _unescape(prefix),
-        "f": lambda: "/" + _unescape(inst or prefix),
+        "f": lambda: _path_unescape(inst or prefix),
         "h": lambda: os.path.expanduser("~"),
         "t": _runtime_dir,
         "U": lambda: str(os.getuid()),
@@ -469,7 +475,8 @@ def _schema_user_svc(unit_name):
         return None
     if unit_name in m:
         return m[unit_name]
-    path = _find_user_unit(unit_name)
+    # instances resolve to their template file, which must not alias-match
+    path = None if "@" in unit_name else _find_user_unit(unit_name)
     return m.get(os.path.basename(os.path.realpath(path))) if path else None
 
 

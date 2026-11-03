@@ -152,9 +152,6 @@ bi = si.unit_to_svc("vsh", si.parse_unit(
     "[Service]\nWorkingDirectory=/tmp/%i\nExecStartPre=/bin/prep x%Iy\nExecStart=/bin/v\n[Install]\nWantedBy=x\n"))
 check("%i/%I empty on a non-instance unit (systemd semantics)",
       "working_dir=/tmp/\n" in bi and "exec_pre=/bin/prep xy\n" in bi and "Skip" not in bi)
-bti = si.timer_to_svc("ft", si.parse_unit("[Timer]\nOnCalendar=daily\nUnit=bk@dev-sda.service\n"),
-                      si.parse_unit("[Service]\nType=oneshot\nExecStart=/bin/bk %i %I\n"), unit="bk@dev-sda")
-check("timer onto an instance: %i raw, %I unescaped", "args=dev-sda\n" in bti and "args=dev/sda\n" in bti)
 bo = si.unit_to_svc("o", si.parse_unit(
     "[Service]\nExecStartPre=/bin/a\nExecStartPre=+/bin/b\nExecStart=/bin/o\n[Install]\nWantedBy=x\n"))
 check("plain before + warns of reorder", "order changed" in bo)

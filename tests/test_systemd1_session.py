@@ -38,6 +38,7 @@ def main():
         "home-a\\x2db|home/a-b|pk|pk|/home/a-b"
     assert m._expand("%i|%I|%p|%f", {}, "plain.service") == "||plain|/plain"
     assert m._expand("%n|%N", {}, "w@x.service") == "w@x.service|w@x"
+    assert m._expand("%f", {}, "fs@-.service") == "/"
     print("test_systemd1_session: expansion OK")
 
     # F5: foo@bar resolves to foo@bar.service if present, else foo@.service
@@ -50,7 +51,7 @@ def main():
             assert m._find_user_unit("tpl@x") == os.path.join(d, "tpl@.service")
             assert m._find_user_unit("tpl@x.service") == os.path.join(d, "tpl@.service")
             assert m._find_user_unit("tpl@own.service") == os.path.join(d, "tpl@own.service")
-            assert m._find_user_unit("tpl@.service") == os.path.join(d, "tpl@.service")
+            assert m._find_user_unit("tpl@.service") is None
             assert m._find_user_unit("nope@x") is None
         finally:
             m.USER_UNIT_DIRS = saved
