@@ -22,6 +22,7 @@ import os
 import sys
 import signal
 import shlex
+import json
 import re
 import time
 import subprocess
@@ -255,6 +256,38 @@ def _find_user_unit(name):
     return None
 
 
+def _unit_dropins(name, unit_file=None):
+    # systemd's drop-in .conf files for a unit, applied in filename order. Dirs:
+    # <unit>.d, its template's, each dash prefix's (foo-.service.d) and the type's
+    # (service.d), most specific first; a filename seen first (higher-priority unit
+    # dir, then more specific) shadows later ones, so a /dev/null link masks one.
+    # An alias also takes the drop-ins of the unit it links to, as systemd does.
+    name = _unit_name(name)
+    stem, _, suf = name.rpartition(".")
+    names = [name]
+    if "@" in stem:
+        names.append(stem.split("@", 1)[0] + "@." + suf)
+    real = os.path.basename(os.path.realpath(unit_file)) if unit_file else name
+    if real not in names and not real.startswith(stem.split("@", 1)[0] + "@."):
+        names.append(real)
+    base = stem.split("@", 1)[0]
+    parts = base.split("-")
+    names += ["-".join(parts[:i]) + "-." + suf for i in range(len(parts) - 1, 0, -1)]
+    names.append(suf)
+    found = {}
+    for d in USER_UNIT_DIRS:
+        for n in names:
+            dd = os.path.join(d, n + ".d")
+            try:
+                ents = os.listdir(dd)
+            except OSError:
+                continue
+            for e in ents:
+                if e.endswith(".conf") and not e.startswith(".") and e not in found:
+                    found[e] = os.path.join(dd, e)
+    return [found[k] for k in sorted(found)]
+
+
 def _unescape(s):
     return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s.replace("-", "/"))
 
@@ -263,19 +296,26 @@ def _path_unescape(s):
     return "/" if s == "-" else "/" + _unescape(s)
 
 
-def _parse_unit_execstart(path):
-    # Return (cmds, environment_list, type) from a unit's [Service] section;
-    # cmds = [(ignore_failure, exec_path, argv)]. An empty ExecStart=/Environment=
-    # resets the list, as in systemd. '@' means the next word is argv[0].
+def _parse_unit_execstart(path, dropins=()):
+    # Return (cmds, environment_list, type) from a unit's [Service] section and
+    # then its drop-ins; cmds = [(ignore_failure, no_vars, exec_path, argv)]. An
+    # empty ExecStart=/Environment= resets the list, as in systemd. '@' means the
+    # next word is argv[0].
     cmds, env, stype = [], [], "simple"
+    lines = []
+    for i, p in enumerate((path,) + tuple(dropins)):
+        try:
+            with open(p) as f:
+                raw = f.read()
+        except OSError as e:
+            _log("unit read error %s: %r" % (p, e))
+            if i == 0:
+                return [], [], stype
+            continue
+        lines.append("[]")   # each file opens its own sections
+        lines += raw.replace("\\\n", " ").splitlines()
     section = None
-    try:
-        with open(path) as f:
-            raw = f.read()
-    except OSError as e:
-        _log("unit read error %s: %r" % (path, e))
-        return [], [], stype
-    for line in raw.replace("\\\n", " ").splitlines():
+    for line in lines:
         line = line.strip()
         if not line or line.startswith(("#", ";")):
             continue
@@ -317,25 +357,44 @@ def _parse_unit_execstart(path):
     return cmds, env, stype
 
 
+# Runs a oneshot's ExecStart= list in order as one tracked pid (the last step
+# is exec'd into it unless '-' makes its failure moot); a non-'-' failure stops
+# the rest with sh's exit code.
+# execvp, not sh, so an '@' argv[0] reaches each step.
+_CHAIN = """import os, sys, json, signal
+# python ignores these at startup and the steps would inherit it
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
+steps = json.loads(sys.argv[1])
+for i, (ign, exe, argv) in enumerate(steps):
+    if i == len(steps) - 1 and not ign:
+        try:
+            os.execvp(exe, argv)
+        except Exception:
+            sys.exit(127)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.execvp(exe, argv)
+        finally:
+            os._exit(127)
+    rc = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+    if rc and not ign:
+        sys.exit(rc if rc > 0 else 128 - rc)
+"""
+
+
 def _plan(cmds, stype="simple"):
     # One spawnable (exec_path, argv) for the unit: None if there is no command,
     # "multi" if several ExecStart= on a non-oneshot (systemd refuses to load it).
-    # A oneshot's commands run in order under one sh, so the unit stays a single
-    # tracked pid; a non-'-' failure stops the rest. '@' argv[0] is lost there.
     if not cmds:
         return None
     if len(cmds) == 1:
         return cmds[0][-2], cmds[0][-1]
     if stype != "oneshot":
         return "multi"
-    parts = []
-    for i, (ignore, _, exe, argv) in enumerate(cmds):
-        words = shlex.join([exe] + argv[1:])
-        if i == len(cmds) - 1:
-            parts.append("exec " + words)
-        else:
-            parts.append(words if ignore else words + " || exit $?")
-    return "/bin/sh", ["/bin/sh", "-c", "; ".join(parts)]
+    steps = [(ignore, exe, argv) for ignore, _, exe, argv in cmds]
+    return sys.executable, [sys.executable, "-I", "-c", _CHAIN, json.dumps(steps)]
 
 
 # --- unit-string expansion (systemd % specifiers + $VAR) -------------------
@@ -343,7 +402,8 @@ def _plan(cmds, stype="simple"):
 # user manager to expand them, an unexpanded "%h/.local/bin/foo" is spawned
 # verbatim and ENOENTs. Expand the common specifiers and env-var references
 # ourselves, matching systemd's order (specifiers first, then variables).
-_VAR_RE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+# systemd only expands valid variable names: $0, $1 reach the command untouched
+_VAR_RE = re.compile(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)")
 
 
 def _username():
@@ -584,7 +644,7 @@ def handle_start_unit(session, msg, member="StartUnit"):
     if not unit_file:
         _log("%s(%s): no user unit file -> forward" % (member, name))
         return False
-    cmds, unit_env, stype = _parse_unit_execstart(unit_file)
+    cmds, unit_env, stype = _parse_unit_execstart(unit_file, _unit_dropins(unit_name, unit_file))
     if not cmds:
         _log("%s(%s): no ExecStart in %s -> forward" % (member, name, unit_file))
         return False
