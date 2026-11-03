@@ -102,11 +102,43 @@ def main():
                 "ExecStart=-/usr/bin/tool --flag \\\n"
                 "  --home %h\n")
         unit = f.name
-    exec_path, argv, envl = m._parse_unit_execstart(unit)
+    cmds, envl, stype = m._parse_unit_execstart(unit)
     os.unlink(unit)
-    assert exec_path == "/usr/bin/tool", exec_path
-    assert argv == ["/usr/bin/tool", "--flag", "--home", "%h"], argv
+    assert cmds == [(True, "/usr/bin/tool", ["/usr/bin/tool", "--flag", "--home", "%h"])], cmds
     assert "FOO=bar" in envl and "BAZ=qux" in envl, envl
+    assert stype == "simple", stype
+
+    # F7: multiple ExecStart=, empty-value reset (ExecStart= and Environment=), @argv0
+    def parse(body):
+        with tempfile.NamedTemporaryFile("w", suffix=".service", delete=False) as f:
+            f.write(body)
+        try:
+            return m._parse_unit_execstart(f.name)
+        finally:
+            os.unlink(f.name)
+    cmds, envl, stype = parse("[Service]\nType=oneshot\nEnvironment=A=1\nExecStart=/bin/old\n"
+                              "ExecStart=\nEnvironment=\nEnvironment=B=2\n"
+                              "ExecStart=/bin/a x\nExecStart=-@/bin/b bee y\n")
+    assert stype == "oneshot"
+    assert cmds == [(False, "/bin/a", ["/bin/a", "x"]), (True, "/bin/b", ["bee", "y"])], cmds
+    assert envl == ["B=2"], envl
+
+    assert m._plan([]) is None
+    assert m._plan([(False, "/bin/a", ["a0", "x"])]) == ("/bin/a", ["a0", "x"])
+    assert m._plan([(False, "/bin/a", ["/bin/a"]), (False, "/bin/b", ["/bin/b"])], "simple") == "multi"
+    ex, av = m._plan([(False, "/bin/a", ["/bin/a", "x y"]), (True, "/bin/b", ["bee"]),
+                      (False, "/bin/c", ["/bin/c", "$z"])], "oneshot")
+    assert ex == "/bin/sh" and av[:2] == ["/bin/sh", "-c"], av
+    assert av[2] == "/bin/a 'x y' || exit $?; /bin/b; exec /bin/c '$z'", av[2]
+    # and it really runs in order, stopping at the first unignored failure
+    with tempfile.TemporaryDirectory() as d:
+        log = os.path.join(d, "log")
+        ex, av = m._plan([(False, "/bin/sh", ["/bin/sh", "-c", "echo 1 >>" + log]),
+                          (True, "/bin/false", ["/bin/false"]),
+                          (False, "/bin/sh", ["/bin/sh", "-c", "echo 2 >>%s; exit 3" % log]),
+                          (False, "/bin/sh", ["/bin/sh", "-c", "echo 3 >>" + log])], "oneshot")
+        assert subprocess.run(av, executable=ex).returncode == 3
+        assert open(log).read() == "1\n2\n", open(log).read()
     print("test_systemd1_session: parse OK")
 
     # schema-user hand-off: verb table, then state lookup through a stub schema-ctl
