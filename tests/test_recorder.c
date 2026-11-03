@@ -551,6 +551,11 @@ static void forward_kinds(void) {
     assert(rec_forward_kind("died") && rec_forward_kind("dormant"));
     assert(rec_forward_kind("76-excised") && rec_forward_kind("watchdog-kill"));
     assert(!rec_forward_kind("spawn") && !rec_forward_kind("promote"));
+    assert(rec_forward_kind("breaker-tripped"));
+    {   /* a tripped breaker is a permanent loss until reset: crit even on a non-critical svc */
+        rec_event_t b = mk(REC_SRC_PID1, "breaker-tripped", "", "loopy", 1, 1);
+        assert(rec_tier(&b) == REC_TIER_CRIT);
+    }
     assert(!rec_forward_kind("timer-failed") && !rec_forward_kind("ctl-restart"));
     assert(!rec_forward_kind("oneshot-done"));
 }

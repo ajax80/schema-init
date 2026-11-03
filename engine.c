@@ -512,6 +512,20 @@ static void park(service_t *svc) {
     service_log(svc, "dormant");
 }
 
+/* FRICTION gave up on the service: park it with backoff, or after the fifth
+ * time trip the crash-loop breaker. Only this path sets circuit_broken; a
+ * start-timeout or fallback-down excise is not a crash loop. */
+void engine_friction_verdict(service_t *svc) {
+    if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count >= 4) {
+        svc->dormant_count++;
+        svc->circuit_broken = 1;
+        service_log(svc, "76-excised");
+        service_log(svc, "breaker-tripped");
+    } else {
+        park(svc);
+    }
+}
+
 static int held_now(const service_t *svc) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -520,6 +534,7 @@ static int held_now(const service_t *svc) {
 
 static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
+    svc->circuit_broken = 0;
     svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
@@ -1348,13 +1363,7 @@ static void tick_service(service_t *svc,
                 play_card(svc);
             } else if (svc->inst.state == STATE_EXCISED) {
                 svc_cgroup_kill_tree(svc);
-                svc->dormant_count++;
-                if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count > 4) {
-                    service_log(svc, "76-excised");
-                } else {
-                    svc->dormant_count--;
-                    park(svc);
-                }
+                engine_friction_verdict(svc);
                 if (svc->fallback_live) {
                     service_t *fb = service_fallback(svc, services, svc_count);
                     if (fb) fallback_up(fb);
@@ -1786,9 +1795,10 @@ static void ctl_cmd(int fd, char *line) {
         if (strcmp(opt, "--json") == 0) {
             ctl_writef(fd, "{\n  \"services_count\": %d,\n  \"groups_count\": %d,\n  \"services\": [\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++) {
-                ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d\n    }%s\n",
+                ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d,\n      \"circuit_broken\": %s\n    }%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count,
+                    services[i].circuit_broken ? "true" : "false",
                     (i < svc_count - 1) ? "," : "");
             }
             ctl_writef(fd, "  ]\n}\n");
@@ -1799,6 +1809,7 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));
                 ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
                 ctl_writef(fd, "service.%s.last_exit=%s\n", services[i].name, last_exit_str(&services[i]));
+                ctl_writef(fd, "service.%s.circuit_broken=%d\n", services[i].name, services[i].circuit_broken);
                 if (svc_held_on_socket(&services[i]))
                     ctl_writef(fd, "service.%s.waiting=%s\n", services[i].name, services[i].wait_socket);
             }
@@ -1812,6 +1823,8 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "%s  pid=%d  state=%s  restarts=%d\n", s->name,
                     (int)s->child_pid, state_name(s->inst.state), s->restart_count);
                 ctl_writef(fd, "last exit: %s\n", last_exit_str(s));
+                if (s->circuit_broken)
+                    ctl_writef(fd, "circuit_broken=1: crash-loop breaker excised it; schema-ctl reset %s\n", s->name);
                 ctl_writef(fd, "hardening default: %s\n", service_hardening_default() ? "ON" : "off");
                 ctl_writef(fd, "  %-15s %-5s %s\n", "no_new_privs",
                     (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", hard_source(s, HARD_NNP));
@@ -1845,6 +1858,8 @@ static void ctl_cmd(int fd, char *line) {
                 int sk = services[i].fdstore_max > 0 ? fdstore_count(services[i].name) : 0;
                 if (sk > 0)
                     snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  fds=%d", sk);
+                if (services[i].circuit_broken)
+                    snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  circuit_broken=1");
                 ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s%s%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count, deck,

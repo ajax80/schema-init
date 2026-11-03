@@ -47,6 +47,8 @@ FULL_TRUST promotes to FUNDAMENTAL on the first readiness signal the service has
 
 Services marked `critical=1` never reach EXCISED — they enter DORMANT and retry at 1-hour intervals indefinitely. Non-critical services excise after 5 dormant cycles (~75 minutes). A dep marked `critical=1` that is EXCISED still blocks its dependents. A non-critical EXCISED dep is skipped — dependents proceed without it.
 
+An excise from that crash loop trips the **circuit breaker**: the service is marked `circuit_broken=1` (shown by `schema-ctl status`, `status --kv`/`--json`, and as `Result=start-limit-hit` over the systemd1 D-Bus shim) and a `breaker-tripped` event goes to the flight recorder at critical tier. A start-timeout or fallback excise does not set it. `schema-ctl reset` or `start` clears it.
+
 ---
 
 ## Service files

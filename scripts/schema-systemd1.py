@@ -204,6 +204,8 @@ class Systemd1Unit(dbus.service.Object):
         self.pid = status_dict.get('pid', 0)
         self.raw_state = status_dict.get('state', 'UNKNOWN')
         self.restarts = status_dict.get('restarts', 0)
+        # systemd's name for a unit its start rate limit gave up on
+        self.result = 'start-limit-hit' if status_dict.get('circuit_broken') else 'success'
 
         # State Mapping logic
         self.service_type = 'simple'
@@ -282,7 +284,7 @@ class Systemd1Unit(dbus.service.Object):
             'MainPID': dbus.UInt32(self.pid),
             'ExecMainPID': dbus.UInt32(self.pid),
             'NRestarts': dbus.UInt32(self.restarts),
-            'Result': dbus.String('success'),
+            'Result': dbus.String(self.result),
         }
 
     @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='s', out_signature='a{sv}')
@@ -409,6 +411,7 @@ class Systemd1Manager(dbus.service.Object):
                 old_active = unit.active_state
                 old_sub = unit.sub_state
                 old_pid = unit.pid
+                old_result = unit.result
                 unit.update_state(s)
                 
                 # If properties changed, emit PropertiesChanged signal
@@ -417,6 +420,8 @@ class Systemd1Manager(dbus.service.Object):
                     changed['ActiveState'] = dbus.String(unit.active_state)
                 if unit.sub_state != old_sub:
                     changed['SubState'] = dbus.String(unit.sub_state)
+                if unit.result != old_result:
+                    changed['Result'] = dbus.String(unit.result)
                 if unit.pid != old_pid:
                     changed['MainPID'] = dbus.UInt32(unit.pid)
                     changed['ExecMainPID'] = dbus.UInt32(unit.pid)

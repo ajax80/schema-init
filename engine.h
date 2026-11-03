@@ -93,6 +93,7 @@ int engine_reload(int evict, char *err, size_t errsz);
 void engine_open(int adopting);
 void engine_arm_timers(int adopting);
 void engine_run(void);
+void engine_friction_verdict(service_t *svc);
 void engine_stop_services(void);
 void engine_kill_services(void);
 void engine_release(void);

@@ -438,6 +438,7 @@ typedef struct {
     int              restart_sec;      /* wait this long before respawning a dead service; 0 = at once */
     struct timespec  restart_at;       /* CLOCK_MONOTONIC before which a retry may not spawn */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
+    uint8_t          circuit_broken;   /* crash-loop breaker excised it; reset/start clears */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
     int              stop_timeout_sec;   /* shutdown SIGTERM->SIGKILL grace; 0 = default */
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
