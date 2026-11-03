@@ -408,6 +408,37 @@ until_ok '[ "$(starts slow)" = 2 ]' || { tail -20 "$I/out"; fail "bind 6: slow n
 [ -s "$I/slow.stopdone" ] && [ "$(tail -1 "$I/slow.starts")" -ge "$(cat "$I/slow.stopdone")" ] || \
     fail "bind 6: slow respawned before its exec_stop finished"
 
+# 8 (review #1). slow is being stopped on purpose (exec_stop 2 s) when pod2 restarts: stays down
+s0=$(starts slow); bc stop slow; bc restart pod2
+until_ok '[ "$(bk slow state)" = EXCISED ] && [ "$(bk pod2 state)" = FUNDAMENTAL ]' || fail "bind 8: settle"
+sleep 1.5
+[ "$(starts slow)" = "$s0" ] && [ "$(bk slow bind_held)" = 0 ] || fail "bind 8: a user stop became a bind hold"
+bc start slow; until_ok '[ "$(bk slow state)" = FUNDAMENTAL ]' || fail "bind 8: start slow"
+
+# 9 (review #2). pod dies first and respawns, ctr dies after: held against the run that
+# went down, so the new run being up brings it back
+bc start ctr; up ctr "9 pre"
+c0=$(starts ctr)
+kill -KILL "$(cat "$I/pod.pid")"; sleep 0.2; kill -KILL "$(cat "$I/ctr.pid")" 2>/dev/null
+until_ok '[ "$(starts ctr)" -gt '"$c0"' ] && [ "$(bk ctr state)" = FUNDAMENTAL ]' || \
+    { grep -E "\] (ctr|pod) " "$I/out" | tail -12; fail "bind 9: ctr stuck held after pod respawned first"; }
+
+# 10 (review #7). a clean exit is its own: a pod restart right after doesn't revive it
+kill -TERM "$(cat "$I/ctr.pid")"
+until_ok '[ "$(bk ctr state)" = EXCISED ]' || fail "bind 10: ctr clean exit"
+c0=$(starts ctr); p0=$(starts pod); bc restart pod
+until_ok '[ "$(starts pod)" -gt '"$p0"' ] && [ "$(bk pod state)" = FUNDAMENTAL ]' || fail "bind 10: pod restart"
+sleep 1.5
+[ "$(starts ctr)" = "$c0" ] && [ "$(bk ctr excise_reason)" = none ] || fail "bind 10: clean exit reclassified as the pod's"
+
+# 11 (review #4). bind= removed while held -> released and started
+bc start ctr; until_ok '[ "$(bk ctr state)" = FUNDAMENTAL ]' || fail "bind 11: pre"
+bc stop pod; until_ok '[ "$(bk ctr bind_held)" = 1 ] && [ "$(bk pod state)" = EXCISED ]' || fail "bind 11: ctr not held"
+sed -i '/^bind=pod$/d' "$B/ctr.svc"; c0=$(starts ctr); bc daemon-reload
+until_ok '[ "$(starts ctr)" -gt '"$c0"' ]' || { grep -E "\] ctr " "$I/out" | tail -8; fail "bind 11: ctr still held with bind= gone"; }
+printf 'bind=pod\n' >> "$B/ctr.svc"; bc start pod; bc daemon-reload
+until_ok '[ "$(bk pod state)" = FUNDAMENTAL ] && [ "$(bk ctr bind)" = pod ]' || fail "bind 11: restore"
+
 # 7. reload without pod -> ctr held, bind-target-missing
 bc start ctr; up ctr "7 pre"
 rm "$B/pod.svc"; bc daemon-reload

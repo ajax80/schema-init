@@ -870,6 +870,14 @@ check("pod's PIDFile=%t/%N.pid expanded",
       os.path.exists(os.path.join(out, "web-pod.svc"))
       and "pid_file=%s/web-pod.pid\n" % t.run in svc(out, "web-pod")
       and "--infra-conmon-pidfile=%s/web-pod.pid" % t.run in svc(out, "web-pod"))
+t2 = Tree()
+t2.write(t2.cfg("lone.service"), "[X-Container]\nImage=img\nPod=gone.pod\n[Unit]\nBindsTo=gone-pod.service\n"
+         "[Service]\nExecStart=/usr/bin/podman run --pod gone img\n[Install]\nWantedBy=default.target\n")
+t2.enable("lone.service")
+_, out2 = run(t2)
+check("Pod= container whose pod isn't imported: no bind=, the WARN stays",
+      "bind=" not in svc(out2, "lone") and "does not restart this container" in svc(out2, "lone"))
+t2.done()
 check("Pod= container binds to its pod (BindsTo= -> bind=), no interim WARN",
       "bind=web-pod\n" in svc(out, "web") and "does not restart this container" not in svc(out, "web"))
 check("container waits on its pod, limits verified",

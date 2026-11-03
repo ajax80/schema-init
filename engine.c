@@ -571,7 +571,7 @@ static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
     breaker_clear(svc);
     svc->excise_reason = EXC_NONE;
-    svc->bind_held = svc->bind_requeue = 0;
+    svc->bind_held = 0;
     svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
@@ -647,8 +647,11 @@ static int stop_cmds_begin(service_t *svc, int phase) {
  * failed on its own. bind=X is also a dep=X, so dep_idx resolves it. */
 
 static int svc_is_up(const service_t *s) {
-    return s->inst.state == STATE_FUNDAMENTAL || s->inst.state == STATE_SETTLED ||
-           s->inst.state == STATE_PERFECT;
+    if (s->inst.state == STATE_FUNDAMENTAL || s->inst.state == STATE_SETTLED ||
+        s->inst.state == STATE_PERFECT) return 1;
+    /* a socket service PID 1 listens for stays up across its idle exit and
+     * the on-demand start after it: its binders mustn't churn per connection */
+    return s->listen_open && (s->inst.state == STATE_NEW_PROCESS || s->inst.state == STATE_FULL_TRUST);
 }
 
 /* The bound's index; -1 when it isn't in the config, or is a timer/oneshot
@@ -670,10 +673,15 @@ static int ts_after(struct timespec a, struct timespec b) {
     return a.tv_sec > b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec > b.tv_nsec);
 }
 
+/* The hold remembers the bound's run that was last seen up: "back" is a newer
+ * run up. Not the time of the hold, which can come after the bound already
+ * respawned (a down edge noticed late, a binder reaped after) */
 static void bind_hold(service_t *b, const char *ev) {
-    if (!b->bind_held) clock_gettime(CLOCK_MONOTONIC, &b->bind_held_since);
+    if (!b->bind_held) {
+        int t = bind_bound(b);
+        b->bind_held_since = t >= 0 ? services[t].bind_seen_spawn : (struct timespec){0, 0};
+    }
     b->bind_held = 1;
-    b->bind_requeue = 0;
     b->bind_died_at.tv_sec = b->bind_died_at.tv_nsec = 0;
     service_log(b, ev);
 }
@@ -682,6 +690,8 @@ static void bind_hold(service_t *b, const char *ev) {
  * the bound's doing (reap() takes it to EXCISED/EXC_BIND, no recovery) */
 static void bind_stop(service_t *b, const char *ev) {
     if (b->bind_held || b->child_pid <= 0) return;
+    /* being stopped on purpose already: its bound's return must not start it */
+    if (b->ctl_killed && (b->flags & SVC_NO_RESTART)) return;
     bind_hold(b, ev);
     b->restart_at.tv_sec = b->restart_at.tv_nsec = 0;
     stop_main(b);
@@ -698,7 +708,7 @@ static void bind_stop_binders(const service_t *svc) {
 }
 
 static void bind_start(service_t *b) {
-    b->bind_held = b->bind_requeue = 0;
+    b->bind_held = 0;
     b->excise_reason = EXC_NONE;
     b->inst.state = STATE_NEW_PROCESS;
     service_log(b, "bind-start");
@@ -712,7 +722,15 @@ static void bind_tick(void) {
     clock_gettime(CLOCK_MONOTONIC, &now);
     for (int j = 0; j < svc_count; j++) {
         service_t *b = &services[j];
-        if (!b->bind_name[0]) continue;
+        if (!b->bind_name[0]) {
+            /* bind= removed on a reload while held: nothing to wait for now */
+            if (b->bind_held) {
+                b->bind_held = 0;
+                if (b->inst.state == STATE_EXCISED && b->excise_reason == EXC_BIND && b->child_pid <= 0)
+                    bind_start(b);
+            }
+            continue;
+        }
         int t = bind_bound(b);
         if (t < 0) {
             /* no bound to follow: never runs without it */
@@ -732,12 +750,13 @@ static void bind_tick(void) {
         int up = svc_is_up(bd);
         /* gone since the last pass, or back already with a new process */
         int went_down = bd->bind_was_up &&
-            (!up || bd->spawn_time_mono.tv_sec != bd->bind_seen_spawn.tv_sec ||
-             bd->spawn_time_mono.tv_nsec != bd->bind_seen_spawn.tv_nsec);
+            (!up || (!bd->listen_open && (bd->spawn_time_mono.tv_sec != bd->bind_seen_spawn.tv_sec ||
+                                          bd->spawn_time_mono.tv_nsec != bd->bind_seen_spawn.tv_nsec)));
         if (went_down) {
             if (b->child_pid > 0) {
                 bind_stop(b, "bind-stop");
-            } else if (!b->bind_held && (b->bind_died_at.tv_sec || b->bind_died_at.tv_nsec)) {
+            } else if (!b->bind_held && !b->circuit_broken &&
+                       (b->bind_died_at.tv_sec || b->bind_died_at.tv_nsec)) {
                 int64_t ago = (int64_t)(now.tv_sec - b->bind_died_at.tv_sec) * 1000 +
                               (now.tv_nsec - b->bind_died_at.tv_nsec) / 1000000;
                 if (ago >= 0 && ago < BIND_GRACE_MS) {
@@ -756,12 +775,9 @@ static void bind_tick(void) {
          * while its exec_stop ends our process */
         int back = up && bd->stop_pid <= 0 && !bd->ctl_killed &&
                    ts_after(bd->spawn_time_mono, b->bind_held_since);
-        if (b->bind_held && back) {
-            if (b->child_pid <= 0 && b->stop_pid <= 0) bind_start(b);
-            else b->bind_requeue = 1;
-        } else if (b->bind_requeue && !up) {
-            b->bind_requeue = 0;
-        }
+        /* and not before its own old process and stop runner are gone */
+        if (b->bind_held && back && b->child_pid <= 0 && b->stop_pid <= 0)
+            bind_start(b);
         /* strict start: dep= lets a non-critical excised dep through; bind= never */
         if (!b->bind_held && b->child_pid <= 0 && b->inst.state == STATE_NEW_PROCESS &&
             (bd->inst.state == STATE_EXCISED || bd->inst.state == STATE_DORMANT)) {
@@ -775,7 +791,7 @@ static void bind_tick(void) {
 static void bind_snapshot_up(void) {
     for (int j = 0; j < svc_count; j++) {
         services[j].bind_was_up = (uint8_t)svc_is_up(&services[j]);
-        services[j].bind_seen_spawn = services[j].spawn_time_mono;
+        if (services[j].bind_was_up) services[j].bind_seen_spawn = services[j].spawn_time_mono;
     }
 }
 
@@ -984,7 +1000,8 @@ static void reap(void) {
                 if (t < 0 || !svc_is_up(&services[t]) || services[t].ctl_killed ||
                     (services[t].stop_pid > 0 && (services[t].stop_phase & 3) == 1)) {
                     bind_hold(&services[i], "bind-stop");
-                } else {
+                } else if (services[i].term_signal || (services[i].has_exited && services[i].exit_status != 0)) {
+                    /* a clean exit was its own to make; only a failure can be the bound's */
                     clock_gettime(CLOCK_MONOTONIC, &services[i].bind_died_at);
                     services[i].bind_saved_restarts = services[i].restart_count;
                     services[i].bind_saved_dormant = services[i].dormant_count;
@@ -2048,7 +2065,7 @@ static void ctl_cmd(int fd, char *line) {
                     ctl_writef(fd, "excise_reason=%s\n", excise_reason_name(s->excise_reason));
                 if (s->bind_name[0])
                     ctl_writef(fd, "bound to %s%s\n", s->bind_name,
-                               s->bind_requeue ? " (held, requeued)" : s->bind_held ? " (held)" : "");
+                               s->bind_held ? " (held)" : "");
                 ctl_writef(fd, "hardening default: %s\n", service_hardening_default() ? "ON" : "off");
                 ctl_writef(fd, "  %-15s %-5s %s\n", "no_new_privs",
                     (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", hard_source(s, HARD_NNP));
@@ -2140,7 +2157,7 @@ static void ctl_cmd(int fd, char *line) {
             services[i].flags |= SVC_NO_RESTART;
             services[i].restart_at.tv_sec = services[i].restart_at.tv_nsec = 0;
             /* stopped on purpose: its bound's return must not start it */
-            services[i].bind_held = services[i].bind_requeue = 0;
+            services[i].bind_held = 0;
             services[i].bind_died_at.tv_sec = services[i].bind_died_at.tv_nsec = 0;
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;

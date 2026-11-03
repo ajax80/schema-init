@@ -2442,7 +2442,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->expand_args = atoi(val) != 0;
     } else if (strcmp(line, "bind") == 0) {
         while (*val == ' ' || *val == '\t') val++;
-        if (svc->bind_name[0]) {
+        /* a drop-in replaces it, like other one-value keys */
+        if (svc->bind_name[0] && !pc->dropin) {
             fprintf(stderr, "[schema-init] %s: more than one bind= line\n", svc->name[0] ? svc->name : path);
             return -1;
         }
@@ -2701,6 +2702,11 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
     svc->no_restart_cfg = (svc->flags & SVC_NO_RESTART) != 0;
     /* bind=X is also dep=X (start order, shutdown order, cycles): after the
      * drop-ins, so an empty dep= in one can't drop it */
+    if (svc->bind_name[0] && (svc->flags & SVC_TIMER)) {
+        /* a held timer would come back with a stale timer_next and fire at once */
+        fprintf(stderr, "[schema-init] %s: bind= on a timer — not loaded\n", svc->name);
+        return -1;
+    }
     if (svc->bind_name[0]) {
         int k, have = 0;
         for (k = 0; k < pc->dep_slot; k++) have |= !strcmp(svc->dep_name[k], svc->bind_name);

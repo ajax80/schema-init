@@ -51,7 +51,7 @@ int main(void) {
     svcs[0].dormant_count = 200;
     svcs[0].circuit_broken = 1;
     svcs[0].excise_reason = EXC_LISTEN_FAIL;
-    svcs[0].bind_held = 1; svcs[0].bind_requeue = 1; svcs[0].bind_was_up = 1;
+    svcs[0].bind_held = 1; svcs[0].bind_was_up = 1;
     svcs[0].bind_held_since.tv_sec = 77; svcs[0].bind_seen_spawn.tv_nsec = 9;
     svcs[0].bind_saved_restarts = 3; svcs[0].bind_saved_dormant = 2;
     svcs[0].flags = SVC_NO_RESTART;               /* held down by schema-ctl stop */
@@ -97,7 +97,7 @@ int main(void) {
     assert(strcmp(out[0].rt.cgroup_path, "/sys/fs/cgroup/schema-init/dbus") == 0);
     assert(out[0].rt.is_frozen == 1 && out[0].rt.dormant_count == 200 && out[0].rt.circuit_broken == 1);
     assert(out[0].rt.excise_reason == EXC_LISTEN_FAIL);
-    assert(out[0].rt.bind_held == 1 && out[0].rt.bind_requeue == 1 && out[0].rt.bind_was_up == 1);
+    assert(out[0].rt.bind_held == 1 && out[0].rt.bind_was_up == 1);
     assert(out[0].rt.bind_held_since.tv_sec == 77 && out[0].rt.bind_seen_spawn.tv_nsec == 9);
     assert(out[0].rt.bind_saved_restarts == 3 && out[0].rt.bind_saved_dormant == 2);
     assert(out[0].rt.listen_open == 2 && out[0].rt.listen_hold == 1);

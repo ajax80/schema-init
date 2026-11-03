@@ -125,6 +125,10 @@ int main(void) {
         put(root, "b.svc", "name=b\nexec=/bin/true\nbind=pod\nbind=other\n");
         memset(&svc, 0, sizeof svc);
         assert(service_load_one(b, &svc) != 0);
+        /* a held timer would come back with a stale timer_next: refused */
+        put(root, "b.svc", "name=b\nexec=/bin/true\non_boot_sec=5\nbind=pod\n");
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(b, &svc) != 0);
         put(root, "b.svc", "name=b\nexec=/bin/true\nno_restart=1\n");
         memset(&svc, 0, sizeof svc);
         assert(service_load_one(b, &svc) == 0 && svc.no_restart_cfg == 1);

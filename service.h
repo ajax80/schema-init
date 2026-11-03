@@ -460,7 +460,6 @@ typedef struct {
     uint8_t          no_restart_cfg;   /* the .svc's no_restart=; SVC_NO_RESTART is also a stop's hold */
     char             bind_name[64];    /* bind=: stop with it, start again with it; also a dep */
     uint8_t          bind_held;        /* stopped because its bound went down; restarts with it */
-    uint8_t          bind_requeue;     /* bound came back while this was still stopping */
     uint8_t          bind_was_up;      /* this service was up at the last tick's tail (edge detection) */
     struct timespec  bind_seen_spawn;  /* its spawn_time_mono at that tail: a respawn is a down edge too */
     struct timespec  bind_held_since;  /* when this binder was held: its bound must spawn after it */
