@@ -420,14 +420,15 @@ class Systemd1Manager(dbus.service.Object):
                     changed['ActiveState'] = dbus.String(unit.active_state)
                 if unit.sub_state != old_sub:
                     changed['SubState'] = dbus.String(unit.sub_state)
-                if unit.result != old_result:
-                    changed['Result'] = dbus.String(unit.result)
                 if unit.pid != old_pid:
                     changed['MainPID'] = dbus.UInt32(unit.pid)
                     changed['ExecMainPID'] = dbus.UInt32(unit.pid)
                 
                 if changed:
                     unit.PropertiesChanged('org.freedesktop.systemd1.Unit', changed, [])
+                if unit.result != old_result:
+                    unit.PropertiesChanged('org.freedesktop.systemd1.Service',
+                                           {'Result': dbus.String(unit.result)}, [])
 
         # Clean up removed units
         for name in list(self.units.keys()):

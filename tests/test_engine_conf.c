@@ -43,6 +43,9 @@ static void test_circuit_breaker(void) {
     s.inst.state = STATE_EXCISED;
     engine_friction_verdict(&s);
     assert(s.inst.state == STATE_EXCISED && s.circuit_broken == 1);
+    s.inst.state = STATE_EXCISED;   /* a breaker that has tripped trips again on the next verdict */
+    engine_friction_verdict(&s);
+    assert(s.circuit_broken == 1);
 
     memset(&s, 0, sizeof s);
     strcpy(s.name, "crit");

@@ -476,12 +476,19 @@ static void restart_budget_refresh(service_t *svc) {
     }
 }
 
+static void breaker_clear(service_t *svc) {
+    /* a cleared breaker restarts the backoff too, or the first FRICTION re-trips it */
+    if (svc->circuit_broken) svc->dormant_count = 0;
+    svc->circuit_broken = 0;
+}
+
 static void fallback_up(service_t *fb) {
     fb->standby_up = 1;
     fb->flags &= ~SVC_NO_RESTART;
     if (fb->child_pid <= 0 && (fb->inst.state == STATE_EXCISED || fb->inst.state == STATE_PERFECT)) {
         fb->inst.state = STATE_NEW_PROCESS;
         fb->restart_count = 0;
+        breaker_clear(fb);
     }
     service_log(fb, "fallback-up");
 }
@@ -519,8 +526,7 @@ void engine_friction_verdict(service_t *svc) {
     if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count >= 4) {
         svc->dormant_count++;
         svc->circuit_broken = 1;
-        service_log(svc, "76-excised");
-        service_log(svc, "breaker-tripped");
+        service_log(svc, "breaker-tripped");   /* not also 76-excised: one loss, one record */
     } else {
         park(svc);
     }
@@ -534,7 +540,7 @@ static int held_now(const service_t *svc) {
 
 static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
-    svc->circuit_broken = 0;
+    breaker_clear(svc);
     svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
@@ -1852,7 +1858,7 @@ static void ctl_cmd(int fd, char *line) {
         } else {
             ctl_writef(fd, "services: %d  groups: %d\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++) {
-                char deck[48] = "";
+                char deck[96] = "";
                 if (services[i].card_count)
                     snprintf(deck, sizeof deck, "  cards=%d/%d", services[i].card_next, services[i].card_count);
                 int sk = services[i].fdstore_max > 0 ? fdstore_count(services[i].name) : 0;
