@@ -511,7 +511,7 @@ static int ns_hides(service_t *svc, uint8_t bit, uint8_t *knob, const char *knob
     if (path_under(svc->exec, dirs, n)) what = "exec";
     else if (path_under(svc->ready_path, dirs, n)) what = "ready_path";
     else if (wd[0] && path_under(wd, dirs, n)) {
-        /* explicit knob stays: an exec_pre may create the dir inside the private mount */
+        /* explicit knob stays: asked for by name; the spawn's chdir then fails loudly */
         if (!(svc->hard_default & bit)) return 0;
         what = "working_dir";
     }
