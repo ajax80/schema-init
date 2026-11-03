@@ -45,4 +45,21 @@ class Boom(sd.Check):
 sd.REGISTRY[:] = [Boom()]
 check("main survives an exploding check", sd.main(["--check"]) == 0)
 
+# a non-root --check: the report dir isn't writable. Still prints, still exits 0
+import io, contextlib
+logd = os.path.join(root, "var/log/schema-init")
+if os.path.exists(os.path.join(logd, "doctor-report.txt")):
+    os.unlink(os.path.join(logd, "doctor-report.txt"))   # an existing file stays writable in a 0555 dir
+os.chmod(logd, 0o555)
+buf, err = io.StringIO(), io.StringIO()
+try:
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+        rc = sd.main(["--check"])
+except Exception as e:
+    rc = "raised %r" % e
+finally:
+    os.chmod(logd, 0o755)
+check("unwritable report dir: exit 0, results printed, says why",
+      rc == 0 and "boom" in buf.getvalue() and "report not written" in err.getvalue())
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

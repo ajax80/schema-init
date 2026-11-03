@@ -1570,8 +1570,12 @@ def main(argv):
             pass
 
     out = render_json(results) if args.json else render_report(results)
-    write_report(render_report(results))
     print(out)
+    # a non-root --check can't write /var/log; the results above still stand
+    try:
+        write_report(render_report(results))
+    except OSError as e:
+        print("schema-doctor: report not written: %s" % e, file=sys.stderr)
     return 0
 
 
