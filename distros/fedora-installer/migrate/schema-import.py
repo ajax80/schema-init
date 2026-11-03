@@ -145,7 +145,9 @@ def _which(cmd):
 
 
 def _specifiers(argv, name, strict=True):
-    spec = {"n": name + ".service", "N": name, "p": name, "t": "/run", "%": "%"}
+    # %i/%I are empty on a non-instance unit, as in systemd; template units and
+    # timers onto instances are skipped before reaching here.
+    spec = {"n": name + ".service", "N": name, "p": name, "i": "", "I": "", "t": "/run", "%": "%"}
     if _USER:
         spec.update({"h": _USER["home"], "t": _USER["runtime"], "S": _USER["state"],
                      "C": _USER["cache"], "E": _USER["config"], "u": _USER["user"],

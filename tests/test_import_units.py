@@ -148,6 +148,10 @@ for bad in ("/bin/a 100%", "/bin/a %h"):
 bt = si.timer_to_svc("foo", si.parse_unit("[Timer]\nOnCalendar=daily\nUnit=bar.service\n"),
                      si.parse_unit("[Service]\nType=oneshot\nExecStartPre=/bin/prep %n\nExecStart=/bin/bar %N\n"), unit="bar")
 check("timer: specifiers name the service, not the timer", "exec_pre=/bin/prep bar.service\n" in bt and "args=bar\n" in bt)
+bi = si.unit_to_svc("vsh", si.parse_unit(
+    "[Service]\nWorkingDirectory=/tmp/%i\nExecStartPre=/bin/prep x%Iy\nExecStart=/bin/v\n[Install]\nWantedBy=x\n"))
+check("%i/%I empty on a non-instance unit (systemd semantics)",
+      "working_dir=/tmp/\n" in bi and "exec_pre=/bin/prep xy\n" in bi and "Skip" not in bi)
 bo = si.unit_to_svc("o", si.parse_unit(
     "[Service]\nExecStartPre=/bin/a\nExecStartPre=+/bin/b\nExecStart=/bin/o\n[Install]\nWantedBy=x\n"))
 check("plain before + warns of reorder", "order changed" in bo)
