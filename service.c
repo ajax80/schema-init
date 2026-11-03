@@ -1732,8 +1732,12 @@ static int cg_read(const char *dir, const char *file, char *buf, size_t n) {
     return 1;
 }
 
-/* memory.max is rounded down to a page by the kernel */
-static int verify_one(const char *dir, const char *file, const char *want, char *why, size_t n) {
+/* memory.max is rounded down to a page by the kernel. A mismatch names its
+ * cgroup; one with a real value outranks an unlimited one ("max", or no file),
+ * so podman's runtime/ (conmon, never limited) can't hide the payload's
+ * wrong limit whatever order readdir gives. */
+static int verify_one(const char *dir, const char *rel, const char *file, const char *want,
+                      char *why, size_t n, int *real) {
     char got[64];
     if (!want[0]) return 1;
     if (!cg_read(dir, file, got, sizeof got)) snprintf(got, sizeof got, "missing");
@@ -1742,33 +1746,39 @@ static int verify_one(const char *dir, const char *file, const char *want, char 
         unsigned long long w = strtoull(want, NULL, 10), g = strtoull(got, NULL, 10);
         ok = g <= w && w - g < (unsigned long long)sysconf(_SC_PAGESIZE);
     }
-    if (!ok) snprintf(why, n, "%s want=%s got=%s", file, want, got);
+    if (!ok && !*real) {
+        snprintf(why, n, "%s: %s want=%s got=%s", rel, file, want, got);
+        *real = strcmp(got, "missing") != 0 && strncmp(got, "max", 3) != 0;
+    }
     return ok;
 }
 
-static int verify_walk(const char *cg, const service_t *svc, char *why, size_t n) {
+static int verify_walk(const char *cg, const char *rel, const service_t *svc,
+                       char *why, size_t n, int *real) {
     DIR *d = opendir(cg);
     struct dirent *e;
-    char sub[512], ev[32];
+    char sub[512], subrel[512], ev[32];
     int found = 0;
     if (!d) return 0;
     while (!found && (e = readdir(d))) {
         if (e->d_type != DT_DIR || e->d_name[0] == '.') continue;
         if (snprintf(sub, sizeof sub, "%s/%s", cg, e->d_name) >= (int)sizeof sub) continue;
+        snprintf(subrel, sizeof subrel, "%s%s%s", rel, rel[0] ? "/" : "", e->d_name);
         /* first line of cgroup.events; an empty subtree can't hold the payload */
         if (!cg_read(sub, "cgroup.events", ev, sizeof ev) || strcmp(ev, "populated 1") != 0) continue;
-        found = (verify_one(sub, "memory.max", svc->verify_memory_max, why, n) &&
-                 verify_one(sub, "cpu.max", svc->verify_cpu_max, why, n) &&
-                 verify_one(sub, "pids.max", svc->verify_pids_max, why, n)) ||
-                verify_walk(sub, svc, why, n);
+        found = (verify_one(sub, subrel, "memory.max", svc->verify_memory_max, why, n, real) &&
+                 verify_one(sub, subrel, "cpu.max", svc->verify_cpu_max, why, n, real) &&
+                 verify_one(sub, subrel, "pids.max", svc->verify_pids_max, why, n, real)) ||
+                verify_walk(sub, subrel, svc, why, n, real);
     }
     closedir(d);
     return found;
 }
 
 int verify_limits_match(const char *cg, const service_t *svc, char *why, size_t n) {
+    int real = 0;
     snprintf(why, n, "no populated cgroup below the service");
-    return verify_walk(cg, svc, why, n);
+    return verify_walk(cg, "", svc, why, n, &real);
 }
 
 void cgroup_rmdir_tree(const char *cg) {
@@ -1881,7 +1891,7 @@ static void rail_write(const char *line, size_t len) {
 }
 
 void service_log(const service_t *svc, const char *event) {
-    char line[256];
+    char line[512];
     int n;
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
@@ -1894,7 +1904,10 @@ void service_log(const service_t *svc, const char *event) {
                  state_name(svc->inst.state),
                  svc->inst.weight,
                  (int)svc->child_pid);
-    if (n > (int)sizeof(line) - 1) n = (int)sizeof(line) - 1;
+    if (n > (int)sizeof(line) - 1) {
+        n = (int)sizeof(line) - 1;
+        line[n - 1] = '\n';   /* a cut line still ends: the next one starts on its own */
+    }
 
     fputs(line, stdout);
     fflush(stdout);

@@ -2298,7 +2298,7 @@ static void notify_poll(int max_batch) {
                 if (service_verifies_limits(svc)) {
                     /* a limit asked for but not in force fails the service,
                      * never runs it unlimited */
-                    char why[160] = "service has no cgroup", ev[200];
+                    char why[256] = "service has no cgroup", ev[288];
                     if (!svc->cgroup_path[0] || !verify_limits_match(svc->cgroup_path, svc, why, sizeof why)) {
                         snprintf(ev, sizeof ev, "limits-mismatch %s", why);
                         service_log(svc, ev);

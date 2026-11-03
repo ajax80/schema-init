@@ -44,6 +44,21 @@ int main(void) {
     assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
     assert(strstr(why, "memory.max") && strstr(why, "want=67108864") && strstr(why, "got=max"));
 
+    /* why= names the cgroup, and the payload's wrong limit is reported, not
+     * runtime/'s "max" (conmon's, never limited), in either readdir order */
+    put(pl, "memory.max", "33554432\n");
+    assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
+    assert(strstr(why, "libpod-payload-abc: memory.max want=67108864 got=33554432"));
+    {
+        char rt2[300];
+        snprintf(rt2, sizeof rt2, "%s/zz-runtime", svcd);   /* created after the payload */
+        mkcg(rt2, "max\n", "max 100000\n", 1);
+        assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
+        assert(strstr(why, "libpod-payload-abc: memory.max want=67108864 got=33554432"));
+        put(rt2, "cgroup.events", "populated 0\nfrozen 0\n");
+    }
+    put(pl, "memory.max", "max\n");
+
     /* the kernel rounds memory.max down to a page: still a match */
     snprintf(svc.verify_memory_max, sizeof svc.verify_memory_max, "100000000");
     put(pl, "memory.max", "99999744\n");
