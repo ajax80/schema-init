@@ -256,16 +256,20 @@ def _find_user_unit(name):
     return None
 
 
-def _unit_dropins(name):
+def _unit_dropins(name, unit_file=None):
     # systemd's drop-in .conf files for a unit, applied in filename order. Dirs:
     # <unit>.d, its template's, each dash prefix's (foo-.service.d) and the type's
     # (service.d), most specific first; a filename seen first (higher-priority unit
     # dir, then more specific) shadows later ones, so a /dev/null link masks one.
+    # An alias also takes the drop-ins of the unit it links to, as systemd does.
     name = _unit_name(name)
     stem, _, suf = name.rpartition(".")
     names = [name]
     if "@" in stem:
         names.append(stem.split("@", 1)[0] + "@." + suf)
+    real = os.path.basename(os.path.realpath(unit_file)) if unit_file else name
+    if real not in names and not real.startswith(stem.split("@", 1)[0] + "@."):
+        names.append(real)
     base = stem.split("@", 1)[0]
     parts = base.split("-")
     names += ["-".join(parts[:i]) + "-." + suf for i in range(len(parts) - 1, 0, -1)]
@@ -279,7 +283,7 @@ def _unit_dropins(name):
             except OSError:
                 continue
             for e in ents:
-                if e.endswith(".conf") and e not in found:
+                if e.endswith(".conf") and not e.startswith(".") and e not in found:
                     found[e] = os.path.join(dd, e)
     return [found[k] for k in sorted(found)]
 
@@ -354,15 +358,19 @@ def _parse_unit_execstart(path, dropins=()):
 
 
 # Runs a oneshot's ExecStart= list in order as one tracked pid (the last step
-# is exec'd into it); a non-'-' failure stops the rest with sh's exit code.
+# is exec'd into it unless '-' makes its failure moot); a non-'-' failure stops
+# the rest with sh's exit code.
 # execvp, not sh, so an '@' argv[0] reaches each step.
-_CHAIN = """import os, sys, json
+_CHAIN = """import os, sys, json, signal
+# python ignores these at startup and the steps would inherit it
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
 steps = json.loads(sys.argv[1])
 for i, (ign, exe, argv) in enumerate(steps):
-    if i == len(steps) - 1:
+    if i == len(steps) - 1 and not ign:
         try:
             os.execvp(exe, argv)
-        except OSError:
+        except Exception:
             sys.exit(127)
     pid = os.fork()
     if pid == 0:
@@ -636,7 +644,7 @@ def handle_start_unit(session, msg, member="StartUnit"):
     if not unit_file:
         _log("%s(%s): no user unit file -> forward" % (member, name))
         return False
-    cmds, unit_env, stype = _parse_unit_execstart(unit_file, _unit_dropins(unit_name))
+    cmds, unit_env, stype = _parse_unit_execstart(unit_file, _unit_dropins(unit_name, unit_file))
     if not cmds:
         _log("%s(%s): no ExecStart in %s -> forward" % (member, name, unit_file))
         return False

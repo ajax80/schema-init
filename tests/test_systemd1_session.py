@@ -185,6 +185,20 @@ def main():
         ex, av = m._plan([(True, False, "/nonexistent", ["/nonexistent"]),
                           (False, False, "/nonexistent2", ["x"])], "oneshot")
         assert subprocess.run(av, executable=ex).returncode == 127
+        # '-' on the last step: its failure is ignored, as systemd does
+        ex, av = m._plan([(False, False, "/bin/true", ["/bin/true"]),
+                          (True, False, "/nonexistent", ["/nonexistent"])], "oneshot")
+        assert subprocess.run(av, executable=ex).returncode == 0
+        # steps get SIGPIPE back at its default: a writer to a closed pipe dies of it
+        ex, av = m._plan([(False, False, "/bin/true", ["/bin/true"]),
+                          (False, False, "/bin/sh", ["/bin/sh", "-c", "kill -PIPE $$"])], "oneshot")
+        r = subprocess.run(av, executable=ex, capture_output=True, text=True)
+        assert r.returncode == -signal.SIGPIPE, r.returncode
+        # an empty '@' argv[0] is an exec failure, not a traceback
+        ex, av = m._plan([(False, False, "/bin/true", ["/bin/true"]),
+                          (False, False, "/bin/true", [""])], "oneshot")
+        r = subprocess.run(av, executable=ex, capture_output=True, text=True)
+        assert r.returncode == 127 and "Traceback" not in r.stderr, r
 
     # drop-ins: <unit>.d, template, dash prefix and type-level dirs, in filename
     # order; a higher-priority unit dir shadows a same-named file; /dev/null masks
@@ -206,6 +220,11 @@ def main():
         os.makedirs(os.path.join(hi, "foo-bar@.service.d"))
         os.symlink("/dev/null", os.path.join(hi, "foo-bar@.service.d/60-masked.conf"))
         put(lo, "foo-bar@x.service.d/not-a-conf", "[Service]\nEnvironment=N=1\n")
+        put(lo, "foo-bar@x.service.d/.hidden.conf", "[Service]\nEnvironment=H=1\n")
+        # an alias picks up the drop-ins of the unit it links to
+        put(lo, "real.service", "[Service]\nExecStart=/bin/orig\n")
+        put(lo, "real.service.d/o.conf", "[Service]\nExecStart=\nExecStart=/bin/over\n")
+        os.symlink(os.path.join(lo, "real.service"), os.path.join(lo, "dbus-org.x.service"))
         put(lo, "foo-bar@x.service.d/70-other.conf", "[Unit]\nExecStart=/bin/ignored\n")
         saved, m.USER_UNIT_DIRS = m.USER_UNIT_DIRS, (hi, lo)
         try:
@@ -218,6 +237,9 @@ def main():
             assert cmds == [(False, False, "/bin/real", ["nick", "%i"])], cmds
             assert envl == ["A=0", "ALL=1", "P=1", "A=1", "S=hi"], envl
             assert m._unit_dropins("plain.service") == [os.path.join(lo, "service.d/10-all.conf")]
+            f = m._find_user_unit("dbus-org.x.service")
+            cmds, _, _ = m._parse_unit_execstart(f, m._unit_dropins("dbus-org.x.service", f))
+            assert cmds == [(False, False, "/bin/over", ["/bin/over"])], cmds
         finally:
             m.USER_UNIT_DIRS = saved
     print("test_systemd1_session: parse OK")
