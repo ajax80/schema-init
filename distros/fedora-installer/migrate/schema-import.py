@@ -1306,13 +1306,32 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("%s=%s capped at 300 s" % (skey, stop))
         else:
             lines.append("stop_timeout_sec=%d" % sec)
-    elif sections.get("X-Container") is not None or sections.get("X-Pod") is not None:
-        # exec_stop is podman rm -f / podman pod stop --time=N, which wait
-        # StopTimeout= (10 s) before SIGKILL: 3 s would cut it short and leave
-        # debris (a pod left Exited, its pod rm never reached)
-        q = sections.get("X-Container") if sections.get("X-Container") is not None else sections["X-Pod"]
-        st = _timespan_sec(_get_last(q, "StopTimeout") or "10") or 10
-        lines.append("stop_timeout_sec=%d" % min(st + 5, 300))
+    else:
+        # Quadlet's stop commands wait podman's StopTimeout= (default 10 s)
+        # before SIGKILL: podman rm -f (containers), pod stop --time=N (pods),
+        # kube down (kube). 3 s would cut them short and leave debris (a pod
+        # left Exited, its pod rm never reached). An explicit --time/-t in a
+        # stop command (drop-in, hand-written unit) counts too; the larger wins.
+        q = next((sections[k] for k in ("X-Container", "X-Pod", "X-Kube") if sections.get(k) is not None), None)
+        st = None
+        if q is not None:
+            raw = _get_last(q, "StopTimeout")
+            st = _timespan_sec(raw) if raw else 10
+            if st is None:
+                warns.append("StopTimeout=%s unrecognised, podman's 10 s assumed" % raw)
+                st = 10
+        # only user mode runs exec_stop at all (see above)
+        for k in ("ExecStop", "ExecStopPost") if _USER else ():
+            for v in _get_all(svc, k):
+                toks = v.split()
+                if not any(os.path.basename(t) == "podman" for t in toks[:2]):
+                    continue
+                for i, t in enumerate(toks):
+                    m = re.fullmatch(r"(?:--time|-t)=(\d+)", t)
+                    if m or (t in ("--time", "-t") and i + 1 < len(toks) and toks[i + 1].isdigit()):
+                        st = max(st or 0, int(m.group(1) if m else toks[i + 1]))
+        if st is not None:
+            lines.append("stop_timeout_sec=%d" % min(st + 5, 300))
 
     # [Install] presence is why the unit was queued; note if it's missing.
     notes = []
