@@ -519,6 +519,24 @@ static void park(service_t *svc) {
     service_log(svc, "dormant");
 }
 
+const char *excise_reason_name(uint8_t r) {
+    static const char *const n[] = {
+        [EXC_NONE] = "none", [EXC_BREAKER] = "breaker", [EXC_START_TIMEOUT] = "start-timeout",
+        [EXC_MAIN_PID_TIMEOUT] = "main-pid-timeout", [EXC_EXIT_CODE] = "exit-code",
+        [EXC_SIGNAL] = "signal", [EXC_CORE_DUMP] = "core-dump",
+        [EXC_READINESS_LOST] = "readiness-lost", [EXC_NO_CGROUP] = "no-cgroup",
+        [EXC_LISTEN_FAIL] = "listen-fail", [EXC_FUSE] = "fuse", [EXC_PROBE] = "probe-failed",
+    };
+    return r < sizeof n / sizeof n[0] ? n[r] : "unknown";
+}
+
+/* A death nobody asked for, from the last wait status; a clean exit 0 is none. */
+uint8_t excise_reason_from_exit(const service_t *svc) {
+    if (svc->ctl_killed) return EXC_NONE;
+    if (svc->term_signal) return svc->core_dumped ? EXC_CORE_DUMP : EXC_SIGNAL;
+    return svc->has_exited && svc->exit_status != 0 ? EXC_EXIT_CODE : EXC_NONE;
+}
+
 /* FRICTION gave up on the service: park it with backoff, or after the fifth
  * time trip the crash-loop breaker. Only this path sets circuit_broken; a
  * start-timeout or fallback-down excise is not a crash loop. */
@@ -526,6 +544,7 @@ void engine_friction_verdict(service_t *svc) {
     if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && svc->dormant_count >= 4) {
         svc->dormant_count++;
         svc->circuit_broken = 1;
+        svc->excise_reason = EXC_BREAKER;
         service_log(svc, "breaker-tripped");   /* not also 76-excised: one loss, one record */
     } else {
         park(svc);
@@ -541,6 +560,7 @@ static int held_now(const service_t *svc) {
 static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
     breaker_clear(svc);
+    svc->excise_reason = EXC_NONE;
     svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
@@ -817,6 +837,7 @@ static void reap(void) {
                 if (WIFEXITED(status) && WEXITSTATUS(status) == 0 && !services[i].cgroup_path[0]) {
                     /* nothing to check a MAINPID= against: refuse, as pid_file does */
                     services[i].inst.state = STATE_EXCISED;
+                    services[i].excise_reason = EXC_NO_CGROUP;
                     service_log(&services[i], "main-pid-no-cgroup");
                     stop_cmds_begin(&services[i], 2);
                     break;
@@ -868,6 +889,7 @@ static void reap(void) {
                     /* nothing to prove the PID is ours or to find a daemon
                      * left behind by: refuse rather than retry into duplicates */
                     services[i].inst.state = STATE_EXCISED;
+                    services[i].excise_reason = EXC_NO_CGROUP;
                     service_log(&services[i], "pid_file-no-cgroup");
                     break;
                 }
@@ -897,6 +919,7 @@ static void reap(void) {
                 }
             } else if (services[i].flags & SVC_NO_RESTART) {
                 services[i].inst.state = STATE_EXCISED;
+                services[i].excise_reason = excise_reason_from_exit(&services[i]);
                 service_log(&services[i], "76-no-restart");
                 /* Explicit stop/down lands here straight from reap() — it
                  * never crosses the FRICTION→EXCISED transition that the tick
@@ -1005,6 +1028,7 @@ static void monitor_failsafes(void) {
             restart_budget_refresh(svc);
             if (svc->failsafe_cmd[0]) start_failsafe(svc);
             svc->inst.state = (svc->flags & SVC_NO_RESTART) ? STATE_EXCISED : STATE_RECOVERY;
+            if (svc->inst.state == STATE_EXCISED) svc->excise_reason = EXC_MAIN_PID_TIMEOUT;
             stop_cmds_begin(svc, 2);
         }
         if (svc->stop_pid > 0 && !(svc->stop_phase & STOP_TIMED_OUT)) {
@@ -1137,6 +1161,7 @@ static void ready_lost(service_t *svc) {
     active_kill_service(svc);
     if (svc->flags & SVC_NO_RESTART) {
         svc->inst.state = STATE_EXCISED;
+        svc->excise_reason = EXC_READINESS_LOST;
         service_log(svc, "76-no-restart");
         return;
     }
@@ -1194,6 +1219,7 @@ static void tick_service(service_t *svc,
             if (services[di].inst.state == STATE_FRICTION || services[di].inst.state == STATE_EXCISED) {
                 execute_fuse_cmd(svc);
                 svc->inst.state = STATE_EXCISED;
+                svc->excise_reason = EXC_FUSE;
                 service_log(svc, "fuse-tripped");
                 if (svc->child_pid > 0) {
                     kill(svc->child_pid, SIGKILL);
@@ -1213,6 +1239,7 @@ static void tick_service(service_t *svc,
             if (!svc->standby_up && service_is_standby(svc, services, svc_count)) {
                 svc->flags |= SVC_NO_RESTART;
                 svc->inst.state = STATE_EXCISED;
+                svc->excise_reason = EXC_NONE;
                 service_log(svc, "standby");
                 break;
             }
@@ -1254,6 +1281,7 @@ static void tick_service(service_t *svc,
                 if (service_listen_open(svc) < 0) {
                     svc->listen_hold = 0;
                     svc->inst.state = STATE_EXCISED;
+                    svc->excise_reason = EXC_LISTEN_FAIL;
                     service_log(svc, "listen-fail");
                     break;
                 }
@@ -1292,6 +1320,7 @@ static void tick_service(service_t *svc,
                 if (svc->failsafe_cmd[0]) start_failsafe(svc);
                 if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise) {
                     svc->inst.state = STATE_EXCISED;
+                    svc->excise_reason = EXC_START_TIMEOUT;
                     service_log(svc, "76-excised");
                 } else {
                     svc->inst.state = STATE_RECOVERY;
@@ -1332,6 +1361,7 @@ static void tick_service(service_t *svc,
                 if (ready) {
                     flags = service_probe_f8(svc, services, svc_count);
                     schema_step(&svc->inst, flags);
+                    if (svc->inst.state == STATE_EXCISED) svc->excise_reason = EXC_PROBE;
                     if (svc->inst.state != prev) {
                         clock_gettime(CLOCK_MONOTONIC, &svc->stable_time);
                         mark_boot_ready(svc, ready);
@@ -1801,10 +1831,11 @@ static void ctl_cmd(int fd, char *line) {
         if (strcmp(opt, "--json") == 0) {
             ctl_writef(fd, "{\n  \"services_count\": %d,\n  \"groups_count\": %d,\n  \"services\": [\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++) {
-                ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d,\n      \"circuit_broken\": %s\n    }%s\n",
+                ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d,\n      \"circuit_broken\": %s,\n      \"excise_reason\": \"%s\"\n    }%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count,
                     services[i].circuit_broken ? "true" : "false",
+                    excise_reason_name(services[i].excise_reason),
                     (i < svc_count - 1) ? "," : "");
             }
             ctl_writef(fd, "  ]\n}\n");
@@ -1816,6 +1847,8 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.restarts=%d\n", services[i].name, services[i].restart_count);
                 ctl_writef(fd, "service.%s.last_exit=%s\n", services[i].name, last_exit_str(&services[i]));
                 ctl_writef(fd, "service.%s.circuit_broken=%d\n", services[i].name, services[i].circuit_broken);
+                ctl_writef(fd, "service.%s.excise_reason=%s\n", services[i].name,
+                    excise_reason_name(services[i].excise_reason));
                 if (svc_held_on_socket(&services[i]))
                     ctl_writef(fd, "service.%s.waiting=%s\n", services[i].name, services[i].wait_socket);
             }
@@ -1831,6 +1864,8 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "last exit: %s\n", last_exit_str(s));
                 if (s->circuit_broken)
                     ctl_writef(fd, "circuit_broken=1: crash-loop breaker excised it; schema-ctl reset %s\n", s->name);
+                else if (s->excise_reason)
+                    ctl_writef(fd, "excise_reason=%s\n", excise_reason_name(s->excise_reason));
                 ctl_writef(fd, "hardening default: %s\n", service_hardening_default() ? "ON" : "off");
                 ctl_writef(fd, "  %-15s %-5s %s\n", "no_new_privs",
                     (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", hard_source(s, HARD_NNP));
@@ -1930,6 +1965,7 @@ static void ctl_cmd(int fd, char *line) {
             } else {
                 ctl_wait_abort(&services[i]);
                 services[i].inst.state = STATE_EXCISED;
+                services[i].excise_reason = EXC_NONE;
                 ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
             }
             write(fd, ".\n", 2);

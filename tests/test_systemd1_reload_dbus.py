@@ -89,5 +89,16 @@ check("breaker-excised unit: failed + Result=start-limit-hit",
       v.active_state == "failed" and v.result == "start-limit-hit")
 v.update_state({"pid": 7, "state": "SETTLED", "restarts": 0, "circuit_broken": False})
 check("after reset: Result=success", v.result == "success")
+for reason, want in (("start-timeout", "timeout"), ("main-pid-timeout", "timeout"),
+                     ("exit-code", "exit-code"), ("signal", "signal"), ("core-dump", "core-dump"),
+                     ("readiness-lost", "protocol"), ("no-cgroup", "resources"),
+                     ("listen-fail", "resources"), ("fuse", "resources"), ("probe-failed", "resources"),
+                     ("none", "success")):
+    v.update_state({"pid": 0, "state": "EXCISED", "restarts": 0, "circuit_broken": False, "excise_reason": reason})
+    check("excise_reason=%s: Result=%s" % (reason, want), v.result == want)
+v.update_state({"pid": 0, "state": "EXCISED", "restarts": 0, "circuit_broken": True})
+check("circuit_broken without excise_reason (older PID 1): start-limit-hit", v.result == "start-limit-hit")
+v.update_state({"pid": 0, "state": "PERFECT", "restarts": 0, "circuit_broken": False, "excise_reason": "exit-code"})
+check("a reason outside EXCISED is not a failure: Result=success", v.result == "success")
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

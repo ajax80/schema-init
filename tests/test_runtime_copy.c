@@ -15,6 +15,7 @@ int main(void) {
     src.restart_count = 3;
     src.dormant_count = 2;
     src.circuit_broken = 1;
+    src.excise_reason = EXC_SIGNAL;
     src.dormant_until.tv_sec = 900; src.dormant_until.tv_nsec = 7;
     src.restart_at.tv_sec = 910; src.restart_at.tv_nsec = 3;
     src.last_start = 1759280000;
@@ -47,6 +48,7 @@ int main(void) {
     assert(dst.restart_count == 3);
     assert(dst.dormant_count == 2);
     assert(dst.circuit_broken == 1);
+    assert(dst.excise_reason == EXC_SIGNAL);
     assert(dst.dormant_until.tv_sec == 900 && dst.dormant_until.tv_nsec == 7);
     assert(dst.restart_at.tv_sec == 910 && dst.restart_at.tv_nsec == 3);
     assert(dst.last_start == 1759280000);

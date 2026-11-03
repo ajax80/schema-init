@@ -1381,6 +1381,7 @@ int service_spawn(service_t *svc) {
     svc->ready_path_verified = 0;
     svc->ready_watched = 0;
     svc->ctl_killed = 0;
+    svc->excise_reason = EXC_NONE;   /* the reason belongs to the run that was excised */
     svc->ready_stale_ino = 0;
     if (svc->ready_path[0]) {
         struct stat st;

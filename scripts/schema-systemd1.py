@@ -68,6 +68,32 @@ def _is_bus_unit(name):
     return str(name) in ('dbus.service', 'dbus-broker.service', 'dbus-daemon.service')
 
 
+# schema excise_reason -> systemd unit Result
+EXCISE_RESULT = {
+    'breaker': 'start-limit-hit',
+    'start-timeout': 'timeout',
+    'main-pid-timeout': 'timeout',
+    'exit-code': 'exit-code',
+    'signal': 'signal',
+    'core-dump': 'core-dump',
+    'readiness-lost': 'protocol',
+    'no-cgroup': 'resources',
+    'listen-fail': 'resources',
+    'fuse': 'resources',
+    'probe-failed': 'resources',
+}
+
+
+def excise_result(status_dict):
+    # a reason is a failure only while the unit sits excised
+    if status_dict.get('state') != 'EXCISED':
+        return 'success'
+    # circuit_broken still counts: it survives a re-exec from a PID 1 that predates excise_reason
+    if status_dict.get('circuit_broken'):
+        return 'start-limit-hit'
+    return EXCISE_RESULT.get(status_dict.get('excise_reason'), 'success')
+
+
 def svc_files(path):
     """path, then its drop-ins in the order PID 1 applies them (svc_dropins.h)."""
     d, base = os.path.split(path)
@@ -204,8 +230,7 @@ class Systemd1Unit(dbus.service.Object):
         self.pid = status_dict.get('pid', 0)
         self.raw_state = status_dict.get('state', 'UNKNOWN')
         self.restarts = status_dict.get('restarts', 0)
-        # systemd's name for a unit its start rate limit gave up on
-        self.result = 'start-limit-hit' if status_dict.get('circuit_broken') else 'success'
+        self.result = excise_result(status_dict)
 
         # State Mapping logic
         self.service_type = 'simple'

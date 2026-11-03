@@ -50,6 +50,7 @@ int main(void) {
     svcs[0].is_frozen = 1;
     svcs[0].dormant_count = 200;
     svcs[0].circuit_broken = 1;
+    svcs[0].excise_reason = EXC_LISTEN_FAIL;
     svcs[0].flags = SVC_NO_RESTART;               /* held down by schema-ctl stop */
     svcs[0].listen_open = 2; svcs[0].listen_hold = 1;
     svcs[0].listen_fd[0] = 9; svcs[0].listen_fd[1] = 12; svcs[0].listen_fd[2] = -1; svcs[0].listen_fd[3] = 0;
@@ -92,6 +93,7 @@ int main(void) {
     assert(strcmp(out[0].rt.notify_status, "100% ready = yes\tok\n") == 0);
     assert(strcmp(out[0].rt.cgroup_path, "/sys/fs/cgroup/schema-init/dbus") == 0);
     assert(out[0].rt.is_frozen == 1 && out[0].rt.dormant_count == 200 && out[0].rt.circuit_broken == 1);
+    assert(out[0].rt.excise_reason == EXC_LISTEN_FAIL);
     assert(out[0].rt.listen_open == 2 && out[0].rt.listen_hold == 1);
     assert(out[0].rt.listen_fd[0] == 9 && out[0].rt.listen_fd[1] == 12 && out[0].rt.listen_fd[2] == -1);
     assert(out[1].rt.listen_open == 0);
