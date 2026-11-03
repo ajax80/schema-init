@@ -1542,6 +1542,34 @@ class SessionRegistry:
     def get(self, sid):
         return self.sessions.get(str(sid))
 
+    # A lookup that misses re-reads the directory before answering: a
+    # compositor asks for its session a few ms after the login script's
+    # rename, inside the 250 ms poll, and an answer from the last poll was
+    # NoSuchSession -- or, via the seat, the placeholder #31 (the boot race).
+    # Only when the directory moved since the last sync: polkit asks
+    # GetSessionByPID for pids in no session at all, and those must stay cheap.
+    def _resync_if_changed(self):
+        try:
+            m = os.stat(SESSIONS_DIR).st_mtime_ns
+        except OSError:
+            return
+        if m != getattr(self, '_dir_mtime', None):
+            self.sync()
+
+    def find(self, sid):
+        obj = self.get(sid)
+        if obj is None:
+            self._resync_if_changed()
+            obj = self.get(sid)
+        return obj
+
+    def find_pid(self, pid):
+        obj = self.session_for_pid(pid)
+        if obj is None:
+            self._resync_if_changed()
+            obj = self.session_for_pid(pid)
+        return obj
+
     def primary(self):
         """The session an unqualified request means: the active one, else any.
 
@@ -1627,6 +1655,10 @@ class SessionRegistry:
 
     def sync(self, handoff=None):
         """Diff the directory against the live objects. Returns True (GLib)."""
+        try:
+            self._dir_mtime = os.stat(SESSIONS_DIR).st_mtime_ns
+        except OSError:
+            self._dir_mtime = None
         try:
             records = scan_session_files()
         except Exception as e:
@@ -2163,7 +2195,7 @@ class Login1Manager(dbus.service.Object):
         return self.registry.primary() if self.registry else None
 
     def _lookup(self, session_id):
-        obj = self.registry.get(str(session_id)) if self.registry else None
+        obj = self.registry.find(str(session_id)) if self.registry else None
         if obj is None:
             raise dbus.exceptions.DBusException(
                 "No session '%s'" % session_id,
@@ -2532,7 +2564,7 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
-        obj = self.registry.session_for_pid(int(pid)) if self.registry else None
+        obj = self.registry.find_pid(int(pid)) if self.registry else None
         if obj is None:
             raise dbus.exceptions.DBusException(
                 "PID %s is not part of any session" % pid,
@@ -2541,7 +2573,7 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetUserByPID(self, pid):
-        obj = self.registry.session_for_pid(int(pid)) if self.registry else None
+        obj = self.registry.find_pid(int(pid)) if self.registry else None
         if obj is None:
             raise dbus.exceptions.DBusException(
                 "PID %s is not part of any session" % pid,
@@ -3250,7 +3282,9 @@ def main():
     registry.manager = manager
 
     for obj in registry.sessions.values():
-        if handoff is None and obj.record.active and obj.vt_fd is None:
+        # not the placeholder: it stands for "nobody registered yet", which is
+        # every cold boot, not a desktop running under us
+        if handoff is None and obj.record.active and obj.vt_fd is None and not obj.record.synthesised:
             # Cold start under a session that is already running: its compositor
             # took control of a bridge that no longer exists, so we hold none of
             # its fds and _setup_vt_mediation() is never called for it. Before
