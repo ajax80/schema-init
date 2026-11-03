@@ -2800,10 +2800,13 @@ static void shutdown_ordered(void) {
         shut_reap();
         for (i = 0; i < svc_count; i++) {
             alive[i] = !killed[i] && svc_signal_all(&services[i], 0) > 0;
-            /* exec_stop_post once it is gone; it counts as alive until done */
-            if (!alive[i] && (term_at[i] || killed[i]) && !post_at[i] &&
-                stop_cmds_begin(&services[i], 2))
-                post_at[i] = now;
+            /* exec_stop_post once it is gone; it counts as alive until done.
+             * Gone may be exec_stop's doing (podman rm, kill $MAINPID) with no
+             * SIGTERM sent: post then waits for exec_stop to finish. */
+            if (!alive[i] && (term_at[i] || killed[i] || stop_at[i]) && !post_at[i]) {
+                if (services[i].stop_pid > 0) alive[i] = 1;
+                else if (stop_cmds_begin(&services[i], 2)) post_at[i] = now;
+            }
             if (post_at[i] && services[i].stop_pid > 0) {
                 if (now - post_at[i] < stop_grace_ms(&services[i])) alive[i] = 1;
                 else kill_group(services[i].stop_pid);

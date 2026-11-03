@@ -48,6 +48,8 @@ printf 'name=tmr\nexec=/bin/echo\nargs=tick\non_calendar=03:00\npersistent=1\n' 
 { sleeper sd; printf 'exec_stop=/bin/sh -c "date +%%s%%N > %s/sd.stopcmd"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/sd.post"\n' "$T" "$T"; } > "$S/sd.svc"
 # exec_stop kills main itself and outlives it: exec_stop_post must still run (#433)
 printf 'name=pk\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/pk.pid; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nexec_stop=/bin/sh -c "kill $(cat %s/pk.pid); sleep 1"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/pk.post"\n' "$T" "$T" "$T" > "$S/pk.svc"
+# ...and at shutdown too (M2): exec_stop kills main and outlives it, no SIGTERM is ever sent
+printf 'name=pks\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/pks.pid; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nexec_stop=/bin/sh -c "kill $(cat %s/pks.pid); sleep 1"\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/pks.post"\n' "$T" "$T" "$T" > "$S/pks.svc"
 # a timer run gets exec_stop_post too (#433)
 printf 'name=tp\nexec=/bin/true\non_boot_sec=0\nexec_stop_post=/bin/sh -c "date +%%s%%N > %s/tp.post"\n' "$T" > "$S/tp.svc"
 chmod 600 "$S"/*.svc
@@ -152,6 +154,7 @@ PID=
 [ -s "$T/a.stop" ] && [ -s "$T/b.stop" ] || fail "sleepers saw no SIGTERM"
 [ "$(cat "$T/b.stop")" -le "$(cat "$T/a.stop")" ] || fail "a stopped before its dependent b"
 [ -s "$T/sd.stopcmd" ] || fail "sd: exec_stop not run at shutdown"
+[ -s "$T/pks.post" ] || fail "pks: exec_stop_post skipped at shutdown when exec_stop took main down"
 [ -s "$T/sd.post" ] || fail "sd: exec_stop_post not run at shutdown"
 [ "$(cat "$T/sd.stopcmd")" -le "$(cat "$T/sd.stop")" ] || fail "sd: exec_stop ran after SIGTERM at shutdown"
 pgrep -f "$T/sl" > /dev/null && fail "dbl orphan survived"
