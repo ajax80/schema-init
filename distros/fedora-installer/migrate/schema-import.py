@@ -1133,6 +1133,19 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.extend(rt_pres)
     for pre, pa in pres:
         lines.append("exec_pre=%s%s" % (pre, " ".join(_cmd_quote(w) for w in pa)))
+    wd_note = None
+    wd = (_get_last(svc, "WorkingDirectory") or "").strip()
+    if wd:
+        ign = "-" if wd.startswith("-") else ""
+        d = wd[len(ign):]
+        try:
+            d = _specifiers([d], unit or name)[0]
+        except Skip:
+            d = ""
+        if (d.startswith("/") or d == "~") and len(ign + d) < 256 and "\n" not in d:
+            lines.append("working_dir=%s%s" % (ign, d))
+        else:
+            wd_note = "dropped WorkingDirectory=%s" % wd
     # user mode only: system units have always been stopped by SIGTERM alone,
     # and a re-import must not change that. The runner drops to the service's
     # user, so + and ! can't be honoured.
@@ -1301,9 +1314,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     notes += rt_notes
     notes += dep_notes
     notes += ["socket: " + n for n in sock_notes]
-    for k in ("WorkingDirectory",):
-        if _get_last(svc, k):
-            notes.append("dropped %s" % k)
+    if wd_note:
+        notes.append(wd_note)
     if notes:
         lines.insert(0, "# schema-import: " + "; ".join(notes))
     for w in reversed(warns):

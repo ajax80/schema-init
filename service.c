@@ -811,6 +811,24 @@ static int svc_run_cmds(const service_t *svc, char *const *cmds, int n,
     return 0;
 }
 
+/* Called twice on spawn: before the root '+' exec_pre lines, then again after
+ * hardening + the uid drop, because a private /tmp or the user's permissions
+ * change what the path resolves to. */
+static void svc_chdir(const service_t *svc) {
+    if (!svc->working_dir[0]) return;
+    const char *d = svc->working_dir;
+    int ignore = *d == '-';
+    d += ignore;
+    if (strcmp(d, "~") == 0) {
+        struct passwd *pw = getpwuid(svc->run_uid);
+        d = pw && pw->pw_dir && pw->pw_dir[0] ? pw->pw_dir : "/";
+    }
+    if (chdir(d) != 0 && !ignore) {
+        dprintf(2, "[schema-init] WORKING DIR FAILED for %s: %s: %d\n", svc->name, d, errno);
+        _exit(126);
+    }
+}
+
 static void svc_run_pre(const service_t *svc, int privileged) {
     if (svc_run_cmds(svc, svc->exec_pre, svc->exec_pre_count, "exec_pre", privileged) < 0) _exit(1);
 }
@@ -1300,6 +1318,7 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
             _exit(126);
         }
     }
+    svc_chdir(svc);
     /* a failing exec_stop skips the rest of its own list, never exec_stop_post */
     int bad = (phase & 1) && svc_run_cmds(svc, svc->exec_stop, svc->exec_stop_count, "exec_stop", -1) < 0;
     if ((phase & 2) && svc_run_cmds(svc, svc->exec_stop_post, svc->exec_stop_post_count, "exec_stop_post", -1) < 0)
@@ -1462,6 +1481,7 @@ int service_spawn(service_t *svc) {
         }
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
+            svc_chdir(svc);
             svc_run_pre(svc, 1);
         }
         if (service_apply_hardening(svc) != 0)
@@ -1535,6 +1555,7 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
+        svc_chdir(svc);
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
             svc_run_pre(svc, 0);
@@ -2458,6 +2479,15 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     }
     else if (strcmp(line, "ready_path") == 0)
         strncpy(svc->ready_path, val, sizeof(svc->ready_path) - 1);
+    else if (strcmp(line, "working_dir") == 0) {
+        const char *d = val + (*val == '-');
+        if ((d[0] != '/' && strcmp(d, "~") != 0) || strlen(val) >= sizeof svc->working_dir) {
+            fprintf(stderr, "[schema-init] %s: working_dir=%s needs an absolute path or ~, optionally after -\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        strcpy(svc->working_dir, val);
+    }
     else if (strncmp(line, "verify_", 7) == 0 &&
              (!strcmp(line + 7, "memory_max") || !strcmp(line + 7, "cpu_max") || !strcmp(line + 7, "pids_max"))) {
         char *dst = line[7] == 'm' ? svc->verify_memory_max : line[7] == 'c' ? svc->verify_cpu_max : svc->verify_pids_max;

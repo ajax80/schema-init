@@ -112,6 +112,35 @@ int main(void) {
     memset(&svc, 0, sizeof svc);
     assert(service_load_one(p, &svc) != 0);
 
+    /* working_dir=: commands run in it; a missing dir fails unless prefixed - */
+    snprintf(body, sizeof body,
+             "name=s\nexec=/bin/true\nworking_dir=%s\n"
+             "exec_stop=/bin/sh -c \"pwd > %s\"\n", dir, out);
+    write_svc(p, body);
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(p, &svc) == 0);
+    assert(runner(&svc, 1) == 0);
+    slurp(out, buf, sizeof buf);
+    char want[300];
+    snprintf(want, sizeof want, "%s\n", dir);
+    assert(strcmp(buf, want) == 0);
+    snprintf(body, sizeof body, "name=s\nexec=/bin/true\nworking_dir=%s/nope\nexec_stop=/bin/true\n", dir);
+    write_svc(p, body);
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(p, &svc) == 0);
+    assert(runner(&svc, 1) == 126);
+    snprintf(body, sizeof body, "name=s\nexec=/bin/true\nworking_dir=-%s/nope\nexec_stop=/bin/true\n", dir);
+    write_svc(p, body);
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(p, &svc) == 0);
+    assert(runner(&svc, 1) == 0);
+    write_svc(p, "name=s\nexec=/bin/true\nworking_dir=relative/dir\n");
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(p, &svc) == -1);
+    write_svc(p, "name=s\nexec=/bin/true\nworking_dir=-~\n");
+    memset(&svc, 0, sizeof svc);
+    assert(service_load_one(p, &svc) == 0 && strcmp(svc.working_dir, "-~") == 0);
+
     unlink(p); unlink(out); rmdir(dir);
     printf("test_svc_stopcmds: PASS\n");
     return 0;

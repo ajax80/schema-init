@@ -367,6 +367,7 @@ typedef struct {
     time_t           start_time;       /* when current run began              */
     int              stable_secs;      /* seconds until FULL_TRUST->FUNDAMENTAL; default STABLE_SECS */
     char             ready_path[256];  /* if set, promote when this path exists (fallback: stable_secs) */
+    char             working_dir[256]; /* chdir before exec_pre/exec/stop cmds; "-" prefix = ignore if missing, "~" = user home */
     char             pid_file[256];    /* forking daemon: launcher exits 0, main PID read from here */
     char             verify_memory_max[24];  /* after READY=1 some populated cgroup below the */
     char             verify_cpu_max[40];     /* service must carry these values (podman's own */
