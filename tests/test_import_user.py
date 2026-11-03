@@ -838,6 +838,26 @@ check("unit map: lazy socket and timer left out",
       "lazy" not in units and "tick" not in units and "listen_lazy=1" in svc(out, "lazy"))
 t.done()
 
+# 12. a Quadlet Pod= container: BindsTo= pulls its pod in, and the pod's
+# PIDFile=%t/%N.pid resolves like its ExecStartPre= does (was: no such pod)
+t = Tree()
+t.write(t.cfg("web-pod.service"),
+        "[Service]\nExecStartPre=/usr/bin/podman pod create --infra-conmon-pidfile=%t/%N.pid --name web\n"
+        "ExecStart=/usr/bin/podman pod start web\nType=forking\nPIDFile=%t/%N.pid\n")
+t.write(t.cfg("web.service"),
+        "[Unit]\nBindsTo=web-pod.service\nAfter=web-pod.service\n"
+        "[Service]\nExecStart=/usr/bin/podman run --cgroups=split --pod web img\n[Install]\nWantedBy=default.target\n")
+t.enable("web.service")
+units, _ = gen()
+check("BindsTo= pulls the pod into the set", "web-pod.service" in units)
+c, out = run(t)
+check("pod's PIDFile=%t/%N.pid expanded",
+      os.path.exists(os.path.join(out, "web-pod.svc"))
+      and "pid_file=%s/web-pod.pid\n" % t.run in svc(out, "web-pod")
+      and "--infra-conmon-pidfile=%s/web-pod.pid" % t.run in svc(out, "web-pod"))
+check("container waits on its pod", "dep=web-pod\n" in svc(out, "web"))
+t.done()
+
 # --- CLI: no XDG_RUNTIME_DIR -> 2 ---
 saved = os.environ.pop("XDG_RUNTIME_DIR", None)
 check("cli_no_runtime", si.main(["--user"]) == 2)

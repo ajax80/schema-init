@@ -1054,6 +1054,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
 
     stype = _get_last(svc, "Type").lower()
     pidfile = _get_last(svc, "PIDFile")
+    if _USER and "%" in pidfile:
+        # Quadlet's pods use PIDFile=%t/%N.pid, the same %t/%N their ExecStartPre= writes;
+        # user mode only, so system re-imports don't change
+        pidfile = _specifiers([pidfile], unit or name)[0]
     if stype == "forking" and not (pidfile.startswith("/") and not any(c in pidfile for c in "%$")):
         raise Skip("Type=forking without an absolute PIDFile= — nothing to "
                    "find the daemon's main PID by")
@@ -2276,7 +2280,8 @@ def user_enabled_set(skip):
             continue
         parsed = parse_unit(text)
         unit = parsed.get("Unit", [])
-        for key in ("Wants", "Requires"):
+        # BindsTo= starts its target like Requires= (Quadlet binds a Pod= container to its pod)
+        for key in ("Wants", "Requires", "BindsTo"):
             for v in _get_all(unit, key):
                 queue += [(w, False) for w in v.split()]
         # a socket's or timer's .svc runs its service, so that service's hard
