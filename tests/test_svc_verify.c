@@ -44,19 +44,42 @@ int main(void) {
     assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
     assert(strstr(why, "memory.max") && strstr(why, "want=67108864") && strstr(why, "got=max"));
 
-    /* why= names the cgroup, and the payload's wrong limit is reported, not
-     * runtime/'s "max" (conmon's, never limited), in either readdir order */
+    /* why= names each populated cgroup's first mismatch, sorted by name:
+     * runtime/'s "max" can't hide the payload's wrong limit, nor the reverse */
     put(pl, "memory.max", "33554432\n");
     assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
-    assert(strstr(why, "libpod-payload-abc: memory.max want=67108864 got=33554432"));
+    assert(!strcmp(why, "libpod-payload-abc: memory.max want=67108864 got=33554432; "
+                        "runtime: memory.max want=67108864 got=max"));
+    /* the common failure: payload unlimited, beside a sibling with some other real limit */
+    put(pl, "memory.max", "max\n");
+    put(rt, "memory.max", "1048576\n");
+    assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
+    assert(!strcmp(why, "libpod-payload-abc: memory.max want=67108864 got=max; "
+                        "runtime: memory.max want=67108864 got=1048576"));
+    put(rt, "memory.max", "max\n");
+    /* a long payload id is cut to 40 chars; want/got survive */
     {
-        char rt2[300];
-        snprintf(rt2, sizeof rt2, "%s/zz-runtime", svcd);   /* created after the payload */
-        mkcg(rt2, "max\n", "max 100000\n", 1);
+        char lp[400];
+        snprintf(lp, sizeof lp, "%s/libpod-payload-0a2f4e7f2eccbad7cecf5b71c520dd3b930f442c0765f69b1fd8b6ababfd1e86", svcd);
+        mkcg(lp, "33554432\n", "150000 100000\n", 1);
+        put(pl, "cgroup.events", "populated 0\nfrozen 0\n");
         assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
-        assert(strstr(why, "libpod-payload-abc: memory.max want=67108864 got=33554432"));
-        put(rt2, "cgroup.events", "populated 0\nfrozen 0\n");
+        assert(strstr(why, "libpod-payload-0a2f4e7f2eccbad7cecf5b71c: memory.max want=67108864 got=33554432"));
+        put(lp, "cgroup.events", "populated 0\nfrozen 0\n");
+        put(pl, "cgroup.events", "populated 1\nfrozen 0\n");
     }
+    /* a missing or empty memory.max is never within a page of a small want */
+    snprintf(svc.verify_memory_max, sizeof svc.verify_memory_max, "1000");
+    {
+        char f[400];
+        snprintf(f, sizeof f, "%s/memory.max", pl);
+        unlink(f);
+        assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
+        assert(strstr(why, "libpod-payload-abc: memory.max want=1000 got=missing"));
+        put(pl, "memory.max", "");
+        assert(verify_limits_match(svcd, &svc, why, sizeof why) == 0);
+    }
+    snprintf(svc.verify_memory_max, sizeof svc.verify_memory_max, "67108864");
     put(pl, "memory.max", "max\n");
 
     /* the kernel rounds memory.max down to a page: still a match */
