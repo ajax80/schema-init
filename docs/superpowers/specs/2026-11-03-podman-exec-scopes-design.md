@@ -1,0 +1,253 @@
+# podman exec scopes — `podman exec` from a login shell
+
+Status: **design, rev 1 — awaiting Greg's review.** No code yet.
+Author: Claire, 2026-11-03. Backlog item from the rootless podman phase
+(`2026-10-27-rootless-podman-quadlet-design.md`, "known gaps").
+
+## Why
+
+Rootless Quadlet containers run under schema-user, inside
+`user.slice/user-U.slice/user@U.service/<svc>/`. A login shell lives in
+`user.slice/user-U.slice/session-N.scope`. Reproduced on blakbox 2026-11-03
+(podman 5.8.9, cgroupfs manager, cgroup v2), Quadlet `scopetest.container`
+FUNDAMENTAL under schema-user:
+
+```
+$ podman exec systemd-scopetest true
+Error: crun: write to `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/
+  scopetest/libpod-payload-<id>/cgroup.procs`: Permission denied: OCI permission denied
+rc=126
+```
+
+cgroup v2 lets a process move from A to B only when the writer can write the
+`cgroup.procs` of A and B's **common ancestor**. That ancestor is
+`user-U.slice`, which root owns. `podman exec` cannot work from a login shell
+today: not from Konsole, not over ssh. The e2e script works around it by
+running its exec from a throwaway .svc (`tests/livetest/podman-quadlet-e2e.sh`
+lines 24-29).
+
+### What systemd does, and what podman already asks us for
+
+Every rootless podman command whose current cgroup it does not own asks the
+**user** systemd manager for a scope holding itself. Traced on blakbox with
+strace, `podman info` sends on the session bus:
+
+```
+StartTransientUnit("podman-<pid>.scope", "replace",
+    [Slice="user.slice", PIDs=[<own pid>], Delegate=true, DefaultDependencies=false], [])
+```
+
+The session shim (`scripts/schema-systemd1-session.py:183`) refuses every
+ExecStart-less transient unit, so podman logs at debug level
+`Failed to add podman to systemd sandbox cgroup: schema-init does not manage
+transient scopes` and carries on in `session-N.scope`. The podman pause process
+was created the same way and lives in `session-1.scope` on blakbox.
+
+systemd --user cannot move a process out of `session-N.scope` either. It calls
+the **system** manager's `AttachProcessesToUnit("user@U.service",
+"/user.slice/podman-<pid>.scope", [pid])`, and PID 1 (root) does the write.
+
+### Proven by hand (blakbox, 2026-11-03)
+
+As the user: `mkdir user@1000.service/scopes.slice/podman-proof.scope`. As root:
+write the shell's pid into its `cgroup.procs`. From that shell:
+`podman exec systemd-scopetest sh -c 'echo exec-ok'` → `exec-ok`, rc=0. Once
+both sides of the move are under `user@1000.service`, which the user owns, crun's
+write is allowed. Nothing else is needed.
+
+## Goal
+
+`podman exec` (and anything else needing the same move) works from any login
+shell that has a session bus, because schema-init does the same two steps as
+systemd:
+
+1. **The session shim** (runs as the user) accepts podman's scope request,
+   creates the scope cgroup in the user's own tree, and asks the system side to
+   move the pid there.
+2. **The system bridge** (`scripts/schema-systemd1.py`, root) implements
+   `AttachProcessesToUnit` for that single case, under strict checks.
+
+## Non-goals
+
+- General transient scopes. Chromium, KDE `app-*.scope` and every other
+  ExecStart-less request stay refused, as today (the shim's comment at :195
+  records why: ACKing Chromium's scope wedged its network service).
+- `systemd-run --user --scope`, `Delegate=` controller enabling, scope
+  properties (limits, `KillMode`), `StopUnit`/`KillUnit` on a scope, scope
+  objects on the bus.
+- Changing podman's cgroup manager (stays cgroupfs) or Quadlet's `--cgroups=split`.
+- ssh-only users without a session bus. They keep today's behaviour (see Open
+  questions).
+
+## Anti-goals (a failure even if exec works)
+
+- Any podman command fails, or gets noticeably slower, where it works today. A
+  refusal or a broken step must leave podman exactly where it is now: run in
+  place, log at debug level.
+- A user can move a process they don't fully own, or a process into a cgroup
+  outside their own `user@U.service`.
+- Chromium tabs wedge again.
+- The system bridge's existing `StartTransientUnit` ack (KDE app launches) changes.
+
+## Design
+
+### Names
+
+- **scope name**: `podman-<suffix>.scope` with
+  `^podman-[A-Za-z0-9_-]{1,64}\.scope$`. This covers `podman-<pid>.scope` and
+  the pause process's `podman-pause-<n>.scope`.
+- **scope dir**: `<CG>/user.slice/user-U.slice/user@U.service/user.slice/<scope name>`,
+  where `<CG>` is `$SCHEMA_CGROUP_ROOT` or `/sys/fs/cgroup`, as in logind. The
+  `user.slice` under `user@U.service` mirrors systemd's own layout, and podman
+  asks for `Slice=user.slice`. A schema-user service cgroup is `user@U.service/<name>`,
+  and `service.c:2322` does not validate `name=`, so a hand-written
+  `name=user.slice` would collide. An imported unit can't, because the importer
+  drops `.service`. Guard (my call): the shim refuses if `user.slice` itself
+  holds processes or has any child that isn't `podman-*.scope`.
+
+### 1. Session shim: `StartTransientUnit` for podman scopes
+
+In `handle_start_transient_unit`, before the existing ExecStart-less refusal:
+
+Accept only if **all** of these hold:
+
+- no `ExecStart` (an ExecStart request keeps the existing spawn path);
+- the name matches the scope-name regex;
+- `PIDs` is present and is exactly `[<sender pid>]`, where `<sender pid>` comes
+  from `GetConnectionUnixProcessID(msg.get_sender())` on the session bus. podman
+  always sends its own pid, and the sender is blocked waiting for the reply, so
+  the pid can't be recycled meanwhile;
+- `Slice` is absent or `user.slice`;
+- the user's `user@U.service` exists and is owned by U (schema-user's
+  delegation, `schema-logind.py:317`).
+
+Anything else gets the existing `NotSupported` refusal, unchanged.
+
+Accepted:
+
+1. `mkdir -p` the `user.slice` dir (user-owned, so no root needed; no controllers
+   enabled, because podman's own process needs none), then `mkdir` the scope
+   dir. If the scope dir already exists and is unpopulated (pid reuse of a
+   leftover), reuse it. If it is populated, refuse.
+2. Call the system bus `org.freedesktop.systemd1.Manager.AttachProcessesToUnit(
+   "user@U.service", "/user.slice/<scope name>", [pid])` with a 2 s timeout.
+3. Success → `_reply_job_and_done` (job reply, then JobNew/JobRemoved "done";
+   go-systemd waits for that JobRemoved). Failure or timeout → `rmdir` the scope
+   dir and refuse with `NotSupported`, so podman continues in place as today.
+4. Log one line each way: `scope podman-123.scope pid=123 -> attached` /
+   `-> refused (<why>)`.
+
+**Sweep:** empty scope dirs are removed by the shim. Each accepted request and a
+60 s GLib timer remove every `user.slice/podman-*.scope` whose `cgroup.events`
+says `populated 0`. If the shim dies, leftover empty dirs are harmless, and
+logind's `remove_user_cgroup` (deepest-first) clears the tree on the next
+schema-user start.
+
+### 2. System bridge: `AttachProcessesToUnit(s unit, s subcgroup, au pids)`
+
+A new `@dbus.service.method` on the Manager in `schema-systemd1.py`, with the
+real systemd signature. The stock Fedora policy
+`/usr/share/dbus-1/system.d/org.freedesktop.systemd1.conf` already allows
+`send_member="AttachProcessesToUnit"` to everyone, so no policy file changes.
+Authorisation happens in the method:
+
+- **caller uid** C = `GetConnectionUnixUser(sender)`. Refuse C == 0 (root
+  needs no help, and this keeps the surface user-only).
+- `unit` must equal `"user@%d.service" % C` exactly.
+- `subcgroup` must match `^/user\.slice/podman-[A-Za-z0-9_-]{1,64}\.scope$`
+  (the same name rule, no `..`, no other shape).
+- the target dir `<user@C.service><subcgroup>`: `os.lstat` is a directory (not a
+  symlink) with `st_uid == C`, and `user@C.service` itself has `st_uid == C`.
+- `pids`: 1 to 4 entries. For each pid:
+  1. `fd = os.pidfd_open(pid)`;
+  2. `/proc/<pid>/status` `Uid:` and `Gid:` lines must show C in all four fields
+     (real, effective, saved, fs). This refuses setuid helpers and anything a
+     user merely shares a session with;
+  3. write the pid to the target's `cgroup.procs`;
+  4. **race check**: if `fd` now polls readable (the process exited), the
+     number may have been recycled between steps 2 and 4. Read the current
+     holder's `status`. If it is not fully C, write it back to the cgroup it
+     came from (read in step 2 from `/proc/<pid>/cgroup`) and log loudly. Either
+     way, return an error for the call.
+- Any refusal → `org.freedesktop.DBus.Error.AccessDenied` (identity checks) or
+  `InvalidArgs` (shape), and nothing is written.
+- Log one line per call: `AttachProcessesToUnit(user@1000.service,
+  /user.slice/podman-123.scope, [123]) uid=1000 -> ok`.
+
+Sandbox: the bridge runs with `protect_system=full`, which makes `/usr /boot
+/efi /etc` read-only and leaves `/sys` alone (`ns.c:41`). The write needs root's
+DAC override, which it has (no `caps=` line in `schema-systemd1.svc`). The
+builder checks this live, not just on paper.
+
+### 3. What changes for each kind of podman process
+
+| Caller | Owns its cgroup? | Before | After |
+|---|---|---|---|
+| login shell `podman exec` / `ps` / `info` | no | runs in session-N.scope, exec EACCES | moved to `podman-<pid>.scope`; exec works |
+| pause process (first podman after boot) | no | session-N.scope (dies with the session) | `podman-pause-*.scope` (lives until schema-user stops) |
+| Quadlet podman under schema-user | yes | no scope request | no scope request (unchanged; must be verified, see Tests) |
+| ad-hoc `podman run` from a shell | no | runs in session-N.scope, container gets no cgroup | **changes:** podman now owns its cgroup. Where the container's cgroup lands, and whether `--memory` now works, must be observed and written up. A detached container's conmon keeps its scope populated, so the sweep leaves it alone |
+
+The process leaves `session-N.scope`, so `sd_pid_get_session()` no longer
+reports a session for it. systemd has the same property, and podman doesn't
+need a session. The login shell itself never moves.
+
+Lifetime: scopes live inside schema-user's tree. When schema-user stops (logout
+without linger) or restarts, logind's `kill_user_cgroup` kills them, including a
+`podman exec -it` shell. This matches systemd, where scopes die with `user@U`.
+
+## Tests
+
+Unit (`tests/test_systemd1_session.py`, `tests/` for the bridge, with a fake
+cgroup root via `SCHEMA_CGROUP_ROOT`, as the logind tests do):
+
+- shim accepts the exact podman payload; refuses: wrong name (`app-x.scope`,
+  `chrome-1.scope`), PIDs ≠ sender, two PIDs, `Slice=foo.slice`, ExecStart
+  present (goes to spawn path), tree not owned by U, populated existing dir.
+- shim on bridge error/timeout: dir removed, `NotSupported` returned.
+- sweep removes `populated 0` dirs only, and only `podman-*.scope`.
+- bridge refuses: root caller; `user@<other>.service`; `/user.slice/../x`,
+  `/foo.scope`, symlinked target; target not owned by C; pid owned by another uid;
+  pid with euid ≠ ruid; more than 4 pids. Race path: pidfd shows exit → holder
+  restored, error returned.
+
+Live (`tests/livetest/podman-exec-scope.sh`, blakbox, after COPR upgrade +
+relogin: the shim is session-bus-activated, so a relogin picks it up):
+
+1. Quadlet up → `podman exec <c> true` from a Konsole shell, rc=0.
+2. During `podman exec <c> sleep 3`, `user@U.service/user.slice/podman-*.scope`
+   exists and holds podman; within 60 s of exit it is gone.
+3. `busctl --user call ... StartTransientUnit chrome-1.scope ...` → NotSupported
+   (Chromium path unchanged). Open Helium/Chromium, load two pages.
+4. As the user, call system-bus `AttachProcessesToUnit` with pid 1 →
+   AccessDenied; with `user@0.service` → AccessDenied; with `/user.slice/../..` →
+   InvalidArgs.
+5. Starting a Quadlet logs **no** scope request in `schema-stu.log`.
+6. `podman run --rm debian:trixie true` and `podman run -d --name t ... sleep 60`
+   from the shell both still work. Record where `t`'s cgroup lands.
+7. `time podman ps` before and after: the added cost is under 50 ms.
+8. Mutation check: with the bridge method stubbed to fail, exec still fails the
+   old way and `podman ps` still works.
+9. Update `podman-quadlet-e2e.sh`: drop the e2e-hog workaround and run the hog
+   with `podman exec` directly from the shell (check 6 stays).
+
+## Where it goes (sizing)
+
+One PR, Python only: shim ~80 lines, bridge ~70, tests ~150, live script, e2e
+edit, `docs/svc-reference.md`/roadmap line. No C, no PID 1 change, no
+re-exec concerns. Deploy = package upgrade + relogin. The bridge is a
+schema-init service, and restarting it is fine; it is not a session daemon.
+
+## Open questions (for Greg / Jonathan)
+
+1. **ssh-only sessions.** The shim is activated on the session bus. Is there a
+   session bus at `/run/user/U/bus` for an ssh login with no desktop, on DBox
+   (linger + ssh)? If not, exec over ssh stays broken. That's acceptable for v1
+   and gets its own follow-up if wanted.
+2. **Race-restore** (bridge step 4) vs simply accepting the residual race the
+   way systemd's pid-number API does. I chose restore-and-error, because the
+   window is tiny but the cost of getting it wrong is a foreign process in a
+   user-writable cgroup.
+3. Should the bridge accept the call from the shim only (e.g. by checking the
+   caller's `/proc/<pid>/exe`)? I say no: the checks bind to the uid, and any
+   process of that uid could already do the move through the shim.
