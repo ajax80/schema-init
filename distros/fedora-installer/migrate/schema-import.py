@@ -1259,6 +1259,15 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             ([], ["podman limits not verified: X-Container Exec= not understood"])
         lines.extend(vl)
         warns.extend(vl_warns)
+    pod = _get_last(sections.get("X-Container") or [], "Pod")
+    if pod:
+        # systemd: BindsTo= stops it with its pod, and the pod's Wants= starts
+        # it again. schema has only start ordering (dep=); Quadlet runs it with
+        # --rm, so a pod restart doesn't bring it back either. Until bind=
+        # exists (docs/superpowers/specs/2026-11-03-bind-key-design.md), say so.
+        warns.append("Pod=%s: stopping or restarting the pod does not restart this "
+                     "container here; start it again with schema-ctl --user start %s"
+                     % (pod, name))
     sb, sb_warns = socket_bind_lines(svc)
     lines.extend(sb)
     warns.extend(sb_warns)
