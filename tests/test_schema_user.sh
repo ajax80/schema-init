@@ -321,4 +321,129 @@ until_ok 'kv | grep -Eqx "service.xl.pid=[1-9][0-9]*"' || { kv | grep "^service.
 kv | grep -qx "service.xl.excise_reason=none" || { kv | grep "^service.xl\."; fail "start xl: reason not cleared"; }
 istop
 
+# no_restart=1 survives schema-ctl stop + start: start used to clear it with the stop's hold
+I=$(mktemp -d "$T/imp.XXXX"); mkdir -m700 "$I/run" "$I/run/schema-user" "$I/run/schema-user/services"
+printf 'name=nr\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/nr.pid; date +%%s%%N >> %s/nr.starts; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\nno_restart=1\n' \
+    "$I" "$I" > "$I/run/schema-user/services/nr.svc"
+chmod 600 "$I/run/schema-user/services/nr.svc"
+SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HOME=$I/cfg ./schema-user > "$I/out" 2>&1 &
+PID=$!
+nk() { XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv 2>/dev/null | sed -n "s/^service\.nr\.$1=//p"; }
+until_ok '[ "$(nk state)" = FUNDAMENTAL ]' || fail "no_restart: nr never up"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user stop nr > /dev/null
+until_ok '[ "$(nk state)" = EXCISED ]' || fail "no_restart: stop nr"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user start nr > /dev/null
+until_ok '[ "$(nk state)" = FUNDAMENTAL ] && [ "$(wc -l < "$I/nr.starts")" = 2 ]' || fail "no_restart: start nr"
+kill -KILL "$(cat "$I/nr.pid")"
+until_ok '[ "$(nk state)" = EXCISED ]' || fail "no_restart: nr not excised after its death"
+sleep 1.5
+[ "$(wc -l < "$I/nr.starts")" = 2 ] || fail "no_restart=1 lost after stop+start: nr respawned"
+istop
+
+# bind= (docs/superpowers/specs/2026-11-03-bind-key-design.md): ctr follows pod.
+# pod's exec_stop ends ctr's main first, as podman pod stop does (the race in review #1)
+I=$(mktemp -d "$T/imp.XXXX"); mkdir -m700 "$I/run" "$I/run/schema-user" "$I/run/schema-user/services"
+B=$I/run/schema-user/services
+bsvc() {  # name, extra lines
+    printf 'name=%s\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/%s.pid; date +%%s%%N >> %s/%s.starts; trap "exit 0" TERM; while :; do sleep 1 & wait; done\nstable_secs=1\n%b' \
+        "$1" "$I" "$1" "$I" "$1" "$2" > "$B/$1.svc"
+}
+# ...and outlasts BIND_GRACE_MS, so only the stop-request paths (not the
+# crash reclassification) can call ctr's exit the pod's doing
+bsvc pod "exec_stop=/bin/sh -c \"kill \$(cat $I/ctr.pid) 2>/dev/null; sleep 2.5\"\n"
+bsvc ctr "bind=pod\nno_restart=1\nexec_stop_post=/bin/sh -c \"date +%s%N >> $I/ctr.post\"\n"
+# case 6: a binder whose exec_stop outlives its pod's restart
+bsvc pod2 ""
+bsvc slow "bind=pod2\nno_restart=1\nexec_stop=/bin/sh -c \"sleep 2; date +%s%N > $I/slow.stopdone\"\n"
+chmod 600 "$B"/*.svc
+SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HOME=$I/cfg ./schema-user > "$I/out" 2>&1 &
+PID=$!
+bk() { XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv 2>/dev/null | sed -n "s/^service\.$1\.$2=//p"; }
+bc() { XDG_RUNTIME_DIR=$I/run ./schema-ctl --user "$@" > /dev/null 2>&1; }
+starts() { wc -l < "$I/$1.starts" 2>/dev/null || echo 0; }
+up() { until_ok '[ "$(bk '"$1"' state)" = FUNDAMENTAL ]' || { cat "$I/out" | tail -20; fail "bind: $1 never FUNDAMENTAL ($2)"; }; }
+up pod start; up ctr start; up pod2 start; up slow start
+[ "$(bk ctr bind)" = pod ] && [ "$(bk ctr bind_held)" = 0 ] || fail "bind: --kv bind/bind_held"
+
+# 1. stop pod -> ctr held (EXCISED, excise_reason=bind), its post ran, no restart counted
+bc stop pod
+until_ok '[ "$(bk ctr excise_reason)" = bind ]' || { bk ctr state; tail -20 "$I/out"; fail "bind 1: ctr not held after stop pod"; }
+[ "$(bk ctr state)" = EXCISED ] && [ "$(bk ctr bind_held)" = 1 ] && [ "$(bk ctr restarts)" = 0 ] || fail "bind 1: state/held/restarts"
+until_ok '[ -s "$I/ctr.post" ]' || fail "bind 1: ctr exec_stop_post skipped"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status ctr | grep -qx "bound to pod (held)" || fail "bind 1: status line"
+until_ok '[ "$(bk pod state)" = EXCISED ]' || fail "bind 1: pod never stopped"
+sleep 1; [ "$(starts ctr)" = 1 ] || fail "bind 1: ctr restarted while pod is stopping or down"
+
+# 2. start pod -> ctr back
+bc start pod
+until_ok '[ "$(starts ctr)" = 2 ] && [ "$(bk ctr state)" = FUNDAMENTAL ]' || { tail -20 "$I/out"; fail "bind 2: ctr not back with pod"; }
+[ "$(bk ctr bind_held)" = 0 ] && [ "$(bk ctr excise_reason)" = none ] || fail "bind 2: held/reason not cleared"
+
+# 3. ctr stopped on purpose: a pod restart leaves it down; start brings it back
+bc stop ctr
+until_ok '[ "$(bk ctr state)" = EXCISED ]' || fail "bind 3: stop ctr"
+p0=$(starts pod); bc restart pod
+until_ok '[ "$(starts pod)" -gt '"$p0"' ] && [ "$(bk pod state)" = FUNDAMENTAL ]' || fail "bind 3: pod restart"
+sleep 1.5
+[ "$(starts ctr)" = 2 ] && [ "$(bk ctr bind_held)" = 0 ] || fail "bind 3: user-stopped ctr came back with pod"
+bc start ctr; until_ok '[ "$(starts ctr)" = 3 ]' || fail "bind 3: start ctr"
+up ctr "3 start"
+
+# 4. crash: ctr dies first, then pod's main -> reclassified, back with pod, no restart counted
+kill -KILL "$(cat "$I/ctr.pid")"; sleep 0.1; kill -KILL "$(cat "$I/pod.pid")"
+until_ok 'grep -q "ctr .*bind-reclassified" "$I/out"' || { grep -E "\] (ctr|pod) " "$I/out" | tail -25; fail "bind 4: ctr's exit not reclassified"; }
+until_ok '[ "$(starts ctr)" = 4 ] && [ "$(bk ctr state)" = FUNDAMENTAL ]' || { tail -20 "$I/out"; fail "bind 4: ctr not back after pod crash"; }
+[ "$(bk ctr restarts)" = 0 ] || fail "bind 4: reclassified exit counted as a restart ($(bk ctr restarts))"
+
+# 5. ctr dies on its own, pod stays up past the 2 s grace -> not held, stays down
+kill -KILL "$(cat "$I/ctr.pid")"
+until_ok '[ "$(bk ctr state)" = EXCISED ]' || fail "bind 5: ctr not excised"
+sleep 2.5
+[ "$(bk ctr excise_reason)" = signal ] && [ "$(bk ctr bind_held)" = 0 ] && [ "$(starts ctr)" = 4 ] || \
+    fail "bind 5: own death treated as bind ($(bk ctr excise_reason), held=$(bk ctr bind_held))"
+
+# 6. pod2 restarts while slow's exec_stop (2 s) runs: slow requeued, spawned only after it
+bc restart pod2
+until_ok '[ "$(starts slow)" = 2 ]' || { tail -20 "$I/out"; fail "bind 6: slow not back after pod2 restart"; }
+[ -s "$I/slow.stopdone" ] && [ "$(tail -1 "$I/slow.starts")" -ge "$(cat "$I/slow.stopdone")" ] || \
+    fail "bind 6: slow respawned before its exec_stop finished"
+
+# 8 (review #1). slow is being stopped on purpose (exec_stop 2 s) when pod2 restarts: stays down
+s0=$(starts slow); bc stop slow; bc restart pod2
+until_ok '[ "$(bk slow state)" = EXCISED ] && [ "$(bk pod2 state)" = FUNDAMENTAL ]' || fail "bind 8: settle"
+sleep 1.5
+[ "$(starts slow)" = "$s0" ] && [ "$(bk slow bind_held)" = 0 ] || fail "bind 8: a user stop became a bind hold"
+bc start slow; until_ok '[ "$(bk slow state)" = FUNDAMENTAL ]' || fail "bind 8: start slow"
+
+# 9 (review #2). pod dies first and respawns, ctr dies after: held against the run that
+# went down, so the new run being up brings it back
+bc start ctr; up ctr "9 pre"
+c0=$(starts ctr)
+kill -KILL "$(cat "$I/pod.pid")"; sleep 0.2; kill -KILL "$(cat "$I/ctr.pid")" 2>/dev/null
+until_ok '[ "$(starts ctr)" -gt '"$c0"' ] && [ "$(bk ctr state)" = FUNDAMENTAL ]' || \
+    { grep -E "\] (ctr|pod) " "$I/out" | tail -12; fail "bind 9: ctr stuck held after pod respawned first"; }
+
+# 10 (review #7). a clean exit is its own: a pod restart right after doesn't revive it
+kill -TERM "$(cat "$I/ctr.pid")"
+until_ok '[ "$(bk ctr state)" = EXCISED ]' || fail "bind 10: ctr clean exit"
+c0=$(starts ctr); p0=$(starts pod); bc restart pod
+until_ok '[ "$(starts pod)" -gt '"$p0"' ] && [ "$(bk pod state)" = FUNDAMENTAL ]' || fail "bind 10: pod restart"
+sleep 1.5
+[ "$(starts ctr)" = "$c0" ] && [ "$(bk ctr excise_reason)" = none ] || fail "bind 10: clean exit reclassified as the pod's"
+
+# 11 (review #4). bind= removed while held -> released and started
+bc start ctr; until_ok '[ "$(bk ctr state)" = FUNDAMENTAL ]' || fail "bind 11: pre"
+bc stop pod; until_ok '[ "$(bk ctr bind_held)" = 1 ] && [ "$(bk pod state)" = EXCISED ]' || fail "bind 11: ctr not held"
+sed -i '/^bind=pod$/d' "$B/ctr.svc"; c0=$(starts ctr); bc daemon-reload
+until_ok '[ "$(starts ctr)" -gt '"$c0"' ]' || { grep -E "\] ctr " "$I/out" | tail -8; fail "bind 11: ctr still held with bind= gone"; }
+printf 'bind=pod\n' >> "$B/ctr.svc"; bc start pod; bc daemon-reload
+until_ok '[ "$(bk pod state)" = FUNDAMENTAL ] && [ "$(bk ctr bind)" = pod ]' || fail "bind 11: restore"
+
+# 7. reload without pod -> ctr held, bind-target-missing
+bc start ctr; up ctr "7 pre"
+rm "$B/pod.svc"; bc daemon-reload
+until_ok '[ "$(bk ctr bind_held)" = 1 ]' || { tail -20 "$I/out"; fail "bind 7: ctr not held with pod gone"; }
+grep -q "ctr .*bind-target-missing" "$I/out" || fail "bind 7: no bind-target-missing"
+istop
+
 echo "test_schema_user: ok"

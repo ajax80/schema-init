@@ -144,6 +144,7 @@ enum {
     EXC_LISTEN_FAIL,
     EXC_FUSE,
     EXC_PROBE,            /* ready, but its binary and deps probed absent */
+    EXC_BIND,             /* held: its bind= service went down (not a failure) */
 };
 
 typedef enum {
@@ -456,6 +457,15 @@ typedef struct {
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     uint8_t          circuit_broken;   /* crash-loop breaker excised it; reset/start clears */
     uint8_t          excise_reason;    /* EXC_*: why the last excise happened; cleared on spawn */
+    uint8_t          no_restart_cfg;   /* the .svc's no_restart=; SVC_NO_RESTART is also a stop's hold */
+    char             bind_name[64];    /* bind=: stop with it, start again with it; also a dep */
+    uint8_t          bind_held;        /* stopped because its bound went down; restarts with it */
+    uint8_t          bind_was_up;      /* this service was up at the last tick's tail (edge detection) */
+    struct timespec  bind_seen_spawn;  /* its spawn_time_mono at that tail: a respawn is a down edge too */
+    struct timespec  bind_held_since;  /* when this binder was held: its bound must spawn after it */
+    struct timespec  bind_died_at;     /* own exit while bound up: reclassified if bound follows soon */
+    int              bind_saved_restarts; /* restart_count before that exit, restored on reclassify */
+    uint8_t          bind_saved_dormant;  /* dormant_count likewise */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
     int              stop_timeout_sec;   /* shutdown SIGTERM->SIGKILL grace; 0 = default */
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */

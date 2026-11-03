@@ -109,6 +109,31 @@ int main(void) {
     memset(&svc, 0, sizeof svc);
     assert(service_load_one(q, &svc) != 0);
 
+    /* bind=: one per .svc, also a dep (not counted twice), survives a drop-in's dep= reset */
+    {
+        char b[300];
+        snprintf(b, sizeof b, "%s/b.svc", root);
+        put(root, "b.svc", "name=b\nexec=/bin/true\ndep=pod\nbind=pod\ndep=net\n");
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(b, &svc) == 0 && !strcmp(svc.bind_name, "pod"));
+        int n = 0, have = 0;
+        for (int k = 0; k < MAX_DEPS && svc.dep_name[k][0]; k++) { n++; have |= !strcmp(svc.dep_name[k], "pod"); }
+        assert(have && n == 2);
+        put(root, "b.svc", "name=b\nexec=/bin/true\nbind=pod\n");
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(b, &svc) == 0 && !strcmp(svc.dep_name[0], "pod"));
+        put(root, "b.svc", "name=b\nexec=/bin/true\nbind=pod\nbind=other\n");
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(b, &svc) != 0);
+        /* a held timer would come back with a stale timer_next: refused */
+        put(root, "b.svc", "name=b\nexec=/bin/true\non_boot_sec=5\nbind=pod\n");
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(b, &svc) != 0);
+        put(root, "b.svc", "name=b\nexec=/bin/true\nno_restart=1\n");
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(b, &svc) == 0 && svc.no_restart_cfg == 1);
+    }
+
     /* parse: the keys load, and a service without them has nothing to verify */
     char p[300];
     snprintf(p, sizeof p, "%s/v.svc", root);

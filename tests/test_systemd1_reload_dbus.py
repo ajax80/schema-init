@@ -100,5 +100,8 @@ v.update_state({"pid": 0, "state": "EXCISED", "restarts": 0, "circuit_broken": T
 check("circuit_broken without excise_reason (older PID 1): start-limit-hit", v.result == "start-limit-hit")
 v.update_state({"pid": 0, "state": "PERFECT", "restarts": 0, "circuit_broken": False, "excise_reason": "exit-code"})
 check("a reason outside EXCISED is not a failure: Result=success", v.result == "success")
+v.update_state({"pid": 0, "state": "EXCISED", "restarts": 0, "circuit_broken": False, "excise_reason": "bind"})
+check("bind-held: inactive/dead, Result=success (systemd BindsTo= stop)",
+      v.active_state == "inactive" and v.sub_state == "dead" and v.result == "success")
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

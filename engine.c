@@ -79,6 +79,8 @@ static group_t     *groups = groups_a;
 group_t     *shadow_groups = groups_b;
 static int          grp_count = 0;
 #define EVICT_GRACE_SECS  3
+/* a binder's own exit this close before its bound goes down was the bound's doing */
+#define BIND_GRACE_MS     2000
 #define EVICT_KILL_WAIT_SECS 5
 #define EVICT_STUCK_RECHECK_SECS 60
 
@@ -526,6 +528,7 @@ const char *excise_reason_name(uint8_t r) {
         [EXC_SIGNAL] = "signal", [EXC_CORE_DUMP] = "core-dump",
         [EXC_READINESS_LOST] = "readiness-lost", [EXC_NO_CGROUP] = "no-cgroup",
         [EXC_LISTEN_FAIL] = "listen-fail", [EXC_FUSE] = "fuse", [EXC_PROBE] = "probe-failed",
+        [EXC_BIND] = "bind",
     };
     return r < sizeof n / sizeof n[0] ? n[r] : "unknown";
 }
@@ -557,10 +560,18 @@ static int held_now(const service_t *svc) {
     return svc_retry_held(svc, &now);
 }
 
+/* start/restart/reset lift a stop's hold, not the .svc's own no_restart=1:
+ * clearing the shared flag made a no_restart service auto-restart from then on */
+static void restart_policy_restore(service_t *svc) {
+    if (svc->no_restart_cfg) svc->flags |= SVC_NO_RESTART;
+    else svc->flags &= ~SVC_NO_RESTART;
+}
+
 static void ctl_rearm(service_t *svc, int start) {
     svc->card_next = 0;
     breaker_clear(svc);
     svc->excise_reason = EXC_NONE;
+    svc->bind_held = 0;
     svc->restart_at.tv_sec = svc->restart_at.tv_nsec = 0;
     if (start) svc->standby_up |= service_is_standby(svc, services, svc_count);
     if (svc->fallback_live) {
@@ -630,9 +641,164 @@ static int stop_cmds_begin(service_t *svc, int phase) {
     return 1;
 }
 
+/* ── bind= (docs/superpowers/specs/2026-11-03-bind-key-design.md) ──────
+ * The binder follows its bound: stopped when the bound goes down (held),
+ * started again when it comes back, unless it was stopped on purpose or
+ * failed on its own. bind=X is also a dep=X, so dep_idx resolves it. */
+
+static int svc_is_up(const service_t *s) {
+    if (s->inst.state == STATE_FUNDAMENTAL || s->inst.state == STATE_SETTLED ||
+        s->inst.state == STATE_PERFECT) return 1;
+    /* a socket service PID 1 listens for stays up across its idle exit and
+     * the on-demand start after it: its binders mustn't churn per connection */
+    return s->listen_open && (s->inst.state == STATE_NEW_PROCESS || s->inst.state == STATE_FULL_TRUST);
+}
+
+/* The bound's index; -1 when it isn't in the config, or is a timer/oneshot
+ * (their PERFECT means "ran", not "up") */
+static int bind_bound(const service_t *s) {
+    if (!s->bind_name[0]) return -1;
+    for (int k = 0; k < MAX_DEPS && s->dep_name[k][0]; k++) {
+        if (strcmp(s->dep_name[k], s->bind_name) != 0) continue;
+        int b = s->dep_idx[k];
+        if (b < 0 || b >= svc_count || (services[b].flags & (SVC_TIMER | SVC_ONESHOT))) return -1;
+        return b;
+    }
+    return -1;
+}
+
+static void stop_main(service_t *svc);
+
+static int ts_after(struct timespec a, struct timespec b) {
+    return a.tv_sec > b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec > b.tv_nsec);
+}
+
+/* The hold remembers the bound's run that was last seen up: "back" is a newer
+ * run up. Not the time of the hold, which can come after the bound already
+ * respawned (a down edge noticed late, a binder reaped after) */
+static void bind_hold(service_t *b, const char *ev) {
+    if (!b->bind_held) {
+        int t = bind_bound(b);
+        b->bind_held_since = t >= 0 ? services[t].bind_seen_spawn : (struct timespec){0, 0};
+    }
+    b->bind_held = 1;
+    b->bind_died_at.tv_sec = b->bind_died_at.tv_nsec = 0;
+    service_log(b, ev);
+}
+
+/* Stop a running binder the way schema-ctl stop would, but held: its exit is
+ * the bound's doing (reap() takes it to EXCISED/EXC_BIND, no recovery) */
+static void bind_stop(service_t *b, const char *ev) {
+    if (b->bind_held || b->child_pid <= 0) return;
+    /* being stopped on purpose already: its bound's return must not start it */
+    if (b->ctl_killed && (b->flags & SVC_NO_RESTART)) return;
+    bind_hold(b, ev);
+    b->restart_at.tv_sec = b->restart_at.tv_nsec = 0;
+    stop_main(b);
+}
+
+/* A stop was asked of SVC: its running binders go first, held, so their exit
+ * during its exec_stop (podman pod stop ends the containers) isn't theirs */
+static void bind_stop_binders(const service_t *svc) {
+    int idx = (int)(svc - services);
+    if (idx < 0 || idx >= svc_count) return;
+    for (int j = 0; j < svc_count; j++)
+        if (j != idx && bind_bound(&services[j]) == idx)
+            bind_stop(&services[j], "bind-stop");
+}
+
+static void bind_start(service_t *b) {
+    b->bind_held = 0;
+    b->excise_reason = EXC_NONE;
+    b->inst.state = STATE_NEW_PROCESS;
+    service_log(b, "bind-start");
+}
+
+/* Once per tick pass, before the services tick: act on each bound's edge
+ * since the last pass's tail (inst.prev_state isn't maintained by the
+ * engine, so the edge is our own bind_was_up snapshot) */
+static void bind_tick(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    for (int j = 0; j < svc_count; j++) {
+        service_t *b = &services[j];
+        if (!b->bind_name[0]) {
+            /* bind= removed on a reload while held: nothing to wait for now */
+            if (b->bind_held) {
+                b->bind_held = 0;
+                if (b->inst.state == STATE_EXCISED && b->excise_reason == EXC_BIND && b->child_pid <= 0)
+                    bind_start(b);
+            }
+            continue;
+        }
+        int t = bind_bound(b);
+        if (t < 0) {
+            /* no bound to follow: never runs without it */
+            if (!b->bind_held) {
+                if (b->child_pid > 0) bind_stop(b, "bind-target-missing");
+                else {
+                    bind_hold(b, "bind-target-missing");
+                    if (b->inst.state != STATE_EXCISED) {
+                        b->inst.state = STATE_EXCISED;
+                        b->excise_reason = EXC_BIND;
+                    }
+                }
+            }
+            continue;
+        }
+        service_t *bd = &services[t];
+        int up = svc_is_up(bd);
+        /* gone since the last pass, or back already with a new process */
+        int went_down = bd->bind_was_up &&
+            (!up || (!bd->listen_open && (bd->spawn_time_mono.tv_sec != bd->bind_seen_spawn.tv_sec ||
+                                          bd->spawn_time_mono.tv_nsec != bd->bind_seen_spawn.tv_nsec)));
+        if (went_down) {
+            if (b->child_pid > 0) {
+                bind_stop(b, "bind-stop");
+            } else if (!b->bind_held && !b->circuit_broken &&
+                       (b->bind_died_at.tv_sec || b->bind_died_at.tv_nsec)) {
+                int64_t ago = (int64_t)(now.tv_sec - b->bind_died_at.tv_sec) * 1000 +
+                              (now.tv_nsec - b->bind_died_at.tv_nsec) / 1000000;
+                if (ago >= 0 && ago < BIND_GRACE_MS) {
+                    /* it went first in the bound's own going: not its failure */
+                    b->restart_count = b->bind_saved_restarts;
+                    b->dormant_count = b->bind_saved_dormant;
+                    b->restart_at.tv_sec = b->restart_at.tv_nsec = 0;
+                    b->inst.state = STATE_EXCISED;
+                    b->excise_reason = EXC_BIND;
+                    bind_hold(b, "bind-reclassified");
+                }
+            }
+        }
+        /* back: up, not stopping, and a run of it newer than our hold. Up
+         * alone isn't enough -- a pod asked to stop is still FUNDAMENTAL
+         * while its exec_stop ends our process */
+        int back = up && bd->stop_pid <= 0 && !bd->ctl_killed &&
+                   ts_after(bd->spawn_time_mono, b->bind_held_since);
+        /* and not before its own old process and stop runner are gone */
+        if (b->bind_held && back && b->child_pid <= 0 && b->stop_pid <= 0)
+            bind_start(b);
+        /* strict start: dep= lets a non-critical excised dep through; bind= never */
+        if (!b->bind_held && b->child_pid <= 0 && b->inst.state == STATE_NEW_PROCESS &&
+            (bd->inst.state == STATE_EXCISED || bd->inst.state == STATE_DORMANT)) {
+            b->inst.state = STATE_EXCISED;
+            b->excise_reason = EXC_BIND;
+            bind_hold(b, "bind-wait");
+        }
+    }
+}
+
+static void bind_snapshot_up(void) {
+    for (int j = 0; j < svc_count; j++) {
+        services[j].bind_was_up = (uint8_t)svc_is_up(&services[j]);
+        if (services[j].bind_was_up) services[j].bind_seen_spawn = services[j].spawn_time_mono;
+    }
+}
+
 /* SIGTERM the main process, after its exec_stop commands when it has any */
 static void stop_main(service_t *svc) {
     if (svc->child_pid <= 0) return;
+    bind_stop_binders(svc);
     if (svc->stop_pid > 0 && svc->stop_phase == 1) return;
     if (!stop_cmds_begin(svc, 1)) kill(svc->child_pid, SIGTERM);
 }
@@ -825,6 +991,32 @@ static void reap(void) {
             services[i].last_pid   = pid;
             services[i].child_pid  = 0;
             note_exit(&services[i], status);
+
+            /* bind=: an exit while its bound is down or stopping is the bound's
+             * doing; one while the bound is up is its own, remembered in case
+             * the bound follows within BIND_GRACE_MS (crash order varies) */
+            if (services[i].bind_name[0] && !services[i].bind_held && !services[i].ctl_killed) {
+                int t = bind_bound(&services[i]);
+                if (t < 0 || !svc_is_up(&services[t]) || services[t].ctl_killed ||
+                    (services[t].stop_pid > 0 && (services[t].stop_phase & 3) == 1)) {
+                    bind_hold(&services[i], "bind-stop");
+                } else if (services[i].term_signal || (services[i].has_exited && services[i].exit_status != 0)) {
+                    /* a clean exit was its own to make; only a failure can be the bound's */
+                    clock_gettime(CLOCK_MONOTONIC, &services[i].bind_died_at);
+                    services[i].bind_saved_restarts = services[i].restart_count;
+                    services[i].bind_saved_dormant = services[i].dormant_count;
+                }
+            }
+            if (services[i].bind_held) {
+                /* not a death: no restart budget, failsafe, recovery or breaker */
+                services[i].inst.state = STATE_EXCISED;
+                services[i].excise_reason = EXC_BIND;
+                services[i].main_wait = 0;
+                svc_cgroup_kill_tree(&services[i]);
+                service_log(&services[i], "bind-stopped");
+                stop_cmds_begin(&services[i], 2);
+                break;
+            }
 
             /* main_pid_notify: the launcher exiting is a handover, not a death */
             /* only a launcher: a daemon that sent READY=1 itself and then exits
@@ -1831,11 +2023,12 @@ static void ctl_cmd(int fd, char *line) {
         if (strcmp(opt, "--json") == 0) {
             ctl_writef(fd, "{\n  \"services_count\": %d,\n  \"groups_count\": %d,\n  \"services\": [\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++) {
-                ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d,\n      \"circuit_broken\": %s,\n      \"excise_reason\": \"%s\"\n    }%s\n",
+                ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d,\n      \"circuit_broken\": %s,\n      \"excise_reason\": \"%s\",\n      \"bind\": \"%s\",\n      \"bind_held\": %s\n    }%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count,
                     services[i].circuit_broken ? "true" : "false",
                     excise_reason_name(services[i].excise_reason),
+                    services[i].bind_name, services[i].bind_held ? "true" : "false",
                     (i < svc_count - 1) ? "," : "");
             }
             ctl_writef(fd, "  ]\n}\n");
@@ -1849,6 +2042,10 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.circuit_broken=%d\n", services[i].name, services[i].circuit_broken);
                 ctl_writef(fd, "service.%s.excise_reason=%s\n", services[i].name,
                     excise_reason_name(services[i].excise_reason));
+                if (services[i].bind_name[0]) {
+                    ctl_writef(fd, "service.%s.bind=%s\n", services[i].name, services[i].bind_name);
+                    ctl_writef(fd, "service.%s.bind_held=%d\n", services[i].name, services[i].bind_held);
+                }
                 if (svc_held_on_socket(&services[i]))
                     ctl_writef(fd, "service.%s.waiting=%s\n", services[i].name, services[i].wait_socket);
             }
@@ -1866,6 +2063,9 @@ static void ctl_cmd(int fd, char *line) {
                     ctl_writef(fd, "circuit_broken=1: crash-loop breaker excised it; schema-ctl reset %s\n", s->name);
                 else if (s->excise_reason)
                     ctl_writef(fd, "excise_reason=%s\n", excise_reason_name(s->excise_reason));
+                if (s->bind_name[0])
+                    ctl_writef(fd, "bound to %s%s\n", s->bind_name,
+                               s->bind_held ? " (held)" : "");
                 ctl_writef(fd, "hardening default: %s\n", service_hardening_default() ? "ON" : "off");
                 ctl_writef(fd, "  %-15s %-5s %s\n", "no_new_privs",
                     (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", hard_source(s, HARD_NNP));
@@ -1932,7 +2132,7 @@ static void ctl_cmd(int fd, char *line) {
             if (strcmp(services[i].name, name) != 0) continue;
             if (services[i].inst.state == STATE_EXCISED ||
                 services[i].inst.state == STATE_PERFECT) {
-                services[i].flags       &= ~SVC_NO_RESTART;
+                restart_policy_restore(&services[i]);
                 services[i].listen_hold  = 0;
                 services[i].inst.state   = STATE_NEW_PROCESS;
                 services[i].restart_count = 0;
@@ -1956,6 +2156,9 @@ static void ctl_cmd(int fd, char *line) {
             if (strcmp(services[i].name, name) != 0) continue;
             services[i].flags |= SVC_NO_RESTART;
             services[i].restart_at.tv_sec = services[i].restart_at.tv_nsec = 0;
+            /* stopped on purpose: its bound's return must not start it */
+            services[i].bind_held = 0;
+            services[i].bind_died_at.tv_sec = services[i].bind_died_at.tv_nsec = 0;
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
                 stop_main(&services[i]);
@@ -1977,7 +2180,7 @@ static void ctl_cmd(int fd, char *line) {
         const char *name = line + 8;
         for (i = 0; i < svc_count; i++) {
             if (strcmp(services[i].name, name) != 0) continue;
-            services[i].flags &= ~SVC_NO_RESTART;
+            restart_policy_restore(&services[i]);
             services[i].listen_hold = 0;
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
@@ -2003,7 +2206,7 @@ static void ctl_cmd(int fd, char *line) {
                 services[i].restart_count = 0;
                 services[i].dormant_count = 0;
                 ctl_rearm(&services[i], 0);
-                services[i].flags &= ~SVC_NO_RESTART;
+                restart_policy_restore(&services[i]);
                 if (services[i].inst.state == STATE_EXCISED ||
                     services[i].inst.state == STATE_DORMANT ||
                     services[i].inst.state == STATE_PERFECT) {
@@ -2017,7 +2220,7 @@ static void ctl_cmd(int fd, char *line) {
                 services[i].restart_count = 0;
                 services[i].dormant_count = 0;
                 ctl_rearm(&services[i], 0);
-                services[i].flags &= ~SVC_NO_RESTART;
+                restart_policy_restore(&services[i]);
                 if (services[i].inst.state == STATE_EXCISED ||
                     services[i].inst.state == STATE_DORMANT ||
                     services[i].inst.state == STATE_PERFECT) {
@@ -3070,6 +3273,7 @@ void engine_run(void) {
         for (i = 0; i < svc_count; i++)
             before[i] = services[i].inst.state;
         timer_catchup_tick();
+        bind_tick();
         for (i = 0; i < svc_count; i++)
             tick_service(&services[i], grp_states, grp_count);
         {
@@ -3086,6 +3290,7 @@ void engine_run(void) {
         shm_update();
         eviction_tick();
         service_watchdog_tick();
+        bind_snapshot_up();
         engine_hooks.loop_tail();
     }
 }

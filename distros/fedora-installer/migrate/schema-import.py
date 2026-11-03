@@ -945,7 +945,28 @@ def dep_lines(name, sections, known):
         d = d if d in known else raw.get(d, d)
         if d not in self_names and _UNIT_ALIAS.get(d, d) not in self_names and d in known and d not in deps:
             deps.append(d)
-    return _cap_deps(deps)
+    lines, notes = _cap_deps(deps)
+    # BindsTo= also stops with its target and starts again with it: bind= (one;
+    # its dep= above stays, PID 1 counts it once). User mode only, so system
+    # re-imports don't change; a Quadlet Pod= container is the case.
+    if _USER:
+        binds = []
+        for u in tokens(unit, "BindsTo"):
+            if not u.endswith(".service") or "@" in u:
+                continue
+            base = u.rsplit(".", 1)[0]
+            d = _UNIT_ALIAS.get(base, base)
+            d = d if d in known else raw.get(d, d)   # as the deps above resolve it
+            if d in known and d not in self_names and _UNIT_ALIAS.get(d, d) not in self_names:
+                binds.append(d)
+        if binds:
+            if "dep=%s" % binds[0] in lines:
+                lines.append("bind=%s" % binds[0])
+            else:
+                notes.append("BindsTo=%s not bound: its dep= was dropped (limit 8)" % binds[0])
+            if len(binds) > 1:
+                notes.append("BindsTo=%s: only the first is bind=, the rest dep= only" % " ".join(binds[1:]))
+    return lines, notes
 
 
 def _cap_deps(deps):
@@ -1259,15 +1280,6 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             ([], ["podman limits not verified: X-Container Exec= not understood"])
         lines.extend(vl)
         warns.extend(vl_warns)
-    pod = _get_last(sections.get("X-Container") or [], "Pod")
-    if pod:
-        # systemd: BindsTo= stops it with its pod, and the pod's Wants= starts
-        # it again. schema has only start ordering (dep=); Quadlet runs it with
-        # --rm, so a pod restart doesn't bring it back either. Until bind=
-        # exists (docs/superpowers/specs/2026-11-03-bind-key-design.md), say so.
-        warns.append("Pod=%s: stopping or restarting the pod does not restart this "
-                     "container here; start it again with schema-ctl --user start %s"
-                     % (pod, name))
     sb, sb_warns = socket_bind_lines(svc)
     lines.extend(sb)
     warns.extend(sb_warns)
@@ -1277,6 +1289,13 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)
+    pod = _get_last(sections.get("X-Container") or [], "Pod")
+    if pod and not any(l.startswith("bind=") for l in lines):
+        # no bind= written (system mode, or its pod unit not imported): a pod
+        # restart leaves it down, so say so
+        warns.append("Pod=%s: stopping or restarting the pod does not restart this "
+                     "container here; start it again with schema-ctl --user start %s"
+                     % (pod, name))
 
     sock_notes = []
     if sock is not None:

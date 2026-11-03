@@ -81,6 +81,7 @@ EXCISE_RESULT = {
     'listen-fail': 'resources',
     'fuse': 'resources',
     'probe-failed': 'resources',
+    'bind': 'success',
 }
 
 
@@ -248,7 +249,8 @@ class Systemd1Unit(dbus.service.Object):
             self.active_state = 'activating'
             self.sub_state = 'auto-restart'
         elif self.raw_state == 'EXCISED':
-            if self.name in self.manager.recently_stopped:
+            # held by bind=: stopped with its bound, as systemd's BindsTo= -- not failed
+            if self.name in self.manager.recently_stopped or status_dict.get('excise_reason') == 'bind':
                 self.active_state = 'inactive'
                 self.sub_state = 'dead'
             else:
