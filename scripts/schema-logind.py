@@ -834,6 +834,16 @@ class SessionRecord:
         return live == stored   # same incarnation; a mismatch means the pid was recycled
 
 
+def _uptime():
+    try:
+        if os.environ.get('SCHEMA_LOGIND_UPTIME'):     # tests
+            return float(os.environ['SCHEMA_LOGIND_UPTIME'])
+        with open('/proc/uptime') as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
 def scan_session_files():
     """All /run/systemd/sessions/<id> as {sid: SessionRecord}.
 
@@ -1542,6 +1552,31 @@ class SessionRegistry:
     def get(self, sid):
         return self.sessions.get(str(sid))
 
+    # A lookup that misses re-reads the directory before answering when it
+    # holds an entry the registry doesn't: a compositor asks for its session a
+    # few ms after the login script's rename, inside the 250 ms poll, and the
+    # last poll's answer was NoSuchSession. Only then: polkit asks for pids in
+    # no session at all, and those cost one listdir. The seat and other reads
+    # are covered by the login script asking once (GetSession) before it
+    # starts the desktop -- see schema-plasma-autologin.sh.
+    def _resolve(self, lookup, key):
+        obj = lookup(key)
+        if obj is None:
+            try:
+                names = os.listdir(SESSIONS_DIR)
+            except OSError:
+                names = []
+            if any(n.isalnum() and n not in self.sessions for n in names):
+                self.sync()
+                obj = lookup(key)
+        return obj
+
+    def find(self, sid):
+        return self._resolve(self.get, str(sid))
+
+    def find_pid(self, pid):
+        return self._resolve(self.session_for_pid, pid)
+
     def primary(self):
         """The session an unqualified request means: the active one, else any.
 
@@ -2163,7 +2198,7 @@ class Login1Manager(dbus.service.Object):
         return self.registry.primary() if self.registry else None
 
     def _lookup(self, session_id):
-        obj = self.registry.get(str(session_id)) if self.registry else None
+        obj = self.registry.find(str(session_id)) if self.registry else None
         if obj is None:
             raise dbus.exceptions.DBusException(
                 "No session '%s'" % session_id,
@@ -2532,7 +2567,7 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):
-        obj = self.registry.session_for_pid(int(pid)) if self.registry else None
+        obj = self.registry.find_pid(int(pid)) if self.registry else None
         if obj is None:
             raise dbus.exceptions.DBusException(
                 "PID %s is not part of any session" % pid,
@@ -2541,7 +2576,7 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetUserByPID(self, pid):
-        obj = self.registry.session_for_pid(int(pid)) if self.registry else None
+        obj = self.registry.find_pid(int(pid)) if self.registry else None
         if obj is None:
             raise dbus.exceptions.DBusException(
                 "PID %s is not part of any session" % pid,
@@ -3250,7 +3285,11 @@ def main():
     registry.manager = manager
 
     for obj in registry.sessions.values():
-        if handoff is None and obj.record.active and obj.vt_fd is None:
+        # Not the placeholder at boot: it stands for "nobody registered yet",
+        # which is every cold boot. Later it can be a legacy login running as
+        # #31 under a restarted logind, which is what this warning is for.
+        if handoff is None and obj.record.active and obj.vt_fd is None and \
+                not (obj.record.synthesised and _uptime() < 120):
             # Cold start under a session that is already running: its compositor
             # took control of a bridge that no longer exists, so we hold none of
             # its fds and _setup_vt_mediation() is never called for it. Before
