@@ -870,9 +870,8 @@ check("pod's PIDFile=%t/%N.pid expanded",
       os.path.exists(os.path.join(out, "web-pod.svc"))
       and "pid_file=%s/web-pod.pid\n" % t.run in svc(out, "web-pod")
       and "--infra-conmon-pidfile=%s/web-pod.pid" % t.run in svc(out, "web-pod"))
-check("Pod= container warns that a pod restart won't restart it",
-      "WARN: Pod=web.pod: stopping or restarting the pod does not restart this container here; "
-      "start it again with schema-ctl --user start web" in svc(out, "web"))
+check("Pod= container binds to its pod (BindsTo= -> bind=), no interim WARN",
+      "bind=web-pod\n" in svc(out, "web") and "does not restart this container" not in svc(out, "web"))
 check("container waits on its pod, limits verified",
       "dep=web-pod\n" in svc(out, "web") and "verify_memory_max=67108864\n" in svc(out, "web"))
 t.done()

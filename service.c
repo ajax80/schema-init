@@ -1382,6 +1382,7 @@ int service_spawn(service_t *svc) {
     svc->ready_watched = 0;
     svc->ctl_killed = 0;
     svc->excise_reason = EXC_NONE;   /* the reason belongs to the run that was excised */
+    svc->bind_died_at.tv_sec = svc->bind_died_at.tv_nsec = 0;
     svc->ready_stale_ino = 0;
     if (svc->ready_path[0]) {
         struct stat st;
@@ -1748,7 +1749,7 @@ static int verify_one(const char *dir, const char *file, const char *want, char 
 }
 
 #define VERIFY_MISS_MAX 4
-typedef struct { int n; char e[VERIFY_MISS_MAX][112]; } verify_miss_t;
+typedef struct { int n; char e[VERIFY_MISS_MAX][144]; } verify_miss_t;
 
 /* Every populated cgroup's first mismatch is kept: which one should hold the
  * limits isn't knowable here (podman's split puts conmon in runtime/, never
@@ -2209,6 +2210,8 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     } else if (strcmp(key, "dep") == 0) {
         memset(svc->dep_name, 0, sizeof svc->dep_name);
         pc->dep_slot = 0;
+    } else if (strcmp(key, "bind") == 0) {
+        svc->bind_name[0] = '\0';
     } else if (strcmp(key, "landlock_ro") == 0 || strcmp(key, "landlock_rw") == 0) {
         landlock_clear(svc, key[10] == 'w');
     } else if (strcmp(key, "rw_path") == 0) {
@@ -2437,7 +2440,21 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         snprintf(svc->socket_group, sizeof svc->socket_group, "%s", val);
     } else if (strcmp(line, "expand_args") == 0) {
         svc->expand_args = atoi(val) != 0;
+    } else if (strcmp(line, "bind") == 0) {
+        while (*val == ' ' || *val == '\t') val++;
+        if (svc->bind_name[0]) {
+            fprintf(stderr, "[schema-init] %s: more than one bind= line\n", svc->name[0] ? svc->name : path);
+            return -1;
+        }
+        if (!*val || strlen(val) >= sizeof svc->bind_name) {
+            fprintf(stderr, "[schema-init] %s: bad bind=%s\n", svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        snprintf(svc->bind_name, sizeof svc->bind_name, "%s", val);
     } else if (strcmp(line, "dep") == 0) {
+        /* bind= adds its dep at finalize; a dep= naming it too isn't a second slot */
+        for (int k = 0; k < pc->dep_slot; k++)
+            if (!strcmp(svc->dep_name[k], val)) return 0;
         if (pc->dep_slot >= MAX_DEPS) {
             fprintf(stderr, "[schema-init] %s: more than %d dep= lines\n",
                     svc->name[0] ? svc->name : path, MAX_DEPS);
@@ -2680,6 +2697,22 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
     if (hardening_finalize(svc) != 0) return -1;
+    /* drop-ins applied: what start/restart/reset put back after a stop's hold */
+    svc->no_restart_cfg = (svc->flags & SVC_NO_RESTART) != 0;
+    /* bind=X is also dep=X (start order, shutdown order, cycles): after the
+     * drop-ins, so an empty dep= in one can't drop it */
+    if (svc->bind_name[0]) {
+        int k, have = 0;
+        for (k = 0; k < pc->dep_slot; k++) have |= !strcmp(svc->dep_name[k], svc->bind_name);
+        if (!have) {
+            if (pc->dep_slot >= MAX_DEPS) {
+                fprintf(stderr, "[schema-init] %s: bind=%s needs a dep slot, %d dep= lines already\n",
+                        svc->name, svc->bind_name, MAX_DEPS);
+                return -1;
+            }
+            snprintf(svc->dep_name[pc->dep_slot++], sizeof svc->dep_name[0], "%s", svc->bind_name);
+        }
+    }
     if (service_verifies_limits(svc) && !svc->notify) {
         fprintf(stderr, "[schema-init] %s: verify_*_max needs notify=1 (checked on READY=1) — not loaded\n", svc->name);
         return -1;

@@ -31,6 +31,14 @@ typedef struct {
     X(U8,   dormant_count)       \
     X(U8,   circuit_broken)      \
     X(U8,   excise_reason)       \
+    X(U8,   bind_held)           \
+    X(U8,   bind_requeue)        \
+    X(U8,   bind_was_up)         \
+    X(TS,   bind_seen_spawn)     \
+    X(TS,   bind_held_since)     \
+    X(TS,   bind_died_at)        \
+    X(INT,  bind_saved_restarts) \
+    X(U8,   bind_saved_dormant)  \
     X(TS,   dormant_until)       \
     X(TS,   restart_at)          \
     X(TIME, last_start)          \
