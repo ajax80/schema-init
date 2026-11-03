@@ -502,8 +502,19 @@ static int ns_hides(service_t *svc, uint8_t bit, uint8_t *knob, const char *knob
                     const char *const *dirs, int n) {
     const char *what = NULL;
     if (!*knob) return 0;
+    char wd[260] = "";
+    if (svc->working_dir[0]) {
+        const char *d = svc->working_dir + (svc->working_dir[0] == '-');
+        int root = !svc->run_user[0] || !strcmp(svc->run_user, "root");
+        snprintf(wd, sizeof wd, "%s/", strcmp(d, "~") ? d : root ? "/root" : "/home");
+    }
     if (path_under(svc->exec, dirs, n)) what = "exec";
     else if (path_under(svc->ready_path, dirs, n)) what = "ready_path";
+    else if (wd[0] && path_under(wd, dirs, n)) {
+        /* explicit knob stays: an exec_pre may create the dir inside the private mount */
+        if (!(svc->hard_default & bit)) return 0;
+        what = "working_dir";
+    }
     if (!what) return 0;
     if (svc->hard_default & bit) {
         *knob = 0;
@@ -811,22 +822,38 @@ static int svc_run_cmds(const service_t *svc, char *const *cmds, int n,
     return 0;
 }
 
-/* Called twice on spawn: before the root '+' exec_pre lines, then again after
- * hardening + the uid drop, because a private /tmp or the user's permissions
- * change what the path resolves to. */
-static void svc_chdir(const service_t *svc) {
+enum { WD_ROOT_PRE, WD_MAIN, WD_STOP };
+
+/* WD_ROOT_PRE runs as root before hardening, for the '+' exec_pre lines only,
+ * and is never fatal; WD_MAIN after hardening + the uid drop is the real one.
+ * Any failure that doesn't abort lands in "/" — a cwd left over from the root
+ * pass would reach into a dir protect_home/private_tmp just hid. WD_STOP never
+ * aborts: exec_stop_post must still run. */
+static void svc_chdir(const service_t *svc, int pass) {
     if (!svc->working_dir[0]) return;
+    if (pass == WD_ROOT_PRE) {
+        int plus = 0;
+        for (int i = 0; i < svc->exec_pre_count; i++)
+            plus |= memchr(svc->exec_pre[i], '+', strspn(svc->exec_pre[i], "+-")) != NULL;
+        if (!plus) return;
+    }
     const char *d = svc->working_dir;
     int ignore = *d == '-';
     d += ignore;
     if (strcmp(d, "~") == 0) {
-        struct passwd *pw = getpwuid(svc->run_uid);
+        /* by name: run_uid is still 0 in the parent when user= was created after load */
+        struct passwd *pw = svc->run_user[0] ? getpwnam(svc->run_user) : getpwuid(svc->run_uid);
         d = pw && pw->pw_dir && pw->pw_dir[0] ? pw->pw_dir : "/";
     }
-    if (chdir(d) != 0 && !ignore) {
-        dprintf(2, "[schema-init] WORKING DIR FAILED for %s: %s: %d\n", svc->name, d, errno);
+    if (chdir(d) == 0) return;
+    int e = errno;
+    if (pass == WD_MAIN && !ignore) {
+        dprintf(2, "[schema-init] WORKING DIR FAILED for %s: %s: %d\n", svc->name, d, e);
         _exit(126);
     }
+    if (pass == WD_STOP && !ignore)
+        dprintf(2, "[schema-init] %s: stop commands: working_dir %s: %d, running in /\n", svc->name, d, e);
+    if (chdir("/") != 0) _exit(126);
 }
 
 static void svc_run_pre(const service_t *svc, int privileged) {
@@ -1318,7 +1345,7 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
             _exit(126);
         }
     }
-    svc_chdir(svc);
+    svc_chdir(svc, WD_STOP);
     /* a failing exec_stop skips the rest of its own list, never exec_stop_post */
     int bad = (phase & 1) && svc_run_cmds(svc, svc->exec_stop, svc->exec_stop_count, "exec_stop", -1) < 0;
     if ((phase & 2) && svc_run_cmds(svc, svc->exec_stop_post, svc->exec_stop_post_count, "exec_stop_post", -1) < 0)
@@ -1481,7 +1508,7 @@ int service_spawn(service_t *svc) {
         }
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
-            svc_chdir(svc);
+            svc_chdir(svc, WD_ROOT_PRE);
             svc_run_pre(svc, 1);
         }
         if (service_apply_hardening(svc) != 0)
@@ -1555,7 +1582,7 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
-        svc_chdir(svc);
+        svc_chdir(svc, WD_MAIN);
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
             svc_run_pre(svc, 0);
@@ -2133,6 +2160,8 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
         svc->env_count = 0;
     } else if (strcmp(key, "exec_pre") == 0) {
         svc_free_cmds(svc->exec_pre, &svc->exec_pre_count);
+    } else if (strcmp(key, "working_dir") == 0) {
+        svc->working_dir[0] = '\0';
     } else if (strcmp(key, "exec_stop") == 0) {
         svc_free_cmds(svc->exec_stop, &svc->exec_stop_count);
     } else if (strcmp(key, "exec_stop_post") == 0) {

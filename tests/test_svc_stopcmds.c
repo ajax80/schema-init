@@ -124,11 +124,15 @@ int main(void) {
     char want[300];
     snprintf(want, sizeof want, "%s\n", dir);
     assert(strcmp(buf, want) == 0);
-    snprintf(body, sizeof body, "name=s\nexec=/bin/true\nworking_dir=%s/nope\nexec_stop=/bin/true\n", dir);
+    /* a missing dir never blocks stop commands: they run in / */
+    snprintf(body, sizeof body, "name=s\nexec=/bin/true\nworking_dir=%s/nope\n"
+             "exec_stop_post=/bin/sh -c \"pwd > %s\"\n", dir, out);
     write_svc(p, body);
     memset(&svc, 0, sizeof svc);
     assert(service_load_one(p, &svc) == 0);
-    assert(runner(&svc, 1) == 126);
+    assert(runner(&svc, 2) == 0);
+    slurp(out, buf, sizeof buf);
+    assert(strcmp(buf, "/\n") == 0);
     snprintf(body, sizeof body, "name=s\nexec=/bin/true\nworking_dir=-%s/nope\nexec_stop=/bin/true\n", dir);
     write_svc(p, body);
     memset(&svc, 0, sizeof svc);
