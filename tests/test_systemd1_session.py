@@ -96,8 +96,19 @@ def main():
     q.terminate(); q.wait()
     # restart of a oneshot chain must not orphan the step it is running
     g = subprocess.Popen(["/bin/sh", "-c", "sleep 30 || exit $?; exec sleep 31"], start_new_session=True)
-    time.sleep(0.2)
-    kid = int(subprocess.check_output(["pgrep", "-P", str(g.pid)]).split()[0])
+    kid = None
+    for _ in range(50):  # /proc scan, not pgrep: CI container has no procps
+        for d in filter(str.isdigit, os.listdir("/proc")):
+            try:
+                with open("/proc/%s/stat" % d) as f:
+                    if f.read().rsplit(")", 1)[1].split()[1] == str(g.pid):
+                        kid = int(d)
+            except OSError:
+                pass
+        if kid:
+            break
+        time.sleep(0.05)
+    assert kid, "chain step never started"
     m._spawned["chain.service"] = (g.pid, m._proc_starttime(g.pid))
     assert m._stop_unit("chain.service") is True
     g.wait()
