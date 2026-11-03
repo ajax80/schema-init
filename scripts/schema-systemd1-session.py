@@ -264,16 +264,17 @@ def _path_unescape(s):
 
 
 def _parse_unit_execstart(path):
-    # Return (exec_path, argv, environment_list) from a unit's [Service] section.
-    # Handles ExecStart's leading modifier chars (-@+!:) and multiline continuations.
-    exec_path, argv, env = None, None, []
+    # Return (cmds, environment_list, type) from a unit's [Service] section;
+    # cmds = [(ignore_failure, exec_path, argv)]. An empty ExecStart=/Environment=
+    # resets the list, as in systemd. '@' means the next word is argv[0].
+    cmds, env, stype = [], [], "simple"
     section = None
     try:
         with open(path) as f:
             raw = f.read()
     except OSError as e:
         _log("unit read error %s: %r" % (path, e))
-        return None, None, []
+        return [], [], stype
     for line in raw.replace("\\\n", " ").splitlines():
         line = line.strip()
         if not line or line.startswith(("#", ";")):
@@ -285,21 +286,56 @@ def _parse_unit_execstart(path):
             continue
         key, val = line.split("=", 1)
         key, val = key.strip(), val.strip()
-        if key == "ExecStart" and val:
+        if key == "ExecStart":
+            if not val:
+                cmds = []
+                continue
+            pre = ""
             while val and val[0] in "-@+!:":
+                pre += val[0]
                 val = val[1:]
             try:
                 argv = shlex.split(val)
             except ValueError:
                 argv = val.split()
-            if argv:
-                exec_path = argv[0]
-        elif key == "Environment" and val:
+            if not argv:
+                continue
+            exec_path = argv[0]
+            if "@" in pre:
+                argv = argv[1:] or [exec_path]
+            cmds.append(("-" in pre, ":" in pre, exec_path, argv))
+        elif key == "Environment":
+            if not val:
+                env = []
+                continue
             try:
                 env.extend(shlex.split(val))
             except ValueError:
                 env.extend(val.split())
-    return exec_path, argv, env
+        elif key == "Type":
+            stype = val or "simple"
+    return cmds, env, stype
+
+
+def _plan(cmds, stype="simple"):
+    # One spawnable (exec_path, argv) for the unit: None if there is no command,
+    # "multi" if several ExecStart= on a non-oneshot (systemd refuses to load it).
+    # A oneshot's commands run in order under one sh, so the unit stays a single
+    # tracked pid; a non-'-' failure stops the rest. '@' argv[0] is lost there.
+    if not cmds:
+        return None
+    if len(cmds) == 1:
+        return cmds[0][-2], cmds[0][-1]
+    if stype != "oneshot":
+        return "multi"
+    parts = []
+    for i, (ignore, _, exe, argv) in enumerate(cmds):
+        words = shlex.join([exe] + argv[1:])
+        if i == len(cmds) - 1:
+            parts.append("exec " + words)
+        else:
+            parts.append(words if ignore else words + " || exit $?")
+    return "/bin/sh", ["/bin/sh", "-c", "; ".join(parts)]
 
 
 # --- unit-string expansion (systemd % specifiers + $VAR) -------------------
@@ -322,7 +358,7 @@ def _runtime_dir():
     return os.environ.get("XDG_RUNTIME_DIR") or ("/run/user/%d" % os.getuid())
 
 
-def _expand(s, env, unit_name=""):
+def _expand(s, env, unit_name="", variables=True):
     base = unit_name
     for suf in (".service", ".target", ".socket", ".scope"):
         if base.endswith(suf):
@@ -353,6 +389,8 @@ def _expand(s, env, unit_name=""):
         out.append(c)
         i += 1
     expanded = "".join(out)
+    if not variables:  # ExecStart=: prefix -- specifiers only, $VAR left literal
+        return expanded
     return _VAR_RE.sub(lambda m: env.get(m.group(1) or m.group(2), ""), expanded)
 
 
@@ -397,6 +435,20 @@ def _unit_alive(name):
     return True
 
 
+def _signal_group(pid, sig):
+    # Spawns lead their own session (pgid == pid), so signal the group: a oneshot
+    # chain's sh would otherwise die and leave its running step behind. Fall back
+    # to the pid when it is not a group leader (it setsid'd away, or a test child).
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, sig)
+        else:
+            os.kill(pid, sig)
+        return True
+    except OSError:
+        return False
+
+
 def _stop_unit(name):
     rec = _spawned.pop(name, None)
     if not rec:
@@ -404,9 +456,7 @@ def _stop_unit(name):
     pid, st = rec
     if _proc_starttime(pid) != st:   # gone or recycled -> never signal a stranger
         return False
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
+    if not _signal_group(pid, signal.SIGTERM):
         return False
     # Wait (bounded) for it to exit before the respawn races it for the unit's
     # well-known bus name; escalate to SIGKILL if it will not go.
@@ -419,10 +469,7 @@ def _stop_unit(name):
             break
         time.sleep(0.05)
     else:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+        _signal_group(pid, signal.SIGKILL)
     _log("stopped %s pid=%d" % (name, pid))
     return True
 
@@ -537,8 +584,8 @@ def handle_start_unit(session, msg, member="StartUnit"):
     if not unit_file:
         _log("%s(%s): no user unit file -> forward" % (member, name))
         return False
-    exec_path, argv, unit_env = _parse_unit_execstart(unit_file)
-    if not exec_path:
+    cmds, unit_env, stype = _parse_unit_execstart(unit_file)
+    if not cmds:
         _log("%s(%s): no ExecStart in %s -> forward" % (member, name, unit_file))
         return False
 
@@ -553,8 +600,15 @@ def handle_start_unit(session, msg, member="StartUnit"):
         v = _expand(v, scratch, unit_name)
         scratch[k] = v
         expanded_env.append("%s=%s" % (k, v))
-    argv = [_expand(a, scratch, unit_name) for a in argv]
-    exec_path = argv[0] if argv else _expand(exec_path, scratch, unit_name)
+    plan = _plan([(ign, nv, _expand(exe, scratch, unit_name, not nv),
+                   [_expand(a, scratch, unit_name, not nv) for a in av])
+                  for ign, nv, exe, av in cmds], stype)
+    if plan == "multi":
+        session.send_message(ll.ErrorMessage(
+            msg, "org.freedesktop.DBus.Error.Failed",
+            "schema-init: %s has more than one ExecStart= but is not Type=oneshot" % unit_name))
+        return True
+    exec_path, argv = plan
 
     if action == "restart":
         _stop_unit(unit_name)
