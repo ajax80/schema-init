@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import sys
 import signal
@@ -150,6 +151,7 @@ def main():
                     (False, True, "/bin/c", ["/bin/c", "$X"])], cmds
     assert parse("[Service]\nType=oneshot\nType=\nExecStart=/bin/a\n")[2] == "simple"
     assert m._expand("$HOME %N", {"HOME": "/h"}, "u.service", False) == "$HOME u"
+    assert m._expand("$0 ${1} $HOME", {"HOME": "/h"}, "u.service") == "$0 ${1} /h"
     assert envl == ["B=2"], envl
 
     assert m._plan([]) is None
@@ -157,8 +159,9 @@ def main():
     assert m._plan([(False, False, "/bin/a", ["/bin/a"]), (False, False, "/bin/b", ["/bin/b"])], "simple") == "multi"
     ex, av = m._plan([(False, False, "/bin/a", ["/bin/a", "x y"]), (True, False, "/bin/b", ["bee"]),
                       (False, False, "/bin/c", ["/bin/c", "$z"])], "oneshot")
-    assert ex == "/bin/sh" and av[:2] == ["/bin/sh", "-c"], av
-    assert av[2] == "/bin/a 'x y' || exit $?; /bin/b; exec /bin/c '$z'", av[2]
+    assert ex == sys.executable and av[:3] == [sys.executable, "-I", "-c"], av
+    assert json.loads(av[4]) == [[False, "/bin/a", ["/bin/a", "x y"]], [True, "/bin/b", ["bee"]],
+                                 [False, "/bin/c", ["/bin/c", "$z"]]], av[4]
     # and it really runs in order, stopping at the first unignored failure
     with tempfile.TemporaryDirectory() as d:
         log = os.path.join(d, "log")
@@ -168,6 +171,55 @@ def main():
                           (False, False, "/bin/sh", ["/bin/sh", "-c", "echo 3 >>" + log])], "oneshot")
         assert subprocess.run(av, executable=ex).returncode == 3
         assert open(log).read() == "1\n2\n", open(log).read()
+        # '@' argv[0] reaches every step, the exec'd last one too
+        a0 = os.path.join(d, "a0")
+        step = ["/bin/sh", "-c", 'echo "$0" >> ' + a0]
+        ex, av = m._plan([(False, False, "/bin/sh", ["first"] + step[1:]),
+                          (False, False, "/bin/sh", ["last"] + step[1:])], "oneshot")
+        assert subprocess.run(av, executable=ex).returncode == 0
+        assert open(a0).read() == "first\nlast\n", open(a0).read()
+        # a step killed by a signal ends the chain as sh would: 128+sig
+        ex, av = m._plan([(False, False, "/bin/sh", ["/bin/sh", "-c", "kill -TERM $$"]),
+                          (False, False, "/bin/true", ["/bin/true"])], "oneshot")
+        assert subprocess.run(av, executable=ex).returncode == 128 + signal.SIGTERM
+        ex, av = m._plan([(True, False, "/nonexistent", ["/nonexistent"]),
+                          (False, False, "/nonexistent2", ["x"])], "oneshot")
+        assert subprocess.run(av, executable=ex).returncode == 127
+
+    # drop-ins: <unit>.d, template, dash prefix and type-level dirs, in filename
+    # order; a higher-priority unit dir shadows a same-named file; /dev/null masks
+    with tempfile.TemporaryDirectory() as d:
+        hi, lo = os.path.join(d, "hi"), os.path.join(d, "lo")
+        def put(root, rel, body):
+            p = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(body)
+        put(lo, "foo-bar@.service", "[Service]\nExecStart=/bin/base\nEnvironment=A=0\n")
+        put(lo, "service.d/10-all.conf", "[Service]\nEnvironment=ALL=1\n")
+        put(lo, "foo-.service.d/20-prefix.conf", "[Service]\nEnvironment=P=1\n")
+        put(lo, "foo-bar@.service.d/30-tpl.conf", "[Service]\nExecStart=\nExecStart=@/bin/real nick %i\n")
+        put(lo, "foo-bar@x.service.d/40-inst.conf", "[Service]\nEnvironment=A=1\n")
+        put(lo, "foo-bar@x.service.d/50-shadowed.conf", "[Service]\nEnvironment=S=lo\n")
+        put(hi, "foo-bar@x.service.d/50-shadowed.conf", "[Service]\nEnvironment=S=hi\n")
+        put(lo, "foo-bar@x.service.d/60-masked.conf", "[Service]\nEnvironment=M=1\n")
+        os.makedirs(os.path.join(hi, "foo-bar@.service.d"))
+        os.symlink("/dev/null", os.path.join(hi, "foo-bar@.service.d/60-masked.conf"))
+        put(lo, "foo-bar@x.service.d/not-a-conf", "[Service]\nEnvironment=N=1\n")
+        put(lo, "foo-bar@x.service.d/70-other.conf", "[Unit]\nExecStart=/bin/ignored\n")
+        saved, m.USER_UNIT_DIRS = m.USER_UNIT_DIRS, (hi, lo)
+        try:
+            dropins = m._unit_dropins("foo-bar@x.service")
+            assert [os.path.basename(p) for p in dropins] == [
+                "10-all.conf", "20-prefix.conf", "30-tpl.conf", "40-inst.conf",
+                "50-shadowed.conf", "60-masked.conf", "70-other.conf"], dropins
+            assert dropins[4].startswith(hi) and dropins[5].startswith(hi), dropins
+            cmds, envl, _ = m._parse_unit_execstart(m._find_user_unit("foo-bar@x.service"), dropins)
+            assert cmds == [(False, False, "/bin/real", ["nick", "%i"])], cmds
+            assert envl == ["A=0", "ALL=1", "P=1", "A=1", "S=hi"], envl
+            assert m._unit_dropins("plain.service") == [os.path.join(lo, "service.d/10-all.conf")]
+        finally:
+            m.USER_UNIT_DIRS = saved
     print("test_systemd1_session: parse OK")
 
     # schema-user hand-off: verb table, then state lookup through a stub schema-ctl
