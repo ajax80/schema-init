@@ -2788,8 +2788,8 @@ static void shut_reap(void) {
 static void shutdown_ordered(void) {
     uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0}, stop_at[MAX_SERVICES] = {0},
              post_at[MAX_SERVICES] = {0};
-    int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0}, gone[MAX_SERVICES] = {0};
-    int i, j, round = 0, held = 0;
+    int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0}, gone[MAX_SERVICES] = {0}, was_up[MAX_SERVICES];
+    int i, j, round = 0, held = 0, first = 1;
     char msg[320];
 
     for (;;) {
@@ -2800,10 +2800,24 @@ static void shutdown_ordered(void) {
         shut_reap();
         for (i = 0; i < svc_count; i++) {
             alive[i] = !killed[i] && svc_signal_all(&services[i], 0) > 0;
-            /* exec_stop_post once it is gone; it counts as alive until done */
-            if (!alive[i] && (term_at[i] || killed[i]) && !post_at[i] &&
-                stop_cmds_begin(&services[i], 2))
-                post_at[i] = now;
+            if (first) was_up[i] = alive[i];
+            /* exec_stop_post once a service that was up is gone, however it went:
+             * SIGTERM, a kill, its own exit, or exec_stop taking it down (podman
+             * rm, kill $MAINPID). A stop runner still going is waited for within
+             * its grace, then killed: never an unbounded hold on shutdown. */
+            if (!alive[i] && was_up[i] && !post_at[i]) {
+                if (services[i].stop_pid > 0) {
+                    const struct timespec *t = &services[i].stop_start;
+                    uint64_t ran = now - ((uint64_t)t->tv_sec * 1000 + (uint64_t)t->tv_nsec / 1000000);
+                    uint64_t grace = stop_grace_ms(&services[i]);
+                    if (ran >= grace) kill_group(services[i].stop_pid);
+                    /* past the kill, a second for the reap so post can still start;
+                     * one wedged in D state is given up on, not waited for */
+                    if (!killed[i] && ran < grace + 1000) alive[i] = 1;
+                } else if (stop_cmds_begin(&services[i], 2)) {
+                    post_at[i] = now;
+                }
+            }
             if (post_at[i] && services[i].stop_pid > 0) {
                 if (now - post_at[i] < stop_grace_ms(&services[i])) alive[i] = 1;
                 else kill_group(services[i].stop_pid);
@@ -2871,6 +2885,7 @@ static void shutdown_ordered(void) {
                 off += snprintf(msg + off, sizeof msg - off, " %s", services[i].name);
         }
         if (sent) engine_hooks.shut_log(msg);
+        first = 0;
         usleep(20000);
     }
     snprintf(msg, sizeof msg, "services down in %llu ms",
