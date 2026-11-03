@@ -1,5 +1,6 @@
 #include "../engine.h"
 #include "../service.h"
+#include <signal.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -42,7 +43,7 @@ static void test_circuit_breaker(void) {
     }
     s.inst.state = STATE_EXCISED;
     engine_friction_verdict(&s);
-    assert(s.inst.state == STATE_EXCISED && s.circuit_broken == 1);
+    assert(s.inst.state == STATE_EXCISED && s.circuit_broken == 1 && s.excise_reason == EXC_BREAKER);
     s.inst.state = STATE_EXCISED;   /* a breaker that has tripped trips again on the next verdict */
     engine_friction_verdict(&s);
     assert(s.circuit_broken == 1);
@@ -65,8 +66,28 @@ static void test_circuit_breaker(void) {
     }
 }
 
+/* an unrequested death names its cause; a stop or a clean exit 0 is none */
+static void test_excise_reason_from_exit(void) {
+    service_t s;
+    memset(&s, 0, sizeof s);
+    s.has_exited = 1; s.exit_status = 3;
+    assert(excise_reason_from_exit(&s) == EXC_EXIT_CODE);
+    s.exit_status = 0;
+    assert(excise_reason_from_exit(&s) == EXC_NONE);
+    s.exit_status = -1; s.term_signal = SIGTERM;
+    assert(excise_reason_from_exit(&s) == EXC_SIGNAL);
+    s.core_dumped = 1;
+    assert(excise_reason_from_exit(&s) == EXC_CORE_DUMP);
+    s.ctl_killed = 1;
+    assert(excise_reason_from_exit(&s) == EXC_NONE);
+    assert(strcmp(excise_reason_name(EXC_START_TIMEOUT), "start-timeout") == 0);
+    assert(strcmp(excise_reason_name(EXC_FUSE), "fuse") == 0);
+    assert(strcmp(excise_reason_name(200), "unknown") == 0);
+}
+
 int main(void) {
     test_pid1_defaults();
+    test_excise_reason_from_exit();
     test_circuit_breaker();
     test_mkdir_p();
     assert(!strcmp(engine_paths.ctl_sock, "/run/schema-init.sock"));

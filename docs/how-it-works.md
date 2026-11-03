@@ -49,6 +49,17 @@ Services marked `critical=1` never reach EXCISED — they enter DORMANT and retr
 
 An excise from that crash loop trips the **circuit breaker**: the service is marked `circuit_broken=1` (shown by `schema-ctl status`, `status --kv`/`--json`, and as `Result=start-limit-hit` over the systemd1 D-Bus shim) and a `breaker-tripped` event goes to the flight recorder at critical tier. A start-timeout or fallback excise does not set it. `schema-ctl reset` or `start` clears it.
 
+Every excise also records why it happened as `excise_reason` (in `status <name>`, `status --kv` and `--json`; cleared when the service next spawns). The systemd1 shim reports it as the unit's `Result`:
+
+| `excise_reason` | cause | `Result` |
+|---|---|---|
+| `none` | stop, standby, fallback-down, clean exit 0 | `success` |
+| `breaker` | crash-loop breaker | `start-limit-hit` |
+| `start-timeout`, `main-pid-timeout` | not ready inside `start_timeout_sec` / no MAINPID in time | `timeout` |
+| `exit-code`, `signal`, `core-dump` | a `no_restart` service died on its own | same |
+| `readiness-lost` | a `no_restart` service's ready path vanished | `protocol` |
+| `no-cgroup`, `listen-fail`, `fuse` | no cgroup to check a MAINPID/pid_file against, socket bind failed, quarantine fuse tripped | `resources` |
+
 ---
 
 ## Service files

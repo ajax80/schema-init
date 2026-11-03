@@ -280,4 +280,32 @@ PID=$!
 until_ok '[ -f "$I/cu.ran" ]' || { ist; cat "$I/run/schema-user/services/mount-fstab.svc" "$I/out"; fail "catch-up: held by a failing mount-fstab"; }
 istop
 
+# excise_reason: each excise names its cause in status (text, --kv, --json)
+I=$(mktemp -d "$T/imp.XXXX"); mkdir -m700 "$I/run" "$I/run/schema-user" "$I/run/schema-user/services"
+X=$I/run/schema-user/services
+printf 'name=xc\nexec=/bin/sh\nargs=-c\nargs=exit 3\nno_restart=1\n' > "$X/xc.svc"
+printf 'name=xs\nexec=/bin/sh\nargs=-c\nargs=kill -TERM $$\nno_restart=1\n' > "$X/xs.svc"
+printf 'name=xok\nexec=/bin/sh\nargs=-c\nargs=exit 0\nno_restart=1\n' > "$X/xok.svc"
+printf 'name=xt\nexec=%s\nargs=30\nstable_secs=30\nstart_timeout_sec=1\n' "$T/sl" > "$X/xt.svc"
+: > "$I/notadir"
+printf 'name=xl\nexec=%s\nargs=30\nlisten=stream:%s/notadir/x.sock\nlisten_lazy=1\n' "$T/sl" "$I" > "$X/xl.svc"
+chmod 600 "$X"/*.svc
+SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HOME=$I/cfg ./schema-user > "$I/out" 2>&1 &
+PID=$!
+kv() { XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --kv 2>/dev/null; }
+for want in xc=exit-code xs=signal xok=none xt=start-timeout xl=listen-fail; do
+    n=${want%%=*}
+    until_ok 'kv | grep -qx "service.$n.state=EXCISED"' || { kv; cat "$I/out"; fail "excise_reason: $n never excised"; }
+    kv | grep -qx "service.$n.excise_reason=${want#*=}" || { kv | grep "^service.$n\."; fail "excise_reason: $n wanted ${want#*=}"; }
+done
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status xt | grep -qx 'excise_reason=start-timeout' || fail "status xt: no excise_reason line"
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | python3 -c '
+import json, sys
+r = {s["name"]: s.get("excise_reason") for s in json.load(sys.stdin)["services"]}
+assert r["xc"] == "exit-code" and r["xok"] == "none", r' || fail "status --json: excise_reason"
+# a restart clears it: the reason belongs to the run that was excised
+XDG_RUNTIME_DIR=$I/run ./schema-ctl --user start xt > /dev/null || fail "start xt"
+until_ok 'kv | grep -qx "service.xt.excise_reason=none"' || { kv | grep "^service.xt\."; fail "start xt: reason not cleared"; }
+istop
+
 echo "test_schema_user: ok"

@@ -1625,6 +1625,7 @@ int service_spawn(service_t *svc) {
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
+    svc->excise_reason = EXC_NONE;
     if (!svc->boot_spawn.tv_sec && !svc->boot_spawn.tv_nsec)
         svc->boot_spawn = svc->spawn_time_mono;
     svc->last_pet   = svc->spawn_time_mono;

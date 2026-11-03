@@ -130,6 +130,21 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define SVC_STOP_FIRST     (1 << 8)  /* shutdown: stopped before anything else */
 #define SVC_MAIN_PID_NOTIFY (1 << 9) /* main_pid_notify=1: MAINPID= hands supervision to that pid */
 
+/* Why a service was excised; the systemd1 shim maps it to a unit Result. */
+enum {
+    EXC_NONE = 0,         /* not excised, or on purpose: stop, standby, fallback-down */
+    EXC_BREAKER,
+    EXC_START_TIMEOUT,
+    EXC_MAIN_PID_TIMEOUT,
+    EXC_EXIT_CODE,
+    EXC_SIGNAL,
+    EXC_CORE_DUMP,
+    EXC_READINESS_LOST,
+    EXC_NO_CGROUP,
+    EXC_LISTEN_FAIL,
+    EXC_FUSE,
+};
+
 typedef enum {
     PRIO_PERIPHERAL = 0,
     PRIO_STANDARD,
@@ -439,6 +454,7 @@ typedef struct {
     struct timespec  restart_at;       /* CLOCK_MONOTONIC before which a retry may not spawn */
     uint8_t          dormant_count;    /* backoff multiplier: delay = min(300<<n, 3600) */
     uint8_t          circuit_broken;   /* crash-loop breaker excised it; reset/start clears */
+    uint8_t          excise_reason;    /* EXC_*: why the last excise happened; cleared on spawn */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
     int              stop_timeout_sec;   /* shutdown SIGTERM->SIGKILL grace; 0 = default */
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
