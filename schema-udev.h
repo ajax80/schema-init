@@ -414,6 +414,7 @@ static inline int uevent_from_sysfs(const char *sysroot, const char *dirpath, st
 }
 
 #include <ftw.h>
+#include <glob.h>
 
 static char  **g_coldplug_paths = NULL;   /* collected device dir paths */
 static size_t  g_coldplug_np = 0, g_coldplug_cap = 0;
@@ -483,6 +484,32 @@ static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struc
     free(g_coldplug_paths);
     g_coldplug_paths = NULL; g_coldplug_np = g_coldplug_cap = 0;
     return rc;
+}
+
+/* The walk above replays devices only. `udevadm trigger --type=all` also
+ * replays subsystems -- module, bus, driver -- and stock rules act on those
+ * (60-block.rules turns on removable-media polling on module/block add; NFS,
+ * fuse, nvidia hang off module adds too). Their uevent files are write-only
+ * with no subsystem link, so no event can be built from them here: write
+ * "add" and let the kernel emit the real one, as udevadm does. Returns how
+ * many were triggered. */
+static inline int coldplug_trigger_subsystems(const char *sysroot) {
+    static const char *const pat[] = { "module/*/uevent", "bus/*/uevent", "bus/*/drivers/*/uevent" };
+    int n = 0;
+    for (size_t i = 0; i < sizeof pat / sizeof *pat; i++) {
+        char g[1024];
+        if ((size_t)snprintf(g, sizeof g, "%s/%s", sysroot, pat[i]) >= sizeof g) continue;
+        glob_t gl;
+        if (glob(g, 0, NULL, &gl) != 0) continue;
+        for (size_t j = 0; j < gl.gl_pathc; j++) {
+            int fd = open(gl.gl_pathv[j], O_WRONLY | O_CLOEXEC);
+            if (fd < 0) continue;
+            if (write(fd, "add", 3) == 3) n++;
+            close(fd);
+        }
+        globfree(&gl);
+    }
+    return n;
 }
 
 #define UDEV_MONITOR_MAGIC 0xfeedcafeu

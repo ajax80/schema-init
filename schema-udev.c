@@ -476,6 +476,9 @@ int main(void) {
     double cp_t0 = mono_ms();
     coldplug_walk_root("/sys", coldplug_dispatch);
     fprintf(stderr, "[schema-udev] coldplug took %.0fms\n", mono_ms() - cp_t0);
+    if (g_live)
+        fprintf(stderr, "[schema-udev] triggered %d subsystem uevents (module/bus/drivers)\n",
+                coldplug_trigger_subsystems("/sys"));
     if (g_live && udev_signal_ready() == 0)
         fprintf(stderr, "[schema-udev] ready marker %s written (coldplug complete)\n", SCHEMA_UDEV_READY);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");

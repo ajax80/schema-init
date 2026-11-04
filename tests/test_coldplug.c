@@ -165,5 +165,31 @@ int main(void) {
     struct stat rst; assert(stat(marker, &rst) == 0 && S_ISREG(rst.st_mode));
     assert(udev_signal_ready_at(sub) == 0);                   /* idempotent */
     printf("test_coldplug (ready-marker): OK\n");
+
+    /* subsystem trigger: like `udevadm trigger --type=subsystems`, write "add"
+     * into module/bus/driver uevent files so the kernel emits the events that
+     * rules such as 60-block.rules (media polling default) act on. */
+    char tmpl5[] = "/tmp/schema-udev-subsys-XXXXXX";
+    char *ss = mkdtemp(tmpl5); assert(ss);
+    const char *with[] = { "module/block", "module/fuse", "bus/usb", "bus/usb/drivers/usb" };
+    char p5[1024];
+    for (size_t i = 0; i < sizeof with / sizeof *with; i++) {
+        snprintf(cmd, sizeof cmd, "mkdir -p '%s/%s' && : > '%s/%s/uevent'", ss, with[i], ss, with[i]);
+        assert(system(cmd) == 0);
+    }
+    snprintf(cmd, sizeof cmd, "mkdir -p '%s/module/nouevent/parameters' '%s/devices/x'"
+             " && : > '%s/devices/x/uevent'", ss, ss, ss);
+    assert(system(cmd) == 0);
+    assert(coldplug_trigger_subsystems(ss) == 4);
+    for (size_t i = 0; i < sizeof with / sizeof *with; i++) {
+        snprintf(p5, sizeof p5, "%s/%s/uevent", ss, with[i]);
+        FILE *f = fopen(p5, "r"); assert(f);
+        char got[16] = ""; assert(fgets(got, sizeof got, f)); fclose(f);
+        assert(strcmp(got, "add") == 0);
+    }
+    snprintf(p5, sizeof p5, "%s/devices/x/uevent", ss);
+    struct stat dst; assert(stat(p5, &dst) == 0 && dst.st_size == 0);   /* devices: the walk's job */
+    assert(coldplug_trigger_subsystems("/nonexistent-sysroot") == 0);
+    printf("test_coldplug (subsystem trigger): OK\n");
     return 0;
 }
