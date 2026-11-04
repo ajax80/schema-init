@@ -154,6 +154,7 @@ rm -f /etc/schema-init/services/schema-migrate-finish.svc  # finishes an in-plac
 # login1 session via schema-logind + the session helpers, then launches Plasma.
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-plasma-autologin.sh" /usr/local/bin/schema-plasma-autologin.sh
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-logind.py"           /usr/local/bin/schema-logind.py
+[ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-systemd1.py"           /usr/local/bin/schema-systemd1.py
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-doctor.py"           /usr/local/bin/schema-doctor
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-session-register"    /usr/local/bin/schema-session-register
 [ -n "$RPMS" ] || install -m0755 "$SRC/scripts/schema-session-unregister"  /usr/local/bin/schema-session-unregister
