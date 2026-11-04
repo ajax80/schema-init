@@ -292,6 +292,91 @@ def main():
         os.environ["XDG_RUNTIME_DIR"] = saved_rt
     print("test_systemd1_session: schema-user hand-off OK")
 
+    # podman's own scope request (podman exec from a login shell)
+    podman = [("Slice", "user.slice"), ("PIDs", [42]), ("Delegate", True),
+              ("DefaultDependencies", False)]
+    assert m._scope_check("podman-42.scope", podman, 42) is None
+    assert m._scope_check("podman-pause-7.scope", podman, 42) is None
+    assert m._scope_check("app-x.scope", podman, 42) is not None
+    assert m._scope_check("chrome-1.scope", podman, 42) is not None
+    assert m._scope_check("podman-42.scope", podman, 43) is not None
+    assert m._scope_check("podman-42.scope", [("PIDs", [42, 43])], 42) is not None
+    assert m._scope_check("podman-42.scope", [("Slice", "user.slice")], 42) is not None
+    assert m._scope_check("podman-42.scope", [("Slice", "foo.slice"), ("PIDs", [42])], 42) is not None
+    assert m._scope_check("podman-42.scope", [("PIDs", [42])], 42) is None
+
+    me = os.getuid()
+    with tempfile.TemporaryDirectory() as root:
+        svc = "%s/user.slice/user-%d.slice/user@%d.service" % (root, me, me)
+        os.makedirs(svc)
+        sl = svc + "/user.slice"
+        pop = set()
+        saved_pop = m._populated
+        m._populated = lambda p: p in pop
+        try:
+            leaf = m._scope_prepare("podman-42.scope", me, root)
+            assert leaf == sl + "/podman-42.scope" and os.path.isdir(leaf)
+            assert m._scope_prepare("podman-42.scope", me, root) == leaf    # empty leftover reused
+            pop.add(leaf)
+            try:
+                m._scope_prepare("podman-42.scope", me, root)
+                assert False, "populated leftover reused"
+            except m.ScopeRefused:
+                pass
+            cid = "cd954c4e" * 8                                            # ad-hoc podman run -d
+            os.mkdir(sl + "/" + cid)
+            assert m._scope_prepare("podman-44.scope", me, root) == sl + "/podman-44.scope"
+            assert m._scope_sweep(me, root) == 1 and os.path.isdir(sl + "/" + cid)
+            os.rmdir(sl + "/" + cid)
+            for child in ("runtime", "libpod-payload-ab12"):                # a Quadlet .svc named user.slice
+                os.mkdir(sl + "/" + child)
+                try:
+                    m._scope_prepare("podman-43.scope", me, root)
+                    assert False, "service cgroup %s accepted" % child
+                except m.ScopeRefused:
+                    pass
+                assert not os.path.exists(sl + "/podman-43.scope")
+                os.rmdir(sl + "/" + child)
+            with open(sl + "/cgroup.procs", "w") as f:
+                f.write("123\n")
+            try:
+                m._scope_prepare("podman-43.scope", me, root)
+                assert False, "user.slice holding processes accepted"
+            except m.ScopeRefused:
+                pass
+            os.unlink(sl + "/cgroup.procs")
+            try:
+                m._scope_prepare("podman-43.scope", me + 1, root)
+                assert False, "someone else's tree accepted"
+            except m.ScopeRefused:
+                pass
+
+            os.mkdir(sl + "/podman-1.scope")
+            os.mkdir(sl + "/other.scope")
+            assert m._scope_sweep(me, root) == 1                             # podman-1; 42 is populated
+            assert not os.path.exists(sl + "/podman-1.scope")
+            assert os.path.isdir(leaf) and os.path.isdir(sl + "/other.scope")
+            pop.clear()
+            os.rmdir(sl + "/other.scope")
+
+            calls = []
+            ok, why = m._scope_request("podman-50.scope", podman[:1] + [("PIDs", [50])], 50, me,
+                                       lambda name, pid: calls.append((name, pid)), root)
+            assert ok and calls == [("podman-50.scope", 50)], (ok, why, calls)
+
+            def broken(name, pid):
+                raise RuntimeError("no bridge")
+            ok, why = m._scope_request("podman-51.scope", [("PIDs", [51])], 51, me, broken, root)
+            assert not ok and "no bridge" in why
+            assert not os.path.exists(sl + "/podman-51.scope")
+            ok, why = m._scope_request("podman-52.scope", [("PIDs", [9])], 52, me, broken, root)
+            assert not ok and not os.path.exists(sl + "/podman-52.scope")
+            ok, why = m._scope_request("podman-53.scope", [("PIDs", 7)], 53, me, broken, root)
+            assert not ok and "error" in why                                   # malformed PIDs: answered, not raised
+        finally:
+            m._populated = saved_pop
+    print("test_systemd1_session: podman scopes OK")
+
     print("test_systemd1_session: OK")
 
 

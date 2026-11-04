@@ -5,6 +5,8 @@
 #   [Container] Image=docker.io/library/nginx:alpine PublishPort=8080:80
 #   Memory=64m  [Service] Restart=always  [Install] WantedBy=default.target
 # $1 = a LAN host reachable over ssh, for the curl check.
+# Run it from a desktop terminal: check 4 execs from this shell, which needs
+# a session bus for podman's scope request (podman exec scopes, 2026-11-03).
 set -u
 U=e2e-web C=systemd-e2e-web Q=$HOME/.config/containers/systemd/$U.container
 LAN=${1:-}
@@ -22,16 +24,10 @@ wait_for running 120 && st | grep -q 'state=FUNDAMENTAL' && pass "2 up and FUNDA
 [ "$(podman ps -q --filter name=$C | wc -l)" = 1 ] && pass "2 exactly one container" || fail "2 container count $(podman ps -q --filter name=$C | wc -l)"
 
 [ "$(memmax)" = 67108864 ] && pass "4 payload memory.max=67108864" || fail "4 memory.max=$(memmax)"
-# from a login shell podman exec is refused (crun can't move a process from
-# session-N.scope into user@.service: the common ancestor is root's); systemd
-# gets round it with a transient scope, a later phase here. So the hog runs
-# from a throwaway user service inside the schema-user tree.
-H=$XDG_RUNTIME_DIR/schema-user/services/e2e-hog.svc R=$(mktemp)
-printf 'name=e2e-hog\nexec=/bin/sh\nargs=-c\nargs=podman exec %s sh -c "head -c 200m /dev/zero | tail > /dev/null"; echo $? > %s\noneshot=1\n' "$C" "$R" > "$H"
-chmod 600 "$H"; : > "$R"
-schema-ctl --user reload > /dev/null
-wait_for "[ -s $R ]" 60; rc=$(cat "$R")
-rm -f "$H" "$R"; schema-ctl --user reload --evict > /dev/null
+# straight from this shell: podman's own podman-<pid>.scope request puts it
+# under user@.service, so crun may move the exec into the payload cgroup
+# (podman exec scopes, 2026-11-03)
+podman exec "$C" sh -c "head -c 200m /dev/zero | tail > /dev/null"; rc=$?
 [ "$rc" = 137 ] && pass "4 memory hog OOM-killed (rc 137)" || fail "4 memory hog rc=$rc"
 wait_for "running && st | grep -q state=FUNDAMENTAL" 90
 
