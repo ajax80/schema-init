@@ -103,8 +103,12 @@ systemd:
   asks for `Slice=user.slice`. A schema-user service cgroup is `user@U.service/<name>`,
   and `service.c:2322` does not validate `name=`, so a hand-written
   `name=user.slice` would collide. An imported unit can't, because the importer
-  drops `.service`. Guard (my call): the shim refuses if `user.slice` itself
-  holds processes or has any child that isn't `podman-*.scope`.
+  drops `.service`. Guard (my call): the shim refuses if `user.slice` looks
+  like a schema-user service cgroup, meaning it holds processes itself or has a
+  `runtime` / `libpod-payload-*` child (the `--cgroups=split` layout). Other
+  children are expected. Rev 1 refused any non-scope child, and the live run
+  showed that wedges every scope while an ad-hoc `podman run -d` container lives:
+  podman puts that container's cgroup in `user.slice/<64-hex id>`.
 
 ### 1. Session shim: `StartTransientUnit` for podman scopes
 
@@ -198,7 +202,7 @@ builder checks this live, not just on paper.
 | login shell `podman exec` / `ps` / `info` | no | runs in session-N.scope, exec EACCES | moved to `podman-<pid>.scope`; exec works |
 | pause process (first podman after boot) | no | session-N.scope (dies with the session) | `podman-pause-*.scope` (lives until schema-user stops) |
 | Quadlet podman under schema-user | yes | no scope request | no scope request (unchanged; must be verified, see Tests) |
-| ad-hoc `podman run` from a shell | no | runs in session-N.scope, container gets no cgroup | **changes:** podman now owns its cgroup. Where the container's cgroup lands, and whether `--memory` now works, must be observed and written up. A detached container's conmon keeps its scope populated, so the sweep leaves it alone |
+| ad-hoc `podman run` from a shell | no | runs in session-N.scope, container gets no cgroup | **changes (seen live 11-03):** conmon stays in `podman-<pid>.scope` (populated, so the sweep leaves it alone), and the payload gets its own `user.slice/<container id>` cgroup, which podman removes on `rm`. Whether `--memory` now holds for ad-hoc containers is unmeasured |
 
 The process leaves `session-N.scope`, so `sd_pid_get_session()` no longer
 reports a session for it. systemd has the same property, and podman doesn't
