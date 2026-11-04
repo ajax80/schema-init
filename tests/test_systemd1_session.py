@@ -323,14 +323,20 @@ def main():
                 assert False, "populated leftover reused"
             except m.ScopeRefused:
                 pass
-            os.mkdir(sl + "/web")                                           # a .svc named user.slice
-            try:
-                m._scope_prepare("podman-43.scope", me, root)
-                assert False, "foreign child in user.slice accepted"
-            except m.ScopeRefused:
-                pass
-            assert not os.path.exists(sl + "/podman-43.scope")
-            os.rmdir(sl + "/web")
+            cid = "cd954c4e" * 8                                            # ad-hoc podman run -d
+            os.mkdir(sl + "/" + cid)
+            assert m._scope_prepare("podman-44.scope", me, root) == sl + "/podman-44.scope"
+            assert m._scope_sweep(me, root) == 1 and os.path.isdir(sl + "/" + cid)
+            os.rmdir(sl + "/" + cid)
+            for child in ("runtime", "libpod-payload-ab12"):                # a Quadlet .svc named user.slice
+                os.mkdir(sl + "/" + child)
+                try:
+                    m._scope_prepare("podman-43.scope", me, root)
+                    assert False, "service cgroup %s accepted" % child
+                except m.ScopeRefused:
+                    pass
+                assert not os.path.exists(sl + "/podman-43.scope")
+                os.rmdir(sl + "/" + child)
             with open(sl + "/cgroup.procs", "w") as f:
                 f.write("123\n")
             try:

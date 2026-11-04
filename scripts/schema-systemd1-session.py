@@ -269,7 +269,10 @@ def _scope_prepare(name, uid, cg_root):
     except OSError as e:
         raise ScopeRefused("mkdir %s: %s" % (sl, e))
     # .svc names aren't validated, so a hand-written name=user.slice would
-    # share this cgroup; stay out of anything we didn't make.
+    # share this cgroup: stay out if it looks like a schema-user service (its
+    # process in the cgroup itself, or podman's --cgroups=split children).
+    # Other children are expected -- an ad-hoc `podman run -d` from a scope
+    # puts its container cgroup here as a sibling, named by container id.
     try:
         with open(sl + "/cgroup.procs") as f:
             if f.read().strip():
@@ -277,8 +280,9 @@ def _scope_prepare(name, uid, cg_root):
     except FileNotFoundError:
         pass
     for e in os.scandir(sl):
-        if e.is_dir(follow_symlinks=False) and not _SCOPE_RE.match(e.name):
-            raise ScopeRefused("%s has a foreign child %s" % (sl, e.name))
+        if e.is_dir(follow_symlinks=False) and (
+                e.name == "runtime" or e.name.startswith("libpod-payload-")):
+            raise ScopeRefused("%s is a service cgroup (%s)" % (sl, e.name))
     leaf = sl + "/" + name
     try:
         os.mkdir(leaf)
@@ -323,6 +327,9 @@ def _scope_request(name, props, sender_pid, uid, attach, cg_root=None):
             os.rmdir(leaf)
         except OSError:
             pass
+        if isinstance(e, dbus.DBusException):
+            # dbus-python puts the far side's whole traceback in the message
+            e = "%s: %s" % (e.get_dbus_name(), ((e.get_dbus_message() or "").strip().splitlines() or [""])[-1])
         return False, "attach: %s" % e
     _scope_sweep(uid, cg_root)
     return True, "attached"

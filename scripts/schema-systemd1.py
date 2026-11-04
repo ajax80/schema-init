@@ -752,9 +752,9 @@ class Systemd1Manager(dbus.service.Object):
         try:
             attach_pids(attach_validate(uid, unit, subcgroup, pids), pids, uid)
         except AttachRefused as e:
-            print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> refused: {e}")
+            print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> refused: {e}", flush=True)
             raise dbus.exceptions.DBusException(str(e), name='org.freedesktop.DBus.Error.' + e.kind)
-        print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> ok")
+        print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> ok", flush=True)
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
     def StopUnit(self, name, mode):
