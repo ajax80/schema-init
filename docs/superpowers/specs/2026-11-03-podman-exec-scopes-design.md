@@ -1,6 +1,7 @@
 # podman exec scopes — `podman exec` from a login shell
 
-Status: **design, rev 1 — awaiting Greg's review.** No code yet.
+Status: **design, rev 2 — Greg's review (2026-11-03) folded in.** No code yet.
+Rev 2 changes are listed at the end.
 Author: Claire, 2026-11-03. Backlog item from the rootless podman phase
 (`2026-10-27-rootless-podman-quadlet-design.md`, "known gaps").
 
@@ -114,7 +115,8 @@ Accept only if **all** of these hold:
 - no `ExecStart` (an ExecStart request keeps the existing spawn path);
 - the name matches the scope-name regex;
 - `PIDs` is present and is exactly `[<sender pid>]`, where `<sender pid>` comes
-  from `GetConnectionUnixProcessID(msg.get_sender())` on the session bus. podman
+  from the bus driver's `org.freedesktop.DBus.GetConnectionUnixProcessID(msg.get_sender())`
+  (dbus-python's `Bus` has `get_unix_user` but no pid helper). podman
   always sends its own pid, and the sender is blocked waiting for the reply, so
   the pid can't be recycled meanwhile;
 - `Slice` is absent or `user.slice`;
@@ -156,19 +158,29 @@ Authorisation happens in the method:
 - `unit` must equal `"user@%d.service" % C` exactly.
 - `subcgroup` must match `^/user\.slice/podman-[A-Za-z0-9_-]{1,64}\.scope$`
   (the same name rule, no `..`, no other shape).
-- the target dir `<user@C.service><subcgroup>`: `os.lstat` is a directory (not a
-  symlink) with `st_uid == C`, and `user@C.service` itself has `st_uid == C`.
+- the target dir `<user@C.service><subcgroup>`: `user@C.service`,
+  `user@C.service/user.slice` and the leaf are each `os.lstat`-checked: a real
+  directory (not a symlink) with `st_uid == C`. Then
+  `os.path.commonpath([user_svc, os.path.realpath(target)]) == user_svc`. Real
+  cgroupfs refuses `symlink()` (EPERM, checked on blakbox), so this is defence in
+  depth. It does matter for the plain-filesystem `SCHEMA_CGROUP_ROOT` used in tests.
 - `pids`: 1 to 4 entries. For each pid:
-  1. `fd = os.pidfd_open(pid)`;
-  2. `/proc/<pid>/status` `Uid:` and `Gid:` lines must show C in all four fields
+  1. `fd = os.pidfd_open(pid)` (ESRCH → error);
+  2. the `Uid:` line of `/proc/<pid>/status` must show C in all four fields
      (real, effective, saved, fs). This refuses setuid helpers and anything a
-     user merely shares a session with;
-  3. write the pid to the target's `cgroup.procs`;
-  4. **race check**: if `fd` now polls readable (the process exited), the
-     number may have been recycled between steps 2 and 4. Read the current
-     holder's `status`. If it is not fully C, write it back to the cgroup it
-     came from (read in step 2 from `/proc/<pid>/cgroup`) and log loudly. Either
-     way, return an error for the call.
+     user merely shares a session with. Gid is not checked: cgroup and DAC
+     permission here are uid-bound, and a primary gid often differs from the uid
+     (LDAP, `users`=100);
+  3. `fd` must not poll readable. That proves the status read in step 2 belonged
+     to the process `fd` holds, and that it is still alive;
+  4. write the pid to the target's `cgroup.procs` (ESRCH → it exited → error);
+  5. if `fd` now polls readable, return an error and log it. **Never move a pid
+     anywhere else** to "undo" the write: a recycled pid was never in the old
+     cgroup, so writing it there would hijack an innocent process (Greg #1).
+  Residual window: step 3 to step 4, a single syscall pair. Exploiting it would
+  need the caller's process to exit and its number to come round again through
+  `pid_max` (4,194,304 on blakbox) inside that gap. Accepted, as systemd's
+  pid-number API accepts it.
 - Any refusal → `org.freedesktop.DBus.Error.AccessDenied` (identity checks) or
   `InvalidArgs` (shape), and nothing is written.
 - Log one line per call: `AttachProcessesToUnit(user@1000.service,
@@ -208,8 +220,10 @@ cgroup root via `SCHEMA_CGROUP_ROOT`, as the logind tests do):
 - sweep removes `populated 0` dirs only, and only `podman-*.scope`.
 - bridge refuses: root caller; `user@<other>.service`; `/user.slice/../x`,
   `/foo.scope`, symlinked target; target not owned by C; pid owned by another uid;
-  pid with euid ≠ ruid; more than 4 pids. Race path: pidfd shows exit → holder
-  restored, error returned.
+  pid with euid ≠ ruid; more than 4 pids; symlinked `user.slice` (fake root).
+  Gid ≠ uid but Uid all C → accepted. Race path: pidfd readable before the
+  write → no write, error; readable after → error, and nothing moved anywhere
+  else.
 
 Live (`tests/livetest/podman-exec-scope.sh`, blakbox, after COPR upgrade +
 relogin: the shim is session-bus-activated, so a relogin picks it up):
@@ -244,10 +258,23 @@ schema-init service, and restarting it is fine; it is not a session daemon.
    session bus at `/run/user/U/bus` for an ssh login with no desktop, on DBox
    (linger + ssh)? If not, exec over ssh stays broken. That's acceptable for v1
    and gets its own follow-up if wanted.
-2. **Race-restore** (bridge step 4) vs simply accepting the residual race the
-   way systemd's pid-number API does. I chose restore-and-error, because the
-   window is tiny but the cost of getting it wrong is a foreign process in a
-   user-writable cgroup.
-3. Should the bridge accept the call from the shim only (e.g. by checking the
-   caller's `/proc/<pid>/exe`)? I say no: the checks bind to the uid, and any
-   process of that uid could already do the move through the shim.
+2. ~~Race-restore~~: settled in rev 2. Poll before and after the write, never
+   restore (Greg #1).
+3. ~~Restrict the bridge to the shim~~: settled as no. Greg agreed: `exe` is
+   `python3`, and the checks already bind to the uid.
+
+## Rev 2 changes (Greg's review)
+
+1. Race: dropped the move-back of a recycled pid, which would have hijacked a
+   foreign process. Now: poll before the write, ESRCH on the write, poll after,
+   return an error. Greg's "eliminates the window" overstated it: a
+   one-syscall gap remains, documented and accepted.
+2. Gid check removed. Rev 1 compared Gid against the uid, which would refuse
+   every user whose primary gid ≠ uid. Uid only, all four fields.
+3. Every path component is lstat-checked, plus a realpath/commonpath check.
+   Not exploitable on real cgroupfs (no symlinks), but it holds the line in
+   the test root.
+4. The sender pid comes from the bus driver's `GetConnectionUnixProcessID`;
+   dbus-python has no helper for it (confirmed).
+5. ssh-only (Q1): stays a v1 gap. Greg says headless ssh logins start no
+   broker. That is not verified here, so it stays a live check on DBox.
