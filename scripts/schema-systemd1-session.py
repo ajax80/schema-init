@@ -780,6 +780,22 @@ def handle_schema_user_unit(session, msg, member):
     return True
 
 
+def handle_stop_unit(session, msg):
+    # Only this process can stop what it spawned: the system bus would ack a job
+    # and leave the unit running.
+    try:
+        name = str(msg.get_args_list(byte_arrays=True)[0])
+    except Exception as e:  # noqa: BLE001
+        _log("StopUnit args error: %r" % (e,))
+        return False
+    unit_name = _unit_name(name)
+    if not _unit_alive(unit_name):
+        return False
+    _stop_unit(unit_name)
+    _reply_job_and_done(session, msg, name)
+    return True
+
+
 def handle_start_unit(session, msg, member="StartUnit"):
     # KDE portal .service files carry SystemdService=, so dbus delegates their
     # activation to org.freedesktop.systemd1.Manager.StartUnit on the session
@@ -902,6 +918,8 @@ def main():
                     handle_schema_user_unit(session, msg, member):
                 return ll.HANDLER_RESULT_HANDLED
             if member in _START_MEMBERS and handle_start_unit(session, msg, member):
+                return ll.HANDLER_RESULT_HANDLED
+            if member == "StopUnit" and handle_stop_unit(session, msg):
                 return ll.HANDLER_RESULT_HANDLED
         if path == "/" or path == PATH_PREFIX or path.startswith(PATH_PREFIX + "/"):
             forward_call(session, system, msg)

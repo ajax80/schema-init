@@ -377,6 +377,31 @@ def main():
             m._populated = saved_pop
     print("test_systemd1_session: podman scopes OK")
 
+    # StopUnit stops a unit this shim spawned, and leaves anything else to the forward
+    class _Msg:
+        def __init__(self, name):
+            self.name = name
+
+        def get_args_list(self, byte_arrays=False):
+            return [self.name, "replace"]
+
+    acked = []
+    saved_reply = m._reply_job_and_done
+    m._reply_job_and_done = lambda session, msg, name: acked.append(name)
+    try:
+        p = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        m._spawned["probe.service"] = (p.pid, m._proc_starttime(p.pid))
+        assert m.handle_stop_unit(None, _Msg("probe.service")) is True
+        assert p.wait(timeout=5) == -signal.SIGTERM
+        assert acked == ["probe.service"]
+        assert "probe.service" not in m._spawned
+        assert m.handle_stop_unit(None, _Msg("probe.service")) is False  # already stopped
+        assert m.handle_stop_unit(None, _Msg("never-spawned.service")) is False
+        assert acked == ["probe.service"]
+    finally:
+        m._reply_job_and_done = saved_reply
+    print("test_systemd1_session: StopUnit OK")
+
     print("test_systemd1_session: OK")
 
 
