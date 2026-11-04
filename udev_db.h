@@ -43,7 +43,13 @@ static inline int udev_db_filename(const struct uevent *ev, char *out, size_t ou
     else if (maj && min)
         w = snprintf(out, outsz, "%c%s:%s",
                      (sub && strcmp(sub, "block") == 0) ? 'b' : 'c', maj, min);
-    else if (sub && devpath) {
+    else if (sub && devpath && strcmp(sub, "drivers") == 0 &&
+             strncmp(devpath, "/bus/", 5) == 0 && strstr(devpath + 5, "/drivers/")) {
+        /* sd-device's id is +drivers:<bus>:<driver>: same-named drivers on
+         * two buses (pnp and platform rtc_cmos) must not share a record */
+        const char *bus = devpath + 5, *end = strchr(bus, '/');
+        w = snprintf(out, outsz, "+drivers:%.*s:%s", (int)(end - bus), bus, strrchr(devpath, '/') + 1);
+    } else if (sub && devpath) {
         const char *slash = strrchr(devpath, '/');
         w = snprintf(out, outsz, "+%s:%s", sub, slash ? slash + 1 : devpath);
     } else
