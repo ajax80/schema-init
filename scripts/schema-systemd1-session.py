@@ -180,7 +180,7 @@ def _spawn(exec_path, argv, kde_env):
         return None
 
 
-def handle_start_transient_unit(session, msg):
+def handle_start_transient_unit(session, msg, system=None):
     global _job_seq
     try:
         args = msg.get_args_list(byte_arrays=True)
@@ -191,6 +191,9 @@ def handle_start_transient_unit(session, msg):
         _log("args error: %r" % e)
 
     exec_path, argv, kde_env = _parse_exec_and_env(props)
+    if not exec_path and system is not None and _SCOPE_RE.match(name):
+        handle_scope(session, system, msg, name, props)
+        return
     if not exec_path:
         # A scope adopting already-running PIDs -- Chromium/KDE registering their
         # own child processes, NOT an app launch. Before this relay existed these
@@ -208,6 +211,152 @@ def handle_start_transient_unit(session, msg):
 
     _spawn(exec_path, argv, kde_env)
     _reply_job_and_done(session, msg, name)
+
+
+CGROUP_ROOT = os.environ.get("SCHEMA_CGROUP_ROOT", "/sys/fs/cgroup")
+_SCOPE_RE = re.compile(r"^podman-[A-Za-z0-9_-]{1,64}\.scope$")
+ATTACH_TIMEOUT = 2  # s; every rootless podman command waits on this
+
+
+class ScopeRefused(Exception):
+    pass
+
+
+def _prop(props, key):
+    for entry in props:
+        if str(entry[0]) == key:
+            return entry[1]
+    return None
+
+
+def _scope_check(name, props, sender_pid):
+    if not _SCOPE_RE.match(name):
+        return "not a podman scope"
+    pids = _prop(props, "PIDs")
+    # podman only ever asks for itself; the sender is blocked on our reply, so
+    # its pid can't be recycled while we work.
+    if pids is None or [int(p) for p in pids] != [sender_pid]:
+        return "PIDs %r is not [sender %d]" % (pids, sender_pid)
+    sl = _prop(props, "Slice")
+    if sl is not None and str(sl) != "user.slice":
+        return "Slice %s" % sl
+    return None
+
+
+def _user_slice(uid, cg_root):
+    return "%s/user.slice/user-%d.slice/user@%d.service/user.slice" % (cg_root, uid, uid)
+
+
+def _populated(path):
+    try:
+        with open(path + "/cgroup.events") as f:
+            return "populated 1" in f.read()
+    except OSError:
+        return False
+
+
+def _scope_prepare(name, uid, cg_root):
+    sl = _user_slice(uid, cg_root)
+    try:
+        if os.stat(os.path.dirname(sl)).st_uid != uid:
+            raise ScopeRefused("user@%d.service not delegated" % uid)
+    except OSError as e:
+        raise ScopeRefused("no user@%d.service: %s" % (uid, e))
+    try:
+        os.mkdir(sl)
+    except FileExistsError:
+        pass
+    except OSError as e:
+        raise ScopeRefused("mkdir %s: %s" % (sl, e))
+    # .svc names aren't validated, so a hand-written name=user.slice would
+    # share this cgroup; stay out of anything we didn't make.
+    try:
+        with open(sl + "/cgroup.procs") as f:
+            if f.read().strip():
+                raise ScopeRefused("%s holds processes" % sl)
+    except FileNotFoundError:
+        pass
+    for e in os.scandir(sl):
+        if e.is_dir(follow_symlinks=False) and not _SCOPE_RE.match(e.name):
+            raise ScopeRefused("%s has a foreign child %s" % (sl, e.name))
+    leaf = sl + "/" + name
+    try:
+        os.mkdir(leaf)
+    except FileExistsError:
+        if _populated(leaf):
+            raise ScopeRefused("%s already in use" % leaf)
+    except OSError as e:
+        raise ScopeRefused("mkdir %s: %s" % (leaf, e))
+    return leaf
+
+
+def _scope_sweep(uid, cg_root=None):
+    sl = _user_slice(uid, cg_root or CGROUP_ROOT)
+    n = 0
+    try:
+        entries = list(os.scandir(sl))
+    except OSError:
+        return 0
+    for e in entries:
+        if e.is_dir(follow_symlinks=False) and _SCOPE_RE.match(e.name) and not _populated(e.path):
+            try:
+                os.rmdir(e.path)
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
+def _scope_request(name, props, sender_pid, uid, attach, cg_root=None):
+    cg_root = cg_root or CGROUP_ROOT
+    why = _scope_check(name, props, sender_pid)
+    if why:
+        return False, why
+    try:
+        leaf = _scope_prepare(name, uid, cg_root)
+    except ScopeRefused as e:
+        return False, str(e)
+    try:
+        attach(name, sender_pid)
+    except Exception as e:  # noqa: BLE001 -- any failure: podman runs in place, as before
+        try:
+            os.rmdir(leaf)
+        except OSError:
+            pass
+        return False, "attach: %s" % e
+    _scope_sweep(uid, cg_root)
+    return True, "attached"
+
+
+def _sender_pid(session, sender):
+    return int(session.call_blocking(
+        "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+        "GetConnectionUnixProcessID", "s", (sender,)))
+
+
+def _attach_via(system):
+    def attach(name, pid):
+        system.call_blocking(
+            BUS_NAME, PATH_PREFIX, MGR_IFACE, "AttachProcessesToUnit", "ssau",
+            ("user@%d.service" % os.getuid(), "/user.slice/" + name, [dbus.UInt32(pid)]),
+            timeout=ATTACH_TIMEOUT)
+    return attach
+
+
+def handle_scope(session, system, msg, name, props):
+    try:
+        pid = _sender_pid(session, msg.get_sender())
+    except dbus.DBusException as e:
+        pid, ok, why = 0, False, "sender pid: %s" % e
+    else:
+        ok, why = _scope_request(name, props, pid, os.getuid(), _attach_via(system))
+    _log("scope %s pid=%d -> %s" % (name, pid, why if ok else "refused (%s)" % why))
+    if ok:
+        _reply_job_and_done(session, msg, name)
+    else:
+        session.send_message(ll.ErrorMessage(
+            msg, "org.freedesktop.DBus.Error.NotSupported",
+            "schema-init does not manage transient scopes"))
 
 
 def _reply_job_and_done(session, msg, name):
@@ -733,7 +882,7 @@ def main():
         member = msg.get_member()
         if path == PATH_PREFIX and msg.get_interface() == MGR_IFACE:
             if member == "StartTransientUnit":
-                handle_start_transient_unit(session, msg)
+                handle_start_transient_unit(session, msg, system)
                 return ll.HANDLER_RESULT_HANDLED
             if (member in _START_MEMBERS or member == "StopUnit") and \
                     handle_schema_user_unit(session, msg, member):
@@ -758,6 +907,7 @@ def main():
     system.add_match_string("type='signal',sender='%s'" % BUS_NAME)
     system.add_message_filter(signal_filter)
 
+    GLib.timeout_add_seconds(60, lambda: _scope_sweep(os.getuid()) or True)
     GLib.MainLoop().run()
     return 0
 
