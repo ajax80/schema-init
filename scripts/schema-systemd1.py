@@ -35,12 +35,12 @@ _UNIT_RE = re.compile(r'^[A-Za-z0-9:_.@-]+$')
 
 def schema_ctl(action, name):
     if not name or name.startswith('-') or not _UNIT_RE.match(name):
-        print(f"systemd1: refusing unsafe unit name {name!r}", file=sys.stderr)
+        print(f"systemd1: refusing unsafe unit name {_q(name)}", file=sys.stderr)
         return
     try:
         subprocess.run([SCHEMA_CTL, action, name], capture_output=True, timeout=5)
     except Exception as e:
-        print(f"systemd1: schema-ctl {action} {name} failed: {e}", file=sys.stderr)
+        print(f"systemd1: schema-ctl {action} {_q(name)} failed: {e}", file=sys.stderr)
 
 MANAGE_UNITS = 'org.freedesktop.systemd1.manage-units'
 RELOAD_DAEMON = 'org.freedesktop.systemd1.reload-daemon'
@@ -50,10 +50,21 @@ AUTHORITY = ('org.freedesktop.PolicyKit1', '/org/freedesktop/PolicyKit1/Authorit
 # A prompt waits on a person; the caller's own D-Bus timeout ends its wait first.
 POLKIT_TIMEOUT_SEC = 300
 
+UNIT_VERBS = {'StartUnit': 'start', 'StopUnit': 'stop', 'RestartUnit': 'restart',
+              'TryRestartUnit': 'try-restart', 'ReloadUnit': 'reload',
+              'ReloadOrRestartUnit': 'reload-or-restart',
+              'ReloadOrTryRestartUnit': 'reload-or-try-restart'}
+
+# Any local user can put a string in our log: escaped so it can't forge a line,
+# bounded so it can't fill the disk.
+def _q(value):
+    text = ' '.join(map(str, value)) if isinstance(value, list) else str(value)
+    return repr(text[:200])
+
 # The stock bus policy lets any user send StartUnit and friends, because systemd
 # checks polkit inside the daemon. So must we, or any local user can stop any
 # service. Anything that goes wrong asking is a refusal.
-def authorize(bus, sender, interactive, action, what, proceed, deny):
+def authorize(bus, sender, interactive, action, details, what, proceed, deny):
     # No sender: the 0600 private socket, root's by its file mode.
     if sender is None:
         proceed()
@@ -62,31 +73,32 @@ def authorize(bus, sender, interactive, action, what, proceed, deny):
         print(f"systemd1: {what} uid={uid} -> denied ({reason})", flush=True)
         deny(dbus.exceptions.DBusException(
             f"Not authorized: {action}", name='org.freedesktop.DBus.Error.' + name))
-    try:
-        uid = int(bus.get_unix_user(sender))
-    except dbus.exceptions.DBusException as e:
-        refuse('?', e.get_dbus_name())
-        return
-    if uid == 0:
-        print(f"systemd1: {what} uid=0 -> allowed", flush=True)
-        proceed()
-        return
-    def answered(result):
-        if result[0]:
-            print(f"systemd1: {what} uid={uid} -> allowed by polkit", flush=True)
+    def ask_polkit(uid):
+        uid = int(uid)
+        if uid == 0:
+            print(f"systemd1: {what} uid=0 -> allowed", flush=True)
             proceed()
-        elif result[1] and not interactive:
-            refuse(uid, 'needs authentication', 'InteractiveAuthorizationRequired')
-        else:
-            refuse(uid, 'polkit')
-    def failed(e):
-        refuse(uid, f"polkit unavailable: {e.get_dbus_name()}")
-    subject = ('system-bus-name', {'name': dbus.String(sender, variant_level=1)})
-    # Interactive only when the client asked: background callers must not raise
-    # password dialogs on the desktop.
-    bus.call_async(*AUTHORITY, 'CheckAuthorization', '(sa{sv})sa{ss}us',
-                   (subject, action, {}, 1 if interactive else 0, ''),
-                   answered, failed, timeout=POLKIT_TIMEOUT_SEC)
+            return
+        def answered(result):
+            if result[0]:
+                print(f"systemd1: {what} uid={uid} -> allowed by polkit", flush=True)
+                proceed()
+            elif result[1] and not interactive:
+                refuse(uid, 'needs authentication', 'InteractiveAuthorizationRequired')
+            else:
+                refuse(uid, 'polkit')
+        subject = ('system-bus-name', {'name': dbus.String(sender, variant_level=1)})
+        # Interactive only when the client asked: background callers must not
+        # raise password dialogs on the desktop.
+        bus.call_async(*AUTHORITY, 'CheckAuthorization', '(sa{sv})sa{ss}us',
+                       (subject, action, details, 1 if interactive else 0, ''),
+                       answered, lambda e: refuse(uid, f"polkit unavailable: {e.get_dbus_name()}"),
+                       timeout=POLKIT_TIMEOUT_SEC)
+    # Async: during a ReloadConfig dissolve the bus can stall for seconds, and a
+    # blocking lookup would stall the bridge's only main loop with it.
+    bus.call_async('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                   'GetConnectionUnixUser', 's', (sender,), ask_polkit,
+                   lambda e: refuse('?', e.get_dbus_name()))
 
 
 def escape_unit_name(name):
@@ -678,11 +690,14 @@ class Systemd1Manager(dbus.service.Object):
                 proceed()
             except Exception as e:
                 error(e)
-        args = [str(x) for a in message.get_args_list() for x in (a if isinstance(a, list) else [a])]
-        # repr: names come from the caller and must not forge log lines
-        what = f"{message.get_member()}{args!r}"
+        member, args = message.get_member(), message.get_args_list()
+        # schema_ctl strips the suffix: sshd, sshd.service and sshd.target all
+        # reach sshd, so a polkit rule must see the one unit that will be acted on.
+        details = {'unit': svc_name(str(args[0])) + '.service', 'verb': UNIT_VERBS[member]} \
+            if member in UNIT_VERBS else {}
+        what = f"{member}({', '.join(_q(a) for a in args)})"
         authorize(self.bus, message.get_sender(), message.get_allow_interactive_authorization(),
-                  action, what, run, error)
+                  action, details, what, run, error)
 
     def _trigger_job_signals(self, unit_name):
         job_id = self.next_job_id
@@ -763,11 +778,11 @@ class Systemd1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='s', out_signature='')
     def ResetFailedUnit(self, name):
-        print(f"systemd1: ResetFailedUnit({name}) (no-op)")
+        print(f"systemd1: ResetFailedUnit({_q(name)}) (no-op)")
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ssi', out_signature='')
     def KillUnit(self, name, whom, sig):
-        print(f"systemd1: KillUnit({name}, {whom}, {sig}) (no-op)")
+        print(f"systemd1: KillUnit({_q(name)}, {_q(whom)}, {sig}) (no-op)")
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='s')
     def GetDefaultTarget(self):
@@ -781,12 +796,12 @@ class Systemd1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asb', out_signature='a(sss)')
     def UnmaskUnitFiles(self, names, runtime):
-        print(f"systemd1: UnmaskUnitFiles({list(names)})")
+        print(f"systemd1: UnmaskUnitFiles({_q(list(names))})")
         return []
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asbb', out_signature='ba(sss)')
     def PresetUnitFiles(self, names, runtime, force):
-        print(f"systemd1: PresetUnitFiles({list(names)})")
+        print(f"systemd1: PresetUnitFiles({_q(list(names))})")
         return dbus.Boolean(True), []
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='a(usssoo)')
@@ -801,7 +816,7 @@ class Systemd1Manager(dbus.service.Object):
                          message_keyword='message', async_callbacks=('reply', 'error'))
     def StartUnit(self, name, mode, message=None, reply=None, error=None):
         def run():
-            print(f"systemd1: StartUnit({name}, {mode})")
+            print(f"systemd1: StartUnit({_q(name)}, {_q(mode)})")
             schema_ctl('start', svc_name(str(name)))
             reply(self._trigger_job_signals(str(name)))
         self._gated(message, MANAGE_UNITS, run, error)
@@ -816,7 +831,7 @@ class Systemd1Manager(dbus.service.Object):
         # and the app actually starts. Without this every menu/krunner launch
         # (Konsole, Ghostty, Helium) dies on UnknownMethod.
         name = str(name)
-        print(f"systemd1: StartTransientUnit({name}, {mode}) [ack; no real scope]")
+        print(f"systemd1: StartTransientUnit({_q(name)}, {_q(mode)}) [ack; no real scope]")
         job_id = self.next_job_id
         self.next_job_id += 1
         job_path = dbus.ObjectPath(f'/org/freedesktop/systemd1/job/{job_id}')
@@ -832,15 +847,15 @@ class Systemd1Manager(dbus.service.Object):
         try:
             attach_pids(attach_validate(uid, unit, subcgroup, pids), pids, uid)
         except AttachRefused as e:
-            print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> refused: {e}", flush=True)
+            print(f"systemd1: AttachProcessesToUnit({_q(unit)}, {_q(subcgroup)}, {pids}) uid={uid} -> refused: {_q(e)}", flush=True)
             raise dbus.exceptions.DBusException(str(e), name='org.freedesktop.DBus.Error.' + e.kind)
-        print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> ok", flush=True)
+        print(f"systemd1: AttachProcessesToUnit({_q(unit)}, {_q(subcgroup)}, {pids}) uid={uid} -> ok", flush=True)
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o',
                          message_keyword='message', async_callbacks=('reply', 'error'))
     def StopUnit(self, name, mode, message=None, reply=None, error=None):
         def run():
-            print(f"systemd1: StopUnit({name}, {mode})")
+            print(f"systemd1: StopUnit({_q(name)}, {_q(mode)})")
             self.recently_stopped.add(str(name))
             schema_ctl('stop', svc_name(str(name)))
             reply(self._trigger_job_signals(str(name)))
@@ -850,7 +865,7 @@ class Systemd1Manager(dbus.service.Object):
                          message_keyword='message', async_callbacks=('reply', 'error'))
     def RestartUnit(self, name, mode, message=None, reply=None, error=None):
         def run():
-            print(f"systemd1: RestartUnit({name}, {mode})")
+            print(f"systemd1: RestartUnit({_q(name)}, {_q(mode)})")
             schema_ctl('restart', svc_name(str(name)))
             reply(self._trigger_job_signals(str(name)))
         self._gated(message, MANAGE_UNITS, run, error)
@@ -863,7 +878,7 @@ class Systemd1Manager(dbus.service.Object):
                          message_keyword='message', async_callbacks=('reply', 'error'))
     def TryRestartUnit(self, name, mode, message=None, reply=None, error=None):
         def run():
-            print(f"systemd1: TryRestartUnit({name}, {mode})")
+            print(f"systemd1: TryRestartUnit({_q(name)}, {_q(mode)})")
             self.poll_and_update()
             if self._is_active(str(name)):
                 schema_ctl('restart', svc_name(str(name)))
@@ -890,7 +905,7 @@ class Systemd1Manager(dbus.service.Object):
 
     def _reload_unit(self, name, mode, reply, error):
         name = str(name)
-        print(f"systemd1: ReloadUnit({name}, {mode})")
+        print(f"systemd1: ReloadUnit({_q(name)}, {_q(mode)})")
         if _is_bus_unit(name):
             _reload_dbus(lambda: reply(self._trigger_job_signals(name)), error)
             return
@@ -921,7 +936,7 @@ class Systemd1Manager(dbus.service.Object):
                          message_keyword='message', async_callbacks=('reply', 'error'))
     def ReloadOrRestartUnit(self, name, mode, message=None, reply=None, error=None):
         def run():
-            print(f"systemd1: ReloadOrRestartUnit({name}, {mode})")
+            print(f"systemd1: ReloadOrRestartUnit({_q(name)}, {_q(mode)})")
             if _is_bus_unit(name):
                 _reload_dbus(lambda: reply(self._trigger_job_signals(str(name))), error)
                 return
@@ -933,7 +948,7 @@ class Systemd1Manager(dbus.service.Object):
                          message_keyword='message', async_callbacks=('reply', 'error'))
     def ReloadOrTryRestartUnit(self, name, mode, message=None, reply=None, error=None):
         def run():
-            print(f"systemd1: ReloadOrTryRestartUnit({name}, {mode})")
+            print(f"systemd1: ReloadOrTryRestartUnit({_q(name)}, {_q(mode)})")
             if _is_bus_unit(name):
                 _reload_dbus(lambda: reply(self._trigger_job_signals(str(name))), error)
                 return
@@ -954,21 +969,21 @@ class Systemd1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='sba(sv)', out_signature='')
     def SetUnitProperties(self, name, runtime, properties):
-        print(f"systemd1: SetUnitProperties({name}) (no-op)")
+        print(f"systemd1: SetUnitProperties({_q(name)}) (no-op)")
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asbb', out_signature='ba(sss)')
     def EnableUnitFiles(self, names, runtime, force):
-        print(f"systemd1: EnableUnitFiles({list(names)})")
+        print(f"systemd1: EnableUnitFiles({_q(list(names))})")
         return dbus.Boolean(True), []
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asb', out_signature='a(sss)')
     def DisableUnitFiles(self, names, runtime):
-        print(f"systemd1: DisableUnitFiles({list(names)})")
+        print(f"systemd1: DisableUnitFiles({_q(list(names))})")
         return []
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='asbb', out_signature='a(sss)')
     def MaskUnitFiles(self, names, runtime, force):
-        print(f"systemd1: MaskUnitFiles({list(names)})")
+        print(f"systemd1: MaskUnitFiles({_q(list(names))})")
         return []
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='', out_signature='')
@@ -1002,7 +1017,7 @@ class Systemd1Manager(dbus.service.Object):
             k, v = str(a).split('=', 1)
             self.env_set[k] = v
             self.env_unset.discard(k)
-        print(f"systemd1: environment unset={list(unset)} set={list(assignments)}")
+        print(f"systemd1: environment unset={_q(list(unset))} set={_q(list(assignments))}")
 
     def _gated_env(self, message, unset, assignments, reply, error):
         def run():

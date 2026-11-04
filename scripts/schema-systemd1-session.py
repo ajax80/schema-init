@@ -34,7 +34,7 @@ from gi.repository import GLib
 BUS_NAME = "org.freedesktop.systemd1"
 PATH_PREFIX = "/org/freedesktop/systemd1"
 MGR_IFACE = "org.freedesktop.systemd1.Manager"
-FWD_TIMEOUT = 25000  # ms; covers an interactive polkit prompt on a write
+FWD_TIMEOUT = 25000  # ms
 
 # systemd --user unit search dirs, highest precedence first (systemd.unit(5)).
 # schema-init has no user manager, so we resolve StartUnit against these
@@ -895,10 +895,34 @@ def handle_start_unit(session, msg, member="StartUnit"):
     return True
 
 
+# A session caller means its user manager, and we are it. These have no user-side
+# state to change, so they succeed here. Forwarded, they would act on the system
+# manager (one user's environment for everyone, a full system reload), which
+# refuses a desktop user anyway. Real system units still forward, for polkit.
+_LOCAL_ACK_MEMBERS = ("Reload", "SetEnvironment", "UnsetEnvironment", "UnsetAndSetEnvironment")
+
+
+def handle_user_manager_write(session, msg, member):
+    if member in _LOCAL_ACK_MEMBERS:
+        _log("%s: ack, nothing to change" % member)
+        session.send_message(ll.MethodReturnMessage(msg))
+        return True
+    if member in _START_MEMBERS or member == "StopUnit":
+        name = str(msg.get_args_list(byte_arrays=True)[0])
+        if name.endswith(".target"):
+            _log("%s(%s): no user targets, ack" % (member, name))
+            _reply_job_and_done(session, msg, name)
+            return True
+    return False
+
+
 def forward_call(session, system, msg):
     call = ll.MethodCallMessage(
         BUS_NAME, msg.get_path(), msg.get_interface(), msg.get_member()
     )
+    # Never let this prompt, even if the client allows it: the call below blocks
+    # our only thread, so a dialog would freeze every app launch in the session.
+    call.set_allow_interactive_authorization(False)
     _append(call, msg.get_args_list(byte_arrays=True), msg.get_signature())
     try:
         reply = system.send_message_with_reply_and_block(call, FWD_TIMEOUT)
@@ -950,6 +974,8 @@ def main():
             if member in _START_MEMBERS and handle_start_unit(session, msg, member):
                 return ll.HANDLER_RESULT_HANDLED
             if member == "StopUnit" and handle_stop_unit(session, msg):
+                return ll.HANDLER_RESULT_HANDLED
+            if handle_user_manager_write(session, msg, member):
                 return ll.HANDLER_RESULT_HANDLED
         if path == "/" or path == PATH_PREFIX or path.startswith(PATH_PREFIX + "/"):
             forward_call(session, system, msg)

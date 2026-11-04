@@ -49,6 +49,7 @@ class FakePolkit(dbus.service.Object):
             mode = f.read()
         with open(wdir + "/polkit.log", "a") as f:
             f.write(json.dumps({"action": str(action), "flags": int(flags),
+                                "details": {str(k): str(v) for k, v in details.items()},
                                 "subject": [str(subject[0]), str(subject[1]["name"])]}) + "\n")
         return (mode == "yes", mode == "challenge", {})
 
@@ -99,21 +100,44 @@ procs = []
 class FakeBus:
     def __init__(self, uid):
         self.uid, self.polkit_calls = uid, 0
-    def get_unix_user(self, sender):
-        return self.uid
-    def call_async(self, *a, **k):
-        self.polkit_calls += 1
+    def call_async(self, name, path, iface, member, sig, args, ok, err, **k):
+        if member == "GetConnectionUnixUser":
+            ok(self.uid)
+        else:
+            self.polkit_calls += 1
 
 
 def decide(uid, sender):
     bus, got = FakeBus(uid), []
-    m.authorize(bus, sender, False, MANAGE, "StopUnit", lambda: got.append("run"), lambda e: got.append("deny"))
+    m.authorize(bus, sender, False, MANAGE, {}, "StopUnit", lambda: got.append("run"), lambda e: got.append("deny"))
     return got, bus.polkit_calls
 
 
 check("root passes without asking polkit", decide(0, ":1.5") == (["run"], 0))
 check("private socket (no sender) passes without asking polkit", decide(1000, None) == (["run"], 0))
 check("a user neither runs nor is denied until polkit answers", decide(1000, ":1.5") == ([], 1))
+
+
+class UidFails(FakeBus):
+    def call_async(self, name, path, iface, member, sig, args, ok, err, **k):
+        err(dbus.DBusException("gone", name="org.freedesktop.DBus.Error.NameHasNoOwner"))
+
+
+got = []
+m.authorize(UidFails(0), ":1.5", False, MANAGE, {}, "StopUnit", lambda: got.append("run"), lambda e: got.append("deny"))
+check("uid lookup failure is a refusal", got == ["deny"])
+
+# A new mutating method that skips the gate is an unauthenticated root action.
+OPEN = {"GetUnitFileState", "GetUnit", "LoadUnit", "ListUnits", "ListUnitsFiltered", "ListUnitsByNames",
+        "ResetFailed", "ResetFailedUnit", "KillUnit", "GetDefaultTarget", "ListUnitFiles", "UnmaskUnitFiles",
+        "PresetUnitFiles", "ListJobs", "CancelJob", "StartTransientUnit", "AttachProcessesToUnit",
+        "EnqueueMarkedJobs", "Reexecute", "SetUnitProperties", "EnableUnitFiles", "DisableUnitFiles",
+        "MaskUnitFiles", "Subscribe", "Unsubscribe"}
+mgr_methods = {k: v for k, v in vars(m.Systemd1Manager).items()
+               if getattr(v, "_dbus_is_method", False) and v._dbus_interface == "org.freedesktop.systemd1.Manager"}
+unlisted = sorted(k for k, v in mgr_methods.items() if k not in OPEN and v._dbus_message_keyword != "message")
+check("every Manager method is gated or knowingly open: %s" % unlisted, not unlisted)
+check("no open-listed method is stale", OPEN <= set(mgr_methods))
 
 
 # --- real bus -----------------------------------------------------------------
@@ -144,8 +168,8 @@ client = dbus.bus.BusConnection(ADDR)
 
 
 def spawn(role):
-    procs.append(subprocess.Popen([sys.executable, os.path.abspath(__file__), role, ADDR, work],
-                                  stdout=subprocess.DEVNULL, stderr=open(work + "/%s.err" % role, "w")))
+    procs.append(subprocess.Popen([sys.executable, "-u", os.path.abspath(__file__), role, ADDR, work],
+                                  stdout=open(work + "/%s.out" % role, "w"), stderr=open(work + "/%s.err" % role, "w")))
     return procs[-1]
 
 
@@ -259,6 +283,42 @@ def main():
     # the handler's own error must reach the caller once it runs after polkit
     check("ReloadUnit authorized: its own error still reaches the caller",
           call("ReloadUnit", "ss", ("nope.service", "replace")) == "org.freedesktop.systemd1.NoSuchUnit")
+
+    # schema-ctl strips the suffix, so all of these reach sshd: a polkit rule on
+    # sshd.service must see the same unit whichever spelling the caller picks.
+    for spelled in ("sshd.service", "sshd", "sshd.target"):
+        reset("no")
+        call("StopUnit", "ss", (spelled, "replace"))
+        check("polkit details for %s" % spelled,
+              polkit_seen()["details"] == {"unit": "sshd.service", "verb": "stop"})
+    for member, verb in (("StartUnit", "start"), ("RestartUnit", "restart"), ("TryRestartUnit", "try-restart"),
+                         ("ReloadUnit", "reload"), ("ReloadOrRestartUnit", "reload-or-restart"),
+                         ("ReloadOrTryRestartUnit", "reload-or-try-restart")):
+        reset("no")
+        call(member, "ss", U)
+        check("polkit verb for %s" % member, polkit_seen()["details"].get("verb") == verb)
+    reset("no")
+    call("Reload", "", ())
+    check("Reload names no unit", polkit_seen()["details"] == {})
+
+    forged = "systemd1: StopUnit['crond.service', 'replace'] uid=0 -> allowed"
+    for member, sig, args in (("ResetFailedUnit", "s", ("x\n" + forged,)),
+                              ("KillUnit", "ssi", ("x\n" + forged, "all", 15)),
+                              ("SetUnitProperties", "sba(sv)", ("x\n" + forged, True, [])),
+                              ("EnableUnitFiles", "asbb", (["x\n" + forged], False, False)),
+                              ("StartTransientUnit", "ssa(sv)a(sa(sv))", ("x\n" + forged, "fail", [], [])),
+                              ("AttachProcessesToUnit", "ssau", ("x\n" + forged, "/y", [1])),
+                              ("StopUnit", "ss", ("x\n" + forged, "replace"))):
+        reset("no")
+        call(member, sig, args)
+    time.sleep(0.3)
+    with open(work + "/bridge.out") as f:
+        check("no caller name can forge a log line", forged + "\n" not in f.read())
+    reset("no")
+    call("SetEnvironment", "as", (["A=" + "x" * 50000],))
+    time.sleep(0.3)
+    with open(work + "/bridge.out") as f:
+        check("a refused call's log line is bounded", max(len(l) for l in f) < 1000)
 
     reset("no")
     check("reads need no authorization", call("ListUnits", "", ()) is None)
