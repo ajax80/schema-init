@@ -458,6 +458,52 @@ def main():
         m._reply_job_and_done, m.GLib.timeout_add_seconds, m.USER_UNIT_DIRS, m._signal_group = saved
     print("test_systemd1_session: StopUnit OK")
 
+    # A session caller means its user manager, so these stay here: forwarded,
+    # they would reach the system manager, which now refuses the desktop user.
+    import dbus
+    import dbus.lowlevel as dll
+    def call(member, sig=None, *args):
+        msg = dll.MethodCallMessage("x.y", m.PATH_PREFIX, m.MGR_IFACE, member)
+        if args:
+            msg.append(*args, signature=sig)
+        return msg
+    saved_reply, saved_ll = m._reply_job_and_done, m.ll
+    acked = []
+    m._reply_job_and_done = lambda session, msg, name: acked.append(name)
+    # an unsent message has serial 0, and libdbus aborts on replying to one
+    m.ll = type("L", (), {"MethodCallMessage": dll.MethodCallMessage,
+                          "MethodReturnMessage": staticmethod(lambda msg: "return"),
+                          "ErrorMessage": staticmethod(lambda msg, err, text: "error")})
+    try:
+        for member, sig, args in (("Reload", None, ()), ("SetEnvironment", "as", (["A=1"],)),
+                                  ("UnsetEnvironment", "as", (["A"],)),
+                                  ("UnsetAndSetEnvironment", "asas", (["A"], ["B=1"]))):
+            session = _Session()
+            assert m.handle_user_manager_write(session, call(member, sig, *args), member) is True
+            assert session.sent == ["return"], member
+        for member in m._START_MEMBERS + ("StopUnit",):
+            acked.clear()
+            assert m.handle_user_manager_write(_Session(), call(member, "ss", "plasma-x.target", "fail"), member) is True
+            assert acked == ["plasma-x.target"], member
+            # a real service is the system's, and polkit decides
+            assert m.handle_user_manager_write(_Session(), call(member, "ss", "sshd.service", "fail"), member) is False
+        assert m.handle_user_manager_write(_Session(), call("ListUnits"), "ListUnits") is False
+
+        # The relay's call blocks its only thread: a prompt would freeze every app
+        # launch in the session, then time out with the dialog still up.
+        class _System:
+            def send_message_with_reply_and_block(self, fwd, timeout):
+                self.fwd = fwd
+                raise dbus.DBusException("no", name="org.freedesktop.DBus.Error.AccessDenied")
+        for flag in (True, False):
+            system, msg = _System(), call("RestartUnit", "ss", "sshd.service", "replace")
+            msg.set_allow_interactive_authorization(flag)
+            m.forward_call(_Session(), system, msg)
+            assert system.fwd.get_allow_interactive_authorization() is False
+    finally:
+        m._reply_job_and_done, m.ll = saved_reply, saved_ll
+    print("test_systemd1_session: user manager writes OK")
+
     print("test_systemd1_session: OK")
 
 

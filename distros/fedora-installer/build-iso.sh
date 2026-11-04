@@ -53,6 +53,7 @@ install -m0755 "$HERE/../fedora-kde/scripts/schema-plasma-autologin.sh" "$PAYLOA
 # login1 stub + session bookkeeping + the Plasma launch chain. Autologin drives
 # these to bring up a full KDE Wayland desktop under schema-init as PID 1.
 install -m0755 "$REPO/scripts/schema-logind.py"               "$PAYLOAD/scripts/"
+install -m0755 "$REPO/scripts/schema-systemd1.py"               "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-doctor.py"               "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-session-register"        "$PAYLOAD/scripts/"
 install -m0755 "$REPO/scripts/schema-session-unregister"      "$PAYLOAD/scripts/"

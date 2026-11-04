@@ -21,6 +21,7 @@ config autostart
 service dbus
 service seatd
 service schema-logind
+service schema-systemd1
 service plasma-autologin
 service polkitd
 service bluetoothd

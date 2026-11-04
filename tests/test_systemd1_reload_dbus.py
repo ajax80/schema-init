@@ -27,6 +27,10 @@ class Mgr:
         self.signals = []
     def poll_and_update(self):
         pass
+    # who may call is test_systemd1_authz's concern; this file tests what runs
+    def _gated(self, message, action, proceed, error):
+        proceed()
+    _reload_unit = m.Systemd1Manager._reload_unit
     def _trigger_job_signals(self, name):
         self.signals.append(name)
         return "/job/1"
