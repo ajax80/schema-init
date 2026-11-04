@@ -31,6 +31,15 @@ int main(void) {
     put(&o, "SUBSYSTEM", "acpi"); put(&o, "DEVPATH", "/devices/LNXSYSTM:00/AMDI0030:00");
     assert(udev_db_filename(&o, name, sizeof name) == 0 && strcmp(name, "+acpi:AMDI0030:00") == 0);
 
+    /* drivers: sd-device's id carries the bus, or same-named drivers on two
+     * buses (pnp + platform rtc_cmos) share one record */
+    struct uevent dr; memset(&dr, 0, sizeof dr);
+    put(&dr, "SUBSYSTEM", "drivers"); put(&dr, "DEVPATH", "/bus/platform/drivers/rtc_cmos");
+    assert(udev_db_filename(&dr, name, sizeof name) == 0 && strcmp(name, "+drivers:platform:rtc_cmos") == 0);
+    struct uevent mo; memset(&mo, 0, sizeof mo);
+    put(&mo, "SUBSYSTEM", "module"); put(&mo, "DEVPATH", "/module/block");
+    assert(udev_db_filename(&mo, name, sizeof name) == 0 && strcmp(name, "+module:block") == 0);
+
     /* delta serialization: kernel props [0,kernel_n), derived props after */
     struct uevent d; memset(&d, 0, sizeof d);
     put(&d, "SUBSYSTEM", "block"); put(&d, "MAJOR", "8"); put(&d, "MINOR", "0");

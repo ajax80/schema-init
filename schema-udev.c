@@ -414,6 +414,57 @@ static double mono_ms(void) {
     return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
 }
 
+#define SUBSYS_TRIGGERED SCHEMA_UDEV_READY_DIR "/subsystems-triggered"
+#define SUBSYS_DRAIN_MS  5000
+
+static unsigned long long kernel_seqnum(void) {
+    unsigned long long v = 0;
+    FILE *f = fopen("/sys/kernel/uevent_seqnum", "re");
+    if (f) { if (fscanf(f, "%llu", &v) != 1) v = 0; fclose(f); }
+    return v;
+}
+
+/* Subsystems before devices, as systemd-udev-trigger does: device rules can
+ * depend on what module adds set (module parameters, nodes from RUN+=). The
+ * kernel queues the triggered events on nlfd; handle them all before the
+ * device walk so "ready" means they ran. Once per boot: a live restart must
+ * not replay ~1000 module/driver adds to every listener. */
+static void subsystems_coldplug(int nlfd) {
+    if (access(SUBSYS_TRIGGERED, F_OK) == 0) {
+        fprintf(stderr, "[schema-udev] subsystem uevents already replayed this boot\n");
+        return;
+    }
+    double t0 = mono_ms();
+    int n = coldplug_trigger_subsystems("/sys");
+    unsigned long long target = kernel_seqnum(), seen = 0;
+    int handled = 0;
+    while (n > 0 && seen < target) {
+        int left = SUBSYS_DRAIN_MS - (int)(mono_ms() - t0);
+        if (left <= 0) break;
+        struct pollfd p = { nlfd, POLLIN, 0 };
+        if (poll(&p, 1, left) <= 0) { if (errno == EINTR) continue; break; }
+        for (;;) {
+            char buf[8192];
+            ssize_t r = netlink_recv(nlfd, buf, sizeof buf);
+            if (r < 0) {
+                if (errno == EINTR || errno == 0 || errno == ENOBUFS) continue;
+                break;
+            }
+            struct uevent ev;
+            if (uevent_parse(buf, (size_t)r, &ev) != 0) continue;
+            const char *sq = uevent_get(&ev, "SEQNUM");
+            if (sq) { unsigned long long v = strtoull(sq, NULL, 10); if (v > seen) seen = v; }
+            dispatch(&ev);
+            handled++;
+        }
+    }
+    fprintf(stderr, "[schema-udev] subsystems: triggered %d, handled %d events in %.0fms%s\n",
+            n, handled, mono_ms() - t0, seen < target && n > 0 ? " (TIMED OUT before the last)" : "");
+    mkdir(SCHEMA_UDEV_READY_DIR, 0755);
+    int fd = open(SUBSYS_TRIGGERED, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+    if (fd >= 0) close(fd);
+}
+
 static void coldplug_dispatch(struct uevent *ev) {
     double t0 = mono_ms();
     dispatch(ev);
@@ -472,13 +523,11 @@ int main(void) {
     disk_links_wipe(SCHEMA_DISK_DIR);
     uaccess_wipe(SCHEMA_UACCESS_DIR);
     fprintf(stderr, "[schema-udev] rules load %.0fms, wipe %.0fms\n", rl_t1 - rl_t0, mono_ms() - rl_t1);
+    if (g_live) subsystems_coldplug(nlfd);
     fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
     double cp_t0 = mono_ms();
     coldplug_walk_root("/sys", coldplug_dispatch);
     fprintf(stderr, "[schema-udev] coldplug took %.0fms\n", mono_ms() - cp_t0);
-    if (g_live)
-        fprintf(stderr, "[schema-udev] triggered %d subsystem uevents (module/bus/drivers)\n",
-                coldplug_trigger_subsystems("/sys"));
     if (g_live && udev_signal_ready() == 0)
         fprintf(stderr, "[schema-udev] ready marker %s written (coldplug complete)\n", SCHEMA_UDEV_READY);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");

@@ -491,8 +491,7 @@ static inline int coldplug_walk_root(const char *sysroot, void (*on_event)(struc
  * (60-block.rules turns on removable-media polling on module/block add; NFS,
  * fuse, nvidia hang off module adds too). Their uevent files are write-only
  * with no subsystem link, so no event can be built from them here: write
- * "add" and let the kernel emit the real one, as udevadm does. Returns how
- * many were triggered. */
+ * "add" and let the kernel emit the real one, as udevadm does. */
 static inline int coldplug_trigger_subsystems(const char *sysroot) {
     static const char *const pat[] = { "module/*/uevent", "bus/*/uevent", "bus/*/drivers/*/uevent" };
     int n = 0;
@@ -500,7 +499,7 @@ static inline int coldplug_trigger_subsystems(const char *sysroot) {
         char g[1024];
         if ((size_t)snprintf(g, sizeof g, "%s/%s", sysroot, pat[i]) >= sizeof g) continue;
         glob_t gl;
-        if (glob(g, 0, NULL, &gl) != 0) continue;
+        if (glob(g, GLOB_NOSORT, NULL, &gl) != 0) continue;
         for (size_t j = 0; j < gl.gl_pathc; j++) {
             int fd = open(gl.gl_pathv[j], O_WRONLY | O_CLOEXEC);
             if (fd < 0) continue;
