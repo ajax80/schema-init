@@ -39,6 +39,10 @@ static void test_argv_split(void) {
     assert(!strcmp(argv[0], "ata_id")); assert(!strcmp(argv[1], "--export"));
     assert(!strcmp(argv[2], "/dev/sda")); assert(argv[3] == NULL);
 
+    /* double quotes group like single, and a quote inside the other stays literal */
+    n = udev_argv_split("/bin/sh -c \"echo a b\" 'say \"hi\"' \"it's\"", store, argv, 16);
+    assert(n == 5 && strcmp(argv[2], "echo a b") == 0 &&
+           strcmp(argv[3], "say \"hi\"") == 0 && strcmp(argv[4], "it's") == 0);
     n = udev_argv_split("/bin/sh -c 'logger hi there' -- x", store, argv, 16);
     assert(n == 5);
     assert(!strcmp(argv[0], "/bin/sh")); assert(!strcmp(argv[1], "-c"));

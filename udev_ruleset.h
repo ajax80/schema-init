@@ -60,8 +60,9 @@ static inline int rk_parse_span(const char *s, const char *end, struct rk_span *
     while (p < end && (*p == ' ' || *p == '\t')) p++;
     if (p >= end || *p != '"') return -1;
     p++;
-    const char *e = memchr(p, '"', (size_t)(end - p));
-    if (!e) return -1;
+    const char *e = p;
+    while (e < end && *e != '"') e += (e[0] == '\\' && e + 1 < end && e[1] == '"') ? 2 : 1;
+    if (e >= end) return -1;
     sp->v = p; sp->vl = (size_t)(e - p);
     if (sp->vl >= RK_VAL_MAX) return -1;
     return 0;
@@ -73,10 +74,15 @@ static inline void rk_span_fill(const struct rk_span *sp, struct rule_clause *ou
     out->op = sp->op;
     out->key = *w;    memcpy(*w, sp->k, sp->kl); *w += sp->kl; *(*w)++ = '\0';
     out->subkey = *w; if (sp->sl) memcpy(*w, sp->s, sp->sl); *w += sp->sl; *(*w)++ = '\0';
-    out->val = *w;    memcpy(*w, sp->v, sp->vl); *w += sp->vl; *(*w)++ = '\0';
+    out->val = *w;
+    for (size_t i = 0; i < sp->vl; i++) {
+        if (sp->v[i] == '\\' && i + 1 < sp->vl && sp->v[i + 1] == '"') i++;
+        *(*w)++ = sp->v[i];
+    }
+    *(*w)++ = '\0';
 }
 
-/* Split on top-level commas (quotes are literal), parse each as a clause. */
+/* Split on top-level commas (\" does not end a value), parse each as a clause. */
 static inline int ruleset_parse_line(const char *line, struct rule *out) {
     struct rk_span sp[RULE_MAX_CLAUSES];
     int n = 0;
@@ -91,7 +97,11 @@ static inline int ruleset_parse_line(const char *line, struct rule *out) {
         /* find end of this clause: next top-level comma */
         const char *seg = p;
         int inq = 0;
-        while (*p && !(*p == ',' && !inq)) { if (*p == '"') inq = !inq; p++; }
+        while (*p && !(*p == ',' && !inq)) {
+            if (inq && p[0] == '\\' && p[1] == '"') { p += 2; continue; }
+            if (*p == '"') inq = !inq;
+            p++;
+        }
         size_t seglen = (size_t)(p - seg);
         if (seglen == 0 || seglen >= RK_KEY_MAX + RK_SUB_MAX + RK_VAL_MAX + 8) { if (*p == ',') p++; continue; }
         if (n >= RULE_MAX_CLAUSES) return -1;

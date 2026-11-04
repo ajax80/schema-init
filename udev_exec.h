@@ -21,8 +21,11 @@ static inline int udev_argv_split(const char *cmd, char store[][UE_VAL_MAX],
         if (argc >= max) return -1;
         char *o = store[argc]; size_t n = 0;
         while (*p && *p != ' ' && *p != '\t') {
-            if (*p == '\'') { p++; while (*p && *p != '\'') { if (n + 1 < UE_VAL_MAX) o[n++] = *p; p++; }
-                              if (*p == '\'') p++; }
+            if (*p == '\'' || *p == '"') {
+                char q = *p++;
+                while (*p && *p != q) { if (n + 1 < UE_VAL_MAX) o[n++] = *p; p++; }
+                if (*p == q) p++;
+            }
             else { if (n + 1 < UE_VAL_MAX) o[n++] = *p; p++; }
         }
         o[n] = '\0'; argv[argc] = store[argc]; argc++;

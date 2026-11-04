@@ -624,7 +624,15 @@ def _expand(s, env, unit_name="", variables=True):
 # auto-reaped (SIGCHLD=SIG_IGN), so liveness is os.kill(pid,0) -- but a bare pid
 # is reuse-unsafe (a recycled pid would read as "alive" and get SIGTERM'd), so
 # we pin it with /proc/pid/stat starttime, which is unique per pid incarnation.
-_spawned = {}  # unit name -> (pid, starttime)
+_spawned = {}  # _spawn_key(unit) -> (pid, starttime)
+STOP_TIMEOUT_SEC = 90   # systemd's DefaultTimeoutStopSec
+
+
+def _spawn_key(unit_name):
+    # An Alias= and its unit are one unit. Instances resolve to their template
+    # file, which must not collapse them into one record.
+    path = None if "@" in unit_name else _find_user_unit(unit_name)
+    return os.path.basename(os.path.realpath(path)) if path else unit_name
 
 
 def _proc_starttime(pid):
@@ -672,7 +680,13 @@ def _signal_group(pid, sig):
         return False
 
 
-def _stop_unit(name):
+def _kill_late(pid, st):
+    if _proc_starttime(pid) == st:
+        _signal_group(pid, signal.SIGKILL)
+    return False    # one-shot GLib source
+
+
+def _stop_unit(name, kill_after=0):
     rec = _spawned.pop(name, None)
     if not rec:
         return False
@@ -692,7 +706,12 @@ def _stop_unit(name):
             break
         time.sleep(0.05)
     else:
-        _signal_group(pid, signal.SIGKILL)
+        # A restart can't wait, its respawn needs the bus name. A plain stop must
+        # give the unit time to flush, without holding this main loop.
+        if kill_after:
+            GLib.timeout_add_seconds(kill_after, _kill_late, pid, st)
+        else:
+            _signal_group(pid, signal.SIGKILL)
     _log("stopped %s pid=%d" % (name, pid))
     return True
 
@@ -780,6 +799,32 @@ def handle_schema_user_unit(session, msg, member):
     return True
 
 
+def handle_stop_unit(session, msg):
+    # Only this process can stop what it spawned. Never forward a user unit: the
+    # system bridge would stop a system service of the same name.
+    try:
+        name = str(msg.get_args_list(byte_arrays=True)[0])
+    except Exception as e:  # noqa: BLE001
+        _log("StopUnit args error: %r" % (e,))
+        return False
+    unit_name = _unit_name(name)
+    key = _spawn_key(unit_name)
+    if not _unit_alive(key):
+        if not _find_user_unit(unit_name):
+            return False
+        _log("StopUnit(%s): not running, no-op ack" % name)
+    else:
+        rec = _spawned[key]
+        if not _stop_unit(key, STOP_TIMEOUT_SEC) and _proc_starttime(rec[0]) == rec[1]:
+            _spawned[key] = rec
+            session.send_message(ll.ErrorMessage(
+                msg, "org.freedesktop.DBus.Error.Failed",
+                "schema-init: could not signal %s" % unit_name))
+            return True
+    _reply_job_and_done(session, msg, name)
+    return True
+
+
 def handle_start_unit(session, msg, member="StartUnit"):
     # KDE portal .service files carry SystemdService=, so dbus delegates their
     # activation to org.freedesktop.systemd1.Manager.StartUnit on the session
@@ -794,7 +839,8 @@ def handle_start_unit(session, msg, member="StartUnit"):
         return False
     unit_name = _unit_name(name)
 
-    action = _restart_action(member, _unit_alive(unit_name))
+    key = _spawn_key(unit_name)
+    action = _restart_action(member, _unit_alive(key))
     if action == "noop":
         # StartUnit on an already-running unit, or Try*Restart on one that is not
         # running: systemd does nothing but succeeds. Ack the job (so the caller
@@ -834,7 +880,7 @@ def handle_start_unit(session, msg, member="StartUnit"):
     exec_path, argv = plan
 
     if action == "restart":
-        _stop_unit(unit_name)
+        _stop_unit(key)
     _log("%s(%s): spawning %s from %s" % (member, name, exec_path, unit_file))
     pid = _spawn(exec_path, argv, expanded_env)
     if not pid:
@@ -844,7 +890,7 @@ def handle_start_unit(session, msg, member="StartUnit"):
             msg, "org.freedesktop.DBus.Error.Failed",
             "schema-init: failed to spawn %s" % exec_path))
         return True
-    _spawned[unit_name] = (pid, _proc_starttime(pid))
+    _spawned[key] = (pid, _proc_starttime(pid))
     _reply_job_and_done(session, msg, name)
     return True
 
@@ -902,6 +948,8 @@ def main():
                     handle_schema_user_unit(session, msg, member):
                 return ll.HANDLER_RESULT_HANDLED
             if member in _START_MEMBERS and handle_start_unit(session, msg, member):
+                return ll.HANDLER_RESULT_HANDLED
+            if member == "StopUnit" and handle_stop_unit(session, msg):
                 return ll.HANDLER_RESULT_HANDLED
         if path == "/" or path == PATH_PREFIX or path.startswith(PATH_PREFIX + "/"):
             forward_call(session, system, msg)

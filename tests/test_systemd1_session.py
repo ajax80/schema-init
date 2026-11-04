@@ -377,6 +377,87 @@ def main():
             m._populated = saved_pop
     print("test_systemd1_session: podman scopes OK")
 
+    # StopUnit acts on what this shim spawned and never reaches a same-named system unit
+    class _Msg:
+        def __init__(self, name):
+            self.name = name
+
+        def get_args_list(self, byte_arrays=False):
+            return [self.name, "replace"]
+
+    class _Session:
+        def __init__(self):
+            self.sent = []
+
+        def send_message(self, reply):
+            self.sent.append(reply)
+
+    acked, timers = [], []
+    saved = (m._reply_job_and_done, m.GLib.timeout_add_seconds, m.USER_UNIT_DIRS, m._signal_group)
+    m._reply_job_and_done = lambda session, msg, name: acked.append(name)
+    m.GLib.timeout_add_seconds = lambda sec, fn, *a: timers.append((sec, fn, a))
+    try:
+        with tempfile.TemporaryDirectory() as units:
+            m.USER_UNIT_DIRS = [units]
+            with open(units + "/real.service", "w") as f:
+                f.write("[Service]\nExecStart=/usr/bin/sleep 60\n")
+            os.symlink("real.service", units + "/dbus-org.x.service")
+
+            # a running unit gets SIGTERM and the job is acked
+            p = subprocess.Popen(["sleep", "60"], start_new_session=True)
+            m._spawned["probe.service"] = (p.pid, m._proc_starttime(p.pid))
+            assert m.handle_stop_unit(None, _Msg("probe.service")) is True
+            assert p.wait(timeout=5) == -signal.SIGTERM
+            assert acked == ["probe.service"] and "probe.service" not in m._spawned
+
+            # a known user unit that is not running: ack, no forward to the system bus
+            acked.clear()
+            assert m.handle_stop_unit(None, _Msg("real.service")) is True
+            assert acked == ["real.service"]
+
+            # no user unit and nothing spawned: not ours, forward
+            acked.clear()
+            assert m.handle_stop_unit(None, _Msg("never-spawned.service")) is False
+            assert acked == []
+
+            # started through an alias, stopped by its real name
+            assert m.handle_start_unit(None, _Msg("dbus-org.x.service")) is True
+            pid = m._spawned["real.service"][0]
+            assert m.handle_stop_unit(None, _Msg("real.service")) is True
+            assert os.waitpid(pid, 0)[1] == signal.SIGTERM and "real.service" not in m._spawned
+            timers.clear()
+
+            # a slow unit keeps its stop grace: no SIGKILL at the restart wait
+            acked.clear()
+            p = subprocess.Popen(["sh", "-c", "trap '' TERM; exec sleep 60"], start_new_session=True)
+            time.sleep(0.2)
+            m._spawned["slow.service"] = (p.pid, m._proc_starttime(p.pid))
+            assert m.handle_stop_unit(None, _Msg("slow.service")) is True
+            assert p.poll() is None and acked == ["slow.service"]
+            assert [t[0] for t in timers] == [90]
+            sec, fn, args = timers[0]
+            assert fn(*args) is False                                  # one-shot GLib source
+            assert p.wait(timeout=5) == -signal.SIGKILL
+
+            # a signal that fails is an error, and the unit stays tracked
+            acked.clear()
+            p = subprocess.Popen(["sleep", "60"], start_new_session=True)
+            m._spawned["stuck.service"] = rec = (p.pid, m._proc_starttime(p.pid))
+            m._signal_group = lambda pid, sig: False
+            session = _Session()
+            saved_ll = m.ll
+            m.ll = type("L", (), {"ErrorMessage": staticmethod(lambda msg, err, text: text)})
+            try:
+                assert m.handle_stop_unit(session, _Msg("stuck.service")) is True
+            finally:
+                m.ll = saved_ll
+            assert acked == [] and len(session.sent) == 1 and m._spawned["stuck.service"] == rec
+            p.kill()
+            p.wait()
+    finally:
+        m._reply_job_and_done, m.GLib.timeout_add_seconds, m.USER_UNIT_DIRS, m._signal_group = saved
+    print("test_systemd1_session: StopUnit OK")
+
     print("test_systemd1_session: OK")
 
 

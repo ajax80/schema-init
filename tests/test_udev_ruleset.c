@@ -36,6 +36,12 @@ int main(void) {
     assert(CL("KERNEL==\"sd*|vd*\"") == 0 &&
            strcmp(c->val, "sd*|vd*") == 0);
 
+    /* \" stays inside the value and is unescaped, as udev_rule_parse_value does */
+    assert(CL("RUN+=\"bash -c '[[ $$x != \\\"D\\\" ]] && y'\"") == 0);
+    assert(strcmp(c->val, "bash -c '[[ $$x != \"D\" ]] && y'") == 0);
+    /* other backslashes are left for the value's own consumer */
+    assert(CL("SYMLINK+=\"a\\x2db\"") == 0 && strcmp(c->val, "a\\x2db") == 0);
+
     /* malformed: no operator */
     assert(CL("ACTION add") == -1);
 
@@ -56,6 +62,13 @@ int main(void) {
 
     /* blank line -> 0 clauses */
     assert(ruleset_parse_line("   ", &r) == 0);
+
+    /* a comma after \" is still inside the value, not a clause separator */
+    struct rule q;
+    assert(ruleset_parse_line("RUN+=\"a \\\"b,c\\\" d, e\", MODE=\"660\"", &q) == 2);
+    assert(strcmp(q.clause[0].val, "a \"b,c\" d, e") == 0);
+    assert(strcmp(q.clause[1].key, "MODE") == 0 && strcmp(q.clause[1].val, "660") == 0);
+    free(q.clause);
 
     printf("test_udev_ruleset: line OK\n");
 
