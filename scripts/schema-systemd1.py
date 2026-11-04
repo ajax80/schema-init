@@ -8,6 +8,8 @@ import json
 import re
 import gc
 import resource
+import select
+import stat
 import dbus
 import dbus.service
 import dbus.server
@@ -52,6 +54,97 @@ def svc_name(unit):
         if unit.endswith(suffix):
             return unit[:-len(suffix)]
     return unit
+
+CGROUP_ROOT = os.environ.get('SCHEMA_CGROUP_ROOT', '/sys/fs/cgroup')
+_ATTACH_SUB_RE = re.compile(r'^/user\.slice/podman-[A-Za-z0-9_-]{1,64}\.scope$')
+_ATTACH_MAX_PIDS = 4
+
+
+class AttachRefused(Exception):
+    def __init__(self, kind, why):
+        super().__init__(why)
+        self.kind = kind
+
+
+def _owned_dir(path, uid):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        raise AttachRefused('InvalidArgs', 'no such cgroup %s' % path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+        raise AttachRefused('AccessDenied', '%s is not a directory owned by %d' % (path, uid))
+
+
+def attach_validate(caller_uid, unit, subcgroup, pids, cg_root=None):
+    # Only what systemd --user asks PID 1 for on podman's behalf: a user's own
+    # process into a podman scope inside that user's own delegated tree.
+    cg_root = cg_root or CGROUP_ROOT
+    if caller_uid == 0:
+        raise AttachRefused('AccessDenied', 'root needs no attach')
+    if unit != 'user@%d.service' % caller_uid:
+        raise AttachRefused('AccessDenied', 'unit %s is not the caller\'s user@ unit' % unit)
+    if not _ATTACH_SUB_RE.match(subcgroup):
+        raise AttachRefused('InvalidArgs', 'subcgroup %r not allowed' % subcgroup)
+    if not 1 <= len(pids) <= _ATTACH_MAX_PIDS:
+        raise AttachRefused('InvalidArgs', '%d pids' % len(pids))
+    user_svc = '%s/user.slice/user-%d.slice/%s' % (cg_root, caller_uid, unit)
+    target = user_svc + subcgroup
+    # lstat every component we own a claim on: a symlink anywhere below
+    # user@ would let root write outside the user's tree.
+    for path in (user_svc, user_svc + '/user.slice', target):
+        _owned_dir(path, caller_uid)
+    if os.path.commonpath([user_svc, os.path.realpath(target)]) != user_svc:
+        raise AttachRefused('AccessDenied', '%s resolves outside %s' % (target, user_svc))
+    return target
+
+
+def _exited(fd):
+    p = select.poll()
+    p.register(fd, select.POLLIN)
+    return bool(p.poll(0))
+
+
+def _pid_uids(pid):
+    with open('/proc/%d/status' % pid) as f:
+        for line in f:
+            if line.startswith('Uid:'):
+                return tuple(int(x) for x in line.split()[1:5])
+    return ()
+
+
+def attach_pids(target, pids, caller_uid):
+    for pid in pids:
+        try:
+            fd = os.pidfd_open(pid)
+        except OSError:
+            raise AttachRefused('InvalidArgs', 'pid %d is gone' % pid)
+        try:
+            try:
+                uids = _pid_uids(pid)
+            except OSError:
+                raise AttachRefused('InvalidArgs', 'pid %d is gone' % pid)
+            # All four (real, effective, saved, fs): a setuid helper is not the
+            # user's to move. Gid is not checked -- cgroup access is uid-bound.
+            if uids != (caller_uid,) * 4:
+                raise AttachRefused('AccessDenied', 'pid %d is not wholly uid %d' % (pid, caller_uid))
+            # Not exited after the status read: the uids belonged to the
+            # process fd holds, not to a recycled number.
+            if _exited(fd):
+                raise AttachRefused('InvalidArgs', 'pid %d exited during attach' % pid)
+            try:
+                with open(target + '/cgroup.procs', 'w') as f:
+                    f.write('%d\n' % pid)
+            except ProcessLookupError:
+                raise AttachRefused('InvalidArgs', 'pid %d exited during attach' % pid)
+            except OSError as e:
+                raise AttachRefused('AccessDenied', 'write %s: %s' % (target, e))
+            # Never "undo" by moving the number elsewhere: if it was recycled,
+            # the new holder never lived in the old cgroup.
+            if _exited(fd):
+                raise AttachRefused('InvalidArgs', 'pid %d exited during attach' % pid)
+        finally:
+            os.close(fd)
+
 
 def _reload_dbus(done, fail):
     # what dbus-broker's ExecReload= does; safe on every schema-dbus version and
@@ -650,6 +743,18 @@ class Systemd1Manager(dbus.service.Object):
         self.JobNew(dbus.UInt32(job_id), job_path, name)
         self.JobRemoved(dbus.UInt32(job_id), job_path, name, "done")
         return job_path
+
+    @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ssau',
+                         out_signature='', sender_keyword='sender')
+    def AttachProcessesToUnit(self, unit, subcgroup, pids, sender=None):
+        unit, subcgroup, pids = str(unit), str(subcgroup), [int(p) for p in pids]
+        uid = int(self.bus.get_unix_user(sender))
+        try:
+            attach_pids(attach_validate(uid, unit, subcgroup, pids), pids, uid)
+        except AttachRefused as e:
+            print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> refused: {e}")
+            raise dbus.exceptions.DBusException(str(e), name='org.freedesktop.DBus.Error.' + e.kind)
+        print(f"systemd1: AttachProcessesToUnit({unit}, {subcgroup}, {pids}) uid={uid} -> ok")
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o')
     def StopUnit(self, name, mode):
