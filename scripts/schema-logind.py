@@ -2048,6 +2048,12 @@ class UserSupervisors:
             if status is not None:
                 st['pid'] = None
                 if st['stopping']:
+                    # schema-user stopped its own services; what is left is not
+                    # its (podman exec scopes): systemd's user@U stop takes them
+                    # too. Their dirs go at the next _start, once empty.
+                    if user_cgroup_populated(uid):
+                        self.killed |= user_cgroup_pids(uid)
+                        kill_user_cgroup(uid)
                     remove_user_cgroup(uid)
                     del self.state[uid]
                     print(f"login1-stub: schema-user uid={uid} stopped")

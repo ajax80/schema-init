@@ -454,6 +454,28 @@ def test_linger_without_session():
 
 
 
+# podman exec scopes live in user@U.service/user.slice/ and are not
+# schema-user's services: an ordered stop must take them too, as systemd's
+# user@U stop does, or they run on unsupervised until the next _start.
+def test_stop_kills_leftover_scopes():
+    sv = fresh()
+    try:
+        sv.reconcile({UID}, 0)
+        pid = sv.pid(UID)
+        wait_for(lambda: execd(pid))
+        with open(svc_dir() + '/cgroup.events', 'w') as f:
+            f.write('populated 1\nfrozen 0\n')
+        sv.reconcile(set(), 1)
+        sv.reconcile(set(), 31)
+        check('stop: schema-user TERMed', wait_for(lambda: dead(pid)))
+        sv.reconcile(set(), 32)
+        check('stop: leftover scope processes killed via cgroup.kill',
+              read(svc_dir() + '/cgroup.kill').strip() == '1')
+        check('stop: uid forgotten', UID not in sv.state)
+    finally:
+        cleanup(sv)
+
+
 def test_crash_kills_leftovers():
     sv = fresh(CRASHER)
     try:
@@ -775,6 +797,7 @@ TESTS = [
     test_adopt_reaps_zombies,
     test_start_without_delegation,
     test_stop_escalates_after_relogin,
+    test_stop_kills_leftover_scopes,
 ]
 
 

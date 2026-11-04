@@ -62,8 +62,21 @@ check("symlinked user.slice refused", refused(v(), "AccessDenied"))
 os.unlink(svc + "/user.slice")
 os.rename(svc + "/user.slice.real", svc + "/user.slice")
 
+# CI runs us under system.slice; pretend we're in a login session
+real_cg = m._pid_cgroup
+m._pid_cgroup = lambda pid: "/user.slice/user-%d.slice/session-1.scope" % me
 m.attach_pids(leaf, [os.getpid()], me)
 check("own pid written", open(procs).read().strip() == str(os.getpid()))
+
+open(procs, "w").close()
+m._pid_cgroup = lambda pid: "/system.slice/foo.service"
+check("own-uid process outside the user's slice refused",
+      refused(lambda: m.attach_pids(leaf, [os.getpid()], me), "AccessDenied"))
+check("  ...nothing written", open(procs).read() == "")
+m._pid_cgroup = lambda pid: "/user.slice/user-%d.slice/session-1.scope" % (me + 1)
+check("own-uid process in another user's slice refused",
+      refused(lambda: m.attach_pids(leaf, [os.getpid()], me), "AccessDenied"))
+m._pid_cgroup = lambda pid: "/user.slice/user-%d.slice/session-1.scope" % me
 
 open(procs, "w").close()
 check("root's pid 1 refused", refused(lambda: m.attach_pids(leaf, [1], me), "AccessDenied"))
@@ -83,6 +96,7 @@ m._exited = lambda fd: next(seq)
 check("exited after write refused", refused(lambda: m.attach_pids(leaf, [os.getpid()], me), "InvalidArgs"))
 check("  ...only the target was written", open(procs).read().strip() == str(os.getpid()))
 m._exited = real_exited
+m._pid_cgroup = real_cg
 
 print("test_systemd1_attach: %d/%d" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

@@ -112,6 +112,14 @@ def _pid_uids(pid):
     return ()
 
 
+def _pid_cgroup(pid):
+    with open('/proc/%d/cgroup' % pid) as f:
+        for line in f:
+            if line.startswith('0::'):
+                return line[3:].strip()
+    return ''
+
+
 def attach_pids(target, pids, caller_uid):
     for pid in pids:
         try:
@@ -127,6 +135,14 @@ def attach_pids(target, pids, caller_uid):
             # user's to move. Gid is not checked -- cgroup access is uid-bound.
             if uids != (caller_uid,) * 4:
                 raise AttachRefused('AccessDenied', 'pid %d is not wholly uid %d' % (pid, caller_uid))
+            # Only out of the user's own sessions/tree: a system service that
+            # merely runs as this uid stays under root's limits and kill.
+            try:
+                src = _pid_cgroup(pid)
+            except OSError:
+                raise AttachRefused('InvalidArgs', 'pid %d is gone' % pid)
+            if not src.startswith('/user.slice/user-%d.slice/' % caller_uid):
+                raise AttachRefused('AccessDenied', 'pid %d is in %s, not uid %d\'s slice' % (pid, src, caller_uid))
             # Not exited after the status read: the uids belonged to the
             # process fd holds, not to a recycled number.
             if _exited(fd):

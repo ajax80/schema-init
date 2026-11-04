@@ -371,6 +371,8 @@ def main():
             assert not os.path.exists(sl + "/podman-51.scope")
             ok, why = m._scope_request("podman-52.scope", [("PIDs", [9])], 52, me, broken, root)
             assert not ok and not os.path.exists(sl + "/podman-52.scope")
+            ok, why = m._scope_request("podman-53.scope", [("PIDs", 7)], 53, me, broken, root)
+            assert not ok and "error" in why                                   # malformed PIDs: answered, not raised
         finally:
             m._populated = saved_pop
     print("test_systemd1_session: podman scopes OK")

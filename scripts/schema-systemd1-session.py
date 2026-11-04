@@ -180,7 +180,7 @@ def _spawn(exec_path, argv, kde_env):
         return None
 
 
-def handle_start_transient_unit(session, msg, system=None):
+def handle_start_transient_unit(session, msg, system):
     global _job_seq
     try:
         args = msg.get_args_list(byte_arrays=True)
@@ -191,7 +191,7 @@ def handle_start_transient_unit(session, msg, system=None):
         _log("args error: %r" % e)
 
     exec_path, argv, kde_env = _parse_exec_and_env(props)
-    if not exec_path and system is not None and _SCOPE_RE.match(name):
+    if not exec_path and _SCOPE_RE.match(name):
         handle_scope(session, system, msg, name, props)
         return
     if not exec_path:
@@ -294,8 +294,8 @@ def _scope_prepare(name, uid, cg_root):
     return leaf
 
 
-def _scope_sweep(uid, cg_root=None):
-    sl = _user_slice(uid, cg_root or CGROUP_ROOT)
+def _scope_sweep(uid, cg_root=CGROUP_ROOT):
+    sl = _user_slice(uid, cg_root)
     n = 0
     try:
         entries = list(os.scandir(sl))
@@ -311,8 +311,15 @@ def _scope_sweep(uid, cg_root=None):
     return n
 
 
-def _scope_request(name, props, sender_pid, uid, attach, cg_root=None):
-    cg_root = cg_root or CGROUP_ROOT
+def _scope_request(name, props, sender_pid, uid, attach, cg_root=CGROUP_ROOT):
+    # Every podman command waits on our reply: nothing may escape unanswered.
+    try:
+        return _scope_request_inner(name, props, sender_pid, uid, attach, cg_root)
+    except Exception as e:  # noqa: BLE001
+        return False, "error: %r" % e
+
+
+def _scope_request_inner(name, props, sender_pid, uid, attach, cg_root):
     why = _scope_check(name, props, sender_pid)
     if why:
         return False, why
@@ -338,7 +345,7 @@ def _scope_request(name, props, sender_pid, uid, attach, cg_root=None):
 def _sender_pid(session, sender):
     return int(session.call_blocking(
         "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-        "GetConnectionUnixProcessID", "s", (sender,)))
+        "GetConnectionUnixProcessID", "s", (sender,), timeout=ATTACH_TIMEOUT))
 
 
 def _attach_via(system):
@@ -353,7 +360,7 @@ def _attach_via(system):
 def handle_scope(session, system, msg, name, props):
     try:
         pid = _sender_pid(session, msg.get_sender())
-    except dbus.DBusException as e:
+    except Exception as e:  # noqa: BLE001
         pid, ok, why = 0, False, "sender pid: %s" % e
     else:
         ok, why = _scope_request(name, props, pid, os.getuid(), _attach_via(system))

@@ -1,7 +1,7 @@
 # podman exec scopes — `podman exec` from a login shell
 
-Status: **design, rev 2 — Greg's review (2026-11-03) folded in.** No code yet.
-Rev 2 changes are listed at the end.
+Status: **rev 3: Greg's review, the live run and /code-review folded in; implemented in PR #466.**
+Rev 2 and rev 3 changes are listed at the end.
 Author: Claire, 2026-11-03. Backlog item from the rootless podman phase
 (`2026-10-27-rootless-podman-quadlet-design.md`, "known gaps").
 
@@ -96,7 +96,9 @@ systemd:
 
 - **scope name**: `podman-<suffix>.scope` with
   `^podman-[A-Za-z0-9_-]{1,64}\.scope$`. This covers `podman-<pid>.scope` and
-  the pause process's `podman-pause-<n>.scope`.
+  the pause process's `podman-pause-<n>.scope`. The pause request is refused in
+  practice anyway: podman puts the pause pid in `PIDs`, not its own, and the
+  PIDs==[sender] rule refuses that. This is from podman's source, not seen live.
 - **scope dir**: `<CG>/user.slice/user-U.slice/user@U.service/user.slice/<scope name>`,
   where `<CG>` is `$SCHEMA_CGROUP_ROOT` or `/sys/fs/cgroup`, as in logind. The
   `user.slice` under `user@U.service` mirrors systemd's own layout, and podman
@@ -200,7 +202,7 @@ builder checks this live, not just on paper.
 | Caller | Owns its cgroup? | Before | After |
 |---|---|---|---|
 | login shell `podman exec` / `ps` / `info` | no | runs in session-N.scope, exec EACCES | moved to `podman-<pid>.scope`; exec works |
-| pause process (first podman after boot) | no | session-N.scope (dies with the session) | `podman-pause-*.scope` (lives until schema-user stops) |
+| pause process (first podman after boot) | no | session-N.scope (dies with the session) | unchanged: its request names the pause pid, not the sender, so it is refused |
 | Quadlet podman under schema-user | yes | no scope request | no scope request (unchanged; must be verified, see Tests) |
 | ad-hoc `podman run` from a shell | no | runs in session-N.scope, container gets no cgroup | **changes (seen live 11-03):** conmon stays in `podman-<pid>.scope` (populated, so the sweep leaves it alone), and the payload gets its own `user.slice/<container id>` cgroup, which podman removes on `rm`. Whether `--memory` now holds for ad-hoc containers is unmeasured |
 
@@ -208,9 +210,12 @@ The process leaves `session-N.scope`, so `sd_pid_get_session()` no longer
 reports a session for it. systemd has the same property, and podman doesn't
 need a session. The login shell itself never moves.
 
-Lifetime: scopes live inside schema-user's tree. When schema-user stops (logout
-without linger) or restarts, logind's `kill_user_cgroup` kills them, including a
-`podman exec -it` shell. This matches systemd, where scopes die with `user@U`.
+Lifetime: scopes live inside schema-user's tree. When schema-user crashes or
+hits its stop timeout, logind's `kill_user_cgroup` kills them. Before rev 3 an
+*ordered* stop left them running unsupervised until the next `_start`, so logind
+now kills a populated tree after an ordered stop too. That includes a
+`podman exec -it` shell and an ad-hoc `podman run -d` conmon, as systemd's
+`user@U` stop does. This is the only logind change.
 
 ## Tests
 
@@ -266,6 +271,34 @@ schema-init service, and restarting it is fine; it is not a session daemon.
    restore (Greg #1).
 3. ~~Restrict the bridge to the shim~~: settled as no. Greg agreed: `exe` is
    `python3`, and the checks already bind to the uid.
+
+## Follow-ups (not in this PR)
+
+- `service.c` doesn't validate `name=`. Rejecting `*.slice`, `*.scope` and
+  `init.scope` would remove the `user.slice` collision outright. The shim's
+  guard is a heuristic: a hand-written `name=user.slice` service that hasn't
+  started yet slips past it. That fix touches C and PID 1, so it is left out of
+  this Python-only PR.
+- The shim's two bus calls block its GLib loop for up to 2 s each when the
+  bridge or bus driver is slow. An async version is possible if that ever shows
+  up live.
+
+## Rev 3 changes (live run + /code-review)
+
+1. The guard against a service named `user.slice` now detects a service
+   layout, not "any non-scope child". An ad-hoc `podman run -d` puts its
+   container cgroup in `user.slice/<id>` (seen live), and the old rule wedged
+   every scope while it lived.
+2. Bridge: the source cgroup must be under `/user.slice/user-C.slice/`. A
+   system service running as the user's uid can no longer be pulled out of
+   root's limits and kill.
+3. logind kills a populated user tree after an ordered schema-user stop.
+4. Shim: every error answers podman (`NotSupported`) and none escapes the
+   filter; the sender-pid call has the 2 s timeout too.
+5. Pause scope: documented as refused (see Names).
+6. Rejected: closing the poll→write race with SIGSTOP or a re-check. A stopped
+   process can still be killed, and a re-check comes after the move. The
+   window stays documented and accepted.
 
 ## Rev 2 changes (Greg's review)
 

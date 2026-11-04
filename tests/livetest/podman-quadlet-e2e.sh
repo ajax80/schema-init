@@ -5,6 +5,8 @@
 #   [Container] Image=docker.io/library/nginx:alpine PublishPort=8080:80
 #   Memory=64m  [Service] Restart=always  [Install] WantedBy=default.target
 # $1 = a LAN host reachable over ssh, for the curl check.
+# Run it from a desktop terminal: check 4 execs from this shell, which needs
+# a session bus for podman's scope request (podman exec scopes, 2026-11-03).
 set -u
 U=e2e-web C=systemd-e2e-web Q=$HOME/.config/containers/systemd/$U.container
 LAN=${1:-}
