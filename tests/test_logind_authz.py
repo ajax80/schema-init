@@ -84,6 +84,10 @@ GATED = [
     (m.Login1Session, "ReleaseDevice", (0, 0), "authz_check"),
     (m.Login1Manager, "UnlockSession", ("1",), "authz_check"),
     (m.Login1Manager, "UnlockSessions", (), "authz_check"),
+    (m.Login1Session, "Activate", (), "authz_check"),
+    (m.Login1Session, "ReleaseControl", (), "authz_check"),
+    (m.Login1Session, "PauseDeviceComplete", (0, 0), "authz_check"),
+    (m.Login1Manager, "ReleaseSession", ("1",), "authz_check"),
 ]
 
 saved_check = m.authz_check

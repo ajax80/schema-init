@@ -139,11 +139,12 @@ def authz_check(connection, sender, what):
     session's own user pass (matching PowerOff/TakeDevice); everyone else, and
     any unresolved sender, is refused. Fail-closed before any side effect.
     """
-    if not caller_authorized(connection, sender):
-        print("login1-stub: DENY %s from uid=%s" % (what, caller_uid(connection, sender)),
-              file=sys.stderr)
-        raise dbus.exceptions.DBusException(
-            "Not authorized: " + what, name='org.freedesktop.DBus.Error.AccessDenied')
+    uid = caller_uid(connection, sender)
+    if uid == 0 or (uid is not None and uid == get_active_uid()):
+        return
+    print("login1-stub: DENY %s from uid=%s" % (what, uid), file=sys.stderr)
+    raise dbus.exceptions.DBusException(
+        "Not authorized: " + what, name='org.freedesktop.DBus.Error.AccessDenied')
 
 
 def get_timezone():
@@ -1356,8 +1357,9 @@ class Login1Session(dbus.service.Object):
         self._set_active(True)
         return True
 
-    @dbus.service.method(SESSION_IFACE, in_signature='', out_signature='')
-    def Activate(self):
+    @dbus.service.method(SESSION_IFACE, in_signature='', out_signature='', sender_keyword='sender')
+    def Activate(self, sender=None):
+        authz_check(self._connection, sender, "Activate")
         print(f"login1-stub: Session.Activate() -> VT {self.vtnr}")
         if self.vtnr:
             vt_activate(self.vtnr)
@@ -1425,8 +1427,9 @@ class Login1Session(dbus.service.Object):
             print(f"login1-stub: session VT captured as {self.vtnr}")
         self._setup_vt_mediation()
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
-    def ReleaseControl(self):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='', sender_keyword='sender')
+    def ReleaseControl(self, sender=None):
+        authz_check(self._connection, sender, "ReleaseControl")
         print("login1-stub: Session.ReleaseControl() requested")
         self._teardown_vt_mediation()
 
@@ -1485,8 +1488,9 @@ class Login1Session(dbus.service.Object):
             except Exception as e:
                 print(f"login1-stub: Error closing fd={fd}: {e}", file=sys.stderr)
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='')
-    def PauseDeviceComplete(self, major, minor):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='', sender_keyword='sender')
+    def PauseDeviceComplete(self, major, minor, sender=None):
+        authz_check(self._connection, sender, "PauseDeviceComplete")
         print(f"login1-stub: Session.PauseDeviceComplete({major}, {minor}) requested")
         self.pending_acks.discard((major, minor))
         if not self.pending_acks and self.release_timer is not None:
@@ -2579,8 +2583,9 @@ class Login1Manager(dbus.service.Object):
         finally:
             os.close(fd)
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
-    def ReleaseSession(self, session_id):
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
+    def ReleaseSession(self, session_id, sender=None):
+        authz_check(self._connection, sender, "ReleaseSession")
         sid = str(session_id)
         print(f"login1-stub: ReleaseSession({sid})")
         uid = self.registry.sessions[sid].record.uid if sid in self.registry.sessions else ''

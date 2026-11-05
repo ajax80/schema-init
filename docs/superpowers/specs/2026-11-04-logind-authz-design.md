@@ -29,13 +29,19 @@ is the first statement of every gated method.
 
 Gated now: hostname1 Set{Hostname,StaticHostname,PrettyHostname,IconName,
 Chassis,Deployment,Location}; timedate1 SetTimezone; locale1
-Set{Locale,VConsoleKeyboard,X11Keyboard}; login1 Session.Unlock,
-Session.ReleaseDevice, Manager.UnlockSession, Manager.UnlockSessions.
+Set{Locale,VConsoleKeyboard,X11Keyboard}; login1 Session.{Unlock,Activate,
+ReleaseControl,ReleaseDevice,PauseDeviceComplete}, Manager.{UnlockSession,
+UnlockSessions,ReleaseSession}. (Activate/ReleaseControl/PauseDeviceComplete/
+ReleaseSession added after code review: all reachable VT/session-state mutators
+of the same DoS class; the active session's own compositor is the active uid, so
+caller_authorized still lets it through.)
 
-Left open deliberately: Get*/List*/Can* (reads); SetTime/SetNTP/SetLocalRTC
-(no-op `pass` bodies); Lock/LockSession (locking is not a threat);
-SetIdleHint/SetLockedHint (the compositor/locker reports its own state);
-Terminate*/Activate* (no-ops on a single seat).
+Left open deliberately: Get*/List*/Can* (reads); SetTime/SetNTP/SetLocalRTC,
+ScheduleShutdown, SetWallMessage, Manager.ActivateSession, Terminate* (no-op
+`pass`/print bodies here); Lock/LockSession (locking is not a threat);
+SetIdleHint/SetLockedHint (the compositor/locker reports its own state); Inhibit
+(returns a throwaway fd, no real inhibitor state); RearmVtMediation (custom
+interface, not in the stock bus policy, so not reachable by non-root).
 
 ## Not in this change
 
