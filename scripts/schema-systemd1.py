@@ -1125,6 +1125,30 @@ class PrivateSocketServer(dbus.server.Server):
             except Exception:
                 pass
 
+def _bind_private_socket(path):
+    """Create the root-only private socket with no world-connectable window.
+
+    dbus's Server binds the socket at mode 0777 regardless of umask, and we
+    narrow it to 0600 only afterward; a local user who connect()s in between is
+    served as root, because a private-peer call has sender=None (see authorize).
+    Lock the parent dir to 0700 across the bind so only root -- which bypasses
+    directory permissions -- can reach the socket until it is 0600, then restore
+    the dir mode. finally so a failed bind never leaves /run/systemd at 0700.
+    """
+    sockdir = os.path.dirname(path) or '/'
+    os.makedirs(sockdir, exist_ok=True)
+    dir_mode = stat.S_IMODE(os.stat(sockdir).st_mode)
+    os.chmod(sockdir, 0o700)
+    try:
+        if os.path.exists(path):
+            os.unlink(path)
+        server = PrivateSocketServer('unix:path=' + path)
+        os.chmod(path, 0o600)
+        return server
+    finally:
+        os.chmod(sockdir, dir_mode)
+
+
 def main():
     DBusGMainLoop(set_as_default=True)
 
@@ -1163,11 +1187,7 @@ def main():
         sys.exit(1)
 
     try:
-        if os.path.exists(PRIVATE_SOCKET_PATH):
-            os.unlink(PRIVATE_SOCKET_PATH)
-        priv_server = PrivateSocketServer('unix:path=' + PRIVATE_SOCKET_PATH)
-        os.chmod(PRIVATE_SOCKET_PATH, 0o600)
-        manager._priv_server = priv_server
+        manager._priv_server = _bind_private_socket(PRIVATE_SOCKET_PATH)
         print(f"systemd1: serving root private socket at {PRIVATE_SOCKET_PATH}")
     except Exception as e:
         print(f"systemd1: failed to start private socket: {e}", file=sys.stderr)
