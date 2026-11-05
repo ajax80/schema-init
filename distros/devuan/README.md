@@ -104,7 +104,7 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 |---|---|---|
 | `udevd`, `udev-coldplug` | `eudev` | `/sbin/udevd`, then `udevadm trigger` + `settle` |
 | `mount-fstab` | `mountall.sh` | mounts `/etc/fstab`, after coldplug: on a laptop with a 5400 rpm disk, starting it alongside coldplug (as on Artix and Void) brought sshd and NetworkManager up 1–2 s sooner but slowed coldplug by 1.5–2 s, so LightDM started 0.6 s later and the desktop was no sooner ([before](../../tests/livetest/dbox-bench-20261018-lcos-coldplug-before.txt), [alongside](../../tests/livetest/dbox-bench-20261018-lcos-coldplug-parallel.txt)) |
-| `devuan-boot` | `bootmisc.sh`, `x11-common`, `networking` (lo), `kmod`, `hwclock.sh` | loopback up, `swapon -a`, `/etc/modules`, RTC if `LOCAL`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
+| `devuan-boot` | `hostname.sh`, `bootmisc.sh`, `x11-common`, `networking` (lo), `kmod`, `hwclock.sh` | hostname from `/etc/hostname`, loopback up, `swapon -a`, `/etc/modules`, RTC if `LOCAL`, `/tmp/.X11-unix`, `/run/sshd`, `/run/utmp`, machine-id |
 | `sysctl` | `procps` | `sysctl --system` (a key the kernel rejects is logged, not fatal) |
 | `journal-sink` | `rsyslog` | owns `/dev/log`; logs to `/var/log/schema-init/journal.log` |
 | `dbus` | `dbus` | `dbus-daemon --system --nofork`, or schema-dbus (below) |
@@ -116,8 +116,7 @@ sudo schema-ctl status        # every service FUNDAMENTAL or PERFECT
 | `getty-tty1` … `getty-tty6` | `inittab` gettys | `getty 38400 ttyN` |
 | `logrotate` | cron.daily logrotate | `logrotate` at 00:10 |
 
-PID 1 itself mounts `/proc`, `/sys`, `/dev`, `/run`, remounts `/` read-write and
-sets the hostname from `/etc/hostname`.
+PID 1 itself mounts `/proc`, `/sys`, `/dev`, `/run` and remounts `/` read-write.
 
 ### Other services
 
@@ -230,8 +229,6 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
   required" after a 10 s stall); 0 in 13 sysvinit boots. Logging in by hand works.
   The cause is not found yet; LCOS works around a similar X cookie race in
   `lcos-display-fix`.
-- LightDM's very first start on a fresh install can fail once while it creates
-  `/var/lib/lightdm/data`; schema-init restarts it and it comes up.
 - No GUI wizard on Devuan; `install.sh` is the whole path.
 
 EXPERIMENTAL. Try it on a machine you can reinstall.
