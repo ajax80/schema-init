@@ -894,6 +894,7 @@ static int on_readable(sdbus_conn *c) {
         return 1;
     }
     sdbus_conn_in_append(c, buf, (int)n);
+    if (c->in_over) { remove_conn(c); return 0; }   /* pending inbound over the cap */
     process_inbound(c);
     return 1;
 }

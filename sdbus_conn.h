@@ -33,6 +33,12 @@
    it (25k PropertiesChanged/session), and a stuck reader emits no epoll event of
    its own, so the cap is enforced here, at enqueue, not on the victim's events. */
 #define SDBUS_MAX_OUTGOING_BYTES (16 * 1024 * 1024)
+/* per-connection inbound ceiling. A client that dribbles a never-completing
+   message grows c->in toward the message's declared length (up to SDBUS_MAX_MSG),
+   and 256 such conns/uid would pin ~32 GB in the root broker. Cap pending inbound
+   at the same size as the outbound backlog -- the broker won't relay a larger
+   message anyway -- and drop the connection when it is exceeded. */
+#define SDBUS_MAX_CONN_PENDING (16 * 1024 * 1024)
 
 /* one queued outbound message: its bytes and the unix fds bound to it. Keeping
    fds per-chunk is what makes SCM_RIGHTS relay correct under partial writes. */
@@ -44,7 +50,7 @@ typedef struct {
     uid_t uid; gid_t gid; pid_t pid;
     int gids[SDBUS_MAX_GIDS]; int n_gids;
     const char *unique;                 /* ":1.N", set at Hello */
-    unsigned char *in;  int in_len, in_cap;
+    unsigned char *in;  int in_len, in_cap, in_over;   /* in_over: pending exceeded the cap -> drop */
     unsigned char *out; int out_len, out_cap;   /* scratch for auth/driver bytes */
     int pending_fds[SDBUS_MAX_PENDING_FDS]; int n_pending_fds;   /* received, awaiting a full msg */
     sdbus_outchunk *oq; int n_oq, oq_head, oq_cap;   /* ordered outbound queue */
@@ -132,6 +138,7 @@ static inline void sdbus_conn_out_append(sdbus_conn *c, const void *data, int le
 }
 
 static inline void sdbus_conn_in_append(sdbus_conn *c, const void *data, int len) {
+    if (c->in_len + len > SDBUS_MAX_CONN_PENDING) { c->in_over = 1; return; }
     if (c->in_len + len > c->in_cap) {
         c->in_cap = (c->in_len + len) * 2 + 64;
         c->in = realloc(c->in, c->in_cap);
