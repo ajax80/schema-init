@@ -100,7 +100,7 @@ schema-init beside sysvinit on a stock Devuan desktop install: sysvinit stays th
 |---------|------|
 | `udevd`, `udev-coldplug` | eudev, then coldplug trigger + settle |
 | `mount-fstab` | Mounts `/etc/fstab` |
-| `devuan-boot` | Oneshot — loopback, swap, `/etc/modules`, X11 socket dirs, `/run/sshd`, utmp |
+| `devuan-boot` | Oneshot — hostname, loopback, swap, `/etc/modules`, X11 socket dirs, `/run/sshd`, utmp |
 | `dbus`, `elogind` | System bus and seat/session management |
 | `network-manager` | Networking, foreground |
 | `slim` | Display manager, foreground (`-n`) |
