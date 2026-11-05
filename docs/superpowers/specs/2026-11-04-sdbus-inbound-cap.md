@@ -28,6 +28,18 @@ would exceed the cap is refused whole. Live: a raw client authenticated to a
 private-socket broker, declaring a 20 MB body and dribbling, is dropped at ~16 MB
 — before the body completes. `make test` + Python suite pass.
 
+## Scope notes (from code review)
+
+- **Driver-addressed messages 16 MB-128 MB** are now disconnected mid-receive
+  rather than processed. Every driver call (Hello, RequestName, AddMatch, ...)
+  is tiny; nothing legitimate approaches 16 MB, and an oversized driver message
+  is itself anomalous. The ceiling is deliberate.
+- **Per-uid aggregate** is still 256 conns x 16 MB (plus the symmetric outbound
+  backlog). That matches the existing outbound cap's exposure and is 8x tighter
+  than stock dbus-daemon (256 x `max_incoming_bytes` ~= 127 MB). A per-uid
+  inbound+outbound memory budget would bound it further -- a follow-up that
+  should also cover the pre-existing outbound cap, not just this change.
+
 ## Follow-up (separate PR)
 
 The router evaluates only `op="send"`, never recipient `receive_*` rules; a

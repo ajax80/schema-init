@@ -96,18 +96,17 @@ int main(void) {
     assert(c7.in_len <= SDBUS_MAX_CONN_PENDING);                 /* never grew past the cap */
     assert((long)c7.in_cap <= 2L * SDBUS_MAX_CONN_PENDING);      /* realloc doubling bounded */
     assert(c7.in_len + (int)sizeof chunk > SDBUS_MAX_CONN_PENDING); /* tripped at the boundary */
+    /* the refused append was whole, not partial: in_len did not move */
+    int at_cap = c7.in_len;
+    sdbus_conn_in_append(&c7, chunk, sizeof chunk);
+    assert(c7.in_over == 1 && c7.in_len == at_cap);
     free(c7.in);
 
-    /* the append that would exceed the cap is refused whole, not partially
-       written, and leaves in_len untouched */
+    /* a message of exactly the cap can still be relayed in one outbound chunk --
+       the inbound cap leaves room for the chunk struct the outbound cap counts */
     sdbus_conn c8; memset(&c8, 0, sizeof c8);
-    sdbus_conn_in_append(&c8, chunk, sizeof chunk);
-    int held = c8.in_len;
-    c8.in_len = SDBUS_MAX_CONN_PENDING - 16;   /* pretend near the cap; append must refuse first */
-    sdbus_conn_in_append(&c8, chunk, sizeof chunk);
-    assert(c8.in_over == 1 && c8.in_len == SDBUS_MAX_CONN_PENDING - 16);
-    c8.in_len = held;
-    free(c8.in);
+    assert((long)SDBUS_MAX_CONN_PENDING + (long)sizeof(sdbus_outchunk) <= SDBUS_MAX_OUTGOING_BYTES);
+    (void)c8;
 
     printf("all sdbus_conn tests passed\n");
     return 0;

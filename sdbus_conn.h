@@ -33,16 +33,19 @@
    it (25k PropertiesChanged/session), and a stuck reader emits no epoll event of
    its own, so the cap is enforced here, at enqueue, not on the victim's events. */
 #define SDBUS_MAX_OUTGOING_BYTES (16 * 1024 * 1024)
-/* per-connection inbound ceiling. A client that dribbles a never-completing
-   message grows c->in toward the message's declared length (up to SDBUS_MAX_MSG),
-   and 256 such conns/uid would pin ~32 GB in the root broker. Cap pending inbound
-   at the same size as the outbound backlog -- the broker won't relay a larger
-   message anyway -- and drop the connection when it is exceeded. */
-#define SDBUS_MAX_CONN_PENDING (16 * 1024 * 1024)
 
 /* one queued outbound message: its bytes and the unix fds bound to it. Keeping
    fds per-chunk is what makes SCM_RIGHTS relay correct under partial writes. */
 typedef struct { unsigned char *b; int len, off; int fds[SDBUS_MAX_PENDING_FDS]; int nfds; } sdbus_outchunk;
+
+/* per-connection inbound ceiling. A client that dribbles a never-completing
+   message grows c->in toward the message's declared length (up to SDBUS_MAX_MSG),
+   and 256 such conns/uid would pin ~32 GB in the root broker. Cap it so a fully
+   received message can always be relayed in one outbound chunk: the outbound
+   enqueue refuses at oq_bytes + len + sizeof(chunk) > SDBUS_MAX_OUTGOING_BYTES,
+   so leave room for that chunk struct -- otherwise an exactly-limit message is
+   accepted inbound only to reap the recipient on delivery. */
+#define SDBUS_MAX_CONN_PENDING (SDBUS_MAX_OUTGOING_BYTES - (long)sizeof(sdbus_outchunk))
 
 typedef struct {
     int fd, id;
