@@ -222,6 +222,10 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
   command line for both.
 - `last` shows sessions ending in "crash": schema-init does not write wtmp
   boot/shutdown records.
+- An empty, missing or unusual `/etc/hostname` (a comment line, stray whitespace, CRLF):
+  NetworkManager renames the machine `localhost.localdomain` after LightDM has started,
+  so LightDM's greeter fails once and schema-init restarts it. Keep one plain name in the
+  file.
 - SLiM and LightDM are supported. Another display manager needs its own `.svc`
   (run it in the foreground); install.sh says so when it finds none.
 - LightDM autologin: on the HP laptop, 1 schema-init boot in 14 came up at the
