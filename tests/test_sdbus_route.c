@@ -75,7 +75,7 @@ static void test_receive_policy_filters_a_subscriber(void) {
     sdbus_policy *pol = sdbus_policy_parse(
         "context = default\nallow = send_type:signal\nallow = receive_type:signal\n"
         "context = user:1000\ndeny = receive_sender:org.sigsrc,receive_type:signal\n");
-    assert(pol->has_recv_deny == 1);
+    assert(pol->has_recv_rule == 1);
 
     int tg[8], synth, denied;
     DBusMessage *sig = dbus_message_new_signal("/p", "org.sig", "Changed");

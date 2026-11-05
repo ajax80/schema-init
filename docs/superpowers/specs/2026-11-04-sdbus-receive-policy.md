@@ -11,18 +11,24 @@ signals (the standard wpa_supplicant.conf pattern).
 
 ## Fix
 
-- The policy carries `has_recv_deny`, set at parse time when any `deny` rule has
-  a `receive_*` predicate. When it is 0 — a policy with only the default
-  `receive_type` allow backbone, i.e. every receive allowed — the receive check
-  is skipped entirely, so this is a no-op for such policies and adds no cost to
-  the signal hot path.
+- The policy carries `has_recv_rule`, set at parse time when ANY rule -- allow or
+  deny -- has a `receive_*` predicate. A policy with no receive rule leaves
+  receive unconfigured (all allowed) and the check is skipped. A whitelist of
+  allow-receive rules counts too: the engine default-denies whatever the
+  whitelist doesn't cover, so enforcement must run (an earlier version keyed the
+  flag on deny-receive only, which let such whitelists silently bypass policy --
+  fixed after code review).
 - When it is 1, each signal delivery is gated by `sdbus__recv_allowed`: an
   `op="receive"` eval with the recipient's uid/gids, the message fields, and the
   sender's well-known names. Directed signals to a forbidden recipient are
-  dropped; broadcast subscribers are filtered individually.
-- `receive_sender` now matches set-membership over the sender's well-known names
-  (with the unique name as a fallback), mirroring `send_destination`, so a
-  multi-name sender is matched correctly.
+  dropped (and dropped, fail-closed, if the resolved owner conn can't be found);
+  broadcast subscribers are filtered individually.
+- `receive_sender` is matched as a scalar well-known name, exactly as the
+  reference model `tools/dbus-learn/felt_policy.py` (`_RECV`) does; the route
+  path passes the sender's first owned well-known name (its unique as fallback).
+  A multi-name sender named by a non-first `receive_sender` rule is a limitation
+  of the reference model, not reached by the fleet policy. (An earlier version
+  did set-membership, diverging from the model and its corpus gate -- reverted.)
 
 ## Scope
 
@@ -31,13 +37,15 @@ policy lives. method_call/method_return/error receive-denies are not enforced:
 none exist in the policy, the default `receive_type` allows cover them, and
 gating a call on the recipient side would have to synthesize an AccessDenied
 back to the caller (or hang it) — a larger change with no policy that needs it.
-Requested replies keep their existing policy bypass. Noted as a follow-up.
+Requested replies keep their existing policy bypass. method_call/return receive
+enforcement, and a per-sender prefilter to skip the eval on the hot path when no
+receive rule could match the sender, are noted as follow-ups.
 
 ## Verified
 
 `tests/test_sdbus_policy.c`: receive eval denies the matching recipient, allows
-other uids and other senders, honors the unique-name fallback, and `has_recv_deny`
-is set only for a deny-receive rule. `tests/test_sdbus_route.c`: a broadcast
+other uids and other senders, an allow-whitelist default-denies the rest, and
+`has_recv_rule` is set for any receive rule but not for a receive-free policy. `tests/test_sdbus_route.c`: a broadcast
 drops the forbidden subscriber and delivers to the allowed one. Live: with a
 `has_recv_deny` policy loaded, a normal signal is still delivered to its
 subscriber (no over-filtering). `make test` + Python suite pass.
