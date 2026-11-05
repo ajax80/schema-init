@@ -1,10 +1,7 @@
 #!/bin/sh
 # Before dbus, so before the display manager: LightDM keys its X cookie on the hostname
 # at start. NetworkManager would set it too, but races LightDM and the greeter dies.
-h=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' /etc/hostname 2>/dev/null | grep -m1 .)
-# Same fallback as hostname.sh: no name at all becomes localhost, one set earlier stays.
-[ "$(cat /proc/sys/kernel/hostname)" = "(none)" ] && h=${h:-localhost}
-[ -n "$h" ] && echo "$h" > /proc/sys/kernel/hostname
+[ -s /etc/hostname ] && cat /etc/hostname > /proc/sys/kernel/hostname
 ip link set lo up
 swapon -a
 sed -e 's/#.*//' /etc/modules 2>/dev/null | while read -r m args; do [ -n "$m" ] && modprobe "$m" $args; done
