@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.21
+Version:        0.4.22
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,41 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Thu Nov 05 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.22-1
+- Security: the systemd1 bridge authorizes callers through polkit (#469).
+  schema-logind checks authorization on the hostname, timedate and locale
+  setters and on session unlock, activate and device calls (#470).
+  schema-systemd1 closes a race while creating its private socket (#471).
+  schema-dbus caps inbound buffering per connection (#472) and enforces
+  recipient receive_* policy (#473)
+- Devuan: devuan-boot sets the hostname before the display manager starts.
+  Without it LightDM's greeter died once on every boot without autologin,
+  and the supervisor restarted it (#474)
+- New service keys: working_dir= with WorkingDirectory= import (#452), rw_path=
+  to keep a path writable inside protect_system (#448), bind= to stop with a
+  service and start again with it (#465), circuit_broken=1 names the crash-loop
+  breaker when it trips (#455), excise_reason names why a service was excised
+  (#456)
+- systemd compatibility: template specifiers %i %I %p %P %f (#453). The session
+  shim takes multiple ExecStart= and empty-value resets (#454), reads unit
+  drop-ins and keeps '@' argv0 in oneshot chains (#457). Escaped quotes in udev
+  rules and StopUnit on shim-spawned units fixed (#468)
+- Rootless podman: `podman exec` from a login shell works through podman scopes
+  (#466). Quadlet Pod= containers import with their pod (#458), and a warning
+  says a Pod= container won't follow its pod (#463). Quadlet pods get the stop
+  grace podman pod stop needs (#461). exec_stop_post runs when exec_stop took the
+  service down (#460)
+- Boot: schema-udev replays module, bus and driver uevents at coldplug (#467).
+  PID 1 creates static device nodes (#445) and sets the correct 1777 modes on
+  /dev/shm, /run/lock and /run/shm (#446). A just-registered logind session
+  answers lookups at once (#462)
+- Raspberry Pi: `schema-pi enable` sets up a stock Pi OS box with the service kit
+  (#444), which gains a sysctl service (#449). schema-pi-early runs
+  systemd-tmpfiles and clears /run/nologin (#447). `schema-pi refresh` updates
+  untouched kit .svc files on upgrade (#448)
+- schema-doctor: a non-root --check prints its results instead of a traceback
+  (#462). limits-mismatch names the cgroup and its real value (#459)
+
 * Wed Oct 28 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.21-1
 - Raspberry Pi: signed apt repo (ajax80.github.io/schema-init-apt) with
   amd64, arm64 and armhf debs; armhf is ARMv6, built on Raspbian, so Zero
