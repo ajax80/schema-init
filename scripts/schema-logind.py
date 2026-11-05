@@ -130,6 +130,23 @@ def caller_authorized(connection, sender):
         return False
     return uid == 0 or uid == get_active_uid()
 
+def authz_check(connection, sender, what):
+    """Gate a mutator the stock bus policy leaves open to any local caller.
+
+    hostname1/timedate1/locale1 ship `allow send_destination` for everyone
+    because real systemd checks polkit inside the daemon; we do not, so without
+    this any uid rewrites /etc or unlocks the screen. Root and the active
+    session's own user pass (matching PowerOff/TakeDevice); everyone else, and
+    any unresolved sender, is refused. Fail-closed before any side effect.
+    """
+    uid = caller_uid(connection, sender)
+    if uid == 0 or (uid is not None and uid == get_active_uid()):
+        return
+    print("login1-stub: DENY %s from uid=%s" % (what, uid), file=sys.stderr)
+    raise dbus.exceptions.DBusException(
+        "Not authorized: " + what, name='org.freedesktop.DBus.Error.AccessDenied')
+
+
 def get_timezone():
     try:
         target = os.readlink('/etc/localtime')
@@ -1340,8 +1357,9 @@ class Login1Session(dbus.service.Object):
         self._set_active(True)
         return True
 
-    @dbus.service.method(SESSION_IFACE, in_signature='', out_signature='')
-    def Activate(self):
+    @dbus.service.method(SESSION_IFACE, in_signature='', out_signature='', sender_keyword='sender')
+    def Activate(self, sender=None):
+        authz_check(self._connection, sender, "Activate")
         print(f"login1-stub: Session.Activate() -> VT {self.vtnr}")
         if self.vtnr:
             vt_activate(self.vtnr)
@@ -1363,8 +1381,9 @@ class Login1Session(dbus.service.Object):
         print("login1-stub: Session.Lock() requested")
         self._emit_bare_signal('Lock')
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
-    def Unlock(self):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='', sender_keyword='sender')
+    def Unlock(self, sender=None):
+        authz_check(self._connection, sender, "Unlock")
         print("login1-stub: Session.Unlock() requested")
         self._emit_bare_signal('Unlock')
 
@@ -1408,8 +1427,9 @@ class Login1Session(dbus.service.Object):
             print(f"login1-stub: session VT captured as {self.vtnr}")
         self._setup_vt_mediation()
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
-    def ReleaseControl(self):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='', sender_keyword='sender')
+    def ReleaseControl(self, sender=None):
+        authz_check(self._connection, sender, "ReleaseControl")
         print("login1-stub: Session.ReleaseControl() requested")
         self._teardown_vt_mediation()
 
@@ -1455,8 +1475,9 @@ class Login1Session(dbus.service.Object):
                 name='org.freedesktop.login1.FailedToOpenDevice'
             )
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='')
-    def ReleaseDevice(self, major, minor):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='', sender_keyword='sender')
+    def ReleaseDevice(self, major, minor, sender=None):
+        authz_check(self._connection, sender, "ReleaseDevice")
         print(f"login1-stub: Session.ReleaseDevice({major}, {minor}) requested")
         key = (major, minor)
         fd = self.devices.pop(key, None)
@@ -1467,8 +1488,9 @@ class Login1Session(dbus.service.Object):
             except Exception as e:
                 print(f"login1-stub: Error closing fd={fd}: {e}", file=sys.stderr)
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='')
-    def PauseDeviceComplete(self, major, minor):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='', sender_keyword='sender')
+    def PauseDeviceComplete(self, major, minor, sender=None):
+        authz_check(self._connection, sender, "PauseDeviceComplete")
         print(f"login1-stub: Session.PauseDeviceComplete({major}, {minor}) requested")
         self.pending_acks.discard((major, minor))
         if not self.pending_acks and self.release_timer is not None:
@@ -2247,16 +2269,18 @@ class Login1Manager(dbus.service.Object):
     def LockSession(self, session_id):
         self._relay_lock('Lock', session_id)
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
-    def UnlockSession(self, session_id):
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
+    def UnlockSession(self, session_id, sender=None):
+        authz_check(self._connection, sender, "UnlockSession")
         self._relay_lock('Unlock', session_id)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
     def LockSessions(self):
         self._relay_lock('Lock')
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
-    def UnlockSessions(self):
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='', sender_keyword='sender')
+    def UnlockSessions(self, sender=None):
+        authz_check(self._connection, sender, "UnlockSessions")
         self._relay_lock('Unlock')
 
     # Compat stubs: methods KDE/loginctl may call that this stub does not
@@ -2559,8 +2583,9 @@ class Login1Manager(dbus.service.Object):
         finally:
             os.close(fd)
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
-    def ReleaseSession(self, session_id):
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
+    def ReleaseSession(self, session_id, sender=None):
+        authz_check(self._connection, sender, "ReleaseSession")
         sid = str(session_id)
         print(f"login1-stub: ReleaseSession({sid})")
         uid = self.registry.sessions[sid].record.uid if sid in self.registry.sessions else ''
@@ -2679,8 +2704,9 @@ class Hostname1(dbus.service.Object):
     # /etc/hostname; the rest live in /etc/machine-info. KDE's hostname panel and
     # nm-dispatcher call these in sequence, so implementing only SetHostname just
     # moves the UnknownMethod traceback to the next call.
-    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
-    def SetHostname(self, hostname, interactive):
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetHostname(self, hostname, interactive, sender=None):
+        authz_check(self._connection, sender, "SetHostname")
         if hostname and not _valid_hostname(hostname):
             raise dbus.exceptions.DBusException(
                 'Invalid hostname: ' + hostname,
@@ -2691,8 +2717,9 @@ class Hostname1(dbus.service.Object):
             raise dbus.exceptions.DBusException(
                 str(e), name='org.freedesktop.hostname1.Error.Failed')
 
-    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
-    def SetStaticHostname(self, hostname, interactive):
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetStaticHostname(self, hostname, interactive, sender=None):
+        authz_check(self._connection, sender, "SetStaticHostname")
         if hostname and not _valid_hostname(hostname):
             raise dbus.exceptions.DBusException(
                 'Invalid hostname: ' + hostname,
@@ -2713,24 +2740,29 @@ class Hostname1(dbus.service.Object):
             raise dbus.exceptions.DBusException(
                 str(e), name='org.freedesktop.hostname1.Error.Failed')
 
-    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
-    def SetPrettyHostname(self, hostname, interactive):
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetPrettyHostname(self, hostname, interactive, sender=None):
+        authz_check(self._connection, sender, "SetPrettyHostname")
         self._set_machine_info('PRETTY_HOSTNAME', hostname)
 
-    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
-    def SetIconName(self, icon, interactive):
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetIconName(self, icon, interactive, sender=None):
+        authz_check(self._connection, sender, "SetIconName")
         self._set_machine_info('ICON_NAME', icon)
 
-    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
-    def SetChassis(self, chassis, interactive):
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetChassis(self, chassis, interactive, sender=None):
+        authz_check(self._connection, sender, "SetChassis")
         self._set_machine_info('CHASSIS', chassis)
 
-    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
-    def SetDeployment(self, deployment, interactive):
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetDeployment(self, deployment, interactive, sender=None):
+        authz_check(self._connection, sender, "SetDeployment")
         self._set_machine_info('DEPLOYMENT', deployment)
 
-    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='')
-    def SetLocation(self, location, interactive):
+    @dbus.service.method('org.freedesktop.hostname1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetLocation(self, location, interactive, sender=None):
+        authz_check(self._connection, sender, "SetLocation")
         self._set_machine_info('LOCATION', location)
 
     def _set_machine_info(self, key, value):
@@ -2947,8 +2979,9 @@ class Timedate1(dbus.service.Object):
             }
         return {}
 
-    @dbus.service.method('org.freedesktop.timedate1', in_signature='sb', out_signature='')
-    def SetTimezone(self, timezone, interactive):
+    @dbus.service.method('org.freedesktop.timedate1', in_signature='sb', out_signature='', sender_keyword='sender')
+    def SetTimezone(self, timezone, interactive, sender=None):
+        authz_check(self._connection, sender, "SetTimezone")
         zonefile = '/usr/share/zoneinfo/' + timezone
         if '..' in timezone or not os.path.isfile(zonefile):
             raise dbus.exceptions.DBusException(
@@ -3126,8 +3159,9 @@ class Locale1(dbus.service.Object):
             }
         return {}
 
-    @dbus.service.method('org.freedesktop.locale1', in_signature='asb', out_signature='')
-    def SetLocale(self, locale, interactive):
+    @dbus.service.method('org.freedesktop.locale1', in_signature='asb', out_signature='', sender_keyword='sender')
+    def SetLocale(self, locale, interactive, sender=None):
+        authz_check(self._connection, sender, "SetLocale")
         try:
             set_locale([str(x) for x in locale])
         except (ValueError, OSError) as e:
@@ -3136,16 +3170,18 @@ class Locale1(dbus.service.Object):
 
     # `convert` (cross-generate the X11 layout from the vconsole keymap and vice
     # versa) is not honoured yet — a v1 follow-up. The pair is written verbatim.
-    @dbus.service.method('org.freedesktop.locale1', in_signature='ssbb', out_signature='')
-    def SetVConsoleKeyboard(self, keymap, keymap_toggle, convert, interactive):
+    @dbus.service.method('org.freedesktop.locale1', in_signature='ssbb', out_signature='', sender_keyword='sender')
+    def SetVConsoleKeyboard(self, keymap, keymap_toggle, convert, interactive, sender=None):
+        authz_check(self._connection, sender, "SetVConsoleKeyboard")
         try:
             set_vconsole(str(keymap), str(keymap_toggle))
         except (ValueError, OSError) as e:
             raise dbus.exceptions.DBusException(
                 str(e), name='org.freedesktop.locale1.Error.Failed')
 
-    @dbus.service.method('org.freedesktop.locale1', in_signature='ssssbb', out_signature='')
-    def SetX11Keyboard(self, layout, model, variant, options, convert, interactive):
+    @dbus.service.method('org.freedesktop.locale1', in_signature='ssssbb', out_signature='', sender_keyword='sender')
+    def SetX11Keyboard(self, layout, model, variant, options, convert, interactive, sender=None):
+        authz_check(self._connection, sender, "SetX11Keyboard")
         try:
             set_x11_keyboard(str(layout), str(model), str(variant), str(options))
         except (ValueError, OSError) as e:
