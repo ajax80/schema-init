@@ -117,6 +117,13 @@ deny=receive_sender:org.foo
               "destination": None, "interface": None, "member": None, "path": None}
     assert evaluate(policy, denied) == "deny"
 
+    # set-membership: a multi-name sender cannot evade the deny by owning the
+    # denied name alongside others
+    multi = dict(denied, sender_name=":1.7", sender_names=["org.bar", "org.foo"])
+    assert evaluate(policy, multi) == "deny"
+    notme = dict(denied, sender_name=":1.8", sender_names=["org.bar"])
+    assert evaluate(policy, notme) == "allow"
+
     allowed = {"op": "receive", "uid": 1000, "gids": [1000],
                "sender_name": "org.bar", "msgtype": "signal",
                "destination": None, "interface": None, "member": None, "path": None}

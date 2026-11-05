@@ -39,7 +39,8 @@ typedef struct {
     const char **dest_names; int n_dest_names;
     const char *name;            /* for op=="own" */
     int has_reply_serial;        /* 0/1 */
-    const char *sender_name;     /* for receive_sender (sender's well-known name) */
+    const char *sender_name;     /* receive_sender fallback (sender unique) */
+    const char **sender_names; int n_sender_names;  /* sender's owned well-known names */
 } sdbus_req;
 
 typedef struct { char *attr; char *value; } sdbus_pred;
@@ -248,7 +249,21 @@ static inline int sdbus__rule_matches(const sdbus_rule *rule, const sdbus_req *r
             if (!sdbus__field_matches(req->path, value)) return 0;
         } else if (!strcmp(attr, "receive_sender")) {
             if (!sdbus__eq(op, "receive")) return 0;
-            if (!sdbus__field_matches(req->sender_name, value)) return 0;
+            /* set-membership over the sender's owned names, unique as fallback
+               (mirrors send_destination; scalar would let a multi-name sender
+               evade a deny-receive) */
+            int n = req->n_sender_names;
+            const char *fb = NULL;
+            if (n == 0 && req->sender_name) { fb = req->sender_name; n = 1; }
+            if (!strcmp(value, "*")) {
+                if (n == 0) return 0;
+            } else {
+                int found = 0;
+                for (int k = 0; k < req->n_sender_names; k++)
+                    if (sdbus__eq(req->sender_names[k], value)) { found = 1; break; }
+                if (!found && fb && sdbus__eq(fb, value)) found = 1;
+                if (!found) return 0;
+            }
         } else if (!strcmp(attr, "receive_interface")) {
             if (!sdbus__eq(op, "receive")) return 0;
             if (!sdbus__field_matches(req->interface, value)) return 0;

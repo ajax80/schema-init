@@ -55,11 +55,12 @@ static inline int sdbus__recv_allowed(sdbus_policy *pol, const char *tstr,
     req.member = msg->member;
     req.msgtype = tstr;
     req.path = msg->path;
-    /* felt_policy matches receive_sender as a scalar well-known name; pass the
-       sender's first owned name, else its unique. (A multi-name sender named by
-       a non-first receive_sender rule is a reference-model limitation, not hit
-       by the fleet policy.) */
-    req.sender_name = n_snames > 0 ? snames[0] : sender_unique;
+    /* receive_sender is set-membership over the sender's owned names, with its
+       unique as fallback -- matching only one name would let a multi-name
+       sender evade a deny-receive (mirrors send_destination). */
+    req.sender_names = snames;
+    req.n_sender_names = n_snames;
+    req.sender_name = sender_unique;
     return strcmp(sdbus_policy_eval(pol, &req), SDBUS_ALLOW) == 0;
 }
 

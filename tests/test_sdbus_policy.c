@@ -94,12 +94,25 @@ int main(void) {
         "allow = receive_type:signal\n"
         "context = user:0\n"
         "deny = receive_sender:org.wpa,receive_type:signal\n";
-    sdbus_req r_root = { .op="receive", .uid=0, .msgtype="signal", .sender_name="org.wpa" };
+    const char *wpa[] = { "org.wpa" };
+    sdbus_req r_root = { .op="receive", .uid=0, .msgtype="signal",
+                         .sender_names=wpa, .n_sender_names=1, .sender_name=":1.5" };
     assert(!strcmp(evals(rp, &r_root), "deny"));       /* root recipient: denied */
-    sdbus_req r_user = { .op="receive", .uid=1000, .msgtype="signal", .sender_name="org.wpa" };
+    sdbus_req r_user = { .op="receive", .uid=1000, .msgtype="signal",
+                         .sender_names=wpa, .n_sender_names=1, .sender_name=":1.5" };
     assert(!strcmp(evals(rp, &r_user), "allow"));      /* other uid: default allow */
-    sdbus_req r_other = { .op="receive", .uid=0, .msgtype="signal", .sender_name="org.other" };
+    const char *othn[] = { "org.other" };
+    sdbus_req r_other = { .op="receive", .uid=0, .msgtype="signal",
+                          .sender_names=othn, .n_sender_names=1, .sender_name=":1.9" };
     assert(!strcmp(evals(rp, &r_other), "allow"));     /* different sender: allowed */
+    /* a multi-name sender cannot evade the deny by owning the denied name second */
+    const char *multi[] = { "org.other", "org.wpa" };
+    sdbus_req r_multi = { .op="receive", .uid=0, .msgtype="signal",
+                          .sender_names=multi, .n_sender_names=2, .sender_name=":1.7" };
+    assert(!strcmp(evals(rp, &r_multi), "deny"));
+    /* unique-name fallback when the sender owns no well-known name */
+    sdbus_req r_uniq = { .op="receive", .uid=0, .msgtype="signal", .sender_name="org.wpa" };
+    assert(!strcmp(evals(rp, &r_uniq), "deny"));
 
     /* has_recv_rule set when ANY rule (allow or deny) has a receive_* predicate,
        so an allow-whitelist still enables enforcement (engine default-denies the

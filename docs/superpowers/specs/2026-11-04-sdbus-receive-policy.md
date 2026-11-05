@@ -23,12 +23,13 @@ signals (the standard wpa_supplicant.conf pattern).
   sender's well-known names. Directed signals to a forbidden recipient are
   dropped (and dropped, fail-closed, if the resolved owner conn can't be found);
   broadcast subscribers are filtered individually.
-- `receive_sender` is matched as a scalar well-known name, exactly as the
-  reference model `tools/dbus-learn/felt_policy.py` (`_RECV`) does; the route
-  path passes the sender's first owned well-known name (its unique as fallback).
-  A multi-name sender named by a non-first `receive_sender` rule is a limitation
-  of the reference model, not reached by the fleet policy. (An earlier version
-  did set-membership, diverging from the model and its corpus gate -- reverted.)
+- `receive_sender` is set-membership over the sender's owned well-known names
+  (unique as fallback), mirroring `send_destination`. Matching only one name
+  would let a multi-name sender evade a deny-receive (flagged by security
+  review). The reference model `tools/dbus-learn/felt_policy.py` was updated in
+  lockstep -- its `receive_sender` now takes the same set-membership branch as
+  `send_destination`, with the scalar `sender_name` as fallback so the existing
+  model test still holds -- so the C port and the model stay conformant.
 
 ## Scope
 
