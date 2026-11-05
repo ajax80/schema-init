@@ -228,7 +228,9 @@ and the binaries in `/usr/bin` stay; delete them by hand if you want them gone.
   LightDM login screen instead of the desktop (the session exited with "Authorization
   required" after a 10 s stall); 0 in 13 sysvinit boots. Logging in by hand works.
   The cause is not found yet; LCOS works around a similar X cookie race in
-  `lcos-display-fix`.
+  `lcos-display-fix`. A hostname race with the same message was fixed after this
+  count (LightDM's greeter on every boot without autologin); whether it is the same
+  failure has not been tested.
 - No GUI wizard on Devuan; `install.sh` is the whole path.
 
 EXPERIMENTAL. Try it on a machine you can reinstall.

@@ -2,6 +2,7 @@ name=slim
 exec=/usr/bin/slim
 condition=file_is_exec:/usr/bin/slim
 args=-n
+dep=devuan-boot
 dep=elogind
 dep=udev-coldplug
 needs_root=1
