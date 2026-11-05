@@ -87,6 +87,27 @@ int main(void) {
     assert(n6 - 1 == SDBUS_MAX_OUTGOING_BYTES / (long)(sizeof body + sizeof(sdbus_outchunk)));
     sdbus_conn_free_fields(&c6);
 
+    /* inbound pending is capped: a client dribbling a never-completing message
+       flags in_over and stops growing c->in, so one uid can't pin unbounded
+       memory in the broker. on_readable drops the connection on in_over. */
+    sdbus_conn c7; memset(&c7, 0, sizeof c7);
+    unsigned char chunk[65536] = {0};
+    while (!c7.in_over) sdbus_conn_in_append(&c7, chunk, sizeof chunk);
+    assert(c7.in_len <= SDBUS_MAX_CONN_PENDING);                 /* never grew past the cap */
+    assert((long)c7.in_cap <= 2L * SDBUS_MAX_CONN_PENDING);      /* realloc doubling bounded */
+    assert(c7.in_len + (int)sizeof chunk > SDBUS_MAX_CONN_PENDING); /* tripped at the boundary */
+    /* the refused append was whole, not partial: in_len did not move */
+    int at_cap = c7.in_len;
+    sdbus_conn_in_append(&c7, chunk, sizeof chunk);
+    assert(c7.in_over == 1 && c7.in_len == at_cap);
+    free(c7.in);
+
+    /* a message of exactly the cap can still be relayed in one outbound chunk --
+       the inbound cap leaves room for the chunk struct the outbound cap counts */
+    sdbus_conn c8; memset(&c8, 0, sizeof c8);
+    assert((long)SDBUS_MAX_CONN_PENDING + (long)sizeof(sdbus_outchunk) <= SDBUS_MAX_OUTGOING_BYTES);
+    (void)c8;
+
     printf("all sdbus_conn tests passed\n");
     return 0;
 }

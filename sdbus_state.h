@@ -226,7 +226,20 @@ static inline int sdbus_state_read(int memfd, sdbus_state_hdr *h, sdbus_conn **c
         }
         uint32_t inl = sdbus__sr_u32(&r);
         if (r.bad || inl > r.len - r.off || inl > INT_MAX) goto out;
-        if (inl) { sdbus_conn_in_append(c, r.p + r.off, (int)inl); r.off += inl; }
+        if (inl) {
+            /* Trusted handoff from our prior self across a re-exec: restore the
+               in-flight buffer as-is, not through sdbus_conn_in_append's cap. A
+               pre-cap instance could have had more than the cap buffered, and
+               routing it through the cap would set in_over, drop the bytes, and
+               poison the connection into a spurious disconnect. The cap governs
+               new reads in on_readable, not this one-time restore. */
+            c->in = malloc(inl);
+            if (!c->in) goto out;
+            memcpy(c->in, r.p + r.off, inl);
+            c->in_len = (int)inl;
+            c->in_cap = (int)inl;
+            r.off += inl;
+        }
         uint32_t np = sdbus__sr_u32(&r);
         if (r.bad || np > SDBUS_MAX_PENDING_FDS || (int)np > npfds - used_pfds) goto out;
         for (uint32_t k = 0; k < np; k++) c->pending_fds[k] = pfds[used_pfds++];

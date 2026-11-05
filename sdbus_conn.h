@@ -38,13 +38,22 @@
    fds per-chunk is what makes SCM_RIGHTS relay correct under partial writes. */
 typedef struct { unsigned char *b; int len, off; int fds[SDBUS_MAX_PENDING_FDS]; int nfds; } sdbus_outchunk;
 
+/* per-connection inbound ceiling. A client that dribbles a never-completing
+   message grows c->in toward the message's declared length (up to SDBUS_MAX_MSG),
+   and 256 such conns/uid would pin ~32 GB in the root broker. Cap it so a fully
+   received message can always be relayed in one outbound chunk: the outbound
+   enqueue refuses at oq_bytes + len + sizeof(chunk) > SDBUS_MAX_OUTGOING_BYTES,
+   so leave room for that chunk struct -- otherwise an exactly-limit message is
+   accepted inbound only to reap the recipient on delivery. */
+#define SDBUS_MAX_CONN_PENDING (SDBUS_MAX_OUTGOING_BYTES - (long)sizeof(sdbus_outchunk))
+
 typedef struct {
     int fd, id;
     int authed, auth_ok, said_hello, negotiated_fd, saw_nul;   /* auth_ok: an AUTH succeeded (OK sent) */
     uid_t uid; gid_t gid; pid_t pid;
     int gids[SDBUS_MAX_GIDS]; int n_gids;
     const char *unique;                 /* ":1.N", set at Hello */
-    unsigned char *in;  int in_len, in_cap;
+    unsigned char *in;  int in_len, in_cap, in_over;   /* in_over: pending exceeded the cap -> drop */
     unsigned char *out; int out_len, out_cap;   /* scratch for auth/driver bytes */
     int pending_fds[SDBUS_MAX_PENDING_FDS]; int n_pending_fds;   /* received, awaiting a full msg */
     sdbus_outchunk *oq; int n_oq, oq_head, oq_cap;   /* ordered outbound queue */
@@ -132,6 +141,7 @@ static inline void sdbus_conn_out_append(sdbus_conn *c, const void *data, int le
 }
 
 static inline void sdbus_conn_in_append(sdbus_conn *c, const void *data, int len) {
+    if (c->in_len + len > SDBUS_MAX_CONN_PENDING) { c->in_over = 1; return; }
     if (c->in_len + len > c->in_cap) {
         c->in_cap = (c->in_len + len) * 2 + 64;
         c->in = realloc(c->in, c->in_cap);
