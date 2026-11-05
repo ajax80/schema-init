@@ -16,16 +16,18 @@ Greg's audit suggested a umask fix; that does not help here, because the mode is
 
 ## Fix
 
-`_bind_private_socket(path)` locks the parent dir (`/run/systemd`) to 0700 across
-the bind, so only root — which bypasses directory permissions — can reach the
-socket until it is chmod'd to 0600, then restores the dir mode in a `finally`
-(a failed bind must not leave `/run/systemd` at 0700). Root consumers of
-`/run/systemd/*` (schema-logind's sessions) are unaffected during the window;
-non-root is blocked, which is the point.
+`_bind_private_socket(path)` binds the socket inside a 0700 throwaway dir under
+`/run/systemd`, narrows it to 0600, then `os.rename()`s it onto the real path.
+The rename is atomic and the listening inode is unaffected, so clients reach the
+final path while `/run/systemd`'s own mode is never touched. Nothing a crash in
+the window can skip leaves a shared dir corrupted or a 0777 socket at the real
+path (an earlier dir-lock version did both — fixed after code review).
 
 ## Verified
 
-`tests/test_systemd1_socket.py`: socket ends 0600, parent dir mode preserved,
-and preserved even when the bind raises. Live on Eli: after restart the socket
-is `srw------- root:root`, `/run/systemd` stays 0755, the bridge serves the
-system bus (nobody reads, nobody mutate denied).
+`tests/test_systemd1_socket.py`: the socket ends 0600 at the real path, the
+parent dir mode is untouched, no staging dir is left, a stale socket is replaced
+atomically, and a failed bind leaves nothing behind — all compared against the
+dir's actual prior mode, not an absolute. Live on Eli: after restart the socket
+is `srw------- root:root`, `/run/systemd` stays 0755, no staging dir, the bridge
+serves the system bus (nobody mutate denied).

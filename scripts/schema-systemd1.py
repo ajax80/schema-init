@@ -9,6 +9,7 @@ import re
 import gc
 import resource
 import select
+import tempfile
 import stat
 import dbus
 import dbus.service
@@ -1126,27 +1127,35 @@ class PrivateSocketServer(dbus.server.Server):
                 pass
 
 def _bind_private_socket(path):
-    """Create the root-only private socket with no world-connectable window.
-
-    dbus's Server binds the socket at mode 0777 regardless of umask, and we
-    narrow it to 0600 only afterward; a local user who connect()s in between is
-    served as root, because a private-peer call has sender=None (see authorize).
-    Lock the parent dir to 0700 across the bind so only root -- which bypasses
-    directory permissions -- can reach the socket until it is 0600, then restore
-    the dir mode. finally so a failed bind never leaves /run/systemd at 0700.
-    """
+    # dbus binds the listening socket at mode 0777 regardless of umask, and a
+    # narrowing chmod only runs afterward; a local user who connect()s in that
+    # window is served as root, because a private-peer call has sender=None,
+    # which authorize() trusts. So bind inside a 0700 throwaway dir where
+    # non-root can't reach it, narrow it to 0600, then rename it onto the real
+    # path. The rename is atomic and the listening inode is unaffected, so
+    # clients reach the final path while /run/systemd's own mode is never
+    # touched -- no abnormal exit in the window can corrupt a shared directory.
     sockdir = os.path.dirname(path) or '/'
     os.makedirs(sockdir, exist_ok=True)
-    dir_mode = stat.S_IMODE(os.stat(sockdir).st_mode)
-    os.chmod(sockdir, 0o700)
+    staging = tempfile.mkdtemp(prefix='.private-', dir=sockdir)
+    os.chmod(staging, 0o700)
+    tmp = os.path.join(staging, 'sock')
     try:
-        if os.path.exists(path):
-            os.unlink(path)
-        server = PrivateSocketServer('unix:path=' + path)
-        os.chmod(path, 0o600)
+        server = PrivateSocketServer('unix:path=' + tmp)
+        os.chmod(tmp, 0o600)
+        os.rename(tmp, path)   # atomic; replaces any stale socket at path
         return server
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     finally:
-        os.chmod(sockdir, dir_mode)
+        try:
+            os.rmdir(staging)
+        except OSError:
+            pass
 
 
 def main():
