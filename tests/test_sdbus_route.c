@@ -53,6 +53,43 @@ static void test_no_policy_file_default_allows_broadcast(void) {
     printf("test_no_policy_file_default_allows_broadcast OK\n");
 }
 
+/* A subscriber that the recipient-side policy forbids must be dropped from a
+   broadcast, while a subscriber the policy allows still gets it. */
+static void test_receive_policy_filters_a_subscriber(void) {
+    sdbus_names *names = sdbus_names_new();
+    sdbus_replies *replies = sdbus_replies_new();
+    sdbus_conn src = {0}, deny = {0}, ok = {0};
+    src.id = 1; src.uid = 1000; src.gids[0] = 1000; src.n_gids = 1;
+    deny.id = 2; deny.uid = 1000; deny.gids[0] = 1000; deny.n_gids = 1;
+    ok.id = 3; ok.uid = 1001; ok.gids[0] = 1001; ok.n_gids = 1;
+    src.unique = sdbus_names_alloc_unique(names, 1);
+    deny.unique = sdbus_names_alloc_unique(names, 2);
+    ok.unique = sdbus_names_alloc_unique(names, 3);
+    sdbus_transition t[1]; int nt;
+    sdbus_names_request(names, 1, "org.sigsrc", 0, t, &nt);   /* the sender's well-known name */
+    deny.matches = sdbus_match_new(); sdbus_match_add(deny.matches, "type='signal',interface='org.sig'");
+    ok.matches = sdbus_match_new();   sdbus_match_add(ok.matches,   "type='signal',interface='org.sig'");
+    sdbus_conn *all[] = { &src, &deny, &ok };
+
+    /* default allows receiving signals; uid 1000 may not receive from org.sigsrc */
+    sdbus_policy *pol = sdbus_policy_parse(
+        "context = default\nallow = send_type:signal\nallow = receive_type:signal\n"
+        "context = user:1000\ndeny = receive_sender:org.sigsrc,receive_type:signal\n");
+    assert(pol->has_recv_deny == 1);
+
+    int tg[8], synth, denied;
+    DBusMessage *sig = dbus_message_new_signal("/p", "org.sig", "Changed");
+    sdbus_wire_msg sm = wtake(sig, 20);
+    int n = sdbus_route_targets(&sm, &src, names, all, 3, pol, replies, &synth, &denied, tg, 8);
+    assert(n == 1 && tg[0] == 3);        /* uid-1000 subscriber filtered; uid-1001 delivered */
+    dbus_message_unref(sig);
+
+    sdbus_policy_free(pol);
+    sdbus_match_free(deny.matches); sdbus_match_free(ok.matches);
+    sdbus_names_free(names); sdbus_replies_free(replies);
+    printf("test_receive_policy_filters_a_subscriber OK\n");
+}
+
 int main(void) {
     sdbus_names *names = sdbus_names_new();
     sdbus_replies *replies = sdbus_replies_new();
@@ -126,6 +163,7 @@ int main(void) {
     for (int i = 0; i < g_nbufs; i++) free(g_bufs[i]);
 
     test_no_policy_file_default_allows_broadcast();
+    test_receive_policy_filters_a_subscriber();
 
     printf("all sdbus_route tests passed\n");
     return 0;
