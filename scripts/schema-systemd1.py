@@ -9,6 +9,7 @@ import re
 import gc
 import resource
 import select
+import tempfile
 import stat
 import dbus
 import dbus.service
@@ -1125,6 +1126,38 @@ class PrivateSocketServer(dbus.server.Server):
             except Exception:
                 pass
 
+def _bind_private_socket(path):
+    # dbus binds the listening socket at mode 0777 regardless of umask, and a
+    # narrowing chmod only runs afterward; a local user who connect()s in that
+    # window is served as root, because a private-peer call has sender=None,
+    # which authorize() trusts. So bind inside a 0700 throwaway dir where
+    # non-root can't reach it, narrow it to 0600, then rename it onto the real
+    # path. The rename is atomic and the listening inode is unaffected, so
+    # clients reach the final path while /run/systemd's own mode is never
+    # touched -- no abnormal exit in the window can corrupt a shared directory.
+    sockdir = os.path.dirname(path) or '/'
+    os.makedirs(sockdir, exist_ok=True)
+    staging = tempfile.mkdtemp(prefix='.private-', dir=sockdir)
+    os.chmod(staging, 0o700)
+    tmp = os.path.join(staging, 'sock')
+    try:
+        server = PrivateSocketServer('unix:path=' + tmp)
+        os.chmod(tmp, 0o600)
+        os.rename(tmp, path)   # atomic; replaces any stale socket at path
+        return server
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    finally:
+        try:
+            os.rmdir(staging)
+        except OSError:
+            pass
+
+
 def main():
     DBusGMainLoop(set_as_default=True)
 
@@ -1163,11 +1196,7 @@ def main():
         sys.exit(1)
 
     try:
-        if os.path.exists(PRIVATE_SOCKET_PATH):
-            os.unlink(PRIVATE_SOCKET_PATH)
-        priv_server = PrivateSocketServer('unix:path=' + PRIVATE_SOCKET_PATH)
-        os.chmod(PRIVATE_SOCKET_PATH, 0o600)
-        manager._priv_server = priv_server
+        manager._priv_server = _bind_private_socket(PRIVATE_SOCKET_PATH)
         print(f"systemd1: serving root private socket at {PRIVATE_SOCKET_PATH}")
     except Exception as e:
         print(f"systemd1: failed to start private socket: {e}", file=sys.stderr)
