@@ -38,6 +38,32 @@ static inline int sdbus__route_resolve(sdbus_names *names, sdbus_conn **all,
     return sdbus_names_owner(names, dest);
 }
 
+/* A recipient's receive_* policy. Only consulted when the loaded policy carries
+   any receive_* rule (pol->has_recv_rule); a policy with none leaves receive
+   unconfigured (all allowed) and this is skipped. A whitelist of allow-receive
+   rules still counts -- the engine default-denies whatever they don't cover. */
+static inline int sdbus__recv_allowed(sdbus_policy *pol, const char *tstr,
+        const sdbus_wire_msg *msg, const char **snames, int n_snames,
+        const char *sender_unique, const sdbus_conn *rcpt) {
+    sdbus_req req;
+    memset(&req, 0, sizeof req);
+    req.op = "receive";
+    req.uid = (int)rcpt->uid;
+    req.gids = rcpt->gids;
+    req.n_gids = rcpt->n_gids;
+    req.interface = msg->interface;
+    req.member = msg->member;
+    req.msgtype = tstr;
+    req.path = msg->path;
+    /* receive_sender is set-membership over the sender's owned names, with its
+       unique as fallback -- matching only one name would let a multi-name
+       sender evade a deny-receive (mirrors send_destination). */
+    req.sender_names = snames;
+    req.n_sender_names = n_snames;
+    req.sender_name = sender_unique;
+    return strcmp(sdbus_policy_eval(pol, &req), SDBUS_ALLOW) == 0;
+}
+
 static inline int sdbus_route_targets(sdbus_wire_msg *msg, sdbus_conn *sender,
         sdbus_names *names, sdbus_conn **all, int n_all, sdbus_policy *pol,
         sdbus_replies *replies, int *synth_error, int *denied,
@@ -89,6 +115,15 @@ static inline int sdbus_route_targets(sdbus_wire_msg *msg, sdbus_conn *sender,
         if (msg->destination) {                    /* directed signal */
             if (dest_owner < 0) return 0;
             if (max_targets < 1) return 0;
+            if (pol->has_recv_rule) {
+                const char **sn = NULL;
+                int nsn = sdbus_names_owned_by(names, sender->id, &sn);
+                const sdbus_conn *rc = NULL;
+                for (int i = 0; i < n_all; i++) if (all[i]->id == dest_owner) { rc = all[i]; break; }
+                int ok = rc && sdbus__recv_allowed(pol, tstr, msg, sn, nsn, sender->unique, rc);
+                free(sn);
+                if (!ok) return 0;   /* fail closed: no recipient conn -> drop */
+            }
             targets[0] = dest_owner;
             return 1;
         }
@@ -101,8 +136,12 @@ static inline int sdbus_route_targets(sdbus_wire_msg *msg, sdbus_conn *sender,
             if (cc->matches && sdbus_match_signal(cc->matches, msg->interface,
                                                   msg->member, msg->path,
                                                   sender->unique, snames, n_snames,
-                                                  msg->arg0))
+                                                  msg->arg0)) {
+                if (pol->has_recv_rule &&
+                    !sdbus__recv_allowed(pol, tstr, msg, snames, n_snames, sender->unique, cc))
+                    continue;
                 targets[n++] = cc->id;
+            }
         }
         free(snames);
         return n;

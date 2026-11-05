@@ -57,10 +57,12 @@ def parse_policy(text):
 # destination's owned well-known names), not through this scalar map.
 _SEND = {"send_interface": "interface",
          "send_member": "member", "send_type": "msgtype", "send_path": "path"}
-# receive_sender constrains the sender identity of the incoming message, not its
-# destination. sender_name is not yet populated by any request builder in SP0
-# (no op="receive" request exists yet) — this mapping is correctness-for-the-future.
-_RECV = {"receive_sender": "sender_name", "receive_interface": "interface",
+# receive_sender constrains the sender identity of the incoming message. Like
+# send_destination it is set-membership over the sender's owned well-known names
+# (sender_names), with the scalar sender_name as fallback — matching only the
+# first/one name would let a multi-name sender evade a deny-receive. Handled
+# specially below, not in this scalar map.
+_RECV = {"receive_interface": "interface",
          "receive_member": "member", "receive_type": "msgtype", "receive_path": "path"}
 
 def _rule_matches(rule, request):
@@ -104,6 +106,18 @@ def _rule_matches(rule, request):
             if op != "send":
                 return False
             if not _field_matches(request.get(_SEND[attr]), value):
+                return False
+        elif attr == "receive_sender":
+            if op != "receive":
+                return False
+            names = request.get("sender_names")
+            if not names:
+                sn = request.get("sender_name")
+                names = [sn] if sn else []
+            if value == "*":
+                if not names:
+                    return False
+            elif value not in names:
                 return False
         elif attr in _RECV:
             if op != "receive":

@@ -86,6 +86,51 @@ int main(void) {
     const char *pcomment = "# a comment\n\ncontext = default  # trailing\nallow = send_destination:org.example.Svc\n";
     assert(strcmp(evals(pcomment, &send), "allow") == 0);
 
+    /* receive: the default receive_type backbone allows all types; a deny-receive
+       in a user context removes it for that recipient, matched against the
+       sender's well-known names (set membership, unique as fallback) */
+    const char *rp =
+        "context = default\n"
+        "allow = receive_type:signal\n"
+        "context = user:0\n"
+        "deny = receive_sender:org.wpa,receive_type:signal\n";
+    const char *wpa[] = { "org.wpa" };
+    sdbus_req r_root = { .op="receive", .uid=0, .msgtype="signal",
+                         .sender_names=wpa, .n_sender_names=1, .sender_name=":1.5" };
+    assert(!strcmp(evals(rp, &r_root), "deny"));       /* root recipient: denied */
+    sdbus_req r_user = { .op="receive", .uid=1000, .msgtype="signal",
+                         .sender_names=wpa, .n_sender_names=1, .sender_name=":1.5" };
+    assert(!strcmp(evals(rp, &r_user), "allow"));      /* other uid: default allow */
+    const char *othn[] = { "org.other" };
+    sdbus_req r_other = { .op="receive", .uid=0, .msgtype="signal",
+                          .sender_names=othn, .n_sender_names=1, .sender_name=":1.9" };
+    assert(!strcmp(evals(rp, &r_other), "allow"));     /* different sender: allowed */
+    /* a multi-name sender cannot evade the deny by owning the denied name second */
+    const char *multi[] = { "org.other", "org.wpa" };
+    sdbus_req r_multi = { .op="receive", .uid=0, .msgtype="signal",
+                          .sender_names=multi, .n_sender_names=2, .sender_name=":1.7" };
+    assert(!strcmp(evals(rp, &r_multi), "deny"));
+    /* unique-name fallback when the sender owns no well-known name */
+    sdbus_req r_uniq = { .op="receive", .uid=0, .msgtype="signal", .sender_name="org.wpa" };
+    assert(!strcmp(evals(rp, &r_uniq), "deny"));
+
+    /* has_recv_rule set when ANY rule (allow or deny) has a receive_* predicate,
+       so an allow-whitelist still enables enforcement (engine default-denies the
+       rest) -- not only an explicit deny-receive */
+    sdbus_policy *pd = sdbus_policy_parse(rp);
+    assert(pd && pd->has_recv_rule == 1);
+    sdbus_policy_free(pd);
+    sdbus_policy *pw = sdbus_policy_parse(
+        "context = default\nallow = receive_sender:org.only\n");
+    assert(pw && pw->has_recv_rule == 1);              /* allow-whitelist counts */
+    sdbus_req r_wl = { .op="receive", .uid=1000, .msgtype="signal", .sender_name="org.other" };
+    assert(!strcmp(sdbus_policy_eval(pw, &r_wl), "deny"));  /* not whitelisted -> default deny */
+    sdbus_policy_free(pw);
+    sdbus_policy *ps = sdbus_policy_parse(
+        "context = default\nallow = send_type:signal\ndeny = send_type:method_call\n");
+    assert(ps && ps->has_recv_rule == 0);              /* no receive rule -> skip */
+    sdbus_policy_free(ps);
+
     printf("all sdbus_policy tests passed\n");
     return 0;
 }
