@@ -174,7 +174,7 @@ except si.Skip:
     check("9 ExecStartPre skipped", True)
 
 # --- ExecStart prefix stripping ---
-b3 = si.unit_to_svc("p", si.parse_unit("[Service]\nExecStart=@-/bin/p arg\n[Install]\nWantedBy=x\n"))
+b3 = si.unit_to_svc("p", si.parse_unit("[Service]\nExecStart=@-/bin/p p arg\n[Install]\nWantedBy=x\n"))
 check("prefix chars stripped", "exec=/bin/p\n" in b3 and "args=arg\n" in b3)
 
 # --- $VAR expansion / dropping ---
@@ -1112,13 +1112,189 @@ check("Fedora sshd.service output unchanged", si.unit_to_svc("sshd", si.parse_un
       'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nnotify=1\n'
       'restart_sec=42\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
 check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
-      '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\nname=chronyd\n'
+      '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\n'
+      '# schema-import WARN: no equivalent here, not enforced: CapabilityBoundingSet\nname=chronyd\n'
       'exec=/usr/sbin/chronyd\nargs=-n\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/chronyd\nexpand_args=1\nnotify=1\n'
       'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\n')
 check("Fedora fstrim.timer output unchanged",
       si.timer_to_svc("fstrim", si.parse_unit(_F_FSTRIM_T), si.parse_unit(_F_FSTRIM_S)) ==
+      '# schema-import WARN: no equivalent here, not enforced: ProtectKernelTunables\n'
       '# schema-import: dropped RandomizedDelaySec; dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
       'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
       'private_tmp=0\nprotect_system=0\nprotect_home=0\non_calendar=Mon 00:00\npersistent=1\n')
+
+# --- security audit 2026-11-05 ---
+def warns(body):
+    return [l[len(si.WARN_PREFIX):] for l in body.splitlines() if l.startswith(si.WARN_PREFIX)]
+def svc(extra):
+    return si.unit_to_svc("a", si.parse_unit("[Service]\nExecStart=/usr/bin/a\n" + extra))
+
+_b = svc("DynamicUser=yes\n")
+check("DynamicUser without User= stays root and says so",
+      "needs_root=1\n" in _b and any("DynamicUser" in w and "root" in w for w in warns(_b)))
+_b = svc("DynamicUser=yes\nUser=wsdd\n")
+check("DynamicUser with User= warns of the static user",
+      "user=wsdd\n" in _b and any("DynamicUser" in w and "wsdd" in w for w in warns(_b)))
+check("DynamicUser=no is silent", not warns(svc("DynamicUser=no\n")))
+check("ExecStart=+ is root under systemd too: no DynamicUser warning", not any(
+    "DynamicUser" in w for w in warns(si.unit_to_svc("a", si.parse_unit(
+        "[Service]\nExecStart=+/usr/bin/a\nDynamicUser=yes\n")))))
+_b = warns(svc("CapabilityBoundingSet=CAP_KILL\nSystemCallFilter=@system-service\nPrivateNetwork=yes\n"
+               "IPAddressDeny=any\nInaccessiblePaths=/secret\nReadOnlyPaths=/data\nUMask=0077\n"))
+check("dropped sandbox directives are all named", all(any(k in w for w in _b) for k in (
+    "CapabilityBoundingSet", "SystemCallFilter", "PrivateNetwork", "IPAddressDeny",
+    "InaccessiblePaths", "ReadOnlyPaths", "UMask")))
+check("sandbox directives at their defaults are silent", not warns(svc(
+    "PrivateDevices=no\nUMask=0022\nDevicePolicy=auto\nProtectProc=default\nProcSubset=all\n"
+    "CapabilityBoundingSet=\nMemoryDenyWriteExecute=false\n")))
+check("RootDirectory= says the unit is no longer confined",
+      any("RootDirectory" in w for w in warns(svc("RootDirectory=/srv/jail\n"))))
+_ur = tempfile.mkdtemp(); os.makedirs(os.path.join(_ur, "etc"))
+open(os.path.join(_ur, "etc/passwd"), "w").write("foo:x:900:900::/:/bin/sh\n")
+open(os.path.join(_ur, "etc/group"), "w").write("foo:x:900:\nbar:x:901:\n")
+_saved_env = {k: os.environ.get(k) for k in ("MIGRATE_ROOT", "SCHEMA_SVC_DIR", "SCHEMA_STATE_DIR", "SCHEMA_BUS_OVERRIDE_DIR")}
+for k in _saved_env:
+    os.environ.pop(k, None)
+os.environ["MIGRATE_ROOT"] = _ur
+check("Group= other than the primary group warns",
+      any("Group=bar" in w for w in warns(svc("User=foo\nGroup=bar\n"))))
+check("Group= equal to the primary group is silent", not warns(svc("User=foo\nGroup=foo\n")))
+check("Group= on a root unit warns", any("Group=bar" in w for w in warns(svc("Group=bar\n"))))
+check("SupplementaryGroups= warns",
+      any("SupplementaryGroups" in w for w in warns(svc("User=foo\nSupplementaryGroups=bar\n"))))
+si.set_user_mode(si.user_context("/h", 1000, "u", {"XDG_RUNTIME_DIR": "/r"}))
+check("user mode runs as the user: no privilege warnings", not warns(svc("PrivateNetwork=yes\nGroup=bar\n")))
+si.set_user_mode(None)
+
+# drop-ins, modes, a bad unit, names
+_ar = tempfile.mkdtemp()
+os.environ["MIGRATE_ROOT"] = _ar
+_ul, _et = os.path.join(_ar, "usr/lib/systemd/system"), os.path.join(_ar, "etc/systemd/system")
+_sd = os.path.join(_ar, "etc/schema-init/services")
+for d in (_ul, _et, _sd, os.path.join(_ar, "var/lib/schema-init"), os.path.join(_ar, "tmp"),
+          os.path.join(_ar, "etc/init.d")):
+    os.makedirs(d)
+def put(path, text, mode=0o644):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+    os.chmod(path, mode)
+def body_of(n):
+    return open(os.path.join(_sd, n + ".svc")).read()
+def mode_of(n):
+    return os.stat(os.path.join(_sd, n)).st_mode & 0o777
+def quiet(units, **kw):
+    return si.drain(units=units, log=lambda *_: None, **kw)
+
+put(os.path.join(_ul, "di.service"), "[Service]\nExecStart=/usr/bin/base\nEnvironment=OLD=1\n")
+put(os.path.join(_et, "di.service.d/h.conf"),
+    "[Service]\nUser=nobody\nNoNewPrivileges=yes\nExecStart=\nExecStart=/usr/bin/over\nEnvironment=\nEnvironment=NEW=2\n")
+quiet(["di.service"])
+_b = body_of("di")
+check("system mode: a drop-in's User= applies", "user=nobody\n" in _b and "needs_root" not in _b)
+check("system mode: a drop-in's hardening applies", "no_new_privs=1\n" in _b)
+check("system mode: a drop-in replaces ExecStart=", "exec=/usr/bin/over\n" in _b)
+check("Environment= with no value resets the list", "env=NEW=2\n" in _b and "OLD" not in _b)
+put(os.path.join(_ul, "pr.service"), "[Service]\nExecStart=/usr/bin/pr\n")
+put(os.path.join(_ul, "pr.service.d/same.conf"), "[Service]\nUser=vendor\n")
+put(os.path.join(_et, "pr.service.d/same.conf"), "[Service]\nUser=admin\n")
+quiet(["pr.service"])
+check("/etc drop-in hides a vendor one of the same name", "user=admin\n" in body_of("pr"))
+put(os.path.join(_ul, "mk.service"), "[Service]\nExecStart=/usr/bin/mk\n")
+os.symlink("/dev/null", os.path.join(_et, "mk.service"))
+put(os.path.join(_et, "mk.service.d/x.conf"), "[Service]\nExecStart=/usr/bin/mk2\n")
+check("a masked unit stays masked whatever its drop-ins say", si.import_one("mk.service")[0] == "skipped")
+put(os.path.join(_ul, "jobt.timer"), "[Timer]\nOnCalendar=daily\n")
+put(os.path.join(_ul, "jobt.service"), "[Service]\nType=oneshot\nExecStart=/usr/bin/j\n")
+put(os.path.join(_et, "jobt.service.d/u.conf"), "[Service]\nUser=nobody\n")
+quiet(["jobt.timer"])
+check("a timer's service takes its drop-ins", "user=nobody\n" in body_of("jobt"))
+
+put(os.path.join(_et, "sec.service"), "[Service]\nEnvironment=T=hunter2\nExecStart=/usr/bin/sec\n", 0o600)
+quiet(["sec.service"])
+check("a private unit's .svc is private", mode_of("sec.svc") == 0o600)
+put(os.path.join(_et, "sec2.service"), "[Service]\nType=forking\nEnvironment=T=hunter2\nExecStart=/usr/bin/s\n", 0o600)
+quiet(["sec2.service"])
+check("a private unit's skip stub is private", mode_of("sec2.svc.skipped") == 0o600)
+put(os.path.join(_ul, "sdi.service"), "[Service]\nExecStart=/usr/bin/sdi\n")
+put(os.path.join(_et, "sdi.service.d/s.conf"), "[Service]\nEnvironment=T=hunter2\n", 0o600)
+quiet(["sdi.service"])
+check("a private drop-in makes the .svc private", mode_of("sdi.svc") == 0o600)
+put(os.path.join(_ul, "pub.service"), "[Service]\nExecStart=/usr/bin/pub\n")
+quiet(["pub.service"])
+check("a world-readable unit keeps a 0644 .svc", mode_of("pub.svc") == 0o644)
+os.chmod(os.path.join(_ul, "pub.service"), 0o600)
+quiet(["pub.service"], force=True)
+check("--force over a 0644 .svc tightens it", mode_of("pub.svc") == 0o600)
+check("no temp file left behind", not [e for e in os.listdir(_sd) if e.endswith(".tmp")])
+
+with open(os.path.join(_ul, "bad8.service"), "wb") as f:
+    f.write(b"[Service]\nExecStart=/bin/x\n# \xff\xfe\n")
+put(os.path.join(_ul, "goodafter.service"), "[Service]\nExecStart=/usr/bin/goodafter\n")
+put(os.path.join(_ul, "hugesec.service"), "[Service]\nExecStart=/usr/bin/hugesec\nRestart=always\nRestartSec=%s\n" % ("1" * 400))
+_q = os.path.join(_ar, "var/lib/schema-init/pending.list")
+put(_q, "bad8.service\ngoodafter.service\n")
+_c = si.drain(log=lambda *_: None)
+check("a non-UTF-8 unit is one error, not the end of the drain",
+      _c["error"] == 1 and _c["imported"] == 1 and os.path.exists(os.path.join(_sd, "goodafter.svc")))
+check("the unit that failed stays queued", open(_q).read() == "bad8.service\n")
+os.remove(_q)
+check("an overflowing timespan is just not understood", si._timespan_sec("1" * 400) is None)
+import signal
+signal.alarm(10)    # the old regex hangs here for far longer than the suite runs
+check("a long bad timespan answers at once", si._timespan_sec("1" * 64 + "!") is None)
+signal.alarm(0)
+check("timespans still parse", si._timespan_sec("1min 30s") == 90 and si._timespan_sec("500ms") == 1
+      and si._timespan_sec("30") == 30 and si._timespan_sec("1.") is None and si._timespan_sec("x") is None)
+with open(os.path.join(_ul, "other8.timer"), "wb") as f:
+    f.write(b"[Timer]\nOnCalendar=daily\n# \xff\n")
+put(os.path.join(_ul, "bystander.service"), "[Service]\nExecStart=/usr/bin/bystander\n")
+check("someone else's unreadable timer doesn't fail this unit", si.import_one("bystander.service")[0] == "imported")
+os.remove(os.path.join(_ul, "other8.timer"))
+_spec = open(os.path.join(REPO, "schema-init.spec")).read()
+check("%post retries --enabled after a failed import",
+      "if %{_bindir}/schema-import --enabled >" in _spec)
+
+put(os.path.join(_ar, "tmp/evil.service"), "[Service]\nExecStart=/usr/bin/evil\n")
+put(os.path.join(_ar, "tmp/evil"), "#!/bin/sh\n", 0o755)
+for _n in ("../../../../tmp/evil", "/etc/init.d/../../tmp/evil", "/etc/sv/../../tmp/evil", "/etc/sv/a;b", "a\nb"):
+    check("name refused: %r" % _n, si.import_one(_n)[0] == "error")
+put(os.path.join(_ul, "trav.socket"), "[Socket]\nListenStream=1\nService=../../../../tmp/evil.service\n")
+check("Socket Service= can't leave the service dir", si.import_one("trav.socket")[0] == "error")
+put(os.path.join(_ul, "travt.timer"), "[Timer]\nOnCalendar=daily\nUnit=../../../../tmp/evil.service\n")
+put(os.path.join(_ul, "travt.service"), "[Service]\nExecStart=/usr/bin/t\n")
+check("Timer Unit= can't leave the unit dir", si.import_one("travt.timer")[0] == "skipped")
+check("templates and escapes are still legal names", si.import_one("ghost@x\\x2dy.service")[0] == "not-found")
+try:
+    si.condition_lines(si.parse_unit("[Unit]\nRequires=dev-a\\x0aexec=/bin/evil.device\n"))
+    check("a control character in a device unit is refused", False)
+except si.Skip:
+    check("a control character in a device unit is refused", True)
+
+_b = si.unit_to_svc("a", si.parse_unit("[Service]\nExecStart=@/usr/bin/a argv0 --flag\n"))
+check("ExecStart=@ does not pass argv0 as an argument",
+      "exec=/usr/bin/a\nargs=--flag\n" in _b and "argv0\n" not in _b.replace("WARN", ""))
+check("ExecStart=@ warns argv[0] was lost", any("argv[0]" in w for w in warns(_b)))
+_b = si.unit_to_svc("a", si.parse_unit(
+    "[Service]\nType=oneshot\nExecStartPre=/bin/pre\nExecStart=-/bin/one x\nExecStart=/bin/sh -c 'a || b'\nExecStart=/bin/last y\n"))
+check("a oneshot's earlier ExecStart= lines run first, in order",
+      'exec_pre=/bin/pre\nexec_pre=-/bin/one x\nexec_pre=/bin/sh -c "a || b"\n' in _b
+      and "exec=/bin/last\nargs=y\n" in _b)
+_b = si.timer_to_svc("a", si.parse_unit("[Timer]\nOnCalendar=daily\n"), si.parse_unit(
+    "[Service]\nType=oneshot\nExecStart=/bin/backup\nExecStart=/bin/prune\n"))
+check("so does a timer's", "exec_pre=/bin/backup\n" in _b and "exec=/bin/prune\n" in _b)
+try:
+    si.unit_to_svc("a", si.parse_unit("[Service]\nType=oneshot\n" + "".join("ExecStart=/bin/c%d\n" % i for i in range(10))))
+    check("too many for exec_pre is refused, not half-run", False)
+except si.Skip:
+    check("too many for exec_pre is refused, not half-run", True)
+_b = si.unit_to_svc("a", si.parse_unit("[Service]\nType=oneshot\nExecStart=/bin/one\nExecStart=\nExecStart=/bin/two\n"))
+check("a reset ExecStart= leaves only what follows", "exec=/bin/two\n" in _b and "/bin/one" not in _b)
+
+for k, v in _saved_env.items():
+    if v is None:
+        os.environ.pop(k, None)
+    else:
+        os.environ[k] = v
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

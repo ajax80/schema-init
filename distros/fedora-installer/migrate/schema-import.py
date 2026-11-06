@@ -14,10 +14,12 @@ SCHEMA_STATE_DIR / SCHEMA_SVC_DIR override the queue and output locations, and
 match the shim's own env knobs.
 """
 import argparse
+import math
 import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -80,14 +82,18 @@ def _exec_tokens(execstart):
     """argv list from an ExecStart value: strip leading @-:+! prefix chars off
     the executable, then shell-split. Returns [] if empty."""
     s = execstart.strip()
+    pre = ""
     while s and s[0] in _EXEC_PREFIX:
+        pre += s[0]
         s = s[1:].lstrip()
     if not s:
         return []
     try:
-        return shlex.split(s)
+        toks = shlex.split(s)
     except ValueError:
-        return s.split()
+        toks = s.split()
+    # @/path argv0 args: the second word is argv[0], not an argument
+    return toks[:1] + toks[2:] if "@" in pre else toks
 
 
 def _expand_argv(argv, env):
@@ -116,6 +122,9 @@ def _env_pairs(values):
     multiple pairs per line. Tokens without '=' are dropped."""
     out = []
     for v in values:
+        if not v.strip():
+            out = []
+            continue
         try:
             toks = shlex.split(v)
         except ValueError:
@@ -524,11 +533,14 @@ def _timespan_sec(v):
     if not v or v == "infinity":
         return None
     total = 0.0
-    for num, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([a-z]*)", v):
+    span = r"(\d+(?:\.\d+)?)\s*([a-z]*)"
+    for num, unit in re.findall(span, v):
         if unit not in _SPAN_UNITS:
             return None
         total += float(num) * _SPAN_UNITS[unit]
-    if not re.fullmatch(r"(\s*\d+(?:\.\d+)?\s*[a-z]*)+", v):
+    # what the spans leave behind, not a fullmatch of (digits)+: that backtracks
+    # exponentially on a long run of digits with junk after it
+    if re.sub(span, "", v).strip() or not math.isfinite(total):
         return None
     sec = int(total)
     return sec + (1 if total > sec else 0)
@@ -840,7 +852,10 @@ def condition_lines(sections, facts=None):
                 if dev.endswith(".device"):
                     if not dev.startswith("dev-"):
                         raise Skip("%s=%s: only /dev device units map to a path" % (k, dev))
-                    conds.append(("PathExists", k, _device_path(dev)))
+                    path = _device_path(dev)
+                    if re.search(r"[\x00-\x1f\x7f]", path):
+                        raise Skip("%s=%s: control character in the device path" % (k, dev))
+                    conds.append(("PathExists", k, path))
     lines, static_trig, static_any = [], 0, False
     facts = facts or None
     for name, key, v in conds:
@@ -1009,6 +1024,53 @@ def _ambient_caps(svc):
     return list(caps), warns
 
 
+# Directives that confine a unit under systemd and that the engine has no key
+# for. _UNENFORCED_DEFAULT: the values that ask for nothing, so lose nothing.
+_UNENFORCED = (
+    "CapabilityBoundingSet", "SystemCallFilter", "SystemCallArchitectures",
+    "RestrictAddressFamilies", "RestrictNamespaces", "RestrictRealtime", "RestrictSUIDSGID",
+    "RestrictFileSystems", "LockPersonality", "MemoryDenyWriteExecute",
+    "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
+    "ProtectControlGroups", "ProtectClock", "ProtectHostname", "ProtectProc", "ProcSubset",
+    "PrivateDevices", "PrivateNetwork", "PrivateUsers", "PrivateIPC", "PrivateMounts", "RemoveIPC",
+    "NetworkNamespacePath", "IPCNamespacePath", "ReadOnlyPaths", "ReadOnlyDirectories",
+    "InaccessiblePaths", "InaccessibleDirectories", "NoExecPaths", "ExecPaths",
+    "TemporaryFileSystem", "BindPaths", "BindReadOnlyPaths", "DevicePolicy", "DeviceAllow",
+    "IPAddressDeny", "IPAddressAllow", "UMask",
+)
+_UNENFORCED_DEFAULT = {"DevicePolicy": "auto", "ProtectProc": "default", "ProcSubset": "all", "UMask": "0022"}
+
+
+# What the .svc can't carry, named so the loss isn't silent. privileged: + or !
+# run the main process as root under systemd too; only + also skips the sandbox.
+# Not user mode: those services run as the user, with nothing to drop to.
+def _unenforced_warns(svc, user, privileged, unsandboxed):
+    if _USER:
+        return []
+    warns = []
+    if not privileged:
+        if _get_last(svc, "DynamicUser").lower() in _TRUE:
+            if user and user != "root":
+                warns.append("DynamicUser=yes: runs as the static user %s, which must exist" % user)
+            else:
+                warns.append("DynamicUser=yes with no User=: runs as root, no dynamic users here")
+        group = _get_last(svc, "Group")
+        if group and group != (_primary_group(user) if user and user != "root" else "root"):
+            warns.append("Group=%s not applied: runs with %s's primary group" % (group, user or "root"))
+        if _get_last(svc, "SupplementaryGroups"):
+            warns.append("SupplementaryGroups= not applied: only %s's /etc/group memberships" % (user or "root"))
+    if unsandboxed:
+        return warns
+    for k in ("RootDirectory", "RootImage"):
+        if _get_last(svc, k):
+            warns.append("%s= not applied: runs in the real root" % k)
+    lost = [k for k in _UNENFORCED
+            if _get_last(svc, k).lower() not in _FALSE and _get_last(svc, k).lower() != _UNENFORCED_DEFAULT.get(k)]
+    if lost:
+        warns.append("no equivalent here, not enforced: " + " ".join(lost))
+    return warns
+
+
 # what systemd chowns to when Group= is unset; the user name if it can't be read
 def _primary_group(user):
     def rows(f):
@@ -1091,7 +1153,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if stype == "dbus" and not busname:
         raise Skip("Type=dbus without BusName= — nothing to wait for")
 
-    execstarts = _get_all(svc, "ExecStart")
+    execstarts = []
+    for v in _get_all(svc, "ExecStart"):
+        execstarts = execstarts + [v] if v.strip() else []
     execstart = execstarts[-1] if execstarts else ""
     argv = _exec_tokens(execstart)
     if not argv:
@@ -1115,6 +1179,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         env_file_notes.append("dropped EnvironmentFile=%s (limit 4)" % " ".join(env_files[4:]))
         env_files = env_files[:4]
     pres = _exec_pre(svc, unit or name)
+    # a oneshot runs its ExecStart= lines in turn; a .svc has one exec=
+    if stype == "oneshot":
+        pres += _exec_pre([("ExecStart", v) for v in execstarts[:-1]], unit or name, "ExecStart")
     expand = bool(env_files) and any("$" in a for a in argv[1:] + [w for _, pa in pres for w in pa])
     dropped_args = 0
     env_map = dict(p.split("=", 1) for p in env_pairs)
@@ -1221,13 +1288,14 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         if rsec:
             lines.append("restart_sec=%d" % min(rsec, 3600))
 
-    user = _get_last(svc, "User")
+    named_user = user = _get_last(svc, "User")
     # ExecStart=! / + run the main process as root whatever User= says (F44 GA
     # chrony: User=chrony + ExecStart=!, the daemon drops privileges itself)
     lead = execstart.strip()
     pfx = lead[:len(lead) - len(lead.lstrip(_EXEC_PREFIX))]
     # (!! is only the fallback for kernels without ambient caps; F44 has them)
-    if "+" in pfx or ("!" in pfx and "!!" not in pfx):
+    privileged = "+" in pfx or ("!" in pfx and "!!" not in pfx)
+    if privileged:
         user = ""
     amb, amb_warns = _ambient_caps(svc)
     if user and user != "root":
@@ -1267,6 +1335,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # here only the main process is confined
     warns.extend(stop_warns)
     warns.extend(amb_warns + rt_warns)
+    if "@" in pfx:
+        warns.append("ExecStart=@ custom argv[0] not kept: the program sees its own path")
+    warns.extend(_unenforced_warns(svc, named_user, privileged, "+" in pfx))
     if _USER and stype in ("notify", "notify-reload"):
         # Quadlet's [X-Container] Image= says where podman's options end;
         # the check runs on READY=1, so only notify units can have it
@@ -1426,6 +1497,73 @@ def _unit_dirs():
         "usr/lib/systemd/system", "lib/systemd/system")]
 
 
+_private_src = False    # a source of the unit in hand isn't world-readable
+
+
+def _note_private(path):
+    global _private_src
+    try:
+        _private_src = _private_src or not os.stat(path).st_mode & stat.S_IROTH
+    except OSError:
+        pass
+
+
+# drop-in text in systemd's order for the unit known by these names; a
+# same-named file higher up hides the rest
+def _dropin_text(names):
+    drop = {}
+    for d in _unit_dirs():
+        for name in names:
+            dd = os.path.join(d, name + ".d")
+            try:
+                for e in os.listdir(dd):
+                    if e.endswith(".conf"):
+                        drop.setdefault(e, os.path.join(dd, e))
+            except OSError:
+                continue
+    text = ""
+    for e in sorted(drop):
+        _note_private(drop[e])
+        try:
+            with open(drop[e]) as f:
+                text += "\n" + f.read()
+        except OSError:
+            pass
+    return text
+
+
+# The unit as systemd sees it. A masked unit stays masked (empty) whatever its
+# drop-ins say; an alias shares the drop-ins of the file it points to.
+def read_unit(path):
+    _note_private(path)
+    with open(path) as f:
+        text = f.read()
+    if _masked(path):
+        return text
+    return text + _dropin_text(dict.fromkeys((os.path.basename(path), os.path.basename(os.path.realpath(path)))))
+
+
+# systemd's unit name characters, plus + (some packages use it). Names reach
+# output paths and, for runit, an sh -c line.
+_NAME_OK = re.compile(r"[A-Za-z0-9:_.\\@+-]+")
+
+
+def _name_ok(name):
+    return bool(_NAME_OK.fullmatch(name)) and not name.startswith(".")
+
+
+# 0600 when a source was: Environment= secrets in it are copied here. The old
+# file is replaced, not rewritten, or --force would keep its mode.
+def _write_output(path, body):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(body)
+        os.fchmod(f.fileno(), 0o600 if _private_src else 0o644)
+    os.replace(tmp, path)
+
+
 def find_unit(name):
     """Locate a unit file by bare or .service name; None if not found."""
     cands = [name] if name.endswith(".service") else [name + ".service", name]
@@ -1471,7 +1609,7 @@ def _timer_for(name):
             try:
                 with open(os.path.join(d, e)) as f:
                     t = parse_unit(f.read())
-            except OSError:
+            except (OSError, ValueError):
                 continue
             if _get_last(t.get("Timer", []), "Unit") == name + ".service":
                 return e
@@ -1551,7 +1689,7 @@ def _exec_owner(body, out):
         try:
             with open(p) as f:
                 olines = f.read().splitlines()
-        except OSError:
+        except (OSError, ValueError):
             continue
         other = [ln[5:].strip() for ln in olines if ln.startswith("exec=")]
         if other and daemon(olines) and real(other[-1]) == mine:
@@ -1575,7 +1713,7 @@ def _svc_graph():
         try:
             with open(os.path.join(svc_dir(), e)) as f:
                 lines = f.read().splitlines()
-        except OSError:
+        except (OSError, ValueError):
             continue
         g[e[:-4]] = ([ln[4:].strip() for ln in lines if ln.startswith("dep=")],
                      any(ln.startswith(_TIMER_KEYS) for ln in lines))
@@ -1671,6 +1809,7 @@ def _import_lsb(name, force, queued):
     if os.path.exists(out) and not force:
         return ("exists", out)
     path = os.path.join(initd_dir(), name)
+    _note_private(path)
     try:
         with open(path) as f:
             text = f.read()
@@ -1709,9 +1848,8 @@ def _runnable_unit(unit):
     if not p:
         return False
     try:
-        with open(p) as f:
-            sec = parse_unit(f.read())
-    except OSError:
+        sec = parse_unit(read_unit(p))
+    except (OSError, ValueError):
         return False
     inst = sec.get("Install", [])
     return bool(_get_last(sec.get("Service", []), "ExecStart")) and \
@@ -1823,6 +1961,9 @@ def import_one(name, force=False, queued=()):
     """Translate one queued unit. Returns (status, detail) where status is one
     of: imported, exists, not-found, skipped, error. queued: the other names
     in the same drain (an enabled .service makes its socket eager)."""
+    bare = name[len(INITD):] if name.startswith(INITD) else name[len(SV):] if name.startswith(SV) else name
+    if not _name_ok(bare):
+        return ("error", "invalid unit name %r" % name)
     if name.startswith(INITD):
         return _import_lsb(name[len(INITD):], force, queued)
     if name.startswith(SV):
@@ -1838,8 +1979,7 @@ def import_one(name, force=False, queued=()):
         if not spath:
             return ("not-found", name + ".socket")
         try:
-            with open(spath) as f:
-                stext = f.read()
+            stext = read_unit(spath)
         except OSError as e:
             return ("error", str(e))
         sock_sections = parse_unit(stext)
@@ -1849,18 +1989,19 @@ def import_one(name, force=False, queued=()):
             return ("skipped", (str(s), skip_stub(name, spath, str(s), stext),
                                 os.path.join(svc_dir(), name + ".svc")))
         target = _get_last(sock_sections.get("Socket", []), "Service") or name + ".service"
+        if not _name_ok(target):
+            return ("error", "%s.socket: invalid Service=%r" % (name, target))
         name = target[:-len(".service")] if target.endswith(".service") else target
     else:
         spath = find_unit(name + ".socket") if not timer else None
         if spath and spath.endswith(name + ".socket"):
             try:
-                with open(spath) as f:
-                    cand = parse_unit(f.read())
+                cand = parse_unit(read_unit(spath))
                 svc_target = _get_last(cand.get("Socket", []), "Service") or name + ".service"
                 if svc_target == name + ".service":
                     socket_lines(cand)
                     sibling = cand
-            except (OSError, Skip):
+            except (OSError, ValueError, Skip):
                 pass
     out = os.path.join(svc_dir(), name + ".svc")
     if os.path.exists(out) and not force:
@@ -1872,8 +2013,7 @@ def import_one(name, force=False, queued=()):
     lazy = socket and not _service_enabled(name) and name + ".service" not in queued \
         and name not in queued
     try:
-        with open(path) as f:
-            text = f.read()
+        text = read_unit(path)
         sections = parse_unit(text)
         if sibling is not None and _socket_used(name, sections, queued):
             sock_sections = sibling
@@ -1884,14 +2024,15 @@ def import_one(name, force=False, queued=()):
             raise Skip(denied)
         if timer:
             target = _get_last(sections.get("Timer", []), "Unit") or name + ".service"
+            if not _name_ok(target):
+                raise Skip("timer's Unit=%s is not a unit name" % target)
             if "@" in target:
                 raise Skip("timer starts template instance %s — instances unsupported" % target)
             spath = find_unit(target)
             if not spath:
                 raise Skip("timer's %s not found" % target)
-            with open(spath) as f:
-                body = timer_to_svc(name, sections, parse_unit(f.read()), known,
-                                    target[:-len(".service")] if target.endswith(".service") else target)
+            body = timer_to_svc(name, sections, parse_unit(read_unit(spath)), known,
+                                target[:-len(".service")] if target.endswith(".service") else target)
         else:
             if not sections.get("Install") and _timer_for(name):
                 raise Skip("started by %s, which owns %s.svc — enable the timer"
@@ -1912,15 +2053,24 @@ def import_one(name, force=False, queued=()):
 def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_fallback=()):
     """Drain the queue (or the given unit list). Writes .svc files, then rewrites
     the queue keeping only transient (not-found) entries. Returns a counts dict."""
+    global _private_src
     from_queue = units is None
     items = units if units is not None else _read_queue()
     counts = {"imported": 0, "exists": 0, "not-found": 0, "skipped": 0, "error": 0}
     keep = []
     for name in items:
-        status, detail = import_one(name, force=force, queued=items)
-        if status == "skipped" and name in lsb_fallback and not detail[0].startswith(OWNED):
-            log("unit    %s: %s; using %s%s" % (name, detail[0], INITD, name[:-len(".service")]))
-            status, detail = _import_lsb(name[:-len(".service")], force, items)
+        _private_src = False
+        # anything one unit can throw stays that unit's problem: dnf file triggers
+        # run this, and the units after it (and the bus overrides) still need doing
+        try:
+            status, detail = import_one(name, force=force, queued=items)
+            if status == "skipped" and name in lsb_fallback and not detail[0].startswith(OWNED):
+                log("unit    %s: %s; using %s%s" % (name, detail[0], INITD, name[:-len(".service")]))
+                status, detail = _import_lsb(name[:-len(".service")], force, items)
+            if status == "imported" and not dry_run:
+                _write_output(*detail)
+        except Exception as e:
+            status, detail = "error", "%s: %s" % (type(e).__name__, e)
         counts[status] += 1
         if status == "imported":
             out, body = detail
@@ -1928,12 +2078,8 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
             for ln in body.splitlines():
                 if ln.startswith(WARN_PREFIX):
                     log("WARN    %s: %s" % (name, ln[len(WARN_PREFIX):]))
-            if not dry_run:
-                os.makedirs(os.path.dirname(out), exist_ok=True)
-                with open(out, "w") as f:
-                    f.write(body)
-                if written is not None:
-                    written.append(out)
+            if not dry_run and written is not None:
+                written.append(out)
         elif status == "exists":
             log("have    %s (%s exists; --force to overwrite)" % (name, detail))
         elif status == "not-found":
@@ -1945,9 +2091,7 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
             log("skip    %s: %s (see %s)" % (name, reason, stub_path))
             if not dry_run:
                 try:
-                    os.makedirs(os.path.dirname(stub_path), exist_ok=True)
-                    with open(stub_path, "w") as f:
-                        f.write(stub)
+                    _write_output(stub_path, stub)
                 except OSError as e:
                     log("WARN    %s: could not write %s: %s" % (name, stub_path, e))
         else:
@@ -2159,22 +2303,7 @@ def user_unit_text(name):
             break
     if text is None:
         return None
-    drop = {}
-    for d in _unit_dirs():
-        dd = os.path.join(d, name + ".d")
-        try:
-            for e in os.listdir(dd):
-                if e.endswith(".conf"):
-                    drop.setdefault(e, os.path.join(dd, e))
-        except OSError:
-            continue
-    for e in sorted(drop):
-        try:
-            with open(drop[e]) as f:
-                text += "\n" + f.read()
-        except OSError:
-            pass
-    return text
+    return text + _dropin_text((name,))
 
 
 def _unit_name(n):
