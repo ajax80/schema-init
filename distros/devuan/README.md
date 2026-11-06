@@ -13,8 +13,8 @@ Tested in UEFI VMs on:
   7.2.6-lunduke).
 
 - **LCOS 0.9.3 on real hardware**: HP 15 laptop (Celeron N4000, 4 GB, HDD,
-  Wi-Fi), dual-booted beside Fedora. Measured: desktop 1.9 s sooner and 9 MB
-  less RAM than sysvinit ([numbers](../../docs/benchmarks.md#lcos-093-devuan-based-xfce-sysvinit-vs-schema-init)).
+  Wi-Fi), dual-booted beside Fedora. Measured: desktop 2 s sooner than sysvinit,
+  RAM about the same, 432 MB against 427 ([numbers](../../docs/benchmarks.md#lcos-093-devuan-based-xfce-sysvinit-vs-schema-init)).
 
 On each: boots to the desktop under schema-init, the Restart/Shut Down buttons
 work, and the sysvinit entry still boots and shuts down normally with this
@@ -38,6 +38,17 @@ What you get:
 - **Live control.** `schema-ctl status`, `start`, `stop`, and `add` to load a
   new service without a reboot. A new schema-init takes over PID 1 in place
   (`schema-ctl reexec`).
+- **Limp mode.** A service's file can list what to try when it fails:
+  `card=exec:CMD` runs a fix-up before the next retry, and `card=fallback:SVC`
+  runs a reduced standby until the service recovers, then stops it. See
+  [`card`](../../docs/svc-reference.md). Tested on a Devuan 6 VM with
+  throwaway test services; no shipped Devuan service uses it.
+- **Kernel fences per service.** With Landlock, `landlock_ro=` and
+  `landlock_rw=` hold a service to the paths it lists, and `landlock_bind_tcp=`
+  and `landlock_connect_tcp=` to the TCP ports it lists. Root is confined too,
+  and so are its children. See [Hardening](../../docs/svc-reference.md#hardening).
+  Tested on a Devuan 6 VM (kernel 6.12) with a test service; no shipped Devuan
+  service uses it.
 - **Timers without cron** (`logrotate` at 00:10).
 - **A rescue boot and fsck at boot**, as with sysvinit (see
   [Rescue](#rescue)). A filesystem fsck cannot fix stops the boot only until
