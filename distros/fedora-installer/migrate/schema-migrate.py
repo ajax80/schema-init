@@ -1154,7 +1154,7 @@ def _write_as_user(path, data, uid):
                 os.setgid(gid)
                 os.setuid(uid)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK, 0o644)
             os.write(fd, data.encode())
             os.close(fd)
             os._exit(0)
@@ -1235,26 +1235,24 @@ def recovery_text(snapshot=None, fallback=True):
 def write_recovery_card(profile, root="/", text=RECOVERY_TEXT):
     written = []
     user = profile.get("user")
-    uid = profile.get("uid")
-    targets = []
     # only place a card in the user's home if that home already exists — never
     # create /home/<user> ourselves (as root it would be root-owned and break
-    # the user's later home setup).
+    # the user's later home setup). As the user, or a link planted at this path
+    # gets root to overwrite and chown its target.
     if user and os.path.isdir(os.path.join(root, "home", user)):
-        targets.append(("home/%s/schema-recovery.txt" % user, uid))
-    targets.append(("boot/schema-recovery.txt", None))
-    for rel, owner in targets:
-        dst = os.path.join(root, rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(dst, "w") as fh:
-            fh.write(text)
-        os.chmod(dst, 0o644)
-        if owner is not None:
-            try:
-                os.chown(dst, owner, owner)
-            except OSError:
-                pass
-        written.append("/" + rel)
+        rel = "home/%s/schema-recovery.txt" % user
+        if _write_as_user(os.path.join(root, rel), text, profile.get("uid")):
+            written.append("/" + rel)
+        else:
+            print("schema-migrate: couldn't write /%s; the recovery card is at /boot/schema-recovery.txt" % rel,
+                  file=sys.stderr)
+    rel = "boot/schema-recovery.txt"
+    dst = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    with open(dst, "w") as fh:
+        fh.write(text)
+    os.chmod(dst, 0o644)
+    written.append("/" + rel)
     return written
 
 

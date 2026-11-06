@@ -5,6 +5,11 @@ import os, sys, tempfile, importlib.util
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 root = tempfile.mkdtemp()
 os.environ["DOCTOR_ROOT"] = root
+os.makedirs(os.path.join(root, "run/systemd/sessions"))
+def set_session_uid(uid):
+    with open(os.path.join(root, "run/systemd/sessions/1"), "w") as fh:
+        fh.write("UID=%d\nACTIVE=1\n" % uid)
+set_session_uid(os.getuid())
 home = os.path.join(root, "home", "u")
 os.makedirs(home)
 
@@ -65,6 +70,47 @@ open(GUARD, "w").write("pre-existing\n")
 snap2 = c.snapshot()
 c.back_out(snap2)
 check("back_out keeps a pre-existing guard", os.path.exists(GUARD))
+
+# --- the desktop process is picked by owner and argv0, never by a word in its args
+os.remove(GUARD)
+rogue_home = os.path.join(root, "home", "rogue")
+os.makedirs(rogue_home)
+mkproc(10, "plasmashell", {"HOME": home, "XDG_DATA_DIRS": "/usr/share"})
+mkproc(1, "python3 /tmp/x.py plasmashell", {"HOME": rogue_home, "XDG_DATA_DIRS": "/a:/a"})
+check("word in another process's args is not the desktop", c.detect() is None)
+check("real plasmashell found past the impostor", c._plasma()["pid"] == "10")
+
+mkproc(1, "plasmashell", {"HOME": rogue_home, "XDG_DATA_DIRS": "/a:/a"})
+os.remove(os.path.join(root, "proc", "10", "cmdline"))
+set_session_uid(os.getuid() + 1)
+check("plasmashell owned by a non-session uid is ignored", c.detect() is None)
+set_session_uid(os.getuid())
+
+# --- a link planted at the guard path must not redirect the root write
+g2 = os.path.join(rogue_home, sd.DEDUP_GUARD_REL)
+os.makedirs(os.path.dirname(g2))
+outside = os.path.join(root, "created-outside-home")
+os.symlink(outside, g2)
+f = c.detect()
+check("planted link still reads as missing guard", f is not None)
+c.heal(f)
+check("heal does not write through a planted link", not os.path.exists(outside))
+check("verify reports the failed heal", c.verify() is False)
+
+# --- a FIFO at the guard path must not hang the root doctor
+import signal; signal.alarm(20)  # a blocked open must fail the test, not hang it
+os.remove(g2)
+os.mkfifo(g2)
+c.heal(f)
+check("heal returns with a FIFO at the guard path", True)
+
+# --- only the desktop user counts, not any other logged-in user
+os.remove(g2)
+with open(os.path.join(root, "run/systemd/sessions/1"), "w") as fh:
+    fh.write("UID=%d\nACTIVE=1\nTYPE=wayland\n" % (os.getuid() + 1))
+with open(os.path.join(root, "run/systemd/sessions/2"), "w") as fh:
+    fh.write("UID=%d\nACTIVE=1\nTYPE=tty\nREMOTE=1\n" % os.getuid())
+check("another logged-in user's plasmashell is not the desktop", c.detect() is None)
 
 print("PASS" if all(results) else "FAIL")
 sys.exit(0 if all(results) else 1)

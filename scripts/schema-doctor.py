@@ -11,6 +11,7 @@ import fcntl
 import glob
 import json
 import os
+import pwd
 import re
 import shutil
 import stat
@@ -273,26 +274,26 @@ class FlapState:
 REGISTRY: list = []
 
 
+# Active SSH sessions are ACTIVE=1 too, so the graphical one comes first.
 def active_uid():
-    d = os.path.join(ROOT, "run/systemd/sessions")
-    try:
-        names = [n for n in os.listdir(d) if n != "31" and not n.endswith(".ref")]
-    except FileNotFoundError:
-        return None
-    for n in sorted(names):
-        try:
-            for line in open(os.path.join(d, n)):
-                if line.startswith("UID="):
-                    return int(line.strip()[4:])
-        except (OSError, ValueError):
-            continue
-    return None
+    sess = _sessions()
+    names = sorted(n for n in sess if n != "31" and sess[n].get("UID", "").isdigit())
+    def active(n):
+        return sess[n].get("ACTIVE") == "1"
+    for n in names:
+        if active(n) and sess[n].get("TYPE") in ("wayland", "x11"):
+            return int(sess[n]["UID"])
+    for n in names:
+        if active(n):
+            return int(sess[n]["UID"])
+    return int(sess[names[0]]["UID"]) if names else None
 
 
 def _proc_table():
     tbl = []
     for d in sorted(glob.glob(os.path.join(ROOT, "proc/[0-9]*"))):
         try:
+            uid = os.stat(d).st_uid
             cmd = open(os.path.join(d, "cmdline"), "rb").read() \
                     .replace(b"\0", b" ").decode(errors="replace").strip()
         except OSError:
@@ -305,8 +306,48 @@ def _proc_table():
                     env[k.decode(errors="replace")] = v.decode(errors="replace")
         except OSError:
             pass
-        tbl.append({"pid": os.path.basename(d), "cmd": cmd, "env": env})
+        tbl.append({"pid": os.path.basename(d), "uid": uid, "cmd": cmd, "env": env})
     return tbl
+
+
+# This runs as root and acts on what it finds in a process's environment, so any
+# local user can present a process named or mentioning plasmashell. Only one the
+# desktop user owns, with that name as argv0, counts.
+def _desktop_proc(name, tbl=None):
+    uid = active_uid()
+    if uid in (None, 0):
+        return None
+    for p in tbl if tbl is not None else _proc_table():
+        argv0 = p["cmd"].split(None, 1)[0] if p["cmd"] else ""
+        if p["uid"] == uid and os.path.basename(argv0) == name:
+            return p
+    return None
+
+
+# Paths under a user's home are theirs to swap at any moment: write with their uid,
+# don't follow a final link, and don't block forever on a FIFO with no reader.
+def _write_as_user(path, data, uid, mode):
+    try:
+        gid = pwd.getpwuid(uid).pw_gid
+    except KeyError:
+        gid = uid
+    pid = os.fork()
+    if pid == 0:
+        try:
+            if os.getuid() == 0:
+                os.setgroups([])
+                os.setgid(gid)
+                os.setuid(uid)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK, mode)
+            os.write(fd, data.encode())
+            os.fchmod(fd, mode)
+            os.close(fd)
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    _, st = os.waitpid(pid, 0)
+    return os.WIFEXITED(st) and os.WEXITSTATUS(st) == 0
 
 
 def _running(needle, tbl=None):
@@ -814,8 +855,8 @@ class KsycocaLoop(Check):
 
     def detect(self):
         tbl = _proc_table()
-        pl = next((p for p in tbl if "plasmashell" in p["cmd"]), None)
-        kd = next((p for p in tbl if "kded6" in p["cmd"]), None)
+        pl = _desktop_proc("plasmashell", tbl)
+        kd = _desktop_proc("kded6", tbl)
         if not pl or not kd:
             return None
         a = pl["env"].get("XDG_MENU_PREFIX", "")
@@ -843,13 +884,16 @@ class PanelLauncherPaths(Check):
     APPLETS_REL = ".config/plasma-org.kde.plasma.desktop-appletsrc"
 
     def detect(self):
-        p = next((x for x in _proc_table() if "plasmashell" in x["cmd"]), None)
+        p = _desktop_proc("plasmashell")
         home = p["env"].get("HOME") if p else None
         if not home:
             return None
         path = os.path.join(home, self.APPLETS_REL)
+        # root reading a path the user controls: no links, no blocking on a FIFO
         try:
-            lines = open(path, errors="replace").read().splitlines()
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, errors="replace") as fh:
+                lines = fh.read().splitlines()
         except OSError:
             return None
         bad = []
@@ -897,7 +941,7 @@ class XdgDataDirsDup(Check):
     grade = SAFE
 
     def _plasma(self):
-        return next((p for p in _proc_table() if "plasmashell" in p["cmd"]), None)
+        return _desktop_proc("plasmashell")
 
     def _guard(self, home):
         return os.path.join(home, DEDUP_GUARD_REL)
@@ -932,11 +976,7 @@ class XdgDataDirsDup(Check):
         home = p["env"].get("HOME") if p else None
         if not home:
             return
-        g = self._guard(home)
-        os.makedirs(os.path.dirname(g), exist_ok=True)
-        with open(g, "w") as fh:
-            fh.write(DEDUP_GUARD)
-        os.chmod(g, 0o755)
+        _write_as_user(self._guard(home), DEDUP_GUARD, p["uid"], 0o755)
 
     def verify(self):
         p = self._plasma()
@@ -1438,7 +1478,7 @@ def read_status_json():
 def active_session_env():
     uid = active_uid()
     for p in _proc_table():
-        if p["env"].get("DBUS_SESSION_BUS_ADDRESS"):
+        if p["uid"] == uid and p["env"].get("DBUS_SESSION_BUS_ADDRESS"):
             return uid, p["env"]
     return uid, None
 

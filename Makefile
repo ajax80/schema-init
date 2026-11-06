@@ -207,6 +207,7 @@ install-wizard:
 	install -m 0644 distros/fedora-installer/wizard/status.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/status.py
 	install -m 0644 distros/fedora-installer/wizard/controller.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/controller.py
 	install -m 0644 distros/fedora-installer/wizard/main.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/main.py
+	install -m 0755 distros/fedora-installer/wizard/askpass.py $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/askpass.py
 	install -m 0644 distros/fedora-installer/wizard/qml/Main.qml $(DESTDIR)$(PREFIX)/libexec/schema-init/wizard/qml/Main.qml
 	install -d $(DESTDIR)$(SYSCONFDIR)/xdg/autostart
 	install -m 0644 distros/fedora-installer/wizard/schema-wizard.desktop $(DESTDIR)$(SYSCONFDIR)/xdg/autostart/schema-wizard.desktop
