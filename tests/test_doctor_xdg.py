@@ -97,5 +97,20 @@ c.heal(f)
 check("heal does not write through a planted link", not os.path.exists(outside))
 check("verify reports the failed heal", c.verify() is False)
 
+# --- a FIFO at the guard path must not hang the root doctor
+import signal; signal.alarm(20)  # a blocked open must fail the test, not hang it
+os.remove(g2)
+os.mkfifo(g2)
+c.heal(f)
+check("heal returns with a FIFO at the guard path", True)
+
+# --- only the desktop user counts, not any other logged-in user
+os.remove(g2)
+with open(os.path.join(root, "run/systemd/sessions/1"), "w") as fh:
+    fh.write("UID=%d\nACTIVE=1\nTYPE=wayland\n" % (os.getuid() + 1))
+with open(os.path.join(root, "run/systemd/sessions/2"), "w") as fh:
+    fh.write("UID=%d\nACTIVE=1\nTYPE=tty\nREMOTE=1\n" % os.getuid())
+check("another logged-in user's plasmashell is not the desktop", c.detect() is None)
+
 print("PASS" if all(results) else "FAIL")
 sys.exit(0 if all(results) else 1)

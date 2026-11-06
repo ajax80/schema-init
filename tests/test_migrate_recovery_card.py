@@ -57,4 +57,21 @@ try:
 finally:
     del os.environ["MIGRATE_ROOT"]
 
+# a FIFO at the card path must not hang --deploy mid-way, and a failed card is said out loud
+import signal; signal.alarm(20)  # a blocked open must fail the test, not hang it
+import contextlib, io
+root = tempfile.mkdtemp()
+os.makedirs(os.path.join(root, "home/jandoe")); os.makedirs(os.path.join(root, "boot"))
+os.mkfifo(os.path.join(root, "home/jandoe/schema-recovery.txt"))
+os.environ["MIGRATE_ROOT"] = root
+try:
+    out = io.StringIO()
+    with contextlib.redirect_stderr(out):
+        paths = m.write_recovery_card({"user": "jandoe", "uid": os.getuid()}, root=root)
+    check("FIFO: returns with the boot card only", paths == ["/boot/schema-recovery.txt"])
+    check("failed home card is reported, with where the copy is",
+          "schema-recovery.txt" in out.getvalue() and "/boot/" in out.getvalue())
+finally:
+    del os.environ["MIGRATE_ROOT"]
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

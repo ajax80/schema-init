@@ -274,37 +274,19 @@ class FlapState:
 REGISTRY: list = []
 
 
+# Active SSH sessions are ACTIVE=1 too, so the graphical one comes first.
 def active_uid():
-    d = os.path.join(ROOT, "run/systemd/sessions")
-    try:
-        names = [n for n in os.listdir(d) if n != "31" and not n.endswith(".ref")]
-    except FileNotFoundError:
-        return None
-    for n in sorted(names):
-        try:
-            for line in open(os.path.join(d, n)):
-                if line.startswith("UID="):
-                    return int(line.strip()[4:])
-        except (OSError, ValueError):
-            continue
-    return None
-
-
-def _session_uids():
-    d = os.path.join(ROOT, "run/systemd/sessions")
-    uids = set()
-    try:
-        names = [n for n in os.listdir(d) if not n.endswith(".ref")]
-    except FileNotFoundError:
-        return uids
+    sess = _sessions()
+    names = sorted(n for n in sess if n != "31" and sess[n].get("UID", "").isdigit())
+    def active(n):
+        return sess[n].get("ACTIVE") == "1"
     for n in names:
-        try:
-            for line in open(os.path.join(d, n)):
-                if line.startswith("UID="):
-                    uids.add(int(line.strip()[4:]))
-        except (OSError, ValueError):
-            continue
-    return uids
+        if active(n) and sess[n].get("TYPE") in ("wayland", "x11"):
+            return int(sess[n]["UID"])
+    for n in names:
+        if active(n):
+            return int(sess[n]["UID"])
+    return int(sess[names[0]]["UID"]) if names else None
 
 
 def _proc_table():
@@ -329,19 +311,21 @@ def _proc_table():
 
 
 # This runs as root and acts on what it finds in a process's environment, so any
-# local user can present a process named or mentioning plasmashell. Only one a
-# session user owns, with that name as argv0, counts as the desktop.
+# local user can present a process named or mentioning plasmashell. Only one the
+# desktop user owns, with that name as argv0, counts.
 def _desktop_proc(name, tbl=None):
-    uids = _session_uids() - {0}
+    uid = active_uid()
+    if uid in (None, 0):
+        return None
     for p in tbl if tbl is not None else _proc_table():
         argv0 = p["cmd"].split(None, 1)[0] if p["cmd"] else ""
-        if p["uid"] in uids and os.path.basename(argv0) == name:
+        if p["uid"] == uid and os.path.basename(argv0) == name:
             return p
     return None
 
 
-# Paths under a user's home are theirs to swap for a link at any moment: write
-# with their uid and don't follow a final link, so a root heal can't be redirected.
+# Paths under a user's home are theirs to swap at any moment: write with their uid,
+# don't follow a final link, and don't block forever on a FIFO with no reader.
 def _write_as_user(path, data, uid, mode):
     try:
         gid = pwd.getpwuid(uid).pw_gid
@@ -355,7 +339,7 @@ def _write_as_user(path, data, uid, mode):
                 os.setgid(gid)
                 os.setuid(uid)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK, mode)
             os.write(fd, data.encode())
             os.fchmod(fd, mode)
             os.close(fd)
@@ -905,8 +889,11 @@ class PanelLauncherPaths(Check):
         if not home:
             return None
         path = os.path.join(home, self.APPLETS_REL)
+        # root reading a path the user controls: no links, no blocking on a FIFO
         try:
-            lines = open(path, errors="replace").read().splitlines()
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, errors="replace") as fh:
+                lines = fh.read().splitlines()
         except OSError:
             return None
         bad = []

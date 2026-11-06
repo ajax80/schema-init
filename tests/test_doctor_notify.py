@@ -38,6 +38,17 @@ uid2, env2 = sd.active_session_env()
 check("other uid's bus address is not harvested", uid2 == os.getuid() + 1 and env2 is None, str(env2))
 open(os.path.join(TMP, "run/systemd/sessions/1"), "w").write("UID=%d\nACTIVE=1\n" % os.getuid())
 
+# an active root or SSH session sorting first must not hide the graphical one
+sess = os.path.join(TMP, "run/systemd/sessions")
+os.remove(os.path.join(sess, "1"))
+open(os.path.join(sess, "10"), "w").write("UID=0\nACTIVE=1\nTYPE=tty\nREMOTE=1\n")
+open(os.path.join(sess, "2"), "w").write("UID=%d\nACTIVE=1\nTYPE=wayland\n" % os.getuid())
+check("active graphical session wins over an earlier active tty", sd.active_uid() == os.getuid())
+uid3, env3 = sd.active_session_env()
+check("notify still finds the desktop's bus", env3 and "dbus-abc" in env3.get("DBUS_SESSION_BUS_ADDRESS", ""))
+os.remove(os.path.join(sess, "10")); os.remove(os.path.join(sess, "2"))
+open(os.path.join(sess, "1"), "w").write("UID=%d\nACTIVE=1\n" % os.getuid())
+
 # capture notify_send calls without running anything
 sent = []
 sd.notify_send = lambda uid, env, summary, body: sent.append((summary, body))

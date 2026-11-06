@@ -1154,7 +1154,7 @@ def _write_as_user(path, data, uid):
                 os.setgid(gid)
                 os.setuid(uid)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK, 0o644)
             os.write(fd, data.encode())
             os.close(fd)
             os._exit(0)
@@ -1243,6 +1243,9 @@ def write_recovery_card(profile, root="/", text=RECOVERY_TEXT):
         rel = "home/%s/schema-recovery.txt" % user
         if _write_as_user(os.path.join(root, rel), text, profile.get("uid")):
             written.append("/" + rel)
+        else:
+            print("schema-migrate: couldn't write /%s; the recovery card is at /boot/schema-recovery.txt" % rel,
+                  file=sys.stderr)
     rel = "boot/schema-recovery.txt"
     dst = os.path.join(root, rel)
     os.makedirs(os.path.dirname(dst), exist_ok=True)

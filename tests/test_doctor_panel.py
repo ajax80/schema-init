@@ -58,5 +58,19 @@ check("detect flags file:// pin", f is not None)
 check("detail names the fragile path scheme", f is not None and "file://" in f.detail)
 check("finding not healable", f is not None and f.healable is False)
 
+# --- root reads this path: not through a link, and never blocking on a FIFO
+import signal; signal.alarm(20)  # a blocked open must fail the test, not hang it
+secret = os.path.join(root, "root-only")
+with open(secret, "w") as fh:
+    fh.write("launchers=file:///secret/from-root-file.desktop\n")
+if os.path.lexists(APPLETS):
+    os.remove(APPLETS)
+os.symlink(secret, APPLETS)
+check("does not read through a planted link", c.detect() is None)
+os.remove(APPLETS)
+os.mkfifo(APPLETS)
+check("returns with a FIFO at the applets path", c.detect() is None)
+os.remove(APPLETS)
+
 print("PASS" if all(results) else "FAIL")
 sys.exit(0 if all(results) else 1)
