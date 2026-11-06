@@ -5,7 +5,7 @@ TMP = tempfile.mkdtemp()
 os.environ["DOCTOR_ROOT"] = TMP
 # fabricate an active session (uid 1000) and a GUI proc carrying the /tmp/dbus bus
 os.makedirs(os.path.join(TMP, "run/systemd/sessions"), exist_ok=True)
-open(os.path.join(TMP, "run/systemd/sessions/1"), "w").write("UID=1000\nACTIVE=1\n")
+open(os.path.join(TMP, "run/systemd/sessions/1"), "w").write("UID=%d\nACTIVE=1\n" % os.getuid())
 pdir = os.path.join(TMP, "proc/999"); os.makedirs(pdir, exist_ok=True)
 open(os.path.join(pdir, "cmdline"), "wb").write(b"plasmashell\0")
 open(os.path.join(pdir, "environ"), "wb").write(
@@ -23,7 +23,7 @@ def check(name, ok, detail=''):
 CR = sd.CheckResult
 
 uid, env = sd.active_session_env()
-check("finds active uid", uid == 1000, str(uid))
+check("finds active uid", uid == os.getuid(), str(uid))
 check("harvests /tmp/dbus bus", env and env.get("DBUS_SESSION_BUS_ADDRESS") == "unix:path=/tmp/dbus-abc")
 check("notify argv targets uid + app", sd._notify_argv(1000, "S", "B")[:6] ==
       ["setpriv", "--reuid", "1000", "--regid", "1000", "--clear-groups"])
@@ -31,6 +31,12 @@ check("notify argv guards dash-leading summary with --", sd._notify_argv(1000, "
       ["--", "S", "B"])
 check("notify argv survives dash-leading summary/body", sd._notify_argv(1000, "-x", "-y")[-3:] ==
       ["--", "-x", "-y"])
+
+# a bus address from a process the session user doesn't own is never trusted
+open(os.path.join(TMP, "run/systemd/sessions/1"), "w").write("UID=%d\nACTIVE=1\n" % (os.getuid() + 1))
+uid2, env2 = sd.active_session_env()
+check("other uid's bus address is not harvested", uid2 == os.getuid() + 1 and env2 is None, str(env2))
+open(os.path.join(TMP, "run/systemd/sessions/1"), "w").write("UID=%d\nACTIVE=1\n" % os.getuid())
 
 # capture notify_send calls without running anything
 sent = []

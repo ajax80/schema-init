@@ -5,6 +5,11 @@ import os, sys, tempfile, importlib.util
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 root = tempfile.mkdtemp()
 os.environ["DOCTOR_ROOT"] = root
+os.makedirs(os.path.join(root, "run/systemd/sessions"))
+def set_session_uid(uid):
+    with open(os.path.join(root, "run/systemd/sessions/1"), "w") as fh:
+        fh.write("UID=%d\nACTIVE=1\n" % uid)
+set_session_uid(os.getuid())
 home = os.path.join(root, "home", "u")
 os.makedirs(os.path.join(home, ".config"))
 APPLETS = os.path.join(home, ".config/plasma-org.kde.plasma.desktop-appletsrc")

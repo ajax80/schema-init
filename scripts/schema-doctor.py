@@ -11,6 +11,7 @@ import fcntl
 import glob
 import json
 import os
+import pwd
 import re
 import shutil
 import stat
@@ -289,10 +290,28 @@ def active_uid():
     return None
 
 
+def _session_uids():
+    d = os.path.join(ROOT, "run/systemd/sessions")
+    uids = set()
+    try:
+        names = [n for n in os.listdir(d) if not n.endswith(".ref")]
+    except FileNotFoundError:
+        return uids
+    for n in names:
+        try:
+            for line in open(os.path.join(d, n)):
+                if line.startswith("UID="):
+                    uids.add(int(line.strip()[4:]))
+        except (OSError, ValueError):
+            continue
+    return uids
+
+
 def _proc_table():
     tbl = []
     for d in sorted(glob.glob(os.path.join(ROOT, "proc/[0-9]*"))):
         try:
+            uid = os.stat(d).st_uid
             cmd = open(os.path.join(d, "cmdline"), "rb").read() \
                     .replace(b"\0", b" ").decode(errors="replace").strip()
         except OSError:
@@ -305,8 +324,46 @@ def _proc_table():
                     env[k.decode(errors="replace")] = v.decode(errors="replace")
         except OSError:
             pass
-        tbl.append({"pid": os.path.basename(d), "cmd": cmd, "env": env})
+        tbl.append({"pid": os.path.basename(d), "uid": uid, "cmd": cmd, "env": env})
     return tbl
+
+
+# This runs as root and acts on what it finds in a process's environment, so any
+# local user can present a process named or mentioning plasmashell. Only one a
+# session user owns, with that name as argv0, counts as the desktop.
+def _desktop_proc(name, tbl=None):
+    uids = _session_uids() - {0}
+    for p in tbl if tbl is not None else _proc_table():
+        argv0 = p["cmd"].split(None, 1)[0] if p["cmd"] else ""
+        if p["uid"] in uids and os.path.basename(argv0) == name:
+            return p
+    return None
+
+
+# Paths under a user's home are theirs to swap for a link at any moment: write
+# with their uid and don't follow a final link, so a root heal can't be redirected.
+def _write_as_user(path, data, uid, mode):
+    try:
+        gid = pwd.getpwuid(uid).pw_gid
+    except KeyError:
+        gid = uid
+    pid = os.fork()
+    if pid == 0:
+        try:
+            if os.getuid() == 0:
+                os.setgroups([])
+                os.setgid(gid)
+                os.setuid(uid)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+            os.write(fd, data.encode())
+            os.fchmod(fd, mode)
+            os.close(fd)
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    _, st = os.waitpid(pid, 0)
+    return os.WIFEXITED(st) and os.WEXITSTATUS(st) == 0
 
 
 def _running(needle, tbl=None):
@@ -814,8 +871,8 @@ class KsycocaLoop(Check):
 
     def detect(self):
         tbl = _proc_table()
-        pl = next((p for p in tbl if "plasmashell" in p["cmd"]), None)
-        kd = next((p for p in tbl if "kded6" in p["cmd"]), None)
+        pl = _desktop_proc("plasmashell", tbl)
+        kd = _desktop_proc("kded6", tbl)
         if not pl or not kd:
             return None
         a = pl["env"].get("XDG_MENU_PREFIX", "")
@@ -843,7 +900,7 @@ class PanelLauncherPaths(Check):
     APPLETS_REL = ".config/plasma-org.kde.plasma.desktop-appletsrc"
 
     def detect(self):
-        p = next((x for x in _proc_table() if "plasmashell" in x["cmd"]), None)
+        p = _desktop_proc("plasmashell")
         home = p["env"].get("HOME") if p else None
         if not home:
             return None
@@ -897,7 +954,7 @@ class XdgDataDirsDup(Check):
     grade = SAFE
 
     def _plasma(self):
-        return next((p for p in _proc_table() if "plasmashell" in p["cmd"]), None)
+        return _desktop_proc("plasmashell")
 
     def _guard(self, home):
         return os.path.join(home, DEDUP_GUARD_REL)
@@ -932,11 +989,7 @@ class XdgDataDirsDup(Check):
         home = p["env"].get("HOME") if p else None
         if not home:
             return
-        g = self._guard(home)
-        os.makedirs(os.path.dirname(g), exist_ok=True)
-        with open(g, "w") as fh:
-            fh.write(DEDUP_GUARD)
-        os.chmod(g, 0o755)
+        _write_as_user(self._guard(home), DEDUP_GUARD, p["uid"], 0o755)
 
     def verify(self):
         p = self._plasma()
@@ -1438,7 +1491,7 @@ def read_status_json():
 def active_session_env():
     uid = active_uid()
     for p in _proc_table():
-        if p["env"].get("DBUS_SESSION_BUS_ADDRESS"):
+        if p["uid"] == uid and p["env"].get("DBUS_SESSION_BUS_ADDRESS"):
             return uid, p["env"]
     return uid, None
 

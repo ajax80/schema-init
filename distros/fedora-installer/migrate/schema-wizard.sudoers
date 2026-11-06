@@ -1,3 +1,13 @@
-# The schema onboarding GUI runs unprivileged and reaches root ONLY through
-# these two fixed helper paths. No wildcards.
-%wheel ALL=(root) NOPASSWD: /usr/bin/schema-migrate, /usr/libexec/schema-init/schema-flip-apply
+# The schema onboarding GUI runs unprivileged. These are the stage steps it runs
+# after setup started: each only moves a migration already under way. --deploy
+# and --uninstall are deliberately absent and need the admin's password, as does
+# every other argument.
+%wheel ALL=(root) NOPASSWD: /usr/bin/schema-migrate --arm-flip, \
+    /usr/bin/schema-migrate --arm-dbus, \
+    /usr/bin/schema-migrate --confirm-dbus, \
+    /usr/bin/schema-migrate --skip-dbus, \
+    /usr/bin/schema-migrate --retry, \
+    /usr/bin/schema-migrate --dismiss, \
+    /usr/bin/schema-migrate --why, \
+    /usr/bin/schema-migrate --finish, \
+    /usr/bin/schema-migrate --stage

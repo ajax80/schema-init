@@ -1,9 +1,10 @@
+import os
 import subprocess
 
 
 class Backend:
     MIGRATE = "/usr/bin/schema-migrate"
-    FLIP = "/usr/libexec/schema-init/schema-flip-apply"
+    ASKPASS = "/usr/libexec/schema-init/wizard/askpass.py"
 
     def __init__(self, run=subprocess.run):
         self._run = run
@@ -11,8 +12,13 @@ class Backend:
     def _sudo(self, path, *args):
         return self._run(["sudo", path, *args], capture_output=True, text=True)
 
+    # Not in the sudoers grant. A GUI has no terminal for sudo to prompt on.
+    def _sudo_password(self, path, *args):
+        return self._run(["sudo", "-A", path, *args], capture_output=True, text=True,
+                         env=dict(os.environ, SUDO_ASKPASS=self.ASKPASS))
+
     def deploy(self, opts=None):
-        return self._sudo(self.MIGRATE, "--deploy", "--prebuilt", *(opts or []))
+        return self._sudo_password(self.MIGRATE, "--deploy", "--prebuilt", *(opts or []))
 
     def arm_flip(self):
         return self._sudo(self.MIGRATE, "--arm-flip")
@@ -39,10 +45,7 @@ class Backend:
         return self._sudo(self.MIGRATE, "--finish")
 
     def uninstall(self):
-        return self._sudo(self.MIGRATE, "--uninstall")
+        return self._sudo_password(self.MIGRATE, "--uninstall")
 
     def read_stage(self):
         return (self._sudo(self.MIGRATE, "--stage").stdout or "").strip()
-
-    def flip(self, subcmd):
-        return self._sudo(self.FLIP, subcmd)
