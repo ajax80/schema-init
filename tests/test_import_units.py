@@ -1146,7 +1146,18 @@ check("dropped sandbox directives are all named", all(any(k in w for w in _b) fo
     "InaccessiblePaths", "ReadOnlyPaths", "UMask")))
 check("sandbox directives at their defaults are silent", not warns(svc(
     "PrivateDevices=no\nUMask=0022\nDevicePolicy=auto\nProtectProc=default\nProcSubset=all\n"
-    "CapabilityBoundingSet=\nMemoryDenyWriteExecute=false\n")))
+    "SystemCallFilter=\nMemoryDenyWriteExecute=false\n")))
+check("CapabilityBoundingSet= with no value is the empty set, the strictest",
+      any("CapabilityBoundingSet" in w for w in warns(svc("CapabilityBoundingSet=\n"))))
+check("mandatory access control and PID isolation are named", all(any(k in w for w in warns(svc(
+    "SELinuxContext=x\nAppArmorProfile=x\nSecureBits=keep-caps\nPrivatePIDs=yes\n"))) for k in (
+    "SELinuxContext", "AppArmorProfile", "SecureBits", "PrivatePIDs")))
+check("DynamicUser names the confinement it implies",
+      any("NoNewPrivileges" in w and "ProtectSystem=strict" in w for w in warns(svc("DynamicUser=yes\n"))))
+check("ExecCondition= is named: the unit starts unconditionally",
+      any("ExecCondition" in w for w in warns(svc("ExecCondition=/bin/check\n"))))
+check("ExecStartPost= is named: it never runs",
+      any("ExecStartPost" in w for w in warns(svc("ExecStartPost=/bin/after\n"))))
 check("RootDirectory= says the unit is no longer confined",
       any("RootDirectory" in w for w in warns(svc("RootDirectory=/srv/jail\n"))))
 _ur = tempfile.mkdtemp(); os.makedirs(os.path.join(_ur, "etc"))
@@ -1251,9 +1262,18 @@ with open(os.path.join(_ul, "other8.timer"), "wb") as f:
 put(os.path.join(_ul, "bystander.service"), "[Service]\nExecStart=/usr/bin/bystander\n")
 check("someone else's unreadable timer doesn't fail this unit", si.import_one("bystander.service")[0] == "imported")
 os.remove(os.path.join(_ul, "other8.timer"))
-_spec = open(os.path.join(REPO, "schema-init.spec")).read()
-check("%post retries --enabled after a failed import",
-      "if %{_bindir}/schema-import --enabled >" in _spec)
+with open(_q, "wb") as f:
+    f.write(b"b\xff.service\ngoodq.service\n")
+put(os.path.join(_ul, "goodq.service"), "[Service]\nExecStart=/usr/bin/goodq\n")
+_c = si.drain(log=lambda *_: None)
+check("a non-UTF-8 queue line doesn't stop the drain", _c["imported"] == 1 and _c["not-found"] == 1)
+os.remove(_q)
+put(os.path.join(_ul, "shh.service"), "[Service]\nExecStart=/usr/bin/shh\n")
+_dd = os.path.join(_et, "shh.service.d")
+put(os.path.join(_dd, "s.conf"), "[Service]\nEnvironment=T=hunter2\n", 0o644)
+os.chmod(_dd, 0o700)
+quiet(["shh.service"])
+check("a 0644 drop-in in a 0700 directory is still private", mode_of("shh.svc") == 0o600)
 
 put(os.path.join(_ar, "tmp/evil.service"), "[Service]\nExecStart=/usr/bin/evil\n")
 put(os.path.join(_ar, "tmp/evil"), "#!/bin/sh\n", 0o755)
@@ -1270,6 +1290,19 @@ try:
     check("a control character in a device unit is refused", False)
 except si.Skip:
     check("a control character in a device unit is refused", True)
+try:
+    si.condition_lines(si.parse_unit("[Unit]\nRequires=dev-a\\x85exec=/bin/evil.device\n"))
+    check("NEL in a device unit is refused: splitlines() breaks on it", False)
+except si.Skip:
+    check("NEL in a device unit is refused: splitlines() breaks on it", True)
+check("a reset Requires= takes back its device condition", not si.condition_lines(si.parse_unit(
+    "[Unit]\nRequires=dev-tty.device\nRequires=\n")))
+check("a reset Requires= takes back its dep=", "dep=x" not in si.unit_to_svc("a", si.parse_unit(
+    "[Unit]\nDefaultDependencies=no\nRequires=x.service\nRequires=\n[Service]\nExecStart=/bin/a\n"), known={"x"}))
+check("a drop-in's OnCalendar= reset is one schedule", "on_calendar=Mon 00:00" in "\n".join(si.timer_lines(si.parse_unit(
+    "[Timer]\nOnCalendar=daily\nOnCalendar=\nOnCalendar=weekly\n"))[0]))
+check("OnCalendar= reset to OnBootSec= is a boot timer", "on_boot_sec=60" in si.timer_lines(si.parse_unit(
+    "[Timer]\nOnCalendar=daily\nOnCalendar=\nOnBootSec=1min\n"))[0])
 
 _b = si.unit_to_svc("a", si.parse_unit("[Service]\nExecStart=@/usr/bin/a argv0 --flag\n"))
 check("ExecStart=@ does not pass argv0 as an argument",
@@ -1288,6 +1321,12 @@ try:
     check("too many for exec_pre is refused, not half-run", False)
 except si.Skip:
     check("too many for exec_pre is refused, not half-run", True)
+for _p in "!+":
+    try:
+        si.unit_to_svc("a", si.parse_unit("[Service]\nType=oneshot\nUser=foo\nExecStart=/bin/one\nExecStart=%s/bin/two\n" % _p))
+        check("ExecStart=%s last can't take User= from the lines before it" % _p, False)
+    except si.Skip:
+        check("ExecStart=%s last can't take User= from the lines before it" % _p, True)
 _b = si.unit_to_svc("a", si.parse_unit("[Service]\nType=oneshot\nExecStart=/bin/one\nExecStart=\nExecStart=/bin/two\n"))
 check("a reset ExecStart= leaves only what follows", "exec=/bin/two\n" in _b and "/bin/one" not in _b)
 

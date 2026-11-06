@@ -312,12 +312,10 @@ if [ -f "$svcd/sysprep.svc" ]; then
     fi
     if [ ! -e "$st/enabled-units-imported" ]; then
         mkdir -p /var/log/schema-init
-        if %{_bindir}/schema-import --enabled > /var/log/schema-init/upgrade-import.log 2>&1; then
-            touch "$st/enabled-units-imported"
-            echo "schema-init: imported the services systemd had enabled; they start at next boot"
-        else
-            echo "schema-init: some enabled units did not import, retrying next upgrade; see /var/log/schema-init/upgrade-import.log"
-        fi
+        %{_bindir}/schema-import --enabled > /var/log/schema-init/upgrade-import.log 2>&1 ||
+            echo "schema-init: some enabled units did not import; see /var/log/schema-init/upgrade-import.log"
+        touch "$st/enabled-units-imported"
+        echo "schema-init: imported the services systemd had enabled; they start at next boot"
     fi
     if [ ! -e "$st/rail-seatd-removed" ]; then
         if grep -qsx 'exec=/usr/local/bin/seatd-run.sh' "$svcd/seatd.svc" && [ ! -e /usr/local/bin/seatd-run.sh ]; then

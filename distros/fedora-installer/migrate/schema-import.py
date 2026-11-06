@@ -74,8 +74,14 @@ def _get_last(section, key):
     return out
 
 
+# An empty assignment clears the values before it, as in systemd: it's how a
+# drop-in replaces a vendor Requires= or OnCalendar=.
 def _get_all(section, key):
-    return [v for k, v in section if k == key]
+    out = []
+    for k, v in section:
+        if k == key:
+            out = out + [v] if v.strip() else []
+    return out
 
 
 def _exec_tokens(execstart):
@@ -122,9 +128,6 @@ def _env_pairs(values):
     multiple pairs per line. Tokens without '=' are dropped."""
     out = []
     for v in values:
-        if not v.strip():
-            out = []
-            continue
         try:
             toks = shlex.split(v)
         except ValueError:
@@ -853,8 +856,9 @@ def condition_lines(sections, facts=None):
                     if not dev.startswith("dev-"):
                         raise Skip("%s=%s: only /dev device units map to a path" % (k, dev))
                     path = _device_path(dev)
-                    if re.search(r"[\x00-\x1f\x7f]", path):
-                        raise Skip("%s=%s: control character in the device path" % (k, dev))
+                    # printable ASCII only: \x85 breaks a line for str.splitlines()
+                    if re.search(r"[^\x20-\x7e]", path):
+                        raise Skip("%s=%s: unprintable character in the device path" % (k, dev))
                     conds.append(("PathExists", k, path))
     lines, static_trig, static_any = [], 0, False
     facts = facts or None
@@ -1036,7 +1040,8 @@ _UNENFORCED = (
     "NetworkNamespacePath", "IPCNamespacePath", "ReadOnlyPaths", "ReadOnlyDirectories",
     "InaccessiblePaths", "InaccessibleDirectories", "NoExecPaths", "ExecPaths",
     "TemporaryFileSystem", "BindPaths", "BindReadOnlyPaths", "DevicePolicy", "DeviceAllow",
-    "IPAddressDeny", "IPAddressAllow", "UMask",
+    "IPAddressDeny", "IPAddressAllow", "UMask", "PrivatePIDs", "SecureBits",
+    "SELinuxContext", "AppArmorProfile",
 )
 _UNENFORCED_DEFAULT = {"DevicePolicy": "auto", "ProtectProc": "default", "ProcSubset": "all", "UMask": "0022"}
 
@@ -1053,12 +1058,18 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
             if user and user != "root":
                 warns.append("DynamicUser=yes: runs as the static user %s, which must exist" % user)
             else:
-                warns.append("DynamicUser=yes with no User=: runs as root, no dynamic users here")
+                warns.append("DynamicUser=yes with no User=: runs as root, no dynamic users here, "
+                             "and without what it implies unless set here (NoNewPrivileges, "
+                             "ProtectSystem=strict, ProtectHome=read-only, PrivateTmp, RemoveIPC, RestrictSUIDSGID)")
         group = _get_last(svc, "Group")
         if group and group != (_primary_group(user) if user and user != "root" else "root"):
             warns.append("Group=%s not applied: runs with %s's primary group" % (group, user or "root"))
         if _get_last(svc, "SupplementaryGroups"):
             warns.append("SupplementaryGroups= not applied: only %s's /etc/group memberships" % (user or "root"))
+    if _get_all(svc, "ExecCondition"):
+        warns.append("ExecCondition= not run: the unit starts unconditionally")
+    if _get_all(svc, "ExecStartPost"):
+        warns.append("ExecStartPost= not run")
     if unsandboxed:
         return warns
     for k in ("RootDirectory", "RootImage"):
@@ -1066,6 +1077,9 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
             warns.append("%s= not applied: runs in the real root" % k)
     lost = [k for k in _UNENFORCED
             if _get_last(svc, k).lower() not in _FALSE and _get_last(svc, k).lower() != _UNENFORCED_DEFAULT.get(k)]
+    # empty clears any other list, but here it is the empty set: no capabilities at all
+    if any(k == "CapabilityBoundingSet" for k, _ in svc) and not _get_last(svc, "CapabilityBoundingSet"):
+        lost.insert(0, "CapabilityBoundingSet")
     if lost:
         warns.append("no equivalent here, not enforced: " + " ".join(lost))
     return warns
@@ -1153,9 +1167,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if stype == "dbus" and not busname:
         raise Skip("Type=dbus without BusName= — nothing to wait for")
 
-    execstarts = []
-    for v in _get_all(svc, "ExecStart"):
-        execstarts = execstarts + [v] if v.strip() else []
+    execstarts = _get_all(svc, "ExecStart")
     execstart = execstarts[-1] if execstarts else ""
     argv = _exec_tokens(execstart)
     if not argv:
@@ -1179,8 +1191,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         env_file_notes.append("dropped EnvironmentFile=%s (limit 4)" % " ".join(env_files[4:]))
         env_files = env_files[:4]
     pres = _exec_pre(svc, unit or name)
-    # a oneshot runs its ExecStart= lines in turn; a .svc has one exec=
-    if stype == "oneshot":
+    # a oneshot runs its ExecStart= lines in turn; a .svc has one exec=. User= is
+    # service-wide here, so a privileged last line would take it from the others.
+    if stype == "oneshot" and len(execstarts) > 1:
+        lead = execstart.strip()
+        if re.match(r"[@\-:]*(\+|!(?!!))", lead) and _get_last(svc, "User") not in ("", "root"):
+            raise Skip("ExecStart=%s runs as root but the lines before it as User=" % execstart)
         pres += _exec_pre([("ExecStart", v) for v in execstarts[:-1]], unit or name, "ExecStart")
     expand = bool(env_files) and any("$" in a for a in argv[1:] + [w for _, pa in pres for w in pa])
     dropped_args = 0
@@ -1501,9 +1517,17 @@ _private_src = False    # a source of the unit in hand isn't world-readable
 
 
 def _note_private(path):
+    # the directories count too: a 0644 file in a 0700 dir is meant to be private
     global _private_src
     try:
-        _private_src = _private_src or not os.stat(path).st_mode & stat.S_IROTH
+        root, p = os.path.realpath(_root()), os.path.realpath(path)
+        private = not os.stat(p).st_mode & stat.S_IROTH
+        while not private:
+            p = os.path.dirname(p)
+            if p in (root, "/"):
+                break
+            private = not os.stat(p).st_mode & stat.S_IXOTH
+        _private_src = _private_src or private
     except OSError:
         pass
 
@@ -1577,7 +1601,8 @@ def find_unit(name):
 
 def _read_queue():
     try:
-        with open(queue_path()) as f:
+        # the shim queues whatever it was given: bad bytes become a name that isn't found
+        with open(queue_path(), errors="backslashreplace") as f:
             return [ln.strip() for ln in f if ln.strip()]
     except FileNotFoundError:
         return []
