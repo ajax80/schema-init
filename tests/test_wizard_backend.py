@@ -11,9 +11,12 @@ def check(n, ok): results.append(bool(ok)); print(("  ok  " if ok else "  FAIL "
 
 calls = []
 envs = []
+tries_seen = []
 def rec(argv, *a, **k):
     calls.append(argv)
     envs.append(k.get("env"))
+    p = (k.get("env") or {}).get("SCHEMA_ASKPASS_TRIES")
+    tries_seen.append(p and (p, os.stat(p).st_mode & 0o777))
     class R: returncode = 0; stdout = "INSTALLED\n"
     return R()
 
@@ -24,6 +27,10 @@ check("deploy asks for a password through askpass",
       calls[-1] == ["sudo", "-A", be.Backend.MIGRATE, "--deploy", "--prebuilt", "--advanced-no-snapshot"])
 check("deploy points sudo at the askpass helper",
       envs[-1] and envs[-1].get("SUDO_ASKPASS") == be.Backend.ASKPASS)
+
+check("deploy gets English from sudo, to tell its failures apart", envs[-1].get("LANGUAGE") == "C")
+check("deploy gives askpass a private count file", tries_seen[-1] and tries_seen[-1][1] == 0o600)
+check("count file removed afterwards", not os.path.exists(tries_seen[-1][0]))
 
 b.arm_flip()
 check("arm_flip shells sudo schema-migrate --arm-flip",

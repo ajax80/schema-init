@@ -79,6 +79,21 @@ c, be = fresh(stage.ROLLED_BACK)
 check("ROLLED_BACK finishes/tears down", c.advance(consent=True, recovery_ack=True, selections={}) == "finished")
 
 c, be = fresh(None)
+class PwBackend:
+    def __init__(self, err): self.err = err
+    def deploy(self, opts=None): return type("R", (), {"returncode": 1, "stderr": self.err})()
+def outcome_for(err):
+    r = tempfile.mkdtemp(); os.makedirs(os.path.join(r, "var/lib"))
+    return core.WizardCore(backend=PwBackend(err), root=r).advance(consent=True, recovery_ack=True, selections={})
+wrong = outcome_for("Sorry, try again.\nsudo: 3 incorrect password attempts\n")
+cancel = outcome_for("sudo: no password was provided\nsudo: a password is required\n")
+other = outcome_for("Traceback: boom\n")
+check("three wrong passwords", wrong == "wrong_password")
+check("prompt cancelled", cancel == "password_cancelled")
+check("any other failure", other == "deploy_failed")
+check("each has its own words", len({core.error_for(wrong), core.error_for(cancel), core.error_for(other)}) == 3
+      and core.error_for(wrong) and core.error_for(cancel))
+
 check("no consent -> noop", c.advance(consent=False, recovery_ack=True, selections={}) == "noop")
 check("no consent -> nothing called", be.calls == [])
 

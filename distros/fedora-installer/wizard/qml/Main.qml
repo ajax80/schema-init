@@ -13,8 +13,8 @@ ApplicationWindow {
     Timer {
         interval: 2000; repeat: true
         // summary: the wizard autostarts at login, before the doctor's heal run writes its status
-        running: wizard.screen === "waiting_reboot"
-                 || (wizard.screen === "summary" && wizard.statusItems.length === 0)
+        running: !wizard.busy && (wizard.screen === "waiting_reboot"
+                 || (wizard.screen === "summary" && wizard.statusItems.length === 0))
         onTriggered: wizard.refresh()
     }
 
@@ -31,91 +31,119 @@ ApplicationWindow {
         }
     }
 
+    onClosing: (close) => close.accepted = !wizard.busy
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 24
         spacing: 16
 
-        Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            font.pixelSize: 18
-            text: win.screenText()
-        }
-
-        Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            visible: wizard.detail !== ""
-            text: wizard.detail
-        }
-
+        // Everything that can grow scrolls here, so the error and the buttons
+        // below never get pushed out of the window.
         ScrollView {
-            id: results
+            id: page
+            objectName: "pageScroll"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: wizard.screen === "summary"
             clip: true
+            contentWidth: availableWidth
 
             ColumnLayout {
-                width: results.availableWidth
-                spacing: 6
+                width: page.availableWidth
+                spacing: 16
 
                 Label {
-                    text: "Overall: " + wizard.overall
-                    font.bold: true
-                }
-                Label {
-                    visible: wizard.statusItems.length === 0
-                    wrapMode: Text.WordWrap
                     Layout.fillWidth: true
-                    text: "The doctor hasn't reported yet."
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 18
+                    text: win.screenText()
                 }
-                Repeater {
-                    model: wizard.statusItems
-                    delegate: RowLayout {
-                        required property var modelData
+
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    visible: wizard.detail !== ""
+                    text: wizard.detail
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: wizard.screen === "summary"
+                    spacing: 6
+
+                    Label {
+                        text: "Overall: " + wizard.overall
+                        font.bold: true
+                    }
+                    Label {
+                        visible: wizard.statusItems.length === 0
+                        wrapMode: Text.WordWrap
                         Layout.fillWidth: true
-                        spacing: 8
-                        Rectangle {
-                            width: 12; height: 12; radius: 6
-                            Layout.alignment: Qt.AlignTop
-                            Layout.topMargin: 3
-                            color: modelData.color === "GREEN" ? "#27ae60"
-                                 : modelData.color === "AMBER" ? "#e67e22"
-                                 : modelData.color === "RED" ? "#c0392b" : "#95a5a6"
-                        }
-                        Label {
+                        text: "The doctor hasn't reported yet."
+                    }
+                    Repeater {
+                        model: wizard.statusItems
+                        delegate: RowLayout {
+                            required property var modelData
                             Layout.fillWidth: true
-                            wrapMode: Text.WordWrap
-                            text: modelData.name
-                                  + (modelData.detail ? " — " + modelData.detail : "")
-                                  + (modelData.action ? "\n" + modelData.action : "")
+                            spacing: 8
+                            Rectangle {
+                                width: 12; height: 12; radius: 6
+                                Layout.alignment: Qt.AlignTop
+                                Layout.topMargin: 3
+                                color: modelData.color === "GREEN" ? "#27ae60"
+                                     : modelData.color === "AMBER" ? "#e67e22"
+                                     : modelData.color === "RED" ? "#c0392b" : "#95a5a6"
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                text: modelData.name
+                                      + (modelData.detail ? " — " + modelData.detail : "")
+                                      + (modelData.action ? "\n" + modelData.action : "")
+                            }
                         }
+                    }
+                }
+
+                // Recovery-card acknowledgement, shown only before the first reboot.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: wizard.screen === "welcome"
+                    spacing: 8
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: wizard.recoveryText()
+                    }
+                    CheckBox {
+                        id: ack
+                        objectName: "ackBox"
+                        text: "I've saved these instructions"
+                        enabled: !wizard.busy
+                        onToggled: wizard.setRecoveryAck(checked)
                     }
                 }
             }
         }
 
-        // Recovery-card acknowledgement, shown only before the first reboot.
-        ColumnLayout {
+        RowLayout {
             Layout.fillWidth: true
-            visible: wizard.screen === "welcome"
+            visible: wizard.busy
             spacing: 8
 
+            BusyIndicator {
+                objectName: "busyIndicator"
+                running: wizard.busy
+                implicitWidth: 32; implicitHeight: 32
+            }
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: wizard.recoveryText()
-            }
-            CheckBox {
-                id: ack
-                text: "I've saved these instructions"
-                onToggled: wizard.setRecoveryAck(checked)
+                text: "Working on it. This can take a few minutes."
             }
         }
-
-        Item { Layout.fillHeight: true; visible: wizard.screen !== "summary" }
 
         Label {
             Layout.fillWidth: true
@@ -128,13 +156,15 @@ ApplicationWindow {
         Button {
             text: wizard.secondaryAction
             visible: wizard.secondaryAction !== ""
+            enabled: !wizard.busy
             onClicked: wizard.secondaryClicked()
         }
 
         Button {
+            objectName: "primaryButton"
             text: wizard.primaryAction
             visible: wizard.primaryAction !== ""
-            enabled: wizard.screen !== "welcome" || ack.checked
+            enabled: !wizard.busy && (wizard.screen !== "welcome" || ack.checked)
             onClicked: wizard.continueClicked()
         }
     }

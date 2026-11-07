@@ -1,5 +1,6 @@
 import os
 import subprocess
+import tempfile
 
 
 class Backend:
@@ -14,8 +15,15 @@ class Backend:
 
     # Not in the sudoers grant. A GUI has no terminal for sudo to prompt on.
     def _sudo_password(self, path, *args):
-        return self._run(["sudo", "-A", path, *args], capture_output=True, text=True,
-                         env=dict(os.environ, SUDO_ASKPASS=self.ASKPASS))
+        # LANGUAGE=C: the core tells sudo's failures apart by their English text
+        fd, tries = tempfile.mkstemp(prefix="schema-askpass-")
+        os.close(fd)
+        try:
+            return self._run(["sudo", "-A", path, *args], capture_output=True, text=True,
+                             env=dict(os.environ, SUDO_ASKPASS=self.ASKPASS, LANGUAGE="C",
+                                      SCHEMA_ASKPASS_TRIES=tries))
+        finally:
+            os.remove(tries)
 
     def deploy(self, opts=None):
         return self._sudo_password(self.MIGRATE, "--deploy", "--prebuilt", *(opts or []))

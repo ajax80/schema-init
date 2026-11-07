@@ -35,9 +35,9 @@ print("ECHO_HIDDEN=%s LABEL=%s" % (seen.get("echo"), seen.get("label")), file=sy
 sys.exit(rc)
 """
 
-def drive(action):
+def drive(action, env=None):
     return subprocess.run([sys.executable, "-c", DRIVER, ASKPASS, action],
-                          capture_output=True, text=True, timeout=30)
+                          capture_output=True, text=True, timeout=30, env=dict(os.environ, **(env or {})))
 
 r = drive("ok")
 check("accept exits 0", r.returncode == 0)
@@ -48,6 +48,20 @@ check("shows sudo's prompt", "password for u" in r.stderr)
 r = drive("cancel")
 check("cancel exits nonzero", r.returncode != 0)
 check("cancel prints nothing", r.stdout == "")
+
+# sudo starts a new askpass per attempt, so the count lives in a file
+import tempfile
+fd, tries = tempfile.mkstemp(); os.close(fd)
+r = drive("ok", {"SCHEMA_ASKPASS_TRIES": tries})
+check("first attempt: no complaint", "try again" not in r.stderr.lower())
+r = drive("ok", {"SCHEMA_ASKPASS_TRIES": tries})
+check("second attempt says the password was wrong", "wasn't right" in r.stderr and "try again" in r.stderr.lower())
+check("second attempt still shows sudo's prompt", "password for u" in r.stderr)
+check("second attempt prints only the password", r.stdout == "s3cret\n")
+check("the count file never holds the password", "s3cret" not in open(tries).read())
+os.remove(tries)
+r = drive("ok", {"SCHEMA_ASKPASS_TRIES": tries + ".gone/x"})
+check("unwritable count file doesn't stop the prompt", r.returncode == 0 and r.stdout == "s3cret\n")
 
 mk = open(os.path.join(REPO, "Makefile")).read()
 check("installed executable, for sudo to run it",
