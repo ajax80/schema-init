@@ -1057,9 +1057,8 @@ os.environ.pop("MIGRATE_ROOT")
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nGroup=bar\nRuntimeDirectory=r\nRuntimeDirectoryMode=750\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= + Group= -> -g group", "exec_pre=+/usr/bin/install -d -m 750 -o foo -g bar /run/r\n" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a b\nRuntimeDirectory=%N\nExecStart=/bin/r\n"))
-check("several RuntimeDirectory= entries, one line each, %N expanded",
-      "exec_pre=+/usr/bin/install -d -m 0755 /run/a\nexec_pre=+/usr/bin/install -d -m 0755 /run/b\n"
-      "exec_pre=+/usr/bin/install -d -m 0755 /run/r\n" in _rt)
+check("several RuntimeDirectory= entries share a line, %N expanded",
+      "exec_pre=+/usr/bin/install -d -m 0755 /run/a /run/b /run/r\n" in _rt)
 # root install -d -o under a parent the user owns follows a symlink the user planted there
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=cockpit/tls\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= nested kept for a root unit (cockpit, networkd)",
@@ -1070,11 +1069,11 @@ _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=a//b a/./b 
 check("RuntimeDirectory= nested with empty, . or .. component dropped", "install -d" not in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit('[Service]\nRuntimeDirectory="my dir" b\nExecStart=/bin/r\n'))
 check("RuntimeDirectory= quoted entry keeps its space",
-      'exec_pre=+/usr/bin/install -d -m 0755 "/run/my dir"\n' in _rt and "/run/b\n" in _rt)
+      'exec_pre=+/usr/bin/install -d -m 0755 "/run/my dir" /run/b\n' in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=a/b ok\nExecStart=/bin/r\n"))
 check("RuntimeDirectory= nested entry dropped and noted when User= is not root",
       "/run/a" not in _rt and _rt.count("install -d") == 1 and "-o foo -g foo /run/ok\n" in _rt
-      and "# schema-import:" in _rt and "dropped RuntimeDirectory=a/b" in _rt)
+      and si.WARN_PREFIX in _rt and "dropped RuntimeDirectory=a/b" in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nUser=foo\nRuntimeDirectory=. ..\nExecStart=/bin/r\n"))
 check("RuntimeDirectory=. and .. dropped (would chown /run or /)", "install -d" not in _rt)
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=irqbalance/\nExecStart=/bin/r\n"))
@@ -1088,7 +1087,7 @@ check("RuntimeDirectory= bad entries dropped and noted, good kept",
 _rt = si.unit_to_svc("r", si.parse_unit("[Service]\nRuntimeDirectory=r\nRuntimeDirectoryMode=bogus\nExecStart=/bin/r\n"))
 check("RuntimeDirectoryMode= unrecognised -> 0755, warned", "-m 0755 /run/r\n" in _rt and "RuntimeDirectoryMode=bogus" in _rt)
 check("RuntimeDirectory= counts toward the 8 exec_pre limit", skipped("r",
-      "[Service]\nRuntimeDirectory=a b\n" + "".join("ExecStartPre=/bin/p%d\n" % i for i in range(7)) + "ExecStart=/bin/r\n"))
+      "[Service]\nRuntimeDirectory=a b\n" + "".join("ExecStartPre=/bin/p%d\n" % i for i in range(8)) + "ExecStart=/bin/r\n"))
 
 for cal, want in (("*-*-* 6,18:00", "6,18:00"), ("Mon 18,6:30", "Mon 6,18:30"),
                   ("*-*-15 0,12:00:00", "15 0,12:00"), ("*-*-* 6,24:00", None), ("*-*-* 6,,18:00", None)):
@@ -1364,6 +1363,41 @@ check("with an EnvironmentFile= it waits for runtime", "args=--sock=${RUNTIME_DI
 _long = _rtenv("RuntimeDirectory=" + " ".join("d%d" % i + "x" * 60 for i in range(8)) + "\n")
 check("too long for one line: the unit still imports", "exec=/bin/r\n" in _long)
 check("too long for one line: says so", "env=RUNTIME_DIRECTORY" not in _long and "RUNTIME_DIRECTORY not set" in _long)
+# --- the rest of the family, each expectation seen on real systemd (VM 202) ---
+for key, base, var in (("StateDirectory", "/var/lib", "STATE_DIRECTORY"), ("CacheDirectory", "/var/cache", "CACHE_DIRECTORY"),
+                       ("LogsDirectory", "/var/log", "LOGS_DIRECTORY"), ("ConfigurationDirectory", "/etc", "CONFIGURATION_DIRECTORY")):
+    _d = _rtenv(key + "=fam\n")
+    check(key + ": directory made as root", "exec_pre=+/usr/bin/install -d -m 0755 %s/fam\n" % base in _d)
+    check(key + ": variable set", "env=%s=%s/fam\n" % (var, base) in _d)
+    _d = _rtenv("User=nobody\nGroup=nobody\n" + key + "=fam\n")
+    check(key + ": owned by User=", "install -d -m 0755 -o nobody -g nobody %s/fam\n" % base in _d)
+    _d = _rtenv(key + "=fam\n" + key + "Mode=0700\n")
+    check(key + ": mode honoured", "install -d -m 0700 %s/fam\n" % base in _d)
+    check(key + ": variable expands in a command", "args=--d=%s/fam/x\n" % base in si.unit_to_svc("r", si.parse_unit(
+        "[Service]\nExecStart=/bin/r --d=${%s}/x\n%s=fam\n" % (var, key))))
+check("paths sort and merge", "env=STATE_DIRECTORY=/var/lib/aa:/var/lib/zb\n" in _rtenv("StateDirectory=zb aa aa\n"))
+check("a value the unit sets wins", "env=STATE_DIRECTORY=/mine\n" in _rtenv("StateDirectory=q\nEnvironment=STATE_DIRECTORY=/mine\n"))
+_all = _rtenv("RuntimeDirectory=a\nStateDirectory=b\nCacheDirectory=c\nLogsDirectory=d\nConfigurationDirectory=e\n")
+check("all five together", all(v in _all for v in ("env=RUNTIME_DIRECTORY=/run/a\n", "env=STATE_DIRECTORY=/var/lib/b\n",
+      "env=CACHE_DIRECTORY=/var/cache/c\n", "env=LOGS_DIRECTORY=/var/log/d\n", "env=CONFIGURATION_DIRECTORY=/etc/e\n")))
+_nest = _rtenv("User=nobody\nStateDirectory=p/q\n")
+check("nested under User=: not created, for the symlink reason", "install -d" not in _nest)
+check("nested under User=: warned, the daemon may need it", si.WARN_PREFIX in _nest and "StateDirectory=p/q" in _nest)
+_nroot = _rtenv("StateDirectory=p/q\n")
+check("nested as root: fine", "install -d -m 0755 /var/lib/p/q\n" in _nroot and "env=STATE_DIRECTORY=/var/lib/p/q\n" in _nroot)
+_many = _rtenv("StateDirectory=" + " ".join("s%d" % i for i in range(12)) + "\n")
+check("many in one family share a line", _many.count("install -d") == 1 and "exec=/bin/r\n" in _many)
+_long = _rtenv("StateDirectory=" + " ".join("d%d" % i + "x" * 60 for i in range(12)) + "\n")
+check("a long family splits under the line limit", _long.count("install -d") >= 2 and all(len(l) <= 511 for l in _long.splitlines()))
+_short = _rtenv("StateDirectory=" + " ".join("s%d" % i for i in range(60)) + "\n")
+check("short names can't pass the 32-word limit", all(len(l.split()) <= 32 for l in _short.splitlines() if l.startswith("exec_pre=")))
+check("and all of them are still made", all("/var/lib/s%d" % i in _short for i in range(60)))
+_full = "".join("ExecStartPre=/bin/p%d\n" % i for i in range(7))
+_b = _rtenv(_full + "StateDirectory=st\nCacheDirectory=ca\n")
+check("over the exec_pre limit: the unit still imports", "exec=/bin/r\n" in _b and _b.count("exec_pre=") <= 8)
+check("over the exec_pre limit: says which wasn't made", "CacheDirectory" in _b.split("name=")[0] or "CacheDirectory" in _b)
+_rtp = _rtenv(_full + "RuntimeDirectory=rt\n" + "StateDirectory=st\n")
+check("over the limit: RuntimeDirectory= goes first", "/run/rt" in _rtp and "install -d -m 0755 /var/lib/st" not in _rtp)
 _e16 = "".join("Environment=V%d=1\n" % i for i in range(16))
 _r16 = _rtenv("RuntimeDirectory=r1\n" + _e16)
 check("16 variables already: the unit still imports", "env=V15=1\n" in _r16)
