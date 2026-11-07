@@ -140,6 +140,89 @@ check("queued unit's Wants= comes along", os.path.exists(S + "late-soft.svc"), o
 check("queued unit gets its dep=", "dep=late-hard\n" in open(S + "late.svc").read())
 check("queue emptied", open(si.queue_path()).read() == "", open(si.queue_path()).read())
 
+# --- from review, each on its own clean tree ---
+def reset():
+    shutil.rmtree(root)
+    os.makedirs(LIB)
+    os.makedirs(ETC)
+    os.makedirs(S)
+    os.makedirs(os.path.dirname(si.queue_path()))
+
+
+# an alias resolves to the real unit, or it walks past every name check
+reset()
+unit("rsyslog.service", body="ExecStart=/usr/sbin/rsyslogd")
+os.symlink("rsyslog.service", os.path.join(LIB, "syslog.service"))
+unit("dbus-broker.service", body="ExecStart=/usr/bin/dbus-broker-launch")
+os.symlink("dbus-broker.service", os.path.join(LIB, "messagebus.service"))
+unit("real.service")
+os.symlink("real.service", os.path.join(LIB, "nick.service"))
+unit("p.service", "Wants=syslog.service messagebus.service nick.service")
+enable("p.service")
+got = si.enabled_units()
+check("alias of a denied unit stays out", "syslog.service" not in got and "rsyslog.service" not in got, got)
+check("alias of a reclaimed bus stays out", "messagebus.service" not in got and "dbus-broker.service" not in got, got)
+check("an ordinary alias imports as the real unit", "real.service" in got and "nick.service" not in got, got)
+si.drain(units=got, log=lambda *_: None)
+check("no rsyslog service written", not os.path.exists(S + "syslog.svc") and not os.path.exists(S + "rsyslog.svc"), os.listdir(S))
+check("no second broker written", not os.path.exists(S + "messagebus.svc"), os.listdir(S))
+
+# a pulled-in dep that fails stays queued for the next drain
+reset()
+unit("q.service", "Requires=qdep.service")
+with open(os.path.join(LIB, "qdep.service"), "wb") as f:
+    f.write(b"[Service]\nExecStart=/usr/bin/\xff\n")
+with open(si.queue_path(), "w") as f:
+    f.write("q.service\n")
+si.drain(log=lambda *_: None)
+check("failed pulled-in dep stays queued", "qdep.service" in open(si.queue_path()).read(), open(si.queue_path()).read())
+check("its parent leaves the queue", "q.service" not in open(si.queue_path()).read().replace("qdep.service", ""))
+with open(si.queue_path(), "w") as f:
+    f.write("")
+
+# a skipped socket doesn't mean its service is missing
+reset()
+unit("b.service", "Requires=rb.service")
+unit("rb.service")
+unit("rb.socket", body="\n".join("ListenStream=/run/rb%d" % i for i in range(5)), section="Socket")
+logs4 = []
+si.drain(units=si.with_deps(["b.service", "rb.socket"]), log=logs4.append)
+check("service imported despite its socket being skipped", os.path.exists(S + "rb.svc"), logs4)
+check("so no false warning", not [l for l in logs4 if l.startswith("WARN") and "needs rb" in l], logs4)
+
+# one .svc name, one job: a timer's schedule must not be replaced by its service
+reset()
+unit("t.timer", body="OnCalendar=daily", section="Timer")
+unit("t.service", body="ExecStart=/usr/bin/true\n[Install]\nWantedBy=multi-user.target")
+unit("c.service", "Requires=t.service")
+enable("t.timer", "timers")
+enable("c.service")
+got = si.enabled_units()
+check("enabled timer keeps its service out", "t.service" not in got, got)
+si.drain(units=got, force=True, log=lambda *_: None)
+check("the schedule survives --force", "on_calendar=" in open(S + "t.svc").read(), open(S + "t.svc").read())
+
+# systemd would start a wanted timer
+reset()
+unit("w.timer", body="OnCalendar=daily", section="Timer")
+unit("w.service")
+unit("e.service", "Wants=w.timer")
+enable("e.service")
+check("a wanted timer comes along", "w.timer" in si.enabled_units(), si.enabled_units())
+unit("hard.service", "Requires=absent.timer")
+st, det = si.import_one("hard.service", queued=["hard.service"])
+check("an unmet required timer warns", st == "imported" and "absent.timer" in det[1], det)
+
+# queue entries are checked before anything reads them
+reset()
+outside = os.path.join(root, "evil.service")
+with open(outside, "w") as f:
+    f.write("[Unit]\nWants=tempt.service\n[Service]\nExecStart=/usr/bin/true\n")
+unit("tempt.service")
+got = si.with_deps(["../../../evil.service"])
+check("a bad queue name isn't read", "tempt.service" not in got, got)
+check("and isn't dropped: import_one reports it", got == ["../../../evil.service"], got)
+
 shutil.rmtree(root)
 print("test_import_deps: %d/%d" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)
