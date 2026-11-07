@@ -1717,6 +1717,36 @@ static void shm_update(void) {
 
 /* ── runtime control socket ─────────────────────────────────────────── */
 
+/* The loop that reaps children and pets the watchdog is the one replying, and
+ * the read-only group can reach this socket. A client gets 250 ms to send its
+ * line, and its reply goes out in one non-blocking send: per-write timeouts
+ * still let a client hold the loop by reading a little at a time. The largest
+ * reply (--kv, 128 services) is about 67 KB and fits an empty socket buffer. A
+ * reply that doesn't loses its terminator, which schema-ctl reports. */
+#define CTL_RECV_MS  250
+#define CTL_LATE_SEC 1      /* the one reply written outside ctl_poll: re-exec's */
+
+static char   ctl_out[128 * 1024];
+static size_t ctl_out_n;
+static int    ctl_out_fd = -1, ctl_out_over;
+
+static void ctl_send(int fd, const char *buf, size_t n) {
+    if (fd != ctl_out_fd) {
+        write(fd, buf, n);
+        return;
+    }
+    if (ctl_out_over || n > sizeof(ctl_out) - ctl_out_n) {
+        ctl_out_over = 1;
+        return;
+    }
+    memcpy(ctl_out + ctl_out_n, buf, n);
+    ctl_out_n += n;
+}
+
+static void ctl_end(int fd) {
+    ctl_send(fd, ".\n", 2);
+}
+
 void ctl_writef(int fd, const char *fmt, ...) {
     char buf[512];
     va_list ap;
@@ -1724,7 +1754,13 @@ void ctl_writef(int fd, const char *fmt, ...) {
     va_start(ap, fmt);
     n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    if (n > 0) write(fd, buf, (size_t)n);
+    if (n <= 0) return;
+    /* vsnprintf returns the untruncated length; the newline keeps the next line whole */
+    if ((size_t)n >= sizeof(buf)) {
+        n = sizeof(buf) - 1;
+        buf[n - 1] = '\n';
+    }
+    ctl_send(fd, buf, (size_t)n);
 }
 
 #define ANALYZE_BAR      40
@@ -2013,6 +2049,16 @@ static const char *last_exit_str(const service_t *s) {
     return b;
 }
 
+/* What a bare reset retries. EXC_NONE is on purpose (stop, standby,
+ * fallback-down) and EXC_BIND is waiting for its bound: neither failed. A stop
+ * holds SVC_NO_RESTART beyond the config: start_timeout_sec can overtake a slow
+ * one and record a failure reason, and it is still a stop. */
+static int svc_failed(const service_t *s) {
+    if ((s->flags & SVC_NO_RESTART) && !s->no_restart_cfg) return 0;
+    return s->inst.state == STATE_DORMANT ||
+           (s->inst.state == STATE_EXCISED && s->excise_reason != EXC_NONE && s->excise_reason != EXC_BIND);
+}
+
 static void ctl_cmd(int fd, char *line) {
     int i, extra;
     line[strcspn(line, "\r\n")] = '\0';
@@ -2117,7 +2163,7 @@ static void ctl_cmd(int fd, char *line) {
             if (strcmp(services[i].name, name) != 0) continue;
             clock_gettime(CLOCK_MONOTONIC, &services[i].last_pet);
             ctl_writef(fd, "ok\n");
-            write(fd, ".\n", 2);
+            ctl_end(fd);
             return;
         }
         ctl_writef(fd, "err: not found: %s\n", name);
@@ -2145,7 +2191,7 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "err: %s is %s\n",
                     name, state_name(services[i].inst.state));
             }
-            write(fd, ".\n", 2);
+            ctl_end(fd);
             return;
         }
         ctl_writef(fd, "err: not found: %s\n", name);
@@ -2171,7 +2217,7 @@ static void ctl_cmd(int fd, char *line) {
                 services[i].excise_reason = EXC_NONE;
                 ctl_writef(fd, "ok: %s stopped (was not running)\n", name);
             }
-            write(fd, ".\n", 2);
+            ctl_end(fd);
             return;
         }
         ctl_writef(fd, "err: not found: %s\n", name);
@@ -2193,7 +2239,7 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_rearm(&services[i], 1);
                 ctl_writef(fd, "ok: %s requeued\n", name);
             }
-            write(fd, ".\n", 2);
+            ctl_end(fd);
             return;
         }
         ctl_writef(fd, "err: not found: %s\n", name);
@@ -2202,18 +2248,24 @@ static void ctl_cmd(int fd, char *line) {
         const char *name = line + 5;
         while (*name == ' ') name++;
         if (*name == '\0') {
+            int requeued = 0;
             for (i = 0; i < svc_count; i++) {
-                services[i].restart_count = 0;
-                services[i].dormant_count = 0;
-                ctl_rearm(&services[i], 0);
-                restart_policy_restore(&services[i]);
-                if (services[i].inst.state == STATE_EXCISED ||
-                    services[i].inst.state == STATE_DORMANT ||
-                    services[i].inst.state == STATE_PERFECT) {
-                    services[i].inst.state = STATE_NEW_PROCESS;
+                service_t *s = &services[i];
+                int failed = svc_failed(s);
+                s->restart_count = 0;
+                s->dormant_count = 0;
+                s->card_next = 0;
+                breaker_clear(s);
+                if (failed) {
+                    ctl_rearm(s, 0);
+                    restart_policy_restore(s);
+                    s->inst.state = STATE_NEW_PROCESS;
+                    requeued++;
+                } else if (s->inst.state == STATE_NEW_PROCESS) {
+                    s->restart_at.tv_sec = s->restart_at.tv_nsec = 0;
                 }
             }
-            ctl_writef(fd, "ok: reset all services\n");
+            ctl_writef(fd, "ok: counters cleared, %d failed requeued\n", requeued);
         } else {
             for (i = 0; i < svc_count; i++) {
                 if (strcmp(services[i].name, name) != 0) continue;
@@ -2230,12 +2282,12 @@ static void ctl_cmd(int fd, char *line) {
                     ctl_writef(fd, "ok: reset restart count for %s (current state: %s)\n",
                                name, state_name(services[i].inst.state));
                 }
-                write(fd, ".\n", 2);
+                ctl_end(fd);
                 return;
             }
             ctl_writef(fd, "err: not found: %s\n", name);
         }
-        write(fd, ".\n", 2);
+        ctl_end(fd);
         return;
 
 
@@ -2244,12 +2296,12 @@ static void ctl_cmd(int fd, char *line) {
         int j, k;
         if (svc_count >= MAX_SERVICES) {
             ctl_writef(fd, "err: MAX_SERVICES (%d) reached\n", MAX_SERVICES);
-            write(fd, ".\n", 2);
+            ctl_end(fd);
             return;
         }
         if (service_load_one(path, &services[svc_count]) < 0) {
             ctl_writef(fd, "err: failed to load %s\n", path);
-            write(fd, ".\n", 2);
+            ctl_end(fd);
             return;
         }
         for (j = 0; j < svc_count; j++) {
@@ -2258,7 +2310,7 @@ static void ctl_cmd(int fd, char *line) {
                 for (k = 1; k < MAX_ARGV; k++)
                     if (services[svc_count].argv[k]) { free(services[svc_count].argv[k]); services[svc_count].argv[k] = NULL; }
                 service_free_landlock(&services[svc_count]);
-                write(fd, ".\n", 2);
+                ctl_end(fd);
                 return;
             }
         }
@@ -2269,7 +2321,7 @@ static void ctl_cmd(int fd, char *line) {
             service_free_landlock(&services[svc_count]);
             memset(&services[svc_count], 0, sizeof(service_t));
             validate_and_resolve(services, svc_count, groups, grp_count);
-            write(fd, ".\n", 2);
+            ctl_end(fd);
             return;
         }
         /* Arm timers added at runtime, mirroring the boot/reload arm sites.
@@ -2291,7 +2343,7 @@ static void ctl_cmd(int fd, char *line) {
         }
         ctl_writef(fd, "ok: %s queued\n", services[svc_count].name);
         svc_count++;
-        write(fd, ".\n", 2);
+        ctl_end(fd);
         return;
 
     } else if (strncmp(line, "reload", 6) == 0) {
@@ -2354,7 +2406,7 @@ static void ctl_cmd(int fd, char *line) {
     } else {
         ctl_writef(fd, "err: unknown: %s\n", line);
     }
-    write(fd, ".\n", 2);
+    ctl_end(fd);
 }
 
 void set_nonblock(int fd) {
@@ -2576,10 +2628,18 @@ static void ctl_poll(void) {
     int pos = 0, cfd;
     ssize_t n;
     struct timeval tv = {0, 100000}; /* 100ms receive timeout */
+    struct timeval stv = {CTL_LATE_SEC, 0};
+    struct timespec t0, t;
+    int complete = 0, flags = 0;
     if (ctl_fd < 0) return;
     cfd = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC);
     if (cfd < 0) return;
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
+    ctl_out_fd = cfd;
+    ctl_out_n = 0;
+    ctl_out_over = 0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
     /* Peer identity: root and our own uid may run everything; schema-group
      * members (allowed in by the 0660 socket) get read-only verbs only. */
@@ -2590,21 +2650,32 @@ static void ctl_poll(void) {
         peer_uid = cred.uid;
 
     while (pos < (int)sizeof(buf) - 1) {
-        n = recv(cfd, buf + pos, 1, 0);
+        n = recv(cfd, buf + pos, 1, flags);
         if (n <= 0) break;
-        if (buf[pos++] == '\n') break;
+        if (buf[pos++] == '\n') { complete = 1; break; }
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        /* past the deadline, take only what already arrived: PID 1 being late
+         * must not refuse a line the client sent in time */
+        if ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000 >= CTL_RECV_MS)
+            flags = MSG_DONTWAIT;
     }
-    if (pos > 0) {
+    if (pos > 0 && !complete) {
+        /* half of "stop foobar" can name another service */
+        ctl_writef(cfd, "err: incomplete command\n");
+        ctl_end(cfd);
+    } else if (pos > 0) {
         buf[pos] = '\0';
         buf[strcspn(buf, "\r\n")] = '\0';
         if (peer_uid != 0 && peer_uid != geteuid() && !ctl_is_readonly(buf)) {
             ctl_writef(cfd, "err: '%s' requires root (uid %d has read-only access)\n",
                        buf, (int)peer_uid);
-            write(cfd, ".\n", 2);
+            ctl_end(cfd);
         } else {
             ctl_cmd(cfd, buf);
         }
     }
+    if (ctl_out_n) send(cfd, ctl_out, ctl_out_n, MSG_DONTWAIT | MSG_NOSIGNAL);
+    ctl_out_fd = -1;
     close(cfd);
 }
 

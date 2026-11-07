@@ -29,7 +29,7 @@ USER_AUTOSTART="$HOME/.config/autostart/schema-firstboot.desktop"
 REPORT_USER="$HOME/schema-flip-report.txt"
 HELPER=/usr/libexec/schema-init/schema-flip-apply
 for h in /usr/libexec/schema-init/schema-flip-apply /usr/local/lib/schema/schema-flip-apply; do
-    [ -x "$h" ] && sudo -n -l "$h" >/dev/null 2>&1 && { HELPER=$h; break; }
+    [ -x "$h" ] && sudo -n -l "$h" root-state >/dev/null 2>&1 && { HELPER=$h; break; }
 done
 
 mkdir -p "$STATE_DIR"
@@ -57,12 +57,15 @@ info() { yad --title="$TITLE" --window-icon="$ICON" --width=520 --borders=18 \
              --image="$1" --text="$2" --button="$3":0 "${@:4}"; }
 
 # privileged actions cross to root through the single sudoers-permitted helper.
-H() { sudo "$HELPER" "$@"; }
+# -n: after retire a rerun from a terminal must not stop at a password prompt.
+H() { sudo -n "$HELPER" "$@"; }
 
 # remove the on-demand launcher (user-owned) and the system autostart (root).
 remove_icon()     { rm -f "$DESK_ICON" 2>/dev/null || true; }
 stop_autostart()  { H resolve 2>/dev/null || true; rm -f "$USER_AUTOSTART"; }
-finish_clean()    { stop_autostart; remove_icon; }
+# the end: the sudo grant goes with it, so a reboot still due needs retire-reboot instead.
+forget_user_side() { rm -f "$USER_AUTOSTART"; remove_icon; }
+finish_clean()    { H retire 2>/dev/null || true; forget_user_side; }
 
 # copy the root-written report to the user's home so they can open it without sudo.
 pull_report() { local p; p=$(H report 2>/dev/null); [ -n "$p" ] && cp -f "$p" "$REPORT_USER" 2>/dev/null; }
@@ -185,11 +188,11 @@ details are saved to:\n<tt>${REPORT_USER}</tt>" \
         pull_report
         reason=$(humanize_reason "$(H explain 2>/dev/null)")
         H rollback || true           # also resets the root state to skipped
-        echo skipped > "$STATE"; finish_clean
+        echo skipped > "$STATE"; forget_user_side
         info dialog-warning \
 "<b>Putting it back the way it was.</b>\n\nThe optional switch didn't take on this hardware (${reason}), so we're undoing it. \
 Everything will work normally — one more restart finishes tidying up.\n\n(Details saved to <tt>${REPORT_USER}</tt>.)" "Restart"
-        H reboot
+        H retire-reboot
     fi
     ;;
 
@@ -247,11 +250,11 @@ back the way it was. <b>Everything works normally and there's nothing you need t
     else
         reason=$(humanize_reason "$(H dbus-explain 2>/dev/null)")
         H dbus-rollback || true
-        echo done > "$STATE"; finish_clean
+        echo done > "$STATE"; forget_user_side
         info dialog-warning \
 "<b>Putting it back the way it was.</b>\n\nThe optional message bus switch didn't take on this hardware \
 (${reason}), so we're undoing it. One more restart finishes tidying up." "Restart"
-        H reboot
+        H retire-reboot
     fi
     ;;
 

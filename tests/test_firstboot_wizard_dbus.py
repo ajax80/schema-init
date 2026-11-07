@@ -23,7 +23,8 @@ exit "$rc"
 '''
 SUDO = '''#!/bin/sh
 [ "$1" = -n ] && [ "$2" = -l ] && exit 0
-cmd="$2"
+[ "$1" = -n ] || { echo "no-n $2" >> "$FAKE/calls"; exit 1; }
+cmd="$3"
 echo "$cmd" >> "$FAKE/calls"
 [ -f "$FAKE/out.$cmd" ] && cat "$FAKE/out.$cmd"
 exit "$(cat "$FAKE/rc.$cmd" 2>/dev/null || echo 0)"
@@ -76,20 +77,20 @@ def main():
     check('dbus checked then armed', 'dbus-check' in calls and calls.index('dbus-check') < calls.index('dbus-arm'), str(calls))
     check('reboots after arming', calls[-1] == 'reboot', str(calls))
     check('state dbus_armed', st == 'dbus_armed', st)
-    check('autostart kept for the confirm login', 'resolve' not in calls and run.autostart_kept, str(calls))
+    check('autostart kept for the confirm login', 'resolve' not in calls and 'retire' not in calls and run.autostart_kept, str(calls))
 
     print("-- dbus offer skipped --")
     calls, st = run('dbus_offer', yad=[3])
     check('no dbus-arm', 'dbus-arm' not in calls, str(calls))
     check('state done', st == 'done', st)
-    check('autostart removed', 'resolve' in calls and not run.autostart_kept, str(calls))
+    check('autostart removed, grant retired', 'retire' in calls and not run.autostart_kept, str(calls))
 
     for phase in ('welcome', 'dbus_offer'):
         for code, why in ((143, 'killed by shutdown/logout'), (1, "couldn't open")):
             print(f"-- {phase}: yad {why} (rc {code}) is not Skip --")
             calls, st = run(phase, yad=[code])
             check('state unchanged', st == phase, st)
-            check('autostart kept, nothing resolved', run.autostart_kept and 'resolve' not in calls, str(calls))
+            check('autostart kept, nothing resolved', run.autostart_kept and 'resolve' not in calls and 'retire' not in calls, str(calls))
     print("-- dbus armed, 'Restarting' notice killed: still reboots --")
     calls, st = run('dbus_offer', yad=[0, 0, 143])
     check('armed then rebooted', 'dbus-arm' in calls and calls[-1] == 'reboot', str(calls))
@@ -115,19 +116,19 @@ def main():
     print("-- armed boot, broker authoritative --")
     calls, st = run('dbus_armed', yad=[0])
     check('confirms', 'dbus-confirm' in calls, str(calls))
-    check('no rollback, no reboot', 'dbus-rollback' not in calls and 'reboot' not in calls, str(calls))
+    check('no rollback, no reboot', 'dbus-rollback' not in calls and 'reboot' not in calls and 'retire-reboot' not in calls, str(calls))
     check('state done', st == 'done', st)
     check('user autostart removed once done', not run.autostart_kept)
 
     print("-- armed boot, seatbelt already rolled back --")
     calls, st = run('dbus_armed', yad=[0], rc={'dbus-is-authoritative': 1}, out={'dbus-state': 'skipped'})
-    check('does not roll back again or reboot', 'dbus-rollback' not in calls and 'reboot' not in calls, str(calls))
+    check('does not roll back again or reboot', 'dbus-rollback' not in calls and 'reboot' not in calls and 'retire-reboot' not in calls, str(calls))
     check('state done', st == 'done', st)
 
     print("-- armed boot, not authoritative, seatbelt has not acted --")
     calls, st = run('dbus_armed', yad=[0], rc={'dbus-is-authoritative': 1}, out={'dbus-state': 'armed'})
     check('rolls back', 'dbus-rollback' in calls, str(calls))
-    check('reboots', calls[-1] == 'reboot', str(calls))
+    check('reboots, grant retired', calls[-1] == 'retire-reboot', str(calls))
     check('never confirms', 'dbus-confirm' not in calls, str(calls))
 
     print(f">> {sum(results)}/{len(results)} passed")

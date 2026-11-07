@@ -289,8 +289,9 @@ static void usage(FILE *out) {
         "                         or HH:MM today. Read from shared memory; root sees\n"
         "                         full command lines\n"
         "  pet <svc>              feed a service's watchdog\n"
-        "  reset [<svc>]          clear restart/dormant counters and retry;\n"
-        "                         no argument resets every service\n"
+        "  reset [<svc>]          clear restart/dormant counters and retry <svc>;\n"
+        "                         no argument clears every counter and retries\n"
+        "                         only what failed, not what was stopped or finished\n"
         "  reboot\n"
         "  poweroff\n"
         "\n"
@@ -491,6 +492,8 @@ int main(int argc, char **argv) {
     write(fd, cmd, strlen(cmd));
 
     rlen = 0;
+    rbuf[0] = '\0';
+    int whole = 0;
     for (;;) {
         if (rlen + 1 >= cap) {
             char *nb = realloc(rbuf, cap * 2);
@@ -502,13 +505,14 @@ int main(int argc, char **argv) {
         if (n <= 0) break;
         rlen += (size_t)n;
         rbuf[rlen] = '\0';
-        if (rlen >= 2 && rbuf[rlen - 2] == '.' && rbuf[rlen - 1] == '\n') {
+        if (rlen >= 2 && rbuf[rlen - 2] == '.' && rbuf[rlen - 1] == '\n' && (rlen == 2 || rbuf[rlen - 3] == '\n')) {
             rbuf[rlen - 2] = '\0';
+            whole = 1;
             break;
         }
     }
 
-    i = strncmp(rbuf, "err:", 4) == 0;
+    i = !whole || strncmp(rbuf, "err:", 4) == 0;
     char *jend = NULL;
     if (skip_manifest && !i && argc == 3 && !strcmp(argv[1], "status") && !strcmp(argv[2], "--json"))
         jend = strstr(rbuf, "\n  ]\n}");
@@ -524,6 +528,8 @@ int main(int argc, char **argv) {
     if (skip_manifest && !i && !strcmp(argv[1], "status") &&
         (argc == 2 || (argc == 3 && !strcmp(argv[2], "--kv"))))
         print_skipped(argc == 3 ? SKIP_KV : SKIP_TEXT, 0);
+    if (!whole)
+        fprintf(stderr, "schema-ctl: reply cut short: the command may not have run\n");
     close(fd);
     free(rbuf);
     return i;

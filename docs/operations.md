@@ -22,7 +22,7 @@ sudo schema-ctl add <svc|path>  # load a new .svc at runtime (bare name = /etc/s
 sudo schema-ctl reload          # re-read the services directory (rejected if new config has a cycle)
 sudo schema-ctl reload --evict  # reload + SIGTERM any running service no longer present in config
 sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
-sudo schema-ctl reset [<name>]  # reset restart/dormant counts and re-queue failed services (clears circuit_broken=1)
+sudo schema-ctl reset [<name>]  # reset restart/dormant counts and re-queue failed services (clears circuit_broken=1); with a <name>, also starts it if it was stopped. Bare reset leaves stopped services and finished oneshots alone
 sudo schema-ctl reexec [<path>] # replace the PID 1 binary in place, services keep running
 sudo schema-ctl reboot          # orderly shutdown sweep, then reboot (also: poweroff)
 ```
