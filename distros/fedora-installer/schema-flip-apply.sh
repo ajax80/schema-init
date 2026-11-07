@@ -8,7 +8,8 @@
 # which the wizard invokes as `sudo /usr/local/lib/schema/schema-flip-apply <cmd>`.
 #
 # A passwordless sudoers.d rule (installed by schema.ks for the login user)
-# permits exactly this one script — so this file is the whole security surface.
+# permits the wizard's subcommands of this one script until `retire` removes it
+# — so this file is the whole security surface.
 # Keep it tight: helpers resolved from this script's own fixed, sudoers-pinned
 # location, a closed set of subcommands, no eval of caller-supplied strings.
 #
@@ -26,10 +27,13 @@ VERIFY="$LIB/verify-rules-live"
 DBUSFLIP="$LIB/schema-dbus-flip.sh"
 SHIP_MD5_FILE=/etc/schema-init/schema-udev.ship-md5
 SYS_AUTOSTART=/etc/xdg/autostart/schema-firstboot.desktop
+SUDOERS=/etc/sudoers.d/schema-flip
 # ROOT state the headless seatbelt reads (distinct from the wizard's own
 # user-tree state). The helper is the ONLY writer — it is the root boundary.
 ROOT_STATE=/var/lib/schema-init/firstboot.state
 ARMED_BOOTS=/var/lib/schema-init/flip-armed-boots
+
+reboot_now() { systemctl reboot 2>/dev/null || schema-ctl reboot 2>/dev/null || reboot; }
 
 cmd="${1:-}"
 case "$cmd" in
@@ -121,14 +125,22 @@ case "$cmd" in
         # own ~/Desktop launcher is removed by the wizard itself, as the user).
         rm -f "$SYS_AUTOSTART"
         ;;
+    retire)
+        # the wizard is finished for good: nothing it does needs root any more
+        rm -f "$SYS_AUTOSTART" "$SUDOERS"
+        ;;
+    retire-reboot)
+        rm -f "$SYS_AUTOSTART" "$SUDOERS"
+        reboot_now
+        ;;
     reboot)
-        systemctl reboot 2>/dev/null || schema-ctl reboot 2>/dev/null || reboot
+        reboot_now
         ;;
     dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state|dbus-explain)
         exec env -u SCHEMA_DBUS_FLIP_ROOT "$DBUSFLIP" "${cmd#dbus-}"
         ;;
     *)
-        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|root-state|explain|resolve|reboot|dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state|dbus-explain}" >&2
+        echo "usage: schema-flip-apply {check|report|arm|confirm|disarm|rollback|is-authoritative|root-state|explain|resolve|retire|retire-reboot|reboot|dbus-check|dbus-arm|dbus-confirm|dbus-rollback|dbus-is-authoritative|dbus-state|dbus-explain}" >&2
         exit 2
         ;;
 esac

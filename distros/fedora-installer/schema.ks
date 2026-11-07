@@ -319,13 +319,25 @@ FBHOME=""
 # card -> only a dummy auto_null sink). audio is the one Anaconda leaves off.
 [ -n "$FBUSER" ] && usermod -aG audio "$FBUSER" 2>/dev/null || true
 
-# Passwordless sudo for JUST the flip helper, for JUST the login user. The helper
-# is the security boundary (a closed set of subcommands, fixed paths); this lets
+# Passwordless sudo for JUST the flip helper's wizard subcommands, for JUST the
+# login user, until the wizard retires it (schema-flip-apply retire). This lets
 # the user-side GUI wizard perform the root flip steps without a polkit agent
 # (which can't run here — it's a systemd user unit). 0440 + validate before commit.
+# BEGIN flip grant
+flip_grant() {
+    sep=
+    printf '%s ALL=(root) NOPASSWD: ' "$FBUSER"
+    for c in arm check confirm dbus-arm dbus-check dbus-confirm dbus-explain \
+             dbus-is-authoritative dbus-rollback dbus-state disarm explain \
+             is-authoritative reboot report resolve retire retire-reboot rollback root-state; do
+        printf '%s%s/schema-flip-apply %s' "$sep" "$LIB" "$c"
+        sep=', '
+    done
+    echo
+}
+# END flip grant
 if [ -n "$FBUSER" ]; then
-    printf '%s ALL=(root) NOPASSWD: %s/schema-flip-apply\n' "$FBUSER" "$LIB" \
-        > /etc/sudoers.d/schema-flip
+    flip_grant > /etc/sudoers.d/schema-flip
     chmod 0440 /etc/sudoers.d/schema-flip
     visudo -cf /etc/sudoers.d/schema-flip || rm -f /etc/sudoers.d/schema-flip
 fi
