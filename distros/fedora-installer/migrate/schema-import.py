@@ -944,7 +944,8 @@ def dep_lines(name, sections, known):
     # a separate /var subvol is mounted. First, so the 8-dep cap never drops it.
     if (_get_last(unit, "DefaultDependencies").lower() not in ("no", "false", "0", "off")
             or {"local-fs.target", "remote-fs.target"} & set(tokens(unit, "After"))
-            or _get_all(unit, "RequiresMountsFor")):
+            or _get_all(unit, "RequiresMountsFor")
+            or any(_get_all(svc, k) for k in ("StateDirectory", "CacheDirectory", "LogsDirectory"))):
         cands.append("mount-fstab")
     part_of = {_UNIT_ALIAS.get(u.rsplit(".", 1)[0], u.rsplit(".", 1)[0])
                for u in tokens(unit, "PartOf") if u.endswith((".service", ".socket"))}
@@ -1142,28 +1143,51 @@ def exec_dir_lines(svc, name, key, sys_base, user_base):
         mode = "0755"
     # user mode: under the user's own dirs, and the runner is the user already
     base, pfx = (user_base(_USER), "") if _USER else (sys_base, "+")
-    user, own = _get_last(svc, "User"), ""
+    # Only RuntimeDirectory= was translated before: a unit whose other directory
+    # already exists must not stop starting because install failed.
+    if key != "RuntimeDirectory":
+        pfx += "-"
+    user, group, own = _get_last(svc, "User"), _get_last(svc, "Group"), ""
     if not _USER and user and user != "root":
-        own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(_get_last(svc, "Group") or _primary_group(user)))
+        own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(group or _primary_group(user)))
+    elif not _USER and group:
+        own = " -g %s" % _cmd_quote(group)
     if not base:
         return [], ["dropped %s=%s (no XDG_RUNTIME_DIR)" % (key, " ".join(dirs))], warns, []
-    paths = []
+    paths, make = [], []
     for d in dirs:
         try:
             x = _specifiers([d], name)[0].rstrip("/")
         except Skip:
             x = None
         # dir:symlink (systemd 254) is not translated. Nested only without -o: a root
-        # install -d -o through a parent the user owns follows a symlink the user put there
+        # install -d -o through a parent the user owns follows a symlink the user put there.
+        # The path is still the daemon's to use: only creating it is the risk.
         parts = x.split("/") if x else []
-        if (not parts or ":" in x or any(c in ("", ".", "..") for c in parts)
-                or (own and len(parts) > 1)):
+        if not parts or ":" in x or any(c in ("", ".", "..") for c in parts):
             warns.append("dropped %s=%s: not created, and the daemon may need it" % (key, d))
             continue
-        paths.append(base + "/" + x)
+        p = base + "/" + x
+        if p in paths:
+            continue
+        paths.append(p)
+        if own and " -o " in own and len(parts) > 1:
+            warns.append("dropped %s=%s: not created, and the daemon may need it" % (key, d))
+        else:
+            make.append(p)
     out, cur = [], []
     start = "exec_pre=%s/usr/bin/install -d -m %s%s" % (pfx, mode, own)
-    for q in (_cmd_quote(p) for p in paths):
+    # systemd leaves an existing config dir alone, unlike the others: install -o would
+    # hand a packaged root:adm 0750 one to the service user to rewrite.
+    if key == "ConfigurationDirectory":
+        for p in make:
+            if re.fullmatch(r"[A-Za-z0-9._/+@-]+", p) and re.fullmatch(r"[A-Za-z0-9._ +@-]*", own):
+                out.append('exec_pre=%s/bin/sh -c "test -e %s || exec /usr/bin/install -d -m %s%s %s"'
+                           % (pfx, p, mode, own, p))
+            else:
+                warns.append("dropped %s=%s: not created, its name can't go in the check" % (key, p))
+        return out, notes, warns, paths
+    for q in (_cmd_quote(p) for p in make):
         if cur and (len(cur) >= _EXEC_DIR_WORDS
                     or len(start) + sum(len(c) + 1 for c in cur) + len(q) + 1 > _EXEC_DIR_LINE):
             out.append(" ".join([start] + cur))
@@ -1242,7 +1266,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     env_map = dict(p.split("=", 1) for p in env_pairs)
     # systemd sets these for the daemon, sorted and merged; a value the unit sets
     # wins. Before expansion, or ${STATE_DIRECTORY} counts as unset and is dropped.
-    rt_pres, rt_notes, rt_warns, dir_env, later_dirs = [], [], [], [], []
+    rt_pres, rt_notes, rt_warns, dir_env, later_dirs, config_rw = [], [], [], [], [], []
     for key, sys_base, user_base, var in _EXEC_DIRS:
         d_lines, d_notes, d_warns, d_paths = exec_dir_lines(svc, unit or name, key, sys_base, user_base)
         if key == "RuntimeDirectory":
@@ -1251,6 +1275,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             later_dirs.append((key, d_lines))
         rt_notes += d_notes
         rt_warns += d_warns
+        if key == "ConfigurationDirectory":   # systemd keeps it writable under ProtectSystem=
+            config_rw = [("ReadWritePaths", p) for p in d_paths]
         if d_paths and var not in env_map:
             value = ":".join(sorted(d_paths))
             dir_env.append((var, value))
@@ -1279,6 +1305,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     for key, d_lines in later_dirs:
         if len(rt_pres) + len(pres) + len(d_lines) > 8:
             rt_warns.append("%s= not created: no room in the limit of 8 exec_pre lines" % key)
+        elif any(len(ln) > 511 for ln in d_lines):
+            rt_warns.append("%s= not created: its path is longer than a line (limit 511)" % key)
         else:
             rt_pres = rt_pres + d_lines
 
@@ -1394,7 +1422,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
 
     lines.append("critical=0")
 
-    hard, warns = _hardening(svc)
+    hard, warns = _hardening(svc + config_rw)
     if "+" in pfx:
         # + is full privileges: systemd skips the sandbox too, not just User=.
         # The sandbox is service-wide here, so plain ExecStartPre lines that
