@@ -988,6 +988,22 @@ def dep_lines(name, sections, known):
     return lines, notes
 
 
+# Hard deps with no .svc: systemd would have started them or failed. Reclaimed
+# units and aliases already run here under their own names. A timer's .svc is never
+# in known, so only a missing unit file counts; the walk imports one that exists.
+def unmet_deps(name, sections, known):
+    unmet = []
+    for k in ("Requires", "Requisite", "BindsTo"):
+        for u in _unit_tokens(sections, "Unit", k):
+            base = u.rsplit(".", 1)[0]
+            if not u.endswith((".service", ".socket", ".timer")) or "@" in u or u.startswith(_RECLAIMED) \
+                    or base in _UNIT_ALIAS or base == name or u in unmet:
+                continue
+            if (not find_unit(u)) if u.endswith(".timer") else base not in known:
+                unmet.append(u)
+    return unmet
+
+
 def _cap_deps(deps):
     """PID 1 refuses a ninth dep=: keep the first 8, note the rest."""
     notes = ["dropped dep on %s (limit 8)" % " ".join(deps[8:])] if len(deps) > 8 else []
@@ -1376,6 +1392,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)
+    if known and not _USER:
+        unmet = unmet_deps(name, sections, known)
+        if unmet:
+            warns.append("needs %s, which has no service here: it may fail without it" % " ".join(unmet))
     pod = _get_last(sections.get("X-Container") or [], "Pod")
     if pod and not any(l.startswith("bind=") for l in lines):
         # no bind= written (system mode, or its pod unit not imported): a pod
@@ -1682,6 +1702,67 @@ def enabled_units():
                 or u.startswith(_RECLAIMED) or u in out:
             continue
         out.append(u)
+    return with_deps(out)
+
+
+def _unit_tokens(sections, section, key):
+    return " ".join(_get_all(sections.get(section, []), key)).split()
+
+
+# The name to import a dep under, or None. Resolved first: an alias walks past
+# every name check (syslog.service -> rsyslog.service, messagebus.service ->
+# dbus-broker.service) and would start a second owner of /dev/log or the bus.
+def _pulled_in(unit):
+    if not unit.endswith((".service", ".socket", ".timer")) or "@" in unit or not _name_ok(unit):
+        return None
+    path = find_unit(unit)
+    if not path or _masked(path):
+        return None
+    real = os.path.basename(os.path.realpath(path))
+    base = real.rsplit(".", 1)[0]
+    if "@" in real or real.startswith(_RECLAIMED) or base in _UNIT_ALIAS or _denied(base):
+        return None
+    return real
+
+
+# units plus what systemd would start along with them: a service's Requires=,
+# BindsTo= and Wants=. A socket or timer brings its own, but only the hard deps of
+# the service it activates, whose Wants= wait for its first activation.
+def with_deps(units):
+    out, seen, queue = list(units), set(units), list(units)
+    dirs = _unit_dirs()
+    while queue:
+        u = queue.pop(0)
+        if u.startswith((INITD, SV)) or not _name_ok(u):   # import_one reports a bad name
+            continue
+        path = find_unit(u)
+        if not path:
+            continue
+        try:
+            sections = parse_unit(read_unit(path))
+            follow = []
+            for key in ("Requires", "BindsTo", "Wants"):
+                follow += _unit_tokens(sections, "Unit", key)
+            if u.endswith((".socket", ".timer")):
+                sec, key = ("Socket", "Service") if u.endswith(".socket") else ("Timer", "Unit")
+                target = _get_last(sections.get(sec, []), key) or u.rsplit(".", 1)[0] + ".service"
+                tpath = find_unit(target) if _name_ok(target) else None
+                if tpath:
+                    tsections = parse_unit(read_unit(tpath))
+                    for key in ("Requires", "BindsTo"):
+                        follow += _unit_tokens(tsections, "Unit", key)
+        except (OSError, ValueError):
+            continue
+        for w in follow + _wants_dir_units(dirs, u):
+            if w in seen:
+                continue
+            seen.add(w)
+            real = _pulled_in(w)
+            # a timer's .svc is the timer job: its service must not replace it
+            if real and real not in out and not (real.endswith(".service") and real[:-8] + ".timer" in out):
+                seen.add(real)
+                out.append(real)
+                queue.append(real)
     return out
 
 
@@ -2080,9 +2161,10 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
     the queue keeping only transient (not-found) entries. Returns a counts dict."""
     global _private_src
     from_queue = units is None
-    items = units if units is not None else _read_queue()
+    items = units if units is not None else with_deps(_read_queue())
     counts = {"imported": 0, "exists": 0, "not-found": 0, "skipped": 0, "error": 0}
     keep = []
+    done, why_skipped, done_paths = {}, {}, []
     for name in items:
         _private_src = False
         # anything one unit can throw stays that unit's problem: dnf file triggers
@@ -2099,6 +2181,8 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
         counts[status] += 1
         if status == "imported":
             out, body = detail
+            done[name] = body
+            done_paths.append(out)
             log("import  %s -> %s" % (name, out))
             for ln in body.splitlines():
                 if ln.startswith(WARN_PREFIX):
@@ -2112,6 +2196,7 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
             keep.append(name)
         elif status == "skipped":
             reason, stub, out = detail
+            why_skipped[os.path.basename(out)[:-len(".svc")]] = reason
             stub_path = out + ".skipped"
             log("skip    %s: %s (see %s)" % (name, reason, stub_path))
             if not dry_run:
@@ -2122,12 +2207,24 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
         else:
             log("ERROR   %s: %s" % (name, detail))
             keep.append(name)
+    # Queued, so it counted as known when dep= was written, then skipped: only
+    # the drain as a whole knows nothing will satisfy that dep.
+    # A skipped socket doesn't mean its service is missing, so look for the .svc.
+    written_names = {os.path.basename(o)[:-len(".svc")] for o in done_paths}
+    for name, body in done.items():
+        for ln in body.splitlines():
+            if ln.startswith("dep=") and ln[4:] in why_skipped and ln[4:] not in written_names \
+                    and not os.path.exists(os.path.join(svc_dir(), ln[4:] + ".svc")):
+                log("WARN    %s: needs %s.service, which was not imported, so it may fail: %s"
+                    % (name, ln[4:], why_skipped[ln[4:]]))
     if from_queue and not dry_run:
         os.makedirs(state_dir(), exist_ok=True)
         # Re-read so intents the shim appended while we processed survive, and
         # rewrite atomically (tmp + rename) so a crash can't truncate the queue.
         processed = set(items) - set(keep)
         remaining = [n for n in _read_queue() if n not in processed]
+        # a dep the walk added was never in the file, but gets the same retry
+        remaining += [n for n in keep if n not in remaining]
         tmp = queue_path() + ".tmp"
         with open(tmp, "w") as f:
             for n in remaining:
