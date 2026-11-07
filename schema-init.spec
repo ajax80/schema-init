@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.22
+Version:        0.4.23
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,29 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sat Nov 07 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.23-1
+- Security: a client on the control socket can no longer hold PID 1. Replies go
+  out in one non-blocking send, a client gets 250 ms to send its line, and an
+  unfinished line is refused. ctl_writef no longer sends bytes past its buffer.
+  schema-ctl reports a reply that was cut short (#479)
+- Security: schema-migrate writes the home recovery card as the user, schema-doctor
+  checks the process it reads a session from, and the wizard's sudo grant lists
+  exact arguments, so --deploy and --uninstall need a password (#478). The ISO's
+  sudo grant lists exact subcommands and is removed when the wizard finishes (#479)
+- schema-ctl reset with no name retries only what failed, not services stopped on
+  purpose or oneshots that finished (#479)
+- Wizard: stays responsive while a password prompt is open or a deploy runs, says
+  when a password was wrong, tells a failure before anything changed from one
+  after, and keeps Continue on screen. --uninstall removes the recovery cards (#480)
+- schema-import: migration brings along what an enabled unit needs, as systemd
+  would start it, and warns about a hard dependency with no service (#482).
+  StateDirectory=, CacheDirectory=, LogsDirectory= and ConfigurationDirectory= now
+  get their directory and variable, RuntimeDirectory= gets its variable, and all
+  of them expand in commands (#483, #484). Reads system drop-ins, warns about
+  sandboxing it can't carry over, keeps a 0600 unit's secrets private, and one bad
+  unit no longer stops the rest (#477)
+- Stable apt now moves when the GitHub release is published, with the exact debs
+  the tag run tested, not when the tag is pushed (#481)
 * Thu Nov 05 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.22-1
 - Security: the systemd1 bridge authorizes callers through polkit (#469).
   schema-logind checks authorization on the hostname, timedate and locale
