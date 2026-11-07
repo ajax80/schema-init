@@ -33,6 +33,7 @@ SUDOERS=/etc/sudoers.d/schema-flip
 ROOT_STATE=/var/lib/schema-init/firstboot.state
 ARMED_BOOTS=/var/lib/schema-init/flip-armed-boots
 
+retire_grant() { rm -f "$SYS_AUTOSTART" "$SUDOERS"; }
 reboot_now() { systemctl reboot 2>/dev/null || schema-ctl reboot 2>/dev/null || reboot; }
 
 cmd="${1:-}"
@@ -127,10 +128,10 @@ case "$cmd" in
         ;;
     retire)
         # the wizard is finished for good: nothing it does needs root any more
-        rm -f "$SYS_AUTOSTART" "$SUDOERS"
+        retire_grant
         ;;
     retire-reboot)
-        rm -f "$SYS_AUTOSTART" "$SUDOERS"
+        retire_grant
         reboot_now
         ;;
     reboot)

@@ -505,7 +505,7 @@ int main(int argc, char **argv) {
         if (n <= 0) break;
         rlen += (size_t)n;
         rbuf[rlen] = '\0';
-        if (rlen >= 2 && rbuf[rlen - 2] == '.' && rbuf[rlen - 1] == '\n') {
+        if (rlen >= 2 && rbuf[rlen - 2] == '.' && rbuf[rlen - 1] == '\n' && (rlen == 2 || rbuf[rlen - 3] == '\n')) {
             rbuf[rlen - 2] = '\0';
             whole = 1;
             break;

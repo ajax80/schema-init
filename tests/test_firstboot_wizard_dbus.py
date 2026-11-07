@@ -23,7 +23,8 @@ exit "$rc"
 '''
 SUDO = '''#!/bin/sh
 [ "$1" = -n ] && [ "$2" = -l ] && exit 0
-cmd="$2"
+[ "$1" = -n ] || { echo "no-n $2" >> "$FAKE/calls"; exit 1; }
+cmd="$3"
 echo "$cmd" >> "$FAKE/calls"
 [ -f "$FAKE/out.$cmd" ] && cat "$FAKE/out.$cmd"
 exit "$(cat "$FAKE/rc.$cmd" 2>/dev/null || echo 0)"

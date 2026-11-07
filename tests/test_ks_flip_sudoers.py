@@ -41,9 +41,13 @@ check("helper handles every grant", granted <= cases, granted - cases)
 check("wizard probes with an argument the grant allows",
       re.search(r'sudo -n -l "\$h" root-state', wiz), "bare sudo -l cannot match a pinned rule")
 
-body = helper.split("    retire)", 1)[-1].split(";;", 1)[0]
-check("retire removes the grant", "/etc/sudoers.d/schema-flip" in helper and "$SUDOERS" in body, body)
-check("retire removes the autostart", "$SYS_AUTOSTART" in body, body)
+fn = re.search(r"^retire_grant\(\)\s*\{(.*?)\}", helper, re.M)
+check("retire_grant removes grant and autostart", fn and "$SUDOERS" in fn.group(1) and "$SYS_AUTOSTART" in fn.group(1)
+      and "SUDOERS=/etc/sudoers.d/schema-flip" in helper, helper[:0])
+for c in ("retire", "retire-reboot"):
+    body = helper.split("    %s)" % c, 1)[-1].split(";;", 1)[0]
+    check(c + " calls retire_grant", "retire_grant" in body, body)
+check("wizard never waits at a sudo prompt", re.search(r'^H\(\) \{ sudo -n "\$HELPER"', wiz, re.M))
 resolve = helper.split("    resolve)", 1)[-1].split(";;", 1)[0]
 check("resolve keeps the grant: the wizard stays re-runnable", "SUDOERS" not in resolve, resolve)
 

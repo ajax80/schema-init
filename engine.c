@@ -1717,19 +1717,30 @@ static void shm_update(void) {
 
 /* ── runtime control socket ─────────────────────────────────────────── */
 
-/* The loop that reaps children and pets the watchdog is the one replying. The
- * read-only group can reach this socket, so a client gets 250 ms to send its
- * line and 1 s per blocked write. */
+/* The loop that reaps children and pets the watchdog is the one replying, and
+ * the read-only group can reach this socket. A client gets 250 ms to send its
+ * line, and its reply goes out in one non-blocking send: per-write timeouts
+ * still let a client hold the loop by reading a little at a time. The largest
+ * reply (--kv, 128 services) is about 67 KB and fits an empty socket buffer. A
+ * reply that doesn't loses its terminator, which schema-ctl reports. */
 #define CTL_RECV_MS  250
-#define CTL_SEND_SEC 1
+#define CTL_LATE_SEC 1      /* the one reply written outside ctl_poll: re-exec's */
 
-/* After one timed-out write the reply is over: otherwise each remaining line
- * would hold the loop for another CTL_SEND_SEC. */
-static int ctl_dead_fd = -1;
+static char   ctl_out[128 * 1024];
+static size_t ctl_out_n;
+static int    ctl_out_fd = -1, ctl_out_over;
 
 static void ctl_send(int fd, const char *buf, size_t n) {
-    if (fd == ctl_dead_fd) return;
-    if (write(fd, buf, n) != (ssize_t)n) ctl_dead_fd = fd;
+    if (fd != ctl_out_fd) {
+        write(fd, buf, n);
+        return;
+    }
+    if (ctl_out_over || n > sizeof(ctl_out) - ctl_out_n) {
+        ctl_out_over = 1;
+        return;
+    }
+    memcpy(ctl_out + ctl_out_n, buf, n);
+    ctl_out_n += n;
 }
 
 static void ctl_end(int fd) {
@@ -2039,8 +2050,11 @@ static const char *last_exit_str(const service_t *s) {
 }
 
 /* What a bare reset retries. EXC_NONE is on purpose (stop, standby,
- * fallback-down) and EXC_BIND is waiting for its bound: neither failed. */
+ * fallback-down) and EXC_BIND is waiting for its bound: neither failed. A stop
+ * holds SVC_NO_RESTART beyond the config: start_timeout_sec can overtake a slow
+ * one and record a failure reason, and it is still a stop. */
 static int svc_failed(const service_t *s) {
+    if ((s->flags & SVC_NO_RESTART) && !s->no_restart_cfg) return 0;
     return s->inst.state == STATE_DORMANT ||
            (s->inst.state == STATE_EXCISED && s->excise_reason != EXC_NONE && s->excise_reason != EXC_BIND);
 }
@@ -2614,15 +2628,17 @@ static void ctl_poll(void) {
     int pos = 0, cfd;
     ssize_t n;
     struct timeval tv = {0, 100000}; /* 100ms receive timeout */
-    struct timeval stv = {CTL_SEND_SEC, 0};
+    struct timeval stv = {CTL_LATE_SEC, 0};
     struct timespec t0, t;
-    int complete = 0, eof = 0;
+    int complete = 0, flags = 0;
     if (ctl_fd < 0) return;
     cfd = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC);
     if (cfd < 0) return;
     setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
-    ctl_dead_fd = -1;
+    ctl_out_fd = cfd;
+    ctl_out_n = 0;
+    ctl_out_over = 0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     /* Peer identity: root and our own uid may run everything; schema-group
@@ -2634,14 +2650,16 @@ static void ctl_poll(void) {
         peer_uid = cred.uid;
 
     while (pos < (int)sizeof(buf) - 1) {
-        n = recv(cfd, buf + pos, 1, 0);
-        if (n == 0) eof = 1;
+        n = recv(cfd, buf + pos, 1, flags);
         if (n <= 0) break;
         if (buf[pos++] == '\n') { complete = 1; break; }
         clock_gettime(CLOCK_MONOTONIC, &t);
-        if ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000 >= CTL_RECV_MS) break;
+        /* past the deadline, take only what already arrived: PID 1 being late
+         * must not refuse a line the client sent in time */
+        if ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000 >= CTL_RECV_MS)
+            flags = MSG_DONTWAIT;
     }
-    if (pos > 0 && !complete && !eof) {
+    if (pos > 0 && !complete) {
         /* half of "stop foobar" can name another service */
         ctl_writef(cfd, "err: incomplete command\n");
         ctl_end(cfd);
@@ -2656,8 +2674,9 @@ static void ctl_poll(void) {
             ctl_cmd(cfd, buf);
         }
     }
+    if (ctl_out_n) send(cfd, ctl_out, ctl_out_n, MSG_DONTWAIT | MSG_NOSIGNAL);
+    ctl_out_fd = -1;
     close(cfd);
-    ctl_dead_fd = -1;
 }
 
 static void signalfd_init(void) {
