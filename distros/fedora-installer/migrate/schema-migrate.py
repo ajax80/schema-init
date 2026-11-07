@@ -1410,8 +1410,9 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
     if not dry_run and "no-fallback-entry" in _adv():
         hide_fallback_entries(m)
     if not dry_run:
-        write_recovery_card(profile, root=ROOT, text=recovery_text(
-            m.snapshot, fallback="no-fallback-entry" not in _adv()))
+        for card in write_recovery_card(profile, root=ROOT, text=recovery_text(
+                m.snapshot, fallback="no-fallback-entry" not in _adv())):
+            m.add_file(card)
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
         stage.transition(stage.R1_PENDING, root=ROOT, extra={"adv": _adv()})

@@ -139,8 +139,15 @@ def _ok(result):
 _ERROR = {
     "reboot_pending": "An update is waiting for a restart, so nothing was changed. "
                       "Restart your computer, then open setup again.",
-    "deploy_failed": "Setup couldn't start, so nothing was changed. "
-                     "Check that you can run admin commands, then try again.",
+    "auth_failed": "Setup couldn't start, so nothing was changed. "
+                   "Check that you can run admin commands, then try again.",
+    "deploy_stopped": "Setup stopped before it finished, so your computer may be partly changed. "
+                      "The details are in ~/.local/state/schema/setup.log.",
+    "wrong_password": "That password wasn't accepted, so nothing was changed. Press Continue to try again.",
+    "password_cancelled": "Setup needs your password to continue, so nothing was changed. "
+                          "Press Continue when you're ready.",
+    "crashed": "Something went wrong during that step. Close this window and open setup again "
+               "to see where things stand.",
     "arm_failed": "Couldn't arm the switch, so nothing was changed. Try again.",
     "finish_failed": "Couldn't finish tidying up. Your computer is fine.",
     "dbus_arm_failed": "Couldn't prepare the message bus switch, so nothing was changed. "
@@ -234,7 +241,9 @@ class WizardCore:
             r = self.backend.deploy(self.deploy_opts(selections))
             if getattr(r, "returncode", 0) == _migrate().REBOOT_PENDING_RC:
                 return "reboot_pending"
-            return "deployed" if _ok(r) else "deploy_failed"
+            if _ok(r):
+                return "deployed"
+            return getattr(r, "auth", "") or "deploy_stopped"
         if s == stage.R1_HEAL:
             r = self.backend.arm_flip()
             return "armed" if _ok(r) else "arm_failed"

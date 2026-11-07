@@ -13,8 +13,8 @@ ApplicationWindow {
     Timer {
         interval: 2000; repeat: true
         // summary: the wizard autostarts at login, before the doctor's heal run writes its status
-        running: wizard.screen === "waiting_reboot"
-                 || (wizard.screen === "summary" && wizard.statusItems.length === 0)
+        running: !wizard.busy && (wizard.screen === "waiting_reboot"
+                 || (wizard.screen === "summary" && wizard.statusItems.length === 0))
         onTriggered: wizard.refresh()
     }
 
@@ -31,91 +31,144 @@ ApplicationWindow {
         }
     }
 
+    // Refused once, not always: a backend call has no timeout, and the window
+    // manager can't offer to force-quit a window that is still painting.
+    property bool warnedClose: false
+    onClosing: (close) => {
+        if (wizard.busy && !warnedClose) {
+            close.accepted = false
+            warnedClose = true
+        }
+    }
+    Connections {
+        target: wizard
+        function onChanged() { if (!wizard.busy) win.warnedClose = false }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 24
         spacing: 16
 
-        Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            font.pixelSize: 18
-            text: win.screenText()
-        }
-
-        Label {
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            visible: wizard.detail !== ""
-            text: wizard.detail
-        }
-
+        // Everything that can grow scrolls here, so the error and the buttons
+        // below never get pushed out of the window.
         ScrollView {
-            id: results
+            id: page
+            objectName: "pageScroll"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            visible: wizard.screen === "summary"
             clip: true
+            contentWidth: availableWidth
 
             ColumnLayout {
-                width: results.availableWidth
-                spacing: 6
+                width: page.availableWidth
+                spacing: 16
 
                 Label {
-                    text: "Overall: " + wizard.overall
-                    font.bold: true
-                }
-                Label {
-                    visible: wizard.statusItems.length === 0
-                    wrapMode: Text.WordWrap
                     Layout.fillWidth: true
-                    text: "The doctor hasn't reported yet."
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 18
+                    text: win.screenText()
                 }
-                Repeater {
-                    model: wizard.statusItems
-                    delegate: RowLayout {
-                        required property var modelData
+
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    visible: wizard.detail !== ""
+                    text: wizard.detail
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: wizard.screen === "summary"
+                    spacing: 6
+
+                    Label {
+                        text: "Overall: " + wizard.overall
+                        font.bold: true
+                    }
+                    Label {
+                        visible: wizard.statusItems.length === 0
+                        wrapMode: Text.WordWrap
                         Layout.fillWidth: true
-                        spacing: 8
-                        Rectangle {
-                            width: 12; height: 12; radius: 6
-                            Layout.alignment: Qt.AlignTop
-                            Layout.topMargin: 3
-                            color: modelData.color === "GREEN" ? "#27ae60"
-                                 : modelData.color === "AMBER" ? "#e67e22"
-                                 : modelData.color === "RED" ? "#c0392b" : "#95a5a6"
-                        }
-                        Label {
+                        text: "The doctor hasn't reported yet."
+                    }
+                    Repeater {
+                        model: wizard.statusItems
+                        delegate: RowLayout {
+                            required property var modelData
                             Layout.fillWidth: true
-                            wrapMode: Text.WordWrap
-                            text: modelData.name
-                                  + (modelData.detail ? " — " + modelData.detail : "")
-                                  + (modelData.action ? "\n" + modelData.action : "")
+                            spacing: 8
+                            Rectangle {
+                                width: 12; height: 12; radius: 6
+                                Layout.alignment: Qt.AlignTop
+                                Layout.topMargin: 3
+                                color: modelData.color === "GREEN" ? "#27ae60"
+                                     : modelData.color === "AMBER" ? "#e67e22"
+                                     : modelData.color === "RED" ? "#c0392b" : "#95a5a6"
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                text: modelData.name
+                                      + (modelData.detail ? " — " + modelData.detail : "")
+                                      + (modelData.action ? "\n" + modelData.action : "")
+                            }
                         }
+                    }
+                }
+
+                // Recovery-card acknowledgement, shown only before the first reboot.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: wizard.screen === "welcome"
+                    spacing: 8
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: wizard.recoveryText()
                     }
                 }
             }
         }
 
-        // Recovery-card acknowledgement, shown only before the first reboot.
-        ColumnLayout {
-            Layout.fillWidth: true
+        // Outside the scrolling page: Continue stays grey until this is ticked, so
+        // it must not be able to sit out of view.
+        CheckBox {
+            id: ack
+            objectName: "ackBox"
             visible: wizard.screen === "welcome"
+            text: "I've saved these instructions"
+            enabled: !wizard.busy
+            onToggled: wizard.setRecoveryAck(checked)
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            visible: wizard.busy
             spacing: 8
 
+            BusyIndicator {
+                objectName: "busyIndicator"
+                running: wizard.busy
+                implicitWidth: 32; implicitHeight: 32
+            }
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: wizard.recoveryText()
-            }
-            CheckBox {
-                id: ack
-                text: "I've saved these instructions"
-                onToggled: wizard.setRecoveryAck(checked)
+                text: "Working on it. This can take a few minutes. If you were asked for a password, "
+                      + "that window may be behind this one."
             }
         }
 
-        Item { Layout.fillHeight: true; visible: wizard.screen !== "summary" }
+        Label {
+            objectName: "closeHint"
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            visible: wizard.busy && win.warnedClose
+            text: "Closing now could leave setup half-done. Close the window again to quit anyway."
+        }
 
         Label {
             Layout.fillWidth: true
@@ -128,13 +181,15 @@ ApplicationWindow {
         Button {
             text: wizard.secondaryAction
             visible: wizard.secondaryAction !== ""
+            enabled: !wizard.busy
             onClicked: wizard.secondaryClicked()
         }
 
         Button {
+            objectName: "primaryButton"
             text: wizard.primaryAction
             visible: wizard.primaryAction !== ""
-            enabled: wizard.screen !== "welcome" || ack.checked
+            enabled: !wizard.busy && (wizard.screen !== "welcome" || ack.checked)
             onClicked: wizard.continueClicked()
         }
     }

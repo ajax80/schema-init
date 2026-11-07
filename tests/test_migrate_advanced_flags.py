@@ -92,6 +92,8 @@ try:
 finally:
     del os.environ["MIGRATE_ROOT"]
 check("uninstall deletes the snapshot", ["btrfs", "subvolume", "delete", snap] in ucalls)
+check("card recorded in the manifest", "/boot/schema-recovery.txt" in man.files)
+check("uninstall removes the card", not os.path.exists(os.path.join(root, "boot/schema-recovery.txt")))
 m, root, calls, err = deploy(["--advanced-no-snapshot"], fstype="btrfs")
 check("no-snapshot: no snapshot taken", snapshots(calls) == [] and err is None)
 check("no-snapshot: card mentions no snapshot", "read-only copy" not in open(os.path.join(root, "boot/schema-recovery.txt")).read())
