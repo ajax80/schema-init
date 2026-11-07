@@ -988,6 +988,19 @@ def dep_lines(name, sections, known):
     return lines, notes
 
 
+def unmet_deps(name, sections, known):
+    """Hard deps with no .svc: systemd would have started them or failed. Reclaimed
+    units and aliases already run here under their own names."""
+    unmet = []
+    for k in ("Requires", "Requisite", "BindsTo"):
+        for u in " ".join(_get_all(sections.get("Unit", []), k)).split():
+            base = u.rsplit(".", 1)[0]
+            if (u.endswith((".service", ".socket")) and "@" not in u and not u.startswith(_RECLAIMED)
+                    and base not in _UNIT_ALIAS and base not in known and base != name and u not in unmet):
+                unmet.append(u)
+    return unmet
+
+
 def _cap_deps(deps):
     """PID 1 refuses a ninth dep=: keep the first 8, note the rest."""
     notes = ["dropped dep on %s (limit 8)" % " ".join(deps[8:])] if len(deps) > 8 else []
@@ -1376,6 +1389,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)
+    if known and not _USER:
+        unmet = unmet_deps(name, sections, known)
+        if unmet:
+            warns.append("needs %s, which has no service here: it may fail without it" % " ".join(unmet))
     pod = _get_last(sections.get("X-Container") or [], "Pod")
     if pod and not any(l.startswith("bind=") for l in lines):
         # no bind= written (system mode, or its pod unit not imported): a pod
@@ -1682,6 +1699,51 @@ def enabled_units():
                 or u.startswith(_RECLAIMED) or u in out:
             continue
         out.append(u)
+    return with_deps(out)
+
+
+def _pulled_in(unit):
+    if not unit.endswith((".service", ".socket")) or "@" in unit or not _name_ok(unit) \
+            or unit.startswith(_RECLAIMED) or unit.rsplit(".", 1)[0] in _UNIT_ALIAS:
+        return False
+    path = find_unit(unit)
+    return bool(path) and not _masked(path)
+
+
+def with_deps(units):
+    """units plus what systemd would start along with them: a service's Requires=,
+    BindsTo= and Wants=. A socket or timer brings its own, but only the hard deps
+    of the service it activates, whose Wants= wait for its first activation."""
+    out, seen, queue = list(units), set(units), list(units)
+    dirs = _unit_dirs()
+    while queue:
+        u = queue.pop(0)
+        if u.startswith((INITD, SV)):
+            continue
+        path = find_unit(u)
+        if not path:
+            continue
+        try:
+            sections = parse_unit(read_unit(path))
+            follow = []
+            for key in ("Requires", "BindsTo", "Wants"):
+                follow += " ".join(_get_all(sections.get("Unit", []), key)).split()
+            if u.endswith((".socket", ".timer")):
+                sec, key = ("Socket", "Service") if u.endswith(".socket") else ("Timer", "Unit")
+                target = _get_last(sections.get(sec, []), key) or u.rsplit(".", 1)[0] + ".service"
+                tpath = find_unit(target)
+                if tpath:
+                    tunit = parse_unit(read_unit(tpath)).get("Unit", [])
+                    for key in ("Requires", "BindsTo"):
+                        follow += " ".join(_get_all(tunit, key)).split()
+        except (OSError, ValueError):
+            continue
+        for w in follow + _wants_dir_units(dirs, u):
+            if w not in seen:
+                seen.add(w)
+                if _pulled_in(w):
+                    out.append(w)
+                    queue.append(w)
     return out
 
 
@@ -2080,9 +2142,10 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
     the queue keeping only transient (not-found) entries. Returns a counts dict."""
     global _private_src
     from_queue = units is None
-    items = units if units is not None else _read_queue()
+    items = units if units is not None else with_deps(_read_queue())
     counts = {"imported": 0, "exists": 0, "not-found": 0, "skipped": 0, "error": 0}
     keep = []
+    done, why_skipped = {}, {}
     for name in items:
         _private_src = False
         # anything one unit can throw stays that unit's problem: dnf file triggers
@@ -2099,6 +2162,7 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
         counts[status] += 1
         if status == "imported":
             out, body = detail
+            done[name] = body
             log("import  %s -> %s" % (name, out))
             for ln in body.splitlines():
                 if ln.startswith(WARN_PREFIX):
@@ -2112,6 +2176,7 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
             keep.append(name)
         elif status == "skipped":
             reason, stub, out = detail
+            why_skipped[os.path.basename(out)[:-len(".svc")]] = reason
             stub_path = out + ".skipped"
             log("skip    %s: %s (see %s)" % (name, reason, stub_path))
             if not dry_run:
@@ -2122,6 +2187,13 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
         else:
             log("ERROR   %s: %s" % (name, detail))
             keep.append(name)
+    # Queued, so it counted as known when dep= was written, then skipped: only
+    # the drain as a whole knows nothing will satisfy that dep.
+    for name, body in done.items():
+        for ln in body.splitlines():
+            if ln.startswith("dep=") and ln[4:] in why_skipped:
+                log("WARN    %s: needs %s.service, which was not imported, so it may fail: %s"
+                    % (name, ln[4:], why_skipped[ln[4:]]))
     if from_queue and not dry_run:
         os.makedirs(state_dir(), exist_ok=True)
         # Re-read so intents the shim appended while we processed survive, and
