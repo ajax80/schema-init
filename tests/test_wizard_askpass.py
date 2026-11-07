@@ -30,13 +30,13 @@ def act():
 QTimer.singleShot(200, act)
 s = importlib.util.spec_from_file_location("askpass", sys.argv[1])
 m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
-rc = m.main(["askpass", "[sudo] password for u: "])
+rc = m.main(["askpass", sys.argv[3]])
 print("ECHO_HIDDEN=%s LABEL=%s" % (seen.get("echo"), seen.get("label")), file=sys.stderr)
 sys.exit(rc)
 """
 
-def drive(action, env=None):
-    return subprocess.run([sys.executable, "-c", DRIVER, ASKPASS, action],
+def drive(action, env=None, prompt="[sudo] password for u: "):
+    return subprocess.run([sys.executable, "-c", DRIVER, ASKPASS, action, prompt],
                           capture_output=True, text=True, timeout=30, env=dict(os.environ, **(env or {})))
 
 r = drive("ok")
@@ -59,6 +59,11 @@ check("second attempt says the password was wrong", "wasn't right" in r.stderr a
 check("second attempt still shows sudo's prompt", "password for u" in r.stderr)
 check("second attempt prints only the password", r.stdout == "s3cret\n")
 check("the count file never holds the password", "s3cret" not in open(tries).read())
+# a different prompt is PAM's next question (a PIN, an OTP), not a retry
+r = drive("ok", {"SCHEMA_ASKPASS_TRIES": tries}, prompt="Enter PIN: ")
+check("PAM's next prompt after a right password: no complaint", "try again" not in r.stderr.lower() and "Enter PIN" in r.stderr)
+r = drive("ok", {"SCHEMA_ASKPASS_TRIES": tries}, prompt="Enter PIN: ")
+check("the same prompt again is a retry", "wasn't right" in r.stderr)
 os.remove(tries)
 r = drive("ok", {"SCHEMA_ASKPASS_TRIES": tries + ".gone/x"})
 check("unwritable count file doesn't stop the prompt", r.returncode == 0 and r.stdout == "s3cret\n")

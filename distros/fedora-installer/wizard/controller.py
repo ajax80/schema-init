@@ -110,13 +110,17 @@ class WizardController(QObject):
         self.changed.emit()
 
         def work():
+            outcome = "crashed"
             try:
                 outcome = action()
             except Exception as e:
                 print("schema-wizard: %r" % e, flush=True)
-                outcome = "crashed"
-            self._done.emit(outcome)
-        self._spawn(work)
+            finally:
+                self._done.emit(outcome)   # or busy stays set and the window never recovers
+        try:
+            self._spawn(work)
+        except RuntimeError:
+            self._finished("crashed")
 
     @Slot(str)
     def _finished(self, outcome):

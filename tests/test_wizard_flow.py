@@ -80,19 +80,19 @@ check("ROLLED_BACK finishes/tears down", c.advance(consent=True, recovery_ack=Tr
 
 c, be = fresh(None)
 class PwBackend:
-    def __init__(self, err): self.err = err
-    def deploy(self, opts=None): return type("R", (), {"returncode": 1, "stderr": self.err})()
-def outcome_for(err):
+    def __init__(self, auth): self.auth = auth
+    def deploy(self, opts=None): return type("R", (), {"returncode": 1, "auth": self.auth})()
+def outcome_for(auth):
     r = tempfile.mkdtemp(); os.makedirs(os.path.join(r, "var/lib"))
-    return core.WizardCore(backend=PwBackend(err), root=r).advance(consent=True, recovery_ack=True, selections={})
-wrong = outcome_for("Sorry, try again.\nsudo: 3 incorrect password attempts\n")
-cancel = outcome_for("sudo: no password was provided\nsudo: a password is required\n")
-other = outcome_for("Traceback: boom\n")
-check("three wrong passwords", wrong == "wrong_password")
-check("prompt cancelled", cancel == "password_cancelled")
-check("any other failure", other == "deploy_failed")
-check("each has its own words", len({core.error_for(wrong), core.error_for(cancel), core.error_for(other)}) == 3
-      and core.error_for(wrong) and core.error_for(cancel))
+    return core.WizardCore(backend=PwBackend(auth), root=r).advance(consent=True, recovery_ack=True, selections={})
+outcomes = {a: outcome_for(a) for a in ("wrong_password", "password_cancelled", "auth_failed", "")}
+check("auth outcomes pass through", all(outcomes[a] == a for a in ("wrong_password", "password_cancelled", "auth_failed")))
+check("a failure after authenticating is its own outcome", outcomes[""] == "deploy_stopped")
+for a in ("wrong_password", "password_cancelled", "auth_failed"):
+    check(a + ": says nothing changed", "nothing was changed" in core.error_for(a))
+check("deploy_stopped doesn't claim nothing changed", "nothing was changed" not in core.error_for("deploy_stopped"))
+check("deploy_stopped says where the details are", "setup.log" in core.error_for("deploy_stopped"))
+check("crashed names no button some screens don't have", "Continue" not in core.error_for("crashed"))
 
 check("no consent -> noop", c.advance(consent=False, recovery_ack=True, selections={}) == "noop")
 check("no consent -> nothing called", be.calls == [])
@@ -108,7 +108,7 @@ def failing(stg):
     if stg is not None: stage.write_stage(stg, root=root)
     return core.WizardCore(backend=FailBackend(), root=root)
 
-check("failed deploy -> deploy_failed", failing(None).advance(consent=True, recovery_ack=True, selections={}) == "deploy_failed")
+check("failed deploy -> deploy_stopped", failing(None).advance(consent=True, recovery_ack=True, selections={}) == "deploy_stopped")
 class PendingBackend(FakeBackend):
     def deploy(self, opts=None): return type("R", (), {"returncode": 3})()
 pr = tempfile.mkdtemp(); os.makedirs(os.path.join(pr, "var/lib"))

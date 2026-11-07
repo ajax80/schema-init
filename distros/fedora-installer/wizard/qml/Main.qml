@@ -31,7 +31,19 @@ ApplicationWindow {
         }
     }
 
-    onClosing: (close) => close.accepted = !wizard.busy
+    // Refused once, not always: a backend call has no timeout, and the window
+    // manager can't offer to force-quit a window that is still painting.
+    property bool warnedClose: false
+    onClosing: (close) => {
+        if (wizard.busy && !warnedClose) {
+            close.accepted = false
+            warnedClose = true
+        }
+    }
+    Connections {
+        target: wizard
+        function onChanged() { if (!wizard.busy) win.warnedClose = false }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -117,15 +129,19 @@ ApplicationWindow {
                         wrapMode: Text.WordWrap
                         text: wizard.recoveryText()
                     }
-                    CheckBox {
-                        id: ack
-                        objectName: "ackBox"
-                        text: "I've saved these instructions"
-                        enabled: !wizard.busy
-                        onToggled: wizard.setRecoveryAck(checked)
-                    }
                 }
             }
+        }
+
+        // Outside the scrolling page: Continue stays grey until this is ticked, so
+        // it must not be able to sit out of view.
+        CheckBox {
+            id: ack
+            objectName: "ackBox"
+            visible: wizard.screen === "welcome"
+            text: "I've saved these instructions"
+            enabled: !wizard.busy
+            onToggled: wizard.setRecoveryAck(checked)
         }
 
         RowLayout {
@@ -141,8 +157,17 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "Working on it. This can take a few minutes."
+                text: "Working on it. This can take a few minutes. If you were asked for a password, "
+                      + "that window may be behind this one."
             }
+        }
+
+        Label {
+            objectName: "closeHint"
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+            visible: wizard.busy && win.warnedClose
+            text: "Closing now could leave setup half-done. Close the window again to quit anyway."
         }
 
         Label {

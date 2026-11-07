@@ -80,7 +80,10 @@ settle()
 bottom = btn.mapToScene(QPointF(0, btn.height())).y()
 check("Continue inside the window with an error showing (%.0f <= %d)" % (bottom, win.height()), bottom <= win.height())
 ack = win.findChild(QQuickItem, "ackBox")
-check("recovery checkbox reachable: inside a scrolling area", ack is not None and win.findChild(QQuickItem, "pageScroll") is not None)
+check("recovery checkbox inside the window at that height",
+      ack.mapToScene(QPointF(0, ack.height())).y() <= win.height())
+scroll = win.findChild(QQuickItem, "pageScroll")
+check("recovery checkbox can't scroll out of view", not scroll.isAncestorOf(ack))
 
 # while working: buttons off, something moving, window can't be closed away
 class Hold:
@@ -100,8 +103,29 @@ check("Continue disabled while working", win4.findChild(QQuickItem, "primaryButt
 check("busy indicator running", win4.findChild(QQuickItem, "busyIndicator").property("running") is True)
 win4.close()
 settle()
-check("window stays open while working", win4.isVisible())
+check("first close while working: window stays", win4.isVisible())
+hint = win4.findChild(QQuickItem, "closeHint")
+check("first close says what closing now means", hint.property("visible") is True and "half-done" in hint.property("text"))
 loop = QEventLoop(); QTimer.singleShot(600, loop.quit); loop.exec()
 check("Continue back after", w4.busy is False)
+check("close hint gone when the work ends", hint.property("visible") is False)
+
+# a hung backend must not make the window impossible to close
+class Hang:
+    def deploy(self, opts=None):
+        time.sleep(30)
+root5 = tempfile.mkdtemp(); os.makedirs(os.path.join(root5, "var/lib"))
+w5 = cm.WizardController(core=co.WizardCore(backend=Hang(), root=root5))
+e5 = QQmlApplicationEngine()
+e5.rootContext().setContextProperty("wizard", w5)
+e5.load(QUrl.fromLocalFile(os.path.join(WIZ, "qml", "Main.qml")))
+win5 = e5.rootObjects()[0]
+w5.setRecoveryAck(True)
+w5.continueClicked()
+settle()
+win5.close(); settle()
+check("still open after one close", win5.isVisible())
+win5.close(); settle()
+check("second close quits anyway", not win5.isVisible())
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

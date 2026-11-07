@@ -111,4 +111,33 @@ co6.continueClicked()
 loop = QEventLoop(); QTimer.singleShot(300, loop.quit); loop.exec()
 check("an exception does not leave it busy forever", not co6.busy and co6.error != "")
 
+class ExitBackend:
+    def deploy(self, opts=None): raise SystemExit(3)
+
+root7 = tempfile.mkdtemp(); os.makedirs(os.path.join(root7, "var/lib"))
+co7 = ctrl.WizardController(core=core.WizardCore(backend=ExitBackend(), root=root7))
+co7.setRecoveryAck(True)
+co7.continueClicked()
+loop = QEventLoop(); QTimer.singleShot(300, loop.quit); loop.exec()
+check("SystemExit in the worker does not leave it busy", not co7.busy and co7.error != "")
+
+# stdout is a closed pipe at autostart: reporting the crash can raise too
+real_print = ctrl.print if hasattr(ctrl, "print") else None
+def bad_print(*a, **k): raise BrokenPipeError()
+ctrl.print = bad_print
+root8 = tempfile.mkdtemp(); os.makedirs(os.path.join(root8, "var/lib"))
+co8 = ctrl.WizardController(core=core.WizardCore(backend=BoomBackend(), root=root8))
+co8.setRecoveryAck(True)
+co8.continueClicked()
+loop = QEventLoop(); QTimer.singleShot(300, loop.quit); loop.exec()
+del ctrl.print
+check("a failing report does not leave it busy", not co8.busy and co8.error != "")
+
+def no_thread(work): raise RuntimeError("can't start new thread")
+root9 = tempfile.mkdtemp(); os.makedirs(os.path.join(root9, "var/lib"))
+co9 = ctrl.WizardController(core=core.WizardCore(backend=FakeBackend(), root=root9), spawn=no_thread)
+co9.setRecoveryAck(True)
+co9.continueClicked()
+check("no thread available: not busy, error shown", not co9.busy and co9.error != "")
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
