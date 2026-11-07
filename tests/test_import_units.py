@@ -1336,4 +1336,19 @@ for k, v in _saved_env.items():
     else:
         os.environ[k] = v
 
+# --- $RUNTIME_DIRECTORY: systemd sets it, and cockpit-certificate-ensure exits 1 without it ---
+def _rtenv(extra):
+    return si.unit_to_svc("r", si.parse_unit("[Service]\nExecStart=/bin/r\n" + extra))
+check("RUNTIME_DIRECTORY set to the directory", "env=RUNTIME_DIRECTORY=/run/r1\n" in _rtenv("RuntimeDirectory=r1\n"))
+check("several directories join with a colon",
+      "env=RUNTIME_DIRECTORY=/run/a:/run/b/c\n" in _rtenv("RuntimeDirectory=a b/c\n"))
+check("no RuntimeDirectory=, no variable", "RUNTIME_DIRECTORY" not in _rtenv(""))
+check("an emptied RuntimeDirectory=, no variable", "RUNTIME_DIRECTORY" not in _rtenv("RuntimeDirectory=x\nRuntimeDirectory=\n"))
+check("a dropped directory isn't listed", "env=RUNTIME_DIRECTORY=/run/ok\n" in _rtenv("RuntimeDirectory=../bad ok\n"))
+check("only dropped directories, no variable", "RUNTIME_DIRECTORY" not in _rtenv("RuntimeDirectory=../bad\n"))
+_e16 = "".join("Environment=V%d=1\n" % i for i in range(16))
+_r16 = _rtenv("RuntimeDirectory=r1\n" + _e16)
+check("16 variables already: the unit still imports", "env=V15=1\n" in _r16)
+check("16 variables already: says so", "RUNTIME_DIRECTORY" in _r16 and "env=RUNTIME_DIRECTORY" not in _r16)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

@@ -1115,13 +1115,13 @@ def _primary_group(user):
 
 # systemd creates RuntimeDirectory= dirs before ExecStartPre=, and schema-init
 # does not: a root install -d ahead of the unit's own exec_pre lines does
-# (Debian ssh.service's sshd -t needs /run/sshd). Returns (lines, notes, warns).
+# (Debian ssh.service's sshd -t needs /run/sshd). Returns (lines, notes, warns, paths).
 def runtime_dir_lines(svc, name):
     dirs, notes, warns = [], [], []
     for v in _get_all(svc, "RuntimeDirectory"):
         dirs = dirs + _list("RuntimeDirectory", v, warns) if v.strip() else []
     if not dirs:
-        return [], [], warns
+        return [], [], warns, []
     mode = _get_last(svc, "RuntimeDirectoryMode") or "0755"
     if not re.fullmatch(r"[0-7]{3,4}", mode):
         warns.append("RuntimeDirectoryMode=%s unrecognised, 0755 used" % mode)
@@ -1131,9 +1131,9 @@ def runtime_dir_lines(svc, name):
     user, own = _get_last(svc, "User"), ""
     if not _USER and user and user != "root":
         own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(_get_last(svc, "Group") or _primary_group(user)))
-    out = []
+    out, paths = [], []
     if not base:
-        return [], ["dropped RuntimeDirectory=%s (no XDG_RUNTIME_DIR)" % " ".join(dirs)], warns
+        return [], ["dropped RuntimeDirectory=%s (no XDG_RUNTIME_DIR)" % " ".join(dirs)], warns, []
     for d in dirs:
         try:
             x = _specifiers([d], name)[0].rstrip("/")
@@ -1148,7 +1148,8 @@ def runtime_dir_lines(svc, name):
             continue
         out.append("exec_pre=%s/usr/bin/install -d -m %s%s %s"
                    % (pfx, mode, own, _cmd_quote(base + "/" + x)))
-    return out, notes, warns
+        paths.append(base + "/" + x)
+    return out, notes, warns, paths
 
 
 def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
@@ -1234,7 +1235,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                 expanded.append((pre, pa))
         pres = expanded
 
-    rt_pres, rt_notes, rt_warns = runtime_dir_lines(svc, unit or name)
+    rt_pres, rt_notes, rt_warns, rt_paths = runtime_dir_lines(svc, unit or name)
     if len(rt_pres) + len(pres) > 8:
         raise Skip("%d RuntimeDirectory= + %d ExecStartPre= lines (limit 8 exec_pre)"
                    % (len(rt_pres), len(pres)))
@@ -1244,6 +1245,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     env_pairs = list({p.split("=", 1)[0]: p for p in env_pairs}.values())
     if len(env_pairs) > 16:
         raise Skip("Environment= sets %d variables (limit 16)" % len(env_pairs))
+    # systemd sets this for the daemon; a variable the unit sets itself wins
+    if rt_paths and not any(p.startswith("RUNTIME_DIRECTORY=") for p in env_pairs):
+        if len(env_pairs) < 16:
+            env_pairs.append("RUNTIME_DIRECTORY=" + ":".join(rt_paths))
+        else:
+            rt_warns.append("RUNTIME_DIRECTORY not set: Environment= already uses all 16 variables")
     for pre, pa in pres:
         if len(pa) > 32:
             raise Skip("ExecStartPre= has %d words (limit 32)" % len(pa))
