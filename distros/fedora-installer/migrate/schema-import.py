@@ -1120,6 +1120,7 @@ def runtime_dir_lines(svc, name):
     dirs, notes, warns = [], [], []
     for v in _get_all(svc, "RuntimeDirectory"):
         dirs = dirs + _list("RuntimeDirectory", v, warns) if v.strip() else []
+    dirs = list(dict.fromkeys(dirs))
     if not dirs:
         return [], [], warns, []
     mode = _get_last(svc, "RuntimeDirectoryMode") or "0755"
@@ -1218,6 +1219,13 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     expand = bool(env_files) and any("$" in a for a in argv[1:] + [w for _, pa in pres for w in pa])
     dropped_args = 0
     env_map = dict(p.split("=", 1) for p in env_pairs)
+    # systemd sets this for the daemon, sorted and merged; a value the unit sets
+    # wins. Before expansion, or ${RUNTIME_DIRECTORY} counts as unset and is dropped.
+    rt_pres, rt_notes, rt_warns, rt_paths = runtime_dir_lines(svc, unit or name)
+    rt_env = None
+    if rt_paths and "RUNTIME_DIRECTORY" not in env_map:
+        rt_env = ":".join(sorted(rt_paths))
+        env_map["RUNTIME_DIRECTORY"] = rt_env
     if env_files and "$" in argv[0]:
         exe, _ = _expand_argv(argv[:1], env_map)
         if not exe:
@@ -1235,7 +1243,6 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                 expanded.append((pre, pa))
         pres = expanded
 
-    rt_pres, rt_notes, rt_warns, rt_paths = runtime_dir_lines(svc, unit or name)
     if len(rt_pres) + len(pres) > 8:
         raise Skip("%d RuntimeDirectory= + %d ExecStartPre= lines (limit 8 exec_pre)"
                    % (len(rt_pres), len(pres)))
@@ -1245,12 +1252,13 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     env_pairs = list({p.split("=", 1)[0]: p for p in env_pairs}.values())
     if len(env_pairs) > 16:
         raise Skip("Environment= sets %d variables (limit 16)" % len(env_pairs))
-    # systemd sets this for the daemon; a variable the unit sets itself wins
-    if rt_paths and not any(p.startswith("RUNTIME_DIRECTORY=") for p in env_pairs):
-        if len(env_pairs) < 16:
-            env_pairs.append("RUNTIME_DIRECTORY=" + ":".join(rt_paths))
-        else:
+    if rt_env:
+        if len(env_pairs) >= 16:
             rt_warns.append("RUNTIME_DIRECTORY not set: Environment= already uses all 16 variables")
+        elif len("env=RUNTIME_DIRECTORY=" + rt_env) > 511:
+            rt_warns.append("RUNTIME_DIRECTORY not set: its value is longer than a line (limit 511)")
+        else:
+            env_pairs.append("RUNTIME_DIRECTORY=" + rt_env)
     for pre, pa in pres:
         if len(pa) > 32:
             raise Skip("ExecStartPre= has %d words (limit 32)" % len(pa))

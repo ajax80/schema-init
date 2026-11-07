@@ -898,5 +898,12 @@ check("cli_no_runtime", si.main(["--user"]) == 2)
 if saved is not None:
     os.environ["XDG_RUNTIME_DIR"] = saved
 
+t = Tree()
+_rb = si.unit_to_svc("r", si.parse_unit("[Service]\nExecStart=/bin/r --s=${RUNTIME_DIRECTORY}/x\nRuntimeDirectory=q\n"))
+_rt = t.run + "/q"
+check("runtime_directory_under_xdg", "env=RUNTIME_DIRECTORY=%s\n" % _rt in _rb)
+check("runtime_directory_expands", "args=--s=%s/x\n" % _rt in _rb)
+t.done()
+
 print("%d/%d passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)
