@@ -269,7 +269,14 @@ finally:
         sup.wait(15)
     except subprocess.TimeoutExpired:
         os.killpg(sup.pid, signal.SIGKILL)
-    subprocess.run(["pkill", "-KILL", "-f", sl])
+    # any sleeper a killed supervisor left behind: argv[0] is unique to this run
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                if f.read().split(b"\0")[0] == sl.encode():
+                    os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
     log.close()
     shutil.rmtree(T, ignore_errors=True)
 
