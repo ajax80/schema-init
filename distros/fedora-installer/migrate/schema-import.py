@@ -944,7 +944,8 @@ def dep_lines(name, sections, known):
     # a separate /var subvol is mounted. First, so the 8-dep cap never drops it.
     if (_get_last(unit, "DefaultDependencies").lower() not in ("no", "false", "0", "off")
             or {"local-fs.target", "remote-fs.target"} & set(tokens(unit, "After"))
-            or _get_all(unit, "RequiresMountsFor")):
+            or _get_all(unit, "RequiresMountsFor")
+            or any(_get_all(svc, k) for k in ("StateDirectory", "CacheDirectory", "LogsDirectory"))):
         cands.append("mount-fstab")
     part_of = {_UNIT_ALIAS.get(u.rsplit(".", 1)[0], u.rsplit(".", 1)[0])
                for u in tokens(unit, "PartOf") if u.endswith((".service", ".socket"))}
@@ -1113,43 +1114,87 @@ def _primary_group(user):
     return next((r[0] for r in rows("group") if len(r) > 2 and r[2] == gid), user)
 
 
-# systemd creates RuntimeDirectory= dirs before ExecStartPre=, and schema-init
-# does not: a root install -d ahead of the unit's own exec_pre lines does
-# (Debian ssh.service's sshd -t needs /run/sshd). Returns (lines, notes, warns, paths).
-def runtime_dir_lines(svc, name):
+# (directive, system base, user-mode base, variable). RuntimeDirectory= first: it is
+# the one a daemon cannot do without, so it is the last to lose an exec_pre slot.
+_EXEC_DIRS = (("RuntimeDirectory", "/run", lambda u: u["runtime"], "RUNTIME_DIRECTORY"),
+              ("StateDirectory", "/var/lib", lambda u: u["state"], "STATE_DIRECTORY"),
+              ("CacheDirectory", "/var/cache", lambda u: u["cache"], "CACHE_DIRECTORY"),
+              ("LogsDirectory", "/var/log", lambda u: os.path.join(u["state"], "log"), "LOGS_DIRECTORY"),
+              ("ConfigurationDirectory", "/etc", lambda u: u["config"], "CONFIGURATION_DIRECTORY"))
+_EXEC_DIR_LINE = 400
+_EXEC_DIR_WORDS = 24   # with install's own words, under the engine's 32 per exec_pre
+
+
+# systemd creates these dirs before ExecStartPre=, and schema-init does not: a root
+# install -d ahead of the unit's own exec_pre lines does (Debian ssh.service's sshd -t
+# needs /run/sshd). A family shares lines, so it can't use up the exec_pre limit. Not
+# done: systemd also chowns an existing directory's contents when the owner changes.
+# Returns (lines, notes, warns, paths).
+def exec_dir_lines(svc, name, key, sys_base, user_base):
     dirs, notes, warns = [], [], []
-    for v in _get_all(svc, "RuntimeDirectory"):
-        dirs = dirs + _list("RuntimeDirectory", v, warns) if v.strip() else []
+    for v in _get_all(svc, key):
+        dirs = dirs + _list(key, v, warns) if v.strip() else []
     dirs = list(dict.fromkeys(dirs))
     if not dirs:
         return [], [], warns, []
-    mode = _get_last(svc, "RuntimeDirectoryMode") or "0755"
+    mode = _get_last(svc, key + "Mode") or "0755"
     if not re.fullmatch(r"[0-7]{3,4}", mode):
-        warns.append("RuntimeDirectoryMode=%s unrecognised, 0755 used" % mode)
+        warns.append("%sMode=%s unrecognised, 0755 used" % (key, mode))
         mode = "0755"
-    # user mode: under $XDG_RUNTIME_DIR, and the runner is the user already
-    base, pfx = (_USER["runtime"], "") if _USER else ("/run", "+")
-    user, own = _get_last(svc, "User"), ""
+    # user mode: under the user's own dirs, and the runner is the user already
+    base, pfx = (user_base(_USER), "") if _USER else (sys_base, "+")
+    # Only RuntimeDirectory= was translated before: a unit whose other directory
+    # already exists must not stop starting because install failed.
+    if key != "RuntimeDirectory":
+        pfx += "-"
+    user, group, own = _get_last(svc, "User"), _get_last(svc, "Group"), ""
     if not _USER and user and user != "root":
-        own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(_get_last(svc, "Group") or _primary_group(user)))
-    out, paths = [], []
+        own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(group or _primary_group(user)))
+    elif not _USER and group:
+        own = " -g %s" % _cmd_quote(group)
     if not base:
-        return [], ["dropped RuntimeDirectory=%s (no XDG_RUNTIME_DIR)" % " ".join(dirs)], warns, []
+        return [], ["dropped %s=%s (no XDG_RUNTIME_DIR)" % (key, " ".join(dirs))], warns, []
+    paths, make = [], []
     for d in dirs:
         try:
             x = _specifiers([d], name)[0].rstrip("/")
         except Skip:
             x = None
         # dir:symlink (systemd 254) is not translated. Nested only without -o: a root
-        # install -d -o through a parent the user owns follows a symlink the user put there
+        # install -d -o through a parent the user owns follows a symlink the user put there.
+        # The path is still the daemon's to use: only creating it is the risk.
         parts = x.split("/") if x else []
-        if (not parts or ":" in x or any(c in ("", ".", "..") for c in parts)
-                or (own and len(parts) > 1)):
-            notes.append("dropped RuntimeDirectory=%s" % d)
+        if not parts or ":" in x or any(c in ("", ".", "..") for c in parts):
+            warns.append("dropped %s=%s: not created, and the daemon may need it" % (key, d))
             continue
-        out.append("exec_pre=%s/usr/bin/install -d -m %s%s %s"
-                   % (pfx, mode, own, _cmd_quote(base + "/" + x)))
-        paths.append(base + "/" + x)
+        p = base + "/" + x
+        if p in paths:
+            continue
+        paths.append(p)
+        if own and " -o " in own and len(parts) > 1:
+            warns.append("dropped %s=%s: not created, and the daemon may need it" % (key, d))
+        else:
+            make.append(p)
+    out, cur = [], []
+    start = "exec_pre=%s/usr/bin/install -d -m %s%s" % (pfx, mode, own)
+    # systemd leaves an existing config dir alone, unlike the others: install -o would
+    # hand a packaged root:adm 0750 one to the service user to rewrite.
+    if key == "ConfigurationDirectory":
+        for p in make:
+            if re.fullmatch(r"[A-Za-z0-9._/+@-]+", p) and re.fullmatch(r"[A-Za-z0-9._ +@-]*", own):
+                out.append('exec_pre=%s/bin/sh -c "test -e %s || exec /usr/bin/install -d -m %s%s %s"'
+                           % (pfx, p, mode, own, p))
+            else:
+                warns.append("dropped %s=%s: not created, its name can't go in the check" % (key, p))
+        return out, notes, warns, paths
+    for q in (_cmd_quote(p) for p in make):
+        if cur and (len(cur) >= _EXEC_DIR_WORDS
+                    or len(start) + sum(len(c) + 1 for c in cur) + len(q) + 1 > _EXEC_DIR_LINE):
+            out.append(" ".join([start] + cur))
+            cur = []
+        cur.append(q)
+    if cur:
+        out.append(" ".join([start] + cur))
     return out, notes, warns, paths
 
 
@@ -1219,13 +1264,23 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     expand = bool(env_files) and any("$" in a for a in argv[1:] + [w for _, pa in pres for w in pa])
     dropped_args = 0
     env_map = dict(p.split("=", 1) for p in env_pairs)
-    # systemd sets this for the daemon, sorted and merged; a value the unit sets
-    # wins. Before expansion, or ${RUNTIME_DIRECTORY} counts as unset and is dropped.
-    rt_pres, rt_notes, rt_warns, rt_paths = runtime_dir_lines(svc, unit or name)
-    rt_env = None
-    if rt_paths and "RUNTIME_DIRECTORY" not in env_map:
-        rt_env = ":".join(sorted(rt_paths))
-        env_map["RUNTIME_DIRECTORY"] = rt_env
+    # systemd sets these for the daemon, sorted and merged; a value the unit sets
+    # wins. Before expansion, or ${STATE_DIRECTORY} counts as unset and is dropped.
+    rt_pres, rt_notes, rt_warns, dir_env, later_dirs, config_rw = [], [], [], [], [], []
+    for key, sys_base, user_base, var in _EXEC_DIRS:
+        d_lines, d_notes, d_warns, d_paths = exec_dir_lines(svc, unit or name, key, sys_base, user_base)
+        if key == "RuntimeDirectory":
+            rt_pres = d_lines
+        elif d_lines:
+            later_dirs.append((key, d_lines))
+        rt_notes += d_notes
+        rt_warns += d_warns
+        if key == "ConfigurationDirectory":   # systemd keeps it writable under ProtectSystem=
+            config_rw = [("ReadWritePaths", p) for p in d_paths]
+        if d_paths and var not in env_map:
+            value = ":".join(sorted(d_paths))
+            dir_env.append((var, value))
+            env_map[var] = value
     if env_files and "$" in argv[0]:
         exe, _ = _expand_argv(argv[:1], env_map)
         if not exe:
@@ -1246,19 +1301,27 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if len(rt_pres) + len(pres) > 8:
         raise Skip("%d RuntimeDirectory= + %d ExecStartPre= lines (limit 8 exec_pre)"
                    % (len(rt_pres), len(pres)))
+    # Over the limit these warn: they imported before, and the dir may already exist.
+    for key, d_lines in later_dirs:
+        if len(rt_pres) + len(pres) + len(d_lines) > 8:
+            rt_warns.append("%s= not created: no room in the limit of 8 exec_pre lines" % key)
+        elif any(len(ln) > 511 for ln in d_lines):
+            rt_warns.append("%s= not created: its path is longer than a line (limit 511)" % key)
+        else:
+            rt_pres = rt_pres + d_lines
 
     if len(argv) > 63:
         raise Skip("ExecStart= has %d arguments (limit 62)" % (len(argv) - 1))
     env_pairs = list({p.split("=", 1)[0]: p for p in env_pairs}.values())
     if len(env_pairs) > 16:
         raise Skip("Environment= sets %d variables (limit 16)" % len(env_pairs))
-    if rt_env:
+    for var, value in dir_env:
         if len(env_pairs) >= 16:
-            rt_warns.append("RUNTIME_DIRECTORY not set: Environment= already uses all 16 variables")
-        elif len("env=RUNTIME_DIRECTORY=" + rt_env) > 511:
-            rt_warns.append("RUNTIME_DIRECTORY not set: its value is longer than a line (limit 511)")
+            rt_warns.append("%s not set: Environment= already uses all 16 variables" % var)
+        elif len("env=%s=%s" % (var, value)) > 511:
+            rt_warns.append("%s not set: its value is longer than a line (limit 511)" % var)
         else:
-            env_pairs.append("RUNTIME_DIRECTORY=" + rt_env)
+            env_pairs.append("%s=%s" % (var, value))
     for pre, pa in pres:
         if len(pa) > 32:
             raise Skip("ExecStartPre= has %d words (limit 32)" % len(pa))
@@ -1359,7 +1422,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
 
     lines.append("critical=0")
 
-    hard, warns = _hardening(svc)
+    hard, warns = _hardening(svc + config_rw)
     if "+" in pfx:
         # + is full privileges: systemd skips the sandbox too, not just User=.
         # The sandbox is service-wide here, so plain ExecStartPre lines that

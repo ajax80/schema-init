@@ -903,6 +903,12 @@ _rb = si.unit_to_svc("r", si.parse_unit("[Service]\nExecStart=/bin/r --s=${RUNTI
 _rt = t.run + "/q"
 check("runtime_directory_under_xdg", "env=RUNTIME_DIRECTORY=%s\n" % _rt in _rb)
 check("runtime_directory_expands", "args=--s=%s/x\n" % _rt in _rb)
+_rf = si.unit_to_svc("r", si.parse_unit("[Service]\nExecStart=/bin/r\nStateDirectory=us\nCacheDirectory=uc\nLogsDirectory=ul\nConfigurationDirectory=ue\n"))
+for _v, _k, _sub in (("STATE_DIRECTORY", "state", "us"), ("CACHE_DIRECTORY", "cache", "uc"),
+                     ("LOGS_DIRECTORY", "state", "log/ul"), ("CONFIGURATION_DIRECTORY", "config", "ue")):
+    _want = t.ctx[_k] + "/" + _sub
+    check("exec_dir_" + _v, "env=%s=%s\n" % (_v, _want) in _rf and _want in "".join(l for l in _rf.splitlines() if l.startswith("exec_pre=")))
+check("exec_dir_no_root_prefix", "exec_pre=+" not in _rf)
 t.done()
 
 print("%d/%d passed" % (sum(results), len(results)))
