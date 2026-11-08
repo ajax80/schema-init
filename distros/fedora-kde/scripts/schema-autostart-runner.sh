@@ -5,10 +5,19 @@
 # `systemd --user` to run that target, so the entries are orphaned. We run the
 # sweep ourselves. Launched from ~/.config/plasma-workspace/env/zz-schema-autostart.sh.
 
-LOG=/tmp/schema-autostart-runner.log
+# Not /tmp: a first-login failure is only noticed after reboots that wipe it.
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/schema-user/log"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/autostart-runner.log"
 echo "runner start $(date)" > "$LOG"
 
-for _ in $(seq 1 40); do pgrep -x plasmashell >/dev/null && break; sleep 0.5; done
+# Everything below needs plasmashell's environment. A fresh install's first
+# login took >20 s to bring it up; the old 20 s cap then launched every entry
+# with no display and the first-boot wizard never drew (#486).
+for _ in $(seq 1 600); do pgrep -x -u "$(id -u)" plasmashell >/dev/null && break; sleep 0.5; done
+pgrep -x -u "$(id -u)" plasmashell >/dev/null \
+    && echo "plasmashell up $(date)" >>"$LOG" \
+    || echo "plasmashell not up after 300s, launching without its env $(date)" >>"$LOG"
 sleep 2
 # The env hooks start us before kwin exists, so the compositor's variables
 # never reached us, and every entry launched without them: flatpak Kodi fell
