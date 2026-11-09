@@ -140,28 +140,34 @@ def main():
 
     # #493: opened again in the boot it was armed in, the restart never happened.
     # is-authoritative can't pass yet; judging now would roll back an untested flip.
-    for phase, auth, rb in (('armed', 'is-authoritative', 'rollback'),
-                            ('dbus_armed', 'dbus-is-authoritative', 'dbus-rollback')):
+    for phase, auth, rb, rs in (('armed', 'is-authoritative', 'rollback', 'root-state'),
+                                ('dbus_armed', 'dbus-is-authoritative', 'dbus-rollback', 'dbus-state')):
+        armed_out = {'root-state': 'armed', 'dbus-state': 'armed'}
         print(f"-- {phase}, same boot it was armed in, Restart now --")
-        calls, st = run(phase, yad=[0], rc={auth: 1}, out={'root-state': 'armed', 'dbus-state': 'armed'},
-                        boot='boot-a', armed_boot='boot-a')
+        calls, st = run(phase, yad=[0], rc={auth: 1}, out=armed_out, boot='boot-a', armed_boot='boot-a')
         check('no rollback, not judged', rb not in calls and auth not in calls, str(calls))
-        check('restarts', calls == ['reboot'], str(calls))
+        check('restarts', calls == [rs, 'reboot'], str(calls))
         check('state kept for the real next boot', st == phase, st)
         check('autostart kept', run.autostart_kept)
         print(f"-- {phase}, same boot, Not now --")
-        calls, st = run(phase, yad=[3], boot='boot-a', armed_boot='boot-a')
-        check('nothing run', calls == [], str(calls))
+        calls, st = run(phase, yad=[3], out=armed_out, boot='boot-a', armed_boot='boot-a')
+        check('nothing run', calls == [rs], str(calls))
         check('state kept', st == phase, st)
         print(f"-- {phase}, same boot, dialog killed by logout --")
-        calls, st = run(phase, yad=[143], boot='boot-a', armed_boot='boot-a')
-        check('nothing run', calls == [], str(calls))
+        calls, st = run(phase, yad=[143], out=armed_out, boot='boot-a', armed_boot='boot-a')
+        check('nothing run', calls == [rs], str(calls))
+        check('state and autostart kept', st == phase and run.autostart_kept, st)
+        print(f"-- {phase}, same boot, but the switch was already undone --")
+        calls, st = run(phase, yad=[0, 0], rc={auth: 1}, out={rs: 'skipped'}, boot='boot-a', armed_boot='boot-a')
+        check('no "one restart left", judged instead', auth in calls and 'reboot' not in calls, str(calls))
         print(f"-- {phase}, next boot: judged as before --")
-        calls, st = run(phase, yad=[0, 0, 0, 0], rc={auth: 1}, out={'root-state': 'armed', 'dbus-state': 'armed'},
-                        boot='boot-b', armed_boot='boot-a')
+        calls, st = run(phase, yad=[0, 0, 0, 0], rc={auth: 1}, out=armed_out, boot='boot-b', armed_boot='boot-a')
         check('rolled back as before', rb in calls, str(calls))
 
     print("-- arming records the boot it was armed in --")
+    calls, st = run('welcome', yad=[0, 0, 0, 0], out={'check': 'HARMFUL: 0\n'}, boot='boot-a')
+    check('udev arm writes armed_boot', 'arm' in calls and st == 'armed' and run.armed_boot == 'boot-a',
+          f"{calls} {st} {run.armed_boot}")
     calls, st = run('dbus_offer', yad=[0, 0, 0], boot='boot-a')
     check('armed_boot written', run.armed_boot == 'boot-a', str(run.armed_boot))
     calls, st = run('armed', yad=[0, 0, 0], boot='boot-c', armed_boot='boot-a')
@@ -171,9 +177,17 @@ def main():
     calls, st = run('dbus_offer', yad=[0, 0, 0, 0], rc={'reboot': 1})
     check('an error notice shown', run.yad_left == [] and calls[-1] == 'reboot', f"{calls} left={run.yad_left}")
     check('state stays armed', st == 'dbus_armed', st)
-    print("-- restart killed by shutdown's SIGTERM (143): no error --")
-    calls, st = run('dbus_offer', yad=[0, 0, 0, 0], rc={'reboot': 143})
-    check('no error notice', run.yad_left == ['0'], f"left={run.yad_left}")
+    for code in (143, 129):
+        print(f"-- restart killed by a shutdown signal (rc {code}): no error --")
+        calls, st = run('dbus_offer', yad=[0, 0, 0, 0], rc={'reboot': code})
+        check('no error notice', run.yad_left == ['0'], f"left={run.yad_left}")
+    print("-- rollback's retire-reboot fails: says so --")
+    calls, st = run('dbus_armed', yad=[0, 0], rc={'dbus-is-authoritative': 1, 'retire-reboot': 1},
+                    out={'dbus-state': 'armed'})
+    check('an error notice shown', calls[-1] == 'retire-reboot' and run.yad_left == [], f"{calls} left={run.yad_left}")
+    print("-- finished: armed_boot cleared --")
+    calls, st = run('dbus_armed', yad=[0], armed_boot='boot-a')
+    check('armed_boot removed', st == 'done' and run.armed_boot is None, str(run.armed_boot))
     print("-- same boot, Restart now fails: says so --")
     calls, st = run('armed', yad=[0, 0], rc={'reboot': 1}, boot='boot-a', armed_boot='boot-a')
     check('an error notice shown', run.yad_left == [], f"left={run.yad_left}")
