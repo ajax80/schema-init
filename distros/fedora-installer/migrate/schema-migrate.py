@@ -1069,10 +1069,17 @@ def dbus_awaiting_reboot(root="/"):
 # already rebooted can still read PENDING for a moment. The boot a stage started
 # waiting in tells the two apart; a deploy older than armed_boot never matches.
 def awaiting_reboot(root="/"):
+    if not _boot_id():
+        return False
     s = stage.read_stage(root)
     if s in (stage.R1_PENDING, stage.R2_PENDING):
         return stage.read_extra(root).get("armed_boot") == _boot_id()
     return dbus_awaiting_reboot(root)
+
+def rebooted_since_armed(root="/"):
+    armed = stage.read_extra(root).get("armed_boot")
+    return (stage.read_stage(root) in (stage.R1_PENDING, stage.R2_PENDING)
+            and bool(armed) and bool(_boot_id()) and armed != _boot_id())
 
 def reboot_if_waiting(root="/", flip=_default_flip):
     if not awaiting_reboot(root):
@@ -1429,7 +1436,10 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
             m.add_file(card)
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
-        stage.transition(stage.R1_PENDING, root=ROOT, extra={"adv": _adv(), "armed_boot": _boot_id()})
+        extra = {"adv": _adv()}
+        if ROOT == "/":     # an offline target's next boot isn't this one
+            extra["armed_boot"] = _boot_id()
+        stage.transition(stage.R1_PENDING, root=ROOT, extra=extra)
     return m
 
 

@@ -29,6 +29,7 @@ check("screen() reflects the written stage", c.screen() == "summary")
 # stage started waiting in: right after the reboot the stage still reads
 # PENDING until --finish runs, and a click then must not reboot again (#489).
 mig = core._migrate()
+_real_boot_id = mig._boot_id
 mig._boot_id = lambda: "boot-a"
 stage.write_stage(stage.R1_PENDING, root=root, extra={"armed_boot": "boot-a"})
 check("waiting_reboot offers Restart now in the armed boot",
@@ -46,9 +47,28 @@ class FakeBackend:
 mig._boot_id = lambda: "boot-a"
 be = FakeBackend(0); c.backend = be
 check("Restart now restarts", c.advance(True, False, {}) == "restarting" and be.calls == ["reboot"])
-be = FakeBackend(1); c.backend = be
+c = core.WizardCore(root=root, backend=FakeBackend(1))
 check("a refused restart says so", c.advance(True, False, {}) == "reboot_failed")
 check("reboot_failed has an error message", "menu" in core.error_for("reboot_failed"))
+
+# once it is restarting, nothing to click again while shutdown runs
+c = core.WizardCore(root=root, backend=FakeBackend(0))
+c.advance(True, False, {})
+check("restarting hides the button", c.primary_action("waiting_reboot") == "")
+check("restarting says so", "Restarting" in c.detail())
+
+# rebooted, but --finish hasn't run yet: not a second "please restart"
+c = core.WizardCore(root=root, backend=FakeBackend(0))
+mig._boot_id = lambda: "boot-b"
+check("rebooted before --finish -> finishing", c.screen() == "finishing")
+check("finishing offers no button", c.primary_action("finishing") == "")
+be = FakeBackend(0); c.backend = be
+check("finishing never restarts", c.advance(True, False, {}) == "noop" and be.calls == [])
+stage.write_stage(stage.R1_PENDING, root=root, extra={"armed_boot": None})
+check("a deploy older than armed_boot keeps waiting_reboot", c.screen() == "waiting_reboot")
+be = FakeBackend(0); c.backend = be
+check("no restart outside the armed boot", c.advance(True, False, {}) == "noop" and be.calls == [])
+mig._boot_id = _real_boot_id
 
 check("welcome offers Continue", c.primary_action("welcome") == "Continue")
 check("summary offers Continue", c.primary_action("summary") == "Continue")

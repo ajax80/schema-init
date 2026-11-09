@@ -189,4 +189,20 @@ m.restore_autostart = lambda root="/": True
 m.retry_flip(root=r, flip=_rec()[0])
 check("retry records the armed boot", m.stage.read_extra(r).get("armed_boot") == "boot-a")
 
+m = _load(); r = _root()
+m._boot_id = lambda: ""
+m.stage.write_stage(m.stage.R2_PENDING, root=r, extra={"armed_boot": ""})
+check("an unreadable boot id never awaits", not m.awaiting_reboot(root=r))
+check("an unreadable boot id is not 'rebooted'", not m.rebooted_since_armed(root=r))
+
+m = _load(); r = _root()
+m._boot_id = lambda: "boot-b"
+m.stage.write_stage(m.stage.R1_PENDING, root=r, extra={"armed_boot": "boot-a"})
+check("R1 armed in an earlier boot has rebooted", m.rebooted_since_armed(root=r))
+m.stage.write_stage(m.stage.R1_PENDING, root=r, extra={"armed_boot": "boot-b"})
+check("R1 armed this boot has not rebooted", not m.rebooted_since_armed(root=r))
+m = _load(); r = _root()
+m.stage.write_stage(m.stage.R1_PENDING, root=r)
+check("R1 with no armed boot is not known to have rebooted", not m.rebooted_since_armed(root=r))
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

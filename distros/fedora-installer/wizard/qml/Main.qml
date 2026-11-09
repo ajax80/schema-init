@@ -13,7 +13,7 @@ ApplicationWindow {
     Timer {
         interval: 2000; repeat: true
         // summary: the wizard autostarts at login, before the doctor's heal run writes its status
-        running: !wizard.busy && (wizard.screen === "waiting_reboot"
+        running: !wizard.busy && (wizard.screen === "waiting_reboot" || wizard.screen === "finishing"
                  || (wizard.screen === "summary" && wizard.statusItems.length === 0))
         onTriggered: wizard.refresh()
     }
@@ -22,6 +22,7 @@ ApplicationWindow {
         switch (wizard.screen) {
         case "welcome": return "Welcome — this will set up schema on your computer.";
         case "waiting_reboot": return "Please restart your computer to continue.";
+        case "finishing": return "Finishing the restart…";
         case "summary": return "First stage done. Here is what the doctor checked.";
         case "final": return "Schema is successfully installed.";
         case "rolled_back": return "Your computer put itself back safely. The switch was undone, and nothing is broken.";

@@ -167,6 +167,7 @@ class WizardCore:
         self.backend = backend
         self.root = root
         self._why = None
+        self._restarting = False
 
     def current_stage(self):
         return stage.read_stage(self.root)
@@ -181,11 +182,15 @@ class WizardCore:
             return "dbus_offer"
         if s == stage.R3_PENDING and mig.dbus_awaiting_reboot(self.root):
             return "waiting_reboot"
+        # rebooted, but --finish runs only after login: don't ask for another restart
+        if mig.rebooted_since_armed(self.root):
+            return "finishing"
         return self.screen_for(s)
 
     def primary_action(self, screen):
         if screen == "waiting_reboot":
-            return "Restart now" if _migrate().awaiting_reboot(self.root) else ""
+            ok = not self._restarting and _migrate().awaiting_reboot(self.root)
+            return "Restart now" if ok else ""
         return _ACTION.get(screen, "")
 
     def secondary_action(self, screen):
@@ -222,6 +227,8 @@ class WizardCore:
         return "retried" if _ok(self.backend.retry()) else "retry_failed"
 
     def detail(self):
+        if self._restarting:
+            return "Restarting…"
         if self.screen() != "rolled_back":
             return ""
         cur = self.current_stage()
@@ -237,7 +244,12 @@ class WizardCore:
         if not consent:
             return "noop"
         if self.screen() == "waiting_reboot":
-            return "restarting" if _ok(self.backend.reboot()) else "reboot_failed"
+            if self._restarting or not _migrate().awaiting_reboot(self.root):
+                return "noop"
+            if not _ok(self.backend.reboot()):
+                return "reboot_failed"
+            self._restarting = True
+            return "restarting"
         s = self.current_stage()
         if s == stage.INSTALLED:
             if not recovery_ack:
