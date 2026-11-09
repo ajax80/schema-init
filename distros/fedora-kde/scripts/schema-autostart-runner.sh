@@ -5,16 +5,37 @@
 # `systemd --user` to run that target, so the entries are orphaned. We run the
 # sweep ourselves. Launched from ~/.config/plasma-workspace/env/zz-schema-autostart.sh.
 
-LOG=/tmp/schema-autostart-runner.log
-echo "runner start $(date)" > "$LOG"
+# Not /tmp: a first-login failure is only noticed after reboots that wipe it.
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/schema-user/log"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/autostart-runner.log"
+# Appended, not truncated: the failing login is usually followed by good ones.
+[ -f "$LOG" ] && tail -n 400 "$LOG" > "$LOG.tmp" && mv -f "$LOG.tmp" "$LOG"
+echo "=== runner start $(date)" >> "$LOG"
 
-for _ in $(seq 1 40); do pgrep -x plasmashell >/dev/null && break; sleep 0.5; done
-sleep 2
 # The env hooks start us before kwin exists, so the compositor's variables
 # never reached us, and every entry launched without them: flatpak Kodi fell
 # back to GBM and never showed, mpv lost its KWin rules. plasmashell started
 # after kwin, so take them from it.
-_ps=$(pgrep -x -u "$(id -u)" plasmashell | head -1)
+# A fresh install's first login took >20 s to bring plasmashell up; giving up
+# then launched every entry with no display and the first-boot wizard never
+# drew (#486). Past 20 s, settle for kwin's socket so a plasmashell that died
+# at startup doesn't hold back the watchdog that respawns it.
+TICK=${SCHEMA_RUNNER_TICK:-0.5}
+_uid=$(id -u); _ps=""; _sock=""
+for i in $(seq 1 600); do
+    _ps=$(pgrep -x -u "$_uid" plasmashell | head -1)
+    [ -n "$_ps" ] && break
+    if [ "$i" -gt 40 ]; then
+        for s in "${XDG_RUNTIME_DIR:-/run/user/$_uid}"/wayland-[0-9]*; do
+            [ -S "$s" ] && { _sock=${s##*/}; break; }
+        done
+        [ -n "$_sock" ] && break
+    fi
+    sleep "$TICK"
+done
+echo "plasmashell=${_ps:-none} wayland-socket=${_sock:-none} after $i polls $(date)" >>"$LOG"
+sleep 2
 if [ -n "$_ps" ]; then
     while IFS= read -r -d '' _kv; do
         case "$_kv" in
@@ -22,7 +43,8 @@ if [ -n "$_ps" ]; then
         esac
     done < "/proc/$_ps/environ"
 fi
-unset _ps _kv
+[ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "$_sock" ] && export WAYLAND_DISPLAY="$_sock"
+unset _ps _kv _sock _uid
 
 # No Xwayland cookie step: Plasma 6 kwin starts Xwayland on demand with no
 # -auth and grants SI:localuser, so there is nothing to merge -- waiting for it
