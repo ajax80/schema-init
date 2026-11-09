@@ -50,6 +50,12 @@ check("Restart now restarts", c.advance(True, False, {}) == "restarting" and be.
 c = core.WizardCore(root=root, backend=FakeBackend(1))
 check("a refused restart says so", c.advance(True, False, {}) == "reboot_failed")
 check("reboot_failed has an error message", "menu" in core.error_for("reboot_failed"))
+# stock systemd: logind tears the sudo scope down before it returns the 0 (#492 VM run)
+c = core.WizardCore(root=root, backend=FakeBackend(-15))
+check("a restart killed by shutdown's SIGTERM is restarting",
+      c.advance(True, False, {}) == "restarting")
+c = core.WizardCore(root=root, backend=FakeBackend(-9))
+check("other signals still say it failed", c.advance(True, False, {}) == "reboot_failed")
 
 # once it is restarting, nothing to click again while shutdown runs
 c = core.WizardCore(root=root, backend=FakeBackend(0))

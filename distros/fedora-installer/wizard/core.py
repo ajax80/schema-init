@@ -1,4 +1,5 @@
 import os
+import signal
 import importlib.util as _ilu
 from importlib.machinery import SourceFileLoader
 
@@ -246,7 +247,10 @@ class WizardCore:
         if self.screen() == "waiting_reboot":
             if self._restarting or not _migrate().awaiting_reboot(self.root):
                 return "noop"
-            if not _ok(self.backend.reboot()):
+            # Under systemd, logind kills the sudo scope as the reboot starts,
+            # before the 0 comes back: SIGTERM here means it is restarting.
+            r = self.backend.reboot()
+            if not _ok(r) and getattr(r, "returncode", 0) != -signal.SIGTERM:
                 return "reboot_failed"
             self._restarting = True
             return "restarting"
