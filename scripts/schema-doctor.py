@@ -803,7 +803,11 @@ class PowerDevilRunning(Check):
     def detect(self):
         if active_uid() in (None, 0):
             return None
-        if _running("org_kde_powerdevil"):
+        tbl = _proc_table()
+        # The boot run fires when the session registers, before plasmashell
+        # and PowerDevil come up together; checking then flagged it on every
+        # boot (#490). The periodic run catches one that never starts.
+        if not _running("plasmashell", tbl) or _running("org_kde_powerdevil", tbl):
             return None
         return Finding(
             detail="PowerDevil is not running — its /etc/xdg/autostart entry carries "

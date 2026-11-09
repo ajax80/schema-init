@@ -29,6 +29,10 @@ def check(n, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {n}"
 
 c = sd.PowerDevilRunning()
 
+# The boot run fires once the logind session exists, seconds before
+# plasma-session-start brings up plasmashell and PowerDevil together (#490).
+check("clean before the desktop is up", c.detect() is None)
+
 mkproc(1000, "plasmashell")
 f = c.detect()
 check("detect flags powerdevil down", f is not None and not f.healable)
