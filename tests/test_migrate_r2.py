@@ -150,4 +150,43 @@ check("skip_dbus returns 0", m.skip_dbus(root=r) == 0)
 check("skip_dbus withdraws the offer", m.stage.read_stage(r) == m.stage.DONE and not m.dbus_offered(root=r))
 check("skip_dbus tears down", not os.path.exists(os.path.join(r, AUTOSTART)))
 
+# --reboot (#489): only from the boot a stage started waiting in. --finish runs
+# after login, so a freshly rebooted desktop still reads R1/R2_PENDING for a
+# moment; a Restart click then must not reboot it twice.
+m = _load(); r = _root()
+m._boot_id = lambda: "boot-a"
+m.stage.write_stage(m.stage.R1_HEAL, root=r)
+m.arm_flip(root=r, flip=_rec()[0])
+check("arm_flip records the armed boot", m.stage.read_extra(r).get("armed_boot") == "boot-a")
+check("R2 same boot awaits reboot", m.awaiting_reboot(root=r))
+flip, calls = _rec()
+check("reboot from the armed boot reboots", m.reboot_if_waiting(root=r, flip=flip) == 0 and calls == ["reboot"])
+m._boot_id = lambda: "boot-b"
+check("R2 after reboot not awaiting", not m.awaiting_reboot(root=r))
+flip, calls = _rec()
+check("reboot after reboot refused", m.reboot_if_waiting(root=r, flip=flip) != 0 and not calls)
+
+m = _load(); r = _root()
+m._boot_id = lambda: "boot-a"
+m.stage.write_stage(m.stage.R1_PENDING, root=r)
+check("R1 with no armed boot (older deploy) not awaiting", not m.awaiting_reboot(root=r))
+m.stage.write_stage(m.stage.R1_PENDING, root=r, extra={"armed_boot": "boot-a"})
+check("R1 same boot awaits reboot", m.awaiting_reboot(root=r))
+
+m = _load(); r = _root()
+m._boot_id = lambda: "boot-a"
+m.stage.write_stage(m.stage.DONE, root=r)
+m.arm_dbus(root=r, flip=_rec()[0])
+check("R3 same boot awaits reboot", m.awaiting_reboot(root=r))
+m.stage.write_stage(m.stage.DONE, root=r)
+flip, calls = _rec()
+check("reboot refused outside a waiting stage", m.reboot_if_waiting(root=r, flip=flip) != 0 and not calls)
+
+m = _load(); r = _root()
+m._boot_id = lambda: "boot-a"
+m.stage.write_stage(m.stage.ROLLED_BACK, root=r)
+m.restore_autostart = lambda root="/": True
+m.retry_flip(root=r, flip=_rec()[0])
+check("retry records the armed boot", m.stage.read_extra(r).get("armed_boot") == "boot-a")
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

@@ -22,6 +22,7 @@ class FakeBackend:
     def retry(self): self.calls.append(("retry",)); return self
     def dismiss(self): self.calls.append(("dismiss",)); return self
     def why(self): self.calls.append(("why",)); return getattr(self, "reason", "")
+    def reboot(self): self.calls.append(("reboot",)); return self
 
 def fresh(stg, extra=None):
     root = tempfile.mkdtemp(); os.makedirs(os.path.join(root, "var/lib"))
@@ -63,7 +64,8 @@ check("Skip does nothing off the offer screen", c.skip() == "noop" and be.calls 
 bid = open("/proc/sys/kernel/random/boot_id").read().strip()
 c, be = fresh(stage.R3_PENDING, extra={"dbus_armed_boot": bid})
 check("R3 same boot -> waiting_reboot", c.screen() == "waiting_reboot")
-check("R3 same boot never confirms", c.advance(consent=True, recovery_ack=True, selections={}) == "noop" and be.calls == [])
+check("R3 same boot restarts, never confirms",
+      c.advance(consent=True, recovery_ack=True, selections={}) == "restarting" and be.calls == [("reboot",)])
 
 c, be = fresh(stage.R3_PENDING, extra={"dbus_armed_boot": "an-earlier-boot"})
 check("R3 after reboot -> confirming", c.screen() == "confirming")

@@ -50,7 +50,7 @@ def rec(argv, *a, **k):
     class R: returncode = 0; stdout = ""
     return R()
 b = be.Backend(run=rec)
-for meth in ("arm_flip", "arm_dbus", "confirm_dbus", "skip_dbus", "retry", "dismiss", "why", "finish", "read_stage"):
+for meth in ("arm_flip", "arm_dbus", "confirm_dbus", "skip_dbus", "retry", "dismiss", "why", "finish", "read_stage", "reboot"):
     getattr(b, meth)()
     check("sudoers grants wizard " + meth, " ".join(seen[-1][1:]) in grants)
 check("sudoers grants nothing the wizard doesn't call",

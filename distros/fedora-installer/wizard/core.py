@@ -76,12 +76,11 @@ _SCREEN = {
 }
 
 # The primary button label per screen. "" means the screen has NO clickable
-# action: waiting_reboot is reboot-gated (the user restarts; advance() no-ops
-# there), so it must show no button — a dead Continue is what sent a user
-# rebooting into a stranded stage.
+# action. waiting_reboot's label is decided in primary_action: a dead Continue
+# there once sent a user rebooting into a stranded stage, so it only ever
+# offers a restart that really happens.
 _ACTION = {
     "welcome": "Continue",
-    "waiting_reboot": "",
     "summary": "Continue",
     "final": "Finish",
     "rolled_back": "Finish",
@@ -155,6 +154,7 @@ _ERROR = {
     "confirm_failed": "Couldn't check the message bus switch yet. Try Continue again.",
     "skip_failed": "Couldn't record that choice. Your computer is fine.",
     "retry_failed": "Couldn't set up another try, so nothing was changed. Your computer is fine.",
+    "reboot_failed": "Couldn't restart from here. Restart your computer from the menu to continue.",
 }
 
 
@@ -184,6 +184,8 @@ class WizardCore:
         return self.screen_for(s)
 
     def primary_action(self, screen):
+        if screen == "waiting_reboot":
+            return "Restart now" if _migrate().awaiting_reboot(self.root) else ""
         return _ACTION.get(screen, "")
 
     def secondary_action(self, screen):
@@ -234,6 +236,8 @@ class WizardCore:
     def advance(self, consent, recovery_ack, selections):
         if not consent:
             return "noop"
+        if self.screen() == "waiting_reboot":
+            return "restarting" if _ok(self.backend.reboot()) else "reboot_failed"
         s = self.current_stage()
         if s == stage.INSTALLED:
             if not recovery_ack:
