@@ -1052,7 +1052,7 @@ def arm_flip(root="/", flip=_default_flip):
         return 0
     if flip("arm").returncode != 0:
         return 1
-    stage.transition(stage.R2_PENDING, root=root)
+    stage.transition(stage.R2_PENDING, root=root, extra={"armed_boot": _boot_id()})
     return 0
 
 def _boot_id():
@@ -1064,6 +1064,27 @@ def _boot_id():
 def dbus_awaiting_reboot(root="/"):
     return (stage.read_stage(root) == stage.R3_PENDING
             and stage.read_extra(root).get("dbus_armed_boot") == _boot_id())
+
+# R1/R2 leave PENDING only when --finish runs after login, so a desktop that has
+# already rebooted can still read PENDING for a moment. The boot a stage started
+# waiting in tells the two apart; a deploy older than armed_boot never matches.
+def awaiting_reboot(root="/"):
+    if not _boot_id():
+        return False
+    s = stage.read_stage(root)
+    if s in (stage.R1_PENDING, stage.R2_PENDING):
+        return stage.read_extra(root).get("armed_boot") == _boot_id()
+    return dbus_awaiting_reboot(root)
+
+def rebooted_since_armed(root="/"):
+    armed = stage.read_extra(root).get("armed_boot")
+    return (stage.read_stage(root) in (stage.R1_PENDING, stage.R2_PENDING)
+            and bool(armed) and bool(_boot_id()) and armed != _boot_id())
+
+def reboot_if_waiting(root="/", flip=_default_flip):
+    if not awaiting_reboot(root):
+        return 1
+    return flip("reboot").returncode
 
 def udev_offered(root="/"):
     return "no-udev-flip" not in stage.read_extra(root).get("adv", [])
@@ -1181,7 +1202,7 @@ def retry_flip(root="/", flip=_default_flip):
     if cur == stage.ROLLED_BACK:
         if flip("arm").returncode != 0:
             return 1
-        stage.transition(stage.R2_PENDING, root=root)
+        stage.transition(stage.R2_PENDING, root=root, extra={"armed_boot": _boot_id()})
     elif cur == stage.R3_ROLLED_BACK:
         if flip("dbus-arm").returncode != 0:
             return 1
@@ -1415,7 +1436,10 @@ def do_deploy(run=subprocess.run, dry_run=False, prebuilt=False):
             m.add_file(card)
         m.set_boot_entry("/" + os.path.relpath(entry, ROOT))
         m.save()
-        stage.transition(stage.R1_PENDING, root=ROOT, extra={"adv": _adv()})
+        extra = {"adv": _adv()}
+        if ROOT == "/":     # an offline target's next boot isn't this one
+            extra["armed_boot"] = _boot_id()
+        stage.transition(stage.R1_PENDING, root=ROOT, extra=extra)
     return m
 
 
@@ -1491,6 +1515,8 @@ def main(argv, run=subprocess.run):
     ap.add_argument("--prebuilt", action="store_true",
                     help="consume RPM-installed binaries; never compile")
     ap.add_argument("--stage", action="store_true", help="print the current wizard stage")
+    ap.add_argument("--reboot", action="store_true",
+                    help="restart, only while a stage is waiting for one")
     ap.add_argument("--advanced-no-fallback-entry", action="store_true")
     ap.add_argument("--advanced-no-snapshot", action="store_true")
     ap.add_argument("--advanced-no-udev-flip", action="store_true")
@@ -1510,6 +1536,9 @@ def main(argv, run=subprocess.run):
 
     if args.arm_dbus:
         return arm_dbus(root=ROOT)
+
+    if args.reboot:
+        return reboot_if_waiting(root=ROOT)
 
     if args.confirm_dbus:
         print(confirm_dbus(root=ROOT))

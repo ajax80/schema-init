@@ -99,6 +99,9 @@ class Backend:
     def finish(self):
         return self._sudo(self.MIGRATE, "--finish")
 
+    def reboot(self):
+        return self._sudo(self.MIGRATE, "--reboot")
+
     def uninstall(self):
         return self._sudo_password(self.MIGRATE, "--uninstall")
 
