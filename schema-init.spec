@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.23
+Version:        0.4.24
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,21 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Mon Nov 09 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.24-1
+- Autostart runner waits up to 300 s for this user's plasmashell (falling back to
+  kwin's Wayland socket), so a slow first login no longer starts the wizard with
+  no display. Its log is kept in ~/.local/state/schema-user/log (#487)
+- schema-doctor: powerdevil-running stays clean until the desktop is up, so the
+  boot run no longer flags PowerDevil before plasmashell starts it (#491)
+- Wizard: "Restart now" on the waiting-for-restart screen. schema-migrate --reboot
+  restarts only while a stage waits on a restart armed in this boot; a restart
+  killed by the shutdown's SIGTERM is not reported as a failure (#492)
+- ISO first-boot wizard: a flip opened again in the boot it was armed in shows
+  "One restart left" instead of rolling back an untried switch (#494)
+- Raspberry Pi: reboot, poweroff, halt and shutdown work under schema-init. The
+  deb diverts systemd-sysv's links to an init-aware wrapper that falls back to
+  systemd's originals; delayed or cancelled shutdowns are refused (#495)
+
 * Sat Nov 07 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.23-1
 - Security: a client on the control socket can no longer hold PID 1. Replies go
   out in one non-blocking send, a client gets 250 ms to send its line, and an
