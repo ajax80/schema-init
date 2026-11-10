@@ -11,7 +11,7 @@ esac
 systemd() { exec "${SCHEMA_PI_SYSTEMD:-/usr/libexec/schema-init/systemd}/$name" "$@"; }
 [ "$(cat "${SCHEMA_PROC1:-/proc/1/comm}" 2>/dev/null)" = schema-init ] || systemd "$@"
 
-refuse() { echo "$name $1: not supported under schema-init (only now: 'sudo $name' or 'shutdown -r now')" >&2; exit 1; }
+refuse() { echo "$name $1: not supported under schema-init (use 'sudo reboot', 'sudo poweroff' or 'sudo shutdown -r now')" >&2; exit 1; }
 
 # schema-ctl has no halt: halt powers off, as the Fedora shim does
 action=poweroff
