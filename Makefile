@@ -278,6 +278,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_pi_kit.sh
 	sh tests/test_schema_pi.sh
 	sh tests/test_deb_trigger.sh
+	sh tests/test_pi_halt.sh
 	sh tests/test_deb_version.sh
 	sh tests/test_devuan_boot.sh
 	sh tests/test_autostart_runner.sh

@@ -111,6 +111,10 @@ State is in `/var/lib/schema-init/pi-boot` (`attempts=`, `last_target=`). Every 
 
 The upgrade also runs `schema-pi refresh` when the kit is enabled. Each kit `.svc` (`pi-*`, `udev`, `udev-trigger`, `dbus`, `journal-sink`) that is still byte-identical to what `schema-pi` last installed is replaced with the new shipped version, and a missing one is reinstalled. One you edited is kept, with a line naming the shipped copy in `/usr/share/schema-init/`. The record is `/var/lib/schema-init/kit.sums`. Refreshed files take effect at the next boot.
 
+## Shutdown
+
+`sudo reboot`, `poweroff`, `halt` and `shutdown` work under schema-init. On Raspberry Pi OS these come from systemd-sysv as links to `systemctl`, which cannot reach a systemd that is not running. Installing the package moves them aside with `dpkg-divert` (to `reboot.systemd` and so on) and puts a small wrapper in their place. Under schema-init the wrapper calls `schema-ctl reboot` or `schema-ctl poweroff` (`halt` powers off; `shutdown -r now` reboots). `-f` still goes to systemd's own, which reboots straight away without asking PID 1: the way out if PID 1 is stuck. Under systemd, including a fallback boot, systemd's own runs with the same arguments. `shutdown` needs `now`: with no time systemd would wait a minute, and a delay (`+5`, `10:00`), `-k` or a wall message are refused under schema-init rather than shutting down at once. `shutdown -c` succeeds and does nothing, since nothing is ever pending. `apt remove schema-init` gives systemd-sysv its files back.
+
 ## Status
 
 ```sh

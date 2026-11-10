@@ -1,6 +1,20 @@
 #!/bin/sh
 set -e
 
+# give systemd-sysv its reboot/poweroff/halt/shutdown back (postinst divert_halt, #488)
+restore_halt() {
+    command -v dpkg-divert > /dev/null 2>&1 || return 0
+    for f in reboot poweroff halt shutdown; do
+        for d in "${SCHEMA_SBIN:-/usr/sbin}" "${SCHEMA_ROOTSBIN:-/sbin}"; do
+            [ "$(dpkg-divert --listpackage "$d/$f" 2>/dev/null)" = schema-init ] || continue
+            rm -f "$d/$f"
+            # a failed remove keeps the wrapper rather than leaving no $f at all
+            dpkg-divert --package schema-init --rename --remove "$d/$f" > /dev/null ||
+                ln -sfn /usr/libexec/schema-init/schema-pi-halt "$d/$f" || :
+        done
+    done
+}
+
 case "$1" in
 remove)
     # init= would point at a deleted wrapper and the next boot would panic; never fail the removal over it
@@ -9,6 +23,12 @@ remove)
     if schema-pi status 2>/dev/null | grep -qx 'enabled: yes'; then
         schema-pi disable || true
     fi
+    restore_halt
+    ;;
+upgrade|deconfigure)
+    # the new version's postinst diverts again; an older one without the wrapper
+    # must not inherit links to a file it deletes
+    restore_halt
     ;;
 esac
 
