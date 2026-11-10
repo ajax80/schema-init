@@ -27,6 +27,9 @@ STATE="$STATE_DIR/firstboot.state"       # the wizard's own GUI-phase state (use
 DESK_ICON="$HOME/Desktop/schema-udev-flip.desktop"
 USER_AUTOSTART="$HOME/.config/autostart/schema-firstboot.desktop"
 REPORT_USER="$HOME/schema-flip-report.txt"
+# The boot a flip was armed in: until it changes, the restart hasn't happened (#493).
+ARMED_BOOT="$STATE_DIR/firstboot.armed_boot"
+BOOT_ID=$(cat "${SCHEMA_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" 2>/dev/null)
 HELPER=/usr/libexec/schema-init/schema-flip-apply
 for h in /usr/libexec/schema-init/schema-flip-apply /usr/local/lib/schema/schema-flip-apply; do
     [ -x "$h" ] && sudo -n -l "$h" root-state >/dev/null 2>&1 && { HELPER=$h; break; }
@@ -63,8 +66,42 @@ H() { sudo -n "$HELPER" "$@"; }
 # remove the on-demand launcher (user-owned) and the system autostart (root).
 remove_icon()     { rm -f "$DESK_ICON" 2>/dev/null || true; }
 stop_autostart()  { H resolve 2>/dev/null || true; rm -f "$USER_AUTOSTART"; }
+# $1 = the rc of H reboot / H retire-reboot (kept literal at the call sites:
+# test_ks_flip_sudoers matches the grant to them). rc >= 128: the shutdown's own
+# signal reached sudo before the 0 came back (#492), so it is restarting.
+restarted() {
+    [ "$1" -eq 0 ] || [ "$1" -ge 128 ] && return 0
+    info dialog-error \
+"<b>Couldn't restart from here.</b>\n\nRestart your computer from the menu to finish." "OK"
+}
+
+same_boot() { [ -n "$BOOT_ID" ] && [ "$(cat "$ARMED_BOOT" 2>/dev/null)" = "$BOOT_ID" ]; }
+
+arm_and_restart() {
+    printf '%s\n' "$BOOT_ID" > "$ARMED_BOOT"
+    echo "$1" > "$STATE"
+    info dialog-information \
+"<b>Ready. Restarting to finish.</b>\n\nWhen your computer comes back it'll confirm everything looks good. \
+If it doesn't, it puts itself back the way it is now — you don't have to do anything." "Restart now"
+    H reboot; restarted $?
+}
+
+# Opened again before the restart: is-authoritative can't pass yet, so judging
+# now would roll back a switch that was never tried. Offer the restart instead.
+# $1 = the root state; already resolved means the switch is off, so fall through.
+offer_restart() {
+    same_boot && [ "$1" = armed ] || return 0
+    ask --title="$TITLE" --window-icon="$ICON" --width=520 --borders=18 --image=system-reboot \
+        --text="<b>One restart left.</b>\n\nThe switch is ready and takes effect when your computer restarts. \
+Nothing has changed yet." \
+        --button="Not now":3 --button="Restart now":0
+    [ $? -eq 0 ] || exit 0
+    H reboot; restarted $?
+    exit 0
+}
+
 # the end: the sudo grant goes with it, so a reboot still due needs retire-reboot instead.
-forget_user_side() { rm -f "$USER_AUTOSTART"; remove_icon; }
+forget_user_side() { rm -f "$USER_AUTOSTART" "$ARMED_BOOT"; remove_icon; }
 finish_clean()    { H retire 2>/dev/null || true; forget_user_side; }
 
 # copy the root-written report to the user's home so they can open it without sudo.
@@ -150,19 +187,16 @@ it confirms everything looks good, and if it doesn't it <b>puts itself back auto
         echo welcome > "$STATE"; stop_autostart; exit 0
     fi
 
-    echo armed > "$STATE"
-    info dialog-information \
-"<b>Ready. Restarting to finish.</b>\n\nWhen your computer comes back it'll confirm everything looks good. \
-If it doesn't, it puts itself back the way it is now — you don't have to do anything." "Restart now"
-    H reboot
+    arm_and_restart armed
     ;;
 
 armed)
+    rstate=$(H root-state 2>/dev/null)
+    offer_restart "$rstate"
     # booting AFTER the flip was armed. Three outcomes:
     #   1. schema-udev is authoritative        -> success, confirm.
     #   2. the headless seatbelt already healed -> explain WHY, no extra reboot.
     #   3. armed but neither                    -> undo cleanly ourselves.
-    rstate=$(H root-state 2>/dev/null)
     if H is-authoritative; then
         H confirm || true            # clears the root state so the seatbelt stops
         pull_report
@@ -192,7 +226,7 @@ details are saved to:\n<tt>${REPORT_USER}</tt>" \
         info dialog-warning \
 "<b>Putting it back the way it was.</b>\n\nThe optional switch didn't take on this hardware (${reason}), so we're undoing it. \
 Everything will work normally — one more restart finishes tidying up.\n\n(Details saved to <tt>${REPORT_USER}</tt>.)" "Restart"
-        H retire-reboot
+        H retire-reboot; restarted $?
     fi
     ;;
 
@@ -226,15 +260,12 @@ it confirms everything looks good, and if it doesn't it <b>puts itself back auto
         stop_autostart; exit 0
     fi
 
-    echo dbus_armed > "$STATE"
-    info dialog-information \
-"<b>Ready. Restarting to finish.</b>\n\nWhen your computer comes back it'll confirm everything looks good. \
-If it doesn't, it puts itself back the way it is now — you don't have to do anything." "Restart now"
-    H reboot
+    arm_and_restart dbus_armed
     ;;
 
 dbus_armed)
     rstate=$(H dbus-state 2>/dev/null)
+    offer_restart "$rstate"
     if H dbus-is-authoritative; then
         H dbus-confirm || true
         pull_report
@@ -254,7 +285,7 @@ back the way it was. <b>Everything works normally and there's nothing you need t
         info dialog-warning \
 "<b>Putting it back the way it was.</b>\n\nThe optional message bus switch didn't take on this hardware \
 (${reason}), so we're undoing it. One more restart finishes tidying up." "Restart"
-        H retire-reboot
+        H retire-reboot; restarted $?
     fi
     ;;
 
