@@ -4,6 +4,10 @@
 # diverts them to <name>.systemd and links this in their place. Under systemd
 # (also the Pi's fallback boot) systemd's own runs, same name and arguments.
 name=$(basename "$0")
+case "$name" in
+    reboot|poweroff|halt|shutdown) ;;
+    *) echo "schema-pi-halt: run as reboot, poweroff, halt or shutdown" >&2; exit 2 ;;
+esac
 systemd() { exec "${SCHEMA_PI_SYSTEMD:-/usr/libexec/schema-init/systemd}/$name" "$@"; }
 [ "$(cat "${SCHEMA_PROC1:-/proc/1/comm}" 2>/dev/null)" = schema-init ] || systemd "$@"
 
@@ -15,11 +19,14 @@ action=poweroff
 seen_time=
 for a in "$@"; do
     case "$a" in
-        --help|-w|--wtmp-only) systemd "$@" ;;
-        -c|-k) refuse "$a" ;;
+        # -f: reboot(2) without asking PID 1, the way out when PID 1 is stuck
+        --help|-w|--wtmp-only|-f|--force) systemd "$@" ;;
+        # nothing is ever pending under schema-init, so there's nothing to cancel
+        -c) exit 0 ;;
+        -k) refuse "$a" ;;
         -r|--reboot) action=reboot ;;
         -p|-P|--poweroff|-h|-H|--halt) action=poweroff ;;
-        -f|--force|-n|--no-wall|-d|--no-wtmp|-i) ;;
+        -n|--no-wall|-d|--no-wtmp|-i) ;;
         now|+0)
             [ "$name" = shutdown ] && [ -z "$seen_time" ] || refuse "$a"
             seen_time=1 ;;
@@ -27,4 +34,6 @@ for a in "$@"; do
         *) refuse "$a" ;;
     esac
 done
+# shutdown with no time means +1 minute; now is only what was asked when it says so
+[ "$name" = shutdown ] && [ -z "$seen_time" ] && refuse "without a time (systemd's default is +1 minute)"
 exec schema-ctl "$action"

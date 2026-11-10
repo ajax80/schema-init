@@ -1,27 +1,44 @@
 #!/bin/sh
 set -e
 
+W=/usr/libexec/schema-init/schema-pi-halt
+# systemd-sysv's reboot/poweroff/halt/shutdown can't reach a systemd that isn't
+# PID 1 (#488): move them aside and link the init-aware wrapper in their place;
+# it still runs them under systemd. The path is whichever one dpkg owns (trixie
+# /usr/sbin, bookworm /sbin). Never fails the install, never leaves a name missing.
+divert_halt() {
+    command -v dpkg-query > /dev/null 2>&1 || return 0
+    for f in reboot poweroff halt shutdown; do
+        for d in "${SCHEMA_SBIN:-/usr/sbin}" "${SCHEMA_ROOTSBIN:-/sbin}"; do
+            if [ "$(dpkg-divert --listpackage "$d/$f" 2>/dev/null)" = schema-init ]; then
+                [ -L "$d/$f" ] || ln -sfn "$W" "$d/$f" || :
+                continue 2
+            fi
+        done
+        for d in "${SCHEMA_SBIN:-/usr/sbin}" "${SCHEMA_ROOTSBIN:-/sbin}"; do
+            dpkg-query -S "$d/$f" 2>/dev/null | grep -qv '^schema-init:' || continue
+            if dpkg-divert --package schema-init --rename --divert "$d/$f.systemd" --add "$d/$f" > /dev/null; then
+                ln -sfn "$W" "$d/$f" || dpkg-divert --package schema-init --rename --remove "$d/$f" > /dev/null || :
+            fi
+            break
+        done
+    done
+}
+
 case "$1" in
 configure)
     dpkg-trigger --no-await schema-init-reexec || :
-    # systemd-sysv's reboot/poweroff/halt/shutdown can't reach a systemd that
-    # isn't PID 1 (#488): move them aside, the init-aware wrapper takes their
-    # place and still runs them under systemd. Never fails the install.
-    sbin=${SCHEMA_SBIN:-/usr/sbin}
-    if command -v dpkg-query > /dev/null 2>&1; then
-        for f in reboot poweroff halt shutdown; do
-            [ "$(readlink "$sbin/$f" 2>/dev/null)" = /usr/libexec/schema-init/schema-pi-halt ] && continue
-            dpkg-query -S "$sbin/$f" 2>/dev/null | grep -qv '^schema-init:' || continue
-            dpkg-divert --package schema-init --rename --divert "$sbin/$f.systemd" --add "$sbin/$f" > /dev/null &&
-                ln -sfn /usr/libexec/schema-init/schema-pi-halt "$sbin/$f" || :
-        done
-    fi
+    divert_halt
     if [ -z "$2" ]; then
         echo "schema-init: installed, PID 1 unchanged. On a Raspberry Pi run 'schema-pi enable' to boot with it."
     elif command -v schema-pi > /dev/null 2>&1; then
         # kit .svc changes reach an enabled Pi; edited ones are kept, and nothing here fails the upgrade
         schema-pi refresh || :
     fi
+    ;;
+abort-remove|abort-upgrade|abort-deconfigure)
+    # the prerm gave the names back before the step that failed
+    divert_halt
     ;;
 triggered)
     # PID 1 swaps itself onto the upgraded binary in place; a refusal leaves

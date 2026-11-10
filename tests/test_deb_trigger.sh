@@ -15,13 +15,13 @@ chmod +x "$T/bin/schema-ctl" "$T/bin/dpkg-trigger"
 
 run() {
     rm -f "$T/ctl.log" "$T/dpkg-trigger.log"
-    PATH=$T/bin:$PATH SCHEMA_PROC1=$T/comm SCHEMA_PROC1_ROOT=/ SCHEMA_CTL_SOCK=${SOCK:-$T/sock} SCHEMA_SBIN=$T/sbin \
+    PATH=$T/bin:$PATH SCHEMA_PROC1=$T/comm SCHEMA_PROC1_ROOT=/ SCHEMA_CTL_SOCK=${SOCK:-$T/sock} SCHEMA_SBIN=$T/sbin SCHEMA_ROOTSBIN=$T/sbin \
         sh "$POSTINST" "$@" > "$T/out" 2>&1
 }
 # prerm: removing the package must not leave cmdline.txt pointing at a deleted init
 prerm() {
     rm -f "$T/pi.log"
-    PATH=$T/bin:$PATH SCHEMA_SBIN=$T/sbin SCHEMA_PI_MOUNT_FIRMWARE=$T/bin/mount-fw sh "$PRERM" "$@" > "$T/out" 2>&1
+    PATH=$T/bin:$PATH SCHEMA_SBIN=$T/sbin SCHEMA_ROOTSBIN=$T/sbin SCHEMA_PI_MOUNT_FIRMWARE=$T/bin/mount-fw sh "$PRERM" "$@" > "$T/out" 2>&1
 }
 printf '#!/bin/sh\necho mount >> "%s/pi.log"\n' "$T" > "$T/bin/mount-fw"
 chmod +x "$T/bin/mount-fw"
@@ -42,7 +42,7 @@ pi_shim yes 1
 prerm remove || fail "prerm remove must not fail when disable does"
 # an empty PATH, not just no shim: the host's real schema-pi must never run here
 mkdir "$T/empty"
-PATH=$T/empty SCHEMA_SBIN=$T/sbin /bin/sh "$PRERM" remove > "$T/out" 2>&1 || fail "prerm remove without schema-pi"
+PATH=$T/empty SCHEMA_SBIN=$T/sbin SCHEMA_ROOTSBIN=$T/sbin /bin/sh "$PRERM" remove > "$T/out" 2>&1 || fail "prerm remove without schema-pi"
 echo ok prerm
 
 # The postinst checks -S, which needs a real unix socket.
