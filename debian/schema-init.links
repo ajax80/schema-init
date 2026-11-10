@@ -1,1 +1,5 @@
 usr/libexec/schema-init/schema-import usr/bin/schema-import
+usr/sbin/reboot.systemd usr/libexec/schema-init/systemd/reboot
+usr/sbin/poweroff.systemd usr/libexec/schema-init/systemd/poweroff
+usr/sbin/halt.systemd usr/libexec/schema-init/systemd/halt
+usr/sbin/shutdown.systemd usr/libexec/schema-init/systemd/shutdown

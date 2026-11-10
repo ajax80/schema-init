@@ -9,6 +9,13 @@ remove)
     if schema-pi status 2>/dev/null | grep -qx 'enabled: yes'; then
         schema-pi disable || true
     fi
+    # give systemd-sysv its reboot/poweroff/halt/shutdown back (postinst, #488)
+    sbin=${SCHEMA_SBIN:-/usr/sbin}
+    for f in reboot poweroff halt shutdown; do
+        [ "$(readlink "$sbin/$f" 2>/dev/null)" = /usr/libexec/schema-init/schema-pi-halt ] || continue
+        rm -f "$sbin/$f"
+        dpkg-divert --package schema-init --rename --remove "$sbin/$f" > /dev/null || true
+    done
     ;;
 esac
 

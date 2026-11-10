@@ -4,6 +4,18 @@ set -e
 case "$1" in
 configure)
     dpkg-trigger --no-await schema-init-reexec || :
+    # systemd-sysv's reboot/poweroff/halt/shutdown can't reach a systemd that
+    # isn't PID 1 (#488): move them aside, the init-aware wrapper takes their
+    # place and still runs them under systemd. Never fails the install.
+    sbin=${SCHEMA_SBIN:-/usr/sbin}
+    if command -v dpkg-query > /dev/null 2>&1; then
+        for f in reboot poweroff halt shutdown; do
+            [ "$(readlink "$sbin/$f" 2>/dev/null)" = /usr/libexec/schema-init/schema-pi-halt ] && continue
+            dpkg-query -S "$sbin/$f" 2>/dev/null | grep -qv '^schema-init:' || continue
+            dpkg-divert --package schema-init --rename --divert "$sbin/$f.systemd" --add "$sbin/$f" > /dev/null &&
+                ln -sfn /usr/libexec/schema-init/schema-pi-halt "$sbin/$f" || :
+        done
+    fi
     if [ -z "$2" ]; then
         echo "schema-init: installed, PID 1 unchanged. On a Raspberry Pi run 'schema-pi enable' to boot with it."
     elif command -v schema-pi > /dev/null 2>&1; then

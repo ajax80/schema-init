@@ -1,0 +1,30 @@
+#!/bin/sh
+# /usr/sbin/{reboot,poweroff,halt,shutdown} on a Pi (#488). systemd-sysv's are
+# links to systemctl, which can't reach a systemd that isn't running; the deb
+# diverts them to <name>.systemd and links this in their place. Under systemd
+# (also the Pi's fallback boot) systemd's own runs, same name and arguments.
+name=$(basename "$0")
+systemd() { exec "${SCHEMA_PI_SYSTEMD:-/usr/libexec/schema-init/systemd}/$name" "$@"; }
+[ "$(cat "${SCHEMA_PROC1:-/proc/1/comm}" 2>/dev/null)" = schema-init ] || systemd "$@"
+
+refuse() { echo "$name $1: not supported under schema-init (only now: 'sudo $name' or 'shutdown -r now')" >&2; exit 1; }
+
+# schema-ctl has no halt: halt powers off, as the Fedora shim does
+action=poweroff
+[ "$name" = reboot ] && action=reboot
+seen_time=
+for a in "$@"; do
+    case "$a" in
+        --help|-w|--wtmp-only) systemd "$@" ;;
+        -c|-k) refuse "$a" ;;
+        -r|--reboot) action=reboot ;;
+        -p|-P|--poweroff|-h|-H|--halt) action=poweroff ;;
+        -f|--force|-n|--no-wall|-d|--no-wtmp|-i) ;;
+        now|+0)
+            [ "$name" = shutdown ] && [ -z "$seen_time" ] || refuse "$a"
+            seen_time=1 ;;
+        # a delay or a wall message: doing it now would not be what was asked
+        *) refuse "$a" ;;
+    esac
+done
+exec schema-ctl "$action"
