@@ -826,7 +826,7 @@ class SessionAgents(Check):
     grade = DEFERRED
 
     AGENTS = [
-        (("kglobalacceld", "kwin_wayland"), "kglobalacceld (global shortcuts)"),
+        (("kglobalacceld", "kwin_wayland", "kglobalaccel5"), "kglobalacceld (global shortcuts)"),
         (("polkit-kde-authentication-agent-1",), "polkit-kde-authentication-agent-1 (authorization prompts)"),
     ]
 
