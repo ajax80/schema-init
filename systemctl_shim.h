@@ -410,23 +410,69 @@ __attribute__((unused)) static int user_is_enabled(const char *unit) {
     return 1;
 }
 
+static const char power_refused[] = "refused";
+__attribute__((unused)) static const char *power_refuse(const char *name, const char *what) {
+    fprintf(stderr, "%s %s: not supported under schema-init "
+            "(use 'sudo reboot', 'sudo poweroff' or 'sudo shutdown -r now')\n", name, what);
+    return power_refused;
+}
+
+/* systemd reads a bare number as minutes, so 0 / +00 is now too */
+__attribute__((unused)) static int time_is_now(const char *t) {
+    if (strcmp(t, "now") == 0) return 1;
+    if (*t == '+') t++;
+    if (!*t) return 0;
+    for (; *t; t++) if (*t != '0') return 0;
+    return 1;
+}
+
+/* Same table as scripts/schema-pi-halt, except there --help/-w/-f go to
+ * systemd's own; here there is none, so help and wtmp-only do nothing and -f
+ * still asks PID 1. Nothing is ever pending under schema-init: a delay done
+ * now is not what was asked, so it is refused, and -c has nothing to cancel. */
+__attribute__((unused)) static const char *power_args(const char *name, int argc, char **argv) {
+    int shutdown = strcmp(name, "shutdown") == 0, seen_time = 0, j;
+    const char *action = strcmp(name, "reboot") == 0 ? "reboot" : "poweroff";
+    for (j = 1; j < argc && shutdown; j++)
+        if (argv[j][0] == '-' && argv[j][1] != '-' && strchr(argv[j] + 1, 'c')) return "";
+    for (j = 1; j < argc; j++) {
+        const char *a = argv[j];
+        if (strcmp(a, "--help") == 0 || strcmp(a, "--wtmp-only") == 0) {
+            if (a[2] == 'h') printf("%s: under schema-init, '%s' or '%s now' (no delay)\n", name, name, name);
+            return "";
+        }
+        if (strcmp(a, "--reboot") == 0) action = "reboot";
+        else if (strcmp(a, "--poweroff") == 0 || strcmp(a, "--halt") == 0) action = "poweroff";
+        else if (strcmp(a, "--no-wall") == 0 || strcmp(a, "--no-wtmp") == 0 || strcmp(a, "--force") == 0) ;
+        else if (a[0] == '-' && a[1] && a[1] != '-') {
+            for (const char *c = a + 1; *c; c++) {
+                if (*c == 'w') return "";
+                if (*c == 'r') action = "reboot";
+                else if (strchr("pPhH", *c)) action = "poweroff";
+                else if (!strchr("ndif", *c)) return power_refuse(name, a);
+            }
+        }
+        else if (a[0] == '-') return power_refuse(name, a);
+        /* the first word is the time; any after it is the wall message, which
+         * nobody gets, but the power action itself is the one asked for */
+        else if (!shutdown) return power_refuse(name, a);
+        else if (!seen_time) { if (!time_is_now(a)) return power_refuse(name, a); seen_time = 1; }
+    }
+    if (shutdown && !seen_time) return power_refuse(name, "without a time (systemd's default is +1 minute)");
+    return action;
+}
+
 /* reboot/poweroff/halt/shutdown are symlinks to systemctl, so they land here
  * too; so do `systemctl reboot|poweroff|halt`. PID 1's control socket takes
- * reboot and poweroff. Returns the schema-ctl verb, "" for a no-op
- * (shutdown -c), or NULL when this is not a power request. */
+ * reboot and poweroff. Returns the schema-ctl verb, "" for a no-op,
+ * power_refused, or NULL when this is not a power request. */
 __attribute__((unused)) static const char *power_action(int argc, char **argv) {
     const char *base = strrchr(argv[0], '/');
     base = base ? base + 1 : argv[0];
     int j;
-    if (strcmp(base, "reboot") == 0) return "reboot";
-    if (strcmp(base, "poweroff") == 0 || strcmp(base, "halt") == 0) return "poweroff";
-    if (strcmp(base, "shutdown") == 0) {
-        for (j = 1; j < argc; j++) {
-            if (strcmp(argv[j], "-c") == 0) return "";
-            if (strcmp(argv[j], "-r") == 0 || strcmp(argv[j], "--reboot") == 0) return "reboot";
-        }
-        return "poweroff";
-    }
+    if (strcmp(base, "reboot") == 0 || strcmp(base, "poweroff") == 0 || strcmp(base, "halt") == 0 ||
+        strcmp(base, "shutdown") == 0)
+        return power_args(base, argc, argv);
     for (j = 1; j < argc; j++) {
         if (argv[j][0] == '-') continue;
         if (strcmp(argv[j], "reboot") == 0) return "reboot";
@@ -439,6 +485,7 @@ __attribute__((unused)) static const char *power_action(int argc, char **argv) {
 __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     shim_user = 0;
     const char *power = power_action(argc, argv);
+    if (power == power_refused) return 1;
     if (power) return *power ? (run_ctl(power, NULL) == 0 ? 0 : 1) : 0;
     if (argc < 2) return 0;
     int j;

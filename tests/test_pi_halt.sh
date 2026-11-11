@@ -48,13 +48,21 @@ w $S reboot --help && [ -e "$T/orig.log" ] || fail "--help goes to systemd's tex
 # -f is reboot(2) without PID 1: the way out when PID 1 is stuck
 w $S reboot -f && [ "$(cat "$T/orig.log")" = "reboot -f" ] && [ ! -e "$T/ctl.log" ] || fail "reboot -f goes to systemd's"
 w $S shutdown -c && none || fail "shutdown -c is a no-op success (nothing pending)"
+w $S shutdown +5 -c && none || fail "shutdown -c cancels wherever it is"
+# systemd reads a bare number as minutes: 0 is now (Ansible: -r +0 "Reboot initiated by Ansible")
+w $S shutdown -r 0 && ctl reboot || fail "shutdown -r 0"
+w $S shutdown -r +00 "Reboot initiated by Ansible" && ctl reboot || fail "shutdown -r +00 msg"
+# a wall message after an immediate time: done as asked, only nobody is told
+w $S shutdown -r now "kernel update" && ctl reboot || fail "shutdown -r now msg"
+w $S shutdown -rn now && ctl reboot || fail "shutdown -rn now"
+w $S shutdown -hP now && ctl poweroff || fail "shutdown -hP now"
 w $S reboot now; [ $? = 1 ] && none || fail "reboot now refused"
 ln -s "$HALT" "$T/w/other"
 w $S other; [ $? = 2 ] && none || fail "any other name refused, never powers off"
 echo ok wrapper
 
 # refused, never an immediate power-off the caller didn't ask for
-for a in "" "-r" "-h" "-k" "+5" "-r 10:00" "-r now bye"; do
+for a in "" "-r" "-h" "-k" "-rk now" "-x now" "+5" "-r 10:00" "+5 bye" "bye"; do
     # shellcheck disable=SC2086
     w $S shutdown $a && fail "shutdown $a accepted"
     none || fail "shutdown $a acted"
