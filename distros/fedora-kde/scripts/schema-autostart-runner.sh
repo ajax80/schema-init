@@ -104,9 +104,13 @@ for f in "$HOME"/.config/autostart/*.desktop; do
             esac ;;
     esac
     key=${prog##*/}
+    # prog is a literal, not a regex, and must be a whole word of the command
+    # line: unanchored, /usr/bin/foo matched a running /usr/bin/foobar (or any
+    # shell whose script mentions it) and foo was never started.
+    _re="(^|[ /])$(printf '%s' "$prog" | sed 's/[][\\.*^$+?(){}|]/\\&/g')( |\$)"
     # this user's copy only: root's, sddm's or another login's is not running
     # here. -U (real uid): a setuid program the user started is still theirs.
-    if [ -n "$prog" ] && { pgrep -U "$_uid" -f -- "$prog" >/dev/null 2>&1 ||
+    if [ -n "$prog" ] && { pgrep -U "$_uid" -f -- "$_re" >/dev/null 2>&1 ||
                            pgrep -U "$_uid" -x "$key" >/dev/null 2>&1; }; then
         echo "skip running $name ($key)" >>"$LOG"; continue
     fi

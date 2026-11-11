@@ -282,6 +282,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_deb_version.sh
 	sh tests/test_devuan_boot.sh
 	sh tests/test_autostart_runner.sh
+	sh tests/test_plasma_watchdog.sh
 	$(CC) $(CFLAGS) tests/test_ready_timer.c -o /tmp/schema-test-ready-timer && /tmp/schema-test-ready-timer
 	$(CC) $(CFLAGS) tests/test_runtime_copy.c -o /tmp/schema-test-runtime-copy && /tmp/schema-test-runtime-copy
 	$(CC) $(CFLAGS) tests/test_reexec_state.c -o /tmp/schema-test-reexec-state && /tmp/schema-test-reexec-state

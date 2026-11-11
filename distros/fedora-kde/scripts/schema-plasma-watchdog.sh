@@ -16,6 +16,9 @@ exec 9>"$LOCK"
 flock -n 9 || { echo "another watchdog already running, exit $(date)" >> "$WD_LOG"; exit 0; }
 
 echo "watchdog start $(date)" > "$WD_LOG"
+# This user's processes only: sddm's greeter runs its own kwin_wayland, and a
+# second login has its own plasmashell; neither is this session's.
+_uid=$(id -u)
 fails=0; window=$(date +%s)
 
 # One-time self-heal at login. The initial plasma-session-forked plasmashell can
@@ -28,8 +31,8 @@ fails=0; window=$(date +%s)
 # below never catches this because plasmashell IS running. Wait for it, and if it is
 # bare, kill it so the respawn below relaunches it with the correct env. Fires only
 # when the race lands dirty; a clean boot leaves it untouched. (Claire 2026-08-18)
-for _ in $(seq 1 30); do pgrep -x plasmashell >/dev/null 2>&1 && break; sleep 1; done
-psh=$(pgrep -x plasmashell | head -1)
+for _ in $(seq 1 30); do pgrep -u "$_uid" -x plasmashell >/dev/null 2>&1 && break; sleep 1; done
+psh=$(pgrep -u "$_uid" -x plasmashell | head -1)
 if [ -n "$psh" ] && ! grep -qz 'XDG_MENU_PREFIX=plasma-' /proc/"$psh"/environ 2>/dev/null; then
     echo "initial plasmashell $psh has bare XDG_MENU_PREFIX, killing for clean respawn $(date)" >>"$WD_LOG"
     # SIGKILL, not SIGTERM: plasmashell catches SIGTERM as a session-save and does
@@ -83,7 +86,7 @@ spin_check() {
         fi
         echo; echo "== duplicate session daemons =="
         for d in kactivitymanagerd kded6 xdg-desktop-portal-kde; do
-            echo "$d: $(pgrep -fc "/$d\$" 2>/dev/null)"
+            echo "$d: $(pgrep -u "$_uid" -fc "/$d\$" 2>/dev/null)"
         done
         echo; echo "== ksycoca mtimes =="
         ls -l --time-style=+%T "$HOME"/.cache/ksycoca6_* 2>/dev/null
@@ -94,8 +97,8 @@ spin_check() {
 }
 
 while sleep 5; do
-    pgrep -x kwin_wayland >/dev/null 2>&1 || { echo "compositor gone, exit $(date)" >>"$WD_LOG"; break; }
-    psh=$(pgrep -x plasmashell | head -1)
+    pgrep -u "$_uid" -x kwin_wayland >/dev/null 2>&1 || { echo "compositor gone, exit $(date)" >>"$WD_LOG"; break; }
+    psh=$(pgrep -u "$_uid" -x plasmashell | head -1)
     if [ -n "$psh" ]; then
         spin_check "$psh"
         continue
