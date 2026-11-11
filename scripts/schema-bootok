@@ -5,9 +5,18 @@ shopt -s nullglob
 TIMEOUT="${SCHEMA_BOOTOK_TIMEOUT:-90}"
 GRUBENV="${SCHEMA_GRUBENV:-/boot/grub2/grubenv}"
 
+UID_MIN=$(awk '$1 == "UID_MIN" { print $2 }' /etc/login.defs 2>/dev/null)
+UID_MAX=$(awk '$1 == "UID_MAX" { print $2 }' /etc/login.defs 2>/dev/null)
+UID_MIN=${UID_MIN:-1000} UID_MAX=${UID_MAX:-60000}
+
+# Only a login user's compositor counts. A display manager's greeter (sddm runs
+# kwin_wayland as its own system uid) holds the card too, and the boot would be
+# marked good while the user's session never came up.
 desktop_up() {
-  local p fd
+  local p fd u
   for p in $(pgrep -x kwin_wayland 2>/dev/null); do
+    u=$(awk '/^Uid:/ { print $2 }' /proc/"$p"/status 2>/dev/null)
+    [ -n "$u" ] && [ "$u" -ge "$UID_MIN" ] && [ "$u" -le "$UID_MAX" ] || continue
     for fd in /proc/"$p"/fd/*; do
       case "$(readlink -f "$fd" 2>/dev/null)" in
         /dev/dri/card*) return 0 ;;
