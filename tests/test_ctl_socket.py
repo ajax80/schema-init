@@ -47,11 +47,12 @@ sleeper("held")
 LONG = "/tmp/" + "a" * 490
 sleeper("longpath", "protect_system=full", "rw_path=" + LONG)
 COUNT = T + "/once.count"
-# ignores SIGTERM, so a stop is still in progress when start_timeout_sec expires.
-# The stop must land inside that window: at 3 s a loaded runner missed it ~1 in 6,
-# found the service already timed out, and the stop cleared its excise_reason.
-svc("slowstop", "exec=/bin/sh", "args=-c", 'args=trap "" TERM; while :; do %s 1; done' % shutil.which("sleep"),
-    "notify=1", "start_timeout_sec=6", "stop_timeout_sec=60")
+# ignores SIGTERM, so a stop is still in progress when start_timeout_sec expires;
+# ARMED says the trap is set (a SIGTERM before it kills the shell outright)
+ARMED = T + "/slowstop.armed"
+svc("slowstop", "exec=/bin/sh", "args=-c",
+    'args=trap "" TERM; : > %s; while :; do %s 1; done' % (ARMED, shutil.which("sleep")),
+    "notify=1", "start_timeout_sec=3", "stop_timeout_sec=60")
 svc("once", "exec=/bin/sh", "args=-c", "args=echo x >> " + COUNT, "oneshot=1")
 OK = T + "/fails.ok"
 svc("fails", "exec=/bin/sh", "args=-c",
@@ -250,13 +251,24 @@ try:
     ctl("stop", "held")
     check("stopped service is down", wait_for(lambda: excised("held")), state("held"))
     # a stop that start_timeout_sec overtook is still a stop
-    check("slowstop timed out at boot", wait_for(lambda: excised("slowstop"), 15), state("slowstop"))
-    ctl("start", "slowstop")
-    check("slowstop started again", wait_for(lambda: up("slowstop")), state("slowstop"))
-    reply = ctl("stop", "slowstop")[1]
-    check("slowstop: stop landed while it ran", "SIGTERM" in reply, reply)
-    check("stop overtaken by the start timeout", wait_for(lambda: excised("slowstop") and
-          "excise_reason=start-timeout" in ctl("status", "slowstop")[1], 15), ctl("status", "slowstop")[1])
+    check("slowstop timed out at boot", wait_for(lambda: excised("slowstop")), state("slowstop"))
+    # the stop has to land inside the 2-3 s window (start_timeout_sec counts whole
+    # seconds); a loaded runner can miss it, the timeout excises first and the
+    # stop finds nothing running, so start over until a stop catches it running
+    reply = ""
+    for _ in range(5):
+        if os.path.exists(ARMED):
+            os.unlink(ARMED)
+        ctl("start", "slowstop")
+        if not wait_for(lambda: os.path.exists(ARMED)):
+            break
+        reply = ctl("stop", "slowstop")[1]
+        if "SIGTERM" in reply:
+            break
+        wait_for(lambda: excised("slowstop"))
+    check("slowstop: a stop caught it running", "SIGTERM" in reply, (reply, state("slowstop")))
+    check("stop overtaken by the start timeout", "SIGTERM" in reply and wait_for(lambda: excised("slowstop") and
+          "excise_reason=start-timeout" in ctl("status", "slowstop")[1]), ctl("status", "slowstop")[1])
     open(OK, "w").close()
     ctl("reset")
     check("reset: failed service comes back", wait_for(lambda: up("fails")), state("fails"))
