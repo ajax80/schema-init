@@ -104,7 +104,9 @@ for f in "$HOME"/.config/autostart/*.desktop; do
             esac ;;
     esac
     key=${prog##*/}
-    if [ -n "$prog" ] && { pgrep -f -- "$prog" >/dev/null 2>&1 || pgrep -x "$key" >/dev/null 2>&1; }; then
+    # this user's copy only: root's, sddm's or another login's is not running here
+    if [ -n "$prog" ] && { pgrep -u "$(id -u)" -f -- "$prog" >/dev/null 2>&1 ||
+                           pgrep -u "$(id -u)" -x "$key" >/dev/null 2>&1; }; then
         echo "skip running $name ($key)" >>"$LOG"; continue
     fi
 
