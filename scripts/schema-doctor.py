@@ -350,10 +350,6 @@ def _write_as_user(path, data, uid, mode):
     return os.WIFEXITED(st) and os.WEXITSTATUS(st) == 0
 
 
-def _running(needle, tbl=None):
-    return any(needle in p["cmd"] for p in (tbl if tbl is not None else _proc_table()))
-
-
 class CardInputAcl(Check):
     name = "card-input-acl"
     summary = "the logged-in user can open the uaccess-tagged devices (GPU, SDR/FIDO)"
@@ -807,8 +803,8 @@ class PowerDevilRunning(Check):
         # The boot run fires when the session registers, ~5 s before
         # plasma-session-start brings up plasmashell and then PowerDevil;
         # checking then flagged it on every boot (#490). The periodic run
-        # catches one that never starts. _desktop_proc, not _running: the
-        # session scripts' own `pgrep ... plasmashell` polls match a substring.
+        # catches one that never starts. _desktop_proc, not a substring: the
+        # session scripts' own `pgrep ... plasmashell` polls would match.
         if (not _desktop_proc("plasmashell", tbl)
                 or _desktop_proc("org_kde_powerdevil", tbl)):
             return None
@@ -831,17 +827,19 @@ class SessionAgents(Check):
 
     AGENTS = [
         (("kglobalacceld", "kwin_wayland"), "kglobalacceld (global shortcuts)"),
-        (("polkit-kde-authentication-agent",), "polkit-kde-authentication-agent-1 (authorization prompts)"),
+        (("polkit-kde-authentication-agent-1",), "polkit-kde-authentication-agent-1 (authorization prompts)"),
     ]
 
     def detect(self):
         if active_uid() in (None, 0):
             return None
         tbl = _proc_table()
-        if not _running("plasmashell", tbl):
+        # _desktop_proc, not a substring: earlyoom's --avoid list names
+        # plasmashell and kwin_wayland, and session scripts pgrep for them
+        if not _desktop_proc("plasmashell", tbl):
             return None                              # not a live KDE desktop
         missing = [label for needles, label in self.AGENTS
-                   if not any(_running(n, tbl) for n in needles)]
+                   if not any(_desktop_proc(n, tbl) for n in needles)]
         if not missing:
             return None
         return Finding(

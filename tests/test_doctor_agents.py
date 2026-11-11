@@ -7,7 +7,7 @@ root = tempfile.mkdtemp()
 os.environ["DOCTOR_ROOT"] = root
 os.makedirs(os.path.join(root, "run/systemd/sessions"))
 with open(os.path.join(root, "run/systemd/sessions", "1"), "w") as fh:
-    fh.write("UID=1000\nVTNR=1\n")
+    fh.write("UID=%d\nVTNR=1\n" % os.getuid())
 
 
 def mkproc(pid, cmd):
@@ -35,6 +35,11 @@ c = sd.SessionAgents()
 
 # no plasmashell → not a live KDE desktop → clean (a GNOME stranger won't false-flag)
 check("clean when no plasmashell", c.detect() is None)
+# a command line naming them is not them: earlyoom's --avoid list names
+# plasmashell and kwin_wayland on every box, a session script's pgrep polls
+mkproc(5, "/usr/bin/earlyoom --avoid ^(kwin_wayland|plasmashell|kglobalacceld)$")
+mkproc(6, "pgrep -f polkit-kde-authentication-agent-1")
+check("a command line naming plasmashell is not the desktop", c.detect() is None)
 
 # KDE session with both agents up → clean
 mkproc(10, "/usr/bin/plasmashell")
@@ -45,7 +50,7 @@ check("clean when both agents run", c.detect() is None)
 # kglobalacceld missing → flagged, names it, deferred/not healable
 rmproc(11)
 f = c.detect()
-check("detect flags missing shortcut daemon", f is not None)
+check("detect flags missing shortcut daemon despite earlyoom naming kwin_wayland", f is not None)
 check("detail names kglobalacceld", f is not None and "kglobalacceld" in f.detail)
 check("finding not healable", f is not None and f.healable is False)
 
@@ -57,7 +62,7 @@ rmproc(13)
 # both agents missing → names both
 rmproc(12)
 f = c.detect()
-check("detail names polkit agent too", f is not None and "polkit" in f.detail.lower())
+check("detail names polkit agent too, despite a pgrep naming it", f is not None and "polkit" in f.detail.lower())
 
 print("PASS" if all(results) else "FAIL")
 sys.exit(0 if all(results) else 1)
