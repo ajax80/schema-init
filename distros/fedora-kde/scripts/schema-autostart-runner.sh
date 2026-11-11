@@ -44,7 +44,7 @@ if [ -n "$_ps" ]; then
     done < "/proc/$_ps/environ"
 fi
 [ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "$_sock" ] && export WAYLAND_DISPLAY="$_sock"
-unset _ps _kv _sock _uid
+unset _ps _kv _sock
 
 # No Xwayland cookie step: Plasma 6 kwin starts Xwayland on demand with no
 # -auth and grants SI:localuser, so there is nothing to merge -- waiting for it
@@ -104,7 +104,10 @@ for f in "$HOME"/.config/autostart/*.desktop; do
             esac ;;
     esac
     key=${prog##*/}
-    if [ -n "$prog" ] && { pgrep -f -- "$prog" >/dev/null 2>&1 || pgrep -x "$key" >/dev/null 2>&1; }; then
+    # this user's copy only: root's, sddm's or another login's is not running
+    # here. -U (real uid): a setuid program the user started is still theirs.
+    if [ -n "$prog" ] && { pgrep -U "$_uid" -f -- "$prog" >/dev/null 2>&1 ||
+                           pgrep -U "$_uid" -x "$key" >/dev/null 2>&1; }; then
         echo "skip running $name ($key)" >>"$LOG"; continue
     fi
 

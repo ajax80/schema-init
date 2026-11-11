@@ -12,7 +12,7 @@ RUNNER="$HERE/distros/fedora-kde/scripts/schema-autostart-runner.sh"
 unshare -r -p -f --mount-proc true 2>/dev/null \
     || { echo "SKIP: autostart runner (no unprivileged pid namespace)"; exit 0; }
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT
+trap '[ -n "${KEEP:-}" ] && echo "kept $T" || rm -rf "$T"' EXIT
 
 mkdir -p "$T/home/.config/autostart" "$T/home/.local/bin" "$T/run" "$T/bin"
 chmod 700 "$T/run"
@@ -48,5 +48,43 @@ LOG="$T/home/.local/state/schema-user/log/autostart-runner.log"
 [ "$(grep -c '^=== runner start' "$LOG" 2>/dev/null)" = 2 ] \
     || { echo "FAIL: log does not keep both logins ($LOG)"; fail=1; }
 
-[ $fail -eq 0 ] && echo "PASS: autostart runner waits for plasmashell, falls back to kwin socket"
+# "skip running" means running for this user: another uid's copy of the same
+# program (root's, sddm's, a second login's) must not stop it starting here.
+# Needs subordinate uids (newuidmap) to have a second user in the namespace.
+if unshare -r --map-auto -p -f --mount-proc true 2>/dev/null; then
+    chmod 755 "$T" "$T/bin"
+    printf '#!/bin/sh\ntouch "%s/launched.$(id -u)" 2>/dev/null\nwhile :; do sleep 1; done\n' "$T" > "$T/bin/agent"
+    chmod 755 "$T/bin/agent"
+    printf '[Desktop Entry]\nType=Application\nExec=%s/bin/agent\n' "$T" > "$T/home/.config/autostart/agent.desktop"
+    # $1: uid to run a copy of the agent as before the runner starts
+    run_agent() {
+        rm -f "$T"/launched.* "$T/seen" "$T/agent-up"
+        : > "$LOG"
+        unshare -r --map-auto -p -f --mount-proc env -i PATH="$PATH" HOME="$T/home" XDG_RUNTIME_DIR="$T/run" \
+            SCHEMA_RUNNER_TICK=0.05 T="$T" RUNNER="$RUNNER" AS="$1" sh -c '
+            WAYLAND_DISPLAY=wayland-ps "$T/bin/plasmashell" &
+            setpriv --reuid "$AS" --regid "$AS" --clear-groups "$T/bin/agent" &
+            # the copy is up, and (as uid 0) has written its marker, before the runner looks
+            i=0; until pgrep -U "$AS" -f "$T/bin/agent" >/dev/null && { [ "$AS" != 0 ] || [ -e "$T/launched.0" ]; }; do
+                [ $i -lt 50 ] || exit 0; sleep 0.1; i=$((i+1))
+            done
+            : > "$T/agent-up"
+            rm -f "$T"/launched.*
+            "$RUNNER"
+            [ "$AS" = 0 ] && exit 0      # nothing should launch: the log says so
+            i=0; while [ ! -e "$T/launched.0" ] && [ $i -lt 25 ]; do sleep 0.2; i=$((i+1)); done
+        '
+    }
+    run_agent 1000
+    [ -e "$T/agent-up" ] || { echo "FAIL: the other user's copy never started"; fail=1; }
+    [ -e "$T/launched.0" ] || { echo "FAIL: another user's copy of an autostart program stopped it starting"; fail=1; }
+    run_agent 0
+    [ -e "$T/agent-up" ] || { echo "FAIL: the user's own copy never started"; fail=1; }
+    [ ! -e "$T/launched.0" ] && grep -q "skip running agent.desktop" "$LOG" \
+        || { echo "FAIL: the user's own running copy did not skip the launch"; fail=1; }
+else
+    echo "SKIP: autostart runner, other user's process (no subordinate uids)"
+fi
+
+[ $fail -eq 0 ] && echo "PASS: autostart runner waits for plasmashell, falls back to kwin socket, skips only its own user's"
 exit $fail
