@@ -69,6 +69,33 @@ elif ! ssh-add -l >/dev/null 2>&1; then
         && echo "ssh key loaded" >>"$LOG" || echo "ssh-add failed (wallet locked?)" >>"$LOG"
 fi
 
+_interp() {
+    case "${1##*/}" in
+        sh|bash|dash|zsh|env|python|python2|python3|perl|ruby|node) return 0 ;;
+    esac
+    return 1
+}
+# $1 is the program itself (argv[0], or an interpreter's first argument), not
+# any word of a command line: `pgrep -f /usr/bin/foo` also matched
+# /usr/bin/foobar, `less /usr/bin/foo` and shells that merely named it, and foo
+# was never started. Compared as a string, so no regex escaping.
+_running() {
+    local pid a0 a1
+    for pid in $(pgrep -U "$_uid"); do
+        a0="" a1=""
+        { IFS= read -r -d '' a0; IFS= read -r -d '' a1; } < "/proc/$pid/cmdline" 2>/dev/null
+        _argmatch "$a0" "$1" && return 0
+        _interp "$a0" && _argmatch "$a1" "$1" && return 0
+    done
+    return 1
+}
+# a bare name also matches the same program run by its path
+_argmatch() {
+    [ "$1" = "$2" ] && return 0
+    case "$2" in */*) return 1 ;; esac
+    [ "${1##*/}" = "$2" ]
+}
+
 shopt -s nullglob
 for f in "$HOME"/.config/autostart/*.desktop; do
     name=${f##*/}
@@ -91,9 +118,7 @@ for f in "$HOME"/.config/autostart/*.desktop; do
 
     set -f; set -- $cmd; set +f
     prog=$1
-    case "${prog##*/}" in
-        sh|bash|dash|zsh|env|python|python2|python3|perl|ruby|node) shift; [ -n "$1" ] && prog=$1 ;;
-    esac
+    _interp "$prog" && { shift; [ -n "$1" ] && prog=$1; }
     # `sh -c "sleep 5; exec foo"` left prog=-c, and `pgrep -f -- -c` matches
     # nearly any process, so such entries were always skipped as running. Use the
     # last exec target in the command; with none, launch without the check.
@@ -106,7 +131,7 @@ for f in "$HOME"/.config/autostart/*.desktop; do
     key=${prog##*/}
     # this user's copy only: root's, sddm's or another login's is not running
     # here. -U (real uid): a setuid program the user started is still theirs.
-    if [ -n "$prog" ] && { pgrep -U "$_uid" -f -- "$prog" >/dev/null 2>&1 ||
+    if [ -n "$prog" ] && { _running "$prog" ||
                            pgrep -U "$_uid" -x "$key" >/dev/null 2>&1; }; then
         echo "skip running $name ($key)" >>"$LOG"; continue
     fi

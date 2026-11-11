@@ -29,6 +29,7 @@ fi
 # schema-init has no PAM/login step, so SHELL is otherwise inherited as
 # /bin/bash from dbus-run-session; set it from passwd here (the session root) so
 # the whole tree inherits it. Guard against empty getent so SHELL is never "".
+_uid=$(id -u)
 _sh="$(getent passwd "$(id -un)" | cut -d: -f7)"
 [ -n "$_sh" ] && export SHELL="$_sh"
 
@@ -114,7 +115,7 @@ export WAYLAND_DISPLAY=wayland-0
 # PipeWire stack. Normally systemd --user units; with schema-init as PID 1
 # nothing provides the pipewire-0 socket -> no audio and kpipewire spins. Start
 # in-session (seat access -> real ALSA sinks). Guarded: skip if already running.
-if [ -x /usr/bin/pipewire ] && ! pgrep -x pipewire >/dev/null 2>&1; then
+if [ -x /usr/bin/pipewire ] && ! pgrep -U "$_uid" -x pipewire >/dev/null 2>&1; then
     /usr/bin/pipewire &
     sleep 1
     /usr/bin/wireplumber &
@@ -144,7 +145,7 @@ sleep 1
 # other and plasmashell's main thread spins re-querying a locked database
 # (taskbar dead; 2026-10-10 blakbox, 1.6M "database is locked"/hour).
 if [ -x /usr/libexec/kactivitymanagerd ] && ! busctl --user status org.kde.ActivityManager >/dev/null 2>&1; then
-    pgrep -x kactivitymanage >/dev/null 2>&1 || /usr/libexec/kactivitymanagerd &
+    pgrep -U "$_uid" -x kactivitymanage >/dev/null 2>&1 || /usr/libexec/kactivitymanagerd &
     i=0
     while [ $i -lt 20 ]; do
         busctl --user status org.kde.ActivityManager >/dev/null 2>&1 && break
@@ -152,14 +153,16 @@ if [ -x /usr/libexec/kactivitymanagerd ] && ! busctl --user status org.kde.Activ
         i=$((i+1))
     done
 fi
-pgrep -x plasmashell >/dev/null || /usr/bin/plasmashell &
+pgrep -U "$_uid" -x plasmashell >/dev/null || /usr/bin/plasmashell &
 
 # KDE session daemons ksmserver/startplasma normally start. Their
 # /etc/xdg/autostart entries carry X-systemd-skip=true, so the KDE autostart
 # fallback skips them too -> no ksycoca service daemon (kded6), no power
 # management, no global shortcuts, no polkit auth prompts. Start in-session so
 # they inherit the logind session (polkit-kde needs it to resolve its subject).
-# Guarded against doubles (each is also a single-instance bus name).
+# Guarded against doubles (each is also a single-instance bus name): this
+# user's copy (real uid, as the autostart runner checks), matched as argv[0],
+# not any command line that merely mentions the path.
 #
 # kactivitymanagerd (above, before plasmashell) and xdg-desktop-portal-kde are launched here too, not left
 # to D-Bus activation: both have .service files under
@@ -182,7 +185,8 @@ for _svc in /usr/bin/kded6 \
             /usr/libexec/kglobalacceld \
             /usr/libexec/kf6/polkit-kde-authentication-agent-1 \
             /usr/libexec/xdg-desktop-portal-kde; do
-    [ -x "$_svc" ] && ! pgrep -f "$_svc" >/dev/null 2>&1 && "$_svc" &
+    _re="^$(printf '%s' "$_svc" | sed 's/[][\\.*^$+?(){}|]/\\&/g')( |\$)"
+    [ -x "$_svc" ] && ! pgrep -U "$_uid" -f "$_re" >/dev/null 2>&1 && "$_svc" &
 done
 
 # xdg-desktop-portal probes its backends ONCE at startup and never re-probes.
