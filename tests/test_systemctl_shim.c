@@ -394,9 +394,31 @@ static void test_power(void) {
     ctl_log_clear(); assert(run_as("shutdown", "22:00", NULL) == 1); assert(!ctl_log_has("poweroff"));
     ctl_log_clear(); assert(run_as("shutdown", NULL, NULL) == 1); assert(!ctl_log_has("poweroff"));  /* systemd: +1 min */
     ctl_log_clear(); assert(run_as("shutdown", "-r", NULL) == 1); assert(!ctl_log_has("reboot"));
-    ctl_log_clear(); assert(run_as("shutdown", "now", "going down") == 1); assert(!ctl_log_has("poweroff"));
-    ctl_log_clear(); assert(run_as("shutdown", "now", "now") == 1); assert(!ctl_log_has("poweroff"));
     ctl_log_clear(); assert(run_as("shutdown", "-k", "now") == 1); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "-x", "now") == 1); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "\"msg\"", NULL) == 1); assert(!ctl_log_has("poweroff"));  /* not a time */
+    /* systemd reads a bare number as minutes: 0 is now (Ansible: -r +0 "Reboot initiated by Ansible") */
+    ctl_log_clear(); assert(run_as("shutdown", "-r", "0") == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as3("shutdown", "-r", "+00", "Reboot initiated by Ansible") == 0); assert(ctl_log_has("reboot"));
+    /* a wall message after an immediate time: done as asked, only nobody is told */
+    ctl_log_clear(); assert(run_as3("shutdown", "-r", "now", "kernel update") == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("shutdown", "+5", "kernel update") == 1); assert(!ctl_log_has("poweroff"));
+    /* combined short options */
+    ctl_log_clear(); assert(run_as("shutdown", "-rn", "now") == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("shutdown", "-hP", "now") == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "-rk", "now") == 1); assert(!ctl_log_has("reboot"));
+    /* -c cancels wherever it is: nothing is ever pending */
+    ctl_log_clear(); assert(run_as("shutdown", "+5", "-c") == 0); assert(!ctl_log_has("poweroff"));
+    /* help and wtmp-only never power anything off */
+    ctl_log_clear(); assert(run_as("poweroff", "--help", NULL) == 0); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("halt", "--help", NULL) == 0); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("reboot", "-w", NULL) == 0); assert(!ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("shutdown", "--help", NULL) == 0); assert(!ctl_log_has("poweroff"));
+    /* reboot/poweroff/halt take no time */
+    ctl_log_clear(); assert(run_as("reboot", "now", NULL) == 1); assert(!ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("halt", "--reboot", NULL) == 0); assert(ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("reboot", "-p", NULL) == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("reboot", "-f", NULL) == 0); assert(ctl_log_has("reboot"));
     ctl_log_clear(); assert(run_as("systemctl", "--no-wall", "reboot") == 0); assert(ctl_log_has("reboot"));
     ctl_log_clear(); run_as("systemctl", "status", "reboot"); assert(!ctl_log_has("reboot"));   /* a unit arg, not a verb */
 }
