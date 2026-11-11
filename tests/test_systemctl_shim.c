@@ -369,6 +369,11 @@ static int run_as(const char *argv0, const char *a, const char *b) {
     return shim_dispatch(n, argv);
 }
 
+static int run_as3(const char *argv0, const char *a, const char *b, const char *c) {
+    char *argv[] = { (char *)argv0, (char *)a, (char *)b, (char *)c, NULL };
+    return shim_dispatch(4, argv);
+}
+
 static void test_power(void) {
     setup_sandbox();
     make_ctl_stub("x");
@@ -380,6 +385,18 @@ static void test_power(void) {
     ctl_log_clear(); assert(run_as("shutdown", "-r", "now") == 0); assert(ctl_log_has("reboot"));
     ctl_log_clear(); assert(run_as("shutdown", "now", NULL) == 0); assert(ctl_log_has("poweroff"));
     ctl_log_clear(); assert(run_as("shutdown", "-c", NULL) == 0); assert(!ctl_log_has("poweroff") && !ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("shutdown", "-h", "now") == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "+0", NULL) == 0); assert(ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as3("shutdown", "-r", "--no-wall", "now") == 0); assert(ctl_log_has("reboot"));
+    /* nothing can be pending under schema-init: a delay done now is not what was asked */
+    ctl_log_clear(); assert(run_as("shutdown", "+10", NULL) == 1); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "-r", "+5") == 1); assert(!ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("shutdown", "22:00", NULL) == 1); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", NULL, NULL) == 1); assert(!ctl_log_has("poweroff"));  /* systemd: +1 min */
+    ctl_log_clear(); assert(run_as("shutdown", "-r", NULL) == 1); assert(!ctl_log_has("reboot"));
+    ctl_log_clear(); assert(run_as("shutdown", "now", "going down") == 1); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "now", "now") == 1); assert(!ctl_log_has("poweroff"));
+    ctl_log_clear(); assert(run_as("shutdown", "-k", "now") == 1); assert(!ctl_log_has("poweroff"));
     ctl_log_clear(); assert(run_as("systemctl", "--no-wall", "reboot") == 0); assert(ctl_log_has("reboot"));
     ctl_log_clear(); run_as("systemctl", "status", "reboot"); assert(!ctl_log_has("reboot"));   /* a unit arg, not a verb */
 }
