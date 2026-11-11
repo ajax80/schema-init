@@ -56,7 +56,8 @@ if unshare -r --map-auto -p -f --mount-proc true 2>/dev/null; then
     printf '#!/bin/sh\ntouch "%s/launched.$(id -u)" 2>/dev/null\nwhile :; do sleep 1; done\n' "$T" > "$T/bin/agent"
     chmod 755 "$T/bin/agent"
     printf '[Desktop Entry]\nType=Application\nExec=%s/bin/agent\n' "$T" > "$T/home/.config/autostart/agent.desktop"
-    # a different program whose path starts with the agent's
+    # a different program whose path starts with the agent's, run with the
+    # agent's path as its argument
     printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$T/bin/agent-helper"
     chmod 755 "$T/bin/agent-helper"
     # $1: uid to run a copy of $2 (default: the agent) as before the runner starts
@@ -66,7 +67,7 @@ if unshare -r --map-auto -p -f --mount-proc true 2>/dev/null; then
         unshare -r --map-auto -p -f --mount-proc env -i PATH="$PATH" HOME="$T/home" XDG_RUNTIME_DIR="$T/run" \
             SCHEMA_RUNNER_TICK=0.05 T="$T" RUNNER="$RUNNER" AS="$1" PRE="${2:-$T/bin/agent}" sh -c '
             WAYLAND_DISPLAY=wayland-ps "$T/bin/plasmashell" &
-            setpriv --reuid "$AS" --regid "$AS" --clear-groups "$PRE" &
+            setpriv --reuid "$AS" --regid "$AS" --clear-groups $PRE &
             # the copy is up, and (the agent as uid 0) has written its marker, before the runner looks
             i=0; until pgrep -U "$AS" -f "$PRE" >/dev/null && { [ "$AS" != 0 ] || [ "$PRE" != "$T/bin/agent" ] || [ -e "$T/launched.0" ]; }; do
                 [ $i -lt 50 ] || exit 0; sleep 0.1; i=$((i+1))
@@ -85,9 +86,9 @@ if unshare -r --map-auto -p -f --mount-proc true 2>/dev/null; then
     [ -e "$T/agent-up" ] || { echo "FAIL: the user's own copy never started"; fail=1; }
     [ ! -e "$T/launched.0" ] && grep -q "skip running agent.desktop" "$LOG" \
         || { echo "FAIL: the user's own running copy did not skip the launch"; fail=1; }
-    run_agent 0 "$T/bin/agent-helper"
+    run_agent 0 "$T/bin/agent-helper $T/bin/agent"
     [ -e "$T/agent-up" ] || { echo "FAIL: agent-helper never started"; fail=1; }
-    [ -e "$T/launched.0" ] || { echo "FAIL: a running program whose path starts with the entry's counted as the entry"; fail=1; }
+    [ -e "$T/launched.0" ] || { echo "FAIL: a running program whose path starts with the entry's or naming it counted as the entry"; fail=1; }
 else
     echo "SKIP: autostart runner, other user's process (no subordinate uids)"
 fi
