@@ -599,6 +599,7 @@ static void play_card(service_t *svc) {
     }
     pid_t pid = service_card_spawn(svc, svc->card_next);
     svc->card_next++;
+    svc->card_killed = 0;
     if (pid < 0) {
         service_log(svc, "card-fork-fail");
         return;
@@ -609,7 +610,10 @@ static void play_card(service_t *svc) {
 }
 
 static void card_done(service_t *svc, int status) {
+    int killed = svc->card_killed;
     svc->card_pid = 0;
+    svc->card_killed = 0;
+    if (killed) return;                 /* card-timeout was logged at the kill */
     service_log(svc, WIFEXITED(status) && WEXITSTATUS(status) == 0 ? "card-done" : "card-failed");
 }
 
@@ -1204,14 +1208,13 @@ static void monitor_failsafes(void) {
     
     for (i = 0; i < svc_count; i++) {
         service_t *svc = &services[i];
-        if (svc->card_pid > 0 && now.tv_sec - svc->card_start.tv_sec >= CARD_TIMEOUT_SECS) {
-            int st;
+        if (svc->card_pid > 0 && !svc->card_killed && now.tv_sec - svc->card_start.tv_sec >= CARD_TIMEOUT_SECS) {
+            /* never wait for it here: a card stuck in D state outlives SIGKILL,
+             * and a blocking waitpid would stop the loop that feeds the watchdog */
             kill(-svc->card_pid, SIGKILL);
             kill(svc->card_pid, SIGKILL);
-            if (waitpid(svc->card_pid, &st, 0) == svc->card_pid || errno == ECHILD) {
-                svc->card_pid = 0;
-                service_log(svc, "card-timeout");
-            }
+            svc->card_killed = 1;
+            service_log(svc, "card-timeout");
         }
         if (svc->main_wait && now.tv_sec >= svc->main_wait_due.tv_sec) {
             svc->main_wait = 0;
@@ -2824,6 +2827,35 @@ int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, 
     return services_check_cycles(svc_table, s_count);
 }
 
+/* Sockets carried from the previous table (re-exec: the old image; reload:
+ * the old config): CLOEXEC again, and kept only while they are still what
+ * this .svc asks for. A changed listen= is rebound now; a removed one is
+ * closed, and a service parked on it starts the plain way. */
+void listen_adopt(service_t *svc) {
+    int ok = svc->listen_open == svc->listen_count;
+    for (int k = 0; ok && k < svc->listen_open; k++)
+        ok = service_listen_matches(svc, k);
+    if (!ok) {
+        if (svc->listen_open)
+            elog(stderr, "%s: carried sockets do not match listen=, rebinding\n", svc->name);
+        int parked = svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT;
+        for (int k = 0; k < svc->listen_open && k < MAX_LISTEN; k++)
+            close(svc->listen_fd[k]);
+        svc->listen_open = 0;
+        if (parked && !svc->listen_count) {
+            /* a lazy park's hold would park it again, on no socket at all */
+            svc->inst.state = STATE_NEW_PROCESS;
+            svc->listen_hold = 0;
+        } else if (svc->listen_count && service_listen_open(svc) < 0 && parked) {
+            svc->inst.state = STATE_NEW_PROCESS;
+            svc->listen_hold = 1;
+        }
+        return;
+    }
+    for (int k = 0; k < svc->listen_open; k++)
+        fcntl(svc->listen_fd[k], F_SETFD, FD_CLOEXEC);
+}
+
 /* Returns 0 if the new configuration was adopted, -1 if it was rejected, with
  * `err` filled in. The caller reports that outcome: a reload can be refused for
  * three different reasons and the operator has to be told which, over the same
@@ -2912,6 +2944,9 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                  * reload, and a service frozen at reload time can never thaw. */
                 svc_runtime_copy(&shadow_services[i], &services[j]);
                 svc_clamp_hold(&shadow_services[i], &reload_now);
+                /* the copy brought the old listen_fd[]; a changed or dropped
+                 * listen= kept the old socket until reboot */
+                listen_adopt(&shadow_services[i]);
 
                 /* A run-once timer (on_boot_sec with no interval) marks itself
                  * terminal by clearing SVC_TIMER when it completes. The shadow

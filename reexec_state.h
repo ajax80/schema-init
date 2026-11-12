@@ -73,6 +73,7 @@ typedef struct {
     X(INT,  listen_open)         \
     X(INT,  card_next)           \
     X(PID,  card_pid)            \
+    X(U8,   card_killed)         \
     X(TS,   card_start)          \
     X(PID,  stop_pid)            \
     X(INT,  stop_phase)          \

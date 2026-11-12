@@ -21,7 +21,9 @@
 #define MAX_ENV_FILES   4
 #define MAX_EXEC_PRE    8
 #define MAX_CARDS       4
-#define CARD_TIMEOUT_SECS 30
+#ifndef CARD_TIMEOUT_SECS
+#define CARD_TIMEOUT_SECS 30   /* tests build with a short one */
+#endif
 #define MAX_LISTEN      4
 #define MAX_COND        8
 #define MAX_DEPS        8
@@ -365,6 +367,7 @@ typedef struct {
     int              card_count;
     int              card_next;           /* next card to play; reset with the restart budget */
     pid_t            card_pid;            /* running card, 0 if none; the spawn waits for it */
+    uint8_t          card_killed;         /* card_pid timed out and got SIGKILL; reap() collects it */
     struct timespec  card_start;
     uint8_t          fallback_live;       /* card=fallback: played; its service runs while this is down */
     uint8_t          standby_up;          /* named by a card=fallback:, and started by it */
