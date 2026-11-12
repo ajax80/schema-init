@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.24
+Version:        0.4.25
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -526,6 +526,20 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Nov 11 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.25-1
+- Fedora systemctl shim and Pi shutdown wrapper: shutdown with a delay (+10,
+  -k, a clock time) is refused instead of powering off at once; --help and -w
+  no longer act (#499)
+- schema-doctor session-agents matches agents by process name, so a command
+  line merely mentioning one no longer hides a missing agent (#500)
+- Autostart runner skips an entry only when this user's own copy is running,
+  matched by program, not by any command line that names it (#501, #502)
+- Plasma watchdog and session start look only at this user's processes: a
+  greeter's kwin no longer keeps the watchdog alive, another login's
+  plasmashell no longer blocks a respawn (#502)
+- schema-bootok counts only a login user's session, and now confirms GNOME and
+  X11 sessions (Fedora Cinnamon: an X server holding the GPU beside the user's
+  shell); /dev/nvidia* counts as holding it (#503, #504)
 * Mon Nov 09 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.24-1
 - Autostart runner waits up to 300 s for this user's plasmashell (falling back to
   kwin's Wayland socket), so a slow first login no longer starts the wizard with
