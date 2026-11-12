@@ -174,7 +174,7 @@ static inline cgroup_tier_t cgroup_tiering(prio_t priority, int cpu_weight) {
     default:
         tier.cpu_idle = 0; tier.cpu_weight = 100;  tier.io_weight = 100;  break;
     }
-    /* an explicit cpu_weight= takes the CPU half; io.weight stays tiered */
+    /* cpu.idle=1 would override any weight written beside it */
     if (cpu_weight > 0) { tier.cpu_idle = 0; tier.cpu_weight = cpu_weight; }
     return tier;
 }
@@ -183,6 +183,15 @@ static inline cgroup_tier_t cgroup_tiering(prio_t priority, int cpu_weight) {
  * 0 = write nothing. Above 100 the quota spans cores. Pure. */
 static inline long cpu_max_quota(int pct) {
     return pct > 0 && pct <= 10000 ? pct * 1000L : 0;
+}
+
+/* survival posture's cpu.max for a STANDARD service: half a core or the
+ * service's own tighter cap, and on leaving its own cap back (0 = "max").
+ * A fixed write here would lose cpu_limit= until the next spawn. Pure. */
+static inline long survival_cpu_quota(int pct, int under_pressure) {
+    long own = cpu_max_quota(pct);
+    if (!under_pressure) return own;
+    return own > 0 && own < 50000 ? own : 50000;
 }
 
 /* soft reclaim buffer (memory.high): 90% of the hard cap, in bytes; 0 (no

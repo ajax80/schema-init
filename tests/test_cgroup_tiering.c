@@ -34,6 +34,15 @@ int main(void) {
     assert(cpu_max_quota(10000) == 10000000);
     assert(cpu_max_quota(10001) == 0);
 
+    /* survival posture: a STANDARD service is held to half a core or its own
+     * tighter cap, and leaving restores its own cap (0 = write "max") */
+    assert(survival_cpu_quota(0, 1) == 50000);
+    assert(survival_cpu_quota(20, 1) == 20000);
+    assert(survival_cpu_quota(150, 1) == 50000);
+    assert(survival_cpu_quota(0, 0) == 0);
+    assert(survival_cpu_quota(20, 0) == 20000);
+    assert(survival_cpu_quota(150, 0) == 150000);
+
     /* no limit -> no soft reclaim buffer */
     assert(mem_high_bytes(0) == 0);
     assert(mem_high_bytes(-5) == 0);

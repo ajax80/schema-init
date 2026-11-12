@@ -102,6 +102,12 @@ int main(void) {
     write_svc(p, "name=g\nexec=/bin/true\npids_max=64\npids_max=\ncpu_weight=250\ncpu_weight=\n");
     assert(service_load_one(p, &svc) == 0);
     assert(svc.pids_max == 0 && svc.cpu_weight == 0);
+    write_svc(p, "name=g\nexec=/bin/true\npids_max=64\npids_max=max\ncpu_weight=9\ncpu_weight=infinity\n");
+    assert(service_load_one(p, &svc) == -1);   /* cpu_weight has no unlimited */
+    write_svc(p, "name=g\nexec=/bin/true\npids_max=64\npids_max=max\n");
+    assert(service_load_one(p, &svc) == 0 && svc.pids_max == 0);
+    write_svc(p, "name=g\nexec=/bin/true\npids_max=64\npids_max=infinity\n");
+    assert(service_load_one(p, &svc) == 0 && svc.pids_max == 0);
     static const char *badcg[] = {
         "cpu_weight=0", "cpu_weight=10001", "cpu_weight=x", "cpu_weight=-5",
         "pids_max=0", "pids_max=-1", "pids_max=12k", "pids_max=99999999999",

@@ -621,7 +621,11 @@ static void execute_survival_posture(int under_pressure) {
         if (svc->priority == PRIO_PERIPHERAL) {
             set_cgroup_freeze(svc, under_pressure);
         } else if (svc->priority == PRIO_STANDARD) {
-            set_cgroup_cpu_limit(svc, under_pressure ? "50000 100000" : "max 100000");
+            char q[32];
+            long quota = survival_cpu_quota(svc->cpu_limit_pct, under_pressure);
+            if (quota > 0) snprintf(q, sizeof q, "%ld 100000", quota);
+            else snprintf(q, sizeof q, "max 100000");
+            set_cgroup_cpu_limit(svc, q);
         }
     }
 }
