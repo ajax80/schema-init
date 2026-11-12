@@ -92,6 +92,14 @@ int main(void) {
     assert(run(&svc) == 126);
     assert(access(out, F_OK) != 0);
 
+    /* a group name too long for the field refuses the load: a truncation
+     * could resolve to some other group */
+    snprintf(p, sizeof p, "%s/e.svc", dir);
+    snprintf(body, sizeof body,
+        "name=e\nexec=/bin/true\ngroup=%0*d\n", 40, 7);
+    write_svc(p, body);
+    assert(service_load_one(p, &svc) != 0);
+
     printf("test_group_key: ALL OK\n");
     return 0;
 }

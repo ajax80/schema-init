@@ -62,6 +62,10 @@ _g = si.unit_to_svc("g4", si.parse_unit("[Service]\nExecStart=/bin/g\nGroup=root
 check("Group=root with no User= is the default: dropped", "group=" not in _g)
 _g = si.unit_to_svc("g5", si.parse_unit("[Service]\nExecStart=/bin/g\nUser=nobody\nGroup=root\n"))
 check("Group=root beside User= is a real override: kept", "group=root\n" in _g)
+si.set_user_mode(si.user_context("/h", 1000, "u", {"XDG_RUNTIME_DIR": "/r"}))
+_g = si.unit_to_svc("g6", si.parse_unit("[Service]\nExecStart=/bin/g\nGroup=games\n"))
+check("user mode never emits group= (schema-user cannot setgid)", "group=" not in _g)
+si.set_user_mode(None)
 # F44 GA chrony: User=chrony with ExecStart=! — systemd runs the main process as
 # root (chronyd drops privileges itself); as user=chrony it dies "Not superuser".
 for pfx in ("!", "+", "-!"):

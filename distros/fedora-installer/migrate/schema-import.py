@@ -1417,8 +1417,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         if amb:
             rt_notes.append("dropped AmbientCapabilities= (runs as root)")
     # Group= overrides the primary gid; ExecStart=!/+ keeps root's gid too.
-    # Dropped only when it names what the process would get anyway.
-    group = "" if privileged else _get_last(svc, "Group")
+    # Dropped only when it names what the process would get anyway. Never in
+    # user mode: schema-user cannot setgid, so group= would fail every start.
+    group = "" if privileged or _USER else _get_last(svc, "Group")
     if group and group != (_primary_group(user) if user and user != "root" else "root"):
         lines.append("group=%s" % group)
 

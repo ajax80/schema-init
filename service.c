@@ -1330,17 +1330,16 @@ static int svc_group_resolve(const char *val, gid_t *out) {
     return 1;
 }
 
-/* resolves run_group into run_gid in a spawned child; exits 126 on failure:
- * a service asked to run under a group must never fall back to root:root */
-static void svc_apply_group(service_t *svc) {
+/* run_group -> *g in a spawned child; exits 126 on failure: a service asked
+ * to run under a group must never fall back to root:root. *g is untouched
+ * when no group= is set. */
+static void svc_resolve_group_or_die(const service_t *svc, gid_t *g, const char *what) {
     if (!svc->run_group[0]) return;
-    gid_t g;
-    if (!svc_group_resolve(svc->run_group, &g)) {
-        dprintf(2, "[schema-init] UID DROP FAILED for %s: no group %s\n",
-                svc->name, svc->run_group);
+    if (!svc_group_resolve(svc->run_group, g)) {
+        dprintf(2, "[schema-init] UID DROP FAILED for %s: %sno group %s\n",
+                svc->name, what, svc->run_group);
         _exit(126);
     }
-    svc->run_gid = g;
 }
 
 pid_t service_stop_spawn(const service_t *svc, int phase) {
@@ -1358,11 +1357,7 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
     syscall(SYS_close_range, 3, ~0U, 0);
     svc_apply_env(svc, NULL, 0);
     gid_t sgid = svc->run_gid;
-    if (svc->run_group[0] && !svc_group_resolve(svc->run_group, &sgid)) {
-        dprintf(2, "[schema-init] UID DROP FAILED for %s: stop commands: no group %s\n",
-                svc->name, svc->run_group);
-        _exit(126);
-    }
+    svc_resolve_group_or_die(svc, &sgid, "stop commands: ");
     if (svc->run_uid && svc->cap_ambient_mask) {
         const char *step = "";
         if (apply_ambient_caps(svc->cap_ambient_mask, svc->run_uid, sgid,
@@ -1561,7 +1556,7 @@ int service_spawn(service_t *svc) {
             svc->run_uid = pw->pw_uid;
             svc->run_gid = pw->pw_gid;
         }
-        svc_apply_group(svc);   /* after user=: group= overrides the primary gid */
+        svc_resolve_group_or_die(svc, &svc->run_gid, "");   /* after user=: group= overrides the primary gid */
         if (svc->run_uid) {
             struct passwd *pw = getpwuid(svc->run_uid);
             if (pw) {
@@ -1574,7 +1569,9 @@ int service_spawn(service_t *svc) {
                 char xdg[48];
                 snprintf(xdg, sizeof(xdg), "/run/user/%u", (unsigned)svc->run_uid);
                 mkdir(xdg, 0700);
-                chown(xdg, svc->run_uid, svc->run_gid);
+                /* the user's primary group, as logind would: group= must not
+                 * hand the override group ownership of the runtime dir */
+                chown(xdg, svc->run_uid, pw ? pw->pw_gid : svc->run_gid);
                 setenv("XDG_RUNTIME_DIR", xdg, 1);
             }
             if (svc->cap_ambient_mask) {
@@ -2683,6 +2680,12 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             fprintf(stderr, "[schema-init] %s: user=%s does not exist yet — "
                     "it will be looked up again at start\n", path, val);
     } else if (strcmp(line, "group") == 0) {
+        /* a truncated name could resolve to SOME OTHER group: refuse the load */
+        if (strlen(val) >= sizeof svc->run_group) {
+            fprintf(stderr, "[schema-init] %s: group=%s longer than %zu chars — service not loaded\n",
+                    path, val, sizeof svc->run_group - 1);
+            return -1;
+        }
         /* stored by name and resolved at start, after user=: the gid must not
          * depend on which line comes first in the file */
         memset(svc->run_group, 0, sizeof svc->run_group);
