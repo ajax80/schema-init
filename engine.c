@@ -2835,6 +2835,10 @@ void listen_adopt(service_t *svc) {
     int ok = svc->listen_open == svc->listen_count;
     for (int k = 0; ok && k < svc->listen_open; k++)
         ok = service_listen_matches(svc, k);
+    if (!ok && svc->listen_open && svc->child_pid > 0) {
+        elog(stderr, "%s: listen= changed while running, its sockets are kept until it stops\n", svc->name);
+        ok = 1;
+    }
     if (!ok) {
         if (svc->listen_open)
             elog(stderr, "%s: carried sockets do not match listen=, rebinding\n", svc->name);
@@ -2946,7 +2950,8 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 svc_clamp_hold(&shadow_services[i], &reload_now);
                 /* the copy brought the old listen_fd[]; a changed or dropped
                  * listen= kept the old socket until reboot */
-                listen_adopt(&shadow_services[i]);
+                if (shadow_services[i].listen_open)
+                    listen_adopt(&shadow_services[i]);
 
                 /* A run-once timer (on_boot_sec with no interval) marks itself
                  * terminal by clearing SVC_TIMER when it completes. The shadow

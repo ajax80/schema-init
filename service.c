@@ -2079,6 +2079,7 @@ static int mem_limit_parse(const char *val, long *mb) {
     } else if (!((*end == 'M' || *end == 'm') && !end[1]) && *end) {
         return -1;
     }
+    if (v > MEM_LIMIT_MB_MAX) return -1;
     *mb = v;
     return 0;
 }
@@ -2681,7 +2682,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     } else if (strcmp(line, "mem_limit") == 0) {
         /* MB; atol read "1G" as 1 MB and the service died of OOM at start */
         if (mem_limit_parse(val, &svc->mem_limit_mb) < 0) {
-            fprintf(stderr, "[schema-init] %s: mem_limit=%s must be MB, NM or NG, 0 or empty\n",
+            fprintf(stderr, "[schema-init] %s: mem_limit=%s must be megabytes (512, 512M) or gigabytes (2G), 0 or empty\n",
                     svc->name[0] ? svc->name : path, val);
             return -1;
         }
@@ -2711,7 +2712,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->flags |= SVC_TIMER | SVC_ONESHOT;
     } else if (strcmp(line, "on_calendar") == 0) {
         /* ignored, the line left a plain daemon that ran at boot and crash-looped */
-        if (parse_calendar(svc, val) != 0) {
+        if (*val && parse_calendar(svc, val) != 0) {
             fprintf(stderr, "[schema-init] %s: bad on_calendar='%s' "
                     "(want HH:MM or H,H:MM, optionally after 'Mon' weekly "
                     "or 'DD' monthly) — not loaded\n", svc->name[0] ? svc->name : path, val);
@@ -2802,7 +2803,7 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
 static int svc_name_ok(const char *n) {
     if (n[0] == '.') return 0;
     for (; *n; n++)
-        if (!isalnum((unsigned char)*n) && !strchr("._@:+-", *n)) return 0;
+        if (!isalnum((unsigned char)*n) && !strchr("._@:+-\\", *n)) return 0;
     return 1;
 }
 
@@ -2881,7 +2882,7 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
 
     if (!svc->name[0] || !svc->exec[0]) return -1;
     if (!svc_name_ok(svc->name)) {
-        fprintf(stderr, "[schema-init] %s: name '%s' may hold only A-Z a-z 0-9 . _ @ : + - "
+        fprintf(stderr, "[schema-init] %s: name '%s' may hold only A-Z a-z 0-9 . _ @ : + - \\ "
                 "and not start with '.' — not loaded\n", path, svc->name);
         return -1;
     }

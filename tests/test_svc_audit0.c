@@ -37,6 +37,7 @@ static void test_on_calendar(void) {
     service_t s;
     assert(load_key("on_calendar=25:00", &s) == -1);
     assert(load_key("on_calendar=Mon", &s) == -1);
+    assert(load_key("on_calendar=", &s) == 0 && !(s.flags & SVC_TIMER));
     assert(load_key("on_calendar=03:30", &s) == 0);
     assert((s.flags & SVC_TIMER) && (s.flags & SVC_TIMER_CALENDAR));
 }
@@ -48,6 +49,7 @@ static void test_names(void) {
     assert(load("name=.hidden\nexec=/bin/true\n", &s) == -1);
     assert(load("name=a/b\nexec=/bin/true\n", &s) == -1);
     assert(load("name=app-org.kde.x:1+y_z\nexec=/bin/true\n", &s) == 0);
+    assert(load("name=systemd-fsck@dev-disk-by\\x2duuid-1\nexec=/bin/true\n", &s) == 0);
     write_file("motor@12.svc", "exec=/bin/true\n");
     char p[256];
     snprintf(p, sizeof p, "%s/motor@12.svc", dir);
@@ -72,6 +74,8 @@ static void test_limits(void) {
     assert(load_key("mem_limit=1T", &s) == -1);
     assert(load_key("mem_limit=-5", &s) == -1);
     assert(load_key("mem_limit=1GB", &s) == -1);
+    assert(load_key("mem_limit=1099511627777", &s) == -1);
+    assert(load_key("mem_limit=1099511627776", &s) == 0 && mem_high_bytes(s.mem_limit_mb) > 0);
 
     assert(load_key("watchdog_sec=-1", &s) == -1);
     assert(load_key("watchdog_sec=x", &s) == -1);
@@ -105,6 +109,9 @@ int main(void) {
     test_names();
     test_limits();
     test_load_order_and_dups();
+    char cmd[300];
+    snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+    assert(system(cmd) == 0);
     printf("test_svc_audit0: ok\n");
     return 0;
 }
