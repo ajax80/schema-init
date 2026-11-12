@@ -24,8 +24,11 @@ hardware.
   - `schema-snapshot arm [N] | disarm` — see below.
 
 - **`schema-bootok`** — a root oneshot run late in the rail. Waits up to
-  `SCHEMA_BOOTOK_TIMEOUT` (default 90s) for a live compositor (`kwin_wayland`
-  holding a `/dev/dri/card*` fd), then sets `boot_success=1` and clears
+  `SCHEMA_BOOTOK_TIMEOUT` (default 90s) for a login user's live session:
+  their `kwin_wayland`, `gnome-shell` or Wayland `cinnamon` holding a
+  `/dev/dri/card*` (or `/dev/nvidia*`) fd, or an X server holding one beside
+  their `cinnamon`/`gnome-shell`/`kwin_x11`/`plasmashell`. A greeter's system
+  uid never counts. It then sets `boot_success=1` and clears
   `boot_counter`. On timeout it leaves `boot_success=0`, so the fallback stays
   armed. Success means *desktop reached*, not *init finished*.
 

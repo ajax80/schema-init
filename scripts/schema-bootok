@@ -11,21 +11,39 @@ UID_MIN=$(awk '$1 == "UID_MIN" && $2 ~ /^[0-9]+$/ { print $2; exit }' \
   "${SCHEMA_LOGIN_DEFS:-/etc/login.defs}" 2>/dev/null)
 UID_MIN=${UID_MIN:-1000}
 
-# Only a login user's compositor counts. A display manager's greeter (sddm runs
-# kwin_wayland as its own system uid) holds the card too, and the boot would be
-# marked good while the user's session never came up. No upper bound: homed
-# and directory (sssd) users sit above login.defs UID_MAX.
+login_uid() {
+  local k u
+  while read -r k u _; do
+    [ "$k" = "Uid:" ] && { [ "$u" -ge "$UID_MIN" ]; return; }
+  done < /proc/"$1"/status 2>/dev/null
+  return 1
+}
+
+# The proprietary NVIDIA driver without nvidia-drm modeset gives Xorg only
+# /dev/nvidia*, no DRM card.
+holds_card() {
+  [ -n "$(find /proc/"$1"/fd \( -lname '/dev/dri/card*' -o -lname '/dev/nvidia[0-9]*' \) -print -quit 2>/dev/null)" ]
+}
+
+# Only a login user's session counts. A display manager's greeter holds the
+# card too (sddm runs kwin_wayland as its own system uid; LightDM's greeter
+# sits on a root Xorg), and the boot would be marked good while the user's
+# session never came up. No upper bound: homed and directory (sssd) users sit
+# above login.defs UID_MAX.
+#   Wayland: the user's compositor holds the card.
+#   X11 (Fedora Cinnamon): an X server holds it, usually as root, so the user
+#   is shown by their session shell running beside it.
 desktop_up() {
-  local p fd k u
-  for p in $(pgrep -x kwin_wayland 2>/dev/null); do
-    u=""
-    while read -r k u _; do [ "$k" = "Uid:" ] && break; u=""; done < /proc/"$p"/status 2>/dev/null
-    [ -n "$u" ] && [ "$u" -ge "$UID_MIN" ] || continue
-    for fd in /proc/"$p"/fd/*; do
-      case "$(readlink -f "$fd" 2>/dev/null)" in
-        /dev/dri/card*) return 0 ;;
-      esac
-    done
+  local p x=""
+  for p in $(pgrep -x 'kwin_wayland|gnome-shell|cinnamon' 2>/dev/null); do
+    login_uid "$p" && holds_card "$p" && return 0
+  done
+  for p in $(pgrep -x 'Xorg|X' 2>/dev/null); do
+    holds_card "$p" && { x=1; break; }
+  done
+  [ -n "$x" ] || return 1
+  for p in $(pgrep -x 'cinnamon|gnome-shell|kwin_x11|plasmashell' 2>/dev/null); do
+    login_uid "$p" && return 0
   done
   return 1
 }
@@ -42,5 +60,5 @@ while [ "$waited" -lt "$TIMEOUT" ]; do
   waited=$((waited + 2))
 done
 
-echo "schema-bootok: no live compositor after ${TIMEOUT}s; boot_success left 0 (fallback stays armed)" >&2
+echo "schema-bootok: no login user's session (their compositor, or an X server plus their session shell) holding the GPU after ${TIMEOUT}s; boot_success left 0 (fallback stays armed)" >&2
 exit 1
