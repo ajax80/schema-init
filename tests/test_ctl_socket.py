@@ -54,9 +54,10 @@ svc("slowstop", "exec=/bin/sh", "args=-c",
     'args=trap "" TERM; : > %s; while :; do %s 1; done' % (ARMED, shutil.which("sleep")),
     "notify=1", "start_timeout_sec=3", "stop_timeout_sec=60")
 svc("once", "exec=/bin/sh", "args=-c", "args=echo x >> " + COUNT, "oneshot=1")
-# name= is free text from the .svc: quotes, backslashes, control bytes and
-# raw non-UTF-8 bytes must come back as valid JSON from `status --json`
-HOSTILE = 'q"\\u\x01\xe9end'
+# quotes, control bytes and non-UTF-8 are refused at load now; backslash is
+# allowed (systemd-escaped instance names), and a raw `\u` or `\x` copied into
+# JSON unescaped is invalid, so `status --json` must still escape it
+HOSTILE = 'q\\u00\\x2dend\\'
 with open(SVC + "/jsonhostile.svc", "w", encoding="latin-1") as f:
     f.write('name=%s\nexec=%s\nargs=1000\nstable_secs=1\n' % (HOSTILE, sl))
 os.chmod(SVC + "/jsonhostile.svc", 0o600)
