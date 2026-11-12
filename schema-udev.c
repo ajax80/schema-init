@@ -216,8 +216,11 @@ static const char *const RULE_DIRS[] = {
     "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
 
 static void ruleset_reload(void) {
-    ruleset_free(&g_ruleset);
-    ruleset_load_dirs(RULE_DIRS, 3, &g_ruleset);
+    if (ruleset_reload_swap(&g_ruleset, RULE_DIRS, 3) != 0) {
+        fprintf(stderr, "[schema-udev] rules reload failed or came back empty — keeping the %d loaded rule(s)\n",
+                g_ruleset.n);
+        return;
+    }
     ug_cache_clear();
     fprintf(stderr, "[schema-udev] loaded %d native rule(s)\n", g_ruleset.n);
 }
@@ -225,6 +228,12 @@ static void ruleset_reload(void) {
 static void rules_reload(void) {
     struct dev_rule tmp[MAX_RULES];
     int n = dev_rules_load_dir(DEV_DIR, tmp, MAX_RULES);
+    /* an unreadable dir reads as 0: don't let a bad reload wipe live rules */
+    if (n <= 0 && g_nrules > 0) {
+        fprintf(stderr, "[schema-udev] %s reload came back empty — keeping %d rule(s)\n",
+                DEV_DIR, g_nrules);
+        return;
+    }
     memcpy(g_rules, tmp, sizeof(struct dev_rule) * (n < 0 ? 0 : n));
     g_nrules = n < 0 ? 0 : n;
     fprintf(stderr, "[schema-udev] loaded %d rule(s) from %s\n", g_nrules, DEV_DIR);

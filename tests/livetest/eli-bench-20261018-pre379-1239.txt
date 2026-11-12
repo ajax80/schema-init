@@ -1,0 +1,24 @@
+== base boot 1
+schema-init-0.4.14-1.1239.20261017git999f4a3.fc44.x86_64
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=79
+kwin=9.0 plasmashell=14.0 desktop_drawn=20.3 portal_kde=13.7
+xorg=- xfce4_session=- xfce4_panel=- xfdesktop=-
+mem_used_mb=1343 procs=230 load1=0.67 io_some_avg300=0.67
+boot: kernel 3.746s + userspace 7.091s = 10.837s   (last ready: plasma-autologin)
+1
+== base boot 2
+schema-init-0.4.14-1.1239.20261017git999f4a3.fc44.x86_64
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=77
+kwin=9.0 plasmashell=14.2 desktop_drawn=20.7 portal_kde=13.6
+xorg=- xfce4_session=- xfce4_panel=- xfdesktop=-
+mem_used_mb=1340 procs=225 load1=0.52 io_some_avg300=0.64
+boot: kernel 3.718s + userspace 6.809s = 10.528s   (last ready: plasma-autologin)
+1
+== base boot 3
+schema-init-0.4.14-1.1239.20261017git999f4a3.fc44.x86_64
+init=schema-init kernel=7.2.7-200.fc44.x86_64 uptime=77
+kwin=9.0 plasmashell=14.2 desktop_drawn=20.7 portal_kde=13.7
+xorg=- xfce4_session=- xfce4_panel=- xfdesktop=-
+mem_used_mb=1354 procs=228 load1=0.27 io_some_avg300=0.65
+boot: kernel 3.676s + userspace 6.651s = 10.327s   (last ready: plasma-autologin)
+1
