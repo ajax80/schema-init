@@ -785,29 +785,6 @@ static void reexec_close_strays(const int *keep, int nkeep) {
     fd_close_detached(strays, n);
 }
 
-/* Sockets the old image held: CLOEXEC again, and only while they are still
- * what this .svc asks for. */
-static void listen_adopt(service_t *svc) {
-    int ok = svc->listen_open == svc->listen_count;
-    for (int k = 0; ok && k < svc->listen_open; k++)
-        ok = service_listen_matches(svc, k);
-    if (!ok) {
-        if (svc->listen_open)
-            fprintf(stderr, "[schema-init] re-exec: %s: carried sockets do not match listen=, rebinding at next start\n", svc->name);
-        int parked = svc->listen_open && svc->child_pid == 0 && svc->inst.state == STATE_PERFECT;
-        for (int k = 0; k < svc->listen_open && k < MAX_LISTEN; k++)
-            close(svc->listen_fd[k]);
-        svc->listen_open = 0;
-        if (svc->listen_count && service_listen_open(svc) < 0 && parked) {
-            svc->inst.state = STATE_NEW_PROCESS;
-            svc->listen_hold = 1;
-        }
-        return;
-    }
-    for (int k = 0; k < svc->listen_open; k++)
-        fcntl(svc->listen_fd[k], F_SETFD, FD_CLOEXEC);
-}
-
 static void reexec_adopt(int blob_fd, int oldexe_fd) {
     reexec_global_t g;
     eviction_t ev[MAX_EVICTIONS];

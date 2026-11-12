@@ -21,7 +21,9 @@
 #define MAX_ENV_FILES   4
 #define MAX_EXEC_PRE    8
 #define MAX_CARDS       4
-#define CARD_TIMEOUT_SECS 30
+#ifndef CARD_TIMEOUT_SECS
+#define CARD_TIMEOUT_SECS 30   /* tests build with a short one */
+#endif
 #define MAX_LISTEN      4
 #define MAX_COND        8
 #define MAX_DEPS        8
@@ -196,9 +198,11 @@ static inline long survival_cpu_quota(int pct, int under_pressure) {
 
 /* soft reclaim buffer (memory.high): 90% of the hard cap, in bytes; 0 (no
  * memory.high) when the service has no mem_limit. Pure. */
+#define MEM_LIMIT_MB_MAX (1LL << 40)   /* MB * 2^20 must fit a long long */
 static inline long long mem_high_bytes(long mem_limit_mb) {
     if (mem_limit_mb <= 0) return 0;
-    return (mem_limit_mb * 1024LL * 1024LL * 9LL) / 10LL;
+    /* floor(mb * 2^20 * 0.9) without the *9 that overflows at MEM_LIMIT_MB_MAX */
+    return mem_limit_mb * 943718LL + mem_limit_mb * 2LL / 5LL;
 }
 
 /* on_calendar day-of-week token -> tm_wday index (Sun=0..Sat=6), or -1 if the
@@ -365,6 +369,7 @@ typedef struct {
     int              card_count;
     int              card_next;           /* next card to play; reset with the restart budget */
     pid_t            card_pid;            /* running card, 0 if none; the spawn waits for it */
+    uint8_t          card_killed;         /* card_pid timed out and got SIGKILL; reap() collects it */
     struct timespec  card_start;
     uint8_t          fallback_live;       /* card=fallback: played; its service runs while this is down */
     uint8_t          standby_up;          /* named by a card=fallback:, and started by it */

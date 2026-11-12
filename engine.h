@@ -88,6 +88,7 @@ void notify_pause_track(void);
 int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 int engine_load(const char *svc_dir);
 int engine_reload(int evict, char *err, size_t errsz);
+void listen_adopt(service_t *svc);
 
 #define SHUT_GRACE_MS   3000
 void engine_open(int adopting);

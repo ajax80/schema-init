@@ -268,6 +268,8 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_recorder_daemon.sh
 	sh tests/test_schema_user.sh
 	sh tests/test_bus_activate.sh
+	sh tests/test_reload_listen.sh
+	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-card-user && sh tests/test_card_timeout.sh /tmp/schema-test-card-user
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
@@ -345,6 +347,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_mountns_rw.c ns.c -o /tmp/schema-test-mountns-rw && /tmp/schema-test-mountns-rw
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-dropins && /tmp/schema-test-dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-rlimits && /tmp/schema-test-rlimits
+	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-audit0 && /tmp/schema-test-audit0
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-groupkey && sh tests/test_group_key.sh
 	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cap-parse && /tmp/schema-test-cap-parse
 	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o /tmp/schema-test-ambient-caps && /tmp/schema-test-ambient-caps

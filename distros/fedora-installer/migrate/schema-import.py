@@ -1630,6 +1630,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         if sec is None:
             warns.append("WatchdogSec=%s unrecognised, no service watchdog" % wd)
         elif sec > 0 and stype in ("notify", "notify-reload"):
+            if sec > 86400:   # the engine refuses the service above a day
+                warns.append("WatchdogSec=%s above 1d, capped at 86400" % wd)
+                sec = 86400
             lines.append("watchdog_sec=%d" % sec)
         elif sec > 0:
             warns.append("WatchdogSec= without Type=notify has no socket to pet over, dropped")

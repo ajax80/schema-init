@@ -2064,6 +2064,26 @@ static int cg_key_int(const service_t *svc, const char *path, const char *key,
     return 0;
 }
 
+/* "512", "512M", "2G"; empty or 0 = no limit */
+static int mem_limit_parse(const char *val, long *mb) {
+    char *end;
+    long v;
+    if (!*val) { *mb = 0; return 0; }
+    if (!isdigit((unsigned char)*val)) return -1;
+    errno = 0;
+    v = strtol(val, &end, 10);
+    if (errno || v < 0) return -1;
+    if ((*end == 'G' || *end == 'g') && !end[1]) {
+        if (v > LONG_MAX / 1024) return -1;
+        v *= 1024;
+    } else if (!((*end == 'M' || *end == 'm') && !end[1]) && *end) {
+        return -1;
+    }
+    if (v > MEM_LIMIT_MB_MAX) return -1;
+    *mb = v;
+    return 0;
+}
+
 static int parse_partition(const char *val) {
     if (strcasecmp(val, "isolated") == 0) return PART_ISOLATED;
     if (strcasecmp(val, "root") == 0)     return PART_ROOT;
@@ -2641,8 +2661,13 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     } else if (strcmp(line, "watchdog_timeout_ms") == 0) {
         svc->watchdog_timeout_ms = atoi(val);
     } else if (strcmp(line, "watchdog_sec") == 0) {
+        if (*val && strcmp(val, "0") && cg_key_int(svc, path, line, val, 86400, "0-86400 seconds") < 0)
+            return -1;
         svc->watchdog_sec = atoi(val);
     } else if (strcmp(line, "cpu_limit") == 0) {
+        /* atoi let "abc" or "20000" through as 0: no limit at all */
+        if (*val && strcmp(val, "0") && cg_key_int(svc, path, line, val, 10000, "1-10000 (% of one core), 0 or empty") < 0)
+            return -1;
         svc->cpu_limit_pct = atoi(val);
     } else if (strcmp(line, "pids_max") == 0) {
         /* empty clears, so a drop-in can lift a limit the base file set */
@@ -2655,7 +2680,12 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         svc->cpu_weight = *val ? atoi(val) : 0;
     } else if (strcmp(line, "mem_limit") == 0) {
-        svc->mem_limit_mb = atol(val);
+        /* MB; atol read "1G" as 1 MB and the service died of OOM at start */
+        if (mem_limit_parse(val, &svc->mem_limit_mb) < 0) {
+            fprintf(stderr, "[schema-init] %s: mem_limit=%s must be megabytes (512, 512M) or gigabytes (2G), 0 or empty\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
     } else if (strcmp(line, "cpuset") == 0) {
         strncpy(svc->cpuset, val, sizeof(svc->cpuset) - 1);
     } else if (strcmp(line, "cpuset_partition") == 0) {
@@ -2681,10 +2711,13 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->timer_interval_sec = atoi(val);
         svc->flags |= SVC_TIMER | SVC_ONESHOT;
     } else if (strcmp(line, "on_calendar") == 0) {
-        if (parse_calendar(svc, val) != 0)
-            fprintf(stderr, "[schema-init] WARN: '%s' bad on_calendar='%s' "
+        /* ignored, the line left a plain daemon that ran at boot and crash-looped */
+        if (*val && parse_calendar(svc, val) != 0) {
+            fprintf(stderr, "[schema-init] %s: bad on_calendar='%s' "
                     "(want HH:MM or H,H:MM, optionally after 'Mon' weekly "
-                    "or 'DD' monthly) — ignoring\n", svc->name, val);
+                    "or 'DD' monthly) — not loaded\n", svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
     } else if (strcmp(line, "persistent") == 0) {
         if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
     } else if (strcmp(line, "user") == 0) {
@@ -2766,6 +2799,14 @@ static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path
     return 0;
 }
 
+/* the name is a cgroup dir, a log file name and a word on the control socket */
+static int svc_name_ok(const char *n) {
+    if (n[0] == '.') return 0;
+    for (; *n; n++)
+        if (!isalnum((unsigned char)*n) && !strchr("._@:+-\\", *n)) return 0;
+    return 1;
+}
+
 /* Post-parse checks and defaults, then the name from the filename.
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
@@ -2840,6 +2881,11 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
     }
 
     if (!svc->name[0] || !svc->exec[0]) return -1;
+    if (!svc_name_ok(svc->name)) {
+        fprintf(stderr, "[schema-init] %s: name '%s' may hold only A-Z a-z 0-9 . _ @ : + - \\ "
+                "and not start with '.' — not loaded\n", path, svc->name);
+        return -1;
+    }
     svc->argv[pc->argc] = NULL;
     return 0;
 }
@@ -2889,18 +2935,24 @@ int services_load(const char *dir, service_t *table, int max) {
                 "writable by others — loading anyway; schema-ctl reload is refused until fixed (chown root:root; chmod go-w)\n", dir);
         svc_refused++;
     }
-    struct dirent *ent;
+    struct dirent **ents;
     int count = 0;
     int warned = 0;
 
     if (!d) return 0;
+    closedir(d);
+    /* sorted: readdir order made start order and table order differ per
+     * filesystem, and decided which of two same-named files won */
+    int nents = scandir(dir, &ents, NULL, svc_dropin_cmp);
+    if (nents < 0) return 0;
 
-    while ((ent = readdir(d))) {
+    for (int e = 0; e < nents; e++) {
         char path[512];
-        size_t nlen = strlen(ent->d_name);
+        const char *dn = ents[e]->d_name;
+        size_t nlen = strlen(dn);
 
         /* only .svc files */
-        if (nlen < 5 || strcmp(ent->d_name + nlen - 4, ".svc") != 0)
+        if (nlen < 5 || strcmp(dn + nlen - 4, ".svc") != 0)
             continue;
 
         if (count >= max) {
@@ -2911,12 +2963,24 @@ int services_load(const char *dir, service_t *table, int max) {
             continue;
         }
 
-        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
-        if (svc_load_file(path, &table[count]) == 0)
-            count++;
+        snprintf(path, sizeof(path), "%s/%s", dir, dn);
+        if (svc_load_file(path, &table[count]) != 0)
+            continue;
+        /* two files with one name= would share a cgroup and a log, and every
+         * lookup by name would find only the first */
+        int k;
+        for (k = 0; k < count && strcmp(table[k].name, table[count].name); k++)
+            ;
+        if (k < count) {
+            fprintf(stderr, "[schema-init] REFUSED %s: name '%s' is already taken by an earlier "
+                    ".svc — not loaded\n", path, table[count].name);
+            svc_free_strings(&table[count]);
+            continue;
+        }
+        count++;
     }
-
-    closedir(d);
+    for (int e = 0; e < nents; e++) free(ents[e]);
+    free(ents);
 
     /* second pass: resolve dep names → indices */
     {
