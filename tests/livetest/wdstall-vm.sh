@@ -71,13 +71,13 @@ timeout 220 qemu-system-x86_64 -enable-kvm -m 512 -smp 2 -no-reboot -nographic -
   -kernel "$KERNEL" -initrd "$WORK/i.gz" \
   -device i6300esb -append "console=ttyS0 rdinit=/init panic=1 loglevel=4" </dev/null >"$OUT" 2>&1 || true
 
-grep -E 'opened hardware watchdog|STALL-START|TICK-(5|10|15)|STALL-OK|DMT-STOP|WD-NEVER-FIRED|missed pet window|Kernel panic' "$OUT"
+grep -E 'opened hardware watchdog|STALL-START|TICK-(5|10|15)|STALL-OK|DMT-STOP|WD-NEVER-FIRED|missed pet window|Kernel panic' "$OUT" || true
 r=0
 grep -q 'opened hardware watchdog' "$OUT" || { echo ">> MISS: engine never opened the watchdog"; r=1; }
 grep -q 'STALL-OK' "$OUT" || { echo ">> MISS: reset during the stall — pets did not keep flowing"; r=1; }
-grep -q 'DMT-STOP' "$OUT" || r=1
+grep -q 'DMT-STOP' "$OUT" || { echo ">> MISS: the DMT phase never started"; r=1; }
 grep -q 'WD-NEVER-FIRED' "$OUT" && { echo ">> MISS: device never fired after pets stopped"; r=1; }
-bad=$(grep -c 'TICK-.*ERR' "$OUT" || true)
+bad=$(grep -c 'TICK-.*ERR' "$OUT") || true
 [ "$bad" -eq 0 ] || { echo ">> MISS: $bad status calls failed during the stall"; r=1; }
 [ $r -eq 0 ] && echo ">> RESULT: PASS (pets survive a ctl stall; the armed device fires when pets stop)" \
              || echo ">> RESULT: FAIL (serial: $OUT)"

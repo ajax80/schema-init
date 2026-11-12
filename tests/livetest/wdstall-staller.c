@@ -3,6 +3,7 @@
  *   stuck <sock> <secs>: sends "status --kv", never reads, holds the socket
  *   drip  <sock> <secs>: one byte of "status" every 100 ms, never a newline
  */
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,9 @@ static int conn(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc != 4) return 2;
+    /* the server times a dripped line out and closes: the next write must
+     * return EPIPE and reconnect, not die on SIGPIPE */
+    signal(SIGPIPE, SIG_IGN);
     int secs = atoi(argv[3]);
     time_t end = time(NULL) + secs;
     if (strcmp(argv[1], "stuck") == 0) {
