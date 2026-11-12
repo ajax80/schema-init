@@ -5,9 +5,22 @@ shopt -s nullglob
 TIMEOUT="${SCHEMA_BOOTOK_TIMEOUT:-90}"
 GRUBENV="${SCHEMA_GRUBENV:-/boot/grub2/grubenv}"
 
+# First numeric UID_MIN wins: a duplicate or junk line must not make every
+# comparison below fail and roll back a good boot.
+UID_MIN=$(awk '$1 == "UID_MIN" && $2 ~ /^[0-9]+$/ { print $2; exit }' \
+  "${SCHEMA_LOGIN_DEFS:-/etc/login.defs}" 2>/dev/null)
+UID_MIN=${UID_MIN:-1000}
+
+# Only a login user's compositor counts. A display manager's greeter (sddm runs
+# kwin_wayland as its own system uid) holds the card too, and the boot would be
+# marked good while the user's session never came up. No upper bound: homed
+# and directory (sssd) users sit above login.defs UID_MAX.
 desktop_up() {
-  local p fd
+  local p fd k u
   for p in $(pgrep -x kwin_wayland 2>/dev/null); do
+    u=""
+    while read -r k u _; do [ "$k" = "Uid:" ] && break; u=""; done < /proc/"$p"/status 2>/dev/null
+    [ -n "$u" ] && [ "$u" -ge "$UID_MIN" ] || continue
     for fd in /proc/"$p"/fd/*; do
       case "$(readlink -f "$fd" 2>/dev/null)" in
         /dev/dri/card*) return 0 ;;
