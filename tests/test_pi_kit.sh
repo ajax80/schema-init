@@ -55,6 +55,8 @@ PATH=$T/bin:$PATH SCHEMA_PI_ROOT=$T/root sh "$D/scripts/schema-pi-early" >/dev/n
 [ ! -e "$T/root/run/nologin" ] || fail "early: /run/nologin left behind"
 
 # timesync runs from a copy: its floor falls back to its own mtime, which a checkout sets to now
+# its last-good-sync stamp stays in the scratch tree, never the real /var/lib
+export SCHEMA_PI_STAMP=$T/timesync-last
 TS=$T/schema-pi-timesync
 cp "$D/scripts/schema-pi-timesync" "$TS"; touch -d 2020-01-01 "$TS"
 
@@ -105,6 +107,33 @@ touch -d '2026-11-02 12:00 UTC' "$TS"
 PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1 || fail "timesync mtime: exit"
 [ "$(grep '^date' "$T/calls")" = 'date -s Tue, 03 Nov 2026 04:05:06 GMT' ] || fail "timesync mtime: $(cat "$T/calls") $(cat "$T/out")"
 touch -d 2020-01-01 "$TS"
+
+# last good sync: two agreeing sources stamp the time they set...
+rm -f "$SCHEMA_PI_STAMP"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_G_DATE='Mon, 02 Nov 2026 03:04:35 GMT' SCHEMA_PI_ONCE=1 sh "$TS" >/dev/null 2>&1
+[ "$(cat "$SCHEMA_PI_STAMP" 2>/dev/null)" = 1793588645 ] || fail "timesync stamp: agreed sync not stamped: $(cat "$SCHEMA_PI_STAMP" 2>&1)"
+# ...a lone source does not: a spoofed forward jump must not become the floor
+rm -f "$SCHEMA_PI_STAMP"
+PATH=$T/bin:$PATH T_G_OK=1 SCHEMA_PI_ONCE=1 SCHEMA_PI_RESYNC=0 sh "$TS" >/dev/null 2>&1
+grep -qx 'date -s Tue, 03 Nov 2026 04:05:06 GMT' "$T/calls" || fail "timesync stamp: lone source did not set"
+[ ! -e "$SCHEMA_PI_STAMP" ] || fail "timesync stamp: a lone source stamped"
+# ...and later, two agreeing sources cannot wind the clock behind it (on-path MITM spoofing both)
+echo 1793700000 > "$SCHEMA_PI_STAMP"
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_G_DATE='Mon, 02 Nov 2026 03:04:35 GMT' SCHEMA_PI_ONCE=1 sh "$TS" > "$T/out" 2>&1
+grep -q '^date -s' "$T/calls" && fail "timesync stamp: set behind the last good sync: $(cat "$T/calls")"
+grep -q 'before last good sync' "$T/out" || fail "timesync stamp: refusal not logged: $(cat "$T/out")"
+# ...within 60 s of it is fine (the sources' own tolerance)
+echo 1793588700 > "$SCHEMA_PI_STAMP"
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_G_DATE='Mon, 02 Nov 2026 03:04:35 GMT' SCHEMA_PI_ONCE=1 sh "$TS" >/dev/null 2>&1
+grep -qx 'date -s Mon, 02 Nov 2026 03:04:05 GMT' "$T/calls" || fail "timesync stamp: 60 s slack: $(cat "$T/calls")"
+# ...and a junk stamp is no floor
+echo junk > "$SCHEMA_PI_STAMP"
+: > "$T/calls"
+PATH=$T/bin:$PATH T_CF_OK=1 T_G_OK=1 T_G_DATE='Mon, 02 Nov 2026 03:04:35 GMT' SCHEMA_PI_ONCE=1 sh "$TS" >/dev/null 2>&1
+grep -qx 'date -s Mon, 02 Nov 2026 03:04:05 GMT' "$T/calls" || fail "timesync stamp: junk stamp blocked: $(cat "$T/calls")"
+rm -f "$SCHEMA_PI_STAMP"
 grep -q '^BUILD_EPOCH=$' scripts/schema-pi-timesync || fail "timesync: BUILD_EPOCH must ship unbaked in the source"
 grep -q 's/^BUILD_EPOCH=.*/BUILD_EPOCH=$(SOURCE_DATE_EPOCH)/' debian/rules || fail "debian/rules does not bake BUILD_EPOCH"
 
