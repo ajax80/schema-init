@@ -14,9 +14,9 @@
 static void write_svc(const char *path, const char *body) {
     FILE *f = fopen(path, "w");
     assert(f);
+    fchmod(fileno(f), 0600);   /* by fd, not path: CodeQL TOCTOU */
     fputs(body, f);
     fclose(f);
-    chmod(path, 0600);
 }
 
 static int run(service_t *svc) {
