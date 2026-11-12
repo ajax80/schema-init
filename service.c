@@ -281,14 +281,14 @@ static void cgroup_apply_limits(service_t *svc) {
 
     if (!svc->cgroup_path[0]) return;
 
-    if (svc->cpu_limit_pct > 0 && svc->cpu_limit_pct <= 100) {
-        snprintf(path, sizeof(path), "%s/cpu.max", svc->cgroup_path);
-        fd = open(path, O_WRONLY);
-        if (fd >= 0) {
-            n = snprintf(buf, sizeof(buf), "%d 100000\n", svc->cpu_limit_pct * 1000);
-            write(fd, buf, (size_t)n);
-            close(fd);
-        }
+    if (cpu_max_quota(svc->cpu_limit_pct) > 0) {
+        snprintf(buf, sizeof(buf), "%ld 100000\n", cpu_max_quota(svc->cpu_limit_pct));
+        cg_write(svc->cgroup_path, "cpu.max", buf);
+    }
+
+    if (svc->pids_max > 0) {
+        snprintf(buf, sizeof(buf), "%d\n", svc->pids_max);
+        cg_write(svc->cgroup_path, "pids.max", buf);
     }
 
     if (svc->mem_limit_mb > 0) {
@@ -321,7 +321,7 @@ static void cgroup_apply_limits(service_t *svc) {
      * cpu.idle. io.weight shields CRITICAL disk I/O from peripheral hogs — keeps
      * PipeWire from crackling under frigate/torrent load. */
     {
-        cgroup_tier_t tier = cgroup_tiering(svc->priority);
+        cgroup_tier_t tier = cgroup_tiering(svc->priority, svc->cpu_weight);
         if (tier.cpu_idle) {
             cg_write(svc->cgroup_path, "cpu.idle", "1\n");
         } else {
@@ -2632,6 +2632,18 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->watchdog_sec = atoi(val);
     } else if (strcmp(line, "cpu_limit") == 0) {
         svc->cpu_limit_pct = atoi(val);
+    } else if (strcmp(line, "pids_max") == 0 || strcmp(line, "cpu_weight") == 0) {
+        int w = line[0] == 'c', v = 0;
+        char *end;
+        long l = strtol(val, &end, 10);
+        /* empty clears, so a drop-in can lift a limit the base file set */
+        if (*val && (*end || l < 1 || l > (w ? 10000 : 4194304))) {
+            fprintf(stderr, "[schema-init] %s: %s=%s must be %s\n", svc->name[0] ? svc->name : path,
+                    line, val, w ? "1-10000" : "1-4194304, or empty for unlimited");
+            return -1;
+        }
+        if (*val) v = (int)l;
+        if (w) svc->cpu_weight = v; else svc->pids_max = v;
     } else if (strcmp(line, "mem_limit") == 0) {
         svc->mem_limit_mb = atol(val);
     } else if (strcmp(line, "cpuset") == 0) {

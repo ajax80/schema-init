@@ -94,6 +94,24 @@ int main(void) {
             assert(r == -1);
     }
 
+    /* cgroup keys from imported Slice=/TasksMax=/CPUWeight=/CPUQuota= */
+    snprintf(p, sizeof p, "%s/g.svc", dir);
+    write_svc(p, "name=g\nexec=/bin/true\npids_max=64\ncpu_weight=250\ncpu_limit=150\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.pids_max == 64 && svc.cpu_weight == 250 && svc.cpu_limit_pct == 150);
+    write_svc(p, "name=g\nexec=/bin/true\npids_max=64\npids_max=\ncpu_weight=250\ncpu_weight=\n");
+    assert(service_load_one(p, &svc) == 0);
+    assert(svc.pids_max == 0 && svc.cpu_weight == 0);
+    static const char *badcg[] = {
+        "cpu_weight=0", "cpu_weight=10001", "cpu_weight=x", "cpu_weight=-5",
+        "pids_max=0", "pids_max=-1", "pids_max=12k", "pids_max=99999999999",
+    };
+    for (size_t b = 0; b < sizeof badcg / sizeof badcg[0]; b++) {
+        snprintf(body, sizeof body, "name=g\nexec=/bin/true\n%s\n", badcg[b]);
+        write_svc(p, body);
+        assert(service_load_one(p, &svc) == -1);
+    }
+
     /* a drop-in replaces one limit and an empty value removes another */
     char dd[300];
     snprintf(p, sizeof p, "%s/d.svc", dir);
