@@ -1078,9 +1078,6 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
                 warns.append("DynamicUser=yes with no User=: runs as root, no dynamic users here, "
                              "and without what it implies unless set here (NoNewPrivileges, "
                              "ProtectSystem=strict, ProtectHome=read-only, PrivateTmp, RemoveIPC, RestrictSUIDSGID)")
-        group = _get_last(svc, "Group")
-        if group and group != (_primary_group(user) if user and user != "root" else "root"):
-            warns.append("Group=%s not applied: runs with %s's primary group" % (group, user or "root"))
         if _get_last(svc, "SupplementaryGroups"):
             warns.append("SupplementaryGroups= not applied: only %s's /etc/group memberships" % (user or "root"))
     if _get_all(svc, "ExecCondition"):
@@ -1419,6 +1416,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         lines.append("needs_root=1")
         if amb:
             rt_notes.append("dropped AmbientCapabilities= (runs as root)")
+    # Group= overrides the primary gid; ExecStart=!/+ keeps root's gid too.
+    # Dropped only when it names what the process would get anyway. Never in
+    # user mode: schema-user cannot setgid, so group= would fail every start.
+    group = "" if privileged or _USER else _get_last(svc, "Group")
+    if group and group != (_primary_group(user) if user and user != "root" else "root"):
+        lines.append("group=%s" % group)
 
     lines.append("critical=0")
 
