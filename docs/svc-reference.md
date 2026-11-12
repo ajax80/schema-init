@@ -133,6 +133,12 @@ Per-service confinement, applied in the child between fork and exec. Each is opt
 
 A hardening step that fails aborts the spawn (`HARDENING FAILED` in the service log) rather than running the service unconfined.
 
+## Resource limits from systemd units
+
+`schema-import` maps a unit's `MemoryMax=` (or the older `MemoryLimit=`) to `mem_limit` (rounded up to whole MB), `CPUQuota=` to `cpu_limit`, `CPUWeight=` to `cpu_weight` (`idle` → `1`) and `TasksMax=` to `pids_max`. `infinity` or an empty value means no key. A percentage `MemoryMax=`/`TasksMax=` has no equivalent and is warned about, as are `MemoryHigh=`, `MemorySwapMax=`, `IOWeight=`, `AllowedCPUs=` and the other resource directives with no key here.
+
+There are no slice objects. A unit's `Slice=` is resolved through the same unit directories and drop-ins as the unit itself, together with every parent slice (`a-b.slice` sits in `a.slice`). Each cap they set is folded onto the member, and the tightest of the unit's own value and the slices' values wins. `CPUWeight=` is relative, not a cap, so the unit's own value is used, or else the nearest slice's. Under systemd a slice caps its members **together**. Here each member gets the whole ceiling, and the generated file warns about this. Slices with no limits (Fedora's `system-cups.slice` and the like) are ignored, as are the root slices (`system.slice`, `user.slice`, `app.slice`, …). `--user` works the same way, using the user unit directories.
+
 ## Service templates
 
 For fleets of identical services — e.g. 49 joint controllers on an exoskeleton — define config once and symlink instances:

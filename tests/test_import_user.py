@@ -911,5 +911,16 @@ for _v, _k, _sub in (("STATE_DIRECTORY", "state", "us"), ("CACHE_DIRECTORY", "ca
 check("exec_dir_no_root_prefix", "exec_pre=+" not in _rf)
 t.done()
 
+# --- user units: User=/Group= never reach schema-user; Slice= folds from the user dirs ---
+t = Tree()
+t.write(t.cfg("pod-web.slice"), "[Slice]\nMemoryMax=256M\nTasksMax=50\n")
+t.write(t.cfg("u.service"), "[Service]\nExecStart=/bin/u\nUser=nobody\nGroup=games\nSlice=pod-web.slice\n")
+_n, _ub = si._user_translate("u.service", set(), {"u.service"})
+check("user: User= dropped with a WARN, no user=/group=",
+      "user=" not in _ub.replace("# schema-import WARN: User=", "") and "group=" not in _ub
+      and "User=nobody dropped" in _ub)
+check("user: slice from ~/.config folds", "mem_limit=256\n" in _ub and "pids_max=50\n" in _ub)
+t.done()
+
 print("%d/%d passed" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

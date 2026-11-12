@@ -1451,4 +1451,89 @@ _r16 = _rtenv("RuntimeDirectory=r1\n" + _e16)
 check("16 variables already: the unit still imports", "env=V15=1\n" in _r16)
 check("16 variables already: says so", "RUNTIME_DIRECTORY" in _r16 and "env=RUNTIME_DIRECTORY" not in _r16)
 
+# --- resource directives and Slice= -> per-service cgroup keys ---
+def _cg(svc_body, name="cg"):
+    return si.unit_to_svc(name, si.parse_unit("[Service]\nExecStart=/bin/c\n" + svc_body))
+check("MemoryMax=512M -> mem_limit=512", "mem_limit=512\n" in _cg("MemoryMax=512M\n"))
+check("MemoryMax=1.5G -> mem_limit=1536", "mem_limit=1536\n" in _cg("MemoryMax=1.5G\n"))
+check("MemoryMax bytes round UP to a MB", "mem_limit=1\n" in _cg("MemoryMax=1000000\n"))
+check("legacy MemoryLimit= -> mem_limit", "mem_limit=256\n" in _cg("MemoryLimit=256M\n"))
+check("MemoryMax=infinity -> no key", "mem_limit=" not in _cg("MemoryMax=infinity\n"))
+check("empty MemoryMax= clears the one before", "mem_limit=" not in _cg("MemoryMax=512M\nMemoryMax=\n"))
+_p = _cg("MemoryMax=50%\n")
+check("MemoryMax=50% -> warned, no key", "mem_limit=" not in _p and "MemoryMax=50%" in _p and si.WARN_PREFIX in _p)
+check("CPUQuota=150% -> cpu_limit=150", "cpu_limit=150\n" in _cg("CPUQuota=150%\n"))
+check("CPUQuota=12.5% rounds up", "cpu_limit=13\n" in _cg("CPUQuota=12.5%\n"))
+check("CPUWeight=250 -> cpu_weight=250", "cpu_weight=250\n" in _cg("CPUWeight=250\n"))
+check("CPUWeight=idle -> cpu_weight=1", "cpu_weight=1\n" in _cg("CPUWeight=idle\n"))
+check("TasksMax=64 -> pids_max=64", "pids_max=64\n" in _cg("TasksMax=64\n"))
+check("TasksMax=infinity -> no key", "pids_max=" not in _cg("TasksMax=infinity\n"))
+_p = _cg("TasksMax=10%\n")
+check("TasksMax=10% -> warned, no key", "pids_max=" not in _p and "TasksMax=10%" in _p)
+_p = _cg("MemoryHigh=300M\n")
+check("MemoryHigh= alone -> warned, no mem_limit", "mem_limit=" not in _p and "MemoryHigh" in _p.split("name=")[0])
+check("MemoryMax=8E -> no key (past any machine, overflows the engine)", "mem_limit=" not in _cg("MemoryMax=8E\n"))
+check("defaults ask for nothing: no WARN", si.WARN_PREFIX not in _cg("IOWeight=100\nMemoryLow=0\nCPUShares=1024\n"))
+check("CPUQuotaPeriodSec= warned", "CPUQuotaPeriodSec" in _cg("CPUQuota=50%\nCPUQuotaPeriodSec=10ms\n"))
+check("CPUWeight=idle says it is not cpu.idle", "cpu.idle" in _cg("CPUWeight=idle\n").split("name=")[0])
+check("no resource directives -> no cgroup keys", not any(k in _cg("") for k in ("mem_limit", "cpu_limit", "cpu_weight", "pids_max")))
+
+_sroot = tempfile.mkdtemp()
+_sd = os.path.join(_sroot, "etc/systemd/system")
+os.makedirs(_sd)
+def _sl(fname, body):
+    with open(os.path.join(_sd, fname), "w") as f:
+        f.write(body)
+_sl("foo.slice", "[Slice]\nMemoryMax=512M\nCPUWeight=50\n")
+_sl("foo-bar.slice", "[Slice]\nMemoryMax=1G\nTasksMax=100\n")
+_sl("cups.slice", "[Unit]\nDescription=CUPS\n")
+_sl("my\\x2dapp.slice", "[Slice]\nTasksMax=10\n")
+_sl("masked.slice", "")
+os.makedirs(os.path.join(_sd, "foo-bar.slice.d"))
+_sl("foo-bar.slice.d/50-tight.conf", "[Slice]\nCPUQuota=75%\n")
+_saved_root = os.environ.get("MIGRATE_ROOT")
+os.environ["MIGRATE_ROOT"] = _sroot
+try:
+    _m = _cg("Slice=foo-bar.slice\nMemoryMax=2G\n")
+    check("slice: the tightest cap up the chain wins over the unit's own",
+          "mem_limit=512\n" in _m)
+    check("slice: its TasksMax= reaches the member", "pids_max=100\n" in _m)
+    check("slice: a drop-in on the slice counts", "cpu_limit=75\n" in _m)
+    check("slice: nearest CPUWeight= up the chain", "cpu_weight=50\n" in _m)
+    check("slice: warns the ceiling is per service now",
+          si.WARN_PREFIX in _m and "foo-bar.slice" in _m.split("name=")[0])
+    check("slice: the unit's own tighter cap wins", "mem_limit=100\n" in _cg("Slice=foo-bar.slice\nMemoryMax=100M\n"))
+    check("slice: the unit's own CPUWeight= wins", "cpu_weight=300\n" in _cg("Slice=foo-bar.slice\nCPUWeight=300\n"))
+    _c = _cg("Slice=cups.slice\n")
+    check("slice: a limit-less slice is silent", si.WARN_PREFIX not in _c and "pids_max" not in _c)
+    check("slice: \\x2d stays one name, not a parent", "pids_max=10\n" in _cg("Slice=my\\x2dapp.slice\n"))
+    _c = _cg("Slice=nowhere.slice\n")
+    check("slice: missing -> ignored", si.WARN_PREFIX not in _c)
+    _w = _m.split("name=")[0]
+    check("slice: the WARN names only what applied", "mem_limit=512 (foo.slice)" in _w and "1024" not in _w)
+    _w = _cg("Slice=foo-bar.slice\nCPUWeight=300\n").split("name=")[0]
+    check("slice: a CPUWeight= the unit overrode isn't in the WARN", "cpu_weight=50" not in _w)
+    os.makedirs(os.path.join(_sd, "pre-.slice.d"))
+    _sl("pre-.slice.d/10.conf", "[Slice]\nTasksMax=7\n")
+    check("slice: prefix drop-in pre-.slice.d, no slice file needed", "pids_max=7\n" in _cg("Slice=pre-x.slice\n"))
+    os.makedirs(os.path.join(_sd, "slice.d"))
+    _sl("slice.d/10.conf", "[Slice]\nCPUQuota=300%\n")
+    check("slice: type-wide slice.d drop-in", "cpu_limit=300\n" in _cg("Slice=pre-x.slice\n"))
+    os.remove(os.path.join(_sd, "slice.d/10.conf"))
+    try:
+        _cg("Slice=masked.slice\n")
+        check("slice: masked -> skipped, systemd won't start it", False)
+    except si.Skip as e:
+        check("slice: masked -> skipped, systemd won't start it", "masked.slice" in str(e))
+    _sl("system.slice", "[Slice]\nMemoryMax=64M\n")
+    _c = _cg("Slice=system.slice\n")
+    check("slice: system.slice ignored", "mem_limit" not in _c and si.WARN_PREFIX not in _c)
+    _c = _cg("Slice=../evil.slice\n")
+    check("slice: a bad name -> warned, nothing read", "mem_limit" not in _c and "Slice=../evil.slice" in _c)
+finally:
+    if _saved_root is None:
+        os.environ.pop("MIGRATE_ROOT", None)
+    else:
+        os.environ["MIGRATE_ROOT"] = _saved_root
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

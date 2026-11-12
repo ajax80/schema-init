@@ -250,6 +250,135 @@ def limit_lines(svc):
     return lines, warns
 
 
+_SIZE_SUFFIX = {"": 1, "B": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40, "P": 1 << 50, "E": 1 << 60}
+# systemd's resource directives with no key here, and the values that ask for
+# nothing; memory.high follows mem_limit on its own
+_CG_UNMAPPED = {"MemoryHigh": "infinity", "MemoryLow": "0", "MemoryMin": "0", "MemorySwapMax": "infinity",
+                "MemoryZSwapMax": "infinity", "StartupCPUWeight": "100", "CPUShares": "1024",
+                "StartupCPUShares": "1024", "CPUQuotaPeriodSec": "100ms", "AllowedCPUs": "",
+                "AllowedMemoryNodes": "", "IOWeight": "100", "StartupIOWeight": "100", "IODeviceWeight": "",
+                "IOReadBandwidthMax": "", "IOWriteBandwidthMax": "", "IOReadIOPSMax": "",
+                "IOWriteIOPSMax": "", "IODeviceLatencyTargetSec": "", "BlockIOWeight": "500"}
+# the roots every unit sits under anyway: their limits are machine-wide, not the member's
+_ROOT_SLICES = {"-.slice", "system.slice", "user.slice", "machine.slice",
+                "app.slice", "background.slice", "session.slice"}
+_MEM_MB_MAX = 1 << 40   # the engine's MB * 2^20 must fit a long long
+
+
+# one systemd value -> (engine key, int), None for no limit, ValueError for no equivalent
+def _cg_value(key, v):
+    if v in ("", "infinity"):
+        return None
+    if key == "MemoryMax":
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTPE]?)B?", v)
+        if not m:
+            raise ValueError
+        mb = max(1, math.ceil(float(m.group(1)) * _SIZE_SUFFIX[m.group(2)] / (1 << 20)))
+        return None if mb > _MEM_MB_MAX else ("mem_limit", mb)
+    if key == "CPUQuota":
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)%", v)
+        if not m or float(m.group(1)) <= 0:
+            raise ValueError
+        return ("cpu_limit", min(10000, math.ceil(float(m.group(1)))))
+    if key == "CPUWeight":
+        n = 1 if v == "idle" else int(v) if v.isdigit() else 0
+        if not 1 <= n <= 10000:
+            raise ValueError
+        return ("cpu_weight", n)
+    if not v.isdigit() or int(v) < 1:   # TasksMax
+        raise ValueError
+    # past the kernel's pid ceiling it can never bite
+    return None if int(v) > 4194304 else ("pids_max", int(v))
+
+
+def _cg_section(sec, where, warns):
+    out = {}
+    for key in ("MemoryMax", "CPUQuota", "CPUWeight", "TasksMax"):
+        # MemoryLimit= is the cgroup-v1 name, used only when MemoryMax= is absent
+        k = "MemoryLimit" if key == "MemoryMax" and not any(x == key for x, _ in sec) else key
+        if not any(x == k for x, _ in sec):
+            continue
+        v = _get_last(sec, k)
+        try:
+            got = _cg_value(key, v)
+        except ValueError:
+            warns.append("%s%s=%s not translated (no equivalent here)" % (where, k, v))
+            continue
+        if got:
+            out[got[0]] = got[1]
+        if v == "idle":
+            warns.append("%sCPUWeight=idle is cpu_weight=1 here, not cpu.idle: it still gets a share" % where)
+    lost = [k for k, dflt in _CG_UNMAPPED.items() if _get_last(sec, k) not in ("", "infinity", dflt)]
+    if lost:
+        warns.append("%sresource limits with no key here, not enforced: %s" % (where, " ".join(lost)))
+    return out
+
+
+# A slice exists under systemd with no file of its own, so its drop-ins count
+# alone; a-b.slice also takes a-.slice.d/ and the type-wide slice.d/.
+def _slice_text(n):
+    for d in _unit_dirs():
+        p = os.path.join(d, n)
+        if os.path.lexists(p):
+            if _masked(p):
+                raise Masked(n)
+            _note_private(p)
+            try:
+                with open(p) as f:
+                    base = f.read()
+            except OSError:
+                base = ""
+            break
+    else:
+        base = ""
+    parts = n[:-len(".slice")].split("-")
+    prefixes = ["-".join(parts[:i]) + "-.slice" for i in range(1, len(parts))]
+    return base + _dropin_text(["slice"] + prefixes + [n])
+
+
+# the named slice and its parents up to the root; systemd escapes a '-'
+# inside one name as \x2d, so splitting on '-' finds exactly the parents
+def _slice_chain(name):
+    parts = name[:-len(".slice")].split("-")
+    chain = []
+    for i in range(len(parts), 0, -1):
+        n = "-".join(parts[:i]) + ".slice"
+        if n in _ROOT_SLICES:
+            continue
+        try:
+            text = _slice_text(n)
+        except Masked:
+            raise Skip("Slice=%s: %s is masked, systemd would not start the unit" % (name, n))
+        if text:
+            chain.append((n, parse_unit(text).get("Slice", [])))
+    return chain
+
+
+# A slice caps its members together; here each member gets the whole ceiling,
+# so the WARN names the slice values that won.
+def cgroup_lines(svc):
+    warns = []
+    got = _cg_section(svc, "", warns)
+    src = {}
+    sl = _get_last(svc, "Slice")
+    chain = []
+    if sl and sl not in _ROOT_SLICES:
+        if sl.endswith(".slice") and _name_ok(sl):
+            chain = _slice_chain(sl)
+        else:
+            warns.append("Slice=%s not understood, its limits not applied" % sl)
+    for n, sec in chain:
+        for k, v in _cg_section(sec, "%s: " % n, warns).items():
+            # cpu_weight is relative, not a cap: the unit's own, else the nearest slice's
+            if k not in got or (k != "cpu_weight" and v < got[k]):
+                got[k], src[k] = v, n
+    order = ("mem_limit", "cpu_limit", "cpu_weight", "pids_max")
+    if src:
+        warns.append("Slice=%s ceilings now bind this service alone, not the slice's members "
+                     "together: %s" % (sl, ", ".join("%s=%d (%s)" % (k, got[k], src[k]) for k in order if k in src)))
+    return ["%s=%d" % (k, got[k]) for k in order if k in got], warns
+
+
 def _hardening(svc):
     """The four hardening knobs, always explicit so the unit means the same
     thing whatever the host's hardening-default is, then any rw_path= lines
@@ -1470,6 +1599,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lim, lim_warns = limit_lines(svc)
     lines.extend(lim)
     warns.extend(lim_warns)
+    cg, cg_warns = cgroup_lines(svc)
+    lines.extend(cg)
+    warns.extend(cg_warns)
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)
