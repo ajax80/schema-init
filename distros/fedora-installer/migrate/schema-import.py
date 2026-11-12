@@ -250,6 +250,116 @@ def limit_lines(svc):
     return lines, warns
 
 
+_SIZE_SUFFIX = {"": 1, "B": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40, "P": 1 << 50, "E": 1 << 60}
+# systemd's resource directives with no key here; memory.high follows mem_limit
+_CG_UNMAPPED = ("MemoryHigh", "MemoryLow", "MemoryMin", "MemorySwapMax", "MemoryZSwapMax",
+                "StartupCPUWeight", "CPUShares", "StartupCPUShares", "AllowedCPUs",
+                "AllowedMemoryNodes", "IOWeight", "StartupIOWeight", "IODeviceWeight",
+                "IOReadBandwidthMax", "IOWriteBandwidthMax", "IOReadIOPSMax", "IOWriteIOPSMax",
+                "IODeviceLatencyTargetSec", "BlockIOWeight")
+# the roots every unit sits under anyway: their limits are machine-wide, not the member's
+_ROOT_SLICES = {"-.slice", "system.slice", "user.slice", "machine.slice",
+                "app.slice", "background.slice", "session.slice"}
+
+
+def _cg_value(key, v):
+    """One systemd resource value -> (engine key, int) or None for no limit;
+    raises ValueError for one with no equivalent here."""
+    if v in ("", "infinity"):
+        return None
+    if key == "MemoryMax":
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTPE]?)B?", v)
+        if not m:
+            raise ValueError
+        b = float(m.group(1)) * _SIZE_SUFFIX[m.group(2)]
+        return ("mem_limit", max(1, math.ceil(b / (1 << 20))))
+    if key == "CPUQuota":
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)%", v)
+        if not m or float(m.group(1)) <= 0:
+            raise ValueError
+        return ("cpu_limit", min(10000, math.ceil(float(m.group(1)))))
+    if key == "CPUWeight":
+        n = 1 if v == "idle" else int(v) if v.isdigit() else 0
+        if not 1 <= n <= 10000:
+            raise ValueError
+        return ("cpu_weight", n)
+    if not v.isdigit() or int(v) < 1:   # TasksMax
+        raise ValueError
+    # past the kernel's pid ceiling it can never bite
+    return None if int(v) > 4194304 else ("pids_max", int(v))
+
+
+def _cg_section(sec, where, warns):
+    """{engine key: int} for one [Service] or [Slice] section."""
+    out = {}
+    for key in ("MemoryMax", "CPUQuota", "CPUWeight", "TasksMax"):
+        k = key
+        if key == "MemoryMax" and not any(x == "MemoryMax" for x, _ in sec):
+            k = "MemoryLimit"
+        if not any(x == k for x, _ in sec):
+            continue
+        v = _get_last(sec, k)
+        try:
+            got = _cg_value(key, v)
+        except ValueError:
+            warns.append("%s%s=%s not translated (no equivalent here)" % (where, k, v))
+            continue
+        if got:
+            out[got[0]] = got[1]
+    lost = [k for k in _CG_UNMAPPED if _get_last(sec, k) not in ("", "infinity")]
+    if lost:
+        warns.append("%sresource limits with no key here, not enforced: %s" % (where, " ".join(lost)))
+    return out
+
+
+def _slice_chain(name):
+    """[(slice, [Slice] section)] from the named slice up to its root, those
+    found and not masked; systemd escapes a '-' inside one name as \x2d."""
+    parts = name[:-len(".slice")].split("-")
+    chain = []
+    for i in range(len(parts), 0, -1):
+        n = "-".join(parts[:i]) + ".slice"
+        if n in _ROOT_SLICES:
+            continue
+        try:
+            text = user_unit_text(n)
+        except Masked:
+            continue
+        if text:
+            chain.append((n, parse_unit(text).get("Slice", [])))
+    return chain
+
+
+def cgroup_lines(svc):
+    """MemoryMax=/CPUQuota=/CPUWeight=/TasksMax=, the unit's own and its Slice='s,
+    -> mem_limit=/cpu_limit=/cpu_weight=/pids_max=. A slice caps its members
+    together; here each member gets the whole ceiling, and a WARN says so."""
+    warns = []
+    own = _cg_section(svc, "", warns)
+    sl = _get_last(svc, "Slice")
+    chain = []
+    if sl and sl not in _ROOT_SLICES:
+        if sl.endswith(".slice") and _name_ok(sl):
+            chain = _slice_chain(sl)
+        else:
+            warns.append("Slice=%s not understood, its limits not applied" % sl)
+    got = dict(own)
+    folded = []
+    for n, sec in chain:
+        for k, v in _cg_section(sec, "%s: " % n, warns).items():
+            if k == "cpu_weight":
+                # relative, not a cap: the unit's own or the nearest slice's
+                got.setdefault(k, v)
+            elif k not in got or v < got[k]:
+                got[k] = v
+            folded.append("%s=%s (%s)" % (k, v, n))
+    if folded:
+        warns.append("Slice=%s ceilings now bind this service alone, not the slice's "
+                     "members together: %s" % (sl, ", ".join(folded)))
+    return ["%s=%d" % (k, got[k]) for k in ("mem_limit", "cpu_limit", "cpu_weight", "pids_max")
+            if k in got], warns
+
+
 def _hardening(svc):
     """The four hardening knobs, always explicit so the unit means the same
     thing whatever the host's hardening-default is, then any rw_path= lines
@@ -1470,6 +1580,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lim, lim_warns = limit_lines(svc)
     lines.extend(lim)
     warns.extend(lim_warns)
+    cg, cg_warns = cgroup_lines(svc)
+    lines.extend(cg)
+    warns.extend(cg_warns)
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)
