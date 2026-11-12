@@ -54,10 +54,10 @@ svc("slowstop", "exec=/bin/sh", "args=-c",
     'args=trap "" TERM; : > %s; while :; do %s 1; done' % (ARMED, shutil.which("sleep")),
     "notify=1", "start_timeout_sec=3", "stop_timeout_sec=60")
 svc("once", "exec=/bin/sh", "args=-c", "args=echo x >> " + COUNT, "oneshot=1")
-# name= is free text from the .svc: quotes, backslashes and control bytes must
-# come back as valid JSON from `status --json` ("machine-parseable" promise)
-HOSTILE = 'q"\\u\x01end'
-with open(SVC + "/jsonhostile.svc", "w") as f:
+# name= is free text from the .svc: quotes, backslashes, control bytes and
+# raw non-UTF-8 bytes must come back as valid JSON from `status --json`
+HOSTILE = 'q"\\u\x01\xe9end'
+with open(SVC + "/jsonhostile.svc", "w", encoding="latin-1") as f:
     f.write('name=%s\nexec=%s\nargs=1000\nstable_secs=1\n' % (HOSTILE, sl))
 os.chmod(SVC + "/jsonhostile.svc", 0o600)
 OK = T + "/fails.ok"
@@ -68,7 +68,10 @@ svc("fails", "exec=/bin/sh", "args=-c",
 def ctl(*a, timeout=5, env=ENV):
     t0 = time.monotonic()
     try:
-        r = subprocess.run([CTL, "--user", *a], env=env, capture_output=True, text=True, timeout=timeout)
+        # --kv replies carry raw name bytes (only --json promises clean parse):
+        # a hostile name must fail the json check, not crash the harness here
+        r = subprocess.run([CTL, "--user", *a], env=env, capture_output=True, text=True,
+                           errors="replace", timeout=timeout)
         return r.returncode, r.stdout, r.stderr, time.monotonic() - t0
     except subprocess.TimeoutExpired:
         return "TIMEOUT", "", "", time.monotonic() - t0

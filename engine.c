@@ -2059,15 +2059,18 @@ static int svc_failed(const service_t *s) {
            (s->inst.state == STATE_EXCISED && s->excise_reason != EXC_NONE && s->excise_reason != EXC_BIND);
 }
 
-/* JSON string body: name= is free text from the .svc, so quotes, backslashes
- * and control bytes must not break the "machine-parseable" promise. out needs
- * 6*strlen(s)+1 (\u00XX); anything past that is dropped, never half-escaped. */
+/* JSON string body: name= is free text from the .svc, so quotes, backslashes,
+ * control bytes AND bytes past ASCII must not break the "machine-parseable"
+ * promise — a raw 0xE9 is invalid UTF-8 and strict parsers refuse the whole
+ * reply. Every byte >= 0x7F becomes \u00XX (a multibyte UTF-8 name comes out
+ * byte-escaped rather than pretty, but the JSON always parses). out needs
+ * 6*strlen(s)+1; anything past that is dropped, never half-escaped. */
 static const char *json_esc(const char *s, char *out, size_t outsz) {
     size_t o = 0;
     for (; *s && o + 7 <= outsz; s++) {
         unsigned char c = (unsigned char)*s;
         if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = (char)c; }
-        else if (c < 0x20) o += (size_t)snprintf(out + o, outsz - o, "\\u%04x", c);
+        else if (c < 0x20 || c >= 0x7f) o += (size_t)snprintf(out + o, outsz - o, "\\u%04x", c);
         else out[o++] = (char)c;
     }
     out[o] = '\0';
