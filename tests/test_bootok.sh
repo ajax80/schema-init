@@ -16,7 +16,7 @@ chmod 755 "$T"
 mkdir -p "$T/bin"
 chmod 755 "$T/bin"
 # CARD=1: hold the card open, as a compositor or Xorg does
-for n in kwin_wayland gnome-shell cinnamon Xorg lightdm-greeter; do
+for n in kwin_wayland gnome-shell cinnamon Xorg X kwin_x11 plasmashell lightdm-greeter; do
     printf '#!/bin/sh\n[ "$CARD" = 1 ] && exec 3</dev/dri/card0\nwhile :; do sleep 1; done\n' > "$T/bin/$n"
 done
 printf '#!/bin/sh\necho "$@" >> "%s/editenv"\n' "$T" > "$T/bin/grub2-editenv"
@@ -73,6 +73,11 @@ expect good "root Xorg + the user's cinnamon"         Xorg:0:1 cinnamon:1000:0
 expect bad  "root Xorg + LightDM's greeter only"      Xorg:0:1 lightdm-greeter:990:0
 expect bad  "root Xorg + a system uid's cinnamon"     Xorg:0:1 cinnamon:990:0
 expect bad  "the user's cinnamon with no Xorg"        cinnamon:1000:0
+expect bad  "an Xorg not holding the card"           Xorg:0:0 cinnamon:1000:0
+expect good "X (the LightDM default name)"            X:0:1 cinnamon:1000:0
+expect good "root Xorg + the user's KDE on X11"       Xorg:0:1 kwin_x11:1000:0
+expect good "root Xorg + the user's plasmashell"      Xorg:0:1 plasmashell:1000:0
+expect bad  "a user's plasmashell alone"              plasmashell:1000:1
 
 [ $fail -eq 0 ] && echo "PASS: schema-bootok counts only a login user's session (Wayland or X11)"
 exit $fail

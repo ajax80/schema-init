@@ -19,14 +19,10 @@ login_uid() {
   return 1
 }
 
+# The proprietary NVIDIA driver without nvidia-drm modeset gives Xorg only
+# /dev/nvidia*, no DRM card.
 holds_card() {
-  local fd
-  for fd in /proc/"$1"/fd/*; do
-    case "$(readlink -f "$fd" 2>/dev/null)" in
-      /dev/dri/card*) return 0 ;;
-    esac
-  done
-  return 1
+  [ -n "$(find /proc/"$1"/fd \( -lname '/dev/dri/card*' -o -lname '/dev/nvidia[0-9]*' \) -print -quit 2>/dev/null)" ]
 }
 
 # Only a login user's session counts. A display manager's greeter holds the
@@ -35,19 +31,19 @@ holds_card() {
 # session never came up. No upper bound: homed and directory (sssd) users sit
 # above login.defs UID_MAX.
 #   Wayland: the user's compositor holds the card.
-#   X11 (Fedora Cinnamon): Xorg holds it, usually as root, so the user is shown
-#   by their session shell running beside it.
+#   X11 (Fedora Cinnamon): an X server holds it, usually as root, so the user
+#   is shown by their session shell running beside it.
 desktop_up() {
-  local p x
+  local p x=""
   for p in $(pgrep -x 'kwin_wayland|gnome-shell|cinnamon' 2>/dev/null); do
     login_uid "$p" && holds_card "$p" && return 0
   done
-  for x in $(pgrep -x Xorg 2>/dev/null); do
-    holds_card "$x" || continue
-    for p in $(pgrep -x 'cinnamon|gnome-shell|kwin_x11|plasmashell' 2>/dev/null); do
-      login_uid "$p" && return 0
-    done
-    return 1
+  for p in $(pgrep -x 'Xorg|X' 2>/dev/null); do
+    holds_card "$p" && { x=1; break; }
+  done
+  [ -n "$x" ] || return 1
+  for p in $(pgrep -x 'cinnamon|gnome-shell|kwin_x11|plasmashell' 2>/dev/null); do
+    login_uid "$p" && return 0
   done
   return 1
 }
@@ -64,5 +60,5 @@ while [ "$waited" -lt "$TIMEOUT" ]; do
   waited=$((waited + 2))
 done
 
-echo "schema-bootok: no live compositor after ${TIMEOUT}s; boot_success left 0 (fallback stays armed)" >&2
+echo "schema-bootok: no login user's session (their compositor, or an X server plus their session shell) holding the GPU after ${TIMEOUT}s; boot_success left 0 (fallback stays armed)" >&2
 exit 1
