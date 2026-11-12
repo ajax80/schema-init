@@ -2059,6 +2059,24 @@ static int svc_failed(const service_t *s) {
            (s->inst.state == STATE_EXCISED && s->excise_reason != EXC_NONE && s->excise_reason != EXC_BIND);
 }
 
+/* JSON string body: name= is free text from the .svc, so quotes, backslashes,
+ * control bytes AND bytes past ASCII must not break the "machine-parseable"
+ * promise — a raw 0xE9 is invalid UTF-8 and strict parsers refuse the whole
+ * reply. Every byte >= 0x7F becomes \u00XX (a multibyte UTF-8 name comes out
+ * byte-escaped rather than pretty, but the JSON always parses). out needs
+ * 6*strlen(s)+1; anything past that is dropped, never half-escaped. */
+static const char *json_esc(const char *s, char *out, size_t outsz) {
+    size_t o = 0;
+    for (; *s && o + 7 <= outsz; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = (char)c; }
+        else if (c < 0x20 || c >= 0x7f) o += (size_t)snprintf(out + o, outsz - o, "\\u%04x", c);
+        else out[o++] = (char)c;
+    }
+    out[o] = '\0';
+    return out;
+}
+
 static void ctl_cmd(int fd, char *line) {
     int i, extra;
     line[strcspn(line, "\r\n")] = '\0';
@@ -2067,14 +2085,16 @@ static void ctl_cmd(int fd, char *line) {
         char *opt = line + 6;
         while (*opt == ' ') opt++;
         if (strcmp(opt, "--json") == 0) {
+            char jn[6 * sizeof(services[0].name) + 1], jb[6 * sizeof(services[0].bind_name) + 1];
             ctl_writef(fd, "{\n  \"services_count\": %d,\n  \"groups_count\": %d,\n  \"services\": [\n", svc_count, grp_count);
             for (i = 0; i < svc_count; i++) {
                 ctl_writef(fd, "    {\n      \"name\": \"%s\",\n      \"pid\": %d,\n      \"state\": \"%s\",\n      \"restarts\": %d,\n      \"circuit_broken\": %s,\n      \"excise_reason\": \"%s\",\n      \"bind\": \"%s\",\n      \"bind_held\": %s\n    }%s\n",
-                    services[i].name, (int)services[i].child_pid,
+                    json_esc(services[i].name, jn, sizeof jn), (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count,
                     services[i].circuit_broken ? "true" : "false",
                     excise_reason_name(services[i].excise_reason),
-                    services[i].bind_name, services[i].bind_held ? "true" : "false",
+                    json_esc(services[i].bind_name, jb, sizeof jb),
+                    services[i].bind_held ? "true" : "false",
                     (i < svc_count - 1) ? "," : "");
             }
             ctl_writef(fd, "  ]\n}\n");
