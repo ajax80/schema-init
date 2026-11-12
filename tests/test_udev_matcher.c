@@ -244,7 +244,9 @@ int main(void) {
         /* run the whole installed ruleset against the real device: must not crash */
         const char *real[] = { "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
         struct ruleset live = {0};
-        assert(ruleset_load_dirs(real, 3, &live) == 0);
+        int any = 0;   /* a build container may have no udev: then nothing loads */
+        for (int i = 0; i < 3; i++) any |= access(real[i], F_OK) == 0;
+        assert(ruleset_load_dirs(real, 3, &live) == (any ? 0 : -1));
         int matched = 0;
         for (int i = 0; i < live.n; i++) if (rule_match(&live.rules[i], &cl)) matched++;
         assert(matched >= 0);

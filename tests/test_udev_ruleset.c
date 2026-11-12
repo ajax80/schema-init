@@ -171,7 +171,11 @@ int main(void) {
     /* smoke: real installed set loads and parses a sane number of rules */
     const char *real[] = { "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
     struct ruleset live = {0};
-    assert(ruleset_load_dirs(real, 3, &live) == 0);
+    /* a build container may have no udev at all: no dir opens, which the
+     * loader reports as a failed load (a reload must keep the live set) */
+    int any = 0;
+    for (int i = 0; i < 3; i++) any |= access(real[i], F_OK) == 0;
+    assert(ruleset_load_dirs(real, 3, &live) == (any ? 0 : -1));
     if (access("/usr/lib/udev/rules.d", F_OK) == 0)
         assert(live.n > 100);   /* 168 files on blakbox -> thousands of rules */
     ruleset_free(&live);
