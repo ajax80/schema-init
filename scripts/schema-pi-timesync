@@ -4,21 +4,33 @@ CURL=${SCHEMA_PI_CURL:-curl}
 DATE=${SCHEMA_PI_DATE:-date}
 # baked from SOURCE_DATE_EPOCH by debian/rules; empty in an unbuilt copy, which uses its own mtime
 BUILD_EPOCH=
-# the time last set by two agreeing sources; rm it to lift the floor it sets
+# the time last set by two agreeing sources, and how many syncs in a row both said earlier
 STAMP=${SCHEMA_PI_STAMP:-/var/lib/schema-init/timesync-last}
+STRIKES=3
 
 # The Date header is unauthenticated, so never take a time from before this package was built.
 # When both sources answer they must agree within 60 s; a lone answer may only move the clock
 # forward, so one spoofed path cannot wind it back or fight an honest second source.
-# Both sources share one physical path, though: an on-path MITM can spoof them alike. So the
-# floor is also the last time two sources agreed on (less their 60 s tolerance), which keeps
-# such a rollback to the time since the last good sync instead of months back to the build.
-# sets f (the floor) and why (what it came from, for the log)
+# Both sources share one physical path, though: an on-path MITM can spoof them alike and wind
+# the clock back toward the build. So there is a soft floor too: the last time two sources
+# agreed on, less their 60 s. Soft, because that MITM could as well have spoofed it forward,
+# and a hard floor would then hold the clock wrong for good: agreeing sources that say earlier
+# win on the 3rd sync in a row (~12h at the 6h resync), so a one-off poisoning heals itself and
+# a rollback needs the path held for half a day. A lone source never moves it either way.
 floor() {
     f=${BUILD_EPOCH:-$(stat -c %Y "$0" 2>/dev/null)}
-    f=${f:-0} why=build
-    s=$(cat "$STAMP" 2>/dev/null)
-    case $s in ''|*[!0-9]*) ;; *) [ $((s - 60)) -gt "$f" ] && f=$((s - 60)) why="last good sync" ;; esac
+    f=${f:-0}
+}
+
+# sets sf: 0 when there is no stamp; a 0-led one would be octal to $(( )), so it is junk too
+stamp_floor() {
+    s=$(cat "$STAMP" 2>/dev/null) sf=0
+    case $s in [1-9]*) case $s in *[!0-9]*) ;; *) sf=$((s - 60)) ;; esac ;; esac
+}
+
+strikes() {
+    k=$(cat "$STAMP.below" 2>/dev/null)
+    case $k in [1-9]) ;; *) k=0 ;; esac
 }
 
 ask() {
@@ -30,12 +42,12 @@ while :; do
     ok= d1=$(ask 1.1.1.1) d2=$(ask 208.67.222.222)
     t1=$([ -n "$d1" ] && $DATE -d "$d1" +%s 2>/dev/null)
     t2=$([ -n "$d2" ] && $DATE -d "$d2" +%s 2>/dev/null)
-    floor; now=$($DATE +%s)
+    floor; stamp_floor; now=$($DATE +%s)
     # an answer is no outage: a refused time waits for the resync, not the 30 s retry
     [ -z "$d1$d2" ] || ok=0
     # an unparseable or pre-build answer counts as no answer, so it cannot veto the other source
-    if [ -n "$d1" ] && { [ -z "$t1" ] || [ "$t1" -lt "$f" ]; }; then echo "timesync: ignored $d1 from 1.1.1.1 (before $why $f)"; d1= t1=; fi
-    if [ -n "$d2" ] && { [ -z "$t2" ] || [ "$t2" -lt "$f" ]; }; then echo "timesync: ignored $d2 from 208.67.222.222 (before $why $f)"; d2= t2=; fi
+    if [ -n "$d1" ] && { [ -z "$t1" ] || [ "$t1" -lt "$f" ]; }; then echo "timesync: ignored $d1 from 1.1.1.1 (before build $f)"; d1= t1=; fi
+    if [ -n "$d2" ] && { [ -z "$t2" ] || [ "$t2" -lt "$f" ]; }; then echo "timesync: ignored $d2 from 208.67.222.222 (before build $f)"; d2= t2=; fi
     for pick in 1 2; do
         if [ $pick = 1 ]; then d=$d1 t=$t1 o=$t2 addr=1.1.1.1; else d=$d2 t=$t2 o=$t1 addr=208.67.222.222; fi
         [ -n "$d" ] || continue
@@ -50,11 +62,29 @@ while :; do
             echo "timesync: ignored $d from $addr (behind the clock, no second source)"
             continue
         fi
+        if [ "$t" -lt "$sf" ]; then
+            if [ -z "$o" ]; then
+                echo "timesync: ignored $d from $addr (before last good sync $sf, no second source)"
+                continue
+            fi
+            strikes; k=$((k + 1))
+            if [ "$k" -lt "$STRIKES" ]; then
+                echo "$k" >"$STAMP.below" 2>/dev/null
+                # both sources say the same, so the other pick would only strike twice
+                echo "timesync: ignored $d from $addr (before last good sync $sf, $k/$STRIKES)"
+                break
+            fi
+            echo "timesync: sources agreed before last good sync $STRIKES times in a row; taking them"
+        fi
         if $DATE -s "$d" >/dev/null; then
             echo "timesync: $d from $addr"
             ok=1
-            # only an agreed time may raise the floor: a lone one could be a spoofed jump forward
-            [ -n "$o" ] && { echo "$t" >"$STAMP.tmp" && mv "$STAMP.tmp" "$STAMP"; } 2>/dev/null
+            # only an agreed time may set the soft floor (a lone one could be a spoofed jump
+            # forward), and the lower of the two, so one spoofed source cannot push it up 60 s
+            if [ -n "$o" ]; then
+                lo=$t; [ "$o" -lt "$lo" ] && lo=$o
+                { echo "$lo" >"$STAMP.tmp" && mv "$STAMP.tmp" "$STAMP"; rm -f "$STAMP.below"; } 2>/dev/null
+            fi
             break
         fi
     done
