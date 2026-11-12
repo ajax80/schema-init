@@ -119,6 +119,55 @@ int main(void) {
 
     printf("test_udev_ruleset: dirs OK\n");
 
+    /* reload keeps the live set when the new load fails or comes back empty:
+     * a HUP while the rules dirs are unreadable must not leave the daemon
+     * processing uevents with no rules */
+    {
+        char base[] = "/tmp/rs-reload-XXXXXX";
+        assert(mkdtemp(base));
+        char da[300], db[300], pr[340];
+        snprintf(da, sizeof da, "%s/a", base);
+        snprintf(db, sizeof db, "%s/b", base);
+        assert(mkdir(da, 0755) == 0 && mkdir(db, 0755) == 0);
+        snprintf(pr, sizeof pr, "%s/10-x.rules", da);
+        FILE *f = fopen(pr, "w");
+        fputs("KERNEL==\"sda\", SYMLINK+=\"x\"\n", f);
+        fclose(f);
+
+        const char *da_only[] = { da }, *db_only[] = { db };
+        const char *gone[] = { "/nonexistent-schema-rs-a", "/nonexistent-schema-rs-b" };
+        struct ruleset lv = {0};
+        assert(ruleset_reload_swap(&lv, da_only, 1) == 0 && lv.n == 1);
+
+        /* every dir unreadable -> refused, old rules stay */
+        assert(ruleset_reload_swap(&lv, gone, 2) != 0 && lv.n == 1);
+        assert(strcmp(lv.rules[0].clause[0].val, "sda") == 0);
+
+        /* readable but empty while rules are live -> refused, old rules stay */
+        assert(ruleset_reload_swap(&lv, db_only, 1) != 0 && lv.n == 1);
+
+        /* a usable new set swaps in */
+        snprintf(pr, sizeof pr, "%s/20-y.rules", db);
+        f = fopen(pr, "w");
+        fputs("KERNEL==\"vda\"\nKERNEL==\"vdb\"\n", f);
+        fclose(f);
+        assert(ruleset_reload_swap(&lv, db_only, 1) == 0 && lv.n == 2);
+        assert(strcmp(lv.rules[0].clause[0].val, "vda") == 0);
+        ruleset_free(&lv);
+
+        /* first load into an empty set from empty dirs is not an error */
+        struct ruleset fresh = {0};
+        snprintf(pr, sizeof pr, "%s/20-y.rules", db);
+        unlink(pr);
+        assert(ruleset_reload_swap(&fresh, db_only, 1) == 0 && fresh.n == 0);
+        ruleset_free(&fresh);
+
+        snprintf(pr, sizeof pr, "%s/10-x.rules", da);
+        unlink(pr);
+        rmdir(da); rmdir(db); rmdir(base);
+    }
+    printf("test_udev_ruleset: reload-swap OK\n");
+
     /* smoke: real installed set loads and parses a sane number of rules */
     const char *real[] = { "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
     struct ruleset live = {0};

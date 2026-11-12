@@ -141,9 +141,12 @@ static inline void ruleset_free(struct ruleset *rs) {
     memset(rs, 0, sizeof *rs);
 }
 
+/* -1: file unreadable (skipped, not fatal); 1: an append ran out of memory,
+ * so the set is truncated and must not replace a live one; 0: loaded. */
 static inline int ruleset_load_file(const char *path, struct ruleset *rs) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
+    int oom = 0;
     char logical[4096]; size_t llen = 0; int cont = 0;
     char line[2048];
     while (fgets(line, sizeof line, f)) {
@@ -160,13 +163,15 @@ static inline int ruleset_load_file(const char *path, struct ruleset *rs) {
         if (cont) continue;
         if (llen && logical[0] != '#') {
             struct rule r;
-            if (ruleset_parse_line(logical, &r) > 0 && ruleset_append(rs, &r) != 0)
+            if (ruleset_parse_line(logical, &r) > 0 && ruleset_append(rs, &r) != 0) {
                 free(r.clause);
+                oom = 1;
+            }
         }
         llen = 0; logical[0] = '\0';
     }
     fclose(f);
-    return 0;
+    return oom;
 }
 
 /* Resolve *.rules basenames across dirs (later dir wins), process in lexical
@@ -174,10 +179,11 @@ static inline int ruleset_load_file(const char *path, struct ruleset *rs) {
 static inline int ruleset_load_dirs(const char *const *dirs, int ndirs, struct ruleset *rs) {
     char names[1024][64];
     char owner[1024][256];   /* full path of winning dir for that basename */
-    int nn = 0;
+    int nn = 0, opened = 0, bad = 0;
     for (int di = 0; di < ndirs; di++) {
         DIR *d = opendir(dirs[di]);
         if (!d) continue;
+        opened++;
         struct dirent *e;
         while ((e = readdir(d))) {
             size_t l = strlen(e->d_name);
@@ -202,7 +208,24 @@ static inline int ruleset_load_dirs(const char *const *dirs, int ndirs, struct r
             char to[256]; safe_copy(to, owner[j-1], sizeof to);
             safe_copy(owner[j-1], owner[j], sizeof to); safe_copy(owner[j], to, sizeof to);
         }
-    for (int i = 0; i < nn; i++) ruleset_load_file(owner[i], rs);
+    for (int i = 0; i < nn; i++)
+        if (ruleset_load_file(owner[i], rs) > 0) bad = 1;
+    return (bad || (!opened && ndirs > 0)) ? -1 : 0;
+}
+
+/* Load into a fresh set and swap it in only when usable; a failed load (every
+ * dir unreadable, OOM mid-append) or one that comes back empty while rules
+ * are live keeps the old set: processing uevents with no rules is worse than
+ * running on stale ones. */
+static inline int ruleset_reload_swap(struct ruleset *live, const char *const *dirs, int ndirs) {
+    struct ruleset fresh = {0};
+    int r = ruleset_load_dirs(dirs, ndirs, &fresh);
+    if (r != 0 || (fresh.n == 0 && live->n > 0)) {
+        ruleset_free(&fresh);
+        return -1;
+    }
+    ruleset_free(live);
+    *live = fresh;
     return 0;
 }
 
