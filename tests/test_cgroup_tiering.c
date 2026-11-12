@@ -3,20 +3,45 @@
 #include <stdio.h>
 
 int main(void) {
-    cgroup_tier_t p = cgroup_tiering(PRIO_PERIPHERAL);
+    cgroup_tier_t p = cgroup_tiering(PRIO_PERIPHERAL, 0);
     assert(p.cpu_idle == 1);
     assert(p.cpu_weight == 0);   /* cpu.weight not written when cpu.idle=1 */
     assert(p.io_weight == 10);
 
-    cgroup_tier_t s = cgroup_tiering(PRIO_STANDARD);
+    cgroup_tier_t s = cgroup_tiering(PRIO_STANDARD, 0);
     assert(s.cpu_idle == 0);
     assert(s.cpu_weight == 100);
     assert(s.io_weight == 100);
 
-    cgroup_tier_t c = cgroup_tiering(PRIO_CRITICAL);
+    cgroup_tier_t c = cgroup_tiering(PRIO_CRITICAL, 0);
     assert(c.cpu_idle == 0);
     assert(c.cpu_weight == 1000);
     assert(c.io_weight == 1000);
+
+    /* an explicit cpu_weight= replaces the tier's CPU half, cpu.idle included;
+     * io.weight stays with the priority class */
+    cgroup_tier_t w = cgroup_tiering(PRIO_PERIPHERAL, 250);
+    assert(w.cpu_idle == 0 && w.cpu_weight == 250 && w.io_weight == 10);
+    w = cgroup_tiering(PRIO_CRITICAL, 1);
+    assert(w.cpu_idle == 0 && w.cpu_weight == 1 && w.io_weight == 1000);
+
+    /* cpu.max quota per 100000us period; >100% spans cores, junk writes nothing */
+    assert(cpu_max_quota(0) == 0);
+    assert(cpu_max_quota(-1) == 0);
+    assert(cpu_max_quota(50) == 50000);
+    assert(cpu_max_quota(100) == 100000);
+    assert(cpu_max_quota(150) == 150000);
+    assert(cpu_max_quota(10000) == 10000000);
+    assert(cpu_max_quota(10001) == 0);
+
+    /* survival posture: a STANDARD service is held to half a core or its own
+     * tighter cap, and leaving restores its own cap (0 = write "max") */
+    assert(survival_cpu_quota(0, 1) == 50000);
+    assert(survival_cpu_quota(20, 1) == 20000);
+    assert(survival_cpu_quota(150, 1) == 50000);
+    assert(survival_cpu_quota(0, 0) == 0);
+    assert(survival_cpu_quota(20, 0) == 20000);
+    assert(survival_cpu_quota(150, 0) == 150000);
 
     /* no limit -> no soft reclaim buffer */
     assert(mem_high_bytes(0) == 0);

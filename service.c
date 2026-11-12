@@ -281,14 +281,15 @@ static void cgroup_apply_limits(service_t *svc) {
 
     if (!svc->cgroup_path[0]) return;
 
-    if (svc->cpu_limit_pct > 0 && svc->cpu_limit_pct <= 100) {
-        snprintf(path, sizeof(path), "%s/cpu.max", svc->cgroup_path);
-        fd = open(path, O_WRONLY);
-        if (fd >= 0) {
-            n = snprintf(buf, sizeof(buf), "%d 100000\n", svc->cpu_limit_pct * 1000);
-            write(fd, buf, (size_t)n);
-            close(fd);
-        }
+    long quota = cpu_max_quota(svc->cpu_limit_pct);
+    if (quota > 0) {
+        snprintf(buf, sizeof(buf), "%ld 100000\n", quota);
+        cg_write(svc->cgroup_path, "cpu.max", buf);
+    }
+
+    if (svc->pids_max > 0) {
+        snprintf(buf, sizeof(buf), "%d\n", svc->pids_max);
+        cg_write(svc->cgroup_path, "pids.max", buf);
     }
 
     if (svc->mem_limit_mb > 0) {
@@ -321,7 +322,7 @@ static void cgroup_apply_limits(service_t *svc) {
      * cpu.idle. io.weight shields CRITICAL disk I/O from peripheral hogs — keeps
      * PipeWire from crackling under frigate/torrent load. */
     {
-        cgroup_tier_t tier = cgroup_tiering(svc->priority);
+        cgroup_tier_t tier = cgroup_tiering(svc->priority, svc->cpu_weight);
         if (tier.cpu_idle) {
             cg_write(svc->cgroup_path, "cpu.idle", "1\n");
         } else {
@@ -2052,6 +2053,17 @@ static uint32_t svc_content_hash(const char *path, char (*dropins)[SVC_DROPIN_PA
  *   critical=0
  */
 
+static int cg_key_int(const service_t *svc, const char *path, const char *key,
+                      const char *val, long max, const char *want) {
+    char *end;
+    long l = strtol(val, &end, 10);
+    if (*end || l < 1 || l > max) {
+        fprintf(stderr, "[schema-init] %s: %s=%s must be %s\n", svc->name[0] ? svc->name : path, key, val, want);
+        return -1;
+    }
+    return 0;
+}
+
 static int parse_partition(const char *val) {
     if (strcasecmp(val, "isolated") == 0) return PART_ISOLATED;
     if (strcasecmp(val, "root") == 0)     return PART_ROOT;
@@ -2632,6 +2644,16 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->watchdog_sec = atoi(val);
     } else if (strcmp(line, "cpu_limit") == 0) {
         svc->cpu_limit_pct = atoi(val);
+    } else if (strcmp(line, "pids_max") == 0) {
+        /* empty clears, so a drop-in can lift a limit the base file set */
+        int unlimited = !*val || !strcmp(val, "max") || !strcmp(val, "infinity");
+        if (!unlimited && cg_key_int(svc, path, line, val, 4194304, "1-4194304, max or empty") < 0)
+            return -1;
+        svc->pids_max = unlimited ? 0 : atoi(val);
+    } else if (strcmp(line, "cpu_weight") == 0) {
+        if (*val && cg_key_int(svc, path, line, val, 10000, "1-10000, or empty for the priority tier") < 0)
+            return -1;
+        svc->cpu_weight = *val ? atoi(val) : 0;
     } else if (strcmp(line, "mem_limit") == 0) {
         svc->mem_limit_mb = atol(val);
     } else if (strcmp(line, "cpuset") == 0) {

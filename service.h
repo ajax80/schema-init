@@ -163,7 +163,7 @@ typedef struct {
     int cpu_idle;   /* 1 PERIPHERAL, 0 otherwise */
 } cgroup_tier_t;
 
-static inline cgroup_tier_t cgroup_tiering(prio_t priority) {
+static inline cgroup_tier_t cgroup_tiering(prio_t priority, int cpu_weight) {
     cgroup_tier_t tier = {0, 0, 0};
     switch (priority) {
     case PRIO_PERIPHERAL:
@@ -174,7 +174,24 @@ static inline cgroup_tier_t cgroup_tiering(prio_t priority) {
     default:
         tier.cpu_idle = 0; tier.cpu_weight = 100;  tier.io_weight = 100;  break;
     }
+    /* cpu.idle=1 would override any weight written beside it */
+    if (cpu_weight > 0) { tier.cpu_idle = 0; tier.cpu_weight = cpu_weight; }
     return tier;
+}
+
+/* cpu.max quota (us per 100000us period) for cpu_limit= percent of one core;
+ * 0 = write nothing. Above 100 the quota spans cores. Pure. */
+static inline long cpu_max_quota(int pct) {
+    return pct > 0 && pct <= 10000 ? pct * 1000L : 0;
+}
+
+/* survival posture's cpu.max for a STANDARD service: half a core or the
+ * service's own tighter cap, and on leaving its own cap back (0 = "max").
+ * A fixed write here would lose cpu_limit= until the next spawn. Pure. */
+static inline long survival_cpu_quota(int pct, int under_pressure) {
+    long own = cpu_max_quota(pct);
+    if (!under_pressure) return own;
+    return own > 0 && own < 50000 ? own : 50000;
 }
 
 /* soft reclaim buffer (memory.high): 90% of the hard cap, in bytes; 0 (no
@@ -428,8 +445,10 @@ typedef struct {
     int              term_signal;      /* signal that ended the last run (0 = exited) */
     int              core_dumped;      /* that signal produced a core */
     int              has_exited;       /* a run has ended at least once */
-    int              cpu_limit_pct;    /* 1-100: % of one CPU core via cpu.max; 0 = unlimited */
+    int              cpu_limit_pct;    /* 1-10000: % of one CPU core via cpu.max; 0 = unlimited */
     long             mem_limit_mb;     /* MB hard cap via memory.max; 0 = unlimited */
+    int              pids_max;         /* pids.max; 0 = unlimited */
+    int              cpu_weight;       /* 1-10000 cpu.weight over the priority tier; 0 = tier */
     char             cpuset[64];       /* CPU affinity list for cpuset.cpus (e.g. "2,3"); empty = unconstrained */
     int              cpuset_partition; /* PART_MEMBER/ROOT/ISOLATED; cgroupv2 cpuset.cpus.partition */
     int              allowed_slot_min; /* slot boundary gate: -1 = unconstrained */
