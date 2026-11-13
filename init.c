@@ -1749,6 +1749,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* PID 1 feeds the hardware watchdog: a page-in stall under a swap storm
+     * can turn into a reboot. Locked before the first spawn; fork children do
+     * not inherit it. A container may refuse; carry on unlocked. */
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
+        fprintf(stderr, "schema-init: mlockall: %s, PID 1 stays swappable\n", strerror(errno));
+
     engine_open(reexec_fd >= 0);
     if (reexec_fd < 0)
         schema_boot_log();

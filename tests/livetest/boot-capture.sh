@@ -38,6 +38,8 @@ CSV="$LOGDIR/boot-history.csv"
   ps -o pid,ppid,rss,vsz,comm -p 1
   printf 'PID 1 RSS:   %s  (systemd-as-PID1 typically 10000-15000 kB)\n' \
     "$(awk '/VmRSS/{print $2" "$3}' /proc/1/status)"
+  printf 'PID 1 locked: %s  (mlockall; 0 kB means PID 1 can be swapped)\n' \
+    "$(awk '/VmLck/{print $2" "$3}' /proc/1/status)"
   printf 'processes:   %s\n' "$(ps -e --no-headers | wc -l)"
   printf 'threads:     %s\n\n' "$(ps -eLf --no-headers | wc -l)"
 

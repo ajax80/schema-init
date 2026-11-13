@@ -26,6 +26,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
+#include <linux/magic.h>
 
 #define DEV_LOG       "/dev/log"
 #define JOURNAL_DIR   "/run/systemd/journal"
@@ -166,17 +168,26 @@ static void parse_native(const char *buf, size_t len) {
     if (msg) emit("native", sev, tagbuf, msg, msglen);
 }
 
-/* Read a SCM_RIGHTS-passed sealed memfd/O_TMPFILE to EOF, then parse it. */
+/* Parse a SCM_RIGHTS-passed entry. The socket is 0666 and the sink is single
+ * threaded: a pipe with a live writer, or a file on a FUSE mount the sender
+ * controls, would block a read() forever and take all logging with it. So,
+ * as journald: a regular file only, and either a sealed memfd or a file on
+ * tmpfs, read with pread up to its size at fstat time. */
 static void drain_passed_fd(int fd) {
     static char fbuf[MAX_FD_BYTES];
+    struct stat st;
+    struct statfs sf;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return;
+    int seals = fcntl(fd, F_GET_SEALS);
+    int sealed = seals >= 0 && (seals & (F_SEAL_WRITE | F_SEAL_SHRINK)) == (F_SEAL_WRITE | F_SEAL_SHRINK);
+    if (!sealed && (fstatfs(fd, &sf) < 0 || sf.f_type != TMPFS_MAGIC)) return;
+    size_t want = (size_t)st.st_size < sizeof fbuf ? (size_t)st.st_size : sizeof fbuf;
     size_t off = 0;
-    lseek(fd, 0, SEEK_SET);
-    for (;;) {
-        ssize_t r = read(fd, fbuf + off, sizeof fbuf - off);
-        if (r < 0) { if (errno == EINTR) continue; break; }
-        if (r == 0) break;
+    while (off < want) {
+        ssize_t r = pread(fd, fbuf + off, want - off, (off_t)off);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
         off += (size_t)r;
-        if (off == sizeof fbuf) break;
     }
     if (off) parse_native(fbuf, off);
 }
@@ -361,9 +372,19 @@ static int open_out(void) {
 }
 
 int main(void) {
+    /* JOURNAL_SINK_ROOT prefixes every socket path: tests only */
+    const char *root = getenv("JOURNAL_SINK_ROOT");
+    char p_run[256], p_dir[256], p_devlog[256], p_native[256], p_stdout[256];
+    if (!root) root = "";
+    snprintf(p_run, sizeof p_run, "%s/run/systemd", root);
+    snprintf(p_dir, sizeof p_dir, "%s%s", root, JOURNAL_DIR);
+    snprintf(p_devlog, sizeof p_devlog, "%s%s", root, DEV_LOG);
+    snprintf(p_native, sizeof p_native, "%s%s", root, NATIVE_SOCK);
+    snprintf(p_stdout, sizeof p_stdout, "%s%s", root, STDOUT_SOCK);
+
     /* dir first: code that stat()s JOURNAL_DIR for "journald is home" */
-    mkdir("/run/systemd", 0755);
-    mkdir(JOURNAL_DIR, 0755);
+    mkdir(p_run, 0755);
+    mkdir(p_dir, 0755);
 
     out_fd = open_out();
     if (out_fd < 0) {
@@ -375,9 +396,9 @@ int main(void) {
     if (getenv("JOURNAL_SINK_KMSG"))
         kmsg_fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
 
-    int dev_fd    = make_unix(DEV_LOG, SOCK_DGRAM);
-    int native_fd = make_unix(NATIVE_SOCK, SOCK_DGRAM);
-    int stdout_fd = make_unix(STDOUT_SOCK, SOCK_STREAM);
+    int dev_fd    = make_unix(p_devlog, SOCK_DGRAM);
+    int native_fd = make_unix(p_native, SOCK_DGRAM);
+    int stdout_fd = make_unix(p_stdout, SOCK_STREAM);
     if (native_fd < 0 || stdout_fd < 0) {
         fprintf(stderr, "schema-journal-sink: required socket missing\n");
         return 1;

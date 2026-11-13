@@ -916,7 +916,7 @@ static struct {
     sdbus_svctab *tab;                /* new table, swapped with the policy */
     struct timespec started;          /* the dissolve's start: the cache's mtime */
 } g_rl;
-static const char *g_dissect, *g_system_conf, *g_cache, *g_override_dir, *g_polfile;
+static const char *g_dissect, *g_system_conf, *g_cache, *g_override_dir, *g_polfile, *g_python;
 static long g_reload_timeout_ms = 30000;
 
 static void synth_return_wire(sdbus_conn *c, uint32_t reply_serial) {
@@ -1048,7 +1048,7 @@ static void reload_start(void) {
         int ofd = open("/proc/self/oom_score_adj", O_WRONLY | O_CLOEXEC);   /* not the broker's OOM shield */
         if (ofd >= 0) { (void)!write(ofd, "0\n", 2); close(ofd); }
         dup2(fd, 1);
-        execlp("python3", "python3", g_dissect, g_system_conf, (char *)NULL);
+        execl(g_python, "python3", g_dissect, g_system_conf, (char *)NULL);
         _exit(127);
     }
     close(fd);
@@ -1509,6 +1509,14 @@ int main(int argc, char **argv) {
        the activation table only */
     g_polfile = polfile;
     g_dissect = getenv("SCHEMA_DBUS_DISSECT");
+    /* never a PATH lookup: this execs as root */
+    if (g_dissect && g_dissect[0] != '/') {
+        fprintf(stderr, "schema-dbus: SCHEMA_DBUS_DISSECT=%s is not absolute, reload rebuilds the activation table only\n", g_dissect);
+        g_dissect = NULL;
+    }
+    g_python = getenv("SCHEMA_DBUS_PYTHON");
+    if (!g_python || g_python[0] != '/')
+        g_python = access("/usr/bin/python3", X_OK) == 0 ? "/usr/bin/python3" : "/usr/local/bin/python3";
     g_cache = getenv("SCHEMA_DBUS_CACHE");
     g_system_conf = getenv("SCHEMA_DBUS_SYSTEM_CONF") ? getenv("SCHEMA_DBUS_SYSTEM_CONF") : "/usr/share/dbus-1/system.conf";
     g_override_dir = getenv("SCHEMA_DBUS_OVERRIDE_DIR") ? getenv("SCHEMA_DBUS_OVERRIDE_DIR")
