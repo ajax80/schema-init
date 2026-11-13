@@ -8,6 +8,9 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/statvfs.h>
+#include <sys/mount.h>
+#include <sched.h>
 #include <sys/wait.h>
 
 static int try_create(const char *p) {
@@ -115,6 +118,21 @@ int main(void) {
         assert(access(f, F_OK) == 0);
         snprintf(f, sizeof f, "%s/var-tmp/left-var", pt);
         assert(access(f, F_OK) == 0);
+    }
+    /* a host /tmp mounted noexec stays noexec inside, nosuid added on top */
+    pid = fork();
+    if (pid == 0) {
+        struct statvfs v;
+        if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0) _exit(50);
+        if (mount("tmpfs", "/tmp", "tmpfs", MS_NOEXEC, "mode=1777") != 0) _exit(51);
+        if (apply_mount_ns("schema-test-pt", 1, 0, 0, NULL, 0, &step) != 0) _exit(52);
+        if (statvfs("/tmp", &v) != 0) _exit(53);
+        _exit((v.f_flag & ST_NOEXEC) && (v.f_flag & ST_NOSUID) && (v.f_flag & ST_NODEV) ? 0 : 54);
+    }
+    assert(waitpid(pid, &st, 0) == pid);
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        fprintf(stderr, "test_mountns_rw: noexec host /tmp status %d\n", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+        return 1;
     }
     struct stat sp;
     assert(stat("/tmp/schema-private", &sp) == 0 && sp.st_uid == 0 && (sp.st_mode & 0777) == 0700);
