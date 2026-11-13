@@ -4,14 +4,11 @@ BINS = schema-init schema-user schema-ctl schema-subreaper schema-journal-sink s
 include /usr/share/dpkg/pkg-info.mk
 
 # bindnow on top of the defaults; the Makefile reads no CPPFLAGS, so fold them
-# (they carry _FORTIFY_SOURCE) into CFLAGS. PIE is explicit: Raspbian's gcc is
-# not default-pie and dpkg-buildflags assumes it is, so the helpers came out
-# non-PIE there. A no-op on a default-pie gcc.
+# (they carry _FORTIFY_SOURCE) into CFLAGS
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 DPKG_EXPORT_BUILDFLAGS = 1
 include /usr/share/dpkg/buildflags.mk
-export CFLAGS := $(CFLAGS) $(CPPFLAGS) -fPIE
-export LDFLAGS := $(LDFLAGS) -pie
+export CFLAGS := $(CFLAGS) $(CPPFLAGS)
 
 %:
 	dh $@
