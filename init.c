@@ -1763,8 +1763,12 @@ int main(int argc, char **argv) {
 
     /* after engine_load: a service's watchdog_timeout_ms is one of the opt-ins.
      * A re-exec keeps whatever the old binary held, armed or not. */
-    if (reexec_fd < 0)
+    if (reexec_fd < 0) {
+        /* here, not in engine_load: --reexec-check loads too, and a dry run
+         * must not touch live cgroups */
+        service_cgroup_root_low(services, svc_count);
         watchdog_init();
+    }
 
     /* PID 1 feeds the hardware watchdog: a page-in stall under a swap storm
      * can turn into a reboot. Locked before the first spawn; fork children do

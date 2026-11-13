@@ -496,14 +496,17 @@ const char *watchdog_arm_reason(const char *cmdline, int conf_present,
                                 const service_t *svcs, int n) {
     static const char key[] = "schema.watchdog=";
     const char *p = cmdline;
+    int flag = -1;
+    /* the last one wins: a bootloader appends to a baked-in default */
     while (p && (p = strstr(p, key)) != NULL) {
         const char *v = p + sizeof(key) - 1;
         if ((p == cmdline || isspace((unsigned char)p[-1])) &&
             (v[0] == '0' || v[0] == '1') &&
             (v[1] == '\0' || isspace((unsigned char)v[1])))
-            return v[0] == '1' ? "schema.watchdog=1 on the kernel command line" : NULL;
+            flag = v[0] == '1';
         p = v;
     }
+    if (flag >= 0) return flag ? "schema.watchdog=1 on the kernel command line" : NULL;
     if (conf_present) return "/etc/schema-init/watchdog exists";
     for (int i = 0; i < n; i++)
         if (svcs[i].watchdog_timeout_ms > 0) return "a service sets watchdog_timeout_ms";
@@ -517,9 +520,11 @@ void service_cgroup_root_low(const service_t *svcs, int n) {
     long long sum = 0;
     char buf[32];
     if (!service_cgroup_root[0]) return;
-    for (int i = 0; i < n; i++) sum += mem_low_bytes(svcs[i].mem_low_mb);
+    /* each term is at most 2^60, so the sum can't wrap before the check */
+    for (int i = 0; i < n && sum <= MEM_LIMIT_MB_MAX * 1048576LL; i++) sum += mem_low_bytes(svcs[i].mem_low_mb);
     mkdir(service_cgroup_root, 0755);
-    snprintf(buf, sizeof buf, "%lld\n", sum);
+    if (sum > MEM_LIMIT_MB_MAX * 1048576LL) snprintf(buf, sizeof buf, "max\n");
+    else snprintf(buf, sizeof buf, "%lld\n", sum);
     cg_write(service_cgroup_root, "memory.low", buf);
 }
 
@@ -2741,7 +2746,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     } else if (strcmp(line, "swap_max") == 0) {
         svc->swap_max_set = *val != '\0';
         svc->swap_max_mb = 0;
-        if (strcmp(val, "max") == 0) {
+        if (strcasecmp(val, "max") == 0 || strcasecmp(val, "infinity") == 0) {
             svc->swap_max_mb = -1;
         } else if (mem_limit_parse(val, &svc->swap_max_mb) < 0) {
             fprintf(stderr, "[schema-init] %s: swap_max=%s must be megabytes (512, 512M), gigabytes (2G), 0, max or empty\n",

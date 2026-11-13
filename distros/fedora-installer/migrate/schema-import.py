@@ -274,7 +274,8 @@ def _cg_value(key, v):
             raise ValueError
         b = float(m.group(1)) * _SIZE_SUFFIX[m.group(2)]
         if key == "MemorySwapMax":
-            return ("swap_max", math.ceil(b / (1 << 20)))
+            mb = math.ceil(b / (1 << 20))
+            return None if mb > _MEM_MB_MAX else ("swap_max", mb)
         if key != "MemoryMax":
             # memory.min has no key here; memory.low is the soft form of it
             return None if b == 0 else ("mem_low", min(_MEM_MB_MAX, math.ceil(b / (1 << 20))))
@@ -378,9 +379,11 @@ def cgroup_lines(svc):
         for k, v in _cg_section(sec, "%s: " % n, warns).items():
             # a slice's protection covers its members together; handed to
             # each it would shield the slice many times over
-            if k in ("mem_low", "swap_max"):
+            if k == "mem_low":
+                warns.append("%s: MemoryLow/MemoryMin protect the slice as a whole, not applied" % n)
                 continue
             # cpu_weight is relative, not a cap: the unit's own, else the nearest slice's
+            # swap_max is a ceiling like the others: the tightest wins
             if k not in got or (k != "cpu_weight" and v < got[k]):
                 got[k], src[k] = v, n
     order = ("mem_limit", "mem_low", "swap_max", "cpu_limit", "cpu_weight", "pids_max")

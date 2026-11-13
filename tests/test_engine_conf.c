@@ -100,6 +100,9 @@ static void test_watchdog_opt_in(void) {
     assert(strstr(watchdog_arm_reason("", 0, sv, 2), "watchdog_timeout_ms"));
     /* =0 on the command line overrides the file and the services */
     assert(watchdog_arm_reason("schema.watchdog=0", 1, sv, 2) == NULL);
+    /* last one wins */
+    assert(watchdog_arm_reason("schema.watchdog=1 schema.watchdog=0", 0, sv, 2) == NULL);
+    assert(watchdog_arm_reason("schema.watchdog=0 schema.watchdog=1", 0, sv, 2) != NULL);
 }
 
 int main(void) {

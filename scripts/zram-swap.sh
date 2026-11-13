@@ -1,14 +1,16 @@
 #!/bin/sh
 set -e
 
-# disksize min(2 x RAM, 8G), mem_limit RAM/2: a fixed or RAM-sized device on a
-# small box holds most of RAM as compressed pages before OOM can act, which is
-# the thrash zram was meant to end. Either is overridable from the .svc's env.
+# disksize min(RAM, 8G), zram-generator's own default: a fixed 16G device on a
+# small box holds most of RAM as compressed pages before OOM can act. No
+# mem_limit by default: a full pool fails swap writes while the device still
+# shows free slots, and reclaim retries instead of reaching OOM. Both
+# overridable from the .svc's env.
 ram_kb=${SCHEMA_ZRAM_RAM_KB:-$(awk '/MemTotal/{print $2}' /proc/meminfo)}
-zdisk=$((ram_kb * 2048))
+zdisk=$((ram_kb * 1024))
 [ "$zdisk" -gt 8589934592 ] && zdisk=8589934592
 zdisk=${SCHEMA_ZRAM_DISKSIZE:-$zdisk}
-zlimit=${SCHEMA_ZRAM_MEM_LIMIT:-$((ram_kb * 512))}
+zlimit=${SCHEMA_ZRAM_MEM_LIMIT:-0}
 if [ -n "${SCHEMA_ZRAM_SIZES_ONLY:-}" ]; then
     printf 'disksize=%s mem_limit=%s\n' "$zdisk" "$zlimit"
     exit 0
@@ -57,7 +59,7 @@ if [ "$(cat /sys/block/zram0/disksize 2>/dev/null || echo 0)" = "0" ]; then
         echo zstd > /sys/block/zram0/comp_algorithm || true
     fi
     echo "$zdisk" > /sys/block/zram0/disksize || true
-    echo "$zlimit" > /sys/block/zram0/mem_limit || true
+    [ "$zlimit" = 0 ] || echo "$zlimit" > /sys/block/zram0/mem_limit || true
 fi
 
 # Initialize and enable swap if not active

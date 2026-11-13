@@ -93,7 +93,8 @@ static void test_limits(void) {
     assert(load_key("swap_max=512M", &s) == 0 && s.swap_max_set && s.swap_max_mb == 512);
     assert(load_key("swap_max=", &s) == 0 && !s.swap_max_set);
     assert(load_key("swap_max=-1", &s) == -1);
-    assert(load_key("swap_max=infinity", &s) == -1);
+    assert(load_key("swap_max=infinity", &s) == 0 && s.swap_max_set && s.swap_max_mb == -1);
+    assert(load_key("swap_max=lots", &s) == -1);
 
     assert(load_key("watchdog_sec=-1", &s) == -1);
     assert(load_key("watchdog_sec=x", &s) == -1);

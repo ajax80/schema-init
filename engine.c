@@ -3179,7 +3179,6 @@ int engine_load(const char *svc_dir) {
     grp_count = groups_load(svc_dir, groups, MAX_GROUPS);
     if (grp_count == 0 && engine_paths.svc_fallback)
         grp_count = groups_load(engine_paths.svc_fallback, groups, MAX_GROUPS);
-    service_cgroup_root_low(services, svc_count);
     return validate_and_resolve(services, svc_count, groups, grp_count);
 }
 #define SHUT_TOTAL_MS  12000
