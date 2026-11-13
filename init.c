@@ -133,22 +133,22 @@ static void load_watchdog_module(void) {
 }
 
 /* systemd-modules-load parity: every module named in the
- * /etc/modules-load.d/*.conf drop-ins (one module per line; blanks and
- * '#'/';' comments ignored) goes to one `modprobe -a -b` child that boot does
- * not wait for: nvidia or vboxdrv can take seconds each, and nothing here
- * needs them before the first spawn. Lets a node declare e.g. `tun` so
- * devtmpfs creates /dev/net/tun. Runs after mount_pseudo() has devtmpfs
- * mounted. The main loop reaps the child like any orphan. */
+ * /etc/modules-load.d/ drop-ins (*.conf, one module per line; blanks and
+ * '#'/';' comments ignored) goes to one `modprobe -a -b` child, started early
+ * so it loads while the .svc files parse; modules_wait() holds the first
+ * spawn for it, since a service may need one (sysctl after br_netfilter,
+ * i2c-dev's nodes). Lets a node declare e.g. `tun` so devtmpfs creates
+ * /dev/net/tun. Runs after mount_pseudo() has devtmpfs mounted. */
 #define MODLOAD_MAX 128
 static pid_t modload_pid = -1;
 static void load_configured_modules(void) {
     if (getpid() != 1) return;
     static char names[MODLOAD_MAX][256];
     char *argv[MODLOAD_MAX + 4] = { "modprobe", "-a", "-b" };
-    int n = 0;
+    int n = 0, full = 0;
     glob_t g;
     if (glob("/etc/modules-load.d/*.conf", 0, NULL, &g) != 0) return;
-    for (size_t i = 0; i < g.gl_pathc; i++) {
+    for (size_t i = 0; i < g.gl_pathc && !full; i++) {
         FILE *f = fopen(g.gl_pathv[i], "r");
         if (!f) continue;
         char line[256];
@@ -166,6 +166,7 @@ static void load_configured_modules(void) {
             if (*p == '\0') continue;
             if (n == MODLOAD_MAX) {
                 printf("[schema-init] modules-load.d: more than %d modules, '%s' and later ignored\n", MODLOAD_MAX, p);
+                full = 1;
                 break;
             }
             snprintf(names[n], sizeof names[n], "%s", p);
@@ -183,18 +184,27 @@ static void load_configured_modules(void) {
     }
     if (modload_pid < 0)
         printf("[schema-init] modules-load.d: fork failed: %s\n", strerror(errno));
-    else
-        printf("[schema-init] modules-load.d: %d module(s) handed to modprobe (pid %d), not waited for\n",
-               n, (int)modload_pid);
 }
 
-/* Any process left but PID 1 and kernel threads (kthreadd, pid 2, and its
- * children). A zombie counts: it is ours to reap until it is gone. */
+static void modules_wait(void) {
+    int st;
+    if (modload_pid <= 0) return;
+    while (waitpid(modload_pid, &st, 0) < 0 && errno == EINTR) ;
+    if (WIFEXITED(st) && WEXITSTATUS(st) == 0)
+        printf("[schema-init] modules-load.d: modules loaded\n");
+    else
+        printf("[schema-init] modules-load.d: modprobe -a failed (status %#x); its own messages name the module\n", st);
+    modload_pid = -1;
+}
+
+/* Any process left but PID 1 and kernel threads. A zombie counts: it is ours
+ * to reap until it is gone. So does a usermode helper the kernel started
+ * (the core_pattern pipe): its parent is kthreadd too. */
 static int user_procs_left(void) {
     DIR *d = opendir("/proc");
     struct dirent *e;
     int left = 0;
-    if (!d) return 0;
+    if (!d) return 1;   /* can't look: wait out the cap */
     while (!left && (e = readdir(d))) {
         char p[64], st[512];
         int pid = atoi(e->d_name);
@@ -274,9 +284,6 @@ static void watchdog_init(void) {
     if (fd >= 0) { ssize_t n = read(fd, cl, sizeof(cl) - 1); if (n > 0) cl[n] = '\0'; close(fd); }
     const char *why = watchdog_arm_reason(cl, access("/etc/schema-init/watchdog", F_OK) == 0,
                                           services, svc_count);
-    /* the watchdog driver may be one of the modules still loading */
-    if (why && modload_pid > 0)
-        while (waitpid(modload_pid, NULL, 0) < 0 && errno == EINTR) ;
     if (!why) {
         printf("[schema-init] hardware watchdog left closed (opt in: schema.watchdog=1, /etc/schema-init/watchdog, or watchdog_timeout_ms=)\n");
         return;
@@ -1815,6 +1822,7 @@ int main(int argc, char **argv) {
         /* here, not in engine_load: --reexec-check loads too, and a dry run
          * must not touch live cgroups */
         service_cgroup_root_low(services, svc_count);
+        modules_wait();   /* before the watchdog too: its driver may be in the list */
         watchdog_init();
     }
 

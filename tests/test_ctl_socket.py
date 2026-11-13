@@ -322,6 +322,15 @@ try:
     check("reset: oneshot not re-run", open(COUNT).read() == "x\n", open(COUNT).read())
     check("reset: named service is still restartable", ctl("reset", "held")[0] == 0 and
           wait_for(lambda: up("held")), state("held"))
+    # audit 2026-11-12, 2.3: memory read back on request, only where the
+    # supervisor got a cgroup (a delegated user cgroup; CI runners have none)
+    _one = ctl("status", "victim")[1]
+    if "memory: current=" in _one:
+        check("status <svc> prints memory.peak and oom_kill", "peak=" in _one and "oom_kill=" in _one, _one)
+        _row = [l for l in ctl("status")[1].splitlines() if l.split()[:1] == ["victim"]]
+        check("status lists mem= for a running service", _row and " mem=" in _row[0], _row)
+    else:
+        print("  skip status mem= (no cgroup for schema-user here)")
     # audit 2026-11-12, 3.5: seq moves only when something a reader sees did
     def _seq():
         with open("/dev/shm/schema-user-%d" % os.geteuid(), "rb") as f:
@@ -342,16 +351,6 @@ try:
     check("shm seq holds still while nothing changes", _seq() == _s0, (_s0, _seq()))
     ctl("stop", "victim")
     check("shm seq moves when a service does", wait_for(lambda: _seq() != _s0), _seq())
-
-    # audit 2026-11-12, 2.3: memory read back on request, only where the
-    # supervisor got a cgroup (a delegated user cgroup; CI runners have none)
-    _one = ctl("status", "victim")[1]
-    if "memory: current=" in _one:
-        check("status <svc> prints memory.peak and oom_kill", "peak=" in _one and "oom_kill=" in _one, _one)
-        _row = [l for l in ctl("status")[1].splitlines() if l.split()[:1] == ["victim"]]
-        check("status lists mem= for a running service", _row and " mem=" in _row[0], _row)
-    else:
-        print("  skip status mem= (no cgroup for schema-user here)")
 finally:
     sup.send_signal(signal.SIGTERM)
     try:

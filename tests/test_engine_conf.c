@@ -107,9 +107,11 @@ static void test_watchdog_opt_in(void) {
 
 /* audit 3.4: what still counts as alive after the SIGKILL broadcast */
 static void test_proc_stat_is_user(void) {
-    assert(proc_stat_is_user("812 (bash) S 1 812 812 0 -1 4194560"));
-    assert(!proc_stat_is_user("37 (kworker/u16:2) I 2 0 0 0 -1 69238880"));
-    assert(proc_stat_is_user("900 (a) b) 2 c) Z 1 900 900"));   /* comm with ") 2 " in it */
+    assert(proc_stat_is_user("812 (bash) S 1 812 812 0 -1 4194560 100"));
+    assert(!proc_stat_is_user("37 (kworker/u16:2) I 2 0 0 0 -1 69238880 0"));   /* PF_KTHREAD */
+    /* a usermode helper: kthreadd's child, but not a kernel thread */
+    assert(proc_stat_is_user("4021 (schema-coredump) R 2 0 0 0 -1 4194560 12"));
+    assert(proc_stat_is_user("900 (a) b) 2 c) Z 1 900 900 0 -1 4194560 0"));   /* comm with ") 2 " in it */
     assert(!proc_stat_is_user("garbage"));
 }
 

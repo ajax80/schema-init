@@ -6,8 +6,8 @@
  * LED color-board, refreshing whenever PID 1 bumps `seq`.
  *
  * It depends on nothing graphical: its own process, its own shm snapshot, so it
- * survives a frozen compositor — measured, `seq` kept advancing with
- * kwin_wayland in state T. Since 2026-07-27 it is also *visible* during that
+ * survives a frozen compositor — measured, PID 1 kept updating it with
+ * kwin_wayland in state T (seq moves only on a change since 2026-11-13). Since 2026-07-27 it is also *visible* during that
  * freeze: VT_PROCESS mediation in scripts/schema-logind.py hands the console
  * over even when the compositor is too wedged to acknowledge the handoff.
  *
@@ -189,7 +189,7 @@ static const char *sys_name(uint8_t s) {
 }
 
 /* Consistent snapshot: read seq, copy, re-read seq; retry while it moved.
- * PID 1 bumps seq after a full write (init.c shm_update), so a stable seq
+ * PID 1 bumps seq after a write that changed something (engine.c shm_update), so a stable seq
  * across the copy means the snapshot is internally consistent. */
 static int snapshot(const schema_shm_t *live, schema_shm_t *out) {
     const volatile uint32_t *seqp = &live->seq;
