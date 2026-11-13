@@ -21,8 +21,19 @@ CFLAGS += -DSCHEMA_INIT_VERSION='"$(SCHEMA_VERSION)"'
 endif
 LDFLAGS ?= -pie -Wl,-z,relro,-z,now
 # PID 1 and schema-init-pi are static (no libc to load that early) but still
-# position independent, so ASLR covers them too. The cross targets keep -static.
-STATIC_LDFLAGS ?= -static-pie -Wl,-z,relro,-z,now
+# position independent, so ASLR covers them too. A glibc without static-pie
+# (Raspbian armv6: no rcrt1.o) gets plain -static. The cross targets keep -static.
+# Probed by linking (with CFLAGS, so --sysroot counts), only when not given.
+ifeq ($(origin STATIC_LDFLAGS),undefined)
+ifeq ($(shell echo 'int main(void){return 0;}' | $(CC) $(CFLAGS) -static-pie -x c - -o /dev/null 2>/dev/null && echo y),y)
+STATIC_LDFLAGS = -static-pie -Wl,-z,relro,-z,now
+STATIC_PIE = 1
+else
+STATIC_LDFLAGS = -static -Wl,-z,relro,-z,now
+STATIC_PIE = 0
+endif
+endif
+STATIC_PIE ?= $(if $(findstring -static-pie,$(STATIC_LDFLAGS)),1,0)
 TESTDIR ?= $(CURDIR)/build/test
 CARGO   ?= cargo
 
@@ -264,7 +275,7 @@ schema-init-pi: schema-init-pi.c pi_bootguard.h
 # The default CFLAGS/LDFLAGS make these pass; a packager's own flags may not,
 # so this is a CI step rather than part of `make test`.
 check-hardening: $(BINS) $(OBJS)
-	sh tests/test_hardening_flags.sh $(BINS) -- $(OBJS)
+	STATIC_PIE=$(STATIC_PIE) STATIC_BINS="schema-init schema-init-pi" sh tests/test_hardening_flags.sh $(BINS) -- $(OBJS)
 
 clean:
 	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl schema-init-pi udev-parity verify-rules-live verify-eprops-live libatomic_asneeded.a
