@@ -183,6 +183,34 @@ static void test_lifecycle(void) {
     assert(ctl_log_has("stop sock"));
 }
 
+/* audit 2026-11-12, 1.5 + 1.6 */
+static int sb_exists(const char *rel) {
+    char p[512]; snprintf(p, sizeof p, "%s/svc/%s", sandbox, rel);
+    return access(p, F_OK) == 0;
+}
+
+static void test_disable_and_mask(void) {
+    setup_sandbox();
+    make_ctl_stub("none");
+    char svc[512];
+    snprintf(svc, sizeof svc, "%s/svc/tuned.svc", sandbox);
+    FILE *f = fopen(svc, "w"); assert(f); fputs("name=tuned\nexec=/bin/true\n", f); fclose(f);
+    /* disable keeps a hand-tuned file, enable brings it back */
+    assert(run("disable", "tuned.service") == 0);
+    assert(!sb_exists("tuned.svc") && sb_exists("tuned.svc.disabled"));
+    assert(run("enable", "tuned.service") == 0);
+    assert(sb_exists("tuned.svc") && !sb_exists("tuned.svc.disabled"));
+    /* mask: a twin, a stop and a reload; is-enabled says so; enable refuses */
+    assert(run("mask", "tuned.service") == 0);
+    assert(sb_exists("tuned.svc.masked"));
+    assert(ctl_log_has("stop tuned") && ctl_log_has("reload"));
+    assert(run("is-enabled", "tuned.service") == 1);
+    assert(run("enable", "tuned.service") == 0 && sb_exists("tuned.svc.masked"));
+    assert(run("unmask", "tuned.service") == 0);
+    assert(!sb_exists("tuned.svc.masked"));
+    assert(run("is-enabled", "tuned.service") == 0);
+}
+
 static void test_flags_and_safety(void) {
     setup_sandbox();
     write_unit("foo.service");
@@ -507,6 +535,7 @@ int main(void) {
     test_enable_queue();
     printf("task2 systemctl-shim tests passed\n");
     test_lifecycle();
+    test_disable_and_mask();
     printf("task3 systemctl-shim tests passed\n");
     test_flags_and_safety();
     printf("task4 systemctl-shim tests passed\n");

@@ -564,6 +564,17 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             if (!unit_supported(argv[i])) continue;
+            char tn[256], tw[600], tsvc[520];
+            svc_name_for(argv[i], tn, sizeof tn);
+            snprintf(tsvc, sizeof tsvc, "%s/%s.svc", shim_svc_dir(), tn);
+            snprintf(tw, sizeof tw, "%s.masked", tsvc);
+            if (access(tw, F_OK) == 0) {
+                fprintf(stderr, "Failed to enable unit: Unit %s is masked.\n", argv[i]);
+                continue;
+            }
+            snprintf(tw, sizeof tw, "%s.disabled", tsvc);
+            if (access(tsvc, F_OK) != 0 && rename(tw, tsvc) == 0)
+                printf("Restored %s from %s\n", tsvc, tw);
             char qn[300];
             unit_queue_name(argv[i], qn, sizeof qn);
             queue_add(qn);
@@ -583,22 +594,50 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             unit_queue_name(argv[i], qn, sizeof qn);
             queue_remove(qn);
             svc_name_for(argv[i], name, sizeof name);
-            char svc[512];
+            char svc[512], off[600];
             snprintf(svc, sizeof svc, "%s/%s.svc", shim_svc_dir(), name);
-            unlink(svc);
+            snprintf(off, sizeof off, "%s.disabled", svc);
+            /* renamed, never deleted: the file may be hand-tuned (a package
+             * %preun or muscle memory used to erase it); enable puts it back */
+            if (rename(svc, off) == 0) printf("Moved %s to %s\n", svc, off);
             if (now) run_ctl("stop", name);
         }
         return 0;
+    }
+    if (!shim_user && (strcmp(verb, "mask") == 0 || strcmp(verb, "unmask") == 0)) {
+        int rc = 0, changed = 0;
+        for (i = verb_idx + 1; i < argc; i++) {
+            if (argv[i][0] == '-') continue;
+            char name[256], tw[600];
+            svc_name_for(argv[i], name, sizeof name);
+            snprintf(tw, sizeof tw, "%s/%s.svc.masked", shim_svc_dir(), name);
+            if (verb[0] == 'm') {
+                /* the loader skips a .svc with this twin; the importer won't regenerate it */
+                int fd = open(tw, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+                if (fd < 0) { fprintf(stderr, "Failed to mask %s: %s\n", argv[i], strerror(errno)); rc = 1; continue; }
+                close(fd);
+                printf("Masked %s (%s)\n", argv[i], tw);
+                run_ctl("stop", name);
+                changed = 1;
+            } else if (unlink(tw) == 0) {
+                printf("Unmasked %s\n", argv[i]);
+                changed = 1;
+            }
+        }
+        if (changed) run_ctl("reload", NULL);
+        return rc;
     }
     if (strcmp(verb, "is-enabled") == 0) {
         int rc = 0, seen = 0;
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
             seen = 1;
-            if (!unit_supported(argv[i])) { printf("disabled\n"); rc = 1; continue; }
-            char qn[300], name[256];
-            unit_queue_name(argv[i], qn, sizeof qn);
+            char qn[300], name[256], tw[600];
             svc_name_for(argv[i], name, sizeof name);
+            snprintf(tw, sizeof tw, "%s/%s.svc.masked", shim_svc_dir(), name);
+            if (access(tw, F_OK) == 0) { printf("masked\n"); rc = 1; continue; }
+            if (!unit_supported(argv[i])) { printf("disabled\n"); rc = 1; continue; }
+            unit_queue_name(argv[i], qn, sizeof qn);
             if (queue_contains(qn) || svc_exists(name)) printf("enabled\n");
             else { printf("disabled\n"); rc = 1; }
         }

@@ -771,6 +771,13 @@ open(os.path.join(unitdir, "other.socket"), "w").write("[Socket]\nListenStream=/
 open(os.path.join(unitdir, "other.service"), "w").write("[Service]\nExecStart=/usr/bin/other\n")
 st, det = si.import_one("other")
 check("a same-name socket for another Service= is not attached", st == "imported" and "listen=" not in det[1])
+# audit 2026-11-12, 1.6: `systemctl mask`/`disable` twins are never regenerated, --force or not
+open(os.path.join(SD, "other.svc.masked"), "w").close()
+check("a masked name is not regenerated", si.import_one("other", force=True)[0] == "masked")
+os.unlink(os.path.join(SD, "other.svc.masked"))
+open(os.path.join(SD, "other.svc.disabled"), "w").close()
+check("a disabled name is not regenerated", si.import_one("other", force=True)[0] == "disabled")
+os.unlink(os.path.join(SD, "other.svc.disabled"))
 # systemd only uses a socket that is enabled or pulled in (Debian ssh.socket ships disabled)
 open(os.path.join(unitdir, "ssh.socket"), "w").write("[Socket]\nListenStream=22\nAccept=no\n[Install]\nWantedBy=sockets.target\n")
 open(os.path.join(unitdir, "ssh.service"), "w").write("[Service]\nExecStart=/usr/sbin/sshd -D\n[Install]\nWantedBy=multi-user.target\n")

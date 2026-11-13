@@ -2964,6 +2964,15 @@ int services_load(const char *dir, service_t *table, int max) {
         }
 
         snprintf(path, sizeof(path), "%s/%s", dir, dn);
+        {
+            /* `systemctl mask` leaves an empty <name>.svc.masked twin */
+            char masked[520];
+            snprintf(masked, sizeof masked, "%s.masked", path);
+            if (access(masked, F_OK) == 0) {
+                fprintf(stderr, "[schema-init] %s: masked, not loaded\n", path);
+                continue;
+            }
+        }
         if (svc_load_file(path, &table[count]) != 0)
             continue;
         /* two files with one name= would share a cgroup and a log, and every

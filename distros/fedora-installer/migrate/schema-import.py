@@ -2128,6 +2128,8 @@ def lsb_to_svc(name, text, known=None):
 
 def _import_lsb(name, force, queued):
     out = os.path.join(svc_dir(), name + ".svc")
+    if os.path.exists(out + ".masked") or os.path.exists(out + ".disabled"):
+        return ("masked" if os.path.exists(out + ".masked") else "disabled", out)
     if os.path.exists(out) and not force:
         return ("exists", out)
     path = os.path.join(initd_dir(), name)
@@ -2256,6 +2258,8 @@ def runit_to_svc(name, text, known=None, after=None, check=False):
 
 def _import_runit(name, force, queued):
     out = os.path.join(svc_dir(), name + ".svc")
+    if os.path.exists(out + ".masked") or os.path.exists(out + ".disabled"):
+        return ("masked" if os.path.exists(out + ".masked") else "disabled", out)
     if os.path.exists(out) and not force:
         return ("exists", out)
     path = os.path.join(_root(), SV.lstrip("/"), name, "run")
@@ -2326,6 +2330,8 @@ def import_one(name, force=False, queued=()):
             except (OSError, ValueError, Skip):
                 pass
     out = os.path.join(svc_dir(), name + ".svc")
+    if os.path.exists(out + ".masked") or os.path.exists(out + ".disabled"):
+        return ("masked" if os.path.exists(out + ".masked") else "disabled", out)
     if os.path.exists(out) and not force:
         return ("exists", out)
     path = find_unit(name + ".timer" if timer else name)
@@ -2378,7 +2384,7 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
     global _private_src
     from_queue = units is None
     items = units if units is not None else with_deps(_read_queue())
-    counts = {"imported": 0, "exists": 0, "not-found": 0, "skipped": 0, "error": 0}
+    counts = {"imported": 0, "exists": 0, "masked": 0, "disabled": 0, "not-found": 0, "skipped": 0, "error": 0}
     keep = []
     done, why_skipped, done_paths = {}, {}, []
     for name in items:
@@ -2407,6 +2413,10 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
                 written.append(out)
         elif status == "exists":
             log("have    %s (%s exists; --force to overwrite)" % (name, detail))
+        elif status in ("masked", "disabled"):
+            # never regenerated, --force or not: the admin put that twin there
+            log("%-7s %s (%s.%s; systemctl %s to undo)" % (
+                status[:7], name, detail, status, "unmask" if status == "masked" else "enable"))
         elif status == "not-found":
             log("MISS    %s (no unit file; left queued)" % name)
             keep.append(name)
