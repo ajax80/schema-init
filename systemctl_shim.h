@@ -177,6 +177,14 @@ __attribute__((unused)) static char *svc_name_for(const char *unit, char *buf, s
     return buf;
 }
 
+/* rename that never replaces: link() fails with EEXIST where rename() would
+ * silently overwrite whatever appeared since the caller looked */
+__attribute__((unused)) static int move_noreplace(const char *from, const char *to) {
+    if (link(from, to) != 0) return -1;
+    unlink(from);
+    return 0;
+}
+
 __attribute__((unused)) static int svc_masked(const char *name) {
     char p[600];
     return access(svc_path(name, ".masked", p, sizeof p), F_OK) == 0;
@@ -611,7 +619,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
              * one was deleted, and the drain makes it again from the queue */
             svc_path(name, "", svc, sizeof svc);
             svc_path(name, ".disabled", off, sizeof off);
-            int restored = access(svc, F_OK) != 0 && rename(off, svc) == 0;
+            int restored = move_noreplace(off, svc) == 0;
             if (restored) printf("Restored %s from %s\n", svc, off);
             unit_queue_name(argv[i], qn, sizeof qn);
             queue_add(qn);
@@ -640,19 +648,22 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             if (keep && access(svc, F_OK) == 0)
                 fprintf(stderr, "%s: %s left in place (%s)\n", argv[i], svc,
                         svc_is_bus(name) ? "the system bus" : "its service runs from it");
-            /* a second hand-written copy must not overwrite the one already saved */
-            if (have && !gen && access(off, F_OK) == 0) {
-                fprintf(stderr, "Not disabling %s: %s already holds a saved copy; move one of them aside\n",
-                        argv[i], off);
+            /* a hand-written file is renamed, never deleted (a package %preun
+             * runs this too), and never over the copy already saved; enable
+             * puts it back */
+            if (have && !gen && move_noreplace(svc, off) != 0) {
+                if (errno == EEXIST)
+                    fprintf(stderr, "Not disabling %s: %s already holds a saved copy; move one of them aside\n",
+                            argv[i], off);
+                else
+                    fprintf(stderr, "Not disabling %s: %s: %s\n", argv[i], off, strerror(errno));
                 rc = 1;
                 continue;
             }
+            if (have && !gen) printf("Moved %s to %s\n", svc, off);
             unit_queue_name(argv[i], qn, sizeof qn);
             queue_remove(qn);
-            /* a hand-written file is renamed, never deleted (a package %preun
-             * runs this too); enable puts it back */
             if (gen && unlink(svc) == 0) printf("Removed %s\n", svc);
-            else if (have && !gen && rename(svc, off) == 0) printf("Moved %s to %s\n", svc, off);
             if (now && !svc_is_bus(name)) run_ctl("stop", name);
         }
         return rc;
