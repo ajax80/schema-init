@@ -3,8 +3,8 @@
 # code carries the stack protector and fortify. Dynamic binaries prove the last
 # two by importing __stack_chk_fail and a __*_chk; a static binary holds libc's
 # own copies either way, so for those the objects after `--` are checked.
-# STATIC_PIE=0: the static binaries were linked plain -static (a glibc with no
-# static-pie), so they are checked for RELRO only.
+# STATIC_PIE=0: the binaries named in STATIC_BINS were linked plain -static (a
+# glibc with no static-pie), so they are checked for RELRO only.
 # usage: test_hardening_flags.sh BIN... [-- OBJ...]
 set -u
 bad=0
@@ -12,8 +12,8 @@ fail() { echo "FAIL: $*"; bad=1; }
 while [ $# -gt 0 ] && [ "$1" != -- ]; do
     b=$1; shift
     readelf -lW "$b" | grep -q GNU_RELRO || fail "$b: no RELRO"
-    if [ "${STATIC_PIE:-1}" = 0 ] && ! readelf -lW "$b" | grep -q INTERP; then
-        continue
+    if [ "${STATIC_PIE:-1}" = 0 ]; then
+        case " ${STATIC_BINS:-} " in *" $b "*) continue ;; esac
     fi
     readelf -h "$b" | grep -q 'Type:.*DYN' || fail "$b: not PIE"
     readelf -dW "$b" | grep -Eq 'BIND_NOW|FLAGS_1.*NOW' || fail "$b: no BIND_NOW"

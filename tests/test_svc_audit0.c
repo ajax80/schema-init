@@ -80,6 +80,8 @@ static void test_limits(void) {
     } else {   /* 32-bit long: strtol's own range is the cap */
         assert(load_key("mem_limit=2147483648", &s) == -1);
         assert(load_key("mem_limit=2147483647", &s) == 0 && mem_high_bytes(s.mem_limit_mb) > 0);
+        assert(load_key("mem_limit=2097152G", &s) == -1);   /* the G multiply's own guard */
+        assert(load_key("mem_limit=2097151G", &s) == 0);
     }
 
     assert(load_key("watchdog_sec=-1", &s) == -1);
