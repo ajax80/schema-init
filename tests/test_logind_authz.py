@@ -5,7 +5,10 @@
 # local uid rewrites /etc or unlocks the screen. Same class as the #469 bridge.
 import importlib.util
 import os
+import shutil
 import sys
+import tempfile
+import types
 
 try:
     import dbus
@@ -41,8 +44,53 @@ def denied(fn):
     return False
 
 
+# --- who the gate trusts (audit 2026-11-12, 1.3) -----------------------------
+# Not get_active_uid(): it falls back to 1000 at the login screen and to min()
+# with two users. authz_uid() reads the root-written session files and the VT.
+def authz_case(sessions, run_user, vt):
+    d = tempfile.mkdtemp(prefix="logind-authz-")
+    try:
+        for sub_ in ("sessions", "run-user", "linger"):
+            os.mkdir(os.path.join(d, sub_))
+        for sid, body in sessions.items():
+            with open(os.path.join(d, "sessions", sid), "w") as f:
+                f.write(body)
+        for u in run_user:
+            os.mkdir(os.path.join(d, "run-user", str(u)))
+        with open(os.path.join(d, "vt"), "w") as f:
+            f.write(vt + "\n")
+        saved = (m.SESSIONS_DIR, m.RUN_USER_DIR, m.ACTIVE_VT_PATH, m.LINGER_DIR)
+        m.SESSIONS_DIR, m.RUN_USER_DIR = d + "/sessions", d + "/run-user"
+        m.ACTIVE_VT_PATH, m.LINGER_DIR = d + "/vt", d + "/linger"
+        try:
+            return m.authz_uid()
+        finally:
+            m.SESSIONS_DIR, m.RUN_USER_DIR, m.ACTIVE_VT_PATH, m.LINGER_DIR = saved
+    finally:
+        shutil.rmtree(d)
+
+
+def sess(uid, vt, active):
+    return "UID=%d\nVTNR=%d\nACTIVE=%d\nSTATE=%s\n" % (uid, vt, active, "active" if active else "online")
+
+
+check("login screen, no session, no /run/user: nobody (was 1000)",
+      authz_case({}, [], "tty1") is None)
+check("no session files, one /run/user: that uid", authz_case({}, [1000], "tty1") == 1000)
+check("no session files, two /run/user: nobody (was the lower uid)",
+      authz_case({}, [1000, 1001], "tty1") is None)
+check("two users: the one on the front VT (was the lower uid)",
+      authz_case({"1": sess(1000, 1, 0), "2": sess(1001, 2, 1)}, [1000, 1001], "tty2") == 1001)
+check("no session on the front VT: the single active one",
+      authz_case({"1": sess(1000, 1, 1), "2": sess(1001, 2, 0)}, [1000, 1001], "tty5") == 1000)
+check("no session on the front VT and two active: nobody",
+      authz_case({"1": sess(1000, 1, 1), "2": sess(1001, 2, 1)}, [1000, 1001], "tty5") is None)
+check("session files present, none active, none in front: nobody",
+      authz_case({"1": sess(1000, 3, 0)}, [1000], "tty1") is None)
+
+
 # --- the gate decisions ------------------------------------------------------
-m.get_active_uid = lambda: 1000
+m.authz_uid = lambda: 1000
 
 check("authz_check: active-session uid passes",
       m.authz_check(Conn(1000), ":1", "X") is None)
@@ -113,6 +161,59 @@ try:
             print("        seen=%r reached=%r" % (seen, reached))
 finally:
     m.authz_check = saved_check
+
+# --- device fds go to the session controller only (audit 2026-11-12, 1.4) ----
+class Bus(Conn):
+    def __init__(self, uid, alive=()):
+        Conn.__init__(self, uid)
+        self.alive = set(alive)
+    def name_has_owner(self, name):
+        return name in self.alive
+
+
+def session(uid, controller=None, unknown=False, alive=()):
+    S = m.Login1Session
+    o = types.SimpleNamespace(_connection=Bus(uid, alive), controller=controller,
+                              controller_unknown=unknown, devices={}, vtnr=1)
+    o._setup_vt_mediation = o._teardown_vt_mediation = lambda: None
+    o._require_controller = lambda snd, what: S._require_controller(o, snd, what)
+    o._controller_alive = lambda: S._controller_alive(o)
+    return o
+
+
+def err(fn):
+    try:
+        fn()
+    except dbus.exceptions.DBusException as e:
+        return e.get_dbus_name().rsplit(".", 1)[-1]
+    return None
+
+
+S = m.Login1Session
+o = session(1000)
+check("TakeDevice before TakeControl: NotInControl",
+      err(lambda: S.TakeDevice(o, 13, 64, sender=":1.5")) == "NotInControl")
+S.TakeControl(o, False, sender=":1.5")
+o._connection.alive.add(":1.5")
+check("TakeControl records the caller", o.controller == ":1.5")
+check("same uid, other process: NotInControl",
+      err(lambda: S.TakeDevice(o, 13, 64, sender=":1.9")) == "NotInControl")
+check("the controller gets past the gate (to the open)",
+      err(lambda: S.TakeDevice(o, 0, 0, sender=":1.5")) == "FailedToOpenDevice")
+check("a second TakeControl while the controller lives: refused",
+      err(lambda: S.TakeControl(o, False, sender=":1.9")) == "DeviceIsTaken")
+check("ReleaseDevice from a non-controller: NotInControl",
+      err(lambda: S.ReleaseDevice(o, 13, 64, sender=":1.9")) == "NotInControl")
+o._connection.alive.clear()
+S.TakeControl(o, False, sender=":1.9")
+check("a crashed controller's restart takes over", o.controller == ":1.9")
+check("root needs no TakeControl",
+      err(lambda: S.TakeDevice(session(0), 0, 0, sender=":1.2")) == "FailedToOpenDevice")
+u = session(1000, unknown=True)
+check("handoff from an older bridge: the first device caller is adopted",
+      err(lambda: S.TakeDevice(u, 0, 0, sender=":1.7")) == "FailedToOpenDevice" and u.controller == ":1.7")
+check("and only that one",
+      err(lambda: S.TakeDevice(u, 0, 0, sender=":1.8")) == "NotInControl")
 
 print("test_logind_authz: %d/%d" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)
