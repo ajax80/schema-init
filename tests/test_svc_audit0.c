@@ -106,6 +106,13 @@ static void test_load_order_and_dups(void) {
     assert(!strcmp(tab[0].name, "x") && !strcmp(tab[0].exec, "/bin/true"));
     assert(!strcmp(tab[1].name, "c"));
     assert(!strcmp(tab[2].name, "d"));
+    /* `systemctl mask`: an empty <name>.svc.masked twin keeps it out (audit 1.6) */
+    write_file("d.svc.masked", "");
+    n = services_load(dir, tab, MAX_SERVICES);
+    assert(n == 2 && strcmp(tab[0].name, "d") && strcmp(tab[1].name, "d"));
+    /* nor can schema-ctl add load it */
+    snprintf(p, sizeof p, "%s/d.svc", dir);
+    assert(service_load_one(p, &tab[2]) != 0);
     free(tab);
 }
 

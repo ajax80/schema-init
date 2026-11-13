@@ -771,6 +771,36 @@ open(os.path.join(unitdir, "other.socket"), "w").write("[Socket]\nListenStream=/
 open(os.path.join(unitdir, "other.service"), "w").write("[Service]\nExecStart=/usr/bin/other\n")
 st, det = si.import_one("other")
 check("a same-name socket for another Service= is not attached", st == "imported" and "listen=" not in det[1])
+# audit 2026-11-12, 1.5 + 1.6: a `systemctl mask` twin is never regenerated, --force or not;
+# a saved hand-written .disabled copy never blocks an import
+open(os.path.join(SD, "other.svc.masked"), "w").close()
+check("a masked name is not regenerated", si.import_one("other", force=True)[0] == "masked")
+_q = open(si.queue_path()).read()
+open(si.queue_path(), "w").write("other.service\n")
+_ml = []
+_c = si.drain(log=_ml.append)
+check("a masked queue entry stays queued for unmask", _c["masked"] == 1
+      and open(si.queue_path()).read() == "other.service\n" and any(l.startswith("masked  other") for l in _ml))
+os.unlink(os.path.join(SD, "other.svc.masked"))
+open(os.path.join(SD, "other.svc.disabled"), "w").close()
+_c = si.drain(log=lambda *_: None)
+check("a .disabled twin doesn't block the import", _c["imported"] == 1 and not open(si.queue_path()).read())
+_ot = open(os.path.join(SD, "other.svc")).read()
+check("the drain stamps what it writes", _ot.startswith(si.SYS_MARK) and _ot == si._stamped(_ot.split("\n", 1)[1]))
+os.unlink(os.path.join(SD, "other.svc.disabled")); os.unlink(os.path.join(SD, "other.svc"))
+open(si.queue_path(), "w").write(_q)
+# an older importer's unmarked file is stamped once, by the first drain; a hand-edited one is not
+_body = si.import_one("other", force=True)[1][1]
+open(os.path.join(SD, "other.svc"), "w").write(_body)
+os.chmod(os.path.join(SD, "other.svc"), 0o600)
+_good = open(os.path.join(SD, "good.svc")).read()
+open(os.path.join(SD, "good.svc"), "w").write(_good.split("\n", 1)[1] + "# tuned\n")
+os.unlink(os.path.join(os.environ["SCHEMA_STATE_DIR"], "svc-stamped"))
+si.drain(units=[], log=lambda *_: None)
+check("legacy generated .svc stamped, mode kept", open(os.path.join(SD, "other.svc")).read() == si._stamped(_body)
+      and os.stat(os.path.join(SD, "other.svc")).st_mode & 0o777 == 0o600)
+check("hand-edited .svc left unstamped", not open(os.path.join(SD, "good.svc")).read().startswith(si.SYS_MARK))
+os.unlink(os.path.join(SD, "other.svc"))
 # systemd only uses a socket that is enabled or pulled in (Debian ssh.socket ships disabled)
 open(os.path.join(unitdir, "ssh.socket"), "w").write("[Socket]\nListenStream=22\nAccept=no\n[Install]\nWantedBy=sockets.target\n")
 open(os.path.join(unitdir, "ssh.service"), "w").write("[Service]\nExecStart=/usr/sbin/sshd -D\n[Install]\nWantedBy=multi-user.target\n")

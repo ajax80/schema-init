@@ -2892,6 +2892,14 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
 
 static int svc_load_file(const char *path, service_t *svc) {
     struct parse_ctx pc = { 1, 0, 0 };
+    /* `systemctl mask` leaves an empty <name>.svc.masked twin; here, so that
+     * schema-ctl add can't load it either */
+    char masked[SVC_DROPIN_PATH + 8];
+    snprintf(masked, sizeof masked, "%s.masked", path);
+    if (access(masked, F_OK) == 0) {
+        fprintf(stderr, "[schema-init] %s: masked, not loaded\n", path);
+        return -1;
+    }
     char dropins[SVC_DROPIN_MAX][SVC_DROPIN_PATH];
     int nd = svc_dropin_list(path, dropins, SVC_DROPIN_MAX);
     if (nd < 0) {
