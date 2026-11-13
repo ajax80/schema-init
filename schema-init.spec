@@ -69,6 +69,8 @@ overwrite a service file a running system depends on.
 %global core_bins schema-init schema-user schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder
 %global migrate_bins schema-udev verify-rules-live schema-systemctl schema-dbus
 %make_build BINS="%{core_bins} %{migrate_bins}" SCHEMA_VERSION="%{version}-%{release}"
+# binaries only: under %%{optflags} LTO the objects show no canary references
+sh tests/test_hardening_flags.sh %{core_bins} %{migrate_bins}
 RUSTFLAGS="%{build_rustflags}" CARGO_PROFILE_RELEASE_STRIP=false %make_build analyze CARGO="cargo --offline"
 gcc %{optflags} -shared -fPIC -o mock_sd.so distros/fedora-kde/scripts/mock_sd.c -ldl %{build_ldflags}
 

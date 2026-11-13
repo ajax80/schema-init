@@ -17,7 +17,7 @@ export CFLAGS := $(CFLAGS) $(CPPFLAGS)
 # report the package version instead of git describe.
 override_dh_auto_build:
 	$(MAKE) SCHEMA_VERSION=$(DEB_VERSION) BINS="$(BINS)" all schema-init-pi
-	$(MAKE) BINS="$(BINS) schema-init-pi" check-hardening
+	$(MAKE) SCHEMA_VERSION=$(DEB_VERSION) BINS="$(BINS) schema-init-pi" check-hardening
 	if command -v cargo >/dev/null 2>&1; then $(MAKE) analyze || true; fi
 
 override_dh_auto_test:

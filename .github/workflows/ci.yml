@@ -32,8 +32,10 @@ jobs:
       - name: python suite
         run: su ci -c "XDG_RUNTIME_DIR=/run/user/$(id -u ci) sh .github/ci-python-suite.sh"
 
-  # The C unit tests under ASan + UBSan. PID 1 links dynamically here (no
-  # static sanitizer runtime); leaks are off, PID 1's tables live forever.
+  # The C unit tests under ASan + UBSan; leaks off (PID 1's tables live
+  # forever). `make test` compiles init.o but never links or runs schema-init,
+  # so PID 1's own main loop is not covered here. STATIC_LDFLAGS is emptied
+  # for schema-init-pi: there is no static sanitizer runtime.
   sanitize:
     runs-on: ubuntu-latest
     container: registry.fedoraproject.org/fedora:44

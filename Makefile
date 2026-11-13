@@ -19,7 +19,6 @@ SCHEMA_VERSION := $(or $(SCHEMA_VERSION),$(shell git describe --always --dirty 2
 ifneq ($(SCHEMA_VERSION),)
 CFLAGS += -DSCHEMA_INIT_VERSION='"$(SCHEMA_VERSION)"'
 endif
-CFLAGS_STATIC = $(CFLAGS) -static
 LDFLAGS ?= -pie -Wl,-z,relro,-z,now
 # PID 1 and schema-init-pi are static (no libc to load that early) but still
 # position independent, so ASLR covers them too. The cross targets keep -static.
@@ -57,14 +56,16 @@ desktop:
 	$(MAKE) -C desktop
 
 schema-init: init.o $(ENGINE_OBJS)
-	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o $@ $^ -lrt
+	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
+	# whole-program LTO link of PID 1 that CI never exercises
+	$(CC) $(STATIC_LDFLAGS) -o $@ $^ -lrt
 
 # Dynamic, unlike PID 1: it runs in a session where libc is always there.
 schema-user: schema-user.o $(ENGINE_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ -lrt
 
 schema-init-static:
-	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
+	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o schema-init-static $(SRCS)
 
 schema-ctl: schema-ctl.c svc_dropins.h recorder.h recorder_logic.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
@@ -271,14 +272,17 @@ clean:
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
 
+# no fortify: the Fedora cross sysroot's bits/stdlib.h trips "Assumed value of
+# MB_LEN_MAX wrong" under it. Plain -static: no static-pie for these.
+CROSS_FLAGS = HARDEN_CFLAGS="-fstack-protector-strong -fstack-clash-protection -Wno-unused-result" LDFLAGS="-L. -static" STATIC_LDFLAGS="-L. -static"
+
 aarch64:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
-	# no fortify: the Fedora cross sysroot's bits/stdlib.h trips "Assumed value of MB_LEN_MAX wrong"
-	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- SYSROOT=/usr/aarch64-redhat-linux/sys-root/fc44 LDFLAGS="-L. -static" HARDEN_CFLAGS="-fstack-protector-strong -fstack-clash-protection -Wno-unused-result" schema-init-static schema-ctl schema-subreaper schema-journal-sink
+	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- SYSROOT=/usr/aarch64-redhat-linux/sys-root/fc44 $(CROSS_FLAGS) schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
 armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
-	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
+	$(MAKE) CROSS_COMPILE=arm-linux-gnu- $(CROSS_FLAGS) schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
 test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board schema-user schema-systemctl $(OBJS)
 	mkdir -p $(TESTDIR)
