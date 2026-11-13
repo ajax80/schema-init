@@ -210,6 +210,33 @@ try:
     slow.close()
     check("slow sender: another client waits under 2 s", res["r"][0] == 0 and res["r"][3] < 2, res["r"][::3])
 
+    # silent and dribbling clients wait in the main loop, never in a blocking
+    # read (audit 2026-11-12, 1.9): a status alongside them is not delayed
+    quiet = [connect() for _ in range(3)]
+    drib = connect()
+    drib.send(b"sta")
+    rc, out, _, secs = ctl("list")
+    check("status beside 4 silent clients is not delayed", rc == 0 and secs < 0.2, (rc, secs))
+    for q in quiet + [drib]:
+        q.close()
+    time.sleep(0.4)
+
+    # a full table answers "busy" at once instead of blocking
+    full = [connect() for _ in range(8)]
+    time.sleep(0.05)
+    extra = connect()
+    extra.settimeout(1)
+    try:
+        busy = extra.recv(64)
+    except OSError as e:
+        busy = repr(e).encode()
+    check("ninth waiting client is told busy", busy.startswith(b"err: busy"), busy)
+    extra.close()
+    for q in full:
+        q.close()
+    time.sleep(0.4)
+    check("answers normally once the table drains", ctl("list")[0] == 0)
+
     # a command cut off by the deadline is not a command: never act on half of it
     cut = connect()
     cut.sendall(b"stop victim")

@@ -22,6 +22,8 @@
 #include "fdstore.h"
 #include "coredump.h"
 #include <sys/resource.h>
+#include <sys/syscall.h>
+#include <linux/capability.h>
 #include "group.h"
 #include "schema_shm.h"
 #include "recorder.h"
@@ -1146,6 +1148,7 @@ static void reexec_commit(void) {
         snprintf(b, sizeof b, "%d", blob);
         snprintf(o, sizeof o, "%d", oldexe);
         printf("[schema-init] re-exec: %s\n", reexec_path);
+        ctl_pend_abort("PID 1 is re-executing, try again");
         if (watchdog_fd >= 0)
             write(watchdog_fd, "\0", 1);
         fflush(NULL);
@@ -1747,6 +1750,24 @@ int main(int argc, char **argv) {
         sync();
         reboot(RB_HALT_SYSTEM);
         return 1;
+    }
+
+    /* PID 1 feeds the hardware watchdog: a page-in stall under a swap storm
+     * can turn into a reboot. Locked before the first spawn; fork children do
+     * not inherit it. A container may refuse; carry on unlocked. */
+    {
+        /* MCL_FUTURE under a finite RLIMIT_MEMLOCK without CAP_IPC_LOCK (a
+         * container) would turn every later allocation past the limit into
+         * ENOMEM; there, lock what is mapped now and nothing more */
+        struct rlimit ml;
+        struct __user_cap_header_struct ch = { _LINUX_CAPABILITY_VERSION_3, 0 };
+        struct __user_cap_data_struct cd[2] = {{0}};
+        int future = (getrlimit(RLIMIT_MEMLOCK, &ml) == 0 && ml.rlim_cur == RLIM_INFINITY) ||
+                     (syscall(SYS_capget, &ch, cd) == 0 && (cd[CAP_IPC_LOCK / 32].effective >> (CAP_IPC_LOCK % 32)) & 1);
+        if (mlockall(MCL_CURRENT | (future ? MCL_FUTURE : 0)) != 0)
+            fprintf(stderr, "schema-init: mlockall: %s, PID 1 stays swappable\n", strerror(errno));
+        else if (!future)
+            fprintf(stderr, "schema-init: no CAP_IPC_LOCK: PID 1 locked as mapped now, later growth stays swappable\n");
     }
 
     engine_open(reexec_fd >= 0);

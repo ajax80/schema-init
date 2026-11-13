@@ -82,6 +82,7 @@ extern int64_t reexec_check_due;
 extern int     reexec_check_killed;
 time_t mono_sec(void);
 uint64_t monotonic_ms(void);
+void ctl_pend_abort(const char *why);
 void ctl_writef(int fd, const char *fmt, ...);
 void set_nonblock(int fd);
 void notify_pause_track(void);

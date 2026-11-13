@@ -2646,60 +2646,121 @@ static int fdstore_keep(const char *name, void *ctx) {
     return 0;
 }
 
-static void ctl_poll(void) {
-    char buf[256];
-    int pos = 0, cfd;
-    ssize_t n;
-    struct timeval tv = {0, 100000}; /* 100ms receive timeout */
+/* A client that hasn't sent its whole line waits here, polled by the main
+ * loop, never read in a blocking loop: a dribbling or silent client used to
+ * hold the loop that reaps and pets for up to CTL_RECV_MS per connection. */
+#define CTL_PENDING 8
+static struct ctl_client {
+    int     fd;
+    uid_t   uid;
+    int     pos;
+    int64_t due;
+    char    buf[256];
+} ctl_pend[CTL_PENDING] = { [0 ... CTL_PENDING - 1] = { .fd = -1 } };
+
+static void ctl_finish(struct ctl_client *c, int complete) {
+    int cfd = c->fd;
     struct timeval stv = {CTL_LATE_SEC, 0};
-    struct timespec t0, t;
-    int complete = 0, flags = 0;
-    if (ctl_fd < 0) return;
-    cfd = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC);
-    if (cfd < 0) return;
-    setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    /* blocking again, so the send timeout governs re-exec's late reply */
+    fcntl(cfd, F_SETFL, fcntl(cfd, F_GETFL) & ~O_NONBLOCK);
     setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
     ctl_out_fd = cfd;
     ctl_out_n = 0;
     ctl_out_over = 0;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-
-    /* Peer identity: root and our own uid may run everything; schema-group
-     * members (allowed in by the 0660 socket) get read-only verbs only. */
-    struct ucred cred;
-    socklen_t clen = sizeof(cred);
-    uid_t peer_uid = (uid_t)-1;
-    if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &clen) == 0)
-        peer_uid = cred.uid;
-
-    while (pos < (int)sizeof(buf) - 1) {
-        n = recv(cfd, buf + pos, 1, flags);
-        if (n <= 0) break;
-        if (buf[pos++] == '\n') { complete = 1; break; }
-        clock_gettime(CLOCK_MONOTONIC, &t);
-        /* past the deadline, take only what already arrived: PID 1 being late
-         * must not refuse a line the client sent in time */
-        if ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000 >= CTL_RECV_MS)
-            flags = MSG_DONTWAIT;
-    }
-    if (pos > 0 && !complete) {
+    if (c->pos > 0 && !complete) {
         /* half of "stop foobar" can name another service */
         ctl_writef(cfd, "err: incomplete command\n");
         ctl_end(cfd);
-    } else if (pos > 0) {
-        buf[pos] = '\0';
-        buf[strcspn(buf, "\r\n")] = '\0';
-        if (peer_uid != 0 && peer_uid != geteuid() && !ctl_is_readonly(buf)) {
+    } else if (c->pos > 0) {
+        c->buf[c->pos] = '\0';
+        c->buf[strcspn(c->buf, "\r\n")] = '\0';
+        /* Peer identity: root and our own uid may run everything; schema-group
+         * members (allowed in by the 0660 socket) get read-only verbs only. */
+        if (c->uid != 0 && c->uid != geteuid() && !ctl_is_readonly(c->buf)) {
             ctl_writef(cfd, "err: '%s' requires root (uid %d has read-only access)\n",
-                       buf, (int)peer_uid);
+                       c->buf, (int)c->uid);
             ctl_end(cfd);
         } else {
-            ctl_cmd(cfd, buf);
+            ctl_cmd(cfd, c->buf);
         }
     }
     if (ctl_out_n) send(cfd, ctl_out, ctl_out_n, MSG_DONTWAIT | MSG_NOSIGNAL);
     ctl_out_fd = -1;
     close(cfd);
+    c->fd = -1;
+}
+
+/* Take what has arrived. 1 if the client is finished (answered or closed). */
+static int ctl_client_read(struct ctl_client *c) {
+    while (c->pos < (int)sizeof(c->buf) - 1) {
+        ssize_t n = recv(c->fd, c->buf + c->pos, 1, MSG_DONTWAIT);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+        if (n <= 0) break;                       /* EOF or error */
+        if (c->buf[c->pos++] == '\n') { ctl_finish(c, 1); return 1; }
+    }
+    ctl_finish(c, 0);
+    return 1;
+}
+
+static void ctl_poll(void) {
+    struct ctl_client *c = NULL;
+    struct ucred cred;
+    socklen_t clen = sizeof(cred);
+    int cfd;
+    if (ctl_fd < 0) return;
+    uid_t uid = (uid_t)-1;
+    int others = 0;
+    cfd = accept4(ctl_fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    if (cfd < 0) return;
+    if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &clen) == 0)
+        uid = cred.uid;
+    for (int i = 0; i < CTL_PENDING; i++) {
+        if (ctl_pend[i].fd < 0) { if (!c) c = &ctl_pend[i]; }
+        else if (ctl_pend[i].uid != 0 && ctl_pend[i].uid != geteuid()) others++;
+    }
+    /* the read-only group gets half the slots, so it can't lock root out */
+    if (uid != 0 && uid != geteuid() && others >= CTL_PENDING / 2) c = NULL;
+    if (!c) {
+        send(cfd, "err: busy, try again\n.\n", 23, MSG_DONTWAIT | MSG_NOSIGNAL);
+        close(cfd);
+        return;
+    }
+    c->fd = cfd;
+    c->pos = 0;
+    c->uid = uid;
+    c->due = (int64_t)monotonic_ms() + CTL_RECV_MS;
+    ctl_client_read(c);                         /* the usual client sent it all already */
+}
+
+/* Past the deadline, take only what already arrived: PID 1 being late must
+ * not refuse a line the client sent in time. */
+static void ctl_expire(void) {
+    int64_t now = (int64_t)monotonic_ms();
+    for (int i = 0; i < CTL_PENDING; i++)
+        if (ctl_pend[i].fd >= 0 && now >= ctl_pend[i].due && !ctl_client_read(&ctl_pend[i]))
+            ctl_finish(&ctl_pend[i], 0);
+}
+
+/* Clients now outlive one loop iteration: a re-exec or a shutdown would drop
+ * them with no reply. */
+void ctl_pend_abort(const char *why) {
+    char msg[160];
+    int n = snprintf(msg, sizeof msg, "err: %s\n.\n", why);
+    for (int i = 0; i < CTL_PENDING; i++) {
+        if (ctl_pend[i].fd < 0) continue;
+        send(ctl_pend[i].fd, msg, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL);
+        close(ctl_pend[i].fd);
+        ctl_pend[i].fd = -1;
+    }
+}
+
+static int64_t ctl_due(void) {
+    int64_t due = WAKE_NONE;
+    for (int i = 0; i < CTL_PENDING; i++)
+        if (ctl_pend[i].fd >= 0 && (due == WAKE_NONE || ctl_pend[i].due < due))
+            due = ctl_pend[i].due;
+    return due;
 }
 
 static void signalfd_init(void) {
@@ -2780,6 +2841,11 @@ static int get_poll_timeout(void) {
         best = wake_min(best, ready_backstop_due, now_m, WAKE_NONE);
     if (ready_event_due)
         best = wake_min(best, ready_event_due, now_m, WAKE_NONE);
+    {
+        int64_t cd = ctl_due();
+        if (cd != WAKE_NONE)
+            best = wake_min(best, cd, now_m, WAKE_NONE);
+    }
     return wake_timeout(best, tick || awaiting, awaiting ? READY_POLL_MS : TICK_USEC / 1000);
 }
 
@@ -3277,8 +3343,8 @@ void engine_run(void) {
     int i;
 
     while (engine_running) {
-        struct pollfd fds[5 + MAX_SERVICES * MAX_LISTEN];
-        int fd_svc[5 + MAX_SERVICES * MAX_LISTEN];
+        struct pollfd fds[5 + CTL_PENDING + MAX_SERVICES * MAX_LISTEN];
+        int fd_svc[5 + CTL_PENDING + MAX_SERVICES * MAX_LISTEN];
         int nfds = 0, nfixed;
         int psi_fired = 0;
         uint8_t grp_states[MAX_GROUPS];
@@ -3317,6 +3383,14 @@ void engine_run(void) {
             fds[nfds].revents = 0;
             nfds++;
         }
+        int npend = nfds;
+        for (int ci = 0; ci < CTL_PENDING; ci++) {
+            if (ctl_pend[ci].fd < 0) continue;
+            fds[nfds].fd = ctl_pend[ci].fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            fd_svc[nfds++] = ci;
+        }
         nfixed = nfds;
         for (int si = 0; si < svc_count; si++) {
             if (!service_listen_waiting(&services[si])) continue;
@@ -3340,7 +3414,7 @@ void engine_run(void) {
                         service_log(ls, "socket-wake");
                     }
                 }
-                for (e = 0; e < nfixed; e++) {
+                for (e = 0; e < npend; e++) {
                     if (fds[e].fd == psi_fd && psi_fd >= 0) {
                         if (fds[e].revents & (POLLERR | POLLNVAL)) {
                             close(psi_fd);
@@ -3373,6 +3447,12 @@ void engine_run(void) {
                         ready_inotify_drain();
                     }
                 }
+                /* after sig_fd: a command must see the deaths reaped this wake */
+                for (e = npend; e < nfixed; e++) {
+                    struct ctl_client *cc = &ctl_pend[fd_svc[e]];
+                    if (fds[e].revents && cc->fd == fds[e].fd)
+                        ctl_client_read(cc);
+                }
             } else if (ret < 0 && errno != EINTR) {
                 usleep(TICK_USEC);
             }
@@ -3380,6 +3460,7 @@ void engine_run(void) {
             usleep(TICK_USEC);
         }
 
+        ctl_expire();
         engine_hooks.loop_pressure(psi_fired);
 
         {
@@ -3447,6 +3528,7 @@ void engine_release(void) {
         close(notify_fd);
         unlink(engine_paths.notify_sock);
     }
+    ctl_pend_abort("shutting down");
     if (ctl_fd >= 0) {
         close(ctl_fd);
         unlink(engine_paths.ctl_sock);

@@ -232,7 +232,7 @@ class Reload(Base):
     def test_missing_python3_keeps_old(self):
         empty = tempfile.mkdtemp()
         try:
-            e = self.env(path=empty)
+            e = self.env(path=empty, extra_env={"SCHEMA_DBUS_PYTHON": empty + "/python3"})
             a = Client(e.bus)
             m = reload_config(a)
             self.assertEqual(m.mtype, ERROR)
@@ -240,6 +240,16 @@ class Reload(Base):
             a.driver("ListNames")
         finally:
             os.rmdir(empty)
+
+    def test_relative_dissect_refused(self):
+        # it execs as root: a relative path would resolve against the cwd
+        e = self.env(extra_env={"SCHEMA_DBUS_DISSECT": "dissect.py"})
+        a = Client(e.bus)
+        reload_config(a)
+        self.assertIn("is not absolute", e.logtext())
+        time.sleep(0.5)   # long enough for a dissolver the guard let through to show up
+        self.assertEqual(running("dissect.py"), [])
+        a.driver("ListNames")
 
     def test_dissolver_timeout_keeps_old(self):
         e = self.env(extra_env={"SCHEMA_DBUS_RELOAD_TIMEOUT_MS": "500"})
