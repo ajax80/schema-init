@@ -9,17 +9,20 @@ STRIP   = $(CROSS_COMPILE)strip
 # -U first: some gcc builds (Ubuntu) predefine _FORTIFY_SOURCE. Fortify marks
 # write()/chown() warn_unused_result; PID 1 ignores those on purpose (best-effort
 # log and cgroup writes), so the warning is noise here.
-HARDEN_CFLAGS = -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fstack-clash-protection -fPIE -Wno-unused-result
+HARDEN_CFLAGS = -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fstack-clash-protection -Wno-unused-result
 ifneq ($(filter x86_64-% i386-% i486-% i586-% i686-%,$(shell $(CC) -dumpmachine)),)
 HARDEN_CFLAGS += -fcf-protection
 endif
 CFLAGS ?= -O2 $(HARDEN_CFLAGS)
-CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I.
+# PIE is appended, not defaulted: a packager's own flags replace the defaults,
+# and on a gcc that is not default-pie (Raspbian) that silently dropped it.
+CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I. -fPIE
 SCHEMA_VERSION := $(or $(SCHEMA_VERSION),$(shell git describe --always --dirty 2>/dev/null))
 ifneq ($(SCHEMA_VERSION),)
 CFLAGS += -DSCHEMA_INIT_VERSION='"$(SCHEMA_VERSION)"'
 endif
-LDFLAGS ?= -pie -Wl,-z,relro,-z,now
+LDFLAGS ?= -Wl,-z,relro,-z,now
+LDFLAGS += -pie
 # PID 1 and schema-init-pi are static (no libc to load that early) but still
 # position independent, so ASLR covers them too. A glibc without static-pie
 # (Raspbian armv6: no rcrt1.o) gets plain -static. The cross targets keep -static.
