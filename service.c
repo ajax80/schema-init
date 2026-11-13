@@ -585,7 +585,7 @@ static int hardening_finalize(service_t *svc) {
 
 int service_apply_hardening(const service_t *svc) {
     const char *step = "";
-    if (apply_mount_ns(svc->ns_private_tmp, svc->ns_protect_system,
+    if (apply_mount_ns(svc->name, svc->ns_private_tmp, svc->ns_protect_system,
                        svc->ns_protect_home, (const char *const *)svc->rw_path,
                        svc->rw_path_count, &step) != 0) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: mount_ns: %s: %d\n",

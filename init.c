@@ -293,8 +293,8 @@ static void mount_pseudo(void) {
     mkdir("/dev/pts", 0755);
     mount("devpts",  "/dev/pts", "devpts", MS_NOSUID|MS_NOEXEC,        "gid=5,mode=620,ptmxmode=666");
     mkdir("/dev/shm", 01777);
-    mount("tmpfs",   "/dev/shm", "tmpfs", MS_NOSUID|MS_NODEV,          "mode=1777");
-    mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755");
+    mount("tmpfs",   "/dev/shm", "tmpfs", MS_NOSUID|MS_NODEV,          "mode=1777,nr_inodes=1m");
+    mount("tmpfs",   "/run",  "tmpfs",    MS_NOSUID|MS_NODEV,           "mode=0755,size=20%,nr_inodes=800k");
     mount("cgroup2", "/sys/fs/cgroup", "cgroup2", MS_NOSUID|MS_NODEV|MS_NOEXEC|MS_RELATIME, NULL);
     mount("pstore",  "/sys/fs/pstore", "pstore",  MS_NOSUID|MS_NODEV|MS_NOEXEC, NULL);
     int cg_fd = open("/sys/fs/cgroup/cgroup.subtree_control", O_WRONLY);
