@@ -2080,6 +2080,33 @@ static const char *json_esc(const char *s, char *out, size_t outsz) {
     return out;
 }
 
+/* One cgroup file of a live service: the first line, or the value after KEY
+ * in a flat-keyed file (memory.events, cpu.stat). "" if absent. Read on
+ * request only; the loop never touches these. */
+static const char *cg_peek(const service_t *s, const char *file, const char *key, char *out, size_t n) {
+    char p[400], l[128];
+    FILE *f;
+    size_t kl = key ? strlen(key) : 0;
+    out[0] = '\0';
+    if (!s->cgroup_path[0] || s->child_pid <= 0) return out;
+    snprintf(p, sizeof p, "%s/%s", s->cgroup_path, file);
+    if (!(f = fopen(p, "r"))) return out;
+    while (fgets(l, sizeof l, f)) {
+        l[strcspn(l, "\n")] = '\0';
+        if (!key) { snprintf(out, n, "%s", l); break; }
+        if (!strncmp(l, key, kl) && l[kl] == ' ') { snprintf(out, n, "%s", l + kl + 1); break; }
+    }
+    fclose(f);
+    return out;
+}
+
+/* bytes as MiB, "max" and "" passed through */
+static const char *cg_mib(const char *v, char *out, size_t n) {
+    if (!*v || strspn(v, "0123456789") != strlen(v)) snprintf(out, n, "%s", *v ? v : "-");
+    else snprintf(out, n, "%.1fM", strtoull(v, NULL, 10) / 1048576.0);
+    return out;
+}
+
 static void ctl_cmd(int fd, char *line) {
     int i, extra;
     line[strcspn(line, "\r\n")] = '\0';
@@ -2128,6 +2155,18 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "%s  pid=%d  state=%s  restarts=%d\n", s->name,
                     (int)s->child_pid, state_name(s->inst.state), s->restart_count);
                 ctl_writef(fd, "last exit: %s\n", last_exit_str(s));
+                if (s->cgroup_path[0] && s->child_pid > 0) {
+                    char v[128], a[32], b[32], c[32], d[32], e[32];
+                    cg_mib(cg_peek(s, "memory.current", NULL, v, sizeof v), a, sizeof a);
+                    cg_mib(cg_peek(s, "memory.peak", NULL, v, sizeof v), b, sizeof b);
+                    cg_mib(cg_peek(s, "memory.swap.current", NULL, v, sizeof v), c, sizeof c);
+                    cg_mib(cg_peek(s, "memory.low", NULL, v, sizeof v), d, sizeof d);
+                    cg_mib(cg_peek(s, "memory.swap.max", NULL, v, sizeof v), e, sizeof e);
+                    ctl_writef(fd, "memory: current=%s peak=%s swap=%s low=%s swap.max=%s oom_kill=%s\n",
+                               a, b, c, d, e, *cg_peek(s, "memory.events", "oom_kill", v, sizeof v) ? v : "-");
+                    if (*cg_peek(s, "cpu.stat", "usage_usec", v, sizeof v))
+                        ctl_writef(fd, "cpu: %.2fs\n", strtoull(v, NULL, 10) / 1e6);
+                }
                 if (s->circuit_broken)
                     ctl_writef(fd, "circuit_broken=1: crash-loop breaker excised it; schema-ctl reset %s\n", s->name);
                 else if (s->excise_reason)
@@ -2170,6 +2209,11 @@ static void ctl_cmd(int fd, char *line) {
                     snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  fds=%d", sk);
                 if (services[i].circuit_broken)
                     snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  circuit_broken=1");
+                {
+                    char v[128], m[32];
+                    if (*cg_peek(&services[i], "memory.current", NULL, v, sizeof v))
+                        snprintf(deck + strlen(deck), sizeof deck - strlen(deck), "  mem=%s", cg_mib(v, m, sizeof m));
+                }
                 ctl_writef(fd, "  %-24s  pid=%-6d  state=%-14s  restarts=%d%s%s%s%s%s\n",
                     services[i].name, (int)services[i].child_pid,
                     state_name(services[i].inst.state), services[i].restart_count, deck,
@@ -3099,6 +3143,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     grp_count = shadow_grp_count;
 
     elog(stdout, "configuration reload completed successfully (generation updated)\n");
+    service_cgroup_root_low(services, svc_count);
     eviction_readded();
 
     /* Arm newly introduced timer services or ensure they are scheduled */
