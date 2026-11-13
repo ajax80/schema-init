@@ -205,6 +205,20 @@ static inline long long mem_high_bytes(long mem_limit_mb) {
     return mem_limit_mb * 943718LL + mem_limit_mb * 2LL / 5LL;
 }
 
+/* memory.low in bytes, 0 = write nothing */
+static inline long long mem_low_bytes(long mem_low_mb) {
+    return mem_low_mb > 0 && mem_low_mb <= MEM_LIMIT_MB_MAX ? mem_low_mb * 1048576LL : 0;
+}
+
+/* memory.swap.max: bytes, CG_SWAP_SKIP (write nothing) or CG_SWAP_MAX ("max").
+ * A CRITICAL service is kept out of swap unless swap_max= says otherwise. Pure. */
+#define CG_SWAP_SKIP (-1LL)
+#define CG_SWAP_MAX  (-2LL)
+static inline long long swap_max_value(prio_t priority, int set, long mb) {
+    if (set) return mb < 0 ? CG_SWAP_MAX : mb * 1048576LL;
+    return priority == PRIO_CRITICAL ? 0 : CG_SWAP_SKIP;
+}
+
 /* on_calendar day-of-week token -> tm_wday index (Sun=0..Sat=6), or -1 if the
  * token is not one of the canonical 3-letter names (case-insensitive). Pure. */
 static inline int calendar_dow_from_name(const char *s) {
@@ -452,6 +466,9 @@ typedef struct {
     int              has_exited;       /* a run has ended at least once */
     int              cpu_limit_pct;    /* 1-10000: % of one CPU core via cpu.max; 0 = unlimited */
     long             mem_limit_mb;     /* MB hard cap via memory.max; 0 = unlimited */
+    long             mem_low_mb;       /* MB shielded from reclaim via memory.low; 0 = none */
+    long             swap_max_mb;      /* memory.swap.max in MB, -1 = "max"; read only if swap_max_set */
+    int              swap_max_set;     /* swap_max= given; unset leaves the priority default */
     int              pids_max;         /* pids.max; 0 = unlimited */
     int              cpu_weight;       /* 1-10000 cpu.weight over the priority tier; 0 = tier */
     char             cpuset[64];       /* CPU affinity list for cpuset.cpus (e.g. "2,3"); empty = unconstrained */
@@ -635,6 +652,16 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
  * NULL; file is the content of /etc/schema-init/hardening-default or NULL.
  * cmdline schema.hardening_default=0|1 wins; else file trimmed == "on". */
 int  hardening_default_resolve(const char *cmdline, const char *file);
+
+/* Why PID 1 should open the hardware watchdog, or NULL to leave it closed.
+ * cmdline schema.watchdog=0|1 wins; else /etc/schema-init/watchdog present;
+ * else any loaded service with a watchdog_timeout_ms window. */
+const char *watchdog_arm_reason(const char *cmdline, int conf_present,
+                                const service_t *svcs, int n);
+
+/* memory.low of the cgroup root = the sum of every loaded service's mem_low:
+ * a child's memory.low only counts up to what its parent holds. */
+void service_cgroup_root_low(const service_t *svcs, int n);
 void service_set_hardening_default(int on);
 int  service_hardening_default(void);
 

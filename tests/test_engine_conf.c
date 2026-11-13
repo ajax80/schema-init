@@ -86,7 +86,24 @@ static void test_excise_reason_from_exit(void) {
     assert(strcmp(excise_reason_name(200), "unknown") == 0);
 }
 
+/* audit 2026-11-12, 2.5: the hardware watchdog is opt-in */
+static void test_watchdog_opt_in(void) {
+    service_t sv[2];
+    memset(sv, 0, sizeof sv);
+    assert(watchdog_arm_reason("quiet splash", 0, sv, 2) == NULL);
+    assert(watchdog_arm_reason(NULL, 0, sv, 2) == NULL);
+    assert(watchdog_arm_reason("quiet schema.watchdog=1", 0, sv, 2) != NULL);
+    assert(watchdog_arm_reason("xschema.watchdog=1", 0, sv, 2) == NULL);
+    assert(watchdog_arm_reason("schema.watchdog=10", 0, sv, 2) == NULL);
+    assert(watchdog_arm_reason("", 1, sv, 2) != NULL);
+    sv[1].watchdog_timeout_ms = 500;
+    assert(strstr(watchdog_arm_reason("", 0, sv, 2), "watchdog_timeout_ms"));
+    /* =0 on the command line overrides the file and the services */
+    assert(watchdog_arm_reason("schema.watchdog=0", 1, sv, 2) == NULL);
+}
+
 int main(void) {
+    test_watchdog_opt_in();
     test_pid1_defaults();
     test_excise_reason_from_exit();
     test_circuit_breaker();

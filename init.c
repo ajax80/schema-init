@@ -220,17 +220,27 @@ static void rescue_boot(void) {
     fprintf(stderr, "[schema-init] rescue shell exited, continuing boot\n");
 }
 
+/* Opt-in, like systemd's RuntimeWatchdogSec=: opening an iTCO arms a 30 s
+ * hardware reset behind PID 1 and wakes it every timeout/3 for good. */
 static void watchdog_init(void) {
     const char *paths[] = { "/dev/watchdog0", "/dev/watchdog", NULL };
-    int i;
+    char cl[4096] = "";
+    int i, fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) { ssize_t n = read(fd, cl, sizeof(cl) - 1); if (n > 0) cl[n] = '\0'; close(fd); }
+    const char *why = watchdog_arm_reason(cl, access("/etc/schema-init/watchdog", F_OK) == 0,
+                                          services, svc_count);
+    if (!why) {
+        printf("[schema-init] hardware watchdog left closed (opt in: schema.watchdog=1, /etc/schema-init/watchdog, or watchdog_timeout_ms=)\n");
+        return;
+    }
     for (i = 0; paths[i]; i++) {
         watchdog_fd = open(paths[i], O_WRONLY | O_CLOEXEC);
         if (watchdog_fd >= 0) {
             int timeout = 0;
             if (ioctl(watchdog_fd, WDIOC_GETTIMEOUT, &timeout) < 0) timeout = 0;
             watchdog_pet_ms = wd_pet_ms(timeout);
-            printf("[schema-init] opened hardware watchdog (%s, timeout %ds, pet every %lldms)\n",
-                   paths[i], timeout, (long long)watchdog_pet_ms);
+            printf("[schema-init] opened hardware watchdog (%s, timeout %ds, pet every %lldms): %s\n",
+                   paths[i], timeout, (long long)watchdog_pet_ms, why);
             break;
         }
     }
@@ -1703,7 +1713,6 @@ int main(int argc, char **argv) {
         load_configured_modules();
         pstore_harvest();
         rescue_boot();
-        watchdog_init();
     }
     /* Before the control socket opens or a single service spawns, so the
      * raised limit covers every descriptor PID 1 will ever hold. */
@@ -1751,6 +1760,11 @@ int main(int argc, char **argv) {
         reboot(RB_HALT_SYSTEM);
         return 1;
     }
+
+    /* after engine_load: a service's watchdog_timeout_ms is one of the opt-ins.
+     * A re-exec keeps whatever the old binary held, armed or not. */
+    if (reexec_fd < 0)
+        watchdog_init();
 
     /* PID 1 feeds the hardware watchdog: a page-in stall under a swap storm
      * can turn into a reboot. Locked before the first spawn; fork children do

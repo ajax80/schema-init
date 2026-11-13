@@ -386,6 +386,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
+	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
 	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cap-parse && $(TESTDIR)/cap-parse
 	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o $(TESTDIR)/ambient-caps && $(TESTDIR)/ambient-caps

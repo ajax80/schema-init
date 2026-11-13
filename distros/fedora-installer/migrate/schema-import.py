@@ -253,8 +253,7 @@ def limit_lines(svc):
 _SIZE_SUFFIX = {"": 1, "B": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40, "P": 1 << 50, "E": 1 << 60}
 # systemd's resource directives with no key here, and the values that ask for
 # nothing; memory.high follows mem_limit on its own
-_CG_UNMAPPED = {"MemoryHigh": "infinity", "MemoryLow": "0", "MemoryMin": "0", "MemorySwapMax": "infinity",
-                "MemoryZSwapMax": "infinity", "StartupCPUWeight": "100", "CPUShares": "1024",
+_CG_UNMAPPED = {"MemoryHigh": "infinity", "MemoryZSwapMax": "infinity", "StartupCPUWeight": "100", "CPUShares": "1024",
                 "StartupCPUShares": "1024", "CPUQuotaPeriodSec": "100ms", "AllowedCPUs": "",
                 "AllowedMemoryNodes": "", "IOWeight": "100", "StartupIOWeight": "100", "IODeviceWeight": "",
                 "IOReadBandwidthMax": "", "IOWriteBandwidthMax": "", "IOReadIOPSMax": "",
@@ -269,11 +268,17 @@ _MEM_MB_MAX = 1 << 40   # the engine's MB * 2^20 must fit a long long
 def _cg_value(key, v):
     if v in ("", "infinity"):
         return None
-    if key == "MemoryMax":
+    if key in ("MemoryMax", "MemoryLow", "MemoryMin", "MemorySwapMax"):
         m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTPE]?)B?", v)
         if not m:
             raise ValueError
-        mb = max(1, math.ceil(float(m.group(1)) * _SIZE_SUFFIX[m.group(2)] / (1 << 20)))
+        b = float(m.group(1)) * _SIZE_SUFFIX[m.group(2)]
+        if key == "MemorySwapMax":
+            return ("swap_max", math.ceil(b / (1 << 20)))
+        if key != "MemoryMax":
+            # memory.min has no key here; memory.low is the soft form of it
+            return None if b == 0 else ("mem_low", min(_MEM_MB_MAX, math.ceil(b / (1 << 20))))
+        mb = max(1, math.ceil(b / (1 << 20)))
         return None if mb > _MEM_MB_MAX else ("mem_limit", mb)
     if key == "CPUQuota":
         m = re.fullmatch(r"(\d+(?:\.\d+)?)%", v)
@@ -293,7 +298,7 @@ def _cg_value(key, v):
 
 def _cg_section(sec, where, warns):
     out = {}
-    for key in ("MemoryMax", "CPUQuota", "CPUWeight", "TasksMax"):
+    for key in ("MemoryMax", "MemoryLow", "MemoryMin", "MemorySwapMax", "CPUQuota", "CPUWeight", "TasksMax"):
         # MemoryLimit= is the cgroup-v1 name, used only when MemoryMax= is absent
         k = "MemoryLimit" if key == "MemoryMax" and not any(x == key for x, _ in sec) else key
         if not any(x == k for x, _ in sec):
@@ -304,7 +309,9 @@ def _cg_section(sec, where, warns):
         except ValueError:
             warns.append("%s%s=%s not translated (no equivalent here)" % (where, k, v))
             continue
-        if got:
+        if got and got[0] == "mem_low" and "mem_low" in out:
+            out["mem_low"] = max(out["mem_low"], got[1])
+        elif got:
             out[got[0]] = got[1]
         if v == "idle":
             warns.append("%sCPUWeight=idle is cpu_weight=1 here, not cpu.idle: it still gets a share" % where)
@@ -369,10 +376,14 @@ def cgroup_lines(svc):
             warns.append("Slice=%s not understood, its limits not applied" % sl)
     for n, sec in chain:
         for k, v in _cg_section(sec, "%s: " % n, warns).items():
+            # a slice's protection covers its members together; handed to
+            # each it would shield the slice many times over
+            if k in ("mem_low", "swap_max"):
+                continue
             # cpu_weight is relative, not a cap: the unit's own, else the nearest slice's
             if k not in got or (k != "cpu_weight" and v < got[k]):
                 got[k], src[k] = v, n
-    order = ("mem_limit", "cpu_limit", "cpu_weight", "pids_max")
+    order = ("mem_limit", "mem_low", "swap_max", "cpu_limit", "cpu_weight", "pids_max")
     if src:
         warns.append("Slice=%s ceilings now bind this service alone, not the slice's members "
                      "together: %s" % (sl, ", ".join("%s=%d (%s)" % (k, got[k], src[k]) for k in order if k in src)))

@@ -313,6 +313,21 @@ static void cgroup_apply_limits(service_t *svc) {
         }
     }
 
+    {
+        long long low = mem_low_bytes(svc->mem_low_mb);
+        long long sw = swap_max_value(svc->priority, svc->swap_max_set, svc->swap_max_mb);
+        if (low > 0) {
+            snprintf(buf, sizeof(buf), "%lld\n", low);
+            cg_write(svc->cgroup_path, "memory.low", buf);
+        }
+        if (sw == CG_SWAP_MAX) {
+            cg_write(svc->cgroup_path, "memory.swap.max", "max\n");
+        } else if (sw >= 0) {
+            snprintf(buf, sizeof(buf), "%lld\n", sw);
+            cg_write(svc->cgroup_path, "memory.swap.max", buf);
+        }
+    }
+
     /* kill a service's whole cgroup together on OOM — no orphaned survivors. */
     cg_write(svc->cgroup_path, "memory.oom.group", "1\n");
 
@@ -475,6 +490,37 @@ int hardening_default_resolve(const char *cmdline, const char *file) {
     size_t n = strlen(file);
     while (n && isspace((unsigned char)file[n - 1])) n--;
     return n == 2 && strncmp(file, "on", 2) == 0;
+}
+
+const char *watchdog_arm_reason(const char *cmdline, int conf_present,
+                                const service_t *svcs, int n) {
+    static const char key[] = "schema.watchdog=";
+    const char *p = cmdline;
+    while (p && (p = strstr(p, key)) != NULL) {
+        const char *v = p + sizeof(key) - 1;
+        if ((p == cmdline || isspace((unsigned char)p[-1])) &&
+            (v[0] == '0' || v[0] == '1') &&
+            (v[1] == '\0' || isspace((unsigned char)v[1])))
+            return v[0] == '1' ? "schema.watchdog=1 on the kernel command line" : NULL;
+        p = v;
+    }
+    if (conf_present) return "/etc/schema-init/watchdog exists";
+    for (int i = 0; i < n; i++)
+        if (svcs[i].watchdog_timeout_ms > 0) return "a service sets watchdog_timeout_ms";
+    return NULL;
+}
+
+/* Sum, not "max": under memory_recursiveprot (systemd's initrd mounts with it)
+ * a root holding max hands the unclaimed rest to every service, and nothing
+ * would be reclaimed before anything else. */
+void service_cgroup_root_low(const service_t *svcs, int n) {
+    long long sum = 0;
+    char buf[32];
+    if (!service_cgroup_root[0]) return;
+    for (int i = 0; i < n; i++) sum += mem_low_bytes(svcs[i].mem_low_mb);
+    mkdir(service_cgroup_root, 0755);
+    snprintf(buf, sizeof buf, "%lld\n", sum);
+    cg_write(service_cgroup_root, "memory.low", buf);
 }
 
 static void apply_hardening_defaults(service_t *svc) {
@@ -2683,6 +2729,22 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         /* MB; atol read "1G" as 1 MB and the service died of OOM at start */
         if (mem_limit_parse(val, &svc->mem_limit_mb) < 0) {
             fprintf(stderr, "[schema-init] %s: mem_limit=%s must be megabytes (512, 512M) or gigabytes (2G), 0 or empty\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+    } else if (strcmp(line, "mem_low") == 0) {
+        if (mem_limit_parse(val, &svc->mem_low_mb) < 0) {
+            fprintf(stderr, "[schema-init] %s: mem_low=%s must be megabytes (512, 512M) or gigabytes (2G), 0 or empty\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+    } else if (strcmp(line, "swap_max") == 0) {
+        svc->swap_max_set = *val != '\0';
+        svc->swap_max_mb = 0;
+        if (strcmp(val, "max") == 0) {
+            svc->swap_max_mb = -1;
+        } else if (mem_limit_parse(val, &svc->swap_max_mb) < 0) {
+            fprintf(stderr, "[schema-init] %s: swap_max=%s must be megabytes (512, 512M), gigabytes (2G), 0, max or empty\n",
                     svc->name[0] ? svc->name : path, val);
             return -1;
         }

@@ -53,5 +53,19 @@ int main(void) {
     assert(mem_high_bytes(4096) == 3865470566LL);      /* 4 GiB*9/10: > 32-bit LONG_MAX */
 
     printf("all cgroup_tiering tests passed\n");
+    /* memory.low: MB to bytes, nothing written for 0 */
+    assert(mem_low_bytes(0) == 0);
+    assert(mem_low_bytes(-1) == 0);
+    assert(mem_low_bytes(256) == 256LL * 1048576);
+
+    /* memory.swap.max: CRITICAL stays out of swap unless swap_max= says so;
+     * the others are left alone; "max" and 0 are both explicit */
+    assert(swap_max_value(PRIO_CRITICAL, 0, 0) == 0);
+    assert(swap_max_value(PRIO_STANDARD, 0, 0) == CG_SWAP_SKIP);
+    assert(swap_max_value(PRIO_PERIPHERAL, 0, 0) == CG_SWAP_SKIP);
+    assert(swap_max_value(PRIO_CRITICAL, 1, -1) == CG_SWAP_MAX);
+    assert(swap_max_value(PRIO_CRITICAL, 1, 128) == 128LL * 1048576);
+    assert(swap_max_value(PRIO_STANDARD, 1, 0) == 0);
+
     return 0;
 }
