@@ -25,10 +25,30 @@ jobs:
           install -d -o ci -m 0700 /run/user/$(id -u ci)
       - name: build
         run: su ci -c 'make'
+      - name: hardening flags
+        run: su ci -c 'make check-hardening'
       - name: unit tests
         run: su ci -c 'make test'
       - name: python suite
         run: su ci -c "XDG_RUNTIME_DIR=/run/user/$(id -u ci) sh .github/ci-python-suite.sh"
+
+  # The C unit tests under ASan + UBSan. PID 1 links dynamically here (no
+  # static sanitizer runtime); leaks are off, PID 1's tables live forever.
+  sanitize:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:44
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: >
+          dnf -y --disablerepo=fedora-cisco-openh264 install gcc make glibc-static libacl-devel dbus-devel libzstd-devel
+          pkgconf-pkg-config python3 libasan libubsan git util-linux procps-ng diffutils systemd-udev
+      - name: unprivileged user
+        run: useradd -m ci && chown -R ci "$GITHUB_WORKSPACE"
+      - name: make test under sanitizers
+        run: >
+          su ci -c 'CFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=undefined"
+          LDFLAGS="-fsanitize=address,undefined" STATIC_LDFLAGS= ASAN_OPTIONS=detect_leaks=0 make test'
 
   fuzz:
     runs-on: ubuntu-latest

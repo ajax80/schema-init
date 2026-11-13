@@ -2,7 +2,7 @@
 # group= needs setgid, so the compiled test runs as uid 0 of a user namespace.
 # The binary is built by the Makefile right before this script runs.
 set -eu
-BIN=/tmp/schema-test-groupkey
+BIN=${1:?usage: test_group_key.sh <binary>}
 [ -x "$BIN" ] || { echo "SKIP: group= (binary not built)"; exit 0; }
 if [ "$(id -u)" = 0 ]; then
     exec "$BIN"

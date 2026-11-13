@@ -56,8 +56,9 @@ overwrite a service file a running system depends on.
 %build
 # The Makefile takes CFLAGS from the environment and appends the flags the code
 # requires, so rpm's %%{optflags} -- fortify, stack-protector, annobin -- apply
-# to the dynamically linked helpers. PID 1 itself is linked -static and does not
-# consume LDFLAGS; the hardened-ld specs would force PIE onto a static binary.
+# to the dynamically linked helpers. PID 1 and schema-init-pi link with the
+# Makefile's STATIC_LDFLAGS (-static-pie, full RELRO), not LDFLAGS: the
+# hardened-ld specs there would add a plain -pie to a static link.
 #
 # schema-udev (the native device manager) lives in the same tree but is a
 # separate, still-maturing concern that is deliberately NOT shipped by the

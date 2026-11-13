@@ -247,11 +247,17 @@ int main(void) {
         struct dev_ctx lc; assert(dev_ctx_init(&lc, &le, "/sys") == 0);
         const char *real[] = { "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
         struct ruleset live = {0};
-        assert(ruleset_load_dirs(real, 3, &live) == 0);
-        assert(ruleset_apply(&live, &lc) == 0);   /* must not crash */
-        assert(lc.ntags >= 0);                    /* sda typically gets "systemd" */
-        ruleset_free(&live);
-        printf("test_udev_executor: live-smoke OK (sda tags=%d symlinks=%d)\n", lc.ntags, lc.nsym);
+        int any = 0;   /* a build container may have /sys but no udev: nothing to load */
+        for (int i = 0; i < 3; i++) any |= access(real[i], F_OK) == 0;
+        if (any) {
+            assert(ruleset_load_dirs(real, 3, &live) == 0);
+            assert(ruleset_apply(&live, &lc) == 0);   /* must not crash */
+            assert(lc.ntags >= 0);                    /* sda typically gets "systemd" */
+            ruleset_free(&live);
+            printf("test_udev_executor: live-smoke OK (sda tags=%d symlinks=%d)\n", lc.ntags, lc.nsym);
+        } else {
+            printf("test_udev_executor: live-smoke skipped (no udev rules)\n");
+        }
     }
     /* IMPORT{program} must capture multi-line output beyond 512 bytes
        (regression: dmi_memory_id emits ~1.3KB; a 512-byte buffer truncated it). */
