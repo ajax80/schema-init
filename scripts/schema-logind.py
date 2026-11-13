@@ -95,25 +95,25 @@ def get_active_uid():
     return 1000
 
 
+# The uid allowed to drive the console (power, devices, /etc), or None.
+# Not get_active_uid(): that one must name *some* uid for runtime dirs and
+# ACLs, so it guesses 1000 at the login screen and min() with two users, and
+# any uid-1000 process then passed the gate with nobody logged in. Here the
+# root-written session files decide: the local session on the VT the kernel
+# says is in front, else the one active local session, else nobody.
 def authz_uid():
-    """The uid allowed to drive the console: power, devices, /etc. None = nobody.
-
-    Not get_active_uid(): that one has to name *some* uid for runtime dirs and
-    ACLs, so it falls back to 1000 at the login screen and to min() with two
-    users, and any uid-1000 process then passed this gate with nobody logged
-    in. Here the root-written session files decide: the session on the VT the
-    kernel says is in front, else the one session marked active, else nobody.
-    A box whose login script writes no session files keeps the /run/user
-    reading, minus the guess. There a lingering uid has to count: it is the
-    only signal left, and the logged-in user may well linger.
-    """
-    recs = [r for r in scan_session_files().values()
-            if not r.synthesised and r.data.get('UID')]
-    if not recs:
+    files = [r for r in scan_session_files().values() if not r.synthesised and r.data.get('UID')]
+    recs = [r for r in files if not r.remote and r.state != 'closing']
+    if not files:
+        # No session files (a legacy login script): /run/user is all there is.
+        # A lingering uid is only a tiebreak: the logged-in user may linger
+        # (ajax80 on blakbox does), but a second lingerer must not lock them out.
         try:
             uids = {int(d) for d in os.listdir(RUN_USER_DIR) if d.isdigit() and int(d) >= 1000}
         except OSError:
             return None
+        if len(uids) > 1:
+            uids -= linger_uids()
         return uids.pop() if len(uids) == 1 else None
     vt = vtnr_from_tty(read_file_line(ACTIVE_VT_PATH) or '')
     if vt:
@@ -145,7 +145,7 @@ def caller_uid(connection, sender):
     except Exception:
         return None
 
-def caller_authorized(connection, sender):
+def caller_authorized(connection, sender, owner=None):
     """Ownership gate real logind/ConsoleKit enforce via session/seat membership.
 
     Without it, ANY bus client can TakeDevice() an input-device fd (a
@@ -157,9 +157,11 @@ def caller_authorized(connection, sender):
     uid = caller_uid(connection, sender)
     if uid is None:
         return False
-    return uid == 0 or uid == authz_uid()
+    # owner: a session's own root-written uid; its compositor may run its
+    # session from the background VT, as with real logind
+    return uid == 0 or (owner is not None and uid == owner) or uid == authz_uid()
 
-def authz_check(connection, sender, what):
+def authz_check(connection, sender, what, owner=None):
     """Gate a mutator the stock bus policy leaves open to any local caller.
 
     hostname1/timedate1/locale1 ship `allow send_destination` for everyone
@@ -169,7 +171,7 @@ def authz_check(connection, sender, what):
     any unresolved sender, is refused. Fail-closed before any side effect.
     """
     uid = caller_uid(connection, sender)
-    if uid == 0 or (uid is not None and uid == authz_uid()):
+    if uid == 0 or (uid is not None and (uid == owner or uid == authz_uid())):
         return
     print("login1-stub: DENY %s from uid=%s" % (what, uid), file=sys.stderr)
     raise dbus.exceptions.DBusException(
@@ -992,7 +994,7 @@ def vt_activate(vtnr):
 
 
 class Login1Session(dbus.service.Object):
-    def __init__(self, bus, record, handoff=None):
+    def __init__(self, bus, record, handoff=None, reexec=False):
         self.record = record
         self.sid = record.sid
         self.path = session_path_for(self.sid)
@@ -1003,7 +1005,10 @@ class Login1Session(dbus.service.Object):
         # same-uid process can't read the compositor's input, and handing it
         # evdev fds would undo that (a keylogger).
         self.controller = None
-        self.controller_unknown = False
+        # Created during a re-exec: whoever controlled this session is still
+        # running and won't TakeControl again. Only one session's state is
+        # handed over; the others lose their controller too.
+        self.controller_unknown = reexec
         env_vt = os.environ.get('SCHEMA_LOGIND_VTNR', '')
         # The session's VT is captured at TakeControl() time — that is when the
         # compositor announces itself, and it is the only trusted moment we
@@ -1036,9 +1041,8 @@ class Login1Session(dbus.service.Object):
         self.idle_hint = bool(state.get('idle_hint', False))
         self.idle_since = int(state.get('idle_since', 0))
         self.controller = state.get('controller')
-        # handed over by a bridge older than controller tracking: the compositor
-        # already holds its devices and won't TakeControl again
-        self.controller_unknown = 'controller' not in state and bool(state.get('devices'))
+        # a bridge older than controller tracking handed this over
+        self.controller_unknown = not self.controller
 
         for key, fd in (state.get('devices') or {}).items():
             try:
@@ -1455,7 +1459,7 @@ class Login1Session(dbus.service.Object):
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='',
                          sender_keyword='sender')
     def TakeControl(self, force, sender=None):
-        if not caller_authorized(self._connection, sender):
+        if not caller_authorized(self._connection, sender, self._owner()):
             print(f"login1-stub: DENY TakeControl from uid={caller_uid(self._connection, sender)}",
                   file=sys.stderr)
             raise dbus.exceptions.DBusException(
@@ -1476,29 +1480,50 @@ class Login1Session(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='', sender_keyword='sender')
     def ReleaseControl(self, sender=None):
-        authz_check(self._connection, sender, "ReleaseControl")
-        if self.controller and sender != self.controller and caller_uid(self._connection, sender) != 0:
+        authz_check(self._connection, sender, "ReleaseControl", self._owner())
+        # controller or root only, never "nobody holds it": after a handoff that
+        # lost the controller the compositor is still live on this session
+        if sender != self.controller and caller_uid(self._connection, sender) != 0:
             raise dbus.exceptions.DBusException(
                 "Not the session controller", name='org.freedesktop.login1.NotInControl')
         print("login1-stub: Session.ReleaseControl() requested")
         self.controller = None
         self._teardown_vt_mediation()
 
+    # A session's root-written uid, or None for a stand-in record (its uid is a guess).
+    def _owner(self):
+        rec = getattr(self, 'record', None)
+        return rec.uid if rec and not rec.synthesised and rec.data.get('UID') else None
+
+    # Device calls come from the controller only (root exempt).
     def _require_controller(self, sender, what):
-        """Device calls come from the controller only (root exempt)."""
         if sender == self.controller or caller_uid(self._connection, sender) == 0:
             return
-        if self.controller_unknown:
+        if self.controller_unknown and self._is_compositor(sender):
             self.controller, self.controller_unknown = sender, False
-            print(f"login1-stub: controller adopted as {sender} (handoff predates tracking)")
+            print(f"login1-stub: controller adopted as {sender} (re-exec lost it)")
             return
         print(f"login1-stub: DENY {what} from {sender}: not the controller ({self.controller})",
               file=sys.stderr)
         raise dbus.exceptions.DBusException(
             "TakeControl first", name='org.freedesktop.login1.NotInControl')
 
+    # After a re-exec that lost the controller, only a compositor binary may be
+    # adopted: /proc/<pid>/exe can't be forged by a same-uid process the way
+    # comm can, so a keylogger racing the compositor to the first device call
+    # does not win it.
+    def _is_compositor(self, sender):
+        try:
+            pid = int(self._connection.call_blocking(
+                'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                'GetConnectionUnixProcessID', 's', (sender,)))
+            exe = os.readlink('/proc/%d/exe' % pid)
+        except Exception:
+            return False
+        return os.path.basename(exe.split(' (deleted)')[0]) in _COMPOSITORS
+
+    # A crashed compositor's name is gone; its restart must not be locked out.
     def _controller_alive(self):
-        """A crashed compositor's name is gone; its restart must not be locked out."""
         try:
             return bool(self._connection.name_has_owner(self.controller))
         except Exception:
@@ -1518,7 +1543,7 @@ class Login1Session(dbus.service.Object):
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='hb',
                          sender_keyword='sender')
     def TakeDevice(self, major, minor, sender=None):
-        if not caller_authorized(self._connection, sender):
+        if not caller_authorized(self._connection, sender, self._owner()):
             print(f"login1-stub: DENY TakeDevice({major},{minor}) from "
                   f"uid={caller_uid(self._connection, sender)}", file=sys.stderr)
             raise dbus.exceptions.DBusException(
@@ -1549,7 +1574,7 @@ class Login1Session(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='', sender_keyword='sender')
     def ReleaseDevice(self, major, minor, sender=None):
-        authz_check(self._connection, sender, "ReleaseDevice")
+        authz_check(self._connection, sender, "ReleaseDevice", self._owner())
         self._require_controller(sender, "ReleaseDevice")
         print(f"login1-stub: Session.ReleaseDevice({major}, {minor}) requested")
         key = (major, minor)
@@ -1563,7 +1588,7 @@ class Login1Session(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Session', in_signature='uu', out_signature='', sender_keyword='sender')
     def PauseDeviceComplete(self, major, minor, sender=None):
-        authz_check(self._connection, sender, "PauseDeviceComplete")
+        authz_check(self._connection, sender, "PauseDeviceComplete", self._owner())
         self._require_controller(sender, "PauseDeviceComplete")
         print(f"login1-stub: Session.PauseDeviceComplete({major}, {minor}) requested")
         self.pending_acks.discard((major, minor))
@@ -1811,7 +1836,7 @@ class SessionRegistry:
             if obj is None:
                 adopt = handoff if (handoff or {}).get(
                     'sid', LEGACY_SESSION_ID) == sid else None
-                obj = Login1Session(self.bus, rec, adopt)
+                obj = Login1Session(self.bus, rec, adopt, reexec=handoff is not None)
                 self.sessions[sid] = obj
                 self._sigs[sid] = rec.signature()
                 if self.manager:
@@ -2660,18 +2685,20 @@ class Login1Manager(dbus.service.Object):
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
     def ReleaseSession(self, session_id, sender=None):
         sid = str(session_id)
-        sessions = self.registry.sessions if getattr(self, 'registry', None) else {}
-        uid = sessions[sid].record.uid if sid in sessions else ''
-        # a user may end their own session wherever it is; anyone else needs the gate
-        if uid == '' or caller_uid(self._connection, sender) != uid:
-            authz_check(self._connection, sender, "ReleaseSession")
+        reg = getattr(self, 'registry', None)
+        obj = reg.sessions.get(sid) if reg else None
+        uid = obj.record.uid if obj else ''
+        # a user may end their own session wherever it is, but only by a
+        # root-written uid: a stand-in record's uid is the 1000 guess
+        authz_check(self._connection, sender, "ReleaseSession", obj._owner() if obj else None)
         print(f"login1-stub: ReleaseSession({sid})")
         try:
             subprocess.run([SESSION_UNREGISTER, str(sid), str(uid)], timeout=5)
         except Exception as e:
             print("login1-stub: schema-session-unregister failed: %s" % e,
                   file=sys.stderr)
-        self.registry.sync()
+        if reg:
+            reg.sync()
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='u', out_signature='o')
     def GetSessionByPID(self, pid):

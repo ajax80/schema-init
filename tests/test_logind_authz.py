@@ -70,8 +70,8 @@ def authz_case(sessions, run_user, vt):
         shutil.rmtree(d)
 
 
-def sess(uid, vt, active):
-    return "UID=%d\nVTNR=%d\nACTIVE=%d\nSTATE=%s\n" % (uid, vt, active, "active" if active else "online")
+def sess(uid, vt, active, extra=""):
+    return "UID=%d\nVTNR=%d\nACTIVE=%d\nSTATE=%s\n%s" % (uid, vt, active, "active" if active else "online", extra)
 
 
 check("login screen, no session, no /run/user: nobody (was 1000)",
@@ -87,6 +87,25 @@ check("no session on the front VT and two active: nobody",
       authz_case({"1": sess(1000, 1, 1), "2": sess(1001, 2, 1)}, [1000, 1001], "tty5") is None)
 check("session files present, none active, none in front: nobody",
       authz_case({"1": sess(1000, 3, 0)}, [1000], "tty1") is None)
+check("a remote session marked active is not the console",
+      authz_case({"1": sess(1001, 0, 1, "REMOTE=1\n")}, [1001], "tty1") is None)
+
+
+def linger_case(run_user, lingering):
+    d = tempfile.mkdtemp(prefix="logind-linger-")
+    saved = m.linger_uids
+    m.linger_uids = lambda: set(lingering)
+    try:
+        return authz_case({}, run_user, "tty1")
+    finally:
+        m.linger_uids = saved
+        shutil.rmtree(d)
+
+
+check("no session files, the one user lingers: still that user",
+      linger_case([1000], [1000]) == 1000)
+check("no session files, a second user lingers: the logged-in one",
+      linger_case([1000, 1001], [1001]) == 1000)
 
 
 # --- the gate decisions ------------------------------------------------------
@@ -109,7 +128,7 @@ class Reached(Exception):
 
 seen = []
 def recording_gate(gate_name):
-    def g(connection, sender, what):
+    def g(connection, sender, what, owner=None):
         seen.append((gate_name, what, sender))
         raise Reached
     return g
@@ -171,13 +190,17 @@ class Bus(Conn):
         return name in self.alive
 
 
-def session(uid, controller=None, unknown=False, alive=()):
+def session(uid, controller=None, unknown=False, alive=(), owner=1000, compositor=True):
     S = m.Login1Session
+    rec = m.SessionRecord("1", {"UID": str(owner)} if owner is not None else None,
+                          synthesised=owner is None)
     o = types.SimpleNamespace(_connection=Bus(uid, alive), controller=controller,
-                              controller_unknown=unknown, devices={}, vtnr=1)
+                              controller_unknown=unknown, devices={}, vtnr=1, record=rec)
     o._setup_vt_mediation = o._teardown_vt_mediation = lambda: None
     o._require_controller = lambda snd, what: S._require_controller(o, snd, what)
     o._controller_alive = lambda: S._controller_alive(o)
+    o._owner = lambda: S._owner(o)
+    o._is_compositor = lambda snd: compositor
     return o
 
 
@@ -210,10 +233,39 @@ check("a crashed controller's restart takes over", o.controller == ":1.9")
 check("root needs no TakeControl",
       err(lambda: S.TakeDevice(session(0), 0, 0, sender=":1.2")) == "FailedToOpenDevice")
 u = session(1000, unknown=True)
-check("handoff from an older bridge: the first device caller is adopted",
+check("re-exec lost the controller: the compositor is adopted",
       err(lambda: S.TakeDevice(u, 0, 0, sender=":1.7")) == "FailedToOpenDevice" and u.controller == ":1.7")
 check("and only that one",
       err(lambda: S.TakeDevice(u, 0, 0, sender=":1.8")) == "NotInControl")
+k = session(1000, unknown=True, compositor=False)
+check("re-exec lost the controller: a non-compositor is not adopted",
+      err(lambda: S.TakeDevice(k, 0, 0, sender=":1.6")) == "NotInControl" and k.controller is None)
+check("ReleaseControl with no controller: refused to non-root",
+      err(lambda: S.ReleaseControl(session(1000, unknown=True), sender=":1.6")) == "NotInControl")
+
+m.authz_uid = lambda: 1000      # user 1000 in front; 1001's session is behind
+b = session(1001, owner=1001)
+check("a background session's own compositor may TakeControl",
+      err(lambda: S.TakeControl(b, False, sender=":2.1")) is None and b.controller == ":2.1")
+check("another uid may not",
+      err(lambda: S.TakeControl(session(1002, owner=1001), False, sender=":2.2")) == "AccessDenied")
+m.authz_uid = lambda: None      # login screen
+check("a stand-in session's guessed uid gives no ownership",
+      err(lambda: S.TakeControl(session(1000, owner=None), False, sender=":2.3")) == "AccessDenied")
+
+
+class Reg:
+    def __init__(self, obj):
+        self.sessions = {"1": obj}
+    def sync(self):
+        pass
+
+
+mgr = m.Login1Manager.__new__(m.Login1Manager)
+mgr._connection = Conn(1000)
+mgr.registry = Reg(session(1000, owner=None))
+check("ReleaseSession of a stand-in session at the login screen: denied",
+      denied(lambda: m.Login1Manager.ReleaseSession(mgr, "1", sender=":2.4")))
 
 print("test_logind_authz: %d/%d" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)
