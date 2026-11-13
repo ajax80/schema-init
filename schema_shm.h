@@ -34,7 +34,7 @@ typedef struct {
 
 typedef struct {
     uint32_t    magic;
-    uint32_t    seq;         /* bumped after each full write — reader detects updates */
+    uint32_t    seq;         /* bumped after a write that changed something; still while idle, so not a liveness signal */
     int32_t     count;
     shm_svc_t   svc[SCHEMA_SHM_MAX];
     int32_t     group_count;

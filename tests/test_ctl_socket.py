@@ -331,6 +331,26 @@ try:
         check("status lists mem= for a running service", _row and " mem=" in _row[0], _row)
     else:
         print("  skip status mem= (no cgroup for schema-user here)")
+    # audit 2026-11-12, 3.5: seq moves only when something a reader sees did
+    def _seq():
+        with open("/dev/shm/schema-user-%d" % os.geteuid(), "rb") as f:
+            return int.from_bytes(f.read(8)[4:8], sys.byteorder)
+    # let the reset above finish (held comes back up), then watch an idle window:
+    # before the gate seq moved on every loop pass
+    _end = time.monotonic() + 20
+    _s0 = _seq()
+    while time.monotonic() < _end:
+        time.sleep(1.5)
+        if _seq() == _s0:
+            break
+        _s0 = _seq()
+    # a status wakes the loop and changes nothing
+    for _ in range(5):
+        ctl("status")
+        time.sleep(0.3)
+    check("shm seq holds still while nothing changes", _seq() == _s0, (_s0, _seq()))
+    ctl("stop", "victim")
+    check("shm seq moves when a service does", wait_for(lambda: _seq() != _s0), _seq())
 finally:
     sup.send_signal(signal.SIGTERM)
     try:

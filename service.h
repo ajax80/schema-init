@@ -601,6 +601,19 @@ static inline int cmdline_word_match(const char *cmdline, const char *arg) {
     }
     return 0;
 }
+/* /proc/<pid>/stat: 1 unless PF_KTHREAD is set in flags (field 9). Not the
+ * parent: a usermode helper (core_pattern pipe) is kthreadd's child too.
+ * comm may hold spaces and ')', so the fields after the last ')'. Pure. */
+#define PROC_PF_KTHREAD 0x00200000u
+static inline int proc_stat_is_user(const char *stat) {
+    const char *r = strrchr(stat, ')');
+    char state;
+    int ppid, pgrp, sess, tty, tpgid;
+    unsigned flags;
+    if (!r || sscanf(r + 1, " %c %d %d %d %d %d %u", &state, &ppid, &pgrp, &sess, &tty, &tpgid, &flags) != 7)
+        return 0;
+    return !(flags & PROC_PF_KTHREAD);
+}
 static inline int rescue_cmdline(const char *cmdline) {
     static const char *w[] = { "schema.rescue", "single", "s", "S", "1", "rescue", NULL };
     for (int i = 0; w[i]; i++)
