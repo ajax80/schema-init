@@ -1692,30 +1692,47 @@ static void shm_init(void) {
 _Static_assert(SCHEMA_SHM_MAX >= MAX_SERVICES, "shm svc table smaller than MAX_SERVICES");
 _Static_assert(SCHEMA_SHM_MAX_GROUPS >= MAX_GROUPS, "shm group table smaller than MAX_GROUPS");
 
+/* Readers (schema-board, the shim's is-active) redraw on every seq change,
+ * so seq moves only when something they can see did. system_state is written
+ * straight from the signal handlers; its change still has to bump seq. */
 static void shm_update(void) {
-    int i;
+    static uint8_t last_sys;
+    int i, changed = 0;
     if (!shm_ptr) return;
     for (i = 0; i < svc_count; i++) {
-        memcpy(shm_ptr->svc[i].name, services[i].name, 64);
-        shm_ptr->svc[i].state         = services[i].inst.state;
-        shm_ptr->svc[i].weight        = services[i].inst.weight;
-        shm_ptr->svc[i].child_pid     = (int32_t)services[i].child_pid;
-        shm_ptr->svc[i].restart_count = services[i].restart_count;
-        shm_ptr->svc[i].card_played   = (uint8_t)services[i].card_next;
-        shm_ptr->svc[i].card_count    = (uint8_t)services[i].card_count;
+        shm_svc_t e;
+        memset(&e, 0, sizeof e);
+        memcpy(e.name, services[i].name, 64);
+        e.state         = services[i].inst.state;
+        e.weight        = services[i].inst.weight;
+        e.child_pid     = (int32_t)services[i].child_pid;
+        e.restart_count = services[i].restart_count;
+        e.card_played   = (uint8_t)services[i].card_next;
+        e.card_count    = (uint8_t)services[i].card_count;
         service_t *fb = services[i].fallback_live ? service_fallback(&services[i], services, svc_count) : NULL;
-        shm_ptr->svc[i].limp = (fb && fb->standby_up ? SHM_LIMP_FALLBACK : 0)
+        e.limp = (fb && fb->standby_up ? SHM_LIMP_FALLBACK : 0)
             | (service_is_standby(&services[i], services, svc_count)
                ? (services[i].standby_up ? SHM_LIMP_STANDIN : SHM_LIMP_STANDBY) : 0);
+        if (memcmp(&shm_ptr->svc[i], &e, sizeof e) != 0) {
+            memcpy(&shm_ptr->svc[i], &e, sizeof e);
+            changed = 1;
+        }
     }
-    shm_ptr->count = svc_count;
+    if (shm_ptr->count != svc_count) { shm_ptr->count = svc_count; changed = 1; }
     for (i = 0; i < grp_count; i++) {
-        memcpy(shm_ptr->groups[i].name, groups[i].name, 64);
-        shm_ptr->groups[i].state        = groups[i].state;
-        shm_ptr->groups[i].member_count = groups[i].member_count;
+        shm_group_t g;
+        memset(&g, 0, sizeof g);
+        memcpy(g.name, groups[i].name, 64);
+        g.state        = groups[i].state;
+        g.member_count = groups[i].member_count;
+        if (memcmp(&shm_ptr->groups[i], &g, sizeof g) != 0) {
+            memcpy(&shm_ptr->groups[i], &g, sizeof g);
+            changed = 1;
+        }
     }
-    shm_ptr->group_count = grp_count;
-    shm_ptr->seq++;
+    if (shm_ptr->group_count != grp_count) { shm_ptr->group_count = grp_count; changed = 1; }
+    if (shm_ptr->system_state != last_sys) { last_sys = shm_ptr->system_state; changed = 1; }
+    if (changed) shm_ptr->seq++;
 }
 
 /* ── runtime control socket ─────────────────────────────────────────── */

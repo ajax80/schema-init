@@ -322,6 +322,27 @@ try:
     check("reset: oneshot not re-run", open(COUNT).read() == "x\n", open(COUNT).read())
     check("reset: named service is still restartable", ctl("reset", "held")[0] == 0 and
           wait_for(lambda: up("held")), state("held"))
+    # audit 2026-11-12, 3.5: seq moves only when something a reader sees did
+    def _seq():
+        with open("/dev/shm/schema-user-%d" % os.geteuid(), "rb") as f:
+            return int.from_bytes(f.read(8)[4:8], sys.byteorder)
+    # let the reset above finish (held comes back up), then watch an idle window:
+    # before the gate seq moved on every loop pass
+    _end = time.monotonic() + 20
+    _s0 = _seq()
+    while time.monotonic() < _end:
+        time.sleep(1.5)
+        if _seq() == _s0:
+            break
+        _s0 = _seq()
+    # a status wakes the loop and changes nothing
+    for _ in range(5):
+        ctl("status")
+        time.sleep(0.3)
+    check("shm seq holds still while nothing changes", _seq() == _s0, (_s0, _seq()))
+    ctl("stop", "victim")
+    check("shm seq moves when a service does", wait_for(lambda: _seq() != _s0), _seq())
+
     # audit 2026-11-12, 2.3: memory read back on request, only where the
     # supervisor got a cgroup (a delegated user cgroup; CI runners have none)
     _one = ctl("status", "victim")[1]

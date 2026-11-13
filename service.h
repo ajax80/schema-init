@@ -601,6 +601,15 @@ static inline int cmdline_word_match(const char *cmdline, const char *arg) {
     }
     return 0;
 }
+/* /proc/<pid>/stat: 1 unless the parent is kthreadd (pid 2), i.e. a kernel
+ * thread. comm may hold spaces and ')', so the fields after the last ')'. Pure. */
+static inline int proc_stat_is_user(const char *stat) {
+    const char *r = strrchr(stat, ')');
+    char state;
+    int ppid;
+    if (!r || sscanf(r + 1, " %c %d", &state, &ppid) != 2) return 0;
+    return ppid != 2;
+}
 static inline int rescue_cmdline(const char *cmdline) {
     static const char *w[] = { "schema.rescue", "single", "s", "S", "1", "rescue", NULL };
     for (int i = 0; w[i]; i++)

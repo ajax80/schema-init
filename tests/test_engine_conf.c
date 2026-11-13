@@ -105,8 +105,17 @@ static void test_watchdog_opt_in(void) {
     assert(watchdog_arm_reason("schema.watchdog=0 schema.watchdog=1", 0, sv, 2) != NULL);
 }
 
+/* audit 3.4: what still counts as alive after the SIGKILL broadcast */
+static void test_proc_stat_is_user(void) {
+    assert(proc_stat_is_user("812 (bash) S 1 812 812 0 -1 4194560"));
+    assert(!proc_stat_is_user("37 (kworker/u16:2) I 2 0 0 0 -1 69238880"));
+    assert(proc_stat_is_user("900 (a) b) 2 c) Z 1 900 900"));   /* comm with ") 2 " in it */
+    assert(!proc_stat_is_user("garbage"));
+}
+
 int main(void) {
     test_watchdog_opt_in();
+    test_proc_stat_is_user();
     test_pid1_defaults();
     test_excise_reason_from_exit();
     test_circuit_breaker();

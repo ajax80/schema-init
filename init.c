@@ -132,13 +132,20 @@ static void load_watchdog_module(void) {
         printf("[schema-init] watchdog module load failed (sp5100_tco)\n");
 }
 
-/* systemd-modules-load parity: modprobe every module named in the
+/* systemd-modules-load parity: every module named in the
  * /etc/modules-load.d/*.conf drop-ins (one module per line; blanks and
- * '#'/';' comments ignored). Lets a node declare e.g. `tun` so devtmpfs
- * creates /dev/net/tun at boot, instead of each service wrapper modprobing
- * by hand. Runs after mount_pseudo() has devtmpfs mounted. */
+ * '#'/';' comments ignored) goes to one `modprobe -a -b` child that boot does
+ * not wait for: nvidia or vboxdrv can take seconds each, and nothing here
+ * needs them before the first spawn. Lets a node declare e.g. `tun` so
+ * devtmpfs creates /dev/net/tun. Runs after mount_pseudo() has devtmpfs
+ * mounted. The main loop reaps the child like any orphan. */
+#define MODLOAD_MAX 128
+static pid_t modload_pid = -1;
 static void load_configured_modules(void) {
     if (getpid() != 1) return;
+    static char names[MODLOAD_MAX][256];
+    char *argv[MODLOAD_MAX + 4] = { "modprobe", "-a", "-b" };
+    int n = 0;
     glob_t g;
     if (glob("/etc/modules-load.d/*.conf", 0, NULL, &g) != 0) return;
     for (size_t i = 0; i < g.gl_pathc; i++) {
@@ -157,14 +164,52 @@ static void load_configured_modules(void) {
             if (*p == '#' || *p == ';' || *p == '\0') continue;
             p[strcspn(p, " \t\r\n")] = '\0';
             if (*p == '\0') continue;
-            if (modprobe_one(p) == 0)
-                printf("[schema-init] loaded module '%s'\n", p);
-            else
-                printf("[schema-init] module load failed: '%s'\n", p);
+            if (n == MODLOAD_MAX) {
+                printf("[schema-init] modules-load.d: more than %d modules, '%s' and later ignored\n", MODLOAD_MAX, p);
+                break;
+            }
+            snprintf(names[n], sizeof names[n], "%s", p);
+            argv[3 + n] = names[n];
+            n++;
         }
         fclose(f);
     }
     globfree(&g);
+    if (!n) return;
+    modload_pid = fork();
+    if (modload_pid == 0) {
+        execv("/sbin/modprobe", argv);
+        _exit(127);
+    }
+    if (modload_pid < 0)
+        printf("[schema-init] modules-load.d: fork failed: %s\n", strerror(errno));
+    else
+        printf("[schema-init] modules-load.d: %d module(s) handed to modprobe (pid %d), not waited for\n",
+               n, (int)modload_pid);
+}
+
+/* Any process left but PID 1 and kernel threads (kthreadd, pid 2, and its
+ * children). A zombie counts: it is ours to reap until it is gone. */
+static int user_procs_left(void) {
+    DIR *d = opendir("/proc");
+    struct dirent *e;
+    int left = 0;
+    if (!d) return 0;
+    while (!left && (e = readdir(d))) {
+        char p[64], st[512];
+        int pid = atoi(e->d_name);
+        if (pid <= 2) continue;
+        snprintf(p, sizeof p, "/proc/%d/stat", pid);
+        int fd = open(p, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        ssize_t n = read(fd, st, sizeof st - 1);
+        close(fd);
+        if (n <= 0) continue;
+        st[n] = '\0';
+        left = proc_stat_is_user(st);
+    }
+    closedir(d);
+    return left;
 }
 
 static void pid1_hardening_default(void) {
@@ -229,6 +274,9 @@ static void watchdog_init(void) {
     if (fd >= 0) { ssize_t n = read(fd, cl, sizeof(cl) - 1); if (n > 0) cl[n] = '\0'; close(fd); }
     const char *why = watchdog_arm_reason(cl, access("/etc/schema-init/watchdog", F_OK) == 0,
                                           services, svc_count);
+    /* the watchdog driver may be one of the modules still loading */
+    if (why && modload_pid > 0)
+        while (waitpid(modload_pid, NULL, 0) < 0 && errno == EINTR) ;
     if (!why) {
         printf("[schema-init] hardware watchdog left closed (opt in: schema.watchdog=1, /etc/schema-init/watchdog, or watchdog_timeout_ms=)\n");
         return;
@@ -1841,10 +1889,18 @@ int main(int argc, char **argv) {
      * journal the next boot had to replay. Kill whatever remains. Linux exempts
      * PID 1 from kill(-1), so this cannot hit us. */
     kill(-1, SIGKILL);
-    sleep(1);
-    while (waitpid(-1, NULL, WNOHANG) > 0)
-        ;
-    shut_log("SIGKILL broadcast");
+    /* was a flat sleep(1) on every shutdown; one in D state still gets the full second */
+    uint64_t kt = monotonic_ms();
+    for (;; usleep(20000)) {
+        while (waitpid(-1, NULL, WNOHANG) > 0)
+            ;
+        if (!user_procs_left() || monotonic_ms() - kt >= 1000) break;
+    }
+    {
+        char m[64];
+        snprintf(m, sizeof m, "SIGKILL broadcast (%llu ms)", (unsigned long long)(monotonic_ms() - kt));
+        shut_log(m);
+    }
 
     engine_release();
     shut_log("control socket and shm released");
