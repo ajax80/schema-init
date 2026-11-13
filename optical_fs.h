@@ -130,6 +130,7 @@ static inline int fs_probe_udf(const char *dev, struct uevent *out) {
 }
 
 static inline int optical_fs_probe(const char *devnode, struct uevent *out) {
+    if (!devnode) return -1;   /* the blkid builtin falls back here for events with no DEVNAME */
     if (fs_probe_udf(devnode, out) == 0) return 0;       /* UDF wins on bridge discs */
     if (fs_probe_iso9660(devnode, out) == 0) return 0;
     return -1;

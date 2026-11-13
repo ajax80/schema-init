@@ -36,3 +36,4 @@ tests/dbus-corpus/*
 /schema-analyze
 /analyze/target/
 debian/changelog
+build/

@@ -4,14 +4,26 @@ STRIP   = $(CROSS_COMPILE)strip
 # Optimisation and hardening are tunable; a packager or distro can supply its
 # own CFLAGS in the environment. The flags the code actually requires to
 # compile are appended, so overriding CFLAGS cannot silently drop them.
-CFLAGS ?= -O2
+# Hardening goes in the overridable default: a distro's own CFLAGS (rpm
+# %{optflags}, dpkg-buildflags) already carry its equivalent.
+# -U first: some gcc builds (Ubuntu) predefine _FORTIFY_SOURCE. Fortify marks
+# write()/chown() warn_unused_result; PID 1 ignores those on purpose (best-effort
+# log and cgroup writes), so the warning is noise here.
+HARDEN_CFLAGS = -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 -fstack-protector-strong -fstack-clash-protection -fPIE -Wno-unused-result
+ifneq ($(filter x86_64-% i386-% i486-% i586-% i686-%,$(shell $(CC) -dumpmachine)),)
+HARDEN_CFLAGS += -fcf-protection
+endif
+CFLAGS ?= -O2 $(HARDEN_CFLAGS)
 CFLAGS += -std=c99 -Wall -Wextra -D_GNU_SOURCE -I.
 SCHEMA_VERSION := $(or $(SCHEMA_VERSION),$(shell git describe --always --dirty 2>/dev/null))
 ifneq ($(SCHEMA_VERSION),)
 CFLAGS += -DSCHEMA_INIT_VERSION='"$(SCHEMA_VERSION)"'
 endif
-CFLAGS_STATIC = $(CFLAGS) -static
-LDFLAGS ?=
+LDFLAGS ?= -pie -Wl,-z,relro,-z,now
+# PID 1 and schema-init-pi are static (no libc to load that early) but still
+# position independent, so ASLR covers them too. The cross targets keep -static.
+STATIC_LDFLAGS ?= -static-pie -Wl,-z,relro,-z,now
+TESTDIR ?= $(CURDIR)/build/test
 CARGO   ?= cargo
 
 DBUS_CFLAGS := $(shell pkg-config --cflags dbus-1)
@@ -44,14 +56,16 @@ desktop:
 	$(MAKE) -C desktop
 
 schema-init: init.o $(ENGINE_OBJS)
-	$(CC) -static -o $@ $^ -lrt
+	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
+	# whole-program LTO link of PID 1 that CI never exercises
+	$(CC) $(STATIC_LDFLAGS) -o $@ $^ -lrt
 
 # Dynamic, unlike PID 1: it runs in a session where libc is always there.
 schema-user: schema-user.o $(ENGINE_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ -lrt
 
 schema-init-static:
-	$(CC) $(CFLAGS_STATIC) $(LDFLAGS) -o schema-init-static $(SRCS)
+	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o schema-init-static $(SRCS)
 
 schema-ctl: schema-ctl.c svc_dropins.h recorder.h recorder_logic.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
@@ -245,36 +259,46 @@ install-analyze:
 	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
 
 schema-init-pi: schema-init-pi.c pi_bootguard.h
-	$(CC) $(CFLAGS) -static -o $@ $<
+	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o $@ $<
+
+# The default CFLAGS/LDFLAGS make these pass; a packager's own flags may not,
+# so this is a CI step rather than part of `make test`.
+check-hardening: $(BINS) $(OBJS)
+	sh tests/test_hardening_flags.sh $(BINS) -- $(OBJS)
 
 clean:
-	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-systemctl schema-init-pi udev-parity libatomic_asneeded.a
-	rm -rf $(RELDIR)
+	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl schema-init-pi udev-parity verify-rules-live verify-eprops-live libatomic_asneeded.a
+	rm -rf $(RELDIR) build
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
 
+# no fortify: the Fedora cross sysroot's bits/stdlib.h trips "Assumed value of
+# MB_LEN_MAX wrong" under it. Plain -static: no static-pie for these.
+CROSS_FLAGS = HARDEN_CFLAGS="-fstack-protector-strong -fstack-clash-protection -Wno-unused-result" LDFLAGS="-L. -static" STATIC_LDFLAGS="-L. -static"
+
 aarch64:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
-	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- SYSROOT=/usr/aarch64-redhat-linux/sys-root/fc44 LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
+	$(MAKE) CROSS_COMPILE=aarch64-linux-gnu- SYSROOT=/usr/aarch64-redhat-linux/sys-root/fc44 $(CROSS_FLAGS) schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
 armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
-	$(MAKE) CROSS_COMPILE=arm-linux-gnu- LDFLAGS="-L. -static" schema-init-static schema-ctl schema-subreaper schema-journal-sink
+	$(MAKE) CROSS_COMPILE=arm-linux-gnu- $(CROSS_FLAGS) schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
 test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board schema-user schema-systemctl $(OBJS)
+	mkdir -p $(TESTDIR)
 	sh tests/check_tu_statics.sh init.o engine.o
-	$(CC) $(CFLAGS) tests/test_recorder.c -o /tmp/schema-test-recorder && /tmp/schema-test-recorder
-	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o /tmp/schema-test-recorder-scenario -lrt && /tmp/schema-test-recorder-scenario
+	$(CC) $(CFLAGS) tests/test_recorder.c -o $(TESTDIR)/recorder && $(TESTDIR)/recorder
+	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o $(TESTDIR)/recorder-scenario -lrt && $(TESTDIR)/recorder-scenario
 	sh tests/test_recorder_daemon.sh
 	sh tests/test_schema_user.sh
 	sh tests/test_bus_activate.sh
 	sh tests/test_reload_listen.sh
-	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-card-user && sh tests/test_card_timeout.sh /tmp/schema-test-card-user
-	$(CC) $(CFLAGS) tests/test_reclaim.c -o /tmp/schema-test-reclaim && /tmp/schema-test-reclaim
-	$(CC) $(CFLAGS) tests/test_pressure_step.c -o /tmp/schema-test-pressure && /tmp/schema-test-pressure
-	$(CC) $(CFLAGS) tests/test_next_wake.c -o /tmp/schema-test-next-wake && /tmp/schema-test-next-wake
-	$(CC) $(CFLAGS) tests/test_pi_bootguard.c -o /tmp/schema-test-pi-bootguard && /tmp/schema-test-pi-bootguard
-	$(CC) $(CFLAGS) tests/test_svc_dir_env.c -o /tmp/schema-test-svc-dir-env && /tmp/schema-test-svc-dir-env
+	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
+	$(CC) $(CFLAGS) tests/test_reclaim.c -o $(TESTDIR)/reclaim && $(TESTDIR)/reclaim
+	$(CC) $(CFLAGS) tests/test_pressure_step.c -o $(TESTDIR)/pressure && $(TESTDIR)/pressure
+	$(CC) $(CFLAGS) tests/test_next_wake.c -o $(TESTDIR)/next-wake && $(TESTDIR)/next-wake
+	$(CC) $(CFLAGS) tests/test_pi_bootguard.c -o $(TESTDIR)/pi-bootguard && $(TESTDIR)/pi-bootguard
+	$(CC) $(CFLAGS) tests/test_svc_dir_env.c -o $(TESTDIR)/svc-dir-env && $(TESTDIR)/svc-dir-env
 	sh tests/test_pi_wrapper.sh
 	sh tests/test_pi_bootok.sh
 	sh tests/test_pi_kit.sh
@@ -286,77 +310,77 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_autostart_runner.sh
 	sh tests/test_plasma_watchdog.sh
 	sh tests/test_bootok.sh
-	$(CC) $(CFLAGS) tests/test_ready_timer.c -o /tmp/schema-test-ready-timer && /tmp/schema-test-ready-timer
-	$(CC) $(CFLAGS) tests/test_runtime_copy.c -o /tmp/schema-test-runtime-copy && /tmp/schema-test-runtime-copy
-	$(CC) $(CFLAGS) tests/test_reexec_state.c -o /tmp/schema-test-reexec-state && /tmp/schema-test-reexec-state
-	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o /tmp/schema-test-tiering && /tmp/schema-test-tiering
-	$(CC) $(CFLAGS) tests/test_calendar.c -o /tmp/schema-test-calendar && /tmp/schema-test-calendar
-	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o /tmp/schema-test-uevent && /tmp/schema-test-uevent
-	$(CC) $(CFLAGS) tests/test_dev_match.c -o /tmp/schema-test-devmatch && /tmp/schema-test-devmatch
-	$(CC) $(CFLAGS) tests/test_dev_load.c -o /tmp/schema-test-devload && /tmp/schema-test-devload
-	$(CC) $(CFLAGS) tests/test_symlink.c -o /tmp/schema-test-symlink && /tmp/schema-test-symlink
-	$(CC) $(CFLAGS) tests/test_coldplug.c -o /tmp/schema-test-coldplug && /tmp/schema-test-coldplug
-	$(CC) $(CFLAGS) tests/test_libudev_frame.c -o /tmp/schema-test-libudev && /tmp/schema-test-libudev
-	$(CC) $(CFLAGS) tests/test_udev_db.c -o /tmp/schema-test-udevdb && /tmp/schema-test-udevdb
-	$(CC) $(CFLAGS) tests/test_udev_ruleset.c -o /tmp/schema-test-ruleset && /tmp/schema-test-ruleset
-	$(CC) $(CFLAGS) tests/test_udev_matcher.c -o /tmp/schema-test-matcher && /tmp/schema-test-matcher
-	$(CC) $(CFLAGS) tests/test_udev_executor.c -o /tmp/schema-test-executor && /tmp/schema-test-executor
-	$(CC) $(CFLAGS) tests/test_udev_r4a.c -o /tmp/schema-test-r4a && /tmp/schema-test-r4a
-	$(CC) $(CFLAGS) tests/test_udev_r4b.c -o /tmp/schema-test-r4b && /tmp/schema-test-r4b
-	$(CC) $(CFLAGS) tests/test_parity.c -o /tmp/schema-test-parity && /tmp/schema-test-parity
-	$(CC) $(CFLAGS) tests/test_path_id.c -o /tmp/schema-test-pathid && /tmp/schema-test-pathid
-	$(CC) $(CFLAGS) tests/test_usb_id.c -o /tmp/schema-test-usbid && /tmp/schema-test-usbid
-	$(CC) $(CFLAGS) tests/test_input_id.c -o /tmp/schema-test-inputid && /tmp/schema-test-inputid
-	$(CC) $(CFLAGS) tests/test_net_id.c -o /tmp/schema-test-netid && /tmp/schema-test-netid
-	$(CC) $(CFLAGS) tests/test_blkid_pt.c -o /tmp/schema-test-blkidpt && /tmp/schema-test-blkidpt
-	$(CC) $(CFLAGS) tests/test_dissect_image.c -o /tmp/schema-test-dissect && /tmp/schema-test-dissect
-	$(CC) $(CFLAGS) tests/test_blkid_fs.c -o /tmp/schema-test-blkidfs && /tmp/schema-test-blkidfs
-	$(CC) $(CFLAGS) tests/test_hwdb.c -o /tmp/schema-test-hwdb && /tmp/schema-test-hwdb
-	$(CC) $(CFLAGS) tests/test_udev_builtins.c -o /tmp/schema-test-ub && /tmp/schema-test-ub
-	$(CC) $(CFLAGS) tests/test_udev_rules.c -o /tmp/schema-test-ur && /tmp/schema-test-ur
-	$(CC) $(CFLAGS) tests/test_ata_id.c -o /tmp/schema-test-ataid && /tmp/schema-test-ataid
-	$(CC) $(CFLAGS) tests/test_v4l_id.c -o /tmp/schema-test-v4lid && /tmp/schema-test-v4lid
-	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o /tmp/schema-test-cdromid && /tmp/schema-test-cdromid
-	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o /tmp/schema-test-cdrommedia && /tmp/schema-test-cdrommedia
-	$(CC) $(CFLAGS) tests/test_disk_links.c -o /tmp/schema-test-disklinks && /tmp/schema-test-disklinks
-	$(CC) $(CFLAGS) tests/test_static_nodes.c -o /tmp/schema-test-staticnodes && /tmp/schema-test-staticnodes
-	$(CC) $(CFLAGS) tests/test_notify.c -o /tmp/schema-test-notify && /tmp/schema-test-notify
-	$(CC) $(CFLAGS) tests/test_fdstore.c -o /tmp/schema-test-fdstore && /tmp/schema-test-fdstore
-	$(CC) $(CFLAGS) tests/test_fdclose.c -o /tmp/schema-test-fdclose && /tmp/schema-test-fdclose
-	$(CC) $(CFLAGS) tests/test_coredump.c -o /tmp/schema-test-coredump && /tmp/schema-test-coredump
-	$(CC) $(CFLAGS) tests/test_uaccess.c -o /tmp/schema-test-uaccess -lacl && /tmp/schema-test-uaccess
-	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o /tmp/schema-test-uaccess-apply -lacl && /tmp/schema-test-uaccess-apply
-	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o /tmp/schema-test-sdbus-policy && /tmp/schema-test-sdbus-policy
-	$(CC) $(CFLAGS) tests/test_sdbus_reload.c -o /tmp/schema-test-sdbus-reload && /tmp/schema-test-sdbus-reload
-	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf && /tmp/schema-test-sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
-	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_codec.c -o /tmp/schema-test-sdbus-codec $(DBUS_LIBS) && /tmp/schema-test-sdbus-codec
-	$(CC) $(CFLAGS) tests/test_sdbus_names.c -o /tmp/schema-test-sdbus-names && /tmp/schema-test-sdbus-names
-	$(CC) $(CFLAGS) tests/test_sdbus_match.c -o /tmp/schema-test-sdbus-match && /tmp/schema-test-sdbus-match
-	$(CC) $(CFLAGS) tests/test_sdbus_reply.c -o /tmp/schema-test-sdbus-reply && /tmp/schema-test-sdbus-reply
-	$(CC) $(CFLAGS) tests/test_sdbus_state.c -o /tmp/schema-test-sdbus-state && /tmp/schema-test-sdbus-state
-	$(CC) $(CFLAGS) tests/test_sdbus_conn.c -o /tmp/schema-test-sdbus-conn && /tmp/schema-test-sdbus-conn
-	$(CC) $(CFLAGS) tests/test_sdbus_auth.c -o /tmp/schema-test-sdbus-auth && /tmp/schema-test-sdbus-auth
-	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_driver.c -o /tmp/schema-test-sdbus-driver $(DBUS_LIBS) && /tmp/schema-test-sdbus-driver
-	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_route.c -o /tmp/schema-test-sdbus-route $(DBUS_LIBS) && /tmp/schema-test-sdbus-route
-	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o /tmp/schema-test-sdbus-wire $(DBUS_LIBS) && /tmp/schema-test-sdbus-wire
-	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_forward.c -o /tmp/schema-test-sdbus-forward $(DBUS_LIBS) && /tmp/schema-test-sdbus-forward
-	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o /tmp/schema-test-sdbus-activate && /tmp/schema-test-sdbus-activate
-	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o /tmp/schema-test-systemctl && /tmp/schema-test-systemctl
-	$(CC) $(CFLAGS) tests/test_service_env.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-env && /tmp/schema-test-env
-	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-mountns && /tmp/schema-test-mountns
-	$(CC) $(CFLAGS) tests/test_mountns_rw.c ns.c -o /tmp/schema-test-mountns-rw && /tmp/schema-test-mountns-rw
-	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-dropins && /tmp/schema-test-dropins
-	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-rlimits && /tmp/schema-test-rlimits
-	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-audit0 && /tmp/schema-test-audit0
-	$(CC) $(CFLAGS) tests/test_group_key.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-groupkey && sh tests/test_group_key.sh
-	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cap-parse && /tmp/schema-test-cap-parse
-	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o /tmp/schema-test-ambient-caps && /tmp/schema-test-ambient-caps
-	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-stopcmds && /tmp/schema-test-stopcmds
-	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-verify && /tmp/schema-test-verify
-	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cycles && /tmp/schema-test-cycles
-	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-cgkill && /tmp/schema-test-cgkill
-	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o /tmp/schema-test-landlock-tcp && /tmp/schema-test-landlock-tcp
-	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o /tmp/schema-test-engine-conf && /tmp/schema-test-engine-conf
+	$(CC) $(CFLAGS) tests/test_ready_timer.c -o $(TESTDIR)/ready-timer && $(TESTDIR)/ready-timer
+	$(CC) $(CFLAGS) tests/test_runtime_copy.c -o $(TESTDIR)/runtime-copy && $(TESTDIR)/runtime-copy
+	$(CC) $(CFLAGS) tests/test_reexec_state.c -o $(TESTDIR)/reexec-state && $(TESTDIR)/reexec-state
+	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o $(TESTDIR)/tiering && $(TESTDIR)/tiering
+	$(CC) $(CFLAGS) tests/test_calendar.c -o $(TESTDIR)/calendar && $(TESTDIR)/calendar
+	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o $(TESTDIR)/uevent && $(TESTDIR)/uevent
+	$(CC) $(CFLAGS) tests/test_dev_match.c -o $(TESTDIR)/devmatch && $(TESTDIR)/devmatch
+	$(CC) $(CFLAGS) tests/test_dev_load.c -o $(TESTDIR)/devload && $(TESTDIR)/devload
+	$(CC) $(CFLAGS) tests/test_symlink.c -o $(TESTDIR)/symlink && $(TESTDIR)/symlink
+	$(CC) $(CFLAGS) tests/test_coldplug.c -o $(TESTDIR)/coldplug && $(TESTDIR)/coldplug
+	$(CC) $(CFLAGS) tests/test_libudev_frame.c -o $(TESTDIR)/libudev && $(TESTDIR)/libudev
+	$(CC) $(CFLAGS) tests/test_udev_db.c -o $(TESTDIR)/udevdb && $(TESTDIR)/udevdb
+	$(CC) $(CFLAGS) tests/test_udev_ruleset.c -o $(TESTDIR)/ruleset && $(TESTDIR)/ruleset
+	$(CC) $(CFLAGS) tests/test_udev_matcher.c -o $(TESTDIR)/matcher && $(TESTDIR)/matcher
+	$(CC) $(CFLAGS) tests/test_udev_executor.c -o $(TESTDIR)/executor && $(TESTDIR)/executor
+	$(CC) $(CFLAGS) tests/test_udev_r4a.c -o $(TESTDIR)/r4a && $(TESTDIR)/r4a
+	$(CC) $(CFLAGS) tests/test_udev_r4b.c -o $(TESTDIR)/r4b && $(TESTDIR)/r4b
+	$(CC) $(CFLAGS) tests/test_parity.c -o $(TESTDIR)/parity && $(TESTDIR)/parity
+	$(CC) $(CFLAGS) tests/test_path_id.c -o $(TESTDIR)/pathid && $(TESTDIR)/pathid
+	$(CC) $(CFLAGS) tests/test_usb_id.c -o $(TESTDIR)/usbid && $(TESTDIR)/usbid
+	$(CC) $(CFLAGS) tests/test_input_id.c -o $(TESTDIR)/inputid && $(TESTDIR)/inputid
+	$(CC) $(CFLAGS) tests/test_net_id.c -o $(TESTDIR)/netid && $(TESTDIR)/netid
+	$(CC) $(CFLAGS) tests/test_blkid_pt.c -o $(TESTDIR)/blkidpt && $(TESTDIR)/blkidpt
+	$(CC) $(CFLAGS) tests/test_dissect_image.c -o $(TESTDIR)/dissect && $(TESTDIR)/dissect
+	$(CC) $(CFLAGS) tests/test_blkid_fs.c -o $(TESTDIR)/blkidfs && $(TESTDIR)/blkidfs
+	$(CC) $(CFLAGS) tests/test_hwdb.c -o $(TESTDIR)/hwdb && $(TESTDIR)/hwdb
+	$(CC) $(CFLAGS) tests/test_udev_builtins.c -o $(TESTDIR)/ub && $(TESTDIR)/ub
+	$(CC) $(CFLAGS) tests/test_udev_rules.c -o $(TESTDIR)/ur && $(TESTDIR)/ur
+	$(CC) $(CFLAGS) tests/test_ata_id.c -o $(TESTDIR)/ataid && $(TESTDIR)/ataid
+	$(CC) $(CFLAGS) tests/test_v4l_id.c -o $(TESTDIR)/v4lid && $(TESTDIR)/v4lid
+	$(CC) $(CFLAGS) tests/test_cdrom_id.c -o $(TESTDIR)/cdromid && $(TESTDIR)/cdromid
+	$(CC) $(CFLAGS) tests/test_cdrom_media.c -o $(TESTDIR)/cdrommedia && $(TESTDIR)/cdrommedia
+	$(CC) $(CFLAGS) tests/test_disk_links.c -o $(TESTDIR)/disklinks && $(TESTDIR)/disklinks
+	$(CC) $(CFLAGS) tests/test_static_nodes.c -o $(TESTDIR)/staticnodes && $(TESTDIR)/staticnodes
+	$(CC) $(CFLAGS) tests/test_notify.c -o $(TESTDIR)/notify && $(TESTDIR)/notify
+	$(CC) $(CFLAGS) tests/test_fdstore.c -o $(TESTDIR)/fdstore && $(TESTDIR)/fdstore
+	$(CC) $(CFLAGS) tests/test_fdclose.c -o $(TESTDIR)/fdclose && $(TESTDIR)/fdclose
+	$(CC) $(CFLAGS) tests/test_coredump.c -o $(TESTDIR)/coredump && $(TESTDIR)/coredump
+	$(CC) $(CFLAGS) tests/test_uaccess.c -o $(TESTDIR)/uaccess -lacl && $(TESTDIR)/uaccess
+	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o $(TESTDIR)/uaccess-apply -lacl && $(TESTDIR)/uaccess-apply
+	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o $(TESTDIR)/sdbus-policy && $(TESTDIR)/sdbus-policy
+	$(CC) $(CFLAGS) tests/test_sdbus_reload.c -o $(TESTDIR)/sdbus-reload && $(TESTDIR)/sdbus-reload
+	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf && $(TESTDIR)/sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_codec.c -o $(TESTDIR)/sdbus-codec $(DBUS_LIBS) && $(TESTDIR)/sdbus-codec
+	$(CC) $(CFLAGS) tests/test_sdbus_names.c -o $(TESTDIR)/sdbus-names && $(TESTDIR)/sdbus-names
+	$(CC) $(CFLAGS) tests/test_sdbus_match.c -o $(TESTDIR)/sdbus-match && $(TESTDIR)/sdbus-match
+	$(CC) $(CFLAGS) tests/test_sdbus_reply.c -o $(TESTDIR)/sdbus-reply && $(TESTDIR)/sdbus-reply
+	$(CC) $(CFLAGS) tests/test_sdbus_state.c -o $(TESTDIR)/sdbus-state && $(TESTDIR)/sdbus-state
+	$(CC) $(CFLAGS) tests/test_sdbus_conn.c -o $(TESTDIR)/sdbus-conn && $(TESTDIR)/sdbus-conn
+	$(CC) $(CFLAGS) tests/test_sdbus_auth.c -o $(TESTDIR)/sdbus-auth && $(TESTDIR)/sdbus-auth
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_driver.c -o $(TESTDIR)/sdbus-driver $(DBUS_LIBS) && $(TESTDIR)/sdbus-driver
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_route.c -o $(TESTDIR)/sdbus-route $(DBUS_LIBS) && $(TESTDIR)/sdbus-route
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_wire.c -o $(TESTDIR)/sdbus-wire $(DBUS_LIBS) && $(TESTDIR)/sdbus-wire
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_forward.c -o $(TESTDIR)/sdbus-forward $(DBUS_LIBS) && $(TESTDIR)/sdbus-forward
+	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o $(TESTDIR)/sdbus-activate && $(TESTDIR)/sdbus-activate
+	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o $(TESTDIR)/systemctl && $(TESTDIR)/systemctl
+	$(CC) $(CFLAGS) tests/test_service_env.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/env && $(TESTDIR)/env
+	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/mountns && $(TESTDIR)/mountns
+	$(CC) $(CFLAGS) tests/test_mountns_rw.c ns.c -o $(TESTDIR)/mountns-rw && $(TESTDIR)/mountns-rw
+	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
+	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
+	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
+	$(CC) $(CFLAGS) tests/test_group_key.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
+	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cap-parse && $(TESTDIR)/cap-parse
+	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o $(TESTDIR)/ambient-caps && $(TESTDIR)/ambient-caps
+	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/stopcmds && $(TESTDIR)/stopcmds
+	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify && $(TESTDIR)/verify
+	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cycles && $(TESTDIR)/cycles
+	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cgkill && $(TESTDIR)/cgkill
+	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o $(TESTDIR)/landlock-tcp && $(TESTDIR)/landlock-tcp
+	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/engine-conf && $(TESTDIR)/engine-conf
 
 # libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
 # + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.
@@ -398,8 +422,8 @@ verify-dbus-conformance:
 	  ../../tests/dbus-corpus/capture-20260902.jsonl \
 	  ../../tests/dbus-corpus/policy-dissolved-full.txt \
 	  ../../tests/dbus-corpus/policy-golden-full.tsv
-	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o /tmp/schema-test-sdbus-conf-full
-	/tmp/schema-test-sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
+	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf-full
+	$(TESTDIR)/sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
 .PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz verify-live verify-dbus-conformance
 
