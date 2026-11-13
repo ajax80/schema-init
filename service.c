@@ -2892,6 +2892,14 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
 
 static int svc_load_file(const char *path, service_t *svc) {
     struct parse_ctx pc = { 1, 0, 0 };
+    /* `systemctl mask` leaves an empty <name>.svc.masked twin; here, so that
+     * schema-ctl add can't load it either */
+    char masked[SVC_DROPIN_PATH + 8];
+    snprintf(masked, sizeof masked, "%s.masked", path);
+    if (access(masked, F_OK) == 0) {
+        fprintf(stderr, "[schema-init] %s: masked, not loaded\n", path);
+        return -1;
+    }
     char dropins[SVC_DROPIN_MAX][SVC_DROPIN_PATH];
     int nd = svc_dropin_list(path, dropins, SVC_DROPIN_MAX);
     if (nd < 0) {
@@ -2964,15 +2972,6 @@ int services_load(const char *dir, service_t *table, int max) {
         }
 
         snprintf(path, sizeof(path), "%s/%s", dir, dn);
-        {
-            /* `systemctl mask` leaves an empty <name>.svc.masked twin */
-            char masked[520];
-            snprintf(masked, sizeof masked, "%s.masked", path);
-            if (access(masked, F_OK) == 0) {
-                fprintf(stderr, "[schema-init] %s: masked, not loaded\n", path);
-                continue;
-            }
-        }
         if (svc_load_file(path, &table[count]) != 0)
             continue;
         /* two files with one name= would share a cgroup and a log, and every

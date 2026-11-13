@@ -110,6 +110,9 @@ static void test_load_order_and_dups(void) {
     write_file("d.svc.masked", "");
     n = services_load(dir, tab, MAX_SERVICES);
     assert(n == 2 && strcmp(tab[0].name, "d") && strcmp(tab[1].name, "d"));
+    /* nor can schema-ctl add load it */
+    snprintf(p, sizeof p, "%s/d.svc", dir);
+    assert(service_load_one(p, &tab[2]) != 0);
     free(tab);
 }
 
