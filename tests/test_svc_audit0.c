@@ -74,8 +74,13 @@ static void test_limits(void) {
     assert(load_key("mem_limit=1T", &s) == -1);
     assert(load_key("mem_limit=-5", &s) == -1);
     assert(load_key("mem_limit=1GB", &s) == -1);
-    assert(load_key("mem_limit=1099511627777", &s) == -1);
-    assert(load_key("mem_limit=1099511627776", &s) == 0 && mem_high_bytes(s.mem_limit_mb) > 0);
+    if (sizeof(long) > 4) {
+        assert(load_key("mem_limit=1099511627777", &s) == -1);
+        assert(load_key("mem_limit=1099511627776", &s) == 0 && mem_high_bytes(s.mem_limit_mb) > 0);
+    } else {   /* 32-bit long: strtol's own range is the cap */
+        assert(load_key("mem_limit=2147483648", &s) == -1);
+        assert(load_key("mem_limit=2147483647", &s) == 0 && mem_high_bytes(s.mem_limit_mb) > 0);
+    }
 
     assert(load_key("watchdog_sec=-1", &s) == -1);
     assert(load_key("watchdog_sec=x", &s) == -1);
