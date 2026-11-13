@@ -104,8 +104,8 @@ def linger_case(run_user, lingering):
 
 check("no session files, the one user lingers: still that user",
       linger_case([1000], [1000]) == 1000)
-check("no session files, a second user lingers: the logged-in one",
-      linger_case([1000, 1001], [1001]) == 1000)
+check("no session files, a second user lingers: nobody (fail closed)",
+      linger_case([1000, 1001], [1001]) is None)
 
 
 # --- the gate decisions ------------------------------------------------------

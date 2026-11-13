@@ -106,14 +106,13 @@ def authz_uid():
     recs = [r for r in files if not r.remote and r.state != 'closing']
     if not files:
         # No session files (a legacy login script): /run/user is all there is.
-        # A lingering uid is only a tiebreak: the logged-in user may linger
-        # (ajax80 on blakbox does), but a second lingerer must not lock them out.
+        # One uid there is the user, lingering or not (ajax80 on blakbox
+        # lingers). Two is ambiguous and stays closed: subtracting lingerers
+        # would hand the console to whoever is left, an ssh login included.
         try:
             uids = {int(d) for d in os.listdir(RUN_USER_DIR) if d.isdigit() and int(d) >= 1000}
         except OSError:
             return None
-        if len(uids) > 1:
-            uids -= linger_uids()
         return uids.pop() if len(uids) == 1 else None
     vt = vtnr_from_tty(read_file_line(ACTIVE_VT_PATH) or '')
     if vt:
