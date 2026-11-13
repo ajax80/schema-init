@@ -26,8 +26,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
-#include <sys/vfs.h>
-#include <linux/magic.h>
+#include <sys/wait.h>
+#include "fdclose.h"
 
 #define DEV_LOG       "/dev/log"
 #define JOURNAL_DIR   "/run/systemd/journal"
@@ -168,19 +168,40 @@ static void parse_native(const char *buf, size_t len) {
     if (msg) emit("native", sev, tagbuf, msg, msglen);
 }
 
+/* 1 if fd lives on a tmpfs mount. Asked of /proc, never of the fd: fstat,
+ * fstatfs and read on a FUSE fd go to its daemon and can block. */
+static int fd_on_tmpfs(int fd) {
+    char p[64], line[1024];
+    int mnt = -1, found = 0;
+    snprintf(p, sizeof p, "/proc/self/fdinfo/%d", fd);
+    FILE *f = fopen(p, "re");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "mnt_id: %d", &mnt) == 1) break;
+    fclose(f);
+    if (mnt < 0 || !(f = fopen("/proc/self/mountinfo", "re"))) return 0;
+    while (!found && fgets(line, sizeof line, f)) {
+        char *sep = strstr(line, " - ");
+        char fstype[32];
+        if (atoi(line) == mnt && sep && sscanf(sep + 3, "%31s", fstype) == 1)
+            found = strcmp(fstype, "tmpfs") == 0 ? 1 : -1;
+    }
+    fclose(f);
+    return found == 1;
+}
+
 /* Parse a SCM_RIGHTS-passed entry. The socket is 0666 and the sink is single
- * threaded: a pipe with a live writer, or a file on a FUSE mount the sender
- * controls, would block a read() forever and take all logging with it. So,
- * as journald: a regular file only, and either a sealed memfd or a file on
- * tmpfs, read with pread up to its size at fstat time. */
+ * threaded: a pipe with a live writer, or a FUSE file, would block it forever
+ * and take all logging with it. So, as journald: a sealed memfd, or a regular
+ * file on tmpfs, read with pread up to its size. Nothing touches the fd until
+ * one of those is established (F_GET_SEALS is answered by the kernel). */
 static void drain_passed_fd(int fd) {
     static char fbuf[MAX_FD_BYTES];
     struct stat st;
-    struct statfs sf;
-    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return;
     int seals = fcntl(fd, F_GET_SEALS);
     int sealed = seals >= 0 && (seals & (F_SEAL_WRITE | F_SEAL_SHRINK)) == (F_SEAL_WRITE | F_SEAL_SHRINK);
-    if (!sealed && (fstatfs(fd, &sf) < 0 || sf.f_type != TMPFS_MAGIC)) return;
+    if (!sealed && !fd_on_tmpfs(fd)) return;
+    if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return;
     size_t want = (size_t)st.st_size < sizeof fbuf ? (size_t)st.st_size : sizeof fbuf;
     size_t off = 0;
     while (off < want) {
@@ -194,7 +215,9 @@ static void drain_passed_fd(int fd) {
 
 static void handle_native(int sock) {
     char buf[LINE_MAX_];
-    char ctl[CMSG_SPACE(sizeof(int) * 4)];
+    /* room for SCM_MAX_FD: a truncated message has the kernel close the
+     * rest in this process, and that close can block like any other */
+    char ctl[CMSG_SPACE(sizeof(int) * FDCLOSE_MSG_FDS)];
     for (;;) {
         struct iovec iov = { buf, sizeof buf };
         struct msghdr mh = { 0 };
@@ -213,10 +236,10 @@ static void handle_native(int sock) {
             if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS) {
                 int *fds = (int *)CMSG_DATA(c);
                 int nf = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-                for (int i = 0; i < nf; i++) {
+                for (int i = 0; i < nf; i++)
                     drain_passed_fd(fds[i]);
-                    close(fds[i]);
-                }
+                fd_close_detached(fds, nf);     /* close() can block too: a FUSE flush */
+                if (fdclose_full()) return;     /* the next message may not fit the park */
             }
         }
         if (r > 0) parse_native(buf, (size_t)r);
@@ -337,6 +360,11 @@ static int make_unix(const char *path, int type) {
 
     struct sockaddr_un sa = { 0 };
     sa.sun_family = AF_UNIX;
+    if (strlen(path) >= sizeof sa.sun_path) {
+        fprintf(stderr, "schema-journal-sink: %s: path too long for a socket\n", path);
+        close(fd);
+        return -1;
+    }
     strncpy(sa.sun_path, path, sizeof sa.sun_path - 1);
     unlink(path);
     if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) {
@@ -398,6 +426,7 @@ int main(void) {
 
     int dev_fd    = make_unix(p_devlog, SOCK_DGRAM);
     int native_fd = make_unix(p_native, SOCK_DGRAM);
+    fdclose_sock = native_fd;   /* fd passing shuts while the closers are full */
     int stdout_fd = make_unix(p_stdout, SOCK_STREAM);
     if (native_fd < 0 || stdout_fd < 0) {
         fprintf(stderr, "schema-journal-sink: required socket missing\n");
@@ -412,7 +441,8 @@ int main(void) {
     for (;;) {
         int n = 0;
         pfd[n].fd = dev_fd;    pfd[n].events = POLLIN; n++;   /* 0 */
-        pfd[n].fd = native_fd; pfd[n].events = POLLIN; n++;   /* 1 */
+        /* closers full: leave fd-bearing messages queued until one exits */
+        pfd[n].fd = fdclose_full() ? -1 : native_fd; pfd[n].events = POLLIN; n++;   /* 1 */
         pfd[n].fd = stdout_fd; pfd[n].events = POLLIN; n++;   /* 2 */
         for (int i = 0; i < MAX_STREAM_CONNS; i++) {
             if (conns[i].fd >= 0) {
@@ -422,13 +452,15 @@ int main(void) {
             }
         }
 
-        if (poll(pfd, n, -1) < 0) {
+        if (poll(pfd, n, fdclose_n ? 100 : -1) < 0) {
             if (errno == EINTR) continue;
             perror("schema-journal-sink: poll");
             break;
         }
 
         if (dev_fd >= 0 && (pfd[0].revents & POLLIN)) handle_devlog(dev_fd);
+        for (pid_t cp; (cp = waitpid(-1, NULL, WNOHANG)) > 0; )
+            fdclose_reaped(cp);
         if (pfd[1].revents & POLLIN) handle_native(native_fd);
 
         if (pfd[2].revents & POLLIN) {

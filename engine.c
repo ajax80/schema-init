@@ -2722,7 +2722,7 @@ static void ctl_poll(void) {
     /* the read-only group gets half the slots, so it can't lock root out */
     if (uid != 0 && uid != geteuid() && others >= CTL_PENDING / 2) c = NULL;
     if (!c) {
-        send(cfd, "err: busy\n", 10, MSG_DONTWAIT | MSG_NOSIGNAL);
+        send(cfd, "err: busy, try again\n.\n", 23, MSG_DONTWAIT | MSG_NOSIGNAL);
         close(cfd);
         return;
     }
@@ -2740,6 +2740,19 @@ static void ctl_expire(void) {
     for (int i = 0; i < CTL_PENDING; i++)
         if (ctl_pend[i].fd >= 0 && now >= ctl_pend[i].due && !ctl_client_read(&ctl_pend[i]))
             ctl_finish(&ctl_pend[i], 0);
+}
+
+/* Clients now outlive one loop iteration: a re-exec or a shutdown would drop
+ * them with no reply. */
+void ctl_pend_abort(const char *why) {
+    char msg[160];
+    int n = snprintf(msg, sizeof msg, "err: %s\n.\n", why);
+    for (int i = 0; i < CTL_PENDING; i++) {
+        if (ctl_pend[i].fd < 0) continue;
+        send(ctl_pend[i].fd, msg, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL);
+        close(ctl_pend[i].fd);
+        ctl_pend[i].fd = -1;
+    }
 }
 
 static int64_t ctl_due(void) {
@@ -2828,8 +2841,11 @@ static int get_poll_timeout(void) {
         best = wake_min(best, ready_backstop_due, now_m, WAKE_NONE);
     if (ready_event_due)
         best = wake_min(best, ready_event_due, now_m, WAKE_NONE);
-    if (ctl_due() != WAKE_NONE)
-        best = wake_min(best, ctl_due(), now_m, WAKE_NONE);
+    {
+        int64_t cd = ctl_due();
+        if (cd != WAKE_NONE)
+            best = wake_min(best, cd, now_m, WAKE_NONE);
+    }
     return wake_timeout(best, tick || awaiting, awaiting ? READY_POLL_MS : TICK_USEC / 1000);
 }
 
@@ -3398,11 +3414,6 @@ void engine_run(void) {
                         service_log(ls, "socket-wake");
                     }
                 }
-                for (e = npend; e < nfixed; e++) {
-                    struct ctl_client *cc = &ctl_pend[fd_svc[e]];
-                    if (fds[e].revents && cc->fd == fds[e].fd)
-                        ctl_client_read(cc);
-                }
                 for (e = 0; e < npend; e++) {
                     if (fds[e].fd == psi_fd && psi_fd >= 0) {
                         if (fds[e].revents & (POLLERR | POLLNVAL)) {
@@ -3435,6 +3446,12 @@ void engine_run(void) {
                     } else if (fds[e].fd == ino_fd) {
                         ready_inotify_drain();
                     }
+                }
+                /* after sig_fd: a command must see the deaths reaped this wake */
+                for (e = npend; e < nfixed; e++) {
+                    struct ctl_client *cc = &ctl_pend[fd_svc[e]];
+                    if (fds[e].revents && cc->fd == fds[e].fd)
+                        ctl_client_read(cc);
                 }
             } else if (ret < 0 && errno != EINTR) {
                 usleep(TICK_USEC);
@@ -3511,6 +3528,7 @@ void engine_release(void) {
         close(notify_fd);
         unlink(engine_paths.notify_sock);
     }
+    ctl_pend_abort("shutting down");
     if (ctl_fd >= 0) {
         close(ctl_fd);
         unlink(engine_paths.ctl_sock);

@@ -2,7 +2,7 @@
 # The native socket is 0666 and the sink single-threaded: a passed pipe with a
 # live writer used to block it in read() forever (audit 2026-11-12, 1.2).
 # Refused fds must not stall it; a memfd or tmpfs file must still be read.
-import os, socket, subprocess, sys, tempfile, time
+import fcntl, os, socket, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SINK = os.path.join(HERE, "..", "schema-journal-sink")
@@ -60,8 +60,21 @@ try:
 
     m = os.memfd_create("j", os.MFD_ALLOW_SEALING)
     os.write(m, b"MESSAGE=via-memfd\n")
+    fcntl.fcntl(m, fcntl.F_ADD_SEALS, fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
     send(fd=m)
-    check("a passed memfd is read", logged("via-memfd"))
+    check("a sealed memfd is read", logged("via-memfd"))
+
+    u = os.memfd_create("j", os.MFD_ALLOW_SEALING)
+    os.write(u, b"MESSAGE=via-unsealed\n")
+    send(fd=u)
+    send(b"MESSAGE=after-unsealed\n")
+    check("an unsealed memfd is refused", logged("after-unsealed") and not logged("via-unsealed", 0.1))
+
+    if os.statvfs("/dev/shm") and open("/proc/self/mounts").read().count(" /dev/shm tmpfs "):
+        with tempfile.NamedTemporaryFile(dir="/dev/shm") as tf:
+            tf.write(b"MESSAGE=via-tmpfs\n"); tf.flush()
+            send(fd=tf.fileno())
+            check("a regular file on tmpfs is read", logged("via-tmpfs"))
 
     f = open(T + "/disk", "wb+")   # T is not tmpfs on every box, so only refusal is safe to assert off tmpfs
     f.write(b"MESSAGE=via-sock-dir\n"); f.flush()

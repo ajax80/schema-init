@@ -1515,7 +1515,11 @@ int main(int argc, char **argv) {
         g_dissect = NULL;
     }
     g_python = getenv("SCHEMA_DBUS_PYTHON");
-    if (!g_python || g_python[0] != '/')
+    if (g_python && g_python[0] != '/') {
+        fprintf(stderr, "schema-dbus: SCHEMA_DBUS_PYTHON=%s is not absolute, using the default python3\n", g_python);
+        g_python = NULL;
+    }
+    if (!g_python)
         g_python = access("/usr/bin/python3", X_OK) == 0 ? "/usr/bin/python3" : "/usr/local/bin/python3";
     g_cache = getenv("SCHEMA_DBUS_CACHE");
     g_system_conf = getenv("SCHEMA_DBUS_SYSTEM_CONF") ? getenv("SCHEMA_DBUS_SYSTEM_CONF") : "/usr/share/dbus-1/system.conf";

@@ -247,6 +247,7 @@ class Reload(Base):
         a = Client(e.bus)
         reload_config(a)
         self.assertIn("is not absolute", e.logtext())
+        time.sleep(0.5)   # long enough for a dissolver the guard let through to show up
         self.assertEqual(running("dissect.py"), [])
         a.driver("ListNames")
 
