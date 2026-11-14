@@ -66,14 +66,14 @@ resolve() {
     esac
 }
 
+# waited counts tenths of a second: 0.1 s polls for the first second, 0.5 s after.
 wait_dev() {
     spec=$1 limit=$2 waited=0
     while :; do
         dev=$(resolve "$spec")
         [ -n "$dev" ] && { printf '%s' "$dev"; return 0; }
         [ "$limit" -ne 0 ] && [ "$waited" -ge $((limit * 10)) ] && return 1
-        sleep 0.1
-        waited=$((waited + 1))
+        if [ "$waited" -lt 10 ]; then sleep 0.1; waited=$((waited + 1)); else sleep 0.5; waited=$((waited + 5)); fi
     done
 }
 
@@ -125,21 +125,40 @@ fat_clean() {
     [ -n "$fhb" ] && [ $((fhb & fmask)) = $fmask ]
 }
 
-check() {
+# Sets rc and out; rc=skip means not checked, with the reason in out.
+run_fsck() {
     cdev=$1 ctgt=$2 cfs=$3
-    [ "$fsck_mode" = skip ] && return 0
     [ "$cfs" = auto ] && cfs=$(blkid -o value -s TYPE "$cdev" 2>/dev/null)
-    command -v "fsck.$cfs" >/dev/null || { log "$ctgt: no fsck.$cfs, not checked"; return 0; }
+    command -v "fsck.$cfs" >/dev/null || { rc=skip out="$ctgt: no fsck.$cfs, not checked"; return; }
     case "$cfs" in vfat|fat|msdos)
-        [ "$fsck_mode" = auto ] && fat_clean "$cdev" && { log "$ctgt: $cdev was unmounted cleanly, not checked"; return 0; } ;;
+        [ "$fsck_mode" = auto ] && fat_clean "$cdev" && { rc=skip out="$ctgt: $cdev was unmounted cleanly, not checked"; return; } ;;
     esac
     f=; [ "$fsck_mode" = force ] && f=-f
     out=$(fsck -a -T $f -t "$cfs" "$cdev" 2>&1); rc=$?
+}
+
+fkey() { printf '%s' "$1" | cksum | cut -d' ' -f1; }
+
+# The parallel pre-pass's result file for this spec, if it made one.
+prechecked() { [ -n "$fsck_dir" ] && [ -f "$fsck_dir/$(fkey "$1")" ]; }
+
+check() {
+    cdev=$1 ctgt=$2 cfs=$3 cspec=$4
+    [ "$fsck_mode" = skip ] && return 0
+    if prechecked "$cspec"; then
+        res=$fsck_dir/$(fkey "$cspec")
+        rc=$(head -n1 "$res") out=$(tail -n +2 "$res")
+    else
+        run_fsck "$cdev" "$ctgt" "$cfs"
+    fi
+    [ "$rc" = skip ] && { log "$out"; return 0; }
     [ -z "$out" ] || printf '%s\n' "$out" | sed "s|^|schema-mount-fstab: fsck $cdev: |"
     [ $rc -le 3 ] && { [ $rc = 0 ] || log "$ctgt: fsck fixed errors on $cdev ($rc)"; return 0; }
     [ $nofail = 1 ] && { fail "$ctgt: fsck $cdev failed ($rc), not mounted"; return 1; }
     rescue "$ctgt: fsck $cdev found errors it could not fix ($rc)" "$cdev"
     mounted "$ctgt" && { log "$ctgt mounted in the rescue shell"; return 1; }
+    [ "$cfs" = auto ] && cfs=$(blkid -o value -s TYPE "$cdev" 2>/dev/null)
+    f=; [ "$fsck_mode" = force ] && f=-f
     fsck -a -T $f -t "$cfs" "$cdev" >/dev/null 2>&1; rc=$?
     [ $rc -le 3 ] && { log "$ctgt: $cdev is clean now"; return 0; }
     fail "$ctgt: fsck $cdev still fails ($rc), not mounted"; return 1
@@ -177,13 +196,16 @@ do_entry() {
         dev=$spec
     else
         start=$(now_cs)
+        if prechecked "$spec" && [ "$(head -n1 "$fsck_dir/$(fkey "$spec")")" = nodev ]; then
+            fail "$tgt: $spec not present after ${t}s"; return
+        fi
         dev=$(wait_dev "$spec" "$t") || { fail "$tgt: $spec not present after ${t}s"; return; }
         btype=$fs; [ "$fs" = auto ] && btype=$(blkid -o value -s TYPE "$dev" 2>/dev/null)
         if [ "$btype" = btrfs ] && [ ! -f "$dev" ] && ! has_opt "$opts" loop; then
             dl=0; [ "$t" -ne 0 ] && dl=$((start + t * 100))
             btrfs_wait "$dev" "$dl" "$opts" || log "$tgt: btrfs on $dev: not all devices present after ${t}s, mounting anyway"
         fi
-        [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "${btype:-$fs}" || return
+        [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "${btype:-$fs}" "$spec" || return
     fi
     mkdir -p "$tgt"
     case "$fs" in auto|none) set -- ;; *) set -- -t "$fs" ;; esac
@@ -210,6 +232,42 @@ rows=$(awk -v pseudo="$PSEUDO" '
     }' "$FSTAB" | sort -t "$(printf '\t')" -k2,2n)
 
 tab=$(printf '\t')
+
+# fsck every distinct block device in parallel, each job waiting for its own
+# device; the mount loop then takes the results in order, so a rescue shell
+# still comes one at a time. File specs (a loop image on a filesystem this run
+# mounts) are left to the mount loop.
+fsck_dir=
+[ "$fsck_mode" = skip ] || fsck_dir=$(mktemp -d "${TMPDIR:-/run}/schema-fsck.XXXXXX" 2>/dev/null) || fsck_dir=
+if [ -n "$fsck_dir" ]; then
+    jobs=" "
+    while IFS=$tab read -r pass depth spec tgt fs opts fpass; do
+        [ "$pass" = m ] && [ "${fpass:-0}" != 0 ] || continue
+        case "$fs" in swap|none) continue ;; esac
+        has_opt "$opts" bind && continue
+        case "$spec" in UUID=*|LABEL=*|PARTUUID=*|PARTLABEL=*|/dev/*) ;; *) continue ;; esac
+        k=$(fkey "$spec")
+        case "$jobs" in *" $k "*) continue ;; esac
+        mounted "$tgt" && continue
+        jobs="$jobs$k "
+        t=$(timeout_secs "$(opt_val "$opts" x-systemd.device-timeout)")
+        [ -n "$t" ] || { if has_opt "$opts" nofail; then t=10; else t=90; fi; }
+        (
+            if dev=$(wait_dev "$spec" "$t"); then
+                btype=$fs; [ "$fs" = auto ] && btype=$(blkid -o value -s TYPE "$dev" 2>/dev/null)
+                run_fsck "$dev" "$tgt" "${btype:-$fs}"
+                printf '%s\n%s\n' "$rc" "$out" > "$fsck_dir/$k.tmp"
+            else
+                printf 'nodev\n' > "$fsck_dir/$k.tmp"
+            fi
+            mv "$fsck_dir/$k.tmp" "$fsck_dir/$k"
+        ) &
+    done <<EOF
+$rows
+EOF
+    wait
+fi
+
 while IFS=$tab read -r pass depth spec tgt fs opts fpass; do
     [ -n "$spec" ] || continue
     if [ "$pass" = skip ]; then log "$tgt skipped (_netdev: no network ordering here)"; continue; fi
@@ -219,5 +277,6 @@ $rows
 EOF
 
 rm -f /forcefsck /fastboot
+[ -z "$fsck_dir" ] || rm -rf "$fsck_dir"
 [ $failed = 0 ] || { log "done, with failures"; exit 0; }
 log "done"
