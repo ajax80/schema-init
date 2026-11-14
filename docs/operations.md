@@ -186,7 +186,10 @@ locked (Fedora's default) it gives no shell and the boot goes on, so use
 `init=/bin/sh` there.
 
 **fsck.** `mount-fstab` checks each `/etc/fstab` filesystem with a pass number
-above 0 (`fsck -a`) before mounting it; `/` is the initramfs's. FAT filesystems are
+above 0 (`fsck -a`) before mounting it; `/` is the initramfs's. Block devices are
+checked in parallel, each waiting for its own device, and the results are then
+taken in fstab order, so a rescue shell still comes one at a time; a spec that
+is a file (a loop image) is checked when its turn comes. FAT filesystems are
 skipped when the boot-sector dirty bit and the FAT[1] clean-shutdown bits say
 they were unmounted cleanly, unless forced. When fsck
 cannot fix one, a `nofail` entry is left unmounted and any other gets the same

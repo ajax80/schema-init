@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, 'scripts', 'schema-mount-fstab')
@@ -11,12 +12,16 @@ SCRIPT = os.path.join(REPO, 'scripts', 'schema-mount-fstab')
 FAKES = {
     'blkid': '''#!/bin/sh
 case "$*" in
+  *LABEL=missing*) ;;
+  *LABEL=late*) { [ -e "$T/late" ] || [ "$(date +%s)" -ge "${FAKE_LATE_AT:-99999999999}" ]; } && echo /dev/fake-late ;;
+  *UUID=*) echo /dev/fake-d ;;
   *"-s TYPE"*) echo "${FAKE_TYPE:-ext4}" ;;
   *LABEL=*) for a; do l=$a; done; echo "/dev/fake-${l#LABEL=}" ;;
 esac
 ''',
     'fsck': '''#!/bin/sh
 echo "fsck $*" >> "$T/calls"
+[ -z "$FAKE_FSCK_SLEEP" ] || { echo "start $(date +%s.%N)" >> "$T/times"; sleep "$FAKE_FSCK_SLEEP"; echo "end $(date +%s.%N)" >> "$T/times"; touch "$T/late"; }
 rc=$(head -1 "$T/rcs" 2>/dev/null); sed -i 1d "$T/rcs" 2>/dev/null
 exit ${rc:-0}
 ''',
@@ -45,7 +50,7 @@ def check(name, ok, detail=''):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  — {detail}" if detail else ''))
 
 
-def run(fstab_line, rcs=(), fat=None, cmdline='', ftype='ext4', ready_after=1):
+def run(fstab_line, rcs=(), fat=None, cmdline='', ftype='ext4', ready_after=1, fsck_sleep='', tmpdir=None, late_at=''):
     t = tempfile.mkdtemp(prefix='schema-fsck-')
     try:
         b = os.path.join(t, 'bin')
@@ -71,8 +76,15 @@ def run(fstab_line, rcs=(), fat=None, cmdline='', ftype='ext4', ready_after=1):
         env = dict(os.environ, T=t, PATH=b + ':' + os.environ['PATH'],
                    SCHEMA_FSTAB=os.path.join(t, 'fstab'), SCHEMA_CONSOLE=os.path.join(t, 'console'),
                    SCHEMA_CMDLINE=os.path.join(t, 'cmdline'), FAKE_TYPE=ftype,
-                   FAKE_READY_AFTER=str(ready_after))
+                   FAKE_READY_AFTER=str(ready_after), FAKE_FSCK_SLEEP=fsck_sleep, FAKE_LATE_AT=late_at,
+                   SCHEMA_RUN=tmpdir or t)
+        t0 = time.monotonic()
         out = subprocess.run(['sh', SCRIPT], env=env, capture_output=True, text=True, timeout=30).stdout
+        global elapsed, leftover, times
+        elapsed = time.monotonic() - t0
+        leftover = [n for n in os.listdir(t) if n.startswith('schema-fsck.')]
+        tp = os.path.join(t, 'times')
+        times = open(tp).read().splitlines() if os.path.exists(tp) else []
         cp = os.path.join(t, 'calls')
         calls = open(cp).read().splitlines() if os.path.exists(cp) else []
         return out, calls
@@ -184,6 +196,56 @@ check('type auto -> btrfs: waits for ready', 'btrfs device ready /dev/fake-d' in
 
 out, calls = run('LABEL=d @/m ext4 defaults 0 0')
 check('ext4: no btrfs calls', not btrfs_calls(calls) and mounted(calls), calls)
+
+def spans():
+    st = [float(x.split()[1]) for x in times if x.startswith('start')]
+    en = [float(x.split()[1]) for x in times if x.startswith('end')]
+    return sorted(st), sorted(en)
+
+
+three = 'LABEL=a @/a ext4 defaults 0 2\nLABEL=b @/b ext4 defaults 0 2\nLABEL=c @/c ext4 defaults 0 2'
+out, calls = run(three, fsck_sleep='2')
+starts, ends = spans()
+check('three devices: fscks overlap, all mounted',
+      len(starts) == 3 and starts[-1] < ends[0] and sum(c.startswith('mount') for c in calls) == 3
+      and elapsed < 4.5, f'{elapsed:.2f}s {times}')
+check('pre-pass dir removed', leftover == [], leftover)
+check('mounts keep fstab order',
+      [c.split()[-1][-2:] for c in calls if c.startswith('mount')] == ['/a', '/b', '/c'], calls)
+
+out, calls = run(three, fsck_sleep='1', tmpdir='/nonexistent')
+check('no run dir: sequential fallback, all checked and mounted',
+      sum(c.startswith('fsck') for c in calls) == 3 and sum(c.startswith('mount') for c in calls) == 3
+      and elapsed >= 3, f'{elapsed:.2f}s')
+
+out, calls = run('LABEL=d @/m ext4 defaults 0 2\nLABEL=d @/m/sub ext4 defaults 0 2')
+check('same spec twice: one fsck', sum(c.startswith('fsck') for c in calls) == 1
+      and sum(c.startswith('mount') for c in calls) == 2, calls)
+
+out, calls = run('LABEL=d @/m ext4 defaults 0 2\nUUID=x @/n ext4 defaults 0 2', fsck_sleep='1')
+starts, ends = spans()
+check('two spellings of one device: checked one after the other',
+      len(starts) == 2 and starts[1] >= ends[0] and sum(c.startswith('mount') for c in calls) == 2, times)
+
+out, calls = run('LABEL=missing @/m ext4 defaults,x-systemd.device-timeout=3 0 2')
+check('device never appears: one timeout, not two',
+      'not present after 3s' in out and not mounted(calls) and elapsed < 5.5, f'{elapsed:.2f}s {out}')
+
+out, calls = run('LABEL=missing @/m ext4 defaults,nofail,x-systemd.device-timeout=3 0 2\nLABEL=d @/n ext4 defaults 0 2',
+                 fsck_sleep='3')
+check('missing nofail device waits alongside the other fsck',
+      'nofail, continuing' in out and mounted(calls) and elapsed < 5.5, f'{elapsed:.2f}s')
+
+out, calls = run('LABEL=late @/l ext4 defaults,nofail,x-systemd.device-timeout=1 0 2\nLABEL=d @/n ext4 defaults 0 2',
+                 fsck_sleep='2')
+check('nofail device late for the pre-pass but there by its turn: checked and mounted',
+      any(c.endswith(' /dev/fake-late') for c in calls if c.startswith('fsck'))
+      and any('/dev/fake-late' in c for c in calls if c.startswith('mount')), calls)
+
+out, calls = run('LABEL=late @/l ext4 defaults,nofail,x-systemd.device-timeout=1 0 2\n'
+                 'LABEL=late @/l/sub ext4 defaults 0 2', late_at=str(int(time.time()) + 3))
+check('same spec, nofail then required: the pre-pass waits the longer timeout',
+      sum('/dev/fake-late' in c for c in calls if c.startswith('mount')) == 2 and 'with failures' not in out, out)
 
 print(f"{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)
