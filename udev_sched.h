@@ -43,6 +43,10 @@ static inline int sched_path_related(const char *a, const char *b) {
     return strncmp(a, b, la) == 0 && (b[la] == '/' || b[la] == '\0');
 }
 
+static inline int sched_net_renames(const struct sched_meta *m) {
+    return !strcmp(m->action, "add") || !strcmp(m->action, "move");
+}
+
 static inline int sched_conflict(const struct sched_meta *a, const struct sched_meta *b) {
     if (!a->devpath[0] || !b->devpath[0]) return 1;
     const char *pa[2] = { a->devpath, a->devpath_old }, *pb[2] = { b->devpath, b->devpath_old };
@@ -53,8 +57,9 @@ static inline int sched_conflict(const struct sched_meta *a, const struct sched_
     if (a->has_devnum && b->has_devnum && a->is_block == b->is_block &&
         a->major == b->major && a->minor == b->minor) return 1;
     if (a->ifindex && a->ifindex == b->ifindex) return 1;
-    /* NIC renames go through temporary names that can collide */
-    if (!strcmp(a->subsystem, "net") && !strcmp(b->subsystem, "net")) return 1;
+    /* NIC renames (add/move) go through temporary names that can collide */
+    if (!strcmp(a->subsystem, "net") && !strcmp(b->subsystem, "net") &&
+        sched_net_renames(a) && sched_net_renames(b)) return 1;
     return 0;
 }
 

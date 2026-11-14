@@ -54,6 +54,20 @@ static void same_ifindex(void) {
     assert(!sched_conflict(&n1, &blk));
 }
 
+/* only net add/move can rename (temp names collide); a veth remove burst
+ * must not queue a keyboard behind it */
+static void net_remove_not_serialised(void) {
+    struct sched_meta r1 = meta("/devices/virtual/net/veth1", "net", 0, 0, 11);
+    struct sched_meta r2 = meta("/devices/virtual/net/veth2", "net", 0, 0, 12);
+    snprintf(r1.action, sizeof r1.action, "remove");
+    snprintf(r2.action, sizeof r2.action, "remove");
+    assert(!sched_conflict(&r1, &r2));
+    struct sched_meta a2 = meta("/devices/virtual/net/veth3", "net", 0, 0, 13);
+    assert(!sched_conflict(&r1, &a2));
+    struct sched_meta a3 = meta("/devices/virtual/net/veth4", "net", 0, 0, 14);
+    assert(sched_conflict(&a2, &a3));
+}
+
 static void move_old_path(void) {
     struct sched_meta a = meta("/devices/x/wlan0", "net", 0, 0, 0);
     snprintf(a.devpath_old, sizeof a.devpath_old, "%s", "/devices/x/eth0");
@@ -104,6 +118,7 @@ int main(void) {
     replug_same_devnum();
     block_vs_char_same_numbers();
     same_ifindex();
+    net_remove_not_serialised();
     move_old_path();
     no_devpath();
     queue_order_same_dev();

@@ -538,11 +538,10 @@ static void coldplug_dispatch(struct uevent *ev) {
 static struct sched_meta g_qm[WQ_MAX];
 static char *g_qraw[WQ_MAX];
 static size_t g_qlen[WQ_MAX];
-static double g_qenq[WQ_MAX];
 static int g_qhead, g_qtail;
 
 static struct sched_meta g_rm[WORKERS_MAX];
-static struct { pid_t pid; double enq_ms, deadline_ms; } g_run[WORKERS_MAX];
+static struct { pid_t pid; double start_ms, deadline_ms; } g_run[WORKERS_MAX];
 static int g_nrun, g_cap = 4;
 
 static long long g_event_timeout_ms = 180000;
@@ -557,7 +556,6 @@ static void wq_push(const char *buf, size_t len) {
         memmove(g_qm, g_qm + g_qhead, n * sizeof g_qm[0]);
         memmove(g_qraw, g_qraw + g_qhead, n * sizeof g_qraw[0]);
         memmove(g_qlen, g_qlen + g_qhead, n * sizeof g_qlen[0]);
-        memmove(g_qenq, g_qenq + g_qhead, n * sizeof g_qenq[0]);
         g_qhead = 0; g_qtail = n;
     }
     double now = mono_ms();
@@ -577,18 +575,14 @@ static void wq_push(const char *buf, size_t len) {
     sched_meta_from(&ev, &g_qm[g_qtail]);
     g_qraw[g_qtail] = raw;
     g_qlen[g_qtail] = len;
-    g_qenq[g_qtail] = now;
     g_qtail++;
 }
 
 /* drop queued entry head+i, keeping the order of the rest */
 static void wq_take(int i) {
-    int at = g_qhead + i;
     memmove(g_qm + g_qhead + 1, g_qm + g_qhead, i * sizeof g_qm[0]);
     memmove(g_qraw + g_qhead + 1, g_qraw + g_qhead, i * sizeof g_qraw[0]);
     memmove(g_qlen + g_qhead + 1, g_qlen + g_qhead, i * sizeof g_qlen[0]);
-    memmove(g_qenq + g_qhead + 1, g_qenq + g_qhead, i * sizeof g_qenq[0]);
-    (void)at;
     g_qhead++;
     if (g_qhead == g_qtail) g_qhead = g_qtail = 0;
 }
@@ -599,6 +593,8 @@ static void worker_child(const char *raw, size_t len) {
     signal(SIGHUP, SIG_DFL); signal(SIGTERM, SIG_DFL);
     signal(SIGINT, SIG_DFL); signal(SIGCHLD, SIG_DFL);
     sigprocmask(SIG_SETMASK, &empty, NULL);
+    /* its own group, so a timeout or shutdown kill takes its helpers too */
+    setpgid(0, 0);
     close(g_nlfd); close(g_sfd);
     struct uevent ev;
     if (uevent_parse(raw, len, &ev) == 0) dispatch(&ev, DISPATCH_WORKER);
@@ -625,10 +621,11 @@ static int workers_start(void) {
             return 1;
         }
         if (pid == 0) worker_child(g_qraw[at], g_qlen[at]);
+        setpgid(pid, pid);   /* both sides: no window where a kill(-pid) misses */
         g_rm[g_nrun] = g_qm[at];
         g_run[g_nrun].pid = pid;
-        g_run[g_nrun].enq_ms = g_qenq[at];
-        g_run[g_nrun].deadline_ms = mono_ms() + (double)g_event_timeout_ms;
+        g_run[g_nrun].start_ms = mono_ms();
+        g_run[g_nrun].deadline_ms = g_run[g_nrun].start_ms + (double)g_event_timeout_ms;
         g_nrun++;
         free(g_qraw[at]);
         wq_take(i);
@@ -644,7 +641,7 @@ static void workers_reap(void) {
     while ((pid = waitpid(-1, &st, WNOHANG)) > 0) {
         for (int k = 0; k < g_nrun; k++) {
             if (g_run[k].pid != pid) continue;
-            double dt = mono_ms() - g_run[k].enq_ms;
+            double dt = mono_ms() - g_run[k].start_ms;
             if (WIFSIGNALED(st))
                 fprintf(stderr, "[schema-udev] worker for %s %s died on signal %d\n",
                         g_rm[k].action, g_rm[k].devpath, WTERMSIG(st));
@@ -661,12 +658,12 @@ static void workers_reap(void) {
 
 /* Never waits on the killed worker: one stuck in D state would freeze the
  * loop. Its slot is free at once; a pending SIGKILL lands before it can
- * return to user space, so it writes nothing more. */
+ * return to user space, and the group kill takes its helpers. */
 static void workers_expire(void) {
     double now = mono_ms();
     for (int k = 0; k < g_nrun; k++) {
         if (now < g_run[k].deadline_ms) continue;
-        kill(g_run[k].pid, SIGKILL);
+        kill(-g_run[k].pid, SIGKILL);
         fprintf(stderr, "[schema-udev] event TIMED OUT after %llds %s %s\n",
                 g_event_timeout_ms / 1000, g_rm[k].action, g_rm[k].devpath);
         run_remove(k);
@@ -684,13 +681,13 @@ static int poll_timeout(int retry) {
 }
 
 static void workers_shutdown(void) {
-    for (int k = 0; k < g_nrun; k++) kill(g_run[k].pid, SIGTERM);
+    for (int k = 0; k < g_nrun; k++) kill(-g_run[k].pid, SIGTERM);
     for (int t = 0; t < 100 && g_nrun; t++) {
         struct timespec ts = { 0, 50 * 1000000L };
         nanosleep(&ts, NULL);
         workers_reap();
     }
-    for (int k = 0; k < g_nrun; k++) kill(g_run[k].pid, SIGKILL);
+    for (int k = 0; k < g_nrun; k++) kill(-g_run[k].pid, SIGKILL);
 }
 
 static long long env_ll(const char *name, long long dflt) {
@@ -725,6 +722,7 @@ int main(void) {
         return 1;
     }
     g_event_timeout_ms = env_ll("SCHEMA_UDEV_EVENT_TIMEOUT_MS", 180000);
+    if (g_event_timeout_ms < 1000 || g_event_timeout_ms > 3600000) g_event_timeout_ms = 180000;
     g_slow_ms = env_ll("SCHEMA_UDEV_SLOW_MS", 1000);
     long np = sysconf(_SC_NPROCESSORS_ONLN);
     g_cap = sched_cap(np > 0 ? np : 1);
@@ -782,7 +780,8 @@ int main(void) {
 
     if (g_live) unlink(SCHEMA_UDEV_READY);
     double rl_t0 = mono_ms();
-    rules_reload();
+    if (g_feed) fprintf(stderr, "[schema-udev] test feed: legacy .dev rules skipped\n");
+    else rules_reload();
     ruleset_reload();
     double rl_t1 = mono_ms();
     disk_links_wipe(SCHEMA_UDEV_RULES_DIR);   /* reuse the generic recursive rmdir/wipe */
@@ -823,7 +822,7 @@ int main(void) {
                 if (si.ssi_signo == SIGCHLD) {
                     workers_reap();
                 } else if (si.ssi_signo == SIGHUP) {
-                    rules_reload();
+                    if (!g_feed) rules_reload();
                     ruleset_reload();
                 } else {
                     quit = 1;   /* TERM / INT */

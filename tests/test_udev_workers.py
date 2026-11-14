@@ -104,6 +104,11 @@ try:
     tadd = d.done('add', '/devices/t/c', 6)
     tchg = d.done('change', '/devices/t/c', 6)
     check('same_device_ordered', tadd is not None and tchg is not None and tchg >= tadd)
+    chg = [l for _, l in d.lines if 'ms change /devices/t/c' in l]
+    cms = int(chg[-1].split('] slow ')[1].split('ms')[0]) if chg else 99999
+    check('slow_measured_from_start', cms < 1000, f'{cms}ms')
+    check('legacy_rules_skipped', any('legacy .dev rules skipped' in l for _, l in d.lines)
+          and not any('rule(s) from /etc/schema-init/dev' in l for _, l in d.lines))
 
     d.send('remove', '/devices/u1/sdb', SUBSYSTEM='block', MAJOR='8', MINOR='16', TESTSLEEP='2')
     d.send('add', '/devices/u2/sdb', SUBSYSTEM='block', MAJOR='8', MINOR='16')
@@ -121,12 +126,28 @@ finally:
 
 d = Daemon(timeout_ms=2000)
 try:
-    t0 = d.send('add', '/devices/t/d', TESTSLEEP='20')
+    t0 = d.send('add', '/devices/t/d', TESTSLEEP='20.5')
     tk = d.wait_for(lambda l: 'event TIMED OUT' in l and '/devices/t/d' in l, 5)
     check('idle_deadline_fires', tk is not None and tk - t0 < 4, secs(tk, t0))
     t1 = d.send('change', '/devices/t/d')
     tc = d.done('change', '/devices/t/d', 3)
     check('device_freed_after_timeout', tc is not None and tc - t1 < 1, secs(tc, t1))
+    left = []
+    for pid in os.listdir('/proc'):
+        try:
+            if open(f'/proc/{pid}/cmdline', 'rb').read() == b'/bin/sleep\x0020.5\x00':
+                left.append(pid)
+        except OSError:
+            pass
+    check('helper_killed_with_worker', not left, left)
+finally:
+    d.stop()
+
+d = Daemon(timeout_ms=0)
+try:
+    t0 = d.send('add', '/devices/t/z')
+    tz = d.done('add', '/devices/t/z', 3)
+    check('timeout_env_zero_ignored', tz is not None and not any('TIMED OUT' in l for _, l in d.lines), secs(tz, t0))
 finally:
     d.stop()
 

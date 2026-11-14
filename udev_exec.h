@@ -142,8 +142,6 @@ static inline int udev_run_capture(const char *cmd, char *out, size_t outlen) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-/* Wait for a child up to timeout_s, then SIGKILL it. Exit status, or -1 if
- * it died on a signal or timed out. */
 static inline int udev_wait_child(pid_t pid, int timeout_s, const char *what) {
     int status, timed_out = 0;
     int pfd = (int)syscall(SYS_pidfd_open, pid, 0);
