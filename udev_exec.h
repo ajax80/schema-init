@@ -10,6 +10,8 @@
 #include <time.h>
 #include <limits.h>
 #include <poll.h>
+#include <stdio.h>
+#include <sys/syscall.h>
 
 static inline int udev_argv_split(const char *cmd, char store[][UE_VAL_MAX],
                                   char *argv[], int max) {
@@ -56,8 +58,10 @@ static inline const char *udev_run_direct(int argc, char *const argv[]) {
     return NULL;
 }
 
+/* per helper (PROGRAM, IMPORT{program}, a worker's RUN); the 180 s
+ * udevd event_timeout is the worker deadline in schema-udev.c */
 #ifndef UDEV_EXEC_TIMEOUT
-#define UDEV_EXEC_TIMEOUT 180
+#define UDEV_EXEC_TIMEOUT 30
 #endif
 #define UDEV_EXEC_LIBDIR  "/usr/lib/udev"
 
@@ -128,8 +132,53 @@ static inline int udev_run_capture(const char *cmd, char *out, size_t outlen) {
     }
     close(p[0]);
     if (o < outlen) out[o] = '\0';
-    if (timed_out) { kill(pid, SIGKILL); waitpid(pid, &status, 0); return -1; }
+    if (timed_out) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        fprintf(stderr, "[schema-udev] helper TIMED OUT after %ds: %s\n", UDEV_EXEC_TIMEOUT, cmd);
+        return -1;
+    }
     if (waitpid(pid, &status, 0) != pid) return -1;
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* Wait for a child up to timeout_s, then SIGKILL it. Exit status, or -1 if
+ * it died on a signal or timed out. */
+static inline int udev_wait_child(pid_t pid, int timeout_s, const char *what) {
+    int status, timed_out = 0;
+    int pfd = (int)syscall(SYS_pidfd_open, pid, 0);
+    if (pfd >= 0) {
+        struct pollfd p = { .fd = pfd, .events = POLLIN };
+        struct timespec t0, now;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (;;) {
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long long left = timeout_s * 1000LL - (now.tv_sec - t0.tv_sec) * 1000LL
+                             - (now.tv_nsec - t0.tv_nsec) / 1000000;
+            if (left <= 0) { timed_out = 1; break; }
+            int n = poll(&p, 1, (int)left);
+            if (n > 0) break;
+            if (n == 0) { timed_out = 1; break; }
+            if (errno != EINTR) break;
+        }
+        close(pfd);
+    } else {
+        int ticks = timeout_s * 100;
+        for (;;) {
+            pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid) return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            if (r < 0 && errno != EINTR) return -1;
+            if (ticks-- <= 0) { timed_out = 1; break; }
+            struct timespec ts = { 0, 10 * 1000000L };
+            nanosleep(&ts, NULL);
+        }
+    }
+    if (timed_out) {
+        kill(pid, SIGKILL);
+        fprintf(stderr, "[schema-udev] helper TIMED OUT after %ds: %s\n", timeout_s, what);
+    }
+    while (waitpid(pid, &status, 0) < 0)
+        if (errno != EINTR) return -1;
+    return !timed_out && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 #endif

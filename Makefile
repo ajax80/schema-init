@@ -340,6 +340,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_udev_sched.c -o $(TESTDIR)/udev-sched && $(TESTDIR)/udev-sched
 	$(CC) $(CFLAGS) tests/test_udev_matcher.c -o $(TESTDIR)/matcher && $(TESTDIR)/matcher
 	$(CC) $(CFLAGS) tests/test_udev_executor.c -o $(TESTDIR)/executor && $(TESTDIR)/executor
+	$(CC) $(CFLAGS) -DUDEV_EXEC_TIMEOUT=1 tests/test_udev_executor.c -o $(TESTDIR)/executor-t1 && $(TESTDIR)/executor-t1
 	$(CC) $(CFLAGS) tests/test_udev_r4a.c -o $(TESTDIR)/r4a && $(TESTDIR)/r4a
 	$(CC) $(CFLAGS) tests/test_udev_r4b.c -o $(TESTDIR)/r4b && $(TESTDIR)/r4b
 	$(CC) $(CFLAGS) tests/test_parity.c -o $(TESTDIR)/parity && $(TESTDIR)/parity
