@@ -1,5 +1,6 @@
 /* schema-udev — native uevent -> schema rule -> action daemon (Phase 1).
  * Listens on the kernel uevent netlink (group 1), alongside systemd-udevd. */
+#include <sys/file.h>
 #include "schema-udev.h"
 #include "udev_builtins.h"
 #include "udev_rules.h"
@@ -137,7 +138,24 @@ static void export_scrubbed_env(const struct uevent *ev) {
  * argv exec, not a shell; output discarded; children reaped by the SIGCHLD
  * drain). RUN{builtin} kmod load invokes modprobe for MODALIAS or explicit modules;
  * other builtins (uaccess) are handled natively elsewhere. */
-static void run_ctx_runs(const struct dev_ctx *rc) {
+/* Coldplug runs events inline with fire-and-forget RUN, as before; a live
+ * worker waits for each RUN (udevd parity), bounded per helper. */
+enum dispatch_mode { DISPATCH_INLINE, DISPATCH_WORKER };
+
+/* Workers run concurrently: the claims registry, uaccess state and legacy
+ * .dev symlinks are shared between devices. -1 = proceed unlocked. */
+#define UDEV_LINKS_LOCK   "/run/schema-udev-links.lock"
+#define UDEV_UACCESS_LOCK SCHEMA_UDEV_READY_DIR "/uaccess.lock"
+static int udev_lock(const char *path) {
+    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) return -1;
+    while (flock(fd, LOCK_EX) < 0)
+        if (errno != EINTR) { close(fd); return -1; }
+    return fd;
+}
+static void udev_unlock(int fd) { if (fd >= 0) close(fd); }
+
+static void run_ctx_runs(const struct dev_ctx *rc, enum dispatch_mode mode) {
     for (int i = 0; i < rc->nruns; i++) {
         char store[32][UE_VAL_MAX]; char *argv[33];
         int argc = udev_argv_split(rc->runs[i], store, argv, 32);
@@ -182,6 +200,7 @@ static void run_ctx_runs(const struct dev_ctx *rc) {
                     }
                     _exit(127);
                 }
+                if (mode == DISPATCH_WORKER) udev_wait_child(pid, UDEV_EXEC_TIMEOUT, rc->runs[i]);
             }
             continue;
         }
@@ -202,6 +221,7 @@ static void run_ctx_runs(const struct dev_ctx *rc) {
             execvp(argv[0], argv);
             _exit(127);
         }
+        if (mode == DISPATCH_WORKER) udev_wait_child(pid, UDEV_EXEC_TIMEOUT, rc->runs[i]);
     }
 }
 
@@ -287,9 +307,11 @@ static void net_rename(struct uevent *ev, struct uevent *orig, const char *newna
     }
 }
 
-static void dispatch(struct uevent *ev) {
+static void dispatch(struct uevent *ev, enum dispatch_mode mode) {
     const char *action = uevent_get(ev, "ACTION");
     if (!action) return;
+    struct uevent shadow_ev;
+    int bcast = 0;
     const char *devpath = uevent_get(ev, "DEVPATH");
     int kernel_n = ev->n;
     if (devpath) {
@@ -307,7 +329,7 @@ static void dispatch(struct uevent *ev) {
                 for (int i = 0; i < old.n; i++)
                     if (!uevent_get(ev, old.key[i])) uevent_set(ev, old.key[i], old.val[i]);
         }
-        struct uevent shadow_ev = *ev;          /* deep copy: uevent is inline char[], no heap */
+        shadow_ev = *ev;                        /* deep copy: uevent is inline char[], no heap */
         int pre_rules_n = shadow_ev.n;
         struct dev_ctx rc;
         int ua_tagged = 0;
@@ -343,15 +365,19 @@ static void dispatch(struct uevent *ev) {
             if (g_live) {
                 node_symlink_farm(&shadow_ev, action);
                 char devid[128];
-                if (udev_db_filename(&shadow_ev, devid, sizeof devid) == 0)
+                if (udev_db_filename(&shadow_ev, devid, sizeof devid) == 0) {
+                    int lk = udev_lock(UDEV_LINKS_LOCK);
                     rule_links_update("/dev", SCHEMA_UDEV_LINK_CLAIMS, devid,
                                       uevent_get(&shadow_ev, "DEVNAME"),
                                       rc.link_priority, syms, nsyms);
+                    udev_unlock(lk);
+                }
                 if (strcmp(action, "remove") != 0) {
                     if (dn) node_apply_perms(dn, rc.owner, rc.group, rc.mode);
-                    run_ctx_runs(&rc);
+                    run_ctx_runs(&rc, mode);
                 }
-                monitor_broadcast(&shadow_ev);
+                /* announced last, once ACLs and links are in place (udevd order) */
+                bcast = 1;
             }
         }
         run_rules("/sys", devpath, dn, ev);
@@ -365,6 +391,7 @@ static void dispatch(struct uevent *ev) {
         int shadow_disk = is_block && !g_live;
         if (strcmp(action, "remove") == 0) {
             if (shadow_disk) disk_links_gc(disk_base, SCHEMA_UDEV_DB_DIR, ev);
+            int ulk = udev_lock(UDEV_UACCESS_LOCK);
             uaccess_clear(SCHEMA_UACCESS_DIR, ev);
             if (g_live) {
                 int uid = uaccess_active_uid(SEAT0_PATH);
@@ -375,14 +402,17 @@ static void dispatch(struct uevent *ev) {
                         ua_clear_node(node, uid);
                 }
             }
+            udev_unlock(ulk);
             udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
         } else {
             udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
             if (shadow_disk && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
                 disk_links_apply(disk_base, ev);
             if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0) {
+                int ulk = udev_lock(UDEV_UACCESS_LOCK);
                 uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev, ua_tagged);   /* audit trail */
                 if (g_live) uaccess_apply(SEAT0_PATH, ev, ua_tagged);            /* real ACL */
+                udev_unlock(ulk);
             }
         }
     }
@@ -393,13 +423,18 @@ static void dispatch(struct uevent *ev) {
         if (strcmp(action, "add") == 0 && g_rules[i].symlink[0]) {
             const char *dn = uevent_get(ev, "DEVNAME");
             if (dn) {
-                if (symlink_apply(dev_base, g_rules[i].symlink, dn) == 0) {
+                int lk = udev_lock(UDEV_LINKS_LOCK);
+                int ok = symlink_apply(dev_base, g_rules[i].symlink, dn) == 0;
+                udev_unlock(lk);
+                if (ok) {
                     fprintf(stderr, "[schema-udev] created symlink %s/%s -> %s\n",
                             dev_base, g_rules[i].symlink, dn);
                 }
             }
         } else if (strcmp(action, "remove") == 0 && g_rules[i].symlink[0]) {
+            int lk = udev_lock(UDEV_LINKS_LOCK);
             symlink_clear(dev_base, g_rules[i].symlink);
+            udev_unlock(lk);
             fprintf(stderr, "[schema-udev] removed symlink %s/%s\n",
                     dev_base, g_rules[i].symlink);
         }
@@ -415,6 +450,7 @@ static void dispatch(struct uevent *ev) {
             run_hook(hook, ev);
         }
     }
+    if (bcast) monitor_broadcast(&shadow_ev);
 }
 
 static double mono_ms(void) {
@@ -463,7 +499,7 @@ static void subsystems_coldplug(int nlfd) {
             if (uevent_parse(buf, (size_t)r, &ev) != 0) continue;
             const char *sq = uevent_get(&ev, "SEQNUM");
             if (sq) { unsigned long long v = strtoull(sq, NULL, 10); if (v > seen) seen = v; }
-            dispatch(&ev);
+            dispatch(&ev, DISPATCH_INLINE);
             handled++;
         }
     }
@@ -476,7 +512,7 @@ static void subsystems_coldplug(int nlfd) {
 
 static void coldplug_dispatch(struct uevent *ev) {
     double t0 = mono_ms();
-    dispatch(ev);
+    dispatch(ev, DISPATCH_INLINE);
     double dt = mono_ms() - t0;
     if (dt >= 50.0)
         fprintf(stderr, "[schema-udev] coldplug slow %.0fms %s\n", dt, uevent_get(ev, "DEVPATH"));
@@ -582,7 +618,7 @@ int main(void) {
                 }
                 struct uevent ev;
                 if (uevent_parse(buf, (size_t)n, &ev) != 0) continue;
-                dispatch(&ev);
+                dispatch(&ev, DISPATCH_INLINE);
             }
         }
     }
