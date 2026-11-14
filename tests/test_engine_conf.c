@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <limits.h>
+#include <unistd.h>
 
 static void test_pid1_defaults(void) {
     assert(!strcmp(engine_paths.ctl_fallback, "./run/schema-init.sock"));
@@ -115,7 +117,67 @@ static void test_proc_stat_is_user(void) {
     assert(!proc_stat_is_user("garbage"));
 }
 
+static void touch(const char *dir, const char *name) {
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    FILE *f = fopen(p, "w");
+    assert(f);
+    fclose(f);
+}
+
+/* /usr/lib/modules-load.d is read too, with systemd's override and mask rules */
+static void test_modload_conf_list(void) {
+    char base[] = "/tmp/schema-modload-XXXXXX", etc[64], lib[64], alias[64], p[128], gone[64], cmd[96];
+    const char *out[8];
+    int dropped;
+    assert(mkdtemp(base));
+    snprintf(etc, sizeof etc, "%s/etc", base);
+    snprintf(lib, sizeof lib, "%s/lib", base);
+    snprintf(alias, sizeof alias, "%s/alias", base);
+    snprintf(gone, sizeof gone, "%s/missing", base);
+    assert(mkdir(etc, 0755) == 0 && mkdir(lib, 0755) == 0 && symlink(lib, alias) == 0);
+    touch(etc, "x.conf");
+    touch(lib, "x.conf");
+    touch(lib, "a.conf");
+    touch(lib, "z.conf");
+    touch(lib, "m.conf");
+    touch(lib, "y.conf");
+    touch(lib, "notes.txt");
+    snprintf(p, sizeof p, "%s/m.conf", etc);
+    assert(symlink("/dev/null", p) == 0);
+    snprintf(p, sizeof p, "%s/y.conf", etc);     /* a directory is not a drop-in */
+    assert(mkdir(p, 0755) == 0);
+    snprintf(p, sizeof p, "%s/dangling.conf", etc);
+    assert(symlink("/nonexistent", p) == 0);
+    /* alias is lib under another name (usrmerge's /lib): read once */
+    const char *dirs[] = { etc, gone, lib, alias, NULL };
+    int n = modload_conf_list(dirs, out, 8, &dropped);
+    const char *want[] = { "lib/a.conf", "etc/x.conf", "lib/y.conf", "lib/z.conf" };
+    assert(n == 4 && dropped == 0);
+    for (int i = 0; i < 4; i++) {
+        snprintf(p, sizeof p, "%s/%s", base, want[i]);
+        assert(!strcmp(out[i], p));
+    }
+    assert(modload_conf_list(dirs, out, 2, &dropped) == 2 && dropped == 2);
+    const char *none[] = { gone, NULL };
+    assert(modload_conf_list(none, out, 8, &dropped) == 0 && dropped == 0);
+    snprintf(cmd, sizeof cmd, "rm -rf %s", base);
+    assert(system(cmd) == 0);
+}
+
+static void test_cmdline_modules_load(void) {
+    char names[4][256];
+    assert(cmdline_modules_load("ro modules_load=vfio-pci,kvm quiet modules-load=tun", names, 4) == 3);
+    assert(!strcmp(names[0], "vfio-pci") && !strcmp(names[1], "kvm") && !strcmp(names[2], "tun"));
+    assert(cmdline_modules_load("rd.modules_load=x xmodules_load=y modules_load= modules_load=,a,,", names, 4) == 1);
+    assert(!strcmp(names[0], "a"));
+    assert(cmdline_modules_load("modules_load=a,b,c,d,e", names, 4) == 4);
+    assert(cmdline_modules_load("", names, 4) == 0);
+}
+
 int main(void) {
+    test_modload_conf_list();
+    test_cmdline_modules_load();
     test_watchdog_opt_in();
     test_proc_stat_is_user();
     test_pid1_defaults();

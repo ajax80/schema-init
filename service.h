@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#include <limits.h>
 #include <stdint.h>
 #include <time.h>
 #include <pwd.h>
@@ -671,6 +672,18 @@ int  hardening_default_resolve(const char *cmdline, const char *file);
  * else any loaded service with a watchdog_timeout_ms window. */
 const char *watchdog_arm_reason(const char *cmdline, int conf_present,
                                 const service_t *svcs, int n);
+
+/* modules-load.d drop-ins in read order: a basename in an earlier dirs[]
+ * entry hides it in later ones, a /dev/null symlink masks it, anything not a
+ * regular file is ignored, survivors are sorted by basename. dirs is
+ * NULL-terminated; a directory seen before (usrmerge's /lib) is skipped.
+ * out points into static storage. *dropped counts files past a cap. */
+#define MODLOAD_CONF_MAX 256
+#define MODLOAD_PATH_MAX 512
+int modload_conf_list(const char *const *dirs, const char **out, int max, int *dropped);
+
+/* Names from every modules_load= / modules-load= word, comma-separated. */
+int cmdline_modules_load(const char *cmdline, char (*names)[256], int max);
 
 /* memory.low of the cgroup root = the sum of every loaded service's mem_low:
  * a child's memory.low only counts up to what its parent holds. */

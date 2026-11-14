@@ -20,6 +20,7 @@ int fdstore_n, fdstore_cap;
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <dirent.h>
 #include <time.h>
 #include <signal.h>
@@ -490,6 +491,78 @@ int hardening_default_resolve(const char *cmdline, const char *file) {
     size_t n = strlen(file);
     while (n && isspace((unsigned char)file[n - 1])) n--;
     return n == 2 && strncmp(file, "on", 2) == 0;
+}
+
+static int modload_cmp(const void *a, const void *b) {
+    return strcmp(strrchr(*(const char *const *)a, '/'), strrchr(*(const char *const *)b, '/'));
+}
+
+int modload_conf_list(const char *const *dirs, const char **out, int max, int *dropped) {
+    static char all[MODLOAD_CONF_MAX][MODLOAD_PATH_MAX];
+    static unsigned char masked[MODLOAD_CONF_MAX];
+    dev_t ddev[16];
+    ino_t dino[16];
+    int n = 0, k = 0, nd = 0;
+    *dropped = 0;
+    for (int d = 0; dirs[d]; d++) {
+        char pat[MODLOAD_PATH_MAX];
+        struct stat ds;
+        glob_t g;
+        int dup = 0;
+        if (stat(dirs[d], &ds) != 0 || !S_ISDIR(ds.st_mode)) continue;
+        /* usrmerge: /lib is /usr/lib, read it once */
+        for (int j = 0; j < nd; j++)
+            if (ddev[j] == ds.st_dev && dino[j] == ds.st_ino) dup = 1;
+        if (dup) continue;
+        if (nd < 16) { ddev[nd] = ds.st_dev; dino[nd] = ds.st_ino; nd++; }
+        snprintf(pat, sizeof pat, "%s/*.conf", dirs[d]);
+        if (glob(pat, 0, NULL, &g) != 0) continue;
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            const char *p = g.gl_pathv[i], *base = strrchr(p, '/');
+            struct stat st;
+            int seen = 0, m;
+            /* first directory wins: dirs[] is in priority order */
+            for (int j = 0; j < n && !seen; j++)
+                seen = !strcmp(strrchr(all[j], '/'), base);
+            if (seen || stat(p, &st) != 0) continue;
+            m = S_ISCHR(st.st_mode) && st.st_rdev == makedev(1, 3);
+            if (!m && !S_ISREG(st.st_mode)) continue;
+            if (n == MODLOAD_CONF_MAX || strlen(p) >= MODLOAD_PATH_MAX) { (*dropped)++; continue; }
+            memcpy(all[n], p, strlen(p) + 1);
+            masked[n++] = m;
+        }
+        globfree(&g);
+    }
+    for (int j = 0; j < n; j++) {
+        if (masked[j]) continue;
+        if (k == max) { (*dropped)++; continue; }
+        out[k++] = all[j];
+    }
+    qsort(out, k, sizeof out[0], modload_cmp);
+    return k;
+}
+
+int cmdline_modules_load(const char *cl, char (*names)[256], int max) {
+    int n = 0;
+    while (cl && *cl) {
+        size_t w;
+        while (isspace((unsigned char)*cl)) cl++;
+        w = strcspn(cl, " \t\n");
+        if (w > 13 && (!strncmp(cl, "modules_load=", 13) || !strncmp(cl, "modules-load=", 13))) {
+            const char *v = cl + 13, *end = cl + w;
+            while (v < end) {
+                size_t l = strcspn(v, ",");
+                if (v + l > end) l = end - v;
+                if (l && l < 256 && n < max) {
+                    memcpy(names[n], v, l);
+                    names[n++][l] = '\0';
+                }
+                v += l + 1;
+            }
+        }
+        cl += w;
+    }
+    return n;
 }
 
 const char *watchdog_arm_reason(const char *cmdline, int conf_present,
