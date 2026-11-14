@@ -70,7 +70,13 @@ hotplug for everything else.** Boot time is secondary.
 - Keeps reading netlink and the signalfd exactly as now, but never runs
   `dispatch()` itself for live events. It appends each received datagram
   (raw bytes + length, not a parsed `struct uevent`, which is ~73 KB) to an
-  in-memory FIFO.
+  in-memory FIFO, together with scheduler metadata extracted **once** at
+  enqueue (DEVPATH, DEVPATH_OLD, devnum + block/char, IFINDEX, SUBSYSTEM,
+  ACTION, enqueue time), so a scheduling pass never re-parses datagrams.
+- `poll()` no longer waits forever: its timeout is the time to the earliest
+  running worker's deadline (or -1 when none run). On every wakeup,
+  including a 0 return, expired workers are killed. Otherwise a hung worker
+  on an idle system would never hit its deadline.
 - After every wakeup it starts as many queued events as it may (below).
 - Coldplug (`subsystems_coldplug()` and `coldplug_walk_root()`) still runs
   inline before the loop, unchanged, and the ready marker still means
@@ -78,9 +84,12 @@ hotplug for everything else.** Boot time is secondary.
 
 ### Workers
 
-- One `fork()` per event. The child parses the datagram and runs today's
-  `dispatch()` unmodified in behaviour, then `_exit()`s. The parsed ruleset
-  is shared copy-on-write.
+- One `fork()` per event. Right after fork the child resets its signal
+  mask to empty and handlers to default (the parent blocks HUP/TERM/INT/CHLD
+  for its signalfd; inherited, TERM would be ignored), closes the netlink
+  and signalfd fds (keeps the monitor fd), parses the datagram, runs
+  `dispatch()` in worker mode, then `_exit()`s. The parsed ruleset is shared
+  copy-on-write.
 - `dispatch()` gains a mode flag: worker mode vs inline (coldplug).
   Coldplug keeps today's behaviour exactly, including fire-and-forget RUN
   (**Claude's call**: waiting there would slow boot and has no per-event
@@ -109,15 +118,18 @@ hotplug for everything else.** Boot time is secondary.
     it, so a stick replugged into another port (same `sdb`, new DEVPATH)
     must not run its `add` beside the old `remove`;
   - same `IFINDEX` (net devices: db records are `n<ifindex>`).
-- An event may start when it conflicts with no running worker **and** with
-  no earlier event still queued (so per-device queue order holds).
+- An event may start when it conflicts with no running worker **and**
+  conflicts with no earlier event still queued. This is not strict FIFO:
+  unrelated devices run out of order; an event is held only behind an
+  earlier queued or running event it conflicts with.
+- All `net` subsystem events are serialised against each other in the
+  scheduler (NIC rename temp-name collisions); no lock file for renames.
 - Events without DEVPATH (rare) are serialised against everything.
 - Concurrency cap: `max(4, min(2 * nproc, 16))` workers (**Claude's call**;
   the audit's `min(nproc, 4)` lets four sleeping disks stall everything).
-- Queue cap: 4096 events. On overflow, log once per burst and drop the
-  oldest *unstarted* event for a device that already has a newer queued
-  event of the same action, else drop the newest; never block netlink reads.
-  (The builder may pick a simpler bounded policy if it keeps the log line.)
+- Queue cap: 4096 events. On overflow drop the newest, with a
+  rate-limited log line per burst; never block netlink reads and never scan
+  the queue to coalesce.
 
 ### Timeouts
 
@@ -127,8 +139,14 @@ hotplug for everything else.** Boot time is secondary.
   coldplug now costs 30 s instead of 180 s.
 - Per event: 180 s (udevd's `event_timeout`), enforced by the main loop on
   the worker pid: SIGKILL, log `[schema-udev] event TIMED OUT after 180s
-  <ACTION> <DEVPATH>`, release the device so its queue moves on. Keep the
-  existing `(TIMED OUT)` wording style.
+  <ACTION> <DEVPATH>`, and release the device's conflict slot at once so its
+  queue moves on. Keep the existing `(TIMED OUT)` wording style.
+- Never `waitpid()` blocking on a killed worker: one stuck in D state (disk
+  spin-up, wedged USB bridge ioctl) does not die until the kernel call
+  returns, and a blocking wait would freeze the daemon. It is reaped later
+  by the normal `WNOHANG` drain. Safe to release its slot early: a pending
+  SIGKILL is delivered before the task returns to user space, so it can
+  never write state again.
 - Builtin ioctls are only covered by the per-event deadline (they cannot be
   interrupted from inside); that is the point of moving them off the loop.
 - A killed worker may leave that one device half-updated (some claims
@@ -158,20 +176,21 @@ matters is files. Audit of what `dispatch()` touches:
 | `/run/schema-udev-links` claims + `/dev/disk/*` resolve (`rule_links_update`) | **no**: two devices can claim one name | `flock()` a lock file in the claims dir around the whole call |
 | uaccess record + ACL apply/clear | per node (devnum rule), but reads seat state | `flock()` one uaccess lock around record/apply/clear |
 | NIC rename (`net_rename`) | **no**: temp-name collisions between NICs | serialise all `net` subsystem `add` events (scheduler rule) or a lock |
-| legacy `.dev` rules symlinks/hooks (`symlink_apply`, `run_hook`) | names can collide | same lock as the claims registry |
+| legacy `.dev` rules symlinks (`symlink_apply`, `symlink_clear`) | names can collide | same lock as the claims registry; **not** around `run_hook()`, which spawns a shell |
 
 Locks are taken only around those sections, never across a helper run.
 
 ### SIGCHLD, HUP, TERM
 
-- SIGCHLD: the main loop reaps workers by pid (not `waitpid(-1)` blindly
-  dropping status) to free their device slots. Grandchildren (legacy hooks)
-  are the worker's problem; a worker that `_exit()`s leaves them to PID 1
-  as today.
+- SIGCHLD: drain with `waitpid(-1, &st, WNOHANG)`, look each pid up among
+  running workers, free its slot and log abnormal status. Unknown pids are
+  ignored silently: coldplug's fire-and-forget RUN children and hooks exit
+  after the loop starts. Grandchildren of a worker (legacy hooks) go to
+  PID 1 when the worker exits, as today.
 - SIGHUP: reload rules in the main process; workers forked afterwards use
   the new set, in-flight ones finish on the old.
-- SIGTERM/INT: stop dequeuing, give in-flight workers up to 5 s, SIGKILL
-  the rest, exit.
+- SIGTERM/INT: stop dequeuing, SIGTERM in-flight workers, give them up to
+  5 s (non-blocking reaps), SIGKILL the rest, exit without waiting on them.
 
 ## Testing (required)
 
@@ -193,12 +212,16 @@ Locks are taken only around those sections, never across a helper run.
   flip, plug/unplug USB storage and a keyboard, check `/dev/disk/by-*`,
   ACLs on the seat, NIC names), then blakbox. Only then merge.
 
+Review: builder check (fresh subagent) and Greg (2026-11-13) folded in:
+devnum/IFINDEX conflicts, coldplug mode flag, broadcast at the tail,
+killed-worker policy; dynamic poll timeout, no blocking wait on killed
+workers, child signal/fd reset, enqueue-time metadata, hook lock scope,
+tail-drop overflow, net serialised in the scheduler.
+
 ## Left to the builder
 
 - Data structures for the queue and running set; where the test event
   source hooks in.
 - Whether the scheduler lives in a new header (`udev_sched.h`, preferred for
   testing) or in `schema-udev.c`.
-- Exact lock file names and whether NIC renames use the scheduler rule or a
-  lock.
-- Queue overflow policy details, within the constraints above.
+- Exact lock file names.
