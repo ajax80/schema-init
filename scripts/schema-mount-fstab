@@ -139,14 +139,31 @@ run_fsck() {
 
 fkey() { printf '%s' "$1" | cksum | cut -d' ' -f1; }
 
-# The parallel pre-pass's result file for this spec, if it made one.
-prechecked() { [ -n "$fsck_dir" ] && [ -f "$fsck_dir/$(fkey "$1")" ]; }
+# One fsck at a time per lock: the whole disk when it spins (parallel checks
+# on one spindle seek against each other), else the device itself, so two
+# fstab spellings of one partition never get checked at once.
+lock_key() {
+    n=$(basename "$(readlink -f "$1")")
+    if [ -e "/sys/class/block/$n/partition" ]; then
+        d=$(basename "$(readlink -f "/sys/class/block/$n/..")")
+        [ "$(cat "/sys/block/$d/queue/rotational" 2>/dev/null)" = 1 ] && n=$d
+    fi
+    fkey "$n"
+}
+
+# Sets t from an entry's x-systemd.device-timeout and nofail (90 s, nofail 10 s).
+entry_timeout() {
+    raw=$(opt_val "$1" x-systemd.device-timeout)
+    t=""
+    [ -z "$raw" ] || t=$(timeout_secs "$raw")
+    [ -n "$raw" ] && [ -z "$t" ] && [ -n "$2" ] && log "$2: x-systemd.device-timeout=$raw not understood, using the default"
+    [ -n "$t" ] || { if has_opt "$1" nofail; then t=10; else t=90; fi; }
+}
 
 check() {
-    cdev=$1 ctgt=$2 cfs=$3 cspec=$4
+    cdev=$1 ctgt=$2 cfs=$3 res=$4
     [ "$fsck_mode" = skip ] && return 0
-    if prechecked "$cspec"; then
-        res=$fsck_dir/$(fkey "$cspec")
+    if [ -n "$res" ] && [ -f "$res" ]; then
         rc=$(head -n1 "$res") out=$(tail -n +2 "$res")
     else
         run_fsck "$cdev" "$ctgt" "$cfs"
@@ -157,10 +174,8 @@ check() {
     [ $nofail = 1 ] && { fail "$ctgt: fsck $cdev failed ($rc), not mounted"; return 1; }
     rescue "$ctgt: fsck $cdev found errors it could not fix ($rc)" "$cdev"
     mounted "$ctgt" && { log "$ctgt mounted in the rescue shell"; return 1; }
-    [ "$cfs" = auto ] && cfs=$(blkid -o value -s TYPE "$cdev" 2>/dev/null)
-    f=; [ "$fsck_mode" = force ] && f=-f
-    fsck -a -T $f -t "$cfs" "$cdev" >/dev/null 2>&1; rc=$?
-    [ $rc -le 3 ] && { log "$ctgt: $cdev is clean now"; return 0; }
+    run_fsck "$cdev" "$ctgt" "$cfs"
+    { [ "$rc" = skip ] || [ $rc -le 3 ]; } && { log "$ctgt: $cdev is clean now"; return 0; }
     fail "$ctgt: fsck $cdev still fails ($rc), not mounted"; return 1
 }
 
@@ -171,11 +186,7 @@ failed=0
 do_entry() {
     spec=$1 tgt=$2 fs=$3 opts=$4 fpass=$5
     nofail=0; has_opt "$opts" nofail && nofail=1
-    raw=$(opt_val "$opts" x-systemd.device-timeout)
-    t=""
-    [ -z "$raw" ] || t=$(timeout_secs "$raw")
-    [ -n "$raw" ] && [ -z "$t" ] && log "$tgt: x-systemd.device-timeout=$raw not understood, using the default"
-    [ -n "$t" ] || { if [ $nofail = 1 ]; then t=10; else t=90; fi; }
+    entry_timeout "$opts" "$tgt"
 
     fail() {
         if [ $nofail = 1 ]; then log "$1 (nofail, continuing)"; else log "$1"; failed=1; fi
@@ -196,8 +207,12 @@ do_entry() {
         dev=$spec
     else
         start=$(now_cs)
-        if prechecked "$spec" && [ "$(head -n1 "$fsck_dir/$(fkey "$spec")")" = nodev ]; then
-            fail "$tgt: $spec not present after ${t}s"; return
+        res=; [ -z "$fsck_dir" ] || res=$fsck_dir/$(fkey "$spec")
+        # the pre-pass waited the longest timeout of any entry for this spec;
+        # a device that turned up since is checked here instead
+        if [ -n "$res" ] && [ -f "$res" ] && [ "$(head -n1 "$res")" = nodev ]; then
+            [ -n "$(resolve "$spec")" ] || { fail "$tgt: $spec not present after ${t}s"; return; }
+            rm -f "$res"
         fi
         dev=$(wait_dev "$spec" "$t") || { fail "$tgt: $spec not present after ${t}s"; return; }
         btype=$fs; [ "$fs" = auto ] && btype=$(blkid -o value -s TYPE "$dev" 2>/dev/null)
@@ -205,7 +220,7 @@ do_entry() {
             dl=0; [ "$t" -ne 0 ] && dl=$((start + t * 100))
             btrfs_wait "$dev" "$dl" "$opts" || log "$tgt: btrfs on $dev: not all devices present after ${t}s, mounting anyway"
         fi
-        [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "${btype:-$fs}" "$spec" || return
+        [ "${fpass:-0}" = 0 ] || [ "$fs" = none ] || check "$dev" "$tgt" "${btype:-$fs}" "$res" || return
     fi
     mkdir -p "$tgt"
     case "$fs" in auto|none) set -- ;; *) set -- -t "$fs" ;; esac
@@ -238,7 +253,8 @@ tab=$(printf '\t')
 # still comes one at a time. File specs (a loop image on a filesystem this run
 # mounts) are left to the mount loop.
 fsck_dir=
-[ "$fsck_mode" = skip ] || fsck_dir=$(mktemp -d "${TMPDIR:-/run}/schema-fsck.XXXXXX" 2>/dev/null) || fsck_dir=
+# /run, not $TMPDIR: /tmp may be an fstab entry this run mounts over
+[ "$fsck_mode" = skip ] || fsck_dir=$(mktemp -d "${SCHEMA_RUN:-/run}/schema-fsck.XXXXXX" 2>/dev/null) || fsck_dir=
 if [ -n "$fsck_dir" ]; then
     jobs=" "
     while IFS=$tab read -r pass depth spec tgt fs opts fpass; do
@@ -250,12 +266,22 @@ if [ -n "$fsck_dir" ]; then
         case "$jobs" in *" $k "*) continue ;; esac
         mounted "$tgt" && continue
         jobs="$jobs$k "
-        t=$(timeout_secs "$(opt_val "$opts" x-systemd.device-timeout)")
-        [ -n "$t" ] || { if has_opt "$opts" nofail; then t=10; else t=90; fi; }
+        # the longest timeout of any entry naming this spec; 0 is no limit
+        tmax=-1
+        while IFS=$tab read -r _ _ s2 _ _ o2 _; do
+            [ "$s2" = "$spec" ] || continue
+            entry_timeout "$o2" ""
+            if [ "$t" = 0 ] || [ "$tmax" = 0 ]; then tmax=0; elif [ "$t" -gt "$tmax" ]; then tmax=$t; fi
+        done <<EOT
+$rows
+EOT
         (
-            if dev=$(wait_dev "$spec" "$t"); then
+            if dev=$(wait_dev "$spec" "$tmax"); then
                 btype=$fs; [ "$fs" = auto ] && btype=$(blkid -o value -s TYPE "$dev" 2>/dev/null)
+                lk=$fsck_dir/lock-$(lock_key "$dev")
+                until mkdir "$lk" 2>/dev/null; do sleep 0.1; done
                 run_fsck "$dev" "$tgt" "${btype:-$fs}"
+                rmdir "$lk"
                 printf '%s\n%s\n' "$rc" "$out" > "$fsck_dir/$k.tmp"
             else
                 printf 'nodev\n' > "$fsck_dir/$k.tmp"
