@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <limits.h>
+#include <unistd.h>
 
 static void test_pid1_defaults(void) {
     assert(!strcmp(engine_paths.ctl_fallback, "./run/schema-init.sock"));
@@ -115,7 +117,46 @@ static void test_proc_stat_is_user(void) {
     assert(!proc_stat_is_user("garbage"));
 }
 
+static void touch(const char *dir, const char *name) {
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    FILE *f = fopen(p, "w");
+    assert(f);
+    fclose(f);
+}
+
+/* /usr/lib/modules-load.d is read too, with systemd's override and mask rules */
+static void test_modload_conf_list(void) {
+    char base[] = "/tmp/schema-modload-XXXXXX", etc[64], lib[64], nul[128], gone[64];
+    static char out[8][PATH_MAX];
+    assert(mkdtemp(base));
+    snprintf(etc, sizeof etc, "%s/etc", base);
+    snprintf(lib, sizeof lib, "%s/lib", base);
+    snprintf(gone, sizeof gone, "%s/missing", base);
+    assert(mkdir(etc, 0755) == 0 && mkdir(lib, 0755) == 0);
+    touch(etc, "x.conf");
+    touch(lib, "x.conf");
+    touch(lib, "a.conf");
+    touch(lib, "z.conf");
+    touch(lib, "m.conf");
+    touch(lib, "notes.txt");
+    snprintf(nul, sizeof nul, "%s/m.conf", etc);
+    assert(symlink("/dev/null", nul) == 0);
+    const char *dirs[] = { etc, gone, lib, NULL };
+    int n = modload_conf_list(dirs, out, 8);
+    char want[3][128];
+    snprintf(want[0], sizeof want[0], "%s/a.conf", lib);
+    snprintf(want[1], sizeof want[1], "%s/x.conf", etc);
+    snprintf(want[2], sizeof want[2], "%s/z.conf", lib);
+    assert(n == 3);
+    for (int i = 0; i < 3; i++) assert(!strcmp(out[i], want[i]));
+    assert(modload_conf_list(dirs, out, 2) == 2);
+    const char *none[] = { gone, NULL };
+    assert(modload_conf_list(none, out, 8) == 0);
+}
+
 int main(void) {
+    test_modload_conf_list();
     test_watchdog_opt_in();
     test_proc_stat_is_user();
     test_pid1_defaults();

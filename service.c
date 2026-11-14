@@ -20,6 +20,7 @@ int fdstore_n, fdstore_cap;
 #include <errno.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <dirent.h>
 #include <time.h>
 #include <signal.h>
@@ -490,6 +491,40 @@ int hardening_default_resolve(const char *cmdline, const char *file) {
     size_t n = strlen(file);
     while (n && isspace((unsigned char)file[n - 1])) n--;
     return n == 2 && strncmp(file, "on", 2) == 0;
+}
+
+static int modload_cmp(const void *a, const void *b) {
+    const char *x = *(const char *const *)a, *y = *(const char *const *)b;
+    int c = strcmp(strrchr(x, '/'), strrchr(y, '/'));
+    return c ? c : (x < y ? -1 : x > y);
+}
+
+int modload_conf_list(const char *const *dirs, char (*out)[PATH_MAX], int max) {
+    static char all[MODLOAD_CONF_MAX][PATH_MAX];
+    static const char *ord[MODLOAD_CONF_MAX];
+    int n = 0, k = 0;
+    for (int d = 0; dirs[d]; d++) {
+        char pat[PATH_MAX];
+        glob_t g;
+        snprintf(pat, sizeof pat, "%s/*.conf", dirs[d]);
+        if (glob(pat, 0, NULL, &g) != 0) continue;
+        for (size_t i = 0; i < g.gl_pathc && n < MODLOAD_CONF_MAX; i++) {
+            snprintf(all[n], sizeof all[n], "%s", g.gl_pathv[i]);
+            ord[n] = all[n];
+            n++;
+        }
+        globfree(&g);
+    }
+    /* stable on directory order: all[] is filled dir by dir, and ties break on address */
+    qsort(ord, n, sizeof ord[0], modload_cmp);
+    for (int i = 0; i < n && k < max; i++) {
+        struct stat st;
+        if (i && !strcmp(strrchr(ord[i], '/'), strrchr(ord[i - 1], '/'))) continue;
+        if (stat(ord[i], &st) == 0 && S_ISCHR(st.st_mode) && st.st_rdev == makedev(1, 3)) continue;
+        snprintf(out[k], sizeof out[k], "%s", ord[i]);
+        k++;
+    }
+    return k;
 }
 
 const char *watchdog_arm_reason(const char *cmdline, int conf_present,

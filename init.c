@@ -133,7 +133,8 @@ static void load_watchdog_module(void) {
 }
 
 /* systemd-modules-load parity: every module named in the
- * /etc/modules-load.d/ drop-ins (*.conf, one module per line; blanks and
+ * modules-load.d drop-ins (*.conf in /etc, /run, /usr/local/lib, /usr/lib,
+ * /lib, read in systemd's order; one module per line; blanks and
  * '#'/';' comments ignored) goes to one `modprobe -a -b` child, started early
  * so it loads while the .svc files parse; modules_wait() holds the first
  * spawn for it, since a service may need one (sysctl after br_netfilter,
@@ -146,10 +147,13 @@ static void load_configured_modules(void) {
     static char names[MODLOAD_MAX][256];
     char *argv[MODLOAD_MAX + 4] = { "modprobe", "-a", "-b" };
     int n = 0, full = 0;
-    glob_t g;
-    if (glob("/etc/modules-load.d/*.conf", 0, NULL, &g) != 0) return;
-    for (size_t i = 0; i < g.gl_pathc && !full; i++) {
-        FILE *f = fopen(g.gl_pathv[i], "r");
+    static const char *const dirs[] = {
+        "/etc/modules-load.d", "/run/modules-load.d", "/usr/local/lib/modules-load.d",
+        "/usr/lib/modules-load.d", "/lib/modules-load.d", NULL };
+    static char confs[MODLOAD_CONF_MAX][PATH_MAX];
+    int nc = modload_conf_list(dirs, confs, MODLOAD_CONF_MAX);
+    for (int i = 0; i < nc && !full; i++) {
+        FILE *f = fopen(confs[i], "r");
         if (!f) continue;
         char line[256];
         int r;
@@ -157,7 +161,7 @@ static void load_configured_modules(void) {
             char *p = line;
             if (r < 0) {
                 printf("[schema-init] %s: line longer than %zu bytes — ignored\n",
-                       g.gl_pathv[i], sizeof line - 1);
+                       confs[i], sizeof line - 1);
                 continue;
             }
             while (*p == ' ' || *p == '\t') p++;
@@ -175,7 +179,6 @@ static void load_configured_modules(void) {
         }
         fclose(f);
     }
-    globfree(&g);
     if (!n) return;
     modload_pid = fork();
     if (modload_pid == 0) {
