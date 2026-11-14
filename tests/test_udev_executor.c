@@ -6,6 +6,10 @@
 #include <unistd.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <errno.h>
+#include <time.h>
 
 static void ue_set(struct uevent *ev, const char *k, const char *v) {
     safe_copy(ev->key[ev->n], k, UE_KEY_MAX);
@@ -13,7 +17,38 @@ static void ue_set(struct uevent *ev, const char *k, const char *v) {
     ev->n++;
 }
 
+#if UDEV_EXEC_TIMEOUT == 1
+static double now_s(void) {
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+
+/* audit 3.3: helpers are bounded and their wait is too */
+static void helper_timeouts(void) {
+    char out[64];
+    double t0 = now_s();
+    assert(udev_run_capture("/bin/sleep 5", out, sizeof out) == -1);
+    assert(now_s() - t0 < 3);
+
+    pid_t p = fork();
+    if (p == 0) { execl("/bin/sleep", "sleep", "5", (char *)NULL); _exit(127); }
+    t0 = now_s();
+    assert(udev_wait_child(p, 1, "sleep 5") == -1);
+    assert(now_s() - t0 < 3);
+    assert(kill(p, 0) == -1 && errno == ESRCH);
+
+    p = fork();
+    if (p == 0) _exit(7);
+    assert(udev_wait_child(p, 1, "x") == 7);
+    printf("test_udev_executor: helper timeouts OK\n");
+}
+#endif
+
 int main(void) {
+#if UDEV_EXEC_TIMEOUT == 1
+    helper_timeouts();
+    return 0;
+#endif
     struct uevent ev; memset(&ev, 0, sizeof ev);
     ue_set(&ev, "ACTION", "add");
     ue_set(&ev, "DEVPATH", "/devices/x");

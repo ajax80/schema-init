@@ -102,7 +102,7 @@ schema-journal-sink: schema-journal-sink.c
 schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
-schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h
+schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h udev_sched.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lacl
 
 parity: tools/udev-parity.c udev-parity.h udev_db.h udev_rules.h udev_builtins.h hwdb.h ata_id.h v4l_id.h cdrom_id.h optical_fs.h schema-udev.h fido_id.h
@@ -337,8 +337,10 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_libudev_frame.c -o $(TESTDIR)/libudev && $(TESTDIR)/libudev
 	$(CC) $(CFLAGS) tests/test_udev_db.c -o $(TESTDIR)/udevdb && $(TESTDIR)/udevdb
 	$(CC) $(CFLAGS) tests/test_udev_ruleset.c -o $(TESTDIR)/ruleset && $(TESTDIR)/ruleset
+	$(CC) $(CFLAGS) tests/test_udev_sched.c -o $(TESTDIR)/udev-sched && $(TESTDIR)/udev-sched
 	$(CC) $(CFLAGS) tests/test_udev_matcher.c -o $(TESTDIR)/matcher && $(TESTDIR)/matcher
 	$(CC) $(CFLAGS) tests/test_udev_executor.c -o $(TESTDIR)/executor && $(TESTDIR)/executor
+	$(CC) $(CFLAGS) -DUDEV_EXEC_TIMEOUT=1 tests/test_udev_executor.c -o $(TESTDIR)/executor-t1 && $(TESTDIR)/executor-t1
 	$(CC) $(CFLAGS) tests/test_udev_r4a.c -o $(TESTDIR)/r4a && $(TESTDIR)/r4a
 	$(CC) $(CFLAGS) tests/test_udev_r4b.c -o $(TESTDIR)/r4b && $(TESTDIR)/r4b
 	$(CC) $(CFLAGS) tests/test_parity.c -o $(TESTDIR)/parity && $(TESTDIR)/parity

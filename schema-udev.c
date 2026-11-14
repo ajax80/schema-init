@@ -1,5 +1,7 @@
 /* schema-udev — native uevent -> schema rule -> action daemon (Phase 1).
  * Listens on the kernel uevent netlink (group 1), alongside systemd-udevd. */
+#include <sys/un.h>
+#include <sys/file.h>
 #include "schema-udev.h"
 #include "udev_builtins.h"
 #include "udev_rules.h"
@@ -8,6 +10,7 @@
 #include "disk_links.h"
 #include "uaccess.h"
 #include "udev_exec.h"
+#include "udev_sched.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -137,7 +140,24 @@ static void export_scrubbed_env(const struct uevent *ev) {
  * argv exec, not a shell; output discarded; children reaped by the SIGCHLD
  * drain). RUN{builtin} kmod load invokes modprobe for MODALIAS or explicit modules;
  * other builtins (uaccess) are handled natively elsewhere. */
-static void run_ctx_runs(const struct dev_ctx *rc) {
+/* Coldplug runs events inline with fire-and-forget RUN, as before; a live
+ * worker waits for each RUN (udevd parity), bounded per helper. */
+enum dispatch_mode { DISPATCH_INLINE, DISPATCH_WORKER };
+
+/* Workers run concurrently: the claims registry, uaccess state and legacy
+ * .dev symlinks are shared between devices. -1 = proceed unlocked. */
+#define UDEV_LINKS_LOCK   "/run/schema-udev-links.lock"
+#define UDEV_UACCESS_LOCK SCHEMA_UDEV_READY_DIR "/uaccess.lock"
+static int udev_lock(const char *path) {
+    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) return -1;
+    while (flock(fd, LOCK_EX) < 0)
+        if (errno != EINTR) { close(fd); return -1; }
+    return fd;
+}
+static void udev_unlock(int fd) { if (fd >= 0) close(fd); }
+
+static void run_ctx_runs(const struct dev_ctx *rc, enum dispatch_mode mode) {
     for (int i = 0; i < rc->nruns; i++) {
         char store[32][UE_VAL_MAX]; char *argv[33];
         int argc = udev_argv_split(rc->runs[i], store, argv, 32);
@@ -182,6 +202,7 @@ static void run_ctx_runs(const struct dev_ctx *rc) {
                     }
                     _exit(127);
                 }
+                if (mode == DISPATCH_WORKER) udev_wait_child(pid, UDEV_EXEC_TIMEOUT, rc->runs[i]);
             }
             continue;
         }
@@ -202,6 +223,7 @@ static void run_ctx_runs(const struct dev_ctx *rc) {
             execvp(argv[0], argv);
             _exit(127);
         }
+        if (mode == DISPATCH_WORKER) udev_wait_child(pid, UDEV_EXEC_TIMEOUT, rc->runs[i]);
     }
 }
 
@@ -215,8 +237,12 @@ static struct ruleset g_ruleset;
 static const char *const RULE_DIRS[] = {
     "/usr/lib/udev/rules.d", "/run/udev/rules.d", "/etc/udev/rules.d" };
 
+static const char *g_test_rules;   /* SCHEMA_UDEV_TEST_RULES: the only rules dir */
 static void ruleset_reload(void) {
-    if (ruleset_reload_swap(&g_ruleset, RULE_DIRS, 3) != 0) {
+    const char *const *dirs = RULE_DIRS;
+    int nd = 3;
+    if (g_test_rules) { dirs = &g_test_rules; nd = 1; }
+    if (ruleset_reload_swap(&g_ruleset, dirs, nd) != 0) {
         fprintf(stderr, "[schema-udev] rules reload failed or came back empty — keeping the %d loaded rule(s); "
                 "restart schema-udev to load an intentionally emptied set\n", g_ruleset.n);
         return;
@@ -287,9 +313,12 @@ static void net_rename(struct uevent *ev, struct uevent *orig, const char *newna
     }
 }
 
-static void dispatch(struct uevent *ev) {
+static int g_feed;   /* SCHEMA_UDEV_TEST_FEED in use */
+static void dispatch(struct uevent *ev, enum dispatch_mode mode) {
     const char *action = uevent_get(ev, "ACTION");
     if (!action) return;
+    struct uevent shadow_ev;
+    int bcast = 0;
     const char *devpath = uevent_get(ev, "DEVPATH");
     int kernel_n = ev->n;
     if (devpath) {
@@ -307,7 +336,7 @@ static void dispatch(struct uevent *ev) {
                 for (int i = 0; i < old.n; i++)
                     if (!uevent_get(ev, old.key[i])) uevent_set(ev, old.key[i], old.val[i]);
         }
-        struct uevent shadow_ev = *ev;          /* deep copy: uevent is inline char[], no heap */
+        shadow_ev = *ev;                        /* deep copy: uevent is inline char[], no heap */
         int pre_rules_n = shadow_ev.n;
         struct dev_ctx rc;
         int ua_tagged = 0;
@@ -343,15 +372,21 @@ static void dispatch(struct uevent *ev) {
             if (g_live) {
                 node_symlink_farm(&shadow_ev, action);
                 char devid[128];
-                if (udev_db_filename(&shadow_ev, devid, sizeof devid) == 0)
+                if (udev_db_filename(&shadow_ev, devid, sizeof devid) == 0) {
+                    int lk = udev_lock(UDEV_LINKS_LOCK);
                     rule_links_update("/dev", SCHEMA_UDEV_LINK_CLAIMS, devid,
                                       uevent_get(&shadow_ev, "DEVNAME"),
                                       rc.link_priority, syms, nsyms);
+                    udev_unlock(lk);
+                }
                 if (strcmp(action, "remove") != 0) {
                     if (dn) node_apply_perms(dn, rc.owner, rc.group, rc.mode);
-                    run_ctx_runs(&rc);
+                    run_ctx_runs(&rc, mode);
                 }
-                monitor_broadcast(&shadow_ev);
+                /* announced last, once ACLs and links are in place (udevd order) */
+                bcast = 1;
+            } else if (g_feed && strcmp(action, "remove") != 0) {
+                run_ctx_runs(&rc, mode);   /* test feed: dry-run, but RUN still exercised */
             }
         }
         run_rules("/sys", devpath, dn, ev);
@@ -365,6 +400,7 @@ static void dispatch(struct uevent *ev) {
         int shadow_disk = is_block && !g_live;
         if (strcmp(action, "remove") == 0) {
             if (shadow_disk) disk_links_gc(disk_base, SCHEMA_UDEV_DB_DIR, ev);
+            int ulk = udev_lock(UDEV_UACCESS_LOCK);
             uaccess_clear(SCHEMA_UACCESS_DIR, ev);
             if (g_live) {
                 int uid = uaccess_active_uid(SEAT0_PATH);
@@ -375,14 +411,17 @@ static void dispatch(struct uevent *ev) {
                         ua_clear_node(node, uid);
                 }
             }
+            udev_unlock(ulk);
             udev_db_remove(SCHEMA_UDEV_DB_DIR, ev);
         } else {
             udev_db_write(SCHEMA_UDEV_DB_DIR, ev, kernel_n);
             if (shadow_disk && (strcmp(action, "add") == 0 || strcmp(action, "change") == 0))
                 disk_links_apply(disk_base, ev);
             if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0) {
+                int ulk = udev_lock(UDEV_UACCESS_LOCK);
                 uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev, ua_tagged);   /* audit trail */
                 if (g_live) uaccess_apply(SEAT0_PATH, ev, ua_tagged);            /* real ACL */
+                udev_unlock(ulk);
             }
         }
     }
@@ -393,13 +432,18 @@ static void dispatch(struct uevent *ev) {
         if (strcmp(action, "add") == 0 && g_rules[i].symlink[0]) {
             const char *dn = uevent_get(ev, "DEVNAME");
             if (dn) {
-                if (symlink_apply(dev_base, g_rules[i].symlink, dn) == 0) {
+                int lk = udev_lock(UDEV_LINKS_LOCK);
+                int ok = symlink_apply(dev_base, g_rules[i].symlink, dn) == 0;
+                udev_unlock(lk);
+                if (ok) {
                     fprintf(stderr, "[schema-udev] created symlink %s/%s -> %s\n",
                             dev_base, g_rules[i].symlink, dn);
                 }
             }
         } else if (strcmp(action, "remove") == 0 && g_rules[i].symlink[0]) {
+            int lk = udev_lock(UDEV_LINKS_LOCK);
             symlink_clear(dev_base, g_rules[i].symlink);
+            udev_unlock(lk);
             fprintf(stderr, "[schema-udev] removed symlink %s/%s\n",
                     dev_base, g_rules[i].symlink);
         }
@@ -415,6 +459,7 @@ static void dispatch(struct uevent *ev) {
             run_hook(hook, ev);
         }
     }
+    if (bcast) monitor_broadcast(&shadow_ev);
 }
 
 static double mono_ms(void) {
@@ -463,7 +508,7 @@ static void subsystems_coldplug(int nlfd) {
             if (uevent_parse(buf, (size_t)r, &ev) != 0) continue;
             const char *sq = uevent_get(&ev, "SEQNUM");
             if (sq) { unsigned long long v = strtoull(sq, NULL, 10); if (v > seen) seen = v; }
-            dispatch(&ev);
+            dispatch(&ev, DISPATCH_INLINE);
             handled++;
         }
     }
@@ -476,19 +521,228 @@ static void subsystems_coldplug(int nlfd) {
 
 static void coldplug_dispatch(struct uevent *ev) {
     double t0 = mono_ms();
-    dispatch(ev);
+    dispatch(ev, DISPATCH_INLINE);
     double dt = mono_ms() - t0;
     if (dt >= 50.0)
         fprintf(stderr, "[schema-udev] coldplug slow %.0fms %s\n", dt, uevent_get(ev, "DEVPATH"));
 }
 
+/* Live events run in forked workers (audit 3.3): the loop only queues
+ * datagrams, starts a worker when the event conflicts with nothing running
+ * or queued ahead of it (udev_sched.h), and kills a worker past its deadline,
+ * so one stuck device never holds up the others. */
+#define WQ_MAX     4096
+#define WQ_WINDOW  256    /* scheduling scans this many queued events at most */
+#define WORKERS_MAX 16
+
+static struct sched_meta g_qm[WQ_MAX];
+static char *g_qraw[WQ_MAX];
+static size_t g_qlen[WQ_MAX];
+static int g_qhead, g_qtail;
+
+static struct sched_meta g_rm[WORKERS_MAX];
+static struct { pid_t pid; double start_ms, deadline_ms; } g_run[WORKERS_MAX];
+static int g_nrun, g_cap = 4;
+
+static long long g_event_timeout_ms = 180000;
+static long long g_slow_ms = 1000;
+static int g_nlfd = -1, g_sfd = -1;
+static unsigned long g_qdropped;
+static double g_qdrop_logged;
+
+static void wq_push(const char *buf, size_t len) {
+    if (g_qtail == WQ_MAX && g_qhead > 0) {
+        int n = g_qtail - g_qhead;
+        memmove(g_qm, g_qm + g_qhead, n * sizeof g_qm[0]);
+        memmove(g_qraw, g_qraw + g_qhead, n * sizeof g_qraw[0]);
+        memmove(g_qlen, g_qlen + g_qhead, n * sizeof g_qlen[0]);
+        g_qhead = 0; g_qtail = n;
+    }
+    double now = mono_ms();
+    char *raw = g_qtail < WQ_MAX ? malloc(len) : NULL;
+    if (!raw) {
+        g_qdropped++;
+        if (now - g_qdrop_logged >= 1000) {
+            fprintf(stderr, "[schema-udev] event queue full (%d), dropping events (%lu dropped)\n", WQ_MAX, g_qdropped);
+            g_qdrop_logged = now;
+            g_qdropped = 0;
+        }
+        return;
+    }
+    struct uevent ev;
+    if (uevent_parse(buf, len, &ev) != 0) { free(raw); return; }
+    memcpy(raw, buf, len);
+    sched_meta_from(&ev, &g_qm[g_qtail]);
+    g_qraw[g_qtail] = raw;
+    g_qlen[g_qtail] = len;
+    g_qtail++;
+}
+
+/* drop queued entry head+i, keeping the order of the rest */
+static void wq_take(int i) {
+    memmove(g_qm + g_qhead + 1, g_qm + g_qhead, i * sizeof g_qm[0]);
+    memmove(g_qraw + g_qhead + 1, g_qraw + g_qhead, i * sizeof g_qraw[0]);
+    memmove(g_qlen + g_qhead + 1, g_qlen + g_qhead, i * sizeof g_qlen[0]);
+    g_qhead++;
+    if (g_qhead == g_qtail) g_qhead = g_qtail = 0;
+}
+
+static void worker_child(const char *raw, size_t len) {
+    sigset_t empty;
+    sigemptyset(&empty);
+    signal(SIGHUP, SIG_DFL); signal(SIGTERM, SIG_DFL);
+    signal(SIGINT, SIG_DFL); signal(SIGCHLD, SIG_DFL);
+    sigprocmask(SIG_SETMASK, &empty, NULL);
+    /* its own group, so a timeout or shutdown kill takes its helpers too */
+    setpgid(0, 0);
+    close(g_nlfd); close(g_sfd);
+    struct uevent ev;
+    if (uevent_parse(raw, len, &ev) == 0) dispatch(&ev, DISPATCH_WORKER);
+    _exit(0);
+}
+
+static void run_remove(int k) {
+    g_nrun--;
+    if (k != g_nrun) { g_rm[k] = g_rm[g_nrun]; g_run[k] = g_run[g_nrun]; }
+}
+
+/* returns 1 when something could not start for a transient reason */
+static int workers_start(void) {
+    while (g_nrun < g_cap && g_qtail > g_qhead) {
+        int nq = g_qtail - g_qhead;
+        if (nq > WQ_WINDOW) nq = WQ_WINDOW;
+        int i = sched_pick(g_qm + g_qhead, nq, g_rm, g_nrun);
+        if (i < 0) return 0;
+        int at = g_qhead + i;
+        fflush(stderr);
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "[schema-udev] worker fork: %s\n", strerror(errno));
+            return 1;
+        }
+        if (pid == 0) worker_child(g_qraw[at], g_qlen[at]);
+        setpgid(pid, pid);   /* both sides: no window where a kill(-pid) misses */
+        g_rm[g_nrun] = g_qm[at];
+        g_run[g_nrun].pid = pid;
+        g_run[g_nrun].start_ms = mono_ms();
+        g_run[g_nrun].deadline_ms = g_run[g_nrun].start_ms + (double)g_event_timeout_ms;
+        g_nrun++;
+        free(g_qraw[at]);
+        wq_take(i);
+    }
+    return 0;
+}
+
+/* Unknown pids (coldplug's fire-and-forget RUN children, hooks, a worker
+ * already given up on) are reaped silently. */
+static void workers_reap(void) {
+    int st;
+    pid_t pid;
+    while ((pid = waitpid(-1, &st, WNOHANG)) > 0) {
+        for (int k = 0; k < g_nrun; k++) {
+            if (g_run[k].pid != pid) continue;
+            double dt = mono_ms() - g_run[k].start_ms;
+            if (WIFSIGNALED(st))
+                fprintf(stderr, "[schema-udev] worker for %s %s died on signal %d\n",
+                        g_rm[k].action, g_rm[k].devpath, WTERMSIG(st));
+            else if (WEXITSTATUS(st) != 0)
+                fprintf(stderr, "[schema-udev] worker for %s %s exited %d\n",
+                        g_rm[k].action, g_rm[k].devpath, WEXITSTATUS(st));
+            if (dt >= (double)g_slow_ms)
+                fprintf(stderr, "[schema-udev] slow %.0fms %s %s\n", dt, g_rm[k].action, g_rm[k].devpath);
+            run_remove(k);
+            break;
+        }
+    }
+}
+
+/* Never waits on the killed worker: one stuck in D state would freeze the
+ * loop. Its slot is free at once; a pending SIGKILL lands before it can
+ * return to user space, and the group kill takes its helpers. */
+static void workers_expire(void) {
+    double now = mono_ms();
+    for (int k = 0; k < g_nrun; k++) {
+        if (now < g_run[k].deadline_ms) continue;
+        kill(-g_run[k].pid, SIGKILL);
+        fprintf(stderr, "[schema-udev] event TIMED OUT after %llds %s %s\n",
+                g_event_timeout_ms / 1000, g_rm[k].action, g_rm[k].devpath);
+        run_remove(k);
+        k--;
+    }
+}
+
+static int poll_timeout(int retry) {
+    if (!g_nrun) return retry ? 100 : -1;
+    double next = g_run[0].deadline_ms;
+    for (int k = 1; k < g_nrun; k++) if (g_run[k].deadline_ms < next) next = g_run[k].deadline_ms;
+    double left = next - mono_ms();
+    int ms = left <= 0 ? 0 : (int)left + 1;
+    return retry && ms > 100 ? 100 : ms;
+}
+
+static void workers_shutdown(void) {
+    for (int k = 0; k < g_nrun; k++) kill(-g_run[k].pid, SIGTERM);
+    for (int t = 0; t < 100 && g_nrun; t++) {
+        struct timespec ts = { 0, 50 * 1000000L };
+        nanosleep(&ts, NULL);
+        workers_reap();
+    }
+    for (int k = 0; k < g_nrun; k++) kill(-g_run[k].pid, SIGKILL);
+}
+
+static long long env_ll(const char *name, long long dflt) {
+    const char *v = getenv(name);
+    if (!v || !*v) return dflt;
+    char *end;
+    long long n = strtoll(v, &end, 10);
+    return *end || n < 0 ? dflt : n;
+}
+
+/* SCHEMA_UDEV_TEST_FEED: a unix datagram socket read in place of netlink,
+ * for tests/test_udev_workers.py. Never as root: a test run must not touch
+ * the real /dev or a live daemon's state. */
+static int test_feed_open(const char *path) {
+    struct sockaddr_un sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    if (strlen(path) >= sizeof sa.sun_path) return -1;
+    strcpy(sa.sun_path, path);
+    int fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0) return -1;
+    unlink(path);
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
+    return fd;
+}
+
 int main(void) {
-    int nlfd = netlink_open();
-    if (nlfd < 0) {
-        fprintf(stderr, "[schema-udev] netlink open/bind failed: %s\n", strerror(errno));
+    const char *feed = getenv("SCHEMA_UDEV_TEST_FEED");
+    g_test_rules = getenv("SCHEMA_UDEV_TEST_RULES");
+    if ((feed || g_test_rules) && geteuid() == 0) {
+        fprintf(stderr, "[schema-udev] SCHEMA_UDEV_TEST_* refused as root\n");
         return 1;
     }
+    g_event_timeout_ms = env_ll("SCHEMA_UDEV_EVENT_TIMEOUT_MS", 180000);
+    if (g_event_timeout_ms < 1000 || g_event_timeout_ms > 3600000) g_event_timeout_ms = 180000;
+    g_slow_ms = env_ll("SCHEMA_UDEV_SLOW_MS", 1000);
+    long np = sysconf(_SC_NPROCESSORS_ONLN);
+    g_cap = sched_cap(np > 0 ? np : 1);
 
+    int nlfd;
+    if (feed) {
+        g_feed = 1;
+        nlfd = test_feed_open(feed);
+        if (nlfd < 0) {
+            fprintf(stderr, "[schema-udev] test feed %s: %s\n", feed, strerror(errno));
+            return 1;
+        }
+    } else {
+        nlfd = netlink_open();
+        if (nlfd < 0) {
+            fprintf(stderr, "[schema-udev] netlink open/bind failed: %s\n", strerror(errno));
+            return 1;
+        }
+    }
+    g_nlfd = nlfd;
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGHUP);  sigaddset(&mask, SIGTERM);
@@ -496,11 +750,12 @@ int main(void) {
     sigprocmask(SIG_BLOCK, &mask, NULL);
     int sfd = signalfd(-1, &mask, SFD_CLOEXEC | SFD_NONBLOCK);
     if (sfd < 0) { fprintf(stderr, "[schema-udev] signalfd: %s\n", strerror(errno)); return 1; }
+    g_sfd = sfd;
 
     errno = 0;
     int live_rc = access(SCHEMA_UDEV_LIVE_FLAG, F_OK);
     int live_errno = errno;
-    g_live = (live_rc == 0);
+    g_live = (live_rc == 0) && !g_feed;
     {
         struct stat lst;
         int st_rc = lstat(SCHEMA_UDEV_LIVE_FLAG, &lst);
@@ -525,25 +780,36 @@ int main(void) {
 
     if (g_live) unlink(SCHEMA_UDEV_READY);
     double rl_t0 = mono_ms();
-    rules_reload();
+    if (g_feed) fprintf(stderr, "[schema-udev] test feed: legacy .dev rules skipped\n");
+    else rules_reload();
     ruleset_reload();
     double rl_t1 = mono_ms();
     disk_links_wipe(SCHEMA_UDEV_RULES_DIR);   /* reuse the generic recursive rmdir/wipe */
     disk_links_wipe(SCHEMA_DISK_DIR);
     uaccess_wipe(SCHEMA_UACCESS_DIR);
     fprintf(stderr, "[schema-udev] rules load %.0fms, wipe %.0fms\n", rl_t1 - rl_t0, mono_ms() - rl_t1);
-    if (g_live) subsystems_coldplug(nlfd);
-    fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
-    double cp_t0 = mono_ms();
-    coldplug_walk_root("/sys", coldplug_dispatch);
-    fprintf(stderr, "[schema-udev] coldplug took %.0fms\n", mono_ms() - cp_t0);
+    if (g_feed) {
+        fprintf(stderr, "[schema-udev] test feed on %s (no coldplug)\n", feed);
+    } else {
+        if (g_live) subsystems_coldplug(nlfd);
+        fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
+        double cp_t0 = mono_ms();
+        coldplug_walk_root("/sys", coldplug_dispatch);
+        fprintf(stderr, "[schema-udev] coldplug took %.0fms\n", mono_ms() - cp_t0);
+    }
     if (g_live && udev_signal_ready() == 0)
         fprintf(stderr, "[schema-udev] ready marker %s written (coldplug complete)\n", SCHEMA_UDEV_READY);
     fprintf(stderr, "[schema-udev] listening on kernel uevent netlink (group 1)\n");
 
+    fprintf(stderr, "[schema-udev] hotplug workers: up to %d, event deadline %llds\n",
+            g_cap, g_event_timeout_ms / 1000);
     struct pollfd pfd[2] = { { nlfd, POLLIN, 0 }, { sfd, POLLIN, 0 } };
-    for (;;) {
-        if (poll(pfd, 2, -1) < 0) { if (errno == EINTR) continue; break; }
+    int retry = 0, quit = 0;
+    while (!quit) {
+        if (poll(pfd, 2, poll_timeout(retry)) < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
 
         if ((pfd[0].revents | pfd[1].revents) & (POLLERR | POLLHUP | POLLNVAL)) {
             fprintf(stderr, "[schema-udev] poll error on fd, exiting\n");
@@ -552,12 +818,11 @@ int main(void) {
 
         if (pfd[1].revents & POLLIN) {
             struct signalfd_siginfo si;
-            int quit = 0;
             while (read(sfd, &si, sizeof si) == (ssize_t)sizeof si) {
                 if (si.ssi_signo == SIGCHLD) {
-                    while (waitpid(-1, NULL, WNOHANG) > 0) ;   /* drain all */
+                    workers_reap();
                 } else if (si.ssi_signo == SIGHUP) {
-                    rules_reload();
+                    if (!g_feed) rules_reload();
                     ruleset_reload();
                 } else {
                     quit = 1;   /* TERM / INT */
@@ -569,7 +834,8 @@ int main(void) {
         if (pfd[0].revents & POLLIN) {
             for (;;) {
                 char buf[8192];
-                ssize_t n = netlink_recv(nlfd, buf, sizeof buf);
+                ssize_t n = g_feed ? recv(nlfd, buf, sizeof buf, MSG_DONTWAIT)
+                                   : netlink_recv(nlfd, buf, sizeof buf);
                 if (n < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                     if (errno == ENOBUFS) {
@@ -580,12 +846,15 @@ int main(void) {
                     if (errno == 0) continue;   /* spoofed datagram skipped */
                     break;
                 }
-                struct uevent ev;
-                if (uevent_parse(buf, (size_t)n, &ev) != 0) continue;
-                dispatch(&ev);
+                wq_push(buf, (size_t)n);
             }
         }
+
+        workers_reap();
+        workers_expire();
+        retry = workers_start();
     }
+    workers_shutdown();
     fprintf(stderr, "[schema-udev] shutting down\n");
     close(nlfd); close(sfd);
     return 0;
