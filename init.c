@@ -133,8 +133,9 @@ static void load_watchdog_module(void) {
 }
 
 /* systemd-modules-load parity: every module named in the
- * modules-load.d drop-ins (*.conf in /etc, /run, /usr/local/lib, /usr/lib,
- * /lib, read in systemd's order; one module per line; blanks and
+ * kernel command line's modules_load= and the modules-load.d drop-ins
+ * (*.conf in /etc, /run, /usr/local/lib, /usr/lib, /lib, read in systemd's
+ * order; one module per line; blanks and
  * '#'/';' comments ignored) goes to one `modprobe -a -b` child, started early
  * so it loads while the .svc files parse; modules_wait() holds the first
  * spawn for it, since a service may need one (sysctl after br_netfilter,
@@ -150,8 +151,15 @@ static void load_configured_modules(void) {
     static const char *const dirs[] = {
         "/etc/modules-load.d", "/run/modules-load.d", "/usr/local/lib/modules-load.d",
         "/usr/lib/modules-load.d", "/lib/modules-load.d", NULL };
-    static char confs[MODLOAD_CONF_MAX][PATH_MAX];
-    int nc = modload_conf_list(dirs, confs, MODLOAD_CONF_MAX);
+    const char *confs[MODLOAD_CONF_MAX];
+    char cl[4096] = "";
+    int dropped, nc = modload_conf_list(dirs, confs, MODLOAD_CONF_MAX, &dropped);
+    if (dropped)
+        printf("[schema-init] modules-load.d: more than %d drop-ins, %d ignored\n", MODLOAD_CONF_MAX, dropped);
+    int fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) { ssize_t r = read(fd, cl, sizeof(cl) - 1); if (r > 0) cl[r] = '\0'; close(fd); }
+    n = cmdline_modules_load(cl, names, MODLOAD_MAX);
+    for (int i = 0; i < n; i++) argv[3 + i] = names[i];
     for (int i = 0; i < nc && !full; i++) {
         FILE *f = fopen(confs[i], "r");
         if (!f) continue;
