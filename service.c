@@ -1830,6 +1830,7 @@ int service_spawn(service_t *svc) {
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
     svc->wd_fired = 0;
+    svc->kill_sent = (struct timespec){0, 0};
     if (!svc->boot_spawn.tv_sec && !svc->boot_spawn.tv_nsec)
         svc->boot_spawn = svc->spawn_time_mono;
     svc->last_pet   = svc->spawn_time_mono;
@@ -2432,6 +2433,12 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     } else if (strcmp(key, "reload_signal") == 0) {
         svc->reload_signal = 0;
         svc->reload_signal_set = 0;
+    } else if (strcmp(key, "kill_mode") == 0) {
+        svc->kill_mode = KILL_MODE_DEFAULT;
+    } else if (strcmp(key, "kill_signal") == 0) {
+        svc->kill_signal = 0;
+    } else if (strcmp(key, "final_kill_signal") == 0) {
+        svc->final_kill_signal = 0;
     } else if (strcmp(key, "restart") == 0) {
         svc->restart_policy = RESTART_ALWAYS;
         svc->flags &= ~SVC_NO_RESTART;
@@ -2556,6 +2563,18 @@ static int svc_signal_name(const char *v) {
     for (size_t i = 0; i < sizeof t / sizeof t[0]; i++)
         if (strcasecmp(v, t[i].n) == 0) return t[i].s;
     return 0;
+}
+
+/* kill_signal= / final_kill_signal=: any name or 1-64 but STOP, which would
+ * only pause it */
+static int svc_any_signal_parse(const char *v) {
+    while (*v == ' ' || *v == '\t') v++;
+    if (*v >= '0' && *v <= '9') {
+        char *end;
+        long n = strtol(v, &end, 10);
+        return *end || n < 1 || n > 64 || n == SIGSTOP ? 0 : (int)n;
+    }
+    return svc_signal_name(v);
 }
 
 static int svc_reload_signal_parse(const char *v) {
@@ -2754,6 +2773,24 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                     svc->name[0] ? svc->name : path, line, val);
             return -1;
         }
+    } else if (strcmp(line, "kill_mode") == 0) {
+        if (!strcmp(val, "control-group") || !strcmp(val, "cgroup")) svc->kill_mode = KILL_MODE_CGROUP;
+        else if (!strcmp(val, "mixed")) svc->kill_mode = KILL_MODE_MIXED;
+        else if (!strcmp(val, "process")) svc->kill_mode = KILL_MODE_PROCESS;
+        else {
+            fprintf(stderr, "[schema-init] %s: kill_mode=%s is not control-group, mixed or process\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+    } else if (strcmp(line, "kill_signal") == 0 || strcmp(line, "final_kill_signal") == 0) {
+        int sig = svc_any_signal_parse(val);
+        if (sig <= 0) {
+            fprintf(stderr, "[schema-init] %s: %s=%s is not a signal (TERM, SIGINT, 9, ...)\n",
+                    svc->name[0] ? svc->name : path, line, val);
+            return -1;
+        }
+        if (line[0] == 'k') svc->kill_signal = sig;
+        else svc->final_kill_signal = sig;
     } else if (strcmp(line, "reload") == 0) {
         /* the systemd1 shim's older opt-in: reload means SIGHUP */
         if (!svc->reload_signal_set) svc->reload_signal = atoi(val) == 1 || strcmp(val, "yes") == 0 ? SIGHUP : 0;

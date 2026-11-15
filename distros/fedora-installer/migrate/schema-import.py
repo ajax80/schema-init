@@ -1618,6 +1618,24 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         rsec = _timespan_sec(_get_last(svc, "RestartSec"))
         if rsec:
             lines.append("restart_sec=%d" % min(rsec, 3600))
+    # KillMode= (audit 4.3): unset keeps schema-init's own stop; explicit values map
+    km = _get_last(svc, "KillMode").lower()
+    if km in ("control-group", "mixed", "process"):
+        lines.append("kill_mode=%s" % km)
+    elif km == "none":
+        restart_warns.append("KillMode=none mapped to kill_mode=process (the main process still gets the stop signal)")
+        lines.append("kill_mode=process")
+    elif km:
+        restart_warns.append("KillMode=%s dropped: not a KillMode= value" % km)
+    for key, out_key in (("KillSignal", "kill_signal"), ("FinalKillSignal", "final_kill_signal")):
+        v = _get_last(svc, key)
+        if not v:
+            continue
+        u = v.upper()
+        if v.isdigit() or (u[3:] if u.startswith("SIG") else u) in _EXIT_SIGS:
+            lines.append("%s=%s" % (out_key, v))
+        else:
+            restart_warns.append("%s=%s dropped: not a signal schema-init knows" % (key, v))
     for key, out_key in (("SuccessExitStatus", "success_exit_status"),
                          ("RestartPreventExitStatus", "restart_prevent_exit_status")):
         toks = " ".join(_get_all(svc, key)).split()

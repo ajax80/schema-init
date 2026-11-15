@@ -513,6 +513,10 @@ typedef struct {
     uint8_t          prevent_codes[256 / 8];   /* restart_prevent_exit_status= */
     uint64_t         prevent_sigs;
     uint8_t          wd_fired;         /* watchdog SIGABRT sent this run: its death is a watchdog death */
+    uint8_t          kill_mode;        /* kill_mode= (KILL_MODE_*); DEFAULT keeps the pre-4.3 behaviour */
+    int              kill_signal;      /* kill_signal=, 0 = SIGTERM */
+    int              final_kill_signal;/* final_kill_signal=, 0 = SIGKILL */
+    struct timespec  kill_sent;        /* when a schema-ctl stop/restart signalled it; 0 = not waiting */
     char             bind_name[64];    /* bind=: stop with it, start again with it; also a dep */
     uint8_t          bind_held;        /* stopped because its bound went down; restarts with it */
     uint8_t          bind_was_up;      /* this service was up at the last tick's tail (edge detection) */
@@ -522,7 +526,7 @@ typedef struct {
     int              bind_saved_restarts; /* restart_count before that exit, restored on reclassify */
     uint8_t          bind_saved_dormant;  /* dormant_count likewise */
     int              start_timeout_sec;  /* kill if not promoted by spawn+N; -1=unset, 0=off */
-    int              stop_timeout_sec;   /* shutdown SIGTERM->SIGKILL grace; 0 = default */
+    int              stop_timeout_sec;   /* stop grace before final_kill_signal; 0 = default (3 s shutdown, 90 s runtime) */
     struct timespec  spawn_time_mono;    /* CLOCK_MONOTONIC when spawned                    */
     struct timespec  boot_spawn;         /* first spawn since PID 1 started (analyze)       */
     struct timespec  boot_ready;         /* first FUNDAMENTAL/PERFECT since PID 1 started   */
@@ -573,6 +577,10 @@ pid_t service_card_spawn(const service_t *svc, int idx);
 /* one child running PHASE's commands in order (1 exec_stop, 2 exec_stop_post,
  * 3 both); exits non-zero when a command without '-' fails */
 pid_t service_stop_spawn(const service_t *svc, int phase);
+
+/* kill_mode= (systemd KillMode=). DEFAULT: a stop signals the main process
+ * and sweeps the rest once it is gone; shutdown signals them all */
+enum { KILL_MODE_DEFAULT, KILL_MODE_CGROUP, KILL_MODE_MIXED, KILL_MODE_PROCESS };
 
 /* restart= (systemd Restart=); ALWAYS = 0 is the default, today's behaviour */
 enum { RESTART_ALWAYS, RESTART_NO, RESTART_ON_SUCCESS, RESTART_ON_FAILURE,
