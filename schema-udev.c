@@ -144,6 +144,20 @@ static void export_scrubbed_env(const struct uevent *ev) {
  * worker waits for each RUN (udevd parity), bounded per helper. */
 enum dispatch_mode { DISPATCH_INLINE, DISPATCH_WORKER };
 
+/* SCHEMA_UDEV_RUN_OUTPUT=1 keeps RUN helpers' stdout/stderr in udevd.log;
+ * udevd only debug-logs it, and stock rules chatter every boot (pktsetup
+ * with no pktcdvd since 6.10, hdparm APM lines). */
+static int g_run_output;
+
+static void devnull_stdio(void) {
+    int devnull = open("/dev/null", O_RDWR);
+    if (devnull < 0) return;
+    dup2(devnull, STDIN_FILENO);
+    dup2(devnull, STDOUT_FILENO);
+    dup2(devnull, STDERR_FILENO);
+    if (devnull > STDERR_FILENO) close(devnull);
+}
+
 /* Workers run concurrently: the claims registry, uaccess state and legacy
  * .dev symlinks are shared between devices. -1 = proceed unlocked. */
 #define UDEV_LINKS_LOCK   "/run/schema-udev-links.lock"
@@ -170,13 +184,7 @@ static void run_ctx_runs(const struct dev_ctx *rc, enum dispatch_mode mode) {
                 if (pid == 0) {
                     sigset_t empty; sigemptyset(&empty);
                     sigprocmask(SIG_SETMASK, &empty, NULL);
-                    int devnull = open("/dev/null", O_RDWR);
-                    if (devnull >= 0) {
-                        dup2(devnull, STDIN_FILENO);
-                        dup2(devnull, STDOUT_FILENO);
-                        dup2(devnull, STDERR_FILENO);
-                        if (devnull > STDERR_FILENO) close(devnull);
-                    }
+                    devnull_stdio();
                     if (argc > 2) {
                         char *margv[37];
                         margv[0] = "modprobe";
@@ -215,6 +223,7 @@ static void run_ctx_runs(const struct dev_ctx *rc, enum dispatch_mode mode) {
             sigset_t empty; sigemptyset(&empty);
             sigprocmask(SIG_SETMASK, &empty, NULL);
             export_scrubbed_env(rc->ev);
+            if (!g_run_output) devnull_stdio();
             if (!strchr(argv[0], '/')) {
                 char lp[512];
                 snprintf(lp, sizeof lp, "/usr/lib/udev/%s", argv[0]);
@@ -724,6 +733,7 @@ int main(void) {
     g_event_timeout_ms = env_ll("SCHEMA_UDEV_EVENT_TIMEOUT_MS", 180000);
     if (g_event_timeout_ms < 1000 || g_event_timeout_ms > 3600000) g_event_timeout_ms = 180000;
     g_slow_ms = env_ll("SCHEMA_UDEV_SLOW_MS", 1000);
+    g_run_output = env_ll("SCHEMA_UDEV_RUN_OUTPUT", 0) != 0;
     long np = sysconf(_SC_NPROCESSORS_ONLN);
     g_cap = sched_cap(np > 0 ? np : 1);
 
