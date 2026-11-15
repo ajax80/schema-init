@@ -801,6 +801,13 @@ static void bind_snapshot_up(void) {
     }
 }
 
+/* SIGTERM, or "signal 37" for one with no short name */
+static void sig_text(int sig, char *buf, size_t n) {
+    const char *ab = sig_abbrev(sig);
+    if (ab) snprintf(buf, n, "SIG%s", ab);
+    else snprintf(buf, n, "signal %d", sig);
+}
+
 static int kill_sig(const service_t *s) { return s->kill_signal ? s->kill_signal : SIGTERM; }
 static int final_sig(const service_t *s) { return s->final_kill_signal ? s->final_kill_signal : SIGKILL; }
 
@@ -808,12 +815,22 @@ static int final_sig(const service_t *s) { return s->final_kill_signal ? s->fina
  * else systemd's TimeoutStopSec default (shutdown keeps its own 3 s grace) */
 #define RUNTIME_STOP_GRACE_MS 90000
 
-/* kill_signal= to the whole cgroup under control-group, else the main process */
+static uint64_t runtime_stop_grace_ms(const service_t *svc) {
+    return svc->stop_timeout_sec ? (uint64_t)svc->stop_timeout_sec * 1000 : RUNTIME_STOP_GRACE_MS;
+}
+
+static int kill_sent_set(const service_t *svc) {
+    return svc->kill_sent.tv_sec || svc->kill_sent.tv_nsec;
+}
+
+/* kill_signal= to the whole cgroup under control-group, else the main
+ * process. The escalation deadline runs from the first signal: a repeated
+ * stop doesn't push it back. */
 static void stop_signal(service_t *svc) {
     if (svc->child_pid <= 0) return;
     if (svc->kill_mode == KILL_MODE_CGROUP) svc_signal_all(svc, kill_sig(svc));
     else kill(svc->child_pid, kill_sig(svc));
-    clock_gettime(CLOCK_MONOTONIC, &svc->kill_sent);
+    if (!kill_sent_set(svc)) clock_gettime(CLOCK_MONOTONIC, &svc->kill_sent);
 }
 
 /* final_kill_signal=: the main process under process, else everything */
@@ -826,6 +843,28 @@ static void final_signal(service_t *svc) {
         if (svc->child_pid > 0) kill(svc->child_pid, SIGKILL);
     } else {
         svc_signal_all(svc, sig);
+    }
+}
+
+/* What the main process left when it went, by kill_mode: unset sweeps it
+ * (SIGKILL), mixed sends final_kill_signal, process leaves it, and
+ * control-group leaves a stop's TERMed rest its grace (kill_sent stays set:
+ * the escalation check sends final_kill_signal at the deadline, and a
+ * respawn waits for the cgroup to drain). 1 = still draining. */
+static int sweep_rest(service_t *svc) {
+    switch (svc->kill_mode) {
+    case KILL_MODE_PROCESS:
+        return 0;
+    case KILL_MODE_MIXED:
+        final_signal(svc);
+        return 0;
+    case KILL_MODE_CGROUP:
+        if (kill_sent_set(svc) && svc_signal_all(svc, 0) > 0) return 1;
+        svc_cgroup_kill_tree(svc);
+        return 0;
+    default:
+        svc_cgroup_kill_tree(svc);
+        return 0;
     }
 }
 
@@ -1034,7 +1073,6 @@ static void reap(void) {
 
             services[i].last_pid   = pid;
             services[i].child_pid  = 0;
-            services[i].kill_sent  = (struct timespec){0, 0};
             note_exit(&services[i], status);
 
             /* bind=: an exit while its bound is down or stopping is the bound's
@@ -1059,7 +1097,7 @@ static void reap(void) {
                 services[i].inst.state = STATE_EXCISED;
                 services[i].excise_reason = EXC_BIND;
                 services[i].main_wait = 0;
-                svc_cgroup_kill_tree(&services[i]);
+                if (!sweep_rest(&services[i])) services[i].kill_sent = (struct timespec){0, 0};
                 service_log(&services[i], "bind-stopped");
                 stop_cmds_begin(&services[i], 2);
                 break;
@@ -1172,20 +1210,26 @@ static void reap(void) {
                  * core carved out of general scheduling (and leaks the parent
                  * cpuset.cpus.exclusive union) until reboot. Release here so
                  * stop frees the reservation; cgroup_assign() rebuilds the
-                 * cgroup on any later start. kill_mode=process leaves the
-                 * rest running (sshd: a stop keeps the sessions). */
-                if (services[i].kill_mode != KILL_MODE_PROCESS) svc_cgroup_kill_tree(&services[i]);
+                 * cgroup on any later start. kill_mode decides about the
+                 * rest (process: sshd's stop keeps the sessions). */
+                if (!sweep_rest(&services[i])) services[i].kill_sent = (struct timespec){0, 0};
             } else if (services[i].ctl_killed) {
-                if (services[i].pid_file[0] || (services[i].flags & SVC_MAIN_PID_NOTIFY) ||
-                    services[i].kill_mode == KILL_MODE_CGROUP || services[i].kill_mode == KILL_MODE_MIXED)
-                    svc_cgroup_kill_tree(&services[i]);
+                /* unset: only a forking / MAINPID= service's leftovers are swept
+                 * (as before); an explicit kill_mode decides for itself */
+                if (services[i].kill_mode != KILL_MODE_DEFAULT ||
+                    services[i].pid_file[0] || (services[i].flags & SVC_MAIN_PID_NOTIFY)) {
+                    if (!sweep_rest(&services[i])) services[i].kill_sent = (struct timespec){0, 0};
+                } else {
+                    services[i].kill_sent = (struct timespec){0, 0};
+                }
                 services[i].inst.state = STATE_NEW_PROCESS;
                 service_log(&services[i], "ctl-restart");
             } else {
                 /* unexpected death → enter recovery arc; an explicit
                  * control-group/mixed takes what the main process left */
                 if (services[i].kill_mode == KILL_MODE_CGROUP || services[i].kill_mode == KILL_MODE_MIXED)
-                    svc_cgroup_kill_tree(&services[i]);
+                    sweep_rest(&services[i]);
+                services[i].kill_sent = (struct timespec){0, 0};
                 restart_budget_refresh(&services[i]);
                 if (services[i].failsafe_cmd[0]) {
                     start_failsafe(&services[i]);
@@ -1291,13 +1335,18 @@ static void monitor_failsafes(void) {
                 svc->stop_phase |= STOP_TIMED_OUT;
             }
         }
-        if (svc->child_pid > 0 && (svc->kill_sent.tv_sec || svc->kill_sent.tv_nsec)) {
+        if (kill_sent_set(svc)) {
             uint64_t ran = (uint64_t)(now.tv_sec - svc->kill_sent.tv_sec) * 1000 +
                            (now.tv_nsec - svc->kill_sent.tv_nsec) / 1000000;
-            uint64_t dl = svc->stop_timeout_sec ? (uint64_t)svc->stop_timeout_sec * 1000 : RUNTIME_STOP_GRACE_MS;
-            if (ran >= dl) {
+            int draining = svc->child_pid <= 0;
+            if (draining && svc_signal_all(svc, 0) == 0) {
+                /* control-group's rest went within its grace */
+                svc_cgroup_kill_tree(svc);
+                svc->kill_sent = (struct timespec){0, 0};
+            } else if (ran >= runtime_stop_grace_ms(svc)) {
                 service_log(svc, "stop-escalate");
                 final_signal(svc);
+                if (draining) svc_cgroup_kill_tree(svc);
                 svc->kill_sent = (struct timespec){0, 0};
             }
         }
@@ -1336,7 +1385,7 @@ static void active_kill_service(service_t *svc) {
     if (svc->child_pid <= 0) return;
     restart_budget_refresh(svc);
     
-    kill(svc->child_pid, SIGTERM);
+    kill(svc->child_pid, kill_sig(svc));
     
     int elapsed_ms = 0;
     int status;
@@ -1345,7 +1394,7 @@ static void active_kill_service(service_t *svc) {
         if (res == svc->child_pid) {
             note_exit(svc, status);
             svc->child_pid = 0;
-            svc_cgroup_kill_tree(svc);
+            if (svc->kill_mode != KILL_MODE_PROCESS) svc_cgroup_kill_tree(svc);
             stop_cmds_begin(svc, 2);
             return;
         }
@@ -1369,7 +1418,7 @@ static void active_kill_service(service_t *svc) {
      * cause is recorded now: the SIGKILL we just sent. */
     note_exit(svc, reaped ? status : SIGKILL);
     svc->child_pid = 0;
-    svc_cgroup_kill_tree(svc);
+    if (svc->kill_mode != KILL_MODE_PROCESS) svc_cgroup_kill_tree(svc);
     stop_cmds_begin(svc, 2);
 }
 
@@ -1504,6 +1553,8 @@ static void tick_service(service_t *svc,
 
         case STATE_NEW_PROCESS:
             if (svc->failsafe_pid > 0 || svc->card_pid > 0 || svc->stop_pid > 0) break;
+            /* control-group: the last run's rest is still in its stop grace */
+            if (svc->child_pid <= 0 && kill_sent_set(svc)) break;
             if (svc_retry_held(svc, &now_mono)) break;
             if (!svc->standby_up && service_is_standby(svc, services, svc_count)) {
                 svc->flags |= SVC_NO_RESTART;
@@ -2372,11 +2423,12 @@ static void ctl_cmd(int fd, char *line) {
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
                 stop_main(&services[i]);
-                const char *ab = sig_abbrev(kill_sig(&services[i]));
+                char sn[16];
+                sig_text(kill_sig(&services[i]), sn, sizeof sn);
                 if (services[i].stop_pid > 0)
                     ctl_writef(fd, "ok: exec_stop → %s (pid %d)\n", name, (int)services[i].child_pid);
                 else
-                    ctl_writef(fd, "ok: SIG%s → %s (pid %d)\n", ab ? ab : "?", name, (int)services[i].child_pid);
+                    ctl_writef(fd, "ok: %s → %s (pid %d)\n", sn, name, (int)services[i].child_pid);
             } else {
                 ctl_wait_abort(&services[i]);
                 services[i].inst.state = STATE_EXCISED;
@@ -2397,8 +2449,9 @@ static void ctl_cmd(int fd, char *line) {
             if (services[i].child_pid > 0) {
                 services[i].ctl_killed = 1;
                 stop_main(&services[i]);
-                const char *ab = sig_abbrev(kill_sig(&services[i]));
-                ctl_writef(fd, "ok: SIG%s → %s — recovery arc will respawn\n", ab ? ab : "?", name);
+                char sn[16];
+                sig_text(kill_sig(&services[i]), sn, sizeof sn);
+                ctl_writef(fd, "ok: %s → %s — recovery arc will respawn\n", sn, name);
             } else {
                 ctl_wait_abort(&services[i]);
                 services[i].inst.state    = STATE_NEW_PROCESS;
@@ -2991,11 +3044,11 @@ static int get_poll_timeout(void) {
             !svc->is_frozen)
             best = wake_min(best, svc_wd_due(&svc->last_pet, &svc->wd_abort_at, svc->wd_armed_sec),
                             now_m, WAKE_NONE);
-        /* a runtime stop's escalation deadline */
-        if (svc->child_pid > 0 && (svc->kill_sent.tv_sec || svc->kill_sent.tv_nsec))
-            best = wake_min(best, ts_ms_ceil(&svc->kill_sent) +
-                            (svc->stop_timeout_sec ? (int64_t)svc->stop_timeout_sec * 1000 : RUNTIME_STOP_GRACE_MS),
-                            now_m, WAKE_NONE);
+        /* a runtime stop's escalation deadline; a draining cgroup is polled */
+        if (kill_sent_set(svc)) {
+            best = wake_min(best, ts_ms_ceil(&svc->kill_sent) + (int64_t)runtime_stop_grace_ms(svc), now_m, WAKE_NONE);
+            if (svc->child_pid <= 0) tick = 1;
+        }
         if (svc->failsafe_pid > 0 || svc->card_pid > 0 || svc->stop_pid > 0 || svc->reload_pid > 0 ||
             svc->main_wait || (svc->watchdog_timeout_ms > 0 && svc->child_pid > 0))
             tick = 1;

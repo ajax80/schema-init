@@ -1632,7 +1632,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         if not v:
             continue
         u = v.upper()
-        if v.isdigit() or (u[3:] if u.startswith("SIG") else u) in _EXIT_SIGS:
+        # what the .svc parser takes: names, or 1-64 but STOP (19)
+        if (v.isdigit() and 1 <= int(v) <= 64 and int(v) != 19) or \
+                (not v.isdigit() and (u[3:] if u.startswith("SIG") else u) in _EXIT_SIGS):
             lines.append("%s=%s" % (out_key, v))
         else:
             restart_warns.append("%s=%s dropped: not a signal schema-init knows" % (key, v))

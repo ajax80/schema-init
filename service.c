@@ -2577,15 +2577,9 @@ static int svc_any_signal_parse(const char *v) {
     return svc_signal_name(v);
 }
 
+/* reload_signal=: a KILL would end the service, not reload it */
 static int svc_reload_signal_parse(const char *v) {
-    while (*v == ' ' || *v == '\t') v++;
-    if (*v >= '0' && *v <= '9') {
-        char *end;
-        long n = strtol(v, &end, 10);
-        if (*end || n < 1 || n > 64 || n == SIGKILL || n == SIGSTOP) return 0;
-        return (int)n;
-    }
-    int s = svc_signal_name(v);
+    int s = svc_any_signal_parse(v);
     return s == SIGKILL ? 0 : s;
 }
 

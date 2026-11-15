@@ -1205,6 +1205,9 @@ check("KillMode=none -> process + WARN", _km("KillMode=none\n") ==
 check("KillSignal= / FinalKillSignal= mapped", _km("KillSignal=SIGINT\nFinalKillSignal=SIGQUIT\n") ==
       ["kill_signal=SIGINT", "final_kill_signal=SIGQUIT"])
 check("an unknown KillSignal= dropped with a WARN", any("KillSignal=SIGRTMIN+3 dropped" in l for l in _km("KillSignal=SIGRTMIN+3\n")))
+for bad in ("19", "0", "65"):
+    check("KillSignal=%s (the parser refuses it) dropped, not emitted" % bad,
+          not any(l.startswith("kill_signal=") for l in _km("KillSignal=%s\n" % bad)))
 
 # --- audit 4.1: ExecReload= / notify-reload ---
 def _rl(body):
