@@ -1571,10 +1571,34 @@ pid_t service_card_spawn(const service_t *svc, int idx) {
     _exit(127);
 }
 
+static void svc_resolve_user_or_die(service_t *svc) {
+    if (svc->run_user[0] && !svc->run_uid && strcmp(svc->run_user, "root") != 0) {
+        char *end;
+        unsigned long id = strtoul(svc->run_user, &end, 10);
+        struct passwd *pw = !*end && id < (uid_t)-1 ? getpwuid((uid_t)id)
+                          : *end ? getpwnam(svc->run_user) : NULL;
+        if (!pw) {
+            dprintf(2, "[schema-init] UID DROP FAILED for %s: no user %s\n",
+                    svc->name, svc->run_user);
+            _exit(126);
+        }
+        svc->run_uid = pw->pw_uid;
+        svc->run_gid = pw->pw_gid;
+    }
+    /* after user=: group= overrides the primary gid */
+    svc_resolve_group_or_die(svc, &svc->run_gid, "");
+}
+
 int service_spawn(service_t *svc) {
     int sync[2];
     pid_t pid;
 
+    /* schema-ctl restart: a fresh runtime dir, as systemd's stop+start gives;
+     * a crash respawn keeps it */
+    if (svc->rt_made && svc->ctl_killed) {
+        service_runtime_dirs_remove(svc);
+        svc->rt_made = 0;
+    }
     svc->ready_path_verified = 0;
     svc->ready_watched = 0;
     svc->ctl_killed = 0;
@@ -1705,22 +1729,14 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
-        if (svc->run_user[0] && !svc->run_uid && strcmp(svc->run_user, "root") != 0) {
-            char *end;
-            unsigned long id = strtoul(svc->run_user, &end, 10);
-            struct passwd *pw = !*end && id < (uid_t)-1 ? getpwuid((uid_t)id)
-                              : *end ? getpwnam(svc->run_user) : NULL;
-            if (!pw) {
-                dprintf(2, "[schema-init] UID DROP FAILED for %s: no user %s\n",
-                        svc->name, svc->run_user);
-                _exit(126);
-            }
-            svc->run_uid = pw->pw_uid;
-            svc->run_gid = pw->pw_gid;
+        /* only when there are dirs to own: otherwise after the + exec_pre
+         * lines, which may create the user (sysusers) */
+        int exec_dirs = 0;
+        for (int k = 0; k < EXEC_DIR_KINDS; k++) exec_dirs |= svc->exec_dir_count[k];
+        if (exec_dirs) {
+            svc_resolve_user_or_die(svc);
+            svc_make_exec_dirs(svc, 1);
         }
-        /* before the dirs, which the user owns; after user=: group= overrides the primary gid */
-        svc_resolve_group_or_die(svc, &svc->run_gid, "");
-        svc_make_exec_dirs(svc, 1);
         if (svc->exec_pre_count) {
             svc_apply_env(svc, file_env, file_envc);
             svc_chdir(svc, WD_ROOT_PRE);
@@ -1728,6 +1744,7 @@ int service_spawn(service_t *svc) {
         }
         if (service_apply_hardening(svc) != 0)
             _exit(126);
+        if (!exec_dirs) svc_resolve_user_or_die(svc);
         if (svc->run_uid) {
             struct passwd *pw = getpwuid(svc->run_uid);
             if (pw) {
@@ -2409,26 +2426,52 @@ static int mkdir_base(const char *base) {
     }
 }
 
-/* every component below BASE through openat(O_NOFOLLOW): a parent the service
- * user owns can hold a planted symlink, and root must not follow it */
-static int walk_parent(const char *base, char *rel, char **leaf, const char **step) {
+/* a directory only the creator (or root) can write: a symlink in it was put
+ * there by an admin, not by the service user */
+static int dir_trusted(int fd) {
+    struct stat st;
+    return fstat(fd, &st) == 0 && (st.st_uid == 0 || st.st_uid == geteuid()) && !(st.st_mode & 022);
+}
+
+/* open NAME in FD as a directory: never through a symlink, unless FOLLOW and
+ * FD is trusted (an admin's /var/lib/mysql -> /data/mysql) */
+static int open_dir_at(int fd, const char *name, int follow) {
+    int nfd = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    int e = errno;
+    if (nfd >= 0 || !follow || (e != ELOOP && e != ENOTDIR)) return nfd;
+    if (fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISLNK(st.st_mode)) {
+        errno = e;
+        return -1;
+    }
+    if (!dir_trusted(fd)) {
+        errno = ELOOP;
+        return -1;
+    }
+    return openat(fd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+}
+
+/* every component below BASE through open_dir_at: a parent the service user
+ * owns can hold a planted symlink, and root must not follow it. MAKE: create
+ * missing parents (root-owned 0755) */
+static int walk_parent(const char *base, char *rel, char **leaf, int make, const char **step) {
     int fd;
     *step = "open base";
     fd = open(base, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) return -1;
+    *leaf = rel;
     for (char *c = rel, *sl; (sl = strchr(c, '/')); c = sl + 1) {
         *sl = '\0';
         *step = "mkdir";
-        if (mkdirat(fd, c, 0755) != 0 && errno != EEXIST) goto fail;
+        if (make && mkdirat(fd, c, 0755) != 0 && errno != EEXIST) { *sl = '/'; goto fail; }
         *step = "open";
-        int nfd = openat(fd, c, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        int nfd = open_dir_at(fd, c, make);
         *sl = '/';
         if (nfd < 0) goto fail;
         close(fd);
         fd = nfd;
         *leaf = sl + 1;
     }
-    if (!strchr(rel, '/')) *leaf = rel;
     return fd;
 fail: {
         int e = errno;
@@ -2446,13 +2489,13 @@ int service_make_dir(const char *base, const char *rel, mode_t mode, uid_t uid, 
     strcpy(buf, rel);
     *step = "mkdir base";
     if (mkdir_base(base) != 0) return -1;
-    pfd = walk_parent(base, buf, &leaf, step);
+    pfd = walk_parent(base, buf, &leaf, 1, step);
     if (pfd < 0) return -1;
     /* 0700 until the owner and mode are set */
     *step = "mkdir";
     if (mkdirat(pfd, leaf, 0700) != 0 && errno != EEXIST) goto out;
     *step = "open";
-    fd = openat(pfd, leaf, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    fd = open_dir_at(pfd, leaf, 1);
     if (fd < 0) goto out;
     *step = "chown";
     if (fchown(fd, uid, gid) != 0) goto out;
@@ -2475,6 +2518,17 @@ static int rm_at(int dfd, const char *name, int depth) {
     if (depth > 256) { errno = ELOOP; return -1; }
     int fd = openat(dfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return -1;
+    /* never into another mount (a bind or FUSE mount the service left below
+     * its runtime dir): its files are not ours to delete */
+    struct statx sx;
+    struct stat ps, cs;
+    if (fstat(dfd, &ps) != 0 || fstat(fd, &cs) != 0 || ps.st_dev != cs.st_dev ||
+        (statx(fd, "", AT_EMPTY_PATH, STATX_BASIC_STATS, &sx) == 0 &&
+         (sx.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT) && (sx.stx_attributes & STATX_ATTR_MOUNT_ROOT))) {
+        close(fd);
+        errno = EBUSY;
+        return -1;
+    }
     DIR *d = fdopendir(fd);
     if (!d) { close(fd); return -1; }
     /* entries removed while reading may hide others: read again until a pass removes nothing */
@@ -2508,7 +2562,7 @@ int service_remove_tree(const char *base, const char *rel) {
         *sl = save;
         if (lstat(full, &st) != 0 && errno == ENOENT) return 0;
     }
-    pfd = walk_parent(base, buf, &leaf, &step);
+    pfd = walk_parent(base, buf, &leaf, 0, &step);
     if (pfd < 0) return -1;
     r = rm_at(pfd, leaf, 0);
     close(pfd);
@@ -2517,6 +2571,13 @@ int service_remove_tree(const char *base, const char *rel) {
 
 static int str_cmp(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+size_t service_exec_dir_env_size(const service_t *svc, int kind, const char *base) {
+    size_t n = 1;
+    for (int i = 0; i < svc->exec_dir_count[kind]; i++)
+        n += strlen(base) + strlen(svc->exec_dir[kind][i]) + 2;
+    return n;
 }
 
 int service_exec_dir_env(const service_t *svc, int kind, const char *base, char *out, size_t n) {
@@ -2544,8 +2605,9 @@ static void svc_make_exec_dirs(const service_t *svc, int create) {
     uid_t uid = root ? svc->run_uid : (uid_t)-1;
     gid_t gid = root && (svc->run_uid || svc->run_group[0]) ? svc->run_gid : root ? 0 : (gid_t)-1;
     for (int k = 0; k < EXEC_DIR_KINDS; k++) {
-        char base[PATH_MAX], env[2048];
+        char base[PATH_MAX], *env;
         const char *step = "";
+        mode_t mode = svc->exec_dir_mode_set & (1 << k) ? svc->exec_dir_mode[k] : 0755;
         if (!svc->exec_dir_count[k]) continue;
         if (service_exec_dir_base(k, base, sizeof base) != 0) {
             if (!create) continue;
@@ -2554,14 +2616,17 @@ static void svc_make_exec_dirs(const service_t *svc, int create) {
             _exit(126);
         }
         for (int i = 0; create && i < svc->exec_dir_count[k]; i++) {
-            if (service_make_dir(base, svc->exec_dir[k][i], svc->exec_dir_mode[k] ? svc->exec_dir_mode[k] : 0755,
-                                 uid, gid, &step) != 0) {
-                dprintf(2, "[schema-init] %s: %s=%s: %s: %s\n", svc->name, exec_dir_key[k],
-                        svc->exec_dir[k][i], step, strerror(errno));
-                _exit(126);
-            }
+            if (service_make_dir(base, svc->exec_dir[k][i], mode, uid, gid, &step) == 0) continue;
+            dprintf(2, "[schema-init] %s: %s=%s: %s: %s%s\n", svc->name, exec_dir_key[k],
+                    svc->exec_dir[k][i], step, strerror(errno),
+                    k == EXEC_DIR_RUNTIME ? "" : " (starting anyway)");
+            /* the daemon can't run without its runtime dir; the others may
+             * already be there in a form we won't touch (a read-only /var) */
+            if (k == EXEC_DIR_RUNTIME) _exit(126);
         }
-        if (service_exec_dir_env(svc, k, base, env, sizeof env) == 0) setenv(var[k], env, 1);
+        size_t need = service_exec_dir_env_size(svc, k, base);
+        if ((env = malloc(need)) && service_exec_dir_env(svc, k, base, env, need) == 0) setenv(var[k], env, 1);
+        free(env);
     }
 }
 
@@ -2586,9 +2651,15 @@ void service_runtime_dirs_remove(const service_t *svc) {
             if (lstat(full, &st) != 0) continue;
             snprintf(buf, sizeof buf, "%s", svc->exec_dir[EXEC_DIR_RUNTIME][i]);
         }
-        pfd = walk_parent(base, buf, &leaf, &step);
+        pfd = walk_parent(base, buf, &leaf, 0, &step);
         if (pfd < 0) continue;
-        snprintf(aside[n], sizeof aside[n], ".schema-gone-%s-%d-%d", svc->name, (int)getpid(), i);
+        /* unique per call: getpid() is 1 in PID 1, and a delete cut short by a
+         * shutdown leaves its aside behind */
+        struct timespec ts;
+        static unsigned seq;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        snprintf(aside[n], sizeof aside[n], ".schema-gone-%.40s-%lld%09ld-%u", svc->name,
+                 (long long)ts.tv_sec, ts.tv_nsec, seq++);
         if (renameat(pfd, leaf, bfd, aside[n]) == 0) n++;
         else if (errno != ENOENT)
             fprintf(stderr, "[schema-init] %s: runtime_dir=%s not removed: %s\n", svc->name,
@@ -3218,7 +3289,10 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                     svc->name[0] ? svc->name : path, line, val);
             return -1;
         }
-        svc->exec_dir_mode[exec_dir_kind(line, 1)] = (uint16_t)(*val ? m : 0);
+        int k = exec_dir_kind(line, 1);
+        svc->exec_dir_mode[k] = (uint16_t)(*val ? m : 0);
+        if (*val) svc->exec_dir_mode_set |= 1 << k;
+        else svc->exec_dir_mode_set &= ~(1 << k);
     }
     else if (strcmp(line, "landlock_bind_tcp") == 0 || strcmp(line, "landlock_connect_tcp") == 0) {
         int k = line[9] == 'c', ntok = 0, none = 0, bad = strlen(val) >= 256;

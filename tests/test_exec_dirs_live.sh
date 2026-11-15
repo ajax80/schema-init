@@ -18,10 +18,14 @@ mode() { stat -c %a "$1"; }
 
 S=$T/run/schema-user/services
 mkdir -m700 "$T/run"; mkdir -p "$S" "$T/cfg" "$T/outside"; chmod 700 "$T/run/schema-user" "$S"
-ln -s "$T/outside" "$T/run/trap"
+# a world-writable parent stands in for one the service user owns
+mkdir -m777 "$T/run/pub"; chmod 777 "$T/run/pub"; ln -s "$T/outside" "$T/run/pub/trap"
+mkdir -p "$T/state"; : > "$T/state/blocked"
 printf 'name=rd\nexec=/bin/sh\nargs=-c\nargs=env | grep _DIRECTORY= | sort > %s/rd.env; echo $$ > %s/rd.pid; while :; do sleep 1 & wait; done\nruntime_dir=rd/nested rd2\nruntime_dir_mode=0700\nstate_dir=st\ncache_dir=ca\nlogs_dir=lg\nlogs_dir_mode=0750\nenv=CACHE_DIRECTORY=/mine\nexec_stop=/bin/sh -c "echo $RUNTIME_DIRECTORY > %s/stop.env"\nstable_secs=1\n' "$T" "$T" "$T" > "$S/rd.svc"
 # a symlink planted in a parent: never followed, the spawn fails
-printf 'name=evil\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/evil.pid; exec sleep 600\nruntime_dir=trap/x\nstable_secs=1\n' "$T" > "$S/evil.svc"
+printf 'name=evil\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/evil.pid; exec sleep 600\nruntime_dir=pub/trap/x\nstable_secs=1\n' "$T" > "$S/evil.svc"
+# a state_dir that can't be made doesn't stop the start (it imported with -install before)
+printf 'name=blk\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/blk.pid; exec sleep 600\nstate_dir=blocked\nstable_secs=1\n' "$T" > "$S/blk.svc"
 chmod 600 "$S"/*.svc
 
 ./schema-user > "$T/out" 2>&1 &
@@ -40,9 +44,12 @@ grep -qx "STATE_DIRECTORY=$T/state/st" "$T/rd.env" || fail "STATE_DIRECTORY"
 grep -qx "LOGS_DIRECTORY=$T/state/log/lg" "$T/rd.env" || fail "LOGS_DIRECTORY"
 grep -qx "CACHE_DIRECTORY=/mine" "$T/rd.env" || fail "env= must win: $(cat "$T/rd.env")"
 
-until_ok "grep -qs 'evil: runtime_dir=trap/x' $T/state/schema-user/log/evil.log" || fail "evil: no runtime_dir error logged: $(ls $T/state/schema-user/log)"
+until_ok "grep -qs 'evil: runtime_dir=pub/trap/x' $T/state/schema-user/log/evil.log" || fail "evil: no runtime_dir error logged: $(ls $T/state/schema-user/log)"
 [ ! -e "$T/outside/x" ] || fail "followed the planted symlink"
 [ ! -s "$T/evil.pid" ] || fail "evil ran"
+
+until_ok "[ -s $T/blk.pid ]" || fail "blk: a blocked state_dir stopped the start"
+grep -qs 'blk: state_dir=blocked.*starting anyway' "$T/state/schema-user/log/blk.log" || fail "blk: not logged"
 
 # a crash respawn keeps the runtime dir
 touch "$T/run/rd2/keep"
@@ -50,6 +57,13 @@ P1=$(cat "$T/rd.pid"); : > "$T/rd.pid"
 kill -KILL "$P1"
 until_ok "[ -s $T/rd.pid ]" || fail "rd never respawned"
 [ -e "$T/run/rd2/keep" ] || fail "runtime dir lost on a respawn"
+
+# schema-ctl restart gives a fresh one, as systemd's stop+start does
+: > "$T/rd.pid"
+./schema-ctl --user restart rd > /dev/null || fail "restart rd"
+until_ok "[ -s $T/rd.pid ]" || fail "rd never came back from restart"
+[ -d "$T/run/rd2" ] && [ ! -e "$T/run/rd2/keep" ] || fail "restart kept the old runtime dir: $(ls -a "$T/run/rd2" 2>&1)"
+touch "$T/run/rd2/keep"
 
 # a stop removes the runtime dirs, keeps the rest
 ./schema-ctl --user stop rd > /dev/null || fail "stop rd"

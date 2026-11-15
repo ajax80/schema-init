@@ -78,3 +78,16 @@ engine sets them).
 ## Not in scope
 `ConfigurationDirectory=` native, `*Preserve=`, `dir:symlink` (systemd 254),
 `dynamic_user` ownership (4.10).
+
+## Review changes (PR #533)
+- A symlink below the base is followed when its directory is owned by root
+  (the user, in schema-user) and writable by no one else; otherwise refused.
+- state/cache/logs creation failures log and continue (the importer's old
+  `-install` never blocked a start); runtime failures still fail the spawn.
+- The user is resolved early only for a service with dirs, so a `+` exec_pre
+  that creates the user (sysusers) still works for the rest.
+- `schema-ctl restart` empties the runtime dir (systemd's stop+start).
+- The delete never crosses into another mount (st_dev + STATX_ATTR_MOUNT_ROOT).
+- `*_dir_mode=0000` is a real mode; aside names are unique per call.
+- Known: renaming/removing `runtime_dir=` on a running service, or evicting
+  it on reload, leaves the old directory.

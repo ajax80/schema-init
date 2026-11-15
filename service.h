@@ -519,7 +519,8 @@ typedef struct {
     struct timespec  kill_sent;        /* when a schema-ctl stop/restart signalled it; 0 = not waiting */
     char            *exec_dir[4][8];   /* runtime_dir=/state_dir=/cache_dir=/logs_dir= (EXEC_DIR_*), relative */
     uint8_t          exec_dir_count[4];
-    uint16_t         exec_dir_mode[4]; /* *_dir_mode=, 0 = 0755 */
+    uint16_t         exec_dir_mode[4]; /* *_dir_mode=, used when its bit in exec_dir_mode_set is on */
+    uint8_t          exec_dir_mode_set;/* bit k: *_dir_mode= given (0000 is a real mode); else 0755 */
     uint8_t          rt_made;          /* a spawn created the runtime dirs; removed once stopped for good */
     char             bind_name[64];    /* bind=: stop with it, start again with it; also a dep */
     uint8_t          bind_held;        /* stopped because its bound went down; restarts with it */
@@ -599,6 +600,8 @@ int service_make_dir(const char *base, const char *rel, mode_t mode, uid_t uid, 
 int service_remove_tree(const char *base, const char *rel);
 /* KIND's dirs as full paths, sorted, ':'-joined (RUNTIME_DIRECTORY= etc.) */
 int service_exec_dir_env(const service_t *svc, int kind, const char *base, char *out, size_t n);
+/* bytes service_exec_dir_env needs, NUL included */
+size_t service_exec_dir_env_size(const service_t *svc, int kind, const char *base);
 /* move the runtime dirs aside and delete them in a child PID 1 doesn't wait for */
 void service_runtime_dirs_remove(const service_t *svc);
 
