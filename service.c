@@ -1829,6 +1829,7 @@ int service_spawn(service_t *svc) {
     svc->last_start = time(NULL);
     svc->start_time = svc->last_start;
     clock_gettime(CLOCK_MONOTONIC, &svc->spawn_time_mono);
+    svc->wd_fired = 0;
     if (!svc->boot_spawn.tv_sec && !svc->boot_spawn.tv_nsec)
         svc->boot_spawn = svc->spawn_time_mono;
     svc->last_pet   = svc->spawn_time_mono;
@@ -2431,6 +2432,15 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     } else if (strcmp(key, "reload_signal") == 0) {
         svc->reload_signal = 0;
         svc->reload_signal_set = 0;
+    } else if (strcmp(key, "restart") == 0) {
+        svc->restart_policy = RESTART_ALWAYS;
+        svc->flags &= ~SVC_NO_RESTART;
+    } else if (strcmp(key, "success_exit_status") == 0) {
+        memset(svc->success_codes, 0, sizeof svc->success_codes);
+        svc->success_sigs = 0;
+    } else if (strcmp(key, "restart_prevent_exit_status") == 0) {
+        memset(svc->prevent_codes, 0, sizeof svc->prevent_codes);
+        svc->prevent_sigs = 0;
     } else if (strcmp(key, "card") == 0) {
         for (int i = 0; i < svc->card_count; i++) {
             free(svc->card[i]);
@@ -2534,12 +2544,21 @@ static int svc_parse_rlimit(service_t *svc, const char *key, const char *val) {
 
 /* reload_signal=: a name (HUP, SIGHUP, any case) or a number. 0 = refused:
  * KILL and STOP can't be caught, so they'd stop the service, not reload it */
-static int svc_reload_signal_parse(const char *v) {
+static int svc_signal_name(const char *v) {
     static const struct { const char *n; int s; } t[] = {
         { "HUP", SIGHUP }, { "INT", SIGINT }, { "QUIT", SIGQUIT }, { "USR1", SIGUSR1 },
         { "USR2", SIGUSR2 }, { "TERM", SIGTERM }, { "CONT", SIGCONT }, { "URG", SIGURG },
         { "WINCH", SIGWINCH }, { "PWR", SIGPWR }, { "ALRM", SIGALRM }, { "TRAP", SIGTRAP },
+        { "KILL", SIGKILL }, { "ABRT", SIGABRT }, { "SEGV", SIGSEGV }, { "PIPE", SIGPIPE },
+        { "BUS", SIGBUS }, { "FPE", SIGFPE }, { "ILL", SIGILL }, { "SYS", SIGSYS },
     };
+    if (strncasecmp(v, "SIG", 3) == 0) v += 3;
+    for (size_t i = 0; i < sizeof t / sizeof t[0]; i++)
+        if (strcasecmp(v, t[i].n) == 0) return t[i].s;
+    return 0;
+}
+
+static int svc_reload_signal_parse(const char *v) {
     while (*v == ' ' || *v == '\t') v++;
     if (*v >= '0' && *v <= '9') {
         char *end;
@@ -2547,10 +2566,61 @@ static int svc_reload_signal_parse(const char *v) {
         if (*end || n < 1 || n > 64 || n == SIGKILL || n == SIGSTOP) return 0;
         return (int)n;
     }
-    if (strncasecmp(v, "SIG", 3) == 0) v += 3;
-    for (size_t i = 0; i < sizeof t / sizeof t[0]; i++)
-        if (strcasecmp(v, t[i].n) == 0) return t[i].s;
+    int s = svc_signal_name(v);
+    return s == SIGKILL ? 0 : s;
+}
+
+/* success_exit_status= / restart_prevent_exit_status=: exit codes 0-255
+ * and signal names, space separated; -1 on a token that is neither */
+static int svc_status_list(const char *v, uint8_t *codes, uint64_t *sigs) {
+    char buf[512];
+    snprintf(buf, sizeof buf, "%s", v);
+    for (char *save, *t = strtok_r(buf, " \t,", &save); t; t = strtok_r(NULL, " \t,", &save)) {
+        if (*t >= '0' && *t <= '9') {
+            char *end;
+            long n = strtol(t, &end, 10);
+            if (*end || n > 255) return -1;
+            codes[n / 8] |= (uint8_t)(1u << (n % 8));
+            continue;
+        }
+        int sig = svc_signal_name(t);
+        if (sig <= 0) return -1;
+        *sigs |= 1ULL << (sig - 1);
+    }
     return 0;
+}
+
+int service_death_class(const service_t *svc) {
+    if (svc->wd_fired) return DEATH_WATCHDOG;
+    int s = svc->term_signal;
+    if (s) {
+        /* systemd's clean signals, plus success_exit_status= ones */
+        if (s == SIGHUP || s == SIGINT || s == SIGTERM || s == SIGPIPE ||
+            (s <= 64 && (svc->success_sigs & (1ULL << (s - 1)))))
+            return DEATH_CLEAN;
+        return DEATH_SIGNAL;
+    }
+    int c = svc->exit_status;
+    if (c == 0 || (c > 0 && c < 256 && (svc->success_codes[c / 8] & (1u << (c % 8)))))
+        return DEATH_CLEAN;
+    return DEATH_EXIT;
+}
+
+int service_restart_wanted(const service_t *svc, int death) {
+    int s = svc->term_signal, c = svc->exit_status;
+    if (death != DEATH_TIMEOUT && death != DEATH_WATCHDOG) {
+        if (s && s <= 64 && (svc->prevent_sigs & (1ULL << (s - 1)))) return 0;
+        if (!s && c >= 0 && c < 256 && (svc->prevent_codes[c / 8] & (1u << (c % 8)))) return 0;
+    }
+    switch (svc->restart_policy) {
+    case RESTART_NO:          return 0;
+    case RESTART_ON_SUCCESS:  return death == DEATH_CLEAN;
+    case RESTART_ON_FAILURE:  return death != DEATH_CLEAN;
+    case RESTART_ON_ABNORMAL: return death == DEATH_SIGNAL || death == DEATH_TIMEOUT || death == DEATH_WATCHDOG;
+    case RESTART_ON_ABORT:    return death == DEATH_SIGNAL;
+    case RESTART_ON_WATCHDOG: return death == DEATH_WATCHDOG;
+    default:                  return 1;
+    }
 }
 
 /* One key=value line. 0 = ok, -1 = the service must be rejected. */
@@ -2660,6 +2730,30 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         }
         svc->reload_signal = sig;
         svc->reload_signal_set = 1;
+    } else if (strcmp(line, "restart") == 0) {
+        static const char *const pol[] = { "always", "no", "on-success", "on-failure",
+                                           "on-abnormal", "on-abort", "on-watchdog" };
+        int k = 0;
+        while (k < 7 && strcmp(val, pol[k]) != 0) k++;
+        if (k == 7) {
+            fprintf(stderr, "[schema-init] %s: restart=%s is not always, no, on-success, on-failure, on-abnormal, on-abort or on-watchdog\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        /* "no" lives only in SVC_NO_RESTART, so whatever lifts the flag (a
+         * drop-in's no_restart=0, a fallback brought up) lifts it; the
+         * last of restart= / no_restart= wins */
+        svc->restart_policy = k == RESTART_NO ? RESTART_ALWAYS : (uint8_t)k;
+        if (k == RESTART_NO) svc->flags |= SVC_NO_RESTART;
+        else svc->flags &= ~SVC_NO_RESTART;
+    } else if (strcmp(line, "success_exit_status") == 0 || strcmp(line, "restart_prevent_exit_status") == 0) {
+        int succ = line[0] == 's';
+        if (svc_status_list(val, succ ? svc->success_codes : svc->prevent_codes,
+                            succ ? &svc->success_sigs : &svc->prevent_sigs) != 0) {
+            fprintf(stderr, "[schema-init] %s: %s=%s takes exit codes 0-255 and signal names\n",
+                    svc->name[0] ? svc->name : path, line, val);
+            return -1;
+        }
     } else if (strcmp(line, "reload") == 0) {
         /* the systemd1 shim's older opt-in: reload means SIGHUP */
         if (!svc->reload_signal_set) svc->reload_signal = atoi(val) == 1 || strcmp(val, "yes") == 0 ? SIGHUP : 0;

@@ -507,6 +507,12 @@ typedef struct {
     uint8_t          circuit_broken;   /* crash-loop breaker excised it; reset/start clears */
     uint8_t          excise_reason;    /* EXC_*: why the last excise happened; cleared on spawn */
     uint8_t          no_restart_cfg;   /* the .svc's no_restart=; SVC_NO_RESTART is also a stop's hold */
+    uint8_t          restart_policy;   /* restart= (RESTART_*); restart=no is SVC_NO_RESTART, never stored here */
+    uint8_t          success_codes[256 / 8];   /* success_exit_status= exit codes (bitmap) */
+    uint64_t         success_sigs;             /* ...and signals, bit sig-1 */
+    uint8_t          prevent_codes[256 / 8];   /* restart_prevent_exit_status= */
+    uint64_t         prevent_sigs;
+    uint8_t          wd_fired;         /* watchdog SIGABRT sent this run: its death is a watchdog death */
     char             bind_name[64];    /* bind=: stop with it, start again with it; also a dep */
     uint8_t          bind_held;        /* stopped because its bound went down; restarts with it */
     uint8_t          bind_was_up;      /* this service was up at the last tick's tail (edge detection) */
@@ -567,6 +573,16 @@ pid_t service_card_spawn(const service_t *svc, int idx);
 /* one child running PHASE's commands in order (1 exec_stop, 2 exec_stop_post,
  * 3 both); exits non-zero when a command without '-' fails */
 pid_t service_stop_spawn(const service_t *svc, int phase);
+
+/* restart= (systemd Restart=); ALWAYS = 0 is the default, today's behaviour */
+enum { RESTART_ALWAYS, RESTART_NO, RESTART_ON_SUCCESS, RESTART_ON_FAILURE,
+       RESTART_ON_ABNORMAL, RESTART_ON_ABORT, RESTART_ON_WATCHDOG };
+/* how a run ended, in systemd's Restart= table terms */
+enum { DEATH_CLEAN, DEATH_EXIT, DEATH_SIGNAL, DEATH_WATCHDOG, DEATH_TIMEOUT };
+/* from the recorded exit (exit_status/term_signal/wd_fired) */
+int service_death_class(const service_t *svc);
+/* restart= and restart_prevent_exit_status= say this death restarts */
+int service_restart_wanted(const service_t *svc, int death);
 /* one child running exec_reload in order, $MAINPID replaced by MAINPID */
 pid_t service_reload_spawn(const service_t *svc, pid_t mainpid);
 service_t *service_fallback(const service_t *svc, service_t *table, int count);

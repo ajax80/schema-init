@@ -406,6 +406,7 @@ static void service_watchdog_tick(void) {
             elog(stdout, "watchdog: '%s' sent no WATCHDOG=1 for %ds — SIGABRT\n",
                    svc->name, svc->wd_armed_sec);
             service_log(svc, "watchdog-abort");
+            svc->wd_fired = 1;
             kill(svc->child_pid, SIGABRT);
             svc->wd_abort_at = now;
         }
@@ -1014,7 +1015,9 @@ static void reap(void) {
                 if (t < 0 || !svc_is_up(&services[t]) || services[t].ctl_killed ||
                     (services[t].stop_pid > 0 && (services[t].stop_phase & 3) == 1)) {
                     bind_hold(&services[i], "bind-stop");
-                } else if (services[i].term_signal || (services[i].has_exited && services[i].exit_status != 0)) {
+                } else if (services[i].term_signal ||
+                           (services[i].has_exited && service_death_class(&services[i]) != DEATH_CLEAN)) {
+                    /* a success_exit_status= code is as clean as exit 0 here */
                     /* a clean exit was its own to make; only a failure can be the bound's */
                     clock_gettime(CLOCK_MONOTONIC, &services[i].bind_died_at);
                     services[i].bind_saved_restarts = services[i].restart_count;
@@ -1079,10 +1082,10 @@ static void reap(void) {
             if (!handover && services[i].cgroup_path[0] && cgroup_has_children(services[i].cgroup_path))
                 svc_cgroup_kill_tree(&services[i]);
 
+            int death = service_death_class(&services[i]);
             if (services[i].flags & SVC_TIMER) {
                 timer_rearm(&services[i]);
-                service_log(&services[i],
-                    services[i].exit_status == 0 ? "timer-done" : "timer-failed");
+                service_log(&services[i], death == DEATH_CLEAN ? "timer-done" : "timer-failed");
                 stop_cmds_begin(&services[i], 2);
                 break;
             }
@@ -1105,16 +1108,15 @@ static void reap(void) {
 
             if (services[i].listen_open && !services[i].ctl_killed &&
                 !(services[i].flags & SVC_ONESHOT) &&
-                ((WIFEXITED(status) && WEXITSTATUS(status) == 0) ||
-                 (services[i].flags & SVC_NO_RESTART)) &&
+                (death == DEATH_CLEAN || (services[i].flags & SVC_NO_RESTART)) &&
                 mono_sec() - services[i].spawn_time_mono.tv_sec >= LISTEN_MIN_RUN_SECS) {
                 /* idle exit of a socket service: PID 1 still holds its
                  * sockets, the next connection starts it again */
                 services[i].inst.state = STATE_PERFECT;
                 clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
                 service_log(&services[i], "socket-idle");
-            } else if (WIFEXITED(status) && WEXITSTATUS(status) == 0
-                && (services[i].flags & SVC_ONESHOT)) {
+            } else if (death == DEATH_CLEAN && (services[i].flags & SVC_ONESHOT)) {
+                /* exit 0, a clean signal, or what success_exit_status= lists */
                 /* clean one-shot exit → PERFECT */
                 services[i].inst.state = STATE_PERFECT;
                 clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
@@ -1123,10 +1125,16 @@ static void reap(void) {
                 if (strcmp(services[i].name, "slot-detect") == 0) {
                     load_env_file();
                 }
-            } else if (services[i].flags & SVC_NO_RESTART) {
+            } else if ((services[i].flags & SVC_NO_RESTART) ||
+                       (!services[i].ctl_killed && !service_restart_wanted(&services[i], death))) {
+                /* held down, or restart= / restart_prevent_exit_status= say
+                 * this exit stays down: EXCISED, as no_restart=1 always was */
                 services[i].inst.state = STATE_EXCISED;
-                services[i].excise_reason = excise_reason_from_exit(&services[i]);
-                service_log(&services[i], "76-no-restart");
+                /* a success_exit_status= code reads as stopped, not exit-code;
+                 * signals keep their reason, as always */
+                services[i].excise_reason = !services[i].term_signal && death == DEATH_CLEAN
+                                            ? EXC_NONE : excise_reason_from_exit(&services[i]);
+                service_log(&services[i], (services[i].flags & SVC_NO_RESTART) ? "76-no-restart" : "76-restart-policy");
                 /* Explicit stop/down lands here straight from reap() — it
                  * never crosses the FRICTION→EXCISED transition that the tick
                  * loop uses to tear cgroups down, and case STATE_EXCISED is a
@@ -1232,7 +1240,8 @@ static void monitor_failsafes(void) {
             service_log(svc, "main-pid-timeout");
             restart_budget_refresh(svc);
             if (svc->failsafe_cmd[0]) start_failsafe(svc);
-            svc->inst.state = (svc->flags & SVC_NO_RESTART) ? STATE_EXCISED : STATE_RECOVERY;
+            svc->inst.state = (svc->flags & SVC_NO_RESTART) || !service_restart_wanted(svc, DEATH_TIMEOUT)
+                              ? STATE_EXCISED : STATE_RECOVERY;
             if (svc->inst.state == STATE_EXCISED) svc->excise_reason = EXC_MAIN_PID_TIMEOUT;
             stop_cmds_begin(svc, 2);
         }
@@ -1374,10 +1383,10 @@ static int ready_live(const service_t *svc) {
 static void ready_lost(service_t *svc) {
     service_log(svc, "readiness-lost");
     active_kill_service(svc);
-    if (svc->flags & SVC_NO_RESTART) {
+    if ((svc->flags & SVC_NO_RESTART) || !service_restart_wanted(svc, DEATH_TIMEOUT)) {
         svc->inst.state = STATE_EXCISED;
         svc->excise_reason = EXC_READINESS_LOST;
-        service_log(svc, "76-no-restart");
+        service_log(svc, (svc->flags & SVC_NO_RESTART) ? "76-no-restart" : "76-restart-policy");
         return;
     }
     start_failsafe(svc);
@@ -1550,8 +1559,14 @@ static void tick_service(service_t *svc,
                     svc_cgroup_kill_tree(svc);
                     restart_budget_refresh(svc);
                     if (svc->failsafe_cmd[0]) start_failsafe(svc);
-                    svc->inst.state = STATE_RECOVERY;
                     service_log(svc, "pid_file-missing");
+                    if ((svc->flags & SVC_NO_RESTART) || !service_restart_wanted(svc, DEATH_TIMEOUT)) {
+                        svc->inst.state = STATE_EXCISED;
+                        svc->excise_reason = EXC_START_TIMEOUT;
+                        service_log(svc, (svc->flags & SVC_NO_RESTART) ? "76-no-restart" : "76-restart-policy");
+                    } else {
+                        svc->inst.state = STATE_RECOVERY;
+                    }
                 }
                 break;
             }

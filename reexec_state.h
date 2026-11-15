@@ -80,6 +80,7 @@ typedef struct {
     X(TS,   stop_start)          \
     X(PID,  reload_pid)          \
     X(TS,   reload_start)        \
+    X(U8,   wd_fired)            \
     X(PID,  main_pid)            \
     X(INT,  main_wait)           \
     X(TS,   main_wait_due)       \
