@@ -309,16 +309,15 @@ t.done()
 # --- RuntimeDirectory= in user mode: under $XDG_RUNTIME_DIR, no root + ---
 t = Tree()
 _b = si.unit_to_svc("rd", si.parse_unit("[Service]\nUser=tess\nRuntimeDirectory=rd\nExecStart=/bin/rd\n"))
-check("user RuntimeDirectory= -> install -d under XDG_RUNTIME_DIR, no +, no owner",
-      ("exec_pre=/usr/bin/install -d -m 0755 %s/rd\n" % t.run) in _b)
+check("user RuntimeDirectory= -> runtime_dir= (the engine puts it under XDG_RUNTIME_DIR)",
+      "runtime_dir=rd\n" in _b and "install -d" not in _b)
 _b = si.unit_to_svc("rd", si.parse_unit("[Service]\nUser=tess\nRuntimeDirectory=rd/sub\nExecStart=/bin/rd\n"))
-check("user RuntimeDirectory= nested kept (the runner is the user already)",
-      ("exec_pre=/usr/bin/install -d -m 0755 %s/rd/sub\n" % t.run) in _b)
+check("user RuntimeDirectory= nested kept", "runtime_dir=rd/sub\n" in _b)
 _saved = t.ctx["runtime"]; t.ctx["runtime"] = ""
 _b = si.unit_to_svc("rd", si.parse_unit("[Service]\nRuntimeDirectory=rd\nExecStart=/bin/rd\n"))
 t.ctx["runtime"] = _saved
-check("user RuntimeDirectory= with no XDG_RUNTIME_DIR -> no line, noted",
-      "install -d" not in _b and "dropped RuntimeDirectory=rd" in _b)
+check("user RuntimeDirectory= with no XDG_RUNTIME_DIR -> no key, noted",
+      "runtime_dir=" not in _b and "dropped RuntimeDirectory=rd" in _b)
 t.done()
 
 # --- a socket's .svc keeps its service's dep= now the dep is generated ---
@@ -901,13 +900,14 @@ if saved is not None:
 t = Tree()
 _rb = si.unit_to_svc("r", si.parse_unit("[Service]\nExecStart=/bin/r --s=${RUNTIME_DIRECTORY}/x\nRuntimeDirectory=q\n"))
 _rt = t.run + "/q"
-check("runtime_directory_under_xdg", "env=RUNTIME_DIRECTORY=%s\n" % _rt in _rb)
+check("runtime_directory_left_to_engine", "runtime_dir=q\n" in _rb and "env=RUNTIME_DIRECTORY" not in _rb)
 check("runtime_directory_expands", "args=--s=%s/x\n" % _rt in _rb)
 _rf = si.unit_to_svc("r", si.parse_unit("[Service]\nExecStart=/bin/r\nStateDirectory=us\nCacheDirectory=uc\nLogsDirectory=ul\nConfigurationDirectory=ue\n"))
-for _v, _k, _sub in (("STATE_DIRECTORY", "state", "us"), ("CACHE_DIRECTORY", "cache", "uc"),
-                     ("LOGS_DIRECTORY", "state", "log/ul"), ("CONFIGURATION_DIRECTORY", "config", "ue")):
-    _want = t.ctx[_k] + "/" + _sub
-    check("exec_dir_" + _v, "env=%s=%s\n" % (_v, _want) in _rf and _want in "".join(l for l in _rf.splitlines() if l.startswith("exec_pre=")))
+for _nk, _sub in (("state_dir", "us"), ("cache_dir", "uc"), ("logs_dir", "ul")):
+    check("exec_dir_" + _nk, "%s=%s\n" % (_nk, _sub) in _rf)
+_want = t.ctx["config"] + "/ue"
+check("exec_dir_CONFIGURATION_DIRECTORY", "env=CONFIGURATION_DIRECTORY=%s\n" % _want in _rf
+      and _want in "".join(l for l in _rf.splitlines() if l.startswith("exec_pre=")))
 check("exec_dir_no_root_prefix", "exec_pre=+" not in _rf)
 t.done()
 

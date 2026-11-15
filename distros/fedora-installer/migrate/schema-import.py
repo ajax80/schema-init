@@ -1305,6 +1305,9 @@ _EXEC_DIRS = (("RuntimeDirectory", "/run", lambda u: u["runtime"], "RUNTIME_DIRE
               ("ConfigurationDirectory", "/etc", lambda u: u["config"], "CONFIGURATION_DIRECTORY"))
 _EXEC_DIR_LINE = 400
 _EXEC_DIR_WORDS = 24   # with install's own words, under the engine's 32 per exec_pre
+# the engine creates these itself (audit 4.4), owned by user=/group=, through no symlink
+_NATIVE_DIRS = {"RuntimeDirectory": "runtime_dir", "StateDirectory": "state_dir",
+                "CacheDirectory": "cache_dir", "LogsDirectory": "logs_dir"}
 
 
 # systemd creates these dirs before ExecStartPre=, and schema-init does not: a root
@@ -1325,10 +1328,10 @@ def exec_dir_lines(svc, name, key, sys_base, user_base):
         mode = "0755"
     # user mode: under the user's own dirs, and the runner is the user already
     base, pfx = (user_base(_USER), "") if _USER else (sys_base, "+")
-    # Only RuntimeDirectory= was translated before: a unit whose other directory
+    native = _NATIVE_DIRS.get(key)
+    # ConfigurationDirectory= was not translated before: a unit whose directory
     # already exists must not stop starting because install failed.
-    if key != "RuntimeDirectory":
-        pfx += "-"
+    pfx += "-"
     user, group, own = _get_last(svc, "User"), _get_last(svc, "Group"), ""
     if not _USER and user and user != "root":
         own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(group or _primary_group(user)))
@@ -1336,7 +1339,7 @@ def exec_dir_lines(svc, name, key, sys_base, user_base):
         own = " -g %s" % _cmd_quote(group)
     if not base:
         return [], ["dropped %s=%s (no XDG_RUNTIME_DIR)" % (key, " ".join(dirs))], warns, []
-    paths, make = [], []
+    paths, make, rels = [], [], []
     for d in dirs:
         try:
             x = _specifiers([d], name)[0].rstrip("/")
@@ -1352,12 +1355,33 @@ def exec_dir_lines(svc, name, key, sys_base, user_base):
         p = base + "/" + x
         if p in paths:
             continue
+        if native:
+            # the engine splits its value on blanks and caps each kind at 8
+            if any(c.isspace() for c in x) or len(x) > 200:
+                warns.append("dropped %s=%s: not created, its name has a blank or is too long" % (key, d))
+            elif len(rels) == 8:
+                warns.append("dropped %s=%s: not created, limit 8" % (key, d))
+            else:
+                paths.append(p)
+                rels.append(x)
+            continue
         paths.append(p)
         if own and " -o " in own and len(parts) > 1:
             warns.append("dropped %s=%s: not created, and the daemon may need it" % (key, d))
         else:
             make.append(p)
     out, cur = [], []
+    if native:
+        for r in rels:
+            if cur and len(native) + 1 + sum(len(c) + 1 for c in cur) + len(r) > _EXEC_DIR_LINE:
+                out.append("%s=%s" % (native, " ".join(cur)))
+                cur = []
+            cur.append(r)
+        if cur:
+            out.append("%s=%s" % (native, " ".join(cur)))
+        if out and int(mode, 8) != 0o755:
+            out.append("%s_mode=%s" % (native, mode))
+        return out, notes, warns, paths
     start = "exec_pre=%s/usr/bin/install -d -m %s%s" % (pfx, mode, own)
     # systemd leaves an existing config dir alone, unlike the others: install -o would
     # hand a packaged root:adm 0750 one to the service user to rewrite.
@@ -1449,10 +1473,11 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # systemd sets these for the daemon, sorted and merged; a value the unit sets
     # wins. Before expansion, or ${STATE_DIRECTORY} counts as unset and is dropped.
     rt_pres, rt_notes, rt_warns, dir_env, later_dirs, config_rw = [], [], [], [], [], []
+    dir_keys = []
     for key, sys_base, user_base, var in _EXEC_DIRS:
         d_lines, d_notes, d_warns, d_paths = exec_dir_lines(svc, unit or name, key, sys_base, user_base)
-        if key == "RuntimeDirectory":
-            rt_pres = d_lines
+        if key in _NATIVE_DIRS:
+            dir_keys += d_lines
         elif d_lines:
             later_dirs.append((key, d_lines))
         rt_notes += d_notes
@@ -1461,7 +1486,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             config_rw = [("ReadWritePaths", p) for p in d_paths]
         if d_paths and var not in env_map:
             value = ":".join(sorted(d_paths))
-            dir_env.append((var, value))
+            if key not in _NATIVE_DIRS:   # the engine sets the others
+                dir_env.append((var, value))
             env_map[var] = value
     if env_files and "$" in argv[0]:
         exe, _ = _expand_argv(argv[:1], env_map)
@@ -1480,9 +1506,8 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                 expanded.append((pre, pa))
         pres = expanded
 
-    if len(rt_pres) + len(pres) > 8:
-        raise Skip("%d RuntimeDirectory= + %d ExecStartPre= lines (limit 8 exec_pre)"
-                   % (len(rt_pres), len(pres)))
+    if len(pres) > 8:
+        raise Skip("%d ExecStartPre= lines (limit 8 exec_pre)" % len(pres))
     # Over the limit these warn: they imported before, and the dir may already exist.
     for key, d_lines in later_dirs:
         if len(rt_pres) + len(pres) + len(d_lines) > 8:
@@ -1518,6 +1543,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         lines.append("env_file=%s" % ef)
     if expand:
         lines.append("expand_args=1")
+    lines.extend(dir_keys)
     lines.extend(rt_pres)
     for pre, pa in pres:
         lines.append("exec_pre=%s%s" % (pre, " ".join(_cmd_quote(w) for w in pa)))

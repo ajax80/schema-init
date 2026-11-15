@@ -383,6 +383,17 @@ static void eviction_tick(void) {
     }
 }
 
+/* runtime_dir=: removed once the service is stopped for good, kept across
+ * respawns and backoff; waits for exec_stop_post, which may still use it */
+static void runtime_dir_tick(void) {
+    for (int i = 0; i < svc_count; i++) {
+        service_t *s = &services[i];
+        if (!s->rt_made || s->child_pid > 0 || s->stop_pid > 0 || s->inst.state != STATE_EXCISED) continue;
+        service_runtime_dirs_remove(s);
+        s->rt_made = 0;
+    }
+}
+
 static void service_watchdog_tick(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -3755,6 +3766,7 @@ void engine_run(void) {
         groups_update(groups, grp_count, svc_states, svc_count);
         shm_update();
         eviction_tick();
+        runtime_dir_tick();
         service_watchdog_tick();
         bind_snapshot_up();
         engine_hooks.loop_tail();

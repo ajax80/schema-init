@@ -517,6 +517,10 @@ typedef struct {
     int              kill_signal;      /* kill_signal=, 0 = SIGTERM */
     int              final_kill_signal;/* final_kill_signal=, 0 = SIGKILL */
     struct timespec  kill_sent;        /* when a schema-ctl stop/restart signalled it; 0 = not waiting */
+    char            *exec_dir[4][8];   /* runtime_dir=/state_dir=/cache_dir=/logs_dir= (EXEC_DIR_*), relative */
+    uint8_t          exec_dir_count[4];
+    uint16_t         exec_dir_mode[4]; /* *_dir_mode=, 0 = 0755 */
+    uint8_t          rt_made;          /* a spawn created the runtime dirs; removed once stopped for good */
     char             bind_name[64];    /* bind=: stop with it, start again with it; also a dep */
     uint8_t          bind_held;        /* stopped because its bound went down; restarts with it */
     uint8_t          bind_was_up;      /* this service was up at the last tick's tail (edge detection) */
@@ -581,6 +585,22 @@ pid_t service_stop_spawn(const service_t *svc, int phase);
 /* kill_mode= (systemd KillMode=). DEFAULT: a stop signals the main process
  * and sweeps the rest once it is gone; shutdown signals them all */
 enum { KILL_MODE_DEFAULT, KILL_MODE_CGROUP, KILL_MODE_MIXED, KILL_MODE_PROCESS };
+
+/* runtime_dir= and friends (systemd RuntimeDirectory= etc.); index of exec_dir */
+enum { EXEC_DIR_RUNTIME, EXEC_DIR_STATE, EXEC_DIR_CACHE, EXEC_DIR_LOGS, EXEC_DIR_KINDS };
+#define MAX_EXEC_DIRS 8
+/* /run, /var/lib, ... as root; the XDG dirs in schema-user. -1 if unknown */
+int service_exec_dir_base(int kind, char *out, size_t n);
+/* create BASE/REL without following any symlink below BASE; the leaf gets
+ * uid:gid (-1 = keep) and MODE. -1 with errno and *step on failure */
+int service_make_dir(const char *base, const char *rel, mode_t mode, uid_t uid, gid_t gid,
+                     const char **step);
+/* delete BASE/REL and everything in it, never through a symlink; 0 if gone */
+int service_remove_tree(const char *base, const char *rel);
+/* KIND's dirs as full paths, sorted, ':'-joined (RUNTIME_DIRECTORY= etc.) */
+int service_exec_dir_env(const service_t *svc, int kind, const char *base, char *out, size_t n);
+/* move the runtime dirs aside and delete them in a child PID 1 doesn't wait for */
+void service_runtime_dirs_remove(const service_t *svc);
 
 /* restart= (systemd Restart=); ALWAYS = 0 is the default, today's behaviour */
 enum { RESTART_ALWAYS, RESTART_NO, RESTART_ON_SUCCESS, RESTART_ON_FAILURE,
