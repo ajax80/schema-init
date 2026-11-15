@@ -131,8 +131,15 @@ static void service_environment(const char *xdg, const char *cfg_home) {
     snprintf(path, sizeof path, "%s", p && p[0] ? p : "/usr/local/bin:/usr/bin:/bin");
     snprintf(bus, sizeof bus, "unix:path=%s/bus", xdg);
     snprintf(cfg, sizeof cfg, "%s", cfg_home);
-    char xdg_copy[PATH_MAX];
+    char xdg_copy[PATH_MAX], keep[2][PATH_MAX];
+    static const char *const keep_var[2] = { "XDG_STATE_HOME", "XDG_CACHE_HOME" };
     snprintf(xdg_copy, sizeof xdg_copy, "%s", xdg);
+    /* the bases state_dir=/cache_dir=/logs_dir= resolve against: a service
+     * must see the ones this supervisor was started with */
+    for (int i = 0; i < 2; i++) {
+        const char *v = getenv(keep_var[i]);
+        snprintf(keep[i], sizeof keep[i], "%s", v && v[0] == '/' ? v : "");
+    }
     clearenv();
     setenv("HOME", pw->pw_dir, 1);
     setenv("USER", pw->pw_name, 1);
@@ -141,6 +148,8 @@ static void service_environment(const char *xdg, const char *cfg_home) {
     setenv("PATH", path, 1);
     setenv("XDG_RUNTIME_DIR", xdg_copy, 1);
     setenv("DBUS_SESSION_BUS_ADDRESS", bus, 1);
+    for (int i = 0; i < 2; i++)
+        if (keep[i][0]) setenv(keep_var[i], keep[i], 1);
     envd_replay_dir("/usr/lib/environment.d");
     envd_replay_dir("/etc/environment.d");
     join(path, cfg, "/environment.d");

@@ -308,6 +308,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_svc_reload_live.sh
 	sh tests/test_restart_policy_live.sh
 	sh tests/test_kill_signal_live.sh
+	sh tests/test_exec_dirs_live.sh
 	sh tests/test_bus_activate.sh
 	sh tests/test_reload_listen.sh
 	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
@@ -399,6 +400,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_svc_reload.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svcreload && $(TESTDIR)/svcreload
 	$(CC) $(CFLAGS) tests/test_svc_restart_policy.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/restartpol && $(TESTDIR)/restartpol
 	$(CC) $(CFLAGS) tests/test_svc_kill_mode.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/killmode && $(TESTDIR)/killmode
+	$(CC) $(CFLAGS) tests/test_svc_exec_dirs.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/execdirs && $(TESTDIR)/execdirs
 	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify && $(TESTDIR)/verify
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cycles && $(TESTDIR)/cycles
 	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cgkill && $(TESTDIR)/cgkill
