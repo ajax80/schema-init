@@ -138,6 +138,18 @@ def _reload_sig(name):
     return None
 
 
+# an exit code 0-255 or a signal name, as success_exit_status= takes them
+_EXIT_SIGS = {"HUP", "INT", "QUIT", "USR1", "USR2", "TERM", "CONT", "URG", "WINCH", "PWR", "ALRM", "TRAP",
+              "KILL", "ABRT", "SEGV", "PIPE", "BUS", "FPE", "ILL", "SYS"}
+
+
+def _exit_status_tok(t):
+    if t.isdigit():
+        return int(t) <= 255
+    u = t.upper()
+    return (u[3:] if u.startswith("SIG") else u) in _EXIT_SIGS
+
+
 # kill -HUP $MAINPID / kill -s HUP $MAINPID / kill --signal=HUP $MAINPID:
 # the signal name when the line is only that, else None
 def _kill_mainpid_sig(argv):
@@ -826,7 +838,7 @@ def timer_to_svc(name, timer_sections, svc_sections, known=None, unit=None):
             tnotes = []
             if kept:
                 out.append("# schema-import: " + "; ".join(kept))
-        elif ln in ("no_restart=1", "oneshot=1"):
+        elif ln in ("no_restart=1", "oneshot=1") or ln.startswith("restart="):
             continue
         else:
             out.append(ln)
@@ -1590,14 +1602,28 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     elif stype == "forking":
         lines.append("pid_file=%s" % pidfile)
 
-    # systemd defaults Restart=no; only always/on-* opt into auto-restart.
+    # systemd defaults Restart=no; always is schema-init's default, the
+    # on-* ones are restart= (audit 4.2)
     restart = _get_last(svc, "Restart").lower()
+    restart_warns = []
     if restart in ("", "no"):
         lines.append("no_restart=1")
     else:
+        if restart in ("on-success", "on-failure", "on-abnormal", "on-abort", "on-watchdog"):
+            lines.append("restart=%s" % restart)
+        elif restart != "always":
+            restart_warns.append("Restart=%s dropped: not a Restart= value, restarts always" % restart)
         rsec = _timespan_sec(_get_last(svc, "RestartSec"))
         if rsec:
             lines.append("restart_sec=%d" % min(rsec, 3600))
+    for key, out_key in (("SuccessExitStatus", "success_exit_status"),
+                         ("RestartPreventExitStatus", "restart_prevent_exit_status")):
+        toks = " ".join(_get_all(svc, key)).split()
+        good = [t for t in toks if _exit_status_tok(t)]
+        if len(good) != len(toks):
+            restart_warns.append("%s: dropped %s" % (key, " ".join(t for t in toks if t not in good)))
+        if good:
+            lines.append("%s=%s" % (out_key, " ".join(good)))
 
     named_user = user = _get_last(svc, "User")
     # ExecStart=! / + run the main process as root whatever User= says (F44 GA
@@ -1652,6 +1678,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # here only the main process is confined
     warns.extend(stop_warns)
     warns.extend(reload_warns)
+    warns.extend(restart_warns)
     warns.extend(amb_warns + rt_warns)
     if "@" in pfx:
         warns.append("ExecStart=@ custom argv[0] not kept: the program sees its own path")

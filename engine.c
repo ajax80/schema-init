@@ -406,6 +406,7 @@ static void service_watchdog_tick(void) {
             elog(stdout, "watchdog: '%s' sent no WATCHDOG=1 for %ds — SIGABRT\n",
                    svc->name, svc->wd_armed_sec);
             service_log(svc, "watchdog-abort");
+            svc->wd_fired = 1;
             kill(svc->child_pid, SIGABRT);
             svc->wd_abort_at = now;
         }
@@ -1113,8 +1114,10 @@ static void reap(void) {
                 services[i].inst.state = STATE_PERFECT;
                 clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
                 service_log(&services[i], "socket-idle");
-            } else if (WIFEXITED(status) && WEXITSTATUS(status) == 0
+            } else if (WIFEXITED(status) && !services[i].term_signal &&
+                       service_death_class(&services[i]) == DEATH_CLEAN
                 && (services[i].flags & SVC_ONESHOT)) {
+                /* exit 0, or a code success_exit_status= lists */
                 /* clean one-shot exit → PERFECT */
                 services[i].inst.state = STATE_PERFECT;
                 clock_gettime(CLOCK_MONOTONIC, &services[i].stable_time);
@@ -1123,10 +1126,18 @@ static void reap(void) {
                 if (strcmp(services[i].name, "slot-detect") == 0) {
                     load_env_file();
                 }
-            } else if (services[i].flags & SVC_NO_RESTART) {
+            } else if ((services[i].flags & SVC_NO_RESTART) ||
+                       (!services[i].ctl_killed &&
+                        !service_restart_wanted(&services[i], service_death_class(&services[i])))) {
+                /* held down, or restart= / restart_prevent_exit_status= say
+                 * this exit stays down: EXCISED, as no_restart=1 always was */
                 services[i].inst.state = STATE_EXCISED;
-                services[i].excise_reason = excise_reason_from_exit(&services[i]);
-                service_log(&services[i], "76-no-restart");
+                /* a success_exit_status= code reads as stopped, not exit-code;
+                 * signals keep their reason, as always */
+                services[i].excise_reason = !services[i].term_signal &&
+                                            service_death_class(&services[i]) == DEATH_CLEAN
+                                            ? EXC_NONE : excise_reason_from_exit(&services[i]);
+                service_log(&services[i], (services[i].flags & SVC_NO_RESTART) ? "76-no-restart" : "76-restart-policy");
                 /* Explicit stop/down lands here straight from reap() — it
                  * never crosses the FRICTION→EXCISED transition that the tick
                  * loop uses to tear cgroups down, and case STATE_EXCISED is a
@@ -1232,7 +1243,8 @@ static void monitor_failsafes(void) {
             service_log(svc, "main-pid-timeout");
             restart_budget_refresh(svc);
             if (svc->failsafe_cmd[0]) start_failsafe(svc);
-            svc->inst.state = (svc->flags & SVC_NO_RESTART) ? STATE_EXCISED : STATE_RECOVERY;
+            svc->inst.state = (svc->flags & SVC_NO_RESTART) || !service_restart_wanted(svc, DEATH_TIMEOUT)
+                              ? STATE_EXCISED : STATE_RECOVERY;
             if (svc->inst.state == STATE_EXCISED) svc->excise_reason = EXC_MAIN_PID_TIMEOUT;
             stop_cmds_begin(svc, 2);
         }
@@ -1374,7 +1386,7 @@ static int ready_live(const service_t *svc) {
 static void ready_lost(service_t *svc) {
     service_log(svc, "readiness-lost");
     active_kill_service(svc);
-    if (svc->flags & SVC_NO_RESTART) {
+    if ((svc->flags & SVC_NO_RESTART) || !service_restart_wanted(svc, DEATH_TIMEOUT)) {
         svc->inst.state = STATE_EXCISED;
         svc->excise_reason = EXC_READINESS_LOST;
         service_log(svc, "76-no-restart");

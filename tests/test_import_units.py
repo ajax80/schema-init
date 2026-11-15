@@ -1152,10 +1152,10 @@ _F_CHRONY = ("[Service]\nType=notify\nPIDFile=/run/chrony/chronyd.pid\nEnvironme
 _F_FSTRIM_T = "[Timer]\nOnCalendar=weekly\nAccuracySec=1h\nPersistent=true\nRandomizedDelaySec=100min\n[Install]\nWantedBy=timers.target\n"
 _F_FSTRIM_S = ("[Service]\nType=oneshot\nExecStart=/usr/bin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose "
                "--quiet-unsupported\nProtectKernelTunables=yes\n")
-# 4.1: its ExecReload=/bin/kill -HUP $MAINPID is now reload_signal=HUP
-check("Fedora sshd.service output unchanged but for reload_signal", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
+# 4.1: its ExecReload=/bin/kill -HUP $MAINPID is now reload_signal=HUP; 4.2: Restart=on-failure is restart=
+check("Fedora sshd.service output unchanged but for reload_signal + restart", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
       'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nreload_signal=HUP\nnotify=1\n'
-      'restart_sec=42\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
+      'restart=on-failure\nrestart_sec=42\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
 check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
       '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\n'
       '# schema-import WARN: no equivalent here, not enforced: CapabilityBoundingSet\nname=chronyd\n'
@@ -1167,6 +1167,28 @@ check("Fedora fstrim.timer output unchanged",
       '# schema-import: dropped RandomizedDelaySec; dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
       'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
       'private_tmp=0\nprotect_system=0\nprotect_home=0\non_calendar=Mon 00:00\npersistent=1\n')
+
+# --- audit 4.2: Restart= / SuccessExitStatus= / RestartPreventExitStatus= ---
+def _rp(body):
+    return [l for l in si.unit_to_svc("p", si.parse_unit("[Service]\nExecStart=/usr/bin/true\n" + body)).splitlines()
+            if "restart" in l.lower() or "exit_status" in l or "ExitStatus" in l]
+check("no Restart= -> no_restart=1", _rp("") == ["no_restart=1"])
+check("Restart=always -> nothing (the default)", _rp("Restart=always\n") == [])
+for v in ("on-success", "on-failure", "on-abnormal", "on-abort", "on-watchdog"):
+    check("Restart=%s -> restart=%s" % (v, v), _rp("Restart=%s\n" % v) == ["restart=%s" % v])
+check("Restart=sometimes -> WARN, restarts always",
+      _rp("Restart=sometimes\n") == ["# schema-import WARN: Restart=sometimes dropped: not a Restart= value, restarts always"])
+check("SuccessExitStatus= lines join, signals kept",
+      "success_exit_status=143 SIGTERM 3" in _rp("Restart=on-failure\nSuccessExitStatus=143 SIGTERM\nSuccessExitStatus=3\n"))
+check("RestartPreventExitStatus= mapped", "restart_prevent_exit_status=6 SIGKILL" in
+      _rp("Restart=always\nRestartPreventExitStatus=6 SIGKILL\n"))
+check("a bad ExitStatus token is dropped with a WARN, the rest kept",
+      any("dropped EXIT_BOGUS" in l for l in _rp("SuccessExitStatus=EXIT_BOGUS 2\n")) and
+      "success_exit_status=2" in _rp("SuccessExitStatus=EXIT_BOGUS 2\n"))
+
+check("a timer's service drops restart= (the timer runs it)",
+      "restart=" not in si.timer_to_svc("t", si.parse_unit("[Timer]\nOnCalendar=daily\n"),
+                                        si.parse_unit("[Service]\nExecStart=/usr/bin/true\nRestart=on-failure\n")))
 
 # --- audit 4.1: ExecReload= / notify-reload ---
 def _rl(body):
