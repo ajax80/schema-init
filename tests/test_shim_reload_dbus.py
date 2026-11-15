@@ -59,4 +59,35 @@ os.rename(os.path.join(bin_, "dbus-send"), os.path.join(bin_, "gdbus"))
 rc, ctl, bus = run("restart", "dbus.service")
 check("explicit restart dbus still goes to schema-ctl", "restart dbus" in ctl and bus == "", "ctl=%r" % ctl)
 
+# audit 4.1: other services reload through PID 1 and restart only when it
+# says cannot-reload
+open(os.path.join(svc, "web.svc"), "w").write("name=web\nexec=/bin/true\n")
+open(os.path.join(svc, "idle.svc"), "w").write("name=idle\nexec=/bin/true\n")
+ctl2 = os.path.join(bin_, "fake-ctl2")
+open(ctl2, "w").write("""#!/bin/sh
+echo "$*" >> %s
+case "$1" in
+status) printf 'service.web.state=PERFECT\\nservice.idle.state=EXCISED\\n' ;;
+reload) echo "$RELOAD_REPLY"; case "$RELOAD_REPLY" in ok:*) exit 0 ;; *) exit 1 ;; esac ;;
+*) echo "ok: $*" ;;
+esac
+""" % ctllog)
+os.chmod(ctl2, 0o755)
+OKR = "ok: SIGHUP → web (pid 5)"
+NOR = "err: cannot-reload: web has no exec_reload= or reload_signal="
+for verb in ("reload", "reload-or-restart", "try-reload-or-restart"):
+    rc, ctl, _ = run(verb, "web.service", SCHEMA_CTL=ctl2, RELOAD_REPLY=OKR)
+    check("%s web (reloadable) -> reload, no restart" % verb,
+          rc == 0 and "reload web" in ctl and "restart web" not in ctl, "ctl=%r" % ctl)
+    rc, ctl, _ = run(verb, "web.service", SCHEMA_CTL=ctl2, RELOAD_REPLY=NOR)
+    check("%s web (cannot-reload) -> restart" % verb,
+          "reload web" in ctl and "restart web" in ctl, "ctl=%r" % ctl)
+    rc, ctl, _ = run(verb, "idle.service", SCHEMA_CTL=ctl2, RELOAD_REPLY=OKR)
+    check("%s idle (inactive) -> nothing" % verb, "idle" not in ctl.replace("status", ""), "ctl=%r" % ctl)
+rc, ctl, _ = run("reload", "web.service", SCHEMA_CTL=ctl2, RELOAD_REPLY="err: web is already reloading")
+check("other reload errors never turn into a restart", "restart web" not in ctl, "ctl=%r" % ctl)
+r = subprocess.run([SHIM, "reload", "web.service"], env=dict(env, SCHEMA_CTL=ctl2, RELOAD_REPLY=OKR),
+                   capture_output=True, text=True)
+check("PID 1's reload reply is shown", OKR in r.stdout, "out=%r" % r.stdout)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

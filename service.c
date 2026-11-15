@@ -1506,6 +1506,70 @@ pid_t service_stop_spawn(const service_t *svc, int phase) {
     _exit(bad);
 }
 
+/* svc_run_cmds with $MAINPID / ${MAINPID} replaced first; a word longer
+ * than the buffer fails the runner instead of running a truncated command */
+static char *svc_subst_mainpid(const char *c, const char *pid) {
+    size_t cap = strlen(c) * 2 + 32;
+    char *o = malloc(cap);
+    if (!o) return NULL;
+    size_t n = 0, pl = strlen(pid);
+    while (*c) {
+        size_t skip = strncmp(c, "${MAINPID}", 10) == 0 ? 10 : strncmp(c, "$MAINPID", 8) == 0 ? 8 : 0;
+        if (skip) {
+            if (n + pl + 1 > cap) { free(o); return NULL; }
+            memcpy(o + n, pid, pl);
+            n += pl;
+            c += skip;
+            continue;
+        }
+        if (n + 2 > cap) { free(o); return NULL; }
+        o[n++] = *c++;
+    }
+    o[n] = '\0';
+    return o;
+}
+
+pid_t service_reload_spawn(const service_t *svc, pid_t mainpid) {
+    pid_t pid = fork();
+    if (pid != 0) return pid;
+    service_reset_child_sigmask();
+    /* own group: a timed-out runner is killed with what it started */
+    setsid();
+    int null_fd = open("/dev/null", O_RDONLY);
+    if (null_fd >= 0) {
+        dup2(null_fd, STDIN_FILENO);
+        if (null_fd > 0) close(null_fd);
+    }
+    svc_child_log(svc);
+    syscall(SYS_close_range, 3, ~0U, 0);
+    svc_apply_env(svc, NULL, 0);
+    char pidtxt[24];
+    snprintf(pidtxt, sizeof pidtxt, "%d", (int)mainpid);
+    setenv("MAINPID", pidtxt, 1);
+    char *cmds[MAX_EXEC_PRE];
+    for (int i = 0; i < svc->exec_reload_count; i++)
+        if (!(cmds[i] = svc_subst_mainpid(svc->exec_reload[i], pidtxt))) _exit(1);
+    gid_t sgid = svc->run_gid;
+    svc_resolve_group_or_die(svc, &sgid, "exec_reload: ");
+    if (svc->run_uid && svc->cap_ambient_mask) {
+        const char *step = "";
+        if (apply_ambient_caps(svc->cap_ambient_mask, svc->run_uid, sgid,
+                               svc->run_user[0] ? svc->run_user : "nobody", &step) != 0) {
+            dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n", svc->name, step, errno);
+            _exit(126);
+        }
+    } else if (svc->run_uid || svc->run_group[0]) {
+        if (initgroups(svc->run_user[0] ? svc->run_user
+                                        : svc->run_uid ? "nobody" : "root", sgid) != 0 ||
+            setgid(sgid) != 0 || (svc->run_uid && setuid(svc->run_uid) != 0)) {
+            dprintf(2, "[schema-init] UID DROP FAILED for %s: exec_reload: %d\n", svc->name, errno);
+            _exit(126);
+        }
+    }
+    svc_chdir(svc, WD_STOP);
+    _exit(svc_run_cmds(svc, cmds, svc->exec_reload_count, "exec_reload", -1) < 0);
+}
+
 pid_t service_card_spawn(const service_t *svc, int idx) {
     pid_t pid = fork();
     if (pid != 0) return pid;
@@ -2295,6 +2359,7 @@ void service_free_landlock(service_t *svc) {
     svc_free_cmds(svc->exec_pre, &svc->exec_pre_count);
     svc_free_cmds(svc->exec_stop, &svc->exec_stop_count);
     svc_free_cmds(svc->exec_stop_post, &svc->exec_stop_post_count);
+    svc_free_cmds(svc->exec_reload, &svc->exec_reload_count);
     for (int i = 0; i < svc->card_count; i++) {
         free(svc->card[i]);
         svc->card[i] = NULL;
@@ -2384,6 +2449,8 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
         svc_free_cmds(svc->exec_stop, &svc->exec_stop_count);
     } else if (strcmp(key, "exec_stop_post") == 0) {
         svc_free_cmds(svc->exec_stop_post, &svc->exec_stop_post_count);
+    } else if (strcmp(key, "exec_reload") == 0) {
+        svc_free_cmds(svc->exec_reload, &svc->exec_reload_count);
     } else if (strcmp(key, "card") == 0) {
         for (int i = 0; i < svc->card_count; i++) {
             free(svc->card[i]);
@@ -2485,6 +2552,27 @@ static int svc_parse_rlimit(service_t *svc, const char *key, const char *val) {
     return 1;
 }
 
+/* reload_signal=: a name (HUP, SIGHUP, any case) or a number. 0 = refused:
+ * KILL and STOP can't be caught, so they'd stop the service, not reload it */
+static int svc_reload_signal_parse(const char *v) {
+    static const struct { const char *n; int s; } t[] = {
+        { "HUP", SIGHUP }, { "INT", SIGINT }, { "QUIT", SIGQUIT }, { "USR1", SIGUSR1 },
+        { "USR2", SIGUSR2 }, { "TERM", SIGTERM }, { "CONT", SIGCONT }, { "URG", SIGURG },
+        { "WINCH", SIGWINCH }, { "PWR", SIGPWR }, { "ALRM", SIGALRM }, { "TRAP", SIGTRAP },
+    };
+    while (*v == ' ' || *v == '\t') v++;
+    if (*v >= '0' && *v <= '9') {
+        char *end;
+        long n = strtol(v, &end, 10);
+        if (*end || n < 1 || n > 64 || n == SIGKILL || n == SIGSTOP) return 0;
+        return (int)n;
+    }
+    if (strncasecmp(v, "SIG", 3) == 0) v += 3;
+    for (size_t i = 0; i < sizeof t / sizeof t[0]; i++)
+        if (strcasecmp(v, t[i].n) == 0) return t[i].s;
+    return 0;
+}
+
 /* One key=value line. 0 = ok, -1 = the service must be rejected. */
 static int svc_cmd_ok(const char *cmd) {
     char *w[33];
@@ -2575,6 +2663,26 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         cmds[(*n)++] = strdup(cmd);
+    } else if (strcmp(line, "exec_reload") == 0) {
+        const char *cmd = val + strspn(val, " \t");
+        if (!svc_cmd_ok(cmd + strspn(cmd, "-")) || svc->exec_reload_count >= MAX_EXEC_PRE) {
+            fprintf(stderr, "[schema-init] %s: exec_reload=%s needs an absolute command with balanced quotes and at most 32 words, at most %d per service\n",
+                    svc->name[0] ? svc->name : path, val, MAX_EXEC_PRE);
+            return -1;
+        }
+        svc->exec_reload[svc->exec_reload_count++] = strdup(cmd);
+    } else if (strcmp(line, "reload_signal") == 0) {
+        int sig = svc_reload_signal_parse(val);
+        if (sig <= 0) {
+            fprintf(stderr, "[schema-init] %s: reload_signal=%s is not a signal a daemon can catch (HUP, USR1, 10, ...)\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->reload_signal = sig;
+        svc->reload_signal_set = 1;
+    } else if (strcmp(line, "reload") == 0) {
+        /* the systemd1 shim's older opt-in: reload means SIGHUP */
+        if (!svc->reload_signal_set) svc->reload_signal = atoi(val) == 1 || strcmp(val, "yes") == 0 ? SIGHUP : 0;
     } else if (strcmp(line, "card") == 0) {
         const char *c = val + strspn(val, " \t");
         int ok = strncmp(c, "exec:", 5) == 0 ? svc_cmd_ok(c + 5)
