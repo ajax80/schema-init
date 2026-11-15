@@ -232,7 +232,12 @@ static void run_ctx_runs(const struct dev_ctx *rc, enum dispatch_mode mode) {
             execvp(argv[0], argv);
             _exit(127);
         }
-        if (mode == DISPATCH_WORKER) udev_wait_child(pid, UDEV_EXEC_TIMEOUT, rc->runs[i]);
+        if (mode == DISPATCH_WORKER) {
+            int rc_exit = udev_wait_child(pid, UDEV_EXEC_TIMEOUT, rc->runs[i]);
+            /* output is discarded, so leave one line per failing helper */
+            if (rc_exit > 0)
+                fprintf(stderr, "[schema-udev] RUN exited %d: %s\n", rc_exit, rc->runs[i]);
+        }
     }
 }
 
@@ -733,7 +738,8 @@ int main(void) {
     g_event_timeout_ms = env_ll("SCHEMA_UDEV_EVENT_TIMEOUT_MS", 180000);
     if (g_event_timeout_ms < 1000 || g_event_timeout_ms > 3600000) g_event_timeout_ms = 180000;
     g_slow_ms = env_ll("SCHEMA_UDEV_SLOW_MS", 1000);
-    g_run_output = env_ll("SCHEMA_UDEV_RUN_OUTPUT", 0) != 0;
+    const char *ro = getenv("SCHEMA_UDEV_RUN_OUTPUT");
+    g_run_output = ro && *ro && strcmp(ro, "0") != 0;
     long np = sysconf(_SC_NPROCESSORS_ONLN);
     g_cap = sched_cap(np > 0 ? np : 1);
 

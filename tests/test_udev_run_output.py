@@ -21,6 +21,7 @@ if not os.access(BIN, os.X_OK):
     sys.exit(0)
 
 RULES = '''ENV{TESTRUN}=="1", RUN+="/bin/sh -c 'echo RUN-STDOUT-MARK; echo RUN-STDERR-MARK >&2; touch $env{TESTDONE}'"
+ENV{TESTRUN}=="1", RUN+="/bin/sh -c 'exit 3'"
 '''
 results = []
 
@@ -43,18 +44,22 @@ def run(extra_env, workdir):
     lines = []
     for f in (p.stdout, p.stderr):
         threading.Thread(target=lambda f=f: [lines.append(l) for l in f], daemon=True).start()
-    end = time.monotonic() + 10
-    while not any('test feed on' in l for l in lines) and time.monotonic() < end:
-        time.sleep(0.02)
-    rec = ['add@/devices/t/x', 'ACTION=add', 'DEVPATH=/devices/t/x', 'SEQNUM=1',
-           'SUBSYSTEM=test', 'TESTRUN=1', f'TESTDONE={done}']
-    socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).sendto(('\0'.join(rec) + '\0').encode(), feed)
-    end = time.monotonic() + 10
-    while not os.path.exists(done) and time.monotonic() < end:
-        time.sleep(0.02)
-    time.sleep(0.3)
-    p.terminate()
-    p.wait(5)
+    try:
+        end = time.monotonic() + 10
+        while not any('test feed on' in l for l in lines) and time.monotonic() < end:
+            time.sleep(0.02)
+        if not any('test feed on' in l for l in lines):
+            return False, ''.join(lines)
+        rec = ['add@/devices/t/x', 'ACTION=add', 'DEVPATH=/devices/t/x', 'SEQNUM=1',
+               'SUBSYSTEM=test', 'TESTRUN=1', f'TESTDONE={done}']
+        socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).sendto(('\0'.join(rec) + '\0').encode(), feed)
+        end = time.monotonic() + 10
+        while not os.path.exists(done) and time.monotonic() < end:
+            time.sleep(0.02)
+        time.sleep(0.3)
+    finally:
+        p.terminate()
+        p.wait(5)
     time.sleep(0.1)
     return os.path.exists(done), ''.join(lines)
 
@@ -63,12 +68,17 @@ work = tempfile.mkdtemp(prefix='schema-udev-out-')
 try:
     ran, out = run({}, work)
     check('default: RUN helper ran', ran)
-    check('default: helper stdout not in daemon output', 'RUN-STDOUT-MARK' not in out)
-    check('default: helper stderr not in daemon output', 'RUN-STDERR-MARK' not in out)
+    check('default: failing helper leaves one exit line', 'RUN exited 3' in out)
+    check('default: helper stdout not in daemon output', ran and 'RUN-STDOUT-MARK' not in out)
+    check('default: helper stderr not in daemon output', ran and 'RUN-STDERR-MARK' not in out)
+    ran, out = run({'SCHEMA_UDEV_RUN_OUTPUT': '0'}, work)
+    check('RUN_OUTPUT=0: output still discarded', ran and 'RUN-STDERR-MARK' not in out)
     ran, out = run({'SCHEMA_UDEV_RUN_OUTPUT': '1'}, work)
     check('RUN_OUTPUT=1: helper ran', ran)
     check('RUN_OUTPUT=1: helper stdout kept', 'RUN-STDOUT-MARK' in out)
     check('RUN_OUTPUT=1: helper stderr kept', 'RUN-STDERR-MARK' in out)
+    ran, out = run({'SCHEMA_UDEV_RUN_OUTPUT': 'yes'}, work)
+    check('RUN_OUTPUT=yes: helper stderr kept', ran and 'RUN-STDERR-MARK' in out)
 finally:
     shutil.rmtree(work, ignore_errors=True)
 
