@@ -74,4 +74,9 @@ done
 # bare reload still re-reads the .svc files
 r=$(ctl reload) || fail "bare reload: $r"
 case "$r" in "ok: reload (graceful)"*) ;; *) fail "bare reload reply: $r" ;; esac
+# extra spaces before --evict are still the config reload, not a service named --evict
+r=$(python3 -c 'import socket,sys
+c=socket.socket(socket.AF_UNIX); c.connect(sys.argv[1]); c.sendall(b"reload  --evict\n")
+print(c.makefile().readline().strip())' "$T/run/schema-user/ctl.sock")
+case "$r" in "ok: reload (evict mode)"*) ;; *) fail "reload  --evict: $r" ;; esac
 echo "test_svc_reload_live: ok"

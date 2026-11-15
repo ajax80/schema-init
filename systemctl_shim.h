@@ -802,6 +802,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         const char *ctlverb = verb;
         int reloads = strcmp(verb, "reload") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
                       strcmp(verb, "try-reload-or-restart") == 0;
+        int fail = 0;
         if (strcmp(verb, "try-restart") == 0 || reloads)
             ctlverb = "restart";
         for (i = verb_idx + 1; i < argc; i++) {
@@ -820,16 +821,21 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
                 && !ctl_is_active(name)) continue;
             if (reloads) {
                 char reply[512];
-                /* a .svc without exec_reload=/reload_signal= restarts, as
-                 * every reload did before PID 1 could reload a service */
-                if (run_ctl_out("reload", name, reply, sizeof reply) == 0 || !strstr(reply, "cannot-reload")) {
-                    if (reply[0]) fputs(reply, stdout);
+                int rc = run_ctl_out("reload", name, reply, sizeof reply);
+                /* a .svc without exec_reload=/reload_signal= restarts, as every
+                 * reload did before; so does a supervisor older than
+                 * `reload <svc>`, which re-read its config instead */
+                if (!strstr(reply, "cannot-reload") && strncmp(reply, "ok: reload (", 12) != 0) {
+                    if (rc != 0) {
+                        fputs(reply[0] ? reply : "systemctl: no reply from schema-ctl\n", stderr);
+                        fail = 1;
+                    }
                     continue;
                 }
             }
             run_ctl(ctlverb, name);
         }
-        return 0;
+        return fail;
     }
     if (strcmp(verb, "is-active") == 0) {
         int rc = 0, seen = 0;

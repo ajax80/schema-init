@@ -127,8 +127,8 @@ def _expand_argv(argv, env):
 _RELOAD_SIGS = {"HUP", "INT", "QUIT", "USR1", "USR2", "TERM", "CONT", "URG", "WINCH", "PWR", "ALRM", "TRAP"}
 
 
+# a ReloadSignal= / kill -SIG name as reload_signal= takes it, or None
 def _reload_sig(name):
-    """A ReloadSignal=/kill -SIG name as reload_signal= takes it, or None."""
     n = name.upper()
     n = n[3:] if n.startswith("SIG") else n
     if n in _RELOAD_SIGS:
@@ -138,9 +138,9 @@ def _reload_sig(name):
     return None
 
 
+# kill -HUP $MAINPID / kill -s HUP $MAINPID / kill --signal=HUP $MAINPID:
+# the signal name when the line is only that, else None
 def _kill_mainpid_sig(argv):
-    """`kill -HUP $MAINPID`, `kill -s HUP $MAINPID`, `kill --signal=HUP ...`:
-    the signal name when the line is just that, else None."""
     if not argv or os.path.basename(argv[0]) != "kill" or argv[-1] not in ("$MAINPID", "${MAINPID}"):
         return None
     mid = argv[1:-1]

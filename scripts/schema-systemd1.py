@@ -34,8 +34,8 @@ SCHEMA_CTL = next((p for p in ("/usr/bin/schema-ctl", "/usr/local/bin/schema-ctl
 # a leading '-'; this still permits real names like getty-tty2 / mount-efi.
 _UNIT_RE = re.compile(r'^[A-Za-z0-9:_.@-]+$')
 
+# returns PID 1's reply line ('' when it never answered)
 def schema_ctl(action, name):
-    """PID 1's reply line ('' when it never answered)."""
     if not name or name.startswith('-') or not _UNIT_RE.match(name):
         print(f"systemd1: refusing unsafe unit name {_q(name)}", file=sys.stderr)
         return ''
@@ -45,6 +45,9 @@ def schema_ctl(action, name):
     except Exception as e:
         print(f"systemd1: schema-ctl {action} {_q(name)} failed: {e}", file=sys.stderr)
         return ''
+
+def _cannot_reload(reply):
+    return 'cannot-reload' in reply or reply.startswith('ok: reload (')
 
 MANAGE_UNITS = 'org.freedesktop.systemd1.manage-units'
 RELOAD_DAEMON = 'org.freedesktop.systemd1.reload-daemon'
@@ -386,19 +389,24 @@ class Systemd1Unit(dbus.service.Object):
         if self.short_name == 'dbus':      # ReloadUnit routes it to ReloadConfig
             self.can_reload = True
             return True
-        self.can_reload = False
+        cmds, sig, old = False, False, False
         try:
             for path in svc_files('/etc/schema-init/services/%s.svc' % self.short_name):
                 with open(path) as f:
                     for line in f:
-                        line = line.strip()
-                        if line.startswith(('exec_reload=', 'reload_signal=')):
-                            self.can_reload = True
-                            return True
-                        if line.startswith('reload='):
-                            self.can_reload = line in ('reload=1', 'reload=yes')
+                        k, _, v = line.strip().partition('=')
+                        v = v.strip()
+                        if k == 'exec_reload':
+                            cmds = bool(v)
+                        elif k == 'reload_signal':
+                            sig = bool(v)
+                            if not v:       # PID 1's clear drops reload=1's HUP too
+                                old = False
+                        elif k == 'reload':
+                            old = v in ('1', 'yes')
         except OSError:
             pass
+        self.can_reload = cmds or sig or old
         return self.can_reload
 
     def update_state(self, status_dict):
@@ -928,19 +936,22 @@ class Systemd1Manager(dbus.service.Object):
                 "Unit %s is not running." % name,
                 name='org.freedesktop.systemd1.NoSuchUnit')
         out = schema_ctl('reload', svc_name(name))
-        if not out.startswith('ok:'):
+        if _cannot_reload(out) or not out.startswith('ok:'):
             raise dbus.exceptions.DBusException(
                 "Could not reload %s: %s" % (name, out or 'no reply from PID 1'),
                 name='org.freedesktop.systemd1.NoSuchUnit')
         reply(self._trigger_job_signals(name))
 
+    # restart only when PID 1 can't reload it (no key, or a PID 1 older than
+    # `reload <svc>`, which re-read its config instead); like the systemctl
+    # shim, never on "already reloading" or other errors
     def _reload_or_restart(self, name):
-        """reload when the unit can and PID 1 takes it, else restart"""
         self.poll_and_update()
         unit = self.units.get(name)
-        if unit is not None and unit.can_reload and unit.pid and \
-                schema_ctl('reload', svc_name(name)).startswith('ok:'):
-            return
+        if unit is not None and unit.can_reload and unit.pid:
+            out = schema_ctl('reload', svc_name(name))
+            if not _cannot_reload(out):
+                return
         schema_ctl('restart', svc_name(name))
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o',

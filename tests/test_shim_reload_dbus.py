@@ -84,10 +84,20 @@ for verb in ("reload", "reload-or-restart", "try-reload-or-restart"):
           "reload web" in ctl and "restart web" in ctl, "ctl=%r" % ctl)
     rc, ctl, _ = run(verb, "idle.service", SCHEMA_CTL=ctl2, RELOAD_REPLY=OKR)
     check("%s idle (inactive) -> nothing" % verb, "idle" not in ctl.replace("status", ""), "ctl=%r" % ctl)
-rc, ctl, _ = run("reload", "web.service", SCHEMA_CTL=ctl2, RELOAD_REPLY="err: web is already reloading")
-check("other reload errors never turn into a restart", "restart web" not in ctl, "ctl=%r" % ctl)
+for verb in ("reload", "reload-or-restart"):
+    r = subprocess.run([SHIM, verb, "web.service"], env=dict(env, SCHEMA_CTL=ctl2, RELOAD_REPLY="err: web is already reloading"),
+                       capture_output=True, text=True)
+    ctl = open(ctllog).read() if os.path.exists(ctllog) else ""
+    check("%s: other reload errors -> exit 1 + stderr, never a restart" % verb,
+          r.returncode == 1 and "already reloading" in r.stderr and "restart web" not in ctl,
+          "rc=%d err=%r ctl=%r" % (r.returncode, r.stderr, ctl))
+    os.unlink(ctllog)
 r = subprocess.run([SHIM, "reload", "web.service"], env=dict(env, SCHEMA_CTL=ctl2, RELOAD_REPLY=OKR),
                    capture_output=True, text=True)
-check("PID 1's reload reply is shown", OKR in r.stdout, "out=%r" % r.stdout)
+check("a successful reload prints nothing, like systemctl", r.returncode == 0 and r.stdout == "" and r.stderr == "",
+      "out=%r err=%r" % (r.stdout, r.stderr))
+rc, ctl, _ = run("reload", "web.service", SCHEMA_CTL=ctl2, RELOAD_REPLY="ok: reload (graceful)")
+check("a supervisor older than reload <svc> (config-reload reply) -> restart",
+      "reload web" in ctl and "restart web" in ctl, "ctl=%r" % ctl)
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

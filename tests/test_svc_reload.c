@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 
 static void write_svc(const char *path, const char *body) {
     FILE *f = fopen(path, "w");
@@ -82,6 +83,18 @@ int main(void) {
     assert(load(p, "name=s\nexec=/bin/true\nreload=0\n", &svc) == 0 && svc.reload_signal == 0);
     assert(load(p, "name=s\nexec=/bin/true\nreload=1\nreload_signal=USR2\n", &svc) == 0 && svc.reload_signal == SIGUSR2);
     assert(load(p, "name=s\nexec=/bin/true\nreload_signal=USR2\nreload=1\n", &svc) == 0 && svc.reload_signal == SIGUSR2);
+    /* a drop-in's empty reload_signal= clears it (and reload=1's HUP), as for the sibling lists */
+    {
+        char dd[400], dp[450];
+        snprintf(dd, sizeof dd, "%s.d", p);
+        assert(mkdir(dd, 0755) == 0);
+        snprintf(dp, sizeof dp, "%s/10-off.conf", dd);
+        write_svc(dp, "reload_signal=\nexec_reload=\n");
+        assert(load(p, "name=s\nexec=/bin/true\nreload_signal=HUP\nexec_reload=/bin/true\n", &svc) == 0);
+        assert(svc.reload_signal == 0 && svc.exec_reload_count == 0);
+        unlink(dp);
+        rmdir(dd);
+    }
     /* exec_reload= needs an absolute command */
     assert(load(p, "name=s\nexec=/bin/true\nexec_reload=true\n", &svc) == -1);
 

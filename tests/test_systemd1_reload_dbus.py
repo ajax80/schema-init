@@ -118,16 +118,36 @@ for meth in ("ReloadOrRestartUnit", "ReloadOrTryRestartUnit"):
     call(getattr(m.Systemd1Manager, meth), mg, "rsyslog.service")
     check("%s: refused reload falls back to restart" % meth,
           ctl == [("reload", "rsyslog"), ("restart", "rsyslog")])
+    for rep_ in ("err: rsyslog is already reloading", "err: rsyslog: signal: No such process"):
+        reply_ok[0] = rep_
+        ctl.clear(); mg = Mgr(); mg._is_active = lambda n: True
+        call(getattr(m.Systemd1Manager, meth), mg, "rsyslog.service")
+        check("%s: %r never restarts" % (meth, rep_), ctl == [("reload", "rsyslog")])
+    reply_ok[0] = "ok: reload (graceful)"
+    ctl.clear(); mg = Mgr(); mg._is_active = lambda n: True
+    call(getattr(m.Systemd1Manager, meth), mg, "rsyslog.service")
+    check("%s: older PID 1's config-reload reply -> restart" % meth,
+          ctl == [("reload", "rsyslog"), ("restart", "rsyslog")])
+reply_ok[0] = "ok: reload (graceful)"
+try:
+    reload_unit(Mgr(), "rsyslog.service", "replace")
+    check("ReloadUnit on an older PID 1 is an error, not a fake success", False)
+except m.dbus.exceptions.DBusException as e:
+    check("ReloadUnit on an older PID 1 is an error, not a fake success", True)
 
 import tempfile
 d = tempfile.mkdtemp()
-for body, want in (("exec_reload=/bin/true\n", True), ("reload_signal=USR1\n", True),
-                   ("reload=1\n", True), ("reload=0\n", False), ("exec=/bin/x\n", False)):
+for body, drop, want in (("exec_reload=/bin/true\n", "", True), ("reload_signal=USR1\n", "", True),
+                         ("reload=1\n", "", True), ("reload=0\n", "", False), ("exec=/bin/x\n", "", False),
+                         ("", "exec_reload=/bin/r\n", True), ("exec_reload=/bin/r\n", "exec_reload=\n", False),
+                         ("reload_signal=HUP\n", "reload_signal=\n", False), ("reload=1\n", "reload_signal=\n", False),
+                         ("reload_signal=HUP\n", "reload=0\n", True)):
     open(os.path.join(d, "x.svc"), "w").write("name=x\n" + body)
-    m.svc_files = lambda pattern: [os.path.join(d, "x.svc")]
+    open(os.path.join(d, "x.conf"), "w").write(drop)
+    m.svc_files = lambda pattern: [os.path.join(d, "x.svc"), os.path.join(d, "x.conf")]
     w = m.Systemd1Unit.__new__(m.Systemd1Unit)
     w.short_name = "x"
-    check("CanReload for %r is %s" % (body.strip(), want), m.Systemd1Unit._read_can_reload(w) is want)
+    check("CanReload for %r + drop-in %r is %s" % (body.strip(), drop.strip(), want), m.Systemd1Unit._read_can_reload(w) is want)
 
 u = m.Systemd1Unit.__new__(m.Systemd1Unit)
 u.short_name = "dbus"

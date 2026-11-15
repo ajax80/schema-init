@@ -2450,7 +2450,8 @@ static void ctl_cmd(int fd, char *line) {
         ctl_end(fd);
         return;
 
-    } else if (strncmp(line, "reload ", 7) == 0 && line[7] && strcmp(line + 7, "--evict") != 0) {
+    } else if (strncmp(line, "reload ", 7) == 0 && line[7 + strspn(line + 7, " ")] &&
+               strcmp(line + 7 + strspn(line + 7, " "), "--evict") != 0) {
         const char *name = line + 7;
         while (*name == ' ') name++;
         for (i = 0; i < svc_count; i++) {
