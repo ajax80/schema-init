@@ -1152,10 +1152,11 @@ _F_CHRONY = ("[Service]\nType=notify\nPIDFile=/run/chrony/chronyd.pid\nEnvironme
 _F_FSTRIM_T = "[Timer]\nOnCalendar=weekly\nAccuracySec=1h\nPersistent=true\nRandomizedDelaySec=100min\n[Install]\nWantedBy=timers.target\n"
 _F_FSTRIM_S = ("[Service]\nType=oneshot\nExecStart=/usr/bin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose "
                "--quiet-unsupported\nProtectKernelTunables=yes\n")
-# 4.1: its ExecReload=/bin/kill -HUP $MAINPID is now reload_signal=HUP; 4.2: Restart=on-failure is restart=
-check("Fedora sshd.service output unchanged but for reload_signal + restart", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
+# 4.1: ExecReload=/bin/kill -HUP $MAINPID is reload_signal=HUP; 4.2: Restart=on-failure is restart=;
+# 4.3: KillMode=process is kill_mode=process (a stop keeps the sessions)
+check("Fedora sshd.service output unchanged but for reload_signal, restart, kill_mode", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
       'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nreload_signal=HUP\nnotify=1\n'
-      'restart=on-failure\nrestart_sec=42\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
+      'restart=on-failure\nrestart_sec=42\nkill_mode=process\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
 check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
       '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\n'
       '# schema-import WARN: no equivalent here, not enforced: CapabilityBoundingSet\nname=chronyd\n'
@@ -1190,6 +1191,23 @@ check("a bad ExitStatus token is dropped with a WARN, the rest kept",
 check("a timer's service drops restart= (the timer runs it)",
       "restart=" not in si.timer_to_svc("t", si.parse_unit("[Timer]\nOnCalendar=daily\n"),
                                         si.parse_unit("[Service]\nExecStart=/usr/bin/true\nRestart=on-failure\n")))
+
+# --- audit 4.3: KillMode= / KillSignal= / FinalKillSignal= ---
+def _km(body):
+    return [l for l in si.unit_to_svc("k", si.parse_unit("[Service]\nExecStart=/usr/bin/true\nRestart=always\n" + body)).splitlines()
+            if "kill" in l.lower()]
+check("no KillMode= -> nothing", _km("") == [])
+for v in ("control-group", "mixed", "process"):
+    check("KillMode=%s -> kill_mode=%s" % (v, v), _km("KillMode=%s\n" % v) == ["kill_mode=%s" % v])
+check("KillMode=none -> process + WARN", _km("KillMode=none\n") ==
+      ["# schema-import WARN: KillMode=none mapped to kill_mode=process (the main process still gets the stop signal)",
+       "kill_mode=process"])
+check("KillSignal= / FinalKillSignal= mapped", _km("KillSignal=SIGINT\nFinalKillSignal=SIGQUIT\n") ==
+      ["kill_signal=SIGINT", "final_kill_signal=SIGQUIT"])
+check("an unknown KillSignal= dropped with a WARN", any("KillSignal=SIGRTMIN+3 dropped" in l for l in _km("KillSignal=SIGRTMIN+3\n")))
+for bad in ("19", "0", "65"):
+    check("KillSignal=%s (the parser refuses it) dropped, not emitted" % bad,
+          not any(l.startswith("kill_signal=") for l in _km("KillSignal=%s\n" % bad)))
 
 # --- audit 4.1: ExecReload= / notify-reload ---
 def _rl(body):
