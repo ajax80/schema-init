@@ -33,6 +33,7 @@ svc succ7    'exit 7'        'restart=on-failure\nsuccess_exit_status=7\n'
 svc prev5    'exit 5'        'restart_prevent_exit_status=5\n'
 svc onsucc1  'exit 1'        'restart=on-success\n'
 svc os7      'exit 7'        'oneshot=1\nsuccess_exit_status=7\n'
+svc osu1     'kill -USR1 $$' 'oneshot=1\nsuccess_exit_status=SIGUSR1\n'
 chmod 600 "$S"/*.svc
 
 ./schema-user > "$T/out" 2>&1 &
@@ -53,6 +54,8 @@ for s in onfail0 onfailtm no1 abort1 succ7 prev5 onsucc1; do
     [ "$(runs $s)" = 1 ] || fail "$s ran $(runs $s) times"
 done
 until_ok "line os7 | grep -q 'state=PERFECT'" || fail "oneshot exit 7 with success_exit_status=7: $(line os7)"
+until_ok "line osu1 | grep -q 'state=PERFECT'" || fail "oneshot killed by a listed signal: $(line osu1)"
+[ "$(runs osu1)" = 1 ] || fail "osu1 reran $(runs osu1) times"
 grep -q "onfail0.*76-restart-policy\|76-restart-policy.*onfail0" "$T/out" || grep -rq "76-restart-policy" "$T/state" 2>/dev/null \
     || fail "no 76-restart-policy log line"
 

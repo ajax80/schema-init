@@ -507,7 +507,7 @@ typedef struct {
     uint8_t          circuit_broken;   /* crash-loop breaker excised it; reset/start clears */
     uint8_t          excise_reason;    /* EXC_*: why the last excise happened; cleared on spawn */
     uint8_t          no_restart_cfg;   /* the .svc's no_restart=; SVC_NO_RESTART is also a stop's hold */
-    uint8_t          restart_policy;   /* restart= (RESTART_*); restart=no also sets SVC_NO_RESTART */
+    uint8_t          restart_policy;   /* restart= (RESTART_*); restart=no is SVC_NO_RESTART, never stored here */
     uint8_t          success_codes[256 / 8];   /* success_exit_status= exit codes (bitmap) */
     uint64_t         success_sigs;             /* ...and signals, bit sig-1 */
     uint8_t          prevent_codes[256 / 8];   /* restart_prevent_exit_status= */

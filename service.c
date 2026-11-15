@@ -2740,8 +2740,10 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                     svc->name[0] ? svc->name : path, val);
             return -1;
         }
-        /* last of restart= / no_restart= wins */
-        svc->restart_policy = (uint8_t)k;
+        /* "no" lives only in SVC_NO_RESTART, so whatever lifts the flag (a
+         * drop-in's no_restart=0, a fallback brought up) lifts it; the
+         * last of restart= / no_restart= wins */
+        svc->restart_policy = k == RESTART_NO ? RESTART_ALWAYS : (uint8_t)k;
         if (k == RESTART_NO) svc->flags |= SVC_NO_RESTART;
         else svc->flags &= ~SVC_NO_RESTART;
     } else if (strcmp(line, "success_exit_status") == 0 || strcmp(line, "restart_prevent_exit_status") == 0) {
@@ -2901,9 +2903,9 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     }
     else if (strcmp(line, "critical") == 0 && atoi(val))
         svc->flags |= SVC_CRITICAL;
-    else if (strcmp(line, "no_restart") == 0 && atoi(val)) {
-        svc->flags |= SVC_NO_RESTART;
-        svc->restart_policy = RESTART_NO;
+    else if (strcmp(line, "no_restart") == 0) {
+        if (atoi(val)) svc->flags |= SVC_NO_RESTART;
+        else svc->flags &= ~SVC_NO_RESTART;
     }
     else if (strcmp(line, "stop_first") == 0 && atoi(val))
         svc->flags |= SVC_STOP_FIRST;

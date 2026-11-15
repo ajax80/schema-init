@@ -1612,7 +1612,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         if restart in ("on-success", "on-failure", "on-abnormal", "on-abort", "on-watchdog"):
             lines.append("restart=%s" % restart)
         elif restart != "always":
-            restart_warns.append("Restart=%s dropped: not a Restart= value, restarts always" % restart)
+            # systemd ignores a bad assignment and keeps its default, no
+            restart_warns.append("Restart=%s is not a Restart= value: systemd keeps Restart=no" % restart)
+            lines.append("no_restart=1")
         rsec = _timespan_sec(_get_last(svc, "RestartSec"))
         if rsec:
             lines.append("restart_sec=%d" % min(rsec, 3600))

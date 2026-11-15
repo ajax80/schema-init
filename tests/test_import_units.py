@@ -1176,8 +1176,9 @@ check("no Restart= -> no_restart=1", _rp("") == ["no_restart=1"])
 check("Restart=always -> nothing (the default)", _rp("Restart=always\n") == [])
 for v in ("on-success", "on-failure", "on-abnormal", "on-abort", "on-watchdog"):
     check("Restart=%s -> restart=%s" % (v, v), _rp("Restart=%s\n" % v) == ["restart=%s" % v])
-check("Restart=sometimes -> WARN, restarts always",
-      _rp("Restart=sometimes\n") == ["# schema-import WARN: Restart=sometimes dropped: not a Restart= value, restarts always"])
+check("Restart=on-falure (typo) -> WARN + no_restart=1, as systemd keeps Restart=no",
+      _rp("Restart=on-falure\n") == ["# schema-import WARN: Restart=on-falure is not a Restart= value: systemd keeps Restart=no",
+                                      "no_restart=1"])
 check("SuccessExitStatus= lines join, signals kept",
       "success_exit_status=143 SIGTERM 3" in _rp("Restart=on-failure\nSuccessExitStatus=143 SIGTERM\nSuccessExitStatus=3\n"))
 check("RestartPreventExitStatus= mapped", "restart_prevent_exit_status=6 SIGKILL" in

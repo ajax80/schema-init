@@ -34,13 +34,14 @@ int main(void) {
     assert(load("name=r\nexec=/bin/true\n", &s) == 0 && s.restart_policy == RESTART_ALWAYS && !(s.flags & SVC_NO_RESTART));
     assert(load("name=r\nexec=/bin/true\nrestart=on-failure\n", &s) == 0 && s.restart_policy == RESTART_ON_FAILURE);
     assert(load("name=r\nexec=/bin/true\nrestart=on-watchdog\n", &s) == 0 && s.restart_policy == RESTART_ON_WATCHDOG);
-    assert(load("name=r\nexec=/bin/true\nrestart=no\n", &s) == 0 && s.restart_policy == RESTART_NO && (s.flags & SVC_NO_RESTART));
+    /* "no" is the flag alone: whatever lifts the flag lifts it */
+    assert(load("name=r\nexec=/bin/true\nrestart=no\n", &s) == 0 && s.restart_policy == RESTART_ALWAYS && (s.flags & SVC_NO_RESTART));
     assert(load("name=r\nexec=/bin/true\nrestart=sometimes\n", &s) == -1);
     /* last of restart= / no_restart= wins */
     assert(load("name=r\nexec=/bin/true\nno_restart=1\nrestart=on-failure\n", &s) == 0 &&
            s.restart_policy == RESTART_ON_FAILURE && !(s.flags & SVC_NO_RESTART));
-    assert(load("name=r\nexec=/bin/true\nrestart=on-failure\nno_restart=1\n", &s) == 0 &&
-           s.restart_policy == RESTART_NO && (s.flags & SVC_NO_RESTART));
+    assert(load("name=r\nexec=/bin/true\nrestart=on-failure\nno_restart=1\n", &s) == 0 && (s.flags & SVC_NO_RESTART));
+    assert(load("name=r\nexec=/bin/true\nrestart=no\nno_restart=0\n", &s) == 0 && !(s.flags & SVC_NO_RESTART));
 
     /* classification: systemd's clean signals, success_exit_status= */
     assert(load("name=r\nexec=/bin/true\nsuccess_exit_status=3 SIGUSR1\nsuccess_exit_status=143\n", &s) == 0);
@@ -83,6 +84,20 @@ int main(void) {
     assert(!service_restart_wanted(&s, died(&s, 0, SIGKILL)));
     assert(service_restart_wanted(&s, DEATH_TIMEOUT));
 
+    /* drop-in no_restart=0 lifts a base restart=no (#530 review) */
+    {
+        char dd[400], dp[450];
+        snprintf(dd, sizeof dd, "%s.d", path);
+        assert(mkdir(dd, 0755) == 0);
+        snprintf(dp, sizeof dp, "%s/10.conf", dd);
+        FILE *f = fopen(dp, "w");
+        fputs("no_restart=0\n", f);
+        fclose(f);
+        assert(load("name=r\nexec=/bin/true\nrestart=no\n", &s) == 0);
+        assert(!(s.flags & SVC_NO_RESTART) && service_restart_wanted(&s, DEATH_EXIT));
+        unlink(dp);
+        rmdir(dd);
+    }
     /* drop-in: an empty value clears each key */
     {
         char dd[400], dp[450];
