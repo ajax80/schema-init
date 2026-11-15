@@ -231,6 +231,44 @@ __attribute__((unused)) static int run_ctl(const char *verb, const char *name) {
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+/* run_ctl, keeping PID 1's reply (truncated to the buffer) for the caller */
+__attribute__((unused)) static int run_ctl_out(const char *verb, const char *name, char *out, size_t outsz) {
+    int p[2];
+    out[0] = '\0';
+    if (pipe2(p, O_CLOEXEC) < 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(p[0]); close(p[1]); return -1; }
+    if (pid == 0) {
+        dup2(p[1], 1);
+        const char *a[5];
+        int k = 0;
+        a[k++] = shim_ctl();
+        if (shim_user) a[k++] = "--user";
+        a[k++] = verb;
+        if (name) a[k++] = name;
+        a[k] = NULL;
+        execvp(a[0], (char **)a);
+        _exit(127);
+    }
+    close(p[1]);
+    size_t n = 0;
+    for (;;) {
+        char tmp[256];
+        ssize_t r = read(p[0], tmp, sizeof tmp);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) break;
+        size_t c = (size_t)r < outsz - 1 - n ? (size_t)r : outsz - 1 - n;
+        memcpy(out + n, tmp, c);
+        n += c;
+    }
+    out[n] = '\0';
+    close(p[0]);
+    int st;
+    while (waitpid(pid, &st, 0) < 0)
+        if (errno != EINTR) return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
 __attribute__((unused)) static const char *shim_shm_path(void) {
     static char ubuf[64];
     const char *e = getenv("SCHEMA_SHM_PATH");
@@ -762,8 +800,10 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
         strcmp(verb, "reload") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
         strcmp(verb, "try-reload-or-restart") == 0) {
         const char *ctlverb = verb;
-        if (strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
-            strcmp(verb, "reload") == 0 || strcmp(verb, "try-reload-or-restart") == 0)
+        int reloads = strcmp(verb, "reload") == 0 || strcmp(verb, "reload-or-restart") == 0 ||
+                      strcmp(verb, "try-reload-or-restart") == 0;
+        int fail = 0;
+        if (strcmp(verb, "try-restart") == 0 || reloads)
             ctlverb = "restart";
         for (i = verb_idx + 1; i < argc; i++) {
             if (argv[i][0] == '-') continue;
@@ -779,9 +819,23 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
             if ((strcmp(verb, "try-restart") == 0 || strcmp(verb, "reload") == 0 ||
                  strcmp(verb, "reload-or-restart") == 0 || strcmp(verb, "try-reload-or-restart") == 0)
                 && !ctl_is_active(name)) continue;
+            if (reloads) {
+                char reply[512];
+                int rc = run_ctl_out("reload", name, reply, sizeof reply);
+                /* a .svc without exec_reload=/reload_signal= restarts, as every
+                 * reload did before; so does a supervisor older than
+                 * `reload <svc>`, which re-read its config instead */
+                if (!strstr(reply, "cannot-reload") && strncmp(reply, "ok: reload (", 12) != 0) {
+                    if (rc != 0) {
+                        fputs(reply[0] ? reply : "systemctl: no reply from schema-ctl\n", stderr);
+                        fail = 1;
+                    }
+                    continue;
+                }
+            }
             run_ctl(ctlverb, name);
         }
-        return 0;
+        return fail;
     }
     if (strcmp(verb, "is-active") == 0) {
         int rc = 0, seen = 0;

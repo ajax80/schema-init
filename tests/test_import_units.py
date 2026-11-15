@@ -1152,8 +1152,9 @@ _F_CHRONY = ("[Service]\nType=notify\nPIDFile=/run/chrony/chronyd.pid\nEnvironme
 _F_FSTRIM_T = "[Timer]\nOnCalendar=weekly\nAccuracySec=1h\nPersistent=true\nRandomizedDelaySec=100min\n[Install]\nWantedBy=timers.target\n"
 _F_FSTRIM_S = ("[Service]\nType=oneshot\nExecStart=/usr/bin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose "
                "--quiet-unsupported\nProtectKernelTunables=yes\n")
-check("Fedora sshd.service output unchanged", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
-      'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nnotify=1\n'
+# 4.1: its ExecReload=/bin/kill -HUP $MAINPID is now reload_signal=HUP
+check("Fedora sshd.service output unchanged but for reload_signal", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
+      'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nreload_signal=HUP\nnotify=1\n'
       'restart_sec=42\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
 check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
       '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\n'
@@ -1166,6 +1167,30 @@ check("Fedora fstrim.timer output unchanged",
       '# schema-import: dropped RandomizedDelaySec; dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
       'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
       'private_tmp=0\nprotect_system=0\nprotect_home=0\non_calendar=Mon 00:00\npersistent=1\n')
+
+# --- audit 4.1: ExecReload= / notify-reload ---
+def _rl(body):
+    return [l for l in si.unit_to_svc("r", si.parse_unit("[Service]\nExecStart=/usr/bin/true\n" + body)).splitlines()
+            if "reload" in l.lower()]
+for form in ("/bin/kill -HUP $MAINPID", "/usr/bin/kill -s HUP $MAINPID", "/bin/kill -SIGHUP ${MAINPID}",
+             "/bin/kill --signal=HUP $MAINPID", "-/bin/kill -HUP $MAINPID"):
+    check("ExecReload=%s -> reload_signal=HUP" % form, _rl("ExecReload=%s\n" % form) == ["reload_signal=HUP"])
+check("kill -URG $MAINPID -> reload_signal=URG", _rl("ExecReload=/bin/kill -URG $MAINPID\n") == ["reload_signal=URG"])
+check("kill -KILL stays a command (reload_signal= refuses KILL)",
+      _rl("ExecReload=/bin/kill -KILL $MAINPID\n") == ["exec_reload=/bin/kill -KILL $MAINPID"])
+check("mixed ExecReload= lines all run as exec_reload, $MAINPID kept",
+      _rl("ExecReload=/usr/sbin/nginx -s reload\nExecReload=/bin/kill -s USR2 ${MAINPID}\n") ==
+      ["exec_reload=/usr/sbin/nginx -s reload", "exec_reload=/bin/kill -s USR2 $MAINPID"])
+check("ExecReload= keeps '-' and expands Environment=",
+      _rl("Environment=CONF=/etc/x.conf\nExecReload=-/usr/bin/true --conf ${CONF}\n") ==
+      ["exec_reload=-/usr/bin/true --conf /etc/x.conf"])
+check("ExecReload=+ is refused with a WARN, nothing emitted",
+      _rl("ExecReload=+/usr/bin/true\n") == ["# schema-import WARN: ExecReload not translated: ExecReload=+/usr/bin/true uses a prefix schema-init can't honour"])
+check("Type=notify-reload -> reload_signal=HUP", "reload_signal=HUP" in _rl("Type=notify-reload\n"))
+check("Type=notify-reload ReloadSignal=SIGUSR1 -> USR1", "reload_signal=USR1" in _rl("Type=notify-reload\nReloadSignal=SIGUSR1\n"))
+check("Type=notify-reload: ExecReload= wins", _rl("Type=notify-reload\nExecReload=/usr/bin/true r\n") ==
+      ["exec_reload=/usr/bin/true r"])
+check("no ExecReload=: no reload key", _rl("") == [])
 
 # --- security audit 2026-11-05 ---
 def warns(body):

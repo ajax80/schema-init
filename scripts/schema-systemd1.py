@@ -34,14 +34,20 @@ SCHEMA_CTL = next((p for p in ("/usr/bin/schema-ctl", "/usr/local/bin/schema-ctl
 # a leading '-'; this still permits real names like getty-tty2 / mount-efi.
 _UNIT_RE = re.compile(r'^[A-Za-z0-9:_.@-]+$')
 
+# returns PID 1's reply line ('' when it never answered)
 def schema_ctl(action, name):
     if not name or name.startswith('-') or not _UNIT_RE.match(name):
         print(f"systemd1: refusing unsafe unit name {_q(name)}", file=sys.stderr)
-        return
+        return ''
     try:
-        subprocess.run([SCHEMA_CTL, action, name], capture_output=True, timeout=5)
+        r = subprocess.run([SCHEMA_CTL, action, name], capture_output=True, timeout=5, text=True)
+        return r.stdout.strip()
     except Exception as e:
         print(f"systemd1: schema-ctl {action} {_q(name)} failed: {e}", file=sys.stderr)
+        return ''
+
+def _cannot_reload(reply):
+    return 'cannot-reload' in reply or reply.startswith('ok: reload (')
 
 MANAGE_UNITS = 'org.freedesktop.systemd1.manage-units'
 RELOAD_DAEMON = 'org.freedesktop.systemd1.reload-daemon'
@@ -371,7 +377,8 @@ class Systemd1Unit(dbus.service.Object):
         print(f"systemd1: Registered Unit {self.name} at {self.path}")
 
     def _read_can_reload(self):
-        """reload=1 in the .svc opts a service into ReloadUnit (SIGHUP).
+        """exec_reload=, reload_signal= or reload=1 in the .svc opt a service
+        into ReloadUnit; PID 1 runs the commands or sends the signal.
 
         Cached: this is read per unit and update_state runs on every poll.
         A service that does not handle SIGHUP dies on it, so reload is never
@@ -382,16 +389,24 @@ class Systemd1Unit(dbus.service.Object):
         if self.short_name == 'dbus':      # ReloadUnit routes it to ReloadConfig
             self.can_reload = True
             return True
-        self.can_reload = False
+        cmds, sig, old = False, False, False
         try:
             for path in svc_files('/etc/schema-init/services/%s.svc' % self.short_name):
                 with open(path) as f:
                     for line in f:
-                        line = line.strip()
-                        if line.startswith('reload='):
-                            self.can_reload = line in ('reload=1', 'reload=yes')
+                        k, _, v = line.strip().partition('=')
+                        v = v.strip()
+                        if k == 'exec_reload':
+                            cmds = bool(v)
+                        elif k == 'reload_signal':
+                            sig = bool(v)
+                            if not v:       # PID 1's clear drops reload=1's HUP too
+                                old = False
+                        elif k == 'reload':
+                            old = v in ('1', 'yes')
         except OSError:
             pass
+        self.can_reload = cmds or sig or old
         return self.can_reload
 
     def update_state(self, status_dict):
@@ -889,18 +904,13 @@ class Systemd1Manager(dbus.service.Object):
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o',
                          message_keyword='message', async_callbacks=('reply', 'error'))
     def ReloadUnit(self, name, mode, message=None, reply=None, error=None):
-        """SIGHUP the service's own pid — the reopen/reload signal daemons expect.
+        """schema-ctl reload: the unit's exec_reload= commands, or its
+        reload_signal= (reload=1 is SIGHUP) sent to the supervised pid.
 
-        This is what logrotate's postrotate hooks call: rsyslog reopens its
-        files on SIGHUP, and without it a renamed log means the daemon keeps
-        writing to the rotated inode forever. Missing entirely before this, so
-        every caller got a full dbus-python traceback instead of an answer.
-
-        NOT a restart. Reload is only offered for a unit that is actually
-        running, and a service that does not handle SIGHUP would die -- so
-        this stays opt-in via reload=1 in the .svc rather than being applied
-        to anything with a pid. Real systemd makes the same distinction with
-        ExecReload=; CanReload reports it per unit.
+        logrotate's postrotate hooks call this: rsyslog reopens its files on
+        SIGHUP. NOT a restart, and never assumed: a service that doesn't
+        handle the signal would die, so a unit without one of the keys is
+        refused, as systemd refuses a unit without ExecReload=.
         """
         self._gated(message, MANAGE_UNITS, lambda: self._reload_unit(name, mode, reply, error), error)
 
@@ -918,20 +928,31 @@ class Systemd1Manager(dbus.service.Object):
                 name='org.freedesktop.systemd1.NoSuchUnit')
         if not unit.can_reload:
             raise dbus.exceptions.DBusException(
-                "Unit %s does not support reload; set reload=1 in its .svc "
-                "if the service reopens on SIGHUP." % name,
+                "Unit %s does not support reload; give its .svc exec_reload= "
+                "or reload_signal=." % name,
                 name='org.freedesktop.systemd1.NoSuchUnit')
         if not unit.pid:
             raise dbus.exceptions.DBusException(
                 "Unit %s is not running." % name,
                 name='org.freedesktop.systemd1.NoSuchUnit')
-        try:
-            os.kill(unit.pid, signal.SIGHUP)
-        except OSError as e:
+        out = schema_ctl('reload', svc_name(name))
+        if _cannot_reload(out) or not out.startswith('ok:'):
             raise dbus.exceptions.DBusException(
-                "Could not signal %s (pid %d): %s" % (name, unit.pid, e),
+                "Could not reload %s: %s" % (name, out or 'no reply from PID 1'),
                 name='org.freedesktop.systemd1.NoSuchUnit')
         reply(self._trigger_job_signals(name))
+
+    # restart only when PID 1 can't reload it (no key, or a PID 1 older than
+    # `reload <svc>`, which re-read its config instead); like the systemctl
+    # shim, never on "already reloading" or other errors
+    def _reload_or_restart(self, name):
+        self.poll_and_update()
+        unit = self.units.get(name)
+        if unit is not None and unit.can_reload and unit.pid:
+            out = schema_ctl('reload', svc_name(name))
+            if not _cannot_reload(out):
+                return
+        schema_ctl('restart', svc_name(name))
 
     @dbus.service.method('org.freedesktop.systemd1.Manager', in_signature='ss', out_signature='o',
                          message_keyword='message', async_callbacks=('reply', 'error'))
@@ -941,7 +962,7 @@ class Systemd1Manager(dbus.service.Object):
             if _is_bus_unit(name):
                 _reload_dbus(lambda: reply(self._trigger_job_signals(str(name))), error)
                 return
-            schema_ctl('restart', svc_name(str(name)))
+            self._reload_or_restart(str(name))
             reply(self._trigger_job_signals(str(name)))
         self._gated(message, MANAGE_UNITS, run, error)
 
@@ -955,7 +976,7 @@ class Systemd1Manager(dbus.service.Object):
                 return
             self.poll_and_update()
             if self._is_active(str(name)):
-                schema_ctl('restart', svc_name(str(name)))
+                self._reload_or_restart(str(name))
             reply(self._trigger_job_signals(str(name)))
         self._gated(message, MANAGE_UNITS, run, error)
 

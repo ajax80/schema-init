@@ -23,7 +23,8 @@ class Unit:
 
 class Mgr:
     def __init__(self):
-        self.units = {"dbus.service": Unit(428, False), "foo.service": Unit(99, False)}
+        self.units = {"dbus.service": Unit(428, False), "foo.service": Unit(99, False),
+                      "rsyslog.service": Unit(77, True), "idle.service": Unit(0, True)}
         self.signals = []
     def poll_and_update(self):
         pass
@@ -31,6 +32,7 @@ class Mgr:
     def _gated(self, message, action, proceed, error):
         proceed()
     _reload_unit = m.Systemd1Manager._reload_unit
+    _reload_or_restart = m.Systemd1Manager._reload_or_restart
     def _trigger_job_signals(self, name):
         self.signals.append(name)
         return "/job/1"
@@ -80,6 +82,72 @@ for meth in ("ReloadOrRestartUnit", "ReloadOrTryRestartUnit"):
 calls.clear()
 reload_unit(Mgr(), "dbus-broker.service", "replace")
 check("ReloadUnit(dbus-broker.service) calls ReloadConfig", calls == ["ReloadConfig"] and kills == [])
+
+# 4.1: reloads go through PID 1 (schema-ctl reload), never os.kill from here
+ctl, reply_ok = [], ["ok: SIGHUP → rsyslog (pid 77)"]
+def fake_ctl(action, name):
+    ctl.append((action, name))
+    return reply_ok[0] if action == "reload" else "ok: restarted"
+m.schema_ctl = fake_ctl
+kills.clear()
+r = reload_unit(Mgr(), "rsyslog.service", "replace")
+check("ReloadUnit(reloadable) → schema-ctl reload, no os.kill",
+      ctl == [("reload", "rsyslog")] and kills == [] and r == "/job/1")
+ctl.clear(); reply_ok[0] = "err: rsyslog is already reloading"
+try:
+    reload_unit(Mgr(), "rsyslog.service", "replace")
+    check("ReloadUnit: PID 1's err reaches the caller", False)
+except m.dbus.exceptions.DBusException as e:
+    check("ReloadUnit: PID 1's err reaches the caller", "already reloading" in str(e))
+ctl.clear()
+try:
+    reload_unit(Mgr(), "idle.service", "replace")
+    check("ReloadUnit(not running) refuses without calling PID 1", False)
+except m.dbus.exceptions.DBusException as e:
+    check("ReloadUnit(not running) refuses without calling PID 1", "not running" in str(e) and ctl == [])
+for meth in ("ReloadOrRestartUnit", "ReloadOrTryRestartUnit"):
+    reply_ok[0] = "ok: SIGHUP → rsyslog (pid 77)"
+    ctl.clear(); mg = Mgr(); mg._is_active = lambda n: True
+    call(getattr(m.Systemd1Manager, meth), mg, "rsyslog.service")
+    check("%s(reloadable) reloads only" % meth, ctl == [("reload", "rsyslog")])
+    ctl.clear(); mg = Mgr(); mg._is_active = lambda n: True
+    call(getattr(m.Systemd1Manager, meth), mg, "foo.service")
+    check("%s(no reload key) restarts" % meth, ctl == [("restart", "foo")])
+    reply_ok[0] = "err: cannot-reload: rsyslog has no exec_reload= or reload_signal="
+    ctl.clear(); mg = Mgr(); mg._is_active = lambda n: True
+    call(getattr(m.Systemd1Manager, meth), mg, "rsyslog.service")
+    check("%s: refused reload falls back to restart" % meth,
+          ctl == [("reload", "rsyslog"), ("restart", "rsyslog")])
+    for rep_ in ("err: rsyslog is already reloading", "err: rsyslog: signal: No such process"):
+        reply_ok[0] = rep_
+        ctl.clear(); mg = Mgr(); mg._is_active = lambda n: True
+        call(getattr(m.Systemd1Manager, meth), mg, "rsyslog.service")
+        check("%s: %r never restarts" % (meth, rep_), ctl == [("reload", "rsyslog")])
+    reply_ok[0] = "ok: reload (graceful)"
+    ctl.clear(); mg = Mgr(); mg._is_active = lambda n: True
+    call(getattr(m.Systemd1Manager, meth), mg, "rsyslog.service")
+    check("%s: older PID 1's config-reload reply -> restart" % meth,
+          ctl == [("reload", "rsyslog"), ("restart", "rsyslog")])
+reply_ok[0] = "ok: reload (graceful)"
+try:
+    reload_unit(Mgr(), "rsyslog.service", "replace")
+    check("ReloadUnit on an older PID 1 is an error, not a fake success", False)
+except m.dbus.exceptions.DBusException as e:
+    check("ReloadUnit on an older PID 1 is an error, not a fake success", True)
+
+import tempfile
+d = tempfile.mkdtemp()
+for body, drop, want in (("exec_reload=/bin/true\n", "", True), ("reload_signal=USR1\n", "", True),
+                         ("reload=1\n", "", True), ("reload=0\n", "", False), ("exec=/bin/x\n", "", False),
+                         ("", "exec_reload=/bin/r\n", True), ("exec_reload=/bin/r\n", "exec_reload=\n", False),
+                         ("reload_signal=HUP\n", "reload_signal=\n", False), ("reload=1\n", "reload_signal=\n", False),
+                         ("reload_signal=HUP\n", "reload=0\n", True)):
+    open(os.path.join(d, "x.svc"), "w").write("name=x\n" + body)
+    open(os.path.join(d, "x.conf"), "w").write(drop)
+    m.svc_files = lambda pattern: [os.path.join(d, "x.svc"), os.path.join(d, "x.conf")]
+    w = m.Systemd1Unit.__new__(m.Systemd1Unit)
+    w.short_name = "x"
+    check("CanReload for %r + drop-in %r is %s" % (body.strip(), drop.strip(), want), m.Systemd1Unit._read_can_reload(w) is want)
 
 u = m.Systemd1Unit.__new__(m.Systemd1Unit)
 u.short_name = "dbus"

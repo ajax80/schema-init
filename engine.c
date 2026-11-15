@@ -821,6 +821,12 @@ static void stop_cmds_done(service_t *svc, int status) {
     }
 }
 
+/* exec_reload runner gone: the service itself is untouched either way */
+static void reload_cmds_done(service_t *svc, int status) {
+    svc->reload_pid = 0;
+    service_log(svc, WIFEXITED(status) && WEXITSTATUS(status) == 0 ? "reload-done" : "reload-fail");
+}
+
 static void mark_boot_ready(service_t *svc, int how) {
     if (svc->boot_ready.tv_sec || svc->boot_ready.tv_nsec) return;
     svc->boot_ready = svc->stable_time;
@@ -988,6 +994,10 @@ static void reap(void) {
             }
             if (services[i].stop_pid == pid) {
                 stop_cmds_done(&services[i], status);
+                break;
+            }
+            if (services[i].reload_pid == pid) {
+                reload_cmds_done(&services[i], status);
                 break;
             }
             if (services[i].child_pid != pid) continue;
@@ -1235,6 +1245,16 @@ static void monitor_failsafes(void) {
                 /* SIGTERM the main process now; reap() still collects the runner */
                 if (svc->stop_phase == 1 && svc->child_pid > 0) kill(svc->child_pid, SIGTERM);
                 svc->stop_phase |= STOP_TIMED_OUT;
+            }
+        }
+        if (svc->reload_pid > 0) {
+            uint64_t ran = (uint64_t)(now.tv_sec - svc->reload_start.tv_sec) * 1000 +
+                           (now.tv_nsec - svc->reload_start.tv_nsec) / 1000000;
+            /* killed once: reap() clears reload_pid when it goes */
+            if (ran >= stop_grace_ms(svc) && svc->reload_start.tv_sec >= 0) {
+                kill_group(svc->reload_pid);
+                service_log(svc, "reload-timeout");
+                svc->reload_start.tv_sec = -1;
             }
         }
         if (svc->failsafe_pid <= 0) continue;
@@ -2430,6 +2450,42 @@ static void ctl_cmd(int fd, char *line) {
         ctl_end(fd);
         return;
 
+    } else if (strncmp(line, "reload ", 7) == 0 && line[7 + strspn(line + 7, " ")] &&
+               strcmp(line + 7 + strspn(line + 7, " "), "--evict") != 0) {
+        const char *name = line + 7;
+        while (*name == ' ') name++;
+        for (i = 0; i < svc_count; i++) {
+            service_t *s = &services[i];
+            if (strcmp(s->name, name) != 0) continue;
+            if (s->child_pid <= 0)
+                ctl_writef(fd, "err: %s is not running\n", name);
+            else if (!s->exec_reload_count && !s->reload_signal)
+                ctl_writef(fd, "err: cannot-reload: %s has no exec_reload= or reload_signal=\n", name);
+            else if (s->reload_pid > 0)
+                ctl_writef(fd, "err: %s is already reloading\n", name);
+            else if (s->exec_reload_count) {
+                pid_t rp = service_reload_spawn(s, s->child_pid);
+                if (rp < 0) {
+                    ctl_writef(fd, "err: %s: fork: %s\n", name, strerror(errno));
+                } else {
+                    s->reload_pid = rp;
+                    clock_gettime(CLOCK_MONOTONIC, &s->reload_start);
+                    service_log(s, "reload-cmd");
+                    ctl_writef(fd, "ok: exec_reload → %s (pid %d)\n", name, (int)s->child_pid);
+                }
+            } else if (kill(s->child_pid, s->reload_signal) != 0) {
+                ctl_writef(fd, "err: %s: signal: %s\n", name, strerror(errno));
+            } else {
+                const char *ab = sig_abbrev(s->reload_signal);
+                service_log(s, "reload-signal");
+                if (ab) ctl_writef(fd, "ok: SIG%s → %s (pid %d)\n", ab, name, (int)s->child_pid);
+                else ctl_writef(fd, "ok: signal %d → %s (pid %d)\n", s->reload_signal, name, (int)s->child_pid);
+            }
+            ctl_end(fd);
+            return;
+        }
+        ctl_writef(fd, "err: not found: %s\n", name);
+
     } else if (strncmp(line, "reload", 6) == 0) {
         char *opt = line + 6;
         while (*opt == ' ') opt++;
@@ -3120,6 +3176,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
                 /* its stop commands can't be sequenced without the struct:
                  * one already running is tracked, else both lists run now,
                  * beside the SIGTERM */
+                if (services[j].reload_pid > 0) eviction_add(services[j].reload_pid, "");
                 if (services[j].stop_pid > 0) {
                     eviction_add(services[j].stop_pid, "");
                 } else if (services[j].child_pid > 0 &&
@@ -3238,6 +3295,7 @@ static void shut_reap(void) {
         if (fdclose_reaped(pid)) continue;
         for (i = 0; i < svc_count; i++) {
             if (services[i].stop_pid == pid) { services[i].stop_pid = 0; services[i].stop_phase = 0; break; }
+            if (services[i].reload_pid == pid) { services[i].reload_pid = 0; break; }
             if (services[i].child_pid == pid) { services[i].child_pid = 0; break; }
         }
     }

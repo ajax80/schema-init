@@ -376,6 +376,12 @@ typedef struct {
     pid_t            stop_pid;            /* runner for exec_stop(_post), 0 if none; a respawn waits for it */
     int              stop_phase;          /* 1 exec_stop, 2 exec_stop_post, 3 both (eviction) */
     struct timespec  stop_start;
+    char            *exec_reload[MAX_EXEC_PRE];     /* schema-ctl reload <svc>; wins over reload_signal */
+    int              exec_reload_count;
+    int              reload_signal;       /* reload_signal= (or reload=1 = SIGHUP), 0 = none */
+    int              reload_signal_set;   /* reload_signal= given: reload=1 doesn't override it */
+    pid_t            reload_pid;          /* exec_reload runner, 0 if none */
+    struct timespec  reload_start;
     pid_t            main_pid;            /* main_pid_notify: pid from MAINPID=, supervised once the launcher exits 0 */
     int              main_wait;           /* launcher exited 0 before MAINPID=: waiting until main_wait_due */
     struct timespec  main_wait_due;
@@ -561,6 +567,8 @@ pid_t service_card_spawn(const service_t *svc, int idx);
 /* one child running PHASE's commands in order (1 exec_stop, 2 exec_stop_post,
  * 3 both); exits non-zero when a command without '-' fails */
 pid_t service_stop_spawn(const service_t *svc, int phase);
+/* one child running exec_reload in order, $MAINPID replaced by MAINPID */
+pid_t service_reload_spawn(const service_t *svc, pid_t mainpid);
 service_t *service_fallback(const service_t *svc, service_t *table, int count);
 int  service_is_standby(const service_t *svc, const service_t *table, int count);
 

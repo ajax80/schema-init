@@ -123,6 +123,36 @@ def _expand_argv(argv, env):
     return out, dropped
 
 
+# the signals PID 1's reload_signal= takes (service.c svc_reload_signal_parse)
+_RELOAD_SIGS = {"HUP", "INT", "QUIT", "USR1", "USR2", "TERM", "CONT", "URG", "WINCH", "PWR", "ALRM", "TRAP"}
+
+
+# a ReloadSignal= / kill -SIG name as reload_signal= takes it, or None
+def _reload_sig(name):
+    n = name.upper()
+    n = n[3:] if n.startswith("SIG") else n
+    if n in _RELOAD_SIGS:
+        return n
+    if n.isdigit() and 1 <= int(n) <= 64 and int(n) not in (9, 19):
+        return n
+    return None
+
+
+# kill -HUP $MAINPID / kill -s HUP $MAINPID / kill --signal=HUP $MAINPID:
+# the signal name when the line is only that, else None
+def _kill_mainpid_sig(argv):
+    if not argv or os.path.basename(argv[0]) != "kill" or argv[-1] not in ("$MAINPID", "${MAINPID}"):
+        return None
+    mid = argv[1:-1]
+    if len(mid) == 1 and mid[0].startswith("--signal="):
+        return _reload_sig(mid[0][9:])
+    if len(mid) == 1 and mid[0].startswith("-") and not mid[0].startswith("--"):
+        return _reload_sig(mid[0][1:])
+    if len(mid) == 2 and mid[0] in ("-s", "--signal"):
+        return _reload_sig(mid[1])
+    return None
+
+
 def _env_pairs(values):
     """Flatten Environment= lines into KEY=VALUE strings, honoring quoting and
     multiple pairs per line. Tokens without '=' are dropped."""
@@ -1516,6 +1546,37 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                     continue
                 lines.append("%s=%s%s" % (out_key, pre, " ".join(_cmd_quote(w) for w in pa)))
 
+    # ExecReload=: kill -SIG $MAINPID is reload_signal= (no runner fork);
+    # anything else runs as exec_reload=, $MAINPID left for PID 1
+    reload_warns, has_reload = [], False
+    try:
+        reloads = _exec_pre(svc, unit or name, "ExecReload", "-")
+    except Skip as e:
+        reload_warns.append("ExecReload not translated: %s" % e)
+        reloads = []
+    sigs = [_kill_mainpid_sig(pa) for _, pa in reloads]
+    if reloads and all(sigs) and len(set(sigs)) == 1:
+        lines.append("reload_signal=%s" % sigs[0])
+        has_reload = True
+    else:
+        renv = dict(env_map, MAINPID="$MAINPID")
+        for pre, pa in reloads:
+            shown = "ExecReload=%s%s" % (pre, " ".join(pa))
+            pa, _ = _expand_argv(pa, renv)
+            if not pa or len(pa) > 32:
+                reload_warns.append("%s dropped: %s" % (shown, "empty after $VAR expansion"
+                                                        if not pa else "more than 32 words"))
+                continue
+            lines.append("exec_reload=%s%s" % (pre, " ".join(_cmd_quote(w) for w in pa)))
+            has_reload = True
+    if stype == "notify-reload" and not has_reload:
+        rs = _get_last(svc, "ReloadSignal") or "SIGHUP"
+        sig = _reload_sig(rs)
+        if sig:
+            lines.append("reload_signal=%s" % sig)
+        else:
+            reload_warns.append("ReloadSignal=%s dropped: not a signal reload_signal= takes" % rs)
+
     if stype == "oneshot":
         lines.append("oneshot=1")
     elif stype in ("notify", "notify-reload"):
@@ -1590,6 +1651,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
     # here only the main process is confined
     warns.extend(stop_warns)
+    warns.extend(reload_warns)
     warns.extend(amb_warns + rt_warns)
     if "@" in pfx:
         warns.append("ExecStart=@ custom argv[0] not kept: the program sees its own path")

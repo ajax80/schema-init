@@ -305,6 +305,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o $(TESTDIR)/recorder-scenario -lrt && $(TESTDIR)/recorder-scenario
 	sh tests/test_recorder_daemon.sh
 	sh tests/test_schema_user.sh
+	sh tests/test_svc_reload_live.sh
 	sh tests/test_bus_activate.sh
 	sh tests/test_reload_listen.sh
 	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
@@ -393,6 +394,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cap-parse && $(TESTDIR)/cap-parse
 	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o $(TESTDIR)/ambient-caps && $(TESTDIR)/ambient-caps
 	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/stopcmds && $(TESTDIR)/stopcmds
+	$(CC) $(CFLAGS) tests/test_svc_reload.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svcreload && $(TESTDIR)/svcreload
 	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify && $(TESTDIR)/verify
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cycles && $(TESTDIR)/cycles
 	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cgkill && $(TESTDIR)/cgkill
