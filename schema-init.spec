@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.25
+Version:        0.4.26
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -530,6 +530,34 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sat Nov 14 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.26-1
+- Full audit (2026-11-12) fixes. Stricter .svc parsing refuses bad on_calendar,
+  cpu_limit, mem_limit and watchdog_sec values, duplicate names and odd names
+  (#514); hardened builds, PID 1 static-pie (armhf plain -static) (#515-#517)
+- journal-sink no longer hangs on a hostile fd; the control socket can't stall
+  the supervisor; PID 1 locks its memory (mlockall) (#518)
+- logind trusts only the real seat and gives devices to the session controller
+  only (#519)
+- systemctl shim: disable removes only untouched generated .svc and keeps a
+  hand-written one as .svc.disabled; mask/unmask work (#520)
+- /run capped at 20% of RAM, /dev/shm inode-capped; private_tmp lives under
+  /tmp/schema-private on the host /tmp (#521)
+- Hardware watchdog is opt-in (schema.watchdog=1 or /etc/schema-init/watchdog);
+  mem_low= and swap_max= keys, critical services never swap, zram sized
+  min(RAM, 8G), status shows memory (#522)
+- modules-load runs in one modprobe child, reads /usr/lib and friends in
+  systemd order and the modules_load= cmdline; no fixed 1 s shutdown sleep
+  (#523, #525)
+- Parallel fsck, one per device (#524)
+- schema-udev: hotplug events run in parallel workers, so one stuck device no
+  longer freezes hotplug; helper timeout 180 -> 30 s (#526). RUN helpers'
+  output is discarded like udevd's, with one line per failing helper;
+  SCHEMA_UDEV_RUN_OUTPUT=1 keeps it (#527)
+- Engine: group=, pids_max=, cpu_weight=, cpu_limit= above one core; survival
+  mode keeps a service's own cpu_limit; importer maps Group=, Slice= and the
+  resource directives (#508, #510, #511)
+- Pi timesync floors on the last agreed sync, softly (#512); a failed udev
+  rules reload keeps the live set (#506); status --json escapes names (#507)
 * Wed Nov 11 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.25-1
 - Fedora systemctl shim and Pi shutdown wrapper: shutdown with a delay (+10,
   -k, a clock time) is refused instead of powering off at once; --help and -w
