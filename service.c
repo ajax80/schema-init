@@ -2903,10 +2903,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     }
     else if (strcmp(line, "critical") == 0 && atoi(val))
         svc->flags |= SVC_CRITICAL;
-    else if (strcmp(line, "no_restart") == 0) {
-        if (atoi(val)) svc->flags |= SVC_NO_RESTART;
-        else svc->flags &= ~SVC_NO_RESTART;
-    }
+    else if (strcmp(line, "no_restart") == 0 && atoi(val))
+        svc->flags |= SVC_NO_RESTART;
     else if (strcmp(line, "stop_first") == 0 && atoi(val))
         svc->flags |= SVC_STOP_FIRST;
     else if (strcmp(line, "main_pid_notify") == 0 && atoi(val))

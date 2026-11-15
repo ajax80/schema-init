@@ -41,7 +41,8 @@ int main(void) {
     assert(load("name=r\nexec=/bin/true\nno_restart=1\nrestart=on-failure\n", &s) == 0 &&
            s.restart_policy == RESTART_ON_FAILURE && !(s.flags & SVC_NO_RESTART));
     assert(load("name=r\nexec=/bin/true\nrestart=on-failure\nno_restart=1\n", &s) == 0 && (s.flags & SVC_NO_RESTART));
-    assert(load("name=r\nexec=/bin/true\nrestart=no\nno_restart=0\n", &s) == 0 && !(s.flags & SVC_NO_RESTART));
+    /* base-file rule (test_svc_dropins): flag=0 is a no-op there */
+    assert(load("name=r\nexec=/bin/true\nrestart=no\nno_restart=0\n", &s) == 0 && (s.flags & SVC_NO_RESTART));
 
     /* classification: systemd's clean signals, success_exit_status= */
     assert(load("name=r\nexec=/bin/true\nsuccess_exit_status=3 SIGUSR1\nsuccess_exit_status=143\n", &s) == 0);
