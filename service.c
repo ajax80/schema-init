@@ -456,8 +456,20 @@ static int parse_ns_field(service_t *svc, const char *key, const char *val) {
     } else if (strcmp(key, "protect_home") == 0) {
         r = parse_ns_bool(val, &svc->ns_protect_home);
         svc->hard_set |= HARD_PH;
-    } else
-        return 0;
+    } else {
+        static const struct { const char *key; uint8_t bit; } kn[] = {
+            { "protect_kernel_tunables", NS_K_TUNABLES }, { "protect_kernel_modules", NS_K_MODULES },
+            { "protect_control_groups", NS_K_CGROUPS }, { "private_devices", NS_K_DEVICES },
+            { "protect_hostname", NS_K_HOSTNAME },
+        };
+        size_t i;
+        uint8_t on = 0;
+        for (i = 0; i < sizeof(kn) / sizeof(kn[0]) && strcmp(key, kn[i].key); i++) {}
+        if (i == sizeof(kn) / sizeof(kn[0])) return 0;
+        r = parse_ns_bool(val, &on);
+        if (on) svc->ns_kernel |= kn[i].bit;
+        else svc->ns_kernel &= (uint8_t)~kn[i].bit;
+    }
     if (r != 0) {
         fprintf(stderr, "[schema-init] %s: bad value %s=%s\n",
                 svc->name[0] ? svc->name : "?", key, val);
@@ -700,31 +712,57 @@ static int landlock_check(service_t *svc) {
     return 0;
 }
 
+/* explicit-only knobs: hiding exec/ready_path refuses the load, and an
+ * ambient cap the knob strips from the bounding set could never be raised */
+static int kernel_ns_check(service_t *svc) {
+    static const char *const mods[] = { "/usr/lib/modules/", "/lib/modules/" };
+    static const char *const dev[] = { "/dev/" };
+    static const char *const kept[] = { "/dev/shm/", "/dev/mqueue/" };
+    uint8_t m = !!(svc->ns_kernel & NS_K_MODULES), d = !!(svc->ns_kernel & NS_K_DEVICES);
+    uint64_t lost = svc->cap_ambient_mask & ns_kernel_cap_drop(svc->ns_kernel);
+    if (ns_hides(svc, 0, &m, "protect_kernel_modules", mods, 2) != 0) return -1;
+    /* shm and mqueue are the host's inside the private /dev */
+    if (d && !path_under(svc->exec, dev, 1) && path_under(svc->ready_path, kept, 2)) d = 0;
+    if (ns_hides(svc, 0, &d, "private_devices", dev, 1) != 0) return -1;
+    if (lost) {
+        fprintf(stderr, "[schema-init] %s: ambient_caps holds a cap %s drops — not loaded\n",
+                svc->name, (lost & (1ULL << CAP_SYS_MODULE)) ? "protect_kernel_modules" : "private_devices");
+        return -1;
+    }
+    return 0;
+}
+
 static int hardening_finalize(service_t *svc) {
     static const char *const tmp[] = { "/tmp/", "/var/tmp/" };
     static const char *const home[] = { "/home/", "/root/", "/run/user/" };
     apply_hardening_defaults(svc);
     if (ns_hides(svc, HARD_PT, &svc->ns_private_tmp, "private_tmp", tmp, 2) != 0) return -1;
     if (ns_hides(svc, HARD_PH, &svc->ns_protect_home, "protect_home", home, 3) != 0) return -1;
+    if (kernel_ns_check(svc) != 0) return -1;
     return landlock_check(svc);
 }
 
 int service_apply_hardening(const service_t *svc) {
     const char *step = "";
     if (apply_mount_ns(svc->name, svc->ns_private_tmp, svc->ns_protect_system,
-                       svc->ns_protect_home, (const char *const *)svc->rw_path,
+                       svc->ns_protect_home, svc->ns_kernel, (const char *const *)svc->rw_path,
                        svc->rw_path_count, &step) != 0) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: mount_ns: %s: %d\n",
                 svc->name, step, errno);
         return -1;
     }
+    uint64_t kdrop = ns_kernel_cap_drop(svc->ns_kernel);
     if (svc->cap_restrict) {
-        /* an ambient cap outside the bounding set could never be raised */
-        if (apply_capabilities(svc->cap_keep_mask | svc->cap_ambient_mask) != 0) {
+        /* an ambient cap outside the bounding set could never be raised;
+         * the kernel knobs win over keep_caps, as in systemd */
+        if (apply_capabilities((svc->cap_keep_mask | svc->cap_ambient_mask) & ~kdrop) != 0) {
             dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
                     svc->name, errno);
             return -1;
         }
+    } else if (kdrop && drop_bounding(kdrop) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: kernel caps: %d\n", svc->name, errno);
+        return -1;
     }
     if (svc->flags & SVC_NO_NEW_PRIVS) {
         if (apply_no_new_privs() != 0) {

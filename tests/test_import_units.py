@@ -1152,10 +1152,30 @@ check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.pa
       'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\n')
 check("Fedora fstrim.timer output unchanged",
       si.timer_to_svc("fstrim", si.parse_unit(_F_FSTRIM_T), si.parse_unit(_F_FSTRIM_S)) ==
-      '# schema-import WARN: no equivalent here, not enforced: ProtectKernelTunables\n'
       '# schema-import: dropped RandomizedDelaySec; dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
       'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
-      'private_tmp=0\nprotect_system=0\nprotect_home=0\non_calendar=Mon 00:00\npersistent=1\n')
+      'private_tmp=0\nprotect_system=0\nprotect_home=0\nprotect_kernel_tunables=1\non_calendar=Mon 00:00\npersistent=1\n')
+
+# --- audit 4.5: kernel-surface knobs ---
+def _kn(body):
+    return si.unit_to_svc("k", si.parse_unit("[Service]\nExecStart=/usr/bin/true\n" + body))
+for _d, _k in (("ProtectKernelTunables", "protect_kernel_tunables"), ("ProtectKernelModules", "protect_kernel_modules"),
+               ("ProtectControlGroups", "protect_control_groups"), ("PrivateDevices", "private_devices"),
+               ("ProtectHostname", "protect_hostname")):
+    _o = _kn("%s=yes\n" % _d)
+    check("%s=yes -> %s=1, not unenforced" % (_d, _k), "\n%s=1\n" % _k in _o and _d not in _o)
+    check("%s=no -> no line" % _d, _k not in _kn("%s=no\n" % _d))
+_o = _kn("ProtectHostname=bogus\n")
+check("ProtectHostname=bogus warns, no line",
+      "ProtectHostname=bogus unrecognised, not applied" in _o and "protect_hostname" not in _o)
+_o = _kn("ProtectHostname=private\n")
+check("ProtectHostname=private -> 1, no warning", "\nprotect_hostname=1\n" in _o and "WARN" not in _o)
+_o = _kn("ProtectHostname=yes:box1\n")
+check("ProtectHostname=yes:NAME -> 1, warns the name is not set",
+      "\nprotect_hostname=1\n" in _o and "ProtectHostname=yes:box1" in _o)
+_o = _kn("ProtectControlGroups=strict\n")
+check("ProtectControlGroups=strict -> 1 with a warning",
+      "\nprotect_control_groups=1\n" in _o and "ProtectControlGroups=strict" in _o)
 
 # --- audit 4.2: Restart= / SuccessExitStatus= / RestartPreventExitStatus= ---
 def _rp(body):

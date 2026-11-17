@@ -16,6 +16,9 @@ int parse_cap_list(const char *csv, uint64_t *mask);
  * Runs while root, before setuid. Returns 0 on success, -1 on real failure. */
 int apply_capabilities(uint64_t keep_mask);
 
+/* PR_CAPBSET_DROP each cap in mask. 0, or -1 with errno set. */
+int drop_bounding(uint64_t mask);
+
 /* Ambient caps for a service that drops to a non-root uid. Prep runs while
  * root, before initgroups/setgid/setuid; raise runs right after setuid. On
  * failure *step names the call that failed. */
