@@ -53,7 +53,7 @@
 ### Task 2: Mounts in apply_mount_ns
 
 **Files:**
-- Modify: `ns.c`, `ns.h` (signature), `service.c:714` (caller), `tests/test_mountns_rw.c:36` (caller)
+- Modify: `ns.c`, `ns.h` (signature), `service.c:714` (caller), `tests/test_mountns_rw.c` (all 5 callers pass kernel=0)
 - Create: `tests/test_kernel_ns.c`; Makefile test line next to mountns-rw (links ns.c caps.c)
 
 **Interfaces:**
@@ -65,9 +65,10 @@ Order after protect_home, before rw_path: hostname (unshare CLONE_NEWUTS), tunab
 private_devices algorithm:
 1. Before covering /dev: O_PATH|O_CLOEXEC fds of host `/dev/{null,zero,full,random,urandom,tty,shm,mqueue,log}` (ENOENT → -1, skipped later); tty gid = fstat of /dev/tty fd (5 if missing).
 2. tmpfs on /dev, MS_NOSUID|MS_NOEXEC, `mode=0755,size=4m`.
-3. For each held fd: create empty file (or mkdir for shm/mqueue) and bind `/proc/self/fd/N` onto it with MS_BIND only (no nodev: these are device nodes).
-4. mkdir /dev/pts; mount devpts `newinstance,ptmxmode=0666,mode=0620,gid=<tty gid>` MS_NOSUID|MS_NOEXEC; symlink `pts/ptmx` → /dev/ptmx.
+3. For each held fd: fstat it; S_ISDIR → mkdir 0755, else create an empty 0666 file and bind `/proc/self/fd/N` onto it with MS_BIND only (no nodev: these are device nodes).
+4. mkdir /dev/pts; mount devpts `newinstance,ptmxmode=0666,mode=0620,gid=<tty gid>` MS_NOSUID|MS_NOEXEC; on EINVAL (tty gid unmapped, e.g. the userns test) retry without gid=; symlink `pts/ptmx` → /dev/ptmx.
 5. Symlinks: fd→/proc/self/fd, stdin/stdout/stderr→/proc/self/fd/0,1,2.
+6. Close every held fd on success and on each error path.
 
 - [ ] **Step 1: Failing test** tests/test_kernel_ns.c. Root, else child enters a user namespace (unshare CLONE_NEWUSER|CLONE_NEWNS, map own uid/gid to 0, setgroups deny); EPERM → print `SKIP test_kernel_ns (no userns)` and pass. One forked child per case:
   - tunables: `access(p, W_OK)` gives EROFS for /proc/sys/kernel/hostname, /sys/kernel, /proc/sysrq-trigger
@@ -91,7 +92,7 @@ private_devices algorithm:
 **Interfaces:**
 - `ns_kernel_cap_drop`: MODULES → CAP_SYS_MODULE; DEVICES → CAP_MKNOD | CAP_SYS_RAWIO.
 - `drop_bounding(mask)`: PR_CAPBSET_DROP each set bit; 0 / -1 errno.
-- service_apply_hardening: cap_restrict → `apply_capabilities((keep|ambient) & ~drop)`; else `drop_bounding(drop)`; failure prints `HARDENING FAILED for %s: kernel caps: %d`.
+- service_apply_hardening: cap_restrict → `apply_capabilities((keep|ambient) & ~drop)`; else if (drop) `drop_bounding(drop)`; failure prints `HARDENING FAILED for %s: kernel caps: %d`.
 
 - [ ] **Step 1: Failing tests:**
   - kns child: drop_bounding(ns_kernel_cap_drop(NS_K_MODULES|NS_K_DEVICES)), then PR_CAPBSET_READ is 0 for SYS_MODULE, MKNOD, SYS_RAWIO and 1 for CAP_NET_ADMIN
