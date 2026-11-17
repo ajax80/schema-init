@@ -1727,6 +1727,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.append("critical=0")
 
     hard, warns = _hardening(svc + config_rw)
+    joins = _get_last(sections.get("Unit", []), "JoinsNamespaceOf")
+    if joins and "private_network=1" in hard:
+        warns.append("JoinsNamespaceOf=%s: private_network gives this service its own netns, "
+                     "not that unit's" % joins)
     if "+" in pfx:
         # + is full privileges: systemd skips the sandbox too, not just User=.
         # The sandbox is service-wide here, so plain ExecStartPre lines that

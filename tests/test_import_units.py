@@ -1169,6 +1169,9 @@ for _d, _k in (("PrivateNetwork", "private_network"), ("MemoryDenyWriteExecute",
     _o = _kn("%s=yes\n" % _d)
     check("%s=yes -> %s=1, not unenforced" % (_d, _k), "\n%s=1\n" % _k in _o and _d not in _o)
     check("%s=no -> no line" % _d, _k not in _kn("%s=no\n" % _d))
+_o = si.unit_to_svc("k", si.parse_unit("[Unit]\nJoinsNamespaceOf=back.service\n[Service]\nExecStart=/usr/bin/true\nPrivateNetwork=yes\n"))
+check("PrivateNetwork + JoinsNamespaceOf warns the netns is not shared",
+      "\nprivate_network=1\n" in _o and "JoinsNamespaceOf=back.service" in _o)
 check("UMask=0022 -> no line", "umask" not in _kn("UMask=0022\n").lower())
 check("UMask=0077 -> umask=0077", "\numask=0077\n" in _kn("UMask=0077\n"))
 check("UMask=027 -> umask=0027", "\numask=0027\n" in _kn("UMask=027\n"))

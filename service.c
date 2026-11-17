@@ -1517,17 +1517,38 @@ static void svc_resolve_group_or_die(const service_t *svc, gid_t *g, const char 
 /* In a just-forked runner (exec_stop/exec_stop_post, exec_reload): own
  * process group, so a timed-out runner is killed with what it started; the
  * service's env, user and working dir. WHAT names it in failure lines. */
+/* exec_stop/exec_reload talk to the service (rndc reload, a curl to its
+ * 127.0.0.1 admin port): with private_network they belong in its netns, as
+ * under systemd. Main gone: a fresh empty one, never the host's */
+static void svc_runner_netns(const service_t *svc, const char *what) {
+    char p[40];
+    int fd = -1;
+    if (!(svc->ns_kernel & NS_K_NETWORK)) return;
+    if (svc->child_pid > 0) {
+        snprintf(p, sizeof p, "/proc/%d/ns/net", (int)svc->child_pid);
+        fd = open(p, O_RDONLY | O_CLOEXEC);
+    }
+    if (fd >= 0 ? setns(fd, CLONE_NEWNET) != 0 : private_net() != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: %s: private_network: %s\n",
+                svc->name, what, strerror(errno));
+        _exit(126);
+    }
+    if (fd >= 0) close(fd);
+}
+
 static void svc_runner_child(const service_t *svc, const char *what) {
     service_reset_child_sigmask();
     setsid();
-    if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     int null_fd = open("/dev/null", O_RDONLY);
     if (null_fd >= 0) {
         dup2(null_fd, STDIN_FILENO);
         if (null_fd > 0) close(null_fd);
     }
     svc_child_log(svc);
+    /* after the log: PID 1's own files keep PID 1's modes */
+    if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     syscall(SYS_close_range, 3, ~0U, 0);
+    svc_runner_netns(svc, what);
     svc_make_exec_dirs(svc, 0);
     svc_apply_env(svc, NULL, 0);
     char gwhat[48];
@@ -1607,6 +1628,7 @@ pid_t service_card_spawn(const service_t *svc, int idx) {
         if (null_fd > 0) close(null_fd);
     }
     svc_child_log(svc);
+    if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     syscall(SYS_close_range, 3, ~0U, 0);
     char *w[33];
     int nw = service_split_cmdline(svc->card[idx] + 5, w, 32);
@@ -1790,9 +1812,12 @@ int service_spawn(service_t *svc) {
             svc_chdir(svc, WD_ROOT_PRE);
             svc_run_pre(svc, 1);
         }
+        /* user lookups may need the network (LDAP, NIS): before private_network */
+        int early_user = !exec_dirs && (svc->ns_kernel & NS_K_NETWORK);
+        if (early_user) svc_resolve_user_or_die(svc);
         if (service_apply_hardening(svc) != 0)
             _exit(126);
-        if (!exec_dirs) svc_resolve_user_or_die(svc);
+        if (!exec_dirs && !early_user) svc_resolve_user_or_die(svc);
         if (svc->run_uid) {
             struct passwd *pw = getpwuid(svc->run_uid);
             if (pw) {
@@ -3485,6 +3510,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->restart_sec = v < 0 ? 0 : v > 3600 ? 3600 : v;
     } else if (strcmp(line, "start_timeout_sec") == 0) {
         svc->start_timeout_sec = atoi(val);
+    } else if (strcmp(line, "umask") == 0 && !*val) {
+        svc->umask_val = -1;
     } else if (strcmp(line, "umask") == 0) {
         size_t n = strspn(val, "01234567");
         long v = n && n <= 4 && !val[n] ? strtol(val, NULL, 8) : -1;

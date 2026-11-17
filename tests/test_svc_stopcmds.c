@@ -60,6 +60,15 @@ int main(void) {
         assert(stat(f2, &st) == 0 && (st.st_mode & 0777) == 0600);
         assert(stat(f3, &st) == 0 && (st.st_mode & 0777) == 0600);
         unlink(f1); unlink(f2); unlink(f3);
+        /* a card is the service's own command too */
+        snprintf(body, sizeof body, "name=u\nexec=/bin/true\numask=0077\ncard=exec:/bin/touch %s\n", f1);
+        write_svc(p, body);
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(p, &svc) == 0 && svc.card_count == 1);
+        pid_t cp = service_card_spawn(&svc, 0);
+        assert(cp > 0 && waitpid(cp, &ws, 0) == cp && WIFEXITED(ws));
+        assert(stat(f1, &st) == 0 && (st.st_mode & 0777) == 0600);
+        unlink(f1);
         /* unset: the supervisor's own */
         snprintf(body, sizeof body, "name=u\nexec=/bin/touch\nargs=%s\noneshot=1\n", f2);
         write_svc(p, body);
