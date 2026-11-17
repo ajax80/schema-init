@@ -1172,6 +1172,23 @@ for _d, _k in (("PrivateNetwork", "private_network"), ("MemoryDenyWriteExecute",
 _o = si.unit_to_svc("k", si.parse_unit("[Unit]\nJoinsNamespaceOf=back.service\n[Service]\nExecStart=/usr/bin/true\nPrivateNetwork=yes\n"))
 check("PrivateNetwork + JoinsNamespaceOf warns the netns is not shared",
       "\nprivate_network=1\n" in _o and "JoinsNamespaceOf=back.service" in _o)
+# --- audit 4.7: scheduling ---
+check("Nice=19 -> nice=19", "\nnice=19\n" in _kn("Nice=19\n"))
+check("Nice=-20 -> nice=-20", "\nnice=-20\n" in _kn("Nice=-20\n"))
+_o = _kn("Nice=40\n")
+check("Nice=40 warns, no line", "Nice=40 unrecognised, not applied" in _o and "\nnice=" not in _o)
+check("IOSchedulingClass=idle -> io_class=idle", "\nio_class=idle\n" in _kn("IOSchedulingClass=idle\n"))
+check("IOSchedulingClass=2 -> io_class=best-effort", "\nio_class=best-effort\n" in _kn("IOSchedulingClass=2\n"))
+check("IOSchedulingClass=realtime + IOSchedulingPriority=1",
+      "\nio_class=realtime\nio_priority=1\n" in _kn("IOSchedulingClass=realtime\nIOSchedulingPriority=1\n"))
+check("CPUSchedulingPolicy=idle -> sched_policy=idle", "\nsched_policy=idle\n" in _kn("CPUSchedulingPolicy=idle\n"))
+check("CPUSchedulingPolicy=fifo + CPUSchedulingPriority=50",
+      "\nsched_policy=fifo\nsched_priority=50\n" in _kn("CPUSchedulingPolicy=fifo\nCPUSchedulingPriority=50\n"))
+check("ExecStart=+ keeps Nice= (scheduling isn't sandbox)", "\nnice=19\n" in si.unit_to_svc("p", si.parse_unit(
+    "[Service]\nExecStart=+/usr/bin/true\nNice=19\nPrivateTmp=yes\n")))
+_o = _kn("CPUSchedulingPolicy=batch\nCPUSchedulingPriority=50\n")
+check("CPUSchedulingPriority without fifo/rr warns, dropped",
+      "\nsched_priority=" not in _o and "CPUSchedulingPriority=50" in _o and "\nsched_policy=batch\n" in _o)
 check("UMask=0022 -> no line", "umask" not in _kn("UMask=0022\n").lower())
 check("UMask=0077 -> umask=0077", "\numask=0077\n" in _kn("UMask=0077\n"))
 check("UMask=027 -> umask=0027", "\numask=0027\n" in _kn("UMask=027\n"))

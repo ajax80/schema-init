@@ -371,7 +371,7 @@ units use them.
   creating setuid/setgid files, which only a syscall filter can do). This is the largest
   item in the list; do it last in the tier and spec it on its own.
 
-### 4.7 Scheduling
+### 4.7 Scheduling (done: #536 — nice=, io_class=/io_priority=, sched_policy=/sched_priority=)
 - `nice=` (today only via `priority=`), `io_class=`/`io_priority=`
   (`ioprio_set`), `sched_policy=fifo|rr|batch|idle` + `sched_priority=`
   (the Leg loop wants FIFO), `cpu_affinity=` already exists as `cpuset=`.

@@ -2343,6 +2343,16 @@ static void ctl_cmd(int fd, char *line) {
                 for (int k = 0; k < NS_K_COUNT; k++)
                     if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", ns_kernel_names[k]);
                 if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);
+                {
+                    static const char *const ioc[] = { "none", "realtime", "best-effort", "idle" };
+                    static const char *const pol[] = { "other", "fifo", "rr", "batch", "?", "idle" };
+                    if (s->nice_set) ctl_writef(fd, "  nice=%d\n", s->nice_val);
+                    if (s->io_class >= 0) ctl_writef(fd, "  io_class=%s\n", ioc[s->io_class & 3]);
+                    if (s->io_prio >= 0) ctl_writef(fd, "  io_priority=%d\n", s->io_prio);
+                    if (s->sched_policy >= 0 && s->sched_policy < 6)
+                        ctl_writef(fd, "  sched_policy=%s\n", pol[s->sched_policy]);
+                    if (s->sched_prio) ctl_writef(fd, "  sched_priority=%d\n", s->sched_prio);
+                }
                 for (int k = 0; k < s->rw_path_count; k++)
                     ctl_writef(fd, "  %-15s %s\n", "rw_path", s->rw_path[k]);
                 for (int k = 0; k < s->landlock_count; k++)
