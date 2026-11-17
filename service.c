@@ -27,6 +27,7 @@ int fdstore_n, fdstore_cap;
 #include <pwd.h>
 #include <grp.h>
 #include <sys/resource.h>
+#include <sched.h>
 #include <sys/wait.h>
 #include <sys/random.h>
 #include <sys/un.h>
@@ -444,6 +445,55 @@ static void cgroup_apply_limits(service_t *svc) {
     }
 }
 
+static int parse_int_in(const char *v, long lo, long hi, long *out) {
+    char *e;
+    long n;
+    if (!*v) return -1;
+    n = strtol(v, &e, 10);
+    if (*e || n < lo || n > hi) return -1;
+    *out = n;
+    return 0;
+}
+
+/* nice=, io_class=, io_priority=, sched_policy=, sched_priority=. 0 or -1 */
+static int parse_sched_key(service_t *svc, const char *key, const char *val) {
+    static const char *const ioc[] = { "none", "realtime", "best-effort", "idle" };
+    static const struct { const char *n; int p; } pol[] = {
+        { "other", SCHED_OTHER }, { "batch", SCHED_BATCH }, { "idle", SCHED_IDLE },
+        { "fifo", SCHED_FIFO }, { "rr", SCHED_RR },
+    };
+    long n;
+    if (!*val) {
+        /* a drop-in's empty value clears the key */
+        if (!strcmp(key, "nice")) svc->nice_set = 0;
+        else if (!strcmp(key, "io_class")) svc->io_class = -1;
+        else if (!strcmp(key, "io_priority")) svc->io_prio = -1;
+        else if (!strcmp(key, "sched_policy")) svc->sched_policy = -1;
+        else svc->sched_prio = 0;
+        return 0;
+    }
+    if (!strcmp(key, "nice")) {
+        if (parse_int_in(val, -20, 19, &n)) return -1;
+        svc->nice_val = (int8_t)n;
+        svc->nice_set = 1;
+    } else if (!strcmp(key, "io_class")) {
+        for (n = 0; n < 4 && strcmp(val, ioc[n]); n++) {}
+        if (n == 4) return -1;
+        svc->io_class = (int8_t)n;
+    } else if (!strcmp(key, "io_priority")) {
+        if (parse_int_in(val, 0, 7, &n)) return -1;
+        svc->io_prio = (int8_t)n;
+    } else if (!strcmp(key, "sched_policy")) {
+        for (n = 0; n < 5 && strcmp(val, pol[n].n); n++) {}
+        if (n == 5) return -1;
+        svc->sched_policy = (int8_t)pol[n].p;
+    } else {
+        if (parse_int_in(val, 1, 99, &n)) return -1;
+        svc->sched_prio = (uint8_t)n;
+    }
+    return 0;
+}
+
 /* 1 = handled, 0 = not a mount-ns key, -1 = bad value (load error). */
 static int parse_ns_field(service_t *svc, const char *key, const char *val) {
     int r;
@@ -727,6 +777,17 @@ static int kernel_ns_check(service_t *svc) {
     return 0;
 }
 
+static int sched_finalize(service_t *svc) {
+    int rt = svc->sched_policy == SCHED_FIFO || svc->sched_policy == SCHED_RR;
+    if (svc->sched_prio && !rt) {
+        fprintf(stderr, "[schema-init] %s: sched_priority needs sched_policy=fifo or rr — not loaded\n",
+                svc->name);
+        return -1;
+    }
+    if (rt && !svc->sched_prio) svc->sched_prio = 1;
+    return 0;
+}
+
 static int hardening_finalize(service_t *svc) {
     static const char *const tmp[] = { "/tmp/", "/var/tmp/" };
     static const char *const home[] = { "/home/", "/root/", "/run/user/" };
@@ -734,6 +795,7 @@ static int hardening_finalize(service_t *svc) {
     if (ns_hides(svc, HARD_PT, &svc->ns_private_tmp, "private_tmp", tmp, 2) != 0) return -1;
     if (ns_hides(svc, HARD_PH, &svc->ns_protect_home, "protect_home", home, 3) != 0) return -1;
     if (kernel_ns_check(svc) != 0) return -1;
+    if (sched_finalize(svc) != 0) return -1;
     return landlock_check(svc);
 }
 
@@ -1517,6 +1579,38 @@ static void svc_resolve_group_or_die(const service_t *svc, gid_t *g, const char 
 /* In a just-forked runner (exec_stop/exec_stop_post, exec_reload): own
  * process group, so a timed-out runner is killed with what it started; the
  * service's env, user and working dir. WHAT names it in failure lines. */
+/* NULL, or the key that couldn't be applied (errno set). nice is a hint,
+ * as in systemd: refused, the closest RLIMIT_NICE allows, with a log line */
+static const char *svc_apply_sched(const service_t *svc) {
+    if (svc->nice_set && setpriority(PRIO_PROCESS, 0, svc->nice_val) != 0) {
+        struct rlimit rl;
+        int floor = getpriority(PRIO_PROCESS, 0);
+        if (getrlimit(RLIMIT_NICE, &rl) == 0 && rl.rlim_cur > 0 && 20 - (int)rl.rlim_cur < floor)
+            floor = 20 - (int)rl.rlim_cur;
+        if (floor <= svc->nice_val || setpriority(PRIO_PROCESS, 0, floor) != 0) return "nice";
+        dprintf(2, "[schema-init] %s: nice=%d not allowed, running at %d\n", svc->name, svc->nice_val, floor);
+    }
+    if (svc->io_class >= 0 || svc->io_prio >= 0) {
+        int cls = svc->io_class >= 0 ? svc->io_class : 2;
+        int data = cls == 1 || cls == 2 ? (svc->io_prio >= 0 ? svc->io_prio : 4) : 0;
+        /* IOPRIO_PRIO_VALUE(class, data), IOPRIO_WHO_PROCESS */
+        if (syscall(SYS_ioprio_set, 1, 0, cls << 13 | data) != 0) return "io_class";
+    }
+    if (svc->sched_policy >= 0) {
+        struct sched_param sp = { .sched_priority = svc->sched_prio };
+        if (sched_setscheduler(0, svc->sched_policy, &sp) != 0) return "sched_policy";
+    }
+    return NULL;
+}
+
+static void svc_sched_or_die(const service_t *svc) {
+    const char *what = svc_apply_sched(svc);
+    if (what) {
+        dprintf(2, "[schema-init] SCHEDULING FAILED for %s: %s: %s\n", svc->name, what, strerror(errno));
+        _exit(126);
+    }
+}
+
 /* exec_stop/exec_reload talk to the service (rndc reload, a curl to its
  * 127.0.0.1 admin port): with private_network they belong in its netns, as
  * under systemd. Main gone: a fresh empty one, never the host's */
@@ -1549,6 +1643,7 @@ static void svc_runner_child(const service_t *svc, const char *what) {
     if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     syscall(SYS_close_range, 3, ~0U, 0);
     svc_runner_netns(svc, what);
+    svc_sched_or_die(svc);
     svc_make_exec_dirs(svc, 0);
     svc_apply_env(svc, NULL, 0);
     char gwhat[48];
@@ -1765,7 +1860,9 @@ int service_spawn(service_t *svc) {
                 }
             }
         }
-        if (svc->priority == PRIO_CRITICAL) {
+        /* an explicit nice= replaces the tier's: never set first, then undone */
+        if (svc->nice_set) {
+        } else if (svc->priority == PRIO_CRITICAL) {
             if (setpriority(PRIO_PROCESS, 0, -10) < 0) {
                 fprintf(stderr, "[schema-init] Warning: failed to set critical priority for %s: %s\n", svc->name, strerror(errno));
             }
@@ -1799,6 +1896,10 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
+        /* after limit_nice=/limit_rtprio= (they may be what grants it), before
+         * the uid drop (RT needs CAP_SYS_NICE): a policy or I/O class not
+         * granted fails the start, as in systemd, rather than run unscheduled */
+        svc_sched_or_die(svc);
         /* only when there are dirs to own: otherwise after the + exec_pre
          * lines, which may create the user (sysusers) */
         int exec_dirs = 0;
@@ -2380,6 +2481,7 @@ static void svc_init_defaults(service_t *svc) {
     svc->priority = PRIO_STANDARD;
     svc->start_timeout_sec = -1;
     svc->umask_val = -1;
+    svc->io_class = svc->io_prio = svc->sched_policy = -1;
     svc->allowed_slot_min = -1;
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
@@ -3510,6 +3612,13 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->restart_sec = v < 0 ? 0 : v > 3600 ? 3600 : v;
     } else if (strcmp(line, "start_timeout_sec") == 0) {
         svc->start_timeout_sec = atoi(val);
+    } else if (strcmp(line, "nice") == 0 || strcmp(line, "io_class") == 0 ||
+               strcmp(line, "io_priority") == 0 || strcmp(line, "sched_policy") == 0 ||
+               strcmp(line, "sched_priority") == 0) {
+        if (parse_sched_key(svc, line, val) != 0) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s\n", svc->name[0] ? svc->name : path, line, val);
+            return -1;
+        }
     } else if (strcmp(line, "umask") == 0 && !*val) {
         svc->umask_val = -1;
     } else if (strcmp(line, "umask") == 0) {

@@ -398,6 +398,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cap-parse && $(TESTDIR)/cap-parse
 	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o $(TESTDIR)/ambient-caps && $(TESTDIR)/ambient-caps
 	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/stopcmds && $(TESTDIR)/stopcmds
+	$(CC) $(CFLAGS) tests/test_svc_sched.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/sched && $(TESTDIR)/sched
 	$(CC) $(CFLAGS) tests/test_svc_reload.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svcreload && $(TESTDIR)/svcreload
 	$(CC) $(CFLAGS) tests/test_svc_restart_policy.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/restartpol && $(TESTDIR)/restartpol
 	$(CC) $(CFLAGS) tests/test_svc_kill_mode.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/killmode && $(TESTDIR)/killmode

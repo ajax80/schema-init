@@ -491,6 +491,12 @@ typedef struct {
     uint8_t          ns_protect_home;   /* hide /home /root /run/user              */
     uint8_t          ns_kernel;         /* NS_K_* (ns.h)                           */
     int16_t          umask_val;         /* umask= for every child; -1 unset        */
+    int8_t           nice_val;          /* nice=, valid when nice_set              */
+    uint8_t          nice_set;
+    int8_t           io_class;          /* IOPRIO_CLASS_*: 0 none 1 rt 2 be 3 idle; -1 unset */
+    int8_t           io_prio;           /* io_priority= 0..7; -1 unset             */
+    int8_t           sched_policy;      /* SCHED_*; -1 unset                       */
+    uint8_t          sched_prio;        /* sched_priority= 1..99 (fifo/rr), 0 unset */
     char            *rw_path[MAX_RW_PATHS]; /* writable inside protect_system   */
     int              rw_path_count;
     char            *landlock[MAX_LANDLOCK]; /* landlock_ro= / landlock_rw= paths    */

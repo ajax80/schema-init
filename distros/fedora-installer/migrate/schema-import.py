@@ -435,6 +435,55 @@ def cgroup_lines(svc):
     return ["%s=%d" % (k, got[k]) for k in order if k in got], warns
 
 
+_IO_CLASS = {"0": "none", "1": "realtime", "2": "best-effort", "3": "idle",
+             "none": "none", "realtime": "realtime", "best-effort": "best-effort", "idle": "idle"}
+_SCHED_POLICY = ("other", "batch", "idle", "fifo", "rr")
+
+
+def _scheduling(svc):
+    """Nice=, IOScheduling*=, CPUScheduling*= as audit 4.7's keys. Not
+    hardening: ExecStart=+ keeps them. Returns (lines, warnings)."""
+    lines, warns = [], []
+
+    def num(directive, lo, hi):
+        v = _get_last(svc, directive)
+        if not v:
+            return None
+        if re.fullmatch(r"[+-]?\d+", v) and lo <= int(v) <= hi:
+            return int(v)
+        warns.append("%s=%s unrecognised, not applied" % (directive, v))
+        return None
+
+    n = num("Nice", -20, 19)
+    if n is not None:
+        lines.append("nice=%d" % n)
+    v = _get_last(svc, "IOSchedulingClass").lower()
+    if v:
+        if v in _IO_CLASS:
+            lines.append("io_class=%s" % _IO_CLASS[v])
+        else:
+            warns.append("IOSchedulingClass=%s unrecognised, not applied" % v)
+    n = num("IOSchedulingPriority", 0, 7)
+    if n is not None:
+        lines.append("io_priority=%d" % n)
+    v = _get_last(svc, "CPUSchedulingPolicy").lower()
+    pol = None
+    if v:
+        if v in _SCHED_POLICY:
+            pol = v
+            lines.append("sched_policy=%s" % v)
+        else:
+            warns.append("CPUSchedulingPolicy=%s unrecognised, not applied" % v)
+    n = num("CPUSchedulingPriority", 0, 99)
+    # 0 is systemd's only valid value outside fifo/rr: asks for nothing
+    if n is not None and (n or pol in ("fifo", "rr")):
+        if pol in ("fifo", "rr") and n:
+            lines.append("sched_priority=%d" % n)
+        else:
+            warns.append("CPUSchedulingPriority=%d needs CPUSchedulingPolicy=fifo or rr, dropped" % n)
+    return lines, warns
+
+
 def _hardening(svc):
     """The four hardening knobs, always explicit so the unit means the same
     thing whatever the host's hardening-default is, then any rw_path= lines
@@ -1749,6 +1798,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
     lines.extend(hard)
+    sched, sched_warns = _scheduling(svc)
+    lines.extend(sched)
+    warns.extend(sched_warns)
     # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
     # here only the main process is confined
     warns.extend(stop_warns)
