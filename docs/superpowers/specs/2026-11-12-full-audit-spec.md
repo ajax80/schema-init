@@ -366,7 +366,9 @@ units use them.
 - No seccomp anywhere. A hand-built BPF (no libseccomp in a static PID 1)
   with systemd's named groups (`@system-service`, `@mount`, `@privileged`,
   …) as deny or allow lists, plus `syscall_architectures=native`. Importer
-  maps `SystemCallFilter=`/`SystemCallArchitectures=`. This is the largest
+  maps `SystemCallFilter=`/`SystemCallArchitectures=`. Also
+  `restrict_suid_sgid=1` (moved here from 4.5: systemd's blocks chmod/mknod
+  creating setuid/setgid files, which only a syscall filter can do). This is the largest
   item in the list; do it last in the tier and spec it on its own.
 
 ### 4.7 Scheduling
