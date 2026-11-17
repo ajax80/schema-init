@@ -748,13 +748,18 @@ int service_apply_hardening(const service_t *svc) {
                 svc->name, step, errno);
         return -1;
     }
+    uint64_t kdrop = ns_kernel_cap_drop(svc->ns_kernel);
     if (svc->cap_restrict) {
-        /* an ambient cap outside the bounding set could never be raised */
-        if (apply_capabilities(svc->cap_keep_mask | svc->cap_ambient_mask) != 0) {
+        /* an ambient cap outside the bounding set could never be raised;
+         * the kernel knobs win over keep_caps, as in systemd */
+        if (apply_capabilities((svc->cap_keep_mask | svc->cap_ambient_mask) & ~kdrop) != 0) {
             dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
                     svc->name, errno);
             return -1;
         }
+    } else if (kdrop && drop_bounding(kdrop) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: kernel caps: %d\n", svc->name, errno);
+        return -1;
     }
     if (svc->flags & SVC_NO_NEW_PRIVS) {
         if (apply_no_new_privs() != 0) {

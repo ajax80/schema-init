@@ -7,6 +7,50 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/prctl.h>
+#include <sys/wait.h>
+#include <sched.h>
+#include <fcntl.h>
+#include <linux/capability.h>
+
+/* the bounding set service_apply_hardening leaves, read in a forked child
+ * (a user namespace when not root); -1 when no userns is available */
+static long long hardened_bounding(const service_t *svc) {
+    int pfd[2], st;
+    unsigned long long caps = 0;
+    assert(pipe(pfd) == 0);
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        char m[32];
+        uid_t u = getuid();
+        gid_t g = getgid();
+        close(pfd[0]);
+        if (geteuid() != 0) {
+            int fd;
+            if (unshare(CLONE_NEWUSER) != 0) _exit(99);
+            if ((fd = open("/proc/self/setgroups", O_WRONLY)) >= 0) { (void)!write(fd, "deny", 4); close(fd); }
+            snprintf(m, sizeof m, "0 %u 1", (unsigned)u);
+            if ((fd = open("/proc/self/uid_map", O_WRONLY)) < 0 || write(fd, m, strlen(m)) < 0) _exit(99);
+            close(fd);
+            snprintf(m, sizeof m, "0 %u 1", (unsigned)g);
+            if ((fd = open("/proc/self/gid_map", O_WRONLY)) < 0 || write(fd, m, strlen(m)) < 0) _exit(99);
+            close(fd);
+        }
+        if (service_apply_hardening(svc) != 0) _exit(1);
+        for (int c = 0; c < 64; c++)
+            if (prctl(PR_CAPBSET_READ, c) == 1) caps |= 1ULL << c;
+        (void)!write(pfd[1], &caps, sizeof caps);
+        _exit(0);
+    }
+    close(pfd[1]);
+    assert(waitpid(pid, &st, 0) == pid);
+    if (WIFEXITED(st) && WEXITSTATUS(st) == 99) { close(pfd[0]); return -1; }
+    assert(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    assert(read(pfd[0], &caps, sizeof caps) == sizeof caps);
+    close(pfd[0]);
+    return (long long)caps;
+}
 
 static void write_svc(const char *path, const char *body) {
     FILE *f = fopen(path, "w");
@@ -190,6 +234,16 @@ int main(void) {
     write_svc(path, "name=ok\nexec=/usr/bin/true\nprotect_kernel_modules=1\n"
                     "keep_caps=CAP_SYS_MODULE,CAP_NET_ADMIN\n");
     assert(service_load_one(path, &one) == 0);
+    long long bs = hardened_bounding(&one);
+    if (bs >= 0) {
+        assert(!(bs & (1LL << CAP_SYS_MODULE)) && (bs & (1LL << CAP_NET_ADMIN)));
+        write_svc(path, "name=ok\nexec=/usr/bin/true\nprivate_devices=1\n");
+        assert(service_load_one(path, &one) == 0 && !one.cap_restrict);
+        bs = hardened_bounding(&one);
+        assert(!(bs & (1LL << CAP_MKNOD)) && !(bs & (1LL << CAP_SYS_RAWIO)));
+        assert((bs & (1LL << CAP_SYS_MODULE)) && (bs & (1LL << CAP_NET_ADMIN)));
+    } else
+        printf("SKIP  kernel cap drops (no userns)\n");
     unlink(path);
 
     assert(hardening_default_resolve(NULL, NULL) == 0);
