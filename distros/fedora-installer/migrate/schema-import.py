@@ -474,9 +474,10 @@ def _scheduling(svc):
             lines.append("sched_policy=%s" % v)
         else:
             warns.append("CPUSchedulingPolicy=%s unrecognised, not applied" % v)
-    n = num("CPUSchedulingPriority", 1, 99)
-    if n is not None:
-        if pol in ("fifo", "rr"):
+    n = num("CPUSchedulingPriority", 0, 99)
+    # 0 is systemd's only valid value outside fifo/rr: asks for nothing
+    if n is not None and (n or pol in ("fifo", "rr")):
+        if pol in ("fifo", "rr") and n:
             lines.append("sched_priority=%d" % n)
         else:
             warns.append("CPUSchedulingPriority=%d needs CPUSchedulingPolicy=fifo or rr, dropped" % n)

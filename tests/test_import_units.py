@@ -1186,6 +1186,8 @@ check("CPUSchedulingPolicy=fifo + CPUSchedulingPriority=50",
       "\nsched_policy=fifo\nsched_priority=50\n" in _kn("CPUSchedulingPolicy=fifo\nCPUSchedulingPriority=50\n"))
 check("ExecStart=+ keeps Nice= (scheduling isn't sandbox)", "\nnice=19\n" in si.unit_to_svc("p", si.parse_unit(
     "[Service]\nExecStart=+/usr/bin/true\nNice=19\nPrivateTmp=yes\n")))
+_o = _kn("CPUSchedulingPolicy=batch\nCPUSchedulingPriority=0\n")
+check("CPUSchedulingPriority=0 with batch is silent", "WARN" not in _o and "\nsched_priority=" not in _o)
 _o = _kn("CPUSchedulingPolicy=batch\nCPUSchedulingPriority=50\n")
 check("CPUSchedulingPriority without fifo/rr warns, dropped",
       "\nsched_priority=" not in _o and "CPUSchedulingPriority=50" in _o and "\nsched_policy=batch\n" in _o)

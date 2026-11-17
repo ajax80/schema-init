@@ -68,10 +68,18 @@ int main(void) {
     assert(load("sched_policy=batch\n", &s) == 0 && s.sched_policy == SCHED_BATCH);
     assert(load("sched_policy=idle\n", &s) == 0 && s.sched_policy == SCHED_IDLE);
     assert(load("sched_policy=other\n", &s) == 0 && s.sched_policy == SCHED_OTHER);
+    /* a drop-in's empty value clears, so fifo can be turned back into other */
+    assert(load("sched_policy=fifo\nsched_priority=50\nsched_policy=other\nsched_priority=\n", &s) == 0 &&
+           s.sched_policy == SCHED_OTHER && !s.sched_prio);
+    assert(load("nice=5\nnice=\n", &s) == 0 && !s.nice_set);
+    assert(load("io_class=idle\nio_priority=3\nio_class=\nio_priority=\n", &s) == 0 &&
+           s.io_class == -1 && s.io_prio == -1);
+    assert(load("sched_policy=fifo\nsched_policy=\n", &s) == 0 && s.sched_policy == -1);
     {
         const char *bad[] = {
-            "nice=20\n", "nice=-21\n", "nice=x\n", "nice=\n", "io_class=foo\n", "io_priority=8\n",
+            "nice=20\n", "nice=-21\n", "io_class=foo\n", "io_priority=8\n",
             "io_priority=-1\n", "sched_policy=deadline\n", "sched_policy=fifo\nsched_priority=0\n",
+            "nice=x\n",
             "sched_policy=fifo\nsched_priority=100\n", "sched_policy=batch\nsched_priority=5\n",
             "sched_priority=5\n",
         };
@@ -85,6 +93,30 @@ int main(void) {
     const char *pol_probe = "cut -d\" \" -f41 /proc/self/stat";
     assert(spawn_probe("nice=5\n", nice_probe, got, sizeof got) == 0 && !strcmp(got, "5"));
     assert(spawn_probe("priority=critical\nnice=3\n", nice_probe, got, sizeof got) == 0 && !strcmp(got, "3"));
+    /* nice= replaces priority's nice outright: peripheral's +10 never happens first */
+    assert(spawn_probe("priority=peripheral\nnice=0\n", nice_probe, got, sizeof got) == 0 && !strcmp(got, "0"));
+    /* stop runners get the scheduling too */
+    {
+        char body[1024], of[320];
+        static service_t r;
+        int st;
+        snprintf(of, sizeof of, "%s/stop", dir);
+        snprintf(body, sizeof body, "name=t\nexec=/bin/true\nnice=7\nio_class=idle\n"
+                 "exec_stop=/bin/sh -c \"cut -d' ' -f19 /proc/self/stat > %s; ionice >> %s\"\n", of, of);
+        FILE *f = fopen(path, "w");
+        fputs(body, f);
+        fclose(f);
+        memset(&r, 0, sizeof r);
+        assert(service_load_one(path, &r) == 0);
+        pid_t p = service_stop_spawn(&r, 1);
+        assert(p > 0 && waitpid(p, &st, 0) == p && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+        char buf[64] = "";
+        f = fopen(of, "r");
+        assert(f && fread(buf, 1, sizeof buf - 1, f) > 0);
+        fclose(f);
+        assert(!strcmp(buf, "7\nidle\n"));
+        unlink(of);
+    }
     assert(spawn_probe("sched_policy=batch\n", pol_probe, got, sizeof got) == 0 && !strcmp(got, "3"));
     assert(spawn_probe("io_class=idle\n", "ionice", got, sizeof got) == 0 && !strcmp(got, "idle"));
     assert(spawn_probe("io_priority=6\n", "ionice", got, sizeof got) == 0 && !strcmp(got, "best-effort: prio 6"));
@@ -93,8 +125,17 @@ int main(void) {
         struct rlimit rn, rr;
         getrlimit(RLIMIT_NICE, &rn);
         getrlimit(RLIMIT_RTPRIO, &rr);
-        if (rn.rlim_cur < 40)
-            assert(spawn_probe("nice=-20\n", nice_probe, got, sizeof got) == 126 && !got[0]);
+        /* nice is a hint, as in systemd: the closest the limit allows, not a failed start */
+        if (rn.rlim_cur < 40) {
+            char want[8];
+            snprintf(want, sizeof want, "%d", rn.rlim_cur ? 20 - (int)rn.rlim_cur : getpriority(PRIO_PROCESS, 0));
+            assert(spawn_probe("nice=-20\n", nice_probe, got, sizeof got) == 0);
+            if (strcmp(got, want)) { fprintf(stderr, "nice clamp: got %s want %s\n", got, want); return 1; }
+        }
+        /* the unit's own limit_rtprio= is in place before sched_setscheduler */
+        if (rr.rlim_cur == 0 && rr.rlim_max >= 50)
+            assert(spawn_probe("limit_rtprio=50\nsched_policy=fifo\nsched_priority=50\n",
+                               "cut -d\" \" -f40,41 /proc/self/stat", got, sizeof got) == 0 && !strcmp(got, "50 1"));
         if (rr.rlim_cur == 0)
             assert(spawn_probe("sched_policy=fifo\n", pol_probe, got, sizeof got) == 126 && !got[0]);
         else

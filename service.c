@@ -463,6 +463,15 @@ static int parse_sched_key(service_t *svc, const char *key, const char *val) {
         { "fifo", SCHED_FIFO }, { "rr", SCHED_RR },
     };
     long n;
+    if (!*val) {
+        /* a drop-in's empty value clears the key */
+        if (!strcmp(key, "nice")) svc->nice_set = 0;
+        else if (!strcmp(key, "io_class")) svc->io_class = -1;
+        else if (!strcmp(key, "io_priority")) svc->io_prio = -1;
+        else if (!strcmp(key, "sched_policy")) svc->sched_policy = -1;
+        else svc->sched_prio = 0;
+        return 0;
+    }
     if (!strcmp(key, "nice")) {
         if (parse_int_in(val, -20, 19, &n)) return -1;
         svc->nice_val = (int8_t)n;
@@ -1570,12 +1579,17 @@ static void svc_resolve_group_or_die(const service_t *svc, gid_t *g, const char 
 /* In a just-forked runner (exec_stop/exec_stop_post, exec_reload): own
  * process group, so a timed-out runner is killed with what it started; the
  * service's env, user and working dir. WHAT names it in failure lines. */
-/* exec_stop/exec_reload talk to the service (rndc reload, a curl to its
- * 127.0.0.1 admin port): with private_network they belong in its netns, as
- * under systemd. Main gone: a fresh empty one, never the host's */
-/* NULL, or the key that couldn't be applied (errno set) */
+/* NULL, or the key that couldn't be applied (errno set). nice is a hint,
+ * as in systemd: refused, the closest RLIMIT_NICE allows, with a log line */
 static const char *svc_apply_sched(const service_t *svc) {
-    if (svc->nice_set && setpriority(PRIO_PROCESS, 0, svc->nice_val) != 0) return "nice";
+    if (svc->nice_set && setpriority(PRIO_PROCESS, 0, svc->nice_val) != 0) {
+        struct rlimit rl;
+        int floor = getpriority(PRIO_PROCESS, 0);
+        if (getrlimit(RLIMIT_NICE, &rl) == 0 && rl.rlim_cur > 0 && 20 - (int)rl.rlim_cur < floor)
+            floor = 20 - (int)rl.rlim_cur;
+        if (floor <= svc->nice_val || setpriority(PRIO_PROCESS, 0, floor) != 0) return "nice";
+        dprintf(2, "[schema-init] %s: nice=%d not allowed, running at %d\n", svc->name, svc->nice_val, floor);
+    }
     if (svc->io_class >= 0 || svc->io_prio >= 0) {
         int cls = svc->io_class >= 0 ? svc->io_class : 2;
         int data = cls == 1 || cls == 2 ? (svc->io_prio >= 0 ? svc->io_prio : 4) : 0;
@@ -1589,6 +1603,17 @@ static const char *svc_apply_sched(const service_t *svc) {
     return NULL;
 }
 
+static void svc_sched_or_die(const service_t *svc) {
+    const char *what = svc_apply_sched(svc);
+    if (what) {
+        dprintf(2, "[schema-init] SCHEDULING FAILED for %s: %s: %s\n", svc->name, what, strerror(errno));
+        _exit(126);
+    }
+}
+
+/* exec_stop/exec_reload talk to the service (rndc reload, a curl to its
+ * 127.0.0.1 admin port): with private_network they belong in its netns, as
+ * under systemd. Main gone: a fresh empty one, never the host's */
 static void svc_runner_netns(const service_t *svc, const char *what) {
     char p[40];
     int fd = -1;
@@ -1618,6 +1643,7 @@ static void svc_runner_child(const service_t *svc, const char *what) {
     if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     syscall(SYS_close_range, 3, ~0U, 0);
     svc_runner_netns(svc, what);
+    svc_sched_or_die(svc);
     svc_make_exec_dirs(svc, 0);
     svc_apply_env(svc, NULL, 0);
     char gwhat[48];
@@ -1834,22 +1860,15 @@ int service_spawn(service_t *svc) {
                 }
             }
         }
-        if (svc->priority == PRIO_CRITICAL) {
+        /* an explicit nice= replaces the tier's: never set first, then undone */
+        if (svc->nice_set) {
+        } else if (svc->priority == PRIO_CRITICAL) {
             if (setpriority(PRIO_PROCESS, 0, -10) < 0) {
                 fprintf(stderr, "[schema-init] Warning: failed to set critical priority for %s: %s\n", svc->name, strerror(errno));
             }
         } else if (svc->priority == PRIO_PERIPHERAL) {
             if (setpriority(PRIO_PROCESS, 0, 10) < 0) {
                 fprintf(stderr, "[schema-init] Warning: failed to set peripheral priority for %s: %s\n", svc->name, strerror(errno));
-            }
-        }
-        /* explicit keys, before the uid drop (RT needs CAP_SYS_NICE): one
-         * not granted fails the start, as in systemd, rather than run unscheduled */
-        {
-            const char *what = svc_apply_sched(svc);
-            if (what) {
-                dprintf(2, "[schema-init] SCHEDULING FAILED for %s: %s: %s\n", svc->name, what, strerror(errno));
-                _exit(126);
             }
         }
         if (svc->oom_adj_set) {
@@ -1877,6 +1896,10 @@ int service_spawn(service_t *svc) {
                 _exit(126);
             }
         }
+        /* after limit_nice=/limit_rtprio= (they may be what grants it), before
+         * the uid drop (RT needs CAP_SYS_NICE): a policy or I/O class not
+         * granted fails the start, as in systemd, rather than run unscheduled */
+        svc_sched_or_die(svc);
         /* only when there are dirs to own: otherwise after the + exec_pre
          * lines, which may create the user (sysusers) */
         int exec_dirs = 0;
