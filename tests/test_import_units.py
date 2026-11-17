@@ -1168,6 +1168,11 @@ for _d, _k in (("ProtectKernelTunables", "protect_kernel_tunables"), ("ProtectKe
 _o = _kn("ProtectHostname=bogus\n")
 check("ProtectHostname=bogus warns, no line",
       "ProtectHostname=bogus unrecognised, not applied" in _o and "protect_hostname" not in _o)
+_o = _kn("ProtectHostname=private\n")
+check("ProtectHostname=private -> 1, no warning", "\nprotect_hostname=1\n" in _o and "WARN" not in _o)
+_o = _kn("ProtectHostname=yes:box1\n")
+check("ProtectHostname=yes:NAME -> 1, warns the name is not set",
+      "\nprotect_hostname=1\n" in _o and "ProtectHostname=yes:box1" in _o)
 _o = _kn("ProtectControlGroups=strict\n")
 check("ProtectControlGroups=strict -> 1 with a warning",
       "\nprotect_control_groups=1\n" in _o and "ProtectControlGroups=strict" in _o)

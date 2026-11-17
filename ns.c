@@ -160,6 +160,7 @@ static int private_dev(void) {
     char opts[96];
     struct stat st;
 
+    for (i = 0; i < N_DEV_KEEP; i++) fd[i] = -1;
     for (i = 0; i < N_DEV_KEEP; i++) {
         char p[32];
         snprintf(p, sizeof p, "/dev/%s", dev_keep[i]);
@@ -245,16 +246,30 @@ int apply_mount_ns(const char *name, uint8_t private_tmp, uint8_t protect_system
     }
     if (kernel & NS_K_HOSTNAME) {
         *step = "protect_hostname";
-        if (unshare(CLONE_NEWUTS) != 0) return -1;
+        if (unshare(CLONE_NEWUTS) != 0 ||
+            bind_attr("/proc/sys/kernel/hostname", 1) != 0 ||
+            bind_attr("/proc/sys/kernel/domainname", 1) != 0)
+            return -1;
     }
     if (kernel & NS_K_TUNABLES) {
+        /* systemd's ProtectKernelTunables= tables: read-only, then hidden */
         static const char *const kt[] = {
             "/proc/sys", "/sys", "/proc/sysrq-trigger", "/proc/latency_stats", "/proc/acpi",
             "/proc/apm", "/proc/asound", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/scsi",
+            "/proc/mtrr", "/proc/timer_list", "/proc/timer_stats",
         };
+        static const char *const hide_f[] = { "/proc/kallsyms", "/proc/kcore" };
+        static const char *const hide_d[] = { "/sys/kernel/debug", "/sys/kernel/tracing" };
         *step = "protect_kernel_tunables";
         for (i = 0; i < (int)(sizeof(kt) / sizeof(kt[0])); i++)
             if (bind_attr(kt[i], 1) != 0) return -1;
+        for (i = 0; i < 2; i++) {
+            /* an empty read-only file in place: /dev/null, before private_devices covers /dev */
+            if (mount("/dev/null", hide_f[i], NULL, MS_BIND, NULL) != 0 && errno != ENOENT) return -1;
+            if (bind_attr(hide_f[i], 1) != 0) return -1;
+            if (mount_tmpfs(hide_d[i], MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=0000") != 0)
+                return -1;
+        }
     }
     if (kernel & NS_K_CGROUPS) {
         *step = "protect_control_groups";

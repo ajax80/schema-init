@@ -217,6 +217,7 @@ int main(void) {
         { "name=b\nexec=/usr/lib/modules/x/helper\nprotect_kernel_modules=1\n" },
         { "name=b\nexec=/lib/modules/x/helper\nprotect_kernel_modules=1\n" },
         { "name=b\nexec=/usr/bin/true\nprivate_devices=1\nready_path=/dev/schema-ready\n" },
+        { "name=b\nexec=/dev/b.sh\nprivate_devices=1\nready_path=/dev/shm/b.ready\n" },
         { "name=b\nexec=/usr/bin/true\nprotect_kernel_modules=1\nambient_caps=CAP_SYS_MODULE\n"
           "user=nobody\n" },
         { "name=b\nexec=/usr/bin/true\nprivate_devices=1\nambient_caps=CAP_MKNOD\nuser=nobody\n" },
@@ -230,6 +231,10 @@ int main(void) {
     }
     snprintf(path, sizeof(path), "%s/ok.svc", dir);
     write_svc(path, "name=ok\nexec=/usr/bin/true\nprivate_devices=1\nready_path=/run/x\n");
+    assert(service_load_one(path, &one) == 0);
+    write_svc(path, "name=ok\nexec=/usr/bin/true\nprivate_devices=1\nready_path=/dev/shm/ok.ready\n");
+    assert(service_load_one(path, &one) == 0);
+    write_svc(path, "name=ok\nexec=/usr/bin/true\nprivate_devices=1\nready_path=/dev/mqueue/ok\n");
     assert(service_load_one(path, &one) == 0);
     write_svc(path, "name=ok\nexec=/usr/bin/true\nprotect_kernel_modules=1\n"
                     "keep_caps=CAP_SYS_MODULE,CAP_NET_ADMIN\n");

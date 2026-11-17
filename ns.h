@@ -28,7 +28,7 @@ uint64_t ns_kernel_cap_drop(uint8_t kernel);
 /* Build the private mount view in the forked child, before caps are dropped.
  * name: the service's, for its private_tmp dir under /tmp/schema-private.
  * rw paths are made writable again inside the read-only mounts; a missing one
- * is skipped. No-op (0) when no read-only/tmp knob is set. On failure returns
+ * is skipped. No-op (0) when no mount knob and no NS_K_* bit is set. On failure returns
  * -1 with errno set and *step naming the failing operation. */
 int apply_mount_ns(const char *name, uint8_t private_tmp, uint8_t protect_system,
                    uint8_t protect_home, uint8_t kernel, const char *const *rw, int n_rw,

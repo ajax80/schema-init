@@ -717,9 +717,12 @@ static int landlock_check(service_t *svc) {
 static int kernel_ns_check(service_t *svc) {
     static const char *const mods[] = { "/usr/lib/modules/", "/lib/modules/" };
     static const char *const dev[] = { "/dev/" };
+    static const char *const kept[] = { "/dev/shm/", "/dev/mqueue/" };
     uint8_t m = !!(svc->ns_kernel & NS_K_MODULES), d = !!(svc->ns_kernel & NS_K_DEVICES);
     uint64_t lost = svc->cap_ambient_mask & ns_kernel_cap_drop(svc->ns_kernel);
     if (ns_hides(svc, 0, &m, "protect_kernel_modules", mods, 2) != 0) return -1;
+    /* shm and mqueue are the host's inside the private /dev */
+    if (d && !path_under(svc->exec, dev, 1) && path_under(svc->ready_path, kept, 2)) d = 0;
     if (ns_hides(svc, 0, &d, "private_devices", dev, 1) != 0) return -1;
     if (lost) {
         fprintf(stderr, "[schema-init] %s: ambient_caps holds a cap %s drops — not loaded\n",

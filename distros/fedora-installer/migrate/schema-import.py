@@ -480,8 +480,11 @@ def _hardening(svc):
                    ("ProtectControlGroups", "protect_control_groups"),
                    ("PrivateDevices", "private_devices"), ("ProtectHostname", "protect_hostname")):
         v = _get_last(svc, d).lower()
-        if v in _TRUE:
+        if v in _TRUE or (d == "ProtectHostname" and v == "private"):
             lines.append("%s=1" % key)
+        elif d == "ProtectHostname" and v.split(":", 1)[0] in _TRUE + ("private",) and ":" in v:
+            lines.append("%s=1" % key)
+            warns.append("ProtectHostname=%s: the hostname is not set, only isolated" % _get_last(svc, d))
         elif d == "ProtectControlGroups" and v == "strict":
             lines.append("%s=1" % key)
             warns.append("ProtectControlGroups=strict mapped to protect_control_groups=1 (no cgroup namespace)")

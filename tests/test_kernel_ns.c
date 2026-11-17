@@ -57,6 +57,21 @@ static int case_tunables(void) {
     if (!erofs("/proc/sys/kernel/hostname")) return 11;
     if (!erofs("/sys/kernel")) return 12;
     if (access("/proc/sysrq-trigger", F_OK) == 0 && !erofs("/proc/sysrq-trigger")) return 13;
+    if (access("/proc/mtrr", F_OK) == 0 && !erofs("/proc/mtrr")) return 14;
+    if (access("/proc/timer_list", F_OK) == 0 && !erofs("/proc/timer_list")) return 15;
+    {
+        char b[16];
+        int fd = open("/proc/kallsyms", O_RDONLY);
+        if (fd >= 0 && read(fd, b, sizeof b) > 0) return 16;
+        if (fd >= 0) close(fd);
+    }
+    {
+        DIR *d = opendir("/sys/kernel/tracing");
+        struct dirent *e;
+        while (d && (e = readdir(d)))
+            if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) return 17;
+        if (d) closedir(d);
+    }
     return 0;
 }
 
@@ -117,6 +132,7 @@ static int case_devices(int host_log) {
 static int case_hostname(void) {
     if (setup(NS_K_HOSTNAME, NULL, 0)) return 10;
     if (sethostname("schema-kns-test", 15) != 0) return 11;
+    if (!erofs("/proc/sys/kernel/hostname") || !erofs("/proc/sys/kernel/domainname")) return 12;
     return 0;
 }
 
