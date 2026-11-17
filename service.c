@@ -1520,6 +1520,7 @@ static void svc_resolve_group_or_die(const service_t *svc, gid_t *g, const char 
 static void svc_runner_child(const service_t *svc, const char *what) {
     service_reset_child_sigmask();
     setsid();
+    if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     int null_fd = open("/dev/null", O_RDONLY);
     if (null_fd >= 0) {
         dup2(null_fd, STDIN_FILENO);
@@ -1696,6 +1697,8 @@ int service_spawn(service_t *svc) {
             if (null_fd > 0) close(null_fd);
         }
         svc_child_log(svc);
+        /* before exec_pre: every command of the service gets it, as in systemd */
+        if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
         char *file_env[64];
         int file_envc = 0;
         for (int i = 0; i < svc->env_file_count; i++) {

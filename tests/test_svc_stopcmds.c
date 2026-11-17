@@ -38,6 +38,39 @@ int main(void) {
     snprintf(p, sizeof p, "%s/s.svc", dir);
     snprintf(out, sizeof out, "%s/out", dir);
 
+    /* umask= reaches exec_pre, exec and the stop runner; files the host would make 0644 */
+    {
+        char f1[320], f2[320], f3[320];
+        struct stat st;
+        int ws;
+        umask(022);
+        snprintf(f1, sizeof f1, "%s/pre", dir);
+        snprintf(f2, sizeof f2, "%s/main", dir);
+        snprintf(f3, sizeof f3, "%s/stop", dir);
+        snprintf(body, sizeof body,
+                 "name=u\nexec=/bin/touch\nargs=%s\noneshot=1\numask=0077\n"
+                 "exec_pre=/bin/touch %s\nexec_stop=/bin/touch %s\n", f2, f1, f3);
+        write_svc(p, body);
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(p, &svc) == 0 && svc.umask_val == 077);
+        assert(service_spawn(&svc) == 0);
+        assert(waitpid(svc.child_pid, &ws, 0) == svc.child_pid && WIFEXITED(ws) && WEXITSTATUS(ws) == 0);
+        assert(runner(&svc, 1) == 0);
+        assert(stat(f1, &st) == 0 && (st.st_mode & 0777) == 0600);
+        assert(stat(f2, &st) == 0 && (st.st_mode & 0777) == 0600);
+        assert(stat(f3, &st) == 0 && (st.st_mode & 0777) == 0600);
+        unlink(f1); unlink(f2); unlink(f3);
+        /* unset: the supervisor's own */
+        snprintf(body, sizeof body, "name=u\nexec=/bin/touch\nargs=%s\noneshot=1\n", f2);
+        write_svc(p, body);
+        memset(&svc, 0, sizeof svc);
+        assert(service_load_one(p, &svc) == 0);
+        assert(service_spawn(&svc) == 0);
+        assert(waitpid(svc.child_pid, &ws, 0) == svc.child_pid && WIFEXITED(ws));
+        assert(stat(f2, &st) == 0 && (st.st_mode & 0777) == 0644);
+        unlink(f2);
+    }
+
     /* parse: two exec_stop, one ignore-failure exec_stop_post */
     snprintf(body, sizeof body,
              "name=s\nexec=/bin/true\n"
