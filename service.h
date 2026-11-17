@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
+#include "watch.h"
 #include <stdio.h>
 #include "schema.h"
 #include "landlock.h"
@@ -132,6 +133,7 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define SVC_NO_NEW_PRIVS   (1 << 7)  /* prctl(PR_SET_NO_NEW_PRIVS) in child   */
 #define SVC_STOP_FIRST     (1 << 8)  /* shutdown: stopped before anything else */
 #define SVC_MAIN_PID_NOTIFY (1 << 9) /* main_pid_notify=1: MAINPID= hands supervision to that pid */
+#define SVC_PATH        (1 << 10) /* watch_path=: armed in PERFECT, started by a filesystem event */
 
 /* Why a service was excised; the systemd1 shim maps it to a unit Result. */
 enum {
@@ -148,6 +150,7 @@ enum {
     EXC_FUSE,
     EXC_PROBE,            /* ready, but its binary and deps probed absent */
     EXC_BIND,             /* held: its bind= service went down (not a failure) */
+    EXC_TRIGGER_LIMIT,    /* watch_path= fired more than trigger_limit_burst in the window */
 };
 
 typedef enum {
@@ -552,6 +555,17 @@ typedef struct {
     int              timer_cal_dom;      /* on_calendar day-of-month 1..31; -1 = any          */
     struct timespec  timer_next;         /* next-fire deadline: CLOCK_MONOTONIC, or CLOCK_REALTIME if SVC_TIMER_CALENDAR */
     int              timer_catchup_wait; /* persistent: stamp not read until mount-fstab has made one attempt */
+    watch_t          watch[MAX_WATCH];   /* watch_path= */
+    uint8_t          watch_count;
+    uint8_t          make_directory;
+    uint16_t         directory_mode;
+    int              trigger_burst;
+    int              trigger_interval_sec;
+    uint8_t          path_due;           /* a watch fired: start on the next tick */
+    uint8_t          path_rerun;         /* an edge watch fired while running: run once more */
+    int              trigger_count;      /* fires inside the current trigger window */
+    struct timespec  trigger_window;     /* CLOCK_MONOTONIC start of that window */
+    time_t           path_last_fire;
 } service_t;
 
 /* restart_sec: systemd's RestartSec=. Without it a service that dies at once
