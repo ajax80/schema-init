@@ -195,9 +195,29 @@ int main(void) {
     struct { const char *key; uint8_t bit; } kn[] = {
         { "protect_kernel_tunables", NS_K_TUNABLES }, { "protect_kernel_modules", NS_K_MODULES },
         { "protect_control_groups", NS_K_CGROUPS }, { "private_devices", NS_K_DEVICES },
-        { "protect_hostname", NS_K_HOSTNAME },
+        { "protect_hostname", NS_K_HOSTNAME }, { "private_network", NS_K_NETWORK },
+        { "memory_deny_write_execute", NS_K_MDWE },
     };
     snprintf(path, sizeof(path), "%s/k.svc", dir);
+    for (size_t i = 0; i < sizeof(kn) / sizeof(kn[0]); i++)
+        assert(strcmp(ns_kernel_names[__builtin_ctz(kn[i].bit)], kn[i].key) == 0);
+    write_svc(path, "name=k\nexec=/usr/bin/true\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == -1);
+    write_svc(path, "name=k\nexec=/usr/bin/true\numask=0027\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == 027);
+    write_svc(path, "name=k\nexec=/usr/bin/true\numask=0\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == 0);
+    write_svc(path, "name=k\nexec=/usr/bin/true\numask=077\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == 077);
+    {
+        const char *ubad[] = { "0888", "1777", "abc", "", "00777x", "07777" };
+        for (size_t i = 0; i < sizeof(ubad) / sizeof(ubad[0]); i++) {
+            char body[96];
+            snprintf(body, sizeof body, "name=k\nexec=/usr/bin/true\numask=%s\n", ubad[i]);
+            write_svc(path, body);
+            assert(service_load_one(path, &one) == -1);
+        }
+    }
     for (size_t i = 0; i < sizeof(kn) / sizeof(kn[0]); i++) {
         char body[160];
         snprintf(body, sizeof body, "name=k\nexec=/usr/bin/true\n%s=1\n", kn[i].key);

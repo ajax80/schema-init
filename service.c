@@ -457,18 +457,13 @@ static int parse_ns_field(service_t *svc, const char *key, const char *val) {
         r = parse_ns_bool(val, &svc->ns_protect_home);
         svc->hard_set |= HARD_PH;
     } else {
-        static const struct { const char *key; uint8_t bit; } kn[] = {
-            { "protect_kernel_tunables", NS_K_TUNABLES }, { "protect_kernel_modules", NS_K_MODULES },
-            { "protect_control_groups", NS_K_CGROUPS }, { "private_devices", NS_K_DEVICES },
-            { "protect_hostname", NS_K_HOSTNAME },
-        };
-        size_t i;
+        int i;
         uint8_t on = 0;
-        for (i = 0; i < sizeof(kn) / sizeof(kn[0]) && strcmp(key, kn[i].key); i++) {}
-        if (i == sizeof(kn) / sizeof(kn[0])) return 0;
+        for (i = 0; i < NS_K_COUNT && strcmp(key, ns_kernel_names[i]); i++) {}
+        if (i == NS_K_COUNT) return 0;
         r = parse_ns_bool(val, &on);
-        if (on) svc->ns_kernel |= kn[i].bit;
-        else svc->ns_kernel &= (uint8_t)~kn[i].bit;
+        if (on) svc->ns_kernel |= (uint8_t)(1U << i);
+        else svc->ns_kernel &= (uint8_t)~(1U << i);
     }
     if (r != 0) {
         fprintf(stderr, "[schema-init] %s: bad value %s=%s\n",
@@ -2344,6 +2339,7 @@ static void svc_init_defaults(service_t *svc) {
     svc->stable_secs = STABLE_SECS;
     svc->priority = PRIO_STANDARD;
     svc->start_timeout_sec = -1;
+    svc->umask_val = -1;
     svc->allowed_slot_min = -1;
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
@@ -3474,6 +3470,15 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->restart_sec = v < 0 ? 0 : v > 3600 ? 3600 : v;
     } else if (strcmp(line, "start_timeout_sec") == 0) {
         svc->start_timeout_sec = atoi(val);
+    } else if (strcmp(line, "umask") == 0) {
+        size_t n = strspn(val, "01234567");
+        long v = n && n <= 4 && !val[n] ? strtol(val, NULL, 8) : -1;
+        if (v < 0 || v > 0777) {
+            fprintf(stderr, "[schema-init] %s: bad umask=%s (octal, at most 0777)\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->umask_val = (int16_t)v;
     } else if (strcmp(line, "stop_timeout_sec") == 0) {
         int v = atoi(val);
         svc->stop_timeout_sec = (v >= 1 && v <= 300) ? v : 0;

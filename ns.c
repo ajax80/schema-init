@@ -24,6 +24,11 @@ int parse_protect_system(const char *val, uint8_t *out) {
     return parse_ns_bool(val, out);
 }
 
+const char *const ns_kernel_names[NS_K_COUNT] = {
+    "protect_kernel_tunables", "protect_kernel_modules", "protect_control_groups",
+    "private_devices", "protect_hostname", "private_network", "memory_deny_write_execute",
+};
+
 uint64_t ns_kernel_cap_drop(uint8_t kernel) {
     uint64_t m = 0;
     if (kernel & NS_K_MODULES) m |= 1ULL << CAP_SYS_MODULE;

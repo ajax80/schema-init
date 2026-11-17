@@ -13,6 +13,13 @@
 #define NS_K_CGROUPS  0x04      /* protect_control_groups  */
 #define NS_K_DEVICES  0x08      /* private_devices         */
 #define NS_K_HOSTNAME 0x10      /* protect_hostname        */
+#define NS_K_NETWORK  0x20      /* private_network           */
+#define NS_K_MDWE     0x40      /* memory_deny_write_execute */
+#define NS_K_COUNT    7
+#define NS_K_MOUNT_BITS 0x1f    /* the ones apply_mount_ns builds */
+
+/* .svc key of each NS_K_* bit, indexed by bit number */
+extern const char *const ns_kernel_names[NS_K_COUNT];
 
 /* "0" / "1" -> 0 / 1. Returns 0 on success, -1 on any other value. */
 int parse_ns_bool(const char *val, uint8_t *out);
