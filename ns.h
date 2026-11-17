@@ -31,7 +31,7 @@ uint64_t ns_kernel_cap_drop(uint8_t kernel);
  * is skipped. No-op (0) when no read-only/tmp knob is set. On failure returns
  * -1 with errno set and *step naming the failing operation. */
 int apply_mount_ns(const char *name, uint8_t private_tmp, uint8_t protect_system,
-                   uint8_t protect_home, const char *const *rw, int n_rw,
+                   uint8_t protect_home, uint8_t kernel, const char *const *rw, int n_rw,
                    const char **step);
 
 #endif

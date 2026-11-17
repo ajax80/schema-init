@@ -33,7 +33,7 @@ int main(void) {
     if (pid == 0) {
         const char *paths[] = { missing, rw };
         const char *step = "";
-        if (apply_mount_ns("t", 0, PROTECT_SYSTEM_FULL, 0, paths, 2, &step) != 0) {
+        if (apply_mount_ns("t", 0, PROTECT_SYSTEM_FULL, 0, 0, paths, 2, &step) != 0) {
             fprintf(stderr, "apply_mount_ns: %s: %s\n", step, strerror(errno));
             _exit(10);
         }
@@ -59,7 +59,7 @@ int main(void) {
     if (pid == 0) {
         const char *run[] = { "/run" };
         const char *step = "";
-        if (apply_mount_ns("t", 0, 0, 1, run, 1, &step) != 0) _exit(30);
+        if (apply_mount_ns("t", 0, 0, 1, 0, run, 1, &step) != 0) _exit(30);
         if (try_create("/run/user/schema-test-rw") != EROFS) _exit(31);
         _exit(0);
     }
@@ -77,7 +77,7 @@ int main(void) {
         char before[64], after[64];
         snprintf(before, sizeof before, "%ld", (long)0);
         ssize_t n1 = readlink("/proc/self/ns/mnt", before, sizeof before - 1);
-        if (apply_mount_ns("t", 0, 0, 0, paths, 1, &step) != 0) _exit(20);
+        if (apply_mount_ns("t", 0, 0, 0, 0, paths, 1, &step) != 0) _exit(20);
         ssize_t n2 = readlink("/proc/self/ns/mnt", after, sizeof after - 1);
         if (n1 < 0 || n1 != n2 || memcmp(before, after, (size_t)n1) != 0) _exit(21);
         _exit(0);
@@ -94,7 +94,7 @@ int main(void) {
         if (pid == 0) {
             struct statfs in;
             struct stat sb;
-            if (apply_mount_ns("schema-test-pt", 1, 0, 0, NULL, 0, &step) != 0) _exit(40);
+            if (apply_mount_ns("schema-test-pt", 1, 0, 0, 0, NULL, 0, &step) != 0) _exit(40);
             if (statfs("/tmp", &in) != 0 || in.f_type != host.f_type) _exit(41);
             /* fresh each spawn: the last round's file is gone */
             if (access("/tmp/left", F_OK) == 0) _exit(42);
@@ -125,7 +125,7 @@ int main(void) {
         struct statvfs v;
         if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0) _exit(50);
         if (mount("tmpfs", "/tmp", "tmpfs", MS_NOEXEC, "mode=1777") != 0) _exit(51);
-        if (apply_mount_ns("schema-test-pt", 1, 0, 0, NULL, 0, &step) != 0) _exit(52);
+        if (apply_mount_ns("schema-test-pt", 1, 0, 0, 0, NULL, 0, &step) != 0) _exit(52);
         if (statvfs("/tmp", &v) != 0) _exit(53);
         _exit((v.f_flag & ST_NOEXEC) && (v.f_flag & ST_NOSUID) && (v.f_flag & ST_NODEV) ? 0 : 54);
     }

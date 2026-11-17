@@ -389,6 +389,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_service_env.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/env && $(TESTDIR)/env
 	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/mountns && $(TESTDIR)/mountns
 	$(CC) $(CFLAGS) tests/test_mountns_rw.c ns.c -o $(TESTDIR)/mountns-rw && $(TESTDIR)/mountns-rw
+	$(CC) $(CFLAGS) tests/test_kernel_ns.c ns.c caps.c -o $(TESTDIR)/kns && $(TESTDIR)/kns
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0

@@ -142,15 +142,67 @@ static int bind_fd(int fd, const char *target) {
     return (int)syscall(SYS_mount_setattr, AT_FDCWD, target, 0, &attr, sizeof(attr));
 }
 
+/* O_PATH fds of the host nodes a private /dev keeps, taken before /dev is
+ * covered; -1 where the host has none */
+static const char *const dev_keep[] = {
+    "null", "zero", "full", "random", "urandom", "tty", "shm", "mqueue", "log",
+};
+#define N_DEV_KEEP (int)(sizeof(dev_keep) / sizeof(dev_keep[0]))
+
+static int private_dev(void) {
+    static const char *const links[][2] = {
+        { "/proc/self/fd", "/dev/fd" }, { "/proc/self/fd/0", "/dev/stdin" },
+        { "/proc/self/fd/1", "/dev/stdout" }, { "/proc/self/fd/2", "/dev/stderr" },
+        { "pts/ptmx", "/dev/ptmx" },
+    };
+    int fd[N_DEV_KEEP], i, r = -1;
+    gid_t tty_gid = 5;
+    char opts[96];
+    struct stat st;
+
+    for (i = 0; i < N_DEV_KEEP; i++) {
+        char p[32];
+        snprintf(p, sizeof p, "/dev/%s", dev_keep[i]);
+        fd[i] = open(p, O_PATH | O_CLOEXEC);
+        if (fd[i] < 0 && errno != ENOENT) goto out;
+    }
+    if (fd[5] >= 0 && fstat(fd[5], &st) == 0) tty_gid = st.st_gid;
+    if (mount("tmpfs", "/dev", "tmpfs", MS_NOSUID | MS_NOEXEC, "mode=0755,size=4m") != 0) goto out;
+    for (i = 0; i < N_DEV_KEEP; i++) {
+        char p[32], src[32];
+        if (fd[i] < 0) continue;
+        snprintf(p, sizeof p, "/dev/%s", dev_keep[i]);
+        if (fstat(fd[i], &st) != 0) goto out;
+        if (S_ISDIR(st.st_mode) ? mkdir(p, 0755) != 0 : mknod(p, S_IFREG | 0666, 0) != 0) goto out;
+        snprintf(src, sizeof src, "/proc/self/fd/%d", fd[i]);
+        /* no nodev: these are the device nodes themselves */
+        if (mount(src, p, NULL, MS_BIND | MS_REC, NULL) != 0) goto out;
+    }
+    if (mkdir("/dev/pts", 0755) != 0) goto out;
+    snprintf(opts, sizeof opts, "newinstance,ptmxmode=0666,mode=0620,gid=%u", (unsigned)tty_gid);
+    /* the tty group unmapped (a user namespace): mount without it */
+    if (mount("devpts", "/dev/pts", "devpts", MS_NOSUID | MS_NOEXEC, opts) != 0 &&
+        (errno != EINVAL || mount("devpts", "/dev/pts", "devpts", MS_NOSUID | MS_NOEXEC,
+                                  "newinstance,ptmxmode=0666,mode=0620") != 0))
+        goto out;
+    for (i = 0; i < (int)(sizeof(links) / sizeof(links[0])); i++)
+        if (symlink(links[i][0], links[i][1]) != 0) goto out;
+    r = 0;
+out:
+    for (i = 0; i < N_DEV_KEEP; i++)
+        if (fd[i] >= 0) close(fd[i]);
+    return r;
+}
+
 int apply_mount_ns(const char *name, uint8_t private_tmp, uint8_t protect_system,
-                   uint8_t protect_home, const char *const *rw, int n_rw,
+                   uint8_t protect_home, uint8_t kernel, const char *const *rw, int n_rw,
                    const char **step) {
     static const char *sys_paths[] = { "/usr", "/boot", "/efi", "/etc" };
     static const char *tmp_paths[] = { "/tmp", "/var/tmp" };
     static const char *home_paths[] = { "/home", "/root", "/run/user" };
     int i;
 
-    if (!private_tmp && !protect_system && !protect_home) return 0;
+    if (!private_tmp && !protect_system && !protect_home && !kernel) return 0;
 
     *step = "unshare";
     if (unshare(CLONE_NEWNS) != 0) return -1;
@@ -190,6 +242,33 @@ int apply_mount_ns(const char *name, uint8_t private_tmp, uint8_t protect_system
                             MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC,
                             "mode=0755") != 0)
                 return -1;
+    }
+    if (kernel & NS_K_HOSTNAME) {
+        *step = "protect_hostname";
+        if (unshare(CLONE_NEWUTS) != 0) return -1;
+    }
+    if (kernel & NS_K_TUNABLES) {
+        static const char *const kt[] = {
+            "/proc/sys", "/sys", "/proc/sysrq-trigger", "/proc/latency_stats", "/proc/acpi",
+            "/proc/apm", "/proc/asound", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/scsi",
+        };
+        *step = "protect_kernel_tunables";
+        for (i = 0; i < (int)(sizeof(kt) / sizeof(kt[0])); i++)
+            if (bind_attr(kt[i], 1) != 0) return -1;
+    }
+    if (kernel & NS_K_CGROUPS) {
+        *step = "protect_control_groups";
+        if (bind_attr("/sys/fs/cgroup", 1) != 0) return -1;
+    }
+    if (kernel & NS_K_MODULES) {
+        *step = "protect_kernel_modules";
+        if (mount_tmpfs("/usr/lib/modules", MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=0755") != 0 ||
+            mount_tmpfs("/lib/modules", MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=0755") != 0)
+            return -1;
+    }
+    if (kernel & NS_K_DEVICES) {
+        *step = "private_devices";
+        if (private_dev() != 0) return -1;
     }
     /* systemd's ReadWritePaths=: a fresh bind inherits the read-only flag of
      * the mount it sits in, so clear it on the new mount only */
