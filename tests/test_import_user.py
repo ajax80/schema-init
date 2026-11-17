@@ -575,6 +575,12 @@ b = svc(out, "h")
 keys = [l for l in b.splitlines() if not l.startswith("#")]
 check("mount-ns hardening dropped", not any(l.startswith(("private_tmp=", "protect_system=", "protect_home="))
       for l in keys) and sum(l.startswith(si.WARN_PREFIX) and "dropped" in l for l in b.splitlines()) == 3)
+t.write(t.cfg("h.service"), "[Service]\nExecStart=/bin/h\nPrivateDevices=yes\nProtectHostname=yes\n")
+c, out = run(t)
+b = svc(out, "h")
+check("kernel-surface knobs dropped in user mode, with a warning",
+      "\nprivate_devices=" not in b and "\nprotect_hostname=" not in b and
+      si.WARN_PREFIX + "private_devices=1 dropped" in b and si.WARN_PREFIX + "protect_hostname=1 dropped" in b)
 t.write(t.cfg("h.service"), "[Service]\nExecStart=/bin/h\nProtectSystem=full\nReadWritePaths=/etc/h\n")
 c, out = run(t)
 check("user mode emits no rw_path", "rw_path" not in svc(out, "h"))
