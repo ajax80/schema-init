@@ -63,5 +63,6 @@
 - [x] `runtime_dir=` / `state_dir=` / `cache_dir=` / `logs_dir=` — created by PID 1 owned by the service user, never through a symlink; runtime ones removed on stop; importer maps `RuntimeDirectory=` and friends without using `exec_pre` slots
 - [ ] Kernel-surface hardening knobs — `protect_kernel_tunables`, `protect_kernel_modules`, `protect_control_groups`, `private_devices`, `private_network`, `protect_hostname`, `restrict_suid_sgid`, `memory_deny_write_execute`, `umask`
 - [ ] Scheduling — `nice=`, `io_class=`/`io_priority=`, `sched_policy=`/`sched_priority=`
-- [ ] `watch_path=` (systemd `.path` units), `randomized_delay_sec=` and richer timer forms, `supplementary_groups=`, `dynamic_user=1`
+- [x] `watch_path=` (systemd `.path` units) — `exists`/`exists_glob`/`dir_not_empty`/`changed`/`modified` on PID 1's inotify fd, `make_directory=`, trigger limit; importer takes `.path` units
+- [ ] `randomized_delay_sec=` and richer timer forms, `supplementary_groups=`, `dynamic_user=1`
 - [ ] `syscall_filter=` (seccomp) — hand-built BPF for a static PID 1, systemd's named syscall groups; its own design spec first
