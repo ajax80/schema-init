@@ -148,6 +148,50 @@ int main(void) {
     assert(service_load_one(path, &one) == 0 && strcmp(one.rw_path[0], "/etc/..x") == 0);
     unlink(path);
 
+    struct { const char *key; uint8_t bit; } kn[] = {
+        { "protect_kernel_tunables", NS_K_TUNABLES }, { "protect_kernel_modules", NS_K_MODULES },
+        { "protect_control_groups", NS_K_CGROUPS }, { "private_devices", NS_K_DEVICES },
+        { "protect_hostname", NS_K_HOSTNAME },
+    };
+    snprintf(path, sizeof(path), "%s/k.svc", dir);
+    for (size_t i = 0; i < sizeof(kn) / sizeof(kn[0]); i++) {
+        char body[160];
+        snprintf(body, sizeof body, "name=k\nexec=/usr/bin/true\n%s=1\n", kn[i].key);
+        write_svc(path, body);
+        assert(service_load_one(path, &one) == 0 && one.ns_kernel == kn[i].bit);
+        snprintf(body, sizeof body, "name=k\nexec=/usr/bin/true\n%s=1\n%s=0\n", kn[i].key, kn[i].key);
+        write_svc(path, body);
+        assert(service_load_one(path, &one) == 0 && one.ns_kernel == 0);
+    }
+    write_svc(path, "name=k\nexec=/usr/bin/true\nprotect_hostname=1\nprivate_devices=1\n");
+    assert(service_load_one(path, &one) == 0 && one.ns_kernel == (NS_K_HOSTNAME | NS_K_DEVICES));
+    assert(services_load(dir, table, 4) == 1 && table[0].ns_kernel == one.ns_kernel);
+    unlink(path);
+    struct { const char *body; } kbad[] = {
+        { "name=b\nexec=/usr/bin/true\nprotect_hostname=2\n" },
+        { "name=b\nexec=/usr/bin/true\nprivate_devices=yes\n" },
+        { "name=b\nexec=/usr/lib/modules/x/helper\nprotect_kernel_modules=1\n" },
+        { "name=b\nexec=/lib/modules/x/helper\nprotect_kernel_modules=1\n" },
+        { "name=b\nexec=/usr/bin/true\nprivate_devices=1\nready_path=/dev/schema-ready\n" },
+        { "name=b\nexec=/usr/bin/true\nprotect_kernel_modules=1\nambient_caps=CAP_SYS_MODULE\n"
+          "user=nobody\n" },
+        { "name=b\nexec=/usr/bin/true\nprivate_devices=1\nambient_caps=CAP_MKNOD\nuser=nobody\n" },
+    };
+    for (size_t i = 0; i < sizeof(kbad) / sizeof(kbad[0]); i++) {
+        snprintf(path, sizeof(path), "%s/b.svc", dir);
+        write_svc(path, kbad[i].body);
+        assert(service_load_one(path, &one) == -1);
+        assert(services_load(dir, table, 4) == 0);
+        unlink(path);
+    }
+    snprintf(path, sizeof(path), "%s/ok.svc", dir);
+    write_svc(path, "name=ok\nexec=/usr/bin/true\nprivate_devices=1\nready_path=/run/x\n");
+    assert(service_load_one(path, &one) == 0);
+    write_svc(path, "name=ok\nexec=/usr/bin/true\nprotect_kernel_modules=1\n"
+                    "keep_caps=CAP_SYS_MODULE,CAP_NET_ADMIN\n");
+    assert(service_load_one(path, &one) == 0);
+    unlink(path);
+
     assert(hardening_default_resolve(NULL, NULL) == 0);
     assert(hardening_default_resolve(NULL, "on") == 1);
     assert(hardening_default_resolve(NULL, " on \n") == 1);

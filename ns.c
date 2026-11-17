@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mount.h>
+#include <linux/capability.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -21,6 +22,13 @@ int parse_ns_bool(const char *val, uint8_t *out) {
 int parse_protect_system(const char *val, uint8_t *out) {
     if (strcmp(val, "full") == 0) { *out = PROTECT_SYSTEM_FULL; return 0; }
     return parse_ns_bool(val, out);
+}
+
+uint64_t ns_kernel_cap_drop(uint8_t kernel) {
+    uint64_t m = 0;
+    if (kernel & NS_K_MODULES) m |= 1ULL << CAP_SYS_MODULE;
+    if (kernel & NS_K_DEVICES) m |= 1ULL << CAP_MKNOD | 1ULL << CAP_SYS_RAWIO;
+    return m;
 }
 
 /* bind p onto itself, then set (ro=1) or clear (ro=0) MOUNT_ATTR_RDONLY */

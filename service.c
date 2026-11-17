@@ -456,8 +456,20 @@ static int parse_ns_field(service_t *svc, const char *key, const char *val) {
     } else if (strcmp(key, "protect_home") == 0) {
         r = parse_ns_bool(val, &svc->ns_protect_home);
         svc->hard_set |= HARD_PH;
-    } else
-        return 0;
+    } else {
+        static const struct { const char *key; uint8_t bit; } kn[] = {
+            { "protect_kernel_tunables", NS_K_TUNABLES }, { "protect_kernel_modules", NS_K_MODULES },
+            { "protect_control_groups", NS_K_CGROUPS }, { "private_devices", NS_K_DEVICES },
+            { "protect_hostname", NS_K_HOSTNAME },
+        };
+        size_t i;
+        uint8_t on = 0;
+        for (i = 0; i < sizeof(kn) / sizeof(kn[0]) && strcmp(key, kn[i].key); i++) {}
+        if (i == sizeof(kn) / sizeof(kn[0])) return 0;
+        r = parse_ns_bool(val, &on);
+        if (on) svc->ns_kernel |= kn[i].bit;
+        else svc->ns_kernel &= (uint8_t)~kn[i].bit;
+    }
     if (r != 0) {
         fprintf(stderr, "[schema-init] %s: bad value %s=%s\n",
                 svc->name[0] ? svc->name : "?", key, val);
@@ -700,12 +712,30 @@ static int landlock_check(service_t *svc) {
     return 0;
 }
 
+/* explicit-only knobs: hiding exec/ready_path refuses the load, and an
+ * ambient cap the knob strips from the bounding set could never be raised */
+static int kernel_ns_check(service_t *svc) {
+    static const char *const mods[] = { "/usr/lib/modules/", "/lib/modules/" };
+    static const char *const dev[] = { "/dev/" };
+    uint8_t m = !!(svc->ns_kernel & NS_K_MODULES), d = !!(svc->ns_kernel & NS_K_DEVICES);
+    uint64_t lost = svc->cap_ambient_mask & ns_kernel_cap_drop(svc->ns_kernel);
+    if (ns_hides(svc, 0, &m, "protect_kernel_modules", mods, 2) != 0) return -1;
+    if (ns_hides(svc, 0, &d, "private_devices", dev, 1) != 0) return -1;
+    if (lost) {
+        fprintf(stderr, "[schema-init] %s: ambient_caps holds a cap %s drops — not loaded\n",
+                svc->name, (lost & (1ULL << CAP_SYS_MODULE)) ? "protect_kernel_modules" : "private_devices");
+        return -1;
+    }
+    return 0;
+}
+
 static int hardening_finalize(service_t *svc) {
     static const char *const tmp[] = { "/tmp/", "/var/tmp/" };
     static const char *const home[] = { "/home/", "/root/", "/run/user/" };
     apply_hardening_defaults(svc);
     if (ns_hides(svc, HARD_PT, &svc->ns_private_tmp, "private_tmp", tmp, 2) != 0) return -1;
     if (ns_hides(svc, HARD_PH, &svc->ns_protect_home, "protect_home", home, 3) != 0) return -1;
+    if (kernel_ns_check(svc) != 0) return -1;
     return landlock_check(svc);
 }
 

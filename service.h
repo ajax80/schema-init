@@ -489,6 +489,7 @@ typedef struct {
     uint8_t          ns_private_tmp;    /* private /tmp + /var/tmp                 */
     uint8_t          ns_protect_system; /* PROTECT_SYSTEM_* (ns.h)                 */
     uint8_t          ns_protect_home;   /* hide /home /root /run/user              */
+    uint8_t          ns_kernel;         /* NS_K_* (ns.h)                           */
     char            *rw_path[MAX_RW_PATHS]; /* writable inside protect_system   */
     int              rw_path_count;
     char            *landlock[MAX_LANDLOCK]; /* landlock_ro= / landlock_rw= paths    */
