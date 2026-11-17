@@ -21,9 +21,11 @@ in PID 1 and schema-user alike (one engine).
 - Edge kinds (`changed`, `modified`) fire on the event. An event while the
   service is running is remembered once and runs it again after it exits (the
   file changed after the service read it). Never fired at arm time.
-- `make_directory=1`, `directory_mode=` (default 0755): PID 1 (or schema-user,
-  as the user) creates the PATH of `dir_not_empty`/`exists_glob` watches at
-  arm, parents 0755.
+- `make_directory=1`, `directory_mode=` (default 0755): at arm, PID 1 (or
+  schema-user, as the user) creates the PATH of a `dir_not_empty` watch, or
+  the directory part of an `exists_glob` one (never the pattern itself);
+  parents 0755. Owned by whoever creates it (root under PID 1), not by
+  user=: systemd's MakeDirectory= does the same, so imports keep behaving.
 - `trigger_limit_burst=` (default 200), `trigger_limit_interval_sec=`
   (default 2): more fires than that in the window parks the service
   (state EXCISED, reason "trigger limit", rail line `path-trigger-limit`)
@@ -37,7 +39,8 @@ in PID 1 and schema-user alike (one engine).
   else the same name) becomes one .svc, the way `timer_to_svc` folds a timer.
   Maps PathExists=, PathExistsGlob=, PathChanged=, PathModified=,
   DirectoryNotEmpty=, MakeDirectory=, DirectoryMode=, TriggerLimitBurst=,
-  TriggerLimitIntervalSec=. Specifiers through `_specifiers()` (so `%v` is
+  TriggerLimitIntervalSec=. A missing target service is skipped with a
+  reason, as for timers. Specifiers through `_specifiers()` (so `%v` is
   skipped with a reason: it would freeze the kernel version at import time).
 - Shim: `.path` leaves `unit_supported()`'s refusals; `enable foo.path`
   queues foo like a timer.
@@ -50,8 +53,17 @@ in PID 1 and schema-user alike (one engine).
   Watches are never removed by hand; the kernel drops them with the inode
   (IN_IGNORED).
 - Per watch: the wd of the deepest existing ancestor directory, and the wd of
-  PATH itself when it exists (needed for `dir_not_empty` and the self events
-  of `changed`/`modified`). When an event shows a missing component appeared
+  PATH itself when it exists (needed for `dir_not_empty` and the content
+  events of `changed`/`modified`). Ancestor watches follow symlinks (no
+  IN_DONT_FOLLOW), so /var/run/x watches the real /run; only the leaf is
+  added with IN_DONT_FOLLOW.
+- The two wds split the work, because a write to PATH is reported on both
+  (on the parent with name=leaf): from the parent, only structural events
+  for the name count (IN_CREATE, IN_DELETE, IN_MOVED_TO, IN_MOVED_FROM);
+  from the leaf, content events (IN_CLOSE_WRITE, IN_MODIFY for `modified`,
+  IN_ATTRIB, IN_DELETE_SELF, IN_MOVE_SELF; children's events for
+  `dir_not_empty`). Matching only sets a fire flag that the tick consumes,
+  so any duplicates within a batch still start one run. When an event shows a missing component appeared
   or a watched inode went away, the watch is re-armed by walking PATH again.
   A symlink leaf is watched as the link (IN_DONT_FOLLOW), so replacing
   /etc/localtime by rename shows as IN_MOVED_TO name=localtime on /etc.
@@ -64,6 +76,9 @@ in PID 1 and schema-user alike (one engine).
   fire once (a spurious run beats a missed one).
 - The READY_BACKSTOP_MS sweep also re-evaluates level watches and re-arms,
   for what inotify can't see (bind mounts, network filesystems).
+- The pending rerun, the trigger-limit window and count, and the last fire
+  join SVC_RUNTIME_FIELDS (reexec_state.h), so a reload or re-exec neither
+  drops a queued rerun nor resets the limit a looping service is hitting.
 - Re-exec: the fd is CLOEXEC, so the new image re-arms everything and
   re-evaluates level kinds; edge events in that window are lost. Reload:
   re-arm from the new config on the same fd.
@@ -85,10 +100,16 @@ in PID 1 and schema-user alike (one engine).
    gain; the shared-wd problem is solved by the shared mask.
 
 ## Tests
-- Unit (C): parse/refuse table; level fire at arm; edge fire on write,
-  rename-onto, symlink replace; event-while-running reruns once; trigger
-  limit parks; make_directory modes; a missing parent created later arms
-  the watch; ready_path still debounces with a path watch on the same dir.
+- Unit (C): parse/refuse table; level fire at arm; one write to a
+  `changed`/`modified` file runs it exactly once; rename-over fires and the
+  leaf watch moves to the new inode; `ln -sfn` over a symlink leaf fires;
+  /a/b/c/d/file created step by step from /a fires once it appears; an
+  ancestor that is a symlink is watched through; event-while-running reruns
+  once; trigger limit parks and stays parked after the condition clears,
+  until start; make_directory modes and glob dirname; pending rerun and
+  limit survive a reload; ready_path still debounces with a path watch on
+  the same dir.
+- Shim: unit_supported("foo.path"), `enable foo.path` queues foo.
 - Importer (python suite): each Path*= key, Unit=, specifiers (%v skipped),
   listen/timer conflict, ask-password skip, user units.
 - Live: blakbox PID 1 re-exec into the branch, a test path .svc for each
