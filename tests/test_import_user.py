@@ -581,6 +581,12 @@ b = svc(out, "h")
 check("kernel-surface knobs dropped in user mode, with a warning",
       "\nprivate_devices=" not in b and "\nprotect_hostname=" not in b and
       si.WARN_PREFIX + "private_devices=1 dropped" in b and si.WARN_PREFIX + "protect_hostname=1 dropped" in b)
+t.write(t.cfg("h.service"), "[Service]\nExecStart=/bin/h\nPrivateNetwork=yes\nMemoryDenyWriteExecute=yes\nUMask=0077\n")
+c, out = run(t)
+b = svc(out, "h")
+check("user mode drops private_network, keeps MDWE and umask",
+      "\nprivate_network=" not in b and si.WARN_PREFIX + "private_network=1 dropped" in b and
+      "\nmemory_deny_write_execute=1\n" in b and "\numask=0077\n" in b)
 t.write(t.cfg("h.service"), "[Service]\nExecStart=/bin/h\nProtectSystem=full\nReadWritePaths=/etc/h\n")
 c, out = run(t)
 check("user mode emits no rw_path", "rw_path" not in svc(out, "h"))

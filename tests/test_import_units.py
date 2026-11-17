@@ -1165,6 +1165,18 @@ for _d, _k in (("ProtectKernelTunables", "protect_kernel_tunables"), ("ProtectKe
     _o = _kn("%s=yes\n" % _d)
     check("%s=yes -> %s=1, not unenforced" % (_d, _k), "\n%s=1\n" % _k in _o and _d not in _o)
     check("%s=no -> no line" % _d, _k not in _kn("%s=no\n" % _d))
+for _d, _k in (("PrivateNetwork", "private_network"), ("MemoryDenyWriteExecute", "memory_deny_write_execute")):
+    _o = _kn("%s=yes\n" % _d)
+    check("%s=yes -> %s=1, not unenforced" % (_d, _k), "\n%s=1\n" % _k in _o and _d not in _o)
+    check("%s=no -> no line" % _d, _k not in _kn("%s=no\n" % _d))
+_o = si.unit_to_svc("k", si.parse_unit("[Unit]\nJoinsNamespaceOf=back.service\n[Service]\nExecStart=/usr/bin/true\nPrivateNetwork=yes\n"))
+check("PrivateNetwork + JoinsNamespaceOf warns the netns is not shared",
+      "\nprivate_network=1\n" in _o and "JoinsNamespaceOf=back.service" in _o)
+check("UMask=0022 -> no line", "umask" not in _kn("UMask=0022\n").lower())
+check("UMask=0077 -> umask=0077", "\numask=0077\n" in _kn("UMask=0077\n"))
+check("UMask=027 -> umask=0027", "\numask=0027\n" in _kn("UMask=027\n"))
+_o = _kn("UMask=bogus\n")
+check("UMask=bogus warns, no line", "UMask=bogus unrecognised, not applied" in _o and "\numask=" not in _o)
 _o = _kn("ProtectHostname=bogus\n")
 check("ProtectHostname=bogus warns, no line",
       "ProtectHostname=bogus unrecognised, not applied" in _o and "protect_hostname" not in _o)
@@ -1257,11 +1269,11 @@ check("DynamicUser=no is silent", not warns(svc("DynamicUser=no\n")))
 check("ExecStart=+ is root under systemd too: no DynamicUser warning", not any(
     "DynamicUser" in w for w in warns(si.unit_to_svc("a", si.parse_unit(
         "[Service]\nExecStart=+/usr/bin/a\nDynamicUser=yes\n")))))
-_b = warns(svc("CapabilityBoundingSet=CAP_KILL\nSystemCallFilter=@system-service\nPrivateNetwork=yes\n"
-               "IPAddressDeny=any\nInaccessiblePaths=/secret\nReadOnlyPaths=/data\nUMask=0077\n"))
+_b = warns(svc("CapabilityBoundingSet=CAP_KILL\nSystemCallFilter=@system-service\nRestrictNamespaces=yes\n"
+               "IPAddressDeny=any\nInaccessiblePaths=/secret\nReadOnlyPaths=/data\nProtectClock=yes\n"))
 check("dropped sandbox directives are all named", all(any(k in w for w in _b) for k in (
-    "CapabilityBoundingSet", "SystemCallFilter", "PrivateNetwork", "IPAddressDeny",
-    "InaccessiblePaths", "ReadOnlyPaths", "UMask")))
+    "CapabilityBoundingSet", "SystemCallFilter", "RestrictNamespaces", "IPAddressDeny",
+    "InaccessiblePaths", "ReadOnlyPaths", "ProtectClock")))
 check("sandbox directives at their defaults are silent", not warns(svc(
     "PrivateDevices=no\nUMask=0022\nDevicePolicy=auto\nProtectProc=default\nProcSubset=all\n"
     "SystemCallFilter=\nMemoryDenyWriteExecute=false\n")))

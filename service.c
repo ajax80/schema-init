@@ -457,18 +457,13 @@ static int parse_ns_field(service_t *svc, const char *key, const char *val) {
         r = parse_ns_bool(val, &svc->ns_protect_home);
         svc->hard_set |= HARD_PH;
     } else {
-        static const struct { const char *key; uint8_t bit; } kn[] = {
-            { "protect_kernel_tunables", NS_K_TUNABLES }, { "protect_kernel_modules", NS_K_MODULES },
-            { "protect_control_groups", NS_K_CGROUPS }, { "private_devices", NS_K_DEVICES },
-            { "protect_hostname", NS_K_HOSTNAME },
-        };
-        size_t i;
+        int i;
         uint8_t on = 0;
-        for (i = 0; i < sizeof(kn) / sizeof(kn[0]) && strcmp(key, kn[i].key); i++) {}
-        if (i == sizeof(kn) / sizeof(kn[0])) return 0;
+        for (i = 0; i < NS_K_COUNT && strcmp(key, ns_kernel_names[i]); i++) {}
+        if (i == NS_K_COUNT) return 0;
         r = parse_ns_bool(val, &on);
-        if (on) svc->ns_kernel |= kn[i].bit;
-        else svc->ns_kernel &= (uint8_t)~kn[i].bit;
+        if (on) svc->ns_kernel |= (uint8_t)(1U << i);
+        else svc->ns_kernel &= (uint8_t)~(1U << i);
     }
     if (r != 0) {
         fprintf(stderr, "[schema-init] %s: bad value %s=%s\n",
@@ -744,8 +739,13 @@ static int hardening_finalize(service_t *svc) {
 
 int service_apply_hardening(const service_t *svc) {
     const char *step = "";
+    if ((svc->ns_kernel & NS_K_NETWORK) && private_net() != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: private_network: %d\n", svc->name, errno);
+        return -1;
+    }
     if (apply_mount_ns(svc->name, svc->ns_private_tmp, svc->ns_protect_system,
-                       svc->ns_protect_home, svc->ns_kernel, (const char *const *)svc->rw_path,
+                       svc->ns_protect_home, svc->ns_kernel & NS_K_MOUNT_BITS,
+                       (const char *const *)svc->rw_path,
                        svc->rw_path_count, &step) != 0) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: mount_ns: %s: %d\n",
                 svc->name, step, errno);
@@ -770,6 +770,13 @@ int service_apply_hardening(const service_t *svc) {
                     svc->name, errno);
             return -1;
         }
+    }
+    /* last, and never skipped: the service asked for it, so a kernel that
+     * can't (before 6.3) fails the start rather than run it unprotected */
+    if ((svc->ns_kernel & NS_K_MDWE) && apply_mdwe() != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: memory_deny_write_execute: %s\n",
+                svc->name, errno == EINVAL ? "kernel has no PR_SET_MDWE (needs Linux 6.3+)" : strerror(errno));
+        return -1;
     }
     return 0;
 }
@@ -1510,6 +1517,25 @@ static void svc_resolve_group_or_die(const service_t *svc, gid_t *g, const char 
 /* In a just-forked runner (exec_stop/exec_stop_post, exec_reload): own
  * process group, so a timed-out runner is killed with what it started; the
  * service's env, user and working dir. WHAT names it in failure lines. */
+/* exec_stop/exec_reload talk to the service (rndc reload, a curl to its
+ * 127.0.0.1 admin port): with private_network they belong in its netns, as
+ * under systemd. Main gone: a fresh empty one, never the host's */
+static void svc_runner_netns(const service_t *svc, const char *what) {
+    char p[40];
+    int fd = -1;
+    if (!(svc->ns_kernel & NS_K_NETWORK)) return;
+    if (svc->child_pid > 0) {
+        snprintf(p, sizeof p, "/proc/%d/ns/net", (int)svc->child_pid);
+        fd = open(p, O_RDONLY | O_CLOEXEC);
+    }
+    if (fd >= 0 ? setns(fd, CLONE_NEWNET) != 0 : private_net() != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: %s: private_network: %s\n",
+                svc->name, what, strerror(errno));
+        _exit(126);
+    }
+    if (fd >= 0) close(fd);
+}
+
 static void svc_runner_child(const service_t *svc, const char *what) {
     service_reset_child_sigmask();
     setsid();
@@ -1519,7 +1545,10 @@ static void svc_runner_child(const service_t *svc, const char *what) {
         if (null_fd > 0) close(null_fd);
     }
     svc_child_log(svc);
+    /* after the log: PID 1's own files keep PID 1's modes */
+    if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     syscall(SYS_close_range, 3, ~0U, 0);
+    svc_runner_netns(svc, what);
     svc_make_exec_dirs(svc, 0);
     svc_apply_env(svc, NULL, 0);
     char gwhat[48];
@@ -1599,6 +1628,7 @@ pid_t service_card_spawn(const service_t *svc, int idx) {
         if (null_fd > 0) close(null_fd);
     }
     svc_child_log(svc);
+    if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
     syscall(SYS_close_range, 3, ~0U, 0);
     char *w[33];
     int nw = service_split_cmdline(svc->card[idx] + 5, w, 32);
@@ -1689,6 +1719,8 @@ int service_spawn(service_t *svc) {
             if (null_fd > 0) close(null_fd);
         }
         svc_child_log(svc);
+        /* before exec_pre: every command of the service gets it, as in systemd */
+        if (svc->umask_val >= 0) umask((mode_t)svc->umask_val);
         char *file_env[64];
         int file_envc = 0;
         for (int i = 0; i < svc->env_file_count; i++) {
@@ -1780,9 +1812,12 @@ int service_spawn(service_t *svc) {
             svc_chdir(svc, WD_ROOT_PRE);
             svc_run_pre(svc, 1);
         }
+        /* user lookups may need the network (LDAP, NIS): before private_network */
+        int early_user = !exec_dirs && (svc->ns_kernel & NS_K_NETWORK);
+        if (early_user) svc_resolve_user_or_die(svc);
         if (service_apply_hardening(svc) != 0)
             _exit(126);
-        if (!exec_dirs) svc_resolve_user_or_die(svc);
+        if (!exec_dirs && !early_user) svc_resolve_user_or_die(svc);
         if (svc->run_uid) {
             struct passwd *pw = getpwuid(svc->run_uid);
             if (pw) {
@@ -2344,6 +2379,7 @@ static void svc_init_defaults(service_t *svc) {
     svc->stable_secs = STABLE_SECS;
     svc->priority = PRIO_STANDARD;
     svc->start_timeout_sec = -1;
+    svc->umask_val = -1;
     svc->allowed_slot_min = -1;
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
@@ -3474,6 +3510,17 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->restart_sec = v < 0 ? 0 : v > 3600 ? 3600 : v;
     } else if (strcmp(line, "start_timeout_sec") == 0) {
         svc->start_timeout_sec = atoi(val);
+    } else if (strcmp(line, "umask") == 0 && !*val) {
+        svc->umask_val = -1;
+    } else if (strcmp(line, "umask") == 0) {
+        size_t n = strspn(val, "01234567");
+        long v = n && n <= 4 && !val[n] ? strtol(val, NULL, 8) : -1;
+        if (v < 0 || v > 0777) {
+            fprintf(stderr, "[schema-init] %s: bad umask=%s (octal, at most 0777)\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->umask_val = (int16_t)v;
     } else if (strcmp(line, "stop_timeout_sec") == 0) {
         int v = atoi(val);
         svc->stop_timeout_sec = (v >= 1 && v <= 300) ? v : 0;

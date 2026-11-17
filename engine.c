@@ -2340,12 +2340,9 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "  %-15s %-5s %s\n", "protect_system",
                     ps[s->ns_protect_system < 3 ? s->ns_protect_system : 0], hard_source(s, HARD_PS));
                 ctl_writef(fd, "  %-15s %-5d %s\n", "protect_home", s->ns_protect_home, hard_source(s, HARD_PH));
-                {
-                    static const char *const kn[] = { "protect_kernel_tunables", "protect_kernel_modules",
-                        "protect_control_groups", "private_devices", "protect_hostname" };
-                    for (int k = 0; k < 5; k++)
-                        if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", kn[k]);
-                }
+                for (int k = 0; k < NS_K_COUNT; k++)
+                    if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", ns_kernel_names[k]);
+                if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);
                 for (int k = 0; k < s->rw_path_count; k++)
                     ctl_writef(fd, "  %-15s %s\n", "rw_path", s->rw_path[k]);
                 for (int k = 0; k < s->landlock_count; k++)

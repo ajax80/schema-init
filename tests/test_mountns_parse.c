@@ -9,47 +9,137 @@
 #include <sys/stat.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
+#include <ifaddrs.h>
 #include <sched.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <linux/capability.h>
 
 /* the bounding set service_apply_hardening leaves, read in a forked child
  * (a user namespace when not root); -1 when no userns is available */
+/* a user namespace mapped to root when not root; -1 when none is allowed */
+static int become_root(void) {
+    char m[32];
+    int fd;
+    uid_t u = getuid();
+    gid_t g = getgid();
+    if (geteuid() == 0) return 0;
+    if (unshare(CLONE_NEWUSER) != 0) return -1;
+    if ((fd = open("/proc/self/setgroups", O_WRONLY)) >= 0) { (void)!write(fd, "deny", 4); close(fd); }
+    snprintf(m, sizeof m, "0 %u 1", (unsigned)u);
+    if ((fd = open("/proc/self/uid_map", O_WRONLY)) < 0 || write(fd, m, strlen(m)) < 0) return -1;
+    close(fd);
+    snprintf(m, sizeof m, "0 %u 1", (unsigned)g);
+    if ((fd = open("/proc/self/gid_map", O_WRONLY)) < 0 || write(fd, m, strlen(m)) < 0) return -1;
+    close(fd);
+    return 0;
+}
+
+static int mdwe_ok(void) {
+    int st;
+    pid_t pid = fork();
+    if (pid == 0) _exit(apply_mdwe() == 0 ? 0 : 1);
+    return waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0;
+}
+
+/* a stop runner of a private_network service runs in the main process's
+ * netns (or a fresh one once it's gone), never the host's. Returns 1 ok,
+ * 0 skipped (no userns), asserts otherwise */
+static int runner_netns_check(const char *dir) {
+    int st;
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0) {
+        char p[300], out[300], body[1024], host[64], got[64] = "", mainns[64] = "";
+        static service_t s;
+        ssize_t n;
+        if (become_root() != 0) _exit(99);
+        n = readlink("/proc/self/ns/net", host, sizeof host - 1);
+        if (n < 0) _exit(2);
+        host[n] = 0;
+        snprintf(p, sizeof p, "%s/net.svc", dir);
+        snprintf(out, sizeof out, "%s/net.out", dir);
+        snprintf(body, sizeof body, "name=net\nexec=/bin/sleep\nargs=30\nprivate_network=1\n"
+                 "exec_stop=/bin/sh -c \"readlink /proc/self/ns/net > %s\"\n", out);
+        FILE *f = fopen(p, "w");
+        fputs(body, f);
+        fclose(f);
+        if (service_load_one(p, &s) != 0 || service_spawn(&s) != 0) _exit(3);
+        for (int i = 0; i < 200 && !mainns[0]; i++) {
+            char l[64];
+            snprintf(l, sizeof l, "/proc/%d/ns/net", (int)s.child_pid);
+            n = readlink(l, mainns, sizeof mainns - 1);
+            if (n > 0) { mainns[n] = 0; if (!strcmp(mainns, host)) mainns[0] = 0; }
+            if (!mainns[0]) usleep(10000);
+        }
+        if (!mainns[0]) _exit(4);
+        pid_t r = service_stop_spawn(&s, 1);
+        if (r <= 0 || waitpid(r, &st, 0) != r || !WIFEXITED(st) || WEXITSTATUS(st)) _exit(5);
+        f = fopen(out, "r");
+        if (!f || !fgets(got, sizeof got, f)) _exit(6);
+        fclose(f);
+        got[strcspn(got, "\n")] = 0;
+        if (strcmp(got, mainns)) _exit(7);
+        kill(s.child_pid, SIGKILL);
+        waitpid(s.child_pid, &st, 0);
+        s.child_pid = 0;
+        /* main gone: a fresh netns, still not the host's */
+        r = service_stop_spawn(&s, 1);
+        if (r <= 0 || waitpid(r, &st, 0) != r || !WIFEXITED(st) || WEXITSTATUS(st)) _exit(8);
+        f = fopen(out, "r");
+        if (!f || !fgets(got, sizeof got, f)) _exit(9);
+        fclose(f);
+        got[strcspn(got, "\n")] = 0;
+        if (!strcmp(got, host)) _exit(10);
+        unlink(out);
+        unlink(p);
+        _exit(0);
+    }
+    assert(waitpid(pid, &st, 0) == pid && WIFEXITED(st));
+    if (WEXITSTATUS(st) == 99) return 0;
+    if (WEXITSTATUS(st)) fprintf(stderr, "runner_netns_check: child exit %d\n", WEXITSTATUS(st));
+    assert(WEXITSTATUS(st) == 0);
+    return 1;
+}
+
+static unsigned probe_flags;  /* set by hardened_bounding: what the child saw */
+#define PROBE_RWX_REFUSED 1
+#define PROBE_ONLY_LO     2
 static long long hardened_bounding(const service_t *svc) {
     int pfd[2], st;
-    unsigned long long caps = 0;
+    unsigned long long caps = 0, out[2];
     assert(pipe(pfd) == 0);
     pid_t pid = fork();
     assert(pid >= 0);
     if (pid == 0) {
-        char m[32];
-        uid_t u = getuid();
-        gid_t g = getgid();
         close(pfd[0]);
-        if (geteuid() != 0) {
-            int fd;
-            if (unshare(CLONE_NEWUSER) != 0) _exit(99);
-            if ((fd = open("/proc/self/setgroups", O_WRONLY)) >= 0) { (void)!write(fd, "deny", 4); close(fd); }
-            snprintf(m, sizeof m, "0 %u 1", (unsigned)u);
-            if ((fd = open("/proc/self/uid_map", O_WRONLY)) < 0 || write(fd, m, strlen(m)) < 0) _exit(99);
-            close(fd);
-            snprintf(m, sizeof m, "0 %u 1", (unsigned)g);
-            if ((fd = open("/proc/self/gid_map", O_WRONLY)) < 0 || write(fd, m, strlen(m)) < 0) _exit(99);
-            close(fd);
-        }
+        if (become_root() != 0) _exit(99);
         if (service_apply_hardening(svc) != 0) _exit(1);
         for (int c = 0; c < 64; c++)
             if (prctl(PR_CAPBSET_READ, c) == 1) caps |= 1ULL << c;
-        (void)!write(pfd[1], &caps, sizeof caps);
+        out[0] = caps;
+        out[1] = 0;
+        if (mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED)
+            out[1] |= PROBE_RWX_REFUSED;
+        {
+            struct ifaddrs *ifa, *i;
+            int lo_only = getifaddrs(&ifa) == 0;
+            for (i = lo_only ? ifa : NULL; i; i = i->ifa_next)
+                if (strcmp(i->ifa_name, "lo")) lo_only = 0;
+            if (lo_only) { freeifaddrs(ifa); out[1] |= PROBE_ONLY_LO; }
+        }
+        (void)!write(pfd[1], out, sizeof out);
         _exit(0);
     }
     close(pfd[1]);
     assert(waitpid(pid, &st, 0) == pid);
     if (WIFEXITED(st) && WEXITSTATUS(st) == 99) { close(pfd[0]); return -1; }
     assert(WIFEXITED(st) && WEXITSTATUS(st) == 0);
-    assert(read(pfd[0], &caps, sizeof caps) == sizeof caps);
+    assert(read(pfd[0], out, sizeof out) == sizeof out);
     close(pfd[0]);
-    return (long long)caps;
+    probe_flags = (unsigned)out[1];
+    return (long long)out[0];
 }
 
 static void write_svc(const char *path, const char *body) {
@@ -195,9 +285,31 @@ int main(void) {
     struct { const char *key; uint8_t bit; } kn[] = {
         { "protect_kernel_tunables", NS_K_TUNABLES }, { "protect_kernel_modules", NS_K_MODULES },
         { "protect_control_groups", NS_K_CGROUPS }, { "private_devices", NS_K_DEVICES },
-        { "protect_hostname", NS_K_HOSTNAME },
+        { "protect_hostname", NS_K_HOSTNAME }, { "private_network", NS_K_NETWORK },
+        { "memory_deny_write_execute", NS_K_MDWE },
     };
     snprintf(path, sizeof(path), "%s/k.svc", dir);
+    for (size_t i = 0; i < sizeof(kn) / sizeof(kn[0]); i++)
+        assert(strcmp(ns_kernel_names[__builtin_ctz(kn[i].bit)], kn[i].key) == 0);
+    write_svc(path, "name=k\nexec=/usr/bin/true\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == -1);
+    write_svc(path, "name=k\nexec=/usr/bin/true\numask=0027\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == 027);
+    write_svc(path, "name=k\nexec=/usr/bin/true\numask=0\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == 0);
+    write_svc(path, "name=k\nexec=/usr/bin/true\numask=077\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == 077);
+    write_svc(path, "name=k\nexec=/usr/bin/true\numask=077\numask=\n");
+    assert(service_load_one(path, &one) == 0 && one.umask_val == -1);
+    {
+        const char *ubad[] = { "0888", "1777", "abc", "00777x", "07777" };
+        for (size_t i = 0; i < sizeof(ubad) / sizeof(ubad[0]); i++) {
+            char body[96];
+            snprintf(body, sizeof body, "name=k\nexec=/usr/bin/true\numask=%s\n", ubad[i]);
+            write_svc(path, body);
+            assert(service_load_one(path, &one) == -1);
+        }
+    }
     for (size_t i = 0; i < sizeof(kn) / sizeof(kn[0]); i++) {
         char body[160];
         snprintf(body, sizeof body, "name=k\nexec=/usr/bin/true\n%s=1\n", kn[i].key);
@@ -247,6 +359,19 @@ int main(void) {
         bs = hardened_bounding(&one);
         assert(!(bs & (1LL << CAP_MKNOD)) && !(bs & (1LL << CAP_SYS_RAWIO)));
         assert((bs & (1LL << CAP_SYS_MODULE)) && (bs & (1LL << CAP_NET_ADMIN)));
+        assert(!(probe_flags & PROBE_RWX_REFUSED));
+        write_svc(path, "name=ok\nexec=/usr/bin/true\nprivate_network=1\n");
+        assert(service_load_one(path, &one) == 0);
+        bs = hardened_bounding(&one);
+        assert(probe_flags & PROBE_ONLY_LO);
+        if (mdwe_ok()) {
+            write_svc(path, "name=ok\nexec=/usr/bin/true\nmemory_deny_write_execute=1\n");
+            assert(service_load_one(path, &one) == 0);
+            bs = hardened_bounding(&one);
+            assert(probe_flags & PROBE_RWX_REFUSED);
+        } else
+            printf("SKIP  memory_deny_write_execute (kernel has no PR_SET_MDWE)\n");
+        assert(runner_netns_check(dir) == 1);
     } else
         printf("SKIP  kernel cap drops (no userns)\n");
     unlink(path);

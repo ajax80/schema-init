@@ -14,6 +14,12 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 
 /* CI runs make test unprivileged: enter a user namespace mapped to root */
 static int become_root(void) {
@@ -156,6 +162,41 @@ static int case_all(void) {
     return 0;
 }
 
+static int lfd = -1;
+
+static int case_network(void) {
+    struct ifaddrs *ifa, *i;
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+    socklen_t al = sizeof a;
+    int s, c, up = 0;
+    if (private_net() != 0) return 10;
+    if (getifaddrs(&ifa) != 0) return 11;
+    for (i = ifa; i; i = i->ifa_next) {
+        if (strcmp(i->ifa_name, "lo")) return 12;
+        if (i->ifa_flags & IFF_UP) up = 1;
+    }
+    freeifaddrs(ifa);
+    if (!up) return 13;
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0 || bind(s, (struct sockaddr *)&a, sizeof a) != 0 || listen(s, 1) != 0) return 14;
+    getsockname(s, (struct sockaddr *)&a, &al);
+    c = socket(AF_INET, SOCK_STREAM, 0);
+    if (connect(c, (struct sockaddr *)&a, sizeof a) != 0) return 15;
+    /* a listener PID 1 opened before the unshare (socket activation) still accepts */
+    if (lfd >= 0) {
+        int k = accept(lfd, NULL, NULL);
+        if (k < 0) return 16;
+        close(k);
+    }
+    return 0;
+}
+
+static int case_mdwe(void) {
+    if (apply_mdwe() != 0) return errno == EINVAL ? 0 : 10;
+    execl("/proc/self/exe", "kns", "rwx-probe", (char *)NULL);
+    return 11;
+}
+
 static int run(const char *name, int (*fn)(void)) {
     int st;
     pid_t pid = fork();
@@ -177,8 +218,12 @@ static int run(const char *name, int (*fn)(void)) {
 static int host_log;
 static int case_devices_w(void) { return case_devices(host_log); }
 
-int main(void) {
+int main(int argc, char **argv) {
     struct stat st;
+    if (argc > 1 && !strcmp(argv[1], "rwx-probe")) {
+        void *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        return m == MAP_FAILED ? 0 : 20;
+    }
     char before[256], after[256];
     int fail = 0, r;
     host_log = lstat("/dev/log", &st) == 0 && S_ISSOCK(st.st_mode);
@@ -194,6 +239,21 @@ int main(void) {
     fail |= run("hostname", case_hostname);
     fail |= run("caps", case_caps);
     fail |= run("all", case_all);
+    fail |= run("mdwe", case_mdwe);
+    {
+        struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK) };
+        socklen_t al = sizeof a;
+        int c;
+        lfd = socket(AF_INET, SOCK_STREAM, 0);
+        assert(lfd >= 0 && bind(lfd, (struct sockaddr *)&a, sizeof a) == 0 && listen(lfd, 1) == 0);
+        getsockname(lfd, (struct sockaddr *)&a, &al);
+        /* the host side connects first: the backlog holds it for the child's accept */
+        c = socket(AF_INET, SOCK_STREAM, 0);
+        assert(connect(c, (struct sockaddr *)&a, sizeof a) == 0);
+        fail |= run("network", case_network);
+        close(c);
+        close(lfd);
+    }
 
     gethostname(after, sizeof after);
     if (strcmp(before, after)) { fprintf(stderr, "test_kernel_ns: host hostname changed\n"); fail = 1; }
