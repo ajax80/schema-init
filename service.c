@@ -494,6 +494,33 @@ static int parse_sched_key(service_t *svc, const char *key, const char *val) {
     return 0;
 }
 
+/* watch_path=, make_directory=, directory_mode=, trigger_limit_*=. 0 or -1 */
+static int parse_watch_key(service_t *svc, const char *key, const char *val) {
+    long n;
+    if (!strcmp(key, "watch_path")) {
+        if (!*val) { svc->watch_count = 0; return 0; }   /* a drop-in's empty value resets the list */
+        if (svc->watch_count >= MAX_WATCH || watch_parse(val, &svc->watch[svc->watch_count]) != 0)
+            return -1;
+        svc->watch_count++;
+    } else if (!strcmp(key, "make_directory")) {
+        if (parse_int_in(val, 0, 1, &n)) return -1;
+        svc->make_directory = (uint8_t)n;
+    } else if (!strcmp(key, "directory_mode")) {
+        size_t k = strspn(val, "01234567");
+        if (!k || k > 4 || val[k]) return -1;
+        n = strtol(val, NULL, 8);
+        if (n > 07777) return -1;
+        svc->directory_mode = (uint16_t)n;
+    } else if (!strcmp(key, "trigger_limit_burst")) {
+        if (parse_int_in(val, 1, 1000000, &n)) return -1;
+        svc->trigger_burst = (int)n;
+    } else {
+        if (parse_int_in(val, 1, 86400, &n)) return -1;
+        svc->trigger_interval_sec = (int)n;
+    }
+    return 0;
+}
+
 /* 1 = handled, 0 = not a mount-ns key, -1 = bad value (load error). */
 static int parse_ns_field(service_t *svc, const char *key, const char *val) {
     int r;
@@ -2488,6 +2515,9 @@ static void svc_init_defaults(service_t *svc) {
     svc->landlock_tcp_n[0] = svc->landlock_tcp_n[1] = -1;
     svc->timer_cal_dow = -1;
     svc->timer_cal_dom = -1;
+    svc->directory_mode = 0755;
+    svc->trigger_burst = 200;
+    svc->trigger_interval_sec = 2;
 }
 
 static void svc_free_strings(service_t *svc) {
@@ -3619,6 +3649,14 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             fprintf(stderr, "[schema-init] %s: bad %s=%s\n", svc->name[0] ? svc->name : path, line, val);
             return -1;
         }
+    } else if (strcmp(line, "watch_path") == 0 || strcmp(line, "make_directory") == 0 ||
+               strcmp(line, "directory_mode") == 0 || strcmp(line, "trigger_limit_burst") == 0 ||
+               strcmp(line, "trigger_limit_interval_sec") == 0) {
+        if (parse_watch_key(svc, line, val) != 0) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s%s\n", svc->name[0] ? svc->name : path, line, val,
+                    !strcmp(line, "watch_path") && svc->watch_count >= MAX_WATCH ? " (at most 8)" : "");
+            return -1;
+        }
     } else if (strcmp(line, "umask") == 0 && !*val) {
         svc->umask_val = -1;
     } else if (strcmp(line, "umask") == 0) {
@@ -3761,6 +3799,18 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
             snprintf(svc->dep_name[pc->dep_slot++], sizeof svc->dep_name[0], "%s", svc->bind_name);
         }
     }
+    if (svc->watch_count && (svc->listen_count || (svc->flags & SVC_TIMER))) {
+        fprintf(stderr, "[schema-init] %s: watch_path= cannot be combined with listen= or timers — not loaded\n",
+                svc->name);
+        return -1;
+    }
+    if (svc->watch_count && svc->pid_file[0]) {
+        /* the launcher's exit would end the run while its daemon lives on */
+        fprintf(stderr, "[schema-init] %s: watch_path= cannot be combined with pid_file= — not loaded\n",
+                svc->name);
+        return -1;
+    }
+    if (svc->watch_count) svc->flags |= SVC_PATH;
     if (service_verifies_limits(svc) && !svc->notify) {
         fprintf(stderr, "[schema-init] %s: verify_*_max needs notify=1 (checked on READY=1) — not loaded\n", svc->name);
         return -1;

@@ -61,6 +61,11 @@ Every key a schema-init service file understands. The [README](how-it-works.md#s
 | `on_boot_sec` | `0` | Makes the service a **timer**: seconds after boot before the first fire (`0` = at boot). Implies `oneshot=1` — the service runs, exits, and re-arms. The analog of systemd's `OnBootSec=`. See [Timers](#timers) below. |
 | `on_active_sec` | `0` | Timer period: seconds after each completion before the next fire. Measured from completion (like systemd's `OnUnitInactiveSec=`), so a slow run never overlaps itself. Implies `oneshot=1`. |
 | `on_calendar` | — | Wall-clock timer: `HH:MM` daily, `Mon HH:MM` weekly, or `DD HH:MM` monthly. `HH` may be a comma list of hours (`6,18:00`). Implies `oneshot=1`. See [Timers](#timers). |
+| `watch_path` | — | `KIND:PATH`, up to 8 lines (systemd `.path` units): the service starts when the filesystem says so, instead of at boot. `exists`, `exists_glob` (glob in the last component only) and `dir_not_empty` fire whenever the condition holds and the service isn't running, including again after a run; `changed` (closed after a write, created, deleted, renamed onto, attributes) and `modified` (any write too) fire on the event, and an event during a run queues one more run. PATH is absolute; a symlink leaf is watched as the link. Cannot be combined with `listen=`, a timer key or `pid_file=`. An empty `watch_path=` in a drop-in clears the list. See [Path watches](#path-watches). |
+| `make_directory` | `0` | With `watch_path`: create each watched PATH as a directory at arm time, except for `exists` and `exists_glob` (as systemd's `MakeDirectory=`); parents 0755, owned by the process that creates it (root under PID 1). |
+| `directory_mode` | `0755` | Mode for `make_directory`. |
+| `trigger_limit_burst` | `200` | With `watch_path`: more fires than this within `trigger_limit_interval_sec` parks the service (`excise_reason=trigger-limit-hit`) until `schema-ctl start` or `restart`. |
+| `trigger_limit_interval_sec` | `2` | The window for `trigger_limit_burst`, 1–86400. |
 | `persistent` | `0` | With `on_calendar`: a fire missed while the machine was off runs at the next boot (systemd `Persistent=`). |
 | `start_timeout_sec` | `90` for oneshots, `0` otherwise | Max seconds a service may sit in `FULL_TRUST` without promoting before it is killed and routed into the recovery arc — so a hung boot service can't stall its dependents. **Defaults on for oneshots** (the only services that can hang the chain; daemons promote via `stable_secs`). **Timers are exempt** (may run long). `0` disables. The analog of systemd's `TimeoutStartSec=`. |
 | `stop_timeout_sec` | `3` | Seconds a service gets to exit after its `kill_signal` at shutdown before its cgroup is killed (1–300); also how long a `schema-ctl stop`/`restart` waits before `final_kill_signal` (90 s when unset). Raise it for anything that saves state on the way out: the Plasma session gets `20`, because plasmashell can need 12 s to finish writing a freshly built panel layout. The analog of systemd's `TimeoutStopSec=`. |
@@ -272,6 +277,21 @@ persistent=1          # if 03:00 was missed while off, run at next boot
 Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if the most recent scheduled occurrence is newer than that stamp, the timer fires immediately (logged `timer-catchup`) instead of waiting. A never-run timer is seeded rather than replayed, so enabling one doesn't trigger a surprise fire on first boot. `persistent=1` only applies to `on_calendar` timers; on an interval timer it's logged and ignored.
 
 **Not yet implemented:** several times per day, ranges and lists in one key. See `docs/timers-design.md`.
+
+## Path watches
+
+`watch_path=` starts a service from the filesystem, the way a systemd `.path` unit starts its service. The service is armed at boot (state `PERFECT`, counted as up by dependents) and runs each time a watch fires, then is armed again whatever its exit code:
+
+```ini
+name=spool-drain
+exec=/usr/local/bin/drain
+watch_path=dir_not_empty:/var/spool/drain
+make_directory=1
+```
+
+Watches use PID 1's inotify descriptor (schema-user's for user services). A path that doesn't exist yet is watched from its nearest existing parent and followed as directories appear; parents are followed through symlinks (`/var/run` is watched as `/run`). Every 30 s the watches are also re-armed and re-checked, for filesystems inotify can't see (bind mounts, NFS). The rail logs `path-fire KIND:PATH`, `path-done`/`path-failed` and `path-trigger-limit`; `schema-ctl status <svc>` lists the watches and the last fire. `schema-ctl stop` parks the service; `start` runs it now and arms it again.
+
+`schema-import` folds a `.path` unit and the service it starts into one `.svc` named after the path unit. It skips a `.path` whose service is socket- or timer-activated, one using `%v`, and `systemd-ask-password-*.path`.
 
 ---
 

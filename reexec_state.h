@@ -49,6 +49,13 @@ typedef struct {
     X(INT,  wd_armed_sec)        \
     X(TS,   wd_abort_at)         \
     X(INT,  ready_path_verified) \
+    X(U8,   path_due)            \
+    X(U8,   path_rerun)          \
+    X(U8,   path_armed)          \
+    X(U8,   path_stop)           \
+    X(INT,  trigger_count)       \
+    X(TS,   trigger_window)      \
+    X(TIME, path_last_fire)      \
     X(U64,  ready_stale_dev)     \
     X(U64,  ready_stale_ino)     \
     X(TS,   ready_stale_ctime)   \

@@ -376,7 +376,7 @@ units use them.
   (`ioprio_set`), `sched_policy=fifo|rr|batch|idle` + `sched_priority=`
   (the Leg loop wants FIFO), `cpu_affinity=` already exists as `cpuset=`.
 
-### 4.8 `watch_path=` (systemd `.path` units)
+### 4.8 `watch_path=` (systemd `.path` units) (done: see docs/superpowers/specs/2026-11-17-watch-path-design.md)
 - The shim refuses `.path` units. PID 1 already holds an inotify fd for
   `ready_path`; `watch_path=KIND:PATH` (`exists`, `changed`, `modified`,
   `dir_not_empty`) that arms a NEW_PROCESS when the event fires is a small
