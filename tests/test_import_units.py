@@ -1658,4 +1658,70 @@ finally:
     else:
         os.environ["MIGRATE_ROOT"] = _saved_root
 
+# --- audit 4.8: .path units -> watch_path= ---
+_psvc = si.parse_unit("[Service]\nType=oneshot\nExecStart=/usr/bin/job\n")
+_p = si.path_to_svc("job", si.parse_unit("[Path]\nPathExists=/run/x\n"), _psvc)
+check("path: PathExists -> watch_path=exists", "watch_path=exists:/run/x\n" in _p and "exec=/usr/bin/job\n" in _p)
+check("path: the service's oneshot/no_restart lines are dropped", "oneshot=1" not in _p and "no_restart" not in _p)
+_p = si.path_to_svc("job", si.parse_unit(
+    "[Path]\nPathExistsGlob=/run/q/*.job\nPathChanged=/etc/a\nPathModified=/etc/b\nDirectoryNotEmpty=/run/d\n"
+    "MakeDirectory=yes\nDirectoryMode=0700\nTriggerLimitBurst=4\nTriggerLimitIntervalSec=30 minutes\n"), _psvc)
+check("path: each Path*= maps to its kind",
+      all(l in _p for l in ("watch_path=exists_glob:/run/q/*.job\n", "watch_path=changed:/etc/a\n",
+                            "watch_path=modified:/etc/b\n", "watch_path=dir_not_empty:/run/d\n")))
+check("path: MakeDirectory/DirectoryMode", "make_directory=1\n" in _p and "directory_mode=0700\n" in _p)
+check("path: TriggerLimit*", "trigger_limit_burst=4\n" in _p and "trigger_limit_interval_sec=1800\n" in _p)
+check("path: MakeDirectory=no writes nothing",
+      "make_directory" not in si.path_to_svc("job", si.parse_unit("[Path]\nPathExists=/a\nMakeDirectory=no\n"), _psvc))
+for _txt, _why in (("[Path]\nPathChanged=/lib/modules/%v/modules.dep\n", "%v"),
+                   ("[Path]\nMakeDirectory=yes\n", "no Path"),
+                   ("[Path]\nPathExists=relative\n", "absolute"),
+                   ("[Path]\n" + "".join("PathChanged=/p%d\n" % i for i in range(9)), "8")):
+    try:
+        si.path_to_svc("job", si.parse_unit(_txt), _psvc)
+        check("path: skipped (%s)" % _why, False)
+    except si.Skip as e:
+        check("path: skipped (%s)" % _why, _why in str(e))
+
+_saved_p = {k: os.environ.get(k) for k in ("MIGRATE_ROOT", "SCHEMA_SVC_DIR", "SCHEMA_STATE_DIR")}
+_pr = tempfile.mkdtemp()
+os.environ["MIGRATE_ROOT"] = _pr
+os.environ["SCHEMA_STATE_DIR"] = os.path.join(_pr, "state")
+os.environ["SCHEMA_SVC_DIR"] = os.path.join(_pr, "svc")
+_pu = os.path.join(_pr, "usr/lib/systemd/system")
+os.makedirs(_pu); os.makedirs(os.environ["SCHEMA_STATE_DIR"]); os.makedirs(os.environ["SCHEMA_SVC_DIR"])
+def _put(fn, body): open(os.path.join(_pu, fn), "w").write(body)
+try:
+    _put("lvm-import.path", "[Path]\nPathExists=/run/lvm/import\nUnit=lvm-import-run.service\n")
+    _put("lvm-import-run.service", "[Service]\nType=oneshot\nExecStart=/usr/sbin/lvm-import\n")
+    _st, _det = si.import_one("lvm-import.path")
+    check("path: import_one takes a .path with Unit=", _st == "imported" and
+          "watch_path=exists:/run/lvm/import\n" in _det[1])
+    _put("lonely.path", "[Path]\nPathExists=/run/l\n")
+    _st, _det = si.import_one("lonely.path")
+    check("path: a missing target service is skipped with a reason",
+          _st == "skipped" and "lonely.service not found" in _det[0])
+    _put("cupsish.path", "[Path]\nPathExists=/var/cache/c\n")
+    _put("cupsish.socket", "[Socket]\nListenStream=/run/cupsish.sock\n")
+    _put("cupsish.service", "[Service]\nExecStart=/usr/sbin/cupsish -l\n[Install]\nWantedBy=x\n")
+    _st, _det = si.import_one("cupsish.path")
+    check("path: a socket-activated target is skipped",
+          _st == "skipped" and "cannot combine with socket or timer activation" in _det[0])
+    _put("ticky.path", "[Path]\nPathExists=/run/t\n")
+    _put("ticky.timer", "[Timer]\nOnCalendar=daily\n")
+    _put("ticky.service", "[Service]\nType=oneshot\nExecStart=/usr/bin/ticky\n")
+    _st, _det = si.import_one("ticky.path")
+    check("path: a timer-started target is skipped",
+          _st == "skipped" and "cannot combine with socket or timer activation" in _det[0])
+    _put("systemd-ask-password-console.path", "[Path]\nDirectoryNotEmpty=/run/systemd/ask-password\nMakeDirectory=yes\n")
+    _put("systemd-ask-password-console.service", "[Service]\nExecStart=/usr/bin/systemd-tty-ask-password-agent\n")
+    _st, _det = si.import_one("systemd-ask-password-console.path")
+    check("path: ask-password units are skipped", _st == "skipped")
+finally:
+    for _k, _v in _saved_p.items():
+        if _v is None:
+            os.environ.pop(_k, None)
+        else:
+            os.environ[_k] = _v
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

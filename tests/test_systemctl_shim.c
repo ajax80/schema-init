@@ -15,6 +15,7 @@ static void test_strip_suffix(void) {
     assert(strcmp(unit_queue_name("foo.socket", b, sizeof b), "foo.socket") == 0);
     assert(strcmp(strip_service_suffix("foo.timer", b, sizeof b), "foo") == 0);
     assert(strcmp(unit_queue_name("foo.timer", b, sizeof b), "foo.timer") == 0);
+    assert(strcmp(unit_queue_name("foo.path", b, sizeof b), "foo.path") == 0);
     assert(strcmp(unit_queue_name("foo", b, sizeof b), "foo.service") == 0);
 }
 
@@ -27,7 +28,8 @@ static void test_supported(void) {
     assert(unit_supported("foo@.socket") == 0);
     assert(unit_supported("foo.timer") == 1);
     assert(unit_supported("foo@.timer") == 0);
-    assert(unit_supported("foo.path") == 0);
+    assert(unit_supported("foo.path") == 1);
+    assert(unit_supported("foo@.path") == 0);
     assert(unit_supported("foo.target") == 0);
     assert(unit_supported("foo.mount") == 0);
     assert(unit_supported("foo.slice") == 0);

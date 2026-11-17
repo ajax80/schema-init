@@ -891,17 +891,17 @@ def _check_line_len(lines):
             raise Skip("%s= line is %d bytes (limit 511)" % (ln.split("=", 1)[0], len(ln.encode())))
 
 
-def timer_to_svc(name, timer_sections, svc_sections, known=None, unit=None):
-    """A .timer and the .service it starts as one schema timer .svc, named after
-    the timer."""
-    tlines, tnotes = timer_lines(timer_sections)
-    tconds = condition_lines(timer_sections)
+def _fold(name, what, tlines, tnotes, act_sections, svc_sections, known, unit):
+    """An activating unit (.timer, .path) and the .service it starts as one
+    .svc named after the activator: the service body without its restart
+    lines (the activator decides when it runs) plus tlines."""
+    tconds = condition_lines(act_sections)
     sconds = condition_lines(svc_sections)
     if any(":|" in c for c in tconds) and any(":|" in c for c in sconds):
-        raise Skip("timer and service both have |-conditions — schema has one group per service")
+        raise Skip("%s and service both have |-conditions — schema has one group per service" % what)
     if len(tconds) + len(sconds) > 8:
-        raise Skip("%d conditions across timer and service (limit 8)" % (len(tconds) + len(sconds)))
-    tlines += tconds
+        raise Skip("%d conditions across %s and service (limit 8)" % (len(tconds) + len(sconds), what))
+    tlines = tlines + tconds
     body = unit_to_svc(name, svc_sections, known=known, unit=unit)
     out = []
     for ln in body.splitlines():
@@ -920,6 +920,69 @@ def timer_to_svc(name, timer_sections, svc_sections, known=None, unit=None):
         out.insert(0, "# schema-import: " + "; ".join(tnotes))
     _check_line_len(out + tlines)
     return "\n".join(out + tlines) + "\n"
+
+
+def timer_to_svc(name, timer_sections, svc_sections, known=None, unit=None):
+    """A .timer and the .service it starts as one schema timer .svc, named after
+    the timer."""
+    tlines, tnotes = timer_lines(timer_sections)
+    return _fold(name, "timer", tlines, tnotes, timer_sections, svc_sections, known, unit)
+
+
+_PATH_KINDS = (("PathExists", "exists"), ("PathExistsGlob", "exists_glob"), ("PathChanged", "changed"),
+               ("PathModified", "modified"), ("DirectoryNotEmpty", "dir_not_empty"))
+
+
+def path_lines(sections, name):
+    """[Path] keys to watch_path=/make_directory=/... lines plus notes. Raises
+    Skip when a path has no schema equivalent."""
+    p = sections.get("Path", [])
+    lines, notes = [], []
+    for key, kind in _PATH_KINDS:
+        for v in _get_all(p, key):
+            if not v.strip():
+                continue
+            v = _specifiers([v.strip()], name)[0]
+            if not v.startswith("/") or (len(v) > 1 and v.endswith("/")):
+                raise Skip("%s=%s is not an absolute path" % (key, v))
+            if len(v.encode()) > 255:
+                raise Skip("%s=%s is longer than 255 bytes" % (key, v))
+            if kind == "exists_glob" and re.search(r"[*?\[]", v.rsplit("/", 1)[0]):
+                raise Skip("%s=%s has a glob outside its last component" % (key, v))
+            lines.append("watch_path=%s:%s" % (kind, v))
+    if not lines:
+        raise Skip("no PathExists=/PathExistsGlob=/PathChanged=/PathModified=/DirectoryNotEmpty=")
+    if len(lines) > 8:
+        raise Skip("%d paths watched (limit 8)" % len(lines))
+    if _get_last(p, "MakeDirectory").lower() in ("yes", "true", "1", "on"):
+        lines.append("make_directory=1")
+    mode = _get_last(p, "DirectoryMode")
+    if mode:
+        if re.fullmatch(r"[0-7]{1,4}", mode):
+            lines.append("directory_mode=%04o" % int(mode, 8))
+        else:
+            notes.append("DirectoryMode=%s not understood, 0755 used" % mode)
+    burst = _get_last(p, "TriggerLimitBurst")
+    if burst:
+        if burst.isdigit() and int(burst) > 0:
+            lines.append("trigger_limit_burst=%d" % min(int(burst), 1000000))
+        else:
+            notes.append("TriggerLimitBurst=%s dropped" % burst)
+    ival = _get_last(p, "TriggerLimitIntervalSec")
+    if ival:
+        sec = _timespan_sec(ival)
+        if sec and sec <= 86400:
+            lines.append("trigger_limit_interval_sec=%d" % sec)
+        else:
+            notes.append("TriggerLimitIntervalSec=%s dropped" % ival)
+    return lines, notes
+
+
+def path_to_svc(name, path_sections, svc_sections, known=None, unit=None):
+    """A .path and the .service it starts as one watch_path= .svc, named after
+    the path unit."""
+    plines, pnotes = path_lines(path_sections, unit or name)
+    return _fold(name, "path", plines, pnotes, path_sections, svc_sections, known, unit)
 
 
 _LISTEN_KINDS = {"ListenStream": "stream", "ListenDatagram": "dgram",
@@ -1161,6 +1224,8 @@ _DENY = {"rsyslog": "journal-sink owns /dev/log under schema-init",
          "abrtd": "schema-coredump owns kernel core dumps under schema-init",
          "plasma-setup": _FIRSTBOOT, "initial-setup": _FIRSTBOOT,
          "initial-setup-graphical": _FIRSTBOOT, "gnome-initial-setup": _FIRSTBOOT}
+for _ap in ("console", "wall", "plymouth"):
+    _DENY["systemd-ask-password-" + _ap] = "boot password prompts are not run through watch_path= yet"
 
 
 _QUIRKS = {"intel_lpmd": lambda f: None if f.get("cpu_vendor") == "GenuineIntel" and "hybrid_cpu" in f.get("cpu_flags", ())
@@ -2544,8 +2609,10 @@ def import_one(name, force=False, queued=()):
         return _import_runit(name[len(SV):], force, queued)
     timer = name.endswith(".timer")
     socket = name.endswith(".socket")
+    pathu = name.endswith(".path")
     name = name[:-len(".service")] if name.endswith(".service") else name
     name = name[:-len(".timer")] if timer else name
+    name = name[:-len(".path")] if pathu else name
     sock_sections = sibling = None
     if socket:
         name = name[:-len(".socket")]
@@ -2567,7 +2634,7 @@ def import_one(name, force=False, queued=()):
             return ("error", "%s.socket: invalid Service=%r" % (name, target))
         name = target[:-len(".service")] if target.endswith(".service") else target
     else:
-        spath = find_unit(name + ".socket") if not timer else None
+        spath = find_unit(name + ".socket") if not (timer or pathu) else None
         if spath and spath.endswith(name + ".socket"):
             try:
                 cand = parse_unit(read_unit(spath))
@@ -2582,7 +2649,7 @@ def import_one(name, force=False, queued=()):
         return ("masked", out)
     if os.path.exists(out) and not force:
         return ("exists", out)
-    path = find_unit(name + ".timer" if timer else name)
+    path = find_unit(name + ".timer" if timer else name + ".path" if pathu else name)
     if not path:
         return ("not-found", name)
     known = _known_svcs(queued)
@@ -2609,6 +2676,19 @@ def import_one(name, force=False, queued=()):
                 raise Skip("timer's %s not found" % target)
             body = timer_to_svc(name, sections, parse_unit(read_unit(spath)), known,
                                 target[:-len(".service")] if target.endswith(".service") else target)
+        elif pathu:
+            target = _get_last(sections.get("Path", []), "Unit") or name + ".service"
+            if not _name_ok(target):
+                raise Skip("path's Unit=%s is not a unit name" % target)
+            if "@" in target:
+                raise Skip("path starts template instance %s — instances unsupported" % target)
+            spath = find_unit(target)
+            if not spath:
+                raise Skip("path's %s not found" % target)
+            tb = target[:-len(".service")] if target.endswith(".service") else target
+            if find_unit(tb + ".socket") or find_unit(tb + ".timer"):
+                raise Skip("watch_path cannot combine with socket or timer activation (%s)" % tb)
+            body = path_to_svc(name, sections, parse_unit(read_unit(spath)), known, tb)
         else:
             if not sections.get("Install") and _timer_for(name):
                 raise Skip("started by %s, which owns %s.svc — enable the timer"
@@ -3084,9 +3164,6 @@ def user_enabled_set(skip):
         if "@" in u:
             skipped.append((u, "template unit"))
             continue
-        if u.endswith(".path"):
-            skipped.append((u, "path unit"))
-            continue
         try:
             text = user_unit_text(u)
         except Masked:
@@ -3178,6 +3255,10 @@ def _user_activates(unit, sections, skip):
         target = _get_last(sections.get("Timer", []), "Unit") or _base(unit) + ".service"
         if "@" in target:
             raise Skip("timer starts template instance %s — instances unsupported" % target)
+    elif unit.endswith(".path"):
+        target = _get_last(sections.get("Path", []), "Unit") or _base(unit) + ".service"
+        if "@" in target:
+            raise Skip("path starts template instance %s — instances unsupported" % target)
     else:
         return None
     _activation_guard(target, skip)
@@ -3218,6 +3299,12 @@ def _user_translate(unit, known, enabled, skip=(), net=False):
     elif unit.endswith(".timer"):
         svc_sections = _user_sections(target)
         body = timer_to_svc(name, sections, svc_sections, known, _base(target))
+    elif unit.endswith(".path"):
+        svc_sections = _user_sections(target)
+        for sib in (".socket", ".timer"):
+            if user_unit_text(_base(target) + sib) is not None:
+                raise Skip("watch_path cannot combine with socket or timer activation (%s)" % _base(target))
+        body = path_to_svc(name, sections, svc_sections, known, _base(target))
     else:
         body = unit_to_svc(name, sections, None, False, known)
     lines = []

@@ -57,7 +57,7 @@ __attribute__((unused)) static const char *shim_passthrough(void) {
 
 __attribute__((unused)) static const char *strip_service_suffix(const char *unit, char *buf, size_t n) {
     size_t len = strlen(unit);
-    static const char *sufs[] = { ".service", ".timer", ".socket", NULL };
+    static const char *sufs[] = { ".service", ".timer", ".socket", ".path", NULL };
     for (int k = 0; sufs[k]; k++) {
         size_t slen = strlen(sufs[k]);
         if (len > slen && strcmp(unit + len - slen, sufs[k]) == 0) { len -= slen; break; }
@@ -75,7 +75,7 @@ __attribute__((unused)) static int ends_with(const char *s, const char *suf) {
 
 __attribute__((unused)) static int unit_supported(const char *unit) {
     static const char *bad[] = {
-        ".path", ".target",
+        ".target",
         ".mount", ".slice", ".scope", NULL
     };
     int i;
@@ -89,7 +89,8 @@ __attribute__((unused)) static char *unit_queue_name(const char *unit, char *buf
     char base[256];
     strip_service_suffix(unit, base, sizeof base);
     snprintf(buf, n, "%s%s", base, ends_with(unit, ".timer") ? ".timer"
-                                 : ends_with(unit, ".socket") ? ".socket" : ".service");
+                                 : ends_with(unit, ".socket") ? ".socket"
+                                 : ends_with(unit, ".path") ? ".path" : ".service");
     return buf;
 }
 

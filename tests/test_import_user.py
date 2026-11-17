@@ -183,10 +183,12 @@ t.done()
 t = Tree()
 t.write(t.cfg("foo@.service"), SIMPLE)
 t.write(t.cfg("bar.path"), "[Path]\nPathModified=/tmp/x\n")
+t.write(t.cfg("bar.service"), "[Service]\nType=oneshot\nExecStart=/usr/bin/true\n")
 t.enable("foo@x.service", src=t.cfg("foo@.service"))
 t.enable("bar.path")
-check("template_and_path", gen() == ([], [("bar.path", "path unit"), ("foo@x.service", "template unit")]))
+check("template_and_path", gen() == (["bar.path"], [("foo@x.service", "template unit")]))
 t.done()
+
 
 # --- not found ---
 t = Tree()
@@ -932,6 +934,26 @@ check("user: User= dropped with a WARN, no user=/group=",
       "user=" not in _ub.replace("# schema-import WARN: User=", "") and "group=" not in _ub
       and "User=nobody dropped" in _ub)
 check("user: slice from ~/.config folds", "mem_limit=256\n" in _ub and "pids_max=50\n" in _ub)
+t.done()
+
+# --- audit 4.8: a user .path becomes watch_path=, specifiers expanded ---
+t = Tree()
+t.write(t.cfg("sentry.path"), "[Path]\nPathExistsGlob=%C/drkonqi/sentry-envelopes/*\nMakeDirectory=true\n"
+        "TriggerLimitIntervalSec=30 minutes\nTriggerLimitBurst=4\n")
+t.write(t.cfg("sentry.service"), "[Service]\nType=oneshot\nExecStart=/usr/bin/true\n")
+t.enable("sentry.path")
+t.write(t.cfg("orphan.path"), "[Path]\nPathExists=/tmp/o\n")
+t.enable("orphan.path")
+t.write(t.cfg("sock.path"), "[Path]\nPathExists=/tmp/s\n")
+t.write(t.cfg("sock.service"), "[Service]\nExecStart=/usr/bin/true\n")
+t.write(t.cfg("sock.socket"), "[Socket]\nListenStream=%t/sock\n")
+t.enable("sock.path")
+c, out = run(t)
+b = svc(out, "sentry")
+check("user_path_glob", "watch_path=exists_glob:%s/drkonqi/sentry-envelopes/*\n" % t.ctx["cache"] in b
+      and "make_directory=1\n" in b and "trigger_limit_burst=4\n" in b and "trigger_limit_interval_sec=1800\n" in b)
+check("user_path_socket_sibling_skipped", not os.path.exists(os.path.join(out, "sock.svc")))
+check("user_path_missing_service_skipped", not os.path.exists(os.path.join(out, "orphan.svc")) and c["skipped"] >= 1)
 t.done()
 
 print("%d/%d passed" % (sum(results), len(results)))
