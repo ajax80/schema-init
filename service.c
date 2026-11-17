@@ -3804,6 +3804,12 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
                 svc->name);
         return -1;
     }
+    if (svc->watch_count && svc->pid_file[0]) {
+        /* the launcher's exit would end the run while its daemon lives on */
+        fprintf(stderr, "[schema-init] %s: watch_path= cannot be combined with pid_file= — not loaded\n",
+                svc->name);
+        return -1;
+    }
     if (svc->watch_count) svc->flags |= SVC_PATH;
     if (service_verifies_limits(svc) && !svc->notify) {
         fprintf(stderr, "[schema-init] %s: verify_*_max needs notify=1 (checked on READY=1) — not loaded\n", svc->name);

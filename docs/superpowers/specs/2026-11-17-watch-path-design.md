@@ -22,8 +22,10 @@ in PID 1 and schema-user alike (one engine).
   service is running is remembered once and runs it again after it exits (the
   file changed after the service read it). Never fired at arm time.
 - `make_directory=1`, `directory_mode=` (default 0755): at arm, PID 1 (or
-  schema-user, as the user) creates the PATH of a `dir_not_empty` watch, or
-  the directory part of an `exists_glob` one (never the pattern itself);
+  schema-user, as the user) creates PATH as a directory for `dir_not_empty`,
+  `changed` and `modified`, and nothing for `exists`/`exists_glob` — what
+  systemd's path_spec_mkdir does (revised after review; the first draft
+  created a glob's directory);
   parents 0755. Owned by whoever creates it (root under PID 1), not by
   user=: systemd's MakeDirectory= does the same, so imports keep behaving.
 - `trigger_limit_burst=` (default 200), `trigger_limit_interval_sec=`

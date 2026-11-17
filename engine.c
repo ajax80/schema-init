@@ -102,6 +102,10 @@ static int          pass_changed = 1;   /* first pass, or last pass moved a serv
 #define PASS_RERUN_MAX  16                /* ...at most this many passes in a row */
 int          psi_fd = -1;
 static int          ino_fd = -1;
+/* watch_path= has its own fd: a ready_path dir watch keeps its narrow mask
+ * instead of sharing a wd (and the widest mask) with a path watch */
+static int          path_fd = -1;
+static int          path_gc_due;
 static int64_t      ready_event_due = 0;    /* CLOCK_MONOTONIC ms, 0 = none */
 static int64_t      ready_backstop_due = 0;
 int64_t      cpu_check_due = 0;
@@ -576,6 +580,7 @@ static int held_now(const service_t *svc) {
 /* start/restart/reset lift a stop's hold, not the .svc's own no_restart=1:
  * clearing the shared flag made a no_restart service auto-restart from then on */
 static void restart_policy_restore(service_t *svc) {
+    svc->path_stop = 0;
     if (svc->no_restart_cfg) svc->flags |= SVC_NO_RESTART;
     else svc->flags &= ~SVC_NO_RESTART;
 }
@@ -978,6 +983,7 @@ static void fork_adopt(service_t *svc) {
 #define LISTEN_MIN_RUN_SECS 2   /* a quicker exit served nothing: recovery arc, not a wake loop */
 
 static void path_after_run(service_t *s);
+static void path_gc(void);
 
 /* timer fire complete: re-arm regardless of exit code (cron semantics — a
  * failed or condition-skipped run isn't retried, it runs next window).
@@ -1515,9 +1521,9 @@ static void ready_watch(service_t *svc) {
     slash = strrchr(dir, '/');
     if (slash == dir) slash[1] = '\0';
     else if (slash) *slash = '\0';
-    int wd = ino_fd >= 0 && slash ? inotify_add_watch(ino_fd, dir, WATCH_INO_MASK) : -1;
-    svc->ready_wd = wd > 0 ? wd : 0;
-    svc->ready_watched = wd >= 0 ? 1 : -1;
+    svc->ready_watched = (ino_fd >= 0 && slash &&
+        inotify_add_watch(ino_fd, dir, IN_DELETE | IN_MOVED_FROM | IN_DELETE_SELF |
+                                       IN_MOVE_SELF | IN_UNMOUNT) >= 0) ? 1 : -1;
     if (svc->ready_watched > 0 && access(svc->ready_path, F_OK) != 0)
         ready_lost(svc);
 }
@@ -1550,24 +1556,28 @@ static void path_mark(service_t *s, int k) {
 static void path_event(service_t *s, const struct inotify_event *ev) {
     for (int k = 0; k < s->watch_count; k++) {
         int e = watch_event(&s->watch[k], ev);
-        if (e & WATCH_EV_REARM) e |= watch_rearm(ino_fd, &s->watch[k]);
+        if (e & WATCH_EV_REARM) {
+            e |= watch_rearm(path_fd, &s->watch[k]);
+            path_gc_due = 1;
+        }
         if (e & WATCH_EV_FIRE) path_mark(s, k);
     }
 }
 
-/* make_directory, watches on the current ino_fd, and a level watch that
+/* make_directory, watches on the current path_fd, and a level watch that
  * already holds fires. Born armed (PERFECT) only the first time: a reload
  * or re-exec keeps a running or parked service's state. */
 static void path_arm(service_t *s) {
     if (!s->path_armed) {
-        s->inst.state = STATE_PERFECT;
+        /* a running service that just gained watch_path= finishes its run first */
+        if (s->child_pid <= 0) s->inst.state = STATE_PERFECT;
         s->path_armed = 1;
     }
     for (int k = 0; k < s->watch_count; k++) {
         watch_t *w = &s->watch[k];
         if (s->make_directory && watch_make_dir(w, s->directory_mode) != 0)
             elog(stderr, "%s: make_directory for %s: %s\n", s->name, w->path, strerror(errno));
-        if (ino_fd >= 0) watch_arm(ino_fd, w);
+        if (path_fd >= 0) watch_arm(path_fd, w);
         if (watch_is_level(w) && watch_level_true(w)) path_mark(s, k);
     }
 }
@@ -1578,8 +1588,9 @@ static void path_sweep(void) {
         service_t *s = &services[i];
         if (!(s->flags & SVC_PATH)) continue;
         for (int k = 0; k < s->watch_count; k++)
-            if (ino_fd >= 0 && (watch_rearm(ino_fd, &s->watch[k]) & WATCH_EV_FIRE)) path_mark(s, k);
+            if (path_fd >= 0 && (watch_rearm(path_fd, &s->watch[k]) & WATCH_EV_FIRE)) path_mark(s, k);
     }
+    path_gc();
 }
 
 static void path_fire(service_t *s) {
@@ -1606,9 +1617,9 @@ static void path_fire(service_t *s) {
 /* run over: armed again, or parked for good if it was stopped; a level
  * watch still holding, a queued edge event or a restart runs it again */
 static void path_after_run(service_t *s) {
-    int due = s->path_rerun || (s->ctl_killed && !(s->flags & SVC_NO_RESTART));
+    int due = s->path_rerun || (s->ctl_killed && !s->path_stop);
     s->path_rerun = 0;
-    if (s->ctl_killed && (s->flags & SVC_NO_RESTART)) {
+    if (s->path_stop) {
         s->inst.state = STATE_EXCISED;
         s->excise_reason = EXC_NONE;
         return;
@@ -1622,23 +1633,38 @@ static void path_after_run(service_t *s) {
     s->path_due = (uint8_t)due;
 }
 
-static void ino_drain(void) {
+static void ready_inotify_drain(void) {
+    char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
+    while (read(ino_fd, buf, sizeof(buf)) > 0)
+        ;
+    if (!ready_event_due)
+        ready_event_due = (int64_t)monotonic_ms() + READY_EVENT_GRACE_MS;
+}
+
+/* wds no path watch holds any more: ancestors a path has grown past, and
+ * the watches of services a reload dropped */
+static void path_gc(void) {
+    static watch_t *live[MAX_SERVICES * MAX_WATCH];
+    int n = 0;
+    path_gc_due = 0;
+    for (int i = 0; i < svc_count; i++)
+        if (services[i].flags & SVC_PATH)
+            for (int k = 0; k < services[i].watch_count; k++) live[n++] = &services[i].watch[k];
+    if (path_fd >= 0) watch_gc(path_fd, live, n);
+}
+
+static void path_drain(void) {
     char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
     ssize_t n;
-    int ready_hit = 0;
-    while ((n = read(ino_fd, buf, sizeof(buf))) > 0) {
+    while ((n = read(path_fd, buf, sizeof(buf))) > 0) {
         for (char *q = buf; q < buf + n;) {
             const struct inotify_event *ev = (const struct inotify_event *)q;
             q += sizeof *ev + ev->len;
-            if (ev->mask & IN_Q_OVERFLOW) ready_hit = 1;
-            for (int i = 0; i < svc_count; i++) {
-                if (services[i].ready_wd && ev->wd == services[i].ready_wd) ready_hit = 1;
+            for (int i = 0; i < svc_count; i++)
                 if (services[i].flags & SVC_PATH) path_event(&services[i], ev);
-            }
         }
     }
-    if (ready_hit && !ready_event_due)
-        ready_event_due = (int64_t)monotonic_ms() + READY_EVENT_GRACE_MS;
+    if (path_gc_due) path_gc();
 }
 
 static void tick_service(service_t *svc,
@@ -2561,6 +2587,7 @@ static void ctl_cmd(int fd, char *line) {
         for (i = 0; i < svc_count; i++) {
             if (strcmp(services[i].name, name) != 0) continue;
             services[i].flags |= SVC_NO_RESTART;
+            services[i].path_stop = 1;
             services[i].restart_at.tv_sec = services[i].restart_at.tv_nsec = 0;
             /* stopped on purpose: its bound's return must not start it */
             services[i].bind_held = 0;
@@ -3489,8 +3516,17 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     service_cgroup_root_low(services, svc_count);
     eviction_readded();
 
-    for (i = 0; i < svc_count; i++)
-        if (services[i].flags & SVC_PATH) path_arm(&services[i]);
+    for (i = 0; i < svc_count; i++) {
+        service_t *s = &services[i];
+        if (s->flags & SVC_PATH) {
+            path_arm(s);
+        } else if (s->path_armed) {
+            /* watch_path= removed: an armed one is now a plain service, so start it */
+            s->path_armed = s->path_due = s->path_rerun = 0;
+            if (s->child_pid <= 0 && s->inst.state == STATE_PERFECT) s->inst.state = STATE_NEW_PROCESS;
+        }
+    }
+    path_gc();
 
     /* Arm newly introduced timer services or ensure they are scheduled */
     struct timespec tnow;
@@ -3710,6 +3746,7 @@ void engine_open(int adopting) {
     }
     engine_hooks.after_sockets();
     ino_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    path_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (adopting) {
         /* Children that exited during the swap are zombies only the restored
          * child_pid can attribute; their SIGCHLD stays pending for signalfd. */
@@ -3750,8 +3787,8 @@ void engine_run(void) {
     int i;
 
     while (engine_running) {
-        struct pollfd fds[5 + CTL_PENDING + MAX_SERVICES * MAX_LISTEN];
-        int fd_svc[5 + CTL_PENDING + MAX_SERVICES * MAX_LISTEN];
+        struct pollfd fds[6 + CTL_PENDING + MAX_SERVICES * MAX_LISTEN];
+        int fd_svc[6 + CTL_PENDING + MAX_SERVICES * MAX_LISTEN];
         int nfds = 0, nfixed;
         int psi_fired = 0;
         uint8_t grp_states[MAX_GROUPS];
@@ -3786,6 +3823,12 @@ void engine_run(void) {
         }
         if (ino_fd >= 0) {
             fds[nfds].fd = ino_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+        if (path_fd >= 0) {
+            fds[nfds].fd = path_fd;
             fds[nfds].events = POLLIN;
             fds[nfds].revents = 0;
             nfds++;
@@ -3851,7 +3894,9 @@ void engine_run(void) {
                     } else if (fds[e].fd == notify_fd) {
                         notify_poll(NOTIFY_BATCH_MAX);
                     } else if (fds[e].fd == ino_fd) {
-                        ino_drain();
+                        ready_inotify_drain();
+                    } else if (fds[e].fd == path_fd) {
+                        path_drain();
                     }
                 }
                 /* after sig_fd: a command must see the deaths reaped this wake */

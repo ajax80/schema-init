@@ -12,6 +12,38 @@ static const char *const kinds[] = { "exists", "exists_glob", "dir_not_empty", "
 
 #define STRUCTURAL (IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM)
 #define GONE       (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT)
+#define SELF       (IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT)
+
+/* Watches on one inode share a wd, so each add only widens the mask
+ * (IN_MASK_ADD) and asks for no more than its role needs: a parent never
+ * takes content events, or every write to a busy dir would wake PID 1. */
+static struct { int fd, wd; } reg[4096];
+static int nreg;
+
+static int add(int fd, const char *path, uint32_t mask) {
+    int wd = inotify_add_watch(fd, path, mask | IN_MASK_ADD);
+    if (wd < 0) return -1;
+    for (int i = 0; i < nreg; i++)
+        if (reg[i].fd == fd && reg[i].wd == wd) return wd;
+    if (nreg < (int)(sizeof reg / sizeof reg[0])) {
+        reg[nreg].fd = fd;
+        reg[nreg++].wd = wd;
+    }
+    return wd;
+}
+
+/* drop the wds no live watch holds any more: ancestors left behind as a
+ * path appeared, and the watches of services that are gone */
+void watch_gc(int ino_fd, watch_t *const *live, int n) {
+    for (int i = 0; i < nreg;) {
+        int used = reg[i].fd != ino_fd;
+        for (int k = 0; !used && k < n; k++)
+            used = live[k]->wd_parent == reg[i].wd || live[k]->wd_leaf == reg[i].wd;
+        if (used) { i++; continue; }
+        inotify_rm_watch(ino_fd, reg[i].wd);
+        reg[i] = reg[--nreg];
+    }
+}
 
 const char *watch_kind_name(uint8_t kind) {
     return kind < sizeof kinds / sizeof kinds[0] ? kinds[kind] : "?";
@@ -120,14 +152,15 @@ int watch_rearm(int ino_fd, watch_t *w) {
         memcpy(cur, next, sizeof cur);
     }
     w->depth = total - i;
-    w->wd_parent = inotify_add_watch(ino_fd, cur, WATCH_INO_MASK | IN_ONLYDIR);
+    w->wd_parent = add(ino_fd, cur, STRUCTURAL | SELF | IN_ONLYDIR);
     w->wd_leaf = -1;
     seen = !glob_k && lstat(w->path, &st) == 0;
     if (seen && w->depth == 1) {
         if (edge)
-            w->wd_leaf = inotify_add_watch(ino_fd, w->path, WATCH_INO_MASK | IN_DONT_FOLLOW);
+            w->wd_leaf = add(ino_fd, w->path, IN_CLOSE_WRITE | IN_ATTRIB | STRUCTURAL | SELF | IN_DONT_FOLLOW |
+                                              (w->kind == WATCH_MODIFIED ? IN_MODIFY : 0));
         else if (w->kind == WATCH_DIR_NOT_EMPTY)
-            w->wd_leaf = inotify_add_watch(ino_fd, w->path, WATCH_INO_MASK | IN_ONLYDIR);
+            w->wd_leaf = add(ino_fd, w->path, IN_CREATE | IN_MOVED_TO | SELF | IN_ONLYDIR);
     }
     int fire = edge ? (seen && !w->leaf_seen) : watch_level_true(w);
     w->leaf_seen = (uint8_t)seen;
@@ -171,10 +204,11 @@ int watch_event(const watch_t *w, const struct inotify_event *ev) {
     return WATCH_EV_REARM | (edge ? WATCH_EV_FIRE : level_fire(w));
 }
 
+/* systemd's MakeDirectory=: PATH itself, for every kind but the exists ones */
 int watch_make_dir(const watch_t *w, mode_t mode) {
     char tgt[sizeof w->path];
-    if (w->kind != WATCH_DIR_NOT_EMPTY && w->kind != WATCH_EXISTS_GLOB) return 0;
-    target(w, tgt, sizeof tgt);
+    if (w->kind == WATCH_EXISTS || w->kind == WATCH_EXISTS_GLOB) return 0;
+    snprintf(tgt, sizeof tgt, "%s", w->path);
     for (char *q = tgt + 1; *q; q++) {
         if (*q != '/') continue;
         *q = 0;

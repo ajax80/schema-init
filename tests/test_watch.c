@@ -1,5 +1,6 @@
 #include "../watch.h"
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -200,6 +201,68 @@ static void test_sibling_noise(void) {
     }
 }
 
+/* the mask inotify holds for path's inode on fd (fdinfo), -1 if unwatched;
+ * *count gets the number of watches on fd */
+static long watched_mask(int f, const char *path, int *count) {
+    char fi[64], line[512];
+    struct stat st;
+    long m = -1;
+    if (count) *count = 0;
+    snprintf(fi, sizeof fi, "/proc/self/fdinfo/%d", f);
+    FILE *fp = fopen(fi, "r");
+    assert(fp);
+    int have = path && stat(path, &st) == 0;
+    while (fgets(line, sizeof line, fp)) {
+        unsigned long ino, mask;
+        if (sscanf(line, "inotify wd:%*d ino:%lx sdev:%*x mask:%lx", &ino, &mask) != 2) continue;
+        if (count) (*count)++;
+        if (have && ino == (unsigned long)st.st_ino) m = (long)mask;
+    }
+    fclose(fp);
+    return m;
+}
+
+static void test_masks(void) {
+    watch_t w;
+    assert(mkdir(p("mk"), 0755) == 0);
+    put("mk/f", "0");
+    setw(&w, "changed", "mk/f");
+    long pm = watched_mask(fd, p("mk"), NULL), lm = watched_mask(fd, p("mk/f"), NULL);
+    /* the parent sees only structural events: a busy dir doesn't wake us */
+    assert(pm >= 0 && !(pm & (IN_MODIFY | IN_CLOSE_WRITE | IN_ATTRIB)) && (pm & IN_CREATE));
+    assert(lm >= 0 && (lm & IN_CLOSE_WRITE) && !(lm & IN_MODIFY));
+    watch_t m;
+    setw(&m, "modified", "mk/f");
+    assert(watched_mask(fd, p("mk/f"), NULL) & IN_MODIFY);
+    /* a narrower later watch never narrows a shared inode's mask */
+    setw(&w, "changed", "mk/f");
+    assert(watched_mask(fd, p("mk/f"), NULL) & IN_MODIFY);
+}
+
+static void test_gc(void) {
+    int g = inotify_init1(IN_NONBLOCK | IN_CLOEXEC), n;
+    watch_t w, *live[1] = { &w };
+    char v[320];
+    assert(g >= 0);
+    snprintf(v, sizeof v, "changed:%s", p("gc/a/b/f"));
+    assert(watch_parse(v, &w) == 0);
+    watch_arm(g, &w);
+    assert(mkdir(p("gc"), 0755) == 0 || errno == EEXIST);
+    assert(mkdir(p("gc/a"), 0755) == 0 && mkdir(p("gc/a/b"), 0755) == 0);
+    put("gc/a/b/f", "x");
+    watch_rearm(g, &w);
+    watched_mask(g, NULL, &n);
+    assert(n >= 3);   /* T (or gc), gc/a/b, f: the old ancestor lingers */
+    watch_gc(g, live, 1);
+    watched_mask(g, NULL, &n);
+    assert(n == 2 && watched_mask(g, p("gc/a/b"), NULL) >= 0 && watched_mask(g, p("gc/a/b/f"), NULL) >= 0);
+    /* a watch that is gone takes its wds with it */
+    watch_gc(g, live, 0);
+    watched_mask(g, NULL, &n);
+    assert(n == 0);
+    close(g);
+}
+
 static void test_make_dir(void) {
     watch_t w;
     struct stat st;
@@ -208,13 +271,20 @@ static void test_make_dir(void) {
     assert(watch_parse(v, &w) == 0 && watch_make_dir(&w, 0770) == 0);
     assert(stat(p("m1/n"), &st) == 0 && (st.st_mode & 07777) == 0770);
     assert(stat(p("m1"), &st) == 0 && (st.st_mode & 07777) == 0755);
-    snprintf(v, sizeof v, "exists_glob:%s", p("g/*.q"));
-    assert(watch_parse(v, &w) == 0 && watch_make_dir(&w, 0755) == 0);
-    assert(stat(p("g"), &st) == 0 && S_ISDIR(st.st_mode));
-    assert(stat(p("g/*.q"), &st) != 0);
+    /* systemd's MakeDirectory=: PATH itself for dir_not_empty, changed and
+     * modified; nothing for exists and exists_glob */
     snprintf(v, sizeof v, "changed:%s", p("c1/f"));
     assert(watch_parse(v, &w) == 0 && watch_make_dir(&w, 0755) == 0);
-    assert(stat(p("c1"), &st) != 0);
+    assert(stat(p("c1/f"), &st) == 0 && S_ISDIR(st.st_mode));
+    snprintf(v, sizeof v, "modified:%s", p("c2"));
+    assert(watch_parse(v, &w) == 0 && watch_make_dir(&w, 0755) == 0);
+    assert(stat(p("c2"), &st) == 0 && S_ISDIR(st.st_mode));
+    snprintf(v, sizeof v, "exists_glob:%s", p("g/*.q"));
+    assert(watch_parse(v, &w) == 0 && watch_make_dir(&w, 0755) == 0);
+    assert(stat(p("g"), &st) != 0);
+    snprintf(v, sizeof v, "exists:%s", p("e1/x"));
+    assert(watch_parse(v, &w) == 0 && watch_make_dir(&w, 0755) == 0);
+    assert(stat(p("e1"), &st) != 0);
 }
 
 int main(void) {
@@ -233,6 +303,8 @@ int main(void) {
     test_dir_recreated();
     test_sibling_noise();
     test_make_dir();
+    test_masks();
+    test_gc();
     char cmd[400];
     snprintf(cmd, sizeof cmd, "rm -rf %s", T);
     assert(system(cmd) == 0);

@@ -9,11 +9,6 @@
 
 enum { WATCH_EXISTS, WATCH_EXISTS_GLOB, WATCH_DIR_NOT_EMPTY, WATCH_CHANGED, WATCH_MODIFIED };
 
-/* every inotify_add_watch on the engine's fd uses this one mask: watches on
- * the same inode share a wd, and a narrower mask would replace a wider one */
-#define WATCH_INO_MASK (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE | \
-                        IN_MODIFY | IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT)
-
 typedef struct {
     uint8_t kind;
     uint8_t leaf_seen;   /* leaf existed at the last arm: absent→present fires edge kinds */
@@ -35,5 +30,6 @@ int  watch_rearm(int ino_fd, watch_t *w);
 int  watch_level_true(const watch_t *w);
 int  watch_event(const watch_t *w, const struct inotify_event *ev);
 int  watch_make_dir(const watch_t *w, mode_t mode);
+void watch_gc(int ino_fd, watch_t *const *live, int n);
 
 #endif

@@ -452,7 +452,6 @@ typedef struct {
     uint64_t         ready_stale_ino;
     struct timespec  ready_stale_ctime;
     int              ready_watched;    /* 1 inotify watch on dirname(ready_path), -1 add failed (poll), 0 not yet */
-    int              ready_wd;         /* that watch's wd, 0 none: only its events schedule a recheck */
     int              oom_adj_set;      /* oom_score_adj= given in the .svc */
     int              oom_score_adj;    /* -1000..1000, written before exec; inherited by children */
     int              notify;           /* notify=1: gets NOTIFY_SOCKET; READY=1 promotes (fallback: stable_secs) */
@@ -569,6 +568,7 @@ typedef struct {
     time_t           path_last_fire;
     uint8_t          path_armed;         /* born armed once: later arms keep the state */
     uint8_t          path_which;         /* the watch that fired last, for the rail line */
+    uint8_t          path_stop;          /* schema-ctl stop: the run's end parks it, not a restart */
 } service_t;
 
 /* restart_sec: systemd's RestartSec=. Without it a service that dies at once

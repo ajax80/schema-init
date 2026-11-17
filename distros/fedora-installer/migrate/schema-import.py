@@ -891,10 +891,11 @@ def _check_line_len(lines):
             raise Skip("%s= line is %d bytes (limit 511)" % (ln.split("=", 1)[0], len(ln.encode())))
 
 
+# An activator (.timer, .path) and the .service it starts as one .svc named
+# after the activator: the service's restart/oneshot lines go, because the
+# activator decides when it runs (and oneshot would add a 90 s start timeout
+# systemd does not have for Type=oneshot).
 def _fold(name, what, tlines, tnotes, act_sections, svc_sections, known, unit):
-    """An activating unit (.timer, .path) and the .service it starts as one
-    .svc named after the activator: the service body without its restart
-    lines (the activator decides when it runs) plus tlines."""
     tconds = condition_lines(act_sections)
     sconds = condition_lines(svc_sections)
     if any(":|" in c for c in tconds) and any(":|" in c for c in sconds):
@@ -934,8 +935,6 @@ _PATH_KINDS = (("PathExists", "exists"), ("PathExistsGlob", "exists_glob"), ("Pa
 
 
 def path_lines(sections, name):
-    """[Path] keys to watch_path=/make_directory=/... lines plus notes. Raises
-    Skip when a path has no schema equivalent."""
     p = sections.get("Path", [])
     lines, notes = [], []
     for key, kind in _PATH_KINDS:
@@ -979,10 +978,12 @@ def path_lines(sections, name):
 
 
 def path_to_svc(name, path_sections, svc_sections, known=None, unit=None):
-    """A .path and the .service it starts as one watch_path= .svc, named after
-    the path unit."""
     plines, pnotes = path_lines(path_sections, unit or name)
-    return _fold(name, "path", plines, pnotes, path_sections, svc_sections, known, unit)
+    body = _fold(name, "path", plines, pnotes, path_sections, svc_sections, known, unit)
+    if any(ln.startswith("pid_file=") for ln in body.splitlines()):
+        # the launcher's exit would end the run while its daemon lives on
+        raise Skip("forking service (pid_file=) cannot be started by a path unit")
+    return body
 
 
 _LISTEN_KINDS = {"ListenStream": "stream", "ListenDatagram": "dgram",
@@ -2170,22 +2171,26 @@ def skip_stub(name, path, reason, text):
 
 def _timer_for(name):
     """The .timer that starts name.service (same name or Unit=), if any."""
+    return _activator_for(name, ".timer", "Timer")
+
+
+def _activator_for(name, suffix, section):
     for d in _unit_dirs():
         try:
             entries = os.listdir(d)
         except OSError:
             continue
         for e in entries:
-            if not e.endswith(".timer") or "@" in e:
+            if not e.endswith(suffix) or "@" in e:
                 continue
-            if e == name + ".timer":
+            if e == name + suffix:
                 return e
             try:
                 with open(os.path.join(d, e)) as f:
                     t = parse_unit(f.read())
             except (OSError, ValueError):
                 continue
-            if _get_last(t.get("Timer", []), "Unit") == name + ".service":
+            if _get_last(t.get(section, []), "Unit") == name + ".service":
                 return e
     return None
 
@@ -2693,6 +2698,10 @@ def import_one(name, force=False, queued=()):
             if not sections.get("Install") and _timer_for(name):
                 raise Skip("started by %s, which owns %s.svc — enable the timer"
                            % (_timer_for(name), name))
+            # a service only its .path starts would otherwise run at every boot
+            owner = not sections.get("Install") and _activator_for(name, ".path", "Path")
+            if owner:
+                raise Skip("started by %s — enable the path unit" % owner)
             body = unit_to_svc(name, sections, sock_sections, lazy, known)
         body = _drop_cycles(name, body)
         owner = _exec_owner(body, out)

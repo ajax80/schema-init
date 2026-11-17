@@ -83,6 +83,8 @@ int main(void) {
     refuse("watch_path=exists:/a\non_boot_sec=5\n", "watch_path");
     refuse("watch_path=exists:/a\non_active_sec=5\n", "watch_path");
     refuse("watch_path=exists:/a\non_calendar=03:00\n", "watch_path");
+    /* a forking launcher's exit is not the end of the run: refused */
+    refuse("watch_path=exists:/a\npid_file=/run/x.pid\n", "pid_file");
 
     unlink(path);
     unlink(errf);

@@ -33,6 +33,10 @@ svc pre "watch_path=exists:$T/pre\n" "rm -f $T/pre"
 mkdir -p "$T/rp"; : > "$T/rp/other"
 printf 'name=ready\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/ready.pid; touch %s/rp/ready; exec sleep 600\nready_path=%s/rp/ready\n' "$T" "$T" "$T" > "$S/ready.svc"
 svc ch2 "watch_path=changed:$T/rp/other\n" ":"
+: > "$T/nr"
+svc nr "watch_path=changed:$T/nr\nno_restart=1\n" "sleep 2"
+printf 'name=dmn\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/dmn.pid; exec sleep 600\n' "$T" > "$S/dmn.svc"
+svc rmw "watch_path=exists:$T/rmwflag\n" ":"
 chmod 600 "$S"/*.svc
 
 ./schema-user > "$T/out" 2>&1 &
@@ -106,5 +110,29 @@ svc late "watch_path=exists:$T/late\n" "rm -f $T/late"
 chmod 600 "$S/late.svc"
 ./schema-ctl --user add "$S/late.svc" > /dev/null 2>&1 || fail "add late"
 until_ok '[ "$(n late)" = 1 ]' || fail "late: $(n late) runs after add"
+
+# a ready_path's directory watch stays narrow: writes beside it must not wake the engine
+ri=$(printf '%x' "$(stat -c %i "$T/rp")")
+m=$(cat /proc/$PID/fdinfo/* 2>/dev/null | awk -v i="$ri" '$1 == "inotify" { split($3, a, ":"); split($5, b, ":"); if (a[2] == i) print b[2] }')
+[ -n "$m" ] || fail "rp is not watched"
+for x in $m; do [ $((0x$x & 0x2)) = 0 ] || fail "rp watched with IN_MODIFY (mask $x)"; done
+
+# restart of a running path service with no_restart=1 runs it again and stays armed
+printf 1 > "$T/nr"
+until_ok '[ "$(n nr)" = 1 ]' || fail "nr never ran"
+./schema-ctl --user restart nr > /dev/null 2>&1
+until_ok '[ "$(n nr)" = 2 ]' || fail "nr: restart did not rerun ($(n nr))"
+until_ok 'st nr | grep -q "state=PERFECT"' || fail "nr not armed after restart: $(st nr | head -1)"
+
+# reload: a running daemon that gains watch_path= keeps running; a path
+# service that loses it starts as a plain service
+DP=$(cat "$T/dmn.pid")
+printf 'name=dmn\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/dmn.pid; exec sleep 600\nwatch_path=exists:%s/dflag\n' "$T" "$T" > "$S/dmn.svc"
+printf 'name=rmw\nexec=/bin/sh\nargs=-c\nargs=echo $$ > %s/rmw.pid; exec sleep 600\n' "$T" > "$S/rmw.svc"
+chmod 600 "$S/dmn.svc" "$S/rmw.svc"
+./schema-ctl --user reload > /dev/null 2>&1 || fail "reload"
+sleep 0.5
+kill -0 "$DP" 2>/dev/null && ! st dmn | grep -q "state=PERFECT" || fail "dmn: $(st dmn | head -1)"
+until_ok "[ -s $T/rmw.pid ]" || fail "rmw never started once watch_path= was gone: $(st rmw | head -1)"
 
 echo "test_watch_path_live: ok"

@@ -1717,6 +1717,15 @@ try:
     _put("systemd-ask-password-console.service", "[Service]\nExecStart=/usr/bin/systemd-tty-ask-password-agent\n")
     _st, _det = si.import_one("systemd-ask-password-console.path")
     check("path: ask-password units are skipped", _st == "skipped")
+    _put("onlypath.path", "[Path]\nPathExists=/run/op\n")
+    _put("onlypath.service", "[Service]\nType=oneshot\nExecStart=/usr/bin/op\n")
+    _st, _det = si.import_one("onlypath")
+    check("path: a service only a .path starts is not imported as a boot daemon",
+          _st == "skipped" and "onlypath.path" in _det[0])
+    _put("forky.path", "[Path]\nPathExists=/run/fk\n")
+    _put("forky.service", "[Service]\nType=forking\nPIDFile=/run/forky.pid\nExecStart=/usr/sbin/forky\n")
+    _st, _det = si.import_one("forky.path")
+    check("path: a forking target is skipped", _st == "skipped" and "pid_file" in _det[0])
 finally:
     for _k, _v in _saved_p.items():
         if _v is None:
