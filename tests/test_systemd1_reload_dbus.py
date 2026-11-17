@@ -165,6 +165,7 @@ for reason, want in (("start-timeout", "timeout"), ("main-pid-timeout", "timeout
                      ("exit-code", "exit-code"), ("signal", "signal"), ("core-dump", "core-dump"),
                      ("readiness-lost", "protocol"), ("no-cgroup", "resources"),
                      ("listen-fail", "resources"), ("fuse", "resources"), ("probe-failed", "resources"),
+                     ("trigger-limit-hit", "trigger-limit-hit"),
                      ("none", "success")):
     v.update_state({"pid": 0, "state": "EXCISED", "restarts": 0, "circuit_broken": False, "excise_reason": reason})
     check("excise_reason=%s: Result=%s" % (reason, want), v.result == want)

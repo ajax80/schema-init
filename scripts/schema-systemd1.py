@@ -256,6 +256,7 @@ EXCISE_RESULT = {
     'listen-fail': 'resources',
     'fuse': 'resources',
     'probe-failed': 'resources',
+    'trigger-limit-hit': 'trigger-limit-hit',
     'bind': 'success',
 }
 
