@@ -30,6 +30,13 @@ int parse_protect_system(const char *val, uint8_t *out);
 /* bounding-set caps the NS_K_* bits in kernel take away */
 uint64_t ns_kernel_cap_drop(uint8_t kernel);
 
+/* private_network: a new network namespace with loopback up. 0, or -1 + errno */
+int private_net(void);
+
+/* memory_deny_write_execute: PR_SET_MDWE, kept across execve. -1 + errno
+ * (EINVAL before Linux 6.3) when the kernel can't */
+int apply_mdwe(void);
+
 #define MAX_RW_PATHS 8
 
 /* Build the private mount view in the forked child, before caps are dropped.

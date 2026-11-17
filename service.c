@@ -739,8 +739,13 @@ static int hardening_finalize(service_t *svc) {
 
 int service_apply_hardening(const service_t *svc) {
     const char *step = "";
+    if ((svc->ns_kernel & NS_K_NETWORK) && private_net() != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: private_network: %d\n", svc->name, errno);
+        return -1;
+    }
     if (apply_mount_ns(svc->name, svc->ns_private_tmp, svc->ns_protect_system,
-                       svc->ns_protect_home, svc->ns_kernel, (const char *const *)svc->rw_path,
+                       svc->ns_protect_home, svc->ns_kernel & NS_K_MOUNT_BITS,
+                       (const char *const *)svc->rw_path,
                        svc->rw_path_count, &step) != 0) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: mount_ns: %s: %d\n",
                 svc->name, step, errno);
@@ -765,6 +770,13 @@ int service_apply_hardening(const service_t *svc) {
                     svc->name, errno);
             return -1;
         }
+    }
+    /* last, and never skipped: the service asked for it, so a kernel that
+     * can't (before 6.3) fails the start rather than run it unprotected */
+    if ((svc->ns_kernel & NS_K_MDWE) && apply_mdwe() != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: memory_deny_write_execute: %s\n",
+                svc->name, errno == EINVAL ? "kernel has no PR_SET_MDWE (needs Linux 6.3+)" : strerror(errno));
+        return -1;
     }
     return 0;
 }

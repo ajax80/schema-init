@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <sys/mount.h>
 #include <linux/capability.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -34,6 +38,31 @@ uint64_t ns_kernel_cap_drop(uint8_t kernel) {
     if (kernel & NS_K_MODULES) m |= 1ULL << CAP_SYS_MODULE;
     if (kernel & NS_K_DEVICES) m |= 1ULL << CAP_MKNOD | 1ULL << CAP_SYS_RAWIO;
     return m;
+}
+
+int private_net(void) {
+    struct ifreq ifr = { 0 };
+    int s, r = -1;
+    if (unshare(CLONE_NEWNET) != 0) return -1;
+    s = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (s < 0) return -1;
+    snprintf(ifr.ifr_name, sizeof ifr.ifr_name, "lo");
+    if (ioctl(s, SIOCGIFFLAGS, &ifr) == 0) {
+        ifr.ifr_flags |= IFF_UP;
+        r = ioctl(s, SIOCSIFFLAGS, &ifr);
+    }
+    close(s);
+    return r;
+}
+
+#ifndef PR_SET_MDWE
+#define PR_SET_MDWE 65
+#endif
+#ifndef PR_MDWE_REFUSE_EXEC_GAIN
+#define PR_MDWE_REFUSE_EXEC_GAIN 1
+#endif
+int apply_mdwe(void) {
+    return prctl(PR_SET_MDWE, PR_MDWE_REFUSE_EXEC_GAIN, 0, 0, 0) == 0 ? 0 : -1;
 }
 
 /* bind p onto itself, then set (ro=1) or clear (ro=0) MOUNT_ATTR_RDONLY */

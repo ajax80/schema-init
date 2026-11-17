@@ -9,15 +9,20 @@
 #include <sys/stat.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
+#include <ifaddrs.h>
 #include <sched.h>
 #include <fcntl.h>
 #include <linux/capability.h>
 
 /* the bounding set service_apply_hardening leaves, read in a forked child
  * (a user namespace when not root); -1 when no userns is available */
+static unsigned probe_flags;  /* set by hardened_bounding: what the child saw */
+#define PROBE_RWX_REFUSED 1
+#define PROBE_ONLY_LO     2
 static long long hardened_bounding(const service_t *svc) {
     int pfd[2], st;
-    unsigned long long caps = 0;
+    unsigned long long caps = 0, out[2];
     assert(pipe(pfd) == 0);
     pid_t pid = fork();
     assert(pid >= 0);
@@ -40,16 +45,28 @@ static long long hardened_bounding(const service_t *svc) {
         if (service_apply_hardening(svc) != 0) _exit(1);
         for (int c = 0; c < 64; c++)
             if (prctl(PR_CAPBSET_READ, c) == 1) caps |= 1ULL << c;
-        (void)!write(pfd[1], &caps, sizeof caps);
+        out[0] = caps;
+        out[1] = 0;
+        if (mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) == MAP_FAILED)
+            out[1] |= PROBE_RWX_REFUSED;
+        {
+            struct ifaddrs *ifa, *i;
+            int lo_only = getifaddrs(&ifa) == 0;
+            for (i = lo_only ? ifa : NULL; i; i = i->ifa_next)
+                if (strcmp(i->ifa_name, "lo")) lo_only = 0;
+            if (lo_only) { freeifaddrs(ifa); out[1] |= PROBE_ONLY_LO; }
+        }
+        (void)!write(pfd[1], out, sizeof out);
         _exit(0);
     }
     close(pfd[1]);
     assert(waitpid(pid, &st, 0) == pid);
     if (WIFEXITED(st) && WEXITSTATUS(st) == 99) { close(pfd[0]); return -1; }
     assert(WIFEXITED(st) && WEXITSTATUS(st) == 0);
-    assert(read(pfd[0], &caps, sizeof caps) == sizeof caps);
+    assert(read(pfd[0], out, sizeof out) == sizeof out);
     close(pfd[0]);
-    return (long long)caps;
+    probe_flags = (unsigned)out[1];
+    return (long long)out[0];
 }
 
 static void write_svc(const char *path, const char *body) {
@@ -267,6 +284,11 @@ int main(void) {
         bs = hardened_bounding(&one);
         assert(!(bs & (1LL << CAP_MKNOD)) && !(bs & (1LL << CAP_SYS_RAWIO)));
         assert((bs & (1LL << CAP_SYS_MODULE)) && (bs & (1LL << CAP_NET_ADMIN)));
+        assert(!(probe_flags & PROBE_RWX_REFUSED) && !(probe_flags & PROBE_ONLY_LO));
+        write_svc(path, "name=ok\nexec=/usr/bin/true\nmemory_deny_write_execute=1\nprivate_network=1\n");
+        assert(service_load_one(path, &one) == 0);
+        bs = hardened_bounding(&one);
+        assert(probe_flags == (PROBE_RWX_REFUSED | PROBE_ONLY_LO));
     } else
         printf("SKIP  kernel cap drops (no userns)\n");
     unlink(path);
