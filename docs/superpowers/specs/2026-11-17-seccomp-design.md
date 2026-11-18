@@ -16,9 +16,11 @@ hand-built BPF program.
   denylist. Later lines add to the same set; in allowlist mode a later `~`
   line removes from it, in denylist mode a later plain line removes from the
   denylist (systemd's rules). An empty value clears (drop-in convention).
-- `syscall_error_number=ERRNO`: what a blocked syscall returns. Unset, a
-  blocked syscall kills the process (SECCOMP_RET_KILL_PROCESS), as in
-  systemd. A per-entry `:ERRNO` wins for that entry.
+- `syscall_error_number=ERRNO`: what a blocked syscall returns; `kill`
+  kills the process (SECCOMP_RET_KILL_PROCESS). Unset, a blocked syscall
+  returns EPERM — a deliberate difference from systemd, which kills (agreed
+  with Jonathan 10-13 and again 11-17: a failure shows up in the service's
+  log instead of a SIGSYS). A per-entry `:ERRNO` wins for that entry.
 - `syscall_architectures=native`: syscalls from any other ABI kill the
   process (on x86_64 this includes x32 and i386 compat calls). An allowlist
   implies it even when unset: otherwise an i386 compat call (int 0x80)
@@ -81,6 +83,9 @@ hand-built BPF program.
   single-threaded).
 
 ## Non-goals
+- The schema-native denylist preset (`syscall_deny=` / `@default` under
+  the hardening-default switch, the 10-13 plan): a follow-up PR on this
+  engine, rolled out to easy daemons first.
 - Other architectures in `syscall_architectures=` (only `native`).
 - RestrictNamespaces= lists of types; RestrictAddressFamilies=,
   SystemCallLog=, SocketBindAllow= (landlock_bind_tcp covers part of it).
