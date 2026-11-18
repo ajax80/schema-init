@@ -70,6 +70,11 @@ open(os.path.join(svcd, "partial.svc.d/.#20-h.conf"), "w").write("protect_home=1
 open(os.path.join(svcd, "partial.svc.d/30-h.txt"), "w").write("protect_home=1\n")
 check("drop-in knobs count, skipped files do not",
       dict(sd.hardening_unannotated()).get("partial.svc") == ["protect_home", "syscall_deny"])
+os.makedirs(os.path.join(svcd, "done.svc.d"))
+open(os.path.join(svcd, "done.svc.d/20-r.conf"), "w").write("syscall_deny=\n")
+check("an empty syscall_deny= in a drop-in is not an annotation",
+      dict(sd.hardening_unannotated()).get("done.svc") == ["syscall_deny"])
+import shutil; shutil.rmtree(os.path.join(svcd, "done.svc.d"))
 for d, f in (("m@.svc.d", "50.conf"), ("m@a.svc.d", "10.conf")):
     os.makedirs(os.path.join(svcd, d))
     open(os.path.join(svcd, d, f), "w").write("")

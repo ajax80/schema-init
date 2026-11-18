@@ -4095,23 +4095,67 @@ static const char *const sc_deny_preset =
 static int sc_deny_finalize(service_t *svc) {
     const char *v = svc->sc_deny;
     char buf[512], *save, *t;
+    sc_spec_t d = { .mode = SC_DENY };
     if (!(svc->hard_set & HARD_SD)) {
         if (!hardening_default_on) return 0;
+        /* a unit with its own filter chose it, carve-outs and errnos too; one
+         * that asked for no_new_privs=0 to run setuid would lose it to the
+         * filter (an unprivileged install needs NNP) */
+        if (svc->sc.mode != SC_NONE) return 0;
+        if ((svc->hard_set & HARD_NNP) && !(svc->flags & SVC_NO_NEW_PRIVS) &&
+            (svc->run_uid || svc->run_user[0] || svc->dynamic_user || geteuid() != 0)) {
+            fprintf(stderr, "[schema-init] %s: default syscall_deny dropped: no_new_privs=0 for a non-root service\n",
+                    svc->name);
+            return 0;
+        }
         v = "default";
         svc->hard_default |= HARD_SD;
     }
-    if (!strcmp(v, "0")) return 0;
-    snprintf(buf, sizeof buf, "%s", !strcmp(v, "default") ? sc_deny_preset : v);
-    if (svc->sc.mode == SC_NONE) svc->sc.mode = SC_DENY;
+    if (!strcmp(v, "0") || !strcasecmp(v, "no") || !strcasecmp(v, "off") || !strcasecmp(v, "false") ||
+        !strcasecmp(v, "none"))
+        return 0;
+    int preset = !strcmp(v, "default") || !strcasecmp(v, "yes") || !strcasecmp(v, "on") || !strcasecmp(v, "true");
+    snprintf(buf, sizeof buf, "%s", preset ? sc_deny_preset : v);
     for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save)) {
-        /* a bare number other than 0 is a mistake, not a syscall name */
-        int r = t[strspn(t, "0123456789")] ? sc_add(&svc->sc, t, svc->sc.mode == SC_ALLOW) : -1;
+        /* ~ is syscall_filter's; "default" only stands alone; a bare number is a mistake */
+        int r = *t == '~' || !strcmp(t, "default") || !t[strspn(t, "0123456789")] ? -1 : sc_add(&d, t, 0);
         if (r == -2) {
             fprintf(stderr, "[schema-init] %s: syscall_deny: unknown syscall '%s' ignored\n", svc->name, t);
         } else if (r != 0) {
             fprintf(stderr, "[schema-init] %s: syscall_deny: bad entry '%s' (0, default, or names/@groups) — not loaded\n",
                     svc->name, t);
             return -1;
+        }
+    }
+    /* one filter: a name the unit's syscall_filter= already lists keeps its errno */
+    if (svc->sc.mode == SC_NONE) {
+        svc->sc.mode = SC_DENY;
+        memcpy(svc->sc.set, d.set, sizeof d.set);
+        for (int k = 0; k < d.n_err; k++) {
+            svc->sc.err_val[k] = d.err_val[k];
+            memcpy(svc->sc.err_set[k], d.err_set[k], sizeof d.err_set[k]);
+        }
+        svc->sc.n_err = d.n_err;
+    } else if (svc->sc.mode == SC_ALLOW) {
+        for (int w = 0; w < SC_WORDS; w++) svc->sc.set[w] &= ~d.set[w];
+    } else {
+        for (int w = 0; w < SC_WORDS; w++) {
+            uint64_t add = d.set[w] & ~svc->sc.set[w];
+            svc->sc.set[w] |= add;
+            for (int k = 0; k < d.n_err; k++) {
+                if (!(d.err_set[k][w] & add)) continue;
+                int e;
+                for (e = 0; e < svc->sc.n_err && svc->sc.err_val[e] != d.err_val[k]; e++) {}
+                if (e == svc->sc.n_err) {
+                    if (e >= SC_MAX_ERRS) {
+                        fprintf(stderr, "[schema-init] %s: syscall_deny: too many errnos with syscall_filter= — not loaded\n",
+                                svc->name);
+                        return -1;
+                    }
+                    svc->sc.err_val[svc->sc.n_err++] = d.err_val[k];
+                }
+                svc->sc.err_set[e][w] |= d.err_set[k][w] & add;
+            }
         }
     }
     return 0;

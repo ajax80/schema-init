@@ -251,6 +251,7 @@ no_new_privs=0
 private_tmp=0
 protect_system=0
 protect_home=0
+syscall_deny=0
 EOF
 
 # --- UDEV COLDPLUG TRIGGER SERVICE ---
@@ -273,6 +274,7 @@ no_new_privs=0
 private_tmp=0
 protect_system=0
 protect_home=0
+syscall_deny=0
 EOF
 
 # --- HOSTNAME SERVICE ---
@@ -298,6 +300,7 @@ no_new_privs=1
 private_tmp=1
 protect_system=full
 protect_home=1
+syscall_deny=0
 EOF
 
 # --- DBUS SERVICE ---
@@ -322,6 +325,7 @@ no_new_privs=0
 private_tmp=0
 protect_system=0
 protect_home=0
+syscall_deny=0
 EOF
 
 # --- SSHD SERVICE ---
@@ -344,6 +348,7 @@ no_new_privs=0
 private_tmp=0
 protect_system=0
 protect_home=0
+syscall_deny=0
 EOF
 
 # --- GETTY (LOCAL SHELL) SERVICE ---
@@ -362,6 +367,7 @@ no_new_privs=0
 private_tmp=0
 protect_system=0
 protect_home=0
+syscall_deny=0
 EOF
 
 # --- SCHEMA-UDEV RULES DIR ---

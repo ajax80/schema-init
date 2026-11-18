@@ -385,6 +385,7 @@ no_new_privs=0
 private_tmp=0
 protect_system=0
 protect_home=0
+syscall_deny=0
 SVC
 
 # 6. Hardware video decode for Intel iGPUs (eli-class: Haswell HD 4400). A stock

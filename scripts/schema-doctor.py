@@ -189,11 +189,13 @@ def hardening_unannotated():
     out = []
     for path in sorted(glob.glob(os.path.join(ROOT, "etc/schema-init/services/*.svc"))):
         try:
-            keys = {ln.split("=", 1)[0].strip()
-                    for f in svc_files(path) for ln in open(f, errors="replace") if "=" in ln}
+            keys = dict(ln.split("=", 1) for f in svc_files(path)
+                        for ln in open(f, errors="replace").read().splitlines() if "=" in ln)
         except OSError:
             continue
-        missing = [k for k in HARDENING_KEYS if k not in keys]
+        keys = {k.strip(): v.strip() for k, v in keys.items()}
+        # an empty syscall_deny= hands it back to the host default, as PID 1 reads it
+        missing = [k for k in HARDENING_KEYS if k not in keys or (k == "syscall_deny" and not keys[k])]
         if missing:
             out.append((os.path.basename(path), missing))
     return out
