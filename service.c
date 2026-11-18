@@ -3648,6 +3648,50 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             fprintf(stderr, "[schema-init] %s: bad %s=%s\n", svc->name[0] ? svc->name : path, line, val);
             return -1;
         }
+    } else if (strcmp(line, "syscall_filter") == 0) {
+        /* the first line sets the mode (a leading ~ = denylist); a later
+         * line of the opposite sign takes names back out (systemd's rules) */
+        char buf[512], *save, *t;
+        if (!*val) {
+            memset(&svc->sc.set, 0, sizeof svc->sc.set);
+            svc->sc.n_over = 0;
+            svc->sc.mode = SC_NONE;
+            return 0;
+        }
+        int neg = val[0] == '~';
+        snprintf(buf, sizeof buf, "%s", val + neg);
+        if (svc->sc.mode == SC_NONE) svc->sc.mode = neg ? SC_DENY : SC_ALLOW;
+        int remove = (svc->sc.mode == SC_ALLOW) == neg;
+        for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save))
+            if (sc_add(&svc->sc, t, remove) != 0) {
+                fprintf(stderr, "[schema-init] %s: syscall_filter: unknown syscall, group or errno '%s' — not loaded\n",
+                        svc->name[0] ? svc->name : path, t);
+                return -1;
+            }
+    } else if (strcmp(line, "syscall_error_number") == 0) {
+        if (!*val) svc->sc.err = 0;
+        else if (sc_errno_parse(val, &svc->sc.err) != 0) {
+            fprintf(stderr, "[schema-init] %s: bad syscall_error_number=%s — not loaded\n", svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+    } else if (strcmp(line, "syscall_architectures") == 0) {
+        if (*val && strcmp(val, "native") != 0) {
+            fprintf(stderr, "[schema-init] %s: syscall_architectures=%s: only 'native' — not loaded\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->sc.native = *val != 0;
+    } else if (strcmp(line, "restrict_suid_sgid") == 0 || strcmp(line, "lock_personality") == 0 ||
+               strcmp(line, "restrict_realtime") == 0 || strcmp(line, "restrict_namespaces") == 0) {
+        long n;
+        if (parse_int_in(val, 0, 1, &n)) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s (0 or 1) — not loaded\n", svc->name[0] ? svc->name : path, line, val);
+            return -1;
+        }
+        uint8_t *f = !strcmp(line, "restrict_suid_sgid") ? &svc->sc.suid
+                   : !strcmp(line, "lock_personality") ? &svc->sc.persona
+                   : !strcmp(line, "restrict_realtime") ? &svc->sc.rt : &svc->sc.ns;
+        *f = (uint8_t)n;
     } else if (strcmp(line, "watch_path") == 0 || strcmp(line, "make_directory") == 0 ||
                strcmp(line, "directory_mode") == 0 || strcmp(line, "trigger_limit_burst") == 0 ||
                strcmp(line, "trigger_limit_interval_sec") == 0) {

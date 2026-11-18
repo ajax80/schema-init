@@ -2510,6 +2510,14 @@ static void ctl_cmd(int fd, char *line) {
                 for (int k = 0; k < NS_K_COUNT; k++)
                     if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", ns_kernel_names[k]);
                 if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);
+                if (s->sc.mode)
+                    ctl_writef(fd, "  syscall_filter: %s, %d syscalls, blocked -> %s\n",
+                               s->sc.mode == SC_ALLOW ? "allowlist" : "denylist", sc_count(&s->sc),
+                               s->sc.err == SC_KILL ? "kill" : s->sc.err ? strerror(s->sc.err) : strerror(EPERM));
+                if (sc_active(&s->sc))
+                    ctl_writef(fd, "  seccomp:%s%s%s%s%s\n", s->sc.native || s->sc.mode ? " native-arch" : "",
+                               s->sc.suid ? " restrict_suid_sgid" : "", s->sc.persona ? " lock_personality" : "",
+                               s->sc.rt ? " restrict_realtime" : "", s->sc.ns ? " restrict_namespaces" : "");
                 for (int k = 0; k < s->watch_count; k++)
                     ctl_writef(fd, "  watch_path=%s:%s\n", watch_kind_name(s->watch[k].kind), s->watch[k].path);
                 if ((s->flags & SVC_TIMER) && s->inst.state == STATE_PERFECT) {

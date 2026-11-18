@@ -337,6 +337,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_calendar.c -o $(TESTDIR)/calendar && $(TESTDIR)/calendar
 	$(CC) $(CFLAGS) tests/test_seccomp_tables.c -o $(TESTDIR)/sc-tables && $(TESTDIR)/sc-tables
 	$(CC) $(CFLAGS) tests/test_seccomp.c seccomp.c -o $(TESTDIR)/seccomp && $(TESTDIR)/seccomp
+	$(CC) $(CFLAGS) tests/test_svc_seccomp.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-seccomp && $(TESTDIR)/svc-seccomp
 	$(CC) $(CFLAGS) tests/test_svc_timer_keys.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/timer-keys && $(TESTDIR)/timer-keys
 	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o $(TESTDIR)/uevent && $(TESTDIR)/uevent
 	$(CC) $(CFLAGS) tests/test_dev_match.c -o $(TESTDIR)/devmatch && $(TESTDIR)/devmatch
