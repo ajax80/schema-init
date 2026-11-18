@@ -12,15 +12,19 @@ is only warned about, and `DynamicUser=yes` without `User=` runs as root
   /etc/group memberships plus these. Applies to a root service as well
   (systemd does), so a service with only `supplementary_groups=` set still
   calls setgroups. An unknown name fails the start (exit 126,
-  "UID DROP FAILED ... supplementary_groups: <name>"), like `group=`.
+  "UID DROP FAILED ... supplementary_groups: <name>"), like `group=`. The
+  list is getgroups(0) + 16 long (a user can already be in many groups),
+  deduplicated. The stop/post-stop/reload runners (svc_runner_drop) drop the
+  same way as the main process.
 - `dynamic_user=1` (system services only; schema-user ignores it with a log
   line, its services already run as the user):
   - With `user=NAME` where NAME exists in passwd: that static user is used
-    (systemd's rule). Otherwise a uid is allocated.
+    (systemd's rule) — everything below but the allocation still applies
+    (implied keys, private dirs). Otherwise a uid is allocated.
   - Allocation (PID 1, at the first spawn): start at
     61184 + FNV-1a(name) % 4336, probe upward with wraparound, skipping any
-    uid `getpwuid()` knows and any uid another loaded service holds. gid =
-    uid. No free uid refuses the start. The uid rides SVC_RUNTIME_FIELDS
+    number `getpwuid()` or `getgrgid()` knows (gid = uid, so a static group
+    collides too) and any uid another loaded service holds. No free uid refuses the start. The uid rides SVC_RUNTIME_FIELDS
     (reload and re-exec keep it); the hash keeps it stable across boots.
   - Implies, unless set explicitly: `no_new_privs=1`, `private_tmp=1`,
     `protect_system=full`, `protect_home=1`.
@@ -30,9 +34,16 @@ is only warned about, and `DynamicUser=yes` without `User=` runs as root
     `private/<dir>`. In the service's mount namespace a 0755 tmpfs covers
     `<base>/private` and only its own dirs are bound into it, so the
     symlink resolves for the service while another service that is later
-    handed the same uid can never reach them. A dir whose owner is not the
-    uid (it changed after a collision) is chowned recursively at start, as
-    systemd does. Runtime dirs stay in /run, owned by the uid, removed on
+    handed the same uid can never reach them. The tmpfs hides the host's
+    `private/` by path, so the child opens each of its dirs O_PATH first,
+    mounts the tmpfs, then binds each back through /proc/self/fd (the
+    private_devices pattern). A dir whose owner is not the uid (it changed
+    after a collision) is chowned recursively at start, as systemd does:
+    O_NOFOLLOW|O_DIRECTORY opens, fchownat(AT_SYMLINK_NOFOLLOW), and no
+    descent across a different st_dev, so a planted link or mount can't
+    turn root's chown onto host files. A plain `<base>/<dir>` left from
+    before dynamic_user (fwupd-refresh's cache) is renamed into
+    `private/<dir>` and replaced by the symlink. Runtime dirs stay in /run, owned by the uid, removed on
     stop as today.
 - Importer: `SupplementaryGroups=` → `supplementary_groups=`;
   `DynamicUser=yes` → `dynamic_user=1` (with `User=` kept), no more "runs
