@@ -23,6 +23,7 @@ typedef struct {
     const char *env_fallback;
     const char *svc_fallback;
     const char *tag;            /* log line prefix */
+    int dynamic_users;          /* dynamic_user=1 allocates uids (PID 1 only) */
 } engine_paths_t;
 
 extern engine_paths_t engine_paths;
