@@ -11,4 +11,5 @@ critical=0
 private_tmp=1
 protect_system=full
 protect_home=1
+syscall_deny=0
 no_new_privs=1

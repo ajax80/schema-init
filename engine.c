@@ -2585,6 +2585,9 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "  %-15s %-5s %s\n", "protect_system",
                     ps[s->ns_protect_system < 3 ? s->ns_protect_system : 0], hard_source(s, HARD_PS));
                 ctl_writef(fd, "  %-15s %-5d %s\n", "protect_home", s->ns_protect_home, hard_source(s, HARD_PH));
+                ctl_writef(fd, "  %-15s %-5s %s\n", "syscall_deny",
+                    (s->hard_set & HARD_SD) ? (!strcmp(s->sc_deny, "0") ? "0" : !strcmp(s->sc_deny, "default") ? "default" : "list")
+                    : (s->hard_default & HARD_SD) ? "default" : "-", hard_source(s, HARD_SD));
                 for (int k = 0; k < NS_K_COUNT; k++)
                     if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", ns_kernel_names[k]);
                 if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);

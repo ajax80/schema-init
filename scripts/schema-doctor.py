@@ -153,7 +153,7 @@ FLAP_THRESHOLD = 3
 FLAP_WINDOW = 1800   # seconds
 
 
-HARDENING_KEYS = ("no_new_privs", "private_tmp", "protect_system", "protect_home")
+HARDENING_KEYS = ("no_new_privs", "private_tmp", "protect_system", "protect_home", "syscall_deny")
 
 
 def hardening_default_on():

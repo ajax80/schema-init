@@ -12,7 +12,7 @@ def load(root):
 results = []
 def check(name, ok): results.append(ok); print(f"  {'PASS' if ok else 'FAIL'}  {name}")
 
-FULL = "no_new_privs=1\nprivate_tmp=1\nprotect_system=1\nprotect_home=0\n"
+FULL = "no_new_privs=1\nprivate_tmp=1\nprotect_system=1\nprotect_home=0\nsyscall_deny=0\n"
 root = tempfile.mkdtemp()
 svcd = os.path.join(root, "etc/schema-init/services")
 os.makedirs(svcd)
@@ -33,7 +33,7 @@ sd = load(root)
 chk = next(c for c in sd.REGISTRY if c.name == "hardening-annotation")
 
 svc("done", FULL)
-svc("zeroes", "no_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n")
+svc("zeroes", "no_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\nsyscall_deny=0\n")
 check("fully annotated host: lint clean", sd.hardening_unannotated() == [])
 rc, out = lint()
 check("fully annotated host: exit 0", rc == 0 and "0 .svc not fully annotated" in out)
@@ -42,13 +42,13 @@ svc("bare", "")
 svc("partial", "protect_system=0\n")
 svc("commented", "# no_new_privs=1\n" + FULL.replace("no_new_privs=1\n", ""))
 bad = dict(sd.hardening_unannotated())
-check("bare lists all four", bad.get("bare.svc") == list(sd.HARDENING_KEYS))
-check("partial lists the three it left out",
-      bad.get("partial.svc") == ["no_new_privs", "private_tmp", "protect_home"])
+check("bare lists all five", bad.get("bare.svc") == list(sd.HARDENING_KEYS))
+check("partial lists the four it left out",
+      bad.get("partial.svc") == ["no_new_privs", "private_tmp", "protect_home", "syscall_deny"])
 check("a commented key does not count", bad.get("commented.svc") == ["no_new_privs"])
 check("annotated svcs not listed", "done.svc" not in bad and "zeroes.svc" not in bad)
 rc, out = lint()
-check("lint exit 1 and names each", rc == 1 and "bare.svc: no_new_privs private_tmp protect_system protect_home" in out
+check("lint exit 1 and names each", rc == 1 and "bare.svc: no_new_privs private_tmp protect_system protect_home syscall_deny" in out
       and "3 .svc not fully annotated" in out)
 
 switch(None)
@@ -69,7 +69,7 @@ open(os.path.join(svcd, "partial.svc.d/10-h.conf"), "w").write("no_new_privs=1\n
 open(os.path.join(svcd, "partial.svc.d/.#20-h.conf"), "w").write("protect_home=1\n")
 open(os.path.join(svcd, "partial.svc.d/30-h.txt"), "w").write("protect_home=1\n")
 check("drop-in knobs count, skipped files do not",
-      dict(sd.hardening_unannotated()).get("partial.svc") == ["protect_home"])
+      dict(sd.hardening_unannotated()).get("partial.svc") == ["protect_home", "syscall_deny"])
 for d, f in (("m@.svc.d", "50.conf"), ("m@a.svc.d", "10.conf")):
     os.makedirs(os.path.join(svcd, d))
     open(os.path.join(svcd, d, f), "w").write("")

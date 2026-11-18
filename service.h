@@ -441,6 +441,7 @@ typedef struct {
     uint8_t          path_which;         /* the watch that fired last, for the rail line */
     uint8_t          path_stop;          /* schema-ctl stop: the run's end parks it, not a restart */
     sc_spec_t        sc;                 /* syscall_filter= and the seccomp siblings */
+    char             sc_deny[400];       /* syscall_deny= as written ("default", "0", or a list) */
     char             supp_groups[16][64]; /* supplementary_groups=: names or gids, resolved in the child */
     uint8_t          supp_count;
     uint8_t          dynamic_user;
@@ -622,6 +623,7 @@ int service_deps_ready(service_t *svc, service_t *stable, int scount,
 #define HARD_PT  0x2
 #define HARD_PS  0x4
 #define HARD_PH  0x8
+#define HARD_SD  0x10   /* syscall_deny= */
 
 /* Host-wide hardening default (default-flip spec 2026-09-26). cmdline may be
  * NULL; file is the content of /etc/schema-init/hardening-default or NULL.

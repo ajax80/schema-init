@@ -33,6 +33,10 @@ printf 'name=waiter\nexec=/bin/sleep\nargs=600\nsyscall_filter=~wait4 waitid\nex
 # plain exec_pre lines are filtered, + lines are not
 printf 'name=pre\nexec=/bin/true\noneshot=1\nsyscall_filter=~uname\nexec_pre=/bin/sh -c "uname -s > %s/pre.out 2>/dev/null || echo blocked > %s/pre.out"\nexec_pre=+/bin/sh -c "uname -s > %s/plus.out"\n' "$T" "$T" "$T" > "$S/pre.svc"
 printf 'name=lp\nexec=/bin/sleep\nargs=600\nlock_personality=1\n' > "$S/lp.svc"
+# syscall_deny=: an unprivileged clock_settime is EPERM anyway, so kill makes the
+# preset visible (SIGSYS); syscall_deny=0 leaves date to fail on its own
+printf 'name=sdd\nexec=/usr/bin/date\nargs=-s\nargs=@0\noneshot=1\nsyscall_deny=default\nsyscall_error_number=kill\n' > "$S/sdd.svc"
+printf 'name=sd0\nexec=/usr/bin/date\nargs=-s\nargs=@0\noneshot=1\nsyscall_deny=0\nsyscall_error_number=kill\n' > "$S/sd0.svc"
 chmod 600 "$S"/*.svc
 
 ./schema-user > "$T/out" 2>&1 &
@@ -61,5 +65,9 @@ until_ok "[ -s $T/pre.out ] && [ -s $T/plus.out ]" || fail "pre: exec_pre lines 
 [ "$(cat "$T/pre.out")" = blocked ] || fail "plain exec_pre ran unfiltered: $(cat "$T/pre.out")"
 [ "$(cat "$T/plus.out")" = Linux ] || fail "+ exec_pre was filtered"
 st lp | grep -q "native-arch" || fail "status hides the arch check: $(st lp | grep seccomp)"
+until_ok 'st sdd | grep -q SIGSYS' || fail "syscall_deny=default: no SIGSYS from clock_settime: $(st sdd | head -3)"
+st sdd | grep -Eq "syscall_deny +default +explicit" || fail "status: $(st sdd | grep syscall_deny)"
+until_ok 'st sd0 | grep -Eq "exit|code|status=[0-9]"' || fail "sd0 never ran"
+st sd0 | grep -q SIGSYS && fail "syscall_deny=0 still filtered: $(st sd0 | head -3)"
 
 echo "test_seccomp_live: ok"

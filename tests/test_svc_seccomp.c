@@ -80,6 +80,31 @@ int main(void) {
     assert(load("restrict_namespaces=cgroup ipc\n", NULL, &s) == -1);
     assert(load("lock_personality=2\n", NULL, &s) == -1);
 
+    /* syscall_deny=: tri-state on the hardening-default switch */
+    assert(load("", NULL, &s) == 0 && s.sc.mode == SC_NONE);
+    service_set_hardening_default(1);
+    assert(load("", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "mount") == 1 && has(&s, "init_module") == 1 &&
+           has(&s, "settimeofday") == 1 && has(&s, "bpf") == 1 && has(&s, "openat") == 0);
+    assert(s.hard_default & HARD_SD);
+    assert(load("syscall_deny=0\n", NULL, &s) == 0 && s.sc.mode == SC_NONE && (s.hard_set & HARD_SD));
+    assert(load("syscall_deny=@clock\n", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "settimeofday") == 1 &&
+           has(&s, "mount") == 0);
+    service_set_hardening_default(0);
+    assert(load("syscall_deny=default\n", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "mount") == 1);
+    /* merged into the one filter: a denylist adds, an allowlist loses them */
+    assert(load("syscall_filter=~getuid\nsyscall_deny=@clock\n", NULL, &s) == 0 && s.sc.mode == SC_DENY &&
+           has(&s, "getuid") == 1 && has(&s, "settimeofday") == 1);
+    assert(load("syscall_filter=@system-service @clock\nsyscall_deny=@clock\n", NULL, &s) == 0 && s.sc.mode == SC_ALLOW &&
+           has(&s, "openat") == 1 && has(&s, "settimeofday") == 0);
+    assert(load("syscall_deny=@nonesuch\n", NULL, &s) == -1);
+    assert(load("syscall_deny=2\n", NULL, &s) == -1);
+    {
+        char big[600] = "syscall_deny=";
+        while (strlen(big) < 450) strcat(big, "mount ");
+        strcat(big, "\n");
+        assert(load(big, NULL, &s) == -1);
+    }
+
     unlink(path);
     rmdir(dir);
     printf("all svc seccomp tests passed\n");

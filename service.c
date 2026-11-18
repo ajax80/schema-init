@@ -3893,6 +3893,16 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                 return -1;
             }
         }
+    } else if (strcmp(line, "syscall_deny") == 0) {
+        /* resolved at finalize, where the host default is known */
+        if (strlen(val) >= sizeof svc->sc_deny) {
+            fprintf(stderr, "[schema-init] %s: syscall_deny too long (limit %zu) — not loaded\n",
+                    svc->name[0] ? svc->name : path, sizeof svc->sc_deny - 1);
+            return -1;
+        }
+        snprintf(svc->sc_deny, sizeof svc->sc_deny, "%s", val);
+        if (*val) svc->hard_set |= HARD_SD;
+        else svc->hard_set &= ~HARD_SD;
     } else if (strcmp(line, "syscall_error_number") == 0) {
         if (!*val) svc->sc.err = 0;
         else if (sc_errno_parse(val, &svc->sc.err) != 0) {
@@ -4076,8 +4086,40 @@ static int svc_name_ok(const char *n) {
 
 /* Post-parse checks and defaults, then the name from the filename.
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
+/* syscall_deny=: the schema-native denylist (the 10-13 plan). Unset, it
+ * follows the host's hardening-default like the other knobs; merged into
+ * the one filter: a denylist grows, an allowlist loses those names. */
+static const char *const sc_deny_preset =
+    "@clock @cpu-emulation @debug @module @mount @obsolete @raw-io @reboot @swap kexec_load kexec_file_load bpf";
+
+static int sc_deny_finalize(service_t *svc) {
+    const char *v = svc->sc_deny;
+    char buf[512], *save, *t;
+    if (!(svc->hard_set & HARD_SD)) {
+        if (!hardening_default_on) return 0;
+        v = "default";
+        svc->hard_default |= HARD_SD;
+    }
+    if (!strcmp(v, "0")) return 0;
+    snprintf(buf, sizeof buf, "%s", !strcmp(v, "default") ? sc_deny_preset : v);
+    if (svc->sc.mode == SC_NONE) svc->sc.mode = SC_DENY;
+    for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save)) {
+        /* a bare number other than 0 is a mistake, not a syscall name */
+        int r = t[strspn(t, "0123456789")] ? sc_add(&svc->sc, t, svc->sc.mode == SC_ALLOW) : -1;
+        if (r == -2) {
+            fprintf(stderr, "[schema-init] %s: syscall_deny: unknown syscall '%s' ignored\n", svc->name, t);
+        } else if (r != 0) {
+            fprintf(stderr, "[schema-init] %s: syscall_deny: bad entry '%s' (0, default, or names/@groups) — not loaded\n",
+                    svc->name, t);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
     if (hardening_finalize(svc) != 0) return -1;
+    if (sc_deny_finalize(svc) != 0) return -1;
     /* drop-ins applied: what start/restart/reset put back after a stop's hold */
     svc->no_restart_cfg = (svc->flags & SVC_NO_RESTART) != 0;
     /* bind=X is also dep=X (start order, shutdown order, cycles): after the
