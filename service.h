@@ -380,6 +380,7 @@ typedef struct {
     uint8_t          hard_set;          /* HARD_* knobs given explicitly in .svc   */
     uint8_t          hard_default;      /* HARD_* knobs taken from host default    */
     uint8_t          hard_dropped;      /* HARD_* defaults dropped (ns conflict)   */
+    uint8_t          hard_dyn;          /* HARD_* knobs implied by dynamic_user=1   */
     char             cgroup_path[256]; /* /sys/fs/cgroup/schema-init/<name>   */
     struct timespec  dormant_until;    /* CLOCK_MONOTONIC when DORMANT->NEW_PROCESS fires */
     int              restart_sec;      /* wait this long before respawning a dead service; 0 = at once */
@@ -438,6 +439,10 @@ typedef struct {
     uint8_t          path_armed;         /* born armed once: later arms keep the state */
     uint8_t          path_which;         /* the watch that fired last, for the rail line */
     uint8_t          path_stop;          /* schema-ctl stop: the run's end parks it, not a restart */
+    char             supp_groups[16][64]; /* supplementary_groups=: names or gids, resolved in the child */
+    uint8_t          supp_count;
+    uint8_t          dynamic_user;
+    int              dyn_uid;            /* allocated dynamic uid (= gid), 0 none yet */
 } service_t;
 
 /* restart_sec: systemd's RestartSec=. Without it a service that dies at once

@@ -687,6 +687,24 @@ void service_cgroup_root_low(const service_t *svcs, int n) {
     cg_write(service_cgroup_root, "memory.low", buf);
 }
 
+/* dynamic_user=1 implies systemd's sandbox for it, unless the unit says
+ * otherwise; marked so status names the source, and droppable like a default
+ * when it would hide the exec */
+static void apply_dynuser_implies(service_t *svc) {
+    static const uint8_t bits[] = { HARD_NNP, HARD_PT, HARD_PS, HARD_PH };
+    if (!svc->dynamic_user) return;
+    for (int i = 0; i < 4; i++) {
+        uint8_t b = bits[i];
+        if (svc->hard_set & b) continue;
+        if (b == HARD_NNP) svc->flags |= SVC_NO_NEW_PRIVS;
+        else if (b == HARD_PT) svc->ns_private_tmp = 1;
+        else if (b == HARD_PS) svc->ns_protect_system = PROTECT_SYSTEM_FULL;
+        else svc->ns_protect_home = 1;
+        svc->hard_default |= b;
+        svc->hard_dyn |= b;
+    }
+}
+
 static void apply_hardening_defaults(service_t *svc) {
     if (!hardening_default_on) return;
     if (!(svc->hard_set & HARD_NNP)) {
@@ -819,6 +837,7 @@ static int hardening_finalize(service_t *svc) {
     static const char *const tmp[] = { "/tmp/", "/var/tmp/" };
     static const char *const home[] = { "/home/", "/root/", "/run/user/" };
     apply_hardening_defaults(svc);
+    apply_dynuser_implies(svc);
     if (ns_hides(svc, HARD_PT, &svc->ns_private_tmp, "private_tmp", tmp, 2) != 0) return -1;
     if (ns_hides(svc, HARD_PH, &svc->ns_protect_home, "protect_home", home, 3) != 0) return -1;
     if (kernel_ns_check(svc) != 0) return -1;
@@ -3648,6 +3667,29 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             fprintf(stderr, "[schema-init] %s: bad %s=%s\n", svc->name[0] ? svc->name : path, line, val);
             return -1;
         }
+    } else if (strcmp(line, "supplementary_groups") == 0) {
+        if (!*val) svc->supp_count = 0;   /* a drop-in's empty value clears */
+        for (char *tok = val, *sp; *tok; tok = sp) {
+            while (*tok == ' ' || *tok == '\t') tok++;
+            if (!*tok) break;
+            sp = tok + strcspn(tok, " \t");
+            size_t n = (size_t)(sp - tok);
+            if (svc->supp_count >= 16 || n >= sizeof svc->supp_groups[0] || strspn(tok, "abcdefghijklmnopqrstuvwxyz"
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-") < n) {
+                fprintf(stderr, "[schema-init] %s: bad supplementary_groups=%s (at most 16 names or gids) — not loaded\n",
+                        svc->name[0] ? svc->name : path, val);
+                return -1;
+            }
+            memcpy(svc->supp_groups[svc->supp_count], tok, n);
+            svc->supp_groups[svc->supp_count++][n] = '\0';
+        }
+    } else if (strcmp(line, "dynamic_user") == 0) {
+        long n;
+        if (parse_int_in(val, 0, 1, &n)) {
+            fprintf(stderr, "[schema-init] %s: bad dynamic_user=%s — not loaded\n", svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->dynamic_user = (uint8_t)n;
     } else if (strcmp(line, "watch_path") == 0 || strcmp(line, "make_directory") == 0 ||
                strcmp(line, "directory_mode") == 0 || strcmp(line, "trigger_limit_burst") == 0 ||
                strcmp(line, "trigger_limit_interval_sec") == 0) {

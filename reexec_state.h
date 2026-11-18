@@ -53,6 +53,7 @@ typedef struct {
     X(U8,   path_rerun)          \
     X(U8,   path_armed)          \
     X(U8,   path_stop)           \
+    X(INT,  dyn_uid)             \
     X(INT,  trigger_count)       \
     X(TS,   trigger_window)      \
     X(TIME, path_last_fire)      \

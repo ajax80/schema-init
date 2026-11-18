@@ -2359,6 +2359,7 @@ static void ctl_analyze(int fd, const char *arg) {
 
 static const char *hard_source(const service_t *s, uint8_t bit) {
     if (s->hard_set & bit) return "explicit";
+    if ((s->hard_dyn & bit) && !(s->hard_dropped & bit)) return "dynamic_user";
     if (s->hard_dropped & bit) return "dropped (default would hide exec/ready_path)";
     if (s->hard_default & bit) return "default";
     return "unset";
