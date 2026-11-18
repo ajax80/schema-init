@@ -14,6 +14,7 @@ engine_paths_t engine_paths = {
     .env_fallback    = "./run/schema-init/env",
     .svc_fallback    = "./services",
     .tag             = "schema-init",
+    .dynamic_users   = 1,
 };
 
 int engine_reload_integrity = 1;

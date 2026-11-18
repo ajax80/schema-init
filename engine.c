@@ -18,6 +18,7 @@
 #include "service.h"
 #include "svc_dropins.h"
 #include "reexec_state.h"
+#include "dynuser.h"
 #include "notify.h"
 #include "fdstore.h"
 #include "coredump.h"
@@ -1009,6 +1010,8 @@ static void fork_adopt(service_t *svc) {
 #define LISTEN_MIN_RUN_SECS 2   /* a quicker exit served nothing: recovery arc, not a wake loop */
 
 static void path_after_run(service_t *s);
+static int dynuser_assign(service_t *s);
+static void dynuser_apply_all(void);
 static void path_gc(void);
 
 /* timer fire complete: re-arm regardless of exit code (cron semantics — a
@@ -1660,6 +1663,48 @@ static void path_after_run(service_t *s) {
     s->path_due = (uint8_t)due;
 }
 
+/* dynamic_user=1: a uid no passwd/group entry and no other service holds;
+ * kept once picked (it rides reloads and re-execs), and a static user= that
+ * exists wins, as in systemd */
+static int dynuser_taken(uid_t u, void *ctx) {
+    if (getpwuid(u) || getgrgid(u)) return 1;
+    for (int i = 0; i < svc_count; i++)
+        if (&services[i] != ctx && services[i].dyn_uid == (int)u) return 1;
+    return 0;
+}
+
+static int dynuser_assign(service_t *s) {
+    if (!s->dynamic_user) return 0;
+    if (!engine_paths.dynamic_users) {
+        /* schema-user: its services already run as the user; said once */
+        if (s->dynamic_user == 1) elog(stderr, "%s: dynamic_user=1 ignored, user services run as the user\n", s->name);
+        s->dynamic_user = 2;
+        return 0;
+    }
+    if (s->run_user[0] && getpwnam(s->run_user)) {
+        s->dyn_uid = 0;
+        return 0;
+    }
+    if (!s->dyn_uid) {
+        uid_t u = dynuser_pick(s->name, dynuser_taken, s);
+        if (!u) return -1;
+        s->dyn_uid = (int)u;
+    }
+    s->run_uid = (uid_t)s->dyn_uid;
+    s->run_gid = (gid_t)s->dyn_uid;
+    return 0;
+}
+
+/* a fresh parse has run_uid 0: put a carried dynamic uid back, so a stop or
+ * reload runner of a running service never runs as root */
+static void dynuser_apply_all(void) {
+    for (int i = 0; i < svc_count; i++)
+        if (services[i].dyn_uid) {
+            services[i].run_uid = (uid_t)services[i].dyn_uid;
+            services[i].run_gid = (gid_t)services[i].dyn_uid;
+        }
+}
+
 static void ready_inotify_drain(void) {
     char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
     while (read(ino_fd, buf, sizeof(buf)) > 0)
@@ -1787,7 +1832,11 @@ static void tick_service(service_t *svc,
             }
             flags = service_probe_f8(svc, services, svc_count);
             schema_step(&svc->inst, flags);
-            if (svc->inst.state == STATE_FULL_TRUST) {
+            if (svc->inst.state == STATE_FULL_TRUST && dynuser_assign(svc) != 0) {
+                svc->inst.state = STATE_EXCISED;
+                svc->excise_reason = EXC_EXIT_CODE;
+                service_log(svc, "dynamic-uid-exhausted");
+            } else if (svc->inst.state == STATE_FULL_TRUST) {
                 service_log(svc, "spawn");
                 eviction_forget(service_cgroup_path_for(svc));
                 if (service_spawn(svc) < 0) {
@@ -2511,6 +2560,9 @@ static void ctl_cmd(int fd, char *line) {
                 for (int k = 0; k < NS_K_COUNT; k++)
                     if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", ns_kernel_names[k]);
                 if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);
+                if (s->dyn_uid) ctl_writef(fd, "  dynamic uid %d\n", s->dyn_uid);
+                for (int k = 0; k < s->supp_count; k++)
+                    ctl_writef(fd, "  supplementary_group=%s\n", s->supp_groups[k]);
                 for (int k = 0; k < s->watch_count; k++)
                     ctl_writef(fd, "  watch_path=%s:%s\n", watch_kind_name(s->watch[k].kind), s->watch[k].path);
                 if ((s->flags & SVC_TIMER) && s->inst.state == STATE_PERFECT) {
@@ -3542,6 +3594,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     service_cgroup_root_low(services, svc_count);
     eviction_readded();
 
+    dynuser_apply_all();
     for (i = 0; i < svc_count; i++) {
         service_t *s = &services[i];
         if (s->flags & SVC_PATH) {
@@ -3773,6 +3826,7 @@ void engine_open(int adopting) {
 /* arm timer services: born "already ran", first fire = boot + on_boot_sec.
  * After a re-exec only timers new to the config (timer_next still 0). */
 void engine_arm_timers(int adopting) {
+    dynuser_apply_all();
     for (int ti = 0; ti < svc_count; ti++)
         if (services[ti].flags & SVC_PATH) path_arm(&services[ti]);
     for (int ti = 0; ti < svc_count; ti++)

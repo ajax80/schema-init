@@ -1676,6 +1676,13 @@ static void svc_runner_netns(const service_t *svc, const char *what) {
     if (fd >= 0) close(fd);
 }
 
+/* the user's /etc/group memberships; a dynamic uid has none, so it starts
+ * from an empty list (not nobody's, which initgroups would hand it) */
+static int svc_initgroups(const service_t *svc, gid_t gid) {
+    if (svc->dyn_uid) return setgroups(0, NULL);
+    return initgroups(svc->run_user[0] ? svc->run_user : svc->run_uid ? "nobody" : "root", gid);
+}
+
 /* supplementary_groups=, added to what initgroups() just set (a user may
  * already be in many groups, so the list is sized from getgroups) */
 static void svc_supp_groups_or_die(const service_t *svc) {
@@ -1736,8 +1743,7 @@ static void svc_runner_child(const service_t *svc, const char *what) {
             dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n", svc->name, step, errno);
             _exit(126);
         }
-        if (initgroups(svc->run_user[0] ? svc->run_user
-                                        : svc->run_uid ? "nobody" : "root", sgid) != 0) {
+        if (svc_initgroups(svc, sgid) != 0) {
             dprintf(2, "[schema-init] UID DROP FAILED for %s: %s: %d\n", svc->name, what, errno);
             _exit(126);
         }
@@ -2005,7 +2011,12 @@ int service_spawn(service_t *svc) {
         if (service_apply_hardening(svc) != 0)
             _exit(126);
         if (!exec_dirs && !early_user) svc_resolve_user_or_die(svc);
-        if (svc->run_uid) {
+        if (svc->dyn_uid) {
+            /* no passwd entry for a dynamic uid (no NSS module): systemd's env */
+            setenv("HOME", "/", 1);
+            setenv("USER", svc->name, 1);
+            setenv("LOGNAME", svc->name, 1);
+        } else if (svc->run_uid) {
             struct passwd *pw = getpwuid(svc->run_uid);
             if (pw) {
                 setenv("HOME", pw->pw_dir, 1);
@@ -2034,9 +2045,7 @@ int service_spawn(service_t *svc) {
         /* group= alone still switches gid: root with that group, never root:root;
          * supplementary_groups= alone still sets groups on a root service */
         if (svc->run_uid || svc->run_group[0] || svc->supp_count) {
-            if (initgroups(svc->run_user[0] ? svc->run_user
-                                            : svc->run_uid ? "nobody" : "root",
-                           svc->run_gid) != 0) {
+            if (svc_initgroups(svc, svc->run_gid) != 0) {
                 dprintf(2, "[schema-init] UID DROP FAILED for %s: initgroups: %d\n",
                         svc->name, errno);
                 _exit(126);

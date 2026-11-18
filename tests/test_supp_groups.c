@@ -59,6 +59,30 @@ int main(void) {
     /* without the key nothing extra appears */
     assert(run("user=nobody\n", got, sizeof got) == 0 && !has(got, "4"));
 
+    /* a dynamic uid: no passwd entry, so no initgroups list (never nobody's);
+     * only its own gid plus supplementary_groups, and systemd's env */
+    {
+        static service_t d;
+        int st;
+        FILE *f = fopen(path, "w");
+        fprintf(f, "name=dyn\nexec=/bin/sh\nargs=-c\nargs=echo $(id -u) $(id -g) [$(id -G)] $USER $HOME > %s\n"
+                   "oneshot=1\ndynamic_user=1\nsupplementary_groups=adm\nprivate_tmp=0\nprotect_system=0\n"
+                   "protect_home=0\n", out);
+        fclose(f);
+        unlink(out);
+        memset(&d, 0, sizeof d);
+        assert(service_load_one(path, &d) == 0);
+        d.dyn_uid = 64000;
+        d.run_uid = d.run_gid = 64000;
+        assert(service_spawn(&d) == 0);
+        assert(waitpid(d.child_pid, &st, 0) == d.child_pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+        f = fopen(out, "r");
+        assert(f && fgets(got, sizeof got, f));
+        fclose(f);
+        got[strcspn(got, "\n")] = 0;
+        if (strcmp(got, "64000 64000 [64000 4] dyn /")) { fprintf(stderr, "dynamic: %s\n", got); return 1; }
+    }
+
     /* the stop runner drops the same way */
     {
         static service_t r;
