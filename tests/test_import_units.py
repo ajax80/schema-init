@@ -1832,19 +1832,26 @@ for d in (_oul, _olive, _obus, os.path.join(_or, "usr/bin")):
 put(os.path.join(_or, "usr/bin/touch"), "#!/bin/sh\n", 0o755)
 put(os.path.join(_oul, "bare.service"), "[Service]\nType=oneshot\nExecStart=touch /var/lib/x\n")
 put(os.path.join(_oul, "gone.service"), "[Service]\nExecStart=nosuchcmd -x\n")
+put(os.path.join(_oul, "rel.service"), "[Service]\nExecStart=bin/touch\n")
+put(os.path.join(_oul, "mskd.service"), "[Service]\nExecStart=/usr/bin/touch\n")
+put(os.path.join(_olive, "mskd.svc.masked"), "")
 put(os.path.join(_obus, "org.x.Live.service"), si.BUS_MARK + "\n[D-BUS Service]\nName=org.x.Live\n")
 _od = os.path.join(_or, "preview")
 import io, contextlib
 with contextlib.redirect_stdout(io.StringIO()):
-    _rc = si.main(["-f", "--out", _od, "bare.service", "gone.service"])
+    _rc = si.main(["-f", "--out", _od, "bare.service", "gone.service", "rel.service", "mskd.service"])
 check("--out: system-mode units land in DIR", _rc == 0 and os.path.exists(os.path.join(_od, "bare.svc")))
-check("--out: the live services dir is untouched", not os.listdir(_olive))
+check("--out: the live services dir is untouched", os.listdir(_olive) == ["mskd.svc.masked"])
+check("--out: a mask in the live dir still holds", not os.path.exists(os.path.join(_od, "mskd.svc")))
+check("--out: nothing redirected after the run", si._out_dir is None and "SCHEMA_SVC_DIR" not in os.environ)
+check("a relative ExecStart= path is not made absolute",
+      not os.path.exists(os.path.join(_od, "rel.svc")) and os.path.exists(os.path.join(_od, "rel.svc.skipped")))
 check("--out: live bus overrides are left alone", os.path.exists(os.path.join(_obus, "org.x.Live.service")))
 check("bare-name ExecStart= resolves on the search path",
       "exec=/usr/bin/touch\nargs=/var/lib/x\n" in open(os.path.join(_od, "bare.svc")).read())
 check("bare-name ExecStart= not found is skipped, not exec'd as-is",
       not os.path.exists(os.path.join(_od, "gone.svc")) and os.path.exists(os.path.join(_od, "gone.svc.skipped")))
-for _a in (["--out", _od], ["--start", "--out", _od, "bare.service"]):
+for _a in (["--out", _od], ["--start", "--out", _od, "bare.service"], ["-b", "--out", _od]):
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             si.main(_a)
