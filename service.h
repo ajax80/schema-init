@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include "watch.h"
 #include "calendar.h"
+#include "seccomp.h"
 #include <stdio.h>
 #include "schema.h"
 #include "landlock.h"
@@ -439,6 +440,7 @@ typedef struct {
     uint8_t          path_armed;         /* born armed once: later arms keep the state */
     uint8_t          path_which;         /* the watch that fired last, for the rail line */
     uint8_t          path_stop;          /* schema-ctl stop: the run's end parks it, not a restart */
+    sc_spec_t        sc;                 /* syscall_filter= and the seccomp siblings */
     char             supp_groups[16][64]; /* supplementary_groups=: names or gids, resolved in the child */
     uint8_t          supp_count;
     uint8_t          dynamic_user;

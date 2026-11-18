@@ -1468,12 +1468,87 @@ def _ambient_caps(svc):
     return list(caps), warns
 
 
+# the errno names the engine's syscall_error_number= takes (seccomp.c)
+_SC_ERRNOS = {"EPERM", "EACCES", "ENOSYS", "EINVAL", "ENOENT", "EIO", "EBADF", "EAGAIN", "ENOMEM", "EFAULT",
+              "EBUSY", "EEXIST", "ENODEV", "EOPNOTSUPP", "ENOTSUP", "EROFS", "ENOTTY", "ESRCH", "EINTR", "ENOTDIR"}
+
+
+# the groups the engine's tables know (seccomp_groups.h; a test keeps the two
+# in sync): another one refuses the service at load, so it is dropped here
+_SC_GROUPS = {"@default", "@aio", "@basic-io", "@chown", "@clock", "@cpu-emulation", "@debug", "@file-system", "@io-event", "@ipc", "@keyring", "@memlock", "@module", "@mount", "@network-io", "@obsolete", "@pkey", "@privileged", "@process", "@raw-io", "@reboot", "@resources", "@sandbox", "@setuid", "@signal", "@swap", "@sync", "@system-service", "@timer", "@known"}
+
+
+def _sc_errno_ok(v):
+    return v.lower() == "kill" or v in _SC_ERRNOS or (v.isdigit() and int(v) <= 4095)
+
+
+# SystemCallFilter= and the seccomp siblings, as systemd means them (the
+# engine skips syscall names it doesn't know, as systemd does)
+def _seccomp(svc):
+    lines, warns, filt = [], [], []
+    for v in _get_all(svc, "SystemCallFilter"):
+        filt = filt + [v.strip()] if v.strip() else []
+    first = None
+    for v in filt:
+        neg = "~" if v.startswith("~") else ""
+        first = neg if first is None else first
+        keep, bad = [], []
+        for e in v[len(neg):].split():
+            if (":" in e and not _sc_errno_ok(e.split(":", 1)[1])) or \
+                    (e.startswith("@") and e.split(":", 1)[0] not in _SC_GROUPS):
+                bad.append(e)
+            else:
+                keep.append(e)
+        if bad:
+            warns.append("SystemCallFilter= entries the engine doesn't know dropped: %s" % " ".join(bad))
+        # the engine reads lines up to 511 bytes: split long lists, same sign
+        cur = []
+        for e in keep:
+            if cur and len("syscall_filter=" + neg + " ".join(cur + [e])) > 500:
+                lines.append("syscall_filter=%s%s" % (neg, " ".join(cur)))
+                cur = []
+            cur.append(e)
+        started = any(ln.startswith("syscall_filter=") for ln in lines)
+        if not keep and not started:
+            # an all-unknown first line must keep its meaning: an allowlist
+            # of nothing is still an allowlist (@default), and plain lines
+            # after a lost denylist would only take names out of it
+            if not neg:
+                lines.append("syscall_filter=@default")
+            continue
+        if not started and first == "~" and not neg:
+            continue
+        if cur:
+            lines.append("syscall_filter=%s%s" % (neg, " ".join(cur)))
+    err = _get_last(svc, "SystemCallErrorNumber")
+    if err:
+        if _sc_errno_ok(err):
+            lines.append("syscall_error_number=%s" % err)
+        else:
+            warns.append("SystemCallErrorNumber=%s not known here, blocked calls get EPERM" % err)
+    arch = _get_last(svc, "SystemCallArchitectures")
+    if arch == "native":
+        lines.append("syscall_architectures=native")
+    elif arch:
+        warns.append("SystemCallArchitectures=%s: only native is enforced (and is, with any filter)" % arch)
+    for directive, key in (("RestrictSUIDSGID", "restrict_suid_sgid"), ("LockPersonality", "lock_personality"),
+                           ("RestrictRealtime", "restrict_realtime")):
+        if _get_last(svc, directive).lower() in _TRUE:
+            lines.append("%s=1" % key)
+    ns = _get_last(svc, "RestrictNamespaces").lower()
+    if ns in _TRUE:
+        lines.append("restrict_namespaces=1")
+    elif ns and ns not in _FALSE:
+        warns.append("RestrictNamespaces=%s not enforced: only yes/no" % ns)
+    return lines, warns
+
+
 # Directives that confine a unit under systemd and that the engine has no key
 # for. _UNENFORCED_DEFAULT: the values that ask for nothing, so lose nothing.
 _UNENFORCED = (
-    "CapabilityBoundingSet", "SystemCallFilter", "SystemCallArchitectures",
-    "RestrictAddressFamilies", "RestrictNamespaces", "RestrictRealtime", "RestrictSUIDSGID",
-    "RestrictFileSystems", "LockPersonality", "ProtectKernelLogs",
+    "CapabilityBoundingSet",
+    "RestrictAddressFamilies",
+    "RestrictFileSystems", "ProtectKernelLogs",
     "ProtectClock", "ProtectProc", "ProcSubset", "PrivateUsers", "PrivateIPC", "PrivateMounts", "RemoveIPC",
     "NetworkNamespacePath", "IPCNamespacePath", "ReadOnlyPaths", "ReadOnlyDirectories",
     "InaccessiblePaths", "InaccessibleDirectories", "NoExecPaths", "ExecPaths",
@@ -1983,6 +2058,11 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         hard = [ln for ln in hard if ln.split("=", 1)[0] not in implied
                 or _get_last(svc, implied[ln.split("=", 1)[0]])]
     lines.extend(hard)
+    # + with no plain ExecStartPre runs unsandboxed under systemd: no filter
+    if not ("+" in pfx and all("+" in pre for pre, _ in pres)):
+        sc, sc_warns = _seccomp(svc)
+        lines.extend(sc)
+        warns.extend(sc_warns)
     sched, sched_warns = _scheduling(svc)
     lines.extend(sched)
     warns.extend(sched_warns)

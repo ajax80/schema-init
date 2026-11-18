@@ -55,14 +55,14 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c engine.c engine_conf.c schema.c service.c watch.c group.c caps.c ns.c landlock.c
+SRCS    = init.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c
 OBJS    = $(SRCS:.c=.o)
-ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o group.o caps.o ns.o landlock.o
+ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o
 # The core objects share these headers. Without this dependency an incremental
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
+CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h seccomp.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
 
 all: $(BINS)
 
@@ -311,9 +311,10 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_exec_dirs_live.sh
 	sh tests/test_watch_path_live.sh
 	sh tests/test_timer_jitter_live.sh
+	sh tests/test_seccomp_live.sh
 	sh tests/test_bus_activate.sh
 	sh tests/test_reload_listen.sh
-	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c watch.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
+	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o $(TESTDIR)/reclaim && $(TESTDIR)/reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o $(TESTDIR)/pressure && $(TESTDIR)/pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o $(TESTDIR)/next-wake && $(TESTDIR)/next-wake
@@ -335,11 +336,14 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_reexec_state.c -o $(TESTDIR)/reexec-state && $(TESTDIR)/reexec-state
 	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o $(TESTDIR)/tiering && $(TESTDIR)/tiering
 	$(CC) $(CFLAGS) tests/test_calendar.c -o $(TESTDIR)/calendar && $(TESTDIR)/calendar
+	$(CC) $(CFLAGS) tests/test_seccomp_tables.c -o $(TESTDIR)/sc-tables && $(TESTDIR)/sc-tables
+	$(CC) $(CFLAGS) tests/test_seccomp.c seccomp.c -o $(TESTDIR)/seccomp && $(TESTDIR)/seccomp
+	$(CC) $(CFLAGS) tests/test_svc_seccomp.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-seccomp && $(TESTDIR)/svc-seccomp
+	$(CC) $(CFLAGS) tests/test_svc_timer_keys.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/timer-keys && $(TESTDIR)/timer-keys
 	$(CC) $(CFLAGS) tests/test_dynuser.c -o $(TESTDIR)/dynuser && $(TESTDIR)/dynuser
-	$(CC) $(CFLAGS) tests/test_dynuser_dirs.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dynuser-dirs && $(TESTDIR)/dynuser-dirs
-	$(CC) $(CFLAGS) tests/test_supp_groups.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/supp-groups && $(TESTDIR)/supp-groups
-	$(CC) $(CFLAGS) tests/test_svc_dynuser.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-dynuser && $(TESTDIR)/svc-dynuser
-	$(CC) $(CFLAGS) tests/test_svc_timer_keys.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/timer-keys && $(TESTDIR)/timer-keys
+	$(CC) $(CFLAGS) tests/test_dynuser_dirs.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dynuser-dirs && $(TESTDIR)/dynuser-dirs
+	$(CC) $(CFLAGS) tests/test_supp_groups.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/supp-groups && $(TESTDIR)/supp-groups
+	$(CC) $(CFLAGS) tests/test_svc_dynuser.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-dynuser && $(TESTDIR)/svc-dynuser
 	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o $(TESTDIR)/uevent && $(TESTDIR)/uevent
 	$(CC) $(CFLAGS) tests/test_dev_match.c -o $(TESTDIR)/devmatch && $(TESTDIR)/devmatch
 	$(CC) $(CFLAGS) tests/test_dev_load.c -o $(TESTDIR)/devload && $(TESTDIR)/devload
@@ -393,30 +397,30 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) tests/test_sdbus_forward.c -o $(TESTDIR)/sdbus-forward $(DBUS_LIBS) && $(TESTDIR)/sdbus-forward
 	$(CC) $(CFLAGS) tests/test_sdbus_activate.c -o $(TESTDIR)/sdbus-activate && $(TESTDIR)/sdbus-activate
 	$(CC) $(CFLAGS) tests/test_systemctl_shim.c -o $(TESTDIR)/systemctl && $(TESTDIR)/systemctl
-	$(CC) $(CFLAGS) tests/test_service_env.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/env && $(TESTDIR)/env
-	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/mountns && $(TESTDIR)/mountns
+	$(CC) $(CFLAGS) tests/test_service_env.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/env && $(TESTDIR)/env
+	$(CC) $(CFLAGS) tests/test_mountns_parse.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/mountns && $(TESTDIR)/mountns
 	$(CC) $(CFLAGS) tests/test_mountns_rw.c ns.c -o $(TESTDIR)/mountns-rw && $(TESTDIR)/mountns-rw
 	$(CC) $(CFLAGS) tests/test_kernel_ns.c ns.c caps.c -o $(TESTDIR)/kns && $(TESTDIR)/kns
-	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
-	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
-	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
+	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
+	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
+	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
-	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
-	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cap-parse && $(TESTDIR)/cap-parse
+	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
+	$(CC) $(CFLAGS) tests/test_cap_parse.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cap-parse && $(TESTDIR)/cap-parse
 	$(CC) $(CFLAGS) tests/test_ambient_caps.c caps.c -o $(TESTDIR)/ambient-caps && $(TESTDIR)/ambient-caps
-	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/stopcmds && $(TESTDIR)/stopcmds
+	$(CC) $(CFLAGS) tests/test_svc_stopcmds.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/stopcmds && $(TESTDIR)/stopcmds
 	$(CC) $(CFLAGS) tests/test_watch.c watch.c -o $(TESTDIR)/watch && $(TESTDIR)/watch
-	$(CC) $(CFLAGS) tests/test_svc_watch.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-watch && $(TESTDIR)/svc-watch
-	$(CC) $(CFLAGS) tests/test_svc_sched.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/sched && $(TESTDIR)/sched
-	$(CC) $(CFLAGS) tests/test_svc_reload.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svcreload && $(TESTDIR)/svcreload
-	$(CC) $(CFLAGS) tests/test_svc_restart_policy.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/restartpol && $(TESTDIR)/restartpol
-	$(CC) $(CFLAGS) tests/test_svc_kill_mode.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/killmode && $(TESTDIR)/killmode
-	$(CC) $(CFLAGS) tests/test_svc_exec_dirs.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/execdirs && $(TESTDIR)/execdirs
-	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify && $(TESTDIR)/verify
-	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cycles && $(TESTDIR)/cycles
-	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cgkill && $(TESTDIR)/cgkill
+	$(CC) $(CFLAGS) tests/test_svc_watch.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-watch && $(TESTDIR)/svc-watch
+	$(CC) $(CFLAGS) tests/test_svc_sched.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/sched && $(TESTDIR)/sched
+	$(CC) $(CFLAGS) tests/test_svc_reload.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svcreload && $(TESTDIR)/svcreload
+	$(CC) $(CFLAGS) tests/test_svc_restart_policy.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/restartpol && $(TESTDIR)/restartpol
+	$(CC) $(CFLAGS) tests/test_svc_kill_mode.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/killmode && $(TESTDIR)/killmode
+	$(CC) $(CFLAGS) tests/test_svc_exec_dirs.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/execdirs && $(TESTDIR)/execdirs
+	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify && $(TESTDIR)/verify
+	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cycles && $(TESTDIR)/cycles
+	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cgkill && $(TESTDIR)/cgkill
 	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o $(TESTDIR)/landlock-tcp && $(TESTDIR)/landlock-tcp
-	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/engine-conf && $(TESTDIR)/engine-conf
+	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/engine-conf && $(TESTDIR)/engine-conf
 
 # libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
 # + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.

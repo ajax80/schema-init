@@ -67,6 +67,13 @@ Every key a schema-init service file understands. The [README](how-it-works.md#s
 | `directory_mode` | `0755` | Mode for `make_directory`. |
 | `trigger_limit_burst` | `200` | With `watch_path`: more fires than this within `trigger_limit_interval_sec` parks the service (`excise_reason=trigger-limit-hit`) until `schema-ctl start` or `restart`. |
 | `trigger_limit_interval_sec` | `2` | The window for `trigger_limit_burst`, 1–86400. |
+| `syscall_filter` | — | Seccomp filter (systemd `SystemCallFilter=`): syscall names and `@groups` (systemd's: `@system-service`, `@privileged`, `@mount`, …), each optionally `:ERRNO`. A plain first line is an allowlist, one starting with `~` a denylist; later lines add, an opposite-sign line takes names back out; empty clears. Unknown names are skipped with a log line (as systemd does); an unknown group refuses the load. See [Syscall filtering](#syscall-filtering). |
+| `syscall_error_number` | `EPERM` | What a blocked syscall returns: an errno name or number, or `kill`. **Default EPERM, not systemd's kill.** |
+| `syscall_architectures` | — | `native` (systemd `SystemCallArchitectures=`). Any filter already refuses other ABIs. |
+| `restrict_suid_sgid` | `0` | `1`: creating setuid/setgid files fails with EPERM (chmod family, open/creat with `O_CREAT` or `O_TMPFILE`, mknod). |
+| `lock_personality` | `0` | `1`: `personality()` only with `PER_LINUX` (or the query). |
+| `restrict_realtime` | `0` | `1`: switching to `SCHED_FIFO`/`RR`/`DEADLINE` fails with EPERM. The service's own `sched_policy=` still applies (set before the filter). |
+| `restrict_namespaces` | `0` | `1`: `clone`/`unshare` with `CLONE_NEW*` and `setns` fail with EPERM (yes/no only). |
 | `persistent` | `0` | With `on_calendar`: a fire missed while the machine was off runs at the next boot (systemd `Persistent=`). |
 | `start_timeout_sec` | `90` for oneshots, `0` otherwise | Max seconds a service may sit in `FULL_TRUST` without promoting before it is killed and routed into the recovery arc — so a hung boot service can't stall its dependents. **Defaults on for oneshots** (the only services that can hang the chain; daemons promote via `stable_secs`). **Timers are exempt** (may run long). `0` disables. The analog of systemd's `TimeoutStartSec=`. |
 | `stop_timeout_sec` | `3` | Seconds a service gets to exit after its `kill_signal` at shutdown before its cgroup is killed (1–300); also how long a `schema-ctl stop`/`restart` waits before `final_kill_signal` (90 s when unset). Raise it for anything that saves state on the way out: the Plasma session gets `20`, because plasmashell can need 12 s to finish writing a freshly built panel layout. The analog of systemd's `TimeoutStopSec=`. |
@@ -288,6 +295,21 @@ Last-run is stamped to `/var/lib/schema-init/timers/<name>.stamp`; at boot, if t
 `dynamic_user=1` runs a service as a uid nobody else has, picked from systemd's range 61184–65519: hashed from the service name, so it is the same every boot unless taken, and skipping any uid or gid in `/etc/passwd`/`/etc/group` or held by another service. The gid is the same number. It keeps that uid across `schema-ctl reload` and PID 1 re-execs; `schema-ctl status <svc>` shows it. Inside, `USER`/`LOGNAME` are the service name and `HOME=/`. There is no NSS module: `getpwuid()` returns nothing for the uid (systemd ships nss-systemd for this).
 
 It turns on `no_new_privs`, `private_tmp`, `protect_system=full` and `protect_home` unless the service sets them. Its `state_dir`/`cache_dir`/`logs_dir` live under a root-only `private/` (`/var/lib/private/<dir>`, mode 0700), with `/var/lib/<dir>` a symlink to it; in the service's own mount namespace `private/` holds only its dirs, so a service handed the same uid later can't read them. An existing plain `/var/lib/<dir>` is moved in; a dir left owned by an old uid is re-owned without following symlinks or crossing mounts. These dirs take one path component (`state_dir=foo`, not `foo/bar`). `RemoveIPC=` and `RestrictSUIDSGID=` are not implemented yet.
+
+## Syscall filtering
+
+`syscall_filter=` and its siblings build a seccomp-BPF program for the service by hand (PID 1 is static, so no libseccomp) and install it as the very last step before `execve`, in the main process and in the `exec_stop`/`exec_reload` runners. `execve` itself is always allowed. The program checks the architecture first: a syscall from any other ABI (on x86_64 that includes x32 and 32-bit compat calls) kills the process, so nothing gets around the filter that way, and 32-bit binaries can't run under a filtered service. Allow/deny lists are searched as a balanced tree (about 9 compares for `@system-service`, not 400).
+
+**Blocked calls return EPERM by default.** systemd kills the process instead; here a failure shows up in the service's log as an error. Set `syscall_error_number=kill` for systemd's behaviour, or `:ERRNO` on one entry. Without `CAP_SYS_ADMIN` (any service with `user=`), the kernel needs `no_new_privs`, which is then set for it.
+
+The group tables come from `systemd-analyze syscall-filter` (systemd 259) via `tools/gen-seccomp-tables.py`; syscall numbers come from each architecture's kernel headers at build time.
+
+```ini
+syscall_filter=@system-service
+syscall_filter=~@privileged @resources
+restrict_suid_sgid=1
+lock_personality=1
+```
 
 ## Path watches
 

@@ -1067,6 +1067,8 @@ static void svc_apply_env(const service_t *svc, char **file_env, int file_envc) 
 /* Run CMDS in order in this (child) process; PRIVILEGED -1 runs every one,
  * else only those whose '+' prefix matches. A failure without '-' stops the
  * list and returns -1. */
+static void svc_seccomp_or_die(const service_t *svc, const char *what);
+
 static int svc_run_cmds(const service_t *svc, char *const *cmds, int n,
                          const char *what, int privileged) {
     for (int i = 0; i < n; i++) {
@@ -1093,6 +1095,9 @@ static int svc_run_cmds(const service_t *svc, char *const *cmds, int n,
         }
         pid_t p = fork();
         if (p == 0) {
+            /* each command meets the service's filter, not the runner that
+             * waits for it; + lines run unsandboxed, as in systemd */
+            if (!plus) svc_seccomp_or_die(svc, "");
             execv(argv[0], argv);
             _exit(127);
         }
@@ -1683,6 +1688,16 @@ static void svc_runner_netns(const service_t *svc, const char *what) {
     if (fd >= 0) close(fd);
 }
 
+/* the very last step before execve: the service's own setup never meets
+ * its filter, and execve itself is always allowed */
+static void svc_seccomp_or_die(const service_t *svc, const char *what) {
+    const char *step = "";
+    if (sc_active(&svc->sc) && sc_install(&svc->sc, &step) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: %sseccomp: %s: %d\n", svc->name, what, step, errno);
+        _exit(126);
+    }
+}
+
 /* keepcaps + inheritable before the uid drop, so ambient caps survive it */
 static void svc_ambient_prep_or_die(const service_t *svc) {
     const char *step = "";
@@ -2120,6 +2135,7 @@ int service_spawn(service_t *svc) {
             xargv[nx] = NULL;
             argv = xargv;
         }
+        svc_seccomp_or_die(svc, "");
         execv(svc->exec, argv);
         _exit(127);
     }
@@ -3851,6 +3867,56 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             fprintf(stderr, "[schema-init] %s: bad %s=%s\n", svc->name[0] ? svc->name : path, line, val);
             return -1;
         }
+    } else if (strcmp(line, "syscall_filter") == 0) {
+        /* the first line sets the mode (a leading ~ = denylist); a later
+         * line of the opposite sign takes names back out (systemd's rules) */
+        char buf[512], *save, *t;
+        if (!*val) {
+            memset(&svc->sc.set, 0, sizeof svc->sc.set);
+            memset(&svc->sc.err_set, 0, sizeof svc->sc.err_set);
+            svc->sc.n_err = 0;
+            svc->sc.mode = SC_NONE;
+            return 0;
+        }
+        int neg = val[0] == '~';
+        snprintf(buf, sizeof buf, "%s", val + neg);
+        if (svc->sc.mode == SC_NONE) svc->sc.mode = neg ? SC_DENY : SC_ALLOW;
+        int remove = (svc->sc.mode == SC_ALLOW) == neg;
+        for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save)) {
+            int r = sc_add(&svc->sc, t, remove);
+            if (r == -2) {
+                fprintf(stderr, "[schema-init] %s: syscall_filter: unknown syscall '%s' ignored\n",
+                        svc->name[0] ? svc->name : path, t);
+            } else if (r != 0) {
+                fprintf(stderr, "[schema-init] %s: syscall_filter: %s '%s' — not loaded\n", svc->name[0] ? svc->name : path,
+                        r == -3 ? "more than 4 distinct errnos at" : "unknown group or errno", t);
+                return -1;
+            }
+        }
+    } else if (strcmp(line, "syscall_error_number") == 0) {
+        if (!*val) svc->sc.err = 0;
+        else if (sc_errno_parse(val, &svc->sc.err) != 0) {
+            fprintf(stderr, "[schema-init] %s: bad syscall_error_number=%s — not loaded\n", svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+    } else if (strcmp(line, "syscall_architectures") == 0) {
+        if (*val && strcmp(val, "native") != 0) {
+            fprintf(stderr, "[schema-init] %s: syscall_architectures=%s: only 'native' — not loaded\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->sc.native = *val != 0;
+    } else if (strcmp(line, "restrict_suid_sgid") == 0 || strcmp(line, "lock_personality") == 0 ||
+               strcmp(line, "restrict_realtime") == 0 || strcmp(line, "restrict_namespaces") == 0) {
+        long n;
+        if (parse_int_in(val, 0, 1, &n)) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s (0 or 1) — not loaded\n", svc->name[0] ? svc->name : path, line, val);
+            return -1;
+        }
+        uint8_t *f = !strcmp(line, "restrict_suid_sgid") ? &svc->sc.suid
+                   : !strcmp(line, "lock_personality") ? &svc->sc.persona
+                   : !strcmp(line, "restrict_realtime") ? &svc->sc.rt : &svc->sc.ns;
+        *f = (uint8_t)n;
     } else if (strcmp(line, "supplementary_groups") == 0) {
         if (!*val) svc->supp_count = 0;   /* a drop-in's empty value clears */
         for (char *tok = val, *sp; *tok; tok = sp) {
