@@ -118,7 +118,10 @@ int main(void) {
     assert(probe(&s, c_true) == 0 && probe(&s, c_getpid) == 0);
     assert(sc_add(&s, "getpid", 1) == 0);
     assert(probe(&s, c_getpid) == EPERM);
-    assert(sc_add(&s, "@nonesuch", 0) == -1 && sc_add(&s, "nonesuch", 0) == -1 && sc_add(&s, "getpid:EBOGUS", 0) == -1);
+    /* an unknown name is skipped (-2: a unit from a newer systemd still
+     * loads, as systemd itself ignores them); an unknown group or errno is a
+     * typo and refuses */
+    assert(sc_add(&s, "@nonesuch", 0) == -1 && sc_add(&s, "nonesuch", 0) == -2 && sc_add(&s, "getpid:EBOGUS", 0) == -1);
 
     /* a big allowlist (trampolines in the tree): both ends and just outside */
     {

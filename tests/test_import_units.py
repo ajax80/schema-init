@@ -1312,9 +1312,10 @@ check("ExecStart=+ is root under systemd too: no DynamicUser warning", not any(
         "[Service]\nExecStart=+/usr/bin/a\nDynamicUser=yes\n")))))
 _b = warns(svc("CapabilityBoundingSet=CAP_KILL\nSystemCallFilter=@system-service\nRestrictNamespaces=yes\n"
                "IPAddressDeny=any\nInaccessiblePaths=/secret\nReadOnlyPaths=/data\nProtectClock=yes\n"))
-check("dropped sandbox directives are all named", all(any(k in w for w in _b) for k in (
-    "CapabilityBoundingSet", "SystemCallFilter", "RestrictNamespaces", "IPAddressDeny",
-    "InaccessiblePaths", "ReadOnlyPaths", "ProtectClock")))
+check("dropped sandbox directives are all named (seccomp ones are mapped now, audit 4.6)",
+      all(any(k in w for w in _b) for k in ("CapabilityBoundingSet", "IPAddressDeny", "InaccessiblePaths",
+                                           "ReadOnlyPaths", "ProtectClock"))
+      and not any("SystemCallFilter" in w or "RestrictNamespaces" in w for w in _b))
 check("sandbox directives at their defaults are silent", not warns(svc(
     "PrivateDevices=no\nUMask=0022\nDevicePolicy=auto\nProtectProc=default\nProcSubset=all\n"
     "SystemCallFilter=\nMemoryDenyWriteExecute=false\n")))
@@ -1754,5 +1755,37 @@ finally:
             os.environ.pop(_k, None)
         else:
             os.environ[_k] = _v
+
+# --- audit 4.6: seccomp directives are mapped, not warned about ---
+def _sc(extra, pfx=""):
+    return si.unit_to_svc("a", si.parse_unit("[Service]\nExecStart=%s/usr/bin/a\n%s" % (pfx, extra)))
+def _scw(body):
+    return [l[len(si.WARN_PREFIX):] for l in body.splitlines() if l.startswith(si.WARN_PREFIX)]
+_b = _sc("SystemCallFilter=@system-service\nSystemCallFilter=~@privileged @resources\nSystemCallErrorNumber=EPERM\n"
+         "SystemCallArchitectures=native\nRestrictSUIDSGID=yes\nLockPersonality=true\nRestrictRealtime=yes\n"
+         "RestrictNamespaces=yes\n")
+check("seccomp: SystemCallFilter= lines carried in order",
+      "syscall_filter=@system-service\nsyscall_filter=~@privileged @resources\n" in _b)
+check("seccomp: error number, arch, siblings", all(l in _b for l in (
+      "syscall_error_number=EPERM\n", "syscall_architectures=native\n", "restrict_suid_sgid=1\n",
+      "lock_personality=1\n", "restrict_realtime=1\n", "restrict_namespaces=1\n")))
+check("seccomp: mapped directives are no longer 'not enforced'", not any(any(k in w for k in (
+      "SystemCallFilter", "SystemCallArchitectures", "RestrictSUIDSGID", "LockPersonality", "RestrictRealtime",
+      "RestrictNamespaces")) for w in _scw(_b)))
+check("seccomp: :ERRNO entries kept", "syscall_filter=@timer:EPERM\n" in _sc("SystemCallFilter=@timer:EPERM\n"))
+_b = _sc("SystemCallFilter=@mount\nSystemCallFilter=\nSystemCallFilter=~@clock\n")
+check("seccomp: an empty SystemCallFilter= resets", "syscall_filter=~@clock\n" in _b and "@mount" not in _b)
+_b = _sc("SystemCallErrorNumber=ECONNRESET\n")
+check("seccomp: an errno the engine doesn't know is dropped and said",
+      "syscall_error_number" not in _b and any("SystemCallErrorNumber" in w for w in _scw(_b)))
+_b = _sc("SystemCallArchitectures=native x86\n")
+check("seccomp: other architectures warned", "syscall_architectures" not in _b and any("SystemCallArchitectures" in w for w in _scw(_b)))
+_b = _sc("RestrictNamespaces=cgroup ipc\n")
+check("seccomp: RestrictNamespaces= lists warned", "restrict_namespaces" not in _b and any("RestrictNamespaces" in w for w in _scw(_b)))
+check("seccomp: false values write nothing", all(k not in _sc("RestrictSUIDSGID=no\nLockPersonality=false\nRestrictNamespaces=no\n")
+      for k in ("restrict_suid_sgid", "lock_personality", "restrict_namespaces")))
+check("seccomp: ExecStart=+ runs unsandboxed, no filter",
+      "syscall_filter" not in _sc("SystemCallFilter=@system-service\nRestrictSUIDSGID=yes\n", "+")
+      and "restrict_suid_sgid" not in _sc("RestrictSUIDSGID=yes\n", "+"))
 
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

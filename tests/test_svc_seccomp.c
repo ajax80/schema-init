@@ -61,8 +61,9 @@ int main(void) {
     assert(load("syscall_filter=@system-service\n", "syscall_filter=\n", &s) == 0 && s.sc.mode == SC_NONE);
     assert(load("syscall_filter=@system-service\n", "syscall_filter=\nsyscall_filter=~@mount\n", &s) == 0 &&
            s.sc.mode == SC_DENY);
-    /* unknown names refuse the load */
-    assert(load("syscall_filter=nonesuch\n", NULL, &s) == -1);
+    /* an unknown name is skipped (newer systemd units still load); an
+     * unknown group or errno refuses */
+    assert(load("syscall_filter=nonesuch getpid\n", NULL, &s) == 0 && has(&s, "getpid") == 1);
     assert(load("syscall_filter=@nonesuch\n", NULL, &s) == -1);
     assert(load("syscall_filter=getuid:EBOGUS\n", NULL, &s) == -1);
 

@@ -3674,12 +3674,17 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         snprintf(buf, sizeof buf, "%s", val + neg);
         if (svc->sc.mode == SC_NONE) svc->sc.mode = neg ? SC_DENY : SC_ALLOW;
         int remove = (svc->sc.mode == SC_ALLOW) == neg;
-        for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save))
-            if (sc_add(&svc->sc, t, remove) != 0) {
-                fprintf(stderr, "[schema-init] %s: syscall_filter: unknown syscall, group or errno '%s' — not loaded\n",
+        for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save)) {
+            int r = sc_add(&svc->sc, t, remove);
+            if (r == -2) {
+                fprintf(stderr, "[schema-init] %s: syscall_filter: unknown syscall '%s' ignored\n",
+                        svc->name[0] ? svc->name : path, t);
+            } else if (r != 0) {
+                fprintf(stderr, "[schema-init] %s: syscall_filter: unknown group or errno '%s' — not loaded\n",
                         svc->name[0] ? svc->name : path, t);
                 return -1;
             }
+        }
     } else if (strcmp(line, "syscall_error_number") == 0) {
         if (!*val) svc->sc.err = 0;
         else if (sc_errno_parse(val, &svc->sc.err) != 0) {

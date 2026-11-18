@@ -116,7 +116,9 @@ static int mark(sc_spec_t *s, int idx, int remove, int has_err, uint16_t err) {
     return 0;
 }
 
-/* name or @group, optionally :ERRNO; added to the set, or removed from it */
+/* name or @group, optionally :ERRNO; added to the set, or removed from it.
+ * -1: unknown group or errno (a typo); -2: unknown syscall name, which the
+ * caller skips, as systemd does, so a unit from a newer systemd still loads */
 int sc_add(sc_spec_t *s, const char *entry, int remove) {
     const char *colon = strchr(entry, ':');
     size_t len = colon ? (size_t)(colon - entry) : strlen(entry);
@@ -134,7 +136,7 @@ int sc_add(sc_spec_t *s, const char *entry, int remove) {
         return -1;
     }
     int idx = name_idx(entry, len);
-    return idx < 0 ? -1 : mark(s, idx, remove, has_err, err);
+    return idx < 0 ? -2 : mark(s, idx, remove, has_err, err);
 }
 
 int sc_count(const sc_spec_t *s) {

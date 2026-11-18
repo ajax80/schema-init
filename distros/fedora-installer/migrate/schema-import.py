@@ -1468,12 +1468,57 @@ def _ambient_caps(svc):
     return list(caps), warns
 
 
+# the errno names the engine's syscall_error_number= takes (seccomp.c)
+_SC_ERRNOS = {"EPERM", "EACCES", "ENOSYS", "EINVAL", "ENOENT", "EIO", "EBADF", "EAGAIN", "ENOMEM", "EFAULT",
+              "EBUSY", "EEXIST", "ENODEV", "EOPNOTSUPP", "ENOTSUP", "EROFS", "ENOTTY", "ESRCH", "EINTR", "ENOTDIR"}
+
+
+def _sc_errno_ok(v):
+    return v.lower() == "kill" or v in _SC_ERRNOS or (v.isdigit() and int(v) <= 4095)
+
+
+# SystemCallFilter= and the seccomp siblings, as systemd means them (the
+# engine skips syscall names it doesn't know, as systemd does)
+def _seccomp(svc):
+    lines, warns, filt = [], [], []
+    for v in _get_all(svc, "SystemCallFilter"):
+        filt = filt + [v.strip()] if v.strip() else []
+    for v in filt:
+        bad = [e for e in v.lstrip("~").split() if ":" in e and not _sc_errno_ok(e.split(":", 1)[1])]
+        if bad:
+            warns.append("SystemCallFilter= entries with an errno the engine doesn't know dropped: %s" % " ".join(bad))
+            v = " ".join(e for e in v.split() if e not in bad)
+        if v.lstrip("~").strip():
+            lines.append("syscall_filter=%s" % v)
+    err = _get_last(svc, "SystemCallErrorNumber")
+    if err:
+        if _sc_errno_ok(err):
+            lines.append("syscall_error_number=%s" % err)
+        else:
+            warns.append("SystemCallErrorNumber=%s not known here, blocked calls get EPERM" % err)
+    arch = _get_last(svc, "SystemCallArchitectures")
+    if arch == "native":
+        lines.append("syscall_architectures=native")
+    elif arch:
+        warns.append("SystemCallArchitectures=%s: only native is enforced (and is, with any filter)" % arch)
+    for directive, key in (("RestrictSUIDSGID", "restrict_suid_sgid"), ("LockPersonality", "lock_personality"),
+                           ("RestrictRealtime", "restrict_realtime")):
+        if _get_last(svc, directive).lower() in _TRUE:
+            lines.append("%s=1" % key)
+    ns = _get_last(svc, "RestrictNamespaces").lower()
+    if ns in _TRUE:
+        lines.append("restrict_namespaces=1")
+    elif ns and ns not in _FALSE:
+        warns.append("RestrictNamespaces=%s not enforced: only yes/no" % ns)
+    return lines, warns
+
+
 # Directives that confine a unit under systemd and that the engine has no key
 # for. _UNENFORCED_DEFAULT: the values that ask for nothing, so lose nothing.
 _UNENFORCED = (
-    "CapabilityBoundingSet", "SystemCallFilter", "SystemCallArchitectures",
-    "RestrictAddressFamilies", "RestrictNamespaces", "RestrictRealtime", "RestrictSUIDSGID",
-    "RestrictFileSystems", "LockPersonality", "ProtectKernelLogs",
+    "CapabilityBoundingSet",
+    "RestrictAddressFamilies",
+    "RestrictFileSystems", "ProtectKernelLogs",
     "ProtectClock", "ProtectProc", "ProcSubset", "PrivateUsers", "PrivateIPC", "PrivateMounts", "RemoveIPC",
     "NetworkNamespacePath", "IPCNamespacePath", "ReadOnlyPaths", "ReadOnlyDirectories",
     "InaccessiblePaths", "InaccessibleDirectories", "NoExecPaths", "ExecPaths",
@@ -1962,6 +2007,11 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
     lines.extend(hard)
+    # + with no plain ExecStartPre runs unsandboxed under systemd: no filter
+    if not ("+" in pfx and all("+" in pre for pre, _ in pres)):
+        sc, sc_warns = _seccomp(svc)
+        lines.extend(sc)
+        warns.extend(sc_warns)
     sched, sched_warns = _scheduling(svc)
     lines.extend(sched)
     warns.extend(sched_warns)
