@@ -56,6 +56,8 @@ int main(void) {
     assert(run("user=nobody\nsupplementary_groups=4 adm\n", got, sizeof got) == 0 && has(got, "4"));
     /* an unknown group fails the start rather than running without it */
     assert(run("user=nobody\nsupplementary_groups=no_such_group_x\n", got, sizeof got) == 126 && !got[0]);
+    /* a numeric gid must exist too, like group= */
+    assert(run("user=nobody\nsupplementary_groups=99999\n", got, sizeof got) == 126);
     /* without the key nothing extra appears */
     assert(run("user=nobody\n", got, sizeof got) == 0 && !has(got, "4"));
 
@@ -81,6 +83,29 @@ int main(void) {
         fclose(f);
         got[strcspn(got, "\n")] = 0;
         if (strcmp(got, "64000 64000 [64000 4] dyn /")) { fprintf(stderr, "dynamic: %s\n", got); return 1; }
+    }
+
+    /* a dynamic uid keeps its ambient caps (earlyoom: CAP_KILL) */
+    {
+        static service_t d;
+        int st;
+        FILE *f = fopen(path, "w");
+        fprintf(f, "name=dyn\nexec=/bin/sh\nargs=-c\nargs=grep CapAmb /proc/self/status > %s\n"
+                   "oneshot=1\ndynamic_user=1\nambient_caps=CAP_KILL\nprivate_tmp=0\nprotect_system=0\n"
+                   "protect_home=0\n", out);
+        fclose(f);
+        unlink(out);
+        memset(&d, 0, sizeof d);
+        assert(service_load_one(path, &d) == 0);
+        d.dyn_uid = 64000;
+        d.run_uid = d.run_gid = 64000;
+        assert(service_spawn(&d) == 0);
+        assert(waitpid(d.child_pid, &st, 0) == d.child_pid && WIFEXITED(st));
+        if (WEXITSTATUS(st) != 0) { fprintf(stderr, "dynamic + ambient_caps exited %d\n", WEXITSTATUS(st)); return 1; }
+        f = fopen(out, "r");
+        assert(f && fgets(got, sizeof got, f));
+        fclose(f);
+        assert(strstr(got, "0000000000000020"));   /* CAP_KILL = bit 5 */
     }
 
     /* the stop runner drops the same way */

@@ -1666,11 +1666,26 @@ static void path_after_run(service_t *s) {
 /* dynamic_user=1: a uid no passwd/group entry and no other service holds;
  * kept once picked (it rides reloads and re-execs), and a static user= that
  * exists wins, as in systemd */
+struct dynuser_ctx { const service_t *self; uint8_t map[DYNUSER_MAP_BYTES]; };
+
 static int dynuser_taken(uid_t u, void *ctx) {
-    if (getpwuid(u) || getgrgid(u)) return 1;
+    struct dynuser_ctx *c = ctx;
+    if (dynuser_mapped(c->map, u)) return 1;
     for (int i = 0; i < svc_count; i++)
-        if (&services[i] != ctx && services[i].dyn_uid == (int)u) return 1;
+        if (&services[i] != c->self && services[i].dyn_uid == (int)u) return 1;
     return 0;
+}
+
+/* a user= that resolves (name or numeric uid) is the static user, which wins */
+static int dynuser_static(const service_t *s, uid_t *uid) {
+    char *end;
+    struct passwd *pw;
+    if (!s->run_user[0]) return 0;
+    unsigned long id = strtoul(s->run_user, &end, 10);
+    pw = *end ? getpwnam(s->run_user) : getpwuid((uid_t)id);
+    if (!pw) return 0;
+    *uid = pw->pw_uid;
+    return 1;
 }
 
 static int dynuser_assign(service_t *s) {
@@ -1681,12 +1696,20 @@ static int dynuser_assign(service_t *s) {
         s->dynamic_user = 2;
         return 0;
     }
-    if (s->run_user[0] && getpwnam(s->run_user)) {
+    uid_t st;
+    if (dynuser_static(s, &st)) {
+        /* a carried dynamic uid must not linger in run_uid */
+        if (s->dyn_uid && s->run_uid == (uid_t)s->dyn_uid) s->run_uid = st;
         s->dyn_uid = 0;
         return 0;
     }
     if (!s->dyn_uid) {
-        uid_t u = dynuser_pick(s->name, dynuser_taken, s);
+        static struct dynuser_ctx c;
+        memset(&c, 0, sizeof c);
+        c.self = s;
+        dynuser_scan("/etc/passwd", 2, c.map);
+        dynuser_scan("/etc/group", 2, c.map);
+        uid_t u = dynuser_pick(s->name, dynuser_taken, &c);
         if (!u) return -1;
         s->dyn_uid = (int)u;
     }
@@ -1698,11 +1721,16 @@ static int dynuser_assign(service_t *s) {
 /* a fresh parse has run_uid 0: put a carried dynamic uid back, so a stop or
  * reload runner of a running service never runs as root */
 static void dynuser_apply_all(void) {
-    for (int i = 0; i < svc_count; i++)
-        if (services[i].dyn_uid) {
-            services[i].run_uid = (uid_t)services[i].dyn_uid;
-            services[i].run_gid = (gid_t)services[i].dyn_uid;
+    for (int i = 0; i < svc_count; i++) {
+        service_t *s = &services[i];
+        if (!s->dyn_uid) continue;
+        if (!s->dynamic_user) {   /* dynamic_user dropped from the config: forget the uid */
+            s->dyn_uid = 0;
+            continue;
         }
+        s->run_uid = (uid_t)s->dyn_uid;
+        s->run_gid = (gid_t)s->dyn_uid;
+    }
 }
 
 static void ready_inotify_drain(void) {

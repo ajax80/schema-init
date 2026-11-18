@@ -691,9 +691,11 @@ void service_cgroup_root_low(const service_t *svcs, int n) {
 /* dynamic_user=1 implies systemd's sandbox for it, unless the unit says
  * otherwise; marked so status names the source, and droppable like a default
  * when it would hide the exec */
+int service_dynamic_users = 1;
+
 static void apply_dynuser_implies(service_t *svc) {
     static const uint8_t bits[] = { HARD_NNP, HARD_PT, HARD_PS, HARD_PH };
-    if (!svc->dynamic_user) return;
+    if (!svc->dynamic_user || !service_dynamic_users) return;
     for (int i = 0; i < 4; i++) {
         uint8_t b = bits[i];
         if (svc->hard_set & b) continue;
@@ -1681,6 +1683,15 @@ static void svc_runner_netns(const service_t *svc, const char *what) {
     if (fd >= 0) close(fd);
 }
 
+/* keepcaps + inheritable before the uid drop, so ambient caps survive it */
+static void svc_ambient_prep_or_die(const service_t *svc) {
+    const char *step = "";
+    if (svc->cap_ambient_mask && ambient_caps_prep(svc->cap_ambient_mask, &step) != 0) {
+        dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n", svc->name, step, errno);
+        _exit(126);
+    }
+}
+
 /* the user's /etc/group memberships; a dynamic uid has none, so it starts
  * from an empty list (not nobody's, which initgroups would hand it) */
 static int svc_initgroups(const service_t *svc, gid_t gid) {
@@ -1699,16 +1710,11 @@ static void svc_supp_groups_or_die(const service_t *svc) {
         _exit(126);
     }
     for (int i = 0; i < svc->supp_count; i++) {
-        const char *name = svc->supp_groups[i];
-        char *end;
-        gid_t gid = (gid_t)strtoul(name, &end, 10);
-        if (*end || !*name) {
-            struct group *gr = getgrnam(name);
-            if (!gr) {
-                dprintf(2, "[schema-init] UID DROP FAILED for %s: supplementary_groups: %s\n", svc->name, name);
-                _exit(126);
-            }
-            gid = gr->gr_gid;
+        gid_t gid;
+        if (!svc_group_resolve(svc->supp_groups[i], &gid)) {
+            dprintf(2, "[schema-init] UID DROP FAILED for %s: supplementary_groups: %s\n",
+                    svc->name, svc->supp_groups[i]);
+            _exit(126);
         }
         int dup = 0;
         for (int k = 0; k < n && !dup; k++) dup = g[k] == gid;
@@ -1741,6 +1747,11 @@ static void svc_runner_child(const service_t *svc, const char *what) {
     snprintf(gwhat, sizeof gwhat, "%s: ", what);
     gid_t sgid = svc->run_gid;
     svc_resolve_group_or_die(svc, &sgid, gwhat);
+    /* the runner reaches $STATE_DIRECTORY through the same private binds */
+    if (svc->dynamic_user && geteuid() == 0 && service_private_binds(svc) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: %sdynamic_user private dirs: %d\n", svc->name, gwhat, errno);
+        _exit(126);
+    }
     int amb = svc->run_uid && svc->cap_ambient_mask;
     if (amb || svc->run_uid || svc->run_group[0] || svc->supp_count) {
         const char *step = "";
@@ -2021,6 +2032,7 @@ int service_spawn(service_t *svc) {
             setenv("HOME", "/", 1);
             setenv("USER", svc->name, 1);
             setenv("LOGNAME", svc->name, 1);
+            svc_ambient_prep_or_die(svc);
         } else if (svc->run_uid) {
             struct passwd *pw = getpwuid(svc->run_uid);
             if (pw) {
@@ -2038,14 +2050,7 @@ int service_spawn(service_t *svc) {
                 chown(xdg, svc->run_uid, pw ? pw->pw_gid : svc->run_gid);
                 setenv("XDG_RUNTIME_DIR", xdg, 1);
             }
-            if (svc->cap_ambient_mask) {
-                const char *step = "";
-                if (ambient_caps_prep(svc->cap_ambient_mask, &step) != 0) {
-                    dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n",
-                            svc->name, step, errno);
-                    _exit(126);
-                }
-            }
+            svc_ambient_prep_or_die(svc);
         }
         /* group= alone still switches gid: root with that group, never root:root;
          * supplementary_groups= alone still sets groups on a root service */
@@ -2805,8 +2810,10 @@ out:
 static int chown_tree(int fd, uid_t uid, gid_t gid, int depth) {
     struct stat ds;
     int r = 0;
-    if (fstat(fd, &ds) != 0 || fchown(fd, uid, gid) != 0) return -1;
-    if (depth > 64) return 0;
+    /* children first, the top last: a re-own cut short leaves the top on the
+     * old uid, so the next start tries again */
+    if (depth > 256) { errno = ELOOP; return -1; }
+    if (fstat(fd, &ds) != 0) return -1;
     int dfd = dup(fd);
     DIR *d = dfd < 0 ? NULL : fdopendir(dfd);
     if (!d) {
@@ -2817,8 +2824,10 @@ static int chown_tree(int fd, uid_t uid, gid_t gid, int depth) {
         struct stat st;
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         if (fstatat(fd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0 || st.st_dev != ds.st_dev) continue;
-        if (fchownat(fd, e->d_name, uid, gid, AT_SYMLINK_NOFOLLOW) != 0) r = -1;
-        if (!S_ISDIR(st.st_mode)) continue;
+        if (!S_ISDIR(st.st_mode)) {
+            if (fchownat(fd, e->d_name, uid, gid, AT_SYMLINK_NOFOLLOW) != 0) r = -1;
+            continue;
+        }
         int c = openat(fd, e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (c < 0) continue;
         struct stat cs;
@@ -2826,6 +2835,7 @@ static int chown_tree(int fd, uid_t uid, gid_t gid, int depth) {
         close(c);
     }
     closedir(d);
+    if (r == 0 && fchown(fd, uid, gid) != 0) r = -1;
     return r;
 }
 
@@ -3021,10 +3031,11 @@ static void svc_make_exec_dirs(const service_t *svc, int create) {
                      : service_make_dir(base, svc->exec_dir[k][i], mode, uid, gid, &step)) == 0) continue;
             dprintf(2, "[schema-init] %s: %s=%s: %s: %s%s\n", svc->name, exec_dir_key[k],
                     svc->exec_dir[k][i], step, strerror(errno),
-                    k == EXEC_DIR_RUNTIME ? "" : " (starting anyway)");
-            /* the daemon can't run without its runtime dir; the others may
-             * already be there in a form we won't touch (a read-only /var) */
-            if (k == EXEC_DIR_RUNTIME) _exit(126);
+                    k == EXEC_DIR_RUNTIME || dyn ? "" : " (starting anyway)");
+            /* the daemon can't run without its runtime dir, nor a dynamic user
+             * without its private dirs (systemd fails those starts too); the
+             * others may already be there in a form we won't touch */
+            if (k == EXEC_DIR_RUNTIME || dyn) _exit(126);
         }
         size_t need = service_exec_dir_env_size(svc, k, base);
         if ((env = malloc(need)) && service_exec_dir_env(svc, k, base, env, need) == 0) setenv(var[k], env, 1);

@@ -2,6 +2,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 static uid_t taken_set[8];
 static int taken_n;
@@ -39,6 +41,19 @@ int main(void) {
         assert(found);
         taken_set[taken_n++] = DYNUSER_MAX;
         assert(dynuser_pick(name, taken, NULL) == DYNUSER_MIN);
+    }
+    /* local passwd/group files into the range bitmap: no NSS in PID 1's loop */
+    {
+        char pw[] = "/tmp/dynpw-XXXXXX", gr[] = "/tmp/dyngr-XXXXXX";
+        int a = mkstemp(pw), b = mkstemp(gr);
+        dprintf(a, "root:x:0:0::/root:/bin/sh\nsvc:x:61184:61184::/:/sbin/nologin\nbad line\n");
+        dprintf(b, "root:x:0:\nweird:x:65519:\nhigh:x:70000:\n");
+        close(a); close(b);
+        uint8_t map[DYNUSER_MAP_BYTES] = {0};
+        dynuser_scan(pw, 2, map);
+        dynuser_scan(gr, 2, map);
+        assert(dynuser_mapped(map, 61184) && dynuser_mapped(map, 65519) && !dynuser_mapped(map, 61185));
+        unlink(pw); unlink(gr);
     }
     /* nothing free: 0, the start is refused */
     all_taken = 1;

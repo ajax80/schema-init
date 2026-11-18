@@ -85,6 +85,51 @@ int main(void) {
     if (strcmp(got, "mine\nhidden\n")) { fprintf(stderr, "ns view: %s\n", got); return 1; }
     p(a, sizeof a, "var/cache/mine"); assert(lstat(a, &st) == 0 && S_ISLNK(st.st_mode));
 
+    /* the stop runner reaches the private dir too (same binds as the service) */
+    {
+        static service_t r;
+        int ws;
+        FILE *f = fopen(path, "w");
+        fprintf(f, "name=dyn\nexec=/bin/true\ndynamic_user=1\nprivate_tmp=0\nstate_dir=mine\n"
+                   "exec_stop=/bin/sh -c \"echo stopped > $STATE_DIRECTORY/s\"\n");
+        fclose(f);
+        memset(&r, 0, sizeof r);
+        assert(service_load_one(path, &r) == 0);
+        r.dyn_uid = 64000;
+        r.run_uid = r.run_gid = 64000;
+        pid_t pid = service_stop_spawn(&r, 1);
+        assert(pid > 0 && waitpid(pid, &ws, 0) == pid && WIFEXITED(ws));
+        p(a, sizeof a, "var/lib/private/mine/s");
+        if (WEXITSTATUS(ws) != 0 || stat(a, &st) != 0) { fprintf(stderr, "stop runner could not write its state dir\n"); return 1; }
+    }
+
+    /* a plain dir and a non-empty private dir of the same name: the start
+     * fails, it does not run against a half-set-up dir */
+    p(a, sizeof a, "var/lib/clash"); assert(mkdir(a, 0755) == 0);
+    p(a, sizeof a, "var/lib/clash/x"); { FILE *f = fopen(a, "w"); fclose(f); }
+    p(a, sizeof a, "var/lib/private/clash"); assert(mkdir(a, 0755) == 0);
+    p(a, sizeof a, "var/lib/private/clash/y"); { FILE *f = fopen(a, "w"); fclose(f); }
+    snprintf(keys, sizeof keys, "echo ran > %s\nstate_dir=clash", out);
+    assert(spawn(keys, got, sizeof got) == 126 && !got[0]);
+
+    /* a re-own that can't finish leaves the top dir on the old uid, so the
+     * next start tries again (a too-deep tree here) */
+    p(a, sizeof a, "var/lib/private/deep"); assert(mkdir(a, 0755) == 0); chown(a, 1234, 1234);
+    {
+        int fd = open(a, O_RDONLY | O_DIRECTORY);
+        for (int i = 0; i < 300; i++) {
+            assert(mkdirat(fd, "d", 0755) == 0);
+            int c = openat(fd, "d", O_RDONLY | O_DIRECTORY);
+            fchown(c, 1234, 1234);
+            close(fd);
+            fd = c;
+        }
+        close(fd);
+    }
+    snprintf(keys, sizeof keys, "echo ran > %s\nstate_dir=deep", out);
+    assert(spawn(keys, got, sizeof got) == 126);
+    p(a, sizeof a, "var/lib/private/deep"); assert(stat(a, &st) == 0 && st.st_uid == 1234);
+
     snprintf(a, sizeof a, "rm -rf %s", root);
     assert(system(a) == 0);
     printf("all dynuser dirs tests passed\n");

@@ -1947,6 +1947,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             supp = supp[:16]
         if supp:
             lines.append("supplementary_groups=%s" % " ".join(supp))
+    elif _get_last(svc, "SupplementaryGroups"):
+        rt_notes.append("dropped SupplementaryGroups= (%s)" % ("user services run as the user" if _USER
+                        else "ExecStart=!/+ runs as root"))
 
     lines.append("critical=0")
 

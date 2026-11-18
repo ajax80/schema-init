@@ -1314,6 +1314,8 @@ check("DynamicUser with User= keeps both", "user=wsdd\n" in _b and "dynamic_user
       and not any("static user" in w for w in warns(_b)))
 _b = svc("SupplementaryGroups=a b\nSupplementaryGroups=c\nUser=x\n")
 check("SupplementaryGroups= lines add up", "supplementary_groups=a b c\n" in _b and not any("Supplementary" in w for w in warns(_b)))
+_b = si.unit_to_svc("a", si.parse_unit("[Service]\nExecStart=+/usr/bin/a\nSupplementaryGroups=video\n"))
+check("SupplementaryGroups= on an ExecStart=+ unit is noted, not dropped silently", "SupplementaryGroups" in _b)
 _b = svc("SupplementaryGroups=a b\nSupplementaryGroups=\nSupplementaryGroups=c\n")
 check("an empty SupplementaryGroups= resets", "supplementary_groups=c\n" in _b)
 _b = svc("SupplementaryGroups=" + " ".join("g%d" % i for i in range(17)) + "\n")

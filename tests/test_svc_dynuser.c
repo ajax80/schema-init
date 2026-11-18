@@ -63,6 +63,10 @@ int main(void) {
            s.ns_protect_system == PROTECT_SYSTEM_BASE && !(s.hard_dyn & (HARD_PT | HARD_PS)) && (s.hard_dyn & HARD_PH));
     assert(load("dynamic_user=0\n", NULL, &s) == 0 && !s.dynamic_user && !s.hard_dyn);
     assert(load("dynamic_user=2\n", NULL, &s) == -1);
+    /* schema-user ignores dynamic_user=1, and so what it implies */
+    service_dynamic_users = 0;
+    assert(load("dynamic_user=1\n", NULL, &s) == 0 && !s.hard_dyn && !s.ns_protect_home);
+    service_dynamic_users = 1;
     /* <base>/<d> is a symlink into private/: one level only */
     assert(load("dynamic_user=1\nstate_dir=a/b\n", NULL, &s) == -1);
     assert(load("dynamic_user=1\nruntime_dir=a/b\nstate_dir=a\n", NULL, &s) == 0);
