@@ -99,6 +99,23 @@ static long c_setns(void) { return syscall(SYS_setns, -1, 0); }
 
 int main(void) {
     sc_spec_t s;
+#if defined(__SANITIZE_ADDRESS__)
+    /* ASan's runtime makes syscalls of its own (shadow memory, its exit
+     * path) that a minimal allowlist blocks: real filters and ASan don't mix
+     * in one process. The plain test job runs every case; here only the
+     * builder, which needs no filter installed. */
+    {
+        sc_spec_t all;
+        struct sock_filter prog[SC_MAX_INSNS];
+        memset(&all, 0, sizeof all);
+        all.mode = SC_ALLOW;
+        for (int i = 0; i < SC_NAMES_ALL; i++) all.set[i / 64] |= 1ull << (i % 64);
+        int n = sc_build(&all, prog, SC_MAX_INSNS);
+        assert(n > 255 && n <= SC_MAX_INSNS);
+        printf("seccomp tests: builder only under ASan\n");
+        return 0;
+    }
+#endif
     assert(mkdtemp(dir));
     snprintf(path, sizeof path, "%s/f", dir);
     close(open(path, O_CREAT | O_WRONLY, 0644));
@@ -218,7 +235,9 @@ int main(void) {
     assert(probe(&s, c_unshare_user) == EPERM && probe(&s, c_fork) == 0);
     assert(probe(&s, c_clone_user) == EPERM);
     assert(probe(&s, c_clone3) == ENOSYS && probe(&s, c_setns) == EPERM);
-    assert(probe(NULL, c_setns) == EBADF);
+    /* where the environment allows setns at all (a container's own seccomp
+     * profile may not), the unfiltered call reaches the kernel */
+    if (probe(NULL, c_setns) != EPERM) assert(probe(NULL, c_setns) == EBADF);
 
     char cmd[400];
     snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
