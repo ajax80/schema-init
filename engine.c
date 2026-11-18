@@ -36,6 +36,7 @@
 #include <sys/ioctl.h>
 #include <grp.h>
 #include <sys/inotify.h>
+#include <sys/random.h>
 #include <linux/watchdog.h>
 #include <dirent.h>
 #include <mntent.h>
@@ -127,9 +128,24 @@ int     reexec_check_killed = 0;
  * day-by-day (mktime per step re-normalizes wday/mday and self-corrects
  * DST/NTP each cycle). Daily timers (dow=dom=-1) match the first or second
  * day and behave as before. */
+/* randomized_delay_sec: 0..N whole seconds onto the deadline just armed, a
+ * fresh draw each arm. Never blocks: PID 1 can arm before the pool is ready. */
+static void timer_jitter(service_t *svc) {
+    uint32_t r;
+    if (svc->timer_jitter_sec <= 0) return;
+    if (getrandom(&r, sizeof r, GRND_NONBLOCK) != (ssize_t)sizeof r) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        r = (uint32_t)ts.tv_nsec;
+        for (const char *p = svc->name; *p; p++) r = (r ^ (uint8_t)*p) * 16777619u;
+    }
+    svc->timer_next.tv_sec += (time_t)(r % ((uint32_t)svc->timer_jitter_sec + 1));
+}
+
 static void timer_arm_calendar(service_t *svc) {
     svc->timer_next.tv_sec  = calendar_next_after(svc->timer_cal, svc->timer_cal_n, time(NULL));
     svc->timer_next.tv_nsec = 0;
+    timer_jitter(svc);
 }
 
 /* ── persistent calendar timers (persistent=1): catch up a fire missed while
@@ -180,6 +196,7 @@ static void timer_catchup_check(service_t *svc) {
     if (calendar_recent_occurrence(svc, now) > stamp) {
         svc->timer_next.tv_sec  = now;   /* CLOCK_REALTIME: fires on the next tick */
         svc->timer_next.tv_nsec = 0;
+        timer_jitter(svc);
         service_log(svc, "timer-catchup");
     } else {
         timer_arm_calendar(svc);
@@ -195,6 +212,19 @@ static void timer_catchup_check(service_t *svc) {
 static void timer_arm_persistent(service_t *svc) {
     svc->timer_catchup_wait = 1;
     timer_arm_calendar(svc);
+}
+
+/* born "already ran": PERFECT, first fire at the calendar or boot + on_boot_sec */
+static void timer_arm(service_t *svc) {
+    svc->inst.state = STATE_PERFECT;
+    if (svc->flags & SVC_TIMER_CALENDAR) {
+        if (svc->flags & SVC_TIMER_PERSIST) timer_arm_persistent(svc);
+        else timer_arm_calendar(svc);
+        return;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &svc->timer_next);
+    svc->timer_next.tv_sec += svc->timer_boot_sec;
+    timer_jitter(svc);
 }
 
 static void timer_catchup_tick(void) {
@@ -997,6 +1027,7 @@ static void timer_rearm(service_t *svc) {
         clock_gettime(CLOCK_MONOTONIC, &tn);
         svc->timer_next = tn;
         svc->timer_next.tv_sec += svc->timer_interval_sec;
+        timer_jitter(svc);
     } else {
         svc->flags &= ~SVC_TIMER;
     }
@@ -2481,6 +2512,17 @@ static void ctl_cmd(int fd, char *line) {
                 if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);
                 for (int k = 0; k < s->watch_count; k++)
                     ctl_writef(fd, "  watch_path=%s:%s\n", watch_kind_name(s->watch[k].kind), s->watch[k].path);
+                if ((s->flags & SVC_TIMER) && s->inst.state == STATE_PERFECT) {
+                    time_t t = s->timer_next.tv_sec;
+                    char tb[32];
+                    if (!(s->flags & SVC_TIMER_CALENDAR)) {   /* a CLOCK_MONOTONIC deadline */
+                        struct timespec m;
+                        clock_gettime(CLOCK_MONOTONIC, &m);
+                        t = time(NULL) + (s->timer_next.tv_sec - m.tv_sec);
+                    }
+                    strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", localtime(&t));
+                    ctl_writef(fd, "  next fire: %s\n", tb);
+                }
                 if (s->path_last_fire) {
                     char tb[32];
                     strftime(tb, sizeof tb, "%Y-%m-%d %H:%M:%S", localtime(&s->path_last_fire));
@@ -2715,20 +2757,7 @@ static void ctl_cmd(int fd, char *line) {
         /* Arm timers added at runtime, mirroring the boot/reload arm sites.
          * Without this the timer keeps timer_next=0 (a past CLOCK_REALTIME
          * instant) and fires once immediately on the next tick. */
-        if (services[svc_count].flags & SVC_TIMER) {
-            services[svc_count].inst.state = STATE_PERFECT;
-            if (services[svc_count].flags & SVC_TIMER_CALENDAR) {
-                if (services[svc_count].flags & SVC_TIMER_PERSIST)
-                    timer_arm_persistent(&services[svc_count]);
-                else
-                    timer_arm_calendar(&services[svc_count]);
-            } else {
-                struct timespec tnow;
-                clock_gettime(CLOCK_MONOTONIC, &tnow);
-                services[svc_count].timer_next = tnow;
-                services[svc_count].timer_next.tv_sec += services[svc_count].timer_boot_sec;
-            }
-        }
+        if (services[svc_count].flags & SVC_TIMER) timer_arm(&services[svc_count]);
         if (services[svc_count].flags & SVC_PATH) path_arm(&services[svc_count]);
         ctl_writef(fd, "ok: %s queued\n", services[svc_count].name);
         svc_count++;
@@ -3524,25 +3553,10 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     }
     path_gc();
 
-    /* Arm newly introduced timer services or ensure they are scheduled */
-    struct timespec tnow;
-    clock_gettime(CLOCK_MONOTONIC, &tnow);
-    for (i = 0; i < svc_count; i++) {
-        if (services[i].flags & SVC_TIMER) {
-            if (services[i].timer_next.tv_sec == 0) {
-                services[i].inst.state = STATE_PERFECT;
-                if (services[i].flags & SVC_TIMER_CALENDAR) {
-                    if (services[i].flags & SVC_TIMER_PERSIST)
-                        timer_arm_persistent(&services[i]);
-                    else
-                        timer_arm_calendar(&services[i]);
-                } else {
-                    services[i].timer_next = tnow;
-                    services[i].timer_next.tv_sec += services[i].timer_boot_sec;
-                }
-            }
-        }
-    }
+    /* arm only timers new to the config: a carried deadline is kept, never re-drawn */
+    for (i = 0; i < svc_count; i++)
+        if ((services[i].flags & SVC_TIMER) && services[i].timer_next.tv_sec == 0)
+            timer_arm(&services[i]);
     return 0;
 }
 
@@ -3758,25 +3772,11 @@ void engine_open(int adopting) {
 /* arm timer services: born "already ran", first fire = boot + on_boot_sec.
  * After a re-exec only timers new to the config (timer_next still 0). */
 void engine_arm_timers(int adopting) {
-    struct timespec tnow;
-    clock_gettime(CLOCK_MONOTONIC, &tnow);
     for (int ti = 0; ti < svc_count; ti++)
         if (services[ti].flags & SVC_PATH) path_arm(&services[ti]);
-    for (int ti = 0; ti < svc_count; ti++) {
-        if ((services[ti].flags & SVC_TIMER) &&
-            (!adopting || services[ti].timer_next.tv_sec == 0)) {
-            services[ti].inst.state = STATE_PERFECT;
-            if (services[ti].flags & SVC_TIMER_CALENDAR) {
-                if (services[ti].flags & SVC_TIMER_PERSIST)
-                    timer_arm_persistent(&services[ti]);
-                else
-                    timer_arm_calendar(&services[ti]);
-            } else {
-                services[ti].timer_next = tnow;
-                services[ti].timer_next.tv_sec += services[ti].timer_boot_sec;
-            }
-        }
-    }
+    for (int ti = 0; ti < svc_count; ti++)
+        if ((services[ti].flags & SVC_TIMER) && (!adopting || services[ti].timer_next.tv_sec == 0))
+            timer_arm(&services[ti]);
 }
 
 void engine_run(void) {
