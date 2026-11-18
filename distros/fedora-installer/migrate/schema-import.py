@@ -191,6 +191,8 @@ def _cmd_quote(tok):
 
 
 def _which(cmd):
+    if "/" in cmd:   # systemd refuses a relative path; don't invent one
+        return None
     root = os.environ.get("MIGRATE_ROOT") or "/"
     for d in _PRE_SEARCH:
         if os.access(os.path.join(root, d, cmd), os.X_OK):
@@ -218,6 +220,16 @@ def _specifiers(argv, name, strict=True):
     return out
 
 
+def _resolve_exe(argv, key):
+    # systemd searches a fixed PATH for a bare name; exec= must be a path (execv)
+    if argv[0].startswith("/"):
+        return argv
+    exe = _which(argv[0])
+    if not exe:
+        raise Skip("%s command %s not found" % (key, argv[0]))
+    return [exe] + argv[1:]
+
+
 def _exec_pre(svc, name, key="ExecStartPre", prefixes="+-"):
     out = []
     for v in _get_all(svc, key):
@@ -237,11 +249,7 @@ def _exec_pre(svc, name, key="ExecStartPre", prefixes="+-"):
             raise Skip("%s=%s has unbalanced quotes" % (key, v))
         if not argv:
             continue
-        if not argv[0].startswith("/"):
-            exe = _which(argv[0])
-            if not exe:
-                raise Skip("%s command %s not found" % (key, argv[0]))
-            argv[0] = exe
+        argv = _resolve_exe(argv, key)
         out.append(("".join(sorted(set(pre))), _specifiers(argv, name)))
     if len(out) > 8:
         raise Skip("%d %s= lines (limit 8)" % (len(out), key))
@@ -1810,6 +1818,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                 expanded.append((pre, pa))
         pres = expanded
 
+    argv = _resolve_exe(argv, "ExecStart")
     if len(pres) > 8:
         raise Skip("%d ExecStartPre= lines (limit 8 exec_pre)" % len(pres))
     # Over the limit these warn: they imported before, and the dir may already exist.
@@ -2211,6 +2220,13 @@ def _root():
 def state_dir():
     e = os.environ.get("SCHEMA_STATE_DIR")
     return e if e else os.path.join(_root(), "var/lib/schema-init")
+
+
+_out_dir = None   # --out: where the drain writes; everything it reads stays live
+
+
+def _out_path(p):
+    return os.path.join(_out_dir, os.path.basename(p)) if _out_dir else p
 
 
 def svc_dir():
@@ -2974,8 +2990,10 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
             if status == "skipped" and name in lsb_fallback and not detail[0].startswith(OWNED):
                 log("unit    %s: %s; using %s%s" % (name, detail[0], INITD, name[:-len(".service")]))
                 status, detail = _import_lsb(name[:-len(".service")], force, items)
-            if status == "imported" and not dry_run:
-                _write_output(detail[0], _stamped(detail[1]))
+            if status == "imported":
+                detail = (_out_path(detail[0]), detail[1])
+                if not dry_run:
+                    _write_output(detail[0], _stamped(detail[1]))
         except Exception as e:
             status, detail = "error", "%s: %s" % (type(e).__name__, e)
         counts[status] += 1
@@ -3001,7 +3019,7 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
         elif status == "skipped":
             reason, stub, out = detail
             why_skipped[os.path.basename(out)[:-len(".svc")]] = reason
-            stub_path = out + ".skipped"
+            stub_path = _out_path(out) + ".skipped"
             log("skip    %s: %s (see %s)" % (name, reason, stub_path))
             if not dry_run:
                 try:
@@ -3851,10 +3869,12 @@ def main(argv=None):
                     help="generate this user's enabled user units into "
                          "$XDG_RUNTIME_DIR/schema-user/services for schema-user")
     ap.add_argument("--out", metavar="DIR",
-                    help="with --user: write the .svc files here instead")
+                    help="write the .svc files here instead (system mode: named units only)")
     args = ap.parse_args(argv)
     if args.user:
         return _user_main(args)
+    if args.bus_overrides and args.out and not args.user:
+        ap.error("--bus-overrides writes the live overrides; it can't be used with --out")
     if args.bus_overrides:
         c = bus_overrides(dry_run=args.dry_run)
         print("bus-overrides written=%(written)d kept=%(kept)d removed=%(removed)d skipped=%(skipped)d" % c)
@@ -3873,9 +3893,21 @@ def main(argv=None):
         runit_after = args.after
         skip = read_skip(args.rc_skip) if args.rc_skip else set()
         units = (units or []) + [u for u in runit_units(skip) if u not in (units or [])]
+    if args.out:
+        # only the writes move: deps, masks and "exists" are judged against the
+        # live dir. The queue and bus overrides belong to it, so they're refused.
+        if units is None:
+            ap.error("--out needs named units (or -e/--rc/--runit): the queue drains into the live dir")
+        if args.start:
+            ap.error("--start loads from the live dir; it can't be used with --out")
+        global _out_dir
+        _out_dir = args.out
     written = []
-    counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written,
-                   lsb_fallback=fallback)
+    try:
+        counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written,
+                       lsb_fallback=fallback)
+    finally:
+        _out_dir = None
     if args.start and written and _read("/proc/1/comm").strip() == "schema-init":
         for out in written:
             try:
@@ -3885,6 +3917,8 @@ def main(argv=None):
                 print("schema-ctl add %s: %s" % (out, e), file=sys.stderr)
     print("imported=%(imported)d exists=%(exists)d masked=%(masked)d not-found=%(not-found)d "
           "skipped=%(skipped)d error=%(error)d" % counts)
+    if args.out:
+        return 1 if counts["error"] else 0
     try:
         bus_overrides(dry_run=args.dry_run)
     except Exception as e:
