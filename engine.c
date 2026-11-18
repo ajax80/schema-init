@@ -128,10 +128,7 @@ int     reexec_check_killed = 0;
  * DST/NTP each cycle). Daily timers (dow=dom=-1) match the first or second
  * day and behave as before. */
 static void timer_arm_calendar(service_t *svc) {
-    svc->timer_next.tv_sec  = calendar_next_after(svc->timer_cal_hours,
-                                                  svc->timer_cal_min,
-                                                  svc->timer_cal_dow,
-                                                  svc->timer_cal_dom, time(NULL));
+    svc->timer_next.tv_sec  = calendar_next_after(svc->timer_cal, svc->timer_cal_n, time(NULL));
     svc->timer_next.tv_nsec = 0;
 }
 
@@ -166,8 +163,7 @@ static void timer_stamp_write(const service_t *svc, time_t t) {
  * day-by-day; returns 0 if none in the last ~400 days (constraint never
  * satisfiable). */
 static time_t calendar_recent_occurrence(const service_t *svc, time_t now) {
-    return calendar_recent_at_or_before(svc->timer_cal_hours, svc->timer_cal_min,
-                                        svc->timer_cal_dow, svc->timer_cal_dom, now);
+    return calendar_recent_at_or_before(svc->timer_cal, svc->timer_cal_n, now);
 }
 
 /* If a scheduled fire passed while we were down, fire now; otherwise arm
