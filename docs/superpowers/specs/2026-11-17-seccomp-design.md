@@ -20,15 +20,18 @@ hand-built BPF program.
   blocked syscall kills the process (SECCOMP_RET_KILL_PROCESS), as in
   systemd. A per-entry `:ERRNO` wins for that entry.
 - `syscall_architectures=native`: syscalls from any other ABI kill the
-  process (on x86_64 this includes x32 and i386 compat calls).
+  process (on x86_64 this includes x32 and i386 compat calls). An allowlist
+  implies it even when unset: otherwise an i386 compat call (int 0x80)
+  would bypass a 64-bit allowlist entirely.
 - `restrict_suid_sgid=1`: chmod/fchmod/fchmodat/fchmodat2 with S_ISUID or
-  S_ISGID in the mode, open/openat/creat with O_CREAT and such a mode, and
+  S_ISGID in the mode, open/openat/creat with O_CREAT or O_TMPFILE (which
+  also takes a mode) and such a mode, and
   mknod/mknodat of such a file return EPERM; openat2 returns ENOSYS (its
   mode is behind a pointer), as systemd does.
 - `lock_personality=1`: personality() only with PER_LINUX or the query
   value 0xffffffff, else EPERM.
 - `restrict_realtime=1`: sched_setscheduler with SCHED_FIFO, SCHED_RR or
-  SCHED_DEADLINE returns EPERM; sched_setattr returns EPERM (its policy is
+  SCHED_DEADLINE (after masking SCHED_RESET_ON_FORK off) returns EPERM; sched_setattr returns EPERM (its policy is
   behind a pointer). Our own `sched_policy=` is applied before the filter.
 - `restrict_namespaces=1`: clone/unshare with any CLONE_NEW* flag and setns
   return EPERM; clone3 returns ENOSYS so libc falls back to clone, whose
@@ -48,8 +51,9 @@ hand-built BPF program.
 
 ## Mechanism
 - `tools/gen-seccomp-tables.sh` turns `systemd-analyze syscall-filter`
-  into `seccomp_groups.h` (each group's members, `@refs` kept, the systemd
-  version in a comment) and `seccomp_names.h`: every name of `@known`
+  into `seccomp_groups.h` (each group already expanded to its full member
+  list, so a group is one OR into the bitset at load; the systemd version in
+  a comment) and `seccomp_names.h`: every name of `@known`
   wrapped `#ifdef __NR_<name> { "<name>", __NR_<name> }, #endif`, so each
   architecture's build picks its own numbers from the kernel headers and
   drops what it doesn't have. The headers are committed; the script is
@@ -65,8 +69,12 @@ hand-built BPF program.
      argument-inspecting blocks.
   3. the filter set as a balanced binary search tree over sorted syscall
      numbers (~9 compares for 400 entries instead of a linear chain), each
-     leaf returning ALLOW or the entry's errno/kill.
-  Arguments are checked on their low 32 bits (modes and flags fit there).
+     leaf returning ALLOW or the entry's errno/kill. Classic BPF's jt/jf are
+     8-bit: a conditional jump to a subtree more than 255 instructions ahead
+     goes through a BPF_JA trampoline (32-bit offset). Built in a first pass
+     that measures subtree sizes, so offsets are known before emitting.
+  Arguments are checked on their low 32 bits (modes and flags fit there),
+  at offsetof(args[i]) on little-endian and +4 on big-endian.
   Limit: the kernel's 4096 instructions; the builder refuses past it.
 - Installed with prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER) (no libc
   wrapper needed; `seccomp()` with TSYNC is unnecessary, the child is
