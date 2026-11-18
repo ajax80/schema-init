@@ -62,7 +62,7 @@ ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o group.o caps.o n
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
+CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
 
 all: $(BINS)
 
@@ -310,6 +310,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_kill_signal_live.sh
 	sh tests/test_exec_dirs_live.sh
 	sh tests/test_watch_path_live.sh
+	sh tests/test_timer_jitter_live.sh
 	sh tests/test_bus_activate.sh
 	sh tests/test_reload_listen.sh
 	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c watch.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
@@ -334,6 +335,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_reexec_state.c -o $(TESTDIR)/reexec-state && $(TESTDIR)/reexec-state
 	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o $(TESTDIR)/tiering && $(TESTDIR)/tiering
 	$(CC) $(CFLAGS) tests/test_calendar.c -o $(TESTDIR)/calendar && $(TESTDIR)/calendar
+	$(CC) $(CFLAGS) tests/test_svc_timer_keys.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/timer-keys && $(TESTDIR)/timer-keys
 	$(CC) $(CFLAGS) tests/test_uevent_parse.c -o $(TESTDIR)/uevent && $(TESTDIR)/uevent
 	$(CC) $(CFLAGS) tests/test_dev_match.c -o $(TESTDIR)/devmatch && $(TESTDIR)/devmatch
 	$(CC) $(CFLAGS) tests/test_dev_load.c -o $(TESTDIR)/devload && $(TESTDIR)/devload

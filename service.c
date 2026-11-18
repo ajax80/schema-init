@@ -2481,20 +2481,26 @@ static int parse_partition(const char *val) {
     return PART_MEMBER;
 }
 
-/* parse on_calendar into svc->timer_cal_{hours,min,dow,dom} and set the timer
- * flags. Accepts "HH:MM" (daily), "Mon HH:MM" (weekly), "15 HH:MM" (monthly);
- * HH may be a comma list of hours ("6,18:00").
- * Returns 0 on success, -1 on malformed input (caller leaves the service
- * non-timer so a typo can't silently schedule garbage). Field parsing is the
- * pure, unit-tested parse_calendar_fields() in service.h. */
-static int parse_calendar(service_t *svc, const char *val) {
-    uint32_t h;
-    int m, dw, dm;
-    if (parse_calendar_fields(val, &h, &m, &dw, &dm) != 0) return -1;
-    svc->timer_cal_hours = h;
-    svc->timer_cal_min  = m;
-    svc->timer_cal_dow  = dw;
-    svc->timer_cal_dom  = dm;
+struct parse_ctx {
+    int argc;
+    int dep_slot;
+    int dropin;
+    int cal_file;   /* an on_calendar= line seen in the file being parsed */
+};
+
+/* each on_calendar= line adds a schedule (at most 4); the first one in a
+ * drop-in replaces those from earlier files, so a drop-in still overrides */
+static int parse_calendar(service_t *svc, struct parse_ctx *pc, const char *val) {
+    cal_spec_t c;
+    if (calendar_parse(val, &c) != 0) return -1;
+    if (!pc->cal_file) {
+        pc->cal_file = 1;
+        if (pc->dropin) svc->timer_cal_n = 0;
+    }
+    if (svc->timer_cal_n >= 4) return -1;
+    /* a typo must not schedule garbage, nor a spec that never occurs */
+    if (!calendar_next_after(&c, 1, time(NULL))) return -1;
+    svc->timer_cal[svc->timer_cal_n++] = c;
     svc->flags |= SVC_TIMER | SVC_TIMER_CALENDAR | SVC_ONESHOT;
     return 0;
 }
@@ -2513,8 +2519,6 @@ static void svc_init_defaults(service_t *svc) {
     svc->allowed_slot_max = -1;
     svc->max_restarts = MAX_RESTARTS;
     svc->landlock_tcp_n[0] = svc->landlock_tcp_n[1] = -1;
-    svc->timer_cal_dow = -1;
-    svc->timer_cal_dom = -1;
     svc->directory_mode = 0755;
     svc->trigger_burst = 200;
     svc->trigger_interval_sec = 2;
@@ -2918,11 +2922,6 @@ static void landlock_clear(service_t *svc, int rw) {
     svc->landlock_rw = mask;
 }
 
-struct parse_ctx {
-    int argc;
-    int dep_slot;
-    int dropin;
-};
 
 static int dropin_flag(service_t *svc, const char *key, const char *val) {
     static const struct { const char *key; unsigned flag; } f[] = {
@@ -3679,12 +3678,20 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         svc->flags |= SVC_TIMER | SVC_ONESHOT;
     } else if (strcmp(line, "on_calendar") == 0) {
         /* ignored, the line left a plain daemon that ran at boot and crash-looped */
-        if (*val && parse_calendar(svc, val) != 0) {
-            fprintf(stderr, "[schema-init] %s: bad on_calendar='%s' "
-                    "(want HH:MM or H,H:MM, optionally after 'Mon' weekly "
-                    "or 'DD' monthly) — not loaded\n", svc->name[0] ? svc->name : path, val);
+        if (*val && parse_calendar(svc, pc, val) != 0) {
+            fprintf(stderr, "[schema-init] %s: bad on_calendar='%s' (want [DOW] [DOM] H:M, "
+                    "at most 4 lines, one that can occur) — not loaded\n",
+                    svc->name[0] ? svc->name : path, val);
             return -1;
         }
+    } else if (strcmp(line, "randomized_delay_sec") == 0) {
+        long n;
+        if (parse_int_in(val, 0, 2678400, &n)) {
+            fprintf(stderr, "[schema-init] %s: bad randomized_delay_sec=%s (0..2678400) — not loaded\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->timer_jitter_sec = (int)n;
     } else if (strcmp(line, "persistent") == 0) {
         if (atoi(val)) svc->flags |= SVC_TIMER_PERSIST;
     } else if (strcmp(line, "user") == 0) {
@@ -3736,6 +3743,7 @@ int service_open_trusted(const char *path) {
 
 static int svc_parse_file(service_t *svc, struct parse_ctx *pc, const char *path) {
     char line[512];
+    pc->cal_file = 0;
     int fd = service_open_trusted(path);
     if (fd < 0) {
         if (errno == EPERM) {
@@ -3870,7 +3878,7 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
 }
 
 static int svc_load_file(const char *path, service_t *svc) {
-    struct parse_ctx pc = { 1, 0, 0 };
+    struct parse_ctx pc = { 1, 0, 0, 0 };
     /* `systemctl mask` leaves an empty <name>.svc.masked twin; here, so that
      * schema-ctl add can't load it either */
     char masked[SVC_DROPIN_PATH + 8];

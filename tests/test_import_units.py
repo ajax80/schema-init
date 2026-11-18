@@ -522,23 +522,44 @@ check("no ExecStart skipped", skipped("e", "[Service]\nType=simple\n"))
 # --- .timer translation ---
 for cal, want in (("daily", "00:00"), ("weekly", "Mon 00:00"), ("monthly", "1 00:00"),
                   ("Sun *-*-* 01:00:00", "Sun 01:00"), ("*-*-15 03:30", "15 03:30"),
-                  ("hourly", ("interval", 3600)), ("*-*-* *:00:00", ("interval", 3600)),
-                  ("Sun *-*-1..7 1:00:00", None), ("Mon..Fri 09:00", None), ("Mon *-*-15 01:00", None)):
+                  ("hourly", "*:00"), ("*-*-* *:00:00", "*:00"),
+                  ("Sun *-*-1..7 1:00:00", "Sun 1..7 01:00"), ("Mon..Fri 09:00", "Mon..Fri 09:00"),
+                  ("Mon *-*-15 01:00", "Mon 15 01:00"), ("Sat", "Sat 00:00"), ("*:0/15", "*:0,15,30,45"),
+                  ("*-*-1,15 00:00", "1,15 00:00"), ("Sat,Sun 10:00", "Sun,Sat 10:00"), ("4:10", "04:10"),
+                  ("*-*-* 8..17:30", "8..17:30"), ("Mon..Fri *-*-* 09:00:00", "Mon..Fri 09:00"),
+                  ("*-01-01 00:00", None), ("12:00:30", None), ("quarterly", None), ("*:*/0", None),
+                  ("Fri..Mon 00:00", None), ("*-*-* 8..17/2:00", "8,10,12,14,16:00"),
+                  ("*-*-* 5/1:00", "5..23:00"), ("Sat..Sun *-*-* 02:00", "Sun,Sat 02:00"),
+                  ("Mon..Sun 00:00", "00:00"), ("Sun..Sat 00:00", None)):
     check("calendar %r -> %r" % (cal, want), si._calendar(cal) == want)
 svcu = si.parse_unit("[Service]\nType=oneshot\nExecStart=/usr/sbin/logrotate /etc/logrotate.conf\n")
 bt = si.timer_to_svc("logrotate", si.parse_unit("[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n"), svcu)
 check("timer -> on_calendar + persistent, no oneshot/no_restart, notes drop",
       "on_calendar=00:00\n" in bt and "persistent=1\n" in bt and "oneshot=" not in bt
-      and "no_restart=" not in bt and "dropped RandomizedDelaySec" in bt and "no [Install]" not in bt)
+      and "no_restart=" not in bt and "randomized_delay_sec=3600\n" in bt and "RandomizedDelaySec" not in bt
+      and "no [Install]" not in bt)
 bt = si.timer_to_svc("mc", si.parse_unit("[Timer]\nOnBootSec=10min\nOnUnitInactiveSec=3h\n"), svcu)
 check("OnBootSec/OnUnitInactiveSec -> on_boot_sec/on_active_sec", "on_boot_sec=600\n" in bt and "on_active_sec=10800\n" in bt)
 bt = si.timer_to_svc("mc", si.parse_unit("[Timer]\nOnUnitActiveSec=1d\n"), svcu)
 check("OnUnitActiveSec alone also arms the first fire", "on_boot_sec=86400\n" in bt and "on_active_sec=86400\n" in bt)
 try:
-    si.timer_to_svc("x", si.parse_unit("[Timer]\nOnCalendar=Mon..Fri 09:00\n"), svcu); ok = False
+    si.timer_to_svc("x", si.parse_unit("[Timer]\nOnCalendar=*-01-01 09:00\n"), svcu); ok = False
 except si.Skip:
     ok = True
 check("inexpressible OnCalendar skipped", ok)
+bt = si.timer_to_svc("h", si.parse_unit("[Timer]\nOnCalendar=hourly\nRandomizedDelaySec=1h\n"), svcu)
+check("hourly -> wall-aligned on_calendar=*:00", "on_calendar=*:00\n" in bt and "on_boot_sec" not in bt and "on_active_sec" not in bt)
+bt = si.timer_to_svc("two", si.parse_unit("[Timer]\nOnCalendar=Mon 03:00\nOnCalendar=Thu 03:00\n"), svcu)
+check("two OnCalendar= -> two on_calendar= lines", "on_calendar=Mon 03:00\non_calendar=Thu 03:00\n" in bt)
+try:
+    si.timer_to_svc("five", si.parse_unit("[Timer]\n" + "".join("OnCalendar=%d:00\n" % i for i in range(5))), svcu); ok = False
+except si.Skip as e:
+    ok = "limit 4" in str(e)
+check("five OnCalendar= skipped (limit 4)", ok)
+bt = si.timer_to_svc("ga", si.parse_unit("[Timer]\nOnActiveSec=2min\n"), svcu)
+check("OnActiveSec= alone -> on_boot_sec", "on_boot_sec=120\n" in bt and "on_active_sec" not in bt)
+bt = si.timer_to_svc("rd", si.parse_unit("[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1week\n"), svcu)
+check("RandomizedDelaySec=1week -> 604800", "randomized_delay_sec=604800\n" in bt)
 bb = si.unit_to_svc("b", si.parse_unit("[Service]\nExecStart=/bin/bash -c 'echo $X; run ${Y}'\nEnvironment=Y=1\n"))
 check("$VAR inside a word left for the shell, ${VAR} expanded", "args=echo $X; run 1\n" in bb)
 
@@ -1150,11 +1171,12 @@ check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.pa
       '# schema-import WARN: no equivalent here, not enforced: CapabilityBoundingSet\nname=chronyd\n'
       'exec=/usr/sbin/chronyd\nargs=-n\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/chronyd\nexpand_args=1\nnotify=1\n'
       'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\n')
-check("Fedora fstrim.timer output unchanged",
+check("Fedora fstrim.timer output unchanged but for randomized_delay_sec",
       si.timer_to_svc("fstrim", si.parse_unit(_F_FSTRIM_T), si.parse_unit(_F_FSTRIM_S)) ==
-      '# schema-import: dropped RandomizedDelaySec; dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
+      '# schema-import: dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
       'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
-      'private_tmp=0\nprotect_system=0\nprotect_home=0\nprotect_kernel_tunables=1\non_calendar=Mon 00:00\npersistent=1\n')
+      'private_tmp=0\nprotect_system=0\nprotect_home=0\nprotect_kernel_tunables=1\non_calendar=Mon 00:00\npersistent=1\n'
+      'randomized_delay_sec=6000\n')
 
 # --- audit 4.5: kernel-surface knobs ---
 def _kn(body):

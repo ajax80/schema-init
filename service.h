@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "watch.h"
+#include "calendar.h"
 #include <stdio.h>
 #include "schema.h"
 #include "landlock.h"
@@ -223,137 +224,6 @@ static inline long long swap_max_value(prio_t priority, int set, long mb) {
     return priority == PRIO_CRITICAL ? 0 : CG_SWAP_SKIP;
 }
 
-/* on_calendar day-of-week token -> tm_wday index (Sun=0..Sat=6), or -1 if the
- * token is not one of the canonical 3-letter names (case-insensitive). Pure. */
-static inline int calendar_dow_from_name(const char *s) {
-    static const char *const n[7] = {"sun","mon","tue","wed","thu","fri","sat"};
-    char b[4] = {0};
-    int i;
-    for (i = 0; i < 3 && s[i]; i++) b[i] = (char)tolower((unsigned char)s[i]);
-    if (s[i] != '\0') return -1;               /* longer than 3 chars -> reject */
-    for (i = 0; i < 7; i++) if (strcmp(b, n[i]) == 0) return i;
-    return -1;
-}
-
-/* Parse an on_calendar value into fields. An optional leading token selects the
- * recurrence: none = daily, a 3-letter weekday = weekly, a 1..31 number =
- * monthly on that day-of-month. The hour is one hour or a comma list
- * (Debian's apt-daily.timer is "6,18:00"); bit h of *hour_mask is set per hour.
- *   "HH:MM"       -> dow=-1 dom=-1   (every day)
- *   "Mon HH:MM"   -> dow=0..6 dom=-1 (that weekday)
- *   "15 HH:MM"    -> dow=-1  dom=1..31 (that day of month)
- *   "6,18:00"     -> hour_mask (1<<6)|(1<<18)
- * Returns 0 on success, -1 on any malformed input (a typo must not silently
- * schedule garbage). Pure — no clock, unit-tested in tests/test_calendar.c. */
-static inline int parse_calendar_fields(const char *val, uint32_t *hour_mask,
-                                        int *min, int *dow, int *dom) {
-    int dw = -1, dm = -1;
-    char tok[16];
-    /* Split by shape, not by buffer: one token is the time spec at any length,
-     * two are prefix + time spec. A fixed %s width would cut a long hour list
-     * in two and read its head as a day-of-month. */
-    const char *a = val;
-    while (isspace((unsigned char)*a)) a++;
-    const char *b = a;
-    while (*b && !isspace((unsigned char)*b)) b++;
-    const char *c = b;
-    while (isspace((unsigned char)*c)) c++;
-    const char *d = c;
-    while (*d && !isspace((unsigned char)*d)) d++;
-    const char *z = d;
-    while (isspace((unsigned char)*z)) z++;
-    if (a == b || *z) return -1;
-    const char *p = a, *pe = b;
-    if (c != d) {
-        if ((size_t)(b - a) >= sizeof tok) return -1;
-        memcpy(tok, a, (size_t)(b - a));
-        tok[b - a] = '\0';
-        if (isalpha((unsigned char)tok[0])) {
-            dw = calendar_dow_from_name(tok);
-            if (dw < 0) return -1;
-        } else if (isdigit((unsigned char)tok[0])) {
-            char *end;
-            long v = strtol(tok, &end, 10);
-            if (*end != '\0' || v < 1 || v > 31) return -1;
-            dm = (int)v;
-        } else {
-            return -1;
-        }
-        p = c; pe = d;
-    }
-    uint32_t mask = 0;
-    char *end;
-    for (;;) {
-        if (!isdigit((unsigned char)*p)) return -1;
-        long h = strtol(p, &end, 10);
-        if (h > 23) return -1;
-        mask |= 1u << h;
-        if (*end == ':') break;
-        if (*end != ',') return -1;
-        p = end + 1;
-    }
-    p = end + 1;
-    if (!isdigit((unsigned char)*p)) return -1;
-    long m = strtol(p, &end, 10);
-    if (end != pe || m > 59) return -1;
-    *hour_mask = mask; *min = (int)m; *dow = dw; *dom = dm;
-    return 0;
-}
-
-/* Does a wall-clock day satisfy a calendar timer's day constraints? dow/dom of
- * -1 mean "unconstrained". wday/mday come from a struct tm. Pure. */
-static inline int calendar_day_matches(int dow, int dom, int wday, int mday) {
-    if (dow >= 0 && wday != dow) return 0;
-    if (dom >= 1 && mday != dom) return 0;
-    return 1;
-}
-
-/* Earliest local-time instant strictly after `after` at one of the mask's
- * hours, :min, on a day matching the constraints. Walks forward day-by-day,
- * hours ascending within a day; mktime re-normalizes wday/mday and
- * self-corrects DST each step. Daily (dow=dom=-1) resolves on the first/second
- * day. Deterministic under a fixed TZ — unit-tested in tests/test_calendar.c. */
-static inline time_t calendar_next_after(uint32_t hour_mask, int min, int dow,
-                                         int dom, time_t after) {
-    struct tm tm, ck;
-    for (int d = 0; d <= 400; d++) {
-        for (int h = 0; h < 24; h++) {
-            if (!(hour_mask & (1u << h))) continue;
-            localtime_r(&after, &tm);
-            tm.tm_mday += d;
-            tm.tm_hour = h; tm.tm_min = min; tm.tm_sec = 0; tm.tm_isdst = -1;
-            time_t t = mktime(&tm);
-            if (t == (time_t)-1) continue;
-            localtime_r(&t, &ck);
-            if (t > after && calendar_day_matches(dow, dom, ck.tm_wday, ck.tm_mday))
-                return t;
-        }
-    }
-    return after + 86400;   /* unreachable fallback */
-}
-
-/* Most recent matching instant at or before `now`; 0 if none within ~400 days
- * (constraint never satisfiable). Mirror of calendar_next_after, walking back
- * day-by-day with hours descending within a day. */
-static inline time_t calendar_recent_at_or_before(uint32_t hour_mask, int min,
-                                                   int dow, int dom, time_t now) {
-    struct tm tm, ck;
-    for (int d = 0; d <= 400; d++) {
-        for (int h = 23; h >= 0; h--) {
-            if (!(hour_mask & (1u << h))) continue;
-            localtime_r(&now, &tm);
-            tm.tm_mday -= d;
-            tm.tm_hour = h; tm.tm_min = min; tm.tm_sec = 0; tm.tm_isdst = -1;
-            time_t t = mktime(&tm);
-            if (t == (time_t)-1) continue;
-            localtime_r(&t, &ck);
-            if (t <= now && calendar_day_matches(dow, dom, ck.tm_wday, ck.tm_mday))
-                return t;
-        }
-    }
-    return 0;
-}
-
 enum {
     PART_MEMBER = 0,
     PART_ROOT,
@@ -549,10 +419,9 @@ typedef struct {
     int              boot_how;           /* READY_* that proved boot_ready                  */
     int              timer_boot_sec;     /* on_boot_sec: delay from boot to first fire     */
     int              timer_interval_sec; /* on_active_sec: gap after each completion        */
-    uint32_t         timer_cal_hours;    /* on_calendar hour mask, bit h = hour h; 0 = not calendar */
-    int              timer_cal_min;      /* on_calendar=HH:MM minute                          */
-    int              timer_cal_dow;      /* on_calendar weekday 0=Sun..6=Sat; -1 = any day    */
-    int              timer_cal_dom;      /* on_calendar day-of-month 1..31; -1 = any          */
+    cal_spec_t       timer_cal[4];       /* on_calendar= lines; the earliest next one fires */
+    uint8_t          timer_cal_n;
+    int              timer_jitter_sec;   /* randomized_delay_sec: 0..N s added at every arm */
     struct timespec  timer_next;         /* next-fire deadline: CLOCK_MONOTONIC, or CLOCK_REALTIME if SVC_TIMER_CALENDAR */
     int              timer_catchup_wait; /* persistent: stamp not read until mount-fstab has made one attempt */
     watch_t          watch[MAX_WATCH];   /* watch_path= */

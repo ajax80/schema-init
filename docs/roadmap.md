@@ -64,5 +64,6 @@
 - [ ] Kernel-surface hardening knobs — `protect_kernel_tunables`, `protect_kernel_modules`, `protect_control_groups`, `private_devices`, `private_network`, `protect_hostname`, `restrict_suid_sgid`, `memory_deny_write_execute`, `umask`
 - [ ] Scheduling — `nice=`, `io_class=`/`io_priority=`, `sched_policy=`/`sched_priority=`
 - [x] `watch_path=` (systemd `.path` units) — `exists`/`exists_glob`/`dir_not_empty`/`changed`/`modified` on PID 1's inotify fd, `make_directory=`, trigger limit; importer takes `.path` units
-- [ ] `randomized_delay_sec=` and richer timer forms, `supplementary_groups=`, `dynamic_user=1`
+- [x] `randomized_delay_sec=` and richer `on_calendar=` (weekday/day lists and ranges, hour/minute steps, up to 4 lines); importer maps `RandomizedDelaySec=`, `OnActiveSec=`, wall-aligned `hourly`
+- [ ] `supplementary_groups=`, `dynamic_user=1`
 - [ ] `syscall_filter=` (seccomp) — hand-built BPF for a static PID 1, systemd's named syscall groups; its own design spec first

@@ -382,7 +382,7 @@ units use them.
   `dir_not_empty`) that arms a NEW_PROCESS when the event fires is a small
   addition and lets the importer take `.path` units.
 
-### 4.9 Timers
+### 4.9 Timers (done: see docs/superpowers/specs/2026-11-17-timers-design.md)
 - `randomized_delay_sec=` (all `on_calendar` timers fire at the same
   second today), `on_unit_inactive_sec=`, and the richer calendar forms
   in `docs/timers-design.md`.
