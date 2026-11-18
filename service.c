@@ -1041,6 +1041,8 @@ static void svc_apply_env(const service_t *svc, char **file_env, int file_envc) 
 /* Run CMDS in order in this (child) process; PRIVILEGED -1 runs every one,
  * else only those whose '+' prefix matches. A failure without '-' stops the
  * list and returns -1. */
+static void svc_seccomp_or_die(const service_t *svc, const char *what);
+
 static int svc_run_cmds(const service_t *svc, char *const *cmds, int n,
                          const char *what, int privileged) {
     for (int i = 0; i < n; i++) {
@@ -1067,6 +1069,9 @@ static int svc_run_cmds(const service_t *svc, char *const *cmds, int n,
         }
         pid_t p = fork();
         if (p == 0) {
+            /* each command meets the service's filter, not the runner that
+             * waits for it; + lines run unsandboxed, as in systemd */
+            if (!plus) svc_seccomp_or_die(svc, "");
             execv(argv[0], argv);
             _exit(127);
         }
@@ -1703,7 +1708,6 @@ static void svc_runner_child(const service_t *svc, const char *what) {
         }
     }
     svc_chdir(svc, WD_STOP);
-    svc_seccomp_or_die(svc, gwhat);
 }
 
 pid_t service_stop_spawn(const service_t *svc, int phase) {
@@ -3666,7 +3670,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         char buf[512], *save, *t;
         if (!*val) {
             memset(&svc->sc.set, 0, sizeof svc->sc.set);
-            svc->sc.n_over = 0;
+            memset(&svc->sc.err_set, 0, sizeof svc->sc.err_set);
+            svc->sc.n_err = 0;
             svc->sc.mode = SC_NONE;
             return 0;
         }
@@ -3680,8 +3685,8 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                 fprintf(stderr, "[schema-init] %s: syscall_filter: unknown syscall '%s' ignored\n",
                         svc->name[0] ? svc->name : path, t);
             } else if (r != 0) {
-                fprintf(stderr, "[schema-init] %s: syscall_filter: unknown group or errno '%s' — not loaded\n",
-                        svc->name[0] ? svc->name : path, t);
+                fprintf(stderr, "[schema-init] %s: syscall_filter: %s '%s' — not loaded\n", svc->name[0] ? svc->name : path,
+                        r == -3 ? "more than 4 distinct errnos at" : "unknown group or errno", t);
                 return -1;
             }
         }

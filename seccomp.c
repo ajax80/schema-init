@@ -99,26 +99,31 @@ static int name_idx(const char *n, size_t len) {
     return -1;
 }
 
+/* an errno is one of up to SC_MAX_ERRS classes, each a bitset, so a whole
+ * group can carry one (@privileged:EPERM is 55 names); -3 past that */
 static int mark(sc_spec_t *s, int idx, int remove, int has_err, uint16_t err) {
-    int k;
-    for (k = 0; k < s->n_over && s->over[k].idx != idx; k++) {}
+    uint64_t bit = 1ull << (idx % 64);
+    for (int k = 0; k < s->n_err; k++) s->err_set[k][idx / 64] &= ~bit;
     if (remove) {
-        s->set[idx / 64] &= ~(1ull << (idx % 64));
-        if (k < s->n_over) s->over[k] = s->over[--s->n_over];
+        s->set[idx / 64] &= ~bit;
         return 0;
     }
-    s->set[idx / 64] |= 1ull << (idx % 64);
-    if (!has_err) return 0;
-    if (k == s->n_over && s->n_over >= SC_MAX_OVER) return -1;
-    s->over[k].idx = (uint16_t)idx;
-    s->over[k].err = err;
-    if (k == s->n_over) s->n_over++;
+    s->set[idx / 64] |= bit;
+    if (!has_err || s->mode == SC_ALLOW) return 0;   /* an allowlist entry is never blocked */
+    int k;
+    for (k = 0; k < s->n_err && s->err_val[k] != err; k++) {}
+    if (k == s->n_err) {
+        if (s->n_err >= SC_MAX_ERRS) return -3;
+        s->err_val[s->n_err++] = err;
+    }
+    s->err_set[k][idx / 64] |= bit;
     return 0;
 }
 
 /* name or @group, optionally :ERRNO; added to the set, or removed from it.
  * -1: unknown group or errno (a typo); -2: unknown syscall name, which the
- * caller skips, as systemd does, so a unit from a newer systemd still loads */
+ * caller skips, as systemd does, so a unit from a newer systemd still loads;
+ * -3: more distinct errnos than SC_MAX_ERRS */
 int sc_add(sc_spec_t *s, const char *entry, int remove) {
     const char *colon = strchr(entry, ':');
     size_t len = colon ? (size_t)(colon - entry) : strlen(entry);
@@ -130,7 +135,7 @@ int sc_add(sc_spec_t *s, const char *entry, int remove) {
         for (int g = 0; g < SC_GROUPS; g++) {
             if (strlen(sc_groups[g].name) != len || strncmp(sc_groups[g].name, entry, len)) continue;
             for (const unsigned short *p = sc_groups[g].idx; *p != 0xffff; p++)
-                if (mark(s, *p, remove, has_err, err) != 0) return -1;
+                { int r = mark(s, *p, remove, has_err, err); if (r) return r; }
             return 0;
         }
         return -1;
@@ -190,12 +195,12 @@ static void flags_deny(em_t *e, int nr, int arg, uint32_t mask) {
 static void siblings(em_t *e, const sc_spec_t *s) {
     if (s->persona) {
         /* PER_LINUX, or the query value, and nothing else */
+        /* allowed values fall through: syscall_filter still decides */
         int at = open_if(e, __NR_personality);
         LD(e, ARG_LO(0));
         emit(e, BPF_JMP | BPF_JEQ | BPF_K, 2, 0, 0);
         emit(e, BPF_JMP | BPF_JEQ | BPF_K, 1, 0, 0xffffffffu);
         RET(e, ERR(EPERM));
-        RET(e, ALLOW);
         close_if(e, at);
     }
     if (s->rt) {
@@ -208,8 +213,7 @@ static void siblings(em_t *e, const sc_spec_t *s) {
         emit(e, BPF_JMP | BPF_JA, 0, 0, 1);
         RET(e, ERR(EPERM));
         close_if(e, at);
-        /* its policy is behind a pointer */
-        ret_if(e, __NR_sched_setattr, ERR(EPERM));
+        /* sched_setattr is left alone, as systemd's RestrictRealtime does */
     }
     if (s->ns) {
         /* clone's low byte is the exit signal, so no CLONE_NEWTIME there */
@@ -307,11 +311,18 @@ int sc_build(const sc_spec_t *s, struct sock_filter *out, int max) {
         RET(&e, ALLOW);
         return e.n <= max ? e.n : -1;
     }
+    uint64_t set[SC_WORDS];
+    memcpy(set, s->set, sizeof set);
+    /* an allowlist always carries @default, as in systemd: without
+     * exit_group/rt_sigreturn a process can't even exit or return from a signal */
+    for (int g = 0; s->mode == SC_ALLOW && g < SC_GROUPS; g++)
+        if (!strcmp(sc_groups[g].name, "@default"))
+            for (const unsigned short *p = sc_groups[g].idx; *p != 0xffff; p++) set[*p / 64] |= 1ull << (*p % 64);
     for (int i = 0; i < SC_NAMES_ALL; i++) {
-        if (!((s->set[i / 64] >> (i % 64)) & 1) || sc_nr[i] < 0) continue;
+        if (!((set[i / 64] >> (i % 64)) & 1) || sc_nr[i] < 0) continue;
         uint32_t a = s->mode == SC_ALLOW ? ALLOW : act(s->err);
-        for (int k = 0; s->mode == SC_DENY && k < s->n_over; k++)
-            if (s->over[k].idx == i) a = act(s->over[k].err);
+        for (int k = 0; s->mode == SC_DENY && k < s->n_err; k++)
+            if ((s->err_set[k][i / 64] >> (i % 64)) & 1) a = act(s->err_val[k]);
         v[n].nr = (uint32_t)sc_nr[i];
         v[n++].act = a;
     }

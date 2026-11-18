@@ -56,7 +56,7 @@ int main(void) {
     assert(load("syscall_filter=~@clock @mount\nsyscall_filter=mount\n", NULL, &s) == 0);
     assert(s.sc.mode == SC_DENY && has(&s, "settimeofday") == 1 && has(&s, "umount2") == 1 && has(&s, "mount") == 0);
     /* per-entry errno */
-    assert(load("syscall_filter=~getuid:EACCES\n", NULL, &s) == 0 && s.sc.n_over == 1 && s.sc.over[0].err == EACCES);
+    assert(load("syscall_filter=~getuid:EACCES\n", NULL, &s) == 0 && s.sc.n_err == 1 && s.sc.err_val[0] == EACCES);
     /* an empty value clears, in a drop-in too */
     assert(load("syscall_filter=@system-service\n", "syscall_filter=\n", &s) == 0 && s.sc.mode == SC_NONE);
     assert(load("syscall_filter=@system-service\n", "syscall_filter=\nsyscall_filter=~@mount\n", &s) == 0 &&

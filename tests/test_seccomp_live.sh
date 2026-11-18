@@ -25,6 +25,12 @@ svc deny "uname -s > $T/deny.out 2>&1; echo \$? > $T/deny.rc" "syscall_filter=~u
 svc kill "uname -s > $T/kill.out" "syscall_filter=~uname\nsyscall_error_number=kill\n"
 svc suid "touch $T/f; chmod 4755 $T/f; echo \$? > $T/suid.rc" "restrict_suid_sgid=1\n"
 printf 'name=stopper\nexec=/bin/sleep\nargs=600\nsyscall_filter=~uname\nexec_stop=/bin/sh -c "uname -s > %s/st 2>/dev/null || echo blocked > %s/st"\n' "$T" "$T" > "$S/stopper.svc"
+# the runner itself is never filtered: its waitpid works even under ~wait4,
+# so the second stop command waits for the first
+printf 'name=waiter\nexec=/bin/sleep\nargs=600\nsyscall_filter=~wait4 waitid\nexec_stop=/bin/sleep 2\nexec_stop=/usr/bin/touch %s/second\n' "$T" > "$S/waiter.svc"
+# plain exec_pre lines are filtered, + lines are not
+printf 'name=pre\nexec=/bin/true\noneshot=1\nsyscall_filter=~uname\nexec_pre=/bin/sh -c "uname -s > %s/pre.out 2>/dev/null || echo blocked > %s/pre.out"\nexec_pre=+/bin/sh -c "uname -s > %s/plus.out"\n' "$T" "$T" "$T" > "$S/pre.svc"
+printf 'name=lp\nexec=/bin/sleep\nargs=600\nlock_personality=1\n' > "$S/lp.svc"
 chmod 600 "$S"/*.svc
 
 ./schema-user > "$T/out" 2>&1 &
@@ -44,5 +50,15 @@ until_ok 'st stopper | grep -q "pid=[1-9]"' || fail "stopper never started"
 ./schema-ctl --user stop stopper > /dev/null 2>&1
 until_ok "[ -s $T/st ]" || fail "exec_stop never ran"
 [ "$(cat "$T/st")" = blocked ] || fail "exec_stop ran unfiltered: $(cat "$T/st")"
+
+until_ok 'st waiter | grep -q "pid=[1-9]"' || fail "waiter never started"
+t0=$(date +%s)
+./schema-ctl --user stop waiter > /dev/null 2>&1
+until_ok "[ -e $T/second ]" || fail "waiter: second exec_stop never ran"
+[ $(($(stat -c %Y "$T/second") - t0)) -ge 2 ] || fail "waiter: second exec_stop did not wait for the first"
+until_ok "[ -s $T/pre.out ] && [ -s $T/plus.out ]" || fail "pre: exec_pre lines never ran"
+[ "$(cat "$T/pre.out")" = blocked ] || fail "plain exec_pre ran unfiltered: $(cat "$T/pre.out")"
+[ "$(cat "$T/plus.out")" = Linux ] || fail "+ exec_pre was filtered"
+st lp | grep -q "native-arch" || fail "status hides the arch check: $(st lp | grep seccomp)"
 
 echo "test_seccomp_live: ok"

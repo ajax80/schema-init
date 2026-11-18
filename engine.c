@@ -2515,7 +2515,7 @@ static void ctl_cmd(int fd, char *line) {
                                s->sc.mode == SC_ALLOW ? "allowlist" : "denylist", sc_count(&s->sc),
                                s->sc.err == SC_KILL ? "kill" : s->sc.err ? strerror(s->sc.err) : strerror(EPERM));
                 if (sc_active(&s->sc))
-                    ctl_writef(fd, "  seccomp:%s%s%s%s%s\n", s->sc.native || s->sc.mode ? " native-arch" : "",
+                    ctl_writef(fd, "  seccomp: native-arch%s%s%s%s\n",
                                s->sc.suid ? " restrict_suid_sgid" : "", s->sc.persona ? " lock_personality" : "",
                                s->sc.rt ? " restrict_realtime" : "", s->sc.ns ? " restrict_namespaces" : "");
                 for (int k = 0; k < s->watch_count; k++)

@@ -50,6 +50,8 @@ static sc_spec_t spec(int mode, const char *entries) {
 
 static long c_getpid(void) { return syscall(SYS_getpid); }
 static long c_getuid(void) { long r = syscall(SYS_getuid); return r < 0 ? r : 0; }
+static long c_uname(void) { struct { char b[65 * 6]; } u; return syscall(SYS_uname, &u); }
+static long c_chroot(void) { return syscall(SYS_chroot, "/nonexistent-dir"); }
 static long c_read_bad(void) { return syscall(SYS_read, -1, NULL, 0); }   /* EBADF when allowed */
 static long c_true(void) { execl("/bin/true", "true", (char *)NULL); return -1; }
 static long c_x32(void) {
@@ -101,11 +103,12 @@ int main(void) {
     snprintf(path, sizeof path, "%s/f", dir);
     close(open(path, O_CREAT | O_WRONLY, 0644));
 
-    /* allowlist: listed calls pass, the rest get EPERM (the default here) */
-    s = spec(SC_ALLOW, "exit_group exit rt_sigreturn getpid");
-    assert(probe(&s, c_getpid) == 0 && probe(&s, c_getuid) == EPERM);
+    /* allowlist: listed calls pass, the rest get EPERM (the default here);
+     * @default rides along as in systemd, so the process can still exit */
+    s = spec(SC_ALLOW, "getpid");
+    assert(probe(&s, c_getpid) == 0 && probe(&s, c_uname) == EPERM && probe(&s, c_getuid) == 0);
     s.err = SC_KILL;
-    assert(probe(&s, c_getuid) == -SIGSYS);
+    assert(probe(&s, c_uname) == -SIGSYS);
     /* denylist: the inverse; a per-entry errno wins */
     s = spec(SC_DENY, "getuid");
     assert(probe(&s, c_getuid) == EPERM && probe(&s, c_getpid) == 0);
@@ -113,11 +116,20 @@ int main(void) {
     assert(probe(&s, c_getuid) == EACCES);
     s = spec(SC_DENY, "getuid:13");
     assert(probe(&s, c_getuid) == 13);
+    /* a whole group with an errno, and a second errno class */
+    s = spec(SC_DENY, "@privileged:EACCES getuid:ENOSYS");
+    assert(probe(&s, c_chroot) == EACCES && probe(&s, c_getuid) == ENOSYS && probe(&s, c_getpid) == 0);
+    /* up to 4 distinct errnos; a fifth is refused (-3) */
+    memset(&s, 0, sizeof s);
+    s.mode = SC_DENY;
+    assert(sc_add(&s, "getuid:1", 0) == 0 && sc_add(&s, "getgid:2", 0) == 0 && sc_add(&s, "getppid:3", 0) == 0 &&
+           sc_add(&s, "gettid:4", 0) == 0 && sc_add(&s, "uname:5", 0) == -3);
     /* a group, removal from it, and execve always allowed */
     s = spec(SC_ALLOW, "@system-service");
     assert(probe(&s, c_true) == 0 && probe(&s, c_getpid) == 0);
-    assert(sc_add(&s, "getpid", 1) == 0);
-    assert(probe(&s, c_getpid) == EPERM);
+    /* a ~ line takes names out; @default's members always stay */
+    assert(sc_add(&s, "uname", 1) == 0 && sc_add(&s, "getpid", 1) == 0);
+    assert(probe(&s, c_uname) == EPERM && probe(&s, c_getpid) == 0);
     /* an unknown name is skipped (-2: a unit from a newer systemd still
      * loads, as systemd itself ignores them); an unknown group or errno is a
      * typo and refuses */
@@ -184,11 +196,16 @@ int main(void) {
     memset(&s, 0, sizeof s);
     s.persona = 1;
     assert(probe(&s, c_pers_linux) == 0 && probe(&s, c_pers_query) == 0 && probe(&s, c_pers_bsd) == EPERM);
+    /* its allowed values still meet syscall_filter (no early ALLOW) */
+    s = spec(SC_DENY, "personality");
+    s.persona = 1;
+    assert(probe(&s, c_pers_linux) == EPERM);
     /* restrict_realtime (this account may set FIFO: RLIMIT_RTPRIO) */
     memset(&s, 0, sizeof s);
     s.rt = 1;
     assert(probe(&s, c_fifo) == EPERM && probe(&s, c_fifo_rof) == EPERM && probe(&s, c_other) == 0);
-    assert(probe(&s, c_setattr) == EPERM);
+    /* systemd's RestrictRealtime filters only sched_setscheduler */
+    assert(probe(&s, c_setattr) != EPERM);
     /* restrict_namespaces: plain fork still works */
     memset(&s, 0, sizeof s);
     s.ns = 1;

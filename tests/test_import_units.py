@@ -1784,6 +1784,23 @@ _b = _sc("RestrictNamespaces=cgroup ipc\n")
 check("seccomp: RestrictNamespaces= lists warned", "restrict_namespaces" not in _b and any("RestrictNamespaces" in w for w in _scw(_b)))
 check("seccomp: false values write nothing", all(k not in _sc("RestrictSUIDSGID=no\nLockPersonality=false\nRestrictNamespaces=no\n")
       for k in ("restrict_suid_sgid", "lock_personality", "restrict_namespaces")))
+import re as _re
+check("seccomp: the importer's group list matches the engine's tables",
+      si._SC_GROUPS == set(_re.findall(r'"(@[a-z-]+)"', open(os.path.join(REPO, "seccomp_groups.h")).read())))
+_b = _sc("SystemCallFilter=~ptrace:EBOGUS mount\n")
+check("seccomp: a bad errno on a denylist's first entry is dropped too",
+      "syscall_filter=~mount\n" in _b and "EBOGUS" not in _b.split("WARN")[-1].split("\n", 1)[-1])
+_b = _sc("SystemCallFilter=@system-service @frobnicate\n")
+check("seccomp: a group the engine doesn't know is dropped and said",
+      "syscall_filter=@system-service\n" in _b and any("@frobnicate" in w for w in _scw(_b)))
+_long = " ".join("sys%03d" % i for i in range(90))
+_b = _sc("SystemCallFilter=~" + _long + "\n")
+check("seccomp: a long line is split into lines the engine takes",
+      all(len(l) <= 511 for l in _b.splitlines()) and _b.count("syscall_filter=~") >= 2
+      and all(("sys%03d" % i) in _b for i in range(90)))
+check("seccomp: an all-unknown allowlist stays an allowlist", "syscall_filter=@default\n" in _sc("SystemCallFilter=@frobnicate\n"))
+check("seccomp: plain lines after an all-unknown denylist are not turned into an allowlist",
+      "syscall_filter" not in _sc("SystemCallFilter=~@frobnicate\nSystemCallFilter=@clock\n"))
 check("seccomp: ExecStart=+ runs unsandboxed, no filter",
       "syscall_filter" not in _sc("SystemCallFilter=@system-service\nRestrictSUIDSGID=yes\n", "+")
       and "restrict_suid_sgid" not in _sc("RestrictSUIDSGID=yes\n", "+"))

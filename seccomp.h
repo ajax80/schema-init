@@ -8,15 +8,16 @@ struct sock_filter;
 #define SC_WORDS 10            /* bits over sc_known[]; seccomp.c asserts it is enough */
 #define SC_KILL 0xFFFF         /* "errno" meaning: kill the process */
 #define SC_MAX_INSNS 4096      /* the kernel's BPF_MAXINSNS */
-#define SC_MAX_OVER 32
+#define SC_MAX_ERRS 4          /* distinct per-entry errnos */
 enum { SC_NONE, SC_ALLOW, SC_DENY };
 
 typedef struct {
     uint8_t  mode;             /* SC_NONE / SC_ALLOW / SC_DENY */
     uint64_t set[SC_WORDS];    /* bit i = sc_known[i] */
     uint16_t err;              /* blocked calls: 0 = EPERM, SC_KILL = kill */
-    uint8_t  n_over;
-    struct { uint16_t idx, err; } over[SC_MAX_OVER];   /* per-entry :ERRNO */
+    uint8_t  n_err;            /* per-entry :ERRNO classes (denylists) */
+    uint16_t err_val[SC_MAX_ERRS];
+    uint64_t err_set[SC_MAX_ERRS][SC_WORDS];
     uint8_t  native, suid, persona, rt, ns;
 } sc_spec_t;
 

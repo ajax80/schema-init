@@ -1473,6 +1473,11 @@ _SC_ERRNOS = {"EPERM", "EACCES", "ENOSYS", "EINVAL", "ENOENT", "EIO", "EBADF", "
               "EBUSY", "EEXIST", "ENODEV", "EOPNOTSUPP", "ENOTSUP", "EROFS", "ENOTTY", "ESRCH", "EINTR", "ENOTDIR"}
 
 
+# the groups the engine's tables know (seccomp_groups.h; a test keeps the two
+# in sync): another one refuses the service at load, so it is dropped here
+_SC_GROUPS = {"@default", "@aio", "@basic-io", "@chown", "@clock", "@cpu-emulation", "@debug", "@file-system", "@io-event", "@ipc", "@keyring", "@memlock", "@module", "@mount", "@network-io", "@obsolete", "@pkey", "@privileged", "@process", "@raw-io", "@reboot", "@resources", "@sandbox", "@setuid", "@signal", "@swap", "@sync", "@system-service", "@timer", "@known"}
+
+
 def _sc_errno_ok(v):
     return v.lower() == "kill" or v in _SC_ERRNOS or (v.isdigit() and int(v) <= 4095)
 
@@ -1483,13 +1488,38 @@ def _seccomp(svc):
     lines, warns, filt = [], [], []
     for v in _get_all(svc, "SystemCallFilter"):
         filt = filt + [v.strip()] if v.strip() else []
+    first = None
     for v in filt:
-        bad = [e for e in v.lstrip("~").split() if ":" in e and not _sc_errno_ok(e.split(":", 1)[1])]
+        neg = "~" if v.startswith("~") else ""
+        first = neg if first is None else first
+        keep, bad = [], []
+        for e in v[len(neg):].split():
+            if (":" in e and not _sc_errno_ok(e.split(":", 1)[1])) or \
+                    (e.startswith("@") and e.split(":", 1)[0] not in _SC_GROUPS):
+                bad.append(e)
+            else:
+                keep.append(e)
         if bad:
-            warns.append("SystemCallFilter= entries with an errno the engine doesn't know dropped: %s" % " ".join(bad))
-            v = " ".join(e for e in v.split() if e not in bad)
-        if v.lstrip("~").strip():
-            lines.append("syscall_filter=%s" % v)
+            warns.append("SystemCallFilter= entries the engine doesn't know dropped: %s" % " ".join(bad))
+        # the engine reads lines up to 511 bytes: split long lists, same sign
+        cur = []
+        for e in keep:
+            if cur and len("syscall_filter=" + neg + " ".join(cur + [e])) > 500:
+                lines.append("syscall_filter=%s%s" % (neg, " ".join(cur)))
+                cur = []
+            cur.append(e)
+        started = any(ln.startswith("syscall_filter=") for ln in lines)
+        if not keep and not started:
+            # an all-unknown first line must keep its meaning: an allowlist
+            # of nothing is still an allowlist (@default), and plain lines
+            # after a lost denylist would only take names out of it
+            if not neg:
+                lines.append("syscall_filter=@default")
+            continue
+        if not started and first == "~" and not neg:
+            continue
+        if cur:
+            lines.append("syscall_filter=%s%s" % (neg, " ".join(cur)))
     err = _get_last(svc, "SystemCallErrorNumber")
     if err:
         if _sc_errno_ok(err):
