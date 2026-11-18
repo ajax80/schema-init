@@ -1300,12 +1300,25 @@ def warns(body):
 def svc(extra):
     return si.unit_to_svc("a", si.parse_unit("[Service]\nExecStart=/usr/bin/a\n" + extra))
 
-_b = svc("DynamicUser=yes\n")
-check("DynamicUser without User= stays root and says so",
-      "needs_root=1\n" in _b and any("DynamicUser" in w and "root" in w for w in warns(_b)))
+# audit 4.10: DynamicUser= and SupplementaryGroups= are mapped, not warned about
+_b = svc("DynamicUser=yes\nAmbientCapabilities=CAP_KILL CAP_IPC_LOCK\n")
+check("DynamicUser (earlyoom shape) -> dynamic_user=1, its caps kept, no root",
+      "dynamic_user=1\n" in _b and "ambient_caps=CAP_KILL,CAP_IPC_LOCK\n" in _b and "needs_root=1" not in _b
+      and not any("root" in w for w in warns(_b)))
+check("DynamicUser leaves the sandbox it implies to the engine",
+      all(k not in _b for k in ("no_new_privs=", "private_tmp=", "protect_system=", "protect_home=")))
+_b = svc("DynamicUser=yes\nPrivateTmp=no\n")
+check("DynamicUser with an explicit PrivateTmp=no keeps it", "private_tmp=0\n" in _b and "dynamic_user=1\n" in _b)
 _b = svc("DynamicUser=yes\nUser=wsdd\n")
-check("DynamicUser with User= warns of the static user",
-      "user=wsdd\n" in _b and any("DynamicUser" in w and "wsdd" in w for w in warns(_b)))
+check("DynamicUser with User= keeps both", "user=wsdd\n" in _b and "dynamic_user=1\n" in _b
+      and not any("static user" in w for w in warns(_b)))
+_b = svc("SupplementaryGroups=a b\nSupplementaryGroups=c\nUser=x\n")
+check("SupplementaryGroups= lines add up", "supplementary_groups=a b c\n" in _b and not any("Supplementary" in w for w in warns(_b)))
+_b = svc("SupplementaryGroups=a b\nSupplementaryGroups=\nSupplementaryGroups=c\n")
+check("an empty SupplementaryGroups= resets", "supplementary_groups=c\n" in _b)
+_b = svc("SupplementaryGroups=" + " ".join("g%d" % i for i in range(17)) + "\n")
+check("SupplementaryGroups= past 16 is cut and said", "supplementary_groups=" + " ".join("g%d" % i for i in range(16)) + "\n" in _b
+      and "SupplementaryGroups= past 16 dropped: g16" in _b)
 check("DynamicUser=no is silent", not warns(svc("DynamicUser=no\n")))
 check("ExecStart=+ is root under systemd too: no DynamicUser warning", not any(
     "DynamicUser" in w for w in warns(si.unit_to_svc("a", si.parse_unit(
@@ -1323,8 +1336,8 @@ check("CapabilityBoundingSet= with no value is the empty set, the strictest",
 check("mandatory access control and PID isolation are named", all(any(k in w for w in warns(svc(
     "SELinuxContext=x\nAppArmorProfile=x\nSecureBits=keep-caps\nPrivatePIDs=yes\n"))) for k in (
     "SELinuxContext", "AppArmorProfile", "SecureBits", "PrivatePIDs")))
-check("DynamicUser names the confinement it implies",
-      any("NoNewPrivileges" in w and "ProtectSystem=strict" in w for w in warns(svc("DynamicUser=yes\n"))))
+check("DynamicUser names what it implies that isn't enforced yet",
+      any("RemoveIPC" in w and "RestrictSUIDSGID" in w for w in warns(svc("DynamicUser=yes\n"))))
 check("ExecCondition= is named: the unit starts unconditionally",
       any("ExecCondition" in w for w in warns(svc("ExecCondition=/bin/check\n"))))
 check("ExecStartPost= is named: it never runs",
@@ -1340,8 +1353,8 @@ for k in _saved_env:
 os.environ["MIGRATE_ROOT"] = _ur
 check("Group= no longer warns: the engine applies group=",
       not any("Group=" in w for w in warns(svc("User=foo\nGroup=bar\n"))))
-check("SupplementaryGroups= warns",
-      any("SupplementaryGroups" in w for w in warns(svc("User=foo\nSupplementaryGroups=bar\n"))))
+check("SupplementaryGroups= is mapped, not warned about",
+      not any("SupplementaryGroups" in w for w in warns(svc("User=foo\nSupplementaryGroups=bar\n"))))
 si.set_user_mode(si.user_context("/h", 1000, "u", {"XDG_RUNTIME_DIR": "/r"}))
 check("user mode runs as the user: no privilege warnings", not warns(svc("PrivateNetwork=yes\nGroup=bar\n")))
 si.set_user_mode(None)
