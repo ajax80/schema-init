@@ -493,6 +493,9 @@ enum { EXEC_DIR_RUNTIME, EXEC_DIR_STATE, EXEC_DIR_CACHE, EXEC_DIR_LOGS, EXEC_DIR
 int service_exec_dir_base(int kind, char *out, size_t n);
 /* create BASE/REL without following any symlink below BASE; the leaf gets
  * uid:gid (-1 = keep) and MODE. -1 with errno and *step on failure */
+/* tests re-root the system state/cache/logs/runtime bases; NULL in PID 1 */
+extern const char *service_exec_dir_root;
+int service_private_binds(const service_t *svc);
 int service_make_dir(const char *base, const char *rel, mode_t mode, uid_t uid, gid_t gid,
                      const char **step);
 /* delete BASE/REL and everything in it, never through a symlink; 0 if gone */

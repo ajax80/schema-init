@@ -336,6 +336,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_cgroup_tiering.c -o $(TESTDIR)/tiering && $(TESTDIR)/tiering
 	$(CC) $(CFLAGS) tests/test_calendar.c -o $(TESTDIR)/calendar && $(TESTDIR)/calendar
 	$(CC) $(CFLAGS) tests/test_dynuser.c -o $(TESTDIR)/dynuser && $(TESTDIR)/dynuser
+	$(CC) $(CFLAGS) tests/test_dynuser_dirs.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dynuser-dirs && $(TESTDIR)/dynuser-dirs
 	$(CC) $(CFLAGS) tests/test_supp_groups.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/supp-groups && $(TESTDIR)/supp-groups
 	$(CC) $(CFLAGS) tests/test_svc_dynuser.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-dynuser && $(TESTDIR)/svc-dynuser
 	$(CC) $(CFLAGS) tests/test_svc_timer_keys.c service.c watch.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/timer-keys && $(TESTDIR)/timer-keys

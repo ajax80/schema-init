@@ -63,6 +63,10 @@ int main(void) {
            s.ns_protect_system == PROTECT_SYSTEM_BASE && !(s.hard_dyn & (HARD_PT | HARD_PS)) && (s.hard_dyn & HARD_PH));
     assert(load("dynamic_user=0\n", NULL, &s) == 0 && !s.dynamic_user && !s.hard_dyn);
     assert(load("dynamic_user=2\n", NULL, &s) == -1);
+    /* <base>/<d> is a symlink into private/: one level only */
+    assert(load("dynamic_user=1\nstate_dir=a/b\n", NULL, &s) == -1);
+    assert(load("dynamic_user=1\nruntime_dir=a/b\nstate_dir=a\n", NULL, &s) == 0);
+    assert(load("state_dir=a/b\n", NULL, &s) == 0);
 
     unlink(path);
     rmdir(dir);

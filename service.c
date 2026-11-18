@@ -26,6 +26,7 @@ int fdstore_n, fdstore_cap;
 #include <signal.h>
 #include <pwd.h>
 #include <grp.h>
+#include <sys/mount.h>
 #include <sys/resource.h>
 #include <sched.h>
 #include <sys/wait.h>
@@ -857,6 +858,10 @@ int service_apply_hardening(const service_t *svc) {
                        svc->rw_path_count, &step) != 0) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: mount_ns: %s: %d\n",
                 svc->name, step, errno);
+        return -1;
+    }
+    if (svc->dynamic_user && geteuid() == 0 && service_private_binds(svc) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: dynamic_user private dirs: %d\n", svc->name, errno);
         return -1;
     }
     uint64_t kdrop = ns_kernel_cap_drop(svc->ns_kernel);
@@ -2669,6 +2674,8 @@ static int exec_dir_ok(char *v) {
     }
 }
 
+const char *service_exec_dir_root;
+
 int service_exec_dir_base(int kind, char *out, size_t n) {
     static const char *const sys[EXEC_DIR_KINDS] = { "/run", "/var/lib", "/var/cache", "/var/log" };
     static const char *const xdg[EXEC_DIR_KINDS] = { "XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME" };
@@ -2677,7 +2684,7 @@ int service_exec_dir_base(int kind, char *out, size_t n) {
     int r;
     if (kind < 0 || kind >= EXEC_DIR_KINDS) return -1;
     if (geteuid() == 0) {
-        r = snprintf(out, n, "%s", sys[kind]);
+        r = snprintf(out, n, "%s%s", service_exec_dir_root ? service_exec_dir_root : "", sys[kind]);
         return r < 0 || (size_t)r >= n ? -1 : 0;
     }
     /* schema-user: where systemd's user manager puts them */
@@ -2792,6 +2799,119 @@ out:
     return -1;
 }
 
+/* re-own a dynamic user's dir after its uid changed: never through a
+ * symlink (lchown only), never into another mount (a planted bind would
+ * hand root's chown host files) */
+static int chown_tree(int fd, uid_t uid, gid_t gid, int depth) {
+    struct stat ds;
+    int r = 0;
+    if (fstat(fd, &ds) != 0 || fchown(fd, uid, gid) != 0) return -1;
+    if (depth > 64) return 0;
+    int dfd = dup(fd);
+    DIR *d = dfd < 0 ? NULL : fdopendir(dfd);
+    if (!d) {
+        if (dfd >= 0) close(dfd);
+        return -1;
+    }
+    for (struct dirent *e; (e = readdir(d));) {
+        struct stat st;
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (fstatat(fd, e->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0 || st.st_dev != ds.st_dev) continue;
+        if (fchownat(fd, e->d_name, uid, gid, AT_SYMLINK_NOFOLLOW) != 0) r = -1;
+        if (!S_ISDIR(st.st_mode)) continue;
+        int c = openat(fd, e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (c < 0) continue;
+        struct stat cs;
+        if (fstat(c, &cs) == 0 && cs.st_dev == ds.st_dev && chown_tree(c, uid, gid, depth + 1) != 0) r = -1;
+        close(c);
+    }
+    closedir(d);
+    return r;
+}
+
+/* dynamic_user: the dir lives at <base>/private/<d> (private root 0700) and
+ * <base>/<d> is a symlink to it; a plain <base>/<d> from before moves in */
+static int svc_dynamic_dir(const char *base, const char *d, mode_t mode, uid_t uid, gid_t gid,
+                           const char **step) {
+    char priv[PATH_MAX + 16], tgt[300], link[300];
+    struct stat st;
+    int bfd = -1, pfd = -1, fd = -1, r = -1;
+    if (snprintf(priv, sizeof priv, "%s/private", base) >= (int)sizeof priv) { *step = "path"; return -1; }
+    snprintf(tgt, sizeof tgt, "private/%s", d);
+    *step = "mkdir base";
+    if (mkdir_base(base) != 0) return -1;
+    *step = "private";
+    if (mkdir(priv, 0700) != 0 && errno != EEXIST) return -1;
+    if ((bfd = open(base, O_RDONLY | O_DIRECTORY | O_CLOEXEC)) < 0) return -1;
+    if ((pfd = openat(bfd, "private", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)) < 0) goto out;
+    if (fchown(pfd, 0, 0) != 0 || fchmod(pfd, 0700) != 0) goto out;
+    *step = "migrate";
+    if (fstatat(bfd, d, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode) &&
+        renameat(bfd, d, pfd, d) != 0)
+        goto out;
+    *step = "owner";
+    fd = openat(pfd, d, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd >= 0 && fstat(fd, &st) == 0 && st.st_uid != uid && chown_tree(fd, uid, gid, 0) != 0) goto out;
+    if (service_make_dir(priv, d, mode, uid, gid, step) != 0) goto out;
+    *step = "symlink";
+    ssize_t n = readlinkat(bfd, d, link, sizeof link - 1);
+    if (n >= 0) {
+        link[n] = '\0';
+        if (strcmp(link, tgt) != 0 && (unlinkat(bfd, d, 0) != 0 || symlinkat(tgt, bfd, d) != 0)) goto out;
+    } else if (errno != ENOENT || symlinkat(tgt, bfd, d) != 0) {
+        goto out;
+    }
+    r = 0;
+out:
+    if (fd >= 0) close(fd);
+    if (pfd >= 0) close(pfd);
+    close(bfd);
+    return r;
+}
+
+/* In the service's own mount namespace: a tmpfs over each <base>/private
+ * with only this service's dirs bound back, so another service handed the
+ * same uid later never reaches them. The tmpfs hides the host's dirs by
+ * path, so each is held O_PATH first (the private_devices pattern). */
+int service_private_binds(const service_t *svc) {
+    int fd[3][MAX_EXEC_DIRS], r = -1, any = 0;
+    char base[3][PATH_MAX], p[PATH_MAX + 320];
+    for (int k = 0; k < 3; k++)
+        for (int i = 0; i < MAX_EXEC_DIRS; i++) fd[k][i] = -1;
+    for (int k = 0; k < 3; k++) any |= svc->exec_dir_count[EXEC_DIR_STATE + k];
+    if (!any) return 0;
+    /* the fds are taken inside the new namespace: a bind source from another
+     * mount namespace is refused (EINVAL) */
+    if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) != 0) return -1;
+    for (int k = 0; k < 3; k++) {
+        int kind = EXEC_DIR_STATE + k;
+        if (!svc->exec_dir_count[kind]) continue;
+        if (service_exec_dir_base(kind, base[k], sizeof base[k]) != 0) goto out;
+        for (int i = 0; i < svc->exec_dir_count[kind]; i++) {
+            if (snprintf(p, sizeof p, "%s/private/%s", base[k], svc->exec_dir[kind][i]) >= (int)sizeof p) goto out;
+            if ((fd[k][i] = open(p, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)) < 0) goto out;
+        }
+    }
+    for (int k = 0; k < 3; k++) {
+        int kind = EXEC_DIR_STATE + k;
+        if (!svc->exec_dir_count[kind]) continue;
+        if (snprintf(p, sizeof p, "%s/private", base[k]) >= (int)sizeof p) goto out;
+        if (mount("tmpfs", p, "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=0755,size=64k") != 0) goto out;
+        for (int i = 0; i < svc->exec_dir_count[kind]; i++) {
+            char src[32];
+            if (snprintf(p, sizeof p, "%s/private/%s", base[k], svc->exec_dir[kind][i]) >= (int)sizeof p) goto out;
+            snprintf(src, sizeof src, "/proc/self/fd/%d", fd[k][i]);
+            if ((mkdir(p, 0755) != 0 && errno != EEXIST) || mount(src, p, NULL, MS_BIND | MS_REC, NULL) != 0) goto out;
+        }
+    }
+    r = 0;
+out:
+    for (int k = 0; k < 3; k++)
+        for (int i = 0; i < MAX_EXEC_DIRS; i++)
+            if (fd[k][i] >= 0) close(fd[k][i]);
+    return r;
+}
+
 static int rm_at(int dfd, const char *name, int depth) {
     if (unlinkat(dfd, name, 0) == 0 || errno == ENOENT) return 0;
     if (errno != EISDIR && errno != EPERM) return -1;
@@ -2895,8 +3015,10 @@ static void svc_make_exec_dirs(const service_t *svc, int create) {
                     svc->name, exec_dir_key[k]);
             _exit(126);
         }
+        int dyn = svc->dynamic_user && root && k != EXEC_DIR_RUNTIME;
         for (int i = 0; create && i < svc->exec_dir_count[k]; i++) {
-            if (service_make_dir(base, svc->exec_dir[k][i], mode, uid, gid, &step) == 0) continue;
+            if ((dyn ? svc_dynamic_dir(base, svc->exec_dir[k][i], mode, uid, gid, &step)
+                     : service_make_dir(base, svc->exec_dir[k][i], mode, uid, gid, &step)) == 0) continue;
             dprintf(2, "[schema-init] %s: %s=%s: %s: %s%s\n", svc->name, exec_dir_key[k],
                     svc->exec_dir[k][i], step, strerror(errno),
                     k == EXEC_DIR_RUNTIME ? "" : " (starting anyway)");
@@ -3905,6 +4027,14 @@ static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) 
                 svc->name);
         return -1;
     }
+    for (int k = EXEC_DIR_STATE; svc->dynamic_user && k < EXEC_DIR_KINDS; k++)
+        for (int i = 0; i < svc->exec_dir_count[k]; i++)
+            if (strchr(svc->exec_dir[k][i], '/')) {
+                /* <base>/<d> is a symlink into private/: one level only */
+                fprintf(stderr, "[schema-init] %s: dynamic_user=1 takes no nested state/cache/logs dir (%s) — not loaded\n",
+                        svc->name, svc->exec_dir[k][i]);
+                return -1;
+            }
     if (svc->watch_count && svc->pid_file[0]) {
         /* the launcher's exit would end the run while its daemon lives on */
         fprintf(stderr, "[schema-init] %s: watch_path= cannot be combined with pid_file= — not loaded\n",
