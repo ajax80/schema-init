@@ -22,7 +22,9 @@ svc() {  # name, body, extra lines
 }
 svc ok "echo ok > $T/ok.out" "syscall_filter=@system-service\nsyscall_filter=~@privileged @resources\n"
 svc deny "uname -s > $T/deny.out 2>&1; echo \$? > $T/deny.rc" "syscall_filter=~uname\n"
-svc kill "uname -s > $T/kill.out" "syscall_filter=~uname\nsyscall_error_number=kill\n"
+# no shell in between: dash forks the command and reports the child's
+# SIGSYS as exit 159, bash execs it; the service itself must be the one killed
+printf 'name=kill\nexec=/usr/bin/uname\nargs=-s\noneshot=1\nsyscall_filter=~uname\nsyscall_error_number=kill\n' > "$S/kill.svc"
 svc suid "touch $T/f; chmod 4755 $T/f; echo \$? > $T/suid.rc" "restrict_suid_sgid=1\n"
 printf 'name=stopper\nexec=/bin/sleep\nargs=600\nsyscall_filter=~uname\nexec_stop=/bin/sh -c "uname -s > %s/st 2>/dev/null || echo blocked > %s/st"\n' "$T" "$T" > "$S/stopper.svc"
 # the runner itself is never filtered: its waitpid works even under ~wait4,
@@ -41,7 +43,6 @@ until_ok "[ -s $T/ok.out ]" || fail "@system-service service never ran"
 until_ok "[ -s $T/deny.rc ]" || fail "deny never ran"
 [ "$(cat "$T/deny.rc")" != 0 ] || fail "uname ran under ~uname: $(cat "$T/deny.out")"
 until_ok 'st kill | grep -q SIGSYS' || fail "kill: no SIGSYS: $(st kill | head -3)"
-[ ! -s "$T/kill.out" ] || fail "kill: uname printed"
 until_ok "[ -s $T/suid.rc ]" || fail "suid never ran"
 [ "$(cat "$T/suid.rc")" != 0 ] || fail "chmod 4755 went through restrict_suid_sgid"
 st ok | grep -q "syscall_filter: allowlist" || fail "status: $(st ok)"
