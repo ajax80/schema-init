@@ -1676,6 +1676,39 @@ static void svc_runner_netns(const service_t *svc, const char *what) {
     if (fd >= 0) close(fd);
 }
 
+/* supplementary_groups=, added to what initgroups() just set (a user may
+ * already be in many groups, so the list is sized from getgroups) */
+static void svc_supp_groups_or_die(const service_t *svc) {
+    if (!svc->supp_count) return;
+    int n = getgroups(0, NULL);
+    gid_t *g = n < 0 ? NULL : malloc(sizeof(gid_t) * (size_t)(n + 16));
+    if (!g || (n = getgroups(n, g)) < 0) {
+        dprintf(2, "[schema-init] UID DROP FAILED for %s: supplementary_groups: %d\n", svc->name, errno);
+        _exit(126);
+    }
+    for (int i = 0; i < svc->supp_count; i++) {
+        const char *name = svc->supp_groups[i];
+        char *end;
+        gid_t gid = (gid_t)strtoul(name, &end, 10);
+        if (*end || !*name) {
+            struct group *gr = getgrnam(name);
+            if (!gr) {
+                dprintf(2, "[schema-init] UID DROP FAILED for %s: supplementary_groups: %s\n", svc->name, name);
+                _exit(126);
+            }
+            gid = gr->gr_gid;
+        }
+        int dup = 0;
+        for (int k = 0; k < n && !dup; k++) dup = g[k] == gid;
+        if (!dup) g[n++] = gid;
+    }
+    if (setgroups((size_t)n, g) != 0) {
+        dprintf(2, "[schema-init] UID DROP FAILED for %s: supplementary_groups: setgroups: %d\n", svc->name, errno);
+        _exit(126);
+    }
+    free(g);
+}
+
 static void svc_runner_child(const service_t *svc, const char *what) {
     service_reset_child_sigmask();
     setsid();
@@ -1696,18 +1729,25 @@ static void svc_runner_child(const service_t *svc, const char *what) {
     snprintf(gwhat, sizeof gwhat, "%s: ", what);
     gid_t sgid = svc->run_gid;
     svc_resolve_group_or_die(svc, &sgid, gwhat);
-    if (svc->run_uid && svc->cap_ambient_mask) {
+    int amb = svc->run_uid && svc->cap_ambient_mask;
+    if (amb || svc->run_uid || svc->run_group[0] || svc->supp_count) {
         const char *step = "";
-        if (apply_ambient_caps(svc->cap_ambient_mask, svc->run_uid, sgid,
-                               svc->run_user[0] ? svc->run_user : "nobody", &step) != 0) {
+        if (amb && ambient_caps_prep(svc->cap_ambient_mask, &step) != 0) {
             dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n", svc->name, step, errno);
             _exit(126);
         }
-    } else if (svc->run_uid || svc->run_group[0]) {
         if (initgroups(svc->run_user[0] ? svc->run_user
-                                        : svc->run_uid ? "nobody" : "root", sgid) != 0 ||
-            setgid(sgid) != 0 || (svc->run_uid && setuid(svc->run_uid) != 0)) {
+                                        : svc->run_uid ? "nobody" : "root", sgid) != 0) {
             dprintf(2, "[schema-init] UID DROP FAILED for %s: %s: %d\n", svc->name, what, errno);
+            _exit(126);
+        }
+        svc_supp_groups_or_die(svc);
+        if (setgid(sgid) != 0 || (svc->run_uid && setuid(svc->run_uid) != 0)) {
+            dprintf(2, "[schema-init] UID DROP FAILED for %s: %s: %d\n", svc->name, what, errno);
+            _exit(126);
+        }
+        if (amb && ambient_caps_raise(svc->cap_ambient_mask, &step) != 0) {
+            dprintf(2, "[schema-init] AMBIENT CAPS FAILED for %s: %s: %d\n", svc->name, step, errno);
             _exit(126);
         }
     }
@@ -1991,8 +2031,9 @@ int service_spawn(service_t *svc) {
                 }
             }
         }
-        /* group= alone still switches gid: root with that group, never root:root */
-        if (svc->run_uid || svc->run_group[0]) {
+        /* group= alone still switches gid: root with that group, never root:root;
+         * supplementary_groups= alone still sets groups on a root service */
+        if (svc->run_uid || svc->run_group[0] || svc->supp_count) {
             if (initgroups(svc->run_user[0] ? svc->run_user
                                             : svc->run_uid ? "nobody" : "root",
                            svc->run_gid) != 0) {
@@ -2000,6 +2041,7 @@ int service_spawn(service_t *svc) {
                         svc->name, errno);
                 _exit(126);
             }
+            svc_supp_groups_or_die(svc);
             if (setgid(svc->run_gid) != 0) {
                 dprintf(2, "[schema-init] UID DROP FAILED for %s: setgid: %d\n",
                         svc->name, errno);
