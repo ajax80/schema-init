@@ -387,7 +387,7 @@ units use them.
   second today), `on_unit_inactive_sec=`, and the richer calendar forms
   in `docs/timers-design.md`.
 
-### 4.10 `supplementary_groups=`, `dynamic_user=1`
+### 4.10 `supplementary_groups=`, `dynamic_user=1` (done: see docs/superpowers/specs/2026-11-17-groups-dynuser-design.md)
 - Importer skips `SupplementaryGroups=`; `initgroups` already runs, so the
   key is a list appended after it. `dynamic_user` allocates a uid from
   61184–65519 for the run and owns the `*_dir=` directories; lower
