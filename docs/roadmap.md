@@ -67,4 +67,4 @@
 - [x] `randomized_delay_sec=` and richer `on_calendar=` (weekday/day lists and ranges, hour/minute steps, up to 4 lines); importer maps `RandomizedDelaySec=`, `OnActiveSec=`, wall-aligned `hourly`
 - [x] `supplementary_groups=`, `dynamic_user=1` — allocated uid, private state dirs behind a namespace tmpfs; importer maps `DynamicUser=` (earlyoom no longer runs as root) and `SupplementaryGroups=`
 - [x] `syscall_filter=` (seccomp) — hand-built BPF for a static PID 1 with systemd's named syscall groups, plus `restrict_suid_sgid`, `lock_personality`, `restrict_realtime`, `restrict_namespaces`; blocked calls get EPERM
-- [x] `syscall_deny=` — a denylist preset under the hardening-default switch (on the 4.6 engine); shipped and imported `.svc` pin `syscall_deny=0`
+- [x] `syscall_deny=` — a denylist preset (on the 4.6 engine), opt-in per service — taken out from under the hardening-default switch after it cut `mount(2)` from every unpinned host `.svc` on blakbox (11-18)
