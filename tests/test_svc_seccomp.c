@@ -35,6 +35,14 @@ static int load(const char *keys, const char *dropin, service_t *s) {
     return r;
 }
 
+static int err_of(const service_t *s, const char *name) {
+    for (int i = 0; i < SC_NAMES_ALL; i++)
+        if (!strcmp(sc_known[i], name))
+            for (int k = 0; k < s->sc.n_err; k++)
+                if ((s->sc.err_set[k][i / 64] >> (i % 64)) & 1) return s->sc.err_val[k];
+    return 0;
+}
+
 static int has(const service_t *s, const char *name) {
     for (int i = 0; i < SC_NAMES_ALL; i++)
         if (!strcmp(sc_known[i], name)) return (s->sc.set[i / 64] >> (i % 64)) & 1;
@@ -79,6 +87,44 @@ int main(void) {
     assert(load("restrict_namespaces=0\n", NULL, &s) == 0 && !s.sc.ns && !sc_active(&s.sc));
     assert(load("restrict_namespaces=cgroup ipc\n", NULL, &s) == -1);
     assert(load("lock_personality=2\n", NULL, &s) == -1);
+
+    /* syscall_deny=: tri-state on the hardening-default switch */
+    assert(load("", NULL, &s) == 0 && s.sc.mode == SC_NONE);
+    service_set_hardening_default(1);
+    assert(load("", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "mount") == 1 && has(&s, "init_module") == 1 &&
+           has(&s, "settimeofday") == 1 && has(&s, "bpf") == 1 && has(&s, "openat") == 0);
+    assert(s.hard_default & HARD_SD);
+    assert(load("syscall_deny=0\n", NULL, &s) == 0 && s.sc.mode == SC_NONE && (s.hard_set & HARD_SD));
+    assert(load("syscall_deny=@clock\n", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "settimeofday") == 1 &&
+           has(&s, "mount") == 0);
+    service_set_hardening_default(0);
+    assert(load("syscall_deny=default\n", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "mount") == 1);
+    /* merged into the one filter: a denylist adds, an allowlist loses them */
+    assert(load("syscall_filter=~getuid\nsyscall_deny=@clock\n", NULL, &s) == 0 && s.sc.mode == SC_DENY &&
+           has(&s, "getuid") == 1 && has(&s, "settimeofday") == 1);
+    assert(load("syscall_filter=@system-service @clock\nsyscall_deny=@clock\n", NULL, &s) == 0 && s.sc.mode == SC_ALLOW &&
+           has(&s, "openat") == 1 && has(&s, "settimeofday") == 0);
+    assert(load("syscall_deny=@nonesuch\n", NULL, &s) == -1);
+    assert(load("syscall_deny=2\n", NULL, &s) == -1);
+    /* review of #546: the unit's own filter wins where they overlap */
+    assert(load("syscall_filter=~mount:EROFS\nsyscall_deny=@mount\n", NULL, &s) == 0 &&
+           err_of(&s, "mount") == EROFS && has(&s, "umount2") == 1 && err_of(&s, "umount2") == 0);
+    service_set_hardening_default(1);
+    assert(load("syscall_filter=~@privileged\nsyscall_filter=mount\n", NULL, &s) == 0 && has(&s, "mount") == 0 &&
+           !(s.hard_default & HARD_SD));
+    assert(load("user=nobody\nno_new_privs=0\n", NULL, &s) == 0 && s.sc.mode == SC_NONE && !(s.hard_default & HARD_SD));
+    assert(load("no_new_privs=0\n", NULL, &s) == 0 && (s.hard_default & HARD_SD) == (geteuid() == 0 ? HARD_SD : 0));
+    assert(load("syscall_deny=no\n", NULL, &s) == 0 && s.sc.mode == SC_NONE);
+    service_set_hardening_default(0);
+    assert(load("syscall_deny=yes\n", NULL, &s) == 0 && has(&s, "mount") == 1);
+    assert(load("syscall_deny=~mount\n", NULL, &s) == -1);
+    assert(load("syscall_deny=default bpf\n", NULL, &s) == -1);
+    {
+        char big[600] = "syscall_deny=";
+        while (strlen(big) < 450) strcat(big, "mount ");
+        strcat(big, "\n");
+        assert(load(big, NULL, &s) == -1);
+    }
 
     unlink(path);
     rmdir(dir);

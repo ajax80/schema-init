@@ -3893,6 +3893,16 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                 return -1;
             }
         }
+    } else if (strcmp(line, "syscall_deny") == 0) {
+        /* resolved at finalize, where the host default is known */
+        if (strlen(val) >= sizeof svc->sc_deny) {
+            fprintf(stderr, "[schema-init] %s: syscall_deny too long (limit %zu) — not loaded\n",
+                    svc->name[0] ? svc->name : path, sizeof svc->sc_deny - 1);
+            return -1;
+        }
+        snprintf(svc->sc_deny, sizeof svc->sc_deny, "%s", val);
+        if (*val) svc->hard_set |= HARD_SD;
+        else svc->hard_set &= ~HARD_SD;
     } else if (strcmp(line, "syscall_error_number") == 0) {
         if (!*val) svc->sc.err = 0;
         else if (sc_errno_parse(val, &svc->sc.err) != 0) {
@@ -4076,8 +4086,84 @@ static int svc_name_ok(const char *n) {
 
 /* Post-parse checks and defaults, then the name from the filename.
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
+/* syscall_deny=: the schema-native denylist (the 10-13 plan). Unset, it
+ * follows the host's hardening-default like the other knobs; merged into
+ * the one filter: a denylist grows, an allowlist loses those names. */
+static const char *const sc_deny_preset =
+    "@clock @cpu-emulation @debug @module @mount @obsolete @raw-io @reboot @swap kexec_load kexec_file_load bpf";
+
+static int sc_deny_finalize(service_t *svc) {
+    const char *v = svc->sc_deny;
+    char buf[512], *save, *t;
+    sc_spec_t d = { .mode = SC_DENY };
+    if (!(svc->hard_set & HARD_SD)) {
+        if (!hardening_default_on) return 0;
+        /* a unit with its own filter chose it, carve-outs and errnos too; one
+         * that asked for no_new_privs=0 to run setuid would lose it to the
+         * filter (an unprivileged install needs NNP) */
+        if (svc->sc.mode != SC_NONE) return 0;
+        if ((svc->hard_set & HARD_NNP) && !(svc->flags & SVC_NO_NEW_PRIVS) &&
+            (svc->run_uid || svc->run_user[0] || svc->dynamic_user || geteuid() != 0)) {
+            fprintf(stderr, "[schema-init] %s: default syscall_deny dropped: no_new_privs=0 for a non-root service\n",
+                    svc->name);
+            return 0;
+        }
+        v = "default";
+        svc->hard_default |= HARD_SD;
+    }
+    if (!strcmp(v, "0") || !strcasecmp(v, "no") || !strcasecmp(v, "off") || !strcasecmp(v, "false") ||
+        !strcasecmp(v, "none"))
+        return 0;
+    int preset = !strcmp(v, "default") || !strcasecmp(v, "yes") || !strcasecmp(v, "on") || !strcasecmp(v, "true");
+    snprintf(buf, sizeof buf, "%s", preset ? sc_deny_preset : v);
+    for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save)) {
+        /* ~ is syscall_filter's; "default" only stands alone; a bare number is a mistake */
+        int r = *t == '~' || !strcmp(t, "default") || !t[strspn(t, "0123456789")] ? -1 : sc_add(&d, t, 0);
+        if (r == -2) {
+            fprintf(stderr, "[schema-init] %s: syscall_deny: unknown syscall '%s' ignored\n", svc->name, t);
+        } else if (r != 0) {
+            fprintf(stderr, "[schema-init] %s: syscall_deny: bad entry '%s' (0, default, or names/@groups) — not loaded\n",
+                    svc->name, t);
+            return -1;
+        }
+    }
+    /* one filter: a name the unit's syscall_filter= already lists keeps its errno */
+    if (svc->sc.mode == SC_NONE) {
+        svc->sc.mode = SC_DENY;
+        memcpy(svc->sc.set, d.set, sizeof d.set);
+        for (int k = 0; k < d.n_err; k++) {
+            svc->sc.err_val[k] = d.err_val[k];
+            memcpy(svc->sc.err_set[k], d.err_set[k], sizeof d.err_set[k]);
+        }
+        svc->sc.n_err = d.n_err;
+    } else if (svc->sc.mode == SC_ALLOW) {
+        for (int w = 0; w < SC_WORDS; w++) svc->sc.set[w] &= ~d.set[w];
+    } else {
+        for (int w = 0; w < SC_WORDS; w++) {
+            uint64_t add = d.set[w] & ~svc->sc.set[w];
+            svc->sc.set[w] |= add;
+            for (int k = 0; k < d.n_err; k++) {
+                if (!(d.err_set[k][w] & add)) continue;
+                int e;
+                for (e = 0; e < svc->sc.n_err && svc->sc.err_val[e] != d.err_val[k]; e++) {}
+                if (e == svc->sc.n_err) {
+                    if (e >= SC_MAX_ERRS) {
+                        fprintf(stderr, "[schema-init] %s: syscall_deny: too many errnos with syscall_filter= — not loaded\n",
+                                svc->name);
+                        return -1;
+                    }
+                    svc->sc.err_val[svc->sc.n_err++] = d.err_val[k];
+                }
+                svc->sc.err_set[e][w] |= d.err_set[k][w] & add;
+            }
+        }
+    }
+    return 0;
+}
+
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
     if (hardening_finalize(svc) != 0) return -1;
+    if (sc_deny_finalize(svc) != 0) return -1;
     /* drop-ins applied: what start/restart/reset put back after a stop's hold */
     svc->no_restart_cfg = (svc->flags & SVC_NO_RESTART) != 0;
     /* bind=X is also dep=X (start order, shutdown order, cycles): after the

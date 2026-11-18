@@ -1150,6 +1150,8 @@ _ad = si.timer_to_svc("apt-daily", si.parse_unit("[Timer]\nOnCalendar=*-*-* 6,18
                       si.parse_unit("[Service]\nType=oneshot\nExecStart=/usr/lib/apt/apt.systemd.daily update\n"))
 check("apt-daily.timer imports with on_calendar=6,18:00", "on_calendar=6,18:00\npersistent=1\n" in _ad)
 
+check("syscall_deny=0 always written, like the other knobs: the unit means the same on any host",
+      "syscall_deny=0\n" in si.unit_to_svc("x", si.parse_unit("[Service]\nExecStart=/bin/x\n")))
 # Fedora units that use none of the new keys: byte-identical to the output before they existed
 _F_SSHD = ("[Unit]\nAfter=network.target sshd-keygen.target\nWants=sshd-keygen.target\n[Service]\nType=notify\nEnvironment=OPTIONS=\n"
            "EnvironmentFile=-/etc/sysconfig/sshd\nExecStart=/usr/sbin/sshd -D $OPTIONS\nExecReload=/bin/kill -HUP $MAINPID\n"
@@ -1163,19 +1165,19 @@ _F_FSTRIM_S = ("[Service]\nType=oneshot\nExecStart=/usr/bin/fstrim --listed-in /
                "--quiet-unsupported\nProtectKernelTunables=yes\n")
 # 4.1: ExecReload=/bin/kill -HUP $MAINPID is reload_signal=HUP; 4.2: Restart=on-failure is restart=;
 # 4.3: KillMode=process is kill_mode=process (a stop keeps the sessions)
-check("Fedora sshd.service output unchanged but for reload_signal, restart, kill_mode", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
+check("Fedora sshd.service output unchanged but for reload_signal, restart, kill_mode, syscall_deny", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
       'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nreload_signal=HUP\nnotify=1\n'
-      'restart=on-failure\nrestart_sec=42\nkill_mode=process\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n')
-check("Fedora chronyd.service output unchanged", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
+      'restart=on-failure\nrestart_sec=42\nkill_mode=process\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\nsyscall_deny=0\n')
+check("Fedora chronyd.service output unchanged but for syscall_deny", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
       '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\n'
       '# schema-import WARN: no equivalent here, not enforced: CapabilityBoundingSet\nname=chronyd\n'
       'exec=/usr/sbin/chronyd\nargs=-n\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/chronyd\nexpand_args=1\nnotify=1\n'
-      'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\n')
-check("Fedora fstrim.timer output unchanged but for randomized_delay_sec",
+      'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\nsyscall_deny=0\n')
+check("Fedora fstrim.timer output unchanged but for randomized_delay_sec, syscall_deny",
       si.timer_to_svc("fstrim", si.parse_unit(_F_FSTRIM_T), si.parse_unit(_F_FSTRIM_S)) ==
       '# schema-import: dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
       'args=/etc/fstab:/proc/self/mountinfo\nargs=--verbose\nargs=--quiet-unsupported\nneeds_root=1\ncritical=0\nno_new_privs=0\n'
-      'private_tmp=0\nprotect_system=0\nprotect_home=0\nprotect_kernel_tunables=1\non_calendar=Mon 00:00\npersistent=1\n'
+      'private_tmp=0\nprotect_system=0\nprotect_home=0\nsyscall_deny=0\nprotect_kernel_tunables=1\non_calendar=Mon 00:00\npersistent=1\n'
       'randomized_delay_sec=6000\n')
 
 # --- audit 4.5: kernel-surface knobs ---

@@ -531,6 +531,9 @@ def _hardening(svc):
         if v not in _FALSE:
             warns.append("ProtectHome=%s has no equivalent, mapped to protect_home=0" % v)
         lines.append("protect_home=0")
+    # explicit like the four above: no host-default syscall denylist on an
+    # imported unit (it carries systemd's own SystemCallFilter= if it had one)
+    lines.append("syscall_deny=0")
     # audit 4.5: only when asked, so units without them import byte-identical
     for d, key in (("ProtectKernelTunables", "protect_kernel_tunables"),
                    ("ProtectKernelModules", "protect_kernel_modules"),

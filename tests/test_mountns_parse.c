@@ -399,12 +399,12 @@ int main(void) {
     assert(service_load_one(path, &one) == 0);
     assert((one.flags & SVC_NO_NEW_PRIVS) && one.ns_private_tmp == 1 &&
            one.ns_protect_system == PROTECT_SYSTEM_BASE && one.ns_protect_home == 1);
-    assert(one.hard_default == (HARD_NNP | HARD_PT | HARD_PS | HARD_PH) && !one.hard_set);
+    assert(one.hard_default == (HARD_NNP | HARD_PT | HARD_PS | HARD_PH | HARD_SD) && !one.hard_set);
     assert(services_load(dir, table, 4) == 1);
     assert(table[0].hard_default == one.hard_default && table[0].flags == one.flags);
 
     write_svc(path, "name=plain\nexec=/usr/bin/true\nno_new_privs=0\nprivate_tmp=0\n"
-                    "protect_system=0\nprotect_home=0\n");
+                    "protect_system=0\nprotect_home=0\nsyscall_deny=0\n");
     assert(service_load_one(path, &one) == 0);
     assert(!(one.flags & SVC_NO_NEW_PRIVS) && !one.ns_private_tmp &&
            !one.ns_protect_system && !one.ns_protect_home && !one.hard_default);

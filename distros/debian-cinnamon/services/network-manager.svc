@@ -8,3 +8,4 @@ no_new_privs=1
 private_tmp=1
 protect_system=1
 protect_home=0
+syscall_deny=0

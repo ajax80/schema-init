@@ -633,7 +633,7 @@ def _mount_slug(target):
 
 
 SKIP_MOUNT_TARGETS = {"/"}
-NO_HARDENING = "no_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\n"
+NO_HARDENING = "no_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\nsyscall_deny=0\n"
 
 
 def _parent_mount_target(target, targets):
