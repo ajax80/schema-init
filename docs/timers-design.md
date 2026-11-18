@@ -116,10 +116,14 @@ Covers the bulk of cron use (`fstrim`, log rotation, backups, mem-sync).
 **This feature:** `persistent=1` catch-up for calendar timers — run a missed fire
 once at boot, last-run stamped under `/var/lib/schema-init/timers/`.
 
+**Audit 4.9:** `on_calendar=[DOW] [DOM] H:M` with lists, ranges and steps
+(`calendar.h`, one mask per field), up to 4 lines, and `randomized_delay_sec=`
+applied at every arm. See `docs/superpowers/specs/2026-11-17-timers-design.md`.
+
 **Known gaps (not yet implemented):**
 
-- **Richer calendar forms** — day-of-week, multiple times per day, `*:0/15`
-  style. Single daily `HH:MM` only for now.
+- **Calendar fields** — no month or year field, no seconds, no `~` (last day
+  of the month).
 - **Reload** — `schema-ctl reload` reloads a timer in `NEW_PROCESS`, so it fires
   once promptly after a reload rather than waiting out `on_boot_sec` again.
   Re-arm after first completion is unaffected.
