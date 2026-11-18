@@ -66,4 +66,5 @@
 - [x] `watch_path=` (systemd `.path` units) — `exists`/`exists_glob`/`dir_not_empty`/`changed`/`modified` on PID 1's inotify fd, `make_directory=`, trigger limit; importer takes `.path` units
 - [x] `randomized_delay_sec=` and richer `on_calendar=` (weekday/day lists and ranges, hour/minute steps, up to 4 lines); importer maps `RandomizedDelaySec=`, `OnActiveSec=`, wall-aligned `hourly`
 - [ ] `supplementary_groups=`, `dynamic_user=1`
-- [ ] `syscall_filter=` (seccomp) — hand-built BPF for a static PID 1, systemd's named syscall groups; its own design spec first
+- [x] `syscall_filter=` (seccomp) — hand-built BPF for a static PID 1 with systemd's named syscall groups, plus `restrict_suid_sgid`, `lock_personality`, `restrict_realtime`, `restrict_namespaces`; blocked calls get EPERM
+- [ ] `syscall_deny=` / `@default` preset under the hardening-default switch (on the 4.6 engine)

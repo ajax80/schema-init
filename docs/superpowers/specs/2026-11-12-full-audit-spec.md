@@ -362,7 +362,7 @@ units use them.
   Gate each with the same `ns_hides()` safety check and the hardening
   default stays what it is (nnp, private_tmp, protect_system, protect_home).
 
-### 4.6 `syscall_filter=` (seccomp)
+### 4.6 `syscall_filter=` (seccomp) (done: see docs/superpowers/specs/2026-11-17-seccomp-design.md)
 - No seccomp anywhere. A hand-built BPF (no libseccomp in a static PID 1)
   with systemd's named groups (`@system-service`, `@mount`, `@privileged`,
   …) as deny or allow lists, plus `syscall_architectures=native`. Importer
