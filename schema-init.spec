@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.26
+Version:        0.4.27
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -530,6 +530,33 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Nov 18 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.27-1
+- Audit tier 4: the systemd unit semantics the engine was missing.
+- exec_reload= and reload_signal=, schema-ctl reload <svc> (#529); restart=,
+  success_exit_status=, restart_prevent_exit_status= (#530); kill_mode=,
+  kill_signal=, final_kill_signal=, and a runtime stop escalates (#531)
+- runtime_dir=, state_dir=, cache_dir=, logs_dir= (#533). Units imported
+  before this keep their install -d lines until re-imported with
+  schema-import -f
+- protect_kernel_tunables/modules, protect_control_groups, private_devices,
+  protect_hostname, private_network, memory_deny_write_execute (refused on
+  kernels before 6.3), umask= (#534, #535)
+- nice=, io_class=/io_priority=, sched_policy=/sched_priority= (#536)
+- watch_path= for systemd .path units: exists, exists_glob, dir_not_empty,
+  changed, modified, make_directory=, trigger limit 200 per 2 s; the importer
+  takes .path units (#538)
+- Timers: randomized_delay_sec=, on_calendar= with weekdays, days of month,
+  ranges and steps (up to 4 lines), "next fire" in status; the importer maps
+  RandomizedDelaySec= and OnActiveSec=. Hourly timers re-import as
+  wall-aligned *:00 (#539)
+- supplementary_groups=, dynamic_user=1 (uid 61184-65519 from the name,
+  private state dirs); the importer maps DynamicUser=, so earlyoom and
+  fwupd-refresh no longer run as root (#540)
+- syscall_filter=, syscall_error_number=, syscall_architectures=,
+  restrict_suid_sgid, lock_personality, restrict_realtime,
+  restrict_namespaces (#541). A blocked call fails with EPERM instead of
+  killing the service; any filter refuses foreign ABIs, so 32-bit binaries
+  can't run under a filtered service. The importer maps SystemCallFilter=
 * Sat Nov 14 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.26-1
 - Full audit (2026-11-12) fixes. Stricter .svc parsing refuses bad on_calendar,
   cpu_limit, mem_limit and watchdog_sec values, duplicate names and odd names
