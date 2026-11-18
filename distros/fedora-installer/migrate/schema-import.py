@@ -1568,14 +1568,7 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
     warns = []
     if not privileged:
         if _get_last(svc, "DynamicUser").lower() in _TRUE:
-            if user and user != "root":
-                warns.append("DynamicUser=yes: runs as the static user %s, which must exist" % user)
-            else:
-                warns.append("DynamicUser=yes with no User=: runs as root, no dynamic users here, "
-                             "and without what it implies unless set here (NoNewPrivileges, "
-                             "ProtectSystem=strict, ProtectHome=read-only, PrivateTmp, RemoveIPC, RestrictSUIDSGID)")
-        if _get_last(svc, "SupplementaryGroups"):
-            warns.append("SupplementaryGroups= not applied: only %s's /etc/group memberships" % (user or "root"))
+            warns.append("DynamicUser=yes: RemoveIPC and RestrictSUIDSGID it implies are not enforced")
     if _get_all(svc, "ExecCondition"):
         warns.append("ExecCondition= not run: the unit starts unconditionally")
     if _get_all(svc, "ExecStartPost"):
@@ -1994,7 +1987,14 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if privileged:
         user = ""
     amb, amb_warns = _ambient_caps(svc)
-    if user and user != "root":
+    # DynamicUser= runs as an allocated uid (or the static User=, which wins),
+    # never root; schema-user's services already run as the user
+    dynamic = not privileged and not _USER and _get_last(svc, "DynamicUser").lower() in _TRUE
+    if dynamic and (not user or user == "root"):
+        lines.append("dynamic_user=1")
+        if amb:
+            lines.append("ambient_caps=%s" % ",".join(amb))
+    elif user and user != "root":
         lines.append("user=%s" % user)
         # ambient only: keep_caps= with user= fails initgroups unless
         # CAP_SETUID/CAP_SETGID are kept, and the engine widens the bounding
@@ -2011,6 +2011,20 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     group = "" if privileged or _USER else _get_last(svc, "Group")
     if group and group != (_primary_group(user) if user and user != "root" else "root"):
         lines.append("group=%s" % group)
+    if dynamic and user and user != "root":
+        lines.append("dynamic_user=1")
+    if not privileged and not _USER:
+        supp = []
+        for v in _get_all(svc, "SupplementaryGroups"):
+            supp = supp + v.split() if v.strip() else []
+        if len(supp) > 16:
+            rt_notes.append("SupplementaryGroups= past 16 dropped: %s" % " ".join(supp[16:]))
+            supp = supp[:16]
+        if supp:
+            lines.append("supplementary_groups=%s" % " ".join(supp))
+    elif _get_last(svc, "SupplementaryGroups"):
+        rt_notes.append("dropped SupplementaryGroups= (%s)" % ("user services run as the user" if _USER
+                        else "ExecStart=!/+ runs as root"))
 
     lines.append("critical=0")
 
@@ -2036,6 +2050,13 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         elif seen_plain:
             warns.append("ExecStartPre order changed: '+' lines run before the others")
             break
+    if dynamic:
+        # what DynamicUser= implies is left to the engine's dynamic_user=1,
+        # unless the unit spells the directive out
+        implied = {"no_new_privs": "NoNewPrivileges", "private_tmp": "PrivateTmp",
+                   "protect_system": "ProtectSystem", "protect_home": "ProtectHome"}
+        hard = [ln for ln in hard if ln.split("=", 1)[0] not in implied
+                or _get_last(svc, implied[ln.split("=", 1)[0]])]
     lines.extend(hard)
     # + with no plain ExecStartPre runs unsandboxed under systemd: no filter
     if not ("+" in pfx and all("+" in pre for pre, _ in pres)):

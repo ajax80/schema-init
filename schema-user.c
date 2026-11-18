@@ -393,6 +393,8 @@ int main(int argc, char **argv) {
     engine_paths.env_fallback    = NULL;
     engine_paths.svc_fallback    = NULL;
     engine_paths.tag             = "schema-user";
+    engine_paths.dynamic_users   = 0;
+    service_dynamic_users = 0;
     engine_reload_integrity      = 0;
     engine_reload_allow_empty    = 1;
     if (engine_mkdir_p(log_dir, 0700) == 0)
