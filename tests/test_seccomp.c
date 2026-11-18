@@ -106,7 +106,13 @@ int main(void) {
     /* allowlist: listed calls pass, the rest get EPERM (the default here);
      * @default rides along as in systemd, so the process can still exit */
     s = spec(SC_ALLOW, "getpid");
-    assert(probe(&s, c_getpid) == 0 && probe(&s, c_uname) == EPERM && probe(&s, c_getuid) == 0);
+    {
+        int a = probe(&s, c_getpid), b = probe(&s, c_uname), c = probe(&s, c_getuid);
+        if (a != 0 || b != EPERM || c != 0) {
+            fprintf(stderr, "allowlist+@default: getpid=%d uname=%d (want %d) getuid=%d\n", a, b, EPERM, c);
+            return 1;
+        }
+    }
     s.err = SC_KILL;
     assert(probe(&s, c_uname) == -SIGSYS);
     /* denylist: the inverse; a per-entry errno wins */
