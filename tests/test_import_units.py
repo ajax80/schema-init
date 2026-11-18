@@ -528,7 +528,9 @@ for cal, want in (("daily", "00:00"), ("weekly", "Mon 00:00"), ("monthly", "1 00
                   ("*-*-1,15 00:00", "1,15 00:00"), ("Sat,Sun 10:00", "Sun,Sat 10:00"), ("4:10", "04:10"),
                   ("*-*-* 8..17:30", "8..17:30"), ("Mon..Fri *-*-* 09:00:00", "Mon..Fri 09:00"),
                   ("*-01-01 00:00", None), ("12:00:30", None), ("quarterly", None), ("*:*/0", None),
-                  ("Fri..Mon 00:00", None)):
+                  ("Fri..Mon 00:00", None), ("*-*-* 8..17/2:00", "8,10,12,14,16:00"),
+                  ("*-*-* 5/1:00", "5..23:00"), ("Sat..Sun *-*-* 02:00", "Sun,Sat 02:00"),
+                  ("Mon..Sun 00:00", "00:00"), ("Sun..Sat 00:00", None)):
     check("calendar %r -> %r" % (cal, want), si._calendar(cal) == want)
 svcu = si.parse_unit("[Service]\nType=oneshot\nExecStart=/usr/sbin/logrotate /etc/logrotate.conf\n")
 bt = si.timer_to_svc("logrotate", si.parse_unit("[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n"), svcu)

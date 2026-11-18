@@ -65,6 +65,14 @@ int main(void) {
     s = S("*/6:00"); assert(s.hours == (H(0) | H(6) | H(12) | H(18)));
     s = S("10/5:*"); assert(s.hours == (H(10) | H(15) | H(20)) && s.mins == CAL_ANY_MINS);
     s = S("*:*"); assert(s.hours == CAL_ANY_HOURS && s.mins == CAL_ANY_MINS);
+    /* a step inside a range stops at the range's end */
+    s = S("8..17/2:00"); assert(s.hours == (H(8) | H(10) | H(12) | H(14) | H(16)));
+    s = S("5/1:00"); assert(s.hours == (CAL_ANY_HOURS & ~0x1Fu));
+    /* weekday ranges count Monday-first, as systemd: the weekend is Sat..Sun */
+    s = S("Sat..Sun 02:00"); assert(s.dow == (1 << 6 | 1));
+    s = S("Mon..Sun 00:00"); assert(s.dow == CAL_ANY_DOW);
+    s = S("Fri..Sun 00:00"); assert(s.dow == (1 << 5 | 1 << 6 | 1));
+    assert(bad("Sun..Sat 00:00") && bad("Sun..Mon 00:00"));
     assert(bad("*:*/0") && bad("*/0:00") && bad("Fri..Mon 00:00") && bad("25:00") && bad("00:60"));
     assert(bad("0 00:00") && bad("Mon Tue 00:00") && bad("Mon 1 2 00:00") && bad("5..3:00"));
     assert(bad("Mon..  00:00") && bad("1..32 00:00") && bad("*:60/5"));

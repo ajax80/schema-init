@@ -46,17 +46,20 @@ static inline int cal_dow_name(const char **p) {
     return -1;
 }
 
-/* comma list of items, each a single value or a..b (a <= b) */
+/* comma list of items, each a single day or a..b; ranges run Monday-first as
+ * in systemd, so the weekend is Sat..Sun and Sun..Sat is refused */
 static inline int cal_dow(const char *p, const char *e, uint8_t *out) {
     uint8_t m = 0;
     for (;;) {
-        int a = cal_dow_name(&p), b = a;
+        int a = cal_dow_name(&p), b;
         if (a < 0) return -1;
+        a = (a + 6) % 7;
+        b = a;
         if (p[0] == '.' && p[1] == '.') {
             p += 2;
-            if ((b = cal_dow_name(&p)) < a) return -1;
+            if ((b = cal_dow_name(&p)) < 0 || (b = (b + 6) % 7) < a) return -1;
         }
-        for (int i = a; i <= b; i++) m |= (uint8_t)(1u << i);
+        for (int i = a; i <= b; i++) m |= (uint8_t)(1u << ((i + 1) % 7));
         if (p == e) break;
         if (*p++ != ',') return -1;
     }
@@ -87,6 +90,7 @@ static inline int cal_field(const char *p, const char *e, long max, uint64_t *ou
     uint64_t m = 0;
     for (;;) {
         long a, b, step = 1;
+        int ranged = 0;
         if (*p == '*') {
             p++;
             a = 0;
@@ -97,12 +101,13 @@ static inline int cal_field(const char *p, const char *e, long max, uint64_t *ou
             if (p[0] == '.' && p[1] == '.') {
                 p += 2;
                 if (cal_num(&p, 0, max, &b) || b < a) return -1;
+                ranged = 1;
             }
         }
         if (*p == '/') {
             p++;
             if (cal_num(&p, 1, max, &step)) return -1;
-            b = max;
+            if (!ranged) b = max;   /* a/s runs to the end; a..b/s stops at b */
         }
         for (long i = a; i <= b; i += step) m |= 1ull << i;
         if (p == e) break;

@@ -818,8 +818,8 @@ def _cal_set(spec, lo, hi):
     # *, n, a..b, a/s, */s and comma lists, as the engine's calendar.h takes them
     out = set()
     for item in spec.split(","):
-        step = 1
-        if "/" in item:
+        step, stepped = 1, "/" in item
+        if stepped:
             item, s = item.split("/", 1)
             if not s.isdigit() or not 1 <= int(s) <= hi:
                 return None
@@ -835,7 +835,7 @@ def _cal_set(spec, lo, hi):
             a = b = int(item)
         else:
             return None
-        if step > 1 and ".." not in item:
+        if stepped and ".." not in item:
             b = hi
         if not lo <= a <= b <= hi:
             return None
@@ -869,9 +869,11 @@ def _cal_dow(spec):
             if not hit:
                 return None
             idx.append(hit[0])
-        if idx[-1] < idx[0]:
+        # Monday-first ranges, as systemd: Sat..Sun is the weekend
+        mf = [(i + 6) % 7 for i in idx]
+        if mf[-1] < mf[0]:
             return None
-        out.update(range(idx[0], idx[-1] + 1))
+        out.update((i + 1) % 7 for i in range(mf[0], mf[-1] + 1))
     return out
 
 
