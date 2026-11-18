@@ -1810,6 +1810,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                 expanded.append((pre, pa))
         pres = expanded
 
+    # systemd searches a fixed PATH for a bare ExecStart= name; exec= must be a path
+    if not argv[0].startswith("/"):
+        exe = _which(argv[0])
+        if not exe:
+            raise Skip("ExecStart command %s not found" % argv[0])
+        argv = [exe] + argv[1:]
     if len(pres) > 8:
         raise Skip("%d ExecStartPre= lines (limit 8 exec_pre)" % len(pres))
     # Over the limit these warn: they imported before, and the dir may already exist.
@@ -3851,7 +3857,7 @@ def main(argv=None):
                     help="generate this user's enabled user units into "
                          "$XDG_RUNTIME_DIR/schema-user/services for schema-user")
     ap.add_argument("--out", metavar="DIR",
-                    help="with --user: write the .svc files here instead")
+                    help="write the .svc files here instead (system mode: named units only)")
     args = ap.parse_args(argv)
     if args.user:
         return _user_main(args)
@@ -3873,6 +3879,16 @@ def main(argv=None):
         runit_after = args.after
         skip = read_skip(args.rc_skip) if args.rc_skip else set()
         units = (units or []) + [u for u in runit_units(skip) if u not in (units or [])]
+    if args.out:
+        # the queue and the bus overrides belong to the live dir: draining the
+        # queue elsewhere would lose it, and the overrides pass would drop live ones
+        if units is None:
+            ap.error("--out needs named units (or -e/--rc/--runit): the queue drains into the live dir")
+        if args.start:
+            ap.error("--start loads from the live dir; it can't be used with --out")
+        if not args.dry_run:
+            os.makedirs(args.out, exist_ok=True)
+        os.environ["SCHEMA_SVC_DIR"] = args.out
     written = []
     counts = drain(units=units, force=args.force, dry_run=args.dry_run, written=written,
                    lsb_fallback=fallback)
@@ -3885,6 +3901,8 @@ def main(argv=None):
                 print("schema-ctl add %s: %s" % (out, e), file=sys.stderr)
     print("imported=%(imported)d exists=%(exists)d masked=%(masked)d not-found=%(not-found)d "
           "skipped=%(skipped)d error=%(error)d" % counts)
+    if args.out:
+        return 1 if counts["error"] else 0
     try:
         bus_overrides(dry_run=args.dry_run)
     except Exception as e:
