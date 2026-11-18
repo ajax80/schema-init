@@ -140,12 +140,17 @@ jobs:
       #   test_fdclose.c       asserts a close completes in < 0.5 s; too tight
       #                        under emulation (passes natively on 32-bit i386)
       #   test_svc_sched.c     qemu fakes /proc/self/stat: nice and policy read 0
+      #   test_seccomp.c, test_seccomp_live.sh
+      #                        qemu-user refuses to install a seccomp filter (it
+      #                        would filter the emulator); arm64 runs them natively
       - name: make test (qemu)
         env:
           QEMU_SKIP: >-
             tests/test_svc_rlimits.c
             tests/test_fdclose.c
             tests/test_svc_sched.c
+            tests/test_seccomp.c
+            tests/test_seccomp_live.sh
         run: |
           sudo tee "$ROOTFS/build/make-test.sh" > /dev/null <<'EOF'
           cd /build/src && make -n test > /tmp/test-cmds || exit 1
