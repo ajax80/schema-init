@@ -311,6 +311,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_exec_dirs_live.sh
 	sh tests/test_watch_path_live.sh
 	sh tests/test_timer_jitter_live.sh
+	sh tests/test_seccomp_live.sh
 	sh tests/test_bus_activate.sh
 	sh tests/test_reload_listen.sh
 	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user

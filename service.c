@@ -1657,6 +1657,16 @@ static void svc_runner_netns(const service_t *svc, const char *what) {
     if (fd >= 0) close(fd);
 }
 
+/* the very last step before execve: the service's own setup never meets
+ * its filter, and execve itself is always allowed */
+static void svc_seccomp_or_die(const service_t *svc, const char *what) {
+    const char *step = "";
+    if (sc_active(&svc->sc) && sc_install(&svc->sc, &step) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: %sseccomp: %s: %d\n", svc->name, what, step, errno);
+        _exit(126);
+    }
+}
+
 static void svc_runner_child(const service_t *svc, const char *what) {
     service_reset_child_sigmask();
     setsid();
@@ -1693,6 +1703,7 @@ static void svc_runner_child(const service_t *svc, const char *what) {
         }
     }
     svc_chdir(svc, WD_STOP);
+    svc_seccomp_or_die(svc, gwhat);
 }
 
 pid_t service_stop_spawn(const service_t *svc, int phase) {
@@ -2040,6 +2051,7 @@ int service_spawn(service_t *svc) {
             xargv[nx] = NULL;
             argv = xargv;
         }
+        svc_seccomp_or_die(svc, "");
         execv(svc->exec, argv);
         _exit(127);
     }
