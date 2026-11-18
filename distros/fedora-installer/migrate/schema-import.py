@@ -811,61 +811,151 @@ def _timespan_sec(v):
 _DOW = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
+_DOW_FULL = ("sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday")
+
+
+def _cal_set(spec, lo, hi):
+    # *, n, a..b, a/s, */s and comma lists, as the engine's calendar.h takes them
+    out = set()
+    for item in spec.split(","):
+        step = 1
+        if "/" in item:
+            item, s = item.split("/", 1)
+            if not s.isdigit() or not 1 <= int(s) <= hi:
+                return None
+            step = int(s)
+        if item == "*":
+            a, b = lo, hi
+        elif ".." in item:
+            a, b = item.split("..", 1)
+            if not (a.isdigit() and b.isdigit()):
+                return None
+            a, b = int(a), int(b)
+        elif item.isdigit():
+            a = b = int(item)
+        else:
+            return None
+        if step > 1 and ".." not in item:
+            b = hi
+        if not lo <= a <= b <= hi:
+            return None
+        out.update(range(a, b + 1, step))
+    return out
+
+
+def _cal_runs(vals, fmt):
+    vals, out, i = sorted(vals), [], 0
+    while i < len(vals):
+        j = i
+        while j + 1 < len(vals) and vals[j + 1] == vals[j] + 1:
+            j += 1
+        if j - i >= 2:
+            out.append("%s..%s" % (fmt(vals[i]), fmt(vals[j])))
+        else:
+            out.extend(fmt(v) for v in vals[i:j + 1])
+        i = j + 1
+    return ",".join(out)
+
+
+def _cal_dow(spec):
+    out = set()
+    for item in spec.split(","):
+        ends = item.split("..")
+        if len(ends) > 2:
+            return None
+        idx = []
+        for e in ends:
+            hit = [i for i, n in enumerate(_DOW_FULL) if e in (n, n[:3])]
+            if not hit:
+                return None
+            idx.append(hit[0])
+        if idx[-1] < idx[0]:
+            return None
+        out.update(range(idx[0], idx[-1] + 1))
+    return out
+
+
+# systemd OnCalendar= to a schema on_calendar= value ([DOW] [DOM] H:M); None
+# when not expressible (months, years, seconds other than :00)
 def _calendar(v):
-    """systemd OnCalendar= to a schema on_calendar= value ("HH:MM", "Mon HH:MM",
-    "15 HH:MM"); "hourly" to ("interval", 3600). None if not expressible."""
     v = " ".join(v.split()).lower()
     short = {"daily": "00:00", "midnight": "00:00", "weekly": "Mon 00:00",
-             "monthly": "1 00:00"}
+             "monthly": "1 00:00", "hourly": "*:00"}
     if v in short:
         return short[v]
-    if v in ("hourly", "*:00", "*:00:00", "*-*-* *:00", "*-*-* *:00:00"):
-        return ("interval", 3600)
-    m = re.fullmatch(r"(?:([a-z]{3})[a-z]*\s+)?(?:\*-\*-(\*|\d{1,2})\s+)?"
-                     r"(\d{1,2}(?:,\d{1,2})*):(\d{2})(?::00)?", v)
-    if not m:
-        return None
-    dow, dom, mi = m.group(1), m.group(2), int(m.group(4))
-    hours = sorted(set(int(h) for h in m.group(3).split(",")))
-    if hours[-1] > 23 or mi > 59 or (dow and dow not in _DOW):
-        return None
-    # one hour keeps the zero-padded form every existing import was written with
-    hm = "%02d:%02d" % (hours[0], mi) if len(hours) == 1 else \
-        "%s:%02d" % (",".join(str(h) for h in hours), mi)
-    if dow and dom not in (None, "*"):
-        return None
-    if dow:
-        return "%s %s" % (dow.capitalize(), hm)
-    if dom not in (None, "*"):
-        if not 1 <= int(dom) <= 31:
+    toks = v.split(" ")
+    dow = dom = None
+    if toks and toks[0][:1].isalpha():
+        dow = _cal_dow(toks.pop(0))
+        if dow is None:
             return None
-        return "%d %s" % (int(dom), hm)
-    return hm
+    if toks and "-" in toks[0]:
+        parts = toks.pop(0).split("-")
+        if len(parts) == 2:
+            parts = ["*"] + parts
+        if len(parts) != 3 or parts[0] != "*" or parts[1] != "*":
+            return None
+        if parts[2] != "*":
+            dom = _cal_set(parts[2], 1, 31)
+            if dom is None:
+                return None
+    if not toks:
+        toks = ["00:00"]   # a bare weekday or date means midnight
+    if len(toks) != 1:
+        return None
+    hms = toks[0].split(":")
+    if len(hms) == 3:
+        if hms[2] not in ("00", "0"):
+            return None
+        hms = hms[:2]
+    if len(hms) != 2:
+        return None
+    hours, mins = _cal_set(hms[0], 0, 23), _cal_set(hms[1], 0, 59)
+    if not hours or not mins:
+        return None
+    # one hour and one minute keep the zero-padded form every earlier import used
+    if len(hours) == 1:
+        hs = "%02d" % min(hours)
+    elif len(hours) == 24:
+        hs = "*"
+    else:
+        hs = _cal_runs(hours, str)
+    if len(mins) == 1:
+        ms = "%02d" % min(mins)
+    elif len(mins) == 60:
+        ms = "*"
+    else:
+        ms = _cal_runs(mins, str)
+    out = "%s:%s" % (hs, ms)
+    if dom is not None and len(dom) < 31:
+        out = "%s %s" % (_cal_runs(dom, str), out)
+    if dow is not None and len(dow) < 7:
+        out = "%s %s" % (_cal_runs(dow, lambda i: _DOW_FULL[i][:3].capitalize()), out)
+    return out
 
 
 def timer_lines(sections):
     """[Timer] keys to schema timer lines plus notes. Raises Skip when the
     schedule has no schema equivalent."""
     t = sections.get("Timer", [])
-    cal = _get_last(t, "OnCalendar")
-    boot = _get_last(t, "OnBootSec") or _get_last(t, "OnStartupSec")
+    cals = [c for c in _get_all(t, "OnCalendar") if c.strip()]
+    # OnActiveSec= counts from the timer's own start: boot (login for a user timer)
+    boot = _get_last(t, "OnBootSec") or _get_last(t, "OnStartupSec") or _get_last(t, "OnActiveSec")
     active = _get_last(t, "OnUnitActiveSec") or _get_last(t, "OnUnitInactiveSec")
     lines, notes = [], []
-    if len(_get_all(t, "OnCalendar")) > 1:
-        raise Skip("several OnCalendar= — schema has one schedule per service")
-    if cal:
-        c = _calendar(cal)
-        if c is None:
-            raise Skip("OnCalendar=%s has no schema on_calendar equivalent" % cal)
-        if isinstance(c, tuple):
-            lines += ["on_boot_sec=%d" % c[1], "on_active_sec=%d" % c[1]]
-        else:
+    if len(cals) > 4:
+        raise Skip("%d OnCalendar= (limit 4)" % len(cals))
+    if cals:
+        for cal in cals:
+            c = _calendar(cal)
+            if c is None:
+                raise Skip("OnCalendar=%s has no schema on_calendar equivalent" % cal)
             lines.append("on_calendar=%s" % c)
         if boot or active:
             notes.append("OnBootSec/OnUnit*Sec ignored next to OnCalendar")
     else:
         if not boot and not active:
-            raise Skip("timer has no OnCalendar=, OnBootSec= or OnUnitActiveSec=")
+            raise Skip("timer has no OnCalendar=, OnBootSec=, OnActiveSec= or OnUnitActiveSec=")
         for key, val in (("on_boot_sec", boot), ("on_active_sec", active)):
             if val:
                 sec = _timespan_sec(val)
@@ -879,9 +969,15 @@ def timer_lines(sections):
             lines.append("persistent=1")
         else:
             notes.append("Persistent= dropped (catch-up applies to calendar timers only)")
-    for k in ("RandomizedDelaySec", "AccuracySec"):
-        if _get_last(t, k):
-            notes.append("dropped %s" % k)
+    rnd = _get_last(t, "RandomizedDelaySec")
+    if rnd:
+        sec = _timespan_sec(rnd)
+        if sec is None:
+            notes.append("dropped RandomizedDelaySec=%s" % rnd)
+        elif sec:
+            lines.append("randomized_delay_sec=%d" % min(sec, 2678400))
+    if _get_last(t, "AccuracySec"):
+        notes.append("dropped AccuracySec")
     return lines, notes
 
 
