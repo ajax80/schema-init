@@ -4102,11 +4102,11 @@ static int sc_deny_finalize(service_t *svc) {
     if (!strcmp(v, "0") || !strcasecmp(v, "no") || !strcasecmp(v, "off") || !strcasecmp(v, "false") ||
         !strcasecmp(v, "none"))
         return 0;
-    int preset = !strcmp(v, "default") || !strcasecmp(v, "yes") || !strcasecmp(v, "on") || !strcasecmp(v, "true");
+    int preset = !strcasecmp(v, "default") || !strcasecmp(v, "yes") || !strcasecmp(v, "on") || !strcasecmp(v, "true");
     snprintf(buf, sizeof buf, "%s", preset ? sc_deny_preset : v);
     for (t = strtok_r(buf, " \t", &save); t; t = strtok_r(NULL, " \t", &save)) {
         /* ~ is syscall_filter's; "default" only stands alone; a bare number is a mistake */
-        int r = *t == '~' || !strcmp(t, "default") || !t[strspn(t, "0123456789")] ? -1 : sc_add(&d, t, 0);
+        int r = *t == '~' || !strcasecmp(t, "default") || !t[strspn(t, "0123456789")] ? -1 : sc_add(&d, t, 0);
         if (r == -2) {
             fprintf(stderr, "[schema-init] %s: syscall_deny: unknown syscall '%s' ignored\n", svc->name, t);
         } else if (r != 0) {
@@ -4115,6 +4115,16 @@ static int sc_deny_finalize(service_t *svc) {
             return -1;
         }
     }
+    /* an all-unknown list must not install an empty filter: it would still refuse foreign ABIs */
+    int any = 0;
+    for (int w = 0; w < SC_WORDS; w++) any |= d.set[w] != 0;
+    if (!any) {
+        fprintf(stderr, "[schema-init] %s: syscall_deny: no known syscalls — nothing denied\n", svc->name);
+        return 0;
+    }
+    if (svc->sc.mode == SC_ALLOW && d.n_err)
+        fprintf(stderr, "[schema-init] %s: syscall_deny: per-entry errno ignored under an allowlist syscall_filter=\n",
+                svc->name);
     /* one filter: a name the unit's syscall_filter= already lists keeps its errno */
     if (svc->sc.mode == SC_NONE) {
         svc->sc.mode = SC_DENY;

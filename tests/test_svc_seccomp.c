@@ -116,6 +116,9 @@ int main(void) {
     assert(load("syscall_deny=no\n", NULL, &s) == 0 && s.sc.mode == SC_NONE);
     service_set_hardening_default(0);
     assert(load("syscall_deny=yes\n", NULL, &s) == 0 && has(&s, "mount") == 1);
+    assert(load("syscall_deny=Default\n", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "mount") == 1);
+    /* all names unknown on this arch: no filter at all, not an empty one refusing foreign ABIs */
+    assert(load("syscall_deny=nosuchcall\n", NULL, &s) == 0 && s.sc.mode == SC_NONE);
     assert(load("syscall_deny=~mount\n", NULL, &s) == -1);
     assert(load("syscall_deny=default bpf\n", NULL, &s) == -1);
     {
