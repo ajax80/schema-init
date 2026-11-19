@@ -68,17 +68,14 @@ cmd_create() {
   else
     kdir="/$rootsnap/boot"
   fi
-  [ -z "$ibase" ] || initrd_line="initrd $kdir/$ibase"
-  cat > "$ENTRIES/$base.conf" <<EOF
-title $title
-version $(uname -r)
-linux $kdir/$kbase
-${initrd_line}
-options root=$rootdev $newargs
-grub_users \$grub_users
-grub_arg --unrestricted
-grub_class fedora
-EOF
+  # no initrd line at all without one: grub's blscfg stops reading an entry
+  # at a blank line, dropping options (no root=, kernel panic) — 11-18
+  [ -z "$ibase" ] || initrd_line="initrd $kdir/$ibase
+"
+  {
+    printf 'title %s\nversion %s\nlinux %s/%s\n%s' "$title" "$(uname -r)" "$kdir" "$kbase" "$initrd_line"
+    printf 'options root=%s %s\ngrub_users $grub_users\ngrub_arg --unrestricted\ngrub_class fedora\n' "$rootdev" "$newargs"
+  } > "$ENTRIES/$base.conf"
   echo "created: $rootsnap (+ $homesnap) -> $ENTRIES/$base.conf"
   cmd_prune
 }

@@ -2434,6 +2434,15 @@ static void ctl_analyze(int fd, const char *arg) {
         ctl_writef(fd, "note: some rows use the current run, not boot (PID 1 re-exec'd from a build without boot stamps)\n");
 }
 
+/* what syscall_deny= does, not how it was spelled: off/no/... is "0", on/yes/... the preset */
+static const char *sc_deny_label(const service_t *s) {
+    static const char *const off[] = { "0", "no", "off", "false", "none" }, *const on[] = { "default", "yes", "on", "true" };
+    if (!(s->hard_set & HARD_SD)) return "-";
+    for (size_t i = 0; i < sizeof off / sizeof *off; i++) if (!strcasecmp(s->sc_deny, off[i])) return "0";
+    for (size_t i = 0; i < sizeof on / sizeof *on; i++) if (!strcasecmp(s->sc_deny, on[i])) return "default";
+    return "list";
+}
+
 static const char *hard_source(const service_t *s, uint8_t bit) {
     if (s->hard_set & bit) return "explicit";
     if ((s->hard_dyn & bit) && !(s->hard_dropped & bit)) return "dynamic_user";
@@ -2586,8 +2595,7 @@ static void ctl_cmd(int fd, char *line) {
                     ps[s->ns_protect_system < 3 ? s->ns_protect_system : 0], hard_source(s, HARD_PS));
                 ctl_writef(fd, "  %-15s %-5d %s\n", "protect_home", s->ns_protect_home, hard_source(s, HARD_PH));
                 ctl_writef(fd, "  %-15s %-5s %s\n", "syscall_deny",
-                    (s->hard_set & HARD_SD) ? (!strcmp(s->sc_deny, "0") ? "0" : !strcmp(s->sc_deny, "default") ? "default" : "list")
-                    : (s->hard_default & HARD_SD) ? "default" : "-", hard_source(s, HARD_SD));
+                    sc_deny_label(s), hard_source(s, HARD_SD));
                 for (int k = 0; k < NS_K_COUNT; k++)
                     if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", ns_kernel_names[k]);
                 if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);

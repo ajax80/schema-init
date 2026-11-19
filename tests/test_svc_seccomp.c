@@ -88,12 +88,14 @@ int main(void) {
     assert(load("restrict_namespaces=cgroup ipc\n", NULL, &s) == -1);
     assert(load("lock_personality=2\n", NULL, &s) == -1);
 
-    /* syscall_deny=: tri-state on the hardening-default switch */
+    /* syscall_deny=: opt-in only. Unset is nothing even with the hardening
+     * default on: a host .svc written before the knob existed (mount-home)
+     * must not lose mount(2) on upgrade — blakbox 11-18 */
     assert(load("", NULL, &s) == 0 && s.sc.mode == SC_NONE);
     service_set_hardening_default(1);
-    assert(load("", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "mount") == 1 && has(&s, "init_module") == 1 &&
-           has(&s, "settimeofday") == 1 && has(&s, "bpf") == 1 && has(&s, "openat") == 0);
-    assert(s.hard_default & HARD_SD);
+    assert(load("", NULL, &s) == 0 && s.sc.mode == SC_NONE && !(s.hard_default & HARD_SD));
+    assert(load("syscall_deny=default\n", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "mount") == 1 &&
+           has(&s, "init_module") == 1 && has(&s, "settimeofday") == 1 && has(&s, "bpf") == 1 && has(&s, "openat") == 0);
     assert(load("syscall_deny=0\n", NULL, &s) == 0 && s.sc.mode == SC_NONE && (s.hard_set & HARD_SD));
     assert(load("syscall_deny=@clock\n", NULL, &s) == 0 && s.sc.mode == SC_DENY && has(&s, "settimeofday") == 1 &&
            has(&s, "mount") == 0);
@@ -110,10 +112,7 @@ int main(void) {
     assert(load("syscall_filter=~mount:EROFS\nsyscall_deny=@mount\n", NULL, &s) == 0 &&
            err_of(&s, "mount") == EROFS && has(&s, "umount2") == 1 && err_of(&s, "umount2") == 0);
     service_set_hardening_default(1);
-    assert(load("syscall_filter=~@privileged\nsyscall_filter=mount\n", NULL, &s) == 0 && has(&s, "mount") == 0 &&
-           !(s.hard_default & HARD_SD));
-    assert(load("user=nobody\nno_new_privs=0\n", NULL, &s) == 0 && s.sc.mode == SC_NONE && !(s.hard_default & HARD_SD));
-    assert(load("no_new_privs=0\n", NULL, &s) == 0 && (s.hard_default & HARD_SD) == (geteuid() == 0 ? HARD_SD : 0));
+    assert(load("syscall_filter=~@privileged\nsyscall_filter=mount\n", NULL, &s) == 0 && has(&s, "mount") == 0);
     assert(load("syscall_deny=no\n", NULL, &s) == 0 && s.sc.mode == SC_NONE);
     service_set_hardening_default(0);
     assert(load("syscall_deny=yes\n", NULL, &s) == 0 && has(&s, "mount") == 1);

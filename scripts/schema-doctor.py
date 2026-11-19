@@ -153,7 +153,7 @@ FLAP_THRESHOLD = 3
 FLAP_WINDOW = 1800   # seconds
 
 
-HARDENING_KEYS = ("no_new_privs", "private_tmp", "protect_system", "protect_home", "syscall_deny")
+HARDENING_KEYS = ("no_new_privs", "private_tmp", "protect_system", "protect_home")
 
 
 def hardening_default_on():
@@ -189,13 +189,11 @@ def hardening_unannotated():
     out = []
     for path in sorted(glob.glob(os.path.join(ROOT, "etc/schema-init/services/*.svc"))):
         try:
-            keys = dict(ln.split("=", 1) for f in svc_files(path)
-                        for ln in open(f, errors="replace").read().splitlines() if "=" in ln)
+            keys = {ln.split("=", 1)[0].strip()
+                    for f in svc_files(path) for ln in open(f, errors="replace") if "=" in ln}
         except OSError:
             continue
-        keys = {k.strip(): v.strip() for k, v in keys.items()}
-        # an empty syscall_deny= hands it back to the host default, as PID 1 reads it
-        missing = [k for k in HARDENING_KEYS if k not in keys or (k == "syscall_deny" and not keys[k])]
+        missing = [k for k in HARDENING_KEYS if k not in keys]
         if missing:
             out.append((os.path.basename(path), missing))
     return out

@@ -4086,9 +4086,11 @@ static int svc_name_ok(const char *n) {
 
 /* Post-parse checks and defaults, then the name from the filename.
  * 0 = loadable, -1 = rejected (template file, no name, no exec, bad hardening). */
-/* syscall_deny=: the schema-native denylist (the 10-13 plan). Unset, it
- * follows the host's hardening-default like the other knobs; merged into
- * the one filter: a denylist grows, an allowlist loses those names. */
+/* syscall_deny=: the schema-native denylist (the 10-13 plan), merged into
+ * the one filter: a denylist grows, an allowlist loses those names. Opt-in
+ * only, NOT under the hardening-default: a knob added to that switch lands
+ * on every host .svc written before it existed (blakbox 11-18: mount-home
+ * lost mount(2), /home never mounted). */
 static const char *const sc_deny_preset =
     "@clock @cpu-emulation @debug @module @mount @obsolete @raw-io @reboot @swap kexec_load kexec_file_load bpf";
 
@@ -4096,21 +4098,7 @@ static int sc_deny_finalize(service_t *svc) {
     const char *v = svc->sc_deny;
     char buf[512], *save, *t;
     sc_spec_t d = { .mode = SC_DENY };
-    if (!(svc->hard_set & HARD_SD)) {
-        if (!hardening_default_on) return 0;
-        /* a unit with its own filter chose it, carve-outs and errnos too; one
-         * that asked for no_new_privs=0 to run setuid would lose it to the
-         * filter (an unprivileged install needs NNP) */
-        if (svc->sc.mode != SC_NONE) return 0;
-        if ((svc->hard_set & HARD_NNP) && !(svc->flags & SVC_NO_NEW_PRIVS) &&
-            (svc->run_uid || svc->run_user[0] || svc->dynamic_user || geteuid() != 0)) {
-            fprintf(stderr, "[schema-init] %s: default syscall_deny dropped: no_new_privs=0 for a non-root service\n",
-                    svc->name);
-            return 0;
-        }
-        v = "default";
-        svc->hard_default |= HARD_SD;
-    }
+    if (!(svc->hard_set & HARD_SD)) return 0;
     if (!strcmp(v, "0") || !strcasecmp(v, "no") || !strcasecmp(v, "off") || !strcasecmp(v, "false") ||
         !strcasecmp(v, "none"))
         return 0;

@@ -1,5 +1,7 @@
 # syscall_deny= — the schema-native denylist preset (follow-up to 4.6)
 
+> **Superseded in part (2026-11-18):** unset no longer follows the hardening default and the doctor lint does not count it — see the amendment at the end. The Intent/Goals below are the original design that hung blakbox.
+
 ## Intent
 The 10-13 plan (re-confirmed 11-17): a denylist knob for schema's own
 services, on the 4.6 seccomp engine, tied to the hardening-default switch
@@ -41,3 +43,12 @@ denylist on every service that doesn't say otherwise.
    (importer byte-identical fixtures updated).
 3. Live: schema-user service with `syscall_deny=default` gets EPERM from
    `mount`/`swapoff` and runs otherwise; PID 1 check with one test unit.
+
+## Amendment 2026-11-18 — opt-in only
+Shipped on dev 1509, blakbox (hardening-default on since 09-27) cold-booted
+with the preset on all 63 hand-written host `.svc` that predate the knob:
+mount-home lost mount(2) → no /home, gettys/udevd/sddm filtered, boot hung.
+The pinning above covered every generator but not files already on a host.
+Unset `syscall_deny=` is now nothing regardless of the switch; the rollout is
+explicit `syscall_deny=default` per service. Rule for any future knob: never
+add it to the hardening-default set — that set is frozen at the four.
