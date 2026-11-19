@@ -73,7 +73,7 @@ cmd_create() {
   [ -z "$ibase" ] || initrd_line="initrd $kdir/$ibase
 "
   {
-    printf 'title %s\nversion %s\nlinux %s/%s\n%s' "$title" "$(uname -r)" "$kdir" "$kbase" "$initrd_line"
+    printf 'title %s\nversion %s\nlinux %s/%s\n%s' "$title" "${kbase#vmlinuz-}" "$kdir" "$kbase" "$initrd_line"
     printf 'options root=%s %s\ngrub_users $grub_users\ngrub_arg --unrestricted\ngrub_class fedora\n' "$rootdev" "$newargs"
   } > "$ENTRIES/$base.conf"
   echo "created: $rootsnap (+ $homesnap) -> $ENTRIES/$base.conf"

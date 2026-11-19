@@ -2961,7 +2961,8 @@ def _stamp_generated():
         for cand, queued in tries:
             try:
                 st, det = import_one(cand, force=True, queued=queued)
-                if st == "imported" and det == (p, text):
+                # files written before syscall_deny= existed lack its pin line
+                if st == "imported" and det[0] == p and text in (det[1], det[1].replace("syscall_deny=0\n", "", 1)):
                     _write_output(p, _stamped(text), os.stat(p).st_mode & 0o7777)
                     break
             except Exception:
@@ -2978,7 +2979,8 @@ def drain(units=None, force=False, dry_run=False, log=print, written=None, lsb_f
     items = units if units is not None else with_deps(_read_queue())
     counts = {"imported": 0, "exists": 0, "masked": 0, "not-found": 0, "skipped": 0, "error": 0}
     flag = os.path.join(state_dir(), "svc-stamped")
-    if not dry_run and not os.path.exists(flag):
+    # --out promises only DIR is written; stamping rewrites live files in place
+    if not dry_run and not _out_dir and not os.path.exists(flag):
         _stamp_generated()
         os.makedirs(state_dir(), exist_ok=True)
         open(flag, "w").close()
@@ -3872,7 +3874,8 @@ def main(argv=None):
                     help="generate this user's enabled user units into "
                          "$XDG_RUNTIME_DIR/schema-user/services for schema-user")
     ap.add_argument("--out", metavar="DIR",
-                    help="write the .svc files here instead (system mode: named units only)")
+                    help="write the .svc files here instead (system mode: named units only; "
+                         "a unit already in the live dir needs -f)")
     args = ap.parse_args(argv)
     if args.user:
         return _user_main(args)

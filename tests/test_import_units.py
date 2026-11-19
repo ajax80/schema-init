@@ -821,6 +821,13 @@ si.drain(units=[], log=lambda *_: None)
 check("legacy generated .svc stamped, mode kept", open(os.path.join(SD, "other.svc")).read() == si._stamped(_body)
       and os.stat(os.path.join(SD, "other.svc")).st_mode & 0o777 == 0o600)
 check("hand-edited .svc left unstamped", not open(os.path.join(SD, "good.svc")).read().startswith(si.SYS_MARK))
+# one written before syscall_deny= existed has no pin line and is still the importer's
+_old = _body.replace("syscall_deny=0\n", "", 1)
+check("fixture carries the syscall_deny pin", _old != _body)
+open(os.path.join(SD, "other.svc"), "w").write(_old)
+os.unlink(os.path.join(os.environ["SCHEMA_STATE_DIR"], "svc-stamped"))
+si.drain(units=[], log=lambda *_: None)
+check("pre-syscall_deny generated .svc stamped", open(os.path.join(SD, "other.svc")).read() == si._stamped(_old))
 os.unlink(os.path.join(SD, "other.svc"))
 # systemd only uses a socket that is enabled or pulled in (Debian ssh.socket ships disabled)
 open(os.path.join(unitdir, "ssh.socket"), "w").write("[Socket]\nListenStream=22\nAccept=no\n[Install]\nWantedBy=sockets.target\n")
@@ -1837,13 +1844,18 @@ put(os.path.join(_oul, "gone.service"), "[Service]\nExecStart=nosuchcmd -x\n")
 put(os.path.join(_oul, "rel.service"), "[Service]\nExecStart=bin/touch\n")
 put(os.path.join(_oul, "mskd.service"), "[Service]\nExecStart=/usr/bin/touch\n")
 put(os.path.join(_olive, "mskd.svc.masked"), "")
+put(os.path.join(_or, "usr/lib/systemd/system/legacy.service"), "[Service]\nExecStart=/usr/bin/touch\n")
+_leg = si.import_one("legacy", force=True)[1][1]
+put(os.path.join(_olive, "legacy.svc"), _leg)
 put(os.path.join(_obus, "org.x.Live.service"), si.BUS_MARK + "\n[D-BUS Service]\nName=org.x.Live\n")
 _od = os.path.join(_or, "preview")
 import io, contextlib
 with contextlib.redirect_stdout(io.StringIO()):
     _rc = si.main(["-f", "--out", _od, "bare.service", "gone.service", "rel.service", "mskd.service"])
 check("--out: system-mode units land in DIR", _rc == 0 and os.path.exists(os.path.join(_od, "bare.svc")))
-check("--out: the live services dir is untouched", os.listdir(_olive) == ["mskd.svc.masked"])
+check("--out: the live services dir is untouched", sorted(os.listdir(_olive)) == ["legacy.svc", "mskd.svc.masked"]
+      and open(os.path.join(_olive, "legacy.svc")).read() == _leg)
+check("--out: no stamping pass, no stamped flag", not os.path.exists(os.path.join(si.state_dir(), "svc-stamped")))
 check("--out: a mask in the live dir still holds", not os.path.exists(os.path.join(_od, "mskd.svc")))
 check("--out: nothing redirected after the run", si._out_dir is None and "SCHEMA_SVC_DIR" not in os.environ)
 check("a relative ExecStart= path is not made absolute",
