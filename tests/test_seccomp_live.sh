@@ -27,6 +27,7 @@ svc deny "uname -s > $T/deny.out 2>&1; echo \$? > $T/deny.rc" "syscall_filter=~u
 printf 'name=kill\nexec=/usr/bin/uname\nargs=-s\noneshot=1\nsyscall_filter=~uname\nsyscall_error_number=kill\n' > "$S/kill.svc"
 svc suid "touch $T/f; chmod 4755 $T/f; echo \$? > $T/suid.rc" "restrict_suid_sgid=1\n"
 printf 'name=stopper\nexec=/bin/sleep\nargs=600\nsyscall_filter=~uname\nexec_stop=/bin/sh -c "uname -s > %s/st 2>/dev/null || echo blocked > %s/st"\n' "$T" "$T" > "$S/stopper.svc"
+printf 'name=reloader\nexec=/bin/sleep\nargs=600\nsyscall_filter=~uname\nexec_reload=/bin/sh -c "uname -s > %s/rl 2>/dev/null || echo blocked > %s/rl"\n' "$T" "$T" > "$S/reloader.svc"
 # the runner itself is never filtered: its waitpid works even under ~wait4,
 # so the second stop command waits for the first
 printf 'name=waiter\nexec=/bin/sleep\nargs=600\nsyscall_filter=~wait4 waitid\nexec_stop=/bin/sleep 2\nexec_stop=/usr/bin/touch %s/second\n' "$T" > "$S/waiter.svc"
@@ -55,6 +56,12 @@ until_ok 'st stopper | grep -q "pid=[1-9]"' || fail "stopper never started"
 ./schema-ctl --user stop stopper > /dev/null 2>&1
 until_ok "[ -s $T/st ]" || fail "exec_stop never ran"
 [ "$(cat "$T/st")" = blocked ] || fail "exec_stop ran unfiltered: $(cat "$T/st")"
+
+# exec_reload shares the stop runner; pin it separately
+until_ok 'st reloader | grep -q "pid=[1-9]"' || fail "reloader never started"
+./schema-ctl --user reload reloader > /dev/null 2>&1
+until_ok "[ -s $T/rl ]" || fail "exec_reload never ran"
+[ "$(cat "$T/rl")" = blocked ] || fail "exec_reload ran unfiltered: $(cat "$T/rl")"
 
 until_ok 'st waiter | grep -q "pid=[1-9]"' || fail "waiter never started"
 t0=$(date +%s)

@@ -61,8 +61,8 @@
 - [x] `restart=` (systemd's seven `Restart=` values), `success_exit_status=`, `restart_prevent_exit_status=`
 - [x] `kill_mode=` (control-group / mixed / process), `kill_signal=`, `final_kill_signal=`; a runtime stop escalates after its grace
 - [x] `runtime_dir=` / `state_dir=` / `cache_dir=` / `logs_dir=` — created by PID 1 owned by the service user, never through a symlink; runtime ones removed on stop; importer maps `RuntimeDirectory=` and friends without using `exec_pre` slots
-- [ ] Kernel-surface hardening knobs — `protect_kernel_tunables`, `protect_kernel_modules`, `protect_control_groups`, `private_devices`, `private_network`, `protect_hostname`, `restrict_suid_sgid`, `memory_deny_write_execute`, `umask`
-- [ ] Scheduling — `nice=`, `io_class=`/`io_priority=`, `sched_policy=`/`sched_priority=`
+- [x] Kernel-surface hardening knobs — `protect_kernel_tunables`, `protect_kernel_modules`, `protect_control_groups`, `private_devices`, `private_network`, `protect_hostname`, `restrict_suid_sgid`, `memory_deny_write_execute`, `umask`
+- [x] Scheduling — `nice=`, `io_class=`/`io_priority=`, `sched_policy=`/`sched_priority=`
 - [x] `watch_path=` (systemd `.path` units) — `exists`/`exists_glob`/`dir_not_empty`/`changed`/`modified` on PID 1's inotify fd, `make_directory=`, trigger limit; importer takes `.path` units
 - [x] `randomized_delay_sec=` and richer `on_calendar=` (weekday/day lists and ranges, hour/minute steps, up to 4 lines); importer maps `RandomizedDelaySec=`, `OnActiveSec=`, wall-aligned `hourly`
 - [x] `supplementary_groups=`, `dynamic_user=1` — allocated uid, private state dirs behind a namespace tmpfs; importer maps `DynamicUser=` (earlyoom no longer runs as root) and `SupplementaryGroups=`
