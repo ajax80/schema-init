@@ -112,10 +112,7 @@ int main(void) {
     assert(load("syscall_filter=~mount:EROFS\nsyscall_deny=@mount\n", NULL, &s) == 0 &&
            err_of(&s, "mount") == EROFS && has(&s, "umount2") == 1 && err_of(&s, "umount2") == 0);
     service_set_hardening_default(1);
-    assert(load("syscall_filter=~@privileged\nsyscall_filter=mount\n", NULL, &s) == 0 && has(&s, "mount") == 0 &&
-           !(s.hard_default & HARD_SD));
-    assert(load("user=nobody\nno_new_privs=0\n", NULL, &s) == 0 && s.sc.mode == SC_NONE && !(s.hard_default & HARD_SD));
-    assert(load("no_new_privs=0\n", NULL, &s) == 0 && (s.hard_default & HARD_SD) == (geteuid() == 0 ? HARD_SD : 0));
+    assert(load("syscall_filter=~@privileged\nsyscall_filter=mount\n", NULL, &s) == 0 && has(&s, "mount") == 0);
     assert(load("syscall_deny=no\n", NULL, &s) == 0 && s.sc.mode == SC_NONE);
     service_set_hardening_default(0);
     assert(load("syscall_deny=yes\n", NULL, &s) == 0 && has(&s, "mount") == 1);

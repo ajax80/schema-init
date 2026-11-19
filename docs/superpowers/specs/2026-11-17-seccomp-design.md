@@ -85,7 +85,8 @@ hand-built BPF program.
 ## Non-goals
 - The schema-native denylist preset (`syscall_deny=` / `@default` under
   the hardening-default switch, the 10-13 plan): a follow-up PR on this
-  engine, rolled out to easy daemons first.
+  engine, rolled out to easy daemons first. (Shipped opt-in per service,
+  not under the switch — see 2026-11-17-syscall-deny-design.md, 11-18.)
 - Other architectures in `syscall_architectures=` (only `native`).
 - RestrictNamespaces= lists of types; RestrictAddressFamilies=,
   SystemCallLog=, SocketBindAllow= (landlock_bind_tcp covers part of it).

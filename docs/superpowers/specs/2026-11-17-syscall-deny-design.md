@@ -1,5 +1,7 @@
 # syscall_deny= — the schema-native denylist preset (follow-up to 4.6)
 
+> **Superseded in part (2026-11-18):** unset no longer follows the hardening default and the doctor lint does not count it — see the amendment at the end. The Intent/Goals below are the original design that hung blakbox.
+
 ## Intent
 The 10-13 plan (re-confirmed 11-17): a denylist knob for schema's own
 services, on the 4.6 seccomp engine, tied to the hardening-default switch
