@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.27
+Version:        0.4.28
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -530,6 +530,18 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Nov 18 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.28-1
+- syscall_deny= (#546, #547): a denylist preset (@clock @cpu-emulation @debug
+  @module @mount @obsolete @raw-io @reboot @swap kexec_load kexec_file_load
+  bpf), a list, or 0. Opt-in only: an unset key adds nothing, whatever the
+  host hardening default says. The importer and every shipped .svc pin
+  syscall_deny=0
+- schema-snapshot no longer writes a blank initrd line for a kernel without
+  an initramfs; grub stopped reading the entry there and booted it without
+  root= (#547)
+- schema-import: --out is honoured for system units; a bare command name in
+  the final ExecStart= is resolved on the search path or the unit skipped,
+  so ssh-host-keys-migration no longer shows excised on a fresh install (#545)
 * Wed Nov 18 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.27-1
 - Audit tier 4: the systemd unit semantics the engine was missing.
 - exec_reload= and reload_signal=, schema-ctl reload <svc> (#529); restart=,
