@@ -57,9 +57,9 @@ until_ok 'st stopper | grep -q "pid=[1-9]"' || fail "stopper never started"
 until_ok "[ -s $T/st ]" || fail "exec_stop never ran"
 [ "$(cat "$T/st")" = blocked ] || fail "exec_stop ran unfiltered: $(cat "$T/st")"
 
-# exec_reload shares the stop runner; pin it separately
+# exec_reload has its own runner (only svc_runner_child is shared with stop); pin it separately
 until_ok 'st reloader | grep -q "pid=[1-9]"' || fail "reloader never started"
-./schema-ctl --user reload reloader > /dev/null 2>&1
+r=$(./schema-ctl --user reload reloader 2>&1) || fail "reload refused: $r"
 until_ok "[ -s $T/rl ]" || fail "exec_reload never ran"
 [ "$(cat "$T/rl")" = blocked ] || fail "exec_reload ran unfiltered: $(cat "$T/rl")"
 
@@ -77,4 +77,7 @@ st sdd | grep -Eq "syscall_deny +default +explicit" || fail "status: $(st sdd | 
 until_ok 'st sd0 | grep -Eq "exit|code|status=[0-9]"' || fail "sd0 never ran"
 st sd0 | grep -q SIGSYS && fail "syscall_deny=0 still filtered: $(st sd0 | head -3)"
 
+# long-running services outlive a SIGKILLed schema-user; stop them first
+./schema-ctl --user stop reloader > /dev/null 2>&1
+./schema-ctl --user stop lp > /dev/null 2>&1
 echo "test_seccomp_live: ok"
