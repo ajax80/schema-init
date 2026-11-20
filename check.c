@@ -51,22 +51,28 @@ static size_t root_len(const char *root) {
     return n;
 }
 
-const char *check_svc_dir(const char *root, const char *cmdline, char *buf, size_t n) {
-    int rl = (int)root_len(root);
-    char init[PATH_MAX] = "", v[PATH_MAX];
-    struct stat st;
+/* -1 off the Pi; else what schema-init-pi would exec next boot. */
+static int pi_next_target(const char *root, const char *cmdline) {
+    char init[PATH_MAX] = "", r[PATH_MAX / 2];
+    struct pi_state ps;
     word_val(cmdline, "init=", init, sizeof init);
     const char *base = strrchr(init, '/');
     base = base ? base + 1 : init;
+    if (strcmp(base, "schema-init-pi") != 0) return -1;
+    snprintf(r, sizeof r, "%.*s", (int)root_len(root), root);
+    pi_state_load(r, &ps);
+    return pi_choose_target(&ps, pi_known_good_differs(r));
+}
+
+const char *check_svc_dir(const char *root, const char *cmdline, char *buf, size_t n) {
+    int rl = (int)root_len(root);
+    char v[PATH_MAX / 2];
+    struct stat st;
+    int pt = pi_next_target(root, cmdline);
     /* the wrapper unsets a cmdline SCHEMA_SVC_DIR and sets its own only for known-good */
-    if (strcmp(base, "schema-init-pi") == 0) {
-        char r[PATH_MAX];
-        struct pi_state ps;
-        snprintf(r, sizeof r, "%.*s", rl, root);
-        pi_state_load(r, &ps);
-        const char *rel = pi_choose_target(&ps, pi_known_good_differs(r)) == PI_KNOWN_GOOD
-                          ? "/var/lib/schema-init/known-good/services" : SVC_DIR;
-        snprintf(buf, n, "%.*s%s", rl, root, rel);
+    if (pt >= 0) {
+        snprintf(buf, n, "%.*s%s", rl, root,
+                 pt == PI_KNOWN_GOOD ? "/var/lib/schema-init/known-good/services" : SVC_DIR);
         return buf;
     }
     /* svc_dir_from_env()'s rule: absolute and an existing directory */
@@ -112,8 +118,25 @@ static const char *untag(const char *s) {
     return s;
 }
 
+static void print_header(const char *cmdline, int hon, const char *rel_dir) {
+    char line[1024];
+    printf("schema-verify-baseline v1\nbinary_version=%s\n", SCHEMA_INIT_VERSION);
+    lines_t cl = { 0 };
+    for (const char *p = cmdline; *p;) {
+        p += strspn(p, " \t\n");
+        size_t wl = strcspn(p, " \t\n");
+        snprintf(line, sizeof line, "cmdline.%.*s", (int)wl, p);
+        if (wl && boot_critical(p)) lines_add(&cl, line);
+        p += wl;
+    }
+    qsort(cl.v, cl.n, sizeof *cl.v, str_cmp);
+    for (int i = 0; i < cl.n; i++) puts(cl.v[i]);
+    printf("hardening_default=%s\nsvc_dir=%s\n", hon ? "on" : "off", rel_dir);
+}
+
 int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_override) {
-    char root[PATH_MAX], dir[PATH_MAX], path[PATH_MAX], hd[64] = "";
+    /* half-size root: every path built under it must still fit PATH_MAX */
+    char root[PATH_MAX / 2], dir[PATH_MAX], path[PATH_MAX + 256], hd[64] = "";
     size_t rl = root_len(root_arg);
     snprintf(root, sizeof root, "%.*s", (int)rl, root_arg);
 
@@ -127,6 +150,15 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
 
     if (svc_dir_override) snprintf(dir, sizeof dir, "%s%s", root, svc_dir_override);
     else check_svc_dir(root, cmdline, dir, sizeof dir);
+    /* a systemd next boot runs none of these services; saying nothing would read as checked */
+    static const char *const next_init[] = { "schema-init", "known-good", "systemd" };
+    int pt = pi_next_target(root, cmdline);
+    if (pt == PI_SYSTEMD) {
+        print_header(cmdline, hon, dir + rl);
+        printf("next_init=systemd\n");
+        fflush(stdout);
+        return 0;
+    }
     /* PID 1's ./services fallback would read the caller's cwd, not the target */
     engine_paths.svc_fallback = NULL;
 
@@ -176,24 +208,14 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
     fclose(cap);
     char *used = calloc(capl.n ? capl.n : 1, 1);
 
-    printf("schema-verify-baseline v1\nbinary_version=%s\n", SCHEMA_INIT_VERSION);
-    lines_t cl = { 0 };
-    for (const char *p = cmdline; *p;) {
-        p += strspn(p, " \t\n");
-        size_t wl = strcspn(p, " \t\n");
-        snprintf(line, sizeof line, "cmdline.%.*s", (int)wl, p);
-        if (wl && boot_critical(p)) lines_add(&cl, line);
-        p += wl;
-    }
-    qsort(cl.v, cl.n, sizeof *cl.v, str_cmp);
-    for (int i = 0; i < cl.n; i++) puts(cl.v[i]);
-    printf("hardening_default=%s\nsvc_dir=%s\n", hon ? "on" : "off", dir + rl);
+    print_header(cmdline, hon, dir + rl);
+    if (pt >= 0) printf("next_init=%s\n", next_init[pt]);
 
     int errors = 0;
     for (int e = 0; e < ne; e++) {
         if (!bad[e]) continue;
         const char *dn = ents[e]->d_name, *reason = "not loaded";
-        char rel[PATH_MAX], stem[80];
+        char rel[PATH_MAX + 256], stem[80];
         snprintf(rel, sizeof rel, "%s/%s", dir + rl, dn);
         snprintf(stem, sizeof stem, " %.*s: ", (int)(strlen(dn) - 4), dn);
         for (int i = 0; i < capl.n; i++)

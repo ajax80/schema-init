@@ -29,6 +29,7 @@ has "cmdline.root=UUID=1" && has "cmdline.init=/sbin/schema-init" && has "cmdlin
     has "cmdline.modprobe.blacklist=x" || fail "clean: cmdline lines"
 has "cmdline.quiet" && fail "clean: non-boot-critical cmdline word echoed"
 grep -q '^error:' "$T/out" && fail "clean: error line"
+has "next_init=" && fail "clean: next_init off the Pi"
 # body after the header is bytewise sorted
 sed -n '/^b\.\|^a\./,$p' "$T/out" | LC_ALL=C sort -c 2>/dev/null || fail "clean: body not sorted"
 
@@ -88,6 +89,13 @@ svc "$S" x
 printf 'on\n' > "$R/etc/schema-init/hardening-default"
 check --root "$R" --cmdline ""
 has "hardening_default=on" || fail "hdfile: root's file ignored"
+# absent and off in the root must read off whatever the live /etc says
+rm "$R/etc/schema-init/hardening-default"
+check --root "$R" --cmdline ""
+has "hardening_default=off" || fail "hdfile: absent file not off"
+printf 'off\n' > "$R/etc/schema-init/hardening-default"
+check --root "$R" --cmdline ""
+has "hardening_default=off" || fail "hdfile: root's off ignored"
 
 # SCHEMA_SVC_DIR on the cmdline, validated as PID 1 validates it
 newroot alt
@@ -115,13 +123,22 @@ printf 'a\n' > "$R/usr/bin/schema-init"; printf 'b\n' > "$KG/schema-init"
 mkdir -p "$R/alt"; svc "$R/alt" fromalt
 PI="init=/usr/sbin/schema-init-pi SCHEMA_SVC_DIR=/alt"
 check --root "$R" --cmdline "$PI"
-has "svc_dir=/etc/schema-init/services" || fail "pi: no state should boot current"
+has "svc_dir=/etc/schema-init/services" && has "next_init=schema-init" || fail "pi: no state should boot current"
 printf 'attempts=2\nlast_target=current\n' > "$R/var/lib/schema-init/pi-boot"
 check --root "$R" --cmdline "$PI"
-has "svc_dir=/var/lib/schema-init/known-good/services" && has "kg.exec=" || fail "pi: known-good not chosen"
+has "svc_dir=/var/lib/schema-init/known-good/services" && has "kg.exec=" && has "next_init=known-good" || fail "pi: known-good not chosen"
 printf 'attempts=1\nlast_target=current\n' > "$R/var/lib/schema-init/pi-boot"
 check --root "$R" --cmdline "$PI"
 has "svc_dir=/etc/schema-init/services" || fail "pi: attempts=1 should boot current"
+printf 'attempts=3\nlast_target=known-good\n' > "$R/var/lib/schema-init/pi-boot"
+check --root "$R" --cmdline "$PI"
+[ $rc -eq 0 ] || fail "pi: systemd next boot exit $rc"
+[ "$(sed -n '/^svc_dir=/{n;p;}' "$T/out")" = "next_init=systemd" ] || fail "pi: next_init=systemd not after svc_dir"
+grep -q '^cur\.' "$T/out" && fail "pi: service lines for a systemd boot"
+printf 'attempts=2\nlast_target=current\n' > "$R/var/lib/schema-init/pi-boot"
+cp "$KG/schema-init" "$R/usr/bin/schema-init"; rm -rf "$KG/services"; cp -r "$S" "$KG/services"
+check --root "$R" --cmdline "$PI"
+has "next_init=systemd" || fail "pi: attempts=2 with identical known-good should boot systemd"
 
 # never binds a socket or makes runtime paths
 newroot quiet
