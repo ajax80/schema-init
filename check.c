@@ -8,6 +8,7 @@
 #include "svc_serial.h"
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
@@ -109,10 +110,11 @@ static int redirect(int fd) {
 
 /* Loader lines name the root they were read under; the baseline must not. */
 static void strip_root(char *s, const char *root, size_t rl) {
-    char *p;
     if (!rl) return;
-    while ((p = strstr(s, root)) && p[rl] == '/')
-        memmove(p, p + rl, strlen(p + rl) + 1);
+    for (char *p = s; (p = strstr(p, root));) {
+        if (p[rl] == '/') memmove(p, p + rl, strlen(p + rl) + 1);
+        else p++;
+    }
 }
 
 static const char *untag(const char *s) {
@@ -165,9 +167,22 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
     if (have) { ssize_t n = read(fd, hd, sizeof hd - 1); if (n > 0) hd[n] = '\0'; close(fd); }
     int hon = hardening_default_resolve(cmdline, have ? hd : NULL);
     service_set_hardening_default(hon);
+    /* user=/group= resolve against the host's NSS, which is right only for
+     * --root /; a foreign root needs a chroot (a later PR) */
 
+    if (svc_dir_override && svc_dir_override[0] != '/') {
+        fprintf(stderr, "schema-init --check: --svc-dir %s: must be absolute (it is read under --root)\n", svc_dir_override);
+        return 2;
+    }
     if (svc_dir_override) snprintf(dir, sizeof dir, "%s%s", root, svc_dir_override);
     else check_svc_dir(root, cmdline, dir, sizeof dir);
+    /* services_load builds dir/<file> (and drop-in paths) in 512 bytes;
+     * past that every file would fail to open and read as broken */
+    if (strlen(dir) > SVC_DROPIN_PATH - 128) {
+        fprintf(stderr, "schema-init --check: %s: path too long (the loader needs it under %d bytes)\n",
+                dir, SVC_DROPIN_PATH - 128);
+        return 2;
+    }
     /* a systemd next boot runs none of these services; saying nothing would read as checked */
     static const char *const next_init[] = { "schema-init", "known-good", "systemd" };
     int pt = pi_next_target(root, cmdline);
@@ -180,8 +195,12 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
     /* PID 1's ./services fallback would read the caller's cwd, not the target */
     engine_paths.svc_fallback = NULL;
 
-    int out = dup(STDOUT_FILENO), err = dup(STDERR_FILENO);
     FILE *cap = tmpfile();
+    if (!cap) {
+        fprintf(stderr, "schema-init --check: tmpfile: %s\n", strerror(errno));
+        return 2;
+    }
+    int out = dup(STDOUT_FILENO), err = dup(STDERR_FILENO);
     redirect(fileno(cap));
     int cycles = engine_load(dir);
 
@@ -233,11 +252,11 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
     for (int e = 0; e < ne; e++) {
         if (!bad[e]) continue;
         const char *dn = ents[e]->d_name, *reason = "not loaded";
-        char rel[PATH_MAX + 256], stem[80];
+        char rel[PATH_MAX + 256];
+        /* by path only: a " name: " line may be another file's service of that name */
         snprintf(rel, sizeof rel, "%s/%s", dir + rl, dn);
-        snprintf(stem, sizeof stem, " %.*s: ", (int)(strlen(dn) - 4), dn);
         for (int i = 0; i < capl.n; i++)
-            if (!used[i] && (strstr(capl.v[i], rel) || strstr(capl.v[i], stem))) {
+            if (!used[i] && strstr(capl.v[i], rel)) {
                 used[i] = 1;
                 reason = untag(capl.v[i]);
                 break;

@@ -354,8 +354,9 @@ static void print_skipped(int mode, int comma) {
     fclose(f);
 }
 
-/* 0: whole reply (lone "." line stripped), 1: cut short, -1: no reply (reported) */
-static int ctl_request(const char *req, char **reply) {
+/* 0: whole reply (lone "." line stripped), 1: cut short, -1: no reply
+ * (reported, unless quiet: then errno says why) */
+static int ctl_request(const char *req, char **reply, int quiet) {
     char *rbuf;
     size_t cap = 65536, rlen = 0;
     ssize_t n;
@@ -382,6 +383,12 @@ static int ctl_request(const char *req, char **reply) {
             addr.sun_family = AF_UNIX;
             strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
             connected = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+        }
+        if (!connected && quiet) {
+            close(fd);
+            free(rbuf);
+            errno = first_errno;
+            return -1;
         }
         if (!connected) {
             fprintf(stderr, "%s: %s\n", ctl_sock, strerror(first_errno));
@@ -433,9 +440,12 @@ static uint64_t mono_ms(void) {
 static int wait_settled(unsigned window_s) {
     const uint64_t give_up = mono_ms() + settle_give_up_ms(window_s);
     settle_t st = {0};
+    int conn_err = 0;
     for (;;) {
         char *kv;
-        int r = ctl_request("status --kv\n", &kv);
+        /* PID 1 may not answer yet: retried every second, reported once at the end */
+        int r = ctl_request("status --kv\n", &kv, 1);
+        conn_err = r < 0 ? errno : 0;
         if (r == 0 && strncmp(kv, "err:", 4)) {
             if (settle_step(&st, kv, mono_ms(), window_s)) {
                 free(kv);
@@ -444,7 +454,10 @@ static int wait_settled(unsigned window_s) {
         } else
             memset(&st, 0, sizeof st);
         free(kv);
-        if (mono_ms() >= give_up) return -1;
+        if (mono_ms() >= give_up) {
+            if (conn_err) fprintf(stderr, "schema-ctl: %s: %s\n", ctl_sock, strerror(conn_err));
+            return -1;
+        }
         sleep(1);
     }
 }
@@ -666,7 +679,7 @@ int main(int argc, char **argv) {
     }
     strncat(cmd, "\n", sizeof(cmd) - strlen(cmd) - 1);
 
-    r = ctl_request(cmd, &rbuf);
+    r = ctl_request(cmd, &rbuf, 0);
     if (r < 0) return 1;
     whole = r == 0;
 

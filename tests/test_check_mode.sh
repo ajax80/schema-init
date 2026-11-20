@@ -170,6 +170,44 @@ has "next_init=" && fail "pilast: first init= taken"
 check --root "$R" --cmdline "init=/usr/sbin/schema-init-pi -- init=/sbin/schema-init"
 has "next_init=" || fail "pilast: init= after -- taken"
 
+# the root is stripped from every occurrence, even after a longer lookalike
+newroot strip
+svc "$S" a; printf 'name=w\nexec=/bin/true\nwait_socket=%sx %s/%0120d\n' "$R" "$R" 0 > "$S/w.svc"
+check --root "$R" --cmdline ""
+grep -qF "$R/" "$T/out" && fail "strip: root left in the output"
+has "${R}x /0000" || fail "strip: message mangled"
+
+# a reason is only ever the file's own: another service's " zz: " is not this zz.svc's
+newroot attrib
+printf 'name=zz\nexec=/bin/true\ndynamic_user=bogus\n' > "$S/a.svc"
+svc "$S" dupe; printf 'name=dupe\nexec=/bin/true\n' > "$S/zz.svc"
+check --root "$R" --cmdline ""
+grep -q '^error: zz\.svc: REFUSED .*zz\.svc: name .dupe.' "$T/out" || fail "attrib: zz.svc not given its own reason"
+grep -q '^error: zz\.svc: zz:' "$T/out" && fail "attrib: a.svc's message pinned on zz.svc"
+
+# --svc-dir is a path under the root, so absolute
+newroot reldir
+svc "$S" a
+check --root "$R" --cmdline "" --svc-dir etc/schema-init/services
+[ $rc -eq 2 ] || fail "reldir: exit $rc"
+grep -q 'svc-dir' "$T/err" || fail "reldir: no message: $(cat "$T/err")"
+
+# a root too long for the loader's 512-byte paths is refused, not every file failed
+L=$T/$(printf '%0150d' 0)/$(printf '%0150d' 0)/$(printf '%0150d' 0)
+mkdir -p "$L/etc/schema-init/services"; svc "$L/etc/schema-init/services" a
+check --root "$L" --cmdline ""
+[ $rc -eq 2 ] || fail "longroot: exit $rc"
+grep -q 'too long' "$T/err" || fail "longroot: no message: $(cat "$T/err")"
+rm -rf "$T/$(printf '%0150d' 0)"
+
+# no fd left for the capture file: an error, not a crash (redirects first, they need fds too)
+newroot nofd
+svc "$S" a
+sh -c 'exec > "$2" 2> "$3"; ulimit -n 3; exec ./schema-init --check --root "$1" --cmdline ""' sh "$R" "$T/out" "$T/err"
+rc=$?
+[ $rc -eq 2 ] || fail "nofd: exit $rc"
+grep -q 'tmpfile' "$T/err" || fail "nofd: no message: $(cat "$T/err")"
+
 # never binds a socket or makes runtime paths
 newroot quiet
 svc "$S" a
@@ -205,5 +243,16 @@ check --root "$R" --cmdline "schema.hardening_default=1"
 for k in no_new_privs private_tmp protect_system protect_home; do
     has "schema-verify-baseline.$k=0	src=explicit" || fail "baseline_svc: $k not explicitly 0"
 done
+
+# schema-ctl's settle wait: no PID 1 socket is retried quietly, not reported every second.
+# A user+pid namespace makes it root with a "schema-init" PID 1 (a copy of sh).
+cp /bin/sh "$T/schema-init"
+if [ -x ./schema-ctl ] && unshare -r -p -f --mount-proc true 2>/dev/null; then
+    unshare -r -p -f --mount-proc "$T/schema-init" -c \
+        'timeout 4 ./schema-ctl verify --write-baseline --wait-settled 1 > /dev/null 2> "$1"; true' sh "$T/err"
+    [ "$(grep -c . "$T/err")" -eq 0 ] || fail "ctl_quiet: wait printed: $(head -n 4 "$T/err")"
+else
+    echo "check_mode: ctl_quiet skipped (no user+pid namespace)"
+fi
 
 echo "ok check_mode"
