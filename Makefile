@@ -341,6 +341,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(MAKE) test-schema-font
 	$(MAKE) test-rail-render
 	$(MAKE) test-rail-state
+	$(MAKE) test-rail-console
 	sh tests/test_pi_halt.sh
 	sh tests/test_deb_version.sh
 	sh tests/test_devuan_boot.sh
@@ -530,3 +531,6 @@ test-rail-render:
 test-rail-state:
 	$(CC) $(CFLAGS) tests/test_rail_state.c rail.c schema_font.c -o $(TESTDIR)/rail-state && $(TESTDIR)/rail-state
 	sh tests/test_rail_events.sh
+
+test-rail-console:
+	$(CC) $(CFLAGS) tests/test_rail_console.c rail_console.c schema_font.c -o $(TESTDIR)/rail-console && $(TESTDIR)/rail-console
