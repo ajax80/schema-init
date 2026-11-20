@@ -33,6 +33,8 @@ stub v3 'printf "[UNRESOLVED] Next boot: needs root\nResult: 0 fail, 0 change, 0
 stub v64 'echo "usage: schema-ctl verify [--quiet] [--accept]" >&2; exit 64'
 stub vsegv 'kill -SEGV $$'
 stub vhang 'sleep 40'
+stub vpid 'echo $$ > '"$T"'/pid; exec sleep 40'
+stub v1err 'echo verify-said-on-stderr >&2; printf "[FAIL] x\nResult: 1 fail, 0 change, 0 warn\n"; exit 1'
 
 # a pty on stdin/stdout/stderr: util-linux script, else python's openpty
 PTY=
@@ -79,7 +81,8 @@ notty() {
 }
 has() { grep -qF -- "$1" "$T/out"; }
 connected() { has "$SOCK: No such file or directory"; }
-refused_msg() { has "schema-ctl: $1 refused — fix the above or run 'schema-ctl verify --accept'; --force to override"; }
+refused_msg() { has "schema-ctl: $1 refused — fix the above or run 'schema-ctl verify --accept'; run 'schema-ctl $1 --force' to override"; }
+killpid() { [ -s "$T/pid" ] && kill -9 "$(cat "$T/pid")" 2>/dev/null; rm -f "$T/pid"; }
 
 # production build: the overrides are compiled out
 if [ -x ./schema-ctl ]; then
@@ -111,12 +114,12 @@ notty v3 reexec
 [ "$rc" = 1 ] || fail "reexec with UNRESOLVED: exit $rc, want 1"
 connected && fail "reexec with UNRESOLVED contacted PID 1"
 has "[UNRESOLVED] Next boot: needs root" || fail "reexec UNRESOLVED refusal did not show the report"
-has "schema-ctl: reexec refused — verification could not resolve the above; --force to override" || fail "reexec UNRESOLVED message"
+has "schema-ctl: reexec refused — verification could not resolve the above; run 'schema-ctl reexec --force' to override" || fail "reexec UNRESOLVED message"
 notty v0 reexec
 connected || fail "reexec with a clean verify did not proceed"
 notty v1 reexec /usr/sbin/schema-init
 connected && fail "reexec <path> with a FAIL contacted PID 1"
-refused_msg reexec || fail "reexec <path> refusal message"
+refused_msg "reexec /usr/sbin/schema-init" || fail "reexec <path> refusal message"
 notty v1 reexec --force /usr/sbin/schema-init
 connected || fail "reexec --force <path> did not proceed"
 [ -e "$T/ran" ] && fail "reexec --force ran the verifier"
@@ -132,9 +135,52 @@ has "signal" || fail "reexec crash message does not say it was a signal"
 notty v64 reexec
 connected && fail "reexec with verifier exit 64 contacted PID 1"
 has "schema-ctl: reexec refused — verification unavailable (" || fail "reexec exit-64 message"
+has "usage: schema-ctl verify" && fail "the verifier's stderr reached the terminal, not the capture"
 SCHEMA_VERIFY_BIN=$T/missing "$CTL" reexec < /dev/null > "$T/out" 2>&1
 connected && fail "reexec with a missing verifier contacted PID 1"
 has "schema-ctl: reexec refused — verification unavailable (" || fail "reexec missing-verifier message"
+has "; run 'schema-ctl reexec --force' to override" || fail "reexec unavailable message does not name the override command"
+
+# the verifier's stderr is captured with its report, never written to the caller's tty
+notty v1err reexec
+has "verify-said-on-stderr" || fail "the verifier's stderr is not in the refusal report"
+
+# an inherited SIGCHLD=SIG_IGN would have the kernel reap the verifier and its verdict read as a pass
+if command -v python3 >/dev/null 2>&1; then
+    IGN='import os,signal,sys; signal.signal(signal.SIGCHLD, signal.SIG_IGN); os.execv(sys.argv[1], sys.argv[1:])'
+    for k in 1 2 3; do
+        rm -f "$T/ran"
+        SCHEMA_VERIFY_BIN=$T/v1 python3 -c "$IGN" "$CTL" reexec < /dev/null > "$T/out" 2>&1
+        connected && fail "reexec under SIGCHLD=SIG_IGN with a FAIL contacted PID 1 (run $k)"
+        refused_msg reexec || fail "reexec under SIGCHLD=SIG_IGN: refusal message (run $k)"
+    done
+    SCHEMA_VERIFY_BIN=$T/v0 python3 -c "$IGN" "$CTL" reexec < /dev/null > "$T/out" 2>&1
+    connected || fail "reexec under SIGCHLD=SIG_IGN with a clean verify did not proceed"
+fi
+
+# a verifier that won't die after the timeout's SIGKILL (D state): give up on it, don't hang
+t0=$(date +%s)
+SCHEMA_VERIFY_GATE_TIMEOUT_MS=1000 SCHEMA_VERIFY_GATE_NOKILL=1 SCHEMA_VERIFY_BIN=$T/vpid "$CTL" reexec < /dev/null > "$T/out" 2>&1
+t=$(($(date +%s) - t0))
+killpid
+[ "$t" -le 6 ] || fail "unkillable verifier: gate took ${t}s, want ~3"
+connected && fail "reexec with an unkillable verifier contacted PID 1"
+has "schema-ctl: reexec refused — verification unavailable (timed out" || fail "unkillable verifier message"
+
+# SIGTERM while waiting kills the verifier with the caller
+rm -f "$T/pid"
+SCHEMA_VERIFY_BIN=$T/vpid "$CTL" reexec < /dev/null > "$T/out" 2>&1 &
+cp=$!
+i=0; while [ ! -s "$T/pid" ] && [ $i -lt 50 ]; do i=$((i + 1)); sleep 0.1; done
+[ -s "$T/pid" ] || fail "verifier never started"
+kill -TERM $cp
+wait $cp
+rc=$?
+vp=$(cat "$T/pid")
+sleep 0.3
+if kill -0 "$vp" 2>/dev/null; then killpid; fail "SIGTERM to schema-ctl left the verifier running"; fi
+[ "$rc" = 143 ] || fail "SIGTERM during the gate: exit $rc, want 143"
+connected && fail "SIGTERM during the gate still contacted PID 1"
 
 # no override: the gate runs this binary's own verify --quiet
 env -u SCHEMA_VERIFY_BIN "$CTL" reexec < /dev/null > "$T/out" 2>&1

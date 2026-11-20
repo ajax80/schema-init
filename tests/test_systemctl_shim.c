@@ -514,6 +514,19 @@ static void test_power(void) {
     ctl_log_clear(); assert(run_as("halt", "--reboot", NULL) == 0); assert(ctl_log_has("reboot"));
     ctl_log_clear(); assert(run_as("reboot", "-p", NULL) == 0); assert(ctl_log_has("poweroff"));
     ctl_log_clear(); assert(run_as("reboot", "-f", NULL) == 0); assert(ctl_log_has("reboot"));
+    /* -f / --force is the verify gate's override: `sudo reboot -f` after a refusal must get through */
+    ctl_log_clear(); assert(run_as("reboot", "-f", NULL) == 0); assert(ctl_log_has("reboot --force"));
+    ctl_log_clear(); assert(run_as("reboot", "--force", NULL) == 0); assert(ctl_log_has("reboot --force"));
+    ctl_log_clear(); assert(run_as("poweroff", "-f", NULL) == 0); assert(ctl_log_has("poweroff --force"));
+    ctl_log_clear(); assert(run_as("halt", "--force", NULL) == 0); assert(ctl_log_has("poweroff --force"));
+    ctl_log_clear(); assert(run_as("reboot", "-nf", NULL) == 0); assert(ctl_log_has("reboot --force"));
+    ctl_log_clear(); assert(run_as("systemctl", "reboot", "--force") == 0); assert(ctl_log_has("reboot --force"));
+    ctl_log_clear(); assert(run_as("systemctl", "-f", "poweroff") == 0); assert(ctl_log_has("poweroff --force"));
+    ctl_log_clear(); assert(run_as("systemctl", "halt", "-f") == 0); assert(ctl_log_has("poweroff --force"));
+    ctl_log_clear(); assert(run_as("reboot", NULL, NULL) == 0); assert(!ctl_log_has("--force"));
+    ctl_log_clear(); assert(run_as("systemctl", "reboot", NULL) == 0); assert(!ctl_log_has("--force"));
+    /* shutdown -f is not a force (it was skip-fsck): stays gated */
+    ctl_log_clear(); assert(run_as("shutdown", "-rf", "now") == 0); assert(ctl_log_has("reboot") && !ctl_log_has("--force"));
     ctl_log_clear(); assert(run_as("systemctl", "--no-wall", "reboot") == 0); assert(ctl_log_has("reboot"));
     ctl_log_clear(); run_as("systemctl", "status", "reboot"); assert(!ctl_log_has("reboot"));   /* a unit arg, not a verb */
 }

@@ -769,7 +769,9 @@ int main(int argc, char **argv) {
             else argv[n++] = argv[i];
         }
         argc = n;
-        if (verify_gate(argv[1], force, isatty(0) && isatty(2), stderr)) return 1;
+        char act[PATH_MAX + 8];
+        snprintf(act, sizeof act, "%s%s%s", argv[1], argc == 3 ? " " : "", argc == 3 ? argv[2] : "");
+        if (verify_gate(act, force, isatty(0) && isatty(2), stderr)) return 1;
     }
 
     cmd[0] = '\0';
