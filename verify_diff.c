@@ -1,6 +1,6 @@
 #include "verify_diff.h"
 #include "verify_baseline.h"
-#include "svc_serial.h"
+#include "svc_keys.h"
 #include "sha256.h"
 
 #include <errno.h>
@@ -69,7 +69,7 @@ static int pfx(const char *s, const char *p) {
     return !strncmp(s, p, strlen(p));
 }
 
-static void body_line(snap_t *s, char *l, const char *const *keys, int nk) {
+static void body_line(snap_t *s, char *l) {
     char *tab = strchr(l, '\t'), *eq;
     ent_t e = { 0 };
     size_t ll, best = 0;
@@ -81,9 +81,9 @@ static void body_line(snap_t *s, char *l, const char *const *keys, int nk) {
     e.val = eq ? eq + 1 : "";
     if (eq) *eq = '\0';
     ll = strlen(l);
-    for (int i = 0; i < nk; i++) {
-        size_t kl = strlen(keys[i]);
-        if (kl > best && ll > kl + 1 && l[ll - kl - 1] == '.' && !strcmp(l + ll - kl, keys[i])) best = kl;
+    for (int i = 0; i < svc_keys_n; i++) {
+        size_t kl = strlen(svc_keys[i]);
+        if (kl > best && ll > kl + 1 && l[ll - kl - 1] == '.' && !strcmp(l + ll - kl, svc_keys[i])) best = kl;
     }
     if (!best && pfx(l, "grp.") && ll > 12 && !strcmp(l + ll - 8, ".members")) {
         l[ll - 8] = '\0';
@@ -110,8 +110,7 @@ static int ent_cmp(const void *a, const void *b) {
 
 static void parse(snap_t *s, const char *text) {
     static const char *const hdr[] = { "binary_version=", "created=", "cmdline.", "hardening_default=", "svc_dir=" };
-    const char *const *keys;
-    int nk = svc_serial_keys(&keys), in_hdr = 1, after_dir = 0;
+    int in_hdr = 1, after_dir = 0;
     char *p, *l;
 
     memset(s, 0, sizeof *s);
@@ -133,7 +132,7 @@ static void parse(snap_t *s, const char *text) {
         }
         if (pfx(l, "error: ")) PUSH(s->err, s->ne, l);
         else if (pfx(l, "note: ")) PUSH(s->note, s->nn, l);
-        else body_line(s, l, keys, nk);
+        else body_line(s, l);
     }
     if (s->nent) qsort(s->ent, (size_t)s->nent, sizeof *s->ent, ent_cmp);
 }
@@ -196,13 +195,14 @@ static void diff_header(ctx_t *c, const snap_t *b, const snap_t *n) {
                     seen = !strcmp(k, k2);
                 }
             if (seen) continue;
-            /* compared as a sequence: of repeated root= the last one is in force */
-            char *ov = hdr_vals(b, k, '\n'), *nv = hdr_vals(n, k, '\n');
+            /* compared and hashed as a sequence: of repeated root= the last one is in
+             * force. \x1f, not \n: the hash sorts its lines, a cmdline word may hold a space */
+            char *ov = hdr_vals(b, k, '\x1f'), *nv = hdr_vals(n, k, '\x1f');
             if (!ov || !nv || strcmp(ov, nv)) {
                 snprintf(what, sizeof what, "hdr %s", k);
                 hash_line(c, what, ov, nv);
-                for (char *q = ov; q && *q; q++) if (*q == '\n') *q = ' ';
-                for (char *q = nv; q && *q; q++) if (*q == '\n') *q = ' ';
+                for (char *q = ov; q && *q; q++) if (*q == '\x1f') *q = ' ';
+                for (char *q = nv; q && *q; q++) if (*q == '\x1f') *q = ' ';
                 add(c, F_CHANGE, "%s  %s → %s", k, dv(d1, sizeof d1, ov), dv(d2, sizeof d2, nv));
             }
             free(ov);
@@ -361,7 +361,7 @@ int diff_baseline(const char *base, const char *next, finding_t *out, int max, c
     }
     parse(&b, base);
     parse(&n, next);
-    if (bv == BASELINE_VERSION) diff_header(&c, &b, &n);
+    diff_header(&c, &b, &n);
     for (int i = 0; i < n.ne; i++) {
         int old = 0;
         for (int k = 0; k < b.ne && !old; k++) old = !strcmp(b.err[k], n.err[i]);

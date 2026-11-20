@@ -1,6 +1,7 @@
 #include "../service.h"
 #include "../svc_serial.h"
 #include "../sha256.h"
+#include "../svc_keys.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -210,8 +211,27 @@ static void test_sc_hash_tracks_set(void) {
     printf("ok test_sc_hash_tracks_set\n");
 }
 
+/* svc_keys[] is what verify splits lines on: it must be exactly what the emitters write */
+static void test_keys_table(void) {
+    const char *const *em;
+    int ne = svc_serial_keys(&em), bad = 0;
+    for (int i = 0; i < ne; i++) {
+        int k = 0;
+        while (k < svc_keys_n && strcmp(svc_keys[k], em[i])) k++;
+        if (k == svc_keys_n) { printf("FAIL emitted key %s missing from svc_keys[]\n", em[i]); bad = 1; }
+    }
+    for (int k = 0; k < svc_keys_n; k++) {
+        int i = 0;
+        while (i < ne && strcmp(svc_keys[k], em[i])) i++;
+        if (i == ne) { printf("FAIL svc_keys[] key %s is never emitted\n", svc_keys[k]); bad = 1; }
+    }
+    assert(!bad && ne == svc_keys_n);
+    printf("ok test_keys_table\n");
+}
+
 int main(void) {
     assert(mkdtemp(dir));
+    test_keys_table();
     test_args_change();
     test_exec_pre_change();
     test_source_only();

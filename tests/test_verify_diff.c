@@ -1,5 +1,5 @@
 #include "../verify_diff.h"
-#include "../svc_serial.h"
+#include "../svc_keys.h"
 #include "../sha256.h"
 #include <assert.h>
 #include <fcntl.h>
@@ -15,6 +15,8 @@
              "cmdline.root=UUID=abc\nhardening_default=on\nsvc_dir=/etc/schema-init/services\n"
 
 static char tmp[4096];
+static char *mkdir_t(const char *tag);
+static void put(const char *d, const char *name, const char *body);
 static finding_t f[64];
 static int nf;
 static char hash[65];
@@ -118,10 +120,9 @@ static void test_header(void) {
 
 /* ruling 2 */
 static void test_dotted_names(void) {
-    const char *const *keys;
-    int nk = svc_serial_keys(&keys), have = 0;
-    for (int i = 0; i < nk; i++)
-        have += !strcmp(keys[i], "sc.hash") + !strcmp(keys[i], "argv") + !strcmp(keys[i], "syscall_deny");
+    int have = 0;
+    for (int i = 0; i < svc_keys_n; i++)
+        have += !strcmp(svc_keys[i], "sc.hash") + !strcmp(svc_keys[i], "argv") + !strcmp(svc_keys[i], "syscall_deny");
     assert(have == 3);
     diff(HDR "a.b.sc.hash=111\na.b.sc.mode=deny\nx.sc.exec=/x\n",
          NHDR "a.b.sc.hash=222\na.b.sc.mode=deny\nx.sc.exec=/y\n");
@@ -155,9 +156,14 @@ static void test_errors(void) {
 
 /* ruling 5 */
 static void test_versions(void) {
-    diff("schema-verify-baseline v0\nbinary_version=1\na.exec=/a\n", NHDR "a.exec=/b\nb.exec=/b\n");
+    diff("schema-verify-baseline v0\nbinary_version=1\ncmdline.root=UUID=abc\nhardening_default=on\n"
+         "svc_dir=/etc/schema-init/services\na.exec=/a\n", NHDR "a.exec=/b\nb.exec=/b\n");
     assert(nf == 1 && f[0].kind == F_WARN && strstr(f[0].text, "baseline from an older format; refreshed at the next good boot"));
     assert(is_empty_hash(hash));
+    /* an older baseline drops only the service diff: the header is still compared */
+    diff("schema-verify-baseline v0\nbinary_version=1\ncmdline.root=UUID=old\nhardening_default=on\n"
+         "svc_dir=/etc/schema-init/services\na.exec=/a\n", NHDR "a.exec=/b\n");
+    assert(nf == 2 && count(F_WARN) == 1 && find(F_CHANGE, "cmdline.root=  root=UUID=old → root=UUID=abc"));
     assert(diff("schema-verify-baseline v2\na.exec=/a\n", NHDR "a.exec=/a\n") == -1);
     assert(diff("garbage\n", NHDR "a.exec=/a\n") == -1);
     assert(diff("schema-verify-baseline v1x\n", NHDR "a.exec=/a\n") == -1);
@@ -165,6 +171,42 @@ static void test_versions(void) {
     diff(HDR "a.exec=/a\n", "usage: schema-init ...\n");
     assert(count(F_FAIL) == 1);
     printf("ok test_versions\n");
+}
+
+/* repeated cmdline values are a sequence in the hash too; input order otherwise doesn't matter */
+static void test_hash_order(void) {
+    char h1[65], h2[65];
+    const char *b = "schema-verify-baseline v1\nbinary_version=1\ncmdline.root=A\nhardening_default=on\nsvc_dir=/s\na.exec=/a\nb.exec=/b\n";
+    diff(b, "schema-verify-baseline v1\nbinary_version=2\ncmdline.root=C\ncmdline.root=X\ncmdline.root=Y\n"
+            "hardening_default=on\nsvc_dir=/s\na.exec=/a\nb.exec=/b\n");
+    memcpy(h1, hash, 65);
+    diff(b, "schema-verify-baseline v1\nbinary_version=2\ncmdline.root=C\ncmdline.root=Y\ncmdline.root=X\n"
+            "hardening_default=on\nsvc_dir=/s\na.exec=/a\nb.exec=/b\n");
+    memcpy(h2, hash, 65);
+    assert(strcmp(h1, h2));
+    diff(HDR "a.exec=/a\nb.exec=/b\nc.exec=/c\n", "schema-verify-baseline v1\nbinary_version=2\ncmdline.root=UUID=x\n"
+         "hardening_default=off\nsvc_dir=/etc/schema-init/services\na.exec=/a2\nb.exec=/b2\n");
+    memcpy(h1, hash, 65);
+    diff(HDR "c.exec=/c\nb.exec=/b\na.exec=/a\n", "schema-verify-baseline v1\nbinary_version=2\nhardening_default=off\n"
+         "cmdline.root=UUID=x\nsvc_dir=/etc/schema-init/services\nb.exec=/b2\na.exec=/a2\n");
+    memcpy(h2, hash, 65);
+    assert(nf == 5 && !strcmp(h1, h2));
+    printf("ok test_hash_order\n");
+}
+
+static void test_crlf(void) {
+    char *b = NULL, *d;
+    assert(diff("schema-verify-baseline v1\r\n" "a.exec=/a\n", NHDR "a.exec=/a\n") == -1);
+    diff(HDR "a.exec=/a\n", NHDR "a.exec=/a\r\n");
+    assert(nf == 1 && find(F_CHANGE, "exec"));
+    diff(HDR "a.exec=/a\n", "schema-verify-baseline v1\nbinary_version=0.4.21\ncmdline.root=UUID=abc\n"
+         "hardening_default=on\r\nsvc_dir=/etc/schema-init/services\na.exec=/a\n");
+    assert(nf == 1 && find(F_CHANGE, "hardening_default"));
+    d = mkdir_t("crlf");
+    put(d, "established", "");
+    put(d, "baseline", "schema-verify-baseline v1\r\n");
+    assert(baseline_state(d, &b) == BASE_LOST && !b);
+    printf("ok test_crlf\n");
 }
 
 /* ruling 7 */
@@ -248,6 +290,8 @@ int main(int argc, char **argv) {
     test_errors();
     test_versions();
     test_hash_values_only();
+    test_hash_order();
+    test_crlf();
     test_state();
     test_accept();
     printf("verify_diff: all ok\n");

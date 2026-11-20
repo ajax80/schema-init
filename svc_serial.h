@@ -11,8 +11,8 @@
  * change. Both return the number of lines written, sorted bytewise. */
 int svc_serialize(const service_t *s, FILE *out);
 int svc_serialize_all(const service_t *tab, int n, FILE *out);
-/* every key svc_serialize writes, sorted; a service name may hold '.', so
- * verify splits a line on the longest of these */
+/* every key svc_serialize writes, sorted, read off the emitters: the test
+ * holds svc_keys.c's table to it */
 int svc_serial_keys(const char *const **out);
 
 /* shared with schema-ctl status <svc> */

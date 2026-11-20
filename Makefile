@@ -411,7 +411,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_kernel_ns.c ns.c caps.c -o $(TESTDIR)/kns && $(TESTDIR)/kns
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
-	$(CC) $(CFLAGS) tests/test_svc_serial.c svc_serial.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-serial && $(TESTDIR)/svc-serial
+	$(CC) $(CFLAGS) tests/test_svc_serial.c svc_serial.c svc_keys.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-serial && $(TESTDIR)/svc-serial
 	sh tests/test_svc_serial_keys.sh
 	sh tests/test_check_mode.sh
 	rm -rf $(TESTDIR)/vb-*
@@ -420,7 +420,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	rm -rf $(TESTDIR)/vr-*
 	$(CC) $(CFLAGS) tests/test_verify_root.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-root && $(TESTDIR)/verify-root $(TESTDIR)
 	rm -rf $(TESTDIR)/vd-*
-	$(CC) $(CFLAGS) tests/test_verify_diff.c verify_diff.c verify_baseline.c svc_serial.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify-diff && $(TESTDIR)/verify-diff $(TESTDIR)
+	$(CC) $(CFLAGS) tests/test_verify_diff.c verify_diff.c verify_baseline.c svc_keys.c sha256.c -o $(TESTDIR)/verify-diff && $(TESTDIR)/verify-diff $(TESTDIR)
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
