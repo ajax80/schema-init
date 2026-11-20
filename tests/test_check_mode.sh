@@ -210,10 +210,13 @@ rm -rf "$T/$(printf '%0150d' 0)"
 
 # no fd left for the capture file: an error, not a crash (redirects first, they need fds too).
 # Only a sanitizer build may skip: its dynamic loader can't start on 3 fds (exit 127).
+# Under qemu-user (deb.yml sets QEMU_SKIP) the emulator itself needs fds and crashes.
 newroot nofd
 svc "$S" a
 sh -c 'exec > /dev/null 2>&1; ulimit -n 3; exec ./schema-init --check'; got=$?
-if ! { [ $got -eq 127 ] && ldd ./schema-init 2>/dev/null | grep -q 'libasan\|libubsan'; }; then
+if [ -n "${QEMU_SKIP:-}" ]; then
+    echo "check_mode: nofd skipped (qemu-user can't run on 3 fds)"
+elif ! { [ $got -eq 127 ] && ldd ./schema-init 2>/dev/null | grep -q 'libasan\|libubsan'; }; then
     sh -c 'exec > "$2" 2> "$3"; ulimit -n 3; exec ./schema-init --check --root "$1" --cmdline ""' sh "$R" "$T/out" "$T/err"
     rc=$?
     [ $rc -eq 2 ] || fail "nofd: exit $rc"
