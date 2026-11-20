@@ -21,6 +21,7 @@ int engine_reload_integrity = 1;
 int engine_reload_allow_empty = 0;
 
 void engine_hook_noop(void) {}
+void engine_hook_outcome_none(int idx, int outcome) { (void)idx; (void)outcome; }
 void engine_hook_pressure_none(int psi_fired) { (void)psi_fired; }
 int64_t engine_hook_wake_none(int64_t now_m, int *tick) { (void)now_m; (void)tick; return WAKE_NONE; }
 int  engine_hook_ctl_none(int fd, char *line) { (void)fd; (void)line; return 0; }
@@ -36,4 +37,5 @@ engine_hooks_t engine_hooks = {
     .on_sigcont    = engine_hook_noop,
     .on_reaped     = engine_hook_reaped_none,
     .after_sockets = engine_hook_noop,
+    .shut_outcome  = engine_hook_outcome_none,
 };

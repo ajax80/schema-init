@@ -72,7 +72,7 @@ int rail_name_cols(char *out, size_t sz, const char *name, int fontmode) {
 }
 
 static const struct { const char *label, *fg, *bg; int glyph; } CH[] = {
-    [CHIP_NONE]    = { "",        "90",   "30;100", 0 },
+    [CHIP_NONE]    = { "",        "90",   "30;47",  0 },
     [CHIP_ONLINE]  = { "ONLINE",  "32",   "30;42",  0 },
     [CHIP_PERFECT] = { "PERFECT", "35",   "30;45",  0 },
     [CHIP_DONE]    = { "DONE",    "32",   "30;42",  0 },
@@ -82,7 +82,8 @@ static const struct { const char *label, *fg, *bg; int glyph; } CH[] = {
     [CHIP_DORMANT] = { "DORMANT", "34",   "30;44",  4 },
     [CHIP_CUT]     = { "CUT",     "31",   "30;41",  3 },
     [CHIP_STOPPED] = { "STOPPED", "34",   "30;44",  4 },
-    [CHIP_EXITED]  = { "EXITED",  "90",   "30;100", 4 },
+    /* not 100: the Linux console has no bright backgrounds and draws it black */
+    [CHIP_EXITED]  = { "EXITED",  "90",   "30;47",  4 },
     [CHIP_KILLED]  = { "KILLED",  "31",   "30;41",  3 },
     [CHIP_STUCK]   = { "STUCK",   "31",   "30;41",  3 },
     [CHIP_TIMER]   = { "TIMER",   "36",   "30;46",  0 },
@@ -141,7 +142,7 @@ size_t rail_fmt_banner(char *out, size_t sz, const char *word, const char *versi
 size_t rail_fmt_finish(char *out, size_t sz, const rail_counts_t *c, int64_t settled_ms, int timed_out, int fontmode) {
     const struct rail_alphabet *ab = fontmode ? &rail_font_ab : &rail_ascii_ab;
     const struct { int n; const char *label, *bg; } b[] = {
-        { c->online, "ONLINE", "30;42" }, { c->waiting, "WAITING", "30;100" }, { c->friction, "FRICTION", "30;43" },
+        { c->online, "ONLINE", "30;42" }, { c->waiting, "WAITING", "30;47" }, { c->friction, "FRICTION", "30;43" },
         { c->cut, "CUT", "30;41" }, { c->starting, "STARTING", "30;43" },
     };
     wbuf_t w = { out, sz, 0 };
@@ -205,7 +206,7 @@ static const struct { const char *key; int kind; rail_chip_t chip; const char *w
     { "card-timeout",        K_CHIP,  CHIP_FAILED, "" },
     { "condition-skip",      K_QUIET, CHIP_NONE, "condition false by design; counted as WAITING" },
     { "ctl-restart",         K_QUIET, CHIP_NONE, "operator restart; its spawn and ready lines follow" },
-    { "died",                K_DIED,  CHIP_NONE, "" },
+    { "died",                K_DIED,  CHIP_NONE, "with a restart coming, the retry line carries it; else CUT" },
     { "dormant",             K_CHIP,  CHIP_DORMANT, "" },
     { "dormant-wake",        K_QUIET, CHIP_NONE, "back from DORMANT; its spawn line follows" },
     { "dynamic-uid-exhausted", K_CHIP, CHIP_CUT, "" },
@@ -219,7 +220,7 @@ static const struct { const char *key; int kind; rail_chip_t chip; const char *w
     { "forked",              K_QUIET, CHIP_NONE, "process bookkeeping" },
     { "freeze",              K_QUIET, CHIP_NONE, "pressure handling, shown on schema-board" },
     { "freeze-sig",          K_QUIET, CHIP_NONE, "pressure handling, shown on schema-board" },
-    { "friction",            K_CHIP,  CHIP_RETRY, "" },
+    { "friction",            K_QUIET, CHIP_NONE, "a state step between a death and its retry or cut, which are shown" },
     { "fuse-cmd-exec",       K_QUIET, CHIP_NONE, "fuse-tripped is shown" },
     { "fuse-tripped",        K_CHIP,  CHIP_CUT, "" },
     { "killed-SIG*",         K_QUIET, CHIP_NONE, "the died / 76-* event that follows carries the outcome" },
@@ -235,17 +236,17 @@ static const struct { const char *key; int kind; rail_chip_t chip; const char *w
     { "path-failed",         K_CHIP,  CHIP_FAILED, "" },
     { "path-fire",           K_CHIP,  CHIP_TIMER, "" },
     { "path-trigger-limit",  K_CHIP,  CHIP_CUT, "" },
-    { "pid_file-missing",    K_DIED,  CHIP_NONE, "" },
+    { "pid_file-missing",    K_DIED,  CHIP_NONE, "with a restart coming, the retry line carries it; else CUT" },
     { "pid_file-no-cgroup",  K_CHIP,  CHIP_CUT, "" },
     { "promote",             K_READY, CHIP_NONE, "" },
-    { "readiness-lost",      K_CHIP,  CHIP_CUT, "" },
+    { "readiness-lost",      K_QUIET, CHIP_NONE, "a cause: the retry or 76-* excise that follows shows it as the reason" },
     { "reclaim",             K_QUIET, CHIP_NONE, "pressure handling, shown on schema-board" },
     { "reload-cmd",          K_QUIET, CHIP_NONE, "reload-done or reload-fail follows" },
     { "reload-done",         K_QUIET, CHIP_NONE, "a clean reload" },
     { "reload-fail",         K_CHIP,  CHIP_FAILED, "" },
     { "reload-signal",       K_QUIET, CHIP_NONE, "a reload signal sent" },
     { "reload-timeout",      K_CHIP,  CHIP_FAILED, "" },
-    { "restart-hold",        K_CHIP,  CHIP_RETRY, "" },
+    { "restart-hold",        K_QUIET, CHIP_NONE, "the retry line just before it is shown" },
     { "retry",               K_CHIP,  CHIP_RETRY, "" },
     { "retry-deep",          K_CHIP,  CHIP_RETRY, "" },
     { "socket-idle",         K_QUIET, CHIP_NONE, "idle exit by design; PID 1 keeps the socket" },
@@ -307,7 +308,7 @@ rail_chip_t rail_map_event(const char *event, const rail_svc_t *s) {
     if (i < 0) return CHIP_NONE;
     switch (EV[i].kind) {
     case K_CHIP:  return EV[i].chip;
-    case K_DIED:  return s->restart_pending ? CHIP_RETRY : CHIP_CUT;
+    case K_DIED:  return s->restart_pending ? CHIP_NONE : CHIP_CUT;
     case K_END:   return s->failed ? CHIP_CUT : CHIP_EXITED;
     case K_READY: return s->state == STATE_PERFECT ? CHIP_PERFECT : is_ready_state(s->state) ? CHIP_ONLINE : CHIP_NONE;
     case K_SPAWN: return CHIP_SPAWN;
@@ -334,7 +335,7 @@ static struct {
     const rail_io_t *io;
     int font, armed, finished, shutdown, runtime_only;
     int64_t start, last_event;
-    struct { int64_t spawn_at; char spawn_pending, online, perfect; int retries; } s[MAX_SERVICES];
+    struct { int64_t spawn_at; char spawn_pending, online, perfect; char why[48]; } s[MAX_SERVICES];
 } R;
 
 void rail_init(const rail_io_t *io, int fontmode, int reexeced, int64_t pid1_start_ms) {
@@ -371,6 +372,12 @@ void rail_event(const rail_svc_t *s, int idx, const char *event) {
 
     R.last_event = R.io ? R.io->now_ms() : 0;
     if (i < 0 || !ok) return;
+    /* the cause of a death, for the RETRY line that follows it */
+    /* a specific cause (signal, lost readiness) beats the generic died that follows it */
+    if (!strncmp(event, "killed-SIG", 10) || !strcmp(event, "readiness-lost"))
+        snprintf(R.s[idx].why, sizeof R.s[idx].why, "%.*s", (int)strcspn(event, " "), event);
+    else if (EV[i].kind == K_DIED && !R.s[idx].why[0])
+        snprintf(R.s[idx].why, sizeof R.s[idx].why, "%s", event);
     if (EV[i].kind == K_SPAWN) {
         R.s[idx].spawn_at = R.last_event;
         R.s[idx].spawn_pending = 1;
@@ -386,9 +393,13 @@ void rail_event(const rail_svc_t *s, int idx, const char *event) {
     }
     /* an outcome before the 2 s mark: the SPAWN line would be stale */
     R.s[idx].spawn_pending = 0;
-    if (chip == CHIP_RETRY) R.s[idx].retries++;
-    show(s->name, chip, chip == CHIP_RETRY ? R.s[idx].retries : 0,
-         chip == CHIP_CUT || chip == CHIP_FAILED || chip == CHIP_RETRY ? event : "");
+    if (chip == CHIP_RETRY) {
+        show(s->name, chip, s->restart_count, R.s[idx].why[0] ? R.s[idx].why : event);
+        R.s[idx].why[0] = '\0';
+        return;
+    }
+    show(s->name, chip, 0, chip == CHIP_CUT || chip == CHIP_FAILED ? (R.s[idx].why[0] ? R.s[idx].why : event) : "");
+    if (chip == CHIP_CUT) R.s[idx].why[0] = '\0';
 }
 
 void rail_arm_settle(void) { R.armed = 1; }

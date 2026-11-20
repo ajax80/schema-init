@@ -22,6 +22,9 @@
 #include "notify.h"
 #include "fdstore.h"
 #include "coredump.h"
+#include "rail.h"
+#include "rail_console.h"
+#include <linux/fb.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <linux/capability.h>
@@ -1327,6 +1330,126 @@ static int shut_fd = -1;
  * and before the mount holding it goes read-only. */
 #define SHUT_LOG_PATH "/var/log/schema-init/shutdown.log"
 #define SHUT_LOG_MAX  4096
+/* ── the styled rail (text VT only; rail.log keeps the plain line) ──── */
+
+#define RAIL_ORIG "/run/schema-init/console-orig"
+static int rail_on, rail_shut_styled, rail_out_fd = STDOUT_FILENO;
+static int64_t rail_shut_start;
+static char rail_cmdline[4096], rail_conf[256];
+
+static int rail_write_out(const char *b, size_t n) {
+    if (rail_out_fd == STDOUT_FILENO) {
+        fwrite(b, 1, n, stdout);
+        fflush(stdout);
+        return (int)n;
+    }
+    return (int)write(rail_out_fd, b, n);   /* shutdown's non-blocking console: drop, never wait */
+}
+static int64_t rail_now(void) { return (int64_t)monotonic_ms(); }
+static time_t rail_wall(void) { return time(NULL); }
+static const rail_io_t rail_io = { rail_write_out, rail_now, rail_wall };
+
+static void read_small(const char *path, char *buf, size_t sz) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    ssize_t n = fd < 0 ? 0 : read(fd, buf, sz - 1);
+    if (fd >= 0) close(fd);
+    buf[n > 0 ? n : 0] = '\0';
+}
+
+/* the box's configured console font: vconsole.conf FONT=, Debian FONTFACE= */
+static void rail_vconsole_font(char *out, size_t sz) {
+    static const struct { const char *path, *key; } src[] = {
+        { "/etc/vconsole.conf", "FONT=" }, { "/etc/default/console-setup", "FONTFACE=" } };
+    char buf[2048];
+    out[0] = '\0';
+    for (size_t k = 0; k < sizeof src / sizeof *src && !out[0]; k++) {
+        read_small(src[k].path, buf, sizeof buf);
+        for (char *l = buf; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL) {
+            size_t kl = strlen(src[k].key);
+            if (strncmp(l, src[k].key, kl)) continue;
+            l += kl;
+            if (*l == '"' || *l == '\'') l++;
+            snprintf(out, sz, "%.*s", (int)strcspn(l, "\"'\n"), l);
+            break;
+        }
+    }
+}
+
+static int rail_fb_xres(void) {
+    struct fb_var_screeninfo vi;
+    int fd = open("/dev/fb0", O_RDONLY | O_CLOEXEC), x = -1;
+    if (fd >= 0 && ioctl(fd, FBIOGET_VSCREENINFO, &vi) == 0) x = (int)vi.xres;
+    if (fd >= 0) close(fd);
+    return x;
+}
+
+static void rail_fill(rail_svc_t *r, const service_t *s) {
+    r->name = s->name;
+    r->state = s->inst.state;
+    r->pid = s->child_pid;
+    r->failed = svc_failed(s);
+    r->starting = s->child_pid > 0 && s->inst.state == STATE_NEW_PROCESS && !svc_held_on_socket(s);
+    r->restart_pending = s->inst.state == STATE_RECOVERY && !(s->flags & SVC_NO_RESTART);
+    r->restart_count = s->restart_count;
+}
+
+static void rail_hook(const service_t *svc, const char *event, const char *line, size_t n) {
+    long i = svc - services;
+    rail_svc_t r;
+    if (i < 0 || i >= svc_count) {
+        rail_write_out(line, n);   /* not one of ours: the plain line */
+        return;
+    }
+    rail_fill(&r, svc);
+    rail_event(&r, (int)i, event);
+}
+
+static void rail_setup(int reexeced) {
+    char vf[64], host[128];
+    int font = 0;
+
+    read_small("/proc/cmdline", rail_cmdline, sizeof rail_cmdline);
+    read_small("/etc/schema-init/rail", rail_conf, sizeof rail_conf);
+    if (!rc_styled(STDOUT_FILENO, rail_cmdline, rail_conf)) return;
+    rail_vconsole_font(vf, sizeof vf);
+    if (rc_font_wanted(rail_cmdline, rail_conf, vf, rail_fb_xres())) {
+        rc_font_result_t fr = rc_font_load(STDOUT_FILENO);
+        if (fr == RC_FONT_OK) font = 1;
+        else {
+            /* any ioctl failure: plain lines for the rest of the boot */
+            service_rail_note(fr == RC_FONT_FAILED_UNRESTORED ? "console font restore FAILED; styled rail off"
+                              : fr == RC_FONT_FAILED_RESTORED ? "console font load failed (put back); styled rail off"
+                              : "console font not saved; styled rail off");
+            return;
+        }
+    }
+    if (rc_palette_apply(STDOUT_FILENO, RAIL_ORIG) < 0) {
+        service_rail_note("console palette not set; styled rail off");
+        return;
+    }
+    rail_init(&rail_io, font, reexeced, (int64_t)init_start.tv_sec * 1000 + init_start.tv_nsec / 1000000);
+    rail_on = 1;
+    service_log_hook = rail_hook;
+    read_small("/etc/hostname", host, sizeof host);
+    host[strcspn(host, " \n")] = '\0';
+    if (!host[0]) gethostname(host, sizeof host);
+    rail_banner(SCHEMA_INIT_VERSION, host, svc_count);
+}
+
+static int64_t rail_wake(int64_t now_m) {
+    static rail_svc_t v[MAX_SERVICES];
+    if (!rail_on) return WAKE_NONE;
+    for (int i = 0; i < svc_count; i++) rail_fill(&v[i], &services[i]);
+    return rail_tick(v, svc_count, now_m);
+}
+
+static void pid1_shut_outcome(int idx, int outcome) {
+    static const rail_chip_t chip[] = { [SHUT_STOPPED] = CHIP_STOPPED, [SHUT_KILLED] = CHIP_KILLED,
+                                        [SHUT_EXITED] = CHIP_EXITED, [SHUT_STUCK] = CHIP_STUCK };
+    if (rail_shut_styled && idx >= 0 && idx < svc_count && outcome >= 0 && outcome <= SHUT_STUCK)
+        rail_shutdown_outcome(services[idx].name, chip[outcome]);
+}
+
 static char shut_buf[SHUT_LOG_MAX];
 static size_t shut_len = 0;
 static size_t shut_flushed = 0;
@@ -1337,6 +1460,19 @@ static void shut_console_open(void) {
 
     shut_fd = open("/dev/console", O_WRONLY | O_NONBLOCK | O_NOCTTY);
     if (shut_fd >= 0) tcflow(shut_fd, TCOON);
+    if (rail_on) {
+        rail_shutdown_begin();
+        rail_shut_start = (int64_t)monotonic_ms();
+        /* the decision is per sink: /dev/console may be the serial line */
+        rail_shut_styled = shut_fd >= 0 && rc_styled(shut_fd, rail_cmdline, rail_conf);
+        if (rail_shut_styled) {
+            rail_out_fd = shut_fd;
+            rail_shutdown_banner();
+        } else {
+            service_log_hook = NULL;
+            rail_on = 0;
+        }
+    }
 
     if (localtime_r(&now, &tm))
         shut_len = strftime(shut_buf, sizeof(shut_buf),
@@ -1346,7 +1482,15 @@ static void shut_console_open(void) {
 static void shut_write(const char *s) {
     size_t n = strlen(s);
 
-    if (shut_fd >= 0) {
+    if (shut_fd >= 0 && rail_shut_styled) {
+        /* the console gets a dim track line; shutdown.log keeps the text as is */
+        char t[384];
+        const char *p = s;
+        if (!strncmp(p, "[schema-init] ", 14)) p += 14;
+        if (!strncmp(p, "shutdown: ", 10)) p += 10;
+        snprintf(t, sizeof t, "%.*s", (int)strcspn(p, "\n"), p);
+        rail_shutdown_note(t);
+    } else if (shut_fd >= 0) {
         ssize_t w = write(shut_fd, s, n);
         (void)w;                       /* short or EAGAIN: drop it, never wait */
     } else {
@@ -1630,7 +1774,7 @@ static void pid1_loop_pressure(int psi_fired) {
  * tick. The cpu check only matters while a critical service runs, and under
  * the tick it rides that instead. */
 static int64_t pid1_wake_due(int64_t now_m, int *tick) {
-    int64_t due = WAKE_NONE;
+    int64_t due = rail_wake(now_m);
     int i;
     if (system_under_pressure || psi_fd < 0)
         *tick = 1;
@@ -1654,6 +1798,8 @@ static int pid1_on_reaped(pid_t pid, int status) {
 }
 
 static void pid1_loop_tail(void) {
+    /* the first pass has dispatched the initial starts: settle may be judged */
+    if (rail_on) rail_arm_settle();
     watchdog_pet();
     reexec_check_deadline();
 }
@@ -1821,6 +1967,7 @@ int main(int argc, char **argv) {
     engine_hooks.shut_log      = shut_log;
     engine_hooks.on_sigcont    = runit_stop_request;
     engine_hooks.on_reaped     = pid1_on_reaped;
+    engine_hooks.shut_outcome  = pid1_shut_outcome;
     setup_signals();
 
     pid1_hardening_default();
@@ -1887,6 +2034,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "schema-init: no CAP_IPC_LOCK: PID 1 locked as mapped now, later growth stays swappable\n");
     }
 
+    rail_setup(reexec_fd >= 0);
     engine_open(reexec_fd >= 0);
     if (reexec_fd < 0)
         schema_boot_log();
@@ -1913,7 +2061,7 @@ int main(int argc, char **argv) {
     watchdog_close();
     usleep(500000);
     shut_console_open();
-    shut_write("[schema-init] shutting down\n");
+    if (!rail_shut_styled) shut_write("[schema-init] shutting down\n");
     /* Containers do not hang off a .svc, so SIGTERM them first, ahead of the
      * services -- a clean stop lets Frigate flush frigate.db before the
      * remount-ro below, instead of relying on the kill(-1) SIGKILL further on. */
@@ -1973,6 +2121,10 @@ int main(int argc, char **argv) {
             if (cfd > 2) close(cfd);
         }
         remount_all_ro();
+        if (rail_shut_styled)
+            rail_shutdown_end((int64_t)monotonic_ms() - rail_shut_start, engine_do_reboot);
+        /* whatever the shutdown console was: the palette lives on the VTs */
+        rc_palette_restore(RAIL_ORIG, "/dev/tty0");
         if (engine_do_reboot) {
             shut_write("[schema-init] PID 1 reboot\n");
             reboot(RB_AUTOBOOT);

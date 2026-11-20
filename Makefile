@@ -55,7 +55,7 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c check.c karg.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
+SRCS    = init.c check.c karg.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c rail.c rail_console.c schema_font.c
 OBJS    = $(SRCS:.c=.o)
 ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o svc_serial.o sha256.o
 # The core objects share these headers. Without this dependency an incremental
@@ -69,7 +69,7 @@ all: $(BINS)
 desktop:
 	$(MAKE) -C desktop
 
-schema-init: init.o check.o karg.o $(ENGINE_OBJS)
+schema-init: init.o check.o karg.o rail.o rail_console.o schema_font.o $(ENGINE_OBJS)
 	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
 	# whole-program LTO link of PID 1 that CI never exercises.
 	# STATIC_LDFLAGS= (the sanitizer run) links with LDFLAGS, which carry the
@@ -342,6 +342,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(MAKE) test-rail-render
 	$(MAKE) test-rail-state
 	$(MAKE) test-rail-console
+	$(MAKE) test-rail-wiring
 	sh tests/test_pi_halt.sh
 	sh tests/test_deb_version.sh
 	sh tests/test_devuan_boot.sh
@@ -534,3 +535,6 @@ test-rail-state:
 
 test-rail-console:
 	$(CC) $(CFLAGS) tests/test_rail_console.c rail_console.c schema_font.c -o $(TESTDIR)/rail-console && $(TESTDIR)/rail-console
+
+test-rail-wiring:
+	$(CC) $(CFLAGS) tests/test_rail_wiring.c engine.c engine_conf.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c -lrt -o $(TESTDIR)/rail-wiring && $(TESTDIR)/rail-wiring

@@ -51,6 +51,13 @@ int main(void) {
         assert(schema_font_unimap[i - 1].unicode < schema_font_unimap[i].unicode);
     for (unsigned i = 0; i < schema_font_unimap_len; i++) assert(schema_font_unimap[i].fontpos < 256);
 
+    /* the kernel clears and pads with raw glyph 0x20, not through the map:
+     * ASCII and Latin-1 must sit at their own positions */
+    for (unsigned i = 0; i < schema_font_unimap_len; i++) {
+        uint32_t u = schema_font_unimap[i].unicode;
+        if ((u >= 0x20 && u <= 0x7e) || (u >= 0xa0 && u <= 0xff))
+            if (schema_font_unimap[i].fontpos != u) { fprintf(stderr, "U+%04X at %u\n", u, schema_font_unimap[i].fontpos); return 1; }
+    }
     printf("test_schema_font: ok\n");
     return 0;
 }

@@ -38,7 +38,7 @@ static void chips(void) {
     EQ(line("a", CHIP_STOPPED, 0, "", 0, 0, 1),
        "\033[34m┣━□\033[0m \033[1;37ma                \033[0m \033[30;44m STOPPED \033[0m  \033[90m+0.00s\033[0m\n");
     EQ(line("a", CHIP_EXITED, 0, "", 0, 0, 1),
-       "\033[90m┣━□\033[0m \033[1;37ma                \033[0m \033[30;100m EXITED  \033[0m  \033[90m+0.00s\033[0m\n");
+       "\033[90m┣━□\033[0m \033[1;37ma                \033[0m \033[30;47m EXITED  \033[0m  \033[90m+0.00s\033[0m\n");
     EQ(line("a", CHIP_KILLED, 0, "", 0, 0, 1),
        "\033[31m┣━■\033[0m \033[1;37ma                \033[0m \033[30;41m KILLED  \033[0m  \033[90m+0.00s\033[0m\n");
     EQ(line("a", CHIP_STUCK, 0, "", 0, 0, 1),
@@ -75,7 +75,7 @@ static void banner_finish(void) {
             "  \033[36mrail settled in 2.71s\033[0m\n");
     rail_counts_t d = { .online = 3, .waiting = 2, .starting = 1 };
     rail_fmt_finish(buf, sizeof buf, &d, 120000, 1, 0);
-    EQ(buf, "\033[35m==>\033[0m \033[30;42m 3 ONLINE \033[0m \033[30;100m 2 WAITING \033[0m \033[30;43m 1 STARTING \033[0m"
+    EQ(buf, "\033[35m==>\033[0m \033[30;42m 3 ONLINE \033[0m \033[30;47m 2 WAITING \033[0m \033[30;43m 1 STARTING \033[0m"
             "  \033[33mrail still starting after 120s\033[0m\n");
 
     rail_fmt_shutdown_end(buf, sizeof buf, 1800, 0, 1);

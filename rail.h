@@ -44,6 +44,7 @@ typedef struct {
     int starting;         /* spawned and not ready, or queued behind one that is */
     int failed;           /* the engine's svc_failed() */
     int restart_pending;  /* a death will be followed by a restart */
+    int restart_count;    /* the engine's own count, shown as RETRY n */
 } rail_svc_t;
 
 typedef struct {

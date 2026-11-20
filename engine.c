@@ -1503,7 +1503,7 @@ static int socket_accepts(const char *path) {
 
 /* sock_waiting is only recomputed in NEW_PROCESS; a held service that is
  * stopped or excised keeps the stale flag. */
-static int svc_held_on_socket(const service_t *svc) {
+int svc_held_on_socket(const service_t *svc) {
     return svc->sock_waiting && svc->inst.state == STATE_NEW_PROCESS;
 }
 
@@ -2455,7 +2455,7 @@ static const char *last_exit_str(const service_t *s) {
  * fallback-down) and EXC_BIND is waiting for its bound: neither failed. A stop
  * holds SVC_NO_RESTART beyond the config: start_timeout_sec can overtake a slow
  * one and record a failure reason, and it is still a stop. */
-static int svc_failed(const service_t *s) {
+int svc_failed(const service_t *s) {
     if ((s->flags & SVC_NO_RESTART) && !s->no_restart_cfg) return 0;
     return s->inst.state == STATE_DORMANT ||
            (s->inst.state == STATE_EXCISED && s->excise_reason != EXC_NONE && s->excise_reason != EXC_BIND);
@@ -3723,6 +3723,7 @@ static void shutdown_ordered(void) {
     uint64_t start = monotonic_ms(), term_at[MAX_SERVICES] = {0}, stop_at[MAX_SERVICES] = {0},
              post_at[MAX_SERVICES] = {0};
     int alive[MAX_SERVICES], killed[MAX_SERVICES] = {0}, gone[MAX_SERVICES] = {0}, was_up[MAX_SERVICES];
+    int told[MAX_SERVICES] = {0};
     int i, j, round = 0, held = 0, first = 1;
     char msg[320];
 
@@ -3766,8 +3767,14 @@ static void shutdown_ordered(void) {
                 else kill_group(services[i].stop_pid);
             }
             left += alive[i];
+            /* was_up is the snapshot taken on the first pass: each gets one verdict */
+            if (!alive[i] && was_up[i] && !term_at[i] && !killed[i] && !told[i]) {
+                told[i] = 1;
+                engine_hooks.shut_outcome(i, stop_at[i] ? SHUT_STOPPED : SHUT_EXITED);
+            }
             if (!alive[i] && term_at[i] && !killed[i] && !gone[i]) {
                 gone[i] = 1;
+                if (!told[i]) { told[i] = 1; engine_hooks.shut_outcome(i, SHUT_STOPPED); }
                 if (now - term_at[i] >= SHUT_SLOW_MS) {
                     snprintf(msg, sizeof msg, "%s down at +%llu ms (%llu ms after SIGTERM)",
                              services[i].name, (unsigned long long)(now - start),
@@ -3800,6 +3807,7 @@ static void shutdown_ordered(void) {
                 engine_hooks.shut_log(msg);
                 final_signal(&services[i]);
                 killed[i] = 1;
+                if (!told[i]) { told[i] = 1; engine_hooks.shut_outcome(i, SHUT_KILLED); }
                 continue;
             }
             if (hold && !(services[i].flags & SVC_STOP_FIRST)) continue;
@@ -3835,6 +3843,9 @@ static void shutdown_ordered(void) {
         first = 0;
         usleep(20000);
     }
+    /* killed and still there (D state): the kill didn't take */
+    for (i = 0; i < svc_count; i++)
+        if (killed[i] && svc_signal_all(&services[i], 0) > 0) engine_hooks.shut_outcome(i, SHUT_STUCK);
     snprintf(msg, sizeof msg, "services down in %llu ms",
              (unsigned long long)(monotonic_ms() - start));
     engine_hooks.shut_log(msg);

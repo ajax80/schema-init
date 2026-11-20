@@ -81,24 +81,26 @@ EXTRA = [0xFFFD, 0x2588, 0x2580, 0x2584, 0x258C, 0x2590, 0x25CF, 0x25CB, 0x2190,
 def main():
     src, out = sys.argv[1], sys.argv[2]
     sp = parse(src)
-    order = list(range(0x20, 0x7F)) + list(range(0xA0, 0x100)) + LIGHT_BOX + RAIL
-    chosen, glyphs = [], {}
-    for cp in order + EXTRA:
-        if len(chosen) == 256:
+    # ASCII and Latin-1 at their own positions: the kernel clears and pads with
+    # raw glyph 0x20, never through the Unicode map. The rest fill 0x00-0x1F
+    # and 0x7F-0x9F.
+    slots = [None] * 256
+    for cp in list(range(0x20, 0x7F)) + list(range(0xA0, 0x100)):
+        slots[cp] = cp
+    free = list(range(0x00, 0x20)) + list(range(0x7F, 0xA0))
+    glyphs = {}
+    for cp in LIGHT_BOX + RAIL + EXTRA:
+        if not free:
             break
-        if cp in glyphs:
-            continue
-        if cp in sp:
-            glyphs[cp] = sp[cp]
-        elif cp in DRAWN:
-            glyphs[cp] = DRAWN[cp]()
-        else:
-            if cp in order:
-                sys.exit(f'mkschemafont: U+{cp:04X} needed but neither in Spleen nor drawn')
-            continue
-        chosen.append(cp)
-    if len(chosen) != 256:
-        sys.exit(f'mkschemafont: {len(chosen)} glyphs, want 256 (add EXTRA candidates)')
+        if cp in sp or cp in DRAWN:
+            slots[free.pop(0)] = cp
+        elif cp in LIGHT_BOX + RAIL:
+            sys.exit(f'mkschemafont: U+{cp:04X} needed but neither in Spleen nor drawn')
+    if free:
+        sys.exit(f'mkschemafont: {len(free)} slots empty (add EXTRA candidates)')
+    for cp in slots:
+        glyphs[cp] = sp[cp] if cp in sp else DRAWN[cp]()
+    chosen = slots
     head = re.split(r'^CHARS ', open(src).read(), flags=re.M)[0]
     head = head.replace('FAMILY_NAME "Spleen"', 'FAMILY_NAME "schema"')
     head = head.replace('-misc-spleen-', '-schema-schema-')

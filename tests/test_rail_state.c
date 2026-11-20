@@ -40,7 +40,11 @@ static rail_svc_t S(const char *name, uint8_t state) {
 static void map_events(void) {
     rail_svc_t s = S("a", STATE_RECOVERY);
     s.restart_pending = 1;
-    assert(rail_map_event("died", &s) == CHIP_RETRY);
+    /* the retry that follows carries the restart: one line per death */
+    assert(rail_map_event("died", &s) == CHIP_NONE);
+    assert(rail_map_event("friction", &s) == CHIP_NONE);
+    assert(rail_map_event("retry", &s) == CHIP_RETRY);
+    assert(rail_map_event("retry-deep", &s) == CHIP_RETRY);
     s.restart_pending = 0;
     assert(rail_map_event("died", &s) == CHIP_CUT);
     s = S("a", STATE_EXCISED);
@@ -90,6 +94,33 @@ static void spawn_delay(void) {
     if (count("SPAWN") || count(" CUT ") != 1) FAIL("cut before 2 s: want CUT only");
 }
 
+static void one_line_per_death(void) {
+    rail_svc_t s = S("crashy", STATE_RECOVERY);
+    reset(0);
+    for (int k = 1; k <= 4; k++) {
+        s.state = STATE_RECOVERY; s.restart_pending = 1;
+        rail_event(&s, 0, "killed-SIGSEGV-core");
+        rail_event(&s, 0, "died");
+        s.state = STATE_FRICTION;
+        rail_event(&s, 0, "friction");
+        s.state = STATE_NEW_PROCESS; s.restart_count = k;
+        rail_event(&s, 0, k % 2 ? "retry" : "retry-deep");
+        rail_event(&s, 0, "restart-hold");
+    }
+    if (count("RETRY") != 4) FAIL("want one RETRY line per death");
+    if (!count(" RETRY 4 ") || count(" RETRY 5 ")) FAIL("RETRY n must be the engine's restart count");
+    if (count("killed-SIGSEGV-core") != 4) FAIL("RETRY reason should be the cause of death");
+
+    /* readiness-lost is a cause: the retry or the 76-* excise after it is the outcome */
+    reset(0);
+    s = S("rp", STATE_FUNDAMENTAL);
+    assert(rail_map_event("readiness-lost", &s) == CHIP_NONE);
+    rail_event(&s, 0, "readiness-lost");
+    s.state = STATE_EXCISED; s.failed = 1;
+    rail_event(&s, 0, "76-restart-policy");
+    if (count(" CUT ") != 1 || !count("readiness-lost")) FAIL("CUT should carry readiness-lost as its reason");
+}
+
 static void fast_ready_single_line(void) {
     rail_svc_t s = S("fast", STATE_NEW_PROCESS);
     reset(0);
@@ -131,7 +162,8 @@ static void settle(void) {
     if (!count(" 2 ONLINE ") || !count(" 2 WAITING ")) FAIL("bucket counts");
     now = 9000; rail_tick(v, 4, now);
     if (count("rail settled") != 1) FAIL("finish printed twice");
-    rail_event(&v[0], 0, "restart-hold");
+    v[0].restart_count = 1;
+    rail_event(&v[0], 0, "retry");
     if (!strstr(out, "╍")) FAIL("post-settle lines are not runtime shape");
 }
 
@@ -245,6 +277,7 @@ int main(void) {
     tzset();
     map_events();
     spawn_delay();
+    one_line_per_death();
     fast_ready_single_line();
     settle();
     timeout_120();
