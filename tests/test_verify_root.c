@@ -87,6 +87,36 @@ static void test_path_map(void) {
     assert(bls_path_map("/boot", "/vmlinuz-x", small, sizeof small) == -1);
 }
 
+/* GRUB resolves a symlink in the boot tree against its own root, never the host's */
+static void test_in_root(void) {
+    char root[PATH_MAX / 2], p[PATH_MAX];
+    struct stat st;
+    snprintf(root, sizeof root, "%s/vr-top", tmpd);
+    mkdir(root, 0755);
+    snprintf(p, sizeof p, "%s/boot", root);
+    mkdir(p, 0755);
+    snprintf(p, sizeof p, "%s/boot/vmlinuz-x", root);
+    touch(p);
+    snprintf(p, sizeof p, "%s/boot/rel", root);
+    assert(symlink("vmlinuz-x", p) == 0);
+    /* /etc/passwd exists on the host, not in this tree */
+    snprintf(p, sizeof p, "%s/boot/abs", root);
+    assert(symlink("/etc/passwd", p) == 0);
+    snprintf(p, sizeof p, "%s/snap", root);
+    assert(symlink("/boot", p) == 0);
+
+    assert(stat_in_root(root, "/boot/vmlinuz-x", 0, &st) == 0 && S_ISREG(st.st_mode));
+    assert(stat_in_root(root, "/boot/rel", 0, &st) == 0 && S_ISREG(st.st_mode));
+    assert(stat_in_root(root, "/boot/abs", 0, &st) == -1);
+    assert(stat_in_root(root, "/boot/nope", 0, &st) == -1);
+    assert(stat_in_root(root, "/boot/vmlinuz-x/x", 0, &st) == -1);
+    assert(stat_in_root(root, "/../boot/vmlinuz-x", 0, &st) == -2);
+    /* the subvolume check refuses any symlink */
+    assert(stat_in_root(root, "/boot", 1, &st) == 0 && S_ISDIR(st.st_mode));
+    assert(stat_in_root(root, "/snap", 1, &st) == -2);
+    assert(stat_in_root(root, "/snap", 0, &st) == 0 && S_ISDIR(st.st_mode));
+}
+
 static void test_boot_separate(void) {
     char p[PATH_MAX];
     snprintf(p, sizeof p, "%s/vr-mountinfo-blakbox", tmpd);
@@ -259,6 +289,7 @@ int main(int argc, char **argv) {
     setup_devdir();
     test_dev_resolve();
     test_path_map();
+    test_in_root();
     test_boot_separate();
     test_expand();
     test_precheck();

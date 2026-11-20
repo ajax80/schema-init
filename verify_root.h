@@ -3,6 +3,7 @@
 
 #include "verify_boot.h"
 #include <stddef.h>
+#include <sys/stat.h>
 
 /* fail/reasons: FAIL lines. unres: UNRESOLVED lines, never PASS and never FAIL;
  * unresolved points at unres[0] when there is any. check_out is malloc'd, the
@@ -25,6 +26,9 @@ typedef struct {
 int dev_resolve(const char *spec, const char *devdir, char *out, size_t n);
 /* BLS paths are relative to GRUB's root: the btrfs top level, or a separate /boot */
 int bls_path_map(const char *grub_root_mnt, const char *bls_path, char *out, size_t n);
+/* stat a BLS path inside root, symlinks resolved against root (nosym: refused);
+ * 0 found, -1 absent, -2 refused or unreadable */
+int stat_in_root(const char *root, const char *path, int nosym, struct stat *st);
 /* 1 when mountinfo has a mount on /boot: then that partition is GRUB's root */
 int boot_is_separate(const char *mountinfo_path);
 /* GRUB expands $var/${var} in options at boot; 0 ok, -1 with the unknown name in missing */

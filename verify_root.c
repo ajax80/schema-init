@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/openat2.h>
 #include <limits.h>
 #include <poll.h>
 #include <sched.h>
@@ -14,6 +15,7 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -82,6 +84,38 @@ int bls_path_map(const char *mnt, const char *p, char *out, size_t n) {
     size_t ml = strlen(mnt);
     while (ml && mnt[ml - 1] == '/') ml--;
     return snprintf(out, n, "%.*s%s", (int)ml, mnt, p) >= (int)n ? -1 : 0;
+}
+
+int stat_in_root(const char *root, const char *path, int nosym, struct stat *st) {
+    char chk[PATH_MAX];
+    if (bls_path_map("/", path, chk, sizeof chk)) return -2;
+    const char *rel = path + strspn(path, "/");
+    int rfd = open(root, O_PATH | O_DIRECTORY | O_CLOEXEC), rc = -2;
+    if (rfd < 0) return -2;
+    struct open_how how = { .flags = O_PATH | O_CLOEXEC,
+                            .resolve = RESOLVE_IN_ROOT | (nosym ? RESOLVE_NO_SYMLINKS : 0) };
+    int fd = syscall(SYS_openat2, rfd, *rel ? rel : ".", &how, sizeof how);
+    if (fd >= 0) {
+        rc = fstat(fd, st) ? -2 : 0;
+        close(fd);
+    } else if (errno == ENOENT || errno == ENOTDIR) {
+        rc = -1;
+    } else if (errno == ENOSYS) {
+        /* no openat2: walk it without following anything, and call any symlink unknown */
+        char pre[PATH_MAX];
+        rc = 0;
+        for (size_t i = 0; rc == 0 && (i == 0 || rel[i - 1]); i++) {
+            if (rel[i] && rel[i] != '/') continue;
+            snprintf(pre, sizeof pre, "%.*s", (int)i, rel);
+            if (fstatat(rfd, *pre ? pre : ".", st, AT_SYMLINK_NOFOLLOW))
+                rc = errno == ENOENT || errno == ENOTDIR ? -1 : -2;
+            else if (S_ISLNK(st->st_mode))
+                rc = -2;
+            if (!rel[i]) break;
+        }
+    }
+    close(rfd);
+    return rc;
 }
 
 int boot_is_separate(const char *mountinfo) {
@@ -231,10 +265,10 @@ static int mount_any(const char *dev, const char *dir, unsigned long fl, char *t
 #define U(...) dprintf(ctl, "U " __VA_ARGS__)
 
 static int check_file(int ctl, const char *grub, const char *what, const char *p) {
-    char m[PATH_MAX];
     struct stat st;
-    if (bls_path_map(grub, p, m, sizeof m)) return F("%s path %s is not usable\n", what, p);
-    if (stat(m, &st) || !S_ISREG(st.st_mode)) return F("%s %s is missing\n", what, p);
+    int rc = stat_in_root(grub, p, 0, &st);
+    if (rc == -2) return U("%s path %s could not be resolved\n", what, p);
+    if (rc || !S_ISREG(st.st_mode)) return F("%s %s is missing\n", what, p);
     return 0;
 }
 
@@ -244,9 +278,12 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     const char *rootspec = argval(w, nw, "root="), *flags = argval(w, nw, "rootflags=");
     const char *init = argval(w, nw, "init=");
     if (!init) init = "/sbin/init";
-    char dev[PATH_MAX], top[64], tgt[64], type[64] = "btrfs";
+    char dev[PATH_MAX] = "", top[64], tgt[64], type[64] = "btrfs";
     unsigned long fl = MS_RDONLY | MS_NOSUID | MS_NODEV;
-    dev_resolve(rootspec, NULL, dev, sizeof dev);
+    if (dev_resolve(rootspec, NULL, dev, sizeof dev)) {
+        U("root=%s stopped resolving during the inspection\n", rootspec);
+        return;
+    }
 
     /* the mounts must never show outside this child */
     if (unshare(CLONE_NEWNS) || mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)) {
@@ -276,9 +313,14 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
         struct stat st;
         sv += strspn(sv, "/");
         size_t svl = strcspn(sv, ",");
+        snprintf(p, sizeof p, "/%.*s", (int)svl, sv);
+        int rc = stat_in_root(top, p, 1, &st);
+        if (rc == -2) {
+            U("subvolume path %.*s has a symlink or can't be read\n", (int)svl, sv);
+            return;
+        }
         /* 256 is the inode of every btrfs subvolume's root directory */
-        if (snprintf(p, sizeof p, "%s/%.*s", top, (int)svl, sv) >= (int)sizeof p || stat(p, &st) ||
-            !S_ISDIR(st.st_mode)) {
+        if (rc || !S_ISDIR(st.st_mode)) {
             F("subvolume %.*s does not exist on %s\n", (int)svl, sv, rootspec);
             return;
         }
@@ -298,21 +340,22 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     check_file(ctl, grub, "kernel", e->linux_path);
     for (int i = 0; i < e->n_initrd; i++) check_file(ctl, grub, "initrd", e->initrd[i]);
 
-    struct stat a, b;
-    int live = !stat(tgt, &a) && !stat("/", &b) && a.st_dev == b.st_dev && a.st_ino == b.st_ino;
-    if (!live) {
-        /* user=/group= and absolute symlinks must resolve against the target, not the host */
+    /* always chroot, even into the running root's subvolume: the fresh mount carries
+     * none of the host's submounts (/home, a split /usr), which the kernel won't have
+     * either; user=/group= and absolute symlinks resolve against the target */
+    static const char *const sub[][2] = { { "/dev", "/dev" }, { "/proc", "/proc" }, { NULL, "/tmp" } };
+    for (size_t i = 0; i < sizeof sub / sizeof *sub; i++) {
         char p[PATH_MAX];
-        snprintf(p, sizeof p, "%s/dev", tgt);
-        mount("/dev", p, NULL, MS_BIND | MS_REC, NULL);
-        snprintf(p, sizeof p, "%s/proc", tgt);
-        mount("/proc", p, NULL, MS_BIND | MS_REC, NULL);
-        snprintf(p, sizeof p, "%s/tmp", tgt);
-        mount("schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777");
-        if (chroot(tgt) || chdir("/")) {
-            U("cannot chroot into the target: %m\n");
+        snprintf(p, sizeof p, "%s%s", tgt, sub[i][1]);
+        if (sub[i][0] ? mount(sub[i][0], p, NULL, MS_BIND | MS_REC, NULL)
+                      : mount("schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777")) {
+            U("cannot mount %s in the target: %m\n", sub[i][1]);
             return;
         }
+    }
+    if (chroot(tgt) || chdir("/")) {
+        U("cannot chroot into the target: %m\n");
+        return;
     }
 
     char real[PATH_MAX];
@@ -321,23 +364,27 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
         F("init=%s does not exist in the target\n", init);
         return;
     }
+    /* one record per line */
+    if (strchr(real, '\n')) {
+        U("init=%s resolves to a path with a newline\n", init);
+        return;
+    }
     dprintf(ctl, "I %s\n", real);
     if (stat(real, &st) || !S_ISREG(st.st_mode) || !(st.st_mode & 0111)) {
         F("init=%s is not executable in the target\n", init);
         return;
     }
-    const char *bn = strrchr(real, '/') + 1;
-    if (strncmp(bn, "schema-init", 11)) return;
-    dprintf(ctl, "S\n");
-
+    /* by what it says, not its name: a renamed copy at /sbin/init still gets checked */
     int cap = memfd_create("schema-verify", MFD_CLOEXEC), errfd = memfd_create("schema-verify-err", MFD_CLOEXEC);
     char line[200];
     int rc = run((char *[]){ real, "--version", NULL }, cap, cap);
     first_line(cap, line, sizeof line);
     if (rc || strncmp(line, "schema-init ", 12)) {
-        F("init=%s --version failed (exit %d)\n", init, rc);
+        if (!strncmp(strrchr(real, '/') + 1, "schema-init", 11))
+            F("init=%s --version failed (exit %d)\n", init, rc);
         return;
     }
+    dprintf(ctl, "S\n");
 
     char *argv[8 + MAXWORDS] = { real, "--check", "--root", "/", "--cmdline", (char *)opts };
     int ac = 6;
@@ -426,8 +473,15 @@ int root_inspect(const bls_entry_t *e, char (*env)[2][256], int nenv, const char
         unres(r, "cannot inspect the target: mkdtemp: %s", strerror(errno));
         goto done;
     }
-    if (pipe2(ctl, O_CLOEXEC) || pipe2(out, O_CLOEXEC)) {
+    if (pipe2(ctl, O_CLOEXEC)) {
         unres(r, "cannot inspect the target: pipe: %s", strerror(errno));
+        rmdir(base);
+        goto done;
+    }
+    if (pipe2(out, O_CLOEXEC)) {
+        unres(r, "cannot inspect the target: pipe: %s", strerror(errno));
+        close(ctl[0]);
+        close(ctl[1]);
         rmdir(base);
         goto done;
     }
@@ -437,6 +491,8 @@ int root_inspect(const bls_entry_t *e, char (*env)[2][256], int nenv, const char
         close(out[0]);
         /* its own group, so the deadline kill also takes --version and --check */
         setpgid(0, 0);
+        /* no caller fd crosses into the chroot; ctl and out are only written here */
+        close_range(3, ~0U, CLOSE_RANGE_CLOEXEC);
         inspect(e, opts, extra, base, ctl[1], out[1]);
         _exit(0);
     }
