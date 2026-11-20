@@ -22,13 +22,14 @@ done
 printf '#!/bin/sh\necho "$@" >> "%s/editenv"\n' "$T" > "$T/bin/grub2-editenv"
 # pinned, so the host's login.defs can't move 990/1000 across the line
 printf 'UID_MIN 1000\nUID_MIN 500\nUID_MAX 60000\n' > "$T/login.defs"
+printf '#!/bin/sh\necho "$@" >> "%s/ctl"\nexit "${CTL_RC:-0}"\n' "$T" > "$T/bin/schema-ctl"
 chmod 755 "$T/bin/"*
 
 # $@: name:uid:card for each process, started in order. Writes bootok's exit
 # code to $T/rc.
 run() {
-    rm -f "$T/editenv" "$T/rc" "$T/err"
-    unshare -r --map-auto -p -f -m --mount-proc env -i PATH="$T/bin:$PATH" T="$T" BOOTOK="$BOOTOK" PROCS="$*" \
+    rm -f "$T/editenv" "$T/rc" "$T/err" "$T/ctl"
+    unshare -r --map-auto -p -f -m --mount-proc env -i PATH="$T/bin:$PATH" T="$T" BOOTOK="$BOOTOK" PROCS="$*" CTL_RC="${CTL_RC:-0}" \
         SCHEMA_BOOTOK_TIMEOUT=4 SCHEMA_GRUBENV="$T/grubenv" SCHEMA_LOGIN_DEFS="$T/login.defs" sh -c '
         mount -t tmpfs tmpfs /dev/dri || exit 1
         : > /dev/dri/card0
@@ -78,6 +79,13 @@ expect good "X (the LightDM default name)"            X:0:1 cinnamon:1000:0
 expect good "root Xorg + the user's KDE on X11"       Xorg:0:1 kwin_x11:1000:0
 expect good "root Xorg + the user's plasmashell"      Xorg:0:1 plasmashell:1000:0
 expect bad  "a user's plasmashell alone"              plasmashell:1000:1
+
+run kwin_wayland:1000:1
+[ "$(cat "$T/ctl" 2>/dev/null)" = "verify --write-baseline" ] || { echo "FAIL: good boot did not write the baseline"; fail=1; }
+run kwin_wayland:990:1
+[ ! -e "$T/ctl" ] || { echo "FAIL: timed-out boot wrote the baseline"; fail=1; }
+CTL_RC=1 run kwin_wayland:1000:1
+[ "$(cat "$T/rc")" = 0 ] || { echo "FAIL: a failed baseline write failed the boot"; fail=1; }
 
 [ $fail -eq 0 ] && echo "PASS: schema-bootok counts only a login user's session (Wayland or X11)"
 exit $fail

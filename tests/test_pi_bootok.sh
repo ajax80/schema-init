@@ -17,12 +17,13 @@ cat > "$T/ctl" <<EOT
 case "\$1" in
 status) cat "$T/kv" ;;
 reboot) echo reboot >> "$T/reboots" ;;
+verify) echo "\$*" >> "$T/ctlargs"; exit \${CTL_RC:-0} ;;
 esac
 EOT
 chmod +x "$T/ctl"
 
 reset() {
-    rm -rf "$R" "$T/kv" "$T/reboots" "$T/log"
+    rm -rf "$R" "$T/kv" "$T/reboots" "$T/log" "$T/ctlargs"
     mkdir -p "$R/usr/bin" "$R/etc/schema-init/services" "$R/usr/libexec/schema-init" \
         "$R/var/lib/schema-init"
     echo bin-init > "$R/usr/bin/schema-init"
@@ -56,6 +57,13 @@ cmp -s "$KG/schema-init" "$R/usr/bin/schema-init" || fail "bootok_confirms: kg s
 grep -q '^pi-bootok: boot confirmed after [0-9]*s (target=current)$' "$T/log" || fail "bootok_confirms: log: $(cat "$T/log")"
 echo "ok bootok_confirms"
 
+# bootok_writes_baseline: a good boot records one write; a failed write still confirms
+[ "$(cat "$T/ctlargs" 2>/dev/null)" = "verify --write-baseline" ] || fail "bootok_writes_baseline: argv: $(cat "$T/ctlargs" 2>/dev/null)"
+reset; good_kv
+CTL_RC=1 env_run sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_baseline_failure: exit"
+[ -f "$MARK" ] || fail "bootok_baseline_failure: no marker"
+echo "ok bootok_writes_baseline"
+
 # bootok_names_blocker (also: DORMANT blocks, sshd missing blocks)
 reset
 printf 'service.sshd.state=FUNDAMENTAL\nservice.wpa-supplicant.state=RECOVERY\nservice.dead.state=DORMANT\n' > "$T/kv"
@@ -64,6 +72,7 @@ pid=$!
 sleep 0.5
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 [ ! -e "$MARK" ] || fail "bootok_names_blocker: marker written"
+[ ! -e "$T/ctlargs" ] || fail "bootok_names_blocker: baseline written before confirm"
 grep -qx 'pi-bootok: waiting on wpa-supplicant=RECOVERY' "$T/log" || fail "bootok_names_blocker: log: $(cat "$T/log")"
 grep -qx 'pi-bootok: waiting on dead=DORMANT' "$T/log" || fail "bootok_names_blocker: dormant not named"
 [ "$(grep -c 'waiting on wpa' "$T/log")" = 1 ] || fail "bootok_names_blocker: repeated inside 60s"

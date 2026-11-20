@@ -151,4 +151,11 @@ cmp -s "$T/before" "$T/after" || { diff "$T/before" "$T/after"; fail "quiet: new
 
 ./schema-init --check > /dev/null 2>&1 && fail "missing --root accepted"
 
+# the shipped baseline oneshot parses through the real loader
+newroot baseline_svc
+cp services/schema-verify-baseline.svc "$S/"
+check --root "$R" --cmdline ""
+[ $rc -eq 0 ] || fail "baseline_svc: exit $rc"
+has "schema-verify-baseline.exec=" || fail "baseline_svc: no exec line"
+
 echo "ok check_mode"

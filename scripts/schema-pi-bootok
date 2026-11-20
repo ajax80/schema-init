@@ -166,4 +166,6 @@ mkdir -p "$R/run/schema-init"
 restore_old
 [ "$target" = current ] && promote
 
+"$CTL" verify --write-baseline || echo "pi-bootok: baseline not written" >&2
+
 echo "pi-bootok: boot confirmed after $(($(now) - start))s (target=$target)"

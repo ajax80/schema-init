@@ -52,6 +52,7 @@ waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
   if desktop_up; then
     grub2-editenv "$GRUBENV" set boot_success=1
+    schema-ctl verify --write-baseline || echo "schema-bootok: baseline not written" >&2
     grub2-editenv "$GRUBENV" unset boot_counter 2>/dev/null || true
     echo "schema-bootok: desktop confirmed after ${waited}s; boot marked good"
     exit 0
