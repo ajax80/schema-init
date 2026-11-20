@@ -55,14 +55,14 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c
+SRCS    = init.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
 OBJS    = $(SRCS:.c=.o)
-ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o
+ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o svc_serial.o sha256.o
 # The core objects share these headers. Without this dependency an incremental
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h seccomp.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h
+CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h seccomp.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h svc_serial.h sha256.h
 
 all: $(BINS)
 
@@ -314,7 +314,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	sh tests/test_seccomp_live.sh
 	sh tests/test_bus_activate.sh
 	sh tests/test_reload_listen.sh
-	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
+	$(CC) $(CFLAGS) -DCARD_TIMEOUT_SECS=2 schema-user.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c -lrt -o $(TESTDIR)/card-user && sh tests/test_card_timeout.sh $(TESTDIR)/card-user
 	$(CC) $(CFLAGS) tests/test_reclaim.c -o $(TESTDIR)/reclaim && $(TESTDIR)/reclaim
 	$(CC) $(CFLAGS) tests/test_pressure_step.c -o $(TESTDIR)/pressure && $(TESTDIR)/pressure
 	$(CC) $(CFLAGS) tests/test_next_wake.c -o $(TESTDIR)/next-wake && $(TESTDIR)/next-wake
@@ -403,6 +403,8 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_kernel_ns.c ns.c caps.c -o $(TESTDIR)/kns && $(TESTDIR)/kns
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
+	$(CC) $(CFLAGS) tests/test_svc_serial.c svc_serial.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-serial && $(TESTDIR)/svc-serial
+	sh tests/test_svc_serial_keys.sh
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
@@ -420,7 +422,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cycles && $(TESTDIR)/cycles
 	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cgkill && $(TESTDIR)/cgkill
 	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o $(TESTDIR)/landlock-tcp && $(TESTDIR)/landlock-tcp
-	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/engine-conf && $(TESTDIR)/engine-conf
+	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c -lrt -o $(TESTDIR)/engine-conf && $(TESTDIR)/engine-conf
 
 # libFuzzer + ASan/UBSan over schema-dbus's untrusted-input parsers (wire header
 # + reforward round trip, SASL auth, match rules). Needs clang + compiler-rt.

@@ -150,6 +150,21 @@ int sc_count(const sc_spec_t *s) {
     return n;
 }
 
+static int nr_cmp(const void *a, const void *b) {
+    return (*(const int *)a > *(const int *)b) - (*(const int *)a < *(const int *)b);
+}
+
+int sc_nrs(const uint64_t *set, int *out) {
+    int n = 0, u = 0;
+    for (int i = 0; i < SC_NAMES_ALL; i++)
+        if ((set[i / 64] >> (i % 64)) & 1 && sc_nr[i] >= 0) out[n++] = sc_nr[i];
+    qsort(out, (size_t)n, sizeof *out, nr_cmp);
+    /* two names can share a number on one arch */
+    for (int i = 0; i < n; i++)
+        if (!u || out[u - 1] != out[i]) out[u++] = out[i];
+    return u;
+}
+
 /* "if nr == X: <block>"; the block either returns or falls through */
 static int open_if(em_t *e, int nr) {
     LD(e, NR_OFF);
