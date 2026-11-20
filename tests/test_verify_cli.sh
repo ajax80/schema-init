@@ -379,10 +379,23 @@ if [ "$(id -u)" != 0 ]; then
     has "no baseline yet" && fail "pi-nonroot-baseline: read as never established"
     chmod 700 "$T/state"
 fi
+# --check ran and gave no report (crashed, exit 2, not there): unresolved, never "not applicable"
 printf '#!/bin/sh\nexit 2\n' > "$T/pi-init"
 v
-expect 0 pi-undetermined
-has "[note] services: not applicable" || fail "pi-undetermined: note"
+expect 3 pi-exit2
+has "[UNRESOLVED] services: $T/pi-init --check on $T/cmdline.txt gave no report (exit 2)" || fail "pi-exit2: line"
+has "not applicable (the next" && fail "pi-exit2: read as not applicable"
+printf '#!/bin/sh\nkill -SEGV $$\n' > "$T/pi-init"
+v
+expect 3 pi-segv
+has "gave no report (killed by signal 11)" || fail "pi-segv: line"
+printf '#!/bin/sh\necho garbage\n' > "$T/pi-init"
+v
+expect 3 pi-noheader
+has "gave no report (exit 0, no report header)" || fail "pi-noheader: line"
+SCHEMA_VERIFY_PI_INIT="$T/pi-gone" v
+expect 3 pi-missing
+has "[UNRESOLVED] services: $T/pi-gone --check" || fail "pi-missing: line"
 mv "$T/grubenv.off" "$T/grubenv"
 export SCHEMA_VERIFY_CMDLINE_TXT="$T/no-cmdline.txt"
 unset SCHEMA_VERIFY_PI_INIT

@@ -124,8 +124,9 @@ static char *read_path(const char *path, int *err) {
 }
 
 /* stdout and stderr of argv, in full; the exit code, -1 when it didn't run, -2 when
- * there was nowhere to capture it (the child never starts: it would write into the report) */
-static int run_capture(char *const argv[], char **out, size_t *olen, char **err, size_t *elen) {
+ * there was nowhere to capture it (the child never starts: it would write into the report);
+ * wst, when given, the wait status (-1 when there is none) */
+static int run_capture(char *const argv[], char **out, size_t *olen, char **err, size_t *elen, int *wst) {
     int fo = memfd_create("schema-verify-out", MFD_CLOEXEC), fe = memfd_create("schema-verify-err", MFD_CLOEXEC);
     if (fo < 0 || fe < 0) {
         int e = errno;
@@ -137,7 +138,7 @@ static int run_capture(char *const argv[], char **out, size_t *olen, char **err,
         return -2;
     }
     pid_t p = fork();
-    int st = 0;
+    int st = -1;
     if (p == 0) {
         int nul = open("/dev/null", O_RDONLY);
         if (nul >= 0) dup2(nul, 0);
@@ -147,6 +148,7 @@ static int run_capture(char *const argv[], char **out, size_t *olen, char **err,
         _exit(127);
     }
     while (p > 0 && waitpid(p, &st, 0) < 0 && errno == EINTR) ;
+    if (wst) *wst = p > 0 ? st : -1;
     lseek(fo, 0, SEEK_SET);
     lseek(fe, 0, SEEK_SET);
     *out = slurp(fo, olen);
@@ -162,7 +164,7 @@ static int inspect_stub(ctx_t *c, const bls_entry_t *e, root_report_t *r) {
     char opts[4096], *out, *ctl;
     size_t ol, cl;
     if (entry_precheck(e, c->env, c->nenv, opts, sizeof opts, r)) return r->fail ? 1 : 3;
-    if (run_capture((char *[]){ (char *)c->o->inspect, (char *)e->id, opts, NULL }, &out, &ol, &ctl, &cl) == -2) {
+    if (run_capture((char *[]){ (char *)c->o->inspect, (char *)e->id, opts, NULL }, &out, &ol, &ctl, &cl, NULL) == -2) {
         cl = (size_t)asprintf(&ctl, "U cannot capture the inspection: memfd_create: %s\n", strerror(errno));
         ol = 0;
     }
@@ -452,26 +454,32 @@ static void services_report(ctx_t *c, char *text) {
     free(f);
 }
 
-/* the Pi's next boot: schema-init --check on cmdline.txt; check.c applies the wrapper's rule */
-/* NULL with *nocap set: the output could not be captured, which is unresolved, not "not applicable" */
-static char *pi_check(ctx_t *c, int *nocap) {
-    int e;
-    char *cl = read_path(c->o->cmdline_txt, &e), *out, *err;
+/* the Pi's next boot: schema-init --check on cmdline.txt; check.c applies the wrapper's rule.
+ * 0 with *out the report; 1 cmdline.txt unreadable (the inputs are undeterminable); 2 the
+ * output could not be captured; 3 --check ran but gave no report, why in *why */
+static int pi_check(ctx_t *c, char **out, char *why, size_t wsz) {
+    int e, st;
+    char *cl = read_path(c->o->cmdline_txt, &e), *err;
     size_t ol, el;
-    if (!cl) return NULL;
+    *out = NULL;
+    if (!cl) return 1;
     cl[strcspn(cl, "\n")] = '\0';
     int rc = run_capture((char *[]){ (char *)c->o->pi_init, "--check", "--root", "/", "--cmdline", cl, NULL },
-                         &out, &ol, &err, &el);
+                         out, &ol, &err, &el, &st);
     int re = errno;
     free(cl);
     free(err);
-    *nocap = rc == -2;
-    errno = re;
-    if ((rc != 0 && rc != 1) || strncmp(out, BASELINE_MAGIC, sizeof BASELINE_MAGIC - 1)) {
-        free(out);
-        return NULL;
+    if (rc == -2) {
+        snprintf(why, wsz, "cannot capture --check output: %s", strerror(re));
+        return 2;
     }
-    return out;
+    if ((rc == 0 || rc == 1) && !strncmp(*out, BASELINE_MAGIC, sizeof BASELINE_MAGIC - 1)) return 0;
+    if (st != -1 && WIFSIGNALED(st)) snprintf(why, wsz, "killed by signal %d", WTERMSIG(st));
+    else if (rc == -1) snprintf(why, wsz, "did not run");
+    else snprintf(why, wsz, "exit %d%s", rc, rc == 0 || rc == 1 ? ", no report header" : "");
+    free(*out);
+    *out = NULL;
+    return 3;
 }
 
 static int fstab_has(const char *fstab, const char *dir) {
@@ -681,10 +689,12 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     if (unsup) {
         emit(&c, T_NOTE, "%s", unsup_note);
     } else if (pi) {
-        int nocap = 0;
-        if ((pi_out = pi_check(&c, &nocap))) services_report(&c, pi_out);
-        else if (nocap) emit(&c, T_UNRES, "services: cannot capture --check output: %s", strerror(errno));
-        else emit(&c, T_NOTE, "services: not applicable (the next boot's inputs could not be determined)");
+        char why[300];
+        int pr = pi_check(&c, &pi_out, why, sizeof why);
+        if (!pr) services_report(&c, pi_out);
+        else if (pr == 1) emit(&c, T_NOTE, "services: not applicable (the next boot's inputs could not be determined)");
+        else if (pr == 2) emit(&c, T_UNRES, "services: %s", why);
+        else emit(&c, T_UNRES, "services: %s --check on %s gave no report (%s); not checked", o->pi_init, o->cmdline_txt, why);
     } else if (!ar && geteuid() != 0 && !o->inspect) {
         emit(&c, T_UNRES, "needs root: the next boot's services");
     } else if (!ar) {
