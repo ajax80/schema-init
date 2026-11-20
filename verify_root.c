@@ -67,17 +67,22 @@ int dev_resolve(const char *spec, const char *devdir, char *out, size_t n) {
     if (i < sizeof by / sizeof *by) {
         /* UUID= with no value would name the by-uuid directory itself */
         if (!spec[strlen(by[i].key)]) return -1;
-        /* udev's link names: anything outside this set is \xNN, so a value can't climb out with / */
-        size_t o = 0;
-        for (const unsigned char *p = (const unsigned char *)spec + strlen(by[i].key); *p; p++) {
-            if (o + 5 > sizeof name) return -1;
-            if (isalnum(*p) || strchr("#+-.:=@_", *p) || *p >= 0x80)
-                name[o++] = i == 1 ? tolower(*p) : *p;
-            else
-                o += snprintf(name + o, 5, "\\x%02x", *p);
+        /* UUID=: as written (a vfat link is upper case), then lower-cased as dracut looks it up
+         * (udev's ext4/btrfs/xfs links are lower case); PARTUUID=: the kernel ignores case */
+        for (int low = i == 1; low < 2; low++) {
+            /* udev's link names: anything outside this set is \xNN, so a value can't climb out with / */
+            size_t o = 0;
+            for (const unsigned char *p = (const unsigned char *)spec + strlen(by[i].key); *p; p++) {
+                if (o + 5 > sizeof name) return -1;
+                if (isalnum(*p) || strchr("#+-.:=@_", *p) || *p >= 0x80)
+                    name[o++] = low ? tolower(*p) : *p;
+                else
+                    o += snprintf(name + o, 5, "\\x%02x", *p);
+            }
+            name[o] = '\0';
+            if (snprintf(path, sizeof path, "%s/disk/%s/%s", devdir, by[i].dir, name) >= (int)sizeof path) return -1;
+            if (realpath(path, real) || i > 1) break;
         }
-        name[o] = '\0';
-        if (snprintf(path, sizeof path, "%s/disk/%s/%s", devdir, by[i].dir, name) >= (int)sizeof path) return -1;
     } else if (!strncmp(spec, "/dev/", 5) && spec[5]) {
         if (snprintf(path, sizeof path, "%s/%s", devdir, spec + 5) >= (int)sizeof path) return -1;
     } else if (is_majmin(spec)) {

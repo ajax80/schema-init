@@ -44,6 +44,8 @@ int main(int argc, char **argv) {
     put(p, "");
     snprintf(p, sizeof p, "%s/disk/by-uuid/PRESENT", devdir);
     assert(symlink("../../sda1", p) == 0);
+    snprintf(p, sizeof p, "%s/disk/by-uuid/0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9", devdir);
+    assert(symlink("../../sda1", p) == 0);
 
     assert(cls("UUID=A", "btrfs", "defaults") == FS_LOCAL_REQ);
     assert(cls("/dev/sdb1", "ext4", "defaults") == FS_LOCAL_REQ);
@@ -123,6 +125,11 @@ int main(int argc, char **argv) {
     put(p, "UUID=\" /x ext4 defaults 0 0\n\" /y ext4 defaults 0 0\nUUID=\"\" /z ext4 defaults 0 0\n");
     n = disk_findings(p, NULL, devdir, f, 64);
     assert(n == 3 && has(f, n, F_FAIL, "UUID=\" not present") && has(f, n, F_FAIL, "/z"));
+
+    /* an fstab UUID= in upper case names udev's lower-case link */
+    put(p, "UUID=0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9 /data ext4 defaults 0 2\n");
+    n = disk_findings(p, NULL, devdir, f, 64);
+    assert(n == 0);
 
     /* optical, loop and zram devices are no disk the boot waits on */
     n = disk_findings("/nonexistent",

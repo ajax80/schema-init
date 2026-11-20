@@ -48,6 +48,8 @@ static void setup_devdir(void) {
     link_to("by-label", "my\\x20root", "../../nvme0n1p3");
     link_to("by-uuid", "dead-beef", "../../gone");
     link_to("by-partlabel", "root", "../../nvme0n1p3");
+    link_to("by-uuid", "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9", "../../nvme0n1p3");
+    link_to("by-uuid", "ABCD-1234", "../../nvme0n1p3");
     snprintf(p, sizeof p, "%s/block/259:3", devdir);
     assert(symlink("../nvme0n1p3", p) == 0);
     setenv("SCHEMA_VERIFY_DEVDIR", devdir, 1);
@@ -67,6 +69,11 @@ static void test_dev_resolve(void) {
     /* NULL devdir takes the env override */
     assert(dev_resolve("UUID=1111-2222", NULL, out, sizeof out) == 0 && !strcmp(out, want));
 
+    /* udev lower-cases ext4/btrfs/xfs UUIDs and dracut does too before the lookup; a vfat
+     * UUID's link stays upper case, so the value as written is tried first */
+    assert(dev_resolve("UUID=0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9", devdir, out, sizeof out) == 0 && !strcmp(out, want));
+    assert(dev_resolve("UUID=ABCD-1234", devdir, out, sizeof out) == 0 && !strcmp(out, want));
+    assert(dev_resolve("UUID=abcd-1234", devdir, out, sizeof out) == -1);
     assert(dev_resolve("UUID=dead-beef", devdir, out, sizeof out) == -1);
     assert(dev_resolve("UUID=nope", devdir, out, sizeof out) == -1);
     assert(dev_resolve("UUID=", devdir, out, sizeof out) == -1);
