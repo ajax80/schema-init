@@ -192,6 +192,15 @@ has "schema-verify-baseline.start_timeout_sec=0" || fail "baseline_svc: start ti
 # after the persistent /var, so the write can't land in what it covers
 has "schema-verify-baseline.dep=mount-fstab" || fail "baseline_svc: not after mount-fstab"
 has "schema-verify-baseline.exec=/bin/sh" || fail "baseline_svc: exec not /bin/sh"
+# exit 1/3 are final answers (tmpfs, no --check, never settled): restart=always would loop
+has "schema-verify-baseline.restart=no" || fail "baseline_svc: restarts on failure"
+# bootok now runs the baseline write inside its own unit, so no 90 s oneshot default either
+for f in services/schema-bootok.svc.example distros/fedora-kde/hosts/blakbox/services/schema-bootok.svc; do
+    rm -f "$S"/*.svc; cp "$f" "$S/schema-bootok.svc"
+    check --root "$R" --cmdline ""
+    has "schema-bootok.start_timeout_sec=0" || fail "baseline_svc: $f start timeout not 0"
+done
+rm -f "$S"/*.svc; cp services/schema-verify-baseline.svc "$S/"
 check --root "$R" --cmdline "schema.hardening_default=1"
 for k in no_new_privs private_tmp protect_system protect_home; do
     has "schema-verify-baseline.$k=0	src=explicit" || fail "baseline_svc: $k not explicitly 0"
