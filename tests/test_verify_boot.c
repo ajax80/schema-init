@@ -62,6 +62,13 @@ static void test_bls(void) {
     assert(!strcmp(words[1], "SCHEMA_SVC_DIR=/etc/my services"));
     assert(check_opts(&e, why) == 0);
 
+    /* blscfg takes the first linux and options; root= only in a second options line is not booted */
+    assert(bls_parse(FX "two-options.conf", &e) == 0);
+    assert(!strcmp(e.linux_path, "/boot/vmlinuz-a") && e.extra_linux);
+    assert(!strcmp(e.options, "ro quiet") && e.extra_options);
+    assert(check_opts(&e, why) == -1);
+    assert(bls_parse(FX "normal.conf", &e) == 0 && !e.extra_linux && !e.extra_options);
+
     assert(bls_parse(FX "no-such.conf", &e) == -1);
 }
 

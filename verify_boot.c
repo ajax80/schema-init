@@ -51,8 +51,10 @@ int bls_parse(const char *path, bls_entry_t *e) {
         if (bad_seen) e->blank_before_last = 1;
         char *end = v + strlen(v);
         while (end > v && (end[-1] == ' ' || end[-1] == '\t')) *--end = '\0';
+        /* blscfg reads the first linux and options line; a second is reported, not guessed */
         if (kl == 5 && !strncmp(k, "linux", 5)) {
-            e->parse_err |= put(e->linux_path, sizeof e->linux_path, v);
+            if (e->linux_path[0]) e->extra_linux = 1;
+            else e->parse_err |= put(e->linux_path, sizeof e->linux_path, v);
         } else if (kl == 6 && !strncmp(k, "initrd", 6)) {
             for (char *t = strtok(v, " \t"); t; t = strtok(NULL, " \t")) {
                 if (*t == '$') continue; /* a GRUB variable such as $tuned_initrd, not a file */
@@ -60,9 +62,8 @@ int bls_parse(const char *path, bls_entry_t *e) {
                 e->parse_err |= put(e->initrd[e->n_initrd++], sizeof e->initrd[0], t);
             }
         } else if (kl == 7 && !strncmp(k, "options", 7)) {
-            size_t ol = strlen(e->options);
-            e->parse_err |= snprintf(e->options + ol, sizeof e->options - ol, "%s%s",
-                                     ol ? " " : "", v) >= (int)(sizeof e->options - ol);
+            if (e->options[0]) e->extra_options = 1;
+            else e->parse_err |= put(e->options, sizeof e->options, v);
         }
     }
     fclose(f);

@@ -12,6 +12,7 @@ typedef struct {
     char options[4096];
     int blank_before_last;
     int parse_err;
+    int extra_linux, extra_options; /* a second linux/options line: UNRESOLVED */
 } bls_entry_t;
 
 typedef struct { const char *actual, *normal, *fallback; int unresolved; } nextboot_t;
@@ -21,7 +22,8 @@ int bls_parse(const char *path, bls_entry_t *e);
 /* 0 ok; -1 FAIL with why */
 int karg_check(char (*args)[512], int n, char *why, size_t whysz);
 /* 0 resolved; 1 unresolved; 2 FAIL: schema_fallback_id names no entry.
- * An id that could not be resolved is NULL (fallback keeps the unknown id). */
+ * An id that could not be resolved is NULL (fallback keeps the unknown id).
+ * ents must be in blscfg's sort order: normal falls back to ents[0]. */
 int nextboot_resolve(char (*env)[2][256], int nenv, const bls_entry_t *ents, int nents, nextboot_t *nb);
 int grubcfg_live_fallback(const char *cfg_text);
 
