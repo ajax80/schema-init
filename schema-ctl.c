@@ -10,6 +10,7 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sysexits.h>
 
 #include "schema.h"
 #include "svc_dropins.h"
@@ -300,8 +301,9 @@ static void usage(FILE *out) {
         "                         boot's baseline, the boot guard's fallback, and the\n"
         "                         disks. Read-only; root for the full report. Exit 0\n"
         "                         pass, 1 FAIL, 2 unaccepted CHANGE or lost baseline,\n"
-        "                         3 unresolved. --quiet: findings and the result only;\n"
-        "                         --accept: accept the current CHANGE set (no FAIL)\n"
+        "                         3 unresolved, 64 usage. --quiet: findings and the\n"
+        "                         result only; --accept: accept the current CHANGE\n"
+        "                         set (refused while anything FAILs)\n"
         "  verify --write-baseline [--wait-settled <secs>]\n"
         "                         save what this boot runs (the running binary's\n"
         "                         --check) as the baseline the next boot is diffed\n"
@@ -526,7 +528,11 @@ static int reexecd(const char *exe) {
 
 static int cmd_write_baseline(long wait_s) {
     char exe[PATH_MAX] = "", cmdline[4096] = "";
+#ifdef SCHEMA_VERIFY_TESTHOOKS
     const char *dir = getenv("SCHEMA_VERIFY_DIR");
+#else
+    const char *dir = NULL;
+#endif
     int fd, p[2], status;
     size_t len;
     char *out;
@@ -665,7 +671,8 @@ int main(int argc, char **argv) {
         if (bad) {
             fprintf(stderr, "usage: schema-ctl verify [--quiet] [--accept]\n"
                             "       schema-ctl verify --write-baseline [--wait-settled <secs>]\n");
-            return 1;
+            /* not 1: a gate reads 1 as a FAIL */
+            return EX_USAGE;
         }
         verify_opts_env(&vo);
         return verify_run(&vo, stdout);

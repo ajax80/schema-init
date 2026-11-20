@@ -50,7 +50,9 @@ int dev_resolve(const char *spec, const char *devdir, char *out, size_t n) {
         { "LABEL=", "by-label" }, { "PARTLABEL=", "by-partlabel" },
     };
     char path[PATH_MAX], real[PATH_MAX], name[1024];
+#ifdef SCHEMA_VERIFY_TESTHOOKS
     if (!devdir) devdir = getenv("SCHEMA_VERIFY_DEVDIR");
+#endif
     if (!devdir || !*devdir) devdir = "/dev";
 
     size_t i;

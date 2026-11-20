@@ -4,14 +4,17 @@
 # emits root_inspect's records and a canned --check report.
 set -u
 cd "$(dirname "$0")/.."
-[ -x ./schema-ctl ] || { echo "FAIL verify_cli: no ./schema-ctl"; exit 1; }
 TD=${TESTDIR:-$PWD/build/test}
+# the SCHEMA_VERIFY_* overrides exist only in a -DSCHEMA_VERIFY_TESTHOOKS build
+CTL=${1:-$TD/schema-ctl-testhooks}
+[ -x "$CTL" ] || { echo "FAIL verify_cli: no $CTL"; exit 1; }
+[ -x ./schema-ctl ] || { echo "FAIL verify_cli: no ./schema-ctl"; exit 1; }
 mkdir -p "$TD"
 # under TESTDIR, not /tmp: the state dir refuses a tmpfs
 T=$TD/vc
 rm -rf "$T"
 mkdir -p "$T"
-trap '[ -n "${KEEP:-}" ] || rm -rf "$T"' EXIT
+trap 'chmod -R u+rwx "$T" 2>/dev/null; [ -n "${KEEP:-}" ] || rm -rf "$T"' EXIT
 umask 022
 fail() { echo "FAIL verify_cli: $*"; [ -f "$T/out" ] && sed 's/^/  | /' "$T/out"; exit 1; }
 
@@ -59,7 +62,7 @@ export SCHEMA_VERIFY_DIR="$T/state" SCHEMA_VERIFY_GRUBENV="$T/grubenv" SCHEMA_VE
     SCHEMA_VERIFY_DEVDIR="$T/dev" SCHEMA_VERIFY_ESP="$T/esp" SCHEMA_VERIFY_INSPECT="$T/inspect" \
     SCHEMA_VERIFY_CMDLINE_TXT="$T/no-cmdline.txt" VFX="$T/fx"
 
-v() { ./schema-ctl verify "$@" > "$T/out" 2>&1; rc=$?; }
+v() { "$CTL" verify "$@" > "$T/out" 2>&1; rc=$?; }
 has() { grep -qF -- "$1" "$T/out"; }
 expect() { [ "$rc" -eq "$1" ] || fail "$2: exit $rc, want $1"; }
 
@@ -193,6 +196,7 @@ v
 expect 0 no-guard
 has "[note] boot guard not in use" || fail "no-guard: note"
 mv "$T/bls-off/"* "$T/bls/"
+rmdir "$T/bls-off"
 cp tests/fixtures/verify/boot/grub-real.cfg "$T/grub.cfg"
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 
@@ -268,6 +272,15 @@ has "[note] boot entries: not applicable" || fail "pi: boot note"
 has "[PASS] services match the baseline" || fail "pi: services"
 grep -qF -- "--check --root / --cmdline console=tty1 root=PARTUUID=$PU rootwait init=/usr/sbin/schema-init-pi" "$T/pi-args" ||
     fail "pi: --check args: $(cat "$T/pi-args")"
+if [ "$(id -u)" != 0 ]; then
+    # unprivileged, a 0700 state dir hides the baseline: that is not "no baseline yet"
+    chmod 000 "$T/state"
+    v
+    expect 3 pi-nonroot-baseline
+    has "[UNRESOLVED] needs root: baseline" || fail "pi-nonroot-baseline: line"
+    has "no baseline yet" && fail "pi-nonroot-baseline: read as never established"
+    chmod 700 "$T/state"
+fi
 printf '#!/bin/sh\nexit 2\n' > "$T/pi-init"
 v
 expect 0 pi-undetermined
@@ -276,14 +289,74 @@ mv "$T/grubenv.off" "$T/grubenv"
 export SCHEMA_VERIFY_CMDLINE_TXT="$T/no-cmdline.txt"
 unset SCHEMA_VERIFY_PI_INIT
 
-# usage
-./schema-ctl verify --bogus > "$T/out" 2>&1 && fail "usage: --bogus accepted"
+# usage errors are 64, never 1: a gate must not read them as a FAIL
+v --bogus
+expect 64 usage
+v --write-baseline --wait-settled x
+expect 64 usage-wait
+
+# saved_entry unset: GRUB boots the first menu entry, the newest kernel
+mkdir "$T/bls2"
+for k in 7.2.9 7.2.11 7.2.10; do
+    printf 'title k\nlinux /root/boot/vmlinuz-%s\noptions root=PARTUUID=%s ro rootflags=subvol=root init=/sbin/schema-init\n' \
+        "$k" "$PU" > "$T/bls2/m-$k.conf"
+done
+printf 'blsdir=/x\n' > "$T/grubenv2"
+SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
+has "[PASS] actual next boot m-7.2.11:" || fail "newest: actual is not m-7.2.11"
+
+# schema-good* entries alone mean the guard is in use
+cp tests/fixtures/verify/boot/grub-comment.cfg "$T/grub.cfg"
+grep -v schema_fallback "$T/grub.cfg" > "$T/g2" && mv "$T/g2" "$T/grub.cfg"
+printf 'saved_entry=m-7.2.11\n' > "$T/grubenv"
+mkdir "$T/bls-off"
+mv "$T/bls/schema-snap-"* "$T/bls-off/"
+entry schema-good-20260915 schema-good-20260915
+v
+expect 1 good-guard
+has "[FAIL] 09_schema_fallback is not live" || fail "good-guard: guard not judged"
+rm "$T/bls/schema-good-20260915.conf"
+mv "$T/bls-off/"* "$T/bls/"
+rmdir "$T/bls-off"
+cp tests/fixtures/verify/boot/grub-real.cfg "$T/grub.cfg"
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
+
+# more entries than verify reads: unresolved, not a silent cut
+mkdir "$T/bls3"
+cp "$T/bls/"*.conf "$T/bls3/"
+i=0
+while [ $i -lt 70 ]; do printf 'title x\nlinux /x\noptions root=PARTUUID=%s\n' "$PU" > "$T/bls3/z-$i.conf"; i=$((i + 1)); done
+SCHEMA_VERIFY_BLS_DIR="$T/bls3" v
+has "[UNRESOLVED] too many boot entries" || fail "many: line"
+
+if [ "$(id -u)" != 0 ]; then
+    # an entry file that can't be read: a spare is a WARN; the guard's fallback is unresolved, not "no entry"
+    chmod 000 "$T/bls/schema-snap-20261011-200415-post-update.conf"
+    v
+    has "[WARN] boot entry $T/bls/schema-snap-20261011-200415-post-update.conf could not be read" || fail "unreadable-spare: line"
+    chmod 644 "$T/bls/schema-snap-20261011-200415-post-update.conf"
+    chmod 000 "$T/bls/$F.conf"
+    v
+    expect 3 unreadable-fallback
+    has "[UNRESOLVED] boot entry $T/bls/$F.conf could not be read" || fail "unreadable-fallback: line"
+    has "names no boot entry" && fail "unreadable-fallback: called missing"
+    chmod 644 "$T/bls/$F.conf"
+fi
+
+# the shipped binary has no hooks: every SCHEMA_VERIFY_* path above is ignored
+./schema-ctl verify > "$T/out" 2>&1
+grep -qF "$T" "$T/out" && fail "shipped schema-ctl used a SCHEMA_VERIFY_* path"
+printf 'UUID=hook-only-0000 /hook btrfs defaults 0 0\n' > "$T/fstab-hook"
+SCHEMA_VERIFY_FSTAB="$T/fstab-hook" ./schema-ctl verify > "$T/out" 2>&1
+grep -q "hook-only" "$T/out" && fail "shipped schema-ctl read SCHEMA_VERIFY_FSTAB"
+SCHEMA_VERIFY_FSTAB="$T/fstab-hook" "$CTL" verify > "$T/out" 2>&1
+grep -q "hook-only" "$T/out" || fail "testhooks build ignored SCHEMA_VERIFY_FSTAB"
 
 # unprivileged with the real paths: unresolved, exit 3, no crash
 if [ "$(id -u)" != 0 ]; then
     env -u SCHEMA_VERIFY_DIR -u SCHEMA_VERIFY_GRUBENV -u SCHEMA_VERIFY_BLS_DIR -u SCHEMA_VERIFY_GRUBCFG \
         -u SCHEMA_VERIFY_FSTAB -u SCHEMA_VERIFY_KMSG -u SCHEMA_VERIFY_DEVDIR -u SCHEMA_VERIFY_ESP \
-        -u SCHEMA_VERIFY_INSPECT -u SCHEMA_VERIFY_CMDLINE_TXT ./schema-ctl verify > "$T/out" 2>&1
+        -u SCHEMA_VERIFY_INSPECT -u SCHEMA_VERIFY_CMDLINE_TXT "$CTL" verify > "$T/out" 2>&1
     rc=$?
     expect 3 non-root
     has "[UNRESOLVED]" || fail "non-root: no UNRESOLVED"

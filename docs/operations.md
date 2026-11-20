@@ -64,6 +64,7 @@ The last line sums it up, e.g. `Result: 0 fail, 1 change (not accepted), 2 warn`
 | 1 | a FAIL |
 | 2 | no FAIL, but an unaccepted CHANGE, or a lost baseline |
 | 3 | nothing worse than UNRESOLVED |
+| 64 | usage error (a bad flag); no check ran |
 
 **UNRESOLVED** means verify could not find something out: which entry boots next, a root it could not mount, an `init=` too old to have `--check` (the first upgrade onto this version). It never reports PASS for an input it did not read. Run as a normal user, every section that needs root says `[UNRESOLVED] needs root`.
 

@@ -419,12 +419,14 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_verify_baseline.c verify_baseline.c sha256.c -o $(TESTDIR)/verify-baseline && $(TESTDIR)/verify-baseline $(TESTDIR)
 	$(CC) $(CFLAGS) tests/test_verify_boot.c verify_boot.c karg.c -o $(TESTDIR)/verify-boot && $(TESTDIR)/verify-boot $(TESTDIR)
 	rm -rf $(TESTDIR)/vr-*
-	$(CC) $(CFLAGS) tests/test_verify_root.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-root && $(TESTDIR)/verify-root $(TESTDIR)
+	$(CC) $(CFLAGS) -DSCHEMA_VERIFY_TESTHOOKS tests/test_verify_root.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-root && $(TESTDIR)/verify-root $(TESTDIR)
 	rm -rf $(TESTDIR)/vk-*
-	$(CC) $(CFLAGS) tests/test_verify_disk.c verify_disk.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-disk && $(TESTDIR)/verify-disk $(TESTDIR)
+	$(CC) $(CFLAGS) -DSCHEMA_VERIFY_TESTHOOKS tests/test_verify_disk.c verify_disk.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-disk && $(TESTDIR)/verify-disk $(TESTDIR)
 	rm -rf $(TESTDIR)/vd-*
 	$(CC) $(CFLAGS) tests/test_verify_diff.c verify_diff.c verify_baseline.c svc_keys.c sha256.c -o $(TESTDIR)/verify-diff && $(TESTDIR)/verify-diff $(TESTDIR)
-	sh tests/test_verify_cli.sh
+	$(CC) $(CFLAGS) $(LDFLAGS) -DSCHEMA_VERIFY_TESTHOOKS -o $(TESTDIR)/schema-ctl-testhooks $(SCHEMA_CTL_SRCS) -lrt
+	$(CC) $(CFLAGS) tests/test_verify.c $(filter-out schema-ctl.c,$(SCHEMA_CTL_SRCS)) -o $(TESTDIR)/verify-unit && $(TESTDIR)/verify-unit
+	sh tests/test_verify_cli.sh $(TESTDIR)/schema-ctl-testhooks
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey

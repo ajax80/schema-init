@@ -23,7 +23,7 @@ typedef struct {
     int bootok_exec; /* schema-bootok's exec= in the target: 0 not seen, 1 executable, 2 not */
 } root_report_t;
 
-/* devdir NULL: $SCHEMA_VERIFY_DEVDIR, else /dev. 0 when spec names a present node. */
+/* devdir NULL: /dev ($SCHEMA_VERIFY_DEVDIR in a -DSCHEMA_VERIFY_TESTHOOKS build). 0 when spec names a present node. */
 int dev_resolve(const char *spec, const char *devdir, char *out, size_t n);
 /* BLS paths are relative to GRUB's root: the btrfs top level, or a separate /boot */
 int bls_path_map(const char *grub_root_mnt, const char *bls_path, char *out, size_t n);

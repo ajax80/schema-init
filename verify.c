@@ -38,6 +38,8 @@ typedef struct {
     const verify_opts_t *o;
     char hash[65];
     int changes; /* diff_baseline's CHANGEs: the acceptable kind */
+    char rej[4][256]; /* grubenv-named entries whose file could not be read */
+    int nrej;
 } ctx_t;
 
 static void emit(ctx_t *c, tag_t t, const char *fmt, ...) {
@@ -79,7 +81,12 @@ void verify_opts_env(verify_opts_t *o) {
 #undef F
     };
     for (size_t i = 0; i < sizeof m / sizeof *m; i++) {
+        /* tests only: a shipped schema-ctl, run as root by the gates, takes no paths from env */
+#ifdef SCHEMA_VERIFY_TESTHOOKS
         const char *v = getenv(m[i].var);
+#else
+        const char *v = NULL;
+#endif
         *(const char **)((char *)o + m[i].off) = v && *v ? v : m[i].def;
     }
     if (!o->cmdline_txt)
@@ -112,9 +119,19 @@ static char *read_path(const char *path, int *err) {
     return b;
 }
 
-/* stdout and stderr of argv, in full; the exit code, -1 when it didn't run */
+/* stdout and stderr of argv, in full; the exit code, -1 when it didn't run, -2 when
+ * there was nowhere to capture it (the child never starts: it would write into the report) */
 static int run_capture(char *const argv[], char **out, size_t *olen, char **err, size_t *elen) {
     int fo = memfd_create("schema-verify-out", MFD_CLOEXEC), fe = memfd_create("schema-verify-err", MFD_CLOEXEC);
+    if (fo < 0 || fe < 0) {
+        int e = errno;
+        if (fo >= 0) close(fo);
+        if (fe >= 0) close(fe);
+        *out = *err = NULL;
+        *olen = *elen = 0;
+        errno = e;
+        return -2;
+    }
     pid_t p = fork();
     int st = 0;
     if (p == 0) {
@@ -141,7 +158,10 @@ static int inspect_stub(ctx_t *c, const bls_entry_t *e, root_report_t *r) {
     char opts[4096], *out, *ctl;
     size_t ol, cl;
     if (entry_precheck(e, c->env, c->nenv, opts, sizeof opts, r)) return r->fail ? 1 : 3;
-    run_capture((char *[]){ (char *)c->o->inspect, (char *)e->id, opts, NULL }, &out, &ol, &ctl, &cl);
+    if (run_capture((char *[]){ (char *)c->o->inspect, (char *)e->id, opts, NULL }, &out, &ol, &ctl, &cl) == -2) {
+        cl = (size_t)asprintf(&ctl, "U cannot capture the inspection: memfd_create: %s\n", strerror(errno));
+        ol = 0;
+    }
     root_report_fill(ctl, cl, out, ol, r);
     free(ctl);
     return r->fail ? 1 : r->nunres ? 3 : 0;
@@ -188,13 +208,13 @@ static void report_entry(ctx_t *c, const char *role, int i, tag_t sev, int errs)
 }
 
 /* rpmvercmp's rule, enough for BLS file names */
-static int vercmp(const char *a, const char *b) {
+int bls_vercmp(const char *a, const char *b) {
     while (*a || *b) {
         while (*a && !isalnum((unsigned char)*a)) a++;
         while (*b && !isalnum((unsigned char)*b)) b++;
         if (!*a || !*b) break;
         const char *sa = a, *sb = b;
-        int num = isdigit((unsigned char)*a);
+        int num = !!isdigit((unsigned char)*a); /* isdigit gives 2048, not 1 */
         if (num != !!isdigit((unsigned char)*b)) return num ? 1 : -1;
         if (num) {
             while (*sa == '0') sa++;
@@ -216,7 +236,11 @@ static int vercmp(const char *a, const char *b) {
 /* blscfg lists entries newest first; only an unset saved_entry depends on it. By file
  * name: Fedora's blscfg compares the version key first, which names the same kernel. */
 static int ent_cmp(const void *x, const void *y) {
-    return vercmp(((const bls_entry_t *)y)->id, ((const bls_entry_t *)x)->id);
+    return bls_vercmp(((const bls_entry_t *)y)->id, ((const bls_entry_t *)x)->id);
+}
+
+void bls_sort(bls_entry_t *ents, int n) {
+    qsort(ents, (size_t)n, sizeof *ents, ent_cmp);
 }
 
 static int conf_file(const struct dirent *d) {
@@ -261,9 +285,23 @@ static int load_entries(ctx_t *c) {
         unreadable(c, "boot entries", dir, errno);
         return -1;
     }
+    if (nd > MAXENTS) emit(c, T_UNRES, "too many boot entries in %s (%d, %d read)", dir, nd, MAXENTS);
     for (int i = 0; i < nd; i++) {
         snprintf(p, sizeof p, "%s/%s", dir, d[i]->d_name);
-        if (c->nents < MAXENTS && !bls_parse(p, &c->ents[c->nents])) c->nents++;
+        if (c->nents < MAXENTS && !bls_parse(p, &c->ents[c->nents])) {
+            c->nents++;
+        } else if (c->nents < MAXENTS) {
+            /* the guard's own entry unreadable is unknown, not "names no entry" */
+            int e = errno, key = 0;
+            size_t il = strlen(d[i]->d_name) - 5;
+            static const char *const k[] = { "saved_entry", "next_entry", "schema_fallback_id" };
+            for (size_t j = 0; j < 3; j++) {
+                const char *v = env_get(c, k[j]);
+                key |= v && strlen(v) == il && !strncmp(v, d[i]->d_name, il);
+            }
+            emit(c, key ? T_UNRES : T_WARN, "boot entry %s could not be read: %s", p, strerror(e));
+            if (key && c->nrej < 4) snprintf(c->rej[c->nrej++], sizeof c->rej[0], "%.*s", (int)il, d[i]->d_name);
+        }
         free(d[i]);
     }
     free(d);
@@ -271,7 +309,7 @@ static int load_entries(ctx_t *c) {
         emit(c, T_UNRES, "no boot entries in %s", dir);
         return -1;
     }
-    qsort(c->ents, (size_t)c->nents, sizeof *c->ents, ent_cmp);
+    bls_sort(c->ents, c->nents);
     return 0;
 }
 
@@ -290,6 +328,8 @@ static void services_report(ctx_t *c, char *text) {
     }
     int bs = baseline_state(c->o->state_dir, &base), n = -1, max = 256;
     finding_t *f = NULL;
+    /* the 0700 state dir hides the marker too: unprivileged, that is not "never established" */
+    if (bs == BASE_NEVER && geteuid() != 0 && access(c->o->state_dir, X_OK) && errno == EACCES) bs = -1;
     if (bs == BASE_OK) {
         do {
             max = n > max ? n : max;
@@ -302,7 +342,9 @@ static void services_report(ctx_t *c, char *text) {
         /* without a baseline every error: line is the next boot's own */
         for (char *p = text; (p = strstr(p, "\nerror: ")); p++)
             emit(c, T_FAIL, "%.*s", (int)strcspn(p + 8, "\n"), p + 8);
-        if (bs == BASE_NEVER)
+        if (bs < 0)
+            emit(c, T_UNRES, "needs root: baseline %s", c->o->state_dir);
+        else if (bs == BASE_NEVER)
             emit(c, T_WARN, "no baseline yet; the first good boot writes one");
         else
             emit(c, T_LOST, "baseline lost: %s/established is there but the baseline is missing or unreadable; "
@@ -322,7 +364,8 @@ static void services_report(ctx_t *c, char *text) {
 }
 
 /* the Pi's next boot: schema-init --check on cmdline.txt; check.c applies the wrapper's rule */
-static char *pi_check(ctx_t *c) {
+/* NULL with *nocap set: the output could not be captured, which is unresolved, not "not applicable" */
+static char *pi_check(ctx_t *c, int *nocap) {
     int e;
     char *cl = read_path(c->o->cmdline_txt, &e), *out, *err;
     size_t ol, el;
@@ -330,8 +373,11 @@ static char *pi_check(ctx_t *c) {
     cl[strcspn(cl, "\n")] = '\0';
     int rc = run_capture((char *[]){ (char *)c->o->pi_init, "--check", "--root", "/", "--cmdline", cl, NULL },
                          &out, &ol, &err, &el);
+    int re = errno;
     free(cl);
     free(err);
+    *nocap = rc == -2;
+    errno = re;
     if ((rc != 0 && rc != 1) || strncmp(out, BASELINE_MAGIC, sizeof BASELINE_MAGIC - 1)) {
         free(out);
         return NULL;
@@ -413,17 +459,21 @@ static void bootok_check(ctx_t *c, root_report_t *r) {
 static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *act) {
     int e = 0, guard = env_get(c, "schema_fallback_id") || env_get(c, "boot_counter");
     char *cfg = read_path(c->o->grubcfg, &e);
-    for (int i = 0; i < c->nents; i++) guard |= !strncmp(c->ents[i].id, "schema-snap-", 12);
+    for (int i = 0; i < c->nents; i++)
+        guard |= !strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11);
     guard |= cfg && strstr(cfg, "schema_fallback_id");
     /* a box that never used the guard has no way back to judge; arm's own gate runs this
      * after a snapshot exists, when it does */
     if (!guard) {
-        emit(c, T_NOTE, "boot guard not in use (no schema_fallback_id, boot_counter or schema-snap-* entry); not checked");
+        emit(c, T_NOTE, "boot guard not in use (no schema_fallback_id, boot_counter, schema-snap-* or schema-good* entry); not checked");
         free(cfg);
         return;
     }
     int fb = ent_index(c, nb->fallback);
-    if (nbrc == 2) emit(c, T_FAIL, "schema_fallback_id=%s names no boot entry", nb->fallback);
+    int rej = 0;
+    for (int i = 0; i < c->nrej; i++) rej |= !strcmp(c->rej[i], nb->fallback);
+    if (nbrc == 2 && rej) ;
+    else if (nbrc == 2) emit(c, T_FAIL, "schema_fallback_id=%s names no boot entry", nb->fallback);
     else if (fb < 0) emit(c, T_FAIL, "no schema-snap-* entry for the guard to fall back to");
     else report_entry(c, "guard fallback", fb, T_FAIL, 1);
     for (int i = 0; i < c->nents; i++)
@@ -514,7 +564,9 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     emit(&c, T_HEAD, "Services");
     root_report_t *ar = act >= 0 ? inspect(&c, act) : NULL;
     if (pi) {
-        if ((pi_out = pi_check(&c))) services_report(&c, pi_out);
+        int nocap = 0;
+        if ((pi_out = pi_check(&c, &nocap))) services_report(&c, pi_out);
+        else if (nocap) emit(&c, T_UNRES, "services: cannot capture --check output: %s", strerror(errno));
         else emit(&c, T_NOTE, "services: not applicable (the next boot's inputs could not be determined)");
     } else if (!ar && geteuid() != 0 && !o->inspect) {
         emit(&c, T_UNRES, "needs root: the next boot's services");
