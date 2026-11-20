@@ -43,6 +43,8 @@ static void chips(void) {
        "\033[31m┣━■\033[0m \033[1;37ma                \033[0m \033[30;41m KILLED  \033[0m  \033[90m+0.00s\033[0m\n");
     EQ(line("a", CHIP_STUCK, 0, "", 0, 0, 1),
        "\033[31m┣━■\033[0m \033[1;37ma                \033[0m \033[30;41m STUCK   \033[0m  \033[90m+0.00s\033[0m\n");
+    EQ(line("a", CHIP_FAILED, 0, "reload-fail", 0, 0, 1),
+       "\033[33m┣━▲\033[0m \033[1;37ma                \033[0m \033[30;43m FAILED  \033[0m  \033[33mreload-fail\033[0m\n");
     EQ(line("a", CHIP_TIMER, 0, "", 0, 0, 1),
        "\033[36m┣━◆\033[0m \033[1;37ma                \033[0m \033[30;46m TIMER   \033[0m  \033[90m+0.00s\033[0m\n");
 }
@@ -107,7 +109,7 @@ static void name_widths(void) {
 
 static void ascii_only(void) {
     static const rail_chip_t all[] = { CHIP_ONLINE, CHIP_PERFECT, CHIP_DONE, CHIP_SPAWN, CHIP_WAITING, CHIP_RETRY,
-                                       CHIP_DORMANT, CHIP_CUT, CHIP_STOPPED, CHIP_EXITED, CHIP_KILLED, CHIP_STUCK, CHIP_TIMER };
+                                       CHIP_DORMANT, CHIP_CUT, CHIP_STOPPED, CHIP_EXITED, CHIP_KILLED, CHIP_STUCK, CHIP_TIMER, CHIP_FAILED };
     char out[8][1024];
     rail_counts_t c = { 1, 1, 1, 1, 1 };
     for (size_t i = 0; i < sizeof all / sizeof *all; i++)
