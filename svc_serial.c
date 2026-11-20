@@ -111,6 +111,14 @@ static void add_mode(lines_t *L, const service_t *s, const char *key, int set, u
     add_raw(L, s, key, set ? t : "-", NULL);
 }
 
+/* an out-of-range value is written as ?N, never as some valid name: a new
+ * enum value must show as a change */
+static void add_enum(lines_t *L, const service_t *s, const char *key, const char *const *names, int n, int v) {
+    char t[16];
+    snprintf(t, sizeof t, "?%d", v);
+    add_raw(L, s, key, v >= 0 && v < n && names[v] ? names[v] : t, NULL);
+}
+
 static void em_exec(lines_t *L, const service_t *s) {
     int n = 0;
     while (n < MAX_ARGV && s->argv[n]) n++;
@@ -148,12 +156,11 @@ static void em_env(lines_t *L, const service_t *s) {
 }
 
 static void em_fs(lines_t *L, const service_t *s) {
-    static const char *const dk[EXEC_DIR_KINDS] = { "runtime_dir", "state_dir", "cache_dir", "logs_dir" };
     char key[32];
     add_str(L, s, "working_dir", s->working_dir);
     for (int k = 0; k < EXEC_DIR_KINDS; k++) {
-        add_list(L, s, dk[k], s->exec_dir[k], s->exec_dir_count[k]);
-        snprintf(key, sizeof key, "%s_mode", dk[k]);
+        add_list(L, s, service_exec_dir_key[k], s->exec_dir[k], s->exec_dir_count[k]);
+        snprintf(key, sizeof key, "%s_mode", service_exec_dir_key[k]);
         add_mode(L, s, key, (s->exec_dir_mode_set >> k) & 1, s->exec_dir_mode[k]);
     }
     add_list(L, s, "rw_path", s->rw_path, s->rw_path_count);
@@ -161,11 +168,13 @@ static void em_fs(lines_t *L, const service_t *s) {
 }
 
 static void em_hard(lines_t *L, const service_t *s) {
-    char t[8];
+    char t[8], ps[8];
+    snprintf(ps, sizeof ps, "?%d", s->ns_protect_system);
     add_raw(L, s, "no_new_privs", (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", src_of(s, HARD_NNP));
     snprintf(t, sizeof t, "%d", s->ns_private_tmp);
     add_raw(L, s, "private_tmp", t, src_of(s, HARD_PT));
-    add_raw(L, s, "protect_system", svc_protect_system_name(s->ns_protect_system), src_of(s, HARD_PS));
+    add_raw(L, s, "protect_system", s->ns_protect_system < 3 ? svc_protect_system_name(s->ns_protect_system) : ps,
+            src_of(s, HARD_PS));
     snprintf(t, sizeof t, "%d", s->ns_protect_home);
     add_raw(L, s, "protect_home", t, src_of(s, HARD_PH));
     add_raw(L, s, "syscall_deny", svc_sc_deny_label(s), src_of(s, HARD_SD));
@@ -208,7 +217,7 @@ static void em_sc(lines_t *L, const service_t *s) {
     static const char *const mode[] = { "none", "allow", "deny" };
     char h[65];
     sb_t b = { 0 };
-    add_raw(L, s, "sc.mode", mode[s->sc.mode < 3 ? s->sc.mode : 0], NULL);
+    add_enum(L, s, "sc.mode", mode, 3, s->sc.mode);
     add_int(L, s, "sc.count", sc_hash(s->sc.set, h));
     add_raw(L, s, "sc.hash", h, NULL);
     for (int k = 0; k < s->sc.n_err && k < SC_MAX_ERRS; k++) {
@@ -267,14 +276,15 @@ static void em_lifecycle(lines_t *L, const service_t *s) {
     static const char *const km[] = { "default", "control-group", "mixed", "process" };
     sb_t b = { 0 };
     /* restart=no and no_restart=1 are both SVC_NO_RESTART */
-    add_raw(L, s, "restart", (s->flags & SVC_NO_RESTART) ? "no" : pol[s->restart_policy < 7 ? s->restart_policy : 0], NULL);
+    if (s->flags & SVC_NO_RESTART) add_raw(L, s, "restart", "no", NULL);
+    else add_enum(L, s, "restart", pol, 7, s->restart_policy);
     status_list(&b, s->success_codes, s->success_sigs);
     add_sb(L, s, "success_exit_status", &b);
     status_list(&b, s->prevent_codes, s->prevent_sigs);
     add_sb(L, s, "restart_prevent_exit_status", &b);
     add_int(L, s, "restart_sec", s->restart_sec);
     add_int(L, s, "max_restarts", s->max_restarts);
-    add_raw(L, s, "kill_mode", km[s->kill_mode < 4 ? s->kill_mode : 0], NULL);
+    add_enum(L, s, "kill_mode", km, 4, s->kill_mode);
     add_int(L, s, "kill_signal", s->kill_signal);
     add_int(L, s, "final_kill_signal", s->final_kill_signal);
     add_int(L, s, "stop_timeout_sec", s->stop_timeout_sec);
@@ -325,9 +335,9 @@ static void em_resources(lines_t *L, const service_t *s) {
     static const char *const prio[] = { "peripheral", "standard", "critical" };
     static const char *const part[] = { "member", "root", "isolated" };
     static const char *const ioc[] = { "none", "realtime", "best-effort", "idle" };
-    static const char *const pol[] = { "other", "fifo", "rr", "batch", "?", "idle" };
+    static const char *const pol[] = { "other", "fifo", "rr", "batch", NULL, "idle" };
     char t[16];
-    add_raw(L, s, "priority", prio[s->priority <= PRIO_CRITICAL ? s->priority : PRIO_STANDARD], NULL);
+    add_enum(L, s, "priority", prio, 3, (int)s->priority);
     add_int(L, s, "cpu_limit", s->cpu_limit_pct);
     add_int(L, s, "mem_limit", s->mem_limit_mb);
     add_int(L, s, "mem_low", s->mem_low_mb);
@@ -337,42 +347,34 @@ static void em_resources(lines_t *L, const service_t *s) {
     add_int(L, s, "pids_max", s->pids_max);
     add_int(L, s, "cpu_weight", s->cpu_weight);
     add_str(L, s, "cpuset", s->cpuset);
-    add_raw(L, s, "cpuset_partition", part[s->cpuset_partition >= 0 && s->cpuset_partition < 3 ? s->cpuset_partition : 0], NULL);
+    add_enum(L, s, "cpuset_partition", part, 3, s->cpuset_partition);
     add_int(L, s, "allowed_slot_min", s->allowed_slot_min);
     add_int(L, s, "allowed_slot_max", s->allowed_slot_max);
     snprintf(t, sizeof t, "%d", s->oom_score_adj);
     add_raw(L, s, "oom_score_adj", s->oom_adj_set ? t : "-", NULL);
     snprintf(t, sizeof t, "%d", s->nice_val);
     add_raw(L, s, "nice", s->nice_set ? t : "-", NULL);
-    add_raw(L, s, "io_class", s->io_class >= 0 ? ioc[s->io_class & 3] : "-", NULL);
+    if (s->io_class < 0) add_raw(L, s, "io_class", "-", NULL);
+    else add_enum(L, s, "io_class", ioc, 4, s->io_class);
     snprintf(t, sizeof t, "%d", s->io_prio);
     add_raw(L, s, "io_priority", s->io_prio >= 0 ? t : "-", NULL);
-    add_raw(L, s, "sched_policy", s->sched_policy >= 0 && s->sched_policy < 6 ? pol[s->sched_policy] : "-", NULL);
+    if (s->sched_policy < 0) add_raw(L, s, "sched_policy", "-", NULL);
+    else add_enum(L, s, "sched_policy", pol, 6, s->sched_policy);
     add_int(L, s, "sched_priority", s->sched_prio);
 }
 
 static void em_rlimits(lines_t *L, const service_t *s) {
-    static const struct { const char *k; int res; } rk[] = {
-        { "limit_cpu", RLIMIT_CPU },         { "limit_fsize", RLIMIT_FSIZE },
-        { "limit_data", RLIMIT_DATA },       { "limit_stack", RLIMIT_STACK },
-        { "limit_core", RLIMIT_CORE },       { "limit_rss", RLIMIT_RSS },
-        { "limit_nofile", RLIMIT_NOFILE },   { "limit_as", RLIMIT_AS },
-        { "limit_nproc", RLIMIT_NPROC },     { "limit_memlock", RLIMIT_MEMLOCK },
-        { "limit_locks", RLIMIT_LOCKS },     { "limit_sigpending", RLIMIT_SIGPENDING },
-        { "limit_msgqueue", RLIMIT_MSGQUEUE }, { "limit_nice", RLIMIT_NICE },
-        { "limit_rtprio", RLIMIT_RTPRIO },   { "limit_rttime", RLIMIT_RTTIME },
-    };
-    for (size_t i = 0; i < sizeof rk / sizeof *rk; i++) {
+    for (int i = 0; i < SERVICE_RLIM_KEYS; i++) {
         char t[64] = "-", c[24], m[24];
         for (int j = 0; j < s->rlim_count && j < 16; j++) {
-            if (s->rlim[j].res != rk[i].res) continue;
+            if (s->rlim[j].res != service_rlim_keys[i].res) continue;
             if (s->rlim[j].cur == RLIM_INFINITY) snprintf(c, sizeof c, "infinity");
             else snprintf(c, sizeof c, "%llu", (unsigned long long)s->rlim[j].cur);
             if (s->rlim[j].max == RLIM_INFINITY) snprintf(m, sizeof m, "infinity");
             else snprintf(m, sizeof m, "%llu", (unsigned long long)s->rlim[j].max);
             snprintf(t, sizeof t, "%s:%s", c, m);
         }
-        add_raw(L, s, rk[i].k, t, NULL);
+        add_raw(L, s, service_rlim_keys[i].key, t, NULL);
     }
 }
 

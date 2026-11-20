@@ -94,6 +94,25 @@ static void test_escape(void) {
     printf("ok test_escape\n");
 }
 
+static void test_enum_out_of_range(void) {
+    static service_t a;
+    char l[512];
+    load("x.svc", "name=x\nexec=/usr/bin/true\nlimit_nofile=1024:4096\nstate_dir=foo\n", &a);
+    a.restart_policy = 99;
+    a.kill_mode = 7;
+    a.cpuset_partition = 5;
+    a.priority = 9;
+    char *t = ser(&a);
+    assert(line_of(t, "x.restart=", l, sizeof l) && !strcmp(l, "x.restart=?99"));
+    assert(line_of(t, "x.kill_mode=", l, sizeof l) && !strcmp(l, "x.kill_mode=?7"));
+    assert(line_of(t, "x.cpuset_partition=", l, sizeof l) && !strcmp(l, "x.cpuset_partition=?5"));
+    assert(line_of(t, "x.priority=", l, sizeof l) && !strcmp(l, "x.priority=?9"));
+    assert(line_of(t, "x.limit_nofile=", l, sizeof l) && !strcmp(l, "x.limit_nofile=1024:4096"));
+    assert(line_of(t, "x.state_dir=", l, sizeof l) && !strcmp(l, "x.state_dir=foo"));
+    free(t);
+    printf("ok test_enum_out_of_range\n");
+}
+
 static void test_sorted_stable(void) {
     static service_t tab[2];
     load("y.svc", "name=y\nexec=/usr/bin/true\ndep=x\nsyscall_filter=@system-service\n", &tab[0]);
@@ -142,6 +161,7 @@ int main(void) {
     test_exec_pre_change();
     test_source_only();
     test_escape();
+    test_enum_out_of_range();
     test_sorted_stable();
     test_sha256();
     rmdir(dir);

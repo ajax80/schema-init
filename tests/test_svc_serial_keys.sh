@@ -10,7 +10,7 @@ allow="name"
 keys=$( {
     grep -o 'strcmp(\(line\|key\), "[^"]*"' service.c | sed 's/.*"\(.*\)"/\1/'
     grep -o '{ "limit_[a-z]*"' service.c | sed 's/.*"\(.*\)"/\1/'
-    for d in $(sed -n 's/.*exec_dir_key\[EXEC_DIR_KINDS\] = {\(.*\)};/\1/p' service.c | tr -d '",'); do
+    for d in $(sed -n 's/.*service_exec_dir_key\[EXEC_DIR_KINDS\] = {\(.*\)};/\1/p' service.c | tr -d '",'); do
         echo "$d"; echo "${d}_mode"
     done
     grep -o 'line + 7, "[a-z_]*"' service.c | sed 's/.*"\(.*\)"/verify_\1/'
