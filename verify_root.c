@@ -1,0 +1,481 @@
+#include "verify_root.h"
+#include "karg.h"
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <poll.h>
+#include <sched.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+#define INSPECT_MS 30000
+#define MAXWORDS 256
+#define OUT_CAP (16 << 20)
+
+static void vadd(char (*v)[256], int *n, int max, const char *fmt, va_list ap) {
+    if (*n < max) vsnprintf(v[(*n)++], 256, fmt, ap);
+}
+
+static void fail(root_report_t *r, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vadd(r->reasons, &r->nreasons, 16, fmt, ap);
+    va_end(ap);
+    r->fail = 1;
+}
+
+static void unres(root_report_t *r, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vadd(r->unres, &r->nunres, 8, fmt, ap);
+    va_end(ap);
+    r->unresolved = r->unres[0];
+}
+
+int dev_resolve(const char *spec, const char *devdir, char *out, size_t n) {
+    static const struct { const char *key, *dir; } by[] = {
+        { "UUID=", "by-uuid" }, { "PARTUUID=", "by-partuuid" },
+        { "LABEL=", "by-label" }, { "PARTLABEL=", "by-partlabel" },
+    };
+    char path[PATH_MAX], real[PATH_MAX], name[1024];
+    if (!devdir) devdir = getenv("SCHEMA_VERIFY_DEVDIR");
+    if (!devdir || !*devdir) devdir = "/dev";
+
+    size_t i;
+    for (i = 0; i < sizeof by / sizeof *by && strncmp(spec, by[i].key, strlen(by[i].key)); i++)
+        ;
+    if (i < sizeof by / sizeof *by) {
+        /* udev's link names: anything outside this set is \xNN, so a value can't climb out with / */
+        size_t o = 0;
+        for (const unsigned char *p = (const unsigned char *)spec + strlen(by[i].key); *p; p++) {
+            if (o + 5 > sizeof name) return -1;
+            if (isalnum(*p) || strchr("#+-.:=@_", *p) || *p >= 0x80)
+                name[o++] = i == 1 ? tolower(*p) : *p;
+            else
+                o += snprintf(name + o, 5, "\\x%02x", *p);
+        }
+        name[o] = '\0';
+        if (snprintf(path, sizeof path, "%s/disk/%s/%s", devdir, by[i].dir, name) >= (int)sizeof path) return -1;
+    } else if (!strncmp(spec, "/dev/", 5)) {
+        if (snprintf(path, sizeof path, "%s/%s", devdir, spec + 5) >= (int)sizeof path) return -1;
+    } else {
+        return -1;
+    }
+    if (!realpath(path, real)) return -1;
+    return snprintf(out, n, "%s", real) >= (int)n ? -1 : 0;
+}
+
+int bls_path_map(const char *mnt, const char *p, char *out, size_t n) {
+    if (p[0] != '/') return -1;
+    for (const char *s = p; (s = strstr(s, "/..")); s += 3)
+        if (!s[3] || s[3] == '/') return -1;
+    size_t ml = strlen(mnt);
+    while (ml && mnt[ml - 1] == '/') ml--;
+    return snprintf(out, n, "%.*s%s", (int)ml, mnt, p) >= (int)n ? -1 : 0;
+}
+
+int boot_is_separate(const char *mountinfo) {
+    FILE *f = fopen(mountinfo, "r");
+    if (!f) return 0;
+    char line[4096], mp[4096];
+    int sep = 0;
+    while (!sep && fgets(line, sizeof line, f))
+        sep = sscanf(line, "%*s %*s %*s %*s %4095s", mp) == 1 && !strcmp(mp, "/boot");
+    fclose(f);
+    return sep;
+}
+
+static const char *env_lookup(char (*env)[2][256], int n, const char *k) {
+    for (int i = n - 1; i >= 0; i--)
+        if (!strcmp(env[i][0], k)) return env[i][1];
+    return NULL;
+}
+
+/* -1: unknown variable (named in missing); -2: too long once expanded */
+int opts_expand(const char *s, char (*env)[2][256], int nenv, char *out, size_t n, char *missing, size_t msz) {
+    size_t o = 0;
+    while (*s) {
+        if (*s != '$') {
+            if (o + 1 >= n) return -2;
+            out[o++] = *s++;
+            continue;
+        }
+        const char *nm = s + 1, *end;
+        int br = *nm == '{';
+        if (br) {
+            nm++;
+            if (!(end = strchr(nm, '}'))) {
+                snprintf(missing, msz, "%s", s + 1);
+                return -1;
+            }
+        } else {
+            for (end = nm; isalnum((unsigned char)*end) || *end == '_'; end++)
+                ;
+        }
+        snprintf(missing, msz, "%.*s", (int)(end - nm), nm);
+        const char *v = end > nm ? env_lookup(env, nenv, missing) : NULL;
+        if (!v) return -1;
+        size_t vl = strlen(v);
+        if (o + vl >= n) return -2;
+        memcpy(out + o, v, vl);
+        o += vl;
+        s = end + br;
+    }
+    out[o] = '\0';
+    return 0;
+}
+
+/* first occurrence before "--"; karg_check has already refused duplicates */
+static const char *argval(char (*w)[512], int n, const char *key) {
+    size_t kl = strlen(key);
+    for (int i = 0; i < n && strcmp(w[i], "--"); i++)
+        if (!strncmp(w[i], key, kl)) return w[i] + kl;
+    return NULL;
+}
+
+int entry_precheck(const bls_entry_t *e, char (*env)[2][256], int nenv, char *opts, size_t optsz, root_report_t *r) {
+    memset(r, 0, sizeof *r);
+    r->check_rc = -1;
+    if (e->blank_before_last) fail(r, "blank line before the entry's last key: GRUB drops what follows it");
+    if (e->parse_err) fail(r, "entry could not be read whole (a line or the initrd list is too long)");
+    if (!e->linux_path[0]) fail(r, "no linux line");
+    if (e->extra_linux) unres(r, "several linux lines");
+    if (e->extra_options) unres(r, "several options lines");
+
+    char miss[256];
+    int x = opts_expand(e->options, env, nenv, opts, optsz, miss, sizeof miss);
+    if (x == -1) {
+        unres(r, "options use $%s, not in grubenv", miss);
+        return -1;
+    }
+    if (x == -2) {
+        unres(r, "options too long once grubenv variables are expanded");
+        return -1;
+    }
+    char (*w)[512] = malloc(MAXWORDS * sizeof *w), why[256], dev[PATH_MAX];
+    int nw = karg_split(opts, w, MAXWORDS), rc = -1;
+    if (nw < 0) {
+        unres(r, "more than %d kernel arguments", MAXWORDS);
+    } else if (karg_check(w, nw, why, sizeof why)) {
+        fail(r, "%s", why);
+    } else if (dev_resolve(argval(w, nw, "root="), NULL, dev, sizeof dev)) {
+        fail(r, "root=%s does not resolve to a present device", argval(w, nw, "root="));
+    } else {
+        /* dracut reads SCHEMA_SVC_DIR= itself and switch_root may not hand it to PID 1;
+         * init= it does pass on */
+        if (e->n_initrd && argval(w, nw, "SCHEMA_SVC_DIR="))
+            unres(r, "SCHEMA_SVC_DIR with an initramfs: not known to reach PID 1");
+        rc = 0;
+    }
+    free(w);
+    return rc;
+}
+
+static int run(char *const argv[], int ofd, int efd) {
+    static char *const envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
+    pid_t p = fork();
+    if (p == 0) {
+        int nul = open("/dev/null", O_RDONLY);
+        if (nul >= 0) dup2(nul, STDIN_FILENO);
+        dup2(ofd, STDOUT_FILENO);
+        dup2(efd, STDERR_FILENO);
+        execve(argv[0], argv, envp);
+        _exit(127);
+    }
+    int st;
+    if (p < 0 || waitpid(p, &st, 0) < 0) return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+}
+
+static void first_line(int fd, char *buf, size_t n) {
+    ssize_t m = pread(fd, buf, n - 1, 0);
+    buf[m > 0 ? m : 0] = '\0';
+    buf[strcspn(buf, "\n")] = '\0';
+}
+
+static int is_btrfs(const char *dev) {
+    char magic[8] = "";
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    ssize_t m = pread(fd, magic, sizeof magic, 0x10040);
+    close(fd);
+    return m == 8 && !memcmp(magic, "_BHRfS_M", 8);
+}
+
+/* not btrfs: try each block filesystem the kernel knows, as mount(8) does */
+static int mount_any(const char *dev, const char *dir, unsigned long fl, char *type, size_t tsz) {
+    FILE *f = fopen("/proc/filesystems", "r");
+    char line[128];
+    int ok = -1;
+    while (ok && f && fgets(line, sizeof line, f)) {
+        if (!strncmp(line, "nodev", 5)) continue;
+        snprintf(type, tsz, "%s", line + strspn(line, " \t"));
+        type[strcspn(type, "\n")] = '\0';
+        if (strcmp(type, "btrfs")) ok = mount(dev, dir, type, fl, NULL);
+    }
+    if (f) fclose(f);
+    return ok;
+}
+
+#define F(...) dprintf(ctl, "F " __VA_ARGS__)
+#define U(...) dprintf(ctl, "U " __VA_ARGS__)
+
+static int check_file(int ctl, const char *grub, const char *what, const char *p) {
+    char m[PATH_MAX];
+    struct stat st;
+    if (bls_path_map(grub, p, m, sizeof m)) return F("%s path %s is not usable\n", what, p);
+    if (stat(m, &st) || !S_ISREG(st.st_mode)) return F("%s %s is missing\n", what, p);
+    return 0;
+}
+
+static void inspect(const bls_entry_t *e, const char *opts, const char *extra, const char *base, int ctl, int out) {
+    char (*w)[512] = malloc(MAXWORDS * sizeof *w);
+    int nw = karg_split(opts, w, MAXWORDS);
+    const char *rootspec = argval(w, nw, "root="), *flags = argval(w, nw, "rootflags=");
+    const char *init = argval(w, nw, "init=");
+    if (!init) init = "/sbin/init";
+    char dev[PATH_MAX], top[64], tgt[64], type[64] = "btrfs";
+    unsigned long fl = MS_RDONLY | MS_NOSUID | MS_NODEV;
+    dev_resolve(rootspec, NULL, dev, sizeof dev);
+
+    /* the mounts must never show outside this child */
+    if (unshare(CLONE_NEWNS) || mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)) {
+        U("cannot make a private mount namespace: %m\n");
+        return;
+    }
+    /* tmpfs on the mkdtemp dir so the mountpoints below write nothing to the host */
+    if (mount("schema-verify", base, "tmpfs", MS_NOSUID | MS_NODEV, "mode=0700")) {
+        U("cannot mount a private tmpfs: %m\n");
+        return;
+    }
+    snprintf(top, sizeof top, "%s/top", base);
+    snprintf(tgt, sizeof tgt, "%s/root", base);
+    mkdir(top, 0700);
+    mkdir(tgt, 0700);
+
+    int btrfs = is_btrfs(dev);
+    if (btrfs ? mount(dev, top, "btrfs", fl, "subvolid=5") : mount_any(dev, top, fl, type, sizeof type)) {
+        U("cannot mount root=%s (%s) read-only: %m\n", rootspec, dev);
+        return;
+    }
+    const char *sv = NULL;
+    for (const char *p = flags; p && *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] == ','))
+        if (!strncmp(p, "subvol=", 7)) sv = p + 7;
+    if (btrfs && sv) {
+        char p[PATH_MAX];
+        struct stat st;
+        sv += strspn(sv, "/");
+        size_t svl = strcspn(sv, ",");
+        /* 256 is the inode of every btrfs subvolume's root directory */
+        if (snprintf(p, sizeof p, "%s/%.*s", top, (int)svl, sv) >= (int)sizeof p || stat(p, &st) ||
+            !S_ISDIR(st.st_mode)) {
+            F("subvolume %.*s does not exist on %s\n", (int)svl, sv, rootspec);
+            return;
+        }
+        if (st.st_ino != 256) {
+            F("%.*s on %s is a directory, not a subvolume\n", (int)svl, sv, rootspec);
+            return;
+        }
+    }
+    /* the target as the kernel mounts it: rootflags= is the mount data */
+    if (mount(dev, tgt, type, fl, flags)) {
+        F("cannot mount root=%s with rootflags=%s: %m\n", rootspec, flags ? flags : "");
+        return;
+    }
+
+    /* separate /boot: that partition is GRUB's root; else the root device's top level */
+    const char *grub = boot_is_separate("/proc/self/mountinfo") ? "/boot" : top;
+    check_file(ctl, grub, "kernel", e->linux_path);
+    for (int i = 0; i < e->n_initrd; i++) check_file(ctl, grub, "initrd", e->initrd[i]);
+
+    struct stat a, b;
+    int live = !stat(tgt, &a) && !stat("/", &b) && a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+    if (!live) {
+        /* user=/group= and absolute symlinks must resolve against the target, not the host */
+        char p[PATH_MAX];
+        snprintf(p, sizeof p, "%s/dev", tgt);
+        mount("/dev", p, NULL, MS_BIND | MS_REC, NULL);
+        snprintf(p, sizeof p, "%s/proc", tgt);
+        mount("/proc", p, NULL, MS_BIND | MS_REC, NULL);
+        snprintf(p, sizeof p, "%s/tmp", tgt);
+        mount("schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777");
+        if (chroot(tgt) || chdir("/")) {
+            U("cannot chroot into the target: %m\n");
+            return;
+        }
+    }
+
+    char real[PATH_MAX];
+    struct stat st;
+    if (!realpath(init, real)) {
+        F("init=%s does not exist in the target\n", init);
+        return;
+    }
+    dprintf(ctl, "I %s\n", real);
+    if (stat(real, &st) || !S_ISREG(st.st_mode) || !(st.st_mode & 0111)) {
+        F("init=%s is not executable in the target\n", init);
+        return;
+    }
+    const char *bn = strrchr(real, '/') + 1;
+    if (strncmp(bn, "schema-init", 11)) return;
+    dprintf(ctl, "S\n");
+
+    int cap = memfd_create("schema-verify", MFD_CLOEXEC), errfd = memfd_create("schema-verify-err", MFD_CLOEXEC);
+    char line[200];
+    int rc = run((char *[]){ real, "--version", NULL }, cap, cap);
+    first_line(cap, line, sizeof line);
+    if (rc || strncmp(line, "schema-init ", 12)) {
+        F("init=%s --version failed (exit %d)\n", init, rc);
+        return;
+    }
+
+    char *argv[8 + MAXWORDS] = { real, "--check", "--root", "/", "--cmdline", (char *)opts };
+    int ac = 6;
+    char (*xw)[512] = malloc(MAXWORDS * sizeof *xw);
+    int nx = extra ? karg_split(extra, xw, MAXWORDS) : 0;
+    for (int i = 0; i < nx; i++) argv[ac++] = xw[i];
+    argv[ac] = NULL;
+    rc = run(argv, out, errfd);
+    dprintf(ctl, "C %d\n", rc);
+    first_line(errfd, line, sizeof line);
+    if (line[0]) dprintf(ctl, "E %s\n", line);
+    /* 1 means error: lines in the output, which the caller judges; anything else is no report */
+    if (rc && rc != 1) F("%s --check exited %d%s%s\n", init, rc, line[0] ? ": " : "", line);
+}
+
+/* -1 on the deadline: what arrived until then is kept; *over when output was cut */
+static int collect(int fds[2], char *bufs[2], size_t lens[2], int *over) {
+    struct timespec t0, t;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    struct pollfd p[2] = { { fds[0], POLLIN, 0 }, { fds[1], POLLIN, 0 } };
+    size_t caps[2] = { 0, 0 };
+    int open = 2;
+    while (open) {
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        long left = INSPECT_MS - ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
+        if (left <= 0) return -1;
+        if (poll(p, 2, left) < 0 && errno != EINTR) return -1;
+        for (int i = 0; i < 2; i++) {
+            if (p[i].fd < 0 || !p[i].revents) continue;
+            if (caps[i] - lens[i] < 4096 && caps[i] < OUT_CAP) {
+                caps[i] += 65536;
+                bufs[i] = realloc(bufs[i], caps[i] + 1);
+            }
+            char sink[4096];
+            int room = caps[i] - lens[i] >= sizeof sink;
+            ssize_t m = read(p[i].fd, room ? bufs[i] + lens[i] : sink, sizeof sink);
+            if (m <= 0) {
+                p[i].fd = -1;
+                open--;
+            } else if (room) {
+                lens[i] += m;
+            } else {
+                *over = 1;
+            }
+        }
+    }
+    return 0;
+}
+
+void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_report_t *r) {
+    char err[256] = "";
+    for (char *l = ctl, *nl; l && l < ctl + clen; l = nl + 1) {
+        if (!(nl = memchr(l, '\n', ctl + clen - l))) break;
+        *nl = '\0';
+        if (l[0] == 'F' && l[1] == ' ') fail(r, "%s", l + 2);
+        else if (l[0] == 'U' && l[1] == ' ') unres(r, "%s", l + 2);
+        else if (l[0] == 'I' && l[1] == ' ') snprintf(r->init_path, sizeof r->init_path, "%s", l + 2);
+        else if (l[0] == 'S') r->is_schema_init = 1;
+        else if (l[0] == 'C' && l[1] == ' ') r->check_rc = atoi(l + 2);
+        else if (l[0] == 'E' && l[1] == ' ') snprintf(err, sizeof err, "%s", l + 2);
+    }
+    static const char hdr[] = "schema-verify-baseline v1\n";
+    /* rc 0/1 without the header: an init older than --check, or no report at all */
+    if ((r->check_rc == 0 || r->check_rc == 1) && (!out || olen < sizeof hdr - 1 || memcmp(out, hdr, sizeof hdr - 1))) {
+        unres(r, "%s --check gave no report%s%s", r->init_path, err[0] ? ": " : "", err);
+        r->check_rc = -1;
+    }
+    if (r->check_rc == -1 || !out) {
+        free(out);
+        return;
+    }
+    r->check_out = out;
+    r->check_len = olen;
+}
+
+int root_inspect(const bls_entry_t *e, char (*env)[2][256], int nenv, const char *extra, root_report_t *r) {
+    char opts[4096];
+    if (entry_precheck(e, env, nenv, opts, sizeof opts, r)) goto done;
+    if (geteuid() != 0) {
+        unres(r, "needs root");
+        goto done;
+    }
+    char base[] = "/tmp/schema-verify-XXXXXX";
+    int ctl[2], out[2];
+    if (!mkdtemp(base)) {
+        unres(r, "cannot inspect the target: mkdtemp: %s", strerror(errno));
+        goto done;
+    }
+    if (pipe2(ctl, O_CLOEXEC) || pipe2(out, O_CLOEXEC)) {
+        unres(r, "cannot inspect the target: pipe: %s", strerror(errno));
+        rmdir(base);
+        goto done;
+    }
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(ctl[0]);
+        close(out[0]);
+        /* its own group, so the deadline kill also takes --version and --check */
+        setpgid(0, 0);
+        inspect(e, opts, extra, base, ctl[1], out[1]);
+        _exit(0);
+    }
+    close(ctl[1]);
+    close(out[1]);
+    char *bufs[2] = { NULL, NULL };
+    size_t lens[2] = { 0, 0 };
+    int st = 0, late = 0, over = 0;
+    if (pid < 0) {
+        unres(r, "cannot inspect the target: fork: %s", strerror(errno));
+    } else {
+        setpgid(pid, pid);
+        late = collect((int[]){ ctl[0], out[0] }, bufs, lens, &over);
+        if (late) {
+            kill(-pid, SIGKILL);
+            kill(pid, SIGKILL);
+            /* a child stuck in an uninterruptible stat can't be reaped; don't hang with it */
+            for (int i = 0; i < 20 && !waitpid(pid, &st, WNOHANG); i++)
+                nanosleep(&(struct timespec){ 0, 50000000 }, NULL);
+            unres(r, "inspection did not finish within %d s", INSPECT_MS / 1000);
+        } else if (waitpid(pid, &st, 0) == pid && !(WIFEXITED(st) && !WEXITSTATUS(st))) {
+            unres(r, "inspection ended abnormally (status 0x%x)", st);
+        }
+    }
+    close(ctl[0]);
+    close(out[0]);
+    rmdir(base);
+
+    if (bufs[1]) bufs[1][lens[1]] = '\0';
+    root_report_fill(bufs[0], lens[0], bufs[1], lens[1], r);
+    free(bufs[0]);
+    /* a cut or late report would read as services gone */
+    if ((late || over) && r->check_rc != -1) {
+        free(r->check_out);
+        r->check_out = NULL;
+        r->check_len = 0;
+        r->check_rc = -1;
+    }
+    if (over) unres(r, "--check output over %d MB", OUT_CAP >> 20);
+done:
+    return r->fail ? 1 : r->nunres ? 3 : 0;
+}
