@@ -41,6 +41,7 @@ typedef struct {
     char rej[4][256]; /* grubenv-named entries whose file could not be read */
     int nrej;
     int cut; /* more entries than MAXENTS: the rest were not read */
+    int posbad; /* an entry skipped or a sort tie: menu positions are not known */
     char *cfg; /* grub.cfg, NULL with cfg_err when unreadable */
     int cfg_err;
 } ctx_t;
@@ -285,8 +286,11 @@ static int ent_cmp(const void *x, const void *y) {
     return c;
 }
 
-void bls_sort(bls_entry_t *ents, int n) {
+int bls_sort(bls_entry_t *ents, int n) {
     qsort(ents, (size_t)n, sizeof *ents, ent_cmp);
+    int tie = 0;
+    for (int i = 1; i < n; i++) tie |= !ent_cmp(&ents[i - 1], &ents[i]);
+    return tie;
 }
 
 static int conf_file(const struct dirent *d) {
@@ -384,6 +388,7 @@ static int load_entries(ctx_t *c) {
         } else if (c->nents < MAXENTS) {
             /* the guard's own entry unreadable is unknown, not "names no entry" */
             int e = errno, key = 0;
+            c->posbad = 1;
             size_t il = strlen(d[i]->d_name) - 5;
             static const char *const k[] = { "saved_entry", "next_entry", "schema_fallback_id" };
             for (size_t j = 0; j < 3; j++) {
@@ -400,7 +405,10 @@ static int load_entries(ctx_t *c) {
         emit(c, T_UNRES, "no boot entries in %s", dir);
         return -1;
     }
-    bls_sort(c->ents, c->nents);
+    if (bls_sort(c->ents, c->nents)) {
+        c->posbad = 1;
+        emit(c, T_NOTE, "two boot entries in %s compare equal in blscfg's order: menu positions not known", dir);
+    }
     return 0;
 }
 
@@ -558,9 +566,14 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, int act, int nor
     const char *cfg = c->cfg;
     for (int i = 0; i < c->nents; i++)
         guard |= !strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11);
-    guard |= cfg && strstr(cfg, "schema_fallback_id");
     /* a box that never used the guard has no way back to judge; arm's own gate runs this
-     * after a snapshot exists, when it does */
+     * after a snapshot exists, when it does. grub.cfg knowing the guard (true right after
+     * install-bootguard) is installed, not armed */
+    if (!guard && cfg && strstr(cfg, "schema_fallback_id")) {
+        emit(c, T_NOTE, "boot guard installed in %s but not armed (no schema_fallback_id or boot_counter) and no "
+                        "schema-snap-* or schema-good* entry yet; not checked", c->o->grubcfg);
+        return;
+    }
     if (!guard) {
         emit(c, T_NOTE, "boot guard not in use (no schema_fallback_id, boot_counter, schema-snap-* or schema-good* entry); not checked");
         return;
@@ -666,7 +679,7 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         if (!c.cfg) unreadable(&c, "GRUB config", o->grubcfg, c.cfg_err);
         else if (dk) emit(&c, T_UNRES, "%s: which default= its header sets could not be told", o->grubcfg);
         else if (strcmp(dflt, "${saved_entry}")) emit(&c, T_NOTE, "%s sets default=\"%s\", not saved_entry", o->grubcfg, dflt);
-        nbrc = nextboot_resolve(c.env, c.nenv, c.ents, c.nents, dk ? NULL : dflt, c.cut, &nb);
+        nbrc = nextboot_resolve(c.env, c.nenv, c.ents, c.nents, dk ? NULL : dflt, c.cut || c.posbad, &nb);
         act = ent_index(&c, nb.actual);
         nor = ent_index(&c, nb.normal);
         const char *saved = env_get(&c, "saved_entry"), *next = env_get(&c, "next_entry");

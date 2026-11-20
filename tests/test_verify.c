@@ -25,7 +25,7 @@ static void test_vercmp(void) {
 static void sorted(const char *const *in, const char *const *want, int n) {
     bls_entry_t *e = calloc((size_t)n, sizeof *e);
     for (int i = 0; i < n; i++) snprintf(e[i].id, sizeof e[i].id, "%s", in[i]);
-    bls_sort(e, n);
+    assert(bls_sort(e, n) == 0);
     for (int i = 0; i < n; i++) {
         if (strcmp(e[i].id, want[i])) fprintf(stderr, "sort[%d]: %s, want %s\n", i, e[i].id, want[i]);
         assert(!strcmp(e[i].id, want[i]));
@@ -34,9 +34,10 @@ static void sorted(const char *const *in, const char *const *want, int n) {
 }
 
 static void test_sort(void) {
-    /* the name part decides first: a snapshot sorts above every machine-id kernel, and a
-     * new kernel next to it does not change that; a release with a '-' in it moves the
-     * kernel version into the name, so 7.2.11-cachyos1-schema outranks a stock 7.3.0-200 */
+    /* the name part decides first: with a machine-id that starts with a letter (a-f) a
+     * snapshot sorts above every kernel, and a new kernel next to it does not change that;
+     * a release with a '-' in it moves the kernel version into the name, so
+     * 7.2.11-cachyos1-schema outranks a stock 7.3.0-200 */
     static const char *const in[] = { "c8d9-7.3.0-200.fc44.x86_64", "schema-snap-20261118-175630-post-bootfix",
                                       "c8d9-7.2.11-cachyos1-schema.fc44.x86_64", "c8d9-0-rescue" };
     static const char *const want[] = { "schema-snap-20261118-175630-post-bootfix",
@@ -47,6 +48,22 @@ static void test_sort(void) {
     static const char *const in2[] = { "a", "a-1", "a-2", "a-10" };
     static const char *const want2[] = { "a-10", "a-2", "a-1", "a" };
     sorted(in2, want2, 4);
+    /* a machine-id that starts with a digit: vercmp puts a numeric segment above an
+     * alphabetic one, so every kernel sorts above the snapshots */
+    static const char *const in3[] = { "schema-snap-20261118-175630-post-bootfix", "0f1e2d-7.2.11-1.fc44.x86_64",
+                                       "0f1e2d-0-rescue" };
+    static const char *const want3[] = { "0f1e2d-7.2.11-1.fc44.x86_64", "0f1e2d-0-rescue",
+                                         "schema-snap-20261118-175630-post-bootfix" };
+    sorted(in3, want3, 3);
+}
+
+/* two ids vercmp calls equal: GRUB refuses the second, so menu positions are not known */
+static void test_sort_tie(void) {
+    bls_entry_t e[3] = { 0 };
+    snprintf(e[0].id, sizeof e[0].id, "m-1.0");
+    snprintf(e[1].id, sizeof e[1].id, "m-0.9");
+    snprintf(e[2].id, sizeof e[2].id, "m-1.00");
+    assert(bls_sort(e, 3) != 0);
 }
 
 /* vercmp's tilde (before everything) and plus (after the base version) */
@@ -84,13 +101,14 @@ static void test_sort_blakbox(void) {
     }
     free(d);
     assert(n == N);
-    bls_sort(e, N);
+    assert(bls_sort(e, N) == 0);
     for (int i = 0; i < N; i++) assert(!strcmp(e[i].id, want[i]));
 }
 
 int main(void) {
     test_vercmp();
     test_sort();
+    test_sort_tie();
     test_vercmp_sep();
     test_sort_blakbox();
     puts("test_verify: ok");

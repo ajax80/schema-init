@@ -251,6 +251,18 @@ mv "$T/bls/schema-snap-"* "$T/bls-off/"
 v
 expect 0 no-guard
 has "[note] boot guard not in use" || fail "no-guard: note"
+# just after install-bootguard: grub.cfg carries the guard, nothing armed, no snapshot yet
+cp tests/fixtures/verify/boot/grub-real.cfg "$T/grub.cfg"
+v
+expect 0 guard-installed
+has "[note] boot guard installed in $T/grub.cfg but not armed" || fail "guard-installed: note"
+has "no schema-snap-* entry" && fail "guard-installed: FAIL before any snapshot"
+# armed (boot_counter set) with no snapshot to fall back to: that is a FAIL
+printf 'saved_entry=m-7.2.11\nboot_counter=2\nboot_success=1\n' > "$T/grubenv"
+v
+expect 1 guard-armed-nosnap
+has "[FAIL] no schema-snap-* entry for the guard to fall back to" || fail "guard-armed-nosnap: line"
+printf 'saved_entry=m-7.2.11\n' > "$T/grubenv"
 mv "$T/bls-off/"* "$T/bls/"
 rmdir "$T/bls-off"
 cp tests/fixtures/verify/boot/grub-real.cfg "$T/grub.cfg"
@@ -416,11 +428,19 @@ done
 printf 'blsdir=/x\n' > "$T/grubenv2"
 SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
 has "[PASS] actual next boot m-7.3.0:" || fail "newest: actual is not m-7.3.0"
-# ...but a snapshot entry's name sorts above them all: GRUB boots the snapshot, whatever
-# its version key says
+# ...but a snapshot entry's name sorts above them all (the machine-id here starts with a
+# letter; a digit-leading one sorts every kernel above it): GRUB boots the snapshot
 cp "$T/bls/$F.conf" "$T/bls2/$F.conf"
 SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
 has "[PASS] actual next boot $F:" || fail "newest-snap: actual is not the snapshot"
+# two file names vercmp calls equal: GRUB refuses the second, so no menu position is known
+printf 'title k\nlinux /root/boot/vmlinuz\noptions root=PARTUUID=%s ro rootflags=subvol=root init=/sbin/schema-init\n' "$PU" > "$T/bls2/zz-1.0.conf"
+cp "$T/bls2/zz-1.0.conf" "$T/bls2/zz-1.00.conf"
+SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
+expect 3 tie
+has "[UNRESOLVED] actual next boot:" || fail "tie: actual not unresolved"
+grep -q '^\[PASS\] actual' "$T/out" && fail "tie: PASS for a position"
+rm "$T/bls2/zz-1.0.conf" "$T/bls2/zz-1.00.conf"
 
 # schema-good* entries alone mean the guard is in use
 cp tests/fixtures/verify/boot/grub-comment.cfg "$T/grub.cfg"
@@ -468,6 +488,14 @@ if [ "$(id -u)" != 0 ]; then
     has "[UNRESOLVED] boot entry $T/bls/$F.conf could not be read" || fail "unreadable-fallback: line"
     has "names no boot entry" && fail "unreadable-fallback: called missing"
     chmod 644 "$T/bls/$F.conf"
+    # saved_entry unset and the newest kernel unreadable: the menu positions shift, unknown
+    rm "$T/bls2/$F.conf"
+    chmod 000 "$T/bls2/m-7.3.0.conf"
+    SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
+    expect 3 skipped-newest
+    has "[UNRESOLVED] actual next boot:" || fail "skipped-newest: actual not unresolved"
+    has "[PASS] actual next boot m-7.2.11" && fail "skipped-newest: shifted position trusted"
+    chmod 644 "$T/bls2/m-7.3.0.conf"
 
     # just after install-bootguard: grub.cfg knows the guard, no fallback id or snapshot
     # yet, and the saved entry unreadable

@@ -13,9 +13,10 @@ typedef struct {
     const char *envblock_dev; /* NULL: the device holding grubenv */
 } verify_opts_t;
 
-/* blscfg's vercmp (rpm's rule); bls_sort orders entries as F44 blscfg's menu: by file name, newest first */
+/* blscfg's vercmp (rpm's rule); bls_sort orders entries as F44 blscfg's menu: by file name, newest
+ * first; nonzero when two compare equal (GRUB refuses the second, so positions are not known) */
 int bls_vercmp(const char *a, const char *b);
-void bls_sort(bls_entry_t *ents, int n);
+int bls_sort(bls_entry_t *ents, int n);
 /* the real paths; a -DSCHEMA_VERIFY_TESTHOOKS build takes each from its SCHEMA_VERIFY_* variable */
 void verify_opts_env(verify_opts_t *o);
 /* 0 pass, 1 FAIL, 2 unaccepted CHANGE or lost baseline, 3 nothing worse than UNRESOLVED */
