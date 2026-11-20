@@ -16,7 +16,14 @@ rm -rf "$T"
 mkdir -p "$T"
 trap 'chmod -R u+rwx "$T" 2>/dev/null; [ -n "${KEEP:-}" ] || rm -rf "$T"' EXIT
 umask 022
-fail() { echo "FAIL verify_cli: $*"; [ -f "$T/out" ] && sed 's/^/  | /' "$T/out"; exit 1; }
+# VC_CONT=1: report every failing check, not just the first (to list what an older build gets wrong)
+failed=0
+fail() {
+    echo "FAIL verify_cli: $*"
+    [ -n "${VC_CONT:-}" ] && { failed=1; return; }
+    [ -f "$T/out" ] && sed 's/^/  | /' "$T/out"
+    exit 1
+}
 
 PU=3e078549-8379-4ae4-9ae3-bacc2ea36956
 mkdir -p "$T/dev/disk/by-partuuid" "$T/dev/disk/by-uuid" "$T/bls" "$T/state" "$T/fx" "$T/esp/EFI/fedora"
@@ -161,6 +168,30 @@ expect 1 grubcfg-comment
 has "[FAIL] 09_schema_fallback is not live" || fail "grubcfg-comment: line"
 cp tests/fixtures/verify/boot/grub-real.cfg "$T/grub.cfg"
 
+# GRUB_DEFAULT=0: the header sets default="0", so a stale saved_entry is not what boots;
+# all three entries are version 7.2.11, so blscfg's tie-break by file name puts the newest snapshot first
+sed 's/set default="${saved_entry}"/set default="0"/' tests/fixtures/verify/boot/grub-real.cfg > "$T/grub.cfg"
+v
+has "[PASS] actual next boot $F" || fail "default-0: actual is not menu position 0"
+has "[PASS] actual next boot m-7.2.11" && fail "default-0: stale saved_entry taken"
+# GRUB_DEFAULT=<title>: not an entry id verify can match
+sed 's/set default="${saved_entry}"/set default="Fedora Linux (7.2.11)"/' tests/fixtures/verify/boot/grub-real.cfg > "$T/grub.cfg"
+v
+expect 3 default-title
+has "[UNRESOLVED] actual next boot" || fail "default-title: not unresolved"
+cp tests/fixtures/verify/boot/grub-real.cfg "$T/grub.cfg"
+
+# a kernelopts longer than 255 (blakbox's is 270), init= at its end: read whole, never cut short
+LONG=$(printf 'x%.0s' $(seq 1 300))
+printf 'title m\nversion 7.2.11\nlinux /root/boot/vmlinuz-7.2.11\noptions $kernelopts\n' > "$T/bls/m-7.2.11.conf"
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\nkernelopts=root=PARTUUID=%s ro rootflags=subvol=root long=%s init=/sbin/schema-init\n' \
+    "$F" "$PU" "$LONG" > "$T/grubenv"
+v
+expect 0 long-kernelopts
+has "[PASS] actual next boot m-7.2.11: entry checks pass; init=/sbin/schema-init (schema-init)" || fail "long-kernelopts: init= lost"
+entry m-7.2.11 root
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
+
 # a full GRUB config on the ESP loads its own grubenv -> 1
 printf '### BEGIN /etc/grub.d/00_header ###\nset default=0\n' > "$T/esp/EFI/fedora/grub.cfg"
 v
@@ -295,15 +326,22 @@ expect 64 usage
 v --write-baseline --wait-settled x
 expect 64 usage-wait
 
-# saved_entry unset: GRUB boots the first menu entry, the newest kernel
+# saved_entry unset: GRUB boots the first menu entry, blscfg's newest version key; the
+# snapshot's file name sorts first, its version (7.2.11) does not
 mkdir "$T/bls2"
-for k in 7.2.9 7.2.11 7.2.10; do
-    printf 'title k\nlinux /root/boot/vmlinuz-%s\noptions root=PARTUUID=%s ro rootflags=subvol=root init=/sbin/schema-init\n' \
-        "$k" "$PU" > "$T/bls2/m-$k.conf"
+for k in 7.2.9 7.2.11 7.3.0 7.2.10; do
+    printf 'title k\nversion %s\nlinux /root/boot/vmlinuz-%s\noptions root=PARTUUID=%s ro rootflags=subvol=root init=/sbin/schema-init\n' \
+        "$k" "$k" "$PU" > "$T/bls2/m-$k.conf"
 done
+sed 's/^title .*/&\nversion 7.2.11/' "$T/bls/$F.conf" > "$T/bls2/$F.conf"
 printf 'blsdir=/x\n' > "$T/grubenv2"
 SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
-has "[PASS] actual next boot m-7.2.11:" || fail "newest: actual is not m-7.2.11"
+has "[PASS] actual next boot m-7.3.0:" || fail "newest: actual is not m-7.3.0"
+# an entry without a version key: where blscfg puts it is not known
+sed -i '/^version/d' "$T/bls2/m-7.2.9.conf"
+SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
+grep -q '^\[PASS\] actual' "$T/out" && fail "newest-nover: PASS for a menu position"
+has "[UNRESOLVED] actual next boot" || fail "newest-nover: not unresolved"
 
 # schema-good* entries alone mean the guard is in use
 cp tests/fixtures/verify/boot/grub-comment.cfg "$T/grub.cfg"
@@ -383,4 +421,5 @@ if [ "$(id -u)" != 0 ]; then
     grep -q '^\[PASS\] \(actual\|normal\|services\)' "$T/out" && fail "non-root: PASS for an unread input"
 fi
 
+[ "$failed" = 0 ] || exit 1
 echo "verify_cli: ok"

@@ -33,14 +33,14 @@ int stat_in_root(const char *root, const char *path, int nosym, struct stat *st)
 /* 1 when mountinfo has a mount on /boot: then that partition is GRUB's root */
 int boot_is_separate(const char *mountinfo_path);
 /* GRUB expands $var/${var} in options at boot; 0 ok, -1 with the unknown name in missing */
-int opts_expand(const char *opts, char (*env)[2][256], int nenv, char *out, size_t n, char *missing, size_t msz);
+int opts_expand(const char *opts, grubenv_t *env, int nenv, char *out, size_t n, char *missing, size_t msz);
 /* the entry checks that need no mount; 0 when root_inspect may go on to mount */
-int entry_precheck(const bls_entry_t *e, char (*env)[2][256], int nenv, char *opts, size_t optsz, root_report_t *r);
+int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, size_t optsz, root_report_t *r);
 /* the child's records (F/U fail/unresolved, I init path, S schema-init, C --check rc,
  * E its first stderr line, B schema-bootok's exec= 1 ok / 2 not executable) into r; takes out, the --check stdout */
 void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_report_t *r);
 /* entry_precheck, then mount root= read-only in a private namespace and check the
  * target; one 30 s deadline covers the whole inspection */
-int root_inspect(const bls_entry_t *e, char (*env)[2][256], int nenv, const char *check_args_extra, root_report_t *r);
+int root_inspect(const bls_entry_t *e, grubenv_t *env, int nenv, const char *check_args_extra, root_report_t *r);
 
 #endif

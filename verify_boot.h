@@ -4,11 +4,19 @@
 #include "karg.h"
 #include <stddef.h>
 
+/* the env block is 1 KB, so a value can be nearly that long; one longer than this is
+ * kept as GRUBENV_CUT, never as a shorter value */
+#define GRUBENV_SZ 1024
+#define GRUBENV_CUT "\x01"
+typedef char grubenv_t[2][GRUBENV_SZ];
+
 typedef struct {
     char id[256];
+    char version[256]; /* blscfg sorts the menu by it */
     char linux_path[512];
     char initrd[8][512];
     int n_initrd;
+    int initrd_vars; /* initrd words that are GRUB variables such as $tuned_initrd */
     char options[4096];
     int blank_before_last;
     int parse_err;
@@ -17,14 +25,20 @@ typedef struct {
 
 typedef struct { const char *actual, *normal, *fallback; int unresolved; } nextboot_t;
 
-int grubenv_read(const char *path, char (*kv)[2][256], int max);
+int grubenv_read(const char *path, grubenv_t *kv, int max);
 int bls_parse(const char *path, bls_entry_t *e);
 /* 0 ok; -1 FAIL with why */
 int karg_check(char (*args)[512], int n, char *why, size_t whysz);
 /* 0 resolved; 1 unresolved; 2 FAIL: schema_fallback_id names no entry.
  * An id that could not be resolved is NULL (fallback keeps the unknown id).
- * ents must be in blscfg's sort order: normal falls back to ents[0]. */
-int nextboot_resolve(char (*env)[2][256], int nenv, const bls_entry_t *ents, int nents, nextboot_t *nb);
+ * dflt: grub.cfg's header default (grubcfg_default), NULL when not known.
+ * ents must be in blscfg's sort order; a menu position resolves only when none was
+ * cut and every entry has a version key. */
+int nextboot_resolve(grubenv_t *env, int nenv, const bls_entry_t *ents, int nents, const char *dflt, int cut,
+                     nextboot_t *nb);
 int grubcfg_live_fallback(const char *cfg_text);
+/* the value grub.cfg's header gives default= when there is no next_entry ("${saved_entry}",
+ * a position, a title); 0, or -1 when it can't be told */
+int grubcfg_default(const char *cfg_text, char *out, size_t n);
 
 #endif

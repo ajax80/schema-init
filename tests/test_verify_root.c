@@ -9,7 +9,7 @@
 
 static const char *tmpd = "/tmp";
 static char devdir[PATH_MAX / 2];
-static char env[8][2][256];
+static grubenv_t env[8];
 
 static void touch(const char *p) {
     FILE *f = fopen(p, "w");
@@ -155,6 +155,11 @@ static void test_expand(void) {
     assert(opts_expand("$kernelopts $tuned_initrd", env, 3, out, sizeof out, miss, sizeof miss) == -1);
     assert(!strcmp(miss, "tuned_initrd"));
     assert(opts_expand("${nope", env, 3, out, sizeof out, miss, sizeof miss) == -1);
+    /* grubenv_read keeps a value too long to read as cut: never expanded short */
+    snprintf(env[3][0], sizeof env[3][0], "longopts");
+    snprintf(env[3][1], sizeof env[3][1], GRUBENV_CUT);
+    assert(opts_expand("$longopts quiet", env, 4, out, sizeof out, miss, sizeof miss) == -3);
+    assert(!strcmp(miss, "longopts"));
 }
 
 static bls_entry_t entry(const char *opts) {
@@ -190,6 +195,9 @@ static void test_precheck(void) {
     assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == -1);
     assert(!r.fail && r.nunres == 1 && !strcmp(r.unres[0], "options use $tuned_params2, not in grubenv"));
     assert(r.unresolved == r.unres[0]);
+    e = entry("$longopts");
+    assert(entry_precheck(&e, env, 4, opts, sizeof opts, &r) == -1);
+    assert(!r.fail && has(r.unres, r.nunres, "$longopts is too long"));
     e = entry("$kernelopts");
     assert(entry_precheck(&e, env, 1, opts, sizeof opts, &r) == -1);
     assert(!r.fail && has(r.unres, r.nunres, "$kernelopts"));

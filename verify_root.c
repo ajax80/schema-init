@@ -131,14 +131,14 @@ int boot_is_separate(const char *mountinfo) {
     return sep;
 }
 
-static const char *env_lookup(char (*env)[2][256], int n, const char *k) {
+static const char *env_lookup(grubenv_t *env, int n, const char *k) {
     for (int i = n - 1; i >= 0; i--)
         if (!strcmp(env[i][0], k)) return env[i][1];
     return NULL;
 }
 
-/* -1: unknown variable (named in missing); -2: too long once expanded */
-int opts_expand(const char *s, char (*env)[2][256], int nenv, char *out, size_t n, char *missing, size_t msz) {
+/* -1: unknown variable (named in missing); -2: too long once expanded; -3: its grubenv value was cut */
+int opts_expand(const char *s, grubenv_t *env, int nenv, char *out, size_t n, char *missing, size_t msz) {
     size_t o = 0;
     while (*s) {
         if (*s != '$') {
@@ -161,6 +161,7 @@ int opts_expand(const char *s, char (*env)[2][256], int nenv, char *out, size_t 
         snprintf(missing, msz, "%.*s", (int)(end - nm), nm);
         const char *v = end > nm ? env_lookup(env, nenv, missing) : NULL;
         if (!v) return -1;
+        if (!strcmp(v, GRUBENV_CUT)) return -3;
         size_t vl = strlen(v);
         if (o + vl >= n) return -2;
         memcpy(out + o, v, vl);
@@ -179,7 +180,7 @@ static const char *argval(char (*w)[512], int n, const char *key) {
     return NULL;
 }
 
-int entry_precheck(const bls_entry_t *e, char (*env)[2][256], int nenv, char *opts, size_t optsz, root_report_t *r) {
+int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, size_t optsz, root_report_t *r) {
     memset(r, 0, sizeof *r);
     r->check_rc = -1;
     if (e->blank_before_last) fail(r, "blank line before the entry's last key: GRUB drops what follows it");
@@ -196,6 +197,10 @@ int entry_precheck(const bls_entry_t *e, char (*env)[2][256], int nenv, char *op
     }
     if (x == -2) {
         unres(r, "options too long once grubenv variables are expanded");
+        return -1;
+    }
+    if (x == -3) {
+        unres(r, "grubenv value of $%s is too long to read whole", miss);
         return -1;
     }
     char (*w)[512] = malloc(MAXWORDS * sizeof *w), why[256], dev[PATH_MAX];
@@ -495,7 +500,7 @@ void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_repor
     r->check_len = olen;
 }
 
-int root_inspect(const bls_entry_t *e, char (*env)[2][256], int nenv, const char *extra, root_report_t *r) {
+int root_inspect(const bls_entry_t *e, grubenv_t *env, int nenv, const char *extra, root_report_t *r) {
     char opts[4096];
     if (entry_precheck(e, env, nenv, opts, sizeof opts, r)) goto done;
     if (geteuid() != 0) {

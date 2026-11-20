@@ -29,7 +29,7 @@ typedef struct { tag_t t; char *s; } line_t;
 typedef struct {
     line_t *l;
     int n;
-    char env[MAXENV][2][256];
+    grubenv_t env[MAXENV];
     int nenv;
     bls_entry_t *ents;
     int nents;
@@ -41,6 +41,8 @@ typedef struct {
     char rej[4][256]; /* grubenv-named entries whose file could not be read */
     int nrej;
     int cut; /* more entries than MAXENTS: the rest were not read */
+    char *cfg; /* grub.cfg, NULL with cfg_err when unreadable */
+    int cfg_err;
 } ctx_t;
 
 static void emit(ctx_t *c, tag_t t, const char *fmt, ...) {
@@ -208,7 +210,7 @@ static void report_entry(ctx_t *c, const char *role, int i, tag_t sev, int errs)
     if (ne) emit(c, T_WARN, "%s: %d service%s fail to load there", who, ne, ne > 1 ? "s" : "");
 }
 
-/* rpmvercmp's rule, enough for BLS file names */
+/* rpmvercmp's rule, enough for BLS version keys */
 int bls_vercmp(const char *a, const char *b) {
     while (*a || *b) {
         while (*a && !isalnum((unsigned char)*a)) a++;
@@ -234,10 +236,17 @@ int bls_vercmp(const char *a, const char *b) {
     return *a ? 1 : *b ? -1 : 0;
 }
 
-/* blscfg lists entries newest first; only an unset saved_entry depends on it. By file
- * name: Fedora's blscfg compares the version key first, which names the same kernel. */
+/* blscfg's menu order: entries with a version key first, newest version first, a tie
+ * by file name, the greater first */
 static int ent_cmp(const void *x, const void *y) {
-    return bls_vercmp(((const bls_entry_t *)y)->id, ((const bls_entry_t *)x)->id);
+    const bls_entry_t *a = x, *b = y;
+    char fa[300], fb[300];
+    if (!a->version[0] != !b->version[0]) return a->version[0] ? -1 : 1;
+    int r = bls_vercmp(b->version, a->version);
+    if (r) return r;
+    snprintf(fa, sizeof fa, "%s.conf", a->id);
+    snprintf(fb, sizeof fb, "%s.conf", b->id);
+    return strcmp(fb, fa);
 }
 
 void bls_sort(bls_entry_t *ents, int n) {
@@ -459,8 +468,8 @@ static void bootok_check(ctx_t *c, root_report_t *r) {
 }
 
 static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *act) {
-    int e = 0, guard = env_get(c, "schema_fallback_id") || env_get(c, "boot_counter");
-    char *cfg = read_path(c->o->grubcfg, &e);
+    int guard = env_get(c, "schema_fallback_id") || env_get(c, "boot_counter");
+    const char *cfg = c->cfg;
     for (int i = 0; i < c->nents; i++)
         guard |= !strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11);
     guard |= cfg && strstr(cfg, "schema_fallback_id");
@@ -468,7 +477,6 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *a
      * after a snapshot exists, when it does */
     if (!guard) {
         emit(c, T_NOTE, "boot guard not in use (no schema_fallback_id, boot_counter, schema-snap-* or schema-good* entry); not checked");
-        free(cfg);
         return;
     }
     int fb = ent_index(c, nb->fallback);
@@ -483,11 +491,10 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *a
         if (i != fb && (!strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11)))
             report_entry(c, "", i, T_WARN, 1);
 
-    if (!cfg) unreadable(c, "GRUB config", c->o->grubcfg, e);
+    if (!cfg) emit(c, T_NOTE, "09_schema_fallback not checked: %s is unread (above)", c->o->grubcfg);
     else if (grubcfg_live_fallback(cfg)) emit(c, T_PASS, "09_schema_fallback is live in %s", c->o->grubcfg);
     else emit(c, T_FAIL, "09_schema_fallback is not live code in %s: the guard can't fire "
                          "(make install-bootguard; grub2-mkconfig -o %s)", c->o->grubcfg, c->o->grubcfg);
-    free(cfg);
     esp_check(c);
     bootok_check(c, act);
 }
@@ -548,7 +555,14 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         unreadable(&c, "grubenv", o->grubenv, errno);
     } else if (!load_entries(&c)) {
         boot_ok = 1;
-        nbrc = nextboot_resolve(c.env, c.nenv, c.ents, c.nents, &nb);
+        char dflt[256];
+        c.cfg = read_path(o->grubcfg, &c.cfg_err);
+        /* saved_entry decides only when the header sets default="${saved_entry}" */
+        int dk = c.cfg ? grubcfg_default(c.cfg, dflt, sizeof dflt) : -1;
+        if (!c.cfg) unreadable(&c, "GRUB config", o->grubcfg, c.cfg_err);
+        else if (dk) emit(&c, T_UNRES, "%s: which default= its header sets could not be told", o->grubcfg);
+        else if (strcmp(dflt, "${saved_entry}")) emit(&c, T_NOTE, "%s sets default=\"%s\", not saved_entry", o->grubcfg, dflt);
+        nbrc = nextboot_resolve(c.env, c.nenv, c.ents, c.nents, dk ? NULL : dflt, c.cut, &nb);
         act = ent_index(&c, nb.actual);
         nor = ent_index(&c, nb.normal);
         const char *saved = env_get(&c, "saved_entry"), *next = env_get(&c, "next_entry");
@@ -629,6 +643,7 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     fputc('\n', out);
 
     for (int i = 0; i < c.n; i++) free(c.l[i].s);
+    free(c.cfg);
     for (int i = 0; i < MAXENTS; i++) free(c.rep[i].check_out);
     free(c.l);
     free(c.ents);

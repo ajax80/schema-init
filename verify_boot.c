@@ -1,21 +1,24 @@
 #include "verify_boot.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-int grubenv_read(const char *path, char (*kv)[2][256], int max) {
+int grubenv_read(const char *path, grubenv_t *kv, int max) {
     FILE *f = fopen(path, "r");
     if (!f) return -1;
-    char line[1024];
+    char *line = NULL;
+    size_t cap = 0;
     int n = 0;
-    while (n < max && fgets(line, sizeof line, f)) {
+    while (n < max && getline(&line, &cap, f) >= 0) {
         line[strcspn(line, "\n")] = '\0';
         char *eq = strchr(line, '=');
-        if (line[0] == '#' || !eq) continue;
-        snprintf(kv[n][0], 256, "%.*s", (int)(eq - line), line);
-        snprintf(kv[n][1], 256, "%s", eq + 1);
+        if (line[0] == '#' || !eq || eq - line >= GRUBENV_SZ) continue;
+        snprintf(kv[n][0], GRUBENV_SZ, "%.*s", (int)(eq - line), line);
+        if (snprintf(kv[n][1], GRUBENV_SZ, "%s", eq + 1) >= GRUBENV_SZ) snprintf(kv[n][1], GRUBENV_SZ, GRUBENV_CUT);
         n++;
     }
+    free(line);
     fclose(f);
     return n;
 }
@@ -55,9 +58,15 @@ int bls_parse(const char *path, bls_entry_t *e) {
         if (kl == 5 && !strncmp(k, "linux", 5)) {
             if (e->linux_path[0]) e->extra_linux = 1;
             else e->parse_err |= put(e->linux_path, sizeof e->linux_path, v);
+        } else if (kl == 7 && !strncmp(k, "version", 7)) {
+            if (!e->version[0]) e->parse_err |= put(e->version, sizeof e->version, v);
         } else if (kl == 6 && !strncmp(k, "initrd", 6)) {
             for (char *t = strtok(v, " \t"); t; t = strtok(NULL, " \t")) {
-                if (*t == '$') continue; /* a GRUB variable such as $tuned_initrd, not a file */
+                /* a GRUB variable such as $tuned_initrd, not a file */
+                if (*t == '$') {
+                    e->initrd_vars++;
+                    continue;
+                }
                 if (e->n_initrd == 8) { e->parse_err = 1; break; }
                 e->parse_err |= put(e->initrd[e->n_initrd++], sizeof e->initrd[0], t);
             }
@@ -92,7 +101,7 @@ int karg_check(char (*args)[512], int n, char *why, size_t whysz) {
     return 0;
 }
 
-static const char *env_get(char (*env)[2][256], int n, const char *k) {
+static const char *env_get(grubenv_t *env, int n, const char *k) {
     for (int i = n - 1; i >= 0; i--)
         if (!strcmp(env[i][0], k)) return env[i][1][0] ? env[i][1] : NULL;
     return NULL;
@@ -104,14 +113,26 @@ static const char *ent_find(const bls_entry_t *ents, int n, const char *id) {
     return NULL;
 }
 
-int nextboot_resolve(char (*env)[2][256], int nenv, const bls_entry_t *ents, int nents, nextboot_t *nb) {
+int nextboot_resolve(grubenv_t *env, int nenv, const bls_entry_t *ents, int nents, const char *dflt, int cut,
+                     nextboot_t *nb) {
     const char *saved = env_get(env, nenv, "saved_entry"), *next = env_get(env, nenv, "next_entry");
     const char *fb = env_get(env, nenv, "schema_fallback_id");
     const char *cnt = env_get(env, nenv, "boot_counter"), *ok = env_get(env, nenv, "boot_success");
     memset(nb, 0, sizeof *nb);
 
-    if (saved) nb->normal = ent_find(ents, nents, saved);
-    else if (nents) nb->normal = ents[0].id;
+    /* blscfg places an entry without a version key where verify can't be sure of */
+    int posok = !cut;
+    for (int i = 0; i < nents; i++) posok &= !!ents[i].version[0];
+    size_t dl = dflt ? strlen(dflt) : 0;
+    if (!dflt) {
+    } else if (!strcmp(dflt, "${saved_entry}")) {
+        if (saved) nb->normal = ent_find(ents, nents, saved);
+        else if (posok && nents) nb->normal = ents[0].id;
+    } else if (dl && dl < 4 && strspn(dflt, "0123456789") == dl) {
+        if (posok && atoi(dflt) < nents) nb->normal = ents[atoi(dflt)].id;
+    } else {
+        nb->normal = ent_find(ents, nents, dflt);
+    }
     nb->actual = next ? ent_find(ents, nents, next) : nb->normal;
     if (!nb->normal || (next && !nb->actual)) nb->unresolved = 1;
 
@@ -140,7 +161,15 @@ int nextboot_resolve(char (*env)[2][256], int nenv, const bls_entry_t *ents, int
         }
     }
 
-    if (fb && !nb->fallback) {
+    /* a value grubenv_read could not hold whole decides nothing */
+    const char *sel[] = { saved, next, fb, cnt, ok };
+    for (size_t i = 0; i < sizeof sel / sizeof *sel; i++)
+        if (sel[i] && !strcmp(sel[i], GRUBENV_CUT)) {
+            nb->actual = NULL;
+            nb->unresolved = 1;
+            if (sel[i] == fb) nb->fallback = NULL;
+        }
+    if (fb && !nb->fallback && strcmp(fb, GRUBENV_CUT)) {
         nb->fallback = fb;
         nb->unresolved = 1;
         return 2;
@@ -187,4 +216,61 @@ int grubcfg_live_fallback(const char *cfg) {
         }
     }
     return live;
+}
+
+int grubcfg_default(const char *cfg, char *out, size_t n) {
+    /* per open if: 'n' next_entry test, 'b' boot_counter/boot_success test, 'o' other;
+     * upper case once in its else branch */
+    char kind[64];
+    int depth = 0, braces = 0, found = -1, menu = 0;
+    for (const char *p = cfg; *p;) {
+        size_t ll = strcspn(p, "\n");
+        char line[1024];
+        snprintf(line, sizeof line, "%.*s", (int)ll, p);
+        p += ll + (p[ll] == '\n');
+        char *s = line + strspn(line, " \t");
+        char *end = s + strlen(s);
+        while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) *--end = '\0';
+        if (!*s || *s == '#') continue;
+
+        if ((has_word(s, "menuentry") || has_word(s, "submenu")) && menu >= 0) menu = 1;
+        if (has_word(s, "if")) {
+            if (depth < (int)sizeof kind)
+                kind[depth] = strstr(s, "\"${next_entry}\"") ? 'n'
+                              : strstr(s, "${boot_counter}") || strstr(s, "${boot_success}") ? 'b' : 'o';
+            depth++;
+        } else if ((has_word(s, "elif") || has_word(s, "else")) && depth > 0) {
+            if (depth <= (int)sizeof kind) kind[depth - 1] = toupper((unsigned char)kind[depth - 1]);
+        } else if (has_word(s, "fi") && depth > 0) {
+            depth--;
+        } else if (has_word(s, "blscfg") && !braces && !depth) {
+            /* a position counts blscfg's entries only when nothing is listed ahead of them */
+            if (menu && found == 0 && strspn(out, "0123456789") == strlen(out)) return -1;
+            menu = -1;
+        } else if (end > s && end[-1] == '{') {
+            braces++;
+        } else if (!strcmp(s, "}")) {
+            braces--;
+        } else if (!strncmp(s, "set default=", 12) && !braces) {
+            int skip = 0, other = 0;
+            for (int i = 0; i < depth && i < (int)sizeof kind; i++) {
+                skip |= kind[i] == 'n' || kind[i] == 'b' || kind[i] == 'B';
+                other |= kind[i] == 'o' || kind[i] == 'O';
+            }
+            if (skip) continue;
+            /* a default set under a condition verify can't judge: not known, unless a later one overrides it */
+            if (other || depth > (int)sizeof kind) {
+                found = -1;
+                continue;
+            }
+            char *v = s + 12;
+            size_t vl = strlen(v);
+            if (vl >= 2 && (v[0] == '"' || v[0] == '\'') && v[vl - 1] == v[0]) {
+                v++;
+                vl -= 2;
+            }
+            found = snprintf(out, n, "%.*s", (int)vl, v) >= (int)n ? -1 : 0;
+        }
+    }
+    return found;
 }
