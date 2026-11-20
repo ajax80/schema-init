@@ -45,7 +45,7 @@ Accurate, but it reads like a log, not like an init system with its own identity
 PID 1 decides once at start (and again after a re-exec, without reprinting the banner):
 
 - stdout is a VT in text mode: `ioctl(1, KDGETMODE)` succeeds **and** returns `KD_TEXT` (a serial console or a file fails it; Plymouth holding the VT in `KD_GRAPHICS` keeps its splash, plain lines underneath), **and**
-- not switched off: kernel cmdline `schema.rail=plain`, or `rail=plain` in `/etc/schema-init/schema-init.conf` (the existing engine conf).
+- not switched off: kernel cmdline `schema.rail=plain`, or the word `plain` in `/etc/schema-init/rail` (one-word config files, like `/etc/schema-init/hardening-default` and `/etc/schema-init/watchdog`; there is no schema-init.conf).
 
 Otherwise every line is exactly today's line. This one rule keeps vmtest (console=ttyS0), the Pi wrapper's boot.log, and any `script`-captured console unchanged.
 
@@ -58,7 +58,7 @@ The decision is per sink, not global: the shutdown path writes through its own n
 ### 2. Font and palette (best-effort, VT only)
 
 At start, styled mode on:
-- **Font**: `KDFONTOP`/`KD_FONT_OP_SET` with the embedded `schema-16x32` glyphs (512 glyphs × 64 bytes = 32 KiB) and `PIO_UNIMAPCLR` + `PIO_UNIMAP` with its Unicode table. These are separate ioctls, so loading is transactional: first save the current font (`KD_FONT_OP_GET`) and Unicode map (`GIO_UNIMAP`); if any later step fails, put both back. If putting them back also fails, rail.log gets a clear `console font restore FAILED` line and styled mode stays off — never a silent half-changed console. If the framebuffer is too small for 16×32 to give ≥ 80 columns, skip the font (keep the kernel's) but keep the styling. Measured once at start with `FBIOGET_VSCREENINFO` on `/dev/fb0` (`xres >= 1280` — a heuristic on the framebuffer mode at that moment, not a promise about the final console geometry); no `/dev/fb0` yet → skip the font, never wait. A later KMS takeover (simpledrm → real driver) keeps the loaded font (fbcon re-applies it per console); a smaller final mode is accepted. **User font policy** (decision: the configured preference, not detection of what's loaded — the kernel can't name the loaded font): if `/etc/vconsole.conf` (Debian: `/etc/default/console-setup` `FONTFACE=`) names a font other than empty/`eurlatgr`/`schema-16x32`, skip our font and keep the styling. `rail_font=off` in schema-init.conf (or `schema.rail_font=off` on the cmdline) skips it unconditionally.
+- **Font**: `KDFONTOP`/`KD_FONT_OP_SET` with the embedded `schema-16x32` glyphs (**256** glyphs × 64 bytes = 16 KiB — a 512-glyph font makes the VT give up attribute bit 3 for the glyph index, leaving 8 foreground colours, and the design needs the bright ones) and `PIO_UNIMAPCLR` + `PIO_UNIMAP` with its Unicode table. These are separate ioctls, so loading is transactional: first save the current font (`KD_FONT_OP_GET`) and Unicode map (`GIO_UNIMAP`); if any later step fails, put both back. If putting them back also fails, rail.log gets a clear `console font restore FAILED` line and styled mode stays off — never a silent half-changed console. If the framebuffer is too small for 16×32 to give ≥ 80 columns, skip the font (keep the kernel's) but keep the styling. Measured once at start with `FBIOGET_VSCREENINFO` on `/dev/fb0` (`xres >= 1280` — a heuristic on the framebuffer mode at that moment, not a promise about the final console geometry); no `/dev/fb0` yet → skip the font, never wait. A later KMS takeover (simpledrm → real driver) keeps the loaded font (fbcon re-applies it per console); a smaller final mode is accepted. **User font policy** (decision: the configured preference, not detection of what's loaded — the kernel can't name the loaded font): if `/etc/vconsole.conf` (Debian: `/etc/default/console-setup` `FONTFACE=`) names a font other than empty/`eurlatgr`/`schema-16x32`, skip our font and keep the styling. The word `nofont` in `/etc/schema-init/rail` (or `schema.rail_font=off` on the cmdline) skips it unconditionally.
 - **Palette**: `PIO_CMAP` with the 16 schema RGB values (below). In the kernel (`con_set_cmap`, drivers/tty/vt/vt.c) this is global: it rewrites the default palette and every allocated VT — the builder re-confirms on the 6.x/7.x kernels we ship. Accepted: the desktop VT draws its own pixels. A PID 1 crash leaves the schema palette until reboot — accepted.
 - Any ioctl failure: plain text for the rest of the boot, one note line in rail.log, no retry.
 
@@ -90,7 +90,7 @@ SPAWN's dim green (1f 7a 4a) has no slot of its own: SPAWN uses green foreground
 
 ### 3. The schema font
 
-`fonts/schema-16x32.bdf` (source, committed) → `fonts/schema-16x32.psfu` (built) → embedded as a C array (`schema_font.c`, generated at build time, no runtime file read). Built from Spleen 16×32 (BSD-2-Clause; keep its copyright notice in `fonts/LICENSE.spleen` and the package docs).
+`fonts/schema-16x32.bdf` (source, committed) → `fonts/schema-16x32.psfu` (built) → embedded as a C array (`schema_font.c`, generated at build time, no runtime file read). Built from Spleen 16×32, cut down to 256 glyphs: ASCII, Latin-1 printable, light box drawing, and the rail glyphs (BSD-2-Clause; keep its copyright notice in `fonts/LICENSE.spleen` and the package docs).
 
 Glyphs the design needs that Spleen lacks or approximates, drawn in our font with correct Unicode mappings: `━ ┃ ┣ ┗ ╍` (heavy track), `◆ ◇ ▲ ■ □ ►`, `▓ ▒ ░` (banner blocks, Spleen's are kept if they map right). Every glyph the renderer emits must be in the font; a build-time test renders the full set of emitted strings through the font's Unicode table and fails on any unmapped code point.
 
@@ -176,7 +176,7 @@ PID 1 has no boot-complete notion today. **Settle detection is armed only after*
 - **Unchanged paths**: vmtest (serial) passes untouched; `rail.log` lines byte-identical to today for a fixed event sequence (golden test).
 - **Renderer unit tests** (pure function: event + service state + phase → styled line), golden strings for every chip, banner, finish, runtime, shutdown; ASCII-fallback set; width padding with long names (cut with `…` at 17).
 - **Mapping test**: every event name in the source has an explicit mapping.
-- **Font test**: the PSF parses, is 16×32, 512 glyphs, and maps every code point the renderer can emit.
+- **Font test**: the PSF parses, is 16×32, exactly 256 glyphs, and maps every code point the renderer can emit.
 - **VT test**: in a QEMU run with `console=tty0` (vmtest variant with a VGA screen + screendump), PID 1 loads font and palette, banner + finish line appear; one screenshot checked by eye by Jonathan before merge.
 - **Failure tests** (testhooks per ioctl): fail `KD_FONT_OP_SET`, `PIO_UNIMAPCLR`, `PIO_UNIMAP`, `PIO_CMAP` one at a time → console state rolled back (or the restore-FAILED line), plain lines, boot unaffected; palette apply failing after a successful save → no `console-orig` written, nothing restored at shutdown.
 - **Re-exec palette test**: stock palette → schema palette → re-exec → shutdown restore → the **stock** palette (not the schema one) is back; no second banner/finish after a re-exec during boot.
@@ -184,7 +184,7 @@ PID 1 has no boot-complete notion today. **Settle detection is armed only after*
 - **Settle tests**: empty queue before the first dispatch → no finish line; hung service → 120 s line, later readiness → runtime line, no second finish; counts sum to `svc_count` for every state.
 - **Delayed SPAWN**: ready or failed before 2 s → no SPAWN line.
 - **Shutdown outcomes**: STOPPED / KILLED / EXITED (exits between snapshot and stop) / STUCK, from a stubbed sweep.
-- **User font policy**: vconsole.conf names another font → our font skipped, styling kept; `rail_font=off` → skipped.
+- **User font policy**: vconsole.conf names another font → our font skipped, styling kept; `nofont` in `/etc/schema-init/rail` or `schema.rail_font=off` → skipped.
 - **KDGETMODE** checked on the real fds PID 1 uses: stdout as set up at boot and the shutdown `/dev/console` fd, in the QEMU VT run.
 
 ## Left to the builder
