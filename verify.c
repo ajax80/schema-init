@@ -31,6 +31,7 @@ typedef struct {
     int n;
     grubenv_t env[MAXENV];
     int nenv;
+    int ncfg; /* env[0..ncfg): grub.cfg's own top-level sets, for entry options only; grubenv's win */
     bls_entry_t *ents;
     int nents;
     root_report_t *rep; /* per entry, filled on first use */
@@ -63,7 +64,7 @@ static void unreadable(ctx_t *c, const char *what, const char *path, int e) {
 }
 
 static const char *env_get(ctx_t *c, const char *k) {
-    for (int i = c->nenv - 1; i >= 0; i--)
+    for (int i = c->nenv - 1; i >= c->ncfg; i--)
         if (!strcmp(c->env[i][0], k)) return c->env[i][1][0] ? c->env[i][1] : NULL;
     return NULL;
 }
@@ -676,10 +677,19 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         c.cfg = read_path(o->grubcfg, &c.cfg_err);
         /* saved_entry decides only when the header sets default="${saved_entry}" */
         int dk = c.cfg ? grubcfg_default(c.cfg, dflt, sizeof dflt) : -1;
+        if (c.cfg) {
+            /* GRUB's namespace for $var in options: these first, so grubenv and env_block override them */
+            grubenv_t cv[16];
+            int k = grubcfg_vars(c.cfg, cv, MAXENV - c.nenv < 16 ? MAXENV - c.nenv : 16);
+            memmove(c.env + k, c.env, (size_t)c.nenv * sizeof *c.env);
+            memcpy(c.env, cv, (size_t)k * sizeof *cv);
+            c.nenv += k;
+            c.ncfg = k;
+        }
         if (!c.cfg) unreadable(&c, "GRUB config", o->grubcfg, c.cfg_err);
         else if (dk) emit(&c, T_UNRES, "%s: which default= its header sets could not be told", o->grubcfg);
         else if (strcmp(dflt, "${saved_entry}")) emit(&c, T_NOTE, "%s sets default=\"%s\", not saved_entry", o->grubcfg, dflt);
-        nbrc = nextboot_resolve(c.env, c.nenv, c.ents, c.nents, dk ? NULL : dflt, c.cut || c.posbad, &nb);
+        nbrc = nextboot_resolve(c.env + c.ncfg, c.nenv - c.ncfg, c.ents, c.nents, dk ? NULL : dflt, c.cut || c.posbad, &nb);
         act = ent_index(&c, nb.actual);
         nor = ent_index(&c, nb.normal);
         const char *saved = env_get(&c, "saved_entry"), *next = env_get(&c, "next_entry");

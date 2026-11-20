@@ -202,7 +202,7 @@ int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, s
     char miss[256];
     int x = opts_expand(e->options, env, nenv, opts, optsz, miss, sizeof miss);
     if (x == -1) {
-        unres(r, "options use $%s, not in grubenv", miss);
+        unres(r, "options use $%s, not in grubenv or grub.cfg", miss);
         return -1;
     }
     if (x == -2) {

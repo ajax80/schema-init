@@ -301,3 +301,53 @@ int grubcfg_default(const char *cfg, char *out, size_t n) {
     }
     return found;
 }
+
+int grubcfg_vars(const char *cfg, grubenv_t *kv, int max) {
+    int depth = 0, braces = 0, n = 0;
+    for (const char *p = cfg; *p;) {
+        size_t ll = strcspn(p, "\n");
+        char line[1024];
+        snprintf(line, sizeof line, "%.*s", (int)ll, p);
+        p += ll + (p[ll] == '\n');
+        char *s = line + strspn(line, " \t");
+        char *end = s + strlen(s);
+        while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) *--end = '\0';
+        if (!*s || *s == '#') continue;
+        if (has_word(s, "if")) depth++;
+        else if (has_word(s, "fi") && depth > 0) depth--;
+        else if (end > s && end[-1] == '{') braces++;
+        else if (!strcmp(s, "}")) braces--;
+        else if (!depth && !braces && has_word(s, "set")) {
+            char *nm = s + 3 + strspn(s + 3, " \t"), *v = nm;
+            if (!isalpha((unsigned char)*v) && *v != '_') continue;
+            while (isalnum((unsigned char)*v) || *v == '_') v++;
+            if (*v != '=') continue;
+            *v++ = '\0';
+            char *ve;
+            int q = *v == '\'' || *v == '"';
+            /* only a literal: a value naming another variable is left unknown */
+            if (*v == '\'') {
+                if (!(ve = strchr(v + 1, '\''))) continue;
+                v++;
+            } else if (*v == '"') {
+                ve = v + 1 + strcspn(v + 1, "\"$\\`");
+                if (*ve != '"') continue;
+                v++;
+            } else {
+                ve = v + strcspn(v, " \t;$\"'\\`");
+            }
+            char *rest = ve + q;
+            rest += strspn(rest, " \t");
+            if (*rest && *rest != '#') continue;
+            *ve = '\0';
+            int i;
+            for (i = 0; i < n && strcmp(kv[i][0], nm); i++)
+                ;
+            if (i == n && n == max) continue;
+            snprintf(kv[i][0], GRUBENV_SZ, "%s", nm);
+            snprintf(kv[i][1], GRUBENV_SZ, "%s", v);
+            n += i == n;
+        }
+    }
+    return n;
+}

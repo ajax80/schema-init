@@ -41,5 +41,8 @@ int grubcfg_live_fallback(const char *cfg_text);
 /* the value grub.cfg's header gives default= when there is no next_entry ("${saved_entry}",
  * a position, a title); 0, or -1 when it can't be told */
 int grubcfg_default(const char *cfg_text, char *out, size_t n);
+/* grub.cfg's top-level literal set NAME=value lines (not under if, menuentry or function),
+ * the last one per name; the count */
+int grubcfg_vars(const char *cfg_text, grubenv_t *kv, int max);
 
 #endif

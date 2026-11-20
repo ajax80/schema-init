@@ -304,6 +304,30 @@ static void test_envblock(void) {
     remove(dev);
 }
 
+static const char *kvget(grubenv_t *kv, int n, const char *k) {
+    for (int i = 0; i < n; i++)
+        if (!strcmp(kv[i][0], k)) return kv[i][1];
+    return NULL;
+}
+
+/* grub.cfg's own top-level set NAME=value: 00_tuned's tuned_params="" is one */
+static void test_grubcfg_vars(void) {
+    grubenv_t kv[16];
+    int n = grubcfg_vars(slurp(FX "grub-real.cfg"), kv, 16);
+    assert(kvget(kv, n, "tuned_params") && !strcmp(kvget(kv, n, "tuned_params"), ""));
+    assert(kvget(kv, n, "tuned_initrd") && !strcmp(kvget(kv, n, "tuned_initrd"), ""));
+    assert(kvget(kv, n, "pager") && !strcmp(kvget(kv, n, "pager"), "1"));
+    /* under an if, in a function or menuentry, or naming another variable: not known */
+    assert(!kvget(kv, n, "default") && !kvget(kv, n, "timeout") && !kvget(kv, n, "env_block"));
+    n = grubcfg_vars("set a='x y'\nset b=\"$c\"\nmenuentry m {\n  set d=1\n}\nset e=2 # c\nset f=\"g\" h\n", kv, 16);
+    assert(kvget(kv, n, "a") && !strcmp(kvget(kv, n, "a"), "x y"));
+    assert(!kvget(kv, n, "b") && !kvget(kv, n, "d") && !kvget(kv, n, "f"));
+    assert(kvget(kv, n, "e") && !strcmp(kvget(kv, n, "e"), "2"));
+    /* a later top-level set wins */
+    n = grubcfg_vars("set a=1\nset a=2\n", kv, 16);
+    assert(n == 1 && !strcmp(kvget(kv, n, "a"), "2"));
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) tmpd = argv[1];
     test_karg();
@@ -313,6 +337,7 @@ int main(int argc, char **argv) {
     test_grubenv_long();
     test_grubcfg_default();
     test_envblock();
+    test_grubcfg_vars();
     printf("verify_boot: ok\n");
     return 0;
 }

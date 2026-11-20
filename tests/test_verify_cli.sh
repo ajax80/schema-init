@@ -199,6 +199,19 @@ has "[PASS] actual next boot m-7.2.11: entry checks pass; init=/sbin/schema-init
 entry m-7.2.11 root
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 
+# $tuned_params: not in grubenv, but grub.cfg's 00_tuned sets it to "" at top level
+entry m-7.2.11 root '$tuned_params'
+v
+expect 0 cfg-var
+has "[PASS] actual next boot m-7.2.11: entry checks pass" || fail "cfg-var: entry not inspected"
+# grubenv's value wins over grub.cfg's
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\ntuned_params=root=PARTUUID=other\n' "$F" > "$T/grubenv"
+v
+expect 1 cfg-var-grubenv
+has "[FAIL] actual next boot m-7.2.11: conflicting root=" || fail "cfg-var-grubenv: grubenv value not used"
+entry m-7.2.11 root
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
+
 # env_block=: GRUB loads it after grubenv and its values win; here it holds a spent guard
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\nboot_success=1\nenv_block=512+1\n' "$F" > "$T/grubenv"
 B='# GRUB Environment Block

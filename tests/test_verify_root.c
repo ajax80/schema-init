@@ -206,7 +206,7 @@ static void test_precheck(void) {
     /* a variable grubenv doesn't hold is unknown, never a FAIL */
     e = entry("$kernelopts $tuned_params2");
     assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == -1);
-    assert(!r.fail && r.nunres == 1 && !strcmp(r.unres[0], "options use $tuned_params2, not in grubenv"));
+    assert(!r.fail && r.nunres == 1 && !strcmp(r.unres[0], "options use $tuned_params2, not in grubenv or grub.cfg"));
     assert(r.unresolved == r.unres[0]);
     e = entry("$longopts");
     assert(entry_precheck(&e, env, 4, opts, sizeof opts, &r) == -1);
