@@ -1,0 +1,134 @@
+schema-verify-baseline v1
+binary_version=0.4.20
+created=1763500000
+cmdline.root=UUID=abc
+cmdline.rootflags=subvol=root
+hardening_default=on
+svc_dir=/etc/schema-init/services
+note: dependency graph: no cycles
+getty-tty1.exec=/usr/bin/getty-tty1
+getty-tty1.protect_home=0	src=default
+mount-home.exec=/usr/bin/mount-home
+mount-home.protect_home=0	src=default
+sddm.exec=/usr/bin/sddm
+sddm.protect_home=0	src=default
+svc05.exec=/usr/bin/svc05
+svc05.protect_home=0	src=default
+svc06.exec=/usr/bin/svc06
+svc06.protect_home=0	src=default
+svc07.exec=/usr/bin/svc07
+svc07.protect_home=0	src=default
+svc08.exec=/usr/bin/svc08
+svc08.protect_home=0	src=default
+svc09.exec=/usr/bin/svc09
+svc09.protect_home=0	src=default
+svc10.exec=/usr/bin/svc10
+svc10.protect_home=0	src=default
+svc11.exec=/usr/bin/svc11
+svc11.protect_home=0	src=default
+svc12.exec=/usr/bin/svc12
+svc12.protect_home=0	src=default
+svc13.exec=/usr/bin/svc13
+svc13.protect_home=0	src=default
+svc14.exec=/usr/bin/svc14
+svc14.protect_home=0	src=default
+svc15.exec=/usr/bin/svc15
+svc15.protect_home=0	src=default
+svc16.exec=/usr/bin/svc16
+svc16.protect_home=0	src=default
+svc17.exec=/usr/bin/svc17
+svc17.protect_home=0	src=default
+svc18.exec=/usr/bin/svc18
+svc18.protect_home=0	src=default
+svc19.exec=/usr/bin/svc19
+svc19.protect_home=0	src=default
+svc20.exec=/usr/bin/svc20
+svc20.protect_home=0	src=default
+svc21.exec=/usr/bin/svc21
+svc21.protect_home=0	src=default
+svc22.exec=/usr/bin/svc22
+svc22.protect_home=0	src=default
+svc23.exec=/usr/bin/svc23
+svc23.protect_home=0	src=default
+svc24.exec=/usr/bin/svc24
+svc24.protect_home=0	src=default
+svc25.exec=/usr/bin/svc25
+svc25.protect_home=0	src=default
+svc26.exec=/usr/bin/svc26
+svc26.protect_home=0	src=default
+svc27.exec=/usr/bin/svc27
+svc27.protect_home=0	src=default
+svc28.exec=/usr/bin/svc28
+svc28.protect_home=0	src=default
+svc29.exec=/usr/bin/svc29
+svc29.protect_home=0	src=default
+svc30.exec=/usr/bin/svc30
+svc30.protect_home=0	src=default
+svc31.exec=/usr/bin/svc31
+svc31.protect_home=0	src=default
+svc32.exec=/usr/bin/svc32
+svc32.protect_home=0	src=default
+svc33.exec=/usr/bin/svc33
+svc33.protect_home=0	src=default
+svc34.exec=/usr/bin/svc34
+svc34.protect_home=0	src=default
+svc35.exec=/usr/bin/svc35
+svc35.protect_home=0	src=default
+svc36.exec=/usr/bin/svc36
+svc36.protect_home=0	src=default
+svc37.exec=/usr/bin/svc37
+svc37.protect_home=0	src=default
+svc38.exec=/usr/bin/svc38
+svc38.protect_home=0	src=default
+svc39.exec=/usr/bin/svc39
+svc39.protect_home=0	src=default
+svc40.exec=/usr/bin/svc40
+svc40.protect_home=0	src=default
+svc41.exec=/usr/bin/svc41
+svc41.protect_home=0	src=default
+svc42.exec=/usr/bin/svc42
+svc42.protect_home=0	src=default
+svc43.exec=/usr/bin/svc43
+svc43.protect_home=0	src=default
+svc44.exec=/usr/bin/svc44
+svc44.protect_home=0	src=default
+svc45.exec=/usr/bin/svc45
+svc45.protect_home=0	src=default
+svc46.exec=/usr/bin/svc46
+svc46.protect_home=0	src=default
+svc47.exec=/usr/bin/svc47
+svc47.protect_home=0	src=default
+svc48.exec=/usr/bin/svc48
+svc48.protect_home=0	src=default
+svc49.exec=/usr/bin/svc49
+svc49.protect_home=0	src=default
+svc50.exec=/usr/bin/svc50
+svc50.protect_home=0	src=default
+svc51.exec=/usr/bin/svc51
+svc51.protect_home=0	src=default
+svc52.exec=/usr/bin/svc52
+svc52.protect_home=0	src=default
+svc53.exec=/usr/bin/svc53
+svc53.protect_home=0	src=default
+svc54.exec=/usr/bin/svc54
+svc54.protect_home=0	src=default
+svc55.exec=/usr/bin/svc55
+svc55.protect_home=0	src=default
+svc56.exec=/usr/bin/svc56
+svc56.protect_home=0	src=default
+svc57.exec=/usr/bin/svc57
+svc57.protect_home=0	src=default
+svc58.exec=/usr/bin/svc58
+svc58.protect_home=0	src=default
+svc59.exec=/usr/bin/svc59
+svc59.protect_home=0	src=default
+svc60.exec=/usr/bin/svc60
+svc60.protect_home=0	src=default
+svc61.exec=/usr/bin/svc61
+svc61.protect_home=0	src=default
+svc62.exec=/usr/bin/svc62
+svc62.protect_home=0	src=default
+svc63.exec=/usr/bin/svc63
+svc63.protect_home=0	src=default
+udevd.exec=/usr/bin/udevd
+udevd.protect_home=0	src=default

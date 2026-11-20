@@ -419,6 +419,8 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_verify_boot.c verify_boot.c karg.c -o $(TESTDIR)/verify-boot && $(TESTDIR)/verify-boot $(TESTDIR)
 	rm -rf $(TESTDIR)/vr-*
 	$(CC) $(CFLAGS) tests/test_verify_root.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-root && $(TESTDIR)/verify-root $(TESTDIR)
+	rm -rf $(TESTDIR)/vd-*
+	$(CC) $(CFLAGS) tests/test_verify_diff.c verify_diff.c verify_baseline.c svc_serial.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify-diff && $(TESTDIR)/verify-diff $(TESTDIR)
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey

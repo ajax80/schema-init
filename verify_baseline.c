@@ -27,20 +27,12 @@ static int write_all(int fd, const char *p, size_t n) {
     return 0;
 }
 
-int baseline_write(const char *dir, const char *check_out, size_t len, time_t now) {
-    const char *l2;
-    char created[32];
+/* the state dir, made and locked down; the fd, or -1 */
+static int state_dir_open(const char *dir) {
     struct statfs sf;
     struct stat st;
-    int dfd, fd, e;
+    int dfd, e;
 
-    /* an old binary without --check prints usage, not a baseline */
-    if (len < sizeof BASELINE_MAGIC - 1 || memcmp(check_out, BASELINE_MAGIC, sizeof BASELINE_MAGIC - 1) ||
-        !(l2 = memchr(check_out + sizeof BASELINE_MAGIC - 1, '\n', len - (sizeof BASELINE_MAGIC - 1)))) {
-        errno = EINVAL;
-        return -1;
-    }
-    l2++;
     if (mkdir(dir, 0700) < 0 && errno != EEXIST) return -1;
     /* O_NOFOLLOW|O_DIRECTORY reports ENOTDIR for a symlink, so ask directly */
     if (lstat(dir, &st) == 0 && S_ISLNK(st.st_mode)) {
@@ -62,44 +54,87 @@ int baseline_write(const char *dir, const char *check_out, size_t len, time_t no
         errno = EROFS;
         return -1;
     }
-    if (fstatat(dfd, "baseline", &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(st.st_mode)) {
-        close(dfd);
-        errno = ELOOP;
-        return -1;
-    }
-    snprintf(created, sizeof created, "created=%lld\n", (long long)now);
-    unlinkat(dfd, "baseline.tmp", 0);
-    fd = openat(dfd, "baseline.tmp", O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (fd < 0) goto fail;
-    if (fchmod(fd, 0600) < 0 ||
-        write_all(fd, check_out, (size_t)(l2 - check_out)) < 0 ||
-        write_all(fd, created, strlen(created)) < 0 ||
-        write_all(fd, l2, len - (size_t)(l2 - check_out)) < 0 ||
-        fsync(fd) < 0) {
-        e = errno;
-        close(fd);
-        unlinkat(dfd, "baseline.tmp", 0);
-        errno = e;
-        goto fail;
-    }
-    close(fd);
-    if (renameat(dfd, "baseline.tmp", dfd, "baseline") < 0) {
-        e = errno;
-        unlinkat(dfd, "baseline.tmp", 0);
-        errno = e;
-        goto fail;
-    }
-    fd = openat(dfd, "established", O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (fd < 0) goto fail;
-    close(fd);
-    fsync(dfd);
-    close(dfd);
-    return 0;
+    return dfd;
 fail:
     e = errno;
     close(dfd);
     errno = e;
     return -1;
+}
+
+/* NAME in DFD replaced by the two parts, via NAME.tmp + rename, 0600 */
+static int put_atomic(int dfd, const char *name, const char *a, size_t an, const char *b, size_t bn) {
+    char tmp[64];
+    struct stat st;
+    int fd, e;
+
+    if (fstatat(dfd, name, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(st.st_mode)) {
+        errno = ELOOP;
+        return -1;
+    }
+    snprintf(tmp, sizeof tmp, "%s.tmp", name);
+    unlinkat(dfd, tmp, 0);
+    fd = openat(dfd, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) return -1;
+    if (fchmod(fd, 0600) < 0 || write_all(fd, a, an) < 0 || write_all(fd, b, bn) < 0 || fsync(fd) < 0) {
+        e = errno;
+        close(fd);
+        unlinkat(dfd, tmp, 0);
+        errno = e;
+        return -1;
+    }
+    close(fd);
+    if (renameat(dfd, tmp, dfd, name) < 0) {
+        e = errno;
+        unlinkat(dfd, tmp, 0);
+        errno = e;
+        return -1;
+    }
+    return 0;
+}
+
+int verify_state_put(const char *dir, const char *name, const char *data, size_t len) {
+    int dfd = state_dir_open(dir), r, e;
+    if (dfd < 0) return -1;
+    r = put_atomic(dfd, name, data, len, "", 0);
+    e = errno;
+    if (r == 0) fsync(dfd);
+    close(dfd);
+    errno = e;
+    return r;
+}
+
+int baseline_write(const char *dir, const char *check_out, size_t len, time_t now) {
+    const char *l2;
+    char *head;
+    int dfd, fd, r, e;
+
+    /* an old binary without --check prints usage, not a baseline */
+    if (len < sizeof BASELINE_MAGIC - 1 || memcmp(check_out, BASELINE_MAGIC, sizeof BASELINE_MAGIC - 1) ||
+        !(l2 = memchr(check_out + sizeof BASELINE_MAGIC - 1, '\n', len - (sizeof BASELINE_MAGIC - 1)))) {
+        errno = EINVAL;
+        return -1;
+    }
+    l2++;
+    if ((dfd = state_dir_open(dir)) < 0) return -1;
+    /* the first two lines, then created=, then the rest */
+    if (asprintf(&head, "%.*screated=%lld\n", (int)(l2 - check_out), check_out, (long long)now) < 0) {
+        close(dfd);
+        errno = ENOMEM;
+        return -1;
+    }
+    r = put_atomic(dfd, "baseline", head, strlen(head), l2, len - (size_t)(l2 - check_out));
+    free(head);
+    if (r == 0) {
+        fd = openat(dfd, "established", O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (fd < 0) r = -1;
+        else close(fd);
+    }
+    e = errno;
+    if (r == 0) fsync(dfd);
+    close(dfd);
+    errno = e;
+    return r;
 }
 
 /* the value of service.<name>.<key>= at a line start, or NULL */

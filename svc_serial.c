@@ -448,3 +448,25 @@ int svc_serialize_all(const service_t *tab, int n, FILE *out) {
 int svc_serialize(const service_t *s, FILE *out) {
     return svc_serialize_all(s, 1, out);
 }
+
+/* read off the emitters on an empty service, so the list can't drift from what is written */
+int svc_serial_keys(const char *const **out) {
+    static char **keys;
+    static int n;
+    if (!keys) {
+        lines_t L = { 0 };
+        service_t *s = calloc(1, sizeof *s);
+        for (size_t p = 0; p < sizeof props / sizeof *props; p++) props[p].emit(&L, s);
+        free(s);
+        for (int i = 0; i < L.n; i++) {
+            /* ".<key>=<value>": the name is empty */
+            memmove(L.v[i], L.v[i] + 1, strlen(L.v[i]));
+            L.v[i][strcspn(L.v[i], "=")] = '\0';
+        }
+        qsort(L.v, (size_t)L.n, sizeof *L.v, line_cmp);
+        keys = L.v;
+        n = L.n;
+    }
+    *out = (const char *const *)keys;
+    return n;
+}
