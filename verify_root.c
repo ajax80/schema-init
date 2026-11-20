@@ -577,7 +577,11 @@ void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_repor
     static const char hdr[] = "schema-verify-baseline v1\n";
     /* rc 0/1 without the header: an init older than --check, or no report at all */
     if ((r->check_rc == 0 || r->check_rc == 1) && (!out || olen < sizeof hdr - 1 || memcmp(out, hdr, sizeof hdr - 1))) {
-        unres(r, "%s --check gave no report%s%s", r->init_path, err[0] ? ": " : "", err);
+        /* the caller decides what an older schema-init means for this entry's role */
+        if (r->is_schema_init && r->check_rc == 1 && strstr(err, "unknown option '--check'"))
+            r->predates_check = 1;
+        else
+            unres(r, "%s --check gave no report%s%s", r->init_path, err[0] ? ": " : "", err);
         r->check_rc = -1;
     }
     if (r->check_rc == -1 || !out) {

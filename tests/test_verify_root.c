@@ -306,8 +306,18 @@ static void test_report_fill(void) {
     r.check_rc = -1;
     char old[] = "I /usr/bin/schema-init\nS\nC 1\nE schema-init: unknown option '--check'\n";
     root_report_fill(old, strlen(old), NULL, 0, &r);
-    assert(!r.fail && r.nunres == 1 && r.check_rc == -1 && !r.check_out);
-    assert(!strcmp(r.unres[0], "/usr/bin/schema-init --check gave no report: schema-init: unknown option '--check'"));
+    assert(!r.fail && !r.nunres && r.predates_check && r.check_rc == -1 && !r.check_out);
+    /* no report for any other reason stays unresolved */
+    memset(&r, 0, sizeof r);
+    r.check_rc = -1;
+    char none[] = "I /usr/bin/schema-init\nS\nC 0\n";
+    root_report_fill(none, strlen(none), NULL, 0, &r);
+    assert(!r.predates_check && r.nunres == 1 && !strcmp(r.unres[0], "/usr/bin/schema-init --check gave no report"));
+    memset(&r, 0, sizeof r);
+    r.check_rc = -1;
+    char notsi[] = "I /usr/bin/other\nC 1\nE schema-init: unknown option '--check'\n";
+    root_report_fill(notsi, strlen(notsi), NULL, 0, &r);
+    assert(!r.predates_check && r.nunres == 1);
 
     memset(&r, 0, sizeof r);
     r.check_rc = -1;

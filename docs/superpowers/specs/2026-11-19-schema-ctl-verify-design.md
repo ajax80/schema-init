@@ -33,6 +33,7 @@ The question `verify` answers: **"if I reboot now, will this box come back, and 
 - Parsing arbitrary mount scripts (`mount-ocean-drives.sh` etc.). Disk checks cover fstab and the kernel log.
 - JSON output in v1.
 - Pi boot paths (`config.txt`/`cmdline.txt`, no GRUB) in v1: boot-entry checks report "not applicable"; `.svc` and disk checks still run (see §7).
+- Bootloaders other than GRUB+BLS and the Pi in v1 (no `/boot/grub2/grubenv` or no BLS entries directory — Debian's `/boot/grub`, systemd-boot): Next boot, Services and Ways back each report `[note] not applicable: unsupported bootloader (v1)` and never contribute exit 1/2/3; disk checks still run. A dangling grubenv symlink, or a missing grubenv while fstab's `/boot` is unmounted, is `[UNRESOLVED]`, not unsupported.
 
 ## Anti-goals
 
@@ -119,12 +120,13 @@ Sections, in order:
 1. **Actual next boot** — what GRUB picks on the next boot: `next_entry` if set (one-shot), else `saved_entry`/default, then the `09_schema_fallback` rule applied (`boot_counter` set, `boot_success=0`, counter `0`/`-1`, `schema_fallback_id` set → the fallback). This one drives the main FAIL decision.
 2. **Normal default** — the entry picked when no one-shot and no fallback condition applies.
 3. **Guard fallback** — `schema_fallback_id`, else the newest `schema-snap-*` (what `arm` would set).
-If the selection can't be resolved (unknown grub.cfg layout, an entry id that matches nothing), that's `[UNRESOLVED]`, never PASS. A `schema_fallback_id` naming no entry is FAIL.
+`saved_entry` decides only when grub.cfg's header sets `default="${saved_entry}"`; a numeric default is a position in blscfg's menu order (the `version` key, newest first, file name breaking a tie), which resolves only when every entry has a `version` key, none was left unread, and no menu entry precedes `blscfg`. If the selection can't be resolved (unknown grub.cfg layout, an entry id that matches nothing), that's `[UNRESOLVED]`, never PASS. A `schema_fallback_id` naming no entry is FAIL.
 
 **Entry checks** (applied to each of the three):
 - the entry file exists; no blank or whitespace-only line before its last key;
 - the options line is parsed as kernel arguments (quoting respected); duplicate or conflicting `root=`, `rootflags=` or `init=` → FAIL; no `root=` → FAIL;
 - `root=` resolves to a present device — **the entry's** device, not the running root's;
+- with no `initrd`, `root=` is a form the kernel resolves alone (`PARTUUID=`, `PARTLABEL=`, `/dev/<name>`, `major:minor`) — `UUID=`/`LABEL=`/`/dev/mapper/…` there → FAIL (blakbox 09-16 panic); an `initrd` of only `$variables` → UNRESOLVED;
 - `rootflags=subvol=` names a subvolume that exists on that device;
 - the `linux` path and **every** `initrd` path the entry references exist;
 - `init=` is executable inside the target root; when it is schema-init, `<init> --version` runs;
@@ -153,6 +155,7 @@ If the selection can't be resolved (unknown grub.cfg layout, an entry id that ma
 **Ways back**
 - The boot guard's fallback entry (`schema_fallback_id` in grubenv, else the newest `schema-snap-*`): the same entry checks as Next boot, plus its `rootflags=subvol=` subvolume must exist (`btrfs subvolume show`).
 - Every other `schema-snap-*` / `schema-good-*` entry: same checks, WARN only (they're not what the guard boots).
+- A fallback or other snapshot entry whose `init=` is a schema-init older than `--check` → WARN "predates --check; services not checked" (it still boots); the actual next boot predating `--check` stays UNRESOLVED.
 - `/boot/grub2/grub.cfg` contains the `09_schema_fallback` block **as live code** — the `set default="${schema_fallback_id}"` line inside the `boot_counter`/`boot_success` condition, outside comments, and after the point where the header sets `default` (or it would be overridden) — not just the variable name. The ESP grub.cfg is a stub. `schema-bootok` is installed, its `.svc` loads in `--check`, and its `exec=` exists and is executable. These replace today's grep-based `check_armable()` rules.
 - Any of the first three failing → FAIL. A guard that can't fire is a FAIL, not a warning.
 

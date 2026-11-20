@@ -135,6 +135,13 @@ expect 1 blank-fallback
 has "[FAIL] guard fallback $F: blank line" || fail "blank-fallback: line"
 v --quiet
 has "[FAIL] guard fallback $F" || fail "blank-fallback: quiet"
+# guard exhausted: the fallback is the actual next boot, its FAIL reported and counted once
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\nboot_counter=0\nboot_success=0\n' "$F" > "$T/grubenv"
+v
+expect 1 fallback-is-actual
+[ "$(grep -c "^\[FAIL\] .*$F: blank line" "$T/out")" -eq 1 ] || fail "fallback-is-actual: FAIL not once"
+has "Result: 1 fail" || fail "fallback-is-actual: count"
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 entry "$F" "$F"
 
 # an older snapshot entry broken: WARN only
@@ -271,6 +278,22 @@ expect 0 systemd
 has "[PASS] next boot is /usr/lib/systemd/systemd; services not checked" || fail "systemd: line"
 rm "$T/fx/init-m-7.2.11"
 
+# a way back whose schema-init predates --check still boots: WARN, services unchecked
+: > "$VFX/check-$F.out"
+printf 1 > "$VFX/rc-$F"
+printf "E schema-init: unknown option '--check'\n" > "$VFX/ctl-$F"
+v
+expect 0 fallback-predates
+has "[WARN] guard fallback $F: /sbin/schema-init predates --check; services not checked" || fail "fallback-predates: line"
+has "[UNRESOLVED]" && fail "fallback-predates: unresolved"
+# the actual next boot predating --check is not known to come back with its services
+for x in check-%s.out rc-%s ctl-%s; do mv "$VFX/$(printf "$x" "$F")" "$VFX/$(printf "$x" m-7.2.11)"; done
+v
+expect 3 actual-predates
+has "[UNRESOLVED] actual next boot m-7.2.11: /sbin/schema-init predates --check" || fail "actual-predates: line"
+has "[PASS] actual next boot m-7.2.11" && fail "actual-predates: PASS"
+rm "$VFX/check-m-7.2.11.out" "$VFX/rc-m-7.2.11" "$VFX/ctl-m-7.2.11"
+
 # root_inspect's own unresolved line, as it would come from the child
 printf 'U inspection did not finish within 30 s\n' > "$T/fx/ctl-m-7.2.11"
 v
@@ -285,12 +308,38 @@ expect 0 kmsg
 has "[WARN] sdb — 1 I/O error in the kernel log since boot" || fail "kmsg: line"
 : > "$T/kmsg"
 
-# no grubenv on a box that is not a Pi: unresolved, never PASS
+# no grubenv on a box that is not a Pi: not GRUB+BLS, which v1 does not judge; noted, never PASS
 mv "$T/grubenv" "$T/grubenv.off"
 v
-expect 3 no-grubenv
-has "[UNRESOLVED] grubenv $T/grubenv" || fail "no-grubenv: line"
-grep -q '^\[PASS\] actual' "$T/out" && fail "no-grubenv: PASS for the next boot"
+expect 0 no-grubenv
+[ "$(grep -c '^\[note\] not applicable: unsupported bootloader (v1)$' "$T/out")" -eq 3 ] || fail "no-grubenv: three notes"
+grep -q '^\[PASS\] \(actual\|services\)\|^\[UNRESOLVED\]' "$T/out" && fail "no-grubenv: boot judged"
+grep -qx Disks "$T/out" && has "[PASS] required local filesystems present" || fail "no-grubenv: disks not checked"
+# but a grubenv symlink into an unmounted ESP is not "no GRUB"
+ln -s "$T/esp-gone/grubenv" "$T/grubenv"
+v
+expect 3 grubenv-dangling
+has "[UNRESOLVED] grubenv $T/grubenv is a dangling symlink" || fail "grubenv-dangling: line"
+rm "$T/grubenv"
+# nor is one on a /boot that fstab names and nothing has mounted
+if ! grep -q ' /boot ' /proc/self/mountinfo; then
+    printf 'UUID=bbbb-0000 /boot ext4 defaults 0 2\n' >> "$T/fstab"
+    v
+    expect 1 grubenv-boot-unmounted
+    has "[UNRESOLVED] grubenv $T/grubenv is missing and /boot, in fstab, is not mounted" || fail "grubenv-boot-unmounted: line"
+    printf 'UUID=aaaa-1111 / btrfs subvol=root 0 0\ntmpfs /tmp tmpfs defaults 0 0\n' > "$T/fstab"
+fi
+# grubenv without blsdir= and no entries dir: not BLS
+printf 'saved_entry=x\n' > "$T/grubenv"
+SCHEMA_VERIFY_BLS_DIR="$T/no-bls" v
+expect 0 no-bls
+has "[note] not applicable: unsupported bootloader (v1)" || fail "no-bls: note"
+# with blsdir= naming it, a missing dir is a fault
+printf 'saved_entry=x\nblsdir=/x\n' > "$T/grubenv"
+SCHEMA_VERIFY_BLS_DIR="$T/no-bls" v
+expect 3 blsdir-missing
+has "[UNRESOLVED] boot entries $T/no-bls" || fail "blsdir-missing: line"
+rm "$T/grubenv"
 
 # a Pi: no grubenv, cmdline.txt; services from schema-init --check on it
 printf 'console=tty1 root=PARTUUID=%s rootwait init=/usr/sbin/schema-init-pi\n' "$PU" > "$T/cmdline.txt"
@@ -369,6 +418,13 @@ SCHEMA_VERIFY_BLS_DIR="$T/bls3" v
 expect 3 many
 has "[UNRESOLVED] too many boot entries" || fail "many: line"
 grep -q "^\[FAIL\]" "$T/out" && fail "many: a cut entry FAILed"
+
+# entries cut, no schema_fallback_id, the snapshots among the cut: unknown, not "no schema-snap-* entry"
+printf 'saved_entry=m-7.2.11\nboot_counter=2\nboot_success=0\n' > "$T/grubenv"
+SCHEMA_VERIFY_BLS_DIR="$T/bls3" v
+expect 3 many-nofb
+has "no schema-snap-* entry" && fail "many-nofb: FAIL for a cut entry"
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 
 if [ "$(id -u)" != 0 ]; then
     # an entry file that can't be read: a spare is a WARN; the guard's fallback is unresolved, not "no entry"

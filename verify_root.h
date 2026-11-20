@@ -21,6 +21,7 @@ typedef struct {
     char init_path[512]; /* init= resolved inside the target */
     int is_schema_init;
     int bootok_exec; /* schema-bootok's exec= in the target: 0 not seen, 1 executable, 2 not */
+    int predates_check; /* a schema-init that refused --check as an unknown option: no report, no unres line */
 } root_report_t;
 
 /* devdir NULL: /dev ($SCHEMA_VERIFY_DEVDIR in a -DSCHEMA_VERIFY_TESTHOOKS build). 0 when spec names a present node. */

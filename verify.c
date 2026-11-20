@@ -197,6 +197,8 @@ static int count_errors(const char *t) {
 static void report_entry(ctx_t *c, const char *role, int i, tag_t sev, int errs) {
     root_report_t *r = inspect(c, i);
     char who[400];
+    /* a way back with an older schema-init still boots; only its services go unchecked */
+    int spare = sev == T_WARN || !strcmp(role, "guard fallback");
     snprintf(who, sizeof who, "%s%s%s", role, *role ? " " : "", c->ents[i].id);
     for (int k = 0; k < r->nreasons; k++) emit(c, sev, "%s: %s", who, r->reasons[k]);
     for (int k = 0; k < r->nunres; k++) {
@@ -204,7 +206,9 @@ static void report_entry(ctx_t *c, const char *role, int i, tag_t sev, int errs)
         else if (!strcmp(r->unres[k], "needs root")) emit(c, T_UNRES, "needs root: %s", who);
         else emit(c, T_UNRES, "%s: %s", who, r->unres[k]);
     }
-    if (!r->fail && !r->nunres)
+    if (r->predates_check)
+        emit(c, spare ? T_WARN : T_UNRES, "%s: %s predates --check; services not checked", who, r->init_path);
+    if (!r->fail && !r->nunres && !(r->predates_check && !spare))
         emit(c, T_PASS, "%s: entry checks pass; init=%s%s", who, r->init_path, r->is_schema_init ? " (schema-init)" : "");
     int ne = errs ? count_errors(r->check_out) : 0;
     if (ne) emit(c, T_WARN, "%s: %d service%s fail to load there", who, ne, ne > 1 ? "s" : "");
@@ -291,6 +295,8 @@ static int load_entries(ctx_t *c) {
     struct dirent **d;
     if (!dir) return -1;
     int nd = scandir(dir, &d, conf_file, alphasort);
+    /* no blsdir= and no entries dir: not GRUB+BLS; a blsdir= naming nothing is a fault */
+    if (nd < 0 && errno == ENOENT && !env_get(c, "blsdir")) return -2;
     if (nd < 0) {
         unreadable(c, "boot entries", dir, errno);
         return -1;
@@ -467,7 +473,7 @@ static void bootok_check(ctx_t *c, root_report_t *r) {
     else emit(c, T_UNRES, "schema-bootok exec=%s: not checked", exe);
 }
 
-static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *act) {
+static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, int act, int nor, root_report_t *ar) {
     int guard = env_get(c, "schema_fallback_id") || env_get(c, "boot_counter");
     const char *cfg = c->cfg;
     for (int i = 0; i < c->nents; i++)
@@ -485,10 +491,14 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *a
     for (int i = 0; nb->fallback && i < c->nrej; i++) rej |= !strcmp(c->rej[i], nb->fallback);
     if (nbrc == 2 && rej) ;
     else if (nbrc == 2) emit(c, T_FAIL, "schema_fallback_id=%s names no boot entry", nb->fallback);
-    else if (fb < 0) emit(c, T_FAIL, "no schema-snap-* entry for the guard to fall back to");
+    else if (fb < 0 && !c->cut) emit(c, T_FAIL, "no schema-snap-* entry for the guard to fall back to");
+    else if (fb < 0) ;
+    /* already reported once under Next boot: its FAILs must not count twice */
+    else if (fb == act || fb == nor) emit(c, T_NOTE, "guard fallback %s: checked above", c->ents[fb].id);
     else report_entry(c, "guard fallback", fb, T_FAIL, 1);
     for (int i = 0; i < c->nents; i++)
-        if (i != fb && (!strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11)))
+        if (i != fb && i != act && i != nor &&
+            (!strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11)))
             report_entry(c, "", i, T_WARN, 1);
 
     if (!cfg) emit(c, T_NOTE, "09_schema_fallback not checked: %s is unread (above)", c->o->grubcfg);
@@ -496,7 +506,7 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *a
     else emit(c, T_FAIL, "09_schema_fallback is not live code in %s: the guard can't fire "
                          "(make install-bootguard; grub2-mkconfig -o %s)", c->o->grubcfg, c->o->grubcfg);
     esp_check(c);
-    bootok_check(c, act);
+    bootok_check(c, ar);
 }
 
 static char *read_kmsg(const char *path, int *err) {
@@ -538,7 +548,9 @@ static void disks(ctx_t *c) {
 int verify_run(const verify_opts_t *o, FILE *out) {
     ctx_t c = { .o = o };
     nextboot_t nb = { 0 };
-    int nbrc = 0, act = -1, nor = -1, pi = 0, boot_ok = 0;
+    int nbrc = 0, act = -1, nor = -1, pi = 0, boot_ok = 0, unsup = 0, lr = -1;
+    static const char unsup_note[] = "not applicable: unsupported bootloader (v1)";
+    struct stat ls;
     char *pi_out = NULL;
 
     c.ents = calloc(MAXENTS, sizeof *c.ents);
@@ -547,13 +559,23 @@ int verify_run(const verify_opts_t *o, FILE *out) {
 
     emit(&c, T_HEAD, "Next boot");
     c.nenv = grubenv_read(o->grubenv, c.env, MAXENV);
-    if (c.nenv < 0 && errno == ENOENT && !access(o->cmdline_txt, R_OK)) {
+    int ge = errno;
+    if (c.nenv < 0 && ge == ENOENT && !access(o->cmdline_txt, R_OK)) {
         pi = 1;
         c.nenv = 0;
         emit(&c, T_NOTE, "boot entries: not applicable (no GRUB; the next boot is %s)", o->cmdline_txt);
+    } else if (c.nenv < 0 && ge == ENOENT && !lstat(o->grubenv, &ls)) {
+        emit(&c, T_UNRES, "grubenv %s is a dangling symlink (its filesystem not mounted?)", o->grubenv);
+    } else if (c.nenv < 0 && ge == ENOENT && fstab_has(o->fstab, "/boot") && !boot_is_separate("/proc/self/mountinfo")) {
+        emit(&c, T_UNRES, "grubenv %s is missing and /boot, in fstab, is not mounted", o->grubenv);
+    } else if (c.nenv < 0 && ge == ENOENT) {
+        /* not GRUB+BLS (Debian's /boot/grub, systemd-boot): v1 judges nothing about such a boot */
+        unsup = 1;
     } else if (c.nenv < 0) {
-        unreadable(&c, "grubenv", o->grubenv, errno);
-    } else if (!load_entries(&c)) {
+        unreadable(&c, "grubenv", o->grubenv, ge);
+    } else if ((lr = load_entries(&c)) == -2) {
+        unsup = 1;
+    } else if (!lr) {
         boot_ok = 1;
         char dflt[256];
         c.cfg = read_path(o->grubcfg, &c.cfg_err);
@@ -578,9 +600,13 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         if (nb.fallback) emit(&c, T_NOTE, "guard fallback %s: checked under Ways back", nb.fallback);
     }
 
+    if (unsup) emit(&c, T_NOTE, "%s", unsup_note);
+
     emit(&c, T_HEAD, "Services");
     root_report_t *ar = act >= 0 ? inspect(&c, act) : NULL;
-    if (pi) {
+    if (unsup) {
+        emit(&c, T_NOTE, "%s", unsup_note);
+    } else if (pi) {
         int nocap = 0;
         if ((pi_out = pi_check(&c, &nocap))) services_report(&c, pi_out);
         else if (nocap) emit(&c, T_UNRES, "services: cannot capture --check output: %s", strerror(errno));
@@ -593,6 +619,8 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         services_report(&c, ar->check_out);
     } else if (ar->init_path[0] && !ar->is_schema_init) {
         emit(&c, ar->fail ? T_NOTE : T_PASS, "next boot is %s; services not checked", ar->init_path);
+    } else if (ar->predates_check) {
+        emit(&c, T_UNRES, "services: the next boot's %s predates --check; not checked", ar->init_path);
     } else if (geteuid() != 0 && !o->inspect) {
         emit(&c, T_UNRES, "needs root: the next boot's services");
     } else {
@@ -600,10 +628,11 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     }
 
     emit(&c, T_HEAD, "Ways back");
-    if (pi) emit(&c, T_NOTE, "not applicable (no GRUB)");
+    if (unsup) emit(&c, T_NOTE, "%s", unsup_note);
+    else if (pi) emit(&c, T_NOTE, "not applicable (no GRUB)");
     else if (!boot_ok && geteuid() != 0 && !o->inspect) emit(&c, T_UNRES, "needs root: ways back");
     else if (!boot_ok) emit(&c, T_UNRES, "boot entries unread: ways back not checked");
-    else ways_back(&c, nbrc, &nb, ar);
+    else ways_back(&c, nbrc, &nb, act, nor, ar);
 
     emit(&c, T_HEAD, "Disks");
     disks(&c);
