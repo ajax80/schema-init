@@ -1,0 +1,240 @@
+#include "check.h"
+#include "engine.h"
+#include "group.h"
+#include "pi_target.h"
+#include "schema.h"
+#include "service.h"
+#include "svc_dropins.h"
+#include "svc_serial.h"
+#include <ctype.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+typedef struct { char **v; int n, cap; } lines_t;
+
+static void lines_add(lines_t *l, const char *s) {
+    if (l->n == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 256;
+        l->v = realloc(l->v, l->cap * sizeof *l->v);
+    }
+    l->v[l->n++] = strdup(s);
+}
+
+static int str_cmp(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/* First whitespace-separated word starting with key, as hardening_default_resolve() reads it. */
+static int word_val(const char *cmdline, const char *key, char *out, size_t n) {
+    size_t kl = strlen(key);
+    for (const char *p = cmdline; *p;) {
+        p += strspn(p, " \t\n");
+        size_t wl = strcspn(p, " \t\n");
+        if (wl >= kl && strncmp(p, key, kl) == 0) {
+            snprintf(out, n, "%.*s", (int)(wl - kl), p + kl);
+            return 1;
+        }
+        p += wl;
+    }
+    return 0;
+}
+
+static size_t root_len(const char *root) {
+    size_t n = strlen(root);
+    while (n && root[n - 1] == '/') n--;
+    return n;
+}
+
+const char *check_svc_dir(const char *root, const char *cmdline, char *buf, size_t n) {
+    int rl = (int)root_len(root);
+    char init[PATH_MAX] = "", v[PATH_MAX];
+    struct stat st;
+    word_val(cmdline, "init=", init, sizeof init);
+    const char *base = strrchr(init, '/');
+    base = base ? base + 1 : init;
+    /* the wrapper unsets a cmdline SCHEMA_SVC_DIR and sets its own only for known-good */
+    if (strcmp(base, "schema-init-pi") == 0) {
+        char r[PATH_MAX];
+        struct pi_state ps;
+        snprintf(r, sizeof r, "%.*s", rl, root);
+        pi_state_load(r, &ps);
+        const char *rel = pi_choose_target(&ps, pi_known_good_differs(r)) == PI_KNOWN_GOOD
+                          ? "/var/lib/schema-init/known-good/services" : SVC_DIR;
+        snprintf(buf, n, "%.*s%s", rl, root, rel);
+        return buf;
+    }
+    /* svc_dir_from_env()'s rule: absolute and an existing directory */
+    if (word_val(cmdline, "SCHEMA_SVC_DIR=", v, sizeof v) && v[0] == '/') {
+        snprintf(buf, n, "%.*s%s", rl, root, v);
+        if (stat(buf, &st) == 0 && S_ISDIR(st.st_mode)) return buf;
+    }
+    snprintf(buf, n, "%.*s%s", rl, root, SVC_DIR);
+    return buf;
+}
+
+static int boot_critical(const char *w) {
+    static const char *const keys[] = { "root=", "rootflags=", "init=", "rd.", "modprobe.",
+                                        "SCHEMA_SVC_DIR=", "schema.hardening_default=" };
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
+        if (strncmp(w, keys[i], strlen(keys[i])) == 0) return 1;
+    return 0;
+}
+
+static int svc_file(const struct dirent *e) {
+    size_t n = strlen(e->d_name);
+    return n >= 5 && strcmp(e->d_name + n - 4, ".svc") == 0;
+}
+
+static int redirect(int fd) {
+    fflush(stdout);
+    fflush(stderr);
+    dup2(fd, STDOUT_FILENO);
+    return dup2(fd, STDERR_FILENO);
+}
+
+/* Loader lines name the root they were read under; the baseline must not. */
+static void strip_root(char *s, const char *root, size_t rl) {
+    char *p;
+    if (!rl) return;
+    while ((p = strstr(s, root)) && p[rl] == '/')
+        memmove(p, p + rl, strlen(p + rl) + 1);
+}
+
+static const char *untag(const char *s) {
+    const char *e;
+    if (s[0] == '[' && (e = strstr(s, "] "))) return e + 2;
+    return s;
+}
+
+int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_override) {
+    char root[PATH_MAX], dir[PATH_MAX], path[PATH_MAX], hd[64] = "";
+    size_t rl = root_len(root_arg);
+    snprintf(root, sizeof root, "%.*s", (int)rl, root_arg);
+
+    /* pid1_hardening_default(), from the target's inputs instead of /proc and the live /etc */
+    snprintf(path, sizeof path, "%s/etc/schema-init/hardening-default", root);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int have = fd >= 0;
+    if (have) { ssize_t n = read(fd, hd, sizeof hd - 1); if (n > 0) hd[n] = '\0'; close(fd); }
+    int hon = hardening_default_resolve(cmdline, have ? hd : NULL);
+    service_set_hardening_default(hon);
+
+    if (svc_dir_override) snprintf(dir, sizeof dir, "%s%s", root, svc_dir_override);
+    else check_svc_dir(root, cmdline, dir, sizeof dir);
+    /* PID 1's ./services fallback would read the caller's cwd, not the target */
+    engine_paths.svc_fallback = NULL;
+
+    int out = dup(STDOUT_FILENO), err = dup(STDERR_FILENO);
+    FILE *cap = tmpfile();
+    redirect(fileno(cap));
+    int cycles = engine_load(dir);
+
+    /* Which files failed is decided by loading each one again, not by the
+     * wording of the loader's messages. Their repeat chatter is discarded. */
+    int devnull = open("/dev/null", O_WRONLY | O_CLOEXEC);
+    redirect(devnull);
+    struct dirent **ents;
+    int ne = scandir(dir, &ents, svc_file, svc_dropin_cmp);
+    char *bad = calloc(ne > 0 ? ne : 1, 1);
+    char (*claimed)[64] = calloc(MAX_SERVICES, 64);
+    int nclaimed = 0;
+    for (int e = 0; e < ne; e++) {
+        service_t *t = calloc(1, sizeof *t);
+        snprintf(path, sizeof path, "%s/%s", dir, ents[e]->d_name);
+        bad[e] = 1;
+        if (service_load_one(path, t) != 0) continue;
+        int k, c;
+        for (k = 0; k < svc_count && strcmp(services[k].name, t->name); k++)
+            ;
+        for (c = 0; c < nclaimed && strcmp(claimed[c], t->name); c++)
+            ;
+        if (k < svc_count && c == nclaimed && nclaimed < MAX_SERVICES) {
+            snprintf(claimed[nclaimed++], 64, "%s", t->name);
+            bad[e] = 0;
+        }
+    }
+    redirect(out);
+    dup2(err, STDERR_FILENO);
+    close(out);
+    close(err);
+    close(devnull);
+
+    lines_t capl = { 0 };
+    char line[1024];
+    rewind(cap);
+    while (fgets(line, sizeof line, cap)) {
+        line[strcspn(line, "\n")] = 0;
+        strip_root(line, root, rl);
+        if (line[0]) lines_add(&capl, line);
+    }
+    fclose(cap);
+    char *used = calloc(capl.n ? capl.n : 1, 1);
+
+    printf("schema-verify-baseline v1\nbinary_version=%s\n", SCHEMA_INIT_VERSION);
+    lines_t cl = { 0 };
+    for (const char *p = cmdline; *p;) {
+        p += strspn(p, " \t\n");
+        size_t wl = strcspn(p, " \t\n");
+        snprintf(line, sizeof line, "cmdline.%.*s", (int)wl, p);
+        if (wl && boot_critical(p)) lines_add(&cl, line);
+        p += wl;
+    }
+    qsort(cl.v, cl.n, sizeof *cl.v, str_cmp);
+    for (int i = 0; i < cl.n; i++) puts(cl.v[i]);
+    printf("hardening_default=%s\nsvc_dir=%s\n", hon ? "on" : "off", dir + rl);
+
+    int errors = 0;
+    for (int e = 0; e < ne; e++) {
+        if (!bad[e]) continue;
+        const char *dn = ents[e]->d_name, *reason = "not loaded";
+        char rel[PATH_MAX], stem[80];
+        snprintf(rel, sizeof rel, "%s/%s", dir + rl, dn);
+        snprintf(stem, sizeof stem, " %.*s: ", (int)(strlen(dn) - 4), dn);
+        for (int i = 0; i < capl.n; i++)
+            if (!used[i] && (strstr(capl.v[i], rel) || strstr(capl.v[i], stem))) {
+                used[i] = 1;
+                reason = untag(capl.v[i]);
+                break;
+            }
+        printf("error: %s: %s\n", dn, reason);
+        errors++;
+    }
+    if (cycles > 0) { printf("error: %s: dependency cycle\n", dir + rl); errors++; }
+    if (svc_count == 0) { printf("error: %s: no services loaded\n", dir + rl); errors++; }
+    for (int i = 0; i < capl.n; i++)
+        if (!used[i]) printf("note: %s\n", untag(capl.v[i]));
+
+    lines_t body = { 0 };
+    char *ser = NULL;
+    size_t sl = 0;
+    FILE *ms = open_memstream(&ser, &sl);
+    svc_serialize_all(services, svc_count, ms);
+    fclose(ms);
+    for (char *s = ser, *nl; s && *s; s = nl + 1) {
+        nl = strchr(s, '\n');
+        if (!nl) { lines_add(&body, s); break; }
+        *nl = 0;
+        lines_add(&body, s);
+    }
+    int ng;
+    const group_t *g = engine_groups(&ng);
+    for (int i = 0; i < ng; i++) {
+        const char *m[MAX_MEMBERS];
+        int o = snprintf(line, sizeof line, "grp.%s.members=", g[i].name);
+        for (int k = 0; k < g[i].member_count; k++) m[k] = g[i].member_name[k];
+        qsort(m, g[i].member_count, sizeof *m, str_cmp);
+        for (int k = 0; k < g[i].member_count && o < (int)sizeof line; k++)
+            o += snprintf(line + o, sizeof line - o, "%s%s", k ? " " : "", m[k]);
+        lines_add(&body, line);
+    }
+    qsort(body.v, body.n, sizeof *body.v, str_cmp);
+    for (int i = 0; i < body.n; i++) puts(body.v[i]);
+    fflush(stdout);
+    return errors ? 1 : 0;
+}

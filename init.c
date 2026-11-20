@@ -17,6 +17,7 @@
 #include "engine.h"
 #include "service.h"
 #include "svc_dropins.h"
+#include "check.h"
 #include "reexec_state.h"
 #include "notify.h"
 #include "fdstore.h"
@@ -1294,6 +1295,8 @@ static void usage(FILE *out) {
         "  SERVICE_DIR    service definitions (default: %s)\n"
         "  -h, --help     show this help and exit\n"
         "  -V, --version  show version and exit\n"
+        "  --check --root DIR --cmdline OPTS [--svc-dir DIR]\n"
+        "                 load DIR's services as its next boot would and print them\n"
         "\n"
         "To inspect or control a running schema-init, use schema-ctl:\n"
         "  schema-ctl status | timing | list | reload | start NAME | stop NAME\n",
@@ -1681,6 +1684,8 @@ int main(int argc, char **argv) {
     const char *svc_dir = engine_paths.svc_dir;
     int have_dir = 0;
     int reexec_fd = -1, reexec_oldexe = -1, reexec_check_fd = -1;
+    int check = 0;
+    const char *check_root = NULL, *check_cmdline = NULL, *check_dir = NULL;
 
     /* An initrd's systemd runs with umask 0 and switch-root hands that to us;
      * every service would inherit it and create world-writable files.
@@ -1729,6 +1734,11 @@ int main(int argc, char **argv) {
          * (SCHEMA_SVC_DIR is honoured above: env reaches PID 1 only via a deliberate KEY=val on the cmdline or from the Pi wrapper, and is validated as an absolute dir.) */
         if (getpid() == 1)
             continue;
+        /* after the PID 1 skip: a kernel cmdline word must never turn PID 1 into a checker */
+        if (!strcmp(argv[i], "--check")) { check = 1; continue; }
+        if (!strcmp(argv[i], "--root") && i + 1 < argc) { check_root = argv[++i]; continue; }
+        if (!strcmp(argv[i], "--cmdline") && i + 1 < argc) { check_cmdline = argv[++i]; continue; }
+        if (!strcmp(argv[i], "--svc-dir") && i + 1 < argc) { check_dir = argv[++i]; continue; }
         if (argv[i][0] == '-') {
             fprintf(stderr, "schema-init: unknown option '%s'\n", argv[i]);
             usage(stderr);
@@ -1745,6 +1755,15 @@ int main(int argc, char **argv) {
 
     if (reexec_check_fd >= 0)
         return getpid() == 1 ? 1 : reexec_check_main(reexec_check_fd);
+
+    /* no /proc/cmdline fallback: the next boot's cmdline is the caller's to name */
+    if (check || check_root || check_cmdline || check_dir) {
+        if (getpid() == 1 || !check || !check_root || !check_cmdline || have_dir) {
+            fprintf(stderr, "schema-init: --check needs --root DIR --cmdline OPTS [--svc-dir DIR]\n");
+            return 1;
+        }
+        return check_main(check_root, check_cmdline, check_dir);
+    }
 
     if (argv[0] && argv[0][0] == '/' && strlen(argv[0]) < sizeof boot_argv0)
         snprintf(boot_argv0, sizeof boot_argv0, "%s", argv[0]);

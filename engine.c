@@ -3648,6 +3648,11 @@ int engine_reload(int evict, char *err, size_t errsz) {
     return handle_reload(evict, err, errsz);
 }
 
+const group_t *engine_groups(int *n) {
+    *n = grp_count;
+    return groups;
+}
+
 int engine_load(const char *svc_dir) {
     svc_count = services_load(svc_dir, services, MAX_SERVICES);
     if (svc_count == 0 && engine_paths.svc_fallback)

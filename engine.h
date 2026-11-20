@@ -89,6 +89,7 @@ void set_nonblock(int fd);
 void notify_pause_track(void);
 int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, int g_count);
 int engine_load(const char *svc_dir);
+const group_t *engine_groups(int *n);
 int engine_reload(int evict, char *err, size_t errsz);
 void listen_adopt(service_t *svc);
 

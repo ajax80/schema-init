@@ -55,7 +55,7 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
+SRCS    = init.c check.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
 OBJS    = $(SRCS:.c=.o)
 ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o svc_serial.o sha256.o
 # The core objects share these headers. Without this dependency an incremental
@@ -69,7 +69,7 @@ all: $(BINS)
 desktop:
 	$(MAKE) -C desktop
 
-schema-init: init.o $(ENGINE_OBJS)
+schema-init: init.o check.o $(ENGINE_OBJS)
 	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
 	# whole-program LTO link of PID 1 that CI never exercises
 	$(CC) $(STATIC_LDFLAGS) -o $@ $^ -lrt
@@ -118,6 +118,8 @@ schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match
 	$(CC) $(CFLAGS) $(DBUS_CFLAGS) $(LDFLAGS) schema-dbus.c -o $@ $(DBUS_LIBS)
 
 $(OBJS) schema-user.o: $(CORE_HDRS)
+check.o init.o: check.h
+check.o: pi_target.h pi_bootguard.h
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -272,7 +274,7 @@ install-analyze:
 	install -D -m 0755 schema-analyze $(DESTDIR)$(BINDIR)/schema-analyze
 	install -D -m 0644 analyze/schema-analyze.svc.example $(DESTDIR)$(DATADIR)/schema-init/services/schema-analyze.svc.example
 
-schema-init-pi: schema-init-pi.c pi_bootguard.h
+schema-init-pi: schema-init-pi.c pi_bootguard.h pi_target.h
 	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o $@ $<
 
 # The default CFLAGS/LDFLAGS make these pass; a packager's own flags may not,
@@ -298,9 +300,9 @@ armhf:
 	@if [ ! -f libatomic_asneeded.a ]; then ar rcs libatomic_asneeded.a; fi
 	$(MAKE) CROSS_COMPILE=arm-linux-gnu- $(CROSS_FLAGS) schema-init-static schema-ctl schema-subreaper schema-journal-sink
 
-test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board schema-user schema-systemctl $(OBJS)
+test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl schema-board schema-user schema-systemctl $(OBJS)
 	mkdir -p $(TESTDIR)
-	sh tests/check_tu_statics.sh init.o engine.o
+	sh tests/check_tu_statics.sh init.o check.o engine.o
 	$(CC) $(CFLAGS) tests/test_recorder.c -o $(TESTDIR)/recorder && $(TESTDIR)/recorder
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o $(TESTDIR)/recorder-scenario -lrt && $(TESTDIR)/recorder-scenario
 	sh tests/test_recorder_daemon.sh
@@ -405,6 +407,7 @@ test: schema-init-pi schema-coredump schema-recorder schema-ctl schema-board sch
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
 	$(CC) $(CFLAGS) tests/test_svc_serial.c svc_serial.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-serial && $(TESTDIR)/svc-serial
 	sh tests/test_svc_serial_keys.sh
+	sh tests/test_check_mode.sh
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
