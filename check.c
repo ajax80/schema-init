@@ -301,8 +301,11 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
         int o = snprintf(line, sizeof line, "grp.%s.members=", g[i].name);
         for (int k = 0; k < g[i].member_count; k++) m[k] = g[i].member_name[k];
         qsort(m, g[i].member_count, sizeof *m, str_cmp);
-        for (int k = 0; k < g[i].member_count && o < (int)sizeof line; k++)
-            o += snprintf(line + o, sizeof line - o, "%s%s", k ? " " : "", m[k]);
+        for (int k = 0; k < g[i].member_count && o < (int)sizeof line - 1; k++) {
+            int r = snprintf(line + o, sizeof line - o, "%s%s", k ? " " : "", m[k]);
+            /* a cut write stops the list: o never passes the buffer */
+            o = r < 0 || r >= (int)sizeof line - o ? (int)sizeof line - 1 : o + r;
+        }
         lines_add(&body, line);
     }
     if (body.n) qsort(body.v, body.n, sizeof *body.v, str_cmp);

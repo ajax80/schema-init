@@ -65,6 +65,27 @@ static void test_1118(void) {
     printf("ok test_1118\n");
 }
 
+/* more and longer service names than the run's name list holds: cut, never past the buffer */
+static void test_long_names(void) {
+    char *b = malloc(65536), *n = malloc(65536), name[121];
+    size_t bo = (size_t)snprintf(b, 65536, HDR), no = (size_t)snprintf(n, 65536, NHDR);
+    for (int i = 0; i < 10; i++) {
+        memset(name, 'a' + i, 120);
+        name[120] = '\0';
+        bo += (size_t)snprintf(b + bo, 65536 - bo, "%s.exec=/bin/true\n", name);
+        no += (size_t)snprintf(n + no, 65536 - no, "%s.exec=/bin/false\n", name);
+    }
+    diff(b, n);
+    assert(nf == 1 && f[0].kind == F_CHANGE && strstr(f[0].text, "10 services: "));
+    memset(name, 'a', 63);
+    name[63] = ' ';
+    name[64] = '\0';
+    assert(strstr(f[0].text, name));
+    assert(!strstr(f[0].text, "gggg") && strstr(f[0].text, " …"));
+    free(b); free(n);
+    printf("ok test_long_names\n");
+}
+
 static void test_argv_change(void) {
     diff(HDR "mount-home.argv=/home\nmount-home.exec=/usr/bin/mount\n",
          NHDR "mount-home.argv=/tmp\nmount-home.exec=/usr/bin/mount\n");
@@ -280,6 +301,7 @@ int main(int argc, char **argv) {
     snprintf(tmp, sizeof tmp, "%s", argc > 1 ? argv[1] : "/tmp");
     test_1118();
     test_argv_change();
+    test_long_names();
     test_source_only();
     test_removed();
     test_refused();

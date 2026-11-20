@@ -235,15 +235,22 @@ static int chg_cmp(const void *a, const void *b) {
     return c ? c : strcmp(x->svc, y->svc);
 }
 
+/* the next offset after an snprintf at o that returned r: a cut write leaves it at the
+ * terminator, so later appends write nothing */
+static size_t advance(size_t o, int r, size_t sz) {
+    return r < 0 || (size_t)r >= sz - o ? sz - 1 : o + (size_t)r;
+}
+
 /* one finding per run of equal (key, old, new, src): "syscall_deny  unset → default (default)   63 services: …" */
 static void emit_runs(ctx_t *c, fkind_t kind, chg_t *v, int n) {
     char d1[160], d2[160], names[SHOW_NAMES * 66 + 8];
     if (n) qsort(v, (size_t)n, sizeof *v, chg_cmp);
     for (int i = 0, j; i < n; i = j) {
         size_t o = 0;
+        names[0] = '\0';
         for (j = i; j < n && !strcmp(v[j].key, v[i].key) && !nstrcmp(v[j].old, v[i].old) &&
                     !nstrcmp(v[j].new, v[i].new) && !nstrcmp(v[j].src, v[i].src); j++)
-            if (j - i < SHOW_NAMES) o += (size_t)snprintf(names + o, sizeof names - o, " %.63s", v[j].svc);
+            if (j - i < SHOW_NAMES) o = advance(o, snprintf(names + o, sizeof names - o, " %.63s", v[j].svc), sizeof names);
         if (j - i > SHOW_NAMES) snprintf(names + o, sizeof names - o, " …");
         if (kind == F_NOTE)
             add(c, kind, "%s  source %s → %s   %d service%s:%s", v[i].key, v[i].old ? v[i].old : "none",
