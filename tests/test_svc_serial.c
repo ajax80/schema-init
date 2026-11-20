@@ -155,6 +155,61 @@ static void test_sha256(void) {
     printf("ok test_sha256\n");
 }
 
+/* an empty item must not vanish into its neighbours or into an empty list */
+static void test_empty_item(void) {
+    static service_t a, b;
+    char la[512], lb[512];
+    load("x.svc", "name=x\nexec=/usr/bin/true\n", &a);
+    b = a;
+    a.listen_count = 2; strcpy(a.listen[0], ""); strcpy(a.listen[1], "fifo:/run/a");
+    b.listen_count = 1; strcpy(b.listen[0], "fifo:/run/a");
+    char *ta = ser(&a), *tb = ser(&b);
+    assert(line_of(ta, "x.listen=", la, sizeof la) && line_of(tb, "x.listen=", lb, sizeof lb));
+    assert(strcmp(la, lb) != 0);
+    free(ta); free(tb);
+    a.listen_count = 1; strcpy(a.listen[0], "");
+    b.listen_count = 0;
+    ta = ser(&a); tb = ser(&b);
+    assert(line_of(ta, "x.listen=", la, sizeof la) && line_of(tb, "x.listen=", lb, sizeof lb));
+    assert(strcmp(la, lb) != 0);
+    free(ta); free(tb);
+    printf("ok test_empty_item\n");
+}
+
+/* the effective syscall_deny, explicit or defaulted (the 11-18 shape) */
+static void test_syscall_deny_label(void) {
+    static service_t a;
+    char l[512];
+    load("x.svc", "name=x\nexec=/usr/bin/true\nsyscall_deny=default\n", &a);
+    char *t = ser(&a);
+    assert(line_of(t, "x.syscall_deny=", l, sizeof l) && !strcmp(l, "x.syscall_deny=default\tsrc=explicit"));
+    free(t);
+    load("x.svc", "name=x\nexec=/usr/bin/true\n", &a);
+    t = ser(&a);
+    assert(line_of(t, "x.syscall_deny=", l, sizeof l) && !strcmp(l, "x.syscall_deny=-"));
+    free(t);
+    a.hard_default |= HARD_SD;
+    t = ser(&a);
+    assert(line_of(t, "x.syscall_deny=", l, sizeof l) && !strcmp(l, "x.syscall_deny=default\tsrc=default"));
+    free(t);
+    printf("ok test_syscall_deny_label\n");
+}
+
+/* the resolved set, not the spelling: syscall_deny=0 vs default must move sc.hash */
+static void test_sc_hash_tracks_set(void) {
+    static service_t a, b;
+    char la[512], lb[512];
+    load("x.svc", "name=x\nexec=/usr/bin/true\nsyscall_deny=0\n", &a);
+    load("x.svc", "name=x\nexec=/usr/bin/true\nsyscall_deny=default\n", &b);
+    char *ta = ser(&a), *tb = ser(&b);
+    assert(line_of(ta, "x.sc.hash=", la, sizeof la) && line_of(tb, "x.sc.hash=", lb, sizeof lb));
+    assert(strcmp(la, lb) != 0);
+    assert(line_of(ta, "x.sc.count=", la, sizeof la) && !strcmp(la, "x.sc.count=0"));
+    assert(line_of(tb, "x.sc.count=", lb, sizeof lb) && strcmp(lb, "x.sc.count=0"));
+    free(ta); free(tb);
+    printf("ok test_sc_hash_tracks_set\n");
+}
+
 int main(void) {
     assert(mkdtemp(dir));
     test_args_change();
@@ -164,6 +219,9 @@ int main(void) {
     test_enum_out_of_range();
     test_sorted_stable();
     test_sha256();
+    test_empty_item();
+    test_syscall_deny_label();
+    test_sc_hash_tracks_set();
     rmdir(dir);
     return 0;
 }

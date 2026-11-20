@@ -11,10 +11,13 @@ const char *svc_hard_source(const service_t *s, uint8_t bit) {
     return "unset";
 }
 
-/* what syscall_deny= does, not how it was spelled: off/no/... is "0", on/yes/... the preset */
+/* what syscall_deny= does, not how it was spelled: off/no/... is "0", on/yes/... the preset;
+ * explicit or defaulted, so a default that starts applying it shows */
 const char *svc_sc_deny_label(const service_t *s) {
     static const char *const off[] = { "0", "no", "off", "false", "none" }, *const on[] = { "default", "yes", "on", "true" };
-    if (!(s->hard_set & HARD_SD)) return "-";
+    if (!((s->hard_set | s->hard_default) & HARD_SD)) return "-";
+    /* a defaulted one never has its own spelling: it is the preset */
+    if (!(s->hard_set & HARD_SD) && !s->sc_deny[0]) return "default";
     for (size_t i = 0; i < sizeof off / sizeof *off; i++) if (!strcasecmp(s->sc_deny, off[i])) return "0";
     for (size_t i = 0; i < sizeof on / sizeof *on; i++) if (!strcasecmp(s->sc_deny, on[i])) return "default";
     return "list";
@@ -33,7 +36,7 @@ static const char *src_of(const service_t *s, uint8_t bit) {
     return NULL;
 }
 
-typedef struct { char *p; size_t n, cap; } sb_t;
+typedef struct { char *p; size_t n, cap; int items; } sb_t;
 
 static void sb_putc(sb_t *b, char c) {
     if (b->n + 2 > b->cap) {
@@ -54,8 +57,10 @@ static void sb_esc(sb_t *b, const char *v, int item) {
     }
 }
 
+/* \e for an empty item: else ["", "a"] reads as ["a"] and [""] as [] */
 static void sb_item(sb_t *b, const char *v) {
-    if (b->n) sb_putc(b, ' ');
+    if (b->items++) sb_putc(b, ' ');
+    if (!*v) { sb_putc(b, '\\'); sb_putc(b, 'e'); }
     sb_esc(b, v, 1);
 }
 
