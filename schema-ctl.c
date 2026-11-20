@@ -431,7 +431,7 @@ static uint64_t mono_ms(void) {
 }
 
 static int wait_settled(unsigned window_s) {
-    const uint64_t give_up = mono_ms() + 15 * 60 * 1000;
+    const uint64_t give_up = mono_ms() + settle_give_up_ms(window_s);
     settle_t st = {0};
     for (;;) {
         char *kv;
@@ -471,7 +471,7 @@ static char *slurp_fd(int fd, size_t *len) {
 }
 
 static int cmd_write_baseline(long wait_s) {
-    char comm[64] = "", cmdline[4096] = "";
+    char exe[PATH_MAX] = "", cmdline[4096] = "";
     const char *dir = getenv("SCHEMA_VERIFY_DIR");
     int fd, p[2], status;
     size_t len;
@@ -483,17 +483,15 @@ static int cmd_write_baseline(long wait_s) {
         fprintf(stderr, "schema-ctl verify --write-baseline: needs root (it runs /proc/1/exe)\n");
         return 1;
     }
-    fd = open("/proc/1/comm", O_RDONLY | O_CLOEXEC);
-    n = fd < 0 ? -1 : read(fd, comm, sizeof comm - 1);
-    if (fd >= 0) close(fd);
-    comm[n > 0 ? n : 0] = '\0';
-    comm[strcspn(comm, "\n")] = '\0';
-    if (strcmp(comm, "schema-init")) {
-        fprintf(stderr, "schema-ctl: PID 1 is %s, not schema-init — nothing to baseline\n", comm[0] ? comm : "unknown");
+    n = readlink("/proc/1/exe", exe, sizeof exe - 1);
+    exe[n > 0 ? n : 0] = '\0';
+    if (!pid1_exe_is_schema_init(exe)) {
+        fprintf(stderr, "schema-ctl: PID 1 is %s, not schema-init — nothing to baseline\n", exe[0] ? exe : "unknown");
         return 1;
     }
     if (wait_s >= 0 && wait_settled((unsigned)wait_s) < 0) {
-        fprintf(stderr, "schema-ctl: services did not settle within 15 minutes — baseline not written\n");
+        fprintf(stderr, "schema-ctl: services did not settle within %llu minutes — baseline not written\n",
+                (unsigned long long)(settle_give_up_ms((unsigned)wait_s) / 60000));
         return 3;
     }
     fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);

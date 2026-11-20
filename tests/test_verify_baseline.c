@@ -162,9 +162,12 @@ static void test_settle(void) {
     assert(settle_step(&st, kv("DORMANT", 0), S(0), 60) == 0);
     assert(settle_step(&st, kv("DORMANT", 0), S(200), 60) == 0);
     memset(&st, 0, sizeof st);
-    char x[1024];
+    char x[1024], *r;
     snprintf(x, sizeof x, "%s", kv("EXCISED", 0));
-    memcpy(strstr(x, "service.b.excise_reason=none"), "service.b.excise_reason=exit", 28);
+    r = strstr(x, "service.b.excise_reason=none\n") + 24;
+    memmove(r + 9, r + 4, strlen(r + 4) + 1);
+    memcpy(r, "exit-code", 9);
+    assert(strstr(x, "service.b.excise_reason=exit-code\nservice.c."));
     assert(settle_step(&st, x, S(0), 60) == 0);
     assert(settle_step(&st, x, S(200), 60) == 0);
     /* a deliberate stop (EXCISED, reason none) is not a failure */
@@ -178,6 +181,23 @@ static void test_settle(void) {
     assert(settle_step(&st, kv("PERFECT", 0), S(121), 60) == 1);
 }
 
+/* an init=/sbin/init symlink install has comm "init"; the exe link names the binary */
+static void test_pid1_exe(void) {
+    assert(pid1_exe_is_schema_init("/usr/bin/schema-init"));
+    assert(pid1_exe_is_schema_init("/usr/bin/schema-init (deleted)"));
+    assert(pid1_exe_is_schema_init("/var/lib/schema-init/known-good/schema-init"));
+    assert(!pid1_exe_is_schema_init("/usr/lib/systemd/systemd"));
+    assert(!pid1_exe_is_schema_init("/usr/lib/schema-init/init"));
+    assert(!pid1_exe_is_schema_init(""));
+}
+
+/* a window near or past the fixed 15 min would give up before it could settle */
+static void test_give_up(void) {
+    assert(settle_give_up_ms(60) == S(15 * 60));
+    assert(settle_give_up_ms(900) == S(900 + 5 * 60));
+    assert(settle_give_up_ms(3600) == S(3600 + 5 * 60));
+}
+
 int main(int argc, char **argv) {
     snprintf(base, sizeof base, "%s", argc > 1 ? argv[1] : ".");
     test_atomic_perms();
@@ -186,6 +206,8 @@ int main(int argc, char **argv) {
     test_dir_mode_and_owner();
     test_tmpfs_refused();
     test_settle();
+    test_pid1_exe();
+    test_give_up();
     puts("test_verify_baseline: ok");
     return 0;
 }

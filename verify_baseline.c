@@ -167,3 +167,17 @@ int settle_step(settle_t *st, const char *status_kv, uint64_t now_ms, unsigned w
     }
     return now_ms - st->since_ms >= (uint64_t)window_s * 1000;
 }
+
+/* 15 min, or the window plus 5 min: a long window must still get a chance */
+uint64_t settle_give_up_ms(unsigned window_s) {
+    uint64_t s = (uint64_t)window_s + 5 * 60;
+    return (s > 15 * 60 ? s : 15 * 60) * 1000;
+}
+
+/* By the exe link, not comm: an init=/sbin/init symlink install runs as
+ * "init". A binary replaced on disk reads "<path> (deleted)". */
+int pid1_exe_is_schema_init(const char *exe) {
+    const char *b = strrchr(exe, '/');
+    b = b ? b + 1 : exe;
+    return strncmp(b, "schema-init", 11) == 0;
+}
