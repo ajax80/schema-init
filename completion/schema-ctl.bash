@@ -10,7 +10,7 @@ _schema_ctl_svcs() {
 
 _schema_ctl() {
     local cur=${COMP_WORDS[COMP_CWORD]}
-    local cmds="status list analyze timing reload reexec start up stop down restart add cat graph trace pet reset reboot poweroff --help --version"
+    local cmds="status list analyze timing reload reexec start up stop down restart add cat graph trace verify pet reset reboot poweroff --help --version"
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
         return
@@ -19,6 +19,7 @@ _schema_ctl() {
         status)  [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "--json --kv $(_schema_ctl_svcs)" -- "$cur")) ;;
         trace)   COMPREPLY=($(compgen -W "--since" -- "$cur")) ;;
         reload)  COMPREPLY=($(compgen -W "--evict" -- "$cur")) ;;
+        verify)  COMPREPLY=($(compgen -W "--quiet --accept --write-baseline --wait-settled" -- "$cur")) ;;
         add|reexec) compopt -o filenames 2>/dev/null; COMPREPLY=($(compgen -f -- "$cur")) ;;
         analyze|start|up|stop|down|restart|cat|graph|pet|reset)
                  [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "$(_schema_ctl_svcs)" -- "$cur")) ;;

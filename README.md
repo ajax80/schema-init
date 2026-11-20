@@ -13,7 +13,7 @@
 | [How it works](docs/how-it-works.md) | The state machine, `.svc` files, states, shutdown, the shared-memory interface |
 | [Service file reference](docs/svc-reference.md) | Every `.svc` key |
 | [The reclaimed daemons](docs/components.md) | schema-udev, schema-doctor, schema-logind, schema-dbus, running packaged software |
-| [Running a schema-init box](docs/operations.md) | `schema-ctl`, the recovery console, debugging, crashes, logs, the per-user supervisor `schema-user` |
+| [Running a schema-init box](docs/operations.md) | `schema-ctl`, `schema-ctl verify` (will the box come back if you reboot now, and will the way back work?), the recovery console, debugging, crashes, logs, the per-user supervisor `schema-user` |
 | [Numbers](docs/benchmarks.md) | Every boot, RAM, power and footprint measurement, with method and raw data |
 | [Compared](docs/compared.md) | schema-init next to systemd, sysvinit, OpenRC, runit, s6, dinit, Shepherd and BusyBox init, with head-to-head boot numbers |
 | [Porting and distributions](docs/porting.md) | New distros, the shipped distro configs, repository layout |

@@ -113,6 +113,8 @@ static int64_t      ready_event_due = 0;    /* CLOCK_MONOTONIC ms, 0 = none */
 static int64_t      ready_backstop_due = 0;
 int64_t      cpu_check_due = 0;
 struct timespec init_start;
+char booted_version[64] = SCHEMA_INIT_VERSION;
+char booted_image[64] = "";
 
 static void start_failsafe(service_t *svc);
 static void active_kill_service(service_t *svc);
@@ -2526,7 +2528,10 @@ static void ctl_cmd(int fd, char *line) {
             }
             ctl_writef(fd, "  ]\n}\n");
         } else if (strcmp(opt, "--kv") == 0) {
-            ctl_writef(fd, "services_count=%d\ngroups_count=%d\n", svc_count, grp_count);
+            ctl_writef(fd, "services_count=%d\ngroups_count=%d\nbooted_version=%s\n", svc_count, grp_count,
+                       booted_version);
+            /* left out when not known (re-exec'd from an image that did not record it) */
+            if (booted_image[0]) ctl_writef(fd, "booted_image=%s\n", booted_image);
             for (i = 0; i < svc_count; i++) {
                 ctl_writef(fd, "service.%s.pid=%d\n", services[i].name, (int)services[i].child_pid);
                 ctl_writef(fd, "service.%s.state=%s\n", services[i].name, state_name(services[i].inst.state));

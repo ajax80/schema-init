@@ -10,12 +10,14 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sysexits.h>
 
 #include "schema.h"
 #include "svc_dropins.h"
 #include "schema_shm.h"
 #include "recorder_logic.h"
 #include "verify_baseline.h"
+#include "verify.h"
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
@@ -292,6 +294,16 @@ static void usage(FILE *out) {
         "                         pressure episodes, oldest first; <t> is an epoch\n"
         "                         or HH:MM today. Read from shared memory; root sees\n"
         "                         full command lines\n"
+        "  verify [--quiet] [--accept]\n"
+        "                         before a reboot: would the next boot come back, and\n"
+        "                         would the way back work? Checks the boot entry GRUB\n"
+        "                         picks next, its services against the last good\n"
+        "                         boot's baseline, the boot guard's fallback, and the\n"
+        "                         disks. Read-only; root for the full report. Exit 0\n"
+        "                         pass, 1 FAIL, 2 unaccepted CHANGE or lost baseline,\n"
+        "                         3 unresolved, 64 usage. --quiet: findings and the\n"
+        "                         result only; --accept: accept the current CHANGE\n"
+        "                         set (refused while anything FAILs)\n"
         "  verify --write-baseline [--wait-settled <secs>]\n"
         "                         save what this boot runs (the running binary's\n"
         "                         --check) as the baseline the next boot is diffed\n"
@@ -483,9 +495,57 @@ static char *slurp_fd(int fd, size_t *len) {
     return b;
 }
 
+/* 1 when the running image is not the one PID 1 booted; -1 when that can't be told (said why) */
+static int reexecd(const char *exe) {
+    char *kv, *ver, image[64];
+    size_t len;
+    int p[2], st, r;
+    pid_t pid;
+    struct stat ist;
+    if (stat("/proc/1/exe", &ist)) {
+        fprintf(stderr, "schema-ctl: /proc/1/exe: %s\n", strerror(errno));
+        return -1;
+    }
+    snprintf(image, sizeof image, "%llu:%llu", (unsigned long long)ist.st_dev, (unsigned long long)ist.st_ino);
+    r = ctl_request("status --kv\n", &kv, 1);
+    if (r != 0 || !strncmp(kv, "err:", 4)) {
+        fprintf(stderr, "schema-ctl: PID 1 did not answer status --kv%s%s; whether it was re-exec'd since boot is not known\n",
+                r < 0 ? ": " : "", r < 0 ? strerror(errno) : "");
+        free(kv);
+        return -1;
+    }
+    if (pipe2(p, O_CLOEXEC) < 0) {
+        free(kv);
+        return -1;
+    }
+    if ((pid = fork()) == 0) {
+        dup2(p[1], 1);
+        execl("/proc/1/exe", exe, "--version", (char *)NULL);
+        _exit(127);
+    }
+    close(p[1]);
+    ver = pid < 0 ? NULL : slurp_fd(p[0], &len);
+    close(p[0]);
+    while (pid > 0 && waitpid(pid, &st, 0) < 0 && errno == EINTR) ;
+    if (!ver) {
+        fprintf(stderr, "schema-ctl: could not run /proc/1/exe --version\n");
+        free(kv);
+        return -1;
+    }
+    ver[len] = '\0';
+    r = reexecd_since_boot(kv, ver, image);
+    free(kv);
+    free(ver);
+    return r;
+}
+
 static int cmd_write_baseline(long wait_s) {
     char exe[PATH_MAX] = "", cmdline[4096] = "";
+#ifdef SCHEMA_VERIFY_TESTHOOKS
     const char *dir = getenv("SCHEMA_VERIFY_DIR");
+#else
+    const char *dir = NULL;
+#endif
     int fd, p[2], status;
     size_t len;
     char *out;
@@ -507,6 +567,13 @@ static int cmd_write_baseline(long wait_s) {
                 (unsigned long long)(settle_give_up_ms((unsigned)wait_s) / 60000));
         return 3;
     }
+    int rx = reexecd(exe);
+    if (rx > 0)
+        fprintf(stderr, "schema-ctl: PID 1 was re-exec'd since boot; the baseline is written at the next good boot\n");
+    else if (rx)
+        fprintf(stderr, "schema-ctl: baseline not written\n");
+    if (rx)
+        return 1;
     fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
     n = fd < 0 ? -1 : read(fd, cmdline, sizeof cmdline - 1);
     if (fd >= 0) close(fd);
@@ -603,14 +670,28 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "verify") == 0) {
         long wait_s = -1;
         char *end;
+        verify_opts_t vo = { 0 };
+        int bad = user_mode;
         if (!user_mode && argc == 3 && !strcmp(argv[2], "--write-baseline"))
             return cmd_write_baseline(-1);
         if (!user_mode && argc == 5 && !strcmp(argv[2], "--write-baseline") && !strcmp(argv[3], "--wait-settled")) {
             wait_s = strtol(argv[4], &end, 10);
             if (argv[4][0] && !*end && wait_s >= 0 && wait_s <= 3600) return cmd_write_baseline(wait_s);
+            bad = 1;
         }
-        fprintf(stderr, "usage: schema-ctl verify --write-baseline [--wait-settled <secs>]\n");
-        return 1;
+        for (i = 2; i < argc && !bad; i++) {
+            if (!strcmp(argv[i], "--quiet")) vo.quiet = 1;
+            else if (!strcmp(argv[i], "--accept")) vo.accept = 1;
+            else bad = 1;
+        }
+        if (bad) {
+            fprintf(stderr, "usage: schema-ctl verify [--quiet] [--accept]\n"
+                            "       schema-ctl verify --write-baseline [--wait-settled <secs>]\n");
+            /* not 1: a gate reads 1 as a FAIL */
+            return EX_USAGE;
+        }
+        verify_opts_env(&vo);
+        return verify_run(&vo, stdout);
     }
 
     if (strcmp(argv[1], "graph") == 0) {

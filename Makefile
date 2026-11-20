@@ -55,7 +55,7 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c check.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
+SRCS    = init.c check.c karg.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
 OBJS    = $(SRCS:.c=.o)
 ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o svc_serial.o sha256.o
 # The core objects share these headers. Without this dependency an incremental
@@ -69,7 +69,7 @@ all: $(BINS)
 desktop:
 	$(MAKE) -C desktop
 
-schema-init: init.o check.o $(ENGINE_OBJS)
+schema-init: init.o check.o karg.o $(ENGINE_OBJS)
 	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
 	# whole-program LTO link of PID 1 that CI never exercises.
 	# STATIC_LDFLAGS= (the sanitizer run) links with LDFLAGS, which carry the
@@ -85,8 +85,9 @@ schema-init-static:
 
 # sources, not .o: aarch64/armhf rebuild schema-ctl in the same tree, and a
 # native sha256.o left over would link into the cross binary
-SCHEMA_CTL_SRCS = schema-ctl.c verify_baseline.c sha256.c
-schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify_baseline.h sha256.h
+# verify's modules, not the service stack: svc_keys.c is the serializer's key table alone
+SCHEMA_CTL_SRCS = schema-ctl.c verify.c verify_baseline.c verify_boot.c verify_root.c verify_diff.c verify_disk.c svc_keys.c karg.c sha256.c
+schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify.h verify_baseline.h verify_boot.h verify_root.h verify_diff.h verify_disk.h svc_keys.h karg.h sha256.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SCHEMA_CTL_SRCS) -lrt
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
@@ -124,6 +125,7 @@ schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match
 
 $(OBJS) schema-user.o: $(CORE_HDRS)
 check.o init.o: check.h
+check.o karg.o: karg.h
 check.o: pi_target.h pi_bootguard.h
 
 %.o: %.c
@@ -410,11 +412,21 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_kernel_ns.c ns.c caps.c -o $(TESTDIR)/kns && $(TESTDIR)/kns
 	$(CC) $(CFLAGS) tests/test_svc_dropins.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/dropins && $(TESTDIR)/dropins
 	$(CC) $(CFLAGS) tests/test_svc_rlimits.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/rlimits && $(TESTDIR)/rlimits
-	$(CC) $(CFLAGS) tests/test_svc_serial.c svc_serial.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-serial && $(TESTDIR)/svc-serial
+	$(CC) $(CFLAGS) tests/test_svc_serial.c svc_serial.c svc_keys.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-serial && $(TESTDIR)/svc-serial
 	sh tests/test_svc_serial_keys.sh
 	sh tests/test_check_mode.sh
 	rm -rf $(TESTDIR)/vb-*
 	$(CC) $(CFLAGS) tests/test_verify_baseline.c verify_baseline.c sha256.c -o $(TESTDIR)/verify-baseline && $(TESTDIR)/verify-baseline $(TESTDIR)
+	$(CC) $(CFLAGS) tests/test_verify_boot.c verify_boot.c karg.c -o $(TESTDIR)/verify-boot && $(TESTDIR)/verify-boot $(TESTDIR)
+	rm -rf $(TESTDIR)/vr-*
+	$(CC) $(CFLAGS) -DSCHEMA_VERIFY_TESTHOOKS tests/test_verify_root.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-root && $(TESTDIR)/verify-root $(TESTDIR)
+	rm -rf $(TESTDIR)/vk-*
+	$(CC) $(CFLAGS) -DSCHEMA_VERIFY_TESTHOOKS tests/test_verify_disk.c verify_disk.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-disk && $(TESTDIR)/verify-disk $(TESTDIR)
+	rm -rf $(TESTDIR)/vd-*
+	$(CC) $(CFLAGS) tests/test_verify_diff.c verify_diff.c verify_baseline.c svc_keys.c sha256.c -o $(TESTDIR)/verify-diff && $(TESTDIR)/verify-diff $(TESTDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -DSCHEMA_VERIFY_TESTHOOKS -o $(TESTDIR)/schema-ctl-testhooks $(SCHEMA_CTL_SRCS) -lrt
+	$(CC) $(CFLAGS) tests/test_verify.c $(filter-out schema-ctl.c,$(SCHEMA_CTL_SRCS)) -o $(TESTDIR)/verify-unit && $(TESTDIR)/verify-unit
+	sh tests/test_verify_cli.sh $(TESTDIR)/schema-ctl-testhooks
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
@@ -460,6 +472,13 @@ test-all: test
 	done; \
 	if [ "$$fail" != 0 ]; then echo "PYTHON SUITE FAILED"; exit 1; fi
 
+# The 11-18 regression against the real trees (v0.4.27 -> 434dcac): builds both
+# in temp worktrees, so it stays out of `make test`.
+test-verify-regression:
+	mkdir -p $(TESTDIR)
+	$(CC) $(CFLAGS) tests/verify_regress_diff.c verify_diff.c verify_baseline.c svc_keys.c sha256.c -o $(TESTDIR)/verify-regress-diff
+	sh tests/test_verify_regression.sh $(TESTDIR)/verify-regress-diff
+
 verify-live:
 	sh tests/sdbus_live_interop.sh
 	sh tests/verify_disk_links_live.sh
@@ -477,6 +496,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf-full
 	$(TESTDIR)/sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz verify-live verify-dbus-conformance
+.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-dbus-conformance
 
 

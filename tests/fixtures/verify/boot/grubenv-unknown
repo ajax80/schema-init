@@ -1,0 +1,6 @@
+# GRUB Environment Block
+saved_entry=normal
+schema_fallback_id=schema-snap-19990101-000000-gone
+boot_counter=2
+boot_success=0
+######

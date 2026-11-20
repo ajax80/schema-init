@@ -162,6 +162,14 @@ grep '^cmdline\.root=' "$T/out" > "$T/ab"
 check --root "$R" --cmdline "root=B root=A"
 grep '^cmdline\.root=' "$T/out" > "$T/ba"
 cmp -s "$T/ab" "$T/ba" && fail "lastkey: repeated key order lost"
+
+# kernel quoting: quotes are stripped, a quoted -- is a value, not the end of the options
+check --root "$R" --cmdline 'SCHEMA_SVC_DIR="/a2"'
+has "svc_dir=/a2" || fail "quoted: SCHEMA_SVC_DIR=\"/a2\" not /a2"
+has "cmdline.SCHEMA_SVC_DIR=/a2" || fail "quoted: header kept the quotes"
+check --root "$R" --cmdline 'SCHEMA_SVC_DIR=/a1 x="a -- b" SCHEMA_SVC_DIR=/a2 rd.y="p q"'
+has "svc_dir=/a2" || fail "quoted: a quoted -- ended the options"
+has "cmdline.rd.y=p q" || fail "quoted: quoted word split in the header"
 newroot pilast
 mkdir -p "$R/var/lib/schema-init/known-good/services"; svc "$S" cur
 printf 'attempts=2\nlast_target=current\n' > "$R/var/lib/schema-init/pi-boot"
