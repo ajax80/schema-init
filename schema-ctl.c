@@ -456,6 +456,9 @@ static uint64_t mono_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
+/* what had failed (not critical) when the wait settled: recorded beside the baseline */
+static char settled_failed[1024];
+
 static int wait_settled(unsigned window_s) {
     const uint64_t give_up = mono_ms() + settle_give_up_ms(window_s);
     settle_t st = {0};
@@ -467,6 +470,7 @@ static int wait_settled(unsigned window_s) {
         conn_err = r < 0 ? errno : 0;
         if (r == 0 && strncmp(kv, "err:", 4)) {
             if (settle_step(&st, kv, mono_ms(), window_s)) {
+                settle_failed(kv, settled_failed, sizeof settled_failed);
                 free(kv);
                 return 0;
             }
@@ -632,7 +636,12 @@ static int cmd_write_baseline(long wait_s) {
         return 1;
     }
     free(out);
+    /* always rewritten, so an older boot's list never outlives its baseline */
+    if (verify_state_put(dir, "boot-failed", settled_failed, strlen(settled_failed)) < 0)
+        fprintf(stderr, "schema-ctl: %s/boot-failed: %s\n", dir, strerror(errno));
     printf("baseline written: %s/baseline\n", dir);
+    if (settled_failed[0])
+        printf("failed at this boot (not critical, not blocking): %s\n", settled_failed);
     return 0;
 }
 

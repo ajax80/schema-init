@@ -161,12 +161,31 @@ static int state_ok(const char *kv, const char *name, size_t nlen, const char *v
         if (vlen == strlen(good[i]) && !memcmp(val, good[i], vlen)) return 1;
     int excised = vlen == 7 && !memcmp(val, "EXCISED", 7), dormant = vlen == 7 && !memcmp(val, "DORMANT", 7);
     const char *f = kv_field(kv, name, nlen, "failed");
-    if (f && (excised || dormant)) return val_is(f, "0");
+    /* a non-critical service that failed and stays failed (mcelog on an unsupported CPU)
+     * doesn't stop the box coming back; an older PID 1 without critical= stays strict */
+    if (f && (excised || dormant)) return val_is(f, "0") || val_is(kv_field(kv, name, nlen, "critical"), "0");
     if (excised) {
         const char *r = kv_field(kv, name, nlen, "excise_reason");
         return val_is(r, "none") || val_is(r, "bind");
     }
     return vlen == 11 && !memcmp(val, "NEW_PROCESS", 11) && kv_field(kv, name, nlen, "waiting");
+}
+
+size_t settle_failed(const char *kv, char *out, size_t sz) {
+    size_t n = 0;
+    if (sz) out[0] = '\0';
+    for (const char *l = kv; *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : l + strlen(l)) {
+        const char *e = strchr(l, '\n'), *end = e ? e : l + strlen(l), *tail = ".failed=1";
+        size_t tl = strlen(tail);
+        if (strncmp(l, "service.", 8) || (size_t)(end - l) < 8 + tl || memcmp(end - tl, tail, tl)) continue;
+        const char *name = l + 8;
+        size_t nlen = (size_t)(end - tl - name);
+        if (!val_is(kv_field(kv, name, nlen, "critical"), "0")) continue;
+        if (n + nlen + 2 < sz) {
+            n += (size_t)snprintf(out + n, sz - n, "%s%.*s", n ? " " : "", (int)nlen, name);
+        }
+    }
+    return n;
 }
 
 int settle_step(settle_t *st, const char *status_kv, uint64_t now_ms, unsigned window_s) {

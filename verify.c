@@ -479,6 +479,15 @@ static void services_report(ctx_t *c, char *text) {
         bad |= f[i].kind == F_FAIL || f[i].kind == F_CHANGE;
     }
     if (!bad) emit(c, T_PASS, "services match the baseline");
+    {
+        char path[PATH_MAX];
+        int e;
+        snprintf(path, sizeof path, "%s/boot-failed", c->o->state_dir);
+        char *bf = read_path(path, &e);
+        if (bf && bf[strspn(bf, " \n")])
+            emit(c, T_NOTE, "failed at the last good boot (not critical): %s", bf);
+        free(bf);
+    }
     free(f);
 }
 
