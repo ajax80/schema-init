@@ -19,7 +19,7 @@ for v in 1 2 3 64; do
     VRC=$v arm; r=$?
     [ $r != 0 ] || fail "verify $v: arm exited 0"
     [ ! -e "$T/editenv" ] || fail "verify $v: grubenv was written"
-    grep -q '^verify --quiet$' "$T/ctl" 2>/dev/null || fail "verify $v: verify not run"
+    grep -q '^verify --quiet --arming$' "$T/ctl" 2>/dev/null || fail "verify $v: verify not run"
     grep -q 'not armed' "$T/out" || fail "verify $v: no refusal: $(cat "$T/out")"
     grep -q '\[FAIL\] next boot: stub' "$T/out" || fail "verify $v: report not shown"
 done
@@ -32,7 +32,7 @@ VRC=64 arm; grep -q 'unavailable (schema-ctl verify exited 64)' "$T/out" || fail
 # host's real /boot decides; only that the gate didn't stop it matters here)
 VRC=0 arm 3
 grep -q 'not armed' "$T/out" && fail "verify 0: refused"
-grep -q '^verify --quiet$' "$T/ctl" 2>/dev/null || fail "verify 0: verify not run"
+grep -q '^verify --quiet --arming$' "$T/ctl" 2>/dev/null || fail "verify 0: verify not run"
 VRC=1 arm --force 3
 grep -q 'not armed' "$T/out" && fail "--force: refused"
 [ ! -e "$T/ctl" ] || fail "--force: verify ran: $(cat "$T/ctl")"

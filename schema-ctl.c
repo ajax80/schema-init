@@ -298,7 +298,7 @@ static void usage(FILE *out) {
         "                         pressure episodes, oldest first; <t> is an epoch\n"
         "                         or HH:MM today. Read from shared memory; root sees\n"
         "                         full command lines\n"
-        "  verify [--quiet] [--accept]\n"
+        "  verify [--quiet] [--accept] [--arming]\n"
         "                         before a reboot: would the next boot come back, and\n"
         "                         would the way back work? Checks the boot entry GRUB\n"
         "                         picks next, its services against the last good\n"
@@ -307,7 +307,8 @@ static void usage(FILE *out) {
         "                         pass, 1 FAIL, 2 unaccepted CHANGE or lost baseline,\n"
         "                         3 unresolved, 64 usage. --quiet: findings and the\n"
         "                         result only; --accept: accept the current CHANGE\n"
-        "                         set (refused while anything FAILs)\n"
+        "                         set (refused while anything FAILs); --arming:\n"
+        "                         judge the guard as if armed (schema-snapshot arm)\n"
         "  verify --write-baseline [--wait-settled <secs>]\n"
         "                         save what this boot runs (the running binary's\n"
         "                         --check) as the baseline the next boot is diffed\n"
@@ -702,10 +703,11 @@ int main(int argc, char **argv) {
         for (i = 2; i < argc && !bad; i++) {
             if (!strcmp(argv[i], "--quiet")) vo.quiet = 1;
             else if (!strcmp(argv[i], "--accept")) vo.accept = 1;
+            else if (!strcmp(argv[i], "--arming")) vo.arming = 1;
             else bad = 1;
         }
         if (bad) {
-            fprintf(stderr, "usage: schema-ctl verify [--quiet] [--accept]\n"
+            fprintf(stderr, "usage: schema-ctl verify [--quiet] [--accept] [--arming]\n"
                             "       schema-ctl verify --write-baseline [--wait-settled <secs>]\n");
             /* not 1: a gate reads 1 as a FAIL */
             return EX_USAGE;

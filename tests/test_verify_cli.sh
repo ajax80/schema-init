@@ -499,7 +499,8 @@ has "[UNRESOLVED] guard fallback zz-1.0: names an entry GRUB may have dropped (t
 has "names no boot entry" && fail "tie-fallback: called missing"
 rm "$T/bls2/zz-1.0.conf" "$T/bls2/zz-1.00.conf"
 
-# schema-good* entries alone mean the guard is in use
+# schema-good* entries alone, unarmed: manual ways back, the guard's wiring only a note;
+# --arming (schema-snapshot arm) judges it as armed
 cp tests/fixtures/verify/boot/grub-comment.cfg "$T/grub.cfg"
 grep -v schema_fallback "$T/grub.cfg" > "$T/g2" && mv "$T/g2" "$T/grub.cfg"
 printf 'saved_entry=m-7.2.11\n' > "$T/grubenv"
@@ -507,8 +508,17 @@ mkdir "$T/bls-off"
 mv "$T/bls/schema-snap-"* "$T/bls-off/"
 entry schema-good-20260915 schema-good-20260915
 v
+expect 0 good-unarmed
+has "[note] 09_schema_fallback is not live" || fail "good-unarmed: hook not noted"
+has "[note] boot guard not armed" || fail "good-unarmed: not-armed note"
+v --arming
 expect 1 good-guard
 has "[FAIL] 09_schema_fallback is not live" || fail "good-guard: guard not judged"
+printf 'saved_entry=m-7.2.11\nboot_counter=2\n' > "$T/grubenv"
+v
+expect 1 good-armed
+has "[FAIL] 09_schema_fallback is not live" || fail "good-armed: armed guard not judged"
+printf 'saved_entry=m-7.2.11\n' > "$T/grubenv"
 rm "$T/bls/schema-good-20260915.conf"
 mv "$T/bls-off/"* "$T/bls/"
 rmdir "$T/bls-off"

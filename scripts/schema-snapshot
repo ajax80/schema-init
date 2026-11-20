@@ -53,7 +53,8 @@ cmd_create() {
     { print }' "$fstab" > "$fstab.new" && mv "$fstab.new" "$fstab"
   homesub="$(findmnt -no SOURCE /home | sed -n 's/.*\[\/\(.*\)\]$/\1/p')"
   if [ -n "$homesub" ]; then
-    grep -rlE "subvol=/?$homesub([, ]|$)" "$TOP/$rootsnap/usr/local/bin" "$TOP/$rootsnap/etc/schema-init" 2>/dev/null |
+    # no match (a clean install) is exit 1, which pipefail would turn into a silent abort
+    { grep -rlE "subvol=/?$homesub([, ]|$)" "$TOP/$rootsnap/usr/local/bin" "$TOP/$rootsnap/etc/schema-init" 2>/dev/null || true; } |
       while read -r f; do sed -i -E "s#subvol=/?$homesub([, ]|$)#subvol=$homesnap\1#g" "$f"; done
   fi
   umount_top
@@ -160,7 +161,7 @@ cmd_arm() {
   done
   # arming bets the next boot on this box coming back: verify first, as reboot does
   if [ "$force" = 0 ]; then
-    schema-ctl verify --quiet >&2 || rc=$?
+    schema-ctl verify --quiet --arming >&2 || rc=$?
     case "$rc" in
       0) ;;
       1) die "not armed — fix the above; 'schema-snapshot arm --force' to override" ;;
