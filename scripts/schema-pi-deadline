@@ -18,7 +18,7 @@ sleep "$DL"
 if [ ! -e "$R/run/schema-init/pi-boot-ok" ]; then
     echo "pi-deadline: no boot-ok after ${DL}s, rebooting"
     # a stuck Pi stays stuck if one failed reboot ends in the idle sleep below
-    until "$CTL" reboot; do
+    until "$CTL" reboot --force; do
         echo "pi-deadline: reboot failed, retrying in ${RETRY}s"
         sleep "$RETRY"
     done

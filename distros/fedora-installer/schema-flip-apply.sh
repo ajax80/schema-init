@@ -34,7 +34,7 @@ ROOT_STATE=/var/lib/schema-init/firstboot.state
 ARMED_BOOTS=/var/lib/schema-init/flip-armed-boots
 
 retire_grant() { rm -f "$SYS_AUTOSTART" "$SUDOERS"; }
-reboot_now() { systemctl reboot 2>/dev/null || schema-ctl reboot 2>/dev/null || reboot; }
+reboot_now() { systemctl reboot 2>/dev/null || schema-ctl reboot --force 2>/dev/null || reboot; }
 
 cmd="${1:-}"
 case "$cmd" in

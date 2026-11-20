@@ -16,7 +16,7 @@ cat > "$T/ctl" <<EOT
 #!/bin/sh
 case "\$1" in
 status) cat "$T/kv" ;;
-reboot) echo reboot >> "$T/reboots" ;;
+reboot) echo "\$*" >> "$T/reboots" ;;
 verify) echo "\$*" >> "$T/ctlargs"; exit \${CTL_RC:-0} ;;
 esac
 EOT
@@ -226,7 +226,7 @@ pid=$!
 sleep 2
 alive=0; kill -0 "$pid" 2>/dev/null && alive=1
 pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-[ "$(cat "$T/reboots" 2>/dev/null)" = reboot ] || fail "deadline_reboots: no single reboot"
+[ "$(cat "$T/reboots" 2>/dev/null)" = "reboot --force" ] || fail "deadline_reboots: no single reboot --force (an unattended reboot must skip the verify gate)"
 [ "$alive" = 1 ] || fail "deadline_reboots: exited after acting"
 grep -qx 'pi-deadline: no boot-ok after 1s, rebooting' "$T/log" || fail "deadline_reboots: log: $(cat "$T/log")"
 echo "ok deadline_reboots"
@@ -312,7 +312,7 @@ SCHEMA_PI_ROOT=$R SCHEMA_PI_DEADLINE=1 PATH=$T/pathctl:$PATH sh "$T/kgbin/schema
 pid=$!
 sleep 2
 pkill -P "$pid" 2>/dev/null; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-[ "$(cat "$T/reboots" 2>/dev/null)" = reboot ] || fail "ctl_beside_script: deadline did not use the beside ctl: $(cat "$T/log")"
+[ "$(cat "$T/reboots" 2>/dev/null)" = "reboot --force" ] || fail "ctl_beside_script: deadline did not use the beside ctl: $(cat "$T/log")"
 echo "ok ctl_beside_script"
 
 # bootok_swap_fails: a failed .new -> known-good rename must put the old set back
