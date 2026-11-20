@@ -24,13 +24,14 @@ static long long now_ms(void) {
 }
 
 /* 1 reaped, 0 still running at give_up (or a signal came, if on_signal), -1 lost (waitpid failed) */
-static int reap_until(pid_t pid, int *st, long long give_up, int on_signal) {
+static int reap_until(pid_t pid, int *st, long long give_up, int on_signal, const sigset_t *mask) {
+    const struct timespec tick = { 0, 50 * 1000000L };
     for (;;) {
         pid_t w = waitpid(pid, st, WNOHANG);
         if (w == pid) return 1;
         if (w < 0 && errno != EINTR) return -1;
         if ((on_signal && gate_sig) || now_ms() >= give_up) return 0;
-        poll(NULL, 0, 50);
+        ppoll(NULL, 0, &tick, mask);
     }
 }
 
@@ -48,7 +49,7 @@ static int run_verifier(char **rep, char *why, size_t wlen) {
     nokill = getenv("SCHEMA_VERIFY_GATE_NOKILL") != NULL;
 #endif
     struct sigaction dfl = { .sa_handler = SIG_DFL }, catch = { .sa_handler = on_sig }, old_chld, old[3];
-    sigset_t chld, old_mask;
+    sigset_t chld, gsigs, old_mask, run_mask;
     size_t len = 0, cap = 4096;
     long long deadline;
     int p[2], nul, st = 0, open_ = 1, r = -1, done;
@@ -94,11 +95,21 @@ static int run_verifier(char **rep, char *why, size_t wlen) {
         goto out;
     }
     setpgid(pid, pid);
+    /* ^C/TERM/HUP only land inside ppoll: one arriving between the gate_sig test and the
+       sleep would otherwise go unseen for the whole timeout */
+    sigemptyset(&gsigs);
+    for (int i = 0; i < 3; i++) sigaddset(&gsigs, sigs[i]);
+    sigprocmask(SIG_BLOCK, &gsigs, &run_mask);
     deadline = now_ms() + timeout;
-    while (open_ && !gate_sig && deadline > now_ms()) {
+    while (open_ && !gate_sig) {
         struct pollfd pf = { .fd = p[0], .events = POLLIN };
+        long long left = deadline - now_ms();
+        struct timespec ts;
         ssize_t n;
-        if (poll(&pf, 1, (int)(deadline - now_ms())) <= 0) continue;
+        if (left <= 0) break;
+        ts.tv_sec = left / 1000;
+        ts.tv_nsec = (left % 1000) * 1000000L;
+        if (ppoll(&pf, 1, &ts, &run_mask) <= 0) continue;
         if (len + 1 >= cap) {
             char *nb = realloc(*rep, cap * 2);
             if (!nb) break;
@@ -112,13 +123,13 @@ static int run_verifier(char **rep, char *why, size_t wlen) {
     close(p[0]);
     (*rep)[len] = '\0';
     /* stdout closed is not exited: the child gets the rest of the time */
-    done = reap_until(pid, &st, deadline, 1);
+    done = reap_until(pid, &st, deadline, 1, &run_mask);
     if (done == 0) {
         if (!nokill) {
             kill(-pid, SIGKILL);
             kill(pid, SIGKILL);
         }
-        reap_until(pid, &st, now_ms() + GATE_REAP_MS, 0);
+        reap_until(pid, &st, now_ms() + GATE_REAP_MS, 0, &run_mask);
         snprintf(why, wlen, "timed out after %lld s", timeout / 1000);
     } else if (done < 0)
         snprintf(why, wlen, "lost track of it: waitpid: %s", strerror(errno));

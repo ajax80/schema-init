@@ -167,6 +167,14 @@ killpid
 connected && fail "reexec with an unkillable verifier contacted PID 1"
 has "schema-ctl: reexec refused — verification unavailable (timed out" || fail "unkillable verifier message"
 
+# tiny deadlines end promptly (smoke only: the old double-now_ms race is too narrow to hit here)
+t0=$(date +%s)
+for k in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    SCHEMA_VERIFY_GATE_TIMEOUT_MS=1 SCHEMA_VERIFY_BIN=$T/vhang "$CTL" reexec < /dev/null > "$T/out" 2>&1
+done
+t=$(($(date +%s) - t0))
+[ "$t" -le 10 ] || fail "1 ms timeout x20: gate took ${t}s, want ~0"
+
 # SIGTERM while waiting kills the verifier with the caller
 rm -f "$T/pid"
 SCHEMA_VERIFY_BIN=$T/vpid "$CTL" reexec < /dev/null > "$T/out" 2>&1 &
