@@ -8,6 +8,8 @@
  * kept as GRUBENV_CUT, never as a shorter value */
 #define GRUBENV_SZ 1024
 #define GRUBENV_CUT "\x01"
+/* the option namespace's value for a name grubenv and grub.cfg both set, differently */
+#define GRUBENV_BOTH "\x02"
 typedef char grubenv_t[2][GRUBENV_SZ];
 
 typedef struct {

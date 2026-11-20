@@ -31,7 +31,11 @@ typedef struct {
     int n;
     grubenv_t env[MAXENV];
     int nenv;
-    int ncfg; /* env[0..ncfg): grub.cfg's own top-level sets, for entry options only; grubenv's win */
+    /* env[0..ncfg): grub.cfg's own top-level sets; [ncfg..nenv): grubenv and env_block;
+     * [nenv..nopt): GRUBENV_BOTH for a name both set differently. Entry options see all
+     * of it, everything else only grubenv's part */
+    int ncfg, nopt;
+    int tie[MAXENTS]; /* the index of an entry blscfg's order can't tell apart from this one, else -1 */
     bls_entry_t *ents;
     int nents;
     root_report_t *rep; /* per entry, filled on first use */
@@ -165,7 +169,7 @@ static int run_capture(char *const argv[], char **out, size_t *olen, char **err,
 static int inspect_stub(ctx_t *c, const bls_entry_t *e, root_report_t *r) {
     char opts[4096], *out, *ctl;
     size_t ol, cl;
-    if (entry_precheck(e, c->env, c->nenv, opts, sizeof opts, r)) return r->fail ? 1 : 3;
+    if (entry_precheck(e, c->env, c->nopt ? c->nopt : c->nenv, opts, sizeof opts, r)) return r->fail ? 1 : 3;
     if (run_capture((char *[]){ (char *)c->o->inspect, (char *)e->id, opts, NULL }, &out, &ol, &ctl, &cl, NULL) == -2) {
         cl = (size_t)asprintf(&ctl, "U cannot capture the inspection: memfd_create: %s\n", strerror(errno));
         ol = 0;
@@ -178,7 +182,7 @@ static int inspect_stub(ctx_t *c, const bls_entry_t *e, root_report_t *r) {
 static root_report_t *inspect(ctx_t *c, int i) {
     if (!c->done[i]) {
         if (c->o->inspect) inspect_stub(c, &c->ents[i], &c->rep[i]);
-        else root_inspect(&c->ents[i], c->env, c->nenv, NULL, &c->rep[i]);
+        else root_inspect(&c->ents[i], c->env, c->nopt ? c->nopt : c->nenv, NULL, &c->rep[i]);
         c->done[i] = 1;
     }
     return &c->rep[i];
@@ -188,6 +192,15 @@ static int ent_index(ctx_t *c, const char *id) {
     for (int i = 0; id && i < c->nents; i++)
         if (!strcmp(c->ents[i].id, id)) return i;
     return -1;
+}
+
+/* GRUB's bls_add_entry drops the later of two tied entries, in readdir order: one picked
+ * by name may not be in the menu at all. 1 when i is such an entry (reported) */
+static int tied(ctx_t *c, const char *role, int i) {
+    if (i < 0 || c->tie[i] < 0) return 0;
+    emit(c, T_UNRES, "%s %s: names an entry GRUB may have dropped (tie with %s)", role, c->ents[i].id,
+         c->ents[c->tie[i]].id);
+    return 1;
 }
 
 static int count_errors(const char *t) {
@@ -406,7 +419,13 @@ static int load_entries(ctx_t *c) {
         emit(c, T_UNRES, "no boot entries in %s", dir);
         return -1;
     }
+    for (int i = 0; i < c->nents; i++) c->tie[i] = -1;
     if (bls_sort(c->ents, c->nents)) {
+        for (int i = 1; i < c->nents; i++)
+            if (!ent_cmp(&c->ents[i - 1], &c->ents[i])) {
+                c->tie[i] = i - 1;
+                c->tie[i - 1] = i;
+            }
         c->posbad = 1;
         emit(c, T_NOTE, "two boot entries in %s compare equal in blscfg's order: menu positions not known", dir);
     }
@@ -591,6 +610,7 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, int act, int nor
     else if (nbrc == 2) emit(c, T_FAIL, "schema_fallback_id=%s names no boot entry", nb->fallback);
     else if (fb < 0 && !c->cut) emit(c, T_FAIL, "no schema-snap-* entry for the guard to fall back to");
     else if (fb < 0) ;
+    else if (tied(c, "guard fallback", fb)) ;
     /* already reported once under Next boot: its FAILs must not count twice */
     else if (fb == act || fb == nor) emit(c, T_NOTE, "guard fallback %s: checked above", c->ents[fb].id);
     else report_entry(c, "guard fallback", fb, T_FAIL, 1);
@@ -682,13 +702,26 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         /* saved_entry decides only when the header sets default="${saved_entry}" */
         int dk = c.cfg ? grubcfg_default(c.cfg, dflt, sizeof dflt) : -1;
         if (c.cfg) {
-            /* GRUB's namespace for $var in options: these first, so grubenv and env_block override them */
+            /* GRUB's namespace for $var in options. 00_header's load_env runs before a later
+             * top-level set, but verify does not model grub.cfg's order: a name both stores
+             * set differently is unknown, one set the same or in one store only is that value */
             grubenv_t cv[16];
-            int k = grubcfg_vars(c.cfg, cv, MAXENV - c.nenv < 16 ? MAXENV - c.nenv : 16);
+            int room = (MAXENV - c.nenv) / 2, k = grubcfg_vars(c.cfg, cv, room < 16 ? room : 16);
             memmove(c.env + k, c.env, (size_t)c.nenv * sizeof *c.env);
             memcpy(c.env, cv, (size_t)k * sizeof *cv);
             c.nenv += k;
             c.ncfg = k;
+            c.nopt = c.nenv;
+            for (int i = 0; i < k; i++) {
+                const char *gv = NULL;
+                /* raw: an empty grubenv value is a value here, unlike env_get's */
+                for (int j = c.nenv - 1; j >= k && !gv; j--)
+                    if (!strcmp(c.env[j][0], cv[i][0])) gv = c.env[j][1];
+                if (gv && strcmp(gv, cv[i][1]) && strcmp(gv, GRUBENV_CUT)) {
+                    snprintf(c.env[c.nopt][0], GRUBENV_SZ, "%s", cv[i][0]);
+                    snprintf(c.env[c.nopt++][1], GRUBENV_SZ, GRUBENV_BOTH);
+                }
+            }
         }
         if (!c.cfg) unreadable(&c, "GRUB config", o->grubcfg, c.cfg_err);
         else if (dk) emit(&c, T_UNRES, "%s: which default= its header sets could not be told", o->grubcfg);
@@ -696,14 +729,21 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         nbrc = nextboot_resolve(c.env + c.ncfg, c.nenv - c.ncfg, c.ents, c.nents, dk ? NULL : dflt, c.cut || c.posbad, &nb);
         act = ent_index(&c, nb.actual);
         nor = ent_index(&c, nb.normal);
+        int act_tied = tied(&c, "actual next boot", act), nor_tied = nor != act && tied(&c, "normal default", nor);
+        if (nor == act && act_tied) nor_tied = 1;
+        if (act_tied) act = -2;
+        if (nor_tied) nor = -2;
         const char *saved = env_get(&c, "saved_entry"), *next = env_get(&c, "next_entry");
-        if (act < 0)
+        if (act == -2)
+            ;
+        else if (act < 0)
             emit(&c, T_UNRES, "actual next boot: which entry GRUB picks could not be resolved (saved_entry=%s next_entry=%s "
                               "boot_counter=%s)", saved ? saved : "", next ? next : "",
                  env_get(&c, "boot_counter") ? env_get(&c, "boot_counter") : "");
         else
             report_entry(&c, "actual next boot", act, T_FAIL, 0);
-        if (nor < 0) emit(&c, T_UNRES, "normal default: saved_entry=%s names no boot entry", saved ? saved : "");
+        if (nor == -2) ;
+        else if (nor < 0) emit(&c, T_UNRES, "normal default: saved_entry=%s names no boot entry", saved ? saved : "");
         else if (nor == act) emit(&c, T_NOTE, "normal default %s: the same entry", c.ents[nor].id);
         else report_entry(&c, "normal default", nor, T_FAIL, 1);
         if (nb.fallback) emit(&c, T_NOTE, "guard fallback %s: checked under Ways back", nb.fallback);

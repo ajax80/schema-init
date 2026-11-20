@@ -204,11 +204,25 @@ entry m-7.2.11 root '$tuned_params'
 v
 expect 0 cfg-var
 has "[PASS] actual next boot m-7.2.11: entry checks pass" || fail "cfg-var: entry not inspected"
-# grubenv's value wins over grub.cfg's
+# set in grubenv and in grub.cfg with different values: which one GRUB ends with depends on
+# grub.cfg's order, which verify does not model
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\ntuned_params=root=PARTUUID=other\n' "$F" > "$T/grubenv"
 v
-expect 1 cfg-var-grubenv
-has "[FAIL] actual next boot m-7.2.11: conflicting root=" || fail "cfg-var-grubenv: grubenv value not used"
+expect 3 cfg-var-differ
+has '[UNRESOLVED] actual next boot m-7.2.11: $tuned_params is set in both grubenv and grub.cfg with different values' ||
+    fail "cfg-var-differ: line"
+grep -q '^\[FAIL\]' "$T/out" && fail "cfg-var-differ: a FAIL from one of the two values"
+# the same value in both: used
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\ntuned_params=\n' "$F" > "$T/grubenv"
+v
+expect 0 cfg-var-same
+has "[PASS] actual next boot m-7.2.11: entry checks pass" || fail "cfg-var-same: entry not inspected"
+# only in grubenv: used
+entry m-7.2.11 root '$only_env'
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\nonly_env=quiet\n' "$F" > "$T/grubenv"
+v
+expect 0 env-var-only
+has "[PASS] actual next boot m-7.2.11: entry checks pass" || fail "env-var-only: entry not inspected"
 entry m-7.2.11 root
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 
@@ -466,6 +480,23 @@ SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
 expect 3 tie
 has "[UNRESOLVED] actual next boot:" || fail "tie: actual not unresolved"
 grep -q '^\[PASS\] actual' "$T/out" && fail "tie: PASS for a position"
+# saved_entry, next_entry or schema_fallback_id naming one of two tied entries: GRUB keeps
+# whichever readdir gives first, so the named one may not be in the menu
+printf 'saved_entry=zz-1.0\nblsdir=/x\n' > "$T/grubenv5"
+SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv5" v
+expect 3 tie-saved
+has "[UNRESOLVED] actual next boot zz-1.0: names an entry GRUB may have dropped (tie with zz-1.00)" || fail "tie-saved: line"
+grep -q '^\[PASS\] \(actual\|normal\)' "$T/out" && fail "tie-saved: PASS for a tied entry"
+printf 'saved_entry=m-7.3.0\nnext_entry=zz-1.00\nblsdir=/x\n' > "$T/grubenv5"
+SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv5" v
+expect 3 tie-next
+has "[UNRESOLVED] actual next boot zz-1.00: names an entry GRUB may have dropped (tie with zz-1.0)" || fail "tie-next: line"
+has "[PASS] normal default m-7.3.0" || fail "tie-next: normal default"
+printf 'saved_entry=m-7.3.0\nschema_fallback_id=zz-1.0\nblsdir=/x\n' > "$T/grubenv5"
+SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv5" v
+expect 3 tie-fallback
+has "[UNRESOLVED] guard fallback zz-1.0: names an entry GRUB may have dropped (tie with zz-1.00)" || fail "tie-fallback: line"
+has "names no boot entry" && fail "tie-fallback: called missing"
 rm "$T/bls2/zz-1.0.conf" "$T/bls2/zz-1.00.conf"
 
 # schema-good* entries alone mean the guard is in use

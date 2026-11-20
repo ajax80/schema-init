@@ -152,7 +152,8 @@ static const char *env_lookup(grubenv_t *env, int n, const char *k) {
     return NULL;
 }
 
-/* -1: unknown variable (named in missing); -2: too long once expanded; -3: its grubenv value was cut */
+/* -1: unknown variable (named in missing); -2: too long once expanded; -3: its grubenv value was cut;
+ * -4: grubenv and grub.cfg set it differently */
 int opts_expand(const char *s, grubenv_t *env, int nenv, char *out, size_t n, char *missing, size_t msz) {
     size_t o = 0;
     while (*s) {
@@ -177,6 +178,7 @@ int opts_expand(const char *s, grubenv_t *env, int nenv, char *out, size_t n, ch
         const char *v = end > nm ? env_lookup(env, nenv, missing) : NULL;
         if (!v) return -1;
         if (!strcmp(v, GRUBENV_CUT)) return -3;
+        if (!strcmp(v, GRUBENV_BOTH)) return -4;
         size_t vl = strlen(v);
         if (o + vl >= n) return -2;
         memcpy(out + o, v, vl);
@@ -216,6 +218,10 @@ int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, s
     }
     if (x == -3) {
         unres(r, "grubenv value of $%s is too long to read whole", miss);
+        return -1;
+    }
+    if (x == -4) {
+        unres(r, "$%s is set in both grubenv and grub.cfg with different values", miss);
         return -1;
     }
     char (*w)[512] = malloc(MAXWORDS * sizeof *w), why[256], dev[PATH_MAX];

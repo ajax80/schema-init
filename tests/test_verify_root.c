@@ -214,6 +214,17 @@ static void test_precheck(void) {
     e = entry("$kernelopts $tuned_params2");
     assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == -1);
     assert(!r.fail && r.nunres == 1 && !strcmp(r.unres[0], "options use $tuned_params2, not in grubenv or grub.cfg"));
+
+    /* set in grubenv and grub.cfg to different values: which GRUB ends with is not known */
+    static grubenv_t both[1];
+    snprintf(both[0][0], 256, "both");
+    snprintf(both[0][1], 256, GRUBENV_BOTH);
+    e = entry("root=UUID=1111-2222 $both");
+    assert(entry_precheck(&e, both, 1, opts, sizeof opts, &r) == -1);
+    assert(!r.fail && r.nunres == 1 &&
+           !strcmp(r.unres[0], "$both is set in both grubenv and grub.cfg with different values"));
+    e = entry("$kernelopts $tuned_params2");
+    entry_precheck(&e, env, 3, opts, sizeof opts, &r);
     assert(r.unresolved == r.unres[0]);
     e = entry("$longopts");
     assert(entry_precheck(&e, env, 4, opts, sizeof opts, &r) == -1);
