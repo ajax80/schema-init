@@ -112,6 +112,21 @@ int main(int argc, char **argv) {
 
     n = disk_findings("/nonexistent", "<3>blk_update_request: I/O error, dev sdc, sector 1\n<3>x I/O error, dev sdc, sector 2\n", devdir, f, 64);
     assert(n == 1 && has(f, n, F_WARN, "sdc \xe2\x80\x94 2 I/O errors in the kernel log since boot"));
+    /* blkid-style quotes: UUID="…" names the same device (getmntent leaves them in) */
+    snprintf(p, sizeof p, "%s/fstab-q", devdir);
+    put(p, "UUID=\"PRESENT\" / btrfs subvol=root 0 0\n\"UUID=PRESENT\" /a ext4 defaults 0 0\n"
+           "UUID=\"GONE\" /home btrfs defaults 0 0\n");
+    n = disk_findings(p, NULL, devdir, f, 64);
+    assert(n == 1 && has(f, n, F_FAIL, "/home") && !has(f, n, F_FAIL, "PRESENT"));
+    assert(cls("UUID=\"A\"", "ext4", "defaults") == FS_LOCAL_REQ);
+
+    /* optical, loop and zram devices are no disk the boot waits on */
+    n = disk_findings("/nonexistent",
+                      "<3>blk_update_request: I/O error, dev sr0, sector 1\n"
+                      "<3>blk_update_request: I/O error, dev loop3, sector 9\n"
+                      "<3>blk_update_request: I/O error, dev zram0, sector 9\n"
+                      "<3>blk_update_request: I/O error, dev sdc, sector 2\n", devdir, f, 64);
+    assert(n == 1 && has(f, n, F_WARN, "sdc"));
     puts("ok");
     return 0;
 }

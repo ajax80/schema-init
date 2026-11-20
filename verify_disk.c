@@ -59,12 +59,23 @@ static int add(finding_t *out, int max, int *n, fkind_t k, const char *fmt, ...)
     return (*n)++;
 }
 
+/* getmntent leaves blkid-style quotes in: UUID="x" and "UUID=x" are UUID=x */
+static void unquote(char *s) {
+    size_t l = strlen(s);
+    char *v = s[0] == '"' ? s : strchr(s, '=');
+    if (!v || l < 2 || s[l - 1] != '"' || (v != s && v[1] != '"')) return;
+    if (v != s) v++;
+    memmove(v, v + 1, strlen(v + 1) - 1);
+    s[l - 2] = '\0';
+}
+
 static void fstab_findings(const char *path, const char *devdir, finding_t *out, int max, int *n) {
     FILE *f = setmntent(path, "r");
     if (!f) return;
     struct mntent *m;
     char dev[PATH_MAX];
     while ((m = getmntent(f))) {
+        unquote(m->mnt_fsname);
         const char *src = m->mnt_fsname, *dir = m->mnt_dir, *t = m->mnt_type;
         fsclass_t c = fstab_class(m);
         int missing = 0;
@@ -104,6 +115,8 @@ static void whole_disk(char *d) {
 static void count(char (*names)[32], int (*cnt)[2], int *nd, const char *dev, size_t dl, int fs) {
     char d[32];
     if (!dl || dl >= sizeof d) return;
+    /* optical, loop and zram: nothing the boot waits on */
+    if (!strncmp(dev, "sr", 2) || !strncmp(dev, "loop", 4) || !strncmp(dev, "zram", 4)) return;
     memcpy(d, dev, dl);
     d[dl] = '\0';
     whole_disk(d);

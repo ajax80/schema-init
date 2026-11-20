@@ -44,6 +44,11 @@ static void unres(root_report_t *r, const char *fmt, ...) {
     r->unresolved = r->unres[0];
 }
 
+static int is_majmin(const char *s) {
+    size_t a = strspn(s, "0123456789"), b = a && s[a] == ':' ? strspn(s + a + 1, "0123456789") : 0;
+    return b && !s[a + 1 + b];
+}
+
 int dev_resolve(const char *spec, const char *devdir, char *out, size_t n) {
     static const struct { const char *key, *dir; } by[] = {
         { "UUID=", "by-uuid" }, { "PARTUUID=", "by-partuuid" },
@@ -72,6 +77,8 @@ int dev_resolve(const char *spec, const char *devdir, char *out, size_t n) {
         if (snprintf(path, sizeof path, "%s/disk/%s/%s", devdir, by[i].dir, name) >= (int)sizeof path) return -1;
     } else if (!strncmp(spec, "/dev/", 5)) {
         if (snprintf(path, sizeof path, "%s/%s", devdir, spec + 5) >= (int)sizeof path) return -1;
+    } else if (is_majmin(spec)) {
+        if (snprintf(path, sizeof path, "%s/block/%s", devdir, spec) >= (int)sizeof path) return -1;
     } else {
         return -1;
     }
@@ -217,6 +224,17 @@ int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, s
         if (e->n_initrd && argval(w, nw, "SCHEMA_SVC_DIR="))
             unres(r, "SCHEMA_SVC_DIR with an initramfs: not known to reach PID 1");
         rc = 0;
+    }
+    if (nw >= 0 && argval(w, nw, "root=") && !e->n_initrd) {
+        /* no initramfs: the kernel resolves root= itself, with no udev and no device-mapper
+         * (blakbox 09-16: root=UUID= with no initrd panicked) */
+        const char *rs = argval(w, nw, "root=");
+        if (e->initrd_vars)
+            unres(r, "initrd is only GRUB variables: whether an initramfs loads is not known");
+        else if (strncmp(rs, "PARTUUID=", 9) && strncmp(rs, "PARTLABEL=", 10) && !is_majmin(rs) &&
+                 (strncmp(rs, "/dev/", 5) || strchr(rs + 5, '/')))
+            fail(r, "root=%s with no initrd: the kernel alone resolves only PARTUUID=, PARTLABEL=, /dev/<name> "
+                    "or major:minor, so this boot panics", rs);
     }
     free(w);
     return rc;

@@ -37,6 +37,8 @@ static void setup_devdir(void) {
     mk("%s/disk/%s", "by-uuid");
     mk("%s/disk/%s", "by-partuuid");
     mk("%s/disk/%s", "by-label");
+    mk("%s/disk/%s", "by-partlabel");
+    mk("%s/%s", "block");
     snprintf(p, sizeof p, "%s/nvme0n1p3", devdir);
     touch(p);
     link_to("by-uuid", "1111-2222", "../../nvme0n1p3");
@@ -44,6 +46,9 @@ static void setup_devdir(void) {
     /* udev escapes a space in a label as \x20 */
     link_to("by-label", "my\\x20root", "../../nvme0n1p3");
     link_to("by-uuid", "dead-beef", "../../gone");
+    link_to("by-partlabel", "root", "../../nvme0n1p3");
+    snprintf(p, sizeof p, "%s/block/259:3", devdir);
+    assert(symlink("../nvme0n1p3", p) == 0);
     setenv("SCHEMA_VERIFY_DEVDIR", devdir, 1);
 }
 
@@ -65,7 +70,10 @@ static void test_dev_resolve(void) {
     assert(dev_resolve("UUID=nope", devdir, out, sizeof out) == -1);
     assert(dev_resolve("UUID=../../nvme0n1p3", devdir, out, sizeof out) == -1);
     assert(dev_resolve("/dev/sda9", devdir, out, sizeof out) == -1);
-    assert(dev_resolve("259:3", devdir, out, sizeof out) == -1);
+    /* maj:min through /dev/block, as the kernel takes it */
+    assert(dev_resolve("259:3", devdir, out, sizeof out) == 0 && !strcmp(out, want));
+    assert(dev_resolve("259:4", devdir, out, sizeof out) == -1);
+    assert(dev_resolve("259:3/../x", devdir, out, sizeof out) == -1);
 }
 
 static void test_path_map(void) {
@@ -167,6 +175,8 @@ static bls_entry_t entry(const char *opts) {
     memset(&e, 0, sizeof e);
     snprintf(e.id, sizeof e.id, "t");
     snprintf(e.linux_path, sizeof e.linux_path, "/root/boot/vmlinuz-x");
+    e.n_initrd = 1;
+    snprintf(e.initrd[0], sizeof e.initrd[0], "/root/boot/initramfs-x.img");
     snprintf(e.options, sizeof e.options, "%s", opts);
     return e;
 }
@@ -218,10 +228,40 @@ static void test_precheck(void) {
     assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == 0);
     assert(!r.fail && r.nunres == 1 && !strcmp(r.unres[0], "SCHEMA_SVC_DIR with an initramfs: not known to reach PID 1"));
     e = entry("root=UUID=1111-2222 init=/sbin/schema-init");
-    e.n_initrd = 1;
     assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == 0 && !r.fail && !r.nunres);
-    e = entry("root=UUID=1111-2222 SCHEMA_SVC_DIR=/etc/schema-init/known-good");
+    e = entry("root=PARTUUID=3e078549-8379-4ae4-9ae3-bacc2ea36956 SCHEMA_SVC_DIR=/etc/schema-init/known-good");
+    e.n_initrd = 0;
     assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == 0 && !r.fail && !r.nunres);
+
+    /* no initramfs: the kernel resolves root= alone, which UUID=/LABEL=/dev/mapper need
+     * udev or device-mapper for (blakbox 09-16: panic) */
+    bls_entry_t f;
+    assert(bls_parse("tests/fixtures/verify/boot/noinitrd-uuid.conf", &f) == 0 && !f.n_initrd);
+    assert(entry_precheck(&f, env, 3, opts, sizeof opts, &r) == 0);
+    assert(r.fail && has(r.reasons, r.nreasons, "root=UUID=1111-2222 with no initrd"));
+    static const char *const nokernel[] = { "root=LABEL=my\\x20root", "root=/dev/mapper/luks-1", "root=/dev/disk/by-uuid/1111-2222" };
+    for (size_t i = 0; i < sizeof nokernel / sizeof *nokernel; i++) {
+        e = entry(nokernel[i]);
+        e.n_initrd = 0;
+        entry_precheck(&e, env, 3, opts, sizeof opts, &r);
+        assert(r.fail && has(r.reasons, r.nreasons, "with no initrd"));
+        e.n_initrd = 1;
+        entry_precheck(&e, env, 3, opts, sizeof opts, &r);
+        assert(!has(r.reasons, r.nreasons, "with no initrd"));
+    }
+    static const char *const kernel[] = { "root=PARTUUID=3e078549-8379-4ae4-9ae3-bacc2ea36956", "root=/dev/nvme0n1p3",
+                                          "root=259:3", "root=PARTLABEL=root" };
+    for (size_t i = 0; i < sizeof kernel / sizeof *kernel; i++) {
+        e = entry(kernel[i]);
+        e.n_initrd = 0;
+        assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == 0 && !r.fail && !r.nunres);
+    }
+    /* initrd only $tuned_initrd: whether an initramfs loads is not known */
+    e = entry("root=UUID=1111-2222");
+    e.n_initrd = 0;
+    e.initrd_vars = 1;
+    assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == 0);
+    assert(!r.fail && has(r.unres, r.nunres, "initrd is only GRUB variables"));
 
     e = entry("ro quiet");
     assert(entry_precheck(&e, env, 3, opts, sizeof opts, &r) == -1);
