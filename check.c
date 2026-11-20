@@ -30,19 +30,22 @@ static int str_cmp(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-/* First whitespace-separated word starting with key, as hardening_default_resolve() reads it. */
+/* The last word starting with key, as the kernel keeps it for init= and the
+ * env; words after a bare "--" are init's argv, not boot options. */
 static int word_val(const char *cmdline, const char *key, char *out, size_t n) {
     size_t kl = strlen(key);
+    int found = 0;
     for (const char *p = cmdline; *p;) {
         p += strspn(p, " \t\n");
         size_t wl = strcspn(p, " \t\n");
+        if (wl == 2 && !strncmp(p, "--", 2)) break;
         if (wl >= kl && strncmp(p, key, kl) == 0) {
             snprintf(out, n, "%.*s", (int)(wl - kl), p + kl);
-            return 1;
+            found = 1;
         }
         p += wl;
     }
-    return 0;
+    return found;
 }
 
 static size_t root_len(const char *root) {
@@ -118,6 +121,18 @@ static const char *untag(const char *s) {
     return s;
 }
 
+typedef struct { const char *s; int i; } ordered_t;
+
+/* by key; a repeated key keeps cmdline order, since the last one is the one in force */
+static int key_cmp(const void *a, const void *b) {
+    const ordered_t *x = a, *y = b;
+    size_t xl = strcspn(x->s, "="), yl = strcspn(y->s, "=");
+    int c = memcmp(x->s, y->s, xl < yl ? xl : yl);
+    if (c) return c;
+    if (xl != yl) return xl < yl ? -1 : 1;
+    return x->i - y->i;
+}
+
 static void print_header(const char *cmdline, int hon, const char *rel_dir) {
     char line[1024];
     printf("schema-verify-baseline v1\nbinary_version=%s\n", SCHEMA_INIT_VERSION);
@@ -125,12 +140,15 @@ static void print_header(const char *cmdline, int hon, const char *rel_dir) {
     for (const char *p = cmdline; *p;) {
         p += strspn(p, " \t\n");
         size_t wl = strcspn(p, " \t\n");
+        if (wl == 2 && !strncmp(p, "--", 2)) break;
         snprintf(line, sizeof line, "cmdline.%.*s", (int)wl, p);
         if (wl && boot_critical(p)) lines_add(&cl, line);
         p += wl;
     }
-    qsort(cl.v, cl.n, sizeof *cl.v, str_cmp);
-    for (int i = 0; i < cl.n; i++) puts(cl.v[i]);
+    ordered_t *o = calloc(cl.n ? cl.n : 1, sizeof *o);
+    for (int i = 0; i < cl.n; i++) o[i] = (ordered_t){ cl.v[i], i };
+    qsort(o, cl.n, sizeof *o, key_cmp);
+    for (int i = 0; i < cl.n; i++) puts(o[i].s);
     printf("hardening_default=%s\nsvc_dir=%s\n", hon ? "on" : "off", rel_dir);
 }
 
@@ -224,6 +242,12 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
                 reason = untag(capl.v[i]);
                 break;
             }
+        /* masking is deliberate; an error here would block every re-exec */
+        snprintf(path, sizeof path, "%s/%s.masked", dir, dn);
+        if (access(path, F_OK) == 0) {
+            printf("note: %s: masked\n", dn);
+            continue;
+        }
         printf("error: %s: %s\n", dn, reason);
         errors++;
     }

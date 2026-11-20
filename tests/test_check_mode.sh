@@ -140,6 +140,36 @@ cp "$KG/schema-init" "$R/usr/bin/schema-init"; rm -rf "$KG/services"; cp -r "$S"
 check --root "$R" --cmdline "$PI"
 has "next_init=systemd" || fail "pi: attempts=2 with identical known-good should boot systemd"
 
+# masked is deliberate: a note, never an error
+newroot masked
+svc "$S" a; svc "$S" m; : > "$S/m.svc.masked"
+check --root "$R" --cmdline ""
+[ $rc -eq 0 ] || fail "masked: exit $rc"
+grep -q '^error:' "$T/out" && fail "masked: error line"
+grep -qx 'note: m.svc: masked' "$T/out" || fail "masked: no note"
+[ "$(grep -c 'masked' "$T/out")" = 1 ] || fail "masked: loader line repeated"
+
+# the kernel takes the last of a repeated key; words after -- are init's argv
+newroot lastkey
+mkdir -p "$R/a1" "$R/a2"; svc "$R/a1" one; svc "$R/a2" two
+check --root "$R" --cmdline "SCHEMA_SVC_DIR=/a1 SCHEMA_SVC_DIR=/a2"
+has "svc_dir=/a2" || fail "lastkey: first SCHEMA_SVC_DIR won"
+check --root "$R" --cmdline "SCHEMA_SVC_DIR=/a1 -- SCHEMA_SVC_DIR=/a2"
+has "svc_dir=/a1" || fail "lastkey: word after -- read"
+has "cmdline.SCHEMA_SVC_DIR=/a2" && fail "lastkey: word after -- in the header"
+check --root "$R" --cmdline "root=A root=B"
+grep '^cmdline\.root=' "$T/out" > "$T/ab"
+check --root "$R" --cmdline "root=B root=A"
+grep '^cmdline\.root=' "$T/out" > "$T/ba"
+cmp -s "$T/ab" "$T/ba" && fail "lastkey: repeated key order lost"
+newroot pilast
+mkdir -p "$R/var/lib/schema-init/known-good/services"; svc "$S" cur
+printf 'attempts=2\nlast_target=current\n' > "$R/var/lib/schema-init/pi-boot"
+check --root "$R" --cmdline "init=/usr/sbin/schema-init-pi init=/sbin/schema-init"
+has "next_init=" && fail "pilast: first init= taken"
+check --root "$R" --cmdline "init=/usr/sbin/schema-init-pi -- init=/sbin/schema-init"
+has "next_init=" || fail "pilast: init= after -- taken"
+
 # never binds a socket or makes runtime paths
 newroot quiet
 svc "$S" a
