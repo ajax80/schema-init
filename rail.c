@@ -412,14 +412,18 @@ int64_t rail_tick(const rail_svc_t *v, int n, int64_t now_ms) {
     }
     if (R.armed && !R.finished && !R.shutdown && !R.runtime_only) {
         int timed_out = now_ms - R.start >= 120000;
-        if (!starting || timed_out) {
+        /* a dependent spawns a tick after its dependency is ready: quiet for 1 s first */
+        int quiet = now_ms - R.last_event >= 1000;
+        if ((!starting && quiet) || timed_out) {
             rail_counts_t c;
             rail_counts(v, n, &c);
             R.finished = 1;
             emit(b, rail_fmt_finish(b, sizeof b, &c, timed_out && starting ? 120000 : R.last_event - R.start,
                                     timed_out && starting, R.font));
-        } else if (R.start + 120000 < next)
-            next = R.start + 120000;
+        } else {
+            if (R.start + 120000 < next) next = R.start + 120000;
+            if (!starting && R.last_event + 1000 < next) next = R.last_event + 1000;
+        }
     }
     return next;
 }

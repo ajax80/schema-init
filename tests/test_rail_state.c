@@ -124,7 +124,9 @@ static void settle(void) {
     if (count("rail settled")) FAIL("finish while d starting");
     now = 2710; v[3].starting = 0; v[3].state = STATE_SETTLED;
     rail_event(&v[3], 3, "notify-ready");
-    rail_tick(v, 4, now);
+    if (rail_tick(v, 4, now) != 3710) FAIL("next wake should be the end of the 1 s quiet window");
+    if (count("rail settled")) FAIL("finish inside the 1 s quiet window (a dependent may be about to spawn)");
+    now = 3710; rail_tick(v, 4, now);
     if (count("rail settled in 2.71s") != 1) FAIL("finish line missing or wrong time");
     if (!count(" 2 ONLINE ") || !count(" 2 WAITING ")) FAIL("bucket counts");
     now = 9000; rail_tick(v, 4, now);
@@ -189,7 +191,7 @@ static void services_added_after_settle(void) {
     rail_svc_t v[3] = { S("a", STATE_SETTLED), S("b", STATE_NEW_PROCESS), S("c", STATE_NEW_PROCESS) };
     reset(0);
     rail_arm_settle();
-    now = 10; rail_tick(v, 1, now);
+    now = 1000; rail_tick(v, 1, now);
     if (count("rail settled") != 1) FAIL("no settle");
     v[1].pid = 7; v[1].starting = 1; v[2].pid = 8; v[2].starting = 1;
     rail_event(&v[1], 1, "spawn");
