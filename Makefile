@@ -429,6 +429,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	sh tests/test_verify_cli.sh $(TESTDIR)/schema-ctl-testhooks
 	sh tests/test_verify_gate.sh $(TESTDIR)/schema-ctl-testhooks
 	sh tests/test_gate_callers.sh
+	sh tests/test_snapshot_arm_gate.sh
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey

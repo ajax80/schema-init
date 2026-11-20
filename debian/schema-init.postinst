@@ -41,10 +41,11 @@ abort-remove|abort-upgrade|abort-deconfigure)
     divert_halt
     ;;
 triggered)
-    # PID 1 swaps itself onto the upgraded binary in place; a refusal leaves
-    # the running one untouched and never fails the transaction.
+    # PID 1 swaps itself onto the upgraded binary in place; schema-ctl runs
+    # verify first, and a refusal (its report printed above) leaves the
+    # running one untouched and never fails the transaction.
     if [ "$(cat "${SCHEMA_PROC1:-/proc/1/comm}" 2>/dev/null)" = schema-init ] && [ "${SCHEMA_PROC1_ROOT:-/proc/1/root}" -ef / ] && [ -S "${SCHEMA_CTL_SOCK:-/run/schema-init.sock}" ]; then
-        schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; run 'schema-ctl reexec' or reboot to pick up the upgrade"
+        schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; see above, then run 'schema-ctl reexec'"
     fi
     ;;
 esac

@@ -468,13 +468,15 @@ if [ -f %{_sysconfdir}/schema-init/boot-default ]; then
         %{_prefix}/lib/kernel/install.d/99-schema-init.install add "$kv" "/boot/vmlinuz-$kv" || :
     done
 fi
-# PID 1 swaps itself onto the upgraded binary in place; a refusal (memory
-# pressure, a binary that fails its dry run, a PID 1 too old to know the
-# verb) leaves the running one untouched and never fails the transaction.
+# PID 1 swaps itself onto the upgraded binary in place. schema-ctl runs verify
+# first and refuses on any problem with the next boot (its report goes to the
+# transaction log); a refusal (that, memory pressure, a binary that fails its
+# dry run, a PID 1 too old to know the verb) leaves the running one untouched
+# and never fails the transaction.
 if [ -e /run/schema-init.reexec-pending ]; then
     rm -f /run/schema-init.reexec-pending
     if [ "$(cat /proc/1/comm 2>/dev/null)" = schema-init ] && [ /proc/1/root -ef / ] && [ -S /run/schema-init.sock ]; then
-        %{_bindir}/schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; run 'schema-ctl reexec' or reboot to pick up the upgrade"
+        %{_bindir}/schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; see above, then run 'schema-ctl reexec'"
     fi
 fi
 # The org.freedesktop.systemd1 shim is a Python daemon: the new file only
