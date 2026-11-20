@@ -298,7 +298,7 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
             o += snprintf(line + o, sizeof line - o, "%s%s", k ? " " : "", m[k]);
         lines_add(&body, line);
     }
-    qsort(body.v, body.n, sizeof *body.v, str_cmp);
+    if (body.n) qsort(body.v, body.n, sizeof *body.v, str_cmp);
     for (int i = 0; i < body.n; i++) puts(body.v[i]);
     fflush(stdout);
     return errors ? 1 : 0;

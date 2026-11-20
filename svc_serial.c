@@ -428,7 +428,8 @@ static int line_cmp(const void *a, const void *b) {
 
 static int flush(lines_t *L, FILE *out) {
     int n = L->n;
-    qsort(L->v, (size_t)L->n, sizeof *L->v, line_cmp);
+    /* qsort(NULL, 0) is UB: an empty table has no lines array */
+    if (L->n) qsort(L->v, (size_t)L->n, sizeof *L->v, line_cmp);
     for (int i = 0; i < L->n; i++) {
         fprintf(out, "%s\n", L->v[i]);
         free(L->v[i]);
