@@ -513,7 +513,6 @@ static void test_power(void) {
     ctl_log_clear(); assert(run_as("reboot", "now", NULL) == 1); assert(!ctl_log_has("reboot"));
     ctl_log_clear(); assert(run_as("halt", "--reboot", NULL) == 0); assert(ctl_log_has("reboot"));
     ctl_log_clear(); assert(run_as("reboot", "-p", NULL) == 0); assert(ctl_log_has("poweroff"));
-    ctl_log_clear(); assert(run_as("reboot", "-f", NULL) == 0); assert(ctl_log_has("reboot"));
     /* -f / --force is the verify gate's override: `sudo reboot -f` after a refusal must get through */
     ctl_log_clear(); assert(run_as("reboot", "-f", NULL) == 0); assert(ctl_log_has("reboot --force"));
     ctl_log_clear(); assert(run_as("reboot", "--force", NULL) == 0); assert(ctl_log_has("reboot --force"));

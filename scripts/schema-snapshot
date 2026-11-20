@@ -154,7 +154,7 @@ check_armable() {
 }
 
 cmd_arm() {
-  local force=0 n=2 id rc=0
+  local force=0 n=2 id rc=0 a
   for a in "$@"; do
     case "$a" in --force) force=1 ;; *) n="$a" ;; esac
   done
