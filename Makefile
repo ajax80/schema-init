@@ -81,8 +81,11 @@ schema-user: schema-user.o $(ENGINE_OBJS)
 schema-init-static:
 	$(CC) $(CFLAGS) $(STATIC_LDFLAGS) -o schema-init-static $(SRCS)
 
-schema-ctl: schema-ctl.c svc_dropins.h recorder.h recorder_logic.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
+# sources, not .o: aarch64/armhf rebuild schema-ctl in the same tree, and a
+# native sha256.o left over would link into the cross binary
+SCHEMA_CTL_SRCS = schema-ctl.c verify_baseline.c sha256.c
+schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify_baseline.h sha256.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SCHEMA_CTL_SRCS) -lrt
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
@@ -408,6 +411,8 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_svc_serial.c svc_serial.c sha256.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/svc-serial && $(TESTDIR)/svc-serial
 	sh tests/test_svc_serial_keys.sh
 	sh tests/test_check_mode.sh
+	rm -rf $(TESTDIR)/vb-*
+	$(CC) $(CFLAGS) tests/test_verify_baseline.c verify_baseline.c sha256.c -o $(TESTDIR)/verify-baseline && $(TESTDIR)/verify-baseline $(TESTDIR)
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
