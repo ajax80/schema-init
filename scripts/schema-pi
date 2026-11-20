@@ -186,6 +186,8 @@ warn_hand() {
         [ -f "$f" ] || continue
         n=${f##*/}; n=${n%.svc}
         [ -f "$SHARE/$n.svc.example" ] && continue
+        # packaged into this dir by the rpm/deb, not by hand
+        [ "$n" = schema-verify-baseline ] && continue
         grep -qxF "$n" "$D/pi-imported" 2>/dev/null && continue
         hand="$hand${hand:+, }$n"
     done

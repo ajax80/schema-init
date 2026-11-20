@@ -157,5 +157,14 @@ cp services/schema-verify-baseline.svc "$S/"
 check --root "$R" --cmdline ""
 [ $rc -eq 0 ] || fail "baseline_svc: exit $rc"
 has "schema-verify-baseline.exec=" || fail "baseline_svc: no exec line"
+# --wait-settled can run 15 min: the oneshot default of 90 s would kill it
+has "schema-verify-baseline.start_timeout_sec=0" || fail "baseline_svc: start timeout not 0"
+# after the persistent /var, so the write can't land in what it covers
+has "schema-verify-baseline.dep=mount-fstab" || fail "baseline_svc: not after mount-fstab"
+has "schema-verify-baseline.exec=/bin/sh" || fail "baseline_svc: exec not /bin/sh"
+check --root "$R" --cmdline "schema.hardening_default=1"
+for k in no_new_privs private_tmp protect_system protect_home; do
+    has "schema-verify-baseline.$k=0	src=explicit" || fail "baseline_svc: $k not explicitly 0"
+done
 
 echo "ok check_mode"

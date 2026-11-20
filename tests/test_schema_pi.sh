@@ -547,6 +547,8 @@ echo "ok write_fails"
 # hand_warning: warns on hand-written .svc, never on kit or imported ones, never refuses
 reset
 echo mine > "$SVC/sshd.svc"; echo mine > "$SVC/pi-bootok.svc"
+# the package ships this one into the same dir
+echo pkg > "$SVC/schema-verify-baseline.svc"
 pi enable > "$T/log" 2>&1 || fail "hand_warning: exit"
 grep -q "warning: hand-written services found: sshd\. If they run the same daemons" "$T/log" || fail "hand_warning: missing: $(cat "$T/log")"
 [ "$(sed -n 's/.*found: \([^.]*\)\. If.*/\1/p' "$T/log")" = sshd ] || fail "hand_warning: kit or import named: $(cat "$T/log")"

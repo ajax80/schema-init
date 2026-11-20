@@ -208,6 +208,8 @@ env_run sh "$BOOTOK" > "$T/log" 2>&1 || fail "bootok_no_promote_on_kg: exit"
 [ "$(cat "$KG/schema-init")" = old ] || fail "bootok_no_promote_on_kg: content changed"
 [ "$(cat "$STATE")" = "attempts=0
 last_target=known-good" ] || fail "bootok_no_promote_on_kg: state: $(cat "$STATE")"
+# --check would pair the current svc dir with the known-good PID 1: a pairing that never booted
+[ ! -e "$T/ctlargs" ] || fail "bootok_no_promote_on_kg: baseline written on a known-good boot"
 echo "ok bootok_no_promote_on_kg"
 
 # malformed state falls back to current
