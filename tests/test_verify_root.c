@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 
 static const char *tmpd = "/tmp";
@@ -327,6 +328,132 @@ static void test_report_fill(void) {
     assert(r.bootok_exec == 2 && !r.fail);
 }
 
+static void mkp(const char *root, const char *sub, int dir) {
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s%s", root, sub);
+    if (dir) assert(mkdir(p, 0755) == 0);
+    else touch(p);
+}
+
+static void lnp(const char *root, const char *sub, const char *target) {
+    char p[PATH_MAX];
+    snprintf(p, sizeof p, "%s%s", root, sub);
+    assert(symlink(target, p) == 0);
+}
+
+/* run one check with its records into a temp file, then read them back as the parent does */
+#define RECORDS(r, call)                                                        \
+    do {                                                                        \
+        FILE *t_ = tmpfile();                                                   \
+        int ctl = fileno(t_);                                                   \
+        rc = call;                                                              \
+        static char b_[8192];                                                   \
+        size_t l_ = (size_t)pread(ctl, b_, sizeof b_ - 1, 0);                   \
+        memset(&r, 0, sizeof r);                                                \
+        r.check_rc = -1;                                                        \
+        root_report_fill(b_, l_, NULL, 0, &r);                                  \
+        fclose(t_);                                                             \
+    } while (0)
+
+/* what root_inspect checks once it has mounted: run against plain directory trees */
+static void test_tree_checks(void) {
+    char top[PATH_MAX / 2], tgt[PATH_MAX / 2], real[PATH_MAX];
+    root_report_t r;
+    int rc;
+    snprintf(top, sizeof top, "%s/vr-tree-top", tmpd);
+    snprintf(tgt, sizeof tgt, "%s/vr-tree-tgt", tmpd);
+    mkp(top, "", 1);
+    mkp(top, "/root", 1);
+    mkp(top, "/root/boot", 1);
+    mkp(top, "/root/boot/vmlinuz-x", 0);
+    mkp(top, "/root/boot/initramfs-x.img", 0);
+    lnp(top, "/snap-link", "/root");
+
+    /* subvolume: absent FAIL, a symlink UNRESOLVED, a plain directory is not a subvolume */
+    RECORDS(r, subvol_check(ctl, top, "gone,compress=zstd", "UUID=1"));
+    assert(rc && r.fail && has(r.reasons, r.nreasons, "subvolume gone does not exist on UUID=1"));
+    RECORDS(r, subvol_check(ctl, top, "/snap-link", "UUID=1"));
+    assert(rc && !r.fail && has(r.unres, r.nunres, "snap-link has a symlink"));
+    struct stat st;
+    snprintf(real, sizeof real, "%s/root", top);
+    assert(stat(real, &st) == 0);
+    RECORDS(r, subvol_check(ctl, top, "root", "UUID=1"));
+    if (st.st_ino == 256) assert(!rc && !r.fail);
+    else assert(rc && r.fail && has(r.reasons, r.nreasons, "root on UUID=1 is a directory, not a subvolume"));
+
+    /* kernel and every initrd, relative to GRUB's root */
+    bls_entry_t e = entry("root=UUID=1111-2222");
+    RECORDS(r, boot_files_check(ctl, top, &e));
+    assert(!rc && !r.fail && !r.nunres);
+    snprintf(e.linux_path, sizeof e.linux_path, "/root/boot/vmlinuz-gone");
+    snprintf(e.initrd[e.n_initrd++], sizeof e.initrd[0], "/root/boot/initramfs-gone.img");
+    RECORDS(r, boot_files_check(ctl, top, &e));
+    assert(rc && r.nreasons == 2 && has(r.reasons, 2, "kernel /root/boot/vmlinuz-gone is missing") &&
+           has(r.reasons, 2, "initrd /root/boot/initramfs-gone.img is missing"));
+    e = entry("root=UUID=1111-2222");
+    snprintf(e.linux_path, sizeof e.linux_path, "/root/../../etc/vmlinuz");
+    RECORDS(r, boot_files_check(ctl, top, &e));
+    assert(rc && !r.fail && has(r.unres, r.nunres, "kernel path /root/../../etc/vmlinuz could not be resolved"));
+
+    /* init= resolved inside the target, before host /dev and /proc are bound in */
+    mkp(tgt, "", 1);
+    mkp(tgt, "/dev", 1);
+    mkp(tgt, "/proc", 1);
+    mkp(tgt, "/tmp", 1);
+    mkp(tgt, "/usr", 1);
+    mkp(tgt, "/usr/bin", 1);
+    mkp(tgt, "/usr/bin/schema-init", 0);
+    snprintf(real, sizeof real, "%s/usr/bin/schema-init", tgt);
+    chmod(real, 0755);
+    mkp(tgt, "/usr/bin/noexec", 0);
+    lnp(tgt, "/sbin", "usr/bin");
+    lnp(tgt, "/usr/bin/self", "/proc/self/exe");
+    mkp(tgt, "/dev/init", 0);
+    snprintf(real, sizeof real, "%s/dev/init", tgt);
+    chmod(real, 0755);
+    RECORDS(r, init_resolve(ctl, tgt, "/sbin/schema-init", real, sizeof real));
+    assert(!rc && !r.fail && !r.nunres && !strcmp(real, "/usr/bin/schema-init"));
+    RECORDS(r, init_resolve(ctl, tgt, "/sbin/self", real, sizeof real));
+    assert(rc && r.fail && has(r.reasons, r.nreasons, "init=/sbin/self does not exist in the target"));
+    RECORDS(r, init_resolve(ctl, tgt, "/proc/self/exe", real, sizeof real));
+    assert(rc && r.fail);
+    RECORDS(r, init_resolve(ctl, tgt, "/sbin/noexec", real, sizeof real));
+    assert(rc && r.fail && has(r.reasons, r.nreasons, "not executable"));
+    RECORDS(r, init_resolve(ctl, tgt, "/dev/init", real, sizeof real));
+    assert(rc && !r.fail && has(r.unres, r.nunres, "init=/dev/init resolves into /dev"));
+    RECORDS(r, init_resolve(ctl, tgt, "/sbin/gone", real, sizeof real));
+    assert(rc && r.fail && has(r.reasons, r.nreasons, "does not exist"));
+
+    /* /dev, /proc and /tmp must be the target's own directories before anything is mounted on them */
+    RECORDS(r, target_dirs_check(ctl, tgt));
+    assert(!rc && !r.fail && !r.nunres);
+    snprintf(real, sizeof real, "%s/tmp", tgt);
+    rmdir(real);
+    lnp(tgt, "/tmp", "/var/tmp");
+    RECORDS(r, target_dirs_check(ctl, tgt));
+    assert(rc && !r.fail && has(r.unres, r.nunres, "/tmp in the target is not a directory"));
+    unlink(real);
+    RECORDS(r, target_dirs_check(ctl, tgt));
+    assert(rc && has(r.unres, r.nunres, "/tmp in the target is not a directory"));
+}
+
+/* a non-btrfs root already mounted read-write: found by its device number with mount root / */
+static void test_mountinfo_find(void) {
+    char p[PATH_MAX], mp[PATH_MAX];
+    snprintf(p, sizeof p, "%s/vr-mountinfo-ext4", tmpd);
+    FILE *f = fopen(p, "w");
+    fprintf(f, "26 1 8:3 / / rw,relatime shared:1 - ext4 /dev/sda3 rw\n"
+               "40 26 8:5 /sub /mnt/sub rw - ext4 /dev/sda5 rw\n"
+               "41 26 8:5 / /mnt/my\\040disk rw - ext4 /dev/sda5 rw\n"
+               "42 26 0:25 / /home rw - btrfs /dev/nvme0n1p3 rw\n");
+    fclose(f);
+    assert(mountinfo_find(p, makedev(8, 3), mp, sizeof mp) == 0 && !strcmp(mp, "/"));
+    /* a bind of a subdirectory is not the whole filesystem */
+    assert(mountinfo_find(p, makedev(8, 5), mp, sizeof mp) == 0 && !strcmp(mp, "/mnt/my disk"));
+    assert(mountinfo_find(p, makedev(8, 9), mp, sizeof mp) == -1);
+    assert(mountinfo_find("/nonexistent", makedev(8, 3), mp, sizeof mp) == -1);
+}
+
 static void test_needs_root(void) {
     if (geteuid() == 0) {
         printf("verify_root: running as root, needs-root case skipped\n");
@@ -353,6 +480,8 @@ int main(int argc, char **argv) {
     test_expand();
     test_precheck();
     test_report_fill();
+    test_tree_checks();
+    test_mountinfo_find();
     test_needs_root();
     printf("verify_root: ok\n");
     return 0;

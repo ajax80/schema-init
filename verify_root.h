@@ -36,6 +36,18 @@ int boot_is_separate(const char *mountinfo_path);
 int opts_expand(const char *opts, grubenv_t *env, int nenv, char *out, size_t n, char *missing, size_t msz);
 /* the entry checks that need no mount; 0 when root_inspect may go on to mount */
 int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, size_t optsz, root_report_t *r);
+/* the checks inspect runs once root= is mounted, each writing F/U records to ctl and
+ * nonzero when it wrote one; plain directory trees work, so tests run them unprivileged.
+ * subvol_check: rootflags= subvol= value under the btrfs top level (inode 256);
+ * boot_files_check: the kernel and every initrd under GRUB's root;
+ * init_resolve: init= inside tgt before anything is mounted on it, real set to its path there;
+ * target_dirs_check: /dev, /proc, /tmp are tgt's own directories */
+int subvol_check(int ctl, const char *top, const char *subvol, const char *rootspec);
+int boot_files_check(int ctl, const char *grub_root, const bls_entry_t *e);
+int init_resolve(int ctl, const char *tgt, const char *init, char *real, size_t n);
+int target_dirs_check(int ctl, const char *tgt);
+/* the mount point of dev mounted whole (mount root /); 0 found */
+int mountinfo_find(const char *mountinfo_path, dev_t dev, char *mp, size_t n);
 /* the child's records (F/U fail/unresolved, I init path, S schema-init, C --check rc,
  * E its first stderr line, B schema-bootok's exec= 1 ok / 2 not executable) into r; takes out, the --check stdout */
 void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_report_t *r);

@@ -16,6 +16,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -297,6 +298,96 @@ static int check_file(int ctl, const char *grub, const char *what, const char *p
     return 0;
 }
 
+int boot_files_check(int ctl, const char *grub, const bls_entry_t *e) {
+    int bad = !!check_file(ctl, grub, "kernel", e->linux_path);
+    for (int i = 0; i < e->n_initrd; i++) bad |= !!check_file(ctl, grub, "initrd", e->initrd[i]);
+    return bad;
+}
+
+int subvol_check(int ctl, const char *top, const char *sv, const char *rootspec) {
+    char p[PATH_MAX];
+    struct stat st;
+    sv += strspn(sv, "/");
+    int svl = (int)strcspn(sv, ",");
+    snprintf(p, sizeof p, "/%.*s", svl, sv);
+    int rc = stat_in_root(top, p, 1, &st);
+    if (rc == -2) return U("subvolume path %.*s has a symlink or can't be read\n", svl, sv);
+    /* 256 is the inode of every btrfs subvolume's root directory */
+    if (rc || !S_ISDIR(st.st_mode)) return F("subvolume %.*s does not exist on %s\n", svl, sv, rootspec);
+    if (st.st_ino != 256) return F("%.*s on %s is a directory, not a subvolume\n", svl, sv, rootspec);
+    return 0;
+}
+
+int init_resolve(int ctl, const char *tgt, const char *init, char *real, size_t n) {
+    char chk[PATH_MAX], fdp[64], host[PATH_MAX];
+    if (bls_path_map("/", init, chk, sizeof chk)) return U("init=%s is not an absolute path inside the target\n", init);
+    int rfd = open(tgt, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    struct open_how how = { .flags = O_PATH | O_CLOEXEC, .resolve = RESOLVE_IN_ROOT };
+    int fd = rfd < 0 ? -1 : syscall(SYS_openat2, rfd, init + strspn(init, "/"), &how, sizeof how), e = errno;
+    if (rfd >= 0) close(rfd);
+    if (fd < 0 && (e == ENOENT || e == ENOTDIR)) return F("init=%s does not exist in the target\n", init);
+    if (fd < 0) return U("init=%s could not be resolved in the target: %s\n", init, strerror(e));
+    struct stat st;
+    snprintf(fdp, sizeof fdp, "/proc/self/fd/%d", fd);
+    ssize_t hl = readlink(fdp, host, sizeof host - 1);
+    int bad = fstat(fd, &st);
+    close(fd);
+    size_t tl = strlen(tgt);
+    if (hl < 0 || bad || (size_t)hl < tl || strncmp(host, tgt, tl)) return U("init=%s could not be resolved in the target\n", init);
+    host[hl] = '\0';
+    snprintf(real, n, "%s", host[tl] ? host + tl : "/");
+    /* one record per line */
+    if (strchr(real, '\n')) return U("init=%s resolves to a path with a newline\n", init);
+    /* those are replaced by the host's or a tmpfs before init runs */
+    static const char *const repl[] = { "/dev", "/proc", "/tmp" };
+    for (size_t i = 0; i < sizeof repl / sizeof *repl; i++) {
+        size_t rl = strlen(repl[i]);
+        if (!strncmp(real, repl[i], rl) && (!real[rl] || real[rl] == '/'))
+            return U("init=%s resolves into %s, which the inspection replaces\n", init, repl[i]);
+    }
+    if (!S_ISREG(st.st_mode) || !(st.st_mode & 0111)) return F("init=%s is not executable in the target\n", init);
+    return 0;
+}
+
+static const char *const target_sub[] = { "/dev", "/proc", "/tmp" };
+
+int target_dirs_check(int ctl, const char *tgt) {
+    struct stat st;
+    for (size_t i = 0; i < sizeof target_sub / sizeof *target_sub; i++)
+        if (stat_in_root(tgt, target_sub[i], 1, &st) || !S_ISDIR(st.st_mode))
+            return U("%s in the target is not a directory: nothing is mounted on it\n", target_sub[i]);
+    return 0;
+}
+
+static void unescape(char *s) {
+    char *o = s;
+    for (; *s; s++) {
+        if (s[0] == '\\' && s[1] >= '0' && s[1] <= '3' && s[2] >= '0' && s[2] <= '7' && s[3] >= '0' && s[3] <= '7') {
+            *o++ = (char)((s[1] - '0') * 64 + (s[2] - '0') * 8 + (s[3] - '0'));
+            s += 3;
+        } else {
+            *o++ = *s;
+        }
+    }
+    *o = '\0';
+}
+
+int mountinfo_find(const char *mountinfo, dev_t dev, char *mp, size_t n) {
+    FILE *f = fopen(mountinfo, "r");
+    if (!f) return -1;
+    char line[8192], root[4096], m[4096];
+    unsigned ma, mi;
+    int rc = -1;
+    while (rc && fgets(line, sizeof line, f))
+        if (sscanf(line, "%*s %*s %u:%u %4095s %4095s", &ma, &mi, root, m) == 4 && makedev(ma, mi) == dev &&
+            !strcmp(root, "/")) {
+            unescape(m);
+            rc = snprintf(mp, n, "%s", m) >= (int)n ? -1 : 0;
+        }
+    fclose(f);
+    return rc;
+}
+
 /* copies the --check report in cfd to out, after a B record for schema-bootok's exec= */
 static void bootok_exec(int ctl, int cfd, int out) {
     struct stat st;
@@ -349,56 +440,51 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     mkdir(top, 0700);
     mkdir(tgt, 0700);
 
-    int btrfs = is_btrfs(dev);
-    if (btrfs ? mount(dev, top, "btrfs", fl, "subvolid=5") : mount_any(dev, top, fl, type, sizeof type)) {
+    int btrfs = is_btrfs(dev), bound = 0;
+    struct stat ds;
+    char mp[PATH_MAX];
+    if (!btrfs && !stat(dev, &ds) && !mountinfo_find("/proc/self/mountinfo", ds.st_rdev, mp, sizeof mp)) {
+        /* already mounted read-write: a second, read-only mount of it is EBUSY; a read-only
+         * bind of that mount is the same tree (rootflags= only matters to btrfs here) */
+        if (mount(mp, top, NULL, MS_BIND, NULL) ||
+            mount(NULL, top, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL)) {
+            U("cannot bind root=%s (%s, mounted on %s) read-only: %m\n", rootspec, dev, mp);
+            return;
+        }
+        bound = 1;
+    } else if (btrfs ? mount(dev, top, "btrfs", fl, "subvolid=5") : mount_any(dev, top, fl, type, sizeof type)) {
         U("cannot mount root=%s (%s) read-only: %m\n", rootspec, dev);
         return;
     }
     const char *sv = NULL;
     for (const char *p = flags; p && *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] == ','))
         if (!strncmp(p, "subvol=", 7)) sv = p + 7;
-    if (btrfs && sv) {
-        char p[PATH_MAX];
-        struct stat st;
-        sv += strspn(sv, "/");
-        size_t svl = strcspn(sv, ",");
-        snprintf(p, sizeof p, "/%.*s", (int)svl, sv);
-        int rc = stat_in_root(top, p, 1, &st);
-        if (rc == -2) {
-            U("subvolume path %.*s has a symlink or can't be read\n", (int)svl, sv);
-            return;
-        }
-        /* 256 is the inode of every btrfs subvolume's root directory */
-        if (rc || !S_ISDIR(st.st_mode)) {
-            F("subvolume %.*s does not exist on %s\n", (int)svl, sv, rootspec);
-            return;
-        }
-        if (st.st_ino != 256) {
-            F("%.*s on %s is a directory, not a subvolume\n", (int)svl, sv, rootspec);
-            return;
-        }
-    }
+    if (btrfs && sv && subvol_check(ctl, top, sv, rootspec)) return;
     /* the target as the kernel mounts it: rootflags= is the mount data */
-    if (mount(dev, tgt, type, fl, flags)) {
+    if (bound ? mount(top, tgt, NULL, MS_BIND, NULL) ||
+                    mount(NULL, tgt, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL)
+              : mount(dev, tgt, type, fl, flags)) {
         F("cannot mount root=%s with rootflags=%s: %m\n", rootspec, flags ? flags : "");
         return;
     }
 
     /* separate /boot: that partition is GRUB's root; else the root device's top level */
-    const char *grub = boot_is_separate("/proc/self/mountinfo") ? "/boot" : top;
-    check_file(ctl, grub, "kernel", e->linux_path);
-    for (int i = 0; i < e->n_initrd; i++) check_file(ctl, grub, "initrd", e->initrd[i]);
+    boot_files_check(ctl, boot_is_separate("/proc/self/mountinfo") ? "/boot" : top, e);
+
+    /* before host /dev and /proc are bound in: init=/proc/self/exe must not resolve to verify itself */
+    char real[PATH_MAX];
+    if (init_resolve(ctl, tgt, init, real, sizeof real) || target_dirs_check(ctl, tgt)) return;
+    dprintf(ctl, "I %s\n", real);
 
     /* always chroot, even into the running root's subvolume: the fresh mount carries
      * none of the host's submounts (/home, a split /usr), which the kernel won't have
      * either; user=/group= and absolute symlinks resolve against the target */
-    static const char *const sub[][2] = { { "/dev", "/dev" }, { "/proc", "/proc" }, { NULL, "/tmp" } };
-    for (size_t i = 0; i < sizeof sub / sizeof *sub; i++) {
+    for (size_t i = 0; i < sizeof target_sub / sizeof *target_sub; i++) {
         char p[PATH_MAX];
-        snprintf(p, sizeof p, "%s%s", tgt, sub[i][1]);
-        if (sub[i][0] ? mount(sub[i][0], p, NULL, MS_BIND | MS_REC, NULL)
-                      : mount("schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777")) {
-            U("cannot mount %s in the target: %m\n", sub[i][1]);
+        snprintf(p, sizeof p, "%s%s", tgt, target_sub[i]);
+        if (i < 2 ? mount(target_sub[i], p, NULL, MS_BIND | MS_REC, NULL)
+                  : mount("schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777")) {
+            U("cannot mount %s in the target: %m\n", target_sub[i]);
             return;
         }
     }
@@ -407,22 +493,6 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
         return;
     }
 
-    char real[PATH_MAX];
-    struct stat st;
-    if (!realpath(init, real)) {
-        F("init=%s does not exist in the target\n", init);
-        return;
-    }
-    /* one record per line */
-    if (strchr(real, '\n')) {
-        U("init=%s resolves to a path with a newline\n", init);
-        return;
-    }
-    dprintf(ctl, "I %s\n", real);
-    if (stat(real, &st) || !S_ISREG(st.st_mode) || !(st.st_mode & 0111)) {
-        F("init=%s is not executable in the target\n", init);
-        return;
-    }
     /* by what it says, not its name: a renamed copy at /sbin/init still gets checked */
     int cap = memfd_create("schema-verify", MFD_CLOEXEC), errfd = memfd_create("schema-verify-err", MFD_CLOEXEC);
     char line[200];
