@@ -23,6 +23,8 @@ for v in 1 2 3 64; do
     grep -q 'not armed' "$T/out" || fail "verify $v: no refusal: $(cat "$T/out")"
     grep -q '\[FAIL\] next boot: stub' "$T/out" || fail "verify $v: report not shown"
 done
+VRC=1 arm; grep -q 'verify --accept' "$T/out" && fail "verify 1: offers --accept for a FAIL"
+VRC=2 arm; grep -q 'verify --accept' "$T/out" || fail "verify 2: no --accept hint"
 VRC=3 arm; grep -q 'could not resolve' "$T/out" || fail "verify 3: wording"
 VRC=64 arm; grep -q 'unavailable (schema-ctl verify exited 64)' "$T/out" || fail "verify 64: wording"
 

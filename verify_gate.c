@@ -166,6 +166,10 @@ int verify_gate(const char *action, int force, int interactive, FILE *out) {
         if (r == 3)
             fprintf(out, "schema-ctl: %s refused — verification could not resolve the above; "
                     "run 'schema-ctl %s --force' to override\n", action, action);
+        else if (r == 1)
+            /* --accept refuses while anything FAILs: don't offer it */
+            fprintf(out, "schema-ctl: %s refused — fix the above; "
+                    "run 'schema-ctl %s --force' to override\n", action, action);
         else
             fprintf(out, "schema-ctl: %s refused — fix the above or run 'schema-ctl verify --accept'; "
                     "run 'schema-ctl %s --force' to override\n", action, action);

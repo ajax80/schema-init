@@ -193,6 +193,15 @@ check --root "$R" --cmdline ""
 grep -q '^error: zz\.svc: REFUSED .*zz\.svc: name .dupe.' "$T/out" || fail "attrib: zz.svc not given its own reason"
 grep -q '^error: zz\.svc: zz:' "$T/out" && fail "attrib: a.svc's message pinned on zz.svc"
 
+# a refusal that names only the service still reaches its own file, and only its own
+newroot ws
+printf 'name=zz\nexec=/bin/sleep 1\n' > "$S/a.svc"
+printf 'name=zz\nexec=/bin/true\nargs=x\nexec=/bin/echo two words\n' > "$S/zz.svc"
+check --root "$R" --cmdline ""
+grep -q '^error: a\.svc: zz: exec=/bin/sleep 1 has whitespace' "$T/out" || fail "ws: a.svc reason"
+grep -q '^error: zz\.svc: zz: exec=/bin/echo two words has whitespace' "$T/out" || fail "ws: zz.svc reason"
+grep -q '^note: .*has whitespace' "$T/out" && fail "ws: reason repeated as a note"
+
 # --svc-dir is a path under the root, so absolute
 newroot reldir
 svc "$S" a

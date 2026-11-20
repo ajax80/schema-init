@@ -163,7 +163,8 @@ cmd_arm() {
     schema-ctl verify --quiet >&2 || rc=$?
     case "$rc" in
       0) ;;
-      1|2) die "not armed — fix the above or run 'schema-ctl verify --accept'; 'schema-snapshot arm --force' to override" ;;
+      1) die "not armed — fix the above; 'schema-snapshot arm --force' to override" ;;
+      2) die "not armed — fix the above or run 'schema-ctl verify --accept'; 'schema-snapshot arm --force' to override" ;;
       3) die "not armed — verification could not resolve the above; 'schema-snapshot arm --force' to override" ;;
       *) die "not armed — verification unavailable (schema-ctl verify exited $rc); 'schema-snapshot arm --force' to override" ;;
     esac

@@ -82,6 +82,7 @@ notty() {
 has() { grep -qF -- "$1" "$T/out"; }
 connected() { has "$SOCK: No such file or directory"; }
 refused_msg() { has "schema-ctl: $1 refused — fix the above or run 'schema-ctl verify --accept'; run 'schema-ctl $1 --force' to override"; }
+failed_msg() { has "schema-ctl: $1 refused — fix the above; run 'schema-ctl $1 --force' to override" && ! has 'verify --accept'; }
 killpid() { [ -s "$T/pid" ] && kill -9 "$(cat "$T/pid")" 2>/dev/null; rm -f "$T/pid"; }
 
 # production build: the overrides are compiled out
@@ -106,7 +107,7 @@ notty v1 reexec
 [ "$rc" = 1 ] || fail "reexec with a FAIL: exit $rc, want 1"
 connected && fail "reexec with a FAIL contacted PID 1"
 has "[FAIL] next boot: init=/sbin/nope missing" || fail "reexec refusal did not show the report"
-refused_msg reexec || fail "reexec refusal message"
+failed_msg reexec || fail "reexec refusal message"
 notty v2 reexec
 connected && fail "reexec with an unaccepted CHANGE contacted PID 1"
 refused_msg reexec || fail "reexec CHANGE refusal message"
@@ -119,7 +120,7 @@ notty v0 reexec
 connected || fail "reexec with a clean verify did not proceed"
 notty v1 reexec /usr/sbin/schema-init
 connected && fail "reexec <path> with a FAIL contacted PID 1"
-refused_msg "reexec /usr/sbin/schema-init" || fail "reexec <path> refusal message"
+failed_msg "reexec /usr/sbin/schema-init" || fail "reexec <path> refusal message"
 notty v1 reexec --force /usr/sbin/schema-init
 connected || fail "reexec --force <path> did not proceed"
 [ -e "$T/ran" ] && fail "reexec --force ran the verifier"
@@ -152,7 +153,7 @@ if command -v python3 >/dev/null 2>&1; then
         rm -f "$T/ran"
         SCHEMA_VERIFY_BIN=$T/v1 python3 -c "$IGN" "$CTL" reexec < /dev/null > "$T/out" 2>&1
         connected && fail "reexec under SIGCHLD=SIG_IGN with a FAIL contacted PID 1 (run $k)"
-        refused_msg reexec || fail "reexec under SIGCHLD=SIG_IGN: refusal message (run $k)"
+        failed_msg reexec || fail "reexec under SIGCHLD=SIG_IGN: refusal message (run $k)"
     done
     SCHEMA_VERIFY_BIN=$T/v0 python3 -c "$IGN" "$CTL" reexec < /dev/null > "$T/out" 2>&1
     connected || fail "reexec under SIGCHLD=SIG_IGN with a clean verify did not proceed"
@@ -199,7 +200,7 @@ if [ -n "$PTY" ]; then
     [ "$rc" = 1 ] || fail "interactive reboot with a FAIL: exit $rc, want 1"
     connected && fail "interactive reboot with a FAIL contacted PID 1"
     has "[FAIL] next boot: init=/sbin/nope missing" || fail "interactive refusal did not show the report"
-    refused_msg reboot || fail "interactive reboot refusal message"
+    failed_msg reboot || fail "interactive reboot refusal message"
     tty v2 poweroff
     connected && fail "interactive poweroff with an unaccepted CHANGE contacted PID 1"
     refused_msg poweroff || fail "interactive poweroff refusal message"
