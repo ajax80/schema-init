@@ -472,6 +472,13 @@ test-all: test
 	done; \
 	if [ "$$fail" != 0 ]; then echo "PYTHON SUITE FAILED"; exit 1; fi
 
+# The 11-18 regression against the real trees (v0.4.27 -> 434dcac): builds both
+# in temp worktrees, so it stays out of `make test`.
+test-verify-regression:
+	mkdir -p $(TESTDIR)
+	$(CC) $(CFLAGS) tests/verify_regress_diff.c verify_diff.c verify_baseline.c svc_keys.c sha256.c -o $(TESTDIR)/verify-regress-diff
+	sh tests/test_verify_regression.sh $(TESTDIR)/verify-regress-diff
+
 verify-live:
 	sh tests/sdbus_live_interop.sh
 	sh tests/verify_disk_links_live.sh
@@ -489,6 +496,6 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf-full
 	$(TESTDIR)/sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz verify-live verify-dbus-conformance
+.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-dbus-conformance
 
 
