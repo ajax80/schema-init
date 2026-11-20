@@ -63,7 +63,8 @@ static int add(finding_t *out, int max, int *n, fkind_t k, const char *fmt, ...)
 static void unquote(char *s) {
     size_t l = strlen(s);
     char *v = s[0] == '"' ? s : strchr(s, '=');
-    if (!v || l < 2 || s[l - 1] != '"' || (v != s && v[1] != '"')) return;
+    /* an opening and a closing quote, two characters: UUID=" alone is left as it is */
+    if (!v || l < 2 || s[l - 1] != '"' || (v != s && (v[1] != '"' || strlen(v + 1) < 2))) return;
     if (v != s) v++;
     memmove(v, v + 1, strlen(v + 1) - 1);
     s[l - 2] = '\0';

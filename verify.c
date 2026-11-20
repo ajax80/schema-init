@@ -215,11 +215,26 @@ static void report_entry(ctx_t *c, const char *role, int i, tag_t sev, int errs)
     if (ne) emit(c, T_WARN, "%s: %d service%s fail to load there", who, ne, ne > 1 ? "s" : "");
 }
 
-/* rpmvercmp's rule, enough for BLS version keys */
+/* blscfg's vercmp: rpm's rule, with '~' sorting before anything and '+' after the base */
 int bls_vercmp(const char *a, const char *b) {
+    if (!strcmp(a, b)) return 0;
     while (*a || *b) {
-        while (*a && !isalnum((unsigned char)*a)) a++;
-        while (*b && !isalnum((unsigned char)*b)) b++;
+        while (*a && !isalnum((unsigned char)*a) && *a != '~' && *a != '+') a++;
+        while (*b && !isalnum((unsigned char)*b) && *b != '~' && *b != '+') b++;
+        if (*a == '~' || *b == '~') {
+            if (*a != '~') return 1;
+            if (*b != '~') return -1;
+            a++, b++;
+            continue;
+        }
+        if (*a == '+' || *b == '+') {
+            if (!*a) return -1;
+            if (!*b) return 1;
+            if (*a != '+') return 1;
+            if (*b != '+') return -1;
+            a++, b++;
+            continue;
+        }
         if (!*a || !*b) break;
         const char *sa = a, *sb = b;
         int num = !!isdigit((unsigned char)*a); /* isdigit gives 2048, not 1 */
@@ -238,20 +253,34 @@ int bls_vercmp(const char *a, const char *b) {
         int r = memcmp(sa, sb, la < lb ? la : lb);
         if (r || la != lb) return r ? (r > 0 ? 1 : -1) : (la > lb ? 1 : -1);
     }
-    return *a ? 1 : *b ? -1 : 0;
+    return !*a && !*b ? 0 : !*a ? -1 : 1;
 }
 
-/* blscfg's menu order: entries with a version key first, newest version first, a tie
- * by file name, the greater first */
+/* split_package_string: release after the last '-', version after the one before, the
+ * rest the name; with one '-' the part after it is the version */
+static void nvr(char *s, const char **n, const char **v, const char **r) {
+    char *rel = strrchr(s, '-'), *ver;
+    if (rel) *rel++ = '\0';
+    ver = strrchr(s, '-');
+    if (ver) *ver++ = '\0';
+    *n = s;
+    *v = ver ? ver : rel;
+    *r = ver ? rel : NULL;
+}
+
+/* F44 blscfg's bls_cmp (grub2-2.12-60, disassembled): split_cmp on the file names, ".conf"
+ * stripped, name then version then release; the menu lists the newest first */
 static int ent_cmp(const void *x, const void *y) {
-    const bls_entry_t *a = x, *b = y;
-    char fa[300], fb[300];
-    if (!a->version[0] != !b->version[0]) return a->version[0] ? -1 : 1;
-    int r = bls_vercmp(b->version, a->version);
-    if (r) return r;
-    snprintf(fa, sizeof fa, "%s.conf", a->id);
-    snprintf(fb, sizeof fb, "%s.conf", b->id);
-    return strcmp(fb, fa);
+    char a[256], b[256];
+    const char *na, *va, *ra, *nb, *vb, *rb;
+    snprintf(a, sizeof a, "%s", ((const bls_entry_t *)x)->id);
+    snprintf(b, sizeof b, "%s", ((const bls_entry_t *)y)->id);
+    nvr(a, &na, &va, &ra);
+    nvr(b, &nb, &vb, &rb);
+    int c = bls_vercmp(nb, na);
+    if (!c) c = bls_vercmp(vb ? vb : "", va ? va : "");
+    if (!c) c = bls_vercmp(rb ? rb : "", ra ? ra : "");
+    return c;
 }
 
 void bls_sort(bls_entry_t *ents, int n) {

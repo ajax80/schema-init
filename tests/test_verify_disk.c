@@ -119,6 +119,10 @@ int main(int argc, char **argv) {
     n = disk_findings(p, NULL, devdir, f, 64);
     assert(n == 1 && has(f, n, F_FAIL, "/home") && !has(f, n, F_FAIL, "PRESENT"));
     assert(cls("UUID=\"A\"", "ext4", "defaults") == FS_LOCAL_REQ);
+    /* a lone quote is no quoted value: left as is, never read past */
+    put(p, "UUID=\" /x ext4 defaults 0 0\n\" /y ext4 defaults 0 0\nUUID=\"\" /z ext4 defaults 0 0\n");
+    n = disk_findings(p, NULL, devdir, f, 64);
+    assert(n == 3 && has(f, n, F_FAIL, "UUID=\" not present") && has(f, n, F_FAIL, "/z"));
 
     /* optical, loop and zram devices are no disk the boot waits on */
     n = disk_findings("/nonexistent",

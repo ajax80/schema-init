@@ -393,22 +393,21 @@ expect 64 usage
 v --write-baseline --wait-settled x
 expect 64 usage-wait
 
-# saved_entry unset: GRUB boots the first menu entry, blscfg's newest version key; the
-# snapshot's file name sorts first, its version (7.2.11) does not
+# saved_entry unset: GRUB boots the first menu entry; F44 blscfg sorts by file name
+# (name, version, release by vercmp), so of these kernels the newest version is first...
 mkdir "$T/bls2"
 for k in 7.2.9 7.2.11 7.3.0 7.2.10; do
     printf 'title k\nversion %s\nlinux /root/boot/vmlinuz-%s\noptions root=PARTUUID=%s ro rootflags=subvol=root init=/sbin/schema-init\n' \
         "$k" "$k" "$PU" > "$T/bls2/m-$k.conf"
 done
-sed 's/^title .*/&\nversion 7.2.11/' "$T/bls/$F.conf" > "$T/bls2/$F.conf"
 printf 'blsdir=/x\n' > "$T/grubenv2"
 SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
 has "[PASS] actual next boot m-7.3.0:" || fail "newest: actual is not m-7.3.0"
-# an entry without a version key: where blscfg puts it is not known
-sed -i '/^version/d' "$T/bls2/m-7.2.9.conf"
+# ...but a snapshot entry's name sorts above them all: GRUB boots the snapshot, whatever
+# its version key says
+cp "$T/bls/$F.conf" "$T/bls2/$F.conf"
 SCHEMA_VERIFY_BLS_DIR="$T/bls2" SCHEMA_VERIFY_GRUBENV="$T/grubenv2" v
-grep -q '^\[PASS\] actual' "$T/out" && fail "newest-nover: PASS for a menu position"
-has "[UNRESOLVED] actual next boot" || fail "newest-nover: not unresolved"
+has "[PASS] actual next boot $F:" || fail "newest-snap: actual is not the snapshot"
 
 # schema-good* entries alone mean the guard is in use
 cp tests/fixtures/verify/boot/grub-comment.cfg "$T/grub.cfg"

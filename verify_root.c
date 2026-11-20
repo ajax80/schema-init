@@ -65,6 +65,8 @@ int dev_resolve(const char *spec, const char *devdir, char *out, size_t n) {
     for (i = 0; i < sizeof by / sizeof *by && strncmp(spec, by[i].key, strlen(by[i].key)); i++)
         ;
     if (i < sizeof by / sizeof *by) {
+        /* UUID= with no value would name the by-uuid directory itself */
+        if (!spec[strlen(by[i].key)]) return -1;
         /* udev's link names: anything outside this set is \xNN, so a value can't climb out with / */
         size_t o = 0;
         for (const unsigned char *p = (const unsigned char *)spec + strlen(by[i].key); *p; p++) {
@@ -76,7 +78,7 @@ int dev_resolve(const char *spec, const char *devdir, char *out, size_t n) {
         }
         name[o] = '\0';
         if (snprintf(path, sizeof path, "%s/disk/%s/%s", devdir, by[i].dir, name) >= (int)sizeof path) return -1;
-    } else if (!strncmp(spec, "/dev/", 5)) {
+    } else if (!strncmp(spec, "/dev/", 5) && spec[5]) {
         if (snprintf(path, sizeof path, "%s/%s", devdir, spec + 5) >= (int)sizeof path) return -1;
     } else if (is_majmin(spec)) {
         if (snprintf(path, sizeof path, "%s/block/%s", devdir, spec) >= (int)sizeof path) return -1;
@@ -461,9 +463,13 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
         if (!strncmp(p, "subvol=", 7)) sv = p + 7;
     if (btrfs && sv && subvol_check(ctl, top, sv, rootspec)) return;
     /* the target as the kernel mounts it: rootflags= is the mount data */
-    if (bound ? mount(top, tgt, NULL, MS_BIND, NULL) ||
-                    mount(NULL, tgt, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL)
-              : mount(dev, tgt, type, fl, flags)) {
+    /* a failed bind says nothing about the entry; a failed mount with rootflags= does */
+    if (bound && (mount(top, tgt, NULL, MS_BIND, NULL) ||
+                  mount(NULL, tgt, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL))) {
+        U("cannot bind root=%s read-only onto the target: %m\n", rootspec);
+        return;
+    }
+    if (!bound && mount(dev, tgt, type, fl, flags)) {
         F("cannot mount root=%s with rootflags=%s: %m\n", rootspec, flags ? flags : "");
         return;
     }

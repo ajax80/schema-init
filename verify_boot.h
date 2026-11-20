@@ -12,7 +12,6 @@ typedef char grubenv_t[2][GRUBENV_SZ];
 
 typedef struct {
     char id[256];
-    char version[256]; /* blscfg sorts the menu by it */
     char linux_path[512];
     char initrd[8][512];
     int n_initrd;
@@ -35,8 +34,7 @@ int karg_check(char (*args)[512], int n, char *why, size_t whysz);
 /* 0 resolved; 1 unresolved; 2 FAIL: schema_fallback_id names no entry.
  * An id that could not be resolved is NULL (fallback keeps the unknown id).
  * dflt: grub.cfg's header default (grubcfg_default), NULL when not known.
- * ents must be in blscfg's sort order; a menu position resolves only when none was
- * cut and every entry has a version key. */
+ * ents must be in blscfg's sort order; a menu position resolves only when none was cut. */
 int nextboot_resolve(grubenv_t *env, int nenv, const bls_entry_t *ents, int nents, const char *dflt, int cut,
                      nextboot_t *nb);
 int grubcfg_live_fallback(const char *cfg_text);

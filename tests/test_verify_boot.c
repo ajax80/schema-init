@@ -140,12 +140,10 @@ static void test_nextboot(void) {
     assert(nextboot_resolve(env, n, ents, 3, SAVED, 0, &nb) == 2);
     assert(nb.unresolved && !strcmp(nb.fallback, "schema-snap-19990101-000000-gone"));
 
-    /* no saved_entry: the first entry, a menu position known only when every entry has
-     * the version key blscfg sorts by (two-initrd has none) and none was cut */
+    /* no saved_entry: the first entry (ents in menu order); a cut list may lack it */
     n = env_from("# GRUB Environment Block\nblsdir=/x\n");
-    assert(nextboot_resolve(env, n, ents, 1, SAVED, 0, &nb) == 0);
+    assert(nextboot_resolve(env, n, ents, 3, SAVED, 0, &nb) == 0);
     assert(!strcmp(nb.actual, "normal") && !strcmp(nb.normal, "normal"));
-    assert(nextboot_resolve(env, n, ents, 3, SAVED, 0, &nb) == 1 && nb.unresolved && !nb.actual);
     assert(nextboot_resolve(env, n, ents, 1, SAVED, 1, &nb) == 1 && nb.unresolved && !nb.actual);
 
     /* grub.cfg's header default other than ${saved_entry}: saved_entry is not what boots */
@@ -155,7 +153,7 @@ static void test_nextboot(void) {
     assert(nextboot_resolve(env, n, two, 2, "1", 0, &nb) == 0 && !strcmp(nb.actual, "normal"));
     assert(nextboot_resolve(env, n, two, 2, "2", 0, &nb) == 1 && !nb.actual);
     assert(nextboot_resolve(env, n, two, 2, "0", 1, &nb) == 1 && !nb.actual);
-    assert(nextboot_resolve(env, n, ents, 3, "0", 0, &nb) == 1 && !nb.actual);
+    assert(nextboot_resolve(env, n, ents, 3, "1", 0, &nb) == 0 && !strcmp(nb.actual, "two-initrd"));
     assert(nextboot_resolve(env, n, ents, 3, "normal", 0, &nb) == 0 && !strcmp(nb.actual, "normal"));
     assert(nextboot_resolve(env, n, ents, 3, "Fedora Linux (6.1.0) 44", 0, &nb) == 1 && !nb.actual);
     assert(nextboot_resolve(env, n, ents, 3, NULL, 0, &nb) == 1 && !nb.actual);

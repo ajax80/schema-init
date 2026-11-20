@@ -88,8 +88,6 @@ int bls_parse(const char *path, bls_entry_t *e) {
         if (kl == 5 && !strncmp(k, "linux", 5)) {
             if (e->linux_path[0]) e->extra_linux = 1;
             else e->parse_err |= put(e->linux_path, sizeof e->linux_path, v);
-        } else if (kl == 7 && !strncmp(k, "version", 7)) {
-            if (!e->version[0]) e->parse_err |= put(e->version, sizeof e->version, v);
         } else if (kl == 6 && !strncmp(k, "initrd", 6)) {
             for (char *t = strtok(v, " \t"); t; t = strtok(NULL, " \t")) {
                 /* a GRUB variable such as $tuned_initrd, not a file */
@@ -150,9 +148,8 @@ int nextboot_resolve(grubenv_t *env, int nenv, const bls_entry_t *ents, int nent
     const char *cnt = env_get(env, nenv, "boot_counter"), *ok = env_get(env, nenv, "boot_success");
     memset(nb, 0, sizeof *nb);
 
-    /* blscfg places an entry without a version key where verify can't be sure of */
+    /* a cut list may lack the entry blscfg lists first */
     int posok = !cut;
-    for (int i = 0; i < nents; i++) posok &= !!ents[i].version[0];
     size_t dl = dflt ? strlen(dflt) : 0;
     if (!dflt) {
     } else if (!strcmp(dflt, "${saved_entry}")) {

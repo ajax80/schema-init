@@ -69,6 +69,8 @@ static void test_dev_resolve(void) {
 
     assert(dev_resolve("UUID=dead-beef", devdir, out, sizeof out) == -1);
     assert(dev_resolve("UUID=nope", devdir, out, sizeof out) == -1);
+    assert(dev_resolve("UUID=", devdir, out, sizeof out) == -1);
+    assert(dev_resolve("/dev/", devdir, out, sizeof out) == -1);
     assert(dev_resolve("UUID=../../nvme0n1p3", devdir, out, sizeof out) == -1);
     assert(dev_resolve("/dev/sda9", devdir, out, sizeof out) == -1);
     /* maj:min through /dev/block, as the kernel takes it */
