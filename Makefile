@@ -71,8 +71,10 @@ desktop:
 
 schema-init: init.o check.o $(ENGINE_OBJS)
 	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
-	# whole-program LTO link of PID 1 that CI never exercises
-	$(CC) $(STATIC_LDFLAGS) -o $@ $^ -lrt
+	# whole-program LTO link of PID 1 that CI never exercises.
+	# STATIC_LDFLAGS= (the sanitizer run) links with LDFLAGS, which carry the
+	# ASan/UBSan runtime the instrumented objects need
+	$(CC) $(or $(STATIC_LDFLAGS),$(LDFLAGS)) -o $@ $^ -lrt
 
 # Dynamic, unlike PID 1: it runs in a session where libc is always there.
 schema-user: schema-user.o $(ENGINE_OBJS)
