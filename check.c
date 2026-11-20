@@ -1,6 +1,7 @@
 #include "check.h"
 #include "engine.h"
 #include "group.h"
+#include "karg.h"
 #include "pi_target.h"
 #include "schema.h"
 #include "service.h"
@@ -31,21 +32,28 @@ static int str_cmp(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
-/* The last word starting with key, as the kernel keeps it for init= and the
- * env; words after a bare "--" are init's argv, not boot options. */
+/* cmdline words as the kernel splits them, up to a bare "--": the words after it
+ * are init's argv, not boot options. Caller frees. */
+static char (*boot_words(const char *cmdline, int *n))[512] {
+    int max = (int)strlen(cmdline) / 2 + 1;
+    char (*w)[512] = calloc(max, sizeof *w);
+    *n = karg_split(cmdline, w, max);
+    for (int i = 0; i < *n; i++)
+        if (!strcmp(w[i], "--")) *n = i;
+    return w;
+}
+
+/* The last word starting with key, as the kernel keeps it for init= and the env. */
 static int word_val(const char *cmdline, const char *key, char *out, size_t n) {
     size_t kl = strlen(key);
-    int found = 0;
-    for (const char *p = cmdline; *p;) {
-        p += strspn(p, " \t\n");
-        size_t wl = strcspn(p, " \t\n");
-        if (wl == 2 && !strncmp(p, "--", 2)) break;
-        if (wl >= kl && strncmp(p, key, kl) == 0) {
-            snprintf(out, n, "%.*s", (int)(wl - kl), p + kl);
+    int found = 0, nw;
+    char (*w)[512] = boot_words(cmdline, &nw);
+    for (int i = 0; i < nw; i++)
+        if (strncmp(w[i], key, kl) == 0) {
+            snprintf(out, n, "%s", w[i] + kl);
             found = 1;
         }
-        p += wl;
-    }
+    free(w);
     return found;
 }
 
@@ -139,14 +147,13 @@ static void print_header(const char *cmdline, int hon, const char *rel_dir) {
     char line[1024];
     printf("schema-verify-baseline v1\nbinary_version=%s\n", SCHEMA_INIT_VERSION);
     lines_t cl = { 0 };
-    for (const char *p = cmdline; *p;) {
-        p += strspn(p, " \t\n");
-        size_t wl = strcspn(p, " \t\n");
-        if (wl == 2 && !strncmp(p, "--", 2)) break;
-        snprintf(line, sizeof line, "cmdline.%.*s", (int)wl, p);
-        if (wl && boot_critical(p)) lines_add(&cl, line);
-        p += wl;
+    int nw;
+    char (*w)[512] = boot_words(cmdline, &nw);
+    for (int i = 0; i < nw; i++) {
+        snprintf(line, sizeof line, "cmdline.%s", w[i]);
+        if (boot_critical(w[i])) lines_add(&cl, line);
     }
+    free(w);
     ordered_t *o = calloc(cl.n ? cl.n : 1, sizeof *o);
     for (int i = 0; i < cl.n; i++) o[i] = (ordered_t){ cl.v[i], i };
     qsort(o, cl.n, sizeof *o, key_cmp);

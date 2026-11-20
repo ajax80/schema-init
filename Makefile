@@ -55,7 +55,7 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c check.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
+SRCS    = init.c check.c karg.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
 OBJS    = $(SRCS:.c=.o)
 ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o svc_serial.o sha256.o
 # The core objects share these headers. Without this dependency an incremental
@@ -69,7 +69,7 @@ all: $(BINS)
 desktop:
 	$(MAKE) -C desktop
 
-schema-init: init.o check.o $(ENGINE_OBJS)
+schema-init: init.o check.o karg.o $(ENGINE_OBJS)
 	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
 	# whole-program LTO link of PID 1 that CI never exercises.
 	# STATIC_LDFLAGS= (the sanitizer run) links with LDFLAGS, which carry the
@@ -85,8 +85,8 @@ schema-init-static:
 
 # sources, not .o: aarch64/armhf rebuild schema-ctl in the same tree, and a
 # native sha256.o left over would link into the cross binary
-SCHEMA_CTL_SRCS = schema-ctl.c verify_baseline.c sha256.c
-schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify_baseline.h sha256.h
+SCHEMA_CTL_SRCS = schema-ctl.c verify_baseline.c verify_boot.c karg.c sha256.c
+schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify_baseline.h verify_boot.h karg.h sha256.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SCHEMA_CTL_SRCS) -lrt
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
@@ -124,6 +124,7 @@ schema-dbus: schema-dbus.c sdbus_wire.h sdbus_policy.h sdbus_names.h sdbus_match
 
 $(OBJS) schema-user.o: $(CORE_HDRS)
 check.o init.o: check.h
+check.o karg.o: karg.h
 check.o: pi_target.h pi_bootguard.h
 
 %.o: %.c
@@ -415,6 +416,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	sh tests/test_check_mode.sh
 	rm -rf $(TESTDIR)/vb-*
 	$(CC) $(CFLAGS) tests/test_verify_baseline.c verify_baseline.c sha256.c -o $(TESTDIR)/verify-baseline && $(TESTDIR)/verify-baseline $(TESTDIR)
+	$(CC) $(CFLAGS) tests/test_verify_boot.c verify_boot.c karg.c -o $(TESTDIR)/verify-boot && $(TESTDIR)/verify-boot $(TESTDIR)
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey
