@@ -485,7 +485,8 @@ if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ] &&
 fi
 
 %files
-%license LICENSE
+%license LICENSE fonts/LICENSE.spleen
+%{_prefix}/lib/kbd/consolefonts/schema-16x32.psfu.gz
 %doc README.md docs/
 %{_bindir}/schema-init
 %{_bindir}/schema-user

@@ -135,7 +135,11 @@ check.o: pi_target.h pi_bootguard.h
 PI_KIT_EXAMPLES = $(wildcard services/pi-*.svc.example) services/udev.svc.example services/udev-trigger.svc.example \
 	services/dbus.svc.example services/sysctl.svc.example
 
-install: all
+fonts/schema-16x32.psfu.gz: fonts/schema-16x32.psfu
+	gzip -9n < $< > $@
+
+install: all fonts/schema-16x32.psfu.gz
+	install -D -m 0644 fonts/schema-16x32.psfu.gz $(DESTDIR)$(PREFIX)/lib/kbd/consolefonts/schema-16x32.psfu.gz
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(BINS) $(DESTDIR)$(BINDIR)/
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
@@ -291,7 +295,7 @@ check-hardening: $(BINS) $(OBJS)
 
 clean:
 	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl schema-init-pi udev-parity verify-rules-live verify-eprops-live libatomic_asneeded.a
-	rm -rf $(RELDIR) build
+	rm -rf $(RELDIR) build fonts/schema-16x32.psfu.gz
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
 
@@ -334,6 +338,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	sh tests/test_pi_kit.sh
 	sh tests/test_schema_pi.sh
 	sh tests/test_deb_trigger.sh
+	$(MAKE) test-schema-font
 	sh tests/test_pi_halt.sh
 	sh tests/test_deb_version.sh
 	sh tests/test_devuan_boot.sh
@@ -499,3 +504,20 @@ verify-dbus-conformance:
 .PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-dbus-conformance
 
 
+
+# The schema font is generated, then committed (fonts/schema-16x32.{bdf,psfu},
+# schema_font.c), so building schema-init needs no python3. Regenerate after
+# editing tools/mkschemafont.py; test-schema-font fails if the copies drift.
+font:
+	python3 -I tools/mkschemafont.py fonts/spleen-16x32.bdf fonts/schema-16x32.bdf
+	python3 -I tools/bdf2psf.py fonts/schema-16x32.bdf fonts/schema-16x32.psfu
+	python3 -I tools/psf2c.py fonts/schema-16x32.psfu schema_font.c
+
+test-schema-font:
+	$(CC) $(CFLAGS) tests/test_schema_font.c schema_font.c -o $(TESTDIR)/schema-font && $(TESTDIR)/schema-font
+	@if command -v python3 >/dev/null; then \
+	  python3 -I tools/mkschemafont.py fonts/spleen-16x32.bdf $(TESTDIR)/sf.bdf && \
+	  python3 -I tools/bdf2psf.py $(TESTDIR)/sf.bdf $(TESTDIR)/sf.psfu && \
+	  python3 -I tools/psf2c.py $(TESTDIR)/sf.psfu $(TESTDIR)/sf.c && \
+	  cmp -s $(TESTDIR)/sf.bdf fonts/schema-16x32.bdf && cmp -s $(TESTDIR)/sf.psfu fonts/schema-16x32.psfu && \
+	  cmp -s $(TESTDIR)/sf.c schema_font.c || { echo "schema font: committed files drifted from tools/ (make font)"; exit 1; }; fi

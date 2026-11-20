@@ -20,3 +20,8 @@ License: AGPL-3.0-or-later
  On Debian systems, the full text of the GNU Affero General Public
  License version 3 can be found in /usr/share/common-licenses/AGPL-3
  (or at <https://www.gnu.org/licenses/agpl-3.0.html>).
+
+Files: fonts/spleen-16x32.bdf fonts/schema-16x32.* schema_font.c
+Copyright: 2018-2024 Frederic Cambus
+License: BSD-2-Clause
+ See /usr/share/doc/schema-init/LICENSE.spleen.
