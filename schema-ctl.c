@@ -8,11 +8,14 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #include "schema.h"
 #include "svc_dropins.h"
 #include "schema_shm.h"
 #include "recorder_logic.h"
+#include "verify_baseline.h"
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
@@ -289,6 +292,11 @@ static void usage(FILE *out) {
         "                         pressure episodes, oldest first; <t> is an epoch\n"
         "                         or HH:MM today. Read from shared memory; root sees\n"
         "                         full command lines\n"
+        "  verify --write-baseline [--wait-settled <secs>]\n"
+        "                         save what this boot runs (the running binary's\n"
+        "                         --check) as the baseline the next boot is diffed\n"
+        "                         against; --wait-settled first waits for <secs>\n"
+        "                         (60 is the norm) of healthy services, no restarts\n"
         "  pet <svc>              feed a service's watchdog\n"
         "  reset [<svc>]          clear restart/dormant counters and retry <svc>;\n"
         "                         no argument clears every counter and retries\n"
@@ -346,14 +354,218 @@ static void print_skipped(int mode, int comma) {
     fclose(f);
 }
 
+/* 0: whole reply (lone "." line stripped), 1: cut short, -1: no reply
+ * (reported, unless quiet: then errno says why) */
+static int ctl_request(const char *req, char **reply, int quiet) {
+    char *rbuf;
+    size_t cap = 65536, rlen = 0;
+    ssize_t n;
+    int fd, whole = 0;
+    struct sockaddr_un addr;
+
+    *reply = NULL;
+    rbuf = malloc(cap);
+    if (!rbuf) { perror("malloc"); return -1; }
+
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { perror("socket"); free(rbuf); return -1; }
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, ctl_sock, sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int first_errno = errno;
+        int connected = 0;
+        /* try local fallback only when explicitly requested */
+        if (!user_mode && getenv("SCHEMA_CTL_FALLBACK")) {
+            memset(&addr, 0, sizeof(addr));
+            addr.sun_family = AF_UNIX;
+            strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
+            connected = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+        }
+        if (!connected && quiet) {
+            close(fd);
+            free(rbuf);
+            errno = first_errno;
+            return -1;
+        }
+        if (!connected) {
+            fprintf(stderr, "%s: %s\n", ctl_sock, strerror(first_errno));
+            if (user_mode && first_errno == ENOENT)
+                fprintf(stderr, "no socket there — is schema-user running for this user?\n");
+            else if (user_mode)
+                ;
+            else if (first_errno == EACCES || first_errno == EPERM)
+                fprintf(stderr, "schema-ctl talks to PID 1 as root: try sudo schema-ctl %s", req);
+            else if (first_errno == ENOENT)
+                fprintf(stderr, "no socket there — is schema-init running as PID 1?\n");
+            close(fd);
+            free(rbuf);
+            return -1;
+        }
+    }
+
+    write(fd, req, strlen(req));
+
+    rbuf[0] = '\0';
+    for (;;) {
+        if (rlen + 1 >= cap) {
+            char *nb = realloc(rbuf, cap * 2);
+            if (!nb) { perror("realloc"); close(fd); free(rbuf); return -1; }
+            rbuf = nb;
+            cap *= 2;
+        }
+        n = read(fd, rbuf + rlen, cap - 1 - rlen);
+        if (n <= 0) break;
+        rlen += (size_t)n;
+        rbuf[rlen] = '\0';
+        if (rlen >= 2 && rbuf[rlen - 2] == '.' && rbuf[rlen - 1] == '\n' && (rlen == 2 || rbuf[rlen - 3] == '\n')) {
+            rbuf[rlen - 2] = '\0';
+            whole = 1;
+            break;
+        }
+    }
+    close(fd);
+    *reply = rbuf;
+    return !whole;
+}
+
+static uint64_t mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+static int wait_settled(unsigned window_s) {
+    const uint64_t give_up = mono_ms() + settle_give_up_ms(window_s);
+    settle_t st = {0};
+    int conn_err = 0;
+    for (;;) {
+        char *kv;
+        /* PID 1 may not answer yet: retried every second, reported once at the end */
+        int r = ctl_request("status --kv\n", &kv, 1);
+        conn_err = r < 0 ? errno : 0;
+        if (r == 0 && strncmp(kv, "err:", 4)) {
+            if (settle_step(&st, kv, mono_ms(), window_s)) {
+                free(kv);
+                return 0;
+            }
+        } else
+            memset(&st, 0, sizeof st);
+        free(kv);
+        if (mono_ms() >= give_up) {
+            if (conn_err) fprintf(stderr, "schema-ctl: %s: %s\n", ctl_sock, strerror(conn_err));
+            return -1;
+        }
+        sleep(1);
+    }
+}
+
+static char *slurp_fd(int fd, size_t *len) {
+    size_t cap = 65536, n = 0;
+    char *b = malloc(cap);
+    ssize_t r;
+    if (!b) return NULL;
+    while ((r = read(fd, b + n, cap - n)) != 0) {
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        n += (size_t)r;
+        if (n == cap) {
+            char *nb = realloc(b, cap *= 2);
+            if (!nb) { free(b); return NULL; }
+            b = nb;
+        }
+    }
+    *len = n;
+    return b;
+}
+
+static int cmd_write_baseline(long wait_s) {
+    char exe[PATH_MAX] = "", cmdline[4096] = "";
+    const char *dir = getenv("SCHEMA_VERIFY_DIR");
+    int fd, p[2], status;
+    size_t len;
+    char *out;
+    ssize_t n;
+    pid_t pid;
+
+    if (geteuid() != 0) {
+        fprintf(stderr, "schema-ctl verify --write-baseline: needs root (it runs /proc/1/exe)\n");
+        return 1;
+    }
+    n = readlink("/proc/1/exe", exe, sizeof exe - 1);
+    exe[n > 0 ? n : 0] = '\0';
+    if (!pid1_exe_is_schema_init(exe)) {
+        fprintf(stderr, "schema-ctl: PID 1 is %s, not schema-init — nothing to baseline\n", exe[0] ? exe : "unknown");
+        return 1;
+    }
+    if (wait_s >= 0 && wait_settled((unsigned)wait_s) < 0) {
+        fprintf(stderr, "schema-ctl: services did not settle within %llu minutes — baseline not written\n",
+                (unsigned long long)(settle_give_up_ms((unsigned)wait_s) / 60000));
+        return 3;
+    }
+    fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
+    n = fd < 0 ? -1 : read(fd, cmdline, sizeof cmdline - 1);
+    if (fd >= 0) close(fd);
+    if (n <= 0) { fprintf(stderr, "schema-ctl: /proc/cmdline: %s\n", strerror(errno)); return 1; }
+    cmdline[n] = '\0';
+    cmdline[strcspn(cmdline, "\n")] = '\0';
+
+    if (pipe2(p, O_CLOEXEC) < 0) { perror("pipe"); return 1; }
+    pid = fork();
+    if (pid < 0) { perror("fork"); return 1; }
+    if (pid == 0) {
+        /* the running image, even when dnf has replaced the file on disk */
+        char *av[] = { "/proc/1/exe", "--check", "--root", "/", "--cmdline", cmdline, NULL };
+        dup2(p[1], 1);
+        execv(av[0], av);
+        fprintf(stderr, "schema-ctl: /proc/1/exe: %s\n", strerror(errno));
+        _exit(127);
+    }
+    close(p[1]);
+    out = slurp_fd(p[0], &len);
+    close(p[0]);
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) ;
+    if (!out) { perror("read"); return 1; }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) > 1) {
+        fprintf(stderr, "schema-ctl: /proc/1/exe --check failed — baseline not written\n");
+        free(out);
+        return 1;
+    }
+    /* an older PID 1 binary rejects --check with usage and exit 1 */
+    if (len < sizeof BASELINE_MAGIC - 1 || memcmp(out, BASELINE_MAGIC, sizeof BASELINE_MAGIC - 1)) {
+        fprintf(stderr, "schema-ctl: PID 1's binary has no --check (older than this schema-ctl) — no baseline\n");
+        free(out);
+        return 1;
+    }
+    if (WEXITSTATUS(status) == 1)
+        fprintf(stderr, "schema-ctl: warning: some services did not load on this boot — the baseline records them as they are\n");
+    if (!dir || !dir[0]) {
+        dir = VERIFY_DIR_DEFAULT;
+        mkdir("/var/lib/schema-init", 0755);
+    }
+    if (baseline_write(dir, out, len, time(NULL)) < 0) {
+        if (errno == EROFS)
+            fprintf(stderr, "schema-ctl: %s: var not persistent (tmpfs) — baseline not written\n", dir);
+        else if (errno == EPERM)
+            fprintf(stderr, "schema-ctl: %s: not owned by uid %d — refusing to write the baseline there\n", dir, (int)geteuid());
+        else
+            fprintf(stderr, "schema-ctl: %s/baseline: %s\n", dir, strerror(errno));
+        free(out);
+        return 1;
+    }
+    free(out);
+    printf("baseline written: %s/baseline\n", dir);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     char cmd[256];
     char *rbuf;
-    size_t cap = 65536;
-    int fd, i;
-    size_t rlen;
-    ssize_t n;
-    struct sockaddr_un addr;
+    int i, r, whole;
 
     if (argc > 1 && strcmp(argv[1], "--user") == 0) {
         static char usock[PATH_MAX], udir[PATH_MAX], uskip[PATH_MAX];
@@ -386,6 +598,19 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0) {
         printf("schema-ctl %s\n", SCHEMA_INIT_VERSION);
         return 0;
+    }
+
+    if (strcmp(argv[1], "verify") == 0) {
+        long wait_s = -1;
+        char *end;
+        if (!user_mode && argc == 3 && !strcmp(argv[2], "--write-baseline"))
+            return cmd_write_baseline(-1);
+        if (!user_mode && argc == 5 && !strcmp(argv[2], "--write-baseline") && !strcmp(argv[3], "--wait-settled")) {
+            wait_s = strtol(argv[4], &end, 10);
+            if (argv[4][0] && !*end && wait_s >= 0 && wait_s <= 3600) return cmd_write_baseline(wait_s);
+        }
+        fprintf(stderr, "usage: schema-ctl verify --write-baseline [--wait-settled <secs>]\n");
+        return 1;
     }
 
     if (strcmp(argv[1], "graph") == 0) {
@@ -454,64 +679,9 @@ int main(int argc, char **argv) {
     }
     strncat(cmd, "\n", sizeof(cmd) - strlen(cmd) - 1);
 
-    rbuf = malloc(cap);
-    if (!rbuf) { perror("malloc"); return 1; }
-
-    fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) { perror("socket"); free(rbuf); return 1; }
-
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, ctl_sock, sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        int first_errno = errno;
-        int connected = 0;
-        /* try local fallback only when explicitly requested */
-        if (!user_mode && getenv("SCHEMA_CTL_FALLBACK")) {
-            memset(&addr, 0, sizeof(addr));
-            addr.sun_family = AF_UNIX;
-            strncpy(addr.sun_path, "./run/schema-init.sock", sizeof(addr.sun_path) - 1);
-            connected = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
-        }
-        if (!connected) {
-            fprintf(stderr, "%s: %s\n", ctl_sock, strerror(first_errno));
-            if (user_mode && first_errno == ENOENT)
-                fprintf(stderr, "no socket there — is schema-user running for this user?\n");
-            else if (user_mode)
-                ;
-            else if (first_errno == EACCES || first_errno == EPERM)
-                fprintf(stderr, "schema-ctl talks to PID 1 as root: try sudo schema-ctl %s", cmd);
-            else if (first_errno == ENOENT)
-                fprintf(stderr, "no socket there — is schema-init running as PID 1?\n");
-            close(fd);
-            free(rbuf);
-            return 1;
-        }
-    }
-
-    write(fd, cmd, strlen(cmd));
-
-    rlen = 0;
-    rbuf[0] = '\0';
-    int whole = 0;
-    for (;;) {
-        if (rlen + 1 >= cap) {
-            char *nb = realloc(rbuf, cap * 2);
-            if (!nb) { perror("realloc"); close(fd); free(rbuf); return 1; }
-            rbuf = nb;
-            cap *= 2;
-        }
-        n = read(fd, rbuf + rlen, cap - 1 - rlen);
-        if (n <= 0) break;
-        rlen += (size_t)n;
-        rbuf[rlen] = '\0';
-        if (rlen >= 2 && rbuf[rlen - 2] == '.' && rbuf[rlen - 1] == '\n' && (rlen == 2 || rbuf[rlen - 3] == '\n')) {
-            rbuf[rlen - 2] = '\0';
-            whole = 1;
-            break;
-        }
-    }
+    r = ctl_request(cmd, &rbuf, 0);
+    if (r < 0) return 1;
+    whole = r == 0;
 
     i = !whole || strncmp(rbuf, "err:", 4) == 0;
     char *jend = NULL;
@@ -531,7 +701,6 @@ int main(int argc, char **argv) {
         print_skipped(argc == 3 ? SKIP_KV : SKIP_TEXT, 0);
     if (!whole)
         fprintf(stderr, "schema-ctl: reply cut short: the command may not have run\n");
-    close(fd);
     free(rbuf);
     return i;
 }

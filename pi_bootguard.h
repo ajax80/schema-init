@@ -51,18 +51,18 @@ static inline int pi_state_format(const struct pi_state *st, char *buf, size_t n
     return (r < 0 || (size_t)r >= n) ? -1 : r;
 }
 
+/* Pure, so schema-init --check can ask what the next boot would pick without spending an attempt. */
+static inline enum pi_target pi_choose_target(const struct pi_state *st, int known_good_differs) {
+    if (st->attempts == 0 || st->attempts == 1) return PI_CURRENT;
+    if (st->attempts == 2 && known_good_differs) return PI_KNOWN_GOOD;
+    return PI_SYSTEMD;
+}
+
 static inline enum pi_target pi_decide(struct pi_state *st, int known_good_differs) {
-    if (st->attempts == 0 || st->attempts == 1) {
-        st->attempts++;
-        st->last_target = PI_CURRENT;
-    } else if (st->attempts == 2 && known_good_differs) {
-        st->attempts = 3;
-        st->last_target = PI_KNOWN_GOOD;
-    } else {
-        st->attempts = 0;
-        st->last_target = PI_SYSTEMD;
-    }
-    return st->last_target;
+    enum pi_target t = pi_choose_target(st, known_good_differs);
+    st->attempts = t == PI_CURRENT ? st->attempts + 1 : t == PI_KNOWN_GOOD ? 3 : 0;
+    st->last_target = t;
+    return t;
 }
 
 #endif

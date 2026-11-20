@@ -81,6 +81,7 @@ make install-migrate DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_syscon
 make install-wizard DESTDIR=%{buildroot} PREFIX=%{_prefix} SYSCONFDIR=%{_sysconfdir}
 make install-analyze DESTDIR=%{buildroot} PREFIX=%{_prefix}
 install -Dm0755 scripts/schema-bootok %{buildroot}%{_bindir}/schema-bootok
+install -Dm0644 services/schema-verify-baseline.svc %{buildroot}%{_sysconfdir}/schema-init/services/schema-verify-baseline.svc
 install -Dm0755 scripts/schema-doctor.py %{buildroot}/usr/local/bin/schema-doctor
 install -Dm0755 scripts/schema-logind.py %{buildroot}/usr/local/bin/schema-logind.py
 install -Dm0755 scripts/schema-systemd1.py %{buildroot}/usr/local/bin/schema-systemd1.py
@@ -496,6 +497,7 @@ fi
 %{_bindir}/schema-recorder
 %{_bindir}/schema-snapshot
 %{_bindir}/schema-bootok
+%config(noreplace) %{_sysconfdir}/schema-init/services/schema-verify-baseline.svc
 %{_bindir}/schema-analyze
 /usr/local/bin/schema-doctor
 /usr/local/bin/schema-recorder-earlyoom

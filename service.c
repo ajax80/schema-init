@@ -2663,7 +2663,7 @@ static int rw_path_ok(char *v) {
     return 1;
 }
 
-static const char *const exec_dir_key[EXEC_DIR_KINDS] = { "runtime_dir", "state_dir", "cache_dir", "logs_dir" };
+const char *const service_exec_dir_key[EXEC_DIR_KINDS] = { "runtime_dir", "state_dir", "cache_dir", "logs_dir" };
 
 static void exec_dir_clear(service_t *svc, int k) {
     for (int i = 0; i < svc->exec_dir_count[k]; i++) {
@@ -2675,8 +2675,8 @@ static void exec_dir_clear(service_t *svc, int k) {
 
 static int exec_dir_kind(const char *key, int mode) {
     for (int k = 0; k < EXEC_DIR_KINDS; k++) {
-        size_t n = strlen(exec_dir_key[k]);
-        if (strncmp(key, exec_dir_key[k], n) == 0 && strcmp(key + n, mode ? "_mode" : "") == 0) return k;
+        size_t n = strlen(service_exec_dir_key[k]);
+        if (strncmp(key, service_exec_dir_key[k], n) == 0 && strcmp(key + n, mode ? "_mode" : "") == 0) return k;
     }
     return -1;
 }
@@ -3038,14 +3038,14 @@ static void svc_make_exec_dirs(const service_t *svc, int create) {
         if (service_exec_dir_base(k, base, sizeof base) != 0) {
             if (!create) continue;
             dprintf(2, "[schema-init] %s: %s=: no base directory (XDG_RUNTIME_DIR/HOME unset)\n",
-                    svc->name, exec_dir_key[k]);
+                    svc->name, service_exec_dir_key[k]);
             _exit(126);
         }
         int dyn = svc->dynamic_user && root && k != EXEC_DIR_RUNTIME;
         for (int i = 0; create && i < svc->exec_dir_count[k]; i++) {
             if ((dyn ? svc_dynamic_dir(base, svc->exec_dir[k][i], mode, uid, gid, &step)
                      : service_make_dir(base, svc->exec_dir[k][i], mode, uid, gid, &step)) == 0) continue;
-            dprintf(2, "[schema-init] %s: %s=%s: %s: %s%s\n", svc->name, exec_dir_key[k],
+            dprintf(2, "[schema-init] %s: %s=%s: %s: %s%s\n", svc->name, service_exec_dir_key[k],
                     svc->exec_dir[k][i], step, strerror(errno),
                     k == EXEC_DIR_RUNTIME || dyn ? "" : " (starting anyway)");
             /* the daemon can't run without its runtime dir, nor a dynamic user
@@ -3247,7 +3247,7 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     return 1;
 }
 
-static const struct { const char *key; int res; } rlim_keys[] = {
+const struct service_rlim_key service_rlim_keys[] = {
     { "limit_cpu", RLIMIT_CPU },         { "limit_fsize", RLIMIT_FSIZE },
     { "limit_data", RLIMIT_DATA },       { "limit_stack", RLIMIT_STACK },
     { "limit_core", RLIMIT_CORE },       { "limit_rss", RLIMIT_RSS },
@@ -3257,6 +3257,8 @@ static const struct { const char *key; int res; } rlim_keys[] = {
     { "limit_msgqueue", RLIMIT_MSGQUEUE }, { "limit_nice", RLIMIT_NICE },
     { "limit_rtprio", RLIMIT_RTPRIO },   { "limit_rttime", RLIMIT_RTTIME },
 };
+_Static_assert(sizeof service_rlim_keys / sizeof *service_rlim_keys == SERVICE_RLIM_KEYS,
+               "SERVICE_RLIM_KEYS in service.h must match service_rlim_keys[]");
 
 /* systemd's Limit*= value: a number with an optional K/M/G/T (1024) suffix, or
  * "infinity". limit_nice also takes a signed nice level, -20..19. */
@@ -3288,10 +3290,10 @@ static int rlim_value(const char *s, int nice, rlim_t *out) {
  * An empty value drops that limit (drop-ins use this to undo the base file). */
 static int svc_parse_rlimit(service_t *svc, const char *key, const char *val) {
     size_t i;
-    for (i = 0; i < sizeof rlim_keys / sizeof rlim_keys[0]; i++)
-        if (strcmp(key, rlim_keys[i].key) == 0) break;
-    if (i == sizeof rlim_keys / sizeof rlim_keys[0]) return 0;
-    int res = rlim_keys[i].res, slot;
+    for (i = 0; i < SERVICE_RLIM_KEYS; i++)
+        if (strcmp(key, service_rlim_keys[i].key) == 0) break;
+    if (i == SERVICE_RLIM_KEYS) return 0;
+    int res = service_rlim_keys[i].res, slot;
     for (slot = 0; slot < svc->rlim_count; slot++)
         if (svc->rlim[slot].res == res) break;
     if (!*val) {

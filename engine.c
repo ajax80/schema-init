@@ -16,6 +16,7 @@
 #include "schema.h"
 #include "engine.h"
 #include "service.h"
+#include "svc_serial.h"
 #include "svc_dropins.h"
 #include "reexec_state.h"
 #include "dynuser.h"
@@ -2434,23 +2435,6 @@ static void ctl_analyze(int fd, const char *arg) {
         ctl_writef(fd, "note: some rows use the current run, not boot (PID 1 re-exec'd from a build without boot stamps)\n");
 }
 
-/* what syscall_deny= does, not how it was spelled: off/no/... is "0", on/yes/... the preset */
-static const char *sc_deny_label(const service_t *s) {
-    static const char *const off[] = { "0", "no", "off", "false", "none" }, *const on[] = { "default", "yes", "on", "true" };
-    if (!(s->hard_set & HARD_SD)) return "-";
-    for (size_t i = 0; i < sizeof off / sizeof *off; i++) if (!strcasecmp(s->sc_deny, off[i])) return "0";
-    for (size_t i = 0; i < sizeof on / sizeof *on; i++) if (!strcasecmp(s->sc_deny, on[i])) return "default";
-    return "list";
-}
-
-static const char *hard_source(const service_t *s, uint8_t bit) {
-    if (s->hard_set & bit) return "explicit";
-    if ((s->hard_dyn & bit) && !(s->hard_dropped & bit)) return "dynamic_user";
-    if (s->hard_dropped & bit) return "dropped (default would hide exec/ready_path)";
-    if (s->hard_default & bit) return "default";
-    return "unset";
-}
-
 /* Why the service's last run ended: "SIGSEGV (core dumped)", "exit 1", "-". */
 static const char *last_exit_str(const service_t *s) {
     static char b[48];
@@ -2551,6 +2535,8 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.circuit_broken=%d\n", services[i].name, services[i].circuit_broken);
                 ctl_writef(fd, "service.%s.excise_reason=%s\n", services[i].name,
                     excise_reason_name(services[i].excise_reason));
+                /* the verify settle wait judges failure by svc_failed(), not its own copy */
+                ctl_writef(fd, "service.%s.failed=%d\n", services[i].name, svc_failed(&services[i]));
                 if (services[i].bind_name[0]) {
                     ctl_writef(fd, "service.%s.bind=%s\n", services[i].name, services[i].bind_name);
                     ctl_writef(fd, "service.%s.bind_held=%d\n", services[i].name, services[i].bind_held);
@@ -2564,7 +2550,6 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "err: not found: %s\n", opt);
             } else {
                 const service_t *s = &services[i];
-                static const char *const ps[] = { "0", "1", "full" };
                 ctl_writef(fd, "%s  pid=%d  state=%s  restarts=%d\n", s->name,
                     (int)s->child_pid, state_name(s->inst.state), s->restart_count);
                 ctl_writef(fd, "last exit: %s\n", last_exit_str(s));
@@ -2589,13 +2574,13 @@ static void ctl_cmd(int fd, char *line) {
                                s->bind_held ? " (held)" : "");
                 ctl_writef(fd, "hardening default: %s\n", service_hardening_default() ? "ON" : "off");
                 ctl_writef(fd, "  %-15s %-5s %s\n", "no_new_privs",
-                    (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", hard_source(s, HARD_NNP));
-                ctl_writef(fd, "  %-15s %-5d %s\n", "private_tmp", s->ns_private_tmp, hard_source(s, HARD_PT));
+                    (s->flags & SVC_NO_NEW_PRIVS) ? "1" : "0", svc_hard_source(s, HARD_NNP));
+                ctl_writef(fd, "  %-15s %-5d %s\n", "private_tmp", s->ns_private_tmp, svc_hard_source(s, HARD_PT));
                 ctl_writef(fd, "  %-15s %-5s %s\n", "protect_system",
-                    ps[s->ns_protect_system < 3 ? s->ns_protect_system : 0], hard_source(s, HARD_PS));
-                ctl_writef(fd, "  %-15s %-5d %s\n", "protect_home", s->ns_protect_home, hard_source(s, HARD_PH));
+                    svc_protect_system_name(s->ns_protect_system), svc_hard_source(s, HARD_PS));
+                ctl_writef(fd, "  %-15s %-5d %s\n", "protect_home", s->ns_protect_home, svc_hard_source(s, HARD_PH));
                 ctl_writef(fd, "  %-15s %-5s %s\n", "syscall_deny",
-                    sc_deny_label(s), hard_source(s, HARD_SD));
+                    svc_sc_deny_label(s), svc_hard_source(s, HARD_SD));
                 for (int k = 0; k < NS_K_COUNT; k++)
                     if (s->ns_kernel >> k & 1) ctl_writef(fd, "  %s=1\n", ns_kernel_names[k]);
                 if (s->umask_val >= 0) ctl_writef(fd, "  umask=%04o\n", s->umask_val);
@@ -3663,6 +3648,11 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
 
 int engine_reload(int evict, char *err, size_t errsz) {
     return handle_reload(evict, err, errsz);
+}
+
+const group_t *engine_groups(int *n) {
+    *n = grp_count;
+    return groups;
 }
 
 int engine_load(const char *svc_dir) {

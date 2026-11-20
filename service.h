@@ -491,6 +491,12 @@ enum { KILL_MODE_DEFAULT, KILL_MODE_CGROUP, KILL_MODE_MIXED, KILL_MODE_PROCESS }
 
 /* runtime_dir= and friends (systemd RuntimeDirectory= etc.); index of exec_dir */
 enum { EXEC_DIR_RUNTIME, EXEC_DIR_STATE, EXEC_DIR_CACHE, EXEC_DIR_LOGS, EXEC_DIR_KINDS };
+/* the .svc key of each EXEC_DIR_* kind; its mode key adds "_mode" */
+extern const char *const service_exec_dir_key[EXEC_DIR_KINDS];
+/* limit_*= keys and the RLIMIT_* each sets */
+#define SERVICE_RLIM_KEYS 16
+struct service_rlim_key { const char *key; int res; };
+extern const struct service_rlim_key service_rlim_keys[];
 #define MAX_EXEC_DIRS 8
 /* /run, /var/lib, ... as root; the XDG dirs in schema-user. -1 if unknown */
 int service_exec_dir_base(int kind, char *out, size_t n);

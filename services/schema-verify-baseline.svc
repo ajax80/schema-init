@@ -1,0 +1,16 @@
+name=schema-verify-baseline
+exec=/bin/sh
+args=-c
+args=schema-ctl status schema-bootok >/dev/null 2>&1 || schema-ctl status pi-bootok >/dev/null 2>&1 || exec schema-ctl verify --write-baseline --wait-settled 60
+dep=mount-fstab
+oneshot=1
+no_restart=1
+needs_root=1
+critical=0
+priority=peripheral
+start_timeout_sec=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
+syscall_deny=0

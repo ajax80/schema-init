@@ -27,5 +27,7 @@ int sc_errno_parse(const char *v, uint16_t *out);
 int sc_build(const sc_spec_t *s, struct sock_filter *out, int max);
 int sc_install(const sc_spec_t *s, const char **step);
 int sc_count(const sc_spec_t *s);
+/* the syscall numbers SET names on this arch, ascending and unique; OUT holds SC_WORDS * 64 */
+int sc_nrs(const uint64_t *set, int *out);
 
 #endif
