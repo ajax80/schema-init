@@ -508,8 +508,12 @@ static void esp_check(ctx_t *c) {
     int found = 0, full = 0;
     snprintf(efi, sizeof efi, "%s/EFI", c->o->esp);
     DIR *d = opendir(efi);
+    if (!d && errno != ENOENT && errno != ENOTDIR) {
+        unreadable(c, "ESP", efi, errno);
+        return;
+    }
     if (!d) {
-        if (fstab_has(c->o->fstab, "/boot/efi")) emit(c, T_UNRES, "ESP %s not mounted: its grub.cfg not checked", c->o->esp);
+        if (fstab_has(c->o->fstab, c->o->esp)) emit(c, T_UNRES, "ESP %s not mounted: its grub.cfg not checked", c->o->esp);
         else emit(c, T_NOTE, "no ESP in fstab: ESP grub.cfg not applicable");
         return;
     }

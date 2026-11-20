@@ -236,6 +236,19 @@ v
 expect 1 esp-full
 has "[FAIL] ESP /EFI/fedora/grub.cfg is a full GRUB config" || fail "esp-full: line"
 printf 'configfile $prefix/grub.cfg\n' > "$T/esp/EFI/fedora/grub.cfg"
+# the ESP fstab names, at the path verify was given, not mounted: unresolved
+printf 'UUID=aaaa-1111 / btrfs subvol=root 0 0\nUUID=cccc-0000 %s vfat defaults,nofail 0 2\n' "$T/esp-gone" > "$T/fstab"
+SCHEMA_VERIFY_ESP="$T/esp-gone" v
+has "[UNRESOLVED] ESP $T/esp-gone not mounted" || fail "esp-unmounted: line"
+printf 'UUID=aaaa-1111 / btrfs subvol=root 0 0\ntmpfs /tmp tmpfs defaults 0 0\n' > "$T/fstab"
+if [ "$(id -u)" != 0 ]; then
+    # an ESP that can't be listed is unread, not "not mounted"
+    chmod 000 "$T/esp"
+    v
+    has "[UNRESOLVED] needs root: ESP $T/esp/EFI" || fail "esp-unreadable: line"
+    has "not mounted" && fail "esp-unreadable: called not mounted"
+    chmod 755 "$T/esp"
+fi
 
 # schema-bootok: not on the next boot's rail; refused; exec not executable -> 1
 report "$T/fx/check.out" "a.exec=/bin/true"

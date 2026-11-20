@@ -288,7 +288,8 @@ static int mount_any(const char *dev, const char *dir, unsigned long fl, char *t
         if (!strncmp(line, "nodev", 5)) continue;
         snprintf(type, tsz, "%s", line + strspn(line, " \t"));
         type[strcspn(type, "\n")] = '\0';
-        if (strcmp(type, "btrfs")) ok = mount(dev, dir, type, fl, NULL);
+        /* each wrong type is a probe: no kernel log line for it */
+        if (strcmp(type, "btrfs")) ok = mount(dev, dir, type, fl | MS_SILENT, NULL);
     }
     if (f) fclose(f);
     return ok;
@@ -549,7 +550,11 @@ static int collect(int fds[2], char *bufs[2], size_t lens[2], int *over) {
         clock_gettime(CLOCK_MONOTONIC, &t);
         long left = INSPECT_MS - ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
         if (left <= 0) return -1;
-        if (poll(p, 2, left) < 0 && errno != EINTR) return -1;
+        /* revents are stale after EINTR: a read on them could block past the deadline */
+        if (poll(p, 2, left) < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
         for (int i = 0; i < 2; i++) {
             if (p[i].fd < 0 || !p[i].revents) continue;
             if (caps[i] - lens[i] < 4096 && caps[i] < OUT_CAP) {
