@@ -201,18 +201,17 @@ grep -q 'too long' "$T/err" || fail "longroot: no message: $(cat "$T/err")"
 rm -rf "$T/$(printf '%0150d' 0)"
 
 # no fd left for the capture file: an error, not a crash (redirects first, they need fds too).
-# A dynamic or sanitizer build can't even start on 3 fds; then there is nothing to test.
+# Only a sanitizer build may skip: its dynamic loader can't start on 3 fds (exit 127).
 newroot nofd
 svc "$S" a
-./schema-init --check > /dev/null 2>&1; want=$?
 sh -c 'exec > /dev/null 2>&1; ulimit -n 3; exec ./schema-init --check'; got=$?
-if [ $got -eq $want ]; then
+if ! { [ $got -eq 127 ] && ldd ./schema-init 2>/dev/null | grep -q 'libasan\|libubsan'; }; then
     sh -c 'exec > "$2" 2> "$3"; ulimit -n 3; exec ./schema-init --check --root "$1" --cmdline ""' sh "$R" "$T/out" "$T/err"
     rc=$?
     [ $rc -eq 2 ] || fail "nofd: exit $rc"
     grep -q 'tmpfile' "$T/err" || fail "nofd: no message: $(cat "$T/err")"
 else
-    echo "check_mode: nofd skipped (this build can't start on 3 fds)"
+    echo "check_mode: nofd skipped (sanitizer build can't start on 3 fds)"
 fi
 
 # never binds a socket or makes runtime paths
