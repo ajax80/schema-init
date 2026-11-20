@@ -48,6 +48,18 @@ No systemd. No OpenRC. No journal daemon. At its core, just a statically linked 
 
 **PID 1 footprint: 1.2 MB RSS on a minimal boot, 3.3–4.0 MB running a 47-service KDE desktop — one thread, in every case.** Every figure names the machine, the build and the service count it was measured on: see [PID 1 RSS — every measurement](docs/benchmarks.md#pid-1-rss--every-measurement).
 
+## The rail
+
+On a text console, the boot reads as a status display in schema-init's own font and colours: a banner, a track down the left, one line per service with a colour chip for what happened, and a finish line that counts the result.
+
+![The rail on a VT](docs/images/rail-vt.png)
+
+Purple is PERFECT, green is up, yellow is a retry or a failed action, red is cut, blue is stopped or dormant, gray is waiting or exited. Every crash is one `RETRY n` line with its cause; anything broken is red or yellow, never hidden. The full plain record is in `/var/log/schema-init/rail.log`, unchanged.
+
+- Only on a real VT in text mode. A serial console, a log file, or a Plymouth splash keeps today's plain lines.
+- The font is `schema-16x32`, built on [Spleen](https://github.com/fcambus/spleen) (BSD-2-Clause) and loaded by PID 1 itself; it skips itself on screens under 1280 px wide or when `/etc/vconsole.conf` names another font. It's also installed as a normal console font: `setfont schema-16x32`, or put `FONT=schema-16x32` in `/etc/vconsole.conf` and rebuild the initramfs (`dracut -f`) to have it from the first line of boot.
+- Turn it off with `schema.rail=plain` on the kernel command line or the word `plain` in `/etc/schema-init/rail`; keep the colours but not the font with `schema.rail_font=off` or `nofont`.
+
 ## Limp mode
 
 The Ungulate Leg has a get-home mode: when a joint fails it doesn't fall over, it limps. schema-init does the same for services.
