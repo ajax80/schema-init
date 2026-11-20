@@ -339,6 +339,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	sh tests/test_schema_pi.sh
 	sh tests/test_deb_trigger.sh
 	$(MAKE) test-schema-font
+	$(MAKE) test-rail-render
 	sh tests/test_pi_halt.sh
 	sh tests/test_deb_version.sh
 	sh tests/test_devuan_boot.sh
@@ -521,3 +522,6 @@ test-schema-font:
 	  python3 -I tools/psf2c.py $(TESTDIR)/sf.psfu $(TESTDIR)/sf.c && \
 	  cmp -s $(TESTDIR)/sf.bdf fonts/schema-16x32.bdf && cmp -s $(TESTDIR)/sf.psfu fonts/schema-16x32.psfu && \
 	  cmp -s $(TESTDIR)/sf.c schema_font.c || { echo "schema font: committed files drifted from tools/ (make font)"; exit 1; }; fi
+
+test-rail-render:
+	$(CC) $(CFLAGS) tests/test_rail_render.c rail.c schema_font.c -o $(TESTDIR)/rail-render && $(TESTDIR)/rail-render
