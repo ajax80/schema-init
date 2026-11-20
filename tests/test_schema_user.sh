@@ -309,6 +309,10 @@ for want in xc=exit-code xs=signal xok=none xt=start-timeout xl=listen-fail; do
     until_ok 'kv | grep -qx "service.$n.state=EXCISED"' || { kv; cat "$I/out"; fail "excise_reason: $n never excised"; }
     kv | grep -qx "service.$n.excise_reason=${want#*=}" || { kv | grep "^service.$n\."; fail "excise_reason: $n wanted ${want#*=}"; }
 done
+# failed= is svc_failed(): a failure reason counts, a clean stop does not
+for want in xc=1 xs=1 xok=0; do
+    kv | grep -qx "service.${want%%=*}.failed=${want#*=}" || { kv | grep "^service.${want%%=*}\."; fail "failed: $want"; }
+done
 XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status xt | grep -qx 'excise_reason=start-timeout' || fail "status xt: no excise_reason line"
 XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | python3 -c '
 import json, sys

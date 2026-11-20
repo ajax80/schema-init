@@ -2535,6 +2535,8 @@ static void ctl_cmd(int fd, char *line) {
                 ctl_writef(fd, "service.%s.circuit_broken=%d\n", services[i].name, services[i].circuit_broken);
                 ctl_writef(fd, "service.%s.excise_reason=%s\n", services[i].name,
                     excise_reason_name(services[i].excise_reason));
+                /* the verify settle wait judges failure by svc_failed(), not its own copy */
+                ctl_writef(fd, "service.%s.failed=%d\n", services[i].name, svc_failed(&services[i]));
                 if (services[i].bind_name[0]) {
                     ctl_writef(fd, "service.%s.bind=%s\n", services[i].name, services[i].bind_name);
                     ctl_writef(fd, "service.%s.bind_held=%d\n", services[i].name, services[i].bind_held);

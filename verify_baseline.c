@@ -102,20 +102,36 @@ fail:
     return -1;
 }
 
-/* EXCISED with reason none (a stop, standby) or bind (waiting for its bound)
- * is not a failure — the same split as svc_failed() in engine.c. */
-static int excised_ok(const char *kv, const char *name, size_t nlen) {
-    static const char *const ok[] = { "none", "bind" };
+/* the value of service.<name>.<key>= at a line start, or NULL */
+static const char *kv_field(const char *kv, const char *name, size_t nlen, const char *key) {
     char needle[512];
-    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++) {
-        const char *p = kv;
-        int n = snprintf(needle, sizeof needle, "service.%.*s.excise_reason=%s\n", (int)nlen, name, ok[i]);
-        while ((p = strstr(p, needle))) {
-            if (p == kv || p[-1] == '\n') return 1;
-            p += n;
-        }
+    int n = snprintf(needle, sizeof needle, "service.%.*s.%s=", (int)nlen, name, key);
+    for (const char *p = kv; (p = strstr(p, needle)); p += n)
+        if (p == kv || p[-1] == '\n') return p + n;
+    return NULL;
+}
+
+static int val_is(const char *v, const char *want) {
+    size_t n = strlen(want);
+    return v && !strncmp(v, want, n) && (v[n] == '\n' || !v[n]);
+}
+
+/* engine.c svc_failed() decides, sent as failed=; an older PID 1 without it
+ * gets the same split by reason: EXCISED with none (a stop, standby) or bind
+ * (waiting for its bound) is not a failure. A NEW_PROCESS held on its
+ * wait_socket (waiting=) is idle until a connection, not starting. */
+static int state_ok(const char *kv, const char *name, size_t nlen, const char *val, size_t vlen) {
+    static const char *const good[] = { "FUNDAMENTAL", "SETTLED", "FULL_TRUST", "PERFECT" };
+    for (size_t i = 0; i < sizeof good / sizeof good[0]; i++)
+        if (vlen == strlen(good[i]) && !memcmp(val, good[i], vlen)) return 1;
+    int excised = vlen == 7 && !memcmp(val, "EXCISED", 7), dormant = vlen == 7 && !memcmp(val, "DORMANT", 7);
+    const char *f = kv_field(kv, name, nlen, "failed");
+    if (f && (excised || dormant)) return val_is(f, "0");
+    if (excised) {
+        const char *r = kv_field(kv, name, nlen, "excise_reason");
+        return val_is(r, "none") || val_is(r, "bind");
     }
-    return 0;
+    return vlen == 11 && !memcmp(val, "NEW_PROCESS", 11) && kv_field(kv, name, nlen, "waiting");
 }
 
 int settle_step(settle_t *st, const char *status_kv, uint64_t now_ms, unsigned window_s) {
@@ -135,12 +151,7 @@ int settle_step(settle_t *st, const char *status_kv, uint64_t now_ms, unsigned w
             const char *name = line + 8, *key = dot + 1, *val = eq + 1;
             size_t nlen = (size_t)(dot - name), klen = (size_t)(eq - key), vlen = (size_t)(end - val);
             if (klen == 5 && !memcmp(key, "state", 5)) {
-                static const char *const good[] = { "FUNDAMENTAL", "SETTLED", "FULL_TRUST", "PERFECT" };
-                int g = 0;
-                for (size_t i = 0; i < sizeof good / sizeof good[0]; i++)
-                    if (vlen == strlen(good[i]) && !memcmp(val, good[i], vlen)) g = 1;
-                if (!g && !(vlen == 7 && !memcmp(val, "EXCISED", 7) && excised_ok(status_kv, name, nlen)))
-                    healthy = 0;
+                if (!state_ok(status_kv, name, nlen, val, vlen)) healthy = 0;
             } else if (klen == 8 && !memcmp(key, "restarts", 8)) {
                 size_t need = nlen + vlen + 2;
                 if (used + need > cap) {

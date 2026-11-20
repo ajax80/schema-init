@@ -198,6 +198,42 @@ static void test_give_up(void) {
     assert(settle_give_up_ms(3600) == S(3600 + 5 * 60));
 }
 
+/* svc_failed()'s rule through failed=, and a socket-held NEW_PROCESS is idle, not starting */
+static void test_settle_engine_rule(void) {
+    settle_t st = {0};
+    char x[1024], y[1200];
+    /* EXCISED exit-code but failed=0: a stop's hold that a start timeout overtook */
+    snprintf(x, sizeof x, "service.a.state=EXCISED\nservice.a.restarts=0\nservice.a.excise_reason=exit-code\n"
+             "service.a.failed=0\n");
+    assert(settle_step(&st, x, S(0), 60) == 0);
+    assert(settle_step(&st, x, S(61), 60) == 1);
+    memset(&st, 0, sizeof st);
+    snprintf(x, sizeof x, "service.a.state=DORMANT\nservice.a.restarts=0\nservice.a.excise_reason=none\n"
+             "service.a.failed=0\n");
+    assert(settle_step(&st, x, S(0), 60) == 0);
+    assert(settle_step(&st, x, S(61), 60) == 1);
+    /* failed=1 wins even with a reason the old rule called fine */
+    memset(&st, 0, sizeof st);
+    snprintf(x, sizeof x, "service.a.state=EXCISED\nservice.a.restarts=0\nservice.a.excise_reason=none\n"
+             "service.a.failed=1\n");
+    assert(settle_step(&st, x, S(0), 60) == 0);
+    assert(settle_step(&st, x, S(61), 60) == 0);
+    /* waiting on its socket */
+    memset(&st, 0, sizeof st);
+    snprintf(x, sizeof x, "service.a.state=NEW_PROCESS\nservice.a.restarts=0\nservice.a.excise_reason=none\n");
+    snprintf(y, sizeof y, "%sservice.a.waiting=/run/a.sock\n", x);
+    assert(settle_step(&st, y, S(0), 60) == 0);
+    assert(settle_step(&st, y, S(61), 60) == 1);
+    memset(&st, 0, sizeof st);
+    assert(settle_step(&st, x, S(0), 60) == 0);
+    assert(settle_step(&st, x, S(61), 60) == 0);
+    /* a name that is a prefix of another must not borrow its fields */
+    memset(&st, 0, sizeof st);
+    snprintf(y, sizeof y, "%sservice.ab.state=PERFECT\nservice.ab.restarts=0\nservice.ab.waiting=/run/b\n", x);
+    assert(settle_step(&st, y, S(0), 60) == 0);
+    assert(settle_step(&st, y, S(61), 60) == 0);
+}
+
 int main(int argc, char **argv) {
     snprintf(base, sizeof base, "%s", argc > 1 ? argv[1] : ".");
     test_atomic_perms();
@@ -206,6 +242,7 @@ int main(int argc, char **argv) {
     test_dir_mode_and_owner();
     test_tmpfs_refused();
     test_settle();
+    test_settle_engine_rule();
     test_pid1_exe();
     test_give_up();
     puts("test_verify_baseline: ok");
