@@ -92,6 +92,26 @@ static void test_bad_input_refused(void) {
     assert(access(p, F_OK) < 0);
 }
 
+static void test_dir_mode_and_owner(void) {
+    char *d = mkdir_t("mode");
+    struct stat st;
+    assert(chmod(d, 0755) == 0);
+    assert(baseline_write(d, out, sizeof out - 1, 1) == 0);
+    assert(stat(d, &st) == 0 && (st.st_mode & 07777) == 0700);
+
+    /* as root every dir is "ours", and "/" would really be written to */
+    if (geteuid() == 0) {
+        puts("test_dir_mode_and_owner: foreign-owner case skipped (running as root)");
+        return;
+    }
+    if (stat("/usr", &st) < 0 || st.st_uid == geteuid()) {
+        puts("test_dir_mode_and_owner: foreign-owner case skipped (no foreign-owned /usr)");
+        return;
+    }
+    errno = 0;
+    assert(baseline_write("/usr", out, sizeof out - 1, 1) == -1 && errno == EPERM);
+}
+
 static void test_tmpfs_refused(void) {
     struct statfs sf;
     char d[] = "/dev/shm/vb-tmpfs-XXXXXX";
@@ -163,6 +183,7 @@ int main(int argc, char **argv) {
     test_atomic_perms();
     test_symlink_refused();
     test_bad_input_refused();
+    test_dir_mode_and_owner();
     test_tmpfs_refused();
     test_settle();
     puts("test_verify_baseline: ok");

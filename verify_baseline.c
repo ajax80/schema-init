@@ -49,6 +49,13 @@ int baseline_write(const char *dir, const char *check_out, size_t len, time_t no
     }
     dfd = open(dir, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dfd < 0) return -1;
+    /* a dir someone else owns could be swapped under us; one we own is ours to lock down */
+    if (fstat(dfd, &st) < 0 || st.st_uid != geteuid()) {
+        close(dfd);
+        errno = EPERM;
+        return -1;
+    }
+    if (fchmod(dfd, 0700) < 0) goto fail;
     /* /var not mounted yet: a write would land in the tmpfs underneath and vanish */
     if (fstatfs(dfd, &sf) < 0 || sf.f_type == TMPFS_MAGIC) {
         close(dfd);

@@ -539,6 +539,8 @@ static int cmd_write_baseline(long wait_s) {
     if (baseline_write(dir, out, len, time(NULL)) < 0) {
         if (errno == EROFS)
             fprintf(stderr, "schema-ctl: %s: var not persistent (tmpfs) — baseline not written\n", dir);
+        else if (errno == EPERM)
+            fprintf(stderr, "schema-ctl: %s: not owned by uid %d — refusing to write the baseline there\n", dir, (int)geteuid());
         else
             fprintf(stderr, "schema-ctl: %s/baseline: %s\n", dir, strerror(errno));
         free(out);
