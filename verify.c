@@ -40,6 +40,7 @@ typedef struct {
     int changes; /* diff_baseline's CHANGEs: the acceptable kind */
     char rej[4][256]; /* grubenv-named entries whose file could not be read */
     int nrej;
+    int cut; /* more entries than MAXENTS: the rest were not read */
 } ctx_t;
 
 static void emit(ctx_t *c, tag_t t, const char *fmt, ...) {
@@ -285,7 +286,8 @@ static int load_entries(ctx_t *c) {
         unreadable(c, "boot entries", dir, errno);
         return -1;
     }
-    if (nd > MAXENTS) emit(c, T_UNRES, "too many boot entries in %s (%d, %d read)", dir, nd, MAXENTS);
+    c->cut = nd > MAXENTS;
+    if (c->cut) emit(c, T_UNRES, "too many boot entries in %s (%d, %d read)", dir, nd, MAXENTS);
     for (int i = 0; i < nd; i++) {
         snprintf(p, sizeof p, "%s/%s", dir, d[i]->d_name);
         if (c->nents < MAXENTS && !bls_parse(p, &c->ents[c->nents])) {
@@ -470,8 +472,9 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, root_report_t *a
         return;
     }
     int fb = ent_index(c, nb->fallback);
-    int rej = 0;
-    for (int i = 0; i < c->nrej; i++) rej |= !strcmp(c->rej[i], nb->fallback);
+    /* an unreadable or cut-off entry is unknown (already UNRESOLVED), not missing */
+    int rej = c->cut;
+    for (int i = 0; nb->fallback && i < c->nrej; i++) rej |= !strcmp(c->rej[i], nb->fallback);
     if (nbrc == 2 && rej) ;
     else if (nbrc == 2) emit(c, T_FAIL, "schema_fallback_id=%s names no boot entry", nb->fallback);
     else if (fb < 0) emit(c, T_FAIL, "no schema-snap-* entry for the guard to fall back to");

@@ -325,9 +325,12 @@ printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 mkdir "$T/bls3"
 cp "$T/bls/"*.conf "$T/bls3/"
 i=0
-while [ $i -lt 70 ]; do printf 'title x\nlinux /x\noptions root=PARTUUID=%s\n' "$PU" > "$T/bls3/z-$i.conf"; i=$((i + 1)); done
+# fillers sort first, so the cut drops the entries grubenv names
+while [ $i -lt 70 ]; do printf 'title x\nlinux /x\noptions root=PARTUUID=%s\n' "$PU" > "$T/bls3/a-$i.conf"; i=$((i + 1)); done
 SCHEMA_VERIFY_BLS_DIR="$T/bls3" v
+expect 3 many
 has "[UNRESOLVED] too many boot entries" || fail "many: line"
+grep -q "^\[FAIL\]" "$T/out" && fail "many: a cut entry FAILed"
 
 if [ "$(id -u)" != 0 ]; then
     # an entry file that can't be read: a spare is a WARN; the guard's fallback is unresolved, not "no entry"
@@ -341,6 +344,19 @@ if [ "$(id -u)" != 0 ]; then
     has "[UNRESOLVED] boot entry $T/bls/$F.conf could not be read" || fail "unreadable-fallback: line"
     has "names no boot entry" && fail "unreadable-fallback: called missing"
     chmod 644 "$T/bls/$F.conf"
+
+    # just after install-bootguard: grub.cfg knows the guard, no fallback id or snapshot
+    # yet, and the saved entry unreadable
+    mkdir "$T/bls4"
+    printf 'title x\nlinux /root/boot/vmlinuz\noptions root=PARTUUID=%s ro rootflags=subvol=root init=/sbin/schema-init\n' "$PU" > "$T/bls4/m-1.conf"
+    cp "$T/bls4/m-1.conf" "$T/bls4/m-2.conf"
+    chmod 000 "$T/bls4/m-1.conf"
+    printf 'saved_entry=m-1\n' > "$T/grubenv4"
+    SCHEMA_VERIFY_BLS_DIR="$T/bls4" SCHEMA_VERIFY_GRUBENV="$T/grubenv4" v
+    [ "$rc" -le 3 ] || fail "fresh-guard: exit $rc"
+    has "[UNRESOLVED] boot entry $T/bls4/m-1.conf could not be read" || fail "fresh-guard: line"
+    has "Result:" || fail "fresh-guard: no result"
+    chmod 644 "$T/bls4/m-1.conf"
 fi
 
 # the shipped binary has no hooks: every SCHEMA_VERIFY_* path above is ignored

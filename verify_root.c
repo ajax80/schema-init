@@ -403,6 +403,11 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     /* by what it says, not its name: a renamed copy at /sbin/init still gets checked */
     int cap = memfd_create("schema-verify", MFD_CLOEXEC), errfd = memfd_create("schema-verify-err", MFD_CLOEXEC);
     char line[200];
+    /* run() would leave the child on our stdout, the report itself */
+    if (cap < 0 || errfd < 0) {
+        U("cannot capture init=%s's output: memfd_create: %m\n", init);
+        return;
+    }
     int rc = run((char *[]){ real, "--version", NULL }, cap, cap);
     first_line(cap, line, sizeof line);
     if (rc || strncmp(line, "schema-init ", 12)) {
