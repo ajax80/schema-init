@@ -81,6 +81,7 @@ extern struct timespec init_start;
 /* SCHEMA_INIT_VERSION at boot; a re-exec carries it, so a baseline writer can
  * tell the running image from the one that booted */
 extern char booted_version[64];
+extern char booted_image[64]; /* dev:ino of the image PID 1 booted from; "" unknown */
 extern pid_t   reexec_check_pid;
 extern int64_t reexec_check_due;
 extern int     reexec_check_killed;

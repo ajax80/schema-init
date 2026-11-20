@@ -495,13 +495,29 @@ static char *slurp_fd(int fd, size_t *len) {
     return b;
 }
 
-/* 1 when the running image is not the one PID 1 booted (or PID 1 won't say) */
+/* 1 when the running image is not the one PID 1 booted; -1 when that can't be told (said why) */
 static int reexecd(const char *exe) {
-    char *kv, *ver;
+    char *kv, *ver, image[64];
     size_t len;
     int p[2], st, r;
     pid_t pid;
-    if (pipe2(p, O_CLOEXEC) < 0) return 1;
+    struct stat ist;
+    if (stat("/proc/1/exe", &ist)) {
+        fprintf(stderr, "schema-ctl: /proc/1/exe: %s\n", strerror(errno));
+        return -1;
+    }
+    snprintf(image, sizeof image, "%llu:%llu", (unsigned long long)ist.st_dev, (unsigned long long)ist.st_ino);
+    r = ctl_request("status --kv\n", &kv, 1);
+    if (r != 0 || !strncmp(kv, "err:", 4)) {
+        fprintf(stderr, "schema-ctl: PID 1 did not answer status --kv%s%s; whether it was re-exec'd since boot is not known\n",
+                r < 0 ? ": " : "", r < 0 ? strerror(errno) : "");
+        free(kv);
+        return -1;
+    }
+    if (pipe2(p, O_CLOEXEC) < 0) {
+        free(kv);
+        return -1;
+    }
     if ((pid = fork()) == 0) {
         dup2(p[1], 1);
         execl("/proc/1/exe", exe, "--version", (char *)NULL);
@@ -511,16 +527,13 @@ static int reexecd(const char *exe) {
     ver = pid < 0 ? NULL : slurp_fd(p[0], &len);
     close(p[0]);
     while (pid > 0 && waitpid(pid, &st, 0) < 0 && errno == EINTR) ;
-    if (!ver) return 1;
-    ver[len] = '\0';
-    r = ctl_request("status --kv\n", &kv, 1);
-    if (r != 0 || !strncmp(kv, "err:", 4)) {
-        fprintf(stderr, "schema-ctl: PID 1 did not answer status --kv\n");
+    if (!ver) {
+        fprintf(stderr, "schema-ctl: could not run /proc/1/exe --version\n");
         free(kv);
-        free(ver);
-        return 1;
+        return -1;
     }
-    r = reexecd_since_boot(kv, ver);
+    ver[len] = '\0';
+    r = reexecd_since_boot(kv, ver, image);
     free(kv);
     free(ver);
     return r;
@@ -554,10 +567,13 @@ static int cmd_write_baseline(long wait_s) {
                 (unsigned long long)(settle_give_up_ms((unsigned)wait_s) / 60000));
         return 3;
     }
-    if (reexecd(exe)) {
+    int rx = reexecd(exe);
+    if (rx > 0)
         fprintf(stderr, "schema-ctl: PID 1 was re-exec'd since boot; the baseline is written at the next good boot\n");
+    else if (rx)
+        fprintf(stderr, "schema-ctl: baseline not written\n");
+    if (rx)
         return 1;
-    }
     fd = open("/proc/cmdline", O_RDONLY | O_CLOEXEC);
     n = fd < 0 ? -1 : read(fd, cmdline, sizeof cmdline - 1);
     if (fd >= 0) close(fd);

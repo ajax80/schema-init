@@ -194,17 +194,29 @@ static void test_pid1_exe(void) {
 /* after a live re-exec the running image never booted: its baseline would vouch for nothing */
 static void test_reexecd_since_boot(void) {
     const char *kv = "services_count=2\ngroups_count=0\nbooted_version=0.4.27-1.fc44\nservice.a.pid=1\n";
-    assert(reexecd_since_boot(kv, "schema-init 0.4.28-1.fc44\n") == 1);
-    assert(reexecd_since_boot(kv, "schema-init 0.4.27-1.fc44\n") == 0);
-    assert(reexecd_since_boot(kv, "schema-init 0.4.27-1.fc44") == 0);
+    assert(reexecd_since_boot(kv, "schema-init 0.4.28-1.fc44\n", "64769:1234") == 1);
+    assert(reexecd_since_boot(kv, "schema-init 0.4.27-1.fc44\n", "64769:1234") == 0);
+    assert(reexecd_since_boot(kv, "schema-init 0.4.27-1.fc44", "64769:1234") == 0);
     /* a prefix is not the same version */
-    assert(reexecd_since_boot(kv, "schema-init 0.4.27-1.fc4\n") == 1);
+    assert(reexecd_since_boot(kv, "schema-init 0.4.27-1.fc4\n", "64769:1234") == 1);
     /* an older PID 1 without the line: proceed */
-    assert(reexecd_since_boot("services_count=0\ngroups_count=0\n", "schema-init 0.4.28\n") == 0);
+    assert(reexecd_since_boot("services_count=0\ngroups_count=0\n", "schema-init 0.4.28\n", "64769:1234") == 0);
     /* a service named booted_version is not the global line */
-    assert(reexecd_since_boot("service.booted_version=x\n", "schema-init 0.4.28\n") == 0);
+    assert(reexecd_since_boot("service.booted_version=x\n", "schema-init 0.4.28\n", "64769:1234") == 0);
     /* a --version that isn't schema-init's can't be compared: refuse */
-    assert(reexecd_since_boot(kv, "") == 1);
+    assert(reexecd_since_boot(kv, "", "64769:1234") == 1);
+
+    /* booted_image=: the image PID 1 booted from (dev:ino); a same-version rebuild re-exec'd
+     * in is another inode */
+    const char *ki = "services_count=2\ngroups_count=0\nbooted_version=0.4.27-1.fc44\nbooted_image=64769:1234\n";
+    assert(reexecd_since_boot(ki, "schema-init 0.4.27-1.fc44\n", "64769:1234") == 0);
+    assert(reexecd_since_boot(ki, "schema-init 0.4.27-1.fc44\n", "64769:9999") == 1);
+    assert(reexecd_since_boot(ki, "schema-init 0.4.27-1.fc44\n", "64769:12345") == 1);
+    /* the version still counts with a matching image */
+    assert(reexecd_since_boot(ki, "schema-init 0.4.28-1.fc44\n", "64769:1234") == 1);
+    /* not a line of its own: not the field */
+    assert(reexecd_since_boot("service.booted_image=1:2\nbooted_version=0.4.27-1.fc44\n", "schema-init 0.4.27-1.fc44\n",
+                              "64769:1234") == 0);
 }
 
 /* a window near or past the fixed 15 min would give up before it could settle */

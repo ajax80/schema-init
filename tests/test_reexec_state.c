@@ -35,6 +35,7 @@ int main(void) {
     strcpy(g.version, "0.4.0-1.973.git abc");
     strcpy(g.argv0, "/sbin/schema-init");
     strcpy(g.booted_version, "0.4.27-1.fc44");
+    strcpy(g.booted_image, "64769:1234");
     g.init_start.tv_sec = 12; g.init_start.tv_nsec = 345678901;
     g.under_pressure = 1; g.last_stall_ms = 98765; g.last_reclaim_ms = 4321; g.nofile_soft = 1024;
     g.fd_ctl = 3; g.fd_notify = 4; g.fd_watchdog = -1; g.fd_client = 6; g.fd_oldexe = 7;
@@ -83,6 +84,7 @@ int main(void) {
     assert(strcmp(pg.version, g.version) == 0);
     assert(strcmp(pg.argv0, g.argv0) == 0);
     assert(strcmp(pg.booted_version, "0.4.27-1.fc44") == 0);
+    assert(strcmp(pg.booted_image, "64769:1234") == 0);
     assert(pg.init_start.tv_sec == 12 && pg.init_start.tv_nsec == 345678901);
     assert(pg.under_pressure == 1 && pg.last_stall_ms == 98765 && pg.last_reclaim_ms == 4321);
     assert(pg.nofile_soft == 1024);
@@ -141,6 +143,12 @@ int main(void) {
     assert(pg.fd_ctl == -1 && pg.fd_watchdog == -1);
     /* an older writer has no booted_version: the reader falls back to its version */
     assert(pg.booted_version[0] == '\0');
+    /* nor booted_image: unknown, never the new image's own */
+    assert(pg.booted_image[0] == '\0');
+    /* forward: a global key this reader doesn't know (as booted_image is to an older one) is ignored */
+    assert(parse_text("schema-init-state 1\nglobal version=0.4.30 booted_version=0.4.30 future_key=9:9\nend\n",
+                      &pg, &nsvc, pev, &nev, err, sizeof err) == 0);
+    assert(strcmp(pg.version, "0.4.30") == 0 && strcmp(pg.booted_version, "0.4.30") == 0);
 
     /* format gate */
     assert(parse_text("schema-init-state 2\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);

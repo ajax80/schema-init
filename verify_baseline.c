@@ -228,15 +228,24 @@ int pid1_exe_is_schema_init(const char *exe) {
     return strncmp(b, "schema-init", 11) == 0;
 }
 
-int reexecd_since_boot(const char *status_kv, const char *version_out) {
-    const char *b = status_kv, *v;
-    size_t bl, vl;
-    while (b && strncmp(b, "booted_version=", 15)) b = (b = strchr(b, '\n')) ? b + 1 : NULL;
+/* the value of a kv line key=…, NULL when there is none; its length in *len */
+static const char *kv_line(const char *kv, const char *key, size_t *len) {
+    size_t kl = strlen(key);
+    for (const char *b = kv; b; b = (b = strchr(b, '\n')) ? b + 1 : NULL)
+        if (!strncmp(b, key, kl)) {
+            *len = strcspn(b + kl, "\n");
+            return b + kl;
+        }
+    return NULL;
+}
+
+int reexecd_since_boot(const char *status_kv, const char *version_out, const char *image) {
+    size_t bl, il;
+    const char *b = kv_line(status_kv, "booted_version=", &bl), *i = kv_line(status_kv, "booted_image=", &il);
+    if (i && (strlen(image) != il || memcmp(i, image, il))) return 1;
     if (!b) return 0;
-    b += 15;
-    bl = strcspn(b, "\n");
     if (strncmp(version_out, "schema-init ", 12)) return 1;
-    v = version_out + 12;
-    vl = strcspn(v, "\n");
+    const char *v = version_out + 12;
+    size_t vl = strcspn(v, "\n");
     return bl != vl || memcmp(b, v, bl);
 }
