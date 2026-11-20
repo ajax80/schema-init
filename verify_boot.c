@@ -1,12 +1,13 @@
 #include "verify_boot.h"
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-int grubenv_read(const char *path, grubenv_t *kv, int max) {
-    FILE *f = fopen(path, "r");
-    if (!f) return -1;
+static int grubenv_parse(FILE *f, grubenv_t *kv, int max) {
     char *line = NULL;
     size_t cap = 0;
     int n = 0;
@@ -20,6 +21,35 @@ int grubenv_read(const char *path, grubenv_t *kv, int max) {
     }
     free(line);
     fclose(f);
+    return n;
+}
+
+int grubenv_read(const char *path, grubenv_t *kv, int max) {
+    FILE *f = fopen(path, "r");
+    return f ? grubenv_parse(f, kv, max) : -1;
+}
+
+int grubenv_block_read(const char *dev, const char *spec, grubenv_t *kv, int max) {
+    unsigned long long off, len;
+    int used = 0;
+    /* one sector range; GRUB takes a list, which no grub2-editenv writes */
+    if (sscanf(spec, "%llu+%llu%n", &off, &len, &used) != 2 || spec[used] || !len || len > 64) {
+        errno = EINVAL;
+        return -1;
+    }
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char *buf = calloc(1, len * 512 + 1);
+    ssize_t m = pread(fd, buf, len * 512, (off_t)(off * 512));
+    int e = errno;
+    close(fd);
+    if (m != (ssize_t)(len * 512) || strncmp(buf, "# GRUB Environment Block\n", 25)) {
+        free(buf);
+        errno = m < 0 ? e : EILSEQ;
+        return -1;
+    }
+    int n = grubenv_parse(fmemopen(buf, strlen(buf), "r"), kv, max);
+    free(buf);
     return n;
 }
 

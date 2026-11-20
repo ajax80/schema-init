@@ -26,6 +26,9 @@ typedef struct {
 typedef struct { const char *actual, *normal, *fallback; int unresolved; } nextboot_t;
 
 int grubenv_read(const char *path, grubenv_t *kv, int max);
+/* grubenv's env_block=OFF+LEN (512-byte sectors on dev), which GRUB loads after the file;
+ * -1 with errno when it can't be read or is no env block */
+int grubenv_block_read(const char *dev, const char *spec, grubenv_t *kv, int max);
 int bls_parse(const char *path, bls_entry_t *e);
 /* 0 ok; -1 FAIL with why */
 int karg_check(char (*args)[512], int n, char *why, size_t whysz);

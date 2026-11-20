@@ -284,6 +284,28 @@ static void test_grubcfg_default(void) {
            !strcmp(v, "${saved_entry}"));
 }
 
+/* env_block=512+1: the variables GRUB loads after grubenv, from sector 512 of its device */
+static void test_envblock(void) {
+    char dev[4200], blk[512];
+    snprintf(dev, sizeof dev, "%s/vboot-envdev", tmpd);
+    FILE *f = fopen(dev, "w");
+    assert(f);
+    memset(blk, '#', sizeof blk);
+    static const char text[] = "# GRUB Environment Block\nboot_success=1\nboot_indeterminate=0\n";
+    memcpy(blk, text, sizeof text - 1);
+    fseek(f, 512L * 512, SEEK_SET);
+    fwrite(blk, 1, sizeof blk, f);
+    fclose(f);
+    int n = grubenv_block_read(dev, "512+1", env, 32);
+    assert(n == 2 && !strcmp(env[0][0], "boot_success") && !strcmp(env[0][1], "1") && !strcmp(env[1][0], "boot_indeterminate"));
+    /* not an env block there, a range GRUB's editenv never writes, no device: errors, never empty */
+    assert(grubenv_block_read(dev, "511+1", env, 32) == -1);
+    assert(grubenv_block_read(dev, "512+1,600+1", env, 32) == -1);
+    assert(grubenv_block_read(dev, "x", env, 32) == -1);
+    assert(grubenv_block_read("/nonexistent/dev", "512+1", env, 32) == -1);
+    remove(dev);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) tmpd = argv[1];
     test_karg();
@@ -292,6 +314,7 @@ int main(int argc, char **argv) {
     test_grubcfg();
     test_grubenv_long();
     test_grubcfg_default();
+    test_envblock();
     printf("verify_boot: ok\n");
     return 0;
 }

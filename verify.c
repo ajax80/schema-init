@@ -81,6 +81,7 @@ void verify_opts_env(verify_opts_t *o) {
         F(cmdline_txt, "SCHEMA_VERIFY_CMDLINE_TXT", NULL),
         F(pi_init, "SCHEMA_VERIFY_PI_INIT", "/usr/sbin/schema-init"),
         F(inspect, "SCHEMA_VERIFY_INSPECT", NULL),
+        F(envblock_dev, "SCHEMA_VERIFY_ENVBLOCK_DEV", NULL),
 #undef F
     };
     for (size_t i = 0; i < sizeof m / sizeof *m; i++) {
@@ -287,6 +288,48 @@ static const char *bls_dir_for(ctx_t *c, char *buf, size_t n) {
     }
     snprintf(buf, n, "%s", bd + rl);
     return buf;
+}
+
+/* the source of the mount holding path: GRUB's env_block= is sectors on that device */
+static int mount_source(const char *path, char *out, size_t n) {
+    char real[PATH_MAX], line[8192], mp[4096], src[4096];
+    size_t best = 0;
+    if (!realpath(path, real)) return -1;
+    FILE *f = fopen("/proc/self/mountinfo", "r");
+    while (f && fgets(line, sizeof line, f)) {
+        const char *sep = strstr(line, " - ");
+        if (!sep || sscanf(line, "%*s %*s %*s %*s %4095s", mp) != 1 || sscanf(sep, " - %*s %4095s", src) != 1) continue;
+        size_t ml = strcmp(mp, "/") ? strlen(mp) : 0;
+        /* longest match wins; a later mount on the same point hides an earlier one */
+        if ((!ml || (!strncmp(real, mp, ml) && (real[ml] == '/' || !real[ml]))) && ml + 1 >= best) {
+            best = ml + 1;
+            snprintf(out, n, "%s", src);
+        }
+    }
+    if (f) fclose(f);
+    return best && out[0] == '/' ? 0 : -1;
+}
+
+/* GRUB's header loads env_block= after grubenv: its values win (blakbox keeps boot_success there) */
+static int envblock_merge(ctx_t *c) {
+    const char *spec = env_get(c, "env_block");
+    char dev[PATH_MAX];
+    if (!spec) return 0;
+    if (c->o->envblock_dev) snprintf(dev, sizeof dev, "%s", c->o->envblock_dev);
+    else if (mount_source(c->o->grubenv, dev, sizeof dev)) {
+        emit(c, T_UNRES, "grubenv env_block=%s: the device holding %s could not be found", spec, c->o->grubenv);
+        return -1;
+    }
+    int n = grubenv_block_read(dev, spec, c->env + c->nenv, MAXENV - c->nenv);
+    if (n < 0 && errno == EILSEQ) emit(c, T_UNRES, "grubenv env_block=%s on %s: no GRUB env block there", spec, dev);
+    if (n < 0 && errno != EILSEQ) {
+        char what[PATH_MAX + 64];
+        snprintf(what, sizeof what, "grubenv env_block=%s on", spec);
+        unreadable(c, what, dev, errno);
+    }
+    if (n < 0) return -1;
+    c->nenv += n;
+    return 0;
 }
 
 static int load_entries(ctx_t *c) {
@@ -573,6 +616,8 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         unsup = 1;
     } else if (c.nenv < 0) {
         unreadable(&c, "grubenv", o->grubenv, ge);
+    } else if (envblock_merge(&c)) {
+        /* what GRUB reads from it (boot_success, boot_counter, next_entry) is unknown */
     } else if ((lr = load_entries(&c)) == -2) {
         unsup = 1;
     } else if (!lr) {

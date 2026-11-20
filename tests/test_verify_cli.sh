@@ -199,6 +199,24 @@ has "[PASS] actual next boot m-7.2.11: entry checks pass; init=/sbin/schema-init
 entry m-7.2.11 root
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 
+# env_block=: GRUB loads it after grubenv and its values win; here it holds a spent guard
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\nboot_success=1\nenv_block=512+1\n' "$F" > "$T/grubenv"
+B='# GRUB Environment Block
+boot_counter=0
+boot_success=0
+'
+{ head -c $((512 * 512)) /dev/zero; printf '%s' "$B"; head -c $((512 - ${#B})) /dev/zero | tr '\0' '#'; } > "$T/envdev"
+export SCHEMA_VERIFY_ENVBLOCK_DEV="$T/envdev"
+v
+has "[PASS] actual next boot $F" || fail "envblock: guard in env_block not applied"
+rm "$T/envdev"
+v
+expect 3 envblock-unread
+has "[UNRESOLVED] grubenv env_block=512+1 on $T/envdev" || fail "envblock-unread: line"
+grep -q '^\[PASS\] actual' "$T/out" && fail "envblock-unread: PASS for the next boot"
+unset SCHEMA_VERIFY_ENVBLOCK_DEV
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
+
 # a full GRUB config on the ESP loads its own grubenv -> 1
 printf '### BEGIN /etc/grub.d/00_header ###\nset default=0\n' > "$T/esp/EFI/fedora/grub.cfg"
 v
