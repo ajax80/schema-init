@@ -18,6 +18,7 @@
 #include "recorder_logic.h"
 #include "verify_baseline.h"
 #include "verify.h"
+#include "verify_gate.h"
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
@@ -278,8 +279,11 @@ static void usage(FILE *out) {
         "  reload [--evict]       re-read service files; --evict also SIGTERMs\n"
         "                         services no longer present in config\n"
         "  reload <svc>           exec_reload= or reload_signal= on a running service\n"
-        "  reexec [<path>]        replace the PID 1 binary in place (default: the\n"
-        "                         one it booted from); services keep running\n"
+        "  reexec [--force] [<path>]\n"
+        "                         replace the PID 1 binary in place (default: the\n"
+        "                         one it booted from); services keep running.\n"
+        "                         Runs verify --quiet first and refuses on exit 1, 2\n"
+        "                         or 3, or when verify can't run; --force skips it\n"
         "  start <svc>            start a service (alias: up)\n"
         "  stop <svc>             stop it and hold it down (alias: down)\n"
         "  restart <svc>\n"
@@ -313,8 +317,11 @@ static void usage(FILE *out) {
         "  reset [<svc>]          clear restart/dormant counters and retry <svc>;\n"
         "                         no argument clears every counter and retries\n"
         "                         only what failed, not what was stopped or finished\n"
-        "  reboot\n"
-        "  poweroff\n"
+        "  reboot [--force]\n"
+        "  poweroff [--force]     from a terminal (stdin and stderr ttys), run\n"
+        "                         verify --quiet first and refuse on exit 1 or 2;\n"
+        "                         unresolved or unavailable: warn and go ahead.\n"
+        "                         --force skips it; scripts are never gated\n"
         "\n"
         "  --user <cmd...>        talk to this user's schema-user instead of PID 1\n"
         "  --user daemon-reload   re-import the user's unit files, then reload\n"
@@ -633,6 +640,10 @@ int main(int argc, char **argv) {
     char cmd[256];
     char *rbuf;
     int i, r, whole;
+#ifdef SCHEMA_VERIFY_TESTHOOKS
+    const char *tsock = getenv("SCHEMA_VERIFY_CTL_SOCK");
+    if (tsock && tsock[0]) ctl_sock = tsock;
+#endif
 
     if (argc > 1 && strcmp(argv[1], "--user") == 0) {
         static char usock[PATH_MAX], udir[PATH_MAX], uskip[PATH_MAX];
@@ -749,6 +760,16 @@ int main(int argc, char **argv) {
         int has_ext = l > 4 && strcmp(argv[2] + l - 4, ".svc") == 0;
         snprintf(addpath, sizeof addpath, "%s/%s%s", svc_dir, argv[2], has_ext ? "" : ".svc");
         argv[2] = addpath;
+    }
+
+    if (!user_mode && (!strcmp(argv[1], "reboot") || !strcmp(argv[1], "poweroff") || !strcmp(argv[1], "reexec"))) {
+        int force = 0, n = 2;
+        for (i = 2; i < argc; i++) {
+            if (!strcmp(argv[i], "--force")) force = 1;
+            else argv[n++] = argv[i];
+        }
+        argc = n;
+        if (verify_gate(argv[1], force, isatty(0) && isatty(2), stderr)) return 1;
     }
 
     cmd[0] = '\0';

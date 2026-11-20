@@ -35,7 +35,9 @@ case $words[2] in
   trace) _values option --since ;;
   reload) _values option --evict ;;
   verify) _values -w option --quiet --accept --write-baseline --wait-settled ;;
-  add|reexec) _files ;;
+  add) _files ;;
+  reexec) _alternatives 'opts:option:(--force)' 'files:file:_files' ;;
+  reboot|poweroff) _values option --force ;;
   analyze|start|up|stop|down|restart|cat|graph|pet|reset)
     (( CURRENT == 3 )) && _values service $svcs ;;
 esac
