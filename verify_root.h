@@ -20,6 +20,7 @@ typedef struct {
     int check_rc;
     char init_path[512]; /* init= resolved inside the target */
     int is_schema_init;
+    int bootok_exec; /* schema-bootok's exec= in the target: 0 not seen, 1 executable, 2 not */
 } root_report_t;
 
 /* devdir NULL: $SCHEMA_VERIFY_DEVDIR, else /dev. 0 when spec names a present node. */
@@ -36,7 +37,7 @@ int opts_expand(const char *opts, char (*env)[2][256], int nenv, char *out, size
 /* the entry checks that need no mount; 0 when root_inspect may go on to mount */
 int entry_precheck(const bls_entry_t *e, char (*env)[2][256], int nenv, char *opts, size_t optsz, root_report_t *r);
 /* the child's records (F/U fail/unresolved, I init path, S schema-init, C --check rc,
- * E its first stderr line) into r; takes out, the --check stdout */
+ * E its first stderr line, B schema-bootok's exec= 1 ok / 2 not executable) into r; takes out, the --check stdout */
 void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_report_t *r);
 /* entry_precheck, then mount root= read-only in a private namespace and check the
  * target; one 30 s deadline covers the whole inspection */

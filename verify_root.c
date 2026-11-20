@@ -272,6 +272,30 @@ static int check_file(int ctl, const char *grub, const char *what, const char *p
     return 0;
 }
 
+/* copies the --check report in cfd to out, after a B record for schema-bootok's exec= */
+static void bootok_exec(int ctl, int cfd, int out) {
+    struct stat st;
+    char *m;
+    if (fstat(cfd, &st) || !st.st_size) return;
+    if ((m = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, cfd, 0)) == MAP_FAILED) return;
+    static const char key[] = "\nschema-bootok.exec=";
+    char *v = memmem(m, st.st_size, key, sizeof key - 1), path[PATH_MAX];
+    if (v) {
+        v += sizeof key - 1;
+        size_t n = 0;
+        while (v + n < m + st.st_size && v[n] != '\n' && v[n] != '\t') n++;
+        snprintf(path, sizeof path, "%.*s", (int)n, v);
+        struct stat xs;
+        dprintf(ctl, "B %d\n", !stat(path, &xs) && S_ISREG(xs.st_mode) && (xs.st_mode & 0111) ? 1 : 2);
+    }
+    for (off_t o = 0; o < st.st_size;) {
+        ssize_t w = write(out, m + o, st.st_size - o);
+        if (w <= 0) break;
+        o += w;
+    }
+    munmap(m, st.st_size);
+}
+
 static void inspect(const bls_entry_t *e, const char *opts, const char *extra, const char *base, int ctl, int out) {
     char (*w)[512] = malloc(MAXWORDS * sizeof *w);
     int nw = karg_split(opts, w, MAXWORDS);
@@ -392,8 +416,11 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     int nx = extra ? karg_split(extra, xw, MAXWORDS) : 0;
     for (int i = 0; i < nx; i++) argv[ac++] = xw[i];
     argv[ac] = NULL;
-    rc = run(argv, out, errfd);
+    /* through a memfd: schema-bootok's exec= is judged here, inside the target */
+    int cfd = memfd_create("schema-verify-check", MFD_CLOEXEC);
+    rc = run(argv, cfd >= 0 ? cfd : out, errfd);
     dprintf(ctl, "C %d\n", rc);
+    if (cfd >= 0) bootok_exec(ctl, cfd, out);
     first_line(errfd, line, sizeof line);
     if (line[0]) dprintf(ctl, "E %s\n", line);
     /* 1 means error: lines in the output, which the caller judges; anything else is no report */
@@ -445,6 +472,7 @@ void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_repor
         else if (l[0] == 'S') r->is_schema_init = 1;
         else if (l[0] == 'C' && l[1] == ' ') r->check_rc = atoi(l + 2);
         else if (l[0] == 'E' && l[1] == ' ') snprintf(err, sizeof err, "%s", l + 2);
+        else if (l[0] == 'B' && l[1] == ' ') r->bootok_exec = atoi(l + 2) == 1 ? 1 : 2;
     }
     static const char hdr[] = "schema-verify-baseline v1\n";
     /* rc 0/1 without the header: an init older than --check, or no report at all */

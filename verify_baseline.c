@@ -227,3 +227,16 @@ int pid1_exe_is_schema_init(const char *exe) {
     b = b ? b + 1 : exe;
     return strncmp(b, "schema-init", 11) == 0;
 }
+
+int reexecd_since_boot(const char *status_kv, const char *version_out) {
+    const char *b = status_kv, *v;
+    size_t bl, vl;
+    while (b && strncmp(b, "booted_version=", 15)) b = (b = strchr(b, '\n')) ? b + 1 : NULL;
+    if (!b) return 0;
+    b += 15;
+    bl = strcspn(b, "\n");
+    if (strncmp(version_out, "schema-init ", 12)) return 1;
+    v = version_out + 12;
+    vl = strcspn(v, "\n");
+    return bl != vl || memcmp(b, v, bl);
+}

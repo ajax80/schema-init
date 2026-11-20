@@ -34,6 +34,7 @@ int main(void) {
 
     strcpy(g.version, "0.4.0-1.973.git abc");
     strcpy(g.argv0, "/sbin/schema-init");
+    strcpy(g.booted_version, "0.4.27-1.fc44");
     g.init_start.tv_sec = 12; g.init_start.tv_nsec = 345678901;
     g.under_pressure = 1; g.last_stall_ms = 98765; g.last_reclaim_ms = 4321; g.nofile_soft = 1024;
     g.fd_ctl = 3; g.fd_notify = 4; g.fd_watchdog = -1; g.fd_client = 6; g.fd_oldexe = 7;
@@ -81,6 +82,7 @@ int main(void) {
     assert(parse_text(buf, &pg, &nsvc, pev, &nev, err, sizeof err) == 0);
     assert(strcmp(pg.version, g.version) == 0);
     assert(strcmp(pg.argv0, g.argv0) == 0);
+    assert(strcmp(pg.booted_version, "0.4.27-1.fc44") == 0);
     assert(pg.init_start.tv_sec == 12 && pg.init_start.tv_nsec == 345678901);
     assert(pg.under_pressure == 1 && pg.last_stall_ms == 98765 && pg.last_reclaim_ms == 4321);
     assert(pg.nofile_soft == 1024);
@@ -137,6 +139,8 @@ int main(void) {
                       "end\n", &pg, &nsvc, pev, &nev, err, sizeof err) == 0);
     assert(nsvc == 1 && out[0].rt.child_pid == 5 && out[0].rt.restart_count == 0);
     assert(pg.fd_ctl == -1 && pg.fd_watchdog == -1);
+    /* an older writer has no booted_version: the reader falls back to its version */
+    assert(pg.booted_version[0] == '\0');
 
     /* format gate */
     assert(parse_text("schema-init-state 2\nend\n", &pg, &nsvc, pev, &nev, err, sizeof err) == -1);

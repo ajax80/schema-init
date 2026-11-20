@@ -979,6 +979,8 @@ static void reexec_adopt(int blob_fd, int oldexe_fd) {
         evictions[k].deadline = mono_sec() + (evictions[k].deadline - time(NULL));
     eviction_readded();
     init_start = g.init_start;
+    /* an older image wrote no booted_version: it booted as itself, or so we must assume */
+    snprintf(booted_version, sizeof booted_version, "%s", g.booted_version[0] ? g.booted_version : g.version);
     if (g.nofile_soft)
         service_set_nofile_soft_at_boot((rlim_t)g.nofile_soft);
     system_under_pressure = g.under_pressure;
@@ -1017,6 +1019,7 @@ static int reexec_write_blob(int client, int oldexe, char *err, size_t errsz) {
     memset(&g, 0, sizeof g);
     snprintf(g.version, sizeof g.version, "%s", SCHEMA_INIT_VERSION);
     snprintf(g.argv0, sizeof g.argv0, "%s", boot_argv0);
+    snprintf(g.booted_version, sizeof g.booted_version, "%s", booted_version);
     g.init_start = init_start;
     g.under_pressure = system_under_pressure;
     g.last_stall_ms = last_stall_ms;

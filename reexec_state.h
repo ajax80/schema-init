@@ -128,6 +128,7 @@ static inline void svc_carry_timer_done(service_t *fresh, int live_done) {
 typedef struct {
     char            version[64];
     char            argv0[256];
+    char            booted_version[64];  /* the version PID 1 booted as, across re-execs */
     struct timespec init_start;
     int             under_pressure;
     uint64_t        last_stall_ms;
@@ -257,6 +258,7 @@ static inline void state_write(FILE *out, const reexec_global_t *g,
     fprintf(out, "global");
     rx_put_STR(out, "version", g->version);
     rx_put_STR(out, "argv0", g->argv0);
+    rx_put_STR(out, "booted_version", g->booted_version);
     rx_put_TS(out, "init_start", &g->init_start);
     rx_put_INT(out, "under_pressure", &g->under_pressure);
     fprintf(out, " last_stall_ms=%" PRIu64 " last_reclaim_ms=%" PRIu64 " nofile_soft=%" PRIu64 "\n",
@@ -382,6 +384,7 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
             } else if (!strcmp(rec, "global")) {
                 if (!strcmp(k, "version"))             bad = rx_unescape(v, g->version, sizeof g->version);
                 else if (!strcmp(k, "argv0"))          bad = rx_unescape(v, g->argv0, sizeof g->argv0);
+                else if (!strcmp(k, "booted_version")) bad = rx_unescape(v, g->booted_version, sizeof g->booted_version);
                 else if (!strcmp(k, "init_start"))     bad = rx_get_TS(v, &g->init_start, 0);
                 else if (!strcmp(k, "under_pressure")) bad = rx_get_INT(v, &g->under_pressure, 0);
                 else if (!strcmp(k, "last_stall_ms"))  { bad = rx_ll(v, &x) || x < 0; if (!bad) g->last_stall_ms = (uint64_t)x; }

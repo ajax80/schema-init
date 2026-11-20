@@ -266,6 +266,17 @@ static void test_report_fill(void) {
     root_report_fill(bad, strlen(bad), NULL, 0, &r);
     assert(r.fail && r.nreasons == 1 && !strcmp(r.reasons[0], "kernel /root/boot/vmlinuz-x is missing"));
     assert(r.nunres == 1 && r.unresolved == r.unres[0] && !r.is_schema_init && r.check_rc == -1);
+    assert(r.bootok_exec == 0);
+
+    /* schema-bootok's exec= as the child found it inside the target */
+    memset(&r, 0, sizeof r);
+    char bok[] = "I /usr/bin/schema-init\nS\nB 1\n";
+    root_report_fill(bok, strlen(bok), NULL, 0, &r);
+    assert(r.bootok_exec == 1);
+    memset(&r, 0, sizeof r);
+    char bbad[] = "B 2\n";
+    root_report_fill(bbad, strlen(bbad), NULL, 0, &r);
+    assert(r.bootok_exec == 2 && !r.fail);
 }
 
 static void test_needs_root(void) {

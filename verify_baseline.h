@@ -16,5 +16,8 @@ int baseline_write(const char *dir, const char *check_out, size_t len, time_t no
 int settle_step(settle_t *st, const char *status_kv, uint64_t now_ms, unsigned window_s);
 uint64_t settle_give_up_ms(unsigned window_s);
 int pid1_exe_is_schema_init(const char *exe);
+/* 1 when status --kv's booted_version= differs from "schema-init <v>" (a --version
+ * line): PID 1 was re-exec'd into a binary that never booted. No line: 0. */
+int reexecd_since_boot(const char *status_kv, const char *version_out);
 
 #endif

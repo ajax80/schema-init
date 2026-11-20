@@ -24,6 +24,7 @@ sudo schema-ctl reload --evict  # reload + SIGTERM any running service no longer
 sudo schema-ctl pet <name>      # service heartbeat check-in — resets watchdog_timeout_ms window
 sudo schema-ctl reset [<name>]  # reset restart/dormant counts and re-queue failed services (clears circuit_broken=1); with a <name>, also starts it if it was stopped. Bare reset leaves stopped services and finished oneshots alone
 sudo schema-ctl reexec [<path>] # replace the PID 1 binary in place, services keep running
+sudo schema-ctl verify          # before a reboot: will the next boot come back, and will the way back work?
 sudo schema-ctl reboot          # orderly shutdown sweep, then reboot (also: poweroff)
 ```
 
@@ -37,6 +38,40 @@ sudo cp schema-ctl /usr/local/bin/schema-ctl
 ```
 
 ---
+
+## Before a reboot: schema-ctl verify
+
+`schema-ctl verify` answers one question: if you reboot now, will this box come back, and if it doesn't, will the way back work? It reads, it never writes (except `--accept`, below), and it judges the configuration the **next** boot will use, not the running one. A live re-exec can leave a running PID 1 that looks fine while the next boot is broken; that is what this is for.
+
+```sh
+sudo schema-ctl verify            # the full report
+sudo schema-ctl verify --quiet    # only FAIL / CHANGE / WARN / UNRESOLVED lines and the result
+sudo schema-ctl verify --accept   # accept the current CHANGE set (refused while anything FAILs)
+```
+
+The report has four sections:
+
+- **Next boot.** The entry GRUB will pick, from grubenv and the BLS entries (`next_entry`, else `saved_entry`, then the boot guard's fallback rule), the normal default, and the guard's fallback. Each entry is checked: no blank line before its last key (GRUB stops there), one `root=`/`rootflags=`/`init=`, `root=` is a present device, the `rootflags=subvol=` subvolume exists, the kernel and every initrd exist, and `init=` is executable inside that entry's root. The root is mounted read-only in a private namespace and unmounted again; nothing is written.
+- **Services.** The next boot's `init=` binary runs `--check` on that root's `.svc` files with that entry's kernel command line, and the result is compared with the baseline written at the last good boot (`--write-baseline`). A service that no longer loads is a FAIL; a changed effective setting is a CHANGE, grouped by setting with the services it touches; a new service is a WARN. A `systemd` next boot is reported and not compared.
+- **Ways back.** The guard's fallback entry gets the same checks as the next boot, and here a problem is a FAIL: a guard that can't fire is no guard. Other `schema-snap-*` / `schema-good-*` entries are checked too, as WARNs. `/boot/grub2/grub.cfg` must carry `09_schema_fallback` as live code (not in a comment, not overridden by a later `set default=`), the ESP's `grub.cfg` must be a stub that hands over to `/boot/grub2`, and `schema-bootok` must load on the next boot with an executable `exec=`. A box that has never used the guard (no `schema_fallback_id`, no `boot_counter`, no snapshot entry) gets a note instead.
+- **Disks.** Every fstab entry, by class: a required local filesystem whose device is missing is a FAIL; a missing `nofail` device or swap is a WARN; network, virtual, bind, automount and layered (LUKS, mergerfs) sources are noted, not checked. I/O and filesystem errors in the kernel log since boot are WARNs naming the disk.
+
+The last line sums it up, e.g. `Result: 0 fail, 1 change (not accepted), 2 warn`, and the exit code says the same:
+
+| Exit | Meaning |
+|---|---|
+| 0 | pass (WARNs allowed) |
+| 1 | a FAIL |
+| 2 | no FAIL, but an unaccepted CHANGE, or a lost baseline |
+| 3 | nothing worse than UNRESOLVED |
+
+**UNRESOLVED** means verify could not find something out: which entry boots next, a root it could not mount, an `init=` too old to have `--check` (the first upgrade onto this version). It never reports PASS for an input it did not read. Run as a normal user, every section that needs root says `[UNRESOLVED] needs root`.
+
+**`--accept`.** An intended change (you set a new hardening default, a package changed a service) is accepted once: `--accept` records a hash of the current CHANGE set in `/var/lib/schema-init/verify/accepted`, and while the set hashes the same the lines read `[CHANGE accepted]` and exit 0. Any further edit makes a new set and blocks again. A FAIL can never be accepted, and neither can a **lost baseline**: once a baseline has existed (`/var/lib/schema-init/verify/established`), a missing or unreadable one is exit 2 until the next good boot rewrites it. Before any baseline exists, verify warns `no baseline yet` and does not block.
+
+**The baseline** is written at a good boot by `schema-bootok` (desktop boxes) or the `schema-verify-baseline` oneshot (after 60 s of settled services). `--write-baseline` refuses when PID 1 was live re-exec'd since it booted (`status --kv` reports the version PID 1 booted as `booted_version=`): the running binary never proved a boot, so the baseline waits for the next one.
+
+`verify` will block the live re-exec after a package upgrade, `schema-snapshot arm` and an interactive `schema-ctl reboot` / `poweroff` once the gates land; until then it is a command you run. On a Raspberry Pi (no GRUB) the boot-entry sections say "not applicable" and the services are checked from `cmdline.txt` with the boot wrapper's own rule.
 
 ## Recovery console
 
