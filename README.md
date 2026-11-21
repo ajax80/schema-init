@@ -78,7 +78,7 @@ card=fallback:camera-stream-lowres         # give up for now, run the degraded s
 
 Each card is played once; the deck starts over after the service has run for 5 minutes. Nothing here can lose work behind your back: cards are only what the service file declares.
 
-**The board** (`schema-board`) shows it live: every service's state in the leg's LED colours, which card it is on, which service is limping and which one is standing in for it. It runs on its own console and keeps working when the desktop has frozen. See [`card=` in the service file reference](docs/svc-reference.md) and [the recovery console](docs/operations.md#recovery-console).
+**The board** (`schema-board`) shows it live: every service's state in the leg's LED colours, which card it is on, which service is limping and which one is standing in for it. It runs on its own console, drawn in the boot rail's look, and keeps working when the desktop has frozen. See [`card=` in the service file reference](docs/svc-reference.md) and [the recovery console](docs/operations.md#recovery-console).
 
 ## Flight recorder
 

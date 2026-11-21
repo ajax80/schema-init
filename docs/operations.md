@@ -93,6 +93,8 @@ schema-board --tty /dev/tty8                    # then ctrl-alt-F8 to look at it
 schema-board --tty /dev/tty8 --interactive      # ...and fix something from there
 ```
 
+On a VT in text mode the board draws in the boot rail's look — `S C H E M A//B O A R D` banner, colour chips, the rail's glyphs when the console font is `schema-12x24` (ASCII otherwise) — in two columns when one would run off the screen; a list too long for both ends in `… N more`. Piped or `--once`, it prints the plain table. Tests force the look with `SCHEMA_BOARD_STYLE=font|ascii|plain`, `SCHEMA_BOARD_SIZE=<cols>x<rows>` and (with `--once`) `SCHEMA_BOARD_SEL=<n>`.
+
 `--interactive` adds a cockpit: `↑`/`↓` (or `j`/`k`) to select a service, `enter` to raise a card,
 `y` to apply, `n` to cancel. The card is chosen from the service's state — `DORMANT` gets `reset`,
 `EXCISED` gets `start`, anything else gets `restart` — and the confirm panel prints the exact
