@@ -21,7 +21,9 @@ hardware.
   - `schema-snapshot create [label]` — snapshot + BLS entry, auto-prune to
     `SCHEMA_SNAP_KEEP` (default 3).
   - `schema-snapshot list | delete <name> | prune`
-  - `schema-snapshot arm [N] | disarm` — see below.
+  - `schema-snapshot arm [--force] [N] | disarm` — see below. `arm` runs
+    `schema-ctl verify --quiet` first and arms nothing unless it exits 0
+    (`--force` skips it): an armed guard bets the next boot on coming back.
 
 - **`schema-bootok`** — a root oneshot run late in the rail. Waits up to
   `SCHEMA_BOOTOK_TIMEOUT` (default 90s) for a login user's live session:
@@ -48,7 +50,7 @@ and a *real* fallback target (the snapshot).
 ## Deploy flow
 
     make safe-install        # snapshot pre-deploy + install new binary/rail
-    schema-snapshot arm      # point schema_fallback_id at that snapshot, set boot_counter
+    schema-snapshot arm      # verify, then point schema_fallback_id at that snapshot, set boot_counter
     reboot
 
 If the new boot reaches the desktop, `schema-bootok` marks it good and disarms.

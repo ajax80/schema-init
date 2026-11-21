@@ -212,19 +212,42 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
     int cycles = engine_load(dir);
 
     /* Which files failed is decided by loading each one again, not by the
-     * wording of the loader's messages. Their repeat chatter is discarded. */
+     * wording of the loader's messages. Each file's own repeat chatter is kept
+     * as its reason when no engine_load line names its path (a refusal that
+     * names only the service, e.g. "zz: exec=... has whitespace"). */
     int devnull = open("/dev/null", O_WRONLY | O_CLOEXEC);
-    redirect(devnull);
+    FILE *one = tmpfile();
+    redirect(one ? fileno(one) : devnull);
     struct dirent **ents;
     int ne = scandir(dir, &ents, svc_file, svc_dropin_cmp);
     char *bad = calloc(ne > 0 ? ne : 1, 1);
+    char **own = calloc(ne > 0 ? ne : 1, sizeof *own);
     char (*claimed)[64] = calloc(MAX_SERVICES, 64);
     int nclaimed = 0;
     for (int e = 0; e < ne; e++) {
         service_t *t = calloc(1, sizeof *t);
         snprintf(path, sizeof path, "%s/%s", dir, ents[e]->d_name);
         bad[e] = 1;
-        if (service_load_one(path, t) != 0) continue;
+        if (one) {
+            fflush(stdout);
+            fflush(stderr);
+            ftruncate(fileno(one), 0);
+            lseek(fileno(one), 0, SEEK_SET);
+        }
+        if (service_load_one(path, t) != 0) {
+            char l[1024];
+            ssize_t n;
+            fflush(stdout);
+            fflush(stderr);
+            /* pread, not stdio: rewind() may serve the previous file's text from its buffer */
+            if (one && (n = pread(fileno(one), l, sizeof l - 1, 0)) > 0) {
+                l[n] = 0;
+                l[strcspn(l, "\n")] = 0;
+                strip_root(l, root, rl);
+                own[e] = strdup(untag(l));
+            }
+            continue;
+        }
         int k, c;
         for (k = 0; k < svc_count && strcmp(services[k].name, t->name); k++)
             ;
@@ -240,6 +263,7 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
     close(out);
     close(err);
     close(devnull);
+    if (one) fclose(one);
 
     lines_t capl = { 0 };
     char line[1024];
@@ -268,6 +292,15 @@ int check_main(const char *root_arg, const char *cmdline, const char *svc_dir_ov
                 reason = untag(capl.v[i]);
                 break;
             }
+        if (!strcmp(reason, "not loaded") && own[e] && own[e][0]) {
+            reason = own[e];
+            /* engine_load said it too; don't repeat it as a stray note */
+            for (int i = 0; i < capl.n; i++)
+                if (!used[i] && !strcmp(untag(capl.v[i]), own[e])) {
+                    used[i] = 1;
+                    break;
+                }
+        }
         /* masking is deliberate; an error here would block every re-exec */
         snprintf(path, sizeof path, "%s/%s.masked", dir, dn);
         if (access(path, F_OK) == 0) {

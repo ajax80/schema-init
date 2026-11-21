@@ -7,7 +7,7 @@
 /* bls_dir NULL: grubenv's blsdir=; cmdline_txt NULL: the Pi's usual places; envblock_dev NULL: grubenv's device;
  * inspect: a stand-in for root_inspect's mount+chroot child (tests only) */
 typedef struct {
-    int quiet, accept;
+    int quiet, accept, arming;
     const char *state_dir, *grubenv, *bls_dir, *grubcfg, *fstab, *kmsg_path, *devdir;
     const char *esp, *cmdline_txt, *pi_init, *inspect;
     const char *envblock_dev; /* NULL: the device holding grubenv */

@@ -246,6 +246,33 @@ static void test_settle_engine_rule(void) {
              "service.a.failed=1\n");
     assert(settle_step(&st, x, S(0), 60) == 0);
     assert(settle_step(&st, x, S(61), 60) == 0);
+    /* failed but critical=0 (mcelog on an unsupported CPU): settles; critical=1 doesn't */
+    memset(&st, 0, sizeof st);
+    snprintf(x, sizeof x, "service.mcelog.state=EXCISED\nservice.mcelog.restarts=0\nservice.mcelog.excise_reason=exit-code\n"
+             "service.mcelog.failed=1\nservice.mcelog.critical=0\nservice.b.state=PERFECT\nservice.b.restarts=0\n"
+             "service.b.failed=0\nservice.b.critical=0\n");
+    assert(settle_step(&st, x, S(0), 60) == 0);
+    assert(settle_step(&st, x, S(61), 60) == 1);
+    {
+        char fl[64];
+        assert(settle_failed(x, fl, sizeof fl) == 6 && !strcmp(fl, "mcelog"));
+    }
+    {
+        /* several names space-joined; one that won't fit is left out whole */
+        char fl[12], y[512];
+        snprintf(y, sizeof y, "service.aa.failed=1\nservice.aa.critical=0\nservice.bbbbbbbbbb.failed=1\n"
+                 "service.bbbbbbbbbb.critical=0\nservice.cc.failed=1\nservice.cc.critical=0\n");
+        assert(settle_failed(y, fl, sizeof fl) == 5 && !strcmp(fl, "aa cc"));
+    }
+    memset(&st, 0, sizeof st);
+    snprintf(x, sizeof x, "service.a.state=DORMANT\nservice.a.restarts=3\nservice.a.excise_reason=exit-code\n"
+             "service.a.failed=1\nservice.a.critical=1\n");
+    assert(settle_step(&st, x, S(0), 60) == 0);
+    assert(settle_step(&st, x, S(61), 60) == 0);
+    {
+        char fl[64];
+        assert(settle_failed(x, fl, sizeof fl) == 0 && !fl[0]);
+    }
     /* waiting on its socket */
     memset(&st, 0, sizeof st);
     snprintf(x, sizeof x, "service.a.state=NEW_PROCESS\nservice.a.restarts=0\nservice.a.excise_reason=none\n");

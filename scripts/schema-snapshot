@@ -53,7 +53,8 @@ cmd_create() {
     { print }' "$fstab" > "$fstab.new" && mv "$fstab.new" "$fstab"
   homesub="$(findmnt -no SOURCE /home | sed -n 's/.*\[\/\(.*\)\]$/\1/p')"
   if [ -n "$homesub" ]; then
-    grep -rlE "subvol=/?$homesub([, ]|$)" "$TOP/$rootsnap/usr/local/bin" "$TOP/$rootsnap/etc/schema-init" 2>/dev/null |
+    # no match (a clean install) is exit 1, which pipefail would turn into a silent abort
+    { grep -rlE "subvol=/?$homesub([, ]|$)" "$TOP/$rootsnap/usr/local/bin" "$TOP/$rootsnap/etc/schema-init" 2>/dev/null || true; } |
       while read -r f; do sed -i -E "s#subvol=/?$homesub([, ]|$)#subvol=$homesnap\1#g" "$f"; done
   fi
   umount_top
@@ -154,7 +155,22 @@ check_armable() {
 }
 
 cmd_arm() {
-  local n="${1:-2}" id
+  local force=0 n=2 id rc=0 a
+  for a in "$@"; do
+    # a stray word would land in grubenv as boot_counter and break the guard's GRUB arithmetic
+    case "$a" in --force) force=1 ;; ''|*[!0-9]*) die "usage: schema-snapshot arm [--force] [N]" ;; *) n="$a" ;; esac
+  done
+  # arming bets the next boot on this box coming back: verify first, as reboot does
+  if [ "$force" = 0 ]; then
+    schema-ctl verify --quiet --arming >&2 || rc=$?
+    case "$rc" in
+      0) ;;
+      1) die "not armed — fix the above; 'schema-snapshot arm --force' to override" ;;
+      2) die "not armed — fix the above or run 'schema-ctl verify --accept'; 'schema-snapshot arm --force' to override" ;;
+      3) die "not armed — verification could not resolve the above; 'schema-snapshot arm --force' to override" ;;
+      *) die "not armed — verification unavailable (schema-ctl verify exited $rc); 'schema-snapshot arm --force' to override" ;;
+    esac
+  fi
   check_armable
   id="$(newest_fallback_id)"
   [ -n "$id" ] || die "no snapshot boot entry to arm against; run 'schema-snapshot create' first"
@@ -179,7 +195,7 @@ case "${1:-}" in
   prune)  cmd_prune ;;
   delete) shift; cmd_delete "${1:-}" ;;
   list)   cmd_list ;;
-  arm)    shift; cmd_arm "${1:-2}" ;;
+  arm)    shift; cmd_arm "$@" ;;
   disarm) cmd_disarm ;;
-  *) die "usage: schema-snapshot {create [label]|list|prune|delete <name>|arm [N]|disarm}" ;;
+  *) die "usage: schema-snapshot {create [label]|list|prune|delete <name>|arm [--force] [N]|disarm}" ;;
 esac

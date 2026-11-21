@@ -30,7 +30,7 @@ done
 install -m 0755 distros/devuan/grub.d/11_schema-init /etc/grub.d/11_schema-init
 grub-mkconfig -o /boot/grub/grub.cfg
 if [ "$(cat /proc/1/comm)" = schema-init ]; then
-    schema-ctl reexec || echo "PID 1 keeps running the previous schema-init until the next reboot."
+    schema-ctl reexec || echo "PID 1 keeps running the previous schema-init; see above, then run 'schema-ctl reexec'."
 fi
 echo
 echo "Installed. Your current init is still the default boot entry."

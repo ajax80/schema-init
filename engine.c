@@ -2542,6 +2542,7 @@ static void ctl_cmd(int fd, char *line) {
                     excise_reason_name(services[i].excise_reason));
                 /* the verify settle wait judges failure by svc_failed(), not its own copy */
                 ctl_writef(fd, "service.%s.failed=%d\n", services[i].name, svc_failed(&services[i]));
+                ctl_writef(fd, "service.%s.critical=%d\n", services[i].name, !!(services[i].flags & SVC_CRITICAL));
                 if (services[i].bind_name[0]) {
                     ctl_writef(fd, "service.%s.bind=%s\n", services[i].name, services[i].bind_name);
                     ctl_writef(fd, "service.%s.bind_held=%d\n", services[i].name, services[i].bind_held);

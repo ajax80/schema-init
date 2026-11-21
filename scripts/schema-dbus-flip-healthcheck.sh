@@ -41,7 +41,7 @@ rollback() {
     "$FLIP" rollback >> "$LOG" 2>&1 || log "rollback reported error"
     rm -f "$COUNT"
     log "rolled back; rebooting into safe state"
-    schema-ctl reboot 2>/dev/null || reboot -f
+    schema-ctl reboot --force 2>/dev/null || reboot -f
     exit 0
 }
 

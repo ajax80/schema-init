@@ -505,9 +505,13 @@ __attribute__((unused)) static int time_is_now(const char *t) {
     return 1;
 }
 
+/* reboot/poweroff/halt -f or --force: schema-ctl's --force, the override its
+ * verify gate names. shutdown -f was skip-fsck, not a force. */
+static int power_force;
+
 /* Same table as scripts/schema-pi-halt, except there --help/-w/-f go to
  * systemd's own; here there is none, so help and wtmp-only do nothing and -f
- * still asks PID 1. Nothing is ever pending under schema-init: a delay done
+ * still asks PID 1 (skipping the verify gate). Nothing is ever pending under schema-init: a delay done
  * now is not what was asked, so it is refused, and -c has nothing to cancel. */
 __attribute__((unused)) static const char *power_args(const char *name, int argc, char **argv) {
     int shutdown = strcmp(name, "shutdown") == 0, seen_time = 0, j;
@@ -522,12 +526,14 @@ __attribute__((unused)) static const char *power_args(const char *name, int argc
         }
         if (strcmp(a, "--reboot") == 0) action = "reboot";
         else if (strcmp(a, "--poweroff") == 0 || strcmp(a, "--halt") == 0) action = "poweroff";
-        else if (strcmp(a, "--no-wall") == 0 || strcmp(a, "--no-wtmp") == 0 || strcmp(a, "--force") == 0) ;
+        else if (strcmp(a, "--force") == 0) power_force = !shutdown;
+        else if (strcmp(a, "--no-wall") == 0 || strcmp(a, "--no-wtmp") == 0) ;
         else if (a[0] == '-' && a[1] && a[1] != '-') {
             for (const char *c = a + 1; *c; c++) {
                 if (*c == 'w') return "";
                 if (*c == 'r') action = "reboot";
                 else if (strchr("pPhH", *c)) action = "poweroff";
+                else if (*c == 'f') power_force = !shutdown;
                 else if (!strchr("ndif", *c)) return power_refuse(name, a);
             }
         }
@@ -548,14 +554,20 @@ __attribute__((unused)) static const char *power_args(const char *name, int argc
 __attribute__((unused)) static const char *power_action(int argc, char **argv) {
     const char *base = strrchr(argv[0], '/');
     base = base ? base + 1 : argv[0];
-    int j;
+    int j, force = 0;
+    power_force = 0;
     if (strcmp(base, "reboot") == 0 || strcmp(base, "poweroff") == 0 || strcmp(base, "halt") == 0 ||
         strcmp(base, "shutdown") == 0)
         return power_args(base, argc, argv);
+    for (j = 1; j < argc; j++)
+        if (strcmp(argv[j], "--force") == 0 || (argv[j][0] == '-' && argv[j][1] != '-' && strchr(argv[j] + 1, 'f')))
+            force = 1;
     for (j = 1; j < argc; j++) {
         if (argv[j][0] == '-') continue;
+        power_force = force;
         if (strcmp(argv[j], "reboot") == 0) return "reboot";
         if (strcmp(argv[j], "poweroff") == 0 || strcmp(argv[j], "halt") == 0) return "poweroff";
+        power_force = 0;
         return NULL;
     }
     return NULL;
@@ -565,7 +577,7 @@ __attribute__((unused)) static int shim_dispatch(int argc, char **argv) {
     shim_user = 0;
     const char *power = power_action(argc, argv);
     if (power == power_refused) return 1;
-    if (power) return *power ? (run_ctl(power, NULL) == 0 ? 0 : 1) : 0;
+    if (power) return *power ? (run_ctl(power, power_force ? "--force" : NULL) == 0 ? 0 : 1) : 0;
     if (argc < 2) return 0;
     int j;
     int now = 0, global = 0;

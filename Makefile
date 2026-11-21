@@ -86,8 +86,8 @@ schema-init-static:
 # sources, not .o: aarch64/armhf rebuild schema-ctl in the same tree, and a
 # native sha256.o left over would link into the cross binary
 # verify's modules, not the service stack: svc_keys.c is the serializer's key table alone
-SCHEMA_CTL_SRCS = schema-ctl.c verify.c verify_baseline.c verify_boot.c verify_root.c verify_diff.c verify_disk.c svc_keys.c karg.c sha256.c
-schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify.h verify_baseline.h verify_boot.h verify_root.h verify_diff.h verify_disk.h svc_keys.h karg.h sha256.h
+SCHEMA_CTL_SRCS = schema-ctl.c verify.c verify_gate.c verify_baseline.c verify_boot.c verify_root.c verify_diff.c verify_disk.c svc_keys.c karg.c sha256.c
+schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify.h verify_gate.h verify_baseline.h verify_boot.h verify_root.h verify_diff.h verify_disk.h svc_keys.h karg.h sha256.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SCHEMA_CTL_SRCS) -lrt
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
@@ -437,6 +437,9 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) $(LDFLAGS) -DSCHEMA_VERIFY_TESTHOOKS -o $(TESTDIR)/schema-ctl-testhooks $(SCHEMA_CTL_SRCS) -lrt
 	$(CC) $(CFLAGS) tests/test_verify.c $(filter-out schema-ctl.c,$(SCHEMA_CTL_SRCS)) -o $(TESTDIR)/verify-unit && $(TESTDIR)/verify-unit
 	sh tests/test_verify_cli.sh $(TESTDIR)/schema-ctl-testhooks
+	sh tests/test_verify_gate.sh $(TESTDIR)/schema-ctl-testhooks
+	sh tests/test_gate_callers.sh
+	sh tests/test_snapshot_arm_gate.sh
 	$(CC) $(CFLAGS) tests/test_svc_audit0.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/audit0 && $(TESTDIR)/audit0
 	sh tests/test_zram_sizes.sh
 	$(CC) $(CFLAGS) tests/test_group_key.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/groupkey && sh tests/test_group_key.sh $(TESTDIR)/groupkey

@@ -196,9 +196,9 @@ static int ent_index(ctx_t *c, const char *id) {
 
 /* GRUB's bls_add_entry drops the later of two tied entries, in readdir order: one picked
  * by name may not be in the menu at all. 1 when i is such an entry (reported) */
-static int tied(ctx_t *c, const char *role, int i) {
+static int tied(ctx_t *c, const char *role, int i, tag_t sev) {
     if (i < 0 || c->tie[i] < 0) return 0;
-    emit(c, T_UNRES, "%s %s: names an entry GRUB may have dropped (tie with %s)", role, c->ents[i].id,
+    emit(c, sev, "%s %s: names an entry GRUB may have dropped (tie with %s)", role, c->ents[i].id,
          c->ents[c->tie[i]].id);
     return 1;
 }
@@ -479,6 +479,15 @@ static void services_report(ctx_t *c, char *text) {
         bad |= f[i].kind == F_FAIL || f[i].kind == F_CHANGE;
     }
     if (!bad) emit(c, T_PASS, "services match the baseline");
+    {
+        char path[PATH_MAX];
+        int e;
+        snprintf(path, sizeof path, "%s/boot-failed", c->o->state_dir);
+        char *bf = read_path(path, &e);
+        if (bf && bf[strspn(bf, " \n")])
+            emit(c, T_NOTE, "failed at the last good boot (not critical): %s", bf);
+        free(bf);
+    }
     free(f);
 }
 
@@ -522,7 +531,12 @@ static int fstab_has(const char *fstab, const char *dir) {
 /* ported from scripts/schema-snapshot esp_grubcfg_is_stub: a grub.cfg with 00_header
  * on the ESP is a full config that loads the ESP's own grubenv, so the guard's
  * variables in /boot/grub2/grubenv never reach it */
-static void esp_check(ctx_t *c) {
+/* FAIL when the guard is armed (or about to be); otherwise only what arm would need */
+static tag_t guard_tag(int armed) { return armed ? T_FAIL : T_NOTE; }
+/* likewise for what the guard alone needs going unchecked: unarmed it must not block reexec */
+static tag_t guard_unres(int armed) { return armed ? T_UNRES : T_NOTE; }
+
+static void esp_check(ctx_t *c, int armed) {
     char efi[PATH_MAX], p[PATH_MAX + 300], line[1024];
     int found = 0, full = 0;
     snprintf(efi, sizeof efi, "%s/EFI", c->o->esp);
@@ -532,7 +546,7 @@ static void esp_check(ctx_t *c) {
         return;
     }
     if (!d) {
-        if (fstab_has(c->o->fstab, c->o->esp)) emit(c, T_UNRES, "ESP %s not mounted: its grub.cfg not checked", c->o->esp);
+        if (fstab_has(c->o->fstab, c->o->esp)) emit(c, guard_unres(armed), "ESP %s not mounted: its grub.cfg not checked", c->o->esp);
         else emit(c, T_NOTE, "no ESP in fstab: ESP grub.cfg not applicable");
         return;
     }
@@ -549,7 +563,7 @@ static void esp_check(ctx_t *c) {
         while (!is_full && fgets(line, sizeof line, f)) is_full = !strncmp(line, "### BEGIN /etc/grub.d/00_header", 31);
         fclose(f);
         if (is_full)
-            emit(c, T_FAIL, "ESP /EFI/%s/grub.cfg is a full GRUB config that loads its own grubenv, not the guard's; "
+            emit(c, guard_tag(armed), "ESP /EFI/%s/grub.cfg is a full GRUB config that loads its own grubenv, not the guard's; "
                             "replace it with a configfile stub to /boot/grub2", e->d_name);
         full += is_full;
     }
@@ -558,7 +572,7 @@ static void esp_check(ctx_t *c) {
     else if (!full) emit(c, T_PASS, "ESP grub.cfg is a stub");
 }
 
-static void bootok_check(ctx_t *c, root_report_t *r) {
+static void bootok_check(ctx_t *c, root_report_t *r, int armed) {
     const char *t = r ? r->check_out : NULL, *p;
     char exe[512] = "";
     if (r && !t && r->init_path[0] && !r->is_schema_init) {
@@ -566,27 +580,27 @@ static void bootok_check(ctx_t *c, root_report_t *r) {
         return;
     }
     if (!t) {
-        emit(c, T_UNRES, "schema-bootok: the next boot's services could not be read; not checked");
+        emit(c, guard_unres(armed), "schema-bootok: the next boot's services could not be read; not checked");
         return;
     }
     if ((p = strstr(t, "\nerror: schema-bootok.svc:"))) {
         p += 26;
-        emit(c, T_FAIL, "schema-bootok.svc does not load on the next boot:%.*s", (int)strcspn(p, "\n"), p);
+        emit(c, guard_tag(armed), "schema-bootok.svc does not load on the next boot:%.*s", (int)strcspn(p, "\n"), p);
         return;
     }
     if (!(p = strstr(t, "\nschema-bootok.exec="))) {
-        emit(c, T_FAIL, "schema-bootok is not installed on the next boot's rail: an armed guard would roll back good boots");
+        emit(c, guard_tag(armed), "schema-bootok is not installed on the next boot's rail: an armed guard would roll back good boots");
         return;
     }
     p += 20;
     snprintf(exe, sizeof exe, "%.*s", (int)strcspn(p, "\t\n"), p);
     if (r->bootok_exec == 1) emit(c, T_PASS, "schema-bootok loads on the next boot; exec=%s is executable", exe);
-    else if (r->bootok_exec == 2) emit(c, T_FAIL, "schema-bootok exec=%s is not executable in the next boot's root", exe);
-    else emit(c, T_UNRES, "schema-bootok exec=%s: not checked", exe);
+    else if (r->bootok_exec == 2) emit(c, guard_tag(armed), "schema-bootok exec=%s is not executable in the next boot's root", exe);
+    else emit(c, guard_unres(armed), "schema-bootok exec=%s: not checked", exe);
 }
 
 static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, int act, int nor, root_report_t *ar) {
-    int guard = env_get(c, "schema_fallback_id") || env_get(c, "boot_counter");
+    int armed = c->o->arming || env_get(c, "schema_fallback_id") || env_get(c, "boot_counter"), guard = armed;
     const char *cfg = c->cfg;
     for (int i = 0; i < c->nents; i++)
         guard |= !strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11);
@@ -608,12 +622,14 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, int act, int nor
     for (int i = 0; nb->fallback && i < c->nrej; i++) rej |= !strcmp(c->rej[i], nb->fallback);
     if (nbrc == 2 && rej) ;
     else if (nbrc == 2) emit(c, T_FAIL, "schema_fallback_id=%s names no boot entry", nb->fallback);
-    else if (fb < 0 && !c->cut) emit(c, T_FAIL, "no schema-snap-* entry for the guard to fall back to");
+    else if (fb < 0 && !c->cut) emit(c, guard_tag(armed), "no schema-snap-* entry for the guard to fall back to");
     else if (fb < 0) ;
-    else if (tied(c, "guard fallback", fb)) ;
+    else if (tied(c, "guard fallback", fb, guard_unres(armed))) ;
     /* already reported once under Next boot: its FAILs must not count twice */
     else if (fb == act || fb == nor) emit(c, T_NOTE, "guard fallback %s: checked above", c->ents[fb].id);
-    else report_entry(c, "guard fallback", fb, T_FAIL, 1);
+    /* unarmed, GRUB never picks it on its own: a broken snapshot is a manual way back lost */
+    else report_entry(c, "guard fallback", fb, armed ? T_FAIL : T_WARN, 1);
+    if (!armed) emit(c, T_NOTE, "boot guard not armed: snapshots are manual ways back; 'schema-snapshot arm' checks the rest");
     for (int i = 0; i < c->nents; i++)
         if (i != fb && i != act && i != nor &&
             (!strncmp(c->ents[i].id, "schema-snap-", 12) || !strncmp(c->ents[i].id, "schema-good", 11)))
@@ -621,10 +637,10 @@ static void ways_back(ctx_t *c, int nbrc, const nextboot_t *nb, int act, int nor
 
     if (!cfg) emit(c, T_NOTE, "09_schema_fallback not checked: %s is unread (above)", c->o->grubcfg);
     else if (grubcfg_live_fallback(cfg)) emit(c, T_PASS, "09_schema_fallback is live in %s", c->o->grubcfg);
-    else emit(c, T_FAIL, "09_schema_fallback is not live code in %s: the guard can't fire "
+    else emit(c, guard_tag(armed), "09_schema_fallback is not live code in %s: the guard can't fire "
                          "(make install-bootguard; grub2-mkconfig -o %s)", c->o->grubcfg, c->o->grubcfg);
-    esp_check(c);
-    bootok_check(c, ar);
+    esp_check(c, armed);
+    bootok_check(c, ar, armed);
 }
 
 static char *read_kmsg(const char *path, int *err) {
@@ -729,7 +745,7 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         nbrc = nextboot_resolve(c.env + c.ncfg, c.nenv - c.ncfg, c.ents, c.nents, dk ? NULL : dflt, c.cut || c.posbad, &nb);
         act = ent_index(&c, nb.actual);
         nor = ent_index(&c, nb.normal);
-        int act_tied = tied(&c, "actual next boot", act), nor_tied = nor != act && tied(&c, "normal default", nor);
+        int act_tied = tied(&c, "actual next boot", act, T_UNRES), nor_tied = nor != act && tied(&c, "normal default", nor, T_UNRES);
         if (nor == act && act_tied) nor_tied = 1;
         if (act_tied) act = -2;
         if (nor_tied) nor = -2;

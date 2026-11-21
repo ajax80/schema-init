@@ -18,6 +18,7 @@
 #include "recorder_logic.h"
 #include "verify_baseline.h"
 #include "verify.h"
+#include "verify_gate.h"
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
 
@@ -278,8 +279,11 @@ static void usage(FILE *out) {
         "  reload [--evict]       re-read service files; --evict also SIGTERMs\n"
         "                         services no longer present in config\n"
         "  reload <svc>           exec_reload= or reload_signal= on a running service\n"
-        "  reexec [<path>]        replace the PID 1 binary in place (default: the\n"
-        "                         one it booted from); services keep running\n"
+        "  reexec [--force] [<path>]\n"
+        "                         replace the PID 1 binary in place (default: the\n"
+        "                         one it booted from); services keep running.\n"
+        "                         Runs verify --quiet first and refuses on exit 1, 2\n"
+        "                         or 3, or when verify can't run; --force skips it\n"
         "  start <svc>            start a service (alias: up)\n"
         "  stop <svc>             stop it and hold it down (alias: down)\n"
         "  restart <svc>\n"
@@ -294,7 +298,7 @@ static void usage(FILE *out) {
         "                         pressure episodes, oldest first; <t> is an epoch\n"
         "                         or HH:MM today. Read from shared memory; root sees\n"
         "                         full command lines\n"
-        "  verify [--quiet] [--accept]\n"
+        "  verify [--quiet] [--accept] [--arming]\n"
         "                         before a reboot: would the next boot come back, and\n"
         "                         would the way back work? Checks the boot entry GRUB\n"
         "                         picks next, its services against the last good\n"
@@ -303,7 +307,8 @@ static void usage(FILE *out) {
         "                         pass, 1 FAIL, 2 unaccepted CHANGE or lost baseline,\n"
         "                         3 unresolved, 64 usage. --quiet: findings and the\n"
         "                         result only; --accept: accept the current CHANGE\n"
-        "                         set (refused while anything FAILs)\n"
+        "                         set (refused while anything FAILs); --arming:\n"
+        "                         judge the guard as if armed (schema-snapshot arm)\n"
         "  verify --write-baseline [--wait-settled <secs>]\n"
         "                         save what this boot runs (the running binary's\n"
         "                         --check) as the baseline the next boot is diffed\n"
@@ -313,8 +318,11 @@ static void usage(FILE *out) {
         "  reset [<svc>]          clear restart/dormant counters and retry <svc>;\n"
         "                         no argument clears every counter and retries\n"
         "                         only what failed, not what was stopped or finished\n"
-        "  reboot\n"
-        "  poweroff\n"
+        "  reboot [--force]\n"
+        "  poweroff [--force]     from a terminal (stdin and stderr ttys), run\n"
+        "                         verify --quiet first and refuse on exit 1 or 2;\n"
+        "                         unresolved or unavailable: warn and go ahead.\n"
+        "                         --force skips it; scripts are never gated\n"
         "\n"
         "  --user <cmd...>        talk to this user's schema-user instead of PID 1\n"
         "  --user daemon-reload   re-import the user's unit files, then reload\n"
@@ -449,6 +457,9 @@ static uint64_t mono_ms(void) {
     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
 }
 
+/* what had failed (not critical) when the wait settled: recorded beside the baseline */
+static char settled_failed[1024];
+
 static int wait_settled(unsigned window_s) {
     const uint64_t give_up = mono_ms() + settle_give_up_ms(window_s);
     settle_t st = {0};
@@ -460,6 +471,7 @@ static int wait_settled(unsigned window_s) {
         conn_err = r < 0 ? errno : 0;
         if (r == 0 && strncmp(kv, "err:", 4)) {
             if (settle_step(&st, kv, mono_ms(), window_s)) {
+                settle_failed(kv, settled_failed, sizeof settled_failed);
                 free(kv);
                 return 0;
             }
@@ -625,7 +637,12 @@ static int cmd_write_baseline(long wait_s) {
         return 1;
     }
     free(out);
+    /* always rewritten, so an older boot's list never outlives its baseline */
+    if (verify_state_put(dir, "boot-failed", settled_failed, strlen(settled_failed)) < 0)
+        fprintf(stderr, "schema-ctl: %s/boot-failed: %s\n", dir, strerror(errno));
     printf("baseline written: %s/baseline\n", dir);
+    if (settled_failed[0])
+        printf("failed at this boot (not critical, not blocking): %s\n", settled_failed);
     return 0;
 }
 
@@ -633,6 +650,10 @@ int main(int argc, char **argv) {
     char cmd[256];
     char *rbuf;
     int i, r, whole;
+#ifdef SCHEMA_VERIFY_TESTHOOKS
+    const char *tsock = getenv("SCHEMA_VERIFY_CTL_SOCK");
+    if (tsock && tsock[0]) ctl_sock = tsock;
+#endif
 
     if (argc > 1 && strcmp(argv[1], "--user") == 0) {
         static char usock[PATH_MAX], udir[PATH_MAX], uskip[PATH_MAX];
@@ -682,10 +703,11 @@ int main(int argc, char **argv) {
         for (i = 2; i < argc && !bad; i++) {
             if (!strcmp(argv[i], "--quiet")) vo.quiet = 1;
             else if (!strcmp(argv[i], "--accept")) vo.accept = 1;
+            else if (!strcmp(argv[i], "--arming")) vo.arming = 1;
             else bad = 1;
         }
         if (bad) {
-            fprintf(stderr, "usage: schema-ctl verify [--quiet] [--accept]\n"
+            fprintf(stderr, "usage: schema-ctl verify [--quiet] [--accept] [--arming]\n"
                             "       schema-ctl verify --write-baseline [--wait-settled <secs>]\n");
             /* not 1: a gate reads 1 as a FAIL */
             return EX_USAGE;
@@ -749,6 +771,18 @@ int main(int argc, char **argv) {
         int has_ext = l > 4 && strcmp(argv[2] + l - 4, ".svc") == 0;
         snprintf(addpath, sizeof addpath, "%s/%s%s", svc_dir, argv[2], has_ext ? "" : ".svc");
         argv[2] = addpath;
+    }
+
+    if (!user_mode && (!strcmp(argv[1], "reboot") || !strcmp(argv[1], "poweroff") || !strcmp(argv[1], "reexec"))) {
+        int force = 0, n = 2;
+        for (i = 2; i < argc; i++) {
+            if (!strcmp(argv[i], "--force")) force = 1;
+            else argv[n++] = argv[i];
+        }
+        argc = n;
+        char act[PATH_MAX + 8];
+        snprintf(act, sizeof act, "%s%s%s", argv[1], argc == 3 ? " " : "", argc == 3 ? argv[2] : "");
+        if (verify_gate(act, force, isatty(0) && isatty(2), stderr)) return 1;
     }
 
     cmd[0] = '\0';

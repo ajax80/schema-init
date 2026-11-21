@@ -20,7 +20,9 @@ _schema_ctl() {
         trace)   COMPREPLY=($(compgen -W "--since" -- "$cur")) ;;
         reload)  COMPREPLY=($(compgen -W "--evict" -- "$cur")) ;;
         verify)  COMPREPLY=($(compgen -W "--quiet --accept --write-baseline --wait-settled" -- "$cur")) ;;
-        add|reexec) compopt -o filenames 2>/dev/null; COMPREPLY=($(compgen -f -- "$cur")) ;;
+        add)     compopt -o filenames 2>/dev/null; COMPREPLY=($(compgen -f -- "$cur")) ;;
+        reexec)  compopt -o filenames 2>/dev/null; COMPREPLY=($(compgen -W "--force" -- "$cur") $(compgen -f -- "$cur")) ;;
+        reboot|poweroff) COMPREPLY=($(compgen -W "--force" -- "$cur")) ;;
         analyze|start|up|stop|down|restart|cat|graph|pet|reset)
                  [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "$(_schema_ctl_svcs)" -- "$cur")) ;;
     esac

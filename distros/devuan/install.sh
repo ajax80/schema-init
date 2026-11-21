@@ -62,7 +62,7 @@ ln -sf /usr/sbin/shutdown.sysvinit $L/sysv/shutdown
 install -m 0755 $P/grub.d/11_schema-init /etc/grub.d/11_schema-init
 update-grub
 if [ "$(cat /proc/1/comm)" = schema-init ]; then
-    schema-ctl reexec || echo "PID 1 keeps running the previous schema-init until the next reboot."
+    schema-ctl reexec || echo "PID 1 keeps running the previous schema-init; see above, then run 'schema-ctl reexec'."
 fi
 [ -z "$dm" ] || [ -e "/etc/schema-init/services/$dm.svc" ] || echo "No service for display manager '$dm': write /etc/schema-init/services/$dm.svc (run it in the foreground)."
 echo
