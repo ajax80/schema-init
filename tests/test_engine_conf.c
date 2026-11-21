@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <limits.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 static void test_pid1_defaults(void) {
     assert(!strcmp(engine_paths.ctl_fallback, "./run/schema-init.sock"));
@@ -175,6 +176,55 @@ static void test_cmdline_modules_load(void) {
     assert(cmdline_modules_load("", names, 4) == 0);
 }
 
+static int outc[4], outn;
+static void rec_outcome(int idx, int o) { (void)idx; if (outn < 4) outc[outn++] = o; }
+
+/* A zombie whose parent is not us: kill(z, 0) succeeds and SIGKILL does
+ * nothing, like a killed main process that hasn't exited or been reaped yet.
+ * reap_ms < 0: never reaped (really stuck); else its parent reaps it then. */
+static pid_t zombie_holder(int reap_ms, pid_t *z) {
+    int p[2];
+    pid_t a;
+    assert(pipe(p) == 0);
+    if ((a = fork()) == 0) {
+        pid_t zz = fork();
+        if (zz == 0) _exit(0);
+        if (write(p[1], &zz, sizeof zz) != sizeof zz) _exit(1);
+        if (reap_ms >= 0) { usleep((useconds_t)reap_ms * 1000); waitpid(zz, NULL, 0); }
+        for (;;) pause();
+    }
+    assert(read(p[0], z, sizeof *z) == sizeof *z);
+    close(p[0]);
+    close(p[1]);
+    usleep(50000);   /* let zz exit */
+    return a;
+}
+
+/* one verdict per service: KILLED if the kill took within the wait, STUCK if
+ * it never did — never both, and never STUCK for one merely not reaped yet */
+static void test_shutdown_verdicts(void) {
+    int stuck;
+    for (stuck = 0; stuck <= 1; stuck++) {
+        pid_t z, a;
+        /* the kill lands at SIGTERM + 1 s grace; the reap comes 100 ms after it */
+        a = zombie_holder(stuck ? -1 : 1100, &z);
+        memset(&services[0], 0, sizeof services[0]);
+        strcpy(services[0].name, "zomb");
+        services[0].stop_timeout_sec = 1;
+        services[0].child_pid = z;   /* not our child: shut_reap can't reap it */
+        svc_count = 1;
+        outn = 0;
+        engine_hooks.shut_outcome = rec_outcome;
+        engine_stop_services();
+        svc_count = 0;
+        kill(a, SIGKILL);
+        waitpid(a, NULL, 0);
+        if (outn != 1 || outc[0] != (stuck ? SHUT_STUCK : SHUT_KILLED))
+            fprintf(stderr, "stuck=%d: %d verdicts, first %d\n", stuck, outn, outn ? outc[0] : -1);
+        assert(outn == 1 && outc[0] == (stuck ? SHUT_STUCK : SHUT_KILLED));
+    }
+}
+
 int main(void) {
     test_modload_conf_list();
     test_cmdline_modules_load();
@@ -184,6 +234,7 @@ int main(void) {
     test_excise_reason_from_exit();
     test_circuit_breaker();
     test_mkdir_p();
+    test_shutdown_verdicts();
     assert(!strcmp(engine_paths.ctl_sock, "/run/schema-init.sock"));
     assert(!strcmp(engine_paths.run_dir, "/run/schema-init"));
     assert(!strcmp(engine_paths.notify_sock, "/run/schema-init/notify"));

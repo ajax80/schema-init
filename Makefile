@@ -55,21 +55,21 @@ ifneq ($(SYSROOT),)
   CFLAGS += --sysroot=$(SYSROOT)
 endif
 
-SRCS    = init.c check.c karg.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c
+SRCS    = init.c check.c karg.c engine.c engine_conf.c schema.c service.c watch.c seccomp.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c rail.c rail_console.c schema_font.c
 OBJS    = $(SRCS:.c=.o)
 ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.o caps.o ns.o landlock.o svc_serial.o sha256.o
 # The core objects share these headers. Without this dependency an incremental
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h seccomp.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h svc_serial.h sha256.h
+CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h seccomp.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h svc_serial.h sha256.h rail.h rail_console.h rail_glyphs.h
 
 all: $(BINS)
 
 desktop:
 	$(MAKE) -C desktop
 
-schema-init: init.o check.o karg.o $(ENGINE_OBJS)
+schema-init: init.o check.o karg.o rail.o rail_console.o schema_font.o $(ENGINE_OBJS)
 	# no CFLAGS here, as before: an rpm build's -flto would turn this into a
 	# whole-program LTO link of PID 1 that CI never exercises.
 	# STATIC_LDFLAGS= (the sanitizer run) links with LDFLAGS, which carry the
@@ -105,7 +105,7 @@ schema-recorder: schema-recorder.c recorder.h recorder_logic.h
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h
+schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h rail_glyphs.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h udev_sched.h
@@ -135,7 +135,11 @@ check.o: pi_target.h pi_bootguard.h
 PI_KIT_EXAMPLES = $(wildcard services/pi-*.svc.example) services/udev.svc.example services/udev-trigger.svc.example \
 	services/dbus.svc.example services/sysctl.svc.example
 
-install: all
+fonts/schema-12x24.psfu.gz: fonts/schema-12x24.psfu
+	gzip -9n < $< > $@
+
+install: all fonts/schema-12x24.psfu.gz
+	install -D -m 0644 fonts/schema-12x24.psfu.gz $(DESTDIR)$(PREFIX)/lib/kbd/consolefonts/schema-12x24.psfu.gz
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(BINS) $(DESTDIR)$(BINDIR)/
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
@@ -291,7 +295,7 @@ check-hardening: $(BINS) $(OBJS)
 
 clean:
 	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl schema-init-pi udev-parity verify-rules-live verify-eprops-live libatomic_asneeded.a
-	rm -rf $(RELDIR) build
+	rm -rf $(RELDIR) build fonts/schema-12x24.psfu.gz
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
 
@@ -313,6 +317,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_recorder.c -o $(TESTDIR)/recorder && $(TESTDIR)/recorder
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o $(TESTDIR)/recorder-scenario -lrt && $(TESTDIR)/recorder-scenario
 	sh tests/test_recorder_daemon.sh
+	sh tests/test_board_look.sh
 	sh tests/test_schema_user.sh
 	sh tests/test_svc_reload_live.sh
 	sh tests/test_restart_policy_live.sh
@@ -334,6 +339,11 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	sh tests/test_pi_kit.sh
 	sh tests/test_schema_pi.sh
 	sh tests/test_deb_trigger.sh
+	$(MAKE) test-schema-font
+	$(MAKE) test-rail-render
+	$(MAKE) test-rail-state
+	$(MAKE) test-rail-console
+	$(MAKE) test-rail-wiring
 	sh tests/test_pi_halt.sh
 	sh tests/test_deb_version.sh
 	sh tests/test_devuan_boot.sh
@@ -499,3 +509,33 @@ verify-dbus-conformance:
 .PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-dbus-conformance
 
 
+
+# The schema font is generated, then committed (fonts/schema-12x24.{bdf,psfu},
+# schema_font.c), so building schema-init needs no python3. Regenerate after
+# editing tools/mkschemafont.py; test-schema-font fails if the copies drift.
+font:
+	python3 -I tools/mkschemafont.py fonts/spleen-12x24.bdf fonts/schema-12x24.bdf
+	python3 -I tools/bdf2psf.py fonts/schema-12x24.bdf fonts/schema-12x24.psfu
+	python3 -I tools/psf2c.py fonts/schema-12x24.psfu schema_font.c
+
+test-schema-font:
+	$(CC) $(CFLAGS) tests/test_schema_font.c schema_font.c -o $(TESTDIR)/schema-font && $(TESTDIR)/schema-font
+	@if command -v python3 >/dev/null; then \
+	  python3 -I tools/mkschemafont.py fonts/spleen-12x24.bdf $(TESTDIR)/sf.bdf && \
+	  python3 -I tools/bdf2psf.py $(TESTDIR)/sf.bdf $(TESTDIR)/sf.psfu && \
+	  python3 -I tools/psf2c.py $(TESTDIR)/sf.psfu $(TESTDIR)/sf.c && \
+	  cmp -s $(TESTDIR)/sf.bdf fonts/schema-12x24.bdf && cmp -s $(TESTDIR)/sf.psfu fonts/schema-12x24.psfu && \
+	  cmp -s $(TESTDIR)/sf.c schema_font.c || { echo "schema font: committed files drifted from tools/ (make font)"; exit 1; }; fi
+
+test-rail-render:
+	$(CC) $(CFLAGS) tests/test_rail_render.c rail.c schema_font.c -o $(TESTDIR)/rail-render && $(TESTDIR)/rail-render
+
+test-rail-state:
+	$(CC) $(CFLAGS) tests/test_rail_state.c rail.c schema_font.c -o $(TESTDIR)/rail-state && $(TESTDIR)/rail-state
+	sh tests/test_rail_events.sh
+
+test-rail-console:
+	$(CC) $(CFLAGS) tests/test_rail_console.c rail_console.c schema_font.c -o $(TESTDIR)/rail-console && $(TESTDIR)/rail-console
+
+test-rail-wiring:
+	$(CC) $(CFLAGS) tests/test_rail_wiring.c engine.c engine_conf.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c -lrt -o $(TESTDIR)/rail-wiring && $(TESTDIR)/rail-wiring

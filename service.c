@@ -2424,6 +2424,17 @@ static void rail_write(const char *line, size_t len) {
     close(fd);
 }
 
+void (*service_log_hook)(const service_t *svc, const char *event, const char *line, size_t n);
+
+void service_rail_note(const char *msg) {
+    char line[512];
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    int n = snprintf(line, sizeof line, "[%04d-%02d-%02d %02d:%02d:%02d] rail: %s\n", t->tm_year + 1900, t->tm_mon + 1,
+                     t->tm_mday, t->tm_hour, t->tm_min, t->tm_sec, msg);
+    if (n > 0) rail_write(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1);
+}
+
 void service_log(const service_t *svc, const char *event) {
     char line[512];
     int n;
@@ -2445,8 +2456,12 @@ void service_log(const service_t *svc, const char *event) {
         line[n - 1] = '\n';   /* a cut line still ends: the next one starts on its own */
     }
 
-    fputs(line, stdout);
-    fflush(stdout);
+    if (service_log_hook)
+        service_log_hook(svc, event, line, (size_t)n);
+    else {
+        fputs(line, stdout);
+        fflush(stdout);
+    }
 
     rail_write(line, (size_t)n);
 

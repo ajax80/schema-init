@@ -38,7 +38,13 @@ MOUNTNS="$WORK/test_mountns"
 cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$MOUNTNS" "$HERE/test_mountns.c" \
   || { echo "MOUNTNS HELPER BUILD FAILED"; exit 1; }
 SCTL="$WORK/schema-ctl"
-cc -static -O2 -std=c99 -D_GNU_SOURCE -I"$REPO" -o "$SCTL" "$REPO/schema-ctl.c" \
+# schema-ctl is several files since verify: take the list from the Makefile
+SCTL_SRCS=$(make -s -C "$REPO" --no-print-directory -f Makefile -f - print-sctl-srcs <<'MK'
+print-sctl-srcs:
+	@echo $(SCHEMA_CTL_SRCS)
+MK
+)
+cc -static -O2 -std=c99 -D_GNU_SOURCE -I"$REPO" -o "$SCTL" $(printf "$REPO/%s " $SCTL_SRCS) -lrt \
   || { echo "SCHEMA-CTL STATIC BUILD FAILED"; exit 1; }
 PRIVDROP="$WORK/test_privdrop"
 cc -static -O2 -std=c11 -D_GNU_SOURCE -o "$PRIVDROP" "$HERE/test_privdrop.c" \
@@ -971,6 +977,57 @@ EOF
 echo ">> initramfs: $(du -h "$WORK/initramfs.cpio.gz" | cut -f1)"
 
 # 4. Boot it.
+if [ "${VT:-0}" = 1 ]; then
+  # VT=1: the styled rail. UEFI gives simpledrm a framebuffer (fbcon, so the
+  # schema font can load); tty0 is the last console=, so it is PID 1's stdout.
+  # Screens are taken over QMP; the serial verdict below doesn't apply.
+  cp /usr/share/edk2/ovmf/OVMF_VARS.fd "$WORK/vars.fd"
+  echo ">> booting QEMU on a VGA console (VT=1)..."
+  qemu-system-x86_64 \
+    -enable-kvm -m 512 -smp 4 -no-reboot -nic none -machine q35 \
+    -drive if=pflash,format=raw,readonly=on,file=/usr/share/edk2/ovmf/OVMF_CODE.fd \
+    -drive if=pflash,format=raw,file="$WORK/vars.fd" \
+    -vga std -display none -qmp unix:"$WORK/qmp.sock",server,nowait -serial file:"$SERIAL" \
+    -kernel "$KERNEL" -initrd "$WORK/initramfs.cpio.gz" \
+    -append "console=ttyS0 console=tty0 rdinit=/sbin/schema-init panic=1 loglevel=4" \
+    < /dev/null >/dev/null 2>&1 &
+  QPID=$!
+  shot() {
+    python3 -I - "$WORK/qmp.sock" "$1" <<'PY'
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); f = s.makefile('rw')
+f.readline()
+for cmd in ({"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": sys.argv[2]}}):
+    f.write(json.dumps(cmd) + "\n"); f.flush(); f.readline()
+PY
+  }
+  # the test services' own reports scroll the rail away within a minute
+  for t in 3 6 12 25; do
+    sleep $((t - ${prev:-0})); prev=$t
+    shot "$WORK/vt-$t.ppm" && python3 -I -c "from PIL import Image; import sys; Image.open(sys.argv[1]).save(sys.argv[2])" \
+      "$WORK/vt-$t.ppm" "$OUT/vt-$t.png" && echo ">> screen at ${t}s: $OUT/vt-$t.png"
+  done
+  kill $QPID 2>/dev/null; wait $QPID 2>/dev/null
+  # styled = the schema palette's exact ONLINE green (3d dc 84; stock VGA green is
+  # 00 aa 00) on screen. The finish line's magenta waits for test-hang's 90 s cut,
+  # by which time the test reports have scrolled the rail away.
+  python3 -I - "$OUT"/vt-3.png "$OUT"/vt-6.png "$OUT"/vt-12.png "$OUT"/vt-25.png <<'PY'
+import sys
+from PIL import Image
+ok = False
+for f in sys.argv[1:]:
+    im = Image.open(f).convert('RGB')
+    c = {}
+    for p in im.get_flattened_data() if hasattr(im, 'get_flattened_data') else im.getdata():
+        c[p] = c.get(p, 0) + 1
+    mag, grn = c.get((0xc4, 0x6c, 0xff), 0), c.get((0x3d, 0xdc, 0x84), 0)
+    print(f"   {f}: magenta px={mag} green px={grn} size={im.size}")
+    ok |= grn > 200
+print(">> RESULT: " + ("PASS (styled rail on the VT; look at the PNGs)" if ok else "FAIL (no schema palette on screen)"))
+sys.exit(0 if ok else 1)
+PY
+  exit $?
+fi
 echo ">> booting QEMU (timeout ${TIMEOUT}s, kernel $(uname -r))..."
 timeout "$TIMEOUT" qemu-system-x86_64 \
   -enable-kvm -m 512 -smp 4 -no-reboot -nographic -nic none \

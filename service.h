@@ -598,6 +598,11 @@ static inline int service_listen_waiting(const service_t *svc) {
 
 /* log one line about the service's current schema state */
 void service_log(const service_t *svc, const char *event);
+/* PID 1 on a text VT draws the rail itself: set, it gets each event and the
+ * plain line in place of stdout. rail.log and the recorder are unchanged. */
+extern void (*service_log_hook)(const service_t *svc, const char *event, const char *line, size_t n);
+/* one plain line in rail.log, for the rail's own notes */
+void service_rail_note(const char *msg);
 
 /* kill all processes in the service's cgroup and remove it */
 int  cgroup_kill_path(const char *cg);

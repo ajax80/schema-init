@@ -48,11 +48,18 @@ typedef struct {
     void (*on_sigcont)(void);
     int  (*on_reaped)(pid_t pid, int status);
     void (*after_sockets)(void);
+    /* the shutdown sweep's verdict per service that was up when it began */
+    void (*shut_outcome)(int idx, int outcome);
 } engine_hooks_t;
+
+enum { SHUT_STOPPED, SHUT_KILLED, SHUT_EXITED, SHUT_STUCK };
+int svc_held_on_socket(const service_t *svc);
+int svc_failed(const service_t *s);
 
 extern engine_hooks_t engine_hooks;
 
 void engine_hook_noop(void);
+void engine_hook_outcome_none(int idx, int outcome);
 void engine_hook_pressure_none(int psi_fired);
 int64_t engine_hook_wake_none(int64_t now_m, int *tick);
 int  engine_hook_ctl_none(int fd, char *line);
