@@ -1009,7 +1009,7 @@ PY
   done
   kill $QPID 2>/dev/null; wait $QPID 2>/dev/null
   # styled = the schema palette's exact ONLINE green (3d dc 84; stock VGA green is
-  # 00 aa 00) on screen. The finish line's magenta waits for test-hang's 90 s cut,
+  # 00 aa 00) on screen. The finish line's violet waits for test-hang's 90 s cut,
   # by which time the test reports have scrolled the rail away.
   python3 -I - "$OUT"/vt-3.png "$OUT"/vt-6.png "$OUT"/vt-12.png "$OUT"/vt-25.png <<'PY'
 import sys
@@ -1020,8 +1020,8 @@ for f in sys.argv[1:]:
     c = {}
     for p in im.get_flattened_data() if hasattr(im, 'get_flattened_data') else im.getdata():
         c[p] = c.get(p, 0) + 1
-    mag, grn = c.get((0xc4, 0x6c, 0xff), 0), c.get((0x3d, 0xdc, 0x84), 0)
-    print(f"   {f}: magenta px={mag} green px={grn} size={im.size}")
+    vio, grn = c.get((0x8a, 0x6c, 0xff), 0), c.get((0x3d, 0xdc, 0x84), 0)
+    print(f"   {f}: violet px={vio} green px={grn} size={im.size}")
     ok |= grn > 200
 print(">> RESULT: " + ("PASS (styled rail on the VT; look at the PNGs)" if ok else "FAIL (no schema palette on screen)"))
 sys.exit(0 if ok else 1)

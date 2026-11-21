@@ -79,12 +79,14 @@ Palette (ANSI slot → RGB), from the approved mockup:
 | 1 red | CUT, errors | ff 4d 5e |
 | 2 green | ONLINE | 3d dc 84 |
 | 3 yellow | RETRY / friction | ff d2 3f |
-| 4 blue | STOPPED / dormant | 4d a3 ff |
-| 5 magenta | PERFECT, banner, track | c4 6c ff |
+| 4 blue | STOPPED / dormant | 3d 7b ff |
+| 5 violet | PERFECT, banner, track | 8a 6c ff |
 | 6 cyan | `//`, finish text | 3f e0 ff |
 | 7 white | text | c8 c8 d0 |
 | 8 bright black | dim (times, separators) | 5c 58 70 |
-| 9–15 bright | bright variants | ff 80 90, 7d ff b0, ff e6 80, 80 c0 ff, e2 9b ff, 90 f0 ff, ec ec f2 |
+| 9–15 bright | bright variants | ff 80 90, 7d ff b0, ff e6 80, 6f a0 ff, a9 9c ff, 90 f0 ff, ec ec f2 |
+
+Retuned 2026-11-20 (#555): slots 4, 5, 12, 13 moved from the original `4da3ff`/`c46cff`/`80c0ff`/`e29bff` — the purples read pink.
 
 SPAWN's dim green (1f 7a 4a) has no slot of its own: SPAWN uses green foreground with the dim attribute, or the builder may repurpose a slot if dim renders poorly on fbcon.
 
