@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# bdf2psf.py IN.bdf OUT.psfu — a 16x32, 256-glyph BDF to PSF2 with a Unicode table
+# bdf2psf.py IN.bdf OUT.psfu — a 12x24, 256-glyph BDF to PSF2 with a Unicode table
 # (one code point per glyph: its ENCODING).
 import struct
 import sys
 
-W, H, N = 16, 32, 256
+W, H, N = 12, 24, 256
 
 
 def main():
@@ -14,8 +14,8 @@ def main():
         line = line.rstrip('\n')
         if line.startswith('ENCODING '):
             cur = int(line.split()[1])
-        elif line.startswith('BBX ') and line.split()[1:] != ['16', '32', '0', '-6']:
-            sys.exit(f'bdf2psf: U+{cur:04X}: {line}, want BBX 16 32 0 -6')
+        elif line.startswith('BBX ') and line.split()[1:] != ['12', '24', '0', '-5']:
+            sys.exit(f'bdf2psf: U+{cur:04X}: {line}, want BBX 12 24 0 -5')
         elif line == 'BITMAP':
             rows = []
         elif line == 'ENDCHAR':

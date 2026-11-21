@@ -69,7 +69,7 @@ static void font_wanted_rules(void) {
     assert(rc_font_wanted("", "", "", 1280) == 1);
     assert(rc_font_wanted("", "", "ter-v32b", 1920) == 0);
     assert(rc_font_wanted("", "", "eurlatgr", 1920) == 1);
-    assert(rc_font_wanted("", "", "schema-16x32", 1920) == 1);
+    assert(rc_font_wanted("", "", "schema-12x24", 1920) == 1);
     assert(rc_font_wanted("", "nofont\n", "", 1920) == 0);
     assert(rc_font_wanted("a schema.rail_font=off b", "", "", 1920) == 0);
 }

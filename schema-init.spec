@@ -486,7 +486,7 @@ fi
 
 %files
 %license LICENSE fonts/LICENSE.spleen
-%{_prefix}/lib/kbd/consolefonts/schema-16x32.psfu.gz
+%{_prefix}/lib/kbd/consolefonts/schema-12x24.psfu.gz
 %doc README.md docs/
 %{_bindir}/schema-init
 %{_bindir}/schema-user
