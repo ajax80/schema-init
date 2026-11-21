@@ -74,4 +74,25 @@ D=$(board) || fail "default exit"
 [ "$P" = "$D" ] || fail "default (non-VT) output is not the plain board"
 echo "$D" | grep -q "limp-mode board" || fail "plain board changed"
 
+# --- Task 2: two columns, overflow, selection ---
+mk 68
+O=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=160x45 board) || fail "68 exit"
+for n in svc000 svc040 svc067; do echo "$O" | grep -q "$n" || fail "68@160x45 lacks $n"; done
+[ "$(echo "$O" | wc -l)" -le 45 ] || fail "68@160x45 taller than 45 lines"
+echo "$O" | grep -q "┣━.*┣━" || fail "68@160x45 not two columns"
+echo "$O" | grep -q "more" && fail "68@160x45 overflowed"
+O=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=160x45 SCHEMA_BOARD_SEL=50 board) || fail "sel exit"
+[ "$(echo "$O" | wc -l)" -le 45 ] || fail "sel: taller than 45 lines"
+echo "$O" | grep -q "┣━.*━►.*svc050" || fail "sel 50 not marked in the second column"
+[ "$(echo "$O" | grep -c "${ESC}\[1;93m━►")" -eq 1 ] || fail "sel: marker count != 1"
+O=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=80x45 board) || fail "68@80 exit"
+echo "$O" | grep -q "┣━.*┣━" && fail "80 cols drew two columns"
+echo "$O" | grep -q "… [0-9]* more" || fail "68@80x45 no overflow line"
+[ "$(echo "$O" | wc -l)" -le 45 ] || fail "68@80x45 taller than 45 lines"
+mk 120
+O=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=160x45 board) || fail "120 exit"
+echo "$O" | grep -q "… [0-9]* more" || fail "120@160x45 no overflow line"
+[ "$(echo "$O" | wc -l)" -le 45 ] || fail "120@160x45 taller than 45 lines"
+echo "$O" | head -1 | grep -q "S C H E M A" || fail "banner not first line"
+
 echo "PASS: board look"

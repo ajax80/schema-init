@@ -465,6 +465,18 @@ static sbuf_t newline(void) {
     return b;
 }
 
+/* Column-major slots for `items` cells in `cols` x `rows`: two columns when one
+ * would overflow and the screen is wide enough; the last slot becomes "… N more"
+ * when even that overflows. Returns the slots drawn. */
+static int board_layout(int items, int cols, int rows, int *ncol, int *per_col) {
+    int cap;
+    if (rows < 1) rows = 1;
+    *ncol = items > rows && cols >= COL_W + ROW_W ? 2 : 1;
+    cap = *ncol * rows;
+    *per_col = items <= cap ? (items + *ncol - 1) / *ncol : rows;
+    return items <= cap ? items : cap;
+}
+
 static void render_styled(const schema_shm_t *s) {
     static const uint8_t order[] = { STATE_PERFECT, STATE_FUNDAMENTAL, STATE_SETTLED, STATE_FULL_TRUST,
                                      STATE_NEW_PROCESS, STATE_RECOVERY, STATE_FRICTION, STATE_DORMANT,
@@ -494,14 +506,24 @@ static void render_styled(const schema_shm_t *s) {
              arrow_bytes(scr_cols - 3), arrow_line);
     }
 
-    for (i = 0; i < valid; i++) {
-        b = newline();
-        cell_svc(&b, &s->svc[i], interactive && i == sel, ab);
+    for (i = 0; i < valid; i++)
         for (size_t k = 0; k < sizeof order; k++) if (s->svc[i].state == order[k]) cnt[k]++;
-    }
-    for (i = 0; i < gc; i++) {
-        b = newline();
-        cell_group(&b, &s->groups[i], ab);
+    {
+        int items = valid + gc, head = nlines, foot = 1 + (interactive ? 1 + !!msg[0] : 0);
+        int ncol, per_col, shown = board_layout(items, scr_cols, scr_rows - head - foot, &ncol, &per_col);
+        for (int r = 0; r < per_col; r++) {
+            int any = 0;
+            for (int c = 0; c < ncol; c++) {
+                int k = c * per_col + r;
+                if (k >= shown) break;
+                if (!any) { b = newline(); any = 1; }
+                else sput(&b, "  ");
+                if (shown < items && k == shown - 1)
+                    sput(&b, "\033[90m%s %d more\033[0m%*s", ab->trunc, items - shown + 1, ROW_W - 8, "");
+                else if (k < valid) cell_svc(&b, &s->svc[k], interactive && k == sel, ab);
+                else cell_group(&b, &s->groups[k - valid], ab);
+            }
+        }
     }
 
     b = newline();
@@ -646,6 +668,8 @@ int main(int argc, char **argv) {
     }
 
     style = board_style(once);
+    /* test hook: show a selection in a --once render */
+    if (once && style != STYLE_PLAIN && (env = getenv("SCHEMA_BOARD_SEL"))) { interactive = 1; sel = atoi(env); }
     if ((env = getenv("SCHEMA_RECORDER_FAKETIME"))) roff = atol(env) - (long)time(NULL);
     rec_poll();
 
