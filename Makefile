@@ -523,12 +523,7 @@ font:
 
 test-schema-font:
 	$(CC) $(CFLAGS) tests/test_schema_font.c schema_font.c -o $(TESTDIR)/schema-font && $(TESTDIR)/schema-font
-	@if command -v python3 >/dev/null; then \
-	  python3 -I tools/mkschemafont.py fonts/spleen-12x24.bdf $(TESTDIR)/sf.bdf && \
-	  python3 -I tools/bdf2psf.py $(TESTDIR)/sf.bdf $(TESTDIR)/sf.psfu && \
-	  python3 -I tools/psf2c.py $(TESTDIR)/sf.psfu $(TESTDIR)/sf.c && \
-	  cmp -s $(TESTDIR)/sf.bdf fonts/schema-12x24.bdf && cmp -s $(TESTDIR)/sf.psfu fonts/schema-12x24.psfu && \
-	  cmp -s $(TESTDIR)/sf.c schema_font.c || { echo "schema font: committed files drifted from tools/ (make font)"; exit 1; }; fi
+	TESTDIR=$(TESTDIR) sh tests/test_font_drift.sh
 
 test-rail-render:
 	$(CC) $(CFLAGS) tests/test_rail_render.c rail.c schema_font.c -o $(TESTDIR)/rail-render && $(TESTDIR)/rail-render
