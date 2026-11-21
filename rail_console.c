@@ -39,7 +39,7 @@ int rc_font_wanted(const char *cmdline, const char *rail_conf, const char *vcons
     /* the box's own font choice wins; the stock ones (eurlatgr, Debian's Fixed) don't count as a choice */
     return !vconsole_font || !vconsole_font[0] || !strcmp(vconsole_font, "eurlatgr") ||
            !strcmp(vconsole_font, "Fixed") ||   /* Debian console-setup's stock FONTFACE */
-           !strcmp(vconsole_font, "schema-12x24");
+           !strcmp(vconsole_font, "schema-10x20");
 }
 
 /* KD_FONT_OP_GET writes at a 32-row pitch, up to 512 glyphs, 32 px wide */
@@ -65,7 +65,7 @@ rc_font_result_t rc_font_load(int fd) {
     int font_changed = 0;
 
     if (xioctl(fd, KDFONTOP, &get) < 0 || xioctl(fd, GIO_UNIMAP, &map) < 0) return RC_FONT_SKIPPED;
-    if (font_set(fd, 12, 24, 256, (unsigned char *)schema_font_glyphs) == 0) {
+    if (font_set(fd, 10, 20, 256, (unsigned char *)schema_font_glyphs) == 0) {
         font_changed = 1;
         if (map_set(fd, (struct unipair *)schema_font_unimap, (unsigned short)schema_font_unimap_len) == 0)
             return RC_FONT_OK;
