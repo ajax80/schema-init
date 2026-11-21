@@ -114,17 +114,17 @@ static void palette(void) {
 
     reset(); fail_req = PIO_CMAP; fail_n = 1;
     assert(rc_palette_apply(3, path) == -1);
-    assert(access(path, F_OK) == -1);   /* nothing applied: nothing to restore */
+    assert(open(path, O_RDONLY) == -1 && errno == ENOENT);   /* nothing applied: nothing to restore */
 
     reset();
     assert(rc_palette_apply(3, path) == 0);
     assert(called(GIO_CMAP, -1) == 1 && !memcmp(cmap_now, rc_schema_palette, 48));
+    struct stat st;
     fd = open(path, O_RDONLY);
     assert(fd >= 0 && read(fd, b, sizeof b) == 48);
+    assert(fstat(fd, &st) == 0 && (st.st_mode & 0777) == 0600);
     close(fd);
     for (int i = 0; i < 48; i++) assert(b[i] == 0x11);
-    struct stat st;
-    assert(stat(path, &st) == 0 && (st.st_mode & 0777) == 0600);
 
     /* the re-exec'd PID 1: the original is already saved, never saved again */
     reset();
