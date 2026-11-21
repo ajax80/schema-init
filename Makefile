@@ -317,6 +317,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_recorder.c -o $(TESTDIR)/recorder && $(TESTDIR)/recorder
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o $(TESTDIR)/recorder-scenario -lrt && $(TESTDIR)/recorder-scenario
 	sh tests/test_recorder_daemon.sh
+	sh tests/test_board_look.sh
 	sh tests/test_schema_user.sh
 	sh tests/test_svc_reload_live.sh
 	sh tests/test_restart_policy_live.sh

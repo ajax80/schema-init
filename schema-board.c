@@ -25,6 +25,7 @@
  * See docs/superpowers/specs/2026-06-14-limp-mode-design.md.
  */
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,7 @@
 #include "schema.h"
 #include "schema_shm.h"
 #include "recorder_logic.h"
+#include "rail_glyphs.h"
 #include <sys/ioctl.h>
 
 #define CTL_SOCK_PATH "/run/schema-init.sock"
@@ -250,21 +252,26 @@ static int rec_poll(void) {
     return changed;
 }
 
-static void put_arrow(void) {
-    struct winsize ws;
-    int cols = 80, left, i = 0;
-    if (!arrow_shade || !arrow_line[0]) return;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) cols = ws.ws_col;
-    left = cols - 2;
+/* bytes of arrow_line that fill at most `left` columns, cut on a UTF-8 boundary */
+static int arrow_bytes(int left) {
+    int i = 0;
     while (arrow_line[i] && left > 0) {
         i++;
         while (((unsigned char)arrow_line[i] & 0xc0) == 0x80) i++;
         left--;
     }
-    printf(" %s%.*s\033[0m\n", arrow_shade == 1 ? "\033[1;31m" : "\033[90m", i, arrow_line);
+    return i;
 }
 
-static void render(const schema_shm_t *s) {
+static void put_arrow(void) {
+    struct winsize ws;
+    int cols = 80;
+    if (!arrow_shade || !arrow_line[0]) return;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) cols = ws.ws_col;
+    printf(" %s%.*s\033[0m\n", arrow_shade == 1 ? "\033[1;31m" : "\033[90m", arrow_bytes(cols - 2), arrow_line);
+}
+
+static void render_plain(const schema_shm_t *s) {
     int i, valid;
     fputs("\033[2J\033[H", stdout);                       /* clear + home */
     printf("\033[1m schema-init — limp-mode board   "
@@ -334,6 +341,207 @@ static void render(const schema_shm_t *s) {
         if (msg[0]) printf(" %s\n", msg);
     }
     fflush(stdout);
+}
+
+/* ---- the rail look: same font, palette, chips and glyphs as PID 1's boot rail ---- */
+
+enum { STYLE_PLAIN = 0, STYLE_ASCII, STYLE_FONT };
+#define ROW_W  78   /* visible columns per cell; two cells + gutter fit 160 */
+#define COL_W  80
+#define NAME_W 22
+#define MAXLN  128
+
+static int style = STYLE_PLAIN;
+static int scr_cols = 80, scr_rows = 24;
+
+/* Plain for pipes, --once and serial: vmtest and the recorder test read that. */
+static int board_style(int once) {
+    const char *e = getenv("SCHEMA_BOARD_STYLE");
+    struct console_font_op f = { .op = KD_FONT_OP_GET, .width = 32, .height = 32, .charcount = 512 };
+    int m = -1;
+    if (e) return !strcmp(e, "font") ? STYLE_FONT : !strcmp(e, "ascii") ? STYLE_ASCII : STYLE_PLAIN;
+    if (once || ioctl(STDOUT_FILENO, KDGETMODE, &m) < 0 || m != KD_TEXT) return STYLE_PLAIN;
+    /* NULL data asks only the size: the rail glyphs exist only in schema-12x24 */
+    return ioctl(STDOUT_FILENO, KDFONTOP, &f) == 0 && f.width == 12 && f.height == 24 ? STYLE_FONT : STYLE_ASCII;
+}
+
+static void screen_size(void) {
+    struct winsize ws;
+    const char *e = getenv("SCHEMA_BOARD_SIZE");
+    if (e && sscanf(e, "%dx%d", &scr_cols, &scr_rows) == 2) return;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0) {
+        scr_cols = ws.ws_col;
+        scr_rows = ws.ws_row;
+    }
+}
+
+static const char *st_chip(uint8_t s) {
+    switch (s) {
+        case STATE_PERFECT:     return "30;45";
+        case STATE_FULL_TRUST:
+        case STATE_FUNDAMENTAL:
+        case STATE_SETTLED:     return "30;42";
+        case STATE_NEW_PROCESS: return "2;30;42";
+        case STATE_RECOVERY:
+        case STATE_FRICTION:    return "30;43";
+        case STATE_DORMANT:     return "30;44";
+        case STATE_EXCISED:     return "30;41";
+        default:                return "30;47";
+    }
+}
+
+typedef struct { char *p; size_t sz, n; } sbuf_t;
+
+static void sput(sbuf_t *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void sput(sbuf_t *b, const char *fmt, ...) {
+    va_list ap;
+    int r;
+    if (b->n >= b->sz) return;
+    va_start(ap, fmt);
+    r = vsnprintf(b->p + b->n, b->sz - b->n, fmt, ap);
+    va_end(ap);
+    if (r > 0) b->n = b->n + (size_t)r < b->sz ? b->n + (size_t)r : b->sz - 1;
+}
+
+/* Names come from .svc files: printable ASCII as-is, anything else one '?',
+ * so nothing a name holds can move the cursor on tty8. Fixed width. */
+static void put_name(sbuf_t *b, const char *in, int w, const struct rail_alphabet *ab) {
+    const unsigned char *s = (const unsigned char *)in;
+    int total = 0, cols = 0;
+    for (const unsigned char *q = s; *q; q++) if ((*q & 0xc0) != 0x80) total++;
+    for (; *s && cols < w; s++) {
+        if ((*s & 0xc0) == 0x80) continue;
+        if (total > w && cols == w - 1) { sput(b, "%s", ab->trunc); cols++; break; }
+        sput(b, "%c", *s >= 0x20 && *s < 0x7f ? *s : '?');
+        cols++;
+    }
+    for (; cols < w; cols++) sput(b, " ");
+}
+
+static void put_lead(sbuf_t *b, int selected, const struct rail_alphabet *ab) {
+    if (selected) sput(b, "\033[1;93m%s\033[0m ", style == STYLE_FONT ? "━►" : "->");
+    else sput(b, "\033[35m%s\033[0m ", ab->branch);
+}
+
+static void cell_svc(sbuf_t *b, const shm_svc_t *v, int selected, const struct rail_alphabet *ab) {
+    char name[65], deck[8] = "";
+    int held = (v->limp & SHM_LIMP_STANDBY) && v->state == STATE_EXCISED;
+    int vis = 2 + 1 + NAME_W + 1 + 13 + 1 + 21;
+    memcpy(name, v->name, 64);
+    name[64] = '\0';
+    if (v->card_count) snprintf(deck, sizeof deck, "%u/%u", v->card_played, v->card_count);
+    put_lead(b, selected, ab);
+    sput(b, selected ? "\033[1;97m" : "\033[97m");
+    put_name(b, name, NAME_W, ab);
+    sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3u %7d %3d %5s\033[0m",
+         held ? "2;30;47" : st_chip(v->state), held ? "STANDBY" : st_name(v->state),
+         v->weight, v->child_pid, v->restart_count, deck);
+    if (v->limp & (SHM_LIMP_FALLBACK | SHM_LIMP_STANDIN)) {
+        sput(b, " \033[33m%s\033[0m", v->limp & SHM_LIMP_FALLBACK ? "limping " : "stand-in");
+        vis += 9;
+    }
+    for (; vis < ROW_W; vis++) sput(b, " ");
+}
+
+static void cell_group(sbuf_t *b, const shm_group_t *g, const struct rail_alphabet *ab) {
+    char name[65];
+    int vis = 2 + 1 + NAME_W + 1 + 13 + 1 + 11;
+    memcpy(name, g->name, 64);
+    name[64] = '\0';
+    sput(b, "\033[36m%s\033[0m \033[96m", ab->branch_rt);
+    put_name(b, name, NAME_W, ab);
+    sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3d members\033[0m", st_chip(g->state), st_name(g->state),
+         g->member_count);
+    for (; vis < ROW_W; vis++) sput(b, " ");
+}
+
+static char lines[MAXLN][2048];
+static int nlines;
+
+static sbuf_t newline(void) {
+    sbuf_t b = { lines[nlines], sizeof lines[0], 0 };
+    lines[nlines][0] = '\0';
+    if (nlines < MAXLN - 1) nlines++;
+    return b;
+}
+
+static void render_styled(const schema_shm_t *s) {
+    static const uint8_t order[] = { STATE_PERFECT, STATE_FUNDAMENTAL, STATE_SETTLED, STATE_FULL_TRUST,
+                                     STATE_NEW_PROCESS, STATE_RECOVERY, STATE_FRICTION, STATE_DORMANT,
+                                     STATE_EXCISED };
+    const struct rail_alphabet *ab = style == STYLE_FONT ? &rail_font_ab : &rail_ascii_ab;
+    char host[65] = "";
+    int i, valid = s->count, gc = s->group_count, cnt[sizeof order] = { 0 };
+    sbuf_t b;
+
+    if (valid < 0) valid = 0;
+    if (valid > SCHEMA_SHM_MAX) valid = SCHEMA_SHM_MAX;
+    if (gc < 0) gc = 0;
+    if (gc > SCHEMA_SHM_MAX_GROUPS) gc = SCHEMA_SHM_MAX_GROUPS;
+    gethostname(host, sizeof host - 1);
+    screen_size();
+    nlines = 0;
+
+    b = newline();
+    sput(&b, "\033[35m%s\033[0m \033[95mS C H E M A\033[36m//\033[92mB O A R D\033[0m \033[35m%s\033[0m  \033[90m",
+         ab->banner_l, ab->banner_r);
+    put_name(&b, host, (int)strnlen(host, 32), ab);
+    sput(&b, " %s %s %s %d services %s seq %u\033[0m", ab->sep, sys_name(s->system_state), ab->sep, valid, ab->sep,
+         s->seq);
+    if (arrow_shade && arrow_line[0]) {
+        b = newline();
+        sput(&b, "\033[35m%s\033[0m %s%.*s\033[0m", ab->track_v, arrow_shade == 1 ? "\033[1;31m" : "\033[90m",
+             arrow_bytes(scr_cols - 3), arrow_line);
+    }
+
+    for (i = 0; i < valid; i++) {
+        b = newline();
+        cell_svc(&b, &s->svc[i], interactive && i == sel, ab);
+        for (size_t k = 0; k < sizeof order; k++) if (s->svc[i].state == order[k]) cnt[k]++;
+    }
+    for (i = 0; i < gc; i++) {
+        b = newline();
+        cell_group(&b, &s->groups[i], ab);
+    }
+
+    b = newline();
+    sput(&b, "\033[35m%s\033[0m", ab->finish);
+    for (size_t k = 0; k < sizeof order; k++)
+        if (cnt[k]) sput(&b, " \033[%sm %d %s \033[0m", st_chip(order[k]), cnt[k], st_name(order[k]));
+    if (interactive) {
+        int have = valid > 0 && sel >= 0 && sel < valid;
+        char name[65] = "";
+        if (have) { memcpy(name, s->svc[sel].name, 64); name[64] = '\0'; }
+        b = newline();
+        if (mode == MODE_CONFIRM && have) {
+            const char *verb = card_for(s->svc[sel].state);
+            sput(&b, "\033[1;93m%s\033[0m \033[1m%s ", style == STYLE_FONT ? "━►" : "->", verb);
+            put_name(&b, name, (int)strnlen(name, 64), ab);
+            sput(&b, "?\033[0m  \033[90mschema-ctl %s ", verb);
+            put_name(&b, name, (int)strnlen(name, 64), ab);
+            sput(&b, "\033[0m   \033[30;42m y \033[0m apply  \033[30;47m n \033[0m cancel");
+        } else {
+            sput(&b, "\033[90m%s up/down or j/k  enter: card  ctrl-C: quit", ab->sep);
+            if (have) {
+                sput(&b, "   card for ");
+                put_name(&b, name, (int)strnlen(name, 64), ab);
+                sput(&b, ": schema-ctl %s", card_for(s->svc[sel].state));
+            }
+            sput(&b, "\033[0m");
+        }
+        if (msg[0]) { b = newline(); sput(&b, " %s", msg); }
+    }
+
+    /* no newline after the last line: a full screen must not scroll the banner off */
+    fputs("\033[H\033[2J", stdout);
+    for (i = 0; i < nlines; i++) printf("%s%s", i ? "\n" : "", lines[i]);
+    if (style != STYLE_PLAIN && !isatty(STDOUT_FILENO)) fputs("\n", stdout);
+    fflush(stdout);
+}
+
+static void render(const schema_shm_t *s) {
+    if (style == STYLE_PLAIN) render_plain(s);
+    else render_styled(s);
 }
 
 static void usage(FILE *out) {
@@ -437,6 +645,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    style = board_style(once);
     if ((env = getenv("SCHEMA_RECORDER_FAKETIME"))) roff = atol(env) - (long)time(NULL);
     rec_poll();
 
