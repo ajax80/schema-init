@@ -1780,7 +1780,7 @@ static int64_t pid1_wake_due(int64_t now_m, int *tick) {
         *tick = 1;
     for (i = 0; !*tick && i < svc_count; i++)
         if (services[i].priority == PRIO_CRITICAL && services[i].child_pid > 0) {
-            due = cpu_check_due;
+            if (cpu_check_due < due) due = cpu_check_due;   /* never push the rail's deadline out */
             break;
         }
     if (watchdog_fd >= 0 && now_m + watchdog_pet_ms < due)

@@ -3671,6 +3671,7 @@ int engine_load(const char *svc_dir) {
 }
 #define SHUT_TOTAL_MS  12000
 #define SHUT_SLOW_MS     250
+#define SHUT_STUCK_MS   1000   /* how long a SIGKILLed service gets to be gone */
 
 static int shut_depends_on(const service_t *s, int target) {
     int k, m;
@@ -3806,8 +3807,7 @@ static void shutdown_ordered(void) {
                          services[i].name, (unsigned long long)grace);
                 engine_hooks.shut_log(msg);
                 final_signal(&services[i]);
-                killed[i] = 1;
-                if (!told[i]) { told[i] = 1; engine_hooks.shut_outcome(i, SHUT_KILLED); }
+                killed[i] = 1;   /* its verdict waits for the kill to take, below */
                 continue;
             }
             if (hold && !(services[i].flags & SVC_STOP_FIRST)) continue;
@@ -3843,9 +3843,25 @@ static void shutdown_ordered(void) {
         first = 0;
         usleep(20000);
     }
-    /* killed and still there (D state): the kill didn't take */
+    /* A kill is instant but the exit and the reap are not: give the killed up to
+     * SHUT_STUCK_MS to go, then KILLED or STUCK (D state) — one verdict each.
+     * process mode judges only the main pid; its leftovers are the final sweep's. */
+    for (uint64_t until = monotonic_ms() + SHUT_STUCK_MS;;) {
+        int pending = 0;
+        shut_reap();
+        for (i = 0; i < svc_count; i++) {
+            if (!killed[i] || told[i]) continue;
+            if (services[i].kill_mode == KILL_MODE_PROCESS
+                    ? services[i].child_pid > 0 && kill(services[i].child_pid, 0) == 0
+                    : svc_signal_all(&services[i], 0) > 0)
+                pending = 1;
+            else { told[i] = 1; engine_hooks.shut_outcome(i, SHUT_KILLED); }
+        }
+        if (!pending || monotonic_ms() >= until) break;
+        usleep(20000);
+    }
     for (i = 0; i < svc_count; i++)
-        if (killed[i] && svc_signal_all(&services[i], 0) > 0) engine_hooks.shut_outcome(i, SHUT_STUCK);
+        if (killed[i] && !told[i]) { told[i] = 1; engine_hooks.shut_outcome(i, SHUT_STUCK); }
     snprintf(msg, sizeof msg, "services down in %llu ms",
              (unsigned long long)(monotonic_ms() - start));
     engine_hooks.shut_log(msg);

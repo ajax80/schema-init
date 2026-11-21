@@ -36,8 +36,9 @@ int rc_styled(int fd, const char *cmdline, const char *rail_conf) {
 int rc_font_wanted(const char *cmdline, const char *rail_conf, const char *vconsole_font, int fb_xres) {
     if (fb_xres < 1280) return 0;
     if (has_word(cmdline, "schema.rail_font=off") || has_word(rail_conf, "nofont")) return 0;
-    /* the box's own font choice wins; the stock one doesn't count as a choice */
+    /* the box's own font choice wins; the stock ones (eurlatgr, Debian's Fixed) don't count as a choice */
     return !vconsole_font || !vconsole_font[0] || !strcmp(vconsole_font, "eurlatgr") ||
+           !strcmp(vconsole_font, "Fixed") ||   /* Debian console-setup's stock FONTFACE */
            !strcmp(vconsole_font, "schema-12x24");
 }
 
@@ -84,12 +85,15 @@ const unsigned char rc_schema_palette[48] = {
 };
 
 static int read48(const char *path, unsigned char *b) {
+    unsigned char t[49];   /* one spare byte tells a longer file from a 48-byte one */
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     ssize_t n;
     if (fd < 0) return -1;
-    n = read(fd, b, 49);
+    n = read(fd, t, sizeof t);
     close(fd);
-    return n == 48 ? 0 : -1;
+    if (n != 48) return -1;
+    memcpy(b, t, 48);
+    return 0;
 }
 
 static int write48(const char *path, const unsigned char *b) {

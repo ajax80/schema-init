@@ -70,6 +70,7 @@ static void font_wanted_rules(void) {
     assert(rc_font_wanted("", "", "ter-v32b", 1920) == 0);
     assert(rc_font_wanted("", "", "eurlatgr", 1920) == 1);
     assert(rc_font_wanted("", "", "schema-12x24", 1920) == 1);
+    assert(rc_font_wanted("", "", "Fixed", 1920) == 1);   /* Debian console-setup stock FONTFACE */
     assert(rc_font_wanted("", "nofont\n", "", 1920) == 0);
     assert(rc_font_wanted("a schema.rail_font=off b", "", "", 1920) == 0);
 }
@@ -139,6 +140,14 @@ static void palette(void) {
     memset(cmap_now, 0, sizeof cmap_now);
     assert(rc_palette_restore(path, vt) == 0);
     for (int i = 0; i < 48; i++) assert(cmap_now[i] == 0x11);
+
+    /* a saved palette of the wrong size is refused, and reading it stays in bounds */
+    reset();
+    fd = open(path, O_WRONLY | O_TRUNC);
+    memset(b, 0x22, sizeof b);
+    assert(write(fd, b, sizeof b) == (ssize_t)sizeof b);
+    close(fd);
+    assert(rc_palette_restore(path, vt) == -1 && ncalls == 0);
 
     reset();
     unlink(path);

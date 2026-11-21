@@ -62,7 +62,7 @@ ENGINE_OBJS = engine.o engine_conf.o schema.o service.o watch.o seccomp.o group.
 # build after a header edit (e.g. a service_t field) rebuilds only the changed
 # .c, leaving the others with a stale struct layout — the linked PID 1 then hangs
 # at boot on an ABI mismatch. %.o: %.c alone does not capture header deps.
-CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h seccomp.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h svc_serial.h sha256.h
+CORE_HDRS = engine.h schema.h schema_shm.h service.h watch.h calendar.h dynuser.h seccomp.h reexec_state.h group.h caps.h ns.h landlock.h notify.h coredump.h svc_dropins.h recorder.h svc_serial.h sha256.h rail.h rail_console.h rail_glyphs.h
 
 all: $(BINS)
 
@@ -105,7 +105,7 @@ schema-recorder: schema-recorder.c recorder.h recorder_logic.h
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h
+schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h rail_glyphs.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h udev_sched.h

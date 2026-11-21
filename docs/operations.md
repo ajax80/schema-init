@@ -45,7 +45,7 @@ On a VT in text mode PID 1 draws the boot as a status display (README, "The rail
 
 - Plain lines whenever stdout isn't a VT in `KD_TEXT` (serial console, log file, Plymouth), and for the rest of the boot if any font or palette ioctl fails (`rail.log` says which).
 - `rail.log` is unchanged: the same plain line as before, styled mode or not.
-- Off: `schema.rail=plain` (cmdline) or `plain` in `/etc/schema-init/rail`. Font only off: `schema.rail_font=off` or `nofont`. The font also skips itself under 1280 px, without `/dev/fb0`, or when `/etc/vconsole.conf` `FONT=` (Debian `/etc/default/console-setup` `FONTFACE=`) names another font.
+- Off: `schema.rail=plain` (cmdline) or `plain` in `/etc/schema-init/rail`. Font only off: `schema.rail_font=off` or `nofont`. The font also skips itself under 1280 px, without `/dev/fb0`, or when `/etc/vconsole.conf` `FONT=` (Debian `/etc/default/console-setup` `FONTFACE=`) names another font (the stock `eurlatgr` and `Fixed` don't count).
 - The pre-schema palette is kept in `/run/schema-init/console-orig` so a re-exec'd PID 1 restores the original, not its own.
 - `tests/livetest/vmtest-vt.sh` boots the build on a UEFI framebuffer console in QEMU and saves screenshots.
 
