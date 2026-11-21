@@ -96,7 +96,7 @@ echo "$O" | grep -q "… [0-9]* more" || fail "120@160x45 no overflow line"
 echo "$O" | head -1 | grep -q "S C H E M A" || fail "banner not first line"
 
 # --- final review: lines clipped to the screen, footer kept on tall screens ---
-vis_max() { sed "s/${ESC}\[[0-9;]*[A-Za-z]//g" | LC_ALL=C.UTF-8 awk '{ n = length($0); if (n > m) m = n } END { print m + 0 }'; }
+vis_max() { sed "s/${ESC}\[[0-9;]*[A-Za-z]//g" | LC_ALL=C tr -d '\200-\277' | LC_ALL=C awk '{ n = length($0); if (n > m) m = n } END { print m + 0 }'; }  # strip UTF-8 continuation bytes: mawk/busybox length() counts bytes
 mk 68
 for st in font ascii; do
     O=$(SCHEMA_BOARD_STYLE=$st SCHEMA_BOARD_SIZE=80x25 board) || fail "$st 80x25 exit"
