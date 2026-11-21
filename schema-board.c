@@ -355,14 +355,23 @@ static int style = STYLE_PLAIN;
 static int scr_cols = 80, scr_rows = 24;
 
 /* Plain for pipes, --once and serial: vmtest and the recorder test read that. */
+/* By its map, not its size: stock Terminus ter-v20n is 10x20 too but lacks the
+ * rail glyphs; U+254D is one only schema-10x20 carries among console fonts. */
+static int font_is_schema(int fd) {
+    static struct unipair e[8192];
+    struct unimapdesc d = { .entry_ct = sizeof e / sizeof *e, .entries = e };
+    if (ioctl(fd, GIO_UNIMAP, &d) < 0) return 0;
+    for (unsigned i = 0; i < d.entry_ct; i++)
+        if (e[i].unicode == 0x254D) return 1;
+    return 0;
+}
+
 static int board_style(int once) {
     const char *e = getenv("SCHEMA_BOARD_STYLE");
-    struct console_font_op f = { .op = KD_FONT_OP_GET, .width = 32, .height = 32, .charcount = 512 };
     int m = -1;
     if (e) return !strcmp(e, "font") ? STYLE_FONT : !strcmp(e, "ascii") ? STYLE_ASCII : STYLE_PLAIN;
     if (once || ioctl(STDOUT_FILENO, KDGETMODE, &m) < 0 || m != KD_TEXT) return STYLE_PLAIN;
-    /* NULL data asks only the size: the rail glyphs exist only in schema-12x24 */
-    return ioctl(STDOUT_FILENO, KDFONTOP, &f) == 0 && f.width == 12 && f.height == 24 ? STYLE_FONT : STYLE_ASCII;
+    return font_is_schema(STDOUT_FILENO) ? STYLE_FONT : STYLE_ASCII;
 }
 
 static void screen_size(void) {
@@ -584,7 +593,7 @@ static void render_styled(const schema_shm_t *s) {
     fflush(stdout);
 }
 
-/* The board can start before the boot loads schema-12x24 on its VT, and a
+/* The board can start before the boot loads schema-10x20 on its VT, and a
  * setfont changes the size: pick the look and size again, redraw on a change. */
 static int view_changed(int once) {
     int st = board_style(once), c = scr_cols, r = scr_rows;
