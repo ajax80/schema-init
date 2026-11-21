@@ -257,6 +257,13 @@ static void test_settle_engine_rule(void) {
         char fl[64];
         assert(settle_failed(x, fl, sizeof fl) == 6 && !strcmp(fl, "mcelog"));
     }
+    {
+        /* several names space-joined; one that won't fit is left out whole */
+        char fl[12], y[512];
+        snprintf(y, sizeof y, "service.aa.failed=1\nservice.aa.critical=0\nservice.bbbbbbbbbb.failed=1\n"
+                 "service.bbbbbbbbbb.critical=0\nservice.cc.failed=1\nservice.cc.critical=0\n");
+        assert(settle_failed(y, fl, sizeof fl) == 5 && !strcmp(fl, "aa cc"));
+    }
     memset(&st, 0, sizeof st);
     snprintf(x, sizeof x, "service.a.state=DORMANT\nservice.a.restarts=3\nservice.a.excise_reason=exit-code\n"
              "service.a.failed=1\nservice.a.critical=1\n");

@@ -182,7 +182,10 @@ size_t settle_failed(const char *kv, char *out, size_t sz) {
         size_t nlen = (size_t)(end - tl - name);
         if (!val_is(kv_field(kv, name, nlen, "critical"), "0")) continue;
         if (n + nlen + 2 < sz) {
-            n += (size_t)snprintf(out + n, sz - n, "%s%.*s", n ? " " : "", (int)nlen, name);
+            if (n) out[n++] = ' ';
+            memcpy(out + n, name, nlen);
+            n += nlen;
+            out[n] = '\0';
         }
     }
     return n;
