@@ -153,7 +153,7 @@ jobs:
             tests/test_seccomp_live.sh
         run: |
           sudo tee "$ROOTFS/build/make-test.sh" > /dev/null <<'EOF'
-          cd /build/src && make -n test > /tmp/test-cmds || exit 1
+          cd /build/src && make -n --no-print-directory test > /tmp/test-cmds || exit 1
           fail=0
           while IFS= read -r c; do
               skip=
