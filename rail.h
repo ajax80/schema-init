@@ -67,5 +67,7 @@ rail_chip_t rail_map_event(const char *event, const rail_svc_t *s);
 int rail_event_known(const char *event);
 const char *rail_event_why(const char *event);
 void rail_counts(const rail_svc_t *svcs, int n, rail_counts_t *c);
+/* spawned and not ready yet (FULL_TRUST is the engine's "waiting for readiness") */
+int rail_is_starting(uint8_t state, int pid, int held_on_socket);
 
 #endif

@@ -236,7 +236,7 @@ static const struct { const char *key; int kind; rail_chip_t chip; const char *w
     { "path-failed",         K_CHIP,  CHIP_FAILED, "" },
     { "path-fire",           K_CHIP,  CHIP_TIMER, "" },
     { "path-trigger-limit",  K_CHIP,  CHIP_CUT, "" },
-    { "pid_file-missing",    K_DIED,  CHIP_NONE, "with a restart coming, the retry line carries it; else CUT" },
+    { "pid_file-missing",    K_QUIET, CHIP_NONE, "a cause, logged before the restart decision: the retry or 76-* after it shows it" },
     { "pid_file-no-cgroup",  K_CHIP,  CHIP_CUT, "" },
     { "promote",             K_READY, CHIP_NONE, "" },
     { "readiness-lost",      K_QUIET, CHIP_NONE, "a cause: the retry or 76-* excise that follows shows it as the reason" },
@@ -255,7 +255,7 @@ static const struct { const char *key; int kind; rail_chip_t chip; const char *w
     { "spawn",               K_SPAWN, CHIP_NONE, "" },
     { "spawn-fail",          K_CHIP,  CHIP_CUT, "" },
     { "standby",             K_QUIET, CHIP_NONE, "stopped by design; counted as WAITING" },
-    { "start-timeout",       K_CHIP,  CHIP_CUT, "" },
+    { "start-timeout",       K_QUIET, CHIP_NONE, "a cause: the retry or 76-excised that follows shows it as the reason" },
     { "stop-cmd",            K_QUIET, CHIP_NONE, "stop-cmd-done or a failure follows" },
     { "stop-cmd-done",       K_QUIET, CHIP_NONE, "a clean stop command" },
     { "stop-cmd-failed",     K_CHIP,  CHIP_FAILED, "" },
@@ -265,7 +265,7 @@ static const struct { const char *key; int kind; rail_chip_t chip; const char *w
     { "stop-post",           K_QUIET, CHIP_NONE, "the post-stop command started" },
     { "thaw",                K_QUIET, CHIP_NONE, "pressure handling, shown on schema-board" },
     { "thaw-sig",            K_QUIET, CHIP_NONE, "pressure handling, shown on schema-board" },
-    { "timeout-recovery",    K_CHIP,  CHIP_RETRY, "" },
+    { "timeout-recovery",    K_QUIET, CHIP_NONE, "the retry that follows is the one RETRY line for this start timeout" },
     { "timer-catchup",       K_CHIP,  CHIP_TIMER, "" },
     { "timer-done",          K_QUIET, CHIP_NONE, "the timer run finished cleanly" },
     { "timer-failed",        K_CHIP,  CHIP_FAILED, "" },
@@ -299,8 +299,13 @@ const char *rail_event_why(const char *event) {
     return i < 0 ? "" : EV[i].why;
 }
 
+/* FULL_TRUST is not ready: the engine sets it at spawn and leaves it on readiness */
 static int is_ready_state(uint8_t st) {
-    return st == STATE_FUNDAMENTAL || st == STATE_SETTLED || st == STATE_FULL_TRUST || st == STATE_PERFECT;
+    return st == STATE_FUNDAMENTAL || st == STATE_SETTLED || st == STATE_PERFECT;
+}
+
+int rail_is_starting(uint8_t state, int pid, int held_on_socket) {
+    return pid > 0 && (state == STATE_FULL_TRUST || state == STATE_NEW_PROCESS) && !held_on_socket;
 }
 
 rail_chip_t rail_map_event(const char *event, const rail_svc_t *s) {
@@ -310,7 +315,10 @@ rail_chip_t rail_map_event(const char *event, const rail_svc_t *s) {
     case K_CHIP:  return EV[i].chip;
     case K_DIED:  return s->restart_pending ? CHIP_NONE : CHIP_CUT;
     case K_END:   return s->failed ? CHIP_CUT : CHIP_EXITED;
-    case K_READY: return s->state == STATE_PERFECT ? CHIP_PERFECT : is_ready_state(s->state) ? CHIP_ONLINE : CHIP_NONE;
+    case K_READY:
+        /* readiness that failed its probe lands in EXCISED and still logs promote */
+        if (s->failed) return CHIP_CUT;
+        return s->state == STATE_PERFECT ? CHIP_PERFECT : is_ready_state(s->state) ? CHIP_ONLINE : CHIP_NONE;
     case K_SPAWN: return CHIP_SPAWN;
     default:      return CHIP_NONE;
     }
@@ -374,7 +382,8 @@ void rail_event(const rail_svc_t *s, int idx, const char *event) {
     if (i < 0 || !ok) return;
     /* the cause of a death, for the RETRY line that follows it */
     /* a specific cause (signal, lost readiness) beats the generic died that follows it */
-    if (!strncmp(event, "killed-SIG", 10) || !strcmp(event, "readiness-lost"))
+    if (!strncmp(event, "killed-SIG", 10) || !strcmp(event, "readiness-lost") || !strcmp(event, "start-timeout") ||
+        !strcmp(event, "pid_file-missing"))
         snprintf(R.s[idx].why, sizeof R.s[idx].why, "%.*s", (int)strcspn(event, " "), event);
     else if (EV[i].kind == K_DIED && !R.s[idx].why[0])
         snprintf(R.s[idx].why, sizeof R.s[idx].why, "%s", event);
@@ -382,10 +391,13 @@ void rail_event(const rail_svc_t *s, int idx, const char *event) {
         R.s[idx].spawn_at = R.last_event;
         R.s[idx].spawn_pending = 1;
         R.s[idx].online = R.s[idx].perfect = 0;
+        R.s[idx].why[0] = '\0';   /* a cause from before this start is not this one's */
         return;
     }
     if (chip == CHIP_NONE) return;
-    if (EV[i].kind == K_READY) {
+    if (EV[i].kind == K_READY && chip == CHIP_CUT)
+        snprintf(R.s[idx].why, sizeof R.s[idx].why, "probe-failed");
+    else if (EV[i].kind == K_READY) {
         if (chip == CHIP_ONLINE && R.s[idx].online) return;
         if (chip == CHIP_PERFECT && R.s[idx].perfect) return;
         R.s[idx].online = 1;

@@ -55,7 +55,7 @@ static void map_events(void) {
     assert(rail_map_event("killed-SIGSEGV-core", &s) == CHIP_NONE);
     assert(rail_map_event("card-2/3", &s) == CHIP_FAILED);
     assert(rail_map_event("condition-skip path_exists:/x", &s) == CHIP_NONE);
-    assert(rail_map_event("start-timeout", &s) == CHIP_CUT);
+    assert(rail_map_event("start-timeout", &s) == CHIP_NONE);   /* a cause; the 76-excised after it is the CUT */
     assert(rail_map_event("reload-fail", &s) == CHIP_FAILED);
     assert(rail_map_event("timer-fire", &s) == CHIP_TIMER);
     assert(rail_map_event("path-fire IN_CREATE:/x", &s) == CHIP_TIMER);
@@ -88,8 +88,10 @@ static void spawn_delay(void) {
     reset(0);
     s = S("doomed", STATE_NEW_PROCESS); s.pid = 12; s.starting = 1;
     rail_event(&s, 0, "spawn");
-    now = 1500; s.state = STATE_EXCISED; s.failed = 1; s.starting = 0;
+    now = 1500;
     rail_event(&s, 0, "start-timeout");
+    s.state = STATE_EXCISED; s.failed = 1; s.starting = 0;
+    rail_event(&s, 0, "76-excised");
     now = 4000; rail_tick(&s, 1, now);
     if (count("SPAWN") || count(" CUT ") != 1) FAIL("cut before 2 s: want CUT only");
 }
@@ -271,8 +273,75 @@ static void every_event_classified(void) {
     if (n < 80) FAIL("only %d events listed", n);
 }
 
+/* review C1: FULL_TRUST is "spawned, waiting for readiness" in this engine */
+static void full_trust_is_starting(void) {
+    assert(rail_is_starting(STATE_FULL_TRUST, 42, 0) == 1);
+    assert(rail_is_starting(STATE_NEW_PROCESS, 42, 0) == 1);
+    assert(rail_is_starting(STATE_FULL_TRUST, 0, 0) == 0);
+    assert(rail_is_starting(STATE_NEW_PROCESS, 42, 1) == 0);   /* held on its socket */
+    assert(rail_is_starting(STATE_FUNDAMENTAL, 42, 0) == 0);
+    rail_svc_t v[1] = { S("slowd", STATE_FULL_TRUST) };
+    rail_counts_t c;
+    rail_counts(v, 1, &c);
+    if (c.online) FAIL("FULL_TRUST counted ONLINE");
+    reset(0);
+    v[0].pid = 7; v[0].starting = rail_is_starting(v[0].state, v[0].pid, 0);
+    rail_event(&v[0], 0, "spawn");
+    rail_arm_settle();
+    assert(rail_map_event("notify-ready", &v[0]) == CHIP_NONE);
+    now = 5000; rail_tick(v, 1, now);
+    if (count("rail settled")) FAIL("settled while a service waits for readiness");
+    if (count("SPAWN") != 1) FAIL("slow start shows no SPAWN");
+    now = 120000; rail_tick(v, 1, now);
+    if (count("still starting after 120s") != 1) FAIL("120 s line never fires for a never-ready service");
+}
+
+/* review I1/I2/I3/I4 */
+static void causes_and_outcomes(void) {
+    rail_svc_t s = S("pf", STATE_FULL_TRUST);
+    reset(0);
+    rail_event(&s, 0, "pid_file-missing");
+    s.state = STATE_RECOVERY; s.restart_pending = 1;
+    s.state = STATE_NEW_PROCESS; s.restart_count = 1;
+    rail_event(&s, 0, "retry");
+    if (count(" CUT ") || !count("RETRY 1") || !count("pid_file-missing")) FAIL("I1: pid_file-missing is a cause");
+
+    reset(0);
+    s = S("st", STATE_FULL_TRUST);
+    rail_event(&s, 0, "start-timeout");
+    s.state = STATE_RECOVERY;
+    rail_event(&s, 0, "timeout-recovery");
+    s.state = STATE_NEW_PROCESS; s.restart_count = 1;
+    rail_event(&s, 0, "retry");
+    if (count(" CUT ") || count("RETRY") != 1 || !count("start-timeout")) FAIL("I2: start-timeout + restart = one RETRY");
+    reset(0);
+    s = S("st2", STATE_FULL_TRUST);
+    rail_event(&s, 0, "start-timeout");
+    s.state = STATE_EXCISED; s.failed = 1;
+    rail_event(&s, 0, "76-excised");
+    if (count(" CUT ") != 1 || !count("start-timeout")) FAIL("I2: start-timeout + excise = one CUT with the cause");
+
+    reset(0);
+    s = S("stale", STATE_FUNDAMENTAL);
+    rail_event(&s, 0, "killed-SIGTERM");
+    s.state = STATE_FULL_TRUST;
+    rail_event(&s, 0, "spawn");
+    s.state = STATE_RECOVERY; s.restart_pending = 1;
+    rail_event(&s, 0, "died");
+    s.state = STATE_NEW_PROCESS; s.restart_count = 1;
+    rail_event(&s, 0, "retry");
+    if (count("killed-SIGTERM") || !count("died")) FAIL("I3: a stale cause from before the last spawn");
+
+    reset(0);
+    s = S("probe", STATE_EXCISED); s.failed = 1;
+    rail_event(&s, 0, "promote");
+    if (count(" CUT ") != 1 || !count("probe-failed")) FAIL("I4: a failed probe at promote shows nothing");
+}
+
 int main(void) {
     every_event_classified();
+    full_trust_is_starting();
+    causes_and_outcomes();
     setenv("TZ", "UTC", 1);
     tzset();
     map_events();

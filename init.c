@@ -1388,7 +1388,7 @@ static void rail_fill(rail_svc_t *r, const service_t *s) {
     r->state = s->inst.state;
     r->pid = s->child_pid;
     r->failed = svc_failed(s);
-    r->starting = s->child_pid > 0 && s->inst.state == STATE_NEW_PROCESS && !svc_held_on_socket(s);
+    r->starting = rail_is_starting(s->inst.state, s->child_pid, svc_held_on_socket(s));
     r->restart_pending = s->inst.state == STATE_RECOVERY && !(s->flags & SVC_NO_RESTART);
     r->restart_count = s->restart_count;
 }
