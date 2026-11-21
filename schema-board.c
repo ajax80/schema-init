@@ -368,11 +368,13 @@ static int board_style(int once) {
 static void screen_size(void) {
     struct winsize ws;
     const char *e = getenv("SCHEMA_BOARD_SIZE");
-    if (e && sscanf(e, "%dx%d", &scr_cols, &scr_rows) == 2) return;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0) {
+    if (!(e && sscanf(e, "%dx%d", &scr_cols, &scr_rows) == 2) &&
+        ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0) {
         scr_cols = ws.ws_col;
         scr_rows = ws.ws_row;
     }
+    /* lines[] holds MAXLN; past that the footer (and the y/n prompt) would vanish */
+    if (scr_rows > MAXLN - 1) scr_rows = MAXLN - 1;
 }
 
 static const char *st_chip(uint8_t s) {
@@ -453,6 +455,24 @@ static void cell_group(sbuf_t *b, const shm_group_t *g, const struct rail_alphab
     sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3d members\033[0m", st_chip(g->state), st_name(g->state),
          g->member_count);
     for (; vis < ROW_W; vis++) sput(b, " ");
+}
+
+/* Cut a built line to `cols` visible columns: a VT wraps anything wider, and
+ * on a full screen that wrap scrolls the banner off. SGR runs cost nothing. */
+static void clip_line(char *l, size_t sz, int cols) {
+    int vis = 0;
+    for (char *p = l; *p; ) {
+        if (*p == '\033' && p[1] == '[') {
+            p += 2;
+            while (*p && !(*p >= 0x40 && *p <= 0x7e)) p++;
+            if (*p) p++;
+            continue;
+        }
+        if (vis == cols) { snprintf(p, sz - (size_t)(p - l), "\033[0m"); return; }
+        vis++;
+        p++;
+        while ((*p & 0xc0) == 0x80) p++;
+    }
 }
 
 static char lines[MAXLN][2048];
@@ -556,9 +576,22 @@ static void render_styled(const schema_shm_t *s) {
 
     /* no newline after the last line: a full screen must not scroll the banner off */
     fputs("\033[H\033[2J", stdout);
-    for (i = 0; i < nlines; i++) printf("%s%s", i ? "\n" : "", lines[i]);
+    for (i = 0; i < nlines; i++) {
+        clip_line(lines[i], sizeof lines[i], scr_cols);
+        printf("%s%s", i ? "\n" : "", lines[i]);
+    }
     if (style != STYLE_PLAIN && !isatty(STDOUT_FILENO)) fputs("\n", stdout);
     fflush(stdout);
+}
+
+/* The board can start before the boot loads schema-12x24 on its VT, and a
+ * setfont changes the size: pick the look and size again, redraw on a change. */
+static int view_changed(int once) {
+    int st = board_style(once), c = scr_cols, r = scr_rows;
+    screen_size();
+    if (st == style && c == scr_cols && r == scr_rows) return 0;
+    style = st;
+    return 1;
 }
 
 static void render(const schema_shm_t *s) {
@@ -684,6 +717,7 @@ int main(int argc, char **argv) {
         dirty = 0;
         if (snap.seq != last_seq) { dirty = 1; last_seq = snap.seq; }
         if (rec_poll()) dirty = 1;
+        if (view_changed(once)) dirty = 1;
 
         valid = snap.count;
         if (valid < 0) valid = 0;

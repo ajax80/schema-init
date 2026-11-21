@@ -95,4 +95,19 @@ echo "$O" | grep -q "… [0-9]* more" || fail "120@160x45 no overflow line"
 [ "$(echo "$O" | wc -l)" -le 45 ] || fail "120@160x45 taller than 45 lines"
 echo "$O" | head -1 | grep -q "S C H E M A" || fail "banner not first line"
 
+# --- final review: lines clipped to the screen, footer kept on tall screens ---
+vis_max() { sed "s/${ESC}\[[0-9;]*[A-Za-z]//g" | LC_ALL=C.UTF-8 awk '{ n = length($0); if (n > m) m = n } END { print m + 0 }'; }
+mk 68
+for st in font ascii; do
+    O=$(SCHEMA_BOARD_STYLE=$st SCHEMA_BOARD_SIZE=80x25 board) || fail "$st 80x25 exit"
+    [ "$(echo "$O" | vis_max)" -le 80 ] || fail "$st 80x25: a line is wider than 80 ($(echo "$O" | vis_max))"
+    [ "$(echo "$O" | wc -l)" -le 25 ] || fail "$st 80x25 taller than 25"
+    O=$(SCHEMA_BOARD_STYLE=$st SCHEMA_BOARD_SIZE=60x20 board) || fail "$st 60x20 exit"
+    [ "$(echo "$O" | vis_max)" -le 60 ] || fail "$st 60x20: a line is wider than 60"
+done
+mk 128
+O=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=80x200 SCHEMA_BOARD_SEL=3 board) || fail "80x200 exit"
+echo "$O" | grep -q "━━►" || fail "80x200: footer lost"
+echo "$O" | grep -q "j/k" || fail "80x200: key help lost"
+
 echo "PASS: board look"
