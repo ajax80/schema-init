@@ -513,13 +513,13 @@ verify-dbus-conformance:
 
 
 
-# The schema font is generated, then committed (fonts/schema-12x24.{bdf,psfu},
+# The schema font is generated, then committed (fonts/schema-10x20.{bdf,psfu},
 # schema_font.c), so building schema-init needs no python3. Regenerate after
 # editing tools/mkschemafont.py; test-schema-font fails if the copies drift.
 font:
-	python3 -I tools/mkschemafont.py fonts/spleen-12x24.bdf fonts/schema-12x24.bdf
-	python3 -I tools/bdf2psf.py fonts/schema-12x24.bdf fonts/schema-12x24.psfu
-	python3 -I tools/psf2c.py fonts/schema-12x24.psfu schema_font.c
+	python3 -I tools/mkschemafont.py fonts/ter-u20n.bdf fonts/schema-10x20.bdf
+	python3 -I tools/bdf2psf.py fonts/schema-10x20.bdf fonts/schema-10x20.psfu
+	python3 -I tools/psf2c.py fonts/schema-10x20.psfu schema_font.c
 
 test-schema-font:
 	$(CC) $(CFLAGS) tests/test_schema_font.c schema_font.c -o $(TESTDIR)/schema-font && $(TESTDIR)/schema-font
