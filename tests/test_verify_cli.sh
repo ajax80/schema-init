@@ -511,6 +511,15 @@ v
 expect 0 good-unarmed
 has "[note] 09_schema_fallback is not live" || fail "good-unarmed: hook not noted"
 has "[note] boot guard not armed" || fail "good-unarmed: not-armed note"
+# unarmed, what the guard alone needs going unchecked is a note: it must not block reexec
+printf none > "$T/fx/bootok"
+v
+expect 0 good-unarmed-bootok-unchecked
+has "[note] schema-bootok exec=/usr/bin/schema-bootok: not checked" || fail "good-unarmed: bootok unchecked not a note"
+v --arming
+expect 1 good-arming-bootok-unchecked   # the dead 09 hook FAILs too; FAIL outranks
+has "[UNRESOLVED] schema-bootok exec=/usr/bin/schema-bootok: not checked" || fail "good-arming: bootok unchecked not unresolved"
+rm "$T/fx/bootok"
 v --arming
 expect 1 good-guard
 has "[FAIL] 09_schema_fallback is not live" || fail "good-guard: guard not judged"

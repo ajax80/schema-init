@@ -37,5 +37,14 @@ VRC=1 arm --force 3
 grep -q 'not armed' "$T/out" && fail "--force: refused"
 [ ! -e "$T/ctl" ] || fail "--force: verify ran: $(cat "$T/ctl")"
 
+# anything but --force and a count is refused before verify runs or grubenv is touched
+for bad in -f --forse 2x ""; do
+    VRC=0 arm "$bad"; r=$?
+    [ $r != 0 ] || fail "arm '$bad': exited 0"
+    [ ! -e "$T/editenv" ] || fail "arm '$bad': grubenv written"
+    [ ! -e "$T/ctl" ] || fail "arm '$bad': verify ran"
+    grep -q 'usage' "$T/out" || fail "arm '$bad': no usage: $(cat "$T/out")"
+done
+
 [ $rc = 0 ] && echo "snapshot_arm_gate: ok"
 exit $rc

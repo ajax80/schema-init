@@ -157,7 +157,8 @@ check_armable() {
 cmd_arm() {
   local force=0 n=2 id rc=0 a
   for a in "$@"; do
-    case "$a" in --force) force=1 ;; *) n="$a" ;; esac
+    # a stray word would land in grubenv as boot_counter and break the guard's GRUB arithmetic
+    case "$a" in --force) force=1 ;; ''|*[!0-9]*) die "usage: schema-snapshot arm [--force] [N]" ;; *) n="$a" ;; esac
   done
   # arming bets the next boot on this box coming back: verify first, as reboot does
   if [ "$force" = 0 ]; then
