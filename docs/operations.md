@@ -41,7 +41,7 @@ sudo cp schema-ctl /usr/local/bin/schema-ctl
 
 ## The rail on the console
 
-On a VT in text mode PID 1 draws the boot as a status display (README, "The rail"): its own `schema-12x24` font and palette, loaded at start; one line per meaningful event with a colour chip; a finish line once nothing has been starting for a second (or `rail still starting after 120s`). After that, lines use a dashed track and the wall clock; a live re-exec never redraws the banner. Shutdown draws `S C H E M A//H A L T`, one line per service that was up (`STOPPED`, `KILLED` if it needed SIGKILL, `EXITED` if it went on its own, `STUCK` if even the kill didn't take), and restores the console palette through `/dev/tty0` before the reboot.
+On a VT in text mode PID 1 draws the boot as a status display (README, "The rail"): its own `schema-10x20` font and palette, loaded at start; one line per meaningful event with a colour chip; a finish line once nothing has been starting for a second (or `rail still starting after 120s`). After that, lines use a dashed track and the wall clock; a live re-exec never redraws the banner. Shutdown draws `S C H E M A//H A L T`, one line per service that was up (`STOPPED`, `KILLED` if it needed SIGKILL, `EXITED` if it went on its own, `STUCK` if even the kill didn't take), and restores the console palette through `/dev/tty0` before the reboot.
 
 - Plain lines whenever stdout isn't a VT in `KD_TEXT` (serial console, log file, Plymouth), and for the rest of the boot if any font or palette ioctl fails (`rail.log` says which).
 - `rail.log` is unchanged: the same plain line as before, styled mode or not.
@@ -97,7 +97,7 @@ schema-board --tty /dev/tty8                    # then ctrl-alt-F8 to look at it
 schema-board --tty /dev/tty8 --interactive      # ...and fix something from there
 ```
 
-On a VT in text mode the board draws in the boot rail's look — `S C H E M A//B O A R D` banner, colour chips, the rail's glyphs when the console font is `schema-12x24` (ASCII otherwise) — in two columns when one would run off the screen; a list too long for both ends in `… N more`. Piped or `--once`, it prints the plain table. Tests force the look with `SCHEMA_BOARD_STYLE=font|ascii|plain`, `SCHEMA_BOARD_SIZE=<cols>x<rows>` and (with `--once`) `SCHEMA_BOARD_SEL=<n>`.
+On a VT in text mode the board draws in the boot rail's look — `S C H E M A//B O A R D` banner, colour chips, the rail's glyphs when the console font is `schema-10x20` (ASCII otherwise) — in two columns when one would run off the screen; a list too long for both ends in `… N more`. Piped or `--once`, it prints the plain table. Tests force the look with `SCHEMA_BOARD_STYLE=font|ascii|plain`, `SCHEMA_BOARD_SIZE=<cols>x<rows>` and (with `--once`) `SCHEMA_BOARD_SEL=<n>`.
 
 `--interactive` adds a cockpit: `↑`/`↓` (or `j`/`k`) to select a service, `enter` to raise a card,
 `y` to apply, `n` to cancel. The card is chosen from the service's state — `DORMANT` gets `reset`,

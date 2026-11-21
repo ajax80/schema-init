@@ -37,4 +37,4 @@ tests/dbus-corpus/*
 /analyze/target/
 debian/changelog
 build/
-fonts/schema-12x24.psfu.gz
+fonts/schema-10x20.psfu.gz
