@@ -271,6 +271,11 @@ static void put_arrow(void) {
     printf(" %s%.*s\033[0m\n", arrow_shade == 1 ? "\033[1;31m" : "\033[90m", arrow_bytes(cols - 2), arrow_line);
 }
 
+/* a service name or PID 1's reply printed raw would let an ESC in it drive the terminal */
+static void clean(char *s) {
+    for (unsigned char *q = (unsigned char *)s; *q; q++) if (*q < 0x20 || *q == 0x7f) *q = '?';
+}
+
 static void render_plain(const schema_shm_t *s) {
     int i, valid;
     fputs("\033[2J\033[H", stdout);                       /* clear + home */
@@ -290,6 +295,7 @@ static void render_plain(const schema_shm_t *s) {
         char name[65];
         memcpy(name, v->name, 64);
         name[64] = '\0';
+        clean(name);
         char deck[8] = "";
         if (v->card_count) snprintf(deck, sizeof deck, "%u/%u", v->card_played, v->card_count);
         int held = (v->limp & SHM_LIMP_STANDBY) && v->state == STATE_EXCISED;
@@ -313,6 +319,7 @@ static void render_plain(const schema_shm_t *s) {
             char gname[65];
             memcpy(gname, g->name, 64);
             gname[64] = '\0';
+            clean(gname);
             printf(" %-28.28s %s%-13s\033[0m %5d\n",
                    gname, st_color(g->state), st_name(g->state),
                    g->member_count);
@@ -325,6 +332,7 @@ static void render_plain(const schema_shm_t *s) {
         if (have) {
             memcpy(name, s->svc[sel].name, 64);
             name[64] = '\0';
+            clean(name);
         }
         printf("\n");
         if (mode == MODE_CONFIRM && have) {
@@ -432,11 +440,6 @@ static void put_name(sbuf_t *b, const char *in, int w, const struct rail_alphabe
         cols++;
     }
     for (; cols < w; cols++) sput(b, " ");
-}
-
-/* a service name or PID 1's reply printed raw would let an ESC in it drive the terminal */
-static void clean(char *s) {
-    for (unsigned char *q = (unsigned char *)s; *q; q++) if (*q < 0x20 || *q == 0x7f) *q = '?';
 }
 
 /* restarts in 3 columns: past 999 the row would shift right */

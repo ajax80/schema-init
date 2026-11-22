@@ -79,6 +79,8 @@ P=$(SCHEMA_BOARD_STYLE=plain board) || fail "plain exit"
 D=$(board) || fail "default exit"
 [ "$P" = "$D" ] || fail "default (non-VT) output is not the plain board"
 echo "$D" | grep -q "limp-mode board" || fail "plain board changed"
+echo "$P" | grep -q "evil${ESC}" && fail "plain: name injected an escape"
+echo "$P" | grep -q "evil?\[2Jname" || fail "plain: ESC not shown as ?"
 
 # --- Task 2: two columns, overflow, selection ---
 mk 68

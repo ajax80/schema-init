@@ -7,8 +7,8 @@
 
 /* one entry's mount+chroot inspection */
 #define VERIFY_INSPECT_MS 30000
-/* all entries: once spent, the rest are reported uninspected instead of run. Entries go
- * in report order (next boot, guard fallback, then spares), so what's cut is a spare */
+/* spare snapshot entries start only inside this; the rest are reported uninspected.
+ * The next boot, the normal default and the guard fallback are never cut */
 #define VERIFY_BUDGET_MS 45000
 
 /* fail/reasons: FAIL lines. unres: UNRESOLVED lines, never PASS and never FAIL;

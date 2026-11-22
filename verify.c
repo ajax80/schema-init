@@ -187,14 +187,16 @@ static long long mono_ms(void) {
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static root_report_t *inspect(ctx_t *c, int i) {
+/* spare: may be cut once the budget is spent */
+static root_report_t *inspect(ctx_t *c, int i, int spare) {
     if (!c->done[i]) {
         root_report_t *r = &c->rep[i];
-        if (mono_ms() - c->t0 >= c->budget) {
+        if (spare && mono_ms() - c->t0 >= c->budget) {
             snprintf(r->unres[0], sizeof r->unres[0], "not inspected: verify's %lld s went to the entries above",
                      c->budget / 1000);
             r->unresolved = r->unres[0];
             r->nunres = 1;
+            r->check_rc = -1;
         } else if (c->o->inspect) inspect_stub(c, &c->ents[i], &c->rep[i]);
         else root_inspect(&c->ents[i], c->env, c->nopt ? c->nopt : c->nenv, NULL, &c->rep[i]);
         c->done[i] = 1;
@@ -227,7 +229,7 @@ static int count_errors(const char *t) {
  * for a spare. errs: count its --check error: lines here (the actual next boot's are
  * judged against the baseline under Services instead) */
 static void report_entry(ctx_t *c, const char *role, int i, tag_t sev, int errs) {
-    root_report_t *r = inspect(c, i);
+    root_report_t *r = inspect(c, i, !*role);
     char who[400];
     /* a way back with an older schema-init still boots; only its services go unchecked */
     int spare = sev == T_WARN || !strcmp(role, "guard fallback");
@@ -787,7 +789,7 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     if (unsup) emit(&c, T_NOTE, "%s", unsup_note);
 
     emit(&c, T_HEAD, "Services");
-    root_report_t *ar = act >= 0 ? inspect(&c, act) : NULL;
+    root_report_t *ar = act >= 0 ? inspect(&c, act, 0) : NULL;
     if (unsup) {
         emit(&c, T_NOTE, "%s", unsup_note);
     } else if (pi) {
