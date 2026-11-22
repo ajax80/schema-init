@@ -525,6 +525,88 @@ static void test_rootflags_data(void) {
     assert(rootflags_data("subvol=root,noatime", 1, &ms, d, 5) == -1);
 }
 
+
+/* a crafted image: only the superblock bytes needs_replay reads */
+static void img(const char *path, long off, const void *b, size_t n, long off2, const void *b2, size_t n2) {
+    FILE *f = fopen(path, "w");
+    assert(f);
+    fseek(f, off, SEEK_SET);
+    fwrite(b, 1, n, f);
+    if (b2) {
+        fseek(f, off2, SEEK_SET);
+        fwrite(b2, 1, n2, f);
+    }
+    fseek(f, 0x11000, SEEK_SET);
+    fputc(0, f);
+    fclose(f);
+}
+
+static void test_needs_replay(void) {
+    char p[PATH_MAX], sys[PATH_MAX], d[PATH_MAX + 64];
+    snprintf(p, sizeof p, "%s/vr-img", tmpd);
+    snprintf(sys, sizeof sys, "%s/vr-sysbtrfs", tmpd);
+    mkdir(sys, 0755);
+    /* ext: magic 0xEF53 at sb+0x38, incompat at sb+0x60, RECOVER = 0x4 */
+    unsigned char mag[2] = { 0x53, 0xef }, clean[4] = { 0xc2, 0x02, 0, 0 }, dirty[4] = { 0xc6, 0x22, 0, 0 };
+    img(p, 1024 + 0x38, mag, 2, 1024 + 0x60, clean, 4);
+    assert(needs_replay(p, sys) == 0);
+    img(p, 1024 + 0x38, mag, 2, 1024 + 0x60, dirty, 4);
+    assert(needs_replay(p, sys) == 1);
+    /* btrfs: fsid at sb+0x20, magic at sb+0x40, log_root at sb+0x60 */
+    unsigned char sb[0x68] = { 0 };
+    for (int i = 0; i < 16; i++) sb[0x20 + i] = (unsigned char)(0x10 * i + i);
+    memcpy(sb + 0x40, "_BHRfS_M", 8);
+    img(p, 0x10000, sb, sizeof sb, 0, NULL, 0);
+    assert(needs_replay(p, sys) == 0);
+    sb[0x62] = 0xd4;
+    img(p, 0x10000, sb, sizeof sb, 0, NULL, 0);
+    assert(needs_replay(p, sys) == 1);
+    /* mounted somewhere: the kernel replayed the log when it first mounted it */
+    snprintf(d, sizeof d, "%s/00112233-4455-6677-8899-aabbccddeeff", sys);
+    mkdir(d, 0755);
+    assert(needs_replay(p, sys) == 0);
+    rmdir(d);
+    unsigned char none[8] = { 0 };
+    img(p, 0, none, 8, 0, NULL, 0);
+    assert(needs_replay(p, sys) == 0);
+    unlink(p);
+    assert(needs_replay(p, sys) == 0);
+    rmdir(sys);
+}
+
+/* root + loop devices from tests/verify_nowrite_live.sh; it checks the image bytes, this the report */
+static int unres_has(const root_report_t *r, const char *s) {
+    for (int i = 0; i < r->nunres; i++)
+        if (strstr(r->unres[i], s)) return 1;
+    return 0;
+}
+
+static void live_case(const char *var, const char *opts_fmt, const char *want, const char *never) {
+    const char *dev = getenv(var);
+    char opts[512];
+    root_report_t r;
+    if (!dev) return;
+    snprintf(opts, sizeof opts, opts_fmt, dev);
+    bls_entry_t e = entry(opts);
+    root_inspect(&e, env, 3, NULL, &r);
+    for (int i = 0; i < r.nunres; i++) printf("  %s: U %s\n", var, r.unres[i]);
+    if (want && !unres_has(&r, want)) { printf("FAIL live %s: no \"%s\"\n", var, want); exit(1); }
+    if (never && unres_has(&r, never)) { printf("FAIL live %s: \"%s\"\n", var, never); exit(1); }
+    printf("ok live %s\n", var);
+}
+
+static void test_live_nowrite(void) {
+    if (geteuid() != 0 || !getenv("VL_LIVE")) return;
+    unsetenv("SCHEMA_VERIFY_DEVDIR");
+    live_case("VL_BTRFS_DIRTY", "root=%s ro", "needs replay", NULL);
+    live_case("VL_EXT4_DIRTY", "root=%s ro", "needs replay", NULL);
+    live_case("VL_XFS_DIRTY", "root=%s ro", "cannot mount", NULL);
+    live_case("VL_BTRFS_CLEAN", "root=%s ro", NULL, "cannot mount");
+    live_case("VL_EXT4_CLEAN", "root=%s ro", NULL, "cannot mount");
+    live_case("VL_EXT4_MOUNTED", "root=%s ro rootflags=data=journal", "mounted already", NULL);
+    live_case("VL_EXT4_MOUNTED", "root=%s ro rootflags=noatime,nodev", NULL, "mounted already");
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) tmpd = argv[1];
     setup_devdir();
@@ -538,6 +620,8 @@ int main(int argc, char **argv) {
     test_tree_checks();
     test_mountinfo_find();
     test_needs_root();
+    test_needs_replay();
+    test_live_nowrite();
     test_rootflags_data();
     printf("verify_root: ok\n");
     return 0;
