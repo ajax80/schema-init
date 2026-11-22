@@ -200,6 +200,7 @@ def test_derived_files():
     reg._seat_uaccess_fp = {}
     reg._seat_uaccess_nodes = {}
     reg._seat_udev_mtime = {}
+    reg._seat_uaccess_retry = {}
     for sid, rec in L.scan_session_files().items():
         obj = type('S', (), {})()
         obj.sid, obj.record, obj.path = sid, rec, L.session_path_for(sid)

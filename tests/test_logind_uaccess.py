@@ -96,6 +96,12 @@ def test_apply():
     check('apply: new login granted', all(f'user:{uid + 1}:rw' in getfacl(p) for p in (a, b)))
     check('apply: prior login revoked', all(f'user:{uid}:rw' not in getfacl(p) for p in (a, b)))
 
+    # revoke-only: no active user left on the seat
+    L.apply_uaccess_acl([a, b], None, uid + 1)
+    check('apply: revoke-only drops the old uid',
+          all(f'user:{uid + 1}:' not in getfacl(p) for p in (a, b)))
+    L.apply_uaccess_acl([a, b], uid + 1, None)
+
     # idempotent re-apply of the same uid is a no-op that still holds
     L.apply_uaccess_acl([a, b], uid + 1, uid + 1)
     check('apply: idempotent', all(f'user:{uid + 1}:rw' in getfacl(p) for p in (a, b)))
@@ -103,9 +109,9 @@ def test_apply():
 
 # -- registry change-detection ----------------------------------------------
 
-def _set_active(reg, active_uid, sid='1'):
+def _set_active(reg, active_uid, sid='1', seat='seat0'):
     body = ['# This is private data. Do not parse.']
-    for k, v in dict(UID=active_uid, USER='u%d' % active_uid, SEAT='seat0',
+    for k, v in dict(UID=active_uid, USER='u%d' % active_uid, SEAT=seat,
                      VTNR=1, ACTIVE=1, STATE='active', IS_DISPLAY=1).items():
         body.append('%s=%s' % (k, v))
     with open(os.path.join(RUNDIR, 'sessions', sid), 'w') as f:
@@ -118,21 +124,41 @@ def _set_active(reg, active_uid, sid='1'):
         reg.sessions[s] = obj
 
 
+def _bare_registry():
+    reg = L.SessionRegistry.__new__(L.SessionRegistry)
+    reg.sessions = {}; reg._derived = {}
+    reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
+    reg._seat_uaccess_nodes = {}; reg._seat_udev_mtime = {}
+    reg._seat_uaccess_retry = {}
+    return reg
+
+
+def _recorder(calls, key=tuple):
+    def apply(nodes, new, old):
+        calls.append((key(nodes), new, old))
+        return []
+    return apply
+
+
+def _logout(reg):
+    for f in os.listdir(os.path.join(RUNDIR, 'sessions')):
+        os.unlink(os.path.join(RUNDIR, 'sessions', f))
+    reg.sessions = {}
+
+
 def test_registry_fires_on_change():
     calls = []
     real_nodes, real_apply = L.uaccess_seat_nodes, L.apply_uaccess_acl
-    L.uaccess_seat_nodes = lambda seat='seat0': ['/dev/fake0']
-    L.apply_uaccess_acl = lambda nodes, new, old: calls.append((tuple(nodes), new, old))
+    fake = node('fake0')
+    L.uaccess_seat_nodes = lambda seat='seat0': [fake]
+    L.apply_uaccess_acl = _recorder(calls)
     try:
-        reg = L.SessionRegistry.__new__(L.SessionRegistry)
-        reg.sessions = {}; reg._derived = {}
-        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
-        reg._seat_uaccess_nodes = {}; reg._seat_udev_mtime = {}
+        reg = _bare_registry()
 
         _set_active(reg, 1000)
         reg._write_derived()
         check('registry: fires on first active uid',
-              calls == [(('/dev/fake0',), 1000, None)], str(calls))
+              calls == [((fake,), 1000, None)], str(calls))
 
         calls.clear()
         reg._write_derived()
@@ -142,7 +168,7 @@ def test_registry_fires_on_change():
         _set_active(reg, 1001)
         reg._write_derived()
         check('registry: re-fires with old uid on change',
-              calls == [(('/dev/fake0',), 1001, 1000)], str(calls))
+              calls == [((fake,), 1001, 1000)], str(calls))
     finally:
         L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
 
@@ -155,14 +181,11 @@ def test_registry_refires_on_node_readd():
     # the live node set moves, not just when the uid does.
     calls = []
     real_apply = L.apply_uaccess_acl
-    L.apply_uaccess_acl = lambda nodes, new, old: calls.append((tuple(sorted(nodes)), new, old))
+    L.apply_uaccess_acl = _recorder(calls, lambda n: tuple(sorted(n)))
     try:
         a = node('readd/card0')
         record('c226:0', 'N:readd/card0\nE:ID_SEAT=seat0\nQ:uaccess\n')
-        reg = L.SessionRegistry.__new__(L.SessionRegistry)
-        reg.sessions = {}; reg._derived = {}
-        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
-        reg._seat_uaccess_nodes = {}; reg._seat_udev_mtime = {}
+        reg = _bare_registry()
 
         _set_active(reg, 1000)
         reg._write_derived()
@@ -203,12 +226,9 @@ def test_registry_enumerates_only_on_udev_change():
         n_enum[0] += 1
         return [node('lazy/card0')]
     L.uaccess_seat_nodes = counting_nodes
-    L.apply_uaccess_acl = lambda *a: None
+    L.apply_uaccess_acl = lambda *a: []
     try:
-        reg = L.SessionRegistry.__new__(L.SessionRegistry)
-        reg.sessions = {}; reg._derived = {}
-        reg._seat_active_uid = {}; reg._seat_uaccess_fp = {}
-        reg._seat_uaccess_nodes = {}; reg._seat_udev_mtime = {}
+        reg = _bare_registry()
 
         _set_active(reg, 1000)
         for _ in range(20):                    # five seconds of polling
@@ -225,11 +245,122 @@ def test_registry_enumerates_only_on_udev_change():
         L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
 
 
+def test_apply_reports_failures():
+    # setfacl's rc used to be dropped, so a node it failed on was cached as
+    # granted and never retried. The apply must say which nodes failed.
+    ok = node('fail/ok')
+    gone = os.path.join(DEV, 'fail/vanished')
+    failed = L.apply_uaccess_acl([ok, gone], uid, None)
+    check('failures: vanished node reported', list(failed) == [gone], str(failed))
+
+
+def test_registry_revokes_when_no_active():
+    # The old uid's ACLs must go when the seat has no active session (logout,
+    # or a switch to a tty nobody owns) — they used to stay until the next login.
+    real_nodes = L.uaccess_seat_nodes
+    n = node('noactive/card0')
+    subprocess.run(['setfacl', '-b', n], check=True)
+    L.uaccess_seat_nodes = lambda seat='seat0': [n]
+    try:
+        reg = _bare_registry()
+        _set_active(reg, uid + 7)
+        reg._write_derived()
+        check('noactive: granted while active', f'user:{uid + 7}:rw' in getfacl(n))
+
+        _logout(reg)
+        reg._write_derived()
+        check('noactive: revoked after logout', f'user:{uid + 7}:' not in getfacl(n),
+              getfacl(n))
+        check('noactive: cache cleared', 'seat0' not in reg._seat_active_uid
+              and 'seat0' not in reg._seat_uaccess_fp, str(reg._seat_active_uid))
+
+        # the same uid logging back in is a fresh grant, not a cached no-op
+        _set_active(reg, uid + 7)
+        reg._write_derived()
+        check('noactive: same uid re-granted on return', f'user:{uid + 7}:rw' in getfacl(n))
+        _logout(reg)
+        reg._write_derived()
+    finally:
+        L.uaccess_seat_nodes = real_nodes
+
+
+def test_registry_revokes_vanished_seat():
+    # seats() only lists seats that have sessions (plus seat0), so a seat whose
+    # last session ends drops out of the loop entirely; it must still be revoked.
+    calls = []
+    real_nodes, real_apply = L.uaccess_seat_nodes, L.apply_uaccess_acl
+    L.uaccess_seat_nodes = lambda seat='seat0': [node('vseat/' + seat)]
+    L.apply_uaccess_acl = _recorder(calls)
+    try:
+        reg = _bare_registry()
+        _set_active(reg, 1000, seat='seat1')
+        reg._write_derived()
+        calls.clear()
+        _logout(reg)
+        reg._write_derived()
+        check('vseat: seat1 revoked after its last session ends',
+              any(c[1] is None and c[2] == 1000 and any('seat1' in p for p in c[0])
+                  for c in calls), str(calls))
+        check('vseat: seat1 cache cleared', 'seat1' not in reg._seat_active_uid)
+    finally:
+        L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
+
+
+def test_registry_retries_failed_nodes():
+    # A node setfacl failed on must not be cached as done — but retrying it on
+    # every 4 Hz cycle would spawn setfacl forever on a persistent failure, so
+    # retries are gated by UACCESS_RETRY_S.
+    calls, fail = [], set()
+    now = [1000.0]
+    real_nodes, real_apply, real_clock = L.uaccess_seat_nodes, L.apply_uaccess_acl, L.time.monotonic
+    a, b = node('retry/a'), node('retry/b')
+    L.uaccess_seat_nodes = lambda seat='seat0': [a, b]
+    def apply(nodes, new, old):
+        calls.append((tuple(sorted(nodes)), new, old))
+        return [x for x in nodes if x in fail]
+    L.apply_uaccess_acl = apply
+    L.time.monotonic = lambda: now[0]
+    try:
+        reg = _bare_registry()
+        fail.add(b)
+        _set_active(reg, 1000)
+        reg._write_derived()
+        calls.clear()
+        reg._write_derived()
+        check('retry: not retried inside the gate', calls == [], str(calls))
+
+        now[0] += L.UACCESS_RETRY_S + 0.1
+        fail.clear()
+        reg._write_derived()
+        check('retry: failed node retried after the gate',
+              any(b in c[0] and c[1] == 1000 for c in calls), str(calls))
+
+        calls.clear()
+        now[0] += L.UACCESS_RETRY_S + 0.1
+        reg._write_derived()
+        check('retry: settles once it succeeds', calls == [], str(calls))
+
+        # a uid switch is never held back by an earlier failure's gate
+        fail.add(b)
+        _set_active(reg, 1001)
+        reg._write_derived()
+        calls.clear()
+        _set_active(reg, 1002)
+        reg._write_derived()
+        check('retry: uid switch bypasses the gate',
+              any(c[1] == 1002 for c in calls), str(calls))
+    finally:
+        L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
+        L.time.monotonic = real_clock
+
+
 def main():
     print(f"schema-logind uaccess re-scan tests (run dir {RUNDIR})\n")
     for fn in (test_enumerate, test_apply, test_registry_fires_on_change,
                test_registry_refires_on_node_readd,
-               test_registry_enumerates_only_on_udev_change):
+               test_registry_enumerates_only_on_udev_change,
+               test_apply_reports_failures, test_registry_revokes_when_no_active,
+               test_registry_revokes_vanished_seat, test_registry_retries_failed_nodes):
         print(fn.__name__)
         fn()
         print()

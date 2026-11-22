@@ -343,6 +343,9 @@ SESSION_UNREGISTER = os.environ.get(
 UDEV_DATA_DIR = os.environ.get('SCHEMA_LOGIND_UDEV_DATA', '/run/udev/data')
 DEV_DIR = os.environ.get('SCHEMA_LOGIND_DEV_DIR', '/dev')
 _UDEV_DB_RE = re.compile(r'([cb])(\d+):(\d+)')
+# A node setfacl failed on is retried, but no sooner than this: derive runs at
+# 4 Hz and a persistent failure must not become a setfacl spawn loop.
+UACCESS_RETRY_S = 5.0
 
 # --- per-user supervisor (schema-user) --------------------------------------
 # Overridable for the same reason as the dirs above: a test aims these at a
@@ -629,14 +632,21 @@ def uaccess_seat_nodes(seat_id='seat0'):
 
 def apply_uaccess_acl(nodes, new_uid, old_uid=None):
     """Grant the active user rw on each node and revoke the previous user's —
-    the setfacl half of devnode_acl_all. Non-fatal per node: a device that
-    vanished mid-scan must not abort the rest."""
+    the setfacl half of devnode_acl_all. new_uid None is revoke-only (nobody
+    active). Non-fatal per node: a device that vanished mid-scan must not abort
+    the rest. Returns the nodes setfacl failed on, so they aren't cached as done."""
+    failed = []
     for n in nodes:
-        subprocess.run(['setfacl', '-m', 'u:%d:rw' % new_uid, n],
-                       stderr=subprocess.DEVNULL)
+        rc = 0
+        if new_uid is not None:
+            rc |= subprocess.run(['setfacl', '-m', 'u:%d:rw' % new_uid, n],
+                                 stderr=subprocess.DEVNULL).returncode
         if old_uid is not None and old_uid != new_uid:
-            subprocess.run(['setfacl', '-x', 'u:%d' % old_uid, n],
-                           stderr=subprocess.DEVNULL)
+            rc |= subprocess.run(['setfacl', '-x', 'u:%d' % old_uid, n],
+                                 stderr=subprocess.DEVNULL).returncode
+        if rc:
+            failed.append(n)
+    return failed
 
 
 def _uaccess_fingerprint(nodes):
@@ -1665,6 +1675,7 @@ class SessionRegistry:
         self._seat_uaccess_fp = {}   # seat_id -> {path: (ino, mtime_ns)} last granted
         self._seat_uaccess_nodes = {}  # seat_id -> cached node paths
         self._seat_udev_mtime = {}   # seat_id -> udev-DB mtime at last enumeration
+        self._seat_uaccess_retry = {}  # seat_id -> (uid, monotonic) earliest retry after a failure
         self.supervisors = None      # UserSupervisors, attached by main()
 
     # -- lookup --------------------------------------------------------------
@@ -1889,7 +1900,8 @@ class SessionRegistry:
         sd_login_monitor_new(NULL) would not fail with -ENOENT; nothing could
         read real seat or user state off disk until now.
         """
-        for seat_id in self.seats():
+        seats = self.seats()
+        for seat_id in seats:
             members = self.sessions_for_seat(seat_id)
             active_sid, _ = self.active_session_for_seat(seat_id)
             uids = []
@@ -1902,10 +1914,12 @@ class SessionRegistry:
                 active_uid = self.sessions[active_sid].record.uid
                 body.append('ACTIVE=%s' % active_sid)
                 body.append('ACTIVE_UID=%d' % active_uid)
-                self._reconcile_uaccess(seat_id, active_uid)
+            self._reconcile_uaccess(seat_id, active_uid if active_sid else None)
             body.append('SESSIONS=%s' % ' '.join(s for s, _ in members))
             body.append('UIDS=%s' % ' '.join(str(u) for u in uids))
             self._write_if_changed(SEATS_DIR + '/' + seat_id, '\n'.join(body) + '\n')
+        for seat_id in [s for s in self._seat_active_uid if s not in seats]:
+            self._reconcile_uaccess(seat_id, None)
 
         for uid in self.uids():
             mine = [o for o in self.sessions.values() if o.record.uid == uid]
@@ -1953,18 +1967,37 @@ class SessionRegistry:
         fp = _uaccess_fingerprint(nodes)
         old = self._seat_active_uid.get(seat_id)
         prev = self._seat_uaccess_fp.get(seat_id)
-        if old == active_uid and prev == fp:
+        if active_uid is None:
+            if old is None:
+                return
+            targets, revoke = list(fp), old       # nobody active: revoke only
+        elif old == active_uid and prev == fp:
             return
-        if old != active_uid:
-            targets, revoke = nodes, old          # login / uid switch: all, revoke old
+        elif old != active_uid:
+            targets, revoke = list(fp), old       # login / uid switch: all, revoke old
         else:
             prev = prev or {}
             targets, revoke = [n for n, sig in fp.items() if prev.get(n) != sig], None
+        retry = self._seat_uaccess_retry.get(seat_id)
+        if retry and retry[0] == active_uid and time.monotonic() < retry[1]:
+            return
         try:
-            apply_uaccess_acl(targets, active_uid, revoke)
+            failed = apply_uaccess_acl(targets, active_uid, revoke)
         except Exception as e:
             print(f"login1-stub: uaccess re-scan failed on {seat_id}: {e}",
                   file=sys.stderr)
+            return
+        if failed:
+            # Leave the cache unadvanced so the whole step (grant + revoke)
+            # repeats after the gate; setfacl is idempotent on the nodes that
+            # already took.
+            self._seat_uaccess_retry[seat_id] = (active_uid,
+                                                 time.monotonic() + UACCESS_RETRY_S)
+            return
+        self._seat_uaccess_retry.pop(seat_id, None)
+        if active_uid is None:
+            self._seat_active_uid.pop(seat_id, None)
+            self._seat_uaccess_fp.pop(seat_id, None)
             return
         self._seat_active_uid[seat_id] = active_uid
         self._seat_uaccess_fp[seat_id] = fp
