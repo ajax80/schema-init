@@ -21,7 +21,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define INSPECT_MS 30000
 #define MAXWORDS 256
 #define OUT_CAP (16 << 20)
 
@@ -554,7 +553,7 @@ static int collect(int fds[2], char *bufs[2], size_t lens[2], int *over) {
     int open = 2;
     while (open) {
         clock_gettime(CLOCK_MONOTONIC, &t);
-        long left = INSPECT_MS - ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
+        long left = VERIFY_INSPECT_MS - ((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
         if (left <= 0) return -1;
         /* revents are stale after EINTR: a read on them could block past the deadline */
         if (poll(p, 2, left) < 0) {
@@ -666,7 +665,7 @@ int root_inspect(const bls_entry_t *e, grubenv_t *env, int nenv, const char *ext
             /* a child stuck in an uninterruptible stat can't be reaped; don't hang with it */
             for (int i = 0; i < 20 && !waitpid(pid, &st, WNOHANG); i++)
                 nanosleep(&(struct timespec){ 0, 50000000 }, NULL);
-            unres(r, "inspection did not finish within %d s", INSPECT_MS / 1000);
+            unres(r, "inspection did not finish within %d s", VERIFY_INSPECT_MS / 1000);
         } else if (waitpid(pid, &st, 0) == pid && !(WIFEXITED(st) && !WEXITSTATUS(st))) {
             unres(r, "inspection ended abnormally (status 0x%x)", st);
         }

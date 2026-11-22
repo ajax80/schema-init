@@ -18,6 +18,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAXENV 64
@@ -49,6 +50,7 @@ typedef struct {
     int posbad; /* an entry skipped or a sort tie: menu positions are not known */
     char *cfg; /* grub.cfg, NULL with cfg_err when unreadable */
     int cfg_err;
+    long long t0, budget; /* ms: inspections start only while now - t0 < budget */
 } ctx_t;
 
 static void emit(ctx_t *c, tag_t t, const char *fmt, ...) {
@@ -179,9 +181,21 @@ static int inspect_stub(ctx_t *c, const bls_entry_t *e, root_report_t *r) {
     return r->fail ? 1 : r->nunres ? 3 : 0;
 }
 
+static long long mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 static root_report_t *inspect(ctx_t *c, int i) {
     if (!c->done[i]) {
-        if (c->o->inspect) inspect_stub(c, &c->ents[i], &c->rep[i]);
+        root_report_t *r = &c->rep[i];
+        if (mono_ms() - c->t0 >= c->budget) {
+            snprintf(r->unres[0], sizeof r->unres[0], "not inspected: verify's %lld s went to the entries above",
+                     c->budget / 1000);
+            r->unresolved = r->unres[0];
+            r->nunres = 1;
+        } else if (c->o->inspect) inspect_stub(c, &c->ents[i], &c->rep[i]);
         else root_inspect(&c->ents[i], c->env, c->nopt ? c->nopt : c->nenv, NULL, &c->rep[i]);
         c->done[i] = 1;
     }
@@ -690,6 +704,11 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     c.ents = calloc(MAXENTS, sizeof *c.ents);
     c.rep = calloc(MAXENTS, sizeof *c.rep);
     c.done = calloc(MAXENTS, sizeof *c.done);
+    c.t0 = mono_ms();
+    c.budget = VERIFY_BUDGET_MS;
+#ifdef SCHEMA_VERIFY_TESTHOOKS
+    if (getenv("SCHEMA_VERIFY_BUDGET_MS")) c.budget = atoll(getenv("SCHEMA_VERIFY_BUDGET_MS"));
+#endif
 
     emit(&c, T_HEAD, "Next boot");
     c.nenv = grubenv_read(o->grubenv, c.env, MAXENV);

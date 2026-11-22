@@ -9,8 +9,11 @@
 #include <sys/wait.h>
 
 #include "verify_gate.h"
+#include "verify_root.h"
 
-#define GATE_TIMEOUT_MS 30000
+/* verify's budget, one inspection that started just inside it, and the rest of the
+ * run: a verify that is slow but within its own limits must not read as unavailable */
+#define GATE_TIMEOUT_MS (VERIFY_BUDGET_MS + VERIFY_INSPECT_MS + 15000)
 /* after SIGKILL: a child stuck in D state never dies, and the gate must not wait on it */
 #define GATE_REAP_MS 2000
 

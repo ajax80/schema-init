@@ -5,6 +5,12 @@
 #include <stddef.h>
 #include <sys/stat.h>
 
+/* one entry's mount+chroot inspection */
+#define VERIFY_INSPECT_MS 30000
+/* all entries: once spent, the rest are reported uninspected instead of run. Entries go
+ * in report order (next boot, guard fallback, then spares), so what's cut is a spare */
+#define VERIFY_BUDGET_MS 45000
+
 /* fail/reasons: FAIL lines. unres: UNRESOLVED lines, never PASS and never FAIL;
  * unresolved points at unres[0] when there is any. check_out is malloc'd, the
  * caller frees it (NUL-terminated); check_rc is -1 when --check gave no report. */

@@ -587,6 +587,21 @@ if [ "$(id -u)" != 0 ]; then
     chmod 644 "$T/bls4/m-1.conf"
 fi
 
+# the time budget: once spent, a spare is a WARN (never blocks); the armed fallback is UNRESOLVED
+echo 1.2 > "$VFX/sleep-schema-snap-20261118-175630-post-bootfix"
+SCHEMA_VERIFY_BUDGET_MS=1000 v
+expect 0 budget-spare
+has "[PASS] guard fallback schema-snap-20261118-175630-post-bootfix" || fail "budget-spare: fallback not inspected"
+has "[WARN] schema-snap-20261011-200415-post-update: unresolved: not inspected: verify's 1 s went to the entries above" ||
+    fail "budget-spare: spare line"
+rm "$VFX/sleep-schema-snap-20261118-175630-post-bootfix"
+echo 1.2 > "$VFX/sleep-m-7.2.11"
+SCHEMA_VERIFY_BUDGET_MS=1000 v
+expect 3 budget-fallback
+has "[PASS] actual next boot m-7.2.11" || fail "budget-fallback: actual not inspected"
+has "[UNRESOLVED] guard fallback schema-snap-20261118-175630-post-bootfix: not inspected" || fail "budget-fallback: line"
+rm "$VFX/sleep-m-7.2.11"
+
 # the shipped binary has no hooks: every SCHEMA_VERIFY_* path above is ignored
 ./schema-ctl verify > "$T/out" 2>&1
 grep -qF "$T" "$T/out" && fail "shipped schema-ctl used a SCHEMA_VERIFY_* path"
