@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.29
+Version:        0.4.30
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -535,6 +535,26 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sun Nov 22 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.30-1
+- Supersedes 0.4.29, which was tagged but never released: on a Pi, verify
+  ran the next boot's --check against /usr/sbin/schema-init, which the deb
+  does not ship, so a package upgrade's re-exec was refused. It now checks
+  /usr/bin/schema-init, what schema-init-pi execs (#561)
+- schema-ctl verify (#550, #552, #553): a pre-reboot check of the next boot
+  (the entry GRUB will actually pick, its kernel, initrd, root and init=, the
+  candidate's own --check in a read-only chroot), services against the last
+  good boot's baseline, the guard's ways back, and disks. reexec, arm and an
+  interactive reboot/poweroff run it first and refuse on FAIL, an unaccepted
+  CHANGE or (reexec) UNRESOLVED; --force overrides. Package upgrades re-exec
+  through the gate without failing the transaction. Spare snapshots are
+  inspected within a 45 s budget; the rest are a WARN (#559)
+- The rail look (#554, #555, #557): a styled boot rail and board in a
+  blue-violet palette on the Terminus-based schema-10x20 console font; the
+  board falls back to ASCII on any other font
+- schema-snapshot: prune and delete never remove the snapshot the armed
+  guard falls back to (#558)
+- schema-board: names and card replies cleaned of control bytes, restart
+  counts kept to their column, standby tallied as STANDBY (#559)
 * Sat Nov 21 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.29-1
 - schema-ctl verify (#550, #552, #553): a pre-reboot check of the next boot
   (the entry GRUB will actually pick, its kernel, initrd, root and init=, the
