@@ -117,8 +117,12 @@ int rc_palette_apply(int fd, const char *orig_path) {
     unsigned char orig[48];
     int have = read48(orig_path, orig) == 0;
     if (!have && xioctl(fd, GIO_CMAP, orig) < 0) return -1;
-    if (xioctl(fd, PIO_CMAP, (void *)rc_schema_palette) < 0) return -1;
-    if (!have) write48(orig_path, orig);
+    /* save before applying: without the original, restore has nothing to put back */
+    if (!have && write48(orig_path, orig) < 0) return -1;
+    if (xioctl(fd, PIO_CMAP, (void *)rc_schema_palette) < 0) {
+        if (!have) unlink(orig_path);
+        return -1;
+    }
     return 0;
 }
 

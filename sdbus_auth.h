@@ -11,15 +11,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/random.h>
+#include <time.h>
+#include <unistd.h>
 
-/* the bus GUID reported in OK; 32 hex chars, stable per process */
+/* the bus GUID reported in OK; 32 hex chars, stable per process. Random, not
+   PID-derived: PID 1 starts the system bus at the same PID every boot, and the
+   spec wants it unique per bus instance. */
 static inline const char *sdbus__guid(void) {
     static char g[33];
     if (!g[0]) {
-        unsigned seed = (unsigned)getpid() * 2654435761u + 0x9e3779b9u;
-        for (int i = 0; i < 32; i++) {
-            seed = seed * 1103515245u + 12345u;
-            g[i] = "0123456789abcdef"[(seed >> 16) & 0xf];
+        unsigned char r[16];
+        if (getrandom(r, sizeof r, 0) != (ssize_t)sizeof r) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            unsigned seed = (unsigned)getpid() ^ (unsigned)ts.tv_nsec ^ (unsigned)ts.tv_sec * 2654435761u;
+            for (int i = 0; i < 16; i++) r[i] = (unsigned char)((seed = seed * 1103515245u + 12345u) >> 16);
+        }
+        for (int i = 0; i < 16; i++) {
+            g[2 * i] = "0123456789abcdef"[r[i] >> 4];
+            g[2 * i + 1] = "0123456789abcdef"[r[i] & 0xf];
         }
         g[32] = '\0';
     }

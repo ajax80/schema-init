@@ -1,5 +1,6 @@
 #include "../verify_boot.h"
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -283,6 +284,26 @@ static void test_grubcfg_default(void) {
 }
 
 /* env_block=512+1: the variables GRUB loads after grubenv, from sector 512 of its device */
+/* more variables than the caller has room for: an error, never a silent prefix
+   (a dropped next_entry or boot_success would change what verify concludes) */
+static void test_grubenv_overflow(void) {
+    grubenv_t kv[2];
+    int n = env_from("# GRUB Environment Block\na=1\n#c\nb=2\n");
+    assert(n == 2);
+    char p[4200];
+    snprintf(p, sizeof p, "%s/vboot-over", tmpd);
+    FILE *f = fopen(p, "w");
+    fputs("a=1\nb=2\nnext_entry=x\n", f);
+    fclose(f);
+    errno = 0;
+    assert(grubenv_read(p, kv, 2) == -1 && errno == E2BIG);
+    f = fopen(p, "w");
+    fputs("a=1\nb=2\n# trailing comment\n\n", f);
+    fclose(f);
+    assert(grubenv_read(p, kv, 2) == 2);
+    remove(p);
+}
+
 static void test_envblock(void) {
     char dev[4200], blk[512];
     snprintf(dev, sizeof dev, "%s/vboot-envdev", tmpd);
@@ -301,6 +322,8 @@ static void test_envblock(void) {
     assert(grubenv_block_read(dev, "512+1,600+1", env, 32) == -1);
     assert(grubenv_block_read(dev, "x", env, 32) == -1);
     assert(grubenv_block_read("/nonexistent/dev", "512+1", env, 32) == -1);
+    errno = 0;
+    assert(grubenv_block_read(dev, "512+1", env, 1) == -1 && errno == E2BIG);
     remove(dev);
 }
 
@@ -326,6 +349,11 @@ static void test_grubcfg_vars(void) {
     /* a later top-level set wins */
     n = grubcfg_vars("set a=1\nset a=2\n", kv, 16);
     assert(n == 1 && !strcmp(kvget(kv, n, "a"), "2"));
+    /* more distinct names than room: an error, not the first few (a dropped one
+       set differently in grubenv would read as a known value) */
+    errno = 0;
+    assert(grubcfg_vars("set a=1\nset b=2\nset c=3\n", kv, 2) == -1 && errno == E2BIG);
+    assert(grubcfg_vars("set a=1\nset b=2\nset a=3\n", kv, 2) == 2);
 }
 
 int main(int argc, char **argv) {
@@ -336,6 +364,7 @@ int main(int argc, char **argv) {
     test_grubcfg();
     test_grubenv_long();
     test_grubcfg_default();
+    test_grubenv_overflow();
     test_envblock();
     test_grubcfg_vars();
     printf("verify_boot: ok\n");
