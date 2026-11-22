@@ -22,8 +22,8 @@
    broadcast (property-change notifications, portal state signals, etc)
    -- verified against this file's own test suite, which already needed
    this same line for tests/test_sdbus_route.c's broadcast case. own:*
-   is included for completeness/documented-intent even though nothing
-   currently gates RequestName on policy (see the SP4 design doc). */
+   is required: sdbus_driver.h's RequestName checks own= policy, so
+   without it nothing on the session bus could claim a name. */
 #define SDBUS_NO_POLICY_FILE_DEFAULT \
     "context = default\n" \
     "allow = send_destination:*\n" \

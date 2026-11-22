@@ -15,7 +15,24 @@ static int out_has(sdbus_conn *c, const char *s) {
 }
 static void out_reset(sdbus_conn *c) { c->out_len = 0; }
 
+/* the bus GUID was a hash of the PID: guessable, and the same for every bus
+   started at the same PID (PID 1's system bus on every boot) */
+static void guid(void) {
+    char pidguid[33];
+    unsigned seed = (unsigned)getpid() * 2654435761u + 0x9e3779b9u;
+    for (int i = 0; i < 32; i++) {
+        seed = seed * 1103515245u + 12345u;
+        pidguid[i] = "0123456789abcdef"[(seed >> 16) & 0xf];
+    }
+    pidguid[32] = '\0';
+    const char *g = sdbus__guid();
+    assert(strlen(g) == 32 && strspn(g, "0123456789abcdef") == 32);
+    assert(strcmp(g, pidguid));
+    assert(sdbus__guid() == g && !strcmp(sdbus__guid(), g));
+}
+
 int main(void) {
+    guid();
     /* --- auth handshake against a fake conn (uid set directly) --- */
     sdbus_conn c = {0};
     c.uid = 1000;

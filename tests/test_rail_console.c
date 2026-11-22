@@ -158,6 +158,13 @@ static void palette(void) {
     reset();
     unlink(path);
     assert(rc_palette_restore(path, vt) == -1 && ncalls == 0);
+
+    /* the original can't be saved: applying would leave nothing to restore it from */
+    char blocked[160];
+    snprintf(blocked, sizeof blocked, "%s/vt/console-orig", dir);   /* vt is a file, not a dir */
+    reset();
+    assert(rc_palette_apply(3, blocked) == -1);
+    assert(called(PIO_CMAP, -1) == 0);
 }
 
 int main(void) {

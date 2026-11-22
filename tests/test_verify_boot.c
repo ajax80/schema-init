@@ -1,5 +1,6 @@
 #include "../verify_boot.h"
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -282,6 +283,26 @@ static void test_grubcfg_default(void) {
            !strcmp(v, "${saved_entry}"));
 }
 
+/* more variables than the caller has room for: an error, never a silent prefix
+   (a dropped next_entry or boot_success would change what verify concludes) */
+static void test_grubenv_overflow(void) {
+    grubenv_t kv[2];
+    int n = env_from("# GRUB Environment Block\na=1\n#c\nb=2\n");
+    assert(n == 2);
+    char p[4200];
+    snprintf(p, sizeof p, "%s/vboot-over", tmpd);
+    FILE *f = fopen(p, "w");
+    fputs("a=1\nb=2\nnext_entry=x\n", f);
+    fclose(f);
+    errno = 0;
+    assert(grubenv_read(p, kv, 2) == -1 && errno == E2BIG);
+    f = fopen(p, "w");
+    fputs("a=1\nb=2\n# trailing comment\n\n", f);
+    fclose(f);
+    assert(grubenv_read(p, kv, 2) == 2);
+    remove(p);
+}
+
 /* env_block=512+1: the variables GRUB loads after grubenv, from sector 512 of its device */
 static void test_envblock(void) {
     char dev[4200], blk[512];
@@ -301,6 +322,8 @@ static void test_envblock(void) {
     assert(grubenv_block_read(dev, "512+1,600+1", env, 32) == -1);
     assert(grubenv_block_read(dev, "x", env, 32) == -1);
     assert(grubenv_block_read("/nonexistent/dev", "512+1", env, 32) == -1);
+    errno = 0;
+    assert(grubenv_block_read(dev, "512+1", env, 1) == -1 && errno == E2BIG);
     remove(dev);
 }
 
@@ -336,6 +359,7 @@ int main(int argc, char **argv) {
     test_grubcfg();
     test_grubenv_long();
     test_grubcfg_default();
+    test_grubenv_overflow();
     test_envblock();
     test_grubcfg_vars();
     printf("verify_boot: ok\n");

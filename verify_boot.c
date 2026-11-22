@@ -11,16 +11,20 @@ static int grubenv_parse(FILE *f, grubenv_t *kv, int max) {
     char *line = NULL;
     size_t cap = 0;
     int n = 0;
-    while (n < max && getline(&line, &cap, f) >= 0) {
+    while (getline(&line, &cap, f) >= 0) {
         line[strcspn(line, "\n")] = '\0';
         char *eq = strchr(line, '=');
         if (line[0] == '#' || !eq || eq - line >= GRUBENV_SZ) continue;
+        /* no room: the rest is unseen, and a dropped next_entry or boot_success
+           changes the answer, so this is an error rather than a prefix */
+        if (n == max) { n = -1; break; }
         snprintf(kv[n][0], GRUBENV_SZ, "%.*s", (int)(eq - line), line);
         if (snprintf(kv[n][1], GRUBENV_SZ, "%s", eq + 1) >= GRUBENV_SZ) snprintf(kv[n][1], GRUBENV_SZ, GRUBENV_CUT);
         n++;
     }
     free(line);
     fclose(f);
+    if (n < 0) errno = E2BIG;   /* after fclose, which may touch errno */
     return n;
 }
 

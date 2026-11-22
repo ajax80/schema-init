@@ -388,7 +388,9 @@ static int envblock_merge(ctx_t *c) {
     }
     int n = grubenv_block_read(dev, spec, c->env + c->nenv, MAXENV - c->nenv);
     if (n < 0 && errno == EILSEQ) emit(c, T_UNRES, "grubenv env_block=%s on %s: no GRUB env block there", spec, dev);
-    if (n < 0 && errno != EILSEQ) {
+    if (n < 0 && errno == E2BIG)
+        emit(c, T_UNRES, "grubenv env_block=%s on %s: more than %d variables with grubenv's, verify can't see them all", spec, dev, MAXENV);
+    if (n < 0 && errno != EILSEQ && errno != E2BIG) {
         char what[PATH_MAX + 64];
         snprintf(what, sizeof what, "grubenv env_block=%s on", spec);
         unreadable(c, what, dev, errno);
@@ -727,6 +729,8 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     } else if (c.nenv < 0 && ge == ENOENT) {
         /* not GRUB+BLS (Debian's /boot/grub, systemd-boot): v1 judges nothing about such a boot */
         unsup = 1;
+    } else if (c.nenv < 0 && ge == E2BIG) {
+        emit(&c, T_UNRES, "grubenv %s: more than %d variables, verify can't see them all", o->grubenv, MAXENV);
     } else if (c.nenv < 0) {
         unreadable(&c, "grubenv", o->grubenv, ge);
     } else if (envblock_merge(&c)) {
