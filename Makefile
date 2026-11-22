@@ -135,11 +135,11 @@ check.o: pi_target.h pi_bootguard.h
 PI_KIT_EXAMPLES = $(wildcard services/pi-*.svc.example) services/udev.svc.example services/udev-trigger.svc.example \
 	services/dbus.svc.example services/sysctl.svc.example
 
-fonts/schema-12x24.psfu.gz: fonts/schema-12x24.psfu
+fonts/schema-10x20.psfu.gz: fonts/schema-10x20.psfu
 	gzip -9n < $< > $@
 
-install: all fonts/schema-12x24.psfu.gz
-	install -D -m 0644 fonts/schema-12x24.psfu.gz $(DESTDIR)$(PREFIX)/lib/kbd/consolefonts/schema-12x24.psfu.gz
+install: all fonts/schema-10x20.psfu.gz
+	install -D -m 0644 fonts/schema-10x20.psfu.gz $(DESTDIR)$(PREFIX)/lib/kbd/consolefonts/schema-10x20.psfu.gz
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(BINS) $(DESTDIR)$(BINDIR)/
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
@@ -295,7 +295,7 @@ check-hardening: $(BINS) $(OBJS)
 
 clean:
 	rm -f $(OBJS) schema-user.o schema-user schema-analyze schema-init schema-init-static schema-ctl schema-subreaper schema-journal-sink schema-board schema-coredump schema-recorder schema-udev schema-dbus schema-systemctl schema-init-pi udev-parity verify-rules-live verify-eprops-live libatomic_asneeded.a
-	rm -rf $(RELDIR) build fonts/schema-12x24.psfu.gz
+	rm -rf $(RELDIR) build fonts/schema-10x20.psfu.gz
 	$(MAKE) -C desktop clean
 	rm -rf analyze/target
 
@@ -513,13 +513,13 @@ verify-dbus-conformance:
 
 
 
-# The schema font is generated, then committed (fonts/schema-12x24.{bdf,psfu},
+# The schema font is generated, then committed (fonts/schema-10x20.{bdf,psfu},
 # schema_font.c), so building schema-init needs no python3. Regenerate after
 # editing tools/mkschemafont.py; test-schema-font fails if the copies drift.
 font:
-	python3 -I tools/mkschemafont.py fonts/spleen-12x24.bdf fonts/schema-12x24.bdf
-	python3 -I tools/bdf2psf.py fonts/schema-12x24.bdf fonts/schema-12x24.psfu
-	python3 -I tools/psf2c.py fonts/schema-12x24.psfu schema_font.c
+	python3 -I tools/mkschemafont.py fonts/ter-u20n.bdf fonts/schema-10x20.bdf
+	python3 -I tools/bdf2psf.py fonts/schema-10x20.bdf fonts/schema-10x20.psfu
+	python3 -I tools/psf2c.py fonts/schema-10x20.psfu schema_font.c
 
 test-schema-font:
 	$(CC) $(CFLAGS) tests/test_schema_font.c schema_font.c -o $(TESTDIR)/schema-font && $(TESTDIR)/schema-font

@@ -3,7 +3,7 @@ Version:        0.4.28
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
-License:        AGPL-3.0-or-later
+License:        AGPL-3.0-or-later AND OFL-1.1
 URL:            https://github.com/ajax80/schema-init
 Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
@@ -487,8 +487,8 @@ if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ] &&
 fi
 
 %files
-%license LICENSE fonts/LICENSE.spleen
-%{_prefix}/lib/kbd/consolefonts/schema-12x24.psfu.gz
+%license LICENSE fonts/OFL.terminus
+%{_prefix}/lib/kbd/consolefonts/schema-10x20.psfu.gz
 %doc README.md docs/
 %{_bindir}/schema-init
 %{_bindir}/schema-user

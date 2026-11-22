@@ -16,6 +16,7 @@ static struct { unsigned long req; int op; } calls[64];
 static int ncalls, mode_reply = KD_TEXT, fail_n, fail_op = -1;
 static unsigned long fail_req;
 static unsigned char cmap_now[48];
+static unsigned set_w, set_h;   /* size of the last KD_FONT_OP_SET */
 
 static int fake(int fd, unsigned long req, void *arg) {
     (void)fd;
@@ -29,6 +30,9 @@ static int fake(int fd, unsigned long req, void *arg) {
             struct console_font_op *f = arg;
             f->width = 8; f->height = 16; f->charcount = 256;
             if (f->data) memset(f->data, 0x5a, 256 * 32);
+        } else if (op == KD_FONT_OP_SET) {
+            set_w = ((struct console_font_op *)arg)->width;
+            set_h = ((struct console_font_op *)arg)->height;
         }
         return 0;
     case GIO_UNIMAP: {
@@ -69,7 +73,8 @@ static void font_wanted_rules(void) {
     assert(rc_font_wanted("", "", "", 1280) == 1);
     assert(rc_font_wanted("", "", "ter-v32b", 1920) == 0);
     assert(rc_font_wanted("", "", "eurlatgr", 1920) == 1);
-    assert(rc_font_wanted("", "", "schema-12x24", 1920) == 1);
+    assert(rc_font_wanted("", "", "schema-10x20", 1920) == 1);
+    assert(rc_font_wanted("", "", "schema-12x24", 1920) == 0);
     assert(rc_font_wanted("", "", "Fixed", 1920) == 1);   /* Debian console-setup stock FONTFACE */
     assert(rc_font_wanted("", "nofont\n", "", 1920) == 0);
     assert(rc_font_wanted("a schema.rail_font=off b", "", "", 1920) == 0);
@@ -78,6 +83,7 @@ static void font_wanted_rules(void) {
 static void font_fail_each_step(void) {
     reset();
     assert(rc_font_load(3) == RC_FONT_OK);
+    assert(set_w == 10 && set_h == 20);
     assert(called(KDFONTOP, KD_FONT_OP_SET) == 1 && called(PIO_UNIMAPCLR, -1) == 1 && called(PIO_UNIMAP, -1) == 1);
 
     reset(); fail_req = KDFONTOP; fail_op = KD_FONT_OP_GET; fail_n = 1;

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <linux/kd.h>
 
-/* schema_font.c is generated from fonts/schema-12x24.bdf (tools/bdf2psf.py, tools/psf2c.py) */
+/* schema_font.c is generated from fonts/schema-10x20.bdf (tools/bdf2psf.py, tools/psf2c.py) */
 extern const unsigned char schema_font_glyphs[256 * 64];
 extern const struct unipair schema_font_unimap[];
 extern const unsigned schema_font_unimap_len;
@@ -16,7 +16,7 @@ struct rail_alphabet {
     const char *sep, *trunc, *banner_l, *banner_r;
 };
 
-/* every glyph here must be in schema-12x24 (tests/test_schema_font.c) */
+/* every glyph here must be in schema-10x20 (tests/test_schema_font.c) */
 static const struct rail_alphabet rail_font_ab = {
     "┃", "┣━", "╍━", "━━►",
     "◆", "◇", "▲", "■", "□",

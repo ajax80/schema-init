@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# mkschemafont.py SPLEEN.bdf OUT.bdf — cut Spleen 12x24 down to the 256 glyphs of
-# schema-12x24 and draw the rail glyphs Spleen lacks. 256, not 512: a 512-glyph
+# mkschemafont.py TERMINUS.bdf OUT.bdf — cut Terminus ter-u20n down to the 256 glyphs
+# of schema-10x20 and draw the rail glyphs Terminus lacks. 256, not 512: a 512-glyph
 # console font costs the VT its bright colours (attribute bit 3 becomes a glyph bit).
 import re
 import sys
 
-W, H = 12, 24
+W, H = 10, 20
 
 
 def parse(path):
@@ -29,60 +29,41 @@ def blank():
     return [0] * H
 
 
-# BDF rows are whole bytes, left-aligned: a 12-px row is 16 bits, pixel 0 at bit 15
+# BDF rows are whole bytes, left-aligned: a 10-px row is 16 bits, pixel 0 at bit 15
 def setpx(g, x, y):
     if 0 <= x < W and 0 <= y < H:
         g[y] |= 1 << (15 - x)
 
 
-# drawn on Spleen 12x24's metrics, matching its U+25C6: centre (5, 12), x-height rows 8..18
+# drawn on Terminus 20n's metrics: its U+25C6 is centred (4, 9) over rows 5..13,
+# its U+25A0 fills cols 2..6 rows 6..13, its U+2501 is rows 9..10
+def dash_heavy():
+    g = blank()
+    for y in (9, 10):
+        for x in (1, 2, 3, 6, 7, 8):
+            setpx(g, x, y)
+    return g
+
+
 def diamond_outline():
     g = blank()
     for y in range(H):
         for x in range(W):
-            d = abs(x - 5) + abs(y - 12)
-            if 3.5 <= d <= 5.5:
+            if 3 <= abs(x - 4) + abs(y - 9) <= 4:
                 setpx(g, x, y)
-    return g
-
-
-def square_filled():
-    g = blank()
-    for y in range(8, 18):
-        for x in range(1, 11):
-            setpx(g, x, y)
     return g
 
 
 def square_outline():
     g = blank()
-    for y in range(8, 18):
-        for x in range(1, 11):
-            if y in (8, 9, 16, 17) or x in (1, 2, 9, 10):
+    for y in range(6, 14):
+        for x in range(2, 7):
+            if y in (6, 13) or x in (2, 6):
                 setpx(g, x, y)
     return g
 
 
-def triangle_up():
-    g = blank()
-    for y in range(8, 19):
-        half = (y - 8) // 2
-        for x in range(5 - half, 6 + half):
-            setpx(g, x, y)
-    return g
-
-
-def pointer_right():
-    g = blank()
-    for y in range(7, 18):
-        half = 5 - abs(y - 12)
-        for x in range(1, 1 + 2 * half):
-            setpx(g, x, y)
-    return g
-
-
-DRAWN = {0x25C7: diamond_outline, 0x25A0: square_filled, 0x25A1: square_outline, 0x25B2: triangle_up,
-         0x25BA: pointer_right}
+DRAWN = {0x254D: dash_heavy, 0x25C7: diamond_outline, 0x25A1: square_outline}
 
 # what the rail emits beyond ASCII/Latin-1 (keep in step with rail_glyphs.h)
 RAIL = [0x2501, 0x2503, 0x2523, 0x2517, 0x254D, 0x25C6, 0x25C7, 0x25B2, 0x25A0, 0x25A1,
@@ -114,21 +95,24 @@ def main():
         if cp in sp or cp in DRAWN:
             slots[free.pop(0)] = cp
         elif cp in LIGHT_BOX + RAIL:
-            sys.exit(f'mkschemafont: U+{cp:04X} needed but neither in Spleen nor drawn')
+            sys.exit(f'mkschemafont: U+{cp:04X} needed but neither in Terminus nor drawn')
     if free:
         sys.exit(f'mkschemafont: {len(free)} slots empty (add EXTRA candidates)')
     for cp in slots:
         glyphs[cp] = sp[cp] if cp in sp else DRAWN[cp]()
     chosen = slots
     head = re.split(r'^CHARS ', open(src).read(), flags=re.M)[0]
-    head = head.replace('FAMILY_NAME "Spleen"', 'FAMILY_NAME "schema"')
-    head = head.replace('-misc-spleen-', '-schema-schema-')
+    head = head.replace('FAMILY_NAME "Terminus"', 'FAMILY_NAME "schema"')
+    head = head.replace('-xos4-Terminus-', '-schema-schema-')
+    head = head.replace('FOUNDRY "xos4"', 'FOUNDRY "schema"')
+    # BDF wants STARTFONT first; the provenance COMMENT goes right after it
+    first, rest = head.split('\n', 1)
+    head = first + '\nCOMMENT schema-10x20: Terminus 4.49.1 ter-u20n cut to 256 glyphs, rail glyphs added\n' + rest
     with open(out, 'w') as f:
-        f.write('COMMENT schema-12x24: Spleen 12x24 2.1.0 cut to 256 glyphs, rail glyphs added\n')
         f.write(head)
         f.write(f'CHARS {len(chosen)}\n')
         for cp in chosen:
-            f.write(f'STARTCHAR uni{cp:04X}\nENCODING {cp}\nSWIDTH 500 0\nDWIDTH 12 0\nBBX 12 24 0 -5\nBITMAP\n')
+            f.write(f'STARTCHAR uni{cp:04X}\nENCODING {cp}\nSWIDTH 500 0\nDWIDTH 10 0\nBBX 10 20 0 -4\nBITMAP\n')
             for r in glyphs[cp]:
                 f.write(f'{r:04X}\n')
             f.write('ENDCHAR\n')
