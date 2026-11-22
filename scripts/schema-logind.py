@@ -630,20 +630,22 @@ def uaccess_seat_nodes(seat_id='seat0'):
     return out
 
 
-def apply_uaccess_acl(nodes, new_uid, old_uid=None):
+def apply_uaccess_acl(nodes, new_uid, revoke=()):
     """Grant the active user rw on each node and revoke the previous user's —
-    the setfacl half of devnode_acl_all. new_uid None is revoke-only (nobody
-    active). Non-fatal per node: a device that vanished mid-scan must not abort
-    the rest. Returns the nodes setfacl failed on, so they aren't cached as done."""
+    the setfacl half of devnode_acl_all. Non-fatal per node: a device that
+    vanished mid-scan must not abort the rest."""
+    # new_uid None = revoke-only (nobody active). Failed nodes are returned so
+    # the caller retries them instead of caching them as granted.
     failed = []
     for n in nodes:
         rc = 0
         if new_uid is not None:
             rc |= subprocess.run(['setfacl', '-m', 'u:%d:rw' % new_uid, n],
                                  stderr=subprocess.DEVNULL).returncode
-        if old_uid is not None and old_uid != new_uid:
-            rc |= subprocess.run(['setfacl', '-x', 'u:%d' % old_uid, n],
-                                 stderr=subprocess.DEVNULL).returncode
+        for u in revoke:
+            if u != new_uid:
+                rc |= subprocess.run(['setfacl', '-x', 'u:%d' % u, n],
+                                     stderr=subprocess.DEVNULL).returncode
         if rc:
             failed.append(n)
     return failed
@@ -1676,6 +1678,7 @@ class SessionRegistry:
         self._seat_uaccess_nodes = {}  # seat_id -> cached node paths
         self._seat_udev_mtime = {}   # seat_id -> udev-DB mtime at last enumeration
         self._seat_uaccess_retry = {}  # seat_id -> (uid, monotonic) earliest retry after a failure
+        self._seat_uaccess_stale = {}  # seat_id -> uids that may still hold ACLs after a failed step
         self.supervisors = None      # UserSupervisors, attached by main()
 
     # -- lookup --------------------------------------------------------------
@@ -1918,7 +1921,8 @@ class SessionRegistry:
             body.append('SESSIONS=%s' % ' '.join(s for s, _ in members))
             body.append('UIDS=%s' % ' '.join(str(u) for u in uids))
             self._write_if_changed(SEATS_DIR + '/' + seat_id, '\n'.join(body) + '\n')
-        for seat_id in [s for s in self._seat_active_uid if s not in seats]:
+        for seat_id in [s for s in set(self._seat_active_uid) | set(self._seat_uaccess_stale)
+                        if s not in seats]:
             self._reconcile_uaccess(seat_id, None)
 
         for uid in self.uids():
@@ -1967,40 +1971,47 @@ class SessionRegistry:
         fp = _uaccess_fingerprint(nodes)
         old = self._seat_active_uid.get(seat_id)
         prev = self._seat_uaccess_fp.get(seat_id)
-        if active_uid is None:
-            if old is None:
-                return
-            targets, revoke = list(fp), old       # nobody active: revoke only
-        elif old == active_uid and prev == fp:
+        stale = self._seat_uaccess_stale.get(seat_id, set())
+        revoke = (stale | {old}) - {None, active_uid}
+        if old == active_uid and prev == fp and not revoke:
             return
-        elif old != active_uid:
-            targets, revoke = list(fp), old       # login / uid switch: all, revoke old
+        if old != active_uid or revoke:
+            targets = list(fp)                    # login / switch / logout / stale: all
         else:
             prev = prev or {}
-            targets, revoke = [n for n, sig in fp.items() if prev.get(n) != sig], None
+            targets = [n for n, sig in fp.items() if prev.get(n) != sig]
         retry = self._seat_uaccess_retry.get(seat_id)
         if retry and retry[0] == active_uid and time.monotonic() < retry[1]:
             return
         try:
-            failed = apply_uaccess_acl(targets, active_uid, revoke)
+            failed = apply_uaccess_acl(targets, active_uid, sorted(revoke))
         except Exception as e:
+            # e.g. setfacl not installed: gate it like a failure, or this
+            # re-execs and logs every 4 Hz cycle.
             print(f"login1-stub: uaccess re-scan failed on {seat_id}: {e}",
                   file=sys.stderr)
-            return
-        if failed:
-            # Leave the cache unadvanced so the whole step (grant + revoke)
-            # repeats after the gate; setfacl is idempotent on the nodes that
-            # already took.
             self._seat_uaccess_retry[seat_id] = (active_uid,
                                                  time.monotonic() + UACCESS_RETRY_S)
             return
-        self._seat_uaccess_retry.pop(seat_id, None)
+        # The step happened, failures or not: active_uid now holds what took,
+        # so it's the uid to revoke later. Revokes that may not have landed
+        # stay in `stale` and failed nodes stay out of fp, so the next pass
+        # (after the gate) repeats exactly the unfinished work.
+        if failed:
+            self._seat_uaccess_retry[seat_id] = (active_uid,
+                                                 time.monotonic() + UACCESS_RETRY_S)
+            self._seat_uaccess_stale[seat_id] = revoke
+            fp = {n: sig for n, sig in fp.items() if n not in failed}
+        else:
+            self._seat_uaccess_retry.pop(seat_id, None)
+            self._seat_uaccess_stale.pop(seat_id, None)
         if active_uid is None:
-            self._seat_active_uid.pop(seat_id, None)
-            self._seat_uaccess_fp.pop(seat_id, None)
-            return
-        self._seat_active_uid[seat_id] = active_uid
-        self._seat_uaccess_fp[seat_id] = fp
+            for cache in (self._seat_active_uid, self._seat_uaccess_fp,
+                          self._seat_uaccess_nodes, self._seat_udev_mtime):
+                cache.pop(seat_id, None)
+        else:
+            self._seat_active_uid[seat_id] = active_uid
+            self._seat_uaccess_fp[seat_id] = fp
 
     def _write_if_changed(self, path, content):
         # Compared against what we last wrote rather than re-read: this runs at
