@@ -253,6 +253,54 @@ int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, s
     return rc;
 }
 
+/* mount(8) turns these into mount flags (ms) or keeps them to itself (0); none is
+ * filesystem data. bind/move/propagation words are mount(8)'s own calls, never ORed in */
+static const struct { const char *w; unsigned long ms; } vfs_opts[] = {
+    { "noexec", MS_NOEXEC }, { "nosuid", MS_NOSUID }, { "nodev", MS_NODEV },
+    { "sync", MS_SYNCHRONOUS }, { "dirsync", MS_DIRSYNC }, { "mand", MS_MANDLOCK },
+    { "noatime", MS_NOATIME }, { "nodiratime", MS_NODIRATIME }, { "relatime", MS_RELATIME },
+    { "strictatime", MS_STRICTATIME }, { "lazytime", MS_LAZYTIME }, { "iversion", MS_I_VERSION },
+    { "nosymfollow", 256 /* MS_NOSYMFOLLOW */ }, { "silent", MS_SILENT },
+    { "ro", 0 }, { "rw", 0 }, { "exec", 0 }, { "suid", 0 }, { "dev", 0 }, { "async", 0 },
+    { "nomand", 0 }, { "atime", 0 }, { "diratime", 0 }, { "norelatime", 0 }, { "nostrictatime", 0 },
+    { "nolazytime", 0 }, { "noiversion", 0 }, { "symfollow", 0 }, { "loud", 0 },
+    { "remount", 0 }, { "bind", 0 }, { "rbind", 0 }, { "move", 0 },
+    { "private", 0 }, { "rprivate", 0 }, { "shared", 0 }, { "rshared", 0 },
+    { "slave", 0 }, { "rslave", 0 }, { "unbindable", 0 }, { "runbindable", 0 },
+    { "defaults", 0 }, { "auto", 0 }, { "noauto", 0 }, { "user", 0 }, { "nouser", 0 },
+    { "users", 0 }, { "owner", 0 }, { "noowner", 0 }, { "group", 0 }, { "nogroup", 0 },
+    { "nofail", 0 }, { "_netdev", 0 }, { "loop", 0 },
+};
+/* key=value words mount(8) keeps */
+static const char *const vfs_keys[] = { "user=", "helper=", "uhelper=", "loop=", "offset=", "sizelimit=",
+                                        "encryption=", "comment=", "x-", "X-" };
+
+static int vfs_opt(const char *p, size_t len, unsigned long *ms) {
+    for (size_t i = 0; i < sizeof vfs_keys / sizeof *vfs_keys; i++)
+        if (!strncmp(p, vfs_keys[i], strlen(vfs_keys[i])) && strlen(vfs_keys[i]) <= len) return 1;
+    for (size_t i = 0; i < sizeof vfs_opts / sizeof *vfs_opts; i++)
+        if (strlen(vfs_opts[i].w) == len && !strncmp(p, vfs_opts[i].w, len)) {
+            *ms |= vfs_opts[i].ms;
+            return 1;
+        }
+    return 0;
+}
+
+int rootflags_data(const char *flags, int initrd, unsigned long *ms, char *out, size_t n) {
+    size_t o = 0;
+    if (!n) return -1;
+    out[0] = 0;
+    for (const char *p = flags; p && *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] == ',')) {
+        size_t len = strcspn(p, ",");
+        if (!len || (initrd && vfs_opt(p, len, ms))) continue;
+        if (o + !!o + len >= n) return -1;
+        if (o) out[o++] = ',';
+        memcpy(out + o, p, len);
+        out[o += len] = 0;
+    }
+    return 0;
+}
+
 static int run(char *const argv[], int ofd, int efd) {
     static char *const envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
     pid_t p = fork();
@@ -480,8 +528,21 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
         U("cannot bind root=%s read-only onto the target: %m\n", rootspec);
         return;
     }
-    if (!bound && mount(dev, tgt, type, fl, flags)) {
-        F("cannot mount root=%s with rootflags=%s: %m\n", rootspec, flags ? flags : "");
+    /* with an initramfs, mount(8) gets rootflags= and splits off its mount flags; the
+     * kernel alone hands it to mount(2) whole. Read-only stays forced either way */
+    char data[512];
+    unsigned long ms = fl;
+    if (!bound && rootflags_data(flags, e->n_initrd > 0, &ms, data, sizeof data)) {
+        U("rootflags=%s is too long to check\n", flags);
+        return;
+    }
+    if (!bound && mount(dev, tgt, type, ms, data)) {
+        /* initrd words that are all GRUB variables: whether mount(8) or the kernel mounts root is not known */
+        if (!e->n_initrd && e->initrd_vars)
+            U("cannot mount root=%s with rootflags=%s as the kernel would (%m); the initrd is only GRUB variables\n",
+              rootspec, flags ? flags : "");
+        else
+            F("cannot mount root=%s with rootflags=%s (mount data \"%s\"): %m\n", rootspec, flags ? flags : "", data);
         return;
     }
 

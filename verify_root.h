@@ -53,6 +53,10 @@ int subvol_check(int ctl, const char *top, const char *subvol, const char *roots
 int boot_files_check(int ctl, const char *grub_root, const bls_entry_t *e);
 int init_resolve(int ctl, const char *tgt, const char *init, char *real, size_t n);
 int target_dirs_check(int ctl, const char *tgt);
+/* rootflags= as filesystem mount data into out: with an initramfs, mount(8) words
+ * (noatime, nodev, x-*...) dropped, as dracut's mount -o leaves them out of the data,
+ * and the mount flags among them ORed into *ms; without one, as given. -1 when out is too small */
+int rootflags_data(const char *flags, int initrd, unsigned long *ms, char *out, size_t n);
 /* the mount point of dev mounted whole (mount root /); 0 found */
 int mountinfo_find(const char *mountinfo_path, dev_t dev, char *mp, size_t n);
 /* the child's records (F/U fail/unresolved, I init path, S schema-init, C --check rc,

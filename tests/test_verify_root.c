@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
@@ -500,6 +501,30 @@ static void test_needs_root(void) {
     assert(r.fail && !r.unresolved);
 }
 
+static void test_rootflags_data(void) {
+    char d[256];
+    unsigned long ms = 0;
+    /* Eli 11-22: dracut hands rootflags= to mount(8), which turns noatime into
+     * MS_NOATIME; as raw mount(2) data btrfs refuses it with EINVAL */
+    assert(rootflags_data("subvol=root,noatime", 1, &ms, d, sizeof d) == 0 && !strcmp(d, "subvol=root") && ms == MS_NOATIME);
+    ms = 0;
+    assert(rootflags_data("rw,noatime,compress=zstd:1,subvol=root,relatime,nodev,x-foo=1,defaults,user=bob,rprivate,comment=a",
+                          1, &ms, d, sizeof d) == 0 && !strcmp(d, "compress=zstd:1,subvol=root") &&
+           ms == (MS_NOATIME | MS_RELATIME | MS_NODEV));
+    /* noexec must reach the mount, or an init the boot cannot exec passes */
+    ms = 0;
+    assert(rootflags_data("subvol=root,noexec", 1, &ms, d, sizeof d) == 0 && !strcmp(d, "subvol=root") && ms == MS_NOEXEC);
+    ms = 0;
+    assert(rootflags_data("bind,remount", 1, &ms, d, sizeof d) == 0 && !strcmp(d, "") && ms == 0);
+    /* a key that only starts like one of mount(8)'s stays data */
+    assert(rootflags_data("users_quota=1,user_xattr", 1, &ms, d, sizeof d) == 0 && !strcmp(d, "users_quota=1,user_xattr"));
+    /* no initramfs: the kernel passes rootflags= to mount(2) untouched */
+    ms = 0;
+    assert(rootflags_data("subvol=root,noatime", 0, &ms, d, sizeof d) == 0 && !strcmp(d, "subvol=root,noatime") && ms == 0);
+    assert(rootflags_data(NULL, 1, &ms, d, sizeof d) == 0 && !strcmp(d, ""));
+    assert(rootflags_data("subvol=root,noatime", 1, &ms, d, 5) == -1);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) tmpd = argv[1];
     setup_devdir();
@@ -513,6 +538,7 @@ int main(int argc, char **argv) {
     test_tree_checks();
     test_mountinfo_find();
     test_needs_root();
+    test_rootflags_data();
     printf("verify_root: ok\n");
     return 0;
 }
