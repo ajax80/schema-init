@@ -20,7 +20,8 @@ trap cleanup EXIT
 fail() { echo "FAIL verify_nowrite_live: $*"; exit 1; }
 mkdir "$T/m"
 
-attach() { l=$(losetup -f --show "$1") || fail "losetup $1"; LOOPS="$LOOPS $l"; echo "$l"; }
+# sets $L, not echoed: a $(...) subshell would keep LOOPS from the cleanup trap
+attach() { L=$(losetup -f --show "$1") || fail "losetup $1"; LOOPS="$LOOPS $L"; }
 
 # $1 type, $2 name: a clean image and, copied while mounted, a dirty one
 mkimg() {
@@ -49,17 +50,17 @@ VL_LIVE=1
 export VL_LIVE
 for i in "$@"; do
     case $i in
-        btrfs-dirty) VL_BTRFS_DIRTY=$(attach "$T/$i.img"); export VL_BTRFS_DIRTY ;;
-        ext4-dirty) VL_EXT4_DIRTY=$(attach "$T/$i.img"); export VL_EXT4_DIRTY ;;
-        xfs-dirty) VL_XFS_DIRTY=$(attach "$T/$i.img"); export VL_XFS_DIRTY ;;
-        btrfs) VL_BTRFS_CLEAN=$(attach "$T/$i.img"); export VL_BTRFS_CLEAN ;;
-        ext4) VL_EXT4_CLEAN=$(attach "$T/$i.img"); export VL_EXT4_CLEAN ;;
+        btrfs-dirty) attach "$T/$i.img"; VL_BTRFS_DIRTY=$L; export VL_BTRFS_DIRTY ;;
+        ext4-dirty) attach "$T/$i.img"; VL_EXT4_DIRTY=$L; export VL_EXT4_DIRTY ;;
+        xfs-dirty) attach "$T/$i.img"; VL_XFS_DIRTY=$L; export VL_XFS_DIRTY ;;
+        btrfs) attach "$T/$i.img"; VL_BTRFS_CLEAN=$L; export VL_BTRFS_CLEAN ;;
+        ext4) attach "$T/$i.img"; VL_EXT4_CLEAN=$L; export VL_EXT4_CLEAN ;;
     esac
 done
 # an already-mounted ext4 root: its own copy, mounted read-write as a running root is
 if [ -f "$T/ext4.img" ]; then
     cp --sparse=always "$T/ext4.img" "$T/ext4-m.img"
-    VL_EXT4_MOUNTED=$(attach "$T/ext4-m.img")
+    attach "$T/ext4-m.img"; VL_EXT4_MOUNTED=$L
     export VL_EXT4_MOUNTED
     mount "$VL_EXT4_MOUNTED" "$T/m" || fail "mount ext4-m"
 fi
