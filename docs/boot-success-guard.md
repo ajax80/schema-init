@@ -19,7 +19,10 @@ hardware.
   repointed at the snapshot, fstab rewritten to the frozen subvols). Booting the
   entry gives a real read-write desktop — no initramfs overlay needed.
   - `schema-snapshot create [label]` — snapshot + BLS entry, auto-prune to
-    `SCHEMA_SNAP_KEEP` (default 3).
+    `SCHEMA_SNAP_KEEP` (default 3). The snapshot that grubenv's
+    `schema_fallback_id` names is never pruned or deleted (`delete` refuses
+    until `disarm`); if it is older than the newest `SCHEMA_SNAP_KEEP` it is
+    kept on top of them.
   - `schema-snapshot list | delete <name> | prune`
   - `schema-snapshot arm [--force] [N] | disarm` — see below. `arm` runs
     `schema-ctl verify --quiet` first and arms nothing unless it exits 0
