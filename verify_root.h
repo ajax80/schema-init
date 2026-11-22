@@ -53,6 +53,9 @@ int subvol_check(int ctl, const char *top, const char *subvol, const char *roots
 int boot_files_check(int ctl, const char *grub_root, const bls_entry_t *e);
 int init_resolve(int ctl, const char *tgt, const char *init, char *real, size_t n);
 int target_dirs_check(int ctl, const char *tgt);
+/* 1 when dev's filesystem has a log or journal only a read-write mount may replay (ext3/4
+ * needs_recovery; a btrfs log on a filesystem not mounted anywhere, by sysfs_btrfs/<fsid>) */
+int needs_replay(const char *dev, const char *sysfs_btrfs);
 /* rootflags= as filesystem mount data into out: with an initramfs, mount(8) words
  * (noatime, nodev, x-*...) dropped, as dracut's mount -o leaves them out of the data,
  * and the mount flags among them ORed into *ms; without one, as given. -1 when out is too small */

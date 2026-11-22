@@ -499,6 +499,10 @@ verify-live:
 	sh tests/verify_uaccess_live.sh
 	sh tests/verify_db_live.sh
 
+# root + loop: verify's inspection never writes to a dirty filesystem (run `make test` first, as yourself)
+verify-nowrite-live:
+	sh tests/verify_nowrite_live.sh
+
 # Local-only: prove the C policy engine byte-identical against the PRIVATE
 # 14,979-msg SP0 corpus. Corpus + its derivatives never leave the machine
 # (tests/dbus-corpus/* is gitignored), so this is not part of `make test`.
@@ -510,7 +514,7 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf-full
 	$(TESTDIR)/sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-dbus-conformance
+.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-nowrite-live verify-dbus-conformance
 
 
 

@@ -332,7 +332,36 @@ static int is_btrfs(const char *dev) {
     return m == 8 && !memcmp(magic, "_BHRfS_M", 8);
 }
 
-/* not btrfs: try each block filesystem the kernel knows, as mount(8) does */
+int needs_replay(const char *dev, const char *sysfs_btrfs) {
+    unsigned char ext[0x64], bt[0x68];
+    char p[PATH_MAX];
+    struct stat st;
+    int fd = open(dev, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    ssize_t ne = pread(fd, ext, sizeof ext, 1024), nb = pread(fd, bt, sizeof bt, 0x10000);
+    close(fd);
+    /* btrfs first: its unused first 64K may still hold an old ext superblock */
+    if (nb != sizeof bt || memcmp(bt + 0x40, "_BHRfS_M", 8))
+        return ne == sizeof ext && ext[0x38] == 0x53 && ext[0x39] == 0xef && (ext[0x60] & 0x4);
+    int log = 0;
+    for (int i = 0x60; i < 0x68; i++) log |= bt[i];
+    if (!log) return 0;
+    /* a filesystem mounted anywhere had its log replayed by that first mount; ours shares its tree */
+    const unsigned char *u = bt + 0x20;
+    snprintf(p, sizeof p, "%s/%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", sysfs_btrfs,
+             u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+    return stat(p, &st) != 0;
+}
+
+/* not btrfs: each filesystem verify can mount read-only without a write, with what keeps it so;
+ * a read-only mount alone still replays a journal (ext3/4) or log (xfs, f2fs) onto the device.
+ * xfs and f2fs have no-recovery mounts too, but with a dirty log their view is inconsistent and
+ * nothing short of parsing that log tells: not listed, so the mount fails and the report says so */
+static const struct { const char *type, *data; } safe_fs[] = {
+    { "ext4", "noload" }, { "ext3", "noload" }, { "ext2", NULL }, { "vfat", NULL }, { "msdos", NULL },
+    { "exfat", NULL }, { "iso9660", NULL }, { "squashfs", NULL }, { "erofs", NULL },
+};
+
 static int mount_any(const char *dev, const char *dir, unsigned long fl, char *type, size_t tsz) {
     FILE *f = fopen("/proc/filesystems", "r");
     char line[128];
@@ -342,7 +371,11 @@ static int mount_any(const char *dev, const char *dir, unsigned long fl, char *t
         snprintf(type, tsz, "%s", line + strspn(line, " \t"));
         type[strcspn(type, "\n")] = '\0';
         /* each wrong type is a probe: no kernel log line for it */
-        if (strcmp(type, "btrfs")) ok = mount(dev, dir, type, fl | MS_SILENT, NULL);
+        for (size_t i = 0; i < sizeof safe_fs / sizeof *safe_fs; i++)
+            if (!strcmp(type, safe_fs[i].type)) {
+                ok = mount(dev, dir, type, fl | MS_SILENT, safe_fs[i].data);
+                break;
+            }
     }
     if (f) fclose(f);
     return ok;
@@ -506,15 +539,21 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     char mp[PATH_MAX];
     if (!btrfs && !stat(dev, &ds) && !mountinfo_find("/proc/self/mountinfo", ds.st_rdev, mp, sizeof mp)) {
         /* already mounted read-write: a second, read-only mount of it is EBUSY; a read-only
-         * bind of that mount is the same tree (rootflags= only matters to btrfs here) */
+         * bind of that mount is the same tree, but rootflags= is never tried on it */
         if (mount(mp, top, NULL, MS_BIND, NULL) ||
             mount(NULL, top, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL)) {
             U("cannot bind root=%s (%s, mounted on %s) read-only: %m\n", rootspec, dev, mp);
             return;
         }
         bound = 1;
-    } else if (btrfs ? mount(dev, top, "btrfs", fl, "subvolid=5") : mount_any(dev, top, fl, type, sizeof type)) {
-        U("cannot mount root=%s (%s) read-only: %m\n", rootspec, dev);
+    } else if (needs_replay(dev, "/sys/fs/btrfs")) {
+        U("root=%s (%s) has a %s that needs replay, which only a read-write mount does; the boot will, "
+          "verify won't write to inspect it\n", rootspec, dev, btrfs ? "btrfs log" : "journal");
+        return;
+    } else if (btrfs ? mount(dev, top, "btrfs", fl, "subvolid=5,rescue=nologreplay")
+                     : mount_any(dev, top, fl, type, sizeof type)) {
+        U("cannot mount root=%s (%s) read-only without writing to it (%m); verify mounts only btrfs, "
+          "ext2/3/4, vfat, exfat, iso9660, squashfs and erofs that way\n", rootspec, dev);
         return;
     }
     const char *sv = NULL;
@@ -532,9 +571,13 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
      * kernel alone hands it to mount(2) whole. Read-only stays forced either way */
     char data[512];
     unsigned long ms = fl;
-    if (!bound && rootflags_data(flags, e->n_initrd > 0, &ms, data, sizeof data)) {
+    if (rootflags_data(flags, e->n_initrd > 0, &ms, data, sizeof data)) {
         U("rootflags=%s is too long to check\n", flags);
-        return;
+        if (!bound) return;
+    } else if (bound && data[0]) {
+        /* mount flags are the VFS's and always valid; filesystem options meet the filesystem only at boot */
+        U("rootflags=%s: root=%s is mounted already, so its filesystem options (\"%s\") can't be tried; "
+          "the boot will\n", flags, rootspec, data);
     }
     if (!bound && mount(dev, tgt, type, ms, data)) {
         /* initrd words that are all GRUB variables: whether mount(8) or the kernel mounts root is not known */
