@@ -156,6 +156,9 @@ jobs:
           cd /build/src && make -n --no-print-directory test > /tmp/test-cmds || exit 1
           fail=0
           while IFS= read -r c; do
+              # make -n recurses into $(MAKE) sub-targets and lists their commands
+              # right after: running the "make <target>" line too runs them twice
+              case $c in "make "*) continue ;; esac
               skip=
               for p in $QEMU_SKIP; do case $c in *"$p"*) skip=$p ;; esac; done
               if [ -n "$skip" ]; then echo "SKIPPED under qemu-user: $skip"; continue; fi

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Committed font files must match a regen from tools/ (make font). Skipped
 # without python3 so building/testing schema-init never needs it.
+cd "$(dirname "$0")/.." || exit 1
 command -v python3 >/dev/null || { echo "font drift: skipped (no python3)"; exit 0; }
 T=${TESTDIR:-build/test}
 mkdir -p "$T"
