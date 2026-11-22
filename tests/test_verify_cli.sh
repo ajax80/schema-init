@@ -411,6 +411,11 @@ expect 3 blsdir-missing
 has "[UNRESOLVED] boot entries $T/no-bls" || fail "blsdir-missing: line"
 rm "$T/grubenv"
 
+# the Pi's --check binary is the one schema-init-pi execs (v0.4.29 shipped /usr/sbin, which a deb lacks)
+w=$(sed -n 's|.*P(path, "\(/[^"]*/schema-init\)").*|\1|p' schema-init-pi.c | head -n 1)
+d=$(sed -n 's|.*F(pi_init, "SCHEMA_VERIFY_PI_INIT", "\([^"]*\)").*|\1|p' verify.c)
+[ -n "$w" ] && [ "$w" = "$d" ] || fail "pi: verify checks '$d', schema-init-pi execs '$w'"
+
 # a Pi: no grubenv, cmdline.txt; services from schema-init --check on it
 printf 'console=tty1 root=PARTUUID=%s rootwait init=/usr/sbin/schema-init-pi\n' "$PU" > "$T/cmdline.txt"
 printf '#!/bin/sh\necho "$@" > "%s/pi-args"\ncat "%s/fx/check.out"\n' "$T" "$T" > "$T/pi-init"
