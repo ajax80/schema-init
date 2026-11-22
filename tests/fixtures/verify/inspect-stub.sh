@@ -3,6 +3,7 @@
 # $1 entry id, $2 its expanded options. Records to stderr, --check output to stdout.
 # Per-entry overrides in $VFX: init-<id>, ctl-<id> (extra records), rc-<id>, check-<id>.out.
 id=$1
+[ -f "$VFX/sleep-$id" ] && sleep "$(cat "$VFX/sleep-$id")"
 init=$(printf "%s\n" "$2" | tr " " "\n" | sed -n "s/^init=//p" | tail -n 1)
 [ -f "$VFX/init-$id" ] && init=$(cat "$VFX/init-$id")
 printf "I %s\n" "${init:-/sbin/init}" >&2

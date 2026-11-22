@@ -524,7 +524,7 @@ font:
 
 test-schema-font:
 	$(CC) $(CFLAGS) tests/test_schema_font.c schema_font.c -o $(TESTDIR)/schema-font && $(TESTDIR)/schema-font
-	TESTDIR=$(TESTDIR) sh tests/test_font_drift.sh
+	TESTDIR='$(TESTDIR)' sh tests/test_font_drift.sh
 
 test-rail-render:
 	$(CC) $(CFLAGS) tests/test_rail_render.c rail.c schema_font.c -o $(TESTDIR)/rail-render && $(TESTDIR)/rail-render

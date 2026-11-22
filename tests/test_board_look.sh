@@ -18,7 +18,8 @@ cat > "$T/mk.c" <<'CEOF'
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-/* mk NAME N: N services cycling every state; #1 long name, #2 an ESC name */
+/* mk NAME N [x]: N services cycling every state; #1 long name, #2 an ESC name;
+ * x: #3 and #4 with 4- and 6-digit restarts, #6 (EXCISED) held on standby */
 int main(int c, char **v) {
     static const uint8_t st[] = { STATE_PERFECT, STATE_FUNDAMENTAL, STATE_SETTLED, STATE_NEW_PROCESS,
                                   STATE_FRICTION, STATE_DORMANT, STATE_EXCISED, STATE_FULL_TRUST };
@@ -39,6 +40,11 @@ int main(int c, char **v) {
     }
     if (n > 1) snprintf(z.svc[1].name, 64, "a-very-long-service-name-that-overflows");
     if (n > 2) snprintf(z.svc[2].name, 64, "evil\033[2Jname");
+    if (c > 3 && n > 6) {
+        z.svc[3].restart_count = 1234;
+        z.svc[4].restart_count = 250000;
+        z.svc[6].limp = SHM_LIMP_STANDBY;
+    }
     f = shm_open(v[1], O_RDWR | O_CREAT, 0644);
     if (f < 0 || write(f, &z, sizeof z) != (ssize_t)sizeof z) return 1;
     return 0;
@@ -46,7 +52,7 @@ int main(int c, char **v) {
 CEOF
 gcc -O2 -std=c99 -D_GNU_SOURCE -I. -o "$T/mk" "$T/mk.c" -lrt || fail "mk build"
 
-mk() { S=/schema-board-look-$$-$1; SHMS="$SHMS $S"; "$T/mk" "$S" "$1" || fail "mk $1"; }
+mk() { S=/schema-board-look-$$-$1${2:-}; SHMS="$SHMS $S"; "$T/mk" "$S" "$@" || fail "mk $*"; }
 board() { SCHEMA_RECORDER_SHM=/schema-nonexistent-$$ SCHEMA_BOARD_SHM=$S ./schema-board --once; }
 ESC=$(printf '\033')
 
@@ -73,6 +79,8 @@ P=$(SCHEMA_BOARD_STYLE=plain board) || fail "plain exit"
 D=$(board) || fail "default exit"
 [ "$P" = "$D" ] || fail "default (non-VT) output is not the plain board"
 echo "$D" | grep -q "limp-mode board" || fail "plain board changed"
+echo "$P" | grep -q "evil${ESC}" && fail "plain: name injected an escape"
+echo "$P" | grep -q "evil?\[2Jname" || fail "plain: ESC not shown as ?"
 
 # --- Task 2: two columns, overflow, selection ---
 mk 68
@@ -109,5 +117,16 @@ mk 128
 O=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=80x200 SCHEMA_BOARD_SEL=3 board) || fail "80x200 exit"
 echo "$O" | grep -q "━━►" || fail "80x200: footer lost"
 echo "$O" | grep -q "j/k" || fail "80x200: key help lost"
+
+# --- restarts past 999 keep the columns; standby is tallied as STANDBY, not EXCISED ---
+mk 10 x
+O=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=80x60 board) || fail "x exit"
+echo "$O" | grep -q "svc003.* 1k " || fail "1234 restarts not shown as 1k"
+echo "$O" | grep -q "svc004.* \*\* " || fail "250000 restarts not shown as **"
+rows=$(echo "$O" | grep "svc00[0-9]" | sed "s/${ESC}\[[0-9;]*[A-Za-z]//g" | LC_ALL=C tr -d '\200-\277' | LC_ALL=C awk '{ print length($0) }' | sort -u | wc -l)
+[ "$rows" -eq 1 ] || fail "rows differ in width with big restart counts"
+tally=$(SCHEMA_BOARD_STYLE=font SCHEMA_BOARD_SIZE=200x60 board | grep "━━►")
+echo "$tally" | grep -q "1 STANDBY" || fail "standby not tallied: $tally"
+echo "$tally" | grep -q "EXCISED" && fail "standby tallied as EXCISED: $tally"
 
 echo "PASS: board look"

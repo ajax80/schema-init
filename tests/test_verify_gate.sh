@@ -231,10 +231,11 @@ if [ -n "$PTY" ]; then
     has "[WARN] verification unavailable; proceeding with reboot" || fail "interactive reboot missing-verifier WARN"
     connected || fail "interactive reboot with a missing verifier did not proceed"
 
+    # the shipped 105 s would make this the slowest test by far: 3 s stands in for it
     t0=$(date +%s)
-    tty vhang reboot
+    SCHEMA_VERIFY_GATE_TIMEOUT_MS=3000 tty vhang reboot
     t=$(($(date +%s) - t0))
-    [ "$t" -ge 29 ] && [ "$t" -lt 39 ] || fail "hung verifier: gate took ${t}s, want ~30"
+    [ "$t" -ge 3 ] && [ "$t" -lt 8 ] || fail "hung verifier: gate took ${t}s, want ~3"
     has "[WARN] verification unavailable; proceeding with reboot" || fail "interactive reboot hang WARN"
     has "timed out" || fail "hang reason does not say timed out"
     connected || fail "interactive reboot with a hung verifier did not proceed"

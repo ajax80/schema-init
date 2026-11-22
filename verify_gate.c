@@ -9,8 +9,14 @@
 #include <sys/wait.h>
 
 #include "verify_gate.h"
+#include "verify_root.h"
 
-#define GATE_TIMEOUT_MS 30000
+/* the three entries verify never cuts (next boot, normal default, guard fallback) at
+ * their full inspection time, plus the rest of the run; spares start only inside the
+ * budget, so they finish by budget + one inspection, which is less. A verify that is
+ * slow but within its own limits must not read as unavailable */
+#define GATE_TIMEOUT_MS (3 * VERIFY_INSPECT_MS + 15000)
+_Static_assert(3 * VERIFY_INSPECT_MS >= VERIFY_BUDGET_MS + VERIFY_INSPECT_MS, "gate shorter than verify");
 /* after SIGKILL: a child stuck in D state never dies, and the gate must not wait on it */
 #define GATE_REAP_MS 2000
 
