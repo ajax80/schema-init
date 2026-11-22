@@ -1,11 +1,11 @@
-COMMENT schema-10x20: Terminus 4.49.1 ter-u20n cut to 256 glyphs, rail glyphs added
 STARTFONT 2.1
+COMMENT schema-10x20: Terminus 4.49.1 ter-u20n cut to 256 glyphs, rail glyphs added
 FONT -schema-schema-Medium-R-Normal--20-200-72-72-C-100-ISO10646-1
 SIZE 20 72 72
 FONTBOUNDINGBOX 10 20 0 -4
 STARTPROPERTIES 20
 FAMILY_NAME "schema"
-FOUNDRY "xos4"
+FOUNDRY "schema"
 SETWIDTH_NAME "Normal"
 ADD_STYLE_NAME ""
 COPYRIGHT "Copyright (C) 2020 Dimitar Toshkov Zhekov"

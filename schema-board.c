@@ -356,11 +356,16 @@ static int scr_cols = 80, scr_rows = 24;
 
 /* Plain for pipes, --once and serial: vmtest and the recorder test read that. */
 /* By its map, not its size: stock Terminus ter-v20n is 10x20 too but lacks the
- * rail glyphs; U+254D is one only schema-10x20 carries among console fonts. */
+ * rail glyphs; U+254D is one only schema-10x20 carries among console fonts.
+ * GIO_UNIMAP on a background VT needs CAP_SYS_TTY_CONFIG or the tty as our
+ * ctty (--tty opens it O_NOCTTY); without that, fall back to the size. */
 static int font_is_schema(int fd) {
     static struct unipair e[8192];
     struct unimapdesc d = { .entry_ct = sizeof e / sizeof *e, .entries = e };
-    if (ioctl(fd, GIO_UNIMAP, &d) < 0) return 0;
+    if (ioctl(fd, GIO_UNIMAP, &d) < 0) {
+        struct console_font_op f = { .op = KD_FONT_OP_GET, .width = 32, .height = 32, .charcount = 512 };
+        return errno == EPERM && ioctl(fd, KDFONTOP, &f) == 0 && f.width == 10 && f.height == 20;
+    }
     for (unsigned i = 0; i < d.entry_ct; i++)
         if (e[i].unicode == 0x254D) return 1;
     return 0;

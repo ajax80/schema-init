@@ -104,8 +104,11 @@ def main():
     head = re.split(r'^CHARS ', open(src).read(), flags=re.M)[0]
     head = head.replace('FAMILY_NAME "Terminus"', 'FAMILY_NAME "schema"')
     head = head.replace('-xos4-Terminus-', '-schema-schema-')
+    head = head.replace('FOUNDRY "xos4"', 'FOUNDRY "schema"')
+    # BDF wants STARTFONT first; the provenance COMMENT goes right after it
+    first, rest = head.split('\n', 1)
+    head = first + '\nCOMMENT schema-10x20: Terminus 4.49.1 ter-u20n cut to 256 glyphs, rail glyphs added\n' + rest
     with open(out, 'w') as f:
-        f.write('COMMENT schema-10x20: Terminus 4.49.1 ter-u20n cut to 256 glyphs, rail glyphs added\n')
         f.write(head)
         f.write(f'CHARS {len(chosen)}\n')
         for cp in chosen:

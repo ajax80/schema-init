@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Source: Terminus 4.49.1 `ter-u20n.bdf`, vendored unchanged as `fonts/ter-u20n.bdf`; licence OFL-1.1 (`fonts/OFL.terminus` = upstream `OFL.TXT`). Upstream tarball: `https://downloads.sourceforge.net/project/terminus-font/terminus-font-4.49/terminus-font-4.49.1.tar.gz` (an extracted copy is at `/tmp/claude-1000/-/1766adbc-2cb3-48c4-9181-bb65644791e1/scratchpad/ter/terminus-font-4.49.1/`).
+- Source: Terminus 4.49.1 `ter-u20n.bdf`, vendored unchanged as `fonts/ter-u20n.bdf`; licence OFL-1.1 (`fonts/OFL.terminus` = upstream `OFL.TXT`). Upstream tarball: `https://downloads.sourceforge.net/project/terminus-font/terminus-font-4.49/terminus-font-4.49.1.tar.gz`, sha256 `d961c1b781627bf417f9b340693d64fc219e0113ad3a3af1a3424c7aa373ef79`.
 - Font name `schema-10x20`; cell 10×20; BDF `BBX 10 20 0 -4`; 256 glyphs (never 512 — bright colours).
 - Hand-drawn glyphs: exactly ╍ U+254D, ◇ U+25C7, □ U+25A1. Everything else from Terminus.
 - Embedded glyph pitch stays 64 bytes (32 rows × 2 bytes); `schema_font_glyphs[256 * 64]` unchanged.
