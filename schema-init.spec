@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.28
+Version:        0.4.29
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -535,6 +535,22 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sat Nov 21 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.29-1
+- schema-ctl verify (#550, #552, #553): a pre-reboot check of the next boot
+  (the entry GRUB will actually pick, its kernel, initrd, root and init=, the
+  candidate's own --check in a read-only chroot), services against the last
+  good boot's baseline, the guard's ways back, and disks. reexec, arm and an
+  interactive reboot/poweroff run it first and refuse on FAIL, an unaccepted
+  CHANGE or (reexec) UNRESOLVED; --force overrides. Package upgrades re-exec
+  through the gate without failing the transaction. Spare snapshots are
+  inspected within a 45 s budget; the rest are a WARN (#559)
+- The rail look (#554, #555, #557): a styled boot rail and board in a
+  blue-violet palette on the Terminus-based schema-10x20 console font; the
+  board falls back to ASCII on any other font
+- schema-snapshot: prune and delete never remove the snapshot the armed
+  guard falls back to (#558)
+- schema-board: names and card replies cleaned of control bytes, restart
+  counts kept to their column, standby tallied as STANDBY (#559)
 * Wed Nov 18 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.28-1
 - syscall_deny= (#546, #547): a denylist preset (@clock @cpu-emulation @debug
   @module @mount @obsolete @raw-io @reboot @swap kexec_load kexec_file_load
