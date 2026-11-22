@@ -500,6 +500,20 @@ static void test_needs_root(void) {
     assert(r.fail && !r.unresolved);
 }
 
+static void test_rootflags_data(void) {
+    char d[256];
+    /* Eli 11-22: dracut hands rootflags= to mount(8), which turns noatime into
+     * MS_NOATIME; as raw mount(2) data btrfs refuses it with EINVAL */
+    assert(rootflags_data("subvol=root,noatime", 1, d, sizeof d) == 0 && !strcmp(d, "subvol=root"));
+    assert(rootflags_data("rw,noatime,compress=zstd:1,subvol=root,relatime,nodev,x-foo=1,defaults", 1, d, sizeof d) == 0 &&
+           !strcmp(d, "compress=zstd:1,subvol=root"));
+    assert(rootflags_data("noatime,nodiratime", 1, d, sizeof d) == 0 && !strcmp(d, ""));
+    /* no initramfs: the kernel passes rootflags= to mount(2) untouched */
+    assert(rootflags_data("subvol=root,noatime", 0, d, sizeof d) == 0 && !strcmp(d, "subvol=root,noatime"));
+    assert(rootflags_data(NULL, 1, d, sizeof d) == 0 && !strcmp(d, ""));
+    assert(rootflags_data("subvol=root,noatime", 1, d, 5) == -1);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) tmpd = argv[1];
     setup_devdir();
@@ -513,6 +527,7 @@ int main(int argc, char **argv) {
     test_tree_checks();
     test_mountinfo_find();
     test_needs_root();
+    test_rootflags_data();
     printf("verify_root: ok\n");
     return 0;
 }

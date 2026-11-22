@@ -253,6 +253,38 @@ int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, s
     return rc;
 }
 
+/* mount(8) takes these as mount flags or keeps them to itself; none is filesystem data */
+static const char *const vfs_opts[] = {
+    "ro", "rw", "exec", "noexec", "suid", "nosuid", "dev", "nodev", "sync", "async", "dirsync",
+    "remount", "bind", "rbind", "move", "mand", "nomand", "atime", "noatime", "diratime",
+    "nodiratime", "relatime", "norelatime", "strictatime", "nostrictatime", "lazytime",
+    "nolazytime", "iversion", "noiversion", "symfollow", "nosymfollow", "silent", "loud",
+    "defaults", "auto", "noauto", "user", "nouser", "users", "owner", "noowner", "group",
+    "nogroup", "nofail", "_netdev",
+};
+
+static int vfs_opt(const char *p, size_t len) {
+    if (!strncmp(p, "x-", 2) || !strncmp(p, "X-", 2) || !strncmp(p, "comment=", 8)) return 1;
+    for (size_t i = 0; i < sizeof vfs_opts / sizeof *vfs_opts; i++)
+        if (strlen(vfs_opts[i]) == len && !strncmp(p, vfs_opts[i], len)) return 1;
+    return 0;
+}
+
+int rootflags_data(const char *flags, int initrd, char *out, size_t n) {
+    size_t o = 0;
+    if (!n) return -1;
+    out[0] = 0;
+    for (const char *p = flags; p && *p; p += strcspn(p, ",") + (p[strcspn(p, ",")] == ',')) {
+        size_t len = strcspn(p, ",");
+        if (!len || (initrd && vfs_opt(p, len))) continue;
+        if (o + !!o + len >= n) return -1;
+        if (o) out[o++] = ',';
+        memcpy(out + o, p, len);
+        out[o += len] = 0;
+    }
+    return 0;
+}
+
 static int run(char *const argv[], int ofd, int efd) {
     static char *const envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
     pid_t p = fork();
@@ -480,7 +512,14 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
         U("cannot bind root=%s read-only onto the target: %m\n", rootspec);
         return;
     }
-    if (!bound && mount(dev, tgt, type, fl, flags)) {
+    /* with an initramfs, mount(8) gets rootflags= and splits off its mount flags; the
+     * kernel alone hands it to mount(2) whole. Read-only stays forced either way */
+    char data[512];
+    if (!bound && rootflags_data(flags, e->n_initrd || e->initrd_vars, data, sizeof data)) {
+        U("rootflags=%s is too long to check\n", flags);
+        return;
+    }
+    if (!bound && mount(dev, tgt, type, fl, data)) {
         F("cannot mount root=%s with rootflags=%s: %m\n", rootspec, flags ? flags : "");
         return;
     }
