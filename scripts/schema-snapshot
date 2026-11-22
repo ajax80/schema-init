@@ -82,9 +82,12 @@ cmd_create() {
 }
 
 cmd_prune() {
-  local snaps old n
+  local snaps old n pinned
+  # the armed guard boots schema_fallback_id on a failed boot; pruning it leaves
+  # the guard pointing at nothing (11-21: create pruned post-bootfix, verify caught it)
+  pinned="$(grub2-editenv "$GRUBENV" list 2>/dev/null | sed -n 's/^schema_fallback_id=//p')" || pinned=""
   mount_top
-  mapfile -t snaps < <(ls -1 "$TOP" 2>/dev/null | grep -E "^$PREFIX_SNAP-[0-9]{8}-[0-9]{6}-" | grep -v -- '-home$' | sort)
+  mapfile -t snaps < <(ls -1 "$TOP" 2>/dev/null | grep -E "^$PREFIX_SNAP-[0-9]{8}-[0-9]{6}-" | grep -v -- '-home$' | grep -vxF -- "$pinned" | sort)
   umount_top
   n=${#snaps[@]}
   [ "$n" -gt "$KEEP" ] || return 0
