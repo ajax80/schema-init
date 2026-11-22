@@ -87,7 +87,8 @@ void verify_opts_env(verify_opts_t *o) {
         F(devdir, "SCHEMA_VERIFY_DEVDIR", NULL),
         F(esp, "SCHEMA_VERIFY_ESP", "/boot/efi"),
         F(cmdline_txt, "SCHEMA_VERIFY_CMDLINE_TXT", NULL),
-        F(pi_init, "SCHEMA_VERIFY_PI_INIT", "/usr/sbin/schema-init"),
+        /* what schema-init-pi execs: the deb puts schema-init in /usr/bin, not /usr/sbin */
+        F(pi_init, "SCHEMA_VERIFY_PI_INIT", "/usr/bin/schema-init"),
         F(inspect, "SCHEMA_VERIFY_INSPECT", NULL),
         F(envblock_dev, "SCHEMA_VERIFY_ENVBLOCK_DEV", NULL),
 #undef F
