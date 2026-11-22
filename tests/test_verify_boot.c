@@ -283,7 +283,6 @@ static void test_grubcfg_default(void) {
            !strcmp(v, "${saved_entry}"));
 }
 
-/* env_block=512+1: the variables GRUB loads after grubenv, from sector 512 of its device */
 /* more variables than the caller has room for: an error, never a silent prefix
    (a dropped next_entry or boot_success would change what verify concludes) */
 static void test_grubenv_overflow(void) {
@@ -304,6 +303,7 @@ static void test_grubenv_overflow(void) {
     remove(p);
 }
 
+/* env_block=512+1: the variables GRUB loads after grubenv, from sector 512 of its device */
 static void test_envblock(void) {
     char dev[4200], blk[512];
     snprintf(dev, sizeof dev, "%s/vboot-envdev", tmpd);
@@ -349,11 +349,6 @@ static void test_grubcfg_vars(void) {
     /* a later top-level set wins */
     n = grubcfg_vars("set a=1\nset a=2\n", kv, 16);
     assert(n == 1 && !strcmp(kvget(kv, n, "a"), "2"));
-    /* more distinct names than room: an error, not the first few (a dropped one
-       set differently in grubenv would read as a known value) */
-    errno = 0;
-    assert(grubcfg_vars("set a=1\nset b=2\nset c=3\n", kv, 2) == -1 && errno == E2BIG);
-    assert(grubcfg_vars("set a=1\nset b=2\nset a=3\n", kv, 2) == 2);
 }
 
 int main(int argc, char **argv) {

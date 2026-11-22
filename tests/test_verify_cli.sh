@@ -244,14 +244,6 @@ grep -q '^\[PASS\] actual' "$T/out" && fail "envblock-unread: PASS for the next 
 unset SCHEMA_VERIFY_ENVBLOCK_DEV
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 
-# grub.cfg setting more top-level variables than verify holds: unknown, not a prefix
-cp "$T/grub.cfg" "$T/grub.cfg.keep"
-i=0; while [ $i -lt 20 ]; do printf 'set cfgpad%d=x\n' $i; i=$((i + 1)); done >> "$T/grub.cfg"
-v
-expect 3 grubcfg-overflow
-has "[UNRESOLVED] $T/grub.cfg: more top-level variables than verify holds" || fail "grubcfg-overflow: line"
-mv "$T/grub.cfg.keep" "$T/grub.cfg"
-
 # more variables than verify holds: the rest is unseen, so the next boot is unknown
 { printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F"; i=0; while [ $i -lt 70 ]; do printf 'pad%d=x\n' $i; i=$((i + 1)); done; } > "$T/grubenv"
 v

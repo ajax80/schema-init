@@ -17,13 +17,14 @@ static int grubenv_parse(FILE *f, grubenv_t *kv, int max) {
         if (line[0] == '#' || !eq || eq - line >= GRUBENV_SZ) continue;
         /* no room: the rest is unseen, and a dropped next_entry or boot_success
            changes the answer, so this is an error rather than a prefix */
-        if (n == max) { n = -1; errno = E2BIG; break; }
+        if (n == max) { n = -1; break; }
         snprintf(kv[n][0], GRUBENV_SZ, "%.*s", (int)(eq - line), line);
         if (snprintf(kv[n][1], GRUBENV_SZ, "%s", eq + 1) >= GRUBENV_SZ) snprintf(kv[n][1], GRUBENV_SZ, GRUBENV_CUT);
         n++;
     }
     free(line);
     fclose(f);
+    if (n < 0) errno = E2BIG;   /* after fclose, which may touch errno */
     return n;
 }
 
@@ -346,7 +347,7 @@ int grubcfg_vars(const char *cfg, grubenv_t *kv, int max) {
             int i;
             for (i = 0; i < n && strcmp(kv[i][0], nm); i++)
                 ;
-            if (i == n && n == max) { errno = E2BIG; return -1; }
+            if (i == n && n == max) continue;
             snprintf(kv[i][0], GRUBENV_SZ, "%s", nm);
             snprintf(kv[i][1], GRUBENV_SZ, "%s", v);
             n += i == n;

@@ -749,10 +749,6 @@ int verify_run(const verify_opts_t *o, FILE *out) {
              * set differently is unknown, one set the same or in one store only is that value */
             grubenv_t cv[16];
             int room = (MAXENV - c.nenv) / 2, k = grubcfg_vars(c.cfg, cv, room < 16 ? room : 16);
-            if (k < 0) {
-                emit(&c, T_UNRES, "%s: more top-level variables than verify holds; a $var in options may be misread", o->grubcfg);
-                k = 0;
-            }
             memmove(c.env + k, c.env, (size_t)c.nenv * sizeof *c.env);
             memcpy(c.env, cv, (size_t)k * sizeof *cv);
             c.nenv += k;

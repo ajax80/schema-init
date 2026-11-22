@@ -17,12 +17,14 @@
 
 /* the bus GUID reported in OK; 32 hex chars, stable per process. Random, not
    PID-derived: PID 1 starts the system bus at the same PID every boot, and the
-   spec wants it unique per bus instance. */
+   spec wants it unique per bus instance. NONBLOCK: the system bus authenticates
+   its first client early in boot, and a blocked broker stalls every client; a
+   GUID needs uniqueness, not secrecy, so the time/pid fallback is enough. */
 static inline const char *sdbus__guid(void) {
     static char g[33];
     if (!g[0]) {
         unsigned char r[16];
-        if (getrandom(r, sizeof r, 0) != (ssize_t)sizeof r) {
+        if (getrandom(r, sizeof r, GRND_NONBLOCK) != (ssize_t)sizeof r) {
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
             unsigned seed = (unsigned)getpid() ^ (unsigned)ts.tv_nsec ^ (unsigned)ts.tv_sec * 2654435761u;
