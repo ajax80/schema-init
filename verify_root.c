@@ -340,8 +340,9 @@ int needs_replay(const char *dev, const char *sysfs_btrfs) {
     if (fd < 0) return 0;
     ssize_t ne = pread(fd, ext, sizeof ext, 1024), nb = pread(fd, bt, sizeof bt, 0x10000);
     close(fd);
-    if (ne == sizeof ext && ext[0x38] == 0x53 && ext[0x39] == 0xef) return !!(ext[0x60] & 0x4);
-    if (nb != sizeof bt || memcmp(bt + 0x40, "_BHRfS_M", 8)) return 0;
+    /* btrfs first: its unused first 64K may still hold an old ext superblock */
+    if (nb != sizeof bt || memcmp(bt + 0x40, "_BHRfS_M", 8))
+        return ne == sizeof ext && ext[0x38] == 0x53 && ext[0x39] == 0xef && (ext[0x60] & 0x4);
     int log = 0;
     for (int i = 0x60; i < 0x68; i++) log |= bt[i];
     if (!log) return 0;
@@ -551,7 +552,8 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
         return;
     } else if (btrfs ? mount(dev, top, "btrfs", fl, "subvolid=5,rescue=nologreplay")
                      : mount_any(dev, top, fl, type, sizeof type)) {
-        U("cannot mount root=%s (%s) read-only without writing to it: %m\n", rootspec, dev);
+        U("cannot mount root=%s (%s) read-only without writing to it (%m); verify mounts only btrfs, "
+          "ext2/3/4, vfat, exfat, iso9660, squashfs and erofs that way\n", rootspec, dev);
         return;
     }
     const char *sv = NULL;
@@ -571,12 +573,12 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     unsigned long ms = fl;
     if (rootflags_data(flags, e->n_initrd > 0, &ms, data, sizeof data)) {
         U("rootflags=%s is too long to check\n", flags);
-        return;
-    }
-    /* mount flags are the VFS's and always valid; filesystem options meet the filesystem only at boot */
-    if (bound && data[0])
+        if (!bound) return;
+    } else if (bound && data[0]) {
+        /* mount flags are the VFS's and always valid; filesystem options meet the filesystem only at boot */
         U("rootflags=%s: root=%s is mounted already, so its filesystem options (\"%s\") can't be tried; "
           "the boot will\n", flags, rootspec, data);
+    }
     if (!bound && mount(dev, tgt, type, ms, data)) {
         /* initrd words that are all GRUB variables: whether mount(8) or the kernel mounts root is not known */
         if (!e->n_initrd && e->initrd_vars)

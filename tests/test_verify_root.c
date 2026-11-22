@@ -558,6 +558,15 @@ static void test_needs_replay(void) {
     memcpy(sb + 0x40, "_BHRfS_M", 8);
     img(p, 0x10000, sb, sizeof sb, 0, NULL, 0);
     assert(needs_replay(p, sys) == 0);
+    /* a stale dirty ext superblock left in a btrfs device's first 64K is not its state */
+    img(p, 0x10000, sb, sizeof sb, 1024 + 0x38, mag, 2);
+    {
+        FILE *f = fopen(p, "r+");
+        fseek(f, 1024 + 0x60, SEEK_SET);
+        fwrite(dirty, 1, 4, f);
+        fclose(f);
+    }
+    assert(needs_replay(p, sys) == 0);
     sb[0x62] = 0xd4;
     img(p, 0x10000, sb, sizeof sb, 0, NULL, 0);
     assert(needs_replay(p, sys) == 1);

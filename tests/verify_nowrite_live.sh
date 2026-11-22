@@ -28,11 +28,13 @@ mkimg() {
     "mkfs.$1" -q "$T/$2.img" >/dev/null 2>&1 || "mkfs.$1" "$T/$2.img" >/dev/null 2>&1 || return 1
     l=$(losetup -f --show "$T/$2.img") || return 1
     mount "$l" "$T/m" || { losetup -d "$l"; return 1; }
-    mkdir -p "$T/m/sbin" && echo x > "$T/m/sbin/init" && sync
-    dd if=/dev/urandom of="$T/m/f" bs=1M count=2 conv=fsync status=none
-    cp --sparse=always "$T/$2.img" "$T/$2-dirty.img"
-    umount "$T/m"
+    mkdir -p "$T/m/sbin" && echo x > "$T/m/sbin/init" && sync &&
+        dd if=/dev/urandom of="$T/m/f" bs=1M count=2 conv=fsync status=none &&
+        cp --sparse=always "$T/$2.img" "$T/$2-dirty.img"
+    r=$?
+    umount "$T/m" || fail "umount $2"
     losetup -d "$l"
+    return $r
 }
 
 set --
