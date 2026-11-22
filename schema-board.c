@@ -434,13 +434,26 @@ static void put_name(sbuf_t *b, const char *in, int w, const struct rail_alphabe
     for (; cols < w; cols++) sput(b, " ");
 }
 
+/* a service name or PID 1's reply printed raw would let an ESC in it drive the terminal */
+static void clean(char *s) {
+    for (unsigned char *q = (unsigned char *)s; *q; q++) if (*q < 0x20 || *q == 0x7f) *q = '?';
+}
+
+/* restarts in 3 columns: past 999 the row would shift right */
+static const char *count3(int n, char buf[8]) {
+    if (n < 1000) snprintf(buf, 8, "%d", n < 0 ? 0 : n);
+    else if (n < 100000) snprintf(buf, 8, "%dk", n / 1000);
+    else snprintf(buf, 8, "**");
+    return buf;
+}
+
 static void put_lead(sbuf_t *b, int selected, const struct rail_alphabet *ab) {
     if (selected) sput(b, "\033[1;93m%s\033[0m ", style == STYLE_FONT ? "━►" : "->");
     else sput(b, "\033[35m%s\033[0m ", ab->branch);
 }
 
 static void cell_svc(sbuf_t *b, const shm_svc_t *v, int selected, const struct rail_alphabet *ab) {
-    char name[65], deck[8] = "";
+    char name[65], deck[8] = "", rs[8];
     int held = (v->limp & SHM_LIMP_STANDBY) && v->state == STATE_EXCISED;
     int vis = 2 + 1 + NAME_W + 1 + 13 + 1 + 21;
     memcpy(name, v->name, 64);
@@ -449,9 +462,9 @@ static void cell_svc(sbuf_t *b, const shm_svc_t *v, int selected, const struct r
     put_lead(b, selected, ab);
     sput(b, selected ? "\033[1;97m" : "\033[97m");
     put_name(b, name, NAME_W, ab);
-    sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3u %7d %3d %5s\033[0m",
+    sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3u %7d %3s %5s\033[0m",
          held ? "2;30;47" : st_chip(v->state), held ? "STANDBY" : st_name(v->state),
-         v->weight, v->child_pid, v->restart_count, deck);
+         v->weight, v->child_pid, count3(v->restart_count, rs), deck);
     if (v->limp & (SHM_LIMP_FALLBACK | SHM_LIMP_STANDIN)) {
         sput(b, " \033[33m%s\033[0m", v->limp & SHM_LIMP_FALLBACK ? "limping " : "stand-in");
         vis += 9;
@@ -517,7 +530,7 @@ static void render_styled(const schema_shm_t *s) {
                                      STATE_EXCISED };
     const struct rail_alphabet *ab = style == STYLE_FONT ? &rail_font_ab : &rail_ascii_ab;
     char host[65] = "";
-    int i, valid = s->count, gc = s->group_count, cnt[sizeof order] = { 0 };
+    int i, valid = s->count, gc = s->group_count, cnt[sizeof order] = { 0 }, standby = 0;
     sbuf_t b;
 
     if (valid < 0) valid = 0;
@@ -540,8 +553,11 @@ static void render_styled(const schema_shm_t *s) {
              arrow_bytes(scr_cols - 3), arrow_line);
     }
 
-    for (i = 0; i < valid; i++)
+    for (i = 0; i < valid; i++) {
+        /* held on standby is not broken: rows show it STANDBY, so must the tally */
+        if ((s->svc[i].limp & SHM_LIMP_STANDBY) && s->svc[i].state == STATE_EXCISED) { standby++; continue; }
         for (size_t k = 0; k < sizeof order; k++) if (s->svc[i].state == order[k]) cnt[k]++;
+    }
     {
         int items = valid + gc, head = nlines, foot = 1 + (interactive ? 1 + !!msg[0] : 0);
         int ncol, per_col, shown = board_layout(items, scr_cols, scr_rows - head - foot, &ncol, &per_col);
@@ -564,6 +580,7 @@ static void render_styled(const schema_shm_t *s) {
     sput(&b, "\033[35m%s\033[0m", ab->finish);
     for (size_t k = 0; k < sizeof order; k++)
         if (cnt[k]) sput(&b, " \033[%sm %d %s \033[0m", st_chip(order[k]), cnt[k], st_name(order[k]));
+    if (standby) sput(&b, " \033[2;30;47m %d STANDBY \033[0m", standby);
     if (interactive) {
         int have = valid > 0 && sel >= 0 && sel < valid;
         char name[65] = "";
@@ -768,12 +785,17 @@ int main(int argc, char **argv) {
                                 const char *verb = card_for(snap.svc[sel].state);
                                 memcpy(name, snap.svc[sel].name, 64);
                                 name[64] = '\0';
-                                snprintf(msg, sizeof(msg), "\033[33m… %s %s\033[0m", verb, name);
+                                char shown[65];
+                                memcpy(shown, name, sizeof shown);
+                                clean(shown);
+                                snprintf(msg, sizeof(msg), "\033[33m… %s %s\033[0m", verb, shown);
                                 render(&snap);
-                                if (apply_card(verb, name, reply, sizeof(reply)) == 0)
-                                    snprintf(msg, sizeof(msg), "\033[32m✓ %s %s: %.120s\033[0m", verb, name, reply);
+                                int ok = apply_card(verb, name, reply, sizeof(reply)) == 0;
+                                clean(reply);
+                                if (ok)
+                                    snprintf(msg, sizeof(msg), "\033[32m✓ %s %s: %.120s\033[0m", verb, shown, reply);
                                 else
-                                    snprintf(msg, sizeof(msg), "\033[31m✗ %s %s: %.120s\033[0m", verb, name, reply);
+                                    snprintf(msg, sizeof(msg), "\033[31m✗ %s %s: %.120s\033[0m", verb, shown, reply);
                             }
                             mode = MODE_BROWSE;
                             dirty = 1;
