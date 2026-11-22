@@ -7,6 +7,13 @@ T=$(mktemp -d)
 trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$T"' EXIT
 fail() { echo "FAIL: $*"; exit 1; }
 
+# the scripts' sync flushes every filesystem on the host: under heavy host I/O it outlasts the cases' timeouts
+mkdir -p "$T/nosync"
+printf '#!/bin/sh\n' > "$T/nosync/sync"
+chmod +x "$T/nosync/sync"
+PATH=$T/nosync:$PATH
+export PATH
+
 R=$T/root
 STATE=$R/var/lib/schema-init/pi-boot
 KG=$R/var/lib/schema-init/known-good
