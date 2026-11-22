@@ -81,17 +81,21 @@ cmd_create() {
   cmd_prune
 }
 
+# the armed guard boots schema_fallback_id on a failed boot; deleting that
+# snapshot leaves the guard pointing at nothing (11-21: create's prune deleted
+# post-bootfix, verify caught it)
+fallback_id() { grub2-editenv "$GRUBENV" list 2>/dev/null | sed -n 's/^schema_fallback_id=//p' || true; }
+
 cmd_prune() {
   local snaps old n pinned
-  # the armed guard boots schema_fallback_id on a failed boot; pruning it leaves
-  # the guard pointing at nothing (11-21: create pruned post-bootfix, verify caught it)
-  pinned="$(grub2-editenv "$GRUBENV" list 2>/dev/null | sed -n 's/^schema_fallback_id=//p')" || pinned=""
+  pinned="$(fallback_id)"
   mount_top
-  mapfile -t snaps < <(ls -1 "$TOP" 2>/dev/null | grep -E "^$PREFIX_SNAP-[0-9]{8}-[0-9]{6}-" | grep -v -- '-home$' | grep -vxF -- "$pinned" | sort)
+  mapfile -t snaps < <(ls -1 "$TOP" 2>/dev/null | grep -E "^$PREFIX_SNAP-[0-9]{8}-[0-9]{6}-" | grep -v -- '-home$' | sort)
   umount_top
   n=${#snaps[@]}
   [ "$n" -gt "$KEEP" ] || return 0
   for old in "${snaps[@]:0:$((n-KEEP))}"; do
+    [ "$old" != "$pinned" ] || { echo "kept: $old (armed fallback)"; continue; }
     mount_top
     btrfs subvolume delete "$TOP/$old" >/dev/null 2>&1 || true
     btrfs subvolume delete "$TOP/$old-home" >/dev/null 2>&1 || true
@@ -105,6 +109,7 @@ cmd_prune() {
 cmd_delete() {
   local name="${1:?usage: schema-snapshot delete <name>}"
   case "$name" in "$PREFIX_SNAP-"*) ;; *) die "refusing to delete non-snapshot subvol: $name" ;; esac
+  [ "$name" != "$(fallback_id)" ] || die "$name is the armed fallback; 'schema-snapshot disarm' first"
   mount_top
   btrfs subvolume delete "$TOP/$name" >/dev/null 2>&1 || true
   btrfs subvolume delete "$TOP/$name-home" >/dev/null 2>&1 || true
