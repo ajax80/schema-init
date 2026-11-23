@@ -179,6 +179,13 @@ static void test_expand(void) {
     snprintf(env[3][1], sizeof env[3][1], GRUBENV_CUT);
     assert(opts_expand("$longopts quiet", env, 4, out, sizeof out, miss, sizeof miss) == -3);
     assert(!strcmp(miss, "longopts"));
+    /* a name grub.cfg sets past what verify holds: unknown, not grubenv's or empty */
+    {
+        grubenv_t dr[1];
+        snprintf(dr[0][0], 256, "padded");
+        snprintf(dr[0][1], 256, GRUBENV_DROPPED);
+        assert(opts_expand("ro $padded", dr, 1, out, sizeof out, miss, sizeof miss) == -5 && !strcmp(miss, "padded"));
+    }
 }
 
 static bls_entry_t entry(const char *opts) {
