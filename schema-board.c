@@ -43,6 +43,7 @@
 #include "schema.h"
 #include "schema_shm.h"
 #include "state_colors.h"
+#include "board_top.h"
 #include "recorder_logic.h"
 #include "rail_glyphs.h"
 #include <sys/ioctl.h>
@@ -647,6 +648,8 @@ static int open_tty(const char *dev) {
 }
 
 int main(int argc, char **argv) {
+    const char *base = strrchr(argv[0], '/');
+    if (!strcmp(base ? base + 1 : argv[0], "schema-top")) return top_main(argc, argv);
     const char *tty = NULL;
     int once = 0;
     int fd, i;

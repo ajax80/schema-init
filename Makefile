@@ -105,8 +105,8 @@ schema-recorder: schema-recorder.c recorder.h recorder_logic.h
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-board: schema-board.c schema.h schema_shm.h state_colors.h recorder.h recorder_logic.h rail_glyphs.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
+schema-board: schema-board.c board_top.c board_top.h schema.h schema_shm.h state_colors.h recorder.h recorder_logic.h rail_glyphs.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ schema-board.c board_top.c -lrt
 
 schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h udev_sched.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lacl
@@ -318,6 +318,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_recorder_scenario.c -o $(TESTDIR)/recorder-scenario -lrt && $(TESTDIR)/recorder-scenario
 	sh tests/test_recorder_daemon.sh
 	sh tests/test_board_look.sh
+	sh tests/test_board_top.sh
 	sh tests/test_schema_user.sh
 	sh tests/test_svc_reload_live.sh
 	sh tests/test_restart_policy_live.sh
@@ -402,6 +403,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o $(TESTDIR)/uaccess-apply -lacl && $(TESTDIR)/uaccess-apply
 	$(CC) $(CFLAGS) tests/test_state_colors.c -o $(TESTDIR)/state-colors && $(TESTDIR)/state-colors
 	$(CC) $(CFLAGS) tests/test_ctl_colour.c -o $(TESTDIR)/ctl-colour -lutil && $(TESTDIR)/ctl-colour
+	$(CC) $(CFLAGS) tests/test_board_top.c board_top.c -o $(TESTDIR)/board-top -lrt && $(TESTDIR)/board-top
 	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o $(TESTDIR)/sdbus-policy && $(TESTDIR)/sdbus-policy
 	$(CC) $(CFLAGS) tests/test_sdbus_reload.c -o $(TESTDIR)/sdbus-reload && $(TESTDIR)/sdbus-reload
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf && $(TESTDIR)/sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
