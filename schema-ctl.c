@@ -293,6 +293,8 @@ static void usage(FILE *out) {
         "                         means %s/<name>.svc\n"
         "  cat <svc>              print <svc>.svc and its drop-ins in the order\n"
         "                         they apply (read from disk, not from PID 1)\n"
+        "  top                    live per-service CPU and memory (runs schema-top;\n"
+        "                         no root needed)\n"
         "  log [-f] [-n N] <svc>\n"
         "                         the service's log: the last 50 lines (-n 0:\n"
         "                         all); -f follows it across logrotate. Reads\n"
@@ -425,7 +427,9 @@ static int ctl_request(const char *req, char **reply, int quiet) {
             else if (user_mode)
                 ;
             else if (first_errno == EACCES || first_errno == EPERM)
-                fprintf(stderr, "schema-ctl talks to PID 1 as root: try sudo schema-ctl %s", req);
+                /* not echoing req: the client can't know PID 1's (or a hook's) commands, and
+                   "try sudo schema-ctl <typo>" reads as if the command exists */
+                fprintf(stderr, "schema-ctl talks to PID 1 as root: run it with sudo\n");
             else if (first_errno == ENOENT)
                 fprintf(stderr, "no socket there — is schema-init running as PID 1?\n");
             close(fd);
@@ -729,6 +733,16 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "log") == 0)
         return ctl_log_main(argc, argv, user_mode);
+    if (strcmp(argv[1], "top") == 0) {
+        if (user_mode) {
+            fprintf(stderr, "schema-ctl: top shows PID 1's services, not this user's — run schema-ctl top\n");
+            return 1;
+        }
+        argv[1] = "schema-top";
+        execvp(argv[1], argv + 1);
+        fprintf(stderr, "schema-ctl: schema-top: %s (it is installed with schema-board)\n", strerror(errno));
+        return 1;
+    }
     if (strcmp(argv[1], "graph") == 0) {
         if (argc > 3 || (argc == 3 && (!argv[2][0] || strchr(argv[2], '/')))) {
             fprintf(stderr, "usage: schema-ctl graph [<svc>]\n");
@@ -824,6 +838,12 @@ int main(int argc, char **argv) {
     } else if (!i && !strcmp(argv[1], "status") && argc <= 3 &&
                !(argc == 3 && (!strcmp(argv[2], "--json") || !strcmp(argv[2], "--kv"))) && colour_wanted(1)) {
         status_colourize(rbuf, stdout);
+    } else if (whole && !strncmp(rbuf, "err: unknown: ", 14)) {
+        /* not "unknown command": PID 1 says the same to a known verb with the wrong
+           arguments (a bare "start", "stop a b") */
+        rbuf[strcspn(rbuf, "\n")] = '\0';
+        fprintf(stderr, "schema-ctl: PID 1 did not accept '%s' — schema-ctl --help lists the commands and their arguments\n",
+                rbuf + 14);
     } else {
         printf("%s", rbuf);
     }

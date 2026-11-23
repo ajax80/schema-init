@@ -444,6 +444,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_verify.c $(filter-out schema-ctl.c,$(SCHEMA_CTL_SRCS)) -o $(TESTDIR)/verify-unit && $(TESTDIR)/verify-unit
 	sh tests/test_verify_cli.sh $(TESTDIR)/schema-ctl-testhooks
 	sh tests/test_ctl_log.sh $(TESTDIR)/schema-ctl-testhooks
+	sh tests/test_ctl_unknown.sh $(TESTDIR)/schema-ctl-testhooks
 	sh tests/test_verify_gate.sh $(TESTDIR)/schema-ctl-testhooks
 	sh tests/test_gate_callers.sh
 	sh tests/test_snapshot_arm_gate.sh
