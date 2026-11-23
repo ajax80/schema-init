@@ -42,6 +42,7 @@
 
 #include "schema.h"
 #include "schema_shm.h"
+#include "state_colors.h"
 #include "recorder_logic.h"
 #include "rail_glyphs.h"
 #include <sys/ioctl.h>
@@ -149,37 +150,6 @@ static int apply_card(const char *verb, const char *name, char *out, size_t outs
     return 0;
 }
 
-static const char *st_name(uint8_t s) {
-    switch (s) {
-        case STATE_FUNDAMENTAL: return "FUNDAMENTAL";
-        case STATE_FRICTION:    return "FRICTION";
-        case STATE_SETTLED:     return "SETTLED";
-        case STATE_NEW_PROCESS: return "NEW_PROCESS";
-        case STATE_RECOVERY:    return "RECOVERY";
-        case STATE_FULL_TRUST:  return "FULL_TRUST";
-        case STATE_PERFECT:     return "PERFECT";
-        case STATE_EXCISED:     return "EXCISED";
-        case STATE_DORMANT:     return "DORMANT";
-        default:                return "?";
-    }
-}
-
-/* LED color language (see spec): purple=go, green=stable/new, yellow=failing,
- * blue=attention, red=broke. Returns an ANSI SGR sequence. */
-static const char *st_color(uint8_t s) {
-    switch (s) {
-        case STATE_PERFECT:     return "\033[35m";   /* purple — go/heaven   */
-        case STATE_FULL_TRUST:
-        case STATE_FUNDAMENTAL:
-        case STATE_SETTLED:     return "\033[32m";   /* green  — stable      */
-        case STATE_NEW_PROCESS: return "\033[2;32m"; /* dim green — new      */
-        case STATE_RECOVERY:
-        case STATE_FRICTION:    return "\033[33m";   /* yellow — failing     */
-        case STATE_DORMANT:     return "\033[34m";   /* blue   — attention   */
-        case STATE_EXCISED:     return "\033[31m";   /* red    — broke       */
-        default:                return "\033[37m";   /* white  — unknown     */
-    }
-}
 
 static const char *sys_name(uint8_t s) {
     switch (s) {
@@ -301,7 +271,7 @@ static void render_plain(const schema_shm_t *s) {
         int held = (v->limp & SHM_LIMP_STANDBY) && v->state == STATE_EXCISED;
         printf("%s %-28.28s %s%-13s\033[0m %4u %8d %5d %5s%s%s\n",
                (interactive && i == sel) ? "\033[7m" : "",
-               name, held ? "\033[2m" : st_color(v->state), held ? "STANDBY" : st_name(v->state),
+               name, held ? "\033[2m" : state_ansi(v->state), held ? "STANDBY" : state_label(v->state),
                v->weight, v->child_pid, v->restart_count, deck,
                v->limp & SHM_LIMP_FALLBACK ? "  \033[33mlimping: fallback in play\033[0m"
                : v->limp & SHM_LIMP_STANDIN ? "  \033[33mstanding in\033[0m"
@@ -321,7 +291,7 @@ static void render_plain(const schema_shm_t *s) {
             gname[64] = '\0';
             clean(gname);
             printf(" %-28.28s %s%-13s\033[0m %5d\n",
-                   gname, st_color(g->state), st_name(g->state),
+                   gname, state_ansi(g->state), state_label(g->state),
                    g->member_count);
         }
     }
@@ -466,7 +436,7 @@ static void cell_svc(sbuf_t *b, const shm_svc_t *v, int selected, const struct r
     sput(b, selected ? "\033[1;97m" : "\033[97m");
     put_name(b, name, NAME_W, ab);
     sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3u %7d %3s %5s\033[0m",
-         held ? "2;30;47" : st_chip(v->state), held ? "STANDBY" : st_name(v->state),
+         held ? "2;30;47" : st_chip(v->state), held ? "STANDBY" : state_label(v->state),
          v->weight, v->child_pid, count3(v->restart_count, rs), deck);
     if (v->limp & (SHM_LIMP_FALLBACK | SHM_LIMP_STANDIN)) {
         sput(b, " \033[33m%s\033[0m", v->limp & SHM_LIMP_FALLBACK ? "limping " : "stand-in");
@@ -482,7 +452,7 @@ static void cell_group(sbuf_t *b, const shm_group_t *g, const struct rail_alphab
     name[64] = '\0';
     sput(b, "\033[36m%s\033[0m \033[96m", ab->branch_rt);
     put_name(b, name, NAME_W, ab);
-    sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3d members\033[0m", st_chip(g->state), st_name(g->state),
+    sput(b, "\033[0m \033[%sm %-11s \033[0m \033[90m%3d members\033[0m", st_chip(g->state), state_label(g->state),
          g->member_count);
     for (; vis < ROW_W; vis++) sput(b, " ");
 }
@@ -582,7 +552,7 @@ static void render_styled(const schema_shm_t *s) {
     b = newline();
     sput(&b, "\033[35m%s\033[0m", ab->finish);
     for (size_t k = 0; k < sizeof order; k++)
-        if (cnt[k]) sput(&b, " \033[%sm %d %s \033[0m", st_chip(order[k]), cnt[k], st_name(order[k]));
+        if (cnt[k]) sput(&b, " \033[%sm %d %s \033[0m", st_chip(order[k]), cnt[k], state_label(order[k]));
     if (standby) sput(&b, " \033[2;30;47m %d STANDBY \033[0m", standby);
     if (interactive) {
         int have = valid > 0 && sel >= 0 && sel < valid;

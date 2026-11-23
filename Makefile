@@ -105,7 +105,7 @@ schema-recorder: schema-recorder.c recorder.h recorder_logic.h
 schema-journal-sink: schema-journal-sink.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
-schema-board: schema-board.c schema.h schema_shm.h recorder.h recorder_logic.h rail_glyphs.h
+schema-board: schema-board.c schema.h schema_shm.h state_colors.h recorder.h recorder_logic.h rail_glyphs.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
 
 schema-udev: schema-udev.c schema-udev.h udev_db.h udev_rules.h udev_builtins.h hwdb.h uaccess.h disk_links.h fido_id.h udev_ruleset.h path_id.h udev_exec.h udev_sched.h
@@ -400,6 +400,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_coredump.c -o $(TESTDIR)/coredump && $(TESTDIR)/coredump
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o $(TESTDIR)/uaccess -lacl && $(TESTDIR)/uaccess
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o $(TESTDIR)/uaccess-apply -lacl && $(TESTDIR)/uaccess-apply
+	$(CC) $(CFLAGS) tests/test_state_colors.c -o $(TESTDIR)/state-colors && $(TESTDIR)/state-colors
 	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o $(TESTDIR)/sdbus-policy && $(TESTDIR)/sdbus-policy
 	$(CC) $(CFLAGS) tests/test_sdbus_reload.c -o $(TESTDIR)/sdbus-reload && $(TESTDIR)/sdbus-reload
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf && $(TESTDIR)/sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
