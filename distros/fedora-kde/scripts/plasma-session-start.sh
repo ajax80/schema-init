@@ -153,6 +153,24 @@ if [ -x /usr/libexec/kactivitymanagerd ] && ! busctl --user status org.kde.Activ
         i=$((i+1))
     done
 fi
+# A first-run panel cut short (a shutdown while plasmashell was still building
+# it, as the first-boot wizard's "Switch and restart" can do) is saved
+# half-made: an applet section with no plugin= — no tray, no clock — and
+# plasmashell reuses that file at every login. Set it aside (kept, timestamped)
+# so plasmashell builds the default panel again. Only a top-level applet section
+# counts; [Configuration] subsections and nested tray applets carry no plugin=.
+_schema_heal_layout() {
+    [ -f "$1" ] || return 0
+    awk '
+        function check() { if (inapp && !hasplug) bad = 1 }
+        /^\[/ { check(); inapp = ($0 ~ /^\[Containments\]\[[0-9]+\]\[Applets\]\[[0-9]+\]$/); hasplug = 0; next }
+        inapp && /^plugin=/ { hasplug = 1 }
+        END { check(); exit bad ? 0 : 1 }
+    ' "$1" || return 0
+    mv "$1" "$1.broken-$(date +%Y%m%d%H%M%S)" &&
+        echo "plasma-session-start: half-built panel layout set aside ($1.broken-*); plasmashell will rebuild the default" >&2
+}
+_schema_heal_layout "$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
 pgrep -U "$_uid" -x plasmashell >/dev/null || /usr/bin/plasmashell &
 
 # KDE session daemons ksmserver/startplasma normally start. Their
