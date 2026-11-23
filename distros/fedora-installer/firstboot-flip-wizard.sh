@@ -42,6 +42,27 @@ phase=$(cat "$STATE")
 TITLE="schema — finishing setup"
 ICON=drive-harddisk
 
+# Plasma builds its default panel on its first start, saving as it goes. A
+# "Switch and restart" in that window shuts plasmashell down mid-build, and the
+# half-made panel (no tray, no clock) is what every later login loads (v0.4.31
+# isotest). Show nothing until the layout file exists and has stood still with
+# plasmashell up; capped, so a session without Plasma still gets the wizard.
+wait_plasma_settled() {
+    local f="$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
+    local still="${SCHEMA_PLASMA_SETTLE_SEC:-10}" cap="${SCHEMA_PLASMA_SETTLE_MAX:-120}"
+    local i m
+    for i in $(seq 1 $(( cap * 2 ))); do
+        m=$(stat -c %Y "$f" 2>/dev/null)   # the file can vanish between checks (atomic save)
+        if [ -n "$m" ] && pgrep -u "$(id -u)" -x plasmashell >/dev/null 2>&1 &&
+           [ $(( $(date +%s) - m )) -gt "$still" ]; then
+            return 0
+        fi
+        sleep 0.5
+    done
+}
+# only the phases whose dialog can end in "Switch and restart"
+case "$phase" in welcome|dbus_offer) wait_plasma_settled ;; esac
+
 # Only a real choice moves the wizard on. A choice dialog that yad couldn't
 # open (rc 1) or that died under it (128+signal: shutdown or logout with it
 # still up) is not "Skip" -- that used to record skipped and delete the

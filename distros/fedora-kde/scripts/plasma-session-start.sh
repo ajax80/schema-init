@@ -153,7 +153,42 @@ if [ -x /usr/libexec/kactivitymanagerd ] && ! busctl --user status org.kde.Activ
         i=$((i+1))
     done
 fi
-pgrep -U "$_uid" -x plasmashell >/dev/null || /usr/bin/plasmashell &
+# A first-run panel cut short (a shutdown while plasmashell was still building
+# it, as the first-boot wizard's "Switch and restart" can do) is saved
+# half-made and plasmashell reuses that file at every login. The cut leaves an
+# applet section with no plugin= (or a panel with no applets at all) and never
+# gets as far as the clock; asking for both keeps a lived-in desktop with a
+# stray orphan group from ever being reset. Set aside (kept, timestamped) so
+# plasmashell builds the default panel again. Not caught: a cut after the tray
+# applet but before the tray's own containment (an empty tray, clock present).
+_schema_heal_layout() {
+    [ -f "$1" ] || return 0
+    awk '
+        function check() { if (inapp && !hasplug) cut = 1 }
+        /^\[/ {
+            check(); inapp = 0; cont = ""
+            h = $0; gsub(/[\[\]]/, " ", h); n = split(h, w, " ")
+            if (n == 2 && w[1] == "Containments") cont = w[2]
+            if (n == 4 && w[1] == "Containments" && w[3] == "Applets") { inapp = 1; hasapp[w[2]] = 1 }
+            hasplug = 0; next
+        }
+        /^plugin=/ { hasplug = 1 }
+        cont != "" && $0 == "plugin=org.kde.panel" { panel[cont] = 1 }
+        $0 == "plugin=org.kde.plasma.digitalclock" { clock = 1 }
+        END { check(); for (c in panel) if (!(c in hasapp)) cut = 1; exit (cut && !clock) ? 0 : 1 }
+    ' "$1" || return 0
+    mv "$1" "$1.broken-$(date +%Y%m%d%H%M%S)" &&
+        echo "plasma-session-start: half-built panel layout set aside ($1.broken-*); plasmashell will rebuild the default" >&2
+}
+# Healing only here, where no plasmashell is up: moving the file out from under
+# a running one would have it save a near-empty layout of its own.
+_schema_start_plasmashell() {
+    pgrep -U "$_uid" -x plasmashell >/dev/null && return 0
+    _schema_heal_layout "${SCHEMA_LAYOUT:-$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc}"
+    "${PLASMASHELL:-/usr/bin/plasmashell}" &
+}
+_schema_start_plasmashell
+
 
 # KDE session daemons ksmserver/startplasma normally start. Their
 # /etc/xdg/autostart entries carry X-systemd-skip=true, so the KDE autostart

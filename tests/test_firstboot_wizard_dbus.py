@@ -63,7 +63,8 @@ def run(phase, yad=(), rc=None, out=None, boot='boot-b', armed_boot=None):
         open(armed_file, 'w').write(armed_boot + '\n')
     open(os.path.join(fake, 'boot_id'), 'w').write(boot + '\n')
     env = dict(os.environ, HOME=home, FAKE=fake, PATH=fake + ':' + os.environ['PATH'],
-               SCHEMA_BOOT_ID_FILE=os.path.join(fake, 'boot_id'))
+               SCHEMA_BOOT_ID_FILE=os.path.join(fake, 'boot_id'),
+               SCHEMA_PLASMA_SETTLE_MAX='0')   # no Plasma here: test_firstboot_wizard_settle covers the wait
     env.pop('XDG_STATE_HOME', None)
     subprocess.run(['bash', WIZARD], env=env, stdin=subprocess.DEVNULL,
                    capture_output=True, timeout=30)
