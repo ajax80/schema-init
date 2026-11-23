@@ -86,8 +86,8 @@ schema-init-static:
 # sources, not .o: aarch64/armhf rebuild schema-ctl in the same tree, and a
 # native sha256.o left over would link into the cross binary
 # verify's modules, not the service stack: svc_keys.c is the serializer's key table alone
-SCHEMA_CTL_SRCS = schema-ctl.c verify.c verify_gate.c verify_baseline.c verify_boot.c verify_root.c verify_diff.c verify_disk.c svc_keys.c karg.c sha256.c
-schema-ctl: $(SCHEMA_CTL_SRCS) svc_dropins.h recorder.h recorder_logic.h verify.h verify_gate.h verify_baseline.h verify_boot.h verify_root.h verify_diff.h verify_disk.h svc_keys.h karg.h sha256.h
+SCHEMA_CTL_SRCS = schema-ctl.c verify.c verify_gate.c verify_baseline.c verify_boot.c verify_root.c verify_diff.c verify_disk.c svc_keys.c karg.c sha256.c ctl_log.c
+schema-ctl: $(SCHEMA_CTL_SRCS) ctl_log.h ctl_colour.h state_colors.h svc_dropins.h recorder.h recorder_logic.h verify.h verify_gate.h verify_baseline.h verify_boot.h verify_root.h verify_diff.h verify_disk.h svc_keys.h karg.h sha256.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SCHEMA_CTL_SRCS) -lrt
 
 schema-systemctl: schema-systemctl.c systemctl_shim.h
@@ -401,6 +401,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_uaccess.c -o $(TESTDIR)/uaccess -lacl && $(TESTDIR)/uaccess
 	$(CC) $(CFLAGS) tests/test_uaccess_apply.c -o $(TESTDIR)/uaccess-apply -lacl && $(TESTDIR)/uaccess-apply
 	$(CC) $(CFLAGS) tests/test_state_colors.c -o $(TESTDIR)/state-colors && $(TESTDIR)/state-colors
+	$(CC) $(CFLAGS) tests/test_ctl_colour.c -o $(TESTDIR)/ctl-colour -lutil && $(TESTDIR)/ctl-colour
 	$(CC) $(CFLAGS) tests/test_sdbus_policy.c -o $(TESTDIR)/sdbus-policy && $(TESTDIR)/sdbus-policy
 	$(CC) $(CFLAGS) tests/test_sdbus_reload.c -o $(TESTDIR)/sdbus-reload && $(TESTDIR)/sdbus-reload
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf && $(TESTDIR)/sdbus-conf tests/fixtures/dbus/policy-dissolved.txt tests/fixtures/dbus/policy-golden.tsv
@@ -438,6 +439,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) $(LDFLAGS) -DSCHEMA_VERIFY_TESTHOOKS -o $(TESTDIR)/schema-ctl-testhooks $(SCHEMA_CTL_SRCS) -lrt
 	$(CC) $(CFLAGS) tests/test_verify.c $(filter-out schema-ctl.c,$(SCHEMA_CTL_SRCS)) -o $(TESTDIR)/verify-unit && $(TESTDIR)/verify-unit
 	sh tests/test_verify_cli.sh $(TESTDIR)/schema-ctl-testhooks
+	sh tests/test_ctl_log.sh $(TESTDIR)/schema-ctl-testhooks
 	sh tests/test_verify_gate.sh $(TESTDIR)/schema-ctl-testhooks
 	sh tests/test_gate_callers.sh
 	sh tests/test_snapshot_arm_gate.sh

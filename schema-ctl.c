@@ -15,6 +15,8 @@
 #include "schema.h"
 #include "svc_dropins.h"
 #include "schema_shm.h"
+#include "ctl_colour.h"
+#include "ctl_log.h"
 #include "recorder_logic.h"
 #include "verify_baseline.h"
 #include "verify.h"
@@ -291,6 +293,10 @@ static void usage(FILE *out) {
         "                         means %s/<name>.svc\n"
         "  cat <svc>              print <svc>.svc and its drop-ins in the order\n"
         "                         they apply (read from disk, not from PID 1)\n"
+        "  log [-f] [-n N] <svc> the service's log (last 50 lines; -n 0 all);\n"
+        "                         -f follows it across logrotate. Reads\n"
+        "                         /var/log/schema-init (or /run/log/...); root\n"
+        "                         for system services; `log rail` is the boot rail's\n"
         "  graph [<svc>]          dependency graph as Graphviz DOT (A -> B: A waits\n"
         "                         for B; boxes are groups, red = missing); read\n"
         "                         from disk. View: schema-ctl graph | dot -Tsvg\n"
@@ -716,6 +722,8 @@ int main(int argc, char **argv) {
         return verify_run(&vo, stdout);
     }
 
+    if (strcmp(argv[1], "log") == 0)
+        return ctl_log_main(argc, argv, user_mode);
     if (strcmp(argv[1], "graph") == 0) {
         if (argc > 3 || (argc == 3 && (!argv[2][0] || strchr(argv[2], '/')))) {
             fprintf(stderr, "usage: schema-ctl graph [<svc>]\n");
@@ -808,6 +816,9 @@ int main(int argc, char **argv) {
         printf("%s", rbuf);
         print_skipped(SKIP_JSON, jend > rbuf && jend[-1] == '}');
         printf("\n  ]\n}\n");
+    } else if (!i && !strcmp(argv[1], "status") && argc <= 3 &&
+               !(argc == 3 && (!strcmp(argv[2], "--json") || !strcmp(argv[2], "--kv"))) && colour_wanted(1)) {
+        status_colourize(rbuf, stdout);
     } else {
         printf("%s", rbuf);
     }
