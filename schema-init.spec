@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.30
+Version:        0.4.31
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -535,6 +535,29 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Sun Nov 22 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.31-1
+- Security: any local user could call every org.freedesktop.login1 method.
+  schema-logind served hostname1/timedate1/locale1/ConsoleKit on login1's own
+  bus connection, and their stock "anyone may send" policies matched the whole
+  connection, past login1.conf's deny. CreateSession then let a non-root
+  caller have root move any pid (PID 1 included) into a user session scope.
+  Each extra name now has its own connection; CreateSession answers only
+  root (pam_systemd); Lock, SetLockedHint, SetIdleHint and LockSession(s)
+  check the caller, and Manager lock/unlock relays reach the session again
+  (#572)
+- uaccess device ACLs are revoked when a seat has no active session, and a
+  failed setfacl is retried (gated to 5 s) instead of cached as done (#567)
+- verify never writes to the root it inspects: dirty btrfs/ext3/ext4 roots
+  are opened without log replay, unknown or unsafe ones are UNRESOLVED;
+  unchecked rootflags= on an already-mounted root are flagged (#565)
+- verify: a grubenv or env block with more variables than verify holds is
+  UNRESOLVED instead of silently cut; grub.cfg sets past verify's room are
+  unknown by name, and only an entry that uses one is unresolved (#568, #570)
+- verify: btrfs's lifetime error counters, printed at every mount, no longer
+  read as an error since boot; they are a note (#569)
+- The rail's console palette is applied only once the original is saved;
+  the D-Bus broker's bus GUID is random, not derived from its PID (#568)
+
 * Sun Nov 22 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.30-1
 - Supersedes 0.4.29, which was tagged but never released: on a Pi, verify
   ran the next boot's --check against /usr/sbin/schema-init, which the deb
