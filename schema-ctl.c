@@ -733,10 +733,14 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "log") == 0)
         return ctl_log_main(argc, argv, user_mode);
-    if (!user_mode && strcmp(argv[1], "top") == 0) {
+    if (strcmp(argv[1], "top") == 0) {
+        if (user_mode) {
+            fprintf(stderr, "schema-ctl: top shows PID 1's services, not this user's — run schema-ctl top\n");
+            return 1;
+        }
         argv[1] = "schema-top";
         execvp(argv[1], argv + 1);
-        fprintf(stderr, "schema-ctl: schema-top: %s\n", strerror(errno));
+        fprintf(stderr, "schema-ctl: schema-top: %s (it is installed with schema-board)\n", strerror(errno));
         return 1;
     }
     if (strcmp(argv[1], "graph") == 0) {
@@ -835,9 +839,10 @@ int main(int argc, char **argv) {
                !(argc == 3 && (!strcmp(argv[2], "--json") || !strcmp(argv[2], "--kv"))) && colour_wanted(1)) {
         status_colourize(rbuf, stdout);
     } else if (whole && !strncmp(rbuf, "err: unknown: ", 14)) {
-        /* also what PID 1 says to a known verb missing its argument ("start") */
+        /* not "unknown command": PID 1 says the same to a known verb with the wrong
+           arguments (a bare "start", "stop a b") */
         rbuf[strcspn(rbuf, "\n")] = '\0';
-        fprintf(stderr, "schema-ctl: unknown command '%s' — schema-ctl --help lists the commands and their arguments\n",
+        fprintf(stderr, "schema-ctl: PID 1 did not accept '%s' — schema-ctl --help lists the commands and their arguments\n",
                 rbuf + 14);
     } else {
         printf("%s", rbuf);
