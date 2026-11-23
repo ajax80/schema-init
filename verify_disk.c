@@ -113,7 +113,7 @@ static void whole_disk(char *d) {
 }
 
 #define MAXDEV 32
-static void count(char (*names)[32], int (*cnt)[2], int *nd, const char *dev, size_t dl, int fs) {
+static void count(char (*names)[32], int (*cnt)[3], int *nd, const char *dev, size_t dl, int fs) {
     char d[32];
     if (!dl || dl >= sizeof d) return;
     /* optical, loop and zram: nothing the boot waits on */
@@ -127,7 +127,7 @@ static void count(char (*names)[32], int (*cnt)[2], int *nd, const char *dev, si
     if (i == *nd) {
         if (*nd == MAXDEV) return;
         strcpy(names[(*nd)++], d);
-        cnt[i][0] = cnt[i][1] = 0;
+        cnt[i][0] = cnt[i][1] = cnt[i][2] = 0;
     }
     cnt[i][fs]++;
 }
@@ -140,7 +140,7 @@ static size_t dev_token(const char *s) {
 
 static void kmsg_findings(const char *text, finding_t *out, int max, int *n) {
     char names[MAXDEV][32];
-    int cnt[MAXDEV][2], nd = 0;
+    int cnt[MAXDEV][3], nd = 0;
     for (const char *l = text; l && *l;) {
         const char *nl = strchr(l, '\n');
         size_t len = nl ? (size_t)(nl - l) : strlen(l);
@@ -152,15 +152,19 @@ static void kmsg_findings(const char *text, finding_t *out, int max, int *n) {
             count(names, cnt, &nd, d + 4, dev_token(d + 4), 0);
         } else if (strstr(line, "EXT4-fs error") && (d = strstr(line, "(device "))) {
             count(names, cnt, &nd, d + 8, dev_token(d + 8), 1);
-        } else if (strstr(line, "BTRFS") && !strstr(line, "BTRFS info") &&
-                   (strstr(line, "corrupt") || strstr(line, "errs:")) && (d = strstr(line, "(device "))) {
-            /* not info: at mount btrfs prints its persisted lifetime errs: counters
-               at info level; an error since boot logs as BTRFS error/warning */
+        } else if (strstr(line, "BTRFS info") && strstr(line, "errs:") && (d = strstr(line, "(device "))) {
+            /* at mount btrfs prints its persisted lifetime counters at info level:
+               an earlier error, not one since boot (that logs as BTRFS error) */
+            count(names, cnt, &nd, d + 8, dev_token(d + 8), 2);
+        } else if (strstr(line, "BTRFS") && (strstr(line, "corrupt") || strstr(line, "errs:")) && (d = strstr(line, "(device "))) {
             count(names, cnt, &nd, d + 8, dev_token(d + 8), 1);
         }
     }
     for (int i = 0; i < nd; i++) {
         int t = cnt[i][0] + cnt[i][1];
+        if (cnt[i][2])
+            add(out, max, n, F_NOTE, "%s \xe2\x80\x94 btrfs lifetime error counters are non-zero (an earlier error; see btrfs device stats)", names[i]);
+        if (!t) continue;
         add(out, max, n, F_WARN, "%s \xe2\x80\x94 %d %s error%s in the kernel log since boot", names[i], t,
             cnt[i][1] ? "I/O or filesystem" : "I/O", t == 1 ? "" : "s");
     }

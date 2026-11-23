@@ -109,12 +109,17 @@ int main(int argc, char **argv) {
            error from months ago, not one since boot (a new one logs as BTRFS error) */
         "<6>[  14.5] BTRFS info (device sdf3): bdev /dev/sdf3 errs: wr 0, rd 1, flush 0, corrupt 0, gen 0\n";
     n = disk_findings("/nonexistent", km, devdir, f, 64);
-    assert(n == 3);
+    assert(n == 4);
     assert(has(f, n, F_WARN, "sde \xe2\x80\x94 3 I/O or filesystem errors in the kernel log since boot"));
     assert(has(f, n, F_WARN, "sdb \xe2\x80\x94 1 I/O or filesystem error"));
     assert(has(f, n, F_WARN, "nvme0n1 \xe2\x80\x94 1 "));
     assert(!strstr(f[0].text, "sda"));
     assert(!has(f, n, F_WARN, "sdf"));
+    /* but the history stays visible, as a note */
+    assert(has(f, n, F_NOTE, "sdf \xe2\x80\x94 btrfs lifetime error counters are non-zero"));
+    /* another info line naming corruption is still a since-boot finding */
+    n = disk_findings("/nonexistent", "<6>BTRFS info (device sdg1): scrub: fixed up corrupt block\n", devdir, f, 64);
+    assert(n == 1 && has(f, n, F_WARN, "sdg \xe2\x80\x94 1 I/O or filesystem error"));
 
     n = disk_findings("/nonexistent", "<3>blk_update_request: I/O error, dev sdc, sector 1\n<3>x I/O error, dev sdc, sector 2\n", devdir, f, 64);
     assert(n == 1 && has(f, n, F_WARN, "sdc \xe2\x80\x94 2 I/O errors in the kernel log since boot"));
