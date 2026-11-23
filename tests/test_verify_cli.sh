@@ -252,6 +252,23 @@ v
 expect 3 cfg-overflow-dropped-env
 has '[UNRESOLVED] actual next boot m-7.2.11: grub.cfg sets $cfgpad23 past what verify holds; its value is unknown' ||
     fail "cfg-overflow-dropped-env: grubenv's value used"
+# exactly at verify's read limit (256 names): all seen, nothing unresolved for it
+cp "$T/grub.cfg.keep" "$T/grub.cfg"
+base=$(awk '/^set [A-Za-z_]+=/' "$T/grub.cfg" | sed 's/=.*//' | sort -u | wc -l)
+i=0; while [ $i -lt $((256 - base)) ]; do printf 'set cfgpad%d=x\n' $i; i=$((i + 1)); done >> "$T/grub.cfg"
+entry m-7.2.11 root
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
+v
+grep -q 'top-level variables; ones past that are not seen' "$T/out" && fail "cfg-limit-exact: flagged though every name was read"
+# past it: a name grub.cfg never got to read can't take grubenv's value
+printf 'set cfgpad999=x\n' >> "$T/grub.cfg"
+entry m-7.2.11 root '$cfgpad999'
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\ncfgpad999=quiet\n' "$F" > "$T/grubenv"
+v
+expect 3 cfg-limit-over
+has "top-level variables; ones past that are not seen" || fail "cfg-limit-over: global line"
+has '[UNRESOLVED] actual next boot m-7.2.11: grub.cfg sets $cfgpad999 past what verify holds; its value is unknown' ||
+    fail "cfg-limit-over: grubenv's value used for a name past the limit"
 mv "$T/grub.cfg.keep" "$T/grub.cfg"
 entry m-7.2.11 root
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"

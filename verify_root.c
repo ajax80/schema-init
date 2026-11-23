@@ -152,7 +152,7 @@ static const char *env_lookup(grubenv_t *env, int n, const char *k) {
 }
 
 /* -1: unknown variable (named in missing); -2: too long once expanded; -3: its grubenv value was cut;
- * -4: grubenv and grub.cfg set it differently */
+ * -4: grubenv and grub.cfg set it differently; -5: grub.cfg sets it past what verify holds */
 int opts_expand(const char *s, grubenv_t *env, int nenv, char *out, size_t n, char *missing, size_t msz) {
     size_t o = 0;
     while (*s) {

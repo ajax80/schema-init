@@ -757,8 +757,11 @@ int verify_run(const verify_opts_t *o, FILE *out) {
              * top-level set, but verify does not model grub.cfg's order: a name both stores
              * set differently is unknown, one set the same or in one store only is that value */
             /* all of them, so the ones past the room are known by name */
-            grubenv_t *cv = malloc(GRUBCFG_MAXVARS * sizeof *cv);
-            int room = (MAXENV - c.nenv) / 2, all = grubcfg_vars(c.cfg, cv, GRUBCFG_MAXVARS);
+            /* one past the limit, to tell "exactly full" from "names went unread" */
+            grubenv_t *cv = malloc((GRUBCFG_MAXVARS + 1) * sizeof *cv);
+            int room = (MAXENV - c.nenv) / 2, all = grubcfg_vars(c.cfg, cv, GRUBCFG_MAXVARS + 1);
+            int unread = all > GRUBCFG_MAXVARS;
+            if (unread) all = GRUBCFG_MAXVARS;
             int k = all < room ? all : room;
             if (k > 16) k = 16;
             memmove(c.env + k, c.env, (size_t)c.nenv * sizeof *c.env);
@@ -776,19 +779,27 @@ int verify_run(const verify_opts_t *o, FILE *out) {
                     snprintf(c.env[c.nopt++][1], GRUBENV_SZ, GRUBENV_BOTH);
                 }
             }
-            if (all > k) {
+            if (all > k || unread) {
                 /* last match wins in the lookup, so a dropped name also hides grubenv's
-                 * value for it: grub.cfg's may be the one GRUB ends with */
-                c.nx = c.nopt + (all - k);
-                c.xenv = malloc((size_t)c.nx * sizeof *c.xenv);
+                 * value for it: grub.cfg's may be the one GRUB ends with. With names
+                 * left unread, any grubenv name grub.cfg might set is dropped too */
+                c.nx = c.nopt;
+                c.xenv = malloc((size_t)(c.nopt + (all - k) + c.nenv) * sizeof *c.xenv);
                 memcpy(c.xenv, c.env, (size_t)c.nopt * sizeof *c.env);
                 for (int i = k; i < all; i++) {
-                    snprintf(c.xenv[c.nopt + i - k][0], GRUBENV_SZ, "%s", cv[i][0]);
-                    snprintf(c.xenv[c.nopt + i - k][1], GRUBENV_SZ, GRUBENV_DROPPED);
+                    snprintf(c.xenv[c.nx][0], GRUBENV_SZ, "%s", cv[i][0]);
+                    snprintf(c.xenv[c.nx++][1], GRUBENV_SZ, GRUBENV_DROPPED);
+                }
+                for (int j = k; unread && j < c.nenv; j++) {
+                    int seen = 0;
+                    for (int i = 0; i < all && !seen; i++) seen = !strcmp(cv[i][0], c.env[j][0]);
+                    if (seen) continue;
+                    snprintf(c.xenv[c.nx][0], GRUBENV_SZ, "%s", c.env[j][0]);
+                    snprintf(c.xenv[c.nx++][1], GRUBENV_SZ, GRUBENV_DROPPED);
                 }
             }
-            if (all == GRUBCFG_MAXVARS)
-                emit(&c, T_UNRES, "%s sets %d or more top-level variables; ones past that are not seen",
+            if (unread)
+                emit(&c, T_UNRES, "%s sets more than %d top-level variables; ones past that are not seen",
                      o->grubcfg, GRUBCFG_MAXVARS);
             free(cv);
         }
