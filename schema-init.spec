@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.31
+Version:        0.4.32
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -536,6 +536,15 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Mon Nov 23 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.32-1
+- First-boot: the wizard's first flip could cut Plasma's first-run panel
+  short (no tray, clock or show-desktop, kept on every later login). The
+  wizard now waits for the layout to settle, and session start sets aside a
+  half-built layout so plasmashell rebuilds the default (#576)
+- schema-top: live per-service CPU/MEM view with sort and scroll;
+  schema-ctl status colours its states on a tty; new
+  schema-ctl log [-f] [-n N] <name> tails a service log across logrotate (#575)
+
 * Sun Nov 22 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.31-1
 - Security: any local user could call every org.freedesktop.login1 method.
   schema-logind served hostname1/timedate1/locale1/ConsoleKit on login1's own
