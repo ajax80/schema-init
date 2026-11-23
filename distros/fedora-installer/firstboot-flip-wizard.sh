@@ -50,16 +50,18 @@ ICON=drive-harddisk
 wait_plasma_settled() {
     local f="$HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
     local still="${SCHEMA_PLASMA_SETTLE_SEC:-10}" cap="${SCHEMA_PLASMA_SETTLE_MAX:-120}"
-    local end=$(( $(date +%s) + cap ))
-    while [ "$(date +%s)" -lt "$end" ]; do
-        if [ -f "$f" ] && pgrep -u "$(id -u)" -x plasmashell >/dev/null 2>&1 &&
-           [ $(( $(date +%s) - $(stat -c %Y "$f") )) -gt "$still" ]; then
+    local i m
+    for i in $(seq 1 $(( cap * 2 ))); do
+        m=$(stat -c %Y "$f" 2>/dev/null)   # the file can vanish between checks (atomic save)
+        if [ -n "$m" ] && pgrep -u "$(id -u)" -x plasmashell >/dev/null 2>&1 &&
+           [ $(( $(date +%s) - m )) -gt "$still" ]; then
             return 0
         fi
         sleep 0.5
     done
 }
-case "$phase" in done|skipped) ;; *) wait_plasma_settled ;; esac
+# only the phases whose dialog can end in "Switch and restart"
+case "$phase" in welcome|dbus_offer) wait_plasma_settled ;; esac
 
 # Only a real choice moves the wizard on. A choice dialog that yad couldn't
 # open (rc 1) or that died under it (128+signal: shutdown or logout with it

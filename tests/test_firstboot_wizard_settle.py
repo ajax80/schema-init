@@ -15,7 +15,7 @@ def check(name, ok, detail=''):
     results.append(ok)
     print(('  PASS  ' if ok else '  FAIL  ') + name + ('' if ok else '  — ' + detail))
 
-def first_dialog_after(layout_age=None, plasmashell=True, settle=2, cap=6):
+def first_dialog_after(layout_age=None, plasmashell=True, settle=2, cap=6, phase='welcome'):
     tmp = tempfile.mkdtemp(prefix='schema-fbw-settle-')
     fake, home = os.path.join(tmp, 'fake'), os.path.join(tmp, 'home')
     os.makedirs(fake); os.makedirs(os.path.join(home, '.local/state/schema'))
@@ -26,7 +26,7 @@ def first_dialog_after(layout_age=None, plasmashell=True, settle=2, cap=6):
         os.chmod(os.path.join(fake, n), 0o755)
     os.makedirs(os.path.join(home, '.config/autostart'))
     open(os.path.join(home, '.config/autostart/schema-firstboot.desktop'), 'w').close()
-    open(os.path.join(home, '.local/state/schema/firstboot.state'), 'w').write('welcome\n')
+    open(os.path.join(home, '.local/state/schema/firstboot.state'), 'w').write(phase + '\n')
     lay = os.path.join(home, '.config/plasma-org.kde.plasma.desktop-appletsrc')
     if layout_age is not None:
         open(lay, 'w').write('[Containments][1]\nplugin=org.kde.panel\n')
@@ -50,5 +50,10 @@ d = first_dialog_after(layout_age=3600)
 check('layout long settled (a later login): no wait (< 1.5 s)', d is not None and d < 1.5, str(d))
 d = first_dialog_after(layout_age=None, plasmashell=False, cap=3)
 check('no plasmashell, no layout: gives up at the cap and still shows (3-5 s)', d is not None and 2.9 <= d < 5, str(d))
+for i in range(3):
+    d = first_dialog_after(layout_age=None, plasmashell=False, cap=3)
+    check('cap is whole: run %d waits 3-5 s' % (i + 1), d is not None and 2.9 <= d < 5, str(d))
+d = first_dialog_after(layout_age=None, plasmashell=False, cap=6, phase='armed')
+check('a phase that never restarts (armed): no wait (< 1.5 s)', d is not None and d < 1.5, str(d))
 print('test_firstboot_wizard_settle: %d/%d' % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)
