@@ -118,6 +118,7 @@ def _run_fallback_case(uid, label, seed_real_session):
         fb_env['SCHEMA_LOGIND_UDEV_DATA'] = fb_rundir   # uaccess re-scan inert
         fb_env['SCHEMA_LOGIND_DEV_DIR'] = fb_rundir
         fb_env['SCHEMA_CGROUP_ROOT'] = fb_cgroot
+        fb_env['SCHEMA_LOGIND_PAM_UID'] = str(os.getuid())   # stands in for root's pam_systemd
         fb_env['SCHEMA_SESSION_REGISTER'] = '/nonexistent/schema-session-register'
         fb_env.pop('SCHEMA_LOGIND_VTNR', None)
 
@@ -233,6 +234,7 @@ def main():
     env['SCHEMA_LOGIND_UDEV_DATA'] = rundir   # uaccess re-scan inert
     env['SCHEMA_LOGIND_DEV_DIR'] = rundir
     env['SCHEMA_CGROUP_ROOT'] = cgroot
+    env['SCHEMA_LOGIND_PAM_UID'] = str(os.getuid())   # stands in for root's pam_systemd
     env.pop('SCHEMA_LOGIND_VTNR', None)
 
     stub = subprocess.Popen([sys.executable, LOGIND], env=env,

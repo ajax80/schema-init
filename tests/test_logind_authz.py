@@ -155,6 +155,13 @@ GATED = [
     (m.Login1Session, "ReleaseControl", (), "authz_check"),
     (m.Login1Session, "PauseDeviceComplete", (0, 0), "authz_check"),
     (m.Login1Manager, "ReleaseSession", ("1",), "authz_check"),
+    # review 2026-11-22: with login1 reachable by any uid (see own_extra_names),
+    # locking someone else's screen or lying about its lock/idle state is open
+    (m.Login1Session, "Lock", (), "authz_check"),
+    (m.Login1Session, "SetLockedHint", (True,), "authz_check"),
+    (m.Login1Session, "SetIdleHint", (True,), "authz_check"),
+    (m.Login1Manager, "LockSession", ("1",), "authz_check"),
+    (m.Login1Manager, "LockSessions", (), "authz_check"),
 ]
 
 saved_check = m.authz_check
@@ -266,6 +273,52 @@ mgr._connection = Conn(1000)
 mgr.registry = Reg(session(1000, owner=None))
 check("ReleaseSession of a stand-in session at the login screen: denied",
       denied(lambda: m.Login1Manager.ReleaseSession(mgr, "1", sender=":2.4")))
+
+# --- CreateSession is pam_systemd's, which runs as root (review 2026-11-22) ---
+# A non-root caller named any pid and schema-logind wrote it into a session
+# scope's cgroup.procs as root — PID 1 included.
+def create(uid, vtnr=0, tty=""):
+    mgr = m.Login1Manager.__new__(m.Login1Manager)
+    mgr._connection = Conn(uid)
+    return err(lambda: m.Login1Manager.CreateSession(
+        mgr, 1000, 1, "login", "tty", "user", "", "seat0", vtnr, tty, "", False, "", "", [],
+        sender=":2.9"))
+
+check("CreateSession from uid 1000: AccessDenied", create(1000) == "AccessDenied")
+check("CreateSession from an unresolved sender: AccessDenied", create(None) == "AccessDenied")
+check("CreateSession from root passes the gate (no VT: SessionBusy)", create(0) == "SessionBusy")
+
+
+# --- each extra name on its own connection (review 2026-11-22) ---------------
+# send_destination matches any name the receiving connection owns, so the
+# blanket allows that hostname1/timedate1/locale1/ConsoleKit ship covered every
+# login1 method while all five shared one connection.
+class FakeBus:
+    made = []
+    def __init__(self):
+        self.names = []
+        FakeBus.made.append(self)
+    def request_name(self, name, flags=0):
+        self.names.append(name)
+
+saved = {k: getattr(m, k) for k in ("Hostname1", "Timedate1", "Locale1", "ConsoleKitSession", "ConsoleKitManager")}
+for k in saved:
+    setattr(m, k, lambda bus, *a, _k=k: (_k, bus))
+try:
+    FakeBus.made = []
+    held = m.own_extra_names(FakeBus, 1000)
+    owned = [b.names for b in FakeBus.made]
+    check("own_extra_names: one connection per name",
+          sorted(n for ns in owned for n in ns) == sorted(["org.freedesktop.hostname1", "org.freedesktop.timedate1",
+                                                          "org.freedesktop.locale1", "org.freedesktop.ConsoleKit"])
+          and all(len(ns) == 1 for ns in owned))
+    check("own_extra_names: never claims login1", all("org.freedesktop.login1" not in ns for ns in owned))
+    check("own_extra_names: ConsoleKit's two objects share its connection",
+          sum(1 for o in held if o[0].startswith("ConsoleKit")) == 2
+          and len({id(o[1]) for o in held if o[0].startswith("ConsoleKit")}) == 1)
+finally:
+    for k, v in saved.items():
+        setattr(m, k, v)
 
 print("test_logind_authz: %d/%d" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

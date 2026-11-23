@@ -160,6 +160,31 @@ def caller_authorized(connection, sender, owner=None):
     # session from the background VT, as with real logind
     return uid == 0 or (owner is not None and uid == owner) or uid == authz_uid()
 
+def own_extra_names(connect, uid):
+    """Serve hostname1/timedate1/locale1/ConsoleKit, each on its own connection.
+
+    A bus policy send_destination rule matches any name the receiving connection
+    owns. Those four ship `allow send_destination=<name>` for everyone, so on
+    login1's connection they opened every login1 method to any uid, past
+    login1.conf's deny and member whitelist. Their own connections keep each
+    name's policy to itself, as systemd's separate daemons do.
+    """
+    held = []
+    for name, make in (
+            ('org.freedesktop.hostname1', lambda b: [Hostname1(b)]),
+            ('org.freedesktop.timedate1', lambda b: [Timedate1(b)]),
+            ('org.freedesktop.locale1', lambda b: [Locale1(b)]),
+            ('org.freedesktop.ConsoleKit', lambda b: [ConsoleKitSession(b, uid), ConsoleKitManager(b)])):
+        try:
+            bus = connect()
+            held += make(bus)
+            bus.request_name(name, dbus.bus.NAME_FLAG_REPLACE_EXISTING)
+            print("login1-stub: Successfully acquired '%s' name" % name)
+        except Exception as e:
+            print("login1-stub: Failed to acquire name '%s': %s" % (name, e), file=sys.stderr)
+    return held
+
+
 def authz_check(connection, sender, what, owner=None):
     """Gate a mutator the stock bus policy leaves open to any local caller.
 
@@ -351,6 +376,9 @@ UACCESS_RETRY_S = 5.0
 # Overridable for the same reason as the dirs above: a test aims these at a
 # temp tree and a shell stand-in instead of the live box.
 LINGER_DIR = os.environ.get('SCHEMA_LINGER_DIR', '/var/lib/systemd/linger')
+# The only uid CreateSession answers: pam_systemd's, i.e. root. Overridable so
+# the integration test can drive it as itself on a throwaway bus.
+PAM_UID = int(os.environ.get('SCHEMA_LOGIND_PAM_UID', '0'))
 SCHEMA_USER_BIN = os.environ.get('SCHEMA_USER_BIN', '/usr/bin/schema-user')
 USER_KILLSWITCH = os.environ.get('SCHEMA_USER_KILLSWITCH',
                                  '/etc/schema-init/user-supervisor.disabled')
@@ -1431,8 +1459,9 @@ class Login1Session(dbus.service.Object):
         msg = dbus.lowlevel.SignalMessage(self.path, SESSION_IFACE, member)
         self._connection.send_message(msg)
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='')
-    def Lock(self):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='', out_signature='', sender_keyword='sender')
+    def Lock(self, sender=None):
+        authz_check(self._connection, sender, "Lock", self._owner())
         print("login1-stub: Session.Lock() requested")
         self._emit_bare_signal('Lock')
 
@@ -1442,8 +1471,9 @@ class Login1Session(dbus.service.Object):
         print("login1-stub: Session.Unlock() requested")
         self._emit_bare_signal('Unlock')
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
-    def SetLockedHint(self, locked):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='', sender_keyword='sender')
+    def SetLockedHint(self, locked, sender=None):
+        authz_check(self._connection, sender, "SetLockedHint", self._owner())
         # The screen locker reports its state here; everything that asks "is the
         # screen locked" reads the resulting LockedHint property.
         locked = bool(locked)
@@ -1454,8 +1484,9 @@ class Login1Session(dbus.service.Object):
         self.PropertiesChanged(SESSION_IFACE,
                                {'LockedHint': dbus.Boolean(locked)}, [])
 
-    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='')
-    def SetIdleHint(self, idle):
+    @dbus.service.method('org.freedesktop.login1.Session', in_signature='b', out_signature='', sender_keyword='sender')
+    def SetIdleHint(self, idle, sender=None):
+        authz_check(self._connection, sender, "SetIdleHint", self._owner())
         idle = bool(idle)
         if idle == self.idle_hint:
             return
@@ -2407,8 +2438,9 @@ class Login1Manager(dbus.service.Object):
         for obj in targets:
             getattr(obj, member)()
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='')
-    def LockSession(self, session_id):
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
+    def LockSession(self, session_id, sender=None):
+        authz_check(self._connection, sender, "LockSession")
         self._relay_lock('Lock', session_id)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
@@ -2416,8 +2448,9 @@ class Login1Manager(dbus.service.Object):
         authz_check(self._connection, sender, "UnlockSession")
         self._relay_lock('Unlock', session_id)
 
-    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='')
-    def LockSessions(self):
+    @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='', sender_keyword='sender')
+    def LockSessions(self, sender=None):
+        authz_check(self._connection, sender, "LockSessions")
         self._relay_lock('Lock')
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='', sender_keyword='sender')
@@ -2605,10 +2638,10 @@ class Login1Manager(dbus.service.Object):
 
     @dbus.service.method('org.freedesktop.login1.Manager',
                          in_signature='uusssssussbssa(sv)',
-                         out_signature='soshusub')
+                         out_signature='soshusub', sender_keyword='sender')
     def CreateSession(self, uid, pid, service, type_, class_, desktop,
                       seat_id, vtnr, tty, display, remote, remote_user,
-                      remote_host, properties):
+                      remote_host, properties, sender=None):
         """The call pam_systemd.so already makes on every login.
 
         pam_systemd is in the session stack at /etc/pam.d/system-auth, which
@@ -2631,6 +2664,14 @@ class Login1Manager(dbus.service.Object):
         is already in a session: pam_systemd treats that as success and stays
         quiet, where any other error name is logged at err on every sudo.
         """
+        # pam_systemd runs inside a root login stack; anyone else would be
+        # naming an arbitrary pid for root to write into a session scope
+        if caller_uid(self._connection, sender) != PAM_UID:
+            print("login1-stub: DENY CreateSession from uid=%s" % caller_uid(self._connection, sender),
+                  file=sys.stderr)
+            raise dbus.exceptions.DBusException(
+                "CreateSession is for pam_systemd, which runs as root",
+                name='org.freedesktop.DBus.Error.AccessDenied')
         vtnr = int(vtnr) or vtnr_from_tty(str(tty))
         if vtnr <= 0:
             raise dbus.exceptions.DBusException(
@@ -3489,13 +3530,6 @@ def main():
                   f"mediation is NOT armed: the recovery console is unreachable "
                   f"until that session logs out and back in.", file=sys.stderr)
 
-    hostname = Hostname1(bus)
-    timedate = Timedate1(bus)
-    locale = Locale1(bus)
-
-    ck_session = ConsoleKitSession(bus, uid)
-    ck_manager = ConsoleKitManager(bus)
-
     try:
         bus.request_name('org.freedesktop.login1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
         print("login1-stub: Successfully acquired 'org.freedesktop.login1' name")
@@ -3503,31 +3537,8 @@ def main():
         print(f"login1-stub: Failed to acquire name 'org.freedesktop.login1': {e}", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        bus.request_name('org.freedesktop.hostname1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
-        print("login1-stub: Successfully acquired 'org.freedesktop.hostname1' name")
-    except Exception as e:
-        print(f"login1-stub: Failed to acquire name 'org.freedesktop.hostname1': {e}", file=sys.stderr)
-
-
-
-    try:
-        bus.request_name('org.freedesktop.timedate1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
-        print("login1-stub: Successfully acquired 'org.freedesktop.timedate1' name")
-    except Exception as e:
-        print(f"login1-stub: Failed to acquire name 'org.freedesktop.timedate1': {e}", file=sys.stderr)
-
-    try:
-        bus.request_name('org.freedesktop.locale1', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
-        print("login1-stub: Successfully acquired 'org.freedesktop.locale1' name")
-    except Exception as e:
-        print(f"login1-stub: Failed to acquire name 'org.freedesktop.locale1': {e}", file=sys.stderr)
-
-    try:
-        bus.request_name('org.freedesktop.ConsoleKit', dbus.bus.NAME_FLAG_REPLACE_EXISTING)
-        print("login1-stub: Successfully acquired 'org.freedesktop.ConsoleKit' name")
-    except Exception as e:
-        print(f"login1-stub: Failed to acquire name 'org.freedesktop.ConsoleKit': {e}", file=sys.stderr)
+    # kept referenced for the life of the loop: they hold the connections
+    extra = own_extra_names(lambda: dbus.SystemBus(private=True), uid)
 
     GLib.timeout_add(VT_POLL_MS, registry.poll)
     print(f"login1-stub: watching {ACTIVE_VT_PATH} and {SESSIONS_DIR} every "
