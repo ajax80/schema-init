@@ -197,7 +197,12 @@ On the console it takes over, the board disables screen blanking and hides the c
 sudo schema-ctl status          # full dump: state, pid, restart count, weight
 sudo schema-ctl list            # compact: name + state only
 sudo schema-ctl timing          # kernel→PID1 handoff + per-service stable timestamps
+schema-top                      # live: state, PID, CPU% and memory per service
 ```
+
+On a terminal, `status` colours each state the way the board does (purple PERFECT, green stable, yellow failing, blue DORMANT, red EXCISED); piped, with `--json`/`--kv`, `NO_COLOR` or `TERM=dumb` it stays plain.
+
+`schema-top` is `schema-board`'s top view: the same shared-memory table, so it needs no root and never touches the control socket, plus each service's CPU% (100% = one core) and memory from its cgroup. Sorted by CPU; `c`/`m`/`n` sort by CPU, memory or name, `r` reverses, `j`/`k` or the arrows scroll, `q` quits. `schema-top --once` prints one snapshot (CPU% over half a second), for scripts and ssh one-liners. Idle services' CPU% is dim, 50%+ yellow, a pinned core bold red.
 
 A service stuck in `NEW_PROCESS` means its dependencies haven't stabilised. `status` shows the state of every dep — trace upward.
 
@@ -206,11 +211,14 @@ A service in `FRICTION` is in last-chance recovery. On the next failed F6 probe 
 ### Service logs
 
 ```sh
-tail -f /run/log/schema-init/<name>.log    # live stdout/stderr for a service
-cat /run/log/schema-init/dbus.log          # full output since last boot
+sudo schema-ctl log <name>        # the last 50 lines of a service's stdout/stderr
+sudo schema-ctl log -n 0 <name>   # all of it
+sudo schema-ctl log -f <name>     # follow; keeps going across the nightly logrotate
+sudo schema-ctl log rail          # the boot rail's own log
+schema-ctl --user log <name>      # a schema-user service's log
 ```
 
-These are plain text on a tmpfs. If a service is failing silently, its output is here.
+The files are plain text in `/var/log/schema-init/<name>.log`, or `/run/log/schema-init/` when PID 1 started a service before `/var` was writable; `log` reads whichever was written last. They are `0640 root`, hence `sudo`. If a service is failing silently, its output is here.
 
 ### D-Bus tracing
 
