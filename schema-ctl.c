@@ -666,6 +666,9 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--user") == 0) {
         static char usock[PATH_MAX], udir[PATH_MAX], uskip[PATH_MAX];
         const char *xdg = getenv("XDG_RUNTIME_DIR");
+        /* log reads $XDG_STATE_HOME, not the runtime dir: ssh sessions often lack it */
+        if (argc > 2 && !strcmp(argv[2], "log"))
+            return ctl_log_main(argc - 1, argv + 1, 1);
         if (!xdg || !xdg[0]) {
             fprintf(stderr, "schema-ctl --user: XDG_RUNTIME_DIR is not set\n");
             return 1;

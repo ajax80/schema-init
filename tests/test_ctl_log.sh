@@ -68,7 +68,8 @@ kill $FP; FP=
 
 mkdir -p "$T/state/schema-user/log"
 echo mine > "$T/state/schema-user/log/f.log"
-XDG_STATE_HOME="$T/state" "$CTL" --user log f > "$T/out" 2> "$T/err"
+# no XDG_RUNTIME_DIR (ssh, CI): log needs only the state dir
+env -u XDG_RUNTIME_DIR XDG_STATE_HOME="$T/state" "$CTL" --user log f > "$T/out" 2> "$T/err"
 [ "$(cat "$T/out")" = mine ] || fail "--user log"
 
 "$CTL" > /dev/null 2> "$T/usage"

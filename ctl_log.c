@@ -25,31 +25,45 @@ static const char *dir_run(void) {
 }
 
 /* PID 1 writes /var/log/schema-init, or /run/log/schema-init while /var isn't
- * writable; a box can carry both, and the one written last is the live one */
-int log_pick(const char *name, int user, char *out, size_t n) {
-    struct stat a, b;
-    char pa[PATH_MAX], pb[PATH_MAX];
-    if (!*name || strchr(name, '/')) {
+ * writable; a box can carry both, and the one written last is the live one.
+ * Opened, then judged by fstat on the fd held: nothing checked by name is used. */
+int log_open(const char *name, int user, char *out, size_t n) {
+    char p[2][PATH_MAX];
+    int np = 0, best = -1, denied = 0;
+    struct stat bs, st;
+    if (!*name || strchr(name, '/') || name[0] == '.') {
         errno = ENOENT;
         return -1;
     }
     if (user) {
         const char *x = getenv("XDG_STATE_HOME"), *h = getenv("HOME");
-        if (x && *x) snprintf(out, n, "%s/schema-user/log/%s.log", x, name);
-        else snprintf(out, n, "%s/.local/state/schema-user/log/%s.log", h ? h : "", name);
-        return lstat(out, &a);
+        if (x && *x) snprintf(p[np++], PATH_MAX, "%s/schema-user/log/%s.log", x, name);
+        else snprintf(p[np++], PATH_MAX, "%s/.local/state/schema-user/log/%s.log", h ? h : "", name);
+    } else {
+        snprintf(p[np++], PATH_MAX, "%s/%s.log", dir_var(), name);
+        snprintf(p[np++], PATH_MAX, "%s/%s.log", dir_run(), name);
     }
-    snprintf(pa, sizeof pa, "%s/%s.log", dir_var(), name);
-    snprintf(pb, sizeof pb, "%s/%s.log", dir_run(), name);
-    int ha = lstat(pa, &a) == 0, hb = lstat(pb, &b) == 0;
-    if (!ha && !hb) {
-        errno = ENOENT;
-        return -1;
+    for (int i = 0; i < np; i++) {
+        int fd = open(p[i], O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0) {
+            denied |= errno == EACCES || errno == EPERM;
+            continue;
+        }
+        if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode)) {
+            close(fd);
+            continue;
+        }
+        if (best < 0 || st.st_mtim.tv_sec > bs.st_mtim.tv_sec ||
+            (st.st_mtim.tv_sec == bs.st_mtim.tv_sec && st.st_mtim.tv_nsec > bs.st_mtim.tv_nsec)) {
+            if (best >= 0) close(best);
+            best = fd, bs = st;
+            snprintf(out, n, "%s", p[i]);
+        } else {
+            close(fd);
+        }
     }
-    int use_b = hb && (!ha || b.st_mtim.tv_sec > a.st_mtim.tv_sec ||
-                       (b.st_mtim.tv_sec == a.st_mtim.tv_sec && b.st_mtim.tv_nsec > a.st_mtim.tv_nsec));
-    snprintf(out, n, "%s", use_b ? pb : pa);
-    return 0;
+    if (best < 0) errno = denied ? EACCES : ENOENT;
+    return best;
 }
 
 static void copy_from(int fd, off_t off, FILE *out) {
@@ -98,7 +112,7 @@ int log_follow(const char *path, FILE *out) {
     int in = inotify_init1(IN_CLOEXEC);
     if (in < 0 || inotify_add_watch(in, dir, IN_MODIFY | IN_CREATE | IN_MOVED_TO | IN_MOVED_FROM | IN_DELETE) < 0)
         return -1;
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     off_t off = fd >= 0 ? lseek(fd, 0, SEEK_END) : 0;
     char ev[sizeof(struct inotify_event) + NAME_MAX + 1];
     for (;;) {
@@ -113,14 +127,16 @@ int log_follow(const char *path, FILE *out) {
             copy_from(fd, off, out);
             off = lseek(fd, 0, SEEK_CUR);
         }
-        if (stat(path, &now) == 0 && (fd < 0 || fstat(fd, &cur) != 0 || now.st_ino != cur.st_ino)) {
+        int nfd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (nfd >= 0 && fstat(nfd, &now) == 0 &&
+            (fd < 0 || fstat(fd, &cur) != 0 || now.st_ino != cur.st_ino || now.st_dev != cur.st_dev)) {
+            /* a new file under the name (logrotate): switch to it, from the top */
             if (fd >= 0) close(fd);
-            fd = open(path, O_RDONLY | O_CLOEXEC);
-            off = 0;
-            if (fd >= 0) {
-                copy_from(fd, 0, out);
-                off = lseek(fd, 0, SEEK_CUR);
-            }
+            fd = nfd;
+            copy_from(fd, 0, out);
+            off = lseek(fd, 0, SEEK_CUR);
+        } else if (nfd >= 0) {
+            close(nfd);
         }
     }
 }
@@ -140,14 +156,10 @@ int ctl_log_main(int argc, char **argv, int user) {
     }
     if (!name) goto usage;
     char path[PATH_MAX];
-    if (log_pick(name, user, path, sizeof path) < 0) {
-        fprintf(stderr, "schema-ctl: no log for %s\n", name);
-        return 1;
-    }
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int fd = log_open(name, user, path, sizeof path);
     if (fd < 0) {
-        if (errno == EACCES || errno == EPERM) fprintf(stderr, "needs root: sudo schema-ctl log %s\n", name);
-        else fprintf(stderr, "schema-ctl: %s: %s\n", path, strerror(errno));
+        if (errno == EACCES) fprintf(stderr, "needs root: sudo schema-ctl log %s\n", name);
+        else fprintf(stderr, "schema-ctl: no log for %s\n", name);
         return 1;
     }
     log_tail(fd, lines, stdout);
