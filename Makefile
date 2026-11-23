@@ -142,6 +142,7 @@ install: all fonts/schema-10x20.psfu.gz
 	install -D -m 0644 fonts/schema-10x20.psfu.gz $(DESTDIR)$(PREFIX)/lib/kbd/consolefonts/schema-10x20.psfu.gz
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(BINS) $(DESTDIR)$(BINDIR)/
+	[ ! -e $(DESTDIR)$(BINDIR)/schema-board ] || ln -sf schema-board $(DESTDIR)$(BINDIR)/schema-top
 	install -d $(DESTDIR)$(SYSCONFDIR)/schema-init/services
 	install -d $(DESTDIR)$(DATADIR)/schema-init/services
 	install -m 0644 $(filter-out $(PI_KIT_EXAMPLES),$(wildcard services/*)) $(DESTDIR)$(DATADIR)/schema-init/services/

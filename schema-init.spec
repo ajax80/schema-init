@@ -496,6 +496,7 @@ fi
 %{_bindir}/schema-subreaper
 %{_bindir}/schema-journal-sink
 %{_bindir}/schema-board
+%{_bindir}/schema-top
 %{_bindir}/schema-coredump
 %{_bindir}/schema-recorder
 %{_bindir}/schema-snapshot
