@@ -70,6 +70,8 @@ echo "$O" | grep -q "30 services" || fail "no service count"
 echo "$O" | grep "svc000" | grep -q "50.0M" || fail "svc000 MEM: $(echo "$O" | grep svc000)"
 echo "$O" | grep "svc003" | sed "s/${ESC}\[[0-9;]*m//g" | grep -q "%\|M\b" && fail "svc003 (no cgroup) shows numbers"
 [ "$(echo "$O" | vis_max)" -le 80 ] || fail "80x25: a line is wider than 80"
+# piped (as here), --once is for scripts: no colour at all (review I1)
+echo "$O" | grep -q "${ESC}" && fail "--once into a pipe carries escape codes"
 O60=$(SCHEMA_BOARD_SIZE=60x20 top)
 [ "$(echo "$O60" | vis_max)" -le 60 ] || fail "60x20: a line is wider than 60"
 echo "$O" | grep -q "a-very-long-service-n" || fail "long name not cut to 22"

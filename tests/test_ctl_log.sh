@@ -71,4 +71,6 @@ echo mine > "$T/state/schema-user/log/f.log"
 XDG_STATE_HOME="$T/state" "$CTL" --user log f > "$T/out" 2> "$T/err"
 [ "$(cat "$T/out")" = mine ] || fail "--user log"
 
+"$CTL" > /dev/null 2> "$T/usage"
+grep -q "rail's log" "$T/usage" || fail "usage: the log entry is cut short"
 echo "ctl_log: ok"

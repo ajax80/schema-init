@@ -24,6 +24,6 @@ int top_read_cgroup(const char *cgroot, const char *svc, uint64_t *usage_usec, l
 void top_sample_all(const schema_shm_t *s, top_sample_t *samp, int n, const char *cgroot);
 void top_sort(const schema_shm_t *s, const top_sample_t *samp, int *order, int n, int key, int reverse);
 void top_render(FILE *out, const schema_shm_t *s, const top_sample_t *samp, const int *order, int n,
-                int key, int reverse, int first, int rows, int cols);
+                int key, int reverse, int first, int rows, int cols, int colour);
 int top_main(int argc, char **argv);
 #endif

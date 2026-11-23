@@ -76,6 +76,18 @@ try:
     check("terminal restored", termios.tcgetattr(fd) == before)
 except termios.error:
     check("terminal restored (pty closed with it)", True)
+# stdin not a terminal (ssh -n, a script): no busy loop on stdin, cursor shown again on exit (review I2)
+import resource
+before_ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+p = subprocess.Popen([top], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
+time.sleep(2)
+p.terminate()
+out, _ = p.communicate(timeout=3)
+ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+cpu = (ru.ru_utime - before_ru.ru_utime) + (ru.ru_stime - before_ru.ru_stime)
+check("stdin /dev/null: under 0.3 s CPU in 2 s", cpu < 0.3, "%.2f s" % cpu)
+check("stdin /dev/null: still drawing frames", out.count(b"schema-top") >= 2, str(out.count(b"schema-top")))
+check("stdin /dev/null: cursor not left hidden", b"\x1b[?25l" not in out or out.rstrip().endswith(b"\x1b[?25h\x1b[0m"), repr(out[-40:]))
 subprocess.run([mk, "rm", SHM])
 print("test_board_top_keys: %d/%d" % (sum(results), len(results)))
 sys.exit(0 if all(results) else 1)

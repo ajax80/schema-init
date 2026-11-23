@@ -1,6 +1,6 @@
 /* schema-top: see board_top.h. Linked into schema-board; picked by argv[0]. */
 #include "board_top.h"
-#include "state_colors.h"
+#include "ctl_colour.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -126,20 +126,22 @@ static void put_name(FILE *out, const char *raw) {
 
 /* copy a rendered line, stopping at cols visible columns (SGR and UTF-8
  * continuation bytes are not columns) */
+static int top_colour = 1;
+
 static void put_clipped(FILE *out, const char *line, int cols) {
     int vis = 0;
     for (const char *p = line; *p && *p != '\n'; p++) {
         if (*p == '\033') {
             const char *e = p + 1;
             if (*e == '[') while (*++e && !(*e >= '@' && *e <= '~'));
-            fwrite(p, 1, (size_t)(e - p + (*e != 0)), out);
+            if (top_colour) fwrite(p, 1, (size_t)(e - p + (*e != 0)), out);
             p = *e ? e : e - 1;
             continue;
         }
         if (((unsigned char)*p & 0xc0) != 0x80 && ++vis > cols) break;
         fputc(*p, out);
     }
-    fputs("\033[0m\n", out);
+    fputs(top_colour ? "\033[0m\n" : "\n", out);
 }
 
 static void line_out(FILE *out, int cols, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
@@ -162,7 +164,7 @@ static const char *sys_label(uint8_t st) {
 }
 
 void top_render(FILE *out, const schema_shm_t *s, const top_sample_t *samp, const int *order, int n,
-                int key, int reverse, int first, int rows, int cols) {
+                int key, int reverse, int first, int rows, int cols, int colour) {
     static const char *keys[] = { "CPU", "MEM", "NAME" };
     int ok = 0, fr = 0, dor = 0, exc = 0;
     long long mem = 0;
@@ -176,6 +178,7 @@ void top_render(FILE *out, const schema_shm_t *s, const top_sample_t *samp, cons
         else ok++;
         if (samp[i].have) mem += samp[i].mem;
     }
+    top_colour = colour;
     if (first < 0) first = 0;
     if (rows < 1) rows = 1;
     if (n > rows) snprintf(range, sizeof range, "   [%d-%d of %d]", first + 1, first + rows < n ? first + rows : n, n);
@@ -241,14 +244,15 @@ static void snap(const schema_shm_t *live, schema_shm_t *out) {
 }
 
 static struct termios saved_tio;
-static int raw_on;
+static int raw_on, cursor_hidden;
 
 static void raw_off(void) {
-    if (!raw_on) return;
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tio);
-    fputs("\033[?25h\033[0m\n", stdout);
-    fflush(stdout);
-    raw_on = 0;
+    if (raw_on) tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tio);
+    if (cursor_hidden) {
+        fputs("\033[?25h\033[0m\n", stdout);
+        fflush(stdout);
+    }
+    raw_on = cursor_hidden = 0;
 }
 
 static void on_signal(int sig) {
@@ -302,22 +306,26 @@ int top_main(int argc, char **argv) {
         top_sample_all(&s, samp, n, cg);
         term_size(&cols, &rows);
         top_sort(&s, samp, order, n, key, rev);
-        top_render(stdout, &s, samp, order, n, key, rev, 0, n, cols);
+        top_render(stdout, &s, samp, order, n, key, rev, 0, n, cols, colour_wanted(STDOUT_FILENO));
         return 0;
     }
-    if (tcgetattr(STDIN_FILENO, &saved_tio) == 0) {
+    int colour = colour_wanted(STDOUT_FILENO), keys = isatty(STDIN_FILENO);
+    atexit(raw_off);
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+    signal(SIGHUP, on_signal);
+    if (keys && tcgetattr(STDIN_FILENO, &saved_tio) == 0) {
         struct termios t = saved_tio;
         t.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
         t.c_cc[VMIN] = 0;
         t.c_cc[VTIME] = 0;
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
         raw_on = 1;
-        atexit(raw_off);
-        signal(SIGINT, on_signal);
-        signal(SIGTERM, on_signal);
-        signal(SIGHUP, on_signal);
     }
-    fputs("\033[?25l", stdout);
+    if (isatty(STDOUT_FILENO)) {
+        fputs("\033[?25l", stdout);
+        cursor_hidden = 1;
+    }
     int64_t next = 0;
     uint32_t seen = (uint32_t)-1;
     int dirty = 1;
@@ -341,15 +349,15 @@ int top_main(int argc, char **argv) {
             if (first > n - win) first = n - win;
             if (first < 0) first = 0;
             top_sort(&s, samp, order, n, key, rev);
-            fputs("\033[H\033[2J", stdout);
-            top_render(stdout, &s, samp, order, n, key, rev, first, win, cols);
+            if (colour) fputs("\033[H\033[2J", stdout);
+            top_render(stdout, &s, samp, order, n, key, rev, first, win, cols, colour);
             fflush(stdout);
             dirty = 0;
         }
         /* wake for a key, a seq change (checked every 200 ms) or the 1 s tick */
         int64_t left = (next - mono_us()) / 1000;
         struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
-        if (poll(&p, 1, left < 0 ? 0 : left > 200 ? 200 : (int)left) > 0) {
+        if (poll(&p, keys ? 1 : 0, left < 0 ? 0 : left > 200 ? 200 : (int)left) > 0) {
             if (p.revents & (POLLHUP | POLLERR)) return 0;
             char k[64];
             int nk = read_keys(k, (int)sizeof k);

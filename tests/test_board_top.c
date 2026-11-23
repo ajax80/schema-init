@@ -48,7 +48,7 @@ int main(void) {
     char *buf = NULL;
     size_t n = 0;
     FILE *f = open_memstream(&buf, &n);
-    top_render(f, &z, sm, o, 3, TOP_SORT_CPU, 0, 0, 20, 80);
+    top_render(f, &z, sm, o, 3, TOP_SORT_CPU, 0, 0, 20, 80, 1);
     fclose(f);
     assert(strstr(buf, "\033[2m  0.0"));
     assert(strstr(buf, "\033[33m 60.0"));
