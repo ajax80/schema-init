@@ -104,13 +104,17 @@ int main(int argc, char **argv) {
         "<3>[  11.0] BTRFS error (device sdb1): bdev /dev/sdb1 errs: wr 0, rd 0, flush 0, corrupt 2, gen 0\n"
         "<4>[  12.0] BTRFS warning (device nvme0n1p3): csum failed, corrupt leaf\n"
         "<6>[  13.0] EXT4-fs (sda1): mounted filesystem\n"
-        "<6>[  14.0] BTRFS info (device sda2): using crc32c\n";
+        "<6>[  14.0] BTRFS info (device sda2): using crc32c\n"
+        /* at mount, btrfs prints its persisted lifetime counters at info level: an
+           error from months ago, not one since boot (a new one logs as BTRFS error) */
+        "<6>[  14.5] BTRFS info (device sdf3): bdev /dev/sdf3 errs: wr 0, rd 1, flush 0, corrupt 0, gen 0\n";
     n = disk_findings("/nonexistent", km, devdir, f, 64);
     assert(n == 3);
     assert(has(f, n, F_WARN, "sde \xe2\x80\x94 3 I/O or filesystem errors in the kernel log since boot"));
     assert(has(f, n, F_WARN, "sdb \xe2\x80\x94 1 I/O or filesystem error"));
     assert(has(f, n, F_WARN, "nvme0n1 \xe2\x80\x94 1 "));
     assert(!strstr(f[0].text, "sda"));
+    assert(!has(f, n, F_WARN, "sdf"));
 
     n = disk_findings("/nonexistent", "<3>blk_update_request: I/O error, dev sdc, sector 1\n<3>x I/O error, dev sdc, sector 2\n", devdir, f, 64);
     assert(n == 1 && has(f, n, F_WARN, "sdc \xe2\x80\x94 2 I/O errors in the kernel log since boot"));

@@ -152,7 +152,10 @@ static void kmsg_findings(const char *text, finding_t *out, int max, int *n) {
             count(names, cnt, &nd, d + 4, dev_token(d + 4), 0);
         } else if (strstr(line, "EXT4-fs error") && (d = strstr(line, "(device "))) {
             count(names, cnt, &nd, d + 8, dev_token(d + 8), 1);
-        } else if (strstr(line, "BTRFS") && (strstr(line, "corrupt") || strstr(line, "errs:")) && (d = strstr(line, "(device "))) {
+        } else if (strstr(line, "BTRFS") && !strstr(line, "BTRFS info") &&
+                   (strstr(line, "corrupt") || strstr(line, "errs:")) && (d = strstr(line, "(device "))) {
+            /* not info: at mount btrfs prints its persisted lifetime errs: counters
+               at info level; an error since boot logs as BTRFS error/warning */
             count(names, cnt, &nd, d + 8, dev_token(d + 8), 1);
         }
     }
