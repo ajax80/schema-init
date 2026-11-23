@@ -6,6 +6,7 @@ cmds=(
   'list:service names'
   'analyze:boot critical chain'
   'timing:per-service cost'
+  'top:live per-service CPU and memory'
   'reload:re-read service files'
   'reexec:replace the PID 1 binary in place'
   'start:start a service'
@@ -15,6 +16,7 @@ cmds=(
   'restart:restart a service'
   'add:load one .svc file'
   'cat:print a .svc and its drop-ins'
+  'log:a service log, -f to follow'
   'graph:dependency graph as Graphviz DOT'
   'trace:flight recorder: recent crashes and pressure'
   'verify:before a reboot: would the next boot come back'
@@ -38,6 +40,6 @@ case $words[2] in
   add) _files ;;
   reexec) _alternatives 'opts:option:(--force)' 'files:file:_files' ;;
   reboot|poweroff) _values option --force ;;
-  analyze|start|up|stop|down|restart|cat|graph|pet|reset)
+  analyze|start|up|stop|down|restart|cat|log|graph|pet|reset)
     (( CURRENT == 3 )) && _values service $svcs ;;
 esac

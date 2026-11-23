@@ -10,7 +10,7 @@ _schema_ctl_svcs() {
 
 _schema_ctl() {
     local cur=${COMP_WORDS[COMP_CWORD]}
-    local cmds="status list analyze timing reload reexec start up stop down restart add cat graph trace verify pet reset reboot poweroff --help --version"
+    local cmds="status list analyze timing top reload reexec start up stop down restart add cat log graph trace verify pet reset reboot poweroff --help --version"
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
         return
@@ -23,7 +23,7 @@ _schema_ctl() {
         add)     compopt -o filenames 2>/dev/null; COMPREPLY=($(compgen -f -- "$cur")) ;;
         reexec)  compopt -o filenames 2>/dev/null; COMPREPLY=($(compgen -W "--force" -- "$cur") $(compgen -f -- "$cur")) ;;
         reboot|poweroff) COMPREPLY=($(compgen -W "--force" -- "$cur")) ;;
-        analyze|start|up|stop|down|restart|cat|graph|pet|reset)
+        analyze|start|up|stop|down|restart|cat|log|graph|pet|reset)
                  [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "$(_schema_ctl_svcs)" -- "$cur")) ;;
     esac
 }

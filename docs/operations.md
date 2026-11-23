@@ -197,7 +197,7 @@ On the console it takes over, the board disables screen blanking and hides the c
 sudo schema-ctl status          # full dump: state, pid, restart count, weight
 sudo schema-ctl list            # compact: name + state only
 sudo schema-ctl timing          # kernel→PID1 handoff + per-service stable timestamps
-schema-top                      # live: state, PID, CPU% and memory per service
+schema-top                      # live: state, PID, CPU% and memory per service (also: schema-ctl top)
 ```
 
 On a terminal, `status` colours each state the way the board does (purple PERFECT, green stable, yellow failing, blue DORMANT, red EXCISED); piped, with `--json`/`--kv`, `NO_COLOR` or `TERM=dumb` it stays plain.
