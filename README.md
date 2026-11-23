@@ -128,7 +128,7 @@ then run `schema-wizard`. It walks you through three reversible stages with a ro
 These are real gaps, not future features being teased:
 
 - **Young, and not independently audited — but audited as far as we can take it ourselves.** `schema-dbus` and `schema-logind` sit on the system's authorization boundary — who may own a bus name, who may power off, who gets device access. Here is what has been done:
-  - Every change lands test-first with a code-review pass. CI runs the C test suite under AddressSanitizer and UndefinedBehaviorSanitizer, plus fuzz harnesses and CodeQL; the Python integration suite (`make test-all`) runs locally, not yet in CI.
+  - Every change lands test-first with a code-review pass. CI runs the C test suite, again under AddressSanitizer and UndefinedBehaviorSanitizer, and the Python integration suite, plus fuzz harnesses and CodeQL.
   - An AI-assisted security review of the D-Bus and logind daemons (Nov 2026) found and fixed missing polkit gates, unenforced D-Bus receive policy and socket-permission races.
   - A security audit of `schema-import` (Nov 2026) fixed silent sandbox loss, ignored drop-ins and secrets copied world-readable ([#477](https://github.com/ajax80/schema-init/pull/477)).
   - A read-only audit of every C source, the Python daemons' authorization paths, the shim, the importer and CI (Nov 2026; [spec](docs/superpowers/specs/2026-11-12-full-audit-spec.md)) was worked through tier by tier.
