@@ -171,6 +171,9 @@ try:
         meth = getattr(cls, name)
         self = object.__new__(cls)
         self._connection = Conn(65534)
+        # Manager lock relays read the target's owner before gating (read-only)
+        self._lookup = lambda sid: types.SimpleNamespace(_owner=lambda: None)
+        self.registry = types.SimpleNamespace(sessions={})
         seen.clear()
         try:
             meth(self, *args, sender=":attacker")
@@ -273,6 +276,43 @@ mgr._connection = Conn(1000)
 mgr.registry = Reg(session(1000, owner=None))
 check("ReleaseSession of a stand-in session at the login screen: denied",
       denied(lambda: m.Login1Manager.ReleaseSession(mgr, "1", sender=":2.4")))
+
+# --- Manager lock relays reach the session (review of #572) ------------------
+# The relay called Session.Lock()/Unlock() with no sender, so their own gate saw
+# an unresolved caller and refused even root: loginctl lock-session did nothing.
+class LockSess:
+    def __init__(self, owner):
+        self.emitted = []
+        self.owner = owner
+    def _owner(self):
+        return self.owner
+    def _emit_bare_signal(self, member):
+        self.emitted.append(member)
+
+def relay(uid, method, *args, owner=1000, front=1000):
+    saved_front = m.authz_uid
+    m.authz_uid = lambda: front
+    mgr = m.Login1Manager.__new__(m.Login1Manager)
+    mgr._connection = Conn(uid)
+    s1 = LockSess(owner)
+    mgr.registry = types.SimpleNamespace(sessions={"1": s1})
+    mgr._lookup = lambda sid: s1
+    try:
+        e = err(lambda: getattr(m.Login1Manager, method)(mgr, *args, sender=":3.1"))
+    finally:
+        m.authz_uid = saved_front
+    return e, s1.emitted
+
+check("LockSession from root emits Lock", relay(0, "LockSession", "1") == (None, ["Lock"]))
+check("LockSessions from the active user emits Lock", relay(1000, "LockSessions") == (None, ["Lock"]))
+check("UnlockSession from root emits Unlock", relay(0, "UnlockSession", "1") == (None, ["Unlock"]))
+check("UnlockSessions from root emits Unlock", relay(0, "UnlockSessions") == (None, ["Unlock"]))
+check("LockSession of a background session by its owner: allowed",
+      relay(1001, "LockSession", "1", owner=1001, front=1000) == (None, ["Lock"]))
+check("LockSession of someone else's session: denied, nothing emitted",
+      relay(1002, "LockSession", "1", owner=1001, front=1000) == ("AccessDenied", []))
+check("UnlockSession of someone else's session: denied, nothing emitted",
+      relay(1002, "UnlockSession", "1", owner=1001, front=1000) == ("AccessDenied", []))
 
 # --- CreateSession is pam_systemd's, which runs as root (review 2026-11-22) ---
 # A non-root caller named any pid and schema-logind wrote it into a session

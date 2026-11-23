@@ -2427,36 +2427,37 @@ class Login1Manager(dbus.service.Object):
     # loginctl lock-session/unlock-session route through the Manager, not the
     # Session object. Before these existed dbus-python raised UnknownMethod as
     # an unhandled traceback, so `loginctl lock-session` failed outright.
-    def _relay_lock(self, member, session_id=None):
+    def _relay_lock(self, member, sender, session_id=None):
+        # Gate here and emit directly: going through Session.Lock()/Unlock()
+        # would re-gate with no sender, which refuses everyone, root included.
         if session_id:
-            getattr(self._lookup(session_id), member)()
+            obj = self._lookup(session_id)
+            authz_check(self._connection, sender, member + "Session", obj._owner())
+            obj._emit_bare_signal(member)
             return
+        authz_check(self._connection, sender, member + "Sessions")
         targets = list(self.registry.sessions.values()) if self.registry else []
         if not targets:
             raise dbus.exceptions.DBusException(
                 "No session", name='org.freedesktop.login1.NoSuchSession')
         for obj in targets:
-            getattr(obj, member)()
+            obj._emit_bare_signal(member)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
     def LockSession(self, session_id, sender=None):
-        authz_check(self._connection, sender, "LockSession")
-        self._relay_lock('Lock', session_id)
+        self._relay_lock('Lock', sender, session_id)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='s', out_signature='', sender_keyword='sender')
     def UnlockSession(self, session_id, sender=None):
-        authz_check(self._connection, sender, "UnlockSession")
-        self._relay_lock('Unlock', session_id)
+        self._relay_lock('Unlock', sender, session_id)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='', sender_keyword='sender')
     def LockSessions(self, sender=None):
-        authz_check(self._connection, sender, "LockSessions")
-        self._relay_lock('Lock')
+        self._relay_lock('Lock', sender)
 
     @dbus.service.method('org.freedesktop.login1.Manager', in_signature='', out_signature='', sender_keyword='sender')
     def UnlockSessions(self, sender=None):
-        authz_check(self._connection, sender, "UnlockSessions")
-        self._relay_lock('Unlock')
+        self._relay_lock('Unlock', sender)
 
     # Compat stubs: methods KDE/loginctl may call that this stub does not
     # faithfully back. Accepting them keeps clients from crashing on
