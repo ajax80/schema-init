@@ -178,6 +178,7 @@ int opts_expand(const char *s, grubenv_t *env, int nenv, char *out, size_t n, ch
         if (!v) return -1;
         if (!strcmp(v, GRUBENV_CUT)) return -3;
         if (!strcmp(v, GRUBENV_BOTH)) return -4;
+        if (!strcmp(v, GRUBENV_DROPPED)) return -5;
         size_t vl = strlen(v);
         if (o + vl >= n) return -2;
         memcpy(out + o, v, vl);
@@ -221,6 +222,10 @@ int entry_precheck(const bls_entry_t *e, grubenv_t *env, int nenv, char *opts, s
     }
     if (x == -4) {
         unres(r, "$%s is set in both grubenv and grub.cfg with different values", miss);
+        return -1;
+    }
+    if (x == -5) {
+        unres(r, "grub.cfg sets $%s past what verify holds; its value is unknown", miss);
         return -1;
     }
     char (*w)[512] = malloc(MAXWORDS * sizeof *w), why[256], dev[PATH_MAX];

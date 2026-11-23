@@ -22,6 +22,8 @@
 #include <unistd.h>
 
 #define MAXENV 64
+/* grub.cfg top-level sets read by name; only MAXENV's share of them keeps a value */
+#define GRUBCFG_MAXVARS 256
 #define MAXENTS 64
 
 typedef enum { T_HEAD, T_PASS, T_NOTE, T_WARN, T_CHANGE, T_LOST, T_UNRES, T_FAIL } tag_t;
@@ -36,6 +38,10 @@ typedef struct {
      * [nenv..nopt): GRUBENV_BOTH for a name both set differently. Entry options see all
      * of it, everything else only grubenv's part */
     int ncfg, nopt;
+    /* what entry options expand against: env, or (grub.cfg past the room) a heap copy
+     * that also maps each dropped name to GRUBENV_DROPPED */
+    grubenv_t *xenv;
+    int nx;
     int tie[MAXENTS]; /* the index of an entry blscfg's order can't tell apart from this one, else -1 */
     bls_entry_t *ents;
     int nents;
@@ -168,11 +174,14 @@ static int run_capture(char *const argv[], char **out, size_t *olen, char **err,
     return WEXITSTATUS(st);
 }
 
+static grubenv_t *optenv(ctx_t *c) { return c->xenv ? c->xenv : c->env; }
+static int optn(ctx_t *c) { return c->xenv ? c->nx : c->nopt ? c->nopt : c->nenv; }
+
 /* the stand-in child: its stderr carries the records, its stdout the --check report */
 static int inspect_stub(ctx_t *c, const bls_entry_t *e, root_report_t *r) {
     char opts[4096], *out, *ctl;
     size_t ol, cl;
-    if (entry_precheck(e, c->env, c->nopt ? c->nopt : c->nenv, opts, sizeof opts, r)) return r->fail ? 1 : 3;
+    if (entry_precheck(e, optenv(c), optn(c), opts, sizeof opts, r)) return r->fail ? 1 : 3;
     if (run_capture((char *[]){ (char *)c->o->inspect, (char *)e->id, opts, NULL }, &out, &ol, &ctl, &cl, NULL) == -2) {
         cl = (size_t)asprintf(&ctl, "U cannot capture the inspection: memfd_create: %s\n", strerror(errno));
         ol = 0;
@@ -199,7 +208,7 @@ static root_report_t *inspect(ctx_t *c, int i, int spare) {
             r->nunres = 1;
             r->check_rc = -1;
         } else if (c->o->inspect) inspect_stub(c, &c->ents[i], &c->rep[i]);
-        else root_inspect(&c->ents[i], c->env, c->nopt ? c->nopt : c->nenv, NULL, &c->rep[i]);
+        else root_inspect(&c->ents[i], optenv(c), optn(c), NULL, &c->rep[i]);
         c->done[i] = 1;
     }
     return &c->rep[i];
@@ -747,8 +756,11 @@ int verify_run(const verify_opts_t *o, FILE *out) {
             /* GRUB's namespace for $var in options. 00_header's load_env runs before a later
              * top-level set, but verify does not model grub.cfg's order: a name both stores
              * set differently is unknown, one set the same or in one store only is that value */
-            grubenv_t cv[16];
-            int room = (MAXENV - c.nenv) / 2, k = grubcfg_vars(c.cfg, cv, room < 16 ? room : 16);
+            /* all of them, so the ones past the room are known by name */
+            grubenv_t *cv = malloc(GRUBCFG_MAXVARS * sizeof *cv);
+            int room = (MAXENV - c.nenv) / 2, all = grubcfg_vars(c.cfg, cv, GRUBCFG_MAXVARS);
+            int k = all < room ? all : room;
+            if (k > 16) k = 16;
             memmove(c.env + k, c.env, (size_t)c.nenv * sizeof *c.env);
             memcpy(c.env, cv, (size_t)k * sizeof *cv);
             c.nenv += k;
@@ -764,6 +776,21 @@ int verify_run(const verify_opts_t *o, FILE *out) {
                     snprintf(c.env[c.nopt++][1], GRUBENV_SZ, GRUBENV_BOTH);
                 }
             }
+            if (all > k) {
+                /* last match wins in the lookup, so a dropped name also hides grubenv's
+                 * value for it: grub.cfg's may be the one GRUB ends with */
+                c.nx = c.nopt + (all - k);
+                c.xenv = malloc((size_t)c.nx * sizeof *c.xenv);
+                memcpy(c.xenv, c.env, (size_t)c.nopt * sizeof *c.env);
+                for (int i = k; i < all; i++) {
+                    snprintf(c.xenv[c.nopt + i - k][0], GRUBENV_SZ, "%s", cv[i][0]);
+                    snprintf(c.xenv[c.nopt + i - k][1], GRUBENV_SZ, GRUBENV_DROPPED);
+                }
+            }
+            if (all == GRUBCFG_MAXVARS)
+                emit(&c, T_UNRES, "%s sets %d or more top-level variables; ones past that are not seen",
+                     o->grubcfg, GRUBCFG_MAXVARS);
+            free(cv);
         }
         if (!c.cfg) unreadable(&c, "GRUB config", o->grubcfg, c.cfg_err);
         else if (dk) emit(&c, T_UNRES, "%s: which default= its header sets could not be told", o->grubcfg);
@@ -866,6 +893,7 @@ int verify_run(const verify_opts_t *o, FILE *out) {
 
     for (int i = 0; i < c.n; i++) free(c.l[i].s);
     free(c.cfg);
+    free(c.xenv);
     for (int i = 0; i < MAXENTS; i++) free(c.rep[i].check_out);
     free(c.l);
     free(c.ents);

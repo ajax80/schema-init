@@ -226,6 +226,36 @@ has "[PASS] actual next boot m-7.2.11: entry checks pass" || fail "env-var-only:
 entry m-7.2.11 root
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
 
+# grub.cfg with more top-level sets than verify holds: the ones past the room are
+# unknown, but only an entry whose options use one is unresolved
+cp "$T/grub.cfg" "$T/grub.cfg.keep"
+i=0; while [ $i -lt 24 ]; do printf 'set cfgpad%d=x\n' $i; i=$((i + 1)); done >> "$T/grub.cfg"
+v
+expect 0 cfg-overflow-unused
+has "[PASS] actual next boot m-7.2.11: entry checks pass" || fail "cfg-overflow-unused: entry not inspected"
+grep -q '^\[UNRESOLVED\]' "$T/out" && fail "cfg-overflow-unused: unresolved though no option uses a dropped name"
+# a recorded one still expands
+entry m-7.2.11 root '$cfgpad0'
+v
+expect 0 cfg-overflow-recorded
+has "[PASS] actual next boot m-7.2.11: entry checks pass" || fail "cfg-overflow-recorded: entry not inspected"
+# a dropped one is unknown
+entry m-7.2.11 root '$cfgpad23'
+v
+expect 3 cfg-overflow-dropped
+has '[UNRESOLVED] actual next boot m-7.2.11: grub.cfg sets $cfgpad23 past what verify holds; its value is unknown' ||
+    fail "cfg-overflow-dropped: line"
+grep -q '^\[PASS\] actual' "$T/out" && fail "cfg-overflow-dropped: PASS for the next boot"
+# ...even when grubenv also sets it: grub.cfg's value may be the one GRUB ends with
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\ncfgpad23=quiet\n' "$F" > "$T/grubenv"
+v
+expect 3 cfg-overflow-dropped-env
+has '[UNRESOLVED] actual next boot m-7.2.11: grub.cfg sets $cfgpad23 past what verify holds; its value is unknown' ||
+    fail "cfg-overflow-dropped-env: grubenv's value used"
+mv "$T/grub.cfg.keep" "$T/grub.cfg"
+entry m-7.2.11 root
+printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\n' "$F" > "$T/grubenv"
+
 # env_block=: GRUB loads it after grubenv and its values win; here it holds a spent guard
 printf 'saved_entry=m-7.2.11\nschema_fallback_id=%s\nboot_success=1\nenv_block=512+1\n' "$F" > "$T/grubenv"
 B='# GRUB Environment Block
