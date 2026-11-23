@@ -8,6 +8,9 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <time.h>
+#include <poll.h>
+#include <signal.h>
+#include <termios.h>
 #include <unistd.h>
 
 #define TOP_CGROOT "/sys/fs/cgroup/schema-init"
@@ -237,10 +240,48 @@ static void snap(const schema_shm_t *live, schema_shm_t *out) {
     }
 }
 
+static struct termios saved_tio;
+static int raw_on;
+
+static void raw_off(void) {
+    if (!raw_on) return;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_tio);
+    fputs("\033[?25h\033[0m\n", stdout);
+    fflush(stdout);
+    raw_on = 0;
+}
+
+static void on_signal(int sig) {
+    raw_off();
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static int count_of(const schema_shm_t *s) {
+    return s->count < 0 ? 0 : s->count > SCHEMA_SHM_MAX ? SCHEMA_SHM_MAX : s->count;
+}
+
+/* every key that arrived, arrows as j/k (a paste or held key comes in one read) */
+static int read_keys(char *keys, int max) {
+    unsigned char b[64];
+    ssize_t r = read(STDIN_FILENO, b, sizeof b);
+    int n = 0;
+    for (ssize_t i = 0; i < r && n < max; i++) {
+        if (b[i] == 0x1b && i + 2 < r && b[i + 1] == '[') {
+            if (b[i + 2] == 'A') keys[n++] = 'k';
+            else if (b[i + 2] == 'B') keys[n++] = 'j';
+            i += 2;
+        } else {
+            keys[n++] = (char)b[i];
+        }
+    }
+    return n;
+}
+
 int top_main(int argc, char **argv) {
     static schema_shm_t s;
     static top_sample_t samp[SCHEMA_SHM_MAX];
-    int once = 0, order[SCHEMA_SHM_MAX], cols, rows;
+    int once = 0, order[SCHEMA_SHM_MAX], cols, rows, key = TOP_SORT_CPU, rev = 0, first = 0;
     const char *name = getenv("SCHEMA_BOARD_SHM"), *cg = getenv("SCHEMA_BOARD_CGROOT");
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "--once")) once = 1;
@@ -253,14 +294,78 @@ int top_main(int argc, char **argv) {
         return 1;
     }
     snap(live, &s);
-    int n = s.count < 0 ? 0 : s.count > SCHEMA_SHM_MAX ? SCHEMA_SHM_MAX : s.count;
-    top_sample_all(&s, samp, n, cg);
-    usleep(500000);
-    snap(live, &s);
-    n = s.count < 0 ? 0 : s.count > SCHEMA_SHM_MAX ? SCHEMA_SHM_MAX : s.count;
-    top_sample_all(&s, samp, n, cg);
-    term_size(&cols, &rows);
-    top_sort(&s, samp, order, n, TOP_SORT_CPU, 0);
-    top_render(stdout, &s, samp, order, n, TOP_SORT_CPU, 0, 0, once ? n : rows - 4, cols);
-    return 0;
+    top_sample_all(&s, samp, count_of(&s), cg);
+    if (once) {
+        usleep(500000);
+        snap(live, &s);
+        int n = count_of(&s);
+        top_sample_all(&s, samp, n, cg);
+        term_size(&cols, &rows);
+        top_sort(&s, samp, order, n, key, rev);
+        top_render(stdout, &s, samp, order, n, key, rev, 0, n, cols);
+        return 0;
+    }
+    if (tcgetattr(STDIN_FILENO, &saved_tio) == 0) {
+        struct termios t = saved_tio;
+        t.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+        t.c_cc[VMIN] = 0;
+        t.c_cc[VTIME] = 0;
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &t);
+        raw_on = 1;
+        atexit(raw_off);
+        signal(SIGINT, on_signal);
+        signal(SIGTERM, on_signal);
+        signal(SIGHUP, on_signal);
+    }
+    fputs("\033[?25l", stdout);
+    int64_t next = 0;
+    uint32_t seen = (uint32_t)-1;
+    int dirty = 1;
+    for (;;) {
+        int64_t now = mono_us();
+        if (now >= next) {
+            snap(live, &s);
+            top_sample_all(&s, samp, count_of(&s), cg);
+            next = now + 1000000;
+            dirty = 1;
+        } else if (*(const volatile uint32_t *)&live->seq != seen) {
+            snap(live, &s);
+            top_sample_all(&s, samp, count_of(&s), cg);
+            dirty = 1;
+        }
+        seen = s.seq;
+        if (dirty) {
+            int n = count_of(&s);
+            term_size(&cols, &rows);
+            int win = rows - 4 > 1 ? rows - 4 : 1;
+            if (first > n - win) first = n - win;
+            if (first < 0) first = 0;
+            top_sort(&s, samp, order, n, key, rev);
+            fputs("\033[H\033[2J", stdout);
+            top_render(stdout, &s, samp, order, n, key, rev, first, win, cols);
+            fflush(stdout);
+            dirty = 0;
+        }
+        /* wake for a key, a seq change (checked every 200 ms) or the 1 s tick */
+        int64_t left = (next - mono_us()) / 1000;
+        struct pollfd p = { STDIN_FILENO, POLLIN, 0 };
+        if (poll(&p, 1, left < 0 ? 0 : left > 200 ? 200 : (int)left) > 0) {
+            if (p.revents & (POLLHUP | POLLERR)) return 0;
+            char k[64];
+            int nk = read_keys(k, (int)sizeof k);
+            for (int i = 0; i < nk; i++) {
+                switch (k[i]) {
+                case 'q': return 0;
+                case 'c': key = TOP_SORT_CPU; first = 0; break;
+                case 'm': key = TOP_SORT_MEM; first = 0; break;
+                case 'n': key = TOP_SORT_NAME; first = 0; break;
+                case 'r': rev = !rev; break;
+                case 'j': first++; break;
+                case 'k': first--; break;
+                default: continue;
+                }
+                dirty = 1;
+            }
+        }
+    }
 }
