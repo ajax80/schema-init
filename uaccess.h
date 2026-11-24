@@ -158,13 +158,14 @@ static inline int ua_clear_node(const char *node, int uid) {
  * for the seat's active uid. Ineligible or no active uid -> nothing granted. */
 static inline int uaccess_apply(const char *seat_path, const struct uevent *ev, int eligible) {
     const char *devname = uevent_get(ev, "DEVNAME");
-    if (!devname || !devname[0]) return -1;
+    /* no node (most uevents) or one already gone: nothing to grant, not a failure */
+    if (!devname || !devname[0]) return 0;
     char node[UE_VAL_MAX + 8];
-    if ((size_t)snprintf(node, sizeof node, "/dev/%s", devname) >= sizeof node) return -1;
+    if ((size_t)snprintf(node, sizeof node, "/dev/%s", devname) >= sizeof node) { errno = ENAMETOOLONG; return -1; }
     int uid = uaccess_active_uid(seat_path);
     if (uid < 0) return 0;
     if (!eligible) return ua_clear_node(node, uid);
-    return ua_apply_node(node, uid);
+    return ua_apply_node(node, uid) < 0 && errno != ENOENT ? -1 : 0;
 }
 
 static inline void uaccess_wipe(const char *dir) {
