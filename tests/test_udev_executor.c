@@ -351,6 +351,12 @@ int main(void) {
         assert(!dry_run_skips(&atc, "/usr/bin/notalsactl x"));
         atc.dry_run = 0;
         assert(!dry_run_skips(&atc, "/usr/bin/alsactl nrestore 0"));
+        /* a live restart's coldplug replay: the mixers were restored at boot
+         * and set by the user since; a second restore would undo that */
+        atc.warm = 1;
+        assert(dry_run_skips(&atc, "/usr/bin/alsactl -E X --export restore 0"));
+        assert(!dry_run_skips(&atc, "/usr/sbin/ethtool -i lo"));
+        atc.warm = 0;
         printf("test_udev_executor: attr-write OK (dry_run suppresses)\n");
     }
 

@@ -246,6 +246,9 @@ static void run_ctx_runs(const struct dev_ctx *rc, enum dispatch_mode mode) {
  * namespaces); present => own the real /dev, /dev/disk, and real ACLs. */
 #define SCHEMA_UDEV_LIVE_FLAG "/etc/schema-init/schema-udev.live"
 static int g_live = 0;
+/* set for the device walk of a live restart (the subsystem replay already
+ * ran this boot): dispatch marks its rules context warm */
+static int g_coldplug_warm;
 
 static struct ruleset g_ruleset;
 static const char *const RULE_DIRS[] = {
@@ -355,6 +358,7 @@ static void dispatch(struct uevent *ev, enum dispatch_mode mode) {
         struct dev_ctx rc;
         int ua_tagged = 0;
         if (dev_ctx_init(&rc, &shadow_ev, "/sys") == 0) {
+            rc.warm = g_coldplug_warm;
             ruleset_apply(&g_ruleset, &rc);
             if (g_live && strcmp(action, "add") == 0 && rc.name[0]) {
                 net_rename(&shadow_ev, ev, rc.name);
@@ -807,10 +811,14 @@ int main(void) {
     if (g_feed) {
         fprintf(stderr, "[schema-udev] test feed on %s (no coldplug)\n", feed);
     } else {
+        int warm = g_live && access(SUBSYS_TRIGGERED, F_OK) == 0;
         if (g_live) subsystems_coldplug(nlfd);
-        fprintf(stderr, "[schema-udev] running coldplug sysfs walk...\n");
+        fprintf(stderr, "[schema-udev] running coldplug sysfs walk%s...\n",
+                warm ? " (restart: device-state helpers skipped)" : "");
         double cp_t0 = mono_ms();
+        g_coldplug_warm = warm;
         coldplug_walk_root("/sys", coldplug_dispatch);
+        g_coldplug_warm = 0;
         fprintf(stderr, "[schema-udev] coldplug took %.0fms\n", mono_ms() - cp_t0);
     }
     if (g_live && udev_signal_ready() == 0)
