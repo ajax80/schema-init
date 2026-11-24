@@ -207,10 +207,11 @@ int settle_step(settle_t *st, const char *status_kv, uint64_t now_ms, unsigned w
         if (dot) {
             const char *name = line + 8, *key = dot + 1, *val = eq + 1;
             size_t nlen = (size_t)(dot - name), klen = (size_t)(eq - key), vlen = (size_t)(end - val);
-            if (klen == 5 && !memcmp(key, "state", 5)) {
-                if (!state_ok(status_kv, name, nlen, val, vlen)) healthy = 0;
-            } else if (klen == 8 && !memcmp(key, "restarts", 8)) {
-                size_t need = nlen + vlen + 2;
+            int state = klen == 5 && !memcmp(key, "state", 5);
+            if (state && !state_ok(status_kv, name, nlen, val, vlen)) healthy = 0;
+            /* state too: a healthy-to-healthy move (FULL_TRUST -> FUNDAMENTAL) restarts the window */
+            if (state || (klen == 8 && !memcmp(key, "restarts", 8))) {
+                size_t need = nlen + klen + vlen + 3;
                 if (used + need > cap) {
                     char *nb;
                     while (used + need > cap) cap *= 2;
@@ -218,8 +219,10 @@ int settle_step(settle_t *st, const char *status_kv, uint64_t now_ms, unsigned w
                     set = nb;
                 }
                 memcpy(set + used, name, nlen);
-                set[used + nlen] = '=';
-                memcpy(set + used + nlen + 1, val, vlen);
+                set[used + nlen] = '.';
+                memcpy(set + used + nlen + 1, key, klen);
+                set[used + nlen + 1 + klen] = '=';
+                memcpy(set + used + nlen + 2 + klen, val, vlen);
                 set[used + need - 1] = '\n';
                 used += need;
             }
