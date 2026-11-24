@@ -106,4 +106,25 @@ PID=
 [ "$rc" = 0 ] || fail "exit $rc after SIGTERM"
 [ -s "$T/a.stop" ] || fail "a never got SIGTERM"
 
+# a loop pass held past the dry run's 5 s deadline (a slow daemon-reload
+# import) must not turn a dry run that already finished into a timeout
+printf '#!/bin/sh\n[ -e %s/slow ] && sleep 7\nexit 0\n' "$T" > "$T/imp"
+chmod +x "$T/imp"
+SCHEMA_USER_IMPORT=$T/imp "$T/su-old" > "$T/out" 2>&1 &
+PID=$!
+until_ok '[ -S "$T/run/schema-user/ctl.sock" ]' || fail "no ctl.sock (slow import)"
+until_ok 'st | grep -Eq "^ +a +pid=[1-9][0-9]* +state=FUNDAMENTAL"' || { st; fail "a not up (slow import)"; }
+# a dry run that takes 1 s, so the reload lands while it is pending
+printf '#include <string.h>\n#include <unistd.h>\nint main(int c, char **v) { if (c > 1 && !strcmp(v[1], "--reexec-check")) sleep(1); execv("%s/su-new", v); return 127; }\n' "$T" > "$T/slow.c"
+${CC:-cc} -o "$T/su-slow" "$T/slow.c" || fail "cannot build the slow wrapper"
+touch "$T/slow"
+rx "$T/su-slow" > "$T/rx.slow" &
+RXP=$!
+sleep 0.3
+./schema-ctl --user daemon-reload > /dev/null 2>&1
+wait "$RXP"
+rm -f "$T/slow"
+grep -Eq "^ok: re-executed into " "$T/rx.slow" || fail "finished dry run judged as a timeout: $(cat "$T/rx.slow")"
+stop
+
 echo "test_schema_user_reexec: ok"

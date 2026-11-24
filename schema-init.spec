@@ -484,9 +484,11 @@ fi
 # independent of the PID 1 re-exec above, and never fails the transaction.
 # The process name and the socket are the user's to fake, so the client runs
 # as that user (PID 1's root-only socket stays out of reach) and is time-
-# limited. An instance already re-exec'd no longer shows "(deleted)".
-for pid in $(pgrep -x schema-user 2>/dev/null); do
-    case "$(readlink /proc/$pid/exe 2>/dev/null)" in *" (deleted)") ;; *) continue ;; esac
+# limited. Found by exe, not comm: after an fexecve the comm is the fd
+# number on older kernels. An instance already re-exec'd is no longer deleted.
+for exe in /proc/[0-9]*/exe; do
+    [ "$(readlink "$exe" 2>/dev/null)" = "%{_bindir}/schema-user (deleted)" ] || continue
+    pid=${exe#/proc/}; pid=${pid%%/exe}
     cmp -s /proc/$pid/exe %{_bindir}/schema-user && continue
     uid=$(stat -c %u /proc/$pid 2>/dev/null) || continue
     gid=$(stat -c %g /proc/$pid 2>/dev/null) || continue

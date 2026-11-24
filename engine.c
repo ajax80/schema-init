@@ -4555,8 +4555,14 @@ int engine_reexec_start(int client, const char *path, char *err, size_t errsz) {
 /* Called from the main loop: a dry run past its deadline gets SIGKILL; reap()
  * then reports it. */
 void engine_reexec_tick(void) {
+    siginfo_t si;
     if (reexec_check_pid > 0 && !reexec_check_killed &&
         (int64_t)monotonic_ms() >= reexec_check_due) {
+        /* A pass held past the deadline (schema-user's daemon-reload import)
+         * may find the dry run already done: leave its verdict to reap(). */
+        si.si_pid = 0;
+        if (waitid(P_PID, (id_t)reexec_check_pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0 && si.si_pid)
+            return;
         kill(reexec_check_pid, SIGKILL);
         reexec_check_killed = 1;
     }

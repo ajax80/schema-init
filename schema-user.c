@@ -435,6 +435,9 @@ int main(int argc, char **argv) {
     engine_paths.svc_fallback    = NULL;
     engine_paths.tag             = "schema-user";
     engine_reload_allow_empty    = 1;
+    engine_reload_integrity      = 0;
+    engine_paths.dynamic_users   = 0;
+    service_dynamic_users        = 0;
     /* the dry run: the running image holds the lock and owns every path */
     if (reexec_check_fd >= 0)
         return engine_reexec_check_main(reexec_check_fd);
