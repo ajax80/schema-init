@@ -55,7 +55,10 @@ ME = pwd.getpwuid(UID).pw_name
 results = []
 
 SLEEPER = "#!/bin/sh\ntrap 'exit 0' TERM\nwhile :; do sleep 0.1; done\n"
-STUBBORN = "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 0.1; done\n"
+STUBBORN_READY = os.path.join(TMP, 'stubborn.ready')
+# marks itself ready only once TERM is ignored: exec'd is not enough, a TERM
+# sent before the trap kills it (flaked on a loaded CI runner)
+STUBBORN = "#!/bin/sh\ntrap '' TERM\n: > %s\nwhile :; do sleep 0.1; done\n" % STUBBORN_READY
 CRASHER = "#!/bin/sh\nexit 3\n"
 
 
@@ -265,6 +268,8 @@ def cleanup(*svs):
 
 
 def fresh(body=SLEEPER):
+    if os.path.exists(STUBBORN_READY):
+        os.unlink(STUBBORN_READY)
     wipe_user_tree()
     fake_user_tree()
     set_bin(body)
@@ -358,7 +363,7 @@ def test_stop_timeout_kill():
     try:
         sv.reconcile({UID}, 0)
         pid = sv.pid(UID)
-        wait_for(lambda: execd(pid))
+        wait_for(lambda: os.path.exists(STUBBORN_READY))
         sv.reconcile(set(), 1)
         sv.reconcile(set(), 31)
         time.sleep(0.2)
@@ -753,7 +758,7 @@ def test_stop_escalates_after_relogin():
     try:
         sv.reconcile({UID}, 0)
         pid = sv.pid(UID)
-        wait_for(lambda: execd(pid))
+        wait_for(lambda: os.path.exists(STUBBORN_READY))
         sv.reconcile(set(), 1)
         sv.reconcile(set(), 31)          # SIGTERM, ignored
         sv.reconcile({UID}, 33)          # user back while it is stopping
