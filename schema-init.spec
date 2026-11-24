@@ -365,6 +365,13 @@ fi
 %transfiletriggerpostun migrate -- /usr/share/dbus-1/system-services
 %{_bindir}/schema-import --bus-overrides >/dev/null 2>&1 || :
 
+# akmods installs the nvidia kmod rpm minutes after the kernel; a kernel the
+# kernel-install hook held for want of it can become the default now
+%transfiletriggerin -- /lib/modules /usr/lib/modules
+if grep -q '/nvidia[^/]*\.ko'; then
+    %{_prefix}/lib/kernel/install.d/99-schema-init.install promote || :
+fi
+
 %files migrate
 %dir %{_libexecdir}/schema-init
 %dir %{_datadir}/%{name}/migrate

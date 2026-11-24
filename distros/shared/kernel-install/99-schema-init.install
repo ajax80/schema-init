@@ -14,11 +14,24 @@
 # hook everywhere, and a box that only has it installed keeps its boot menu.
 # On an opted-in box the newest schema entry is made the saved default on each
 # add — this is what keeps a schema-init box on schema-init across kernel updates.
+#
+# Two guards run on every box, opted in or not:
+# - a kernel whose version carries "-schema" is built to boot with no initramfs
+#   (root storage in-kernel). Every entry booting one gets its initrd line
+#   dropped and root=UUID= turned into root=PARTUUID=: the kernel alone cannot
+#   resolve a filesystem UUID and panics (blakbox, 09-16 and again 11-24).
+# - on a box running schema-init with nvidia loaded, a new kernel that has no
+#   nvidia module yet does not become the default (black screen otherwise); the
+#   running kernel's entry stays default and the new one is recorded as held
+#   until `promote` finds the module.
 set -eu
 
 COMMAND="${1:-}"
 KERNEL_VERSION="${2:-}"
-[ -n "$KERNEL_VERSION" ] || [ "$COMMAND" = reclone ] || exit 0
+case "$COMMAND" in
+    reclone|fixup|promote) : ;;
+    *) [ -n "$KERNEL_VERSION" ] || exit 0 ;;
+esac
 
 BOOT_ROOT="${KERNEL_INSTALL_BOOT_ROOT:-/boot}"
 ENTRIES="$BOOT_ROOT/loader/entries"
@@ -32,7 +45,11 @@ ENTRIES="$BOOT_ROOT/loader/entries"
 CONF_ROOT="${SCHEMA_INIT_CONF_ROOT:-/etc/schema-init}"
 CMDLINE_D="$CONF_ROOT/kernel-cmdline.d"
 DEFAULT_MARKER="$CONF_ROOT/boot-default"
-[ -f "$DEFAULT_MARKER" ] || exit 0
+SYSFS="${SCHEMA_INIT_SYSFS:-/sys}"
+MODULES="${SCHEMA_INIT_MODULES:-/lib/modules}"
+PROC_CMDLINE="${SCHEMA_INIT_PROC_CMDLINE:-/proc/cmdline}"
+HELD="${SCHEMA_INIT_STATE_DIR:-/var/lib/schema-init}/held-kernel"
+RUNNING="${SCHEMA_INIT_RUNNING_KERNEL:-$(uname -r)}"
 # init path is not the same on every box (/usr/bin on some, /sbin on others), so
 # resolve it rather than hardcode: explicit override, else whatever is on PATH.
 INIT_PATH="${SCHEMA_INIT_BIN:-}"
@@ -78,6 +95,128 @@ newest_schema_version() {
     done | sort -V | tail -1
 }
 
+is_noinitrd() {
+    case "$1" in *-schema*) return 0 ;; esac
+    return 1
+}
+
+fix_noinitrd() {
+    # $1 = entry file booting a no-initramfs kernel
+    uuid="$(sed -n 's/^options.*[[:space:]]root=UUID=\([^[:space:]]*\).*/\1/p' "$1" | head -1)"
+    part=
+    if [ -n "$uuid" ]; then
+        part="$(blkid -t "UUID=$uuid" -s PARTUUID -o value 2>/dev/null | sort -u || true)"
+        # multi-device btrfs shares one fs UUID; with no initramfs nothing runs
+        # a device scan, so one member's PARTUUID cannot mount it either
+        case "$part" in *"
+"*) part= ;; esac
+        [ -n "$part" ] || echo "schema-init: ${1##*/}: no single PARTUUID for root=UUID=$uuid, entry cannot boot without an initramfs" >&2
+    fi
+    tmp="$1.tmp.$$"
+    if [ -n "$part" ]; then
+        sed -e '/^initrd[[:space:]]/d' -e "/^options /s/\([[:space:]]\)root=UUID=[^[:space:]]*/\1root=PARTUUID=$part/" "$1" > "$tmp"
+    else
+        sed -e '/^initrd[[:space:]]/d' "$1" > "$tmp"
+    fi
+    if cmp -s "$tmp" "$1"; then rm -f "$tmp"; else mv "$tmp" "$1"; fi
+}
+
+fix_noinitrd_all() {
+    for e in "$ENTRIES"/*.conf; do
+        [ -f "$e" ] || continue
+        case "${e##*/}" in *rescue*) continue ;; esac
+        v="$(sed -n 's|^linux[[:space:]].*/vmlinuz-\([^[:space:]]*\).*|\1|p' "$e" | head -1)"
+        is_noinitrd "$v" && fix_noinitrd "$e"
+    done
+    return 0
+}
+
+opted_in() {
+    [ -f "$DEFAULT_MARKER" ] || grep -q 'init=[^[:space:]]*schema-init' "$PROC_CMDLINE" 2>/dev/null
+}
+
+module_built() {
+    [ -n "$(find "$MODULES/$1" -name 'nvidia.ko*' 2>/dev/null | head -1)" ]
+}
+
+gpu_ready() {
+    # $1 = kernel version; only nvidia is gated: it is out-of-tree, so a new
+    # kernel routinely lands before its module is built
+    [ -d "$SYSFS/module/nvidia" ] || return 0
+    module_built "$1"
+}
+
+pinned() {
+    pin="$(cat "$DEFAULT_MARKER" 2>/dev/null | tr -d '\r\n ')"
+    pin="${pin%.conf}"
+    [ -z "$pin" ] || [ ! -f "$ENTRIES/$pin.conf" ] || printf '%s\n' "$pin"
+}
+
+default_owned() {
+    # the gate never overrides schema-migrate (it picks the default itself) or a pin
+    [ -z "${SCHEMA_INIT_NO_DEFAULT:-}" ] && [ -z "$(pinned)" ]
+}
+
+boots_schema() {
+    grep -q '^options .*init=[^[:space:]]*schema-init' "$ENTRIES/$1.conf" 2>/dev/null
+}
+
+entry_for() {
+    # $1 = kernel version: the entry this box boots it from — the twin on an
+    # opted-in box (its stock entry boots systemd), else the stock entry
+    if [ -f "$DEFAULT_MARKER" ]; then
+        [ ! -f "$ENTRIES/schema-$1.conf" ] || printf 'schema-%s\n' "$1"
+        return 0
+    fi
+    stock="$(find_stock "$1")"
+    [ -z "$stock" ] || basename "$stock" .conf
+}
+
+newest_ready() {
+    # newest kernel, other than $1, whose entry boots schema-init and has its nvidia module
+    for e in "$ENTRIES"/*.conf; do
+        [ -f "$e" ] || continue
+        v="$(sed -n 's|^linux[[:space:]].*/vmlinuz-\([^[:space:]]*\).*|\1|p' "$e" | head -1)"
+        [ -n "$v" ] && [ "$v" != "${1:-}" ] || continue
+        [ "$(entry_for "$v")" = "$(basename "$e" .conf)" ] || continue
+        boots_schema "$(basename "$e" .conf)" && module_built "$v" && printf '%s\n' "$v"
+    done | sort -V | tail -1
+}
+
+hold() {
+    # $1 = kernel version that must not become the default yet
+    [ "$1" != "$RUNNING" ] || return 0
+    default_owned || return 0
+    keep="$(entry_for "$RUNNING")"
+    if [ -z "$keep" ] || ! boots_schema "$keep"; then
+        r="$(newest_ready "$1")"
+        keep="${r:+$(entry_for "$r")}"
+    fi
+    if [ -z "$keep" ]; then
+        echo "schema-init: no nvidia module for $1 and no schema-init entry with one to keep as default" >&2
+        return 0
+    fi
+    command -v grub2-editenv >/dev/null 2>&1 || return 0
+    grub2-editenv - set "saved_entry=$keep" 2>/dev/null || true
+    mkdir -p "${HELD%/*}" && printf '%s\n' "$1" > "$HELD"
+    echo "schema-init: no nvidia module for $1 yet, default stays on $keep (held; promoted once the module is built)" >&2
+}
+
+promote() {
+    [ -f "$HELD" ] || return 0
+    v="$(cat "$HELD")"
+    e="$(entry_for "$v")"
+    if [ -z "$e" ]; then rm -f "$HELD"; return 0; fi
+    # the file, not gpu_ready: on a boot without nvidia loaded every kernel looks ready
+    module_built "$v" || return 0
+    # a newer ready kernel took the default meanwhile: never step back to this one
+    if [ "$(newest_ready)" != "$v" ] || ! default_owned; then rm -f "$HELD"; return 0; fi
+    command -v grub2-editenv >/dev/null 2>&1 || return 0
+    grub2-editenv - set "saved_entry=$e" 2>/dev/null || true
+    rm -f "$HELD"
+    echo "schema-init: nvidia module built for $v, default now $e" >&2
+}
+
 set_default_to() {
     # $1 = kernel version being added/removed (the "natural" candidate)
     [ -f "$DEFAULT_MARKER" ] || return 0
@@ -121,36 +260,62 @@ clone() {
 
 case "$COMMAND" in
 add)
-    xtra="$(extra_args)"
-    clone "$KERNEL_VERSION" || exit 0
-    # Fedora's 20-grub.install runs grub2-mkconfig whenever /etc/default/grub is
-    # newer than /etc/kernel/cmdline (e.g. a grub2-tools update replaced it), and
-    # mkconfig rewrites the options of EVERY BLS entry -- stripping init= from
-    # the existing schema entries (DBox, 7.2.7 update, 2026-09-25). Re-clone
-    # every schema entry that still has a stock twin.
-    for e in "$ENTRIES"/schema-*.conf; do
-        [ -f "$e" ] || continue
-        v="${e##*/schema-}"; v="${v%.conf}"
-        [ "$v" = "$KERNEL_VERSION" ] || clone "$v" || true
-    done
-    set_default_to "$KERNEL_VERSION"
+    if [ -f "$DEFAULT_MARKER" ]; then
+        xtra="$(extra_args)"
+        if clone "$KERNEL_VERSION"; then
+            # Fedora's 20-grub.install runs grub2-mkconfig whenever /etc/default/grub is
+            # newer than /etc/kernel/cmdline (e.g. a grub2-tools update replaced it), and
+            # mkconfig rewrites the options of EVERY BLS entry -- stripping init= from
+            # the existing schema entries (DBox, 7.2.7 update, 2026-09-25). Re-clone
+            # every schema entry that still has a stock twin.
+            for e in "$ENTRIES"/schema-*.conf; do
+                [ -f "$e" ] || continue
+                v="${e##*/schema-}"; v="${v%.conf}"
+                [ "$v" = "$KERNEL_VERSION" ] || clone "$v" || true
+            done
+            set_default_to "$KERNEL_VERSION"
+        fi
+    fi
+    fix_noinitrd_all
+    if opted_in; then
+        promote
+        gpu_ready "$KERNEL_VERSION" || hold "$KERNEL_VERSION"
+    fi
     ;;
 reclone)
     # not a kernel-install verb: grub.d/11_schema_bls_restore calls it after
     # grub2-mkconfig's 10_linux rewrote every entry's options. Re-clone each
     # twin from its (new) stock entry; the default is left alone.
-    xtra="$(extra_args)"
-    for e in "$ENTRIES"/schema-*.conf; do
-        [ -f "$e" ] || continue
-        v="${e##*/schema-}"; v="${v%.conf}"
-        clone "$v" || true
-    done
+    if [ -f "$DEFAULT_MARKER" ]; then
+        xtra="$(extra_args)"
+        for e in "$ENTRIES"/schema-*.conf; do
+            [ -f "$e" ] || continue
+            v="${e##*/schema-}"; v="${v%.conf}"
+            clone "$v" || true
+        done
+    fi
+    fix_noinitrd_all
+    ;;
+fixup)
+    # 11_schema_bls_restore runs this after every grub2-mkconfig: 10_linux
+    # stamps root=UUID= from GRUB_DEVICE_UUID onto every entry
+    fix_noinitrd_all
+    opted_in && promote
+    ;;
+promote)
+    opted_in && promote
     ;;
 remove)
-    rm -f "$SCHEMA_CONF"
-    # if this was the default, fall back to the newest surviving schema entry
-    latest="$(newest_schema_version)"
-    [ -n "$latest" ] && set_default_to "$latest"
+    if [ -f "$DEFAULT_MARKER" ]; then
+        rm -f "$SCHEMA_CONF"
+        [ "$(cat "$HELD" 2>/dev/null)" != "$KERNEL_VERSION" ] || rm -f "$HELD"
+        # if this was the default, fall back to the newest surviving schema
+        # entry — never a held one, its nvidia module is not built yet
+        latest="$(newest_schema_version)"
+        [ -z "$latest" ] || [ "$latest" != "$(cat "$HELD" 2>/dev/null)" ] || latest="$(newest_ready "$latest")"
+        [ -n "$latest" ] && set_default_to "$latest"
+    fi
+    [ "$(cat "$HELD" 2>/dev/null)" != "$KERNEL_VERSION" ] || rm -f "$HELD"
     ;;
 esac
 exit 0

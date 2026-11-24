@@ -5,6 +5,9 @@
 # by 99-schema-init.install itself, so a GRUB_CMDLINE_LINUX change still
 # reaches them; every other stashed entry (snapshots, schema-good-*, hand-made,
 # twins on a box that never opted in) gets its own options line back verbatim.
+# Last, the hook's fixup re-applies the no-initramfs fixes (10_linux stamps
+# root=UUID= on every entry) and promotes a held kernel whose nvidia module
+# has since been built.
 # Prints nothing: stdout of a grub.d script lands in grub.cfg.
 ENTRIES="${SCHEMA_INIT_GRUB_ENTRIES:-/boot/loader/entries}"
 STASH="${SCHEMA_INIT_BLS_STASH:-/run/schema-init-bls-stash}"
@@ -34,7 +37,13 @@ if [ -f "$MARKER" ] && [ -x "$HOOK" ]; then
         "$HOOK" reclone >&2 && recloned=1
 fi
 
-[ -d "$STASH" ] || exit 0
+fixup() {
+    [ -x "$HOOK" ] || return 0
+    KERNEL_INSTALL_BOOT_ROOT="${ENTRIES%/loader/entries}" SCHEMA_INIT_GRUB_ENTRIES="$ENTRIES" \
+        "$HOOK" fixup >&2 || true
+}
+
+if [ ! -d "$STASH" ]; then fixup; exit 0; fi
 for s in "$STASH"/*.conf; do
     [ -f "$s" ] || continue
     e="$ENTRIES/${s##*/}"
@@ -52,4 +61,5 @@ for s in "$STASH"/*.conf; do
         mv "$e.tmp.$$" "$e"
 done
 rm -rf "$STASH"
+fixup
 exit 0

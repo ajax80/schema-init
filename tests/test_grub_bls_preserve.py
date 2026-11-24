@@ -82,6 +82,19 @@ def env_for(root, entries, conf_root):
     env['SCHEMA_INIT_BIN'] = '/usr/bin/schema-init'
     env['SCHEMA_INIT_KI_HOOK'] = HOOK
     env['KERNEL_INSTALL_ENTRY_TOKEN'] = TOKEN
+    # the hook's fixup must never read the host's /sys, /proc or /var/lib
+    env['SCHEMA_INIT_SYSFS'] = os.path.join(root, 'sys')
+    env['SCHEMA_INIT_MODULES'] = os.path.join(root, 'lib/modules')
+    env['SCHEMA_INIT_PROC_CMDLINE'] = os.path.join(root, 'proc-cmdline')
+    env['SCHEMA_INIT_STATE_DIR'] = os.path.join(root, 'var/lib/schema-init')
+    env['SCHEMA_INIT_RUNNING_KERNEL'] = VER
+    bind = os.path.join(root, 'bin')
+    os.makedirs(bind, exist_ok=True)
+    stub = os.path.join(bind, 'blkid')
+    with open(stub, 'w') as f:
+        f.write('#!/bin/sh\ncase "$2" in UUID=abc) echo 3e07;; *) exit 2;; esac\n')
+    os.chmod(stub, 0o755)
+    env['PATH'] = bind + os.pathsep + env['PATH']
     env.pop('GRUB_CMDLINE_LINUX', None)
     env.pop('GRUB_CMDLINE_LINUX_DEFAULT', None)
     return env
@@ -143,6 +156,22 @@ def test_global_init_cmdline_still_restores_snapshot():
     new = f'{NEW_STOCK} init=/sbin/schema-init'
     check('global init=: stock entry takes the new mkconfig line', opts(e['stock']) == new, opts(e['stock']))
     check('global init=: non schema-* entry is mkconfig\'s to rewrite', opts(e['custom']) == new, opts(e['custom']))
+
+
+def test_noinitrd_kernel_entry_fixed_after_mkconfig():
+    # blakbox 11-24: 10_linux stamped root=UUID= on the SchemaKernel entry,
+    # which has no initramfs to resolve it -> kernel panic
+    root, entries, conf_root, e = new_tree(marker=False)
+    sk = '7.2.11-cachyos1-schema.fc44.x86_64'
+    body = open(e['custom']).read().replace(f'/vmlinuz-{VER}', f'/vmlinuz-{sk}')
+    open(e['custom'], 'w').write(body)
+    s, r = mkconfig(root, entries, conf_root, cmdline=f'{NEW_STOCK} init=/sbin/schema-init')
+    check('noinitrd: restore exits 0', r.returncode == 0, r.stderr)
+    check('noinitrd: root=PARTUUID= put back',
+          opts(e['custom']) == f'root=PARTUUID=3e07 ro rootflags=subvol=root rhgb quiet mitigations=off init=/sbin/schema-init',
+          opts(e['custom']))
+    check('noinitrd: initrd line dropped', 'initrd' not in open(e['custom']).read())
+    check('noinitrd: initramfs kernels keep root=UUID=', opts(e['stock']).startswith('root=UUID=abc'), opts(e['stock']))
 
 
 def test_no_marker_twin_verbatim():
@@ -230,6 +259,7 @@ def test_odd_characters_survive():
 def main():
     print('schema-init grub.d BLS preserve tests\n')
     for fn in (test_mkconfig_preserves_entries, test_global_init_cmdline_still_restores_snapshot,
+               test_noinitrd_kernel_entry_fixed_after_mkconfig,
                test_restore_without_stash_fixes_twin, test_trailing_space_from_10_linux, test_no_extras,
                test_no_marker_twin_verbatim, test_interrupted_run_keeps_stash, test_idempotent,
                test_missing_entries_dir, test_entry_removed_between, test_odd_characters_survive):
