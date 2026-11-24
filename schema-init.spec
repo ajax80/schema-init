@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.32
+Version:        0.4.33
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -555,6 +555,16 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Mon Nov 23 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.33-1
+- schema-user re-execs in place: schema-ctl --user reexec swaps the running
+  binary with PID 1's own handoff, services and rootless containers kept
+  (same pids, same cgroups). An RPM upgrade does it for every running
+  instance, asking each as its own user. The first upgrade from an older
+  schema-user prints "log out and back in" once (#579)
+- An upgrade no longer moves the volume: schema-udev's restart replayed
+  sound-card adds and alsactl restored the last saved mixer state (#580)
+- schema-ctl top runs schema-top; an unknown command is named, with a
+  pointer to --help (#578)
 * Mon Nov 23 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.32-1
 - First-boot: the wizard's first flip could cut Plasma's first-run panel
   short (no tray, clock or show-desktop, kept on every later login). The
