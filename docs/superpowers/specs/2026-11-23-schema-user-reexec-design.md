@@ -154,6 +154,13 @@ v0.4.32 or older does not know `reexec` and gets that line.
 - Live: blakbox rootless podman container under schema-user survives
   `schema-ctl --user reexec` and an RPM upgrade.
 
+## Known
+
+- A failure in the new image between exec and adopt (runtime dir, passwd
+  entry, run/log dir creation) has no fallback: it exits 1 and logind
+  restarts the user's tree, as any restart does today. Those are the calls
+  the running image already passed with the same saved environment.
+
 ## Landing (my call)
 
 Draft PR → /code-review → merge when green → dev COPR. Ships in v0.4.33 with

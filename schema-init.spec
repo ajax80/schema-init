@@ -482,15 +482,18 @@ fi
 # Each user's schema-user swaps onto the new binary in place too, its
 # services and containers kept. Only instances still on the replaced file;
 # independent of the PID 1 re-exec above, and never fails the transaction.
-done_uids=" "
+# The process name and the socket are the user's to fake, so the client runs
+# as that user (PID 1's root-only socket stays out of reach) and is time-
+# limited. An instance already re-exec'd no longer shows "(deleted)".
 for pid in $(pgrep -x schema-user 2>/dev/null); do
     case "$(readlink /proc/$pid/exe 2>/dev/null)" in *" (deleted)") ;; *) continue ;; esac
     cmp -s /proc/$pid/exe %{_bindir}/schema-user && continue
     uid=$(stat -c %u /proc/$pid 2>/dev/null) || continue
-    case "$done_uids" in *" $uid "*) continue ;; esac
-    done_uids="$done_uids$uid "
+    gid=$(stat -c %g /proc/$pid 2>/dev/null) || continue
+    [ "$uid" != 0 ] || continue
     [ -S "/run/user/$uid/schema-user/ctl.sock" ] || continue
-    XDG_RUNTIME_DIR="/run/user/$uid" %{_bindir}/schema-ctl --user reexec >/dev/null 2>&1 ||
+    timeout 30 setpriv --reuid="$uid" --regid="$gid" --clear-groups \
+        env XDG_RUNTIME_DIR="/run/user/$uid" %{_bindir}/schema-ctl --user reexec >/dev/null 2>&1 ||
         echo "schema-init: schema-user for uid $uid kept its old binary; log out and back in to finish"
 done
 # The org.freedesktop.systemd1 shim is a Python daemon: the new file only
