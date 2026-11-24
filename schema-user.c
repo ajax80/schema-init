@@ -24,6 +24,7 @@
 static char run_dir[PATH_MAX], ctl_sock[PATH_MAX], notify_sock[PATH_MAX], svc_dir[PATH_MAX];
 static char shm_name[64], stamp_dir[PATH_MAX], log_dir[PATH_MAX];
 static char cg_root[PATH_MAX];
+static int lock_fd = -1;
 
 static void die(const char *msg) {
     fprintf(stderr, "schema-user: %s\n", msg);
@@ -59,8 +60,10 @@ static void single_instance(void) {
     join(lock, run_dir, "/lock");
     fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0) die("cannot open the instance lock");
-    if (flock(fd, LOCK_EX | LOCK_NB) == 0)
+    if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+        lock_fd = engine_reexec_lock_fd = fd;
         return;
+    }
     int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     memset(&a, 0, sizeof a);
     a.sun_family = AF_UNIX;
@@ -181,6 +184,10 @@ static void user_cgroup_root(void) {
                 cg_root[0] = '\0';
         }
     if (f) fclose(f);
+    /* after a re-exec we already sit in our own init.scope: the root is its parent */
+    size_t cl = strlen(cg_root);
+    if (cl > 11 && !strcmp(cg_root + cl - 11, "/init.scope"))
+        cg_root[cl - 11] = '\0';
     if (!cg_root[0])
         why = "no cgroup v2";
     else if (strlen(cg_root) > sizeof(((service_t *)0)->cgroup_path) - 1 - sizeof(((service_t *)0)->name))
@@ -326,7 +333,15 @@ static char imp[PATH_MAX], state_home[PATH_MAX], cfg_home[PATH_MAX];
  * disabled unit loaded; we have no "loaded but not enabled"). Blocks the loop
  * for up to IMPORT_SECS, as the import at start does. */
 static int user_ctl_extra(int fd, char *line) {
-    char err[256] = "";
+    char err[320] = "";
+    if (strcmp(line, "reexec") == 0 || strncmp(line, "reexec ", 7) == 0) {
+        const char *path = line[6] ? line + 7 : engine_reexec_argv0;
+        while (*path == ' ') path++;
+        if (engine_reexec_start(fd, path, err, sizeof err) == 0)
+            return 2;                   /* the reply comes when the dry run ends */
+        ctl_writef(fd, "err: %s\n", err);
+        return 1;
+    }
     if (strcmp(line, "daemon-reload") != 0) return 0;
     run_import(imp, cfg_home, state_home);
     if (engine_reload(1, err, sizeof err) == 0)
@@ -336,12 +351,45 @@ static int user_ctl_extra(int fd, char *line) {
     return 1;
 }
 
+/* The environment we were started with: service_environment() replaces it,
+ * and a re-exec'd image needs the original to find its paths. */
+static char **save_environment(void) {
+    size_t n = 0;
+    while (environ[n]) n++;
+    char **e = calloc(n + 1, sizeof *e);
+    if (!e) die("out of memory");
+    for (size_t i = 0; i < n; i++)
+        if (!(e[i] = strdup(environ[i]))) die("out of memory");
+    return e;
+}
+
+static void user_reexec_prep(void) {
+    service_set_hardening_default(0);
+}
+
+/* the lock came across as an open fd: the same open file, so this succeeds */
+static void user_reexec_restore(const reexec_global_t *g) {
+    lock_fd = g->fd_lock;
+    if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB) < 0)
+        die("instance lock not carried across the re-exec");
+}
+
 int main(int argc, char **argv) {
     const char *xdg = getenv("XDG_RUNTIME_DIR");
     const char *state = getenv("XDG_STATE_HOME"), *cfg = getenv("XDG_CONFIG_HOME");
     const char *imp_env = getenv("SCHEMA_USER_IMPORT");
     struct passwd *pw;
     struct sigaction sa;
+    int reexec_fd = -1, reexec_oldexe = -1, reexec_check_fd = -1;
+
+    engine_reexec_env = save_environment();
+    engine_reexec_keep_argv0 = 1;
+    if (argv[0] && argv[0][0] == '/' && strlen(argv[0]) < sizeof engine_reexec_argv0)
+        snprintf(engine_reexec_argv0, sizeof engine_reexec_argv0, "%s", argv[0]);
+    else
+        snprintf(engine_reexec_argv0, sizeof engine_reexec_argv0, "/usr/bin/schema-user");
+    engine_hooks.reexec_check_prep   = user_reexec_prep;
+    engine_hooks.reexec_restore_host = user_reexec_restore;
 
     if (argc > 1 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help"))) {
         printf("usage: schema-user\n"
@@ -353,7 +401,15 @@ int main(int argc, char **argv) {
         printf("schema-user %s\n", SCHEMA_INIT_VERSION);
         return 0;
     }
-    if (argc > 1) die("takes no arguments (see -h)");
+    /* written by our own previous image, never by a user */
+    if (argc == 4 && !strcmp(argv[1], "--reexec")) {
+        reexec_fd = atoi(argv[2]);
+        reexec_oldexe = atoi(argv[3]);
+    } else if (argc == 3 && !strcmp(argv[1], "--reexec-check")) {
+        reexec_check_fd = atoi(argv[2]);
+    } else if (argc > 1) {
+        die("takes no arguments (see -h)");
+    }
     if (geteuid() == 0) die("schema-user runs as a user; PID 1 supervises root");
     /* read before service_environment() clears the environment */
     snprintf(imp, sizeof imp, "%s", imp_env ? imp_env : IMPORT_DEFAULT);
@@ -375,9 +431,17 @@ int main(int argc, char **argv) {
     join(stamp_dir, state_home, "/schema-user/timers");
     join(log_dir, state_home, "/schema-user/log");
     snprintf(shm_name, sizeof shm_name, "/schema-user-%u", (unsigned)geteuid());
+    engine_paths.svc_dir         = svc_dir;
+    engine_paths.svc_fallback    = NULL;
+    engine_paths.tag             = "schema-user";
+    engine_reload_allow_empty    = 1;
+    /* the dry run: the running image holds the lock and owns every path */
+    if (reexec_check_fd >= 0)
+        return engine_reexec_check_main(reexec_check_fd);
     if (engine_mkdir_p(run_dir, 0700) < 0 || engine_mkdir_p(svc_dir, 0700) < 0)
         die("cannot create the run directory");
-    single_instance();
+    if (reexec_fd < 0)
+        single_instance();
 
     prctl(PR_SET_CHILD_SUBREAPER, 1);
     umask(022);
@@ -414,13 +478,20 @@ int main(int argc, char **argv) {
     engine_hooks.shut_log  = user_shut_log;
     engine_hooks.ctl_extra = user_ctl_extra;
 
-    run_import(imp, cfg_home, state_home);
-    if (!engine_running)
-        _exit(0);
-    if (engine_load(svc_dir) > 0)
-        die("dependency cycle in the service configuration");
-    engine_open(0);
-    engine_arm_timers(0);
+    if (reexec_fd >= 0) {
+        /* no import: a changed importer would change the set the blob matches */
+        engine_reexec_adopt(reexec_fd, reexec_oldexe);
+    } else {
+        run_import(imp, cfg_home, state_home);
+        if (!engine_running)
+            _exit(0);
+        if (engine_load(svc_dir) > 0)
+            die("dependency cycle in the service configuration");
+    }
+    engine_open(reexec_fd >= 0);
+    engine_arm_timers(reexec_fd >= 0);
+    if (reexec_fd >= 0)
+        engine_reexec_finish();
     engine_run();
     engine_stop_services();
     engine_kill_services();

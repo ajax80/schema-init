@@ -322,6 +322,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	sh tests/test_board_top.sh
 	sh tests/test_plasma_layout_heal.sh
 	sh tests/test_schema_user.sh
+	sh tests/test_schema_user_reexec.sh
 	sh tests/test_svc_reload_live.sh
 	sh tests/test_restart_policy_live.sh
 	sh tests/test_kill_signal_live.sh
