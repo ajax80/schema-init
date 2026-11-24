@@ -92,7 +92,7 @@ On a Raspberry Pi (no GRUB) the boot-entry sections say "not applicable" and the
 
 `99-schema-init.install` runs last in every `kernel-install add`, and `grub.d/11_schema_bls_restore` calls it again after every `grub2-mkconfig`. Two guards apply on every box:
 
-- **No-initramfs kernels.** A kernel whose version contains `-schema` is built to boot without an initramfs. Every entry that boots one loses its `initrd` line, and `root=UUID=` becomes `root=PARTUUID=` (via `blkid`). Both `kernel-install` and `10_linux` write `root=UUID=`, which only an initramfs can resolve. If no PARTUUID is found, the hook prints a warning and `schema-ctl verify` reports the entry.
+- **No-initramfs kernels.** A kernel whose version contains `-schema` or `.schema.` (the `kernel-cachyos-schema` rpm) is built to boot without an initramfs. Every entry that boots one loses its `initrd` line, and `root=UUID=` becomes `root=PARTUUID=` (via `blkid`). Both `kernel-install` and `10_linux` write `root=UUID=`, which only an initramfs can resolve. If no PARTUUID is found, the hook prints a warning and `schema-ctl verify` reports the entry.
 - **nvidia gate.** On a box booted into schema-init with the nvidia module loaded, a new kernel that has no `nvidia.ko*` under `/lib/modules/<version>` does not become the default. The running kernel's entry stays default and the new version goes into `/var/lib/schema-init/held-kernel`. When the module's rpm is installed (akmods), an rpm file trigger runs `99-schema-init.install promote`, which makes it the default. Every later `add` and `grub2-mkconfig` runs it as well. A newer kernel that became the default meanwhile drops the hold instead. The gate never overrides a `boot-default` pin.
 
 ## Recovery console

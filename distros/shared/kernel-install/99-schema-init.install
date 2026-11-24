@@ -16,7 +16,7 @@
 # add — this is what keeps a schema-init box on schema-init across kernel updates.
 #
 # Two guards run on every box, opted in or not:
-# - a kernel whose version carries "-schema" is built to boot with no initramfs
+# - a kernel whose version carries "-schema" or ".schema." is built to boot with no initramfs
 #   (root storage in-kernel). Every entry booting one gets its initrd line
 #   dropped and root=UUID= turned into root=PARTUUID=: the kernel alone cannot
 #   resolve a filesystem UUID and panics (blakbox, 09-16 and again 11-24).
@@ -96,7 +96,9 @@ newest_schema_version() {
 }
 
 is_noinitrd() {
-    case "$1" in *-schema*) return 0 ;; esac
+    # -schema: hand builds (7.2.11-cachyos1-schema.fc44); .schema.: the
+    # kernel-cachyos-schema rpm (rpm allows one '-' in a uname)
+    case "$1" in *-schema*|*.schema.*) return 0 ;; esac
     return 1
 }
 
