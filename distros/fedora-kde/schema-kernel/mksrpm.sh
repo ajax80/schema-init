@@ -11,6 +11,7 @@
 # kernel under our name.
 set -euo pipefail
 
+[ $# -ge 1 ] || { echo "usage: mksrpm.sh <kernel-cachyos-*.src.rpm> [outdir]" >&2; exit 2; }
 SRC="$(realpath "$1")"
 OUT="$(realpath "${2:-.}")"
 WORK="$(mktemp -d)"
@@ -18,7 +19,9 @@ trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/SOURCES" "$WORK/SPECS"
 (cd "$WORK/SOURCES" && rpm2cpio "$SRC" | cpio -idm --quiet)
-mv "$WORK/SOURCES/kernel-cachyos.spec" "$WORK/SPECS/upstream.spec"
+specs=("$WORK"/SOURCES/*.spec)
+[ ${#specs[@]} -eq 1 ] || { echo "mksrpm: expected one spec in $SRC, found ${#specs[@]}" >&2; exit 1; }
+mv "${specs[0]}" "$WORK/SPECS/upstream.spec"
 SPEC="$WORK/SPECS/kernel-cachyos-schema.spec"
 cp "$WORK/SPECS/upstream.spec" "$SPEC"
 
@@ -42,12 +45,20 @@ edit 's/^Name:\( *\)kernel-cachyos%{?_lto_args:-lto}$/Name:\1kernel-cachyos-sche
      'kernel-cachyos-schema'
 # upstream's upgrade path from its old naming must not pull this package in
 sed -i -e '/^Provides: *kernel-cachyos%{?_lto_args:-lto} >/d' -e '/^Obsoletes: *kernel-cachyos/d' "$SPEC"
+# every package must derive from the new Name: a hardcoded upstream name would
+# clash with stock kernel-cachyos or stand in for it
+if grep -nE '^(Provides|Obsoletes|Requires|Conflicts):.*kernel-cachyos[^-]|^(Provides|Obsoletes|Requires|Conflicts):.*kernel-cachyos$|^%package +-n +kernel-cachyos' "$SPEC"; then
+    echo "mksrpm: upstream spec still names kernel-cachyos directly (above)" >&2; exit 1
+fi
 
-edit 's/^\(    scripts\/config -u DEFAULT_HOSTNAME\)$/\1\n\n    # schema: boot with no initramfs (root is on NVMe)\n    scripts\/config -e BLK_DEV_NVME -e NVME_CORE -d LOCALVERSION_AUTO/' \
-     'scripts/config -e BLK_DEV_NVME -e NVME_CORE -d LOCALVERSION_AUTO'
-# olddefconfig may refuse a symbol; check what it actually produced
-edit 's/^\(    diff -u %{SOURCE1} \.config || :\)$/\1\n    grep -qx CONFIG_BLK_DEV_NVME=y .config \&\& grep -qx CONFIG_NVME_CORE=y .config/' \
-     'grep -qx CONFIG_BLK_DEV_NVME=y .config'
+# everything on the path to root must be built in: NVMe + btrfs (upstream has
+# btrfs =y today; forcing it keeps a config change from making it a module)
+edit 's/^\(    scripts\/config -u DEFAULT_HOSTNAME\)$/\1\n\n    # schema: boot with no initramfs (root is btrfs on NVMe)\n    scripts\/config -e BLK_DEV_NVME -e NVME_CORE -e BTRFS_FS -d LOCALVERSION_AUTO/' \
+     'scripts/config -e BLK_DEV_NVME -e NVME_CORE -e BTRFS_FS -d LOCALVERSION_AUTO'
+# olddefconfig may refuse a symbol; check what it produced. One grep per line:
+# %prep runs under sh -e, which ignores a failure on the left of &&
+edit 's/^\(    diff -u %{SOURCE1} \.config || :\)$/\1\n    grep -qx CONFIG_BLK_DEV_NVME=y .config\n    grep -qx CONFIG_NVME_CORE=y .config\n    grep -qx CONFIG_BTRFS_FS=y .config/' \
+     'grep -qx CONFIG_BTRFS_FS=y .config'
 
 rpmbuild -bs --define "_topdir $WORK" "$SPEC" >/dev/null
 mkdir -p "$OUT"
