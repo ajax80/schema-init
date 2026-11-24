@@ -247,7 +247,7 @@ static void run_ctx_runs(const struct dev_ctx *rc, enum dispatch_mode mode) {
 #define SCHEMA_UDEV_LIVE_FLAG "/etc/schema-init/schema-udev.live"
 static int g_live = 0;
 /* set for the device walk of a live restart (the subsystem replay already
- * ran this boot): dispatch marks its rules context warm */
+ * ran this boot); dispatch marks a device warm if it was handled before */
 static int g_coldplug_warm;
 
 static struct ruleset g_ruleset;
@@ -358,7 +358,15 @@ static void dispatch(struct uevent *ev, enum dispatch_mode mode) {
         struct dev_ctx rc;
         int ua_tagged = 0;
         if (dev_ctx_init(&rc, &shadow_ev, "/sys") == 0) {
-            rc.warm = g_coldplug_warm;
+            /* warm only for a device an earlier instance handled this boot (its
+             * db record is there): a boot walk that died early, or a card that
+             * arrived while we were down, still gets its first restore */
+            if (g_coldplug_warm) {
+                char wid[128], wp[PATH_MAX];
+                rc.warm = udev_db_filename(ev, wid, sizeof wid) == 0 &&
+                          (size_t)snprintf(wp, sizeof wp, "%s/%s", UDEV_DB_DIR, wid) < sizeof wp &&
+                          access(wp, F_OK) == 0;
+            }
             ruleset_apply(&g_ruleset, &rc);
             if (g_live && strcmp(action, "add") == 0 && rc.name[0]) {
                 net_rename(&shadow_ev, ev, rc.name);
@@ -814,7 +822,7 @@ int main(void) {
         int warm = g_live && access(SUBSYS_TRIGGERED, F_OK) == 0;
         if (g_live) subsystems_coldplug(nlfd);
         fprintf(stderr, "[schema-udev] running coldplug sysfs walk%s...\n",
-                warm ? " (restart: device-state helpers skipped)" : "");
+                warm ? " (restart: alsactl skipped for devices already handled)" : "");
         double cp_t0 = mono_ms();
         g_coldplug_warm = warm;
         coldplug_walk_root("/sys", coldplug_dispatch);

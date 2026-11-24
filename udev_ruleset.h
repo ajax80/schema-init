@@ -279,7 +279,7 @@ struct dev_ctx {
     char name[UE_VAL_MAX];
     char result[UE_VAL_MAX];      /* last PROGRAM stdout (trimmed); $result / %c */
     int  dry_run;                 /* skip ATTR{}= sysfs writes (verify tools) */
-    int  warm;                    /* a live restart's coldplug replay, not boot */
+    int  warm;                    /* restart replay of a device already handled this boot */
     int  link_priority;
     int  escape;                  /* 0=none, 1=replace */
     char final_keys[DEVCTX_FINAL_MAX][RK_KEY_MAX + RK_SUB_MAX + 2];
@@ -802,6 +802,8 @@ static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c,
 
 static inline void ctx_add_run(struct dev_ctx *ctx, const char *v, int is_builtin) {
     if (ctx->nruns >= DEVCTX_RUNS_MAX) return;
+    /* only warm: a dry run still lists what RUN would do */
+    if (ctx->warm && !is_builtin && dry_run_skips(ctx, v)) return;
     ctx->run_builtin[ctx->nruns] = is_builtin;
     safe_copy(ctx->runs[ctx->nruns++], v, UE_VAL_MAX);
 }

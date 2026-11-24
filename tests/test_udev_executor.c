@@ -356,7 +356,16 @@ int main(void) {
         atc.warm = 1;
         assert(dry_run_skips(&atc, "/usr/bin/alsactl -E X --export restore 0"));
         assert(!dry_run_skips(&atc, "/usr/sbin/ethtool -i lo"));
+        /* Arch/Debian alsa-utils restore through RUN+= rather than IMPORT */
+        struct rule run_rule;
+        ruleset_parse_line("RUN+=\"/usr/bin/alsactl restore 0\"", &run_rule);
+        atc.nruns = 0;
+        apply_rule(&run_rule, &atc);
+        assert(atc.nruns == 0);
         atc.warm = 0;
+        apply_rule(&run_rule, &atc);
+        assert(atc.nruns == 1);
+        atc.nruns = 0;
         printf("test_udev_executor: attr-write OK (dry_run suppresses)\n");
     }
 
