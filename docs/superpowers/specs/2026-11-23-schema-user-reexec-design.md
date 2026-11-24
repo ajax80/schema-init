@@ -90,16 +90,29 @@ renamed.
 - **Command.** `reexec` is accepted on the user ctl socket from the user and
   from root (the existing peer rule). `schema-ctl --user reexec` skips
   `verify_gate` (that guards PID 1). Default path `/usr/bin/schema-user`.
+- **Cgroup root.** `user_cgroup_root()` derives the root from
+  `/proc/self/cgroup`, which after the first start reads `…/init.scope`. The
+  root is carried in the blob (or `/init.scope` stripped); a re-exec'd image
+  must create services beside `init.scope`, never under it.
+- **argv[0].** The new image keeps the argv[0] the instance was started with
+  (`/usr/bin/schema-user`), whatever `<path>` was re-exec'd: logind's
+  `_is_schema_user()` matches on exe or argv[0]/argv[1], and a miss at its next
+  adoption would make it kill the user's tree as leftovers.
 - **Fallback.** New image refuses → back to the old image (same as PID 1). Old
   image gone too → `_exit(1)`; logind sees a crash, kills the tree, restarts.
 
 ### Upgrade trigger
 
-`%posttrans` (after the PID 1 re-exec): for each
-`/run/user/<uid>/schema-user/ctl.sock` with a live `schema-user`, run
-`XDG_RUNTIME_DIR=/run/user/<uid> schema-ctl --user reexec`. On error print one
-line naming the user and "log out and back in to finish". A `schema-user` from
-v0.4.32 or older does not know `reexec`: same message, one time only.
+`%posttrans`, after the PID 1 block but not inside it or dependent on it (my
+call): schema-user and PID 1 only meet through logind and the cgroup tree, so
+a new schema-user under an old PID 1 is the same mix a user gets today between
+upgrade and reboot. Only instances whose `/proc/<pid>/exe` is the replaced
+binary (`… (deleted)`, as the schema-udev block checks) are re-exec'd (my call):
+a hand-run dev instance on another binary, or one already current, is left
+alone. For each, run `XDG_RUNTIME_DIR=/run/user/<uid> schema-ctl --user
+reexec`. On error print one line per user per transaction naming the user and
+"log out and back in to finish"; no state kept (my call). A `schema-user` from
+v0.4.32 or older does not know `reexec` and gets that line.
 
 ## Testing
 
@@ -113,6 +126,13 @@ v0.4.32 or older does not know `reexec`: same message, one time only.
   `dnf upgrade` re-exec on blakbox (68/0 as before).
 - Live: blakbox rootless podman container under schema-user survives
   `schema-ctl --user reexec` and an RPM upgrade.
+
+## Landing (my call)
+
+Draft PR → /code-review → merge when green → dev COPR. Ships in v0.4.33 with
+#578, no separate release. Hardware: blakbox takes the dev build by
+`dnf upgrade` (PID 1 re-exec + schema-user re-exec, podman container check);
+Eli takes a reboot on it as the hardware test box.
 
 ## Left to the builder
 
