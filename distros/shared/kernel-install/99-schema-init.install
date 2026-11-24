@@ -105,8 +105,12 @@ fix_noinitrd() {
     uuid="$(sed -n 's/^options.*[[:space:]]root=UUID=\([^[:space:]]*\).*/\1/p' "$1" | head -1)"
     part=
     if [ -n "$uuid" ]; then
-        part="$(blkid -t "UUID=$uuid" -s PARTUUID -o value 2>/dev/null | head -1 || true)"
-        [ -n "$part" ] || echo "schema-init: ${1##*/}: no PARTUUID for root=UUID=$uuid, entry cannot boot without an initramfs" >&2
+        part="$(blkid -t "UUID=$uuid" -s PARTUUID -o value 2>/dev/null | sort -u || true)"
+        # multi-device btrfs shares one fs UUID; with no initramfs nothing runs
+        # a device scan, so one member's PARTUUID cannot mount it either
+        case "$part" in *"
+"*) part= ;; esac
+        [ -n "$part" ] || echo "schema-init: ${1##*/}: no single PARTUUID for root=UUID=$uuid, entry cannot boot without an initramfs" >&2
     fi
     tmp="$1.tmp.$$"
     if [ -n "$part" ]; then
@@ -131,28 +135,67 @@ opted_in() {
     [ -f "$DEFAULT_MARKER" ] || grep -q 'init=[^[:space:]]*schema-init' "$PROC_CMDLINE" 2>/dev/null
 }
 
+module_built() {
+    [ -n "$(find "$MODULES/$1" -name 'nvidia.ko*' 2>/dev/null | head -1)" ]
+}
+
 gpu_ready() {
     # $1 = kernel version; only nvidia is gated: it is out-of-tree, so a new
     # kernel routinely lands before its module is built
     [ -d "$SYSFS/module/nvidia" ] || return 0
-    [ -n "$(find "$MODULES/$1" -name 'nvidia.ko*' 2>/dev/null | head -1)" ]
+    module_built "$1"
+}
+
+pinned() {
+    pin="$(cat "$DEFAULT_MARKER" 2>/dev/null | tr -d '\r\n ')"
+    pin="${pin%.conf}"
+    [ -z "$pin" ] || [ ! -f "$ENTRIES/$pin.conf" ] || printf '%s\n' "$pin"
+}
+
+default_owned() {
+    # the gate never overrides schema-migrate (it picks the default itself) or a pin
+    [ -z "${SCHEMA_INIT_NO_DEFAULT:-}" ] && [ -z "$(pinned)" ]
+}
+
+boots_schema() {
+    grep -q '^options .*init=[^[:space:]]*schema-init' "$ENTRIES/$1.conf" 2>/dev/null
 }
 
 entry_for() {
-    # $1 = kernel version: the entry this box boots it from
-    if [ -f "$DEFAULT_MARKER" ] && [ -f "$ENTRIES/schema-$1.conf" ]; then
-        printf 'schema-%s\n' "$1"
-        return
+    # $1 = kernel version: the entry this box boots it from — the twin on an
+    # opted-in box (its stock entry boots systemd), else the stock entry
+    if [ -f "$DEFAULT_MARKER" ]; then
+        [ ! -f "$ENTRIES/schema-$1.conf" ] || printf 'schema-%s\n' "$1"
+        return 0
     fi
     stock="$(find_stock "$1")"
     [ -z "$stock" ] || basename "$stock" .conf
 }
 
+newest_ready() {
+    # newest kernel, other than $1, whose entry boots schema-init and has its nvidia module
+    for e in "$ENTRIES"/*.conf; do
+        [ -f "$e" ] || continue
+        v="$(sed -n 's|^linux[[:space:]].*/vmlinuz-\([^[:space:]]*\).*|\1|p' "$e" | head -1)"
+        [ -n "$v" ] && [ "$v" != "${1:-}" ] || continue
+        [ "$(entry_for "$v")" = "$(basename "$e" .conf)" ] || continue
+        boots_schema "$(basename "$e" .conf)" && module_built "$v" && printf '%s\n' "$v"
+    done | sort -V | tail -1
+}
+
 hold() {
     # $1 = kernel version that must not become the default yet
     [ "$1" != "$RUNNING" ] || return 0
+    default_owned || return 0
     keep="$(entry_for "$RUNNING")"
-    [ -n "$keep" ] || return 0
+    if [ -z "$keep" ] || ! boots_schema "$keep"; then
+        r="$(newest_ready "$1")"
+        keep="${r:+$(entry_for "$r")}"
+    fi
+    if [ -z "$keep" ]; then
+        echo "schema-init: no nvidia module for $1 and no schema-init entry with one to keep as default" >&2
+        return 0
+    fi
     command -v grub2-editenv >/dev/null 2>&1 || return 0
     grub2-editenv - set "saved_entry=$keep" 2>/dev/null || true
     mkdir -p "${HELD%/*}" && printf '%s\n' "$1" > "$HELD"
@@ -164,12 +207,12 @@ promote() {
     v="$(cat "$HELD")"
     e="$(entry_for "$v")"
     if [ -z "$e" ]; then rm -f "$HELD"; return 0; fi
-    gpu_ready "$v" || return 0
-    if [ -f "$DEFAULT_MARKER" ]; then
-        set_default_to "$v"
-    elif command -v grub2-editenv >/dev/null 2>&1; then
-        grub2-editenv - set "saved_entry=$e" 2>/dev/null || true
-    fi
+    # the file, not gpu_ready: on a boot without nvidia loaded every kernel looks ready
+    module_built "$v" || return 0
+    # a newer ready kernel took the default meanwhile: never step back to this one
+    if [ "$(newest_ready)" != "$v" ] || ! default_owned; then rm -f "$HELD"; return 0; fi
+    command -v grub2-editenv >/dev/null 2>&1 || return 0
+    grub2-editenv - set "saved_entry=$e" 2>/dev/null || true
     rm -f "$HELD"
     echo "schema-init: nvidia module built for $v, default now $e" >&2
 }
@@ -265,8 +308,11 @@ promote)
 remove)
     if [ -f "$DEFAULT_MARKER" ]; then
         rm -f "$SCHEMA_CONF"
-        # if this was the default, fall back to the newest surviving schema entry
+        [ "$(cat "$HELD" 2>/dev/null)" != "$KERNEL_VERSION" ] || rm -f "$HELD"
+        # if this was the default, fall back to the newest surviving schema
+        # entry — never a held one, its nvidia module is not built yet
         latest="$(newest_schema_version)"
+        [ -z "$latest" ] || [ "$latest" != "$(cat "$HELD" 2>/dev/null)" ] || latest="$(newest_ready "$latest")"
         [ -n "$latest" ] && set_default_to "$latest"
     fi
     [ "$(cat "$HELD" 2>/dev/null)" != "$KERNEL_VERSION" ] || rm -f "$HELD"

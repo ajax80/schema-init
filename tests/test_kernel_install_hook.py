@@ -384,7 +384,7 @@ def test_noinitrd_unresolvable_uuid():
     r = run('add', SVER, boot, conf_root, bind)
     body = open(os.path.join(entries, f'{TOKEN}-{SVER}.conf')).read()
     check('unresolvable: exits 0', r.returncode == 0, r.stderr)
-    check('unresolvable: warns', 'no PARTUUID' in r.stderr, r.stderr)
+    check('unresolvable: warns', 'no single PARTUUID' in r.stderr, r.stderr)
     check('unresolvable: root left as-is, initrd still dropped',
           'root=UUID=abc' in body and 'initrd' not in body, body)
 
@@ -445,8 +445,10 @@ def test_promote_once_module_built():
 
 def test_promote_marker_box_uses_twin():
     root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True, marker=True)
+    run('add', RUNNING, boot, conf_root, bind)
     run('add', SVER, boot, conf_root, bind)
-    check('marker gate: held', held(root) == SVER)
+    check('marker gate: held on the running twin, not its stock entry',
+          held(root) == SVER and saved(rec)[-1:] == [f'saved_entry=schema-{RUNNING}'], saved(rec))
     add_module(root, SVER)
     open(rec, 'w').close()
     run('fixup', '', boot, conf_root, bind)
@@ -460,6 +462,78 @@ def test_remove_clears_held():
     r = run('remove', SVER, boot, conf_root, bind)
     check('remove held: exits 0', r.returncode == 0, r.stderr)
     check('remove held: record cleared', held(root) is None)
+
+
+def test_marker_gate_never_picks_stock():
+    # no twin for the running kernel: its stock entry boots systemd, so it is no fallback
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True, marker=True)
+    r = run('add', SVER, boot, conf_root, bind)
+    check('no twin: stock entry never made default',
+          f'saved_entry={TOKEN}-{RUNNING}' not in saved(rec), saved(rec))
+    check('no twin: says it could not hold', 'no schema-init entry' in r.stderr, r.stderr)
+
+
+def test_hold_respects_pin_and_no_default():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True, marker=True)
+    run('add', RUNNING, boot, conf_root, bind)
+    with open(os.path.join(conf_root, 'boot-default'), 'w') as f:
+        f.write(f'schema-{RUNNING}')
+    open(rec, 'w').close()
+    run('add', SVER, boot, conf_root, bind)
+    check('pin: hold does not write the default', saved(rec) == [f'saved_entry=schema-{RUNNING}'], saved(rec))
+    check('pin: nothing held', held(root) is None)
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True)
+    run('add', SVER, boot, conf_root, bind, {'SCHEMA_INIT_NO_DEFAULT': '1'})
+    check('no-default knob: hold writes nothing', saved(rec) == [] and held(root) is None, saved(rec))
+
+
+def test_promote_needs_the_file_without_nvidia_loaded():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True)
+    run('add', SVER, boot, conf_root, bind)
+    os.rmdir(os.path.join(root, 'sys/module/nvidia'))   # booted a nouveau fallback
+    open(rec, 'w').close()
+    run('promote', '', boot, conf_root, bind)
+    check('no nvidia loaded: held kernel still held', held(root) == SVER and saved(rec) == [], saved(rec))
+
+
+def test_promote_never_steps_back():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True)
+    run('add', SVER, boot, conf_root, bind)
+    newer = '7.3.10-cachyos1-schema.fc44.x86_64'
+    write_entry(entries, newer)
+    add_module(root, newer)
+    run('add', newer, boot, conf_root, bind)
+    add_module(root, SVER)
+    open(rec, 'w').close()
+    run('promote', '', boot, conf_root, bind)
+    check('superseded: older held kernel not promoted', saved(rec) == [], saved(rec))
+    check('superseded: hold dropped', held(root) is None)
+
+
+def test_remove_does_not_default_to_held():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True, marker=True)
+    add_module(root, RUNNING)
+    run('add', RUNNING, boot, conf_root, bind)
+    old = '6.9.0-cachyos1-schema.fc44.x86_64'
+    write_entry(entries, old)
+    run('add', old, boot, conf_root, bind)
+    run('add', SVER, boot, conf_root, bind)
+    check('remove setup: held', held(root) == SVER)
+    open(rec, 'w').close()
+    run('remove', old, boot, conf_root, bind)
+    check('remove: default goes to the ready kernel, not the held one',
+          saved(rec)[-1:] == [f'saved_entry=schema-{RUNNING}'], saved(rec))
+
+
+def test_multidevice_root_left_alone():
+    root, boot, entries, conf_root, rec, bind = schema_box()
+    stub = os.path.join(bind, 'blkid')
+    with open(stub, 'w') as f:
+        f.write('#!/bin/sh\necho p1\necho p2\n')
+    r = run('add', SVER, boot, conf_root, bind)
+    body = open(os.path.join(entries, f'{TOKEN}-{SVER}.conf')).read()
+    check('multi-device: root=UUID= kept', 'root=UUID=abc' in body, body)
+    check('multi-device: warns', 'no single PARTUUID' in r.stderr, r.stderr)
 
 
 def main():
@@ -476,7 +550,10 @@ def main():
                test_gate_holds_without_module, test_gate_passes_with_module,
                test_gate_off_without_nvidia, test_gate_off_when_not_schema_box,
                test_promote_once_module_built, test_promote_marker_box_uses_twin,
-               test_remove_clears_held):
+               test_remove_clears_held, test_marker_gate_never_picks_stock,
+               test_hold_respects_pin_and_no_default, test_promote_needs_the_file_without_nvidia_loaded,
+               test_promote_never_steps_back, test_remove_does_not_default_to_held,
+               test_multidevice_root_left_alone):
         print(fn.__name__)
         fn()
         print()
