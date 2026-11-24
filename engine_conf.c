@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include "engine.h"
 #include "notify.h"
 #include "schema_shm.h"
@@ -27,6 +28,10 @@ int64_t engine_hook_wake_none(int64_t now_m, int *tick) { (void)now_m; (void)tic
 int  engine_hook_ctl_none(int fd, char *line) { (void)fd; (void)line; return 0; }
 void engine_hook_log_none(const char *msg) { (void)msg; }
 int  engine_hook_reaped_none(pid_t pid, int status) { (void)pid; (void)status; return 0; }
+int  engine_hook_refuse_none(char *err, size_t errsz) { (void)err; (void)errsz; return 0; }
+void engine_hook_host_none(reexec_global_t *g) { (void)g; }
+void engine_hook_host_const_none(const reexec_global_t *g) { (void)g; }
+void engine_hook_exit(void) { _exit(1); }
 
 engine_hooks_t engine_hooks = {
     .loop_pressure = engine_hook_pressure_none,
@@ -38,4 +43,9 @@ engine_hooks_t engine_hooks = {
     .on_reaped     = engine_hook_reaped_none,
     .after_sockets = engine_hook_noop,
     .shut_outcome  = engine_hook_outcome_none,
+    .reexec_refuse       = engine_hook_refuse_none,
+    .reexec_save_host    = engine_hook_host_none,
+    .reexec_restore_host = engine_hook_host_const_none,
+    .reexec_check_prep   = engine_hook_noop,
+    .reexec_last_resort  = engine_hook_exit,
 };

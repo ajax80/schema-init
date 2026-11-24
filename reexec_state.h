@@ -136,6 +136,7 @@ typedef struct {
     uint64_t        last_reclaim_ms;
     uint64_t        nofile_soft;     /* soft RLIMIT_NOFILE the kernel gave PID 1 at boot */
     int             fd_ctl, fd_notify, fd_watchdog, fd_client, fd_oldexe;
+    int             fd_lock;         /* schema-user's instance lock; -1 for PID 1 */
 } reexec_global_t;
 
 /* one service as the blob carries it: identity + live SVC_TIMER bit + the
@@ -265,8 +266,8 @@ static inline void state_write(FILE *out, const reexec_global_t *g,
     rx_put_INT(out, "under_pressure", &g->under_pressure);
     fprintf(out, " last_stall_ms=%" PRIu64 " last_reclaim_ms=%" PRIu64 " nofile_soft=%" PRIu64 "\n",
             g->last_stall_ms, g->last_reclaim_ms, g->nofile_soft);
-    fprintf(out, "fd ctl=%d notify=%d watchdog=%d client=%d oldexe=%d\n",
-            g->fd_ctl, g->fd_notify, g->fd_watchdog, g->fd_client, g->fd_oldexe);
+    fprintf(out, "fd ctl=%d notify=%d watchdog=%d client=%d oldexe=%d lock=%d\n",
+            g->fd_ctl, g->fd_notify, g->fd_watchdog, g->fd_client, g->fd_oldexe, g->fd_lock);
     for (int i = 0; i < nsvc; i++) {
         const service_t *s = &svcs[i];
         int timer = (s->flags & SVC_TIMER) != 0;
@@ -310,7 +311,7 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
     int lineno = 0, ended = 0, rc = -1;
 
     memset(g, 0, sizeof *g);
-    g->fd_ctl = g->fd_notify = g->fd_watchdog = g->fd_client = g->fd_oldexe = -1;
+    g->fd_ctl = g->fd_notify = g->fd_watchdog = g->fd_client = g->fd_oldexe = g->fd_lock = -1;
     *nsvc = 0;
     *nev = 0;
     *nfs = 0;
@@ -396,7 +397,7 @@ static inline int state_parse(FILE *in, reexec_global_t *g,
             } else {
                 int *fd = !strcmp(k, "ctl") ? &g->fd_ctl : !strcmp(k, "notify") ? &g->fd_notify :
                           !strcmp(k, "watchdog") ? &g->fd_watchdog : !strcmp(k, "client") ? &g->fd_client :
-                          !strcmp(k, "oldexe") ? &g->fd_oldexe : NULL;
+                          !strcmp(k, "oldexe") ? &g->fd_oldexe : !strcmp(k, "lock") ? &g->fd_lock : NULL;
                 if (fd) bad = rx_get_INT(v, fd, 0) || *fd < -1;
             }
             if (bad) FAIL("line %d: bad value for %s", lineno, k);
