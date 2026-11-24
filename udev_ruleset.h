@@ -279,6 +279,7 @@ struct dev_ctx {
     char name[UE_VAL_MAX];
     char result[UE_VAL_MAX];      /* last PROGRAM stdout (trimmed); $result / %c */
     int  dry_run;                 /* skip ATTR{}= sysfs writes (verify tools) */
+    int  warm;                    /* restart replay of a device already handled this boot */
     int  link_priority;
     int  escape;                  /* 0=none, 1=replace */
     char final_keys[DEVCTX_FINAL_MAX][RK_KEY_MAX + RK_SUB_MAX + 2];
@@ -580,9 +581,12 @@ static inline int parent_group_match(const struct rule_clause *cl, int nc, struc
     }
 }
 
-/* dry_run: helpers that change device state (alsactl nrestore reloads mixers). */
+/* Helpers that change device state (alsactl restore reloads mixers): never in
+ * a dry run, and not in a restart's replay either. systemd-udevd never replays
+ * on restart; a second restore here put every upgrade's volume back to the
+ * last saved state. */
 static inline int dry_run_skips(const struct dev_ctx *ctx, const char *cmd) {
-    if (!ctx->dry_run) return 0;
+    if (!ctx->dry_run && !ctx->warm) return 0;
     size_t n = strcspn(cmd, " \t");
     const char *b = cmd + n;
     while (b > cmd && b[-1] != '/') b--;
@@ -798,6 +802,8 @@ static inline int apply_import(struct dev_ctx *ctx, const struct rule_clause *c,
 
 static inline void ctx_add_run(struct dev_ctx *ctx, const char *v, int is_builtin) {
     if (ctx->nruns >= DEVCTX_RUNS_MAX) return;
+    /* only warm: a dry run still lists what RUN would do */
+    if (ctx->warm && !is_builtin && dry_run_skips(ctx, v)) return;
     ctx->run_builtin[ctx->nruns] = is_builtin;
     safe_copy(ctx->runs[ctx->nruns++], v, UE_VAL_MAX);
 }
