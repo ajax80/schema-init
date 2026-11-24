@@ -101,6 +101,33 @@ renamed.
 - **Fallback.** New image refuses → back to the old image (same as PID 1). Old
   image gone too → `_exit(1)`; logind sees a crash, kills the tree, restarts.
 
+### Traps found in review (Greg, 11-23, verified against the code)
+
+- **Dry run vs the instance lock.** `--reexec-check` runs while the parent
+  holds the flock; it must compute `run_dir`/`svc_dir` from the saved
+  environment and return its verdict before `single_instance()`, the import,
+  or any mkdir.
+- **Empty service set.** `reexec_validate()` refuses `svc_count <= 0`; shared
+  code refuses 0 only when `!engine_reload_allow_empty`. Otherwise every user
+  with nothing enabled refuses re-exec in `%posttrans`.
+- **Lock fd carried.** New blob key `lock=` (the parser skips unknown keys, so
+  old images are unaffected; `fd_watchdog` is not overloaded). It goes in
+  `keep[]` for `reexec_close_strays()` and has CLOEXEC cleared at commit.
+- **Saved environment on all three execs.** Dry-run child, commit, and
+  fallback all `fexecve` with the deep-copied startup environment, never the
+  current `environ`. PID 1 passes `environ` as today.
+- **Signals and reply after adopt.** PID 1 unblocks the held signals and sends
+  the pending `schema-ctl` reply in `main()` after `engine_arm_timers()`. That
+  moves into shared code run after adopt, so schema-user never keeps SIGTERM
+  blocked and its client gets an answer.
+- **Hooks (builder's naming may vary):** `reexec_refuse` (PID 1 pressure),
+  `reexec_save_host` / `reexec_restore_host` (PID 1: watchdog + boot metrics;
+  schema-user: lock fd, cgroup root), `reexec_check_prep` (hardening default),
+  `reexec_last_resort` (PID 1 reboot; schema-user `_exit(1)`).
+- **`%posttrans` discovery:** `pgrep -x schema-user`, `/proc/<pid>/exe` ends in
+  ` (deleted)`, uid from `stat -c %u /proc/<pid>`, once per uid, socket must
+  exist.
+
 ### Upgrade trigger
 
 `%posttrans`, after the PID 1 block but not inside it or dependent on it (my
@@ -137,5 +164,3 @@ Eli takes a reboot on it as the hardware test box.
 ## Left to the builder
 
 - Exact hook names and where the host-specific fields live.
-- Whether the lock fd rides in the blob or argv.
-- How `%posttrans` finds live instances (socket + `SO_PEERCRED`, or `pgrep -x`).
