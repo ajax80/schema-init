@@ -101,6 +101,9 @@ def get_active_uid():
 # any uid-1000 process then passed the gate with nobody logged in. Here the
 # root-written session files decide: the local session on the VT the kernel
 # says is in front, else the one active local session, else nobody.
+_run_user_authz_hinted = False
+
+
 def authz_uid():
     files = [r for r in scan_session_files().values() if not r.synthesised and r.data.get('UID')]
     recs = [r for r in files if not r.remote and r.state != 'closing']
@@ -111,6 +114,12 @@ def authz_uid():
         # to trusting the sole uid there; two stay ambiguous and closed, since
         # subtracting lingerers would hand the console to an ssh login.
         if not os.path.exists(RUN_USER_AUTHZ_FLAG):
+            global _run_user_authz_hinted
+            if not _run_user_authz_hinted:
+                _run_user_authz_hinted = True
+                print("login1-stub: no session files; console requests are denied. "
+                      f"To trust the sole /run/user uid, create {RUN_USER_AUTHZ_FLAG}",
+                      file=sys.stderr)
             return None
         try:
             uids = {int(d) for d in os.listdir(RUN_USER_DIR) if d.isdigit() and int(d) >= 1000}

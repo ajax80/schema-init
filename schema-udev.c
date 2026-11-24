@@ -448,7 +448,8 @@ static void dispatch(struct uevent *ev, enum dispatch_mode mode) {
                 uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev, ua_tagged);   /* audit trail */
                 /* real ACL; schema-logind's re-scan repairs a node this misses */
                 if (g_live && uaccess_apply(SEAT0_PATH, ev, ua_tagged) < 0)
-                    fprintf(stderr, "[schema-udev] uaccess ACL on /dev/%s failed: %s\n",
+                    fprintf(stderr, "[schema-udev] uaccess %s on /dev/%s failed: %s\n",
+                            ua_tagged ? "grant" : "clear",
                             uevent_get(ev, "DEVNAME") ? uevent_get(ev, "DEVNAME") : "?", strerror(errno));
                 udev_unlock(ulk);
             }

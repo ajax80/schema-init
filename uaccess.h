@@ -164,8 +164,8 @@ static inline int uaccess_apply(const char *seat_path, const struct uevent *ev, 
     if ((size_t)snprintf(node, sizeof node, "/dev/%s", devname) >= sizeof node) { errno = ENAMETOOLONG; return -1; }
     int uid = uaccess_active_uid(seat_path);
     if (uid < 0) return 0;
-    if (!eligible) return ua_clear_node(node, uid);
-    return ua_apply_node(node, uid) < 0 && errno != ENOENT ? -1 : 0;
+    if (!eligible) return ua_clear_node(node, uid) < 0 && errno != ENOTDIR ? -1 : 0;
+    return ua_apply_node(node, uid) < 0 && errno != ENOENT && errno != ENOTDIR ? -1 : 0;
 }
 
 static inline void uaccess_wipe(const char *dir) {

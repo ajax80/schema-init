@@ -431,18 +431,19 @@ def test_registry_exception_is_gated():
         L.uaccess_seat_nodes, L.apply_uaccess_acl = real_nodes, real_apply
 
 
-def test_restart_repairs_udev_miss():
-    # schema-udev's own ACL apply failed (or ran before login); a freshly
-    # started logind holds no cache and must grant the node on its first pass.
+def test_fresh_registry_grants_ungranted_node():
+    # Stands in for schema-udev's ACL apply having failed: a fresh registry
+    # (as after a logind restart) holds no cache and must grant the node on
+    # its first pass, with real setfacl.
     real_nodes = L.uaccess_seat_nodes
     n = node('restart/a')
     subprocess.run(['setfacl', '-b', n], check=True)
     L.uaccess_seat_nodes = lambda seat='seat0': [n]
+    reg = _bare_registry()
     try:
-        reg = _bare_registry()
         _set_active(reg, uid)
         reg._write_derived()
-        check('restart: fresh logind grants a node udev missed', f'user:{uid}:rw' in getfacl(n))
+        check('fresh registry grants an ungranted node', f'user:{uid}:rw' in getfacl(n))
     finally:
         L.uaccess_seat_nodes = real_nodes
         _logout(reg)
@@ -457,7 +458,7 @@ def main():
                test_registry_revokes_vanished_seat, test_registry_retries_failed_nodes,
                test_registry_partial_switch_failure_revokes_both,
                test_registry_first_login_partial_failure_then_logout,
-               test_registry_exception_is_gated, test_restart_repairs_udev_miss):
+               test_registry_exception_is_gated, test_fresh_registry_grants_ungranted_node):
         print(fn.__name__)
         fn()
         print()
