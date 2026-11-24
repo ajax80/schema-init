@@ -154,17 +154,16 @@ static void test_settle(void) {
     assert(settle_step(&st, kv("FULL_TRUST", 0), S(0), 60) == 0);
     assert(settle_step(&st, kv("RECOVERY", 0), S(40), 60) == 0);
     assert(settle_step(&st, kv("FULL_TRUST", 0), S(61), 60) == 0);
-    /* the window counts from the return to health (61), not the last unhealthy sighting */
-    assert(settle_step(&st, kv("FULL_TRUST", 0), S(101), 60) == 0);
-    assert(settle_step(&st, kv("FULL_TRUST", 0), S(120), 60) == 0);
-    assert(settle_step(&st, kv("FULL_TRUST", 0), S(121), 60) == 1);
+    assert(settle_step(&st, kv("FULL_TRUST", 0), S(99), 60) == 0);
+    assert(settle_step(&st, kv("FULL_TRUST", 0), S(101), 60) == 1);
 
-    /* healthy to healthy is still a state change: the window starts over */
+    /* healthy to healthy does not restart the window: a timer or socket-activated
+     * service cycles PERFECT <-> FULL_TRUST all day, and the box must still settle */
     memset(&st, 0, sizeof st);
-    assert(settle_step(&st, kv("FULL_TRUST", 0), S(0), 60) == 0);
-    assert(settle_step(&st, kv("FUNDAMENTAL", 0), S(40), 60) == 0);
-    assert(settle_step(&st, kv("FUNDAMENTAL", 0), S(61), 60) == 0);
-    assert(settle_step(&st, kv("FUNDAMENTAL", 0), S(101), 60) == 1);
+    assert(settle_step(&st, kv("PERFECT", 0), S(0), 60) == 0);
+    assert(settle_step(&st, kv("FULL_TRUST", 0), S(20), 60) == 0);
+    assert(settle_step(&st, kv("PERFECT", 0), S(40), 60) == 0);
+    assert(settle_step(&st, kv("FUNDAMENTAL", 0), S(61), 60) == 1);
 
     /* a failure parked in EXCISED or DORMANT never settles */
     memset(&st, 0, sizeof st);
