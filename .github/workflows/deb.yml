@@ -143,6 +143,10 @@ jobs:
       #   test_seccomp.c, test_seccomp_live.sh
       #                        qemu-user refuses to install a seccomp filter (it
       #                        would filter the emulator); arm64 runs them natively
+      #   test_schema_user_reexec.sh
+      #                        re-exec is fexecve() of the new binary; an emulated
+      #                        process cannot fexecve a foreign-arch ELF (ENOENT);
+      #                        arm64 runs it natively
       - name: make test (qemu)
         env:
           QEMU_SKIP: >-
@@ -151,6 +155,7 @@ jobs:
             tests/test_svc_sched.c
             tests/test_seccomp.c
             tests/test_seccomp_live.sh
+            tests/test_schema_user_reexec.sh
         run: |
           sudo tee "$ROOTFS/build/make-test.sh" > /dev/null <<'EOF'
           cd /build/src && make -n --no-print-directory test > /tmp/test-cmds || exit 1
