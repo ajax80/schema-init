@@ -88,6 +88,13 @@ A package upgrade re-execs PID 1 through the same gated `schema-ctl reexec`: on 
 
 On a Raspberry Pi (no GRUB) the boot-entry sections say "not applicable" and the services are checked from `cmdline.txt` with the boot wrapper's own rule. Any other bootloader (no `/boot/grub2/grubenv`, or no BLS entries directory: Debian's `/boot/grub`, systemd-boot) is not judged in v1: Next boot, Services and Ways back each say `[note] not applicable: unsupported bootloader (v1)` and never change the exit code; Disks still run. A grubenv that is a dangling symlink, or missing while fstab's `/boot` is unmounted, is UNRESOLVED, not unsupported.
 
+## Kernel updates
+
+`99-schema-init.install` runs last in every `kernel-install add`, and `grub.d/11_schema_bls_restore` calls it again after every `grub2-mkconfig`. Two guards apply on every box:
+
+- **No-initramfs kernels.** A kernel whose version contains `-schema` is built to boot without an initramfs. Every entry that boots one loses its `initrd` line, and `root=UUID=` becomes `root=PARTUUID=` (via `blkid`). Both `kernel-install` and `10_linux` write `root=UUID=`, which only an initramfs can resolve. If no PARTUUID is found, the hook prints a warning and `schema-ctl verify` reports the entry.
+- **nvidia gate.** On a box booted into schema-init with the nvidia module loaded, a new kernel that has no `nvidia.ko*` under `/lib/modules/<version>` does not become the default. The running kernel's entry stays default and the new version goes into `/var/lib/schema-init/held-kernel`. Once the module exists, `99-schema-init.install promote` (also run by every later `add` and `grub2-mkconfig`) makes it the default.
+
 ## Recovery console
 
 When a Wayland compositor wedges, `ctrl-alt-F2` only gets you another login on the same broken session, and systemd's `rescue`/`emergency` targets are all-or-nothing — they tear the session down and lose your work. `schema-board` on a dedicated VT is the alternative: a surface that sits **below** the compositor and shows you what is actually wrong.

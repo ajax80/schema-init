@@ -78,6 +78,13 @@ def run(cmd, ver, boot, conf_root, bind, extra_env=None):
     env['SCHEMA_INIT_CONF_ROOT'] = conf_root
     env['SCHEMA_INIT_BIN'] = '/usr/bin/schema-init'   # deterministic; host-independent
     env['PATH'] = bind + os.pathsep + env['PATH']
+    # never read the host's /sys, /proc/cmdline, /lib/modules or /var/lib
+    root = os.path.dirname(boot)
+    env['SCHEMA_INIT_SYSFS'] = os.path.join(root, 'sys')
+    env['SCHEMA_INIT_MODULES'] = os.path.join(root, 'lib/modules')
+    env['SCHEMA_INIT_PROC_CMDLINE'] = os.path.join(root, 'proc-cmdline')
+    env['SCHEMA_INIT_STATE_DIR'] = os.path.join(root, 'var/lib/schema-init')
+    env['SCHEMA_INIT_RUNNING_KERNEL'] = '7.0.1-200.fc44.x86_64'
     if extra_env:
         env.update(extra_env)
     return subprocess.run(['sh', HOOK, cmd, ver, os.path.join(boot, 'x')],
@@ -288,6 +295,173 @@ def test_remove_ignores_non_kernel_schema_entries():
           got[-1:] == [f'saved_entry=schema-{old}'], repr(got))
 
 
+SVER = '7.3.9-cachyos1-schema.fc44.x86_64'
+RUNNING = '7.0.1-200.fc44.x86_64'
+
+
+def write_entry(entries, ver, initrd=True, opts='root=UUID=abc ro rootflags=subvol=root init=/sbin/schema-init'):
+    path = os.path.join(entries, f'{TOKEN}-{ver}.conf')
+    with open(path, 'w') as f:
+        f.write(f'title Fedora Linux ({ver}) 44\nversion {ver}\nlinux /vmlinuz-{ver}\n'
+                + (f'initrd /initramfs-{ver}.img $tuned_initrd\n' if initrd else '')
+                + f'options {opts}\ngrub_class fedora\n')
+    return path
+
+
+def blkid_stub(bind, mapping):
+    # blkid -t UUID=<u> -s PARTUUID -o value
+    cases = ''.join(f'  UUID={u}) echo {p};;\n' for u, p in mapping.items())
+    stub = os.path.join(bind, 'blkid')
+    with open(stub, 'w') as f:
+        f.write('#!/bin/sh\ncase "$2" in\n' + cases + '  *) exit 2;;\nesac\n')
+    os.chmod(stub, 0o755)
+
+
+def schema_box(nvidia=False, with_module=False, marker=False):
+    # blakbox shape: no marker, init= on the running cmdline, nvidia loaded
+    root, boot, entries, conf_root, rec, bind = new_tree(marker=marker, extras=False)
+    os.remove(os.path.join(entries, f'{TOKEN}-{VER}.conf'))
+    write_entry(entries, RUNNING, initrd=False,
+                opts='root=PARTUUID=p1 ro rootflags=subvol=root init=/sbin/schema-init')
+    write_entry(entries, SVER)
+    with open(os.path.join(root, 'proc-cmdline'), 'w') as f:
+        f.write('BOOT_IMAGE=/vmlinuz root=PARTUUID=p1 ro init=/sbin/schema-init\n')
+    if nvidia:
+        os.makedirs(os.path.join(root, 'sys/module/nvidia'))
+    os.makedirs(os.path.join(root, 'lib/modules', SVER))
+    if with_module:
+        add_module(root, SVER)
+    blkid_stub(bind, {'abc': 'p1'})
+    return root, boot, entries, conf_root, rec, bind
+
+
+def add_module(root, ver):
+    d = os.path.join(root, 'lib/modules', ver, 'extra/nvidia-580xx')
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, 'nvidia.ko'), 'w').close()
+
+
+def held(root):
+    p = os.path.join(root, 'var/lib/schema-init/held-kernel')
+    return open(p).read().strip() if os.path.isfile(p) else None
+
+
+def saved(rec):
+    return open(rec).read().split() if os.path.isfile(rec) else []
+
+
+def test_noinitrd_entry_fixed():
+    root, boot, entries, conf_root, rec, bind = schema_box()
+    r = run('add', SVER, boot, conf_root, bind)
+    check('noinitrd: exits 0', r.returncode == 0, r.stderr)
+    body = open(os.path.join(entries, f'{TOKEN}-{SVER}.conf')).read()
+    check('noinitrd: initrd line dropped', 'initrd' not in body, body)
+    check('noinitrd: root=UUID= turned into root=PARTUUID=',
+          'options root=PARTUUID=p1 ro rootflags=subvol=root init=/sbin/schema-init\n' in body, body)
+    check('noinitrd: other lines kept', 'grub_class fedora' in body and f'linux /vmlinuz-{SVER}' in body)
+
+
+def test_noinitrd_leaves_initramfs_kernels():
+    root, boot, entries, conf_root, rec, bind = schema_box()
+    write_entry(entries, VER)
+    run('add', VER, boot, conf_root, bind)
+    body = open(os.path.join(entries, f'{TOKEN}-{VER}.conf')).read()
+    check('initramfs kernel: initrd kept', f'initrd /initramfs-{VER}.img' in body, body)
+    check('initramfs kernel: root=UUID= kept', 'root=UUID=abc' in body, body)
+
+
+def test_noinitrd_twin_fixed():
+    root, boot, entries, conf_root, rec, bind = schema_box(marker=True)
+    run('add', SVER, boot, conf_root, bind)
+    body = open(os.path.join(entries, f'schema-{SVER}.conf')).read()
+    check('noinitrd twin: no initrd', 'initrd' not in body, body)
+    check('noinitrd twin: PARTUUID', 'root=PARTUUID=p1' in body and 'UUID=abc' not in body, body)
+
+
+def test_noinitrd_unresolvable_uuid():
+    root, boot, entries, conf_root, rec, bind = schema_box()
+    blkid_stub(bind, {})
+    r = run('add', SVER, boot, conf_root, bind)
+    body = open(os.path.join(entries, f'{TOKEN}-{SVER}.conf')).read()
+    check('unresolvable: exits 0', r.returncode == 0, r.stderr)
+    check('unresolvable: warns', 'no PARTUUID' in r.stderr, r.stderr)
+    check('unresolvable: root left as-is, initrd still dropped',
+          'root=UUID=abc' in body and 'initrd' not in body, body)
+
+
+def test_fixup_after_mkconfig():
+    root, boot, entries, conf_root, rec, bind = schema_box()
+    run('add', SVER, boot, conf_root, bind)
+    # 10_linux rewrote the options back to root=UUID=
+    write_entry(entries, SVER, initrd=False)
+    r = run('fixup', '', boot, conf_root, bind)
+    body = open(os.path.join(entries, f'{TOKEN}-{SVER}.conf')).read()
+    check('fixup: exits 0', r.returncode == 0, r.stderr)
+    check('fixup: PARTUUID restored', 'root=PARTUUID=p1' in body, body)
+
+
+def test_gate_holds_without_module():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True)
+    r = run('add', SVER, boot, conf_root, bind)
+    check('gate: default kept on running kernel',
+          saved(rec)[-1:] == [f'saved_entry={TOKEN}-{RUNNING}'], saved(rec))
+    check('gate: new kernel recorded as held', held(root) == SVER, held(root))
+    check('gate: says why', 'no nvidia module' in r.stderr, r.stderr)
+
+
+def test_gate_passes_with_module():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True, with_module=True)
+    run('add', SVER, boot, conf_root, bind)
+    check('gate ok: default not touched', saved(rec) == [], saved(rec))
+    check('gate ok: nothing held', held(root) is None)
+
+
+def test_gate_off_without_nvidia():
+    root, boot, entries, conf_root, rec, bind = schema_box()
+    run('add', SVER, boot, conf_root, bind)
+    check('no nvidia: nothing held', held(root) is None and saved(rec) == [], saved(rec))
+
+
+def test_gate_off_when_not_schema_box():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True)
+    with open(os.path.join(root, 'proc-cmdline'), 'w') as f:
+        f.write('BOOT_IMAGE=/vmlinuz root=UUID=abc ro rhgb quiet\n')
+    run('add', SVER, boot, conf_root, bind)
+    check('not opted in: default left to the distro', held(root) is None and saved(rec) == [], saved(rec))
+
+
+def test_promote_once_module_built():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True)
+    run('add', SVER, boot, conf_root, bind)
+    open(rec, 'w').close()
+    run('promote', '', boot, conf_root, bind)
+    check('promote: still held while module missing', held(root) == SVER and saved(rec) == [], saved(rec))
+    add_module(root, SVER)
+    r = run('promote', '', boot, conf_root, bind)
+    check('promote: default advanced', saved(rec)[-1:] == [f'saved_entry={TOKEN}-{SVER}'], saved(rec))
+    check('promote: held cleared', held(root) is None)
+    check('promote: says so', 'default now' in r.stderr, r.stderr)
+
+
+def test_promote_marker_box_uses_twin():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True, marker=True)
+    run('add', SVER, boot, conf_root, bind)
+    check('marker gate: held', held(root) == SVER)
+    add_module(root, SVER)
+    open(rec, 'w').close()
+    run('fixup', '', boot, conf_root, bind)
+    check('marker promote via fixup: twin made default',
+          saved(rec)[-1:] == [f'saved_entry=schema-{SVER}'], saved(rec))
+
+
+def test_remove_clears_held():
+    root, boot, entries, conf_root, rec, bind = schema_box(nvidia=True)
+    run('add', SVER, boot, conf_root, bind)
+    r = run('remove', SVER, boot, conf_root, bind)
+    check('remove held: exits 0', r.returncode == 0, r.stderr)
+    check('remove held: record cleared', held(root) is None)
+
+
 def main():
     print('schema-init kernel-install hook tests\n')
     for fn in (test_add_full, test_no_marker_leaves_default, test_no_default_knob, test_no_extras,
@@ -296,7 +470,13 @@ def main():
                test_pin_broken_falls_back_to_advance, test_marker_whitespace_and_conf_suffix_normalized,
                test_esp_boot_root_falls_back_to_grub_entries,
                test_add_refreshes_older_schema_entries, test_add_leaves_orphan_schema_entry,
-               test_remove_ignores_non_kernel_schema_entries):
+               test_remove_ignores_non_kernel_schema_entries,
+               test_noinitrd_entry_fixed, test_noinitrd_leaves_initramfs_kernels,
+               test_noinitrd_twin_fixed, test_noinitrd_unresolvable_uuid, test_fixup_after_mkconfig,
+               test_gate_holds_without_module, test_gate_passes_with_module,
+               test_gate_off_without_nvidia, test_gate_off_when_not_schema_box,
+               test_promote_once_module_built, test_promote_marker_box_uses_twin,
+               test_remove_clears_held):
         print(fn.__name__)
         fn()
         print()
