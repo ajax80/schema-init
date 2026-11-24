@@ -50,6 +50,15 @@ typedef struct {
     void (*after_sockets)(void);
     /* the shutdown sweep's verdict per service that was up when it began */
     void (*shut_outcome)(int idx, int outcome);
+    /* re-exec: non-zero refuses with err (PID 1: under pressure) */
+    int  (*reexec_refuse)(char *err, size_t errsz);
+    /* host-only state into / out of the blob */
+    void (*reexec_save_host)(reexec_global_t *g);
+    void (*reexec_restore_host)(const reexec_global_t *g);
+    /* the dry run, before it loads the config */
+    void (*reexec_check_prep)(void);
+    /* the new image refused and the old one is gone too (PID 1: reboot) */
+    void (*reexec_last_resort)(void);
 } engine_hooks_t;
 
 enum { SHUT_STOPPED, SHUT_KILLED, SHUT_EXITED, SHUT_STUCK };
@@ -89,6 +98,17 @@ extern struct timespec init_start;
  * tell the running image from the one that booted */
 extern char booted_version[64];
 extern char booted_image[64]; /* dev:ino of the image PID 1 booted from; "" unknown */
+/* re-exec, shared by PID 1 and schema-user */
+extern char  engine_reexec_argv0[256];   /* the argv[0] the host started with; carried */
+extern int   engine_reexec_keep_argv0;   /* 1: every exec keeps it (logind finds schema-user by it) */
+extern char **engine_reexec_env;         /* environment for the execs; NULL = environ */
+extern int   engine_reexec_lock_fd;      /* host fd carried across as lock=; -1 none */
+int  engine_reexec_start(int client, const char *path, char *err, size_t errsz);
+int  engine_reexec_check_main(int blob_fd);
+void engine_reexec_adopt(int blob_fd, int oldexe_fd);
+void engine_reexec_finish(void);
+void engine_reexec_tick(void);
+int  engine_reexec_reaped(pid_t pid, int status);
 extern pid_t   reexec_check_pid;
 extern int64_t reexec_check_due;
 extern int     reexec_check_killed;

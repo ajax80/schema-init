@@ -479,6 +479,25 @@ if [ -e /run/schema-init.reexec-pending ]; then
         %{_bindir}/schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; see above, then run 'schema-ctl reexec'"
     fi
 fi
+# Each user's schema-user swaps onto the new binary in place too, its
+# services and containers kept. Only instances still on the replaced file;
+# independent of the PID 1 re-exec above, and never fails the transaction.
+# The process name and the socket are the user's to fake, so the client runs
+# as that user (PID 1's root-only socket stays out of reach) and is time-
+# limited. Found by exe, not comm: after an fexecve the comm is the fd
+# number on older kernels. An instance already re-exec'd is no longer deleted.
+for exe in /proc/[0-9]*/exe; do
+    [ "$(readlink "$exe" 2>/dev/null)" = "%{_bindir}/schema-user (deleted)" ] || continue
+    pid=${exe#/proc/}; pid=${pid%%/exe}
+    cmp -s /proc/$pid/exe %{_bindir}/schema-user && continue
+    uid=$(stat -c %u /proc/$pid 2>/dev/null) || continue
+    gid=$(stat -c %g /proc/$pid 2>/dev/null) || continue
+    [ "$uid" != 0 ] || continue
+    [ -S "/run/user/$uid/schema-user/ctl.sock" ] || continue
+    timeout 30 setpriv --reuid="$uid" --regid="$gid" --clear-groups \
+        env XDG_RUNTIME_DIR="/run/user/$uid" %{_bindir}/schema-ctl --user reexec >/dev/null 2>&1 ||
+        echo "schema-init: schema-user for uid $uid kept its old binary; log out and back in to finish"
+done
 # The org.freedesktop.systemd1 shim is a Python daemon: the new file only
 # takes effect when it is restarted. Only a box that runs it is touched.
 if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ] &&

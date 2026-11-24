@@ -334,6 +334,8 @@ The package does not restart the broker for you yet. The fallback launcher (`sch
 
 Drive it with `schema-ctl --user`, e.g. `schema-ctl --user status` or `schema-ctl --user restart <svc>`.
 
+**Upgrades keep your services.** `schema-ctl --user reexec [<path>]` swaps the running `schema-user` onto a new binary in place, as `schema-ctl reexec` does for PID 1: same pid, and every service and container keeps running. An RPM upgrade (`dnf upgrade`) does this for every running instance; the Devuan, Void and Artix install scripts do not yet. If the new binary refuses (a broken `.svc`, a dependency cycle), the old one keeps running and the upgrade prints one line asking that user to log out and back in.
+
 - `XDG_RUNTIME_DIR` must be set and be a directory you own, or it exits 1. A second copy for the same user exits 1 with "already running".
 - Services start with `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus`, plus `KEY=VALUE` lines from `*.conf` in `/usr/lib/environment.d`, `/etc/environment.d` and `$XDG_CONFIG_HOME/environment.d`, in that order (later wins). `$VAR` and `${VAR}` are expanded; nothing else is. The environment `schema-user` itself was started with is not passed on, so `WAYLAND_DISPLAY` and `DISPLAY` never leak in.
 - Run by hand, it gives each service its own cgroup only if the cgroup it was started in was delegated to you (you can write its `cgroup.procs` and create directories in it). It moves itself into `init.scope` there. Otherwise it says so once and runs without per-service cgroups.

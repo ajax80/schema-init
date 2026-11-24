@@ -336,6 +336,8 @@ static void usage(FILE *out) {
         "\n"
         "  --user <cmd...>        talk to this user's schema-user instead of PID 1\n"
         "  --user daemon-reload   re-import the user's unit files, then reload\n"
+        "  --user reexec [<path>] replace the schema-user binary in place (default:\n"
+        "                         the one it started from); services keep running\n"
         "  --help                 this text\n"
         "  --version              print version and exit\n"
         "\n"

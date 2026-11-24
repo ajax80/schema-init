@@ -38,7 +38,7 @@ int main(void) {
     strcpy(g.booted_image, "64769:1234");
     g.init_start.tv_sec = 12; g.init_start.tv_nsec = 345678901;
     g.under_pressure = 1; g.last_stall_ms = 98765; g.last_reclaim_ms = 4321; g.nofile_soft = 1024;
-    g.fd_ctl = 3; g.fd_notify = 4; g.fd_watchdog = -1; g.fd_client = 6; g.fd_oldexe = 7;
+    g.fd_ctl = 3; g.fd_notify = 4; g.fd_watchdog = -1; g.fd_client = 6; g.fd_oldexe = 7; g.fd_lock = 9;
 
     strcpy(svcs[0].name, "dbus");
     svcs[0].content_hash = 4000000000u;
@@ -91,7 +91,16 @@ int main(void) {
     assert(out[0].rt.flags & SVC_NO_RESTART);
     assert(!(out[2].rt.flags & SVC_NO_RESTART));
     assert(pg.fd_ctl == 3 && pg.fd_notify == 4 && pg.fd_watchdog == -1 && pg.fd_client == 6 && pg.fd_oldexe == 7);
+    assert(pg.fd_lock == 9);
     assert(nsvc == 3 && nev == 2);
+    {
+        /* a blob from an image older than lock= carries no host lock fd */
+        reexec_global_t og;
+        int on, oe;
+        assert(parse_text("schema-init-state 1\nglobal version=x\nfd ctl=3 notify=4 watchdog=-1 client=-1 oldexe=-1\nend\n",
+                          &og, &on, pev, &oe, err, sizeof err) == 0);
+        assert(og.fd_lock == -1 && og.fd_ctl == 3);
+    }
     assert(strcmp(out[0].name, "dbus") == 0 && out[0].hash == 4000000000u && out[0].timer == 0);
     assert(out[0].rt.child_pid == 199 && out[0].rt.restart_count == 1);
     assert(out[0].rt.inst.state == 4 && out[0].rt.inst.prev_state == 3 && out[0].rt.inst.weight == 8);
