@@ -446,7 +446,11 @@ static void dispatch(struct uevent *ev, enum dispatch_mode mode) {
             if (strcmp(action, "add") == 0 || strcmp(action, "change") == 0) {
                 int ulk = udev_lock(UDEV_UACCESS_LOCK);
                 uaccess_record(SCHEMA_UACCESS_DIR, SEAT0_PATH, ev, ua_tagged);   /* audit trail */
-                if (g_live) uaccess_apply(SEAT0_PATH, ev, ua_tagged);            /* real ACL */
+                /* real ACL; schema-logind's re-scan repairs a node this misses */
+                if (g_live && uaccess_apply(SEAT0_PATH, ev, ua_tagged) < 0)
+                    fprintf(stderr, "[schema-udev] uaccess %s on /dev/%s failed: %s\n",
+                            ua_tagged ? "grant" : "clear",
+                            uevent_get(ev, "DEVNAME") ? uevent_get(ev, "DEVNAME") : "?", strerror(errno));
                 udev_unlock(ulk);
             }
         }

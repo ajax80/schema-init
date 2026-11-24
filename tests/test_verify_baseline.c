@@ -157,6 +157,14 @@ static void test_settle(void) {
     assert(settle_step(&st, kv("FULL_TRUST", 0), S(99), 60) == 0);
     assert(settle_step(&st, kv("FULL_TRUST", 0), S(101), 60) == 1);
 
+    /* healthy to healthy does not restart the window: a timer or socket-activated
+     * service cycles PERFECT <-> FULL_TRUST all day, and the box must still settle */
+    memset(&st, 0, sizeof st);
+    assert(settle_step(&st, kv("PERFECT", 0), S(0), 60) == 0);
+    assert(settle_step(&st, kv("FULL_TRUST", 0), S(20), 60) == 0);
+    assert(settle_step(&st, kv("PERFECT", 0), S(40), 60) == 0);
+    assert(settle_step(&st, kv("FUNDAMENTAL", 0), S(61), 60) == 1);
+
     /* a failure parked in EXCISED or DORMANT never settles */
     memset(&st, 0, sizeof st);
     assert(settle_step(&st, kv("DORMANT", 0), S(0), 60) == 0);

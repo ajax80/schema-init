@@ -101,14 +101,26 @@ def get_active_uid():
 # any uid-1000 process then passed the gate with nobody logged in. Here the
 # root-written session files decide: the local session on the VT the kernel
 # says is in front, else the one active local session, else nobody.
+_run_user_authz_hinted = False
+
+
 def authz_uid():
     files = [r for r in scan_session_files().values() if not r.synthesised and r.data.get('UID')]
     recs = [r for r in files if not r.remote and r.state != 'closing']
     if not files:
-        # No session files (a legacy login script): /run/user is all there is.
-        # One uid there is the user, lingering or not (ajax80 on blakbox
-        # lingers). Two is ambiguous and stays closed: subtracting lingerers
-        # would hand the console to whoever is left, an ssh login included.
+        # No session files (a legacy login script that registers none). Strict
+        # by default: a lingering user's background jobs keep /run/user/<uid>
+        # alive with nobody at the console. RUN_USER_AUTHZ_FLAG opts back in
+        # to trusting the sole uid there; two stay ambiguous and closed, since
+        # subtracting lingerers would hand the console to an ssh login.
+        if not os.path.exists(RUN_USER_AUTHZ_FLAG):
+            global _run_user_authz_hinted
+            if not _run_user_authz_hinted:
+                _run_user_authz_hinted = True
+                print("login1-stub: no session files; console requests are denied. "
+                      f"To trust the sole /run/user uid, create {RUN_USER_AUTHZ_FLAG}",
+                      file=sys.stderr)
+            return None
         try:
             uids = {int(d) for d in os.listdir(RUN_USER_DIR) if d.isdigit() and int(d) >= 1000}
         except OSError:
@@ -384,6 +396,9 @@ USER_KILLSWITCH = os.environ.get('SCHEMA_USER_KILLSWITCH',
                                  '/etc/schema-init/user-supervisor.disabled')
 KERNEL_CMDLINE = os.environ.get('SCHEMA_LOGIND_CMDLINE', '/proc/cmdline')
 RUN_USER_DIR = os.environ.get('SCHEMA_LOGIND_RUN_USER', '/run/user')
+# Opt-in: with no session files at all, trust the sole /run/user uid (see authz_uid)
+RUN_USER_AUTHZ_FLAG = os.environ.get('SCHEMA_LOGIND_RUN_USER_AUTHZ',
+                                     '/etc/schema-init/logind-run-user-authz')
 USER_LOG_DIR = os.environ.get('SCHEMA_USER_LOG_DIR', '/var/log/schema-init')
 _USER_SVC_RE = re.compile(r'/user@(\d+)\.service/')
 
