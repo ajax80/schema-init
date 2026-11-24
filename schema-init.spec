@@ -479,6 +479,20 @@ if [ -e /run/schema-init.reexec-pending ]; then
         %{_bindir}/schema-ctl reexec || echo "schema-init: PID 1 kept its old binary; see above, then run 'schema-ctl reexec'"
     fi
 fi
+# Each user's schema-user swaps onto the new binary in place too, its
+# services and containers kept. Only instances still on the replaced file;
+# independent of the PID 1 re-exec above, and never fails the transaction.
+done_uids=" "
+for pid in $(pgrep -x schema-user 2>/dev/null); do
+    case "$(readlink /proc/$pid/exe 2>/dev/null)" in *" (deleted)") ;; *) continue ;; esac
+    cmp -s /proc/$pid/exe %{_bindir}/schema-user && continue
+    uid=$(stat -c %u /proc/$pid 2>/dev/null) || continue
+    case "$done_uids" in *" $uid "*) continue ;; esac
+    done_uids="$done_uids$uid "
+    [ -S "/run/user/$uid/schema-user/ctl.sock" ] || continue
+    XDG_RUNTIME_DIR="/run/user/$uid" %{_bindir}/schema-ctl --user reexec >/dev/null 2>&1 ||
+        echo "schema-init: schema-user for uid $uid kept its old binary; log out and back in to finish"
+done
 # The org.freedesktop.systemd1 shim is a Python daemon: the new file only
 # takes effect when it is restarted. Only a box that runs it is touched.
 if [ -S /run/schema-init.sock ] && [ /proc/1/root -ef / ] &&
