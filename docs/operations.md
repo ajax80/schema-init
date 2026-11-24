@@ -189,6 +189,12 @@ On the console it takes over, the board disables screen blanking and hides the c
 
 ---
 
+## Who logind trusts at the console
+
+schema-logind lets only the console's user take devices, power off or reboot. It decides who that is from the session files that logins register (`/run/systemd/sessions/`): the session on the front VT, else the single active one. With no session files at all (a login path that registers none) it trusts nobody, so the desktop's shutdown and device access stop working until a login registers.
+
+To get the old behavior back on such a box, create `/etc/schema-init/logind-run-user-authz`: then, with no session files, the one user with a `/run/user/<uid>` is trusted; two or more are still nobody. The cost: a user who lingers keeps `/run/user/<uid>` with no one at the console, so their background jobs could power the box off or take its devices. The flag is ignored once any session file exists.
+
 ## Debugging
 
 ### Service state

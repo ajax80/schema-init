@@ -47,11 +47,13 @@ def denied(fn):
 # --- who the gate trusts (audit 2026-11-12, 1.3) -----------------------------
 # Not get_active_uid(): it falls back to 1000 at the login screen and to min()
 # with two users. authz_uid() reads the root-written session files and the VT.
-def authz_case(sessions, run_user, vt):
+def authz_case(sessions, run_user, vt, run_user_authz=False):
     d = tempfile.mkdtemp(prefix="logind-authz-")
     try:
         for sub_ in ("sessions", "run-user", "linger"):
             os.mkdir(os.path.join(d, sub_))
+        if run_user_authz:
+            open(os.path.join(d, "run-user-authz"), "w").close()
         for sid, body in sessions.items():
             with open(os.path.join(d, "sessions", sid), "w") as f:
                 f.write(body)
@@ -59,13 +61,15 @@ def authz_case(sessions, run_user, vt):
             os.mkdir(os.path.join(d, "run-user", str(u)))
         with open(os.path.join(d, "vt"), "w") as f:
             f.write(vt + "\n")
-        saved = (m.SESSIONS_DIR, m.RUN_USER_DIR, m.ACTIVE_VT_PATH, m.LINGER_DIR)
+        saved = (m.SESSIONS_DIR, m.RUN_USER_DIR, m.ACTIVE_VT_PATH, m.LINGER_DIR, m.RUN_USER_AUTHZ_FLAG)
         m.SESSIONS_DIR, m.RUN_USER_DIR = d + "/sessions", d + "/run-user"
         m.ACTIVE_VT_PATH, m.LINGER_DIR = d + "/vt", d + "/linger"
+        m.RUN_USER_AUTHZ_FLAG = d + "/run-user-authz"
         try:
             return m.authz_uid()
         finally:
-            m.SESSIONS_DIR, m.RUN_USER_DIR, m.ACTIVE_VT_PATH, m.LINGER_DIR = saved
+            (m.SESSIONS_DIR, m.RUN_USER_DIR, m.ACTIVE_VT_PATH, m.LINGER_DIR,
+             m.RUN_USER_AUTHZ_FLAG) = saved
     finally:
         shutil.rmtree(d)
 
@@ -76,9 +80,14 @@ def sess(uid, vt, active, extra=""):
 
 check("login screen, no session, no /run/user: nobody (was 1000)",
       authz_case({}, [], "tty1") is None)
-check("no session files, one /run/user: that uid", authz_case({}, [1000], "tty1") == 1000)
-check("no session files, two /run/user: nobody (was the lower uid)",
-      authz_case({}, [1000, 1001], "tty1") is None)
+check("no session files, one /run/user, strict default: nobody",
+      authz_case({}, [1000], "tty1") is None)
+check("no session files, one /run/user, opted in: that uid",
+      authz_case({}, [1000], "tty1", run_user_authz=True) == 1000)
+check("no session files, two /run/user, opted in: nobody (was the lower uid)",
+      authz_case({}, [1000, 1001], "tty1", run_user_authz=True) is None)
+check("opt-in flag ignored once session files exist",
+      authz_case({"1": sess(1000, 3, 0)}, [1000], "tty1", run_user_authz=True) is None)
 check("two users: the one on the front VT (was the lower uid)",
       authz_case({"1": sess(1000, 1, 0), "2": sess(1001, 2, 1)}, [1000, 1001], "tty2") == 1001)
 check("no session on the front VT: the single active one",
@@ -91,18 +100,20 @@ check("a remote session marked active is not the console",
       authz_case({"1": sess(1001, 0, 1, "REMOTE=1\n")}, [1001], "tty1") is None)
 
 
-def linger_case(run_user, lingering):
+def linger_case(run_user, lingering, run_user_authz=True):
     d = tempfile.mkdtemp(prefix="logind-linger-")
     saved = m.linger_uids
     m.linger_uids = lambda: set(lingering)
     try:
-        return authz_case({}, run_user, "tty1")
+        return authz_case({}, run_user, "tty1", run_user_authz)
     finally:
         m.linger_uids = saved
         shutil.rmtree(d)
 
 
-check("no session files, the one user lingers: still that user",
+check("no session files, the one user lingers, strict default: nobody",
+      linger_case([1000], [1000], run_user_authz=False) is None)
+check("no session files, the one user lingers, opted in: still that user",
       linger_case([1000], [1000]) == 1000)
 check("no session files, a second user lingers: nobody (fail closed)",
       linger_case([1000, 1001], [1001]) is None)
