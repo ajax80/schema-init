@@ -361,6 +361,16 @@ def test_noinitrd_entry_fixed():
     check('noinitrd: other lines kept', 'grub_class fedora' in body and f'linux /vmlinuz-{SVER}' in body)
 
 
+def test_noinitrd_rpm_uname():
+    # kernel-cachyos-schema rpm: rpm allows one '-', so the tag is ".schema."
+    root, boot, entries, conf_root, rec, bind = schema_box()
+    v = '7.3.6-1.cachyos1.schema.fc44.x86_64'
+    write_entry(entries, v)
+    run('add', v, boot, conf_root, bind)
+    body = open(os.path.join(entries, f'{TOKEN}-{v}.conf')).read()
+    check('rpm uname: initrd dropped + PARTUUID', 'initrd' not in body and 'root=PARTUUID=p1' in body, body)
+
+
 def test_noinitrd_leaves_initramfs_kernels():
     root, boot, entries, conf_root, rec, bind = schema_box()
     write_entry(entries, VER)
@@ -545,7 +555,7 @@ def main():
                test_esp_boot_root_falls_back_to_grub_entries,
                test_add_refreshes_older_schema_entries, test_add_leaves_orphan_schema_entry,
                test_remove_ignores_non_kernel_schema_entries,
-               test_noinitrd_entry_fixed, test_noinitrd_leaves_initramfs_kernels,
+               test_noinitrd_entry_fixed, test_noinitrd_rpm_uname, test_noinitrd_leaves_initramfs_kernels,
                test_noinitrd_twin_fixed, test_noinitrd_unresolvable_uuid, test_fixup_after_mkconfig,
                test_gate_holds_without_module, test_gate_passes_with_module,
                test_gate_off_without_nvidia, test_gate_off_when_not_schema_box,
