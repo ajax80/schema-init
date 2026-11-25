@@ -62,6 +62,7 @@ jobs:
   # Ubuntu's GRUB lacks): a Fedora container on the runner, with its KVM
   grub-fallback:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: kvm

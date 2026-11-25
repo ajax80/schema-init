@@ -79,13 +79,14 @@ entry() {
         "$1" "$2" "$3" "$1"
 }
 
-# $1 name; the rest grubenv KEY=VALUE pairs
-run() {
+# $1 name; the rest grubenv KEY=VALUE pairs. Called bare, so set -e covers every step
+mkdisk() {
     name=$1; shift
     D=$WORK/$name.img
     truncate -s 96M "$D"
     printf 'label: gpt\nstart=2048, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B\n' | sfdisk -q "$D"
-    mkfs.vfat -F 32 --offset 2048 "$D" 97280 >/dev/null
+    # the partition's own size: sfdisk keeps the last 33 sectors for the backup GPT
+    mkfs.vfat -F 32 --offset 2048 "$D" $(( ($(sfdisk -q -l -o Sectors "$D" | tail -1) ) / 2 )) >/dev/null
     M="-i $D@@1M"
     mmd $M ::/EFI ::/EFI/BOOT ::/loader ::/loader/entries
     mcopy $M "$WORK/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
@@ -103,8 +104,15 @@ run() {
     truncate -s 1024 "$WORK/env"
     mcopy $M "$WORK/env" ::/grubenv
     cp "$OVMF/OVMF_VARS.fd" "$WORK/vars.fd"
-    ACCEL=tcg CPU=max
-    [ -w /dev/kvm ] && ACCEL=kvm CPU=host
+}
+
+ACCEL=tcg CPU=max
+[ -w /dev/kvm ] && ACCEL=kvm CPU=host
+# two OVMF+GRUB+kernel boots, emulated
+[ "$ACCEL" = tcg ] && TIMEOUT=${TIMEOUT_TCG:-600}
+
+boot() {
+    name=$1 D=$WORK/$1.img M="-i $WORK/$1.img@@1M"
     echo ">> $name ($ACCEL)"
     rc=0
     timeout "$TIMEOUT" qemu-system-x86_64 -accel "$ACCEL" -cpu "$CPU" -machine q35 -m 512 -nographic -nic none \
@@ -121,7 +129,8 @@ run() {
 pass=1
 miss() { echo "  MISS: $1"; pass=0; }
 
-rc=0; run armed saved_entry=ci-broken boot_counter=2 boot_success=0 schema_fallback_id=ci-fallback || rc=$?
+mkdisk armed saved_entry=ci-broken boot_counter=2 boot_success=0 schema_fallback_id=ci-fallback
+rc=0; boot armed || rc=$?
 L=$WORK/armed.txt
 [ "$rc" = 0 ] || miss "armed: qemu exited $rc"
 grep -q 'CI-GRUB counter=1 success=0 default=ci-broken' "$L" || miss "armed: boot 1 did not count down and try the default"
@@ -132,7 +141,8 @@ grep -q 'PID 1 poweroff' "$L" || miss "armed: the fallback boot did not power of
 # save_env really wrote the FAT grubenv: the countdown survived the reboot
 grep -q '^boot_counter=0' "$WORK/armed.env.out" || miss "armed: grubenv boot_counter is not 0 after the fallback"
 
-rc=0; run unarmed saved_entry=ci-good schema_fallback_id=ci-fallback || rc=$?
+mkdisk unarmed saved_entry=ci-good schema_fallback_id=ci-fallback
+rc=0; boot unarmed || rc=$?
 L=$WORK/unarmed.txt
 [ "$rc" = 0 ] || miss "unarmed: qemu exited $rc"
 grep -q 'CI-GRUB counter= success=0 default=ci-good' "$L" || miss "unarmed: GRUB did not keep the default"
