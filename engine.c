@@ -13,6 +13,7 @@
 #include <time.h>
 #include <errno.h>
 
+#include "ctl_gate.h"
 #include "schema.h"
 #include "engine.h"
 #include "service.h"
@@ -2995,17 +2996,6 @@ static void ctl_init(void) {
     listen(ctl_fd, 4);
 }
 
-/* Read-only verbs any connected uid may run. Everything else needs uid 0.
- * Match the first whitespace-delimited token exactly so e.g. "statusfoo" is
- * not treated as "status" (anchored allowlist); "status --json" still passes. */
-static int ctl_is_readonly(const char *line) {
-    size_t n = strcspn(line, " \t");
-    return (n == 6 && memcmp(line, "status", 6) == 0)
-        || (n == 4 && memcmp(line, "list", 4) == 0)
-        || (n == 6 && memcmp(line, "timing", 6) == 0)
-        || (n == 7 && memcmp(line, "analyze", 7) == 0);
-}
-
 /* Drain the sd_notify socket. A message counts only for a notify=1 service
  * whose cgroup (or main pid, when cgroups are unavailable) holds the sender. */
 static void notify_poll(int max_batch) {
@@ -3199,7 +3189,7 @@ static void ctl_finish(struct ctl_client *c, int complete) {
         c->buf[strcspn(c->buf, "\r\n")] = '\0';
         /* Peer identity: root and our own uid may run everything; schema-group
          * members (allowed in by the 0660 socket) get read-only verbs only. */
-        if (c->uid != 0 && c->uid != geteuid() && !ctl_is_readonly(c->buf)) {
+        if (!ctl_peer_may(c->uid, geteuid(), c->buf)) {
             ctl_writef(cfd, "err: '%s' requires root (uid %d has read-only access)\n",
                        c->buf, (int)c->uid);
             ctl_end(cfd);

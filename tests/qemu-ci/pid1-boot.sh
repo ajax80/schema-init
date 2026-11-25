@@ -38,7 +38,16 @@ mkdir -p "$ROOT"/bin "$ROOT"/sbin "$ROOT"/usr/bin "$ROOT"/etc/schema-init/servic
 cp schema-init "$ROOT/sbin/schema-init"
 cp "$WORK/schema-ctl" "$ROOT/bin/schema-ctl"
 cp "$BB" "$ROOT/bin/busybox"
-for a in sh cat echo sleep poweroff touch grep head cut; do ln -s busybox "$ROOT/bin/$a"; done
+for a in sh cat echo sleep poweroff touch grep head cut stat; do ln -s busybox "$ROOT/bin/$a"; done
+# security regressions: a schema-group user for the control-socket gate, and an
+# initrd-style handoff with umask 0 (#204: systemd's initrd hands PID 1 umask 0).
+# Deliberate: PID 1 is exec'd from a shell, not by the kernel, as a dracut boot does;
+# a direct rdinit= boot (no initrd) is no longer what this job exercises
+printf 'root:x:0:0::/:/bin/sh\nciuser:x:1000:1000::/tmp:/bin/sh\n' > "$ROOT/etc/passwd"
+printf 'root:x:0:\nschema:x:900:ciuser\nciuser:x:1000:\n' > "$ROOT/etc/group"
+chmod 1777 "$ROOT/tmp"
+printf '#!/bin/sh\numask 000\nexec /sbin/schema-init\n' > "$ROOT/sbin/init-umask0"
+chmod +x "$ROOT/sbin/init-umask0"
 
 svc() { printf '%s\n' "$2" > "$ROOT/etc/schema-init/services/$1.svc"; }
 svc ci-hello 'name=ci-hello
@@ -99,11 +108,33 @@ args=-c
 args=echo CI-AFTER-FAIL-RAN > /dev/console
 oneshot=1
 after=ci-broken'
+# #204: a file a service creates must not be world-writable after a umask-0 handoff
+svc ci-umask 'name=ci-umask
+exec=/bin/sh
+args=-c
+args=touch /run/ci-umask.f; echo "CI-UMASK-$(stat -c %a /run/ci-umask.f)" > /dev/console
+oneshot=1'
+# the control socket: group schema may read (status), never change (stop); a stop
+# that got through would also show as a second CI-DAEMON-TERM
+printf '%s\n' '#!/bin/sh' 'o=/tmp/ci-gate.out' \
+    'r=$(/bin/schema-ctl status ci-daemon 2>&1)' \
+    'case "$r" in *pid=*) echo CI-GATE-READ-OK ;; *) echo "CI-GATE-READ-FAIL $r" ;; esac > $o' \
+    'r=$(/bin/schema-ctl stop ci-daemon 2>&1)' \
+    'case "$r" in *"requires root"*) echo CI-GATE-DENIED ;; *) echo "CI-GATE-BREACH $r" ;; esac >> $o' \
+    > "$ROOT/bin/ci-gate"
+chmod +x "$ROOT/bin/ci-gate"
+svc ci-gate 'name=ci-gate
+exec=/bin/ci-gate
+user=ciuser
+oneshot=1
+dep=ci-daemon'
 # schema-ctl poweroff, so the control socket and PID 1's own shutdown run; poweroff -f
 # would bypass both. The fallback only ends a wedged run, and is a failure
 cat > "$ROOT/bin/ci-finish" <<'EOF'
 #!/bin/sh
 echo CI-UP > /dev/console
+echo "CI-SOCK-$(stat -c '%a-%G' /run/schema-init.sock)" > /dev/console
+cat /tmp/ci-gate.out > /dev/console 2>&1
 ( sleep 90; echo CI-WEDGED > /dev/console; poweroff -f ) &
 pid() { /bin/schema-ctl status "$1" 2>&1 | head -1 | grep -o 'pid=[0-9]*' | cut -d= -f2; }
 D1=$(pid ci-daemon) C1=$(pid ci-crasher)
@@ -128,7 +159,9 @@ dep=ci-hello
 dep=ci-daemon
 dep=ci-dependent
 dep=ci-ordered
-dep=ci-after-fail'
+dep=ci-after-fail
+dep=ci-umask
+dep=ci-gate'
 
 ( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -1 ) > "$WORK/initramfs.gz"
 
@@ -142,13 +175,18 @@ echo ">> booting ($ACCEL, $(basename "$KERNEL"))"
 rc=0
 timeout "$TIMEOUT" qemu-system-x86_64 -accel "$ACCEL" -cpu "$CPU" -m 512 -smp 2 -no-reboot -nographic -nic none \
     -kernel "$KERNEL" -initrd "$WORK/initramfs.gz" \
-    -append "console=ttyS0 rdinit=/sbin/schema-init panic=-1 loglevel=4" \
+    -append "console=ttyS0 rdinit=/sbin/init-umask0 panic=-1 loglevel=4" \
     < /dev/null > "$SERIAL" 2>&1 || rc=$?
 
 pass=1
 miss() { echo "  MISS: $1"; pass=0; }
 [ "$rc" = 0 ] || miss "qemu exited $rc ($([ "$rc" = 124 ] && echo timeout || echo error))"
 grep -q CI-HELLO "$SERIAL" || miss "oneshot ci-hello never ran"
+grep -q CI-UMASK-644 "$SERIAL" || miss "#204: a service file after a umask-0 handoff is not 0644 ($(grep -o 'CI-UMASK-[0-9]*' "$SERIAL"))"
+grep -q CI-SOCK-660-schema "$SERIAL" || miss "control socket is not 0660 root:schema ($(grep -o 'CI-SOCK-[^ ]*' "$SERIAL"))"
+grep -q CI-GATE-READ-OK "$SERIAL" || miss "group schema could not run a read-only verb"
+grep -q CI-GATE-DENIED "$SERIAL" || miss "group schema was not refused a mutating verb"
+grep -q CI-GATE-BREACH "$SERIAL" && miss "group schema ran a mutating verb"
 grep -q CI-UP "$SERIAL" || miss "ci-finish never ran after its deps were ready"
 grep -q CI-CRASH-2 "$SERIAL" || miss "ci-crasher did not crash twice"
 grep -Eq 'CI-CRASHER: .*restarts=2[^0-9]*$' "$SERIAL" || miss "ci-crasher's restarts are not 2"
@@ -167,7 +205,7 @@ grep -q 'PID 1 poweroff' "$SERIAL" || miss "PID 1 never reached poweroff"
 grep -q CI-WEDGED "$SERIAL" && miss "shutdown wedged, forced off"
 grep -q 'Kernel panic' "$SERIAL" && miss "kernel panic (PID 1 died?)"
 if [ "$pass" = 1 ]; then
-    echo ">> PASS: PID 1 booted, ordered after=/before=, recovered a crash in dependency order, re-exec kept services, powered off cleanly"
+    echo ">> PASS: PID 1 booted (umask-0 handoff), gated group schema to read-only, ordered after=/before=, recovered a crash in dependency order, re-exec kept services, powered off cleanly"
 else
     echo ">> FAIL — serial:"
     cat "$SERIAL"
