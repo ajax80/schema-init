@@ -4,9 +4,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sched.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static const char *tmpd = "/tmp";
@@ -623,6 +627,110 @@ static void test_live_nowrite(void) {
     live_case("VL_EXT4_MOUNTED", "root=%s ro rootflags=noatime,nodev", NULL, "mounted already");
 }
 
+/* a hostile init= under the sandbox, root only: every probe prints ok or BREACH.
+ * The target is a read-only tree like the real one, with the host's /usr for a shell */
+static const char hostile[] =
+    "#!/bin/bash\n"
+    "HP=$1 HO=$2\n"
+    "p() { if eval \"$2\" >/dev/null 2>&1; then echo \"BREACH $1\"; else echo \"ok $1\"; fi; }\n"
+    "p blockdev '[ -n \"$(find /dev -type b)\" ]'\n"
+    "p devlist '[ \"$(ls /dev | tr \"\\n\" \" \")\" != \"full null random urandom zero \" ]'\n"
+    "p mknod 'mknod /tmp/sda b 8 0'\n"
+    "p sysctl 'echo 3 > /proc/sys/vm/drop_caches'\n"
+    "p sysrq 'echo h > /proc/sysrq-trigger'\n"
+    "p hostpid '[ -e /proc/$HP ]'\n"
+    "p pidcount '[ $(ls /proc | grep -c \"^[0-9]\") -gt 12 ]'\n"
+    "p escape 'cd /../../..; [ ! -e /MARKER ] || [ -e \"$HO\" ]'\n"
+    "p chroot 'chroot / true'\n"
+    "p rofs 'touch /written'\n"
+    "p hostname 'hostname schema-evil'\n"
+    "p net 'echo > /dev/tcp/127.0.0.1/22'\n"
+    "p uid '[ $(id -u) = 0 ]'\n"
+    "p caps '! grep -q \"^CapEff:[[:space:]]*0*$\" /proc/self/status'\n"
+    "p bnd '! grep -q \"^CapBnd:[[:space:]]*0*$\" /proc/self/status'\n"
+    "p nnp '! grep -q \"^NoNewPrivs:[[:space:]]*1$\" /proc/self/status'\n"
+    "echo done\n";
+
+static void sandbox_tree(const char *t) {
+    char p[PATH_MAX];
+    static const char *const dirs[] = { "", "/dev", "/proc", "/tmp", "/usr" };
+    static const char *const links[][2] = { { "bin", "usr/bin" }, { "sbin", "usr/sbin" }, { "lib", "usr/lib" }, { "lib64", "usr/lib64" } };
+    for (size_t i = 0; i < sizeof dirs / sizeof *dirs; i++) {
+        snprintf(p, sizeof p, "%s%s", t, dirs[i]);
+        mkdir(p, 0755);
+    }
+    for (size_t i = 0; i < sizeof links / sizeof *links; i++) {
+        snprintf(p, sizeof p, "%s/%s", t, links[i][0]);
+        symlink(links[i][1], p);
+    }
+    snprintf(p, sizeof p, "%s/MARKER", t);
+    touch(p);
+    snprintf(p, sizeof p, "%s/hostile", t);
+    FILE *f = fopen(p, "w");
+    fputs(hostile, f);
+    fclose(f);
+    chmod(p, 0755);
+}
+
+static void test_sandbox_live(void) {
+    if (geteuid() != 0) {
+        printf("verify_root: not root, sandbox fixtures skipped\n");
+        return;
+    }
+    /* root-owned like root_inspect's base: the sandbox's root maps only host root */
+    char t[] = "/tmp/vr-sandbox-XXXXXX", usr[PATH_MAX], host_only[PATH_MAX], pid[16], why[256];
+    assert(mkdtemp(t) && !chmod(t, 0755));
+    snprintf(host_only, sizeof host_only, "%s/vr-sandbox-host-only", tmpd);
+    touch(host_only);
+    sandbox_tree(t);
+    snprintf(pid, sizeof pid, "%d", (int)getpid());
+    pid_t c = fork();
+    if (c == 0) {
+        /* the target is read-only, as root_inspect mounts it */
+        snprintf(usr, sizeof usr, "%s/usr", t);
+        if (unshare(CLONE_NEWNS) || mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) ||
+            mount("/usr", usr, NULL, MS_BIND | MS_REC, NULL) || mount(t, t, NULL, MS_BIND | MS_REC, NULL) ||
+            mount(NULL, t, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL)) {
+            perror("sandbox fixture mounts");
+            fflush(stdout);
+            _exit(2);
+        }
+        int fd = memfd_create("out", 0);
+        int rc = sandbox_run(t, (char *[]){ "/hostile", pid, host_only, NULL }, fd, fd, why, sizeof why);
+        char out[4096];
+        ssize_t n = pread(fd, out, sizeof out - 1, 0);
+        out[n > 0 ? n : 0] = '\0';
+        printf("%s", out);
+        if (rc == -2) printf("FAIL sandbox: %s\n", why);
+        else if (rc || !strstr(out, "done\n") || strstr(out, "BREACH")) printf("FAIL sandbox: rc %d\n", rc);
+        else printf("ok sandbox: hostile init contained\n");
+        fflush(stdout);
+        if (rc || !strstr(out, "done\n") || strstr(out, "BREACH")) _exit(1);
+
+        /* a sandbox that can't be built never runs the target at all */
+        char nope[PATH_MAX];
+        snprintf(nope, sizeof nope, "%s/usr", t);
+        ftruncate(fd, 0);
+        rc = sandbox_run(nope, (char *[]){ "/hostile", NULL }, fd, fd, why, sizeof why);
+        n = pread(fd, out, sizeof out - 1, 0);
+        if (rc != -2 || !why[0] || n > 0) {
+            printf("FAIL sandbox: unbuildable sandbox gave rc %d, %zd bytes of output\n", rc, n);
+            fflush(stdout);
+            _exit(1);
+        }
+        printf("ok sandbox: unbuildable -> \"%s\", target not run\n", why);
+        fflush(stdout);
+        _exit(0);
+    }
+    int st;
+    assert(c > 0 && waitpid(c, &st, 0) == c);
+    assert(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    unlink(host_only);
+    char rm[PATH_MAX];
+    snprintf(rm, sizeof rm, "rm -rf %s", t);
+    assert(system(rm) == 0);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) tmpd = argv[1];
     setup_devdir();
@@ -639,6 +747,7 @@ int main(int argc, char **argv) {
     test_needs_replay();
     test_live_nowrite();
     test_rootflags_data();
+    test_sandbox_live();
     printf("verify_root: ok\n");
     return 0;
 }

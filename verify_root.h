@@ -65,6 +65,12 @@ int mountinfo_find(const char *mountinfo_path, dev_t dev, char *mp, size_t n);
 /* the child's records (F/U fail/unresolved, I init path, S schema-init, C --check rc,
  * E its first stderr line, B schema-bootok's exec= 1 ok / 2 not executable) into r; takes out, the --check stdout */
 void root_report_fill(char *ctl, size_t clen, char *out, size_t olen, root_report_t *r);
+/* run argv (a path inside root) chrooted in root, in new user/mount/pid/net/ipc/uts/cgroup
+ * namespaces as an unprivileged uid with no capabilities: a private /dev (null zero full
+ * random urandom), its own /proc with /proc/sys read-only, a tmpfs /tmp. root needs dev,
+ * proc and tmp directories. Exit status as waitpid gives it (128+signal), 127 when argv
+ * won't exec; -2 with why set when the sandbox could not be built: argv never ran */
+int sandbox_run(const char *root, char *const argv[], int ofd, int efd, char *why, size_t wn);
 /* entry_precheck, then mount root= read-only in a private namespace and check the
  * target; one 30 s deadline covers the whole inspection */
 int root_inspect(const bls_entry_t *e, grubenv_t *env, int nenv, const char *check_args_extra, root_report_t *r);
