@@ -168,6 +168,9 @@ cmd_arm() {
     # a stray word would land in grubenv as boot_counter and break the guard's GRUB arithmetic
     case "$a" in --force) force=1 ;; ''|*[!0-9]*) die "usage: schema-snapshot arm [--force] [N]" ;; *) n="$a" ;; esac
   done
+  # GRUB's 08 counts down before 09 looks: N gives the new entry N-1 boots, so 0 and 1
+  # would boot the snapshot next time without ever trying the new one
+  [ "$n" -ge 2 ] 2>/dev/null || die "arm: N must be 2 or more (N-1 boots of the new entry before the fallback)"
   # arming bets the next boot on this box coming back: verify first, as reboot does
   if [ "$force" = 0 ]; then
     schema-ctl verify --quiet --arming >&2 || rc=$?

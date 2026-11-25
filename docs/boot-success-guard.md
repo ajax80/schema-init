@@ -77,7 +77,12 @@ assert the fallback id is chosen) before trusting it on hardware.
 
 ## Tunables / defaults
 
-- `boot_counter` (arm's `N`): **2** — tolerate one flaky boot before falling back.
+- `boot_counter` (arm's `N`): **2**. The new entry gets **N−1** boots: GRUB's stock
+  `08_fallback_counting` counts down before `09_schema_fallback` looks, and falls
+  back once the count reaches 0. The default gives the new entry one boot; one that
+  doesn't confirm success sends the next boot to the snapshot. `N=3` allows one flaky
+  boot, two in a row fall back. `arm` refuses N below 2, which would boot the snapshot
+  without ever trying the new entry. Tested under real GRUB in `tests/qemu-ci/grub-fallback.sh`.
 - auto-reboot-on-hang: **off** — on timeout the guard only logs; pick the
   fallback entry manually (the box stays reachable over SSH).
 - `SCHEMA_BOOTOK_TIMEOUT`: **90s** — clears a healthy cold boot with margin,
