@@ -38,20 +38,22 @@ grep -q 'not armed' "$T/out" && fail "--force: refused"
 [ ! -e "$T/ctl" ] || fail "--force: verify ran: $(cat "$T/ctl")"
 
 # anything but --force and a count is refused before verify runs or grubenv is touched
-# N below 2 would never try the new entry: refused before verify runs or grubenv is touched
-for n in 0 1 01; do
-    VRC=0 arm "$n"; r=$?
-    [ $r != 0 ] || fail "arm $n: exited 0"
-    [ ! -e "$T/editenv" ] || fail "arm $n: grubenv written"
-    [ ! -e "$T/ctl" ] || fail "arm $n: verify ran"
-    grep -q 'N must be 2 or more' "$T/out" || fail "arm $n: wording: $(cat "$T/out")"
-done
 for bad in -f --forse 2x ""; do
     VRC=0 arm "$bad"; r=$?
     [ $r != 0 ] || fail "arm '$bad': exited 0"
     [ ! -e "$T/editenv" ] || fail "arm '$bad': grubenv written"
     [ ! -e "$T/ctl" ] || fail "arm '$bad': verify ran"
     grep -q 'usage' "$T/out" || fail "arm '$bad': no usage: $(cat "$T/out")"
+done
+
+# N below 2 never tries the new entry; a leading zero or 4+ digits isn't plain decimal
+# for grubenv: refused before verify runs or grubenv is touched
+for n in 0 1 01 08 010 1000 99999999999999999999; do
+    VRC=0 arm "$n"; r=$?
+    [ $r != 0 ] || fail "arm $n: exited 0"
+    [ ! -e "$T/editenv" ] || fail "arm $n: grubenv written"
+    [ ! -e "$T/ctl" ] || fail "arm $n: verify ran"
+    grep -q 'N must be 2 to 999' "$T/out" || fail "arm $n: wording: $(cat "$T/out")"
 done
 
 [ $rc = 0 ] && echo "snapshot_arm_gate: ok"
