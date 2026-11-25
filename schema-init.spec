@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.33
+Version:        0.4.34
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -580,6 +580,26 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Wed Nov 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.34-1
+- New after=/before= keys: ordering only, no health dependency (hold until
+  the other service has finished starting, either way). schema-import maps
+  systemd After=/Before= onto them; an edge that closes a cycle is dropped
+  and logged (#599)
+- A relative exec= now warns at load and in schema-ctl verify; a later
+  release will refuse it (#596)
+- schema-ctl verify runs the target init= in a sandbox (user/mount/pid/net
+  namespaces, no caps, read-only root); any setup failure is UNRESOLVED and
+  the target never runs (#590)
+- schema-snapshot arm refuses N<2; the boot guard doc states that
+  boot_counter=N gives N-1 tries (#594)
+- logind: strict authz by default with no session files (the old /run/user
+  fallback is opt-in); udev uaccess failures are logged (#583)
+- kernel-install: no-initramfs (-schema) kernels skip dracut, get
+  root=PARTUUID= and no initrd line; on nvidia boxes a new kernel without
+  the module is held off the default entry (#585, #588)
+- CI: schema-init boots as PID 1 under QEMU (crash recovery, ordering,
+  re-exec, real GRUB fallback, verify in-guest) plus security regression
+  tests for the umask, ctl gate and broker connection cap (#591-#595, #600)
 * Mon Nov 23 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.33-1
 - schema-user re-execs in place: schema-ctl --user reexec swaps the running
   binary with PID 1's own handoff, services and rootless containers kept
