@@ -310,9 +310,14 @@ int rootflags_data(const char *flags, int initrd, unsigned long *ms, char *out, 
     return 0;
 }
 
-/* the target's uid inside the sandbox. Host root is mapped there too, as 0, only so
- * --check's root-owned-file rule reads as it would at boot; nothing runs as it */
-#define SANDBOX_UID 65534
+/* the host uid behind the target's uid 1 in the sandbox: one that owns no files, since
+ * --check trusts files owned by its own euid. Host root is mapped too, as 0, only so
+ * its root-owned-file rule reads as it would at boot; nothing runs as it */
+#define SANDBOX_HOST_UID 2147483646
+/* what --check had as real root and needs to read what the boot reads (0600 .svc files,
+ * 0700 dirs, exec= only root may run): over root-owned files only, the userns's own.
+ * Writes stay shut: the root is read-only and /proc holds nothing but processes */
+#define SANDBOX_CAPS ((1u << CAP_DAC_OVERRIDE) | (1u << CAP_DAC_READ_SEARCH))
 
 static int write_str(const char *path, const char *s) {
     int fd = open(path, O_WRONLY | O_CLOEXEC);
@@ -335,7 +340,7 @@ static void sb_bind(int wfd, const char *src, const char *dst, unsigned long fl)
 }
 
 /* pid 1 of the sandbox's pid namespace: builds its view of the target, then runs
- * argv as SANDBOX_UID with no capabilities and reports its status */
+ * argv as uid 1 with only SANDBOX_CAPS and reports its status */
 static void sb_pid1(const char *root, char *const argv[], int ofd, int efd, int wfd) {
     static const char *const devs[] = { "null", "zero", "full", "random", "urandom" };
     char p[PATH_MAX];
@@ -354,14 +359,10 @@ static void sb_pid1(const char *root, char *const argv[], int ofd, int efd, int 
     }
     snprintf(p, sizeof p, "%s/dev", root);
     sb_mount(wfd, NULL, p, NULL, MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NOEXEC, NULL);
-    /* this namespace's own processes only; the kernel's tunables read-only */
+    /* this namespace's own processes and nothing else: no /proc/sys, irq, sysrq-trigger,
+     * which root-owned and under CAP_DAC_OVERRIDE would be writable (Linux 5.8+) */
     snprintf(p, sizeof p, "%s/proc", root);
-    sb_mount(wfd, "proc", p, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL);
-    snprintf(p, sizeof p, "%s/proc/sys", root);
-    sb_bind(wfd, p, p, MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC);
-    /* absent without CONFIG_MAGIC_SYSRQ */
-    snprintf(p, sizeof p, "%s/proc/sysrq-trigger", root);
-    if (!access(p, F_OK)) sb_bind(wfd, p, p, MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC);
+    sb_mount(wfd, "proc", p, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, "subset=pid");
     snprintf(p, sizeof p, "%s/tmp", root);
     sb_mount(wfd, "schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777,size=64m");
     /* no setsid(): the deadline kills root_inspect's process group, and this stays in it.
@@ -372,20 +373,26 @@ static void sb_pid1(const char *root, char *const argv[], int ofd, int efd, int 
     if (c < 0) SB_DIE("fork: %m");
     if (c == 0) {
         for (int cap = 0; cap < 64; cap++)
-            if (prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) && errno == EINVAL) break;
-        /* --check writes one report and never forks; a hostile init gets this much */
-        struct rlimit fsz = { OUT_CAP, OUT_CAP }, np = { 64, 64 };
-        if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) || prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) ||
-            setrlimit(RLIMIT_FSIZE, &fsz) || setrlimit(RLIMIT_NPROC, &np) || setgroups(0, NULL) ||
-            setresgid(1, 1, 1) || setresuid(1, 1, 1))
-            SB_DIE("drop privileges: %m");
-        /* leaving uid 0 clears every capability; prove it rather than trust it */
+            if (!(cap < 32 && SANDBOX_CAPS & 1u << cap) && prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) && errno == EINVAL)
+                break;
+        /* --check writes one report in well under this and never forks; a hostile init gets
+         * this much. FSIZE: one byte over OUT_CAP, so collect() still sees an oversized report */
+        struct rlimit fsz = { OUT_CAP + 1, OUT_CAP + 1 }, np = { 64, 64 }, as = { 1UL << 30, 1UL << 30 };
         struct __user_cap_header_struct h = { _LINUX_CAPABILITY_VERSION_3, 0 };
-        struct __user_cap_data_struct d[2];
-        if (syscall(SYS_capget, &h, d) || d[0].permitted | d[1].permitted | d[0].effective | d[1].effective)
-            SB_DIE("capabilities left after dropping privileges");
+        struct __user_cap_data_struct d[2] = { { SANDBOX_CAPS, SANDBOX_CAPS, SANDBOX_CAPS }, { 0, 0, 0 } };
+        if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) || prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) ||
+            setrlimit(RLIMIT_FSIZE, &fsz) || setrlimit(RLIMIT_NPROC, &np) || setrlimit(RLIMIT_AS, &as) ||
+            setgroups(0, NULL) || setresgid(1, 1, 1) || setresuid(1, 1, 1) || syscall(SYS_capset, &h, d) ||
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_DAC_OVERRIDE, 0, 0) ||
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_DAC_READ_SEARCH, 0, 0) ||
+            prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+            SB_DIE("drop privileges: %m");
+        /* prove the set rather than trust it */
+        if (syscall(SYS_capget, &h, d) || d[0].permitted != SANDBOX_CAPS || d[0].effective != SANDBOX_CAPS ||
+            d[1].permitted | d[1].effective | d[1].inheritable)
+            SB_DIE("capabilities other than DAC_OVERRIDE, DAC_READ_SEARCH left");
         static char *const envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
-        int nul = open("/dev/null", O_RDONLY);
+        int nul = open("/dev/null", O_RDONLY | O_CLOEXEC);
         if (nul < 0 || dup2(nul, STDIN_FILENO) < 0 || dup2(ofd, STDOUT_FILENO) < 0 || dup2(efd, STDERR_FILENO) < 0)
             SB_DIE("stdio: %m");
         execve(argv[0], argv, envp);
@@ -418,7 +425,8 @@ int sandbox_run(const char *root, char *const argv[], int ofd, int efd, char *wh
         char b = 0;
         if (unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWIPC | CLONE_NEWUTS |
                     CLONE_NEWCGROUP))
-            SB_DIE("unshare: %m");
+            SB_DIE("unshare: %m%s", errno == ENOSPC ? " (user.max_user_namespaces is 0?)"
+                                    : errno == EPERM ? " (verify running in a chroot or container?)" : "");
         /* the maps are the parent's to write: only it holds CAP_SETUID over the host's ids */
         if (write(sync[1], "", 1) != 1 || read(ack[0], &b, 1) != 1 || b != 1) SB_DIE("uid/gid map not written");
         pid_t one = fork();
@@ -433,7 +441,7 @@ int sandbox_run(const char *root, char *const argv[], int ofd, int efd, char *wh
     char b, path[64], map[64];
     int synced = p > 0 && read(sync[0], &b, 1) == 1, ok = synced;
     if (ok) {
-        snprintf(map, sizeof map, "0 0 1\n1 %d 1\n", SANDBOX_UID);
+        snprintf(map, sizeof map, "0 0 1\n1 %u 1\n", SANDBOX_HOST_UID);
         snprintf(path, sizeof path, "/proc/%d/uid_map", (int)p);
         ok = !write_str(path, map);
         snprintf(path, sizeof path, "/proc/%d/gid_map", (int)p);
@@ -769,6 +777,10 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     rc = sandbox_run(tgt, argv, cfd >= 0 ? cfd : out, errfd, why, sizeof why);
     if (rc == -2) {
         U("cannot sandbox init=%s: %s\n", init, why);
+        return;
+    }
+    if (rc == 128 + SIGXFSZ) {
+        U("%s --check output over %d MB\n", init, OUT_CAP >> 20);
         return;
     }
     dprintf(ctl, "C %d\n", rc);

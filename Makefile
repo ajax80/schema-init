@@ -515,7 +515,7 @@ verify-nowrite-live:
 # root: a hostile fake init= under verify's sandbox (tests/test_verify_root.c)
 verify-sandbox-live:
 	@mkdir -p $(TESTDIR)
-	rm -rf $(TESTDIR)/vr-*
+	rm -rf $(TESTDIR)/vr-* /tmp/vr-sandbox-*
 	$(CC) $(CFLAGS) -DSCHEMA_VERIFY_TESTHOOKS tests/test_verify_root.c verify_root.c verify_boot.c karg.c -o $(TESTDIR)/verify-root
 	$(TESTDIR)/verify-root $(TESTDIR) > $(TESTDIR)/sandbox.out; rc=$$?; cat $(TESTDIR)/sandbox.out; \
 		[ $$rc = 0 ] && grep -q '^ok sandbox: hostile init contained' $(TESTDIR)/sandbox.out

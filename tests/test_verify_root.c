@@ -638,6 +638,7 @@ static const char hostile[] =
     "p mknod 'mknod /tmp/sda b 8 0'\n"
     "p sysctl 'echo 3 > /proc/sys/vm/drop_caches'\n"
     "p sysrq 'echo h > /proc/sysrq-trigger'\n"
+    "p procsys '[ -e /proc/sys/kernel ] || [ -e /proc/irq ] || [ -e /proc/kcore ]'\n"
     "p hostpid '[ -e /proc/$HP ]'\n"
     "p pidcount '[ $(ls /proc | grep -c \"^[0-9]\") -gt 12 ]'\n"
     "p escape 'cd /../../..; [ ! -e /MARKER ] || [ -e \"$HO\" ]'\n"
@@ -646,8 +647,9 @@ static const char hostile[] =
     "p hostname 'hostname schema-evil'\n"
     "p net 'echo > /dev/tcp/127.0.0.1/22'\n"
     "p uid '[ $(id -u) = 0 ]'\n"
-    "p caps '! grep -q \"^CapEff:[[:space:]]*0*$\" /proc/self/status'\n"
-    "p bnd '! grep -q \"^CapBnd:[[:space:]]*0*$\" /proc/self/status'\n"
+    "p caps '! grep -q \"^CapEff:[[:space:]]*0*6$\" /proc/self/status'\n"
+    "p bnd '! grep -q \"^CapBnd:[[:space:]]*0*6$\" /proc/self/status'\n"
+    "p rootread '! cat /secret'\n"
     "p nnp '! grep -q \"^NoNewPrivs:[[:space:]]*1$\" /proc/self/status'\n"
     "echo done\n";
 
@@ -665,6 +667,10 @@ static void sandbox_tree(const char *t) {
     }
     snprintf(p, sizeof p, "%s/MARKER", t);
     touch(p);
+    /* 0600 root: what a 0600 .svc is; the boot reads it, so --check must */
+    snprintf(p, sizeof p, "%s/secret", t);
+    touch(p);
+    chmod(p, 0600);
     snprintf(p, sizeof p, "%s/hostile", t);
     FILE *f = fopen(p, "w");
     fputs(hostile, f);
@@ -684,6 +690,8 @@ static void test_sandbox_live(void) {
     touch(host_only);
     sandbox_tree(t);
     snprintf(pid, sizeof pid, "%d", (int)getpid());
+    /* or the child's copy of the buffer prints it twice */
+    fflush(stdout);
     pid_t c = fork();
     if (c == 0) {
         /* the target is read-only, as root_inspect mounts it */
