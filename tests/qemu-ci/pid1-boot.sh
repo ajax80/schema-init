@@ -8,7 +8,7 @@ cd "$(dirname "$0")/../.."
 REPO=$PWD
 KERNEL=${KERNEL:-/boot/vmlinuz-$(uname -r)}
 BB=${BUSYBOX:-$(command -v busybox)}
-TIMEOUT=${TIMEOUT:-120}
+TIMEOUT=${TIMEOUT:-150}
 WORK=$(mktemp -d)
 ROOT=$WORK/root
 SERIAL=$WORK/serial.log
@@ -100,7 +100,7 @@ dep=ci-dependent'
 # which the runner's static glibc uses (PID 1 died of SIGILL)
 ACCEL=tcg CPU=max
 [ -w /dev/kvm ] && ACCEL=kvm CPU=host
-# emulated, a boot can outlast ci-finish's 60 s wedge watchdog
+# emulated, a boot can outlast ci-finish's 90 s wedge watchdog
 [ "$ACCEL" = tcg ] && TIMEOUT=${TIMEOUT_TCG:-400}
 echo ">> booting ($ACCEL, $(basename "$KERNEL"))"
 rc=0
@@ -115,10 +115,12 @@ miss() { echo "  MISS: $1"; pass=0; }
 grep -q CI-HELLO "$SERIAL" || miss "oneshot ci-hello never ran"
 grep -q CI-UP "$SERIAL" || miss "ci-finish never ran after its deps were ready"
 grep -q CI-CRASH-2 "$SERIAL" || miss "ci-crasher did not crash twice"
-grep -Eq 'CI-CRASHER: .*restarts=2' "$SERIAL" || miss "ci-crasher's restarts are not 2"
+grep -Eq 'CI-CRASHER: .*restarts=2[^0-9]*$' "$SERIAL" || miss "ci-crasher's restarts are not 2"
 grep -q CI-DEP-AFTER-RECOVERY "$SERIAL" || miss "ci-dependent did not wait for ci-crasher's recovery"
 grep -q CI-DEP-EARLY "$SERIAL" && miss "ci-dependent started on a dead ci-crasher run"
-grep -Eq 're-exec .* [0-9]+ adopted, 0 new' "$SERIAL" || miss "PID 1 did not re-exec and adopt its services"
+grep -Eq 're-exec .* [1-9][0-9]* adopted, 0 new' "$SERIAL" || miss "PID 1 did not re-exec and adopt its services"
+# a rolled-back re-exec logs the same adopt line; only the client's reply differs
+grep -q 'ok: re-executed into' "$SERIAL" || miss "re-exec not confirmed (rolled back?)"
 grep -q CI-REEXEC-KEPT "$SERIAL" || miss "services did not survive the re-exec with the same pids"
 [ "$(grep -c CI-DAEMON-TERM "$SERIAL")" = 1 ] || miss "ci-daemon got SIGTERM other than once at shutdown"
 grep -q 'PID 1 poweroff' "$SERIAL" || miss "PID 1 never reached poweroff"
