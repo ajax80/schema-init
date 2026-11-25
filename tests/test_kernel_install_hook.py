@@ -546,6 +546,34 @@ def test_multidevice_root_left_alone():
     check('multi-device: warns', 'no single PARTUUID' in r.stderr, r.stderr)
 
 
+DRACUT_SHIM = os.path.join(REPO, 'distros/shared/kernel-install/50-dracut.install')
+
+
+def test_dracut_shim():
+    with tempfile.TemporaryDirectory() as d:
+        log = os.path.join(d, 'log')
+        real = os.path.join(d, 'real')
+        with open(real, 'w') as f:
+            f.write('#!/bin/sh\necho "$@" >> %s\n' % log)
+        os.chmod(real, 0o755)
+        env = dict(os.environ, SCHEMA_INIT_DRACUT_PLUGIN=real)
+
+        def shim(*args):
+            if os.path.exists(log):
+                os.remove(log)
+            rc = subprocess.run(['sh', DRACUT_SHIM, *args], env=env).returncode
+            return rc, open(log).read().strip() if os.path.exists(log) else None
+
+        rc, got = shim('add', '7.3.6-1.cachyos1.schema.fc44.x86_64', '/boot/x', '/boot/vmlinuz')
+        check('rpm schema kernel: no dracut on add', rc == 0 and got is None, got)
+        rc, got = shim('add', '7.2.11-cachyos1-schema.fc44', '/boot/x', '/boot/vmlinuz')
+        check('hand-built schema kernel: no dracut on add', rc == 0 and got is None, got)
+        rc, got = shim('add', '6.17.1-300.fc44.x86_64', '/boot/x', '/boot/vmlinuz')
+        check('stock kernel: dracut gets every arg', rc == 0 and got == 'add 6.17.1-300.fc44.x86_64 /boot/x /boot/vmlinuz', got)
+        rc, got = shim('remove', '7.3.6-1.cachyos1.schema.fc44.x86_64', '/boot/x')
+        check('schema kernel remove still reaches dracut', rc == 0 and got == 'remove 7.3.6-1.cachyos1.schema.fc44.x86_64 /boot/x', got)
+
+
 def main():
     print('schema-init kernel-install hook tests\n')
     for fn in (test_add_full, test_no_marker_leaves_default, test_no_default_knob, test_no_extras,
@@ -563,7 +591,7 @@ def main():
                test_remove_clears_held, test_marker_gate_never_picks_stock,
                test_hold_respects_pin_and_no_default, test_promote_needs_the_file_without_nvidia_loaded,
                test_promote_never_steps_back, test_remove_does_not_default_to_held,
-               test_multidevice_root_left_alone):
+               test_multidevice_root_left_alone, test_dracut_shim):
         print(fn.__name__)
         fn()
         print()

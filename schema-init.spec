@@ -98,6 +98,7 @@ install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_
 install -Dm0755 scripts/09_schema_bls_save %{buildroot}%{_sysconfdir}/grub.d/09_schema_bls_save
 install -Dm0755 scripts/11_schema_bls_restore %{buildroot}%{_sysconfdir}/grub.d/11_schema_bls_restore
 install -Dm0755 distros/shared/kernel-install/99-schema-init.install %{buildroot}%{_prefix}/lib/kernel/install.d/99-schema-init.install
+install -Dm0755 distros/shared/kernel-install/50-dracut.install %{buildroot}%{_sysconfdir}/kernel/install.d/50-dracut.install
 install -Dm0755 distros/fedora-kde/scripts/schema-plasma-autologin.sh %{buildroot}/usr/local/bin/schema-plasma-autologin.sh
 install -Dm0755 distros/fedora-kde/scripts/plasma-session-start.sh %{buildroot}/usr/local/bin/plasma-session-start.sh
 install -Dm0755 distros/fedora-kde/scripts/plasmashell-shim %{buildroot}/usr/local/bin/plasmashell-shim
@@ -555,6 +556,8 @@ fi
 %{_sysconfdir}/grub.d/09_schema_bls_save
 %{_sysconfdir}/grub.d/11_schema_bls_restore
 %{_prefix}/lib/kernel/install.d/99-schema-init.install
+# plain %config: a fixed shim must reach boxes on update
+%config %{_sysconfdir}/kernel/install.d/50-dracut.install
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
 %config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
