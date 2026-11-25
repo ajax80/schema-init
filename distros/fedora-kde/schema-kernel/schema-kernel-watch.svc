@@ -3,6 +3,7 @@
 #   sudo install -Dm755 -t /usr/local/libexec/schema-kernel mksrpm.sh watch.sh
 #   sudo install -m644 schema-kernel-watch.svc /etc/schema-init/services/
 #   sudo schema-ctl add schema-kernel-watch
+#   echo https://ntfy.sh/<topic> > ~/.config/schema-kernel-watch/ntfy
 # Runs as ajax80: copr-cli reads its API token from ~/.config/copr.
 name=schema-kernel-watch
 exec=/usr/local/libexec/schema-kernel/watch.sh
