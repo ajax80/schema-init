@@ -14,9 +14,13 @@ SERIAL=$WORK/serial.log
 trap 'rm -rf "$WORK"' EXIT
 
 [ -r "$KERNEL" ] || { echo "FAIL: kernel $KERNEL not readable"; exit 1; }
-file -L "$BB" | grep -q 'statically linked' || { echo "FAIL: $BB is not a static busybox"; exit 1; }
+# the guest has no libc; file says "static-pie linked" for static-pie
+static() { file -L "$1" | grep -Eq 'static(ally|-pie) linked'; }
+static "$BB" || { echo "FAIL: $BB is not a static busybox"; exit 1; }
 
 make -s schema-init
+# make goes by timestamps: a sanitizer build (STATIC_LDFLAGS=) would look up to date
+static schema-init || { echo "FAIL: ./schema-init is not static; make clean first"; exit 1; }
 # schema-ctl is dynamic in the tree; the guest has no libc
 SCTL_SRCS=$(make -s --no-print-directory -f Makefile -f - print-sctl-srcs <<'MK'
 print-sctl-srcs:
@@ -31,7 +35,7 @@ mkdir -p "$ROOT"/bin "$ROOT"/sbin "$ROOT"/usr/bin "$ROOT"/etc/schema-init/servic
 cp schema-init "$ROOT/sbin/schema-init"
 cp "$WORK/schema-ctl" "$ROOT/bin/schema-ctl"
 cp "$BB" "$ROOT/bin/busybox"
-for a in sh cat echo sleep poweroff; do ln -s busybox "$ROOT/bin/$a"; done
+for a in sh cat echo sleep poweroff touch; do ln -s busybox "$ROOT/bin/$a"; done
 
 svc() { printf '%s\n' "$2" > "$ROOT/etc/schema-init/services/$1.svc"; }
 svc ci-hello 'name=ci-hello
@@ -40,10 +44,12 @@ args=-c
 args=echo CI-HELLO > /dev/console
 oneshot=1'
 # a running service the shutdown must stop with SIGTERM, not leave to the final kill
-printf '#!/bin/sh\ntrap "echo CI-DAEMON-TERM > /dev/console; exit 0" TERM\nwhile :; do sleep 1; done\n' > "$ROOT/bin/ci-daemon"
+printf '#!/bin/sh\ntrap "echo CI-DAEMON-TERM > /dev/console; exit 0" TERM\ntouch /run/ci-daemon.ready\nwhile :; do sleep 1; done\n' > "$ROOT/bin/ci-daemon"
 chmod +x "$ROOT/bin/ci-daemon"
+# ready once its trap is set, so ci-finish's poweroff can't beat it under TCG
 svc ci-daemon 'name=ci-daemon
-exec=/bin/ci-daemon'
+exec=/bin/ci-daemon
+ready_path=/run/ci-daemon.ready'
 # schema-ctl poweroff, so the control socket and PID 1's own shutdown run; poweroff -f
 # would bypass both. The fallback only ends a wedged run, and is a failure
 printf '#!/bin/sh\necho CI-UP > /dev/console\n/bin/schema-ctl status > /dev/console 2>&1\n( sleep 60; echo CI-WEDGED > /dev/console; poweroff -f ) &\n/bin/schema-ctl poweroff > /dev/console 2>&1\n' > "$ROOT/bin/ci-finish"
@@ -60,6 +66,8 @@ dep=ci-daemon'
 # which the runner's static glibc uses (PID 1 died of SIGILL)
 ACCEL=tcg CPU=max
 [ -w /dev/kvm ] && ACCEL=kvm CPU=host
+# emulated, a boot can outlast ci-finish's 60 s wedge watchdog
+[ "$ACCEL" = tcg ] && TIMEOUT=${TIMEOUT_TCG:-400}
 echo ">> booting ($ACCEL, $(basename "$KERNEL"))"
 rc=0
 timeout "$TIMEOUT" qemu-system-x86_64 -accel "$ACCEL" -cpu "$CPU" -m 512 -smp 2 -no-reboot -nographic -nic none \
