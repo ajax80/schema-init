@@ -3455,13 +3455,14 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                     svc->name[0] ? svc->name : path, val);
             return -1;
         }
-        /* execv, no PATH search: a relative one would run whatever sits at that path
-         * under the working directory. schema-import already writes the absolute path */
-        if (val[0] != '/') {
-            fprintf(stderr, "[schema-init] %s: exec=%s is not an absolute path\n",
+        /* execv, no PATH search: a relative one runs whatever sits at that path under
+         * working_dir= (or /). Warned, not refused, so a box that has one doesn't lose a
+         * running service at the next upgrade's re-exec; a later release refuses it.
+         * verify_diff turns this --check note into a WARN by its wording */
+        if (val[0] != '/')
+            fprintf(stderr, "[schema-init] %s: exec=%s is not an absolute path; it runs relative to "
+                    "working_dir= (or /), and a later release will refuse it\n",
                     svc->name[0] ? svc->name : path, val);
-            return -1;
-        }
         strncpy(svc->exec, val, sizeof(svc->exec) - 1);
         if (svc->argv[0] != svc->exec) free(svc->argv[0]);
         svc->argv[0] = svc->exec;

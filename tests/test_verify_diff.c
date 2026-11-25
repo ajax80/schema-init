@@ -167,6 +167,9 @@ static void test_notes(void) {
          "note: a: protect_system dropped (default would hide exec)\na.exec=/a\n");
     assert(nf == 1 && f[0].kind == F_WARN && strstr(f[0].text, "dropped"));
     assert(is_empty_hash(hash));
+    /* a relative exec= loads but the next boot should hear about it */
+    diff(HDR "a.exec=/a\n", NHDR "note: a: exec=a is not an absolute path; it runs relative to working_dir= (or /)\na.exec=/a\n");
+    assert(nf == 1 && f[0].kind == F_WARN && strstr(f[0].text, "exec=a is not an absolute path"));
     printf("ok test_notes\n");
 }
 
