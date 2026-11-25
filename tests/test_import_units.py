@@ -656,6 +656,8 @@ u = si.parse_unit("[Unit]\nRequires=tuned.service\nAfter=tuned.service network.t
 ol, on = si.order_lines("tuned-ppd", u, known, ["dep=tuned"])
 check("After= -> after= for known units; dep'd, targets, templates, unknown and self left out",
       ol == ["after=auditd", "after=cups", "before=network-manager"] and on == [])
+ol, _ = si.order_lines("x", si.parse_unit("[Unit]\nRequires=cups.service\nBefore=cups.service auditd.service\n"), known, ["dep=cups"])
+check("Before= on a dep'd unit left out (PID 1 would drop it as a cycle)", ol == ["before=auditd"])
 ol, _ = si.order_lines("x", si.parse_unit("[Unit]\nAfter=dbus-broker.service NetworkManager.service\n"), known, [])
 check("After= resolves aliases", ol == ["after=dbus", "after=network-manager"])
 ol, _ = si.order_lines("x", si.parse_unit("[Unit]\nAfter=auditd.service\n"), set(), [])

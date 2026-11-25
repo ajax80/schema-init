@@ -1427,7 +1427,8 @@ def order_lines(name, sections, known, deps):
     """After=/Before= on a service or socket that has a schema .svc -> after=/
     before= lines: ordering only, as in systemd. PID 1 holds a unit until the
     other has finished starting, either way, and never fails it for that. A dep=
-    already orders, so its after= is left out. Targets have no .svc here."""
+    already orders: its after= is redundant and its before= a cycle PID 1 would
+    drop, so both are left out. Targets have no .svc here."""
     if not known:
         return [], []
     raw = {v: k for k, v in _UNIT_ALIAS.items()}
@@ -1443,7 +1444,7 @@ def order_lines(name, sections, known, deps):
             d = _UNIT_ALIAS.get(base, base)
             d = d if d in known else raw.get(d, d)
             if (d in known and d not in self_names and _UNIT_ALIAS.get(d, d) not in self_names
-                    and d not in names and not (out == "after" and d in have)):
+                    and d not in names and d not in have):
                 names.append(d)
         if len(names) > 16:   # MAX_ORDER: PID 1 refuses a 17th
             notes.append("dropped %s on %s (limit 16)" % (key, " ".join(names[16:])))

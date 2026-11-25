@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <limits.h>
 #include <stdint.h>
+#include "group.h"
 #include <time.h>
 #include <pwd.h>
 #include <ctype.h>
@@ -682,12 +683,15 @@ int service_open_trusted(const char *path);
 /* parse a single .svc file into svc; returns 0 on success, -1 on failure */
 int service_load_one(const char *path, service_t *svc);
 
-/* after=/before= names → order_idx; an edge that closes a cycle (through dep=
- * or other order edges) is dropped and logged, as systemd breaks ordering cycles */
-void services_resolve_order(service_t *table, int count);
+/* after=/before= names → order_idx; an edge that closes a cycle (through dep=,
+ * a dep= group's members, or other order edges) is dropped and logged, as
+ * systemd breaks ordering cycles */
+void services_resolve_order(service_t *table, int count, const group_t *groups, int gcount);
 
-/* 1 once every service it is ordered after has finished starting, either way */
-int service_order_ready(const service_t *svc, const service_t *table, int count);
+/* 1 once every service it is ordered after has finished starting, either way,
+ * or can never start (its deps can't be met) */
+int service_order_ready(const service_t *svc, const service_t *table, int count,
+                        const uint8_t *grp_states, int gcount);
 
 /* detect dependency cycles; logs and returns number of cycles found */
 int services_check_cycles(service_t *table, int count);
