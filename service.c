@@ -3247,6 +3247,10 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
     } else if (strcmp(key, "dep") == 0) {
         memset(svc->dep_name, 0, sizeof svc->dep_name);
         pc->dep_slot = 0;
+    } else if (strcmp(key, "after") == 0) {
+        memset(svc->after_name, 0, sizeof svc->after_name);
+    } else if (strcmp(key, "before") == 0) {
+        memset(svc->before_name, 0, sizeof svc->before_name);
     } else if (strcmp(key, "bind") == 0) {
         svc->bind_name[0] = '\0';
     } else if (strcmp(key, "landlock_ro") == 0 || strcmp(key, "landlock_rw") == 0) {
@@ -3660,6 +3664,26 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         strncpy(svc->dep_name[pc->dep_slot++], val, 63);
+    } else if (strcmp(line, "after") == 0 || strcmp(line, "before") == 0) {
+        char (*names)[64] = line[0] == 'a' ? svc->after_name : svc->before_name;
+        int k;
+        size_t n;
+        while (*val == ' ' || *val == '\t') val++;
+        n = strlen(val);
+        while (n && (val[n - 1] == ' ' || val[n - 1] == '\t')) val[--n] = '\0';
+        /* one name per line: "after=a b" naming no service would order nothing, silently */
+        if (!*val || n >= sizeof names[0] || strpbrk(val, " \t")) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s\n", svc->name[0] ? svc->name : path, line, val);
+            return -1;
+        }
+        for (k = 0; k < MAX_ORDER && names[k][0]; k++)
+            if (!strcmp(names[k], val)) return 0;
+        if (k >= MAX_ORDER) {
+            fprintf(stderr, "[schema-init] %s: more than %d %s= lines\n",
+                    svc->name[0] ? svc->name : path, MAX_ORDER, line);
+            return -1;
+        }
+        snprintf(names[k], sizeof names[k], "%s", val);
     } else if (strcmp(line, "oneshot") == 0 && atoi(val))
         svc->flags |= SVC_ONESHOT;
     else if (strcmp(line, "needs_root") == 0 && atoi(val))
@@ -4412,6 +4436,109 @@ int service_load_one(const char *path, service_t *svc) {
     return svc_load_file(path, svc);
 }
 
+
+/* ── ordering: after= / before= ──────────────────────────────────────── */
+
+static int svc_find(const service_t *table, int count, const char *name) {
+    for (int j = 0; j < count; j++)
+        if (!strcmp(table[j].name, name)) return j;
+    return -1;
+}
+
+typedef struct { const group_t *g; int n; } order_grps_t;
+
+/* does from reach to over dep= (a group dep through its members) and the order
+ * edges kept so far */
+static int order_reaches(const service_t *t, int count, const order_grps_t *gr,
+                         int from, int to, unsigned char *seen) {
+    if (from == to) return 1;
+    if (seen[from]) return 0;
+    seen[from] = 1;
+    for (int k = 0; k < MAX_DEPS; k++) {
+        int d = t[from].dep_idx[k], gi = t[from].grp_dep_idx[k];
+        if (d >= 0 && d < count && order_reaches(t, count, gr, d, to, seen)) return 1;
+        if (gi >= 0 && gi < gr->n)
+            for (int m = 0; m < gr->g[gi].member_count; m++) {
+                int x = gr->g[gi].member_idx[m];
+                if (x >= 0 && x < count && order_reaches(t, count, gr, x, to, seen)) return 1;
+            }
+    }
+    for (int k = 0; k < t[from].order_count; k++)
+        if (order_reaches(t, count, gr, t[from].order_idx[k], to, seen)) return 1;
+    return 0;
+}
+
+static void order_add(service_t *t, int count, const order_grps_t *gr, int s, int target, const char *how) {
+    unsigned char seen[MAX_SERVICES];
+    if (target < 0 || target == s) return;
+    for (int k = 0; k < t[s].order_count; k++)
+        if (t[s].order_idx[k] == target) return;
+    memset(seen, 0, sizeof seen);
+    /* systemd drops an ordering job in a cycle; a waiting pair here would hold forever */
+    if (order_reaches(t, count, gr, target, s, seen)) {
+        fprintf(stderr, "[schema-init] %s: %s%s closes a cycle — ignored\n",
+                t[s].name, how, t[target].name);
+        return;
+    }
+    t[s].order_idx[t[s].order_count++] = target;
+}
+
+void services_resolve_order(service_t *table, int count, const group_t *groups, int gcount) {
+    order_grps_t gr = { groups, groups ? gcount : 0 };
+    int i, k;
+    for (i = 0; i < count; i++) table[i].order_count = 0;
+    for (i = 0; i < count; i++)
+        for (k = 0; k < MAX_ORDER && table[i].after_name[k][0]; k++)
+            order_add(table, count, &gr, i, svc_find(table, count, table[i].after_name[k]), "after=");
+    for (i = 0; i < count; i++)
+        for (k = 0; k < MAX_ORDER && table[i].before_name[k][0]; k++) {
+            int j = svc_find(table, count, table[i].before_name[k]);
+            char how[80];
+            if (j < 0) continue;
+            snprintf(how, sizeof how, "before=%s from ", table[i].before_name[k]);
+            order_add(table, count, &gr, j, i, how);
+        }
+}
+
+/* A queued service that can never start: waiting on a wait_socket= (outside
+ * PID 1's hands), on a critical dep that is excised or dormant, an excised group,
+ * or a dep that is itself stuck. systemd fails that start job, which lets go of
+ * whatever is ordered after it. */
+static int order_pred_stuck(const service_t *p, const service_t *t, int count,
+                            const uint8_t *grp_states, int gcount, int depth) {
+    if (p->sock_waiting) return 1;
+    if (depth > MAX_SERVICES) return 0;
+    for (int k = 0; k < MAX_DEPS && p->dep_name[k][0]; k++) {
+        int d = p->dep_idx[k], gi = p->grp_dep_idx[k];
+        if (d >= 0 && d < count) {
+            uint8_t s = t[d].inst.state;
+            if ((s == STATE_EXCISED || s == STATE_DORMANT) && (t[d].flags & SVC_CRITICAL)) return 1;
+            if (s == STATE_NEW_PROCESS && !t[d].restart_count
+                    && order_pred_stuck(&t[d], t, count, grp_states, gcount, depth + 1)) return 1;
+        }
+        if (gi >= 0 && gi < gcount && grp_states && grp_states[gi] == STATE_EXCISED) return 1;
+    }
+    return 0;
+}
+
+/* systemd's After= waits for the start job, not for health: a service still
+ * queued or spawned-not-ready on its first start holds its followers; up,
+ * given up on, failed once (in recovery, or retrying), parked (socket, timer,
+ * condition skip) or unable to start does not. */
+int service_order_ready(const service_t *svc, const service_t *table, int count,
+                        const uint8_t *grp_states, int gcount) {
+    for (int k = 0; k < svc->order_count; k++) {
+        int j = svc->order_idx[k];
+        if (j < 0 || j >= count) continue;
+        uint8_t s = table[j].inst.state;
+        /* restart_count > 0: a retry, its first start already finished */
+        if (table[j].restart_count) continue;
+        if (s == STATE_FULL_TRUST) return 0;
+        if (s == STATE_NEW_PROCESS && !order_pred_stuck(&table[j], table, count, grp_states, gcount, 0))
+            return 0;
+    }
+    return 1;
+}
 
 /* ── dependency cycle detection (DFS, three-color) ──────────────────── */
 

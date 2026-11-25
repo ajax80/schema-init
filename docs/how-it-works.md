@@ -95,6 +95,7 @@ The most-used keys:
 | `name` | *(required)* | Service name, used in logs, `dep=` and `schema-ctl` |
 | `exec` / `args` | *(required)* / — | Absolute path to the binary; one `args=` line per argument |
 | `dep` | — | Start after this service or group (repeat for several) |
+| `after` / `before` | — | Ordering only: start after the named service has finished starting, whether it worked or not; never blocks on its health |
 | `oneshot` | `0` | Runs to completion; exit 0 is success and it is not restarted |
 | `needs_root` / `user` | `0` / — | Require root, or run as this user |
 | `critical` | `0` | Never give up on it; its failure blocks dependents |

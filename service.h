@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <limits.h>
 #include <stdint.h>
+#include "group.h"
 #include <time.h>
 #include <pwd.h>
 #include <ctype.h>
@@ -31,6 +32,7 @@
 #define MAX_LISTEN      4
 #define MAX_COND        8
 #define MAX_DEPS        8
+#define MAX_ORDER       16  /* after= / before= lines each */
 #define MAX_RESTARTS    5
 #define COOLDOWN_SECS   5
 #define RESTART_RESET_SECS 300 /* a run this long before dying earns a fresh restart budget */
@@ -282,6 +284,10 @@ typedef struct {
     char             dep_name[MAX_DEPS][64]; /* dep names as written in .svc    */
     int              dep_idx[MAX_DEPS];      /* resolved service indices, -1=none */
     int              grp_dep_idx[MAX_DEPS];  /* resolved group indices, -1=none */
+    char             after_name[MAX_ORDER][64];  /* after=: start once it has finished starting */
+    char             before_name[MAX_ORDER][64]; /* before=: the same edge, written on the other end */
+    int              order_idx[MAX_SERVICES];    /* resolved after edges, own after= + others' before=, unique */
+    int              order_count;
     int              flags;                  /* SVC_* flags above               */
 
     schema_instance_t inst;
@@ -676,6 +682,16 @@ int service_open_trusted(const char *path);
 
 /* parse a single .svc file into svc; returns 0 on success, -1 on failure */
 int service_load_one(const char *path, service_t *svc);
+
+/* after=/before= names → order_idx; an edge that closes a cycle (through dep=,
+ * a dep= group's members, or other order edges) is dropped and logged, as
+ * systemd breaks ordering cycles */
+void services_resolve_order(service_t *table, int count, const group_t *groups, int gcount);
+
+/* 1 once every service it is ordered after has finished starting, either way,
+ * or can never start (its deps can't be met) */
+int service_order_ready(const service_t *svc, const service_t *table, int count,
+                        const uint8_t *grp_states, int gcount);
 
 /* detect dependency cycles; logs and returns number of cycles found */
 int services_check_cycles(service_t *table, int count);

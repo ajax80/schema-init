@@ -649,6 +649,25 @@ known = {"dbus", "polkitd", "tuned", "auditd", "network-manager", "cups"}
 dl, dn = si.dep_lines("tuned-ppd", si.parse_unit(
     "[Unit]\nRequires=tuned.service\nAfter=tuned.service network.target auditd.service\n[Service]\nType=dbus\nBusName=x\n"), known)
 check("Type=dbus + Requires -> dbus, polkitd, then tuned; plain After= not a dep", dl == ["dep=dbus", "dep=polkitd", "dep=tuned"] and dn == [])
+# --- After=/Before= -> after=/before= (ordering only) ---
+u = si.parse_unit("[Unit]\nRequires=tuned.service\nAfter=tuned.service network.target auditd.service cups.socket"
+                  " getty@tty1.service gone.service tuned-ppd.service\nBefore=network-manager.service\n"
+                  "[Service]\nExecStart=/bin/x\n")
+ol, on = si.order_lines("tuned-ppd", u, known, ["dep=tuned"])
+check("After= -> after= for known units; dep'd, targets, templates, unknown and self left out",
+      ol == ["after=auditd", "after=cups", "before=network-manager"] and on == [])
+ol, _ = si.order_lines("x", si.parse_unit("[Unit]\nRequires=cups.service\nBefore=cups.service auditd.service\n"), known, ["dep=cups"])
+check("Before= on a dep'd unit left out (PID 1 would drop it as a cycle)", ol == ["before=auditd"])
+ol, _ = si.order_lines("x", si.parse_unit("[Unit]\nAfter=dbus-broker.service NetworkManager.service\n"), known, [])
+check("After= resolves aliases", ol == ["after=dbus", "after=network-manager"])
+ol, _ = si.order_lines("x", si.parse_unit("[Unit]\nAfter=auditd.service\n"), set(), [])
+check("no known set -> no order lines", ol == [])
+kn = known | {"o%d" % i for i in range(18)}
+ol, on = si.order_lines("x", si.parse_unit("[Unit]\nAfter=" + " ".join("o%d.service" % i for i in range(18)) + "\n"), kn, [])
+check("after= capped at 16 with a note", len(ol) == 16 and on == ["dropped After on o16 o17 (limit 16)"])
+body = si.unit_to_svc("tuned-ppd", u, known=known)
+check("unit_to_svc writes after=/before=", "after=auditd" in body and "before=network-manager" in body
+      and "after=tuned" not in body)
 dl, _ = si.dep_lines("bd", si.parse_unit("[Service]\nType=dbus\nBusName=x\n"), {"dbus"})
 check("Type=dbus without a polkitd.svc -> dbus only", dl == ["dep=dbus"])
 fw = "[Unit]\nPartOf=dbus.service\n[Service]\nExecStart=/usr/bin/firewalld --nofork\n[Install]\nAlias=dbus-org.fedoraproject.FirewallD1.service\n"

@@ -211,6 +211,20 @@ static void test_sc_hash_tracks_set(void) {
     printf("ok test_sc_hash_tracks_set\n");
 }
 
+/* after=/before= lines only when set: older baselines have none for any service */
+static void test_order_lines(void) {
+    static service_t a, b;
+    char l[512];
+    load("x.svc", "name=x\nexec=/usr/bin/true\n", &a);
+    load("x.svc", "name=x\nexec=/usr/bin/true\nafter=p\nafter=q\nbefore=r\n", &b);
+    char *ta = ser(&a), *tb = ser(&b);
+    assert(!strstr(ta, "x.after=") && !strstr(ta, "x.before="));
+    assert(line_of(tb, "x.after=", l, sizeof l) && !strcmp(l, "x.after=p q"));
+    assert(line_of(tb, "x.before=", l, sizeof l) && !strcmp(l, "x.before=r"));
+    free(ta); free(tb);
+    printf("ok test_order_lines\n");
+}
+
 /* svc_keys[] is what verify splits lines on: it must be exactly what the emitters write */
 static void test_keys_table(void) {
     const char *const *em;
@@ -232,6 +246,7 @@ static void test_keys_table(void) {
 int main(void) {
     assert(mkdtemp(dir));
     test_keys_table();
+    test_order_lines();
     test_args_change();
     test_exec_pre_change();
     test_source_only();
