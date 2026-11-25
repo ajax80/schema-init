@@ -466,6 +466,7 @@ test: schema-init schema-init-pi schema-coredump schema-recorder schema-ctl sche
 	$(CC) $(CFLAGS) tests/test_svc_verify.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/verify && $(TESTDIR)/verify
 	$(CC) $(CFLAGS) tests/test_service_cycles.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cycles && $(TESTDIR)/cycles
 	$(CC) $(CFLAGS) tests/test_service_order.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/order && $(TESTDIR)/order
+	$(CC) $(CFLAGS) tests/test_ctl_gate.c -o $(TESTDIR)/ctl-gate && $(TESTDIR)/ctl-gate
 	$(CC) $(CFLAGS) tests/test_cgroup_kill.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c -lrt -o $(TESTDIR)/cgkill && $(TESTDIR)/cgkill
 	$(CC) $(CFLAGS) tests/test_landlock_tcp.c landlock.c -o $(TESTDIR)/landlock-tcp && $(TESTDIR)/landlock-tcp
 	$(CC) $(CFLAGS) tests/test_engine_conf.c engine.c engine_conf.c service.c watch.c seccomp.c schema.c group.c caps.c ns.c landlock.c svc_serial.c sha256.c -lrt -o $(TESTDIR)/engine-conf && $(TESTDIR)/engine-conf

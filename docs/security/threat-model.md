@@ -269,20 +269,19 @@ Every boundary fix needs a test that fails without the fix.
 | #179 broker validates messages | D-Bus | `tests/test_sdbus_forward.c`, fuzz harnesses |
 | #180 broker pre-auth flood, BEGIN without AUTH, match limit | D-Bus | `tests/test_sdbus_auth.c`, `tests/test_sdbus_driver.c` |
 | #472 per-connection inbound cap | D-Bus | `tests/test_sdbus_conn.c` |
-| #204 PID 1 umask 0 from initrd | PID 1 | **missing**: verified in a VM only |
+| #204 PID 1 umask 0 from initrd | PID 1 | `tests/qemu-ci/pid1-boot.sh`: boots through an `rdinit` that sets umask 000 and execs PID 1; a service's new file must be 0644 |
 | #390, #393, #394 fd close off PID 1's thread | notify socket | `tests/test_fdclose.c` |
 | #469 systemd1 bridge auth (polkit, fail-closed) | D-Bus / systemd1 | `tests/test_systemd1_authz.py` |
 | #470 logind setter / lock auth | logind | `tests/test_logind_authz.py` |
 | #477 import sandbox loss, secret modes | import | `tests/test_import_units.py` |
 | #479 control socket stuck reader, line deadline | control socket | `tests/test_ctl_socket.py` |
-| read-only verbs for group `schema` (7ceeaad) | control socket | **missing**: the test client is always PID 1's own euid |
+| read-only verbs for group `schema` (7ceeaad) | control socket | `tests/test_ctl_gate.c` (the verb allowlist, anchored); `tests/qemu-ci/pid1-boot.sh`: the socket is 0660 root:schema, a uid-1000 member of `schema` runs `status` and is refused `stop` |
+| broker per-uid connection cap | D-Bus | `tests/test_dbus_conn_cap.py`: the live broker keeps 256 connections from one uid, closes the 257th, frees a slot on close |
 | #572 logind extra-name bus policy | logind / D-Bus | `tests/test_logind_authz.py` |
 | #583 lingering-user authz opt-in | logind | `tests/test_logind_authz.py` (`linger_case`) |
 | #590 verify sandbox | verify | `sudo make verify-sandbox-live` (18 hostile probes and an unbuildable-sandbox case), CI job `verify-sandbox` |
 
-Gaps, for the next security PR: #204 (PID 1 umask) and the read-only-verb gate
-have no test that would catch a regression. The broker's per-uid connection cap
-has none either.
+Each of these fails with its fix removed (checked when the tests were added).
 
 ## Checklist for a change to privileged code
 
