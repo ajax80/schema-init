@@ -32,4 +32,6 @@ In scope: everything in this repository that ships in a release or package, incl
 
 Out of scope: problems that need root to begin with, unless they cross a boundary the project claims to hold (for example, `schema-ctl verify` running code from a boot entry it was only asked to inspect); bugs in the upstream software schema-init launches; and the `docs/` examples.
 
+What the project defends, against whom, and what holds each boundary: [docs/security/threat-model.md](docs/security/threat-model.md).
+
 The project's audits so far have been AI-assisted reviews, not an independent professional audit.

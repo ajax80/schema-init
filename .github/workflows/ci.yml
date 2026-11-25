@@ -41,6 +41,9 @@ jobs:
       - name: hostile init= fixtures
         run: sudo make verify-sandbox-live
 
+  # The QEMU guests (qemu-pid1, grub-fallback) run on every PR: under KVM each boot
+  # is seconds. A slow full-desktop boot test, when there is one, goes on a schedule.
+  #
   # stage 1 of PID 1 under QEMU: the real binary boots a minimal guest, runs
   # services and powers off through its own shutdown path (tests/qemu-ci/)
   qemu-pid1:
