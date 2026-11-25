@@ -56,11 +56,13 @@ dep=ci-daemon'
 
 ( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -1 ) > "$WORK/initramfs.gz"
 
-ACCEL=tcg
-[ -w /dev/kvm ] && ACCEL=kvm
+# the build host's CPU features, as the binary was built for it: qemu64 lacks AVX,
+# which the runner's static glibc uses (PID 1 died of SIGILL)
+ACCEL=tcg CPU=max
+[ -w /dev/kvm ] && ACCEL=kvm CPU=host
 echo ">> booting ($ACCEL, $(basename "$KERNEL"))"
 rc=0
-timeout "$TIMEOUT" qemu-system-x86_64 -accel "$ACCEL" -m 512 -smp 2 -no-reboot -nographic -nic none \
+timeout "$TIMEOUT" qemu-system-x86_64 -accel "$ACCEL" -cpu "$CPU" -m 512 -smp 2 -no-reboot -nographic -nic none \
     -kernel "$KERNEL" -initrd "$WORK/initramfs.gz" \
     -append "console=ttyS0 rdinit=/sbin/schema-init panic=-1 loglevel=4" \
     < /dev/null > "$SERIAL" 2>&1 || rc=$?
