@@ -17,7 +17,7 @@ Every key a schema-init service file understands. The [README](how-it-works.md#s
 | Key | Default | Description |
 |-----|---------|-------------|
 | `name` | *(required)* | Service name — used in logs, dep resolution, and schema-ctl commands |
-| `exec` | *(required)* | Absolute path to the binary to execute |
+| `exec` | *(required)* | Absolute path to the binary to execute. It runs through `execv`, with no PATH search: a relative path or a bare name runs whatever is at that path under `working_dir=` (or `/`). That is logged, and `schema-ctl verify` shows it as a WARN; a later release will refuse it. `schema-import` resolves `ExecStart=`'s bare names to a path |
 | `args` | — | One argument per line (repeat the key for multiple args), at most 62; more refuses the unit |
 | `dep` | — | Dependency by name (repeat for multiple deps, up to 8; can name a service or a group). More than 8 refuses the load. |
 | `oneshot` | `0` | Exit 0 → PERFECT and don't restart; exit non-zero → RECOVERY arc |

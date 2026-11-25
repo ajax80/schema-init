@@ -376,7 +376,8 @@ int diff_baseline(const char *base, const char *next, finding_t *out, int max, c
         else add(&c, F_FAIL, "%s", n.err[i] + 7);
     }
     for (int i = 0; i < n.nn; i++)
-        if (strstr(n.note[i], "dropped")) add(&c, F_WARN, "%s", n.note[i] + 6);
+        if (strstr(n.note[i], "dropped") || strstr(n.note[i], "is not an absolute path"))
+            add(&c, F_WARN, "%s", n.note[i] + 6);
     if (bv < BASELINE_VERSION) add(&c, F_WARN, "baseline from an older format; refreshed at the next good boot");
     /* a systemd entry runs no .svc files: nothing to compare them with */
     else if (!n.systemd) diff_services(&c, &b, &n);
