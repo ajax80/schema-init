@@ -556,12 +556,15 @@ def test_dracut_shim():
         with open(real, 'w') as f:
             f.write('#!/bin/sh\necho "$@" >> %s\n' % log)
         os.chmod(real, 0o755)
-        env = dict(os.environ, SCHEMA_INIT_DRACUT_PLUGIN=real)
+        shim_copy = os.path.join(d, '50-dracut.install')
+        src = open(DRACUT_SHIM).read()
+        assert src.count('DRACUT=/usr/lib/kernel/install.d/50-dracut.install') == 1
+        open(shim_copy, 'w').write(src.replace('DRACUT=/usr/lib/kernel/install.d/50-dracut.install', 'DRACUT=' + real))
 
         def shim(*args):
             if os.path.exists(log):
                 os.remove(log)
-            rc = subprocess.run(['sh', DRACUT_SHIM, *args], env=env).returncode
+            rc = subprocess.run(['sh', shim_copy, *args]).returncode
             return rc, open(log).read().strip() if os.path.exists(log) else None
 
         rc, got = shim('add', '7.3.6-1.cachyos1.schema.fc44.x86_64', '/boot/x', '/boot/vmlinuz')
@@ -572,6 +575,9 @@ def test_dracut_shim():
         check('stock kernel: dracut gets every arg', rc == 0 and got == 'add 6.17.1-300.fc44.x86_64 /boot/x /boot/vmlinuz', got)
         rc, got = shim('remove', '7.3.6-1.cachyos1.schema.fc44.x86_64', '/boot/x')
         check('schema kernel remove still reaches dracut', rc == 0 and got == 'remove 7.3.6-1.cachyos1.schema.fc44.x86_64 /boot/x', got)
+        os.remove(real)
+        rc, got = shim('add', '6.17.1-300.fc44.x86_64', '/boot/x', '/boot/vmlinuz')
+        check('no dracut installed: stock add succeeds', rc == 0 and got is None, (rc, got))
 
 
 def main():

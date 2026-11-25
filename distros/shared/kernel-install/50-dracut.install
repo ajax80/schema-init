@@ -1,8 +1,13 @@
 #!/bin/sh
-# Shadows dracut's plugin of the same name (kernel-install runs an /etc/kernel/install.d
-# file in place of the /usr/lib one) only to skip kernels built to boot with no
-# initramfs: for those dracut is a wasted run and ~60 MB of /boot nothing reads.
-# Everything else, and every remove, goes to dracut unchanged.
+# Shadows dracut's 50-dracut.install (the package links it into /etc/kernel/install.d,
+# which kernel-install runs in place of the /usr/lib one) only to skip kernels
+# built to boot with no initramfs: for those dracut is a wasted run and ~60 MB
+# of /boot nothing reads. kdump's add does nothing and the rescue image is one
+# per machine, so this is the only per-kernel dracut run. Everything else, and
+# every remove, goes to dracut unchanged.
 # Keep the pattern in step with is_noinitrd in 99-schema-init.install.
 case "$1:$2" in add:*-schema*|add:*.schema.*) exit 0 ;; esac
-exec "${SCHEMA_INIT_DRACUT_PLUGIN:-/usr/lib/kernel/install.d/50-dracut.install}" "$@"
+DRACUT=/usr/lib/kernel/install.d/50-dracut.install
+# no dracut installed: kernel-install would have skipped it, so do the same
+[ -x "$DRACUT" ] || exit 0
+exec "$DRACUT" "$@"

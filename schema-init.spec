@@ -98,7 +98,7 @@ install -Dm0755 scripts/09_schema_fallback %{buildroot}%{_sysconfdir}/grub.d/09_
 install -Dm0755 scripts/09_schema_bls_save %{buildroot}%{_sysconfdir}/grub.d/09_schema_bls_save
 install -Dm0755 scripts/11_schema_bls_restore %{buildroot}%{_sysconfdir}/grub.d/11_schema_bls_restore
 install -Dm0755 distros/shared/kernel-install/99-schema-init.install %{buildroot}%{_prefix}/lib/kernel/install.d/99-schema-init.install
-install -Dm0755 distros/shared/kernel-install/50-dracut.install %{buildroot}%{_sysconfdir}/kernel/install.d/50-dracut.install
+install -Dm0755 distros/shared/kernel-install/50-dracut.install %{buildroot}%{_libexecdir}/schema-init/50-dracut.install
 install -Dm0755 distros/fedora-kde/scripts/schema-plasma-autologin.sh %{buildroot}/usr/local/bin/schema-plasma-autologin.sh
 install -Dm0755 distros/fedora-kde/scripts/plasma-session-start.sh %{buildroot}/usr/local/bin/plasma-session-start.sh
 install -Dm0755 distros/fedora-kde/scripts/plasmashell-shim %{buildroot}/usr/local/bin/plasmashell-shim
@@ -439,6 +439,16 @@ if [ -f %{_sysconfdir}/kernel/install.d/99-schema-init.install ] &&
     echo "schema-init: kernel-install hook now ships in %{_prefix}/lib/kernel/install.d; old /etc copy kept as 99-schema-init.install.retired"
 fi
 mkdir -p %{_sharedstatedir}/schema-init && touch %{_sharedstatedir}/schema-init/kernel-hook-etc-retired || :
+# Skip dracut for -schema kernels by shadowing its plugin with a link to our
+# shim. Linked once and only into an empty slot: an admin's own 50-dracut
+# (a /dev/null mask, say) or a removed link stays as the admin left it.
+if [ ! -e %{_sysconfdir}/kernel/install.d/50-dracut.install ] &&
+   [ ! -L %{_sysconfdir}/kernel/install.d/50-dracut.install ] &&
+   [ ! -e %{_sharedstatedir}/schema-init/dracut-shim-linked ]; then
+    mkdir -p %{_sysconfdir}/kernel/install.d &&
+    ln -s %{_libexecdir}/schema-init/50-dracut.install %{_sysconfdir}/kernel/install.d/50-dracut.install || :
+fi
+touch %{_sharedstatedir}/schema-init/dracut-shim-linked || :
 # Installer ISOs before 0.4.13 copied the rail with the build host's uid,
 # which on the target is the first user: PID 1 runs those .svc files as root.
 if [ -n "$(find %{_sysconfdir}/schema-init -xdev \( ! -uid 0 -o ! -gid 0 -o \( ! -type l -perm /022 \) \) -print -quit 2>/dev/null)" ]; then
@@ -452,6 +462,12 @@ if [ -n "$(find %{_sysconfdir}/schema-init -xdev \( ! -uid 0 -o ! -gid 0 -o \( !
 fi
 
 %preun
+# a dangling link would fail every kernel-install add once the shim is gone
+if [ $1 -eq 0 ] && [ "$(readlink %{_sysconfdir}/kernel/install.d/50-dracut.install 2>/dev/null)" = %{_libexecdir}/schema-init/50-dracut.install ]; then
+    rm -f %{_sysconfdir}/kernel/install.d/50-dracut.install
+fi
+# a later reinstall links it again
+[ $1 -eq 0 ] && rm -f %{_sharedstatedir}/schema-init/dracut-shim-linked || :
 # Last removal on an opted-in box: drop the per-kernel schema entries (their
 # init= would point at a deleted binary) and move a default that pointed at one
 # back to its stock twin.
@@ -556,8 +572,7 @@ fi
 %{_sysconfdir}/grub.d/09_schema_bls_save
 %{_sysconfdir}/grub.d/11_schema_bls_restore
 %{_prefix}/lib/kernel/install.d/99-schema-init.install
-# plain %config: a fixed shim must reach boxes on update
-%config %{_sysconfdir}/kernel/install.d/50-dracut.install
+%{_libexecdir}/schema-init/50-dracut.install
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/services
 %config(noreplace) %{_sysconfdir}/logrotate.d/%{name}
