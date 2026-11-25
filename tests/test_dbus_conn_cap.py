@@ -2,12 +2,12 @@
 # Regression test for the broker's per-uid connection cap (SDBUS_MAX_CONN_PER_UID):
 # one local user connecting in a loop must not exhaust the root broker's fds. The
 # live broker, raw sockets: the cap is enforced at accept, before any auth.
-import os, re, resource, socket, subprocess, sys, tempfile, time
+import os, re, resource, shutil, socket, subprocess, sys, tempfile, time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BROKER = os.path.join(REPO, "schema-dbus")
-CAP = int(re.search(r"#define SDBUS_MAX_CONN_PER_UID (\d+)",
-                    open(os.path.join(REPO, "sdbus_conn.h")).read()).group(1))
+with open(os.path.join(REPO, "sdbus_conn.h")) as f:
+    CAP = int(re.search(r"#define SDBUS_MAX_CONN_PER_UID (\d+)", f.read()).group(1))
 results = []
 
 
@@ -29,7 +29,8 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, CAP + 64) if hard == resou
 d = tempfile.mkdtemp(prefix="sdbus-cap-")
 bus = os.path.join(d, "bus")
 policy = os.path.join(d, "dbus.policy")
-open(policy, "w").write("allow = send_type:method_call\nallow = send_type:method_return\n")
+with open(policy, "w") as f:
+    f.write("allow = send_type:method_call\nallow = send_type:method_return\n")
 env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": d,
        "SCHEMA_DBUS_SOCKET": bus, "SCHEMA_DBUS_POLICY": policy,
        "SCHEMA_DBUS_SVCDIRS": d + "/svc", "SCHEMA_DBUS_OVERRIDE_DIR": d + "/ovr",
@@ -67,15 +68,27 @@ try:
     check("connection %d from the same uid is closed" % (CAP + 1), dropped(extra))
     extra.close()
     held.pop().close()
-    time.sleep(0.2)
-    again = connect()
-    check("closing one frees a slot", not dropped(again, 0.5))
+    # the broker may take the new connection before the closed one's EOF: retry
+    for _ in range(20):
+        again = connect()
+        if not dropped(again, 0.5):
+            break
+        again.close()
+    else:
+        again = None
+    check("closing one frees a slot", again is not None)
     check("the broker is still running", proc.poll() is None)
-    for s in held + [again]:
+    for s in held + ([again] if again else []):
         s.close()
 finally:
     proc.terminate()
-    proc.wait(5)
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    log.close()
+    shutil.rmtree(d, ignore_errors=True)
 
 print("test_dbus_conn_cap: %s" % ("ok" if all(results) else "FAILED"))
 sys.exit(0 if all(results) else 1)

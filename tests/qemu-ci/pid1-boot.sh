@@ -40,7 +40,9 @@ cp "$WORK/schema-ctl" "$ROOT/bin/schema-ctl"
 cp "$BB" "$ROOT/bin/busybox"
 for a in sh cat echo sleep poweroff touch grep head cut stat; do ln -s busybox "$ROOT/bin/$a"; done
 # security regressions: a schema-group user for the control-socket gate, and an
-# initrd-style handoff with umask 0 (#204: systemd's initrd hands PID 1 umask 0)
+# initrd-style handoff with umask 0 (#204: systemd's initrd hands PID 1 umask 0).
+# Deliberate: PID 1 is exec'd from a shell, not by the kernel, as a dracut boot does;
+# a direct rdinit= boot (no initrd) is no longer what this job exercises
 printf 'root:x:0:0::/:/bin/sh\nciuser:x:1000:1000::/tmp:/bin/sh\n' > "$ROOT/etc/passwd"
 printf 'root:x:0:\nschema:x:900:ciuser\nciuser:x:1000:\n' > "$ROOT/etc/group"
 chmod 1777 "$ROOT/tmp"

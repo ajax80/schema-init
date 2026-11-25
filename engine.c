@@ -2996,7 +2996,6 @@ static void ctl_init(void) {
     listen(ctl_fd, 4);
 }
 
-
 /* Drain the sd_notify socket. A message counts only for a notify=1 service
  * whose cgroup (or main pid, when cgroups are unavailable) holds the sender. */
 static void notify_poll(int max_batch) {

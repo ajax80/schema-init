@@ -281,7 +281,10 @@ Every boundary fix needs a test that fails without the fix.
 | #583 lingering-user authz opt-in | logind | `tests/test_logind_authz.py` (`linger_case`) |
 | #590 verify sandbox | verify | `sudo make verify-sandbox-live` (18 hostile probes and an unbuildable-sandbox case), CI job `verify-sandbox` |
 
-Each of these fails with its fix removed (checked when the tests were added).
+The three added in #600 were each checked to fail with their fix removed. `test_ctl_gate.c`
+covers only the allowlist; the engine calling it is covered by the QEMU boot, so a run without
+KVM doesn't see that half. `test_dbus_conn_cap.py` skips as root (root is exempt from the cap);
+CI runs it as an unprivileged user.
 
 ## Checklist for a change to privileged code
 
