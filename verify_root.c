@@ -3,6 +3,8 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
+#include <linux/capability.h>
 #include <linux/openat2.h>
 #include <limits.h>
 #include <poll.h>
@@ -14,6 +16,8 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
@@ -306,19 +310,154 @@ int rootflags_data(const char *flags, int initrd, unsigned long *ms, char *out, 
     return 0;
 }
 
-static int run(char *const argv[], int ofd, int efd) {
-    static char *const envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
-    pid_t p = fork();
-    if (p == 0) {
-        int nul = open("/dev/null", O_RDONLY);
-        if (nul >= 0) dup2(nul, STDIN_FILENO);
-        dup2(ofd, STDOUT_FILENO);
-        dup2(efd, STDERR_FILENO);
+/* the host uid behind the target's uid 1 in the sandbox: one that owns no files, since
+ * --check trusts files owned by its own euid. Host root is mapped too, as 0, only so
+ * its root-owned-file rule reads as it would at boot; nothing runs as it */
+#define SANDBOX_HOST_UID 2147483646
+/* what --check had as real root and needs to read what the boot reads (0600 .svc files,
+ * 0700 dirs, exec= only root may run): over root-owned files only, the userns's own.
+ * Writes stay shut: the root is read-only and /proc holds nothing but processes */
+#define SANDBOX_CAPS ((1u << CAP_DAC_OVERRIDE) | (1u << CAP_DAC_READ_SEARCH))
+
+static int write_str(const char *path, const char *s) {
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    ssize_t n = fd < 0 ? -1 : write(fd, s, strlen(s));
+    if (fd >= 0) close(fd);
+    return n == (ssize_t)strlen(s) ? 0 : -1;
+}
+
+/* setup steps report on wfd (closed by a successful exec) and exit; no host fd survives */
+#define SB_DIE(...) do { dprintf(wfd, __VA_ARGS__); _exit(126); } while (0)
+
+static void sb_mount(int wfd, const char *src, const char *dst, const char *type, unsigned long fl, const char *data) {
+    if (mount(src, dst, type, fl, data)) SB_DIE("mount on %s: %m", dst);
+}
+
+/* bind src read-write or read-only onto dst; remounting the bind is what applies the flags */
+static void sb_bind(int wfd, const char *src, const char *dst, unsigned long fl) {
+    sb_mount(wfd, src, dst, NULL, MS_BIND | MS_REC, NULL);
+    sb_mount(wfd, NULL, dst, NULL, MS_REMOUNT | MS_BIND | fl, NULL);
+}
+
+/* pid 1 of the sandbox's pid namespace: builds its view of the target, then runs
+ * argv as uid 1 with only SANDBOX_CAPS and reports its status */
+static void sb_pid1(const char *root, char *const argv[], int ofd, int efd, int wfd) {
+    static const char *const devs[] = { "null", "zero", "full", "random", "urandom" };
+    char p[PATH_MAX];
+    sb_mount(wfd, NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
+    /* a private /dev: no block devices, no tty to push input into the operator's terminal */
+    snprintf(p, sizeof p, "%s/dev", root);
+    sb_mount(wfd, "schema-verify", p, "tmpfs", MS_NOSUID | MS_NOEXEC, "mode=0755,size=64k");
+    for (size_t i = 0; i < sizeof devs / sizeof *devs; i++) {
+        char h[32];
+        snprintf(p, sizeof p, "%s/dev/%s", root, devs[i]);
+        snprintf(h, sizeof h, "/dev/%s", devs[i]);
+        int fd = open(p, O_CREAT | O_WRONLY | O_CLOEXEC, 0666);
+        if (fd < 0) SB_DIE("create %s: %m", p);
+        close(fd);
+        sb_bind(wfd, h, p, MS_NOSUID | MS_NOEXEC);
+    }
+    snprintf(p, sizeof p, "%s/dev", root);
+    sb_mount(wfd, NULL, p, NULL, MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NOEXEC, NULL);
+    /* this namespace's own processes and nothing else: no /proc/sys, irq, sysrq-trigger,
+     * which root-owned and under CAP_DAC_OVERRIDE would be writable (Linux 5.8+) */
+    snprintf(p, sizeof p, "%s/proc", root);
+    sb_mount(wfd, "proc", p, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, "subset=pid");
+    snprintf(p, sizeof p, "%s/tmp", root);
+    sb_mount(wfd, "schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777,size=64m");
+    /* no setsid(): the deadline kills root_inspect's process group, and this stays in it.
+     * The terminal is out of reach anyway: no tty fd crosses, and /dev has no tty */
+    if (chroot(root) || chdir("/")) SB_DIE("chroot %s: %m", root);
+
+    pid_t c = fork();
+    if (c < 0) SB_DIE("fork: %m");
+    if (c == 0) {
+        for (int cap = 0; cap < 64; cap++)
+            if (!(cap < 32 && SANDBOX_CAPS & 1u << cap) && prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) && errno == EINVAL)
+                break;
+        /* --check writes one report in well under this and never forks; a hostile init gets
+         * this much. FSIZE: one byte over OUT_CAP, so collect() still sees an oversized report */
+        struct rlimit fsz = { OUT_CAP + 1, OUT_CAP + 1 }, np = { 64, 64 }, as = { 1UL << 30, 1UL << 30 };
+        struct __user_cap_header_struct h = { _LINUX_CAPABILITY_VERSION_3, 0 };
+        struct __user_cap_data_struct d[2] = { { SANDBOX_CAPS, SANDBOX_CAPS, SANDBOX_CAPS }, { 0, 0, 0 } };
+        if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) || prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) ||
+            setrlimit(RLIMIT_FSIZE, &fsz) || setrlimit(RLIMIT_NPROC, &np) || setrlimit(RLIMIT_AS, &as) ||
+            setgroups(0, NULL) || setresgid(1, 1, 1) || setresuid(1, 1, 1) || syscall(SYS_capset, &h, d) ||
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_DAC_OVERRIDE, 0, 0) ||
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_DAC_READ_SEARCH, 0, 0) ||
+            prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+            SB_DIE("drop privileges: %m");
+        /* prove the set rather than trust it */
+        if (syscall(SYS_capget, &h, d) || d[0].permitted != SANDBOX_CAPS || d[0].effective != SANDBOX_CAPS ||
+            d[1].permitted | d[1].effective | d[1].inheritable)
+            SB_DIE("capabilities other than DAC_OVERRIDE, DAC_READ_SEARCH left");
+        static char *const envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
+        int nul = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (nul < 0 || dup2(nul, STDIN_FILENO) < 0 || dup2(ofd, STDOUT_FILENO) < 0 || dup2(efd, STDERR_FILENO) < 0)
+            SB_DIE("stdio: %m");
         execve(argv[0], argv, envp);
         _exit(127);
     }
+    close(wfd);
     int st;
-    if (p < 0 || waitpid(p, &st, 0) < 0) return -1;
+    if (waitpid(c, &st, 0) < 0) _exit(126);
+    _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
+}
+
+int sandbox_run(const char *root, char *const argv[], int ofd, int efd, char *why, size_t wn) {
+    int sync[2], ack[2], rep[2];
+    why[0] = '\0';
+    if (pipe2(sync, O_CLOEXEC)) return snprintf(why, wn, "pipe: %s", strerror(errno)), -2;
+    if (pipe2(ack, O_CLOEXEC)) {
+        snprintf(why, wn, "pipe: %s", strerror(errno));
+        close(sync[0]), close(sync[1]);
+        return -2;
+    }
+    if (pipe2(rep, O_CLOEXEC)) {
+        snprintf(why, wn, "pipe: %s", strerror(errno));
+        close(sync[0]), close(sync[1]), close(ack[0]), close(ack[1]);
+        return -2;
+    }
+    pid_t p = fork();
+    if (p == 0) {
+        int wfd = rep[1];
+        close(sync[0]), close(ack[1]), close(rep[0]);
+        char b = 0;
+        if (unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWIPC | CLONE_NEWUTS |
+                    CLONE_NEWCGROUP))
+            SB_DIE("unshare: %m%s", errno == ENOSPC ? " (user.max_user_namespaces is 0?)"
+                                    : errno == EPERM ? " (verify running in a chroot or container?)" : "");
+        /* the maps are the parent's to write: only it holds CAP_SETUID over the host's ids */
+        if (write(sync[1], "", 1) != 1 || read(ack[0], &b, 1) != 1 || b != 1) SB_DIE("uid/gid map not written");
+        pid_t one = fork();
+        if (one < 0) SB_DIE("fork: %m");
+        if (one == 0) sb_pid1(root, argv, ofd, efd, wfd);
+        close(wfd);
+        int st;
+        if (waitpid(one, &st, 0) < 0) _exit(126);
+        _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
+    }
+    close(sync[1]), close(ack[0]), close(rep[1]);
+    char b, path[64], map[64];
+    int synced = p > 0 && read(sync[0], &b, 1) == 1, ok = synced;
+    if (ok) {
+        snprintf(map, sizeof map, "0 0 1\n1 %u 1\n", SANDBOX_HOST_UID);
+        snprintf(path, sizeof path, "/proc/%d/uid_map", (int)p);
+        ok = !write_str(path, map);
+        snprintf(path, sizeof path, "/proc/%d/gid_map", (int)p);
+        ok = ok && !write_str(path, map);
+    }
+    /* only to a child still waiting for it: a dead one's pipe would SIGPIPE us */
+    if (synced && write(ack[1], ok ? "\1" : "", 1) < 0) ok = 0;
+    close(sync[0]), close(ack[1]);
+    if (p < 0) snprintf(why, wn, "fork: %s", strerror(errno));
+    ssize_t n = read(rep[0], why, wn - 1);
+    close(rep[0]);
+    if (n > 0) why[n] = '\0';
+    else if (p > 0 && !ok) snprintf(why, wn, "cannot map the sandbox's ids: %s", strerror(errno));
+    int st;
+    if (p > 0 && waitpid(p, &st, 0) < 0) return snprintf(why, wn, "waitpid: %s", strerror(errno)), -2;
+    if (p < 0 || why[0]) return -2;
     return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
 }
 
@@ -437,7 +576,7 @@ int init_resolve(int ctl, const char *tgt, const char *init, char *real, size_t 
     snprintf(real, n, "%s", host[tl] ? host + tl : "/");
     /* one record per line */
     if (strchr(real, '\n')) return U("init=%s resolves to a path with a newline\n", init);
-    /* those are replaced by the host's or a tmpfs before init runs */
+    /* the sandbox mounts its own over those before init runs */
     static const char *const repl[] = { "/dev", "/proc", "/tmp" };
     for (size_t i = 0; i < sizeof repl / sizeof *repl; i++) {
         size_t rl = strlen(repl[i]);
@@ -487,8 +626,8 @@ int mountinfo_find(const char *mountinfo, dev_t dev, char *mp, size_t n) {
     return rc;
 }
 
-/* copies the --check report in cfd to out, after a B record for schema-bootok's exec= */
-static void bootok_exec(int ctl, int cfd, int out) {
+/* copies the --check report in cfd to out, after a B record for schema-bootok's exec= in tgt */
+static void bootok_exec(int ctl, const char *tgt, int cfd, int out) {
     struct stat st;
     char *m;
     if (fstat(cfd, &st) || !st.st_size) return;
@@ -501,7 +640,7 @@ static void bootok_exec(int ctl, int cfd, int out) {
         while (v + n < m + st.st_size && v[n] != '\n' && v[n] != '\t') n++;
         snprintf(path, sizeof path, "%.*s", (int)n, v);
         struct stat xs;
-        dprintf(ctl, "B %d\n", !stat(path, &xs) && S_ISREG(xs.st_mode) && (xs.st_mode & 0111) ? 1 : 2);
+        dprintf(ctl, "B %d\n", !stat_in_root(tgt, path, 0, &xs) && S_ISREG(xs.st_mode) && (xs.st_mode & 0111) ? 1 : 2);
     }
     for (off_t o = 0; o < st.st_size;) {
         ssize_t w = write(out, m + o, st.st_size - o);
@@ -597,37 +736,28 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     /* separate /boot: that partition is GRUB's root; else the root device's top level */
     boot_files_check(ctl, boot_is_separate("/proc/self/mountinfo") ? "/boot" : top, e);
 
-    /* before host /dev and /proc are bound in: init=/proc/self/exe must not resolve to verify itself */
+    /* before the sandbox mounts its /dev and /proc: init=/proc/self/exe must not resolve to verify itself */
     char real[PATH_MAX];
     if (init_resolve(ctl, tgt, init, real, sizeof real) || target_dirs_check(ctl, tgt)) return;
     dprintf(ctl, "I %s\n", real);
 
-    /* always chroot, even into the running root's subvolume: the fresh mount carries
-     * none of the host's submounts (/home, a split /usr), which the kernel won't have
-     * either; user=/group= and absolute symlinks resolve against the target */
-    for (size_t i = 0; i < sizeof target_sub / sizeof *target_sub; i++) {
-        char p[PATH_MAX];
-        snprintf(p, sizeof p, "%s%s", tgt, target_sub[i]);
-        if (i < 2 ? mount(target_sub[i], p, NULL, MS_BIND | MS_REC, NULL)
-                  : mount("schema-verify", p, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777")) {
-            U("cannot mount %s in the target: %m\n", target_sub[i]);
-            return;
-        }
-    }
-    if (chroot(tgt) || chdir("/")) {
-        U("cannot chroot into the target: %m\n");
-        return;
-    }
-
     /* by what it says, not its name: a renamed copy at /sbin/init still gets checked */
     int cap = memfd_create("schema-verify", MFD_CLOEXEC), errfd = memfd_create("schema-verify-err", MFD_CLOEXEC);
     char line[200];
-    /* run() would leave the child on our stdout, the report itself */
+    /* the sandbox would leave the child on our stdout, the report itself */
     if (cap < 0 || errfd < 0) {
         U("cannot capture init=%s's output: memfd_create: %m\n", init);
         return;
     }
-    int rc = run((char *[]){ real, "--version", NULL }, cap, cap);
+    /* always the target's own root, even the running root's subvolume: the fresh mount
+     * carries none of the host's submounts (/home, a split /usr), which the kernel won't
+     * have either; user=/group= and absolute symlinks resolve against the target */
+    char why[256];
+    int rc = sandbox_run(tgt, (char *[]){ real, "--version", NULL }, cap, cap, why, sizeof why);
+    if (rc == -2) {
+        U("cannot sandbox init=%s: %s\n", init, why);
+        return;
+    }
     first_line(cap, line, sizeof line);
     if (rc || strncmp(line, "schema-init ", 12)) {
         if (!strncmp(strrchr(real, '/') + 1, "schema-init", 11))
@@ -644,9 +774,17 @@ static void inspect(const bls_entry_t *e, const char *opts, const char *extra, c
     argv[ac] = NULL;
     /* through a memfd: schema-bootok's exec= is judged here, inside the target */
     int cfd = memfd_create("schema-verify-check", MFD_CLOEXEC);
-    rc = run(argv, cfd >= 0 ? cfd : out, errfd);
+    rc = sandbox_run(tgt, argv, cfd >= 0 ? cfd : out, errfd, why, sizeof why);
+    if (rc == -2) {
+        U("cannot sandbox init=%s: %s\n", init, why);
+        return;
+    }
+    if (rc == 128 + SIGXFSZ) {
+        U("%s --check output over %d MB\n", init, OUT_CAP >> 20);
+        return;
+    }
     dprintf(ctl, "C %d\n", rc);
-    if (cfd >= 0) bootok_exec(ctl, cfd, out);
+    if (cfd >= 0) bootok_exec(ctl, tgt, cfd, out);
     first_line(errfd, line, sizeof line);
     if (line[0]) dprintf(ctl, "E %s\n", line);
     /* 1 means error: lines in the output, which the caller judges; anything else is no report */
@@ -753,7 +891,7 @@ int root_inspect(const bls_entry_t *e, grubenv_t *env, int nenv, const char *ext
         close(out[0]);
         /* its own group, so the deadline kill also takes --version and --check */
         setpgid(0, 0);
-        /* no caller fd crosses into the chroot; ctl and out are only written here */
+        /* no caller fd crosses into the sandbox; ctl and out are only written here */
         close_range(3, ~0U, CLOSE_RANGE_CLOEXEC);
         inspect(e, opts, extra, base, ctl[1], out[1]);
         _exit(0);
