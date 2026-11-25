@@ -58,6 +58,24 @@ jobs:
           sudo install -m 0644 /boot/vmlinuz-$(uname -r) "$RUNNER_TEMP/vmlinuz"
           KERNEL="$RUNNER_TEMP/vmlinuz" sh tests/qemu-ci/pid1-boot.sh
 
+  # stage 4a: the boot-success guard's fallback under real Fedora GRUB (blscfg, which
+  # Ubuntu's GRUB lacks): a Fedora container on the runner, with its KVM
+  grub-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: real GRUB falls back to the snapshot entry
+        run: |
+          docker run --rm --device /dev/kvm -v "$PWD:/src" -w /src registry.fedoraproject.org/fedora:44 sh -ec '
+            dnf -y -q --disablerepo=fedora-cisco-openh264 install gcc make glibc-static file cpio busybox \
+              grub2-efi-x64-modules grub2-tools-extra edk2-ovmf mtools dosfstools util-linux \
+              qemu-system-x86-core kernel-core
+            KERNEL=$(ls /lib/modules/*/vmlinuz | head -1) sh tests/qemu-ci/grub-fallback.sh'
+
   # The C unit tests under ASan + UBSan; leaks off (PID 1's tables live
   # forever). `make test` compiles init.o but never links or runs schema-init,
   # so PID 1's own main loop is not covered here. STATIC_LDFLAGS is emptied
