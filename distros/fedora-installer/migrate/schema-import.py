@@ -1365,8 +1365,8 @@ def dep_lines(name, sections, known):
     the supervised one then loses the name and crash-loops. Bus daemons that
     are not Type=dbus (firewalld) count too: BusName=, Alias=dbus-org.*, or
     PartOf=dbus.service. Plain After= is ordering only in systemd and
-    never keeps a unit from starting, while dep= waits for the dep to settle,
-    so it is not translated. Returns (lines, notes)."""
+    never keeps a unit from starting, while dep= waits for the dep to settle:
+    order_lines makes it after=. Returns (lines, notes)."""
     if not known:
         return [], []
     cands = []
@@ -1420,6 +1420,34 @@ def dep_lines(name, sections, known):
                 notes.append("BindsTo=%s not bound: its dep= was dropped (limit 8)" % binds[0])
             if len(binds) > 1:
                 notes.append("BindsTo=%s: only the first is bind=, the rest dep= only" % " ".join(binds[1:]))
+    return lines, notes
+
+
+def order_lines(name, sections, known, deps):
+    """After=/Before= on a service or socket that has a schema .svc -> after=/
+    before= lines: ordering only, as in systemd. PID 1 holds a unit until the
+    other has finished starting, either way, and never fails it for that. A dep=
+    already orders, so its after= is left out. Targets have no .svc here."""
+    if not known:
+        return [], []
+    raw = {v: k for k, v in _UNIT_ALIAS.items()}
+    self_names = {name, _UNIT_ALIAS.get(name, name)}
+    have = {l[4:] for l in deps if l.startswith("dep=")}
+    lines, notes = [], []
+    for key, out in (("After", "after"), ("Before", "before")):
+        names = []
+        for u in " ".join(_get_all(sections.get("Unit", []), key)).split():
+            if not u.endswith((".service", ".socket")) or "@" in u:
+                continue
+            base = u.rsplit(".", 1)[0]
+            d = _UNIT_ALIAS.get(base, base)
+            d = d if d in known else raw.get(d, d)
+            if (d in known and d not in self_names and _UNIT_ALIAS.get(d, d) not in self_names
+                    and d not in names and not (out == "after" and d in have)):
+                names.append(d)
+        if len(names) > 16:   # MAX_ORDER: PID 1 refuses a 17th
+            notes.append("dropped %s on %s (limit 16)" % (key, " ".join(names[16:])))
+        lines += ["%s=%s" % (out, d) for d in names[:16]]
     return lines, notes
 
 
@@ -2112,6 +2140,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
     lines.extend(deps)
+    order, order_notes = order_lines(name, sections, known, deps)
+    lines.extend(order)
+    dep_notes = dep_notes + order_notes
     if known and not _USER:
         unmet = unmet_deps(name, sections, known)
         if unmet:

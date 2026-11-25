@@ -1818,6 +1818,7 @@ static void tick_service(service_t *svc,
             /* hold here silently until all deps reach a stable state */
             if (!service_deps_ready(svc, services, svc_count,
                                     grp_states, gcount)) break;
+            if (!service_order_ready(svc, services, svc_count)) break;
             if (svc->wait_socket[0] && !socket_accepts(svc->wait_socket)) {
                 if (!svc->sock_waiting) {
                     svc->sock_waiting = 1;
@@ -3421,6 +3422,7 @@ int validate_and_resolve(service_t *svc_table, int s_count, group_t *grp_table, 
             }
         }
     }
+    services_resolve_order(svc_table, s_count);
     return services_check_cycles(svc_table, s_count);
 }
 
@@ -3685,6 +3687,9 @@ static int shut_depends_on(const service_t *s, int target) {
             for (m = 0; m < groups[gi].member_count; m++)
                 if (groups[gi].member_idx[m] == target) return 1;
     }
+    /* after=/before= reverse at shutdown too, as systemd's ordering does */
+    for (k = 0; k < s->order_count; k++)
+        if (s->order_idx[k] == target) return 1;
     return 0;
 }
 

@@ -24,7 +24,7 @@ cycle dropping, and an existing `.svc` that already claims the same `exec=`.
 | **mapped** | the importer consulted it and no warning names it |
 | **warned** | consulted, and the generated `.svc` carries a `# schema-import WARN:` line, starting with that directive, saying what is lost |
 | **silent** | the importer never consulted it for this unit: lost without a word |
-| **inert** | no runtime effect in the `.svc`: `Description=`, `Documentation=`, and the `[Install]` keys only the enable step reads (`WantedBy=`, `RequiredBy=`, `UpheldBy=`, `Also=`, `DefaultInstance=`) |
+| **inert** | no runtime effect in the `.svc`: `Description=`, `Documentation=`, the `[Install]` keys only the enable step reads (`WantedBy=`, `RequiredBy=`, `UpheldBy=`, `Also=`, `DefaultInstance=`), and `Wants=` (`--enabled` imports what it names and every `.svc` starts on its own; without `After=`, systemd orders nothing either) |
 | **skipped-unit** | the unit was refused as a whole; its directives aren't classified |
 
 *Consulted* is measured, not guessed: each directive name is a `str` subclass
@@ -55,9 +55,6 @@ schema-init owns itself (`_denied`, e.g. 6 for core dumps).
 
 | directive | units | what it means |
 |---|---|---|
-| `Unit.After` | 102 | **ordering is not translated.** `dep=` comes only from `Requires=`/`Requisite=`/`BindsTo=` (plus the mount-fstab and dbus heuristics) |
-| `Unit.Before` | 76 | the same, reversed |
-| `Unit.Wants` | 51 | soft dependencies aren't translated. `Wants=X` + `After=X`, systemd's usual "start after X if it's around", becomes nothing |
 | `Service.RemainAfterExit` | 44 | probably harmless: a finished oneshot stays terminal here |
 | `Unit.Conflicts` | 31 | starting one doesn't stop the other |
 | `Service.ExecStop` | 17 | system imports stop by SIGTERM alone, by design (user imports map it), but without a warning |
@@ -67,11 +64,12 @@ schema-init owns itself (`_denied`, e.g. 6 for core dumps).
 | `Service.StandardOutput` / `StandardError` | 11 | |
 | `Unit.OnFailure` | 6 | failure handlers never run |
 
-**The finding that matters:** ordering-only and soft dependencies (`After=`,
-`Before=`, `Wants=`) are the most common silent loss. A service imported from a
-unit that says `Wants=foo.service After=foo.service` can start before `foo`.
-Translating them, and how they should map onto schema-init's model, is a design
-decision. This report only measures it.
+**The finding that mattered:** ordering-only and soft dependencies (`After=`,
+`Before=`, `Wants=`) were the most common silent loss (102, 76 and 51 units).
+They are now mapped: `After=`/`Before=` on a unit with a `.svc` become
+`after=`/`before=`, ordering only (see how-it-works.md), and `Wants=` is inert as
+above. Re-run on the same tree: **mapped 1744, warned 273, silent 214, inert 503**,
+and PID 1's loader still takes every imported `.svc`.
 
 ## Next
 
@@ -83,4 +81,4 @@ decision. This report only measures it.
    *in force* for the running service (the hardening vmtest does this for a few
    keys).
 3. Turn the silent list into warnings or mappings, one directive at a time,
-   starting with `After=`/`Wants=` once the mapping is decided.
+   next `RemainAfterExit=` and `Conflicts=`.

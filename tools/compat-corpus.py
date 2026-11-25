@@ -56,8 +56,10 @@ class Key(str):
 
 
 # no runtime effect in the .svc: descriptive, or the [Install] keys only the enable
-# step reads (Alias= is not here: dbus-org.* aliases add the dbus dep=)
-INERT = {("Unit", "Description"), ("Unit", "Documentation"), ("Install", "WantedBy"),
+# step reads (Alias= is not here: dbus-org.* aliases add the dbus dep=). Wants=:
+# --enabled imports what it names and every .svc starts on its own; with no
+# After= systemd orders nothing either, and After= is read for after=
+INERT = {("Unit", "Description"), ("Unit", "Documentation"), ("Unit", "Wants"), ("Install", "WantedBy"),
          ("Install", "RequiredBy"), ("Install", "UpheldBy"), ("Install", "Also"),
          ("Install", "DefaultInstance")}
 

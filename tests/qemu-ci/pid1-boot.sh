@@ -1,6 +1,6 @@
 #!/bin/sh
 # CI stages 1-2: the real schema-init boots as PID 1 in a minimal QEMU guest, starts
-# services, recovers a crashing one (its dependent waits for the recovery), re-execs
+# services in after=/before= order, recovers a crashing one (its dependent waits for the recovery), re-execs
 # itself with the running services kept, and powers off through its own shutdown path. Busybox initramfs, no
 # disk; the host's kernel (KERNEL=). Exit 0 only on a clean boot and poweroff.
 set -eu
@@ -67,6 +67,38 @@ svc ci-dependent 'name=ci-dependent
 exec=/bin/ci-dependent
 oneshot=1
 dep=ci-crasher'
+# after=/before= (ordering only): ci-ordered waits for ci-slow to finish starting and
+# for ci-early, which names it in before=; ci-after-fail starts once ci-broken's
+# first run has failed, and a name with no .svc holds nothing
+printf '#!/bin/sh\nsleep 2\ntouch /run/ci-slow.ready\nwhile :; do sleep 1; done\n' > "$ROOT/bin/ci-slow"
+chmod +x "$ROOT/bin/ci-slow"
+svc ci-slow 'name=ci-slow
+exec=/bin/ci-slow
+ready_path=/run/ci-slow.ready'
+svc ci-early 'name=ci-early
+exec=/bin/sh
+args=-c
+args=sleep 1; touch /run/ci-early.done
+oneshot=1
+before=ci-ordered'
+svc ci-ordered 'name=ci-ordered
+exec=/bin/sh
+args=-c
+args=if [ -e /run/ci-slow.ready ] && [ -e /run/ci-early.done ]; then echo CI-AFTER-ORDERED; else echo CI-AFTER-EARLY; fi > /dev/console
+oneshot=1
+after=ci-slow
+after=ci-missing'
+svc ci-broken 'name=ci-broken
+exec=/bin/sh
+args=-c
+args=echo CI-BROKEN-RAN > /dev/console; exit 1
+max_restarts=1'
+svc ci-after-fail 'name=ci-after-fail
+exec=/bin/sh
+args=-c
+args=echo CI-AFTER-FAIL-RAN > /dev/console
+oneshot=1
+after=ci-broken'
 # schema-ctl poweroff, so the control socket and PID 1's own shutdown run; poweroff -f
 # would bypass both. The fallback only ends a wedged run, and is a failure
 cat > "$ROOT/bin/ci-finish" <<'EOF'
@@ -94,7 +126,9 @@ exec=/bin/ci-finish
 oneshot=1
 dep=ci-hello
 dep=ci-daemon
-dep=ci-dependent'
+dep=ci-dependent
+dep=ci-ordered
+dep=ci-after-fail'
 
 ( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -1 ) > "$WORK/initramfs.gz"
 
@@ -120,6 +154,10 @@ grep -q CI-CRASH-2 "$SERIAL" || miss "ci-crasher did not crash twice"
 grep -Eq 'CI-CRASHER: .*restarts=2[^0-9]*$' "$SERIAL" || miss "ci-crasher's restarts are not 2"
 grep -q CI-DEP-AFTER-RECOVERY "$SERIAL" || miss "ci-dependent did not wait for ci-crasher's recovery"
 grep -q CI-DEP-EARLY "$SERIAL" && miss "ci-dependent started on a dead ci-crasher run"
+grep -q CI-AFTER-ORDERED "$SERIAL" || miss "after=/before= did not hold ci-ordered until ci-slow was ready and ci-early done"
+grep -q CI-AFTER-EARLY "$SERIAL" && miss "ci-ordered started before what it is ordered after"
+grep -q CI-BROKEN-RAN "$SERIAL" || miss "ci-broken never ran"
+grep -q CI-AFTER-FAIL-RAN "$SERIAL" || miss "after= on a failing service held its follower"
 grep -Eq 're-exec .* [1-9][0-9]* adopted, 0 new' "$SERIAL" || miss "PID 1 did not re-exec and adopt its services"
 # a rolled-back re-exec logs the same adopt line; only the client's reply differs
 grep -q 'ok: re-executed into' "$SERIAL" || miss "re-exec not confirmed (rolled back?)"
@@ -129,7 +167,7 @@ grep -q 'PID 1 poweroff' "$SERIAL" || miss "PID 1 never reached poweroff"
 grep -q CI-WEDGED "$SERIAL" && miss "shutdown wedged, forced off"
 grep -q 'Kernel panic' "$SERIAL" && miss "kernel panic (PID 1 died?)"
 if [ "$pass" = 1 ]; then
-    echo ">> PASS: PID 1 booted, recovered a crash in dependency order, re-exec kept services, powered off cleanly"
+    echo ">> PASS: PID 1 booted, ordered after=/before=, recovered a crash in dependency order, re-exec kept services, powered off cleanly"
 else
     echo ">> FAIL — serial:"
     cat "$SERIAL"

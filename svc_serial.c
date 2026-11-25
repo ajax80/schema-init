@@ -244,6 +244,13 @@ static void em_deps(lines_t *L, const service_t *s) {
     for (int i = 0; i < MAX_DEPS && s->dep_name[i][0]; i++) sb_item(&b, s->dep_name[i]);
     add_sb(L, s, "dep", &b);
     add_str(L, s, "bind", s->bind_name);
+    /* only when set: an empty line for every service would read as a change
+     * against every baseline written before these keys existed */
+    sb_t af = { 0 }, bf = { 0 };
+    for (int i = 0; i < MAX_ORDER && s->after_name[i][0]; i++) sb_item(&af, s->after_name[i]);
+    if (af.items) add_sb(L, s, "after", &af);
+    for (int i = 0; i < MAX_ORDER && s->before_name[i][0]; i++) sb_item(&bf, s->before_name[i]);
+    if (bf.items) add_sb(L, s, "before", &bf);
 }
 
 static void em_flags(lines_t *L, const service_t *s) {
@@ -401,7 +408,7 @@ static const struct {
     { em_landlock, { "landlock_ro", "landlock_rw", "landlock_bind_tcp", "landlock_connect_tcp" } },
     { em_sc, { "syscall_filter", "syscall_error_number", "syscall_architectures", "restrict_suid_sgid",
                "lock_personality", "restrict_realtime", "restrict_namespaces" } },
-    { em_deps, { "dep", "bind" } },
+    { em_deps, { "dep", "bind", "after", "before" } },
     { em_flags, { "oneshot", "needs_root", "critical", "stop_first", "main_pid_notify", "persistent" } },
     { em_ready, { "notify", "ready_bus_name", "ready_path", "pid_file", "wait_socket", "ready_poll_hz",
                   "stable_secs", "start_timeout_sec", "fdstore", "verify_memory_max", "verify_cpu_max",
@@ -456,6 +463,8 @@ int svc_serial_keys(const char *const **out) {
     if (!keys) {
         lines_t L = { 0 };
         service_t *s = calloc(1, sizeof *s);
+        /* em_deps writes these only when set */
+        s->after_name[0][0] = s->before_name[0][0] = 'x';
         for (size_t p = 0; p < sizeof props / sizeof *props; p++) props[p].emit(&L, s);
         free(s);
         for (int i = 0; i < L.n; i++) {
