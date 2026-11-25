@@ -3455,6 +3455,13 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                     svc->name[0] ? svc->name : path, val);
             return -1;
         }
+        /* execv, no PATH search: a relative one would run whatever sits at that path
+         * under the working directory. schema-import already writes the absolute path */
+        if (val[0] != '/') {
+            fprintf(stderr, "[schema-init] %s: exec=%s is not an absolute path\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
         strncpy(svc->exec, val, sizeof(svc->exec) - 1);
         if (svc->argv[0] != svc->exec) free(svc->argv[0]);
         svc->argv[0] = svc->exec;

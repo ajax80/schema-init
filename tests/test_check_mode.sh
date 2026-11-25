@@ -202,6 +202,17 @@ grep -q '^error: a\.svc: zz: exec=/bin/sleep 1 has whitespace' "$T/out" || fail 
 grep -q '^error: zz\.svc: zz: exec=/bin/echo two words has whitespace' "$T/out" || fail "ws: zz.svc reason"
 grep -q '^note: .*has whitespace' "$T/out" && fail "ws: reason repeated as a note"
 
+# exec= runs through execv with no PATH search: a relative path is refused, not resolved
+newroot relexec
+svc "$S" rel relative/path
+svc "$S" bare true
+svc "$S" ok
+check --root "$R" --cmdline ""
+[ $rc -eq 1 ] || fail "relexec: exit $rc"
+grep -q '^error: rel\.svc: rel: exec=relative/path is not an absolute path' "$T/out" || fail "relexec: rel.svc reason"
+grep -q '^error: bare\.svc: bare: exec=true is not an absolute path' "$T/out" || fail "relexec: bare.svc reason"
+grep -q '^error: ok\.svc' "$T/out" && fail "relexec: absolute exec refused"
+
 # --svc-dir is a path under the root, so absolute
 newroot reldir
 svc "$S" a
