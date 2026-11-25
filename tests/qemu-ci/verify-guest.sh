@@ -1,5 +1,5 @@
 #!/bin/sh
-# CI stage 4b: schema-ctl verify against a real boot layout, from inside the box it
+# CI stage 4b (4a is grub-fallback.sh): schema-ctl verify against a real boot layout, from inside the box it
 # judges. OVMF boots GRUB (blscfg) off a FAT ESP; the BLS entry boots a tiny
 # initramfs that mounts the ext4 root and switch_roots into schema-init, as dracut
 # would. In that guest verify runs on the live /boot/grub2 + /boot/loader/entries:
@@ -9,6 +9,8 @@
 # The unit tests judge fixtures; this is the same code on a mounted root, real grubenv,
 # real grub.cfg and a real --check run by the next boot's init.
 set -eu
+# the guest refuses group/world-writable .svc files; a umask of 002 (Fedora private groups) would make them so
+umask 022
 cd "$(dirname "$0")/../.."
 KERNEL=${KERNEL:-/boot/vmlinuz-$(uname -r)}
 # /lib/modules/<v>/vmlinuz (Fedora's kernel-core) or /boot/vmlinuz-<v>
@@ -16,7 +18,6 @@ case $KERNEL in /lib/modules/*/vmlinuz) KMOD=${KMOD:-$(dirname "$KERNEL")} ;; *)
 BB=${BUSYBOX:-$(command -v busybox)}
 GRUBDIR=${GRUBDIR:-/usr/lib/grub/x86_64-efi}
 OVMF=${OVMF:-/usr/share/edk2/ovmf}
-TIMEOUT=${TIMEOUT:-240}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
@@ -36,7 +37,12 @@ MK
 # shellcheck disable=SC2086
 cc -static -O2 -std=c99 -D_GNU_SOURCE -I. -DSCHEMA_INIT_VERSION='"ci"' -o "$WORK/schema-ctl" $SCTL_SRCS -lrt
 
-OPTS="console=ttyS0 root=/dev/vda2 rw init=/sbin/schema-init panic=1 loglevel=4"
+ACCEL=tcg CPU=max
+[ -w /dev/kvm ] && ACCEL=kvm CPU=host
+# emulated, the boot and four verify runs take minutes; the guest watchdog scales with it
+if [ "$ACCEL" = tcg ]; then TIMEOUT=${TIMEOUT:-900} WD=600; else TIMEOUT=${TIMEOUT:-240} WD=150; fi
+# panic=-1 + -no-reboot: a dead PID 1 ends the run, not a reboot loop through GRUB
+OPTS="console=ttyS0 root=/dev/vda2 rw init=/sbin/schema-init panic=-1 loglevel=4 ci_wd=$WD"
 
 # initramfs: the disk driver if it's a module, mount root, hand over to init= (busybox switch_root)
 I=$WORK/initrd
@@ -85,7 +91,8 @@ printf 'name=ci-idle\nexec=/bin/sleep\nargs=100000\n' > "$R/etc/schema-init/serv
 
 cat > "$R/bin/ci-verify" <<'EOF'
 #!/bin/sh
-( sleep 150; echo CI-WEDGED > /dev/console; poweroff -f ) &
+wd=$(sed -n 's/.*ci_wd=\([0-9]*\).*/\1/p' /proc/cmdline)
+( sleep "${wd:-150}"; echo CI-WEDGED > /dev/console; poweroff -f ) &
 v() {
     echo "CI-VERIFY-BEGIN $1" > /dev/console
     /bin/schema-ctl verify > /dev/console 2>&1; rc=$?
@@ -127,12 +134,9 @@ mmd $M ::/EFI ::/EFI/BOOT
 mcopy $M "$WORK/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
 cp "$OVMF/OVMF_VARS.fd" "$WORK/vars.fd"
 
-ACCEL=tcg CPU=max
-[ -w /dev/kvm ] && ACCEL=kvm CPU=host
-[ "$ACCEL" = tcg ] && TIMEOUT=${TIMEOUT_TCG:-600}
 echo ">> booting ($ACCEL)"
 rc=0
-timeout "$TIMEOUT" qemu-system-x86_64 -accel "$ACCEL" -cpu "$CPU" -machine q35 -m 768 -nographic -nic none \
+timeout "$TIMEOUT" qemu-system-x86_64 -accel "$ACCEL" -cpu "$CPU" -machine q35 -m 768 -no-reboot -nographic -nic none \
     -drive if=pflash,format=raw,readonly=on,file="$OVMF/OVMF_CODE.fd" \
     -drive if=pflash,format=raw,file="$WORK/vars.fd" \
     -drive file="$D",format=raw,if=virtio \
@@ -150,7 +154,7 @@ sec clean | grep -q 'services match the baseline' || miss "clean: services did n
 sec clean | grep -q '^\[FAIL\]' && miss "clean: a FAIL"
 sec missing-init | grep -q 'FAIL\] .*ci-next.*init=/sbin/ci-no-such-init does not exist in the target' || miss "missing-init: not a FAIL"
 sec missing-init | grep -q 'CI-VERIFY-END missing-init rc=1' || miss "missing-init: verify did not exit 1"
-sec lost-service | grep -Eq 'FAIL\].*ci-idle' || miss "lost-service: ci-idle not a FAIL"
+sec lost-service | grep -q 'FAIL\] ci-idle.svc: REFUSED .*writable only by its owner' || miss "lost-service: ci-idle.svc's refusal not a FAIL"
 sec lost-service | grep -q 'CI-VERIFY-END lost-service rc=1' || miss "lost-service: verify did not exit 1"
 grep -q 'PID 1 poweroff' "$L" || miss "no clean poweroff"
 grep -q CI-WEDGED "$L" && miss "wedged, forced off"

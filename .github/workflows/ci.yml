@@ -58,9 +58,9 @@ jobs:
           sudo install -m 0644 /boot/vmlinuz-$(uname -r) "$RUNNER_TEMP/vmlinuz"
           KERNEL="$RUNNER_TEMP/vmlinuz" sh tests/qemu-ci/pid1-boot.sh
 
-  # stage 4: the boot-success guard's fallback under real Fedora GRUB, and verify run
-  # inside a guest booted through it (blscfg, which
-  # Ubuntu's GRUB lacks): a Fedora container on the runner, with its KVM
+  # stage 4a: the boot-success guard's fallback under real Fedora GRUB (blscfg, which
+  # Ubuntu's GRUB lacks); stage 4b: verify run inside a guest booted through it.
+  # A Fedora container on the runner, with its KVM
   grub-fallback:
     runs-on: ubuntu-latest
     timeout-minutes: 20
