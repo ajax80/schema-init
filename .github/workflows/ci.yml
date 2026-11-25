@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     container: registry.fedoraproject.org/fedora:44
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: deps
         run: >
           dnf -y --disablerepo=fedora-cisco-openh264 install gcc make glibc-static libacl-devel dbus-devel libzstd-devel
@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     container: registry.fedoraproject.org/fedora:44
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: deps
         run: >
           dnf -y --disablerepo=fedora-cisco-openh264 install gcc make glibc-static libacl-devel dbus-devel libzstd-devel
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     container: registry.fedoraproject.org/fedora:44
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: deps
         run: dnf -y --disablerepo=fedora-cisco-openh264 install clang compiler-rt make dbus-devel
       - name: fuzz 60s per harness
