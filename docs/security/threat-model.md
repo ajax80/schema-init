@@ -13,8 +13,9 @@ desktops and small servers; none of it is meant to face the network.
 1. **Root on the box**: code execution as uid 0, or with capabilities.
 2. **Devices**: input (keyloggers), DRM/GPU, sound, cameras and USB, which logind
    and udev grant to the active session.
-3. **Power and session control**: reboot, poweroff, suspend, session lock/unlock,
-   and hostname/time/locale setters.
+3. **Power and session control**: reboot, poweroff, session lock/unlock, linger,
+   and hostname/time/locale setters. (There is no suspend or hibernate:
+   `CanSuspend` answers `na`, by design.)
 4. **Service integrity**: which services run, how, as whom and with what sandbox,
    and that a service can't be killed, frozen or impersonated by someone else.
 5. **The next boot**: that what verify says about the next boot holds, and that a
@@ -29,7 +30,7 @@ desktops and small servers; none of it is meant to face the network.
 | **A2** | code running as a service's user, or as root with a reduced capability set | a compromised daemon; a buggy service |
 | **A3** | a lingering user with no session | background jobs left behind after logout |
 | **A4** | a crafted **boot entry or root filesystem** that verify is asked to inspect | a snapshot entry, or a foreign root on another disk |
-| **A5** | a crafted **unit file** that an admin imports | a systemd unit from a third-party package |
+| **A5** | a crafted **unit file** in any installed package | a systemd unit from a third-party RPM: the package's file trigger imports it as root with no admin step |
 | **A6** | physical access to the console | out of scope beyond the session rules below |
 
 Out of scope: an attacker who already has root and holds no boundary the project
@@ -40,16 +41,19 @@ schema-init launches; the kernel.
 
 | Component | Runs as | Untrusted input | Channel |
 |---|---|---|---|
-| PID 1 (`init.c`, `engine.c`, `service.c`) | root | control commands (A1 in group `schema`, A2); notify messages and passed fds (any local user) | `/run/schema-init.sock` root:schema 0660; `/run/schema-init/notify` 0666 datagram, `SO_PASSCRED` |
-| PID 1's `.svc` loader | root | `.svc` files and drop-ins | the filesystem: root-owned, not group/world-writable, or refused |
-| `schema-ctl verify` → `verify_root.c` | root | another root filesystem's `init=` binary and `.svc` files (A4) | runs the target's `init= --version` / `--check` |
+| PID 1 (`init.c`, `engine.c`, `service.c`) | root | control commands (A1 in group `schema`, A2); notify messages and passed fds (any local user) | `/run/schema-init.sock`, root:schema 0660 when a `schema` group exists, else 0600; `/run/schema-init/notify` 0666 datagram, `SO_PASSCRED`; `/dev/shm/schema-init` 0644 (read-only export) |
+| PID 1's `.svc` loader | root | `.svc` files and drop-ins | the filesystem: each file must be root-owned and not group/world-writable, or it is refused |
+| `schema-ctl verify` → `verify_root.c` | root | another root filesystem (A4): the kernel mounts it; its `init=` runs; its `--check` report is parsed | mount; the #590 sandbox; the report pipe |
 | `schema-logind.py` (login1, ConsoleKit, hostname1, timedate1, locale1) | root | D-Bus method calls (A1, A2, A3) | the system bus |
-| `schema-systemd1.py` (org.freedesktop.systemd1 bridge) | root | D-Bus method calls (A1, A2) | the system bus |
-| `schema-dbus` (bus broker) | root | every message from every peer (A1, A2, A3) | `/run/dbus/system_bus_socket` 0777; policy decides who may send what |
+| `schema-systemd1.py` (org.freedesktop.systemd1 bridge) | root | D-Bus method calls (A1, A2), including `AttachProcessesToUnit` | the system bus; `/run/systemd/private` 0600 (root only, no polkit) |
+| `schema-dbus` (bus broker) | root | every message from every peer (A1, A2, A3); activation requests by bus name | `/run/dbus/system_bus_socket` 0777; policy decides who may send what |
+| `schema-journal-sink` | root | log lines and passed fds from any local user (A1, A2) | `/dev/log`, `/run/systemd/journal/socket` and `stdout`, all 0666 |
+| `schema-recorder` | root | every process's `/proc` strings; coredump records | its socket is 0600; it publishes a 0644 shm |
 | `schema-udev` | root | kernel uevents; rules files | netlink group 1, sender pid 0 only (`schema-udev.c:59`); rules from root-owned dirs |
-| `schema-coredump` | root, as `core_pattern` pipe | the core image of any crashing process (A1, A2) | the kernel pipe |
+| `schema-coredump` | root, as `core_pattern` pipe | a crashing process's `/proc/<pid>/comm`, `exe`, `cmdline` and `cgroup` (A1, A2); the core itself is streamed into zstd unparsed | the kernel pipe |
 | `schema-user` | the user | that user's own `.svc` files | `$XDG_RUNTIME_DIR/schema-user/services` |
-| `schema-import` | root (admin-run) | systemd unit files (A5) | files on disk |
+| `schema-import` | root: run by an admin, **and by RPM file triggers** whenever any package installs a unit or a D-Bus service file | systemd unit files and D-Bus `.service` files (A5) | files on disk |
+| passwordless sudo grants | root | argv to `schema-flip-apply` (ISO, the login user, 20 subcommands) and `schema-migrate` (`%wheel`, 10 flags), plus the state they read | `/etc/sudoers.d/schema-flip`, `/etc/sudoers.d/schema-wizard` |
 | socket activation (`listen=`) | root binds, hands off | none read by PID 1 | the admin chooses the port; the fd goes to the service unread |
 
 **No network listeners.** PID 1, logind, udev and the broker open no INET socket
@@ -60,17 +64,18 @@ ioctl handles. `listen=` binds what the admin configured and passes it on.
 
 ### PID 1 control socket (A1, A2)
 
-- **Who may connect:** root:schema 0660. The uid comes from `SO_PEERCRED`,
-  never from the message.
+- **Who may connect:** root:schema 0660 when a `schema` group exists, else root
+  only (0600). The uid comes from `SO_PEERCRED`, never from the message.
 - **Who may change things:** root (and PID 1's own euid) run every verb; members
   of `schema` get read-only verbs only (`engine.c` peer check before `ctl_cmd`).
 - **Freezing the supervisor:** a client that asks for output and never reads it
   used to block PID 1 on a full send buffer. Each reply is now built in a buffer
-  and sent with `MSG_DONTWAIT`, so PID 1 never waits on a client that doesn't
-  read (#479).
+  and sent with `MSG_DONTWAIT`, with a 250 ms deadline per command line, so PID 1
+  never waits on a client that doesn't read (#479).
 - **Residual:** anyone in `schema` can read every service's state and command
-  line. Treat `schema` membership as "may see the process table, privileged
-  commands included".
+  line. And **every** local user can read service names, states and pids from
+  PID 1's `/dev/shm/schema-init` export (0644). Treat the service list as public
+  on the box.
 
 ### Notify socket (any local user)
 
@@ -87,17 +92,26 @@ ioctl handles. `listen=` binds what the admin configured and passes it on.
 
 ### `.svc` files and the loader (A2, A5)
 
-- **Trust:** a `.svc` must be a regular file owned by root (or the
+- **Trust, per file:** a `.svc` must be a regular file owned by root (or the
   supervisor's euid) and not group- or world-writable
-  (`service_open_trusted`). Otherwise `REFUSED`. Symlinks under service
-  directories are followed only from an admin-owned directory (`dir_trusted`).
+  (`service_open_trusted`). Otherwise `REFUSED`. A `.svc` symlink is followed
+  (no `O_NOFOLLOW`), and only the target's owner and mode decide.
+- **Trust, per directory:** a service directory, or a parent, that someone
+  other than root could write gets a WARN and still loads; only `schema-ctl
+  reload` is refused there (`service.c` `services_load`). `dir_trusted` is a
+  different check: it governs symlinks PID 1 meets while creating state, runtime
+  and listen directories for a service.
 - **Sandbox loss on import:** `schema-import` maps systemd sandboxing it
-  understands and **warns** about what it drops. A `DynamicUser=` with no `User=`
-  stays root with a warning; secrets are no longer copied 0600 → 0644 (#477).
+  understands and **warns** about what it drops. `DynamicUser=` maps to
+  `dynamic_user=1`, an allocated uid (#540); `RemoveIPC=` and
+  `RestrictSUIDSGID=` are warned as not enforced. Secrets are no longer copied
+  0600 → 0644 (#477).
 - **`exec=`:** runs through `execv`, with no PATH search. A relative path is a
   warning today and verify shows it as a WARN; a later release refuses it (#596).
-- **Residual:** an admin who imports a hostile unit gets a service doing what the
-  unit says. The importer is a translator, not a vetting tool.
+- **Residual:** the RPM file trigger imports every unit a package ships, as root,
+  with no admin step. A package that ships a hostile unit gets a service doing
+  what the unit says, as it would under systemd. The importer is a translator,
+  not a vetting tool.
 
 ### `schema-ctl verify` and the boot entries it inspects (A4)
 
@@ -113,9 +127,14 @@ never boot, so their `init=` is untrusted.
 - If the sandbox can't be built, the result is UNRESOLVED; the binary never runs
   any other way.
 - A 30 s deadline kills the whole process group, which the sandbox stays in.
+- Outside the sandbox, root parses the target's `--check` report, as text with
+  bounded size, and `stat`s the `schema-bootok.exec=` path it names, resolved
+  inside the target.
 - **Residual:** the target can still read anything root can read on its own
   read-only root. That is the point of the inspection, and nothing leaves except
-  the report.
+  the report. The kernel's filesystem code mounts a possibly crafted image,
+  read-only, with log replay refused. A filesystem driver bug is the kernel's,
+  but it is reachable from here.
 
 ### schema-logind (A1, A2, A3)
 
@@ -124,9 +143,12 @@ never boot, so their `init=` is untrusted.
   single active local one, else nobody). A lingering user with no session (A3)
   is nobody unless the admin opts in with `/etc/schema-init/logind-run-user-authz`
   (#583).
-- **Every state-changing method** (TakeDevice, PowerOff/Reboot, Lock/Unlock,
-  hostname/time/locale setters, CreateSession and others) calls `authz_check` as
-  its first statement, which fails closed (#470).
+- **State-changing methods fail closed on the same model.** The 15 methods
+  gated in #470 (hostname/time/locale setters, Lock/Unlock, ReleaseDevice and
+  others) call `authz_check` first. TakeDevice, TakeControl, PowerOff, Reboot
+  and ConsoleKit Restart/Stop call `caller_authorized()` directly, the same rule,
+  older code. `CreateSession` is root only (PAM's uid). `SetUserLinger` has its
+  own `linger_allowed()` rule.
 - **Bus policy:** each extra name (hostname1, timedate1, locale1, ConsoleKit)
   has its own connection, so their blanket `send_destination` allows don't open
   login1's methods at the bus layer (#572).
@@ -137,6 +159,10 @@ never boot, so their `init=` is untrusted.
 
 ### schema-systemd1 bridge (A1, A2)
 
+- `AttachProcessesToUnit` writes pids into cgroups as root for non-root callers;
+  `attach_validate` lets a caller move only processes wholly its own, into its
+  own `user@` unit's slice. The 0600 private socket (`/run/systemd/private`) is
+  root's by its file mode and skips polkit.
 - Unit-changing methods (Start/Stop/Restart/Reload…Unit and friends) are allowed
   to root. For any other caller the bridge asks polkit's `CheckAuthorization`,
   as systemd does inside its daemon, because the stock bus policy lets anyone
@@ -148,29 +174,62 @@ never boot, so their `init=` is untrusted.
 
 - **Malformed messages:** validated before forwarding, and header field types
   enforced (#179). Fuzzed in CI on every PR (#318, `tests/fuzz`).
-- **Resource pinning:** a peer can pin only a bounded amount: per-connection
-  inbound buffering (#472), names, pending replies and match rules (#180, and
-  reply-timeout reaping).
-- **Policy:** the dbus-daemon policy files decide who may send what; the
-  broker's matcher is checked against golden output from the real policy
-  (`tests/fixtures/dbus`).
+- **Resource pinning:** pre-auth floods and match rules (#180), per-connection
+  inbound buffering (#472), and 512 names per connection (ac11c28) are capped.
+  **Pending replies have no count cap**; they are reaped after 120 s. A peer
+  can pin that many until the reaper runs.
+- **Policy:** the dbus-daemon policy files decide who may send what. CI checks
+  the broker's matcher against a synthetic policy with verdicts from an
+  independent oracle (`tests/fixtures/dbus`). The real-corpus comparison, `make
+  verify-dbus-conformance`, runs locally only.
+- **Activation:** any peer the policy lets send to an activatable name makes
+  the broker (or PID 1) start that service. That is D-Bus semantics; the input
+  is the bus name.
 - **Residual:** a policy file that allows too much is honoured as written.
 
 ### schema-udev (A1, A2)
 
 - Only kernel uevents (netlink group 1, sender pid 0). Group 2 (libudev
   broadcasts, which any root process can send) is never read.
-- Rules come from root-owned directories. `RUN` actions run as root, as with
-  systemd-udevd.
+- Rules come from fixed paths in `/etc` and `/usr`. `RUN` actions run as root,
+  as with systemd-udevd. **There is no owner/mode check on rules files** like
+  the `.svc` loader's; it holds because those directories are root-owned.
 - Device ACLs (`uaccess`) go only to the active uid on seat0, as schema-logind
   records it (`uaccess_active_uid`), and are cleared when that changes.
 
 ### schema-coredump (A1, A2)
 
-- It reads an attacker-shaped core image from the kernel pipe as root. The
-  output goes to a root-only directory, with stale temporary files swept.
-- **Residual:** this parser is a classic root-on-attacker-data target. It
-  belongs on the external audit list.
+- The core image is streamed into zstd unparsed, into a 0700 root directory,
+  with stale temporary files swept.
+- As root it reads the crashing process's `/proc/<pid>/comm`, `exe`, `cmdline`
+  and `cgroup`, all strings the crasher controls. They are cleaned and written
+  to the `.meta` file, syslog and the recorder socket.
+- **Residual:** attacker-controlled strings travel through root into three
+  sinks. Greg's 11-04 audit left coredump unaudited, so it's on the external
+  audit list.
+
+### schema-journal-sink (A1, A2)
+
+- It owns `/dev/log`, `/run/systemd/journal/socket` and `stdout`, all 0666, so
+  any local user can send it log lines and fds. Passed fds are read only when
+  they are sealed memfds or on tmpfs, then closed through the detached closer.
+- **Residual:** log forging and disk fill by any local user, as with journald.
+  There is no per-uid rate limit.
+
+### schema-recorder (everyone, read side)
+
+- It runs as root and reads every process's `/proc` strings. Its control socket
+  is 0600, but its shm summary is 0644, readable by every local user, like
+  `/proc` itself.
+
+### Passwordless sudo grants (A1 in the granted group)
+
+- The ISO's `schema-flip` grant (the login user, `schema-flip-apply`, 20 fixed
+  subcommands) and the wizard's `schema-wizard` grant (`%wheel`, `schema-migrate`,
+  10 fixed flags) name exact commands, not wildcards (#478).
+- **Residual:** each listed subcommand is a root action anyone in that group can
+  trigger without a password. A bug in how those programs read their argv or
+  state is root for that group.
 
 ### PID 1 availability (everyone)
 
@@ -184,7 +243,10 @@ never boot, so their `init=` is untrusted.
 ### The next boot (A4, operator error)
 
 - verify (above) judges the next boot, the normal default and the guard
-  fallback before reboot, re-exec and `schema-snapshot arm`.
+  fallback before re-exec and `schema-snapshot arm`, which both refuse on
+  failure. `reboot`/`poweroff` are gated only from a terminal, and they go ahead
+  when the verifier is unavailable, so a box that must go down is never stranded
+  (`docs/operations.md`).
 - The boot-success guard: real GRUB is tested in CI (#593). `boot_counter=N`
   gives the new entry N−1 boots, and `arm` refuses N below 2 (#594).
 
@@ -195,19 +257,22 @@ Every boundary fix needs a test that fails without the fix.
 | Fix | Boundary | Regression test |
 |---|---|---|
 | #179 broker validates messages | D-Bus | `tests/test_sdbus_forward.c`, fuzz harnesses |
-| #180, #472 broker resource caps | D-Bus | `tests/test_sdbus_conn.c`, `tests/test_sdbus_driver.c` |
+| #180 broker pre-auth flood, BEGIN without AUTH, match limit | D-Bus | `tests/test_sdbus_auth.c`, `tests/test_sdbus_driver.c` |
+| #472 per-connection inbound cap | D-Bus | `tests/test_sdbus_conn.c` |
 | #204 PID 1 umask 0 from initrd | PID 1 | **missing**: verified in a VM only |
 | #390, #393, #394 fd close off PID 1's thread | notify socket | `tests/test_fdclose.c` |
 | #469 systemd1 bridge auth (polkit, fail-closed) | D-Bus / systemd1 | `tests/test_systemd1_authz.py` |
 | #470 logind setter / lock auth | logind | `tests/test_logind_authz.py` |
 | #477 import sandbox loss, secret modes | import | `tests/test_import_units.py` |
-| #479 control socket stuck reader, read-only verbs | control socket | `tests/test_ctl_socket.py` |
+| #479 control socket stuck reader, line deadline | control socket | `tests/test_ctl_socket.py` |
+| read-only verbs for group `schema` (7ceeaad) | control socket | **missing**: the test client is always PID 1's own euid |
 | #572 logind extra-name bus policy | logind / D-Bus | `tests/test_logind_authz.py` |
-| #583 lingering-user authz opt-in | logind | `tests/test_logind_authz.py`, `tests/test_logind_vt.py` |
-| #590 verify sandbox | verify | `sudo make verify-sandbox-live` (19 hostile probes), CI job `verify-sandbox` |
+| #583 lingering-user authz opt-in | logind | `tests/test_logind_authz.py` (`linger_case`) |
+| #590 verify sandbox | verify | `sudo make verify-sandbox-live` (18 hostile probes and an unbuildable-sandbox case), CI job `verify-sandbox` |
 
-Gap: #204 has no test that would catch a regression. That's the first item for
-the next security PR.
+Gaps, for the next security PR: #204 (PID 1 umask) and the read-only-verb gate
+have no test that would catch a regression. The broker's per-uid connection cap
+has none either.
 
 ## Checklist for a change to privileged code
 
@@ -244,6 +309,9 @@ covered by tests:
 2. schema-logind: the authz model and the session-file trust.
 3. The notify socket and fd handling in PID 1.
 4. `verify_root.c`: mount handling and the sandbox.
-5. schema-coredump's parser.
+5. schema-coredump and schema-journal-sink: root reading strings and fds that
+   any local user controls.
 6. Privileged exec paths: service spawn (user/caps/namespaces/seccomp/Landlock
    setup in `service.c`, `caps.c`, `ns.c`, `seccomp.c`, `landlock.c`).
+7. The passwordless sudo targets (`schema-flip-apply`, `schema-migrate`) and
+   schema-import as run by RPM file triggers.
