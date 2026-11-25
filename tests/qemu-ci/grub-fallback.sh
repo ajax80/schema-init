@@ -11,6 +11,8 @@
 #            before 09 looks, so N gives the new entry N-1 tries
 #   unarmed: no boot_counter -> the default entry boots, never the fallback
 set -eu
+# the guest refuses group/world-writable .svc files; a umask of 002 (Fedora private groups) would make them so
+umask 022
 cd "$(dirname "$0")/../.."
 KERNEL=${KERNEL:-/boot/vmlinuz-$(uname -r)}
 BB=${BUSYBOX:-$(command -v busybox)}

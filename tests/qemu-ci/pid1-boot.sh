@@ -4,6 +4,8 @@
 # itself with the running services kept, and powers off through its own shutdown path. Busybox initramfs, no
 # disk; the host's kernel (KERNEL=). Exit 0 only on a clean boot and poweroff.
 set -eu
+# the guest refuses group/world-writable .svc files; a umask of 002 (Fedora private groups) would make them so
+umask 022
 cd "$(dirname "$0")/../.."
 REPO=$PWD
 KERNEL=${KERNEL:-/boot/vmlinuz-$(uname -r)}
