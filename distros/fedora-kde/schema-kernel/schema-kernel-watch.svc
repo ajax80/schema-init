@@ -1,0 +1,19 @@
+# blakbox: rebuild kernel-cachyos-schema in COPR when upstream ships a new
+# kernel-cachyos (watch.sh). Install:
+#   sudo install -Dm755 -t /usr/local/libexec/schema-kernel mksrpm.sh watch.sh
+#   sudo install -m644 schema-kernel-watch.svc /etc/schema-init/services/
+#   sudo schema-ctl add schema-kernel-watch
+#   echo https://ntfy.sh/<topic> > ~/.config/schema-kernel-watch/ntfy
+# Runs as ajax80: copr-cli reads its API token from ~/.config/copr.
+name=schema-kernel-watch
+exec=/usr/local/libexec/schema-kernel/watch.sh
+user=ajax80
+critical=0
+# needs ~/.config/copr and dnf's cache in ~/.cache
+protect_home=0
+no_new_privs=1
+private_tmp=1
+protect_system=1
+dep=network-stack
+on_calendar=05:00
+persistent=1
