@@ -41,6 +41,23 @@ jobs:
       - name: hostile init= fixtures
         run: sudo make verify-sandbox-live
 
+  # stage 1 of PID 1 under QEMU: the real binary boots a minimal guest, runs
+  # services and powers off through its own shutdown path (tests/qemu-ci/)
+  qemu-pid1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: deps
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 busybox-static cpio
+      - name: kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: boot schema-init as PID 1
+        run: |
+          sudo install -m 0644 /boot/vmlinuz-$(uname -r) "$RUNNER_TEMP/vmlinuz"
+          KERNEL="$RUNNER_TEMP/vmlinuz" sh tests/qemu-ci/pid1-boot.sh
+
   # The C unit tests under ASan + UBSan; leaks off (PID 1's tables live
   # forever). `make test` compiles init.o but never links or runs schema-init,
   # so PID 1's own main loop is not covered here. STATIC_LDFLAGS is emptied
