@@ -102,10 +102,12 @@ ioctl handles. `listen=` binds what the admin configured and passes it on.
   different check: it governs symlinks PID 1 meets while creating state, runtime
   and listen directories for a service.
 - **Sandbox loss on import:** `schema-import` maps systemd sandboxing it
-  understands and **warns** about what it drops. `DynamicUser=` maps to
-  `dynamic_user=1`, an allocated uid (#540); `RemoveIPC=` and
-  `RestrictSUIDSGID=` are warned as not enforced. Secrets are no longer copied
-  0600 → 0644 (#477).
+  understands and **warns** about what it drops (`RemoveIPC=`,
+  `CapabilityBoundingSet=`, `RestrictAddressFamilies=` and others; the list is
+  `_UNENFORCED` in `schema-import.py`). An explicit `RestrictSUIDSGID=` maps to
+  `restrict_suid_sgid=1`. `DynamicUser=` maps to `dynamic_user=1`, an allocated
+  uid (#540), with a warning that the two settings it implies, RemoveIPC and
+  RestrictSUIDSGID, are not added. Secrets are no longer copied 0600 → 0644 (#477).
 - **`exec=`:** runs through `execv`, with no PATH search. A relative path is a
   warning today and verify shows it as a WARN; a later release refuses it (#596).
 - **Residual:** the RPM file trigger imports every unit a package ships, as root,
@@ -138,8 +140,9 @@ never boot, so their `init=` is untrusted.
 
 ### schema-logind (A1, A2, A3)
 
-- **Who counts as "the user":** root, or the uid of the active local session
-  from root-written session files (the session on the foreground VT, else the
+- **Who counts as "the user":** root; for a per-session method, that session's
+  own root-written owner uid, even on a background VT, as with real logind;
+  otherwise the uid of the active local session from root-written session files (the session on the foreground VT, else the
   single active local one, else nobody). A lingering user with no session (A3)
   is nobody unless the admin opts in with `/etc/schema-init/logind-run-user-authz`
   (#583).
@@ -147,15 +150,22 @@ never boot, so their `init=` is untrusted.
   gated in #470 (hostname/time/locale setters, Lock/Unlock, ReleaseDevice and
   others) call `authz_check` first. TakeDevice, TakeControl, PowerOff, Reboot
   and ConsoleKit Restart/Stop call `caller_authorized()` directly, the same rule,
-  older code. `CreateSession` is root only (PAM's uid). `SetUserLinger` has its
-  own `linger_allowed()` rule.
+  older code, and so does `Seat.SwitchTo`, which changes the active VT.
+  `CreateSession` is root only (PAM's uid). `SetUserLinger` has its own
+  `linger_allowed()` rule.
+- **Ungated because empty today:** timedate1 `SetTime`, `SetNTP`, `SetLocalRTC`;
+  `TerminateSession/User/Seat`, `ScheduleShutdown`, `SetWallMessage`, `Inhibit`,
+  `Session.SetType`. They do nothing. **Giving any of them a body means adding the
+  gate in the same change.**
 - **Bus policy:** each extra name (hostname1, timedate1, locale1, ConsoleKit)
   has its own connection, so their blanket `send_destination` allows don't open
   login1's methods at the bus layer (#572).
 - **No polkit:** schema-logind decides in the daemon, as above. Anything polkit
   would have allowed to a non-session uid is denied.
 - **Residual:** the active local session's uid has what real logind gives it:
-  devices and the power button. A process running as that uid has them too.
+  devices and the power button. A process running as that uid has them too. A
+  second user's background session can use its own session's TakeDevice,
+  TakeControl and Lock without being in front, as with real logind.
 
 ### schema-systemd1 bridge (A1, A2)
 
