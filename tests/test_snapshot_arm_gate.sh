@@ -46,5 +46,15 @@ for bad in -f --forse 2x ""; do
     grep -q 'usage' "$T/out" || fail "arm '$bad': no usage: $(cat "$T/out")"
 done
 
+# N below 2 never tries the new entry; a leading zero or 4+ digits isn't plain decimal
+# for grubenv: refused before verify runs or grubenv is touched
+for n in 0 1 01 08 010 1000 99999999999999999999; do
+    VRC=0 arm "$n"; r=$?
+    [ $r != 0 ] || fail "arm $n: exited 0"
+    [ ! -e "$T/editenv" ] || fail "arm $n: grubenv written"
+    [ ! -e "$T/ctl" ] || fail "arm $n: verify ran"
+    grep -q 'N must be 2 to 999' "$T/out" || fail "arm $n: wording: $(cat "$T/out")"
+done
+
 [ $rc = 0 ] && echo "snapshot_arm_gate: ok"
 exit $rc
