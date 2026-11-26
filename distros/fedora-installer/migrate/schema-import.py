@@ -1205,7 +1205,9 @@ def host_facts():
     ctl = _read("/sys/fs/cgroup/cgroup.controllers", None)
     cpu = dict(ln.split(":", 1) for ln in reversed(_read("/proc/cpuinfo").splitlines()) if ":" in ln)
     cpu = {k.strip(): v.strip() for k, v in cpu.items()}
-    _FACTS = {"virt": virt, "virt_kind": kind, "security": sec,
+    # systemd's private-users: a uid_map that isn't the initial namespace's identity
+    userns = _read("/proc/self/uid_map").split() not in ([], ["0", "0", "4294967295"])
+    _FACTS = {"virt": virt, "virt_kind": kind, "userns": userns, "security": sec,
               "cgroup_v2": ctl is not None, "controllers": set((ctl or "").split()),
               "cpus": len(os.sched_getaffinity(0)),
               "arch": _ARCH.get(platform.machine(), platform.machine()),
@@ -1225,7 +1227,7 @@ def _static_condition(name, arg, facts):
         if a in ("vm", "container"):
             return facts["virt_kind"] == a
         if a == "private-users":
-            return None
+            return facts["userns"]
         return facts["virt"] == a
     if name == "Security":
         known = ("selinux", "apparmor", "audit", "smack", "tpm2", "uefi-secureboot")
