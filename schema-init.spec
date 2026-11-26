@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.35
+Version:        0.4.36
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -580,6 +580,11 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Thu Nov 26 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.36-1
+- 0.4.35 was tagged but not released: its new dir_owner= key was written
+  empty for every service, so schema-ctl verify saw a change on all of them
+  and refused the upgrade's re-exec. It is now written only when set (#608).
+  Everything listed under 0.4.35 ships in this release.
 * Thu Nov 26 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.35-1
 - A relative exec= is now refused at load (warned since 0.4.34); a service
   already running with one is kept across re-exec and reload (#602)
