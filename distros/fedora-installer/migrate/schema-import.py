@@ -1954,6 +1954,24 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                     continue
                 lines.append("%s=%s%s" % (out_key, pre, " ".join(_cmd_quote(w) for w in pa)))
 
+    else:
+        # SIGTERM alone, as above: said out loud, unless the command is that
+        # signal to the main process anyway (kill_signal reaches it the same way)
+        ks = _reload_sig(_get_last(svc, "KillSignal") or "TERM")
+        for key in ("ExecStop", "ExecStopPost"):
+            for v in _get_all(svc, key):
+                if not v.strip():
+                    continue
+                try:
+                    pa = shlex.split(v.lstrip(_EXEC_PREFIX))
+                except ValueError:
+                    pa = []
+                bare = len(pa) == 2 and os.path.basename(pa[0]) == "kill" and pa[1] in ("$MAINPID", "${MAINPID}")
+                if key == "ExecStop" and ks and (bare and ks == "TERM" or _kill_mainpid_sig(pa) == ks):
+                    continue
+                stop_warns.append("%s=%s not run: a system service is stopped by its kill_signal alone; "
+                                  "not enforced: %s" % (key, v.strip(), key))
+
     # ExecReload=: kill -SIG $MAINPID is reload_signal= (no runner fork);
     # anything else runs as exec_reload=, $MAINPID left for PID 1
     reload_warns, has_reload = [], False
@@ -1985,15 +2003,41 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         else:
             reload_warns.append("ReloadSignal=%s dropped: not a signal reload_signal= takes" % rs)
 
+    # a finished oneshot stays done here and its dependents go on: what
+    # RemainAfterExit=yes keeps. Any other type: its exit is supervised as usual
+    life_warns = []
+    # schema-init starts no targets, and its shutdown stops every service: a
+    # conflict with one (shutdown.target, umount.target, emergency.target) is kept
+    clash = [u for u in " ".join(_get_all(sections.get("Unit", []), "Conflicts")).split()
+             if not u.endswith(".target")]
+    if clash:
+        life_warns.append("Conflicts=%s: starting one doesn't stop the other; not enforced: Conflicts"
+                          % " ".join(clash))
+    rae = _get_last(svc, "RemainAfterExit").lower() in _TRUE
+    if rae and stype != "oneshot":
+        life_warns.append("RemainAfterExit=yes on Type=%s: the main process's exit is supervised (restart=, "
+                     "recovery), not left active; not enforced: RemainAfterExit" % (stype or "simple"))
     if stype == "oneshot":
         lines.append("oneshot=1")
     elif stype in ("notify", "notify-reload"):
         lines.append("notify=1")
         # user mode only, like exec_stop: a system re-import must not change
         # which pid PID 1 supervises
-        if _USER and _get_last(svc, "NotifyAccess").lower() == "all":
+        # main/exec: the engine takes a message only from the service's own
+        # cgroup, the spoofing those values guard against
+        na = _get_last(svc, "NotifyAccess").lower()
+        if _USER and na == "all":
             lines.append("main_pid_notify=1")
-    elif stype == "dbus":
+        elif na == "all":
+            life_warns.append("NotifyAccess=all: MAINPID= from another process not honoured, PID 1 keeps "
+                         "supervising the pid it started; not enforced: NotifyAccess")
+        elif na == "none":
+            life_warns.append("NotifyAccess=none: READY=1 still taken from the service; not enforced: NotifyAccess")
+    else:
+        # no notify socket without notify=1, but nothing then needs one: a
+        # watchdog without it is warned with WatchdogSec=
+        _get_last(svc, "NotifyAccess")
+    if stype == "dbus":
         lines.append("ready_bus_name=%s" % busname)
     elif stype == "forking":
         lines.append("pid_file=%s" % pidfile)
@@ -2134,7 +2178,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     warns.extend(sched_warns)
     # after the + handling: systemd enforces SocketBind on the cgroup, + or not;
     # here only the main process is confined
-    warns.extend(stop_warns)
+    warns.extend(stop_warns + life_warns)
     warns.extend(reload_warns)
     warns.extend(restart_warns)
     warns.extend(amb_warns + rt_warns)

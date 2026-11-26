@@ -1620,6 +1620,37 @@ check("... not for ExecStart=!! (runs as User=)", "dir_owner" not in si.unit_to_
       "[Service]\nUser=_chrony\nExecStart=!!/usr/sbin/chronyd\nStateDirectory=chrony\n")))
 check("... not for a ConfigurationDirectory= alone (root's anyway)", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
       "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\nConfigurationDirectory=chrony\n")))
+_ls = lambda body: si.unit_to_svc("ls", si.parse_unit("[Unit]\nDescription=x\n" + body))
+_W = si.WARN_PREFIX
+check("RemainAfterExit=yes on a oneshot: kept as is, no warning",
+      "RemainAfterExit" not in _ls("[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n"))
+check("RemainAfterExit=yes on Type=forking: warned",
+      "not enforced: RemainAfterExit" in _ls("[Service]\nType=forking\nPIDFile=/run/x.pid\n"
+                                            "RemainAfterExit=yes\nExecStart=/bin/x\n"))
+check("Conflicts= on targets only: no warning",
+      "Conflicts" not in _ls("Conflicts=shutdown.target emergency.target\n[Service]\nExecStart=/bin/x\n"))
+_cf = _ls("Conflicts=shutdown.target tlp.service\n[Service]\nExecStart=/bin/x\n")
+check("Conflicts= naming a service: warned, the target left out",
+      "Conflicts=tlp.service: starting one" in _cf and "not enforced: Conflicts" in _cf)
+check("ExecStop= on a system unit: warned, not run",
+      "not enforced: ExecStop" in _ls("[Service]\nExecStart=/bin/x\nExecStop=/bin/x --quit\n")
+      and "exec_stop=" not in _ls("[Service]\nExecStart=/bin/x\nExecStop=/bin/x --quit\n"))
+for _st in ("/bin/kill $MAINPID", "/bin/kill -TERM $MAINPID", "/usr/bin/kill -s SIGTERM ${MAINPID}"):
+    check("ExecStop=%s is the kill_signal itself: no warning" % _st,
+          "ExecStop" not in _ls("[Service]\nExecStart=/bin/x\nExecStop=%s\n" % _st))
+check("ExecStop=kill -INT $MAINPID with KillSignal=SIGINT: no warning",
+      "ExecStop" not in _ls("[Service]\nExecStart=/bin/x\nKillSignal=SIGINT\nExecStop=/bin/kill -INT $MAINPID\n"))
+check("ExecStop=kill -INT $MAINPID with the default kill_signal: warned",
+      "not enforced: ExecStop" in _ls("[Service]\nExecStart=/bin/x\nExecStop=/bin/kill -INT $MAINPID\n"))
+check("ExecStopPost= on a system unit: warned",
+      "not enforced: ExecStopPost" in _ls("[Service]\nExecStart=/bin/x\nExecStopPost=/bin/rm -f /run/x\n"))
+check("ExecStopPost=kill $MAINPID: warned (the main process is gone by then)",
+      "not enforced: ExecStopPost" in _ls("[Service]\nExecStart=/bin/x\nExecStopPost=/bin/kill $MAINPID\n"))
+check("NotifyAccess=main: no warning",
+      "NotifyAccess" not in _ls("[Service]\nType=notify\nNotifyAccess=main\nExecStart=/bin/x\n"))
+_na = _ls("[Service]\nType=notify\nNotifyAccess=all\nExecStart=/bin/x\n")
+check("NotifyAccess=all on a system unit: warned, main_pid_notify not set",
+      "not enforced: NotifyAccess" in _na and "main_pid_notify" not in _na)
 _kt = lambda extra: si.unit_to_svc("kt", si.parse_unit("[Service]\nExecStart=/bin/kt\n" + extra))
 check("ReadWritePaths= under /sys with ProtectKernelTunables= -> rw_path (fprintd)",
       "rw_path=/sys/devices\n" in _kt("ProtectKernelTunables=yes\nReadWritePaths=/sys/devices\n"))
