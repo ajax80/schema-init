@@ -99,8 +99,8 @@ name counts as found on `PATH`.
 | tree | units | imported | mapped | warned | silent | inert |
 |---|---|---|---|---|---|---|
 | Fedora 44 (host) | 302 | 211 | 1744 | 273 | 214 | 503 |
-| Debian trixie | 146 | 95 | 945 | 148 | 127 | 276 |
-| Ubuntu noble | 175 | 123 | 1085 | 170 | 133 | 354 |
+| Debian trixie | 146 | 95 | 942 | 151 | 127 | 276 |
+| Ubuntu noble | 175 | 123 | 1082 | 173 | 133 | 354 |
 | Arch | 172 | 130 | 1401 | 218 | 146 | 441 |
 
 PID 1's loader accepts every imported `.svc` on all four.
@@ -136,11 +136,82 @@ Ubuntu `iscsid.service`) was "not understood", which skipped the whole unit. The
 now judges it: a `/proc/self/uid_map` other than the initial namespace's identity
 map means a user namespace.
 
+(Debian and Ubuntu moved 3 from mapped to warned after stage 3: see below.)
+
+## Third run: in force, not only accepted (2026-11-26)
+
+    make compat-enforce         # network + KVM; ~40 s from the package cache
+
+"Mapped" used to mean the importer read the directive and PID 1's loader took
+the `.svc`. `tools/compat-enforce.py` checks that the setting is actually in force
+for the running process. It replaces each imported unit's daemon with
+`tests/qemu-ci/enforce-probe` and keeps the rest of the `.svc`, then boots the real
+`schema-init` as PID 1 in a QEMU guest with all of them at once. The probe reports
+what it got: uid, groups, capability sets, NoNewPrivs, seccomp mode, umask, cwd,
+rlimits, nice, OOM score, environment, namespaces, which mounts are read-only,
+and whether the host's `/tmp`, `/home`, `/root` and `/dev/mem` are visible. Where
+a flag could lie, the probe tries the operation instead: a W+X mmap
+(`MemoryDenyWriteExecute=`), a personality switch (`LockPersonality=`),
+`SCHED_FIFO` (`RestrictRealtime=`), a setuid chmod (`RestrictSUIDSGID=`) and
+`unshare` (`RestrictNamespaces=`). Each systemd directive is then judged against
+what systemd itself would have given the process:
+
+| verdict | meaning |
+|---|---|
+| enforced | the process has what the unit asked for |
+| NOT-ENFORCED | it doesn't; for a warned directive the warning already said so |
+| unobservable | the probe can't tell, e.g. a non-root process is refused `SCHED_FIFO` whatever the unit says; judged against a hardening-free root control probe in the same boot |
+| unchecked | no oracle for it: mostly the lifecycle keys, which are the pid1-boot job's |
+
+The harness strips lifecycle keys from the `.svc` (exec, deps, ordering,
+conditions, readiness, restart), because a missing daemon or dependency would keep
+the probe from running. It keeps the importer's own `install -d` exec_pre, since
+that is how `ConfigurationDirectory=` gets created. A required `EnvironmentFile=`
+is created empty, standing in for the one the package ships. PID 1 loads at most
+`MAX_SERVICES` (128) `.svc` files, so the units go in batches of 120, one boot per
+batch. Units that claim the same `*Directory=` go to different boots.
+
+| tree | probed under PID 1 | enforced | NOT (all warned) | unobservable |
+|---|---|---|---|---|
+| Fedora 44 | 211/211 | 566 | 32 | 16 |
+| Debian trixie | 95/95 | 303 | 17 | 12 |
+| Ubuntu noble | 123/123 | 275 | 19 | 10 |
+| Arch | 130/130 | 471 | 30 | 10 |
+
+**Nothing mapped without a warning is out of force** on any of the four trees.
+Getting there took three importer fixes, each found by this run:
+
+- **`ConfigurationDirectory=` was created owned by `User=`** (chrony, colord, kea).
+  systemd.exec(5) says every `*Directory=` except that one goes to `User=`, and
+  a config dir stays root's. A fresh one is now root's.
+- **`ReadWritePaths=` under `/sys` was dropped without a word.** fprintd's
+  `/sys/devices` stayed read-only under `ProtectKernelTunables=`. The importer
+  only read write paths under `ProtectSystem=`/`ProtectHome=` dirs. Paths under
+  `/sys` and `/proc/sys`, and under `/sys/fs/cgroup` with
+  `ProtectControlGroups=`, now become `rw_path=`, which ns.c binds after the
+  read-only mounts.
+- **`ExecStart=!` with `User=` gave root-owned State/Runtime/Logs dirs** (chrony
+  on Debian and Ubuntu). systemd still hands those dirs to `User=` when it runs
+  the command as root. The `.svc` has no way to name a directory owner separate
+  from the run user, so this is now a warning. A real fix needs the engine.
+
+The NOT-ENFORCED directives that are all warned, by count: `CapabilityBoundingSet=` 69
+(no bounding-set key), `ProtectHome=read-only`/`tmpfs` 9 and
+`ReadOnlyPaths=` 9 (no equivalents), `ProtectSystem=strict` 4 (mapped to `full`).
+
+CI runs the same harness on every PR (`tests/qemu-ci/compat-enforce.sh`, in the
+`qemu-pid1` job) over `tests/fixtures/compat-enforce`, which has one synthetic unit
+per family of directives. It also runs one control: `fs-tampered` has `private_tmp=1`
+cut from its `.svc` and must come back NOT-ENFORCED. Each oracle was shown to fail
+when its line is cut.
+
 ## Next
 
-1. **Enforcement, not only acceptance:** "mapped" means the importer read it and
-   PID 1's loader takes the result. The next step is checking that the setting is
-   *in force* for the running service (the hardening vmtest does this for a few
-   keys).
-2. Turn the silent list into warnings or mappings, one directive at a time,
+1. **`ExecStart=!` directory owner**: an engine key for the owner of
+   `*Directory=`, separate from the run user.
+2. **`MAX_SERVICES` headroom**: PID 1 loads 128 `.svc` files and ignores the
+   rest with one warning. Real imports take only enabled units (blakbox has 71,
+   the Optiplex 45), but importing every Fedora 44 unit would give 211.
+3. **`CapabilityBoundingSet=`**: the biggest out-of-force directive (69 units).
+4. Turn the silent list into warnings or mappings, one directive at a time,
    next `RemainAfterExit=` and `Conflicts=`.

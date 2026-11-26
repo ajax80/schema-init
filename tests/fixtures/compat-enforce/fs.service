@@ -1,0 +1,10 @@
+[Service]
+ExecStart=/usr/bin/fs
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+PrivateDevices=yes
+ReadWritePaths=/etc/fsrw /sys/devices

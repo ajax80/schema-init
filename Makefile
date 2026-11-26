@@ -543,7 +543,15 @@ compat-corpus: schema-init
 	tools/compat-corpus.py --foreign --security apparmor,audit --label ubuntu-noble --json $(COMPAT_DIR)/ubuntu-noble.json $(COMPAT_DIR)/ubuntu-noble
 	tools/compat-corpus.py --foreign --label arch --json $(COMPAT_DIR)/arch.json $(COMPAT_DIR)/arch
 
-.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-nowrite-live verify-sandbox-live verify-dbus-conformance compat-corpus
+# Network + KVM: compat-corpus's trees, each imported unit run under the real
+# PID 1 in a QEMU guest with its mapped directives checked in force (stage 3)
+compat-enforce: compat-corpus
+	tools/compat-enforce.py --skip-systemd --label fedora-host --json $(COMPAT_DIR)/enforce-fedora-host.json /usr/lib/systemd/system
+	tools/compat-enforce.py --foreign --security apparmor,audit --label debian-trixie --json $(COMPAT_DIR)/enforce-debian-trixie.json $(COMPAT_DIR)/debian-trixie
+	tools/compat-enforce.py --foreign --security apparmor,audit --label ubuntu-noble --json $(COMPAT_DIR)/enforce-ubuntu-noble.json $(COMPAT_DIR)/ubuntu-noble
+	tools/compat-enforce.py --foreign --label arch --json $(COMPAT_DIR)/enforce-arch.json $(COMPAT_DIR)/arch
+
+.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-nowrite-live verify-sandbox-live verify-dbus-conformance compat-corpus compat-enforce
 
 
 
