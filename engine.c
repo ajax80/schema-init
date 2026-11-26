@@ -3453,13 +3453,22 @@ void listen_adopt(service_t *svc) {
  * `err` filled in. The caller reports that outcome: a reload can be refused for
  * three different reasons and the operator has to be told which, over the same
  * channel they asked on. */
+/* service_relexec_keep while reload parses: loaded now */
+static int relexec_in_table(const char *name) {
+    for (int j = 0; j < svc_count; j++)
+        if (!strcmp(services[j].name, name)) return 1;
+    return 0;
+}
+
 static int handle_reload(int evict_mode, char *err, size_t errsz) {
     int i, j;
     elog(stdout, "reloading configuration (SIGHUP)... \n");
 
     const char *svc_dir = engine_paths.svc_dir;
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
+    service_relexec_keep = relexec_in_table;
     int shadow_count = services_load(svc_dir, shadow_services, MAX_SERVICES);
+    service_relexec_keep = NULL;
     if (svc_refused) {
         elog(stdout, "reload rejected: %d file(s)/dir(s) refused on owner/mode\n", svc_refused);
         if (err) snprintf(err, errsz, "%d .svc file(s) or service dir(s) refused: not root-owned or writable "
@@ -3472,7 +3481,9 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
         return -1;
     }
     if (shadow_count == 0 && engine_paths.svc_fallback) {
+        service_relexec_keep = relexec_in_table;
         shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
+        service_relexec_keep = NULL;
     }
     /* a missing dir also loads zero: that is a half-done import swap, not
      * "nothing enabled" */
@@ -4158,6 +4169,7 @@ static void held_signals(sigset_t *set) {
 /* ── re-exec: the new image ─────────────────────────────────────────── */
 
 static reexec_svc_t reexec_svcs[MAX_SERVICES];
+static int reexec_svcs_n;
 static int reexec_reply_fd = -1;
 static char reexec_reply[160];
 
@@ -4177,7 +4189,24 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
     }
     int rc = state_parse(f, g, reexec_svcs, MAX_SERVICES, nrs, ev, nev, fs, maxfs, nfs, err, errsz);
     fclose(f);
+    reexec_svcs_n = rc < 0 ? 0 : *nrs;
     return rc;
+}
+
+/* service_relexec_keep while re-exec parses: loaded by the old image. Not just
+ * running: one in backoff, parked on a socket or between timer runs is live too */
+static int relexec_in_blob(const char *name) {
+    for (int j = 0; j < reexec_svcs_n; j++)
+        if (!strcmp(reexec_svcs[j].name, name)) return 1;
+    return 0;
+}
+
+/* the blob is read first: what the old image loaded decides what a relative exec= keeps */
+static int reexec_load_config(void) {
+    service_relexec_keep = relexec_in_blob;
+    int cycles = engine_load(engine_paths.svc_dir);
+    service_relexec_keep = NULL;
+    return cycles;
 }
 
 /* Everything the new image must prove before it touches anything: the config
@@ -4185,7 +4214,9 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
 static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
                            eviction_t *ev, int *nev, fdstore_ent *fs, int maxfs, int *nfs,
                            char *err, size_t errsz) {
-    if (engine_load(engine_paths.svc_dir) > 0) {
+    if (reexec_read_blob(blob_fd, g, nrs, ev, nev, fs, maxfs, nfs, err, errsz) < 0)
+        return -1;
+    if (reexec_load_config() > 0) {
         snprintf(err, errsz, "dependency cycle in %s", engine_paths.svc_dir);
         return -1;
     }
@@ -4193,8 +4224,6 @@ static int reexec_validate(int blob_fd, reexec_global_t *g, int *nrs,
         snprintf(err, errsz, "no services loaded from %s", engine_paths.svc_dir);
         return -1;
     }
-    if (reexec_read_blob(blob_fd, g, nrs, ev, nev, fs, maxfs, nfs, err, errsz) < 0)
-        return -1;
     return reexec_compare(reexec_svcs, *nrs, services, svc_count, err, errsz);
 }
 
@@ -4288,9 +4317,9 @@ void engine_reexec_adopt(int blob_fd, int oldexe_fd) {
         /* We ARE the fallback: nowhere further back to go, so refusing would
          * loop. Adopt whatever the config and blob allow; only a blob we
          * cannot read at all stops us, since then there is nothing to adopt. */
-        int cycles = engine_load(engine_paths.svc_dir);
         if (reexec_read_blob(blob_fd, &g, &nrs, ev, &nev, fs, fs ? FDSTORE_MAX_TOTAL : 0, &nfs, err, sizeof err) < 0)
             reexec_fallback(blob_fd, -1, g.fd_client, err);
+        int cycles = reexec_load_config();
         if (cycles > 0)
             fprintf(stderr, "[%s] re-exec fallback: dependency cycle in %s, adopting anyway\n", engine_paths.tag, engine_paths.svc_dir);
         if (reexec_compare(reexec_svcs, nrs, services, svc_count, err, sizeof err) < 0)
@@ -4572,9 +4601,13 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
 
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
+    if (reexec_read_blob(blob, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, errsz) < 0)
+        return -1;
+    service_relexec_keep = relexec_in_blob;
     shadow_count = services_load(engine_paths.svc_dir, shadow_services, MAX_SERVICES);
     if (shadow_count == 0 && engine_paths.svc_fallback)
         shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
+    service_relexec_keep = NULL;
     shadow_grp_count = groups_load(engine_paths.svc_dir, shadow_groups, MAX_GROUPS);
     if (shadow_grp_count == 0 && engine_paths.svc_fallback)
         shadow_grp_count = groups_load(engine_paths.svc_fallback, shadow_groups, MAX_GROUPS);
@@ -4582,7 +4615,7 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     if (validate_and_resolve(shadow_services, shadow_count, shadow_groups, shadow_grp_count) > 0) {
         snprintf(err, errsz, "dependency cycle in %s", engine_paths.svc_dir);
         rc = -1;
-    } else if ((rc = reexec_read_blob(blob, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, errsz)) == 0) {
+    } else {
         rc = reexec_compare(reexec_svcs, nrs, shadow_services, shadow_count, err, errsz);
     }
     for (int k = 0; k < shadow_count; k++)

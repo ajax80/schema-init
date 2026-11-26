@@ -2,6 +2,7 @@
 #include "../schema.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -53,6 +54,19 @@ static void before(int from, int to) {
     int k = 0;
     while (t[from].before_name[k][0]) k++;
     snprintf(t[from].before_name[k], 64, "s%d", to);
+}
+
+static int keep_t(const char *name) { return !strcmp(name, "t"); }
+static int keep_m1(const char *name) { return !strcmp(name, "m@1"); }
+
+static int load_file(const char *p, service_t *s) {
+    memset(s, 0, sizeof *s);
+    return service_load_one(p, s);
+}
+
+static void drop(service_t *s) {
+    for (int k = 1; k < MAX_ARGV; k++) free(s->argv[k]);
+    service_free_landlock(s);
 }
 
 static int has_edge(int s, int target) {
@@ -180,6 +194,41 @@ int main(void) {
         assert(service_order_ready(&t[0], t, 2, gs, 1) == 1);
     }
 
+    /* a relative exec= (not ordering, but this file has the loader harness): refused,
+     * unless the engine says that service is already loaded (re-exec/reload keep it).
+     * Asked once the name is final: name= after exec=, a drop-in's exec=, a name from
+     * the file name, an instance's name */
+    assert(load("exec=relative/path\n", NULL, &s) != 0);
+    assert(load("exec=true\n", NULL, &s) != 0);
+    assert(load("", "exec=bin/x\n", &s) != 0);
+    assert(load("exec=x\n", "exec=/bin/x\n", &s) == 0);
+    drop(&s);
+    service_relexec_keep = keep_t;
+    assert(load("exec=relative/path\n", NULL, &s) == 0 && !strcmp(s.exec, "relative/path"));
+    drop(&s);
+    put(path, "exec=rel\nname=other\n");
+    assert(load_file(path, &s) != 0);
+    put(path, "exec=rel\nname=t\n");
+    assert(load_file(path, &s) == 0);
+    drop(&s);
+    put(path, "exec=rel\n");                   /* no name=: "t" from t.svc */
+    assert(load_file(path, &s) == 0 && !strcmp(s.name, "t"));
+    drop(&s);
+    {
+        char ip[320];
+        snprintf(ip, sizeof ip, "%s/m@1.svc", dir);
+        put(ip, "name=m\nexec=rel\n");
+        assert(load_file(ip, &s) != 0);          /* keep_t knows "t", not "m@1" */
+        service_relexec_keep = keep_m1;
+        assert(load_file(ip, &s) == 0 && !strcmp(s.name, "m@1"));
+        drop(&s);
+        unlink(ip);
+    }
+    service_relexec_keep = NULL;
+    put(path, "exec=rel\nname=t\n");
+    assert(load_file(path, &s) != 0);
+
+    unlink(path);
     rmdir(dir);
     printf("test_service_order: ok\n");
     return 0;

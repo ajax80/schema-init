@@ -109,7 +109,8 @@ ioctl handles. `listen=` binds what the admin configured and passes it on.
   uid (#540), with a warning that the two settings it implies, RemoveIPC and
   RestrictSUIDSGID, are not added. Secrets are no longer copied 0600 → 0644 (#477).
 - **`exec=`:** runs through `execv`, with no PATH search. A relative path is a
-  warning today and verify shows it as a WARN; a later release refuses it (#596).
+  refused at load, and verify fails the next boot on it. A service already
+  running with one is kept through a re-exec or reload, with a warning (#596).
 - **Residual:** the RPM file trigger imports every unit a package ships, as root,
   with no admin step. A package that ships a hostile unit gets a service doing
   what the unit says, as it would under systemd. The importer is a translator,
