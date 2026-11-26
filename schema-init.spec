@@ -1,5 +1,5 @@
 Name:           schema-init
-Version:        0.4.34
+Version:        0.4.35
 Release:        1%{?snapshot:.%{snapshot}}%{?dist}
 Summary:        Minimal PID 1 init system driven by a weight-state machine
 
@@ -580,6 +580,20 @@ fi
 %{_datadir}/%{name}/services
 
 %changelog
+* Thu Nov 26 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.35-1
+- A relative exec= is now refused at load (warned since 0.4.34); a service
+  already running with one is kept across re-exec and reload (#602)
+- New dir_owner=USER[:GROUP] key: runtime/state/cache/logs dirs owned apart
+  from the run user. schema-import writes it for ExecStart=!/+ with User= or
+  Group=, where systemd runs as root but gives the dirs to User= (#605)
+- schema-import: RemainAfterExit=, Conflicts=, ExecStop=/ExecStopPost= and
+  NotifyAccess= are no longer dropped silently: kept where schema-init
+  behaves the same, warned where it doesn't (#606). ConfigurationDirectory=
+  stays root's; ReadWritePaths= under /sys and /proc/sys works with
+  ProtectKernelTunables=; ConditionVirtualization=private-users is judged (#604)
+- Compat corpus: Debian, Ubuntu and Arch units from pinned snapshots, and
+  every imported unit run under the real PID 1 with its mapped directives
+  checked in force; CI runs the same check on every PR (#603, #604)
 * Wed Nov 25 2026 Jonathan Ayers <44883767+ajax80@users.noreply.github.com> - 0.4.34-1
 - New after=/before= keys: ordering only, no health dependency (hold until
   the other service has finished starting, either way). schema-import maps
