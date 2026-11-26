@@ -168,7 +168,9 @@ static void em_fs(lines_t *L, const service_t *s) {
         snprintf(key, sizeof key, "%s_mode", service_exec_dir_key[k]);
         add_mode(L, s, key, (s->exec_dir_mode_set >> k) & 1, s->exec_dir_mode[k]);
     }
-    add_str(L, s, "dir_owner", s->dir_owner);
+    /* only when set: a key new since the last baseline must not read as a
+     * change on every service (verify refuses the re-exec over it) */
+    if (s->dir_owner[0]) add_str(L, s, "dir_owner", s->dir_owner);
     add_list(L, s, "rw_path", s->rw_path, s->rw_path_count);
     add_mode(L, s, "umask", s->umask_val >= 0, (unsigned)s->umask_val);
 }
@@ -464,8 +466,8 @@ int svc_serial_keys(const char *const **out) {
     if (!keys) {
         lines_t L = { 0 };
         service_t *s = calloc(1, sizeof *s);
-        /* em_deps writes these only when set */
-        s->after_name[0][0] = s->before_name[0][0] = 'x';
+        /* written only when set */
+        s->after_name[0][0] = s->before_name[0][0] = s->dir_owner[0] = 'x';
         for (size_t p = 0; p < sizeof props / sizeof *props; p++) props[p].emit(&L, s);
         free(s);
         for (int i = 0; i < L.n; i++) {

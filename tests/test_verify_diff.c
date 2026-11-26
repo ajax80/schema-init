@@ -127,6 +127,21 @@ static void test_new_service(void) {
     printf("ok test_new_service\n");
 }
 
+/* a key one serializer writes empty and another leaves out: no change either
+ * way (v0.4.35 wrote dir_owner= for every service, 0.4.34 and 0.4.36 don't) */
+static void test_empty_vs_missing(void) {
+    diff(HDR "a.exec=/a\nb.exec=/b\n", NHDR "a.dir_owner=\na.exec=/a\nb.dir_owner=\nb.exec=/b\n");
+    assert(nf == 0 && is_empty_hash(hash));
+    diff(HDR "a.dir_owner=\na.exec=/a\n", NHDR "a.exec=/a\n");
+    assert(nf == 0 && is_empty_hash(hash));
+    /* a value that is set still counts, both ways */
+    diff(HDR "a.exec=/a\n", NHDR "a.dir_owner=chrony\na.exec=/a\n");
+    assert(nf == 1 && f[0].kind == F_CHANGE && strstr(f[0].text, "dir_owner  unset → chrony"));
+    diff(HDR "a.dir_owner=chrony\na.exec=/a\n", NHDR "a.exec=/a\n");
+    assert(nf == 1 && f[0].kind == F_CHANGE && strstr(f[0].text, "dir_owner  chrony → unset"));
+    printf("ok test_empty_vs_missing\n");
+}
+
 /* ruling 1 */
 static void test_header(void) {
     diff(HDR "a.exec=/a\n", NHDR "a.exec=/a\n");
@@ -311,6 +326,7 @@ int main(int argc, char **argv) {
     test_removed();
     test_refused();
     test_new_service();
+    test_empty_vs_missing();
     test_header();
     test_dotted_names();
     test_notes();
