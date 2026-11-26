@@ -1613,6 +1613,7 @@ _kt = lambda extra: si.unit_to_svc("kt", si.parse_unit("[Service]\nExecStart=/bi
 check("ReadWritePaths= under /sys with ProtectKernelTunables= -> rw_path (fprintd)",
       "rw_path=/sys/devices\n" in _kt("ProtectKernelTunables=yes\nReadWritePaths=/sys/devices\n"))
 check("... /proc/sys too", "rw_path=/proc/sys/net\n" in _kt("ProtectKernelTunables=yes\nReadWritePaths=/proc/sys/net\n"))
+check("... and the rest of ns.c's list (/proc/irq)", "rw_path=/proc/irq\n" in _kt("ProtectKernelTunables=yes\nReadWritePaths=/proc/irq\n"))
 check("... /sys/fs/cgroup with ProtectControlGroups=",
       "rw_path=/sys/fs/cgroup/x\n" in _kt("ProtectControlGroups=yes\nReadWritePaths=/sys/fs/cgroup/x\n"))
 check("/sys writable already without ProtectKernelTunables=: no rw_path",

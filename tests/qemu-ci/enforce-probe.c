@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -184,6 +185,18 @@ int main(int argc, char **argv)
         unlink(sf);
     }
     fprintf(out, "unshare_refused=%d\n", refused_in_child(0));
+    // SystemCallFilter=: swapoff is in @swap, outside @system-service. On a path
+    // that doesn't exist it changes nothing; a filter shows as SIGSYS or EPERM
+    // where the unfiltered control gets ENOENT/EPERM by privilege
+    pid_t sw = fork();
+    if (sw == 0)
+        _exit(syscall(SYS_swapoff, "/nonexistent-enforce-probe") == 0 ? 0 : errno & 0x7f);
+    int sst = 0;
+    waitpid(sw, &sst, 0);
+    if (WIFSIGNALED(sst))
+        fprintf(out, "swapoff=sig%d\n", WTERMSIG(sst));
+    else
+        fprintf(out, "swapoff=errno%d\n", WEXITSTATUS(sst));
 
     for (int i = 2; i < argc; i++) {
         struct stat st;

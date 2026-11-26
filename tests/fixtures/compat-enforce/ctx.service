@@ -5,7 +5,7 @@ Group=svcgrp
 SupplementaryGroups=extra
 UMask=0027
 WorkingDirectory=/srv/work
-Environment="A=1" "B=two words"
+Environment="A=1" "B=two words" "C=from-environment"
 EnvironmentFile=-/etc/default/envfix
 LimitNOFILE=2048:8192
 Nice=5

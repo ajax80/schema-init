@@ -2,3 +2,4 @@
 ExecStart=/usr/bin/pre
 User=svcuser
 StateDirectory=predir
+DynamicUser=no

@@ -600,6 +600,12 @@ def _rw_path_ok(path):
 _MAX_RW_PATHS = 8
 
 
+# ns.c's ProtectKernelTunables= read-only list (kt[])
+_KERNEL_TUNABLES = ("/proc/sys", "/sys", "/proc/sysrq-trigger", "/proc/latency_stats", "/proc/acpi", "/proc/apm",
+                    "/proc/asound", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/scsi", "/proc/mtrr",
+                    "/proc/timer_list", "/proc/timer_stats")
+
+
 def _writable_lower(svc, lines, warns):
     rw = []
     for k, v in svc:
@@ -635,11 +641,11 @@ def _writable_lower(svc, lines, warns):
                          % (" ".join(dict.fromkeys(hit)), key, val, key, levels[idx][0]))
         if key == "protect_system":
             keep = cover
-    # ProtectKernelTunables=/ProtectControlGroups= make /sys, /proc/sys and
-    # /sys/fs/cgroup read-only; a ReadWritePaths= under them (fprintd's
+    # ProtectKernelTunables=/ProtectControlGroups= make /sys, /proc/sys (and the
+    # rest of ns.c's list) and /sys/fs/cgroup read-only; a ReadWritePaths= under them (fprintd's
     # /sys/devices) is bound writable again the same way (ns.c binds rw_path last)
     kern = [p for _, raw, p in rw if _rw_path_ok(raw) and (
-        ("protect_kernel_tunables=1" in lines and (_under(p, "/sys") or _under(p, "/proc/sys")))
+        ("protect_kernel_tunables=1" in lines and any(_under(p, t) for t in _KERNEL_TUNABLES))
         or ("protect_control_groups=1" in lines and _under(p, "/sys/fs/cgroup")))]
     for p in dict.fromkeys(kern):
         if not any(_under(p, q) for q in keep):
@@ -1622,7 +1628,8 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
     warns = []
     if not privileged:
         if _get_last(svc, "DynamicUser").lower() in _TRUE:
-            warns.append("DynamicUser=yes: RemoveIPC and RestrictSUIDSGID it implies are not enforced")
+            # led by what's lost: a warning is credited to the directive it starts with
+            warns.append("RemoveIPC= RestrictSUIDSGID= implied by DynamicUser=yes; not enforced: RemoveIPC RestrictSUIDSGID")
     if _get_all(svc, "ExecCondition"):
         warns.append("ExecCondition= not run: the unit starts unconditionally")
     if _get_all(svc, "ExecStartPost"):

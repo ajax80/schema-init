@@ -98,10 +98,10 @@ name counts as found on `PATH`.
 
 | tree | units | imported | mapped | warned | silent | inert |
 |---|---|---|---|---|---|---|
-| Fedora 44 (host) | 302 | 211 | 1744 | 273 | 214 | 503 |
-| Debian trixie | 146 | 95 | 942 | 151 | 127 | 276 |
-| Ubuntu noble | 175 | 123 | 1082 | 173 | 133 | 354 |
-| Arch | 172 | 130 | 1401 | 218 | 146 | 441 |
+| Fedora 44 (host) | 302 | 211 | 1752 | 265 | 214 | 503 |
+| Debian trixie | 146 | 95 | 943 | 150 | 127 | 276 |
+| Ubuntu noble | 175 | 123 | 1083 | 172 | 133 | 354 |
+| Arch | 172 | 130 | 1402 | 217 | 146 | 441 |
 
 PID 1's loader accepts every imported `.svc` on all four.
 
@@ -136,7 +136,7 @@ Ubuntu `iscsid.service`) was "not understood", which skipped the whole unit. The
 now judges it: a `/proc/self/uid_map` other than the initial namespace's identity
 map means a user namespace.
 
-(Debian and Ubuntu moved 3 from mapped to warned after stage 3: see below.)
+(These counts are the importer after stage 3's fixes, below. A warning is now credited to the directive it is about, and to the `protect_*` level a `ReadWritePaths=` lowered.)
 
 ## Third run: in force, not only accepted (2026-11-26)
 
@@ -152,15 +152,18 @@ rlimits, nice, OOM score, environment, namespaces, which mounts are read-only,
 and whether the host's `/tmp`, `/home`, `/root` and `/dev/mem` are visible. Where
 a flag could lie, the probe tries the operation instead: a W+X mmap
 (`MemoryDenyWriteExecute=`), a personality switch (`LockPersonality=`),
-`SCHED_FIFO` (`RestrictRealtime=`), a setuid chmod (`RestrictSUIDSGID=`) and
-`unshare` (`RestrictNamespaces=`). Each systemd directive is then judged against
+`SCHED_FIFO` (`RestrictRealtime=`), a setuid chmod (`RestrictSUIDSGID=`),
+`unshare` (`RestrictNamespaces=`), and `swapoff` on a path that doesn't exist
+(`SystemCallFilter=`). `swapoff` is in `@swap`, outside `@system-service`, and the
+seccomp mode alone can't decide this one: the engine builds `LockPersonality=` and
+its kin as seccomp filters too. Each systemd directive is then judged against
 what systemd itself would have given the process:
 
 | verdict | meaning |
 |---|---|
 | enforced | the process has what the unit asked for |
 | NOT-ENFORCED | it doesn't; for a warned directive the warning already said so |
-| unobservable | the probe can't tell, e.g. a non-root process is refused `SCHED_FIFO` whatever the unit says; judged against a hardening-free root control probe in the same boot |
+| unobservable | the probe can't tell. A non-root process is refused `SCHED_FIFO` whatever the unit says, and a filter that allows `swapoff` can't be seen by trying it. Each is judged against a hardening-free root control probe in the same boot |
 | unchecked | no oracle for it: mostly the lifecycle keys, which are the pid1-boot job's |
 
 The harness strips lifecycle keys from the `.svc` (exec, deps, ordering,
@@ -173,10 +176,10 @@ batch. Units that claim the same `*Directory=` go to different boots.
 
 | tree | probed under PID 1 | enforced | NOT (all warned) | unobservable |
 |---|---|---|---|---|
-| Fedora 44 | 211/211 | 566 | 32 | 16 |
-| Debian trixie | 95/95 | 303 | 17 | 12 |
-| Ubuntu noble | 123/123 | 275 | 19 | 10 |
-| Arch | 130/130 | 471 | 30 | 10 |
+| Fedora 44 | 211/211 | 572 | 32 | 19 |
+| Debian trixie | 95/95 | 302 | 17 | 14 |
+| Ubuntu noble | 123/123 | 273 | 19 | 13 |
+| Arch | 130/130 | 470 | 30 | 12 |
 
 **Nothing mapped without a warning is out of force** on any of the four trees.
 Getting there took three importer fixes, each found by this run:

@@ -50,6 +50,11 @@ LIMITS = {"LimitNOFILE": "nofile", "LimitNPROC": "nproc", "LimitCORE": "core", "
 DIRS = {"StateDirectory": "/var/lib", "RuntimeDirectory": "/run", "CacheDirectory": "/var/cache",
         "LogsDirectory": "/var/log", "ConfigurationDirectory": "/etc"}
 CONTROL = "enforce-control"
+# what ExecStart=+ switches off (systemd.exec: "the process is executed with full privileges")
+SANDBOX = {"NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem", "ProtectKernelTunables",
+           "ProtectControlGroups", "ProtectKernelModules", "PrivateDevices", "PrivateNetwork", "ProtectHostname",
+           "MemoryDenyWriteExecute", "LockPersonality", "RestrictRealtime", "RestrictSUIDSGID",
+           "RestrictNamespaces", "SystemCallFilter", "CapabilityBoundingSet", "ReadWritePaths", "ReadOnlyPaths"}
 BATCH = 120
 
 
@@ -86,16 +91,7 @@ def translate(path, known):
         return name, sections, None, None
     except Exception as e:
         return name, sections, None, "%s: %s" % (type(e).__name__, e)
-    warned = set()
-    for ln in body.splitlines():
-        if ln.startswith(si.WARN_PREFIX):
-            w = ln[len(si.WARN_PREFIX):]
-            m = re.match(r"([A-Z][A-Za-z]+)[= ]", w)
-            if m:
-                warned.add(m.group(1))
-            m = re.search(r"not enforced: ([A-Za-z ]+)$", w)
-            if m:
-                warned.update(m.group(1).split())
+    warned = cc.warned_of([ln[len(si.WARN_PREFIX):] for ln in body.splitlines() if ln.startswith(si.WARN_PREFIX)])
     return name, sections, (body, warned), None
 
 
@@ -197,12 +193,13 @@ def build_guest(work, units, tamper, overlays, busybox, users, groups):
     # results leave on the second serial port, base64: the console carries PID 1's
     # and the kernel's lines, which would split a payload mid-line
     with open(os.path.join(root, "bin/enforce-collect"), "w") as f:
-        # done when all reported, or the count held still for 15 s: a service that
+        # done when all reported, or the count held still for 15 s after the first
+        # report (a slow TCG boot can take longer than that to get any): a service that
         # can't start (its namespace fails) never will. PID 1's per-service logs
         # ride along, so a not-run unit says why
         f.write("#!/bin/sh\nn=0 still=0 last=-1\nwhile [ $n -lt 240 ] && [ $still -lt 15 ]; do\n"
                 "  c=$(ls /run/probe | wc -l)\n  [ $c -ge %d ] && break\n"
-                "  [ $c = $last ] && still=$((still+1)) || still=0\n  last=$c; sleep 1; n=$((n+1))\ndone\n"
+                "  [ $c -gt 0 ] && [ $c = $last ] && still=$((still+1)) || still=0\n  last=$c; sleep 1; n=$((n+1))\ndone\n"
                 "stty -F /dev/ttyS1 raw 2>/dev/null\n"
                 "{ echo ENFORCE-BEGIN; cd / && tar c run/probe $(ls -d var/log/schema-init run/log/schema-init "
                 "2>/dev/null) | gzip -1 | base64; echo ENFORCE-END; } > /dev/ttyS1\n"
@@ -283,8 +280,8 @@ def limit(v, nr_open):
     return one(soft), one(hard or soft)
 
 
+# {(section, key): (verdict, detail)} for each directive with an oracle
 def judge(sections, rep, ctl, users, groups, overlays):
-    """{(section, key): (verdict, detail)} for each directive with an oracle."""
     one = lambda k: rep.get(k, ["?"])[0].strip()
     out = {}
     uid = int(one("uid")) if one("uid").lstrip("-").isdigit() else None
@@ -298,7 +295,11 @@ def judge(sections, rep, ctl, users, groups, overlays):
     ids = lambda n, table: 0 if n in (None, "root") else int(n) if n.isdigit() else table.get(n)
     # ExecStart=! or + : systemd doesn't switch to User=/Group= for the command
     starts = all_of(sections, "Service", "ExecStart")
-    elevated = bool(starts) and any(c in "+!" for c in re.match(r"[@\-:+!]*", starts[0]).group(0))
+    # the importer's rule: !! is only the no-ambient-caps fallback, so it runs as User=
+    pfx = re.match(r"[@\-:+!]*", starts[0]).group(0) if starts else ""
+    elevated = "+" in pfx or ("!" in pfx and "!!" not in pfx)
+    # + : systemd applies no sandboxing at all, so none is expected
+    unsandboxed = "+" in pfx
     u, g = sv("User"), sv("Group")
     if u:
         want = 0 if elevated else ids(u, users)
@@ -306,8 +307,15 @@ def judge(sections, rep, ctl, users, groups, overlays):
     if g:
         want = 0 if elevated else ids(g, groups)
         put("Group", one("gid") == str(want), want, one("gid"))
+    du = sv("DynamicUser")
+    if du is not None and not elevated:
+        if truthy(du):   # an allocated uid, or the static User= when it names one
+            put("DynamicUser", uid not in (None, 0) and (not u or u == "root" or uid == ids(u, users)),
+                "non-root uid", uid)
+        else:
+            put("DynamicUser", uid == ids(u, users), ids(u, users), uid)
     sg = " ".join(all_of(sections, "Service", "SupplementaryGroups")).split()
-    if sg:
+    if sg and not elevated:
         want = {str(int(x) if x.isdigit() else groups.get(x)) for x in sg}
         got = set(one("groups").split(","))
         put("SupplementaryGroups", want <= got, sorted(want), sorted(got))
@@ -321,26 +329,31 @@ def judge(sections, rep, ctl, users, groups, overlays):
         put("WorkingDirectory", one("cwd") == wd.lstrip("-").rstrip("/") or one("cwd") == wd.lstrip("-"),
             wd.lstrip("-"), one("cwd"))
     env = dict(e.split("=", 1) for e in rep.get("env", []) if "=" in e)
+    # systemd's order: Environment= lines, then each EnvironmentFile= over them,
+    # a later file over an earlier one. Each key is judged under the directive
+    # whose value wins
     want_env = {}
     for v in all_of(sections, "Service", "Environment"):
         try:
             words = shlex.split(v)
         except ValueError:
             continue
-        want_env.update(w.split("=", 1) for w in words if "=" in w and "%" not in w and "$" not in w)
-    if want_env:
-        bad = {k: (v, env.get(k)) for k, v in want_env.items() if env.get(k) != v}
-        put("Environment", not bad, "all set", bad or "all set")
+        want_env.update((w.split("=", 1)[0], (w.split("=", 1)[1], "Environment"))
+                        for w in words if "=" in w and "%" not in w and "$" not in w)
     for v in all_of(sections, "Service", "EnvironmentFile"):
         p = v.lstrip("-")
         src = next((os.path.join(o, p.lstrip("/")) for o in overlays if os.path.exists(os.path.join(o, p.lstrip("/")))), None)
         if not src:
             continue   # absent in the guest as on most hosts: nothing to load
-        fe = dict(ln.split("=", 1) for ln in open(src).read().splitlines()
-                  if "=" in ln and not ln.lstrip().startswith("#"))
-        fe = {k.strip(): val.strip().strip('"\'') for k, val in fe.items()}
-        bad = {k: (val, env.get(k)) for k, val in fe.items() if env.get(k) != val}
-        put("EnvironmentFile", not bad, "all set", bad or "all set")
+        for ln in open(src).read().splitlines():
+            if "=" in ln and not ln.lstrip().startswith("#"):
+                k, val = ln.split("=", 1)
+                want_env[k.strip()] = (val.strip().strip('"\''), "EnvironmentFile")
+    for d in ("Environment", "EnvironmentFile"):
+        mine = {k: v for k, (v, src) in want_env.items() if src == d}
+        if mine:
+            bad = {k: (v, env.get(k)) for k, v in mine.items() if env.get(k) != v}
+            put(d, not bad, "all set", bad or "all set")
     for d, k in LIMITS.items():
         if sv(d):
             want = limit(sv(d), int(one("nr_open")) if d == "LimitNOFILE" else None)
@@ -368,7 +381,8 @@ def judge(sections, rep, ctl, users, groups, overlays):
         bnd = int(one("capbnd"), 16)
         put("ProtectKernelModules", not bnd & (1 << CAP["CAP_SYS_MODULE"]), "no CAP_SYS_MODULE", hex(bnd))
     if truthy(sv("PrivateDevices")):
-        put("PrivateDevices", one("dev_mem") == "0", "/dev/mem hidden", "hidden" if one("dev_mem") == "0" else "visible")
+        put("PrivateDevices", one("dev_mem") == "0", "/dev/mem hidden", "hidden" if one("dev_mem") == "0" else "visible",
+            ctl["dev_mem"][0] == "1")
     for d, k in (("PrivateNetwork", "ns_net"), ("ProtectHostname", "ns_uts")):
         if truthy(sv(d)) or (d == "ProtectHostname" and (sv(d) or "").lower().startswith("private")):
             put(d, one(k) != ctl[k][0], "own namespace", "own" if one(k) != ctl[k][0] else "host's")
@@ -388,8 +402,18 @@ def judge(sections, rep, ctl, users, groups, overlays):
         if denies_uts:
             put("RestrictNamespaces", one("unshare_refused") == "1", "unshare(UTS) refused",
                 "refused" if one("unshare_refused") == "1" else "allowed", root and ctl["unshare_refused"][0] == "0")
-    if all_of(sections, "Service", "SystemCallFilter"):
-        put("SystemCallFilter", one("seccomp") == "2", "seccomp filter (2)", one("seccomp"))
+    scf = all_of(sections, "Service", "SystemCallFilter")
+    if scf:
+        # judged on swapoff (@swap): denied by an allow-list without it, or a
+        # deny-list naming it. Seccomp: 2 alone would also come from
+        # LockPersonality= & co, which the engine builds as seccomp too
+        allow = [v for v in scf if not v.startswith("~")]
+        names = set(" ".join(v.lstrip("~") for v in scf).split())
+        denied = (allow and not names & {"@swap", "swapoff"}) or \
+            any(v.startswith("~") and set(v[1:].split()) & {"@swap", "swapoff"} for v in scf)
+        blocked = one("swapoff") != ctl["swapoff"][0]
+        put("SystemCallFilter", blocked, "swapoff filtered", "%s (control %s)" % (one("swapoff"), ctl["swapoff"][0]),
+            bool(denied))
     cb = all_of(sections, "Service", "CapabilityBoundingSet")
     if cb:
         want = caps_mask(cb)
@@ -411,7 +435,7 @@ def judge(sections, rep, ctl, users, groups, overlays):
                 full = os.path.join(base, p.split(":")[0])
                 got = paths.get(full, ["missing"])
                 # systemd hands each to User=, except a config dir, which stays root's
-                owner = 0 if d == "ConfigurationDirectory" or sv("DynamicUser") else ids(u, users)
+                owner = 0 if d == "ConfigurationDirectory" or truthy(sv("DynamicUser")) else ids(u, users)
                 ok = got[0] != "missing" and (truthy(sv("DynamicUser")) or got[0] == str(owner))
                 put(d, ok, "%s owned by %s" % (full, owner), " ".join(got))
     for k, want_ro in (("ReadWritePaths", "0"), ("ReadOnlyPaths", "1")):
@@ -424,6 +448,8 @@ def judge(sections, rep, ctl, users, groups, overlays):
                 if got[0] == "missing" and p.startswith("-"):
                     continue
                 put(k, got[0] != "missing" and got[-1] == want_ro, "%s ro=%s" % (q, want_ro), " ".join(got))
+    if unsandboxed:
+        out = {k: v for k, v in out.items() if k[1] not in SANDBOX}
     return out
 
 
@@ -449,6 +475,10 @@ def main():
         cc.foreign(a.security or "audit")
     if not os.access(os.path.join(REPO, "schema-init"), os.X_OK):
         sys.exit("compat-enforce: build ./schema-init first (make schema-init)")
+    # the guest has no libc: a dynamic PID 1 only shows as a kernel panic
+    if not re.search(r"static(ally|-pie) linked", subprocess.run(["file", "-L", os.path.join(REPO, "schema-init")],
+                                                                 capture_output=True, text=True).stdout):
+        sys.exit("compat-enforce: ./schema-init is not static; make clean && make schema-init")
     tamper = collections.defaultdict(set)
     for t in a.tamper:
         u, _, ln = t.partition(":")

@@ -1,0 +1,4 @@
+[Service]
+ExecStart=/usr/bin/dyn
+DynamicUser=yes
+StateDirectory=dynstate
