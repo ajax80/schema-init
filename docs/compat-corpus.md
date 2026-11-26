@@ -217,9 +217,9 @@ already behaves the same way, or warned with `not enforced:`:
 | directive | kept | warned |
 |---|---|---|
 | `RemainAfterExit=` | on a oneshot: a finished oneshot stays done and its dependents go on | on any other type (one Arch unit): the exit is supervised |
-| `Conflicts=` | a `.target`: schema-init starts none, and its shutdown stops every service | a service or socket (libvirtd, tlp, getty): starting one doesn't stop the other |
-| `ExecStop=` / `ExecStopPost=` | `kill [-SIG] $MAINPID` with the unit's own kill signal | anything else: a system service is still stopped by its `kill_signal` alone (user imports map them) |
-| `NotifyAccess=` | `main`/`exec`: PID 1 takes notify messages only from the service's own cgroup | `all` on a notify unit (no `MAINPID=` hand-off on system imports), `none` |
+| `Conflicts=` | a `.target`: schema-init starts none, and its shutdown stops every service | a service or socket (libvirtd, tlp, getty), on the unit or its activating `.socket`: starting one doesn't stop the other |
+| `ExecStop=` / `ExecStopPost=` | `kill [-SIG] $MAINPID` with the unit's own kill signal (compared by number) | anything else: a system service is still stopped by its `kill_signal` alone (user imports map them) |
+| `NotifyAccess=` | `main`/`exec`: PID 1 takes notify messages only from the service's own cgroup | `all` on a notify unit (no `MAINPID=` hand-off on system imports), `none`, and any value on a non-notify type (no notify socket) |
 
 Silent directives after the change: Fedora 105, Debian 57, Ubuntu 56, Arch 66.
 What tops the list now is `Install.Alias`, `StartLimit*`, `KeyringMode`,

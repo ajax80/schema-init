@@ -1621,7 +1621,6 @@ check("... not for ExecStart=!! (runs as User=)", "dir_owner" not in si.unit_to_
 check("... not for a ConfigurationDirectory= alone (root's anyway)", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
       "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\nConfigurationDirectory=chrony\n")))
 _ls = lambda body: si.unit_to_svc("ls", si.parse_unit("[Unit]\nDescription=x\n" + body))
-_W = si.WARN_PREFIX
 check("RemainAfterExit=yes on a oneshot: kept as is, no warning",
       "RemainAfterExit" not in _ls("[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n"))
 check("RemainAfterExit=yes on Type=forking: warned",
@@ -1630,8 +1629,17 @@ check("RemainAfterExit=yes on Type=forking: warned",
 check("Conflicts= on targets only: no warning",
       "Conflicts" not in _ls("Conflicts=shutdown.target emergency.target\n[Service]\nExecStart=/bin/x\n"))
 _cf = _ls("Conflicts=shutdown.target tlp.service\n[Service]\nExecStart=/bin/x\n")
-check("Conflicts= naming a service: warned, the target left out",
-      "Conflicts=tlp.service: starting one" in _cf and "not enforced: Conflicts" in _cf)
+check("Conflicts= naming a service: warned as a WARN line, the target left out",
+      si.WARN_PREFIX + "Conflicts=tlp.service: starting one" in _cf and "not enforced: Conflicts" in _cf)
+check("Conflicts= on the activating socket: warned",
+      "Conflicts=old.service (on its .socket)" in si.unit_to_svc("ls", si.parse_unit("[Service]\nExecStart=/bin/x\n"),
+          sock=si.parse_unit("[Unit]\nConflicts=old.service\n[Socket]\nListenStream=/run/ls.sock\n")))
+check("ExecStop=kill $MAINPID with KillSignal=15: same signal, no warning",
+      "ExecStop" not in _ls("[Service]\nExecStart=/bin/x\nKillSignal=15\nExecStop=/bin/kill $MAINPID\n"))
+check("ExecStop=kill -9 $MAINPID with KillSignal=SIGKILL: no warning",
+      "ExecStop" not in _ls("[Service]\nExecStart=/bin/x\nKillSignal=SIGKILL\nExecStop=/bin/kill -9 $MAINPID\n"))
+check("NotifyAccess=all on Type=simple: warned",
+      "NotifyAccess=all on Type=simple" in _ls("[Service]\nNotifyAccess=all\nExecStart=/bin/x\n"))
 check("ExecStop= on a system unit: warned, not run",
       "not enforced: ExecStop" in _ls("[Service]\nExecStart=/bin/x\nExecStop=/bin/x --quit\n")
       and "exec_stop=" not in _ls("[Service]\nExecStart=/bin/x\nExecStop=/bin/x --quit\n"))

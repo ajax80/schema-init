@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -162,6 +163,32 @@ def _kill_mainpid_sig(argv):
         return _reload_sig(mid[0][1:])
     if len(mid) == 2 and mid[0] in ("-s", "--signal"):
         return _reload_sig(mid[1])
+    return None
+
+
+# a signal name or number -> its number; None for what isn't one
+def _signum(v):
+    n = v.strip().upper()
+    n = n[3:] if n.startswith("SIG") else n
+    if n.isdigit():
+        return int(n) if 1 <= int(n) <= 64 else None
+    s = getattr(signal, "SIG" + n, None)
+    return int(s) if isinstance(s, signal.Signals) else None
+
+
+# kill [-SIG|-s SIG|--signal=SIG] $MAINPID -> the signal's number (TERM bare)
+def _stop_kill_sig(argv):
+    if len(argv) < 2 or os.path.basename(argv[0]) != "kill" or argv[-1] not in ("$MAINPID", "${MAINPID}"):
+        return None
+    mid = argv[1:-1]
+    if not mid:
+        return int(signal.SIGTERM)
+    if len(mid) == 1 and mid[0].startswith("--signal="):
+        return _signum(mid[0][9:])
+    if len(mid) == 1 and mid[0].startswith("-") and not mid[0].startswith("--"):
+        return _signum(mid[0][1:])
+    if len(mid) == 2 and mid[0] in ("-s", "--signal"):
+        return _signum(mid[1])
     return None
 
 
@@ -1957,7 +1984,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     else:
         # SIGTERM alone, as above: said out loud, unless the command is that
         # signal to the main process anyway (kill_signal reaches it the same way)
-        ks = _reload_sig(_get_last(svc, "KillSignal") or "TERM")
+        ks = _signum(_get_last(svc, "KillSignal") or "TERM")
         for key in ("ExecStop", "ExecStopPost"):
             for v in _get_all(svc, key):
                 if not v.strip():
@@ -1966,8 +1993,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                     pa = shlex.split(v.lstrip(_EXEC_PREFIX))
                 except ValueError:
                     pa = []
-                bare = len(pa) == 2 and os.path.basename(pa[0]) == "kill" and pa[1] in ("$MAINPID", "${MAINPID}")
-                if key == "ExecStop" and ks and (bare and ks == "TERM" or _kill_mainpid_sig(pa) == ks):
+                if key == "ExecStop" and ks and _stop_kill_sig(pa) == ks:
                     continue
                 stop_warns.append("%s=%s not run: a system service is stopped by its kill_signal alone; "
                                   "not enforced: %s" % (key, v.strip(), key))
@@ -2003,16 +2029,18 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         else:
             reload_warns.append("ReloadSignal=%s dropped: not a signal reload_signal= takes" % rs)
 
-    # a finished oneshot stays done here and its dependents go on: what
-    # RemainAfterExit=yes keeps. Any other type: its exit is supervised as usual
     life_warns = []
     # schema-init starts no targets, and its shutdown stops every service: a
-    # conflict with one (shutdown.target, umount.target, emergency.target) is kept
-    clash = [u for u in " ".join(_get_all(sections.get("Unit", []), "Conflicts")).split()
-             if not u.endswith(".target")]
-    if clash:
-        life_warns.append("Conflicts=%s: starting one doesn't stop the other; not enforced: Conflicts"
-                          % " ".join(clash))
+    # conflict with one (shutdown.target, umount.target, emergency.target) is
+    # kept. The activating socket's own Conflicts= counts too
+    for src, secs in (("", sections), (".socket", sock or {})):
+        clash = [u for u in " ".join(_get_all(secs.get("Unit", []), "Conflicts")).split()
+                 if not u.endswith(".target")]
+        if clash:
+            life_warns.append("Conflicts=%s%s: starting one doesn't stop the other; not enforced: Conflicts"
+                              % (" ".join(clash), " (on its .socket)" if src else ""))
+    # a finished oneshot stays done here and its dependents go on: what
+    # RemainAfterExit=yes keeps. Any other type: its exit is supervised as usual
     rae = _get_last(svc, "RemainAfterExit").lower() in _TRUE
     if rae and stype != "oneshot":
         life_warns.append("RemainAfterExit=yes on Type=%s: the main process's exit is supervised (restart=, "
@@ -2033,10 +2061,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
                          "supervising the pid it started; not enforced: NotifyAccess")
         elif na == "none":
             life_warns.append("NotifyAccess=none: READY=1 still taken from the service; not enforced: NotifyAccess")
-    else:
-        # no notify socket without notify=1, but nothing then needs one: a
-        # watchdog without it is warned with WatchdogSec=
-        _get_last(svc, "NotifyAccess")
+    elif _get_last(svc, "NotifyAccess").lower() not in ("", "none"):
+        # systemd hands NOTIFY_SOCKET to any type with it (STATUS=, MAINPID=)
+        life_warns.append("NotifyAccess=%s on Type=%s: no notify socket without Type=notify; "
+                          "not enforced: NotifyAccess" % (_get_last(svc, "NotifyAccess"), stype or "simple"))
     if stype == "dbus":
         lines.append("ready_bus_name=%s" % busname)
     elif stype == "forking":
