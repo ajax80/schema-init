@@ -10,7 +10,7 @@
 #
 # Nothing is vendored: the lock holds names, versions, paths and hashes only.
 # A package whose hash doesn't match the lock is an error, never a re-resolve.
-import argparse, hashlib, io, json, lzma, os, re, sys, tarfile, urllib.request
+import argparse, hashlib, io, json, lzma, os, re, shutil, sys, tarfile, urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK = os.path.join(REPO, "tools/compat-corpus.lock.json")
@@ -45,11 +45,13 @@ def pkg_index(d):
                 if not m.name.endswith("/desc"):
                     continue
                 f = dict(re.findall(r"%([A-Z0-9]+)%\n([^\n]*)", t.extractfile(m).read().decode()))
+                if f["NAME"] in out:   # first repo listed wins, as in deb_index
+                    continue
                 out[f["NAME"]] = (f["VERSION"], "%s/os/x86_64/%s" % (repo, f["FILENAME"]), f["SHA256SUM"])
     return out
 
 
-def resolve(lock):
+def resolve(lock, path):
     for name, d in lock.items():
         idx = deb_index(d) if d["format"] == "deb" else pkg_index(d)
         missing = [p for p in d["want"] if p not in idx]
@@ -57,7 +59,7 @@ def resolve(lock):
                          for p in d["want"] if p in idx]
         print("%s: %d pinned%s" % (name, len(d["packages"]),
                                    ", not in snapshot: " + " ".join(missing) if missing else ""))
-    with open(LOCK, "w") as f:
+    with open(path, "w") as f:
         json.dump(lock, f, indent=1)
         f.write("\n")
 
@@ -77,22 +79,33 @@ def deb_data(blob):
 
 
 # only <unit dir>/<file> and <unit dir>/<unit>.d/<file>, flattened into dest.
-# Links are recreated, never followed: compat-corpus skips them, and an
-# absolute target (/dev/null for a masked unit) must not resolve on this host
-def extract_units(tarblob, dest):
+# A unit-file link is recreated, never followed: compat-corpus skips links, and
+# an absolute target (/dev/null for a masked unit) must not resolve on this host.
+# A linked <unit>.d is dropped: files under it would be written through the link.
+# A name shipped twice (lib/ and usr/lib/, or two packages that conflict, like
+# Ubuntu's mariadb-server aliasing mysql.service and mysql-server-8.0's real one):
+# a real file replaces a link, else the first copy wins, said out loud either way
+# so the result never hangs on lock order unseen
+def extract_units(tarblob, dest, pkg):
     n = 0
     with tarfile.open(fileobj=io.BytesIO(tarblob)) as t:
         for m in t:
-            p = m.name.lstrip("./")
+            p = m.name.removeprefix("./")
             rel = next((p[len(u):] for u in UNIT_DIRS if p.startswith(u)), None)
             parts = rel.split("/") if rel else []
             if not rel or len(parts) > 2 or (len(parts) == 2 and not parts[0].endswith(".d")) \
-                    or ".." in parts or not (m.isfile() or m.issym()):
+                    or ".." in parts or not (m.isfile() or m.islnk() or m.issym()) \
+                    or (m.issym() and (len(parts) == 2 or rel.endswith(".d"))):
                 continue
             out = os.path.join(dest, rel)
-            os.makedirs(os.path.dirname(out), exist_ok=True)
             if os.path.lexists(out):
-                os.unlink(out)
+                if os.path.islink(out) and not m.issym():
+                    print("compat-fetch: %s: %s replaces an alias link" % (pkg, rel), file=sys.stderr)
+                    os.unlink(out)
+                else:
+                    print("compat-fetch: %s: %s already extracted, kept the first" % (pkg, rel), file=sys.stderr)
+                    continue
+            os.makedirs(os.path.dirname(out), exist_ok=True)
             if m.issym():
                 os.symlink(m.linkname, out)
             else:
@@ -107,7 +120,9 @@ def fetch(lock, out):
     os.makedirs(cache, exist_ok=True)
     for name, d in lock.items():
         dest = os.path.join(out, name)
-        os.makedirs(dest, exist_ok=True)
+        # rebuilt from the cache each run, so a package dropped from the lock leaves nothing behind
+        shutil.rmtree(dest, ignore_errors=True)
+        os.makedirs(dest)
         total = 0
         for p in d["packages"]:
             cp = os.path.join(cache, p["sha256"])
@@ -117,7 +132,7 @@ def fetch(lock, out):
             if not os.path.exists(cp):
                 with open(cp, "wb") as f:
                     f.write(blob)
-            total += extract_units(deb_data(blob) if d["format"] == "deb" else blob, dest)
+            total += extract_units(deb_data(blob) if d["format"] == "deb" else blob, dest, p["name"])
         print("%s: %d packages, %d unit files -> %s" % (name, len(d["packages"]), total, dest))
 
 
@@ -129,8 +144,11 @@ def main():
     a = ap.parse_args()
     lock = json.load(open(a.lock))
     if a.resolve:
-        resolve(lock)
+        resolve(lock, a.lock)
     elif a.out:
+        # Arch packages and Ubuntu's data.tar are zstd: tarfile reads it from 3.14
+        if "zst" not in tarfile.TarFile.OPEN_METH:
+            sys.exit("compat-fetch: this Python's tarfile can't read zstd (needs 3.14 with zstd)")
         fetch(lock, a.out)
     else:
         ap.error("give OUT or --resolve")

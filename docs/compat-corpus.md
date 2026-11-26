@@ -80,7 +80,8 @@ dated snapshot archive (snapshot.debian.org, snapshot.ubuntu.com,
 archive.archlinux.org, all 2026-11-20, URLs that never change) and the packages
 pinned in it by version and sha256. It downloads each one, refuses a hash that
 doesn't match, and extracts only the package's systemd unit dir and its drop-ins.
-Nothing is vendored. `--resolve` re-pins the lock from the snapshots; change the
+Each tree is rebuilt from the hash-keyed cache on every run. Nothing is vendored.
+Arch packages and Ubuntu's are zstd, so it needs Python 3.14. `--resolve` re-pins the lock from the snapshots; change the
 dates in the lock first to move forward.
 
 The package set is the same ground on each: ssh, web and database servers,

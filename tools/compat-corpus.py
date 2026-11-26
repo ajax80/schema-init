@@ -193,11 +193,13 @@ def main():
     ap.add_argument("--skip-systemd", action="store_true", help="leave out systemd-*.service (systemd's own)")
     ap.add_argument("--foreign", action="store_true",
                     help="judge machine-fixed conditions against a fixed reference host, not this one")
-    ap.add_argument("--security", default="audit",
-                    help="--foreign: the reference host's security modules (debian/ubuntu: apparmor,audit)")
+    ap.add_argument("--security",
+                    help="--foreign: the reference host's security modules (default audit; debian/ubuntu: apparmor,audit)")
     a = ap.parse_args()
+    if a.security is not None and not a.foreign:
+        ap.error("--security only applies with --foreign")
     if a.foreign:
-        foreign(a.security)
+        foreign(a.security or "audit")
     if not os.access(os.path.join(REPO, "schema-init"), os.X_OK):
         sys.exit("compat-corpus: build ./schema-init first (make schema-init)")
     units = sorted({p for d in a.dirs for p in glob.glob(os.path.join(d, "*.service")) if not os.path.islink(p)})
