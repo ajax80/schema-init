@@ -1590,7 +1590,8 @@ for key, base, var, nk in (("StateDirectory", "/var/lib", "STATE_DIRECTORY", "st
 # root:adm 0750 config dir to the service user would let it rewrite its own config.
 _c = _rtenv("User=nobody\nConfigurationDirectory=fam\n")
 check("config dir: only made if absent", "test -e /etc/fam ||" in _c)
-check("config dir: fresh one owned by User=", "install -d -m 0755 -o nobody -g nobody /etc/fam" in _c)
+check("config dir: fresh one stays root's, not User='s (systemd.exec)", "install -d -m 0755 /etc/fam\"" in _c
+      and "-o nobody" not in _c and "-g " not in _rtenv("Group=adm\nConfigurationDirectory=fam\n"))
 check("config dir: never an unconditional install", "exec_pre=+-/usr/bin/install" not in _c)
 check("config dir: variable set", "env=CONFIGURATION_DIRECTORY=/etc/fam\n" in _c)
 check("config dir: mode honoured when fresh", "-m 0700 " in _rtenv("ConfigurationDirectory=fam\nConfigurationDirectoryMode=0700\n"))
@@ -1601,6 +1602,24 @@ check("config dir: a name the shell line can't carry is warned, not run", "a b" 
 for _p in ("full", "strict"):
     check("config dir stays writable under ProtectSystem=" + _p, "rw_path=" in _rtenv("ProtectSystem=%s\nConfigurationDirectory=qp\n" % _p) and "/etc/qp" in [l for l in _rtenv("ProtectSystem=%s\nConfigurationDirectory=qp\n" % _p).splitlines() if l.startswith("rw_path=")][0])
 check("no protection, no rw_path", "rw_path=" not in _rtenv("ConfigurationDirectory=qp\n"))
+_bang = si.unit_to_svc("ch", si.parse_unit("[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\nStateDirectory=chrony\n"
+                                           "LogsDirectory=chrony\n"))
+check("ExecStart=! with User= and *Directory=: ownership loss warned",
+      si.WARN_PREFIX + "StateDirectory= LogsDirectory= owned by root, not User=_chrony" in _bang
+      and "not enforced: StateDirectory LogsDirectory\n" in _bang)
+check("... not without a *Directory=", "owned by root" not in si.unit_to_svc("ch", si.parse_unit(
+      "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\n")))
+_kt = lambda extra: si.unit_to_svc("kt", si.parse_unit("[Service]\nExecStart=/bin/kt\n" + extra))
+check("ReadWritePaths= under /sys with ProtectKernelTunables= -> rw_path (fprintd)",
+      "rw_path=/sys/devices\n" in _kt("ProtectKernelTunables=yes\nReadWritePaths=/sys/devices\n"))
+check("... /proc/sys too", "rw_path=/proc/sys/net\n" in _kt("ProtectKernelTunables=yes\nReadWritePaths=/proc/sys/net\n"))
+check("... /sys/fs/cgroup with ProtectControlGroups=",
+      "rw_path=/sys/fs/cgroup/x\n" in _kt("ProtectControlGroups=yes\nReadWritePaths=/sys/fs/cgroup/x\n"))
+check("/sys writable already without ProtectKernelTunables=: no rw_path",
+      "rw_path=" not in _kt("ReadWritePaths=/sys/devices\n"))
+check("rw_path under protect_system and /sys together",
+      "rw_path=/etc/a\n" in _kt("ProtectSystem=full\nProtectKernelTunables=yes\nReadWritePaths=/etc/a /sys/b\n")
+      and "rw_path=/sys/b\n" in _kt("ProtectSystem=full\nProtectKernelTunables=yes\nReadWritePaths=/etc/a /sys/b\n"))
 # hard to reach otherwise: /var can be a separate mount, and install must not run before it
 _dl, _ = si.dep_lines("r", si.parse_unit("[Unit]\nDefaultDependencies=no\n[Service]\nStateDirectory=x\n"), {"mount-fstab"})
 check("StateDirectory= waits for mounts", "dep=mount-fstab" in _dl)
