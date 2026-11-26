@@ -675,8 +675,8 @@ int services_load(const char *dir, service_t *table, int max);
 
 /* .svc files and drop-ins the last services_load refused on owner/mode */
 extern int svc_refused;
-/* set while re-exec or reload parses: a running service whose exec= is relative
- * is kept (with a warning) rather than refused */
+/* set while re-exec or reload parses: a service already loaded whose exec= is
+ * relative is kept (with a warning) rather than refused */
 extern int (*service_relexec_keep)(const char *name);
 
 /* open read-only; -1 with errno EPERM unless a regular file owned by root

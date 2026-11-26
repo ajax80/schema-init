@@ -3453,11 +3453,10 @@ void listen_adopt(service_t *svc) {
  * `err` filled in. The caller reports that outcome: a reload can be refused for
  * three different reasons and the operator has to be told which, over the same
  * channel they asked on. */
-/* service_relexec_keep while reload parses: running now */
-static int relexec_running_live(const char *name) {
+/* service_relexec_keep while reload parses: loaded now */
+static int relexec_in_table(const char *name) {
     for (int j = 0; j < svc_count; j++)
-        if (!strcmp(services[j].name, name))
-            return services[j].child_pid > 0 || services[j].failsafe_pid > 0;
+        if (!strcmp(services[j].name, name)) return 1;
     return 0;
 }
 
@@ -3467,7 +3466,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
 
     const char *svc_dir = engine_paths.svc_dir;
     memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
-    service_relexec_keep = relexec_running_live;
+    service_relexec_keep = relexec_in_table;
     int shadow_count = services_load(svc_dir, shadow_services, MAX_SERVICES);
     service_relexec_keep = NULL;
     if (svc_refused) {
@@ -3482,7 +3481,7 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
         return -1;
     }
     if (shadow_count == 0 && engine_paths.svc_fallback) {
-        service_relexec_keep = relexec_running_live;
+        service_relexec_keep = relexec_in_table;
         shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
         service_relexec_keep = NULL;
     }
@@ -4194,17 +4193,17 @@ static int reexec_read_blob(int fd, reexec_global_t *g, int *nrs,
     return rc;
 }
 
-/* service_relexec_keep while re-exec parses: running in the blob */
-static int relexec_running_in_blob(const char *name) {
+/* service_relexec_keep while re-exec parses: loaded by the old image. Not just
+ * running: one in backoff, parked on a socket or between timer runs is live too */
+static int relexec_in_blob(const char *name) {
     for (int j = 0; j < reexec_svcs_n; j++)
-        if (!strcmp(reexec_svcs[j].name, name))
-            return reexec_svcs[j].rt.child_pid > 0 || reexec_svcs[j].rt.failsafe_pid > 0;
+        if (!strcmp(reexec_svcs[j].name, name)) return 1;
     return 0;
 }
 
-/* the blob is read first: which services are running decides what a relative exec= keeps */
+/* the blob is read first: what the old image loaded decides what a relative exec= keeps */
 static int reexec_load_config(void) {
-    service_relexec_keep = relexec_running_in_blob;
+    service_relexec_keep = relexec_in_blob;
     int cycles = engine_load(engine_paths.svc_dir);
     service_relexec_keep = NULL;
     return cycles;
@@ -4604,7 +4603,7 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
     if (reexec_read_blob(blob, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, errsz) < 0)
         return -1;
-    service_relexec_keep = relexec_running_in_blob;
+    service_relexec_keep = relexec_in_blob;
     shadow_count = services_load(engine_paths.svc_dir, shadow_services, MAX_SERVICES);
     if (shadow_count == 0 && engine_paths.svc_fallback)
         shadow_count = services_load(engine_paths.svc_fallback, shadow_services, MAX_SERVICES);
