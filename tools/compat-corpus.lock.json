@@ -1,0 +1,1677 @@
+{
+ "debian-trixie": {
+  "format": "deb",
+  "base": "https://snapshot.debian.org/archive/debian/20261120T000000Z",
+  "suite": "trixie",
+  "components": [
+   "main"
+  ],
+  "want": [
+   "openssh-server",
+   "nginx",
+   "apache2",
+   "postgresql-common",
+   "mariadb-server",
+   "redis-server",
+   "chrony",
+   "cups-daemon",
+   "cups-browsed",
+   "avahi-daemon",
+   "bluez",
+   "network-manager",
+   "modemmanager",
+   "wpasupplicant",
+   "libvirt-daemon-system",
+   "libvirt-daemon",
+   "containerd",
+   "docker.io",
+   "podman",
+   "polkitd",
+   "udisks2",
+   "upower",
+   "accountsservice",
+   "gdm3",
+   "sddm",
+   "lightdm",
+   "rsync",
+   "cron",
+   "anacron",
+   "nfs-kernel-server",
+   "nfs-common",
+   "samba",
+   "winbind",
+   "smartmontools",
+   "lvm2",
+   "mdadm",
+   "ufw",
+   "fail2ban",
+   "unattended-upgrades",
+   "apparmor",
+   "haproxy",
+   "bind9",
+   "dnsmasq",
+   "postfix",
+   "rsyslog",
+   "tor",
+   "nftables",
+   "firewalld",
+   "cloud-init",
+   "qemu-guest-agent",
+   "open-vm-tools",
+   "tuned",
+   "irqbalance",
+   "thermald",
+   "power-profiles-daemon",
+   "fwupd",
+   "packagekit",
+   "colord",
+   "rtkit",
+   "switcheroo-control",
+   "iio-sensor-proxy",
+   "geoclue-2.0",
+   "plymouth",
+   "openvpn",
+   "wireguard-tools",
+   "apt",
+   "dbus-daemon",
+   "btrfs-progs",
+   "multipath-tools",
+   "open-iscsi",
+   "kea-dhcp4-server",
+   "isc-dhcp-server",
+   "squid",
+   "prometheus-node-exporter",
+   "snapd",
+   "netplan.io"
+  ],
+  "packages": [
+   {
+    "name": "openssh-server",
+    "version": "1:10.0p1-7+deb13u4",
+    "path": "pool/main/o/openssh/openssh-server_10.0p1-7+deb13u4_amd64.deb",
+    "sha256": "b4a02524fd2be375624d917ee8102a16567e9e8dd786b41c35e22360cdd37f9d"
+   },
+   {
+    "name": "nginx",
+    "version": "1.26.3-3+deb13u7",
+    "path": "pool/main/n/nginx/nginx_1.26.3-3+deb13u7_amd64.deb",
+    "sha256": "4ec80321b945692ab6cec4de41e571ab5d77253ada31ae61524004e45632db58"
+   },
+   {
+    "name": "apache2",
+    "version": "2.4.68-1~deb13u1",
+    "path": "pool/main/a/apache2/apache2_2.4.68-1~deb13u1_amd64.deb",
+    "sha256": "99947e7bcdc150d1cc4c078051e17a7af53b716a9453d02d43c6e38f40306e16"
+   },
+   {
+    "name": "postgresql-common",
+    "version": "278",
+    "path": "pool/main/p/postgresql-common/postgresql-common_278_all.deb",
+    "sha256": "6c9e44d4864ab764785d8c40fe51cc51ddc0d36ac9a46bd383db20a4fc5f1e76"
+   },
+   {
+    "name": "mariadb-server",
+    "version": "1:11.8.6-0+deb13u1",
+    "path": "pool/main/m/mariadb/mariadb-server_11.8.6-0+deb13u1_amd64.deb",
+    "sha256": "b62235159df3ad6dd4e82b1ff586e76a395063def855ea341252584ab61fb1b0"
+   },
+   {
+    "name": "redis-server",
+    "version": "5:8.0.2-3+deb13u2",
+    "path": "pool/main/r/redis/redis-server_8.0.2-3+deb13u2_amd64.deb",
+    "sha256": "0edc72458f66c68f2d4ccd0c9959a85a81f4ec7de410a28861cde4a2059f245c"
+   },
+   {
+    "name": "chrony",
+    "version": "4.6.1-3+deb13u2",
+    "path": "pool/main/c/chrony/chrony_4.6.1-3+deb13u2_amd64.deb",
+    "sha256": "3b3fb6b13818c288ea0121038dc3220da869c6dc5d1e5c4d5f7b13647f3ff7e7"
+   },
+   {
+    "name": "cups-daemon",
+    "version": "2.4.10-3+deb13u2",
+    "path": "pool/main/c/cups/cups-daemon_2.4.10-3+deb13u2_amd64.deb",
+    "sha256": "71e1356326df310c7f9b4e727ef4fafaf1256eb9504277d9a10100b48a42583a"
+   },
+   {
+    "name": "cups-browsed",
+    "version": "1.28.17-6+deb13u1",
+    "path": "pool/main/c/cups-filters/cups-browsed_1.28.17-6+deb13u1_amd64.deb",
+    "sha256": "18fe6fe43c8227e497b76535e520a33a5ae176d40458f55ba7645b2c22d6673b"
+   },
+   {
+    "name": "avahi-daemon",
+    "version": "0.8-16",
+    "path": "pool/main/a/avahi/avahi-daemon_0.8-16_amd64.deb",
+    "sha256": "18baeb6f29d6c11686ae62d559d8454b06012dc8c4bf0b4f4037312439ef22a3"
+   },
+   {
+    "name": "bluez",
+    "version": "5.82-1.1",
+    "path": "pool/main/b/bluez/bluez_5.82-1.1_amd64.deb",
+    "sha256": "64a680d95abb11cf02f8170b2d57115dbdee4738a6163c2cf25021f546bce8ac"
+   },
+   {
+    "name": "network-manager",
+    "version": "1.52.1-1",
+    "path": "pool/main/n/network-manager/network-manager_1.52.1-1_amd64.deb",
+    "sha256": "1e1f7aab8916b1346d39c844688409184a589a9e7f8377f9932ad95ebb7aafea"
+   },
+   {
+    "name": "modemmanager",
+    "version": "1.24.0-1+deb13u1",
+    "path": "pool/main/m/modemmanager/modemmanager_1.24.0-1+deb13u1_amd64.deb",
+    "sha256": "8f4c12ba14f4debde8b8b72a6a84720a030e6e643982dc12e01ee9bb7531709b"
+   },
+   {
+    "name": "wpasupplicant",
+    "version": "2:2.10-24",
+    "path": "pool/main/w/wpa/wpasupplicant_2.10-24_amd64.deb",
+    "sha256": "99f50410baddebd421497703ad9b6d0e05deb3dfda99a96b2814f630d9b84498"
+   },
+   {
+    "name": "libvirt-daemon-system",
+    "version": "11.3.0-3+deb13u3",
+    "path": "pool/main/libv/libvirt/libvirt-daemon-system_11.3.0-3+deb13u3_amd64.deb",
+    "sha256": "519732a1394c3e3c2c81ffef503af28a88898d984e707727ff1111181047db7c"
+   },
+   {
+    "name": "libvirt-daemon",
+    "version": "11.3.0-3+deb13u3",
+    "path": "pool/main/libv/libvirt/libvirt-daemon_11.3.0-3+deb13u3_amd64.deb",
+    "sha256": "3c5af005cf57064370871a91e225e9fdca4cd80c5ffa7fe730e11a3246c4d0fd"
+   },
+   {
+    "name": "containerd",
+    "version": "1.7.24~ds1-6+deb13u1",
+    "path": "pool/main/c/containerd/containerd_1.7.24~ds1-6+deb13u1_amd64.deb",
+    "sha256": "ed708deb96fe476a3bce4efa5c0538dfbcf717ab9a7c7944ba7260342c25899c"
+   },
+   {
+    "name": "docker.io",
+    "version": "26.1.5+dfsg1-9+deb13u1",
+    "path": "pool/main/d/docker.io/docker.io_26.1.5+dfsg1-9+deb13u1_amd64.deb",
+    "sha256": "142fe32f839a20720b2e6074b8d28d883b01bc45345f7315586b0c2d348dae87"
+   },
+   {
+    "name": "podman",
+    "version": "5.4.2+ds1-2+b2",
+    "path": "pool/main/p/podman/podman_5.4.2+ds1-2+b2_amd64.deb",
+    "sha256": "e3987a9d1e6d46cbd4ee11bd067927a5f7f886e41c7a2dbe5b89a436905d44a0"
+   },
+   {
+    "name": "polkitd",
+    "version": "126-2",
+    "path": "pool/main/p/policykit-1/polkitd_126-2_amd64.deb",
+    "sha256": "d5a9482759b4f7379eb0d83f7afb49b315165adcfd38ebb00512bb27b7cc5d74"
+   },
+   {
+    "name": "udisks2",
+    "version": "2.10.1-12.1+deb13u2",
+    "path": "pool/main/u/udisks2/udisks2_2.10.1-12.1+deb13u2_amd64.deb",
+    "sha256": "52d8b25704b7bd43f8ec78468796c0f388c73bdec794c23d7201c94504a9973c"
+   },
+   {
+    "name": "upower",
+    "version": "1.90.9-1",
+    "path": "pool/main/u/upower/upower_1.90.9-1_amd64.deb",
+    "sha256": "0417b54999efcac640a797c1c78576253a0c847ba82df4cedca2add607c998ff"
+   },
+   {
+    "name": "accountsservice",
+    "version": "23.13.9-7",
+    "path": "pool/main/a/accountsservice/accountsservice_23.13.9-7_amd64.deb",
+    "sha256": "f63a8ee4a1c2b759637d0d0826da5feffd561a38627ef066b330db533761a221"
+   },
+   {
+    "name": "gdm3",
+    "version": "48.0-2",
+    "path": "pool/main/g/gdm3/gdm3_48.0-2_amd64.deb",
+    "sha256": "246b1c9f66c2a7f0d27366716b247436436ea84a3ccef823212fbe3f9aabd1b1"
+   },
+   {
+    "name": "sddm",
+    "version": "0.21.0+git20250502.4fe234b-2",
+    "path": "pool/main/s/sddm/sddm_0.21.0+git20250502.4fe234b-2_amd64.deb",
+    "sha256": "73313ee5e20e1eff4fe02109080cc4b6d92ab32c863906d66799ed505dc8d8a8"
+   },
+   {
+    "name": "lightdm",
+    "version": "1.32.0-6+b2",
+    "path": "pool/main/l/lightdm/lightdm_1.32.0-6+b2_amd64.deb",
+    "sha256": "a812e9897f78de52569a2d1a1ba46599af0f1483fa0a77b2ac8b7f2b4a3890a9"
+   },
+   {
+    "name": "rsync",
+    "version": "3.4.1+ds1-5+deb13u4",
+    "path": "pool/main/r/rsync/rsync_3.4.1+ds1-5+deb13u4_amd64.deb",
+    "sha256": "8aa122f6ba8d2ff112c72bb9814ee096ee516f0213b36b98bbe79c83c92fb226"
+   },
+   {
+    "name": "cron",
+    "version": "3.0pl1-197",
+    "path": "pool/main/c/cron/cron_3.0pl1-197_amd64.deb",
+    "sha256": "32d7fc3e00dc504401c61682ac31c4a60068721b4e267e8439a04754af914c5b"
+   },
+   {
+    "name": "anacron",
+    "version": "2.3-43",
+    "path": "pool/main/a/anacron/anacron_2.3-43_amd64.deb",
+    "sha256": "02851efac4ede65fc8c2d618787ee1cfce4735def50b9f86a6e62c69dbdb818d"
+   },
+   {
+    "name": "nfs-kernel-server",
+    "version": "1:2.8.3-1",
+    "path": "pool/main/n/nfs-utils/nfs-kernel-server_2.8.3-1_amd64.deb",
+    "sha256": "c18689be68888fbdd0b00bda5f46f64c5c7a945e7bdd394413f1f2107d0810ca"
+   },
+   {
+    "name": "nfs-common",
+    "version": "1:2.8.3-1",
+    "path": "pool/main/n/nfs-utils/nfs-common_2.8.3-1_amd64.deb",
+    "sha256": "3bf0edc765f16d07a579712e8f40307ad61457eb82fbe928f7a107e7101e3ec1"
+   },
+   {
+    "name": "samba",
+    "version": "2:4.22.11+dfsg-0+deb13u1",
+    "path": "pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1_amd64.deb",
+    "sha256": "97a45a98de720a3e1a2d20627a26d3294f3756b188e711eef42c1afdd3461565"
+   },
+   {
+    "name": "winbind",
+    "version": "2:4.22.11+dfsg-0+deb13u1",
+    "path": "pool/main/s/samba/winbind_4.22.11+dfsg-0+deb13u1_amd64.deb",
+    "sha256": "69a43015609c5a6e7e2baaabc7286cafa93b4f25ca6f8df31a49962ab5bb703a"
+   },
+   {
+    "name": "smartmontools",
+    "version": "7.4-3",
+    "path": "pool/main/s/smartmontools/smartmontools_7.4-3_amd64.deb",
+    "sha256": "99996d0c8d821409b490c7bb896584336d733abe232160cc81ac89d9f7ed39d1"
+   },
+   {
+    "name": "lvm2",
+    "version": "2.03.31-2",
+    "path": "pool/main/l/lvm2/lvm2_2.03.31-2_amd64.deb",
+    "sha256": "a6a130eae69ec2ede92b2bf4bfab35208a5340c2c3e2dcb4453bf8fbf742d0a6"
+   },
+   {
+    "name": "mdadm",
+    "version": "4.4-11",
+    "path": "pool/main/m/mdadm/mdadm_4.4-11_amd64.deb",
+    "sha256": "6b659c6c053d7b069924a1b254c17dfb11980f4035198b7e30161fe5f0d8f6b9"
+   },
+   {
+    "name": "ufw",
+    "version": "0.36.2-9",
+    "path": "pool/main/u/ufw/ufw_0.36.2-9_all.deb",
+    "sha256": "7017dd1b5fd5a1755bc0095ef464281de72a07ab15f4bda3b9181ca371892026"
+   },
+   {
+    "name": "fail2ban",
+    "version": "1.1.0-8",
+    "path": "pool/main/f/fail2ban/fail2ban_1.1.0-8_all.deb",
+    "sha256": "ac35080546f1a1581163b2ebcb9796b08eb4abca3d3643082b76dce505cbd6d8"
+   },
+   {
+    "name": "unattended-upgrades",
+    "version": "2.12",
+    "path": "pool/main/u/unattended-upgrades/unattended-upgrades_2.12_all.deb",
+    "sha256": "a5e37d196598d2f2a7cb8c3ded760b77283d0ecf110d2f90d77d4821e3512eb6"
+   },
+   {
+    "name": "apparmor",
+    "version": "4.1.0-1",
+    "path": "pool/main/a/apparmor/apparmor_4.1.0-1_amd64.deb",
+    "sha256": "a08bf026cde3895f76d27cb5f9ba3d31d0ecf8b5b00cab9b70edaa7473d4b0a1"
+   },
+   {
+    "name": "haproxy",
+    "version": "3.0.11-1+deb13u3",
+    "path": "pool/main/h/haproxy/haproxy_3.0.11-1+deb13u3_amd64.deb",
+    "sha256": "9a0b662b6cb63167af33864f90f29c3ef66b0aeee8d213e5b635a7bab25d51d8"
+   },
+   {
+    "name": "bind9",
+    "version": "1:9.20.26-1~deb13u1",
+    "path": "pool/main/b/bind9/bind9_9.20.26-1~deb13u1_amd64.deb",
+    "sha256": "cbf9a19a436d019c424bfe31ec0950cdfdbf6a28e5c82d122e5b6f45ea210f81"
+   },
+   {
+    "name": "dnsmasq",
+    "version": "2.91-1+deb13u2",
+    "path": "pool/main/d/dnsmasq/dnsmasq_2.91-1+deb13u2_all.deb",
+    "sha256": "3ae4148fc4931b017a1d2ce74aa241fd82c2cf321faa0b49e9e70775ffb1cc44"
+   },
+   {
+    "name": "postfix",
+    "version": "3.10.13-0+deb13u1",
+    "path": "pool/main/p/postfix/postfix_3.10.13-0+deb13u1_amd64.deb",
+    "sha256": "8ce131d062484f3beb5f56615b3f731347e766c0087f5a198acf824e5f034aa2"
+   },
+   {
+    "name": "rsyslog",
+    "version": "8.2504.0-1+deb13u2",
+    "path": "pool/main/r/rsyslog/rsyslog_8.2504.0-1+deb13u2_amd64.deb",
+    "sha256": "dd1cde1606196187d98e9e4500210e2f523192cef7aab2f0a0164700ea7fe445"
+   },
+   {
+    "name": "tor",
+    "version": "0.4.9.11-0+deb13u1",
+    "path": "pool/main/t/tor/tor_0.4.9.11-0+deb13u1_amd64.deb",
+    "sha256": "2381888dc083316fa59a675434decdf94e3869c34eb1e17a6b54fc9d5a041b98"
+   },
+   {
+    "name": "nftables",
+    "version": "1.1.3-1",
+    "path": "pool/main/n/nftables/nftables_1.1.3-1_amd64.deb",
+    "sha256": "2ddfa61baaf3a76e2c499db9e521ba6affb226f85af0b6fef739f346ac5f0c39"
+   },
+   {
+    "name": "firewalld",
+    "version": "2.3.1-1+deb13u1",
+    "path": "pool/main/f/firewalld/firewalld_2.3.1-1+deb13u1_all.deb",
+    "sha256": "facd2c084dcd4482b169af0a41bfaa653b49f884385356d0c60e2509fe1097b0"
+   },
+   {
+    "name": "cloud-init",
+    "version": "25.1.4-1+deb13u1",
+    "path": "pool/main/c/cloud-init/cloud-init_25.1.4-1+deb13u1_all.deb",
+    "sha256": "1b120a44110e7234c9cf9ccde78fb5d5ea1292c94ef0ca70d09a580f72980df3"
+   },
+   {
+    "name": "qemu-guest-agent",
+    "version": "1:10.0.13+ds-0+deb13u1",
+    "path": "pool/main/q/qemu/qemu-guest-agent_10.0.13+ds-0+deb13u1_amd64.deb",
+    "sha256": "7d7d6be6a52d6ea21eabdb78f686e4bb886f933171d33f5f3cf3cf2390343abd"
+   },
+   {
+    "name": "open-vm-tools",
+    "version": "2:12.5.0-2+deb13u1",
+    "path": "pool/main/o/open-vm-tools/open-vm-tools_12.5.0-2+deb13u1_amd64.deb",
+    "sha256": "889c9cd5b43af994067d761d4f00861ab58cf13661abdca1df0efe86c07b1837"
+   },
+   {
+    "name": "tuned",
+    "version": "2.25.1-1",
+    "path": "pool/main/t/tuned/tuned_2.25.1-1_all.deb",
+    "sha256": "743c03c2411df0fb3230dd04b98ff7a76d1bf4b0c672ae59128f7e08fe684804"
+   },
+   {
+    "name": "irqbalance",
+    "version": "1.9.4-1+deb13u1",
+    "path": "pool/main/i/irqbalance/irqbalance_1.9.4-1+deb13u1_amd64.deb",
+    "sha256": "a54fa1b3ce9d4b587f1f4b5ad4cc3cf8f9547e15ee56ee4ad49869d5994317cf"
+   },
+   {
+    "name": "thermald",
+    "version": "2.5.9-1",
+    "path": "pool/main/t/thermald/thermald_2.5.9-1_amd64.deb",
+    "sha256": "fad8866132d811430653b695db8b78bd6b8e9dbcb74c0e63196e958de6ff405e"
+   },
+   {
+    "name": "power-profiles-daemon",
+    "version": "0.30-1.1",
+    "path": "pool/main/p/power-profiles-daemon/power-profiles-daemon_0.30-1.1_amd64.deb",
+    "sha256": "12c94dcb80a772226fe96ac7d88ddfd20bb7c066366427325aa01641e8518851"
+   },
+   {
+    "name": "fwupd",
+    "version": "2.0.20-1~deb13u1",
+    "path": "pool/main/f/fwupd/fwupd_2.0.20-1~deb13u1_amd64.deb",
+    "sha256": "dfbc5092bef2de146496a9e3859b5502b01c10a3c34f4b1fe4555098be5210f8"
+   },
+   {
+    "name": "packagekit",
+    "version": "1.3.1-1+deb13u1",
+    "path": "pool/main/p/packagekit/packagekit_1.3.1-1+deb13u1_amd64.deb",
+    "sha256": "15c450dfb327ec86615894eb678c61fec0507949b02631422b35e8280bee9163"
+   },
+   {
+    "name": "colord",
+    "version": "1.4.7-3",
+    "path": "pool/main/c/colord/colord_1.4.7-3_amd64.deb",
+    "sha256": "9d3239019249662d4c3543b5cfe31c5bc240b11ff75d7fd581e92682530f5e9a"
+   },
+   {
+    "name": "rtkit",
+    "version": "0.13-5.1",
+    "path": "pool/main/r/rtkit/rtkit_0.13-5.1_amd64.deb",
+    "sha256": "342aff7bfe72878207bbb9e69890168e4768dcc803f05d99816f52f552413fd6"
+   },
+   {
+    "name": "switcheroo-control",
+    "version": "2.6-3",
+    "path": "pool/main/s/switcheroo-control/switcheroo-control_2.6-3_amd64.deb",
+    "sha256": "d546bc602394a3b470b62744b4d2c1f4674cdb1d78c8b3540119555e83925c91"
+   },
+   {
+    "name": "iio-sensor-proxy",
+    "version": "3.7-3",
+    "path": "pool/main/i/iio-sensor-proxy/iio-sensor-proxy_3.7-3_amd64.deb",
+    "sha256": "911bf536a4ea0b832c267a56064d374df3f838e9458e4fb1fd506432731cc666"
+   },
+   {
+    "name": "geoclue-2.0",
+    "version": "2.7.2-2",
+    "path": "pool/main/g/geoclue-2.0/geoclue-2.0_2.7.2-2_amd64.deb",
+    "sha256": "5985a3d5e4b31aae1c5c038f7a8004a3de6c66cf6416f527cb0f0c82d4330207"
+   },
+   {
+    "name": "plymouth",
+    "version": "24.004.60-5",
+    "path": "pool/main/p/plymouth/plymouth_24.004.60-5_amd64.deb",
+    "sha256": "8b452ef36409edf221dcdcc6397f830c5ab73532b3d0f4385321f80674153fd7"
+   },
+   {
+    "name": "openvpn",
+    "version": "2.6.14-1+deb13u3",
+    "path": "pool/main/o/openvpn/openvpn_2.6.14-1+deb13u3_amd64.deb",
+    "sha256": "8952d637f0634589d733ea18e4fc36d0556dee2b38f50f963852328c2766feca"
+   },
+   {
+    "name": "wireguard-tools",
+    "version": "1.0.20210914-3",
+    "path": "pool/main/w/wireguard/wireguard-tools_1.0.20210914-3_amd64.deb",
+    "sha256": "4fc58e193786a86465596c83ebfc10bfcb5241b918e9a4b60113f62e98046fe1"
+   },
+   {
+    "name": "apt",
+    "version": "3.0.3",
+    "path": "pool/main/a/apt/apt_3.0.3_amd64.deb",
+    "sha256": "55e341fbe92d7502c98faf1b3c235393ea0744db119cf2173603e965b658aef4"
+   },
+   {
+    "name": "dbus-daemon",
+    "version": "1.16.2-2",
+    "path": "pool/main/d/dbus/dbus-daemon_1.16.2-2_amd64.deb",
+    "sha256": "c91558cbd019bd5ec3e9fde0084976d5f61977f4ef0a9ed1ff48fe3a129b91d4"
+   },
+   {
+    "name": "btrfs-progs",
+    "version": "6.14-1",
+    "path": "pool/main/b/btrfs-progs/btrfs-progs_6.14-1_amd64.deb",
+    "sha256": "ae3ab86d467b8b765ea1ea3e264c11a07a6f8a73e6b3df665c787d45b9b3491f"
+   },
+   {
+    "name": "multipath-tools",
+    "version": "0.11.1-2",
+    "path": "pool/main/m/multipath-tools/multipath-tools_0.11.1-2_amd64.deb",
+    "sha256": "afb2615aa3e00eee234ac406f9465eef71d250b589ebea23d48ce7547c1df368"
+   },
+   {
+    "name": "open-iscsi",
+    "version": "2.1.11-1+deb13u2",
+    "path": "pool/main/o/open-iscsi/open-iscsi_2.1.11-1+deb13u2_amd64.deb",
+    "sha256": "cbe0add75552f277d0eef21826e1b8610828cbd04ae1c26878bfa455fbbf31d5"
+   },
+   {
+    "name": "kea-dhcp4-server",
+    "version": "2.6.3-1+deb13u1",
+    "path": "pool/main/i/isc-kea/kea-dhcp4-server_2.6.3-1+deb13u1_amd64.deb",
+    "sha256": "4d1a5317f0061833bc51a2648ee4413a77f710bbceea5e0e472ca4b6c84aaf6a"
+   },
+   {
+    "name": "isc-dhcp-server",
+    "version": "4.4.3-P1-8",
+    "path": "pool/main/i/isc-dhcp/isc-dhcp-server_4.4.3-P1-8_amd64.deb",
+    "sha256": "1546b7cb586c65890a5a3fb43ae1b3b633d195c9c5ec64cffe6a9f1509297f98"
+   },
+   {
+    "name": "squid",
+    "version": "6.13-2+deb13u3",
+    "path": "pool/main/s/squid/squid_6.13-2+deb13u3_amd64.deb",
+    "sha256": "9b05908a0ea99d3d01d32e856ee7ddc27453b8a0a2374e5fecd1e5b66aa4bed7"
+   },
+   {
+    "name": "prometheus-node-exporter",
+    "version": "1.9.0-1+b4",
+    "path": "pool/main/p/prometheus-node-exporter/prometheus-node-exporter_1.9.0-1+b4_amd64.deb",
+    "sha256": "9db00cad0c9e160a4e9c13cbdb2833d58becb1f4cd60eeb0b5e12477ba6a42bd"
+   },
+   {
+    "name": "snapd",
+    "version": "2.68.3-3+deb13u1+b7",
+    "path": "pool/main/s/snapd/snapd_2.68.3-3+deb13u1+b7_amd64.deb",
+    "sha256": "34a1fe77a6f62d216f53868bd1cc20d7d52e3aac3070f0a8da646d2cf5bf1b63"
+   },
+   {
+    "name": "netplan.io",
+    "version": "1.1.2-7",
+    "path": "pool/main/n/netplan.io/netplan.io_1.1.2-7_amd64.deb",
+    "sha256": "f25b10e4531cd241806412135afce78a7d32b8194b073203acd23c4c1b45db02"
+   }
+  ]
+ },
+ "ubuntu-noble": {
+  "format": "deb",
+  "base": "https://snapshot.ubuntu.com/ubuntu/20261120T000000Z",
+  "suite": "noble",
+  "components": [
+   "main",
+   "universe"
+  ],
+  "want": [
+   "openssh-server",
+   "nginx",
+   "apache2",
+   "postgresql-common",
+   "mariadb-server",
+   "redis-server",
+   "chrony",
+   "cups-daemon",
+   "cups-browsed",
+   "avahi-daemon",
+   "bluez",
+   "network-manager",
+   "modemmanager",
+   "wpasupplicant",
+   "libvirt-daemon-system",
+   "libvirt-daemon",
+   "containerd",
+   "docker.io",
+   "podman",
+   "polkitd",
+   "udisks2",
+   "upower",
+   "accountsservice",
+   "gdm3",
+   "sddm",
+   "lightdm",
+   "rsync",
+   "cron",
+   "anacron",
+   "nfs-kernel-server",
+   "nfs-common",
+   "samba",
+   "winbind",
+   "smartmontools",
+   "lvm2",
+   "mdadm",
+   "ufw",
+   "fail2ban",
+   "unattended-upgrades",
+   "apparmor",
+   "haproxy",
+   "bind9",
+   "dnsmasq",
+   "postfix",
+   "rsyslog",
+   "tor",
+   "nftables",
+   "firewalld",
+   "cloud-init",
+   "qemu-guest-agent",
+   "open-vm-tools",
+   "tuned",
+   "irqbalance",
+   "thermald",
+   "power-profiles-daemon",
+   "fwupd",
+   "packagekit",
+   "colord",
+   "rtkit",
+   "switcheroo-control",
+   "iio-sensor-proxy",
+   "geoclue-2.0",
+   "plymouth",
+   "openvpn",
+   "wireguard-tools",
+   "apt",
+   "dbus-daemon",
+   "zfsutils-linux",
+   "btrfs-progs",
+   "multipath-tools",
+   "open-iscsi",
+   "kea-dhcp4-server",
+   "isc-dhcp-server",
+   "squid",
+   "prometheus-node-exporter",
+   "snapd",
+   "mysql-server-8.0",
+   "mysql-server-core-8.0",
+   "ubuntu-advantage-tools",
+   "ubuntu-pro-client",
+   "netplan.io",
+   "whoopsie",
+   "apport",
+   "lxd-installer"
+  ],
+  "packages": [
+   {
+    "name": "openssh-server",
+    "version": "1:9.6p1-3ubuntu13",
+    "path": "pool/main/o/openssh/openssh-server_9.6p1-3ubuntu13_amd64.deb",
+    "sha256": "6fe2467aff7aa8ed1cbe91a3521df69a41b90122143392f94037d4225a7098cb"
+   },
+   {
+    "name": "nginx",
+    "version": "1.24.0-2ubuntu7",
+    "path": "pool/main/n/nginx/nginx_1.24.0-2ubuntu7_amd64.deb",
+    "sha256": "de56297d8b47be0324cf699be438cb58902a26ed1307d129fc4f32aa5e4a5994"
+   },
+   {
+    "name": "apache2",
+    "version": "2.4.58-1ubuntu8",
+    "path": "pool/main/a/apache2/apache2_2.4.58-1ubuntu8_amd64.deb",
+    "sha256": "c079f0c66392586eb5b6a6a503fb84761e1b3e7a037941c6b6021a0cdfc47253"
+   },
+   {
+    "name": "postgresql-common",
+    "version": "257build1",
+    "path": "pool/main/p/postgresql-common/postgresql-common_257build1_all.deb",
+    "sha256": "881216334bef225c61b89f932963242e543cd44771ec24675c9efa34bb5a7095"
+   },
+   {
+    "name": "mariadb-server",
+    "version": "1:10.11.7-2ubuntu2",
+    "path": "pool/universe/m/mariadb/mariadb-server_10.11.7-2ubuntu2_amd64.deb",
+    "sha256": "b388a23215230e0197a4d904c34d363af7bad8b410118497043f0f2cd4fc22bb"
+   },
+   {
+    "name": "redis-server",
+    "version": "5:7.0.15-1build2",
+    "path": "pool/universe/r/redis/redis-server_7.0.15-1build2_amd64.deb",
+    "sha256": "09a7f28a2f81efcc577f81b1bf546af9bd0e5bf2c2ccdc037f66f26369ce43a4"
+   },
+   {
+    "name": "chrony",
+    "version": "4.5-1ubuntu4",
+    "path": "pool/main/c/chrony/chrony_4.5-1ubuntu4_amd64.deb",
+    "sha256": "24ca5bbd465b7a075ce915223f29a51c055e50d9785db4b828325a6171cf080f"
+   },
+   {
+    "name": "cups-daemon",
+    "version": "2.4.7-1.2ubuntu7",
+    "path": "pool/main/c/cups/cups-daemon_2.4.7-1.2ubuntu7_amd64.deb",
+    "sha256": "bcfc0f1ea00a7d8451fa35c66b2baeb23b34ee9a84741853904fd55adde2b289"
+   },
+   {
+    "name": "cups-browsed",
+    "version": "2.0.0-0ubuntu10",
+    "path": "pool/main/c/cups-browsed/cups-browsed_2.0.0-0ubuntu10_amd64.deb",
+    "sha256": "6380a19ed3f30271621b26374598e59461e3936835957c611df8ecc4e5fd6b7a"
+   },
+   {
+    "name": "avahi-daemon",
+    "version": "0.8-13ubuntu6",
+    "path": "pool/main/a/avahi/avahi-daemon_0.8-13ubuntu6_amd64.deb",
+    "sha256": "061d1a0398f590307c39904d9bfe3a0f439505027631a09f793d683155616fec"
+   },
+   {
+    "name": "bluez",
+    "version": "5.72-0ubuntu5",
+    "path": "pool/main/b/bluez/bluez_5.72-0ubuntu5_amd64.deb",
+    "sha256": "5d7105ac794280b38499cbec3945cd158c281875f3d81d746fc15caeac5ab5d9"
+   },
+   {
+    "name": "network-manager",
+    "version": "1.46.0-1ubuntu2",
+    "path": "pool/main/n/network-manager/network-manager_1.46.0-1ubuntu2_amd64.deb",
+    "sha256": "12327862f0c231b8031553cca46d669d286290548acbee396ba3c545041a7be7"
+   },
+   {
+    "name": "modemmanager",
+    "version": "1.23.4-0ubuntu2",
+    "path": "pool/main/m/modemmanager/modemmanager_1.23.4-0ubuntu2_amd64.deb",
+    "sha256": "8eae478e9591cdb72408973925ffc4ffa1049af78efbb405e5dafc48103c326d"
+   },
+   {
+    "name": "wpasupplicant",
+    "version": "2:2.10-21build4",
+    "path": "pool/main/w/wpa/wpasupplicant_2.10-21build4_amd64.deb",
+    "sha256": "6b9816878a7ea9227d4ce08ef439578e9c487c6240ed51de2ecf8fb8d1ab4acd"
+   },
+   {
+    "name": "libvirt-daemon-system",
+    "version": "10.0.0-2ubuntu8",
+    "path": "pool/main/libv/libvirt/libvirt-daemon-system_10.0.0-2ubuntu8_amd64.deb",
+    "sha256": "b74961f5be300417072defac6be067034a7763676d9374d9057e9ae9e717bbb1"
+   },
+   {
+    "name": "libvirt-daemon",
+    "version": "10.0.0-2ubuntu8",
+    "path": "pool/main/libv/libvirt/libvirt-daemon_10.0.0-2ubuntu8_amd64.deb",
+    "sha256": "3a90574a4781be251c9736e7bb74df15ff0087797182c169c26440f20c1d9721"
+   },
+   {
+    "name": "containerd",
+    "version": "1.7.12-0ubuntu4",
+    "path": "pool/main/c/containerd-app/containerd_1.7.12-0ubuntu4_amd64.deb",
+    "sha256": "379c4750e429d470260b15e41bf35cbfac15eddd4e1998f3d41b5db5b584e212"
+   },
+   {
+    "name": "docker.io",
+    "version": "24.0.7-0ubuntu4",
+    "path": "pool/universe/d/docker.io-app/docker.io_24.0.7-0ubuntu4_amd64.deb",
+    "sha256": "c5dd7b465d5cb10d1b78c733ebfb7980a234f1852b547424bfe0e57cba0e6db0"
+   },
+   {
+    "name": "podman",
+    "version": "4.9.3+ds1-1build2",
+    "path": "pool/universe/libp/libpod/podman_4.9.3+ds1-1build2_amd64.deb",
+    "sha256": "90c8b1120e60b6c8ea1ffcf473beb4de4602fff5e044b69f03adc4b3b63d969a"
+   },
+   {
+    "name": "polkitd",
+    "version": "124-2ubuntu1",
+    "path": "pool/main/p/policykit-1/polkitd_124-2ubuntu1_amd64.deb",
+    "sha256": "91c49fe129c07bee891d1dd8f174e16e640742664c1a888a33714993a4592fc7"
+   },
+   {
+    "name": "udisks2",
+    "version": "2.10.1-6build1",
+    "path": "pool/main/u/udisks2/udisks2_2.10.1-6build1_amd64.deb",
+    "sha256": "64a3146521b40eb0f276e52f49f626500458fbd765f165e4b3bc568c6ebdb2b6"
+   },
+   {
+    "name": "upower",
+    "version": "1.90.3-1",
+    "path": "pool/main/u/upower/upower_1.90.3-1_amd64.deb",
+    "sha256": "f2dd39ae2bf0940a70022815b76ca3ca906168b355397df791c3763a27235509"
+   },
+   {
+    "name": "accountsservice",
+    "version": "23.13.9-2ubuntu6",
+    "path": "pool/main/a/accountsservice/accountsservice_23.13.9-2ubuntu6_amd64.deb",
+    "sha256": "92cff947a1b7026d24942de445459d9fbf3cb7254efb98cd581cb4921a4380fd"
+   },
+   {
+    "name": "gdm3",
+    "version": "46.0-2ubuntu1",
+    "path": "pool/main/g/gdm3/gdm3_46.0-2ubuntu1_amd64.deb",
+    "sha256": "90484573f660e074e4dfc717a2123d4a0df29cc50bda473a14c60c9a27627faa"
+   },
+   {
+    "name": "sddm",
+    "version": "0.20.0-2ubuntu4",
+    "path": "pool/universe/s/sddm/sddm_0.20.0-2ubuntu4_amd64.deb",
+    "sha256": "68b65b6b608ab686a1efddabe4dcfa512d1d98ebc9ec20e18a4b0dfa4115a7f6"
+   },
+   {
+    "name": "lightdm",
+    "version": "1.30.0-0ubuntu14",
+    "path": "pool/universe/l/lightdm/lightdm_1.30.0-0ubuntu14_amd64.deb",
+    "sha256": "d812e887047adefa087324195cd0f4b396e6168af92716ecb08b7e568f52ee45"
+   },
+   {
+    "name": "rsync",
+    "version": "3.2.7-1ubuntu1",
+    "path": "pool/main/r/rsync/rsync_3.2.7-1ubuntu1_amd64.deb",
+    "sha256": "2b4e1375f190700fd0811f65356a8fa7b044915b964e84c4c55dce81b83c8423"
+   },
+   {
+    "name": "cron",
+    "version": "3.0pl1-184ubuntu2",
+    "path": "pool/main/c/cron/cron_3.0pl1-184ubuntu2_amd64.deb",
+    "sha256": "5a257b6b3b05d290964f68868db8127cca7eeef64c30dc9586f46cd4f68f1b90"
+   },
+   {
+    "name": "anacron",
+    "version": "2.3-39ubuntu2",
+    "path": "pool/main/a/anacron/anacron_2.3-39ubuntu2_amd64.deb",
+    "sha256": "2b4142e8a0a451f4d3922dfcc8f5d04f9bc4d301bc5ef86c0321a151fd06d2c2"
+   },
+   {
+    "name": "nfs-kernel-server",
+    "version": "1:2.6.4-3ubuntu5",
+    "path": "pool/main/n/nfs-utils/nfs-kernel-server_2.6.4-3ubuntu5_amd64.deb",
+    "sha256": "a0030475302383a305b4e2c9cbc93b21df4497fdfedec3f64de2beb3d677d5b9"
+   },
+   {
+    "name": "nfs-common",
+    "version": "1:2.6.4-3ubuntu5",
+    "path": "pool/main/n/nfs-utils/nfs-common_2.6.4-3ubuntu5_amd64.deb",
+    "sha256": "2a97469568538a6dc6f71862ed93c0158be1161a1f7cd9071ab1ad275c373d6b"
+   },
+   {
+    "name": "samba",
+    "version": "2:4.19.5+dfsg-4ubuntu9",
+    "path": "pool/main/s/samba/samba_4.19.5+dfsg-4ubuntu9_amd64.deb",
+    "sha256": "4c06b778150e883ce1e56552528e9ac0efd68125107ca4ba37377e2bde53957a"
+   },
+   {
+    "name": "winbind",
+    "version": "2:4.19.5+dfsg-4ubuntu9",
+    "path": "pool/main/s/samba/winbind_4.19.5+dfsg-4ubuntu9_amd64.deb",
+    "sha256": "00328fc2d2a69a42590bb3a1a3ffc5e90bfb247be989fdf61587b28e5b32dd74"
+   },
+   {
+    "name": "smartmontools",
+    "version": "7.4-2build1",
+    "path": "pool/main/s/smartmontools/smartmontools_7.4-2build1_amd64.deb",
+    "sha256": "8859c62e6346dcf0a1db77a3647f75bb7e009fd28750f5fe0f4f5a95e5078f90"
+   },
+   {
+    "name": "lvm2",
+    "version": "2.03.16-3ubuntu3",
+    "path": "pool/main/l/lvm2/lvm2_2.03.16-3ubuntu3_amd64.deb",
+    "sha256": "a5a53398b410bd32b4c235729fb0cff4504d88f829c255b1cba1d4fc6a895d41"
+   },
+   {
+    "name": "mdadm",
+    "version": "4.3-1ubuntu2",
+    "path": "pool/main/m/mdadm/mdadm_4.3-1ubuntu2_amd64.deb",
+    "sha256": "4af3e59ea012ab0e5ecd64347356c34033635ae863a3ef6f4f3b8266c3c25bd2"
+   },
+   {
+    "name": "ufw",
+    "version": "0.36.2-6",
+    "path": "pool/main/u/ufw/ufw_0.36.2-6_all.deb",
+    "sha256": "096eb403ecaf6740d160bb306970f025222ef71324319cc1cb78d06dfa462ef1"
+   },
+   {
+    "name": "fail2ban",
+    "version": "1.0.2-3",
+    "path": "pool/universe/f/fail2ban/fail2ban_1.0.2-3_all.deb",
+    "sha256": "c421521fad6ada11ef04949600a3f41a4d8a02f6451ceee748c5feefb58df3b2"
+   },
+   {
+    "name": "unattended-upgrades",
+    "version": "2.9.1+nmu4ubuntu1",
+    "path": "pool/main/u/unattended-upgrades/unattended-upgrades_2.9.1+nmu4ubuntu1_all.deb",
+    "sha256": "13c576c7d8184f509d5ddc4d75bec6e62ef3f745319cce60f8131f401091113b"
+   },
+   {
+    "name": "apparmor",
+    "version": "4.0.0-beta3-0ubuntu3",
+    "path": "pool/main/a/apparmor/apparmor_4.0.0-beta3-0ubuntu3_amd64.deb",
+    "sha256": "d783c4183840745b931b72a9df8c15d341f640efa6f3069e5935c1b6542ff840"
+   },
+   {
+    "name": "haproxy",
+    "version": "2.8.5-1ubuntu3",
+    "path": "pool/main/h/haproxy/haproxy_2.8.5-1ubuntu3_amd64.deb",
+    "sha256": "861bf08a4f55a87663cb56597991ad995e2e4b1a1fff2ce5cd31fd6bf559fbb5"
+   },
+   {
+    "name": "bind9",
+    "version": "1:9.18.24-0ubuntu5",
+    "path": "pool/main/b/bind9/bind9_9.18.24-0ubuntu5_amd64.deb",
+    "sha256": "0d7920c1c84c13c25eaa2e2c6e1dbe64e6a5ae7d9e9efd0dceba3e69afc83a6a"
+   },
+   {
+    "name": "dnsmasq",
+    "version": "2.90-2build2",
+    "path": "pool/universe/d/dnsmasq/dnsmasq_2.90-2build2_all.deb",
+    "sha256": "d17ed607ac0a65d25f0b67580fc1ac3e6aa7570dd4206faed1b84364f18e42a5"
+   },
+   {
+    "name": "postfix",
+    "version": "3.8.6-1build2",
+    "path": "pool/main/p/postfix/postfix_3.8.6-1build2_amd64.deb",
+    "sha256": "12da0ad1e6092cc9ab581ae8909454e771370eb7f8b7943a551bd7c764b69000"
+   },
+   {
+    "name": "rsyslog",
+    "version": "8.2312.0-3ubuntu9",
+    "path": "pool/main/r/rsyslog/rsyslog_8.2312.0-3ubuntu9_amd64.deb",
+    "sha256": "267dae880999e292e60245c9b390ed21ec3de6d3a1b64e72b50bc8be330c845e"
+   },
+   {
+    "name": "tor",
+    "version": "0.4.8.10-1build2",
+    "path": "pool/universe/t/tor/tor_0.4.8.10-1build2_amd64.deb",
+    "sha256": "c05e6904d650f126eee0fc4fc71118e8b2f885d201677fd4b8250998a5acae46"
+   },
+   {
+    "name": "nftables",
+    "version": "1.0.9-1build1",
+    "path": "pool/main/n/nftables/nftables_1.0.9-1build1_amd64.deb",
+    "sha256": "539a2dec3d0178fdb401f7fc351c57b1bddb08024ede5555e33c49d944fa04eb"
+   },
+   {
+    "name": "firewalld",
+    "version": "2.1.1-1",
+    "path": "pool/universe/f/firewalld/firewalld_2.1.1-1_all.deb",
+    "sha256": "16615129761e92a57ce1f0839ad8b287856d54c1390f2e3d252564a1b8f21c66"
+   },
+   {
+    "name": "cloud-init",
+    "version": "24.1.3-0ubuntu3",
+    "path": "pool/main/c/cloud-init/cloud-init_24.1.3-0ubuntu3_all.deb",
+    "sha256": "d12a22e941cec2d311961d4fdaffc6f1bb42e02813336ce5c2b4988fef4c4483"
+   },
+   {
+    "name": "qemu-guest-agent",
+    "version": "1:8.2.2+ds-0ubuntu1",
+    "path": "pool/universe/q/qemu/qemu-guest-agent_8.2.2+ds-0ubuntu1_amd64.deb",
+    "sha256": "be29fed0b37807bb1e1ede9858632e3a2422463694ce9eca3ba8dde1a583dc88"
+   },
+   {
+    "name": "open-vm-tools",
+    "version": "2:12.3.5-5build3",
+    "path": "pool/main/o/open-vm-tools/open-vm-tools_12.3.5-5build3_amd64.deb",
+    "sha256": "94f79cf623096cc4dae7a76e600914c58b54fddc7353a38dec9e93721cd4efb6"
+   },
+   {
+    "name": "tuned",
+    "version": "2.21.0-1ubuntu2",
+    "path": "pool/universe/t/tuned/tuned_2.21.0-1ubuntu2_all.deb",
+    "sha256": "7a8a6728196dfcc9392d76fd5a7e377f6f455e11d67d7963d36c6af0d16cafe8"
+   },
+   {
+    "name": "irqbalance",
+    "version": "1.9.3-2ubuntu5",
+    "path": "pool/main/i/irqbalance/irqbalance_1.9.3-2ubuntu5_amd64.deb",
+    "sha256": "72bf358310cd5509005196160943333b0016dc5c7673b3ec2221f18ec9ab5cc5"
+   },
+   {
+    "name": "thermald",
+    "version": "2.5.6-2build2",
+    "path": "pool/main/t/thermald/thermald_2.5.6-2build2_amd64.deb",
+    "sha256": "e7da0ee2ef80886358cf04cc639a31c92216fe2a371b4944c6fe240351277b4f"
+   },
+   {
+    "name": "power-profiles-daemon",
+    "version": "0.21-1",
+    "path": "pool/main/p/power-profiles-daemon/power-profiles-daemon_0.21-1_amd64.deb",
+    "sha256": "e9dd35f68a89f55730bc5a0ab492a0eee7860825d181a8df15d69cdffb992119"
+   },
+   {
+    "name": "fwupd",
+    "version": "1.9.16-1",
+    "path": "pool/main/f/fwupd/fwupd_1.9.16-1_amd64.deb",
+    "sha256": "dd4dd180189bbb869e82e8167230dd23783901379b13b9b4f32f8c27aa7ca607"
+   },
+   {
+    "name": "packagekit",
+    "version": "1.2.8-2build3",
+    "path": "pool/main/p/packagekit/packagekit_1.2.8-2build3_amd64.deb",
+    "sha256": "a6b17d22ff002b1335076ad684bae325f7b89e44447b3762b5b89142c656ee27"
+   },
+   {
+    "name": "colord",
+    "version": "1.4.7-1build2",
+    "path": "pool/main/c/colord/colord_1.4.7-1build2_amd64.deb",
+    "sha256": "66467a552054dc7fc2f0eba42b7a7cd3be1ec8265cfa8650e8e5fee12d43c239"
+   },
+   {
+    "name": "rtkit",
+    "version": "0.13-5build1",
+    "path": "pool/main/r/rtkit/rtkit_0.13-5build1_amd64.deb",
+    "sha256": "3c50561d57e1c9e53d1c9a698677825531d580fa9a2a755103b2ee57b575fe6b"
+   },
+   {
+    "name": "switcheroo-control",
+    "version": "2.6-2build2",
+    "path": "pool/main/s/switcheroo-control/switcheroo-control_2.6-2build2_amd64.deb",
+    "sha256": "dcbd3638e40bd16219e8a3e55fffe9be06a7312fdff6d6e401e283a903dd8900"
+   },
+   {
+    "name": "iio-sensor-proxy",
+    "version": "3.5-1build2",
+    "path": "pool/main/i/iio-sensor-proxy/iio-sensor-proxy_3.5-1build2_amd64.deb",
+    "sha256": "5b17f67e97ae34e4b245b5303953ca2159d7ad95e2f273584e95365fa756e979"
+   },
+   {
+    "name": "geoclue-2.0",
+    "version": "2.7.0-3ubuntu7",
+    "path": "pool/main/g/geoclue-2.0/geoclue-2.0_2.7.0-3ubuntu7_amd64.deb",
+    "sha256": "c6de0d40f95f70565893f1cac5077999f36384ed18e6327fb24203edeb1b4aa3"
+   },
+   {
+    "name": "plymouth",
+    "version": "24.004.60-1ubuntu7",
+    "path": "pool/main/p/plymouth/plymouth_24.004.60-1ubuntu7_amd64.deb",
+    "sha256": "c6cb574e069f5be3280a6dce0d9d70f9b66c41f7992b2b956ce9eb17255cefd0"
+   },
+   {
+    "name": "openvpn",
+    "version": "2.6.9-1ubuntu4",
+    "path": "pool/main/o/openvpn/openvpn_2.6.9-1ubuntu4_amd64.deb",
+    "sha256": "73bb9039c930d2754bf4fa56a3322ead90f3c2ef3b47975a787bb00cba01a1f7"
+   },
+   {
+    "name": "wireguard-tools",
+    "version": "1.0.20210914-1ubuntu4",
+    "path": "pool/main/w/wireguard/wireguard-tools_1.0.20210914-1ubuntu4_amd64.deb",
+    "sha256": "19790a3203a12791bfaf622ea000780a7558de858766100d52f802079d44c400"
+   },
+   {
+    "name": "apt",
+    "version": "2.7.14build2",
+    "path": "pool/main/a/apt/apt_2.7.14build2_amd64.deb",
+    "sha256": "72b4e9ba826544fa87e9101857432ebfa61c29ec4e091fcd67396cde9b9c6459"
+   },
+   {
+    "name": "dbus-daemon",
+    "version": "1.14.10-4ubuntu4",
+    "path": "pool/main/d/dbus/dbus-daemon_1.14.10-4ubuntu4_amd64.deb",
+    "sha256": "411ebafab3a908069383065fda4a2ee03462b497448780faa1505e0d111c95fa"
+   },
+   {
+    "name": "zfsutils-linux",
+    "version": "2.2.2-0ubuntu9",
+    "path": "pool/main/z/zfs-linux/zfsutils-linux_2.2.2-0ubuntu9_amd64.deb",
+    "sha256": "5cfb8fec8a651dae786c1c9d8924ffb5d5dbac713ff4391bed7e032f43be8a86"
+   },
+   {
+    "name": "btrfs-progs",
+    "version": "6.6.3-1.1build2",
+    "path": "pool/main/b/btrfs-progs/btrfs-progs_6.6.3-1.1build2_amd64.deb",
+    "sha256": "b4aeb482adcce07b276827d8f4b0c502427a2a43574fa8349081f23dcd8c96aa"
+   },
+   {
+    "name": "multipath-tools",
+    "version": "0.9.4-5ubuntu8",
+    "path": "pool/main/m/multipath-tools/multipath-tools_0.9.4-5ubuntu8_amd64.deb",
+    "sha256": "7d2060b66b1668b26fde73a13af5c66d6f7a6fc60a6add2dd9f21e726db7294e"
+   },
+   {
+    "name": "open-iscsi",
+    "version": "2.1.9-3ubuntu4",
+    "path": "pool/main/o/open-iscsi/open-iscsi_2.1.9-3ubuntu4_amd64.deb",
+    "sha256": "b4fe9ae3258f845703eb6ac84f95cae62250ce368ac1317692f4b1b58580d85f"
+   },
+   {
+    "name": "kea-dhcp4-server",
+    "version": "2.4.1-3build3",
+    "path": "pool/main/i/isc-kea/kea-dhcp4-server_2.4.1-3build3_amd64.deb",
+    "sha256": "1576c44abd454e4f6b7e3a064601d38648b40900a207cba07b20b435fddfe57f"
+   },
+   {
+    "name": "isc-dhcp-server",
+    "version": "4.4.3-P1-4ubuntu2",
+    "path": "pool/universe/i/isc-dhcp/isc-dhcp-server_4.4.3-P1-4ubuntu2_amd64.deb",
+    "sha256": "a82d1540abd3bbeabd028c66f762f2fdbb5983301b259ee38709ced5a8dd3a4d"
+   },
+   {
+    "name": "squid",
+    "version": "6.6-1ubuntu5",
+    "path": "pool/main/s/squid/squid_6.6-1ubuntu5_amd64.deb",
+    "sha256": "a454913dd82fefa8fcb2b100069ba559ba049ca7368ae3d16dbbc57e74edb059"
+   },
+   {
+    "name": "prometheus-node-exporter",
+    "version": "1.7.0-1",
+    "path": "pool/universe/p/prometheus-node-exporter/prometheus-node-exporter_1.7.0-1_amd64.deb",
+    "sha256": "c606a914777d84469fe25c2c3593206bbeea4c751338bb7718de5b665741db86"
+   },
+   {
+    "name": "snapd",
+    "version": "2.62+24.04build1",
+    "path": "pool/main/s/snapd/snapd_2.62+24.04build1_amd64.deb",
+    "sha256": "9bbbec2832f7e29c29abdb8b4c685eea3e7d681a0693309f4661eed37c931b28"
+   },
+   {
+    "name": "mysql-server-8.0",
+    "version": "8.0.36-2ubuntu3",
+    "path": "pool/main/m/mysql-8.0/mysql-server-8.0_8.0.36-2ubuntu3_amd64.deb",
+    "sha256": "dc6602fafbfd90bd2bea206b3975b820b5ab094e6e1cb8679dabd84040536ce4"
+   },
+   {
+    "name": "mysql-server-core-8.0",
+    "version": "8.0.36-2ubuntu3",
+    "path": "pool/main/m/mysql-8.0/mysql-server-core-8.0_8.0.36-2ubuntu3_amd64.deb",
+    "sha256": "74ad88d5c53e0ba540067adc7234f2013a2ec7e2e536eaf9d5c40336ea18116f"
+   },
+   {
+    "name": "ubuntu-advantage-tools",
+    "version": "31.2.3",
+    "path": "pool/universe/u/ubuntu-advantage-tools/ubuntu-advantage-tools_31.2.3_all.deb",
+    "sha256": "6eddcb876c77baf6a75db979abb58deb6c13f66a4da1a2f4f0d725dbfd1e0262"
+   },
+   {
+    "name": "ubuntu-pro-client",
+    "version": "31.2.3",
+    "path": "pool/main/u/ubuntu-advantage-tools/ubuntu-pro-client_31.2.3_amd64.deb",
+    "sha256": "09e6384c54272356c5491e5d53054bb28a318f7163bfc2d50c78a5f26112bb20"
+   },
+   {
+    "name": "netplan.io",
+    "version": "1.0-2ubuntu1",
+    "path": "pool/main/n/netplan.io/netplan.io_1.0-2ubuntu1_amd64.deb",
+    "sha256": "3cf169b6a6308b97ff9c1bc44ac54c206c52f53f13fb0b30271c468315e3818f"
+   },
+   {
+    "name": "whoopsie",
+    "version": "0.2.77build3",
+    "path": "pool/main/w/whoopsie/whoopsie_0.2.77build3_amd64.deb",
+    "sha256": "9e795cc3daf27f2cb03a2f78180f71783e08e043e4fd8a91af8db2ecca5693a8"
+   },
+   {
+    "name": "apport",
+    "version": "2.28.1-0ubuntu2",
+    "path": "pool/main/a/apport/apport_2.28.1-0ubuntu2_all.deb",
+    "sha256": "b6e6417593e528a62fd3c09a2d2b93435ecd7c81135aa31abf4777a892b70e17"
+   },
+   {
+    "name": "lxd-installer",
+    "version": "4",
+    "path": "pool/main/l/lxd-installer/lxd-installer_4_all.deb",
+    "sha256": "0cf56f850ff3f4e2931ca6588716e1381c7f3795552d000aca07da46a9c0984c"
+   }
+  ]
+ },
+ "arch": {
+  "format": "pkg",
+  "base": "https://archive.archlinux.org/repos/2026/11/20",
+  "repos": [
+   "core",
+   "extra"
+  ],
+  "want": [
+   "openssh",
+   "nginx",
+   "apache",
+   "postgresql",
+   "mariadb",
+   "valkey",
+   "chrony",
+   "cups",
+   "cups-browsed",
+   "avahi",
+   "bluez",
+   "networkmanager",
+   "modemmanager",
+   "wpa_supplicant",
+   "libvirt",
+   "containerd",
+   "docker",
+   "podman",
+   "polkit",
+   "udisks2",
+   "upower",
+   "accountsservice",
+   "gdm",
+   "sddm",
+   "lightdm",
+   "rsync",
+   "cronie",
+   "nfs-utils",
+   "samba",
+   "smartmontools",
+   "lvm2",
+   "mdadm",
+   "ufw",
+   "fail2ban",
+   "apparmor",
+   "haproxy",
+   "bind",
+   "dnsmasq",
+   "postfix",
+   "syslog-ng",
+   "tor",
+   "nftables",
+   "firewalld",
+   "cloud-init",
+   "qemu-guest-agent",
+   "open-vm-tools",
+   "tuned",
+   "irqbalance",
+   "thermald",
+   "power-profiles-daemon",
+   "fwupd",
+   "packagekit",
+   "colord",
+   "rtkit",
+   "switcheroo-control",
+   "iio-sensor-proxy",
+   "geoclue",
+   "plymouth",
+   "openvpn",
+   "wireguard-tools",
+   "dbus-broker",
+   "btrfs-progs",
+   "multipath-tools",
+   "open-iscsi",
+   "kea",
+   "dhcpcd",
+   "squid",
+   "prometheus-node-exporter",
+   "grafana",
+   "iwd",
+   "pacman-contrib",
+   "reflector",
+   "snapper",
+   "ntp"
+  ],
+  "packages": [
+   {
+    "name": "openssh",
+    "version": "10.6p2-1",
+    "path": "core/os/x86_64/openssh-10.6p2-1-x86_64.pkg.tar.zst",
+    "sha256": "0031b2ae2d65211c8f85f0212277b420f8aa1e051e817de6b86cbfe3da016106"
+   },
+   {
+    "name": "nginx",
+    "version": "1.30.7-1",
+    "path": "extra/os/x86_64/nginx-1.30.7-1-x86_64.pkg.tar.zst",
+    "sha256": "5816dd49cb2f9153ff2c53c0a9c364f8fe5f3d60b4bf4033ae52d4c5007cfdee"
+   },
+   {
+    "name": "apache",
+    "version": "2.4.71-1",
+    "path": "extra/os/x86_64/apache-2.4.71-1-x86_64.pkg.tar.zst",
+    "sha256": "1167e551b152c2d728dbf419d485610ea3ee74b7bce0890b8fed97e067d23542"
+   },
+   {
+    "name": "postgresql",
+    "version": "18.7-1",
+    "path": "extra/os/x86_64/postgresql-18.7-1-x86_64.pkg.tar.zst",
+    "sha256": "e3957943218cd6559225388aa2a7ff1c41bf903cb27e1c8656069f8c3d634f36"
+   },
+   {
+    "name": "mariadb",
+    "version": "13.0.2-3",
+    "path": "extra/os/x86_64/mariadb-13.0.2-3-x86_64.pkg.tar.zst",
+    "sha256": "39df7ef6ab02fd987b801e6040cf9b2134e6e1ad349964e2ad7f1a64a92407bc"
+   },
+   {
+    "name": "valkey",
+    "version": "9.2.0-1",
+    "path": "extra/os/x86_64/valkey-9.2.0-1-x86_64.pkg.tar.zst",
+    "sha256": "7323a2f4e28e1aeb0c6c19168e936f88533d3226480ba7723fc6ba82dfc7cb8b"
+   },
+   {
+    "name": "chrony",
+    "version": "4.9-1",
+    "path": "extra/os/x86_64/chrony-4.9-1-x86_64.pkg.tar.zst",
+    "sha256": "96ac97846b284fe4f0d61689d3ea2e53105ad821e31c444a398e7957e1b7a35b"
+   },
+   {
+    "name": "cups",
+    "version": "2:2.4.20-1",
+    "path": "extra/os/x86_64/cups-2:2.4.20-1-x86_64.pkg.tar.zst",
+    "sha256": "4a9ff0c218eadce87a1c4392fd4f90b2aec345193996634dbe63c338aabf16fa"
+   },
+   {
+    "name": "cups-browsed",
+    "version": "2.1.1-1",
+    "path": "extra/os/x86_64/cups-browsed-2.1.1-1-x86_64.pkg.tar.zst",
+    "sha256": "b07cae1e04890fc9d35909530e536b46cbabaafa81aedcdc4b792c8f7abf185b"
+   },
+   {
+    "name": "avahi",
+    "version": "1:0.9rc5-2",
+    "path": "extra/os/x86_64/avahi-1:0.9rc5-2-x86_64.pkg.tar.zst",
+    "sha256": "be55af7cf20701e6e9786d15cc20b36e6764b5d062261cad7954db34e9dd9408"
+   },
+   {
+    "name": "bluez",
+    "version": "5.88-1",
+    "path": "extra/os/x86_64/bluez-5.88-1-x86_64.pkg.tar.zst",
+    "sha256": "fc23a9531664f56768ab0b48e544e09a02304b31133e7fc3cfabb75b684aad6c"
+   },
+   {
+    "name": "networkmanager",
+    "version": "1.58.1-3",
+    "path": "extra/os/x86_64/networkmanager-1.58.1-3-x86_64.pkg.tar.zst",
+    "sha256": "5ffec643ba59493cdee3f4a1881b729521d64ee9d159218f7acbbdb3a56defda"
+   },
+   {
+    "name": "modemmanager",
+    "version": "1.24.2-2",
+    "path": "extra/os/x86_64/modemmanager-1.24.2-2-x86_64.pkg.tar.zst",
+    "sha256": "a8b3df2e44b0edc625e3fd33ce496f0e81c8a2982a6edaf741a5c3d3af283e13"
+   },
+   {
+    "name": "wpa_supplicant",
+    "version": "2:2.12-2",
+    "path": "core/os/x86_64/wpa_supplicant-2:2.12-2-x86_64.pkg.tar.zst",
+    "sha256": "4d9a85de0a109612d2d0adc8ffb07cf6a61631654d8e9f9fd8b73d8e0d6ab57b"
+   },
+   {
+    "name": "libvirt",
+    "version": "1:12.9.0-1",
+    "path": "extra/os/x86_64/libvirt-1:12.9.0-1-x86_64.pkg.tar.zst",
+    "sha256": "2fe6b2b39f3550e59b9b558a7451ce1ffb55d622b7faeb0ee049f31b403a80cc"
+   },
+   {
+    "name": "containerd",
+    "version": "2.4.2-1",
+    "path": "extra/os/x86_64/containerd-2.4.2-1-x86_64.pkg.tar.zst",
+    "sha256": "e5425cc991142f5181da0b6c44499e7d5ed2cfdad947006664f05add75fe7034"
+   },
+   {
+    "name": "docker",
+    "version": "1:29.10.0-1",
+    "path": "extra/os/x86_64/docker-1:29.10.0-1-x86_64.pkg.tar.zst",
+    "sha256": "5a65c7d30d479e02f6979017fcc3efe33ce26b30e7009798d8f26d258ea0f044"
+   },
+   {
+    "name": "podman",
+    "version": "6.2.0-1",
+    "path": "extra/os/x86_64/podman-6.2.0-1-x86_64.pkg.tar.zst",
+    "sha256": "2ff5ffc3e7a0053f0cee7ef27dc56b2062c201e8a3ebc2ef2fd2f7040e71f262"
+   },
+   {
+    "name": "polkit",
+    "version": "128-1",
+    "path": "extra/os/x86_64/polkit-128-1-x86_64.pkg.tar.zst",
+    "sha256": "27a25617077c39f430ab5fe7aa8c9dd913711bd0f39745af123da0bf3fb1de07"
+   },
+   {
+    "name": "udisks2",
+    "version": "2.12.0-1",
+    "path": "extra/os/x86_64/udisks2-2.12.0-1-x86_64.pkg.tar.zst",
+    "sha256": "df8a661a6149dc9202aa99927f78dc941751980b5d059f25a2a351e6e395a28a"
+   },
+   {
+    "name": "upower",
+    "version": "1.91.5-1",
+    "path": "extra/os/x86_64/upower-1.91.5-1-x86_64.pkg.tar.zst",
+    "sha256": "2de652124aaeec80cfec37411d4b0a9a8c16cc895a1d0e395cbe98d7186591a6"
+   },
+   {
+    "name": "accountsservice",
+    "version": "26.27.3-1",
+    "path": "extra/os/x86_64/accountsservice-26.27.3-1-x86_64.pkg.tar.zst",
+    "sha256": "d3af0478419f59cf771f516cd6265e1e9f7a4e8d3e9cede1d0e6f7173835dab1"
+   },
+   {
+    "name": "gdm",
+    "version": "51.1.1-1",
+    "path": "extra/os/x86_64/gdm-51.1.1-1-x86_64.pkg.tar.zst",
+    "sha256": "f5f2ede0a5eb159b55688b63e0801820815233361419398cf60054d252e23a45"
+   },
+   {
+    "name": "sddm",
+    "version": "0.21.0-7",
+    "path": "extra/os/x86_64/sddm-0.21.0-7-x86_64.pkg.tar.zst",
+    "sha256": "927cc24362cdc83b8c48532252ae4d41ade99dc5e65cb0fdeb9b6d69f7601a7a"
+   },
+   {
+    "name": "lightdm",
+    "version": "1:1.33.1-1",
+    "path": "extra/os/x86_64/lightdm-1:1.33.1-1-x86_64.pkg.tar.zst",
+    "sha256": "3f36bc3e099554e4c644b875aa54d98c52737bb26622e3710c84a425024bd8eb"
+   },
+   {
+    "name": "rsync",
+    "version": "3.5.2-3",
+    "path": "extra/os/x86_64/rsync-3.5.2-3-x86_64.pkg.tar.zst",
+    "sha256": "189c02261bb3cfc6d7b41f8bc750ce1d6c356032e22ea7176d747e7fcc485807"
+   },
+   {
+    "name": "cronie",
+    "version": "1.7.2-2",
+    "path": "extra/os/x86_64/cronie-1.7.2-2-x86_64.pkg.tar.zst",
+    "sha256": "6c01a250006d1561df81bca017ef427cf7353c89f913ace20e090b938ed0c096"
+   },
+   {
+    "name": "nfs-utils",
+    "version": "3.1.1-1",
+    "path": "core/os/x86_64/nfs-utils-3.1.1-1-x86_64.pkg.tar.zst",
+    "sha256": "d8df86dd5975f41f52b13cb6bc325265aef750f30db51be1128d1448f9775b7e"
+   },
+   {
+    "name": "samba",
+    "version": "2:4.25.1-1",
+    "path": "extra/os/x86_64/samba-2:4.25.1-1-x86_64.pkg.tar.zst",
+    "sha256": "53076a2a6e394ae002d99bc5ec55b3e5ace046e8ffb05ee1c9bd1ddce68afc8f"
+   },
+   {
+    "name": "smartmontools",
+    "version": "7.5-2",
+    "path": "extra/os/x86_64/smartmontools-7.5-2-x86_64.pkg.tar.zst",
+    "sha256": "9aa4f3961955f4806a2fb9d2a6a6bac719c628f2457b05288ee1b650ca84d7fa"
+   },
+   {
+    "name": "lvm2",
+    "version": "2.03.44-1",
+    "path": "core/os/x86_64/lvm2-2.03.44-1-x86_64.pkg.tar.zst",
+    "sha256": "5e54ddd42dfad75271d7d5b7038d75e640e6563319ac72578d78f21e08729701"
+   },
+   {
+    "name": "mdadm",
+    "version": "4.6-2",
+    "path": "core/os/x86_64/mdadm-4.6-2-x86_64.pkg.tar.zst",
+    "sha256": "17b2091ae3c0644e452783ec889d90e0814fd19d17989e184fcad1c73ae1aa76"
+   },
+   {
+    "name": "ufw",
+    "version": "0.36.2-7",
+    "path": "extra/os/x86_64/ufw-0.36.2-7-any.pkg.tar.zst",
+    "sha256": "2730f7449bed709b5aa9d6d603f6c2b47d423f7ab198bae16642f4cbba1f7ec9"
+   },
+   {
+    "name": "fail2ban",
+    "version": "1.1.1-1",
+    "path": "extra/os/x86_64/fail2ban-1.1.1-1-any.pkg.tar.zst",
+    "sha256": "5c5034c8798c024cd725ec39ae0b0d53ca0205fde767f168ce50b2ca7e0f6757"
+   },
+   {
+    "name": "apparmor",
+    "version": "4.1.8-2",
+    "path": "extra/os/x86_64/apparmor-4.1.8-2-x86_64.pkg.tar.zst",
+    "sha256": "684b7406dc2986dffda985eff3fcaac233403d53884647c148dfdc426283424c"
+   },
+   {
+    "name": "haproxy",
+    "version": "3.4.8-1",
+    "path": "extra/os/x86_64/haproxy-3.4.8-1-x86_64.pkg.tar.zst",
+    "sha256": "38fd36de7f9e9244514f00d6c7fa71566dddff6163cf58efc542b280750edbc1"
+   },
+   {
+    "name": "bind",
+    "version": "9.20.31-1",
+    "path": "extra/os/x86_64/bind-9.20.31-1-x86_64.pkg.tar.zst",
+    "sha256": "4eef8e443fef5bf1a903b6fd37cc666cdb9224f1b0bbffb18603411f5361a697"
+   },
+   {
+    "name": "dnsmasq",
+    "version": "2.93-1",
+    "path": "extra/os/x86_64/dnsmasq-2.93-1-x86_64.pkg.tar.zst",
+    "sha256": "443d70d2606549270b1ef52183926714e515f81413db33ff96006e23866ad790"
+   },
+   {
+    "name": "postfix",
+    "version": "3.11.7-2",
+    "path": "extra/os/x86_64/postfix-3.11.7-2-x86_64.pkg.tar.zst",
+    "sha256": "53156e06f4202f832dee90cb69a87ef530b65c025fbb8a137d5031794e4a6d4a"
+   },
+   {
+    "name": "syslog-ng",
+    "version": "4.12.0-4",
+    "path": "extra/os/x86_64/syslog-ng-4.12.0-4-x86_64.pkg.tar.zst",
+    "sha256": "b4bae1d8383170753ab5ca20ca79ff7495ec365bd49244dc19d1e0d8f04bab75"
+   },
+   {
+    "name": "tor",
+    "version": "0.4.9.17-1",
+    "path": "extra/os/x86_64/tor-0.4.9.17-1-x86_64.pkg.tar.zst",
+    "sha256": "0a139d32666bf45bac5523813ffb2131a2850c8beb89a3d9667974f30a226127"
+   },
+   {
+    "name": "nftables",
+    "version": "1:1.1.7-3",
+    "path": "extra/os/x86_64/nftables-1:1.1.7-3-x86_64.pkg.tar.zst",
+    "sha256": "5a25cfdb19c370d01cfe81ce8c1e2e1fa9a2e05d51d1417578e8c425893a5b29"
+   },
+   {
+    "name": "firewalld",
+    "version": "2.5.2-1",
+    "path": "extra/os/x86_64/firewalld-2.5.2-1-any.pkg.tar.zst",
+    "sha256": "e7aa5e4e63f3842bb0d59572ed390c30506ab4b5d3ccf7b274ac22055ffec146"
+   },
+   {
+    "name": "cloud-init",
+    "version": "26.2-1",
+    "path": "extra/os/x86_64/cloud-init-26.2-1-any.pkg.tar.zst",
+    "sha256": "3f2305995ec37af3156302d262b714fb5348908e6e1774cba922ce527e264c55"
+   },
+   {
+    "name": "qemu-guest-agent",
+    "version": "11.1.3-1",
+    "path": "extra/os/x86_64/qemu-guest-agent-11.1.3-1-x86_64.pkg.tar.zst",
+    "sha256": "51219db90de86ac116ba805dba29d4ff88bc551622ed90c28d86caef4df3027a"
+   },
+   {
+    "name": "open-vm-tools",
+    "version": "6:13.1.0-5",
+    "path": "extra/os/x86_64/open-vm-tools-6:13.1.0-5-x86_64.pkg.tar.zst",
+    "sha256": "05ebc895d869d5f4289f1337663d2341b573f6e642f7a1b4245a37ac8f429989"
+   },
+   {
+    "name": "tuned",
+    "version": "2.28.0-1",
+    "path": "extra/os/x86_64/tuned-2.28.0-1-any.pkg.tar.zst",
+    "sha256": "21bd980f42ca9fb10aa55756c69c31b39cc7968a3b5dbdfdbed57e06acf84904"
+   },
+   {
+    "name": "irqbalance",
+    "version": "1.9.5-3",
+    "path": "extra/os/x86_64/irqbalance-1.9.5-3-x86_64.pkg.tar.zst",
+    "sha256": "db1b01f0b3a31fb43cde3100aaf254f6b652409a18ce1ca840d98496f82d846c"
+   },
+   {
+    "name": "thermald",
+    "version": "2:2.5.13-1",
+    "path": "extra/os/x86_64/thermald-2:2.5.13-1-x86_64.pkg.tar.zst",
+    "sha256": "44750f980cd9c2995430f0664bb392d98cd3249a7197d01acc607f2f303b8067"
+   },
+   {
+    "name": "power-profiles-daemon",
+    "version": "0.30-1",
+    "path": "extra/os/x86_64/power-profiles-daemon-0.30-1-x86_64.pkg.tar.zst",
+    "sha256": "507838f7040584f735cf9ae5ed1ae1ef4bd1fe21b5840e6ed4770cc8b612f588"
+   },
+   {
+    "name": "fwupd",
+    "version": "2.1.10-1",
+    "path": "extra/os/x86_64/fwupd-2.1.10-1-x86_64.pkg.tar.zst",
+    "sha256": "2ff77854f02a12312f6f1b0da76234ee0d3d8ef49ac793c166e974ff5ccbcaf2"
+   },
+   {
+    "name": "packagekit",
+    "version": "1.4.0-1",
+    "path": "extra/os/x86_64/packagekit-1.4.0-1-x86_64.pkg.tar.zst",
+    "sha256": "b2f25a466a4c5203166672699c2ec931d043a4e2f6170e8cd72696b9b303431a"
+   },
+   {
+    "name": "colord",
+    "version": "1.4.8-2",
+    "path": "extra/os/x86_64/colord-1.4.8-2-x86_64.pkg.tar.zst",
+    "sha256": "383373868edc94b47c59386577e39be1ea156156047471ddfdc7b6725700183e"
+   },
+   {
+    "name": "rtkit",
+    "version": "0.14-2",
+    "path": "extra/os/x86_64/rtkit-0.14-2-x86_64.pkg.tar.zst",
+    "sha256": "d814549adb551ce4a093541a71004184f5060686c4871bec8b061cc971261808"
+   },
+   {
+    "name": "switcheroo-control",
+    "version": "3.0-2",
+    "path": "extra/os/x86_64/switcheroo-control-3.0-2-x86_64.pkg.tar.zst",
+    "sha256": "36a911b4a21c27fc9c5a7aa6b16761246085daa60267723f13c31e8a01726853"
+   },
+   {
+    "name": "iio-sensor-proxy",
+    "version": "3.9-1",
+    "path": "extra/os/x86_64/iio-sensor-proxy-3.9-1-x86_64.pkg.tar.zst",
+    "sha256": "02d90729e6990f3a8208577a5d2fe65acbd3b6563d6ab4cc08019dbe07c7de6f"
+   },
+   {
+    "name": "geoclue",
+    "version": "2.8.2-2",
+    "path": "extra/os/x86_64/geoclue-2.8.2-2-x86_64.pkg.tar.zst",
+    "sha256": "740436587c28c8deaccd116e3e07319a62931b63fd2c9d23d03709bba94d30e5"
+   },
+   {
+    "name": "plymouth",
+    "version": "26.134.222-3",
+    "path": "extra/os/x86_64/plymouth-26.134.222-3-x86_64.pkg.tar.zst",
+    "sha256": "81b2f013974aca30ec7c9f9470ad6827467147076fbcf7b22492fadb6e35b124"
+   },
+   {
+    "name": "openvpn",
+    "version": "2.7.9-1",
+    "path": "extra/os/x86_64/openvpn-2.7.9-1-x86_64.pkg.tar.zst",
+    "sha256": "853ad0d3f1d0a871270ec049a5f414be499235865dffb0448218718c6e8c5056"
+   },
+   {
+    "name": "wireguard-tools",
+    "version": "1.0.20260223-1",
+    "path": "extra/os/x86_64/wireguard-tools-1.0.20260223-1-x86_64.pkg.tar.zst",
+    "sha256": "3f7c14dd90360706c04869f3cb4defdc9248d06cfc9b43bae6be5204a19af4ac"
+   },
+   {
+    "name": "dbus-broker",
+    "version": "37-3",
+    "path": "core/os/x86_64/dbus-broker-37-3-x86_64.pkg.tar.zst",
+    "sha256": "c3a915bb57188e6a43b9df25c0bf11f87528bc20ac50718b1772ce917c6d6117"
+   },
+   {
+    "name": "btrfs-progs",
+    "version": "7.3-1",
+    "path": "core/os/x86_64/btrfs-progs-7.3-1-x86_64.pkg.tar.zst",
+    "sha256": "ef157c2b4d687ca0646a193747bb0b2f5714de9717e24840e80fbc36b25e822e"
+   },
+   {
+    "name": "multipath-tools",
+    "version": "0.15.1-1",
+    "path": "extra/os/x86_64/multipath-tools-0.15.1-1-x86_64.pkg.tar.zst",
+    "sha256": "842ed39596284e8cbdf5ba876a885a5dc941ac9a1e347e6abaad140cea15f078"
+   },
+   {
+    "name": "open-iscsi",
+    "version": "2.1.13-2",
+    "path": "extra/os/x86_64/open-iscsi-2.1.13-2-x86_64.pkg.tar.zst",
+    "sha256": "a64c0305eaeaf83d415c6c7764bd649794f2887b552583de570f374a9c8b5b0e"
+   },
+   {
+    "name": "kea",
+    "version": "1:3.2.1-2",
+    "path": "extra/os/x86_64/kea-1:3.2.1-2-x86_64.pkg.tar.zst",
+    "sha256": "1b6f82636edfc7b4ecae7fc119de571b7586da0d26b62e313b44b551ccf0a184"
+   },
+   {
+    "name": "dhcpcd",
+    "version": "10.5.2-2",
+    "path": "extra/os/x86_64/dhcpcd-10.5.2-2-x86_64.pkg.tar.zst",
+    "sha256": "a2c5992ffb5c607f17fa02b5f38c6b0a302c8eba1e30d93b0f56ae0ef73d4cdb"
+   },
+   {
+    "name": "squid",
+    "version": "7.8-1",
+    "path": "extra/os/x86_64/squid-7.8-1-x86_64.pkg.tar.zst",
+    "sha256": "a6921bf684e3ccc7720e5e704812326ebbb329a889b256e522563f887ad76555"
+   },
+   {
+    "name": "prometheus-node-exporter",
+    "version": "1.13.1-1",
+    "path": "extra/os/x86_64/prometheus-node-exporter-1.13.1-1-x86_64.pkg.tar.zst",
+    "sha256": "b6cf98523516a9fff50f46c28c4216c7231d85163ab0b7add88a45e64fe70a5e"
+   },
+   {
+    "name": "grafana",
+    "version": "13.3.1-1",
+    "path": "extra/os/x86_64/grafana-13.3.1-1-x86_64.pkg.tar.zst",
+    "sha256": "ae81a5487eee8c2cb84e8dce2341adc830f85718db6ae91926a93289b393f7f9"
+   },
+   {
+    "name": "iwd",
+    "version": "3.12-2",
+    "path": "extra/os/x86_64/iwd-3.12-2-x86_64.pkg.tar.zst",
+    "sha256": "934f8f861bad145def3429a25f913882f6054d6f50c63484204cd2bba2f4f8be"
+   },
+   {
+    "name": "pacman-contrib",
+    "version": "1.13.1-1",
+    "path": "extra/os/x86_64/pacman-contrib-1.13.1-1-x86_64.pkg.tar.zst",
+    "sha256": "190d0a557a7863023007407832bf8003345e12ee9cc39f6e3c740b4b56cd234e"
+   },
+   {
+    "name": "reflector",
+    "version": "2023-5",
+    "path": "extra/os/x86_64/reflector-2023-5-any.pkg.tar.zst",
+    "sha256": "447965cc806bf623b7abd33117e8dfd8f49d14d2a361d48134f28a4c1bc93cff"
+   },
+   {
+    "name": "snapper",
+    "version": "0.13.2-2",
+    "path": "extra/os/x86_64/snapper-0.13.2-2-x86_64.pkg.tar.zst",
+    "sha256": "d4a88484519e8a1e6412887e42da78a48b4f31dc0ad7a08c68255ee5677197a6"
+   },
+   {
+    "name": "ntp",
+    "version": "4.2.8.p18-7",
+    "path": "extra/os/x86_64/ntp-4.2.8.p18-7-x86_64.pkg.tar.zst",
+    "sha256": "f7ec2a5390cf704c8409189c3107872028a9ae41e8a17a3bd1d7f627ae418595"
+   }
+  ]
+ }
+}

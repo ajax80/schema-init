@@ -6,11 +6,11 @@
 # without a word, the case that matters most). Each imported .svc then goes
 # through schema-init --check, so "mapped" also means "PID 1's loader takes it".
 #
-#   tools/compat-corpus.py [--json OUT] [--label NAME] DIR [DIR...]
+#   tools/compat-corpus.py [--json OUT] [--label NAME] [--foreign [--security S]] DIR [DIR...]
 #
 # DIRs hold *.service files (a distro's /usr/lib/systemd/system, or an extracted
-# package tree). Output: a summary on stdout, the full per-directive record as
-# JSON (machine-readable, for diffing runs and distros).
+# package tree from tools/compat-fetch.py). Output: a summary on stdout, the full
+# per-directive record as JSON (machine-readable, for diffing runs and distros).
 import argparse, collections, glob, importlib.util, json, os, re, subprocess, sys, tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -170,6 +170,20 @@ def run_unit(path, scratch, known):
     return rec
 
 
+# --foreign: the tree isn't this host's, so judge it against one fixed machine,
+# not whatever box runs the tool: bare-metal x86-64, cgroup v2, outside any user
+# namespace, the distro's own security modules. A bare ExecStart name is taken
+# as found on PATH, as it would be on the distro the unit ships for
+REFERENCE = {"virt": "none", "virt_kind": None, "userns": False, "cgroup_v2": True,
+             "controllers": {"cpuset", "cpu", "io", "memory", "hugetlb", "pids", "rdma", "misc"},
+             "cpus": 4, "arch": "x86-64", "cpu_vendor": "GenuineIntel", "cpu_flags": set()}
+
+
+def foreign(security):
+    si._FACTS = dict(REFERENCE, security=set(security.split(",")) - {""})
+    si._which = lambda cmd: None if "/" in cmd else "/usr/bin/" + cmd
+
+
 def main():
     ap = argparse.ArgumentParser(description="Real systemd units through schema-import, "
                                  "directive by directive: mapped, warned, silent, inert.")
@@ -177,7 +191,13 @@ def main():
     ap.add_argument("--json", help="write the per-unit, per-directive record here")
     ap.add_argument("--label", default="corpus")
     ap.add_argument("--skip-systemd", action="store_true", help="leave out systemd-*.service (systemd's own)")
+    ap.add_argument("--foreign", action="store_true",
+                    help="judge machine-fixed conditions against a fixed reference host, not this one")
+    ap.add_argument("--security", default="audit",
+                    help="--foreign: the reference host's security modules (debian/ubuntu: apparmor,audit)")
     a = ap.parse_args()
+    if a.foreign:
+        foreign(a.security)
     if not os.access(os.path.join(REPO, "schema-init"), os.X_OK):
         sys.exit("compat-corpus: build ./schema-init first (make schema-init)")
     units = sorted({p for d in a.dirs for p in glob.glob(os.path.join(d, "*.service")) if not os.path.islink(p)})

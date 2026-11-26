@@ -71,14 +71,75 @@ They are now mapped: `After=`/`Before=` on a unit with a `.svc` become
 above. Re-run on the same tree: **mapped 1744, warned 273, silent 214, inert 503**,
 and PID 1's loader still takes every imported `.svc`.
 
+## Second run: Debian, Ubuntu, Arch (2026-11-26)
+
+    make compat-corpus          # network: fetches, then runs all four
+
+`tools/compat-fetch.py` reads `tools/compat-corpus.lock.json`: for each distro a
+dated snapshot archive (snapshot.debian.org, snapshot.ubuntu.com,
+archive.archlinux.org, all 2026-11-20, URLs that never change) and the packages
+pinned in it by version and sha256. It downloads each one, refuses a hash that
+doesn't match, and extracts only the package's systemd unit dir and its drop-ins.
+Nothing is vendored. `--resolve` re-pins the lock from the snapshots; change the
+dates in the lock first to move forward.
+
+The package set is the same ground on each: ssh, web and database servers,
+printing, Bluetooth and networking daemons, virtualization and containers, the
+desktop session services, storage (LVM, mdadm, NFS, Samba, iSCSI, multipath),
+firewalls, and cloud and VM guest agents. Debian 76 packages, Ubuntu 84 (plus snapd,
+apport and other Ubuntu-only units), Arch 74.
+
+A foreign tree runs with `--foreign`, so the results don't depend on the machine
+running the tool. Machine-fixed conditions are judged against one reference host:
+bare-metal x86-64, cgroup v2, outside any user namespace, with AppArmor for
+Debian and Ubuntu (their default) and without it for Arch. A bare `ExecStart=`
+name counts as found on `PATH`.
+
+| tree | units | imported | mapped | warned | silent | inert |
+|---|---|---|---|---|---|---|
+| Fedora 44 (host) | 302 | 211 | 1744 | 273 | 214 | 503 |
+| Debian trixie | 146 | 95 | 945 | 148 | 127 | 276 |
+| Ubuntu noble | 175 | 123 | 1085 | 170 | 133 | 354 |
+| Arch | 172 | 130 | 1401 | 218 | 146 | 441 |
+
+PID 1's loader accepts every imported `.svc` on all four.
+
+**Silent losses are the same everywhere.** Here is each directive's count of
+imported units with that loss (Fedora / Debian / Ubuntu / Arch):
+
+| directive | F | D | U | A |
+|---|---|---|---|---|
+| `Service.RemainAfterExit` | 42 | 24 | 32 | 23 |
+| `Unit.Conflicts` | 31 | 19 | 18 | 27 |
+| `Service.ExecStop` | 17 | 12 | 12 | 11 |
+| `Service.NotifyAccess` | 12 | 8 | 7 | 12 |
+| `Install.Alias` | 5 | 8 | 7 | 8 |
+| `Service.OOMScoreAdjust` | 7 | 3 | 5 | 7 |
+| `Service.StandardOutput` / `StandardError` | 6/5 | 3/4 | 5/4 | 5/5 |
+| `Service.TimeoutStartSec` | 5 | 4 | 3 | 7 |
+| `Service.KeyringMode` | 8 | 5 | 2 | 4 |
+| `Unit.OnFailure` | 6 | 3 | 3 | 1 |
+
+So the work on silent losses doesn't depend on the distro, and the order in item 3
+below still holds.
+
+**Skips are the same too.** `Type=forking` without an absolute `PIDFile=` comes first
+on every distro (Debian 14, Ubuntu 13, Arch 12), and template units come second.
+Two more reasons are correct as they stand. All 16 cloud-init units gate on
+`ConditionEnvironment=!KERNEL_CMDLINE=cloud-init=disabled`, an environment
+variable that only systemd's generators set. The VMware and AppArmor units don't
+hold on the reference host.
+
+**Fixed from this run:** `ConditionVirtualization=!private-users` (Debian and
+Ubuntu `iscsid.service`) was "not understood", which skipped the whole unit. The importer
+now judges it: a `/proc/self/uid_map` other than the initial namespace's identity
+map means a user namespace.
+
 ## Next
 
-1. **Debian, Ubuntu and Arch:** the same run over each distro's unit tree, from
-   pinned package versions fetched and extracted at run time (not vendored), so
-   the report is reproducible.
-2. **Enforcement, not only acceptance:** "mapped" means the importer read it and
+1. **Enforcement, not only acceptance:** "mapped" means the importer read it and
    PID 1's loader takes the result. The next step is checking that the setting is
    *in force* for the running service (the hardening vmtest does this for a few
    keys).
-3. Turn the silent list into warnings or mappings, one directive at a time,
+2. Turn the silent list into warnings or mappings, one directive at a time,
    next `RemainAfterExit=` and `Conflicts=`.
