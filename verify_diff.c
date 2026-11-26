@@ -288,6 +288,13 @@ static void diff_services(ctx_t *c, const snap_t *b, const snap_t *n) {
             }
             i++, j++;
         } else if (cmp < 0) {
+            /* a key one serializer writes empty and another leaves out is the
+             * same unset value: a key added or made write-when-set between
+             * releases must not read as a change on every service (v0.4.35) */
+            if (!*x->val && has_svc(n, x->svc)) {
+                i++;
+                continue;
+            }
             if (has_svc(n, x->svc)) {
                 PUSH(chg, nc, (chg_t){ x->key, x->val, NULL, NULL, x->svc });
                 snprintf(what, sizeof what, "%s.%s", x->svc, x->key);
@@ -301,6 +308,10 @@ static void diff_services(ctx_t *c, const snap_t *b, const snap_t *n) {
             last_rm = x->svc;
             i++;
         } else {
+            if (!*y->val && has_svc(b, y->svc)) {
+                j++;
+                continue;
+            }
             if (has_svc(b, y->svc)) {
                 PUSH(chg, nc, (chg_t){ y->key, NULL, y->val, y->src, y->svc });
                 snprintf(what, sizeof what, "%s.%s", y->svc, y->key);
