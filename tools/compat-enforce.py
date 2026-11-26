@@ -437,8 +437,12 @@ def judge(sections, rep, ctl, users, groups, overlays):
                 # systemd hands each to User=/Group= (whatever ExecStart= runs as), except
                 # a config dir, which stays root's; with no Group=, User='s own group
                 mine = d != "ConfigurationDirectory" and not truthy(sv("DynamicUser"))
-                owner = "%s %s" % (ids(u, users), ids(g or u, groups)) if mine else "0 0"
-                ok = got[0] != "missing" and (truthy(sv("DynamicUser")) or " ".join(got[:2]) == owner)
+                # a guest user's primary group shares its name (build_guest); a numeric
+                # User= has no passwd entry there, so only its uid is judged
+                gid = ids(g, groups) if g else 0 if u in (None, "root") else None if u.isdigit() else groups.get(u)
+                owner = "%s %s" % (ids(u, users), gid) if mine else "0 0"
+                ok = got[0] != "missing" and (truthy(sv("DynamicUser")) or " ".join(got[:2]) == owner
+                                              or (gid is None and got[0] == owner.split()[0]))
                 put(d, ok, "%s owned by %s" % (full, owner), " ".join(got))
     for k, want_ro in (("ReadWritePaths", "0"), ("ReadOnlyPaths", "1")):
         for v in all_of(sections, "Service", k):

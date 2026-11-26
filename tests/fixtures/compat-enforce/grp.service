@@ -1,0 +1,4 @@
+[Service]
+Group=bangers
+ExecStart=!/usr/bin/grp
+StateDirectory=grp

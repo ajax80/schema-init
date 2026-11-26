@@ -2143,10 +2143,15 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     warns.extend(_unenforced_warns(svc, named_user, privileged, "+" in pfx))
     # systemd still hands *Directory= to User=/Group= under ExecStart=!/+, while
     # the process runs as root (chrony on Debian/Ubuntu)
-    owned = any(any(_get_all(svc, k)) for k in _NATIVE_DIRS)
-    if privileged and not _USER and named_user and named_user != "root" and owned:
-        g = _get_last(svc, "Group")
-        lines.append("dir_owner=%s%s" % (named_user, ":" + g if g else ""))
+    owned = False
+    for k in _NATIVE_DIRS:
+        cur = []
+        for v in _get_all(svc, k):
+            cur = cur + v.split() if v.strip() else []   # an empty value clears, as in exec_dir_lines
+        owned = owned or bool(cur)
+    g = _get_last(svc, "Group")
+    if privileged and not _USER and owned and ((named_user and named_user != "root") or g):
+        lines.append("dir_owner=%s%s" % (named_user or "root", ":" + g if g else ""))
     if _USER and stype in ("notify", "notify-reload"):
         # Quadlet's [X-Container] Image= says where podman's options end;
         # the check runs on READY=1, so only notify units can have it

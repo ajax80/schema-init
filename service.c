@@ -3047,7 +3047,8 @@ static void svc_make_exec_dirs(const service_t *svc, int create) {
     gid_t gid = root && (svc->run_uid || svc->run_group[0]) ? svc->run_gid : root ? 0 : (gid_t)-1;
     /* systemd still gives the dirs to User= when ExecStart=!/+ runs the
      * process as root (Debian's chrony): looked up at each start, like user= */
-    if (root && create && svc->dir_owner[0]) {
+    /* never over a dynamic user: its private dirs must stay the allocated uid's */
+    if (root && create && svc->dir_owner[0] && !svc->dynamic_user) {
         char u[64], *g = NULL, *end;
         strcpy(u, svc->dir_owner);
         if ((g = strchr(u, ':'))) *g++ = '\0';

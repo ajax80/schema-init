@@ -1610,6 +1610,10 @@ check("ExecStart=! with User= and *Directory=: dirs go to User=, process stays r
 check("... with Group=, to that group",
       "dir_owner=_chrony:adm\n" in si.unit_to_svc("ch", si.parse_unit(
           "[Service]\nUser=_chrony\nGroup=adm\nExecStart=+/usr/sbin/chronyd\nRuntimeDirectory=chrony\n")))
+check("... Group= alone: root:GROUP", "dir_owner=root:adm\n" in si.unit_to_svc("ch", si.parse_unit(
+      "[Service]\nGroup=adm\nExecStart=!/usr/sbin/chronyd\nStateDirectory=chrony\n")))
+check("... not when an empty value cleared the list", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
+      "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\nStateDirectory=chrony\nStateDirectory=\n")))
 check("... not without a *Directory=", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
       "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\n")))
 check("... not for ExecStart=!! (runs as User=)", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(

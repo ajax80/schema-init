@@ -196,8 +196,8 @@ Getting there took three importer fixes, each found by this run:
 - **`ExecStart=!` with `User=` gave root-owned State/Runtime/Logs dirs** (chrony
   on Debian and Ubuntu). systemd still hands those dirs to `User=` when it runs
   the command as root. The importer now writes `dir_owner=USER[:GROUP]`, an engine
-  key that sets the directories' owner apart from the run user. The `bang` and
-  `plus` fixtures check it under PID 1.
+  key that sets the directories' owner apart from the run user. The `bang`,
+  `plus` and `grp` fixtures check it under PID 1.
 
 The NOT-ENFORCED directives that are all warned, by count: `CapabilityBoundingSet=` 69
 (no bounding-set key), `ProtectHome=read-only`/`tmpfs` 9 and
