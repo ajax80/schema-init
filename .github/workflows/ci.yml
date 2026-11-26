@@ -60,6 +60,10 @@ jobs:
         run: |
           sudo install -m 0644 /boot/vmlinuz-$(uname -r) "$RUNNER_TEMP/vmlinuz"
           KERNEL="$RUNNER_TEMP/vmlinuz" sh tests/qemu-ci/pid1-boot.sh
+      # compat corpus stage 3: synthetic units' mapped directives checked in force
+      # under PID 1, with a tampered unit as the control
+      - name: imported directives in force
+        run: KERNEL="$RUNNER_TEMP/vmlinuz" sh tests/qemu-ci/compat-enforce.sh
 
   # stage 4a: the boot-success guard's fallback under real Fedora GRUB (blscfg, which
   # Ubuntu's GRUB lacks); stage 4b: verify run inside a guest booted through it.

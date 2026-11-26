@@ -1,0 +1,5 @@
+[Service]
+ExecStart=/usr/bin/ns
+PrivateNetwork=yes
+ProtectHostname=yes
+RestrictNamespaces=yes

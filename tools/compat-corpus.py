@@ -115,6 +115,25 @@ def check_svc(body, name, scratch):
     return None
 
 
+# a warning is about the directive it leads with ("WatchdogSec= without
+# Type=notify" is WatchdogSec's, not Type's), the list after "not enforced:", and
+# the level a ReadWritePaths= lowered ("... lowered to protect_system=1")
+LOWERED = {"protect_system": "ProtectSystem", "protect_home": "ProtectHome"}
+
+
+def warned_of(warnings):
+    keys = set()
+    for w in warnings:
+        m = re.match(r"([A-Z][A-Za-z]+)[= ]", w)
+        if m:
+            keys.add(m.group(1))
+        m = re.search(r"not enforced: ([A-Za-z ]+)$", w)
+        if m:
+            keys.update(m.group(1).split())
+        keys.update(LOWERED[k] for k in re.findall(r"lowered to (protect_system|protect_home)=", w))
+    return keys
+
+
 def run_unit(path, scratch, known):
     name = os.path.basename(path)[:-len(".service")]
     rec = {"unit": os.path.basename(path), "status": None, "reason": None, "warnings": [],
@@ -143,16 +162,7 @@ def run_unit(path, scratch, known):
     if body:
         rec["warnings"] = [ln[len(si.WARN_PREFIX):] for ln in body.splitlines() if ln.startswith(si.WARN_PREFIX)]
         rec["loader"] = check_svc(body, name, scratch)
-    # a warning is about the directive it leads with ("WatchdogSec= without
-    # Type=notify" is WatchdogSec's, not Type's), or the list after "not enforced:"
-    warned_keys = set()
-    for w in rec["warnings"]:
-        m = re.match(r"([A-Z][A-Za-z]+)[= ]", w)
-        if m:
-            warned_keys.add(m.group(1))
-        m = re.search(r"not enforced: ([A-Za-z ]+)$", w)
-        if m:
-            warned_keys.update(m.group(1).split())
+    warned_keys = warned_of(rec["warnings"])
     for sec, pairs in sections.items():
         for k, v in pairs:
             if inert(sec, str(k)):

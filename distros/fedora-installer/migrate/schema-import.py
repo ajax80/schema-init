@@ -600,6 +600,12 @@ def _rw_path_ok(path):
 _MAX_RW_PATHS = 8
 
 
+# ns.c's ProtectKernelTunables= read-only list (kt[])
+_KERNEL_TUNABLES = ("/proc/sys", "/sys", "/proc/sysrq-trigger", "/proc/latency_stats", "/proc/acpi", "/proc/apm",
+                    "/proc/asound", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/scsi", "/proc/mtrr",
+                    "/proc/timer_list", "/proc/timer_stats")
+
+
 def _writable_lower(svc, lines, warns):
     rw = []
     for k, v in svc:
@@ -635,6 +641,18 @@ def _writable_lower(svc, lines, warns):
                          % (" ".join(dict.fromkeys(hit)), key, val, key, levels[idx][0]))
         if key == "protect_system":
             keep = cover
+    # ProtectKernelTunables=/ProtectControlGroups= make /sys, /proc/sys (and the
+    # rest of ns.c's list) and /sys/fs/cgroup read-only; a ReadWritePaths= under them (fprintd's
+    # /sys/devices) is bound writable again the same way (ns.c binds rw_path last)
+    kern = [p for _, raw, p in rw if _rw_path_ok(raw) and (
+        ("protect_kernel_tunables=1" in lines and any(_under(p, t) for t in _KERNEL_TUNABLES))
+        or ("protect_control_groups=1" in lines and _under(p, "/sys/fs/cgroup")))]
+    for p in dict.fromkeys(kern):
+        if not any(_under(p, q) for q in keep):
+            if len(keep) < _MAX_RW_PATHS:
+                keep.append(p)
+            else:
+                warns.append("ReadWritePaths=%s: past %d rw_path= lines, stays read-only" % (p, _MAX_RW_PATHS))
     lines.extend("rw_path=%s" % p for p in keep)
 
 
@@ -1610,7 +1628,8 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
     warns = []
     if not privileged:
         if _get_last(svc, "DynamicUser").lower() in _TRUE:
-            warns.append("DynamicUser=yes: RemoveIPC and RestrictSUIDSGID it implies are not enforced")
+            # led by what's lost: a warning is credited to the directive it starts with
+            warns.append("RemoveIPC= RestrictSUIDSGID= implied by DynamicUser=yes; not enforced: RemoveIPC RestrictSUIDSGID")
     if _get_all(svc, "ExecCondition"):
         warns.append("ExecCondition= not run: the unit starts unconditionally")
     if _get_all(svc, "ExecStartPost"):
@@ -1679,7 +1698,11 @@ def exec_dir_lines(svc, name, key, sys_base, user_base):
     # already exists must not stop starting because install failed.
     pfx += "-"
     user, group, own = _get_last(svc, "User"), _get_last(svc, "Group"), ""
-    if not _USER and user and user != "root":
+    # systemd.exec: every *Directory= but ConfigurationDirectory= goes to User=/Group=;
+    # a config dir stays root's, so the service can't rewrite its own config
+    if key == "ConfigurationDirectory":
+        pass
+    elif not _USER and user and user != "root":
         own = " -o %s -g %s" % (_cmd_quote(user), _cmd_quote(group or _primary_group(user)))
     elif not _USER and group:
         own = " -g %s" % _cmd_quote(group)
@@ -2118,6 +2141,13 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if "@" in pfx:
         warns.append("ExecStart=@ custom argv[0] not kept: the program sees its own path")
     warns.extend(_unenforced_warns(svc, named_user, privileged, "+" in pfx))
+    # systemd still hands *Directory= to User= under ExecStart=!/+; the engine
+    # chowns them to the run user, which is root here (chrony on Debian/Ubuntu)
+    owned = [k for k in ("RuntimeDirectory", "StateDirectory", "CacheDirectory", "LogsDirectory")
+             if any(_get_all(svc, k))]
+    if privileged and named_user and named_user != "root" and owned:
+        warns.append("%s= owned by root, not User=%s, since ExecStart=%s runs as root; not enforced: %s"
+                     % ("= ".join(owned), named_user, pfx, " ".join(owned)))
     if _USER and stype in ("notify", "notify-reload"):
         # Quadlet's [X-Container] Image= says where podman's options end;
         # the check runs on READY=1, so only notify units can have it

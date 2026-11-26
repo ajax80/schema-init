@@ -21,4 +21,14 @@ with tempfile.TemporaryDirectory() as d:
     assert st[("Unit", "Description")] == "inert" and st[("Install", "WantedBy")] == "inert", st
     assert rec["t@.service"]["status"] == "skipped", rec["t@.service"]
     assert {x["status"] for x in rec["t@.service"]["directives"]} == {"skipped-unit"}
+import importlib.util
+_s = importlib.util.spec_from_file_location("cc", os.path.join(REPO, "tools/compat-corpus.py"))
+cc = importlib.util.module_from_spec(_s)
+_s.loader.exec_module(cc)
+assert {"ReadWritePaths", "ProtectSystem"} <= cc.warned_of(
+    ["ReadWritePaths=/etc/x is read-only under protect_system=full, lowered to protect_system=1"])
+assert "ProtectHome" in cc.warned_of(["ReadWritePaths=/home/x is read-only under protect_home=1, lowered to protect_home=0"])
+_dyn = cc.si.unit_to_svc("dyn", cc.si.parse_unit("[Service]\nExecStart=/bin/d\nDynamicUser=yes\n"))
+_w = cc.warned_of([ln[len(cc.si.WARN_PREFIX):] for ln in _dyn.splitlines() if ln.startswith(cc.si.WARN_PREFIX)])
+assert "DynamicUser" not in _w and {"RemoveIPC", "RestrictSUIDSGID"} <= _w, _w
 print("ok compat_corpus")
