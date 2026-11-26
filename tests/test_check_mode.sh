@@ -202,18 +202,19 @@ grep -q '^error: a\.svc: zz: exec=/bin/sleep 1 has whitespace' "$T/out" || fail 
 grep -q '^error: zz\.svc: zz: exec=/bin/echo two words has whitespace' "$T/out" || fail "ws: zz.svc reason"
 grep -q '^note: .*has whitespace' "$T/out" && fail "ws: reason repeated as a note"
 
-# exec= runs through execv with no PATH search: a relative path still loads (for now) but
-# is noted, which verify shows as a WARN
+# exec= runs through execv with no PATH search: a relative path or bare name is refused,
+# so verify fails the next boot before it happens
 newroot relexec
 svc "$S" rel relative/path
 svc "$S" bare true
 svc "$S" ok
 check --root "$R" --cmdline ""
-[ $rc -eq 0 ] || fail "relexec: exit $rc"
-grep -q '^note: rel: exec=relative/path is not an absolute path; it runs relative to working_dir=' "$T/out" || fail "relexec: rel note"
-grep -q '^note: bare: exec=true is not an absolute path' "$T/out" || fail "relexec: bare note"
-grep -q '^rel\.exec=' "$T/out" && grep -q '^bare\.exec=' "$T/out" || fail "relexec: relative exec not loaded"
-grep -q 'ok: exec=' "$T/out" && fail "relexec: absolute exec noted"
+[ $rc -eq 1 ] || fail "relexec: exit $rc"
+grep -q '^error: rel\.svc: rel: exec=relative/path is not an absolute path' "$T/out" || fail "relexec: rel error"
+grep -q '^error: bare\.svc: bare: exec=true is not an absolute path' "$T/out" || fail "relexec: bare error"
+grep -q '^rel\.exec=' "$T/out" && fail "relexec: relative exec loaded"
+grep -q '^ok\.exec=' "$T/out" || fail "relexec: absolute exec not loaded"
+grep -q 'ok: exec=' "$T/out" && fail "relexec: absolute exec flagged"
 
 # --svc-dir is a path under the root, so absolute
 newroot reldir

@@ -3459,14 +3459,6 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
                     svc->name[0] ? svc->name : path, val);
             return -1;
         }
-        /* execv, no PATH search: a relative one runs whatever sits at that path under
-         * working_dir= (or /). Warned, not refused, so a box that has one doesn't lose a
-         * running service at the next upgrade's re-exec; a later release refuses it.
-         * verify_diff turns this --check note into a WARN by its wording */
-        if (val[0] != '/')
-            fprintf(stderr, "[schema-init] %s: exec=%s is not an absolute path; it runs relative to "
-                    "working_dir= (or /), and a later release will refuse it\n",
-                    svc->name[0] ? svc->name : path, val);
         strncpy(svc->exec, val, sizeof(svc->exec) - 1);
         if (svc->argv[0] != svc->exec) free(svc->argv[0]);
         svc->argv[0] = svc->exec;
@@ -4208,7 +4200,22 @@ static int sc_deny_finalize(service_t *svc) {
     return 0;
 }
 
+int (*service_relexec_keep)(const char *name);
+
 static int svc_finalize(service_t *svc, struct parse_ctx *pc, const char *path) {
+    /* execv, no PATH search: a relative exec= runs whatever sits at that path under
+     * working_dir= (or /). Here, not in the parser: name= may follow exec=. One that is
+     * running across a re-exec or reload is kept, so an upgrade never drops a live
+     * service */
+    if (svc->exec[0] && svc->exec[0] != '/') {
+        if (!service_relexec_keep || !service_relexec_keep(svc->name)) {
+            fprintf(stderr, "[schema-init] %s: exec=%s is not an absolute path — not loaded\n",
+                    svc->name[0] ? svc->name : path, svc->exec);
+            return -1;
+        }
+        fprintf(stderr, "[schema-init] %s: exec=%s is not an absolute path; kept while it runs, "
+                "refused at the next boot\n", svc->name, svc->exec);
+    }
     if (hardening_finalize(svc) != 0) return -1;
     if (sc_deny_finalize(svc) != 0) return -1;
     /* drop-ins applied: what start/restart/reset put back after a stop's hold */

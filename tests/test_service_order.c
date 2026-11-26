@@ -55,6 +55,8 @@ static void before(int from, int to) {
     snprintf(t[from].before_name[k], 64, "s%d", to);
 }
 
+static int keep_t(const char *name) { return !strcmp(name, "t"); }
+
 static int has_edge(int s, int target) {
     for (int k = 0; k < t[s].order_count; k++)
         if (t[s].order_idx[k] == target) return 1;
@@ -180,6 +182,25 @@ int main(void) {
         assert(service_order_ready(&t[0], t, 2, gs, 1) == 1);
     }
 
+    /* a relative exec= (not ordering, but this file has the loader harness): refused,
+     * unless the engine says that service is running (re-exec/reload keep it). name=
+     * after exec= and a drop-in's exec= both count: the check runs once everything is read */
+    assert(load("exec=relative/path\n", NULL, &s) != 0);
+    assert(load("exec=true\n", NULL, &s) != 0);
+    assert(load("", "exec=bin/x\n", &s) != 0);
+    assert(load("exec=x\n", "exec=/bin/x\n", &s) == 0);
+    service_relexec_keep = keep_t;
+    assert(load("exec=relative/path\n", NULL, &s) == 0 && !strcmp(s.exec, "relative/path"));
+    put(path, "exec=rel\nname=other\n");
+    memset(&s, 0, sizeof s);
+    assert(service_load_one(path, &s) != 0);
+    put(path, "exec=rel\nname=t\n");
+    memset(&s, 0, sizeof s);
+    assert(service_load_one(path, &s) == 0);
+    service_relexec_keep = NULL;
+    assert(service_load_one(path, &s) != 0);
+
+    unlink(path);
     rmdir(dir);
     printf("test_service_order: ok\n");
     return 0;
