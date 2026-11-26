@@ -209,11 +209,28 @@ per family of directives. It also runs one control: `fs-tampered` has `private_t
 cut from its `.svc` and must come back NOT-ENFORCED. Each oracle was shown to fail
 when its line is cut.
 
+## The top four silent losses, closed (2026-11-26)
+
+Each is now read for every imported unit. It is either kept, because schema-init
+already behaves the same way, or warned with `not enforced:`:
+
+| directive | kept | warned |
+|---|---|---|
+| `RemainAfterExit=` | on a oneshot: a finished oneshot stays done and its dependents go on | on any other type (one Arch unit): the exit is supervised |
+| `Conflicts=` | a `.target`: schema-init starts none, and its shutdown stops every service | a service or socket (libvirtd, tlp, getty), on the unit or its activating `.socket`: starting one doesn't stop the other |
+| `ExecStop=` / `ExecStopPost=` | `kill [-SIG] $MAINPID` with the unit's own kill signal (compared by number) | anything else: a system service is still stopped by its `kill_signal` alone (user imports map them) |
+| `NotifyAccess=` | `main`/`exec`: PID 1 takes notify messages only from the service's own cgroup | `all` on a notify unit (no `MAINPID=` hand-off on system imports), `none`, and any value on a non-notify type (no notify socket) |
+
+Silent directives after the change: Fedora 105, Debian 57, Ubuntu 56, Arch 66.
+What tops the list now is `Install.Alias`, `StartLimit*`, `KeyringMode`,
+`OOMScoreAdjust`, `TimeoutStartSec` and `StandardOutput`/`StandardError`.
+
 ## Next
 
 1. **`MAX_SERVICES` headroom**: PID 1 loads 128 `.svc` files and ignores the
    rest with one warning. Real imports take only enabled units (blakbox has 71,
    the Optiplex 45), but importing every Fedora 44 unit would give 211.
 2. **`CapabilityBoundingSet=`**: the biggest out-of-force directive (69 units).
-3. Turn the silent list into warnings or mappings, one directive at a time,
-   next `RemainAfterExit=` and `Conflicts=`.
+3. Turn the rest of the silent list into warnings or mappings, next
+   `OOMScoreAdjust=` (engine has `oom_score_adj=`), `TimeoutStartSec=`
+   (`start_timeout_sec=`) and `StartLimit*` (`max_restarts=`).
