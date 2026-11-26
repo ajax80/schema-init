@@ -225,6 +225,20 @@ static void test_order_lines(void) {
     printf("ok test_order_lines\n");
 }
 
+/* a key added since the last baseline: written only when set, or verify sees a
+ * change on every service and refuses the re-exec (v0.4.35 on BlakPi) */
+static void test_dir_owner_only_when_set(void) {
+    static service_t a, b;
+    char l[512];
+    load("x.svc", "name=x\nexec=/usr/bin/true\n", &a);
+    load("x.svc", "name=x\nexec=/usr/bin/true\ndir_owner=chrony:adm\n", &b);
+    char *ta = ser(&a), *tb = ser(&b);
+    assert(!strstr(ta, "x.dir_owner"));
+    assert(line_of(tb, "x.dir_owner=", l, sizeof l) && !strcmp(l, "x.dir_owner=chrony:adm"));
+    free(ta); free(tb);
+    printf("ok test_dir_owner_only_when_set\n");
+}
+
 /* svc_keys[] is what verify splits lines on: it must be exactly what the emitters write */
 static void test_keys_table(void) {
     const char *const *em;
@@ -247,6 +261,7 @@ int main(void) {
     assert(mkdtemp(dir));
     test_keys_table();
     test_order_lines();
+    test_dir_owner_only_when_set();
     test_args_change();
     test_exec_pre_change();
     test_source_only();
