@@ -1604,11 +1604,22 @@ for _p in ("full", "strict"):
 check("no protection, no rw_path", "rw_path=" not in _rtenv("ConfigurationDirectory=qp\n"))
 _bang = si.unit_to_svc("ch", si.parse_unit("[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\nStateDirectory=chrony\n"
                                            "LogsDirectory=chrony\n"))
-check("ExecStart=! with User= and *Directory=: ownership loss warned",
-      si.WARN_PREFIX + "StateDirectory= LogsDirectory= owned by root, not User=_chrony" in _bang
-      and "not enforced: StateDirectory LogsDirectory\n" in _bang)
-check("... not without a *Directory=", "owned by root" not in si.unit_to_svc("ch", si.parse_unit(
+check("ExecStart=! with User= and *Directory=: dirs go to User=, process stays root",
+      "dir_owner=_chrony\n" in _bang and "needs_root=1\n" in _bang and "user=" not in _bang
+      and "owned by root" not in _bang)
+check("... with Group=, to that group",
+      "dir_owner=_chrony:adm\n" in si.unit_to_svc("ch", si.parse_unit(
+          "[Service]\nUser=_chrony\nGroup=adm\nExecStart=+/usr/sbin/chronyd\nRuntimeDirectory=chrony\n")))
+check("... Group= alone: root:GROUP", "dir_owner=root:adm\n" in si.unit_to_svc("ch", si.parse_unit(
+      "[Service]\nGroup=adm\nExecStart=!/usr/sbin/chronyd\nStateDirectory=chrony\n")))
+check("... not when an empty value cleared the list", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
+      "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\nStateDirectory=chrony\nStateDirectory=\n")))
+check("... not without a *Directory=", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
       "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\n")))
+check("... not for ExecStart=!! (runs as User=)", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
+      "[Service]\nUser=_chrony\nExecStart=!!/usr/sbin/chronyd\nStateDirectory=chrony\n")))
+check("... not for a ConfigurationDirectory= alone (root's anyway)", "dir_owner" not in si.unit_to_svc("ch", si.parse_unit(
+      "[Service]\nUser=_chrony\nExecStart=!/usr/sbin/chronyd\nConfigurationDirectory=chrony\n")))
 _kt = lambda extra: si.unit_to_svc("kt", si.parse_unit("[Service]\nExecStart=/bin/kt\n" + extra))
 check("ReadWritePaths= under /sys with ProtectKernelTunables= -> rw_path (fprintd)",
       "rw_path=/sys/devices\n" in _kt("ProtectKernelTunables=yes\nReadWritePaths=/sys/devices\n"))

@@ -410,6 +410,7 @@ typedef struct {
     uint8_t          exec_dir_count[4];
     uint16_t         exec_dir_mode[4]; /* *_dir_mode=, used when its bit in exec_dir_mode_set is on */
     uint8_t          exec_dir_mode_set;/* bit k: *_dir_mode= given (0000 is a real mode); else 0755 */
+    char             dir_owner[64];    /* dir_owner=USER[:GROUP]: owns exec_dir in place of the run user */
     uint8_t          rt_made;          /* a spawn created the runtime dirs; removed once stopped for good */
     char             bind_name[64];    /* bind=: stop with it, start again with it; also a dep */
     uint8_t          bind_held;        /* stopped because its bound went down; restarts with it */

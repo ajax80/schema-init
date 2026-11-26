@@ -7,7 +7,7 @@ const char *const svc_keys[] = {
     "after", "allowed_slot_max", "allowed_slot_min", "ambient_caps", "argv", "before", "bind",
     "cache_dir", "cache_dir_mode", "card", "condition", "cpu_limit",
     "cpu_weight", "cpuset", "cpuset_partition", "critical", "dep",
-    "directory_mode", "dynamic_user", "env", "env_file", "exec",
+    "dir_owner", "directory_mode", "dynamic_user", "env", "env_file", "exec",
     "exec_pre", "exec_reload", "exec_stop", "exec_stop_post", "expand_args",
     "failsafe", "failsafe_timeout_ms", "fdstore", "final_kill_signal", "fuse",
     "fuse_cmd", "group", "io_class", "io_priority", "keep_caps",

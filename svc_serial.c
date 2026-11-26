@@ -168,6 +168,7 @@ static void em_fs(lines_t *L, const service_t *s) {
         snprintf(key, sizeof key, "%s_mode", service_exec_dir_key[k]);
         add_mode(L, s, key, (s->exec_dir_mode_set >> k) & 1, s->exec_dir_mode[k]);
     }
+    add_str(L, s, "dir_owner", s->dir_owner);
     add_list(L, s, "rw_path", s->rw_path, s->rw_path_count);
     add_mode(L, s, "umask", s->umask_val >= 0, (unsigned)s->umask_val);
 }
@@ -401,7 +402,7 @@ static const struct {
     { em_identity, { "user", "group", "supplementary_groups", "dynamic_user", "keep_caps", "ambient_caps" } },
     { em_env, { "env", "env_file" } },
     { em_fs, { "working_dir", "runtime_dir", "state_dir", "cache_dir", "logs_dir", "runtime_dir_mode",
-               "state_dir_mode", "cache_dir_mode", "logs_dir_mode", "rw_path", "umask" } },
+               "state_dir_mode", "cache_dir_mode", "logs_dir_mode", "dir_owner", "rw_path", "umask" } },
     { em_hard, { "no_new_privs", "private_tmp", "protect_system", "protect_home", "syscall_deny" } },
     { em_ns_kernel, { "protect_kernel_tunables", "protect_kernel_modules", "protect_control_groups",
                       "private_devices", "protect_hostname", "private_network", "memory_deny_write_execute" } },
