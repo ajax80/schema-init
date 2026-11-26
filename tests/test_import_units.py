@@ -586,7 +586,7 @@ check("socket service: listen + lazy, no [Install] note", "listen=stream:/run/cu
       and "listen_lazy=1\n" in cu and "no [Install]" not in cu and "notify=1\n" in cu)
 
 # --- Condition*/Assert* ---
-si._FACTS = {"virt": "none", "virt_kind": None, "security": {"audit"}, "cgroup_v2": True,
+si._FACTS = {"virt": "none", "virt_kind": None, "userns": False, "security": {"audit"}, "cgroup_v2": True,
              "controllers": {"cpu", "memory", "io"}, "cpus": 4, "arch": "x86-64"}
 def cond(txt):
     return si.condition_lines(si.parse_unit("[Unit]\n" + txt + "\n"))
@@ -624,6 +624,11 @@ si._FACTS["virt"], si._FACTS["virt_kind"] = "kvm", "vm"
 check("in a VM: Virtualization=vm/kvm hold, =no skips",
       cond("ConditionVirtualization=vm\nConditionVirtualization=kvm") == [] and cond_skip("ConditionVirtualization=no"))
 si._FACTS["virt"], si._FACTS["virt_kind"] = "none", None
+check("private-users: !private-users holds outside a userns, private-users skips",
+      cond("ConditionVirtualization=!private-users") == [] and cond_skip("ConditionVirtualization=private-users"))
+si._FACTS["userns"] = True
+check("in a userns: private-users holds", cond("ConditionVirtualization=private-users") == [])
+si._FACTS["userns"] = False
 sm = si.unit_to_svc("smartd", si.parse_unit("[Unit]\nConditionVirtualization=no\nConditionPathExists=/etc/smartd.conf\n"
                                             "[Service]\nType=notify\nExecStart=/usr/sbin/smartd -n\n[Install]\nWantedBy=x\n"))
 check("unit_to_svc carries condition lines", "condition=path_exists:/etc/smartd.conf\n" in sm)

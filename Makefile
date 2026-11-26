@@ -533,7 +533,17 @@ verify-dbus-conformance:
 	$(CC) $(CFLAGS) tests/test_sdbus_conformance.c -o $(TESTDIR)/sdbus-conf-full
 	$(TESTDIR)/sdbus-conf-full tests/dbus-corpus/policy-dissolved-full.txt tests/dbus-corpus/policy-golden-full.tsv
 
-.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-nowrite-live verify-sandbox-live verify-dbus-conformance
+# Network: fetches the pinned packages in tools/compat-corpus.lock.json (cached
+# by hash under COMPAT_DIR) and runs the corpus over each distro as a foreign tree.
+COMPAT_DIR ?= build/compat
+compat-corpus: schema-init
+	tools/compat-fetch.py $(COMPAT_DIR)
+	tools/compat-corpus.py --skip-systemd --label fedora-host --json $(COMPAT_DIR)/fedora-host.json /usr/lib/systemd/system
+	tools/compat-corpus.py --foreign --security apparmor,audit --label debian-trixie --json $(COMPAT_DIR)/debian-trixie.json $(COMPAT_DIR)/debian-trixie
+	tools/compat-corpus.py --foreign --security apparmor,audit --label ubuntu-noble --json $(COMPAT_DIR)/ubuntu-noble.json $(COMPAT_DIR)/ubuntu-noble
+	tools/compat-corpus.py --foreign --label arch --json $(COMPAT_DIR)/arch.json $(COMPAT_DIR)/arch
+
+.PHONY: all analyze install-analyze clean install install-migrate install-wizard install-dbus-sp1 snapshot safe-install release srpm aarch64 armhf desktop test test-all fuzz test-verify-regression verify-live verify-nowrite-live verify-sandbox-live verify-dbus-conformance compat-corpus
 
 
 
