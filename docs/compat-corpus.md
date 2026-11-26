@@ -195,8 +195,9 @@ Getting there took three importer fixes, each found by this run:
   read-only mounts.
 - **`ExecStart=!` with `User=` gave root-owned State/Runtime/Logs dirs** (chrony
   on Debian and Ubuntu). systemd still hands those dirs to `User=` when it runs
-  the command as root. The `.svc` has no way to name a directory owner separate
-  from the run user, so this is now a warning. A real fix needs the engine.
+  the command as root. The importer now writes `dir_owner=USER[:GROUP]`, an engine
+  key that sets the directories' owner apart from the run user. The `bang` and
+  `plus` fixtures check it under PID 1.
 
 The NOT-ENFORCED directives that are all warned, by count: `CapabilityBoundingSet=` 69
 (no bounding-set key), `ProtectHome=read-only`/`tmpfs` 9 and
@@ -210,11 +211,9 @@ when its line is cut.
 
 ## Next
 
-1. **`ExecStart=!` directory owner**: an engine key for the owner of
-   `*Directory=`, separate from the run user.
-2. **`MAX_SERVICES` headroom**: PID 1 loads 128 `.svc` files and ignores the
+1. **`MAX_SERVICES` headroom**: PID 1 loads 128 `.svc` files and ignores the
    rest with one warning. Real imports take only enabled units (blakbox has 71,
    the Optiplex 45), but importing every Fedora 44 unit would give 211.
-3. **`CapabilityBoundingSet=`**: the biggest out-of-force directive (69 units).
-4. Turn the silent list into warnings or mappings, one directive at a time,
+2. **`CapabilityBoundingSet=`**: the biggest out-of-force directive (69 units).
+3. Turn the silent list into warnings or mappings, one directive at a time,
    next `RemainAfterExit=` and `Conflicts=`.

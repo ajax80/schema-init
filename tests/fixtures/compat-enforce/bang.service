@@ -1,0 +1,7 @@
+[Service]
+User=svcuser
+Group=bangers
+ExecStart=!/usr/bin/bang
+StateDirectory=bang
+RuntimeDirectory=bang
+LogsDirectory=bang

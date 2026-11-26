@@ -3045,6 +3045,23 @@ static void svc_make_exec_dirs(const service_t *svc, int create) {
     int root = geteuid() == 0;
     uid_t uid = root ? svc->run_uid : (uid_t)-1;
     gid_t gid = root && (svc->run_uid || svc->run_group[0]) ? svc->run_gid : root ? 0 : (gid_t)-1;
+    /* systemd still gives the dirs to User= when ExecStart=!/+ runs the
+     * process as root (Debian's chrony): looked up at each start, like user= */
+    if (root && create && svc->dir_owner[0]) {
+        char u[64], *g = NULL, *end;
+        strcpy(u, svc->dir_owner);
+        if ((g = strchr(u, ':'))) *g++ = '\0';
+        errno = 0;
+        unsigned long id = strtoul(u, &end, 10);
+        struct passwd *pw = *end ? getpwnam(u) : !errno && id < (uid_t)-1 ? getpwuid((uid_t)id) : NULL;
+        if (!pw || (g && *g && !svc_group_resolve(g, &gid))) {
+            dprintf(2, "[schema-init] %s: dir_owner=%s: no such %s\n", svc->name, svc->dir_owner,
+                    pw ? "group" : "user");
+            _exit(126);
+        }
+        uid = pw->pw_uid;
+        if (!g || !*g) gid = pw->pw_gid;
+    }
     for (int k = 0; k < EXEC_DIR_KINDS; k++) {
         char base[PATH_MAX], *env;
         const char *step = "";
@@ -3745,6 +3762,16 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             }
             svc->exec_dir[k][svc->exec_dir_count[k]++] = strdup(tok);
         }
+    }
+    else if (strcmp(line, "dir_owner") == 0) {
+        /* a truncated name could resolve to some other user: refuse the load */
+        if (strlen(val) >= sizeof svc->dir_owner || *val == ':' || strchr(val, ':') != strrchr(val, ':')) {
+            fprintf(stderr, "[schema-init] %s: dir_owner=%s is not USER[:GROUP] (under %zu chars)\n",
+                    svc->name[0] ? svc->name : path, val, sizeof svc->dir_owner);
+            return -1;
+        }
+        memset(svc->dir_owner, 0, sizeof svc->dir_owner);
+        strcpy(svc->dir_owner, val);
     }
     else if (exec_dir_kind(line, 1) >= 0) {
         char *end;

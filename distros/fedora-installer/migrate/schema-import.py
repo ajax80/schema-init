@@ -2141,13 +2141,12 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if "@" in pfx:
         warns.append("ExecStart=@ custom argv[0] not kept: the program sees its own path")
     warns.extend(_unenforced_warns(svc, named_user, privileged, "+" in pfx))
-    # systemd still hands *Directory= to User= under ExecStart=!/+; the engine
-    # chowns them to the run user, which is root here (chrony on Debian/Ubuntu)
-    owned = [k for k in ("RuntimeDirectory", "StateDirectory", "CacheDirectory", "LogsDirectory")
-             if any(_get_all(svc, k))]
-    if privileged and named_user and named_user != "root" and owned:
-        warns.append("%s= owned by root, not User=%s, since ExecStart=%s runs as root; not enforced: %s"
-                     % ("= ".join(owned), named_user, pfx, " ".join(owned)))
+    # systemd still hands *Directory= to User=/Group= under ExecStart=!/+, while
+    # the process runs as root (chrony on Debian/Ubuntu)
+    owned = any(any(_get_all(svc, k)) for k in _NATIVE_DIRS)
+    if privileged and not _USER and named_user and named_user != "root" and owned:
+        g = _get_last(svc, "Group")
+        lines.append("dir_owner=%s%s" % (named_user, ":" + g if g else ""))
     if _USER and stype in ("notify", "notify-reload"):
         # Quadlet's [X-Container] Image= says where podman's options end;
         # the check runs on READY=1, so only notify units can have it

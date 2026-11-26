@@ -94,6 +94,11 @@ int main(void) {
     assert(load("name=d\nexec=/bin/true\nruntime_dir=1 2 3 4 5 6 7 8\n", &s) == 0 &&
            s.exec_dir_count[EXEC_DIR_RUNTIME] == 8);
     assert(load("name=d\nexec=/bin/true\nruntime_dir=1 2 3 4 5 6 7 8 9\n", &s) == -1);
+    assert(load("name=d\nexec=/bin/true\ndir_owner=chrony\n", &s) == 0 && !strcmp(s.dir_owner, "chrony"));
+    assert(load("name=d\nexec=/bin/true\ndir_owner=chrony:adm\ndir_owner=\n", &s) == 0 && !s.dir_owner[0]);
+    assert(load("name=d\nexec=/bin/true\ndir_owner=:adm\n", &s) == -1);
+    assert(load("name=d\nexec=/bin/true\ndir_owner=a:b:c\n", &s) == -1);
+    assert(load("name=d\nexec=/bin/true\ndir_owner=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", &s) == -1);
     {
         char dd[400], dp[450];
         snprintf(dd, sizeof dd, "%s.d", path);
