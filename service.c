@@ -2141,9 +2141,14 @@ int service_spawn(service_t *svc) {
             long r = syscall(SYS_keyctl, KEYCTL_JOIN_SESSION_KEYRING, NULL);
             if (r >= 0 && svc->keyring_mode == SVC_KEYRING_SHARED)
                 r = syscall(SYS_keyctl, KEYCTL_LINK, KEY_SPEC_USER_KEYRING, KEY_SPEC_SESSION_KEYRING);
-            /* a kernel without keys, a filter that denies keyctl (with whatever
-             * errno): the service runs with the keyring it inherited, logged */
-            if (r < 0) dprintf(2, "[schema-init] %s: keyring_mode: keyctl: %d, keyring inherited\n",
+            /* no keys in this kernel, or a container's filter (the service's own
+             * filter goes on just before exec): systemd goes on too. Anything else
+             * fails closed: the service asked not to share a keyring. */
+            if (r < 0 && errno != ENOSYS && errno != EPERM && errno != EACCES) {
+                dprintf(2, "[schema-init] %s: keyring_mode: keyctl: %d\n", svc->name, errno);
+                _exit(126);
+            }
+            if (r < 0) dprintf(2, "[schema-init] %s: keyring_mode: no keyrings here (%d), keyring inherited\n",
                                svc->name, errno);
         }
         if (svc->run_uid && svc->cap_ambient_mask) {
