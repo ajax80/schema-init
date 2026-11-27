@@ -7,6 +7,7 @@ int fdstore_n, fdstore_cap;
 #include "caps.h"
 #include "ns.h"
 #include <linux/capability.h>
+#include <linux/keyctl.h>
 #include "coredump.h"
 #include "recorder.h"
 
@@ -1596,6 +1597,33 @@ static void svc_child_log(const service_t *svc) {
         dup2(fd, STDERR_FILENO);
         close(fd);
     }
+    /* stdout=/stderr= over the log; a file that won't open fails the spawn,
+     * as in systemd, with the reason in the log still on fd 2 */
+    for (int i = 0; i < 2; i++) {
+        int m = svc->out_mode[i], ofd;
+        if (m == SVC_OUT_INHERIT || m == SVC_OUT_LOG) continue;
+        /* the same file twice shares one fd, as systemd does: one offset, one truncate */
+        if (i && m == svc->out_mode[0] && m != SVC_OUT_NULL && !strcmp(svc->out_path[0], svc->out_path[1])) {
+            dup2(STDOUT_FILENO, STDERR_FILENO);
+            continue;
+        }
+        if (m == SVC_OUT_NULL) ofd = open("/dev/null", O_WRONLY);
+        else ofd = open(svc->out_path[i], O_WRONLY | O_CREAT | O_NOCTTY | O_CLOEXEC |
+                        (m == SVC_OUT_APPEND ? O_APPEND : m == SVC_OUT_TRUNCATE ? O_TRUNC : 0), 0644);
+        if (ofd < 0) {
+            dprintf(STDERR_FILENO, "[schema-init] %s: %s=%s: %s\n", svc->name, i ? "stderr" : "stdout",
+                    m == SVC_OUT_NULL ? "/dev/null" : svc->out_path[i], strerror(errno));
+            _exit(126);
+        }
+        dup2(ofd, STDOUT_FILENO + i);
+        close(ofd);
+    }
+    /* stderr unset follows a redirected stdout */
+    if (svc->out_mode[1] == SVC_OUT_INHERIT && svc->out_mode[0] > SVC_OUT_LOG)
+        dup2(STDOUT_FILENO, STDERR_FILENO);
+    /* PID 1 ignores SIGPIPE and exec keeps an ignored signal ignored: systemd's
+     * IgnoreSIGPIPE=yes is the default, ignore_sigpipe=0 takes it back */
+    if (svc->sigpipe_dfl) signal(SIGPIPE, SIG_DFL);
 }
 
 service_t *service_fallback(const service_t *svc, service_t *table, int count) {
@@ -2107,6 +2135,21 @@ int service_spawn(service_t *svc) {
             dprintf(2, "[schema-init] UID DROP FAILED for %s: setuid: %d\n",
                     svc->name, errno);
             _exit(126);
+        }
+        /* after setuid: a new session keyring belongs to the uid that makes it */
+        if (svc->keyring_mode != SVC_KEYRING_INHERIT) {
+            long r = syscall(SYS_keyctl, KEYCTL_JOIN_SESSION_KEYRING, NULL);
+            if (r >= 0 && svc->keyring_mode == SVC_KEYRING_SHARED)
+                r = syscall(SYS_keyctl, KEYCTL_LINK, KEY_SPEC_USER_KEYRING, KEY_SPEC_SESSION_KEYRING);
+            /* no keys in this kernel, or a container's filter (the service's own
+             * filter goes on just before exec): systemd goes on too. Anything else
+             * fails closed: the service asked not to share a keyring. */
+            if (r < 0 && errno != ENOSYS && errno != EPERM && errno != EACCES) {
+                dprintf(2, "[schema-init] %s: keyring_mode: keyctl: %d\n", svc->name, errno);
+                _exit(126);
+            }
+            if (r < 0) dprintf(2, "[schema-init] %s: keyring_mode: no keyrings here (%d), keyring inherited\n",
+                               svc->name, errno);
         }
         if (svc->run_uid && svc->cap_ambient_mask) {
             const char *step = "";
@@ -3848,6 +3891,37 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
     else if (strcmp(line, "oom_score_adj") == 0) {
         int v = atoi(val);
         if (v >= -1000 && v <= 1000) { svc->oom_score_adj = v; svc->oom_adj_set = 1; }
+    }
+    else if (strcmp(line, "stdout") == 0 || strcmp(line, "stderr") == 0) {
+        int i = line[3] == 'e', m = -1;
+        const char *p = NULL;
+        if (!*val) m = i ? SVC_OUT_INHERIT : SVC_OUT_LOG;   /* a drop-in's reset */
+        else if (strcmp(val, "log") == 0) m = SVC_OUT_LOG;
+        else if (strcmp(val, "null") == 0) m = SVC_OUT_NULL;
+        else if (i && strcmp(val, "inherit") == 0) m = SVC_OUT_INHERIT;
+        else if (strncmp(val, "file:", 5) == 0) { m = SVC_OUT_FILE; p = val + 5; }
+        else if (strncmp(val, "append:", 7) == 0) { m = SVC_OUT_APPEND; p = val + 7; }
+        else if (strncmp(val, "truncate:", 9) == 0) { m = SVC_OUT_TRUNCATE; p = val + 9; }
+        if (m < 0 || (p && (*p != '/' || strlen(p) >= sizeof svc->out_path[i]))) {
+            fprintf(stderr, "[schema-init] %s: bad %s=%s (log, null%s, or file:/append:/truncate: "
+                    "an absolute path under %zu bytes)\n", svc->name[0] ? svc->name : path, line, val,
+                    i ? ", inherit" : "", sizeof svc->out_path[i]);
+            return -1;
+        }
+        svc->out_mode[i] = (uint8_t)(m == SVC_OUT_LOG && !i ? SVC_OUT_INHERIT : m);
+        snprintf(svc->out_path[i], sizeof svc->out_path[i], "%s", p ? p : "");
+    }
+    else if (strcmp(line, "ignore_sigpipe") == 0)
+        svc->sigpipe_dfl = !strcmp(val, "0") || !strcasecmp(val, "no") || !strcasecmp(val, "false");
+    else if (strcmp(line, "keyring_mode") == 0) {
+        if (!*val || strcmp(val, "inherit") == 0) svc->keyring_mode = SVC_KEYRING_INHERIT;
+        else if (strcmp(val, "private") == 0) svc->keyring_mode = SVC_KEYRING_PRIVATE;
+        else if (strcmp(val, "shared") == 0) svc->keyring_mode = SVC_KEYRING_SHARED;
+        else {
+            fprintf(stderr, "[schema-init] %s: bad keyring_mode=%s (inherit, private or shared)\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
     }
     else if (strcmp(line, "ready_bus_name") == 0)
         snprintf(svc->ready_bus_name, sizeof svc->ready_bus_name, "%s", val);

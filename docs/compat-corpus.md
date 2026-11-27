@@ -288,12 +288,28 @@ Run 6: silent directives are 0 on all four distros (Fedora 73→0, Debian 44→0
 Ubuntu 44→0, Arch 44→0). The imported counts are unchanged, and PID 1's loader
 still takes every `.svc`.
 
+## Stdio, keyring, SIGPIPE in the engine (2026-11-27)
+
+The engine has `stdout=`, `stderr=`, `keyring_mode=` and `ignore_sigpipe=` now, and
+the importer maps `StandardOutput=`/`StandardError=` (`null`, `file:`, `append:`,
+`truncate:`), `KeyringMode=private`/`shared` and `IgnoreSIGPIPE=no` onto them.
+`StandardError=journal` under a redirected stdout writes `stderr=log`, because the
+engine's unset stderr follows stdout as systemd's `inherit` does. What stays warned
+is the `+console`, `tty`, `socket` and `fd` forms. One default still differs:
+systemd gives a system service a private session keyring when `KeyringMode=` is
+unset, while the engine keeps the inherited one. tests/test_schema_user.sh checks
+each key in a running service: the bytes in the files, the SigIgn mask, and the
+session keyring serial.
+
 ## Next
 
-1. Engine keys for the interim warnings: `OnFailure=`, `StandardOutput=`/`StandardError=`,
-   `KeyringMode=` and `IgnoreSIGPIPE=no`.
+1. `OnFailure=` stays warned. Its corpus targets are `emergency.target`,
+   `plymouth-quit`, snapd's and dnf's offline-upgrade cleanup: none is imported or
+   exists here. An engine key would also need a standby state for the target, so it
+   doesn't start at boot like every other `.svc`.
 2. Open questions on the defaults, where the engine and systemd differ with no
    directive in the unit. systemd times out a notify unit at 90 s
    (`DefaultTimeoutStartSec=`), while the engine's default for daemons is no limit.
    systemd gives a oneshot no start timeout, while the engine kills and excises it
-   at 90 s.
+   at 90 s. And with `KeyringMode=` unset, systemd gives a system service a private
+   session keyring, while an imported one keeps the inherited keyring.

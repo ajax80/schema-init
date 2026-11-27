@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory() as d:
     assert st[("Service", "CapabilityBoundingSet")] == "mapped", st
     assert st[("Service", "ReadOnlyPaths")] == "warned", st
     assert st[("Service", "CoredumpFilter")] == "silent", st
-    assert st[("Service", "KeyringMode")] == "warned", st
+    assert st[("Service", "KeyringMode")] == "mapped", st
     assert st[("Unit", "IgnoreOnIsolate")] == "inert", st
     assert st[("Unit", "Description")] == "inert" and st[("Install", "WantedBy")] == "inert", st
     assert rec["t@.service"]["status"] == "skipped", rec["t@.service"]

@@ -2060,8 +2060,6 @@ check("Sockets= naming the service's own socket is not warned", "Sockets=" not i
       and si.WARN_PREFIX + "Sockets" not in _sl("Sockets=a.socket\n"))
 check("Sockets= naming another socket is warned, every line", si.WARN_PREFIX + "Sockets=b.socket c.socket not passed" in _sl(
     "Sockets=a.socket b.socket\nSockets=c.socket\n"))
-check("StandardOutput=null names the StandardError= that follows it", "(and StandardError=, which follows it)" in _sl(
-    "StandardOutput=null\n"))
 check("RequiresMountsFor= with no mount-fstab service to wait for is warned",
       si.WARN_PREFIX + "RequiresMountsFor=" in _sl("", "[Unit]\nRequiresMountsFor=/var/lib\n"))
 check("RequiresMountsFor= -> dep=mount-fstab when there is one, not warned",
@@ -2073,14 +2071,34 @@ check("Alias= other than dbus-org.* is warned", "Alias=display-manager.service n
     "", "[Install]\nAlias=display-manager.service\n"))
 check("Alias=dbus-org.* is the dbus dep, not warned", "Alias" not in _sl("", "[Install]\nAlias=dbus-org.a.service\n"))
 check("StandardOutput=journal is the service log: nothing said", "StandardOutput" not in _sl("StandardOutput=journal\n"))
-check("StandardError=null is warned until the engine has a key", "StandardError=null not applied" in _sl(
-    "StandardError=null\n"))
+check("StandardError=null -> stderr=null", "stderr=null\n" in _sl("StandardError=null\n"))
+check("StandardOutput=null -> stdout=null, stderr follows it unwritten", "stdout=null\n" in _sl("StandardOutput=null\n")
+      and "stderr=" not in _sl("StandardOutput=null\n"))
+check("StandardOutput=null + StandardError=journal keeps stderr in the log", "stderr=log\n" in _sl(
+    "StandardOutput=null\nStandardError=journal\n"))
+check("StandardOutput=file: -> stdout=file:", "stdout=file:/var/log/dmesg\n" in _sl("StandardOutput=file:/var/log/dmesg\n"))
+check("StandardOutput=append:%t/x resolves the specifier", "stdout=append:/run/x\n" in _sl("StandardOutput=append:%t/x\n"))
+check("StandardOutput=journal+console is warned, stays the log", si.WARN_PREFIX + "StandardOutput=journal+console not applied" in _sl(
+    "StandardOutput=journal+console\n") and "stdout=" not in _sl("StandardOutput=journal+console\n"))
+check("StandardOutput=file: relative is warned", si.WARN_PREFIX + "StandardOutput=file:x" in _sl("StandardOutput=file:x\n"))
+check("StandardOutput=append: with an unknown specifier warns, the unit still imports",
+      si.WARN_PREFIX + "StandardOutput=append:/var/log/%H.log not applied" in _sl("StandardOutput=append:/var/log/%H.log\n"))
+check("StandardError= warned under a redirected stdout keeps stderr in the log", "stderr=log\n" in _sl(
+    "StandardOutput=null\nStandardError=journal+console\n"))
+check("StandardOutput=file: + StandardError=null writes stderr=null alone",
+      "stderr=null\n" in _sl("StandardOutput=file:/x\nStandardError=null\n")
+      and "stderr=log" not in _sl("StandardOutput=file:/x\nStandardError=null\n"))
+check("StandardOutput=File: (any case) maps", "stdout=file:/x\n" in _sl("StandardOutput=File:/x\n"))
+check("StandardOutput= path over 128 bytes (UTF-8) is warned", "stdout=" not in _sl("StandardOutput=file:/" + "é" * 70 + "\n"))
+check("KeyringMode=shared -> keyring_mode=shared", "keyring_mode=shared\n" in _sl("KeyringMode=shared\n"))
+check("KeyringMode=inherit writes nothing", "keyring" not in _sl("KeyringMode=inherit\n"))
+check("IgnoreSIGPIPE=no -> ignore_sigpipe=0", "ignore_sigpipe=0\n" in _sl("IgnoreSIGPIPE=no\n")
+      and "IgnoreSIGPIPE" not in _sl("IgnoreSIGPIPE=no\n"))
 check("RuntimeDirectoryPreserve= with no RuntimeDirectory= says nothing",
       "RuntimeDirectoryPreserve" not in _sl("RuntimeDirectoryPreserve=yes\n"))
 check("RuntimeDirectoryPreserve=yes with a RuntimeDirectory= is warned", "RuntimeDirectoryPreserve=yes not enforced" in _sl(
     "RuntimeDirectory=a\nRuntimeDirectoryPreserve=yes\n"))
-for _d, _v, _sec in (("Delegate", "yes", "Service"), ("SendSIGKILL", "no", "Service"), ("KeyringMode", "private", "Service"),
-                     ("IgnoreSIGPIPE", "no", "Service"), ("OnFailure", "x.service", "Unit"), ("SyslogIdentifier", "x", "Service"),
+for _d, _v, _sec in (("Delegate", "yes", "Service"), ("SendSIGKILL", "no", "Service"), ("OnFailure", "x.service", "Unit"), ("SyslogIdentifier", "x", "Service"),
                      ("FailureAction", "reboot", "Unit"), ("RefuseManualStart", "yes", "Unit"), ("BindTo", "x.device", "Unit")):
     _o = _sl(_d + "=" + _v + "\n") if _sec == "Service" else _sl("", "[Unit]\n" + _d + "=" + _v + "\n")
     check("%s=%s is warned" % (_d, _v), si.WARN_PREFIX + _d + "=" in _o)

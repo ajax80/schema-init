@@ -156,6 +156,20 @@ static void em_identity(lines_t *L, const service_t *s) {
         snprintf(t, sizeof t, "0x%016llx", (unsigned long long)s->cap_bound_drop);
         add_raw(L, s, "bounding_caps", t, NULL);
     }
+    static const char *const kr[] = { "inherit", "private", "shared" };
+    if (s->keyring_mode) add_enum(L, s, "keyring_mode", kr, 3, s->keyring_mode);
+}
+
+/* only when not the default: baselines from before these keys don't churn */
+static void em_stdio(lines_t *L, const service_t *s) {
+    static const char *const om[] = { "inherit", "log", "null", "file:", "append:", "truncate:" };
+    char t[160];
+    for (int i = 0; i < 2; i++) {
+        if (!s->out_mode[i]) continue;
+        snprintf(t, sizeof t, "%s%s", om[s->out_mode[i]], s->out_path[i]);
+        add_raw(L, s, i ? "stderr" : "stdout", t, NULL);
+    }
+    if (s->sigpipe_dfl) add_int(L, s, "ignore_sigpipe", 0);
 }
 
 static void em_env(lines_t *L, const service_t *s) {
@@ -407,7 +421,8 @@ static const struct {
     { em_exec, { "exec", "args", "expand_args", "exec_pre", "exec_stop", "exec_stop_post", "exec_reload",
                  "reload", "reload_signal", "card" } },
     { em_identity, { "user", "group", "supplementary_groups", "dynamic_user", "keep_caps", "ambient_caps",
-                   "bounding_caps" } },
+                   "bounding_caps", "keyring_mode" } },
+    { em_stdio, { "stdout", "stderr", "ignore_sigpipe" } },
     { em_env, { "env", "env_file" } },
     { em_fs, { "working_dir", "runtime_dir", "state_dir", "cache_dir", "logs_dir", "runtime_dir_mode",
                "state_dir_mode", "cache_dir_mode", "logs_dir_mode", "dir_owner", "rw_path", "umask" } },
@@ -475,6 +490,7 @@ int svc_serial_keys(const char *const **out) {
         /* written only when set */
         s->after_name[0][0] = s->before_name[0][0] = s->dir_owner[0] = 'x';
         s->cap_bound_set = 1;
+        s->keyring_mode = s->out_mode[0] = s->out_mode[1] = s->sigpipe_dfl = 1;
         for (size_t p = 0; p < sizeof props / sizeof *props; p++) props[p].emit(&L, s);
         free(s);
         for (int i = 0; i < L.n; i++) {

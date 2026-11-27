@@ -251,6 +251,47 @@ static void test_bounding_caps_only_when_set(void) {
     printf("ok test_bounding_caps_only_when_set\n");
 }
 
+/* stdout=, stderr=, ignore_sigpipe=, keyring_mode=: written only off their default,
+ * parsed back to the same; a bad value refuses the load */
+static void test_stdio_keyring(void) {
+    static service_t a, b, c;
+    char l[512];
+    load("x.svc", "name=x\nexec=/usr/bin/true\nstdout=log\nkeyring_mode=inherit\nignore_sigpipe=1\n", &a);
+    char *ta = ser(&a);
+    assert(!strstr(ta, "x.stdout") && !strstr(ta, "x.stderr") && !strstr(ta, "x.keyring_mode") &&
+           !strstr(ta, "x.ignore_sigpipe"));
+    load("x.svc", "name=x\nexec=/usr/bin/true\nstdout=null\nstderr=append:/var/log/x.err\n"
+         "keyring_mode=shared\nignore_sigpipe=0\n", &b);
+    char *tb = ser(&b);
+    assert(line_of(tb, "x.stdout=", l, sizeof l) && !strcmp(l, "x.stdout=null"));
+    assert(line_of(tb, "x.stderr=", l, sizeof l) && !strcmp(l, "x.stderr=append:/var/log/x.err"));
+    assert(line_of(tb, "x.keyring_mode=", l, sizeof l) && !strcmp(l, "x.keyring_mode=shared"));
+    assert(line_of(tb, "x.ignore_sigpipe=", l, sizeof l) && !strcmp(l, "x.ignore_sigpipe=0"));
+    assert(b.out_mode[0] == SVC_OUT_NULL && b.out_mode[1] == SVC_OUT_APPEND && b.sigpipe_dfl == 1);
+    /* stderr=log is its own setting: the log even when stdout goes elsewhere */
+    load("x.svc", "name=x\nexec=/usr/bin/true\nstdout=truncate:/tmp/o\nstderr=log\n", &c);
+    assert(c.out_mode[0] == SVC_OUT_TRUNCATE && !strcmp(c.out_path[0], "/tmp/o") && c.out_mode[1] == SVC_OUT_LOG);
+    /* only an explicit off turns SIGPIPE back on */
+    load("x.svc", "name=x\nexec=/usr/bin/true\nignore_sigpipe=yes\n", &c);
+    assert(!c.sigpipe_dfl);
+    load("x.svc", "name=x\nexec=/usr/bin/true\nignore_sigpipe=no\n", &c);
+    assert(c.sigpipe_dfl);
+    const char *bad[] = { "stdout=inherit\n", "stdout=file:rel\n", "stderr=journal\n", "keyring_mode=session\n" };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
+        char p[300], body[128];
+        snprintf(p, sizeof p, "%s/bad.svc", dir);
+        snprintf(body, sizeof body, "name=x\nexec=/usr/bin/true\n%s", bad[i]);
+        FILE *f = fopen(p, "w");
+        fputs(body, f);
+        fclose(f);
+        memset(&c, 0, sizeof c);
+        assert(service_load_one(p, &c) != 0);
+        unlink(p);
+    }
+    free(ta); free(tb);
+    printf("ok test_stdio_keyring\n");
+}
+
 /* svc_keys[] is what verify splits lines on: it must be exactly what the emitters write */
 static void test_keys_table(void) {
     const char *const *em;
@@ -275,6 +316,7 @@ int main(void) {
     test_order_lines();
     test_dir_owner_only_when_set();
     test_bounding_caps_only_when_set();
+    test_stdio_keyring();
     test_args_change();
     test_exec_pre_change();
     test_source_only();
