@@ -221,7 +221,7 @@ kb() { grep -a "^$1:" "$SERIAL" | tail -1 | grep -o '[0-9]*' | head -1; }
 # and rodata PID 1 hasn't run yet are left out
 short=$(tr -d '\r' < "$SERIAL" | awk '/sbin\/schema-init/{m=$2; n++} /^Size:/{z=$2} /^Rss:/{if ($2 < z) print m, $2 "/" z " kB"}')
 [ -n "$short" ] && miss "PID 1's image not fully paged in: $short"
-[ "$(tr -d '\r' < "$SERIAL" | grep -c 'sbin/schema-init')" -ge 2 ] || miss "no /proc/1/smaps lines for the image"
+[ "$(tr -d '\r' < "$SERIAL" | grep -Ec '^[0-9a-f]+-[0-9a-f]+ [-r][-w][-x]p .*/sbin/schema-init$')" -ge 2 ] || miss "no /proc/1/smaps lines for the image"
 grep -q 'MAX_SERVICES' "$SERIAL" && miss "PID 1 hit MAX_SERVICES with $BULK bulk services"
 # a rolled-back re-exec logs the same adopt line; only the client's reply differs
 grep -q 'ok: re-executed into' "$SERIAL" || miss "re-exec not confirmed (rolled back?)"
