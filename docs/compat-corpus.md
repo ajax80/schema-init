@@ -249,9 +249,9 @@ engine skips the drop.
 
 | directive | maps to | warned |
 |---|---|---|
-| `OOMScoreAdjust=` | `oom_score_adj=` | out of -1000..1000; a negative value in user mode (the kernel refuses an unprivileged lower score) |
-| `TimeoutStartSec=` / `TimeoutSec=` | `start_timeout_sec=` on notify and oneshot (until READY=1 or the exit, as systemd), and on dbus/forking past their worst healthy promotion (90 s, 10 s); `infinity` is `0` | dbus/forking under that, since the timer would kill a healthy service. Simple/exec say nothing: systemd's start ends at fork, so the timeout never runs there either |
-| `StartLimitBurst=` / `StartLimitIntervalSec=` | `max_restarts=` burst−1 (systemd counts the first start), only with `Restart=` on | always: the window isn't kept (the count resets after a 5-minute run). Interval or burst 0, systemd's "no limit", keeps the engine's 5 restarts then a 300 s pause. `StartLimitAction=` other than `none` |
+| `OOMScoreAdjust=` | `oom_score_adj=` | out of -1000..1000; in user mode, below schema-user's own score (the kernel refuses an unprivileged lower one) |
+| `TimeoutStartSec=` / `TimeoutSec=` | `start_timeout_sec=` on notify, oneshot and forking (until READY=1, the exit, or the pid file's adoption, as systemd), and on dbus past its worst healthy promotion (90 s); `infinity` is `0`. A start timeout now follows an explicit `restart=` (the engine used to excise), as systemd's `Restart=` does | dbus under 90 s, since the timer would kill a healthy service. Simple/exec say nothing: systemd's start ends at fork, so the timeout never runs there either. No `Type=` with `BusName=` is dbus, as in systemd |
+| `StartLimitBurst=` / `StartLimitIntervalSec=` | `max_restarts=` burst−1 (systemd counts the first start), only with `Restart=` on; `infinity` is a window that never closes, the strictest | always: the window isn't kept (the count resets after a 5-minute run). Interval or burst 0 (or past 10000), systemd's "no limit", keeps the engine's 5 restarts then a 300 s pause. Nothing is written when `RestartSec=` spaces the starts past the window (systemd never hits the limit). `StartLimitAction=` other than `none` |
 
 Run 5: 559/559 probed, 0 NOT-ENFORCED unwarned. `OOMScoreAdjust=` is in
 force on all 22 units that set it. Silent directives: Fedora 105→73, Debian
@@ -263,5 +263,8 @@ force on all 22 units that set it. Silent directives: Fedora 105→73, Debian
 
 1. Turn the rest of the silent list into warnings or mappings: `OnFailure=`,
    `RequiresMountsFor=`, `KeyringMode=` and `StandardOutput=`/`StandardError=` first.
-2. Open question: systemd also times out a notify unit with no `TimeoutStartSec=`
-   at 90 s (`DefaultTimeoutStartSec=`); the engine's default for daemons is no limit.
+2. Open questions on the defaults, where the engine and systemd differ with no
+   directive in the unit. systemd times out a notify unit at 90 s
+   (`DefaultTimeoutStartSec=`), while the engine's default for daemons is no limit.
+   systemd gives a oneshot no start timeout, while the engine kills and excises it
+   at 90 s.

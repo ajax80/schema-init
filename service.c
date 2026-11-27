@@ -3252,6 +3252,7 @@ static int svc_parse_dropin_line(service_t *svc, struct parse_ctx *pc, const cha
         svc->final_kill_signal = 0;
     } else if (strcmp(key, "restart") == 0) {
         svc->restart_policy = RESTART_ALWAYS;
+        svc->restart_set = 0;
         svc->flags &= ~SVC_NO_RESTART;
     } else if (strcmp(key, "success_exit_status") == 0) {
         memset(svc->success_codes, 0, sizeof svc->success_codes);
@@ -3576,6 +3577,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
          * drop-in's no_restart=0, a fallback brought up) lifts it; the
          * last of restart= / no_restart= wins */
         svc->restart_policy = k == RESTART_NO ? RESTART_ALWAYS : (uint8_t)k;
+        svc->restart_set = k != RESTART_NO;
         if (k == RESTART_NO) svc->flags |= SVC_NO_RESTART;
         else svc->flags &= ~SVC_NO_RESTART;
     } else if (strcmp(line, "success_exit_status") == 0 || strcmp(line, "restart_prevent_exit_status") == 0) {

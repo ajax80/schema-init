@@ -2021,9 +2021,10 @@ check("TimeoutStartSec= past the worst promotion (dbus 90 s) maps: NetworkManage
       "start_timeout_sec=600\n" in _sl("Type=dbus\nBusName=org.a\nTimeoutStartSec=600\n"))
 check("TimeoutStartSec= under it on Type=dbus is warned", "not enforced on Type=dbus" in _sl(
     "Type=dbus\nBusName=org.a\nTimeoutStartSec=60\n"))
-check("TimeoutStartSec= on Type=forking is warned, not mapped (stable_secs would race it)",
-      "TimeoutStartSec=5 not enforced on Type=forking" in _sl("Type=forking\nPIDFile=/run/a.pid\nTimeoutStartSec=5\n")
-      and "start_timeout_sec" not in _sl("Type=forking\nPIDFile=/run/a.pid\nTimeoutStartSec=5\n"))
+check("TimeoutStartSec= on Type=forking maps at any value: promoted on the pid file's adoption",
+      "start_timeout_sec=5\n" in _sl("Type=forking\nPIDFile=/run/a.pid\nTimeoutStartSec=5\n"))
+check("no Type= with BusName= is Type=dbus, as systemd", "ready_bus_name=org.a\n" in _sl("BusName=org.a\n")
+      and "start_timeout_sec=300\n" in _sl("BusName=org.a\nTimeoutStartSec=300\n"))
 _o = _sl("Restart=on-failure\n", "[Unit]\nStartLimitBurst=3\nStartLimitIntervalSec=60\n")
 check("StartLimitBurst=N -> max_restarts=N-1 (systemd counts the first start), window warned",
       "max_restarts=2\n" in _o and "window not kept" in _o)
@@ -2033,6 +2034,13 @@ check("StartLimitIntervalSec=0 is no limit: warned, engine default kept",
       and "no limit under systemd" in _sl("Restart=always\n", "[Unit]\nStartLimitIntervalSec=0\n"))
 check("StartLimit* with Restart=no: nothing to count, silent",
       "max_restarts" not in _sl("", "[Unit]\nStartLimitBurst=3\n") and "StartLimit" not in _sl("", "[Unit]\nStartLimitBurst=3\n"))
+check("StartLimitIntervalSec=infinity is the strictest: the burst holds forever",
+      "max_restarts=1\n" in _sl("Restart=always\n", "[Unit]\nStartLimitBurst=2\nStartLimitIntervalSec=infinity\n"))
+check("RestartSec= spacing the starts past the window: systemd never hits the limit, nothing written",
+      "max_restarts" not in _sl("Restart=always\nRestartSec=30\n", "[Unit]\nStartLimitBurst=3\nStartLimitIntervalSec=10\n")
+      and "StartLimit" not in _sl("Restart=always\nRestartSec=30\n", "[Unit]\nStartLimitBurst=3\nStartLimitIntervalSec=10\n"))
+check("StartLimitBurst= huge is no limit, not an int overflow in the engine",
+      "max_restarts" not in _sl("Restart=always\n", "[Unit]\nStartLimitBurst=99999999999\n"))
 check("StartLimitAction= other than none is warned", "StartLimitAction=reboot not enforced" in _sl(
     "Restart=always\n", "[Unit]\nStartLimitAction=reboot\n"))
 check("OOMScoreAdjust= -> oom_score_adj=", "oom_score_adj=-900\n" in _sl("OOMScoreAdjust=-900\n"))

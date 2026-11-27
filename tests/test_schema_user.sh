@@ -298,6 +298,8 @@ printf 'name=xc\nexec=/bin/sh\nargs=-c\nargs=exit 3\nno_restart=1\n' > "$X/xc.sv
 printf 'name=xs\nexec=/bin/sh\nargs=-c\nargs=kill -TERM $$\nno_restart=1\n' > "$X/xs.svc"
 printf 'name=xok\nexec=/bin/sh\nargs=-c\nargs=exit 0\nno_restart=1\n' > "$X/xok.svc"
 printf 'name=xt\nexec=%s\nargs=30\nstable_secs=30\nstart_timeout_sec=1\n' "$T/sl" > "$X/xt.svc"
+# the same with restart=on-failure: the timeout restarts it, as systemd's Restart= does
+printf 'name=xr\nexec=%s\nargs=30\nstable_secs=30\nstart_timeout_sec=1\nrestart=on-failure\n' "$T/sl" > "$X/xr.svc"
 : > "$I/notadir"
 printf 'name=xl\nexec=%s\nargs=30\nlisten=stream:%s/notadir/x.sock\nlisten_lazy=1\n' "$T/sl" "$I" > "$X/xl.svc"
 chmod 600 "$X"/*.svc
@@ -314,6 +316,8 @@ for want in xc=1 xs=1 xok=0; do
     kv | grep -qx "service.${want%%=*}.failed=${want#*=}" || { kv | grep "^service.${want%%=*}\."; fail "failed: $want"; }
 done
 XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status xt | grep -qx 'excise_reason=start-timeout' || fail "status xt: no excise_reason line"
+until_ok 'kv | grep -Eqx "service.xr.restarts=[1-9][0-9]*"' || { kv | grep "^service.xr\."; fail "start timeout with restart=on-failure: not restarted"; }
+kv | grep -qx "service.xr.excise_reason=start-timeout" && { kv | grep "^service.xr\."; fail "xr excised on its start timeout"; }
 XDG_RUNTIME_DIR=$I/run ./schema-ctl --user status --json | python3 -c '
 import json, sys
 r = {s["name"]: s.get("excise_reason") for s in json.load(sys.stdin)["services"]}
