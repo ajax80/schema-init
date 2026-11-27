@@ -336,6 +336,7 @@ printf 'name=so\nexec=/bin/sh\nargs=-c\nargs=echo OUT; echo ERR >&2\noneshot=1\n
 printf 'name=se\nexec=/bin/sh\nargs=-c\nargs=echo OUT; echo ERR >&2\noneshot=1\nstdout=null\nstderr=append:%s/se.err\n' "$I" > "$X/se.svc"
 printf 'name=sp0\nexec=/bin/sh\nargs=-c\nargs=grep ^SigIgn /proc/self/status\noneshot=1\nstdout=file:%s/sp0\n' "$I" > "$X/sp0.svc"
 printf 'name=sp1\nexec=/bin/sh\nargs=-c\nargs=grep ^SigIgn /proc/self/status\noneshot=1\nstdout=file:%s/sp1\nignore_sigpipe=0\n' "$I" > "$X/sp1.svc"
+printf 'name=sb\nexec=/bin/sh\nargs=-c\nargs=echo AAAAAAAAAAAA; echo B >&2; echo C\noneshot=1\nstdout=truncate:%s/sb\nstderr=truncate:%s/sb\n' "$I" "$I" > "$X/sb.svc"
 KR='import ctypes; print(ctypes.CDLL(None).syscall(250, 0, -3, 0))'
 for k in ki:inherit kp1:private kp2:private ks:shared; do
     printf 'name=%s\nexec=/usr/bin/python3\nargs=-c\nargs=%s\noneshot=1\nstdout=file:%s/%s\nkeyring_mode=%s\n' \
@@ -348,6 +349,8 @@ SCHEMA_USER_IMPORT= XDG_RUNTIME_DIR=$I/run XDG_STATE_HOME=$I/state XDG_CONFIG_HO
 PID=$!
 until_ok 'grep -q ERR "$I/so.out" && grep -q ERR "$I/se.err" && [ -s "$I/sp0" ] && [ -s "$I/sp1" ]' || { cat "$I/out"; fail "stdout=: files not written"; }
 grep -qx OUT "$I/so.out" && grep -qx ERR "$I/so.out" || { cat "$I/so.out"; fail "stdout=truncate: stderr did not follow it"; }
+until_ok '[ "$(wc -l < "$I/sb")" -ge 3 ]' || true
+[ "$(cat "$I/sb")" = "$(printf 'AAAAAAAAAAAA\nB\nC')" ] || { cat "$I/sb"; fail "stdout= and stderr= on one file: not one shared fd"; }
 grep -q OLD "$I/so.out" && { cat "$I/so.out"; fail "stdout=truncate: old content kept"; }
 [ "$(cat "$I/se.err")" = "$(printf 'PRE\nERR')" ] || { cat "$I/se.err"; fail "stderr=append: wanted PRE then ERR, no OUT"; }
 # SIGPIPE is signal 13: bit 12 of SigIgn

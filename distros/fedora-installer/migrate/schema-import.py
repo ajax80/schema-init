@@ -1780,6 +1780,7 @@ def _misc_losses(name, sections, svc):
     for k, out in (("StandardOutput", "stdout"), ("StandardError", "stderr")):
         v = _get_last(svc, k)
         kind, _, path = v.partition(":")
+        kind = kind.lower()
         if v.lower() in ("", "inherit", "journal", "kmsg", "syslog"):
             # the log; stderr's inherit follows stdout, as the engine's unset does,
             # so a journal stderr under a redirected stdout has to say so
@@ -1788,16 +1789,23 @@ def _misc_losses(name, sections, svc):
             continue
         if v.lower() == "null":
             lines.append("%s=null" % out)
-        elif kind in ("file", "append", "truncate"):
-            path = " ".join(_specifiers([path], name)) if path else ""
-            if path.startswith("/") and len(path) < 128:
+            continue
+        if kind in ("file", "append", "truncate"):
+            try:
+                path = " ".join(_specifiers([path], name)) if path else ""
+            except Skip:
+                path = ""   # a specifier with no equivalent: lose the redirect, not the unit
+            if path.startswith("/") and len(path.encode()) < 128:
                 lines.append("%s=%s:%s" % (out, kind, path))
-            else:
-                warns.append("%s=%s not applied: the engine takes an absolute path under 128 bytes; "
-                             "output goes to the service's log" % (k, v))
+                continue
+            warns.append("%s=%s not applied: the engine takes an absolute path under 128 bytes; "
+                         "output goes to the service's log" % (k, v))
         else:
             # +console, tty, socket, fd: the log alone
             warns.append("%s=%s not applied: output goes to the service's log" % (k, v))
+        # unset, the engine's stderr follows a redirected stdout: keep the log the warning names
+        if out == "stderr" and any(l.startswith("stdout=") for l in lines):
+            lines.append("stderr=log")
     if _get_all(unit, "OnFailure"):
         warns.append("OnFailure=%s not started: nothing follows a failure" % " ".join(_get_all(unit, "OnFailure")))
     if _get_all(unit, "BindTo"):

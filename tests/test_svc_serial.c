@@ -271,6 +271,11 @@ static void test_stdio_keyring(void) {
     /* stderr=log is its own setting: the log even when stdout goes elsewhere */
     load("x.svc", "name=x\nexec=/usr/bin/true\nstdout=truncate:/tmp/o\nstderr=log\n", &c);
     assert(c.out_mode[0] == SVC_OUT_TRUNCATE && !strcmp(c.out_path[0], "/tmp/o") && c.out_mode[1] == SVC_OUT_LOG);
+    /* only an explicit off turns SIGPIPE back on */
+    load("x.svc", "name=x\nexec=/usr/bin/true\nignore_sigpipe=yes\n", &c);
+    assert(!c.sigpipe_dfl);
+    load("x.svc", "name=x\nexec=/usr/bin/true\nignore_sigpipe=no\n", &c);
+    assert(c.sigpipe_dfl);
     const char *bad[] = { "stdout=inherit\n", "stdout=file:rel\n", "stderr=journal\n", "keyring_mode=session\n" };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) {
         char p[300], body[128];

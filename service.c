@@ -1602,6 +1602,11 @@ static void svc_child_log(const service_t *svc) {
     for (int i = 0; i < 2; i++) {
         int m = svc->out_mode[i], ofd;
         if (m == SVC_OUT_INHERIT || m == SVC_OUT_LOG) continue;
+        /* the same file twice shares one fd, as systemd does: one offset, one truncate */
+        if (i && m == svc->out_mode[0] && m != SVC_OUT_NULL && !strcmp(svc->out_path[0], svc->out_path[1])) {
+            dup2(STDOUT_FILENO, STDERR_FILENO);
+            continue;
+        }
         if (m == SVC_OUT_NULL) ofd = open("/dev/null", O_WRONLY);
         else ofd = open(svc->out_path[i], O_WRONLY | O_CREAT | O_NOCTTY | O_CLOEXEC |
                         (m == SVC_OUT_APPEND ? O_APPEND : m == SVC_OUT_TRUNCATE ? O_TRUNC : 0), 0644);
@@ -2136,11 +2141,10 @@ int service_spawn(service_t *svc) {
             long r = syscall(SYS_keyctl, KEYCTL_JOIN_SESSION_KEYRING, NULL);
             if (r >= 0 && svc->keyring_mode == SVC_KEYRING_SHARED)
                 r = syscall(SYS_keyctl, KEYCTL_LINK, KEY_SPEC_USER_KEYRING, KEY_SPEC_SESSION_KEYRING);
-            /* a kernel without keys, or a filter that denies keyctl: systemd goes on too */
-            if (r < 0 && errno != ENOSYS && errno != EPERM && errno != EACCES) {
-                dprintf(2, "[schema-init] %s: keyring_mode: keyctl: %d\n", svc->name, errno);
-                _exit(126);
-            }
+            /* a kernel without keys, a filter that denies keyctl (with whatever
+             * errno): the service runs with the keyring it inherited, logged */
+            if (r < 0) dprintf(2, "[schema-init] %s: keyring_mode: keyctl: %d, keyring inherited\n",
+                               svc->name, errno);
         }
         if (svc->run_uid && svc->cap_ambient_mask) {
             const char *step = "";
@@ -3903,7 +3907,7 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
         snprintf(svc->out_path[i], sizeof svc->out_path[i], "%s", p ? p : "");
     }
     else if (strcmp(line, "ignore_sigpipe") == 0)
-        svc->sigpipe_dfl = *val && !atoi(val);
+        svc->sigpipe_dfl = !strcmp(val, "0") || !strcasecmp(val, "no") || !strcasecmp(val, "false");
     else if (strcmp(line, "keyring_mode") == 0) {
         if (!*val || strcmp(val, "inherit") == 0) svc->keyring_mode = SVC_KEYRING_INHERIT;
         else if (strcmp(val, "private") == 0) svc->keyring_mode = SVC_KEYRING_PRIVATE;

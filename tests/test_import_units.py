@@ -2081,6 +2081,15 @@ check("StandardOutput=append:%t/x resolves the specifier", "stdout=append:/run/x
 check("StandardOutput=journal+console is warned, stays the log", si.WARN_PREFIX + "StandardOutput=journal+console not applied" in _sl(
     "StandardOutput=journal+console\n") and "stdout=" not in _sl("StandardOutput=journal+console\n"))
 check("StandardOutput=file: relative is warned", si.WARN_PREFIX + "StandardOutput=file:x" in _sl("StandardOutput=file:x\n"))
+check("StandardOutput=append: with an unknown specifier warns, the unit still imports",
+      si.WARN_PREFIX + "StandardOutput=append:/var/log/%H.log not applied" in _sl("StandardOutput=append:/var/log/%H.log\n"))
+check("StandardError= warned under a redirected stdout keeps stderr in the log", "stderr=log\n" in _sl(
+    "StandardOutput=null\nStandardError=journal+console\n"))
+check("StandardOutput=file: + StandardError=null writes stderr=null alone",
+      "stderr=null\n" in _sl("StandardOutput=file:/x\nStandardError=null\n")
+      and "stderr=log" not in _sl("StandardOutput=file:/x\nStandardError=null\n"))
+check("StandardOutput=File: (any case) maps", "stdout=file:/x\n" in _sl("StandardOutput=File:/x\n"))
+check("StandardOutput= path over 128 bytes (UTF-8) is warned", "stdout=" not in _sl("StandardOutput=file:/" + "é" * 70 + "\n"))
 check("KeyringMode=shared -> keyring_mode=shared", "keyring_mode=shared\n" in _sl("KeyringMode=shared\n"))
 check("KeyringMode=inherit writes nothing", "keyring" not in _sl("KeyringMode=inherit\n"))
 check("IgnoreSIGPIPE=no -> ignore_sigpipe=0", "ignore_sigpipe=0\n" in _sl("IgnoreSIGPIPE=no\n")
