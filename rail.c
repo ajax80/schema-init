@@ -335,9 +335,7 @@ void rail_counts(const rail_svc_t *v, int n, rail_counts_t *c) {
     }
 }
 
-#ifndef MAX_SERVICES
-#define MAX_SERVICES 256
-#endif
+#include "service.h"
 
 static struct {
     const rail_io_t *io;

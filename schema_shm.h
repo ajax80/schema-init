@@ -7,9 +7,9 @@
 #include <sys/stat.h>
 
 #define SCHEMA_SHM_NAME       "/schema-init"
-#define SCHEMA_SHM_MAX        128
+#define SCHEMA_SHM_MAX        512
 #define SCHEMA_SHM_MAX_GROUPS 16
-#define SCHEMA_SHM_MAGIC      0x53434d03u   /* "SCM", layout 3: 128 slots, cards */
+#define SCHEMA_SHM_MAGIC      0x53434d04u   /* "SCM", layout 4: 512 slots, cards */
 
 typedef struct {
     char    name[64];

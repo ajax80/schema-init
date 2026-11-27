@@ -20,7 +20,10 @@
 #include "landlock.h"
 #include "ns.h"
 
-#define MAX_SERVICES    128
+/* the tables are touched only up to the loaded count, so PID 1's RSS follows
+ * the services it has, not this cap (engine.c svc_tables_alloc). Keep
+ * whole-table memsets out */
+#define MAX_SERVICES    512
 #define MAX_ARGV        64
 #define MAX_ENV         16
 #define MAX_ENV_FILES   4

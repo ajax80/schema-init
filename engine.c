@@ -71,10 +71,8 @@ int engine_mkdir_p(const char *path, mode_t mode) {
 #define PID_FILE_WAIT_SECS 5
 #define MAINPID_WAIT_SECS 10
 
-static service_t    services_a[MAX_SERVICES];
-static service_t    services_b[MAX_SERVICES];
-service_t   *services = services_a;
-service_t   *shadow_services = services_b;
+service_t   *services;
+service_t   *shadow_services;
 int          svc_count = 0;
 
 static group_t      groups_a[MAX_GROUPS];
@@ -3465,7 +3463,6 @@ static int handle_reload(int evict_mode, char *err, size_t errsz) {
     elog(stdout, "reloading configuration (SIGHUP)... \n");
 
     const char *svc_dir = engine_paths.svc_dir;
-    memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     service_relexec_keep = relexec_in_table;
     int shadow_count = services_load(svc_dir, shadow_services, MAX_SERVICES);
     service_relexec_keep = NULL;
@@ -4168,7 +4165,20 @@ static void held_signals(sigset_t *set) {
 
 /* ── re-exec: the new image ─────────────────────────────────────────── */
 
-static reexec_svc_t reexec_svcs[MAX_SERVICES];
+static reexec_svc_t *reexec_svcs;
+
+/* heap, not bss: PID 1's mlockall populates the whole binary image, and these
+ * are ~26 MB at the cap. calloc'd untouched, only the slots in use are ever
+ * resident (and then locked, on fault) */
+__attribute__((constructor)) static void svc_tables_alloc(void) {
+    services = calloc(MAX_SERVICES, sizeof(service_t));
+    shadow_services = calloc(MAX_SERVICES, sizeof(service_t));
+    reexec_svcs = calloc(MAX_SERVICES, sizeof(reexec_svc_t));
+    if (!services || !shadow_services || !reexec_svcs) {
+        fprintf(stderr, "schema-init: cannot allocate the service tables\n");
+        abort();
+    }
+}
 static int reexec_svcs_n;
 static int reexec_reply_fd = -1;
 static char reexec_reply[160];
@@ -4599,7 +4609,6 @@ static int reexec_recheck(int blob, char *err, size_t errsz) {
     eviction_t ev[MAX_EVICTIONS];
     int nrs, nev, nfs, shadow_count, shadow_grp_count, rc;
 
-    memset(shadow_services, 0, sizeof(service_t) * MAX_SERVICES);
     memset(shadow_groups, 0, sizeof(group_t) * MAX_GROUPS);
     if (reexec_read_blob(blob, &g, &nrs, ev, &nev, NULL, 0, &nfs, err, errsz) < 0)
         return -1;

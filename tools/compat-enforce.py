@@ -55,7 +55,7 @@ SANDBOX = {"NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem", "Pro
            "ProtectControlGroups", "ProtectKernelModules", "PrivateDevices", "PrivateNetwork", "ProtectHostname",
            "MemoryDenyWriteExecute", "LockPersonality", "RestrictRealtime", "RestrictSUIDSGID",
            "RestrictNamespaces", "SystemCallFilter", "CapabilityBoundingSet", "ReadWritePaths", "ReadOnlyPaths"}
-BATCH = 120
+BATCH = 480
 
 
 def last(sections, sec, key):
@@ -504,7 +504,7 @@ def main():
             units.append((name, sections, res))
     users, groups = users_of(units)
     groups.update({u: uid for u, uid in users.items() if u not in groups})
-    # PID 1 loads at most MAX_SERVICES (service.h, 128) .svc files: one boot per
+    # PID 1 loads at most MAX_SERVICES (service.h, 512) .svc files: one boot per
     # batch, each with the three harness services and its own control probe
     # units that claim the same *Directory= (chrony and chronyd-restricted, which
     # Conflicts= keeps apart on a real host) go to different boots: run together,
