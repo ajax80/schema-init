@@ -61,7 +61,10 @@ class Key(str):
 # After= systemd orders nothing either, and After= is read for after=
 INERT = {("Unit", "Description"), ("Unit", "Documentation"), ("Unit", "Wants"), ("Install", "WantedBy"),
          ("Install", "RequiredBy"), ("Install", "UpheldBy"), ("Install", "Also"),
-         ("Install", "DefaultInstance")}
+         ("Install", "DefaultInstance"),
+         # no isolate, no job queue, no transient restart state to show dependents
+         ("Unit", "IgnoreOnIsolate"), ("Unit", "AllowIsolate"), ("Unit", "OnFailureJobMode"),
+         ("Service", "RestartMode")}
 
 
 def inert(sec, key):

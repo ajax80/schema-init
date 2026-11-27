@@ -5,7 +5,7 @@ import json, os, subprocess, sys, tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with tempfile.TemporaryDirectory() as d:
     open(os.path.join(d, "a.service"), "w").write(
-        "[Unit]\nDescription=a\n[Service]\nExecStart=/bin/true\nKeyringMode=private\n"
+        "[Unit]\nDescription=a\nIgnoreOnIsolate=yes\n[Service]\nExecStart=/bin/true\nCoredumpFilter=default\nKeyringMode=private\n"
         "CapabilityBoundingSet=CAP_NET_ADMIN\nReadOnlyPaths=/data\n[Install]\nWantedBy=multi-user.target\n")
     open(os.path.join(d, "t@.service"), "w").write("[Service]\nExecStart=/bin/true\nUser=nobody\n")
     out = os.path.join(d, "r.json")
@@ -18,7 +18,9 @@ with tempfile.TemporaryDirectory() as d:
     assert st[("Service", "ExecStart")] == "mapped", st
     assert st[("Service", "CapabilityBoundingSet")] == "mapped", st
     assert st[("Service", "ReadOnlyPaths")] == "warned", st
-    assert st[("Service", "KeyringMode")] == "silent", st
+    assert st[("Service", "CoredumpFilter")] == "silent", st
+    assert st[("Service", "KeyringMode")] == "warned", st
+    assert st[("Unit", "IgnoreOnIsolate")] == "inert", st
     assert st[("Unit", "Description")] == "inert" and st[("Install", "WantedBy")] == "inert", st
     assert rec["t@.service"]["status"] == "skipped", rec["t@.service"]
     assert {x["status"] for x in rec["t@.service"]["directives"]} == {"skipped-unit"}

@@ -2047,4 +2047,29 @@ check("OOMScoreAdjust= -> oom_score_adj=", "oom_score_adj=-900\n" in _sl("OOMSco
 check("OOMScoreAdjust= out of range is dropped and said", "oom_score_adj" not in _sl("OOMScoreAdjust=1001\n")
       and "OOMScoreAdjust=1001 out of range" in _sl("OOMScoreAdjust=1001\n"))
 
+# the rest of the silent list, each said out loud or mapped
+check("PermissionsStartOnly=yes is + on every ExecStartPre=, ExecStart= keeps User=",
+      "exec_pre=+/bin/true\n" in _sl("User=nobody\nPermissionsStartOnly=yes\nExecStartPre=/bin/true\n")
+      and "user=nobody\n" in _sl("User=nobody\nPermissionsStartOnly=yes\nExecStartPre=/bin/true\n"))
+check("PermissionsStartOnly=yes with ExecReload= as User= is warned",
+      "PermissionsStartOnly=yes: ExecReload= runs as User=" in _sl(
+          "User=nobody\nPermissionsStartOnly=yes\nExecReload=/bin/true\n"))
+check("OOMPolicy=stop is what memory.oom.group does: nothing said", "OOMPolicy" not in _sl("OOMPolicy=stop\n"))
+check("OOMPolicy=continue is warned", "OOMPolicy=continue not enforced" in _sl("OOMPolicy=continue\n"))
+check("Alias= other than dbus-org.* is warned", "Alias=display-manager.service not kept" in _sl(
+    "", "[Install]\nAlias=display-manager.service\n"))
+check("Alias=dbus-org.* is the dbus dep, not warned", "Alias" not in _sl("", "[Install]\nAlias=dbus-org.a.service\n"))
+check("StandardOutput=journal is the service log: nothing said", "StandardOutput" not in _sl("StandardOutput=journal\n"))
+check("StandardError=null is warned until the engine has a key", "StandardError=null not applied" in _sl(
+    "StandardError=null\n"))
+check("RuntimeDirectoryPreserve= with no RuntimeDirectory= says nothing",
+      "RuntimeDirectoryPreserve" not in _sl("RuntimeDirectoryPreserve=yes\n"))
+check("RuntimeDirectoryPreserve=yes with a RuntimeDirectory= is warned", "RuntimeDirectoryPreserve=yes not enforced" in _sl(
+    "RuntimeDirectory=a\nRuntimeDirectoryPreserve=yes\n"))
+for _d, _v, _sec in (("Delegate", "yes", "Service"), ("SendSIGKILL", "no", "Service"), ("KeyringMode", "private", "Service"),
+                     ("IgnoreSIGPIPE", "no", "Service"), ("OnFailure", "x.service", "Unit"), ("SyslogIdentifier", "x", "Service"),
+                     ("FailureAction", "reboot", "Unit"), ("RefuseManualStart", "yes", "Unit"), ("BindTo", "x.device", "Unit")):
+    _o = _sl(_d + "=" + _v + "\n") if _sec == "Service" else _sl("", "[Unit]\n" + _d + "=" + _v + "\n")
+    check("%s=%s is warned" % (_d, _v), si.WARN_PREFIX + _d + "=" in _o)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
