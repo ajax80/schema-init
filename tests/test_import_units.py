@@ -1199,11 +1199,11 @@ _F_FSTRIM_S = ("[Service]\nType=oneshot\nExecStart=/usr/bin/fstrim --listed-in /
 check("Fedora sshd.service output unchanged but for reload_signal, restart, kill_mode, syscall_deny", si.unit_to_svc("sshd", si.parse_unit(_F_SSHD)) ==
       'name=sshd\nexec=/usr/sbin/sshd\nargs=-D\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/sshd\nexpand_args=1\nreload_signal=HUP\nnotify=1\n'
       'restart=on-failure\nrestart_sec=42\nkill_mode=process\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=0\nprotect_system=0\nprotect_home=0\nsyscall_deny=0\n')
-check("Fedora chronyd.service output unchanged but for syscall_deny", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
-      '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\n'
-      '# schema-import WARN: no equivalent here, not enforced: CapabilityBoundingSet\nname=chronyd\n'
+check("Fedora chronyd.service output unchanged but for syscall_deny, bounding_caps", si.unit_to_svc("chronyd", si.parse_unit(_F_CHRONY)) ==
+      '# schema-import WARN: ProtectSystem=strict mapped to protect_system=full (/ not read-only)\nname=chronyd\n'
       'exec=/usr/sbin/chronyd\nargs=-n\nargs=$OPTIONS\nenv=OPTIONS=\nenv_file=-/etc/sysconfig/chronyd\nexpand_args=1\nnotify=1\n'
-      'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\nsyscall_deny=0\n')
+      'no_restart=1\nneeds_root=1\ncritical=0\nno_new_privs=0\nprivate_tmp=1\nprotect_system=full\nprotect_home=1\nsyscall_deny=0\n'
+      'bounding_caps=~CAP_AUDIT_CONTROL,CAP_AUDIT_READ\n')
 check("Fedora fstrim.timer output unchanged but for randomized_delay_sec, syscall_deny",
       si.timer_to_svc("fstrim", si.parse_unit(_F_FSTRIM_T), si.parse_unit(_F_FSTRIM_S)) ==
       '# schema-import: dropped AccuracySec\nname=fstrim\nexec=/usr/bin/fstrim\nargs=--listed-in\n'
@@ -1360,15 +1360,53 @@ check("ExecStart=+ is root under systemd too: no DynamicUser warning", not any(
         "[Service]\nExecStart=+/usr/bin/a\nDynamicUser=yes\n")))))
 _b = warns(svc("CapabilityBoundingSet=CAP_KILL\nSystemCallFilter=@system-service\nRestrictNamespaces=yes\n"
                "IPAddressDeny=any\nInaccessiblePaths=/secret\nReadOnlyPaths=/data\nProtectClock=yes\n"))
-check("dropped sandbox directives are all named (seccomp ones are mapped now, audit 4.6)",
-      all(any(k in w for w in _b) for k in ("CapabilityBoundingSet", "IPAddressDeny", "InaccessiblePaths",
-                                           "ReadOnlyPaths", "ProtectClock"))
-      and not any("SystemCallFilter" in w or "RestrictNamespaces" in w for w in _b))
+check("dropped sandbox directives are all named (seccomp ones and the bounding set are mapped now)",
+      all(any(k in w for w in _b) for k in ("IPAddressDeny", "InaccessiblePaths", "ReadOnlyPaths", "ProtectClock"))
+      and not any("SystemCallFilter" in w or "RestrictNamespaces" in w or "CapabilityBoundingSet" in w for w in _b))
 check("sandbox directives at their defaults are silent", not warns(svc(
     "PrivateDevices=no\nUMask=0022\nDevicePolicy=auto\nProtectProc=default\nProcSubset=all\n"
     "SystemCallFilter=\nMemoryDenyWriteExecute=false\n")))
 check("CapabilityBoundingSet= with no value is the empty set, the strictest",
-      any("CapabilityBoundingSet" in w for w in warns(svc("CapabilityBoundingSet=\n"))))
+      "bounding_caps=\n" in svc("CapabilityBoundingSet=\n"))
+
+
+def _bc(body, head="ExecStart=/bin/a\n"):
+    out = si.unit_to_svc("a", si.parse_unit("[Service]\n" + head + body))
+    return [ln for ln in out.splitlines() if ln.startswith("bounding_caps=")], out
+
+
+check("CapabilityBoundingSet= list -> bounding_caps= in kernel order", _bc(
+    "CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_CHOWN\n")[0] == ["bounding_caps=CAP_CHOWN,CAP_NET_BIND_SERVICE"])
+check("CapabilityBoundingSet=~ -> a drop list (newer kernel caps stay, as under systemd)", _bc(
+    "CapabilityBoundingSet=~CAP_SYS_ADMIN\n")[0] == ["bounding_caps=~CAP_SYS_ADMIN"])
+check("CapabilityBoundingSet= lines OR together", _bc(
+    "CapabilityBoundingSet=CAP_KILL\nCapabilityBoundingSet=CAP_CHOWN\n")[0] == ["bounding_caps=CAP_CHOWN,CAP_KILL"])
+check("CapabilityBoundingSet=~ after a list takes out of it", _bc(
+    "CapabilityBoundingSet=CAP_KILL CAP_CHOWN\nCapabilityBoundingSet=~CAP_KILL\n")[0] == ["bounding_caps=CAP_CHOWN"])
+check("CapabilityBoundingSet= empty value resets to the empty set", _bc(
+    "CapabilityBoundingSet=CAP_KILL\nCapabilityBoundingSet=\n")[0] == ["bounding_caps="])
+check("CapabilityBoundingSet= that ends at the full set writes nothing", _bc(
+    "CapabilityBoundingSet=~CAP_KILL\nCapabilityBoundingSet=CAP_KILL\n")[0] == [])
+check("CapabilityBoundingSet= a later line naming no known cap replaces, as systemd's sum==0", _bc(
+    "CapabilityBoundingSet=CAP_KILL\nCapabilityBoundingSet=CAP_FROB\n")[0] == ["bounding_caps="]
+    and _bc("CapabilityBoundingSet=CAP_KILL\nCapabilityBoundingSet=~CAP_FROB\n")[0] == [])
+_o = _bc("CapabilityBoundingSet=CAP_KILL CAP_FROB\n")
+check("CapabilityBoundingSet= unknown name is said and left out", _o[0] == ["bounding_caps=CAP_KILL"]
+      and "CAP_FROB not a capability schema-init knows" in _o[1])
+_o = _bc("CapabilityBoundingSet=CAP_KILL\nAmbientCapabilities=CAP_NET_RAW\n", "ExecStart=/bin/a\nUser=u\n")
+check("CapabilityBoundingSet= widened by an AmbientCapabilities= cap it lacks (engine refuses otherwise)",
+      _o[0] == ["bounding_caps=CAP_KILL,CAP_NET_RAW"] and "widened by AmbientCapabilities= CAP_NET_RAW" in _o[1])
+check("CapabilityBoundingSet= with ExecStart=+: unsandboxed, no bounding_caps",
+      _bc("CapabilityBoundingSet=CAP_KILL\n", "ExecStart=+/bin/a\n")[0] == [])
+check("CapabilityBoundingSet= with ExecStart=!: still applies (! only skips User=)",
+      _bc("CapabilityBoundingSet=CAP_KILL\n", "ExecStart=!/bin/a\nUser=u\n")[0] == ["bounding_caps=CAP_KILL"])
+_o = _bc("CapabilityBoundingSet=" + " ".join(si._ENGINE_CAPS_ORDER[:-1]) + "\n")
+check("bounding_caps= long keep list -> a drop list under the 511-byte line, said",
+      _o[0] == ["bounding_caps=~CAP_CHECKPOINT_RESTORE"] and "written as a drop list" in _o[1])
+# colord.service (Fedora, Debian): a 36-name ~ list is 530 bytes as written
+_o = _bc("CapabilityBoundingSet=~" + " ".join(si._ENGINE_CAPS_ORDER[5:]) + "\n")
+check("bounding_caps= long drop list -> a keep list under the 511-byte line, said",
+      _o[0] == ["bounding_caps=" + ",".join(si._ENGINE_CAPS_ORDER[:5])] and "written as a keep list" in _o[1])
 check("mandatory access control and PID isolation are named", all(any(k in w for w in warns(svc(
     "SELinuxContext=x\nAppArmorProfile=x\nSecureBits=keep-caps\nPrivatePIDs=yes\n"))) for k in (
     "SELinuxContext", "AppArmorProfile", "SecureBits", "PrivatePIDs")))

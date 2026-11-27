@@ -813,6 +813,12 @@ static int kernel_ns_check(service_t *svc) {
     static const char *const kept[] = { "/dev/shm/", "/dev/mqueue/" };
     uint8_t m = !!(svc->ns_kernel & NS_K_MODULES), d = !!(svc->ns_kernel & NS_K_DEVICES);
     uint64_t lost = svc->cap_ambient_mask & ns_kernel_cap_drop(svc->ns_kernel);
+    if (svc->cap_bound_set && (svc->run_user[0] || svc->dynamic_user) &&
+        (svc->cap_ambient_mask & svc->cap_bound_drop)) {
+        fprintf(stderr, "[schema-init] %s: ambient_caps holds a cap bounding_caps drops — not loaded\n",
+                svc->name);
+        return -1;
+    }
     if (ns_hides(svc, 0, &m, "protect_kernel_modules", mods, 2) != 0) return -1;
     /* shm and mqueue are the host's inside the private /dev */
     if (d && !path_under(svc->exec, dev, 1) && path_under(svc->ready_path, kept, 2)) d = 0;
@@ -866,17 +872,17 @@ int service_apply_hardening(const service_t *svc) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: dynamic_user private dirs: %d\n", svc->name, errno);
         return -1;
     }
-    uint64_t kdrop = ns_kernel_cap_drop(svc->ns_kernel);
+    uint64_t kdrop = ns_kernel_cap_drop(svc->ns_kernel) | (svc->cap_bound_set ? svc->cap_bound_drop : 0);
     if (svc->cap_restrict) {
         /* an ambient cap outside the bounding set could never be raised;
-         * the kernel knobs win over keep_caps, as in systemd */
+         * the kernel knobs and bounding_caps win over keep_caps, as in systemd */
         if (apply_capabilities((svc->cap_keep_mask | svc->cap_ambient_mask) & ~kdrop) != 0) {
             dprintf(2, "[schema-init] HARDENING FAILED for %s: capabilities: %d\n",
                     svc->name, errno);
             return -1;
         }
     } else if (kdrop && drop_bounding(kdrop) != 0) {
-        dprintf(2, "[schema-init] HARDENING FAILED for %s: kernel caps: %d\n", svc->name, errno);
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: bounding set: %d\n", svc->name, errno);
         return -1;
     }
     if (svc->flags & SVC_NO_NEW_PRIVS) {
@@ -1765,6 +1771,12 @@ static void svc_runner_child(const service_t *svc, const char *what) {
     /* the runner reaches $STATE_DIRECTORY through the same private binds */
     if (svc->dynamic_user && geteuid() == 0 && service_private_binds(svc) != 0) {
         dprintf(2, "[schema-init] HARDENING FAILED for %s: %sdynamic_user private dirs: %d\n", svc->name, gwhat, errno);
+        _exit(126);
+    }
+    /* exec_stop/exec_reload are confined like the main process, as in systemd */
+    uint64_t bdrop = ns_kernel_cap_drop(svc->ns_kernel) | (svc->cap_bound_set ? svc->cap_bound_drop : 0);
+    if (bdrop && drop_bounding(bdrop) != 0) {
+        dprintf(2, "[schema-init] HARDENING FAILED for %s: %s: bounding set: %d\n", svc->name, what, errno);
         _exit(126);
     }
     int amb = svc->run_uid && svc->cap_ambient_mask;
@@ -3709,6 +3721,20 @@ static int svc_parse_line(service_t *svc, struct parse_ctx *pc, char *line, cons
             return -1;
         }
         svc->cap_restrict = 1;
+    }
+    else if (strcmp(line, "bounding_caps") == 0) {
+        /* a list keeps only what it names, unknown-to-us kernel caps too go;
+         * ~list drops only what it names, so newer kernel caps stay */
+        const char *v = val + strspn(val, " \t");
+        int inv = v[0] == '~';
+        uint64_t m;
+        if (parse_cap_list(v + inv, &m) != 0) {
+            fprintf(stderr, "[schema-init] %s: unknown capability in bounding_caps=%s\n",
+                    svc->name[0] ? svc->name : path, val);
+            return -1;
+        }
+        svc->cap_bound_drop = inv ? m : ~m;
+        svc->cap_bound_set = 1;
     }
     else if (strcmp(line, "ambient_caps") == 0) {
         if (parse_cap_list(val, &svc->cap_ambient_mask) != 0) {

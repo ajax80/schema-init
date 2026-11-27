@@ -369,6 +369,8 @@ typedef struct {
     uint64_t         cap_keep_mask;    /* keep_caps allowlist; bit N = CAP_N       */
     uint8_t          cap_restrict;     /* 1 if keep_caps= was present in the .svc  */
     uint64_t         cap_ambient_mask; /* ambient_caps= raised after the uid drop  */
+    uint64_t         cap_bound_drop;   /* bounding_caps=: caps it takes out of the bounding set */
+    uint8_t          cap_bound_set;    /* 1 if bounding_caps= was present          */
     uint8_t          ns_private_tmp;    /* private /tmp + /var/tmp                 */
     uint8_t          ns_protect_system; /* PROTECT_SYSTEM_* (ns.h)                 */
     uint8_t          ns_protect_home;   /* hide /home /root /run/user              */

@@ -103,9 +103,10 @@ ioctl handles. `listen=` binds what the admin configured and passes it on.
   and listen directories for a service.
 - **Sandbox loss on import:** `schema-import` maps systemd sandboxing it
   understands and **warns** about what it drops (`RemoveIPC=`,
-  `CapabilityBoundingSet=`, `RestrictAddressFamilies=` and others; the list is
+  `RestrictAddressFamilies=` and others; the list is
   `_UNENFORCED` in `schema-import.py`). An explicit `RestrictSUIDSGID=` maps to
-  `restrict_suid_sgid=1`. `DynamicUser=` maps to `dynamic_user=1`, an allocated
+  `restrict_suid_sgid=1`. `CapabilityBoundingSet=` maps to `bounding_caps=`.
+  `DynamicUser=` maps to `dynamic_user=1`, an allocated
   uid (#540), with a warning that the two settings it implies, RemoveIPC and
   RestrictSUIDSGID, are not added. Secrets are no longer copied 0600 → 0644 (#477).
 - **`exec=`:** runs through `execv`, with no PATH search. A relative path is a

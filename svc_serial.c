@@ -151,6 +151,11 @@ static void em_identity(lines_t *L, const service_t *s) {
     add_raw(L, s, "keep_caps", s->cap_restrict ? t : "-", NULL);
     snprintf(t, sizeof t, "0x%016llx", (unsigned long long)s->cap_ambient_mask);
     add_raw(L, s, "ambient_caps", t, NULL);
+    /* only when set: baselines from before the key don't churn */
+    if (s->cap_bound_set) {
+        snprintf(t, sizeof t, "0x%016llx", (unsigned long long)s->cap_bound_drop);
+        add_raw(L, s, "bounding_caps", t, NULL);
+    }
 }
 
 static void em_env(lines_t *L, const service_t *s) {
@@ -401,7 +406,8 @@ static const struct {
 } props[] = {
     { em_exec, { "exec", "args", "expand_args", "exec_pre", "exec_stop", "exec_stop_post", "exec_reload",
                  "reload", "reload_signal", "card" } },
-    { em_identity, { "user", "group", "supplementary_groups", "dynamic_user", "keep_caps", "ambient_caps" } },
+    { em_identity, { "user", "group", "supplementary_groups", "dynamic_user", "keep_caps", "ambient_caps",
+                   "bounding_caps" } },
     { em_env, { "env", "env_file" } },
     { em_fs, { "working_dir", "runtime_dir", "state_dir", "cache_dir", "logs_dir", "runtime_dir_mode",
                "state_dir_mode", "cache_dir_mode", "logs_dir_mode", "dir_owner", "rw_path", "umask" } },
@@ -468,6 +474,7 @@ int svc_serial_keys(const char *const **out) {
         service_t *s = calloc(1, sizeof *s);
         /* written only when set */
         s->after_name[0][0] = s->before_name[0][0] = s->dir_owner[0] = 'x';
+        s->cap_bound_set = 1;
         for (size_t p = 0; p < sizeof props / sizeof *props; p++) props[p].emit(&L, s);
         free(s);
         for (int i = 0; i < L.n; i++) {

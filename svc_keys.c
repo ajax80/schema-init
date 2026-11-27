@@ -5,6 +5,7 @@
  * tests/test_svc_serial.c fails when this and the emitters disagree. */
 const char *const svc_keys[] = {
     "after", "allowed_slot_max", "allowed_slot_min", "ambient_caps", "argv", "before", "bind",
+    "bounding_caps",
     "cache_dir", "cache_dir_mode", "card", "condition", "cpu_limit",
     "cpu_weight", "cpuset", "cpuset_partition", "critical", "dep",
     "dir_owner", "directory_mode", "dynamic_user", "env", "env_file", "exec",

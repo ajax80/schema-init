@@ -6,7 +6,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with tempfile.TemporaryDirectory() as d:
     open(os.path.join(d, "a.service"), "w").write(
         "[Unit]\nDescription=a\n[Service]\nExecStart=/bin/true\nKeyringMode=private\n"
-        "CapabilityBoundingSet=CAP_NET_ADMIN\n[Install]\nWantedBy=multi-user.target\n")
+        "CapabilityBoundingSet=CAP_NET_ADMIN\nReadOnlyPaths=/data\n[Install]\nWantedBy=multi-user.target\n")
     open(os.path.join(d, "t@.service"), "w").write("[Service]\nExecStart=/bin/true\nUser=nobody\n")
     out = os.path.join(d, "r.json")
     r = subprocess.run([sys.executable, os.path.join(REPO, "tools/compat-corpus.py"), "--json", out, d],
@@ -16,7 +16,8 @@ with tempfile.TemporaryDirectory() as d:
     st = {(x["section"], x["key"]): x["status"] for x in rec["a.service"]["directives"]}
     assert rec["a.service"]["status"] == "imported" and rec["a.service"]["loader"] is None, rec["a.service"]
     assert st[("Service", "ExecStart")] == "mapped", st
-    assert st[("Service", "CapabilityBoundingSet")] == "warned", st
+    assert st[("Service", "CapabilityBoundingSet")] == "mapped", st
+    assert st[("Service", "ReadOnlyPaths")] == "warned", st
     assert st[("Service", "KeyringMode")] == "silent", st
     assert st[("Unit", "Description")] == "inert" and st[("Install", "WantedBy")] == "inert", st
     assert rec["t@.service"]["status"] == "skipped", rec["t@.service"]

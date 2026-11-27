@@ -1523,7 +1523,8 @@ def _cap_deps(deps):
 
 # caps.c cap_table, the names PID 1 parses: one it doesn't know rejects the
 # whole .svc. test_import_units.py checks this list against caps.c.
-_ENGINE_CAPS = frozenset((
+# in kernel order: the bit each name is
+_ENGINE_CAPS_ORDER = (
     "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_FSETID",
     "CAP_KILL", "CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP", "CAP_LINUX_IMMUTABLE",
     "CAP_NET_BIND_SERVICE", "CAP_NET_BROADCAST", "CAP_NET_ADMIN", "CAP_NET_RAW",
@@ -1534,7 +1535,8 @@ _ENGINE_CAPS = frozenset((
     "CAP_AUDIT_CONTROL", "CAP_SETFCAP", "CAP_MAC_OVERRIDE", "CAP_MAC_ADMIN",
     "CAP_SYSLOG", "CAP_WAKE_ALARM", "CAP_BLOCK_SUSPEND", "CAP_AUDIT_READ",
     "CAP_PERFMON", "CAP_BPF", "CAP_CHECKPOINT_RESTORE",
-))
+)
+_ENGINE_CAPS = frozenset(_ENGINE_CAPS_ORDER)
 
 
 def _ambient_caps(svc):
@@ -1553,6 +1555,47 @@ def _ambient_caps(svc):
                 else:
                     warns.append("AmbientCapabilities= %s not a capability schema-init knows, dropped" % c)
     return list(caps), warns
+
+
+# CapabilityBoundingSet= as systemd folds it: an empty value is no caps at all,
+# a line onto the unset (full) set, or one naming no known cap, replaces; later lines
+# OR in or (~) take out. rest: caps the engine has no name for stay too
+def _bounding_caps(svc, amb):
+    kept, rest, warns, seen = set(), True, [], False
+    for k, v in svc:
+        if k != "CapabilityBoundingSet":
+            continue
+        v = v.strip()
+        inv = v.startswith("~")
+        names = v[inv:].upper().split()
+        bad = [c for c in names if c not in _ENGINE_CAPS]
+        if bad:
+            warns.append("CapabilityBoundingSet= %s not a capability schema-init knows, %s" %
+                         (" ".join(bad), "not dropped" if inv else "dropped"))
+        got = {c for c in names if c in _ENGINE_CAPS}
+        if not got or not seen or (kept == _ENGINE_CAPS and rest):
+            kept, rest = (_ENGINE_CAPS - got, True) if inv else (got, False)
+        else:
+            kept = kept - got if inv else kept | got
+        seen = True
+    if not seen or (kept == _ENGINE_CAPS and rest):
+        return [], warns
+    # the engine refuses an ambient cap the bounding set drops; systemd starts
+    # the unit and the cap just never arrives, so keep it working here
+    if amb and not set(amb) <= kept:
+        warns.append("CapabilityBoundingSet= widened by AmbientCapabilities= %s" %
+                     " ".join(c for c in amb if c not in kept))
+        kept = kept | set(amb)
+    order = [c for c in _ENGINE_CAPS_ORDER if c in kept]
+    drop = [c for c in _ENGINE_CAPS_ORDER if c not in kept]
+    pos, neg = "bounding_caps=" + ",".join(order), "bounding_caps=~" + ",".join(drop)
+    line = neg if rest else pos
+    # the engine reads 511 bytes a line; the other form is then under 21 names
+    if len(line) > 500:
+        line = pos if rest else neg
+        warns.append("CapabilityBoundingSet= written as %s: capabilities newer than schema-init's table %s" %
+                     (("a keep list", "are dropped too") if rest else ("a drop list", "stay")))
+    return [line], warns
 
 
 # the errno names the engine's syscall_error_number= takes (seccomp.c)
@@ -1633,7 +1676,6 @@ def _seccomp(svc):
 # Directives that confine a unit under systemd and that the engine has no key
 # for. _UNENFORCED_DEFAULT: the values that ask for nothing, so lose nothing.
 _UNENFORCED = (
-    "CapabilityBoundingSet",
     "RestrictAddressFamilies",
     "RestrictFileSystems", "ProtectKernelLogs",
     "ProtectClock", "ProtectProc", "ProcSubset", "PrivateUsers", "PrivateIPC", "PrivateMounts", "RemoveIPC",
@@ -1668,9 +1710,6 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
             warns.append("%s= not applied: runs in the real root" % k)
     lost = [k for k in _UNENFORCED
             if _get_last(svc, k).lower() not in _FALSE and _get_last(svc, k).lower() != _UNENFORCED_DEFAULT.get(k)]
-    # empty clears any other list, but here it is the empty set: no capabilities at all
-    if any(k == "CapabilityBoundingSet" for k, _ in svc) and not _get_last(svc, "CapabilityBoundingSet"):
-        lost.insert(0, "CapabilityBoundingSet")
     if lost:
         warns.append("no equivalent here, not enforced: " + " ".join(lost))
     return warns
@@ -2201,6 +2240,11 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         sc, sc_warns = _seccomp(svc)
         lines.extend(sc)
         warns.extend(sc_warns)
+        # schema-user can't drop from the bounding set (no CAP_SETPCAP)
+        if not _USER:
+            bc, bc_warns = _bounding_caps(svc, amb if any(ln.startswith("ambient_caps=") for ln in lines) else [])
+            lines.extend(bc)
+            warns.extend(bc_warns)
     sched, sched_warns = _scheduling(svc)
     lines.extend(sched)
     warns.extend(sched_warns)

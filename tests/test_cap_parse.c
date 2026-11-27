@@ -50,6 +50,24 @@ int main(void) {
 
     assert(load(dir, "name=a\nexec=/bin/true\nambient_caps=CAP_BOGUS\n", &svc) != 0);
 
+    assert(load(dir, "name=a\nexec=/bin/true\n", &svc) == 0 && !svc.cap_bound_set);
+    assert(load(dir, "name=a\nexec=/bin/true\nbounding_caps=CAP_CHOWN,CAP_KILL\n", &svc) == 0);
+    assert(svc.cap_bound_set && svc.cap_bound_drop == ~((1ULL << CAP_CHOWN) | (1ULL << CAP_KILL)));
+    assert(load(dir, "name=a\nexec=/bin/true\nbounding_caps=~CAP_SYS_ADMIN\n", &svc) == 0);
+    assert(svc.cap_bound_drop == (1ULL << CAP_SYS_ADMIN));
+    assert(load(dir, "name=a\nexec=/bin/true\nbounding_caps= ~CAP_SYS_ADMIN\n", &svc) == 0);
+    assert(svc.cap_bound_drop == (1ULL << CAP_SYS_ADMIN));
+    /* root: ambient_caps is ignored, so it can't conflict */
+    assert(load(dir, "name=a\nexec=/bin/true\nambient_caps=CAP_NET_RAW\nbounding_caps=CAP_CHOWN\n", &svc) == 0);
+    /* empty: the empty set, as systemd's CapabilityBoundingSet= */
+    assert(load(dir, "name=a\nexec=/bin/true\nbounding_caps=\n", &svc) == 0);
+    assert(svc.cap_bound_set && svc.cap_bound_drop == ~0ULL);
+    assert(load(dir, "name=a\nexec=/bin/true\nbounding_caps=CAP_BOGUS\n", &svc) != 0);
+    assert(load(dir, "name=a\nexec=/bin/true\nuser=nobody\nambient_caps=CAP_NET_RAW\n"
+                "bounding_caps=CAP_CHOWN\n", &svc) != 0);
+    assert(load(dir, "name=a\nexec=/bin/true\nuser=nobody\nambient_caps=CAP_NET_RAW\n"
+                "bounding_caps=CAP_NET_RAW\n", &svc) == 0);
+
     char cmd[300];
     snprintf(cmd, sizeof cmd, "rm -rf %s", dir);
     system(cmd);
