@@ -2047,4 +2047,42 @@ check("OOMScoreAdjust= -> oom_score_adj=", "oom_score_adj=-900\n" in _sl("OOMSco
 check("OOMScoreAdjust= out of range is dropped and said", "oom_score_adj" not in _sl("OOMScoreAdjust=1001\n")
       and "OOMScoreAdjust=1001 out of range" in _sl("OOMScoreAdjust=1001\n"))
 
+# the rest of the silent list, each said out loud or mapped
+check("PermissionsStartOnly=yes is + on every ExecStartPre=, ExecStart= keeps User=",
+      "exec_pre=+/bin/true\n" in _sl("User=nobody\nPermissionsStartOnly=yes\nExecStartPre=/bin/true\n")
+      and "user=nobody\n" in _sl("User=nobody\nPermissionsStartOnly=yes\nExecStartPre=/bin/true\n"))
+check("PermissionsStartOnly=yes with ExecReload= as User= is warned, an ExecStartPost= doesn't hide it",
+      "PermissionsStartOnly=yes: ExecReload= runs as the service's user" in _sl(
+          "User=nobody\nPermissionsStartOnly=yes\nExecStartPost=/bin/true\nExecReload=/bin/true\n"))
+check("PermissionsStartOnly=yes as root says nothing", "PermissionsStartOnly" not in _sl(
+    "PermissionsStartOnly=yes\nExecReload=/bin/true\n"))
+check("Sockets= naming the service's own socket is not warned", "Sockets=" not in _sl("Sockets=a.socket\n").split("ExecStart")[0]
+      and si.WARN_PREFIX + "Sockets" not in _sl("Sockets=a.socket\n"))
+check("Sockets= naming another socket is warned, every line", si.WARN_PREFIX + "Sockets=b.socket c.socket not passed" in _sl(
+    "Sockets=a.socket b.socket\nSockets=c.socket\n"))
+check("StandardOutput=null names the StandardError= that follows it", "(and StandardError=, which follows it)" in _sl(
+    "StandardOutput=null\n"))
+check("RequiresMountsFor= with no mount-fstab service to wait for is warned",
+      si.WARN_PREFIX + "RequiresMountsFor=" in _sl("", "[Unit]\nRequiresMountsFor=/var/lib\n"))
+check("RequiresMountsFor= -> dep=mount-fstab when there is one, not warned",
+      "dep=mount-fstab\n" in si.unit_to_svc("a", si.parse_unit("[Unit]\nRequiresMountsFor=/var/lib\n[Service]\nExecStart=/bin/a\n"), known={"mount-fstab"})
+      and "RequiresMountsFor" not in si.unit_to_svc("a", si.parse_unit("[Unit]\nRequiresMountsFor=/var/lib\n[Service]\nExecStart=/bin/a\n"), known={"mount-fstab"}))
+check("OOMPolicy=stop is what memory.oom.group does: nothing said", "OOMPolicy" not in _sl("OOMPolicy=stop\n"))
+check("OOMPolicy=continue is warned", "OOMPolicy=continue not enforced" in _sl("OOMPolicy=continue\n"))
+check("Alias= other than dbus-org.* is warned", "Alias=display-manager.service not kept" in _sl(
+    "", "[Install]\nAlias=display-manager.service\n"))
+check("Alias=dbus-org.* is the dbus dep, not warned", "Alias" not in _sl("", "[Install]\nAlias=dbus-org.a.service\n"))
+check("StandardOutput=journal is the service log: nothing said", "StandardOutput" not in _sl("StandardOutput=journal\n"))
+check("StandardError=null is warned until the engine has a key", "StandardError=null not applied" in _sl(
+    "StandardError=null\n"))
+check("RuntimeDirectoryPreserve= with no RuntimeDirectory= says nothing",
+      "RuntimeDirectoryPreserve" not in _sl("RuntimeDirectoryPreserve=yes\n"))
+check("RuntimeDirectoryPreserve=yes with a RuntimeDirectory= is warned", "RuntimeDirectoryPreserve=yes not enforced" in _sl(
+    "RuntimeDirectory=a\nRuntimeDirectoryPreserve=yes\n"))
+for _d, _v, _sec in (("Delegate", "yes", "Service"), ("SendSIGKILL", "no", "Service"), ("KeyringMode", "private", "Service"),
+                     ("IgnoreSIGPIPE", "no", "Service"), ("OnFailure", "x.service", "Unit"), ("SyslogIdentifier", "x", "Service"),
+                     ("FailureAction", "reboot", "Unit"), ("RefuseManualStart", "yes", "Unit"), ("BindTo", "x.device", "Unit")):
+    _o = _sl(_d + "=" + _v + "\n") if _sec == "Service" else _sl("", "[Unit]\n" + _d + "=" + _v + "\n")
+    check("%s=%s is warned" % (_d, _v), si.WARN_PREFIX + _d + "=" in _o)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)

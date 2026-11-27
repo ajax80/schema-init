@@ -259,10 +259,39 @@ force on all 22 units that set it. Silent directives: Fedora 105→73, Debian
 `KeyringMode`, `StandardOutput`/`StandardError`, `RefuseManualStart`, `OnFailure`,
 `IgnoreSIGPIPE` and `RequiresMountsFor`.
 
+## The silent list, emptied (2026-11-27)
+
+Every directive the importer used to skip without a word is now read. Each one is
+mapped, warned or inert:
+
+- **Mapped:** `PermissionsStartOnly=yes` becomes `+` on each `ExecStartPre=`.
+  `ExecStart=` keeps `User=`, and an `ExecReload=` that systemd would run as root is
+  warned. `RequiresMountsFor=` was already the `mount-fstab` dep. It was listed as
+  silent only because an `or` chain stopped before reading it, and it is now warned
+  when no `mount-fstab` is there to wait for: on every corpus tree, since a foreign
+  tree has none. `OOMPolicy=stop`/`kill` is what the engine's `memory.oom.group`
+  already does.
+- **Warned:**
+  - Interim, until the engine has keys for them: `OnFailure=`, `KeyringMode=`,
+    `StandardOutput=`/`StandardError=` other than the journal, and `IgnoreSIGPIPE=no`.
+  - With no engine key: `Alias=` other than `dbus-org.*`, `Delegate=`,
+    `RuntimeDirectoryPreserve=` (when there is a `RuntimeDirectory=`),
+    `SendSIGKILL=no`, `SendSIGHUP=yes`, `NonBlocking=yes`, `FailureAction=` and
+    `SuccessAction=`, `Syslog*=` and `LogLevelMax=`, `Sockets=` naming another unit's socket, `OOMPolicy=continue`,
+    `MemoryKSM=`, `FileDescriptorStoreMax=`, encrypted credentials, `OnSuccess=`,
+    `RefuseManualStart=`/`RefuseManualStop=`, and `BindTo=` (the old spelling).
+- **Inert:** `IgnoreOnIsolate=`, `AllowIsolate=`, `OnFailureJobMode=` and
+  `RestartMode=`. The engine has no isolate, no job queue and no failed state to
+  show dependents during a restart.
+
+Run 6: silent directives are 0 on all four distros (Fedora 73→0, Debian 44→0,
+Ubuntu 44→0, Arch 44→0). The imported counts are unchanged, and PID 1's loader
+still takes every `.svc`.
+
 ## Next
 
-1. Turn the rest of the silent list into warnings or mappings: `OnFailure=`,
-   `RequiresMountsFor=`, `KeyringMode=` and `StandardOutput=`/`StandardError=` first.
+1. Engine keys for the interim warnings: `OnFailure=`, `StandardOutput=`/`StandardError=`,
+   `KeyringMode=` and `IgnoreSIGPIPE=no`.
 2. Open questions on the defaults, where the engine and systemd differ with no
    directive in the unit. systemd times out a notify unit at 90 s
    (`DefaultTimeoutStartSec=`), while the engine's default for daemons is no limit.

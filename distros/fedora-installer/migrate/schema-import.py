@@ -1414,24 +1414,27 @@ def dep_lines(name, sections, known):
     PartOf=dbus.service. Plain After= is ordering only in systemd and
     never keeps a unit from starting, while dep= waits for the dep to settle:
     order_lines makes it after=. Returns (lines, notes)."""
-    if not known:
-        return [], []
-    cands = []
     unit = sections.get("Unit", [])
     svc = sections.get("Service", [])
     tokens = lambda sec, k: " ".join(_get_all(sec, k)).split()
+    # read up front: the or-chains below stop early, and a key they skip looks unread
+    mounts = _get_all(unit, "RequiresMountsFor")
+    aliases = tokens(sections.get("Install", []), "Alias")
+    if not known:
+        return [], []
+    cands = []
     # DefaultDependencies=yes orders a service after local-fs.target, and early
     # units (auditd) say so themselves: crond and auditd die when started before
     # a separate /var subvol is mounted. First, so the 8-dep cap never drops it.
     if (_get_last(unit, "DefaultDependencies").lower() not in ("no", "false", "0", "off")
             or {"local-fs.target", "remote-fs.target"} & set(tokens(unit, "After"))
-            or _get_all(unit, "RequiresMountsFor")
+            or mounts
             or any(_get_all(svc, k) for k in ("StateDirectory", "CacheDirectory", "LogsDirectory"))):
         cands.append("mount-fstab")
     part_of = {_UNIT_ALIAS.get(u.rsplit(".", 1)[0], u.rsplit(".", 1)[0])
                for u in tokens(unit, "PartOf") if u.endswith((".service", ".socket"))}
     if (_get_last(svc, "Type").lower() == "dbus" or _get_last(svc, "BusName")
-            or any(a.startswith("dbus-org.") for a in tokens(sections.get("Install", []), "Alias"))
+            or any(a.startswith("dbus-org.") for a in aliases)
             or "dbus" in part_of):
         cands += ["dbus", "polkitd"]
     for k in ("Requires", "Requisite", "BindsTo"):
@@ -1715,6 +1718,79 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
     return warns
 
 
+# Directives with a runtime effect the engine has no key for, outside the
+# sandbox: each named in its own warning, so none is lost without a word
+def _misc_losses(name, sections, svc):
+    unit = sections.get("Unit", [])
+    warns = []
+    low = lambda sec, k: _get_last(sec, k).lower()
+    for a in " ".join(_get_all(sections.get("Install", []), "Alias")).split():
+        if not a.startswith("dbus-org."):
+            warns.append("Alias=%s not kept: other units can't name this service by it" % a)
+    if low(svc, "Delegate") not in _FALSE:
+        warns.append("Delegate=%s not enforced (the service can't manage its own cgroup subtree)" % low(svc, "Delegate"))
+    keep = low(svc, "RuntimeDirectoryPreserve")
+    if keep in _TRUE or keep == "restart":
+        if any(v.strip() for v in _get_all(svc, "RuntimeDirectory")):
+            warns.append("RuntimeDirectoryPreserve=%s not enforced (runtime_dir is kept across a crash respawn, "
+                         "emptied by schema-ctl restart and removed once stopped for good)" % keep)
+    if low(svc, "SendSIGKILL") in _FALSE[1:]:
+        warns.append("SendSIGKILL=no not enforced (a stop past its timeout kills the cgroup)")
+    if low(svc, "SendSIGHUP") in _TRUE:
+        warns.append("SendSIGHUP=yes not enforced (no SIGHUP follows the kill signal)")
+    if low(svc, "NonBlocking") in _TRUE:
+        warns.append("NonBlocking=yes not enforced (listen= sockets are passed as created)")
+    for sec, keys in ((unit, ("FailureAction", "SuccessAction")), (svc, ("FailureAction", "SuccessAction"))):
+        for k in keys:
+            if low(sec, k) not in ("", "none"):
+                warns.append("%s=%s not enforced (nothing is done when the service ends)" % (k, low(sec, k)))
+    for k in ("SyslogIdentifier", "SyslogFacility", "SyslogLevel", "LogLevelMax"):
+        if _get_last(svc, k):
+            warns.append("%s=%s not applied: output goes to the service's log as written" % (k, _get_last(svc, k)))
+    other = [x for x in " ".join(_get_all(svc, "Sockets")).split() if x != name + ".socket"]
+    if other:
+        warns.append("Sockets=%s not passed: only a .socket named after the service is" % " ".join(other))
+    # stop/kill hold: the engine sets memory.oom.group, so an OOM kill takes the whole service
+    if low(svc, "OOMPolicy") == "continue":
+        warns.append("OOMPolicy=continue not enforced (an OOM kill takes the whole service down)")
+    if low(svc, "MemoryKSM") in _TRUE:
+        warns.append("MemoryKSM=yes not enforced (memory is not offered for merging)")
+    if _get_last(svc, "FileDescriptorStoreMax") not in ("", "0"):
+        warns.append("FileDescriptorStoreMax=%s not enforced (no fd store)" % _get_last(svc, "FileDescriptorStoreMax"))
+    for k in ("LoadCredentialEncrypted", "SetCredentialEncrypted"):
+        if _get_all(svc, k):
+            warns.append("%s= not loaded: no encrypted credentials here" % k)
+    if _get_all(unit, "OnSuccess"):
+        warns.append("OnSuccess=%s not started: nothing follows a clean exit" % " ".join(_get_all(unit, "OnSuccess")))
+    for k in ("RefuseManualStart", "RefuseManualStop"):
+        if low(unit, k) in _TRUE:
+            warns.append("%s=yes not enforced (schema-ctl may start and stop it)" % k)
+    # system mode runs no ExecStartPost=/ExecStop*= (warned elsewhere); exec_reload
+    # drops to the service's identity, where systemd kept root
+    if (low(svc, "PermissionsStartOnly") in _TRUE and not _USER
+            and (_get_last(svc, "User") not in ("", "root") or _get_last(svc, "Group")
+                 or low(svc, "DynamicUser") in _TRUE)
+            and any(v.strip() for v in _get_all(svc, "ExecReload"))):
+        warns.append("PermissionsStartOnly=yes: ExecReload= runs as the service's user, not root")
+    if low(svc, "IgnoreSIGPIPE") in _FALSE[1:]:
+        warns.append("IgnoreSIGPIPE=no not enforced (SIGPIPE stays ignored)")
+    km = low(svc, "KeyringMode")
+    if km in ("private", "shared"):
+        warns.append("KeyringMode=%s not enforced (the service keeps the session keyring it inherits)" % km)
+    log_like = ("journal", "kmsg", "syslog", "inherit", "journal+inherit")
+    so, se = low(svc, "StandardOutput"), low(svc, "StandardError")
+    if so and so not in log_like:
+        both = " (and StandardError=, which follows it)" if se in ("", "inherit") else ""
+        warns.append("StandardOutput=%s%s not applied: output goes to the service's log" % (_get_last(svc, "StandardOutput"), both))
+    if se and se not in log_like:
+        warns.append("StandardError=%s not applied: output goes to the service's log" % _get_last(svc, "StandardError"))
+    if _get_all(unit, "OnFailure"):
+        warns.append("OnFailure=%s not started: nothing follows a failure" % " ".join(_get_all(unit, "OnFailure")))
+    if _get_all(unit, "BindTo"):
+        warns.append("BindTo=%s not read: the old spelling of BindsTo=" % " ".join(_get_all(unit, "BindTo")))
+    return warns
+
+
 def _own_oom():
     try:
         with open("/proc/self/oom_score_adj") as f:
@@ -1970,6 +2046,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         env_file_notes.append("dropped EnvironmentFile=%s (limit 4)" % " ".join(env_files[4:]))
         env_files = env_files[:4]
     pres = _exec_pre(svc, unit or name)
+    # the old spelling of + on every ExecStartPre= (ExecStart= keeps User=)
+    if _get_last(svc, "PermissionsStartOnly").lower() in _TRUE and not _USER:
+        pres = [("".join(sorted(set(pre + "+"))), pa) for pre, pa in pres]
     # a oneshot runs its ExecStart= lines in turn; a .svc has one exec=. User= is
     # service-wide here, so a privileged last line would take it from the others.
     if stype == "oneshot" and len(execstarts) > 1:
@@ -2332,6 +2411,7 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if "@" in pfx:
         warns.append("ExecStart=@ custom argv[0] not kept: the program sees its own path")
     warns.extend(_unenforced_warns(svc, named_user, privileged, "+" in pfx))
+    warns.extend(_misc_losses(name, sections, svc))
     # systemd still hands *Directory= to User=/Group= under ExecStart=!/+, while
     # the process runs as root (chrony on Debian/Ubuntu)
     owned = False
@@ -2367,6 +2447,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     warns.extend(cg_warns)
     lines.extend(condition_lines(sections))
     deps, dep_notes = dep_lines(name, sections, known)
+    # user services start after login, with fstab long mounted
+    if _get_all(sections.get("Unit", []), "RequiresMountsFor") and not _USER and "dep=mount-fstab" not in deps:
+        warns.append("RequiresMountsFor= not held: no mount-fstab service to wait for")
     lines.extend(deps)
     order, order_notes = order_lines(name, sections, known, deps)
     lines.extend(order)
