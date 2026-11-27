@@ -1715,6 +1715,65 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
     return warns
 
 
+# TimeoutStartSec=, StartLimitBurst=/StartLimitIntervalSec= and OOMScoreAdjust=
+# onto the engine's start_timeout_sec=, max_restarts= and oom_score_adj=
+def _start_limits(sections, svc, stype, restarts):
+    lines, warns = [], []
+    # TimeoutSec= sets start too; the later of the two wins, as in systemd
+    tkey, tval = "", ""
+    for k, v in svc:
+        if k in ("TimeoutStartSec", "TimeoutSec"):
+            tkey, tval = k, v
+    if tval:
+        sec = 0 if tval.strip().lower() == "infinity" else _timespan_sec(tval)
+        if sec is None:
+            warns.append("%s=%s unrecognised, dropped" % (tkey, tval))
+        elif stype in ("notify", "notify-reload", "oneshot"):
+            # the engine's timer runs until READY=1 or the oneshot's exit, as systemd's
+            lines.append("start_timeout_sec=%d" % sec)
+        elif stype in ("dbus", "forking"):
+            # promoted by bus name or pid file, at worst after the bus fallback's
+            # 90 s or the default stable_secs: only a timeout past that can't kill a healthy one
+            worst = 90 if stype == "dbus" else 10
+            if sec == 0 or sec > worst:
+                lines.append("start_timeout_sec=%d" % sec)
+            else:
+                warns.append("%s=%s not enforced on Type=%s: at most %d s to promote" % (tkey, tval, stype, worst))
+        # simple/exec: systemd's start is done at fork/exec, the timeout never runs
+    # [Unit] StartLimit*=, or the old [Service] spellings; the last one wins
+    both = sections.get("Unit", []) + svc
+    burst, ival = _get_last(both, "StartLimitBurst"), ""
+    for k, v in both:
+        if k in ("StartLimitIntervalSec", "StartLimitInterval"):
+            ival = v
+    # with Restart=no only manual starts are limited, which PID 1 doesn't count
+    if restarts and (burst or ival):
+        isec = 0 if ival.strip().lower() == "infinity" else _timespan_sec(ival) if ival else 10
+        n = int(burst) if burst.strip().isdigit() else 5 if not burst else None
+        if n is None or isec is None:
+            warns.append("StartLimitBurst=%s StartLimitIntervalSec=%s unrecognised, dropped" % (burst, ival))
+        elif n == 0 or isec == 0:
+            warns.append("StartLimit*: no limit under systemd; here 5 restarts, then a 300 s pause")
+        else:
+            # systemd's burst counts the first start; max_restarts doesn't
+            lines.append("max_restarts=%d" % (n - 1))
+            warns.append("StartLimitIntervalSec= window not kept: %d restarts, counted until a "
+                         "5-minute run" % (n - 1))
+    action = _get_last(both, "StartLimitAction").lower()
+    if action and action != "none":
+        warns.append("StartLimitAction=%s not enforced" % action)
+    oom = _get_last(svc, "OOMScoreAdjust").strip()
+    if oom:
+        if not re.fullmatch(r"-?\d+", oom) or not -1000 <= int(oom) <= 1000:
+            warns.append("OOMScoreAdjust=%s out of range, dropped" % oom)
+        elif _USER and int(oom) < 0:
+            # unprivileged: the kernel refuses a lower score
+            warns.append("OOMScoreAdjust=%s not applied: schema-user can't lower it" % oom)
+        else:
+            lines.append("oom_score_adj=%d" % int(oom))
+    return lines, warns
+
+
 # what systemd chowns to when Group= is unset; the user name if it can't be read
 def _primary_group(user):
     def rows(f):
@@ -2327,6 +2386,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             lines.append("watchdog_sec=%d" % sec)
         elif sec > 0:
             warns.append("WatchdogSec= without Type=notify has no socket to pet over, dropped")
+
+    lines_s, warns_s = _start_limits(sections, svc, stype, "no_restart=1" not in lines)
+    lines.extend(lines_s)
+    warns.extend(warns_s)
 
     # TimeoutStopSec= (or TimeoutSec=, which sets start and stop; the later of
     # the two wins, as in systemd) is how long systemd waits after SIGTERM;
