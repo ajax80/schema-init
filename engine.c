@@ -1892,7 +1892,12 @@ static void tick_service(service_t *svc,
                 service_log(svc, "start-timeout");
                 active_kill_service(svc);
                 if (svc->failsafe_cmd[0]) start_failsafe(svc);
-                if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise) {
+                /* only an explicit restart= retries, as systemd's Restart= does on a
+                 * start timeout; with none, the default "always" would storm */
+                int retry = svc->restart_set && !(svc->flags & SVC_NO_RESTART) &&
+                            service_restart_wanted(svc, DEATH_TIMEOUT);
+                if (retry) restart_budget_refresh(svc);
+                if (!(svc->flags & SVC_CRITICAL) && !svc->no_excise && !retry) {
                     svc->inst.state = STATE_EXCISED;
                     svc->excise_reason = EXC_START_TIMEOUT;
                     service_log(svc, "76-excised");

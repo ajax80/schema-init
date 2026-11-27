@@ -1715,6 +1715,78 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
     return warns
 
 
+def _own_oom():
+    try:
+        with open("/proc/self/oom_score_adj") as f:
+            return int(f.read())
+    except (OSError, ValueError):
+        return 0
+
+
+# TimeoutStartSec=, StartLimitBurst=/StartLimitIntervalSec= and OOMScoreAdjust=
+# onto the engine's start_timeout_sec=, max_restarts= and oom_score_adj=
+def _start_limits(sections, svc, stype, restarts, lines_so_far):
+    lines, warns = [], []
+    # TimeoutSec= sets start too; the later of the two wins, as in systemd
+    tkey, tval = "", ""
+    for k, v in svc:
+        if k in ("TimeoutStartSec", "TimeoutSec"):
+            tkey, tval = k, v
+    if tval:
+        sec = 0 if tval.strip().lower() == "infinity" else _timespan_sec(tval)
+        if sec is None:
+            warns.append("%s=%s unrecognised, dropped" % (tkey, tval))
+        elif stype in ("notify", "notify-reload", "oneshot", "forking"):
+            # the engine's timer runs until READY=1, the oneshot's exit or the
+            # pid file's adoption, as systemd's
+            lines.append("start_timeout_sec=%d" % sec)
+        elif stype == "dbus":
+            # promoted by bus name, at worst after the 90 s bus fallback: only a
+            # timeout past that can't kill a healthy one
+            if sec == 0 or sec > 90:
+                lines.append("start_timeout_sec=%d" % sec)
+            else:
+                warns.append("%s=%s not enforced on Type=dbus: up to 90 s to promote" % (tkey, tval))
+        # simple/exec: systemd's start is done at fork/exec, the timeout never runs
+    # [Unit] StartLimit*=, or the old [Service] spellings; the last one wins
+    both = sections.get("Unit", []) + svc
+    burst, ival = _get_last(both, "StartLimitBurst"), ""
+    for k, v in both:
+        if k in ("StartLimitIntervalSec", "StartLimitInterval"):
+            ival = v
+    # with Restart=no only manual starts are limited, which PID 1 doesn't count
+    if restarts and (burst or ival):
+        # infinity: the window never closes, the strictest; only 0 is no limit
+        inf = ival.strip().lower() == "infinity"
+        isec = None if inf else _timespan_sec(ival) if ival else 10
+        n = int(burst) if burst.strip().isdigit() else 5 if not burst else None
+        rsec = next((int(ln.split("=")[1]) for ln in lines_so_far if ln.startswith("restart_sec=")), 0)
+        if n is None or (isec is None and not inf):
+            warns.append("StartLimitBurst=%s StartLimitIntervalSec=%s unrecognised, dropped" % (burst, ival))
+        elif n == 0 or isec == 0 or n > 10000:
+            warns.append("StartLimit*: no limit under systemd; here 5 restarts, then a 300 s pause")
+        elif not inf and rsec * (n - 1) >= isec:
+            pass   # RestartSec= spaces the starts past the window: systemd never hits the limit
+        else:
+            # systemd's burst counts the first start; max_restarts doesn't
+            lines.append("max_restarts=%d" % (n - 1))
+            warns.append("StartLimitIntervalSec= window not kept: %d restarts, counted until a "
+                         "5-minute run" % (n - 1))
+    action = _get_last(both, "StartLimitAction").lower()
+    if action and action != "none":
+        warns.append("StartLimitAction=%s not enforced" % action)
+    oom = _get_last(svc, "OOMScoreAdjust").strip()
+    if oom:
+        if not re.fullmatch(r"-?\d+", oom) or not -1000 <= int(oom) <= 1000:
+            warns.append("OOMScoreAdjust=%s out of range, dropped" % oom)
+        elif _USER and int(oom) < _own_oom():
+            # unprivileged: the kernel refuses a score below the one inherited
+            warns.append("OOMScoreAdjust=%s not applied: schema-user can't go below its own %d" % (oom, _own_oom()))
+        else:
+            lines.append("oom_score_adj=%d" % int(oom))
+    return lines, warns
+
+
 # what systemd chowns to when Group= is unset; the user name if it can't be read
 def _primary_group(user):
     def rows(f):
@@ -1868,6 +1940,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
         raise Skip("StandardInput=tty: schema-init gives services /dev/null on stdin; "
                    "write a .svc that names the terminal (agetty ... tty1)")
     busname = _get_last(svc, "BusName")
+    # systemd: no Type= with a BusName= is Type=dbus
+    if not stype and busname:
+        stype = "dbus"
     if stype == "dbus" and not busname:
         raise Skip("Type=dbus without BusName= — nothing to wait for")
 
@@ -2327,6 +2402,10 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
             lines.append("watchdog_sec=%d" % sec)
         elif sec > 0:
             warns.append("WatchdogSec= without Type=notify has no socket to pet over, dropped")
+
+    lines_s, warns_s = _start_limits(sections, svc, stype, "no_restart=1" not in lines, lines)
+    lines.extend(lines_s)
+    warns.extend(warns_s)
 
     # TimeoutStopSec= (or TimeoutSec=, which sets start and stop; the later of
     # the two wins, as in systemd) is how long systemd waits after SIGTERM;

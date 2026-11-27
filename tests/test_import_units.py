@@ -2006,4 +2006,45 @@ for _a in (["--out", _od], ["--start", "--out", _od, "bare.service"], ["-b", "--
         _ok = e.code == 2
     check("--out refused: %s" % " ".join(a for a in _a if a != _od), _ok)
 
+def _sl(body, unit=""):
+    return si.unit_to_svc("a", si.parse_unit(unit + "[Service]\nExecStart=/bin/a\n" + body))
+
+
+check("TimeoutStartSec= on Type=notify -> start_timeout_sec=", "start_timeout_sec=120\n" in _sl("Type=notify\nTimeoutStartSec=2min\n"))
+check("TimeoutSec= sets start too; the later wins", "start_timeout_sec=7\n" in _sl(
+    "Type=notify\nTimeoutStartSec=30\nTimeoutSec=7\n"))
+check("TimeoutStartSec=infinity on a oneshot -> start_timeout_sec=0 (no limit)", "start_timeout_sec=0\n" in _sl(
+    "Type=oneshot\nTimeoutStartSec=infinity\n"))
+check("TimeoutStartSec= on Type=simple writes nothing, says nothing: systemd's start ends at fork",
+      "start_timeout_sec" not in _sl("TimeoutStartSec=5\n") and "TimeoutStartSec" not in _sl("TimeoutStartSec=5\n"))
+check("TimeoutStartSec= past the worst promotion (dbus 90 s) maps: NetworkManager's 600",
+      "start_timeout_sec=600\n" in _sl("Type=dbus\nBusName=org.a\nTimeoutStartSec=600\n"))
+check("TimeoutStartSec= under it on Type=dbus is warned", "not enforced on Type=dbus" in _sl(
+    "Type=dbus\nBusName=org.a\nTimeoutStartSec=60\n"))
+check("TimeoutStartSec= on Type=forking maps at any value: promoted on the pid file's adoption",
+      "start_timeout_sec=5\n" in _sl("Type=forking\nPIDFile=/run/a.pid\nTimeoutStartSec=5\n"))
+check("no Type= with BusName= is Type=dbus, as systemd", "ready_bus_name=org.a\n" in _sl("BusName=org.a\n")
+      and "start_timeout_sec=300\n" in _sl("BusName=org.a\nTimeoutStartSec=300\n"))
+_o = _sl("Restart=on-failure\n", "[Unit]\nStartLimitBurst=3\nStartLimitIntervalSec=60\n")
+check("StartLimitBurst=N -> max_restarts=N-1 (systemd counts the first start), window warned",
+      "max_restarts=2\n" in _o and "window not kept" in _o)
+check("StartLimit* in [Service] (old spelling) maps too", "max_restarts=4\n" in _sl("Restart=always\nStartLimitInterval=30\n"))
+check("StartLimitIntervalSec=0 is no limit: warned, engine default kept",
+      "max_restarts" not in _sl("Restart=always\n", "[Unit]\nStartLimitIntervalSec=0\n")
+      and "no limit under systemd" in _sl("Restart=always\n", "[Unit]\nStartLimitIntervalSec=0\n"))
+check("StartLimit* with Restart=no: nothing to count, silent",
+      "max_restarts" not in _sl("", "[Unit]\nStartLimitBurst=3\n") and "StartLimit" not in _sl("", "[Unit]\nStartLimitBurst=3\n"))
+check("StartLimitIntervalSec=infinity is the strictest: the burst holds forever",
+      "max_restarts=1\n" in _sl("Restart=always\n", "[Unit]\nStartLimitBurst=2\nStartLimitIntervalSec=infinity\n"))
+check("RestartSec= spacing the starts past the window: systemd never hits the limit, nothing written",
+      "max_restarts" not in _sl("Restart=always\nRestartSec=30\n", "[Unit]\nStartLimitBurst=3\nStartLimitIntervalSec=10\n")
+      and "StartLimit" not in _sl("Restart=always\nRestartSec=30\n", "[Unit]\nStartLimitBurst=3\nStartLimitIntervalSec=10\n"))
+check("StartLimitBurst= huge is no limit, not an int overflow in the engine",
+      "max_restarts" not in _sl("Restart=always\n", "[Unit]\nStartLimitBurst=99999999999\n"))
+check("StartLimitAction= other than none is warned", "StartLimitAction=reboot not enforced" in _sl(
+    "Restart=always\n", "[Unit]\nStartLimitAction=reboot\n"))
+check("OOMScoreAdjust= -> oom_score_adj=", "oom_score_adj=-900\n" in _sl("OOMScoreAdjust=-900\n"))
+check("OOMScoreAdjust= out of range is dropped and said", "oom_score_adj" not in _sl("OOMScoreAdjust=1001\n")
+      and "OOMScoreAdjust=1001 out of range" in _sl("OOMScoreAdjust=1001\n"))
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
