@@ -1387,6 +1387,9 @@ check("CapabilityBoundingSet= empty value resets to the empty set", _bc(
     "CapabilityBoundingSet=CAP_KILL\nCapabilityBoundingSet=\n")[0] == ["bounding_caps="])
 check("CapabilityBoundingSet= that ends at the full set writes nothing", _bc(
     "CapabilityBoundingSet=~CAP_KILL\nCapabilityBoundingSet=CAP_KILL\n")[0] == [])
+check("CapabilityBoundingSet= a later line naming no known cap replaces, as systemd's sum==0", _bc(
+    "CapabilityBoundingSet=CAP_KILL\nCapabilityBoundingSet=CAP_FROB\n")[0] == ["bounding_caps="]
+    and _bc("CapabilityBoundingSet=CAP_KILL\nCapabilityBoundingSet=~CAP_FROB\n")[0] == [])
 _o = _bc("CapabilityBoundingSet=CAP_KILL CAP_FROB\n")
 check("CapabilityBoundingSet= unknown name is said and left out", _o[0] == ["bounding_caps=CAP_KILL"]
       and "CAP_FROB not a capability schema-init knows" in _o[1])

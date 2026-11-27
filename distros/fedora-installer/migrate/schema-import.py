@@ -1558,7 +1558,7 @@ def _ambient_caps(svc):
 
 
 # CapabilityBoundingSet= as systemd folds it: an empty value is no caps at all,
-# a line onto the unset (full) set or an empty/"~" line replaces, later lines
+# a line onto the unset (full) set, or one naming no known cap, replaces; later lines
 # OR in or (~) take out. rest: caps the engine has no name for stay too
 def _bounding_caps(svc, amb):
     kept, rest, warns, seen = set(), True, [], False
@@ -1573,7 +1573,7 @@ def _bounding_caps(svc, amb):
             warns.append("CapabilityBoundingSet= %s not a capability schema-init knows, %s" %
                          (" ".join(bad), "not dropped" if inv else "dropped"))
         got = {c for c in names if c in _ENGINE_CAPS}
-        if not names or not seen or (kept == _ENGINE_CAPS and rest):
+        if not got or not seen or (kept == _ENGINE_CAPS and rest):
             kept, rest = (_ENGINE_CAPS - got, True) if inv else (got, False)
         else:
             kept = kept - got if inv else kept | got

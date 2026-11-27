@@ -253,14 +253,13 @@ def boot(work, initrd, kernel, timeout):
 # ---- oracle ----------------------------------------------------------------
 
 def caps_mask(values):
-    # systemd: an empty line is the empty set; onto the full set, or for an
-    # empty/"~" line, a line replaces; else lines OR in, "~" lines take out
+    # systemd: an empty line is the empty set; onto the full set, or for a
+    # line naming no known cap, a line replaces; else lines OR in, "~" take out
     full, mask = (1 << len(CAPS)) - 1, None
     for v in values:
         inv = v.startswith("~")
-        names = v[inv:].split()
-        bits = sum(1 << CAP[n] for n in names if n in CAP)
-        if not names or mask is None or mask == full:
+        bits = sum(1 << CAP[n] for n in v[inv:].split() if n in CAP)
+        if not bits or mask is None or mask == full:
             mask = full & ~bits if inv else bits
         else:
             mask = mask & ~bits if inv else mask | bits

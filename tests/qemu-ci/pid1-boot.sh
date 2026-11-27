@@ -138,6 +138,15 @@ exec=/bin/true
 oneshot=1"
     i=$((i+1))
 done
+# bounding_caps= holds for the main process and for an exec_reload runner
+printf '#!/bin/sh\necho "CI-CAPS-$1-$(grep ^CapBnd /proc/self/status | cut -f2)" > /dev/console\n' > "$ROOT/bin/ci-caps-show"
+printf '#!/bin/sh\n/bin/ci-caps-show MAIN\ntouch /run/ci-caps.ready\nwhile :; do sleep 1; done\n' > "$ROOT/bin/ci-caps"
+chmod +x "$ROOT/bin/ci-caps-show" "$ROOT/bin/ci-caps"
+svc ci-caps 'name=ci-caps
+exec=/bin/ci-caps
+exec_reload=/bin/ci-caps-show RELOAD
+bounding_caps=CAP_CHOWN
+ready_path=/run/ci-caps.ready'
 # schema-ctl poweroff, so the control socket and PID 1's own shutdown run; poweroff -f
 # would bypass both. The fallback only ends a wedged run, and is a failure
 cat > "$ROOT/bin/ci-finish" <<'EOF'
@@ -158,6 +167,8 @@ if [ -n "$D1" ] && [ "$D1" = "$D2" ] && [ -d /proc/$D1 ] && [ -n "$C1" ] && [ "$
 else
     echo "CI-REEXEC-LOST daemon $D1->$D2 crasher $C1->$C2" > /dev/console
 fi
+/bin/schema-ctl reload ci-caps > /dev/console 2>&1
+sleep 1
 echo "CI-BULK-$(/bin/schema-ctl status 2>&1 | grep -c ' ci-bulk-')" > /dev/console
 grep VmRSS /proc/1/status > /dev/console
 grep -A5 sbin/schema-init /proc/1/smaps | grep -e sbin/schema-init -e ^Size -e ^Rss > /dev/console
@@ -174,7 +185,8 @@ dep=ci-dependent
 dep=ci-ordered
 dep=ci-after-fail
 dep=ci-umask
-dep=ci-gate'
+dep=ci-gate
+dep=ci-caps'
 
 ( cd "$ROOT" && find . | cpio -o -H newc -R 0:0 2>/dev/null | gzip -1 ) > "$WORK/initramfs.gz"
 
@@ -201,6 +213,8 @@ grep -q CI-GATE-READ-OK "$SERIAL" || miss "group schema could not run a read-onl
 grep -q CI-GATE-DENIED "$SERIAL" || miss "group schema was not refused a mutating verb"
 grep -q CI-GATE-BREACH "$SERIAL" && miss "group schema ran a mutating verb"
 grep -q CI-UP "$SERIAL" || miss "ci-finish never ran after its deps were ready"
+grep -q CI-CAPS-MAIN-0000000000000001 "$SERIAL" || miss "bounding_caps= not in force on the main process ($(grep -o 'CI-CAPS-MAIN-[0-9a-f]*' "$SERIAL"))"
+grep -q CI-CAPS-RELOAD-0000000000000001 "$SERIAL" || miss "bounding_caps= not in force on exec_reload ($(grep -o 'CI-CAPS-RELOAD-[0-9a-f]*' "$SERIAL"))"
 grep -q CI-CRASH-2 "$SERIAL" || miss "ci-crasher did not crash twice"
 grep -Eq 'CI-CRASHER: .*restarts=2[^0-9]*$' "$SERIAL" || miss "ci-crasher's restarts are not 2"
 grep -q CI-DEP-AFTER-RECOVERY "$SERIAL" || miss "ci-dependent did not wait for ci-crasher's recovery"
