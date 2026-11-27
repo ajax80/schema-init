@@ -265,17 +265,19 @@ Every directive the importer used to skip without a word is now read. Each one i
 mapped, warned or inert:
 
 - **Mapped:** `PermissionsStartOnly=yes` becomes `+` on each `ExecStartPre=`.
-  `ExecStart=` keeps `User=`, and an `ExecReload=` or `ExecStop*=` that systemd would
-  run as root is warned. `RequiresMountsFor=` was already the `mount-fstab` dep, and
-  `OOMPolicy=stop`/`kill` is what the engine's `memory.oom.group` does. Both were
-  listed as silent only because an `or` chain stopped before reading them.
+  `ExecStart=` keeps `User=`, and an `ExecReload=` that systemd would run as root is
+  warned. `RequiresMountsFor=` was already the `mount-fstab` dep. It was listed as
+  silent only because an `or` chain stopped before reading it, and it is now warned
+  when no `mount-fstab` is there to wait for: on every corpus tree, since a foreign
+  tree has none. `OOMPolicy=stop`/`kill` is what the engine's `memory.oom.group`
+  already does.
 - **Warned:**
   - Interim, until the engine has keys for them: `OnFailure=`, `KeyringMode=`,
     `StandardOutput=`/`StandardError=` other than the journal, and `IgnoreSIGPIPE=no`.
   - With no engine key: `Alias=` other than `dbus-org.*`, `Delegate=`,
     `RuntimeDirectoryPreserve=` (when there is a `RuntimeDirectory=`),
     `SendSIGKILL=no`, `SendSIGHUP=yes`, `NonBlocking=yes`, `FailureAction=` and
-    `SuccessAction=`, `Syslog*=` and `LogLevelMax=`, `Sockets=`, `OOMPolicy=continue`,
+    `SuccessAction=`, `Syslog*=` and `LogLevelMax=`, `Sockets=` naming another unit's socket, `OOMPolicy=continue`,
     `MemoryKSM=`, `FileDescriptorStoreMax=`, encrypted credentials, `OnSuccess=`,
     `RefuseManualStart=`/`RefuseManualStop=`, and `BindTo=` (the old spelling).
 - **Inert:** `IgnoreOnIsolate=`, `AllowIsolate=`, `OnFailureJobMode=` and

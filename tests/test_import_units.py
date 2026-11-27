@@ -2051,9 +2051,22 @@ check("OOMScoreAdjust= out of range is dropped and said", "oom_score_adj" not in
 check("PermissionsStartOnly=yes is + on every ExecStartPre=, ExecStart= keeps User=",
       "exec_pre=+/bin/true\n" in _sl("User=nobody\nPermissionsStartOnly=yes\nExecStartPre=/bin/true\n")
       and "user=nobody\n" in _sl("User=nobody\nPermissionsStartOnly=yes\nExecStartPre=/bin/true\n"))
-check("PermissionsStartOnly=yes with ExecReload= as User= is warned",
-      "PermissionsStartOnly=yes: ExecReload= runs as User=" in _sl(
-          "User=nobody\nPermissionsStartOnly=yes\nExecReload=/bin/true\n"))
+check("PermissionsStartOnly=yes with ExecReload= as User= is warned, an ExecStartPost= doesn't hide it",
+      "PermissionsStartOnly=yes: ExecReload= runs as the service's user" in _sl(
+          "User=nobody\nPermissionsStartOnly=yes\nExecStartPost=/bin/true\nExecReload=/bin/true\n"))
+check("PermissionsStartOnly=yes as root says nothing", "PermissionsStartOnly" not in _sl(
+    "PermissionsStartOnly=yes\nExecReload=/bin/true\n"))
+check("Sockets= naming the service's own socket is not warned", "Sockets=" not in _sl("Sockets=a.socket\n").split("ExecStart")[0]
+      and si.WARN_PREFIX + "Sockets" not in _sl("Sockets=a.socket\n"))
+check("Sockets= naming another socket is warned, every line", si.WARN_PREFIX + "Sockets=b.socket c.socket not passed" in _sl(
+    "Sockets=a.socket b.socket\nSockets=c.socket\n"))
+check("StandardOutput=null names the StandardError= that follows it", "(and StandardError=, which follows it)" in _sl(
+    "StandardOutput=null\n"))
+check("RequiresMountsFor= with no mount-fstab service to wait for is warned",
+      si.WARN_PREFIX + "RequiresMountsFor=" in _sl("", "[Unit]\nRequiresMountsFor=/var/lib\n"))
+check("RequiresMountsFor= -> dep=mount-fstab when there is one, not warned",
+      "dep=mount-fstab\n" in si.unit_to_svc("a", si.parse_unit("[Unit]\nRequiresMountsFor=/var/lib\n[Service]\nExecStart=/bin/a\n"), known={"mount-fstab"})
+      and "RequiresMountsFor" not in si.unit_to_svc("a", si.parse_unit("[Unit]\nRequiresMountsFor=/var/lib\n[Service]\nExecStart=/bin/a\n"), known={"mount-fstab"}))
 check("OOMPolicy=stop is what memory.oom.group does: nothing said", "OOMPolicy" not in _sl("OOMPolicy=stop\n"))
 check("OOMPolicy=continue is warned", "OOMPolicy=continue not enforced" in _sl("OOMPolicy=continue\n"))
 check("Alias= other than dbus-org.* is warned", "Alias=display-manager.service not kept" in _sl(
