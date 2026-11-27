@@ -40,12 +40,28 @@
 #include <poll.h>
 #include <sys/signalfd.h>
 #include <glob.h>
+#include <link.h>
+#include <stdint.h>
 #include <sys/ioctl.h>
 #include <grp.h>
 #include <sys/inotify.h>
 #include <linux/watchdog.h>
 #include <dirent.h>
 #include <mntent.h>
+
+static int lock_segment(struct dl_phdr_info *info, size_t size, void *arg) {
+    (void)size;
+    (void)arg;
+    long pg = sysconf(_SC_PAGESIZE);
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        if (ph->p_type != PT_LOAD) continue;
+        uintptr_t a = (info->dlpi_addr + ph->p_vaddr) & ~(uintptr_t)(pg - 1);
+        uintptr_t e = info->dlpi_addr + ph->p_vaddr + ph->p_memsz;
+        mlock((void *)a, e - a);
+    }
+    return 0;
+}
 #define MAX_MOUNTS      128      /* shutdown remount-ro sweep */
 static uint64_t     last_stall_ms = 0;
 static uint64_t     last_reclaim_ms = 0;
@@ -1491,7 +1507,15 @@ int main(int argc, char **argv) {
         struct __user_cap_data_struct cd[2] = {{0}};
         int future = (getrlimit(RLIMIT_MEMLOCK, &ml) == 0 && ml.rlim_cur == RLIM_INFINITY) ||
                      (syscall(SYS_capget, &ch, cd) == 0 && (cd[CAP_IPC_LOCK / 32].effective >> (CAP_IPC_LOCK % 32)) & 1);
-        if (mlockall(MCL_CURRENT | (future ? MCL_FUTURE : 0)) != 0)
+        /* on fault: the service tables are calloc'd at the cap and mostly
+         * never touched. The image is then populated as MCL_CURRENT did, so no
+         * code path PID 1 has yet to run is left to a page-in */
+        int r = mlockall(MCL_CURRENT | MCL_ONFAULT | (future ? MCL_FUTURE : 0));
+        if (r == 0)
+            dl_iterate_phdr(lock_segment, NULL);
+        else if (errno == EINVAL)   /* before Linux 4.4 */
+            r = mlockall(MCL_CURRENT | (future ? MCL_FUTURE : 0));
+        if (r != 0)
             fprintf(stderr, "schema-init: mlockall: %s, PID 1 stays swappable\n", strerror(errno));
         else if (!future)
             fprintf(stderr, "schema-init: no CAP_IPC_LOCK: PID 1 locked as mapped now, later growth stays swappable\n");

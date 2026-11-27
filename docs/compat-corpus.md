@@ -171,8 +171,8 @@ conditions, readiness, restart), because a missing daemon or dependency would ke
 the probe from running. It keeps the importer's own `install -d` exec_pre, since
 that is how `ConfigurationDirectory=` gets created. A required `EnvironmentFile=`
 is created empty, standing in for the one the package ships. PID 1 loads at most
-`MAX_SERVICES` (128) `.svc` files, so the units go in batches of 120, one boot per
-batch. Units that claim the same `*Directory=` go to different boots.
+`MAX_SERVICES` (512) `.svc` files, so the units go in batches of 480, one boot per
+batch. All 211 Fedora units load under one PID 1. Units that claim the same `*Directory=` go to different boots.
 
 | tree | probed under PID 1 | enforced | NOT (all warned) | unobservable |
 |---|---|---|---|---|
@@ -227,10 +227,7 @@ What tops the list now is `Install.Alias`, `StartLimit*`, `KeyringMode`,
 
 ## Next
 
-1. **`MAX_SERVICES` headroom**: PID 1 loads 128 `.svc` files and ignores the
-   rest with one warning. Real imports take only enabled units (blakbox has 71,
-   the Optiplex 45), but importing every Fedora 44 unit would give 211.
-2. **`CapabilityBoundingSet=`**: the biggest out-of-force directive (69 units).
-3. Turn the rest of the silent list into warnings or mappings, next
+1. **`CapabilityBoundingSet=`**: the biggest out-of-force directive (69 units).
+2. Turn the rest of the silent list into warnings or mappings, next
    `OOMScoreAdjust=` (engine has `oom_score_adj=`), `TimeoutStartSec=`
    (`start_timeout_sec=`) and `StartLimit*` (`max_restarts=`).

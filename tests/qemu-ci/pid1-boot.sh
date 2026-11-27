@@ -38,7 +38,7 @@ mkdir -p "$ROOT"/bin "$ROOT"/sbin "$ROOT"/usr/bin "$ROOT"/etc/schema-init/servic
 cp schema-init "$ROOT/sbin/schema-init"
 cp "$WORK/schema-ctl" "$ROOT/bin/schema-ctl"
 cp "$BB" "$ROOT/bin/busybox"
-for a in sh cat echo sleep poweroff touch grep head cut stat; do ln -s busybox "$ROOT/bin/$a"; done
+for a in sh cat echo sleep poweroff touch grep head cut stat true wc; do ln -s busybox "$ROOT/bin/$a"; done
 # security regressions: a schema-group user for the control-socket gate, and an
 # initrd-style handoff with umask 0 (#204: systemd's initrd hands PID 1 umask 0).
 # Deliberate: PID 1 is exec'd from a shell, not by the kernel, as a dracut boot does;
@@ -128,6 +128,16 @@ exec=/bin/ci-gate
 user=ciuser
 oneshot=1
 dep=ci-daemon'
+# past the old 128-slot cap: every one loaded, run, kept across the re-exec and
+# in the status table; fewer means a table, the shm export or the re-exec blob truncated
+BULK=${BULK:-400}
+i=0
+while [ $i -lt $BULK ]; do
+    svc "ci-bulk-$i" "name=ci-bulk-$i
+exec=/bin/true
+oneshot=1"
+    i=$((i+1))
+done
 # schema-ctl poweroff, so the control socket and PID 1's own shutdown run; poweroff -f
 # would bypass both. The fallback only ends a wedged run, and is a failure
 cat > "$ROOT/bin/ci-finish" <<'EOF'
@@ -148,6 +158,9 @@ if [ -n "$D1" ] && [ "$D1" = "$D2" ] && [ -d /proc/$D1 ] && [ -n "$C1" ] && [ "$
 else
     echo "CI-REEXEC-LOST daemon $D1->$D2 crasher $C1->$C2" > /dev/console
 fi
+echo "CI-BULK-$(/bin/schema-ctl status 2>&1 | grep -c ' ci-bulk-')" > /dev/console
+grep VmRSS /proc/1/status > /dev/console
+grep -A5 sbin/schema-init /proc/1/smaps | grep -e sbin/schema-init -e ^Size -e ^Rss > /dev/console
 /bin/schema-ctl status > /dev/console 2>&1
 /bin/schema-ctl poweroff > /dev/console 2>&1
 EOF
@@ -197,6 +210,19 @@ grep -q CI-AFTER-EARLY "$SERIAL" && miss "ci-ordered started before what it is o
 grep -q CI-BROKEN-RAN "$SERIAL" || miss "ci-broken never ran"
 grep -q CI-AFTER-FAIL-RAN "$SERIAL" || miss "after= on a failing service held its follower"
 grep -Eq 're-exec .* [1-9][0-9]* adopted, 0 new' "$SERIAL" || miss "PID 1 did not re-exec and adopt its services"
+grep -qw "CI-BULK-$BULK" "$SERIAL" || miss "not all $BULK bulk services in status after the re-exec ($(grep -o 'CI-BULK-[0-9]*' "$SERIAL"))"
+n=$(grep -Eo 're-exec .* [0-9]+ adopted' "$SERIAL" | grep -Eo '[0-9]+ adopted' | cut -d' ' -f1 | head -1)
+[ "${n:-0}" -gt "$BULK" ] || miss "re-exec adopted ${n:-none}, not all $BULK bulk services and the rest"
+# the tables are sized for the cap but locked on fault: only slots in use are
+# resident (populated, it was ~28 MB), while the image stays fully paged in
+kb() { grep -a "^$1:" "$SERIAL" | tail -1 | grep -o '[0-9]*' | head -1; }
+[ "$(kb VmRSS)" -lt 24000 ] 2>/dev/null || miss "PID 1 RSS $(kb VmRSS) kB with $BULK bulk services: the service tables were populated"
+# every mapping of the binary fully resident; without the segment lock, code
+# and rodata PID 1 hasn't run yet are left out
+short=$(tr -d '\r' < "$SERIAL" | awk '/sbin\/schema-init/{m=$2; n++} /^Size:/{z=$2} /^Rss:/{if ($2 < z) print m, $2 "/" z " kB"}')
+[ -n "$short" ] && miss "PID 1's image not fully paged in: $short"
+[ "$(tr -d '\r' < "$SERIAL" | grep -Ec '^[0-9a-f]+-[0-9a-f]+ [-r][-w][-x]p .*/sbin/schema-init$')" -ge 2 ] || miss "no /proc/1/smaps lines for the image"
+grep -q 'MAX_SERVICES' "$SERIAL" && miss "PID 1 hit MAX_SERVICES with $BULK bulk services"
 # a rolled-back re-exec logs the same adopt line; only the client's reply differs
 grep -q 'ok: re-executed into' "$SERIAL" || miss "re-exec not confirmed (rolled back?)"
 grep -q CI-REEXEC-KEPT "$SERIAL" || miss "services did not survive the re-exec with the same pids"
