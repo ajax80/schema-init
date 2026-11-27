@@ -133,6 +133,9 @@ static inline int wake_timeout(int64_t best, int tick, int tick_ms) {
 #define SVC_ONESHOT     (1 << 0)  /* 88 on clean exit, don't restart      */
 #define SVC_NEEDS_ROOT  (1 << 1)  /* F8_PERM_AUTH requires uid 0          */
 #define SVC_CRITICAL    (1 << 2)  /* EXCISED here = system friction        */
+enum { SVC_OUT_INHERIT, SVC_OUT_LOG, SVC_OUT_NULL, SVC_OUT_FILE, SVC_OUT_APPEND, SVC_OUT_TRUNCATE };
+enum { SVC_KEYRING_INHERIT, SVC_KEYRING_PRIVATE, SVC_KEYRING_SHARED };
+
 #define SVC_NO_RESTART  (1 << 3)  /* 76 on any death, no recovery arc     */
 #define SVC_TIMER       (1 << 4)  /* periodic: re-arm to NEW_PROCESS on clock */
 #define SVC_TIMER_CALENDAR (1 << 5) /* timer_next is a CLOCK_REALTIME wall-clock target */
@@ -334,6 +337,10 @@ typedef struct {
     int              ready_watched;    /* 1 inotify watch on dirname(ready_path), -1 add failed (poll), 0 not yet */
     int              oom_adj_set;      /* oom_score_adj= given in the .svc */
     int              oom_score_adj;    /* -1000..1000, written before exec; inherited by children */
+    uint8_t          out_mode[2];      /* stdout=, stderr=: SVC_OUT_*; 0 = the log (stderr: what stdout gets) */
+    char             out_path[2][128]; /* the file of SVC_OUT_FILE/APPEND/TRUNCATE */
+    uint8_t          sigpipe_dfl;      /* ignore_sigpipe=0: SIGPIPE back to SIG_DFL before exec */
+    uint8_t          keyring_mode;     /* keyring_mode=: SVC_KEYRING_* */
     int              notify;           /* notify=1: gets NOTIFY_SOCKET; READY=1 promotes (fallback: stable_secs) */
     int              fdstore_max;      /* fdstore=N: PID 1 keeps up to N fds the daemon sends (FDSTORE=1) */
     int              notify_ready;     /* READY=1 received since the last spawn */

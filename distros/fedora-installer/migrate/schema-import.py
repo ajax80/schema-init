@@ -1718,11 +1718,11 @@ def _unenforced_warns(svc, user, privileged, unsandboxed):
     return warns
 
 
-# Directives with a runtime effect the engine has no key for, outside the
-# sandbox: each named in its own warning, so none is lost without a word
+# Directives outside the sandbox: stdio, keyring and SIGPIPE map; those the
+# engine has no key for are each named in a warning, so none is lost without a word
 def _misc_losses(name, sections, svc):
     unit = sections.get("Unit", [])
-    warns = []
+    lines, warns = [], []
     low = lambda sec, k: _get_last(sec, k).lower()
     for a in " ".join(_get_all(sections.get("Install", []), "Alias")).split():
         if not a.startswith("dbus-org."):
@@ -1773,22 +1773,36 @@ def _misc_losses(name, sections, svc):
             and any(v.strip() for v in _get_all(svc, "ExecReload"))):
         warns.append("PermissionsStartOnly=yes: ExecReload= runs as the service's user, not root")
     if low(svc, "IgnoreSIGPIPE") in _FALSE[1:]:
-        warns.append("IgnoreSIGPIPE=no not enforced (SIGPIPE stays ignored)")
+        lines.append("ignore_sigpipe=0")
     km = low(svc, "KeyringMode")
     if km in ("private", "shared"):
-        warns.append("KeyringMode=%s not enforced (the service keeps the session keyring it inherits)" % km)
-    log_like = ("journal", "kmsg", "syslog", "inherit", "journal+inherit")
-    so, se = low(svc, "StandardOutput"), low(svc, "StandardError")
-    if so and so not in log_like:
-        both = " (and StandardError=, which follows it)" if se in ("", "inherit") else ""
-        warns.append("StandardOutput=%s%s not applied: output goes to the service's log" % (_get_last(svc, "StandardOutput"), both))
-    if se and se not in log_like:
-        warns.append("StandardError=%s not applied: output goes to the service's log" % _get_last(svc, "StandardError"))
+        lines.append("keyring_mode=%s" % km)
+    for k, out in (("StandardOutput", "stdout"), ("StandardError", "stderr")):
+        v = _get_last(svc, k)
+        kind, _, path = v.partition(":")
+        if v.lower() in ("", "inherit", "journal", "kmsg", "syslog"):
+            # the log; stderr's inherit follows stdout, as the engine's unset does,
+            # so a journal stderr under a redirected stdout has to say so
+            if out == "stderr" and v.lower() not in ("", "inherit") and any(l.startswith("stdout=") for l in lines):
+                lines.append("stderr=log")
+            continue
+        if v.lower() == "null":
+            lines.append("%s=null" % out)
+        elif kind in ("file", "append", "truncate"):
+            path = " ".join(_specifiers([path], name)) if path else ""
+            if path.startswith("/") and len(path) < 128:
+                lines.append("%s=%s:%s" % (out, kind, path))
+            else:
+                warns.append("%s=%s not applied: the engine takes an absolute path under 128 bytes; "
+                             "output goes to the service's log" % (k, v))
+        else:
+            # +console, tty, socket, fd: the log alone
+            warns.append("%s=%s not applied: output goes to the service's log" % (k, v))
     if _get_all(unit, "OnFailure"):
         warns.append("OnFailure=%s not started: nothing follows a failure" % " ".join(_get_all(unit, "OnFailure")))
     if _get_all(unit, "BindTo"):
         warns.append("BindTo=%s not read: the old spelling of BindsTo=" % " ".join(_get_all(unit, "BindTo")))
-    return warns
+    return lines, warns
 
 
 def _own_oom():
@@ -2411,7 +2425,9 @@ def unit_to_svc(name, sections, sock=None, lazy=False, known=None, unit=None):
     if "@" in pfx:
         warns.append("ExecStart=@ custom argv[0] not kept: the program sees its own path")
     warns.extend(_unenforced_warns(svc, named_user, privileged, "+" in pfx))
-    warns.extend(_misc_losses(name, sections, svc))
+    misc, misc_warns = _misc_losses(name, sections, svc)
+    lines.extend(misc)
+    warns.extend(misc_warns)
     # systemd still hands *Directory= to User=/Group= under ExecStart=!/+, while
     # the process runs as root (chrony on Debian/Ubuntu)
     owned = False
