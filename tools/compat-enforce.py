@@ -253,19 +253,17 @@ def boot(work, initrd, kernel, timeout):
 # ---- oracle ----------------------------------------------------------------
 
 def caps_mask(values):
-    # systemd: lines accumulate; "~" inverts a line; an empty line resets
-    mask = None
+    # systemd: an empty line is the empty set; onto the full set, or for an
+    # empty/"~" line, a line replaces; else lines OR in, "~" lines take out
+    full, mask = (1 << len(CAPS)) - 1, None
     for v in values:
-        if v == "":
-            mask = None
-            continue
         inv = v.startswith("~")
-        names = v.lstrip("~").split()
+        names = v[inv:].split()
         bits = sum(1 << CAP[n] for n in names if n in CAP)
-        if inv:
-            mask = (mask if mask is not None else (1 << len(CAPS)) - 1) & ~bits
+        if not names or mask is None or mask == full:
+            mask = full & ~bits if inv else bits
         else:
-            mask = (mask or 0) | bits
+            mask = mask & ~bits if inv else mask | bits
     return mask
 
 
@@ -414,7 +412,8 @@ def judge(sections, rep, ctl, users, groups, overlays):
         blocked = one("swapoff") != ctl["swapoff"][0]
         put("SystemCallFilter", blocked, "swapoff filtered", "%s (control %s)" % (one("swapoff"), ctl["swapoff"][0]),
             bool(denied))
-    cb = all_of(sections, "Service", "CapabilityBoundingSet")
+    # raw: here an empty value is the empty set, not a reset
+    cb = [val.strip() for k, val in sections.get("Service", []) if str.__eq__(k, "CapabilityBoundingSet")]
     if cb:
         want = caps_mask(cb)
         if want is not None:

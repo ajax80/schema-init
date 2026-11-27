@@ -200,7 +200,7 @@ Getting there took three importer fixes, each found by this run:
   `plus` and `grp` fixtures check it under PID 1.
 
 The NOT-ENFORCED directives that are all warned, by count: `CapabilityBoundingSet=` 69
-(no bounding-set key), `ProtectHome=read-only`/`tmpfs` 9 and
+(no bounding-set key, closed below), `ProtectHome=read-only`/`tmpfs` 9 and
 `ReadOnlyPaths=` 9 (no equivalents), `ProtectSystem=strict` 4 (mapped to `full`).
 
 CI runs the same harness on every PR (`tests/qemu-ci/compat-enforce.sh`, in the
@@ -225,9 +225,28 @@ Silent directives after the change: Fedora 105, Debian 57, Ubuntu 56, Arch 66.
 What tops the list now is `Install.Alias`, `StartLimit*`, `KeyringMode`,
 `OOMScoreAdjust`, `TimeoutStartSec` and `StandardOutput`/`StandardError`.
 
+## `CapabilityBoundingSet=` in force (2026-11-27)
+
+The engine has a `bounding_caps=` key now. It only takes capabilities out of the
+bounding set, as systemd does. `keep_caps=` also cuts the permitted and effective
+sets, so a `user=` service would lose the setuid it needs. The importer folds the
+unit's lines the way systemd does: an empty value is no capabilities at all, a `~`
+line drops what it names, and later lines OR in or take out. A `~` list stays a
+drop list, so capabilities newer than schema-init's table stay, as under systemd.
+Two cases are warned. A list too long for the engine's 511-byte line is written in
+the other form (colord on all four distros and virtlogd on Ubuntu and Arch: a
+36-name `~` list). A bounding set that lacks an `AmbientCapabilities=` cap is
+widened by it, because the engine refuses to load that.
+
+Run 4 (`make compat-enforce`): 559/559 units probed under PID 1. All 92
+`CapabilityBoundingSet=` units are in force (Fedora 34, Debian 14, Ubuntu 14,
+Arch 30) and 6 of them are warned. NOT-ENFORCED is down to the warned
+`ProtectHome=` 9, `ReadOnlyPaths=` 9, `ProtectSystem=strict` 4 and one `UMask=`.
+The CI fixtures `sys` (keep list) and `capinv` (`~` list) both fail when the
+engine skips the drop.
+
 ## Next
 
-1. **`CapabilityBoundingSet=`**: the biggest out-of-force directive (69 units).
-2. Turn the rest of the silent list into warnings or mappings, next
+1. Turn the rest of the silent list into warnings or mappings, next
    `OOMScoreAdjust=` (engine has `oom_score_adj=`), `TimeoutStartSec=`
    (`start_timeout_sec=`) and `StartLimit*` (`max_restarts=`).

@@ -150,7 +150,10 @@ int apply_ambient_caps(uint64_t mask, uid_t uid, gid_t gid, const char *user,
 
 int drop_bounding(uint64_t mask) {
     for (int c = 0; c < 64; c++)
-        if ((mask >> c & 1) && prctl(PR_CAPBSET_DROP, c, 0, 0, 0) != 0) return -1;
+        if ((mask >> c & 1) && prctl(PR_CAPBSET_DROP, c, 0, 0, 0) != 0) {
+            if (errno == EINVAL) break;   /* past running kernel's max cap */
+            return -1;
+        }
     return 0;
 }
 
