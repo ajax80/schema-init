@@ -1402,7 +1402,8 @@ VERIFY_STATUS = "run/schema-init/verify-status"
 def read_verify_status():
     st = {"fail": []}
     try:
-        for ln in open(os.path.join(ROOT, VERIFY_STATUS)):
+        # FAIL lines carry fstab paths and entry ids verbatim: any bytes
+        for ln in open(os.path.join(ROOT, VERIFY_STATUS), errors="replace"):
             k, sep, v = ln.rstrip("\n").partition("=")
             if not sep:
                 continue
@@ -1614,6 +1615,12 @@ def notify_transitions(results, flap, enabled, partial=False):
                           key=lambda x: rank.get(x, 0), default=GREEN)
     else:
         new_overall = overall_color(results)
+        # a check this run didn't produce (disabled, removed) must not keep a stored
+        # RED that partial runs would read as the overall
+        ran = {r.name for r in results}
+        for n, c in flap.data["checks"].items():
+            if n not in ran:
+                c["last_state"] = GREEN
     if new_overall == GREEN and flap.data.get("last_overall", GREEN) != GREEN:
         events.append(("schema-doctor: all clear", "all seams healthy again"))
     elif partial:

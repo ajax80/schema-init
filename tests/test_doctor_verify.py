@@ -116,4 +116,34 @@ with sd.FlapState.locked():
     check("--verify-only waits on the flap lock", p.poll() is None)
 check("released: it finishes", p.wait(timeout=30) == 0)
 
+# review: a non-UTF-8 byte in a FAIL line (an fstab path) must not crash the doctor
+open(ST, "wb").write(b"exit=1\nts=1\nresult=1 fail\nfail=/mnt/caf\xe9 missing\n")
+try:
+    r = run(); ok = sd.result_color(r) == sd.RED
+except Exception as e:
+    ok = False; r = e
+check("non-UTF-8 FAIL line: RED, no crash", ok, str(r))
+
+# review: a stale stored RED (a check no longer run) must not make every verify run
+# re-arm a spurious "all clear" from the next full run
+fresh()
+flap = sd.FlapState.load()
+flap._c("gone-check")["last_state"] = sd.RED
+flap.save()
+status("exit=0\nts=1\nresult=0 fail\n"); verify_only_pass()
+for _ in range(2):
+    flap = sd.FlapState.load()
+    sd.notify_transitions([sd.CheckResult("power", "", "clean"), run()], flap, True)
+    flap.save()
+    verify_only_pass()
+check("stale entry: at most the one cleanup all clear, no cycle", sum(s == "schema-doctor: all clear" for s, _ in sent) <= 1, str(sent))
+sent.clear()
+for _ in range(2):
+    flap = sd.FlapState.load()
+    sd.notify_transitions([sd.CheckResult("power", "", "clean"), run()], flap, True)
+    flap.save()
+    verify_only_pass()
+check("stale entry: later cycles stay quiet", sent == [], str(sent))
+check("full run zeroes entries it didn't run", sd.FlapState.load().data["checks"]["gone-check"]["last_state"] == sd.GREEN)
+
 print("PASS" if all(results) else "FAIL"); sys.exit(0 if all(results) else 1)
