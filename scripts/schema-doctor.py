@@ -32,6 +32,7 @@ class Finding:
     detail: str
     oracle_said: str = ""
     healable: bool = True
+    color: str = ""     # overrides the grade's colour (one check, more than one severity)
 
 
 @dataclass
@@ -43,6 +44,7 @@ class CheckResult:
     oracle_said: str = ""
     action: str = ""
     grade: str = SAFE
+    color: str = ""
 
 
 class Check:
@@ -95,7 +97,7 @@ def run_checks(checks, heal, force, flap=None, now=None):
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
                                           "left as found (deferred)" if c.grade == DEFERRED
-                                          else "detect-only", grade=c.grade)
+                                          else "detect-only", grade=c.grade, color=f.color)
             continue
         if flap is not None and c.grade == SAFE and c.name not in force:
             if not flap.should_heal(c.name, now):
@@ -130,6 +132,8 @@ def run_checks(checks, heal, force, flap=None, now=None):
 
 
 def result_color(r):
+    if r.color:
+        return r.color
     if r.state == "clean":
         return GREEN
     if r.state == "healed":
@@ -1372,6 +1376,48 @@ class PstoreCrash(Check):
 
 
 REGISTRY.append(PstoreCrash())
+
+
+VERIFY_STATUS = "run/schema-init/verify-status"
+
+
+def read_verify_status():
+    st = {"fail": []}
+    try:
+        for ln in open(os.path.join(ROOT, VERIFY_STATUS)):
+            k, sep, v = ln.rstrip("\n").partition("=")
+            if not sep:
+                continue
+            if k == "fail":
+                st["fail"].append(v)
+            else:
+                st[k] = v
+    except OSError:
+        pass
+    return st
+
+
+# The desktop's Restart is not verify-gated (Plasma has ended the session before it
+# calls Reboot); the warning comes here instead, the moment a real verify run finds it
+class VerifyStatus(Check):
+    name = "verify"
+    summary = "the last verify run found nothing that breaks the next boot"
+    grade = DEFERRED
+
+    def detect(self):
+        st = read_verify_status()
+        code = st.get("exit")
+        if code == "1":
+            first = st["fail"][0] if st["fail"] else st.get("result", "a FAIL")
+            return Finding(detail="next boot may fail: " + first + " — run schema-ctl verify",
+                           oracle_said="systemd has no pre-reboot check", healable=False, color=RED)
+        if code in ("2", "3"):
+            return Finding(detail="verify: " + st.get("result", "") + " — see schema-ctl verify",
+                           healable=False, color=AMBER)
+        return None
+
+
+REGISTRY.append(VerifyStatus())
 
 
 def read_config():
