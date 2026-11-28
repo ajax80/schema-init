@@ -76,6 +76,7 @@ flap.save()
 status("exit=1\nts=1\nresult=1 fail\nfail=x\n"); verify_only_pass()
 status("exit=0\nts=2\nresult=0 fail\n"); flap = verify_only_pass()
 check("verify recovers while power is RED: no all clear", not any(s == "schema-doctor: all clear" for s, _ in sent), str(sent))
+check("...but says verify itself cleared", sent[-1][0] == "schema-doctor: verify cleared", str(sent))
 check("last_overall stays RED", flap.data.get("last_overall") == sd.RED, flap.data.get("last_overall"))
 
 # the CLI: only the verify entry of the status files, no report rewrite

@@ -1599,12 +1599,14 @@ def _shown(r):
 # partial: results is a subset (--verify-only), so the overall comes from every
 # check's stored state, not from these alone
 def notify_transitions(results, flap, enabled, partial=False):
-    events = []
+    events, cleared = [], []
     for r in results:
         col = result_color(r)
         prev = flap._c(r.name).get("last_state", GREEN)
         if col == RED and prev != RED:
             events.append((f"schema-doctor: {r.name}", _shown(r) or "needs attention"))
+        elif prev == RED and col != RED:
+            cleared.append(r.name)
         flap._c(r.name)["last_state"] = col          # bookkeeping, always
     if partial:
         rank = {GREEN: 0, AMBER: 1, RED: 2}
@@ -1614,6 +1616,10 @@ def notify_transitions(results, flap, enabled, partial=False):
         new_overall = overall_color(results)
     if new_overall == GREEN and flap.data.get("last_overall", GREEN) != GREEN:
         events.append(("schema-doctor: all clear", "all seams healthy again"))
+    elif partial:
+        # all clear needs every check green; one amber elsewhere would leave a fixed
+        # verify FAIL with no follow-up at all
+        events += [(f"schema-doctor: {n} cleared", "no longer red") for n in cleared]
     flap.data["last_overall"] = new_overall
     if enabled and events:
         uid, env = active_session_env()
