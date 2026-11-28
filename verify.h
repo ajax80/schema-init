@@ -11,6 +11,7 @@ typedef struct {
     const char *state_dir, *grubenv, *bls_dir, *grubcfg, *fstab, *kmsg_path, *devdir;
     const char *esp, *cmdline_txt, *pi_init, *inspect;
     const char *envblock_dev; /* NULL: the device holding grubenv */
+    const char *status_path;  /* NULL: no status file; schema-doctor reads the real run's */
 } verify_opts_t;
 
 /* blscfg's vercmp (rpm's rule); bls_sort orders entries as F44 blscfg's menu: by file name, newest

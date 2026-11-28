@@ -126,6 +126,30 @@ has "[FAIL] /home — required btrfs device UUID=gone-0000 not present" || fail 
 printf 'UUID=aaaa-1111 / btrfs subvol=root 0 0\ntmpfs /tmp tmpfs defaults 0 0\n' > "$T/fstab"
 report "$T/fx/check.out" "$GOOD"
 
+# the status file schema-doctor reads: only where SCHEMA_VERIFY_STATUS names it (the shipped
+# build's /run/schema-init/verify-status), dir made if missing, rewritten on every run
+ST=$T/st/verify-status
+v
+[ -e "$T/st" ] && fail "status: written with SCHEMA_VERIFY_STATUS unset"
+report "$T/fx/check.out" "a.exec=/bin/false" "schema-bootok.exec=/usr/bin/schema-bootok"
+printf 'UUID=gone-0000 /home btrfs defaults 0 0\n' >> "$T/fstab"
+SCHEMA_VERIFY_STATUS=$ST v --quiet
+expect 1 status-fail
+grep -qx 'exit=1' "$ST" || fail "status-fail: no exit=1"
+grep -Eqx 'ts=[0-9]+' "$ST" || fail "status-fail: no ts="
+grep -q '^result=1 fail' "$ST" || fail "status-fail: no result="
+grep -qx 'fail=/home — required btrfs device UUID=gone-0000 not present' "$ST" || fail "status-fail: no fail= line"
+[ "$(stat -c %a "$ST")" = 644 ] || fail "status-fail: mode"
+printf 'UUID=aaaa-1111 / btrfs subvol=root 0 0\ntmpfs /tmp tmpfs defaults 0 0\n' > "$T/fstab"
+SCHEMA_VERIFY_STATUS=$ST v
+expect 2 status-change
+grep -qx 'exit=2' "$ST" && ! grep -q '^fail=' "$ST" || fail "status-change: want exit=2 and no fail="
+SCHEMA_VERIFY_STATUS=$ST v --accept
+expect 0 status-accept
+grep -qx 'exit=0' "$ST" && grep -q '^result=.*(accepted)' "$ST" || fail "status-accept: want exit=0, accepted"
+rm -f "$T/state/accepted"
+report "$T/fx/check.out" "$GOOD"
+
 # blank line before the fallback entry's last key: GRUB drops the rest -> 1
 F=schema-snap-20261118-175630-post-bootfix
 printf 'title x\nlinux /%s/boot/vmlinuz-7.2.11\ninitrd\noptions root=PARTUUID=%s ro rootflags=subvol=%s init=/sbin/schema-init\n' \
