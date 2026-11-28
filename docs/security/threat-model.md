@@ -258,7 +258,10 @@ never boot, so their `init=` is untrusted.
   fallback before re-exec and `schema-snapshot arm`, which both refuse on
   failure. `reboot`/`poweroff` are gated only from a terminal, and they go ahead
   when the verifier is unavailable, so a box that must go down is never stranded
-  (`docs/operations.md`).
+  (`docs/operations.md`). The desktop's Restart/Shut Down (login1 `Reboot`/`PowerOff`)
+  is deliberately ungated: Plasma has ended the session before it calls them. A
+  verify FAIL reaches the desktop instead as a schema-doctor notification, from the
+  status file every real verify run writes (`schema-doctor-verify.svc`).
 - The boot-success guard: real GRUB is tested in CI (#593). `boot_counter=N`
   gives the new entry N−1 boots, and `arm` refuses N below 2 (#594).
 

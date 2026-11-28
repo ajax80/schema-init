@@ -1,0 +1,11 @@
+name=schema-doctor-verify
+exec=/usr/local/bin/schema-doctor
+args=--verify-only
+watch_path=changed:/run/schema-init/verify-status
+needs_root=1
+critical=0
+no_new_privs=0
+private_tmp=0
+protect_system=0
+protect_home=0
+syscall_deny=0

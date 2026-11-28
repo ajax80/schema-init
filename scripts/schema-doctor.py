@@ -19,6 +19,8 @@ import struct
 import subprocess
 import sys
 import time
+import contextlib
+import fcntl
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -32,6 +34,7 @@ class Finding:
     detail: str
     oracle_said: str = ""
     healable: bool = True
+    color: str = ""     # overrides the grade's colour (one check, more than one severity)
 
 
 @dataclass
@@ -43,6 +46,7 @@ class CheckResult:
     oracle_said: str = ""
     action: str = ""
     grade: str = SAFE
+    color: str = ""
 
 
 class Check:
@@ -95,7 +99,7 @@ def run_checks(checks, heal, force, flap=None, now=None):
             results[c.name] = CheckResult(c.name, c.summary, "reported",
                                           c.explain(f), f.oracle_said,
                                           "left as found (deferred)" if c.grade == DEFERRED
-                                          else "detect-only", grade=c.grade)
+                                          else "detect-only", grade=c.grade, color=f.color)
             continue
         if flap is not None and c.grade == SAFE and c.name not in force:
             if not flap.should_heal(c.name, now):
@@ -130,6 +134,8 @@ def run_checks(checks, heal, force, flap=None, now=None):
 
 
 def result_color(r):
+    if r.color:
+        return r.color
     if r.state == "clean":
         return GREEN
     if r.state == "healed":
@@ -233,9 +239,25 @@ class FlapState:
                 for c in data["checks"].values():
                     c["heals"] = []
                     c["chronic"] = False
+                # its file is in /run: a red verify from the last boot is gone, not cleared
+                if "verify" in data["checks"]:
+                    data["checks"]["verify"]["last_state"] = GREEN
+                    rank = {GREEN: 0, AMBER: 1, RED: 2}
+                    data["last_overall"] = max((c.get("last_state", GREEN) for c in data["checks"].values()),
+                                               key=lambda x: rank.get(x, 0), default=GREEN)
             except (AttributeError, TypeError):
                 data["checks"] = {}
         return cls(data)
+
+    @classmethod
+    @contextlib.contextmanager
+    def locked(cls):
+        # the verify watch and the periodic run must not interleave load -> notify -> save
+        p = os.path.join(ROOT, cls.PATH + ".lock")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            yield
 
     def save(self, now=None):
         self.data["last_run"] = int(now if now is not None else time.time())
@@ -1374,6 +1396,49 @@ class PstoreCrash(Check):
 REGISTRY.append(PstoreCrash())
 
 
+VERIFY_STATUS = "run/schema-init/verify-status"
+
+
+def read_verify_status():
+    st = {"fail": []}
+    try:
+        # FAIL lines carry fstab paths and entry ids verbatim: any bytes
+        for ln in open(os.path.join(ROOT, VERIFY_STATUS), errors="replace"):
+            k, sep, v = ln.rstrip("\n").partition("=")
+            if not sep:
+                continue
+            if k == "fail":
+                st["fail"].append(v)
+            else:
+                st[k] = v
+    except OSError:
+        pass
+    return st
+
+
+# The desktop's Restart is not verify-gated (Plasma has ended the session before it
+# calls Reboot); the warning comes here instead, the moment a real verify run finds it
+class VerifyStatus(Check):
+    name = "verify"
+    summary = "the last verify run found nothing that breaks the next boot"
+    grade = DEFERRED
+
+    def detect(self):
+        st = read_verify_status()
+        code = st.get("exit")
+        if code == "1":
+            first = st["fail"][0] if st["fail"] else st.get("result", "a FAIL")
+            return Finding(detail="next boot may fail: " + first + " — run schema-ctl verify",
+                           oracle_said="systemd has no pre-reboot check", healable=False, color=RED)
+        if code in ("2", "3"):
+            return Finding(detail="verify: " + st.get("result", "") + " — see schema-ctl verify",
+                           healable=False, color=AMBER)
+        return None
+
+
+REGISTRY.append(VerifyStatus())
+
+
 def read_config():
     heal = True
     disabled = set()
@@ -1431,8 +1496,7 @@ def render_status(results, mode):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     lines = [f"schema-doctor: {ov}   {ts}   mode={mode}"]
     for r in results:
-        tail = r.action or r.detail or ""
-        lines.append(f"  {result_color(r):<6} {r.name:<22} {tail}")
+        lines.append(f"  {result_color(r):<6} {r.name:<22} {_shown(r) or ''}")
     return "\n".join(lines) + "\n"
 
 
@@ -1444,6 +1508,26 @@ def status_json(results, mode):
         "checks": [{"name": r.name, "color": result_color(r), "state": r.state,
                     "detail": r.detail, "action": r.action} for r in results],
     }, indent=2)
+
+
+# --verify-only: replace one entry in the last full run's status, keep the rest
+def patch_status(r):
+    try:
+        doc = json.loads(read_status_json())
+        checks = [c for c in doc.get("checks", []) if c.get("name") != r.name]
+    except (ValueError, AttributeError):
+        doc, checks = {}, []
+    checks.append({"name": r.name, "color": result_color(r), "state": r.state,
+                   "detail": r.detail, "action": r.action})
+    rank = {GREEN: 0, AMBER: 1, RED: 2}
+    ov = max((c.get("color", GREEN) for c in checks), key=lambda x: rank.get(x, 0), default=GREEN)
+    doc.update(overall=ov, checks=checks, ts=int(time.time()))
+    lines = [f"schema-doctor: {ov}   {time.strftime('%Y-%m-%d %H:%M:%S')}   mode={doc.get('mode', 'verify')}"]
+    for c in checks:
+        tail = c["detail"] if c["name"] == r.name else (c.get("action") or c.get("detail") or "")
+        lines.append(f"  {c.get('color', GREEN):<6} {c['name']:<22} {tail}")
+    write_status("\n".join(lines) + "\n")
+    write_status_json(json.dumps(doc, indent=2))
 
 
 def write_status(text):
@@ -1508,18 +1592,41 @@ def notify_send(uid, env, summary, body):
         pass
 
 
-def notify_transitions(results, flap, enabled):
-    events = []
+def _shown(r):
+    # a colour override is a check that judges, not heals: its detail is the news
+    return r.detail if r.color else (r.action or r.detail)
+
+
+# partial: results is a subset (--verify-only), so the overall comes from every
+# check's stored state, not from these alone
+def notify_transitions(results, flap, enabled, partial=False):
+    events, cleared = [], []
     for r in results:
         col = result_color(r)
         prev = flap._c(r.name).get("last_state", GREEN)
         if col == RED and prev != RED:
-            events.append((f"schema-doctor: {r.name}",
-                           r.action or r.detail or "needs attention"))
+            events.append((f"schema-doctor: {r.name}", _shown(r) or "needs attention"))
+        elif prev == RED and col != RED:
+            cleared.append(r.name)
         flap._c(r.name)["last_state"] = col          # bookkeeping, always
-    new_overall = overall_color(results)
+    if partial:
+        rank = {GREEN: 0, AMBER: 1, RED: 2}
+        new_overall = max((c.get("last_state", GREEN) for c in flap.data["checks"].values()),
+                          key=lambda x: rank.get(x, 0), default=GREEN)
+    else:
+        new_overall = overall_color(results)
+        # a check this run didn't produce (disabled, removed) must not keep a stored
+        # RED that partial runs would read as the overall
+        ran = {r.name for r in results}
+        for n, c in flap.data["checks"].items():
+            if n not in ran:
+                c["last_state"] = GREEN
     if new_overall == GREEN and flap.data.get("last_overall", GREEN) != GREEN:
         events.append(("schema-doctor: all clear", "all seams healthy again"))
+    elif partial:
+        # all clear needs every check green; one amber elsewhere would leave a fixed
+        # verify FAIL with no follow-up at all
+        events += [(f"schema-doctor: {n} cleared", "no longer red") for n in cleared]
     flap.data["last_overall"] = new_overall
     if enabled and events:
         uid, env = active_session_env()
@@ -1560,6 +1667,8 @@ def main(argv):
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--wait", type=float, default=0.0, help="wait N s for a session first")
     ap.add_argument("--periodic", action="store_true", help="flap-aware run + notify (timer)")
+    ap.add_argument("--verify-only", action="store_true",
+                    help="re-read verify's last result and notify (the verify-status watch)")
     ap.add_argument("--status", action="store_true", help="print the last health status")
     ap.add_argument("--hardening-lint", action="store_true",
                     help="list .svc missing an explicit hardening knob; exit 1 if any")
@@ -1594,7 +1703,24 @@ def main(argv):
     if args.wait:
         wait_for_session(args.wait)
 
+    if args.verify_only:
+        if "verify" in disabled:
+            return 0
+        with FlapState.locked():
+            flap = FlapState.load()
+            r = run_checks([VerifyStatus()], False, set())[0]
+            try:
+                patch_status(r)
+            except OSError:
+                pass
+            notify_transitions([r], flap, cfg_notify, partial=True)
+            flap.save()
+        print(render_report([r]))
+        return 0
+
     heal = (args.heal or (not args.check and not args.dry_run)) and cfg_heal and not args.dry_run
+    lock = FlapState.locked() if args.periodic else contextlib.nullcontext()
+    lock.__enter__()
     flap = FlapState.load() if args.periodic else None
     results = _safe_detect_all(checks, heal, set(args.force), flap)
 
@@ -1613,6 +1739,7 @@ def main(argv):
             flap.save()
         except Exception:
             pass
+    lock.__exit__(None, None, None)
 
     out = render_json(results) if args.json else render_report(results)
     print(out)

@@ -129,8 +129,10 @@ check("uninstall puts the old entry back", sorted(os.listdir(os.path.join(root, 
 SVC = "etc/schema-init/services/"
 m, root, calls, err = deploy([])
 check("default installs the periodic doctor", os.path.exists(os.path.join(root, SVC, "schema-doctor-periodic.svc")))
+check("default installs the verify-status watch", os.path.exists(os.path.join(root, SVC, "schema-doctor-verify.svc")))
 m, root, calls, err = deploy(["--advanced-no-doctor-timers"])
 check("no-doctor-timers: periodic doctor not installed", not os.path.exists(os.path.join(root, SVC, "schema-doctor-periodic.svc")))
+check("no-doctor-timers: verify-status watch not installed", not os.path.exists(os.path.join(root, SVC, "schema-doctor-verify.svc")))
 check("no-doctor-timers: boot-time doctor still installed (migrate-finish deps on it)",
       os.path.exists(os.path.join(root, SVC, "schema-doctor.svc")))
 

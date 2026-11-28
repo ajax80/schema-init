@@ -97,6 +97,12 @@ void verify_opts_env(verify_opts_t *o) {
         F(pi_init, "SCHEMA_VERIFY_PI_INIT", "/usr/bin/schema-init"),
         F(inspect, "SCHEMA_VERIFY_INSPECT", NULL),
         F(envblock_dev, "SCHEMA_VERIFY_ENVBLOCK_DEV", NULL),
+        /* a testhooks build never writes the host's: only where the variable says */
+#ifdef SCHEMA_VERIFY_TESTHOOKS
+        F(status_path, "SCHEMA_VERIFY_STATUS", NULL),
+#else
+        F(status_path, "SCHEMA_VERIFY_STATUS", "/run/schema-init/verify-status"),
+#endif
 #undef F
     };
     for (size_t i = 0; i < sizeof m / sizeof *m; i++) {
@@ -707,6 +713,25 @@ static void disks(ctx_t *c) {
     free(k);
 }
 
+/* exit, time, result and up to 5 FAILs for schema-doctor's verify check; temp + rename, so the
+ * watch on it sees one complete file. Silent on failure: the gates read the exit code, not this */
+static void status_write(const char *path, int code, const char *result, char *const *fails, int nfails) {
+    char dir[PATH_MAX], tmp[PATH_MAX + 8];
+    const char *sl = strrchr(path, '/');
+    if (!sl || (size_t)(sl - path) >= sizeof dir) return;
+    snprintf(dir, sizeof dir, "%.*s", (int)(sl - path), path);
+    if (dir[0]) mkdir(dir, 0755);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if (fd < 0) return;
+    FILE *f = fdopen(fd, "w");
+    if (!f) { close(fd); unlink(tmp); return; }
+    fprintf(f, "exit=%d\nts=%lld\nresult=%s\n", code, (long long)time(NULL), result);
+    for (int i = 0; i < nfails && i < 5; i++) fprintf(f, "fail=%s\n", fails[i]);
+    fchmod(fd, 0644);
+    if (fclose(f) != 0 || rename(tmp, path) != 0) unlink(tmp);
+}
+
 int verify_run(const verify_opts_t *o, FILE *out) {
     ctx_t c = { .o = o };
     nextboot_t nb = { 0 };
@@ -897,10 +922,25 @@ int verify_run(const verify_opts_t *o, FILE *out) {
         else fprintf(out, "[%s%s] %s\n", name[t], t == T_CHANGE && accepted ? " accepted" : "", c.l[i].s);
         first = 0;
     }
-    fprintf(out, "%sResult: %d fail, %d change%s, %d warn", o->quiet ? "" : "\n", fail, change,
-            !change ? "" : accepted && !lost ? " (accepted)" : " (not accepted)", warn);
-    if (unres) fprintf(out, ", %d unresolved", unres);
-    fputc('\n', out);
+    char result[160];
+    int rn = snprintf(result, sizeof result, "%d fail, %d change%s, %d warn", fail, change,
+                      !change ? "" : accepted && !lost ? " (accepted)" : " (not accepted)", warn);
+    if (unres && rn > 0 && (size_t)rn < sizeof result)
+        snprintf(result + rn, sizeof result - rn, ", %d unresolved", unres);
+    fprintf(out, "%sResult: %s\n", o->quiet ? "" : "\n", result);
+    int code = fail ? 1 : (change && !accepted) || lost ? 2 : unres ? 3 : 0;
+    int write_status = o->status_path != NULL;
+#ifndef SCHEMA_VERIFY_TESTHOOKS
+    /* a user's run can't read enough to judge; it must not overwrite root's */
+    write_status = write_status && geteuid() == 0;
+#endif
+    if (write_status) {
+        char *fails[5];
+        int nf = 0;
+        for (int i = 0; i < c.n && nf < 5; i++)
+            if (c.l[i].t == T_FAIL) fails[nf++] = c.l[i].s;
+        status_write(o->status_path, code, result, fails, nf);
+    }
 
     for (int i = 0; i < c.n; i++) free(c.l[i].s);
     free(c.cfg);
@@ -911,7 +951,5 @@ int verify_run(const verify_opts_t *o, FILE *out) {
     free(c.rep);
     free(c.done);
     free(pi_out);
-    if (fail) return 1;
-    if ((change && !accepted) || lost) return 2;
-    return unres ? 3 : 0;
+    return code;
 }

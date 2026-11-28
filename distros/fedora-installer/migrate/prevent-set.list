@@ -34,6 +34,7 @@ service zram
 service zram-recompress
 service schema-doctor
 service schema-doctor-periodic
+service schema-doctor-verify
 service schema-migrate-finish
 
 # --- excluded: host-specific, never deployed to a stranger ---

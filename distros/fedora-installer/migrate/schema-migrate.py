@@ -112,7 +112,7 @@ def _adv():
     return [a for a in os.environ.get("MIGRATE_ADV", "").split(",") if a]
 
 
-DOCTOR_TIMERS = {"schema-doctor-periodic"}
+DOCTOR_TIMERS = {"schema-doctor-periodic", "schema-doctor-verify"}
 SERVICE_DIRS = ["distros/fedora-installer/rail/services", "distros/fedora-kde/services"]
 
 

@@ -79,6 +79,7 @@ The run loop is the safety heart: **snapshot → heal → verify**, per check. I
 The same one-shot engine runs in two roles — it is **not** a daemon:
 
 - **Boot run** (`schema-doctor.svc`, `--heal --wait 30`): a late oneshot after a session exists, aggressive first-heal on a fresh box, silent.
+- **Verify watch** (`schema-doctor-verify.svc`, `--verify-only`): `watch_path=changed:` on `/run/schema-init/verify-status`, which every real `schema-ctl verify` run rewrites. Re-reads only the `verify` check (RED on a FAIL, AMBER on an unaccepted change or UNRESOLVED), patches that one entry into the status files and notifies on the transition. It and the standing run share the flap state under a lock, so neither notifies twice.
 - **Standing run** (`schema-doctor-periodic.svc`, `--heal --periodic`): a native schema-init interval timer (`on_boot_sec`/`on_active_sec`, re-armed by PID 1) re-runs the engine every 10 minutes to catch faults that appear *after* login — a helper that dies at hour 3, an ACL a bad app clobbers mid-session.
 
 The standing run adds three fail-safe guards:
